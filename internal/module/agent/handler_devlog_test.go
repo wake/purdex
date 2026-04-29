@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -17,16 +18,48 @@ import (
 	"github.com/wake/purdex/internal/tmux"
 )
 
+// devLogBuffer is a thread-safe wrapper around bytes.Buffer used to capture
+// log.Printf output across goroutines. The race detector flags concurrent
+// Write (from dispatcher goroutines) + String (from test waitFor pollers)
+// against a bare bytes.Buffer; the mutex serialises both sides. Only the
+// methods used by callers (Write / String / Bytes) are surfaced.
+type devLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *devLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *devLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *devLogBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]byte, b.buf.Len())
+	copy(out, b.buf.Bytes())
+	return out
+}
+
 // captureDevLog redirects log output to an in-memory buffer for the duration
 // of the test. The previous output is restored via t.Cleanup so subsequent
-// tests don't leak the redirected destination.
-func captureDevLog(t *testing.T) *bytes.Buffer {
+// tests don't leak the redirected destination. The buffer is mutex-guarded
+// so concurrent Write (dispatcher goroutines) + String (waitFor pollers)
+// don't trip the race detector.
+func captureDevLog(t *testing.T) *devLogBuffer {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &devLogBuffer{}
 	prev := log.Writer()
-	log.SetOutput(&buf)
+	log.SetOutput(buf)
 	t.Cleanup(func() { log.SetOutput(prev) })
-	return &buf
+	return buf
 }
 
 // devLogPostValid POSTs a valid PdxStop hook event for tmux session "dev",

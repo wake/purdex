@@ -222,6 +222,13 @@ func (o *probeOrchestrator) makeCallback(session, agentType string) probe.Screen
 //     callbacks) and again inside the final critical section (closes the
 //     race window where stop / rename / generation-bump won between the
 //     early unlock and the final lock; codex finding #4 regression).
+//   - OnDrop: optional caller-aware drop callback (W6-3 P2-T6). When non-nil
+//     applyProbeGuards invokes it once with one of the canonical drop
+//     reasons ("stale-callback" / "grace" / "error-guard" / "transition-gate")
+//     before returning applied=false. ScreenChange callers leave this nil so
+//     legacy MetricProbeGraceWindowSuppressed semantics stay intact;
+//     ProbeIntent callers pass probeIntentOnDrop so each drop reason routes
+//     to its own counter + dev log line for fault isolation.
 type probeGuardArgs struct {
 	Session    string
 	AgentType  string
@@ -229,6 +236,7 @@ type probeGuardArgs struct {
 	Signal     agentpkg.Signal
 	Mapping    func(agentpkg.Signal) agentpkg.Status
 	StaleCheck func(*Module) bool
+	OnDrop     func(reason string)
 }
 
 // applyProbeGuards runs the shared probe-status-transition pipeline:
@@ -259,6 +267,9 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
 	staleOK := args.StaleCheck != nil && args.StaleCheck(m)
 	m.mu.Unlock()
 	if !staleOK {
+		if args.OnDrop != nil {
+			args.OnDrop("stale-callback")
+		}
 		return false
 	}
 
@@ -273,6 +284,9 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
 			if isDevMode() {
 				log.Printf("[probe] graceWindow suppress session=%s agent=%s reason=%s",
 					args.Session, args.AgentType, args.Reason)
+			}
+			if args.OnDrop != nil {
+				args.OnDrop("grace")
 			}
 			return false
 		}
@@ -299,14 +313,23 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
 	m.mu.Lock()
 	if args.StaleCheck == nil || !args.StaleCheck(m) {
 		m.mu.Unlock()
+		if args.OnDrop != nil {
+			args.OnDrop("stale-callback")
+		}
 		return false
 	}
 	if m.currentStatus[args.Session] == agentpkg.StatusError {
 		m.mu.Unlock()
+		if args.OnDrop != nil {
+			args.OnDrop("error-guard")
+		}
 		return false
 	}
 	if prev, ok := m.currentStatus[args.Session]; ok && prev == newStatus {
 		m.mu.Unlock()
+		if args.OnDrop != nil {
+			args.OnDrop("transition-gate")
+		}
 		return false
 	}
 	m.currentStatus[args.Session] = newStatus

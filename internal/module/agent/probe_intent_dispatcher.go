@@ -2,10 +2,61 @@ package agent
 
 import (
 	"context"
+	"log"
 	"slices"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 )
+
+// probeIntentOnDrop is the OnDrop callback installed on probeGuardArgs by
+// the dispatcher's consumeSignals path. It maps the canonical drop-reason
+// string (per applyProbeGuards contract) to the matching expvar counter
+// + dev log line. ScreenChange callers leave probeGuardArgs.OnDrop nil so
+// the legacy MetricProbeGraceWindowSuppressed semantics stay isolated.
+//
+// reason values are stable strings emitted by applyProbeGuards:
+// "stale-callback" / "grace" / "error-guard" / "transition-gate". Anything
+// else is logged but not counted (defensive landing for future drop
+// branches that may add reasons before this map is updated).
+func probeIntentOnDrop(reason string) {
+	switch reason {
+	case "stale-callback":
+		agentpkg.MetricProbeIntentDroppedStale.Add(1)
+	case "grace":
+		agentpkg.MetricProbeIntentDroppedGrace.Add(1)
+	case "error-guard":
+		agentpkg.MetricProbeIntentDroppedErrorGuard.Add(1)
+	case "transition-gate":
+		agentpkg.MetricProbeIntentDroppedTransitionGate.Add(1)
+	}
+	if isDevMode() {
+		log.Printf("[probe-intent] drop reason=%s", reason)
+	}
+}
+
+// probeIntentOnDropForSession returns an OnDrop callback that prefixes the
+// drop log with session + kind context so dev-mode tail can correlate the
+// drop with the originating dispatcher path. Counter increments mirror
+// probeIntentOnDrop. The closure variant exists because applyProbeGuards
+// invokes OnDrop without re-supplying session/kind context.
+func probeIntentOnDropForSession(session string, kind agentpkg.ProbeIntentKind) func(string) {
+	return func(reason string) {
+		switch reason {
+		case "stale-callback":
+			agentpkg.MetricProbeIntentDroppedStale.Add(1)
+		case "grace":
+			agentpkg.MetricProbeIntentDroppedGrace.Add(1)
+		case "error-guard":
+			agentpkg.MetricProbeIntentDroppedErrorGuard.Add(1)
+		case "transition-gate":
+			agentpkg.MetricProbeIntentDroppedTransitionGate.Add(1)
+		}
+		if isDevMode() {
+			log.Printf("[probe-intent] drop session=%s kind=%s reason=%s",
+				session, kind, reason)
+		}
+	}
+}
 
 // probeIntentDispatcher routes ProbeIntent lifecycle events from
 // manageActivityWatch / replayStatus into per-(session, kind) detector
@@ -285,6 +336,18 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 	// Execute plan outside m.mu.
 	if plan.cancelOld != nil {
 		plan.cancelOld()
+		agentpkg.MetricProbeIntentStopped.Add(1)
+		if isDevMode() {
+			log.Printf("[probe-intent] stop session=%s kind=%s reason=lifecycle-applyStatus",
+				session, intent.Kind)
+		}
+		d.parent.traceSink.AppendProbeIntent(probeIntentTraceArgs{
+			TmuxSession: session,
+			AgentType:   agentType,
+			Kind:        string(intent.Kind),
+			Decision:    "stop",
+			Reason:      "lifecycle-applyStatus",
+		})
 	}
 	if plan.startCtx != nil {
 		out := make(chan agentpkg.Signal, 1)
@@ -293,6 +356,24 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 			close(out)
 		}()
 		go d.consumeSignals(plan.startCtx, session, agentType, intent, plan.generation, out)
+		agentpkg.MetricProbeIntentStarted.Add(1)
+		if isDevMode() {
+			log.Printf("[probe-intent] start session=%s agent=%s kind=%s pane=%s pid=%d generation=%d",
+				session, agentType, intent.Kind, plan.paneID, plan.senderPID, plan.generation)
+		}
+		d.parent.traceSink.AppendProbeIntent(probeIntentTraceArgs{
+			TmuxSession: session,
+			PaneID:      plan.paneID,
+			AgentType:   agentType,
+			Kind:        string(intent.Kind),
+			Decision:    "start",
+			Reason:      "lifecycle-applyStatus",
+			Payload: map[string]any{
+				"pane_id":    plan.paneID,
+				"sender_pid": plan.senderPID,
+				"generation": plan.generation,
+			},
+		})
 	}
 }
 
@@ -315,6 +396,7 @@ func (d *probeIntentDispatcher) consumeSignals(
 	in <-chan agentpkg.Signal,
 ) {
 	for sig := range in {
+		agentpkg.MetricProbeIntentSignalEmitted.Add(1)
 		applied := applyProbeGuards(d.parent, probeGuardArgs{
 			Session:    session,
 			AgentType:  agentType,
@@ -322,13 +404,45 @@ func (d *probeIntentDispatcher) consumeSignals(
 			Signal:     sig,
 			Mapping:    intent.OnSignal,
 			StaleCheck: makeProbeIntentStaleCheck(session, intent.Kind, agentType, generation),
+			OnDrop:     probeIntentOnDropForSession(session, intent.Kind),
 		})
 		if !applied {
 			continue
 		}
+		// Per spec §5.4 round 5 P1: applied=true means OnEntryStatus no
+		// longer holds (currentStatus already flipped to error/clear inside
+		// applyProbeGuards step 4). Re-run applyStatus so lifecycle case 3
+		// (active && !shouldActive) cancels the detector ctx + deletes the
+		// active entry through the single lifecycle entry point.
+		//
+		// Ordering: emit observability surfaces (counter / log / trace)
+		// BEFORE applyStatus so test waitFor predicates that key off
+		// active-entry presence see the log/trace as a happens-before
+		// guarantee rather than a race against case 3 teardown.
 		d.parent.mu.Lock()
 		appliedStatus := d.parent.currentStatus[session]
 		d.parent.mu.Unlock()
+		agentpkg.MetricProbeIntentApplied.Add(1)
+		if isDevMode() {
+			log.Printf("[probe-intent] signal session=%s kind=%s PaneAlive=%v newStatus=%s applied=true",
+				session, intent.Kind, sig.PaneAlive, appliedStatus)
+		}
+		if d.parent.traceSink != nil {
+			d.parent.traceSink.AppendProbeIntent(probeIntentTraceArgs{
+				TmuxSession: session,
+				PaneID:      sig.PaneID,
+				AgentType:   agentType,
+				Kind:        string(intent.Kind),
+				Decision:    "signal",
+				Reason:      "applied",
+				Payload: map[string]any{
+					"pane_alive": sig.PaneAlive,
+					"sender_pid": sig.SenderPID,
+					"new_status": string(appliedStatus),
+					"generation": generation,
+				},
+			})
+		}
 		d.applyStatus(session, agentType, appliedStatus)
 	}
 }

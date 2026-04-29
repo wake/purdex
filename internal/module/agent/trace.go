@@ -1,19 +1,25 @@
-// TraceStore step coverage audit (W4 PR-4 Phase 3)
+// TraceStore step coverage audit (W4 PR-4 Phase 3 + W6-3 P2-T6)
 //
-// Hook chains use five trace step kinds, recorded by the calls in this file:
-// trigger / verify / frame / projection / emit. The matrix below documents
-// which steps appear on each hook path and identifies cases where a step is
-// reasonably absent.
+// Hook chains use five trace step kinds recorded inline during handleEvent
+// (trigger / verify / frame / projection / emit). W6-3 P2-T6 adds a sixth
+// step kind, "probe-intent", emitted from a standalone, single-step chain
+// each time the ProbeIntent dispatcher arms a detector or an emitted
+// signal is applied. The probe-intent chains have no parent hook context;
+// they live alongside hook-driven chains in the trace store and surface
+// in dev tooling under the same ListChains pagination.
 //
-//	Path                                                    | trigger | verify | frame | projection | emit
-//	cc/codex/opencode valid main (UserPromptSubmit/Stop/...) | yes     | yes    | yes   | yes        | yes
-//	any agent invalid catalog miss (BogusEvent)             | yes     | yes(*) | —     | —          | —
-//	cc/codex/opencode subagent updated_frame                | yes     | yes    | yes   | yes        | yes
-//	cc/codex/opencode subagent frame_missing/id_missing     | yes     | yes    | yes   | yes        | —
-//	SessionEnd (status=clear)                               | yes     | yes    | yes   | yes        | yes
-//	error_guard_blocked (StopFailure-stuck error)           | yes     | yes    | —     | —          | yes(*)
-//	verify rejected (pid_dead, identity_mismatch, ...)      | yes     | yes(*) | —     | —          | —
-//	replay-from-DB / sendSnapshot (cold reconnect)          | —       | —      | —     | —          | —
+//	Path                                                    | trigger | verify | frame | projection | emit | probe-intent
+//	cc/codex/opencode valid main (UserPromptSubmit/Stop/...) | yes     | yes    | yes   | yes        | yes  | —
+//	any agent invalid catalog miss (BogusEvent)             | yes     | yes(*) | —     | —          | —    | —
+//	cc/codex/opencode subagent updated_frame                | yes     | yes    | yes   | yes        | yes  | —
+//	cc/codex/opencode subagent frame_missing/id_missing     | yes     | yes    | yes   | yes        | —    | —
+//	SessionEnd (status=clear)                               | yes     | yes    | yes   | yes        | yes  | —
+//	error_guard_blocked (StopFailure-stuck error)           | yes     | yes    | —     | —          | yes(*)| —
+//	verify rejected (pid_dead, identity_mismatch, ...)      | yes     | yes(*) | —     | —          | —    | —
+//	replay-from-DB / sendSnapshot (cold reconnect)          | —       | —      | —     | —          | —    | —
+//	probe-intent: detector arm (case 2 / 5)                 | —       | —      | —     | —          | —    | yes (decision=start)
+//	probe-intent: detector cancel (case 3 / reconcile / stop)| —       | —      | —     | —          | —    | yes (decision=stop)
+//	probe-intent: applied signal (consumeSignals)           | —       | —      | —     | —          | —    | yes (decision=signal)
 //
 // Notes on absences (all reasonable, no follow-up trace step needed):
 //
@@ -52,6 +58,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wake/purdex/internal/store"
+)
+
+// Trace step kinds. The first five are written by the inline hook pipeline
+// in handleEvent. TraceStepProbeIntent is the sixth chain log step (W6-3
+// P2-T6) emitted by the ProbeIntent dispatcher; it lives alongside hook
+// chains in agent_trace_chains so dashboards can correlate detector
+// lifecycle with hook activity over the same session/pane.
+const (
+	TraceStepTrigger     = "trigger"
+	TraceStepVerify      = "verify"
+	TraceStepFrame       = "frame"
+	TraceStepProjection  = "projection"
+	TraceStepEmit        = "emit"
+	TraceStepProbeIntent = "probe-intent"
 )
 
 type hookTraceSink struct {
@@ -112,6 +132,69 @@ func (s *hookTraceSink) Close() {
 		close(s.queue)
 		s.worker.Wait()
 	})
+}
+
+// probeIntentTraceArgs is the input contract for AppendProbeIntent. Decision
+// is "start" / "stop" / "signal" / "drop"; Reason carries the lifecycle
+// trigger (e.g. "lifecycle-applyStatus", "stop-all", "stale-callback").
+// Payload is best-effort marshaled into PayloadJSON for downstream tooling.
+type probeIntentTraceArgs struct {
+	TmuxSession string
+	PaneID      string
+	AgentType   string
+	Kind        string
+	Decision    string
+	Reason      string
+	Payload     any
+}
+
+// AppendProbeIntent enqueues a single-step trace chain whose only step is a
+// [probe-intent] entry. The chain RootEventName is "probe_intent_<kind>" and
+// its terminal status mirrors the step decision so ListChains pagination
+// surfaces the chain without requiring extra plumbing on the read side.
+//
+// W6-3 P2-T6: dispatcher invokes this from applyIntentLifecycle (start /
+// stop), reconcileSessionActive (stop), stopAll (stop), consumeSignals
+// (signal), and drop sites (probeIntentOnDrop wrapper). The hookTraceSink
+// receiver is nil-safe so dispatcher code does not need to nil-check.
+func (s *hookTraceSink) AppendProbeIntent(args probeIntentTraceArgs) {
+	if s == nil {
+		return
+	}
+	now := time.Now().UnixNano()
+	chainID := uuid.NewString()
+	step := store.TraceStep{
+		StepID:      uuid.NewString(),
+		ChainID:     chainID,
+		Seq:         1,
+		Kind:        TraceStepProbeIntent,
+		TmuxSession: args.TmuxSession,
+		PaneID:      args.PaneID,
+		AgentType:   args.AgentType,
+		EventName:   args.Kind,
+		Decision:    args.Decision,
+		Reason:      args.Reason,
+		PayloadJSON: marshalTraceJSON(args.Payload),
+		BeforeJSON:  marshalTraceJSON(nil),
+		AfterJSON:   marshalTraceJSON(nil),
+		CreatedAt:   now,
+	}
+	chain := store.TraceChain{
+		ChainID:          chainID,
+		StartedAt:        now,
+		CompletedAt:      now,
+		TerminalStatus:   args.Decision,
+		TerminalReason:   args.Reason,
+		TmuxSession:      args.TmuxSession,
+		PaneID:           args.PaneID,
+		RootAgentType:    args.AgentType,
+		RootEventName:    "probe_intent_" + args.Kind,
+		RootReason:       args.Reason,
+		LatestStepKind:   TraceStepProbeIntent,
+		LatestDecision:   args.Decision,
+		LatestStepReason: args.Reason,
+	}
+	s.Enqueue(store.TraceRecord{Chain: chain, Steps: []store.TraceStep{step}})
 }
 
 type hookTraceCollector struct {
