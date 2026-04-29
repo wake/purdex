@@ -32,6 +32,14 @@ type sessionProvider interface {
 	ListSessions() ([]session.SessionInfo, error)
 }
 
+const (
+	sessionMappingUnavailableReason = "session_mapping_unavailable"
+	sessionPanesUnavailableReason   = "session_panes_unavailable"
+	processTableUnavailableReason   = "process_table_unavailable"
+	processDataUnavailableReason    = "process_data_unavailable"
+	tmuxPanesUnavailableReason      = "tmux_panes_unavailable"
+)
+
 type Collectors struct {
 	HostCollector         HostCollector
 	TmuxPaneLister        TmuxPaneLister
@@ -142,7 +150,14 @@ type TmuxSessionRef struct {
 type SessionMetrics struct {
 	SessionCode string               `json:"session_code"`
 	TmuxSession TmuxSessionRef       `json:"tmux_session"`
-	Daemon      PaneProcessAggregate `json:"daemon"`
+	Daemon      SessionDaemonMetrics `json:"daemon"`
+}
+
+type SessionDaemonMetrics struct {
+	CPUPercent        *float64 `json:"cpu_percent"`
+	MemoryBytes       *uint64  `json:"memory_bytes"`
+	ProcessCount      *int     `json:"process_count"`
+	UnavailableReason string   `json:"unavailable_reason,omitempty"`
 }
 
 func (m *Module) getSnapshot(ctx context.Context) (*snapshot, error) {
@@ -195,25 +210,114 @@ func (m *Module) collectSessionMetrics(ctx context.Context) ([]SessionMetrics, e
 
 	panes, err := m.collectors.TmuxPaneLister.ListPanes(ctx)
 	if err != nil {
-		return nil, err
+		return unavailableSessionMetricsForTmuxPanesFailure(sessions), nil
 	}
+	hasMatchingPane := make(map[string]bool, len(sessions))
+	for _, pane := range panes {
+		hasMatchingPane[pane.TmuxSessionID] = true
+	}
+	needsProcessTable := false
+	for _, sess := range sessions {
+		if sess.TmuxID != "" && hasMatchingPane[sess.TmuxID] {
+			needsProcessTable = true
+			break
+		}
+	}
+	if !needsProcessTable {
+		metrics := make([]SessionMetrics, 0, len(sessions))
+		for _, sess := range sessions {
+			reason := sessionPanesUnavailableReason
+			if sess.TmuxID == "" {
+				reason = sessionMappingUnavailableReason
+			}
+			metrics = append(metrics, unavailableSessionMetric(sess, reason))
+		}
+		return metrics, nil
+	}
+
 	processes, err := m.collectors.ProcessTableCollector.ListProcesses(ctx)
 	if err != nil {
-		return nil, err
+		return unavailableSessionMetricsForProcessTableFailure(sessions, hasMatchingPane), nil
 	}
 
 	metrics := make([]SessionMetrics, 0, len(sessions))
 	for _, sess := range sessions {
+		if sess.TmuxID == "" {
+			metrics = append(metrics, unavailableSessionMetric(sess, sessionMappingUnavailableReason))
+			continue
+		}
+		if !hasMatchingPane[sess.TmuxID] {
+			metrics = append(metrics, unavailableSessionMetric(sess, sessionPanesUnavailableReason))
+			continue
+		}
+		aggregate := AggregateSessionProcesses(sess.TmuxID, panes, processes)
+		if aggregate.ProcessCount == 0 {
+			metrics = append(metrics, unavailableSessionMetric(sess, processDataUnavailableReason))
+			continue
+		}
 		metrics = append(metrics, SessionMetrics{
 			SessionCode: sess.Code,
 			TmuxSession: TmuxSessionRef{
 				ID:   sess.TmuxID,
 				Name: sess.Name,
 			},
-			Daemon: AggregateSessionProcesses(sess.TmuxID, panes, processes),
+			Daemon: availableSessionDaemonMetrics(aggregate),
 		})
 	}
 	return metrics, nil
+}
+
+func unavailableSessionMetrics(sessions []session.SessionInfo, reason string) []SessionMetrics {
+	metrics := make([]SessionMetrics, 0, len(sessions))
+	for _, sess := range sessions {
+		metrics = append(metrics, unavailableSessionMetric(sess, reason))
+	}
+	return metrics
+}
+
+func unavailableSessionMetricsForTmuxPanesFailure(sessions []session.SessionInfo) []SessionMetrics {
+	metrics := make([]SessionMetrics, 0, len(sessions))
+	for _, sess := range sessions {
+		reason := tmuxPanesUnavailableReason
+		if sess.TmuxID == "" {
+			reason = sessionMappingUnavailableReason
+		}
+		metrics = append(metrics, unavailableSessionMetric(sess, reason))
+	}
+	return metrics
+}
+
+func unavailableSessionMetricsForProcessTableFailure(sessions []session.SessionInfo, hasMatchingPane map[string]bool) []SessionMetrics {
+	metrics := make([]SessionMetrics, 0, len(sessions))
+	for _, sess := range sessions {
+		reason := processTableUnavailableReason
+		if sess.TmuxID == "" {
+			reason = sessionMappingUnavailableReason
+		} else if !hasMatchingPane[sess.TmuxID] {
+			reason = sessionPanesUnavailableReason
+		}
+		metrics = append(metrics, unavailableSessionMetric(sess, reason))
+	}
+	return metrics
+}
+
+func unavailableSessionMetric(sess session.SessionInfo, reason string) SessionMetrics {
+	return SessionMetrics{
+		SessionCode: sess.Code,
+		TmuxSession: TmuxSessionRef{
+			ID:   sess.TmuxID,
+			Name: sess.Name,
+		},
+		Daemon: SessionDaemonMetrics{UnavailableReason: reason},
+	}
+}
+
+func availableSessionDaemonMetrics(aggregate PaneProcessAggregate) SessionDaemonMetrics {
+	return SessionDaemonMetrics{
+		CPUPercent:   &aggregate.CPUPercent,
+		MemoryBytes:  &aggregate.MemoryBytes,
+		ProcessCount: &aggregate.ProcessCount,
+	}
 }
 
 func (m *Module) effectiveConfig() EffectiveConfig {

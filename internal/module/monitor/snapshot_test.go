@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -153,11 +154,135 @@ func TestSnapshot_IncludesPurdexSessionProcessTotals(t *testing.T) {
 	assert.Equal(t, "abc123", sessions[0].SessionCode)
 	assert.Equal(t, "$1", sessions[0].TmuxSession.ID)
 	assert.Equal(t, "work", sessions[0].TmuxSession.Name)
-	assert.Equal(t, 6.0, sessions[0].Daemon.CPUPercent)
-	assert.Equal(t, uint64(600), sessions[0].Daemon.MemoryBytes)
-	assert.Equal(t, 3, sessions[0].Daemon.ProcessCount)
+	assert.Equal(t, 6.0, *sessions[0].Daemon.CPUPercent)
+	assert.Equal(t, uint64(600), *sessions[0].Daemon.MemoryBytes)
+	assert.Equal(t, 3, *sessions[0].Daemon.ProcessCount)
+	assert.Empty(t, sessions[0].Daemon.UnavailableReason)
 	assert.Equal(t, 1, tmuxLister.calls)
 	assert.Equal(t, 1, processCollector.calls)
+}
+
+func TestSnapshot_MarksSessionUnavailableWhenTmuxPaneListingFails(t *testing.T) {
+	m := New(WithCollectors(Collectors{
+		HostCollector:         newFakeHostCollector(),
+		TmuxPaneLister:        &fakeSnapshotTmuxPaneLister{err: errors.New("boom")},
+		ProcessTableCollector: &fakeSnapshotProcessCollector{},
+	}), withSessionProvider(&fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "abc123", TmuxID: "$1", Name: "work"},
+	}}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 1)
+	assertSessionDaemonUnavailable(t, sessions[0].Daemon, "tmux_panes_unavailable")
+	assertRawSessionDaemonNullFields(t, snapshot.Sessions, 0)
+}
+
+func TestSnapshot_TmuxPaneFailurePreservesMappingReasonsPerSession(t *testing.T) {
+	m := New(WithCollectors(Collectors{
+		HostCollector:         newFakeHostCollector(),
+		TmuxPaneLister:        &fakeSnapshotTmuxPaneLister{err: errors.New("boom")},
+		ProcessTableCollector: &fakeSnapshotProcessCollector{},
+	}), withSessionProvider(&fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "mapped", TmuxID: "$1", Name: "work"},
+		{Code: "missing-session", Name: "unknown"},
+	}}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 2)
+	reasons := sessionUnavailableReasonsByCode(sessions)
+	assert.Equal(t, "tmux_panes_unavailable", reasons["mapped"])
+	assert.Equal(t, "session_mapping_unavailable", reasons["missing-session"])
+}
+
+func TestSnapshot_MarksSessionUnavailableWhenProcessTableFails(t *testing.T) {
+	m := New(WithCollectors(Collectors{
+		HostCollector:         newFakeHostCollector(),
+		TmuxPaneLister:        &fakeSnapshotTmuxPaneLister{panes: []TmuxPane{{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101}}},
+		ProcessTableCollector: &fakeSnapshotProcessCollector{err: errors.New("boom")},
+	}), withSessionProvider(&fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "abc123", TmuxID: "$1", Name: "work"},
+	}}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 1)
+	assertSessionDaemonUnavailable(t, sessions[0].Daemon, "process_table_unavailable")
+}
+
+func TestSnapshot_ProcessTableFailurePreservesMappingReasonsPerSession(t *testing.T) {
+	m := New(WithCollectors(Collectors{
+		HostCollector: newFakeHostCollector(),
+		TmuxPaneLister: &fakeSnapshotTmuxPaneLister{panes: []TmuxPane{
+			{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101},
+		}},
+		ProcessTableCollector: &fakeSnapshotProcessCollector{err: errors.New("boom")},
+	}), withSessionProvider(&fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "mapped", TmuxID: "$1", Name: "work"},
+		{Code: "missing-pane", TmuxID: "$2", Name: "gone"},
+		{Code: "missing-session", Name: "unknown"},
+	}}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 3)
+	reasons := sessionUnavailableReasonsByCode(sessions)
+	assert.Equal(t, "process_table_unavailable", reasons["mapped"])
+	assert.Equal(t, "session_panes_unavailable", reasons["missing-pane"])
+	assert.Equal(t, "session_mapping_unavailable", reasons["missing-session"])
+}
+
+func TestSnapshot_MarksSessionUnavailableWhenPaneMappingIsMissing(t *testing.T) {
+	m := New(WithCollectors(Collectors{
+		HostCollector: newFakeHostCollector(),
+		TmuxPaneLister: &fakeSnapshotTmuxPaneLister{panes: []TmuxPane{
+			{TmuxSessionID: "$2", TmuxSessionName: "other", PaneID: "%2", PanePID: 201},
+		}},
+		ProcessTableCollector: &fakeSnapshotProcessCollector{processes: []Process{{PID: 201, PPID: 1, Command: "other", CPUPercent: 1, MemoryBytes: 100}}},
+	}), withSessionProvider(&fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "abc123", TmuxID: "$1", Name: "work"},
+	}}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 1)
+	assertSessionDaemonUnavailable(t, sessions[0].Daemon, "session_panes_unavailable")
+}
+
+func TestSnapshot_MarksSessionUnavailableWhenProcessDataIsMissing(t *testing.T) {
+	m := New(WithCollectors(Collectors{
+		HostCollector: newFakeHostCollector(),
+		TmuxPaneLister: &fakeSnapshotTmuxPaneLister{panes: []TmuxPane{
+			{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101},
+		}},
+		ProcessTableCollector: &fakeSnapshotProcessCollector{processes: []Process{{PID: 201, PPID: 1, Command: "other", CPUPercent: 1, MemoryBytes: 100}}},
+	}), withSessionProvider(&fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "abc123", TmuxID: "$1", Name: "work"},
+	}}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 1)
+	assertSessionDaemonUnavailable(t, sessions[0].Daemon, "process_data_unavailable")
 }
 
 func TestSnapshot_UsesSessionProviderFromRegistry(t *testing.T) {
@@ -260,20 +385,58 @@ func (p *fakeSessionProvider) ListSessions() ([]session.SessionInfo, error) {
 
 type fakeSnapshotTmuxPaneLister struct {
 	panes []TmuxPane
+	err   error
 	calls int
 }
 
 func (l *fakeSnapshotTmuxPaneLister) ListPanes(context.Context) ([]TmuxPane, error) {
 	l.calls++
+	if l.err != nil {
+		return nil, l.err
+	}
 	return l.panes, nil
 }
 
 type fakeSnapshotProcessCollector struct {
 	processes []Process
+	err       error
 	calls     int
 }
 
 func (c *fakeSnapshotProcessCollector) ListProcesses(context.Context) ([]Process, error) {
 	c.calls++
+	if c.err != nil {
+		return nil, c.err
+	}
 	return c.processes, nil
+}
+
+func assertSessionDaemonUnavailable(t *testing.T, daemon SessionDaemonMetrics, reason string) {
+	t.Helper()
+	assert.Nil(t, daemon.CPUPercent)
+	assert.Nil(t, daemon.MemoryBytes)
+	assert.Nil(t, daemon.ProcessCount)
+	assert.Equal(t, reason, daemon.UnavailableReason)
+}
+
+func sessionUnavailableReasonsByCode(sessions []SessionMetrics) map[string]string {
+	reasons := make(map[string]string, len(sessions))
+	for _, sess := range sessions {
+		reasons[sess.SessionCode] = sess.Daemon.UnavailableReason
+	}
+	return reasons
+}
+
+func assertRawSessionDaemonNullFields(t *testing.T, raw json.RawMessage, index int) {
+	t.Helper()
+	var sessions []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &sessions))
+	require.Greater(t, len(sessions), index)
+	daemon, ok := sessions[index]["daemon"].(map[string]any)
+	require.True(t, ok)
+	for _, field := range []string{"cpu_percent", "memory_bytes", "process_count"} {
+		value, exists := daemon[field]
+		assert.True(t, exists, "%s should be present", field)
+		assert.Nil(t, value, "%s should be null", field)
+	}
 }
