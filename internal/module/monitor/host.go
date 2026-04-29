@@ -38,21 +38,21 @@ type HostMetrics struct {
 
 type HostCPUMetrics struct {
 	Percent           *float64 `json:"percent"`
-	UnavailableReason string   `json:"unavailable_reason,omitempty"`
+	UnavailableReason *string  `json:"unavailable_reason"`
 }
 
 type HostMemoryMetrics struct {
 	TotalBytes        *uint64  `json:"total_bytes"`
 	UsedBytes         *uint64  `json:"used_bytes"`
 	UsedPercent       *float64 `json:"used_percent"`
-	UnavailableReason string   `json:"unavailable_reason,omitempty"`
+	UnavailableReason *string  `json:"unavailable_reason"`
 }
 
 type HostDiskMetrics struct {
 	TotalBytes        *uint64  `json:"total_bytes"`
 	UsedBytes         *uint64  `json:"used_bytes"`
 	UsedPercent       *float64 `json:"used_percent"`
-	UnavailableReason string   `json:"unavailable_reason,omitempty"`
+	UnavailableReason *string  `json:"unavailable_reason"`
 }
 
 type HostMetricsState struct {
@@ -67,9 +67,9 @@ func NewHostMetricsState(collector HostCollector) *HostMetricsState {
 func collectHostMetrics(ctx context.Context, state *HostMetricsState) HostMetrics {
 	if state == nil || state.collector == nil {
 		return HostMetrics{
-			CPU:    &HostCPUMetrics{UnavailableReason: hostCPUUnavailableReason},
-			Memory: &HostMemoryMetrics{UnavailableReason: hostMemoryUnavailableReason},
-			Disk:   &HostDiskMetrics{UnavailableReason: hostDiskUnavailableReason},
+			CPU:    &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUUnavailableReason)},
+			Memory: &HostMemoryMetrics{UnavailableReason: reasonPtr(hostMemoryUnavailableReason)},
+			Disk:   &HostDiskMetrics{UnavailableReason: reasonPtr(hostDiskUnavailableReason)},
 		}
 	}
 
@@ -83,18 +83,18 @@ func collectHostMetrics(ctx context.Context, state *HostMetricsState) HostMetric
 func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetrics {
 	sample, err := state.collector.CollectCPU(ctx)
 	if err != nil {
-		return &HostCPUMetrics{UnavailableReason: hostCPUUnavailableReason}
+		return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUUnavailableReason)}
 	}
 
 	if state.previous == nil {
 		state.previous = &sample
-		return &HostCPUMetrics{UnavailableReason: hostCPUPendingReason}
+		return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUPendingReason)}
 	}
 
 	percent := hostCPUPercent(*state.previous, sample)
 	state.previous = &sample
 	if percent == nil {
-		return &HostCPUMetrics{UnavailableReason: hostCPUPendingReason}
+		return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUPendingReason)}
 	}
 	return &HostCPUMetrics{Percent: percent}
 }
@@ -102,7 +102,7 @@ func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetric
 func collectHostMemory(ctx context.Context, collector HostCollector) *HostMemoryMetrics {
 	sample, err := collector.CollectMemory(ctx)
 	if err != nil {
-		return &HostMemoryMetrics{UnavailableReason: hostMemoryUnavailableReason}
+		return &HostMemoryMetrics{UnavailableReason: reasonPtr(hostMemoryUnavailableReason)}
 	}
 	usedPercent := usedPercent(sample.UsedBytes, sample.TotalBytes)
 	return &HostMemoryMetrics{
@@ -115,7 +115,7 @@ func collectHostMemory(ctx context.Context, collector HostCollector) *HostMemory
 func collectHostDisk(ctx context.Context, collector HostCollector) *HostDiskMetrics {
 	sample, err := collector.CollectDisk(ctx)
 	if err != nil {
-		return &HostDiskMetrics{UnavailableReason: hostDiskUnavailableReason}
+		return &HostDiskMetrics{UnavailableReason: reasonPtr(hostDiskUnavailableReason)}
 	}
 	usedPercent := usedPercent(sample.UsedBytes, sample.TotalBytes)
 	return &HostDiskMetrics{

@@ -271,7 +271,8 @@ func TestSnapshot_IncludesHostMetrics(t *testing.T) {
 	require.NoError(t, json.Unmarshal(snapshot.Host, &host))
 	require.NotNil(t, host.CPU)
 	assert.Nil(t, host.CPU.Percent)
-	assert.Equal(t, "pending", host.CPU.UnavailableReason)
+	require.NotNil(t, host.CPU.UnavailableReason)
+	assert.Equal(t, "pending", *host.CPU.UnavailableReason)
 	require.NotNil(t, host.Memory)
 	assert.Equal(t, uint64(1000), *host.Memory.TotalBytes)
 	require.NotNil(t, host.Disk)
@@ -316,7 +317,7 @@ func TestSnapshot_IncludesPurdexSessionProcessTotals(t *testing.T) {
 		{PID: 201, PPID: 101, Command: "worker", CPUPercent: 2, MemoryBytes: 200},
 		{PID: 101, PPID: 1, Command: "shell", CPUPercent: 1, MemoryBytes: 100},
 	}, sessions[0].Daemon.TopProcesses)
-	assert.Empty(t, sessions[0].Daemon.UnavailableReason)
+	assert.Nil(t, sessions[0].Daemon.UnavailableReason)
 	assert.Equal(t, 1, tmuxLister.calls)
 	assert.Equal(t, 1, processCollector.calls)
 }
@@ -685,13 +686,16 @@ func assertSessionDaemonUnavailable(t *testing.T, daemon SessionDaemonMetrics, r
 	assert.Nil(t, daemon.MemoryBytes)
 	assert.Nil(t, daemon.ProcessCount)
 	assert.Empty(t, daemon.TopProcesses)
-	assert.Equal(t, reason, daemon.UnavailableReason)
+	require.NotNil(t, daemon.UnavailableReason)
+	assert.Equal(t, reason, *daemon.UnavailableReason)
 }
 
 func sessionUnavailableReasonsByCode(sessions []SessionMetrics) map[string]string {
 	reasons := make(map[string]string, len(sessions))
 	for _, sess := range sessions {
-		reasons[sess.SessionCode] = sess.Daemon.UnavailableReason
+		if sess.Daemon.UnavailableReason != nil {
+			reasons[sess.SessionCode] = *sess.Daemon.UnavailableReason
+		}
 	}
 	return reasons
 }
