@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.257] - 2026-04-29
+
+### Feat(monitor): add daemon performance monitor foundation (#740)
+
+Adds the first non-breaking daemon foundation slice for the performance monitor. The daemon now registers an independent `monitor` module with `/api/monitor/config` and a cached `/api/monitor/snapshot` skeleton, separate from agent trace monitor routes.
+
+The config API persists monitor refresh interval and top-process limit settings with safe bounds and clamping. Snapshot caching now reuses fresh samples, invalidates on config updates, and avoids tmux/process sampling until later session-metrics slices.
+
+This release also adds backend primitives for subsequent tab/session metrics: host CPU/memory/disk summaries, all-pane tmux listing, process table parsing, and pane process-tree aggregation. No SPA monitor UI or user-visible session metrics are enabled yet.
+
 ## [1.0.0-alpha.256] - 2026-04-29
 
 ### Refactor(agent): W2 cleanup-followup — simplify cc/codex cleanup sets to two-set union (#738)
