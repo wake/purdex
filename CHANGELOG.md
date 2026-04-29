@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.252] - 2026-04-29
+
+### Fix(daemon): sweep:pid_dead broadcasts status=clear (#727 / closes #717)
+
+Fix opencode (and any agent) leaving its SPA indicator stuck after Ctrl+C exit. Sweep was correctly detecting process death and clearing `agent_frames`, but the WebSocket broadcast carried `status=""` instead of `"clear"`, so SPA's `handleNormalizedEvent` (which keys the clear path on `status === 'clear'`) couldn't recognize the session was empty.
+
+**Root cause** — `internal/module/agent/frame_ops.go` `buildProjectionNormalized` had asymmetric handling of two semantically equivalent "no top frame to display" states. The `projection == nil` branch passed through `result.Status` verbatim, while `projection != nil && TopFrame == nil` forced `StatusClear`. Sweep's `afterFrameCleared` (`sweep.go:551`) called the helper with `agentpkg.DeriveResult{}`, so the empty status leaked through to broadcast whenever a sweep cleared the last frame in a session.
+
+**Round-1 fix** — pass `agentpkg.DeriveResult{Status: agentpkg.StatusClear}` explicitly at the sweep callsite. Surgical 1-line change with explicit caller intent.
+
+**Round-2 hardening** (codex 3-parallel adversarial review):
+- *Defense in depth*: `buildProjectionNormalized`'s `projection == nil` branch now defaults empty `Status` to `StatusClear` (fail-safe for future callers).
+- *Race fix*: `afterFrameCleared` re-resolves `projectionForSession` right before broadcasting. If a hook handler raced in to create a new frame for the same session (e.g. user kills opencode and immediately runs `opencode` again, SessionStart hook lands mid-sweep), the broadcast now carries the live state instead of overwriting the just-installed running status with a stale clear. Best-effort — full serialization requires per-session locking, tracked separately.
+- *Test hygiene*: split broadcast contract tests into a focused `internal/module/agent/sweep_broadcast_test.go` with a shared `readSweepNormalizedEvent` helper that decodes the `HostEvent` envelope and inner `NormalizedEvent` once.
+
+#### Followups tracked
+
+- #728 — Sweep broadcast may be silently dropped (lossy WS, no replay) — pre-existing architectural concern; #717's fix makes the consequence more visible but doesn't worsen it.
+- #729 — Refactor: extract sweep broadcast emission into shared helper across `sweep.go:327` / `:499` / `:551`.
+
 ## [1.0.0-alpha.251] - 2026-04-29
 
 ### Feat(agent): W2 Phase 1 — schema + cc catalog naming separation + lifecycle metadata (#710)
