@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.253] - 2026-04-29
+
+### Fix(spa): wide-mode workspace drag — reorderable, smooth, axis-locked (#732)
+
+Restore workspace reordering by drag in the wide ActivityBar. The fix bundles four related issues uncovered iteratively while debugging:
+
+**Root cause** — `WorkspaceRow`'s name button (`flex-1`, the dominant click target) and Plus button called `onPointerDown stopPropagation()`, blocking dnd-kit `PointerSensor` from receiving pointerdown so workspace drag never activated. The "drag hijack" guard added in 259c2a4f / Phase 3a was redundant: `activationConstraint: { distance: 5 }` already separates click-without-movement from drag-with-movement.
+
+**Three follow-up fixes** surfaced once drag was reachable again:
+
+- *Sibling rows bouncing*: each row registers two overlapping droppables (sortable wrapper + header `useDroppable`). `pointerWithin` returned both, `over` flickered between ids, `verticalListSortingStrategy` displaced siblings only when over.id was in items → bounce. `customCollisionDetection` now filters `droppableContainers` by active drag type.
+- *Drag escapes the list / horizontal drift*: add `restrictWorkspaceDrag` modifier mirroring `ActivityBarNarrow` — Y-axis lock + scroll-zone bbox clamp; short-circuits for tab drag to preserve cross-workspace movement.
+- *Text blurs / appears compressed*: switched from `CSS.Transform.toString(transform)` (3-axis translate + scaleX/Y, non-integer y → sub-pixel blur) to `translate3d(0, Math.round(y), 0)`, matching the narrow-mode pattern. Removed the `title` attr on the workspace name span (was firing a native browser tooltip during drag).
+
+`WorkspaceRow.test.tsx`'s `drag-steals-click guard` describe (its premise was the bug) replaced with `header pointer-down propagation (drag reachability)` covering name / chevron / Plus.
+
 ## [1.0.0-alpha.252] - 2026-04-29
 
 ### Fix(daemon): sweep:pid_dead broadcasts status=clear (#727 / closes #717)
