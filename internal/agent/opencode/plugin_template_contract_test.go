@@ -69,14 +69,14 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 	switch eventType {
 	case "session.created":
 		return mappedHookEvent{
-			Name: "SessionStart",
+			Name: "PdxSessionStart",
 			Payload: map[string]any{
 				"session_id": strMapVal(properties, "sessionID"),
 			},
 		}, true
 	case "permission.asked":
 		return mappedHookEvent{
-			Name: "PermissionRequest",
+			Name: "PdxPermissionRequest",
 			Payload: map[string]any{
 				"request_type": "permission",
 				"permission":   properties["permission"],
@@ -85,7 +85,7 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 		}, true
 	case "question.asked":
 		return mappedHookEvent{
-			Name: "PermissionRequest",
+			Name: "PdxPermissionRequest",
 			Payload: map[string]any{
 				"request_type": "question",
 				"questions":    properties["questions"],
@@ -104,7 +104,7 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 			}
 		}
 		return mappedHookEvent{
-			Name: "StopFailure",
+			Name: "PdxStopFailure",
 			Payload: map[string]any{
 				"error":         errName,
 				"error_details": errDetails,
@@ -124,14 +124,14 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 			return mappedHookEvent{}, false
 		}
 		return mappedHookEvent{
-			Name: "Stop",
+			Name: "PdxStop",
 			Payload: map[string]any{
 				"session_id": sessionID,
 			},
 		}, true
 	case "session.deleted":
 		return mappedHookEvent{
-			Name: "SessionEnd",
+			Name: "PdxSessionEnd",
 			Payload: map[string]any{
 				"session_id": strMapVal(properties, "sessionID"),
 			},
@@ -183,7 +183,7 @@ func (s *pluginSimState) simulateChatMessage(input, output map[string]any) mappe
 		modelName = provID + "/" + modelID
 	}
 	return mappedHookEvent{
-		Name: "UserPromptSubmit",
+		Name: "PdxUserPromptSubmit",
 		Payload: map[string]any{
 			"session_id": sessionID,
 			"message_id": messageID,
@@ -208,7 +208,7 @@ func (s *pluginSimState) simulateToolExecuteBefore(input, output map[string]any)
 	agentType := simAgentTypeFromArgs(args)
 	s.activeSubagents[key] = agentType
 	return mappedHookEvent{
-		Name: "SubagentStart",
+		Name: "PdxSubagentStart",
 		Payload: map[string]any{
 			"agent_id":    callID,
 			"agent_type":  agentType,
@@ -231,7 +231,7 @@ func (s *pluginSimState) simulateToolExecuteAfter(input, output map[string]any) 
 	}
 	delete(s.activeSubagents, key)
 	return mappedHookEvent{
-		Name: "SubagentStop",
+		Name: "PdxSubagentStop",
 		Payload: map[string]any{
 			"agent_id":   callID,
 			"agent_type": agentType,
@@ -461,7 +461,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "session.created",
 			fixtureFile: "session.created.json",
 			kind:        "bus-event",
-			expectName:  "SessionStart",
+			expectName: "PdxSessionStart",
 			expectPayload: map[string]any{
 				"session_id": "ses_fixture_session_created_001",
 			},
@@ -470,7 +470,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "permission.asked",
 			fixtureFile: "permission.asked.json",
 			kind:        "bus-event",
-			expectName:  "PermissionRequest",
+			expectName: "PdxPermissionRequest",
 			expectPayload: map[string]any{
 				"request_type": "permission",
 				"permission":   "edit",
@@ -481,7 +481,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "question.asked",
 			fixtureFile: "question.asked.json",
 			kind:        "bus-event",
-			expectName:  "PermissionRequest",
+			expectName: "PdxPermissionRequest",
 			expectPayload: map[string]any{
 				"request_type": "question",
 				"questions": []any{
@@ -494,7 +494,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "session.error",
 			fixtureFile: "session.error.json",
 			kind:        "bus-event",
-			expectName:  "StopFailure",
+			expectName: "PdxStopFailure",
 			expectPayload: map[string]any{
 				"error":         "ProviderError",
 				"error_details": "request timed out",
@@ -504,7 +504,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "session.status",
 			fixtureFile: "session.status.json",
 			kind:        "bus-event",
-			expectName:  "Stop",
+			expectName: "PdxStop",
 			expectPayload: map[string]any{
 				"session_id": "ses_fixture_status_idle_001",
 			},
@@ -513,7 +513,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "session.deleted",
 			fixtureFile: "session.deleted.json",
 			kind:        "bus-event",
-			expectName:  "SessionEnd",
+			expectName: "PdxSessionEnd",
 			expectPayload: map[string]any{
 				"session_id": "ses_fixture_deleted_001",
 			},
@@ -522,7 +522,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "chat.message",
 			fixtureFile: "chat.message.json",
 			kind:        "strong-hook",
-			expectName:  "UserPromptSubmit",
+			expectName: "PdxUserPromptSubmit",
 			expectPayload: map[string]any{
 				"session_id": "ses_fixture_chat_001",
 				"message_id": "msg_fixture_chat_001",
@@ -535,7 +535,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "tool.execute.before",
 			fixtureFile: "tool.execute.before.json",
 			kind:        "strong-hook",
-			expectName:  "SubagentStart",
+			expectName: "PdxSubagentStart",
 			expectPayload: map[string]any{
 				"agent_id":    "call_fixture_task_001",
 				"agent_type":  "Explore",
@@ -551,7 +551,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 				key := strMapVal(env.Input, "sessionID") + ":" + strMapVal(env.Input, "callID")
 				s.activeSubagents[key] = "Explore"
 			},
-			expectName: "SubagentStop",
+			expectName: "PdxSubagentStop",
 			expectPayload: map[string]any{
 				"agent_id":   "call_fixture_task_001",
 				"agent_type": "Explore",
@@ -625,7 +625,7 @@ func TestOpenCodePluginTemplate_ChatMessageClearsStaleErrorSuppression(t *testin
 			"data": map[string]any{"message": "boom"},
 		},
 	}); !ok {
-		t.Fatal("session.error must emit StopFailure")
+		t.Fatal("session.error must emit PdxStopFailure")
 	}
 	if !state.suppressIdleForSession["S"] {
 		t.Fatal("suppressIdleForSession[S] should be armed after session.error")
@@ -649,8 +649,8 @@ func TestOpenCodePluginTemplate_ChatMessageClearsStaleErrorSuppression(t *testin
 	if !ok {
 		t.Fatal("idle after chat.message clear should emit Stop")
 	}
-	if got.Name != "Stop" {
-		t.Fatalf("event name = %q, want Stop", got.Name)
+	if got.Name != "PdxStop" {
+		t.Fatalf("event name = %q, want PdxStop", got.Name)
 	}
 	if sid := strMapVal(got.Payload, "session_id"); sid != "S" {
 		t.Fatalf("session_id = %q, want %q", sid, "S")
@@ -672,7 +672,7 @@ func TestOpenCodePluginTemplate_StaleSuppressionWithoutChatMessage(t *testing.T)
 			"data": map[string]any{"message": "boom"},
 		},
 	}); !ok {
-		t.Fatal("session.error must emit StopFailure")
+		t.Fatal("session.error must emit PdxStopFailure")
 	}
 
 	// No chat.message between error and idle. The first idle should be

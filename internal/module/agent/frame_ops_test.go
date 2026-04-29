@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
@@ -24,7 +25,7 @@ func TestHandleEvent_SessionStartUpsertsFrame(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`))
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -58,8 +59,8 @@ func TestHandleEvent_StopDoesNotPopFrame(t *testing.T) {
 	})
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxStop","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -92,8 +93,8 @@ func TestHandleEvent_SessionEndPopsFrame(t *testing.T) {
 	})
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSessionEnd","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionEnd","raw_event":{},"agent_type":"cc"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -125,7 +126,7 @@ func TestHandleEvent_SubagentDoesNotCreateFrame(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"PdxSubagentStart","raw_event":{},"agent_type":"cc"}`))
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{},"agent_type":"cc"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	m.handleEvent(w, req)
@@ -159,9 +160,9 @@ func TestHandleEvent_OpenCodeSessionStartClearsPersistedSubagents(t *testing.T) 
 	})
 
 	for _, body := range []string{
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","event_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SubagentStart","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"SessionStart","raw_event":{},"agent_type":"opencode"}`,
 	} {
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -340,6 +341,96 @@ func TestReplay_RestoresLegacySessionsWithoutFrames(t *testing.T) {
 	}
 	if got := m.currentStatus["legacy"]; got != agentpkg.StatusIdle {
 		t.Fatalf("legacy currentStatus = %q, want idle", got)
+	}
+}
+
+// TestReplay_OpencodeLegacyEventName_NotRestored pins the post-W2-P3
+// behavior surfaced by codex Round-1 review of PR #736: when daemon restart
+// replays the legacy agent_events store and a session has no frame
+// projection (e.g. a pre-W2 session that ran before frame projections were
+// written), DeriveStatus is fed the persisted EventName verbatim. After
+// P3-T2 / P3-T6, opencode's DeriveStatus only recognizes Pdx-prefixed names,
+// so legacy literals from a pre-alpha.255 store now return Valid=false.
+//
+// Spec §0 + plan G1 explicitly accept this for alpha — daemon-internal
+// store does not carry a cross-version migration; user reinstall + a fresh
+// hook trigger restores status. This test pins the behavior so a future
+// silent drift back to a normalize/alias path (which would re-introduce the
+// just-removed lifecycle fallback into a different code path) surfaces
+// immediately.
+//
+// P3-T6.2 hardening: also asserts replayFromDB deletes the stale row so a
+// follow-on sendSnapshot (or another replay cycle) doesn't keep tripping
+// over the same garbage. Mirrors handler.go:230's hot-path cleanup.
+func TestReplay_OpencodeLegacyEventName_NotRestored(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "legacy")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "legacy-code", Name: "legacy"},
+	}}
+	m.registry.Register(opencode.NewProvider())
+
+	// Seed the legacy agent_events store with an opencode row written by
+	// a pre-alpha.255 daemon (event_name = upstream literal "Stop"). No
+	// frame projection exists for this session — replay falls through to
+	// the agent_events fallback.
+	if err := m.events.Set("legacy", "Stop", json.RawMessage(`{}`), "opencode", 11); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+
+	m.replayFromDB()
+
+	if got := m.currentStatus["legacy"]; got != "" {
+		t.Errorf("legacy currentStatus = %q, want empty (post-P3 opencode DeriveStatus rejects legacy literal; spec §0 alpha-acceptable — user reinstall + fresh hook restores status)", got)
+	}
+	if got, err := m.events.Get("legacy"); err != nil {
+		t.Fatalf("events.Get after replay: %v", err)
+	} else if got != nil {
+		t.Errorf("legacy agent_events row not deleted after replay: %+v (mirror handler.go:230 invalid-result cleanup so subsequent sendSnapshot doesn't broadcast stale row)", got)
+	}
+}
+
+// TestSendSnapshot_OpencodeLegacyEventName_SkipAndCleanup pins the cold
+// reconnect path that codex Round-2 Attack flagged: a legacy stored
+// event_name like "Stop" that DeriveStatus now rejects must NOT be
+// broadcast to a fresh SPA subscriber. Without this guard sendSnapshot
+// emits a `hook` payload with raw_event_name="Stop" and empty status,
+// which the SPA's hook-module lastTrigger keys directly off — surfacing a
+// stale legacy event in the UI on every reconnect.
+func TestSendSnapshot_OpencodeLegacyEventName_SkipAndCleanup(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "legacy")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "legacy-code", Name: "legacy"},
+	}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(opencode.NewProvider())
+
+	if err := m.events.Set("legacy", "Stop", json.RawMessage(`{}`), "opencode", 11); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+
+	broadcaster := core.NewEventsBroadcaster()
+	sub := broadcaster.AddTestSubscriber()
+	defer broadcaster.RemoveTestSubscriber(sub)
+
+	m.sendSnapshot(sub)
+
+	select {
+	case msg := <-sub.SendCh():
+		t.Errorf("sendSnapshot broadcast a stale legacy hook event to a fresh subscriber: %s", string(msg))
+	case <-time.After(50 * time.Millisecond):
+		// expected — no broadcast for invalid-result rows.
+	}
+
+	if got, err := m.events.Get("legacy"); err != nil {
+		t.Fatalf("events.Get after sendSnapshot: %v", err)
+	} else if got != nil {
+		t.Errorf("legacy agent_events row not deleted after sendSnapshot: %+v", got)
 	}
 }
 

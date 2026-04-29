@@ -101,13 +101,13 @@ func TestOpenCodeCheckHooks_ReportsAll8EventsFromEventsList(t *testing.T) {
 		t.Errorf("status.Events len=%d, want %d (one per installable Events())", len(status.Events), len(events))
 	}
 	for _, e := range events {
-		info, ok := status.Events[e.Name]
+		info, ok := status.Events[e.PurdexName]
 		if !ok {
-			t.Errorf("status.Events missing key %q (from Events())", e.Name)
+			t.Errorf("status.Events missing key %q (from Events())", e.PurdexName)
 			continue
 		}
 		if !info.Installed {
-			t.Errorf("event %q: Installed=false after fresh install", e.Name)
+			t.Errorf("event %q: Installed=false after fresh install", e.PurdexName)
 		}
 	}
 }
@@ -154,10 +154,10 @@ func TestCheckHooks_ValidPlugin_AllInstalled(t *testing.T) {
 		t.Fatalf("valid plugin: Issues=%v, want empty", status.Issues)
 	}
 	for _, spec := range installableOpenCodeEvents(p.Events()) {
-		if info, ok := status.Events[spec.Name]; !ok {
-			t.Errorf("status.Events missing %q", spec.Name)
+		if info, ok := status.Events[spec.PurdexName]; !ok {
+			t.Errorf("status.Events missing %q", spec.PurdexName)
 		} else if !info.Installed {
-			t.Errorf("event %q Installed=false", spec.Name)
+			t.Errorf("event %q Installed=false", spec.PurdexName)
 		}
 	}
 }
@@ -179,10 +179,10 @@ func TestCheckHooks_HandEditedPlugin_Unmanaged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read plugin: %v", err)
 	}
-	// Remove the Stop emit call.
-	edited := strings.Replace(string(data), "await emit('Stop',", "// await emit('Stop',", 1)
+	// Remove the Stop emit call (P3-T3 form: emit(PURDEX_EVENT.PdxStop, ...)).
+	edited := strings.Replace(string(data), "await emit(PURDEX_EVENT.PdxStop,", "// await emit(PURDEX_EVENT.PdxStop,", 1)
 	if edited == string(data) {
-		t.Fatal("test setup: failed to mutate template (Stop emit not found)")
+		t.Fatal("test setup: failed to mutate template (PdxStop emit not found)")
 	}
 	if err := os.WriteFile(pluginPath, []byte(edited), 0644); err != nil {
 		t.Fatalf("write edit: %v", err)
@@ -200,8 +200,8 @@ func TestCheckHooks_HandEditedPlugin_Unmanaged(t *testing.T) {
 		t.Fatalf("hand-edited plugin: issues=%v, want 'plugin body differs from managed template'", status.Issues)
 	}
 	for _, spec := range installableOpenCodeEvents(p.Events()) {
-		if info, ok := status.Events[spec.Name]; ok && info.Installed {
-			t.Errorf("event %q Installed=true after byte-mismatch, want false", spec.Name)
+		if info, ok := status.Events[spec.PurdexName]; ok && info.Installed {
+			t.Errorf("event %q Installed=true after byte-mismatch, want false", spec.PurdexName)
 		}
 	}
 }

@@ -112,7 +112,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	events := make(map[string]agent.HookEventInfo, len(specs))
 	if !resolved {
 		for _, spec := range specs {
-			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath, FutureOnly: spec.FutureOnly}
+			events[spec.PurdexName] = agent.HookEventInfo{Installed: false, Command: pluginPath, FutureOnly: spec.FutureOnly}
 		}
 		// Managed=true: the marker is present, we just can't verify body.
 		// UI Remove button must stay enabled.
@@ -126,7 +126,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	expected := renderManagedPlugin(trustedPath)
 	if !bytes.Equal(data, []byte(expected)) {
 		for _, spec := range specs {
-			events[spec.Name] = agent.HookEventInfo{Installed: false, Command: pluginPath, FutureOnly: spec.FutureOnly}
+			events[spec.PurdexName] = agent.HookEventInfo{Installed: false, Command: pluginPath, FutureOnly: spec.FutureOnly}
 		}
 		return withSupport(agent.HookStatus{
 			Installed: false,
@@ -136,7 +136,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		}, agentVersion), nil
 	}
 	for _, spec := range specs {
-		events[spec.Name] = agent.HookEventInfo{Installed: true, Command: pluginPath, FutureOnly: spec.FutureOnly}
+		events[spec.PurdexName] = agent.HookEventInfo{Installed: true, Command: pluginPath, FutureOnly: spec.FutureOnly}
 	}
 	return withSupport(agent.HookStatus{Installed: true, Managed: true, Events: events, Issues: []string{}}, agentVersion), nil
 }

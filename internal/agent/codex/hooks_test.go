@@ -560,13 +560,13 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	original := codexEventSpecs
 	codexEventSpecs = append(append([]agent.HookEventSpec(nil), codexEventSpecs...),
-		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
-		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+		agent.HookEventSpec{PurdexName: "PdxIgnoredSynthetic", UpstreamKeys: []string{"IgnoredSynthetic"}, Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{PurdexName: "PdxUnsupportedSynthetic", UpstreamKeys: []string{"UnsupportedSynthetic"}, Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
 	)
 	t.Cleanup(func() { codexEventSpecs = original })
 
 	for _, name := range codexEventNames() {
-		if name == "IgnoredSynthetic" || name == "UnsupportedSynthetic" {
+		if name == "PdxIgnoredSynthetic" || name == "PdxUnsupportedSynthetic" {
 			t.Fatalf("codexEventNames included non-installable spec %q", name)
 		}
 	}
@@ -713,14 +713,18 @@ func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
 	if len(status.Events) != 9 {
 		t.Errorf("CheckHooks reported %d events, want 9", len(status.Events))
 	}
-	for _, name := range expectedCodexInstallerNames {
-		info, ok := status.Events[name]
+	// status.Events is keyed by PurdexName post P3-T4; expectedCodexInstallerNames
+	// is the upstream-key list, so flip via the catalog's UpstreamKey ↔
+	// PurdexName 1:1 mapping.
+	for _, upstream := range expectedCodexInstallerNames {
+		purdexName := "Pdx" + upstream
+		info, ok := status.Events[purdexName]
 		if !ok {
-			t.Errorf("CheckHooks.Events missing key %q", name)
+			t.Errorf("CheckHooks.Events missing key %q", purdexName)
 			continue
 		}
 		if !info.Installed {
-			t.Errorf("event %q: Installed=false after fresh install", name)
+			t.Errorf("event %q: Installed=false after fresh install", purdexName)
 		}
 	}
 	if !status.Installed {
@@ -902,8 +906,8 @@ func TestCheckHooks_ThirdPartyLegacyEntryDoesNotTriggerReinstall(t *testing.T) {
 	if !status.Installed {
 		t.Fatalf("expected all pdx hooks to be reported installed, got issues=%v", status.Issues)
 	}
-	if !status.Events["SessionStart"].Installed {
-		t.Fatal("SessionStart should be installed despite coexisting third-party legacy entry")
+	if !status.Events["PdxSessionStart"].Installed {
+		t.Fatal("PdxSessionStart should be installed despite coexisting third-party legacy entry")
 	}
 }
 
@@ -1007,7 +1011,8 @@ func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
 	if len(status.Issues) != 0 {
 		t.Fatalf("legacy 3-event user: Issues=%v, want empty", status.Issues)
 	}
-	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "SessionEnd"}
+	// status.Events keyed by PurdexName post P3-T4.
+	futureOnly := []string{"PdxSubagentStart", "PdxSubagentStop", "PdxStopFailure", "PdxNotification", "PdxSessionEnd"}
 	for _, name := range futureOnly {
 		info, ok := status.Events[name]
 		if !ok {
@@ -1041,9 +1046,11 @@ func TestCheckHooks_NineEvent_FullyInstalled_NoIssues(t *testing.T) {
 		t.Fatalf("full 9-event install: Issues=%v, want empty", status.Issues)
 	}
 	for _, name := range expectedCodexInstallerNames {
-		info := status.Events[name]
+		// status.Events keyed by PurdexName.
+		purdex := "Pdx" + name
+		info := status.Events[purdex]
 		if !info.Installed {
-			t.Errorf("event %q Installed=false after full install", name)
+			t.Errorf("event %q Installed=false after full install", purdex)
 		}
 	}
 }
@@ -1136,12 +1143,13 @@ func TestCheckHooks_FutureOnlyAbsent_DoesNotBlock(t *testing.T) {
 	if len(status.Issues) != 0 {
 		t.Fatalf("mixed FutureOnly absent/valid: Issues=%v, want empty", status.Issues)
 	}
-	for _, absent := range []string{"SubagentStart", "SubagentStop", "SessionEnd"} {
+	// status.Events keyed by PurdexName post P3-T4.
+	for _, absent := range []string{"PdxSubagentStart", "PdxSubagentStop", "PdxSessionEnd"} {
 		if status.Events[absent].Installed {
 			t.Errorf("absent FutureOnly %q Installed=true, want false", absent)
 		}
 	}
-	for _, valid := range []string{"StopFailure", "Notification", "PermissionRequest"} {
+	for _, valid := range []string{"PdxStopFailure", "PdxNotification", "PdxPermissionRequest"} {
 		if !status.Events[valid].Installed {
 			t.Errorf("valid FutureOnly %q Installed=false, want true", valid)
 		}
@@ -1398,12 +1406,15 @@ func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 	if !status.Installed {
 		t.Fatalf("legacy 3-event: Installed=false, Issues=%v", status.Issues)
 	}
+	// UpgradesAvailable is populated with PurdexName values post P3-T4 (the
+	// daemon's HookStatus map flipped to PurdexName-keyed events; the upgrade
+	// list mirrors that convention so the SPA can index both with the same id).
 	want := map[string]bool{
-		"SubagentStart": true,
-		"SubagentStop":  true,
-		"StopFailure":   true,
-		"Notification":  true,
-		"SessionEnd":    true,
+		"PdxSubagentStart": true,
+		"PdxSubagentStop":  true,
+		"PdxStopFailure":   true,
+		"PdxNotification":  true,
+		"PdxSessionEnd":    true,
 	}
 	if len(status.UpgradesAvailable) != len(want) {
 		t.Fatalf("UpgradesAvailable=%v, want %d entries", status.UpgradesAvailable, len(want))
@@ -1450,13 +1461,14 @@ func TestCheckHooks_EventInfoCarriesFutureOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
 	}
-	requiredFalse := []string{"SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"}
+	// status.Events keyed by PurdexName post P3-T4.
+	requiredFalse := []string{"PdxSessionStart", "PdxUserPromptSubmit", "PdxStop", "PdxPermissionRequest"}
 	for _, name := range requiredFalse {
 		if status.Events[name].FutureOnly {
 			t.Errorf("event %q FutureOnly=true, want false", name)
 		}
 	}
-	futureOnly := []string{"SubagentStart", "SubagentStop", "StopFailure", "Notification", "SessionEnd"}
+	futureOnly := []string{"PdxSubagentStart", "PdxSubagentStop", "PdxStopFailure", "PdxNotification", "PdxSessionEnd"}
 	for _, name := range futureOnly {
 		if !status.Events[name].FutureOnly {
 			t.Errorf("event %q FutureOnly=false, want true", name)
@@ -1690,7 +1702,7 @@ func TestMergeCodexHooksFile_MatcherKeyIsUpstreamKey(t *testing.T) {
 			continue
 		}
 		if len(spec.UpstreamKeys) == 0 {
-			t.Fatalf("installable spec %s has empty UpstreamKeys", spec.Name)
+			t.Fatalf("installable spec %s has empty UpstreamKeys", spec.PurdexName)
 		}
 		want[spec.UpstreamKeys[0]] = true
 	}
@@ -1726,7 +1738,7 @@ func TestMergeCodexHooksFile_CommandTokenIsPurdexName(t *testing.T) {
 		}
 		entries, _ := hooks[spec.UpstreamKeys[0]].([]any)
 		if len(entries) == 0 {
-			t.Errorf("spec %s: no entries under upstream key %q", spec.Name, spec.UpstreamKeys[0])
+			t.Errorf("spec %s: no entries under upstream key %q", spec.PurdexName, spec.UpstreamKeys[0])
 			continue
 		}
 		var pdxCommand string
@@ -1741,15 +1753,15 @@ func TestMergeCodexHooksFile_CommandTokenIsPurdexName(t *testing.T) {
 			}
 		}
 		if pdxCommand == "" {
-			t.Errorf("spec %s: no pdx command found under upstream key %q", spec.Name, spec.UpstreamKeys[0])
+			t.Errorf("spec %s: no pdx command found under upstream key %q", spec.PurdexName, spec.UpstreamKeys[0])
 			continue
 		}
 		tokens := tokenizeCodexCommand(pdxCommand)
 		if got := tokens[len(tokens)-1]; got != spec.PurdexName {
-			t.Errorf("spec %s: command end token = %q, want PurdexName %q", spec.Name, got, spec.PurdexName)
+			t.Errorf("spec %s: command end token = %q, want PurdexName %q", spec.PurdexName, got, spec.PurdexName)
 		}
 		if !strings.HasPrefix(spec.PurdexName, "Pdx") {
-			t.Errorf("spec %s: PurdexName %q lacks Pdx prefix (catalog drift)", spec.Name, spec.PurdexName)
+			t.Errorf("spec %s: PurdexName %q lacks Pdx prefix (catalog drift)", spec.PurdexName, spec.PurdexName)
 		}
 	}
 }
@@ -1784,6 +1796,43 @@ func TestCodexKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
 	}
 }
 
+// TestCodexOwnedCleanupEventNames_FixtureDerivedLegacySet pins the static
+// fixture introduced in P3-T4a to the runtime codex installable upstream-key
+// set. After P3-T4 removed spec.Name the legacy upstream-key strings live
+// only in codexLegacyEventNames; the catalog still exposes them via
+// UpstreamKeys[0] (codex has 1:1 PurdexName ↔ UpstreamKey mapping). Drift
+// detected here means the fixture is out of sync with the catalog (until
+// PR-W2-cleanup-followup removes the legacy set entirely).
+func TestCodexOwnedCleanupEventNames_FixtureDerivedLegacySet(t *testing.T) {
+	fixture := make(map[string]bool, len(codexLegacyEventNames))
+	for _, n := range codexLegacyEventNames {
+		fixture[n] = true
+	}
+	runtime := make(map[string]bool)
+	for _, spec := range codexEventSpecs {
+		if !agent.IsInstallableHookSpec(spec) {
+			continue
+		}
+		// codex installable specs have a single-element UpstreamKeys slice
+		// equal to the legacy upstream event name (e.g. "Stop") that
+		// codexLegacyEventNames also lists.
+		runtime[spec.UpstreamKeys[0]] = true
+	}
+	if len(fixture) != len(runtime) {
+		t.Errorf("codexLegacyEventNames size = %d, runtime installable upstream-key set size = %d", len(fixture), len(runtime))
+	}
+	for n := range runtime {
+		if !fixture[n] {
+			t.Errorf("codexLegacyEventNames missing runtime installable Name %q", n)
+		}
+	}
+	for n := range fixture {
+		if !runtime[n] {
+			t.Errorf("codexLegacyEventNames has %q but no runtime installable Name matches (drift — update fixture or catalog)", n)
+		}
+	}
+}
+
 // TestCodexOwnedCleanupEventNames_ThreeSetUnion asserts the cleanup set is
 // the three-set union per spec §6.1 invariant 6: installable specs'
 // UpstreamKeys ∪ PurdexName ∪ legacy Name. codex has one-to-one mapping so
@@ -1800,7 +1849,7 @@ func TestCodexOwnedCleanupEventNames_ThreeSetUnion(t *testing.T) {
 			want[key] = true
 		}
 		want[spec.PurdexName] = true
-		want[spec.Name] = true
+		want[spec.PurdexName] = true
 	}
 	if len(got) != len(want) {
 		t.Errorf("codexOwnedCleanupEventNames size = %d, want %d", len(got), len(want))
@@ -1894,7 +1943,7 @@ func TestCodexOwnedCleanupEventNames_CleansLegacyAndNew(t *testing.T) {
 }
 
 // TestCheckCodexEvent_LooksUpByUpstreamKey asserts CheckHooks reads hooks.json
-// using spec.UpstreamKeys[0] (not spec.Name). After P2-T3 the read path
+// using spec.UpstreamKeys[0] (not spec.PurdexName). After P2-T3 the read path
 // mirrors the write path: a hooks.json keyed by the upstream event name with
 // a command whose tail is the PurdexName must classify as Installed=true.
 func TestCheckCodexEvent_LooksUpByUpstreamKey(t *testing.T) {
@@ -1916,7 +1965,7 @@ func TestCheckCodexEvent_LooksUpByUpstreamKey(t *testing.T) {
 		}
 		// Sanity: upstream key actually present.
 		if _, ok := hooks[spec.UpstreamKeys[0]]; !ok {
-			t.Errorf("spec %s: hooks.json missing UpstreamKey %q", spec.Name, spec.UpstreamKeys[0])
+			t.Errorf("spec %s: hooks.json missing UpstreamKey %q", spec.PurdexName, spec.UpstreamKeys[0])
 		}
 	}
 
@@ -1930,12 +1979,12 @@ func TestCheckCodexEvent_LooksUpByUpstreamKey(t *testing.T) {
 		if !agent.IsInstallableHookSpec(spec) {
 			continue
 		}
-		info := status.Events[spec.Name]
+		info := status.Events[spec.PurdexName]
 		if !info.Installed {
-			t.Errorf("spec %s: Events[%q].Installed=false; want true (UpstreamKey-keyed lookup)", spec.Name, spec.Name)
+			t.Errorf("spec %s: Events[%q].Installed=false; want true (UpstreamKey-keyed lookup)", spec.PurdexName, spec.PurdexName)
 		}
 		if !strings.Contains(info.Command, spec.PurdexName) {
-			t.Errorf("spec %s: Events[%q].Command=%q lacks PurdexName %q", spec.Name, spec.Name, info.Command, spec.PurdexName)
+			t.Errorf("spec %s: Events[%q].Command=%q lacks PurdexName %q", spec.PurdexName, spec.PurdexName, info.Command, spec.PurdexName)
 		}
 	}
 	// Sanity: feature flag preserved separately by the config.toml writer.

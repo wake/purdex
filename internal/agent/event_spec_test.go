@@ -4,19 +4,16 @@ import "testing"
 
 var lookupTestCatalog = []HookEventSpec{
 	{
-		Name:         "SessionStart",
 		PurdexName:   "PdxSessionStart",
 		UpstreamKeys: []string{"SessionStart"},
 		Lifecycle:    LifecycleSessionStart,
 	},
 	{
-		Name:         "PermissionRequest",
 		PurdexName:   "PdxPermissionRequest",
 		UpstreamKeys: []string{"permission.asked", "question.asked"},
 		Lifecycle:    LifecycleNone,
 	},
 	{
-		Name:         "Stop",
 		PurdexName:   "PdxStop",
 		UpstreamKeys: []string{"Stop"},
 		Lifecycle:    LifecycleStop,
@@ -71,30 +68,52 @@ func TestLookupByUpstreamKey_NotFound(t *testing.T) {
 	}
 }
 
-// Pre-W2 catalog entries do not yet populate PurdexName / UpstreamKeys /
-// Lifecycle. New fields must default to zero values without disturbing the
-// legacy Name field, so existing cc / codex / opencode literals compile and
-// behave unchanged until Phase 1 cc + Phase 2 codex + Phase 3 opencode
-// migrations land.
-func TestHookEventSpec_NewFieldsZeroValueBackwardCompat(t *testing.T) {
+// Post-W2 (P3-T4 ship) HookEventSpec exposes PurdexName / UpstreamKeys /
+// Lifecycle as the catalog identifiers. The pre-W2 Name field has been
+// removed. This test pins the zero-value behavior of every remaining field so
+// catalog rows that only populate the canonical W2 fields keep compiling and
+// behaving as expected.
+func TestHookEventSpec_ZeroValueDefaults(t *testing.T) {
 	spec := HookEventSpec{
-		Name:        "SessionStart",
-		EmitsStatus: []Status{StatusRunning},
-		Description: "test",
-		FutureOnly:  false,
-		Handling:    HookHandlingStatus,
+		PurdexName:   "PdxSessionStart",
+		UpstreamKeys: []string{"SessionStart"},
+		Lifecycle:    LifecycleSessionStart,
+		EmitsStatus:  []Status{StatusRunning},
+		Description:  "test",
+		FutureOnly:   false,
+		Handling:     HookHandlingStatus,
 	}
 
-	if spec.Name != "SessionStart" {
-		t.Errorf("Name lost: got %q want %q", spec.Name, "SessionStart")
+	if spec.PurdexName != "PdxSessionStart" {
+		t.Errorf("PurdexName lost: got %q want PdxSessionStart", spec.PurdexName)
 	}
-	if spec.PurdexName != "" {
-		t.Errorf("PurdexName zero value should be empty string; got %q", spec.PurdexName)
+	if len(spec.UpstreamKeys) != 1 || spec.UpstreamKeys[0] != "SessionStart" {
+		t.Errorf("UpstreamKeys lost: got %#v want [SessionStart]", spec.UpstreamKeys)
 	}
-	if spec.UpstreamKeys != nil {
-		t.Errorf("UpstreamKeys zero value should be nil; got %#v", spec.UpstreamKeys)
+	if spec.Lifecycle != LifecycleSessionStart {
+		t.Errorf("Lifecycle lost: got %v want LifecycleSessionStart", spec.Lifecycle)
 	}
-	if spec.Lifecycle != LifecycleNone {
-		t.Errorf("Lifecycle zero value should be LifecycleNone; got %v", spec.Lifecycle)
+
+	// Zero-value rows: every newly added defaulted field must collapse to its
+	// safe default so tests that only assert one or two fields (e.g. synthetic
+	// fixtures in cc/codex hooks tests) keep passing as the catalog evolves.
+	zero := HookEventSpec{}
+	if zero.PurdexName != "" {
+		t.Errorf("PurdexName zero value = %q; want empty", zero.PurdexName)
+	}
+	if zero.UpstreamKeys != nil {
+		t.Errorf("UpstreamKeys zero value = %#v; want nil", zero.UpstreamKeys)
+	}
+	if zero.Lifecycle != LifecycleNone {
+		t.Errorf("Lifecycle zero value = %v; want LifecycleNone", zero.Lifecycle)
+	}
+	if zero.EmitsStatus != nil {
+		t.Errorf("EmitsStatus zero value = %#v; want nil", zero.EmitsStatus)
+	}
+	if zero.Handling != "" {
+		t.Errorf("Handling zero value = %q; want empty", zero.Handling)
+	}
+	if zero.FutureOnly {
+		t.Error("FutureOnly zero value = true; want false")
 	}
 }

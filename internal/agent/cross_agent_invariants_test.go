@@ -10,23 +10,23 @@ import (
 	"github.com/wake/purdex/internal/agent/opencode"
 )
 
-// runForwardInvariants applies invariants 1, 2, 3 (per spec §6.1) to a
+// runForwardInvariants applies invariants 1 and 3 (per spec §6.1) to a
 // migrated agent's catalog snapshot. Invariants 4 (preserved metadata) and
 // 5 (Lifecycle alignment) are per-agent fixture-driven and live in each
 // provider package's own *_test.go (TestCcEventSpecs_PreservedLegacyMetadata
 // / TestCcEventSpecs_LifecycleAlignment etc.).
 //
-// The opencode caveat: opencode 65-entry catalog includes entries where
-// Name and PurdexName do not satisfy a mechanical Pdx prefix (auth.session
-// vs PdxAuthSession etc.). Phase 3 ship removes invariant 2 entirely along
-// with the Name field; during Phase 1/2 this helper skips invariant 2 for
-// opencode.
+// Invariant 2 (dev-time `Name == TrimPrefix(PurdexName, "Pdx")`) was removed
+// in P3-T1 along with reverse-shape mode: with all three agents migrated
+// forward, opencode's non-mechanical legacy names (auth.session vs
+// PdxAuthSession etc.) make the constraint vacuous, and the Name field
+// itself was removed in P3-T4.
 func runForwardInvariants(t *testing.T, agentType string, specs []agent.HookEventSpec) {
 	t.Helper()
-	for _, e := range specs {
+	for i, e := range specs {
 		// Invariant 1: PurdexName non-empty and Pdx-prefixed.
 		if e.PurdexName == "" {
-			t.Errorf("%s [Name=%q]: PurdexName empty (invariant 1)", agentType, e.Name)
+			t.Errorf("%s [index=%d UpstreamKeys=%v]: PurdexName empty (invariant 1)", agentType, i, e.UpstreamKeys)
 			continue
 		}
 		if !strings.HasPrefix(e.PurdexName, "Pdx") {
@@ -36,36 +36,11 @@ func runForwardInvariants(t *testing.T, agentType string, specs []agent.HookEven
 		if len(e.UpstreamKeys) == 0 {
 			t.Errorf("%s %q: UpstreamKeys empty (invariant 1)", agentType, e.PurdexName)
 		}
-		// Invariant 2: dev-time Name backfill for cc / codex (mechanical rename).
-		if agentType != "opencode" {
-			if want := strings.TrimPrefix(e.PurdexName, "Pdx"); e.Name != want {
-				t.Errorf("%s %q: Name=%q want TrimPrefix(PurdexName,%q)=%q (invariant 2)", agentType, e.PurdexName, e.Name, "Pdx", want)
-			}
-		}
 		// Invariant 3: PurdexName not in own UpstreamKeys.
 		for _, k := range e.UpstreamKeys {
 			if k == e.PurdexName {
 				t.Errorf("%s %q: PurdexName present in UpstreamKeys (invariant 3)", agentType, e.PurdexName)
 			}
-		}
-	}
-}
-
-// runReverseInvariants asserts an agent's catalog has NOT migrated yet —
-// PurdexName / UpstreamKeys / Lifecycle remain at zero values. Each phase
-// ship flips the corresponding agent from reverse to forward in the same
-// commit that lands its catalog migration.
-func runReverseInvariants(t *testing.T, agentType string, specs []agent.HookEventSpec) {
-	t.Helper()
-	for _, e := range specs {
-		if e.PurdexName != "" {
-			t.Errorf("%s %q: PurdexName=%q expected empty (reverse invariant — agent not migrated yet)", agentType, e.Name, e.PurdexName)
-		}
-		if e.UpstreamKeys != nil {
-			t.Errorf("%s %q: UpstreamKeys=%v expected nil (reverse invariant)", agentType, e.Name, e.UpstreamKeys)
-		}
-		if e.Lifecycle != agent.LifecycleNone {
-			t.Errorf("%s %q: Lifecycle=%v expected LifecycleNone (reverse invariant)", agentType, e.Name, e.Lifecycle)
 		}
 	}
 }
@@ -90,12 +65,13 @@ func TestCatalogInvariants_Codex_AllForwardInvariants(t *testing.T) {
 	runForwardInvariants(t, "codex", specs)
 }
 
-// TestCatalogInvariants_Opencode_LegacyShape mirrors the codex assertion
-// for opencode. P3-T1 flips it to forward.
-func TestCatalogInvariants_Opencode_LegacyShape(t *testing.T) {
+// TestCatalogInvariants_Opencode_AllForwardInvariants runs forward invariants
+// against opencode's Phase 3 migrated catalog. P3-T1 flipped this from
+// reverse to forward in the same commit that landed the catalog migration.
+func TestCatalogInvariants_Opencode_AllForwardInvariants(t *testing.T) {
 	specs := opencode.NewProvider().Events()
 	if len(specs) == 0 {
 		t.Fatal("opencode catalog snapshot is empty")
 	}
-	runReverseInvariants(t, "opencode", specs)
+	runForwardInvariants(t, "opencode", specs)
 }

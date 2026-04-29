@@ -38,7 +38,7 @@ func TestHandleEvent_PersistAcceptedHookTrace(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{
 		"tmux_session":"work",
 		"tmux_pane_id":"%7",
-		"event_name":"UserPromptSubmit",
+		"purdex_name":"UserPromptSubmit",
 		"raw_event":{"prompt":"hi"},
 		"agent_type":"codex",
 		"sender_pid":1234,
@@ -98,7 +98,7 @@ func TestHandleEvent_VerifyRejectPersistsTerminalChain(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(`{
 		"tmux_session":"work",
 		"tmux_pane_id":"%7",
-		"event_name":"Stop",
+		"purdex_name":"Stop",
 		"raw_event":{},
 		"agent_type":"cc",
 		"sender_pid":1234,

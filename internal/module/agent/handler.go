@@ -77,9 +77,11 @@ func (m *Module) resolveStatuslineInstaller(w http.ResponseWriter, r *http.Reque
 // EventRequest is the JSON body expected by POST /api/agent/event.
 //
 // PurdexName is the daemon-internal stable identifier carried in the JSON
-// payload as `purdex_name`. The legacy `event_name` key is accepted as an
-// unmarshal-only alias during the W2 transition (cc/codex/opencode CLI/plugin
-// roll out the rename across phases). Phase 3 ship removes the alias.
+// payload as `purdex_name`. The pre-W2 `event_name` key was retained as an
+// unmarshal-only alias during Phase 1/2 of the W2 rollout while the
+// cc/codex/opencode CLIs and plugins migrated to the new field name; Phase 3
+// (P3-T5) removed that alias so standard struct unmarshal with the
+// `purdex_name` tag is the only shape now accepted.
 type EventRequest struct {
 	TmuxSession     string          `json:"tmux_session"`
 	TmuxPaneID      string          `json:"tmux_pane_id"`
@@ -91,37 +93,44 @@ type EventRequest struct {
 	SenderUncertain bool            `json:"sender_uncertain"`
 }
 
-// UnmarshalJSON accepts the legacy `event_name` JSON key as an alias for
-// `purdex_name`. When both keys are present, `purdex_name` wins.
-func (r *EventRequest) UnmarshalJSON(data []byte) error {
-	type wire struct {
-		TmuxSession     string          `json:"tmux_session"`
-		TmuxPaneID      string          `json:"tmux_pane_id"`
-		PurdexName      string          `json:"purdex_name"`
-		EventNameAlias  string          `json:"event_name"`
-		RawEvent        json.RawMessage `json:"raw_event"`
-		AgentType       string          `json:"agent_type"`
-		SenderPID       int             `json:"sender_pid"`
-		SenderStartTime string          `json:"sender_start_time"`
-		SenderUncertain bool            `json:"sender_uncertain"`
+// classifyLifecycle resolves an EventRequest to its LifecycleEventKind via
+// the post-W2 two-branch decision tree (spec §3.4.2):
+//
+//  1. Catalog hit (provider implements HookInstaller and Events() lookup
+//     by PurdexName succeeds) — use spec.Lifecycle. LifecycleNone is a
+//     legitimate hit value for events with no frame-mutation effect
+//     (PdxNotification, PdxPermissionRequest, etc.).
+//  2. Catalog miss — return LifecycleNone. The handler surfaces a catalog
+//     miss as event_not_in_catalog via DeriveStatus's Valid=false branch
+//     before this lifecycle classification is consulted; LifecycleNone
+//     therefore behaves as a no-op for any code that did reach this point.
+//
+// The pre-W2 third branch — `isLegacyHookForUnmigrated` falling through to a
+// hardcoded per-agent literal-string switch — was removed in P3-T6 once all
+// three agents (cc Phase 1, codex Phase 2, opencode Phase 3) populated their
+// catalogs with PurdexName + Lifecycle. provider may be nil; branch 1 is
+// then skipped.
+func classifyLifecycle(provider agentpkg.AgentProvider, req EventRequest) agentpkg.LifecycleEventKind {
+	if installer, ok := provider.(agentpkg.HookInstaller); ok {
+		if spec, found := agentpkg.LookupByPurdexName(installer.Events(), req.PurdexName); found {
+			return spec.Lifecycle
+		}
 	}
-	var w wire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return err
+	return agentpkg.LifecycleNone
+}
+
+// classifyLifecycleForReq is the Module-bound counterpart to
+// classifyLifecycle: it resolves the request's provider via m.registry and
+// then runs the lookup. Returns LifecycleNone when the registry is missing
+// or the agent_type is unknown — same effect as a catalog miss.
+// frame_ops.go's hot path uses this so callers don't replicate the registry /
+// type-assert lookup at every dispatch site.
+func (m *Module) classifyLifecycleForReq(req EventRequest) agentpkg.LifecycleEventKind {
+	if m == nil || m.registry == nil {
+		return agentpkg.LifecycleNone
 	}
-	r.TmuxSession = w.TmuxSession
-	r.TmuxPaneID = w.TmuxPaneID
-	r.RawEvent = w.RawEvent
-	r.AgentType = w.AgentType
-	r.SenderPID = w.SenderPID
-	r.SenderStartTime = w.SenderStartTime
-	r.SenderUncertain = w.SenderUncertain
-	if w.PurdexName != "" {
-		r.PurdexName = w.PurdexName
-	} else {
-		r.PurdexName = w.EventNameAlias
-	}
-	return nil
+	provider, _ := m.registry.Get(req.AgentType)
+	return classifyLifecycle(provider, req)
 }
 
 // handleEvent handles POST /api/agent/event.
@@ -195,10 +204,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// W2 metadata-driven lifecycle dispatch (spec §3.4.2): catalog hit on
-	// PurdexName, falling back to legacyLifecycleFor for codex/opencode
-	// pre-migration traffic. classifyLifecycle returns LifecycleNone for
-	// no-op events and unknown PurdexNames alike — branches below key on
-	// specific lifecycle kinds, so a None classification simply skips them.
+	// PurdexName routes the request through the lifecycle branches; a catalog
+	// miss returns LifecycleNone (the request will surface as
+	// event_not_in_catalog at the result.Valid=false branch above).
+	// classifyLifecycle also returns LifecycleNone for known no-op events
+	// (PdxNotification, PdxPermissionRequest), which simply skips lifecycle
+	// branches keyed on specific kinds.
 	lifecycle := classifyLifecycle(provider, req)
 
 	// Invalid result: provider returned Valid=false. Two sub-classes:

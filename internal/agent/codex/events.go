@@ -15,12 +15,11 @@ import "github.com/wake/purdex/internal/agent"
 // DeriveStatus parity either way.
 //
 // W2 schema fields (PurdexName / UpstreamKeys / Lifecycle) are populated for
-// every entry. Name is kept as a deprecated dev-time backfill so Phase 1's
-// daemon and Phase 2/3 provider migrations still compile against legacy
-// references; Phase 3 ship removes it.
+// every entry. The pre-W2 Name field has been removed in Phase 3 (P3-T4);
+// daemon-internal lookups read PurdexName, installer/plugin boundary writes
+// read UpstreamKeys.
 var codexEventSpecs = []agent.HookEventSpec{
 	{
-		Name:         "SessionStart",
 		PurdexName:   "PdxSessionStart",
 		UpstreamKeys: []string{"SessionStart"},
 		Lifecycle:    agent.LifecycleSessionStart,
@@ -28,7 +27,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Description:  "Codex session started",
 	},
 	{
-		Name:         "UserPromptSubmit",
 		PurdexName:   "PdxUserPromptSubmit",
 		UpstreamKeys: []string{"UserPromptSubmit"},
 		Lifecycle:    agent.LifecycleUserPromptSubmit,
@@ -36,7 +34,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Description:  "User submitted a prompt",
 	},
 	{
-		Name:         "SubagentStart",
 		PurdexName:   "PdxSubagentStart",
 		UpstreamKeys: []string{"SubagentStart"},
 		Lifecycle:    agent.LifecycleSubagentStart,
@@ -45,7 +42,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		FutureOnly:   true,
 	},
 	{
-		Name:         "SubagentStop",
 		PurdexName:   "PdxSubagentStop",
 		UpstreamKeys: []string{"SubagentStop"},
 		Lifecycle:    agent.LifecycleSubagentStop,
@@ -54,7 +50,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		FutureOnly:   true,
 	},
 	{
-		Name:         "Stop",
 		PurdexName:   "PdxStop",
 		UpstreamKeys: []string{"Stop"},
 		Lifecycle:    agent.LifecycleStop,
@@ -62,7 +57,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Description:  "Agent finished responding and is idle",
 	},
 	{
-		Name:         "StopFailure",
 		PurdexName:   "PdxStopFailure",
 		UpstreamKeys: []string{"StopFailure"},
 		Lifecycle:    agent.LifecycleStopFailure,
@@ -71,7 +65,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		FutureOnly:   true,
 	},
 	{
-		Name:         "Notification",
 		PurdexName:   "PdxNotification",
 		UpstreamKeys: []string{"Notification"},
 		Lifecycle:    agent.LifecycleNone,
@@ -80,7 +73,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		FutureOnly:   true,
 	},
 	{
-		Name:         "PermissionRequest",
 		PurdexName:   "PdxPermissionRequest",
 		UpstreamKeys: []string{"PermissionRequest"},
 		Lifecycle:    agent.LifecycleNone,
@@ -88,7 +80,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Description:  "Tool permission request awaiting user approval",
 	},
 	{
-		Name:         "SessionEnd",
 		PurdexName:   "PdxSessionEnd",
 		UpstreamKeys: []string{"SessionEnd"},
 		Lifecycle:    agent.LifecycleSessionEnd,
@@ -97,7 +88,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		FutureOnly:   true,
 	},
 	{
-		Name:         "PreToolUse",
 		PurdexName:   "PdxPreToolUse",
 		UpstreamKeys: []string{"PreToolUse"},
 		Lifecycle:    agent.LifecycleNone,
@@ -106,7 +96,6 @@ var codexEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "PostToolUse",
 		PurdexName:   "PdxPostToolUse",
 		UpstreamKeys: []string{"PostToolUse"},
 		Lifecycle:    agent.LifecycleNone,
@@ -122,7 +111,6 @@ func (p *Provider) Events() []agent.HookEventSpec {
 	out := make([]agent.HookEventSpec, len(codexEventSpecs))
 	for i, spec := range codexEventSpecs {
 		out[i] = agent.HookEventSpec{
-			Name:         spec.Name,
 			PurdexName:   spec.PurdexName,
 			UpstreamKeys: append([]string(nil), spec.UpstreamKeys...),
 			Lifecycle:    spec.Lifecycle,
@@ -138,8 +126,9 @@ func (p *Provider) Events() []agent.HookEventSpec {
 	return out
 }
 
-// eventNames returns the ordered installable event Name list for installer /
-// check iteration, derived from codexEventSpecs so there is no parallel SSoT.
+// eventNames returns the ordered installable event PurdexName list for
+// installer / check iteration, derived from codexEventSpecs so there is no
+// parallel SSoT.
 func (p *Provider) eventNames() []string {
 	return codexEventNames()
 }
@@ -152,7 +141,7 @@ func codexEventNames() []string {
 		if !agent.IsInstallableHookSpec(spec) {
 			continue
 		}
-		out = append(out, spec.Name)
+		out = append(out, spec.PurdexName)
 	}
 	return out
 }

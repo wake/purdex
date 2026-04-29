@@ -47,13 +47,13 @@ describe('hook-modules', () => {
       'host-1:s1': {
         agent_type: 'opencode',
         status: 'idle',
-        raw_event_name: 'SubagentStart',
+        raw_event_name: 'PdxSubagentStart',
         broadcast_ts: 10,
       },
       'host-1:s2': {
         agent_type: 'opencode',
         status: 'idle',
-        raw_event_name: 'SubagentStart',
+        raw_event_name: 'PdxSubagentStart',
         broadcast_ts: 20,
       },
       'host-1:s3': {
@@ -64,6 +64,6 @@ describe('hook-modules', () => {
       },
     })
 
-    expect(result).toEqual({ SubagentStart: 20 })
+    expect(result).toEqual({ PdxSubagentStart: 20 })
   })
 })

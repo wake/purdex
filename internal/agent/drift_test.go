@@ -67,14 +67,14 @@ var providerFixtures = map[string][]driftFixture{
 		{"PdxSubagentStop", `{"agent_id":"a"}`, "", true},
 	},
 	"opencode": {
-		{"SessionStart", `{}`, agent.StatusIdle, true},
-		{"UserPromptSubmit", `{}`, agent.StatusRunning, true},
-		{"PermissionRequest", `{"request_type":"tool"}`, agent.StatusWaiting, true},
-		{"Stop", `{}`, agent.StatusIdle, true},
-		{"StopFailure", `{"error":"x"}`, agent.StatusError, true},
-		{"SessionEnd", `{}`, agent.StatusClear, true},
-		{"SubagentStart", `{"agent_id":"a"}`, "", true},
-		{"SubagentStop", `{"agent_id":"a"}`, "", true},
+		{"PdxSessionStart", `{}`, agent.StatusIdle, true},
+		{"PdxUserPromptSubmit", `{}`, agent.StatusRunning, true},
+		{"PdxPermissionRequest", `{"request_type":"tool"}`, agent.StatusWaiting, true},
+		{"PdxStop", `{}`, agent.StatusIdle, true},
+		{"PdxStopFailure", `{"error":"x"}`, agent.StatusError, true},
+		{"PdxSessionEnd", `{}`, agent.StatusClear, true},
+		{"PdxSubagentStart", `{"agent_id":"a"}`, "", true},
+		{"PdxSubagentStop", `{"agent_id":"a"}`, "", true},
 	},
 }
 
@@ -222,13 +222,8 @@ func TestDriftFixtureCoversAllEvents(t *testing.T) {
 			if !agent.IsInstallableHookSpec(spec) {
 				continue
 			}
-			// W2 transition: cc fixtures key on PurdexName (post Phase 1
-			// rename); codex / opencode fixtures still key on legacy Name.
-			// Phase 3 ship drops the Name fallback once all three migrate.
+			// Post-W2: every catalog entry is keyed on PurdexName.
 			key := spec.PurdexName
-			if key == "" {
-				key = spec.Name
-			}
 			if !covered[key] {
 				t.Errorf("provider %q: installable Events() declares %q but providerFixtures has no entry (add a fixture or make the spec non-installable)",
 					row.AgentType, key)
@@ -299,9 +294,6 @@ func TestDriftPerEventEmitsStatusMatch(t *testing.T) {
 				}
 				spec := spec
 				key := spec.PurdexName
-				if key == "" {
-					key = spec.Name
-				}
 				t.Run(key, func(t *testing.T) {
 					fxs, ok := fixturesByEvent[key]
 					if !ok || len(fxs) == 0 {

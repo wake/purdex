@@ -87,15 +87,15 @@ func (f *fakeAgentProvider) DeriveStatus(eventName string, raw json.RawMessage) 
 // empty slice — `events: []agentpkg.HookEventSpec{}` — which is non-nil
 // and so bypasses the default-fill below.
 var fakeDefaultEvents = []agentpkg.HookEventSpec{
-	{Name: "SessionStart", PurdexName: "PdxSessionStart", UpstreamKeys: []string{"SessionStart"}, Lifecycle: agentpkg.LifecycleSessionStart},
-	{Name: "UserPromptSubmit", PurdexName: "PdxUserPromptSubmit", UpstreamKeys: []string{"UserPromptSubmit"}, Lifecycle: agentpkg.LifecycleUserPromptSubmit},
-	{Name: "Stop", PurdexName: "PdxStop", UpstreamKeys: []string{"Stop"}, Lifecycle: agentpkg.LifecycleStop},
-	{Name: "StopFailure", PurdexName: "PdxStopFailure", UpstreamKeys: []string{"StopFailure"}, Lifecycle: agentpkg.LifecycleStopFailure},
-	{Name: "SessionEnd", PurdexName: "PdxSessionEnd", UpstreamKeys: []string{"SessionEnd"}, Lifecycle: agentpkg.LifecycleSessionEnd},
-	{Name: "SubagentStart", PurdexName: "PdxSubagentStart", UpstreamKeys: []string{"SubagentStart"}, Lifecycle: agentpkg.LifecycleSubagentStart},
-	{Name: "SubagentStop", PurdexName: "PdxSubagentStop", UpstreamKeys: []string{"SubagentStop"}, Lifecycle: agentpkg.LifecycleSubagentStop},
-	{Name: "Notification", PurdexName: "PdxNotification", UpstreamKeys: []string{"Notification"}, Lifecycle: agentpkg.LifecycleNone},
-	{Name: "PermissionRequest", PurdexName: "PdxPermissionRequest", UpstreamKeys: []string{"PermissionRequest"}, Lifecycle: agentpkg.LifecycleNone},
+	{PurdexName: "PdxSessionStart", UpstreamKeys: []string{"SessionStart"}, Lifecycle: agentpkg.LifecycleSessionStart},
+	{PurdexName: "PdxUserPromptSubmit", UpstreamKeys: []string{"UserPromptSubmit"}, Lifecycle: agentpkg.LifecycleUserPromptSubmit},
+	{PurdexName: "PdxStop", UpstreamKeys: []string{"Stop"}, Lifecycle: agentpkg.LifecycleStop},
+	{PurdexName: "PdxStopFailure", UpstreamKeys: []string{"StopFailure"}, Lifecycle: agentpkg.LifecycleStopFailure},
+	{PurdexName: "PdxSessionEnd", UpstreamKeys: []string{"SessionEnd"}, Lifecycle: agentpkg.LifecycleSessionEnd},
+	{PurdexName: "PdxSubagentStart", UpstreamKeys: []string{"SubagentStart"}, Lifecycle: agentpkg.LifecycleSubagentStart},
+	{PurdexName: "PdxSubagentStop", UpstreamKeys: []string{"SubagentStop"}, Lifecycle: agentpkg.LifecycleSubagentStop},
+	{PurdexName: "PdxNotification", UpstreamKeys: []string{"Notification"}, Lifecycle: agentpkg.LifecycleNone},
+	{PurdexName: "PdxPermissionRequest", UpstreamKeys: []string{"PermissionRequest"}, Lifecycle: agentpkg.LifecycleNone},
 }
 
 // Events / InstallHooks / RemoveHooks / CheckHooks satisfy HookInstaller so

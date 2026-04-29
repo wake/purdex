@@ -365,7 +365,19 @@ func (m *Module) replayFromDB() {
 			continue
 		}
 		result := provider.DeriveStatus(ev.EventName, ev.RawEvent)
-		if result.Valid && result.Status != "" {
+		if !result.Valid {
+			// Pre-W2 stored EventName (e.g. opencode legacy literal "Stop")
+			// no longer matches a Pdx-prefixed catalog entry; mirror the
+			// hot-path invalid-result cleanup at handler.go:230 so a
+			// subsequent sendSnapshot doesn't broadcast a stale row.
+			if m.events != nil {
+				if err := m.events.Delete(ev.TmuxSession); err != nil {
+					log.Printf("[agent] replay cleanup of legacy event: %v", err)
+				}
+			}
+			continue
+		}
+		if result.Status != "" {
 			m.mu.Lock()
 			m.currentStatus[ev.TmuxSession] = result.Status
 			m.mu.Unlock()
@@ -427,6 +439,20 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 		var result agentpkg.DeriveResult
 		if provider, ok := m.registry.Get(ev.AgentType); ok {
 			result = provider.DeriveStatus(ev.EventName, ev.RawEvent)
+		}
+		if !result.Valid {
+			// Pre-W2 stored EventName no longer matches a Pdx-prefixed
+			// catalog entry; mirror the hot-path invalid-result cleanup at
+			// handler.go:230 so the SPA doesn't see a resurrected
+			// raw_event_name on cold reconnect (which would re-key
+			// hook-module lastTrigger and surface stale legacy events
+			// despite replayFromDB intentionally skipping them).
+			if m.events != nil {
+				if err := m.events.Delete(ev.TmuxSession); err != nil {
+					log.Printf("[agent] snapshot cleanup of legacy event: %v", err)
+				}
+			}
+			continue
 		}
 		normalized := m.buildNormalized(ev.TmuxSession, ev.EventName, ev.AgentType, ev.BroadcastTs, result)
 		payload, _ := json.Marshal(normalized)
