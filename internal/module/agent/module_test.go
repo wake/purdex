@@ -7,6 +7,7 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // TestNew_FailsOnMalformedFramesStore exercises the daemon startup path.
@@ -202,4 +203,88 @@ func TestRenameSessionLocked_StopOnly(t *testing.T) {
 		t.Fatalf("lastHookAt[newname] missing after rename — graceWindow lost")
 	}
 	m.probeOrch.graceMu.Unlock()
+}
+
+// P1-T3: lookupTopFrameForSessionLocked tests
+// -------------------------------------------
+// helper returns the top-frame's pane_id + pid for a session under m.mu.
+// Used by the W6-3 ProbeIntent dispatcher to capture the (paneID, senderPID)
+// snapshot when arming a detector. Tests run with m.mu held to mirror the
+// production caller contract.
+
+// TestLookupTopFrameForSessionLocked_HappyPath seeds one frame for a session
+// and asserts the helper returns its pane_id + pid.
+func TestLookupTopFrameForSessionLocked_HappyPath(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+
+	if _, err := m.frames.Upsert(store.Frame{
+		FrameID:          "frame-1",
+		PaneID:           "%5",
+		AgentType:        "codex",
+		PID:              4242,
+		PPID:             1,
+		ProcessStartTime: "Sun Apr 20 01:30:00 2026",
+		Status:           agentpkg.StatusRunning,
+		StartedAt:        100,
+		LastSeenAt:       120,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+
+	m.mu.Lock()
+	paneID, pid, ok := m.lookupTopFrameForSessionLocked("work")
+	m.mu.Unlock()
+
+	if !ok {
+		t.Fatalf("lookupTopFrameForSessionLocked: ok=false, want true")
+	}
+	if paneID != "%5" {
+		t.Fatalf("paneID = %q, want %%5", paneID)
+	}
+	if pid != 4242 {
+		t.Fatalf("pid = %d, want 4242", pid)
+	}
+}
+
+// TestLookupTopFrameForSessionLocked_NoSession_NotOk asserts an unknown
+// session returns ok=false (no panic, no stale read).
+func TestLookupTopFrameForSessionLocked_NoSession_NotOk(t *testing.T) {
+	m := newTestModule(t)
+	m.tmux = tmux.NewFakeExecutor()
+
+	m.mu.Lock()
+	paneID, pid, ok := m.lookupTopFrameForSessionLocked("ghost")
+	m.mu.Unlock()
+
+	if ok {
+		t.Fatalf("ok=true for unknown session, want false")
+	}
+	if paneID != "" || pid != 0 {
+		t.Fatalf("paneID=%q pid=%d, want empty/0 for missing session", paneID, pid)
+	}
+}
+
+// TestLookupTopFrameForSessionLocked_NoTopFrame_NotOk seeds tmux pane
+// resolution but no frames row — projection.TopFrame is nil, helper returns
+// ok=false.
+func TestLookupTopFrameForSessionLocked_NoTopFrame_NotOk(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+
+	m.mu.Lock()
+	paneID, pid, ok := m.lookupTopFrameForSessionLocked("work")
+	m.mu.Unlock()
+
+	if ok {
+		t.Fatalf("ok=true with no frames seeded, want false")
+	}
+	if paneID != "" || pid != 0 {
+		t.Fatalf("paneID=%q pid=%d, want empty/0 for missing top frame", paneID, pid)
+	}
 }

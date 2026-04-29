@@ -481,6 +481,28 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 	return sessionName, m.resolveSessionCode(sessionName)
 }
 
+// lookupTopFrameForSessionLocked returns the top frame's pane_id + pid for
+// session. CALLER MUST hold m.mu. Returns ok=false when the session has no
+// frame projection or no top frame.
+//
+// W6-3 P1-T3: used by probeIntentDispatcher to capture the (paneID, senderPID)
+// snapshot when arming a ProbeIntent detector. The "Locked" suffix marks the
+// caller-locked contract; the implementation reuses projectionForSession,
+// whose data sources (m.frames sql store + m.tmux pane resolver) acquire
+// their own mutexes that are independent of m.mu, so calling it under m.mu
+// does not introduce a lock cycle.
+//
+// See spec §6.2 — the helper deliberately routes through the existing
+// projection pipeline so daemon-restart hydrate replay (P1-T6) and the live
+// hook path observe identical (paneID, pid) selection logic.
+func (m *Module) lookupTopFrameForSessionLocked(session string) (paneID string, pid int, ok bool) {
+	projection, err := m.projectionForSession(session)
+	if err != nil || projection == nil || projection.TopFrame == nil {
+		return "", 0, false
+	}
+	return projection.TopFrame.PaneID, projection.TopFrame.PID, true
+}
+
 // manageActivityWatch is invoked by hook handlers as a status changes; W3
 // reduces it to a default no-op (stop-only) path. When a watcher is already
 // registered for `session`, it is stopped + evicted from activeWatchers; no
