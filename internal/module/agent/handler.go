@@ -238,6 +238,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			reason = "event_not_in_catalog"
 		}
 		trace.Verify(req, "skipped", reason, nil)
+		if isDevMode() {
+			log.Printf("[derive] skipped agent=%s purdex_name=%s reason=%s chain_id=%s",
+				req.AgentType, req.PurdexName, reason, trace.ChainID())
+		}
 		if req.TmuxSession != "" && m.events != nil {
 			if err := m.events.Delete(req.TmuxSession); err != nil {
 				log.Printf("[agent] clear legacy event on invalid result: %v", err)
@@ -251,6 +255,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			"reason": reason,
 		})
 		return
+	}
+	if isDevMode() {
+		log.Printf("[derive] verify_passed agent=%s purdex_name=%s status=%s reason=%s chain_id=%s",
+			req.AgentType, req.PurdexName, result.Status, result.Reason, trace.ChainID())
 	}
 
 	// Error guard: when in error state, only whitelisted events can clear it

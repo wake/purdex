@@ -106,6 +106,81 @@ func TestHandler_NoDevModeLog_Production(t *testing.T) {
 	}
 }
 
+// TestHandler_DevModeLog_DeriveVerifyPassed verifies the [derive]
+// verify_passed line under PDX_DEV_MODE=1 for the valid path. Fields:
+// agent / purdex_name / status / reason (empty on the success branch) /
+// chain_id.
+func TestHandler_DevModeLog_DeriveVerifyPassed(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	buf := captureDevLog(t)
+	m := newTestModule(t)
+
+	devLogPostValid(t, m)
+
+	if m.traceSink != nil {
+		m.traceSink.FlushForTest()
+	}
+	out := buf.String()
+	line := findLogLine(t, out, `\[derive\] verify_passed`)
+	if !strings.Contains(line, "agent=cc") {
+		t.Errorf("[derive] verify_passed missing agent=cc: %s", line)
+	}
+	if !strings.Contains(line, "purdex_name=PdxStop") {
+		t.Errorf("[derive] verify_passed missing purdex_name=PdxStop: %s", line)
+	}
+	if !strings.Contains(line, "status=idle") {
+		t.Errorf("[derive] verify_passed missing status=idle: %s", line)
+	}
+	if !strings.Contains(line, "reason=") {
+		t.Errorf("[derive] verify_passed missing reason= field: %s", line)
+	}
+	if extractField(line, "chain_id=") == "" {
+		t.Errorf("[derive] verify_passed chain_id should be non-empty: %s", line)
+	}
+}
+
+// TestHandler_DevModeLog_DeriveSkipped verifies the [derive] skipped line
+// under PDX_DEV_MODE=1 for the catalog-miss / invalid-derive path. Fields:
+// agent / purdex_name / reason / chain_id.
+func TestHandler_DevModeLog_DeriveSkipped(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	buf := captureDevLog(t)
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: false}
+		},
+		events: []agentpkg.HookEventSpec{},
+	})
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"BogusEvent","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	if m.traceSink != nil {
+		m.traceSink.FlushForTest()
+	}
+	out := buf.String()
+	line := findLogLine(t, out, `\[derive\] skipped`)
+	if !strings.Contains(line, "agent=cc") {
+		t.Errorf("[derive] skipped missing agent=cc: %s", line)
+	}
+	if !strings.Contains(line, "purdex_name=BogusEvent") {
+		t.Errorf("[derive] skipped missing purdex_name=BogusEvent: %s", line)
+	}
+	if !strings.Contains(line, "reason=event_not_in_catalog") {
+		t.Errorf("[derive] skipped missing reason=event_not_in_catalog: %s", line)
+	}
+	if extractField(line, "chain_id=") == "" {
+		t.Errorf("[derive] skipped chain_id should be non-empty: %s", line)
+	}
+}
+
 // findLogLine returns the first log line matching the given regexp pattern,
 // failing the test if none is found.
 func findLogLine(t *testing.T, out, pattern string) string {
