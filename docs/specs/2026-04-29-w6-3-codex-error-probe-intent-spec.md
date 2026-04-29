@@ -1,6 +1,6 @@
 # W6-3 codex error ad-hoc ProbeIntent spec
 
-> **Status**：draft v4（codex review round 3 1 P1 finding — active target mismatch lifecycle gap — 採納修訂）
+> **Status**：draft v5（codex review round 4 1 P1 — cross-provider lifecycle gap — 採納修訂）
 > **Worktree**：`.claude/worktrees/lights-w6-3-codex-error` / branch `worktree-lights-w6-3-codex-error`
 > **Base**：`origin/main` @ alpha.261（W3+W4 reverted ProbeProfile framework + monitor top processes）
 > **依賴**：W1 audit `docs/specs/2026-04-28-hook-status-audit-spec.md` §6/§7 / lights-rebuild-spec `docs/specs/2026-04-23-lights-rebuild-spec.md` §8.2 / fix-spec `docs/specs/2026-04-28-lights-rebuild-fix-spec.md` §3
@@ -94,6 +94,7 @@ W3 撤回後（alpha.260）的現況：
 | **OnSignal mapping callback in applyProbeGuards（guard 後才 invoke）** | by2z79ouc DEF-1 | 本 spec §3.2 / §5.2 / §5.4 |
 | **detector `isPidAliveFn` package var injection** | by2z79ouc FH-1 | 本 spec §4.2 |
 | **單一 lifecycle helper + active target mismatch 第五 case** | round 3 P1 | 本 spec §5.4 |
+| **applyStatus 入口 reconcileSessionActive（cross-provider cleanup）** | round 4 P1 | 本 spec §5.4 |
 
 ---
 
@@ -147,6 +148,7 @@ W3 撤回後（alpha.260）的現況：
 11. ✅ ProbeIntent compare-and-arm（per by2z79ouc ATK-2）：lifecycle 在 m.mu 內 re-read `currentStatus` + 比對 `OnEntryStatus`，只在 live status 仍 match 才 record active；防 replay 期間 hook race 後 arm stale watcher
 12. ✅ Detector pidAlive 注入（per by2z79ouc FH-1）：codex 包用 `isPidAliveFn` package var（沿 module 包既有 `orchNowFn` / `isPidAliveFn` pattern）；test 覆寫後 cleanup
 13. ✅ ProbeIntent active target re-arm（per round 3 P1）：lifecycle helper 在 `wasActive && shouldActive` 時 m.mu 內比對 `(agentType, paneID, senderPID)` 是否與 active entry 一致；不一致 → cancel 舊 detector + 計算 new generation + 寫入新 entry；防同 status 內 codex 換 pid/pane（restart / multi-pane 切換）後舊 detector 蓋掉新狀態
+14. ✅ Cross-provider reconcile（per round 4 P1）：`applyStatus` 入口先 `reconcileSessionActive`，cancel/delete 任何 `(agentType, kind)` 不再屬於新 provider 宣告集合的 active entry；防 session 切到無 ProbeIntent 的 provider（cc / opencode）後舊 codex detector 仍 emit 蓋掉新狀態
 
 ### 2.2 禁忌
 
@@ -619,10 +621,63 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 ```go
 func (d *probeIntentDispatcher) applyStatus(session, agentType string, newStatus agent.Status) {
     provider, ok := d.parent.registry.GetByType(agentType)
-    if !ok { return }
-    intents := probeIntentsOf(provider)  // type assert ProbeIntentProvider；ok=false 直接 return
+    if !ok {
+        // 未知 agent → reconcile 清掉所有 active（含舊 codex entry 等）
+        d.reconcileSessionActive(session, agentType, nil)
+        return
+    }
+    intents := probeIntentsOf(provider)  // type assert ProbeIntentProvider；non-implementer 回 nil
+
+    // round 4 P1：reconcile session 既有 active entries
+    // 凡 (cur.agentType != newAgentType) 或 cur.kind 不在新 provider 宣告集合 → cancel + delete
+    declaredKinds := make(map[agent.ProbeIntentKind]struct{}, len(intents))
+    for _, intent := range intents {
+        declaredKinds[intent.Kind] = struct{}{}
+    }
+    d.reconcileSessionActive(session, agentType, declaredKinds)
+
     for _, intent := range intents {
         d.applyIntentLifecycle(session, agentType, newStatus, intent)
+    }
+}
+
+// reconcileSessionActive cancel/delete active entries that don't apply to the
+// (newAgentType, declaredKinds) pair. Called from applyStatus before the
+// lifecycle loop. declaredKinds=nil → drop everything (unknown agent / no
+// ProbeIntents declared).
+//
+// Per round 4 P1: without this, switching session top agent from codex (with
+// ProcessDead intent) to cc/opencode (no ProbeIntents) would leave codex
+// active entry stranded. The stranded detector continues polling and its
+// emission still passes makeProbeIntentStaleCheck (active entry's agentType
+// + generation match) → broadcasts wrong status for the new agent.
+func (d *probeIntentDispatcher) reconcileSessionActive(
+    session string,
+    newAgentType string,
+    declaredKinds map[agent.ProbeIntentKind]struct{}, // nil = drop all
+) {
+    var toCancel []context.CancelFunc
+
+    d.parent.mu.Lock()
+    perSession := d.parent.activeProbeIntents[session]
+    if perSession != nil {
+        for kind, cur := range perSession {
+            stale := declaredKinds == nil ||
+                cur.agentType != newAgentType ||
+                func() bool { _, ok := declaredKinds[kind]; return !ok }()
+            if stale {
+                toCancel = append(toCancel, cur.cancel)
+                delete(perSession, kind)
+            }
+        }
+        if len(perSession) == 0 {
+            delete(d.parent.activeProbeIntents, session)
+        }
+    }
+    d.parent.mu.Unlock()
+
+    for _, cancel := range toCancel {
+        cancel()
     }
 }
 
@@ -846,6 +901,7 @@ func (d *probeIntentDispatcher) replayStatus() {
 - replay 順序：先 `replayFromDB` 把 currentStatus + projection 全 hydrate 完，再 `replayStatus()` — 避免 detector 啟動時 `lookupTopFrameForSession` miss
 - **Replay vs hook race（by2z79ouc ATK-2 + round 3 P1 修法）**：`replayStatus` 內部呼叫 `applyStatus(session, agentType, snapshotStatus)` 走標準路徑；`applyIntentLifecycle` 在 m.mu 內 re-read `currentStatus` + `lookupTopFrameForSessionLocked` + 比對 active target — 若 snapshot 取到 `running` 但 hook 已先把 status 改成 `idle`（or 改了 top frame target），lifecycle 在 m.mu 內看到 live state 為基準直接 skip / restart。**Race 完全封閉**
 - **Active target mismatch（round 3 P1）**：同 status 內 codex 換 pid/pane（restart / multi-pane 切換）— `applyIntentLifecycle` 第五 case：cancel 舊 detector + 寫新 entry（含新 generation） + 啟新 detector；舊 detector 在新 entry 寫入後仍可能 emit 舊 generation 的 stale signal，被 `makeProbeIntentStaleCheck` drop（generation mismatch）
+- **Cross-provider lifecycle gap（round 4 P1）**：session 切到無 ProbeIntent 的 provider（cc / opencode）時，`applyStatus` 入口 `reconcileSessionActive` 清掉舊 codex active entry → 舊 detector emission 因 active entry 已不存在被 `makeProbeIntentStaleCheck` drop
 - **Stale frame race**：若 daemon 在 codex 已死的情況下重啟，replay 取到的 top frame.pid 已是 dead → detector 第一次 poll 立即 emit signal → 套 guards → 因 currentStatus 經 replay 仍是 running，transition gate 通過 → broadcast `error`。**這是預期行為**：user-facing 結果是「daemon restart 後正確發現 codex 不見了，立刻變色」，符合 #698 修復目標
 - **Idle session pane gone（accept 限制）**：若 codex 走完 PdxStop hook（status=idle）後 daemon restart，replay snapshot status=idle → ProbeIntent 不在 OnEntryStatus 不啟 detector → pane 後續被 close 不會自動轉 clear。此屬 §8.1 #4 的 accept 限制（idle 期間 pane 退場由 sweep / SessionEnd hook 處理，不在 W6-3+W6-4 scope）
 - ErrorGuard 與 grace window：replay 路徑**沒有**剛收的 hook，故 graceWindow 不啟動；ErrorGuard 視 currentStatus 而定（若已是 error，guard 阻擋無妨）
@@ -865,7 +921,7 @@ func (d *probeIntentDispatcher) replayStatus() {
 |---|---|
 | P1-T1 | `ProbeIntent` / `ProbeIntentKind` / `Signal` / `ProbeIntentProvider` 落 `internal/agent/provider.go` + 單元測試（schema 對齊 §3.2；Signal 4 fields） |
 | P1-T2 | `applyProbeGuards` free function 抽出（mechanical extraction `probe_orchestrator.go interpretScreenEvent` step 1+2+4+5+6） + 新 `staleCheck strategy` 注入點；regression test 確保 ScreenChange 行為零變動（既有 probe_orchestrator_test.go / probe_orchestrator_integration_test.go 全綠） |
-| P1-T3 | 新檔 `internal/module/agent/probe_intent_dispatcher.go`：`applyStatus` / `applyIntentLifecycle` / `consumeSignals` + activeProbeIntents 結構（在 m.mu 內保護） + generation token；用 stub detector 測 lifecycle 5 case（含 active target mismatch 觸發 cancel-and-rearm） + stale-callback re-check + generation 不匹配 drop |
+| P1-T3 | 新檔 `internal/module/agent/probe_intent_dispatcher.go`：`applyStatus` / `reconcileSessionActive` / `applyIntentLifecycle` / `consumeSignals` + activeProbeIntents 結構（在 m.mu 內保護） + generation token；用 stub detector 測 lifecycle 5 case（含 active target mismatch 觸發 cancel-and-rearm） + cross-provider reconcile（codex → cc 切換清掉舊 entry） + stale-callback re-check + generation 不匹配 drop |
 | P1-T4 | `Module.lookupTopFrameForSession` helper（讀 projection top frame `(paneID, pid)`）+ test |
 | P1-T5 | `manageActivityWatch` 接 `probeIntentDisp.applyStatus`；rename / Stop 路徑也接；test 覆蓋 rename 期間 (oldName stop, newName 重評估) |
 | P1-T6 | `Module.Start` 加 `probeIntentDisp.replayStatus`；daemon-restart recovery integration test（fixture：projection top frame 含 dead pid + status=running → Start 後 detector 啟動立即 emit → broadcast error） |
@@ -922,6 +978,7 @@ func (d *probeIntentDispatcher) replayStatus() {
 7. ✅ multi-pane window：detector 對 hook 來源 pane 作判斷，不被同 window 其他 pane（含其他 codex 實例）影響
 8. ✅ active target mismatch（round 3 P1 防護）：codex pane 內 `/exit` + 立即重啟新實例（同 session、status 短暫從 idle 經 SessionStart→UserPromptSubmit 變回 running），detector 必須 cancel 舊 (paneID, oldPID) entry 並 arm 新 (paneID, newPID) entry — 舊 detector 對 oldPID 死亡的 emission 不應蓋掉新 codex 的 running status
 9. ✅ status-stable 換 frame：罕見場景下若 hook 在不變 status 的情況下推送新 top frame（例 frame_ops 重 detect），lifecycle 仍正確 re-arm（不沿用舊 detector）
+10. ✅ provider 切換（round 4 P1 防護）：session 從 codex 切到 cc / opencode（後者無 ProbeIntents）— 舊 codex active entry 必須被 `reconcileSessionActive` 清掉；舊 detector 後續 emission 因 active entry 不存在被 stale guard drop
 
 ### 8.2 不回歸
 
@@ -989,9 +1046,13 @@ func (d *probeIntentDispatcher) replayStatus() {
 
 **決議**：`applyIntentLifecycle` 在單一 m.mu critical section 內處理 5 case（含 active 但 target changed 的 cancel-and-rearm）；不暴露 `startDetector` / `stopDetector` 為公開 method（避免 caller 跳過 lifecycle 比對）。修法詳 §5.4。
 
+### 9.11 ✅ 採 `reconcileSessionActive` 入口清理 — 解 round 4 P1
+
+**決議**：`applyStatus` 入口先 reconcile session 既有 active entries，cancel/delete 任何 `(agentType, kind)` 不再屬於新 provider 宣告集合的 entry；防 cross-provider 切換的 stranded detector。修法詳 §5.4 reconcileSessionActive helper。
+
 ---
 
-**所有 spec drift signal 已收斂；本 spec v4 進 plan 前需通過 codex 第四輪確認。**
+**所有 spec drift signal 已收斂；本 spec v5 進 plan 前需通過 codex 第五輪確認。**
 
 ---
 
