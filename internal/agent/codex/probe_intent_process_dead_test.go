@@ -340,3 +340,48 @@ func TestStartProcessDeadDetector_MultiPane_UsesCorrectPaneID(t *testing.T) {
 		}
 	}
 }
+
+// --- P2-T3: onProcessDead mapper tests (internal — tests unexported fn) ---
+
+// TestOnProcessDead_PaneAliveTrue_MapsToError asserts the W6-3 path:
+// PaneAlive=true (process dead, pane still listed) → StatusError.
+func TestOnProcessDead_PaneAliveTrue_MapsToError(t *testing.T) {
+	got := onProcessDead(agent.Signal{
+		Kind:      agent.ProbeIntentKindProcessDead,
+		PaneAlive: true,
+		PaneID:    "%5",
+		SenderPID: 1234,
+	})
+	if got != agent.StatusError {
+		t.Errorf("onProcessDead(PaneAlive=true) = %q, want %q", got, agent.StatusError)
+	}
+}
+
+// TestOnProcessDead_PaneAliveFalse_MapsToClear asserts the W6-4 path:
+// PaneAlive=false (process dead, pane gone) → StatusClear.
+func TestOnProcessDead_PaneAliveFalse_MapsToClear(t *testing.T) {
+	got := onProcessDead(agent.Signal{
+		Kind:      agent.ProbeIntentKindProcessDead,
+		PaneAlive: false,
+		PaneID:    "%5",
+		SenderPID: 1234,
+	})
+	if got != agent.StatusClear {
+		t.Errorf("onProcessDead(PaneAlive=false) = %q, want %q", got, agent.StatusClear)
+	}
+}
+
+// TestOnProcessDead_WrongKind_ReturnsEmpty asserts that a Signal with a
+// non-ProcessDead Kind returns "" — defends against dispatcher misuse if a
+// future Kind ever shares the OnSignal slot.
+func TestOnProcessDead_WrongKind_ReturnsEmpty(t *testing.T) {
+	got := onProcessDead(agent.Signal{
+		Kind:      "screen_change",
+		PaneAlive: true,
+		PaneID:    "%5",
+		SenderPID: 1234,
+	})
+	if got != "" {
+		t.Errorf("onProcessDead(Kind=screen_change) = %q, want empty Status", got)
+	}
+}
