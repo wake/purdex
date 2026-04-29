@@ -160,6 +160,11 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	if isDevMode() {
+		log.Printf("[hook] trigger session=%s agent=%s purdex_name=%s chain_id=%s",
+			req.TmuxSession, req.AgentType, req.PurdexName, trace.ChainID())
+	}
+
 	if decision := verifyEventFn(m, req); !decision.Accepted {
 		trace.Verify(req, "rejected", decision.Reason, map[string]any{"decision": "rejected", "reason": decision.Reason})
 		trace.Finish("completed", "verify_rejected")

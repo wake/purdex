@@ -83,6 +83,18 @@ type hookTraceCollector struct {
 	finished         bool
 }
 
+// ChainID returns the trace chain UUID for nil-safe consumption from dev-mode
+// log lines emitted alongside the trace pipeline. When the collector is nil
+// (m.traceSink == nil so beginHookTrace returned nil), an empty string is
+// returned so the dev log still records "chain_id=" with the rest of the
+// fields intact rather than panicking on a missing trace.
+func (c *hookTraceCollector) ChainID() string {
+	if c == nil {
+		return ""
+	}
+	return c.chain.ChainID
+}
+
 func beginHookTrace(sink *hookTraceSink, req EventRequest) *hookTraceCollector {
 	if sink == nil {
 		return nil
