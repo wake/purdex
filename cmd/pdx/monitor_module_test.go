@@ -21,7 +21,7 @@ func TestRegisterServeModules_IncludesMonitorRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	c.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/monitor/snapshot", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/monitor/config", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

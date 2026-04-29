@@ -165,6 +165,55 @@ func AggregatePaneDescendants(panePID int, processes []Process) PaneProcessAggre
 	return aggregate
 }
 
+func AggregateSessionProcesses(tmuxSessionID string, panes []TmuxPane, processes []Process) PaneProcessAggregate {
+	if tmuxSessionID == "" {
+		return PaneProcessAggregate{}
+	}
+
+	processByPID := make(map[int]Process, len(processes))
+	childrenByPPID := make(map[int][]int, len(processes))
+	for _, process := range processes {
+		if process.PID <= 0 {
+			continue
+		}
+		if _, exists := processByPID[process.PID]; !exists {
+			processByPID[process.PID] = process
+		}
+		if process.PPID > 0 {
+			childrenByPPID[process.PPID] = append(childrenByPPID[process.PPID], process.PID)
+		}
+	}
+
+	var queue []int
+	for _, pane := range panes {
+		if pane.TmuxSessionID == tmuxSessionID && pane.PanePID > 0 {
+			queue = append(queue, pane.PanePID)
+		}
+	}
+
+	var aggregate PaneProcessAggregate
+	visited := make(map[int]bool, len(processes))
+	for len(queue) > 0 {
+		pid := queue[0]
+		queue = queue[1:]
+		if visited[pid] {
+			continue
+		}
+		visited[pid] = true
+
+		process, ok := processByPID[pid]
+		if !ok {
+			continue
+		}
+		aggregate.CPUPercent += process.CPUPercent
+		aggregate.MemoryBytes += process.MemoryBytes
+		aggregate.ProcessCount++
+		queue = append(queue, childrenByPPID[pid]...)
+	}
+
+	return aggregate
+}
+
 type processCLICommandRunner struct{}
 
 func (processCLICommandRunner) Output(ctx context.Context, args ...string) (string, error) {
