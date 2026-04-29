@@ -308,7 +308,7 @@ func TestOrchestrator_NilProberStartStopNoOp(t *testing.T) {
 	}()
 
 	before := snapshotMetrics()
-	m.probeOrch.startWatch("sess", "missing")
+	m.probeOrch.startWatch("sess", "missing", probe.WatchOptions{})
 	m.probeOrch.stopWatch("sess")
 	after := snapshotMetrics()
 
@@ -504,40 +504,39 @@ func TestInterpretScreenEvent_RevalidatesStaleCallbackAtomically(t *testing.T) {
 	}
 }
 
-// FX4 — startWatch validates ProbeProfile (TopLines + BottomLines mutually
-// exclusive) and returns false on invalid; manageActivityWatch rolls back
-// its activeWatchers mutation. Regression for codex finding #7 (R2 defense
-// MEDIUM): previously a bad provider profile created a silent dead watcher
-// — stale-callback saw it as active, MetricProbeWatchStarted reported
-// "started", but no goroutine ran.
-func TestStartWatch_InvalidProfileRollsBackActiveWatchers(t *testing.T) {
+// FX4 — startWatch validates WatchOptions (TopLines + BottomLines mutually
+// exclusive) and returns false on invalid input. Regression for codex
+// finding #7 (R2 defense MEDIUM): previously a silent dead watcher was
+// possible — stale-callback saw it as active, MetricProbeWatchStarted
+// reported "started", but no goroutine ran.
+//
+// W3 P1-T2: caller now passes WatchOptions directly (orchestrator no longer
+// owns a default profile); this test calls startWatch directly to pin the
+// validation surface.
+func TestStartWatch_InvalidOptionsRollback(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+
+	var logBuf bytes.Buffer
+	prevWriter := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prevWriter)
+
 	m := newTestModule(t)
 	rec := newRecordingProber()
 	m.probeOrch.watcher = rec
 
-	provider := &fakeProfileProvider{
-		fakeAgentProvider: fakeAgentProvider{typeName: "bad-agent"},
-		profile:           agentpkg.ProbeProfile{TopLines: 5, BottomLines: 5},
-	}
-	m.registry.Register(provider)
-
 	before := snapshotMetrics()
-	m.manageActivityWatch("sess", "bad-agent", agentpkg.StatusRunning)
+	ok := m.probeOrch.startWatch("sess", "cc", probe.WatchOptions{TopLines: 5, BottomLines: 5})
 	after := snapshotMetrics()
 
-	// activeWatchers must be rolled back so the orchestrator's stale-callback
-	// guard (and any future cleanup paths) treat the session as not watched.
-	m.mu.Lock()
-	_, present := m.activeWatchers["sess"]
-	m.mu.Unlock()
-	if present {
-		t.Fatalf("activeWatchers[sess] still present after invalid-profile startWatch — rollback missing")
+	if ok {
+		t.Fatalf("startWatch returned true for invalid opts (TopLines+BottomLines both > 0); want false")
 	}
 
 	// Metric must NOT increment — it is reserved for actually-registered
 	// watchers so /debug/vars stays an honest counter.
 	if got := after.watchStarted - before.watchStarted; got != 0 {
-		t.Fatalf("MetricProbeWatchStarted delta = %d, want 0 (invalid profile must not bump the counter)", got)
+		t.Fatalf("MetricProbeWatchStarted delta = %d, want 0 (invalid opts must not bump the counter)", got)
 	}
 
 	// And the prober must not have observed a Watch call for this target.
@@ -545,7 +544,13 @@ func TestStartWatch_InvalidProfileRollsBackActiveWatchers(t *testing.T) {
 	_, watched := rec.watchOpts["sess:"]
 	rec.mu.Unlock()
 	if watched {
-		t.Fatalf("recordingProber observed Watch on sess: despite invalid profile")
+		t.Fatalf("recordingProber observed Watch on sess: despite invalid opts")
+	}
+
+	// Dev-mode log captures the structured invalid-opts surface.
+	const wantLog = "[probe] startWatch invalid opts session=sess agent=cc TopLines=5 BottomLines=5"
+	if !strings.Contains(logBuf.String(), wantLog) {
+		t.Fatalf("dev log missing %q\nfull log:\n%s", wantLog, logBuf.String())
 	}
 }
 
@@ -629,7 +634,7 @@ func TestMetrics_WatchStartedIncrements(t *testing.T) {
 	m.registry.Register(provider)
 
 	before := snapshotMetrics()
-	m.probeOrch.startWatch("sess", "cc")
+	m.probeOrch.startWatch("sess", "cc", probe.WatchOptions{})
 	m.probeOrch.stopWatch("sess")
 	after := snapshotMetrics()
 
@@ -743,65 +748,3 @@ func (r *recordingProber) StopWatch(target string) {
 	r.stops = append(r.stops, target)
 }
 
-// fakeProfileProvider is a fakeAgentProvider variant that ALSO implements
-// agentpkg.ProbeProfileProvider. Defined here (not in fakes_test.go) to keep
-// orchestrator tests self-contained — fakes_test.go's fakeAgentProvider has no
-// ProbeProfile() method, which exercises the "default profile" path.
-type fakeProfileProvider struct {
-	fakeAgentProvider
-	profile agentpkg.ProbeProfile
-}
-
-func (p *fakeProfileProvider) ProbeProfile() agentpkg.ProbeProfile { return p.profile }
-
-// OR1 — startWatch resolves agent's ProbeProfile and forwards options.
-func TestOrchestrator_StartWatchUsesAgentProfile(t *testing.T) {
-	m := newTestModule(t)
-	rec := newRecordingProber()
-	m.probeOrch.watcher = rec
-
-	provider := &fakeProfileProvider{
-		fakeAgentProvider: fakeAgentProvider{typeName: "fake-agent"},
-		profile:           agentpkg.ProbeProfile{TopLines: 5, IdleStableTicks: 2},
-	}
-	m.registry.Register(provider)
-
-	m.probeOrch.startWatch("sess", "fake-agent")
-
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	got, ok := rec.watchOpts["sess:"]
-	if !ok {
-		t.Fatalf("expected Watch on target %q, got %v", "sess:", rec.watchOpts)
-	}
-	want := probe.WatchOptions{TopLines: 5, BottomLines: 0, IdleStableTicks: 2}
-	if got != want {
-		t.Fatalf("WatchOptions = %+v, want %+v", got, want)
-	}
-}
-
-// OR2 — when the agent does NOT implement ProbeProfileProvider, startWatch
-// falls back to defaultProbeProfile. Default preserves legacy
-// CapturePaneContent(target, 10) capture region (R9 fix / G5 parity gate).
-func TestOrchestrator_DefaultProfileWhenAgentMissing(t *testing.T) {
-	m := newTestModule(t)
-	rec := newRecordingProber()
-	m.probeOrch.watcher = rec
-
-	// fakeAgentProvider does NOT implement ProbeProfileProvider.
-	provider := &fakeAgentProvider{typeName: "plain-agent"}
-	m.registry.Register(provider)
-
-	m.probeOrch.startWatch("sess", "plain-agent")
-
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	got, ok := rec.watchOpts["sess:"]
-	if !ok {
-		t.Fatalf("expected Watch on target %q, got %v", "sess:", rec.watchOpts)
-	}
-	want := probe.WatchOptions{TopLines: 0, BottomLines: 10, IdleStableTicks: 3}
-	if got != want {
-		t.Fatalf("WatchOptions = %+v, want %+v (default profile)", got, want)
-	}
-}

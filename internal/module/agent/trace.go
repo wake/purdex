@@ -1,3 +1,46 @@
+// TraceStore step coverage audit (W4 PR-4 Phase 3)
+//
+// Hook chains use five trace step kinds, recorded by the calls in this file:
+// trigger / verify / frame / projection / emit. The matrix below documents
+// which steps appear on each hook path and identifies cases where a step is
+// reasonably absent.
+//
+//	Path                                                    | trigger | verify | frame | projection | emit
+//	cc/codex/opencode valid main (UserPromptSubmit/Stop/...) | yes     | yes    | yes   | yes        | yes
+//	any agent invalid catalog miss (BogusEvent)             | yes     | yes(*) | —     | —          | —
+//	cc/codex/opencode subagent updated_frame                | yes     | yes    | yes   | yes        | yes
+//	cc/codex/opencode subagent frame_missing/id_missing     | yes     | yes    | yes   | yes        | —
+//	SessionEnd (status=clear)                               | yes     | yes    | yes   | yes        | yes
+//	error_guard_blocked (StopFailure-stuck error)           | yes     | yes    | —     | —          | yes(*)
+//	verify rejected (pid_dead, identity_mismatch, ...)      | yes     | yes(*) | —     | —          | —
+//	replay-from-DB / sendSnapshot (cold reconnect)          | —       | —      | —     | —          | —
+//
+// Notes on absences (all reasonable, no follow-up trace step needed):
+//
+//   - invalid catalog miss: handler returns at line ~252 with verify decision
+//     "skipped" / reason="event_not_in_catalog"; frame/projection/emit do not
+//     apply. The W4 [handler] invalid_skip dev log line documents this branch.
+//
+//   - subagent frame_missing/id_missing: handler returns at line ~349 after
+//     trace.Projection (projection precedes the subagent branch); the emit
+//     step is intentionally skipped. The W4 [handler] invalid_skip dev log
+//     surfaces frameMeta.Reason for grep.
+//
+//   - error_guard_blocked: handler emits a verify-step skipped trace and a
+//     synthetic emit step with decision="skipped" / reason="error_guard_blocked"
+//     before returning at ~line 287; frame and projection are skipped because
+//     the guard suppresses state mutation.
+//
+//   - verify rejected: hook fails sender-pid liveness or identity checks at
+//     ~line 169 and finishes with reason="verify_rejected"; the handler short-
+//     circuits before reaching the catalog branch, so frame/projection/emit
+//     do not apply. The verify step itself records the rejection reason.
+//
+//   - replay-from-DB / sendSnapshot: these paths rebuild module state from
+//     persisted projections (replayFromDB) or push the latest event to a new
+//     subscriber (sendSnapshot); neither call enters handleEvent and therefore
+//     does not begin a hook trace chain. They are state-reconstruction paths,
+//     not hook events, and intentionally lie outside the trace step model.
 package agent
 
 import (
@@ -81,6 +124,18 @@ type hookTraceCollector struct {
 	frameStepID      string
 	projectionStepID string
 	finished         bool
+}
+
+// ChainID returns the trace chain UUID for nil-safe consumption from dev-mode
+// log lines emitted alongside the trace pipeline. When the collector is nil
+// (m.traceSink == nil so beginHookTrace returned nil), an empty string is
+// returned so the dev log still records "chain_id=" with the rest of the
+// fields intact rather than panicking on a missing trace.
+func (c *hookTraceCollector) ChainID() string {
+	if c == nil {
+		return ""
+	}
+	return c.chain.ChainID
 }
 
 func beginHookTrace(sink *hookTraceSink, req EventRequest) *hookTraceCollector {

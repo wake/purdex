@@ -160,6 +160,11 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	if isDevMode() {
+		log.Printf("[hook] trigger session=%s agent=%s purdex_name=%s chain_id=%s",
+			req.TmuxSession, req.AgentType, req.PurdexName, trace.ChainID())
+	}
+
 	if decision := verifyEventFn(m, req); !decision.Accepted {
 		trace.Verify(req, "rejected", decision.Reason, map[string]any{"decision": "rejected", "reason": decision.Reason})
 		trace.Finish("completed", "verify_rejected")
@@ -233,6 +238,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			reason = "event_not_in_catalog"
 		}
 		trace.Verify(req, "skipped", reason, nil)
+		if isDevMode() {
+			log.Printf("[derive] skipped agent=%s purdex_name=%s reason=%s chain_id=%s",
+				req.AgentType, req.PurdexName, reason, trace.ChainID())
+			log.Printf("[handler] invalid_skip reason=%s chain_id=%s",
+				reason, trace.ChainID())
+		}
 		if req.TmuxSession != "" && m.events != nil {
 			if err := m.events.Delete(req.TmuxSession); err != nil {
 				log.Printf("[agent] clear legacy event on invalid result: %v", err)
@@ -246,6 +257,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			"reason": reason,
 		})
 		return
+	}
+	if isDevMode() {
+		log.Printf("[derive] verify_passed agent=%s purdex_name=%s status=%s reason=%s chain_id=%s",
+			req.AgentType, req.PurdexName, result.Status, result.Reason, trace.ChainID())
 	}
 
 	// Error guard: when in error state, only whitelisted events can clear it
@@ -284,6 +299,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	trace.Frame(req, frameMeta)
+	if isDevMode() {
+		log.Printf("[handler] frame_apply session=%s frame_id=%s lifecycle=%s decision=%s chain_id=%s",
+			req.TmuxSession, frameMeta.FrameID, req.PurdexName, frameMeta.Decision, trace.ChainID())
+	}
 	projection := paneProjection
 	if req.TmuxSession != "" {
 		projection, err = m.projectionForSession(req.TmuxSession)
@@ -296,6 +315,19 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	trace.Projection(req, summarizeProjectionChange(paneProjection, projection))
+	if isDevMode() {
+		var topStatus, paneID string
+		var subagentCount int
+		if projection != nil {
+			paneID = projection.PaneID
+			subagentCount = len(projection.Subagents)
+			if projection.TopFrame != nil {
+				topStatus = string(projection.TopFrame.Status)
+			}
+		}
+		log.Printf("[handler] projection_built session=%s top_status=%s subagents=%d pane_id=%s chain_id=%s",
+			req.TmuxSession, topStatus, subagentCount, paneID, trace.ChainID())
+	}
 
 	if req.TmuxSession != "" && m.frames != nil && m.events != nil {
 		if err := m.events.Delete(req.TmuxSession); err != nil {
@@ -310,6 +342,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Handle subagent events (transient — broadcast only, don't persist)
 	if lifecycle == agentpkg.LifecycleSubagentStart || lifecycle == agentpkg.LifecycleSubagentStop {
 		if frameMeta.Decision != "updated_frame" {
+			if isDevMode() {
+				log.Printf("[handler] invalid_skip decision=%s reason=%s chain_id=%s",
+					frameMeta.Decision, frameMeta.Reason, trace.ChainID())
+			}
 			trace.Finish("completed", "emit_skipped")
 			traceFinished = true
 			w.Header().Set("Content-Type", "application/json")
@@ -322,6 +358,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 		emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
+		if isDevMode() {
+			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
+				req.TmuxSession, m.hasSubscribers(), emitDecision, emitReason, normalized.RawEventName, trace.ChainID())
+		}
 		if emitDecision == "broadcasted" {
 			trace.Finish("completed", "emit_broadcasted")
 		} else {
@@ -387,6 +427,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	m.mu.Unlock()
 	emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
 	trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
+	if isDevMode() {
+		log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
+			req.TmuxSession, m.hasSubscribers(), emitDecision, emitReason, normalized.RawEventName, trace.ChainID())
+	}
 	if emitDecision == "broadcasted" {
 		trace.Finish("completed", "emit_broadcasted")
 	} else {
@@ -396,6 +440,17 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// hasSubscribers reports whether the events broadcaster has any connected
+// clients. Returns false when m.core or m.core.Events is nil so dev-mode
+// callers can format the field unconditionally without panicking when the
+// module has no event plane wired (test setup, daemon-less unit tests).
+func (m *Module) hasSubscribers() bool {
+	if m == nil || m.core == nil || m.core.Events == nil {
+		return false
+	}
+	return m.core.Events.HasSubscribers()
 }
 
 // buildNormalized creates a NormalizedEvent from the derive result and current state.

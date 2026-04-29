@@ -1114,7 +1114,13 @@ func TestHandleDetect_IncludesOpenCode(t *testing.T) {
 	}
 }
 
-func TestActivityWatch_HookEventSupersedes(t *testing.T) {
+// TestActivityWatch_HookDoesNotStartWatcher — W3 撤回. Phase 4a-1 wired
+// manageActivityWatch to start a probe watcher whenever a hook reported
+// Waiting/Running/Idle. W3 reduces manageActivityWatch to a default no-op
+// (stop-only); W6 reintroduces starts via an explicit ProbeIntent caller.
+// This test pins the new contract: two consecutive hooks do NOT leave an
+// active watcher behind.
+func TestActivityWatch_HookDoesNotStartWatcher(t *testing.T) {
 	m := newTestModule(t)
 
 	fake := tmux.NewFakeExecutor()
@@ -1157,12 +1163,17 @@ func TestActivityWatch_HookEventSupersedes(t *testing.T) {
 	_, watching := m.activeWatchers["work"]
 	m.mu.Unlock()
 
-	if !watching {
-		t.Fatal("watcher should remain active for running status after hook event")
+	if watching {
+		t.Fatal("W3 撤回: hook events must NOT start a watcher; manageActivityWatch is default no-op until W6 ProbeIntent lands")
 	}
 }
 
-func TestActivityWatch_StartsForRunningStatus(t *testing.T) {
+// TestActivityWatch_RunningHookDoesNotStartWatcher — W3 撤回 sibling of
+// TestActivityWatch_HookDoesNotStartWatcher. Phase 4a-1's per-status
+// shouldWatchActivity gate (Waiting/Running/Idle → start) was reverted
+// alongside manageActivityWatch's default-no-op rewrite. Confirms a
+// running-status hook leaves activeWatchers empty.
+func TestActivityWatch_RunningHookDoesNotStartWatcher(t *testing.T) {
 	m := newTestModule(t)
 
 	fake := tmux.NewFakeExecutor()
@@ -1187,8 +1198,8 @@ func TestActivityWatch_StartsForRunningStatus(t *testing.T) {
 	m.mu.Lock()
 	_, watching := m.activeWatchers["work"]
 	m.mu.Unlock()
-	if !watching {
-		t.Fatal("expected active watcher after running status")
+	if watching {
+		t.Fatal("W3 撤回: running-status hook must NOT start a watcher; W6 ProbeIntent reintroduces start path explicitly")
 	}
 }
 
