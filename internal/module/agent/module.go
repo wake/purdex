@@ -44,6 +44,13 @@ type Module struct {
 	subagents      map[string][]agentpkg.SubagentRef
 	activeWatchers map[string]string // tmuxSession → agentType
 
+	// W6-3 P1-T4: ProbeIntent dispatcher state. activeProbeIntents and
+	// probeIntentGen are protected by m.mu (same mutex as activeWatchers).
+	// probeIntentDisp is the long-lived dispatcher pointer; created in New().
+	activeProbeIntents map[string]map[agentpkg.ProbeIntentKind]activeIntent
+	probeIntentGen     uint64
+	probeIntentDisp    *probeIntentDispatcher
+
 	// statusSnapshots caches the latest statusline payload per sessionCode.
 	// Display-only, not persisted; guarded by snapshotMu (separate from mu
 	// because hot-path agent.status POSTs shouldn't contend with hook writes).
@@ -104,17 +111,18 @@ func New(events *store.AgentEventStore) (*Module, error) {
 		}
 	}
 	m := &Module{
-		events:          events,
-		frames:          frames,
-		traces:          traces,
-		registry:        agentpkg.NewRegistry(),
-		currentStatus:   make(map[string]agentpkg.Status),
-		subagents:       make(map[string][]agentpkg.SubagentRef),
-		activeWatchers:  make(map[string]string),
-		statusSnapshots: make(map[string]statusSnapshot),
-		testObservers:   make(map[string]*testObserver),
-		pathHintDedup:   NewPathHintDedupCache(5 * time.Second),
-		pathHintBuffer:  NewPathHintRingBuffer(200),
+		events:             events,
+		frames:             frames,
+		traces:             traces,
+		registry:           agentpkg.NewRegistry(),
+		currentStatus:      make(map[string]agentpkg.Status),
+		subagents:          make(map[string][]agentpkg.SubagentRef),
+		activeWatchers:     make(map[string]string),
+		activeProbeIntents: make(map[string]map[agentpkg.ProbeIntentKind]activeIntent),
+		statusSnapshots:    make(map[string]statusSnapshot),
+		testObservers:      make(map[string]*testObserver),
+		pathHintDedup:      NewPathHintDedupCache(5 * time.Second),
+		pathHintBuffer:     NewPathHintRingBuffer(200),
 	}
 	if traces != nil {
 		m.traceSink = newHookTraceSink(traces)
@@ -124,6 +132,11 @@ func New(events *store.AgentEventStore) (*Module, error) {
 	// m.prober directly. The orchestrator resolves m.prober lazily, so
 	// "AFTER prober is set" semantics hold at startWatch call time.
 	m.probeOrch = newProbeOrchestrator(m)
+	// W6-3 P1-T4: ProbeIntent dispatcher. Created here (not in Init) so the
+	// pointer is non-nil throughout module lifetime; tests that bypass Init
+	// can call manageActivityWatch / replay paths without nil-checking.
+	// parentCtx defaults to context.Background; rotated in Stop().
+	m.probeIntentDisp = newProbeIntentDispatcher(m)
 	return m, nil
 }
 
@@ -254,6 +267,13 @@ func (m *Module) Stop(_ context.Context) error {
 	}
 	if m.prober != nil {
 		m.prober.StopAllWatches()
+	}
+	// W6-3 P1-T4: cancel every armed ProbeIntent detector before clearing
+	// activeWatchers. stopAll uses the same m.mu, so a concurrent applyStatus
+	// either observes the pre-Stop active map or runs to completion — never
+	// partial.
+	if m.probeIntentDisp != nil {
+		m.probeIntentDisp.stopAll()
 	}
 	m.mu.Lock()
 	m.activeWatchers = make(map[string]string)
@@ -479,6 +499,18 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 		return "", ""
 	}
 	return sessionName, m.resolveSessionCode(sessionName)
+}
+
+// nextProbeIntentGeneration returns a fresh monotonically increasing
+// generation token for ProbeIntent detectors. CALLER MUST hold m.mu (the
+// counter is m.mu-protected; call sites are inside applyIntentLifecycle
+// which already holds the lock).
+//
+// Per spec §5.4 — uint64 overflow needs ~5×10¹⁹ increments and is therefore
+// not a practical concern for daemon lifetime; no reuse risk.
+func (m *Module) nextProbeIntentGeneration() uint64 {
+	m.probeIntentGen++
+	return m.probeIntentGen
 }
 
 // lookupTopFrameForSessionLocked returns the top frame's pane_id + pid for
