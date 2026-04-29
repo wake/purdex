@@ -21,12 +21,31 @@ type mappedHookEvent struct {
 	Payload map[string]any
 }
 
+// renderPurdexEventConst emits the JS object literal that the rendered
+// plugin uses for emit() argument substitution (P3-T3). Keys = PurdexName
+// (Pdx-prefixed) so the JS source identifies events by canonical Purdex
+// id rather than upstream Bus key. Iteration order matches catalog order
+// so byte-exact template comparison stays stable.
+func renderPurdexEventConst(specs []agent.HookEventSpec) string {
+	var b strings.Builder
+	b.WriteString("{\n")
+	for _, s := range specs {
+		if !agent.IsInstallableHookSpec(s) {
+			continue
+		}
+		fmt.Fprintf(&b, "    %s: %q,\n", s.PurdexName, s.PurdexName)
+	}
+	b.WriteString("  }")
+	return b.String()
+}
+
 func renderManagedPlugin(pdxPath string) string {
 	return fmt.Sprintf(`// %s
 export const PurdexOpenCodeHooks = async () => {
   const activeSubagents = new Map()
   const suppressIdleForSession = new Set()
   const pdxPath = %q
+  const PURDEX_EVENT = %s
 
   async function emit(eventName, payload = {}) {
     const encoded = JSON.stringify(payload)
@@ -52,24 +71,24 @@ export const PurdexOpenCodeHooks = async () => {
     event: async ({ event }) => {
       switch (event.type) {
         case 'session.created':
-          await emit('SessionStart', { session_id: event.properties.sessionID })
+          await emit(PURDEX_EVENT.PdxSessionStart, { session_id: event.properties.sessionID })
           return
         case 'permission.asked':
-          await emit('PermissionRequest', {
+          await emit(PURDEX_EVENT.PdxPermissionRequest, {
             request_type: 'permission',
             permission: event.properties.permission,
             patterns: event.properties.patterns,
           })
           return
         case 'question.asked':
-          await emit('PermissionRequest', {
+          await emit(PURDEX_EVENT.PdxPermissionRequest, {
             request_type: 'question',
             questions: event.properties.questions,
           })
           return
         case 'session.error':
           if (event.properties.sessionID) suppressIdleForSession.add(event.properties.sessionID)
-          await emit('StopFailure', {
+          await emit(PURDEX_EVENT.PdxStopFailure, {
             error: event.properties.error?.name || '',
             error_details: event.properties.error?.data?.message || '',
           })
@@ -80,10 +99,10 @@ export const PurdexOpenCodeHooks = async () => {
             suppressIdleForSession.delete(event.properties.sessionID)
             return
           }
-          await emit('Stop', { session_id: event.properties.sessionID })
+          await emit(PURDEX_EVENT.PdxStop, { session_id: event.properties.sessionID })
           return
         case 'session.deleted':
-          await emit('SessionEnd', { session_id: event.properties.sessionID })
+          await emit(PURDEX_EVENT.PdxSessionEnd, { session_id: event.properties.sessionID })
           return
       }
     },
@@ -95,7 +114,7 @@ export const PurdexOpenCodeHooks = async () => {
       if (input.sessionID) suppressIdleForSession.delete(input.sessionID)
       const model = input.model
       const modelName = model ? (model.providerID + '/' + model.modelID) : ''
-      await emit('UserPromptSubmit', {
+      await emit(PURDEX_EVENT.PdxUserPromptSubmit, {
         session_id: input.sessionID,
         message_id: input.messageID || output.message?.id || '',
         agent: output.message?.agent || input.agent || '',
@@ -109,7 +128,7 @@ export const PurdexOpenCodeHooks = async () => {
       if (activeSubagents.has(subagentKey)) return
       const agentType = agentTypeFromArgs(output.args)
       activeSubagents.set(subagentKey, agentType)
-      await emit('SubagentStart', {
+      await emit(PURDEX_EVENT.PdxSubagentStart, {
         agent_id: input.callID,
         agent_type: agentType,
         description: typeof output.args?.description === 'string' ? output.args.description : '',
@@ -122,7 +141,7 @@ export const PurdexOpenCodeHooks = async () => {
       const agentType = activeSubagents.get(subagentKey)
       if (!agentType) return
       activeSubagents.delete(subagentKey)
-      await emit('SubagentStop', {
+      await emit(PURDEX_EVENT.PdxSubagentStop, {
         agent_id: input.callID,
         agent_type: agentType,
         title: output.title || '',
@@ -131,17 +150,19 @@ export const PurdexOpenCodeHooks = async () => {
     },
   }
 }
-`, managedMarker, pdxPath)
+`, managedMarker, pdxPath, renderPurdexEventConst(opencodeEventSpecs))
 }
 
-// emittedEventPattern matches `emit('Name', …)` / `emit("Name", …)` inside
-// the plugin body. Strictly used by test-layer parity checks (plan §1.5):
+// emittedEventPattern matches the two emit() argument shapes the plugin
+// template can produce: (a) the canonical post-P3 form
+// emit(PURDEX_EVENT.PdxXxx, ...) and (b) the legacy string-literal form
+// emit('Xxx', ...) the helper still recognizes so test-layer drift checks
+// (PT3 EmitNotInSpec) continue to surface accidental string-literal emit
+// regressions. Strictly used by test-layer parity checks (plan §1.5):
 // runtime health goes through byte-exact template comparison, so this
 // regex's well-known blind spots (comment strings, dead code) never reach
-// production judgement. Keeping the expression scoped to the single
-// emit() call shape keeps the helper understandable for that test-only
-// role.
-var emittedEventPattern = regexp.MustCompile(`emit\(['"](\w+)['"]`)
+// production judgement.
+var emittedEventPattern = regexp.MustCompile(`emit\((?:['"](\w+)['"]|PURDEX_EVENT\.(\w+))`)
 
 // pdxPathLiteralPattern captures the complete quoted Go string literal
 // that renderManagedPlugin writes with %q. The [^"\\]|\\. alternation
@@ -159,10 +180,17 @@ func extractEmittedEvents(body string) []string {
 	seen := make(map[string]bool, len(matches))
 	out := make([]string, 0, len(matches))
 	for _, m := range matches {
-		if len(m) < 2 {
+		if len(m) < 3 {
 			continue
 		}
+		// Group 1 = string-literal form; Group 2 = PURDEX_EVENT.X form.
 		name := m[1]
+		if name == "" {
+			name = m[2]
+		}
+		if name == "" {
+			continue
+		}
 		if seen[name] {
 			continue
 		}
@@ -178,6 +206,10 @@ func extractEmittedEvents(body string) []string {
 // either side yields an error. Scoped to test layer (plan §1.5): runtime
 // never calls this — a build-time drift blocks merge via
 // TestTemplateSpecsParity (PT7) rather than panicking production code.
+//
+// P3-T3: declared set keys on PurdexName (canonical Pdx-prefixed id).
+// extractEmittedEvents returns whatever the emit() RHS resolved to; with
+// PURDEX_EVENT.PdxXxx the captured name is "PdxXxx" so both sides line up.
 func validateSpecsCoverEmitted(body string, specs []agent.HookEventSpec) error {
 	emitted := make(map[string]bool)
 	for _, name := range extractEmittedEvents(body) {
@@ -188,7 +220,7 @@ func validateSpecsCoverEmitted(body string, specs []agent.HookEventSpec) error {
 		if !agent.IsInstallableHookSpec(spec) {
 			continue
 		}
-		declared[spec.Name] = true
+		declared[spec.PurdexName] = true
 	}
 	var missingInSpec []string
 	for name := range emitted {

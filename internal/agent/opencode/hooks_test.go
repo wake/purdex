@@ -179,10 +179,10 @@ func TestCheckHooks_HandEditedPlugin_Unmanaged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read plugin: %v", err)
 	}
-	// Remove the Stop emit call.
-	edited := strings.Replace(string(data), "await emit('Stop',", "// await emit('Stop',", 1)
+	// Remove the Stop emit call (P3-T3 form: emit(PURDEX_EVENT.PdxStop, ...)).
+	edited := strings.Replace(string(data), "await emit(PURDEX_EVENT.PdxStop,", "// await emit(PURDEX_EVENT.PdxStop,", 1)
 	if edited == string(data) {
-		t.Fatal("test setup: failed to mutate template (Stop emit not found)")
+		t.Fatal("test setup: failed to mutate template (PdxStop emit not found)")
 	}
 	if err := os.WriteFile(pluginPath, []byte(edited), 0644); err != nil {
 		t.Fatalf("write edit: %v", err)

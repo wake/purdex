@@ -191,3 +191,94 @@ func TestRenderManagedPlugin_UsesInputModelAndSessionScopedSubagentKeys(t *testi
 		t.Fatalf("rendered plugin should ignore duplicate subagent starts: %s", rendered)
 	}
 }
+
+// === W2 Phase 3 (P3-T3) PURDEX_EVENT const injection assertions ===
+
+// TestRenderManagedPlugin_HasPdxEventConst asserts the rendered template
+// declares the const PURDEX_EVENT object literal with all 8 installable
+// PurdexName entries (per spec §2.3 — installable set is fixed for opencode
+// at SessionStart / UserPromptSubmit / SubagentStart / SubagentStop /
+// PermissionRequest / Stop / StopFailure / SessionEnd, all Pdx-prefixed).
+func TestRenderManagedPlugin_HasPdxEventConst(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	if !strings.Contains(body, "const PURDEX_EVENT = {") {
+		t.Fatal("rendered body missing `const PURDEX_EVENT = {` block")
+	}
+	want := []string{
+		`PdxSessionStart: "PdxSessionStart"`,
+		`PdxUserPromptSubmit: "PdxUserPromptSubmit"`,
+		`PdxSubagentStart: "PdxSubagentStart"`,
+		`PdxSubagentStop: "PdxSubagentStop"`,
+		`PdxPermissionRequest: "PdxPermissionRequest"`,
+		`PdxStop: "PdxStop"`,
+		`PdxStopFailure: "PdxStopFailure"`,
+		`PdxSessionEnd: "PdxSessionEnd"`,
+	}
+	for _, w := range want {
+		if !strings.Contains(body, w) {
+			t.Errorf("PURDEX_EVENT const missing entry %q", w)
+		}
+	}
+}
+
+// TestRenderManagedPlugin_EmitArgsArePdxName asserts every emit() call in
+// the rendered template uses PURDEX_EVENT.PdxXxx as its first argument
+// (no string literals). Pairs with NoLegacyEmitLiteral to lock the post-P3
+// template against accidental string-literal emit regressions.
+func TestRenderManagedPlugin_EmitArgsArePdxName(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	want := []string{
+		"emit(PURDEX_EVENT.PdxSessionStart,",
+		"emit(PURDEX_EVENT.PdxPermissionRequest,",
+		"emit(PURDEX_EVENT.PdxStopFailure,",
+		"emit(PURDEX_EVENT.PdxStop,",
+		"emit(PURDEX_EVENT.PdxSessionEnd,",
+		"emit(PURDEX_EVENT.PdxUserPromptSubmit,",
+		"emit(PURDEX_EVENT.PdxSubagentStart,",
+		"emit(PURDEX_EVENT.PdxSubagentStop,",
+	}
+	for _, w := range want {
+		if !strings.Contains(body, w) {
+			t.Errorf("rendered body missing emit() call %q", w)
+		}
+	}
+}
+
+// TestRenderManagedPlugin_NoLegacyEmitLiteral grep-confirms zero
+// string-literal emit() calls (e.g. emit('SessionStart', ...)) survive in
+// the rendered template post-P3. The whole point of the const refactor
+// is to source-of-truth the names through Go catalog → JS const.
+func TestRenderManagedPlugin_NoLegacyEmitLiteral(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	legacy := []string{
+		"emit('SessionStart',",
+		"emit('UserPromptSubmit',",
+		"emit('SubagentStart',",
+		"emit('SubagentStop',",
+		"emit('PermissionRequest',",
+		"emit('Stop',",
+		"emit('StopFailure',",
+		"emit('SessionEnd',",
+		`emit("SessionStart",`,
+		`emit("UserPromptSubmit",`,
+		`emit("Stop",`,
+		`emit("SessionEnd",`,
+	}
+	for _, lit := range legacy {
+		if strings.Contains(body, lit) {
+			t.Errorf("rendered body still contains legacy literal emit %q (P3-T3 should route via PURDEX_EVENT const)", lit)
+		}
+	}
+}
+
+// TestRenderManagedPlugin_MagicMarkerUnchanged guards against accidental
+// marker bumps during P3-T3 — the managed marker is the version stamp
+// CheckHooks keys off of, and bumping it would invalidate every existing
+// installed plugin without a migration story. (The TemplateSpecsParity
+// test only covers spec/emit drift, not marker drift.)
+func TestRenderManagedPlugin_MagicMarkerUnchanged(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	if !strings.Contains(body, "pdx-managed:opencode-hooks:v1") {
+		t.Fatalf("rendered body missing magic marker `pdx-managed:opencode-hooks:v1`")
+	}
+}
