@@ -313,6 +313,19 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	trace.Projection(req, summarizeProjectionChange(paneProjection, projection))
+	if isDevMode() {
+		var topStatus, paneID string
+		var subagentCount int
+		if projection != nil {
+			paneID = projection.PaneID
+			subagentCount = len(projection.Subagents)
+			if projection.TopFrame != nil {
+				topStatus = string(projection.TopFrame.Status)
+			}
+		}
+		log.Printf("[handler] projection_built session=%s top_status=%s subagents=%d pane_id=%s chain_id=%s",
+			req.TmuxSession, topStatus, subagentCount, paneID, trace.ChainID())
+	}
 
 	if req.TmuxSession != "" && m.frames != nil && m.events != nil {
 		if err := m.events.Delete(req.TmuxSession); err != nil {

@@ -216,6 +216,42 @@ func TestHandler_DevModeLog_FrameApply(t *testing.T) {
 	}
 }
 
+// TestHandler_DevModeLog_ProjectionBuilt verifies the [handler]
+// projection_built line under PDX_DEV_MODE=1 after trace.Projection is
+// recorded. Fields: session / top_status / subagents / pane_id / chain_id.
+// Note: SessionProjection has no Tabs/Codes fields (plan §4 referenced
+// hypothetical tabs/codes counts; the actual projection is per-pane and
+// only carries TopFrame + Subagents). subagents count is the closest
+// readily-available cardinality signal.
+func TestHandler_DevModeLog_ProjectionBuilt(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	buf := captureDevLog(t)
+	m := newTestModule(t)
+
+	devLogPostValid(t, m)
+
+	if m.traceSink != nil {
+		m.traceSink.FlushForTest()
+	}
+	out := buf.String()
+	line := findLogLine(t, out, `\[handler\] projection_built`)
+	if !strings.Contains(line, "session=dev") {
+		t.Errorf("[handler] projection_built missing session=dev: %s", line)
+	}
+	if !strings.Contains(line, "top_status=") {
+		t.Errorf("[handler] projection_built missing top_status= field: %s", line)
+	}
+	if !strings.Contains(line, "subagents=") {
+		t.Errorf("[handler] projection_built missing subagents= field: %s", line)
+	}
+	if !strings.Contains(line, "pane_id=") {
+		t.Errorf("[handler] projection_built missing pane_id= field: %s", line)
+	}
+	if extractField(line, "chain_id=") == "" {
+		t.Errorf("[handler] projection_built chain_id should be non-empty: %s", line)
+	}
+}
+
 // findLogLine returns the first log line matching the given regexp pattern,
 // failing the test if none is found.
 func findLogLine(t *testing.T, out, pattern string) string {
