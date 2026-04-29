@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -18,9 +19,10 @@ type Process struct {
 }
 
 type PaneProcessAggregate struct {
-	CPUPercent   float64 `json:"cpu_percent"`
-	MemoryBytes  uint64  `json:"memory_bytes"`
-	ProcessCount int     `json:"process_count"`
+	CPUPercent   float64   `json:"cpu_percent"`
+	MemoryBytes  uint64    `json:"memory_bytes"`
+	ProcessCount int       `json:"process_count"`
+	TopProcesses []Process `json:"top_processes"`
 }
 
 type ProcessCommandRunner interface {
@@ -165,7 +167,7 @@ func AggregatePaneDescendants(panePID int, processes []Process) PaneProcessAggre
 	return aggregate
 }
 
-func AggregateSessionProcesses(tmuxSessionID string, panes []TmuxPane, processes []Process) PaneProcessAggregate {
+func AggregateSessionProcesses(tmuxSessionID string, panes []TmuxPane, processes []Process, topLimit int) PaneProcessAggregate {
 	if tmuxSessionID == "" {
 		return PaneProcessAggregate{}
 	}
@@ -192,6 +194,7 @@ func AggregateSessionProcesses(tmuxSessionID string, panes []TmuxPane, processes
 	}
 
 	var aggregate PaneProcessAggregate
+	var included []Process
 	visited := make(map[int]bool, len(processes))
 	for len(queue) > 0 {
 		pid := queue[0]
@@ -208,10 +211,32 @@ func AggregateSessionProcesses(tmuxSessionID string, panes []TmuxPane, processes
 		aggregate.CPUPercent += process.CPUPercent
 		aggregate.MemoryBytes += process.MemoryBytes
 		aggregate.ProcessCount++
+		included = append(included, process)
 		queue = append(queue, childrenByPPID[pid]...)
 	}
+	aggregate.TopProcesses = selectTopProcesses(included, topLimit)
 
 	return aggregate
+}
+
+func selectTopProcesses(processes []Process, limit int) []Process {
+	if limit <= 0 || len(processes) == 0 {
+		return nil
+	}
+	sorted := append([]Process(nil), processes...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].CPUPercent != sorted[j].CPUPercent {
+			return sorted[i].CPUPercent > sorted[j].CPUPercent
+		}
+		if sorted[i].MemoryBytes != sorted[j].MemoryBytes {
+			return sorted[i].MemoryBytes > sorted[j].MemoryBytes
+		}
+		return sorted[i].PID < sorted[j].PID
+	})
+	if len(sorted) > limit {
+		sorted = sorted[:limit]
+	}
+	return sorted
 }
 
 type processCLICommandRunner struct{}
