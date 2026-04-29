@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.259] - 2026-04-29
+
+### Feat(monitor): preserve unavailable session metrics (#745)
+
+Keeps daemon monitor session rows visible when session daemon metrics cannot be mapped or collected. tmux pane listing failures, process table failures, missing pane mappings, and missing process data now return stable `unavailable_reason` values instead of failing the snapshot request.
+
+Unavailable daemon metric fields are serialized as explicit `null` values for `cpu_percent`, `memory_bytes`, and `process_count`, while available session metrics continue returning numeric values. Reasons are scoped per session so one session's failure state does not overwrite another session's known mapping state.
+
+This remains a daemon-only, non-breaking slice; SPA UI, top-process selection, and single-flight sampling remain deferred.
+
 ## [1.0.0-alpha.258] - 2026-04-29
 
 ### Feat(monitor): aggregate session process totals (#742)
