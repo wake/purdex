@@ -21,7 +21,8 @@ func TestHost_FirstCPUSampleIsPendingWhileMemoryAndDiskArePresent(t *testing.T) 
 
 	require.NotNil(t, host.CPU)
 	assert.Nil(t, host.CPU.Percent)
-	assert.Equal(t, "pending", host.CPU.UnavailableReason)
+	require.NotNil(t, host.CPU.UnavailableReason)
+	assert.Equal(t, "pending", *host.CPU.UnavailableReason)
 	require.NotNil(t, host.Memory)
 	assert.Equal(t, uint64(1000), *host.Memory.TotalBytes)
 	assert.Equal(t, uint64(250), *host.Memory.UsedBytes)
@@ -46,7 +47,7 @@ func TestHost_SecondCPUSampleComputesPercentFromDeltas(t *testing.T) {
 	require.Nil(t, first.CPU.Percent)
 	require.NotNil(t, second.CPU.Percent)
 	assert.Equal(t, 80.0, *second.CPU.Percent)
-	assert.Empty(t, second.CPU.UnavailableReason)
+	assert.Nil(t, second.CPU.UnavailableReason)
 }
 
 func TestHost_MemoryCollectorReturnsBytesAndPercent(t *testing.T) {
@@ -86,14 +87,17 @@ func TestHost_PartialCollectorFailureReturnsStableUnavailableReasons(t *testing.
 
 	require.NotNil(t, host.CPU)
 	assert.Nil(t, host.CPU.Percent)
-	assert.Equal(t, "host_cpu_unavailable", host.CPU.UnavailableReason)
+	require.NotNil(t, host.CPU.UnavailableReason)
+	assert.Equal(t, "host_cpu_unavailable", *host.CPU.UnavailableReason)
 	require.NotNil(t, host.Memory)
-	assert.Equal(t, "host_memory_unavailable", host.Memory.UnavailableReason)
+	require.NotNil(t, host.Memory.UnavailableReason)
+	assert.Equal(t, "host_memory_unavailable", *host.Memory.UnavailableReason)
 	assert.Nil(t, host.Memory.TotalBytes)
 	assert.Nil(t, host.Memory.UsedBytes)
 	assert.Nil(t, host.Memory.UsedPercent)
 	require.NotNil(t, host.Disk)
-	assert.Equal(t, "host_disk_unavailable", host.Disk.UnavailableReason)
+	require.NotNil(t, host.Disk.UnavailableReason)
+	assert.Equal(t, "host_disk_unavailable", *host.Disk.UnavailableReason)
 	assert.Nil(t, host.Disk.TotalBytes)
 	assert.Nil(t, host.Disk.UsedBytes)
 	assert.Nil(t, host.Disk.UsedPercent)
@@ -123,14 +127,16 @@ func TestHost_PartialCollectorFailureKeepsAvailableMetrics(t *testing.T) {
 	host := collectHostMetrics(context.Background(), state)
 
 	require.NotNil(t, host.CPU)
-	assert.Equal(t, "host_cpu_unavailable", host.CPU.UnavailableReason)
+	require.NotNil(t, host.CPU.UnavailableReason)
+	assert.Equal(t, "host_cpu_unavailable", *host.CPU.UnavailableReason)
 	require.NotNil(t, host.Memory)
 	assert.Equal(t, uint64(1000), *host.Memory.TotalBytes)
 	assert.Equal(t, uint64(400), *host.Memory.UsedBytes)
 	assert.Equal(t, 40.0, *host.Memory.UsedPercent)
-	assert.Empty(t, host.Memory.UnavailableReason)
+	assert.Nil(t, host.Memory.UnavailableReason)
 	require.NotNil(t, host.Disk)
-	assert.Equal(t, "host_disk_unavailable", host.Disk.UnavailableReason)
+	require.NotNil(t, host.Disk.UnavailableReason)
+	assert.Equal(t, "host_disk_unavailable", *host.Disk.UnavailableReason)
 }
 
 type fakeHostCollector struct {

@@ -167,7 +167,7 @@ type SessionDaemonMetrics struct {
 	MemoryBytes       *uint64   `json:"memory_bytes"`
 	ProcessCount      *int      `json:"process_count"`
 	TopProcesses      []Process `json:"top_processes"`
-	UnavailableReason string    `json:"unavailable_reason,omitempty"`
+	UnavailableReason *string   `json:"unavailable_reason"`
 }
 
 func (m *Module) getSnapshot(ctx context.Context) (*snapshot, error) {
@@ -357,8 +357,12 @@ func unavailableSessionMetric(sess session.SessionInfo, reason string) SessionMe
 			ID:   sess.TmuxID,
 			Name: sess.Name,
 		},
-		Daemon: SessionDaemonMetrics{TopProcesses: []Process{}, UnavailableReason: reason},
+		Daemon: SessionDaemonMetrics{TopProcesses: []Process{}, UnavailableReason: reasonPtr(reason)},
 	}
+}
+
+func reasonPtr(reason string) *string {
+	return &reason
 }
 
 func availableSessionDaemonMetrics(aggregate PaneProcessAggregate) SessionDaemonMetrics {
