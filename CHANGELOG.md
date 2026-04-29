@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.254] - 2026-04-29
+
+### Feat(agent): W2 Phase 2 — codex catalog naming separation + lifecycle metadata (#730)
+
+Codex agent catalog migration mirroring cc's W2 Phase 1 (alpha.251). Daemon-internal canonical event id (`PurdexName`, `Pdx`-prefixed) is now decoupled from the upstream Codex hook event name (`UpstreamKey`). Lifecycle dispatch goes through catalog metadata; the legacy fallback predicate retains only the opencode case until Phase 3 ship.
+
+**Catalog** — codex's 11 entries gain `PurdexName` / `UpstreamKeys` / `Lifecycle`. Cross-agent invariant runner flips codex from reverse `LegacyShape` → forward `AllForwardInvariants`. DeriveStatus switch cases rename to `PdxXxx`; legacy literals now miss the catalog (regression-pinned by `TestCodexDeriveStatus_LegacyNames_Invalid` on the 9 negatives).
+
+**Installer boundary** — `~/.codex/hooks.json` keyed by `UpstreamKey` (e.g. `Stop`, `SessionStart`); command tail is `PurdexName` (e.g. `pdx hook --agent codex PdxStop`). `CheckHooks` mirrors the boundary on the read path. `codexKnownEventNames` / `codexOwnedCleanupEventNames` derive from the catalog as a three-way union (`UpstreamKeys ∪ PurdexName ∪ legacy Name`).
+
+**Predicate** — codex case removed from `isLegacyHookForUnmigrated`. Only opencode remains until Phase 3.
+
+**SPA** — codex event-name fixtures updated to `Pdx` prefix.
+
+**Round-2 follow-up (P2-T7)** — `TestHandleEvent_CodexLegacyEventName_IsCatalogMiss` pins the post-P2 boundary: a user upgrading the daemon without running `pdx install --reinstall --agent codex` ends up with hooks emitting legacy literals that now hit the catalog-miss path. Spec §0 + plan G1 deliberately accept this for alpha — reinstall is the user-facing transition trigger. The negative test makes future drift re-introducing a fallback path observable.
+
+**Upgrade note** — after upgrading to alpha.254, run `pdx install --reinstall --agent codex` (and `--agent cc` if not already done at alpha.251). Legacy hooks will silently miss the catalog instead of broadcasting status updates until reinstalled.
+
 ## [1.0.0-alpha.253] - 2026-04-29
 
 ### Fix(spa): wide-mode workspace drag — reorderable, smooth, axis-locked (#732)
