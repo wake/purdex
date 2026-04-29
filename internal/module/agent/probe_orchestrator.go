@@ -18,15 +18,6 @@ type proberWatcher interface {
 	StopWatch(target string)
 }
 
-// defaultProbeProfile is the fallback profile used when an agent provider
-// does not implement agentpkg.ProbeProfileProvider.
-//
-// R9 fix: BottomLines (not TopLines) preserves legacy
-// CapturePaneContent(target, 10) capture region for codex / opencode in
-// PR-4a-1, satisfying the §6 G5 default-profile parity gate. Per-agent
-// TopLines profiles arrive in PR-4a-2 (cc) and beyond.
-var defaultProbeProfile = agentpkg.ProbeProfile{BottomLines: 10, IdleStableTicks: 3}
-
 // probeGraceWindow is the post-recordHookAt suppression window. While
 // active, every screen-change event for the session is dropped (counter
 // +1 each) so a hook event remains the authoritative status source for the
@@ -118,56 +109,45 @@ func (o *probeOrchestrator) prober() proberWatcher {
 	return o.parent.prober
 }
 
-// startWatch resolves the agent's ProbeProfile and starts a probe watcher.
+// startWatch starts a probe watcher with caller-provided WatchOptions.
 //
 // Caller passes session WITHOUT the ":" suffix; orchestrator appends it to
 // match the existing tmux-target convention (R7 fix).
 //
-// Profile resolution (R8 fix): looks up the provider via parent.registry.Get
-// and asserts agentpkg.ProbeProfileProvider. Missing agentType or providers
-// that don't implement the interface fall back to defaultProbeProfile.
+// W3 (this PR): orchestrator no longer owns a default profile or looks up
+// per-agent ProbeProfile via the registry. Callers (e.g. W6 ProbeIntent or
+// future explicit start sites) supply opts directly. While Phase 1 keeps
+// manageActivityWatch / renameSessionLocked as default no-ops, no production
+// caller invokes startWatch yet — tests exercise it directly to pin the
+// surface (FX4 invalid-opts, CC4 explicit start) until W6 lands.
 //
-// Returns true iff a watcher was successfully registered. The caller
-// (manageActivityWatch / renameSessionLocked) uses this to roll back its
-// activeWatchers mutation when the profile is invalid (TopLines + BottomLines
-// mutually exclusive — probe.Watch would log + early-return without
-// registering, leaving a silent dead watcher otherwise; codex finding #7
-// regression). Returning false also skips the started-metric increment so
-// /debug/vars stays an honest counter of registered watchers.
-func (o *probeOrchestrator) startWatch(session, agentType string) bool {
+// Returns true iff a watcher was successfully registered. False is returned
+// when the orchestrator has no prober wired (R14 nil-prober guard) or when
+// opts are invalid (TopLines + BottomLines mutually exclusive — probe.Watch
+// would log + early-return without registering, leaving a silent dead watcher
+// otherwise; codex finding #7 regression). Returning false also skips the
+// started-metric increment so /debug/vars stays an honest counter of
+// registered watchers.
+func (o *probeOrchestrator) startWatch(session, agentType string, opts probe.WatchOptions) bool {
 	pw := o.prober()
 	if pw == nil {
 		return false
 	}
 	target := session + ":"
 
-	profile := defaultProbeProfile
-	if o.parent != nil && o.parent.registry != nil {
-		if provider, ok := o.parent.registry.Get(agentType); ok {
-			if pp, ok := provider.(agentpkg.ProbeProfileProvider); ok {
-				profile = pp.ProbeProfile()
-			}
-		}
-	}
-
-	// Profile validation — must mirror probe.Watch's contract (TopLines +
+	// Opts validation — must mirror probe.Watch's contract (TopLines +
 	// BottomLines mutually exclusive). Validating here lets the caller roll
-	// back its activeWatchers entry; without this, probe.Watch silently
+	// back any local state it set up; without this, probe.Watch silently
 	// drops the call and the orchestrator is left with a "started" metric
 	// + an active map entry but no goroutine.
-	if profile.TopLines > 0 && profile.BottomLines > 0 {
+	if opts.TopLines > 0 && opts.BottomLines > 0 {
 		if isDevMode() {
-			log.Printf("[probe] startWatch invalid profile session=%s agent=%s TopLines=%d BottomLines=%d — mutually exclusive; not registering",
-				session, agentType, profile.TopLines, profile.BottomLines)
+			log.Printf("[probe] startWatch invalid opts session=%s agent=%s TopLines=%d BottomLines=%d — mutually exclusive; not registering",
+				session, agentType, opts.TopLines, opts.BottomLines)
 		}
 		return false
 	}
 
-	opts := probe.WatchOptions{
-		TopLines:        profile.TopLines,
-		BottomLines:     profile.BottomLines,
-		IdleStableTicks: profile.IdleStableTicks,
-	}
 	pw.Watch(target, opts, o.makeCallback(session, agentType))
 	agentpkg.MetricProbeWatchStarted.Add(1)
 	return true

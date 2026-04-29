@@ -286,7 +286,10 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 		// + broadcast) so the renamed session keeps responding to screen events.
 		// nil-prober is handled inside startWatch/stopWatch (R14 fix).
 		m.probeOrch.stopWatch(oldName)
-		if !m.probeOrch.startWatch(newName, agentType) {
+		// W3 P1-T2 transitional: pass empty WatchOptions while P1-T3 removes
+		// this call site entirely. After P1-T3 lands renameSessionLocked is
+		// stop-only and this branch no longer invokes startWatch.
+		if !m.probeOrch.startWatch(newName, agentType, probe.WatchOptions{}) {
 			// Codex finding #7 regression: invalid profile / nil prober — roll
 			// back the activeWatchers transfer so the orchestrator's stale-
 			// callback guard does not see a phantom watcher.
@@ -510,7 +513,10 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 		m.mu.Lock()
 		m.activeWatchers[session] = agentType
 		m.mu.Unlock()
-		if !m.probeOrch.startWatch(session, agentType) {
+		// W3 P1-T2 transitional: pass empty WatchOptions while P1-T3 removes
+		// this branch entirely. After P1-T3 lands manageActivityWatch is a
+		// default no-op (stop-only) and W6 callers invoke startWatch directly.
+		if !m.probeOrch.startWatch(session, agentType, probe.WatchOptions{}) {
 			// Codex finding #7 regression: invalid profile / nil prober — roll
 			// back the activeWatchers entry so the stale-callback guard sees
 			// the session as not watched and /debug/vars stays consistent

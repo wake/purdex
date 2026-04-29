@@ -271,25 +271,3 @@ type SessionState struct {
 	SessionID string
 	Cwd       string
 }
-
-// ProbeProfileProvider lets an agent provider tune probe watcher parameters.
-// Optional: agents that don't implement it fall back to the orchestrator's
-// default profile (sibling pattern to StatusSupporter / HookInstaller).
-type ProbeProfileProvider interface {
-	ProbeProfile() ProbeProfile
-}
-
-// ProbeProfile carries per-agent tuning for the screen-change watcher.
-// TopLines and BottomLines are mutually exclusive (only one may be > 0).
-// IdleStableTicks = 0 means the watch loop uses its built-in default of 3.
-type ProbeProfile struct {
-	// TopLines hashes the top N lines via tmux.CapturePaneTopLines.
-	// 0 = unused.
-	TopLines int
-	// BottomLines hashes the bottom N lines via legacy
-	// tmux.CapturePaneContent(target, N) semantics. 0 = unused.
-	BottomLines int
-	// IdleStableTicks is the number of consecutive identical-hash ticks
-	// before ScreenStable fires. 0 = watch-loop default (3).
-	IdleStableTicks int
-}
