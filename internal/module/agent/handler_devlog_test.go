@@ -12,6 +12,9 @@ import (
 	"testing"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // captureDevLog redirects log output to an in-memory buffer for the duration
@@ -249,6 +252,120 @@ func TestHandler_DevModeLog_ProjectionBuilt(t *testing.T) {
 	}
 	if extractField(line, "chain_id=") == "" {
 		t.Errorf("[handler] projection_built chain_id should be non-empty: %s", line)
+	}
+}
+
+// TestHandler_DevModeLog_BroadcastMain verifies the [broadcast] line for
+// the main valid path under PDX_DEV_MODE=1. Fields: session / has_clients
+// / decision / reason / raw_event_name / chain_id.
+//
+// Uses devLogPostValid which leaves m.core == nil; emitHookToSession
+// therefore returns ("skipped","core_unavailable") and HasSubscribers is
+// reported as false (nil-safe). The label/format remains identical so the
+// log assertion exercises the same emission site.
+func TestHandler_DevModeLog_BroadcastMain(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	buf := captureDevLog(t)
+	m := newTestModule(t)
+
+	devLogPostValid(t, m)
+
+	if m.traceSink != nil {
+		m.traceSink.FlushForTest()
+	}
+	out := buf.String()
+	line := findLogLine(t, out, `\[broadcast\] `)
+	if !strings.Contains(line, "session=dev") {
+		t.Errorf("[broadcast] missing session=dev: %s", line)
+	}
+	if !strings.Contains(line, "has_clients=false") {
+		t.Errorf("[broadcast] expected has_clients=false (nil core): %s", line)
+	}
+	if !strings.Contains(line, "decision=skipped") {
+		t.Errorf("[broadcast] expected decision=skipped: %s", line)
+	}
+	if !strings.Contains(line, "reason=core_unavailable") {
+		t.Errorf("[broadcast] expected reason=core_unavailable: %s", line)
+	}
+	if !strings.Contains(line, "raw_event_name=PdxStop") {
+		t.Errorf("[broadcast] missing raw_event_name=PdxStop: %s", line)
+	}
+	if extractField(line, "chain_id=") == "" {
+		t.Errorf("[broadcast] chain_id should be non-empty: %s", line)
+	}
+}
+
+// TestHandler_DevModeLog_BroadcastSubagent exercises the
+// SubagentStart updated_frame branch (handler.go ~324) so the [broadcast]
+// log emitted from that emit site is observed. A real tmux session +
+// resolved session code + connected EventsBroadcaster subscriber gives
+// has_clients=true and decision=broadcasted to widen coverage on field
+// surface area.
+func TestHandler_DevModeLog_BroadcastSubagent(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "1")
+	buf := captureDevLog(t)
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "PdxSessionStart":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			case "PdxSubagentStart":
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": "call-1"}}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	for _, body := range []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{"agent_id":"call-1"},"agent_type":"cc"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d (body: %s)", w.Code, w.Body.String())
+		}
+	}
+
+	if m.traceSink != nil {
+		m.traceSink.FlushForTest()
+	}
+	out := buf.String()
+	// At least one [broadcast] for SubagentStart should be present with
+	// raw_event_name=PdxSubagentStart and decision=broadcasted.
+	var subagentLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "[broadcast]") && strings.Contains(line, "raw_event_name=PdxSubagentStart") {
+			subagentLine = line
+			break
+		}
+	}
+	if subagentLine == "" {
+		t.Fatalf("missing [broadcast] for PdxSubagentStart in:\n%s", out)
+	}
+	if !strings.Contains(subagentLine, "session=work") {
+		t.Errorf("[broadcast] subagent missing session=work: %s", subagentLine)
+	}
+	if !strings.Contains(subagentLine, "has_clients=true") {
+		t.Errorf("[broadcast] subagent expected has_clients=true: %s", subagentLine)
+	}
+	if !strings.Contains(subagentLine, "decision=broadcasted") {
+		t.Errorf("[broadcast] subagent expected decision=broadcasted: %s", subagentLine)
+	}
+	if extractField(subagentLine, "chain_id=") == "" {
+		t.Errorf("[broadcast] subagent chain_id should be non-empty: %s", subagentLine)
 	}
 }
 

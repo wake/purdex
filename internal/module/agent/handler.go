@@ -352,6 +352,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 		emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
+		if isDevMode() {
+			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
+				req.TmuxSession, m.hasSubscribers(), emitDecision, emitReason, normalized.RawEventName, trace.ChainID())
+		}
 		if emitDecision == "broadcasted" {
 			trace.Finish("completed", "emit_broadcasted")
 		} else {
@@ -417,6 +421,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	m.mu.Unlock()
 	emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
 	trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
+	if isDevMode() {
+		log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
+			req.TmuxSession, m.hasSubscribers(), emitDecision, emitReason, normalized.RawEventName, trace.ChainID())
+	}
 	if emitDecision == "broadcasted" {
 		trace.Finish("completed", "emit_broadcasted")
 	} else {
@@ -426,6 +434,17 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// hasSubscribers reports whether the events broadcaster has any connected
+// clients. Returns false when m.core or m.core.Events is nil so dev-mode
+// callers can format the field unconditionally without panicking when the
+// module has no event plane wired (test setup, daemon-less unit tests).
+func (m *Module) hasSubscribers() bool {
+	if m == nil || m.core == nil || m.core.Events == nil {
+		return false
+	}
+	return m.core.Events.HasSubscribers()
 }
 
 // buildNormalized creates a NormalizedEvent from the derive result and current state.
