@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.265] - 2026-04-29
+
+### Feat(spa): show monitor host summary (#756)
+
+Rewrites `MemoryMonitorPage` into the first daemon-backed Performance Monitor UI slice. The page now fetches monitor config and snapshots for the active host, no longer requires Electron metrics to render, and displays host CPU, memory, disk, sample time, and effective refresh cadence.
+
+Snapshot polling follows the daemon config interval, avoids fallback daemon requests when the active host record is missing, preserves the last host summary through transient refresh failures, and keeps retrying after errors. Loading/error states now expose live-region roles.
+
+Adds localized Performance Monitor host-summary labels and unavailable reason text in English and Traditional Chinese. Full tab table, client metrics, and monitor settings controls remain deferred.
+
 ## [1.0.0-alpha.264] - 2026-04-29
 
 ### Feat(spa): add monitor host API helpers (#754)
