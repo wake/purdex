@@ -57,6 +57,15 @@ type Module struct {
 
 	snapshotMu     sync.Mutex
 	cachedSnapshot *snapshot
+	inFlight       *snapshotFlight
+	snapshotGen    uint64
+}
+
+type snapshotFlight struct {
+	generation uint64
+	done       chan struct{}
+	snapshot   *snapshot
+	err        error
 }
 
 func New(opts ...Option) *Module {
@@ -162,32 +171,71 @@ type SessionDaemonMetrics struct {
 }
 
 func (m *Module) getSnapshot(ctx context.Context) (*snapshot, error) {
-	now := m.now()
-	cfg := m.effectiveConfig()
-	refreshInterval := time.Duration(cfg.RefreshIntervalMS) * time.Millisecond
+	for {
+		now := m.now()
+		m.snapshotMu.Lock()
+		cfg := m.effectiveConfig()
+		refreshInterval := time.Duration(cfg.RefreshIntervalMS) * time.Millisecond
+		if m.cachedSnapshot != nil && now.Sub(m.cachedSnapshot.sampledAt) < refreshInterval {
+			snapshot := m.cachedSnapshot
+			m.snapshotMu.Unlock()
+			return snapshot, nil
+		}
+		if m.inFlight != nil {
+			flight := m.inFlight
+			m.snapshotMu.Unlock()
+			select {
+			case <-flight.done:
+				m.snapshotMu.Lock()
+				stale := flight.generation != m.snapshotGen
+				m.snapshotMu.Unlock()
+				if stale {
+					continue
+				}
+				if flight.err != nil {
+					return nil, flight.err
+				}
+				return flight.snapshot, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 
-	m.snapshotMu.Lock()
-	defer m.snapshotMu.Unlock()
+		flight := &snapshotFlight{generation: m.snapshotGen, done: make(chan struct{})}
+		m.inFlight = flight
+		m.snapshotMu.Unlock()
 
-	if m.cachedSnapshot != nil && now.Sub(m.cachedSnapshot.sampledAt) < refreshInterval {
-		return m.cachedSnapshot, nil
+		snapshot, err := m.collectSnapshot(context.WithoutCancel(ctx), cfg)
+
+		m.snapshotMu.Lock()
+		if m.inFlight == flight {
+			m.inFlight = nil
+		}
+		if err == nil && flight.generation == m.snapshotGen {
+			m.cachedSnapshot = snapshot
+		}
+		flight.snapshot = snapshot
+		flight.err = err
+		close(flight.done)
+		m.snapshotMu.Unlock()
+		return snapshot, err
 	}
+}
 
+func (m *Module) collectSnapshot(ctx context.Context, cfg EffectiveConfig) (*snapshot, error) {
 	sessions, err := m.collectSessionMetrics(ctx, cfg.TopProcessLimit)
 	if err != nil {
 		return nil, err
 	}
 
 	sampledAt := m.now()
-	snapshot := &snapshot{
+	return &snapshot{
 		SampledAt: sampledAt.UnixMilli(),
 		Host:      collectHostMetrics(ctx, m.ensureHostMetricsState()),
 		Sessions:  sessions,
 		Config:    cfg,
 		sampledAt: sampledAt,
-	}
-	m.cachedSnapshot = snapshot
-	return snapshot, nil
+	}, nil
 }
 
 func (m *Module) ensureHostMetricsState() *HostMetricsState {
@@ -396,6 +444,7 @@ func (m *Module) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 func (m *Module) invalidateSnapshot() {
 	m.snapshotMu.Lock()
 	m.cachedSnapshot = nil
+	m.snapshotGen++
 	m.snapshotMu.Unlock()
 }
 
