@@ -20,13 +20,13 @@ import (
 // in P3-T1 along with reverse-shape mode: with all three agents migrated
 // forward, opencode's non-mechanical legacy names (auth.session vs
 // PdxAuthSession etc.) make the constraint vacuous, and the Name field
-// itself is removed in P3-T4.
+// itself was removed in P3-T4.
 func runForwardInvariants(t *testing.T, agentType string, specs []agent.HookEventSpec) {
 	t.Helper()
-	for _, e := range specs {
+	for i, e := range specs {
 		// Invariant 1: PurdexName non-empty and Pdx-prefixed.
 		if e.PurdexName == "" {
-			t.Errorf("%s [Name=%q]: PurdexName empty (invariant 1)", agentType, e.Name)
+			t.Errorf("%s [index=%d UpstreamKeys=%v]: PurdexName empty (invariant 1)", agentType, i, e.UpstreamKeys)
 			continue
 		}
 		if !strings.HasPrefix(e.PurdexName, "Pdx") {

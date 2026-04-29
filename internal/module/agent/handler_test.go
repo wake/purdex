@@ -1098,8 +1098,8 @@ func TestHandleHookSetup_OpenCodeInstall(t *testing.T) {
 	if !bodyStatus.Installed {
 		t.Fatalf("expected installed status, got %+v", bodyStatus)
 	}
-	if !bodyStatus.Events["SubagentStart"].Installed {
-		t.Fatalf("expected SubagentStart installed, got %+v", bodyStatus.Events)
+	if !bodyStatus.Events["PdxSubagentStart"].Installed {
+		t.Fatalf("expected PdxSubagentStart installed, got %+v", bodyStatus.Events)
 	}
 }
 

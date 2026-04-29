@@ -13,9 +13,9 @@ import (
 // deterministic output.
 func TestDeriveSupportedStatuses_UnionAndSort(t *testing.T) {
 	specs := []agent.HookEventSpec{
-		{Name: "A", EmitsStatus: []agent.Status{agent.StatusRunning, agent.StatusWaiting}},
-		{Name: "B", EmitsStatus: []agent.Status{agent.StatusIdle}},
-		{Name: "C", EmitsStatus: []agent.Status{}}, // detail-only, should contribute nothing
+		{PurdexName: "PdxA", EmitsStatus: []agent.Status{agent.StatusRunning, agent.StatusWaiting}},
+		{PurdexName: "PdxB", EmitsStatus: []agent.Status{agent.StatusIdle}},
+		{PurdexName: "PdxC", EmitsStatus: []agent.Status{}}, // detail-only, should contribute nothing
 	}
 	got := agent.DeriveSupportedStatuses(specs)
 	want := []agent.Status{agent.StatusIdle, agent.StatusRunning, agent.StatusWaiting}
@@ -29,9 +29,9 @@ func TestDeriveSupportedStatuses_UnionAndSort(t *testing.T) {
 // collapsed to a single occurrence in the output.
 func TestDeriveSupportedStatuses_DedupesDuplicates(t *testing.T) {
 	specs := []agent.HookEventSpec{
-		{Name: "A", EmitsStatus: []agent.Status{agent.StatusWaiting, agent.StatusWaiting}},
-		{Name: "B", EmitsStatus: []agent.Status{agent.StatusWaiting, agent.StatusIdle}},
-		{Name: "C", EmitsStatus: []agent.Status{agent.StatusIdle}},
+		{PurdexName: "PdxA", EmitsStatus: []agent.Status{agent.StatusWaiting, agent.StatusWaiting}},
+		{PurdexName: "PdxB", EmitsStatus: []agent.Status{agent.StatusWaiting, agent.StatusIdle}},
+		{PurdexName: "PdxC", EmitsStatus: []agent.Status{agent.StatusIdle}},
 	}
 	got := agent.DeriveSupportedStatuses(specs)
 	want := []agent.Status{agent.StatusIdle, agent.StatusWaiting}
@@ -67,7 +67,7 @@ func TestDeriveSupportedStatuses_EmptyInput(t *testing.T) {
 // top of the existing declaration; pre-existing specs remain required" rule
 // so a future rename/retype cannot silently flip the default.
 func TestHookEventSpecFutureOnlyDefaultsToFalse(t *testing.T) {
-	spec := agent.HookEventSpec{Name: "X"}
+	spec := agent.HookEventSpec{PurdexName: "PdxX"}
 	if spec.FutureOnly {
 		t.Fatalf("HookEventSpec zero-value FutureOnly = true, want false")
 	}
@@ -147,7 +147,7 @@ func TestIsInstallableHookSpec(t *testing.T) {
 // §1.2 forbids it (see the comment on HookEventSpec.FutureOnly).
 func TestDeriveSupportedStatusesIgnoresFutureOnlyBit(t *testing.T) {
 	specs := []agent.HookEventSpec{
-		{Name: "Future", EmitsStatus: []agent.Status{agent.StatusWaiting}, FutureOnly: true},
+		{PurdexName: "PdxFuture", EmitsStatus: []agent.Status{agent.StatusWaiting}, FutureOnly: true},
 	}
 	got := agent.DeriveSupportedStatuses(specs)
 	if len(got) != 1 || got[0] != agent.StatusWaiting {

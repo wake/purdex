@@ -72,15 +72,18 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		// Propagate the FutureOnly bit to HookEventInfo so the UI can
 		// render "tolerated absent" vs "required missing" distinctly.
 		info.FutureOnly = spec.FutureOnly
-		events[spec.Name] = info
+		events[spec.PurdexName] = info
 		issues = append(issues, addIssues...)
 		if blocks {
 			allInstalled = false
 		}
 		if spec.FutureOnly && !info.Installed {
 			// Tolerated-absent FutureOnly → advertise as available upgrade.
-			if _, keyExists := hooks[spec.Name]; !keyExists {
-				upgrades = append(upgrades, spec.Name)
+			// Lookup uses the upstream key (codex hooks.json keys are raw
+			// upstream event names); reporting uses PurdexName so the SPA
+			// receives the canonical Pdx-prefixed identifier.
+			if _, keyExists := hooks[spec.UpstreamKeys[0]]; !keyExists {
+				upgrades = append(upgrades, spec.PurdexName)
 			}
 		}
 	}

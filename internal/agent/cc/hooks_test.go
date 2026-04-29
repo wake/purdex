@@ -461,14 +461,15 @@ func TestCCInstallHooks_WritesAllEventsFromEventsList(t *testing.T) {
 		t.Fatal("cc Events() returned empty; installer iteration would be vacuous")
 	}
 	for _, e := range events {
-		entries, ok := hooks[e.Name]
+		key := e.UpstreamKeys[0]
+		entries, ok := hooks[key]
 		if !ok {
-			t.Errorf("event %s (from installable Events()) not found in written hooks", e.Name)
+			t.Errorf("event %s upstream=%q (from installable Events()) not found in written hooks", e.PurdexName, key)
 			continue
 		}
 		arr, ok := entries.([]any)
 		if !ok || len(arr) == 0 {
-			t.Errorf("event %s: no entries written", e.Name)
+			t.Errorf("event %s: no entries written", e.PurdexName)
 		}
 	}
 	if len(hooks) != len(events) {
@@ -489,13 +490,13 @@ func installableCCEvents(events []agent.HookEventSpec) []agent.HookEventSpec {
 func TestCCInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	original := ccEventSpecs
 	ccEventSpecs = append(append([]agent.HookEventSpec(nil), ccEventSpecs...),
-		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
-		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+		agent.HookEventSpec{PurdexName: "PdxIgnoredSynthetic", UpstreamKeys: []string{"IgnoredSynthetic"}, Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{PurdexName: "PdxUnsupportedSynthetic", UpstreamKeys: []string{"UnsupportedSynthetic"}, Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
 	)
 	t.Cleanup(func() { ccEventSpecs = original })
 
 	for _, name := range ccEventNames() {
-		if name == "IgnoredSynthetic" || name == "UnsupportedSynthetic" {
+		if name == "PdxIgnoredSynthetic" || name == "PdxUnsupportedSynthetic" {
 			t.Fatalf("ccEventNames included non-installable spec %q", name)
 		}
 	}
@@ -662,12 +663,12 @@ func TestCCCheckHooks_ReportsAllEventsFromEventsList(t *testing.T) {
 		t.Fatalf("CheckHooks: %v", err)
 	}
 	for _, e := range installableCCEvents(p.Events()) {
-		if _, ok := status.Events[e.Name]; !ok {
-			t.Errorf("CheckHooks.Events missing key %q (from Events())", e.Name)
+		if _, ok := status.Events[e.PurdexName]; !ok {
+			t.Errorf("CheckHooks.Events missing key %q (from Events())", e.PurdexName)
 		}
 	}
-	if status.Events["Notification"].Installed {
-		t.Error("Notification must be reported Installed=false after deletion")
+	if status.Events["PdxNotification"].Installed {
+		t.Error("PdxNotification must be reported Installed=false after deletion")
 	}
 	if status.Installed {
 		t.Error("Installed must be false when any event is missing")
@@ -846,7 +847,7 @@ func TestMergeClaudeHooks_KeyIsUpstreamKey(t *testing.T) {
 			continue
 		}
 		if len(spec.UpstreamKeys) == 0 {
-			t.Fatalf("installable spec %s has empty UpstreamKeys", spec.Name)
+			t.Fatalf("installable spec %s has empty UpstreamKeys", spec.PurdexName)
 		}
 		want[spec.UpstreamKeys[0]] = true
 	}
@@ -874,16 +875,16 @@ func TestMakePdxEntry_CommandTokenIsPurdexName(t *testing.T) {
 		entry := makePdxEntry("/usr/local/bin/pdx", "cc", spec.PurdexName)
 		inner, _ := entry["hooks"].([]any)
 		if len(inner) == 0 {
-			t.Fatalf("spec %s: entry has no inner hooks", spec.Name)
+			t.Fatalf("spec %s: entry has no inner hooks", spec.PurdexName)
 		}
 		hookObj, _ := inner[0].(map[string]any)
 		cmd, _ := hookObj["command"].(string)
 		tokens := tokenizeCCCommand(cmd)
 		if len(tokens) == 0 {
-			t.Fatalf("spec %s: tokenize empty for command %q", spec.Name, cmd)
+			t.Fatalf("spec %s: tokenize empty for command %q", spec.PurdexName, cmd)
 		}
 		if got := tokens[len(tokens)-1]; got != spec.PurdexName {
-			t.Errorf("spec %s: command end token = %q, want PurdexName %q", spec.Name, got, spec.PurdexName)
+			t.Errorf("spec %s: command end token = %q, want PurdexName %q", spec.PurdexName, got, spec.PurdexName)
 		}
 	}
 }
@@ -917,14 +918,14 @@ func TestMergeClaudeHooks_CommandHasPdxPrefix(t *testing.T) {
 			}
 		}
 		if pdxCommand == "" {
-			t.Errorf("spec %s: no pdx command found under upstream key %q", spec.Name, spec.UpstreamKeys[0])
+			t.Errorf("spec %s: no pdx command found under upstream key %q", spec.PurdexName, spec.UpstreamKeys[0])
 			continue
 		}
 		if !strings.Contains(pdxCommand, spec.PurdexName) {
-			t.Errorf("spec %s: command %q lacks PurdexName %q", spec.Name, pdxCommand, spec.PurdexName)
+			t.Errorf("spec %s: command %q lacks PurdexName %q", spec.PurdexName, pdxCommand, spec.PurdexName)
 		}
 		if !strings.HasPrefix(spec.PurdexName, "Pdx") {
-			t.Errorf("spec %s: PurdexName %q lacks Pdx prefix (catalog drift)", spec.Name, spec.PurdexName)
+			t.Errorf("spec %s: PurdexName %q lacks Pdx prefix (catalog drift)", spec.PurdexName, spec.PurdexName)
 		}
 	}
 }
@@ -962,14 +963,13 @@ func TestCcKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
 // ---- P1-T10: ccOwnedCleanupEventNames is the three-set union ----
 
 // TestCcOwnedCleanupEventNames_FixtureDerivedLegacySet pins the static
-// fixture introduced in P3-T4a to the runtime cc installable Names. This
-// guards against drift between the fixture chosen for the legacy set and
-// the catalog's actual installable Name field while spec.Name still
-// exists. Once P3-T4 removes spec.Name, the fixture is the only source of
-// truth — a drift detected here would only fire from the catalog side
-// adding/removing an installable, which by then must be reflected in
-// ccLegacyEventNames manually (and in PR-W2-cleanup-followup the legacy
-// set is removed entirely).
+// fixture introduced in P3-T4a to the runtime cc installable upstream-key
+// set. After P3-T4 removed spec.Name, the legacy upstream-key strings live
+// only in ccLegacyEventNames; the catalog still exposes them via
+// UpstreamKeys[0] (cc has 1:1 PurdexName ↔ UpstreamKey mapping). This test
+// guards against drift — adding/removing an installable in the catalog must
+// be reflected in ccLegacyEventNames manually (PR-W2-cleanup-followup will
+// retire the legacy set entirely).
 func TestCcOwnedCleanupEventNames_FixtureDerivedLegacySet(t *testing.T) {
 	fixture := make(map[string]bool, len(ccLegacyEventNames))
 	for _, n := range ccLegacyEventNames {
@@ -980,19 +980,22 @@ func TestCcOwnedCleanupEventNames_FixtureDerivedLegacySet(t *testing.T) {
 		if !agent.IsInstallableHookSpec(spec) {
 			continue
 		}
-		runtime[spec.Name] = true
+		// cc installable specs have a single-element UpstreamKeys slice; that
+		// element is the legacy upstream event name (e.g. "Stop") that
+		// ccLegacyEventNames also lists.
+		runtime[spec.UpstreamKeys[0]] = true
 	}
 	if len(fixture) != len(runtime) {
-		t.Errorf("ccLegacyEventNames size = %d, runtime installable Name set size = %d", len(fixture), len(runtime))
+		t.Errorf("ccLegacyEventNames size = %d, runtime installable upstream-key set size = %d", len(fixture), len(runtime))
 	}
 	for n := range runtime {
 		if !fixture[n] {
-			t.Errorf("ccLegacyEventNames missing runtime installable Name %q", n)
+			t.Errorf("ccLegacyEventNames missing runtime installable UpstreamKey %q", n)
 		}
 	}
 	for n := range fixture {
 		if !runtime[n] {
-			t.Errorf("ccLegacyEventNames has %q but no runtime installable Name matches (drift — update fixture or catalog)", n)
+			t.Errorf("ccLegacyEventNames has %q but no runtime installable UpstreamKey matches (drift — update fixture or catalog)", n)
 		}
 	}
 }
@@ -1012,7 +1015,7 @@ func TestCcOwnedCleanupEventNames_ThreeSetUnion(t *testing.T) {
 			want[key] = true
 		}
 		want[spec.PurdexName] = true
-		want[spec.Name] = true
+		want[spec.PurdexName] = true
 	}
 	if len(got) != len(want) {
 		t.Errorf("ccOwnedCleanupEventNames size = %d, want %d", len(got), len(want))

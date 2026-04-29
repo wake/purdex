@@ -52,7 +52,6 @@ type HookInstaller interface {
 // runtime hook handling stays per-agent (policy dispersal, plumbing shared).
 //
 // Fields:
-//   - Name: matches the hook JSON event_name / pdx hook CLI subcommand.
 //   - EmitsStatus: non-empty Status values (Status != "") that DeriveStatus
 //     may return for this event across all sub-branches. Empty slice (not nil)
 //     means the event is detail-only (DeriveStatus returns Valid=true with
@@ -85,15 +84,6 @@ const (
 )
 
 type HookEventSpec struct {
-	// Name is the legacy raw upstream event identifier. Kept during W2
-	// transition to allow Phase 1/2 main-branch builds where codex/opencode
-	// catalogs have not yet migrated. Removed in Phase 3 ship together with
-	// any remaining backfill literals.
-	//
-	// Deprecated: use PurdexName for daemon-internal matching, UpstreamKeys
-	// for installer/plugin boundary writes.
-	Name string
-
 	// PurdexName is the daemon-internal stable identifier for this catalog
 	// entry. Always prefixed with "Pdx". Used as:
 	//   - DeriveStatus switch case label
@@ -116,7 +106,7 @@ type HookEventSpec struct {
 	// installable entries, multiple upstream Bus events may map to the same
 	// PurdexName (e.g., permission.asked + question.asked → PdxPermissionRequest).
 	// For opencode unsupported/ignored entries, UpstreamKeys is a
-	// single-element slice equal to the legacy Name value.
+	// single-element slice equal to the raw upstream event name.
 	UpstreamKeys []string
 
 	// Lifecycle classifies the daemon-internal side effect kind for this

@@ -7,9 +7,27 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
-// expectedCCInstallableEventNames lists the hook events cc's installer wires.
-// Keep this stable while the upstream catalog grows around it.
+// expectedCCInstallableEventNames lists the hook events cc's installer wires,
+// keyed on PurdexName (Pdx-prefixed) post P3-T4. Used for runtime catalog
+// assertions.
 var expectedCCInstallableEventNames = []string{
+	"PdxSessionStart",
+	"PdxUserPromptSubmit",
+	"PdxSubagentStart",
+	"PdxSubagentStop",
+	"PdxStop",
+	"PdxStopFailure",
+	"PdxNotification",
+	"PdxPermissionRequest",
+	"PdxSessionEnd",
+}
+
+// expectedCCEventNames lists the upstream event-name keys that cc's installer
+// writes into ~/.claude/settings.json hooks map. cc has 1:1 PurdexName ↔
+// upstream-key mapping so this list is the strings.TrimPrefix(name, "Pdx")
+// view of expectedCCInstallableEventNames. Used by mergeClaudeHooks tests
+// that index settings.json by upstream key.
+var expectedCCEventNames = []string{
 	"SessionStart",
 	"UserPromptSubmit",
 	"SubagentStart",
@@ -21,40 +39,39 @@ var expectedCCInstallableEventNames = []string{
 	"SessionEnd",
 }
 
-var expectedCCEventNames = expectedCCInstallableEventNames
-
 // expectedCCCatalogHandling is pinned to the Claude Code hooks reference,
 // fetched 2026-04-26 from https://docs.anthropic.com/en/docs/claude-code/hooks.
+// Keys are PurdexName (Pdx-prefixed) post P3-T4.
 var expectedCCCatalogHandling = map[string]agent.HookHandling{
-	"Setup":               agent.HookHandlingUnsupported,
-	"SessionStart":        agent.HookHandlingStatus,
-	"UserPromptSubmit":    agent.HookHandlingStatus,
-	"UserPromptExpansion": agent.HookHandlingUnsupported,
-	"PreToolUse":          agent.HookHandlingUnsupported,
-	"PermissionRequest":   agent.HookHandlingStatus,
-	"PermissionDenied":    agent.HookHandlingIgnored,
-	"PostToolUse":         agent.HookHandlingIgnored,
-	"PostToolUseFailure":  agent.HookHandlingIgnored,
-	"PostToolBatch":       agent.HookHandlingUnsupported,
-	"Notification":        agent.HookHandlingStatus,
-	"SubagentStart":       agent.HookHandlingDetail,
-	"SubagentStop":        agent.HookHandlingDetail,
-	"TaskCreated":         agent.HookHandlingIgnored,
-	"TaskCompleted":       agent.HookHandlingIgnored,
-	"Stop":                agent.HookHandlingStatus,
-	"StopFailure":         agent.HookHandlingStatus,
-	"TeammateIdle":        agent.HookHandlingIgnored,
-	"InstructionsLoaded":  agent.HookHandlingIgnored,
-	"ConfigChange":        agent.HookHandlingIgnored,
-	"CwdChanged":          agent.HookHandlingIgnored,
-	"FileChanged":         agent.HookHandlingUnsupported,
-	"WorktreeCreate":      agent.HookHandlingUnsupported,
-	"WorktreeRemove":      agent.HookHandlingUnsupported,
-	"PreCompact":          agent.HookHandlingUnsupported,
-	"PostCompact":         agent.HookHandlingIgnored,
-	"Elicitation":         agent.HookHandlingIgnored,
-	"ElicitationResult":   agent.HookHandlingIgnored,
-	"SessionEnd":          agent.HookHandlingStatus,
+	"PdxSetup":               agent.HookHandlingUnsupported,
+	"PdxSessionStart":        agent.HookHandlingStatus,
+	"PdxUserPromptSubmit":    agent.HookHandlingStatus,
+	"PdxUserPromptExpansion": agent.HookHandlingUnsupported,
+	"PdxPreToolUse":          agent.HookHandlingUnsupported,
+	"PdxPermissionRequest":   agent.HookHandlingStatus,
+	"PdxPermissionDenied":    agent.HookHandlingIgnored,
+	"PdxPostToolUse":         agent.HookHandlingIgnored,
+	"PdxPostToolUseFailure":  agent.HookHandlingIgnored,
+	"PdxPostToolBatch":       agent.HookHandlingUnsupported,
+	"PdxNotification":        agent.HookHandlingStatus,
+	"PdxSubagentStart":       agent.HookHandlingDetail,
+	"PdxSubagentStop":        agent.HookHandlingDetail,
+	"PdxTaskCreated":         agent.HookHandlingIgnored,
+	"PdxTaskCompleted":       agent.HookHandlingIgnored,
+	"PdxStop":                agent.HookHandlingStatus,
+	"PdxStopFailure":         agent.HookHandlingStatus,
+	"PdxTeammateIdle":        agent.HookHandlingIgnored,
+	"PdxInstructionsLoaded":  agent.HookHandlingIgnored,
+	"PdxConfigChange":        agent.HookHandlingIgnored,
+	"PdxCwdChanged":          agent.HookHandlingIgnored,
+	"PdxFileChanged":         agent.HookHandlingUnsupported,
+	"PdxWorktreeCreate":      agent.HookHandlingUnsupported,
+	"PdxWorktreeRemove":      agent.HookHandlingUnsupported,
+	"PdxPreCompact":          agent.HookHandlingUnsupported,
+	"PdxPostCompact":         agent.HookHandlingIgnored,
+	"PdxElicitation":         agent.HookHandlingIgnored,
+	"PdxElicitationResult":   agent.HookHandlingIgnored,
+	"PdxSessionEnd":          agent.HookHandlingStatus,
 }
 
 // TestCCEvents_Count locks the classified upstream event count.
@@ -66,18 +83,18 @@ func TestCCEvents_Count(t *testing.T) {
 	}
 }
 
-// TestCCEvents_NamesMatchExpected asserts the Event Name set matches the
-// version-pinned upstream catalog.
+// TestCCEvents_NamesMatchExpected asserts the Event PurdexName set matches
+// the version-pinned upstream catalog.
 func TestCCEvents_NamesMatchExpected(t *testing.T) {
 	p := NewProvider(nil, nil, nil, nil)
 	events := p.Events()
 
 	got := make(map[string]bool, len(events))
 	for _, e := range events {
-		if got[e.Name] {
-			t.Errorf("cc Events contains duplicate Name %q", e.Name)
+		if got[e.PurdexName] {
+			t.Errorf("cc Events contains duplicate PurdexName %q", e.PurdexName)
 		}
-		got[e.Name] = true
+		got[e.PurdexName] = true
 	}
 	want := make(map[string]bool, len(expectedCCCatalogHandling))
 	for n := range expectedCCCatalogHandling {
@@ -85,12 +102,12 @@ func TestCCEvents_NamesMatchExpected(t *testing.T) {
 	}
 	for n := range want {
 		if !got[n] {
-			t.Errorf("cc Events missing required Name %q", n)
+			t.Errorf("cc Events missing required PurdexName %q", n)
 		}
 	}
 	for n := range got {
 		if !want[n] {
-			t.Errorf("cc Events contains unexpected Name %q", n)
+			t.Errorf("cc Events contains unexpected PurdexName %q", n)
 		}
 	}
 }
@@ -98,15 +115,15 @@ func TestCCEvents_NamesMatchExpected(t *testing.T) {
 func TestCCEvents_ClassifyKnownUpstreamHooks(t *testing.T) {
 	p := NewProvider(nil, nil, nil, nil)
 	for _, e := range p.Events() {
-		want, ok := expectedCCCatalogHandling[e.Name]
+		want, ok := expectedCCCatalogHandling[e.PurdexName]
 		if !ok {
 			continue
 		}
 		if got := agent.EffectiveHookHandling(e); got != want {
-			t.Errorf("cc %s handling = %q, want %q", e.Name, got, want)
+			t.Errorf("cc %s handling = %q, want %q", e.PurdexName, got, want)
 		}
 		if !agent.IsInstallableHookSpec(e) && len(e.EmitsStatus) != 0 {
-			t.Errorf("cc non-installable %s EmitsStatus = %v, want empty", e.Name, e.EmitsStatus)
+			t.Errorf("cc non-installable %s EmitsStatus = %v, want empty", e.PurdexName, e.EmitsStatus)
 		}
 	}
 }
@@ -116,7 +133,7 @@ func TestCCEvents_InstallableSetStaysStable(t *testing.T) {
 	got := map[string]bool{}
 	for _, e := range p.Events() {
 		if agent.IsInstallableHookSpec(e) {
-			got[e.Name] = true
+			got[e.PurdexName] = true
 		}
 	}
 	want := map[string]bool{}
@@ -146,14 +163,14 @@ func TestCCEvents_EmitsStatusForNotification(t *testing.T) {
 	p := NewProvider(nil, nil, nil, nil)
 	var spec *agent.HookEventSpec
 	for i := range p.Events() {
-		if p.Events()[i].Name == "Notification" {
+		if p.Events()[i].PurdexName == "PdxNotification" {
 			s := p.Events()[i]
 			spec = &s
 			break
 		}
 	}
 	if spec == nil {
-		t.Fatal("cc Events missing Notification entry")
+		t.Fatal("cc Events missing PdxNotification entry")
 	}
 	got := make(map[agent.Status]bool, len(spec.EmitsStatus))
 	for _, s := range spec.EmitsStatus {
@@ -161,11 +178,11 @@ func TestCCEvents_EmitsStatusForNotification(t *testing.T) {
 	}
 	for _, want := range []agent.Status{agent.StatusWaiting, agent.StatusIdle} {
 		if !got[want] {
-			t.Errorf("cc Notification EmitsStatus missing %q (got %v)", want, spec.EmitsStatus)
+			t.Errorf("cc PdxNotification EmitsStatus missing %q (got %v)", want, spec.EmitsStatus)
 		}
 	}
 	if len(got) != 2 {
-		t.Errorf("cc Notification EmitsStatus = %v, want exactly {Waiting, Idle}", spec.EmitsStatus)
+		t.Errorf("cc PdxNotification EmitsStatus = %v, want exactly {Waiting, Idle}", spec.EmitsStatus)
 	}
 }
 
@@ -176,14 +193,14 @@ func TestCCEvents_EmitsStatusForNotification(t *testing.T) {
 func TestCCEvents_DetailOnlyHaveEmptyEmitsStatus(t *testing.T) {
 	p := NewProvider(nil, nil, nil, nil)
 	for _, e := range p.Events() {
-		if e.Name != "SubagentStart" && e.Name != "SubagentStop" {
+		if e.PurdexName != "PdxSubagentStart" && e.PurdexName != "PdxSubagentStop" {
 			continue
 		}
 		if e.EmitsStatus == nil {
-			t.Errorf("cc %s EmitsStatus is nil; want non-nil empty slice", e.Name)
+			t.Errorf("cc %s EmitsStatus is nil; want non-nil empty slice", e.PurdexName)
 		}
 		if len(e.EmitsStatus) != 0 {
-			t.Errorf("cc %s EmitsStatus = %v, want empty", e.Name, e.EmitsStatus)
+			t.Errorf("cc %s EmitsStatus = %v, want empty", e.PurdexName, e.EmitsStatus)
 		}
 	}
 }
@@ -194,36 +211,36 @@ func TestCCEvents_DescriptionsNonEmpty(t *testing.T) {
 	p := NewProvider(nil, nil, nil, nil)
 	for _, e := range p.Events() {
 		if strings.TrimSpace(e.Description) == "" {
-			t.Errorf("cc %s Description is empty", e.Name)
+			t.Errorf("cc %s Description is empty", e.PurdexName)
 			continue
 		}
 		for _, r := range e.Description {
 			if r >= 0x1F300 && r <= 0x1FAFF {
-				t.Errorf("cc %s Description contains emoji rune %U: %q", e.Name, r, e.Description)
+				t.Errorf("cc %s Description contains emoji rune %U: %q", e.PurdexName, r, e.Description)
 				break
 			}
 		}
 	}
 }
 
-// expectedCCLifecycle pins the W2 LifecycleEventKind value per cc Name. Any
-// catalog edit that touches lifecycle classification must update this map and
-// the §2.3.1 spec table together.
+// expectedCCLifecycle pins the W2 LifecycleEventKind value per cc PurdexName.
+// Any catalog edit that touches lifecycle classification must update this map
+// and the §2.3.1 spec table together.
 var expectedCCLifecycle = map[string]agent.LifecycleEventKind{
-	"SessionStart":      agent.LifecycleSessionStart,
-	"UserPromptSubmit":  agent.LifecycleUserPromptSubmit,
-	"Stop":              agent.LifecycleStop,
-	"StopFailure":       agent.LifecycleStopFailure,
-	"Notification":      agent.LifecycleNone,
-	"PermissionRequest": agent.LifecycleNone,
-	"SessionEnd":        agent.LifecycleSessionEnd,
-	"SubagentStart":     agent.LifecycleSubagentStart,
-	"SubagentStop":      agent.LifecycleSubagentStop,
+	"PdxSessionStart":      agent.LifecycleSessionStart,
+	"PdxUserPromptSubmit":  agent.LifecycleUserPromptSubmit,
+	"PdxStop":              agent.LifecycleStop,
+	"PdxStopFailure":       agent.LifecycleStopFailure,
+	"PdxNotification":      agent.LifecycleNone,
+	"PdxPermissionRequest": agent.LifecycleNone,
+	"PdxSessionEnd":        agent.LifecycleSessionEnd,
+	"PdxSubagentStart":     agent.LifecycleSubagentStart,
+	"PdxSubagentStop":      agent.LifecycleSubagentStop,
 }
 
 // expectedCCPreservedMetadata locks the EmitsStatus / Description / FutureOnly
-// / Handling tuple per cc Name as of the pre-W2 catalog. Plain-struct-literal
-// migration must not lose any of these fields (Round-2 G1 防漂移).
+// / Handling tuple per cc PurdexName as of the pre-W2 catalog. Plain-struct-
+// literal migration must not lose any of these fields (Round-2 G1 防漂移).
 type ccLegacyMetadata struct {
 	EmitsStatus []agent.Status
 	Description string
@@ -232,35 +249,35 @@ type ccLegacyMetadata struct {
 }
 
 var expectedCCPreservedMetadata = map[string]ccLegacyMetadata{
-	"Setup":               {[]agent.Status{}, "Claude Code setup hook initialization", false, agent.HookHandlingUnsupported},
-	"SessionStart":        {[]agent.Status{agent.StatusIdle}, "Claude Code session started (non-compact source)", false, ""},
-	"UserPromptSubmit":    {[]agent.Status{agent.StatusRunning}, "User submitted a prompt to the agent", false, ""},
-	"SubagentStart":       {[]agent.Status{}, "Nested sub-agent task dispatched", false, ""},
-	"SubagentStop":        {[]agent.Status{}, "Nested sub-agent task completed", false, ""},
-	"Stop":                {[]agent.Status{agent.StatusIdle}, "Agent finished responding and is idle", false, ""},
-	"StopFailure":         {[]agent.Status{agent.StatusError}, "Agent stopped due to an error", false, ""},
-	"Notification":        {[]agent.Status{agent.StatusWaiting, agent.StatusIdle}, "Permission/elicitation prompt, idle prompt, or auth success", false, ""},
-	"PermissionRequest":   {[]agent.Status{agent.StatusWaiting}, "Tool permission request awaiting user approval", false, ""},
-	"SessionEnd":          {[]agent.Status{agent.StatusClear}, "Claude Code session ended", false, ""},
-	"UserPromptExpansion": {[]agent.Status{}, "User command expanded before model processing", false, agent.HookHandlingUnsupported},
-	"PreToolUse":          {[]agent.Status{}, "Tool call about to execute", false, agent.HookHandlingUnsupported},
-	"PermissionDenied":    {[]agent.Status{}, "Tool permission denied by auto mode classifier", false, agent.HookHandlingIgnored},
-	"PostToolUse":         {[]agent.Status{}, "Tool call completed successfully", false, agent.HookHandlingIgnored},
-	"PostToolUseFailure":  {[]agent.Status{}, "Tool call failed", false, agent.HookHandlingIgnored},
-	"PostToolBatch":       {[]agent.Status{}, "Parallel tool call batch resolved", false, agent.HookHandlingUnsupported},
-	"TaskCreated":         {[]agent.Status{}, "Task was created", false, agent.HookHandlingIgnored},
-	"TaskCompleted":       {[]agent.Status{}, "Task was completed", false, agent.HookHandlingIgnored},
-	"TeammateIdle":        {[]agent.Status{}, "Agent team teammate is about to go idle", false, agent.HookHandlingIgnored},
-	"InstructionsLoaded":  {[]agent.Status{}, "Project instructions were loaded", false, agent.HookHandlingIgnored},
-	"ConfigChange":        {[]agent.Status{}, "Claude Code configuration changed", false, agent.HookHandlingIgnored},
-	"CwdChanged":          {[]agent.Status{}, "Working directory changed", false, agent.HookHandlingIgnored},
-	"FileChanged":         {[]agent.Status{}, "Watched file changed on disk", false, agent.HookHandlingUnsupported},
-	"WorktreeCreate":      {[]agent.Status{}, "Worktree is being created", false, agent.HookHandlingUnsupported},
-	"WorktreeRemove":      {[]agent.Status{}, "Worktree is being removed", false, agent.HookHandlingUnsupported},
-	"PreCompact":          {[]agent.Status{}, "Context compaction is about to run", false, agent.HookHandlingUnsupported},
-	"PostCompact":         {[]agent.Status{}, "Context compaction completed", false, agent.HookHandlingIgnored},
-	"Elicitation":         {[]agent.Status{}, "MCP server requested user input", false, agent.HookHandlingIgnored},
-	"ElicitationResult":   {[]agent.Status{}, "MCP elicitation response was submitted", false, agent.HookHandlingIgnored},
+	"PdxSetup":               {[]agent.Status{}, "Claude Code setup hook initialization", false, agent.HookHandlingUnsupported},
+	"PdxSessionStart":        {[]agent.Status{agent.StatusIdle}, "Claude Code session started (non-compact source)", false, ""},
+	"PdxUserPromptSubmit":    {[]agent.Status{agent.StatusRunning}, "User submitted a prompt to the agent", false, ""},
+	"PdxSubagentStart":       {[]agent.Status{}, "Nested sub-agent task dispatched", false, ""},
+	"PdxSubagentStop":        {[]agent.Status{}, "Nested sub-agent task completed", false, ""},
+	"PdxStop":                {[]agent.Status{agent.StatusIdle}, "Agent finished responding and is idle", false, ""},
+	"PdxStopFailure":         {[]agent.Status{agent.StatusError}, "Agent stopped due to an error", false, ""},
+	"PdxNotification":        {[]agent.Status{agent.StatusWaiting, agent.StatusIdle}, "Permission/elicitation prompt, idle prompt, or auth success", false, ""},
+	"PdxPermissionRequest":   {[]agent.Status{agent.StatusWaiting}, "Tool permission request awaiting user approval", false, ""},
+	"PdxSessionEnd":          {[]agent.Status{agent.StatusClear}, "Claude Code session ended", false, ""},
+	"PdxUserPromptExpansion": {[]agent.Status{}, "User command expanded before model processing", false, agent.HookHandlingUnsupported},
+	"PdxPreToolUse":          {[]agent.Status{}, "Tool call about to execute", false, agent.HookHandlingUnsupported},
+	"PdxPermissionDenied":    {[]agent.Status{}, "Tool permission denied by auto mode classifier", false, agent.HookHandlingIgnored},
+	"PdxPostToolUse":         {[]agent.Status{}, "Tool call completed successfully", false, agent.HookHandlingIgnored},
+	"PdxPostToolUseFailure":  {[]agent.Status{}, "Tool call failed", false, agent.HookHandlingIgnored},
+	"PdxPostToolBatch":       {[]agent.Status{}, "Parallel tool call batch resolved", false, agent.HookHandlingUnsupported},
+	"PdxTaskCreated":         {[]agent.Status{}, "Task was created", false, agent.HookHandlingIgnored},
+	"PdxTaskCompleted":       {[]agent.Status{}, "Task was completed", false, agent.HookHandlingIgnored},
+	"PdxTeammateIdle":        {[]agent.Status{}, "Agent team teammate is about to go idle", false, agent.HookHandlingIgnored},
+	"PdxInstructionsLoaded":  {[]agent.Status{}, "Project instructions were loaded", false, agent.HookHandlingIgnored},
+	"PdxConfigChange":        {[]agent.Status{}, "Claude Code configuration changed", false, agent.HookHandlingIgnored},
+	"PdxCwdChanged":          {[]agent.Status{}, "Working directory changed", false, agent.HookHandlingIgnored},
+	"PdxFileChanged":         {[]agent.Status{}, "Watched file changed on disk", false, agent.HookHandlingUnsupported},
+	"PdxWorktreeCreate":      {[]agent.Status{}, "Worktree is being created", false, agent.HookHandlingUnsupported},
+	"PdxWorktreeRemove":      {[]agent.Status{}, "Worktree is being removed", false, agent.HookHandlingUnsupported},
+	"PdxPreCompact":          {[]agent.Status{}, "Context compaction is about to run", false, agent.HookHandlingUnsupported},
+	"PdxPostCompact":         {[]agent.Status{}, "Context compaction completed", false, agent.HookHandlingIgnored},
+	"PdxElicitation":         {[]agent.Status{}, "MCP server requested user input", false, agent.HookHandlingIgnored},
+	"PdxElicitationResult":   {[]agent.Status{}, "MCP elicitation response was submitted", false, agent.HookHandlingIgnored},
 }
 
 // TestCcEventSpecs_PurdexNamePdxPrefix verifies invariant 1: every cc entry
@@ -268,24 +285,11 @@ var expectedCCPreservedMetadata = map[string]ccLegacyMetadata{
 func TestCcEventSpecs_PurdexNamePdxPrefix(t *testing.T) {
 	for _, e := range ccEventSpecs {
 		if e.PurdexName == "" {
-			t.Errorf("cc %q: PurdexName empty", e.Name)
+			t.Errorf("cc %v: PurdexName empty", e.UpstreamKeys)
 			continue
 		}
 		if !strings.HasPrefix(e.PurdexName, "Pdx") {
-			t.Errorf("cc %q: PurdexName %q lacks Pdx prefix", e.Name, e.PurdexName)
-		}
-	}
-}
-
-// TestCcEventSpecs_NameMatchesTrimPrefix verifies invariant 2: the legacy
-// dev-time Name backfill equals strings.TrimPrefix(PurdexName, "Pdx") so
-// fixtures and migration tooling can round-trip the rename mechanically.
-// Phase 3 ship removes this invariant (and the Name field).
-func TestCcEventSpecs_NameMatchesTrimPrefix(t *testing.T) {
-	for _, e := range ccEventSpecs {
-		want := strings.TrimPrefix(e.PurdexName, "Pdx")
-		if e.Name != want {
-			t.Errorf("cc %q: Name %q != TrimPrefix(PurdexName,%q)=%q", e.PurdexName, e.Name, "Pdx", want)
+			t.Errorf("cc %q: PurdexName lacks Pdx prefix", e.PurdexName)
 		}
 	}
 }
@@ -320,12 +324,12 @@ func TestCcEventSpecs_PurdexNameNotInUpstreamKeys(t *testing.T) {
 // expectedCCLifecycle must be LifecycleNone (unsupported / ignored).
 func TestCcEventSpecs_LifecycleAlignment(t *testing.T) {
 	for _, e := range ccEventSpecs {
-		want, listed := expectedCCLifecycle[e.Name]
+		want, listed := expectedCCLifecycle[e.PurdexName]
 		if !listed {
 			want = agent.LifecycleNone
 		}
 		if e.Lifecycle != want {
-			t.Errorf("cc %q (Name=%q): Lifecycle=%v, want %v", e.PurdexName, e.Name, e.Lifecycle, want)
+			t.Errorf("cc %q: Lifecycle=%v, want %v", e.PurdexName, e.Lifecycle, want)
 		}
 	}
 }
@@ -335,22 +339,22 @@ func TestCcEventSpecs_LifecycleAlignment(t *testing.T) {
 // (EmitsStatus / Description / FutureOnly / Handling).
 func TestCcEventSpecs_PreservedLegacyMetadata(t *testing.T) {
 	for _, e := range ccEventSpecs {
-		want, ok := expectedCCPreservedMetadata[e.Name]
+		want, ok := expectedCCPreservedMetadata[e.PurdexName]
 		if !ok {
-			t.Errorf("cc %q: not present in expectedCCPreservedMetadata; update test fixture", e.Name)
+			t.Errorf("cc %q: not present in expectedCCPreservedMetadata; update test fixture", e.PurdexName)
 			continue
 		}
 		if e.Description != want.Description {
-			t.Errorf("cc %q: Description=%q want %q", e.Name, e.Description, want.Description)
+			t.Errorf("cc %q: Description=%q want %q", e.PurdexName, e.Description, want.Description)
 		}
 		if e.FutureOnly != want.FutureOnly {
-			t.Errorf("cc %q: FutureOnly=%v want %v", e.Name, e.FutureOnly, want.FutureOnly)
+			t.Errorf("cc %q: FutureOnly=%v want %v", e.PurdexName, e.FutureOnly, want.FutureOnly)
 		}
 		if e.Handling != want.Handling {
-			t.Errorf("cc %q: Handling=%q want %q", e.Name, e.Handling, want.Handling)
+			t.Errorf("cc %q: Handling=%q want %q", e.PurdexName, e.Handling, want.Handling)
 		}
 		if len(e.EmitsStatus) != len(want.EmitsStatus) {
-			t.Errorf("cc %q: EmitsStatus len=%d want %d", e.Name, len(e.EmitsStatus), len(want.EmitsStatus))
+			t.Errorf("cc %q: EmitsStatus len=%d want %d", e.PurdexName, len(e.EmitsStatus), len(want.EmitsStatus))
 			continue
 		}
 		gotSet := make(map[agent.Status]bool, len(e.EmitsStatus))
@@ -359,7 +363,7 @@ func TestCcEventSpecs_PreservedLegacyMetadata(t *testing.T) {
 		}
 		for _, s := range want.EmitsStatus {
 			if !gotSet[s] {
-				t.Errorf("cc %q: EmitsStatus missing %q (got %v)", e.Name, s, e.EmitsStatus)
+				t.Errorf("cc %q: EmitsStatus missing %q (got %v)", e.PurdexName, s, e.EmitsStatus)
 			}
 		}
 	}
@@ -374,13 +378,13 @@ func TestCCEvents_FreshSliceDefensiveCopy(t *testing.T) {
 	if len(first) == 0 {
 		t.Fatal("cc Events returned empty slice")
 	}
-	first[0].Name = "__mutated__"
+	first[0].PurdexName = "__mutated__"
 	if len(first[0].EmitsStatus) > 0 {
 		first[0].EmitsStatus[0] = agent.Status("__mutated__")
 	}
 	second := p.Events()
-	if second[0].Name == "__mutated__" {
-		t.Errorf("cc Events shares backing array; second call first Name mutated to %q", second[0].Name)
+	if second[0].PurdexName == "__mutated__" {
+		t.Errorf("cc Events shares backing array; second call first PurdexName mutated to %q", second[0].PurdexName)
 	}
 	if len(second[0].EmitsStatus) > 0 && second[0].EmitsStatus[0] == "__mutated__" {
 		t.Errorf("cc Events shares EmitsStatus backing array across calls")

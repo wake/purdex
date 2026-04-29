@@ -39,7 +39,7 @@ func TestValidateSpecsCoverEmitted_EmitNotInSpec(t *testing.T) {
 func TestValidateSpecsCoverEmitted_SpecNotInEmit(t *testing.T) {
 	body := renderManagedPlugin("/fake/pdx")
 	extended := append([]agent.HookEventSpec(nil), opencodeEventSpecs...)
-	extended = append(extended, agent.HookEventSpec{Name: "Phantom"})
+	extended = append(extended, agent.HookEventSpec{PurdexName: "PdxPhantom", UpstreamKeys: []string{"Phantom"}})
 	if err := validateSpecsCoverEmitted(body, extended); err == nil {
 		t.Fatal("expected error for spec-not-in-emit; got nil")
 	}
@@ -49,8 +49,8 @@ func TestValidateSpecsCoverEmitted_IgnoresNonInstallableSpecs(t *testing.T) {
 	body := renderManagedPlugin("/fake/pdx")
 	extended := append([]agent.HookEventSpec(nil), opencodeEventSpecs...)
 	extended = append(extended,
-		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
-		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+		agent.HookEventSpec{PurdexName: "PdxIgnoredSynthetic", UpstreamKeys: []string{"IgnoredSynthetic"}, Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{PurdexName: "PdxUnsupportedSynthetic", UpstreamKeys: []string{"UnsupportedSynthetic"}, Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
 	)
 	if err := validateSpecsCoverEmitted(body, extended); err != nil {
 		t.Fatalf("validateSpecsCoverEmitted should ignore non-installable specs; got %v", err)
@@ -60,13 +60,13 @@ func TestValidateSpecsCoverEmitted_IgnoresNonInstallableSpecs(t *testing.T) {
 func TestOpenCodeCheckHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	original := opencodeEventSpecs
 	opencodeEventSpecs = append(append([]agent.HookEventSpec(nil), opencodeEventSpecs...),
-		agent.HookEventSpec{Name: "IgnoredSynthetic", Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
-		agent.HookEventSpec{Name: "UnsupportedSynthetic", Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
+		agent.HookEventSpec{PurdexName: "PdxIgnoredSynthetic", UpstreamKeys: []string{"IgnoredSynthetic"}, Handling: agent.HookHandlingIgnored, Description: "Ignored synthetic hook"},
+		agent.HookEventSpec{PurdexName: "PdxUnsupportedSynthetic", UpstreamKeys: []string{"UnsupportedSynthetic"}, Handling: agent.HookHandlingUnsupported, Description: "Unsupported synthetic hook"},
 	)
 	t.Cleanup(func() { opencodeEventSpecs = original })
 
 	for _, name := range opencodeEventNames() {
-		if name == "IgnoredSynthetic" || name == "UnsupportedSynthetic" {
+		if name == "PdxIgnoredSynthetic" || name == "PdxUnsupportedSynthetic" {
 			t.Fatalf("opencodeEventNames included non-installable spec %q", name)
 		}
 	}

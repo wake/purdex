@@ -12,18 +12,21 @@ import (
 )
 
 // expectedOpenCodeInstallableNames lists the 8 installable Purdex Names. These
-// are the catalog entries the plugin template's emit('Name', ...) calls bind
+// are the catalog entries the plugin template's emit('PdxXxx', ...) calls bind
 // to. Non-installable entries (ignored/unsupported) use upstream-key naming
-// per plan v1.3 §2.2 bipartite policy and are validated separately by HC5.
+// (still keyed off UpstreamKeys[0]) per plan v1.3 §2.2 bipartite policy and
+// are validated separately by HC5.
+//
+// Post-W2 (P3-T4): names are PurdexName values (Pdx-prefixed).
 var expectedOpenCodeInstallableNames = []string{
-	"SessionStart",
-	"UserPromptSubmit",
-	"SubagentStart",
-	"SubagentStop",
-	"PermissionRequest",
-	"Stop",
-	"StopFailure",
-	"SessionEnd",
+	"PdxSessionStart",
+	"PdxUserPromptSubmit",
+	"PdxSubagentStart",
+	"PdxSubagentStop",
+	"PdxPermissionRequest",
+	"PdxStop",
+	"PdxStopFailure",
+	"PdxSessionEnd",
 }
 
 // installableNameSet exposes the installable name set as a map for collision
@@ -56,20 +59,20 @@ func TestOpenCodeEvents_InstallableNamesMatchExpected(t *testing.T) {
 		if !agent.IsInstallableHookSpec(e) {
 			continue
 		}
-		if got[e.Name] {
-			t.Errorf("opencode installable contains duplicate Name %q", e.Name)
+		if got[e.PurdexName] {
+			t.Errorf("opencode installable contains duplicate PurdexName %q", e.PurdexName)
 		}
-		got[e.Name] = true
+		got[e.PurdexName] = true
 	}
 	want := installableNameSet()
 	for n := range want {
 		if !got[n] {
-			t.Errorf("opencode installable missing required Name %q", n)
+			t.Errorf("opencode installable missing required PurdexName %q", n)
 		}
 	}
 	for n := range got {
 		if !want[n] {
-			t.Errorf("opencode installable contains unexpected Name %q", n)
+			t.Errorf("opencode installable contains unexpected PurdexName %q", n)
 		}
 	}
 }
@@ -79,14 +82,14 @@ func TestOpenCodeEvents_InstallableNamesMatchExpected(t *testing.T) {
 func TestOpenCodeEvents_DetailOnlyHaveEmptyEmitsStatus(t *testing.T) {
 	p := opencode.NewProvider()
 	for _, e := range p.Events() {
-		if e.Name != "SubagentStart" && e.Name != "SubagentStop" {
+		if e.PurdexName != "PdxSubagentStart" && e.PurdexName != "PdxSubagentStop" {
 			continue
 		}
 		if e.EmitsStatus == nil {
-			t.Errorf("opencode %s EmitsStatus is nil; want non-nil empty slice", e.Name)
+			t.Errorf("opencode %s EmitsStatus is nil; want non-nil empty slice", e.PurdexName)
 		}
 		if len(e.EmitsStatus) != 0 {
-			t.Errorf("opencode %s EmitsStatus = %v, want empty", e.Name, e.EmitsStatus)
+			t.Errorf("opencode %s EmitsStatus = %v, want empty", e.PurdexName, e.EmitsStatus)
 		}
 	}
 }
@@ -97,18 +100,18 @@ func TestOpenCodeEvents_DescriptionsNonEmpty(t *testing.T) {
 	p := opencode.NewProvider()
 	for _, e := range p.Events() {
 		if strings.TrimSpace(e.Description) == "" {
-			t.Errorf("opencode %s Description is empty", e.Name)
+			t.Errorf("opencode %s Description is empty", e.PurdexName)
 			continue
 		}
 		if len(e.Description) > 70 {
-			t.Errorf("opencode %s Description %d chars > 70 (plan §2.2): %q", e.Name, len(e.Description), e.Description)
+			t.Errorf("opencode %s Description %d chars > 70 (plan §2.2): %q", e.PurdexName, len(e.Description), e.Description)
 		}
 		if strings.HasSuffix(strings.TrimSpace(e.Description), ".") {
-			t.Errorf("opencode %s Description ends with period (plan §2.2): %q", e.Name, e.Description)
+			t.Errorf("opencode %s Description ends with period (plan §2.2): %q", e.PurdexName, e.Description)
 		}
 		for _, r := range e.Description {
 			if r >= 0x1F300 && r <= 0x1FAFF {
-				t.Errorf("opencode %s Description contains emoji rune %U: %q", e.Name, r, e.Description)
+				t.Errorf("opencode %s Description contains emoji rune %U: %q", e.PurdexName, r, e.Description)
 				break
 			}
 		}
@@ -123,13 +126,13 @@ func TestOpenCodeEvents_FreshSliceDefensiveCopy(t *testing.T) {
 	if len(first) == 0 {
 		t.Fatal("opencode Events returned empty slice")
 	}
-	first[0].Name = "__mutated__"
+	first[0].PurdexName = "__mutated__"
 	if len(first[0].EmitsStatus) > 0 {
 		first[0].EmitsStatus[0] = agent.Status("__mutated__")
 	}
 	second := p.Events()
-	if second[0].Name == "__mutated__" {
-		t.Errorf("opencode Events shares backing array; second call first Name mutated to %q", second[0].Name)
+	if second[0].PurdexName == "__mutated__" {
+		t.Errorf("opencode Events shares backing array; second call first PurdexName mutated to %q", second[0].PurdexName)
 	}
 	if len(second[0].EmitsStatus) > 0 && second[0].EmitsStatus[0] == "__mutated__" {
 		t.Errorf("opencode Events shares EmitsStatus backing array across calls")
@@ -208,11 +211,25 @@ func loadFrozenEvents(t *testing.T) frozenEvents {
 	return e
 }
 
-// catalogIndex returns a Name -> spec map for opencodeEventSpecs.
-func catalogIndex(specs []agent.HookEventSpec) map[string]agent.HookEventSpec {
+// catalogByPurdexName returns a PurdexName -> spec map. Used to resolve
+// installable manifest entries via "Pdx" + purdexEventName.
+func catalogByPurdexName(specs []agent.HookEventSpec) map[string]agent.HookEventSpec {
 	out := make(map[string]agent.HookEventSpec, len(specs))
 	for _, spec := range specs {
-		out[spec.Name] = spec
+		out[spec.PurdexName] = spec
+	}
+	return out
+}
+
+// catalogByUpstreamKey returns an upstream-key -> spec map. Used to resolve
+// non-installable (ignored/unsupported) manifest entries; a single upstream
+// key maps to at most one non-installable catalog entry per spec §2.2.
+func catalogByUpstreamKey(specs []agent.HookEventSpec) map[string]agent.HookEventSpec {
+	out := make(map[string]agent.HookEventSpec, len(specs))
+	for _, spec := range specs {
+		for _, k := range spec.UpstreamKeys {
+			out[k] = spec
+		}
 	}
 	return out
 }
@@ -238,10 +255,12 @@ func catalogIndex(specs []agent.HookEventSpec) map[string]agent.HookEventSpec {
 func TestOpenCodeEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 	p := opencode.NewProvider()
 	specs := p.Events()
-	specsByName := catalogIndex(specs)
+	specsByPurdexName := catalogByPurdexName(specs)
+	specsByUpstreamKey := catalogByUpstreamKey(specs)
 	frozen := loadFrozenEvents(t)
 
-	// Track which events.go entries get matched by events.json (for rule b/c).
+	// Track which events.go entries (keyed by PurdexName) get matched by
+	// events.json (for rule b/c).
 	matchedSpecs := make(map[string]int, len(specs))
 
 	check := func(prefix string, entries []frozenEventEntry) {
@@ -256,36 +275,40 @@ func TestOpenCodeEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 					t.Errorf("%s[%s] kind=installable but purdexEventName is empty", prefix, e.UpstreamKey)
 					continue
 				}
-				spec, ok := specsByName[e.Purdex.PurdexEventName]
+				// Manifest's purdexEventName is the legacy short form
+				// ("Stop", "SessionStart"); post-W2 catalog stores the
+				// "Pdx"-prefixed canonical PurdexName. Resolve via prefix.
+				wantPurdex := "Pdx" + e.Purdex.PurdexEventName
+				spec, ok := specsByPurdexName[wantPurdex]
 				if !ok {
-					t.Errorf("%s[%s] purdexEventName=%q has no opencodeEventSpecs entry", prefix, e.UpstreamKey, e.Purdex.PurdexEventName)
+					t.Errorf("%s[%s] purdexEventName=%q has no opencodeEventSpecs entry with PurdexName=%q", prefix, e.UpstreamKey, e.Purdex.PurdexEventName, wantPurdex)
 					continue
 				}
 				h := agent.EffectiveHookHandling(spec)
 				if h != agent.HookHandlingStatus && h != agent.HookHandlingDetail {
 					t.Errorf("%s[%s] purdexEventName=%q resolves to handling=%q; want status/detail", prefix, e.UpstreamKey, e.Purdex.PurdexEventName, h)
 				}
-				matchedSpecs[e.Purdex.PurdexEventName]++
+				matchedSpecs[wantPurdex]++
 			case "ignored":
-				spec, ok := specsByName[e.UpstreamKey]
+				spec, ok := specsByUpstreamKey[e.UpstreamKey]
 				if !ok {
-					t.Errorf("%s[%s] kind=ignored but no opencodeEventSpecs entry with Name=%q", prefix, e.UpstreamKey, e.UpstreamKey)
+					t.Errorf("%s[%s] kind=ignored but no opencodeEventSpecs entry with UpstreamKeys containing %q", prefix, e.UpstreamKey, e.UpstreamKey)
 					continue
 				}
 				if agent.EffectiveHookHandling(spec) != agent.HookHandlingIgnored {
-					t.Errorf("%s[%s] kind=ignored but opencodeEventSpecs[%q].Handling=%q", prefix, e.UpstreamKey, e.UpstreamKey, agent.EffectiveHookHandling(spec))
+					t.Errorf("%s[%s] kind=ignored but opencodeEventSpecs[%q].Handling=%q", prefix, e.UpstreamKey, spec.PurdexName, agent.EffectiveHookHandling(spec))
 				}
-				matchedSpecs[e.UpstreamKey]++
+				matchedSpecs[spec.PurdexName]++
 			case "unsupported":
-				spec, ok := specsByName[e.UpstreamKey]
+				spec, ok := specsByUpstreamKey[e.UpstreamKey]
 				if !ok {
-					t.Errorf("%s[%s] kind=unsupported but no opencodeEventSpecs entry with Name=%q", prefix, e.UpstreamKey, e.UpstreamKey)
+					t.Errorf("%s[%s] kind=unsupported but no opencodeEventSpecs entry with UpstreamKeys containing %q", prefix, e.UpstreamKey, e.UpstreamKey)
 					continue
 				}
 				if agent.EffectiveHookHandling(spec) != agent.HookHandlingUnsupported {
-					t.Errorf("%s[%s] kind=unsupported but opencodeEventSpecs[%q].Handling=%q", prefix, e.UpstreamKey, e.UpstreamKey, agent.EffectiveHookHandling(spec))
+					t.Errorf("%s[%s] kind=unsupported but opencodeEventSpecs[%q].Handling=%q", prefix, e.UpstreamKey, spec.PurdexName, agent.EffectiveHookHandling(spec))
 				}
-				matchedSpecs[e.UpstreamKey]++
+				matchedSpecs[spec.PurdexName]++
 			case "core-mechanism":
 				// Event hook (Bus fan-out) — no events.go counterpart by design.
 			default:
@@ -300,8 +323,8 @@ func TestOpenCodeEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 	// Rule (b)/(c): every events.go entry must have at least one matching
 	// events.json entry (no events.go-only entries).
 	for _, spec := range specs {
-		if matchedSpecs[spec.Name] == 0 {
-			t.Errorf("opencodeEventSpecs[%q] has no matching events.json entry (events.go-only forbidden by HC5 rule c)", spec.Name)
+		if matchedSpecs[spec.PurdexName] == 0 {
+			t.Errorf("opencodeEventSpecs[%q] has no matching events.json entry (events.go-only forbidden by HC5 rule c)", spec.PurdexName)
 		}
 	}
 }
@@ -309,8 +332,8 @@ func TestOpenCodeEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 // HC5b: collision check + non-installable explicit Handling.
 // Plan v1.3 §3 + §2.2:
 //   (a) ignored/unsupported entries set Handling explicitly (not blank);
-//   (b) ignored/unsupported entry Names must NOT collide with the 8
-//       installable Purdex Names (bipartite naming policy).
+//   (b) ignored/unsupported entry PurdexName values must NOT collide with the
+//       8 installable Purdex Names (bipartite naming policy).
 func TestOpenCodeEvents_NonInstallableHaveExplicitHandlingAndNoNameCollision(t *testing.T) {
 	p := opencode.NewProvider()
 	specs := p.Events()
@@ -320,10 +343,10 @@ func TestOpenCodeEvents_NonInstallableHaveExplicitHandlingAndNoNameCollision(t *
 			continue
 		}
 		if spec.Handling == "" {
-			t.Errorf("opencode non-installable %q has blank Handling; expected explicit ignored/unsupported", spec.Name)
+			t.Errorf("opencode non-installable %q has blank Handling; expected explicit ignored/unsupported", spec.PurdexName)
 		}
-		if installable[spec.Name] {
-			t.Errorf("opencode non-installable Name %q collides with installable Purdex Name set", spec.Name)
+		if installable[spec.PurdexName] {
+			t.Errorf("opencode non-installable PurdexName %q collides with installable Purdex Name set", spec.PurdexName)
 		}
 	}
 }
@@ -337,10 +360,10 @@ func TestOpenCodeEvents_NonInstallableHaveEmptyEmitsStatus(t *testing.T) {
 			continue
 		}
 		if spec.EmitsStatus == nil {
-			t.Errorf("opencode non-installable %q EmitsStatus is nil; want non-nil empty slice", spec.Name)
+			t.Errorf("opencode non-installable %q EmitsStatus is nil; want non-nil empty slice", spec.PurdexName)
 		}
 		if len(spec.EmitsStatus) != 0 {
-			t.Errorf("opencode non-installable %q EmitsStatus=%v; want empty", spec.Name, spec.EmitsStatus)
+			t.Errorf("opencode non-installable %q EmitsStatus=%v; want empty", spec.PurdexName, spec.EmitsStatus)
 		}
 	}
 }
@@ -474,35 +497,37 @@ func TestOpenCodeEvents_StalenessPolicyContract(t *testing.T) {
 // invariant is vacuous after merge.
 
 // expectedOpenCodeLifecycle pins the LifecycleEventKind for every installable
-// per spec §2.3.1. Non-installable entries default to LifecycleNone (verified
-// directly in TestOpenCodeEventSpecs_LifecycleAlignment).
+// per spec §2.3.1, keyed on PurdexName post P3-T4. Non-installable entries
+// default to LifecycleNone (verified directly in
+// TestOpenCodeEventSpecs_LifecycleAlignment).
 var expectedOpenCodeLifecycle = map[string]agent.LifecycleEventKind{
-	"SessionStart":      agent.LifecycleSessionStart,
-	"UserPromptSubmit":  agent.LifecycleUserPromptSubmit,
-	"SubagentStart":     agent.LifecycleSubagentStart,
-	"SubagentStop":      agent.LifecycleSubagentStop,
-	"PermissionRequest": agent.LifecycleNone,
-	"Stop":              agent.LifecycleStop,
-	"StopFailure":       agent.LifecycleStopFailure,
-	"SessionEnd":        agent.LifecycleSessionEnd,
+	"PdxSessionStart":      agent.LifecycleSessionStart,
+	"PdxUserPromptSubmit":  agent.LifecycleUserPromptSubmit,
+	"PdxSubagentStart":     agent.LifecycleSubagentStart,
+	"PdxSubagentStop":      agent.LifecycleSubagentStop,
+	"PdxPermissionRequest": agent.LifecycleNone,
+	"PdxStop":              agent.LifecycleStop,
+	"PdxStopFailure":       agent.LifecycleStopFailure,
+	"PdxSessionEnd":        agent.LifecycleSessionEnd,
 }
 
 // expectedOpenCodeInstallableUpstreamKeys pins the multi-source mapping for
 // the 8 installable entries per spec §2.3 — UpstreamKeys lists the plugin
-// Bus event sources that fire this catalog entry.
+// Bus event sources that fire this catalog entry. Keys are PurdexName.
 var expectedOpenCodeInstallableUpstreamKeys = map[string][]string{
-	"SessionStart":      {"session.created"},
-	"UserPromptSubmit":  {"chat.message"},
-	"SubagentStart":     {"tool.execute.before"},
-	"SubagentStop":      {"tool.execute.after"},
-	"PermissionRequest": {"permission.asked", "question.asked"},
-	"Stop":              {"session.status"},
-	"StopFailure":       {"session.error"},
-	"SessionEnd":        {"session.deleted"},
+	"PdxSessionStart":      {"session.created"},
+	"PdxUserPromptSubmit":  {"chat.message"},
+	"PdxSubagentStart":     {"tool.execute.before"},
+	"PdxSubagentStop":      {"tool.execute.after"},
+	"PdxPermissionRequest": {"permission.asked", "question.asked"},
+	"PdxStop":              {"session.status"},
+	"PdxStopFailure":       {"session.error"},
+	"PdxSessionEnd":        {"session.deleted"},
 }
 
 // opencodeLegacyMetadata mirrors cc/codex pattern for P3-T1 invariant 4 —
-// preserved metadata after the plain-struct-literal rewrite.
+// preserved metadata after the plain-struct-literal rewrite. Keys are
+// PurdexName post P3-T4.
 type opencodeLegacyMetadata struct {
 	EmitsStatus []agent.Status
 	Description string
@@ -511,14 +536,14 @@ type opencodeLegacyMetadata struct {
 }
 
 var expectedOpenCodeInstallablePreservedMetadata = map[string]opencodeLegacyMetadata{
-	"SessionStart":      {EmitsStatus: []agent.Status{agent.StatusIdle}, Description: "OpenCode session started"},
-	"UserPromptSubmit":  {EmitsStatus: []agent.Status{agent.StatusRunning}, Description: "User submitted a prompt"},
-	"SubagentStart":     {EmitsStatus: []agent.Status{}, Description: "Nested sub-agent task dispatched"},
-	"SubagentStop":      {EmitsStatus: []agent.Status{}, Description: "Nested sub-agent task completed"},
-	"PermissionRequest": {EmitsStatus: []agent.Status{agent.StatusWaiting}, Description: "Tool permission request awaiting user approval"},
-	"Stop":              {EmitsStatus: []agent.Status{agent.StatusIdle}, Description: "Agent finished responding and is idle"},
-	"StopFailure":       {EmitsStatus: []agent.Status{agent.StatusError}, Description: "Agent stopped due to an error"},
-	"SessionEnd":        {EmitsStatus: []agent.Status{agent.StatusClear}, Description: "OpenCode session ended"},
+	"PdxSessionStart":      {EmitsStatus: []agent.Status{agent.StatusIdle}, Description: "OpenCode session started"},
+	"PdxUserPromptSubmit":  {EmitsStatus: []agent.Status{agent.StatusRunning}, Description: "User submitted a prompt"},
+	"PdxSubagentStart":     {EmitsStatus: []agent.Status{}, Description: "Nested sub-agent task dispatched"},
+	"PdxSubagentStop":      {EmitsStatus: []agent.Status{}, Description: "Nested sub-agent task completed"},
+	"PdxPermissionRequest": {EmitsStatus: []agent.Status{agent.StatusWaiting}, Description: "Tool permission request awaiting user approval"},
+	"PdxStop":              {EmitsStatus: []agent.Status{agent.StatusIdle}, Description: "Agent finished responding and is idle"},
+	"PdxStopFailure":       {EmitsStatus: []agent.Status{agent.StatusError}, Description: "Agent stopped due to an error"},
+	"PdxSessionEnd":        {EmitsStatus: []agent.Status{agent.StatusClear}, Description: "OpenCode session ended"},
 }
 
 // TestOpenCodeEventSpecs_PurdexNamePdxPrefix verifies invariant 1 across all
@@ -526,11 +551,11 @@ var expectedOpenCodeInstallablePreservedMetadata = map[string]opencodeLegacyMeta
 func TestOpenCodeEventSpecs_PurdexNamePdxPrefix(t *testing.T) {
 	for _, e := range opencode.NewProvider().Events() {
 		if e.PurdexName == "" {
-			t.Errorf("opencode %q: PurdexName empty", e.Name)
+			t.Errorf("opencode %v: PurdexName empty", e.UpstreamKeys)
 			continue
 		}
 		if !strings.HasPrefix(e.PurdexName, "Pdx") {
-			t.Errorf("opencode %q: PurdexName %q lacks Pdx prefix", e.Name, e.PurdexName)
+			t.Errorf("opencode %q: PurdexName lacks Pdx prefix", e.PurdexName)
 		}
 	}
 }
@@ -567,7 +592,7 @@ func TestOpenCodeEventSpecs_InstallableMultiSource(t *testing.T) {
 		if !agent.IsInstallableHookSpec(e) {
 			continue
 		}
-		got[e.Name] = e.UpstreamKeys
+		got[e.PurdexName] = e.UpstreamKeys
 	}
 	for name, want := range expectedOpenCodeInstallableUpstreamKeys {
 		gotKeys, ok := got[name]
@@ -594,13 +619,13 @@ func TestOpenCodeEventSpecs_LifecycleAlignment(t *testing.T) {
 	for _, e := range opencode.NewProvider().Events() {
 		want := agent.LifecycleNone
 		if agent.IsInstallableHookSpec(e) {
-			if w, ok := expectedOpenCodeLifecycle[e.Name]; ok {
+			if w, ok := expectedOpenCodeLifecycle[e.PurdexName]; ok {
 				want = w
 			}
 		}
 		if e.Lifecycle != want {
-			t.Errorf("opencode %q (Name=%q, installable=%v): Lifecycle=%v, want %v",
-				e.PurdexName, e.Name, agent.IsInstallableHookSpec(e), e.Lifecycle, want)
+			t.Errorf("opencode %q (installable=%v): Lifecycle=%v, want %v",
+				e.PurdexName, agent.IsInstallableHookSpec(e), e.Lifecycle, want)
 		}
 	}
 }
@@ -614,22 +639,22 @@ func TestOpenCodeEventSpecs_InstallablePreservedMetadata(t *testing.T) {
 		if !agent.IsInstallableHookSpec(e) {
 			continue
 		}
-		want, ok := expectedOpenCodeInstallablePreservedMetadata[e.Name]
+		want, ok := expectedOpenCodeInstallablePreservedMetadata[e.PurdexName]
 		if !ok {
-			t.Errorf("opencode %q: not present in expectedOpenCodeInstallablePreservedMetadata; update fixture", e.Name)
+			t.Errorf("opencode %q: not present in expectedOpenCodeInstallablePreservedMetadata; update fixture", e.PurdexName)
 			continue
 		}
 		if e.Description != want.Description {
-			t.Errorf("opencode %q: Description=%q want %q", e.Name, e.Description, want.Description)
+			t.Errorf("opencode %q: Description=%q want %q", e.PurdexName, e.Description, want.Description)
 		}
 		if e.FutureOnly != want.FutureOnly {
-			t.Errorf("opencode %q: FutureOnly=%v want %v", e.Name, e.FutureOnly, want.FutureOnly)
+			t.Errorf("opencode %q: FutureOnly=%v want %v", e.PurdexName, e.FutureOnly, want.FutureOnly)
 		}
 		if e.Handling != want.Handling {
-			t.Errorf("opencode %q: Handling=%q want %q", e.Name, e.Handling, want.Handling)
+			t.Errorf("opencode %q: Handling=%q want %q", e.PurdexName, e.Handling, want.Handling)
 		}
 		if len(e.EmitsStatus) != len(want.EmitsStatus) {
-			t.Errorf("opencode %q: EmitsStatus len=%d want %d (got=%v want=%v)", e.Name, len(e.EmitsStatus), len(want.EmitsStatus), e.EmitsStatus, want.EmitsStatus)
+			t.Errorf("opencode %q: EmitsStatus len=%d want %d (got=%v want=%v)", e.PurdexName, len(e.EmitsStatus), len(want.EmitsStatus), e.EmitsStatus, want.EmitsStatus)
 			continue
 		}
 		gotSet := make(map[agent.Status]bool, len(e.EmitsStatus))
@@ -638,7 +663,7 @@ func TestOpenCodeEventSpecs_InstallablePreservedMetadata(t *testing.T) {
 		}
 		for _, s := range want.EmitsStatus {
 			if !gotSet[s] {
-				t.Errorf("opencode %q: EmitsStatus missing %q (got %v)", e.Name, s, e.EmitsStatus)
+				t.Errorf("opencode %q: EmitsStatus missing %q (got %v)", e.PurdexName, s, e.EmitsStatus)
 			}
 		}
 	}

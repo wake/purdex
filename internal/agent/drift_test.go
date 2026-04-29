@@ -222,13 +222,8 @@ func TestDriftFixtureCoversAllEvents(t *testing.T) {
 			if !agent.IsInstallableHookSpec(spec) {
 				continue
 			}
-			// W2 transition: cc fixtures key on PurdexName (post Phase 1
-			// rename); codex / opencode fixtures still key on legacy Name.
-			// Phase 3 ship drops the Name fallback once all three migrate.
+			// Post-W2: every catalog entry is keyed on PurdexName.
 			key := spec.PurdexName
-			if key == "" {
-				key = spec.Name
-			}
 			if !covered[key] {
 				t.Errorf("provider %q: installable Events() declares %q but providerFixtures has no entry (add a fixture or make the spec non-installable)",
 					row.AgentType, key)
@@ -299,9 +294,6 @@ func TestDriftPerEventEmitsStatusMatch(t *testing.T) {
 				}
 				spec := spec
 				key := spec.PurdexName
-				if key == "" {
-					key = spec.Name
-				}
 				t.Run(key, func(t *testing.T) {
 					fxs, ok := fixturesByEvent[key]
 					if !ok || len(fxs) == 0 {

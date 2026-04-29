@@ -65,23 +65,23 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		key := spec.UpstreamKeys[0]
 		entries, keyExists := hooks[key]
 		if !keyExists {
-			events[spec.Name] = agent.HookEventInfo{Installed: false, FutureOnly: spec.FutureOnly}
+			events[spec.PurdexName] = agent.HookEventInfo{Installed: false, FutureOnly: spec.FutureOnly}
 			if spec.FutureOnly {
-				upgrades = append(upgrades, spec.Name)
+				upgrades = append(upgrades, spec.PurdexName)
 				continue
 			}
-			issues = append(issues, spec.Name+" hook not installed")
+			issues = append(issues, spec.PurdexName+" hook not installed")
 			allInstalled = false
 			continue
 		}
 		command := findPdxCommandForEvent(entries, spec.PurdexName)
-		events[spec.Name] = agent.HookEventInfo{
+		events[spec.PurdexName] = agent.HookEventInfo{
 			Installed:  command != "",
 			Command:    command,
 			FutureOnly: spec.FutureOnly,
 		}
 		if command == "" {
-			issues = append(issues, spec.Name+" hook: pdx command not found")
+			issues = append(issues, spec.PurdexName+" hook: pdx command not found")
 			allInstalled = false
 		}
 	}

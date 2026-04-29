@@ -15,12 +15,11 @@ import "github.com/wake/purdex/internal/agent"
 //     auth_success → Idle). Drift test pins each sub-branch separately.
 //
 // W2 schema fields (PurdexName / UpstreamKeys / Lifecycle) are populated for
-// every entry. Name is kept as a deprecated dev-time backfill so Phase 1's
-// daemon and Phase 2/3 provider migrations still compile against legacy
-// references; Phase 3 ship removes it.
+// every entry. The pre-W2 Name field has been removed in Phase 3 (P3-T4);
+// daemon-internal lookups read PurdexName, installer/plugin boundary writes
+// read UpstreamKeys.
 var ccEventSpecs = []agent.HookEventSpec{
 	{
-		Name:         "Setup",
 		PurdexName:   "PdxSetup",
 		UpstreamKeys: []string{"Setup"},
 		Lifecycle:    agent.LifecycleNone,
@@ -29,7 +28,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "SessionStart",
 		PurdexName:   "PdxSessionStart",
 		UpstreamKeys: []string{"SessionStart"},
 		Lifecycle:    agent.LifecycleSessionStart,
@@ -37,7 +35,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "Claude Code session started (non-compact source)",
 	},
 	{
-		Name:         "UserPromptSubmit",
 		PurdexName:   "PdxUserPromptSubmit",
 		UpstreamKeys: []string{"UserPromptSubmit"},
 		Lifecycle:    agent.LifecycleUserPromptSubmit,
@@ -45,7 +42,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "User submitted a prompt to the agent",
 	},
 	{
-		Name:         "SubagentStart",
 		PurdexName:   "PdxSubagentStart",
 		UpstreamKeys: []string{"SubagentStart"},
 		Lifecycle:    agent.LifecycleSubagentStart,
@@ -53,7 +49,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "Nested sub-agent task dispatched",
 	},
 	{
-		Name:         "SubagentStop",
 		PurdexName:   "PdxSubagentStop",
 		UpstreamKeys: []string{"SubagentStop"},
 		Lifecycle:    agent.LifecycleSubagentStop,
@@ -61,7 +56,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "Nested sub-agent task completed",
 	},
 	{
-		Name:         "Stop",
 		PurdexName:   "PdxStop",
 		UpstreamKeys: []string{"Stop"},
 		Lifecycle:    agent.LifecycleStop,
@@ -69,7 +63,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "Agent finished responding and is idle",
 	},
 	{
-		Name:         "StopFailure",
 		PurdexName:   "PdxStopFailure",
 		UpstreamKeys: []string{"StopFailure"},
 		Lifecycle:    agent.LifecycleStopFailure,
@@ -77,7 +70,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "Agent stopped due to an error",
 	},
 	{
-		Name:         "Notification",
 		PurdexName:   "PdxNotification",
 		UpstreamKeys: []string{"Notification"},
 		Lifecycle:    agent.LifecycleNone,
@@ -85,7 +77,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "Permission/elicitation prompt, idle prompt, or auth success",
 	},
 	{
-		Name:         "PermissionRequest",
 		PurdexName:   "PdxPermissionRequest",
 		UpstreamKeys: []string{"PermissionRequest"},
 		Lifecycle:    agent.LifecycleNone,
@@ -93,7 +84,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "Tool permission request awaiting user approval",
 	},
 	{
-		Name:         "SessionEnd",
 		PurdexName:   "PdxSessionEnd",
 		UpstreamKeys: []string{"SessionEnd"},
 		Lifecycle:    agent.LifecycleSessionEnd,
@@ -101,7 +91,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Description:  "Claude Code session ended",
 	},
 	{
-		Name:         "UserPromptExpansion",
 		PurdexName:   "PdxUserPromptExpansion",
 		UpstreamKeys: []string{"UserPromptExpansion"},
 		Lifecycle:    agent.LifecycleNone,
@@ -110,7 +99,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "PreToolUse",
 		PurdexName:   "PdxPreToolUse",
 		UpstreamKeys: []string{"PreToolUse"},
 		Lifecycle:    agent.LifecycleNone,
@@ -119,7 +107,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "PermissionDenied",
 		PurdexName:   "PdxPermissionDenied",
 		UpstreamKeys: []string{"PermissionDenied"},
 		Lifecycle:    agent.LifecycleNone,
@@ -128,7 +115,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "PostToolUse",
 		PurdexName:   "PdxPostToolUse",
 		UpstreamKeys: []string{"PostToolUse"},
 		Lifecycle:    agent.LifecycleNone,
@@ -137,7 +123,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "PostToolUseFailure",
 		PurdexName:   "PdxPostToolUseFailure",
 		UpstreamKeys: []string{"PostToolUseFailure"},
 		Lifecycle:    agent.LifecycleNone,
@@ -146,7 +131,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "PostToolBatch",
 		PurdexName:   "PdxPostToolBatch",
 		UpstreamKeys: []string{"PostToolBatch"},
 		Lifecycle:    agent.LifecycleNone,
@@ -155,7 +139,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "TaskCreated",
 		PurdexName:   "PdxTaskCreated",
 		UpstreamKeys: []string{"TaskCreated"},
 		Lifecycle:    agent.LifecycleNone,
@@ -164,7 +147,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "TaskCompleted",
 		PurdexName:   "PdxTaskCompleted",
 		UpstreamKeys: []string{"TaskCompleted"},
 		Lifecycle:    agent.LifecycleNone,
@@ -173,7 +155,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "TeammateIdle",
 		PurdexName:   "PdxTeammateIdle",
 		UpstreamKeys: []string{"TeammateIdle"},
 		Lifecycle:    agent.LifecycleNone,
@@ -182,7 +163,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "InstructionsLoaded",
 		PurdexName:   "PdxInstructionsLoaded",
 		UpstreamKeys: []string{"InstructionsLoaded"},
 		Lifecycle:    agent.LifecycleNone,
@@ -191,7 +171,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "ConfigChange",
 		PurdexName:   "PdxConfigChange",
 		UpstreamKeys: []string{"ConfigChange"},
 		Lifecycle:    agent.LifecycleNone,
@@ -200,7 +179,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "CwdChanged",
 		PurdexName:   "PdxCwdChanged",
 		UpstreamKeys: []string{"CwdChanged"},
 		Lifecycle:    agent.LifecycleNone,
@@ -209,7 +187,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "FileChanged",
 		PurdexName:   "PdxFileChanged",
 		UpstreamKeys: []string{"FileChanged"},
 		Lifecycle:    agent.LifecycleNone,
@@ -218,7 +195,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "WorktreeCreate",
 		PurdexName:   "PdxWorktreeCreate",
 		UpstreamKeys: []string{"WorktreeCreate"},
 		Lifecycle:    agent.LifecycleNone,
@@ -227,7 +203,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "WorktreeRemove",
 		PurdexName:   "PdxWorktreeRemove",
 		UpstreamKeys: []string{"WorktreeRemove"},
 		Lifecycle:    agent.LifecycleNone,
@@ -236,7 +211,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "PreCompact",
 		PurdexName:   "PdxPreCompact",
 		UpstreamKeys: []string{"PreCompact"},
 		Lifecycle:    agent.LifecycleNone,
@@ -245,7 +219,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
-		Name:         "PostCompact",
 		PurdexName:   "PdxPostCompact",
 		UpstreamKeys: []string{"PostCompact"},
 		Lifecycle:    agent.LifecycleNone,
@@ -254,7 +227,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "Elicitation",
 		PurdexName:   "PdxElicitation",
 		UpstreamKeys: []string{"Elicitation"},
 		Lifecycle:    agent.LifecycleNone,
@@ -263,7 +235,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
-		Name:         "ElicitationResult",
 		PurdexName:   "PdxElicitationResult",
 		UpstreamKeys: []string{"ElicitationResult"},
 		Lifecycle:    agent.LifecycleNone,
@@ -279,7 +250,6 @@ func (p *Provider) Events() []agent.HookEventSpec {
 	out := make([]agent.HookEventSpec, len(ccEventSpecs))
 	for i, spec := range ccEventSpecs {
 		out[i] = agent.HookEventSpec{
-			Name:         spec.Name,
 			PurdexName:   spec.PurdexName,
 			UpstreamKeys: append([]string(nil), spec.UpstreamKeys...),
 			Lifecycle:    spec.Lifecycle,
@@ -297,8 +267,9 @@ func (p *Provider) Events() []agent.HookEventSpec {
 	return out
 }
 
-// eventNames returns the ordered installable event Name list for installer /
-// check iteration, derived from ccEventSpecs so there is no parallel SSoT.
+// eventNames returns the ordered installable event PurdexName list for
+// installer / check iteration, derived from ccEventSpecs so there is no
+// parallel SSoT.
 func (p *Provider) eventNames() []string {
 	return ccEventNames()
 }
@@ -312,7 +283,7 @@ func ccEventNames() []string {
 		if !agent.IsInstallableHookSpec(spec) {
 			continue
 		}
-		out = append(out, spec.Name)
+		out = append(out, spec.PurdexName)
 	}
 	return out
 }
