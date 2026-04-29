@@ -1,6 +1,6 @@
 # W6-3 codex error ad-hoc ProbeIntent — Implementation Plan
 
-> **Status**：draft（待 codex plan review）
+> **Status**：v2（codex plan review 4 finding 全採納）
 > **依賴 spec**：`docs/specs/2026-04-29-w6-3-codex-error-probe-intent-spec.md` v6 final（5 輪 review 12 finding 採納）
 > **Worktree**：`.claude/worktrees/lights-w6-3-codex-error` / branch `worktree-lights-w6-3-codex-error`
 > **Base**：`origin/main` @ alpha.261
@@ -65,35 +65,92 @@ per spec §2.1 必守清單，實作時必持守：
 
 **目標**：從 `probe_orchestrator.go interpretScreenEvent` 抽出 free function `applyProbeGuards`；行為零變動；ScreenChange 路徑改用新 helper；新加 strategy injection point（Mapping callback + StaleCheck closure）。
 
+**1:1 mapping table**（per plan-review P2-2 — 強制 mechanical extraction，可重複驗證）：
+
+| 既有 `interpretScreenEvent` step | 抽出後位置 | 變動類型 |
+|---|---|---|
+| step 1 (line 240-247): stale-callback guard fast-path（read activeWatchers + agentType match） | `applyProbeGuards` step 1：caller-supplied `StaleCheck closure` 在 m.mu 內 invoke；ScreenChange 路徑 closure 內容 = 既有 read 邏輯 | mechanical（read 路徑包進 closure）|
+| step 2 (line 249-259): graceWindow check（取 graceMu lock + lastHookAt）| `applyProbeGuards` step 2：identical 區塊 | identical |
+| step 3 (line 261-303): Kind → status mapping（含 ScreenStable 的 dead-PID sweep 分支） | **保留在 `interpretScreenEvent` 上層** — 完成 mapping 後將 `newStatus` 傳入 `applyProbeGuards` 作為已 mapped 結果（透過 `Mapping closure`） | reorganization：mapping 移到 caller layer |
+| step 4 (line 312-325): final critical section + stale guard re-check + ErrorGuard + transition gate | `applyProbeGuards` step 4：identical（用同一 StaleCheck closure 在 m.mu 內 re-check）| identical |
+| step 5 (line 326-353): mutate currentStatus + setProjectionTopStatus + broadcastToSession | `applyProbeGuards` step 5：identical | identical |
+
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `internal/module/agent/probe_orchestrator.go` | `interpretScreenEvent` step 1+2+4+5+6 (stale guard / graceWindow / ErrorGuard / transition gate / broadcast) 抽到 free function `applyProbeGuards`；step 3 (Kind→status mapping) 改用 caller-supplied Mapping callback；ScreenChange 路徑用 ScreenChange-specific Mapping function 不變語意 |
-| `internal/module/agent/probe_orchestrator_test.go` | 既有 test 全綠（regression assertion） |
+| `internal/module/agent/probe_orchestrator.go` | `interpretScreenEvent` step 1+2+4+5 抽到 `applyProbeGuards`；step 3 mapping 留 caller；ScreenChange 路徑 caller adaptor 把 ScreenChange-specific Kind→status 包成 Mapping closure；StaleCheck closure 包 activeWatchers read |
+| `internal/module/agent/probe_orchestrator_test.go` | 既有 test 全綠（zero regression assertion） |
 | `internal/module/agent/probe_intent_dispatcher.go`（新檔，骨架） | 預留 `probeGuardArgs` struct + `applyProbeGuards` signature；本 task 只填 ScreenChange caller |
 
-**Test**：
-- 既有 `TestInterpretScreenEvent_*` 全部通過（zero regression）
-- 新增 `TestApplyProbeGuards_StaleCheckGuard_ScreenChangeRoute` — fake Module + activeWatchers 缺 entry → applied=false
-- 新增 `TestApplyProbeGuards_GraceWindow` — recordHookAt 後 2s 內 → applied=false
-- 新增 `TestApplyProbeGuards_ErrorGuard` — currentStatus=error → applied=false
-- 新增 `TestApplyProbeGuards_TransitionGate` — currentStatus=newStatus → applied=false
-- 新增 `TestApplyProbeGuards_HappyPath` — 所有 guard pass → mutate + broadcast + applied=true
-- 新增 `TestApplyProbeGuards_FinalCriticalSectionReCheck` — fake interruptBeforeFinalLockFn 模擬 step 1 unlock 後 stop → step 4 lock 內 staleCheck 為 false → 取消 mutate
+**Test**（含 table-driven regression — per plan-review P2-2）：
+
+新加 `applyProbeGuards` 直接測試：
+- `TestApplyProbeGuards_StaleCheckGuard_FastPath` — StaleCheck closure 回 false → applied=false（不進 graceWindow / mapping）
+- `TestApplyProbeGuards_GraceWindow` — recordHookAt 後 2s 內 → applied=false
+- `TestApplyProbeGuards_Mapping_NewStatusEmpty_Drops` — Mapping returns "" → applied=false
+- `TestApplyProbeGuards_ErrorGuard` — currentStatus=error → applied=false
+- `TestApplyProbeGuards_TransitionGate` — currentStatus=newStatus → applied=false
+- `TestApplyProbeGuards_HappyPath_MutatesAndBroadcasts` — 所有 guard pass → mutate + broadcast + applied=true
+- `TestApplyProbeGuards_FinalCriticalSectionReCheck` — fake interruptBeforeFinalLockFn 模擬 step 1 unlock 後 stop → step 4 lock 內 StaleCheck 為 false → 取消 mutate
+
+ScreenChange path table-driven regression（per plan-review P2-2 — 機械驗證 5 類觀察 output 與 pre-extraction 一致）：
+
+```go
+// TestScreenChangePath_RegressionMatrix iterates a 5-case table and asserts
+// each case's externally observable output (broadcast / metric counter /
+// dev log line) matches the pre-extraction baseline fixture verbatim.
+//
+// Cases (5; 對應 step 1-5 各一個觀察點)：
+//   1. stale_active_watchers_drop  — activeWatchers 缺 entry → 無 broadcast、無 metric、無 dev log
+//   2. grace_window_drop           — recordHookAt 後 1s → 無 broadcast、graceWindow counter +1
+//   3. error_guard_drop            — currentStatus=error → 無 broadcast、無 transition counter
+//   4. transition_gate_drop        — currentStatus 已是 target → 無 broadcast、無 mutation
+//   5. happy_path_apply            — 全 pass → broadcast 一次 + transition counter +1 + dev log
+//
+// 每 case 跑 pre-extraction (git stash 模擬) + post-extraction，assert output 字串相等。
+```
 
 **Acceptance**：
 - `go test ./internal/module/agent/...` 全綠
-- `git diff` 確認 ScreenChange 路徑語意變動為 0（除新加 caller indirection 外）
+- 既有 `TestInterpretScreenEvent_*` zero regression
+- `TestScreenChangePath_RegressionMatrix` 5 case 全 pass — output 字串級對齊 pre-extraction baseline
+- 1:1 mapping table 在 PR description 中明示，codex review 對 mapping table 二次 verify
 - ProbeIntent 路徑骨架（Mapping / StaleCheck）暫無 caller，但簽名 finalize
 
-**估計**：~120 行 production（含 free function + ScreenChange caller adaptor）/ ~250 行 test。
+**估計**：~120 行 production（含 free function + ScreenChange caller adaptor）/ ~350 行 test（含 regression matrix fixture）。
 
 **依賴**：P1-T1（用到 ProbeIntent types — 但 P1-T2 ScreenChange 路徑暫不用）。實際 P1-T1 + P1-T2 可平行做。
 
 ---
 
-### P1-T3 — Dispatcher core: `applyStatus` / `reconcileSessionActive` / `applyIntentLifecycle` / `consumeSignals`
+### P1-T3 — `Module.lookupTopFrameForSessionLocked` helper
+
+**目標**：在 m.mu 內讀 frame projection top frame `(paneID, pid)`，給 dispatcher 用。**提前到 P1-T3**（per plan-review P1-1 修法 — dispatcher core 編譯前置依賴）。
+
+**改動**：
+
+| 檔案 | 改動 |
+|---|---|
+| `internal/module/agent/module.go` | 新加 `lookupTopFrameForSessionLocked(session) (paneID string, pid int, ok bool)` — caller 已持 m.mu；走既有 `projectionForSessionLocked`（如有）/ 或 `m.frames` 直接 lookup top frame |
+| `internal/module/agent/module_test.go` | 加 unit test |
+
+**Test**：
+- `TestLookupTopFrameForSessionLocked_HappyPath`
+- `TestLookupTopFrameForSessionLocked_NoSession_NotOk`
+- `TestLookupTopFrameForSessionLocked_NoTopFrame_NotOk`
+
+**Acceptance**：`go test ./internal/module/agent/...` 全綠。
+
+**估計**：~30 行 production / ~80 行 test。
+
+**依賴**：none。
+
+> 註：若既有 `projectionForSession` 已是 m.mu 內 lock-free read，可直接 reuse — 本 task 退化為 wrapper 對齊 dispatcher 預期 contract（`paneID, senderPID, ok`）。實作時驗證。
+
+---
+
+### P1-T4 — Dispatcher core: `applyStatus` / `reconcileSessionActive` / `applyIntentLifecycle` / `consumeSignals`
 
 **目標**：實作 dispatcher 核心邏輯；用 stub detector（永不 emit）跑 lifecycle 5 case + 4 reconcile case + probe-applied teardown 全部 test。
 
@@ -144,33 +201,7 @@ Concurrent rename（補 §6.4 race）：
 
 **估計**：~250 行 production / ~500 行 test。
 
-**依賴**：P1-T1 + P1-T2。
-
----
-
-### P1-T4 — `Module.lookupTopFrameForSessionLocked` helper
-
-**目標**：在 m.mu 內讀 frame projection top frame `(paneID, pid)`，給 dispatcher 用。
-
-**改動**：
-
-| 檔案 | 改動 |
-|---|---|
-| `internal/module/agent/module.go` | 新加 `lookupTopFrameForSessionLocked(session) (paneID string, pid int, ok bool)` — caller 已持 m.mu；走既有 `projectionForSessionLocked`（如有）/ 或 `m.frames` 直接 lookup top frame |
-| `internal/module/agent/module_test.go` | 加 unit test |
-
-**Test**：
-- `TestLookupTopFrameForSessionLocked_HappyPath`
-- `TestLookupTopFrameForSessionLocked_NoSession_NotOk`
-- `TestLookupTopFrameForSessionLocked_NoTopFrame_NotOk`
-
-**Acceptance**：`go test ./internal/module/agent/...` 全綠。
-
-**估計**：~30 行 production / ~80 行 test。
-
-**依賴**：none（與 P1-T3 平行）。實際 P1-T3 會用到此 helper，但兩 task 可同 commit 不衝突。
-
-> 註：若既有 `projectionForSession` 已是 m.mu 內 lock-free read，可直接 reuse — 本 task 退化為 wrapper 對齊 dispatcher 預期 contract（`paneID, senderPID, ok`）。實作時驗證。
+**依賴**：P1-T1 + P1-T2 + **P1-T3**（lookupTopFrameForSessionLocked 是 dispatcher 必要前置 — per plan-review P1-1 修法）。
 
 ---
 
@@ -195,7 +226,7 @@ Concurrent rename（補 §6.4 race）：
 
 **估計**：~30 行 production / ~120 行 test。
 
-**依賴**：P1-T3 + P1-T4。
+**依賴**：P1-T4（dispatcher core）。
 
 ---
 
@@ -220,7 +251,7 @@ Concurrent rename（補 §6.4 race）：
 
 **估計**：~40 行 production / ~150 行 test。
 
-**依賴**：P1-T3 + P1-T4 + P1-T5。
+**依賴**：P1-T4 + P1-T5。
 
 ---
 
@@ -341,7 +372,7 @@ Concurrent rename（補 §6.4 race）：
 
 **估計**：~10 行 production / ~120 行 test。
 
-**依賴**：P1-T3 + P2-T2 + P2-T3。
+**依賴**：P1-T4（dispatcher core）+ P2-T2 + P2-T3。
 
 ---
 
@@ -368,26 +399,46 @@ Concurrent rename（補 §6.4 race）：
 
 ---
 
-### P2-T6 — Trace dev log: `[probe-intent]` step kind
+### P2-T6 — Observability: dev log + TraceStore step + expvar metrics（per plan-review P2-1）
 
-**目標**：W4 trace pipeline 加第 6 條 chain log `[probe-intent]`；同時更新 `trace.go` package comment 列出 6 條 step 順序。
+**目標**：spec §8.4 三件事都做：(a) dev log 4 類 line / (b) TraceStore `[probe-intent]` step kind（chain log 第 6 條）/ (c) expvar metrics counter。
 
-**改動**：
+**(a) dev log**：
 
 | 檔案 | 改動 |
 |---|---|
 | `internal/module/agent/trace.go` | package comment 補 `[probe-intent]` step（包含 start / signal / stop / drop 4 個 sub-step）|
-| `internal/module/agent/probe_intent_dispatcher.go` | dev log（在 `isDevMode()` 條件下）— `[probe-intent] start session=X agent=codex kind=process_dead pane=%5 pid=12345 generation=N` / `[probe-intent] signal session=X kind=process_dead PaneAlive=true newStatus=error applied=true` / `[probe-intent] stop session=X kind=process_dead reason=Y` / `[probe-intent] drop session=X kind=process_dead reason=stale-callback\|grace\|error-guard` |
-| `internal/module/agent/probe_intent_dispatcher_test.go` | 補 dev log 測試（用 capturing logger）|
+| `internal/module/agent/probe_intent_dispatcher.go` | 4 類 dev log（在 `isDevMode()` 條件下）：<br>• `[probe-intent] start session=X agent=codex kind=process_dead pane=%5 pid=12345 generation=N`<br>• `[probe-intent] signal session=X kind=process_dead PaneAlive=true newStatus=error applied=true`<br>• `[probe-intent] stop session=X kind=process_dead reason=lifecycle-applyStatus\|reconcile\|stop-all`<br>• `[probe-intent] drop session=X kind=process_dead reason=stale-callback\|grace\|error-guard\|transition-gate` |
+
+**(b) TraceStore step**：spec §8.4 #2 — chain log 第 6 條 `[probe-intent]` 與 `[hook] / [derive] / [handler] / [broadcast] / [verify_passed]` 對齊：
+
+| 檔案 | 改動 |
+|---|---|
+| `internal/module/agent/trace.go` | 加 `TraceStepProbeIntent` 常數 + step 寫入 helper（reuse 既有 `traceSink.Append` 路徑） |
+| `internal/module/agent/probe_intent_dispatcher.go` | `applyIntentLifecycle` start/stop 路徑 + `consumeSignals` applied 路徑 寫入 trace step（含 chain id — sourced 自 hook 觸發或 replay context）|
+
+**(c) expvar metrics**：spec §8.4 #3 — 沿既有 `internal/agent/MetricProbeXxx` pattern：
+
+| 檔案 | 改動 |
+|---|---|
+| `internal/agent/metrics.go`（既有） | 加 `MetricProbeIntentStarted` / `MetricProbeIntentStopped` / `MetricProbeIntentSignalEmitted` / `MetricProbeIntentApplied` / `MetricProbeIntentDroppedStale` / `MetricProbeIntentDroppedGrace` / `MetricProbeIntentDroppedErrorGuard` / `MetricProbeIntentDroppedTransitionGate`（8 個 counter）|
+| `internal/module/agent/probe_intent_dispatcher.go` | 對應路徑 `Metric*.Add(1)` |
 
 **Test**：
 - `TestProbeIntent_DevLog_StartLine`
 - `TestProbeIntent_DevLog_SignalLine`
 - `TestProbeIntent_DevLog_DropReason_StaleCallback`
+- `TestProbeIntent_TraceStore_StartStep`（fake traceSink + assert Append 被呼叫含 `TraceStepProbeIntent` + chain id）
+- `TestProbeIntent_TraceStore_SignalStep`
+- `TestProbeIntent_Expvar_StartedCounterIncrement`（counter delta test：fire start → counter +1）
+- `TestProbeIntent_Expvar_DroppedCounterByReason`（4 種 drop reason 各對應 counter +1）
 
-**Acceptance**：`PDX_DEV_MODE=1` 下 4 類 log 在對應路徑被印出。
+**Acceptance**：
+- `PDX_DEV_MODE=1` 下 4 類 log 在對應路徑被印出
+- TraceStore 中可 query 出 `TraceStepProbeIntent` step entries（與 hook chain 對齊）
+- `/debug/vars` JSON 內 8 個 `probe_intent_*` counter 反映 dispatcher 動作
 
-**估計**：~30 行 production / ~100 行 test。
+**估計**：~80 行 production / ~250 行 test。
 
 **依賴**：P2-T4。
 
@@ -409,6 +460,8 @@ Concurrent rename（補 §6.4 race）：
 - `TestIntegration_CodexNormalExit_NoErrorBroadcast`（status=idle 期間 process dead → ProbeIntent 不 armed → 不 broadcast）
 - `TestIntegration_CodexRestart_ActiveTargetMismatch_ReArms`（同 pane 內換 pid → case 5 觸發）
 - `TestIntegration_AgentSwitchCodexToCC_OldDetectorTornDown`（reconcile cleanup 驗證）
+- `TestIntegration_ReplayWithRealDetector_PaneGone_BroadcastsClear`（per plan-review P1-2：replayStatus 用 real ProcessDead detector，fixture：projection top frame.pid 已死 + HasPane=false → restart 後立即 emit clear → 對應 §8.1 #5 的 clear 路徑）
+- `TestIntegration_ReplayWithRealDetector_PaneAlive_BroadcastsError`（同上但 HasPane=true → emit error；對應 §8.1 #5 error 路徑）
 
 **Acceptance**：`go test ./internal/module/agent/...` 全綠 + integration test list 全 pass。
 
@@ -446,17 +499,18 @@ Concurrent rename（補 §6.4 race）：
 | §1 codex SIGKILL | codex running 中 → `kill -9 <codex_pid>` | ≤2s lights 變 error | `[probe-intent] signal ... PaneAlive=true newStatus=error applied=true` log + SPA tab icon 紅 |
 | §2 codex pane close | codex running 中 → `tmux kill-pane -t %X` | ≤2s lights 變 clear | `[probe-intent] signal ... PaneAlive=false newStatus=clear applied=true` log + SPA tab icon 灰 |
 | §3 codex /exit | codex running → `/exit` | lights → idle 後 ProbeIntent 停；後續 pane close 不誤觸 | `[probe-intent] stop session=X kind=process_dead reason=lifecycle-applyStatus` log；後續 pane close **無** signal log |
-| §4 daemon restart 後 codex 已死 | codex running 中 stop daemon → kill codex → restart daemon | restart 後 ≤2s lights 變 error | `[probe-intent] start ...` (replay arm) → 立刻 `[probe-intent] signal ... PaneAlive=true ... applied=true` log |
+| §4 daemon restart 後 codex 已死（pane 仍存在）→ error | codex running 中 stop daemon → kill -9 codex → restart daemon | restart 後 ≤2s lights 變 error | `[probe-intent] start ...` (replay arm) → 立刻 `[probe-intent] signal ... PaneAlive=true ... applied=true` log |
+| §5 daemon restart 後 codex 已死（pane 也消失）→ clear（per plan-review P1-2 補測） | codex running 中 stop daemon → `tmux kill-pane` 將 codex pane 連同 process 移除 → restart daemon | restart 後 ≤2s lights 變 clear | `[probe-intent] start ...` (replay arm) → 立刻 `[probe-intent] signal ... PaneAlive=false newStatus=clear ... applied=true` log |
 
 **附加場景（可選）**：
 
 | § | 場景 | 期望 |
 |---|---|---|
-| §5 codex restart 換 pid | codex running → /exit → 重新啟新 codex（同 pane）→ 新 status=running 後 kill 新 pid | lights 變 error，舊 detector 不誤觸 |
-| §6 multi-pane | 同 window 兩個 pane 都跑 codex → kill 其中一個 | 該 pane lights 變 error，另一個 pane 不受影響 |
-| §7 cross-provider | codex running → user 切到該 session 跑 cc → cc 啟動後 kill 原 codex pid | 不誤觸 error（codex active entry 已被 reconcile 清掉）|
+| §6 codex restart 換 pid | codex running → /exit → 重新啟新 codex（同 pane）→ 新 status=running 後 kill 新 pid | lights 變 error，舊 detector 不誤觸 |
+| §7 multi-pane | 同 window 兩個 pane 都跑 codex → kill 其中一個 | 該 pane lights 變 error，另一個 pane 不受影響 |
+| §8 cross-provider | codex running → user 切到該 session 跑 cc → cc 啟動後 kill 原 codex pid | 不誤觸 error（codex active entry 已被 reconcile 清掉）|
 
-**Acceptance**：4 個必驗場景全 PASS，留下 log evidence；不必驗證附加場景（test 已覆蓋）。
+**Acceptance**：5 個必驗場景全 PASS（含 §5 clear 路徑 — per plan-review P1-2），留下 log evidence；不必驗證附加場景（test 已覆蓋）。
 
 **估計**：1-2 小時 manual。
 
@@ -534,29 +588,29 @@ Acceptance: <copy from plan>
 
 ### Unit test（隔離測試）
 - ProbeIntent types（P1-T1）：3-5 tests
-- applyProbeGuards 5 個 guard layer（P1-T2）：6-7 tests
-- Dispatcher lifecycle 5 case（P1-T3）：5 tests
-- Reconcile 4 case（P1-T3）：4 tests
-- Probe-applied teardown（P1-T3）：2 tests
-- Stale-callback / generation（P1-T3）：3 tests
-- Replay race（P1-T3, P1-T6）：2-3 tests
-- lookupTopFrame helper（P1-T4）：3 tests
+- applyProbeGuards 7 個 guard test + ScreenChange regression matrix 5 case（P1-T2）：12 tests
+- lookupTopFrame helper（P1-T3）：3 tests
+- Dispatcher lifecycle 5 case（P1-T4）：5 tests
+- Reconcile 4 case（P1-T4）：4 tests
+- Probe-applied teardown（P1-T4）：2 tests
+- Stale-callback / generation（P1-T4）：3 tests
+- Replay race（P1-T4, P1-T6）：2-3 tests
 - manageActivityWatch / rename / Stop（P1-T5）：4 tests
 - replayStatus（P1-T6）：3 tests
 - HasPane（P2-T1）：4 tests
 - ProcessDead detector（P2-T2）：8 tests
 - Provider ProbeIntents + OnSignal（P2-T3）：5 tests
 - Drift（P2-T5）：3 tests
-- Dev log（P2-T6）：3 tests
+- Observability — dev log + TraceStore + expvar（P2-T6）：7 tests
 
 ### Integration test（跨層）
 - codex detector + dispatcher（P2-T4）：1 test
-- 完整 broadcast path 兩條 mapping（P2-T7）：5 tests
+- 完整 broadcast path 兩條 mapping + replay-real-detector 兩路徑（P2-T7）：7 tests
 
-**Test 總計**：~60+ tests。
+**Test 總計**：~80+ tests。
 
 ### Live verify
-- mlab §1-§4：4 必驗場景
+- mlab §1-§5：5 必驗場景（含 daemon restart + pane gone clear path — per plan-review P1-2）
 
 ---
 
@@ -612,7 +666,7 @@ Phase 2 PR squash merge 後獨立 bump PR：
 |---|---|---|
 | Phase 1 P1-T1~T6 | 6 task 全 commit + test 全綠 + race 全綠 + ScreenChange regression 0 | ⏳ |
 | Phase 2 P2-T1~T7 | 7 task 全 commit + test 全綠 + drift test pass + dev log 完整 | ⏳ |
-| Phase 2 P2-T8 | mlab live §1-§4 全 PASS | ⏳ |
+| Phase 2 P2-T8 | mlab live §1-§5 全 PASS（含 daemon-restart pane-gone clear 路徑）| ⏳ |
 | PR + codex review 兩輪 | 0 critical/P1 + known issue 追蹤化 | ⏳ |
 | Squash merge → main | branch 刪除 + worktree 清理 | ⏳ |
 | Bump PR alpha.262 | merge | ⏳ |
