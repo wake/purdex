@@ -36,6 +36,11 @@ type TerminalConfig struct {
 	SizingMode string `toml:"sizing_mode" json:"sizing_mode"`
 }
 
+type MonitorConfig struct {
+	RefreshIntervalMS int `toml:"refresh_interval_ms" json:"refresh_interval_ms"`
+	TopProcessLimit   int `toml:"top_process_limit"   json:"top_process_limit"`
+}
+
 // GetSizingMode returns the sizing mode, defaulting to "auto".
 func (tc TerminalConfig) GetSizingMode() string {
 	if tc.SizingMode == "" {
@@ -56,6 +61,7 @@ type Config struct {
 	Terminal     TerminalConfig `toml:"terminal"       json:"terminal"`
 	Stream       StreamConfig   `toml:"stream"         json:"stream"`
 	Detect       DetectConfig   `toml:"detect"         json:"detect"`
+	Monitor      MonitorConfig  `toml:"monitor"        json:"monitor"`
 	Features     FeaturesConfig `toml:"features"       json:"features"`
 	Dev          DevConfig      `toml:"dev"            json:"dev"`
 }
@@ -63,8 +69,8 @@ type Config struct {
 func defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		Bind:    "127.0.0.1",
-		Port:    7860,
+		Bind:      "127.0.0.1",
+		Port:      7860,
 		DataDir:   filepath.Join(home, ".config", "pdx"),
 		UploadDir: filepath.Join(home, "tmp", "purdex-upload"),
 		Stream: StreamConfig{
@@ -76,6 +82,10 @@ func defaults() Config {
 		Detect: DetectConfig{
 			CCCommands:   []string{"claude"},
 			PollInterval: 2,
+		},
+		Monitor: MonitorConfig{
+			RefreshIntervalMS: 5000,
+			TopProcessLimit:   10,
 		},
 	}
 }

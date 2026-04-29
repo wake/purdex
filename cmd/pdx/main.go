@@ -21,9 +21,10 @@ import (
 	"github.com/wake/purdex/internal/module/dev"
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	"github.com/wake/purdex/internal/module/logs"
-	syncmod "github.com/wake/purdex/internal/module/sync"
+	"github.com/wake/purdex/internal/module/monitor"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/module/stream"
+	syncmod "github.com/wake/purdex/internal/module/sync"
 	"github.com/wake/purdex/internal/relay"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -150,16 +151,9 @@ func runServe(args []string) {
 	initPairing(c, &cfg, resolvedCfgPath, *quick)
 
 	// 5. Add modules (order doesn't matter — topoSort handles dependencies)
-	c.AddModule(session.NewSessionModule(meta))
-	c.AddModule(stream.New())
-	agentMod, err := agent.New(agentEvents)
-	if err != nil {
-		log.Fatalf("agent module: %v", err)
+	if err := registerServeModules(c, meta, agentEvents); err != nil {
+		log.Fatalf("serve modules: %v", err)
 	}
-	c.AddModule(agentMod)
-	c.AddModule(fsmod.New())
-	c.AddModule(logs.New())
-	c.AddModule(syncmod.New())
 	if c.Cfg.Dev.Update {
 		repoRoot := c.Cfg.Dev.RepoRoot
 		if repoRoot == "" {
@@ -237,6 +231,21 @@ func runServe(args []string) {
 	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Printf("server error: %v", err)
 	}
+}
+
+func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *store.AgentEventStore) error {
+	c.AddModule(session.NewSessionModule(meta))
+	c.AddModule(stream.New())
+	agentMod, err := agent.New(agentEvents)
+	if err != nil {
+		return err
+	}
+	c.AddModule(agentMod)
+	c.AddModule(fsmod.New())
+	c.AddModule(logs.New())
+	c.AddModule(syncmod.New())
+	c.AddModule(monitor.New())
+	return nil
 }
 
 func runRelay(args []string) {
