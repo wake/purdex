@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.262] - 2026-04-29
+
+### Feat(monitor): single-flight snapshot sampling (#750)
+
+Adds single-flight coordination for stale daemon monitor snapshot sampling. Concurrent stale snapshot requests now share one in-flight collection instead of multiplying host, tmux, or process-table scans.
+
+Expensive snapshot collection now runs outside the monitor snapshot state lock, so monitor config updates can invalidate cache without waiting for collectors. Cache writes are guarded by a snapshot generation so in-flight results from an older config cannot repopulate stale cache after invalidation.
+
+This remains a daemon-only, non-breaking slice; SPA UI and daemon CPU-delta refinements remain deferred.
+
 ## [1.0.0-alpha.261] - 2026-04-29
 
 ### Feat(monitor): add bounded top processes (#748)
