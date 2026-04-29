@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.264] - 2026-04-29
+
+### Feat(spa): add monitor host API helpers (#754)
+
+Adds SPA TypeScript types for the daemon monitor snapshot and config contracts, including nullable host/session metrics, top processes, and config bounds.
+
+Adds `fetchMonitorSnapshot`, `fetchMonitorConfig`, and `updateMonitorConfig` helpers through `hostFetch`, with tests covering auth headers, non-OK errors, JSON PUT bodies, and nullable response typing.
+
+This is the first SPA integration slice for the rewritten Performance Monitor; UI wiring remains deferred.
+
 ## [1.0.0-alpha.263] - 2026-04-29
 
 ### Feat(monitor): stabilize API contract fields (#752)
