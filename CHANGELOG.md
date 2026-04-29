@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.256] - 2026-04-29
+
+### Refactor(agent): W2 cleanup-followup — simplify cc/codex cleanup sets to two-set union (#738)
+
+Plan §5.3 CLEANUP-T1 follow-up to W2 alpha.255 ship. Drops the `ccLegacyEventNames` / `codexLegacyEventNames` static fixtures introduced in P3-T4a as a transition safety net while `HookEventSpec.Name` was being removed.
+
+cc and codex catalogs use a 1:1 upstream/Pdx mapping where each installable spec's `UpstreamKeys[0]` is identical to the pre-W2 command-tail token (e.g. `Stop`). The three-set union (`UpstreamKeys ∪ PurdexName ∪ legacy Name`) collapses to a two-set union once legacy Name is dropped — pre-W2 tokens are still recognised via the UpstreamKey leg.
+
+**Behavioural delta: zero.** Verified by codex round-1 review (0 finding) plus the existing `TestC{c,odex}OwnedCleanupEventNames_CleansLegacyAndNew` round-trip tests, which mix legacy `Stop` with new `PdxStop` entries and assert only the canonical Pdx entry remains after reinstall.
+
+**Spec deviation** — plan §5.3 anticipated a `TestCcOwnedCleanupEventNames_OldFixtureNotCleaned` test asserting that "舊命令會殘留（已不在 cleanup set）" after CLEANUP-T1. That assertion isn't implementable for cc/codex's actual catalog because legacy Name strings == UpstreamKeys[0]; the cleanup set still contains them via the UpstreamKey leg. PR body documents the deviation.
+
+Net diff: −145 / +27 lines across 4 files.
+
 ## [1.0.0-alpha.255] - 2026-04-29
 
 ### Feat(agent): W2 Phase 3 — opencode catalog naming separation + transition cleanup (#736)
