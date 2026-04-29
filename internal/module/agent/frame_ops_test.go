@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
@@ -340,6 +341,45 @@ func TestReplay_RestoresLegacySessionsWithoutFrames(t *testing.T) {
 	}
 	if got := m.currentStatus["legacy"]; got != agentpkg.StatusIdle {
 		t.Fatalf("legacy currentStatus = %q, want idle", got)
+	}
+}
+
+// TestReplay_OpencodeLegacyEventName_NotRestored pins the post-W2-P3
+// behavior surfaced by codex Round-1 review of PR #736: when daemon restart
+// replays the legacy agent_events store and a session has no frame
+// projection (e.g. a pre-W2 session that ran before frame projections were
+// written), DeriveStatus is fed the persisted EventName verbatim. After
+// P3-T2 / P3-T6, opencode's DeriveStatus only recognizes Pdx-prefixed names,
+// so legacy literals from a pre-alpha.255 store now return Valid=false.
+//
+// Spec §0 + plan G1 explicitly accept this for alpha — daemon-internal
+// store does not carry a cross-version migration; user reinstall + a fresh
+// hook trigger restores status. This test pins the behavior so a future
+// silent drift back to a normalize/alias path (which would re-introduce the
+// just-removed lifecycle fallback into a different code path) surfaces
+// immediately.
+func TestReplay_OpencodeLegacyEventName_NotRestored(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "legacy")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "legacy-code", Name: "legacy"},
+	}}
+	m.registry.Register(opencode.NewProvider())
+
+	// Seed the legacy agent_events store with an opencode row written by
+	// a pre-alpha.255 daemon (event_name = upstream literal "Stop"). No
+	// frame projection exists for this session — replay falls through to
+	// the agent_events fallback.
+	if err := m.events.Set("legacy", "Stop", json.RawMessage(`{}`), "opencode", 11); err != nil {
+		t.Fatalf("seed legacy event: %v", err)
+	}
+
+	m.replayFromDB()
+
+	if got := m.currentStatus["legacy"]; got != "" {
+		t.Errorf("legacy currentStatus = %q, want empty (post-P3 opencode DeriveStatus rejects legacy literal; spec §0 alpha-acceptable — user reinstall + fresh hook restores status)", got)
 	}
 }
 
