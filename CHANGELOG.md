@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.261] - 2026-04-29
+
+### Feat(monitor): add bounded top processes (#748)
+
+Adds bounded daemon `top_processes` for monitor session metrics. Top processes are sorted deterministically by CPU descending, memory descending, then PID ascending, and are truncated by the effective daemon `top_process_limit` config.
+
+Session totals remain inclusive of all pane root processes and descendants even when the top-process list hides lower-ranked processes. Unavailable session metrics now serialize `top_processes` as an empty array while keeping numeric daemon fields as explicit `null` values.
+
+This remains a daemon-only, non-breaking slice; SPA UI, single-flight sampling, and daemon CPU-delta refinements remain deferred.
+
 ## [1.0.0-alpha.260] - 2026-04-29
 
 ### lights rebuild W3+W4: revert ProbeProfile framework + observability dev log (#744)
