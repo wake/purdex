@@ -154,10 +154,11 @@ type SessionMetrics struct {
 }
 
 type SessionDaemonMetrics struct {
-	CPUPercent        *float64 `json:"cpu_percent"`
-	MemoryBytes       *uint64  `json:"memory_bytes"`
-	ProcessCount      *int     `json:"process_count"`
-	UnavailableReason string   `json:"unavailable_reason,omitempty"`
+	CPUPercent        *float64  `json:"cpu_percent"`
+	MemoryBytes       *uint64   `json:"memory_bytes"`
+	ProcessCount      *int      `json:"process_count"`
+	TopProcesses      []Process `json:"top_processes"`
+	UnavailableReason string    `json:"unavailable_reason,omitempty"`
 }
 
 func (m *Module) getSnapshot(ctx context.Context) (*snapshot, error) {
@@ -172,7 +173,7 @@ func (m *Module) getSnapshot(ctx context.Context) (*snapshot, error) {
 		return m.cachedSnapshot, nil
 	}
 
-	sessions, err := m.collectSessionMetrics(ctx)
+	sessions, err := m.collectSessionMetrics(ctx, cfg.TopProcessLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +197,7 @@ func (m *Module) ensureHostMetricsState() *HostMetricsState {
 	return m.hostState
 }
 
-func (m *Module) collectSessionMetrics(ctx context.Context) ([]SessionMetrics, error) {
+func (m *Module) collectSessionMetrics(ctx context.Context, topProcessLimit int) ([]SessionMetrics, error) {
 	if m.sessionProvider == nil {
 		return []SessionMetrics{}, nil
 	}
@@ -250,7 +251,7 @@ func (m *Module) collectSessionMetrics(ctx context.Context) ([]SessionMetrics, e
 			metrics = append(metrics, unavailableSessionMetric(sess, sessionPanesUnavailableReason))
 			continue
 		}
-		aggregate := AggregateSessionProcesses(sess.TmuxID, panes, processes)
+		aggregate := AggregateSessionProcesses(sess.TmuxID, panes, processes, topProcessLimit)
 		if aggregate.ProcessCount == 0 {
 			metrics = append(metrics, unavailableSessionMetric(sess, processDataUnavailableReason))
 			continue
@@ -308,7 +309,7 @@ func unavailableSessionMetric(sess session.SessionInfo, reason string) SessionMe
 			ID:   sess.TmuxID,
 			Name: sess.Name,
 		},
-		Daemon: SessionDaemonMetrics{UnavailableReason: reason},
+		Daemon: SessionDaemonMetrics{TopProcesses: []Process{}, UnavailableReason: reason},
 	}
 }
 
@@ -317,6 +318,7 @@ func availableSessionDaemonMetrics(aggregate PaneProcessAggregate) SessionDaemon
 		CPUPercent:   &aggregate.CPUPercent,
 		MemoryBytes:  &aggregate.MemoryBytes,
 		ProcessCount: &aggregate.ProcessCount,
+		TopProcesses: aggregate.TopProcesses,
 	}
 }
 

@@ -182,7 +182,9 @@ func TestAggregatePaneDescendantsHandlesCyclesAndMalformedParents(t *testing.T) 
 		{PID: 0, PPID: 101, Command: "bad-pid", CPUPercent: 90, MemoryBytes: 9000},
 	})
 
-	assert.Equal(t, PaneProcessAggregate{CPUPercent: 6, MemoryBytes: 600, ProcessCount: 3}, got)
+	assert.Equal(t, 6.0, got.CPUPercent)
+	assert.Equal(t, uint64(600), got.MemoryBytes)
+	assert.Equal(t, 3, got.ProcessCount)
 }
 
 func TestAggregateSessionProcessesAggregatesAllPanesAndDeduplicatesByPID(t *testing.T) {
@@ -195,9 +197,47 @@ func TestAggregateSessionProcessesAggregatesAllPanesAndDeduplicatesByPID(t *test
 		{PID: 201, PPID: 101, Command: "worker", CPUPercent: 2, MemoryBytes: 200},
 		{PID: 301, PPID: 201, Command: "nested", CPUPercent: 3, MemoryBytes: 300},
 		{PID: 901, PPID: 1, Command: "unrelated", CPUPercent: 90, MemoryBytes: 9000},
-	})
+	}, 10)
 
-	assert.Equal(t, PaneProcessAggregate{CPUPercent: 6, MemoryBytes: 600, ProcessCount: 3}, got)
+	assert.Equal(t, 6.0, got.CPUPercent)
+	assert.Equal(t, uint64(600), got.MemoryBytes)
+	assert.Equal(t, 3, got.ProcessCount)
+}
+
+func TestAggregateSessionProcessesReturnsBoundedTopProcesses(t *testing.T) {
+	got := AggregateSessionProcesses("$1", []TmuxPane{
+		{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101},
+	}, []Process{
+		{PID: 101, PPID: 1, Command: "shell", CPUPercent: 1, MemoryBytes: 100},
+		{PID: 201, PPID: 101, Command: "high-memory", CPUPercent: 5, MemoryBytes: 900},
+		{PID: 202, PPID: 101, Command: "low-pid", CPUPercent: 5, MemoryBytes: 900},
+		{PID: 203, PPID: 101, Command: "high-cpu", CPUPercent: 9, MemoryBytes: 10},
+		{PID: 204, PPID: 101, Command: "hidden", CPUPercent: 4, MemoryBytes: 1000},
+	}, 3)
+
+	assert.Equal(t, 24.0, got.CPUPercent)
+	assert.Equal(t, uint64(2910), got.MemoryBytes)
+	assert.Equal(t, 5, got.ProcessCount)
+	assert.Equal(t, []Process{
+		{PID: 203, PPID: 101, Command: "high-cpu", CPUPercent: 9, MemoryBytes: 10},
+		{PID: 201, PPID: 101, Command: "high-memory", CPUPercent: 5, MemoryBytes: 900},
+		{PID: 202, PPID: 101, Command: "low-pid", CPUPercent: 5, MemoryBytes: 900},
+	}, got.TopProcesses)
+}
+
+func TestAggregateSessionProcessesSortsTopProcessesByMemoryBeforePID(t *testing.T) {
+	got := AggregateSessionProcesses("$1", []TmuxPane{
+		{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101},
+	}, []Process{
+		{PID: 101, PPID: 1, Command: "shell", CPUPercent: 1, MemoryBytes: 100},
+		{PID: 201, PPID: 101, Command: "higher-memory", CPUPercent: 5, MemoryBytes: 900},
+		{PID: 200, PPID: 101, Command: "lower-pid", CPUPercent: 5, MemoryBytes: 100},
+	}, 2)
+
+	assert.Equal(t, []Process{
+		{PID: 201, PPID: 101, Command: "higher-memory", CPUPercent: 5, MemoryBytes: 900},
+		{PID: 200, PPID: 101, Command: "lower-pid", CPUPercent: 5, MemoryBytes: 100},
+	}, got.TopProcesses)
 }
 
 func assertProcessField(t *testing.T, processType reflect.Type, name string, kind reflect.Kind, tag string) {

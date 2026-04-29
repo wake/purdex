@@ -157,9 +157,43 @@ func TestSnapshot_IncludesPurdexSessionProcessTotals(t *testing.T) {
 	assert.Equal(t, 6.0, *sessions[0].Daemon.CPUPercent)
 	assert.Equal(t, uint64(600), *sessions[0].Daemon.MemoryBytes)
 	assert.Equal(t, 3, *sessions[0].Daemon.ProcessCount)
+	assert.Equal(t, []Process{
+		{PID: 301, PPID: 201, Command: "nested", CPUPercent: 3, MemoryBytes: 300},
+		{PID: 201, PPID: 101, Command: "worker", CPUPercent: 2, MemoryBytes: 200},
+		{PID: 101, PPID: 1, Command: "shell", CPUPercent: 1, MemoryBytes: 100},
+	}, sessions[0].Daemon.TopProcesses)
 	assert.Empty(t, sessions[0].Daemon.UnavailableReason)
 	assert.Equal(t, 1, tmuxLister.calls)
 	assert.Equal(t, 1, processCollector.calls)
+}
+
+func TestSnapshot_UsesConfiguredTopProcessLimitWhileKeepingTotalsInclusive(t *testing.T) {
+	m := New(WithCollectors(Collectors{
+		HostCollector: newFakeHostCollector(),
+		TmuxPaneLister: &fakeSnapshotTmuxPaneLister{panes: []TmuxPane{
+			{TmuxSessionID: "$1", TmuxSessionName: "work", PaneID: "%1", PanePID: 101},
+		}},
+		ProcessTableCollector: &fakeSnapshotProcessCollector{processes: []Process{
+			{PID: 101, PPID: 1, Command: "shell", CPUPercent: 1, MemoryBytes: 100},
+			{PID: 201, PPID: 101, Command: "node", CPUPercent: 8, MemoryBytes: 800},
+			{PID: 202, PPID: 101, Command: "go", CPUPercent: 4, MemoryBytes: 400},
+		}},
+	}), withSessionProvider(&fakeSessionProvider{sessions: []session.SessionInfo{
+		{Code: "abc123", TmuxID: "$1", Name: "work"},
+	}}))
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{
+		Monitor: MonitorConfig{RefreshIntervalMS: 5000, TopProcessLimit: 1},
+	}})))
+
+	snapshot := requestSnapshot(t, m)
+
+	var sessions []SessionMetrics
+	require.NoError(t, json.Unmarshal(snapshot.Sessions, &sessions))
+	require.Len(t, sessions, 1)
+	assert.Equal(t, 13.0, *sessions[0].Daemon.CPUPercent)
+	assert.Equal(t, uint64(1300), *sessions[0].Daemon.MemoryBytes)
+	assert.Equal(t, 3, *sessions[0].Daemon.ProcessCount)
+	assert.Equal(t, []Process{{PID: 201, PPID: 101, Command: "node", CPUPercent: 8, MemoryBytes: 800}}, sessions[0].Daemon.TopProcesses)
 }
 
 func TestSnapshot_MarksSessionUnavailableWhenTmuxPaneListingFails(t *testing.T) {
@@ -416,6 +450,7 @@ func assertSessionDaemonUnavailable(t *testing.T, daemon SessionDaemonMetrics, r
 	assert.Nil(t, daemon.CPUPercent)
 	assert.Nil(t, daemon.MemoryBytes)
 	assert.Nil(t, daemon.ProcessCount)
+	assert.Empty(t, daemon.TopProcesses)
 	assert.Equal(t, reason, daemon.UnavailableReason)
 }
 
@@ -439,4 +474,7 @@ func assertRawSessionDaemonNullFields(t *testing.T, raw json.RawMessage, index i
 		assert.True(t, exists, "%s should be present", field)
 		assert.Nil(t, value, "%s should be null", field)
 	}
+	topProcesses, exists := daemon["top_processes"]
+	assert.True(t, exists, "top_processes should be present")
+	assert.Empty(t, topProcesses, "top_processes should be an empty array")
 }
