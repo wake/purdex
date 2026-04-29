@@ -285,8 +285,17 @@ func (m *Module) Stop(_ context.Context) error {
 }
 
 // renameSessionLocked transfers in-memory agent state (subagents, currentStatus,
-// activeWatchers) from oldName to newName.  CALLER MUST hold m.mu.
-func (m *Module) renameSessionLocked(oldName, newName string) {
+// activeWatchers, activeProbeIntents) from oldName to newName.  CALLER MUST
+// hold m.mu.
+//
+// Returns a slice of CancelFuncs that the caller MUST invoke AFTER releasing
+// m.mu. This routes the W6-3 P1-T5 ProbeIntent cleanup through the same
+// post-unlock pattern as dispatchProbeIntentReeval: detector goroutines that
+// were keyed under oldName get cancelled outside the lock so any concurrent
+// applyProbeGuards re-acquisition does not deadlock. Caller may pass the
+// returned slice to dispatchProbeIntentRenameCancels (or invoke each cancel
+// directly).
+func (m *Module) renameSessionLocked(oldName, newName string) []context.CancelFunc {
 	if subs, ok := m.subagents[oldName]; ok {
 		m.subagents[newName] = subs
 		delete(m.subagents, oldName)
@@ -314,16 +323,41 @@ func (m *Module) renameSessionLocked(oldName, newName string) {
 		// within probeGraceWindow once W6 wires starts again.
 		m.probeOrch.migrateLastHookAt(oldName, newName)
 	}
+
+	// W6-3 P1-T5: drop ProbeIntent active entries keyed under oldName. The
+	// dispatcher cannot rearm under newName until our caller invokes
+	// dispatcher.applyStatus(newName, ...) post-unlock, so collecting +
+	// returning the cancel list (rather than invoking inside the lock) keeps
+	// the cancel + arm sequence contiguous from the dispatcher's POV.
+	var toCancel []context.CancelFunc
+	if perSession, ok := m.activeProbeIntents[oldName]; ok {
+		for _, cur := range perSession {
+			toCancel = append(toCancel, cur.cancel)
+		}
+		delete(m.activeProbeIntents, oldName)
+	}
+	return toCancel
 }
 
 // RenameSession transfers in-memory agent state from oldName to newName
 // under the module's lock.  Used by callers that don't need to coordinate
 // with other rename steps (e.g. tests).  Production callers should prefer
 // RenameSessionAtomic to make the rename atomic with tmux + DB updates.
+//
+// W6-3 P1-T5: after the in-memory rename completes, the ProbeIntent
+// dispatcher is re-evaluated for newName so any active codex / future
+// per-agent probes stay armed against the renamed session. The lock is
+// released before invoking dispatcher.applyStatus because the dispatcher
+// itself acquires m.mu (deadlock otherwise).
 func (m *Module) RenameSession(oldName, newName string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.renameSessionLocked(oldName, newName)
+	cancels := m.renameSessionLocked(oldName, newName)
+	plan, hasPlan := m.captureProbeIntentReevalLocked(newName)
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	m.dispatchProbeIntentReeval(newName, plan, hasPlan)
 }
 
 // RenameSessionAtomic runs doRename under the module's lock and then
@@ -343,12 +377,62 @@ func (m *Module) RenameSession(oldName, newName string) {
 // call any method that acquires m.mu (would deadlock).
 func (m *Module) RenameSessionAtomic(oldName, newName string, doRename func() error) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if err := doRename(); err != nil {
+		m.mu.Unlock()
 		return err
 	}
-	m.renameSessionLocked(oldName, newName)
+	cancels := m.renameSessionLocked(oldName, newName)
+	plan, hasPlan := m.captureProbeIntentReevalLocked(newName)
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	m.dispatchProbeIntentReeval(newName, plan, hasPlan)
 	return nil
+}
+
+// probeIntentReevalPlan records the (agentType, status) pair captured during
+// rename so the post-unlock dispatcher.applyStatus call observes the same
+// state the rename observed under m.mu. Routed through a struct (rather
+// than two return values) so future fields (e.g. paneID overrides) extend
+// without touching every call site.
+type probeIntentReevalPlan struct {
+	agentType string
+	status    agentpkg.Status
+}
+
+// captureProbeIntentReevalLocked snapshots the post-rename ProbeIntent
+// re-evaluation inputs: the new session's currentStatus + the top frame's
+// agentType. Returns hasPlan=false when no currentStatus exists yet (rename
+// of a session before any hook fired).
+//
+// CALLER MUST hold m.mu. lookupTopFrameForSessionLocked + projectionForSession
+// touch their own mutexes (frames store, tmux pane resolver) that are
+// independent of m.mu, so calling them under m.mu is safe.
+func (m *Module) captureProbeIntentReevalLocked(session string) (probeIntentReevalPlan, bool) {
+	status, ok := m.currentStatus[session]
+	if !ok {
+		return probeIntentReevalPlan{}, false
+	}
+	agentType := ""
+	if proj, err := m.projectionForSession(session); err == nil && proj != nil && proj.TopFrame != nil {
+		agentType = proj.TopFrame.AgentType
+	}
+	return probeIntentReevalPlan{agentType: agentType, status: status}, true
+}
+
+// dispatchProbeIntentReeval invokes dispatcher.applyStatus outside m.mu so
+// the dispatcher can take its own lock. No-op when hasPlan=false (no
+// currentStatus to evaluate against) or when dispatcher is nil (defensive;
+// New() always wires it).
+func (m *Module) dispatchProbeIntentReeval(session string, plan probeIntentReevalPlan, hasPlan bool) {
+	if !hasPlan {
+		return
+	}
+	if m.probeIntentDisp == nil {
+		return
+	}
+	m.probeIntentDisp.applyStatus(session, plan.agentType, plan.status)
 }
 
 // replayFromDB rebuilds in-memory state from persisted frame projections and
@@ -535,30 +619,40 @@ func (m *Module) lookupTopFrameForSessionLocked(session string) (paneID string, 
 	return projection.TopFrame.PaneID, projection.TopFrame.PID, true
 }
 
-// manageActivityWatch is invoked by hook handlers as a status changes; W3
-// reduces it to a default no-op (stop-only) path. When a watcher is already
-// registered for `session`, it is stopped + evicted from activeWatchers; no
-// new watcher is ever started here.
+// manageActivityWatch is invoked by hook handlers as a status changes. The
+// W3 撤回 stop-only path (no new ScreenChange watcher is ever started here)
+// is preserved; W6-3 P1-T5 dispatches the ProbeIntent lifecycle to
+// probeIntentDisp.applyStatus afterwards so per-agent probe gating runs on
+// every status change.
 //
 // W3 撤回 rationale: Phase 4a-1 wired this function as the always-on probe
 // start site, which violated the "probe is recovery-only" v2.0 contract by
 // covering every Waiting/Running/Idle transition with a screen watcher. W6
-// will reintroduce starts via an explicit ProbeIntent caller that calls
-// `m.probeOrch.startWatch(session, agentType, opts)` directly with chosen
-// WatchOptions. The newStatus parameter is intentionally retained (reserved
-// for that future caller) but currently unused.
+// reintroduces starts via the ProbeIntent dispatcher (per-agent declared
+// intents + lifecycle gating), NOT via probeOrch.startWatch.
 //
 // R3 fix: m.activeWatchers is owned by this function (and renameSessionLocked);
 // the orchestrator deliberately does not touch it.
+//
+// Locking contract: m.mu is acquired and released INSIDE this function for
+// the activeWatchers eviction step; the dispatcher.applyStatus call MUST
+// happen AFTER m.mu is released because the dispatcher takes m.mu itself
+// (see probe_intent_dispatcher.go reconcileSessionActive +
+// applyIntentLifecycle critical sections).
 func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
-	_ = newStatus // reserved for W6 ProbeIntent wiring
-	_ = agentType // reserved for W6 ProbeIntent wiring (e.g. profile lookup)
-
 	m.mu.Lock()
 	_, wasWatching := m.activeWatchers[session]
 	delete(m.activeWatchers, session)
 	m.mu.Unlock()
 	if wasWatching {
 		m.probeOrch.stopWatch(session)
+	}
+
+	// W6-3 P1-T5: dispatch ProbeIntent lifecycle. dispatcher.applyStatus is
+	// safe to call without m.mu held; it routes through reconcileSessionActive
+	// + applyIntentLifecycle which take m.mu themselves for active-set
+	// mutation, then start / cancel detector goroutines outside the lock.
+	if m.probeIntentDisp != nil {
+		m.probeIntentDisp.applyStatus(session, agentType, newStatus)
 	}
 }

@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
@@ -287,4 +289,148 @@ func TestLookupTopFrameForSessionLocked_NoTopFrame_NotOk(t *testing.T) {
 	if paneID != "" || pid != 0 {
 		t.Fatalf("paneID=%q pid=%d, want empty/0 for missing top frame", paneID, pid)
 	}
+}
+
+// -----------------------------------------------------------------------------
+// W6-3 P1-T5: manageActivityWatch / rename / Stop ProbeIntent wiring
+// -----------------------------------------------------------------------------
+
+// newWiringTestModule builds a module like newDispatcherTestModule but with
+// the recording detector pre-installed. Callers seed frames + currentStatus
+// and then drive manageActivityWatch / RenameSession / Stop.
+func newWiringTestModule(t *testing.T) (*Module, *recordingDetector) {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	m.tmux = fakeTmux
+	m.registry.Register(&fakeProbeIntentAgentProvider{
+		fakeAgentProvider: fakeAgentProvider{typeName: "codex"},
+		intents:           []agentpkg.ProbeIntent{processDeadIntent()},
+	})
+	rec := installRecordingDetector(t, m)
+	return m, rec
+}
+
+// TestManageActivityWatch_StatusToRunning_ProbeIntentArmed pins the P1-T5
+// wiring contract: when manageActivityWatch is invoked with a Running status
+// for a session whose top frame matches a registered ProbeIntent provider
+// (codex + ProcessDead), the dispatcher arms a detector and records an
+// active entry.
+func TestManageActivityWatch_StatusToRunning_ProbeIntentArmed(t *testing.T) {
+	m, rec := newWiringTestModule(t)
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+
+	<-rec.started
+	if rec.startCount() != 1 {
+		t.Fatalf("detector started count = %d, want 1", rec.startCount())
+	}
+	cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+	if !ok {
+		t.Fatalf("activeProbeIntents missing after manageActivityWatch(running)")
+	}
+	if cur.agentType != "codex" || cur.paneID != "%5" || cur.senderPID != 4242 {
+		t.Fatalf("active entry = %+v, want codex/%%5/4242", cur)
+	}
+}
+
+// TestManageActivityWatch_StatusToIdle_ProbeIntentTornDown pins the teardown
+// wiring: a session that was armed via Running transitions to Idle, and
+// manageActivityWatch dispatches lifecycle case 3 to delete the entry.
+func TestManageActivityWatch_StatusToIdle_ProbeIntentTornDown(t *testing.T) {
+	m, rec := newWiringTestModule(t)
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	// Arm.
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+	<-rec.started
+
+	// Flip live status to idle, then call manageActivityWatch with idle.
+	m.mu.Lock()
+	m.currentStatus["work"] = agentpkg.StatusIdle
+	m.mu.Unlock()
+	m.manageActivityWatch("work", "codex", agentpkg.StatusIdle)
+
+	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
+		t.Fatalf("activeProbeIntents present after manageActivityWatch(idle), want absent")
+	}
+	waitFor(t, time.Second, func() bool { return rec.cancelCount() == 1 }, "detector cancel after teardown")
+}
+
+// TestRenameSession_OldNameProbeIntentMigratesToNew pins the rename wiring:
+// when a session is renamed while a ProbeIntent is armed under oldName, the
+// rename path tears down the oldName entry and the dispatcher rearms under
+// newName via the post-unlock applyStatus call.
+//
+// Per spec §5.3: dispatcher.applyStatus must NOT be invoked while m.mu is
+// held; rename caller releases the lock before invoking it. The lifecycle
+// helper re-reads currentStatus + top frame inside m.mu independently.
+func TestRenameSession_OldNameProbeIntentMigratesToNew(t *testing.T) {
+	m, rec := newWiringTestModule(t)
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	// Arm under oldName.
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+	<-rec.started
+	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); !ok {
+		t.Fatalf("active entry missing under oldName before rename")
+	}
+
+	// Re-point the fake tmux pane to the new session name + insert a frame
+	// row keyed under the new session so projection rebuild observes the
+	// renamed pane.
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "renamed")
+	}
+
+	m.RenameSession("work", "renamed")
+
+	// Old entry must be gone (either explicitly dropped by rename re-eval or
+	// rearmed under newName which removes the oldName key).
+	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
+		t.Fatalf("active entry still present under oldName after rename")
+	}
+
+	// New entry must exist under newName, armed against the same target.
+	waitFor(t, time.Second, func() bool {
+		cur, ok := readActiveIntent(m, "renamed", agentpkg.ProbeIntentKindProcessDead)
+		return ok && cur.agentType == "codex" && cur.senderPID == 4242
+	}, "active entry rearmed under newName")
+}
+
+// TestModuleStop_ProbeIntentDispatcherStoppedAll pins Module.Stop wiring:
+// every armed ProbeIntent detector is cancelled and activeProbeIntents is
+// cleared before Stop returns. Same contract as TestStopAll_* but exercised
+// through the public Module.Stop entry point.
+func TestModuleStop_ProbeIntentDispatcherStoppedAll(t *testing.T) {
+	m, rec := newWiringTestModule(t)
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+	<-rec.started
+
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatalf("Module.Stop: %v", err)
+	}
+
+	m.mu.Lock()
+	if len(m.activeProbeIntents) != 0 {
+		m.mu.Unlock()
+		t.Fatalf("activeProbeIntents non-empty after Module.Stop: %d entries", len(m.activeProbeIntents))
+	}
+	m.mu.Unlock()
+	waitFor(t, time.Second, func() bool { return rec.cancelCount() == 1 }, "detector cancel after Module.Stop")
 }
