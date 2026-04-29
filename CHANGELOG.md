@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.260] - 2026-04-29
+
+### lights rebuild W3+W4: revert ProbeProfile framework + observability dev log (#744)
+
+Reverts the always-on probe framework introduced by Phase 4a-1 (issue #719) and adds cross-layer dev-log observability so future W5/W6 status-bug work can see exactly which step the chain stopped at.
+
+**W3 — Framework revert** drops `ProbeProfileProvider` interface, `ProbeProfile` struct, the cc adapter, and the always-on `manageActivityWatch` policy. `startWatch` now takes plain `WatchOptions`; default behavior is no-op (the orchestrator only manages a watch when an explicit ad-hoc `ProbeIntent` arrives, which W6 will introduce per agent).
+
+**W4 — Observability** adds dev-log lines `[hook] trigger / [derive] verify_passed|skipped / [handler] frame_apply|projection_built|invalid_skip / [broadcast]` covering every hook chain branch, plus a TraceStore step coverage audit recorded inline in the `internal/module/agent/trace.go` package comment (8 hook paths × 5 trace steps with reasonable-absence rationale). All `log.Printf` (incl. argument formatting) is gated by `if isDevMode() { ... }` so production performs no I/O. `chain_id` is propagated end-to-end so a single hook chain greps as a connected 5-step sequence.
+
+Until W6 lands the per-agent ad-hoc `ProbeIntent` for cc spinner / codex error and clear / opencode running mid-state, those status branches will not auto-promote — accepted regression observation period per spec §0.2 (the framework was the wrong abstraction and is now removed cleanly). Issue #719 always-on `[probe]` chatter no longer appears in daemon log.
+
+Closes #719.
+
 ## [1.0.0-alpha.259] - 2026-04-29
 
 ### Feat(monitor): preserve unavailable session metrics (#745)
