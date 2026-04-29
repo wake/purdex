@@ -296,7 +296,363 @@ describe('MemoryMonitorPage', () => {
     expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(1)
   })
 
-  it('does not apply active-host daemon metrics to session panes from another host', async () => {
+  it('renders daemon metrics for session panes from their own host snapshots', async () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    useTabStore.setState({
+      tabs: {
+        'tab-a': tabWithLeaf('tab-a', 'pane-a', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'same-code',
+          mode: 'terminal',
+          cachedName: 'A',
+          tmuxInstance: 'main',
+        }),
+        'tab-b': tabWithLeaf('tab-b', 'pane-b', {
+          kind: 'tmux-session',
+          hostId: 'host-b',
+          sessionCode: 'same-code',
+          mode: 'terminal',
+          cachedName: 'B',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-a', 'tab-b'],
+      activeTabId: 'tab-a',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockImplementation(async (hostId) => ({
+      ...monitorSnapshot,
+      sessions: [{
+        session_code: 'same-code',
+        tmux_session: { id: hostId === HOST_ID ? '$1' : '$2', name: `pdx-${hostId}` },
+        daemon: {
+          cpu_percent: hostId === HOST_ID ? 12.3 : 45.6,
+          memory_bytes: hostId === HOST_ID ? 2048 : 4096,
+          process_count: hostId === HOST_ID ? 3 : 7,
+          top_processes: [],
+          unavailable_reason: null,
+        },
+      }],
+    }))
+
+    render(<MemoryMonitorPage />)
+
+    await waitFor(() => expect(fetchMonitorSnapshot).toHaveBeenCalledWith(HOST_ID))
+    await waitFor(() => expect(fetchMonitorSnapshot).toHaveBeenCalledWith('host-b'))
+
+    const hostARow = await screen.findByTestId('monitor-row-tab-a-pane-a')
+    expect(within(hostARow).getByText('CPU 12.3%')).toBeInTheDocument()
+    expect(within(hostARow).getByText('Memory 2 KB')).toBeInTheDocument()
+    expect(within(hostARow).getByText('3 processes')).toBeInTheDocument()
+
+    const hostBRow = await screen.findByTestId('monitor-row-tab-b-pane-b')
+    expect(within(hostBRow).getByText('CPU 45.6%')).toBeInTheDocument()
+    expect(within(hostBRow).getByText('Memory 4 KB')).toBeInTheDocument()
+    expect(within(hostBRow).getByText('7 processes')).toBeInTheDocument()
+  })
+
+  it('keeps active-host rows fresh when a secondary host snapshot fails', async () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    useTabStore.setState({
+      tabs: {
+        'tab-a': tabWithLeaf('tab-a', 'pane-a', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'active-code',
+          mode: 'terminal',
+          cachedName: 'A',
+          tmuxInstance: 'main',
+        }),
+        'tab-b': tabWithLeaf('tab-b', 'pane-b', {
+          kind: 'tmux-session',
+          hostId: 'host-b',
+          sessionCode: 'remote-code',
+          mode: 'terminal',
+          cachedName: 'B',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-a', 'tab-b'],
+      activeTabId: 'tab-a',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockImplementation(async (hostId) => {
+      if (hostId === 'host-b') throw new Error('remote snapshot failed')
+      return {
+        ...monitorSnapshot,
+        sessions: [{
+          session_code: 'active-code',
+          tmux_session: { id: '$1', name: 'pdx-active' },
+          daemon: {
+            cpu_percent: 12.3,
+            memory_bytes: 2048,
+            process_count: 3,
+            top_processes: [],
+            unavailable_reason: null,
+          },
+        }],
+      }
+    })
+
+    render(<MemoryMonitorPage />)
+
+    expect(await screen.findByText('Unable to load monitor data: host-b: remote snapshot failed')).toBeInTheDocument()
+    const hostARow = await screen.findByTestId('monitor-row-tab-a-pane-a')
+    expect(within(hostARow).getByText('CPU 12.3%')).toBeInTheDocument()
+    const hostBRow = await screen.findByTestId('monitor-row-tab-b-pane-b')
+    expect(within(hostBRow).getAllByText('Not wired')).toHaveLength(2)
+  })
+
+  it('renders active-host rows without waiting for a slow secondary host snapshot', async () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    useTabStore.setState({
+      tabs: {
+        'tab-a': tabWithLeaf('tab-a', 'pane-a', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'active-code',
+          mode: 'terminal',
+          cachedName: 'A',
+          tmuxInstance: 'main',
+        }),
+        'tab-b': tabWithLeaf('tab-b', 'pane-b', {
+          kind: 'tmux-session',
+          hostId: 'host-b',
+          sessionCode: 'remote-code',
+          mode: 'terminal',
+          cachedName: 'B',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-a', 'tab-b'],
+      activeTabId: 'tab-a',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockImplementation((hostId) => {
+      if (hostId === 'host-b') return new Promise<MonitorSnapshot>(() => {})
+      return Promise.resolve({
+        ...monitorSnapshot,
+        sessions: [{
+          session_code: 'active-code',
+          tmux_session: { id: '$1', name: 'pdx-active' },
+          daemon: {
+            cpu_percent: 12.3,
+            memory_bytes: 2048,
+            process_count: 3,
+            top_processes: [],
+            unavailable_reason: null,
+          },
+        }],
+      })
+    })
+
+    render(<MemoryMonitorPage />)
+
+    await waitFor(() => expect(fetchMonitorSnapshot).toHaveBeenCalledWith('host-b'))
+    const hostARow = await screen.findByTestId('monitor-row-tab-a-pane-a')
+    expect(within(hostARow).getByText('CPU 12.3%')).toBeInTheDocument()
+    const hostBRow = await screen.findByTestId('monitor-row-tab-b-pane-b')
+    expect(within(hostBRow).getAllByText('Not wired')).toHaveLength(2)
+  })
+
+  it('renders a fast secondary host row without waiting for another slow secondary host', async () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+        'host-c': { id: 'host-c', name: 'Host C', ip: '100.64.0.3', port: 7860, order: 2 },
+      },
+      hostOrder: [HOST_ID, 'host-b', 'host-c'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    useTabStore.setState({
+      tabs: {
+        'tab-a': tabWithLeaf('tab-a', 'pane-a', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'active-code',
+          mode: 'terminal',
+          cachedName: 'A',
+          tmuxInstance: 'main',
+        }),
+        'tab-b': tabWithLeaf('tab-b', 'pane-b', {
+          kind: 'tmux-session',
+          hostId: 'host-b',
+          sessionCode: 'fast-code',
+          mode: 'terminal',
+          cachedName: 'B',
+          tmuxInstance: 'main',
+        }),
+        'tab-c': tabWithLeaf('tab-c', 'pane-c', {
+          kind: 'tmux-session',
+          hostId: 'host-c',
+          sessionCode: 'slow-code',
+          mode: 'terminal',
+          cachedName: 'C',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-a', 'tab-b', 'tab-c'],
+      activeTabId: 'tab-a',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockImplementation((hostId) => {
+      if (hostId === 'host-c') return new Promise<MonitorSnapshot>(() => {})
+      return Promise.resolve({
+        ...monitorSnapshot,
+        sessions: hostId === 'host-b' ? [{
+          session_code: 'fast-code',
+          tmux_session: { id: '$2', name: 'pdx-fast' },
+          daemon: {
+            cpu_percent: 45.6,
+            memory_bytes: 4096,
+            process_count: 7,
+            top_processes: [],
+            unavailable_reason: null,
+          },
+        }] : [{
+          session_code: 'active-code',
+          tmux_session: { id: '$1', name: 'pdx-active' },
+          daemon: {
+            cpu_percent: 12.3,
+            memory_bytes: 2048,
+            process_count: 3,
+            top_processes: [],
+            unavailable_reason: null,
+          },
+        }],
+      })
+    })
+
+    render(<MemoryMonitorPage />)
+
+    await waitFor(() => expect(fetchMonitorSnapshot).toHaveBeenCalledWith('host-c'))
+    const hostBRow = await screen.findByTestId('monitor-row-tab-b-pane-b')
+    expect(within(hostBRow).getByText('CPU 45.6%')).toBeInTheDocument()
+    expect(within(hostBRow).getByText('Memory 4 KB')).toBeInTheDocument()
+    expect(within(hostBRow).getByText('7 processes')).toBeInTheDocument()
+    const hostCRow = await screen.findByTestId('monitor-row-tab-c-pane-c')
+    expect(within(hostCRow).getAllByText('Not wired')).toHaveLength(2)
+  })
+
+  it('preserves secondary host metrics across active-host refreshes while the next secondary request is pending', async () => {
+    const fastConfig = { ...monitorConfig, refresh_interval_ms: 10 }
+    vi.mocked(fetchMonitorConfig).mockResolvedValue(fastConfig)
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    useTabStore.setState({
+      tabs: {
+        'tab-a': tabWithLeaf('tab-a', 'pane-a', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'active-code',
+          mode: 'terminal',
+          cachedName: 'A',
+          tmuxInstance: 'main',
+        }),
+        'tab-b': tabWithLeaf('tab-b', 'pane-b', {
+          kind: 'tmux-session',
+          hostId: 'host-b',
+          sessionCode: 'remote-code',
+          mode: 'terminal',
+          cachedName: 'B',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-a', 'tab-b'],
+      activeTabId: 'tab-a',
+      visitHistory: [],
+    })
+    let hostBCalls = 0
+    vi.mocked(fetchMonitorSnapshot).mockImplementation((hostId) => {
+      if (hostId === 'host-b') {
+        hostBCalls += 1
+        if (hostBCalls > 1) return new Promise<MonitorSnapshot>(() => {})
+        return Promise.resolve({
+          ...monitorSnapshot,
+          sessions: [{
+            session_code: 'remote-code',
+            tmux_session: { id: '$2', name: 'pdx-remote' },
+            daemon: {
+              cpu_percent: 45.6,
+              memory_bytes: 4096,
+              process_count: 7,
+              top_processes: [],
+              unavailable_reason: null,
+            },
+          }],
+        })
+      }
+      return Promise.resolve({
+        ...monitorSnapshot,
+        sessions: [{
+          session_code: 'active-code',
+          tmux_session: { id: '$1', name: 'pdx-active' },
+          daemon: {
+            cpu_percent: 12.3,
+            memory_bytes: 2048,
+            process_count: 3,
+            top_processes: [],
+            unavailable_reason: null,
+          },
+        }],
+      })
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const hostBRow = await screen.findByTestId('monitor-row-tab-b-pane-b')
+    expect(within(hostBRow).getByText('CPU 45.6%')).toBeInTheDocument()
+    await waitFor(() => {
+      const activeHostCalls = vi.mocked(fetchMonitorSnapshot).mock.calls.filter(([hostId]) => hostId === HOST_ID)
+      expect(activeHostCalls.length).toBeGreaterThanOrEqual(2)
+    })
+    expect(within(hostBRow).getByText('CPU 45.6%')).toBeInTheDocument()
+  })
+
+  it('does not apply active-host daemon metrics to session panes from another host snapshot', async () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
     useTabStore.setState({
       tabs: {
         'tab-session': tabWithLeaf('tab-session', 'pane-session', {
@@ -312,9 +668,9 @@ describe('MemoryMonitorPage', () => {
       activeTabId: 'tab-session',
       visitHistory: [],
     })
-    vi.mocked(fetchMonitorSnapshot).mockResolvedValue({
+    vi.mocked(fetchMonitorSnapshot).mockImplementation(async (hostId) => ({
       ...monitorSnapshot,
-      sessions: [{
+      sessions: hostId === HOST_ID ? [{
         session_code: 'abc123',
         tmux_session: { id: '$1', name: 'pdx-abc123' },
         daemon: {
@@ -324,13 +680,227 @@ describe('MemoryMonitorPage', () => {
           top_processes: [],
           unavailable_reason: null,
         },
-      }],
+      }] : [],
+    }))
+
+    render(<MemoryMonitorPage />)
+
+    await waitFor(() => expect(fetchMonitorSnapshot).toHaveBeenCalledWith('host-b'))
+    const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
+    expect(within(sessionRow).queryByText('CPU 12.3%')).not.toBeInTheDocument()
+    expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(2)
+  })
+
+  it('does not fetch a fallback snapshot for panes with missing host records', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: 'missing-host',
+          sessionCode: 'abc123',
+          mode: 'terminal',
+          cachedName: 'Missing Host',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    await waitFor(() => expect(fetchMonitorSnapshot).toHaveBeenCalledWith(HOST_ID))
+    expect(fetchMonitorSnapshot).not.toHaveBeenCalledWith('missing-host')
+    const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
+    expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(2)
+  })
+
+  it('stops rendering cached daemon metrics after a pane host record is removed', async () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: 'host-b',
+          sessionCode: 'remote-code',
+          mode: 'terminal',
+          cachedName: 'Remote Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockImplementation(async (hostId) => ({
+      ...monitorSnapshot,
+      sessions: hostId === 'host-b' ? [{
+        session_code: 'remote-code',
+        tmux_session: { id: '$2', name: 'pdx-remote' },
+        daemon: {
+          cpu_percent: 45.6,
+          memory_bytes: 4096,
+          process_count: 7,
+          top_processes: [],
+          unavailable_reason: null,
+        },
+      }] : [],
+    }))
+
+    render(<MemoryMonitorPage />)
+
+    const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
+    expect(within(sessionRow).getByText('CPU 45.6%')).toBeInTheDocument()
+
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+
+    await waitFor(() => expect(within(sessionRow).queryByText('CPU 45.6%')).not.toBeInTheDocument())
+    expect(within(sessionRow).queryByText('Memory 4 KB')).not.toBeInTheDocument()
+    expect(within(sessionRow).queryByText('7 processes')).not.toBeInTheDocument()
+    expect(within(sessionRow).getAllByText('Not wired').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('stops rendering cached daemon metrics after a pane host endpoint changes', async () => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: 'host-b',
+          sessionCode: 'remote-code',
+          mode: 'terminal',
+          cachedName: 'Remote Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    let hostBCalls = 0
+    vi.mocked(fetchMonitorSnapshot).mockImplementation((hostId) => {
+      if (hostId === 'host-b') {
+        hostBCalls += 1
+        if (hostBCalls > 1) return new Promise<MonitorSnapshot>(() => {})
+        return Promise.resolve({
+          ...monitorSnapshot,
+          sessions: [{
+            session_code: 'remote-code',
+            tmux_session: { id: '$2', name: 'pdx-remote' },
+            daemon: {
+              cpu_percent: 45.6,
+              memory_bytes: 4096,
+              process_count: 7,
+              top_processes: [],
+              unavailable_reason: null,
+            },
+          }],
+        })
+      }
+      return Promise.resolve({ ...monitorSnapshot, sessions: [] })
     })
 
     render(<MemoryMonitorPage />)
 
     const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
-    expect(within(sessionRow).queryByText('CPU 12.3%')).not.toBeInTheDocument()
+    expect(within(sessionRow).getByText('CPU 45.6%')).toBeInTheDocument()
+
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.22', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+
+    await waitFor(() => expect(within(sessionRow).queryByText('CPU 45.6%')).not.toBeInTheDocument())
+    expect(within(sessionRow).queryByText('Memory 4 KB')).not.toBeInTheDocument()
+    expect(within(sessionRow).queryByText('7 processes')).not.toBeInTheDocument()
+    expect(within(sessionRow).getAllByText('Not wired').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('stops rendering cached active-host metrics after the active host endpoint changes', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'active-code',
+          mode: 'terminal',
+          cachedName: 'Active Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    let activeCalls = 0
+    vi.mocked(fetchMonitorSnapshot).mockImplementation((hostId) => {
+      if (hostId === HOST_ID) {
+        activeCalls += 1
+        if (activeCalls > 1) return new Promise<MonitorSnapshot>(() => {})
+        return Promise.resolve({
+          ...monitorSnapshot,
+          host: {
+            ...monitorSnapshot.host,
+            cpu: { percent: 12.3, unavailable_reason: null },
+          },
+          sessions: [{
+            session_code: 'active-code',
+            tmux_session: { id: '$1', name: 'pdx-active' },
+            daemon: {
+              cpu_percent: 45.6,
+              memory_bytes: 4096,
+              process_count: 7,
+              top_processes: [],
+              unavailable_reason: null,
+            },
+          }],
+        })
+      }
+      return Promise.resolve({ ...monitorSnapshot, sessions: [] })
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const sessionRow = await screen.findByTestId('monitor-row-tab-session-pane-session')
+    expect(within(sessionRow).getByText('CPU 45.6%')).toBeInTheDocument()
+    expect(screen.getByText('12.3%')).toBeInTheDocument()
+
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.22', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+
+    await waitFor(() => expect(within(sessionRow).queryByText('CPU 45.6%')).not.toBeInTheDocument())
+    expect(screen.queryByText('12.3%')).not.toBeInTheDocument()
     expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(2)
   })
 
