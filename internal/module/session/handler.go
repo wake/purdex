@@ -153,6 +153,8 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	m.invalidateNameCache()
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(info)
@@ -197,6 +199,8 @@ func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	m.invalidateNameCache()
+
 	// Return updated info with new name
 	info.Name = req.Name
 	w.Header().Set("Content-Type", "application/json")
@@ -224,6 +228,8 @@ func (m *SessionModule) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	// Delete meta
 	_ = m.meta.DeleteMeta(info.TmuxID)
+
+	m.invalidateNameCache()
 
 	w.WriteHeader(http.StatusNoContent)
 }
