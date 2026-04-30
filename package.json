@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "purdex",
-  "version": "1.0.0-alpha.272",
+  "version": "1.0.0-alpha.273",
   "license": "MIT",
   "main": "out/main/index.mjs",
   "scripts": {
