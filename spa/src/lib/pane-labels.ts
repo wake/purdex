@@ -42,7 +42,7 @@ export function getPaneLabel(
     case 'hosts':
       return t('page.pane.hosts')
     case 'memory-monitor':
-      return t('monitor.title')
+      return t('performance_monitor.title')
     case 'editor-buffers':
       return t('editor.buffers.tab_title')
     case 'editor': {
