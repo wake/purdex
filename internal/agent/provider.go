@@ -271,3 +271,100 @@ type SessionState struct {
 	SessionID string
 	Cwd       string
 }
+
+// ProbeIntentProvider declares probe-driven status transitions for an agent.
+//
+// Probe is a recovery channel that complements (not replaces) hooks: when an
+// agent's hook catalog has a structural gap (e.g. codex StopFailure being
+// FutureOnly = ✗ 0.124.0 不發), the agent's provider declares one or more
+// ProbeIntents whose detectors infer the missing transition from runtime
+// observation (process liveness, tmux pane content, etc).
+//
+// Implementing this interface is optional. Providers without ProbeIntents
+// behave identically to pre-W6-3 (no probe-driven transitions).
+//
+// Daemon module reads ProbeIntents() on every status change for the session's
+// agent and starts/stops detectors accordingly. Detectors live in the agent's
+// own package (e.g. internal/agent/codex/probe_intent_*.go) — module only
+// owns the dispatcher plumbing.
+type ProbeIntentProvider interface {
+	ProbeIntents() []ProbeIntent
+}
+
+// ProbeIntent is one probe-driven transition declared by an agent provider.
+//
+// Lifecycle (driven by daemon dispatcher):
+//  1. Status changes to a value listed in OnEntryStatus → dispatcher resolves
+//     pane id + senderPID from the active frame, then dispatches to the
+//     per-Kind detector goroutine
+//  2. Detector observes runtime state (per Kind) and emits Signal events
+//  3. Dispatcher applies guards (see probe orchestrator §5.3) then
+//     OnSignal(sig) → Status
+//  4. Status changes to a value NOT in OnEntryStatus → dispatcher stops
+//     detector (cancel ctx) and frees per-(session, kind) state
+//
+// W6-3 first PR finalize: one Kind = ProbeIntentKindProcessDead. Future Kind
+// additions (W6-1/2/6 ScreenChange) MUST keep the existing Signal fields
+// backward compatible (add fields, don't repurpose).
+type ProbeIntent struct {
+	// Kind classifies the detector. W6-3 finalize: only ProbeIntentKindProcessDead.
+	// Subsequent W6 PRs MAY introduce additional Kind constants; existing Kind
+	// semantics and Signal field semantics MUST remain stable.
+	Kind ProbeIntentKind
+
+	// OnEntryStatus is the set of currentStatus values that gate this intent
+	// active. Detector starts on entry to any of these and stops on exit to any
+	// status outside the set.
+	//
+	// Example (W6-3+W6-4): {StatusRunning, StatusWaiting} — codex process_dead
+	// inference only makes sense while codex is supposed to be doing work.
+	OnEntryStatus []Status
+
+	// OnSignal maps a detector signal to the new Status. Empty Status returned
+	// by OnSignal means "drop this signal" (detector observed transient state
+	// that doesn't warrant a transition).
+	//
+	// Contract (per by2z79ouc DEF-1): dispatcher invokes OnSignal as a
+	// mapping callback INSIDE applyProbeGuards, AFTER the stale-callback
+	// guard + graceWindow guard pass. OnSignal therefore never sees signals
+	// that should have been dropped by hook authority. ErrorGuard +
+	// transition gate run AFTER OnSignal returns (they need newStatus to
+	// compare against currentStatus). Provider may safely log / count in
+	// OnSignal because pre-guard-survived signals are guaranteed.
+	OnSignal func(Signal) Status
+}
+
+// ProbeIntentKind is the detector category. W6-3 finalize introduces one Kind;
+// future PRs MAY add more. Use a string type so test fixtures can declare
+// expected kinds without import cycles.
+type ProbeIntentKind string
+
+const (
+	// ProbeIntentKindProcessDead — detector polls senderPID + observes pane
+	// existence; emits one Signal with PaneAlive set when the agent process
+	// is no longer in the pane PID tree (W6-3+W6-4 combined: PaneAlive=true
+	// → caller maps to error; false → caller maps to clear).
+	ProbeIntentKindProcessDead ProbeIntentKind = "process_dead"
+)
+
+// Signal is the runtime observation emitted by a detector. W6-3 finalize
+// includes the minimum context W6-3+W6-4 both need; future Kind additions
+// MAY add fields but MUST keep existing field semantics stable.
+//
+// Field rationale (per b36pap7jc DEF-1 — preventing immediate signature churn
+// on the next W6 PR):
+//   - Kind: required for OnSignal type discrimination
+//   - PaneAlive: W6-3+W6-4 binary distinction; future ScreenChange Kinds may
+//     leave it unconditionally true (they observe pane content, not pane life)
+//   - PaneID: explicit pane id — detector resolves & captures this when the
+//     intent arms; OnSignal receives the same value (used by trace
+//     observability and for downstream future-Kind detectors that act on
+//     pane-scoped state)
+//   - SenderPID: the codex sender pid resolved from frame state; carried on
+//     Signal so OnSignal handlers can log without re-querying
+type Signal struct {
+	Kind      ProbeIntentKind
+	PaneAlive bool
+	PaneID    string
+	SenderPID int
+}

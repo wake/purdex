@@ -115,3 +115,16 @@ func (f *fakeAgentProvider) RemoveHooks(string) error         { return nil }
 func (f *fakeAgentProvider) CheckHooks() (agentpkg.HookStatus, error) {
 	return agentpkg.HookStatus{}, nil
 }
+
+// fakeProbeIntentAgentProvider is fakeAgentProvider plus a configurable
+// ProbeIntents list. Used by W6-3 P1-T4 dispatcher tests to drive the
+// declared-kinds reconcile + per-intent lifecycle paths without involving
+// the codex package (whose detector lands in P2-T2).
+type fakeProbeIntentAgentProvider struct {
+	fakeAgentProvider
+	intents []agentpkg.ProbeIntent
+}
+
+func (f *fakeProbeIntentAgentProvider) ProbeIntents() []agentpkg.ProbeIntent {
+	return f.intents
+}

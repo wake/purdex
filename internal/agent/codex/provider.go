@@ -51,3 +51,41 @@ func (p *Provider) SupportedStatuses() []agent.Status {
 func (p *Provider) IsAlive(tmuxTarget string) bool {
 	return false // Deprecated: agent module uses prober.IsAliveFor directly
 }
+
+// ProbeIntents declares the probe-driven status transitions for the codex
+// agent. W6-3 first PR scope: one intent — ProcessDead — that recovers the
+// missing StopFailure transition codex 0.124.0 does not emit. Future W6 PRs
+// MAY append more intents but MUST keep ProcessDead present and stable.
+//
+// Implements agent.ProbeIntentProvider (optional capability — providers
+// without ProbeIntents behave identically to pre-W6-3).
+//
+// Per spec §4.1: gating set {Running, Waiting} mirrors the only states where
+// codex is supposed to be doing work; OnSignal mapping (PaneAlive=true →
+// Error, false → Clear) splits W6-3 (codex died with pane intact) from W6-4
+// (entire pane disappeared) on the runtime observation captured by
+// StartProcessDeadDetector.
+func (p *Provider) ProbeIntents() []agent.ProbeIntent {
+	return []agent.ProbeIntent{
+		{
+			Kind:          agent.ProbeIntentKindProcessDead,
+			OnEntryStatus: []agent.Status{agent.StatusRunning, agent.StatusWaiting},
+			OnSignal:      onProcessDead,
+		},
+	}
+}
+
+// onProcessDead maps a ProcessDead signal to the recovery status, splitting
+// W6-3 (PaneAlive=true → Error) and W6-4 (PaneAlive=false → Clear) on the
+// pane existence observation that the detector captured. Defends against
+// dispatcher misuse: a Signal with a non-ProcessDead Kind returns an empty
+// Status (drop the signal) rather than mapping to Error or Clear.
+func onProcessDead(sig agent.Signal) agent.Status {
+	if sig.Kind != agent.ProbeIntentKindProcessDead {
+		return ""
+	}
+	if sig.PaneAlive {
+		return agent.StatusError
+	}
+	return agent.StatusClear
+}

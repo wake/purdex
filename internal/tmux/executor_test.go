@@ -397,3 +397,130 @@ func TestFakeExecutor_RangeMethods_Roundtrip(t *testing.T) {
 		t.Errorf("CapturePaneTopLines(3) = %q, want %q", got, want)
 	}
 }
+
+// --- P2-T1: Executor.HasPane(paneID) tests ---
+
+// TestHasPane_PaneExists_ReturnsTrue verifies that HasPane returns true
+// when the requested pane id appears in `tmux list-panes -a -F '#{pane_id}'`.
+func TestHasPane_PaneExists_ReturnsTrue(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	// Mimic `tmux list-panes -a -F '#{pane_id}'` returning two panes.
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+if [ "$1" != "list-panes" ] || [ "$2" != "-a" ] || [ "$3" != "-F" ] || [ "$4" != "#{pane_id}" ]; then
+  printf 'unexpected args: %s\n' "$*" >&2
+  exit 2
+fi
+printf '%%5\n%%7\n'
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := (&tmux.RealExecutor{}).HasPane("%5")
+	if err != nil {
+		t.Fatalf("HasPane unexpected err: %v", err)
+	}
+	if !got {
+		t.Errorf("HasPane(%q) = false, want true", "%5")
+	}
+}
+
+// TestHasPane_PaneNotInList_ReturnsFalse verifies that HasPane returns false
+// when the pane id is absent from `tmux list-panes` output.
+func TestHasPane_PaneNotInList_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+if [ "$1" != "list-panes" ] || [ "$2" != "-a" ] || [ "$3" != "-F" ] || [ "$4" != "#{pane_id}" ]; then
+  printf 'unexpected args: %s\n' "$*" >&2
+  exit 2
+fi
+printf '%%5\n%%7\n'
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := (&tmux.RealExecutor{}).HasPane("%9")
+	if err != nil {
+		t.Fatalf("HasPane unexpected err: %v", err)
+	}
+	if got {
+		t.Errorf("HasPane(%q) = true, want false", "%9")
+	}
+}
+
+// TestHasPane_TransientTmuxError_ReturnsError verifies that a generic
+// tmux invocation error (NOT the documented "no server running" branch
+// — that one is confirmed absence per F10) surfaces as err != nil. Per
+// round-4 audit: callers distinguish transient query failure from
+// confirmed absence to avoid false-positive "pane gone" emissions
+// during tmux hiccups.
+func TestHasPane_TransientTmuxError_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf 'something else went wrong\n' >&2
+exit 1
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := (&tmux.RealExecutor{}).HasPane("%5")
+	if err == nil {
+		t.Fatalf("HasPane returned err=nil on transient tmux error, want non-nil")
+	}
+	if got {
+		t.Errorf("HasPane returned true on tmux error, want false")
+	}
+}
+
+// TestHasPane_NoServerRunning_ReturnsConfirmedAbsence verifies the round-5
+// F10 fix: tmux exits with stderr "no server running" when there are no
+// active sessions. That is global confirmed absence (every pane is gone),
+// not a transient query failure — caller should drive the clear path.
+func TestHasPane_NoServerRunning_ReturnsConfirmedAbsence(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf 'no server running on /private/tmp/tmux-501/default\n' >&2
+exit 1
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := (&tmux.RealExecutor{}).HasPane("%5")
+	if err != nil {
+		t.Fatalf("HasPane returned err=%v on no-server, want nil (confirmed absence)", err)
+	}
+	if got {
+		t.Errorf("HasPane returned true on no-server, want false")
+	}
+}
+
+// TestHasPane_EmptyPaneID_ReturnsFalse verifies that an empty paneID short
+// circuits to false without invoking tmux. The script below would fail the
+// test if executed. err must be nil — empty paneID is confirmed absent,
+// not a query failure.
+func TestHasPane_EmptyPaneID_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf 'tmux must not be invoked for empty paneID\n' >&2
+exit 99
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := (&tmux.RealExecutor{}).HasPane("")
+	if err != nil {
+		t.Fatalf("HasPane(\"\") unexpected err: %v", err)
+	}
+	if got {
+		t.Errorf("HasPane(\"\") = true, want false")
+	}
+}

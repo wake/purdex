@@ -36,6 +36,15 @@ type Executor interface {
 	KillSession(name string) error
 	RenameSession(oldName, newName string) error
 	HasSession(name string) bool
+	// HasPane reports whether the given pane id (e.g. "%5") still exists in
+	// the global tmux pane list. Returns (false, nil) on empty paneID or
+	// confirmed absence; (true, nil) on confirmed presence; (_, err) on a
+	// transient tmux command failure (no server, exec error). Per round-4
+	// audit: callers that derive "pane gone" semantics MUST distinguish
+	// confirmed-absence from query-error — collapsing both into false
+	// causes false-positive "pane gone" / clear emissions during tmux
+	// hiccups while the pane is still alive.
+	HasPane(paneID string) (exists bool, err error)
 	SendKeys(target, keys string) error
 	SendKeysRaw(target string, keys ...string) error
 	PasteText(target, text string) error
@@ -199,6 +208,40 @@ func (r *RealExecutor) HasSession(name string) bool {
 	// Use "=" prefix for exact name matching (tmux 3.2+).
 	// Without it, "has-session -t foo" matches "foobar" via prefix.
 	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
+}
+
+// HasPane reports whether the given pane id is currently listed by
+// `tmux list-panes -a -F '#{pane_id}'`. Conservative on any error: a
+// non-zero exit (no server running, etc) returns false. Empty paneID
+// short-circuits to false without invoking tmux.
+//
+// Used by codex ProbeIntent ProcessDead detector — see
+// internal/agent/codex/probe_intent_process_dead.go.
+func (r *RealExecutor) HasPane(paneID string) (bool, error) {
+	if paneID == "" {
+		return false, nil
+	}
+	cmd := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		// Round-5 audit F10: classify "no server running" as confirmed
+		// global absence (false, nil) rather than a transient query
+		// failure. Without this branch the detector would poll forever
+		// when the user tears down the last tmux session — codex pane
+		// is definitively gone but the lights stay armed.
+		if strings.Contains(stderr.String(), "no server running") {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == paneID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *RealExecutor) SendKeys(target, keys string) error {

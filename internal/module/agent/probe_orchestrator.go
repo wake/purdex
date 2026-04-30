@@ -206,9 +206,171 @@ func (o *probeOrchestrator) makeCallback(session, agentType string) probe.Screen
 	}
 }
 
+// probeGuardArgs is the input contract for applyProbeGuards. Caller fills:
+//   - Session / AgentType: identity used by the dev log + downstream broadcast
+//   - Reason: rawEventName placed on the broadcast NormalizedEvent
+//     (ScreenChange path: "probe:activity"; ProbeIntent path: e.g.
+//     "probe-intent:process_dead")
+//   - Signal: raw detector signal, passed verbatim to Mapping. ScreenChange
+//     callers may leave this zero; ProbeIntent callers fill from the channel
+//   - Mapping: per-route status mapping callback. Invoked AFTER the
+//     stale-callback fast-path + graceWindow guard pass (per by2z79ouc DEF-1
+//     contract). Returning "" drops the signal.
+//   - StaleCheck: per-route active-set checker. Invoked WHILE m.mu is held by
+//     applyProbeGuards (caller therefore reads from m.* maps lock-free).
+//     Run twice — once on the early fast-path (cheap stale-drop for ghost
+//     callbacks) and again inside the final critical section (closes the
+//     race window where stop / rename / generation-bump won between the
+//     early unlock and the final lock; codex finding #4 regression).
+//   - OnDrop: optional caller-aware drop callback (W6-3 P2-T6). When non-nil
+//     applyProbeGuards invokes it once with one of the canonical drop
+//     reasons ("stale-callback" / "grace" / "error-guard" / "transition-gate")
+//     before returning applied=false. ScreenChange callers leave this nil so
+//     legacy MetricProbeGraceWindowSuppressed semantics stay intact;
+//     ProbeIntent callers pass probeIntentOnDrop so each drop reason routes
+//     to its own counter + dev log line for fault isolation.
+type probeGuardArgs struct {
+	Session    string
+	AgentType  string
+	Reason     string
+	Signal     agentpkg.Signal
+	Mapping    func(agentpkg.Signal) agentpkg.Status
+	StaleCheck func(*Module) bool
+	OnDrop     func(reason string)
+}
+
+// applyProbeGuards runs the shared probe-status-transition pipeline:
+//
+//  1. Stale-callback fast-path: m.mu Lock → StaleCheck(m); reject if false.
+//  2. graceWindow suppression: hook within probeGraceWindow → drop + counter.
+//  3. Mapping callback: caller-provided Signal → Status; "" means drop.
+//  4. Final critical section: m.mu Lock → StaleCheck re-check + ErrorGuard +
+//     transition gate; mutate currentStatus on pass.
+//  5. Broadcast: setProjectionTopStatus + buildProjectionNormalized +
+//     broadcastToSession (with NormalizedEvent fallback when the projection
+//     is unavailable).
+//
+// Returns applied=true iff step 4 mutated currentStatus and step 5 broadcast
+// the transition; appliedStatus carries the freshly applied newStatus on the
+// success path (empty on every drop). Returning the locally-known newStatus
+// avoids a follow-up currentStatus re-read race in the ProbeIntent dispatcher
+// (P2-T6 fix) — a concurrent SessionEnd hook between step 4 unlock and a
+// caller's re-read could delete the entry, leaving the dev-log / case-3
+// re-apply path with an empty status.
+//
+// W6-3 P1-T2: extracted from interpretScreenEvent so the W6-3 ProbeIntent
+// dispatcher (P1-T4) can reuse the same guard pipeline through different
+// StaleCheck / Mapping strategies. ScreenChange path is a strict mechanical
+// extraction — pre-extraction tests must remain green.
+func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStatus agentpkg.Status) {
+	if m == nil {
+		return false, ""
+	}
+
+	// 1. Stale-callback guard (early fast-path; lock-free read inside m.mu).
+	m.mu.Lock()
+	staleOK := args.StaleCheck != nil && args.StaleCheck(m)
+	m.mu.Unlock()
+	if !staleOK {
+		if args.OnDrop != nil {
+			args.OnDrop("stale-callback")
+		}
+		return false, ""
+	}
+
+	// 2. graceWindow suppression (independent graceMu — no nesting w/ m.mu).
+	if m.probeOrch != nil {
+		o := m.probeOrch
+		o.graceMu.Lock()
+		last, hasHook := o.lastHookAt[args.Session]
+		o.graceMu.Unlock()
+		if hasHook && orchNowFn().Sub(last) < probeGraceWindow {
+			agentpkg.MetricProbeGraceWindowSuppressed.Add(1)
+			if isDevMode() {
+				log.Printf("[probe] graceWindow suppress session=%s agent=%s reason=%s",
+					args.Session, args.AgentType, args.Reason)
+			}
+			if args.OnDrop != nil {
+				args.OnDrop("grace")
+			}
+			return false, ""
+		}
+	}
+
+	// 3. Mapping callback (per by2z79ouc DEF-1 — invoked only after stale +
+	//    graceWindow guards pass; OnSignal handlers may safely log/count).
+	if args.Mapping == nil {
+		return false, ""
+	}
+	newStatus := args.Mapping(args.Signal)
+	if newStatus == "" {
+		return false, ""
+	}
+
+	// Test-only seam: simulate a concurrent stop/rename that mutates the
+	// active-set between the early fast-path and the final critical section.
+	// Production leaves interruptBeforeFinalLockFn nil (no-op).
+	if hook := interruptBeforeFinalLockFn; hook != nil {
+		hook(args.Session)
+	}
+
+	// 4. Final critical section: atomic re-check + ErrorGuard + transition gate.
+	m.mu.Lock()
+	if args.StaleCheck == nil || !args.StaleCheck(m) {
+		m.mu.Unlock()
+		if args.OnDrop != nil {
+			args.OnDrop("stale-callback")
+		}
+		return false, ""
+	}
+	if m.currentStatus[args.Session] == agentpkg.StatusError {
+		m.mu.Unlock()
+		if args.OnDrop != nil {
+			args.OnDrop("error-guard")
+		}
+		return false, ""
+	}
+	if prev, ok := m.currentStatus[args.Session]; ok && prev == newStatus {
+		m.mu.Unlock()
+		if args.OnDrop != nil {
+			args.OnDrop("transition-gate")
+		}
+		return false, ""
+	}
+	m.currentStatus[args.Session] = newStatus
+	m.mu.Unlock()
+
+	// 5. Broadcast.
+	agentpkg.MetricProbeScreenEvent.Add(1)
+	if isDevMode() {
+		log.Printf("[probe] status session=%s agent=%s status=%s reason=%s",
+			args.Session, args.AgentType, newStatus, args.Reason)
+	}
+	if projection, err := m.setProjectionTopStatus(args.Session, newStatus); err == nil && projection != nil {
+		normalized := buildProjectionNormalized(projection, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
+		m.broadcastToSession(args.Session, normalized)
+		return true, newStatus
+	}
+	// Fallback when the projection is unavailable (e.g. frames row removed
+	// concurrently with the event). Broadcast a minimal normalized event so
+	// SPA clients still see the status change.
+	normalized := agentpkg.NormalizedEvent{
+		AgentType:    args.AgentType,
+		Status:       string(newStatus),
+		RawEventName: args.Reason,
+		BroadcastTs:  time.Now().UnixNano(),
+	}
+	m.broadcastToSession(args.Session, normalized)
+	return true, newStatus
+}
+
 // interpretScreenEvent maps a raw probe.ScreenChangeEvent to a status
-// transition (or drops it). Guards run in this order — each layer encodes
-// a specific invariant:
+// transition via applyProbeGuards. The Kind→Status mapping (including the
+// ScreenStable cheap pre-gate, the independent bottom capture, and the
+// dead-PID + shell-prompt sweep branch) stays in this caller layer because
+// the sweep branch may early-return without invoking the dispatcher.
+//
+// Guard layering — each layer encodes a specific invariant:
 //
 //  1. Stale-callback guard (R4): activeWatchers must contain (session →
 //     agentType). After stopWatch / rename the closure may still be invoked
@@ -237,39 +399,23 @@ func (o *probeOrchestrator) interpretScreenEvent(session, agentType string, ev p
 	}
 	m := o.parent
 
-	// 1. Stale-callback guard (early fast-path).
+	// Read prevStatus for the cheap ScreenStable pre-gate (codex finding #8).
+	// This is an upfront read independent of the guard pipeline; it does not
+	// substitute for the StaleCheck closure (which still runs inside
+	// applyProbeGuards under m.mu in steps 1 and 4).
 	m.mu.Lock()
-	currentAgent, active := m.activeWatchers[session]
 	prevStatus, hasPrev := m.currentStatus[session]
 	m.mu.Unlock()
-	if !active || currentAgent != agentType {
-		return
-	}
 
-	// 2. graceWindow suppression.
-	o.graceMu.Lock()
-	last, hasHook := o.lastHookAt[session]
-	o.graceMu.Unlock()
-	if hasHook && orchNowFn().Sub(last) < probeGraceWindow {
-		agentpkg.MetricProbeGraceWindowSuppressed.Add(1)
-		if isDevMode() {
-			log.Printf("[probe] graceWindow suppress session=%s agent=%s kind=%s", session, agentType, ev.Kind)
-		}
-		return
-	}
-
-	// 3. Kind → status mapping.
+	// Step 3 mapping (Kind → status), kept in the caller layer because the
+	// ScreenStable + dead-PID + shell-prompt branch must early-return on
+	// sweep without entering the dispatcher.
 	var status agentpkg.Status
 	switch ev.Kind {
 	case probe.ScreenChanged:
 		status = agentpkg.StatusRunning
 	case probe.ScreenStable:
-		// Cheap pre-gate (codex finding #8): if already Idle and top-frame
-		// PID is alive, the bottom capture would only feed a transition
-		// gate that's about to drop Idle→Idle. Continuous-stable Idle
-		// panes are common (a session sitting at a shell prompt) — skipping
-		// the tmux subprocess here is a measurable cost win. Dead-PID
-		// branch falls through so the sweep cleanup path keeps working.
+		// Cheap pre-gate: stable-Idle + alive top-frame PID is a no-op.
 		if hasPrev && prevStatus == agentpkg.StatusIdle {
 			projection, _ := m.projectionForSession(session)
 			if projection == nil || projection.TopFrame == nil || isPidAliveFn(projection.TopFrame.PID) {
@@ -278,12 +424,7 @@ func (o *probeOrchestrator) interpretScreenEvent(session, agentType string, ev p
 			// Stable Idle + dead PID: fall through to bottom capture for
 			// shell-prompt classification + sweep cleanup.
 		}
-		// R14 fix #1: ev.Content reflects the watcher's TopLines / BottomLines
-		// configuration. For agents on a TopLines profile the captured content
-		// won't include the bottom shell prompt, so LooksLikeShellPrompt would
-		// false-negative. Take an independent bottom-N capture for the
-		// shell-prompt classifier; treat any tmux error as "not a shell
-		// prompt" (conservative — fall through to Idle, never block).
+		// Independent bottom capture for shell-prompt classification.
 		var bottomContent string
 		if m.tmux != nil {
 			if c, err := m.tmux.CapturePaneContent(session+":", 10); err == nil {
@@ -302,52 +443,19 @@ func (o *probeOrchestrator) interpretScreenEvent(session, agentType string, ev p
 		return
 	}
 
-	// Test-only seam: simulate a concurrent stop/rename that mutates
-	// activeWatchers between the early fast-path and the final critical
-	// section. Production leaves interruptBeforeFinalLockFn nil (no-op).
-	if hook := interruptBeforeFinalLockFn; hook != nil {
-		hook(session)
-	}
-
-	// 1 (re-check) + 4. Error Guard + 5. Transition gate.
-	// Single critical section; the re-check of activeWatchers closes the
-	// race window where stopWatch/rename mutated the map between the early
-	// unlock at step 1 and this lock (codex finding #4 regression).
-	m.mu.Lock()
-	currentAgent, active = m.activeWatchers[session]
-	if !active || currentAgent != agentType {
-		m.mu.Unlock()
-		return
-	}
-	if m.currentStatus[session] == agentpkg.StatusError {
-		m.mu.Unlock()
-		return
-	}
-	if prev, ok := m.currentStatus[session]; ok && prev == status {
-		m.mu.Unlock()
-		return
-	}
-	m.currentStatus[session] = status
-	m.mu.Unlock()
-
-	// 6. Apply transition.
-	agentpkg.MetricProbeScreenEvent.Add(1)
-	if isDevMode() {
-		log.Printf("[probe] status session=%s agent=%s status=%s reason=screen-%s", session, agentType, status, ev.Kind)
-	}
-	if projection, err := m.setProjectionTopStatus(session, status); err == nil && projection != nil {
-		normalized := buildProjectionNormalized(projection, agentType, "probe:activity", time.Now().UnixNano(), agentpkg.DeriveResult{})
-		m.broadcastToSession(session, normalized)
-		return
-	}
-	// Fallback when the projection is unavailable (e.g. frames row removed
-	// concurrently with the screen event). Broadcast a minimal normalized
-	// event so SPA clients still see the status change.
-	normalized := agentpkg.NormalizedEvent{
-		AgentType:    agentType,
-		Status:       string(status),
-		RawEventName: "probe:activity",
-		BroadcastTs:  time.Now().UnixNano(),
-	}
-	m.broadcastToSession(session, normalized)
+	// Steps 1 + 2 + 4 + 5 + 6 — delegate to the shared guard pipeline. The
+	// StaleCheck closure encodes the ScreenChange-path active-set check
+	// (activeWatchers[session] == agentType); the Mapping closure returns
+	// the already-resolved status (mapping happened above so the sweep
+	// branch could short-circuit).
+	applyProbeGuards(m, probeGuardArgs{
+		Session:   session,
+		AgentType: agentType,
+		Reason:    "probe:activity",
+		Mapping:   func(agentpkg.Signal) agentpkg.Status { return status },
+		StaleCheck: func(m *Module) bool {
+			currentAgent, active := m.activeWatchers[session]
+			return active && currentAgent == agentType
+		},
+	})
 }

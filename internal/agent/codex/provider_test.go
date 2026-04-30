@@ -85,6 +85,54 @@ func TestCodexSupportedStatuses_DerivesFromEvents(t *testing.T) {
 	}
 }
 
+// --- P2-T3: ProbeIntents() declaration tests ---
+
+// TestProvider_ProbeIntents_DeclaresProcessDead asserts the codex provider
+// declares exactly one ProbeIntent and its Kind is ProcessDead. This is the
+// W6-3 + W6-4 first PR scope; subsequent W6 PRs MAY append more intents but
+// MUST keep ProcessDead present and stable.
+func TestProvider_ProbeIntents_DeclaresProcessDead(t *testing.T) {
+	p := codex.NewProvider()
+	pip, ok := any(p).(agent.ProbeIntentProvider)
+	if !ok {
+		t.Fatalf("codex.Provider does not implement agent.ProbeIntentProvider")
+	}
+	intents := pip.ProbeIntents()
+	if len(intents) != 1 {
+		t.Fatalf("ProbeIntents() len = %d, want 1 (W6-3 first PR scope)", len(intents))
+	}
+	if intents[0].Kind != agent.ProbeIntentKindProcessDead {
+		t.Errorf("ProbeIntents()[0].Kind = %q, want %q", intents[0].Kind, agent.ProbeIntentKindProcessDead)
+	}
+	if intents[0].OnSignal == nil {
+		t.Errorf("ProbeIntents()[0].OnSignal = nil, want non-nil mapper")
+	}
+}
+
+// TestProvider_ProbeIntents_OnEntryStatusContainsRunningWaiting verifies the
+// gating set covers both Running and Waiting (codex process_dead inference
+// only makes sense while codex is supposed to be working).
+func TestProvider_ProbeIntents_OnEntryStatusContainsRunningWaiting(t *testing.T) {
+	p := codex.NewProvider()
+	pip, ok := any(p).(agent.ProbeIntentProvider)
+	if !ok {
+		t.Fatalf("codex.Provider does not implement agent.ProbeIntentProvider")
+	}
+	intents := pip.ProbeIntents()
+	if len(intents) == 0 {
+		t.Fatalf("ProbeIntents() returned no intents")
+	}
+	gating := make(map[agent.Status]bool, len(intents[0].OnEntryStatus))
+	for _, s := range intents[0].OnEntryStatus {
+		gating[s] = true
+	}
+	for _, want := range []agent.Status{agent.StatusRunning, agent.StatusWaiting} {
+		if !gating[want] {
+			t.Errorf("OnEntryStatus missing %q (have %v)", want, intents[0].OnEntryStatus)
+		}
+	}
+}
+
 // TestCodexSupportedStatuses asserts codex.Provider implements
 // StatusSupporter and declares the same Phase 1 status set as cc/opencode
 // post-DeriveStatus expansion (Commit 3).

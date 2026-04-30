@@ -64,3 +64,65 @@ var MetricProbeScreenEvent = expvar.NewInt("purdex_probe_screen_event_total")
 // suppressed event +1 (no dedup) — the counter measures hook authority
 // over probe.
 var MetricProbeGraceWindowSuppressed = expvar.NewInt("purdex_probe_grace_window_suppressed_total")
+
+// --- W6-3 P2-T6 ProbeIntent dispatcher counters ---------------------------
+// Independent namespace ("purdex_probe_intent_*") so existing probe / phase35
+// dashboards stay separable from the per-Kind ProbeIntent fan-out. Each
+// counter is process-cumulative; daemon restart resets to zero. Tests must
+// compare deltas, never absolute values.
+//
+// Drop counters use caller-aware semantics: ScreenChange path leaves
+// probeGuardArgs.OnDrop nil and only bumps MetricProbeGraceWindowSuppressed
+// (legacy contract); ProbeIntent path supplies OnDrop = probeIntentOnDrop
+// so each drop reason routes to a distinct counter for fault isolation
+// (stale-callback vs grace vs error-guard vs transition-gate).
+
+// MetricProbeIntentStarted counts active ProbeIntent detector arming
+// (applyIntentLifecycle case 2 / 5). Increments after the entry is recorded
+// in m.activeProbeIntents and the goroutine has been scheduled.
+var MetricProbeIntentStarted = expvar.NewInt("purdex_probe_intent_started_total")
+
+// MetricProbeIntentStopped counts every detector cancel from the dispatcher
+// (lifecycle case 3, reconcileSessionActive teardown, stopAll). Each
+// distinct activeIntent.cancel invocation = +1.
+var MetricProbeIntentStopped = expvar.NewInt("purdex_probe_intent_stopped_total")
+
+// MetricProbeIntentSignalEmitted counts every Signal observed by
+// consumeSignals before the guard pipeline runs. Decoupled from
+// MetricProbeIntentApplied so dashboards can show the apply ratio.
+var MetricProbeIntentSignalEmitted = expvar.NewInt("purdex_probe_intent_signal_emitted_total")
+
+// MetricProbeIntentApplied counts signals that successfully traversed the
+// full applyProbeGuards pipeline (StaleCheck + graceWindow + Mapping +
+// ErrorGuard + transition gate) and broadcast a status change. Increments
+// happen inside applyProbeGuards on the ProbeIntent code path.
+var MetricProbeIntentApplied = expvar.NewInt("purdex_probe_intent_applied_total")
+
+// MetricProbeIntentDroppedStale counts signals dropped because StaleCheck
+// returned false — either at the early fast-path lock (active map cleared
+// between detector emit and consumeSignals delivery) or at the final
+// critical-section re-check (race between guard pipeline and cancel/rearm).
+var MetricProbeIntentDroppedStale = expvar.NewInt("purdex_probe_intent_dropped_stale_total")
+
+// MetricProbeIntentDroppedGrace counts signals dropped by the
+// recordHookAt-grace window. Distinct from the legacy
+// MetricProbeGraceWindowSuppressed counter so ProbeIntent path can be
+// reasoned about independently from the ScreenChange path.
+var MetricProbeIntentDroppedGrace = expvar.NewInt("purdex_probe_intent_dropped_grace_total")
+
+// MetricProbeIntentDroppedErrorGuard counts signals dropped because
+// currentStatus was already Error (probe is recovery-only; never overwrite
+// an existing error state).
+var MetricProbeIntentDroppedErrorGuard = expvar.NewInt("purdex_probe_intent_dropped_error_guard_total")
+
+// MetricProbeIntentDroppedTransitionGate counts signals dropped because the
+// mapped status equaled the existing currentStatus (transition gate;
+// suppresses no-op broadcasts).
+var MetricProbeIntentDroppedTransitionGate = expvar.NewInt("purdex_probe_intent_dropped_transition_gate_total")
+
+// MetricProbeIntentUnsupportedKind counts arm attempts for kinds with no
+// production detector wiring. Per audit F6: lifecycle MUST fail-closed so
+// new providers declaring an unwired kind surface a runtime signal rather
+// than silently appearing armed with a noop detector. Drift test exercises
+// production routing rather than just a wiredKinds mirror.
+var MetricProbeIntentUnsupportedKind = expvar.NewInt("purdex_probe_intent_unsupported_kind_total")

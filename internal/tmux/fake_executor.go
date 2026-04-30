@@ -54,7 +54,9 @@ type FakeExecutor struct {
 	autoResizeCalls      []string              // targets passed to ResizeWindowAuto
 	setWindowOptionCalls []SetWindowOptionCall // calls to SetWindowOption
 	windowOptions        map[string]string
-	listCallCount        int    // how many times ListSessions was called
+	paneIDs              []string // global pane id list for HasPane
+	hasPaneErr           error    // simulated transient tmux error for HasPane
+	listCallCount        int      // how many times ListSessions was called
 	alive                bool   // whether tmux server is "alive"
 	HooksOutput          string // returned by ShowHooksGlobal
 	FailSendKeys         bool   // if true, SendKeysRaw returns an error
@@ -206,6 +208,44 @@ func (f *FakeExecutor) HasSession(name string) bool {
 	defer f.mu.Unlock()
 	_, ok := f.sessions[name]
 	return ok
+}
+
+// HasPane reports whether paneID exists in the fake's recorded pane list.
+// Tests register panes via SetPanes (or the existing per-target maps). Empty
+// paneID returns false without lookup, matching RealExecutor semantics.
+func (f *FakeExecutor) HasPane(paneID string) (bool, error) {
+	if paneID == "" {
+		return false, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hasPaneErr != nil {
+		return false, f.hasPaneErr
+	}
+	for _, id := range f.paneIDs {
+		if id == paneID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// SetHasPaneError configures the fake to surface this error from the next
+// HasPane invocations until cleared (passing nil clears). Used by tests
+// that exercise the round-4 transient-tmux-error semantics — pane
+// existence is unknown rather than confirmed-absent.
+func (f *FakeExecutor) SetHasPaneError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hasPaneErr = err
+}
+
+// SetPanes replaces the fake's known pane id list. Used by tests that rely
+// on HasPane (e.g. ProbeIntent ProcessDead detector integration tests).
+func (f *FakeExecutor) SetPanes(paneIDs []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneIDs = append(f.paneIDs[:0:0], paneIDs...)
 }
 
 func (f *FakeExecutor) SendKeys(target, keys string) error {
