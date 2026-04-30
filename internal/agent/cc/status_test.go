@@ -82,6 +82,21 @@ func TestDeriveCCStatus_PdxPermissionRequest_Waiting(t *testing.T) {
 	}
 }
 
+// TestDeriveCCStatus_PdxPostToolUse_Running asserts the W6-1a contract:
+// PostToolUse fires after a tool completes — including after a permission
+// grant — and must flip status to running so the waiting → running transition
+// has an actual hook signal between Notification(permission_prompt) and the
+// eventual Stop.
+func TestDeriveCCStatus_PdxPostToolUse_Running(t *testing.T) {
+	r := deriveViaProvider("PdxPostToolUse", map[string]any{"tool_name": "Bash"})
+	if !r.Valid || r.Status != agent.StatusRunning {
+		t.Fatalf("expected running, got %+v", r)
+	}
+	if r.Detail["tool_name"] != "Bash" {
+		t.Fatalf("expected tool_name Bash in detail")
+	}
+}
+
 func TestDeriveCCStatus_PdxStop_Idle(t *testing.T) {
 	r := deriveViaProvider("PdxStop", map[string]any{"last_assistant_message": "Done"})
 	if !r.Valid || r.Status != agent.StatusIdle {

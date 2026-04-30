@@ -46,6 +46,7 @@ var providerFixtures = map[string][]driftFixture{
 		{"PdxNotification", `{"notification_type":"idle_prompt"}`, agent.StatusIdle, true},
 		{"PdxNotification", `{"notification_type":"auth_success"}`, agent.StatusIdle, true},
 		{"PdxPermissionRequest", `{"tool_name":"Bash"}`, agent.StatusWaiting, true},
+		{"PdxPostToolUse", `{"tool_name":"Bash"}`, agent.StatusRunning, true},
 		{"PdxStop", `{}`, agent.StatusIdle, true},
 		{"PdxStopFailure", `{"error":"x"}`, agent.StatusError, true},
 		{"PdxSessionEnd", `{}`, agent.StatusClear, true},

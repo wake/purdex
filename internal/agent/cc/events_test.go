@@ -20,6 +20,7 @@ var expectedCCInstallableEventNames = []string{
 	"PdxNotification",
 	"PdxPermissionRequest",
 	"PdxSessionEnd",
+	"PdxPostToolUse",
 }
 
 // expectedCCEventNames lists the upstream event-name keys that cc's installer
@@ -37,6 +38,7 @@ var expectedCCEventNames = []string{
 	"Notification",
 	"PermissionRequest",
 	"SessionEnd",
+	"PostToolUse",
 }
 
 // expectedCCCatalogHandling is pinned to the Claude Code hooks reference,
@@ -50,7 +52,7 @@ var expectedCCCatalogHandling = map[string]agent.HookHandling{
 	"PdxPreToolUse":          agent.HookHandlingUnsupported,
 	"PdxPermissionRequest":   agent.HookHandlingStatus,
 	"PdxPermissionDenied":    agent.HookHandlingIgnored,
-	"PdxPostToolUse":         agent.HookHandlingIgnored,
+	"PdxPostToolUse":         agent.HookHandlingStatus,
 	"PdxPostToolUseFailure":  agent.HookHandlingIgnored,
 	"PdxPostToolBatch":       agent.HookHandlingUnsupported,
 	"PdxNotification":        agent.HookHandlingStatus,
@@ -262,7 +264,7 @@ var expectedCCPreservedMetadata = map[string]ccLegacyMetadata{
 	"PdxUserPromptExpansion": {[]agent.Status{}, "User command expanded before model processing", false, agent.HookHandlingUnsupported},
 	"PdxPreToolUse":          {[]agent.Status{}, "Tool call about to execute", false, agent.HookHandlingUnsupported},
 	"PdxPermissionDenied":    {[]agent.Status{}, "Tool permission denied by auto mode classifier", false, agent.HookHandlingIgnored},
-	"PdxPostToolUse":         {[]agent.Status{}, "Tool call completed successfully", false, agent.HookHandlingIgnored},
+	"PdxPostToolUse":         {[]agent.Status{agent.StatusRunning}, "Tool call completed successfully (signals running after permission grant)", false, ""},
 	"PdxPostToolUseFailure":  {[]agent.Status{}, "Tool call failed", false, agent.HookHandlingIgnored},
 	"PdxPostToolBatch":       {[]agent.Status{}, "Parallel tool call batch resolved", false, agent.HookHandlingUnsupported},
 	"PdxTaskCreated":         {[]agent.Status{}, "Task was created", false, agent.HookHandlingIgnored},
