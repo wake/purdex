@@ -26,10 +26,12 @@ type AgentEventStore struct{ db *sql.DB }
 func OpenAgentEvent(path string) (*AgentEventStore, error) {
 	dsn := path
 	if path != ":memory:" {
-		// busy_timeout(5000): make transient write contention WAIT instead of
+		// busy_timeout(500): make transient write contention WAIT instead of
 		// returning SQLITE_BUSY immediately — protects tail latency under
 		// concurrent hooks/sweep/checkpoint without changing durability.
-		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)"
+		// 500ms catches typical SSD checkpoint contention (<300ms observed)
+		// without blocking the hot path past user-perceived UI latency.
+		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(500)"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

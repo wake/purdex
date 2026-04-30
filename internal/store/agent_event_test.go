@@ -138,7 +138,7 @@ func TestAgentEventStore_Delete(t *testing.T) {
 }
 
 // TestOpenAgentEvent_BusyTimeoutApplied verifies that a file-backed
-// AgentEventStore opens with PRAGMA busy_timeout=5000 — making transient
+// AgentEventStore opens with PRAGMA busy_timeout=500 — making transient
 // write contention WAIT instead of return SQLITE_BUSY immediately.
 func TestOpenAgentEvent_BusyTimeoutApplied(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "agent.db")
@@ -152,8 +152,8 @@ func TestOpenAgentEvent_BusyTimeoutApplied(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA busy_timeout").Scan(&ms); err != nil {
 		t.Fatalf("query busy_timeout: %v", err)
 	}
-	if ms != 5000 {
-		t.Errorf("busy_timeout: want 5000, got %d", ms)
+	if ms != 500 {
+		t.Errorf("busy_timeout: want 500, got %d", ms)
 	}
 }
 
