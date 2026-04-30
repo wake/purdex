@@ -3,7 +3,9 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,7 +21,10 @@ type fakePaneLister struct {
 	panes    map[string]bool
 	calls    int
 	callLog  []string
-	override func(string) bool
+	override func(string) (bool, error)
+	// errOnce returns this error on the next call only (then clears),
+	// simulating a transient tmux query failure (round-4 audit).
+	errOnce error
 }
 
 func newFakePaneLister(panes ...string) *fakePaneLister {
@@ -30,15 +35,20 @@ func newFakePaneLister(panes ...string) *fakePaneLister {
 	return &fakePaneLister{panes: m}
 }
 
-func (f *fakePaneLister) HasPane(paneID string) bool {
+func (f *fakePaneLister) HasPane(paneID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	f.callLog = append(f.callLog, paneID)
+	if f.errOnce != nil {
+		err := f.errOnce
+		f.errOnce = nil
+		return false, err
+	}
 	if f.override != nil {
 		return f.override(paneID)
 	}
-	return f.panes[paneID]
+	return f.panes[paneID], nil
 }
 
 func (f *fakePaneLister) Calls() int {
@@ -207,6 +217,52 @@ func TestStartProcessDeadDetector_PidAlive_PaneGone_TreatedAsPaneGone(t *testing
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("detector did not emit a signal in time")
+	}
+	<-done
+}
+
+// TestStartProcessDeadDetector_PaneListerError_KeepsPolling pins the round-4
+// audit semantics: when HasPane returns a transient error (e.g. tmux server
+// transient failure) the detector MUST NOT collapse the error into a
+// confirmed-absent emission. It continues polling until either a clean
+// query confirms presence/absence or ctx is cancelled.
+//
+// Test wires errOnce so the first poll surfaces an error (no signal
+// emitted), then the subsequent ticks observe pidAlive=false +
+// paneAlive=true → emits the error path Signal.
+func TestStartProcessDeadDetector_PaneListerError_KeepsPolling(t *testing.T) {
+	withFastPoll(t, 1*time.Millisecond)
+	// pid is alive on the first tick (so without the fix the error path
+	// would emit clear); becomes dead on subsequent ticks.
+	var pidCalls atomic.Int32
+	withPidAlive(t, func(pid int) bool {
+		// First call returns alive (paired with errOnce on the first poll
+		// → the detector should skip emit). Subsequent calls dead.
+		return pidCalls.Add(1) == 1
+	})
+
+	lister := newFakePaneLister("%5")
+	lister.errOnce = errors.New("tmux server transient")
+
+	out := make(chan agent.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		StartProcessDeadDetector(ctx, lister, "%5", 4321, out)
+		close(done)
+	}()
+
+	// Expect a single eventual Signal: PaneAlive=true (W6-3 error path,
+	// not a false-positive clear). The error tick was dropped.
+	select {
+	case sig := <-out:
+		if !sig.PaneAlive {
+			t.Fatalf("PaneAlive = false on tmux error tick — round-4 fix regression (must keep polling, not emit clear)")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("detector never emitted; expected pid-dead + pane-alive after error recovery")
 	}
 	<-done
 }

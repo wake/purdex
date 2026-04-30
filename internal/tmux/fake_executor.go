@@ -55,6 +55,7 @@ type FakeExecutor struct {
 	setWindowOptionCalls []SetWindowOptionCall // calls to SetWindowOption
 	windowOptions        map[string]string
 	paneIDs              []string // global pane id list for HasPane
+	hasPaneErr           error    // simulated transient tmux error for HasPane
 	listCallCount        int      // how many times ListSessions was called
 	alive                bool   // whether tmux server is "alive"
 	HooksOutput          string // returned by ShowHooksGlobal
@@ -212,18 +213,31 @@ func (f *FakeExecutor) HasSession(name string) bool {
 // HasPane reports whether paneID exists in the fake's recorded pane list.
 // Tests register panes via SetPanes (or the existing per-target maps). Empty
 // paneID returns false without lookup, matching RealExecutor semantics.
-func (f *FakeExecutor) HasPane(paneID string) bool {
+func (f *FakeExecutor) HasPane(paneID string) (bool, error) {
 	if paneID == "" {
-		return false
+		return false, nil
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.hasPaneErr != nil {
+		return false, f.hasPaneErr
+	}
 	for _, id := range f.paneIDs {
 		if id == paneID {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+// SetHasPaneError configures the fake to surface this error from the next
+// HasPane invocations until cleared (passing nil clears). Used by tests
+// that exercise the round-4 transient-tmux-error semantics — pane
+// existence is unknown rather than confirmed-absent.
+func (f *FakeExecutor) SetHasPaneError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hasPaneErr = err
 }
 
 // SetPanes replaces the fake's known pane id list. Used by tests that rely

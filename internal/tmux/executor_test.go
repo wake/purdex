@@ -417,7 +417,11 @@ printf '%%5\n%%7\n'
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if !(&tmux.RealExecutor{}).HasPane("%5") {
+	got, err := (&tmux.RealExecutor{}).HasPane("%5")
+	if err != nil {
+		t.Fatalf("HasPane unexpected err: %v", err)
+	}
+	if !got {
 		t.Errorf("HasPane(%q) = false, want true", "%5")
 	}
 }
@@ -438,14 +442,21 @@ printf '%%5\n%%7\n'
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if (&tmux.RealExecutor{}).HasPane("%9") {
+	got, err := (&tmux.RealExecutor{}).HasPane("%9")
+	if err != nil {
+		t.Fatalf("HasPane unexpected err: %v", err)
+	}
+	if got {
 		t.Errorf("HasPane(%q) = true, want false", "%9")
 	}
 }
 
-// TestHasPane_TmuxCommandError_ReturnsFalse verifies that any tmux invocation
-// error (e.g. server not running) is treated conservatively as not-found.
-func TestHasPane_TmuxCommandError_ReturnsFalse(t *testing.T) {
+// TestHasPane_TmuxCommandError_ReturnsError verifies that a tmux invocation
+// error (e.g. server not running) surfaces as err != nil rather than being
+// collapsed into a confirmed-absent false. Per round-4 audit: callers
+// distinguish transient query failure from confirmed absence to avoid
+// false-positive "pane gone" emissions during tmux hiccups.
+func TestHasPane_TmuxCommandError_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "tmux")
 	if err := os.WriteFile(script, []byte(`#!/bin/sh
@@ -456,14 +467,19 @@ exit 1
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if (&tmux.RealExecutor{}).HasPane("%5") {
+	got, err := (&tmux.RealExecutor{}).HasPane("%5")
+	if err == nil {
+		t.Fatalf("HasPane returned err=nil on tmux error, want non-nil")
+	}
+	if got {
 		t.Errorf("HasPane returned true on tmux error, want false")
 	}
 }
 
 // TestHasPane_EmptyPaneID_ReturnsFalse verifies that an empty paneID short
 // circuits to false without invoking tmux. The script below would fail the
-// test if executed.
+// test if executed. err must be nil — empty paneID is confirmed absent,
+// not a query failure.
 func TestHasPane_EmptyPaneID_ReturnsFalse(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "tmux")
@@ -475,7 +491,11 @@ exit 99
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if (&tmux.RealExecutor{}).HasPane("") {
+	got, err := (&tmux.RealExecutor{}).HasPane("")
+	if err != nil {
+		t.Fatalf("HasPane(\"\") unexpected err: %v", err)
+	}
+	if got {
 		t.Errorf("HasPane(\"\") = true, want false")
 	}
 }

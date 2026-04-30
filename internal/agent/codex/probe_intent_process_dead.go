@@ -70,7 +70,13 @@ func loadIsPidAliveFn() func(int) bool {
 // session targets to the first pane via PanePID, which is the wrong
 // observation for non-first siblings.
 type tmuxPaneLister interface {
-	HasPane(paneID string) bool
+	// HasPane returns (exists, err). exists=true → confirmed presence;
+	// exists=false && err==nil → confirmed absence; err != nil → transient
+	// query failure (no server, exec error). Round-4 audit: the detector
+	// must NOT collapse query error into "pane gone" — that triggers
+	// false-positive clear emissions during tmux hiccups while the codex
+	// pane is still alive.
+	HasPane(paneID string) (exists bool, err error)
 }
 
 // StartProcessDeadDetector is the codex-side detector for
@@ -110,7 +116,15 @@ func StartProcessDeadDetector(
 			return
 		case <-ticker.C:
 			pidAlive := loadIsPidAliveFn()(senderPID)
-			paneAlive := paneLister.HasPane(paneID)
+			paneAlive, paneErr := paneLister.HasPane(paneID)
+			// Round-4 audit: a transient tmux query failure (no server,
+			// list-panes exec error) reports paneErr != nil; do NOT
+			// interpret as confirmed absence — keep polling so a recovered
+			// tmux server can be observed as alive on the next tick. Only
+			// confirmed (paneErr==nil) presence/absence drives a Signal.
+			if paneErr != nil {
+				continue
+			}
 			if pidAlive && paneAlive {
 				continue // both alive, keep polling
 			}

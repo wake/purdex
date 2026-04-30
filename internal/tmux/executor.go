@@ -37,10 +37,14 @@ type Executor interface {
 	RenameSession(oldName, newName string) error
 	HasSession(name string) bool
 	// HasPane reports whether the given pane id (e.g. "%5") still exists in
-	// the global tmux pane list. Returns false on empty paneID, missing
-	// tmux server, or any command error (conservative — caller treats
-	// false as "pane gone").
-	HasPane(paneID string) bool
+	// the global tmux pane list. Returns (false, nil) on empty paneID or
+	// confirmed absence; (true, nil) on confirmed presence; (_, err) on a
+	// transient tmux command failure (no server, exec error). Per round-4
+	// audit: callers that derive "pane gone" semantics MUST distinguish
+	// confirmed-absence from query-error — collapsing both into false
+	// causes false-positive "pane gone" / clear emissions during tmux
+	// hiccups while the pane is still alive.
+	HasPane(paneID string) (exists bool, err error)
 	SendKeys(target, keys string) error
 	SendKeysRaw(target string, keys ...string) error
 	PasteText(target, text string) error
@@ -213,20 +217,20 @@ func (r *RealExecutor) HasSession(name string) bool {
 //
 // Used by codex ProbeIntent ProcessDead detector — see
 // internal/agent/codex/probe_intent_process_dead.go.
-func (r *RealExecutor) HasPane(paneID string) bool {
+func (r *RealExecutor) HasPane(paneID string) (bool, error) {
 	if paneID == "" {
-		return false
+		return false, nil
 	}
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}").Output()
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.TrimSpace(line) == paneID {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (r *RealExecutor) SendKeys(target, keys string) error {
