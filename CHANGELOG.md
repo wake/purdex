@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.279] - 2026-05-01
+
+### Feat(agent): cc PdxPostToolUse → running status (W6-1a) (#790)
+
+Promotes cc `PdxPostToolUse` from `Handling=Ignored` (non-installable) to a status-emitting hook with `EmitsStatus=[Running]`, closing the W5-1 gap where lights stayed yellow after a permission grant until `PdxStop` flipped to idle — skipping the running phase entirely. Now `PostToolUse` gives `waiting → running` a real hook signal.
+
+mlab live verify (cc 2.1.123): `Write(/tmp/...)` permission flow shows `PdxPermissionRequest` → waiting, `PdxNotification(permission_prompt)` → waiting (dual fire confirmed, both map to waiting), user approves, **`PdxPostToolUse` → running** (the W6-1a fix), then `PdxStop` → idle. cc installable hook count goes from 9 to 10; existing installs auto-pick-up the new hook on next `pdx setup --agent cc`.
+
+Also includes a documentation-only outcome for W6-2 (cc compact): `SessionStart(source=compact)` does fire on `/compact` end but the daemon's `compact_ignored` branch is intentional and trace-only. Pre-compact `PdxStop` already settles status to idle in all observed scenarios, so no code change is needed for W6-2 (verified-only).
+
 ## [1.0.0-alpha.278] - 2026-05-01
 
 ### Fix(daemon): drop sweep idle_timeout — alive idle session no longer cleared (#788)
