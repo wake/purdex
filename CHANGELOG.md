@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.269] - 2026-04-30
+
+### Feat(spa): add monitor config controls (#766)
+
+Adds Performance Monitor controls for refresh interval and top-process limit using daemon-provided bounds. Updates persist through the monitor config API and trigger an immediate monitor reload so new refresh cadence takes effect without waiting for the old timer.
+
+The controls preserve dirty drafts across polling refreshes, avoid submitting blank drafts, and guard pending update responses across host endpoint changes and active-host switches.
+
 ## [1.0.0-alpha.268] - 2026-04-30
 
 ### Feat(spa): fetch monitor rows per host (#763)
