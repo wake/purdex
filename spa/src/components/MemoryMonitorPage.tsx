@@ -65,6 +65,7 @@ export function MemoryMonitorPage() {
   const [updatingConfigKeys, setUpdatingConfigKeys] = useState<string[]>([])
   const [configReloadNonce, setConfigReloadNonce] = useState(0)
   const [selectedPaneKey, setSelectedPaneKey] = useState<string | null>(null)
+  const [clientMetrics, setClientMetrics] = useState<ElectronTabMetrics[]>([])
   const draftDirtyRef = useRef(false)
   const retryIntervalMS = useRef(5000)
   const activeWorkspace = activeWorkspaceId ? workspaces.find((workspace) => workspace.id === activeWorkspaceId) : undefined
@@ -163,6 +164,38 @@ export function MemoryMonitorPage() {
     setDraftRefreshSeconds(String(Math.round(config.refresh_interval_ms / 1000)))
     setDraftTopProcessLimit(String(config.top_process_limit))
   }, [activeHostId, activeHostKey, data])
+
+  const clientMetricIntervalMS = data?.hostId === activeHostId && data.activeHostKey === activeHostKey
+    ? data.config.refresh_interval_ms
+    : null
+
+  useEffect(() => {
+    if (!clientMetricIntervalMS || !window.electronAPI?.getProcessMetrics) {
+      setClientMetrics([])
+      return
+    }
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const load = async () => {
+      try {
+        const metrics = await window.electronAPI?.getProcessMetrics()
+        if (!cancelled) setClientMetrics(metrics ?? [])
+      } catch {
+        if (!cancelled) setClientMetrics([])
+      } finally {
+        if (!cancelled) timer = setTimeout(load, clientMetricIntervalMS)
+      }
+    }
+
+    void load()
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [activeHostKey, activeHostId, clientMetricIntervalMS])
 
   if (!activeHostId || !host) {
     return (
@@ -398,7 +431,7 @@ export function MemoryMonitorPage() {
                     </td>
                     <td className="max-w-48 truncate px-3 py-2 font-mono text-text-primary">{row.paneId}</td>
                     <td className="px-3 py-2 text-text-muted">{row.kind}</td>
-                    <td className="px-3 py-2 text-text-muted">{t('performance_monitor.not_wired')}</td>
+                    <td className="px-3 py-2 text-text-muted"><ClientMetricCell row={row} metrics={clientMetrics} /></td>
                     <td className="px-3 py-2 text-text-muted">
                       <DaemonMetricCell row={row} snapshotsByHostId={rowSnapshotsByHostId} validHostIds={validSnapshotHostIds} />
                     </td>
@@ -508,6 +541,20 @@ function DaemonMetricCell({
       <span>{t('performance_monitor.daemon_cpu', { value: formatDaemonCPU(metrics.cpu_percent, t) })}</span>
       <span>{t('performance_monitor.daemon_memory', { value: formatDaemonMemory(metrics.memory_bytes, t) })}</span>
       <span>{formatProcessCount(metrics.process_count, t)}</span>
+    </div>
+  )
+}
+
+function ClientMetricCell({ row, metrics }: { row: PaneRow; metrics: ElectronTabMetrics[] }) {
+  const t = useI18nStore((s) => s.t)
+  const metric = metrics.find((item) => item.paneId === row.paneId && item.kind === row.kind)
+  if (!metric) return t('performance_monitor.not_wired')
+
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1">
+      <span>{t('performance_monitor.daemon_cpu', { value: formatDaemonCPU(metric.cpuPercent, t) })}</span>
+      <span>{t('performance_monitor.daemon_memory', { value: formatDaemonMemory(metric.memoryKB * 1024, t) })}</span>
+      <span>{metric.state}</span>
     </div>
   )
 }

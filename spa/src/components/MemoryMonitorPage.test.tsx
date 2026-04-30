@@ -59,6 +59,7 @@ describe('MemoryMonitorPage', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    delete window.electronAPI
   })
 
   it('loads daemon monitor data for the active host without Electron metrics', async () => {
@@ -483,6 +484,60 @@ describe('MemoryMonitorPage', () => {
     expect(within(sessionRow).getByText('Memory 2 KB')).toBeInTheDocument()
     expect(within(sessionRow).getByText('3 processes')).toBeInTheDocument()
     expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(1)
+  })
+
+  it('pulls Electron client metrics at the monitor interval', async () => {
+    const getProcessMetrics = vi.fn()
+      .mockResolvedValueOnce([{ paneId: 'pane-browser', kind: 'browser', memoryKB: 2048, cpuPercent: 4.5, state: 'active' }])
+      .mockResolvedValue([{ paneId: 'pane-browser', kind: 'browser', memoryKB: 4096, cpuPercent: 8.25, state: 'background' }])
+    const onMetricsUpdate = vi.fn()
+    window.electronAPI = {
+      getProcessMetrics,
+      onMetricsUpdate,
+    } as unknown as typeof window.electronAPI
+    vi.mocked(fetchMonitorConfig).mockResolvedValue({ ...monitorConfig, refresh_interval_ms: 10 })
+    useTabStore.setState({
+      tabs: {
+        'tab-browser': tabWithLeaf('tab-browser', 'pane-browser', { kind: 'browser', url: 'https://example.com' }),
+      },
+      tabOrder: ['tab-browser'],
+      activeTabId: 'tab-browser',
+      visitHistory: [],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const browserRow = await screen.findByTestId('monitor-row-tab-browser-pane-browser')
+    expect(await within(browserRow).findByText('CPU 4.5%')).toBeInTheDocument()
+    expect(within(browserRow).getByText('Memory 2 MB')).toBeInTheDocument()
+    expect(within(browserRow).getByText('active')).toBeInTheDocument()
+    await waitFor(() => expect(getProcessMetrics.mock.calls.length).toBeGreaterThanOrEqual(2))
+    expect(await within(browserRow).findByText('CPU 8.3%')).toBeInTheDocument()
+    expect(within(browserRow).getByText('Memory 4 MB')).toBeInTheDocument()
+    expect(within(browserRow).getByText('background')).toBeInTheDocument()
+    expect(onMetricsUpdate).not.toHaveBeenCalled()
+  })
+
+  it('does not attach stale browser metrics to a reused non-browser pane id', async () => {
+    window.electronAPI = {
+      getProcessMetrics: vi.fn().mockResolvedValue([{ paneId: 'pane-reused', kind: 'browser', memoryKB: 2048, cpuPercent: 4.5, state: 'background' }]),
+      onMetricsUpdate: vi.fn(),
+    } as unknown as typeof window.electronAPI
+    useTabStore.setState({
+      tabs: {
+        'tab-dashboard': tabWithLeaf('tab-dashboard', 'pane-reused', { kind: 'dashboard' }),
+      },
+      tabOrder: ['tab-dashboard'],
+      activeTabId: 'tab-dashboard',
+      visitHistory: [],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const row = await screen.findByTestId('monitor-row-tab-dashboard-pane-reused')
+    await waitFor(() => expect(window.electronAPI?.getProcessMetrics).toHaveBeenCalled())
+    expect(within(row).queryByText('CPU 4.5%')).not.toBeInTheDocument()
+    expect(within(row).getAllByText('Not wired')).toHaveLength(2)
   })
 
   it('shows selected session top processes from daemon metrics', async () => {
