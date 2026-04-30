@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.276] - 2026-04-30
+
+### Perf(daemon): hook pipeline fast-path + sqlite tail tuning (#776)
+
+Hook hot path no longer fans out `1 + 7×S` tmux subprocesses per event. The agent module accepts a new `tmux_session_id` field in hook payloads and resolves the session code via `EncodeSessionID` — a pure O(1) function that bypasses the name cache and `ListSessions` entirely when the ID is present. Legacy hook clients (older `pdx hook` binaries that send only `tmux_session`) still work via a `LookupCodeByName` fast-path with 250 ms TTL plus three-layer invalidation (HTTP handlers, watcher hash change, watcher wait-for) and a name-path fallback safety net.
+
+The session module gains a `nameCache` keyed by tmux name and invalidated on create/rename/delete, on watcher-detected hash changes, and at the start of every `broadcastSessions` call so external `tmux kill-session` / `new-session` / `rename-session` operations are reflected within ~50 ms via the daemon's tmux hooks. The agent module logs a startup line indicating whether the fast path is active so decorator-wrapped providers that drop the `LookupCodeByName` interface are visible at boot.
+
+SQLite stores add `_pragma=busy_timeout(500)` and pool caps (4/4 for the agent DB shared by frames and trace, 2/2 for meta) — transient contention now waits up to 500 ms instead of aborting, without changing durability (`synchronous=FULL` retained).
+
+Hook session resolution is labelled with `id_path` / `id_empty` / `malformed_id` in broadcast log reasons so operators can grep migration status. The `TestResolveSessionCodeFromHook_TrustsIDOverMismatchedName` test locks the trust contract: a valid `tmux_session_id` is authoritative; the daemon does not cross-validate against `tmux_session`/`tmux_pane_id`.
+
+Live verify on mlab measured 5/6 hook chains completing `[hook] trigger → [broadcast]` within the same daemon-log second (vs ~5 s baseline). Follow-ups: #781 (system-wide session_id-keyed identity) and #782 (`log.Lmicroseconds` for sub-second timing measurement).
+
+Closes the round-2 stale-name-reuse race finding via the immutable `tmux_session_id` path; legacy fallback retains the bounded race window covered by `TestLookupCodeByName_NameReuseAfterInvalidate`.
+
 ## [1.0.0-alpha.275] - 2026-04-30
 
 ### Feat(spa): add performance monitor settings page (#779)
