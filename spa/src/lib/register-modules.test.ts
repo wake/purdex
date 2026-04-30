@@ -63,6 +63,14 @@ describe('registerBuiltinModules', () => {
     expect(getPaneRenderer('hosts')).toBeDefined()
   })
 
+  it('registers memory-monitor kind with Performance Monitor display label', () => {
+    registerBuiltinModules()
+
+    const monitor = getModules().find((module) => module.id === 'memory-monitor')
+    expect(monitor?.name).toBe('Performance Monitor')
+    expect(getPaneRenderer('memory-monitor')).toBeDefined()
+  })
+
   it('registers browser provider as disabled when no electronAPI', () => {
     registerBuiltinModules()
     const browser = getNewTabProviders().find((p) => p.id === 'browser')

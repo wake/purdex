@@ -167,7 +167,7 @@ export function registerBuiltinModules(): void {
   })
   registerModule({
     id: 'memory-monitor',
-    name: 'Memory Monitor',
+    name: 'Performance Monitor',
     disableable: true,
     descriptionKey: 'modules.memory_monitor.description',
     panes: [{ kind: 'memory-monitor', component: MemoryMonitorPaneWrapper }],

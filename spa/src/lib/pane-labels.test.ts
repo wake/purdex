@@ -77,7 +77,7 @@ describe('getPaneLabel', () => {
   })
 
   it('returns i18n key for memory-monitor', () => {
-    expect(getPaneLabel({ kind: 'memory-monitor' }, mockSessionStore, mockWorkspaceStore, mockT)).toBe('monitor.title')
+    expect(getPaneLabel({ kind: 'memory-monitor' }, mockSessionStore, mockWorkspaceStore, mockT)).toBe('performance_monitor.title')
   })
 
   it('A2-2: returns i18n key for editor-buffers', () => {
