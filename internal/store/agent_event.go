@@ -26,7 +26,10 @@ type AgentEventStore struct{ db *sql.DB }
 func OpenAgentEvent(path string) (*AgentEventStore, error) {
 	dsn := path
 	if path != ":memory:" {
-		dsn = path + "?_pragma=journal_mode(wal)"
+		// busy_timeout(5000): make transient write contention WAIT instead of
+		// returning SQLITE_BUSY immediately — protects tail latency under
+		// concurrent hooks/sweep/checkpoint without changing durability.
+		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -36,6 +39,12 @@ func OpenAgentEvent(path string) (*AgentEventStore, error) {
 		// Keep a single connection so the in-memory schema is shared across
 		// all queries and transactions in tests.
 		db.SetMaxOpenConns(1)
+	} else {
+		// File-backed: bound the pool so concurrent goroutines can't fan out
+		// fds. agent_event DB is shared with FramesStore + TraceStore via
+		// .Frames() / .Traces(), so cap=4 governs all three together.
+		db.SetMaxOpenConns(4)
+		db.SetMaxIdleConns(4)
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		db.Close()
