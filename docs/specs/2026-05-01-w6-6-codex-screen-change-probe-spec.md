@@ -1,6 +1,6 @@
 # W6-6 codex permission-reply ScreenChange ProbeIntent spec
 
-> **Status**：v2（codex round 1 review job `bl7niz2q4` 2 findings 採納；F1 quick-approval race 改 emit-once-and-return + grace-window-natural-suppression；F2 paneID reuse 改 emit-time senderPID liveness gate）
+> **Status**：v3（codex round 2 review job `bjv3831k4` 2 high findings 採納；F1 fast/silent approval 改 retry-emit pattern（pending flag + 每 retry interval 重發直到 ctx cancel）；F2 paneID identity 改用 `Prober.IsAliveFor("codex", paneID)` — 驗 paneID 對應 pane_pid 子樹有 codex 進程，而非單純 senderPID alive）
 > **Worktree**：`.claude/worktrees/lights-w6-6-codex-screen-change` / branch `worktree-lights-w6-6-codex-screen-change`
 > **Base**：`origin/main` @ alpha.279（W6-1a `c02299b7` 之後）
 > **依賴**：
@@ -58,7 +58,10 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
   - **排除 line 11 input echo 噪音**（user 在批准後若繼續打字會觸發 false running，雖然 user 已按批准、本來就應該是 running，但純粹噪音不算 evidence）
   - **排除 line 13 status line tick 噪音**（cursor blink / status text 自更新）
   - **mlab live verify 2026-05-01 已證**（kickoff 記憶 §3）：codex 0.125.0 idle TUI 完全靜態（1s + 2s 兩次 capture diff 空），無 timer / 無動畫；對話展開後 line 1-10 一定變化
-- **不**用 `IdleStableTicks` / armed flag 機制（v1 設計）。codex round 1 F1 finding：armed=ScreenStable 在 quick-approval 場景下會卡 waiting（user 在 dialog 渲染完之前批准 → streaming 期 ScreenChanged 全被 armed=false drop → streaming 穩定才 armed=true 但已無下一個變化）。**v2 改用 `probeGraceWindow=2s` 自然吸收 dialog 渲染噪音**：detector emit-once-and-return；emit 在 grace 內被 drop → consumeSignals F1 re-arm cycle → 直到 grace 過期第一個 ScreenChanged 通過 → status=running。dialog 渲染通常 <100ms，user 反應通常 ≥1s，grace=2s 安全 cover dialog render；user 批准後 status=running latency ≤ `grace_remaining + watch_poll(500ms)` ≤ 2.5s。
+- **不**用 `IdleStableTicks` / armed flag 機制（v1 設計）。codex round 1 F1：armed=ScreenStable 在 quick-approval 下卡 waiting。
+- **不**用 emit-once-and-return + dispatcher F1 re-arm 機制（v2 設計）。codex round 2 F1：fast/silent approval 場景（grace 期間所有 screen 變化發生 + 後續無變化）下，re-arm 後新 detector baseline 已是 post-change 螢幕，無下一個 diff → 仍卡 waiting。
+- **v3 改用 retry-emit pattern**：detector 用 `pending atomic.Bool` 記錄「至少一次 ScreenChanged 已被觀察」；main goroutine 每 retry interval（= watchPollInterval = 500ms）若 pending=true 則重發 Signal；dispatcher grace drop 期間反覆 retry，grace 過期後第一個 retry emit 通過 → status=running → ctx cancel → detector 退。fast/silent 場景下 pending 一旦 set 就持續 retry，不依賴 grace 後是否還有 ScreenChanged。
+- **`IsAliveFor("codex", paneID)` 取代 isPidAlive**（v3 修 codex round 2 F2 paneID identity）：emit 前驗 paneID 對應 pane_pid 子樹仍有 codex 進程；tmux server restart + paneID reuse 給 unrelated pane 場景下 pane_pid 不再是 codex 子樹 → 驗失敗 → drop。比 senderPID alive 嚴格。
 
 ### 0.5 與 fix-spec §3 的對齊
 
@@ -79,11 +82,11 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 
 1. **新 `ProbeIntentKindScreenChange`** 常數於 `internal/agent/provider.go`
 2. **新 detector** `internal/agent/codex/probe_intent_screen_change.go`：
-   - `StartScreenChangeDetector(ctx, prober, isPidAlive, paneID, senderPID, out)` — `isPidAlive` 注入為 minimal interface 便測試
+   - `StartScreenChangeDetector(ctx, prober, isCodexAlive, paneID, senderPID, out)`；`isCodexAlive func() bool` 注入為 closure（production: `func() bool { return prober.IsAliveFor("codex", paneID) }`；test: 注入 fake）
    - 內部用 `prober.Watch(paneID, WatchOptions{TopLines: 10}, cb)`
-   - **emit-once-and-return** pattern（與 ProcessDead 對稱）：第一個 ScreenChanged 收到時 callback emit Signal → close(emitted) → main goroutine `<-emitted` 解阻塞 → `prober.StopWatch(paneID)` + return → close(out) → consumeSignals 看 channel close 走 F1 re-arm decision
-   - **emit 前 senderPID liveness gate**：callback 在 send 前驗 `isPidAlive(senderPID)`；false → drop（codex 已死，讓 W6-3 ProcessDead 處理 clear/error；防 paneID reuse 後 false-positive，spec 11 review F2）
-   - Signal payload：`{Kind: ScreenChange, PaneAlive: true, PaneID, SenderPID}`
+   - **retry-emit** pattern（v3 — 修 codex round 2 F1）：callback 收 ScreenChanged + isCodexAlive=true → 設 `pending atomic.Bool=true`（不直接 emit）；main goroutine 每 `retryInterval`（= watchPollInterval = 500ms）若 pending=true 則用 select-with-ctx 嘗試 send Signal；dispatcher grace drop 期間反覆 retry，grace 過期後第一個 emit 通過 → status=running → dispatcher cancel ctx → detector 退
+   - **emit 前 paneID identity gate**（v3 — 修 codex round 2 F2）：`isCodexAlive()` 在 callback 內每次 ScreenChanged 都驗（不只 senderPID alive）；false → drop（pane 不再屬於 codex 進程，可能是 tmux restart + paneID reuse 場景）
+   - Signal payload 不變：`{Kind: ScreenChange, PaneAlive: true, PaneID, SenderPID}`
    - send 用 `select case out <- sig: case <-ctx.Done():` 防 ctx-cancel 後 send-on-closed-channel
 3. **`codex.Provider.ProbeIntents()`** 第二筆 entry：
    - `Kind: ProbeIntentKindScreenChange`
@@ -108,18 +111,19 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 
 | 編號 | 條件 |
 |---|---|
-| A1 | waiting 進入 → grace 過後第一個 ScreenChanged → status 切 running、ScreenChange entry teardown |
-| A2 | waiting 進入 → 2s 內無 screen change → grace 過後無 emit；status 維持 waiting；ProcessDead intent 仍 active |
-| A3 | waiting → idle (PdxStop hook) → detector 因 OnEntryStatus 退出被 dispatcher cancel + StopWatch + 不 emit |
-| A4 | waiting → 跨 provider 切換（agent_type 改，e.g. user 在同 session 換成 cc）→ reconcileSessionActive 取消 ScreenChange entry |
-| A5 | dialog 渲染期間 ScreenChanged 進來 → emit Signal → grace drop → consumeSignals F1 re-arm（cycle 持續直到 grace 過期；不卡 waiting）|
-| A6 | dispatcher cancel ctx 後 callback 仍可能 fire → select-with-ctx 防 leak（不 panic、不 send-on-closed-channel）|
+| A1 | waiting 進入 → 第一個 ScreenChanged + isCodexAlive=true → pending=true → main goroutine retry 直到 grace 過期第一個 emit 通過 → status=running、entry teardown |
+| A2 | waiting 進入 → 2s 內無 screen change → pending 仍 false → 無 emit；status 維持 waiting；ProcessDead intent 仍 active |
+| A3 | waiting → idle (PdxStop hook) → detector 因 OnEntryStatus 退出被 dispatcher cancel ctx → main goroutine select hits ctx.Done → StopWatch + return（pending=true 也不 emit，因 ctx 已 cancel） |
+| A4 | waiting → 跨 provider 切換（agent_type 改）→ reconcileSessionActive 取消 ScreenChange entry |
+| A5 | dialog 渲染期間多次 ScreenChanged 連發 → callback 反覆 set pending=true（idempotent）；main goroutine 反覆 retry-emit → grace drop 直到過期 → 通過 |
+| A6 | dispatcher cancel ctx 期間 main goroutine 在 emit select 內 → ctx.Done 路徑贏 → StopWatch + return（不 send-on-closed-channel） |
 | A7 | drift test 通過：startDetector switch case 數量 == supportedKinds 條目數 == ProbeIntents 宣告 Kind 集合 |
-| A8 | mlab live verify §1：codex permission ask → user 按 1 批准 → ≤2.5s lights running（含 grace=2s + 一個 watch tick=0.5s）|
+| A8 | mlab live verify §1：codex permission ask → user 按 1 批准 → ≤2.5s lights running（含 grace=2s + 一個 retry interval=0.5s）|
 | A9 | mlab live verify §2：codex permission ask → user 按 2 拒絕 → PdxStop hook fires → lights idle（不誤觸 running） |
 | A10 | mlab live verify §3：codex 在 waiting 時 user 主動關 pane → W6-4 ProcessDead PaneAlive=false → lights clear（ScreenChange detector 因 ctx cancel 退出） |
-| A11 | **quick approval（hook 後 0.5s 即按批准）**：detector 在 dialog-render 時 emit → grace drop → re-arm；grace 過後新 ScreenChanged → emit 通過 → status=running。Latency ≤ 2.5s。|
-| A12 | **paneID reuse 防護**：detector 在 emit 前 senderPID 已死 → drop（不 emit false running）；test 用 fake `isPidAlive` 注入 dead state |
+| A11 | **fast/silent approval**：grace 期間所有 screen 變化發生 + 後續無新變化 → pending=true 一旦 set 就持續 retry → grace 過期後 retry 通過 → status=running。Latency ≤ 2.5s。 |
+| A12 | **paneID identity 防護**：fake prober 注入 `IsAliveFor("codex", paneID)=false`（模擬 tmux restart + paneID reuse 給 unrelated pane）→ ScreenChanged 進 callback → drop → pending 維持 false → 無 emit |
+| A13 | **isCodexAlive recovers**：`IsAliveFor` 第一個 callback 回 false（transient tmux 查詢失敗）→ drop；下一個 callback 回 true → pending=true → retry-emit → 通過。詳見 §2.3 R7 |
 
 ---
 
@@ -128,12 +132,11 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 ### 2.1 必須
 
 - 新 detector 命名 `internal/agent/codex/probe_intent_screen_change.go`（W6-3 spec §0.1 + audit §7.1 約束 detector 歸 agent package）
-- detector 公開函式 `StartScreenChangeDetector(ctx, prober screenWatcher, isPidAlive func(int) bool, paneID string, senderPID int, out chan<- agent.Signal)`，與 `StartProcessDeadDetector` 對稱（`isPidAlive` 注入便測試）
+- detector 公開函式 `StartScreenChangeDetector(ctx, prober screenWatcher, isCodexAlive func() bool, paneID string, senderPID int, out chan<- agent.Signal)`，與 `StartProcessDeadDetector` 對稱（`isCodexAlive` 注入 closure 便測試 — production: `func() bool { return prober.IsAliveFor("codex", paneID) }`）
 - `screenWatcher` interface 是本 detector 包私有的 minimal contract，只暴露 `Watch(target, opts, cb)` + `StopWatch(target)` 兩個方法，**不直接 import `*probe.Prober`**——便於測試注入 fake，與 W6-3 `tmuxPaneLister` interface 同 pattern
-- detector **必須 emit-once-and-return**：第一個成功的 emit 後立即解阻塞 main goroutine、`prober.StopWatch(paneID)`、return；channel close → consumeSignals F1 re-arm 路徑可用（v2 修 codex F1）
-- callback 內 send Signal 必須 `select case out <- sig: case <-ctx.Done(): return`，防 ctx cancel 後 send-on-closed-channel
-- callback 在 send 前必須 `if !isPidAlive(senderPID) { return }`（v2 修 codex F2 paneID reuse race）
-- main goroutine `<-ctx.Done()` OR `<-emitted` 後必須 call `prober.StopWatch(paneID)` 才 return（避免 watcher 留在 prober.watchers map leak）
+- detector **採 retry-emit pattern**（v3）：callback 設 `pending atomic.Bool=true`；main goroutine 每 retryInterval（= 500ms = watchPollInterval）若 pending=true 用 select-with-ctx send Signal；ctx cancel 即 StopWatch + return
+- callback 在 set pending 前必須 `if !isCodexAlive() { return }`（v3 修 codex round 2 F2 paneID identity）
+- main goroutine 在 send select 與 ticker select 都必須 watch `<-ctx.Done()` → StopWatch + return（避免 watcher leak）
 - `Provider.ProbeIntents()` 回傳 slice 順序：`ProcessDead` 在前、`ScreenChange` 在後（穩定順序便於測試 fixture 對齊）
 
 ### 2.2 不可
@@ -142,21 +145,25 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 - ❌ 不在 detector 內讀 `m.currentStatus` 或 `m.activeProbeIntents`（dispatcher 已負責 lifecycle）
 - ❌ 不複用 `ProbeIntentKindProcessDead` 常數（語意不同，drift test 會抓）
 - ❌ 不在 `OnSignal` 內 emit log / metric（dispatcher consumeSignals 已 emit `[probe-intent] signal …`）
-- ❌ 不引入 `armed` flag / ScreenStable 消費機制（v2 撤回；codex F1 找到的死鎖場景）
-- ❌ 不依賴 detector 自己抗 dialog-render noise（grace window=2s 自然吸收；detector 一發 emit-once 走 dispatcher F1 re-arm cycle 即可）
+- ❌ 不引入 `armed` flag / ScreenStable 消費機制（v2 撤回；codex round 1 F1 死鎖）
+- ❌ 不採 emit-once-and-return + dispatcher F1 re-arm（v2 撤回；codex round 2 F1 fast/silent approval re-baseline 漏）
+- ❌ 不依賴 detector 自己抗 dialog-render noise；改靠 dispatcher graceWindow drop + main goroutine retry 自然 cover
+- ❌ 不在 detector 內讀 `m.currentStatus` 或 `m.activeProbeIntents`（dispatcher 已負責 lifecycle）
 
 ### 2.3 既知 race / edge case
 
 | ID | 場景 | 處置 |
 |---|---|---|
-| R1 | ctx cancel 後 prober callback 仍 fire 一兩次（500ms tick race）| out channel `select case out<-: case <-ctx.Done(): return`；callback 同時讀 `<-emitted` 防止已 emit 過再送 |
-| R2 | dialog 渲染期間連發 ScreenChanged | 第一個 emit → grace drop → consumeSignals applied=false → channel close → F1 re-arm；新 detector 重複，直到 grace 過期（典型 2s）第一個 emit 通過 |
-| R3 | callback 在 emit 與 close(emitted) 之間 race（兩 callback goroutine 同時 fire）| `sync.Once` or `atomic.Bool` 把 emit-and-close 包成 atomic；spec 內示意以 `sync.Once` |
-| R4 | dispatcher cancel ctx 與 callback emit 競賽 | `select case out<-: case <-ctx.Done():` — ctx cancel 贏 → drop；`out<-` 贏 → 後續 `<-emitted` 路徑解阻塞 |
+| R1 | ctx cancel 後 prober callback 仍 fire 一兩次（500ms tick race）| callback 設 pending atomic 不直接 send；main goroutine 在 ticker + send select 都 watch ctx.Done，cancel 後 return |
+| R2 | dialog 渲染期間連發 ScreenChanged | callback 反覆 set pending=true（atomic.Bool 冪等）；main goroutine 不論 retry 幾次 grace drop，grace 過期後第一個 retry 通過 |
+| R3 | retry interval 與 watchPollInterval 同（500ms），啟動瞬間 main ticker 與 watch ticker phase shift | 不影響 — pending 只要 set，下次 main ticker 就 retry；phase 不重要 |
+| R4 | dispatcher cancel ctx 與 main goroutine retry-send 競賽 | `select case out<-: case <-ctx.Done():` — ctx 贏 → 不 send + return；out 贏 → 下一輪 ticker 看 ctx.Done 退 |
 | R5 | W6-3 ProcessDead intent 與 W6-6 ScreenChange intent 同時 active | 不同 Kind，dispatcher per-(session, kind) 分槽；reconcile 只看 declaredKinds，不衝突 |
 | R6 | `prober.Watch(paneID, ...)` 與 W3-revert 後 production caller 為 0 的事實 | W6-6 是 W3 撤回後 `Prober.Watch` 的**第一個 production caller**；測試用 fake prober 即可，production 用 module.prober |
-| R7 | tmux server restart 導致 paneID 重用（codex F2）| callback emit 前驗 `isPidAlive(senderPID)`；server restart 期間原 codex 進程已死 → drop。production 接 `probe.IsPidAlive`（syscall.Kill(pid,0)）|
-| R8 | F1 re-arm 反覆執行造成 expvar 噪音 | 驗收條件 A11 要求 grace 過後 ≤2.5s 解；re-arm cycle 在 grace 期間每 tick 一次 = 最多 4 次（grace=2s, tick=500ms）；MetricProbeIntentStarted 多+4 可接受。devlog 開時可看到 cycle pattern。|
+| R7 | tmux server restart + paneID reuse + 原 codex pid 仍 alive 三重巧合（codex round 2 F2）| callback 內每次 ScreenChanged 都驗 `isCodexAlive()`（內部用 `Prober.IsAliveFor("codex", paneID)`：查 paneID 對應 pane_pid 子樹有無 codex 進程）；reused pane_pid 不在 codex 子樹 → drop |
+| R8 | retry-emit 反覆執行造成 dispatcher expvar 噪音 | grace 期間每 retryInterval(500ms) 一次 = 最多 4 次（grace=2s）。`MetricProbeIntentSignalEmitted` 多+4 +`MetricProbeGraceWindowSuppressed` 多+4 可接受；devlog 看得到 cycle pattern；**無 F1 re-arm cycle**（detector 不 close channel） |
+| R9 | `IsAliveFor` 內部 transient query failure（tmux 短暫無回應）| 該次 callback drop 不 set pending；下一個 callback 重試。watch tick 500ms cadence 下 transient 通常 1-2 tick 內恢復 |
+| R10 | main goroutine retry-send 阻塞 channel buffer=1 | dispatcher consumeSignals 在 grace drop 後 continue loop → 立刻 read next emit → 解 buffer 阻塞；最壞情況 retry-send block 一個 dispatcher cycle = ms 級 |
 
 ### 2.4 與 W6-3 spec drift signal 預警表的對照
 
@@ -232,7 +239,7 @@ func onScreenChange(sig agent.Signal) agent.Status {
 
 不檢 `PaneAlive`（語意上 ScreenChange Kind 必然 PaneAlive=true，detector contract 保證；額外 check 是 dead code 噪音）。
 
-### 4.3 Detector：`StartScreenChangeDetector`（v2，emit-once + senderPID gate）
+### 4.3 Detector：`StartScreenChangeDetector`（v3，retry-emit + paneID identity gate）
 
 ```go
 // internal/agent/codex/probe_intent_screen_change.go
@@ -240,7 +247,8 @@ package codex
 
 import (
     "context"
-    "sync"
+    "sync/atomic"
+    "time"
 
     "github.com/wake/purdex/internal/agent"
     "github.com/wake/purdex/internal/agent/probe"
@@ -259,73 +267,101 @@ type screenWatcher interface {
 // detector observes only conversation flow (mlab live verify 2026-05-01).
 const screenChangeTopLines = 10
 
+// screenChangeRetryInterval is the cadence at which the main goroutine
+// re-attempts to emit Signal while pending=true. Set to watchPollInterval
+// (500ms) so retry roughly tracks the watch loop's own observation cadence
+// — no point retrying faster than the watcher can refresh its baseline.
+// Tests override via SetScreenChangeRetryIntervalForTest.
+var screenChangeRetryInterval atomic.Int64 // nanos
+
+func init() {
+    screenChangeRetryInterval.Store(int64(500 * time.Millisecond))
+}
+
+func currentScreenChangeRetryInterval() time.Duration {
+    return time.Duration(screenChangeRetryInterval.Load())
+}
+
 // StartScreenChangeDetector watches the codex pane for top-10-line content
-// change and emits a single Signal on the first ScreenChanged event whose
-// senderPID is still alive. Behaviour mirrors StartProcessDeadDetector:
-// emit-once-and-return so consumeSignals can run F1 re-arm if the dispatcher
-// drops the signal (e.g. probeGraceWindow). Cancel ctx to stop early.
+// change and persistently re-emits a Signal while at least one ScreenChanged
+// has been observed and the codex process is still attached to the pane.
+// Cancel ctx to stop the watcher and exit.
 //
-// Why no armed/ScreenStable consumer (v2 — codex round 1 F1 finding):
-// In quick-approval flows, the user can dismiss the permission dialog before
-// the watcher sees a ScreenStable, leaving armed=false through the entire
-// post-approval streaming sequence. v2 instead lets dispatcher's existing
-// 2-second probeGraceWindow absorb dialog-render noise: every ScreenChanged
-// fires Signal once, returns; if the dispatcher drops it within grace,
-// consumeSignals re-arms a fresh detector — until grace expires the next
-// ScreenChanged passes and flips status to running.
+// Why retry-emit (v3 — codex round 2 F1 finding):
+//   v2 emit-once-and-return relied on consumeSignals' F1 re-arm to retry
+//   after grace drop. F1 re-arm baselines a fresh watcher, so the
+//   "fast/silent approval" path (all visible diffs land within the 2s
+//   grace, then no further ScreenChanged) loses the only observed signal.
+//   v3 keeps the detector alive across grace; the main goroutine periodically
+//   re-attempts the send, so even if the dispatcher drops the first emit,
+//   the next retry after grace expiry passes through.
 //
-// Why senderPID liveness gate (v2 — codex round 1 F2):
-// tmux server restart can reuse pane id %N for an unrelated pane. The
-// detector validates the original codex sender PID is still alive before
-// emitting; pid-dead means the codex process has gone, so dispatch should
-// flow through W6-3 ProcessDead instead.
+// Why isCodexAlive paneID identity gate (v3 — codex round 2 F2):
+//   senderPID liveness is insufficient: a tmux server restart can reuse
+//   pane id %N while the original codex process happens to still be alive.
+//   isCodexAlive (production: prober.IsAliveFor("codex", paneID)) verifies
+//   the pane_pid descendant tree of paneID currently contains a codex
+//   process, so a reused %N attached to an unrelated shell drops.
 func StartScreenChangeDetector(
     ctx context.Context,
     prober screenWatcher,
-    isPidAlive func(int) bool,
+    isCodexAlive func() bool,
     paneID string,
     senderPID int,
     out chan<- agent.Signal,
 ) {
-    emitted := make(chan struct{})
-    var once sync.Once
+    var pending atomic.Bool
+    sig := agent.Signal{
+        Kind:      agent.ProbeIntentKindScreenChange,
+        PaneAlive: true,
+        PaneID:    paneID,
+        SenderPID: senderPID,
+    }
     cb := func(ev probe.ScreenChangeEvent) {
         if ev.Kind != probe.ScreenChanged {
             return
         }
-        // F2 gate: codex pid still alive? otherwise let ProcessDead handle.
-        if !isPidAlive(senderPID) {
+        // F2 gate: pane_pid subtree still has a codex process? otherwise
+        // we may be observing an unrelated pane that reused %N.
+        if !isCodexAlive() {
             return
         }
-        once.Do(func() {
-            select {
-            case out <- agent.Signal{
-                Kind:      agent.ProbeIntentKindScreenChange,
-                PaneAlive: true,
-                PaneID:    paneID,
-                SenderPID: senderPID,
-            }:
-                close(emitted)
-            case <-ctx.Done():
-            }
-        })
+        pending.Store(true)
     }
     prober.Watch(paneID, probe.WatchOptions{TopLines: screenChangeTopLines}, cb)
-    select {
-    case <-emitted:
-    case <-ctx.Done():
+
+    ticker := time.NewTicker(currentScreenChangeRetryInterval())
+    defer ticker.Stop()
+    for {
+        select {
+        case <-ctx.Done():
+            prober.StopWatch(paneID)
+            return
+        case <-ticker.C:
+            if !pending.Load() {
+                continue
+            }
+            select {
+            case out <- sig:
+                // Dispatcher either applies (cancelling ctx via teardown)
+                // or grace-drops; on the next ticker we retry.
+            case <-ctx.Done():
+                prober.StopWatch(paneID)
+                return
+            }
+        }
     }
-    prober.StopWatch(paneID)
 }
 ```
 
-**emit-once 機制細節**：
+**retry-emit 機制細節**：
 
-- `sync.Once` 保證 emit + close(emitted) 是 atomic — 多個 callback goroutine 同時 fire 時只一個進 critical section
-- main goroutine 等 `<-emitted` 或 `<-ctx.Done()`，任一觸發就 StopWatch + return
-- `out` channel buffer=1（dispatcher 提供）；callback select 同時等 `<-ctx.Done()`，ctx cancel 場景下不會 send-on-closed
-- emit-once-and-return 使 consumeSignals 在 grace drop 時看到 `range in` 終止 + `appliedAny=false` → F1 re-arm 路徑生效
-- ScreenStable event 直接忽略（不 set armed flag、不 emit；只用 ScreenChanged）
+- `pending atomic.Bool`：callback 觀察到 ScreenChanged + isCodexAlive=true 後設 true。set 是 idempotent — 多個 callback fires 都 OK
+- main goroutine ticker 每 retryInterval（500ms）檢查 pending。pending=false → continue（沒有 user-action 信號）
+- pending=true → select-with-ctx send Signal；dispatcher grace drop → 下個 ticker 再 send；grace 過後 → applied=true → cancel ctx → main goroutine 在下次 select 看 ctx.Done → StopWatch + return
+- ScreenStable event 直接忽略（不 set pending、不 emit）
+- channel buffer=1（dispatcher 提供）：retry 期間 dispatcher consumeSignals 反覆 read + grace drop，buffer 不會卡（每次 send 立刻被 read）
+- detector 不 close channel；ctx cancel 後 startDetector 的 wrap goroutine 才 close — F1 re-arm path 不被觸發（appliedAny=true 已退）
 
 ### 4.4 為何用 `paneID` 作 prober.Watch target
 
@@ -350,7 +386,10 @@ m.probeIntentDisp.startDetector = func(
     case agentpkg.ProbeIntentKindProcessDead:
         codex.StartProcessDeadDetector(ctx, mod.tmux, paneID, senderPID, out)
     case agentpkg.ProbeIntentKindScreenChange:
-        codex.StartScreenChangeDetector(ctx, mod.prober, probe.IsPidAlive, paneID, senderPID, out)
+        // closure binds paneID into IsAliveFor target so the detector signature
+        // stays {ctx, prober, isCodexAlive(), paneID, senderPID, out}.
+        isCodexAlive := func() bool { return mod.prober.IsAliveFor("codex", paneID) }
+        codex.StartScreenChangeDetector(ctx, mod.prober, isCodexAlive, paneID, senderPID, out)
     default:
         defaultStartProbeIntentDetector(ctx, mod, kind, paneID, senderPID, out)
     }
@@ -387,8 +426,8 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 | Task | 檔案 | 內容 |
 |---|---|---|
 | P1-T1 | `internal/agent/provider.go` | 加 `ProbeIntentKindScreenChange` const + GoDoc |
-| P1-T2 | `internal/agent/codex/probe_intent_screen_change.go` | 新檔：`screenWatcher` interface + `StartScreenChangeDetector(ctx, prober, isPidAlive, paneID, senderPID, out)` |
-| P1-T3 | `internal/agent/codex/probe_intent_screen_change_test.go` | 表驅動 tests：(1) ScreenChanged + pid alive → emit Signal once / (2) multiple ScreenChanged → 只 emit 一次（sync.Once）/ (3) ScreenStable 忽略（不 emit）/ (4) pid dead → drop（不 emit；F2 gate）/ (5) ctx cancel before emit → main goroutine StopWatch + return / (6) ctx cancel after emit → return（emitted 已 close）/ (7) emit 後 callback 仍 fire → sync.Once 保證 no-op |
+| P1-T2 | `internal/agent/codex/probe_intent_screen_change.go` | 新檔：`screenWatcher` interface + `screenChangeRetryInterval` atomic + `StartScreenChangeDetector(ctx, prober, isCodexAlive, paneID, senderPID, out)` |
+| P1-T3 | `internal/agent/codex/probe_intent_screen_change_test.go` | 表驅動 tests：(1) ScreenChanged + isCodexAlive=true → 下個 ticker emit Signal / (2) ScreenStable 忽略 / (3) isCodexAlive=false → drop（pending 不 set）/ (4) multiple ScreenChanged → pending idempotent / (5) ctx cancel before pending → ticker 路徑 ctx.Done 退 / (6) ctx cancel during retry-send → select-with-ctx ctx 路徑贏 / (7) retry across grace (用 fake retry interval + 控制 dispatcher channel consume race) — emit 多次直到 applied / (8) drift： `screenChangeRetryInterval` 是測試 seam 不影響 production 1Hz 級別 |
 | P1-T4 | `internal/agent/codex/provider.go` | `ProbeIntents()` 加第二筆 + 新 `onScreenChange` mapper |
 | P1-T5 | `internal/agent/codex/provider_test.go` | 擴 fixture：ProbeIntents 長度 2、第二筆 Kind/OnEntryStatus/OnSignal 對齊；onScreenChange 三 case（match→Running / 非 ScreenChange Kind→"" / nil → ""） |
 
@@ -404,7 +443,7 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 
 | Task | 檔案 | 內容 |
 |---|---|---|
-| P3-T1 | `internal/module/agent/probe_intent_dispatcher_integration_test.go` | 端到端 lifecycle：(a) waiting hook → arm → fake event → grace 過後 status=running + teardown / (b) **A11 quick-approval cycle**：waiting hook → fake ScreenChanged 在 grace 內 → grace drop → re-arm → 再 ScreenChanged → grace 已過 → status=running / (c) waiting → idle hook → teardown 不 emit / (d) cross-provider switch → reconcile teardown / (e) **A12 paneID reuse 防護**：注入 isPidAlive=false → ScreenChanged → no Signal |
+| P3-T1 | `internal/module/agent/probe_intent_dispatcher_integration_test.go` | 端到端 lifecycle：(a) waiting hook → arm → fake event → grace 過後 retry emit 通過 → status=running + teardown / (b) **A11 fast/silent approval**：waiting hook → 一個 ScreenChanged 在 grace 內 → 之後再無 event → main goroutine 持續 retry → grace 過後 retry 通過 → status=running / (c) waiting → idle hook → teardown 不 emit / (d) cross-provider switch → reconcile teardown / (e) **A12 paneID identity 防護**：fake prober 注入 IsAliveFor=false → ScreenChanged 進 callback → drop / (f) **A13 isCodexAlive transient recovery**：第一個 callback IsAliveFor=false drop，第二個 true → pending → retry-emit → 通過 |
 | P3-T2 | mlab live verify | §1 approval reply / §2 reject reply / §3 close pane during waiting；建 dev log + screenshot 證據；spec → plan 階段 placeholder，PR body §test plan checklist 條列 |
 
 ---
@@ -430,6 +469,8 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 | 想擴 `Signal` struct 多欄位 | 同上；PaneAlive=true 對 ScreenChange 已是合理常量 |
 | 想引入 sustained-change counter（連續 N tick 才 emit） | mlab live verify 已證 idle TUI 完全靜態 + scroll 不影響 capture-pane；counter 是預先優化雜訊 |
 | 想恢復 `armed` flag / ScreenStable 消費機制 | v1 採用、codex round 1 F1 已抓到 quick-approval race；v2 撤回 |
+| 想恢復 emit-once-and-return + dispatcher F1 re-arm | v2 採用、codex round 2 F1 已抓到 fast/silent approval re-baseline 漏；v3 改 retry-emit |
+| 想恢復 isPidAlive 單獨 check（不查 paneID identity） | v2 採用、codex round 2 F2 已抓到 paneID reuse 漏；v3 改 isCodexAlive=IsAliveFor("codex", paneID) |
 | 想 generalize 為 「per-agent ScreenChangeProfile」（cc / opencode 也用） | fix-spec §3 撤回 framework；W6-1b cc 已降級不做、W6-5 opencode 走 plugin |
 | 想 detector 內部直接讀 `m.activeProbeIntents` / `m.currentStatus` | dispatcher 已負責 lifecycle；detector 只發 Signal |
 | 想抓 codex 特定 glyph / 字串 pattern（spinner / "Approved." / etc）| audit §7.1：agent 改 TUI 即 break；fix-spec 撤回 |
@@ -467,12 +508,13 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 
 1. **`screenWatcher` interface 暴露面** ✅ — 只暴露 Watch / StopWatch 足夠；整合測試驗 status 翻轉而非 prober 內部狀態。
 2. **`OnEntryStatus = {Waiting}`** ✅ — 不含 Running；running 已是目標，ScreenChange running→running 是 noop 但會 spam log。
-3. **F1 re-arm 互動（v2 改變角色）** ✅ — F1 re-arm 在 v2 設計裡是 **核心機制**：detector emit-once-and-return → consumeSignals 看 channel close → 若 appliedAny=false（grace drop）→ re-run applyStatus → 新 detector arm。grace 過後第一個 emit 通過。re-arm 在 ScreenChange 路徑不再是 "harmless edge case"，而是必要的 dialog-noise-suppression 機制（codex F1 finding 收斂後的設計）。
-4. **`prober` 在 Init 後才 ready** ✅ — closure 用 `mod.prober` lazy-resolve；Module.New 順序與 tmux 同模式（W6-3 已驗）。`probe.IsPidAlive` 是 package-level function 直接 ref（無 lazy 問題）。
+3. **F1 re-arm 互動（v3 不再依賴）** ✅ — v2 emit-once 依賴 F1 re-arm；v3 retry-emit pattern detector 自己跨 grace 持續 retry，不再走 F1 re-arm 路徑。F1 在 ScreenChange 路徑變回 dormant edge case（appliedAny=true 退；只有 detector 啟動後 0 callback 收到的奇案會走 F1 — but ScreenChange OnEntryStatus={Waiting} 退場時 F1 fix 重 arm 也只會走 case 1 noop）。
+4. **`prober` 在 Init 後才 ready** ✅ — closure 用 `mod.prober` lazy-resolve；Module.New 順序與 tmux 同模式（W6-3 已驗）。
 
-### 11.1 v2 後仍 open（給 round 2 review）
+### 11.1 v3 後仍 open（給 round 3 review）
 
-- **F1 re-arm 上限**：grace 期間理論上反覆 emit→drop→re-arm；每 watch_poll(500ms) 一次 = 最多 4 cycle / 2s grace。expvar `MetricProbeIntentStarted` / `MetricProbeIntentSignalEmitted` 多+4 在 dev mode 是 noise pattern；production 不影響功能。是否需要 cap？傾向不需要（CycleCount=4 上限固定，grace 過後自然停止）。
-- **A11 acceptance test 可重現性**：integration test 注入 `orchNowFn` 推進虛擬時間使 grace 過期；W6-3 既有 OR4 test 已用此 pattern。直接複用。
-- **F2 paneID reuse 完整 coverage**：原 codex F2 提的「tmux server restart」是極端 case；本 spec 修法靠 isPidAlive 攔截（emit 前一刻原 codex pid 已死的話 drop）。但若 tmux 重啟期間 pid 仍 alive（codex 不依賴 tmux server）+ paneID 真的 reuse，理論仍可能 false positive。實務上 codex 通常在自己的 tmux pane 裡跑、tmux server 死意味著 pane 也死、pid 跟著被 SIGHUP — pid alive 同時 paneID reuse 的概率近零。spec 接受此 known limitation 作 production rare-event。
+- **retry-emit 期間 channel buffer 阻塞**：dispatcher consumeSignals 在 grace drop applied=false 後 continue loop → 立即 read next emit；channel buffer=1 不卡。但若 dispatcher 因為其他原因 slow（鎖競爭）→ retry-send block 一個 dispatcher cycle。production 不應該；但 race-mode test 可能 flaky。需要設計 test fixture 控制 channel consume 節奏。
+- **expvar 噪音 cap**：每 retry interval(500ms) 一次 emit + grace drop = `MetricProbeIntentSignalEmitted` 與 `MetricProbeGraceWindowSuppressed` 在 grace 期間多+4。devlog 看 cycle pattern。production OK；W6-3 spec 已類似 noise 接受。
+- **A11 / A12 / A13 test 可重現性**：integration test 注入 `orchNowFn` 推進虛擬時間使 grace 過期；W6-3 既有 OR4 test pattern 直接複用。`screenChangeRetryInterval` atomic test seam 模仿 W6-3 `processDeadPollInterval`。
+- **F2 paneID identity 是否完整**：v3 用 `Prober.IsAliveFor("codex", paneID)` 內部查 pane_pid 子樹有 codex 進程。tmux server restart + paneID reuse + 原 codex 仍 alive 場景下，新 pane_pid 的子樹不再有 codex（codex 物理上不在那個 pane）→ IsAliveFor=false → drop。剩下唯一可能 false-positive 的場景：**reused pane 內**有別的 codex 進程（user 自己另開了一個 codex）— 此情況 ScreenChange running 反映的是另一個 codex 的活動，但 dispatcher 將其 attribute 給原 session（waiting → running）。極端罕見但理論存在。可接受作 known limitation。
 
