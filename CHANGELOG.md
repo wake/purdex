@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.278] - 2026-05-01
+
+### Fix(daemon): drop sweep idle_timeout — alive idle session no longer cleared (#788)
+
+Removes `sweep.go` path 3 (`idle_timeout`) which marked frames as cleared when their PID was still alive but no hook had bumped `LastSeenAt` for ≥ 1 hour. The invariant was wrong: cc / codex / opencode are long-running processes and an idle session for an hour is normal usage — not a "logically dead" agent. True process death is already covered by `pid_dead` (PID gone) and `pid_reused` (`process_start_time` mismatch) without time bound. The 1h destructive sweep led to all SPA tab lights being silently cleared after a quiet hour even though every agent was still running; `clearSession` then dropped the keyed status map entry and indicator dots stopped rendering until the next hook landed.
+
+`frameIdleThreshold` const is removed. `nowFn` is preserved (still consumed by `canonicalizePane` / `pruneDeadProxyRefs` / `afterFrameCleared` for deterministic broadcast timestamps in tests). Future SPA-side idle-duration display goes through `frame.LastSeenAt → broadcast → SPA` directly (issue #787) and does not require sweep-side detection.
+
+Tests: IS1 rewritten as inverted invariant (`alive + identity-verified frame with stale LastSeenAt is preserved + emits zero broadcast`); IS2 / IS3 / IS5 / IS6 deleted (all defensive against the removed path); pid_dead orphan watcher cleanup still covered by IS4; `setProjectionTopStatus` narrow-update contract still covered by IS7.
+
 ## [1.0.0-alpha.277] - 2026-04-30
 
 ### Fix(spa): W6-LightsUI 4 lights polish (#783)
