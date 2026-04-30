@@ -1,0 +1,1 @@
+12345 1 2026-05-01 13:14:15 36000 node /scripts/app-server-broker.mjs serve --cwd /home/user/work --endpoint unix:/tmp/cxc-XYZ/broker.sock --pid-file /tmp/cxc-XYZ/broker.pid

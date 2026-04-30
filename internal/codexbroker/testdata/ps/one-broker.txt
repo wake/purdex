@@ -1,0 +1,3 @@
+12345 1 Thu May  1 13:14:15 2026 36000 node /Users/wake/.claude/plugins/cache/openai-codex/codex/1.0.2/scripts/app-server-broker.mjs serve --cwd /Users/wake/Workspace/wake/purdex --endpoint unix:/var/folders/aa/bb/T/cxc-ABCDEF/broker.sock --pid-file /var/folders/aa/bb/T/cxc-ABCDEF/broker.pid
+67890 12345 Thu May  1 13:14:16 2026 34000 node /usr/bin/codex app-server
+99999 67890 Thu May  1 13:14:17 2026 59000 codex --some-arg
