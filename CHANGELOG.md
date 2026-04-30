@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.276] - 2026-04-30
+
+### Perf(daemon): hook pipeline fast-path + sqlite tail tuning (#776)
+
+Cuts daemon hook hot-path latency from ~5s to ≤1s on 5/6 measured chains by adding a `resolveSessionCode` fast path that bypasses tmux subprocess fan-out, lowering sqlite `busy_timeout` from 5000ms to 500ms with a 4/4 connection pool cap, and threading the immutable tmux `session_id` through the hook payload (option A) so the daemon resolves session code via `EncodeSessionID` rather than the name cache. Three layers of name-cache invalidation (HTTP handlers, watcher tickNormal hash-change, watcher broadcastSessions wait-for) keep the fallback path race-free.
+
+Four rounds of codex review surfaced six findings, all addressed: stale name reuse race (consumed by option A), 5s busy_timeout amplifying contention lag, decorator wrapping hiding fast-path activation, PathHint still routing through name path, reason-log path label missing, and mismatched ID/name split-state contract. Follow-up issues #781 (system-wide session_id-keyed identity) and #782 (microsecond timing in daemon log) track residual work.
+
+### Fix(spa): W6-LightsUI 4 lights polish (#783)
+
+Closes #762. Four self-contained SPA lights fixes after W1 audit + W6-3+W6-4 ship: `useAgentStore` clears leftover unread when status flips to running so a background tab marked unread by a prior waiting/idle no longer keeps the red dot indefinitely; `TabStatusIndicator` overlay dot drops `animate-breathe` when `isUnread` so the unread tint stays static; `TabStatusIndicator` switches `WarningDiamond` weight from `duotone` to `fill` for crisper error rendering; `SubagentDots` now colors by `is_proxy` (proxy = orange, native = blue) instead of agent type family and drops the hollow-ring proxy variant since the parent agent icon already conveys type.
+
 ## [1.0.0-alpha.275] - 2026-04-30
 
 ### Feat(spa): add performance monitor settings page (#779)
