@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryMonitorPage } from './MemoryMonitorPage'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useHostStore } from '../stores/useHostStore'
@@ -7,6 +7,7 @@ import { useTabStore } from '../stores/useTabStore'
 import {
   fetchMonitorConfig,
   fetchMonitorSnapshot,
+  updateMonitorConfig,
   type MonitorConfig,
   type MonitorSnapshot,
 } from '../lib/host-api'
@@ -15,6 +16,7 @@ import type { PaneContent, Tab } from '../types/tab'
 vi.mock('../lib/host-api', () => ({
   fetchMonitorConfig: vi.fn(),
   fetchMonitorSnapshot: vi.fn(),
+  updateMonitorConfig: vi.fn(),
 }))
 
 const HOST_ID = 'host-a'
@@ -52,6 +54,7 @@ describe('MemoryMonitorPage', () => {
     useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
     vi.mocked(fetchMonitorConfig).mockResolvedValue(monitorConfig)
     vi.mocked(fetchMonitorSnapshot).mockResolvedValue(monitorSnapshot)
+    vi.mocked(updateMonitorConfig).mockResolvedValue(monitorConfig)
   })
 
   afterEach(() => {
@@ -78,6 +81,230 @@ describe('MemoryMonitorPage', () => {
     expect(screen.getByText('1 KB / 4 KB')).toBeInTheDocument()
     expect(screen.getByText('Refresh: 5s')).toBeInTheDocument()
     expect(screen.getByText(/Sampled:/)).toBeInTheDocument()
+  })
+
+  it('renders monitor settings controls from daemon config bounds', async () => {
+    render(<MemoryMonitorPage />)
+
+    expect(await screen.findByRole('group', { name: 'Monitor Settings' })).toBeInTheDocument()
+    const refreshInput = screen.getByLabelText('Refresh interval seconds')
+    const topLimitInput = screen.getByLabelText('Top process limit')
+    expect(refreshInput).toHaveValue(5)
+    expect(refreshInput).toHaveAttribute('min', '1')
+    expect(refreshInput).toHaveAttribute('max', '60')
+    expect(topLimitInput).toHaveValue(10)
+    expect(topLimitInput).toHaveAttribute('min', '1')
+    expect(topLimitInput).toHaveAttribute('max', '50')
+  })
+
+  it('updates monitor config controls through the active host', async () => {
+    vi.mocked(updateMonitorConfig).mockResolvedValue({
+      ...monitorConfig,
+      refresh_interval_ms: 12000,
+      top_process_limit: 20,
+    })
+    render(<MemoryMonitorPage />)
+
+    const refreshInput = await screen.findByLabelText('Refresh interval seconds')
+    fireEvent.change(refreshInput, { target: { value: '12' } })
+    fireEvent.change(screen.getByLabelText('Top process limit'), { target: { value: '20' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+
+    await waitFor(() => expect(updateMonitorConfig).toHaveBeenCalledWith(HOST_ID, {
+      refresh_interval_ms: 12000,
+      top_process_limit: 20,
+    }))
+    expect(await screen.findByText('Refresh: 12s')).toBeInTheDocument()
+    expect(screen.getByLabelText('Top process limit')).toHaveValue(20)
+  })
+
+  it('does not overwrite dirty monitor setting drafts during polling refreshes', async () => {
+    const fastConfig = { ...monitorConfig, refresh_interval_ms: 10 }
+    vi.mocked(fetchMonitorConfig).mockResolvedValue(fastConfig)
+    render(<MemoryMonitorPage />)
+
+    const refreshInput = await screen.findByLabelText('Refresh interval seconds')
+    fireEvent.change(refreshInput, { target: { value: '12' } })
+
+    await waitFor(() => expect(vi.mocked(fetchMonitorSnapshot).mock.calls.length).toBeGreaterThanOrEqual(2))
+    expect(refreshInput).toHaveValue(12)
+  })
+
+  it('reloads monitor data immediately after applying a new refresh interval', async () => {
+    const slowConfig = { ...monitorConfig, refresh_interval_ms: 60000 }
+    vi.mocked(fetchMonitorConfig).mockResolvedValue(slowConfig)
+    vi.mocked(updateMonitorConfig).mockResolvedValue({ ...slowConfig, refresh_interval_ms: 12000 })
+    render(<MemoryMonitorPage />)
+
+    const refreshInput = await screen.findByLabelText('Refresh interval seconds')
+    fireEvent.change(refreshInput, { target: { value: '12' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+
+    await waitFor(() => expect(updateMonitorConfig).toHaveBeenCalled())
+    await waitFor(() => expect(fetchMonitorConfig).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not submit blank monitor setting drafts', async () => {
+    render(<MemoryMonitorPage />)
+
+    const refreshInput = await screen.findByLabelText('Refresh interval seconds')
+    fireEvent.change(refreshInput, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+
+    expect(updateMonitorConfig).not.toHaveBeenCalled()
+    expect(refreshInput).toHaveValue(5)
+  })
+
+  it('hides monitor settings while the same active host id reloads for a changed endpoint', async () => {
+    vi.mocked(fetchMonitorSnapshot).mockImplementation((hostId) => {
+      const currentHost = useHostStore.getState().hosts[hostId]
+      if (currentHost?.ip === '100.64.0.22') return new Promise<MonitorSnapshot>(() => {})
+      return Promise.resolve(monitorSnapshot)
+    })
+    render(<MemoryMonitorPage />)
+
+    expect(await screen.findByRole('group', { name: 'Monitor Settings' })).toBeInTheDocument()
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.22', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Monitor Settings' })).not.toBeInTheDocument())
+  })
+
+  it('ignores a pending config update result after the active host endpoint changes', async () => {
+    let resolveUpdate: (config: MonitorConfig) => void = () => {}
+    vi.mocked(updateMonitorConfig).mockReturnValue(new Promise((resolve) => {
+      resolveUpdate = resolve
+    }))
+    vi.mocked(fetchMonitorSnapshot).mockImplementation((hostId) => {
+      const currentHost = useHostStore.getState().hosts[hostId]
+      if (currentHost?.ip === '100.64.0.22') return new Promise<MonitorSnapshot>(() => {})
+      return Promise.resolve(monitorSnapshot)
+    })
+    render(<MemoryMonitorPage />)
+
+    const refreshInput = await screen.findByLabelText('Refresh interval seconds')
+    fireEvent.change(refreshInput, { target: { value: '12' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+    await waitFor(() => expect(updateMonitorConfig).toHaveBeenCalled())
+
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.22', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    resolveUpdate({ ...monitorConfig, refresh_interval_ms: 12000 })
+
+    await waitFor(() => expect(screen.queryByText('Refresh: 12s')).not.toBeInTheDocument())
+  })
+
+  it('ignores a pending config update rejection after the active host endpoint changes', async () => {
+    let rejectUpdate: (error: Error) => void = () => {}
+    vi.mocked(updateMonitorConfig).mockReturnValue(new Promise((_, reject) => {
+      rejectUpdate = reject
+    }))
+    vi.mocked(fetchMonitorSnapshot).mockImplementation((hostId) => {
+      const currentHost = useHostStore.getState().hosts[hostId]
+      if (currentHost?.ip === '100.64.0.22') return new Promise<MonitorSnapshot>(() => {})
+      return Promise.resolve(monitorSnapshot)
+    })
+    render(<MemoryMonitorPage />)
+
+    const refreshInput = await screen.findByLabelText('Refresh interval seconds')
+    fireEvent.change(refreshInput, { target: { value: '12' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+    await waitFor(() => expect(updateMonitorConfig).toHaveBeenCalled())
+
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.22', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    rejectUpdate(new Error('old endpoint failed'))
+
+    await waitFor(() => expect(screen.queryByText('Unable to load monitor data: old endpoint failed')).not.toBeInTheDocument())
+  })
+
+  it('ignores a pending config update result after switching active hosts', async () => {
+    let resolveUpdate: (config: MonitorConfig) => void = () => {}
+    vi.mocked(updateMonitorConfig).mockReturnValue(new Promise((resolve) => {
+      resolveUpdate = resolve
+    }))
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    render(<MemoryMonitorPage />)
+
+    const refreshInput = await screen.findByLabelText('Refresh interval seconds')
+    fireEvent.change(refreshInput, { target: { value: '12' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+    await waitFor(() => expect(updateMonitorConfig).toHaveBeenCalled())
+
+    useHostStore.setState({ activeHostId: 'host-b' })
+    resolveUpdate({ ...monitorConfig, refresh_interval_ms: 12000 })
+
+    await waitFor(() => expect(screen.queryByText('Refresh: 12s')).not.toBeInTheDocument())
+  })
+
+  it('does not disable the new active host settings while another host update is pending', async () => {
+    vi.mocked(updateMonitorConfig).mockReturnValue(new Promise(() => {}))
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    render(<MemoryMonitorPage />)
+
+    const refreshInput = await screen.findByLabelText('Refresh interval seconds')
+    fireEvent.change(refreshInput, { target: { value: '12' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Applying...' })).toBeDisabled())
+
+    useHostStore.setState({ activeHostId: 'host-b' })
+
+    expect(await screen.findByRole('button', { name: 'Apply monitor settings' })).not.toBeDisabled()
+  })
+
+  it('keeps each host endpoint disabled while its own update is pending', async () => {
+    vi.mocked(updateMonitorConfig).mockReturnValue(new Promise(() => {}))
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Host A', ip: '100.64.0.1', port: 7860, order: 0 },
+        'host-b': { id: 'host-b', name: 'Host B', ip: '100.64.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_ID, 'host-b'],
+      activeHostId: HOST_ID,
+      runtime: {},
+    })
+    render(<MemoryMonitorPage />)
+
+    fireEvent.change(await screen.findByLabelText('Refresh interval seconds'), { target: { value: '12' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Applying...' })).toBeDisabled())
+
+    useHostStore.setState({ activeHostId: 'host-b' })
+    fireEvent.change(await screen.findByLabelText('Refresh interval seconds'), { target: { value: '15' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply monitor settings' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Applying...' })).toBeDisabled())
+
+    useHostStore.setState({ activeHostId: HOST_ID })
+
+    expect(await screen.findByRole('button', { name: 'Applying...' })).toBeDisabled()
   })
 
   it('shows stable unavailable reasons when host metrics are unavailable', async () => {
