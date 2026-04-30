@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.275] - 2026-04-30
+
+### Feat(spa): add performance monitor settings page (#779)
+
+Moves Performance Monitor discovery into Settings as a module-owned page while keeping the existing `memory-monitor` module id and pane renderer for restore compatibility. The settings page is hidden when the monitor module is disabled.
+
+Performance Monitor is no longer offered as pane replacement content from `NewPanePage`, matching the settings-first entry point.
+
 ## [1.0.0-alpha.274] - 2026-04-30
 
 ### Feat(agent): W6-3+W6-4 codex error/clear ad-hoc ProbeIntent — first per-agent probe (#765)
