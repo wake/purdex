@@ -74,6 +74,66 @@ func TestHandleEvent_DoesNotEmitPathHintForBashTool(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_PathHintUsesIDPathWhenPresent pins the round-3 finding-1
+// fix: the cc PreToolUse / PostToolUse path-hint emit branch must resolve
+// its session code via the same immutable-ID path as emitHookToSession.
+//
+// Setup: the fake session provider's name cache is deliberately seeded
+// with a "stale-code" entry for the tmux session "alpha" — simulating the
+// kill-then-recreate name-reuse window where the cache still points at the
+// previous incarnation's code. The hook payload carries the new tmux
+// session ID "$5". A regression that reverts to resolveSessionCode(name)
+// would broadcast the path hint to "stale-code" (wrong SPA session).
+// Asserting we receive it on the EncodeSessionID("$5") code proves the ID
+// path is wired into path-hint emission.
+func TestHandleEvent_PathHintUsesIDPathWhenPresent(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "alpha")
+	m.tmux = fakeTmux
+	// Seed BOTH the cache-style lookup and ListSessions with stale data:
+	// any name-resolution path returns "stale-code". Only the ID path
+	// produces the expected EncodeSessionID("$5") result.
+	m.sessions = &fakeFastSessionProvider{
+		sessions: []session.SessionInfo{{Code: "stale-code", Name: "alpha"}},
+		lookup:   map[string]string{"alpha": "stale-code"},
+	}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, _ json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}
+		},
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	wantCode, err := session.EncodeSessionID("$5")
+	if err != nil {
+		t.Fatalf("EncodeSessionID: %v", err)
+	}
+	if wantCode == "stale-code" {
+		t.Fatalf("test setup: ID-derived code collided with stale-code; pick a different ID")
+	}
+
+	body := `{"tmux_session":"alpha","tmux_session_id":"$5","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxPreToolUse","raw_event":{"cwd":"/x","tool_name":"Read","tool_input":{"file_path":"/x/y/z.go"}},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	// awaitPathHint will fail the test if it sees the path_hint on a
+	// different session code than wantCode. So a positive return here
+	// directly proves the ID-derived code (not the stale name-cache code)
+	// was used.
+	if !awaitPathHint(t, sub, wantCode, "/x/y", "/x", []string{"z.go", `"path":`, `"basename"`}) {
+		t.Fatal("expected agent.path_hint broadcast on ID-derived session code")
+	}
+}
+
 func TestHandleEvent_DoesNotEmitPathHintForOpenCode(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()

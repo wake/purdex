@@ -191,7 +191,11 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// as a fallback for older / non-conforming senders.
 	if req.AgentType == "cc" && (req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUse") &&
 		m.core != nil && m.pathHintDedup != nil && m.pathHintBuffer != nil {
-		if code := m.resolveSessionCode(req.TmuxSession); code != "" {
+		// Prefer the immutable tmux session ID (matches the broadcast path
+		// in emitHookToSession). resolveSessionCode (name cache) would
+		// otherwise leak the kill+recreate rename race onto path hints —
+		// stale code → wrong SPA session receives the path hint.
+		if code, _ := m.resolveSessionCodeFromHook(req); code != "" {
 			cwdFallback := ""
 			if m.sessions != nil {
 				if info, err := m.sessions.GetSession(code); err == nil && info != nil {
