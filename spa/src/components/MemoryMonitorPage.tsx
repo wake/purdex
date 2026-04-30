@@ -8,6 +8,7 @@ import {
   type MonitorConfig,
   type MonitorHostDisk,
   type MonitorHostMemory,
+  type MonitorTopProcess,
   type MonitorSessionDaemonMetrics,
   type MonitorSnapshot,
 } from '../lib/host-api'
@@ -63,6 +64,7 @@ export function MemoryMonitorPage() {
   const [draftDirty, setDraftDirty] = useState(false)
   const [updatingConfigKeys, setUpdatingConfigKeys] = useState<string[]>([])
   const [configReloadNonce, setConfigReloadNonce] = useState(0)
+  const [selectedPaneKey, setSelectedPaneKey] = useState<string | null>(null)
   const draftDirtyRef = useRef(false)
   const retryIntervalMS = useRef(5000)
   const activeWorkspace = activeWorkspaceId ? workspaces.find((workspace) => workspace.id === activeWorkspaceId) : undefined
@@ -184,6 +186,8 @@ export function MemoryMonitorPage() {
   const settingsReady = draftDirty || (draftRefreshSeconds !== '' && draftTopProcessLimit !== '')
   const activeConfigKey = activeHostId ? `${activeHostId}:${activeHostKey}` : ''
   const isUpdatingConfig = updatingConfigKeys.includes(activeConfigKey)
+  const selectedRow = selectedPaneKey ? paneRows.find((row) => paneRowKey(row) === selectedPaneKey) ?? null : null
+  const selectedDaemonMetrics = selectedRow ? findDaemonMetrics(selectedRow, rowSnapshotsByHostId, validSnapshotHostIds) : null
 
   const submitConfig = async (event: FormEvent) => {
     event.preventDefault()
@@ -372,11 +376,26 @@ export function MemoryMonitorPage() {
                   </tr>
                 ) : paneRows.map((row) => (
                   <tr
-                    key={`${row.tabId}:${row.paneId}`}
+                    key={paneRowKey(row)}
                     data-testid={`monitor-row-${row.tabId}-${row.paneId}`}
-                    className="border-b border-border-subtle last:border-b-0"
+                    onClick={() => setSelectedPaneKey(paneRowKey(row))}
+                    className={`cursor-pointer border-b border-border-subtle last:border-b-0 ${selectedPaneKey === paneRowKey(row) ? 'bg-bg-elevated' : ''}`}
                   >
-                    <td className="max-w-48 truncate px-3 py-2 font-mono text-text-primary">{row.tabId}</td>
+                    <td className="max-w-48 truncate px-3 py-2 font-mono text-text-primary">
+                      <button
+                        type="button"
+                        aria-pressed={selectedPaneKey === paneRowKey(row)}
+                        aria-controls="monitor-top-process-details"
+                        aria-label={t('performance_monitor.select_row', { tab: row.tabId, pane: row.paneId })}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setSelectedPaneKey(paneRowKey(row))
+                        }}
+                        className="rounded px-1 text-left font-mono text-text-primary hover:bg-bg-surface"
+                      >
+                        {row.tabId}
+                      </button>
+                    </td>
                     <td className="max-w-48 truncate px-3 py-2 font-mono text-text-primary">{row.paneId}</td>
                     <td className="px-3 py-2 text-text-muted">{row.kind}</td>
                     <td className="px-3 py-2 text-text-muted">{t('performance_monitor.not_wired')}</td>
@@ -389,9 +408,15 @@ export function MemoryMonitorPage() {
             </table>
           </div>
         </section>
+
+        <TopProcessDetails row={selectedRow} metrics={selectedDaemonMetrics} />
       </div>
     </div>
   )
+}
+
+function paneRowKey(row: PaneRow) {
+  return `${row.tabId}:${row.paneId}`
 }
 
 function collectPaneRows(tabs: Record<string, Tab>, tabOrder: string[]): PaneRow[] {
@@ -483,6 +508,52 @@ function DaemonMetricCell({
       <span>{t('performance_monitor.daemon_cpu', { value: formatDaemonCPU(metrics.cpu_percent, t) })}</span>
       <span>{t('performance_monitor.daemon_memory', { value: formatDaemonMemory(metrics.memory_bytes, t) })}</span>
       <span>{formatProcessCount(metrics.process_count, t)}</span>
+    </div>
+  )
+}
+
+function TopProcessDetails({ row, metrics }: { row: PaneRow | null; metrics: MonitorSessionDaemonMetrics | null }) {
+  const t = useI18nStore((s) => s.t)
+  const processes = metrics?.unavailable_reason ? [] : metrics?.top_processes ?? []
+
+  return (
+    <section id="monitor-top-process-details" className="rounded-2xl border border-border-subtle bg-bg-surface/80 p-4 shadow-sm">
+      <div className="mb-4">
+        <h3 className="text-base font-semibold text-text-primary">{t('performance_monitor.top_processes')}</h3>
+        <p className="text-xs text-text-muted">
+          {row
+            ? t('performance_monitor.selected_pane', { tab: row.tabId, pane: row.paneId })
+            : t('performance_monitor.top_processes_desc')}
+        </p>
+      </div>
+
+      {!row ? (
+        <p className="text-sm text-text-muted">{t('performance_monitor.select_pane')}</p>
+      ) : !metrics || metrics.unavailable_reason ? (
+        <p className="text-sm text-text-muted">{metrics?.unavailable_reason ? formatUnavailableReason(metrics.unavailable_reason, t) : t('performance_monitor.no_daemon_metrics')}</p>
+      ) : processes.length === 0 ? (
+        <p className="text-sm text-text-muted">{t('performance_monitor.no_top_processes')}</p>
+      ) : (
+        <div className="grid gap-2 md:grid-cols-2">
+          {processes.map((process) => (
+            <TopProcessCard key={`${process.pid}:${process.command}`} process={process} />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function TopProcessCard({ process }: { process: MonitorTopProcess }) {
+  const t = useI18nStore((s) => s.t)
+  return (
+    <div className="rounded-xl border border-border-subtle bg-bg-elevated p-3">
+      <div className="truncate text-sm font-medium text-text-primary">{process.command}</div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-muted">
+        <span>{t('performance_monitor.pid', { pid: process.pid })}</span>
+        <span>{t('performance_monitor.daemon_cpu', { value: formatDaemonCPU(process.cpu_percent, t) })}</span>
+        <span>{t('performance_monitor.daemon_memory', { value: formatDaemonMemory(process.memory_bytes, t) })}</span>
+      </div>
     </div>
   )
 }

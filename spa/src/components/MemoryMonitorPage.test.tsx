@@ -485,6 +485,133 @@ describe('MemoryMonitorPage', () => {
     expect(within(sessionRow).getAllByText('Not wired')).toHaveLength(1)
   })
 
+  it('shows selected session top processes from daemon metrics', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'abc123',
+          mode: 'terminal',
+          cachedName: 'Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockResolvedValue({
+      ...monitorSnapshot,
+      sessions: [{
+        session_code: 'abc123',
+        tmux_session: { id: '$1', name: 'pdx-abc123' },
+        daemon: {
+          cpu_percent: 12.3,
+          memory_bytes: 2048,
+          process_count: 3,
+          top_processes: [
+            { pid: 42, ppid: 1, command: 'node server.js', cpu_percent: 8.5, memory_bytes: 4096 },
+            { pid: 43, ppid: 42, command: 'worker', cpu_percent: 2, memory_bytes: 1024 },
+          ],
+          unavailable_reason: null,
+        },
+      }],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    expect(await screen.findByText('Select a pane to inspect top processes.')).toBeInTheDocument()
+    fireEvent.click(await screen.findByTestId('monitor-row-tab-session-pane-session'))
+
+    expect(await screen.findByText('Top Processes')).toBeInTheDocument()
+    expect(screen.getByText('node server.js')).toBeInTheDocument()
+    expect(screen.getByText('PID 42')).toBeInTheDocument()
+    expect(screen.getByText('CPU 8.5%')).toBeInTheDocument()
+    expect(screen.getByText('Memory 4 KB')).toBeInTheDocument()
+    expect(screen.getByText('worker')).toBeInTheDocument()
+  })
+
+  it('selects a pane with an accessible row control', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'abc123',
+          mode: 'terminal',
+          cachedName: 'Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockResolvedValue({
+      ...monitorSnapshot,
+      sessions: [{
+        session_code: 'abc123',
+        tmux_session: { id: '$1', name: 'pdx-abc123' },
+        daemon: {
+          cpu_percent: 12.3,
+          memory_bytes: 2048,
+          process_count: 3,
+          top_processes: [{ pid: 42, ppid: 1, command: 'node server.js', cpu_percent: 8.5, memory_bytes: 4096 }],
+          unavailable_reason: null,
+        },
+      }],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    const selectButton = await screen.findByRole('button', { name: 'Select pane tab-session / pane-session' })
+    expect(selectButton).toHaveAttribute('aria-controls', 'monitor-top-process-details')
+    expect(selectButton).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(selectButton)
+
+    expect(selectButton).toHaveAttribute('aria-pressed', 'true')
+    expect(await screen.findByText('node server.js')).toBeInTheDocument()
+  })
+
+  it('shows an empty top-process state for selected rows without process details', async () => {
+    useTabStore.setState({
+      tabs: {
+        'tab-session': tabWithLeaf('tab-session', 'pane-session', {
+          kind: 'tmux-session',
+          hostId: HOST_ID,
+          sessionCode: 'abc123',
+          mode: 'terminal',
+          cachedName: 'Work',
+          tmuxInstance: 'main',
+        }),
+      },
+      tabOrder: ['tab-session'],
+      activeTabId: 'tab-session',
+      visitHistory: [],
+    })
+    vi.mocked(fetchMonitorSnapshot).mockResolvedValue({
+      ...monitorSnapshot,
+      sessions: [{
+        session_code: 'abc123',
+        tmux_session: { id: '$1', name: 'pdx-abc123' },
+        daemon: {
+          cpu_percent: 12.3,
+          memory_bytes: 2048,
+          process_count: 3,
+          top_processes: [],
+          unavailable_reason: null,
+        },
+      }],
+    })
+
+    render(<MemoryMonitorPage />)
+
+    fireEvent.click(await screen.findByTestId('monitor-row-tab-session-pane-session'))
+
+    expect(await screen.findByText('No top processes reported for the selected pane.')).toBeInTheDocument()
+  })
+
   it('renders daemon unavailable reasons for matching session panes', async () => {
     useTabStore.setState({
       tabs: {
