@@ -49,7 +49,7 @@ func TestResolveSessionCodeFromHook_BypassesCacheWhenIDPresent(t *testing.T) {
 	m.sessions = fake
 
 	req := EventRequest{TmuxSessionID: "$5", TmuxSession: "alpha"}
-	got := m.resolveSessionCodeFromHook(req)
+	got, path := m.resolveSessionCodeFromHook(req)
 
 	want, err := session.EncodeSessionID("$5")
 	if err != nil {
@@ -57,6 +57,9 @@ func TestResolveSessionCodeFromHook_BypassesCacheWhenIDPresent(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("resolveSessionCodeFromHook = %q, want %q (pure ID path)", got, want)
+	}
+	if path != hookCodePathID {
+		t.Errorf("resolution path = %q, want %q", path, hookCodePathID)
 	}
 	if fake.lookupCalls != 0 {
 		t.Errorf("LookupCodeByName calls = %d, want 0 (ID path must skip cache)", fake.lookupCalls)
@@ -80,10 +83,13 @@ func TestResolveSessionCodeFromHook_FallsBackToNamePathOnEmptyID(t *testing.T) {
 	m.sessions = fake
 
 	req := EventRequest{TmuxSessionID: "", TmuxSession: "alpha"}
-	got := m.resolveSessionCodeFromHook(req)
+	got, path := m.resolveSessionCodeFromHook(req)
 
 	if got != "alpha-code" {
 		t.Errorf("resolveSessionCodeFromHook = %q, want alpha-code", got)
+	}
+	if path != hookCodePathIDEmpty {
+		t.Errorf("resolution path = %q, want %q", path, hookCodePathIDEmpty)
 	}
 	if fake.lookupCalls != 1 {
 		t.Errorf("LookupCodeByName calls = %d, want 1 (fallback engaged)", fake.lookupCalls)
@@ -106,10 +112,13 @@ func TestResolveSessionCodeFromHook_FallsBackOnMalformedID(t *testing.T) {
 	m.sessions = fake
 
 	req := EventRequest{TmuxSessionID: "not-a-tmux-id", TmuxSession: "beta"}
-	got := m.resolveSessionCodeFromHook(req)
+	got, path := m.resolveSessionCodeFromHook(req)
 
 	if got != "beta-code" {
 		t.Errorf("resolveSessionCodeFromHook = %q, want beta-code", got)
+	}
+	if path != hookCodePathMalformedID {
+		t.Errorf("resolution path = %q, want %q", path, hookCodePathMalformedID)
 	}
 	if fake.lookupCalls != 1 {
 		t.Errorf("LookupCodeByName calls = %d, want 1 (fallback after malformed ID)", fake.lookupCalls)
@@ -153,6 +162,9 @@ func TestEmitHookToSession_DirectUsesSessionIDPath(t *testing.T) {
 	decision, reason := m.emitHookToSession(req, normalized)
 	if decision != "broadcasted" {
 		t.Fatalf("decision = %q (reason=%q), want broadcasted", decision, reason)
+	}
+	if reason != string(hookCodePathID) {
+		t.Errorf("reason = %q, want %q (id_path label exposes fast-path activation)", reason, hookCodePathID)
 	}
 
 	select {
@@ -201,11 +213,42 @@ func TestEmitHookToSession_LegacyPayloadUsesNamePath(t *testing.T) {
 	req := EventRequest{TmuxSession: "work"} // legacy: no TmuxSessionID
 	normalized := agentpkg.NormalizedEvent{AgentType: "cc", RawEventName: "PdxStop"}
 
-	decision, _ := m.emitHookToSession(req, normalized)
+	decision, reason := m.emitHookToSession(req, normalized)
 	if decision != "broadcasted" {
 		t.Fatalf("decision = %q, want broadcasted (legacy fallback)", decision)
 	}
+	if reason != string(hookCodePathIDEmpty) {
+		t.Errorf("reason = %q, want %q (id_empty label flags un-migrated hook clients)", reason, hookCodePathIDEmpty)
+	}
 	if fake.lookupCalls != 1 {
 		t.Errorf("LookupCodeByName calls = %d, want 1 (name path engaged)", fake.lookupCalls)
+	}
+}
+
+// TestEmitHookToSession_MalformedIDReason pins the third path label: when a
+// hook payload reaches us with a corrupt TmuxSessionID, the reason carries
+// the malformed_id label so log greps can spot the pathological case
+// distinct from a benign legacy (id_empty) fallback.
+func TestEmitHookToSession_MalformedIDReason(t *testing.T) {
+	m := newTestModule(t)
+	fake := &fakeFastSessionProvider{
+		sessions: []session.SessionInfo{{Name: "work", Code: "code-work"}},
+		lookup:   map[string]string{"work": "code-work"},
+	}
+	m.sessions = fake
+	m.core = &core.Core{Events: core.NewEventsBroadcaster()}
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	req := EventRequest{TmuxSessionID: "not-a-tmux-id", TmuxSession: "work"}
+	normalized := agentpkg.NormalizedEvent{AgentType: "cc", RawEventName: "PdxStop"}
+
+	decision, reason := m.emitHookToSession(req, normalized)
+	if decision != "broadcasted" {
+		t.Fatalf("decision = %q, want broadcasted (fallback after malformed ID)", decision)
+	}
+	if reason != string(hookCodePathMalformedID) {
+		t.Errorf("reason = %q, want %q (malformed_id label distinguishes corruption from legacy)", reason, hookCodePathMalformedID)
 	}
 }

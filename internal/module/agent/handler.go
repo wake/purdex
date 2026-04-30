@@ -500,17 +500,19 @@ func (m *Module) broadcastToSession(tmuxSession string, normalized agentpkg.Norm
 // emitHookToSession routes a hook-derived normalized event to its WS code.
 // Prefers req.TmuxSessionID (immutable, pure-function resolution) over
 // req.TmuxSession (cache-backed, racy across kill+recreate). Returns the
-// (decision, reason) tuple the trace pipeline annotates onto the chain.
+// (decision, reason) tuple the trace pipeline annotates onto the chain;
+// the reason value carries the resolution path label so operators can grep
+// daemon logs and confirm hook clients have migrated to the ID payload.
 func (m *Module) emitHookToSession(req EventRequest, normalized agentpkg.NormalizedEvent) (string, string) {
 	if m.core == nil {
 		return "skipped", "core_unavailable"
 	}
-	code := m.resolveSessionCodeFromHook(req)
+	code, path := m.resolveSessionCodeFromHook(req)
 	if code == "" {
 		return "skipped", "session_code_missing"
 	}
 	m.emitNormalizedToCode(code, normalized)
-	return "broadcasted", "session_code_resolved"
+	return "broadcasted", string(path)
 }
 
 // emitNormalizedToCode is the shared bottom half of both broadcast paths:
@@ -522,20 +524,48 @@ func (m *Module) emitNormalizedToCode(code string, normalized agentpkg.Normalize
 	m.core.Events.Broadcast(code, "hook", string(payload))
 }
 
+// hookSessionCodePath labels which resolution branch produced the session
+// code for a hook event. It is surfaced through emitHookToSession's reason
+// return so the trace pipeline / broadcast log lets operators tell during
+// rollout whether hook clients have migrated to the new tmux_session_id
+// payload (fast path) vs still using the legacy name path (cache lookup).
+type hookSessionCodePath string
+
+const (
+	// hookCodePathID — TmuxSessionID present and valid; the immutable ID
+	// path resolved the code via a pure EncodeSessionID call. Migrated
+	// hook clients hit this branch.
+	hookCodePathID hookSessionCodePath = "id_path"
+	// hookCodePathIDEmpty — TmuxSessionID missing; backward-compat
+	// fallback to the name-cache path. Indicates the hook client is an
+	// older pdx binary not yet updated; an operational signal that
+	// rollout is incomplete.
+	hookCodePathIDEmpty hookSessionCodePath = "id_empty"
+	// hookCodePathMalformedID — TmuxSessionID present but rejected by
+	// EncodeSessionID (corrupt payload / bug). Falls back to the name
+	// path; the inline error log captures the offending value.
+	hookCodePathMalformedID hookSessionCodePath = "malformed_id"
+)
+
 // resolveSessionCodeFromHook prefers the immutable tmux session ID from the
 // hook payload (eliminates the name-reuse race window) and falls back to
 // the cached name-path resolution when the ID is missing (older pdx hook
 // binary) or malformed (unexpected payload corruption). Falling back rather
 // than dropping keeps a partial-rollout daemon-vs-hook version skew safe.
-func (m *Module) resolveSessionCodeFromHook(req EventRequest) string {
-	if req.TmuxSessionID != "" {
-		code, err := session.EncodeSessionID(req.TmuxSessionID)
-		if err == nil {
-			return code
-		}
-		log.Printf("[agent] invalid tmux_session_id %q: %v (falling back to name path)", req.TmuxSessionID, err)
+//
+// The returned hookSessionCodePath labels the branch that produced the
+// code; see the constants for semantics. Callers that don't log the
+// reason can ignore the second return.
+func (m *Module) resolveSessionCodeFromHook(req EventRequest) (string, hookSessionCodePath) {
+	if req.TmuxSessionID == "" {
+		return m.resolveSessionCode(req.TmuxSession), hookCodePathIDEmpty
 	}
-	return m.resolveSessionCode(req.TmuxSession)
+	code, err := session.EncodeSessionID(req.TmuxSessionID)
+	if err != nil {
+		log.Printf("[agent] invalid tmux_session_id %q: %v (falling back to name path)", req.TmuxSessionID, err)
+		return m.resolveSessionCode(req.TmuxSession), hookCodePathMalformedID
+	}
+	return code, hookCodePathID
 }
 
 // sessionCodeLookuper is the optional fast-path interface a SessionProvider
