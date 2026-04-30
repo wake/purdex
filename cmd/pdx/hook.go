@@ -16,6 +16,7 @@ import (
 
 type hookPayload struct {
 	TmuxSession     string          `json:"tmux_session"`
+	TmuxSessionID   string          `json:"tmux_session_id,omitempty"`
 	TmuxPaneID      string          `json:"tmux_pane_id"`
 	PurdexName      string          `json:"purdex_name"`
 	RawEvent        json.RawMessage `json:"raw_event"`
@@ -33,6 +34,7 @@ type hookProvenance struct {
 }
 
 var queryTmuxSessionFn = queryTmuxSession
+var queryTmuxSessionInfoFn = queryTmuxSessionInfo
 var queryTmuxPaneIDFn = queryTmuxPaneID
 var resolveHookProvenanceFn = resolveHookProvenance
 var postHookEventFn = postHookEvent
@@ -68,9 +70,9 @@ func runHook(args []string) {
 		os.Exit(1)
 	}
 
-	tmuxSession := queryTmuxSessionFn()
+	tmuxSessionID, tmuxSession := queryTmuxSessionInfoFn()
 	provenance := resolveHookProvenanceFn()
-	payload := buildHookPayload(tmuxSession, purdexName, os.Stdin, agentType, provenance)
+	payload := buildHookPayload(tmuxSessionID, tmuxSession, purdexName, os.Stdin, agentType, provenance)
 
 	cfg, err := loadConfigFn("")
 	var url, token string
@@ -85,7 +87,8 @@ func runHook(args []string) {
 }
 
 // queryTmuxSession runs `tmux display-message -p '#{session_name}'` and returns
-// the session name, or "" on any error.
+// the session name, or "" on any error. Retained for non-hook callers
+// (cmd/pdx/statusline_proxy.go) that only need the name.
 func queryTmuxSession() string {
 	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
 	if err != nil {
@@ -94,19 +97,49 @@ func queryTmuxSession() string {
 	return strings.TrimRight(string(out), "\n")
 }
 
+// queryTmuxSessionInfo returns (sessionID, sessionName) from a single
+// `tmux display-message -p '#{session_id}|#{session_name}'` call. Both empty
+// on any error. The sessionID ($N format) is immutable across rename and is
+// the primary key the daemon uses to bypass the name cache rename-race
+// window when resolving session codes for hook events.
+func queryTmuxSessionInfo() (string, string) {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{session_id}|#{session_name}").Output()
+	if err != nil {
+		return "", ""
+	}
+	return parseTmuxSessionInfo(string(out))
+}
+
+// parseTmuxSessionInfo splits "<sessionID>|<sessionName>" output on the FIRST
+// '|'. Names may contain '|' characters (real tmux permits them); the parser
+// preserves them in the name half. When no delimiter is present we treat the
+// whole string as the name and return an empty ID — the daemon falls back to
+// the name path safely.
+func parseTmuxSessionInfo(out string) (string, string) {
+	trimmed := strings.TrimRight(out, "\n")
+	idx := strings.Index(trimmed, "|")
+	if idx < 0 {
+		return "", trimmed
+	}
+	return trimmed[:idx], trimmed[idx+1:]
+}
+
 func queryTmuxPaneID() string {
 	return os.Getenv("TMUX_PANE")
 }
 
 // buildHookPayload constructs a hookPayload from the given parameters.
 // If stdin is empty or cannot be read, raw_event defaults to {}.
-func buildHookPayload(tmuxSession, purdexName string, stdin io.Reader, agentType string, provenance hookProvenance) hookPayload {
+// tmuxSessionID is optional ($N format); when non-empty the daemon prefers
+// it over tmuxSession for code resolution to dodge the rename-race window.
+func buildHookPayload(tmuxSessionID, tmuxSession, purdexName string, stdin io.Reader, agentType string, provenance hookProvenance) hookPayload {
 	raw, err := io.ReadAll(stdin)
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		raw = []byte("{}")
 	}
 	return hookPayload{
 		TmuxSession:     tmuxSession,
+		TmuxSessionID:   tmuxSessionID,
 		TmuxPaneID:      provenance.TmuxPaneID,
 		PurdexName:      purdexName,
 		RawEvent:        json.RawMessage(raw),
