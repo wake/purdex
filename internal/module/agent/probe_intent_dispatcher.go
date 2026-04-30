@@ -586,13 +586,25 @@ func (d *probeIntentDispatcher) consumeSignals(
 	// match) would short-circuit the next status change → re-arm never
 	// fires → codex stays Running indefinitely after a missed crash.
 	// Generation-scoped so a concurrent rearm survives.
+	//
+	// F1 round-3 follow-up: teardown alone is insufficient — codex that
+	// dies WITHIN graceWindow has no future hook to re-trigger lifecycle.
+	// Re-run applyStatus when live status still gates the intent so a
+	// fresh detector arms. graceWindow may suppress the next emit too;
+	// the next post-loop iteration repeats this teardown+rearm cycle
+	// until graceWindow expires (worst case 2-3 polls at 1Hz vs
+	// permanent miss).
 	if !appliedAny {
 		d.parent.mu.Lock()
 		teardown, ok := d.stopActiveIntentInLock(session, intent.Kind, generation, "detector-exited-no-effect")
+		curStatus, hasStatus := d.parent.currentStatus[session]
 		d.parent.mu.Unlock()
 		if ok {
 			teardown.cancel()
 			d.emitStopObservability(session, teardown)
+			if hasStatus && slices.Contains(intent.OnEntryStatus, curStatus) {
+				d.applyStatus(session, agentType, curStatus)
+			}
 		}
 	}
 }

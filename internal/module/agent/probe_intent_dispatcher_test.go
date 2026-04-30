@@ -734,42 +734,71 @@ func TestReplayStatus_StaleFrame_DetectorEmitsImmediately(t *testing.T) {
 // Round-2 audit fixes: F1 graceWindow strand / F2 generation-scoped teardown / F6 fail-closed
 // -----------------------------------------------------------------------------
 
-// TestConsumeSignals_GraceWindowDrop_TearsDownActiveEntry pins F1: when a
-// one-shot detector emits its sole Signal during an active graceWindow,
-// applyProbeGuards drops the signal (applied=false), the channel closes,
-// and consumeSignals' post-loop teardown must remove the active entry —
-// otherwise a future status change observes case-4 (target match) and the
-// detector never re-arms, leaving codex permanently undetected.
-func TestConsumeSignals_GraceWindowDrop_TearsDownActiveEntry(t *testing.T) {
+// TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown pins F1 +
+// round-3 follow-up: when a one-shot detector emits its sole Signal
+// during an active graceWindow, applyProbeGuards drops the signal
+// (applied=false), the channel closes, and consumeSignals' post-loop
+// path must (1) remove the stranded active entry (F1) AND (2) re-arm
+// a fresh generation if currentStatus still gates the intent — otherwise
+// a codex that dies within graceWindow is permanently undetected
+// because there's no future hook to trigger lifecycle.
+//
+// The detector emits exactly once; subsequent arms block on ctx so the
+// rearm cycle stays bounded (production graceWindow expiry breaks the
+// cycle within 2-3 detector polls).
+func TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown(t *testing.T) {
 	m := newDispatcherTestModule(t)
 	m.sessions = &fakeSessionProvider{}
-	// Emit-once-and-exit detector mirrors production codex (returns after
-	// emit, channel closes via wrapping goroutine).
+
+	var emitCount atomic.Int64
 	m.probeIntentDisp.startDetector = func(ctx context.Context, _ *Module, _ agentpkg.ProbeIntentKind, _ string, _ int, out chan<- agentpkg.Signal) {
-		select {
-		case out <- agentpkg.Signal{
-			Kind:      agentpkg.ProbeIntentKindProcessDead,
-			PaneAlive: true,
-			PaneID:    "%5",
-			SenderPID: 4242,
-		}:
-		case <-ctx.Done():
+		// Only the first arm emits — subsequent rearms block so the test
+		// can settle on a single rearm without runaway loops.
+		if emitCount.Add(1) == 1 {
+			select {
+			case out <- agentpkg.Signal{
+				Kind:      agentpkg.ProbeIntentKindProcessDead,
+				PaneAlive: true,
+				PaneID:    "%5",
+				SenderPID: 4242,
+			}:
+			case <-ctx.Done():
+			}
+			return
 		}
+		<-ctx.Done()
 	}
 	t.Cleanup(func() { m.probeIntentDisp.stopAll() })
 
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
-	// Open graceWindow: any probe signal arriving in the next probeGraceWindow
-	// is suppressed. With the F1 fix, the active entry must still be torn
-	// down so a subsequent crash is not missed.
+	// Open graceWindow: probe signal in the next probeGraceWindow is
+	// suppressed. The F1 fix tears down + the round-3 follow-up rearms.
 	m.probeOrch.recordHookAt("work")
 
 	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
+	// Capture gen 1 (first arm) before the teardown+rearm cycle completes.
+	var gen1 uint64
+	waitFor(t, time.Second, func() bool {
+		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		if !ok {
+			return false
+		}
+		gen1 = cur.generation
+		return gen1 > 0
+	}, "gen 1 active entry observed before teardown")
+
+	// Wait for the rearm: emitCount becomes 2 (second arm) AND active
+	// entry's generation has advanced past gen 1. With the round-3 fix
+	// the post-loop teardown calls applyStatus → applyIntentLifecycle
+	// arms a fresh gen.
 	waitFor(t, 2*time.Second, func() bool {
-		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
-		return !ok
-	}, "active entry torn down post-loop after graceWindow drop (F1)")
+		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		if !ok {
+			return false
+		}
+		return cur.generation > gen1 && emitCount.Load() >= 2
+	}, "rearm with new generation after graceWindow drop (F1 round-3 follow-up)")
 }
 
 // TestStopActiveIntentInLock_GenerationMismatch_PreservesEntry pins F2:
