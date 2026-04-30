@@ -879,3 +879,29 @@ func TestApplyIntentLifecycle_UnsupportedKind_FailsClosed(t *testing.T) {
 		t.Fatalf("started metric delta = %d, want 0 (no arm)", got)
 	}
 }
+
+// TestApplyIntentLifecycle_NilTraceSink_DoesNotPanic pins F9: Module.New
+// treats trace-store init failure as non-fatal and leaves traceSink nil.
+// All ProbeIntent observability sites (start / stop / signal /
+// unsupported-kind / drop) MUST guard the nil — otherwise any codex
+// running/waiting transition in degraded mode panics the agent module.
+//
+// This test exercises the start path specifically because it was the
+// only site missing the guard before round-5; the others were already
+// covered by the existing observability tests with non-nil traceSink.
+func TestApplyIntentLifecycle_NilTraceSink_DoesNotPanic(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	rec := installRecordingDetector(t, m)
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+	// Simulate degraded-trace mode (Module.New non-fatal trace init failure).
+	m.traceSink = nil
+
+	// Arming exercises the start observability emit which previously
+	// dereferenced traceSink unconditionally. Pre-fix: panics here.
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+	<-rec.started
+	if rec.startCount() != 1 {
+		t.Fatalf("detector started count = %d, want 1 (arm must succeed under nil traceSink)", rec.startCount())
+	}
+}

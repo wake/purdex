@@ -479,19 +479,25 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 			log.Printf("[probe-intent] start session=%s agent=%s kind=%s pane=%s pid=%d generation=%d",
 				session, agentType, intent.Kind, plan.paneID, plan.senderPID, plan.generation)
 		}
-		d.parent.traceSink.AppendProbeIntent(probeIntentTraceArgs{
-			TmuxSession: session,
-			PaneID:      plan.paneID,
-			AgentType:   agentType,
-			Kind:        string(intent.Kind),
-			Decision:    "start",
-			Reason:      "lifecycle-applyStatus",
-			Payload: map[string]any{
-				"pane_id":    plan.paneID,
-				"sender_pid": plan.senderPID,
-				"generation": plan.generation,
-			},
-		})
+		// F9 audit: Module.New treats trace-store init failure as
+		// non-fatal (traceSink left nil). Other paths (unsupported,
+		// stop, signal) guard nil already; start path must do the same
+		// or any arm in degraded-trace mode panics the agent module.
+		if d.parent.traceSink != nil {
+			d.parent.traceSink.AppendProbeIntent(probeIntentTraceArgs{
+				TmuxSession: session,
+				PaneID:      plan.paneID,
+				AgentType:   agentType,
+				Kind:        string(intent.Kind),
+				Decision:    "start",
+				Reason:      "lifecycle-applyStatus",
+				Payload: map[string]any{
+					"pane_id":    plan.paneID,
+					"sender_pid": plan.senderPID,
+					"generation": plan.generation,
+				},
+			})
+		}
 	}
 }
 

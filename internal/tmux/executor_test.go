@@ -451,16 +451,17 @@ printf '%%5\n%%7\n'
 	}
 }
 
-// TestHasPane_TmuxCommandError_ReturnsError verifies that a tmux invocation
-// error (e.g. server not running) surfaces as err != nil rather than being
-// collapsed into a confirmed-absent false. Per round-4 audit: callers
-// distinguish transient query failure from confirmed absence to avoid
-// false-positive "pane gone" emissions during tmux hiccups.
-func TestHasPane_TmuxCommandError_ReturnsError(t *testing.T) {
+// TestHasPane_TransientTmuxError_ReturnsError verifies that a generic
+// tmux invocation error (NOT the documented "no server running" branch
+// — that one is confirmed absence per F10) surfaces as err != nil. Per
+// round-4 audit: callers distinguish transient query failure from
+// confirmed absence to avoid false-positive "pane gone" emissions
+// during tmux hiccups.
+func TestHasPane_TransientTmuxError_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "tmux")
 	if err := os.WriteFile(script, []byte(`#!/bin/sh
-printf 'no server running\n' >&2
+printf 'something else went wrong\n' >&2
 exit 1
 `), 0755); err != nil {
 		t.Fatal(err)
@@ -469,10 +470,34 @@ exit 1
 
 	got, err := (&tmux.RealExecutor{}).HasPane("%5")
 	if err == nil {
-		t.Fatalf("HasPane returned err=nil on tmux error, want non-nil")
+		t.Fatalf("HasPane returned err=nil on transient tmux error, want non-nil")
 	}
 	if got {
 		t.Errorf("HasPane returned true on tmux error, want false")
+	}
+}
+
+// TestHasPane_NoServerRunning_ReturnsConfirmedAbsence verifies the round-5
+// F10 fix: tmux exits with stderr "no server running" when there are no
+// active sessions. That is global confirmed absence (every pane is gone),
+// not a transient query failure — caller should drive the clear path.
+func TestHasPane_NoServerRunning_ReturnsConfirmedAbsence(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf 'no server running on /private/tmp/tmux-501/default\n' >&2
+exit 1
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := (&tmux.RealExecutor{}).HasPane("%5")
+	if err != nil {
+		t.Fatalf("HasPane returned err=%v on no-server, want nil (confirmed absence)", err)
+	}
+	if got {
+		t.Errorf("HasPane returned true on no-server, want false")
 	}
 }
 

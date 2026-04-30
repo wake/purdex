@@ -221,8 +221,19 @@ func (r *RealExecutor) HasPane(paneID string) (bool, error) {
 	if paneID == "" {
 		return false, nil
 	}
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}").Output()
+	cmd := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
+		// Round-5 audit F10: classify "no server running" as confirmed
+		// global absence (false, nil) rather than a transient query
+		// failure. Without this branch the detector would poll forever
+		// when the user tears down the last tmux session — codex pane
+		// is definitively gone but the lights stay armed.
+		if strings.Contains(stderr.String(), "no server running") {
+			return false, nil
+		}
 		return false, err
 	}
 	for _, line := range strings.Split(string(out), "\n") {
