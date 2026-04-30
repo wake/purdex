@@ -33,6 +33,14 @@ type SessionModule struct {
 	listCacheMu   sync.Mutex
 	listCacheData []SessionInfo
 	listCacheAt   time.Time
+
+	// nameCache backs LookupCodeByName: a name→code map plus a TTL stamp.
+	// Separate from listCache because the lookup fast path runs only one
+	// tmux subprocess (list-sessions) — no meta merge, no per-session
+	// metadata fan-out — and is hit on the hook hot path (#?).
+	nameCacheMu   sync.Mutex
+	nameCacheData map[string]string
+	nameCacheAt   time.Time
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
