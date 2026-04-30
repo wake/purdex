@@ -311,7 +311,7 @@ func TestProbeIntent_Expvar_DroppedCounterByReason(t *testing.T) {
 		m.sessions = &fakeSessionProvider{}
 		// active map empty → StaleCheck returns false on first lock.
 		before := snapshotProbeIntentMetrics()
-		applied := applyProbeGuards(m, probeGuardArgs{
+		applied, _ := applyProbeGuards(m, probeGuardArgs{
 			Session:   "work",
 			AgentType: "codex",
 			Reason:    "probe-intent:process_dead",

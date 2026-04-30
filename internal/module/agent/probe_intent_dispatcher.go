@@ -397,7 +397,7 @@ func (d *probeIntentDispatcher) consumeSignals(
 ) {
 	for sig := range in {
 		agentpkg.MetricProbeIntentSignalEmitted.Add(1)
-		applied := applyProbeGuards(d.parent, probeGuardArgs{
+		applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{
 			Session:    session,
 			AgentType:  agentType,
 			Reason:     "probe-intent:" + string(intent.Kind),
@@ -419,9 +419,10 @@ func (d *probeIntentDispatcher) consumeSignals(
 		// BEFORE applyStatus so test waitFor predicates that key off
 		// active-entry presence see the log/trace as a happens-before
 		// guarantee rather than a race against case 3 teardown.
-		d.parent.mu.Lock()
-		appliedStatus := d.parent.currentStatus[session]
-		d.parent.mu.Unlock()
+		//
+		// appliedStatus comes from applyProbeGuards' return (P2-T6): a
+		// re-read of currentStatus[session] races with concurrent SessionEnd
+		// hooks that may delete the entry before we acquire m.mu.
 		agentpkg.MetricProbeIntentApplied.Add(1)
 		if isDevMode() {
 			log.Printf("[probe-intent] signal session=%s kind=%s PaneAlive=%v newStatus=%s applied=true",

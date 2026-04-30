@@ -52,7 +52,7 @@ func TestApplyProbeGuards_StaleCheckGuard_FastPath(t *testing.T) {
 	m.mu.Unlock()
 
 	before := snapshotMetrics()
-	applied := applyProbeGuards(m, probeGuardArgs{
+	applied, _ := applyProbeGuards(m, probeGuardArgs{
 		Session:    "work",
 		AgentType:  "cc",
 		Reason:     "probe:activity",
@@ -86,7 +86,7 @@ func TestApplyProbeGuards_GraceWindow(t *testing.T) {
 	m.probeOrch.recordHookAt("work")
 
 	before := snapshotMetrics()
-	applied := applyProbeGuards(m, probeGuardArgs{
+	applied, _ := applyProbeGuards(m, probeGuardArgs{
 		Session:    "work",
 		AgentType:  "cc",
 		Reason:     "probe:activity",
@@ -122,7 +122,7 @@ func TestApplyProbeGuards_Mapping_NewStatusEmpty_Drops(t *testing.T) {
 	m.mu.Unlock()
 
 	before := snapshotMetrics()
-	applied := applyProbeGuards(m, probeGuardArgs{
+	applied, _ := applyProbeGuards(m, probeGuardArgs{
 		Session:    "work",
 		AgentType:  "cc",
 		Reason:     "probe-intent:test_drop",
@@ -155,7 +155,7 @@ func TestApplyProbeGuards_ErrorGuard(t *testing.T) {
 	m.mu.Unlock()
 
 	before := snapshotMetrics()
-	applied := applyProbeGuards(m, probeGuardArgs{
+	applied, _ := applyProbeGuards(m, probeGuardArgs{
 		Session:    "work",
 		AgentType:  "cc",
 		Reason:     "probe:activity",
@@ -188,7 +188,7 @@ func TestApplyProbeGuards_TransitionGate(t *testing.T) {
 	m.mu.Unlock()
 
 	before := snapshotMetrics()
-	applied := applyProbeGuards(m, probeGuardArgs{
+	applied, _ := applyProbeGuards(m, probeGuardArgs{
 		Session:    "work",
 		AgentType:  "cc",
 		Reason:     "probe:activity",
@@ -219,7 +219,7 @@ func TestApplyProbeGuards_HappyPath_MutatesAndBroadcasts(t *testing.T) {
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
 	before := snapshotMetrics()
-	applied := applyProbeGuards(m, probeGuardArgs{
+	applied, appliedStatus := applyProbeGuards(m, probeGuardArgs{
 		Session:    "work",
 		AgentType:  "cc",
 		Reason:     "probe:activity",
@@ -230,6 +230,9 @@ func TestApplyProbeGuards_HappyPath_MutatesAndBroadcasts(t *testing.T) {
 
 	if !applied {
 		t.Fatalf("applied = false, want true (happy path)")
+	}
+	if appliedStatus != agentpkg.StatusRunning {
+		t.Fatalf("appliedStatus = %q, want StatusRunning (P2-T6 race fix: caller must not re-read currentStatus)", appliedStatus)
 	}
 	if got := after.screenEvent - before.screenEvent; got != 1 {
 		t.Fatalf("screenEvent delta = %d, want 1", got)
@@ -271,7 +274,7 @@ func TestApplyProbeGuards_FinalCriticalSectionReCheck(t *testing.T) {
 	}
 
 	before := snapshotMetrics()
-	applied := applyProbeGuards(m, probeGuardArgs{
+	applied, _ := applyProbeGuards(m, probeGuardArgs{
 		Session:    "work",
 		AgentType:  "cc",
 		Reason:     "probe:activity",

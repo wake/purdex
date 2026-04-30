@@ -251,15 +251,20 @@ type probeGuardArgs struct {
 //     is unavailable).
 //
 // Returns applied=true iff step 4 mutated currentStatus and step 5 broadcast
-// the transition. Every other branch returns applied=false.
+// the transition; appliedStatus carries the freshly applied newStatus on the
+// success path (empty on every drop). Returning the locally-known newStatus
+// avoids a follow-up currentStatus re-read race in the ProbeIntent dispatcher
+// (P2-T6 fix) — a concurrent SessionEnd hook between step 4 unlock and a
+// caller's re-read could delete the entry, leaving the dev-log / case-3
+// re-apply path with an empty status.
 //
 // W6-3 P1-T2: extracted from interpretScreenEvent so the W6-3 ProbeIntent
 // dispatcher (P1-T4) can reuse the same guard pipeline through different
 // StaleCheck / Mapping strategies. ScreenChange path is a strict mechanical
 // extraction — pre-extraction tests must remain green.
-func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
+func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStatus agentpkg.Status) {
 	if m == nil {
-		return false
+		return false, ""
 	}
 
 	// 1. Stale-callback guard (early fast-path; lock-free read inside m.mu).
@@ -270,7 +275,7 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
 		if args.OnDrop != nil {
 			args.OnDrop("stale-callback")
 		}
-		return false
+		return false, ""
 	}
 
 	// 2. graceWindow suppression (independent graceMu — no nesting w/ m.mu).
@@ -288,18 +293,18 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
 			if args.OnDrop != nil {
 				args.OnDrop("grace")
 			}
-			return false
+			return false, ""
 		}
 	}
 
 	// 3. Mapping callback (per by2z79ouc DEF-1 — invoked only after stale +
 	//    graceWindow guards pass; OnSignal handlers may safely log/count).
 	if args.Mapping == nil {
-		return false
+		return false, ""
 	}
 	newStatus := args.Mapping(args.Signal)
 	if newStatus == "" {
-		return false
+		return false, ""
 	}
 
 	// Test-only seam: simulate a concurrent stop/rename that mutates the
@@ -316,21 +321,21 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
 		if args.OnDrop != nil {
 			args.OnDrop("stale-callback")
 		}
-		return false
+		return false, ""
 	}
 	if m.currentStatus[args.Session] == agentpkg.StatusError {
 		m.mu.Unlock()
 		if args.OnDrop != nil {
 			args.OnDrop("error-guard")
 		}
-		return false
+		return false, ""
 	}
 	if prev, ok := m.currentStatus[args.Session]; ok && prev == newStatus {
 		m.mu.Unlock()
 		if args.OnDrop != nil {
 			args.OnDrop("transition-gate")
 		}
-		return false
+		return false, ""
 	}
 	m.currentStatus[args.Session] = newStatus
 	m.mu.Unlock()
@@ -344,7 +349,7 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
 	if projection, err := m.setProjectionTopStatus(args.Session, newStatus); err == nil && projection != nil {
 		normalized := buildProjectionNormalized(projection, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
 		m.broadcastToSession(args.Session, normalized)
-		return true
+		return true, newStatus
 	}
 	// Fallback when the projection is unavailable (e.g. frames row removed
 	// concurrently with the event). Broadcast a minimal normalized event so
@@ -356,7 +361,7 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool) {
 		BroadcastTs:  time.Now().UnixNano(),
 	}
 	m.broadcastToSession(args.Session, normalized)
-	return true
+	return true, newStatus
 }
 
 // interpretScreenEvent maps a raw probe.ScreenChangeEvent to a status
