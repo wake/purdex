@@ -161,7 +161,7 @@ func TestApplyIntentLifecycle_Case1_NotActive_NotShouldActive_Noop(t *testing.T)
 	rec := installRecordingDetector(t, m)
 
 	// Status idle, not in OnEntryStatus
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusIdle)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusIdle, nil)
 
 	if rec.startCount() != 0 {
 		t.Fatalf("detector started count = %d, want 0", rec.startCount())
@@ -177,7 +177,7 @@ func TestApplyIntentLifecycle_Case2_NotActive_ShouldActive_Start(t *testing.T) {
 	rec := installRecordingDetector(t, m)
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	<-rec.started
 	if rec.startCount() != 1 {
@@ -206,14 +206,14 @@ func TestApplyIntentLifecycle_Case3_Active_NotShouldActive_Stop(t *testing.T) {
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
 	// Arm
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 
 	// Transition to idle (not in OnEntryStatus)
 	m.mu.Lock()
 	m.currentStatus["work"] = agentpkg.StatusIdle
 	m.mu.Unlock()
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusIdle)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusIdle, nil)
 
 	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
 		t.Fatalf("activeProbeIntents present after idle, want absent")
@@ -228,12 +228,12 @@ func TestApplyIntentLifecycle_Case4_Active_ShouldActive_TargetMatch_Noop(t *test
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
 	// First arm
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 	cur1, _ := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
 
 	// Re-apply with same status / same target — should be a noop
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	if rec.startCount() != 1 {
 		t.Fatalf("detector started count = %d, want 1 (case 4 noop)", rec.startCount())
@@ -252,7 +252,7 @@ func TestApplyIntentLifecycle_Case5_Active_ShouldActive_TargetMismatch_CancelAnd
 	rec := installRecordingDetector(t, m)
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 	cur1, _ := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
 
@@ -274,7 +274,7 @@ func TestApplyIntentLifecycle_Case5_Active_ShouldActive_TargetMismatch_CancelAnd
 		t.Fatalf("Upsert frame: %v", err)
 	}
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	// Wait for second start.
 	waitFor(t, time.Second, func() bool { return rec.startCount() == 2 }, "second detector start")
@@ -301,11 +301,11 @@ func TestReconcileSessionActive_UnknownAgent_DropAll(t *testing.T) {
 	rec := installRecordingDetector(t, m)
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 
 	// Pretend agentType swap to an unregistered name.
-	m.probeIntentDisp.applyStatus("work", "ghost-agent", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "ghost-agent", agentpkg.StatusRunning, nil)
 
 	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
 		t.Fatalf("activeProbeIntents present after unknown-agent reconcile")
@@ -319,12 +319,12 @@ func TestReconcileSessionActive_ProviderHasNoIntents_DropAll(t *testing.T) {
 	rec := installRecordingDetector(t, m)
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 
 	// Register a no-intent provider with a different agent name and switch.
 	m.registry.Register(&fakeAgentProvider{typeName: "cc-noprobes"})
-	m.probeIntentDisp.applyStatus("work", "cc-noprobes", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "cc-noprobes", agentpkg.StatusRunning, nil)
 
 	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
 		t.Fatalf("activeProbeIntents present after switching to no-probe provider")
@@ -340,7 +340,7 @@ func TestReconcileSessionActive_AgentTypeChanged_DropOld(t *testing.T) {
 	rec := installRecordingDetector(t, m)
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 	cur1, _ := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
 	if cur1.agentType != "codex" {
@@ -372,7 +372,7 @@ func TestReconcileSessionActive_AgentTypeChanged_DropOld(t *testing.T) {
 		t.Fatalf("Delete frame: %v", err)
 	}
 
-	m.probeIntentDisp.applyStatus("work", "alt-codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "alt-codex", agentpkg.StatusRunning, nil)
 	waitFor(t, time.Second, func() bool {
 		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
 		return ok && cur.agentType == "alt-codex"
@@ -390,7 +390,7 @@ func TestReconcileSessionActive_KindNotInDeclared_DropOldKind(t *testing.T) {
 	rec := installRecordingDetector(t, m)
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 
 	// Register an alt agent that declares NO intents and switch.
@@ -398,7 +398,7 @@ func TestReconcileSessionActive_KindNotInDeclared_DropOldKind(t *testing.T) {
 		fakeAgentProvider: fakeAgentProvider{typeName: "alt-noprobedead"},
 		intents:           nil, // empty declared kinds
 	})
-	m.probeIntentDisp.applyStatus("work", "alt-noprobedead", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "alt-noprobedead", agentpkg.StatusRunning, nil)
 
 	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
 		t.Fatalf("ProcessDead entry present after switching to provider without it")
@@ -440,7 +440,7 @@ func TestConsumeSignals_AppliedTrue_ReRunsApplyStatus(t *testing.T) {
 	})
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	// After detector emits PaneAlive=true → OnSignal returns Error → guards
 	// pass → applied=true → consumeSignals invokes applyStatus(error) →
@@ -499,7 +499,7 @@ func TestConsumeSignals_AppliedFalse_NoTeardown(t *testing.T) {
 	m.currentStatus["work"] = agentpkg.StatusError
 	m.mu.Unlock()
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusError)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusError, nil)
 
 	// Active entry should remain (no probe-applied teardown happened).
 	// Wait a brief moment for the detector to emit + guard to drop.
@@ -594,7 +594,7 @@ func TestApplyIntentLifecycle_StatusChangedBetweenSnapshotAndArm_NoArming(t *tes
 	m.currentStatus["work"] = agentpkg.StatusIdle
 	m.mu.Unlock()
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	if rec.startCount() != 0 {
 		t.Fatalf("detector started despite live currentStatus = Idle; want zero starts")
@@ -613,7 +613,7 @@ func TestStopAll_CancelsAndClearsActiveMap(t *testing.T) {
 	rec := installRecordingDetector(t, m)
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 
 	m.probeIntentDisp.stopAll()
@@ -727,5 +727,89 @@ func TestReplayStatus_StaleFrame_DetectorEmitsImmediately(t *testing.T) {
 	m.mu.Unlock()
 	if got != agentpkg.StatusError {
 		t.Fatalf("currentStatus = %q, want error after stale-frame replay", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Bundle #3: probeIntentTargetHint fast-path
+// -----------------------------------------------------------------------------
+
+// TestApplyStatus_HintBypassesFrameLookup pins the codex hook-pipeline-lag
+// fix #3 contract: a non-nil hint with paneID + senderPID populated must
+// arm the detector with the hint values without consulting
+// lookupTopFrameForSessionLocked. Sessions whose frame is missing from the
+// store would otherwise miss case-2 arming on the slow path; the hint
+// route lets the live hook-handler caller (handler.go) pass through its
+// projection.TopFrame snapshot directly.
+//
+// Two-call test:
+//
+//  1. nil hint, no frame seeded — slow lookup misses → case "shouldActive
+//     but lookup miss" applies; no arm because nothing was wasActive.
+//  2. hint provided, no frame seeded — hint path arms the detector with
+//     hint.paneID / hint.senderPID even though the slow lookup would have
+//     failed.
+func TestApplyStatus_HintBypassesFrameLookup(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	rec := installRecordingDetector(t, m)
+	// Seed currentStatus only — no frame in m.frames store, so
+	// lookupTopFrameForSessionLocked returns hasFrame=false.
+	m.mu.Lock()
+	m.currentStatus["work"] = agentpkg.StatusRunning
+	m.mu.Unlock()
+
+	// (1) nil hint → slow lookup misses → no arm.
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	if rec.startCount() != 0 {
+		t.Fatalf("nil-hint detector started count = %d, want 0 (slow lookup must miss)", rec.startCount())
+	}
+	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
+		t.Fatalf("nil-hint activeProbeIntents present, want absent")
+	}
+
+	// (2) hint provided → arm with hint values (no frame seeded).
+	hint := &probeIntentTargetHint{paneID: "%9", senderPID: 8888}
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, hint)
+	<-rec.started
+	if rec.startCount() != 1 {
+		t.Fatalf("hint detector started count = %d, want 1", rec.startCount())
+	}
+	cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+	if !ok {
+		t.Fatalf("hint activeProbeIntents missing, want set")
+	}
+	if cur.agentType != "codex" || cur.paneID != "%9" || cur.senderPID != 8888 {
+		t.Fatalf("hint active entry = %+v, want codex/%%9/8888", cur)
+	}
+	rec.mu.Lock()
+	gotPaneID := rec.starts[0].PaneID
+	gotPID := rec.starts[0].SenderPID
+	rec.mu.Unlock()
+	if gotPaneID != "%9" || gotPID != 8888 {
+		t.Fatalf("detector started with paneID=%q senderPID=%d, want %%9/8888", gotPaneID, gotPID)
+	}
+}
+
+// TestApplyStatus_HintIncomplete_FallsBackToLookup verifies the empty-hint
+// guard: a hint struct with paneID="" or senderPID=0 must not be treated
+// as a valid fast-path target — the slow lookup runs as if hint were nil.
+// Production callers always populate both fields when they have
+// projection.TopFrame, but the guard is the contract that test mocks /
+// future callers can rely on.
+func TestApplyStatus_HintIncomplete_FallsBackToLookup(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	rec := installRecordingDetector(t, m)
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	// Hint with empty paneID → guard rejects, slow lookup arms with frame.
+	hint := &probeIntentTargetHint{paneID: "", senderPID: 8888}
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, hint)
+	<-rec.started
+	cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+	if !ok {
+		t.Fatalf("activeProbeIntents missing, want set")
+	}
+	if cur.paneID != "%5" || cur.senderPID != 4242 {
+		t.Fatalf("active entry = paneID=%q senderPID=%d, want %%5/4242 (slow lookup, hint rejected)", cur.paneID, cur.senderPID)
 	}
 }

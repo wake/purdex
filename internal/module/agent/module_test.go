@@ -107,7 +107,7 @@ func TestManageActivityWatch_DefaultNoOp(t *testing.T) {
 		agentpkg.StatusClear,
 	}
 	for _, s := range statuses {
-		m.manageActivityWatch("sess", "cc", s)
+		m.manageActivityWatch("sess", "cc", s, nil)
 	}
 
 	rec.mu.Lock()
@@ -133,7 +133,7 @@ func TestManageActivityWatch_StopsExistingWatcher(t *testing.T) {
 	m.activeWatchers["sess"] = "cc"
 	m.mu.Unlock()
 
-	m.manageActivityWatch("sess", "cc", agentpkg.StatusIdle)
+	m.manageActivityWatch("sess", "cc", agentpkg.StatusIdle, nil)
 
 	m.mu.Lock()
 	_, present := m.activeWatchers["sess"]
@@ -323,7 +323,7 @@ func TestManageActivityWatch_StatusToRunning_ProbeIntentArmed(t *testing.T) {
 	}
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning, nil)
 
 	<-rec.started
 	if rec.startCount() != 1 {
@@ -349,14 +349,14 @@ func TestManageActivityWatch_StatusToIdle_ProbeIntentTornDown(t *testing.T) {
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
 	// Arm.
-	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 
 	// Flip live status to idle, then call manageActivityWatch with idle.
 	m.mu.Lock()
 	m.currentStatus["work"] = agentpkg.StatusIdle
 	m.mu.Unlock()
-	m.manageActivityWatch("work", "codex", agentpkg.StatusIdle)
+	m.manageActivityWatch("work", "codex", agentpkg.StatusIdle, nil)
 
 	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
 		t.Fatalf("activeProbeIntents present after manageActivityWatch(idle), want absent")
@@ -380,7 +380,7 @@ func TestRenameSession_OldNameProbeIntentMigratesToNew(t *testing.T) {
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
 	// Arm under oldName.
-	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); !ok {
 		t.Fatalf("active entry missing under oldName before rename")
@@ -419,7 +419,7 @@ func TestModuleStop_ProbeIntentDispatcherStoppedAll(t *testing.T) {
 	}
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning, nil)
 	<-rec.started
 
 	if err := m.Stop(context.Background()); err != nil {

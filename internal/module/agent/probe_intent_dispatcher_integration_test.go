@@ -112,7 +112,7 @@ func TestIntegration_CodexProcessDead_PaneAlive_BroadcastsError(t *testing.T) {
 	}
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	got := readBroadcastNormalized(t, sub, 2*time.Second, "code-work")
 	if got.Status != string(agentpkg.StatusError) {
@@ -142,7 +142,7 @@ func TestIntegration_CodexProcessDead_PaneGone_BroadcastsClear(t *testing.T) {
 	}
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	got := readBroadcastNormalized(t, sub, 2*time.Second, "code-work")
 	if got.Status != string(agentpkg.StatusClear) {
@@ -179,7 +179,7 @@ func TestIntegration_CodexNormalExit_NoErrorBroadcast(t *testing.T) {
 	m.currentStatus["work"] = agentpkg.StatusIdle
 	m.mu.Unlock()
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusIdle)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusIdle, nil)
 
 	// Active entry must remain absent.
 	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); ok {
@@ -216,7 +216,7 @@ func TestIntegration_CodexRestart_ActiveTargetMismatch_ReArms(t *testing.T) {
 	}
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	cur1, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
 	if !ok {
@@ -246,7 +246,7 @@ func TestIntegration_CodexRestart_ActiveTargetMismatch_ReArms(t *testing.T) {
 	// Now flip pid=dead so the new detector emits on its first tick.
 	codex.SetIsPidAliveFnForTest(func(int) bool { return false })
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 
 	got := readBroadcastNormalized(t, sub, 2*time.Second, "code-work")
 	if got.Status != string(agentpkg.StatusError) {
@@ -291,7 +291,7 @@ func TestIntegration_AgentSwitchCodexToCC_OldDetectorTornDown(t *testing.T) {
 	}
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
 	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead); !ok {
 		t.Fatalf("codex detector did not arm")
 	}
@@ -299,7 +299,7 @@ func TestIntegration_AgentSwitchCodexToCC_OldDetectorTornDown(t *testing.T) {
 	// Register a cc provider with no ProbeIntents; switch the session top
 	// agent to it. reconcileSessionActive should drop the codex entry.
 	m.registry.Register(&fakeAgentProvider{typeName: "cc-noprobes"})
-	m.probeIntentDisp.applyStatus("work", "cc-noprobes", agentpkg.StatusRunning)
+	m.probeIntentDisp.applyStatus("work", "cc-noprobes", agentpkg.StatusRunning, nil)
 
 	waitFor(t, time.Second, func() bool {
 		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)

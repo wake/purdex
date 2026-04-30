@@ -405,12 +405,20 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// 2. waiting/running/idle transitions restart the watcher for the top frame.
 	watchAgentType := req.AgentType
 	watchStatus := result.Status
+	var watchHint *probeIntentTargetHint
 	if projection != nil && projection.TopFrame != nil {
 		watchAgentType = projection.TopFrame.AgentType
 		watchStatus = projection.TopFrame.Status
+		// Fast-path target injection (codex #3): caller already has
+		// projection.TopFrame resolved; pass it through so the dispatcher
+		// skips lookupTopFrameForSessionLocked → tmux exec under m.mu.
+		watchHint = &probeIntentTargetHint{
+			paneID:    projection.TopFrame.PaneID,
+			senderPID: projection.TopFrame.PID,
+		}
 	}
 	if req.TmuxSession != "" && m.prober != nil && result.Valid {
-		m.manageActivityWatch(req.TmuxSession, watchAgentType, watchStatus)
+		m.manageActivityWatch(req.TmuxSession, watchAgentType, watchStatus, watchHint)
 	}
 
 	// Clear subagents on non-compact SessionStart
