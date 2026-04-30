@@ -84,6 +84,15 @@ type probeIntentDispatcher struct {
 	// Default points to defaultStartProbeIntentDetector; P2-T4 wires a
 	// codex-routed implementation in newProbeIntentDispatcher / Init.
 	startDetector probeIntentDetectorStarter
+
+	// supportedKinds is the registry of ProbeIntent kinds that have
+	// production detector wiring. Lifecycle pre-arm checks membership and
+	// fails closed (skip arm + emit observability) for unwired kinds — per
+	// audit F6: a provider declaring a new kind without a paired Module.New
+	// switch case must surface as a runtime signal rather than silently
+	// appearing armed with a noop default detector. nil map = no kinds
+	// supported (test default for empty Module unless the test populates).
+	supportedKinds map[agentpkg.ProbeIntentKind]struct{}
 }
 
 // probeIntentDetectorStarter is the contract for ProbeIntent detector
@@ -116,12 +125,35 @@ type activeIntent struct {
 // detectors and starting new goroutines is intentionally deferred so
 // applyIntentLifecycle never blocks on goroutine schedule while holding
 // m.mu (avoids long lock holds during detector startup).
+//
+// stopOld carries the full observability context for the case-3 / case-5
+// teardown so emitStopObservability can run after Unlock without
+// re-reading map state.
 type lifecyclePlan struct {
-	cancelOld  context.CancelFunc
-	startCtx   context.Context
+	stopOld         *stopMeta
+	startCtx        context.Context
+	paneID          string
+	senderPID       int
+	generation      uint64
+	unsupportedKind bool
+	kind            agentpkg.ProbeIntentKind
+}
+
+// stopMeta carries the metadata needed to cancel + emit observability for
+// a stopped active intent. Returned by stopActiveIntentInLock so callers
+// can defer the cancel + emit work until after they release m.mu.
+//
+// Per audit F5/F7: every cancel path (lifecycle case 3/5, reconcile,
+// stopAll, consumeSignals teardown) MUST emit metric + dev log + trace.
+// Centralizing the emission contract through stopMeta + emitStopObservability
+// eliminates the previously-distributed observability gaps.
+type stopMeta struct {
+	cancel     context.CancelFunc
+	agentType  string
+	kind       agentpkg.ProbeIntentKind
 	paneID     string
-	senderPID  int
 	generation uint64
+	reason     string
 }
 
 // newProbeIntentDispatcher constructs a dispatcher tied to the given
@@ -180,6 +212,71 @@ func (d *probeIntentDispatcher) applyStatus(session, agentType string, newStatus
 	}
 }
 
+// stopActiveIntentInLock removes activeProbeIntents[session][kind] when
+// either expectGeneration==0 (caller doesn't care which generation) OR
+// cur.generation matches expectGeneration. Returns ok=true with full
+// stopMeta only when an entry was removed.
+//
+// CALLER MUST hold m.mu. The returned cancel ctx is invoked AFTER Unlock
+// (followed by emitStopObservability) so detector goroutines that
+// re-acquire m.mu during shutdown do not deadlock.
+//
+// Generation guard (audit F2): consumeSignals teardown after applied=true
+// passes its emitting generation; if a concurrent rearm has already
+// installed gen N+1, the mismatch causes ok=false and the newer detector
+// stays intact.
+func (d *probeIntentDispatcher) stopActiveIntentInLock(
+	session string,
+	kind agentpkg.ProbeIntentKind,
+	expectGeneration uint64,
+	reason string,
+) (stopMeta, bool) {
+	perSession := d.parent.activeProbeIntents[session]
+	cur, ok := perSession[kind]
+	if !ok {
+		return stopMeta{}, false
+	}
+	if expectGeneration != 0 && cur.generation != expectGeneration {
+		return stopMeta{}, false
+	}
+	delete(perSession, kind)
+	if len(perSession) == 0 {
+		delete(d.parent.activeProbeIntents, session)
+	}
+	return stopMeta{
+		cancel:     cur.cancel,
+		agentType:  cur.agentType,
+		kind:       kind,
+		paneID:     cur.paneID,
+		generation: cur.generation,
+		reason:     reason,
+	}, true
+}
+
+// emitStopObservability records counter + dev log + trace for an intent
+// teardown. Per audit F5/F7: every stop path must emit these three
+// surfaces — single helper enforces the contract.
+func (d *probeIntentDispatcher) emitStopObservability(session string, meta stopMeta) {
+	agentpkg.MetricProbeIntentStopped.Add(1)
+	if isDevMode() {
+		log.Printf("[probe-intent] stop session=%s agent=%s kind=%s generation=%d reason=%s",
+			session, meta.agentType, meta.kind, meta.generation, meta.reason)
+	}
+	if d.parent.traceSink != nil {
+		d.parent.traceSink.AppendProbeIntent(probeIntentTraceArgs{
+			TmuxSession: session,
+			PaneID:      meta.paneID,
+			AgentType:   meta.agentType,
+			Kind:        string(meta.kind),
+			Decision:    "stop",
+			Reason:      meta.reason,
+			Payload: map[string]any{
+				"generation": meta.generation,
+			},
+		})
+	}
+}
+
 // reconcileSessionActive cancels + deletes active entries that no longer
 // apply to the (newAgentType, declaredKinds) pair. Called from applyStatus
 // before the per-intent lifecycle loop.
@@ -197,11 +294,12 @@ func (d *probeIntentDispatcher) reconcileSessionActive(
 	newAgentType string,
 	declaredKinds map[agentpkg.ProbeIntentKind]struct{},
 ) {
-	var toCancel []context.CancelFunc
+	var stops []stopMeta
 
 	d.parent.mu.Lock()
 	perSession := d.parent.activeProbeIntents[session]
 	if perSession != nil {
+		var staleKinds []agentpkg.ProbeIntentKind
 		for kind, cur := range perSession {
 			stale := declaredKinds == nil ||
 				cur.agentType != newAgentType
@@ -211,18 +309,23 @@ func (d *probeIntentDispatcher) reconcileSessionActive(
 				}
 			}
 			if stale {
-				toCancel = append(toCancel, cur.cancel)
-				delete(perSession, kind)
+				staleKinds = append(staleKinds, kind)
 			}
 		}
-		if len(perSession) == 0 {
-			delete(d.parent.activeProbeIntents, session)
+		// Map mutation outside the iterator to avoid Go's "for range over
+		// map being mutated" undefined ordering on subsequent iterations.
+		for _, kind := range staleKinds {
+			meta, ok := d.stopActiveIntentInLock(session, kind, 0, "reconcile-cross-provider")
+			if ok {
+				stops = append(stops, meta)
+			}
 		}
 	}
 	d.parent.mu.Unlock()
 
-	for _, cancel := range toCancel {
-		cancel()
+	for _, meta := range stops {
+		meta.cancel()
+		d.emitStopObservability(session, meta)
 	}
 }
 
@@ -269,10 +372,8 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 		// case 1: noop
 	case !shouldActive && wasActive:
 		// case 3: stop only
-		plan.cancelOld = cur.cancel
-		delete(perSession, intent.Kind)
-		if len(perSession) == 0 {
-			delete(d.parent.activeProbeIntents, session)
+		if meta, ok := d.stopActiveIntentInLock(session, intent.Kind, 0, "lifecycle-not-shouldActive"); ok {
+			plan.stopOld = &meta
 		}
 	case shouldActive:
 		// case 2 / 4 / 5: lookup live currentStatus + top frame.
@@ -282,10 +383,8 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 		curStatus, hasStatus := d.parent.currentStatus[session]
 		if !hasStatus || !slices.Contains(intent.OnEntryStatus, curStatus) {
 			if wasActive {
-				plan.cancelOld = cur.cancel
-				delete(perSession, intent.Kind)
-				if len(perSession) == 0 {
-					delete(d.parent.activeProbeIntents, session)
+				if meta, ok := d.stopActiveIntentInLock(session, intent.Kind, 0, "lifecycle-status-drift"); ok {
+					plan.stopOld = &meta
 				}
 			}
 			break
@@ -293,10 +392,8 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 		paneID, senderPID, hasFrame := d.parent.lookupTopFrameForSessionLocked(session)
 		if !hasFrame || paneID == "" || senderPID == 0 {
 			if wasActive {
-				plan.cancelOld = cur.cancel
-				delete(perSession, intent.Kind)
-				if len(perSession) == 0 {
-					delete(d.parent.activeProbeIntents, session)
+				if meta, ok := d.stopActiveIntentInLock(session, intent.Kind, 0, "lifecycle-frame-miss"); ok {
+					plan.stopOld = &meta
 				}
 			}
 			break
@@ -309,12 +406,28 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 			// case 4: already armed correctly
 			break
 		}
-		// case 2 (!wasActive) or case 5 (target mismatch)
+		// case 2 (!wasActive) or case 5 (target mismatch).
+		// F6 fail-closed: refuse to arm an unsupported kind. A future
+		// provider might declare a new ProbeIntentKind without the matching
+		// Module.New switch case; emit observability + skip arm rather
+		// than silently parking on the noop default detector.
+		if _, supported := d.supportedKinds[intent.Kind]; !supported {
+			plan.unsupportedKind = true
+			if wasActive {
+				if meta, ok := d.stopActiveIntentInLock(session, intent.Kind, 0, "lifecycle-unsupported-kind"); ok {
+					plan.stopOld = &meta
+				}
+			}
+			break
+		}
 		if wasActive {
-			plan.cancelOld = cur.cancel
+			if meta, ok := d.stopActiveIntentInLock(session, intent.Kind, 0, "lifecycle-target-mismatch"); ok {
+				plan.stopOld = &meta
+			}
 		}
 		generation := d.parent.nextProbeIntentGeneration()
 		ctx, cancel := context.WithCancel(d.parentCtx)
+		perSession = d.parent.activeProbeIntents[session]
 		if perSession == nil {
 			perSession = make(map[agentpkg.ProbeIntentKind]activeIntent)
 			d.parent.activeProbeIntents[session] = perSession
@@ -334,20 +447,25 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 	d.parent.mu.Unlock()
 
 	// Execute plan outside m.mu.
-	if plan.cancelOld != nil {
-		plan.cancelOld()
-		agentpkg.MetricProbeIntentStopped.Add(1)
+	if plan.stopOld != nil {
+		plan.stopOld.cancel()
+		d.emitStopObservability(session, *plan.stopOld)
+	}
+	if plan.unsupportedKind {
+		agentpkg.MetricProbeIntentUnsupportedKind.Add(1)
 		if isDevMode() {
-			log.Printf("[probe-intent] stop session=%s kind=%s reason=lifecycle-applyStatus",
-				session, intent.Kind)
+			log.Printf("[probe-intent] unsupported_kind session=%s agent=%s kind=%s reason=skip-arm",
+				session, agentType, intent.Kind)
 		}
-		d.parent.traceSink.AppendProbeIntent(probeIntentTraceArgs{
-			TmuxSession: session,
-			AgentType:   agentType,
-			Kind:        string(intent.Kind),
-			Decision:    "stop",
-			Reason:      "lifecycle-applyStatus",
-		})
+		if d.parent.traceSink != nil {
+			d.parent.traceSink.AppendProbeIntent(probeIntentTraceArgs{
+				TmuxSession: session,
+				AgentType:   agentType,
+				Kind:        string(intent.Kind),
+				Decision:    "drop",
+				Reason:      "unsupported-kind",
+			})
+		}
 	}
 	if plan.startCtx != nil {
 		out := make(chan agentpkg.Signal, 1)
@@ -395,6 +513,7 @@ func (d *probeIntentDispatcher) consumeSignals(
 	generation uint64,
 	in <-chan agentpkg.Signal,
 ) {
+	appliedAny := false
 	for sig := range in {
 		agentpkg.MetricProbeIntentSignalEmitted.Add(1)
 		applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{
@@ -409,16 +528,17 @@ func (d *probeIntentDispatcher) consumeSignals(
 		if !applied {
 			continue
 		}
+		appliedAny = true
 		// Per spec §5.4 round 5 P1: applied=true means OnEntryStatus no
 		// longer holds (currentStatus already flipped to error/clear inside
-		// applyProbeGuards step 4). Re-run applyStatus so lifecycle case 3
-		// (active && !shouldActive) cancels the detector ctx + deletes the
-		// active entry through the single lifecycle entry point.
+		// applyProbeGuards step 4). Tear down the active entry through the
+		// generation-scoped helper so a concurrent rearm (gen N+1 from a
+		// different hook) survives our cleanup — audit F2.
 		//
-		// Ordering: emit observability surfaces (counter / log / trace)
-		// BEFORE applyStatus so test waitFor predicates that key off
-		// active-entry presence see the log/trace as a happens-before
-		// guarantee rather than a race against case 3 teardown.
+		// Ordering: emit signal observability (counter / log / trace) BEFORE
+		// teardown so test waitFor predicates keying off active-entry
+		// presence see the signal log as a happens-before guarantee rather
+		// than a race against the teardown's stop log.
 		//
 		// appliedStatus comes from applyProbeGuards' return (P2-T6): a
 		// re-read of currentStatus[session] races with concurrent SessionEnd
@@ -444,7 +564,36 @@ func (d *probeIntentDispatcher) consumeSignals(
 				},
 			})
 		}
-		d.applyStatus(session, agentType, appliedStatus)
+		// F2 fix: generation-scoped teardown. If a concurrent hook rearmed
+		// gen N+1 between detector emit and now, stopActiveIntentInLock
+		// returns ok=false (cur.generation != generation) and the newer
+		// detector is preserved. Previously we re-ran applyStatus(error)
+		// which routed through case-3 cleanup and cancelled whatever entry
+		// was present — including the newer rearmed gen — leaving the
+		// session running but undetected.
+		d.parent.mu.Lock()
+		teardown, ok := d.stopActiveIntentInLock(session, intent.Kind, generation, "applied:"+string(appliedStatus))
+		d.parent.mu.Unlock()
+		if ok {
+			teardown.cancel()
+			d.emitStopObservability(session, teardown)
+		}
+	}
+	// F1 fix: detector exited (one-shot post-emit) but the loop exited
+	// without an applied signal — graceWindow drop, transition gate, or
+	// other guard rejected the only emission. Without this teardown the
+	// active entry stays around with no live detector; case-4 (target
+	// match) would short-circuit the next status change → re-arm never
+	// fires → codex stays Running indefinitely after a missed crash.
+	// Generation-scoped so a concurrent rearm survives.
+	if !appliedAny {
+		d.parent.mu.Lock()
+		teardown, ok := d.stopActiveIntentInLock(session, intent.Kind, generation, "detector-exited-no-effect")
+		d.parent.mu.Unlock()
+		if ok {
+			teardown.cancel()
+			d.emitStopObservability(session, teardown)
+		}
 	}
 }
 
@@ -521,19 +670,34 @@ func (d *probeIntentDispatcher) replayStatus() {
 // detector goroutines that may briefly attempt re-acquisition through
 // applyProbeGuards do not deadlock.
 func (d *probeIntentDispatcher) stopAll() {
-	var toCancel []context.CancelFunc
+	type stopAllRecord struct {
+		session string
+		meta    stopMeta
+	}
+	var stops []stopAllRecord
 
 	d.parent.mu.Lock()
-	for _, perSession := range d.parent.activeProbeIntents {
-		for _, cur := range perSession {
-			toCancel = append(toCancel, cur.cancel)
+	for session, perSession := range d.parent.activeProbeIntents {
+		for kind, cur := range perSession {
+			stops = append(stops, stopAllRecord{
+				session: session,
+				meta: stopMeta{
+					cancel:     cur.cancel,
+					agentType:  cur.agentType,
+					kind:       kind,
+					paneID:     cur.paneID,
+					generation: cur.generation,
+					reason:     "module-stop",
+				},
+			})
 		}
 	}
 	d.parent.activeProbeIntents = make(map[string]map[agentpkg.ProbeIntentKind]activeIntent)
 	d.parent.mu.Unlock()
 
-	for _, cancel := range toCancel {
-		cancel()
+	for _, rec := range stops {
+		rec.meta.cancel()
+		d.emitStopObservability(rec.session, rec.meta)
 	}
 }
 

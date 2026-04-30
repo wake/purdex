@@ -271,6 +271,7 @@ type probeIntentMetricSnapshot struct {
 	droppedGrace          int64
 	droppedErrorGuard     int64
 	droppedTransitionGate int64
+	unsupportedKind       int64
 }
 
 func snapshotProbeIntentMetrics() probeIntentMetricSnapshot {
@@ -283,6 +284,7 @@ func snapshotProbeIntentMetrics() probeIntentMetricSnapshot {
 		droppedGrace:          metricInt("purdex_probe_intent_dropped_grace_total"),
 		droppedErrorGuard:     metricInt("purdex_probe_intent_dropped_error_guard_total"),
 		droppedTransitionGate: metricInt("purdex_probe_intent_dropped_transition_gate_total"),
+		unsupportedKind:       metricInt("purdex_probe_intent_unsupported_kind_total"),
 	}
 }
 

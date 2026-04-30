@@ -729,3 +729,124 @@ func TestReplayStatus_StaleFrame_DetectorEmitsImmediately(t *testing.T) {
 		t.Fatalf("currentStatus = %q, want error after stale-frame replay", got)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Round-2 audit fixes: F1 graceWindow strand / F2 generation-scoped teardown / F6 fail-closed
+// -----------------------------------------------------------------------------
+
+// TestConsumeSignals_GraceWindowDrop_TearsDownActiveEntry pins F1: when a
+// one-shot detector emits its sole Signal during an active graceWindow,
+// applyProbeGuards drops the signal (applied=false), the channel closes,
+// and consumeSignals' post-loop teardown must remove the active entry —
+// otherwise a future status change observes case-4 (target match) and the
+// detector never re-arms, leaving codex permanently undetected.
+func TestConsumeSignals_GraceWindowDrop_TearsDownActiveEntry(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	m.sessions = &fakeSessionProvider{}
+	// Emit-once-and-exit detector mirrors production codex (returns after
+	// emit, channel closes via wrapping goroutine).
+	m.probeIntentDisp.startDetector = func(ctx context.Context, _ *Module, _ agentpkg.ProbeIntentKind, _ string, _ int, out chan<- agentpkg.Signal) {
+		select {
+		case out <- agentpkg.Signal{
+			Kind:      agentpkg.ProbeIntentKindProcessDead,
+			PaneAlive: true,
+			PaneID:    "%5",
+			SenderPID: 4242,
+		}:
+		case <-ctx.Done():
+		}
+	}
+	t.Cleanup(func() { m.probeIntentDisp.stopAll() })
+
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+	// Open graceWindow: any probe signal arriving in the next probeGraceWindow
+	// is suppressed. With the F1 fix, the active entry must still be torn
+	// down so a subsequent crash is not missed.
+	m.probeOrch.recordHookAt("work")
+
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+	waitFor(t, 2*time.Second, func() bool {
+		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		return !ok
+	}, "active entry torn down post-loop after graceWindow drop (F1)")
+}
+
+// TestStopActiveIntentInLock_GenerationMismatch_PreservesEntry pins F2:
+// the generation guard must reject mismatched expectations so a concurrent
+// rearm (gen N+1) survives the previous detector's applied-true teardown.
+// Direct unit test on stopActiveIntentInLock — the F2 fix's contract is
+// the helper's behavior under generation mismatch.
+func TestStopActiveIntentInLock_GenerationMismatch_PreservesEntry(t *testing.T) {
+	m := newDispatcherTestModule(t)
+
+	cancelCalls := int32(0)
+	cancel := func() { atomic.AddInt32(&cancelCalls, 1) }
+	m.mu.Lock()
+	m.activeProbeIntents["work"] = map[agentpkg.ProbeIntentKind]activeIntent{
+		agentpkg.ProbeIntentKindProcessDead: {
+			agentType:  "codex",
+			paneID:     "%5",
+			senderPID:  4242,
+			generation: 5,
+			cancel:     cancel,
+		},
+	}
+	m.mu.Unlock()
+
+	// Caller observed gen 1 → expectGeneration=1 → cur.generation=5 → mismatch.
+	m.mu.Lock()
+	_, ok := m.probeIntentDisp.stopActiveIntentInLock("work", agentpkg.ProbeIntentKindProcessDead, 1, "test-mismatch")
+	m.mu.Unlock()
+
+	if ok {
+		t.Fatalf("ok=true with mismatched expectGeneration, want false")
+	}
+	if atomic.LoadInt32(&cancelCalls) != 0 {
+		t.Fatalf("cancel invoked %d times despite mismatch, want 0", atomic.LoadInt32(&cancelCalls))
+	}
+	// Entry must still be present.
+	cur, present := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+	if !present {
+		t.Fatalf("entry torn down despite generation mismatch")
+	}
+	if cur.generation != 5 {
+		t.Fatalf("generation = %d, want 5 (preserved)", cur.generation)
+	}
+}
+
+// TestApplyIntentLifecycle_UnsupportedKind_FailsClosed pins F6: when a
+// provider declares a Kind that has no corresponding entry in
+// supportedKinds, lifecycle must NOT arm a detector — silent default
+// noop would otherwise leave the system "armed" with zero observability.
+// Verifies (1) no detector started, (2) no active entry recorded, (3)
+// MetricProbeIntentUnsupportedKind +1.
+func TestApplyIntentLifecycle_UnsupportedKind_FailsClosed(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	rec := installRecordingDetector(t, m)
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	futureKind := agentpkg.ProbeIntentKind("future_kind_unwired")
+	futureIntent := agentpkg.ProbeIntent{
+		Kind:          futureKind,
+		OnEntryStatus: []agentpkg.Status{agentpkg.StatusRunning},
+		OnSignal:      func(agentpkg.Signal) agentpkg.Status { return agentpkg.StatusError },
+	}
+
+	before := snapshotProbeIntentMetrics()
+	m.probeIntentDisp.applyIntentLifecycle("work", "codex", agentpkg.StatusRunning, futureIntent)
+	after := snapshotProbeIntentMetrics()
+
+	if rec.startCount() != 0 {
+		t.Fatalf("detector started %d time(s) for unsupported kind, want 0", rec.startCount())
+	}
+	if _, ok := readActiveIntent(m, "work", futureKind); ok {
+		t.Fatalf("active entry created for unsupported kind, want none")
+	}
+	if got := after.unsupportedKind - before.unsupportedKind; got != 1 {
+		t.Fatalf("unsupportedKind metric delta = %d, want 1", got)
+	}
+	if got := after.started - before.started; got != 0 {
+		t.Fatalf("started metric delta = %d, want 0 (no arm)", got)
+	}
+}

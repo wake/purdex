@@ -37,15 +37,15 @@ import (
 	"github.com/wake/purdex/internal/agent/opencode"
 )
 
-// wiredKinds is the set of ProbeIntentKind values for which Module.New()
-// installs a dispatch case in its startDetector closure. Bump this set in
-// lockstep with the production switch in module.go — drift on either side
-// trips TestProbeIntentDrift_AllDeclaredKindsHaveDispatcherCase.
-//
-// W6-3 first PR scope: only ProcessDead. W6-4 / W6-1 / W6-2 / W6-6 add
-// more entries here as they land.
-var wiredKinds = map[agentpkg.ProbeIntentKind]struct{}{
-	agentpkg.ProbeIntentKindProcessDead: {},
+// productionSupportedKinds reads the actual supportedKinds map populated
+// by Module.New() — the production routing source of truth. Per audit F6:
+// the drift test must exercise production routing rather than a hand-
+// written mirror, so a missing wire surfaces as a real fail-closed
+// branch in lifecycle, not as a stale test fixture.
+func productionSupportedKinds(t *testing.T) map[agentpkg.ProbeIntentKind]struct{} {
+	t.Helper()
+	m := newTestModule(t) // calls Module.New, populates probeIntentDisp.supportedKinds
+	return m.probeIntentDisp.supportedKinds
 }
 
 // productionRegistry constructs a registry mirroring what Module.Init()
@@ -79,6 +79,7 @@ func productionRegistry(t *testing.T) *agentpkg.Registry {
 // codex satisfies the interface; cc and opencode return false on the
 // type assertion and are skipped.
 func TestProbeIntentDriftCoverage(t *testing.T) {
+	wired := productionSupportedKinds(t)
 	r := productionRegistry(t)
 	providers := r.All()
 	if len(providers) == 0 {
@@ -107,8 +108,8 @@ func TestProbeIntentDriftCoverage(t *testing.T) {
 			if intent.OnSignal == nil {
 				t.Errorf("provider %q intent Kind=%q: OnSignal is nil — dispatcher would crash on signal mapping", p.Type(), intent.Kind)
 			}
-			if _, ok := wiredKinds[intent.Kind]; !ok {
-				t.Errorf("provider %q declares Kind=%q but Module.New()'s startDetector switch has no case for it (wiredKinds drift) — add the case + bump wiredKinds in this test in lockstep", p.Type(), intent.Kind)
+			if _, ok := wired[intent.Kind]; !ok {
+				t.Errorf("provider %q declares Kind=%q but Module.New()'s supportedKinds map (production routing) has no entry for it — add a switch case in startDetector + add the kind to supportedKinds together (audit F6 fail-closed contract)", p.Type(), intent.Kind)
 			}
 		}
 	}
@@ -119,10 +120,17 @@ func TestProbeIntentDriftCoverage(t *testing.T) {
 
 // TestProbeIntentDrift_AllDeclaredKindsHaveDispatcherCase is the focused
 // dispatcher-routing guard. It collects every declared Kind across the
-// production registry and asserts the set is a subset of wiredKinds.
-// Failure here means a provider added a Kind constant + ProbeIntent slot
-// without bumping Module.New()'s switch.
+// production registry and asserts the set is a subset of the production
+// supportedKinds map (Module.New()-populated). Failure here means a
+// provider added a Kind constant + ProbeIntent slot without extending
+// both the startDetector switch AND supportedKinds in lockstep.
+//
+// Per audit F6: this exercises real production routing rather than a
+// hand-written wiredKinds mirror — a missing wire surfaces as
+// fail-closed in the production lifecycle (TestApplyIntentLifecycle_
+// UnsupportedKind_FailsClosed pins that branch directly).
 func TestProbeIntentDrift_AllDeclaredKindsHaveDispatcherCase(t *testing.T) {
+	wired := productionSupportedKinds(t)
 	r := productionRegistry(t)
 	declared := make(map[agentpkg.ProbeIntentKind][]string) // kind → providers declaring it
 	for _, p := range r.All() {
@@ -138,8 +146,8 @@ func TestProbeIntentDrift_AllDeclaredKindsHaveDispatcherCase(t *testing.T) {
 		t.Fatalf("no provider declares any ProbeIntent — drift suite is vacuous")
 	}
 	for kind, providers := range declared {
-		if _, ok := wiredKinds[kind]; !ok {
-			t.Errorf("Kind=%q declared by providers=%v but missing from wiredKinds (Module.New() switch); add a case + bump wiredKinds together", kind, providers)
+		if _, ok := wired[kind]; !ok {
+			t.Errorf("Kind=%q declared by providers=%v but missing from production supportedKinds (Module.New() switch + supportedKinds map); add a case + add to supportedKinds together — audit F6 fail-closed", kind, providers)
 		}
 	}
 }

@@ -119,3 +119,10 @@ var MetricProbeIntentDroppedErrorGuard = expvar.NewInt("purdex_probe_intent_drop
 // mapped status equaled the existing currentStatus (transition gate;
 // suppresses no-op broadcasts).
 var MetricProbeIntentDroppedTransitionGate = expvar.NewInt("purdex_probe_intent_dropped_transition_gate_total")
+
+// MetricProbeIntentUnsupportedKind counts arm attempts for kinds with no
+// production detector wiring. Per audit F6: lifecycle MUST fail-closed so
+// new providers declaring an unwired kind surface a runtime signal rather
+// than silently appearing armed with a noop detector. Drift test exercises
+// production routing rather than just a wiredKinds mirror.
+var MetricProbeIntentUnsupportedKind = expvar.NewInt("purdex_probe_intent_unsupported_kind_total")

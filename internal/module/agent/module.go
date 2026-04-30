@@ -155,6 +155,13 @@ func New(events *store.AgentEventStore) (*Module, error) {
 			defaultStartProbeIntentDetector(ctx, mod, kind, paneID, senderPID, out)
 		}
 	}
+	// supportedKinds MUST mirror the switch above. Lifecycle fails closed
+	// for any kind missing here (audit F6). Adding a new kind requires
+	// extending both the switch and this map together; the drift test
+	// `TestStartDetectorSwitchMatchesSupportedKinds` enforces parity.
+	m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
+		agentpkg.ProbeIntentKindProcessDead: {},
+	}
 	return m, nil
 }
 
