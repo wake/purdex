@@ -31,6 +31,7 @@ import { isModuleOwnedContribution } from './settings-contribution-types'
 import { clearHostBuiltinSources } from './host-builtin-sections'
 import enLocale from '../locales/en.json'
 import zhLocale from '../locales/zh-TW.json'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 
 const FakeComponent = () => null
 
@@ -46,6 +47,7 @@ function clearAll() {
 describe('registerBuiltinModules', () => {
   beforeEach(() => {
     clearAll()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
   })
 
   afterEach(() => {
@@ -69,6 +71,21 @@ describe('registerBuiltinModules', () => {
     const monitor = getModules().find((module) => module.id === 'memory-monitor')
     expect(monitor?.name).toBe('Performance Monitor')
     expect(getPaneRenderer('memory-monitor')).toBeDefined()
+  })
+
+  it('registers Performance Monitor as a settings page', () => {
+    registerBuiltinModules()
+
+    const contribution = listContributions('purdex').find((item) => item.id === 'memory-monitor.performance-monitor')
+    expect(contribution?.localId).toBe('performance-monitor')
+    expect(contribution?.labelKey).toBe('performance_monitor.title')
+  })
+
+  it('hides Performance Monitor settings page when the module is disabled', () => {
+    useModuleEnabledStore.getState().setEnabled('memory-monitor', false)
+    registerBuiltinModules()
+
+    expect(listContributions('purdex').some((item) => item.id === 'memory-monitor.performance-monitor')).toBe(false)
   })
 
   it('registers browser provider as disabled when no electronAPI', () => {

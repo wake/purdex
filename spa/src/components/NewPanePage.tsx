@@ -5,7 +5,7 @@ interface Props {
   onSelect: (content: PaneContent) => void
 }
 
-const SIMPLE_KINDS = new Set(['dashboard', 'history', 'hosts', 'memory-monitor'])
+const SIMPLE_KINDS = new Set(['dashboard', 'history', 'hosts'])
 
 export function NewPanePage({ onSelect }: Props) {
   const paneKinds = getModules().flatMap((m) =>
