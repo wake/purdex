@@ -27,6 +27,20 @@ func deriveCCStatus(purdexName string, rawEvent json.RawMessage) agent.DeriveRes
 			Status: agent.StatusRunning,
 		}
 
+	case "PdxPostToolUse":
+		// W6-1a: cc fires PostToolUse after a tool completes — including
+		// after the user grants a paused permission prompt. Mapping to
+		// running unblocks the waiting → running transition that has no
+		// other hook between Notification(permission_prompt)/PermissionRequest
+		// and the eventual Stop.
+		return agent.DeriveResult{
+			Valid:  true,
+			Status: agent.StatusRunning,
+			Detail: map[string]any{
+				"tool_name": raw["tool_name"],
+			},
+		}
+
 	case "PdxNotification":
 		nt := strVal(raw, "notification_type")
 		var status agent.Status

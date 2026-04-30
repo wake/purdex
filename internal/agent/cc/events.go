@@ -118,9 +118,8 @@ var ccEventSpecs = []agent.HookEventSpec{
 		PurdexName:   "PdxPostToolUse",
 		UpstreamKeys: []string{"PostToolUse"},
 		Lifecycle:    agent.LifecycleNone,
-		EmitsStatus:  []agent.Status{},
-		Description:  "Tool call completed successfully",
-		Handling:     agent.HookHandlingIgnored,
+		EmitsStatus:  []agent.Status{agent.StatusRunning},
+		Description:  "Tool call completed successfully (signals running after permission grant)",
 	},
 	{
 		PurdexName:   "PdxPostToolUseFailure",
