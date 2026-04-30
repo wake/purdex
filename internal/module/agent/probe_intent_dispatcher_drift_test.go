@@ -11,10 +11,10 @@
 //     (OnEntryStatus non-empty + OnSignal non-nil) and every declared
 //     Kind has a dispatcher case wired.
 //
-//  2. Dispatcher routing — every declared Kind is in the wiredKinds set
-//     this test maintains as a mirror of Module.New()'s startDetector
-//     switch. Missing case = drift signal at PR-review time; reviewers
-//     bump wiredKinds in lockstep with the production switch.
+//  2. Dispatcher routing — every declared Kind appears in the production
+//     supportedKinds map (Module.New()-populated). Missing case = drift
+//     signal at PR-review time; per audit F6 the lifecycle fail-closes
+//     for unwired kinds, but this test catches the drift earlier.
 //
 //  3. ProbeIntent shape — for every provider that implements the
 //     interface, ProbeIntents() returns a contract-shaped slice
@@ -22,9 +22,9 @@
 //     acceptable (a provider may declare zero intents) but a single
 //     malformed entry fails.
 //
-// The wiredKinds set MUST stay in sync with internal/module/agent/module.go
-// New()'s startDetector closure. Adding a new Kind without updating both is
-// the canonical drift bug this test guards against.
+// supportedKinds is read from a freshly-constructed Module via
+// productionSupportedKinds(t); this exercises the production routing
+// directly rather than maintaining a hand-written mirror in the test.
 package agent
 
 import (
@@ -71,8 +71,8 @@ func productionRegistry(t *testing.T) *agentpkg.Registry {
 //     never gate active=true and the intent would be dead code)
 //   - OnSignal is non-nil (dispatcher's applyProbeGuards invokes it as
 //     mapping callback; nil would crash production)
-//   - Kind appears in wiredKinds (i.e. Module.New()'s startDetector
-//     switch has a case for it)
+//   - Kind appears in production supportedKinds (i.e. Module.New()'s
+//     startDetector switch + supportedKinds map have it wired)
 //
 // At least one provider must declare ProbeIntentProvider so the suite
 // proves it is exercising real surface, not a vacuous loop. Today only
@@ -161,8 +161,8 @@ func TestProbeIntentDrift_AllDeclaredKindsHaveDispatcherCase(t *testing.T) {
 //
 // Companion to TestProbeIntentDriftCoverage; this one fails fast on the
 // minimal contract regardless of routing wiring, so a regression that
-// nukes wiredKinds at the same time as a malformed intent surfaces both
-// signals to the reviewer rather than just the routing one.
+// nukes a production wiring at the same time as a malformed intent surfaces
+// both signals to the reviewer rather than just the routing one.
 func TestProbeIntentDrift_OnSignalNonNil_OnEntryStatusNonEmpty(t *testing.T) {
 	r := productionRegistry(t)
 	any := false
