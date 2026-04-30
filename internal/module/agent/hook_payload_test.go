@@ -125,6 +125,54 @@ func TestResolveSessionCodeFromHook_FallsBackOnMalformedID(t *testing.T) {
 	}
 }
 
+// TestResolveSessionCodeFromHook_TrustsIDOverMismatchedName locks the current
+// trust contract: a valid tmux_session_id is trusted authoritatively. The daemon
+// does NOT cross-validate against tmux_session/tmux_pane_id. This means a
+// payload with mismatched fields (e.g. id=$5 + name=alpha where $5 belongs
+// to beta) produces split-state: broadcast and path hint emit to the
+// ID-derived code (beta-code), while internal projection/trace/events
+// keying still uses the name (alpha). User-visible emit is correct (reaches
+// the actual session via ID). Full system-wide ID-keying is tracked as a
+// follow-up; this test locks the current behavior so future refactors don't
+// silently change semantics.
+func TestResolveSessionCodeFromHook_TrustsIDOverMismatchedName(t *testing.T) {
+	m := &Module{}
+	fake := &fakeFastSessionProvider{
+		// Seed name→code so that if a regression caused the name path to
+		// run, we'd get "alpha-code" — distinct from the ID-derived code
+		// EncodeSessionID("$5") yields. This makes the assertion below
+		// catch any silent semantic flip.
+		sessions: []session.SessionInfo{{Name: "alpha", Code: "alpha-code"}},
+		lookup:   map[string]string{"alpha": "alpha-code"},
+	}
+	m.sessions = fake
+
+	// Mismatched payload: name claims "alpha" but ID is "$5". Per contract,
+	// pdx hook is the trusted producer; daemon must NOT reconcile.
+	req := EventRequest{TmuxSessionID: "$5", TmuxSession: "alpha"}
+	got, path := m.resolveSessionCodeFromHook(req)
+
+	want, err := session.EncodeSessionID("$5")
+	if err != nil {
+		t.Fatalf("EncodeSessionID: %v", err)
+	}
+	if got != want {
+		t.Errorf("resolveSessionCodeFromHook = %q, want %q (ID must win over mismatched name)", got, want)
+	}
+	if got == "alpha-code" {
+		t.Errorf("resolveSessionCodeFromHook returned name-derived code %q; ID path was bypassed", got)
+	}
+	if path != hookCodePathID {
+		t.Errorf("resolution path = %q, want %q (ID path label expected even with mismatched name)", path, hookCodePathID)
+	}
+	if fake.lookupCalls != 0 {
+		t.Errorf("LookupCodeByName calls = %d, want 0 (name path must not be consulted when ID is valid)", fake.lookupCalls)
+	}
+	if fake.listCalls != 0 {
+		t.Errorf("ListSessions calls = %d, want 0 (slow path must not be consulted when ID is valid)", fake.listCalls)
+	}
+}
+
 // TestEmitHookToSession_DirectUsesSessionIDPath is the focused unit-level
 // proof: emitHookToSession with an EventRequest carrying tmux_session_id
 // broadcasts to the ID-derived code WITHOUT touching the name cache. We
