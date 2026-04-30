@@ -2,13 +2,20 @@ package session
 
 import "time"
 
-const nameCacheTTL = time.Second
+// nameCacheTTL bounds how long a stale name→code mapping can be observed
+// after an external mutation (tmux rename / kill / new outside the daemon's
+// HTTP handlers) before the next refresh. The watcher path invalidates
+// proactively via wait-for, but a hook arriving in the gap between the
+// mutation and the watcher catching up still relies on this TTL as the
+// upper bound. 250ms keeps user-perceived staleness invisible while leaving
+// the cache hot for the 1+7×S avoidance that motivated this fast path.
+const nameCacheTTL = 250 * time.Millisecond
 
 // LookupCodeByName returns the session code for a tmux session name using a
-// 1s TTL cache built from a single `tmux list-sessions` call. It deliberately
-// avoids the meta merge / pane metadata fan-out that ListSessions performs,
-// because the hook hot path only needs name→code resolution and was paying
-// 1+7×S tmux subprocesses per event.
+// short-TTL cache built from a single `tmux list-sessions` call. It
+// deliberately avoids the meta merge / pane metadata fan-out that
+// ListSessions performs, because the hook hot path only needs name→code
+// resolution and was paying 1+7×S tmux subprocesses per event.
 func (m *SessionModule) LookupCodeByName(name string) (string, bool) {
 	m.nameCacheMu.Lock()
 	defer m.nameCacheMu.Unlock()
