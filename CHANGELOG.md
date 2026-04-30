@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.277] - 2026-04-30
+
+### Fix(spa): W6-LightsUI 4 lights polish (#783)
+
+Closes #762. Four self-contained SPA lights fixes after W1 audit + W6-3+W6-4 ship: `useAgentStore` clears leftover unread when status flips to running so a background tab marked unread by a prior waiting/idle no longer keeps the red dot indefinitely; `TabStatusIndicator` overlay dot drops `animate-breathe` when `isUnread` so the unread tint stays static; `TabStatusIndicator` switches `WarningDiamond` weight from `duotone` to `fill` for crisper error rendering; `SubagentDots` now colors by `is_proxy` (proxy = orange, native = blue) instead of agent type family and drops the hollow-ring proxy variant since the parent agent icon already conveys type.
+
 ## [1.0.0-alpha.276] - 2026-04-30
 
 ### Perf(daemon): hook pipeline fast-path + sqlite tail tuning (#776)
