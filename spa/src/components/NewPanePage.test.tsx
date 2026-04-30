@@ -45,4 +45,12 @@ describe('NewPanePage', () => {
     expect(screen.queryByText('Browser')).toBeNull()
     expect(screen.getByText('Dashboard')).toBeTruthy()
   })
+
+  it('does not expose Performance Monitor as pane replacement content', () => {
+    registerModule({ id: 'memory-monitor', name: 'Performance Monitor', panes: [{ kind: 'memory-monitor', component: () => null }] })
+
+    render(<NewPanePage onSelect={vi.fn()} />)
+
+    expect(screen.queryByText('Performance Monitor')).toBeNull()
+  })
 })

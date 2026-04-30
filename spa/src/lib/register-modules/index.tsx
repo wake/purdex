@@ -85,6 +85,10 @@ function MemoryMonitorPaneWrapper() {
   return <MemoryMonitorPage />
 }
 
+function PerformanceMonitorSettingsSection() {
+  return <MemoryMonitorPage />
+}
+
 function InterfaceSectionHost() {
   const subs = getInterfaceSubsections()
   const [active, setActive] = useState<string>(() => subs[0]?.id ?? '')
@@ -171,6 +175,13 @@ export function registerBuiltinModules(): void {
     disableable: true,
     descriptionKey: 'modules.memory_monitor.description',
     panes: [{ kind: 'memory-monitor', component: MemoryMonitorPaneWrapper }],
+    settings: [{
+      localId: 'performance-monitor',
+      scope: 'purdex',
+      order: 6,
+      labelKey: 'performance_monitor.title',
+      component: PerformanceMonitorSettingsSection,
+    }],
   })
   registerModule({
     id: 'hosts',
