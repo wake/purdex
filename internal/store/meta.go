@@ -35,7 +35,12 @@ type MetaStore struct{ db *sql.DB }
 func OpenMeta(path string) (*MetaStore, error) {
 	dsn := path
 	if path != ":memory:" {
-		dsn = path + "?_pragma=journal_mode(wal)"
+		// busy_timeout(500): make transient write contention WAIT instead of
+		// returning SQLITE_BUSY immediately — protects tail latency under
+		// concurrent hooks/sweep/checkpoint without changing durability.
+		// 500ms catches typical SSD checkpoint contention (<300ms observed)
+		// without blocking the hot path past user-perceived UI latency.
+		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(500)"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -46,9 +51,13 @@ func OpenMeta(path string) (*MetaStore, error) {
 	// the same DSN, and each :memory: connection is an independent database
 	// — so a second pool connection would see an empty schema. Pin the pool
 	// to a single connection so all goroutines share the same in-memory DB.
-	// File-backed DBs are unaffected (WAL mode handles concurrency natively).
+	// File-backed DBs use a small cap to bound fd usage; meta has lower
+	// write volume than agent_event so 2/2 is plenty.
 	if path == ":memory:" {
 		db.SetMaxOpenConns(1)
+	} else {
+		db.SetMaxOpenConns(2)
+		db.SetMaxIdleConns(2)
 	}
 	if err := migrateMetaDB(db); err != nil {
 		db.Close()

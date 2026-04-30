@@ -196,6 +196,87 @@ func TestWatcherNoRepeatBroadcastInTmuxDown(t *testing.T) {
 	}
 }
 
+// TestTickNormal_InvalidatesNameCacheOnHashChange verifies that when the
+// watcher's polling loop detects a session-list change (hash diff), it
+// invalidates the LookupCodeByName cache. This is the safety net for the
+// case where an external `tmux rename-session` mutates state without going
+// through the daemon's HTTP handlers.
+func TestTickNormal_InvalidatesNameCacheOnHashChange(t *testing.T) {
+	mod, fake, _ := newWatcherTestModule(t)
+
+	fake.AddSession("alpha", "/tmp")
+
+	// Prime tickNormal so its lastHash matches the current session list,
+	// otherwise the very first tick we run below would already see a hash
+	// change from "" → some-hash and invalidate, masking the real assertion.
+	mod.tickNormal()
+
+	// Pre-populate the name cache.
+	_, ok := mod.LookupCodeByName("alpha")
+	require.True(t, ok)
+	mod.nameCacheMu.Lock()
+	require.False(t, mod.nameCacheAt.IsZero(), "cache must be populated before the test")
+	mod.nameCacheMu.Unlock()
+
+	// Mutate session list externally so the next tickNormal sees a new hash.
+	fake.AddSession("beta", "/tmp")
+
+	mod.tickNormal()
+
+	mod.nameCacheMu.Lock()
+	defer mod.nameCacheMu.Unlock()
+	assert.True(t, mod.nameCacheAt.IsZero(), "tickNormal must invalidate name cache when hash changes")
+}
+
+// TestTickNormal_DoesNotInvalidateOnUnchangedHash verifies that the steady
+// state (no session changes) does not pointlessly bust the cache.
+func TestTickNormal_DoesNotInvalidateOnUnchangedHash(t *testing.T) {
+	mod, fake, _ := newWatcherTestModule(t)
+
+	fake.AddSession("alpha", "/tmp")
+
+	// First tick to register the current hash.
+	mod.tickNormal()
+
+	// Pre-populate the name cache.
+	_, ok := mod.LookupCodeByName("alpha")
+	require.True(t, ok)
+	mod.nameCacheMu.Lock()
+	require.False(t, mod.nameCacheAt.IsZero(), "cache must be populated before the test")
+	mod.nameCacheMu.Unlock()
+
+	// No mutation: the next tick must see an identical hash and not invalidate.
+	mod.tickNormal()
+
+	mod.nameCacheMu.Lock()
+	defer mod.nameCacheMu.Unlock()
+	assert.False(t, mod.nameCacheAt.IsZero(), "tickNormal must not invalidate name cache when hash is unchanged")
+}
+
+// TestBroadcastSessions_InvalidatesNameCache verifies that the wait-for path
+// (which lands in broadcastSessions) invalidates the name cache. This is the
+// authoritative signal — tmux just told us "something changed".
+func TestBroadcastSessions_InvalidatesNameCache(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+
+	fake.AddSession("alpha", "/tmp")
+
+	// Pre-populate the name cache.
+	_, ok := mod.LookupCodeByName("alpha")
+	require.True(t, ok)
+	mod.nameCacheMu.Lock()
+	require.False(t, mod.nameCacheAt.IsZero(), "cache must be populated before the test")
+	mod.nameCacheMu.Unlock()
+
+	mod.broadcastSessions()
+
+	mod.nameCacheMu.Lock()
+	defer mod.nameCacheMu.Unlock()
+	assert.True(t, mod.nameCacheAt.IsZero(), "broadcastSessions must invalidate name cache")
+}
+
 func TestHashSessionsChangesWhenPaneTitleChanges(t *testing.T) {
 	base := []SessionInfo{{
 		Code:      "aa",

@@ -14,7 +14,7 @@ import (
 
 func TestBuildHookPayload_MarshalsPurdexName(t *testing.T) {
 	stdin := strings.NewReader(`{}`)
-	p := buildHookPayload("sess", "PdxSessionStart", stdin, "cc", hookProvenance{
+	p := buildHookPayload("", "sess", "PdxSessionStart", stdin, "cc", hookProvenance{
 		TmuxPaneID:      "%5",
 		SenderPID:       1,
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
@@ -33,20 +33,20 @@ func TestBuildHookPayload_MarshalsPurdexName(t *testing.T) {
 }
 
 func TestRunHook_PositionalArgPassedAsPurdexName(t *testing.T) {
-	origSession := queryTmuxSessionFn
+	origInfo := queryTmuxSessionInfoFn
 	origResolve := resolveHookProvenanceFn
 	origPost := postHookEventFn
 	origLoad := loadConfigFn
 	origStdin := os.Stdin
 	t.Cleanup(func() {
-		queryTmuxSessionFn = origSession
+		queryTmuxSessionInfoFn = origInfo
 		resolveHookProvenanceFn = origResolve
 		postHookEventFn = origPost
 		loadConfigFn = origLoad
 		os.Stdin = origStdin
 	})
 
-	queryTmuxSessionFn = func() string { return "work" }
+	queryTmuxSessionInfoFn = func() (string, string) { return "$1", "work" }
 	resolveHookProvenanceFn = func() hookProvenance {
 		return hookProvenance{
 			TmuxPaneID:      "%5",
@@ -78,7 +78,7 @@ func TestRunHook_PositionalArgPassedAsPurdexName(t *testing.T) {
 
 func TestBuildHookPayload(t *testing.T) {
 	stdin := strings.NewReader(`{"type":"Stop","session_id":"abc123"}`)
-	p := buildHookPayload("my-session", "Stop", stdin, "", hookProvenance{
+	p := buildHookPayload("", "my-session", "Stop", stdin, "", hookProvenance{
 		TmuxPaneID:      "%5",
 		SenderPID:       123,
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
@@ -115,7 +115,7 @@ func TestBuildHookPayload(t *testing.T) {
 
 func TestBuildHookPayload_EmptyStdin(t *testing.T) {
 	stdin := strings.NewReader("")
-	p := buildHookPayload("sess", "Start", stdin, "", hookProvenance{
+	p := buildHookPayload("", "sess", "Start", stdin, "", hookProvenance{
 		TmuxPaneID:      "%7",
 		SenderPID:       456,
 		SenderStartTime: "Sun Apr 20 01:40:00 2026",
@@ -134,7 +134,7 @@ func TestBuildHookPayload_EmptyStdin(t *testing.T) {
 
 func TestBuildHookPayload_WithAgentType(t *testing.T) {
 	stdin := strings.NewReader(`{"hook_event_name":"Stop"}`)
-	p := buildHookPayload("sess", "Stop", stdin, "cc", hookProvenance{})
+	p := buildHookPayload("", "sess", "Stop", stdin, "cc", hookProvenance{})
 
 	if p.AgentType != "cc" {
 		t.Errorf("AgentType = %q, want %q", p.AgentType, "cc")
@@ -143,7 +143,7 @@ func TestBuildHookPayload_WithAgentType(t *testing.T) {
 
 func TestBuildHookPayload_EmptyAgent(t *testing.T) {
 	stdin := strings.NewReader(`{}`)
-	p := buildHookPayload("sess", "Stop", stdin, "", hookProvenance{})
+	p := buildHookPayload("", "sess", "Stop", stdin, "", hookProvenance{})
 
 	if p.AgentType != "" {
 		t.Errorf("AgentType = %q, want empty", p.AgentType)
@@ -248,15 +248,147 @@ func TestPostHookEvent_ServerDown(t *testing.T) {
 	}
 }
 
+// TestQueryTmuxSessionInfo_ParsesIDAndName proves the new helper returns
+// (sessionID, sessionName) from a single tmux call. The hook payload uses the
+// immutable ID to bypass the name cache rename-race window in handler.go.
+func TestQueryTmuxSessionInfo_ParsesIDAndName(t *testing.T) {
+	origInfo := queryTmuxSessionInfoFn
+	t.Cleanup(func() { queryTmuxSessionInfoFn = origInfo })
+
+	queryTmuxSessionInfoFn = func() (string, string) { return "$5", "alpha" }
+
+	id, name := queryTmuxSessionInfoFn()
+	if id != "$5" {
+		t.Errorf("sessionID = %q, want $5", id)
+	}
+	if name != "alpha" {
+		t.Errorf("sessionName = %q, want alpha", name)
+	}
+}
+
+// TestQueryTmuxSessionInfo_HandlesNameWithPipe pins parser behaviour for
+// session names containing the delimiter. We split on the FIRST '|' so the
+// rest of the name (including any further '|') survives intact. Real tmux
+// permits '|' in session names; the parser must not corrupt it.
+func TestQueryTmuxSessionInfo_HandlesNameWithPipe(t *testing.T) {
+	id, name := parseTmuxSessionInfo("$5|name|with|pipes\n")
+	if id != "$5" {
+		t.Errorf("sessionID = %q, want $5", id)
+	}
+	if name != "name|with|pipes" {
+		t.Errorf("sessionName = %q, want name|with|pipes", name)
+	}
+}
+
+// TestQueryTmuxSessionInfo_NoDelimiter covers the malformed/legacy tmux output
+// path. When the delimiter is absent we treat the entire output as the name
+// and return an empty ID — handler.go falls back to the name path safely.
+func TestQueryTmuxSessionInfo_NoDelimiter(t *testing.T) {
+	id, name := parseTmuxSessionInfo("legacy-name\n")
+	if id != "" {
+		t.Errorf("sessionID = %q, want empty", id)
+	}
+	if name != "legacy-name" {
+		t.Errorf("sessionName = %q, want legacy-name", name)
+	}
+}
+
+// TestBuildHookPayload_IncludesSessionID verifies the wire format carries
+// tmux_session_id when populated. The daemon needs the immutable ID to
+// resolve the session code without consulting the name cache.
+func TestBuildHookPayload_IncludesSessionID(t *testing.T) {
+	stdin := strings.NewReader(`{}`)
+	p := buildHookPayload("$7", "alpha", "PdxStop", stdin, "cc", hookProvenance{
+		TmuxPaneID:      "%5",
+		SenderPID:       1,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
+	})
+	if p.TmuxSessionID != "$7" {
+		t.Errorf("TmuxSessionID = %q, want $7", p.TmuxSessionID)
+	}
+
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(out), `"tmux_session_id":"$7"`) {
+		t.Errorf("payload missing tmux_session_id: %s", string(out))
+	}
+}
+
+// TestBuildHookPayload_OmitsEmptySessionID guards omitempty: legacy CLIs that
+// don't populate the ID must not emit the field, so handler.go's fallback
+// branch (driven by req.TmuxSessionID == "") triggers correctly.
+func TestBuildHookPayload_OmitsEmptySessionID(t *testing.T) {
+	stdin := strings.NewReader(`{}`)
+	p := buildHookPayload("", "alpha", "PdxStop", stdin, "cc", hookProvenance{
+		TmuxPaneID: "%5", SenderPID: 1,
+		SenderStartTime: "Sun Apr 20 01:30:00 2026",
+	})
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), `tmux_session_id`) {
+		t.Errorf("empty TmuxSessionID must be omitted via omitempty: %s", string(out))
+	}
+}
+
+// TestRunHook_PopulatesSessionID proves the runHook entry point routes the
+// new info-query helper into the payload. queryTmuxSessionInfoFn returns both
+// fields in a single call — runHook must pass both into buildHookPayload.
+func TestRunHook_PopulatesSessionID(t *testing.T) {
+	origInfo := queryTmuxSessionInfoFn
+	origResolve := resolveHookProvenanceFn
+	origPost := postHookEventFn
+	origLoad := loadConfigFn
+	origStdin := os.Stdin
+	t.Cleanup(func() {
+		queryTmuxSessionInfoFn = origInfo
+		resolveHookProvenanceFn = origResolve
+		postHookEventFn = origPost
+		loadConfigFn = origLoad
+		os.Stdin = origStdin
+	})
+
+	queryTmuxSessionInfoFn = func() (string, string) { return "$11", "work" }
+	resolveHookProvenanceFn = func() hookProvenance {
+		return hookProvenance{TmuxPaneID: "%5", SenderPID: 42, SenderStartTime: "t"}
+	}
+	loadConfigFn = func(string) (config.Config, error) { return config.Config{}, nil }
+
+	var got hookPayload
+	postHookEventFn = func(_ string, _ string, payload hookPayload) error {
+		got = payload
+		return nil
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	_ = w.Close()
+	os.Stdin = r
+
+	runHook([]string{"--agent", "cc", "PdxSessionStart"})
+
+	if got.TmuxSession != "work" {
+		t.Errorf("TmuxSession = %q, want work", got.TmuxSession)
+	}
+	if got.TmuxSessionID != "$11" {
+		t.Errorf("TmuxSessionID = %q, want $11", got.TmuxSessionID)
+	}
+}
+
 func TestRunHook_PopulatesProvenance(t *testing.T) {
-	origSession := queryTmuxSessionFn
+	origInfo := queryTmuxSessionInfoFn
 	origPaneID := queryTmuxPaneIDFn
 	origResolve := resolveHookProvenanceFn
 	origPost := postHookEventFn
 	origLoad := loadConfigFn
 	origStdin := os.Stdin
 	t.Cleanup(func() {
-		queryTmuxSessionFn = origSession
+		queryTmuxSessionInfoFn = origInfo
 		queryTmuxPaneIDFn = origPaneID
 		resolveHookProvenanceFn = origResolve
 		postHookEventFn = origPost
@@ -264,7 +396,7 @@ func TestRunHook_PopulatesProvenance(t *testing.T) {
 		os.Stdin = origStdin
 	})
 
-	queryTmuxSessionFn = func() string { return "work" }
+	queryTmuxSessionInfoFn = func() (string, string) { return "$3", "work" }
 	queryTmuxPaneIDFn = func() string { return "%5" }
 	resolveHookProvenanceFn = func() hookProvenance {
 		return hookProvenance{

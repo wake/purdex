@@ -179,6 +179,16 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.sessions = svc.(session.SessionProvider)
 
+	// Surface whether the hook hot path will use the LookupCodeByName fast
+	// path or fall back to the 1+7×S ListSessions fan-out. Anything that
+	// wraps SessionProvider with a decorator that drops LookupCodeByName
+	// will be visible at startup instead of as a silent latency regression.
+	if _, ok := m.sessions.(sessionCodeLookuper); ok {
+		log.Print("[agent] hook fast-path active (LookupCodeByName available)")
+	} else {
+		log.Print("[agent] hook fast-path NOT active — sessions does not implement LookupCodeByName")
+	}
+
 	// Expose event store and module so other modules (e.g. session rename) can update it.
 	c.Registry.Register("agent.events", m.events)
 	c.Registry.Register("agent.module", m)
