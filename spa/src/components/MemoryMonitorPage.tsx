@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import type { FormEvent } from 'react'
 import { collectLeaves } from '../lib/pane-tree'
 import {
   fetchMonitorConfig,
   fetchMonitorSnapshot,
+  updateMonitorConfig,
   type MonitorConfig,
   type MonitorHostDisk,
   type MonitorHostMemory,
@@ -56,6 +58,12 @@ export function MemoryMonitorPage() {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const [data, setData] = useState<MonitorData | null>(null)
   const [error, setError] = useState<MonitorError | null>(null)
+  const [draftRefreshSeconds, setDraftRefreshSeconds] = useState('')
+  const [draftTopProcessLimit, setDraftTopProcessLimit] = useState('')
+  const [draftDirty, setDraftDirty] = useState(false)
+  const [updatingConfigKeys, setUpdatingConfigKeys] = useState<string[]>([])
+  const [configReloadNonce, setConfigReloadNonce] = useState(0)
+  const draftDirtyRef = useRef(false)
   const retryIntervalMS = useRef(5000)
   const activeWorkspace = activeWorkspaceId ? workspaces.find((workspace) => workspace.id === activeWorkspaceId) : undefined
   const paneRows = collectPaneRows(tabs, activeWorkspace?.tabs ?? tabOrder)
@@ -140,7 +148,19 @@ export function MemoryMonitorPage() {
       secondaryInFlight.clear()
       if (timer) clearTimeout(timer)
     }
-  }, [activeHostId, activeHostKey, host, snapshotHostIdKey, snapshotHostKey])
+  }, [activeHostId, activeHostKey, configReloadNonce, host, snapshotHostIdKey, snapshotHostKey])
+
+  useEffect(() => {
+    draftDirtyRef.current = false
+    setDraftDirty(false)
+  }, [activeHostKey])
+
+  useEffect(() => {
+    const config = data?.hostId === activeHostId && data.activeHostKey === activeHostKey ? data.config : null
+    if (!config || draftDirtyRef.current) return
+    setDraftRefreshSeconds(String(Math.round(config.refresh_interval_ms / 1000)))
+    setDraftTopProcessLimit(String(config.top_process_limit))
+  }, [activeHostId, activeHostKey, data])
 
   if (!activeHostId || !host) {
     return (
@@ -159,8 +179,65 @@ export function MemoryMonitorPage() {
     ? snapshotsByHostId
     : activeHostKeyMatches ? preserveActiveSnapshot(activeHostId, snapshotsByHostId) : {}
   const snapshot = activeHostKeyMatches && activeHostId ? snapshotsByHostId[activeHostId] ?? null : null
-  const config = currentData?.config ?? null
+  const config = activeHostKeyMatches ? currentData?.config ?? null : null
   const validSnapshotHostIds = snapshotHostIdKey ? snapshotHostIdKey.split('\0') : []
+  const settingsReady = draftDirty || (draftRefreshSeconds !== '' && draftTopProcessLimit !== '')
+  const activeConfigKey = activeHostId ? `${activeHostId}:${activeHostKey}` : ''
+  const isUpdatingConfig = updatingConfigKeys.includes(activeConfigKey)
+
+  const submitConfig = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!activeHostId || !config || isUpdatingConfig) return
+
+    const parsedRefreshSeconds = parseConfigDraft(draftRefreshSeconds)
+    const parsedTopProcessLimit = parseConfigDraft(draftTopProcessLimit)
+    if (parsedRefreshSeconds === null || parsedTopProcessLimit === null) {
+      setDraftRefreshSeconds(String(Math.round(config.refresh_interval_ms / 1000)))
+      setDraftTopProcessLimit(String(config.top_process_limit))
+      draftDirtyRef.current = false
+      setDraftDirty(false)
+      return
+    }
+
+    const nextRefreshSeconds = clampNumber(
+      parsedRefreshSeconds,
+      Math.ceil(config.bounds.refresh_interval_ms.min / 1000),
+      Math.floor(config.bounds.refresh_interval_ms.max / 1000),
+    )
+    const nextTopProcessLimit = clampNumber(
+      parsedTopProcessLimit,
+      config.bounds.top_process_limit.min,
+      config.bounds.top_process_limit.max,
+    )
+
+    const submitHostKey = activeHostKey
+    const submitConfigKey = `${activeHostId}:${submitHostKey}`
+    setUpdatingConfigKeys((keys) => keys.includes(submitConfigKey) ? keys : [...keys, submitConfigKey])
+    try {
+      const nextConfig = await updateMonitorConfig(activeHostId, {
+        refresh_interval_ms: nextRefreshSeconds * 1000,
+        top_process_limit: nextTopProcessLimit,
+      })
+      const latestHostState = useHostStore.getState()
+      const latestHost = latestHostState.hosts[activeHostId]
+      if (latestHostState.activeHostId !== activeHostId || !latestHost || snapshotHostTargetKey(latestHost) !== submitHostKey) return
+      retryIntervalMS.current = nextConfig.refresh_interval_ms
+      setData((current) => current?.hostId === activeHostId && current.activeHostKey === submitHostKey ? { ...current, config: nextConfig } : current)
+      setDraftRefreshSeconds(String(Math.round(nextConfig.refresh_interval_ms / 1000)))
+      setDraftTopProcessLimit(String(nextConfig.top_process_limit))
+      draftDirtyRef.current = false
+      setDraftDirty(false)
+      setConfigReloadNonce((value) => value + 1)
+      setError((current) => (current?.hostId === activeHostId ? null : current))
+    } catch (err: unknown) {
+      const latestHostState = useHostStore.getState()
+      const latestHost = latestHostState.hosts[activeHostId]
+      if (latestHostState.activeHostId !== activeHostId || !latestHost || snapshotHostTargetKey(latestHost) !== submitHostKey) return
+      setError({ hostId: activeHostId, message: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setUpdatingConfigKeys((keys) => keys.filter((key) => key !== submitConfigKey))
+    }
+  }
 
   return (
     <div className="flex-1 overflow-y-auto bg-bg-base">
@@ -216,6 +293,56 @@ export function MemoryMonitorPage() {
                 detail={formatPercent(snapshot.host.disk.used_percent, t)}
               />
             </div>
+          </section>
+        )}
+
+        {config && settingsReady && (
+          <section className="rounded-2xl border border-border-subtle bg-bg-surface/80 p-4 shadow-sm">
+            <form role="group" aria-label={t('performance_monitor.settings')} onSubmit={submitConfig} className="flex flex-col gap-4 md:flex-row md:items-end">
+              <div className="flex-1">
+                <label className="text-xs font-medium uppercase tracking-[0.16em] text-text-muted" htmlFor="monitor-refresh-seconds">
+                  {t('performance_monitor.refresh_seconds')}
+                </label>
+                <input
+                  id="monitor-refresh-seconds"
+                  type="number"
+                  min={Math.ceil(config.bounds.refresh_interval_ms.min / 1000)}
+                  max={Math.floor(config.bounds.refresh_interval_ms.max / 1000)}
+                  value={draftRefreshSeconds}
+                  onChange={(event) => {
+                    draftDirtyRef.current = true
+                    setDraftDirty(true)
+                    setDraftRefreshSeconds(event.currentTarget.value)
+                  }}
+                  className="mt-2 w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="text-xs font-medium uppercase tracking-[0.16em] text-text-muted" htmlFor="monitor-top-process-limit">
+                  {t('performance_monitor.top_process_limit')}
+                </label>
+                <input
+                  id="monitor-top-process-limit"
+                  type="number"
+                  min={config.bounds.top_process_limit.min}
+                  max={config.bounds.top_process_limit.max}
+                  value={draftTopProcessLimit}
+                  onChange={(event) => {
+                    draftDirtyRef.current = true
+                    setDraftDirty(true)
+                    setDraftTopProcessLimit(event.currentTarget.value)
+                  }}
+                  className="mt-2 w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isUpdatingConfig}
+                className="rounded-lg border border-border-subtle bg-bg-elevated px-4 py-2 text-sm font-medium text-text-primary disabled:opacity-60"
+              >
+                {isUpdatingConfig ? t('performance_monitor.applying_settings') : t('performance_monitor.apply_settings')}
+              </button>
+            </form>
           </section>
         )}
 
@@ -406,6 +533,17 @@ function formatDaemonMemory(bytes: number | null, t: (key: string) => string) {
 function formatProcessCount(count: number | null, t: (key: string, params?: Record<string, string | number>) => string) {
   if (count === null) return t('performance_monitor.processes_unavailable')
   return t(count === 1 ? 'performance_monitor.process_count_one' : 'performance_monitor.process_count_other', { count })
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function parseConfigDraft(value: string) {
+  if (value.trim() === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function formatBytes(bytes: number) {
