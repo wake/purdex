@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.274] - 2026-04-30
+
+### Feat(agent): W6-3+W6-4 codex error/clear ad-hoc ProbeIntent — first per-agent probe (#765)
+
+Lights system gains its first ad-hoc per-agent ProbeIntent — codex `ProcessDead` detector polls senderPID + paneID and emits a single `Signal` once either invariant fails, recovering the missing `StopFailure` (W6-3 error light) and `SessionEnd` (W6-4 clear light) transitions that codex CLI 0.124.0 does not fire.
+
+The dispatcher introduces a 5-case lifecycle (case 1 noop / 2 arm / 3 stop / 4 already-armed noop / 5 target-mismatch rearm), a generation-scoped teardown helper, fail-closed handling for unsupported kinds, and replay recovery so daemon restart re-evaluates active intents.
+
+Five rounds of codex review surfaced 11 findings, all addressed: F1 graceWindow strand + rearm, F2 generation-scoped teardown race, F3 PID reuse → issue #777, F4 hint validation revert, F5+F7 reconcile/stopAll observability + helper extraction, F6 unsupported-kind fail-closed, F8 `HasPane (bool, error)` + tmux transient-vs-confirmed-absent semantics, F9 nil-traceSink panic, F10 "no server running" → confirmed absence.
+
+Closes #698 (daemon restart activeWatchers recovery). Status flips: W5-4 (codex error) ✅ / W5-5 (codex clear) ✅.
+
 ## [1.0.0-alpha.273] - 2026-04-30
 
 ### Chore(spa): update performance monitor labels (#774)
