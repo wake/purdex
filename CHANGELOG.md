@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.273] - 2026-04-30
+
+### Chore(spa): update performance monitor labels (#774)
+
+Updates the monitor module display name, pane label, provider title, and module description to Performance Monitor in English and Traditional Chinese while retaining the existing `memory-monitor` pane kind and module id for restore compatibility.
+
 ## [1.0.0-alpha.272] - 2026-04-30
 
 ### Test(spa): cover disabled monitor polling (#772)
