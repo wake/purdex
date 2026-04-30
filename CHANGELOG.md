@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.271] - 2026-04-30
+
+### Feat(spa): poll monitor client metrics (#770)
+
+Polls Electron client metrics through `getProcessMetrics()` at the effective Performance Monitor refresh interval instead of relying on fixed push updates. Matching rows now render client CPU, memory, and browser-view state.
+
+Client metrics are scoped by both pane id and pane kind so stale browser metrics are not shown after a pane id is reused for non-browser content.
+
 ## [1.0.0-alpha.270] - 2026-04-30
 
 ### Feat(spa): show selected monitor top processes (#768)
