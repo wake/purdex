@@ -156,6 +156,19 @@ export const useAgentStore = create<AgentState>()(
       if (status) {
         set((s) => ({ statuses: { ...s.statuses, [key]: status } }))
 
+        // running is unambiguous user activity — clear any leftover unread
+        // (e.g. raised by a prior waiting/idle while the tab was in background)
+        // regardless of focus.
+        if (status === 'running') {
+          set((s) => {
+            if (!(key in s.unread)) return s
+
+            const { [key]: _, ...rest } = s.unread
+            return { unread: rest }
+          })
+          return
+        }
+
         // Mark unread when not focused. Notification raises status=idle but
         // shouldn't surface as actionable: cc emits PdxNotification post-W2,
         // codex/opencode pre-migration still emit "Notification". Recognise

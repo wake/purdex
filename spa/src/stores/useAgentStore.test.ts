@@ -252,6 +252,22 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().unread[`${H}:dev`]).toBeUndefined()
   })
 
+  it('running status → clears existing unread regardless of focus', () => {
+    // Background tab + waiting marks unread, then a UserPromptSubmit fires
+    // while still in background — unread should clear because running is
+    // unambiguous user activity, not an actionable signal to surface.
+    useAgentStore.setState({ unread: { [`${H}:dev`]: true } })
+    const event: NormalizedEvent = {
+      agent_type: 'cc',
+      status: 'running',
+      raw_event_name: 'PdxUserPromptSubmit',
+      broadcast_ts: Date.now(),
+    }
+    useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('running')
+    expect(useAgentStore.getState().unread[`${H}:dev`]).toBeUndefined()
+  })
+
   it('agent type is stored from event', () => {
     useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
       agent_type: 'codex',
