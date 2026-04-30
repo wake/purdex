@@ -144,33 +144,19 @@ func (d *probeIntentDispatcher) setParentCtx(ctx context.Context) {
 	d.parentCtx = ctx
 }
 
-// probeIntentTargetHint is an optional fast-path target supplied by hot-path
-// callers (live hook handlers) that already have projection.TopFrame in
-// scope. When non-nil, applyIntentLifecycle skips
-// lookupTopFrameForSessionLocked → projectionForSession → tmux exec — the
-// codex Daemon Hook Pipeline Lag analysis (#3) measured the lookup as the
-// primary contributor to D-segment lock convoy in the W6-3 dispatcher
-// path. Replay (daemon restart) and consumeSignals teardown have no caller
-// context and pass nil → slow lookup retained as the source of truth.
-type probeIntentTargetHint struct {
-	paneID    string
-	senderPID int
-}
-
 // applyStatus is the single entry point for ProbeIntent lifecycle
 // transitions. Called from:
 //
 //   - manageActivityWatch (P1-T5): live hook path, when a hook flips
-//     currentStatus. Caller supplies hint from projection.TopFrame.
-//   - replayStatus (P1-T6): daemon-restart hydrate. hint=nil.
+//     currentStatus.
+//   - replayStatus (P1-T6): daemon-restart hydrate.
 //   - consumeSignals teardown (round 5 P1): probe-applied transitions
 //     re-run lifecycle so the active entry teardown path stays unified.
-//     hint=nil (teardown drops the active entry without arming).
 //
 // Per spec §5.4: reconcile session-wide active-set against the new
 // (agentType, declaredKinds) tuple BEFORE running the per-intent
 // lifecycle so cross-provider switches don't leave stranded entries.
-func (d *probeIntentDispatcher) applyStatus(session, agentType string, newStatus agentpkg.Status, hint *probeIntentTargetHint) {
+func (d *probeIntentDispatcher) applyStatus(session, agentType string, newStatus agentpkg.Status) {
 	provider, ok := d.parent.registry.Get(agentType)
 	if !ok {
 		// Unknown agent → reconcile clears every active entry for the
@@ -190,7 +176,7 @@ func (d *probeIntentDispatcher) applyStatus(session, agentType string, newStatus
 	d.reconcileSessionActive(session, agentType, declaredKinds)
 
 	for _, intent := range intents {
-		d.applyIntentLifecycle(session, agentType, newStatus, intent, hint)
+		d.applyIntentLifecycle(session, agentType, newStatus, intent)
 	}
 }
 
@@ -266,17 +252,10 @@ func (d *probeIntentDispatcher) reconcileSessionActive(
 //
 // Per spec §5.4: lifecycle decision runs entirely inside one m.mu
 // critical section; cancel + start work runs after Unlock.
-//
-// hint: optional fast-path target. When non-nil with paneID + senderPID
-// both populated, the lookup-under-lock step is skipped (avoiding the
-// D-segment lock convoy described in the codex hook-pipeline-lag analysis
-// #3). When nil — replay path / consumeSignals teardown — lookup runs as
-// before.
 func (d *probeIntentDispatcher) applyIntentLifecycle(
 	session, agentType string,
 	newStatus agentpkg.Status,
 	intent agentpkg.ProbeIntent,
-	hint *probeIntentTargetHint,
 ) {
 	shouldActive := slices.Contains(intent.OnEntryStatus, newStatus)
 
@@ -311,20 +290,7 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 			}
 			break
 		}
-		var paneID string
-		var senderPID int
-		var hasFrame bool
-		if hint != nil && hint.paneID != "" && hint.senderPID != 0 {
-			// Fast path: caller has projection.TopFrame in scope; trust it
-			// rather than re-computing under m.mu (which routes through
-			// projectionForSession → tmux exec). currentStatus re-validation
-			// above + StaleCheck below still cover concurrency races.
-			paneID = hint.paneID
-			senderPID = hint.senderPID
-			hasFrame = true
-		} else {
-			paneID, senderPID, hasFrame = d.parent.lookupTopFrameForSessionLocked(session)
-		}
+		paneID, senderPID, hasFrame := d.parent.lookupTopFrameForSessionLocked(session)
 		if !hasFrame || paneID == "" || senderPID == 0 {
 			if wasActive {
 				plan.cancelOld = cur.cancel
@@ -478,11 +444,7 @@ func (d *probeIntentDispatcher) consumeSignals(
 				},
 			})
 		}
-		// Teardown re-arm: applied status is error/clear so applyIntentLifecycle
-		// drops the active entry through case 3 (no arm). hint=nil — slow
-		// lookup path is fine because the lifecycle decision short-circuits
-		// before the lookup runs.
-		d.applyStatus(session, agentType, appliedStatus, nil)
+		d.applyStatus(session, agentType, appliedStatus)
 	}
 }
 
@@ -547,9 +509,7 @@ func probeIntentsOf(p agentpkg.AgentProvider) []agentpkg.ProbeIntent {
 func (d *probeIntentDispatcher) replayStatus() {
 	snapshot := d.parent.snapshotStatuses()
 	for session, entry := range snapshot {
-		// Replay has no caller context (daemon restart): hint=nil falls
-		// back to lookupTopFrameForSessionLocked.
-		d.applyStatus(session, entry.agentType, entry.status, nil)
+		d.applyStatus(session, entry.agentType, entry.status)
 	}
 }
 

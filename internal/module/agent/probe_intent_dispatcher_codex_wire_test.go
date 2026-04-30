@@ -64,7 +64,7 @@ func TestApplyStatus_RealCodexDetector_ArmsAndStops(t *testing.T) {
 		t.Fatalf("dispatcher.startDetector unset — Module.New() did not wire the codex routing closure")
 	}
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
 	// After detector emits PaneAlive=true → OnSignal returns Error → guards
 	// pass → applied=true → consumeSignals invokes applyStatus(error) →
@@ -98,7 +98,7 @@ func TestApplyStatus_RealCodexDetector_PaneGone_ClearPath(t *testing.T) {
 	}
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
 	waitFor(t, 2*time.Second, func() bool {
 		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
@@ -131,7 +131,7 @@ func TestApplyStatus_RealCodexDetector_BothAlive_NoEmit(t *testing.T) {
 	}
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
 	// Detector polls but never emits. Wait long enough that several ticks
 	// would have happened (poll=1ms × ~50ms gives ≥40 ticks) — entry must

@@ -29,7 +29,7 @@ func TestProbeIntent_DevLog_StartLine(t *testing.T) {
 	rec := installRecordingDetector(t, m)
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 	<-rec.started
 
 	out := buf.String()
@@ -64,7 +64,7 @@ func TestProbeIntent_DevLog_SignalLine(t *testing.T) {
 	})
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
 	waitFor(t, time.Second, func() bool {
 		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
@@ -158,7 +158,7 @@ func TestProbeIntent_TraceStore_StartStep(t *testing.T) {
 		t.Skip("traceSink not wired in this fixture")
 	}
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 	<-rec.started
 
 	// Flush before reading.
@@ -221,7 +221,7 @@ func TestProbeIntent_TraceStore_SignalStep(t *testing.T) {
 		t.Skip("traceSink not wired in this fixture")
 	}
 
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 	waitFor(t, time.Second, func() bool {
 		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
 		return !ok
@@ -294,7 +294,7 @@ func TestProbeIntent_Expvar_StartedCounterIncrement(t *testing.T) {
 	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
 
 	before := snapshotProbeIntentMetrics()
-	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning, nil)
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 	<-rec.started
 	after := snapshotProbeIntentMetrics()
 

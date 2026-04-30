@@ -460,10 +460,7 @@ func (m *Module) dispatchProbeIntentReeval(session string, plan probeIntentReeva
 	if m.probeIntentDisp == nil {
 		return
 	}
-	// Rename re-eval is low-frequency (user-triggered): pass nil hint and
-	// let the dispatcher's slow lookup run. Avoids smuggling rename-time
-	// frame state through the dispatcher path.
-	m.probeIntentDisp.applyStatus(session, plan.agentType, plan.status, nil)
+	m.probeIntentDisp.applyStatus(session, plan.agentType, plan.status)
 }
 
 // replayFromDB rebuilds in-memory state from persisted frame projections and
@@ -702,12 +699,7 @@ func (m *Module) lookupTopFrameForSessionLocked(session string) (paneID string, 
 // happen AFTER m.mu is released because the dispatcher takes m.mu itself
 // (see probe_intent_dispatcher.go reconcileSessionActive +
 // applyIntentLifecycle critical sections).
-//
-// hint: optional fast-path target injection. Hot-path callers (live hook
-// handlers) supply the projection.TopFrame they already resolved, letting
-// the dispatcher skip lookupTopFrameForSessionLocked under m.mu (codex
-// hook-pipeline-lag analysis #3 lock convoy).
-func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status, hint *probeIntentTargetHint) {
+func (m *Module) manageActivityWatch(session, agentType string, newStatus agentpkg.Status) {
 	m.mu.Lock()
 	_, wasWatching := m.activeWatchers[session]
 	delete(m.activeWatchers, session)
@@ -721,6 +713,6 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 	// + applyIntentLifecycle which take m.mu themselves for active-set
 	// mutation, then start / cancel detector goroutines outside the lock.
 	if m.probeIntentDisp != nil {
-		m.probeIntentDisp.applyStatus(session, agentType, newStatus, hint)
+		m.probeIntentDisp.applyStatus(session, agentType, newStatus)
 	}
 }
