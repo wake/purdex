@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.272] - 2026-04-30
+
+### Test(spa): cover disabled monitor polling (#772)
+
+Adds a regression test for the disabled `memory-monitor` module path. The test verifies that the disabled module placeholder renders instead of mounting `MemoryMonitorPage`, and that daemon monitor fetches plus Electron client metric pulls remain inactive across fake timer advancement.
+
 ## [1.0.0-alpha.271] - 2026-04-30
 
 ### Feat(spa): poll monitor client metrics (#770)
