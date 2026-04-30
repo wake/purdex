@@ -490,10 +490,28 @@ func (m *Module) emitHookToSession(tmuxSession string, normalized agentpkg.Norma
 	return "broadcasted", "session_code_resolved"
 }
 
-// resolveSessionCode maps a tmux session name to the pdx session code.
+// sessionCodeLookuper is the optional fast-path interface a SessionProvider
+// can implement to avoid the 1+7×S tmux subprocess fan-out of ListSessions on
+// every hook event. The production *session.SessionModule satisfies this
+// implicitly via its 1s TTL name→code cache (see internal/module/session/
+// lookup.go). Kept unexported here because it's a hot-path optimization, not
+// a public contract.
+type sessionCodeLookuper interface {
+	LookupCodeByName(name string) (string, bool)
+}
+
+// resolveSessionCode maps a tmux session name to the pdx session code. Tries
+// the cached fast path first; falls through to ListSessions on a cache miss
+// so a hook fired during a rename/create race window before cache refresh
+// still resolves correctly (safety net per SOT §3.1).
 func (m *Module) resolveSessionCode(tmuxName string) string {
 	if m.sessions == nil {
 		return ""
+	}
+	if lookuper, ok := m.sessions.(sessionCodeLookuper); ok {
+		if code, found := lookuper.LookupCodeByName(tmuxName); found {
+			return code
+		}
 	}
 	sessions, err := m.sessions.ListSessions()
 	if err != nil {
