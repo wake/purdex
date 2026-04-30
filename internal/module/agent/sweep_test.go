@@ -85,8 +85,7 @@ func TestSweep_PreservesLiveFrames(t *testing.T) {
 	origNow := nowFn
 	isPidAliveFn = func(pid int) bool { return true }
 	processStartTimeFn = func(pid int) (string, error) { return "live", nil }
-	// Pin "now" close to LastSeenAt so the idle_timeout rule does not fire
-	// on fixture frames using a simple sentinel LastSeenAt value.
+	// Pin "now" so any sweep broadcast carries a deterministic timestamp.
 	nowFn = func() time.Time { return time.Unix(0, 10) }
 	t.Cleanup(func() {
 		isPidAliveFn = origAlive
@@ -243,18 +242,32 @@ func TestSweep_DoesNotMassDeleteOnTmuxOutage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Idle sweep (Phase 2 PR-2b, plan §1.6 + §1.8 + §2.7)
+// Sweep liveness invariants
+//
+// IS1 / IS4 cover what sweepOnce must (and must not) do for the two
+// remaining destructive paths after idle_timeout (path 3) was removed:
+//   - alive + identity-verified frames are preserved no matter how stale
+//     LastSeenAt is (cc / codex / opencode idle ≥ 1h is normal usage);
+//   - pid_dead still triggers the shared orphan watcher cleanup
+//     (regression for the pre-PR-2b leak).
 // ---------------------------------------------------------------------------
 
-// IS1 — frame idle past threshold is cleared with broadcast reason=sweep:idle_timeout.
-func TestSweep_ClearsIdleFramesByLastSeen(t *testing.T) {
+// IS1 — invariant after path 3 (idle_timeout) removal: a frame whose PID is
+// still alive and identity-verified is preserved by sweep no matter how long
+// LastSeenAt has been stale. cc / codex / opencode are long-running processes
+// and an hour of idle conversation is normal usage, not "logically dead". True
+// process death is covered by pid_dead (PID gone) and pid_reused (start_time
+// mismatch); time alone must never destroy a live frame.
+func TestSweep_PreservesAliveFrameRegardlessOfLastSeen(t *testing.T) {
 	m := newSweepTestModule(t)
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	// Seed frame with LastSeenAt=0; fake nowFn returns 2×threshold so the
-	// elapsed delta > threshold triggers the idle_timeout rule.
+	// LastSeenAt=0 with a wall-clock far in the future would have triggered
+	// the deleted path 3. Keep the same fixture shape to make the inverted
+	// invariant explicit: regardless of elapsed time, alive + verified =
+	// preserved.
 	if _, err := m.frames.Upsert(store.Frame{
 		PaneID:           "%5",
 		AgentType:        "cc",
@@ -274,58 +287,9 @@ func TestSweep_ClearsIdleFramesByLastSeen(t *testing.T) {
 	origNow := nowFn
 	isPidAliveFn = func(int) bool { return true }
 	processStartTimeFn = func(int) (string, error) { return "live", nil }
-	nowFn = func() time.Time { return time.Unix(0, int64(2*frameIdleThreshold)) }
-	t.Cleanup(func() {
-		isPidAliveFn = origAlive
-		processStartTimeFn = origStart
-		nowFn = origNow
-	})
-
-	if err := m.sweepOnce(); err != nil {
-		t.Fatalf("sweepOnce: %v", err)
-	}
-	frames, _ := m.frames.ListByPane("%5")
-	if len(frames) != 0 {
-		t.Fatalf("frame count = %d, want 0 (idle frame should be cleared)", len(frames))
-	}
-
-	// Drain broadcast with reason=sweep:idle_timeout (inside escaped payload).
-	select {
-	case msg := <-sub.SendCh():
-		if !strings.Contains(string(msg), `sweep:idle_timeout`) {
-			t.Fatalf("broadcast = %s, want reason sweep:idle_timeout", msg)
-		}
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("timed out waiting for idle_timeout broadcast")
-	}
-}
-
-// IS2 — fresh frame (LastSeenAt within threshold) is preserved.
-func TestSweep_PreservesFreshFrames(t *testing.T) {
-	m := newSweepTestModule(t)
-
-	// Pretend "now" is 1h — fresh frame LastSeenAt at now-1min (delta < threshold).
-	fakeNow := int64(60 * time.Minute)
-	if _, err := m.frames.Upsert(store.Frame{
-		PaneID:           "%5",
-		AgentType:        "cc",
-		PID:              200,
-		PPID:             1,
-		ProcessStartTime: "live",
-		Status:           agentpkg.StatusIdle,
-		StartedAt:        fakeNow - int64(time.Minute),
-		LastSeenAt:       fakeNow - int64(time.Minute),
-		Verified:         true,
-	}); err != nil {
-		t.Fatalf("Upsert frame: %v", err)
-	}
-
-	origAlive := isPidAliveFn
-	origStart := processStartTimeFn
-	origNow := nowFn
-	isPidAliveFn = func(int) bool { return true }
-	processStartTimeFn = func(int) (string, error) { return "live", nil }
-	nowFn = func() time.Time { return time.Unix(0, fakeNow) }
+	// A time pin two hours in the future demonstrates that even an extreme
+	// "idle delta" no longer triggers a destructive sweep.
+	nowFn = func() time.Time { return time.Unix(0, int64(2*time.Hour)) }
 	t.Cleanup(func() {
 		isPidAliveFn = origAlive
 		processStartTimeFn = origStart
@@ -337,55 +301,15 @@ func TestSweep_PreservesFreshFrames(t *testing.T) {
 	}
 	frames, _ := m.frames.ListByPane("%5")
 	if len(frames) != 1 {
-		t.Fatalf("frame count = %d, want 1 (fresh frame preserved)", len(frames))
-	}
-}
-
-// IS3 — idle sweep also stops the orphan activity watcher.
-func TestSweep_IdleClearStopsOrphanWatcher(t *testing.T) {
-	m := newSweepTestModule(t)
-	m.prober = probe.New(m.tmux)
-	if _, err := m.frames.Upsert(store.Frame{
-		PaneID:           "%5",
-		AgentType:        "cc",
-		PID:              200,
-		PPID:             1,
-		ProcessStartTime: "live",
-		Status:           agentpkg.StatusIdle,
-		StartedAt:        0,
-		LastSeenAt:       0,
-		Verified:         true,
-	}); err != nil {
-		t.Fatalf("Upsert frame: %v", err)
+		t.Fatalf("frame count = %d, want 1 (alive frame must survive any idle delta)", len(frames))
 	}
 
-	// Register an active watcher for this session (simulating an in-flight
-	// Activity probe left over from a running/waiting status).
-	m.activeWatchers["work"] = "cc"
-	m.prober.Watch("work:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
-	t.Cleanup(func() { m.prober.StopAllWatches() })
-
-	origAlive := isPidAliveFn
-	origStart := processStartTimeFn
-	origNow := nowFn
-	isPidAliveFn = func(int) bool { return true }
-	processStartTimeFn = func(int) (string, error) { return "live", nil }
-	nowFn = func() time.Time { return time.Unix(0, int64(2*frameIdleThreshold)) }
-	t.Cleanup(func() {
-		isPidAliveFn = origAlive
-		processStartTimeFn = origStart
-		nowFn = origNow
-	})
-
-	if err := m.sweepOnce(); err != nil {
-		t.Fatalf("sweepOnce: %v", err)
-	}
-
-	if _, ok := m.activeWatchers["work"]; ok {
-		t.Fatal("activeWatchers[work] should be cleared after idle_timeout sweep")
-	}
-	if m.prober.HasWatcher("work:") {
-		t.Fatal("prober watcher for work: should be stopped after idle_timeout sweep")
+	// Zero broadcast: no sweep:idle_timeout, no other clear reason should fire.
+	select {
+	case msg := <-sub.SendCh():
+		t.Fatalf("unexpected broadcast for alive idle frame: %s", msg)
+	case <-time.After(50 * time.Millisecond):
+		// Expected — quiet.
 	}
 }
 
@@ -425,126 +349,6 @@ func TestSweep_DeadPidAlsoStopsOrphanWatcher(t *testing.T) {
 	}
 	if m.prober.HasWatcher("work:") {
 		t.Fatal("prober watcher should be stopped after pid_dead sweep (StopWatch leak fix)")
-	}
-}
-
-// IS5 — concurrent refresh between ListAll and DeleteIfUnchanged causes the
-// optimistic sweep to skip the frame rather than clobber the refreshed row.
-func TestSweep_IdleConditionalDeleteSkipsOnConcurrentRefresh(t *testing.T) {
-	m := newSweepTestModule(t)
-
-	// The frame starts idle (LastSeenAt=0). sweepOnce() will read the list
-	// first, then iterate. We simulate a concurrent hook refresh by bumping
-	// LastSeenAt between ListAll and the DELETE — achieved by swapping nowFn
-	// to run an Upsert on first call.
-	if _, err := m.frames.Upsert(store.Frame{
-		PaneID:           "%5",
-		AgentType:        "cc",
-		PID:              200,
-		PPID:             1,
-		ProcessStartTime: "live",
-		Status:           agentpkg.StatusIdle,
-		StartedAt:        0,
-		LastSeenAt:       0,
-		Verified:         true,
-	}); err != nil {
-		t.Fatalf("Upsert frame: %v", err)
-	}
-
-	origAlive := isPidAliveFn
-	origStart := processStartTimeFn
-	origNow := nowFn
-	isPidAliveFn = func(int) bool { return true }
-	processStartTimeFn = func(int) (string, error) { return "live", nil }
-	// First call (isPidAliveFn before idle check) reads the baseline now; we
-	// piggyback on nowFn to force a concurrent Upsert before the DELETE runs.
-	var raced bool
-	nowFn = func() time.Time {
-		if !raced {
-			raced = true
-			// Simulate concurrent hook refresh before our sweep DELETE.
-			_, _ = m.frames.Upsert(store.Frame{
-				PaneID:           "%5",
-				AgentType:        "cc",
-				PID:              200,
-				PPID:             1,
-				ProcessStartTime: "live",
-				Status:           agentpkg.StatusIdle,
-				StartedAt:        0,
-				LastSeenAt:       int64(30 * time.Minute),
-				Verified:         true,
-			})
-		}
-		return time.Unix(0, int64(2*frameIdleThreshold))
-	}
-	t.Cleanup(func() {
-		isPidAliveFn = origAlive
-		processStartTimeFn = origStart
-		nowFn = origNow
-	})
-
-	if err := m.sweepOnce(); err != nil {
-		t.Fatalf("sweepOnce: %v", err)
-	}
-
-	frames, _ := m.frames.ListByPane("%5")
-	if len(frames) != 1 {
-		t.Fatalf("frame count = %d, want 1 (DeleteIfUnchanged should skip on refresh)", len(frames))
-	}
-	if frames[0].LastSeenAt != int64(30*time.Minute) {
-		t.Fatalf("LastSeenAt = %d, want refreshed value (concurrent Upsert preserved)", frames[0].LastSeenAt)
-	}
-}
-
-// IS6 — probe-driven status transitions (setProjectionTopStatus) refresh
-// LastSeenAt so the idle rule does not mis-classify a live agent at a shell
-// prompt as idle. R1 regression: v6 plan assumed hook traffic was the only
-// LastSeenAt source, but probe activity is the normal signal for
-// waiting/running/idle while hooks may be silent for > 1h.
-func TestSweep_PreservesLiveFrameAfterProbeActivity(t *testing.T) {
-	m := newSweepTestModule(t)
-	if _, err := m.frames.Upsert(store.Frame{
-		PaneID:           "%5",
-		AgentType:        "cc",
-		PID:              200,
-		PPID:             1,
-		ProcessStartTime: "live",
-		Status:           agentpkg.StatusRunning,
-		StartedAt:        0,
-		LastSeenAt:       0, // stale baseline — > 1h in the past from sweep's POV
-		Verified:         true,
-	}); err != nil {
-		t.Fatalf("Upsert frame: %v", err)
-	}
-
-	probeTime := time.Now().UnixNano()
-	if _, err := m.setProjectionTopStatus("work", agentpkg.StatusIdle); err != nil {
-		t.Fatalf("setProjectionTopStatus: %v", err)
-	}
-
-	origAlive := isPidAliveFn
-	origStart := processStartTimeFn
-	origNow := nowFn
-	isPidAliveFn = func(int) bool { return true }
-	processStartTimeFn = func(int) (string, error) { return "live", nil }
-	// Sweep 30 min after probe activity — well within the 1h idle threshold.
-	nowFn = func() time.Time { return time.Unix(0, probeTime+int64(30*time.Minute)) }
-	t.Cleanup(func() {
-		isPidAliveFn = origAlive
-		processStartTimeFn = origStart
-		nowFn = origNow
-	})
-
-	if err := m.sweepOnce(); err != nil {
-		t.Fatalf("sweepOnce: %v", err)
-	}
-
-	frames, _ := m.frames.ListByPane("%5")
-	if len(frames) != 1 {
-		t.Fatalf("frame count = %d, want 1 (probe-bumped LastSeenAt keeps frame alive)", len(frames))
-	}
-	if frames[0].LastSeenAt < probeTime {
-		t.Fatalf("LastSeenAt = %d, want >= %d (setProjectionTopStatus should have bumped it)", frames[0].LastSeenAt, probeTime)
 	}
 }
 
@@ -807,7 +611,7 @@ func TestSweep_PruneDeadProxyRefs_KeepsLiveProxy(t *testing.T) {
 // detach was visible in storage but m.subagents/m.currentStatus and the
 // SPA stayed stale until an unrelated hook fired. Sweep prune now emits
 // "hook" payload with reason=sweep:proxy_pruned (matching the existing
-// idle_timeout / pid_dead broadcast pattern in afterFrameCleared).
+// pid_dead / pid_reused broadcast pattern in afterFrameCleared).
 func TestSweep_PruneDeadProxyRefs_BroadcastsProjectionAfterDetach(t *testing.T) {
 	m := newSweepTestModule(t)
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: m.tmux}
@@ -1143,9 +947,9 @@ func TestSweep_OwnerReadErrorPreservesFrame(t *testing.T) {
 
 // installSweepCanonicalSeams sets up the standard seam overrides for
 // IT10 tests: every PID in the alivePIDs/startTimes maps is alive and
-// identity-verified, every other PID is dead. nowFn is pinned close to
-// the seeded LastSeenAt so the idle_timeout rule does not fire on
-// fixture frames. PPID for any PID not in ppids is 1 (init) — caller
+// identity-verified, every other PID is dead. nowFn is pinned to a
+// fixed value so canonicalize / prune broadcast timestamps are
+// deterministic. PPID for any PID not in ppids is 1 (init) — caller
 // passes only the PIDs that need a non-trivial chain.
 //
 // Returns a cleanup that restores all seams; caller wires it through
