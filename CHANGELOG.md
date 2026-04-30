@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.270] - 2026-04-30
+
+### Feat(spa): show selected monitor top processes (#768)
+
+Adds selectable Performance Monitor pane rows with an accessible control linked to the top-process detail panel. Selecting a daemon-backed session row now shows daemon-reported top processes with PID, CPU, and memory details.
+
+Selected rows without daemon metrics or reported top processes show explicit empty states, and the new labels are localized in English and Traditional Chinese.
+
 ## [1.0.0-alpha.269] - 2026-04-30
 
 ### Feat(spa): add monitor config controls (#766)
