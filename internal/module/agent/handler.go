@@ -83,7 +83,16 @@ func (m *Module) resolveStatuslineInstaller(w http.ResponseWriter, r *http.Reque
 // (P3-T5) removed that alias so standard struct unmarshal with the
 // `purdex_name` tag is the only shape now accepted.
 type EventRequest struct {
-	TmuxSession     string          `json:"tmux_session"`
+	TmuxSession string `json:"tmux_session"`
+	// TmuxSessionID is the immutable tmux session identifier in `$N` format.
+	// When present, the daemon resolves the session code via a pure
+	// EncodeSessionID call, completely bypassing the name→code cache and
+	// closing the rename-race window where an external
+	// `tmux kill-session foo && tmux new-session -s foo` could otherwise
+	// alias the old code via a stale cache entry. Empty string falls
+	// through to the existing name-based path for backward compat with
+	// older pdx hook binaries.
+	TmuxSessionID   string          `json:"tmux_session_id,omitempty"`
 	TmuxPaneID      string          `json:"tmux_pane_id"`
 	PurdexName      string          `json:"purdex_name"`
 	RawEvent        json.RawMessage `json:"raw_event"`
@@ -356,7 +365,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 		m.mu.Unlock()
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
-		emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
+		emitDecision, emitReason := m.emitHookToSession(req, normalized)
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
 			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
@@ -425,7 +434,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 	m.mu.Unlock()
-	emitDecision, emitReason := m.emitHookToSession(req.TmuxSession, normalized)
+	emitDecision, emitReason := m.emitHookToSession(req, normalized)
 	trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 	if isDevMode() {
 		log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
@@ -472,22 +481,61 @@ func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broad
 	return normalized
 }
 
-// broadcastToSession resolves the tmux session name to a session code and broadcasts.
+// broadcastToSession resolves the tmux session name to a session code and
+// broadcasts. Used by the probe orchestrator (no hook payload available, so
+// no tmux_session_id) — falls through to the name-based resolveSessionCode
+// path, which is still cache-backed. Hook callsites should use
+// emitHookToSession instead so the immutable ID path engages.
 func (m *Module) broadcastToSession(tmuxSession string, normalized agentpkg.NormalizedEvent) {
-	_, _ = m.emitHookToSession(tmuxSession, normalized)
-}
-
-func (m *Module) emitHookToSession(tmuxSession string, normalized agentpkg.NormalizedEvent) (string, string) {
 	if m.core == nil {
-		return "skipped", "core_unavailable"
+		return
 	}
 	code := m.resolveSessionCode(tmuxSession)
 	if code == "" {
+		return
+	}
+	m.emitNormalizedToCode(code, normalized)
+}
+
+// emitHookToSession routes a hook-derived normalized event to its WS code.
+// Prefers req.TmuxSessionID (immutable, pure-function resolution) over
+// req.TmuxSession (cache-backed, racy across kill+recreate). Returns the
+// (decision, reason) tuple the trace pipeline annotates onto the chain.
+func (m *Module) emitHookToSession(req EventRequest, normalized agentpkg.NormalizedEvent) (string, string) {
+	if m.core == nil {
+		return "skipped", "core_unavailable"
+	}
+	code := m.resolveSessionCodeFromHook(req)
+	if code == "" {
 		return "skipped", "session_code_missing"
 	}
+	m.emitNormalizedToCode(code, normalized)
+	return "broadcasted", "session_code_resolved"
+}
+
+// emitNormalizedToCode is the shared bottom half of both broadcast paths:
+// marshals the normalized event JSON and pushes it onto the events bus.
+// Callers MUST resolve the session code first; this helper makes no
+// assumptions about how it was obtained.
+func (m *Module) emitNormalizedToCode(code string, normalized agentpkg.NormalizedEvent) {
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
-	return "broadcasted", "session_code_resolved"
+}
+
+// resolveSessionCodeFromHook prefers the immutable tmux session ID from the
+// hook payload (eliminates the name-reuse race window) and falls back to
+// the cached name-path resolution when the ID is missing (older pdx hook
+// binary) or malformed (unexpected payload corruption). Falling back rather
+// than dropping keeps a partial-rollout daemon-vs-hook version skew safe.
+func (m *Module) resolveSessionCodeFromHook(req EventRequest) string {
+	if req.TmuxSessionID != "" {
+		code, err := session.EncodeSessionID(req.TmuxSessionID)
+		if err == nil {
+			return code
+		}
+		log.Printf("[agent] invalid tmux_session_id %q: %v (falling back to name path)", req.TmuxSessionID, err)
+	}
+	return m.resolveSessionCode(req.TmuxSession)
 }
 
 // sessionCodeLookuper is the optional fast-path interface a SessionProvider
