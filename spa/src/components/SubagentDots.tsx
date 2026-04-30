@@ -9,31 +9,16 @@ interface Props {
   left?: number
 }
 
-// Phase 2 PR-2b: dot color per agent family, derived inline (plan §5 — don't
-// abstract the palette elsewhere until a second consumer needs it).
-// Fallback to the cc blue keeps legacy / unknown types visible.
-const TYPE_COLOR: Record<string, string> = {
-  cc: '#60a5fa',
-  codex: '#facc15',
-  opencode: '#f97316',
-}
-const FALLBACK_COLOR = TYPE_COLOR.cc
-const colorFor = (type: string) => TYPE_COLOR[type] ?? FALLBACK_COLOR
+// Dot color encodes whether the subagent ref is a cross-agent proxy (e.g.
+// codex shelling out to cc and triggering cc's own SubagentStart hook) versus
+// a native sub-task spawned inside the agent's own tool loop. Type family is
+// already conveyed by the agent icon in the parent indicator.
+const NATIVE_COLOR = '#60a5fa'  // blue
+const PROXY_COLOR = '#f97316'   // orange
 
-// Proxy refs (cross-agent hook collapsed onto a parent frame) render as a
-// hollow ring — transparent background + 1px ring in the type color — to
-// distinguish from native subagents (solid fill of the same color).
-const dotStyle = (ref: SubagentRef): CSSProperties => {
-  const color = colorFor(ref.type)
-  if (ref.is_proxy) {
-    return {
-      backgroundColor: 'transparent',
-      border: `1px solid ${color}`,
-      boxSizing: 'border-box',
-    }
-  }
-  return { backgroundColor: color }
-}
+const dotStyle = (ref: SubagentRef): CSSProperties => ({
+  backgroundColor: ref.is_proxy ? PROXY_COLOR : NATIVE_COLOR,
+})
 
 const DOT_SIZES: Record<number, number> = { 1: 4, 2: 3.5, 3: 3 }
 

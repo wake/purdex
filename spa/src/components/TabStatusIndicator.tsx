@@ -37,7 +37,7 @@ export function TabStatusIndicator({ status, mode, isActive, isUnread = false }:
         <WarningDiamond
           data-testid="tab-status-error"
           size={10}
-          weight="duotone"
+          weight="fill"
           color={STATUS_COLORS.error}
           style={{
             position: 'absolute',
@@ -53,7 +53,7 @@ export function TabStatusIndicator({ status, mode, isActive, isUnread = false }:
     return (
       <span
         data-testid="tab-status-indicator"
-        className={`rounded-full flex-shrink-0 ${isRunning ? 'animate-breathe' : ''}`}
+        className={`rounded-full flex-shrink-0 ${isRunning && !isUnread ? 'animate-breathe' : ''}`}
         style={{
           width: '6px',
           height: '6px',
@@ -73,7 +73,7 @@ export function TabStatusIndicator({ status, mode, isActive, isUnread = false }:
       <WarningDiamond
         data-testid="tab-status-error"
         size={14}
-        weight="duotone"
+        weight="fill"
         color={STATUS_COLORS.error}
         className="flex-shrink-0"
       />

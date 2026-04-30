@@ -48,6 +48,27 @@ describe('TabStatusIndicator', () => {
     expect(dot.style.backgroundColor).toBe('rgb(239, 68, 68)')
   })
 
+  it('overlay mode: running animates breathe when not unread', () => {
+    cleanup()
+    render(
+      <TabStatusIndicator status="running" mode="overlay" isActive={false} />,
+    )
+    const dot = screen.getByTestId('tab-status-indicator')
+    expect(dot.className).toContain('animate-breathe')
+  })
+
+  it('overlay mode: unread dot stays static (no animate-breathe)', () => {
+    // Component-level invariant: unread tint is informational, not a call-to-
+    // action — it must not pulse. The store layer also clears unread on
+    // running, but the indicator must not breathe even if both flags arrive.
+    cleanup()
+    render(
+      <TabStatusIndicator status="running" mode="overlay" isActive={false} isUnread />,
+    )
+    const dot = screen.getByTestId('tab-status-indicator')
+    expect(dot.className).not.toContain('animate-breathe')
+  })
+
   it('overlay mode: renders warning-diamond instead of dot when status is error', () => {
     cleanup()
     render(
