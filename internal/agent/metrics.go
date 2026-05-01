@@ -126,3 +126,34 @@ var MetricProbeIntentDroppedTransitionGate = expvar.NewInt("purdex_probe_intent_
 // than silently appearing armed with a noop detector. Drift test exercises
 // production routing rather than just a wiredKinds mirror.
 var MetricProbeIntentUnsupportedKind = expvar.NewInt("purdex_probe_intent_unsupported_kind_total")
+
+// --- J3 ProbeIntent dispatcher pre-applyProbeGuards bidirectional grace ---
+// Independent counters for the dispatcher's pre-hold window (per
+// 2026-05-01-probe-intent-bidirectional-grace-window-spec §3.3). The
+// pre-hold sits BEFORE applyProbeGuards' existing post-direction
+// graceWindow (MetricProbeGraceWindowSuppressed) so a probe Signal that
+// races a hook for the same session can be dropped before broadcast.
+// Each counter is process-cumulative; daemon restart resets to zero.
+// Tests must compare deltas, never absolute values.
+
+// MetricProbeIntentPreGraceHeld counts probe Signal entries into the
+// dispatcher's pre-applyProbeGuards hold window. Incremented +1 per
+// Signal observed by consumeSignals immediately after the existing
+// MetricProbeIntentSignalEmitted bump and before the hold timer fires —
+// every Signal that enters the hold contributes, including those that
+// later drop pre-grace / pre-grace-canceled or pass through to apply.
+var MetricProbeIntentPreGraceHeld = expvar.NewInt("purdex_probe_intent_pre_grace_held_total")
+
+// MetricProbeIntentDroppedPreGrace counts probe Signals dropped because a
+// hook for the same session arrived during the pre-applyProbeGuards hold
+// window (lastHookAt > signalAt at timer expiry). Hook authority pre-
+// emption — the probe never reaches applyProbeGuards step 2's existing
+// post-direction graceWindow check.
+var MetricProbeIntentDroppedPreGrace = expvar.NewInt("purdex_probe_intent_dropped_pre_grace_total")
+
+// MetricProbeIntentPreGraceCanceled counts probe Signals dropped because
+// the detector ctx was canceled during the pre-applyProbeGuards hold
+// window (e.g. cross-provider switch via reconcileSessionActive, daemon
+// shutdown via Module.Stop, or any lifecycle teardown that propagates
+// cancel into a still-holding goroutine).
+var MetricProbeIntentPreGraceCanceled = expvar.NewInt("purdex_probe_intent_pre_grace_canceled_total")
