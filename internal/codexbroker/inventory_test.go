@@ -100,13 +100,19 @@ func TestScanner_PsFailureProducesSentinelError(t *testing.T) {
 	}
 }
 
-// TestScanner_Singleflight: two concurrent Scan calls share one underlying scan.
-func TestScanner_Singleflight(t *testing.T) {
+// TestScanner_ConcurrentScansAreIndependent: P1 deliberately does NOT
+// coalesce concurrent scans (R1 review found that singleflight with a
+// fixed key would expose later callers to the first caller's deadline,
+// violating the per-request deadline contract). Each Scan call must
+// drive its own ps invocation and honour its own context. P3 will add
+// a TTL cache + singleflight at a higher layer if amplification
+// becomes a problem.
+func TestScanner_ConcurrentScansAreIndependent(t *testing.T) {
 	stateAbs, _ := filepath.Abs(filepath.Join("testdata", "state"))
 	cxcAbs, _ := filepath.Abs(filepath.Join("testdata", "cxc"))
 	src := loadFixture(t, "one-broker.txt")
 	var listerCalls atomic.Int64
-	rawLister := NewFakeProcessListerFromText(src).WithDelay(50 * time.Millisecond)
+	rawLister := NewFakeProcessListerFromText(src).WithDelay(20 * time.Millisecond)
 	countingLister := &countingProcessLister{inner: rawLister, count: &listerCalls}
 	s := NewScanner(ScannerOpts{
 		FS:              NewOsFS(),
@@ -127,8 +133,8 @@ func TestScanner_Singleflight(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if c := listerCalls.Load(); c >= 5 {
-		t.Errorf("singleflight ineffective: lister called %d times for 5 concurrent Scan calls", c)
+	if c := listerCalls.Load(); c != 5 {
+		t.Errorf("concurrent independence broken: lister called %d times for 5 concurrent Scans, want 5", c)
 	}
 }
 

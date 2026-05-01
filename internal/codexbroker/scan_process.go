@@ -56,9 +56,7 @@ func isBrokerRow(r RawProcess) bool {
 // become anomalies on the candidate, not whole-scan errors. Whole-scan
 // failures (lister returning err) bubble up so the orchestrator can decide
 // 503 vs partial.
-//
-// caseInsensitive is the volume case-fold flag from IsCaseInsensitiveVolume.
-func scanProcesses(ctx context.Context, lister ProcessLister, fs FS, caseInsensitive bool) ([]processCandidate, error) {
+func scanProcesses(ctx context.Context, lister ProcessLister, fs FS) ([]processCandidate, error) {
 	rows, err := lister.List(ctx)
 	if err != nil {
 		return nil, err
@@ -101,7 +99,7 @@ func scanProcesses(ctx context.Context, lister ProcessLister, fs FS, caseInsensi
 		}
 		// Even with parseErr we still call BrokerKey so tests can verify
 		// CwdResolved / anomaly emission.
-		key, resolved, anom := BrokerKey(keyInput, fs, caseInsensitive)
+		key, resolved, anom := BrokerKey(keyInput, fs)
 		c.Key = key
 		c.CwdResolved = resolved
 		if anom != nil && parseErr == nil {

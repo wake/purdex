@@ -64,6 +64,32 @@ func TestParseArgv_TruncatedReturnsAnomaly(t *testing.T) {
 	}
 }
 
+// TestParseArgv_UnquotedCwdWithSpaces documents what happens when ps strips
+// argv quoting. macOS / Linux `ps -ww command=` typically preserves quoting,
+// but on some BSD configurations or wrapper layers (e.g. systemd-run) the
+// quote chars can be lost, leaving the cwd as a bare token. The parser must
+// then take the first whitespace-delimited token as cwd; the remainder of
+// the path is silently dropped. This is documented behaviour, not a bug:
+// the resulting brokerKey will not match codex's hash, the broker shows up
+// as process_orphan + state_dir_no_match, and an `argv_truncated` anomaly
+// MAY (but is not required to) be attached. We just need to make sure we
+// don't panic and don't fall through to the next flag boundary.
+func TestParseArgv_UnquotedCwdWithSpaces(t *testing.T) {
+	cmd := "node app-server-broker.mjs serve --cwd /tmp/path with spaces --endpoint unix:/tmp/x.sock"
+	got, err := ParseBrokerArgv(cmd)
+	if err != nil {
+		t.Fatalf("ParseBrokerArgv: %v", err)
+	}
+	// First token after --cwd is taken; "with" and "spaces" are dropped.
+	if got.Cwd != "/tmp/path" {
+		t.Errorf("Cwd = %q, want %q (parser takes first token only)", got.Cwd, "/tmp/path")
+	}
+	// Endpoint must still be parsed correctly past the dropped tokens.
+	if got.Endpoint != "unix:/tmp/x.sock" {
+		t.Errorf("Endpoint = %q, want unix:/tmp/x.sock", got.Endpoint)
+	}
+}
+
 // TestParseArgv_MissingServeKeyword returns truncated error.
 func TestParseArgv_MissingServeKeyword(t *testing.T) {
 	cmd := "node app-server-broker.mjs --cwd /tmp/foo"

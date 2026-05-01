@@ -14,7 +14,7 @@ func TestScanProcesses_OneBroker(t *testing.T) {
 	cwd := "/Users/wake/Workspace/wake/purdex"
 	fs := &fakeFS{resolve: map[string]string{cwd: cwd}}
 
-	got, err := scanProcesses(context.Background(), lister, fs, false)
+	got, err := scanProcesses(context.Background(), lister, fs)
 	if err != nil {
 		t.Fatalf("scanProcesses: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestScanProcesses_DuplicateRuntime(t *testing.T) {
 	lister := NewFakeProcessListerFromText(src)
 	fs := &fakeFS{resolve: map[string]string{"/tmp/dup": "/tmp/dup"}}
 
-	got, err := scanProcesses(context.Background(), lister, fs, false)
+	got, err := scanProcesses(context.Background(), lister, fs)
 	if err != nil {
 		t.Fatalf("scanProcesses: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestScanProcesses_ArgvTruncated(t *testing.T) {
 	lister := NewFakeProcessListerFromText(src)
 	fs := &fakeFS{}
 
-	got, err := scanProcesses(context.Background(), lister, fs, false)
+	got, err := scanProcesses(context.Background(), lister, fs)
 	if err != nil {
 		t.Fatalf("scanProcesses: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestScanProcesses_NoBrokers(t *testing.T) {
 	lister := NewFakeProcessListerFromText(src)
 	fs := &fakeFS{}
 
-	got, err := scanProcesses(context.Background(), lister, fs, false)
+	got, err := scanProcesses(context.Background(), lister, fs)
 	if err != nil {
 		t.Fatalf("scanProcesses: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestScanProcesses_NoBrokers(t *testing.T) {
 // whole-scan failure (so handler can decide 503 vs partial).
 func TestScanProcesses_PsFailureReturnsError(t *testing.T) {
 	lister := NewFakeProcessLister(nil).WithError(os.ErrInvalid)
-	_, err := scanProcesses(context.Background(), lister, &fakeFS{}, false)
+	_, err := scanProcesses(context.Background(), lister, &fakeFS{})
 	if err == nil {
 		t.Fatalf("expected error from lister")
 	}
@@ -129,7 +129,7 @@ func TestScanProcesses_CwdUnresolvableEmitsCandidate(t *testing.T) {
 		"/Users/wake/Workspace/wake/purdex": os.ErrPermission,
 	}}
 
-	got, err := scanProcesses(context.Background(), lister, fs, false)
+	got, err := scanProcesses(context.Background(), lister, fs)
 	if err != nil {
 		t.Fatalf("scanProcesses: %v", err)
 	}

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 )
 
 // ErrPsUnavailable is returned by Scanner.Scan when the process lister fails
@@ -28,21 +26,17 @@ type ScannerOpts struct {
 	TotalDeadline   time.Duration
 	StateDirBudget  time.Duration
 	SocketDirBudget time.Duration
-	// CaseInsensitive overrides volume detection. nil → auto-detect via
-	// IsCaseInsensitiveVolume(PluginDataRoot).
-	CaseInsensitive *bool
+	CwdStatBudget   time.Duration // per-cwd Stat budget (default 50ms)
 }
 
 // Scanner orchestrates the three discovery sources and returns a Result.
 //
-// Singleflight is used so concurrent Scan() calls share one underlying
-// scan, defending against fork amplification under repeated polling.
+// P1 does NOT coalesce concurrent Scan() calls: each caller's deadline is
+// honoured independently. Production traffic is from a single SPA poll +
+// occasional curl; fork amplification is not currently a concern. P3 will
+// add a TTL cache + singleflight at that layer if needed.
 type Scanner struct {
 	opts ScannerOpts
-	sf   singleflight.Group
-	// caseInsensitive is resolved at construction time (one syscall) so
-	// hot-path scans don't repeat it.
-	caseInsensitive bool
 }
 
 // NewScanner constructs a Scanner with sensible defaults for unspecified options.
@@ -56,13 +50,10 @@ func NewScanner(opts ScannerOpts) *Scanner {
 	if opts.SocketDirBudget <= 0 {
 		opts.SocketDirBudget = 50 * time.Millisecond
 	}
-	ci := false
-	if opts.CaseInsensitive != nil {
-		ci = *opts.CaseInsensitive
-	} else if opts.PluginDataRoot != "" {
-		ci = IsCaseInsensitiveVolume(opts.PluginDataRoot)
+	if opts.CwdStatBudget <= 0 {
+		opts.CwdStatBudget = 50 * time.Millisecond
 	}
-	return &Scanner{opts: opts, caseInsensitive: ci}
+	return &Scanner{opts: opts}
 }
 
 // Result is the response payload of GET /api/codex/brokers; field names
@@ -73,7 +64,12 @@ type Result struct {
 	DeadlineMs     int64          `json:"deadlineMs"`
 	Partial        bool           `json:"partial"`
 	Brokers        []BrokerRecord `json:"brokers"`
-	Summary        ResultSummary  `json:"summary"`
+	// TopAnomalies are scanner-layer diagnostics that have no natural
+	// BrokerRecord home (e.g. a malformed broker.json in a state dir we
+	// otherwise skip, or a glob root that errored). They are surfaced
+	// here so they don't disappear from the API contract.
+	TopAnomalies []Anomaly     `json:"topAnomalies,omitempty"`
+	Summary      ResultSummary `json:"summary"`
 }
 
 // ResultSummary aggregates counts; field names match spec §4.3.
@@ -87,19 +83,13 @@ type ResultSummary struct {
 	ScanSourceTimeouts    []string `json:"scanSourceTimeouts"`
 }
 
-// Scan performs one inventory pass. Concurrent calls coalesce via singleflight.
+// Scan performs one inventory pass. Each caller's context (and therefore
+// deadline) is honoured independently; there is no coalescing in P1.
 func (s *Scanner) Scan(ctx context.Context) (*Result, error) {
-	v, err, _ := s.sf.Do("scan", func() (any, error) {
-		return s.scanOnce(ctx)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return v.(*Result), nil
+	return s.scanOnce(ctx)
 }
 
-// scanOnce is the actual scan body, called by singleflight under the
-// "scan" key.
+// scanOnce is the actual scan body.
 func (s *Scanner) scanOnce(ctx context.Context) (*Result, error) {
 	scanStart := time.Now()
 	scanCtx, cancel := context.WithTimeout(ctx, s.opts.TotalDeadline)
@@ -107,7 +97,7 @@ func (s *Scanner) scanOnce(ctx context.Context) (*Result, error) {
 
 	// 1. Process scan must finish first; reconcile and socket merge depend
 	//    on its output. ErrPsUnavailable when ps cannot be invoked at all.
-	processC, err := scanProcesses(scanCtx, s.opts.Lister, s.opts.FS, s.caseInsensitive)
+	processC, err := scanProcesses(scanCtx, s.opts.Lister, s.opts.FS)
 	if err != nil {
 		// Distinguish "ctx deadline" from "ps not found".
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
@@ -174,15 +164,17 @@ func (s *Scanner) scanOnce(ctx context.Context) (*Result, error) {
 	}
 
 	// 3. Reconcile.
-	records, _ := reconcile(scanCtx, s.opts.FS, processC, stateC, socketCands)
+	records, reconcileTopAnoms := reconcile(scanCtx, s.opts.FS, s.opts.CwdStatBudget, processC, stateC, socketCands)
 
-	// Top-level anomalies from state/socket scanners are merged onto a
-	// pseudo-record (we surface them via summary count; they don't have a
-	// natural BrokerRecord home).
-	_ = stateAnoms
-	_ = socketAnoms
+	// Aggregate top-level anomalies. State/socket scanners may emit
+	// scan-wide diagnostics that don't bind to any BrokerRecord
+	// (e.g. malformed broker.json in a dir we'd otherwise skip).
+	topAnoms := make([]Anomaly, 0, len(stateAnoms)+len(socketAnoms)+len(reconcileTopAnoms))
+	topAnoms = append(topAnoms, stateAnoms...)
+	topAnoms = append(topAnoms, socketAnoms...)
+	topAnoms = append(topAnoms, reconcileTopAnoms...)
 
-	return s.assembleResult(scanStart, processC, records, nil, timeouts, partial), nil
+	return s.assembleResult(scanStart, processC, records, topAnoms, timeouts, partial), nil
 }
 
 // assembleResult materialises the Result from the per-stage outputs.
@@ -190,7 +182,7 @@ func (s *Scanner) assembleResult(
 	scanStart time.Time,
 	processC []processCandidate,
 	records []BrokerRecord,
-	_ []Anomaly,
+	topAnoms []Anomaly,
 	timeouts []string,
 	partial bool,
 ) *Result {
@@ -200,9 +192,11 @@ func (s *Scanner) assembleResult(
 		DeadlineMs:     s.opts.TotalDeadline.Milliseconds(),
 		Partial:        partial,
 		Brokers:        records,
+		TopAnomalies:   topAnoms,
 		Summary: ResultSummary{
 			Total:              len(records),
 			ScanSourceTimeouts: timeouts,
+			AnomalyCount:       len(topAnoms),
 		},
 	}
 	for _, r := range records {

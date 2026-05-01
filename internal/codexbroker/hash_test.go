@@ -41,8 +41,8 @@ func TestBrokerKey_PrivateVarSymlink(t *testing.T) {
 		"/var/foo":         "/private/var/foo",
 		"/private/var/foo": "/private/var/foo",
 	}}
-	keyA, _, anomA := BrokerKey("/var/foo", f, false /* caseInsensitive */)
-	keyB, _, anomB := BrokerKey("/private/var/foo", f, false)
+	keyA, _, anomA := BrokerKey("/var/foo", f)
+	keyB, _, anomB := BrokerKey("/private/var/foo", f)
 	if anomA != nil || anomB != nil {
 		t.Fatalf("unexpected anomalies: %v / %v", anomA, anomB)
 	}
@@ -61,8 +61,8 @@ func TestBrokerKey_CaseFold_OnInsensitiveVolume(t *testing.T) {
 		"/Foo": "/Foo",
 		"/foo": "/Foo",
 	}}
-	keyA, _, anomA := BrokerKey("/Foo", f, true /* caseInsensitive */)
-	keyB, _, anomB := BrokerKey("/foo", f, true)
+	keyA, _, anomA := BrokerKey("/Foo", f)
+	keyB, _, anomB := BrokerKey("/foo", f)
 	if anomA != nil || anomB != nil {
 		t.Fatalf("unexpected anomalies: %v / %v", anomA, anomB)
 	}
@@ -78,8 +78,8 @@ func TestBrokerKey_CaseFold_OnSensitiveVolume(t *testing.T) {
 		"/Foo": "/Foo",
 		"/foo": "/foo",
 	}}
-	keyA, _, anomA := BrokerKey("/Foo", f, false /* caseInsensitive */)
-	keyB, _, anomB := BrokerKey("/foo", f, false)
+	keyA, _, anomA := BrokerKey("/Foo", f)
+	keyB, _, anomB := BrokerKey("/foo", f)
 	if anomA != nil || anomB != nil {
 		t.Fatalf("unexpected anomalies: %v / %v", anomA, anomB)
 	}
@@ -104,8 +104,8 @@ func TestBrokerKey_NFCAndNFDProduceDifferentKeys(t *testing.T) {
 		nfc: nfc,
 		nfd: nfd,
 	}}
-	keyA, _, anomA := BrokerKey(nfc, f, false)
-	keyB, _, anomB := BrokerKey(nfd, f, false)
+	keyA, _, anomA := BrokerKey(nfc, f)
+	keyB, _, anomB := BrokerKey(nfd, f)
 	if anomA != nil || anomB != nil {
 		t.Fatalf("unexpected anomalies: %v / %v", anomA, anomB)
 	}
@@ -121,7 +121,7 @@ func TestBrokerKey_UnresolvableReturnsAnomaly(t *testing.T) {
 	f := &fakeFS{errors: map[string]error{
 		"/tmp/missing": want,
 	}}
-	key, resolved, anom := BrokerKey("/tmp/missing", f, false)
+	key, resolved, anom := BrokerKey("/tmp/missing", f)
 	if anom == nil || *anom != AnomalyCwdUnresolvable {
 		t.Errorf("expected AnomalyCwdUnresolvable, got %v", anom)
 	}
@@ -134,7 +134,7 @@ func TestBrokerKey_UnresolvableReturnsAnomaly(t *testing.T) {
 	// Independent verification: hashing the raw cwd directly must match.
 	keyRaw, _, _ := BrokerKey("/tmp/missing", &fakeFS{resolve: map[string]string{
 		"/tmp/missing": "/tmp/missing",
-	}}, false)
+	}})
 	if key != keyRaw {
 		t.Errorf("unresolvable key %q should equal hash of raw cwd %q", key, keyRaw)
 	}
@@ -144,8 +144,8 @@ func TestBrokerKey_UnresolvableReturnsAnomaly(t *testing.T) {
 // outputs across repeated invocations.
 func TestBrokerKey_DeterministicAcrossCalls(t *testing.T) {
 	f := &fakeFS{resolve: map[string]string{"/tmp/x": "/tmp/x"}}
-	a, _, _ := BrokerKey("/tmp/x", f, false)
-	b, _, _ := BrokerKey("/tmp/x", f, false)
+	a, _, _ := BrokerKey("/tmp/x", f)
+	b, _, _ := BrokerKey("/tmp/x", f)
 	if a != b {
 		t.Errorf("non-deterministic: %q vs %q", a, b)
 	}

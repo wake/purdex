@@ -22,11 +22,9 @@ import (
 // BrokerRecord. Path operations go through the injected FS so tests can
 // mock symlink resolution without touching the real filesystem.
 //
-// The unused `_caseInsensitive` parameter is retained for now so callers
-// (and existing fixture tests) compile unchanged; it is ignored. P2 may
-// reintroduce case/Unicode-fold for collision detection, but never as part
-// of the primary key.
-func BrokerKey(rawCwd string, fs FS, _caseInsensitive bool) (key string, resolved string, anomaly *AnomalyCode) {
+// P2 may reintroduce case/Unicode-fold for collision *detection* (separate
+// anomaly), but never as part of the primary key.
+func BrokerKey(rawCwd string, fs FS) (key string, resolved string, anomaly *AnomalyCode) {
 	target := rawCwd
 	resolvedPath, err := fs.EvalSymlinks(rawCwd)
 	if err != nil {

@@ -137,7 +137,7 @@ func TestReconcile_AllThreeSources(t *testing.T) {
 	fs := newReconcileFS()
 	fs.statInfo[cwd] = &fakeFileInfo{name: "all3", dir: true}
 
-	got, anoms := reconcile(context.Background(), fs, pc, sc, skc)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, sc, skc)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -159,7 +159,7 @@ func TestReconcile_ProcessOnly(t *testing.T) {
 	pc := []processCandidate{makeProcessCandidate("k", 100, cwd)}
 	fs := newReconcileFS()
 	fs.statInfo[cwd] = &fakeFileInfo{name: "po", dir: true}
-	got, anoms := reconcile(context.Background(), fs, pc, nil, nil)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, nil, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -177,7 +177,7 @@ func TestReconcile_ProcessOnly(t *testing.T) {
 // TestReconcile_StateOnly → record with Sources=state-dir, anomaly state_dir_orphan.
 func TestReconcile_StateOnly(t *testing.T) {
 	sc := []stateCandidate{{Key: "k", StateDir: "/state/x-k", HasBrokerJSON: true, BrokerJSON: brokerJSONFile{PID: 999}}}
-	got, anoms := reconcile(context.Background(), newReconcileFS(), nil, sc, nil)
+	got, anoms := reconcile(context.Background(), newReconcileFS(), 0, nil, sc, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -195,7 +195,7 @@ func TestReconcile_StateOnly(t *testing.T) {
 // TestReconcile_SocketOnly → record with Sources=socket, anomaly socket_orphan.
 func TestReconcile_SocketOnly(t *testing.T) {
 	skc := []socketCandidate{{SyntheticKey: "synth", SockDir: "/cxc/cxc-S", PIDFromFile: 555}}
-	got, anoms := reconcile(context.Background(), newReconcileFS(), nil, nil, skc)
+	got, anoms := reconcile(context.Background(), newReconcileFS(), 0, nil, nil, skc)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 	if len(got) != 1 {
@@ -219,7 +219,7 @@ func TestReconcile_DuplicateRuntime(t *testing.T) {
 	}
 	fs := newReconcileFS()
 	fs.statInfo[cwd] = &fakeFileInfo{name: "dup", dir: true}
-	got, anoms := reconcile(context.Background(), fs, pc, nil, nil)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, nil, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -242,7 +242,7 @@ func TestReconcile_BrokerJSONPidMismatch(t *testing.T) {
 	sc := []stateCandidate{{Key: key, StateDir: "/state/mm-kmm", HasBrokerJSON: true, BrokerJSON: brokerJSONFile{PID: 999}}}
 	fs := newReconcileFS()
 	fs.statInfo[cwd] = &fakeFileInfo{name: "mm", dir: true}
-	got, anoms := reconcile(context.Background(), fs, pc, sc, nil)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, sc, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -264,7 +264,7 @@ func TestReconcile_BrokerKeyCollision(t *testing.T) {
 	fs := newReconcileFS()
 	fs.statInfo["/tmp/a"] = &fakeFileInfo{}
 	fs.statInfo["/tmp/b"] = &fakeFileInfo{}
-	got, anoms := reconcile(context.Background(), fs, pc, nil, nil)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, nil, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -284,7 +284,7 @@ func TestReconcile_CwdENOENT(t *testing.T) {
 	pc := []processCandidate{makeProcessCandidate("kg", 33, cwd)}
 	fs := newReconcileFS()
 	fs.statErr[cwd] = os.ErrNotExist
-	got, anoms := reconcile(context.Background(), fs, pc, nil, nil)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, nil, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -305,7 +305,7 @@ func TestReconcile_CwdEACCES(t *testing.T) {
 	pc := []processCandidate{makeProcessCandidate("kp", 44, cwd)}
 	fs := newReconcileFS()
 	fs.statErr[cwd] = os.ErrPermission
-	got, anoms := reconcile(context.Background(), fs, pc, nil, nil)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, nil, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -329,7 +329,7 @@ func TestReconcile_SocketOrphan_PidNotInProcessScan(t *testing.T) {
 	skc := []socketCandidate{{SyntheticKey: "synth", SockDir: "/cxc/cxc-X", PIDFromFile: 99999, SockExists: true}}
 	fs := newReconcileFS()
 	fs.statInfo["/tmp/p1"] = &fakeFileInfo{}
-	got, anoms := reconcile(context.Background(), fs, pc, nil, skc)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, nil, skc)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -359,7 +359,7 @@ func TestReconcile_StateDirNoMatch(t *testing.T) {
 	// Provide a state candidate with a DIFFERENT key so process is unmatched.
 	sc := []stateCandidate{{Key: "different-key", StateDir: "/state/x-different-key", HasBrokerJSON: true, BrokerJSON: brokerJSONFile{PID: 1}}}
 
-	got, anoms := reconcile(context.Background(), fs, pc, sc, nil)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, sc, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 
@@ -395,7 +395,7 @@ func TestReconcile_LstartUnparseableSurfaces(t *testing.T) {
 	}}
 	fs := newReconcileFS()
 	fs.statInfo[cwd] = &fakeFileInfo{}
-	got, anoms := reconcile(context.Background(), fs, pc, nil, nil)
+	got, anoms := reconcile(context.Background(), fs, 0, pc, nil, nil)
 	coverageRecorder.markAll(got)
 	coverageRecorder.markAnomalies(anoms)
 

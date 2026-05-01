@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 )
 
 // reconcile merges processCandidates, stateCandidates, and socketCandidates
@@ -35,12 +36,16 @@ import (
 func reconcile(
 	ctx context.Context,
 	fs FS,
+	cwdStatBudget time.Duration,
 	processC []processCandidate,
 	stateC []stateCandidate,
 	socketC []socketCandidate,
 ) ([]BrokerRecord, []Anomaly) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil
+	}
+	if cwdStatBudget <= 0 {
+		cwdStatBudget = 50 * time.Millisecond
 	}
 
 	// Index state candidates by Key. A given key may map to one state dir.
@@ -62,14 +67,12 @@ func reconcile(
 		processByKey[processC[i].Key] = append(processByKey[processC[i].Key], &processC[i])
 	}
 
-	used := make(map[string]bool)  // state keys consumed by a process record.
-	usedPIDs := make(map[int]bool) // process PIDs whose socket was merged.
+	used := make(map[string]bool) // state keys consumed by a process record.
 
 	// Track which sockets we've already merged into a process record.
 	mergedSockets := make(map[string]bool) // SockDir → merged
 
 	out := make([]BrokerRecord, 0, len(processC)+len(stateC)+len(socketC))
-	var topAnoms []Anomaly
 
 	// 1. Emit one record per process candidate.
 	for i := range processC {
@@ -110,8 +113,29 @@ func reconcile(
 			}
 		}
 
-		// Merge state-dir layer.
-		if sc, ok := stateByKey[pc.Key]; ok {
+		// Merge state-dir layer. Only the broker.json.pid-matching process
+		// owns the state directory; non-owner duplicates (same brokerKey but
+		// different pid) must NOT inherit StateDir/JobCounts because those
+		// fields belong to whichever process broker.json wrote.
+		//
+		// Single-process case: that process is the owner; emit
+		// broker_json_pid_mismatch when broker.json.pid is stale (points at
+		// a different/dead pid).
+		// Duplicate case: only the matching process becomes owner; the rest
+		// stay process-only with duplicate_runtime anomaly already attached.
+		// If broker.json.pid matches no process in the group, no process
+		// claims the state dir; it surfaces as state_dir_orphan in step 2.
+		sc, hasState := stateByKey[pc.Key]
+		isOwner := false
+		if hasState {
+			same := processByKey[pc.Key]
+			if len(same) == 1 {
+				isOwner = true
+			} else if sc.BrokerJSON.PID != 0 && sc.BrokerJSON.PID == pc.PID {
+				isOwner = true
+			}
+		}
+		if isOwner {
 			rec.Sources |= SourceStateDir
 			rec.StateDir = sc.StateDir
 			rec.HasBrokerJSON = sc.HasBrokerJSON
@@ -127,16 +151,20 @@ func reconcile(
 				})
 			}
 			used[pc.Key] = true
-		} else {
+		} else if !hasState {
 			rec.Anomalies = append(rec.Anomalies, Anomaly{
 				Code:   AnomalyProcessOrphan,
 				Detail: fmt.Sprintf("no state dir for Key=%s", pc.Key),
 			})
 			rec.Anomalies = append(rec.Anomalies, Anomaly{
 				Code:   AnomalyStateDirNoMatch,
-				Detail: fmt.Sprintf("process record could not be matched to any state dir"),
+				Detail: "process record could not be matched to any state dir",
 			})
 		}
+		// hasState && !isOwner case: this is a non-owner duplicate. The
+		// duplicate_runtime anomaly is already attached above. Don't merge
+		// state-dir layer; let the owning duplicate (or state_dir_orphan
+		// emission in step 2) carry it.
 
 		// Merge socket layer (lookup by PID).
 		for j := range socketC {
@@ -148,14 +176,14 @@ func reconcile(
 				}
 				rec.Anomalies = append(rec.Anomalies, s.Anomalies...)
 				mergedSockets[s.SockDir] = true
-				usedPIDs[pc.PID] = true
 				break
 			}
 		}
 
 		// Cwd-existence classification. Skip when we don't have a meaningful
-		// path (e.g. argv truncated, no cwd at all).
-		classifyCwd(fs, &rec)
+		// path (e.g. argv truncated, no cwd at all). Bounded by cwdStatBudget
+		// so a stale NFS / sshfs mount doesn't block the whole scan.
+		classifyCwd(fs, &rec, cwdStatBudget)
 
 		out = append(out, rec)
 	}
@@ -204,7 +232,7 @@ func reconcile(
 		out = append(out, rec)
 	}
 
-	return out, topAnoms
+	return out, nil
 }
 
 // canonicalCwdForCollision returns the value used to detect broker_key_collision.
@@ -218,7 +246,12 @@ func canonicalCwdForCollision(p *processCandidate) string {
 
 // classifyCwd populates rec.CwdExists / rec.CwdStatErr / cwd_* anomalies via
 // fs.Stat. ENOENT → cwd_missing; everything else → cwd_transient_stat_error.
-func classifyCwd(fs FS, rec *BrokerRecord) {
+//
+// fs.Stat is invoked in a goroutine so a stale NFS / sshfs mount can't block
+// the whole scan. If budget elapses before Stat returns, the cwd is marked
+// transient (not missing) and the goroutine is left to drain on its own —
+// see spec §8 (per-dir goroutine leak risk under hung syscalls).
+func classifyCwd(fs FS, rec *BrokerRecord, budget time.Duration) {
 	target := rec.CwdResolved
 	if target == "" {
 		target = rec.Cwd
@@ -227,7 +260,27 @@ func classifyCwd(fs FS, rec *BrokerRecord) {
 		// No cwd to classify — leave CwdExists false, CwdStatErr empty.
 		return
 	}
-	_, err := fs.Stat(target)
+	type statResult struct {
+		err error
+	}
+	ch := make(chan statResult, 1)
+	go func() {
+		_, err := fs.Stat(target)
+		ch <- statResult{err: err}
+	}()
+	var err error
+	select {
+	case r := <-ch:
+		err = r.err
+	case <-time.After(budget):
+		rec.CwdExists = false
+		rec.CwdStatErr = "timeout"
+		rec.Anomalies = append(rec.Anomalies, Anomaly{
+			Code:   AnomalyCwdTransientStatError,
+			Detail: fmt.Sprintf("os.Stat(%q): exceeded %s budget", target, budget),
+		})
+		return
+	}
 	if err == nil {
 		rec.CwdExists = true
 		return
