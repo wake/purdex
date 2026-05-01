@@ -1350,3 +1350,61 @@ func TestConsumeSignals_PreGraceDrop_RearmsAfterTeardown(t *testing.T) {
 		t.Errorf("preGraceHeld delta = %d, want >= 1", got)
 	}
 }
+
+// TestReconcileSessionActive_DuringPreGraceHold_CancelsAndCleans pins
+// J3 P2-T3: cross-provider switch (reconcileSessionActive) cancels an
+// active ProbeIntent entry whose detector emission is currently inside
+// the 300ms pre-grace hold. The hold's ctx.Done branch fires →
+// preGraceCanceled +1. The active entry under the old provider is
+// removed (cross-provider cleanup), and the new provider's lifecycle
+// runs without contamination.
+func TestReconcileSessionActive_DuringPreGraceHold_CancelsAndCleans(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	m.sessions = &fakeSessionProvider{}
+	gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+		Kind:      agentpkg.ProbeIntentKindProcessDead,
+		PaneAlive: true,
+		PaneID:    "%5",
+		SenderPID: 4242,
+	})
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	before := snapshotPreGraceMetrics()
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+	// Wait for emit so the consumer is mid-hold.
+	select {
+	case <-gate:
+	case <-time.After(time.Second):
+		t.Fatalf("detector did not emit within 1s")
+	}
+	// Switch top frame to a different agent (cc-noprobes has no
+	// ProbeIntents), then call applyStatus → reconcileSessionActive
+	// drops the codex entry (cross-provider stale) BEFORE the hold timer
+	// fires (300ms is plenty of head-room for the reconcile path to
+	// run synchronously from the test goroutine).
+	m.registry.Register(&fakeAgentProvider{typeName: "cc-noprobes"})
+	m.probeIntentDisp.applyStatus("work", "cc-noprobes", agentpkg.StatusRunning)
+
+	// preGraceCanceled +1 from the cancelled detector's hold goroutine,
+	// and the codex active entry is gone.
+	waitFor(t, 2*time.Second, func() bool {
+		now := snapshotPreGraceMetrics()
+		if (now.preGraceCanceled - before.preGraceCanceled) < 1 {
+			return false
+		}
+		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		return !ok
+	}, "pre-grace cancel + active entry cleared after cross-provider switch")
+
+	after := snapshotPreGraceMetrics()
+	if got := after.preGraceCanceled - before.preGraceCanceled; got != 1 {
+		t.Errorf("preGraceCanceled delta = %d, want 1", got)
+	}
+	if got := after.droppedPreGrace - before.droppedPreGrace; got != 0 {
+		t.Errorf("droppedPreGrace delta = %d, want 0 (must drop pre-cancel, not pre-grace)", got)
+	}
+	if got := after.applied - before.applied; got != 0 {
+		t.Errorf("applied delta = %d, want 0 (signal must NOT reach apply)", got)
+	}
+}
