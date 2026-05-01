@@ -1408,3 +1408,67 @@ func TestReconcileSessionActive_DuringPreGraceHold_CancelsAndCleans(t *testing.T
 		t.Errorf("applied delta = %d, want 0 (signal must NOT reach apply)", got)
 	}
 }
+
+// TestReplayStatus_TriggersProbeIntent_PreGraceConsistent pins J3 P2-T4
+// (spec §1.3 A7): daemon-restart replayStatus → ProbeIntent re-arm
+// runs through the same pre-grace 300ms hold as a fresh applyStatus
+// arm. With no concurrent hook, the replayed Signal proceeds to
+// applyProbeGuards normally; ProcessDead detector latency is bounded
+// by the hold + 1Hz poll, well under the W6-3 ≤2s target. The test
+// stub-emits immediately to keep timing deterministic — production
+// codex polling tail is exercised in P3 mlab live verify.
+func TestReplayStatus_TriggersProbeIntent_PreGraceConsistent(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	m.sessions = &fakeSessionProvider{}
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+		Kind:      agentpkg.ProbeIntentKindProcessDead,
+		PaneAlive: true,
+		PaneID:    "%5",
+		SenderPID: 4242,
+	})
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	before := snapshotPreGraceMetrics()
+	// replayStatus snapshots currentStatus and re-runs applyStatus per
+	// session — same path as a live hook would take.
+	m.probeIntentDisp.replayStatus()
+
+	// Detector emits → consumer enters hold → no concurrent hook → pre-
+	// grace pass-through → applyProbeGuards step 4 broadcasts → applied
+	// → consumeSignals re-runs applyStatus(error) → case 3 teardown.
+	select {
+	case <-gate:
+	case <-time.After(time.Second):
+		t.Fatalf("detector did not emit within 1s after replayStatus")
+	}
+	waitFor(t, 2*time.Second, func() bool {
+		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		return !ok
+	}, "active entry torn down after replay-driven pre-grace pass + apply")
+
+	after := snapshotPreGraceMetrics()
+	if got := after.signalEmitted - before.signalEmitted; got != 1 {
+		t.Errorf("signalEmitted delta = %d, want 1", got)
+	}
+	if got := after.preGraceHeld - before.preGraceHeld; got != 1 {
+		t.Errorf("preGraceHeld delta = %d, want 1 (replay must enter pre-grace)", got)
+	}
+	if got := after.droppedPreGrace - before.droppedPreGrace; got != 0 {
+		t.Errorf("droppedPreGrace delta = %d, want 0 (no concurrent hook)", got)
+	}
+	if got := after.preGraceCanceled - before.preGraceCanceled; got != 0 {
+		t.Errorf("preGraceCanceled delta = %d, want 0", got)
+	}
+	if got := after.applied - before.applied; got != 1 {
+		t.Errorf("applied delta = %d, want 1 (replay path must reach apply)", got)
+	}
+	m.mu.Lock()
+	gotStatus := m.currentStatus["work"]
+	m.mu.Unlock()
+	if gotStatus != agentpkg.StatusError {
+		t.Fatalf("currentStatus = %q, want error after replay-driven apply", gotStatus)
+	}
+}
