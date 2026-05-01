@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.0.0-alpha.280] - 2026-05-01
+
+### Feat(codexbroker): P1 inventory endpoint (read-only, governance phase 1) (#792)
+
+First step of the codex broker / app-server governance feature (kickoff
+`kickoff_codex_broker_and_lights_governance.md` → governance P1). Adds a
+new daemon-side `internal/codexbroker` package and `GET /api/codex/brokers`
+endpoint that enumerates every codex broker process, state directory, and
+socket directory visible on the host with full attribution and a closed-
+list anomaly schema. **Read-only** — zero side effects on broker
+processes or filesystem state.
+
+Live mlab verification at ship time:
+
+```
+summary.total=66 withProcess=42 withStateDir=55 withSocket=42
+scanSourceTimeouts=[] partial=false p95=69ms
+ps count 42→42 unchanged across two scans
+```
+
+P2 (decision + kill), P3 (trigger), P4 (SPA dashboard) and the four lights
+phases (L1–L4) ship in subsequent PRs per the same kickoff. Issue #668
+(codex broker orphan tracking) stays open until P3 lands.
+
+Two rounds of codex review (R1 standard, R2 three-parallel adversarial)
+caught nine blockers total — all fixed in-PR. Three deferred follow-ups
+tracked as #793 (hung-syscall goroutine leak under truly-stuck FS),
+#794 (AnomalyCode runtime emission enforcement), #795 (file-quality
+cleanup: split `reconcile.go` / unify naming / unexport / move test
+seams).
+
+Spec drift correction along the way: original §3.4 specified NFC + APFS-
+aware case-fold inside `BrokerKey`, but live integration revealed this
+desyncs from codex CLI's own state-dir naming (raw `realpathSync.native`
+bytes). The hash is now byte-faithful to codex; collision detection
+moves to a P2 anomaly check rather than touching the primary key.
+
 ## [1.0.0-alpha.279] - 2026-05-01
 
 ### Feat(agent): cc PdxPostToolUse → running status (W6-1a) (#790)
