@@ -596,10 +596,36 @@ func (d *probeIntentDispatcher) consumeSignals(
 		agentpkg.MetricProbeIntentPreGraceHeld.Add(1)
 
 		// Single closure reused for all drop sites in this iteration —
-		// pre-grace, pre-grace-canceled, and applyProbeGuards' four
-		// legacy reasons. Reusing the closure keeps log-context (session,
-		// kind) consistent across drop reasons.
+		// pre-grace, pre-grace-canceled, post-grace, and applyProbeGuards'
+		// four legacy reasons. Reusing the closure keeps log-context
+		// (session, kind) consistent across drop reasons.
 		onDrop := probeIntentOnDropForSession(session, intent.Kind)
+
+		// Post-direction graceWindow pre-check using signalAt as the
+		// reference time. Without this, the 300ms pre-grace hold below
+		// would shift applyProbeGuards' decision time forward by 300ms
+		// → the 2s post graceWindow effectively shrinks to ~1.7s. By
+		// checking against signalAt here we preserve the pre-J3 2s
+		// threshold semantics for the ProbeIntent path (PR round-3 P1
+		// finding).
+		//
+		// Counter pattern matches applyProbeGuards step 2 (probe_orchestrator.go:288):
+		// - MetricProbeGraceWindowSuppressed +1 here (legacy global; dashboard)
+		// - onDrop("grace") routes through probeIntentOnDropForSession's
+		//   switch which increments MetricProbeIntentDroppedGrace.
+		// Do NOT also bump MetricProbeIntentDroppedGrace explicitly — that
+		// would double-count via the helper switch (per spec §3.4 R4).
+		if d.parent.probeOrch != nil {
+			o := d.parent.probeOrch
+			o.graceMu.Lock()
+			last, hasHook := o.lastHookAt[session]
+			o.graceMu.Unlock()
+			if hasHook && !last.After(signalAt) && signalAt.Sub(last) < probeGraceWindow {
+				agentpkg.MetricProbeGraceWindowSuppressed.Add(1)
+				onDrop("grace")
+				continue
+			}
+		}
 
 		timer := time.NewTimer(probeIntentPreGraceWindow)
 		select {
