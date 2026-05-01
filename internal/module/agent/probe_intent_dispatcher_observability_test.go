@@ -7,6 +7,7 @@
 package agent
 
 import (
+	"expvar"
 	"strings"
 	"testing"
 	"time"
@@ -438,6 +439,36 @@ func TestProbeIntent_Expvar_DroppedCounterByReason(t *testing.T) {
 			t.Errorf("droppedTransitionGate delta = %d, want 1", got)
 		}
 	})
+}
+
+// TestProbeIntentMetrics_PreGraceExpvarExposed pins J3 P2-T6: the
+// three new pre-grace counters AND the legacy
+// MetricProbeGraceWindowSuppressed counter (dashboard contract) are
+// registered with the global expvar registry under the agreed names
+// and resolve to *expvar.Int. Dashboards / monitoring / future HTTP
+// exposure all index by these stable string keys.
+func TestProbeIntentMetrics_PreGraceExpvarExposed(t *testing.T) {
+	cases := []struct {
+		key string
+	}{
+		{"purdex_probe_intent_pre_grace_held_total"},
+		{"purdex_probe_intent_dropped_pre_grace_total"},
+		{"purdex_probe_intent_pre_grace_canceled_total"},
+		// Legacy post-direction counter must continue to resolve —
+		// the J3 PR explicitly does not rename it.
+		{"purdex_probe_grace_window_suppressed_total"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			v := expvar.Get(tc.key)
+			if v == nil {
+				t.Fatalf("expvar.Get(%q) = nil; counter not registered", tc.key)
+			}
+			if _, ok := v.(*expvar.Int); !ok {
+				t.Fatalf("expvar.Get(%q) type = %T, want *expvar.Int", tc.key, v)
+			}
+		})
+	}
 }
 
 // dispatcherDropStale exercises the stale-callback drop counter by
