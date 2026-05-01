@@ -1078,9 +1078,15 @@ func (d *probeIntentDispatcher) replayStatus() {
 
 **Known issue 追蹤**：若 round 5 之後仍有 lifecycle corner case（unlikely），於 plan / 實作 / PR review 階段以 follow-up issue 追蹤。
 
+### 9.14 ✅ 採 J3 generic pre-grace timer at dispatcher level — anchor 跨 Kind 不特化
+
+**Drift signal**：未來若有人想為單一 ProbeIntent Kind（如只對 ScreenChange，ProcessDead 不 hold）特化 pre-grace timer，或在 detector 端自行加 pre-hold 邏輯。
+
+**決議**：J3 PR（spec `2026-05-01-probe-intent-bidirectional-grace-window-spec.md`）已確立 pre-grace timer 在 dispatcher `consumeSignals` 內 generic 對所有 ProbeIntent Kind 適用（per fix-spec §3 不為單一 Kind 特化約束 + W6-3 ProcessDead 也有同類 race）；**不可在單一 Kind 特化 pre-grace timer；不可 detector 端自行加 pre-hold**（detector 仍是 dumb emit；lifecycle 由 dispatcher 統一管）。
+
 ---
 
-**所有 spec drift signal 已收斂。本 spec v6 為 final draft；直接進 plan 階段。**
+**所有 spec drift signal 已收斂。本 spec v6 為 final draft；直接進 plan 階段。J3 PR（2026-05-01）後新增 §9.14 anchor 防跨 Kind 特化，不影響 v6 final draft 內容。**
 
 ---
 

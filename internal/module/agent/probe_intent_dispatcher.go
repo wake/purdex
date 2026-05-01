@@ -4,9 +4,33 @@ import (
 	"context"
 	"log"
 	"slices"
+	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 )
+
+// probeIntentPreGraceWindow is the pre-applyProbeGuards hold duration
+// applied by consumeSignals (J3; 2026-05-01-probe-intent-bidirectional-
+// grace-window-spec §3.2). While active, a probe Signal waits to see
+// whether a hook for the same session arrives at the daemon. If a hook
+// arrives during the window (lastHookAt > signalAt at timer expiry), the
+// probe Signal is dropped (hook authority pre-emption). If no hook
+// arrives, the Signal proceeds into applyProbeGuards (which still has
+// its own post-direction 2s graceWindow as a backstop).
+//
+// Sized to cover the `pdx hook` CLI cold start (80-250ms typical, per
+// docs/specs/2026-04-30-daemon-hook-pipeline-lag-analysis.md §2.5) plus
+// a small safety margin. 300ms is small enough that approve-case
+// ScreenChange Signal latency is bounded by the 1.5s Phase A
+// IdleStableTicks gate + 500ms watchPollInterval, not this window.
+// Future tuning (e.g. lower to 200ms after mlab live capture shows hook
+// p99 < 150ms) goes through a separate PR.
+//
+// Defined here (not imported from probe_orchestrator.go's probeGraceWindow)
+// because the post-direction graceWindow is a hook-authority backstop
+// while pre-grace is a dispatcher-level race-window buffer; the two
+// values may evolve independently.
+const probeIntentPreGraceWindow = 300 * time.Millisecond
 
 // probeIntentOnDrop is the OnDrop callback installed on probeGuardArgs by
 // the dispatcher's consumeSignals path. It maps the canonical drop-reason
@@ -14,10 +38,29 @@ import (
 // + dev log line. ScreenChange callers leave probeGuardArgs.OnDrop nil so
 // the legacy MetricProbeGraceWindowSuppressed semantics stay isolated.
 //
-// reason values are stable strings emitted by applyProbeGuards:
-// "stale-callback" / "grace" / "error-guard" / "transition-gate". Anything
-// else is logged but not counted (defensive landing for future drop
-// branches that may add reasons before this map is updated).
+// reason values are stable strings emitted by applyProbeGuards +
+// consumeSignals:
+//
+//	stale-callback      — applyProbeGuards step 1 stale check failed (counter: helper)
+//	grace               — applyProbeGuards step 2 post graceWindow active (counter: helper)
+//	transition-gate     — applyProbeGuards step 4 transition gate rejected (counter: helper)
+//	error-guard         — applyProbeGuards step 4 error guard rejected (counter: helper)
+//	pre-grace           — consumeSignals pre-applyProbeGuards hold: hook arrived (J3; counter: caller)
+//	pre-grace-canceled  — consumeSignals pre-applyProbeGuards hold: ctx canceled (J3; counter: caller)
+//
+// Note on counter ownership: the four legacy reasons increment counters
+// inside the helper switch (helper-side accounting). The two J3 reasons
+// (pre-grace / pre-grace-canceled) are NOT added to the helper switch;
+// the caller (consumeSignals) explicitly invokes
+// MetricProbeIntentDroppedPreGrace.Add(1) /
+// MetricProbeIntentPreGraceCanceled.Add(1) before invoking the helper,
+// so adding them to the switch would double-count. The helper still
+// emits its dev log line for the new reasons via the switch fall-through
+// after the unmatched case (the switch only gates counter inc — log
+// runs unconditionally).
+//
+// Anything else is logged but not counted (defensive landing for future
+// drop branches that may add reasons before this map is updated).
 func probeIntentOnDrop(reason string) {
 	switch reason {
 	case "stale-callback":
@@ -32,6 +75,23 @@ func probeIntentOnDrop(reason string) {
 	if isDevMode() {
 		log.Printf("[probe-intent] drop reason=%s", reason)
 	}
+}
+
+// classifyAsHookRace returns true iff orch.lastHookAt[session] is set with a
+// monotonic timestamp strictly later than signalAt. Used by consumeSignals to
+// distinguish hook-race drops from genuine lifecycle cancellations in the
+// pre-grace path. graceMu held read-only for the lookup (never mutates).
+//
+// "Strictly later" (last.After(signalAt)) — equal timestamps do NOT drop:
+// probe wins on a same-monotonic-ns tie (per spec §2.3 R12 / Q5).
+func classifyAsHookRace(orch *probeOrchestrator, session string, signalAt time.Time) bool {
+	if orch == nil {
+		return false
+	}
+	orch.graceMu.Lock()
+	last, hasHook := orch.lastHookAt[session]
+	orch.graceMu.Unlock()
+	return hasHook && last.After(signalAt)
 }
 
 // probeIntentOnDropForSession returns an OnDrop callback that prefixes the
@@ -513,7 +573,7 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 // status walks lifecycle case 3 (active && !shouldActive) → cancel +
 // delete.
 func (d *probeIntentDispatcher) consumeSignals(
-	_ context.Context,
+	ctx context.Context,
 	session, agentType string,
 	intent agentpkg.ProbeIntent,
 	generation uint64,
@@ -521,7 +581,92 @@ func (d *probeIntentDispatcher) consumeSignals(
 ) {
 	appliedAny := false
 	for sig := range in {
+		// Existing dispatcher metric — every detector emission observed by
+		// consumeSignals counts here, INCLUDING those that later drop
+		// pre-grace / pre-grace-canceled. Preserves the dashboard /
+		// observability invariant that signal_emitted_total is the
+		// pre-guard-pipeline cardinality (per spec §3.1 / plan-review P2).
 		agentpkg.MetricProbeIntentSignalEmitted.Add(1)
+
+		// J3 pre-grace hold: orchNowFn read so signalAt is in the same
+		// monotonic clock frame as recordHookAt's lastHookAt write (both
+		// route through orchNowFn so a test seam can stub them
+		// synchronously).
+		signalAt := orchNowFn()
+		agentpkg.MetricProbeIntentPreGraceHeld.Add(1)
+
+		// Single closure reused for all drop sites in this iteration —
+		// pre-grace, pre-grace-canceled, post-grace, and applyProbeGuards'
+		// four legacy reasons. Reusing the closure keeps log-context
+		// (session, kind) consistent across drop reasons.
+		onDrop := probeIntentOnDropForSession(session, intent.Kind)
+
+		// Post-direction graceWindow pre-check using signalAt as the
+		// reference time. Without this, the 300ms pre-grace hold below
+		// would shift applyProbeGuards' decision time forward by 300ms
+		// → the 2s post graceWindow effectively shrinks to ~1.7s. By
+		// checking against signalAt here we preserve the pre-J3 2s
+		// threshold semantics for the ProbeIntent path (PR round-3 P1
+		// finding).
+		//
+		// Counter pattern matches applyProbeGuards step 2 (probe_orchestrator.go:288):
+		// - MetricProbeGraceWindowSuppressed +1 here (legacy global; dashboard)
+		// - onDrop("grace") routes through probeIntentOnDropForSession's
+		//   switch which increments MetricProbeIntentDroppedGrace.
+		// Do NOT also bump MetricProbeIntentDroppedGrace explicitly — that
+		// would double-count via the helper switch (per spec §3.4 R4).
+		if d.parent.probeOrch != nil {
+			o := d.parent.probeOrch
+			o.graceMu.Lock()
+			last, hasHook := o.lastHookAt[session]
+			o.graceMu.Unlock()
+			if hasHook && !last.After(signalAt) && signalAt.Sub(last) < probeGraceWindow {
+				agentpkg.MetricProbeGraceWindowSuppressed.Add(1)
+				onDrop("grace")
+				continue
+			}
+		}
+
+		timer := time.NewTimer(probeIntentPreGraceWindow)
+		select {
+		case <-timer.C:
+			// hold elapsed without ctx cancel; proceed to hook lookup
+			// then applyProbeGuards.
+		case <-ctx.Done():
+			// Detector ctx canceled mid-hold. Two upstream causes:
+			//   (a) hook race — handler.go:380-413 recordHookAt runs
+			//       BEFORE currentStatus mutation, then applyStatus →
+			//       reconcileSessionActive cancels active ProbeIntent.
+			//       So lastHookAt may already be set with a value >
+			//       signalAt when this branch fires.
+			//   (b) genuine lifecycle cancel — cross-provider switch,
+			//       daemon Stop, etc. without any new hook.
+			// Classify by lastHookAt to keep the metric / reason
+			// semantically aligned with what the dispatcher observes
+			// (per PR round-2 體質 finding: avoid lumping hook race
+			// into pre-grace-canceled).
+			timer.Stop()
+			if classifyAsHookRace(d.parent.probeOrch, session, signalAt) {
+				agentpkg.MetricProbeIntentDroppedPreGrace.Add(1)
+				onDrop("pre-grace")
+				continue
+			}
+			agentpkg.MetricProbeIntentPreGraceCanceled.Add(1)
+			onDrop("pre-grace-canceled")
+			continue
+		}
+
+		// Pre-grace decision: did a same-session hook arrive at the
+		// daemon during the hold? Read lastHookAt under graceMu (read-
+		// only; never mutates state) and compare strictly with signalAt.
+		// Equal timestamps (same monotonic ns) do NOT drop — defined
+		// boundary: probe wins on tie (per spec §2.3 R12 / Q5).
+		if classifyAsHookRace(d.parent.probeOrch, session, signalAt) {
+			agentpkg.MetricProbeIntentDroppedPreGrace.Add(1)
+			onDrop("pre-grace")
+			continue
+		}
+
 		applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{
 			Session:    session,
 			AgentType:  agentType,
@@ -529,7 +674,7 @@ func (d *probeIntentDispatcher) consumeSignals(
 			Signal:     sig,
 			Mapping:    intent.OnSignal,
 			StaleCheck: makeProbeIntentStaleCheck(session, intent.Kind, agentType, generation),
-			OnDrop:     probeIntentOnDropForSession(session, intent.Kind),
+			OnDrop:     onDrop,
 		})
 		if !applied {
 			continue
