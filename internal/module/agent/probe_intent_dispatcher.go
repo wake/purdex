@@ -556,7 +556,7 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 // status walks lifecycle case 3 (active && !shouldActive) → cancel +
 // delete.
 func (d *probeIntentDispatcher) consumeSignals(
-	_ context.Context,
+	ctx context.Context,
 	session, agentType string,
 	intent agentpkg.ProbeIntent,
 	generation uint64,
@@ -564,7 +564,58 @@ func (d *probeIntentDispatcher) consumeSignals(
 ) {
 	appliedAny := false
 	for sig := range in {
+		// Existing dispatcher metric — every detector emission observed by
+		// consumeSignals counts here, INCLUDING those that later drop
+		// pre-grace / pre-grace-canceled. Preserves the dashboard /
+		// observability invariant that signal_emitted_total is the
+		// pre-guard-pipeline cardinality (per spec §3.1 / plan-review P2).
 		agentpkg.MetricProbeIntentSignalEmitted.Add(1)
+
+		// J3 pre-grace hold: orchNowFn read so signalAt is in the same
+		// monotonic clock frame as recordHookAt's lastHookAt write (both
+		// route through orchNowFn so a test seam can stub them
+		// synchronously).
+		signalAt := orchNowFn()
+		agentpkg.MetricProbeIntentPreGraceHeld.Add(1)
+
+		// Single closure reused for all drop sites in this iteration —
+		// pre-grace, pre-grace-canceled, and applyProbeGuards' four
+		// legacy reasons. Reusing the closure keeps log-context (session,
+		// kind) consistent across drop reasons.
+		onDrop := probeIntentOnDropForSession(session, intent.Kind)
+
+		timer := time.NewTimer(probeIntentPreGraceWindow)
+		select {
+		case <-timer.C:
+			// hold elapsed without ctx cancel; proceed to hook lookup
+			// then applyProbeGuards.
+		case <-ctx.Done():
+			// Detector ctx canceled mid-hold (cross-provider switch,
+			// daemon Stop, or any lifecycle teardown). Drop the signal
+			// without entering applyProbeGuards.
+			timer.Stop()
+			agentpkg.MetricProbeIntentPreGraceCanceled.Add(1)
+			onDrop("pre-grace-canceled")
+			continue
+		}
+
+		// Pre-grace decision: did a same-session hook arrive at the
+		// daemon during the hold? Read lastHookAt under graceMu (read-
+		// only; never mutates state) and compare strictly with signalAt.
+		// Equal timestamps (same monotonic ns) do NOT drop — defined
+		// boundary: probe wins on tie (per spec §2.3 R12 / Q5).
+		if d.parent.probeOrch != nil {
+			o := d.parent.probeOrch
+			o.graceMu.Lock()
+			last, hasHook := o.lastHookAt[session]
+			o.graceMu.Unlock()
+			if hasHook && last.After(signalAt) {
+				agentpkg.MetricProbeIntentDroppedPreGrace.Add(1)
+				onDrop("pre-grace")
+				continue
+			}
+		}
+
 		applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{
 			Session:    session,
 			AgentType:  agentType,
@@ -572,7 +623,7 @@ func (d *probeIntentDispatcher) consumeSignals(
 			Signal:     sig,
 			Mapping:    intent.OnSignal,
 			StaleCheck: makeProbeIntentStaleCheck(session, intent.Kind, agentType, generation),
-			OnDrop:     probeIntentOnDropForSession(session, intent.Kind),
+			OnDrop:     onDrop,
 		})
 		if !applied {
 			continue
