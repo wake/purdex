@@ -1,7 +1,7 @@
 # J3 Probe Intent bidirectional graceWindow — Implementation Plan
 
-> **Status**：v2（codex plan review thread `019de428-def1-7533-80f4-cf3b959f7377` 抓 2 實作草稿 bug 全採納：P1 `probeIntentOnDropForSession` 是 package-level closure factory 不是 Module field / P2 既有 `MetricProbeIntentSignalEmitted` 必 preserve；spec §3.1 / §3.4 / plan P1-T3 / P1-T4 case 1-5 metric 列同步修；行為與 trim 範圍不變）
-> **依賴 spec**：`docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-spec.md` v7.1（v7 trim + plan-review fix 草稿）
+> **Status**：v3（codex plan review 兩輪採納 — round 1 thread `019de428-def1-7533-80f4-cf3b959f7377`：P1 `probeIntentOnDropForSession` package-level closure factory 不是 Module field / P2 既有 `MetricProbeIntentSignalEmitted` 必 preserve；round 2 thread `019de42e-d05f-7781-84c9-3ab5d899826d`：P2 `captureDrops` helper intercept 不可行 → metric-only reason 斷言、P3 §3.4 `mapping` reason 與實際行為不符 → 移除；spec §3.1 / §3.4 / plan P1-T3 / P1-T4 case 1-5 + helper section 同步修；行為與 trim 範圍不變）
+> **依賴 spec**：`docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-spec.md` v7.2（v7 trim + plan-review 兩輪 fix）
 > **Worktree**：`.claude/worktrees/probe-intent-bidirectional-grace` / branch `worktree-probe-intent-bidirectional-grace`
 > **Base**：`origin/main` @ alpha.280（codex broker P1 `13e91c64` + bump `5d40e2a2`）
 > **拆分**：Phase 1（P1 dispatcher pre-hold + ctx + metrics + table-driven test；TDD subagent）→ Phase 2（P2 既有 path 重驗 + regression；TDD subagent）→ Phase 3（P3 mlab live verify + W6-3/W6-6 spec drift anchor；主 session）→ PR
@@ -220,19 +220,25 @@ func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
 
 | 檔案 | 改動 |
 |---|---|
-| `internal/module/agent/probe_intent_dispatcher_test.go` | 新增 `TestConsumeSignals_PreGrace_Table` 表驅動 5 case；helper 注入 `orchNowFn` stub + `lastHookAt` 設定 + `probeIntentOnDropForSession` capture；ctx cancel 用 `context.WithCancel` |
+| `internal/module/agent/probe_intent_dispatcher_test.go` | 新增 `TestConsumeSignals_PreGrace_Table` 表驅動 5 case；helper 注入 `orchNowFn` stub + `lastHookAt` 設定；ctx cancel 用 `context.WithCancel` |
 
 **Helper 設計要點**：
 - `withFakeNow(t *testing.T, baseAt time.Time)` 注入 `orchNowFn` 回 baseAt（讓 signalAt deterministic）
 - `setHookAt(t, orch, session, at)` 透過 `recordHookAt`（既有 method）設定 `lastHookAt`；不直接 manipulate `lastHookAt` map
-- `captureDrops(t)` 透過 `probeIntentOnDropForSession` callback 收集 (session, reason) tuple
-- `expectMetricDelta(t, before, after, +1)` 比較 expvar.Int.Value() 變化
+- `expectMetricDelta(t, metric *expvar.Int, before, want int64)` 比較 expvar.Int.Value() 變化（既有 dispatcher / orchestrator test 既有 pattern）
+
+**Reason 斷言策略**：**只透過 metric 斷言 reason，不 intercept `probeIntentOnDropForSession` callback**（callback 是 package-level function，無 production seam 可替換；intercept 會違反 v7 trim「不加 seam」承諾）。每條新 reason 對應唯一 metric：
+- `pre-grace` ↔ `MetricProbeIntentDroppedPreGrace +1`（exclusive）
+- `pre-grace-canceled` ↔ `MetricProbeIntentPreGraceCanceled +1`（exclusive）
+- `grace` ↔ `MetricProbeGraceWindowSuppressed +1` + `MetricProbeIntentDroppedGrace +1`（雙計數，case 5）
+
+dev-mode log 是 observability 給人讀，不是 test 契約。
 
 **Acceptance**：
 - 5 case 全 PASS
 - `go test ./internal/module/agent -run 'TestConsumeSignals_PreGrace' -count=1` 全綠
 - `go test -race ./internal/module/agent -run 'TestConsumeSignals_PreGrace' -count=1` 全綠
-- 各 case metric increment + drop reason 對齊上表
+- 各 case metric increment 對齊上表
 
 **估計**：~150 行 test / 0 行 production
 
