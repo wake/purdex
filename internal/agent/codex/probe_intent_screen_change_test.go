@@ -567,3 +567,47 @@ func TestStartScreenChangeDetector_NoCloseRace(t *testing.T) {
 
 	cancel()
 }
+
+// --- P1-T5: onScreenChange mapper tests (internal — exercises the
+// unexported mapper directly, mirroring the onProcessDead pattern in
+// probe_intent_process_dead_test.go).
+
+// TestOnScreenChange_MatchKind_ReturnsRunning asserts the canonical
+// W6-6 mapping: a Signal with Kind=ScreenChange returns StatusRunning.
+func TestOnScreenChange_MatchKind_ReturnsRunning(t *testing.T) {
+	got := onScreenChange(agent.Signal{
+		Kind:      agent.ProbeIntentKindScreenChange,
+		PaneAlive: true,
+		PaneID:    "%5",
+		SenderPID: 4242,
+	})
+	if got != agent.StatusRunning {
+		t.Errorf("onScreenChange(Kind=ScreenChange) = %q, want %q", got, agent.StatusRunning)
+	}
+}
+
+// TestOnScreenChange_NonScreenChangeKind_ReturnsEmpty asserts the
+// defensive shape: a Signal carrying a different ProbeIntentKind
+// (e.g. ProcessDead) returns "" — defends against dispatcher misuse
+// if a future Kind ever shares the OnSignal slot.
+func TestOnScreenChange_NonScreenChangeKind_ReturnsEmpty(t *testing.T) {
+	got := onScreenChange(agent.Signal{
+		Kind:      agent.ProbeIntentKindProcessDead,
+		PaneAlive: true,
+		PaneID:    "%5",
+		SenderPID: 4242,
+	})
+	if got != "" {
+		t.Errorf("onScreenChange(Kind=ProcessDead) = %q, want \"\"", got)
+	}
+}
+
+// TestOnScreenChange_NilOrZeroKind_ReturnsEmpty asserts the
+// zero-value Kind (e.g. an uninitialized Signal struct) returns ""
+// rather than spuriously mapping to Running.
+func TestOnScreenChange_NilOrZeroKind_ReturnsEmpty(t *testing.T) {
+	got := onScreenChange(agent.Signal{}) // Kind = "" (zero value)
+	if got != "" {
+		t.Errorf("onScreenChange(Kind=\"\") = %q, want \"\"", got)
+	}
+}

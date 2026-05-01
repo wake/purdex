@@ -134,6 +134,44 @@ func TestProvider_ProbeIntents_OnEntryStatusContainsRunningWaiting(t *testing.T)
 	}
 }
 
+// TestProvider_ProbeIntents_HasScreenChangeAsSecondEntry asserts the W6-6
+// addition: ProbeIntents() returns exactly 2 entries, with the second
+// entry declaring Kind=ScreenChange + OnEntryStatus={Waiting} +
+// non-nil OnSignal. Position-sensitive (per provider.go contract: stable
+// order — ProcessDead at 0, ScreenChange at 1).
+func TestProvider_ProbeIntents_HasScreenChangeAsSecondEntry(t *testing.T) {
+	p := codex.NewProvider()
+	pip, ok := any(p).(agent.ProbeIntentProvider)
+	if !ok {
+		t.Fatalf("codex.Provider does not implement agent.ProbeIntentProvider")
+	}
+	intents := pip.ProbeIntents()
+	if len(intents) != 2 {
+		t.Fatalf("ProbeIntents() len = %d, want 2 (W6-6: ProcessDead + ScreenChange)", len(intents))
+	}
+	second := intents[1]
+	if second.Kind != agent.ProbeIntentKindScreenChange {
+		t.Errorf("ProbeIntents()[1].Kind = %q, want %q", second.Kind, agent.ProbeIntentKindScreenChange)
+	}
+	if second.OnSignal == nil {
+		t.Errorf("ProbeIntents()[1].OnSignal = nil, want non-nil mapper")
+	}
+	// OnEntryStatus must contain Waiting (sole gating status — running
+	// is the target, idle/error/clear have hook authority).
+	gating := make(map[agent.Status]bool, len(second.OnEntryStatus))
+	for _, s := range second.OnEntryStatus {
+		gating[s] = true
+	}
+	if !gating[agent.StatusWaiting] {
+		t.Errorf("ProbeIntents()[1].OnEntryStatus missing Waiting (have %v)", second.OnEntryStatus)
+	}
+	// OnEntryStatus must NOT contain Running (running is the target;
+	// see provider.go contract).
+	if gating[agent.StatusRunning] {
+		t.Errorf("ProbeIntents()[1].OnEntryStatus must not contain Running (target status), have %v", second.OnEntryStatus)
+	}
+}
+
 // TestCodexSupportedStatuses asserts codex.Provider implements
 // StatusSupporter and declares the same Phase 1 status set as cc/opencode
 // post-DeriveStatus expansion (Commit 3).
