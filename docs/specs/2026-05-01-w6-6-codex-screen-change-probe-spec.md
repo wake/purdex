@@ -1,8 +1,8 @@
 # W6-6 codex permission-reply ScreenChange ProbeIntent spec
 
-> **Status**：v5（user reframe 後 contract 定稿）。從 v1-v4 的「detector 自己解 quick-approval / fast-with-output 等邊界」轉成 **2-phase + 2-case truth table contract**：Phase A 等 `ScreenStable`（pane 停下來進入穩定）/ Phase B 監控 `ScreenChanged` → emit-once。Phase A 失敗（一直不穩定）一律歸 case 2 by contract → 由 PdxStop hook 自然 cover，detector 不再嘗試補位。實作面 — `armed atomic.Bool`（Phase A→B 閘門）+ `emitted atomic.Bool` + `sync.Mutex`（取代 v4 sync.Once，因 sync.Once 永久熔斷不適用 transient identity false retry-able 場合，修 round 4 F1）；isCodexAlive 用 `prober.FirstAliveAgentInTree(paneID)`（已用 ActivePanePID exact resolve；修 round 3 F3）；emit 前 mutex 內 double-check isCodexAlive（修 round 3 F2 race window）。撤掉 grace gate / `now func()` seam — Phase A 由 ScreenStable 自然 demarcate，detector 不需時間判斷。
+> **Status**：v6（J3 ship at alpha.281 後 update — reject race 由 dispatcher pre-grace 接管，A9/A10 為本 PR ship gate）。v5 contract 主軸不變：**2-phase + 2-case truth table contract** — Phase A 等 `ScreenStable`（pane 停下來進入穩定）/ Phase B 監控 `ScreenChanged` → emit-once；Phase A 失敗一律歸 case 2 by contract → 由 PdxStop hook 自然 cover，detector 不再嘗試補位。實作面 — `armed atomic.Bool`（Phase A→B 閘門）+ `emitted atomic.Bool` + `sync.Mutex`（取代 v4 sync.Once；修 round 4 F1）；isCodexAlive 用 `prober.FirstAliveAgentInTree(paneID)`（已用 ActivePanePID exact resolve；修 round 3 F3）；emit 前 mutex 內 double-check isCodexAlive（修 round 3 F2 race window）。撤掉 grace gate / `now func()` seam — Phase A 由 ScreenStable 自然 demarcate。**v6 update**：round 5 抓到的 reject path race 由 J3 PR #797 dispatcher 雙向 `probeIntentPreGraceWindow=300ms` + `classifyAsHookRace` helper 接管（per W6-3 §9.14 + fix-spec §3 generic-Kind 不特化原則）；本 PR detector 仍是 dumb emit；§0.5 + R14 + §8 anchor + A9/A10 mlab gate 落地。
 >
-> **Spec evolution（progressive precision，per [feedback_meta_drift_progressive_precision]）**：v1 armed/ScreenStable → v2 emit-once + F1 re-arm → v3 retry-emit → v4 detector-grace + emit-once → **v5 2-phase contract**。round 1-4 各打進不同邊界 race（quick-approval / fast-silent / long-dialog / fast-with-output），收斂方向是「同 area 修不同精度層次」非循環 drift；round 4 F2 已逼近物理約束（dialog 渲染 vs user-action 在 hash 層級無法區分），任何 detector-only 解法都會在另一邊界失效。v5 不再追求完美 detector 設計，把「無法判讀」明列為 by-contract limitation；reframe 後 detector 邏輯 ~25 行、無時間 const、無 grace gate、無 once-permanent-fired race。
+> **Spec evolution（progressive precision，per [feedback_meta_drift_progressive_precision]）**：v1 armed/ScreenStable → v2 emit-once + F1 re-arm → v3 retry-emit → v4 detector-grace + emit-once → **v5 2-phase contract** → **v6 (J3 ship at alpha.281) reject race 移交 dispatcher**。round 1-4 各打進不同邊界 race（quick-approval / fast-silent / long-dialog / fast-with-output），收斂方向是「同 area 修不同精度層次」非循環 drift；round 4 F2 已逼近物理約束（dialog 渲染 vs user-action 在 hash 層級無法區分），任何 detector-only 解法都會在另一邊界失效。v5 不再追求完美 detector 設計，把「無法判讀」明列為 by-contract limitation；reframe 後 detector 邏輯 ~25 行、無時間 const、無 grace gate、無 once-permanent-fired race。round 5 抓到 reject path race（armed=true 後 [2] 拒絕 → dialog 消失 ScreenChanged 與 PdxStop hook race） → user reframe 為**跨層 contract**：detector 仍是 dumb emit，dispatcher J3 雙向 graceWindow + `classifyAsHookRace` 處理 hook race（generic 對所有 ProbeIntent Kind 適用），與 W6-3 §9.14 anchor 對齊；boundary race acceptable as known limitation by R13/R14（fail-fast handling — A9 mlab gate 監控漏網率）。
 >
 > **4 round 9 finding 處置摘要**（詳見 §8 / §11）：
 > - Round 1 F1（armed quick-approval deadlock，high）→ ✅ closed by v5 contract（quick-approval 屬 case 2 known limitation，非 bug）
@@ -15,15 +15,17 @@
 > - Round 4 F1（sync.Once 永久熔斷，high）→ ✅ fixed in v5（atomic.Bool + Mutex 取代 sync.Once，transient identity false 不熔斷）
 > - Round 4 F2（fast-with-output source-drop 漏，high）→ ✅ closed by v5 contract（fast-with-output 屬 case 2 known limitation）
 > - Round 4 F3（§2.2 stale constraint，medium）→ ✅ fixed in v5（§2.2 重寫對齊 atomic.Bool/Mutex 結構）
+> - Round 5 F1（reject path race：armed=true 後 [2] 拒絕 ScreenChanged 與 PdxStop hook race，high）→ ✅ closed by v6 cross-layer contract（J3 PR #797 dispatcher 雙向 `probeIntentPreGraceWindow=300ms` + `classifyAsHookRace` cover；boundary race acceptable as known limitation by R14；A9 mlab gate 監控漏網率）
 >
 > **Worktree**：`.claude/worktrees/lights-w6-6-codex-screen-change` / branch `worktree-lights-w6-6-codex-screen-change`
-> **Base**：`origin/main` @ alpha.279（W6-1a `c02299b7` 之後）
+> **Base**：`origin/main` @ alpha.281（J3 PR #797 `56b3ba55` + bump #798 `5736f87e` 之後）
 > **依賴**：
-> - `docs/specs/2026-04-29-w6-3-codex-error-probe-intent-spec.md` — ProbeIntent interface finalize（Kind / Signal / OnEntryStatus / OnSignal）
+> - `docs/specs/2026-04-29-w6-3-codex-error-probe-intent-spec.md` — ProbeIntent interface finalize（Kind / Signal / OnEntryStatus / OnSignal）+ §9.14 generic-Kind 不特化 anchor
+> - `docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-spec.md` — J3 dispatcher 雙向 graceWindow + `classifyAsHookRace` helper（PR #797 ship at alpha.281）— W6-6 reject race 處理層
 > - `docs/specs/2026-04-28-lights-rebuild-fix-spec.md` §3 — non-always-on / non-framework / per-agent ad-hoc 約束
 > - `docs/specs/2026-04-28-hook-status-audit-spec.md` §6 W5-? + §7 W6-6 — 缺口定義
 > - `internal/agent/probe/{probe.go, activity.go}` — `Prober.Watch` / `WatchOptions{TopLines, IdleStableTicks}` / `ScreenChangeEvent{ScreenChanged, ScreenStable}`
-> - `internal/module/agent/probe_intent_dispatcher.go` — 5-case lifecycle / 4-step guards / supportedKinds drift gate
+> - `internal/module/agent/probe_intent_dispatcher.go` — 5-case lifecycle / 4-step guards / supportedKinds drift gate / J3 pre-grace + `classifyAsHookRace`
 
 ---
 
@@ -59,7 +61,7 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 
 | 退出路徑 | 觸發 | 是否需要 probe |
 |---|---|---|
-| user 按 2 拒絕 / Esc 取消 → 回 idle | codex 發 `PdxStop` | ❌ hook authority 已 cover |
+| user 按 2 拒絕 / Esc 取消 → 回 idle | codex 發 `PdxStop` | ❌ hook authority 已 cover；**reject path race 由 J3 dispatcher pre-grace 接管**（見 §0.5）|
 | codex pane 被 user 關閉 | tmux pane 消失 | ❌ W6-4 ProcessDead PaneAlive=false 已 cover |
 | codex 進程崩潰 / SIGKILL | 進程死、pane 留 shell | ❌ W6-3 ProcessDead PaneAlive=true 已 cover |
 | **user 按 1 批准 → codex 執行 tool** | **無 hook** | ✅ **本 PR 補位** |
@@ -118,7 +120,27 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 - 流程：callback 拿 mutex → 檢查 `emitted.Load()` → 第二次 `isCodexAlive()` 重驗 → `select case out<-sig: case <-ctx.Done():` → 若 out 贏 `emitted.Store(true)` + `close(emittedCh)`
 - 後續 callback：若 emitted=true → 直接 return（idempotent）；若 emitted=false（如 transient identity false）→ 仍可 retry（修 round 4 F1）
 
-### 0.5 與 fix-spec §3 的對齊
+### 0.5 Reject path race 與 J3 dispatcher pre-grace 的分工
+
+**Round 5 standard codex review 抓到的 reject path race**：Phase B `armed=true` 後，user 按 [2] 拒絕，dialog 消失也會觸發一次 `ScreenChanged` callback。同時 codex 發出 `PdxStop` hook。極端時序下 ScreenChanged callback 先到 daemon → detector emit-once → status `waiting → running`，PdxStop hook 後到 → status `running → idle`，lights 短暫閃 `waiting → running → idle`。
+
+**處理層次（J3 PR #797 已 ship at alpha.281）**：
+
+| 層次 | 機制 | cover 路徑 |
+|---|---|---|
+| **Detector**（本 PR） | dumb emit；callback 觀察到 ScreenChanged + alive 就 emit Signal，不知道 hook 有沒有要進來 | approve happy path（無 hook 競賽） |
+| **Dispatcher**（J3 ship） | `consumeSignals` 進 `applyProbeGuards` 前 hold `probeIntentPreGraceWindow=300ms`；期間若同 session hook 進來（`recordHookAt`）→ `classifyAsHookRace` 認定 hook race → drop probe；無 hook → 進原 guard pipeline | reject 典型路徑：dialog 消失 ScreenChanged 在 hook 前 300ms 內到 → drop |
+| **Boundary race**（known limitation） | hook 在 300ms hold 過後到 + `recordHookAt` 與 `applyProbeGuards` step 2 read 之間 μs window race | R13-style acceptable as known limitation；A9 quantified gate（30 次 reject 閃 < 3）作為漏網率測試，A9 fail 才開 followup issue 加 per-event trace |
+
+**為什麼不在 detector 端解（per W6-3 §9.14 + fix-spec §3）**：
+
+- pre-grace timer 是 dispatcher 跨 Kind 通用機制（J3 spec §6 + W6-3 §9.14 anchor）：W6-3 ProcessDead 與 W6-6 ScreenChange 都會撞 hook race，dispatcher generic 處理一次到位
+- 在 detector 內加 pre-emit confirm rollback 等於 v5 contract 之外再起一個時間判斷層 — 與 v5「detector 不需時間判斷、Phase A 由 ScreenStable 自然 demarcate」的 contract 牴觸
+- detector 仍是 dumb emit；lifecycle / race protection / hook authority 由 dispatcher 統一管 — 與 W6-3 spec §9.14 anchor 一致
+
+**A9/A10 acceptance（mlab live verify）**：J3 PR ship 時 A9（reject 閃 < 3/30）+ A10（approve latency ≤ 500ms+300ms）標 deferred to W6-6（J3 在 main 上唯一 active ProbeIntent Kind 是 W6-3 ProcessDead，沒有 ScreenChange Kind 可量 reject race）。**本 PR mlab live verify 必須跑完整 30 次 reject 量化 + approve latency**，作為 J3 + W6-6 ship gate。
+
+### 0.6 與 fix-spec §3 的對齊
 
 | fix-spec §3 約束 | W6-6 落地 |
 |---|---|
@@ -191,9 +213,11 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 | A-Drift | drift test 通過：startDetector switch case 數量 == supportedKinds 條目數 == ProbeIntents 宣告 Kind 集合 |
 | A-NoSendOnClosed | dispatcher cancel ctx 期間 callback 在 mutex 內 select → ctx 路徑贏 → 不 send-on-closed-channel |
 | A-mlab-1 | mlab live verify §1：codex permission ask → user 等 dialog 渲染完 ≥1.5s → 按 1 批准 → ≤500ms 內 ScreenChanged → emit → lights running ✓（case 1 happy path）|
-| A-mlab-2 | mlab live verify §2：codex permission ask → user 按 2 拒絕 → PdxStop hook fires → lights idle（不誤觸 running） |
+| A-mlab-2 | mlab live verify §2：codex permission ask → user 按 2 拒絕 → PdxStop hook fires → lights idle（不誤觸 running；典型路徑由 J3 dispatcher pre-grace cover） |
 | A-mlab-3 | mlab live verify §3：codex 在 waiting 時 user 主動關 pane → W6-4 ProcessDead PaneAlive=false → lights clear |
 | A-mlab-4 | mlab live verify §4（**case 2 known limitation 觀察**）：codex permission ask → user 立即按 1（dialog 渲染未完）→ Phase A 失敗 → lights waiting；後續 PdxStop → lights idle（跳過 running phase；by contract 不算 bug，記入 PR body §test plan 預期）|
+| **A9** (J3 ship gate, deferred to W6-6) | mlab live verify §5：30 次 reject 路徑量化測試 — codex permission ask → 等 dialog 渲染完 ≥1.5s → 按 [2] 拒絕；統計 lights 閃 `waiting → running → idle` 的次數 < 3/30 為 PASS（dispatcher pre-grace cover 漏網率）；A9 fail 開 followup issue 加 per-event trace 定位漏網類別 |
+| **A10** (J3 ship gate, deferred to W6-6) | mlab live verify §6：30 次 approve 路徑 latency 量化測試 — codex permission ask → 等 dialog 渲染完 ≥1.5s → 按 [1] 批准；統計每次 ScreenChanged 抵達 daemon 到 SPA 收到 status=running broadcast 的 latency；30 次 P95 ≤ 500ms（probe tick）+ 300ms（pre-grace hold）= 800ms 為 PASS |
 
 **Known limitations（by contract，非 bug）**：
 
@@ -252,6 +276,7 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 | R11 | `Prober.IsAliveFor` 內部 PanePID 不一致（round 3 F3 pre-existing infra bug）| W6-6 不用 IsAliveFor，改 FirstAliveAgentInTree 規避；開 follow-up issue 追 IsAliveFor 一致性 fix（不在本 PR scope）|
 | R12 | armed=true 後又 fire ScreenStable（screen 又穩定一次）| `armed.Store(true)` idempotent；後續 ScreenChanged 仍走 Phase B 流程不影響 |
 | R13 | dialog 渲染期間連發 ScreenChanged | armed=false → 全 drop；dialog 渲染穩定（連續 1.5s 同 hash）後 ScreenStable → armed=true → 後續 user-action ScreenChanged 才會被 Phase B 接收（v5 用 ScreenStable 取代 v4 grace gate；天然處理 long-dialog 與 dialog-noise）|
+| R14 | **Reject path race**：armed=true 後 user 按 [2] 拒絕 → dialog 消失發 ScreenChanged + PdxStop hook 同時往 daemon 走，極端時序 ScreenChanged 先到 → emit → status `waiting → running`，PdxStop 後到 → `running → idle` → lights 短暫閃 | **不在 detector 端處理**（per W6-3 §9.14 anchor + fix-spec §3）；J3 dispatcher 雙向 graceWindow（PR #797 ship at alpha.281）`consumeSignals` 進 `applyProbeGuards` 前 hold 300ms `probeIntentPreGraceWindow`；同 session hook 進來 → `classifyAsHookRace` → drop probe；其餘邊界（hook 在 hold 過後到 + step 2 read μs window）為 R13-style known limitation；**A9 quantified gate 30 次 reject 閃 < 3 為 ship 漏網率測試**（A9 fail 開 followup issue 加 per-event trace） |
 
 ### 2.4 與 W6-3 spec drift signal 預警表的對照
 
@@ -578,7 +603,7 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 | Task | 檔案 | 內容 |
 |---|---|---|
 | P3-T1 | `internal/module/agent/probe_intent_dispatcher_integration_test.go` | 端到端 lifecycle（覆蓋 v5 truth table 主路徑）：(a) **A-Case1-Happy**：waiting hook → arm intent → fake prober ScreenStable → ScreenChanged + alive=true → emit → status=running + teardown / (b) **long-dialog 自然 cover**：waiting → 注入連發 ScreenChanged 模擬 dialog 渲染 → drop（armed=false）→ 注入 ScreenStable → 9 秒虛擬時間後 ScreenChanged → emit → running ✓（不再依賴 grace gate）/ (c) **A-Case2-FastWithOutput**：waiting → 注入 ScreenChanged 多次（無 ScreenStable）+ 後續 idle hook → no emit + status=idle（PdxStop cover；by-contract case 2）/ (d) waiting → idle hook → teardown 不 emit / (e) cross-provider switch → reconcile teardown / (f) **A-Case1-IdentityFalse**：fake isCodexAlive=false → drop；emitted 仍 false / (g) **A-Case1-IdentityRace**：注入 isCodexAlive 第一次 true、mutex 內 second false → 不 emit、emitted 仍 false / (h) **retry after transient false**：alive 從 false 恢復 true → 後續 ScreenChanged → 成功 emit（驗 v5 修 round 4 F1）|
-| P3-T2 | mlab live verify | §1 approval reply（case 1 happy path）/ §2 reject reply / §3 close pane during waiting / §4 quick-approval（case 2 known limitation 觀察 — 預期 lights waiting → idle 跳過 running phase；by-contract 不算 bug，記入 PR body §test plan）；建 dev log + screenshot 證據；spec → plan 階段 placeholder，PR body §test plan checklist 條列 |
+| P3-T2 | mlab live verify | §1 approval reply（case 1 happy path）/ §2 reject reply / §3 close pane during waiting / §4 quick-approval（case 2 known limitation 觀察 — 預期 lights waiting → idle 跳過 running phase；by-contract 不算 bug，記入 PR body §test plan）/ **§5 A9 30 次 reject 量化（閃 running < 3 為 PASS；J3 ship 時 deferred 的 ship gate）** / **§6 A10 30 次 approve latency 量化（P95 ≤ 800ms）**；建 dev log + screenshot 證據；spec → plan 階段 placeholder，PR body §test plan checklist 條列；A9 fail 開 followup issue 加 per-event trace 定位漏網類別 |
 
 ---
 
@@ -611,12 +636,14 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 | 想用 `IsAliveFor("codex", paneID)` 取代 FirstAliveAgentInTree | round 3 F3：IsAliveFor 內部 PanePID 對 multi-pane window 不精確；v3+ 改用 FirstAliveAgentInTree（內部 ActivePanePID exact resolve）|
 | 想 detector 自己解 quick-approval / fast-with-output / long-dialog 邊界 | 物理約束（dialog 渲染 vs user-action 在 hash 層級無法區分）；v1-v4 各自嘗試都引入新 race；v5 reframe 為 by-contract case 2 known limitation，PdxStop hook 作 secondary cover |
 | 想擴 `StartScreenChangeDetector` signature 加 `now func() time.Time` 或 grace 相關參數 | v5 不需時間判斷；signature `(ctx, prober, isCodexAlive, paneID, senderPID, out)` 即可；不需要 dispatcher 私有常數 mirror |
-| 想引入 sustained-change counter（連續 N tick 才 emit） | mlab live verify 已證 idle TUI 完全靜態 + scroll 不影響 capture-pane；counter 是預先優化雜訊 |
 | 想 generalize 為 「per-agent ScreenChangeProfile」（cc / opencode 也用） | fix-spec §3 撤回 framework；W6-1b cc 已降級不做、W6-5 opencode 走 plugin |
 | 想 detector 內部直接讀 `m.activeProbeIntents` / `m.currentStatus` | dispatcher 已負責 lifecycle；detector 只發 Signal |
 | 想抓 codex 特定 glyph / 字串 pattern（spinner / "Approved." / etc）| audit §7.1：agent 改 TUI 即 break；fix-spec 撤回 |
 | 想擴 `startDetector` signature 加 session target | paneID 已是合法 capture-pane target（spec §4.4） |
 | 想 ScreenChange 觸發後 emit 多次 Signal | v5 emit-once 設計：emitted atomic.Bool + sync.Mutex + emittedCh；dispatcher F1 re-arm 路徑由 case 2 path（永無 emit）走 status-driven cancel，與 W6-3 ProcessDead OnEntryStatus 退出處理一致 |
+| 想為 ScreenChange Kind 特化 pre-grace timer（如只對 ScreenChange hold 300ms / ProcessDead 不 hold） | **與 W6-3 §9.14 anchor 對齊** — J3 PR #797（spec `2026-05-01-probe-intent-bidirectional-grace-window-spec.md`）已確立 pre-grace timer 在 dispatcher `consumeSignals` 內 generic 對所有 ProbeIntent Kind 適用（per fix-spec §3 不為單一 Kind 特化約束）；W6-3 ProcessDead 也撞 hook race，dispatcher generic 處理一次到位；本 PR 不在 detector 端加 pre-hold；hook race protection 由 J3 dispatcher 接管，detector 仍是 dumb emit |
+| 想在 W6-6 detector 內加 reject path race 處理（pre-emit confirm rollback / post-emit retract / probe-side hold）| §0.5 + R14 已明訂：reject race 由 J3 dispatcher pre-grace + `classifyAsHookRace` cover；detector 不知道 hook 有沒有要進來、不應做時間判斷（與 v5 contract「detector 不需時間判斷」牴觸）；boundary race acceptable as known limitation by R13/R14 fail-fast handling（A9 mlab gate 監控漏網率）|
+| 想把 J3 spec `probeIntentPreGraceWindow=300ms` 改名 / 改值 / 加新 const for ScreenChange | J3 已 ship at alpha.281 為 dispatcher 跨 Kind 通用 const；W6-6 不動 J3 contract（per W6-3 §9.14）；若改值需走獨立 J3 後續 spec，不在本 PR scope |
 
 ---
 
@@ -633,8 +660,10 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 
 ## 10. 文獻
 
-- W6-3 spec：`docs/specs/2026-04-29-w6-3-codex-error-probe-intent-spec.md`（interface finalize / dispatcher / drift gate / 11 finding 收斂）
+- W6-3 spec：`docs/specs/2026-04-29-w6-3-codex-error-probe-intent-spec.md`（interface finalize / dispatcher / drift gate / 11 finding 收斂 / §9.14 generic-Kind 不特化 anchor）
 - W6-3 plan：`docs/specs/2026-04-29-w6-3-codex-error-probe-intent-plan.md`（14 task / 5 輪 review）
+- J3 bidirectional graceWindow spec：`docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-spec.md`（v7.5；dispatcher 雙向 `probeIntentPreGraceWindow=300ms` + `classifyAsHookRace` helper；PR #797 ship at alpha.281）
+- J3 plan：`docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-plan.md`
 - Fix-spec：`docs/specs/2026-04-28-lights-rebuild-fix-spec.md` §3（framework 撤回約束）
 - W1 audit：`docs/specs/2026-04-28-hook-status-audit-spec.md` §6 / §7 / §7.1（缺口工作池 + 設計約束）
 - Lights rebuild spec：`docs/specs/2026-04-23-lights-rebuild-spec.md` §8.2（ProbeIntent 起源）
@@ -644,7 +673,7 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 
 ---
 
-## 11. Open questions（已隨 round 1-4 收斂 + v5 reframe）
+## 11. Open questions（已隨 round 1-4 收斂 + v5 reframe + v6 J3 cross-layer）
 
 1. **`screenWatcher` interface 暴露面** ✅ — 只暴露 Watch / StopWatch 足夠；整合測試驗 status 翻轉而非 prober 內部狀態。
 2. **`OnEntryStatus = {Waiting}`** ✅ — 不含 Running；running 已是目標，ScreenChange running→running 是 noop 但會 spam log。
@@ -653,9 +682,10 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 5. **`FirstAliveAgentInTree` 已用 ActivePanePID** ✅ — 本 PR worktree 已驗 `internal/agent/probe/liveness.go` line 64 `panePIDRaw, err := p.tmux.ActivePanePID(target)`，line 36-42 註解明說對 paneID `%N` exact resolve（PR #638 codex review round 1 P2 fix 已落地）。
 6. **detector 不依賴 `probeGraceWindow` mirror const** ✅ — v5 移除 grace gate，detector 不需要時間判斷，沒有 cross-package mirror 漂移問題。
 
-### 11.1 v5 後仍 open（給 round 5 review）
+### 11.1 v5 後 + J3 ship 後仍 open（給 round 6 review）
 
 - **case 2 known limitation 觀察**：mlab live verify §4 預期會抓到 quick-approval / fast-with-output 不 emit running 的情境；by-contract 不算 bug，PR body §test plan 預先標註觀察行為（waiting → idle 跳過 running phase 是 contract 正確）。
+- **Reject path race**（R14）已 J3 ship at alpha.281 cover：J3 dispatcher 雙向 `probeIntentPreGraceWindow=300ms` + `classifyAsHookRace` helper 已落地（spec `docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-spec.md` v7.5 + PR #797）。本 PR mlab live verify 必須跑完整 30 次 reject 量化（A9 < 3）+ approve latency（A10 P95 ≤ 800ms），作為 J3 + W6-6 ship gate；A9 fail 才開 followup issue 加 per-event trace（per J3 R13 fail-fast handling）。
 - **若後續 codex permission flow 改成 hook 通知 approval**：本 detector 可整個拿掉（spec drift signal — W6-6 是 hook 缺口的補位，hook 補上後 detector 變多餘）。
 - **IsAliveFor 一致性 follow-up issue**：本 PR 不修；開 GH issue 描述 PanePID vs ActivePanePID 對 paneID target 行為差異，建議 IsAliveFor 改 ActivePanePID 並加 multi-pane test。Issue 標 W6-6 spec round 3 F3 derive。
 - **integration test fake prober 能力**：P3-T1 需 fake prober 支援同時 fire ScreenStable + ScreenChanged 序列。實作面確認既有 W6-3 wire test fake 是否可擴或需重寫；若重寫，需在 plan 階段標 task 規模。
