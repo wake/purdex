@@ -1258,3 +1258,95 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		}
 	})
 }
+
+// TestConsumeSignals_PreGraceDrop_RearmsAfterTeardown pins J3 P2-T1
+// regression: when pre-grace drops a Signal (hook arrived during the
+// 300ms hold) and the one-shot detector returns immediately after
+// emitting, the consumer's `range in` loop exits with appliedAny=false,
+// triggering the existing post-loop teardown + rearm cycle (F1
+// round-3 follow-up). The new generation must arm under live status
+// (currentStatus still gates the intent), proving pre-grace drop is
+// behaviorally equivalent to the post graceWindow drop case for the
+// rearm path.
+//
+// Without the rearm, a codex that had a single probe signal cancelled
+// by an unrelated hook would leave the active entry stranded with no
+// live detector — exactly the F1 strand failure mode.
+func TestConsumeSignals_PreGraceDrop_RearmsAfterTeardown(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	m.sessions = &fakeSessionProvider{}
+
+	var emitCount atomic.Int64
+	// Detector emits exactly once on first arm then returns. The
+	// goroutine wrapper in applyIntentLifecycle calls close(out) on
+	// return, so the consumer's `range in` loop exits → !appliedAny
+	// post-loop branch fires.
+	m.probeIntentDisp.startDetector = func(ctx context.Context, _ *Module, _ agentpkg.ProbeIntentKind, _ string, _ int, out chan<- agentpkg.Signal) {
+		if emitCount.Add(1) == 1 {
+			select {
+			case out <- agentpkg.Signal{
+				Kind:      agentpkg.ProbeIntentKindProcessDead,
+				PaneAlive: true,
+				PaneID:    "%5",
+				SenderPID: 4242,
+			}:
+			case <-ctx.Done():
+			}
+			return
+		}
+		<-ctx.Done()
+	}
+	t.Cleanup(func() { m.probeIntentDisp.stopAll() })
+
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	before := snapshotPreGraceMetrics()
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+	// Capture gen 1 before teardown completes.
+	var gen1 uint64
+	waitFor(t, time.Second, func() bool {
+		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		if !ok {
+			return false
+		}
+		gen1 = cur.generation
+		return gen1 > 0
+	}, "gen 1 active entry observed before pre-grace teardown")
+
+	// Inject hook DURING the 300ms hold so pre-grace drops the signal.
+	// emitCount=1 means the detector has just emitted. Wait a few ms to
+	// be safe (consumer must have entered the hold timer).
+	time.Sleep(50 * time.Millisecond)
+	m.probeOrch.recordHookAt("work")
+
+	// Wait for: pre-grace drop +1 AND emitCount becomes 2 (rearm fired)
+	// AND active entry's generation has advanced past gen1.
+	waitFor(t, 3*time.Second, func() bool {
+		now := snapshotPreGraceMetrics()
+		if (now.droppedPreGrace - before.droppedPreGrace) < 1 {
+			return false
+		}
+		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		if !ok {
+			return false
+		}
+		return cur.generation > gen1 && emitCount.Load() >= 2
+	}, "pre-grace drop teardown + rearm with new generation (J3 P2-T1)")
+
+	after := snapshotPreGraceMetrics()
+	if got := after.droppedPreGrace - before.droppedPreGrace; got < 1 {
+		t.Errorf("droppedPreGrace delta = %d, want >= 1", got)
+	}
+	// Note: signalEmitted / preGraceHeld may exceed 1 because the rearm
+	// cycle re-runs (subsequent emits block via the emitCount guard,
+	// but the second arm still increments preGraceHeld once if the
+	// recordHookAt grace is still active and consumer enters another
+	// hold). Lower-bound assertions only.
+	if got := after.signalEmitted - before.signalEmitted; got < 1 {
+		t.Errorf("signalEmitted delta = %d, want >= 1", got)
+	}
+	if got := after.preGraceHeld - before.preGraceHeld; got < 1 {
+		t.Errorf("preGraceHeld delta = %d, want >= 1", got)
+	}
+}
