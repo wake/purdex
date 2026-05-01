@@ -4,9 +4,33 @@ import (
 	"context"
 	"log"
 	"slices"
+	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 )
+
+// probeIntentPreGraceWindow is the pre-applyProbeGuards hold duration
+// applied by consumeSignals (J3; 2026-05-01-probe-intent-bidirectional-
+// grace-window-spec §3.2). While active, a probe Signal waits to see
+// whether a hook for the same session arrives at the daemon. If a hook
+// arrives during the window (lastHookAt > signalAt at timer expiry), the
+// probe Signal is dropped (hook authority pre-emption). If no hook
+// arrives, the Signal proceeds into applyProbeGuards (which still has
+// its own post-direction 2s graceWindow as a backstop).
+//
+// Sized to cover the `pdx hook` CLI cold start (80-250ms typical, per
+// docs/specs/2026-04-30-daemon-hook-pipeline-lag-analysis.md §2.5) plus
+// a small safety margin. 300ms is small enough that approve-case
+// ScreenChange Signal latency is bounded by the 1.5s Phase A
+// IdleStableTicks gate + 500ms watchPollInterval, not this window.
+// Future tuning (e.g. lower to 200ms after mlab live capture shows hook
+// p99 < 150ms) goes through a separate PR.
+//
+// Defined here (not imported from probe_orchestrator.go's probeGraceWindow)
+// because the post-direction graceWindow is a hook-authority backstop
+// while pre-grace is a dispatcher-level race-window buffer; the two
+// values may evolve independently.
+const probeIntentPreGraceWindow = 300 * time.Millisecond
 
 // probeIntentOnDrop is the OnDrop callback installed on probeGuardArgs by
 // the dispatcher's consumeSignals path. It maps the canonical drop-reason
@@ -14,10 +38,29 @@ import (
 // + dev log line. ScreenChange callers leave probeGuardArgs.OnDrop nil so
 // the legacy MetricProbeGraceWindowSuppressed semantics stay isolated.
 //
-// reason values are stable strings emitted by applyProbeGuards:
-// "stale-callback" / "grace" / "error-guard" / "transition-gate". Anything
-// else is logged but not counted (defensive landing for future drop
-// branches that may add reasons before this map is updated).
+// reason values are stable strings emitted by applyProbeGuards +
+// consumeSignals:
+//
+//	stale-callback      — applyProbeGuards step 1 stale check failed (counter: helper)
+//	grace               — applyProbeGuards step 2 post graceWindow active (counter: helper)
+//	transition-gate     — applyProbeGuards step 4 transition gate rejected (counter: helper)
+//	error-guard         — applyProbeGuards step 4 error guard rejected (counter: helper)
+//	pre-grace           — consumeSignals pre-applyProbeGuards hold: hook arrived (J3; counter: caller)
+//	pre-grace-canceled  — consumeSignals pre-applyProbeGuards hold: ctx canceled (J3; counter: caller)
+//
+// Note on counter ownership: the four legacy reasons increment counters
+// inside the helper switch (helper-side accounting). The two J3 reasons
+// (pre-grace / pre-grace-canceled) are NOT added to the helper switch;
+// the caller (consumeSignals) explicitly invokes
+// MetricProbeIntentDroppedPreGrace.Add(1) /
+// MetricProbeIntentPreGraceCanceled.Add(1) before invoking the helper,
+// so adding them to the switch would double-count. The helper still
+// emits its dev log line for the new reasons via the switch fall-through
+// after the unmatched case (the switch only gates counter inc — log
+// runs unconditionally).
+//
+// Anything else is logged but not counted (defensive landing for future
+// drop branches that may add reasons before this map is updated).
 func probeIntentOnDrop(reason string) {
 	switch reason {
 	case "stale-callback":
