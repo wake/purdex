@@ -3,28 +3,30 @@ package codexbroker
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
-
-	"golang.org/x/text/unicode/norm"
 )
 
-// BrokerKey computes the canonical broker correlation key from a raw cwd
-// argv value, per spec §3.4:
+// BrokerKey computes the broker correlation key from a raw cwd argv value.
 //
-//	brokerKey = sha256(NFC(canonicalCase(EvalSymlinks(cwd))))[:16]
+// The algorithm is byte-identical to codex CLI's own state-dir naming
+// (`scripts/lib/state.mjs::resolveStateDir`), which is:
 //
-// On EvalSymlinks failure the raw cwd is hashed instead and an
+//	brokerKey = sha256(realpath(cwd) || cwd)[:16]
+//
+// where `realpath || cwd` means: try to evaluate symlinks; on failure use
+// the raw value verbatim. NO NFC normalisation, NO case-fold — codex does
+// not do them, so we MUST not, otherwise our key won't match the state-dir
+// suffix codex created.
+//
+// On EvalSymlinks failure the raw cwd is hashed and an
 // AnomalyCwdUnresolvable code is returned for the caller to attach to the
-// BrokerRecord.
+// BrokerRecord. Path operations go through the injected FS so tests can
+// mock symlink resolution without touching the real filesystem.
 //
-// Path operations go through the injected FS so tests can mock symlink
-// resolution without touching the real filesystem.
-//
-// The caseInsensitive flag controls whether the canonical-case step
-// lower-cases the path; on macOS APFS case-preserving + case-insensitive
-// volumes this is true. See hash_darwin.go / hash_linux.go / hash_other.go
-// for platform detection.
-func BrokerKey(rawCwd string, fs FS, caseInsensitive bool) (key string, resolved string, anomaly *AnomalyCode) {
+// The unused `_caseInsensitive` parameter is retained for now so callers
+// (and existing fixture tests) compile unchanged; it is ignored. P2 may
+// reintroduce case/Unicode-fold for collision detection, but never as part
+// of the primary key.
+func BrokerKey(rawCwd string, fs FS, _caseInsensitive bool) (key string, resolved string, anomaly *AnomalyCode) {
 	target := rawCwd
 	resolvedPath, err := fs.EvalSymlinks(rawCwd)
 	if err != nil {
@@ -37,10 +39,6 @@ func BrokerKey(rawCwd string, fs FS, caseInsensitive bool) (key string, resolved
 		resolved = resolvedPath
 	}
 
-	target = norm.NFC.String(target)
-	if caseInsensitive {
-		target = strings.ToLower(target)
-	}
 	sum := sha256.Sum256([]byte(target))
 	key = hex.EncodeToString(sum[:])[:16]
 	return key, resolved, anomaly

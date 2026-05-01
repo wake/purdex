@@ -88,11 +88,15 @@ func TestBrokerKey_CaseFold_OnSensitiveVolume(t *testing.T) {
 	}
 }
 
-// TestBrokerKey_NFCNormalised: NFD vs NFC unicode inputs hash identically.
-func TestBrokerKey_NFCNormalised(t *testing.T) {
-	// "café" with precomposed (NFC) é vs decomposed (NFD) e + combining acute.
-	nfc := "/tmp/café"  // é
-	nfd := "/tmp/café" // e + ́ (combining acute)
+// TestBrokerKey_NFCAndNFDProduceDifferentKeys: codex CLI does NOT normalise
+// unicode (verified against scripts/lib/state.mjs::resolveStateDir which
+// hashes the raw realpath bytes). Our key MUST match codex's, so NFD and
+// NFC inputs of the same "logical" path correctly produce different keys.
+// P2 collision detection may report this as an anomaly, but it must not
+// fold into the primary hash.
+func TestBrokerKey_NFCAndNFDProduceDifferentKeys(t *testing.T) {
+	nfc := "/tmp/caf\u00e9"  // precomposed e-acute
+	nfd := "/tmp/cafe\u0301" // e + combining acute
 	if nfc == nfd {
 		t.Fatalf("test setup error: NFC and NFD bytes are identical")
 	}
@@ -105,8 +109,8 @@ func TestBrokerKey_NFCNormalised(t *testing.T) {
 	if anomA != nil || anomB != nil {
 		t.Fatalf("unexpected anomalies: %v / %v", anomA, anomB)
 	}
-	if keyA != keyB {
-		t.Errorf("NFC vs NFD keys differ: %q vs %q", keyA, keyB)
+	if keyA == keyB {
+		t.Errorf("NFC and NFD keys must differ to match codex's byte-level hash, got identical %q", keyA)
 	}
 }
 
