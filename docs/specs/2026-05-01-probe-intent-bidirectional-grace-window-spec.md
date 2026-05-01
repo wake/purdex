@@ -1,6 +1,6 @@
 # Probe Intent bidirectional graceWindow spec
 
-> **Status**：v4（round 3 standard codex review 採納 2 個 P2 finding — acceptance vs implementation scope 一致性 gap：(a) P1-T4 case (5)/(6) 要 test seam 但 §1.1 in-scope 沒列（既有 `interruptBeforeFinalLockFn` 在 mapping 之後 late於 step 2 不適用），加 §1.1 #5 兩個新 test seam (`preGracePostCheckHookFn` / `preGracePostStep2HookFn`) + P1-T2 task 同步；(b) A13 要 per-event timeline 但 §1.1 只列 aggregate counter，加 §1.1 #6 boundary-race trace log（dev-mode gated 6 欄位）+ P1-T3 task + P2-T7 dev-mode gating test + §6 anchor「想 lower A13 至 aggregate-only」；待派 round 4 standard 確認 spec coherence + 起 plan）。將既有 `probeGraceWindow`（post-direction only：hook 後 2s drop probe）擴成雙向 — ProbeIntent dispatcher `consumeSignals` 在進入 `applyProbeGuards` 之前先 hold `probeIntentPreGraceWindow`（300ms），期間若同 session hook 進來（`recordHookAt`）→ drop probe Signal；無 hook → 進原 guard pipeline。**Boundary race 仍存在**（hook 在 hold 過後到 + `recordHookAt` 與 step 2 read μs window race），acceptable as known limitation by R13。
+> **Status**：v5（round 4 standard codex review 採納 2 個 P2 finding — spec 內部矛盾：(a) double-counting metric — §1.1 `MetricProbeIntentDroppedPreGrace.Add(1)` 與 §3.4 reason mapping 兩處各自計數，每次 drop 被計兩次，§3.4 改寫明示「callback 不計 metric，計數責任在 caller 統一管」；(b) test seam scope 衝突 — `preGracePostStep2HookFn` 必須插在 `applyProbeGuards` 內部 step 2 read 後但 §1.2 寫「不動 `applyProbeGuards`」互斥，§1.2 改寫精確區分「不動行為邏輯」（仍禁）與「test-only nil-check hook invocation 例外允許」（與 `interruptBeforeFinalLockFn` 同 pattern）；待派 round 5 standard 確認收斂 + 起 plan）。將既有 `probeGraceWindow`（post-direction only：hook 後 2s drop probe）擴成雙向 — ProbeIntent dispatcher `consumeSignals` 在進入 `applyProbeGuards` 之前先 hold `probeIntentPreGraceWindow`（300ms），期間若同 session hook 進來（`recordHookAt`）→ drop probe Signal；無 hook → 進原 guard pipeline。**Boundary race 仍存在**（hook 在 hold 過後到 + `recordHookAt` 與 step 2 read μs window race），acceptable as known limitation by R13。
 >
 > **動因**：W6-6 v5 spec round 5 standard codex review 抓到 reject path race — Phase B armed=true 後 user 按 [2] 拒絕，dialog 消失發 ScreenChanged 與 PdxStop hook race；極端場景 probe 先到 daemon → emit running → hook 後到覆蓋 idle → lights 短暫閃 `waiting → running → idle`。既有 post-direction graceWindow 只能壓 hook **之後** 的 probe，無法壓 hook **之前** 已 emit 的 probe。
 >
@@ -155,7 +155,7 @@ ProbeIntent dispatcher `consumeSignals`（`probe_intent_dispatcher.go:515`）在
 
 ### 1.2 Out-of-scope（明列防 scope creep）
 
-- ❌ **動 `applyProbeGuards`**（不改 signature、不加 timer/sleep；保 mechanical extraction 設計）
+- ❌ **動 `applyProbeGuards` 行為邏輯**（不改 signature、不加 timer/sleep、不改 4-step 順序、不改回傳格式；保 mechanical extraction 設計）；**test-only nil-check hook invocation 例外允許**（同 `interruptBeforeFinalLockFn` pattern；具體 `preGracePostStep2HookFn` 插在 step 2 `lastHookAt` read 之後、step 3 mapping 之前；production 為 nil 不影響行為，僅 test 用 deterministic ordering）
 - ❌ **動 legacy ScreenChange watcher path**（W3 撤回後雖無 production caller 但 test 仍依賴；測試行為不變）
 - ❌ **動 hook entry / `recordHookAt`**（hook authority 不變；handler 順序保 codex finding #3 規範）
 - ❌ **動 ProbeIntent interface 形狀**（W6-3 finalize 已 lock：Kind / Signal / OnEntryStatus / OnSignal）
@@ -348,7 +348,7 @@ var MetricProbeIntentPreGraceCanceled = expvar.NewInt("purdex_probe_intent_pre_g
 
 既有 reasons：`"stale-callback"` / `"grace"` / `"mapping"` / `"transition-gate"` / `"error-guard"`。
 
-新增：
+新增 reason strings（**callback 本身不計 expvar metric — metric 計數責任在 caller (`consumeSignals`) 內 explicit `.Add(1)` 統一管，避免 double-counting**；callback 僅供 test/observability 觀察 drop 行為）：
 - `"pre-grace"` — pre-applyProbeGuards hold 期間 hook 到 → drop
 - `"pre-grace-canceled"` — pre-applyProbeGuards hold 期間 ctx cancel → drop
 
