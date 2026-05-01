@@ -449,21 +449,13 @@ dev-mode log 是 observability 給人讀，不是 test 契約。
 
 ---
 
-### P3-T3 — W6-6 spec §8 drift anchor + reject race 段落留 J3 ship 後處理
+### ~~P3-T3~~ — DEFERRED to W6-6 PR (post-J3-ship)
 
-**目標**：在 W6-6 v5 spec `docs/specs/2026-05-01-w6-6-codex-screen-change-probe-spec.md` §8 加同一 anchor；reject race 段落留待 J3 ship 後 W6-6 後續 PR update（不在本 PR scope）。
+**狀態**：**DEFERRED — 不在 J3 PR scope**
 
-**改動**：
+**理由**：W6-6 v5 spec `docs/specs/2026-05-01-w6-6-codex-screen-change-probe-spec.md` 在 `lights-w6-6-codex-screen-change` worktree 尚未 merge 到 main；J3 PR 不可改該檔（per kickoff anchor 「J3 ship 前不可動 W6-6 worktree」並行 session 風險）。
 
-| 檔案 | 改動 |
-|---|---|
-| `docs/specs/2026-05-01-w6-6-codex-screen-change-probe-spec.md` | §8 spec drift signals table append 同 P3-T2 row |
-
-**Acceptance**：spec doc commit；conform W6-6 spec §8 既有格式
-
-**估計**：~5 行 doc
-
-**依賴**：none（可平行 P3-T2）
+**搬移目的地**：J3 ship 後（預計 alpha.281）回 W6-6 worktree update v5 spec reject race 段落時，把同一 anchor 一起加到 W6-6 §8。
 
 ---
 
@@ -490,7 +482,7 @@ dev-mode log 是 observability 給人讀，不是 test 契約。
 PR 建立流程（per CLAUDE.md「完整開發流程」第 7-9 步）：
 
 1. Phase 1+2 完成（subagent TDD：每個 task 獨立 commit；P1-T1 → P1-T2 → P1-T3 → P1-T4 → P2-T1-T6 順序）
-2. Phase 3 P3-T1 mlab live verify（在主 session 跑）→ P3-T2/T3/T4 spec drift anchor + 結果填回
+2. Phase 3 P3-T1 mlab live verify（在主 session 跑）→ P3-T2 W6-3 §9.14 anchor commit + P3-T4 mlab 結果填回 J3 spec；P3-T3 deferred to W6-6 PR
 3. `gh pr create` — title `[J3] ProbeIntent dispatcher bidirectional graceWindow`；body 含 §summary / §test plan（mlab 4 路徑結果）/ §spec / §plan
 4. **Round 1 standard codex review**：`/codex:review --base origin/main --background`
 5. 收斂 round 1 finding（per `feedback_codex_pr_review_spec_alignment` — 對照 spec 採納）
@@ -580,7 +572,7 @@ Phase 2 PR squash merge 後獨立 bump PR：
 | Phase 1 P1-T1~T4 | 4 task 全 commit + test 全綠 + race 全綠 | ⏳ |
 | Phase 2 P2-T1~T6 | 6 task 全 commit + 既有 test zero regression + new regression test 全綠 | ⏳ |
 | Phase 3 P3-T1 | mlab live §1-§4 全 PASS（含 §1 reject 30 次 ≥ 28/30 per A9 quantified threshold） | ⏳ |
-| Phase 3 P3-T2/T3/T4 | W6-3 / W6-6 spec §8 drift anchor commit + 本 spec mlab 結果填回 commit | ⏳ |
+| Phase 3 P3-T2 + P3-T4 | W6-3 §9.14 drift anchor commit + 本 spec mlab 結果填回 commit；P3-T3 W6-6 anchor deferred to W6-6 PR | ⏳ |
 | PR + codex review 兩輪 | 0 critical/P1 + known issue 追蹤化 | ⏳ |
 | Squash merge → main | branch 刪除 + worktree 清理 | ⏳ |
 | Bump PR alpha.281 | merge | ⏳ |
