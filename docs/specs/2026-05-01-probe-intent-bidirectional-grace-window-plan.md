@@ -1,7 +1,7 @@
 # J3 Probe Intent bidirectional graceWindow — Implementation Plan
 
-> **Status**：v1（待派 codex plan review）
-> **依賴 spec**：`docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-spec.md` v7（5 輪 standard review + codex consulting trim + round 6 0 finding）
+> **Status**：v2（codex plan review thread `019de428-def1-7533-80f4-cf3b959f7377` 抓 2 實作草稿 bug 全採納：P1 `probeIntentOnDropForSession` 是 package-level closure factory 不是 Module field / P2 既有 `MetricProbeIntentSignalEmitted` 必 preserve；spec §3.1 / §3.4 / plan P1-T3 / P1-T4 case 1-5 metric 列同步修；行為與 trim 範圍不變）
+> **依賴 spec**：`docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-spec.md` v7.1（v7 trim + plan-review fix 草稿）
 > **Worktree**：`.claude/worktrees/probe-intent-bidirectional-grace` / branch `worktree-probe-intent-bidirectional-grace`
 > **Base**：`origin/main` @ alpha.280（codex broker P1 `13e91c64` + bump `5d40e2a2`）
 > **拆分**：Phase 1（P1 dispatcher pre-hold + ctx + metrics + table-driven test；TDD subagent）→ Phase 2（P2 既有 path 重驗 + regression；TDD subagent）→ Phase 3（P3 mlab live verify + W6-3/W6-6 spec drift anchor；主 session）→ PR
@@ -123,13 +123,22 @@ R13 boundary race acceptable as known limitation；不為 R13 引入 production 
 |---|---|
 | `internal/module/agent/probe_intent_dispatcher.go` | `consumeSignals` signature 從 `_ context.Context` 改 `ctx context.Context`；in-loop pre-hold（per spec §3.1 完整 code 草稿）；hook check after timer；drop pre-grace metric + onDrop reason；drop pre-cancel metric + onDrop reason；進入既有 `applyProbeGuards` 4-step pipeline 不變 |
 
-**核心程式碼**（spec §3.1 完整草稿，搬入即可；以下為實作要點摘要）：
+**核心程式碼**（spec §3.1 v7.1 完整草稿，搬入即可；plan-review P1/P2 finding 修正後）：
 
 ```go
 func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
-    for signal := range signals {
+    for sig := range in {
+        // 既有 signal-emitted metric 必須先 +1（每收到 detector signal）— preserve dashboard / test / obs
+        agentpkg.MetricProbeIntentSignalEmitted.Add(1)
+
         signalAt := orchNowFn()
         agentpkg.MetricProbeIntentPreGraceHeld.Add(1)
+
+        // 既有 package-level closure factory（probe_intent_dispatcher.go:42）
+        // 簽名：probeIntentOnDropForSession(session, kind agentpkg.ProbeIntentKind) func(reason string)
+        // 注意：不是 Module field！pre-grace 兩條新 reason 不在 helper switch 內 → 無 counter
+        // （caller 顯式 .Add(1) 避免 double-count，per spec §3.4 R4）；helper dev log 仍會印
+        onDrop := probeIntentOnDropForSession(session, intent.Kind)
 
         timer := time.NewTimer(probeIntentPreGraceWindow)
         select {
@@ -138,9 +147,7 @@ func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
         case <-ctx.Done():
             timer.Stop()
             agentpkg.MetricProbeIntentPreGraceCanceled.Add(1)
-            if d.parent.probeIntentOnDropForSession != nil {
-                d.parent.probeIntentOnDropForSession(session, "pre-grace-canceled")
-            }
+            onDrop("pre-grace-canceled")
             continue
         }
 
@@ -152,24 +159,29 @@ func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
             o.graceMu.Unlock()
             if hasHook && last.After(signalAt) {
                 agentpkg.MetricProbeIntentDroppedPreGrace.Add(1)
-                if d.parent.probeIntentOnDropForSession != nil {
-                    d.parent.probeIntentOnDropForSession(session, "pre-grace")
-                }
+                onDrop("pre-grace")
                 continue
             }
         }
 
-        applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{...})
-        // ... 既有 lifecycle 5-case + teardown + rearm 不變
+        applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{
+            // ...
+            OnDrop: onDrop,  // 沿用同一 closure；既有 callsite 不變
+        })
+        // ... 既有 lifecycle 5-case + teardown + rearm 完全不動
     }
 }
 ```
 
 **關鍵實作點**：
+- **`MetricProbeIntentSignalEmitted` preserve**（pre-grace drop / cancel 路徑也要 +1）— plan-review P2 finding 修
+- **`probeIntentOnDropForSession` 是 package-level closure factory**（不是 Module field）— plan-review P1 finding 修；簽名 `(session, kind) func(reason)`
+- pre-grace 兩條新 reason `"pre-grace"` / `"pre-grace-canceled"` 不擴 helper switch case → 無 helper-side counter；caller `.Add(1)` 統一管 metric（per spec §3.4 R4）；helper dev log 仍會印新 reason（switch fall-through 後 log 不受影響）
 - `signalAt` 用 `orchNowFn()`（既有 inject hook，test 端可 stub）
 - timer.Stop() 在 ctx.Done branch 顯式呼叫避免 goroutine leak
 - `last.After(signalAt)` 嚴格 greater（per spec §2.3 R12 / Q5；同 ns 不 drop）
 - pre-grace lookup 期間 hold `graceMu` read-only（per spec §0.4 → §2.1 必守清單）
+- `applyProbeGuards` 既有 callsite 的 `OnDrop: probeIntentOnDropForSession(session, intent.Kind)` 改為 reuse 同一 `onDrop` closure（micro-tidiness；行為等價）
 - 既有 `applyIntentLifecycle` / `applyProbeGuards` 後續 5-case + teardown + rearm 邏輯**完全不動**
 
 **Test**：本 task 不寫 test（split 給 P1-T4）；只跑現有 dispatcher test 確認沒被本改造打破（subagent 必跑 `go test -run 'TestConsumeSignals|TestApply' ./internal/module/agent`）。
@@ -192,13 +204,15 @@ func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
 
 **Test cases**（per spec §4.1 P1-T4，trim 後）：
 
-| Case | 場景 | 預期行為 | Metric / reason |
+> **共用斷言**（每個 case 必驗）：`MetricProbeIntentSignalEmitted +1`（既有 metric preservation per plan-review P2 finding）+ `MetricProbeIntentPreGraceHeld +1`（per case 進 hold）。下表只列 case-specific 額外 metric / drop reason。
+
+| Case | 場景 | 預期行為 | Case-specific metric / reason |
 |---|---|---|---|
-| 1 | hold 期間無 hook → timer expire → 進 `applyProbeGuards` | applied 視 mapping 結果而定（mapping 與既有 4-step guard 不變）；signal 進 apply | `MetricProbeIntentPreGraceHeld +1`；無 drop reason |
-| 2 | hold 期間同 session hook 到（透過 caller 設 `lastHookAt > signalAt`）→ drop pre-grace | applied=false（不進 apply）；status 不被 probe 翻 | `MetricProbeIntentPreGraceHeld +1`；`MetricProbeIntentDroppedPreGrace +1`；`onDrop reason="pre-grace"` |
-| 3 | hold 期間 ctx cancel → drop pre-cancel | applied=false（不進 apply）；timer.Stop 呼叫 | `MetricProbeIntentPreGraceHeld +1`；`MetricProbeIntentPreGraceCanceled +1`；`onDrop reason="pre-grace-canceled"` |
+| 1 | hold 期間無 hook（無 `lastHookAt` 紀錄）→ timer expire → 進 `applyProbeGuards` → mapping fixture 回穩定值 → applied | applied=true；status 翻轉到 mapping 回值 | `MetricProbeIntentApplied +1`；無 drop reason |
+| 2 | hold 期間同 session hook 到（透過 caller 在 inject signal 後 `recordHookAt` 設 `lastHookAt > signalAt`，但 timer 仍未 expire）→ drop pre-grace | applied=false（不進 apply）；status 不被 probe 翻 | `MetricProbeIntentDroppedPreGrace +1`；`onDrop reason="pre-grace"` |
+| 3 | hold 期間 ctx cancel → drop pre-cancel | applied=false（不進 apply）；timer.Stop 呼叫 | `MetricProbeIntentPreGraceCanceled +1`；`onDrop reason="pre-grace-canceled"` |
 | 4 | hook 在 hold 期間到（早於 timer expire；caller 在 timer-fire 前 inject `lastHookAt > signalAt`）→ drop pre-grace | 同 case 2，但驗 timing 順序：hook 早於 timer expire | 同 case 2 |
-| 5 | hook 在 hold 過後到（caller 在 timer expire 後設 `lastHookAt > signalAt`，模擬 hook 進 daemon 但 `recordHookAt` 早於 step 2 read）→ 走 post graceWindow drop | applied=false（既有 step 2 graceWindow 觸發） | `MetricProbeIntentPreGraceHeld +1`；無 pre-grace drop；`MetricProbeGraceWindowSuppressed +1`（既有 post counter） |
+| 5 | **pre-grace pass + post graceWindow catch**：caller 在 inject signal 前設 `lastHookAt = signalAt - 1ms`（hook 略早於 signal），即 hook 已 record 但尚未過 2s grace window；pre-grace check 看 `last.After(signalAt)` = false → 通過 → 進 `applyProbeGuards`；step 2 看 `now - last = 301ms < 2s` → drop | applied=false（既有 step 2 graceWindow 觸發） | `MetricProbeIntentSignalEmitted +1`（既有 metric preserved）；`MetricProbeIntentPreGraceHeld +1`；無 pre-grace drop；**`MetricProbeGraceWindowSuppressed +1`** + **`MetricProbeIntentDroppedGrace +1`**（既有 post graceWindow 雙計數，per `applyProbeGuards` step 2）；`onDrop reason="grace"`（既有 helper switch 命中） |
 
 **Case 6（R13 boundary race）不在本 task gating** — 為 known limitation by spec R13；mlab A9 quantified threshold 把關 production 漏網率（P3-T1）。
 

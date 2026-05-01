@@ -1,6 +1,6 @@
 # Probe Intent bidirectional graceWindow spec
 
-> **Status**：v7（v6 後 codex consulting `task-mon19xir-vcknzb` 判定 R3-R5 累積為 review-driven scope creep；R13 已標 known limitation 與「要求 full reconstruction observability 當 ship gate」自相矛盾。Trim 範圍：移 (a) §1.1 #5 兩個 test seam（`preGracePostCheckHookFn` / `preGracePostStep2HookFn`） — case 5 用既有 `applyProbeGuards` unit test pattern、case 6 R13 boundary race 不為它新增 production seam，(b) §1.1 #6 dev-mode trace log 9 欄位 + 跨 log 對齊契約 — 改走 fail-fast：mlab A9 PASS 即 ship、A9 fail 才開 followup issue 加 trace 定位漏網類別，(c) §1.3 A13 acceptance 與 §6 三條 anchor（「想跳過 A13」/「想 lower A13」/「想引入 post-emit confirm rollback」）— 與 R13 known limitation 自相矛盾且把 review-driven scope creep 固化成 drift rule，(d) §1.2 `applyProbeGuards` test-only nil-check 例外段落 — 隨 seam 一起移除；保留：核心 pre-hold 300ms + 3 metrics + ctx cancel + drop reason + A1-A12 + A9 quantified gate（30 次 reject 閃 < 3）+ W6-3/W6-6 spec drift anchor。待派 round 6 standard 驗 trim 後 spec coherence + 無 finding 倒退 + 起 plan）。將既有 `probeGraceWindow`（post-direction only：hook 後 2s drop probe）擴成雙向 — ProbeIntent dispatcher `consumeSignals` 在進入 `applyProbeGuards` 之前先 hold `probeIntentPreGraceWindow`（300ms），期間若同 session hook 進來（`recordHookAt`）→ drop probe Signal；無 hook → 進原 guard pipeline。**Boundary race 仍存在**（hook 在 hold 過後到 + `recordHookAt` 與 step 2 read μs window race），acceptable as known limitation by R13；mlab live verify A9 quantified gate（30 次 reject 閃 running < 3）作為 production 漏網率測試，A9 fail 走 followup issue 加 per-event trace 定位。
+> **Status**：v7.1（v6 後 codex consulting `task-mon19xir-vcknzb` 判定 R3-R5 累積為 review-driven scope creep；R13 已標 known limitation 與「要求 full reconstruction observability 當 ship gate」自相矛盾。Trim 範圍：移 (a) §1.1 #5 兩個 test seam（`preGracePostCheckHookFn` / `preGracePostStep2HookFn`） — case 5 用既有 `applyProbeGuards` unit test pattern、case 6 R13 boundary race 不為它新增 production seam，(b) §1.1 #6 dev-mode trace log 9 欄位 + 跨 log 對齊契約 — 改走 fail-fast：mlab A9 PASS 即 ship、A9 fail 才開 followup issue 加 trace 定位漏網類別，(c) §1.3 A13 acceptance 與 §6 三條 anchor（「想跳過 A13」/「想 lower A13」/「想引入 post-emit confirm rollback」）— 與 R13 known limitation 自相矛盾且把 review-driven scope creep 固化成 drift rule，(d) §1.2 `applyProbeGuards` test-only nil-check 例外段落 — 隨 seam 一起移除；保留：核心 pre-hold 300ms + 3 metrics + ctx cancel + drop reason + A1-A12 + A9 quantified gate（30 次 reject 閃 < 3）+ W6-3/W6-6 spec drift anchor。**v7→v7.1**：codex plan review thread `019de428-def1-7533-80f4-cf3b959f7377` 抓 §3.1 / §3.4 兩個實作草稿 bug — (P1) `probeIntentOnDropForSession` 是 package-level closure factory `(session, kind) func(reason)`，不是 Module field、(P2) 漏 preserve 既有 `MetricProbeIntentSignalEmitted` 計數；§3.1 / §3.4 / plan P1-T3 / P1-T4 全部修；行為與 trim 範圍不變）。將既有 `probeGraceWindow`（post-direction only：hook 後 2s drop probe）擴成雙向 — ProbeIntent dispatcher `consumeSignals` 在進入 `applyProbeGuards` 之前先 hold `probeIntentPreGraceWindow`（300ms），期間若同 session hook 進來（`recordHookAt`）→ drop probe Signal；無 hook → 進原 guard pipeline。**Boundary race 仍存在**（hook 在 hold 過後到 + `recordHookAt` 與 step 2 read μs window race），acceptable as known limitation by R13；mlab live verify A9 quantified gate（30 次 reject 閃 running < 3）作為 production 漏網率測試，A9 fail 走 followup issue 加 per-event trace 定位。
 >
 > **動因**：W6-6 v5 spec round 5 standard codex review 抓到 reject path race — Phase B armed=true 後 user 按 [2] 拒絕，dialog 消失發 ScreenChanged 與 PdxStop hook race；極端場景 probe 先到 daemon → emit running → hook 後到覆蓋 idle → lights 短暫閃 `waiting → running → idle`。既有 post-direction graceWindow 只能壓 hook **之後** 的 probe，無法壓 hook **之前** 已 emit 的 probe。
 >
@@ -241,9 +241,17 @@ func (d *probeIntentDispatcher) consumeSignals(_ context.Context, ...) {
 
 ```go
 func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
-    for signal := range signals {
+    for sig := range in {
+        // 既有 signal-emitted metric 必須先 +1（每收到 detector signal）
+        agentpkg.MetricProbeIntentSignalEmitted.Add(1)
+
         signalAt := orchNowFn()
         agentpkg.MetricProbeIntentPreGraceHeld.Add(1)
+
+        // 既有 package-level helper：closure factory，吞 reason，內含 dev log + 4 既有 reason
+        // counter（pre-grace 兩條新 reason 不在 switch 內 → 無 counter，避免與 caller 顯式
+        // .Add(1) double-count；per §3.4 R4 修）
+        onDrop := probeIntentOnDropForSession(session, intent.Kind)
 
         timer := time.NewTimer(probeIntentPreGraceWindow)
         select {
@@ -252,9 +260,7 @@ func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
         case <-ctx.Done():
             timer.Stop()
             agentpkg.MetricProbeIntentPreGraceCanceled.Add(1)
-            if d.parent.probeIntentOnDropForSession != nil {
-                d.parent.probeIntentOnDropForSession(session, "pre-grace-canceled")
-            }
+            onDrop("pre-grace-canceled")
             continue
         }
 
@@ -266,15 +272,16 @@ func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
             o.graceMu.Unlock()
             if hasHook && last.After(signalAt) {
                 agentpkg.MetricProbeIntentDroppedPreGrace.Add(1)
-                if d.parent.probeIntentOnDropForSession != nil {
-                    d.parent.probeIntentOnDropForSession(session, "pre-grace")
-                }
+                onDrop("pre-grace")
                 continue
             }
         }
 
-        applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{...})
-        // ... lifecycle 5-case + teardown + rearm 不變
+        applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{
+            // ...
+            OnDrop: onDrop,  // 沿用同一 closure；既有 callsite 不變
+        })
+        // ... 既有 lifecycle 5-case + teardown + rearm 完全不變
     }
 }
 ```
@@ -282,9 +289,11 @@ func (d *probeIntentDispatcher) consumeSignals(ctx context.Context, ...) {
 **關鍵點**：
 
 - ctx 參數啟用，hold select 監聽 ctx.Done
+- **既有 `MetricProbeIntentSignalEmitted` 必 preserve**（每收到 signal +1）— pre-grace drop / cancel 路徑也要 `MetricProbeIntentSignalEmitted +1`，否則違反「既有 metric 不變」承諾並讓 dashboard 漏數
+- **`probeIntentOnDropForSession` 是既有 package-level closure factory**（簽名 `(session, kind) func(reason)`），不是 Module field；pre-grace 兩條新 reason `"pre-grace"` / `"pre-grace-canceled"` 不在既有 switch case 內 → 不增 counter（caller 顯式 `.Add(1)` 統一管，避免 double-count，per §3.4 R4 修）；helper 內 dev log 仍會印出新 reason（log 不需修）
 - pre-grace decision 在 timer 過期後 lookup `lastHookAt`；不在 hold 期間 polling（簡化第一版）
-- pre-grace drop / pre-grace-canceled 兩條 path 各自獨立 metric + reason
-- 進入 `applyProbeGuards` 後既有 4-step guard 不動（含既有 post graceWindow）
+- pre-grace drop / pre-grace-canceled 兩條 path 各自獨立 metric `.Add(1)` + 同一 onDrop closure
+- 進入 `applyProbeGuards` 後既有 4-step guard 不動（含既有 post graceWindow）；`OnDrop` 沿用同一 closure
 - `!appliedAny` post-loop rearm 在 pre-grace drop case：drop continue 後 detector 仍可能 exit 觸發 outer teardown — 既有 line 588-615 邏輯仍適用，但要驗 regression
 
 ### 3.2 `probeIntentPreGraceWindow` const
@@ -334,26 +343,42 @@ var MetricProbeIntentPreGraceCanceled = expvar.NewInt("purdex_probe_intent_pre_g
 - `MetricProbeIntentDroppedGrace` — 維持 post graceWindow drop 計數
 - `MetricProbeGraceWindowSuppressed` — 維持 legacy/global post counter（dashboard 仰賴）
 
-### 3.4 `probeIntentOnDropForSession` reason 擴展
+### 3.4 `probeIntentOnDropForSession` reason 擴展（log 註解，不擴 switch）
 
-既有 reasons：`"stale-callback"` / `"grace"` / `"mapping"` / `"transition-gate"` / `"error-guard"`。
+既有 helper 是 package-level closure factory（`probe_intent_dispatcher.go:42`）：
 
-新增 reason strings（**callback 本身不計 expvar metric — metric 計數責任在 caller (`consumeSignals`) 內 explicit `.Add(1)` 統一管，避免 double-counting**；callback 僅供 test/observability 觀察 drop 行為）：
-- `"pre-grace"` — pre-applyProbeGuards hold 期間 hook 到 → drop
-- `"pre-grace-canceled"` — pre-applyProbeGuards hold 期間 ctx cancel → drop
+```go
+func probeIntentOnDropForSession(session string, kind agentpkg.ProbeIntentKind) func(string) {
+    return func(reason string) {
+        switch reason {
+        case "stale-callback": agentpkg.MetricProbeIntentDroppedStale.Add(1)
+        case "grace":          agentpkg.MetricProbeIntentDroppedGrace.Add(1)
+        case "error-guard":    agentpkg.MetricProbeIntentDroppedErrorGuard.Add(1)
+        case "transition-gate":agentpkg.MetricProbeIntentDroppedTransitionGate.Add(1)
+        }
+        if isDevMode() {
+            log.Printf("[probe-intent] drop session=%s kind=%s reason=%s", session, kind, reason)
+        }
+    }
+}
+```
 
-reason mapping function（`internal/module/agent/probe_intent_dispatcher.go` top）擴展：
+**新增兩條 reason 不擴 switch case**（**callback 本身不計 expvar metric — metric 計數責任在 caller (`consumeSignals`) 內 explicit `.Add(1)` 統一管，避免 double-counting**；callback 僅供 dev-mode log 觀察 drop 行為，switch 不命中即不加 counter）：
+- `"pre-grace"` — pre-applyProbeGuards hold 期間 hook 到 → drop（caller `MetricProbeIntentDroppedPreGrace.Add(1)`，callback 落 dev log）
+- `"pre-grace-canceled"` — pre-applyProbeGuards hold 期間 ctx cancel → drop（caller `MetricProbeIntentPreGraceCanceled.Add(1)`，callback 落 dev log）
+
+**reason mapping 註解擴展**（GoDoc 在 `probe_intent_dispatcher.go` top；本 PR 唯一改 helper 周邊的點是註解）：
 
 ```go
 // reason values are stable strings emitted by applyProbeGuards + consumeSignals:
 //
-//   stale-callback        — applyProbeGuards step 1 stale check failed
-//   grace                 — applyProbeGuards step 2 post graceWindow active
-//   mapping               — applyProbeGuards step 3 mapping returned ""
-//   transition-gate       — applyProbeGuards step 4 transition gate rejected
-//   error-guard           — applyProbeGuards step 4 error guard rejected
-//   pre-grace             — consumeSignals pre-applyProbeGuards hold: hook arrived (J3)
-//   pre-grace-canceled    — consumeSignals pre-applyProbeGuards hold: ctx canceled (J3)
+//   stale-callback        — applyProbeGuards step 1 stale check failed (counter: helper)
+//   grace                 — applyProbeGuards step 2 post graceWindow active (counter: helper)
+//   mapping               — applyProbeGuards step 3 mapping returned "" (counter: helper via probeIntentOnDrop, not via this closure)
+//   transition-gate       — applyProbeGuards step 4 transition gate rejected (counter: helper)
+//   error-guard           — applyProbeGuards step 4 error guard rejected (counter: helper)
+//   pre-grace             — consumeSignals pre-applyProbeGuards hold: hook arrived (J3; counter: caller)
+//   pre-grace-canceled    — consumeSignals pre-applyProbeGuards hold: ctx canceled (J3; counter: caller)
 ```
 
 ---
