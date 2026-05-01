@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "config": {"stopReviewGate": false},
+  "jobs": [
+    {
+      "id": "task-running",
+      "status": "running",
+      "phase": "exec",
+      "createdAt": "2026-05-01T13:00:00Z",
+      "updatedAt": "2026-05-01T13:30:00Z",
+      "completedAt": null,
+      "pid": 99999,
+      "logFile": "/tmp/jobs/task-running.log",
+      "request": {"cwd": "/tmp/live"}
+    }
+  ]
+}

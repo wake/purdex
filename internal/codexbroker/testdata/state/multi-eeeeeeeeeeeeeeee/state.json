@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "jobs": [
+    {"id": "j1", "status": "queued",    "updatedAt": "2026-05-01T10:00:00Z"},
+    {"id": "j2", "status": "running",   "updatedAt": "2026-05-01T11:00:00Z"},
+    {"id": "j3", "status": "completed", "updatedAt": "2026-05-01T12:00:00Z"},
+    {"id": "j4", "status": "failed",    "updatedAt": "2026-05-01T13:00:00Z"},
+    {"id": "j5", "status": "cancelled", "updatedAt": "2026-05-01T14:00:00Z"},
+    {"id": "j6", "status": "weird",     "updatedAt": "2026-05-01T15:00:00Z"}
+  ]
+}

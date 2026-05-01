@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "task-old",
+      "status": "completed",
+      "createdAt": "2026-04-30T10:00:00Z",
+      "updatedAt": "2026-04-30T11:00:00Z",
+      "completedAt": "2026-04-30T11:00:00Z",
+      "pid": null
+    }
+  ]
+}

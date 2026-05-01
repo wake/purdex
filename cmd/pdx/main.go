@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
@@ -245,6 +246,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(logs.New())
 	c.AddModule(syncmod.New())
 	c.AddModule(monitor.New())
+	c.AddModule(codexbroker.New())
 	return nil
 }
 
