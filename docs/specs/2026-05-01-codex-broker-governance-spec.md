@@ -125,13 +125,13 @@ Socket-only orphans (`cxc-XXXXXX/` with no live pid in `broker.pid`) are **stale
 
 ### 3.4 Cross-layer correlation key vs runtime identity
 
-**Correlation key** (cross-layer, cross-restart):
+**Correlation key** (cross-layer, cross-restart). The algorithm is **byte-identical to codex CLI's own** `scripts/lib/state.mjs::resolveStateDir`:
 
 ```
-brokerKey = sha256(realpath(--cwd))[:16]
+brokerKey = sha256(realpath(--cwd) || rawCwd)[:16]
 ```
 
-This matches the suffix codex uses to name the state directory and is used to **correlate** records from the three layers. It is **not** a unique runtime identity. Multiple live broker processes can share the same `brokerKey` (e.g. crash-respawn race, intentional double-launch during failover, codex CLI bug). PID-reuse during a long daemon run can also yield two distinct historical instances under the same `brokerKey` over time.
+where `realpath || rawCwd` means: try to evaluate symlinks; on failure, hash the raw value verbatim. **No NFC normalisation, no case-fold** — codex does neither, and because the codex-written state-dir suffix is the only authoritative key on disk, our hash MUST produce the same bytes. Touching the bytes between `realpath` and `sha256` would make Purdex's keys diverge from codex's directory names, breaking three-layer reconciliation. (This was caught during P1 integration testing on a real APFS host: case-fold lowered `/Users/...` to `/users/...` and produced 0/42 triple-source matches; removing case-fold restored 33/66.)
 
 **Runtime identity** (the unit of `BrokerRecord` in P1, the unit of decision in P2):
 
@@ -145,10 +145,10 @@ brokerInstanceID = (brokerKey, pid, lstart)
 
 **Edge cases**:
 
-- `realpath(--cwd)` fails (cwd no longer exists, EACCES, ESTALE): record is emitted with raw cwd, `brokerKey = sha256(rawCwd)[:16]`, and a `cwd_unresolvable` anomaly. State-dir correlation by suffix may then mismatch — that becomes a `state_dir_no_match` anomaly. Never silently skip the record.
-- macOS APFS case-preserving + case-insensitive: comparisons go through `filepath.EvalSymlinks` + canonical-case normalisation (lower-cased on case-insensitive volumes; detected via `pathconf(_PC_CASE_SENSITIVE)`).
-- macOS `/var → /private/var` symlink: covered by `EvalSymlinks` before hashing.
-- Unicode normalisation drift (NFC vs NFD on filenames): hash both forms, prefer NFC; if they disagree, anomaly.
+- `realpath(--cwd)` fails (cwd no longer exists, EACCES, ESTALE): record is emitted with raw cwd, `brokerKey = sha256(rawCwd)[:16]` (matches codex's own fallback), and a `cwd_unresolvable` anomaly. State-dir correlation by suffix may then mismatch — that becomes a `state_dir_no_match` anomaly. Never silently skip the record.
+- macOS `/var → /private/var` symlink: covered by `realpath`/`EvalSymlinks` before hashing — codex uses `realpathSync.native`, which behaves the same.
+- macOS APFS case-preserving + case-insensitive volumes: **not** folded into the primary key; codex hashes the case-preserved bytes. P2 may add a separate collision-detection pass that flags `/Foo` vs `/foo` divergence as `broker_key_collision`, but the primary hash remains byte-faithful.
+- Unicode normalisation drift (NFC vs NFD on filenames): same as case — codex hashes raw bytes, so distinct normalisation forms intentionally produce distinct keys. Cross-form divergence is a P2 anomaly check, not a P1 hash input.
 - Argv truncation (rare but possible if cwd contains shell metachars or non-UTF-8 bytes): record is emitted with truncated cwd + `argv_truncated` anomaly.
 
 ## 4. Phase P1 — Inventory (this PR)
