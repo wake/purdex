@@ -1,6 +1,6 @@
 # W6-6 codex permission-reply ScreenChange ProbeIntent — Implementation Plan
 
-> **Status**：v1（待 codex plan review）
+> **Status**：v1 final（codex plan review 0 finding；thread `019de532-08a2-73f3-9f03-fc7d4c49aa28` 2026-05-02）
 > **依賴 spec**：`docs/specs/2026-05-01-w6-6-codex-screen-change-probe-spec.md` v6.1 final（7 輪 review，round 7 0 finding）
 > **Worktree**：`.claude/worktrees/lights-w6-6-codex-screen-change` / branch `worktree-lights-w6-6-codex-screen-change`
 > **Base**：`origin/main` @ alpha.281（J3 PR #797 `56b3ba55` + bump #798 `5736f87e` 之後）
