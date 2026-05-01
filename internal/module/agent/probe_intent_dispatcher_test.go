@@ -1360,9 +1360,12 @@ func TestConsumeSignals_PreGraceDrop_RearmsAfterTeardown(t *testing.T) {
 	}, "gen 1 active entry observed before pre-grace teardown")
 
 	// Inject hook DURING the 300ms hold so pre-grace drops the signal.
-	// emitCount=1 means the detector has just emitted. Wait a few ms to
-	// be safe (consumer must have entered the hold timer).
-	time.Sleep(50 * time.Millisecond)
+	// Use deterministic metric handshake (PR round-4 P2 finding) — wait
+	// for MetricProbeIntentPreGraceHeld to advance past baseline,
+	// proving consumer captured signalAt + entered timer; then
+	// recordHookAt's monotonic timestamp is strictly > signalAt → falls
+	// into pre-grace post-check branch, not post-grace pre-check.
+	waitForConsumerInHold(t, before.preGraceHeld)
 	m.probeOrch.recordHookAt("work")
 
 	// Wait for: pre-grace drop +1 AND emitCount becomes 2 (rearm fired)
