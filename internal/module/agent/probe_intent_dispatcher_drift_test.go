@@ -185,3 +185,83 @@ func TestProbeIntentDrift_OnSignalNonNil_OnEntryStatusNonEmpty(t *testing.T) {
 		t.Fatalf("zero ProbeIntent declarations across the production registry — suite is vacuous")
 	}
 }
+
+// TestProbeIntentDrift_DeclaredKindsEqualSupportedKinds is the
+// strict bidirectional drift gate (per W6-6 spec §6.2 / plan §2 P2-T2).
+//
+// The two preceding tests (TestProbeIntentDriftCoverage +
+// TestProbeIntentDrift_AllDeclaredKindsHaveDispatcherCase) verify the
+// ⊆ direction: every declared Kind has a dispatcher case. This one
+// verifies the ⊇ direction too: every Kind in the production
+// supportedKinds map has at least one provider declaring it.
+//
+// Failure modes caught:
+//
+//   - Declared by some provider but missing from supportedKinds:
+//     audit F6 fail-closed branch (lifecycle skip-arm) caught earlier
+//     by the ⊆ test, but this test re-asserts the same invariant
+//     under set equality so a single failure message lists the
+//     symmetric difference rather than two unrelated assertions.
+//   - Wired in supportedKinds but no provider declares it: dead
+//     dispatcher case — perhaps a Kind constant was renamed without
+//     updating the provider, or the supportedKinds map was extended
+//     speculatively for a Kind that never made it to ProbeIntents().
+//     The fail-closed branch never trips for it, but the surface area
+//     is still inflated.
+//
+// Together with the W6-6 ScreenChange landing this set is exactly
+// {ProcessDead, ScreenChange}. Future Kinds extend both sides
+// simultaneously per audit F6.
+func TestProbeIntentDrift_DeclaredKindsEqualSupportedKinds(t *testing.T) {
+	wired := productionSupportedKinds(t)
+	r := productionRegistry(t)
+
+	declared := make(map[agentpkg.ProbeIntentKind]struct{})
+	for _, p := range r.All() {
+		pip, ok := p.(agentpkg.ProbeIntentProvider)
+		if !ok {
+			continue
+		}
+		for _, intent := range pip.ProbeIntents() {
+			declared[intent.Kind] = struct{}{}
+		}
+	}
+
+	// Symmetric difference reports both directions in one message.
+	var declaredButNotWired []agentpkg.ProbeIntentKind
+	for k := range declared {
+		if _, ok := wired[k]; !ok {
+			declaredButNotWired = append(declaredButNotWired, k)
+		}
+	}
+	var wiredButNotDeclared []agentpkg.ProbeIntentKind
+	for k := range wired {
+		if _, ok := declared[k]; !ok {
+			wiredButNotDeclared = append(wiredButNotDeclared, k)
+		}
+	}
+	if len(declaredButNotWired) > 0 || len(wiredButNotDeclared) > 0 {
+		t.Errorf("declared/wired drift: declared-but-not-wired=%v wired-but-not-declared=%v (declared=%v wired=%v)",
+			declaredButNotWired, wiredButNotDeclared,
+			keysOf(declared), keysOf(wired))
+	}
+}
+
+// keysOf returns a deterministic list of map keys for diagnostic
+// messages (Go map iteration order is unspecified). Sort by string
+// repr so failure messages stay stable across runs.
+func keysOf(m map[agentpkg.ProbeIntentKind]struct{}) []agentpkg.ProbeIntentKind {
+	out := make([]agentpkg.ProbeIntentKind, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	// crude sort by string conversion — adequate for diagnostics
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if string(out[i]) > string(out[j]) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
