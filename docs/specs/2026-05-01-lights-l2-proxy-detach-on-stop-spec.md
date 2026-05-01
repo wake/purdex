@@ -1,12 +1,12 @@
-# Spec — Lights L2: Proxy detach on Stop (v3 — turn-aware identity, a+b mixed)
+# Spec — Lights L2: Proxy detach on Stop (v4 — turn-aware identity, codex-gated, derive-valid)
 
 **Kickoff**: `kickoff_codex_broker_and_lights_governance.md` §燈號 L2
-**Date**: 2026-05-01 (v1) / 2026-05-02 (v2, v3)
+**Date**: 2026-05-01 (v1) / 2026-05-02 (v2, v3, v4)
 **Branch**: `worktree-lights-l2-proxy-detach`
 **Baseline**: origin/main `5d40e2a2` (alpha.280)
 **Scope**: When a long-lived codex broker finishes a logical dispatch (turn), detach the proxy `SubagentRef` from the parent frame so the lit dot extinguishes — without waiting for the broker process to die.
 
-**v3 supersedes v2** — v2 was blocked by Round-3 codex review (`task-mon4zbs3-ceswha`) for three substantive issues plus six wording/coverage gaps. v3 incorporates all 9 findings plus the a+b mixed strategy from F2 follow-up consulting (`task-mon9h5l9-byczvd`). Review history: v1 → block (`task-mon01q2i-i88vwf`) → v2 → block (`task-mon4zbs3-ceswha`) + F2 consult (`task-mon9h5l9-byczvd`) → v3.
+**v4 supersedes v3** — v3 was blocked by Round-4 codex review (`task-monase7h-0jalqc`) for two implementation-critical blockers (B1: `HookHandlingHandled` doesn't exist + `codex/status.go` missing PdxPreToolUse case → handler early-returns at `result.Valid==false`; B2: shared `LifecycleUserPromptSubmit` case crosses cc/opencode without `AgentType=="codex"` gate) plus six wording/coverage findings. v4 fixes both blockers and all medium/low findings. Review history: v1 → block (`task-mon01q2i-i88vwf`) → v2 → block (`task-mon4zbs3-ceswha`) + F2 consult (`task-mon9h5l9-byczvd`) → v3 → block (`task-monase7h-0jalqc`) → v4.
 
 **Estimated size**: ~380-550 LOC (production + tests + catalog + new lifecycle wiring). Single-PR but mid-large — use two-round codex review (standard + 3-parallel adversarial).
 
@@ -150,18 +150,20 @@ These two helpers serve different intents and intentionally have different seman
 - `frame_ops.go:210-249` SessionStart fast-path: attach proxy ref with `SourceTurnID=""` (codex SessionStart doesn't carry turn_id; §2.1)
 - Behavior unchanged from current code
 
-**B. UserPromptSubmit attach/upsert (new)**
+**B. UserPromptSubmit attach/upsert (new — codex-gated)**
 - New case in `applyFrameEvent` lifecycle switch: `case agentpkg.LifecycleUserPromptSubmit:`
-- Only acts when `frame == nil` and a proxy parent exists (mirrors SessionStart fast-path's `frame == nil` gate)
-- Parses `turn_id` from `req.RawEvent` via new `parseCodexTurnID(req.AgentType, req.RawEvent) string` (returns "" on error, agent mismatch, or missing field — fail-soft)
+- **First check `req.AgentType == "codex"` (B2/v4 fix); if not codex → break and let existing code paths handle it unchanged**. cc and opencode also map UserPromptSubmit to `LifecycleUserPromptSubmit` (`cc/events.go:40`, `opencode/events.go:50`) and must not enter the new attach/upsert path — those providers don't have the long-lived broker race and don't carry codex `turn_id`.
+- For codex: only acts when `frame == nil` and a proxy parent exists (mirrors SessionStart fast-path's `frame == nil` gate)
+- Parses `turn_id` from `req.RawEvent` via new `parseCodexTurnID(rawEvent) string` (returns "" on error or missing field — fail-soft; AgentType pre-gated above so parser doesn't need to re-check)
 - Calls new `upsertProxyRefForBroker` helper:
   - If `findProxyRefByBroker(parent.Subagents, pid, startTime) >= 0` → replace `SourceTurnID` in-place via narrow column update (NOT via `mutateSubagentsWithRetry` SubagentStart, which would skip the mutation)
-  - If not found → append new ref with `SourceTurnID=req.TurnID`
+  - If not found → append new ref with `SourceTurnID=parsedTurnID`
 
-**C. PreToolUse attach/upsert (new — strategy a from F2)**
-- Reuses the **same** lifecycle case body as B (UserPromptSubmit) — both trigger upsert with the parsed turn_id
-- Requires catalog change: `internal/agent/codex/events.go:91-97` — `PdxPreToolUse` lifecycle moves from `LifecycleNone` + `HookHandlingUnsupported` to `LifecycleUserPromptSubmit` (semantically the same intent for L2: "broker is starting work for a turn") + `HookHandlingHandled`
-- Rationale: PreToolUse is the canonical attach trigger for non-prompt turns (review/compact/tool-only) per §2.4. Reusing `LifecycleUserPromptSubmit` keeps the switch case count minimal; the alternative (new `LifecycleToolUse`) would force a wider lifecycle vocabulary change without semantic benefit for L2
+**C. PreToolUse attach/upsert (new — strategy a from F2, two-part change)**
+- **Part 1 (catalog)**: `internal/agent/codex/events.go:91-97` — `PdxPreToolUse` lifecycle moves from `LifecycleNone` to `LifecycleUserPromptSubmit` (same intent for L2: "broker is starting work for a turn"). `Handling` field is **omitted** so `EffectiveHookHandling` defaults to `HookHandlingDetail` (`provider.go:171-178`). **`HookHandlingHandled` does not exist** in the vocabulary (`provider.go:80-83` only defines status / detail / ignored / unsupported) — v3 spec was wrong on this name; v4 uses the actual default-detail path.
+- **Part 2 (DeriveStatus)**: `internal/agent/codex/status.go::deriveCodexStatus` — add `case "PdxPreToolUse"` returning `agent.DeriveResult{Valid: true, Detail: map[string]any{...}}` with empty `Status` (mirroring the existing `PdxSubagentStart, PdxSubagentStop` case at `status.go:67-72`). Without this, `result.Valid == false` makes `handler.go:248` early-return before `applyFrameEvent` is even called — catalog change alone has no runtime effect.
+- Reuses the **same** B case body once both gates pass (codex AgentType + Valid=true derive result)
+- Rationale: PreToolUse is the canonical attach trigger for non-prompt turns (review/compact/tool-only) per §2.4. Reusing `LifecycleUserPromptSubmit` keeps the switch case count minimal.
 
 **D. Stop targeted detach (new — the L2 core)**
 - New case: `case agentpkg.LifecycleStop, agentpkg.LifecycleStopFailure:`
@@ -173,7 +175,7 @@ These two helpers serve different intents and intentionally have different seman
     | Provider | Parsed turn_id | Action | Trace reason |
     |----------|---------------|--------|--------------|
     | codex | non-empty | targeted detach via new `removeProxyRefForSenderTurn(paneID, pid, startTime, turnID)` — only removes ref where ALL three identity fields match | `proxy_subagent_detached_on_stop_turn` |
-    | codex | empty + ref exists with non-empty `SourceTurnID` | **skip detach** (governance sweep handles); emit conservative trace | `proxy_subagent_stop_parse_failed` |
+    | codex | empty + ref exists with non-empty `SourceTurnID` | **skip detach**; ref remains until: (a) a later codex UserPromptSubmit/PreToolUse upserts a new SourceTurnID over it, (b) the broker dies and `pruneDeadProxyRefs` removes it via the SessionStart filter-merge path, or (c) future governance P2/P3 broker cleanup removes the broker's state directory. Current sweep does NOT clean live brokers' refs (M1/v4 fix). | `proxy_subagent_stop_parse_failed` |
     | codex | empty + ref exists with empty `SourceTurnID` (SessionStart attached but no UserPromptSubmit/PreToolUse upsert) | wildcard detach via `removeProxyRefForSender` | `proxy_subagent_detached_on_stop` |
     | cc / opencode | (any) | wildcard detach via `removeProxyRefForSender` | `proxy_subagent_detached_on_stop` |
 
@@ -211,9 +213,11 @@ This is a **new helper** `upsertProxyRefForBroker(parent, pid, startTime, turnID
 | File | Change | LOC est |
 |------|--------|---------|
 | `internal/agent/subagent.go` | Add `SourceTurnID string` field with `json:"source_turn_id,omitempty"` | ~5 |
-| `internal/agent/codex/events.go` | `PdxPreToolUse`: `Lifecycle: LifecycleUserPromptSubmit` (was `LifecycleNone`); `Handling: HookHandlingHandled` (was `HookHandlingUnsupported`); remove `FutureOnly` if set | ~10 |
-| `internal/agent/codex/hooks.go` | Confirm `checkCodexEvent` handles new lifecycle classification correctly (likely no change; verify in implementation) | 0-10 |
-| `internal/module/agent/raw_codex_event.go` *(new)* | `parseCodexTurnID(agentType, rawEvent) string` — returns "" on AgentType != "codex", JSON parse error, or missing field | ~30 |
+| `internal/agent/codex/events.go` | `PdxPreToolUse`: `Lifecycle: LifecycleUserPromptSubmit` (was `LifecycleNone`); **omit `Handling` field** so `EffectiveHookHandling` defaults to `HookHandlingDetail` (was `HookHandlingUnsupported`). `HookHandlingHandled` does NOT exist — v3 typo, fixed in v4. | ~10 |
+| `internal/agent/codex/status.go` | New `case "PdxPreToolUse"` in `deriveCodexStatus` returning `DeriveResult{Valid: true, Detail: map[string]any{...}}` with empty Status — mirrors existing `PdxSubagentStart, PdxSubagentStop` detail-only pattern at `status.go:67-72`. Without this, `result.Valid==false` makes `handler.go:248` early-return before the new lifecycle case can run (B1/v4 fix). | ~10 |
+| `internal/agent/codex/events_test.go` | Update fixture expectations for `PdxPreToolUse` — was `Lifecycle: LifecycleNone, Handling: HookHandlingUnsupported`; v4 expects `Lifecycle: LifecycleUserPromptSubmit, Handling: ""` (or `HookHandlingDetail` after `EffectiveHookHandling`). Cite: catalog test at `events_test.go` (M2/v4 fix). | ~5 |
+| `internal/agent/codex/status_test.go` (or equivalent) | Add test for new `PdxPreToolUse` derive case. | ~10 |
+| `internal/module/agent/raw_codex_event.go` *(new)* | `parseCodexTurnID(rawEvent) string` — returns "" on JSON parse error or missing field. AgentType pre-gating is done in `applyFrameEvent` lifecycle case (§3.3.B), parser doesn't need to re-check. | ~25 |
 | `internal/module/agent/frame_ops.go` | (a) `subagentRefMatches` turn-aware update (§3.2.A). (b) New `findProxyRefByBroker` helper (§3.2.B). (c) New `upsertProxyRefForBroker` helper (§3.4). (d) New `removeProxyRefForSenderTurn` + `detachProxyRefForSenderTurnWithRetry` mirroring existing helpers. (e) New `LifecycleUserPromptSubmit` case in `applyFrameEvent` switch (handles both UserPromptSubmit and PreToolUse via shared upsert path). (f) New `LifecycleStop, LifecycleStopFailure` case with three-sub-case dispatch (§3.3.D table). (g) Inline comments in §3.2.A/B helpers cross-referencing each other to prevent DRY refactor regressions | ~200-280 |
 | `internal/module/agent/handler.go` | No change (RawEvent already in EventRequest) | 0 |
 | `internal/module/agent/frame_ops_test.go` | New test file/section `TestApplyFrameEvent_TurnAwareProxyDetach` with full table matrix (§5) | ~280-400 |
@@ -231,17 +235,18 @@ This is a **new helper** `upsertProxyRefForBroker(parent, pid, startTime, turnID
 | 4 | parent cc + 1 ref(PID=42, t1, turnID="t_a") | Stop from PID=42, raw turn_id="t_b" | ref kept (turn mismatch), trace `proxy_subagent_stop_no_match` | dispatch 1 late Stop |
 | 5 | parent cc + 1 ref(PID=42, t1, turnID="t_a") | UserPromptSubmit from PID=42, raw turn_id="t_b" | ref's SourceTurnID overwritten t_a→t_b in-place (single ref still, NOT appended) | §3.4 explicit no-duplicate guard |
 | 6 | parent cc + 1 ref(PID=42, t1, turnID="t_a") | StopFailure from PID=42, raw turn_id="t_a" | targeted detach succeeds | StopFailure parity with Stop |
-| 7 | parent cc + 0 refs (resumeThread first dispatch, no SessionStart) | UserPromptSubmit from PID=42, raw turn_id="t_a" | first-time attach via append, ref(PID=42, t1, turnID="t_a") created | §3.3.B resumeThread |
+| 7 | parent cc + 0 refs (resumeThread first dispatch, no SessionStart) | UserPromptSubmit from PID=42, raw turn_id="t_a", AgentType=codex | first-time attach via append, ref created with: `IsProxy=true`, `SourcePID=42`, `SourceStartTime=t1`, `SourceTurnID="t_a"`, `ID == fmt.Sprintf("proxy:codex:%d:%s", 42, "t1")` (deterministic, mirrors `frame_ops.go:218`); subsequent same-broker upsert reuses ID (no second ref) | §3.3.B resumeThread + L2/v4 ID assertion |
 | 8 | parent cc + 1 ref(PID=42, t1, turnID="t_a") | Stop from PID=42, raw missing/malformed turn_id, AgentType=codex | **skip detach**, trace `proxy_subagent_stop_parse_failed` | §3.3.D codex parse-failure conservative |
 | 9 | parent cc + 1 ref(PID=42, t1, turnID="") | Stop from PID=42, raw turn_id="" or malformed, AgentType=codex | wildcard detach via `removeProxyRefForSender`, trace `proxy_subagent_detached_on_stop` | §3.3.D codex empty-ref wildcard fallback |
 | 10 | parent cc + 1 ref(PID=42, t1, turnID="t_a") + 1 ref(PID=43, t2, turnID="t_x") (two brokers) | Stop from PID=42, raw turn_id="t_a" | only PID=42 ref detached, PID=43 untouched | multi-broker isolation |
-| 11 | parent cc + 1 ref(PID=42, t1, turnID="t_a") | SessionEnd from PID=42 (no turn_id, AgentType=cc as proxy) | wildcard detach via existing path (unchanged) | §3.3.E SessionEnd unchanged regression guard |
+| 11 | parent opencode + 1 ref(PID=42, t1, turnID="", Type=cc) (cross-type proxy: cc attached as proxy under opencode parent — legitimate cross-type case; codex SessionEnd doesn't exist per §2.3) | SessionEnd from PID=42, AgentType=cc | wildcard detach via existing `removeProxyRefForSender` path (unchanged) | §3.3.E SessionEnd unchanged regression guard (L3/v4 fix: cc/codex was illegal cross-type setup; v4 uses cc-as-proxy-under-opencode which is realistic per existing PR-2b proxy collapse design) |
 | 12 | sender owns own frame (frame != nil) + standalone Stop | Stop from sender's own PID | sender's frame.Subagents unchanged, no proxy detach attempted | §3.3.D `frame != nil` short-circuit |
 | 13 | parent cc + 1 native ref(IsProxy=false, ID="task-x") | Stop from PID=42, raw turn_id="t_a" | native ref untouched (subagentRefMatches IsProxy gate) | native isolation |
 | 14 | parent cc + 1 ref(PID=42, t1, turnID="t_a"). Sequential: Stop(t_a) → Stop(t_a) again | call 1: detached / call 2: no-op (already gone, trace `proxy_subagent_stop_no_match`) | idempotent | retry-safe |
-| 15 | parent cc + 1 ref(PID=42, t1, turnID=""). Sequential: UserPromptSubmit(t_a) → PreToolUse(t_a) → PreToolUse(t_a) → Stop(t_a) | call 1: upsert turnID=t_a / call 2-3: same-turn no-op (turnID already t_a, no change) / call 4: targeted detach | full lifecycle + same-turn idempotent | end-to-end happy path + F5 same-turn no-op |
+| 15 | parent cc + 1 ref(PID=42, t1, turnID=""). Sequential: UserPromptSubmit(t_a) → PreToolUse(t_a) → PreToolUse(t_a) → Stop(t_a) | call 1: upsert turnID=t_a / call 2-3: same-turn no-op (turnID already t_a, StartedAt may refresh, but ref count stays 1 and turnID stays t_a) / call 4: targeted detach | full sequential lifecycle | end-to-end happy path |
+| 15b | parent cc + 1 ref(PID=42, t1, turnID=""). Concurrent: 3 goroutines call (a) UserPromptSubmit(t_a), (b) PreToolUse(t_a), (c) PreToolUse(t_a). `sync.WaitGroup.Wait` after all | exactly one ref remains, IsProxy=true, PID=42, StartTime=t1, turnID="t_a" (last-writer-wins on StartedAt is acceptable). **Forbidden**: two or more refs (any combination), zero refs, ref with turnID != "t_a" | F5/v4 same-turn upsert race-safety |
 | 16 | parent cc + 1 ref(PID=42, t1, turnID="t_a"). Concurrent: goroutine A calls UserPromptSubmit(t_b), goroutine B calls Stop(t_a). `sync.WaitGroup.Wait` after both | **Final state is exactly one of**: (i) ref(PID=42, t1, turnID="t_b") with no Stop detach trace; OR (ii) detach trace `proxy_subagent_detached_on_stop_turn` followed by attach trace with new ref(PID=42, t1, turnID="t_b"). **Forbidden final states**: zero refs, two refs (any combination), single ref with turnID="t_a" | F5 explicit no-dup / no-zero-ref / no-stale-turn guard | concurrency safety under turn changes |
-| 17 | opencode UserPromptSubmit (no codex turn_id in raw, AgentType=opencode) | attach via existing path | ref attached with SourceTurnID="" (provider fallback) | §2.5 opencode fallback unchanged |
+| 17 | parent cc + 0 refs, opencode UserPromptSubmit from PID=99, AgentType=opencode (no codex turn_id) | new lifecycle case **breaks early** at `req.AgentType == "codex"` gate (B2/v4) → falls through to existing post-switch SessionStart proxy fast-path which is gated to `LifecycleSessionStart` (`frame_ops.go:210`) → does NOT enter v3's new attach path → ref stays as whatever existing path produces (typically nothing, since fast-path's gate excludes UserPromptSubmit). **No SourceTurnID written.** | §2.5 opencode/cc unchanged isolation guard (B2/v4 fix verifies new case doesn't bleed into non-codex providers) |
 | 18 | cc Stop with no turn_id in raw, ref has empty SourceTurnID | wildcard detach via §3.3.D fallback | ref detached process-level | §2.5 cc fallback unchanged |
 | 19 | parent cc + 1 ref(PID=42, t1, turnID="t_a") | Stop from PID=42 with **stale SourceStartTime=t_OLD** (PID-reused scenario) | ref kept (SourceStartTime mismatch), trace `proxy_subagent_stop_no_match` | F7 PID-reuse safety |
 | 20 | parent cc + 0 refs | PreToolUse from PID=42 with no proxy parent in pane | trace `user_prompt_without_proxy_parent` (or PreToolUse equivalent), no attach | F4 no-parent fallback path |
@@ -281,12 +286,12 @@ Row 16 uses `sync.WaitGroup` + two goroutines + frame store fake mutex — same 
 |----|-------------|
 | **AC1** | Production code adds no new exported types. `SourceTurnID` is the only new exported API surface, as a field on existing `SubagentRef`. New helpers (`findProxyRefByBroker`, `upsertProxyRefForBroker`, `removeProxyRefForSenderTurn`, `detachProxyRefForSenderTurnWithRetry`, `parseCodexTurnID`) are unexported. Test-only helpers in `_test.go` are unrestricted. |
 | **AC2** | All 20 test rows in §5 pass, including row 16 concurrency assertions. |
-| **AC3** | All existing tests in `internal/module/agent/...` and `internal/agent/...` pass unchanged (test edits limited to the new test file, plus a JSON round-trip test for `SubagentRef` if one exists in `subagent_test.go`). |
+| **AC3** | Existing test edits are limited to: (a) `internal/agent/codex/events_test.go` for `PdxPreToolUse` lifecycle/handling fixture update, (b) `internal/agent/codex/status_test.go` (or equivalent) for new `PdxPreToolUse` derive case, (c) `internal/agent/subagent_test.go` (if exists) for `SubagentRef` JSON round-trip with `SourceTurnID`, (d) the new `frame_ops_test.go` matrix. All other tests pass unchanged. (M2/v4 fix — AC3 v3 wording was wrong; catalog change forces fixture updates.) |
 | **AC4** | `cd spa && pnpm run lint && pnpm run build` and `go build ./... && go test ./...` pass. Race tests (`go test -race ./internal/module/agent/...`) pass for the new test rows, especially row 16. |
-| **AC5** | Trace reason vocabulary stays additive; PR review must run `rg 'proxy_subagent_(detached|upserted|attached|stop)_on_(stop|user_prompt)|proxy_subagent_stop_(no_match|parse_failed)|user_prompt_without_proxy_parent'` and confirm only the §7-listed strings exist. |
+| **AC5** | Trace reason vocabulary stays additive. PR review must run this complete alternation `rg` and confirm matches are exactly the §7-listed reasons (N1/v4 fix — v3 substring pattern would over-match): `rg '"(proxy_subagent_attached\|proxy_subagent_detached\|proxy_subagent_detached_on_stop\|proxy_subagent_detached_on_stop_turn\|proxy_subagent_stop_no_match\|proxy_subagent_stop_parse_failed\|proxy_subagent_upserted_on_user_prompt\|proxy_subagent_attached_on_user_prompt\|user_prompt_without_proxy_parent)"' --type go` |
 | **AC6** | LOC bound: `frame_ops.go` change ≤ 280 lines including comments; new `raw_codex_event.go` ≤ 50 lines; catalog change in `events.go` ≤ 10 lines; new test ≤ 400 lines. Total PR diff ≤ 850 lines including spec + plan + tests. |
 | **AC7** | `SubagentRef` JSON round-trip preserves `SourceTurnID` when set, omits it when empty (`omitempty` semantics). |
-| **AC8** | `PdxPreToolUse` catalog change does not break existing `internal/agent/codex/` consumers — verify via `grep HookHandlingUnsupported` + `grep LifecycleNone` for any path that depends on PreToolUse being unhandled. |
+| **AC8** | `PdxPreToolUse` catalog change isolated to codex; cc/opencode unaffected. PR review must run: `rg 'PdxPreToolUse|HookHandlingUnsupported|LifecycleNone' internal/agent/codex internal/agent/cc internal/agent/opencode` and verify (a) cc's `PdxPreToolUse` (if present) is unchanged; (b) no consumer of codex `PdxPreToolUse` depends on it being `HookHandlingUnsupported` or `LifecycleNone` (M2/v4 fix — v3 grep was vague). |
 
 ## 9. Verification (post-merge live check)
 
