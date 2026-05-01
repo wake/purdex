@@ -1,6 +1,6 @@
 # W6-6 codex permission-reply ScreenChange ProbeIntent spec
 
-> **Status**：v6（J3 ship at alpha.281 後 update — reject race 由 dispatcher pre-grace 接管，A9/A10 為本 PR ship gate）。v5 contract 主軸不變：**2-phase + 2-case truth table contract** — Phase A 等 `ScreenStable`（pane 停下來進入穩定）/ Phase B 監控 `ScreenChanged` → emit-once；Phase A 失敗一律歸 case 2 by contract → 由 PdxStop hook 自然 cover，detector 不再嘗試補位。實作面 — `armed atomic.Bool`（Phase A→B 閘門）+ `emitted atomic.Bool` + `sync.Mutex`（取代 v4 sync.Once；修 round 4 F1）；isCodexAlive 用 `prober.FirstAliveAgentInTree(paneID)`（已用 ActivePanePID exact resolve；修 round 3 F3）；emit 前 mutex 內 double-check isCodexAlive（修 round 3 F2 race window）。撤掉 grace gate / `now func()` seam — Phase A 由 ScreenStable 自然 demarcate。**v6 update**：round 5 抓到的 reject path race 由 J3 PR #797 dispatcher 雙向 `probeIntentPreGraceWindow=300ms` + `classifyAsHookRace` helper 接管（per W6-3 §9.14 + fix-spec §3 generic-Kind 不特化原則）；本 PR detector 仍是 dumb emit；§0.5 + R14 + §8 anchor + A9/A10 mlab gate 落地。
+> **Status**：v6.1（J3 ship at alpha.281 後 update + round 6 P1 close-race fix）。v5 contract 主軸不變：**2-phase + 2-case truth table contract** — Phase A 等 `ScreenStable`（pane 停下來進入穩定）/ Phase B 監控 `ScreenChanged` → emit-once；Phase A 失敗一律歸 case 2 by contract → 由 PdxStop hook 自然 cover，detector 不再嘗試補位。實作面 — `armed atomic.Bool`（Phase A→B 閘門）+ `emitted atomic.Bool` + `sync.Mutex` + **`closed bool` mutex-protected**（v6.1 round 6 P1 fix — detector return 與 cb in-flight 互斥防 close-race）；isCodexAlive 用 `prober.FirstAliveAgentInTree(paneID)`（已用 ActivePanePID exact resolve；修 round 3 F3）；emit 前 mutex 內 double-check isCodexAlive（修 round 3 F2 race window）。撤掉 grace gate / `now func()` seam — Phase A 由 ScreenStable 自然 demarcate。**v6 update**：round 5 抓到的 reject path race 由 J3 PR #797 dispatcher 雙向 `probeIntentPreGraceWindow=300ms` + `classifyAsHookRace` helper 接管（per W6-3 §9.14 + fix-spec §3 generic-Kind 不特化原則）；本 PR detector 仍是 dumb emit；§0.5 + R14 + §8 anchor + A9/A10 mlab gate 落地。**v6.1 update**：round 6 P1 抓到 watchLoop callback inline sync call 與 wrap `close(out)` race；detector 內 mutex 加 `closed bool` flag 統一保護 close/send 互斥（§2.1 + §2.3 R15 + §4.3 + §6 P1-T2/T3）。
 >
 > **Spec evolution（progressive precision，per [feedback_meta_drift_progressive_precision]）**：v1 armed/ScreenStable → v2 emit-once + F1 re-arm → v3 retry-emit → v4 detector-grace + emit-once → **v5 2-phase contract** → **v6 (J3 ship at alpha.281) reject race 移交 dispatcher**。round 1-4 各打進不同邊界 race（quick-approval / fast-silent / long-dialog / fast-with-output），收斂方向是「同 area 修不同精度層次」非循環 drift；round 4 F2 已逼近物理約束（dialog 渲染 vs user-action 在 hash 層級無法區分），任何 detector-only 解法都會在另一邊界失效。v5 不再追求完美 detector 設計，把「無法判讀」明列為 by-contract limitation；reframe 後 detector 邏輯 ~25 行、無時間 const、無 grace gate、無 once-permanent-fired race。round 5 抓到 reject path race（armed=true 後 [2] 拒絕 → dialog 消失 ScreenChanged 與 PdxStop hook race） → user reframe 為**跨層 contract**：detector 仍是 dumb emit，dispatcher J3 雙向 graceWindow + `classifyAsHookRace` 處理 hook race（generic 對所有 ProbeIntent Kind 適用），與 W6-3 §9.14 anchor 對齊；boundary race acceptable as known limitation by R13/R14（fail-fast handling — A9 mlab gate 監控漏網率）。
 >
@@ -16,6 +16,7 @@
 > - Round 4 F2（fast-with-output source-drop 漏，high）→ ✅ closed by v5 contract（fast-with-output 屬 case 2 known limitation）
 > - Round 4 F3（§2.2 stale constraint，medium）→ ✅ fixed in v5（§2.2 重寫對齊 atomic.Bool/Mutex 結構）
 > - Round 5 F1（reject path race：armed=true 後 [2] 拒絕 ScreenChanged 與 PdxStop hook race，high）→ ✅ closed by v6 cross-layer contract（J3 PR #797 dispatcher 雙向 `probeIntentPreGraceWindow=300ms` + `classifyAsHookRace` cover；boundary race acceptable as known limitation by R14；A9 mlab gate 監控漏網率）
+> - Round 6 P1（detector return / cb in-flight close race：watchLoop callback 是 inline sync call 在 watchLoop goroutine 內，prober.StopWatch 不等 callback 完成；detector main goroutine ctx.Done exit → wrap goroutine `close(out)` 緊接，cb 仍可能在 mutex 內 select case `out <- sig:`，Go select 隨機選送 case 觸發 panic on closed channel）→ ✅ fixed in v6.1（detector 內加 `closed bool` mutex-protected；main goroutine return 前在 mutex 內 set closed=true；cb 進 mutex 第一 check `if closed { return }`；鎖序保證 close 與 send 互斥）
 >
 > **Worktree**：`.claude/worktrees/lights-w6-6-codex-screen-change` / branch `worktree-lights-w6-6-codex-screen-change`
 > **Base**：`origin/main` @ alpha.281（J3 PR #797 `56b3ba55` + bump #798 `5736f87e` 之後）
@@ -212,6 +213,7 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 | A-Lifecycle4 | armed=true 後 ctx cancel → main goroutine 從 `<-ctx.Done()` 返回 → StopWatch + return；callback 若 race fire 也走 mutex 內 ctx.Done 路徑（不 send-on-closed） |
 | A-Drift | drift test 通過：startDetector switch case 數量 == supportedKinds 條目數 == ProbeIntents 宣告 Kind 集合 |
 | A-NoSendOnClosed | dispatcher cancel ctx 期間 callback 在 mutex 內 select → ctx 路徑贏 → 不 send-on-closed-channel |
+| **A-NoCloseRace**（v6.1 round 6 P1 fix） | cb 與 detector return 互斥：(a) main goroutine ctx.Done exit → StopWatch → mu.Lock → closed=true → mu.Unlock → return；(b) wrap goroutine close(out)；(c) cb 已進 mutex 但尚未送 → 持鎖期間 main 等 mutex；cb 完成 send（out 仍未 close）→ 退鎖；main 才拿到 mutex；(d) 後續 watchLoop tick fire cb → 進 mutex 看 closed=true → 直接 return；**整個生命週期 0 panic on closed channel**（go test -race 全綠） |
 | A-mlab-1 | mlab live verify §1：codex permission ask → user 等 dialog 渲染完 ≥1.5s → 按 1 批准 → ≤500ms 內 ScreenChanged → emit → lights running ✓（case 1 happy path）|
 | A-mlab-2 | mlab live verify §2：codex permission ask → user 按 2 拒絕 → PdxStop hook fires → lights idle（不誤觸 running；典型路徑由 J3 dispatcher pre-grace cover） |
 | A-mlab-3 | mlab live verify §3：codex 在 waiting 時 user 主動關 pane → W6-4 ProcessDead PaneAlive=false → lights clear |
@@ -236,13 +238,14 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 - `screenWatcher` interface 是本 detector 包私有的 minimal contract，只暴露 `Watch(target, opts, cb)` + `StopWatch(target)` 兩個方法，**不直接 import `*probe.Prober`**——便於測試注入 fake，與 W6-3 `tmuxPaneLister` interface 同 pattern
 - detector 採 **2-phase + 2-case truth table contract**（v5）：
   - **Phase A（armed=false）**：等 `ScreenStable` event → `armed.Store(true)` → 進入 Phase B
-  - **Phase B（armed=true）**：每次 `ScreenChanged` callback → 若 `!armed.Load()` drop / 若 `!isCodexAlive()` drop / mutex 鎖內檢查 `emitted.Load()` + 第二次 `isCodexAlive()` 重驗 → `select case out<-sig: case <-ctx.Done():` 配 `emitted.Store(true)` + `close(emittedCh)`
-  - **main goroutine**：`select case <-emittedCh: case <-ctx.Done():` → `StopWatch(paneID)` + return
+  - **Phase B（armed=true）**：每次 `ScreenChanged` callback → 若 `!armed.Load()` drop / 若 `!isCodexAlive()` drop / mutex 鎖內**第一 check `if closed { return }`**（v6.1 round 6 P1 fix） / `emitted.Load()` 檢查 + 第二次 `isCodexAlive()` 重驗 → `select case out<-sig: case <-ctx.Done():` 配 `emitted.Store(true)` + `close(emittedCh)`
+  - **main goroutine**：`select case <-emittedCh: case <-ctx.Done():` → `StopWatch(paneID)` → **mutex 鎖內 set `closed=true`**（v6.1 round 6 P1 fix） → return
 - 用 `armed atomic.Bool` 作 Phase A→B 閘門（不用 mutex 因為 ScreenStable 是 monotonic：一旦 set true 永不回 false；多次 ScreenStable 重複 Store 是 idempotent）
 - 用 `emitted atomic.Bool` + `sync.Mutex` 作 emit-once（**不用 sync.Once**，因 sync.Once.Do 是 fire-and-forget 永久熔斷；transient `isCodexAlive=false` 不該永久熔斷，需 retry-able；修 round 4 F1）
+- 用 `closed bool`（**mutex-protected**，非 atomic）統一 detector return 與 cb in-flight 的互斥（v6.1 round 6 P1 fix — wrap goroutine `close(out)` 在 detector return 後執行；watchLoop callback 是 inline sync call 不會被 StopWatch 中斷，cb 與 close(out) 必須鎖序互斥；用 mutex-protected bool 而非 atomic 保證 cb 「進 mutex 第一 check closed」與 main 「set closed」之間的 happens-before）
 - emit 前在 mutex 鎖內**第二次** `isCodexAlive()` 重驗（防 first-check pass 與 emit 之間 paneID reuse race，修 round 3 F2）
 - callback 對非 `ScreenStable` / `ScreenChanged` Kind 直接 ignore
-- main goroutine `<-ctx.Done()` arm 必須在每個 case 後 `StopWatch` + return（避免 watcher leak）
+- main goroutine `<-ctx.Done()` arm 必須在每個 case 後 `StopWatch` + mutex 內 `closed=true` + return（避免 watcher leak + 防 close-race）
 - `Provider.ProbeIntents()` 回傳 slice 順序：`ProcessDead` 在前、`ScreenChange` 在後（穩定順序便於測試 fixture 對齊）
 
 ### 2.2 不可
@@ -277,6 +280,7 @@ waiting 狀態下，codex 退出 waiting 的所有路徑：
 | R12 | armed=true 後又 fire ScreenStable（screen 又穩定一次）| `armed.Store(true)` idempotent；後續 ScreenChanged 仍走 Phase B 流程不影響 |
 | R13 | dialog 渲染期間連發 ScreenChanged | armed=false → 全 drop；dialog 渲染穩定（連續 1.5s 同 hash）後 ScreenStable → armed=true → 後續 user-action ScreenChanged 才會被 Phase B 接收（v5 用 ScreenStable 取代 v4 grace gate；天然處理 long-dialog 與 dialog-noise）|
 | R14 | **Reject path race**：armed=true 後 user 按 [2] 拒絕 → dialog 消失發 ScreenChanged + PdxStop hook 同時往 daemon 走，極端時序 ScreenChanged 先到 → emit → status `waiting → running`，PdxStop 後到 → `running → idle` → lights 短暫閃 | **不在 detector 端處理**（per W6-3 §9.14 anchor + fix-spec §3）；J3 dispatcher 雙向 graceWindow（PR #797 ship at alpha.281）`consumeSignals` 進 `applyProbeGuards` 前 hold 300ms `probeIntentPreGraceWindow`；同 session hook 進來 → `classifyAsHookRace` → drop probe；其餘邊界（hook 在 hold 過後到 + step 2 read μs window）為 R13-style known limitation；**A9 quantified gate 30 次 reject 閃 < 3 為 ship 漏網率測試**（A9 fail 開 followup issue 加 per-event trace） |
+| R15 | **Detector return / cb in-flight close race**（round 6 P1 finding）：watchLoop callback 是 inline sync call 在 watchLoop goroutine 內，`prober.StopWatch(paneID)` 只 cancel watcher ctx 不等 callback 完成；detector main goroutine 從 `<-ctx.Done()` 退出 → wrap goroutine 緊接 `close(out)`；同時 cb 可能仍在 mutex 內 select case `out <- sig:`，Go select 在兩 case 都 ready 時隨機選 send case → panic on closed channel | **detector 內 mutex-protected `closed bool`** 統一保護：cb 進 mutex 第一 check `if closed { return }`；main goroutine 在 `StopWatch(paneID)` 後 `mu.Lock; closed=true; mu.Unlock`（在 return 之前）；鎖序保證 (a) main set closed → cb 後續不送、(b) cb 已進 mutex select case → main 等 mutex（此時 send 安全因 wrap 尚未 close out）；之後 wrap close(out) 與 cb 完全互斥 |
 
 ### 2.4 與 W6-3 spec drift signal 預警表的對照
 
@@ -352,7 +356,7 @@ func onScreenChange(sig agent.Signal) agent.Status {
 
 不檢 `PaneAlive`（語意上 ScreenChange Kind 必然 PaneAlive=true，detector contract 保證；額外 check 是 dead code 噪音）。
 
-### 4.3 Detector：`StartScreenChangeDetector`（v5，2-phase + 2-case truth table contract）
+### 4.3 Detector：`StartScreenChangeDetector`（v6.1，2-phase + 2-case truth table contract + close-race fix）
 
 ```go
 // internal/agent/codex/probe_intent_screen_change.go
@@ -435,6 +439,34 @@ const screenChangeTopLines = 10
 //         t, _, err := prober.FirstAliveAgentInTree(paneID)
 //         return err == nil && t == "codex"
 //     }
+//
+// Why mutex-protected closed bool (v6.1 round 6 P1 fix):
+//   The dispatcher wrap goroutine calls close(out) immediately after this
+//   detector returns. probe.Prober.Watch is fire-and-forget: callbacks run
+//   on the watchLoop goroutine, and prober.StopWatch only cancels the
+//   watcher's ctx — it does NOT wait for an in-flight callback to finish.
+//   That means a callback can be inside the `select case out <- sig:`
+//   below at exactly the moment the main goroutine returns and the wrap
+//   goroutine closes out. Go's select picks a ready case at random, so
+//   even when ctx.Done is also ready, the send case can be chosen and
+//   panic on the freshly closed channel.
+//
+//   Fix: the main goroutine sets a mutex-protected closed flag before
+//   returning. The callback's first action inside the mutex is `if
+//   closed { return }`. Lock ordering then guarantees:
+//     - if main has already set closed=true, the callback returns
+//       without entering the send select;
+//     - if the callback is already inside the send select, main is
+//       blocked on mu.Lock so out has not yet been closed (the wrap
+//       goroutine only closes out AFTER the main goroutine returns,
+//       which only happens AFTER mu.Unlock).
+//   Either branch makes close(out) and the send strictly disjoint.
+//
+//   atomic.Bool is insufficient here: a Load+Store pair around the
+//   send still admits a window where the callback observes closed=false
+//   then takes the send case, and the main goroutine's Store happens
+//   between. Mutex is the simplest construct that gives both parties a
+//   serialized critical section.
 func StartScreenChangeDetector(
     ctx context.Context,
     prober screenWatcher,
@@ -447,6 +479,7 @@ func StartScreenChangeDetector(
         armed     atomic.Bool
         emitted   atomic.Bool
         mu        sync.Mutex
+        closed    bool // protected by mu; set true by main goroutine before return
         emittedCh = make(chan struct{})
     )
     sig := agent.Signal{
@@ -477,6 +510,13 @@ func StartScreenChangeDetector(
             }
             mu.Lock()
             defer mu.Unlock()
+            if closed {
+                // v6.1 round 6 P1 fix: main goroutine has begun teardown
+                // and the wrap goroutine is about to close(out). Drop
+                // without entering the send select to avoid a panic on
+                // a closed channel.
+                return
+            }
             if emitted.Load() {
                 // Idempotent: another callback already emitted.
                 return
@@ -496,7 +536,9 @@ func StartScreenChangeDetector(
             case <-ctx.Done():
                 // ctx wins: emitted stays false, emittedCh stays open.
                 // The main goroutine's <-ctx.Done() arm handles
-                // teardown. No send-on-closed-channel risk.
+                // teardown. The mutex + closed handshake below ensures
+                // out is not yet closed at this point: the main
+                // goroutine is blocked on mu.Lock while we hold mu.
             }
         }
     }
@@ -506,6 +548,15 @@ func StartScreenChangeDetector(
     case <-ctx.Done():
     }
     prober.StopWatch(paneID)
+    // v6.1 round 6 P1 fix: serialize with any in-flight callback before
+    // returning. The wrap goroutine closes out immediately after this
+    // function returns; setting closed=true under mu means the next cb
+    // entry observes it and refuses to send, while a cb already inside
+    // mu finishes its send select with out still open (the wrap
+    // goroutine cannot close out until we unlock and return).
+    mu.Lock()
+    closed = true
+    mu.Unlock()
 }
 ```
 
@@ -585,8 +636,8 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 | Task | 檔案 | 內容 |
 |---|---|---|
 | P1-T1 | `internal/agent/provider.go` | 加 `ProbeIntentKindScreenChange` const + GoDoc |
-| P1-T2 | `internal/agent/codex/probe_intent_screen_change.go` | 新檔：`screenWatcher` interface + `screenChangeTopLines` const + `StartScreenChangeDetector(ctx, prober, isCodexAlive, paneID, senderPID, out)`（v5 — 不需 `now func()` time seam、不需 grace gate / mirror const）；內部用 `armed atomic.Bool` + `emitted atomic.Bool` + `sync.Mutex` + `emittedCh chan struct{}` |
-| P1-T3 | `internal/agent/codex/probe_intent_screen_change_test.go` | 表驅動 tests（覆蓋 v5 truth table）：(1) **A-Case1-Happy**：ScreenStable → ScreenChanged + alive=true → emit / (2) **Case2-NoStable**：armed=false 期間 ScreenChanged 多次 → 全 drop（無 emit、emittedCh 未 close）/ (3) **A-Case1-IdentityFalse**：Phase B + alive=false → drop（emitted 仍 false，可 retry）/ (4) **A-Case1-IdentityRace**：first check true、mutex 內 second check false → 不 emit、emitted 仍 false / (5) **A-Case1-MultipleChanges**：Phase B 多次 ScreenChanged + alive=true → 只 emit 一次（mutex 內 emitted check）/ (6) **ScreenStable idempotent**：多次 ScreenStable → armed 持續 true，無副作用 / (7) **retry after transient false**：alive=false drop → 後續 alive 恢復 true → ScreenChanged → 成功 emit（修 round 4 F1 — sync.Once 永久熔斷不會發生）/ (8) ctx cancel before ScreenStable → main goroutine `<-ctx.Done()` → StopWatch + return / (9) ctx cancel during emit select → ctx.Done 贏 → emitted 不 store、emittedCh 不 close（不 send-on-closed）/ (10) other ScreenChangeKind ignored |
+| P1-T2 | `internal/agent/codex/probe_intent_screen_change.go` | 新檔：`screenWatcher` interface + `screenChangeTopLines` const + `StartScreenChangeDetector(ctx, prober, isCodexAlive, paneID, senderPID, out)`（v6.1 — 不需 `now func()` time seam、不需 grace gate / mirror const）；內部用 `armed atomic.Bool` + `emitted atomic.Bool` + `sync.Mutex` + `closed bool`（mutex-protected，v6.1 round 6 P1 close-race fix）+ `emittedCh chan struct{}`；main goroutine return 前 mutex 鎖內 set closed=true |
+| P1-T3 | `internal/agent/codex/probe_intent_screen_change_test.go` | 表驅動 tests（覆蓋 v6.1 truth table + close-race fix）：(1) **A-Case1-Happy**：ScreenStable → ScreenChanged + alive=true → emit / (2) **Case2-NoStable**：armed=false 期間 ScreenChanged 多次 → 全 drop（無 emit、emittedCh 未 close）/ (3) **A-Case1-IdentityFalse**：Phase B + alive=false → drop（emitted 仍 false，可 retry）/ (4) **A-Case1-IdentityRace**：first check true、mutex 內 second check false → 不 emit、emitted 仍 false / (5) **A-Case1-MultipleChanges**：Phase B 多次 ScreenChanged + alive=true → 只 emit 一次（mutex 內 emitted check）/ (6) **ScreenStable idempotent**：多次 ScreenStable → armed 持續 true，無副作用 / (7) **retry after transient false**：alive=false drop → 後續 alive 恢復 true → ScreenChanged → 成功 emit（修 round 4 F1 — sync.Once 永久熔斷不會發生）/ (8) ctx cancel before ScreenStable → main goroutine `<-ctx.Done()` → StopWatch + closed=true + return / (9) ctx cancel during emit select → ctx.Done 贏 → emitted 不 store、emittedCh 不 close / (10) other ScreenChangeKind ignored / (11) **A-NoCloseRace**（v6.1 round 6 P1 fix verify）：cb 進 mutex 走到 closed flag check 之前，main goroutine ctx cancel + StopWatch + 等 mutex；cb 完成 send（out 未 close）→ 退出 mutex；main 拿 mutex set closed → return；wrap close(out) 之後 cb 再次進 mutex 看 closed=true 直接 return（用 fake watcher 模擬 callback 序列化 + go test -race 驗證）|
 | P1-T4 | `internal/agent/codex/provider.go` | `ProbeIntents()` 加第二筆 + 新 `onScreenChange` mapper |
 | P1-T5 | `internal/agent/codex/provider_test.go` | 擴 fixture：ProbeIntents 長度 2、第二筆 Kind/OnEntryStatus/OnSignal 對齊；onScreenChange 三 case（match→Running / 非 ScreenChange Kind→"" / nil → ""） |
 
@@ -609,7 +660,7 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 
 ## 7. 驗收條件（重述 §1.3 Acceptance）
 
-- `A-Case1-*` + `A-Case2-*` + `A-Lifecycle*` + `A-Drift` + `A-NoSendOnClosed` unit + integration test 全綠
+- `A-Case1-*` + `A-Case2-*` + `A-Lifecycle*` + `A-Drift` + `A-NoSendOnClosed` + `A-NoCloseRace`（v6.1 round 6 P1 fix）unit + integration test 全綠
 - `A-mlab-1` / `A-mlab-2` / `A-mlab-3` mlab live verify 全 PASS；`A-mlab-4`（case 2 known limitation 觀察）by-contract 預期 lights waiting → idle 跳過 running phase（非 bug，PR body §test plan 預先標註）
 - `go test ./...` 24 packages 全綠
 - `go test -race ./internal/agent/codex/... ./internal/module/agent/...` 全綠
@@ -644,6 +695,9 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 | 想為 ScreenChange Kind 特化 pre-grace timer（如只對 ScreenChange hold 300ms / ProcessDead 不 hold） | **與 W6-3 §9.14 anchor 對齊** — J3 PR #797（spec `2026-05-01-probe-intent-bidirectional-grace-window-spec.md`）已確立 pre-grace timer 在 dispatcher `consumeSignals` 內 generic 對所有 ProbeIntent Kind 適用（per fix-spec §3 不為單一 Kind 特化約束）；W6-3 ProcessDead 也撞 hook race，dispatcher generic 處理一次到位；本 PR 不在 detector 端加 pre-hold；hook race protection 由 J3 dispatcher 接管，detector 仍是 dumb emit |
 | 想在 W6-6 detector 內加 reject path race 處理（pre-emit confirm rollback / post-emit retract / probe-side hold）| §0.5 + R14 已明訂：reject race 由 J3 dispatcher pre-grace + `classifyAsHookRace` cover；detector 不知道 hook 有沒有要進來、不應做時間判斷（與 v5 contract「detector 不需時間判斷」牴觸）；boundary race acceptable as known limitation by R13/R14 fail-fast handling（A9 mlab gate 監控漏網率）|
 | 想把 J3 spec `probeIntentPreGraceWindow=300ms` 改名 / 改值 / 加新 const for ScreenChange | J3 已 ship at alpha.281 為 dispatcher 跨 Kind 通用 const；W6-6 不動 J3 contract（per W6-3 §9.14）；若改值需走獨立 J3 後續 spec，不在本 PR scope |
+| 想拿掉 mutex-protected `closed bool` flag（改回 v5 「不需要額外 close 同步」）| v6.1 round 6 P1 finding 已驗證：watchLoop callback 是 inline sync call 在 watchLoop goroutine 內，prober.StopWatch 不等 callback 完成；wrap goroutine close(out) 緊接 detector return 而 cb 仍可能在 select case `out <- sig:` 內，Go select 隨機選送 case → panic on closed channel。closed flag 是必要的鎖序保證 |
+| 想用 atomic.Bool 取代 mutex-protected `closed bool` | atomic.Bool Load/Store 之間仍有 window：cb load closed=false → cb 進 select case → main store closed=true → wrap close(out) → cb 仍可能 panic。mutex 給 cb 與 main 序列化 critical section，是 race-free 的唯一簡單做法 |
+| 想改 Prober.StopWatch 為 sync 等 watchLoop 結束 | 需動 probe primitive，影響 sweep / orchestrator 既有 caller；scope 越界。W6-6 detector 內加 closed flag 是局部 fix，scope 對齊本 PR |
 
 ---
 
