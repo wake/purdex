@@ -41,17 +41,22 @@ func reconcile(
 	stateC []stateCandidate,
 	socketC []socketCandidate,
 ) ([]BrokerRecord, []Anomaly) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil
-	}
 	if cwdStatBudget <= 0 {
 		cwdStatBudget = 50 * time.Millisecond
 	}
 
 	// Index state candidates by Key. A given key may map to one state dir.
 	stateByKey := make(map[string]*stateCandidate, len(stateC))
+	stateBySocketDir := make(map[string]*stateCandidate, len(stateC)) // for canonical-key reverse lookup
 	for i := range stateC {
-		stateByKey[stateC[i].Key] = &stateC[i]
+		sc := &stateC[i]
+		stateByKey[sc.Key] = sc
+		// broker.json.SessionDir points at the cxc-* socket directory; this
+		// is the only authoritative way to recover canonical brokerKey when
+		// a socket is observed without a live process (spec §3.2 / §4.2).
+		if sc.BrokerJSON.SessionDir != "" {
+			stateBySocketDir[sc.BrokerJSON.SessionDir] = sc
+		}
 	}
 
 	// Index process candidates by PID for socket lookup. Identity is
@@ -182,8 +187,10 @@ func reconcile(
 
 		// Cwd-existence classification. Skip when we don't have a meaningful
 		// path (e.g. argv truncated, no cwd at all). Bounded by cwdStatBudget
-		// so a stale NFS / sshfs mount doesn't block the whole scan.
-		classifyCwd(fs, &rec, cwdStatBudget)
+		// so a stale NFS / sshfs mount doesn't block the whole scan, and
+		// short-circuited if scanCtx already expired (so N records × budget
+		// can't cumulatively exceed TotalDeadline).
+		classifyCwd(ctx, fs, &rec, cwdStatBudget)
 
 		out = append(out, rec)
 	}
@@ -214,12 +221,17 @@ func reconcile(
 		if mergedSockets[s.SockDir] {
 			continue
 		}
-		key := s.SyntheticKey
-		if key == "" {
-			key = "unknown:" + synthSocketKey(s.SockDir)
+		// Canonical brokerKey reverse lookup (spec §3.2 / §4.2): if any
+		// state-dir's broker.json.sessionDir points at this socket dir,
+		// reuse that state-dir's brokerKey so P2 sweep / quarantine can
+		// keyed-correlate without falling back to a synthetic.
+		var key string
+		if sc, ok := stateBySocketDir[s.SockDir]; ok {
+			key = sc.Key
+		} else if s.SyntheticKey != "" {
+			key = "unknown:" + s.SyntheticKey
 		} else {
-			// Mark as unknown unless a state dir resolved to the same key.
-			key = "unknown:" + key
+			key = "unknown:" + synthSocketKey(s.SockDir)
 		}
 		rec := BrokerRecord{
 			Key:       key,
@@ -248,10 +260,26 @@ func canonicalCwdForCollision(p *processCandidate) string {
 // fs.Stat. ENOENT → cwd_missing; everything else → cwd_transient_stat_error.
 //
 // fs.Stat is invoked in a goroutine so a stale NFS / sshfs mount can't block
-// the whole scan. If budget elapses before Stat returns, the cwd is marked
-// transient (not missing) and the goroutine is left to drain on its own —
-// see spec §8 (per-dir goroutine leak risk under hung syscalls).
-func classifyCwd(fs FS, rec *BrokerRecord, budget time.Duration) {
+// the whole scan. Three exit paths from the select:
+//
+//	(a) Stat returns within budget → classify normally.
+//	(b) Per-cwd budget elapses → cwd_transient_stat_error (timeout).
+//	(c) Outer scan ctx expires before either of the above → mark
+//	    `ctx_canceled` and return without anomaly. This is what
+//	    bounds the cumulative budget at the scan level: even if 60
+//	    cwds individually each have 50ms budget, once TotalDeadline
+//	    fires the rest of them short-circuit immediately.
+//
+// In all three cases the spawned goroutine is left to drain when fs.Stat
+// finally returns — see spec §8 (per-dir goroutine leak risk under truly-
+// hung syscalls). This is a known macOS/Linux limitation: Go cannot cancel
+// a syscall in flight; the only complete fix is at the kernel/runtime layer.
+func classifyCwd(ctx context.Context, fs FS, rec *BrokerRecord, budget time.Duration) {
+	if ctx.Err() != nil {
+		rec.CwdExists = false
+		rec.CwdStatErr = "ctx_canceled"
+		return
+	}
 	target := rec.CwdResolved
 	if target == "" {
 		target = rec.Cwd
@@ -279,6 +307,10 @@ func classifyCwd(fs FS, rec *BrokerRecord, budget time.Duration) {
 			Code:   AnomalyCwdTransientStatError,
 			Detail: fmt.Sprintf("os.Stat(%q): exceeded %s budget", target, budget),
 		})
+		return
+	case <-ctx.Done():
+		rec.CwdExists = false
+		rec.CwdStatErr = "ctx_canceled"
 		return
 	}
 	if err == nil {

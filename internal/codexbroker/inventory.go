@@ -68,7 +68,7 @@ type Result struct {
 	// BrokerRecord home (e.g. a malformed broker.json in a state dir we
 	// otherwise skip, or a glob root that errored). They are surfaced
 	// here so they don't disappear from the API contract.
-	TopAnomalies []Anomaly     `json:"topAnomalies,omitempty"`
+	TopAnomalies []Anomaly     `json:"topAnomalies"`
 	Summary      ResultSummary `json:"summary"`
 }
 
@@ -90,24 +90,53 @@ func (s *Scanner) Scan(ctx context.Context) (*Result, error) {
 }
 
 // scanOnce is the actual scan body.
+//
+// Spec §4.3 503 contract: a 503 is only emitted when ps is unavailable AND
+// state-dir + socket scans also produce no inventory. If ps fails but state
+// or socket data exist, we return 200 with `partial=true` and a
+// `process` entry in `scanSourceTimeouts` so the operator can see the
+// degradation while still consuming the partial inventory.
 func (s *Scanner) scanOnce(ctx context.Context) (*Result, error) {
 	scanStart := time.Now()
 	scanCtx, cancel := context.WithTimeout(ctx, s.opts.TotalDeadline)
 	defer cancel()
 
-	// 1. Process scan must finish first; reconcile and socket merge depend
-	//    on its output. ErrPsUnavailable when ps cannot be invoked at all.
-	processC, err := scanProcesses(scanCtx, s.opts.Lister, s.opts.FS)
-	if err != nil {
-		// Distinguish "ctx deadline" from "ps not found".
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			// ps timed out → partial scan with an empty process layer.
-			return s.assembleResult(scanStart, processC, nil, nil, []string{"process"}, true), nil
+	var (
+		processC []processCandidate
+		timeouts []string
+		partial  bool
+		psErr    error // non-ctx ps failure; remembered for possible 503 fallback below.
+	)
+
+	// 1. Process scan. We classify three outcomes:
+	//    a) success            → processC populated.
+	//    b) ctx deadline/canceled → empty processC, partial=true, "process" in timeouts.
+	//    c) other error (ps not found, exec failure) → remember psErr,
+	//       partial=true; continue to state/socket so the API can still
+	//       return whatever inventory is reachable.
+	pc, err := scanProcesses(scanCtx, s.opts.Lister, s.opts.FS)
+	switch {
+	case err == nil:
+		processC = pc
+		// Race-5 fix: lister returned (rows, nil) but the scan ctx is
+		// already done (e.g. a custom lister that ignores ctx). Treat
+		// as a process timeout so partial flag reflects reality.
+		if scanCtx.Err() != nil {
+			timeouts = append(timeouts, "process")
+			partial = true
 		}
-		return nil, fmt.Errorf("%w: %v", ErrPsUnavailable, err)
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		timeouts = append(timeouts, "process")
+		partial = true
+	default:
+		psErr = err
+		timeouts = append(timeouts, "process")
+		partial = true
 	}
 
 	// 2. State and socket scans in parallel under remaining budget.
+	//    These run regardless of ps outcome so a ps failure can be
+	//    answered with whatever inventory is still reachable.
 	type stateResult struct {
 		cands []stateCandidate
 		anoms []Anomaly
@@ -133,8 +162,6 @@ func (s *Scanner) scanOnce(ctx context.Context) (*Result, error) {
 		stateAnoms  []Anomaly
 		socketCands []socketCandidate
 		socketAnoms []Anomaly
-		timeouts    []string
-		partial     bool
 	)
 
 	stateDone := false
@@ -163,6 +190,12 @@ func (s *Scanner) scanOnce(ctx context.Context) (*Result, error) {
 		}
 	}
 
+	// 503 fallback: only when ps was unavailable AND there is no
+	// state/socket data either, do we admit total failure.
+	if psErr != nil && len(stateC) == 0 && len(socketCands) == 0 {
+		return nil, fmt.Errorf("%w: %v", ErrPsUnavailable, psErr)
+	}
+
 	// 3. Reconcile.
 	records, reconcileTopAnoms := reconcile(scanCtx, s.opts.FS, s.opts.CwdStatBudget, processC, stateC, socketCands)
 
@@ -174,18 +207,27 @@ func (s *Scanner) scanOnce(ctx context.Context) (*Result, error) {
 	topAnoms = append(topAnoms, socketAnoms...)
 	topAnoms = append(topAnoms, reconcileTopAnoms...)
 
-	return s.assembleResult(scanStart, processC, records, topAnoms, timeouts, partial), nil
+	return s.assembleResult(scanStart, records, topAnoms, timeouts, partial), nil
 }
 
 // assembleResult materialises the Result from the per-stage outputs.
 func (s *Scanner) assembleResult(
 	scanStart time.Time,
-	processC []processCandidate,
 	records []BrokerRecord,
 	topAnoms []Anomaly,
 	timeouts []string,
 	partial bool,
 ) *Result {
+	// Always emit empty slices, never nil, so JSON consumers see [] consistently.
+	if records == nil {
+		records = []BrokerRecord{}
+	}
+	if timeouts == nil {
+		timeouts = []string{}
+	}
+	if topAnoms == nil {
+		topAnoms = []Anomaly{}
+	}
 	res := &Result{
 		ScannedAt:      scanStart.UTC(),
 		ScanDurationMs: time.Since(scanStart).Milliseconds(),
@@ -217,7 +259,5 @@ func (s *Scanner) assembleResult(
 			}
 		}
 	}
-	// Avoid unused-warnings on processC when reconcile already ate it.
-	_ = processC
 	return res
 }

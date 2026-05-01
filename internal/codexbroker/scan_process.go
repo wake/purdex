@@ -2,7 +2,6 @@ package codexbroker
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 )
@@ -111,11 +110,6 @@ func scanProcesses(ctx context.Context, lister ProcessLister, fs FS) ([]processC
 		}
 
 		out = append(out, c)
-	}
-	if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		// Context exceeded mid-loop after lister already returned: caller
-		// can decide whether to treat as partial. We surface as a
-		// non-error result here; orchestrator wraps timing.
 	}
 	return out, nil
 }

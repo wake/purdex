@@ -80,8 +80,37 @@ func TestScanner_PartialOnTimeout(t *testing.T) {
 	}
 }
 
-// TestScanner_PsFailureProducesSentinelError: lister error → ErrPsUnavailable.
-func TestScanner_PsFailureProducesSentinelError(t *testing.T) {
+// TestScanner_PsFailureWithEmptyState_503: lister error AND no state/socket
+// inventory → ErrPsUnavailable (HTTP 503).
+//
+// Per spec §4.3, 503 is only emitted when the entire inventory cannot be
+// produced. With no PluginDataRoot/SocketRoots set, state-dir + socket
+// scans return empty, so a ps failure is total failure.
+func TestScanner_PsFailureWithEmptyState_503(t *testing.T) {
+	emptyDir := t.TempDir() // empty plugin-data root
+	lister := NewFakeProcessLister(nil).WithError(errors.New("ps not found"))
+	s := NewScanner(ScannerOpts{
+		FS:              NewOsFS(),
+		Lister:          lister,
+		PluginDataRoot:  emptyDir,
+		SocketRoots:     []string{emptyDir},
+		TotalDeadline:   800 * time.Millisecond,
+		StateDirBudget:  100 * time.Millisecond,
+		SocketDirBudget: 50 * time.Millisecond,
+	})
+	_, err := s.Scan(context.Background())
+	if !errors.Is(err, ErrPsUnavailable) {
+		t.Errorf("expected ErrPsUnavailable, got %v", err)
+	}
+}
+
+// TestScanner_PsFailureWithStateData_200Partial: lister error AND state-dir
+// scan produces inventory → 200 partial (not 503).
+//
+// Per spec §4.3 / R2 review API-7: a ps failure must NOT prevent returning
+// whatever inventory state-dir / socket scans can still observe. The
+// degradation surfaces via partial=true and "process" in scanSourceTimeouts.
+func TestScanner_PsFailureWithStateData_200Partial(t *testing.T) {
 	stateAbs, _ := filepath.Abs(filepath.Join("testdata", "state"))
 	cxcAbs, _ := filepath.Abs(filepath.Join("testdata", "cxc"))
 	lister := NewFakeProcessLister(nil).WithError(errors.New("ps not found"))
@@ -94,9 +123,26 @@ func TestScanner_PsFailureProducesSentinelError(t *testing.T) {
 		StateDirBudget:  100 * time.Millisecond,
 		SocketDirBudget: 50 * time.Millisecond,
 	})
-	_, err := s.Scan(context.Background())
-	if !errors.Is(err, ErrPsUnavailable) {
-		t.Errorf("expected ErrPsUnavailable, got %v", err)
+	res, err := s.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error (200 partial), got %v", err)
+	}
+	if !res.Partial {
+		t.Errorf("expected partial=true, got false")
+	}
+	foundProcessTimeout := false
+	for _, t := range res.Summary.ScanSourceTimeouts {
+		if t == "process" {
+			foundProcessTimeout = true
+			break
+		}
+	}
+	if !foundProcessTimeout {
+		t.Errorf("expected scanSourceTimeouts to contain \"process\", got %v",
+			res.Summary.ScanSourceTimeouts)
+	}
+	if len(res.Brokers) == 0 {
+		t.Errorf("expected non-empty brokers from state-dir/socket fallback, got 0")
 	}
 }
 

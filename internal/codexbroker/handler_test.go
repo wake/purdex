@@ -92,18 +92,17 @@ func TestHandler_Method_405(t *testing.T) {
 	}
 }
 
-// TestHandler_PsFailure_503 verifies that an ErrPsUnavailable from the Scanner
-// produces a 503 with a structured error body. AC9 carve-out: 503 only when ps
-// cannot be invoked at all.
+// TestHandler_PsFailure_503 verifies that ErrPsUnavailable from the Scanner
+// (i.e. ps fail AND no state/socket inventory available) produces a 503 with
+// a structured error body. Per spec §4.3 + R2 API-7 fix.
 func TestHandler_PsFailure_503(t *testing.T) {
-	stateAbs, _ := filepath.Abs(filepath.Join("testdata", "state"))
-	cxcAbs, _ := filepath.Abs(filepath.Join("testdata", "cxc"))
+	emptyDir := t.TempDir() // forces state/socket scans to be empty
 	lister := NewFakeProcessLister(nil).WithError(errors.New("ps not found"))
 	scanner := NewScanner(ScannerOpts{
 		FS:              NewOsFS(),
 		Lister:          lister,
-		PluginDataRoot:  stateAbs,
-		SocketRoots:     []string{cxcAbs},
+		PluginDataRoot:  emptyDir,
+		SocketRoots:     []string{emptyDir},
 		TotalDeadline:   800 * time.Millisecond,
 		StateDirBudget:  100 * time.Millisecond,
 		SocketDirBudget: 50 * time.Millisecond,
