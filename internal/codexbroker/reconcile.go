@@ -62,7 +62,7 @@ func reconcile(
 		processByKey[processC[i].Key] = append(processByKey[processC[i].Key], &processC[i])
 	}
 
-	used := make(map[string]bool) // state keys consumed by a process record.
+	used := make(map[string]bool)  // state keys consumed by a process record.
 	usedPIDs := make(map[int]bool) // process PIDs whose socket was merged.
 
 	// Track which sockets we've already merged into a process record.
