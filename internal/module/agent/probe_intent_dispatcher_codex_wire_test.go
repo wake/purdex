@@ -7,14 +7,28 @@
 // via its public test seams (codex.SetIsPidAliveFnForTest +
 // codex.SetProcessDeadPollIntervalForTest) so the codex package's
 // detector goroutine actually runs end-to-end.
+//
+// W6-6 P2-T3: extends with a ScreenChange wire test that drives
+// codex.StartScreenChangeDetector via a fake screenWatcher. The
+// production switch resolves prober.FirstAliveAgentInTree which
+// requires a live *probe.Prober + tmux backend; instead the wire
+// test swaps probeIntentDisp.startDetector to a closure that calls
+// the real codex.StartScreenChangeDetector with a fake watcher and a
+// scripted isCodexAlive — so the dispatcher pipeline (lifecycle,
+// supportedKinds gate, applyProbeGuards, consumeSignals teardown)
+// runs end-to-end against the real detector.
 package agent
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/agent/codex"
+	"github.com/wake/purdex/internal/agent/probe"
+	"github.com/wake/purdex/internal/store"
 )
 
 // installCodexDetectorSeams installs the codex test seams (fast poll +
@@ -170,4 +184,212 @@ func getFakeTmux(t *testing.T, m *Module) (interface {
 	}
 	s, ok := m.tmux.(setter)
 	return s, ok
+}
+
+// fakeScreenWatcher implements the codex package's screenWatcher
+// contract (Watch + StopWatch) for the W6-6 ScreenChange wire test.
+// Watch records the registered callback so the test can fire
+// ScreenChangeEvent values synchronously; StopWatch records the
+// teardown call so the test can verify the active entry is properly
+// torn down.
+//
+// Lives in the dispatcher test package because the codex package's
+// screenWatcher interface is unexported — Go's structural typing lets
+// any matching method-set satisfy it from outside the package.
+type fakeScreenWatcher struct {
+	mu        sync.Mutex
+	cb        probe.ScreenChangeCallback
+	watchedTo string
+	opts      probe.WatchOptions
+	stopCalls []string
+}
+
+func (f *fakeScreenWatcher) Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cb = cb
+	f.watchedTo = target
+	f.opts = opts
+}
+
+func (f *fakeScreenWatcher) StopWatch(target string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopCalls = append(f.stopCalls, target)
+}
+
+func (f *fakeScreenWatcher) fire(ev probe.ScreenChangeEvent) {
+	f.mu.Lock()
+	cb := f.cb
+	f.mu.Unlock()
+	if cb == nil {
+		return
+	}
+	cb(ev)
+}
+
+func (f *fakeScreenWatcher) hasCallback() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cb != nil
+}
+
+func (f *fakeScreenWatcher) stopCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.stopCalls)
+}
+
+// screenChangeIntent is the canonical W6-6 ProbeIntent declaration
+// used in dispatcher tests. OnEntryStatus = {Waiting}; OnSignal mirrors
+// the production codex onScreenChange mapper (Kind=ScreenChange →
+// Running).
+func screenChangeIntent() agentpkg.ProbeIntent {
+	return agentpkg.ProbeIntent{
+		Kind:          agentpkg.ProbeIntentKindScreenChange,
+		OnEntryStatus: []agentpkg.Status{agentpkg.StatusWaiting},
+		OnSignal: func(sig agentpkg.Signal) agentpkg.Status {
+			if sig.Kind != agentpkg.ProbeIntentKindScreenChange {
+				return ""
+			}
+			return agentpkg.StatusRunning
+		},
+	}
+}
+
+// installScreenChangeWiring swaps probeIntentDisp.startDetector to a
+// closure that routes ScreenChange to codex.StartScreenChangeDetector
+// using the supplied fakeScreenWatcher + isCodexAlive. ProcessDead
+// continues to route to the standard codex detector (using m.tmux) so
+// existing dispatcher invariants stay covered.
+//
+// supportedKinds is set to {ProcessDead, ScreenChange} so the
+// lifecycle's audit-F6 fail-closed branch does NOT trip when the
+// dispatcher arms a ScreenChange entry.
+func installScreenChangeWiring(t *testing.T, m *Module, fw *fakeScreenWatcher, isCodexAlive func() bool) {
+	t.Helper()
+	m.probeIntentDisp.startDetector = func(ctx context.Context, mod *Module, kind agentpkg.ProbeIntentKind, paneID string, senderPID int, out chan<- agentpkg.Signal) {
+		switch kind {
+		case agentpkg.ProbeIntentKindProcessDead:
+			codex.StartProcessDeadDetector(ctx, mod.tmux, paneID, senderPID, out)
+		case agentpkg.ProbeIntentKindScreenChange:
+			codex.StartScreenChangeDetector(ctx, fw, isCodexAlive, paneID, senderPID, out)
+		default:
+			defaultStartProbeIntentDetector(ctx, mod, kind, paneID, senderPID, out)
+		}
+	}
+	m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
+		agentpkg.ProbeIntentKindProcessDead:  {},
+		agentpkg.ProbeIntentKindScreenChange: {},
+	}
+	t.Cleanup(func() { m.probeIntentDisp.stopAll() })
+}
+
+// TestDispatcher_CodexScreenChangeWire_WaitingToRunning drives the W6-6
+// ScreenChange path end-to-end through the dispatcher pipeline:
+//
+//  1. Register a fake codex provider that declares both ProcessDead +
+//     ScreenChange intents.
+//  2. Install custom startDetector wiring that routes ScreenChange to
+//     codex.StartScreenChangeDetector with a fakeScreenWatcher.
+//  3. applyStatus(Waiting) — dispatcher arms BOTH intents (ProcessDead
+//     gates on {Running, Waiting}; ScreenChange gates on {Waiting}).
+//  4. Assert fakeScreenWatcher has registered a callback (detector
+//     entered Phase A).
+//  5. Fire ScreenStable then ScreenChanged — detector emits Signal.
+//  6. consumeSignals applies the signal, status flips to Running,
+//     re-runs applyStatus(Running) which tears down the ScreenChange
+//     entry (case 3: Running ∉ {Waiting}).
+//  7. ScreenChange detector ctx is cancelled → StopWatch called.
+func TestDispatcher_CodexScreenChangeWire_WaitingToRunning(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	m.sessions = &fakeSessionProvider{}
+
+	// Replace the default fakeProbeIntentAgentProvider (registered by
+	// newDispatcherTestModule with only ProcessDead) so the codex test
+	// provider declares BOTH intents.
+	m.registry = agentpkg.NewRegistry()
+	m.registry.Register(&fakeProbeIntentAgentProvider{
+		fakeAgentProvider: fakeAgentProvider{typeName: "codex"},
+		intents:           []agentpkg.ProbeIntent{processDeadIntent(), screenChangeIntent()},
+	})
+
+	// Avoid the ProcessDead detector emitting (would race with our
+	// ScreenChange test by flipping currentStatus to Error).
+	t.Cleanup(codex.SetProcessDeadPollIntervalForTest(50 * time.Millisecond))
+	t.Cleanup(codex.SetIsPidAliveFnForTest(func(int) bool { return true }))
+
+	if fake, ok := getFakeTmux(t, m); ok {
+		fake.SetPanes([]string{"%5"})
+	}
+
+	fw := &fakeScreenWatcher{}
+	installScreenChangeWiring(t, m, fw, func() bool { return true })
+
+	// Seed Waiting state — applyStatus(Waiting) is the natural entry
+	// for ScreenChange (per spec §4.1: OnEntryStatus = {Waiting}).
+	seedWaitingFrame(t, m, "work", "%5", "codex", 4242)
+
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusWaiting)
+
+	// Wait for the ScreenChange detector to call Watch (registers cb).
+	waitFor(t, time.Second, fw.hasCallback, "fake screenWatcher received Watch")
+
+	// Verify the active entry exists for ScreenChange.
+	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindScreenChange); !ok {
+		t.Fatalf("ScreenChange active entry not present after applyStatus(Waiting)")
+	}
+
+	// Phase A → B: ScreenStable arms the detector.
+	fw.fire(probe.ScreenChangeEvent{Kind: probe.ScreenStable})
+	// Phase B emit: ScreenChanged + isCodexAlive=true → emit Signal.
+	fw.fire(probe.ScreenChangeEvent{Kind: probe.ScreenChanged})
+
+	// applyProbeGuards routes the Signal through the J3 pre-grace
+	// (300ms) — wait long enough for the consumeSignals path to
+	// complete.
+	waitFor(t, 2*time.Second, func() bool {
+		m.mu.Lock()
+		st := m.currentStatus["work"]
+		m.mu.Unlock()
+		return st == agentpkg.StatusRunning
+	}, "currentStatus flipped to Running after ScreenChange Signal")
+
+	// 5-case lifecycle: status=Running → ScreenChange OnEntryStatus
+	// no longer matches → entry teardown via consumeSignals re-runs
+	// applyStatus(Running).
+	waitFor(t, 2*time.Second, func() bool {
+		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindScreenChange)
+		return !ok
+	}, "ScreenChange active entry torn down after Running")
+
+	// StopWatch called as part of detector return + dispatcher
+	// reconcile.
+	waitFor(t, 2*time.Second, func() bool {
+		return fw.stopCallCount() >= 1
+	}, "fake screenWatcher.StopWatch called")
+}
+
+// seedWaitingFrame mirrors seedRunningFrame but sets Status =
+// StatusWaiting on both the frame projection and currentStatus. Used
+// by the ScreenChange wire test (W6-6 OnEntryStatus = {Waiting}).
+func seedWaitingFrame(t *testing.T, m *Module, session, paneID, agentType string, pid int) {
+	t.Helper()
+	if _, err := m.frames.Upsert(store.Frame{
+		FrameID:          "frame-" + session + "-" + agentType,
+		PaneID:           paneID,
+		AgentType:        agentType,
+		PID:              pid,
+		PPID:             1,
+		ProcessStartTime: "Sun Apr 20 01:30:00 2026",
+		Status:           agentpkg.StatusWaiting,
+		StartedAt:        100,
+		LastSeenAt:       120,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("seed waiting frame: %v", err)
+	}
+	m.mu.Lock()
+	m.currentStatus[session] = agentpkg.StatusWaiting
+	m.mu.Unlock()
 }
