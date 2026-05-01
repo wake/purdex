@@ -1,6 +1,6 @@
 # Probe Intent bidirectional graceWindow spec
 
-> **Status**：v1（draft；待派 codex round 1 standard review）。將既有 `probeGraceWindow`（post-direction only：hook 後 2s drop probe）擴成雙向 — ProbeIntent dispatcher `consumeSignals` 在進入 `applyProbeGuards` 之前先 hold `probeIntentPreGraceWindow`（300ms），期間若同 session hook 進來（`recordHookAt`）→ drop probe Signal；無 hook → 進原 guard pipeline。
+> **Status**：v2（round 1 standard codex review 採納 P2 finding — A4 boundary race wording 過度樂觀；spec 改寫 A4 精確化 + 加 A9 quantified threshold (30 次 reject 閃 < 3) + A13 observability + R13 boundary race acceptable as known limitation + §6 三條防回退 anchor；待派 round 2 standard 確認 spec coherence + 起 plan）。將既有 `probeGraceWindow`（post-direction only：hook 後 2s drop probe）擴成雙向 — ProbeIntent dispatcher `consumeSignals` 在進入 `applyProbeGuards` 之前先 hold `probeIntentPreGraceWindow`（300ms），期間若同 session hook 進來（`recordHookAt`）→ drop probe Signal；無 hook → 進原 guard pipeline。**Boundary race 仍存在**（hook 在 hold 過後到 + `recordHookAt` 與 step 2 read μs window race），acceptable as known limitation by R13。
 >
 > **動因**：W6-6 v5 spec round 5 standard codex review 抓到 reject path race — Phase B armed=true 後 user 按 [2] 拒絕，dialog 消失發 ScreenChanged 與 PdxStop hook race；極端場景 probe 先到 daemon → emit running → hook 後到覆蓋 idle → lights 短暫閃 `waiting → running → idle`。既有 post-direction graceWindow 只能壓 hook **之後** 的 probe，無法壓 hook **之前** 已 emit 的 probe。
 >
@@ -163,15 +163,16 @@ ProbeIntent dispatcher `consumeSignals`（`probe_intent_dispatcher.go:515`）在
 | A1 | probe Signal 進 dispatcher → hold 300ms → 期間無 hook → 進 `applyProbeGuards` → 既有 4-step guard 行為不變 |
 | A2 | probe Signal 進 dispatcher → hold 300ms → 期間同 session hook 到 → drop pre-grace；status 不被 probe 翻；`MetricProbeIntentDroppedPreGrace` +1 |
 | A3 | probe Signal 進 dispatcher → hold 300ms → ctx cancel during hold → drop pre-cancel；signal 不進 apply；`MetricProbeIntentPreGraceCanceled` +1 |
-| A4 | probe Signal 進 dispatcher → hold 300ms 過 → hook 在 hold 過後到 → 進 `applyProbeGuards` step 2 既有 post graceWindow drop（與本 PR 前行為一致） |
+| A4 | probe Signal 進 dispatcher → hold 300ms 過 → hook 在 hold 過後到並且**在 `applyProbeGuards` step 2 read `lastHookAt` 之前 `recordHookAt` 完成** → step 2 既有 post graceWindow drop（與本 PR 前行為一致）。**注意**：hook 在 hold 過後到但 `recordHookAt` 與 step 2 read race 失敗的 boundary case 走 R13 處置（boundary race acceptable as known limitation）|
 | A5 | W6-3 ProcessDead `!appliedAny` post-loop rearm 路徑：pre-grace drop 後 detector exit → consumeSignals 退迴 case → teardown + rearm + 新 generation detector arm 仍正確（regression test）|
 | A6 | cross-provider switch during hold：reconcileSessionActive 取消 ProbeIntent entry → ctx cancel → drop pre-cancel；不殘留 active entry |
 | A7 | replay path（daemon restart 後 `replayStatus` 觸發 ProbeIntent re-arm）：pre-grace 行為一致；ProcessDead detector 在 daemon restart 後死 process 多 +300ms 檢測延遲（仍 ≤2s W6-3 目標內）|
 | A8 | metric 拆分清楚：`MetricProbeGraceWindowSuppressed`（既有 post）不變；新增三個 pre metric 命名與行為對齊 §1.1 #3 |
-| A9 | mlab live verify §1：codex permission ask → user 按 [2] 拒絕 → 30 次重複 reject capture：lights `waiting → idle` 100% PASS（無 running 閃爍）|
+| A9 | mlab live verify §1（**quantified boundary race threshold**）：codex permission ask → user 按 [2] 拒絕 → 30 次重複 reject capture：lights `waiting → idle` 不誤觸 `running` ≥ 28/30（**閃 running 次數 < 3**）；若 ≥ 3 次閃 running 視為 design 不達標 surface（pre-grace + post graceWindow 雙層應 cover ≥93% 場景；boundary race 內漏網應極罕見）|
 | A10 | mlab live verify §2：codex permission ask → user 按 [1] 批准 → lights `waiting → running` ≤500ms+300ms（observed latency 可接受）|
 | A11 | mlab live verify §3：codex 進程被 SIGKILL → ProcessDead detector 抓到死 → status=error；observed latency 含 1Hz poll + 300ms pre-grace ≤2s |
 | A12 | mlab live verify §4：daemon restart during waiting status → replayStatus → ProbeIntent re-arm；後續 hook / probe 行為與 J3 預期對齊 |
+| A13 | **boundary race observability**：reject 30 次 capture 期間若觀察到任一閃 running，daemon log + expvar 必須能還原該次序列（`signalAt` / `lastHookAt` / pre-grace held 時長 / post graceWindow 是否觸發 / `recordHookAt` 完成時 timestamp 與 step 2 read 順序）— 用於 PR body §test plan 證據與 followup issue 數據 |
 
 ---
 
@@ -209,7 +210,7 @@ ProbeIntent dispatcher `consumeSignals`（`probe_intent_dispatcher.go:515`）在
 | R1 | ctx cancel during hold 後舊 signal 又 apply | hold select 監聽 ctx.Done()；ctx 贏 → drop pre-cancel；不進 `applyProbeGuards`；`MetricProbeIntentPreGraceCanceled` +1 |
 | R2 | hook during hold 但 active entry 已被 reconcile teardown（race window）| pre check 先看 lastHookAt > signalAt → drop pre-grace；既有 stale-callback guard 不會被觸發；reason `pre-grace` 與 `stale-callback` 拆分清楚 |
 | R3 | hook 在 hold 期間 + active entry 仍存在 + same generation | 標準 case；drop pre-grace；status 由 hook authoritative set；`MetricProbeIntentDroppedPreGrace` +1 |
-| R4 | hook 在 hold 過後到（hold 結束才 hook 進 daemon）| pre-grace 不 drop（lastHookAt 仍是 hold 開始前的 timestamp 或無）→ 進 `applyProbeGuards` step 2；既有 post graceWindow drop（與 J3 前行為一致）|
+| R4 | hook 在 hold 過後到（hold 結束才 hook 進 daemon）+ `recordHookAt` 在 `applyProbeGuards` step 2 read `lastHookAt` 之前完成 | pre-grace 不 drop → 進 step 2 → 看到新 `lastHookAt` → post graceWindow drop（與 J3 前行為一致；standard case）|
 | R5 | `!appliedAny` post-loop rearm 被 pre-grace drop 影響 | consumeSignals 既有「detector exited but no signal applied → teardown + rearm」邏輯（line 588-615）必須對 pre-grace drop case 一致 work；regression test 補 |
 | R6 | replay path daemon restart：dead process 檢測延遲多 +300ms | W6-3 spec ≤2s 目標下仍可（1Hz poll + 300ms hold = ~1.3s）；replay test 預期值更新 |
 | R7 | cross-provider switch during hold | reconcileSessionActive 取消 entry → ctx cancel → drop pre-cancel；既有 generation + stale check 仍 work；補 cross-provider test |
@@ -218,6 +219,7 @@ ProbeIntent dispatcher `consumeSignals`（`probe_intent_dispatcher.go:515`）在
 | R10 | daemon restart 期間 in-flight signal | consumer goroutine teardown 走 ctx cancel；in-flight signal 最多多活 N（300ms）；bounded |
 | R11 | 同 session 多 hook 連續到（rapid hook 序列）| 第一個 hook 設 lastHookAt → 後續 probe Signal 進 hold → drop pre-grace（lastHookAt > signalAt）；多 hook 不影響 pre-grace 邏輯 |
 | R12 | timestamp 解析度 boundary（同 nanosecond 內 hook + signal）| `orchNowFn` 用 `time.Now`（typically ns 解析）；race 條件下 hook 與 signal 同 ns 機率極低；若同 ns，定義 `lastHookAt > signalAt`（嚴格 greater）→ 同 ns 不 drop（probe 走 apply）；極端 race 不影響 acceptance |
+| **R13** | **boundary race**（codex round 1 finding）：hook 在 hold 過後到（probe Signal 已進 `applyProbeGuards`）但 `recordHookAt` 完成的時間點 vs step 2 read `lastHookAt` 的時間點 race 失敗 — step 2 read 仍看舊值 → 不 drop → step 4 mutate currentStatus = running → hook 後到才 set idle → lights 短暫閃 `waiting → running → idle` | **acceptable as known limitation**；雙重保險（pre-grace 300ms + post graceWindow 2s）已 cover ≥93% 場景；漏網需「hook 進 daemon 在 hold 過後 + `recordHookAt` 與 step 2 read μs window race」兩個獨立罕見事件交集；observability：A13 要求 daemon log + expvar 還原 boundary race 序列；mlab live verify A9 quantified threshold（30 次 reject 閃 < 3）作為 production 漏網率測試；若 mlab 顯示 ≥ 3 次閃，design 不達標 surface（評估 N 加大 / 補 post-emit confirm rollback / 其他緩解）|
 
 ---
 
@@ -419,6 +421,9 @@ reason mapping function（`internal/module/agent/probe_intent_dispatcher.go` top
 | 想擴 ProbeIntent interface 加 pre-grace 相關欄位 | W6-3 finalize 已 lock；pre-grace 是 dispatcher-level 行為，不通過 interface |
 | 想改 hook entry handler.go:380-413 順序 | codex finding #3 regression 防護：recordHookAt MUST run BEFORE currentStatus mutation；本 PR 不動 |
 | 想跳過 P2-T1 ProcessDead `!appliedAny` rearm regression test | high risk corner case（codex 評估）；pre-grace drop 後 detector exit + rearm 路徑必須驗 |
+| 想 claim「J3 完全消除 reject race」 | spec round 1 codex finding 已抓到 — boundary race 仍存在（hook 在 hold 過後到 + `recordHookAt` 與 step 2 read μs window race）；J3 雙重保險 cover ≥93% 場景，剩 < 7% 走 R13 acceptable as known limitation；**spec wording 必須誠實**（A4 / R13 / A9 quantified threshold 三處錨定）|
+| 想跳過 A13 boundary race observability | mlab live verify A9 若 ≥ 3 次閃 running → design 不達標需 surface；無 observability 則 surface 無法定位是 pre-grace 漏 / post graceWindow 漏 / `recordHookAt` race / 其他 — log + expvar 拆分必須做 |
+| 想引入 post-emit confirm rollback 路徑（emit 後再 hold N，期間 hook 到 → rollback status）| 違反「lifecycle 行為穩定可預期」原則；status mutation rollback 在 dispatcher 是新狀態機路徑，與既有 5-case + 4-step guard 設計衝突；mlab 數據如顯示 boundary race 顯著（≥ 3/30）才考慮獨立 followup spec 評估 |
 
 ---
 
@@ -450,13 +455,16 @@ reason mapping function（`internal/module/agent/probe_intent_dispatcher.go` top
 
 ---
 
-## 9. Open questions（給 codex round 1 review）
+## 9. Open questions
+
+> Round 1 codex review (job `review-momyypsf-bd2hlw`) 已採納：A4 boundary race claim 過度樂觀 → §1.3 A4 改寫精確、§1.3 加 A9 quantified threshold (30 次 reject 閃 < 3) + A13 observability、§2.3 加 R13 boundary race acceptable as known limitation、§6 加三條防回退 anchor。下列為 spec v2 後仍 open 的 questions（給後續 codex round 2 review）。
 
 1. **N=300ms vs mlab 校準**：本 PR 直接定 300ms const ship；mlab capture 為 PR 證據。後續 30-50 次 reject capture 若 `signal_received → recordHookAt` p99 < 150ms，是否考慮獨立 PR 降 N=200ms？建議走 followup issue + 累積足夠 data points 後再決定，避免 const 頻繁變動破壞 lifecycle 預期。
 2. **hook → timer notify channel 第一版不做**：等滿 300ms 看 timestamp vs hook 立刻 cancel hold，user 觀感差別在 worst case probe 多 holding 0-300ms（hidden signal 永不 emit）。第一版簡化 OK；future enhancement 評估點 — 若觀測到大量 pre-grace drop hold 滿 timer 才釋放，notify channel 可降 hold tail latency。
 3. **pre-grace metric 是否要 per-Kind 拆**：目前 generic 計數；future enhancement 可加 label（W6-3 ProcessDead vs W6-6 ScreenChange vs 未來 Kind）。第一版簡化 OK。
-4. **`!appliedAny` post-loop rearm 對 pre-grace drop 是否需要特殊處理**：codex 評估標 high risk；第一版假設既有 line 588-615 邏輯對 pre-grace drop case 一致 work（`appliedAny=false` 走 teardown + rearm），P2-T1 regression test 驗證。若 test 抓到不一致行為，spec 補設計擴展。
+4. **`!appliedAny` post-loop rearm 對 pre-grace drop 是否需要特殊處理**：codex evaluation 標 high risk；第一版假設既有 line 588-615 邏輯對 pre-grace drop case 一致 work（`appliedAny=false` 走 teardown + rearm），P2-T1 regression test 驗證。若 test 抓到不一致行為，spec 補設計擴展。
 5. **timestamp boundary case `lastHookAt == signalAt`**：用 `last.After(signalAt)`（嚴格 greater）→ 同 ns 不 drop（probe 走 apply）。極端 race 機率忽略不計；若 codex review 提出 boundary 問題再評估改 `>=`。
+6. **R13 boundary race threshold（A9 mlab quantified）**：30 次 reject 閃 running 次數 ≥ 3 視為 design 不達標的依據是「pre-grace 300ms cover hook cold start 80-250ms typical p95」推算 ~93%（27/30）下界。實際 hook cold start 分布若 p99 顯著落在 250-400ms 區段，30/30 0 閃可能不可行；threshold 是否該調整？建議 mlab capture 同時量 hook cold start tail 分布，threshold 隨數據動態，但**本 PR 仍以 < 3 為 ship gate**，不達標 surface 評估 N 加大或補 followup spec。
 
 ---
 
