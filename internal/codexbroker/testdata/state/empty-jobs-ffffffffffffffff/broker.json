@@ -1,0 +1,7 @@
+{
+  "endpoint": "unix:/tmp/cxc-EMPTY/broker.sock",
+  "pidFile": "/tmp/cxc-EMPTY/broker.pid",
+  "logFile": "/tmp/cxc-EMPTY/broker.log",
+  "sessionDir": "/tmp/cxc-EMPTY",
+  "pid": 8888
+}
