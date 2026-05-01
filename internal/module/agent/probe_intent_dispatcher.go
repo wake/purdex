@@ -77,6 +77,23 @@ func probeIntentOnDrop(reason string) {
 	}
 }
 
+// classifyAsHookRace returns true iff orch.lastHookAt[session] is set with a
+// monotonic timestamp strictly later than signalAt. Used by consumeSignals to
+// distinguish hook-race drops from genuine lifecycle cancellations in the
+// pre-grace path. graceMu held read-only for the lookup (never mutates).
+//
+// "Strictly later" (last.After(signalAt)) — equal timestamps do NOT drop:
+// probe wins on a same-monotonic-ns tie (per spec §2.3 R12 / Q5).
+func classifyAsHookRace(orch *probeOrchestrator, session string, signalAt time.Time) bool {
+	if orch == nil {
+		return false
+	}
+	orch.graceMu.Lock()
+	last, hasHook := orch.lastHookAt[session]
+	orch.graceMu.Unlock()
+	return hasHook && last.After(signalAt)
+}
+
 // probeIntentOnDropForSession returns an OnDrop callback that prefixes the
 // drop log with session + kind context so dev-mode tail can correlate the
 // drop with the originating dispatcher path. Counter increments mirror
@@ -590,10 +607,24 @@ func (d *probeIntentDispatcher) consumeSignals(
 			// hold elapsed without ctx cancel; proceed to hook lookup
 			// then applyProbeGuards.
 		case <-ctx.Done():
-			// Detector ctx canceled mid-hold (cross-provider switch,
-			// daemon Stop, or any lifecycle teardown). Drop the signal
-			// without entering applyProbeGuards.
+			// Detector ctx canceled mid-hold. Two upstream causes:
+			//   (a) hook race — handler.go:380-413 recordHookAt runs
+			//       BEFORE currentStatus mutation, then applyStatus →
+			//       reconcileSessionActive cancels active ProbeIntent.
+			//       So lastHookAt may already be set with a value >
+			//       signalAt when this branch fires.
+			//   (b) genuine lifecycle cancel — cross-provider switch,
+			//       daemon Stop, etc. without any new hook.
+			// Classify by lastHookAt to keep the metric / reason
+			// semantically aligned with what the dispatcher observes
+			// (per PR round-2 體質 finding: avoid lumping hook race
+			// into pre-grace-canceled).
 			timer.Stop()
+			if classifyAsHookRace(d.parent.probeOrch, session, signalAt) {
+				agentpkg.MetricProbeIntentDroppedPreGrace.Add(1)
+				onDrop("pre-grace")
+				continue
+			}
 			agentpkg.MetricProbeIntentPreGraceCanceled.Add(1)
 			onDrop("pre-grace-canceled")
 			continue
@@ -604,16 +635,10 @@ func (d *probeIntentDispatcher) consumeSignals(
 		// only; never mutates state) and compare strictly with signalAt.
 		// Equal timestamps (same monotonic ns) do NOT drop — defined
 		// boundary: probe wins on tie (per spec §2.3 R12 / Q5).
-		if d.parent.probeOrch != nil {
-			o := d.parent.probeOrch
-			o.graceMu.Lock()
-			last, hasHook := o.lastHookAt[session]
-			o.graceMu.Unlock()
-			if hasHook && last.After(signalAt) {
-				agentpkg.MetricProbeIntentDroppedPreGrace.Add(1)
-				onDrop("pre-grace")
-				continue
-			}
+		if classifyAsHookRace(d.parent.probeOrch, session, signalAt) {
+			agentpkg.MetricProbeIntentDroppedPreGrace.Add(1)
+			onDrop("pre-grace")
+			continue
 		}
 
 		applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{

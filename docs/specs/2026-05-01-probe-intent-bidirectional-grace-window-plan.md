@@ -411,11 +411,9 @@ dev-mode log 是 observability 給人讀，不是 test 契約。
 - expvar curl `/debug/vars` 取 3 pre-grace metric increment 觀察
 - §1 reject 30 次同樣計算閃 running 次數
 
-**Acceptance**（per spec §1.3 A9-A12）：
-- §1 PASS（≥ 28/30）
-- §2 PASS
-- §3 PASS
-- §4 PASS
+**Acceptance**（per spec §1.3 + §5 J3/W6-6 ship gate split）：
+- **J3 PR gate** — §3 PASS（A11）/ §4 PASS（A12）；J3 PR mlab verify 結果填 spec
+- **W6-6 PR gate** — §1 PASS（≥ 28/30 per A9）/ §2 PASS（A10 latency）；J3 ship 時標 N/A（W6-6 ScreenChange ProbeIntent 尚未 merge → 無可量對象），W6-6 PR mlab verify 跑完整 30 次 reject 量化
 
 **A9 fail handling**（spec v7 fail-fast，per §2.3 R13）：若 §1 < 28/30，**不直接 ship**，先開 followup issue 加 per-event trace log + cross-log correlation 定位漏網類別（pre-grace miss / post graceWindow miss / `recordHookAt` 與 step 2 read μs race / 其他），透過 trace 數據真正解 R13 或調 N。
 
@@ -571,7 +569,7 @@ Phase 2 PR squash merge 後獨立 bump PR：
 |---|---|---|
 | Phase 1 P1-T1~T4 | 4 task 全 commit + test 全綠 + race 全綠 | ⏳ |
 | Phase 2 P2-T1~T6 | 6 task 全 commit + 既有 test zero regression + new regression test 全綠 | ⏳ |
-| Phase 3 P3-T1 | mlab live §1-§4 全 PASS（含 §1 reject 30 次 ≥ 28/30 per A9 quantified threshold） | ⏳ |
+| Phase 3 P3-T1 | mlab live §3 (A11) + §4 (A12) PASS = J3 ship gate；§1 (A9) + §2 (A10) defer to W6-6 PR | ⏳ |
 | Phase 3 P3-T2 + P3-T4 | W6-3 §9.14 drift anchor commit + 本 spec mlab 結果填回 commit；P3-T3 W6-6 anchor deferred to W6-6 PR | ⏳ |
 | PR + codex review 兩輪 | 0 critical/P1 + known issue 追蹤化 | ⏳ |
 | Squash merge → main | branch 刪除 + worktree 清理 | ⏳ |

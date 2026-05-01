@@ -937,23 +937,29 @@ func snapshotPreGraceMetrics() preGraceMetricSnapshot {
 }
 
 // installPreGraceEmitOnceDetector installs a detector that emits exactly
-// one Signal on first arm via emit, then waits for ctx.Done. emitGate
-// closes after the detector emits so the test can synchronize "signal
-// is in dispatcher's hold" before injecting hook / cancel. Subsequent
+// one Signal on first arm via emit, then waits for ctx.Done. Subsequent
 // arms (e.g. post-applied teardown + rearm in case 1) block on ctx.
+//
+// Note: this helper does NOT expose a "detector sent" gate. PR round-2
+// review (job 019de4d9 high + 019de4db high) flagged that gate-on-send
+// + Sleep is unreliable: a buffered-channel send returning success only
+// proves the Signal landed in the buffer, not that consumeSignals has
+// read it, captured signalAt, and entered the 300ms timer. Tests must
+// instead wait for `MetricProbeIntentPreGraceHeld` to advance past
+// baseline (see waitForConsumerInHold) — that increment fires
+// immediately after signalAt is captured, providing a deterministic
+// happens-before edge without any production seam.
 func installPreGraceEmitOnceDetector(
 	t *testing.T,
 	m *Module,
 	sig agentpkg.Signal,
-) (emitGate <-chan struct{}) {
+) {
 	t.Helper()
-	gate := make(chan struct{})
 	var emitted atomic.Int32
 	m.probeIntentDisp.startDetector = func(ctx context.Context, _ *Module, _ agentpkg.ProbeIntentKind, _ string, _ int, out chan<- agentpkg.Signal) {
 		if emitted.Add(1) == 1 {
 			select {
 			case out <- sig:
-				close(gate)
 			case <-ctx.Done():
 				return
 			}
@@ -961,7 +967,18 @@ func installPreGraceEmitOnceDetector(
 		<-ctx.Done()
 	}
 	t.Cleanup(func() { m.probeIntentDisp.stopAll() })
-	return gate
+}
+
+// waitForConsumerInHold blocks until MetricProbeIntentPreGraceHeld
+// advances past baseline, proving that consumeSignals has read the
+// next Signal, captured signalAt via orchNowFn, and entered the
+// 300ms timer/select block. Subsequent recordHookAt / stopAll calls
+// are then deterministic w.r.t. the pre-grace decision boundary.
+func waitForConsumerInHold(t *testing.T, baseline int64) {
+	t.Helper()
+	waitFor(t, time.Second, func() bool {
+		return metricInt("purdex_probe_intent_pre_grace_held_total") > baseline
+	}, "consumeSignals captured signalAt and entered pre-grace hold")
 }
 
 // TestConsumeSignals_PreGrace_Table covers J3 spec §4.1 P1-T4 cases 1-5
@@ -983,7 +1000,7 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		m.sessions = &fakeSessionProvider{}
 		// Detector emits PaneAlive=true on first arm → OnSignal returns
 		// Error → applyProbeGuards step 4 broadcasts → applied=true.
-		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+		installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
 			Kind:      agentpkg.ProbeIntentKindProcessDead,
 			PaneAlive: true,
 			PaneID:    "%5",
@@ -994,14 +1011,6 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		before := snapshotPreGraceMetrics()
 		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
-		// Wait for detector to emit so the signal is sitting in the
-		// dispatcher's pre-grace hold. The hold is 300ms; the apply step
-		// runs after the hold elapses.
-		select {
-		case <-gate:
-		case <-time.After(time.Second):
-			t.Fatalf("detector did not emit within 1s")
-		}
 		// applyProbeGuards step 4 mutates currentStatus = Error → case 3
 		// teardown removes the active entry. waitFor must wait long
 		// enough to clear the 300ms pre-grace hold.
@@ -1038,7 +1047,7 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 	t.Run("case_2_hook_during_hold_drops_pre_grace", func(t *testing.T) {
 		m := newDispatcherTestModule(t)
 		m.sessions = &fakeSessionProvider{}
-		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+		installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
 			Kind:      agentpkg.ProbeIntentKindProcessDead,
 			PaneAlive: true,
 			PaneID:    "%5",
@@ -1049,17 +1058,12 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		before := snapshotPreGraceMetrics()
 		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
-		// Wait for the detector to emit; the dispatcher is now sitting in
-		// the 300ms pre-grace hold. Inject a same-session hook while the
-		// hold is still active so lastHookAt > signalAt at timer expiry.
-		select {
-		case <-gate:
-		case <-time.After(time.Second):
-			t.Fatalf("detector did not emit within 1s")
-		}
-		// recordHookAt 200ms into the 300ms hold so the timestamp is
-		// strictly later than signalAt — guarantees pre-grace drop branch.
-		time.Sleep(200 * time.Millisecond)
+		// Wait for consumer to capture signalAt + enter the 300ms timer
+		// (deterministic via metric handshake — no scheduler-dependent
+		// Sleep). Then recordHookAt is guaranteed lastHookAt > signalAt
+		// because monotonic time advances between the metric increment
+		// and this call → pre-grace drop branch fires at timer expiry.
+		waitForConsumerInHold(t, before.preGraceHeld)
 		m.probeOrch.recordHookAt("work")
 
 		// Timer expires at ~300ms → pre-grace check sees lastHookAt >
@@ -1099,7 +1103,7 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 	t.Run("case_3_ctx_cancel_during_hold_drops_pre_cancel", func(t *testing.T) {
 		m := newDispatcherTestModule(t)
 		m.sessions = &fakeSessionProvider{}
-		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+		installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
 			Kind:      agentpkg.ProbeIntentKindProcessDead,
 			PaneAlive: true,
 			PaneID:    "%5",
@@ -1110,17 +1114,12 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		before := snapshotPreGraceMetrics()
 		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
-		// Wait for emit so the consumer is in hold, then cancel via
-		// stopAll BEFORE the 300ms timer fires. ctx.Done branch wins →
-		// drop pre-grace-canceled.
-		select {
-		case <-gate:
-		case <-time.After(time.Second):
-			t.Fatalf("detector did not emit within 1s")
-		}
-		// Cancel ~50ms into hold so the select definitely takes
-		// ctx.Done before the 300ms timer.C fires.
-		time.Sleep(50 * time.Millisecond)
+		// Wait for consumer in hold, then cancel ctx without recording
+		// any hook — ctx.Done branch sees lastHookAt absent and routes
+		// to MetricProbeIntentPreGraceCanceled (genuine lifecycle
+		// cancel, not hook race). Tests the no-hook leg of the new
+		// classifyAsHookRace logic.
+		waitForConsumerInHold(t, before.preGraceHeld)
 		m.probeIntentDisp.stopAll()
 
 		waitFor(t, 2*time.Second, func() bool {
@@ -1146,13 +1145,14 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		}
 	})
 
-	t.Run("case_4_hook_early_in_hold_drops_pre_grace", func(t *testing.T) {
-		// Identical metric outcome to case 2; difference is timing —
-		// hook arrives barely after signal (50ms) instead of 200ms.
-		// Pins behavior under early-hook race.
+	t.Run("case_4_hook_immediately_after_hold_start_drops_pre_grace", func(t *testing.T) {
+		// Same metric outcome as case 2; pins the no-tail-delay variant
+		// (recordHookAt fires the moment consumer enters hold). With
+		// monotonic clock, lastHookAt > signalAt holds even at the
+		// minimum delta the scheduler can produce → pre-grace drop.
 		m := newDispatcherTestModule(t)
 		m.sessions = &fakeSessionProvider{}
-		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+		installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
 			Kind:      agentpkg.ProbeIntentKindProcessDead,
 			PaneAlive: true,
 			PaneID:    "%5",
@@ -1163,14 +1163,10 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		before := snapshotPreGraceMetrics()
 		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
-		select {
-		case <-gate:
-		case <-time.After(time.Second):
-			t.Fatalf("detector did not emit within 1s")
-		}
-		// Hook 50ms into the hold — well before timer fires; lastHookAt
-		// strictly > signalAt at timer expiry.
-		time.Sleep(50 * time.Millisecond)
+		waitForConsumerInHold(t, before.preGraceHeld)
+		// recordHookAt fires immediately — no Sleep — yet lastHookAt is
+		// strictly > signalAt because monotonic time has already
+		// advanced between the metric increment and this call.
 		m.probeOrch.recordHookAt("work")
 
 		waitFor(t, 2*time.Second, func() bool {
@@ -1203,7 +1199,7 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		// applyProbeGuards step 2 + probeIntentOnDropForSession switch).
 		m := newDispatcherTestModule(t)
 		m.sessions = &fakeSessionProvider{}
-		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+		installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
 			Kind:      agentpkg.ProbeIntentKindProcessDead,
 			PaneAlive: true,
 			PaneID:    "%5",
@@ -1219,11 +1215,6 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		before := snapshotPreGraceMetrics()
 		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
-		select {
-		case <-gate:
-		case <-time.After(time.Second):
-			t.Fatalf("detector did not emit within 1s")
-		}
 		// Wait for both pre-grace pass-through (300ms hold) and the
 		// applyProbeGuards step 2 drop.
 		waitFor(t, 2*time.Second, func() bool {
@@ -1255,6 +1246,60 @@ func TestConsumeSignals_PreGrace_Table(t *testing.T) {
 		}
 		if got := after.applied - before.applied; got != 0 {
 			t.Errorf("applied delta = %d, want 0 (post graceWindow blocks apply)", got)
+		}
+	})
+
+	t.Run("case_6_ctx_cancel_after_hook_classifies_as_pre_grace", func(t *testing.T) {
+		// PR round-2 體質 finding: real reject path goes
+		//   handler.recordHookAt → applyStatus → reconcileSessionActive
+		//   → ctx cancel
+		// in a single goroutine, so when ctx.Done wins inside
+		// consumeSignals, lastHookAt is ALREADY set with a value >
+		// signalAt. Pre-fix logic always recorded
+		// MetricProbeIntentPreGraceCanceled, conflating hook race
+		// with genuine lifecycle cancel. Post-fix: ctx.Done branch
+		// calls classifyAsHookRace and routes to
+		// MetricProbeIntentDroppedPreGrace when a same-session hook
+		// arrived before the cancel.
+		m := newDispatcherTestModule(t)
+		m.sessions = &fakeSessionProvider{}
+		installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+			Kind:      agentpkg.ProbeIntentKindProcessDead,
+			PaneAlive: true,
+			PaneID:    "%5",
+			SenderPID: 4242,
+		})
+		seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+		before := snapshotPreGraceMetrics()
+		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+		// Consumer in hold, then simulate handler ordering:
+		//   recordHookAt happens-before ctx cancel (handler.go:380-413)
+		waitForConsumerInHold(t, before.preGraceHeld)
+		m.probeOrch.recordHookAt("work")
+		m.probeIntentDisp.stopAll()
+
+		waitFor(t, 2*time.Second, func() bool {
+			now := snapshotPreGraceMetrics()
+			return (now.droppedPreGrace - before.droppedPreGrace) >= 1
+		}, "droppedPreGrace +1 via ctx.Done branch hook-race classification")
+
+		after := snapshotPreGraceMetrics()
+		if got := after.signalEmitted - before.signalEmitted; got != 1 {
+			t.Errorf("signalEmitted delta = %d, want 1", got)
+		}
+		if got := after.preGraceHeld - before.preGraceHeld; got != 1 {
+			t.Errorf("preGraceHeld delta = %d, want 1", got)
+		}
+		if got := after.droppedPreGrace - before.droppedPreGrace; got != 1 {
+			t.Errorf("droppedPreGrace delta = %d, want 1 (ctx.Done + hook race)", got)
+		}
+		if got := after.preGraceCanceled - before.preGraceCanceled; got != 0 {
+			t.Errorf("preGraceCanceled delta = %d, want 0 (must NOT be classified as canceled when hook arrived)", got)
+		}
+		if got := after.applied - before.applied; got != 0 {
+			t.Errorf("applied delta = %d, want 0", got)
 		}
 	})
 }
@@ -1361,7 +1406,7 @@ func TestConsumeSignals_PreGraceDrop_RearmsAfterTeardown(t *testing.T) {
 func TestReconcileSessionActive_DuringPreGraceHold_CancelsAndCleans(t *testing.T) {
 	m := newDispatcherTestModule(t)
 	m.sessions = &fakeSessionProvider{}
-	gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+	installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
 		Kind:      agentpkg.ProbeIntentKindProcessDead,
 		PaneAlive: true,
 		PaneID:    "%5",
@@ -1372,12 +1417,8 @@ func TestReconcileSessionActive_DuringPreGraceHold_CancelsAndCleans(t *testing.T
 	before := snapshotPreGraceMetrics()
 	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
-	// Wait for emit so the consumer is mid-hold.
-	select {
-	case <-gate:
-	case <-time.After(time.Second):
-		t.Fatalf("detector did not emit within 1s")
-	}
+	// Wait for consumer to capture signalAt + enter hold.
+	waitForConsumerInHold(t, before.preGraceHeld)
 	// Switch top frame to a different agent (cc-noprobes has no
 	// ProbeIntents), then call applyStatus → reconcileSessionActive
 	// drops the codex entry (cross-provider stale) BEFORE the hold timer
@@ -1423,7 +1464,7 @@ func TestReplayStatus_TriggersProbeIntent_PreGraceConsistent(t *testing.T) {
 	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
 		fake.SetPaneSessionName("%5", "work")
 	}
-	gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+	installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
 		Kind:      agentpkg.ProbeIntentKindProcessDead,
 		PaneAlive: true,
 		PaneID:    "%5",
@@ -1439,11 +1480,6 @@ func TestReplayStatus_TriggersProbeIntent_PreGraceConsistent(t *testing.T) {
 	// Detector emits → consumer enters hold → no concurrent hook → pre-
 	// grace pass-through → applyProbeGuards step 4 broadcasts → applied
 	// → consumeSignals re-runs applyStatus(error) → case 3 teardown.
-	select {
-	case <-gate:
-	case <-time.After(time.Second):
-		t.Fatalf("detector did not emit within 1s after replayStatus")
-	}
 	waitFor(t, 2*time.Second, func() bool {
 		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
 		return !ok
