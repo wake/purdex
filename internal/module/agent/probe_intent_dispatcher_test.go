@@ -905,3 +905,356 @@ func TestApplyIntentLifecycle_NilTraceSink_DoesNotPanic(t *testing.T) {
 		t.Fatalf("detector started count = %d, want 1 (arm must succeed under nil traceSink)", rec.startCount())
 	}
 }
+
+// -----------------------------------------------------------------------------
+// J3 P1-T4: pre-grace bidirectional graceWindow table-driven tests
+// -----------------------------------------------------------------------------
+
+// preGraceMetricSnapshot reads the J3 pre-grace counters plus the
+// supporting (signalEmitted / applied / droppedGrace / graceWindowSup)
+// counters used by the table assertions. expvar globals persist across
+// tests — only deltas are stable.
+type preGraceMetricSnapshot struct {
+	signalEmitted    int64
+	preGraceHeld     int64
+	droppedPreGrace  int64
+	preGraceCanceled int64
+	applied          int64
+	droppedGrace     int64
+	graceWindowSup   int64
+}
+
+func snapshotPreGraceMetrics() preGraceMetricSnapshot {
+	return preGraceMetricSnapshot{
+		signalEmitted:    metricInt("purdex_probe_intent_signal_emitted_total"),
+		preGraceHeld:     metricInt("purdex_probe_intent_pre_grace_held_total"),
+		droppedPreGrace:  metricInt("purdex_probe_intent_dropped_pre_grace_total"),
+		preGraceCanceled: metricInt("purdex_probe_intent_pre_grace_canceled_total"),
+		applied:          metricInt("purdex_probe_intent_applied_total"),
+		droppedGrace:     metricInt("purdex_probe_intent_dropped_grace_total"),
+		graceWindowSup:   metricInt("purdex_probe_grace_window_suppressed_total"),
+	}
+}
+
+// installPreGraceEmitOnceDetector installs a detector that emits exactly
+// one Signal on first arm via emit, then waits for ctx.Done. emitGate
+// closes after the detector emits so the test can synchronize "signal
+// is in dispatcher's hold" before injecting hook / cancel. Subsequent
+// arms (e.g. post-applied teardown + rearm in case 1) block on ctx.
+func installPreGraceEmitOnceDetector(
+	t *testing.T,
+	m *Module,
+	sig agentpkg.Signal,
+) (emitGate <-chan struct{}) {
+	t.Helper()
+	gate := make(chan struct{})
+	var emitted atomic.Int32
+	m.probeIntentDisp.startDetector = func(ctx context.Context, _ *Module, _ agentpkg.ProbeIntentKind, _ string, _ int, out chan<- agentpkg.Signal) {
+		if emitted.Add(1) == 1 {
+			select {
+			case out <- sig:
+				close(gate)
+			case <-ctx.Done():
+				return
+			}
+		}
+		<-ctx.Done()
+	}
+	t.Cleanup(func() { m.probeIntentDisp.stopAll() })
+	return gate
+}
+
+// TestConsumeSignals_PreGrace_Table covers J3 spec §4.1 P1-T4 cases 1-5
+// (R13 boundary race / case 6 is acceptable as known limitation per spec
+// §2.3 R13; mlab A9 quantified threshold gates production漏網率).
+//
+// Common assertions per case (per plan §P1-T4):
+//   - signalEmitted +1 (existing dispatcher metric preserved)
+//   - preGraceHeld +1 (every Signal entering the hold)
+//
+// Case-specific deltas validate the drop reason routing — since
+// probeIntentOnDropForSession is a package-level closure factory with
+// no production seam (per v7 trim), reason is asserted via the
+// exclusive metric ↔ reason mapping rather than by intercepting the
+// callback (per plan-review P2 fix).
+func TestConsumeSignals_PreGrace_Table(t *testing.T) {
+	t.Run("case_1_no_hook_proceeds_to_apply", func(t *testing.T) {
+		m := newDispatcherTestModule(t)
+		m.sessions = &fakeSessionProvider{}
+		// Detector emits PaneAlive=true on first arm → OnSignal returns
+		// Error → applyProbeGuards step 4 broadcasts → applied=true.
+		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+			Kind:      agentpkg.ProbeIntentKindProcessDead,
+			PaneAlive: true,
+			PaneID:    "%5",
+			SenderPID: 4242,
+		})
+		seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+		before := snapshotPreGraceMetrics()
+		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+		// Wait for detector to emit so the signal is sitting in the
+		// dispatcher's pre-grace hold. The hold is 300ms; the apply step
+		// runs after the hold elapses.
+		select {
+		case <-gate:
+		case <-time.After(time.Second):
+			t.Fatalf("detector did not emit within 1s")
+		}
+		// applyProbeGuards step 4 mutates currentStatus = Error → case 3
+		// teardown removes the active entry. waitFor must wait long
+		// enough to clear the 300ms pre-grace hold.
+		waitFor(t, 2*time.Second, func() bool {
+			_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+			return !ok
+		}, "active entry torn down after applied=true (case 1: no hook → apply)")
+
+		after := snapshotPreGraceMetrics()
+		if got := after.signalEmitted - before.signalEmitted; got != 1 {
+			t.Errorf("signalEmitted delta = %d, want 1", got)
+		}
+		if got := after.preGraceHeld - before.preGraceHeld; got != 1 {
+			t.Errorf("preGraceHeld delta = %d, want 1", got)
+		}
+		if got := after.droppedPreGrace - before.droppedPreGrace; got != 0 {
+			t.Errorf("droppedPreGrace delta = %d, want 0", got)
+		}
+		if got := after.preGraceCanceled - before.preGraceCanceled; got != 0 {
+			t.Errorf("preGraceCanceled delta = %d, want 0", got)
+		}
+		if got := after.applied - before.applied; got != 1 {
+			t.Errorf("applied delta = %d, want 1 (signal must reach apply)", got)
+		}
+
+		m.mu.Lock()
+		gotStatus := m.currentStatus["work"]
+		m.mu.Unlock()
+		if gotStatus != agentpkg.StatusError {
+			t.Fatalf("currentStatus = %q, want error after pre-grace pass + apply", gotStatus)
+		}
+	})
+
+	t.Run("case_2_hook_during_hold_drops_pre_grace", func(t *testing.T) {
+		m := newDispatcherTestModule(t)
+		m.sessions = &fakeSessionProvider{}
+		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+			Kind:      agentpkg.ProbeIntentKindProcessDead,
+			PaneAlive: true,
+			PaneID:    "%5",
+			SenderPID: 4242,
+		})
+		seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+		before := snapshotPreGraceMetrics()
+		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+		// Wait for the detector to emit; the dispatcher is now sitting in
+		// the 300ms pre-grace hold. Inject a same-session hook while the
+		// hold is still active so lastHookAt > signalAt at timer expiry.
+		select {
+		case <-gate:
+		case <-time.After(time.Second):
+			t.Fatalf("detector did not emit within 1s")
+		}
+		// recordHookAt 200ms into the 300ms hold so the timestamp is
+		// strictly later than signalAt — guarantees pre-grace drop branch.
+		time.Sleep(200 * time.Millisecond)
+		m.probeOrch.recordHookAt("work")
+
+		// Timer expires at ~300ms → pre-grace check sees lastHookAt >
+		// signalAt → drop. Active entry stays armed (no apply) until
+		// detector ctx cancel. Verify by waiting just past hold + a
+		// scheduler grace.
+		waitFor(t, 2*time.Second, func() bool {
+			now := snapshotPreGraceMetrics()
+			return (now.droppedPreGrace - before.droppedPreGrace) >= 1
+		}, "droppedPreGrace +1 after timer expires with hook present")
+
+		after := snapshotPreGraceMetrics()
+		if got := after.signalEmitted - before.signalEmitted; got != 1 {
+			t.Errorf("signalEmitted delta = %d, want 1", got)
+		}
+		if got := after.preGraceHeld - before.preGraceHeld; got != 1 {
+			t.Errorf("preGraceHeld delta = %d, want 1", got)
+		}
+		if got := after.droppedPreGrace - before.droppedPreGrace; got != 1 {
+			t.Errorf("droppedPreGrace delta = %d, want 1", got)
+		}
+		if got := after.preGraceCanceled - before.preGraceCanceled; got != 0 {
+			t.Errorf("preGraceCanceled delta = %d, want 0", got)
+		}
+		if got := after.applied - before.applied; got != 0 {
+			t.Errorf("applied delta = %d, want 0 (signal must NOT reach apply)", got)
+		}
+		// status untouched by probe — stays Running (set by seedRunningFrame).
+		m.mu.Lock()
+		gotStatus := m.currentStatus["work"]
+		m.mu.Unlock()
+		if gotStatus != agentpkg.StatusRunning {
+			t.Fatalf("currentStatus = %q, want running (probe must not flip)", gotStatus)
+		}
+	})
+
+	t.Run("case_3_ctx_cancel_during_hold_drops_pre_cancel", func(t *testing.T) {
+		m := newDispatcherTestModule(t)
+		m.sessions = &fakeSessionProvider{}
+		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+			Kind:      agentpkg.ProbeIntentKindProcessDead,
+			PaneAlive: true,
+			PaneID:    "%5",
+			SenderPID: 4242,
+		})
+		seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+		before := snapshotPreGraceMetrics()
+		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+		// Wait for emit so the consumer is in hold, then cancel via
+		// stopAll BEFORE the 300ms timer fires. ctx.Done branch wins →
+		// drop pre-grace-canceled.
+		select {
+		case <-gate:
+		case <-time.After(time.Second):
+			t.Fatalf("detector did not emit within 1s")
+		}
+		// Cancel ~50ms into hold so the select definitely takes
+		// ctx.Done before the 300ms timer.C fires.
+		time.Sleep(50 * time.Millisecond)
+		m.probeIntentDisp.stopAll()
+
+		waitFor(t, 2*time.Second, func() bool {
+			now := snapshotPreGraceMetrics()
+			return (now.preGraceCanceled - before.preGraceCanceled) >= 1
+		}, "preGraceCanceled +1 after ctx cancel during hold")
+
+		after := snapshotPreGraceMetrics()
+		if got := after.signalEmitted - before.signalEmitted; got != 1 {
+			t.Errorf("signalEmitted delta = %d, want 1", got)
+		}
+		if got := after.preGraceHeld - before.preGraceHeld; got != 1 {
+			t.Errorf("preGraceHeld delta = %d, want 1", got)
+		}
+		if got := after.preGraceCanceled - before.preGraceCanceled; got != 1 {
+			t.Errorf("preGraceCanceled delta = %d, want 1", got)
+		}
+		if got := after.droppedPreGrace - before.droppedPreGrace; got != 0 {
+			t.Errorf("droppedPreGrace delta = %d, want 0", got)
+		}
+		if got := after.applied - before.applied; got != 0 {
+			t.Errorf("applied delta = %d, want 0 (signal must NOT reach apply)", got)
+		}
+	})
+
+	t.Run("case_4_hook_early_in_hold_drops_pre_grace", func(t *testing.T) {
+		// Identical metric outcome to case 2; difference is timing —
+		// hook arrives barely after signal (50ms) instead of 200ms.
+		// Pins behavior under early-hook race.
+		m := newDispatcherTestModule(t)
+		m.sessions = &fakeSessionProvider{}
+		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+			Kind:      agentpkg.ProbeIntentKindProcessDead,
+			PaneAlive: true,
+			PaneID:    "%5",
+			SenderPID: 4242,
+		})
+		seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+		before := snapshotPreGraceMetrics()
+		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+		select {
+		case <-gate:
+		case <-time.After(time.Second):
+			t.Fatalf("detector did not emit within 1s")
+		}
+		// Hook 50ms into the hold — well before timer fires; lastHookAt
+		// strictly > signalAt at timer expiry.
+		time.Sleep(50 * time.Millisecond)
+		m.probeOrch.recordHookAt("work")
+
+		waitFor(t, 2*time.Second, func() bool {
+			now := snapshotPreGraceMetrics()
+			return (now.droppedPreGrace - before.droppedPreGrace) >= 1
+		}, "droppedPreGrace +1 (early hook race)")
+
+		after := snapshotPreGraceMetrics()
+		if got := after.signalEmitted - before.signalEmitted; got != 1 {
+			t.Errorf("signalEmitted delta = %d, want 1", got)
+		}
+		if got := after.preGraceHeld - before.preGraceHeld; got != 1 {
+			t.Errorf("preGraceHeld delta = %d, want 1", got)
+		}
+		if got := after.droppedPreGrace - before.droppedPreGrace; got != 1 {
+			t.Errorf("droppedPreGrace delta = %d, want 1", got)
+		}
+		if got := after.applied - before.applied; got != 0 {
+			t.Errorf("applied delta = %d, want 0", got)
+		}
+	})
+
+	t.Run("case_5_pre_grace_pass_post_grace_window_catches", func(t *testing.T) {
+		// Pre-existing hook (lastHookAt < signalAt) → pre-grace check
+		// returns false (`last.After(signalAt) == false`) → signal
+		// proceeds into applyProbeGuards → step 2's existing post-
+		// direction graceWindow sees `now - last < 2s` → drop with
+		// reason="grace" → MetricProbeGraceWindowSuppressed +1 AND
+		// MetricProbeIntentDroppedGrace +1 (dual-counter pattern per
+		// applyProbeGuards step 2 + probeIntentOnDropForSession switch).
+		m := newDispatcherTestModule(t)
+		m.sessions = &fakeSessionProvider{}
+		gate := installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+			Kind:      agentpkg.ProbeIntentKindProcessDead,
+			PaneAlive: true,
+			PaneID:    "%5",
+			SenderPID: 4242,
+		})
+		seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+		// Hook BEFORE the signal — emulate the standard post-direction
+		// race that the legacy 2s graceWindow already handled. The
+		// dispatcher's new pre-hold must not regress this case.
+		m.probeOrch.recordHookAt("work")
+
+		before := snapshotPreGraceMetrics()
+		m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+		select {
+		case <-gate:
+		case <-time.After(time.Second):
+			t.Fatalf("detector did not emit within 1s")
+		}
+		// Wait for both pre-grace pass-through (300ms hold) and the
+		// applyProbeGuards step 2 drop.
+		waitFor(t, 2*time.Second, func() bool {
+			now := snapshotPreGraceMetrics()
+			return (now.droppedGrace - before.droppedGrace) >= 1
+		}, "droppedGrace +1 via post graceWindow after pre-grace pass-through")
+
+		after := snapshotPreGraceMetrics()
+		if got := after.signalEmitted - before.signalEmitted; got != 1 {
+			t.Errorf("signalEmitted delta = %d, want 1", got)
+		}
+		if got := after.preGraceHeld - before.preGraceHeld; got != 1 {
+			t.Errorf("preGraceHeld delta = %d, want 1", got)
+		}
+		if got := after.droppedPreGrace - before.droppedPreGrace; got != 0 {
+			t.Errorf("droppedPreGrace delta = %d, want 0 (pre-grace must pass-through)", got)
+		}
+		if got := after.preGraceCanceled - before.preGraceCanceled; got != 0 {
+			t.Errorf("preGraceCanceled delta = %d, want 0", got)
+		}
+		// Existing dual-count behavior at step 2: legacy
+		// MetricProbeGraceWindowSuppressed AND ProbeIntent-side
+		// MetricProbeIntentDroppedGrace both increment.
+		if got := after.graceWindowSup - before.graceWindowSup; got != 1 {
+			t.Errorf("graceWindowSup delta = %d, want 1 (post graceWindow drop)", got)
+		}
+		if got := after.droppedGrace - before.droppedGrace; got != 1 {
+			t.Errorf("droppedGrace delta = %d, want 1 (probe-intent reason routing)", got)
+		}
+		if got := after.applied - before.applied; got != 0 {
+			t.Errorf("applied delta = %d, want 0 (post graceWindow blocks apply)", got)
+		}
+	})
+}
