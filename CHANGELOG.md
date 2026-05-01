@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-alpha.281] - 2026-05-02
+
+### Feat(agent): J3 ProbeIntent dispatcher bidirectional graceWindow (#797)
+
+W6-6 ScreenChange ProbeIntent 前置 PR — 將既有 `probeGraceWindow`
+（post-direction only：hook 後 2s drop probe）擴成雙向。dispatcher
+`consumeSignals` 在進入 `applyProbeGuards` 之前先做 signalAt-based
+post-grace pre-check（preserve 2s threshold），再 hold 300ms
+`probeIntentPreGraceWindow`，期間 hook 到 → drop pre-grace；ctx cancel
+→ classify 為 hook race vs lifecycle cancel。
+
+Generic 對所有 ProbeIntent Kind 適用（W6-3 ProcessDead / W6-6
+ScreenChange / 未來 Kind），per fix-spec §3 不為單一 Kind 特化約束。
+
+mlab live verify：
+- A11 SIGKILL ✅ PASS — codex pid SIGKILL → status=error end-to-end ≤1.5s
+- A12 daemon replay ✅ PASS — restart → replayStatus → re-arm ~2s
+- A9/A10 deferred to W6-6 PR（W6-6 ScreenChange 未 merge → 無可量對象）
+
+5 輪 codex review 收斂（R1 standard 0 / R2 三平行 adversarial 3
+finding 全採納 / R3 P1 + R4 P2 + R5 0 finding），spec v7.5 + plan v3。
+W6-3 spec §9.14 加 generic-Kind drift anchor。
+
+R13 boundary race 為 known limitation — fail-fast handling：mlab
+A9 PASS = R13 acceptable；A9 fail = followup issue 加 per-event trace。
+
 ## [1.0.0-alpha.280] - 2026-05-01
 
 ### Feat(codexbroker): P1 inventory endpoint (read-only, governance phase 1) (#792)
