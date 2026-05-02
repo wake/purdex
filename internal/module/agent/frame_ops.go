@@ -871,11 +871,72 @@ func (m *Module) removeProxyRefForSender(paneID string, senderPID int, senderSta
 	return false, store.Frame{}, nil, nil, nil
 }
 
+// removeProxyRefForSenderTurn mirrors removeProxyRefForSender:798 with a
+// turn-aware identity gate (L2 spec §3.3.D). Scans the pane's frames for
+// the proxy SubagentRef whose (SourcePID, SourceStartTime, SourceTurnID)
+// triple matches the sender + turn that emitted Stop, then drops only that
+// ref via detachProxyRefForSenderTurnWithRetry. Pane-scan (not parent-
+// bound) intentionally — Stop hooks do not carry the parent FrameID and a
+// SessionStart-attached ref may live on any frame in the pane.
+//
+// Returns (removed, ownerFrameAfter, ownerBefore, ownerAfter, err) with
+// the same shape as removeProxyRefForSender so the two coexist as siblings
+// rather than divergent return contracts. ownerBefore / ownerAfter are
+// summarizeFrame outputs (any-typed for trace plumbing). When nothing
+// matched returns (false, zeroFrame, nil, nil, nil).
+//
+// Process-level wildcard detach (used by Stop with empty/missing turn_id
+// and by SessionEnd) goes through the existing removeProxyRefForSender;
+// the two functions intentionally coexist (spec §3.2 boundary).
+func (m *Module) removeProxyRefForSenderTurn(paneID string, senderPID int, senderStartTime, turnID string, broadcastTs int64) (bool, store.Frame, any, any, error) {
+	if m.frames == nil {
+		return false, store.Frame{}, nil, nil, nil
+	}
+	frames, err := m.frames.ListByPane(paneID)
+	if err != nil {
+		return false, store.Frame{}, nil, nil, err
+	}
+	for _, frame := range frames {
+		if !subagentsContainProxySenderTurn(frame.Subagents, senderPID, senderStartTime, turnID) {
+			continue
+		}
+		before := summarizeFrame(&frame)
+		detached, stored, derr := m.detachProxyRefForSenderTurnWithRetry(frame, senderPID, senderStartTime, turnID, broadcastTs)
+		if derr != nil {
+			return false, store.Frame{}, nil, nil, derr
+		}
+		if detached {
+			return true, stored, before, summarizeFrame(&stored), nil
+		}
+		// Frame vanished or its ref was already removed by a concurrent
+		// writer. Continue scanning other frames in the pane — a different
+		// owner may still carry our sender's proxy ref for this turn.
+	}
+	return false, store.Frame{}, nil, nil, nil
+}
+
 // subagentsContainProxySender is a side-effect-free check used to short-
 // circuit frames that don't need the read-modify-write retry loop.
 func subagentsContainProxySender(refs []agentpkg.SubagentRef, senderPID int, senderStartTime string) bool {
 	for _, ref := range refs {
 		if ref.IsProxy && ref.SourcePID == senderPID && ref.SourceStartTime == senderStartTime {
+			return true
+		}
+	}
+	return false
+}
+
+// subagentsContainProxySenderTurn mirrors subagentsContainProxySender for
+// the L2 turn-aware Stop targeted detach path (spec §3.3.D). All three
+// identity fields (PID, StartTime, TurnID) must match — process-level
+// matches alone are insufficient: a Stop carrying turn_b should not detach
+// a ref whose owning broker has already moved on to turn_a in flight.
+func subagentsContainProxySenderTurn(refs []agentpkg.SubagentRef, senderPID int, senderStartTime, turnID string) bool {
+	for _, ref := range refs {
+		if ref.IsProxy &&
+			ref.SourcePID == senderPID &&
+			ref.SourceStartTime == senderStartTime &&
+			ref.SourceTurnID == turnID {
 			return true
 		}
 	}
@@ -1045,6 +1106,58 @@ func (m *Module) detachProxyRefWithRetry(owner store.Frame, senderPID int, sende
 		current = *reloaded
 	}
 	return false, store.Frame{}, fmt.Errorf("proxy detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
+}
+
+// detachProxyRefForSenderTurnWithRetry mirrors detachProxyRefWithRetry:887
+// for the L2 turn-aware detach path: reload owner, filter out the proxy
+// ref whose (PID, StartTime, TurnID) triple matches, persist via
+// UpsertIfUnchanged, retry on conflict. All three identity fields must
+// match to drop — process-level matches alone are insufficient (spec
+// §3.3.D, see subagentsContainProxySenderTurn doc).
+//
+// Returns (false, zeroFrame, nil) when the ref is already gone or the
+// frame was deleted mid-flight. Caller continues scanning other frames in
+// the pane (top-level loop in removeProxyRefForSenderTurn).
+func (m *Module) detachProxyRefForSenderTurnWithRetry(owner store.Frame, senderPID int, senderStartTime, turnID string, broadcastTs int64) (bool, store.Frame, error) {
+	current := owner
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		hit := -1
+		for i, ref := range current.Subagents {
+			if ref.IsProxy &&
+				ref.SourcePID == senderPID &&
+				ref.SourceStartTime == senderStartTime &&
+				ref.SourceTurnID == turnID {
+				hit = i
+				break
+			}
+		}
+		if hit < 0 {
+			// Ref already removed or turn drift by a concurrent writer.
+			return false, store.Frame{}, nil
+		}
+		expected := current.LastSeenAt
+		filtered := make([]agentpkg.SubagentRef, 0, len(current.Subagents)-1)
+		filtered = append(filtered, current.Subagents[:hit]...)
+		filtered = append(filtered, current.Subagents[hit+1:]...)
+		current.Subagents = filtered
+		current.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if ok {
+			return true, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(owner.PaneID, owner.PID, owner.ProcessStartTime)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if reloaded == nil {
+			return false, store.Frame{}, nil
+		}
+		current = *reloaded
+	}
+	return false, store.Frame{}, fmt.Errorf("proxy turn detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
 }
 
 // firstAliveAgentInTreeFn is the test seam that indirects

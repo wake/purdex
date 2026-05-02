@@ -4482,3 +4482,239 @@ func TestUpsertProxyRefForBroker_RetryOnConflict(t *testing.T) {
 		t.Fatalf("stored.LastSeenAt = %d, want 100", stored.LastSeenAt)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// L2 Phase 2 P2-T6 — pane-scan removeProxyRefForSenderTurn +
+// detachProxyRefForSenderTurnWithRetry + subagentsContainProxySenderTurn
+// (spec §3.3.D / plan §2 P2-T6)
+// ---------------------------------------------------------------------------
+
+// TestSubagentsContainProxySenderTurn covers the new pure filter helper.
+// Mirrors subagentsContainProxySender (frame_ops.go:831-838) plus a turnID
+// match — three identity fields must all align.
+func TestSubagentsContainProxySenderTurn(t *testing.T) {
+	cases := []struct {
+		name string
+		refs []agentpkg.SubagentRef
+		want bool
+	}{
+		{
+			name: "a — three full match",
+			refs: []agentpkg.SubagentRef{
+				{IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a"},
+			},
+			want: true,
+		},
+		{
+			name: "b — PID match but turn_id differs",
+			refs: []agentpkg.SubagentRef{
+				{IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_b"},
+			},
+			want: false,
+		},
+		{
+			name: "c — turn_id match but PID differs",
+			refs: []agentpkg.SubagentRef{
+				{IsProxy: true, SourcePID: 99, SourceStartTime: "tX", SourceTurnID: "t_a"},
+			},
+			want: false,
+		},
+		{
+			name: "d — IsProxy=false (native) never matches",
+			refs: []agentpkg.SubagentRef{
+				{IsProxy: false, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a"},
+			},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := subagentsContainProxySenderTurn(tc.refs, 42, "t1", "t_a"); got != tc.want {
+				t.Fatalf("subagentsContainProxySenderTurn(%+v, 42, t1, t_a) = %v, want %v", tc.refs, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRemoveProxyRefForSenderTurn_PaneScan covers the top-level pane-scan
+// helper. Mirrors removeProxyRefForSender:798 control flow but adds a
+// turnID gate so only the matching turn's ref is detached. 5 cases.
+func TestRemoveProxyRefForSenderTurn_PaneScan(t *testing.T) {
+	t.Run("a — single frame with matching ref detaches", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		f := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+		f.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a",
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		}}
+		if _, err := m.frames.Upsert(f); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		removed, _, _, _, err := m.removeProxyRefForSenderTurn("%5", 42, "t1", "t_a", 100)
+		if err != nil {
+			t.Fatalf("removeProxyRefForSenderTurn: %v", err)
+		}
+		if !removed {
+			t.Fatalf("removed = false, want true")
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after detach", final.Subagents)
+		}
+	})
+
+	t.Run("b — two frames carry same broker but different turnIDs; only matching frame's ref drops", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		f1 := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+		f1.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a",
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		}}
+		if _, err := m.frames.Upsert(f1); err != nil {
+			t.Fatalf("seed f1: %v", err)
+		}
+		f2 := seedFrame(t, m, "%5", "cc", 200, "t200", 51)
+		f2.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_b",
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 51,
+		}}
+		if _, err := m.frames.Upsert(f2); err != nil {
+			t.Fatalf("seed f2: %v", err)
+		}
+
+		removed, _, _, _, err := m.removeProxyRefForSenderTurn("%5", 42, "t1", "t_b", 100)
+		if err != nil {
+			t.Fatalf("removeProxyRefForSenderTurn: %v", err)
+		}
+		if !removed {
+			t.Fatalf("removed = false, want true (f2 should drop)")
+		}
+		// f1 still has its t_a ref.
+		final1, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final1 == nil || len(final1.Subagents) != 1 || final1.Subagents[0].SourceTurnID != "t_a" {
+			t.Fatalf("f1 Subagents = %+v, want unchanged with turnID=t_a", final1.Subagents)
+		}
+		// f2's ref dropped.
+		final2, _ := m.frames.GetByIdentity("%5", 200, "t200")
+		if final2 == nil || len(final2.Subagents) != 0 {
+			t.Fatalf("f2 Subagents = %+v, want empty after detach", final2.Subagents)
+		}
+	})
+
+	t.Run("c — pane has no frame matching → returns false", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+		// Pane has 1 frame but no proxy ref at all.
+
+		removed, _, _, _, err := m.removeProxyRefForSenderTurn("%5", 42, "t1", "t_a", 100)
+		if err != nil {
+			t.Fatalf("removeProxyRefForSenderTurn: %v", err)
+		}
+		if removed {
+			t.Fatalf("removed = true, want false (no matching ref)")
+		}
+	})
+
+	t.Run("d — IsProxy=false ref with coincidental identity is NOT dropped", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		f := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+		// Native ref with the same SourcePID/StartTime/TurnID strings —
+		// must remain because IsProxy=false (cross-namespace isolation).
+		f.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: false, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a",
+			ID: "task-x", Type: "cc", StartedAt: 50,
+		}}
+		if _, err := m.frames.Upsert(f); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		removed, _, _, _, err := m.removeProxyRefForSenderTurn("%5", 42, "t1", "t_a", 100)
+		if err != nil {
+			t.Fatalf("removeProxyRefForSenderTurn: %v", err)
+		}
+		if removed {
+			t.Fatalf("removed = true, want false (native ref must not be dropped)")
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 {
+			t.Fatalf("Subagents = %+v, want native ref preserved", final.Subagents)
+		}
+	})
+
+	t.Run("e — turnID mismatch on matching broker → ref NOT dropped", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		f := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+		f.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a",
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		}}
+		if _, err := m.frames.Upsert(f); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		removed, _, _, _, err := m.removeProxyRefForSenderTurn("%5", 42, "t1", "t_b", 100)
+		if err != nil {
+			t.Fatalf("removeProxyRefForSenderTurn: %v", err)
+		}
+		if removed {
+			t.Fatalf("removed = true, want false (turnID mismatch)")
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 || final.Subagents[0].SourceTurnID != "t_a" {
+			t.Fatalf("Subagents = %+v, want unchanged turn t_a", final.Subagents)
+		}
+	})
+}
+
+// TestDetachProxyRefForSenderTurnWithRetry_RetryOnConflict covers the
+// retry path on the frame-level helper. Mirrors detachProxyRefWithRetry:887
+// retry semantics with the turn-aware filter.
+func TestDetachProxyRefForSenderTurnWithRetry_RetryOnConflict(t *testing.T) {
+	m := newProxyTestModule(t)
+	f := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+	f.Subagents = []agentpkg.SubagentRef{{
+		IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a",
+		ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+	}}
+	if _, err := m.frames.Upsert(f); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	owner, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || owner == nil {
+		t.Fatalf("owner read: %v / %v", err, owner)
+	}
+
+	// Inject a concurrent racer write that adds an unrelated ref and
+	// bumps LastSeenAt away from the snapshot the helper carries. Helper's
+	// first UpsertIfUnchanged conflicts; reload picks up racer + new
+	// LastSeenAt; second attempt detaches our matching ref and preserves
+	// the racer.
+	cur, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || cur == nil {
+		t.Fatalf("racer baseline: %v / %v", err, cur)
+	}
+	cur.Subagents = append(cur.Subagents, agentpkg.SubagentRef{
+		IsProxy: true, SourcePID: 999, SourceStartTime: "t999", SourceTurnID: "t_x",
+		ID: "proxy:codex:999:t999", Type: "codex", StartedAt: 55,
+	})
+	cur.LastSeenAt = owner.LastSeenAt + 10
+	if _, err := m.frames.Upsert(*cur); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	detached, stored, err := m.detachProxyRefForSenderTurnWithRetry(*owner, 42, "t1", "t_a", 100)
+	if err != nil {
+		t.Fatalf("detachProxyRefForSenderTurnWithRetry: %v", err)
+	}
+	if !detached {
+		t.Fatalf("detached = false, want true after retry")
+	}
+	// Final state: only racer's ref remains.
+	if len(stored.Subagents) != 1 {
+		t.Fatalf("Subagents count = %d, want 1 (racer preserved); refs=%+v", len(stored.Subagents), stored.Subagents)
+	}
+	if stored.Subagents[0].SourcePID != 999 {
+		t.Fatalf("surviving ref PID = %d, want 999 (racer)", stored.Subagents[0].SourcePID)
+	}
+}
