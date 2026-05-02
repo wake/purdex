@@ -65,7 +65,9 @@ internal/codexbroker/
   module.go             register sweep route + pass audit/quarantine/launchregistry into Module
 ```
 
-**Singleflight gate**: `sweep.go` uses `golang.org/x/sync/singleflight`. Key is `brokerKey` (for filtered sweeps) or `"__all__"` (for unfiltered). Dry-run and apply share the gate — a concurrent apply blocks until the in-flight dry-run finishes.
+**Concurrency control**: `sweep.go` uses two layers of `sync.RWMutex` to serialise mutating sweeps without coalescing distinct requests (see Task Q for full design). A daemon-process-wide `globalApplyMu` excludes `__all__` apply from any other concurrent apply or dry-run. A per-`brokerKey` `sync.Map[brokerKey]*sync.RWMutex` serialises filtered apply against itself and against dry-run on the same broker. Dry-run uses read-locks; apply uses write-locks. This replaces the originally-considered `singleflight.Group` (which would coalesce distinct apply requests and silently drop one — see plan-review round 1 finding #4).
+
+**Launch-registry signal in P2**: `launch-registry.json` is loaded read-only at boot (Task I) and consulted by the decision layer (Task F) as the authoritative ownership signal. P2 does NOT populate the registry from spawn paths — that is a P3 / Lights PR-G concern. Therefore on mlab the registry will initially be empty, and **every** broker without a registry entry must be classified as `foreign_quarantine` (per spec §2 + §5.1 line 371: "foreign-broker is quarantine-only — never automatically killed by tick or boot reconcile"). The lookup-miss is a *signal*, not an error; it suppresses kill regardless of predicate state.
 
 **Graceful RPC**: Step 2 connects to `BrokerRecord.Endpoint` (unix socket) and sends a minimal JSON shutdown request. Broker's own handler is responsible for draining children. If the endpoint is absent or the RPC times out, the sequence falls through to SIGTERM. P2 does not define the RPC wire format beyond what the spec requires — treat graceful as best-effort; SIGTERM is the reliable path.
 
@@ -85,7 +87,7 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 
 **Scope**:
 - Add `PredicateResult{A, B, C bool; ADetail, BDetail, CDetail string}` — per predicate evidence summary for the decision trace.
-- Add `DecisionResult{Predicates PredicateResult; IdleSeconds int; OverrideE1, OverrideE2 bool; Kill bool; Reason string}`.
+- Add `DecisionResult{Predicates PredicateResult; IdleSeconds int; OverrideE1, OverrideE2 bool; Kill bool; Reason string; AnomaliesAdded []AnomalyCode}`. `AnomaliesAdded` carries anomalies the decision layer infers (e.g. `AnomalyForeignOwner` when launch-registry lookup misses) without mutating the immutable `BrokerRecord`. The kill rule (Task F) and audit dump (Task K) consume this slice in addition to `rec.Anomalies`.
 - Add `SweepRequest{Mode string; BrokerKey string}` and `SweepResponse{DryRun bool; Evaluated []BrokerDecision; Applied []string; Errors []string}` where `BrokerDecision` pairs `BrokerRecord` with `DecisionResult`.
 - Add `QuarantineEntry` and `QuarantineFile` structs matching the spec §5.3 JSON schema (line 408-422).
 - Add `LaunchEntry{BrokerKey, Pid, Lstart, TmuxPane, CallerSessionID, LaunchedAt string}` and `LaunchRegistry{Version int; Entries []LaunchEntry}`.
@@ -93,7 +95,7 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - No removal of existing P1 types.
 
 **TDD tests**:
-- `TestDecisionResult_JSONRoundTrip` — encode + decode without loss.
+- `TestDecisionResult_JSONRoundTrip` — encode + decode without loss including non-empty `AnomaliesAdded`.
 - `TestQuarantineEntry_ExpiresAt` — verify time arithmetic from `quarantinedAt + 7*24h`.
 - `TestAuditDump_JSONRoundTrip` — round-trip including `killSequence.stepLatencyMs`.
 
@@ -188,10 +190,11 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Pre-condition**: Tasks A, I-stub (launch registry lookup interface only).
 
 **Scope**:
-- `EvalPredicateC(rec BrokerRecord, fs FS, registry LaunchRegistryReader) (bool, string)` where `LaunchRegistryReader` is a minimal interface `{ Lookup(brokerKey string) (*LaunchEntry, bool) }`.
+- `EvalPredicateC(rec BrokerRecord, fs FS, registry LaunchRegistryReader) (bool, string)` where `LaunchRegistryReader` is a minimal interface `{ Lookup(brokerKey string) (*LaunchEntry, bool); Empty() bool }`.
 - Per spec §5.1 lines 365-366: `cwd` path must exist with definitive `os.Stat` success; then at least one of: (a) `registry.Lookup(brokerKey)` returns an entry with `tmuxPane` still alive (verify via `tmux list-panes -F '#{pane_id}'` exec, cached for the scan duration), (b) `callerSessionID` matches a recognised live session (P2: check against daemon's session map if accessible; if no session tracking yet in P2, treat as false — not blocking), (c) explicit lease exists (not in P2 scope).
 - Transient `cwd` stat failures (ESTALE, EIO, EACCES) → fall through; definitive ENOENT → C=false.
 - `DefaultCwdStatBudget = 50 * time.Millisecond`.
+- **Important**: predicate C only reports ownership *evidence*. The "no registry entry → quarantine, never auto-kill" foreign-broker contract (spec §5.1 line 371) is enforced one layer up in Task F by inspecting `registry.Empty()` / `registry.Lookup` directly — predicate C must not silently absorb that responsibility, because predicate C false alone (without ownership context) is also the legitimate outcome for a purdex-owned broker whose pane has just closed.
 
 **TDD tests**:
 - `TestEvalPredicateC_CwdExists_PaneAlive` → true (fake registry + fake tmux pane list).
@@ -216,19 +219,25 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Scope**:
 - `EvalDecision(ctx context.Context, rec BrokerRecord, opts DecisionOpts) DecisionResult` composing A/B/C.
   - `DecisionOpts` carries: `FS`, `ProcessLister`, `Dialer`, `Registry LaunchRegistryReader`, `IdleTimeout time.Duration`, `ResultWindow time.Duration`, `StaleThreshold time.Duration`.
+- **Foreign-broker pre-filter** (spec §5.1 line 371 + §2 line 44): evaluated **before** the kill rule so it strictly precedes the idle-timeout kill path.
+  - Inputs: `opts.Registry`. The registry MAY be `nil` (defensive — Module wiring failure), `Empty()==true` (P2 expected steady state on mlab), or have entries.
+  - Detection: `isForeign := opts.Registry == nil || opts.Registry.Empty() || lookupMiss(opts.Registry, rec.BrokerKey)`. If `isForeign` is true OR `rec.Anomalies` already contains `AnomalyForeignOwner` (forward-compatible with future P1 changes) → set `result.AnomaliesAdded += AnomalyForeignOwner` (only if not already in `rec.Anomalies` to avoid duplicate audit entries), `result.Kill = false`, `result.Reason = "foreign_quarantine"`. Predicate trace is still populated for forensics.
+  - Note: this returns immediately with the predicates evaluated for trace; no kill path can override it within `EvalDecision`. The sweep handler (Task Q) honours operator-explicit `mode=apply&brokerKey=<X>` separately by bypassing the foreign filter — that path is documented in Task Q and tested with `TestSweepHandler_OperatorOverride_ForeignBrokerKilled`.
 - **Conflict rule**: any predicate true → `Kill=false` (positive liveness wins, spec §5.1 lines 367-368).
 - **Kill rule**: `Kill = ¬A ∧ ¬B ∧ ¬C ∧ idleSeconds >= idleTimeout.Seconds()` per spec §5.1 line 371. `idleSeconds` is derived from `rec.LastJobUpdatedAt` (P1 field) vs now; nil `LastJobUpdatedAt` → treated as `age = ∞` (most permissive kill direction — broker never dispatched a job is a valid orphan candidate).
-- **Foreign-broker rule**: if `rec.Anomalies` contains `AnomalyForeignOwner` → `Kill=false`, `Reason="foreign_quarantine"` even if A/B/C all false (spec §2 line 44 + §5.1 line 371).
-- Return `DecisionResult` with full predicate trace.
+- Return `DecisionResult` with full predicate trace + `AnomaliesAdded` slice.
 
 **TDD tests**:
 - `TestEvalDecision_ATrue_NoKill`.
 - `TestEvalDecision_BTrue_NoKill`.
 - `TestEvalDecision_CTrue_NoKill`.
-- `TestEvalDecision_AllFalse_IdleExpired_Kill`.
+- `TestEvalDecision_AllFalse_IdleExpired_Kill` — registry has matching entry; only then idle-timeout kill path triggers.
 - `TestEvalDecision_AllFalse_IdleNotExpired_NoKill`.
-- `TestEvalDecision_ForeignBroker_AllFalse_NoKill`.
-- `TestEvalDecision_NilLastJobUpdatedAt_IdleInfinite_Kill` (idle=∞ treated as expired).
+- `TestEvalDecision_ForeignBroker_AllFalse_NoKill` — `rec.Anomalies` already carries `AnomalyForeignOwner` (forward-compat path).
+- `TestEvalDecision_RegistryMissing_AllForeignQuarantine` — registry `Empty()==true`; **all** brokers (regardless of A/B/C) get `AnomaliesAdded=[AnomalyForeignOwner]`, `Kill=false`, `Reason="foreign_quarantine"`. Mlab-realistic test for the P2-launches-without-spawn-hook scenario.
+- `TestEvalDecision_RegistryNil_AllForeignQuarantine` — defensive: `opts.Registry == nil` treated identically.
+- `TestEvalDecision_RegistryHasOtherKey_ThisIsForeign` — registry populated but lookup miss for this brokerKey → `Reason="foreign_quarantine"`.
+- `TestEvalDecision_NilLastJobUpdatedAt_IdleInfinite_Kill` (idle=∞ treated as expired) — uses populated registry to clear the foreign filter.
 
 **Acceptance**: decision composition tests all green; `go test -race ./internal/codexbroker/...` clean.
 
@@ -297,18 +306,20 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Pre-condition**: Task A done.
 
 **Scope**:
-- `LaunchRegistry` with `Load(path string) (*LaunchRegistryFile, error)`, `Save(path string, f *LaunchRegistryFile) error` (atomic rename), `Register(f *LaunchRegistryFile, e LaunchEntry) *LaunchRegistryFile`, `Remove(f *LaunchRegistryFile, brokerKey string, pid int) *LaunchRegistryFile`, `Lookup(f *LaunchRegistryFile, brokerKey string) (*LaunchEntry, bool)`.
+- `LaunchRegistry` with `Load(path string) (*LaunchRegistryFile, error)`, `Save(path string, f *LaunchRegistryFile) error` (atomic rename), `Register(f *LaunchRegistryFile, e LaunchEntry) *LaunchRegistryFile`, `Remove(f *LaunchRegistryFile, brokerKey string, pid int) *LaunchRegistryFile`, `Lookup(f *LaunchRegistryFile, brokerKey string) (*LaunchEntry, bool)`, `Empty(f *LaunchRegistryFile) bool`.
 - `LaunchRegistryFile{Version int; Entries []LaunchEntry}`.
 - `LaunchEntry{BrokerKey, TmuxPane, CallerSessionID string; Pid int; Lstart time.Time; LaunchedAt time.Time}`.
 - Path: `<pluginDataRoot>/launch-registry.json`.
-- `LaunchRegistryReader` interface (one method: `Lookup(key string) (*LaunchEntry, bool)`) satisfied by `*LaunchRegistryFile`. Used by Task E predicate C.
+- `LaunchRegistryReader` interface (`Lookup(key string) (*LaunchEntry, bool)` + `Empty() bool`) satisfied by `*LaunchRegistryFile`. Used by Task E predicate C and Task F decision composer.
 - **P2 does not populate the registry automatically** (that's a P3 spawn-hook concern). The registry file may be absent on mlab initially — `Load` returns an empty registry on `os.IsNotExist`. P2 reads but does not write during sweep; only `Module.Init` loads it. Tests use fixture files.
+- **Lookup-miss is a quarantine signal, not an error.** The registry is the *authoritative* ownership source per spec §2 + §5.1 line 371. When `Lookup(brokerKey)` returns `false` (or `Empty()` returns true), the decision layer (Task F) MUST classify the broker as `foreign_quarantine`. This is essential because P2 ships before the spawn-hook lands — on mlab, every visible broker will have no registry entry, and any other interpretation would risk auto-killing the operator's own work. Documented contract: `LaunchRegistryReader` consumers must inspect `Empty()` first to distinguish "no purdex broker is tracked yet" (P2 steady state) from "this specific brokerKey is foreign" (post-spawn-hook).
 
 **TDD tests**:
-- `TestLaunchRegistry_LoadMissing` — returns empty registry, no error.
+- `TestLaunchRegistry_LoadMissing` — returns empty registry, `Empty()==true`, no error.
 - `TestLaunchRegistry_RoundTrip` — register + save + load + lookup.
-- `TestLaunchRegistry_Remove` — remove existing entry, lookup returns false.
-- `TestLaunchRegistry_LookupMissing` — returns false.
+- `TestLaunchRegistry_Remove` — remove existing entry, lookup returns false; `Empty()` reflects post-removal state.
+- `TestLaunchRegistry_LookupMissing` — returns false (entries present but key absent).
+- `TestLaunchRegistry_Empty_ZeroEntries` / `TestLaunchRegistry_Empty_AfterRegister` — `Empty()` switches false after first `Register`.
 - `TestLaunchRegistry_AtomicSave` — simulate rename failure; old file intact.
 
 **Acceptance**: launch registry tests all green; lookup satisfies `LaunchRegistryReader` interface.
@@ -503,18 +514,23 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
   - Singleflight key: `brokerKey` (or `"__all__"`).
   - Run `Scanner.Scan(ctx)` to get current inventory.
   - For each `BrokerRecord` (filtered by brokerKey if set): check quarantine (`IsQuarantined`) → skip if quarantined; call `EvalDecision`; populate `SweepResponse.Evaluated`.
-  - If `mode=apply` and `DecisionResult.Kill=true`: call `KillSequence.Run`; record outcome in `SweepResponse.Applied` or `SweepResponse.Errors`.
+  - **Operator override path** (spec §5.1 line 371 "Operator may still issue a manual sweep with `mode=apply&brokerKey=<...>` to override"): when `mode=apply` AND `brokerKey` filter is set AND the resulting `DecisionResult.Reason == "foreign_quarantine"`, the kill is *still* skipped by default in P2. The override semantic ships as a separate `&force=true` query param ONLY recognised in conjunction with explicit `brokerKey`. P2 default behaviour: `force` not set → foreign brokers never killed via sweep API. Logged at audit-info level when `force=true&brokerKey=<X>` triggers a kill on a foreign broker; the audit dump `reason` field becomes `"manual_sweep_force"`. `mode=apply` (no brokerKey, no force) NEVER kills foreign brokers — this is the mlab-safe default that prevents the 50+ broker mass-kill scenario.
+  - If `mode=apply` and `DecisionResult.Kill=true` (or `force=true` foreign override path): call `KillSequence.Run`; record outcome in `SweepResponse.Applied` or `SweepResponse.Errors`.
   - Return `200 JSON SweepResponse`.
 - Timeout: 30 s for `mode=apply` (accounts for graceful + SIGTERM + SIGKILL budget); 10 s for `mode=dry-run`.
 
 **TDD tests**:
 - `TestSweepHandler_DryRun_NoKills` — mode=dry-run, one broker qualifies for kill → evaluated list populated, applied empty.
-- `TestSweepHandler_Apply_KillsOrphan` — mode=apply, fake KillSequence → applied list populated.
+- `TestSweepHandler_Apply_KillsOrphan` — mode=apply, fake KillSequence → applied list populated; populated registry has the brokerKey so foreign filter does not block.
 - `TestSweepHandler_BrokerKeyFilter` — brokerKey=X → only record with matching key evaluated.
 - `TestSweepHandler_QuarantinedSkipped` — broker in quarantine → not in evaluated list.
-- `TestSweepHandler_Singleflight_ConcurrentRequests` — two concurrent POST → one scan.
+- `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` — mode=apply with empty registry on 50 brokers; **zero** kills issued; all decisions are `foreign_quarantine`. Mlab-safety regression test.
+- `TestSweepHandler_OperatorOverride_ForeignBrokerKilled` — `mode=apply&brokerKey=<X>&force=true` with empty registry → KillSequence invoked; audit dump reason=`manual_sweep_force`.
+- `TestSweepHandler_Apply_NoForce_ForeignBrokerNotKilled` — `mode=apply&brokerKey=<X>` without `force` and no registry entry → kill NOT invoked.
 - `TestSweepHandler_MethodNotPost_405`.
 - `TestSweepHandler_ScanFailure_503`.
+
+(Concurrency tests covered separately in Finding #4 section, replacing the original singleflight test.)
 
 **Acceptance**: sweep handler tests green; singleflight coalesces concurrent requests.
 
@@ -661,7 +677,7 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | Reviewer | Focus prompt seed |
 |---|---|
 | Attack | Find: PID-reuse race between Step 0 verify and Step 3 SIGTERM (window where pid is reused between check and kill); fingerprint forgery via argv injection; quarantine bypass (path where `Kill=true` is returned despite quarantine entry); kill loop if broker respawns during sweep; pgid=1 edge case on abnormal broker invocation; singleflight gate not covering all concurrent-apply paths. |
-| Defense | Verify: foreign-broker quarantine boundary — confirm no path kills a foreign broker without explicit `mode=apply&brokerKey`; launch registry missing fallback — predicate C must return false (not panic) when registry absent; E1 transient-ENOENT false positive — ESTALE/EIO/EACCES must not accumulate toward E1; `mode=apply` behaviour is a strict superset of `mode=dry-run` evaluated list (no extra kills not in dry-run); audit preimage must be committed before any signal reaches broker. |
+| Defense | Verify: foreign-broker quarantine boundary — confirm `mode=apply` (no `force`, with or without `brokerKey`) NEVER kills a broker whose registry lookup misses; the only kill path for foreign brokers is `mode=apply&brokerKey=<X>&force=true`; mlab-empty-registry case classifies all 50+ brokers as `foreign_quarantine` with zero kills issued; launch registry missing fallback — predicate C must return false (not panic) when registry absent; E1 transient-ENOENT false positive — ESTALE/EIO/EACCES must not accumulate toward E1; `mode=apply` behaviour is a strict superset of `mode=dry-run` evaluated list (no extra kills not in dry-run); audit preimage must be committed before any signal reaches broker. |
 | Health | Check: `codexbroker` package SRP — `decision.go` vs `killer.go` vs `sweep.go` responsibility boundaries; `audit.go` not leaking into `killer.go` beyond the two defined call sites; `sockverify_darwin.go` / `sockverify_linux.go` / `sockverify_other.go` — are the three files the right split or should interface be extracted to `sockverify.go`; file sizes (anything > 300 LOC needs justification); test fixture ownership clear (no cross-task shared mutable fixtures). |
 
 ---
@@ -680,6 +696,7 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | Scan amplification on concurrent sweep requests | `SweepHandler` uses `singleflight.Group` per brokerKey (or `"__all__"`). Concurrent dry-run + apply for same key: apply waits for in-flight dry-run scan; does not double-scan. `TestSweepHandler_Singleflight_ConcurrentRequests` enforces this. |
 | macOS no /proc for sockverify | `sockverify_darwin.go` uses `proc_pidinfo` via `syscall.Syscall6` (no CGo, no fork). If `proc_pidinfo` returns EPERM, falls back to `lsof -nP` with 1 s timeout. Budget-exceeded or both-failed → `held=true` (conservative defer). |
 | Symlink/realpath edge cases for cwd | All cwd comparisons in P2 use `EvalSymlinks` chain inherited from P1 — same `FS.EvalSymlinks` call path as P1. No new cwd hashing in P2; comparisons use the resolved `BrokerRecord.CwdResolved` field. |
+| **Mlab 50+ existing brokers mass-kill** (P2 ships before spawn-hook populates registry) | `EvalDecision` foreign-broker pre-filter (Task F): empty/missing registry → `Reason="foreign_quarantine"`, `Kill=false`, regardless of A/B/C. Sweep handler `mode=apply` (no `&force`) NEVER kills foreign brokers. `TestEvalDecision_RegistryMissing_AllForeignQuarantine` and `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` are mlab-safety regression tests. Operator override only via explicit `?mode=apply&brokerKey=<X>&force=true`. |
 
 ---
 
