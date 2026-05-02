@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.285] - 2026-05-03
+
+### Fix(spa): clear stale subagent dots (#814)
+
+Fixes stale subagent dots when the backend explicitly broadcasts
+`subagents:null`. The SPA now treats explicit `null` the same as an empty
+subagent list while preserving the existing no-op behavior when the field is
+absent. The agent projection path also serializes empty subagent lists as `[]`
+instead of `null` so reconnect and hook broadcasts stay consistent.
+
 ## [1.0.0-alpha.284] - 2026-05-02
 
 ### Feat(codex): W6-6 ScreenChange ProbeIntent for permission-reply detection (#799)
