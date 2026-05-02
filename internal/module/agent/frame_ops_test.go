@@ -5337,4 +5337,169 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 			t.Fatalf("surviving ref PID = %d, want 43", final.Subagents[0].SourcePID)
 		}
 	})
+
+	// Row 11: parent opencode + 1 ref(PID=42, t1, turnID="", Type=cc)
+	// (cc as proxy under opencode parent — legitimate cross-type case via
+	// existing PR-2b proxy collapse) → SessionEnd from PID=42, AgentType=cc
+	// → wildcard detach via existing removeProxyRefForSender (SessionEnd
+	// path unchanged; T8a does NOT add a SessionEnd handler).
+	t.Run("row11_session_end_cross_type_cc_under_opencode_unchanged", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		// Register opencode provider so registry resolves the parent type.
+		m.registry.Register(&fakeAgentProvider{
+			typeName: "opencode",
+			derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		})
+		seedProxyRef(t, m, "%5", "opencode", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:cc:42:t1", Type: "cc", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+		}})
+		// Seam: SessionEnd path doesn't traverse PPID for detach (it's
+		// pane-scan). readProcessInfoFn still needs to satisfy generic
+		// post-switch code if SessionEnd hits frame == nil branch.
+		origInfo := readProcessInfoFn
+		readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+			return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+		}
+		t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxSessionEnd",
+			AgentType:  "cc", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: json.RawMessage(`{}`),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		// Existing SessionEnd path's reason for cross-type proxy detach.
+		if meta.Reason != "proxy_subagent_detached" {
+			t.Fatalf("reason = %q, want proxy_subagent_detached (existing SessionEnd path)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after SessionEnd wildcard detach", final.Subagents)
+		}
+	})
+
+	// Row 12: sender owns own frame + Stop → frame.Subagents unchanged,
+	// no proxy detach attempt. (Spec §3.3.D `frame != nil` short-circuit.)
+	t.Run("row12_stop_sender_owns_own_frame_short_circuit", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		// Sender PID=42 owns its own codex frame; frame.Subagents has 1
+		// native ref (must remain untouched).
+		f := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
+		f.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: false, ID: "task-existing", Type: "codex", StartedAt: 50,
+		}}
+		if _, err := m.frames.Upsert(f); err != nil {
+			t.Fatalf("seed sender frame: %v", err)
+		}
+		origInfo := readProcessInfoFn
+		readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+			return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+		}
+		t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		// New L2 stop reasons must NOT have surfaced — short-circuit via
+		// `frame != nil` lets the existing generic post-switch path run.
+		switch meta.Reason {
+		case "proxy_subagent_detached_on_stop_turn",
+			"proxy_subagent_detached_on_stop",
+			"proxy_subagent_stop_no_match",
+			"proxy_subagent_stop_parse_failed":
+			t.Fatalf("Stop ran new L2 detach path on sender's own frame; reason=%q", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 42, "t1")
+		if final == nil || len(final.Subagents) != 1 || final.Subagents[0].ID != "task-existing" {
+			t.Fatalf("Subagents = %+v, want native ref preserved", final.Subagents)
+		}
+	})
+
+	// Row 13: parent cc + 1 native ref(IsProxy=false, ID="task-x") with
+	// PID/turnID strings that COINCIDENTALLY match the Stop's identity
+	// → native ref must NOT be dropped. (Cross-namespace isolation —
+	// removeProxyRefForSenderTurn / subagentsContainProxySenderTurn are
+	// already gated on IsProxy=true; this row confirms the case body
+	// doesn't bypass that gate via some other path.)
+	t.Run("row13_stop_native_ref_isolation", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			IsProxy: false, ID: "task-x", Type: "cc", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a",
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		// turnID != "" path → removeProxyRefForSenderTurn IsProxy gate
+		// prevents drop → trace stop_no_match.
+		if meta.Reason != "proxy_subagent_stop_no_match" {
+			t.Fatalf("reason = %q, want proxy_subagent_stop_no_match (native ref must not match)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 || final.Subagents[0].ID != "task-x" {
+			t.Fatalf("Subagents = %+v, want native ref preserved", final.Subagents)
+		}
+	})
+
+	// Row 18: cc Stop with no turn_id in raw, ref has empty SourceTurnID
+	// → wildcard detach via §3.3.D non-codex fallback (process-level
+	// removeProxyRefForSender).
+	t.Run("row18_cc_stop_wildcard_fallback", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		// Parent opencode + cross-type cc proxy ref (legitimate cc-as-
+		// proxy-under-opencode shape from PR-2b).
+		m.registry.Register(&fakeAgentProvider{
+			typeName: "opencode",
+			derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		})
+		seedProxyRef(t, m, "%5", "opencode", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:cc:42:t1", Type: "cc", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+			// SourceTurnID intentionally empty (cc never populates it).
+		}})
+		origInfo := readProcessInfoFn
+		readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+			return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+		}
+		t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "cc", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: json.RawMessage(`{}`),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_detached_on_stop" {
+			t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop (cc wildcard fallback)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after cc Stop wildcard detach", final.Subagents)
+		}
+	})
 }
