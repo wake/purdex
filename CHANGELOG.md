@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0-alpha.283] - 2026-05-02
+
+### [L2] Codex broker turn-aware proxy detach on Stop (#801)
+
+Codex broker (long-lived `codex resume <thread>`) under cc/opencode parent
+now uses turn-aware proxy ref identity for Stop detach. The pre-L2
+SourceTurnID-blind wildcard detach sometimes dropped the wrong turn's ref
+on legitimate intra-broker turn-change races; L2 stamps each
+UserPromptSubmit/PreToolUse upsert with a `turn_id` (parsed from codex
+raw_event) and routes Stop through three sub-cases (spec §3.3.D):
+targeted detach when Stop's turn matches; skip when broker's ref carries
+a non-empty turn but Stop's turn is missing/malformed (preserves the
+dot — Stop is unreliable signal there); empty-turn fallback with
+turn-aware filter (`turnID==""`) re-verifying the empty state inside the
+optimistic-concurrency loop, so a concurrent upgrade is no longer
+wildcard-dropped.
+
+PR-level highlights:
+
+- Spec v5 final after 5 rounds of codex spec review.
+- 11 TDD commits across 3 phases (P1 catalog/parse, P2 helpers, P3
+  dispatch + 22 spec §5 rows + concurrency rows 14/15/15b/16/19).
+- 4 rounds of PR codex review:
+  R1 standard → 1 blocker (PreToolUse no-parent short-circuit).
+  R2 three-way adversarial → 10 findings adopted (A1 TOCTOU / A2
+  turn_id preserve / A3 sender_start_time canonicalization / A4
+  turn_id length cap / D1-D4 defensive rows + trace audit / F3 file
+  split / F6 line-number cleanup).
+  R3 standard → 1 P2 (round-2 A2 vs round-3 P2 trade-off boundary).
+  R3 consulting (independent codex session) → confirmed physical
+  trade-off, recommended option-1 revert.
+  R4 standard → 0 finding.
+- A2 production reverted to unconditional overwrite (round-3 P2
+  resolution); spec §3.5 known-limitation #5 documents the trade-off.
+- 5 follow-up issues opened: #803 (race-mode controlled interleaving),
+  #804 (`applyFrameEvent` dispatcher split), #805
+  (`frame_ops_proxy.go` extraction), #806 (`TurnIdentityProvider` for
+  cc/opencode L3 forward-compat), #808 (explicit unknown/new-generation
+  turn state to break the SourceTurnID single-field trade-off).
+- A6 (PID-reuse triple collision) and F5 (SenderTurn naming) accepted
+  without change.
+
 ## [1.0.0-alpha.282] - 2026-05-02
 
 ### Fix(spa): preserve dot-slash terminal file links (#807)
