@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -227,4 +229,68 @@ func isActiveStatus(s string) bool {
 	default:
 		return false
 	}
+}
+
+// DefaultRecentResultWindow is the spec §5.1 row B default: any job whose
+// completedAt falls within this window AND has a parseable jobs/<id>.json
+// counts as a recent delivery readable.
+const DefaultRecentResultWindow = 30 * time.Minute
+
+// jobResultProbe is the minimal shape we look for in jobs/<id>.json. The
+// presence of EITHER `result` or `rendered` (any non-empty value) confirms
+// the broker successfully wrote a delivery; either field absent is treated
+// as not-readable.
+type jobResultProbe struct {
+	Result   json.RawMessage `json:"result,omitempty"`
+	Rendered json.RawMessage `json:"rendered,omitempty"`
+}
+
+// EvalPredicateB implements spec §5.1 row B "Recent delivery readable".
+//
+// The caller (EvalDecision in task F) provides the same shared
+// []StateJobLite slice already loaded for predicate A — predicate B does
+// not re-read state.json.
+//
+// True iff at least one job satisfies all three:
+//   - status == "completed"
+//   - completedAt is non-nil and within `window` of now
+//   - <stateDir>/jobs/<id>.json exists, opens, decodes successfully, and
+//     contains at least one of {result, rendered}.
+func EvalPredicateB(rec BrokerRecord, jobs []StateJobLite, fs FS, window time.Duration) (bool, string) {
+	if rec.StateDir == "" || fs == nil {
+		return false, "no-state-dir"
+	}
+	now := time.Now()
+	for _, job := range jobs {
+		if job.Status != "completed" || job.CompletedAt == nil {
+			continue
+		}
+		if now.Sub(*job.CompletedAt) > window {
+			continue
+		}
+		if jobResultReadable(rec.StateDir, job.ID, fs) {
+			return true, "completed:" + job.ID
+		}
+	}
+	return false, "no-recent-delivery"
+}
+
+// jobResultReadable opens <stateDir>/jobs/<id>.json and confirms it contains
+// at least one of {result, rendered}. Any I/O or decode failure → false.
+func jobResultReadable(stateDir, id string, fs FS) bool {
+	path := filepath.Join(stateDir, "jobs", id+".json")
+	rc, err := fs.Open(path)
+	if err != nil {
+		return false
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return false
+	}
+	var p jobResultProbe
+	if err := json.Unmarshal(body, &p); err != nil {
+		return false
+	}
+	return len(p.Result) > 0 || len(p.Rendered) > 0
 }

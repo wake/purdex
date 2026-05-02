@@ -211,3 +211,105 @@ func TestEvalPredicateA_RPCDown_NilJobs(t *testing.T) {
 
 // Smoke: make sure syscall import survives in test file (used elsewhere).
 var _ = syscall.SIGTERM
+
+// ----- Task D — Predicate B (recent delivery readable) -------------------
+
+func brokerRecordWithStateDir(stateDir string) BrokerRecord {
+	r := brokerRecord()
+	r.StateDir = stateDir
+	return r
+}
+
+// TestEvalPredicateB_CompletedJobWithinWindow_FilePresent — completed job
+// within window AND jobs/<id>.json exists with a result/rendered field
+// → B=true.
+func TestEvalPredicateB_CompletedJobWithinWindow_FilePresent(t *testing.T) {
+	now := time.Now()
+	completed := now.Add(-5 * time.Minute)
+	jobs := []StateJobLite{{
+		ID: "j1", Status: "completed", UpdatedAt: completed, CompletedAt: timePtr(completed),
+	}}
+	fs := newMemFS()
+	fs.writeFile("/state/jobs/j1.json", `{"result":"ok"}`)
+	rec := brokerRecordWithStateDir("/state")
+	ok, _ := EvalPredicateB(rec, jobs, fs, DefaultRecentResultWindow)
+	if !ok {
+		t.Errorf("expected B=true (completed in window with file)")
+	}
+}
+
+// TestEvalPredicateB_CompletedJobWithinWindow_FileMissing — completed in
+// window but no jobs/<id>.json on disk → B=false.
+func TestEvalPredicateB_CompletedJobWithinWindow_FileMissing(t *testing.T) {
+	now := time.Now()
+	completed := now.Add(-5 * time.Minute)
+	jobs := []StateJobLite{{
+		ID: "j1", Status: "completed", UpdatedAt: completed, CompletedAt: timePtr(completed),
+	}}
+	fs := newMemFS()
+	rec := brokerRecordWithStateDir("/state")
+	ok, _ := EvalPredicateB(rec, jobs, fs, DefaultRecentResultWindow)
+	if ok {
+		t.Errorf("expected B=false (file missing)")
+	}
+}
+
+// TestEvalPredicateB_CompletedJobBeyondWindow — completed long ago → B=false.
+func TestEvalPredicateB_CompletedJobBeyondWindow(t *testing.T) {
+	now := time.Now()
+	completed := now.Add(-2 * time.Hour)
+	jobs := []StateJobLite{{
+		ID: "j1", Status: "completed", UpdatedAt: completed, CompletedAt: timePtr(completed),
+	}}
+	fs := newMemFS()
+	fs.writeFile("/state/jobs/j1.json", `{"result":"ok"}`)
+	rec := brokerRecordWithStateDir("/state")
+	ok, _ := EvalPredicateB(rec, jobs, fs, DefaultRecentResultWindow)
+	if ok {
+		t.Errorf("expected B=false (beyond window)")
+	}
+}
+
+// TestEvalPredicateB_FailedJobWithinWindow — only completed status counts,
+// failed/cancelled do not → B=false.
+func TestEvalPredicateB_FailedJobWithinWindow(t *testing.T) {
+	now := time.Now()
+	when := now.Add(-1 * time.Minute)
+	jobs := []StateJobLite{{
+		ID: "j1", Status: "failed", UpdatedAt: when, CompletedAt: timePtr(when),
+	}}
+	fs := newMemFS()
+	fs.writeFile("/state/jobs/j1.json", `{"error":"boom"}`)
+	rec := brokerRecordWithStateDir("/state")
+	ok, _ := EvalPredicateB(rec, jobs, fs, DefaultRecentResultWindow)
+	if ok {
+		t.Errorf("expected B=false (failed status doesn't count)")
+	}
+}
+
+// TestEvalPredicateB_NoJobs — empty jobs slice → B=false.
+func TestEvalPredicateB_NoJobs(t *testing.T) {
+	fs := newMemFS()
+	rec := brokerRecordWithStateDir("/state")
+	ok, _ := EvalPredicateB(rec, nil, fs, DefaultRecentResultWindow)
+	if ok {
+		t.Errorf("expected B=false (no jobs)")
+	}
+}
+
+// TestEvalPredicateB_MalformedJobFile — file exists but JSON parse fails →
+// B=false.
+func TestEvalPredicateB_MalformedJobFile(t *testing.T) {
+	now := time.Now()
+	completed := now.Add(-5 * time.Minute)
+	jobs := []StateJobLite{{
+		ID: "j1", Status: "completed", UpdatedAt: completed, CompletedAt: timePtr(completed),
+	}}
+	fs := newMemFS()
+	fs.writeFile("/state/jobs/j1.json", `{not-json`)
+	rec := brokerRecordWithStateDir("/state")
+	ok, _ := EvalPredicateB(rec, jobs, fs, DefaultRecentResultWindow)
+	if ok {
+		t.Errorf("expected B=false (malformed file)")
+	}
+}
