@@ -313,3 +313,139 @@ func TestEvalPredicateB_MalformedJobFile(t *testing.T) {
 		t.Errorf("expected B=false (malformed file)")
 	}
 }
+
+// ----- Task E — Predicate C (live ownership) -----------------------------
+
+// fakeRegistry is a minimal LaunchRegistryReader for tests; full impl is
+// task I.
+type fakeRegistry struct {
+	entries map[string]LaunchEntry
+}
+
+func (r *fakeRegistry) Lookup(brokerKey string) (*LaunchEntry, bool) {
+	e, ok := r.entries[brokerKey]
+	if !ok {
+		return nil, false
+	}
+	return &e, true
+}
+
+func (r *fakeRegistry) Empty() bool { return len(r.entries) == 0 }
+
+// fakePaneLister returns a fixed set of live pane IDs.
+type fakePaneLister struct {
+	live map[string]bool
+	err  error
+}
+
+func (l *fakePaneLister) IsAlive(pane string) (bool, error) {
+	if l.err != nil {
+		return false, l.err
+	}
+	return l.live[pane], nil
+}
+
+// memFSWithDirs lets us add an existing directory entry to memFS so cwd
+// stat succeeds.
+func memFSWithCwd(cwd string) *memFS {
+	fs := newMemFS()
+	fs.dirs[cwd] = true
+	return fs
+}
+
+// TestEvalPredicateC_CwdExists_PaneAlive — cwd exists + registry pane alive
+// → C=true.
+func TestEvalPredicateC_CwdExists_PaneAlive(t *testing.T) {
+	rec := brokerRecord()
+	rec.Cwd = "/tmp/work"
+	fs := memFSWithCwd("/tmp/work")
+	reg := &fakeRegistry{entries: map[string]LaunchEntry{
+		rec.Key: {BrokerKey: rec.Key, TmuxPane: "%42"},
+	}}
+	panes := &fakePaneLister{live: map[string]bool{"%42": true}}
+	ok, _ := EvalPredicateC(rec, fs, reg, panes)
+	if !ok {
+		t.Errorf("expected C=true (cwd exists + pane alive)")
+	}
+}
+
+// TestEvalPredicateC_CwdExists_PaneGone — cwd exists but pane closed
+// → C=false.
+func TestEvalPredicateC_CwdExists_PaneGone(t *testing.T) {
+	rec := brokerRecord()
+	rec.Cwd = "/tmp/work"
+	fs := memFSWithCwd("/tmp/work")
+	reg := &fakeRegistry{entries: map[string]LaunchEntry{
+		rec.Key: {BrokerKey: rec.Key, TmuxPane: "%42"},
+	}}
+	panes := &fakePaneLister{live: map[string]bool{}} // pane gone
+	ok, _ := EvalPredicateC(rec, fs, reg, panes)
+	if ok {
+		t.Errorf("expected C=false (pane gone)")
+	}
+}
+
+// TestEvalPredicateC_CwdENOENT — cwd definitively missing → C=false.
+func TestEvalPredicateC_CwdENOENT(t *testing.T) {
+	rec := brokerRecord()
+	rec.Cwd = "/missing/path"
+	rec.CwdExists = false
+	rec.Anomalies = []Anomaly{{Code: AnomalyCwdMissing}}
+	fs := newMemFS()
+	reg := &fakeRegistry{entries: map[string]LaunchEntry{
+		rec.Key: {BrokerKey: rec.Key, TmuxPane: "%42"},
+	}}
+	panes := &fakePaneLister{live: map[string]bool{"%42": true}}
+	ok, _ := EvalPredicateC(rec, fs, reg, panes)
+	if ok {
+		t.Errorf("expected C=false (cwd ENOENT)")
+	}
+}
+
+// TestEvalPredicateC_CwdTransientError — transient stat error (not ENOENT)
+// → fall through (do not gate on cwd); pane evidence still wins.
+func TestEvalPredicateC_CwdTransientError(t *testing.T) {
+	rec := brokerRecord()
+	rec.Cwd = "/tmp/work"
+	rec.CwdExists = false // stat failed transiently
+	rec.Anomalies = []Anomaly{{Code: AnomalyCwdTransientStatError}}
+	fs := newMemFS() // path absent in memFS — but the anomaly tells us it's transient
+	reg := &fakeRegistry{entries: map[string]LaunchEntry{
+		rec.Key: {BrokerKey: rec.Key, TmuxPane: "%42"},
+	}}
+	panes := &fakePaneLister{live: map[string]bool{"%42": true}}
+	ok, _ := EvalPredicateC(rec, fs, reg, panes)
+	if !ok {
+		t.Errorf("expected C=true (transient cwd error + pane alive)")
+	}
+}
+
+// TestEvalPredicateC_NoRegistryEntry — cwd exists but registry has no entry
+// → C=false (no positive ownership evidence).
+func TestEvalPredicateC_NoRegistryEntry(t *testing.T) {
+	rec := brokerRecord()
+	rec.Cwd = "/tmp/work"
+	fs := memFSWithCwd("/tmp/work")
+	reg := &fakeRegistry{entries: map[string]LaunchEntry{}}
+	panes := &fakePaneLister{live: map[string]bool{}}
+	ok, _ := EvalPredicateC(rec, fs, reg, panes)
+	if ok {
+		t.Errorf("expected C=false (no registry entry)")
+	}
+}
+
+// TestEvalPredicateC_RegistryEntry_NoPane — registry entry exists but its
+// pane is gone → C=false.
+func TestEvalPredicateC_RegistryEntry_NoPane(t *testing.T) {
+	rec := brokerRecord()
+	rec.Cwd = "/tmp/work"
+	fs := memFSWithCwd("/tmp/work")
+	reg := &fakeRegistry{entries: map[string]LaunchEntry{
+		rec.Key: {BrokerKey: rec.Key, TmuxPane: "%99"},
+	}}
+	panes := &fakePaneLister{live: map[string]bool{"%42": true}} // %99 not live
+	ok, _ := EvalPredicateC(rec, fs, reg, panes)
+	if ok {
+		t.Errorf("expected C=false (pane closed)")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -293,4 +294,114 @@ func jobResultReadable(stateDir, id string, fs FS) bool {
 		return false
 	}
 	return len(p.Result) > 0 || len(p.Rendered) > 0
+}
+
+// LaunchRegistryReader is the read-only API predicate C and the decision
+// composer (task F) consume. The full LaunchRegistryFile (task I) satisfies
+// it. Empty() lets the composer distinguish "no purdex broker tracked yet"
+// (P2 steady state on mlab) from "this specific brokerKey is foreign"
+// (post-spawn-hook), which both feed AnomalyForeignOwner classification.
+type LaunchRegistryReader interface {
+	Lookup(brokerKey string) (*LaunchEntry, bool)
+	Empty() bool
+}
+
+// PaneAliveChecker is the seam over the tmux pane-list exec. Production
+// wiring (task R) injects a checker backed by `tmux list-panes -F
+// '#{pane_id}'` cached per scan; tests inject a fake.
+//
+// The interface is split out from EvalPredicateC explicitly so the unit
+// tests do not need to fork a real tmux server. Plan task E line 204
+// describes this exec; making it injectable is the standard testability
+// elaboration and does not redesign the semantic.
+type PaneAliveChecker interface {
+	IsAlive(pane string) (bool, error)
+}
+
+// EvalPredicateC implements spec §5.1 row C "Live ownership".
+//
+// Per spec §5.1 lines 365-366: cwd path must exist with definitive os.Stat
+// success; then at least one of (a) tmuxPane mapped to this brokerKey via
+// the launch registry is still alive, (b) registered Purdex caller session
+// alive, or (c) explicit lease — (b) and (c) are deferred to P3 / Lights so
+// P2 only checks (a).
+//
+// Transient cwd stat failures (ESTALE, EIO, EACCES — surfaced as
+// AnomalyCwdTransientStatError on the BrokerRecord) fall through to pane
+// evaluation; only definitive ENOENT (AnomalyCwdMissing) hard-fails C.
+//
+// Per plan task E line 207: predicate C reports ownership *evidence* only.
+// The "no registry entry → quarantine, never auto-kill" foreign-broker
+// contract is enforced one layer up in EvalDecision (task F) via direct
+// inspection of registry.Empty() / Lookup so a purdex-owned broker whose
+// pane just closed is not silently absorbed into the foreign-quarantine
+// path.
+func EvalPredicateC(rec BrokerRecord, fs FS, registry LaunchRegistryReader, panes PaneAliveChecker) (bool, string) {
+	// 1. cwd gate: definitive ENOENT short-circuits to false.
+	if recordHasAnomaly(rec, AnomalyCwdMissing) {
+		return false, "cwd-missing"
+	}
+	// Transient errors fall through; otherwise stat the path now (only if
+	// the BrokerRecord didn't already fail/transient earlier in the scan
+	// path — both flows converge on the same evidence here).
+	if !rec.CwdExists && !recordHasAnomaly(rec, AnomalyCwdTransientStatError) {
+		// Re-stat in this layer for completeness; some test paths set
+		// CwdExists=false without an explicit anomaly.
+		if rec.Cwd != "" && fs != nil {
+			if _, err := fs.Stat(rec.Cwd); err != nil {
+				if isENOENT(err) {
+					return false, "cwd-stat-enoent"
+				}
+				// transient — fall through
+			}
+		}
+	}
+	// 2. Registry lookup → pane alive.
+	if registry == nil {
+		return false, "no-registry"
+	}
+	entry, ok := registry.Lookup(rec.Key)
+	if !ok {
+		return false, "no-registry-entry"
+	}
+	if entry.TmuxPane == "" {
+		return false, "no-tmux-pane-in-entry"
+	}
+	if panes == nil {
+		return false, "no-pane-checker"
+	}
+	alive, err := panes.IsAlive(entry.TmuxPane)
+	if err != nil {
+		return false, "pane-checker-error"
+	}
+	if !alive {
+		return false, "pane-closed"
+	}
+	return true, "pane-alive:" + entry.TmuxPane
+}
+
+// recordHasAnomaly returns true if rec.Anomalies contains the given code.
+// Named to disambiguate from the existing pointer-receiver hasAnomaly test
+// helper in reconcile_test.go (which takes *BrokerRecord).
+func recordHasAnomaly(rec BrokerRecord, code AnomalyCode) bool {
+	for _, a := range rec.Anomalies {
+		if a.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// isENOENT inspects an os/filepath error for the strict not-exist case.
+// Wraps both errors.Is(err, os.ErrNotExist) and the os.IsNotExist heuristic
+// to defend against syscall errno wrapping that doesn't reach the modern
+// sentinel.
+func isENOENT(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	return os.IsNotExist(err)
 }
