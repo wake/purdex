@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"encoding/json"
 	"testing"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 func TestProjection_TopFrameWins(t *testing.T) {
@@ -183,11 +185,11 @@ func TestProjection_NoProxyRefsUnchangedBehavior(t *testing.T) {
 // preserves both refs by merging.
 //
 // Race scenario unchanged from Q1 trail:
-//   1. cc + codex SessionStart race → standalone codex created
-//   2. cc reconcile attaches IsProxy ref to cc but the DeleteIfUnchanged
-//      against the codex row fails (concurrent writer)
-//   3. A SubagentStart hook for codex arrives and writes a native ref
-//      into codex.Subagents
+//  1. cc + codex SessionStart race → standalone codex created
+//  2. cc reconcile attaches IsProxy ref to cc but the DeleteIfUnchanged
+//     against the codex row fails (concurrent writer)
+//  3. A SubagentStart hook for codex arrives and writes a native ref
+//     into codex.Subagents
 //
 // Result: TopFrame == cc; Subagents = [cc's IsProxy codex ref,
 // child's native task-codex-1 ref] (both preserved on wire).
@@ -562,6 +564,85 @@ func TestProjection_IT5_PartialStateHiddenByProjectionDedup(t *testing.T) {
 	delta := agentpkg.MetricProjectionDedupHidden.Value() - startMetric
 	if delta != 1 {
 		t.Fatalf("MetricProjectionDedupHidden delta = %d, want +1", delta)
+	}
+}
+
+func TestProjectPane_FiltersDetachedAliveFramesFromTop(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.tmux.(*tmux.FakeExecutor).SetPanePID("%5", "100")
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "codex",
+		PID:              200,
+		PPID:             1,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origAncestor := pidAncestorIncludesFn
+	isPidAliveFn = func(pid int) bool { return pid == 200 }
+	processStartTimeFn = func(pid int) (string, error) { return "live", nil }
+	pidAncestorIncludesFn = func(pid, ancestor int) bool { return false }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		pidAncestorIncludesFn = origAncestor
+	})
+
+	proj, err := m.projectPane("%5")
+	if err != nil {
+		t.Fatalf("projectPane: %v", err)
+	}
+	if proj == nil || proj.TopFrame != nil {
+		t.Fatalf("TopFrame = %+v, want nil for detached frame", proj.TopFrame)
+	}
+	normalized := buildProjectionNormalized(proj, "cc", "PdxSessionEnd", 1, agentpkg.DeriveResult{Valid: true})
+	if normalized.Status != string(agentpkg.StatusClear) {
+		b, _ := json.Marshal(normalized)
+		t.Fatalf("normalized = %s, want status clear", b)
+	}
+}
+
+func TestProjectPane_KeepsPaneOwnedFrameAsTop(t *testing.T) {
+	m := newSweepTestModule(t)
+	m.tmux.(*tmux.FakeExecutor).SetPanePID("%5", "100")
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID:           "%5",
+		AgentType:        "cc",
+		PID:              200,
+		PPID:             100,
+		ProcessStartTime: "live",
+		Status:           agentpkg.StatusIdle,
+		StartedAt:        10,
+		LastSeenAt:       10,
+		Verified:         true,
+	}); err != nil {
+		t.Fatalf("Upsert frame: %v", err)
+	}
+	origAlive := isPidAliveFn
+	origStart := processStartTimeFn
+	origAncestor := pidAncestorIncludesFn
+	isPidAliveFn = func(pid int) bool { return pid == 200 }
+	processStartTimeFn = func(pid int) (string, error) { return "live", nil }
+	pidAncestorIncludesFn = func(pid, ancestor int) bool { return pid == 200 && ancestor == 100 }
+	t.Cleanup(func() {
+		isPidAliveFn = origAlive
+		processStartTimeFn = origStart
+		pidAncestorIncludesFn = origAncestor
+	})
+
+	proj, err := m.projectPane("%5")
+	if err != nil {
+		t.Fatalf("projectPane: %v", err)
+	}
+	if proj.TopFrame == nil || proj.TopFrame.AgentType != "cc" {
+		t.Fatalf("TopFrame = %+v, want cc", proj.TopFrame)
 	}
 }
 

@@ -637,6 +637,7 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 	if len(frames) == 0 {
 		return nil, nil
 	}
+	frames = m.filterProjectionFrames(frames)
 	return BuildSessionProjections(frames), nil
 }
 

@@ -783,8 +783,55 @@ func (m *Module) projectPane(paneID string) (*SessionProjection, error) {
 	if err != nil {
 		return nil, err
 	}
+	frames = m.filterPaneOwnedProjectionFrames(paneID, frames)
 	projection := buildPaneProjection(paneID, frames)
 	return &projection, nil
+}
+
+func (m *Module) filterProjectionFrames(frames []store.Frame) []store.Frame {
+	if len(frames) == 0 {
+		return frames
+	}
+	byPane := make(map[string][]store.Frame)
+	for _, frame := range frames {
+		byPane[frame.PaneID] = append(byPane[frame.PaneID], frame)
+	}
+	filtered := make([]store.Frame, 0, len(frames))
+	for paneID, paneFrames := range byPane {
+		filtered = append(filtered, m.filterPaneOwnedProjectionFrames(paneID, paneFrames)...)
+	}
+	return filtered
+}
+
+func (m *Module) filterPaneOwnedProjectionFrames(paneID string, frames []store.Frame) []store.Frame {
+	if len(frames) == 0 || m == nil || m.tmux == nil {
+		return frames
+	}
+	panePID, err := resolvePanePIDFn(m.tmux, paneID)
+	if err != nil {
+		return frames
+	}
+	filtered := make([]store.Frame, 0, len(frames))
+	for _, frame := range frames {
+		if projectionFrameEligibleForPane(frame, panePID) {
+			filtered = append(filtered, frame)
+		}
+	}
+	return filtered
+}
+
+func projectionFrameEligibleForPane(frame store.Frame, panePID int) bool {
+	if !isPidAliveFn(frame.PID) {
+		return false
+	}
+	actualStart, err := processStartTimeFn(frame.PID)
+	if err != nil {
+		return true
+	}
+	if actualStart != frame.ProcessStartTime {
+		return false
+	}
+	return pidAncestorIncludesFn(frame.PID, panePID)
 }
 
 func frameID(frame *store.Frame) string {
