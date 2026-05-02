@@ -3,11 +3,92 @@ package codexbroker
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/core"
 )
+
+// realDialer is the production Dialer for unix socket RPC. Used by
+// EvalPredicateA (broker /thread/list) and KillSequence stepGraceful
+// (broker /shutdown). Has no state — ok to share across goroutines.
+type realDialer struct{}
+
+// Dial implements Dialer. dialTimeout caps initial-connect blocking; the
+// caller (EvalPredicateA / stepGraceful) sets read/write deadlines on the
+// returned conn from rpcCtx.
+func (realDialer) Dial(network, address string) (net.Conn, error) {
+	return net.DialTimeout(network, address, 1*time.Second)
+}
+
+// realPaneChecker shells out to `tmux list-panes -aF '#{pane_id}'` once
+// per scan and caches the result. The cache lives for ttl (default 5s)
+// because predicate C is invoked once per broker per scan and a single
+// fork/exec amortises across the whole inventory pass.
+//
+// PR review finding B: production wiring sets ttl=DefaultPaneCacheTTL.
+// The exec is best-effort — a missing tmux binary or socket failure
+// returns IsAlive=(false, error), which is what EvalPredicateC already
+// expects and treats as "no pane evidence". The decision layer never
+// crashes on the error.
+type realPaneChecker struct {
+	mu     sync.Mutex
+	ttl    time.Duration
+	expiry time.Time
+	panes  map[string]bool
+	err    error
+}
+
+// DefaultPaneCacheTTL is the lifetime of one tmux list-panes snapshot.
+const DefaultPaneCacheTTL = 5 * time.Second
+
+func newRealPaneChecker() *realPaneChecker {
+	return &realPaneChecker{ttl: DefaultPaneCacheTTL}
+}
+
+// IsAlive implements PaneAliveChecker. Refreshes the cache when expired
+// and consults the in-memory map.
+func (c *realPaneChecker) IsAlive(pane string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if pane == "" {
+		return false, nil
+	}
+	now := time.Now()
+	if c.panes == nil || now.After(c.expiry) {
+		c.refresh(now)
+	}
+	if c.err != nil {
+		return false, c.err
+	}
+	return c.panes[pane], nil
+}
+
+// refresh runs tmux list-panes once. Caller holds c.mu.
+func (c *realPaneChecker) refresh(now time.Time) {
+	c.expiry = now.Add(c.ttl)
+	cmd := exec.Command("tmux", "list-panes", "-aF", "#{pane_id}")
+	out, err := cmd.Output()
+	if err != nil {
+		c.err = err
+		c.panes = map[string]bool{}
+		return
+	}
+	c.err = nil
+	m := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			m[line] = true
+		}
+	}
+	c.panes = m
+}
 
 // Module wires the codex broker inventory + sweep API into the daemon as a
 // core.Module.
@@ -111,7 +192,13 @@ func (m *Module) Init(_ *core.Core) error {
 		BaseDecisionOpts: DecisionOpts{
 			FS:     NewOsFS(),
 			Lister: NewPsLister(),
-			// Dialer / Panes left nil; predicates degrade gracefully.
+			// PR review finding B: previously left Dialer + Panes nil,
+			// silently pushing predicates A + C toward false and brokers
+			// toward baseline Kill=true. Production now wires both seams
+			// so EvalPredicateA can reach a live broker socket and
+			// EvalPredicateC can confirm a tmux pane is still alive.
+			Dialer: realDialer{},
+			Panes:  newRealPaneChecker(),
 		},
 	}
 
@@ -120,10 +207,15 @@ func (m *Module) Init(_ *core.Core) error {
 
 // buildKillSequence returns a KillRunner backed by a real *KillSequence for
 // the supplied broker. Production path; tests inject their own factory.
+//
+// PR review finding B: previously omitted Dialer, so KillSequence.Step 2
+// (graceful RPC shutdown) was silently never attempted — every operator-
+// issued kill jumped straight to SIGTERM/SIGKILL. Now wires realDialer.
 func (m *Module) buildKillSequence(rec BrokerRecord) KillRunner {
 	return &KillSequence{
 		Rec:       rec,
 		Lister:    NewPsLister(),
+		Dialer:    realDialer{},
 		FS:        NewOsFS(),
 		Signaller: realSignaller{},
 		AuditDir:  m.auditDir,
