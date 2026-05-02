@@ -9,6 +9,26 @@ import { WorkspaceSettingsPage } from '../features/workspace/components/Workspac
 // Persists across unmount/remount (keepAliveCount=0 destroys component on tab switch)
 let lastSection: string | null = null
 
+/**
+ * Legacy URL aliases — keep prior `/settings/<id>` URLs resolving after the
+ * sidebar restructure:
+ *
+ *   - `editor-buffers` → `editor` (HSR collapse, alpha series).
+ *   - `link-detect` / `open-behavior` → `editor` (PR-2 collapse;
+ *     spec §4.2.3).
+ *
+ * The map is consulted before the normal selection logic; the
+ * `setLocation(.., { replace: true })` self-heal path that already runs for
+ * any deep-link rewrites the URL to the canonical id so bookmarks land on a
+ * consistent path. Plain object lookup, no prefix matching — adding a new
+ * alias is a one-line edit.
+ */
+const URL_ALIASES: Record<string, string> = {
+  'editor-buffers': 'editor',
+  'link-detect': 'editor',
+  'open-behavior': 'editor',
+}
+
 /** @internal test-only — must co-locate to access module-scoped variable */
 // eslint-disable-next-line react-refresh/only-export-components
 export function resetLastSection() { lastSection = null }
@@ -66,11 +86,12 @@ function GlobalSettingsPage() {
     : null
   const parts = pathAfterSettings ? pathAfterSettings.split('/') : []
   const rawUrlSection = parts[0] || null
-  // Legacy URL alias: pre-HSR the Editor Buffers tab lived at
-  // `/settings/editor-buffers`; the new Editor section id is `editor`.
-  // Bookmarks / browser history entries must keep resolving — map the old
-  // id to the new one before the normal selection logic runs.
-  const urlSection = rawUrlSection === 'editor-buffers' ? 'editor' : rawUrlSection
+  // Legacy URL aliases (spec §4.2.3): keep prior `/settings/<id>` URLs
+  // resolving after sidebar restructure (`editor-buffers` → `editor` from
+  // the HSR series; `link-detect` / `open-behavior` → `editor` from PR-2).
+  const urlSection = rawUrlSection
+    ? URL_ALIASES[rawUrlSection] ?? rawUrlSection
+    : null
   const urlSubsection = parts[1] || null
 
   const [activeSection, setActiveSection] = useState(() => {
