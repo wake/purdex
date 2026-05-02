@@ -187,35 +187,42 @@ func getFakeTmux(t *testing.T, m *Module) (interface {
 }
 
 // fakeScreenWatcher implements the codex package's screenWatcher
-// contract (Watch + StopWatch) for the W6-6 ScreenChange wire test.
-// Watch records the registered callback so the test can fire
-// ScreenChangeEvent values synchronously; StopWatch records the
+// contract (Watch + StopWatchOwned) for the W6-6 ScreenChange wire
+// test. Watch records the registered callback so the test can fire
+// ScreenChangeEvent values synchronously; StopWatchOwned records the
 // teardown call so the test can verify the active entry is properly
 // torn down.
 //
 // Lives in the dispatcher test package because the codex package's
 // screenWatcher interface is unexported — Go's structural typing lets
 // any matching method-set satisfy it from outside the package.
+//
+// W6-6 R2 F1: Watch returns probe.WatchHandle (zero value — the fake
+// cannot fabricate non-zero handles since fields are unexported); the
+// detector code round-trips the handle to StopWatchOwned, so identity
+// preservation across the round trip suffices for wire testing.
 type fakeScreenWatcher struct {
 	mu        sync.Mutex
 	cb        probe.ScreenChangeCallback
 	watchedTo string
 	opts      probe.WatchOptions
-	stopCalls []string
+	stopCalls int
 }
 
-func (f *fakeScreenWatcher) Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback) {
+func (f *fakeScreenWatcher) Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback) probe.WatchHandle {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cb = cb
 	f.watchedTo = target
 	f.opts = opts
+	return probe.WatchHandle{}
 }
 
-func (f *fakeScreenWatcher) StopWatch(target string) {
+func (f *fakeScreenWatcher) StopWatchOwned(_ probe.WatchHandle) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.stopCalls = append(f.stopCalls, target)
+	f.stopCalls++
+	return true
 }
 
 func (f *fakeScreenWatcher) fire(ev probe.ScreenChangeEvent) {
@@ -237,7 +244,7 @@ func (f *fakeScreenWatcher) hasCallback() bool {
 func (f *fakeScreenWatcher) stopCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.stopCalls)
+	return f.stopCalls
 }
 
 // screenChangeIntent is the canonical W6-6 ProbeIntent declaration

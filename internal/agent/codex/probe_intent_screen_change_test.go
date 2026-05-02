@@ -14,7 +14,7 @@ import (
 
 // fakeWatcher is a deterministic screenWatcher test double. Watch
 // captures the registered callback so tests can fire ScreenStable /
-// ScreenChanged events synchronously via the fire helper. StopWatch
+// ScreenChanged events synchronously via the fire helper. StopWatchOwned
 // records the call so tests can verify teardown.
 //
 // Per spec §6.1 / plan §1 P1-T3: the test does NOT exercise the real
@@ -22,30 +22,47 @@ import (
 // drives the detector's switch statement directly, isolating Phase A
 // → Phase B transitions and emit-once invariants from the watcher's
 // timing.
+//
+// W6-6 R2 F1: Watch returns a probe.WatchHandle whose .target is
+// recorded; StopWatchOwned records the handle, lets the test verify
+// the teardown was scoped to the correct identity (a stale handle
+// passes through as a no-op).
 type fakeWatcher struct {
 	mu        sync.Mutex
 	cb        probe.ScreenChangeCallback
 	target    string
 	opts      probe.WatchOptions
-	stopCalls []string
+	handles   []probe.WatchHandle
+	stopCalls []probe.WatchHandle
 }
 
 func newFakeWatcher() *fakeWatcher {
 	return &fakeWatcher{}
 }
 
-func (f *fakeWatcher) Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback) {
+func (f *fakeWatcher) Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback) probe.WatchHandle {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cb = cb
 	f.target = target
 	f.opts = opts
+	// WatchHandle has unexported fields so the fake cannot fabricate
+	// a non-zero token. Returning the zero value is fine: the codex
+	// detector treats handles as opaque, only ever round-trips them
+	// to StopWatchOwned, so identity is preserved across the round
+	// trip.
+	return probe.WatchHandle{}
 }
 
-func (f *fakeWatcher) StopWatch(target string) {
+func (f *fakeWatcher) StopWatchOwned(h probe.WatchHandle) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.stopCalls = append(f.stopCalls, target)
+	f.stopCalls = append(f.stopCalls, h)
+	// Production *probe.Prober returns true on a successful match.
+	// For the fake the handle is always the zero value so we cannot
+	// distinguish ownership; report true to satisfy the spec
+	// "owner-cancelled" expectation that detector tests rely on.
+	return true
 }
 
 // fire delivers a ScreenChangeEvent to the registered callback
@@ -68,20 +85,11 @@ func (f *fakeWatcher) captureOpts() probe.WatchOptions {
 	return f.opts
 }
 
-// stopCallCount returns the number of StopWatch invocations.
+// stopCallCount returns the number of StopWatchOwned invocations.
 func (f *fakeWatcher) stopCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.stopCalls)
-}
-
-// stopCallTargets returns a snapshot of the StopWatch target log.
-func (f *fakeWatcher) stopCallTargets() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]string, len(f.stopCalls))
-	copy(out, f.stopCalls)
-	return out
 }
 
 // runDetector launches StartScreenChangeDetector on a goroutine and
@@ -413,11 +421,14 @@ func TestStartScreenChangeDetector_CtxCancelBeforeStable_TeardownClean(t *testin
 		t.Fatalf("detector did not return after ctx cancel")
 	}
 	if fw.stopCallCount() != 1 {
-		t.Errorf("StopWatch call count = %d, want 1", fw.stopCallCount())
+		t.Errorf("StopWatchOwned call count = %d, want 1", fw.stopCallCount())
 	}
-	if got := fw.stopCallTargets(); len(got) != 1 || got[0] != "%5" {
-		t.Errorf("StopWatch targets = %v, want [\"%%5\"]", got)
-	}
+	// W6-6 R2 F1: WatchHandle has unexported fields so the fake
+	// cannot fabricate a non-zero token. The detector's contract is
+	// to forward whatever handle Watch returned to StopWatchOwned —
+	// identity preservation is verified by the production
+	// TestProber_StopWatchOwned_OnlyCancelsOwnEntry test in the probe
+	// package. Here we only assert the teardown happened (count==1).
 }
 
 // Ctx cancel during emit select — when ctx wins the in-mutex select

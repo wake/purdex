@@ -15,8 +15,16 @@ var watchPollInterval = 500 * time.Millisecond
 // emits ScreenChanged on every tick whose capture hash differs from the
 // rolling baseline, and ScreenStable when the hash has matched for
 // IdleStableTicks consecutive ticks (counter then resets). The watcher
-// persists until StopWatch is called — callbacks do NOT terminate the
-// watcher (kickoff Decision 13: watch-loop-owned).
+// persists until StopWatch / StopWatchOwned is called — callbacks do NOT
+// terminate the watcher (kickoff Decision 13: watch-loop-owned).
+//
+// Returns a WatchHandle token. Callers that need ownership-aware teardown
+// (e.g. a detector that races a same-target re-arm) pass the handle to
+// StopWatchOwned; callers that only know the target string keep using
+// StopWatch. Returning the handle unconditionally is a small price for
+// keeping the type system honest about ownership; existing callers that
+// discard the return value still get the legacy behaviour because Watch
+// also installs the entry exactly as before.
 //
 // Probe layer is dumb: it does NOT track emit-once state. Orchestrator owns
 // transition dedup via currentStatus per session.
@@ -28,12 +36,14 @@ var watchPollInterval = 500 * time.Millisecond
 //	both == 0         → CapturePaneContent(target, 0)            // full pane
 //
 // TopLines and BottomLines are mutually exclusive. Setting both is a caller
-// programming error: Watch logs a warning and returns without registering.
-func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback) {
+// programming error: Watch logs a warning and returns the zero-value
+// WatchHandle without registering. StopWatchOwned on a zero handle is a
+// no-op.
+func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback) WatchHandle {
 	if opts.TopLines > 0 && opts.BottomLines > 0 {
 		log.Printf("[probe] Watch(%q): TopLines=%d and BottomLines=%d are mutually exclusive; ignoring",
 			target, opts.TopLines, opts.BottomLines)
-		return
+		return WatchHandle{}
 	}
 
 	captureFn := p.makeCaptureFn(target, opts)
@@ -47,14 +57,21 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 		existing.cancel()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	id := &struct{}{}
+	id := new(watcherID)
 	p.watchers[target] = watchEntry{cancel: cancel, id: id}
 	p.watcherMu.Unlock()
 
 	go p.watchLoop(ctx, id, target, captureFn, idleStable, cb)
+	return WatchHandle{target: target, id: id}
 }
 
 // StopWatch cancels the active watcher for the given target. Idempotent.
+//
+// StopWatch is a target-only cancel — it does NOT verify ownership.
+// Same-target re-arm scenarios (detector teardown racing a fresh Watch)
+// must use StopWatchOwned to avoid silently killing a replacement
+// watcher. Sweep / orchestrator paths that conceptually own the target
+// throughout their teardown window keep using StopWatch.
 func (p *Prober) StopWatch(target string) {
 	p.watcherMu.Lock()
 	if entry, ok := p.watchers[target]; ok {
@@ -62,6 +79,34 @@ func (p *Prober) StopWatch(target string) {
 		delete(p.watchers, target)
 	}
 	p.watcherMu.Unlock()
+}
+
+// StopWatchOwned cancels the watcher iff the active entry's identity
+// matches the supplied handle. Returns true when a cancel actually
+// happened. Idempotent.
+//
+// Why this exists (W6-6 R2 F1): Watch installs a unique identity token
+// per call and replaces a previous entry's cancel(). A detector goroutine
+// that calls Watch returns its handle to the main goroutine, which
+// later calls StopWatchOwned during teardown. If a same-target re-arm
+// has installed a new watcher in the meantime, StopWatch (target-only)
+// would silently cancel the replacement; StopWatchOwned refuses unless
+// the live entry's id still matches the handle.
+//
+// A zero-value handle never matches a live entry → returns false.
+func (p *Prober) StopWatchOwned(h WatchHandle) bool {
+	if h.id == nil {
+		return false
+	}
+	p.watcherMu.Lock()
+	defer p.watcherMu.Unlock()
+	entry, ok := p.watchers[h.target]
+	if !ok || entry.id != h.id {
+		return false
+	}
+	entry.cancel()
+	delete(p.watchers, h.target)
+	return true
 }
 
 // StopAllWatches cancels all active watchers. Used during daemon shutdown.
@@ -131,7 +176,7 @@ func hashContent(s string) uint32 {
 // orchestrator owns transition dedup.
 func (p *Prober) watchLoop(
 	ctx context.Context,
-	id *struct{},
+	id *watcherID,
 	target string,
 	capture func() (string, bool),
 	idleStable int,

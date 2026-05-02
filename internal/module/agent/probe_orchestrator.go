@@ -13,8 +13,14 @@ import (
 // proberWatcher is the minimal screen-watcher contract the orchestrator
 // depends on. *probe.Prober trivially satisfies it; tests inject a recording
 // fake. Kept unexported so the seam is scoped to this file.
+//
+// W6-6 R2 F1: Watch returns probe.WatchHandle. Orchestrator does not
+// need ownership-aware teardown (it owns the target through the entire
+// watch lifecycle: same target=session+":" never has same-session
+// re-arm racing teardown), so the handle is intentionally discarded;
+// orchestrator continues to use target-based StopWatch.
 type proberWatcher interface {
-	Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback)
+	Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback) probe.WatchHandle
 	StopWatch(target string)
 }
 

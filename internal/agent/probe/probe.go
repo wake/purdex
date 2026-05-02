@@ -94,9 +94,40 @@ type Prober struct {
 	watchers  map[string]watchEntry // target → active watcher
 }
 
+// watcherID is the per-watcher identity token. Pointer-equality on
+// *watcherID is the unique-per-call discriminator used by watchLoop's
+// self-cleanup and by StopWatchOwned. The struct intentionally carries
+// a non-zero-size field so the runtime cannot coalesce two distinct
+// `new(watcherID)` allocations into the same address (Go is allowed to
+// alias zero-size struct pointers — `&struct{}{}` may equal another
+// `&struct{}{}` — which would silently break ownership).
+type watcherID struct {
+	_ [1]byte
+}
+
 type watchEntry struct {
 	cancel func()
-	id     *struct{} // unique identity token for the active watcher
+	id     *watcherID // unique identity token for the active watcher
+}
+
+// WatchHandle is an opaque ownership token returned by Watch and
+// consumed by StopWatchOwned. It binds a stop request to the specific
+// watchEntry that Watch installed, so a stale stop call (e.g. a
+// detector teardown that races a same-target re-arm) cannot
+// accidentally cancel a replacement watcher installed by a later
+// Watch.
+//
+// Callers MUST treat WatchHandle as opaque — fields are unexported.
+// Zero-value WatchHandle never matches any live entry; passing it to
+// StopWatchOwned is a no-op that returns false.
+//
+// Why unexported fields: production code should always derive
+// handles from Watch. Anything that constructs a WatchHandle by hand
+// is fabricating ownership it never had — the type system refuses
+// that statically.
+type WatchHandle struct {
+	target string
+	id     *watcherID
 }
 
 // New creates a Prober backed by the given tmux executor.

@@ -24,10 +24,24 @@ import (
 // prober. Production wires *probe.Prober; tests inject a fake to drive
 // callbacks deterministically. Same pattern as W6-3's tmuxPaneLister
 // interface — keeps detector focused on the two methods it actually
-// uses (Watch + StopWatch) rather than the full *probe.Prober surface.
+// uses rather than the full *probe.Prober surface.
+//
+// Why StopWatchOwned (W6-6 R2 F1):
+//
+//	The dispatcher can re-arm a same-target ScreenChange intent (status
+//	cycles waiting → running → waiting); each re-arm runs Watch on the
+//	new detector goroutine, which Watch internally cancels the previous
+//	entry and installs a fresh entry tagged with a new identity token.
+//	The PREVIOUS detector's main goroutine then wakes from <-ctx.Done()
+//	and runs its teardown — calling target-only StopWatch here would
+//	silently kill the freshly-installed replacement watcher, leaving
+//	the new detector's intent armed but its underlying watchLoop dead.
+//	StopWatchOwned takes the WatchHandle returned by THIS detector's
+//	Watch call and only cancels the entry when the live id still
+//	matches; a stale teardown is a no-op.
 type screenWatcher interface {
-	Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback)
-	StopWatch(target string)
+	Watch(target string, opts probe.WatchOptions, cb probe.ScreenChangeCallback) probe.WatchHandle
+	StopWatchOwned(h probe.WatchHandle) bool
 }
 
 // screenChangeTopLines is the capture region. Codex 0.125.0 TUI puts
@@ -207,12 +221,18 @@ func StartScreenChangeDetector(
 			}
 		}
 	}
-	prober.Watch(paneID, probe.WatchOptions{TopLines: screenChangeTopLines}, cb)
+	wh := prober.Watch(paneID, probe.WatchOptions{TopLines: screenChangeTopLines}, cb)
 	select {
 	case <-emittedCh:
 	case <-ctx.Done():
 	}
-	prober.StopWatch(paneID)
+	// W6-6 R2 F1 fix: ownership-aware teardown. StopWatchOwned only
+	// cancels the entry when the live id still matches `wh.id`, so a
+	// same-target re-arm that already installed a replacement watcher
+	// is left intact. A target-only StopWatch here would silently kill
+	// the replacement and leave the new detector's intent armed
+	// without a watchLoop.
+	prober.StopWatchOwned(wh)
 	// v6.1 round 6 P1 fix: serialize with any in-flight callback
 	// before returning. The wrap goroutine closes out immediately
 	// after this function returns; setting closed=true under mu means

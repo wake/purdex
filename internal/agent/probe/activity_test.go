@@ -376,3 +376,91 @@ func TestWatch_TmuxErrorTickSkipped(t *testing.T) {
 		t.Fatal("ScreenChanged did not fire after recovery tick")
 	}
 }
+
+// W6-6 R2 F1: ownership-aware StopWatchOwned tests.
+//
+// The dispatcher detector teardown path can race a same-target Watch
+// re-arm: detector1 main goroutine wakes from <-ctx.Done() and calls
+// StopWatch(target) AFTER detector2 has already installed its own
+// watcher for the same target via Watch (which internally cancels the
+// previous entry and replaces it). The legacy StopWatch matches by
+// target string only, so detector1's late teardown silently kills
+// detector2's freshly-installed watcher.
+//
+// StopWatchOwned takes a WatchHandle (returned by Watch) that captures
+// the watcher's identity token. The implementation only cancels +
+// deletes the entry when entry.id == handle.id, so a stale handle
+// cannot reach a replacement watcher.
+
+// TestProber_StopWatchOwned_OnlyCancelsOwnEntry pins the canonical
+// race: two consecutive Watch calls on the same target install two
+// watchers (the second's existing.cancel() retires the first's
+// watchLoop, then installs a fresh entry). StopWatchOwned with the
+// FIRST handle must report false and leave the second watcher intact.
+//
+// Default poll interval (500ms) is intentional — the test never lets a
+// tick fire, just exercises the watcher map state. Using fastPoll +
+// SetWatchPollIntervalForTest leaves a t.Cleanup that races a still-
+// running watchLoop goroutine reading watchPollInterval; the canonical
+// pre-existing tests work around this by capturing pollInterval into
+// a local before the goroutine starts, but the simpler fix here is to
+// avoid the override entirely (the test doesn't depend on tick rate).
+func TestProber_StopWatchOwned_OnlyCancelsOwnEntry(t *testing.T) {
+	exec := tmux.NewFakeExecutor()
+	exec.SetPaneContent("sess:", "baseline")
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	h1 := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+	h2 := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+
+	if got := p.StopWatchOwned(h1); got {
+		t.Errorf("StopWatchOwned(h1) = true, want false (h1 no longer owns the entry)")
+	}
+	if !p.HasWatcher("sess:") {
+		t.Errorf("HasWatcher(sess:) = false, want true (h2 must still be active)")
+	}
+	if got := p.StopWatchOwned(h2); !got {
+		t.Errorf("StopWatchOwned(h2) = false, want true (h2 owns the live entry)")
+	}
+	if p.HasWatcher("sess:") {
+		t.Errorf("HasWatcher(sess:) = true, want false after StopWatchOwned(h2)")
+	}
+}
+
+// TestProber_StopWatchOwned_NoEntry_ReturnsFalse pins the
+// nothing-to-stop case: StopWatchOwned on a target that was never
+// watched returns false (idempotent, no panic).
+func TestProber_StopWatchOwned_NoEntry_ReturnsFalse(t *testing.T) {
+	exec := tmux.NewFakeExecutor()
+	p := probe.New(exec)
+
+	// Construct a synthetic handle. Production code only obtains
+	// handles from Watch; this test reaches for the zero value to
+	// confirm no-watcher == false.
+	var zero probe.WatchHandle
+	if got := p.StopWatchOwned(zero); got {
+		t.Errorf("StopWatchOwned(zero handle, no entry) = true, want false")
+	}
+}
+
+// TestProber_StopWatchOwned_AfterStopWatch_ReturnsFalse pins the
+// legacy-API interaction: StopWatch (target-only) clears the entry,
+// so a later StopWatchOwned with a stale handle returns false even
+// though it once owned the entry.
+func TestProber_StopWatchOwned_AfterStopWatch_ReturnsFalse(t *testing.T) {
+	exec := tmux.NewFakeExecutor()
+	exec.SetPaneContent("sess:", "baseline")
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	h := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+	p.StopWatch("sess:")
+
+	if got := p.StopWatchOwned(h); got {
+		t.Errorf("StopWatchOwned(h) after StopWatch = true, want false")
+	}
+	if p.HasWatcher("sess:") {
+		t.Errorf("HasWatcher(sess:) = true, want false after StopWatch")
+	}
+}
