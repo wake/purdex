@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.0.0-alpha.284] - 2026-05-02
+
+### Feat(codex): W6-6 ScreenChange ProbeIntent for permission-reply detection (#799)
+
+Last piece of the Lights rebuild W6 series. Codex emits no PdxStop hook when
+the user replies to a `PdxPermissionRequest` waiting state by pressing enter
+to approve — the lights would stay stuck in `waiting`. W6-6 introduces a
+ScreenChange ProbeIntent that uses `Prober.Watch` to observe the 10 lines of
+pane content above the input row; once ScreenStable lands, the first
+ScreenChanged event emits a Signal that flips status to `running`.
+
+PR-level highlights:
+
+- 2-phase + 2-case truth table contract (v5 user reframe).
+- Reuses W6-3 ProbeIntentProvider interface + dispatcher 5-case lifecycle.
+- Reject path race covered by J3 dispatcher generic pre-grace (alpha.281).
+- v6.1 detector close-race fix: mutex-protected `closed bool` flag.
+- v6.2 watchLoop baseline retry: capture failure no longer cleanup-returns;
+  500ms loop waits for the next successful capture.
+- Ownership-aware teardown: Prober.WatchHandle + StopWatchOwned avoid
+  same-paneID re-arm cancelling new watcher (W3 legacy / sweep keep
+  StopWatch since they own target end-to-end).
+- Post-grace by-Kind: ScreenChange (hook-armed observer) skips the 2s
+  suppression that ProcessDead (race competitor) needs.
+- Spec §0.4 / §4.3 / §8 reframe (F7-3): baseline failure is a probe-layer
+  transient, not a detector lifecycle signal; 3 drift anchors guard against
+  future regression.
+- 6 rounds of PR codex review converged: R1 P2 (StopWatch race), R2 three-way
+  adversarial (3 findings), R3 P2 (post-grace by-Kind), R4 P2 (Watch baseline
+  fail), R5 P2 (tight rearm loop), R6 standard 0 finding.
+- Known limitation: case 2 (quick-approval / fast-with-output) — armed=false
+  drops ScreenChanged → no emit → idle via PdxStop, lights waiting → idle
+  skips running phase (by-contract, spec §0.5).
+- F4 (50ms cleanup sleep brittle) → issue #800.
+
+Closes #762 (Lights rebuild umbrella).
+
 ## [1.0.0-alpha.283] - 2026-05-02
 
 ### [L2] Codex broker turn-aware proxy detach on Stop (#801)
