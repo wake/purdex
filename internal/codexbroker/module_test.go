@@ -91,3 +91,66 @@ func TestModule_RegistersOnlyGet(t *testing.T) {
 		t.Errorf("POST /api/codex/brokers returned 200 — route should not accept POST")
 	}
 }
+
+// TestModule_RegistersSweepRoute — task R: after Init + RegisterRoutes, the
+// mux has both GET /api/codex/brokers and POST /api/codex/brokers/sweep.
+func TestModule_RegistersSweepRoute(t *testing.T) {
+	m := New()
+	if err := m.Init(nil); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/codex/brokers/sweep", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		t.Errorf("POST /api/codex/brokers/sweep returned 404 — sweep route not registered")
+	}
+}
+
+// TestModule_Init_QuarantineMissing_OK — no quarantine.json on disk → init
+// still succeeds with an empty quarantine file.
+func TestModule_Init_QuarantineMissing_OK(t *testing.T) {
+	m := New()
+	if err := m.Init(nil); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if m.quarantine == nil {
+		t.Errorf("expected non-nil quarantine after Init")
+	}
+	if len(m.quarantine.Entries) != 0 {
+		t.Errorf("expected empty quarantine, got %d entries", len(m.quarantine.Entries))
+	}
+}
+
+// TestModule_Init_E1TrackerEmpty — fresh Init produces an E1Tracker whose
+// Snapshot() returns an empty map.
+func TestModule_Init_E1TrackerEmpty(t *testing.T) {
+	m := New()
+	if err := m.Init(nil); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if m.e1Tracker == nil {
+		t.Fatalf("expected non-nil E1Tracker")
+	}
+	if got := m.e1Tracker.Snapshot(); len(got) != 0 {
+		t.Errorf("expected empty E1Tracker snapshot, got %v", got)
+	}
+}
+
+// TestModule_Init_LaunchRegistryMissing_Empty — no launch-registry.json on
+// disk → Empty() reports true (P2 steady state on mlab).
+func TestModule_Init_LaunchRegistryMissing_Empty(t *testing.T) {
+	m := New()
+	if err := m.Init(nil); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if m.launchRegistry == nil {
+		t.Fatalf("expected non-nil launchRegistry")
+	}
+	if !m.launchRegistry.Empty() {
+		t.Errorf("expected empty launch registry on missing file")
+	}
+}
