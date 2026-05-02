@@ -2,9 +2,12 @@ package codexbroker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -109,6 +112,15 @@ type Module struct {
 
 	pluginDataRoot string
 	auditDir       string
+
+	// quarantineDegraded captures the PR review finding D fail-closed
+	// state. When the on-disk quarantine.json fails to load (corruption,
+	// I/O error other than IsNotExist), the file is renamed aside and
+	// this flag is set. The sweep handler's ApplyDisabled is wired to a
+	// non-empty reason while degraded; mode=apply requests then return
+	// 503 with that reason. Operator clears the situation by deleting the
+	// .bak rename and restarting the daemon.
+	quarantineDegraded bool
 }
 
 // New returns an unconfigured Module. Call Init before RegisterRoutes.
@@ -148,14 +160,15 @@ func (m *Module) Init(_ *core.Core) error {
 	})
 	m.handler = NewHandler(m.scanner)
 
-	// Quarantine — best-effort load; missing file → empty.
-	qStore := &QuarantineStore{}
-	qf, err := qStore.Load(quarantinePath(root))
-	if err != nil {
-		log.Printf("[codexbroker] quarantine load error (continuing with empty): %v", err)
-		qf = &QuarantineFile{Version: 1}
+	// PR review finding D: fail-closed on a corrupt quarantine.json. The
+	// helper renames the corrupt file aside, populates m.quarantine with
+	// an empty in-memory file (so the sweep handler can still write fresh
+	// entries during the degraded window), and sets m.quarantineDegraded
+	// = true. The sweep handler picks the flag up via ApplyDisabled below
+	// and returns 503 on mode=apply until operator restart.
+	if loadErr := m.loadQuarantineFromPath(quarantinePath(root)); loadErr != nil {
+		log.Printf("[codexbroker] quarantine load DEGRADED (apply disabled until restart): %v", loadErr)
 	}
-	m.quarantine = qf
 
 	// Launch registry — best-effort load; missing file → empty.
 	rStore := &LaunchRegistry{}
@@ -189,6 +202,7 @@ func (m *Module) Init(_ *core.Core) error {
 		Lister:          NewPsLister(),
 		Registry:        m.launchRegistry,
 		E1Tracker:       m.e1Tracker,
+		ApplyDisabled:   m.applyDisabledReason(),
 		BaseDecisionOpts: DecisionOpts{
 			FS:     NewOsFS(),
 			Lister: NewPsLister(),
@@ -243,3 +257,46 @@ func (m *Module) Start(_ context.Context) error {
 
 // Stop implements core.Module. Nothing to clean up.
 func (m *Module) Stop(_ context.Context) error { return nil }
+
+// loadQuarantineFromPath populates m.quarantine from disk and reports any
+// fail-closed condition (PR review finding D).
+//
+// Outcomes:
+//
+//   - File absent → m.quarantine = empty Version=1, returns nil.
+//   - Successful load → m.quarantine = decoded file, returns nil.
+//   - Corruption / non-IsNotExist I/O error → file is renamed to
+//     <path>.bak-<unixTs> for forensics, m.quarantine = empty Version=1,
+//     m.quarantineDegraded = true, returns the load error.
+//
+// The handler-side reaction (mode=apply rejected with 503) is wired in
+// Init via SweepHandler.ApplyDisabled = m.applyDisabledReason().
+func (m *Module) loadQuarantineFromPath(path string) error {
+	store := &QuarantineStore{}
+	qf, err := store.Load(path)
+	if err == nil {
+		m.quarantine = qf
+		m.quarantineDegraded = false
+		return nil
+	}
+	// IsNotExist is treated as "first-run steady state" by QuarantineStore.Load
+	// itself (it returns an empty file + nil err); reaching here means a real
+	// error: corruption or genuine I/O failure.
+	bakPath := fmt.Sprintf("%s.bak-%d", path, time.Now().Unix())
+	if renameErr := os.Rename(path, bakPath); renameErr != nil && !errors.Is(renameErr, os.ErrNotExist) {
+		log.Printf("[codexbroker] quarantine corrupt-rename failed (%s -> %s): %v", path, bakPath, renameErr)
+	}
+	m.quarantine = &QuarantineFile{Version: 1}
+	m.quarantineDegraded = true
+	return err
+}
+
+// applyDisabledReason returns the SweepHandler.ApplyDisabled value to wire
+// at Init time. Empty when the module is healthy; non-empty (and explicit)
+// when the operator must intervene before mode=apply is safe.
+func (m *Module) applyDisabledReason() string {
+	if m.quarantineDegraded {
+		return "quarantine_load_failed"
+	}
+	return ""
+}

@@ -104,6 +104,17 @@ type SweepHandler struct {
 	ApplyTimeout  time.Duration
 	DryRunTimeout time.Duration
 
+	// ApplyDisabled, if non-empty, causes mode=apply requests to return
+	// 503 Service Unavailable with the supplied reason in the body and a
+	// Retry-After hint. dry-run remains allowed so operators can still
+	// inspect the inventory while the daemon is in degraded mode.
+	//
+	// PR review finding D: set by Module.Init to "quarantine_load_failed"
+	// when quarantine.json on disk was corrupt and the in-memory state
+	// cannot be trusted. Operator clears the situation by deleting the
+	// renamed .bak file and restarting the daemon.
+	ApplyDisabled string
+
 	// Concurrency primitives. Initialised lazily in HandleSweep.
 	globalApplyMu sync.RWMutex
 	perBrokerMu   sync.Map // map[brokerKey]*sync.RWMutex
@@ -126,6 +137,17 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	brokerKey := r.URL.Query().Get("brokerKey")
+
+	// PR review finding D: degraded mode short-circuits apply BEFORE any
+	// lock is taken. dry-run is still allowed so operators can investigate
+	// the inventory.
+	if mode == "apply" && h.ApplyDisabled != "" {
+		w.Header().Set("Retry-After", "30")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "apply disabled: " + h.ApplyDisabled,
+		})
+		return
+	}
 
 	// Apply per-mode timeout to the request context. The lock acquisition
 	// path also honours this deadline — a queued request whose deadline

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -239,6 +241,89 @@ func startFakeBrokerSocket(t *testing.T, sockPath, jsonBody string) net.Listener
 		}
 	}()
 	return listener
+}
+
+// -- PR review finding D: quarantine load fail-closed --------------------
+
+// TestModule_LoadQuarantine_Corrupt_FailsClosed — finding D regression:
+// a corrupt quarantine.json on disk must NOT silently produce an empty
+// in-memory quarantine. Instead the file must be renamed aside for
+// forensics, the module must remember the failure as a "degraded" state,
+// and any subsequent mode=apply request must be rejected with 503 +
+// reason "quarantine_load_failed". Otherwise an attacker with host shell
+// access could disable every quarantine guard by writing garbage to the
+// file.
+func TestModule_LoadQuarantine_Corrupt_FailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	qPath := filepath.Join(dir, "quarantine.json")
+	if err := os.WriteFile(qPath, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := New()
+	loadErr := m.loadQuarantineFromPath(qPath)
+	if loadErr == nil {
+		t.Fatalf("expected loadQuarantineFromPath to return non-nil on corrupt file")
+	}
+	if !m.quarantineDegraded {
+		t.Errorf("expected quarantineDegraded=true after corrupt load")
+	}
+	// Backup file should exist.
+	matches, _ := filepath.Glob(qPath + ".bak-*")
+	if len(matches) == 0 {
+		t.Errorf("expected quarantine.json.bak-<ts> after corrupt load; dir=%v", dir)
+	}
+	// Original path should now be absent so a fresh write can re-create it
+	// after operator clears the situation.
+	if _, err := os.Stat(qPath); !os.IsNotExist(err) {
+		t.Errorf("expected original quarantine.json removed after rename, stat err=%v", err)
+	}
+}
+
+// TestSweepHandler_ApplyDisabled_503 — finding D regression: when the
+// SweepHandler is in degraded mode (quarantine load failed), mode=apply
+// returns 503 with a clear reason. mode=dry-run still works.
+func TestSweepHandler_ApplyDisabled_503(t *testing.T) {
+	scan := &fakeScanner{brokers: []BrokerRecord{{Key: "k1"}}}
+	killer := &fakeKiller{}
+	eval := &stubDecisionEvaluator{}
+	h := newSweepHandlerForTest(scan, killer, eval, emptyRegistry{}, &QuarantineFile{Version: 1})
+	h.ApplyDisabled = "quarantine_load_failed"
+
+	// mode=apply → 503.
+	req := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=apply&brokerKey=k1", nil)
+	w := httptest.NewRecorder()
+	h.HandleSweep(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("apply status = %d, want 503 (apply disabled)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "quarantine_load_failed") {
+		t.Errorf("expected error body to mention reason, got %s", w.Body.String())
+	}
+
+	// mode=dry-run still allowed (operator can investigate the inventory).
+	req2 := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=dry-run&brokerKey=k1", nil)
+	w2 := httptest.NewRecorder()
+	h.HandleSweep(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Errorf("dry-run status = %d, want 200 (dry-run allowed in degraded mode)", w2.Code)
+	}
+}
+
+// TestModule_LoadQuarantine_Missing_OK — finding D negative case: missing
+// file (the steady state on a fresh install) is NOT a fail-closed trigger.
+func TestModule_LoadQuarantine_Missing_OK(t *testing.T) {
+	dir := t.TempDir()
+	qPath := filepath.Join(dir, "quarantine.json")
+	m := New()
+	if err := m.loadQuarantineFromPath(qPath); err != nil {
+		t.Fatalf("expected nil err on missing file, got %v", err)
+	}
+	if m.quarantineDegraded {
+		t.Errorf("expected quarantineDegraded=false on missing file")
+	}
+	if m.quarantine == nil || m.quarantine.Version != 1 {
+		t.Errorf("expected empty Version=1 quarantine on missing file, got %+v", m.quarantine)
+	}
 }
 
 // TestEvalDecision_Production_ActiveRPCThread_NoKill — finding B end-to-end:
