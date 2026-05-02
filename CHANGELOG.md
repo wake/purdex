@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.282] - 2026-05-02
+
+### Fix(spa): preserve dot-slash terminal file links (#807)
+
+Terminal file-link detection no longer slices `./CLAUDE.md` into `/CLAUDE.md`.
+The absolute path matcher now treats `.` as a path-prefix boundary, while the
+relative-slash matcher continues to recognize the full `./...` path.
+
 ## [1.0.0-alpha.281] - 2026-05-02
 
 ### Feat(agent): J3 ProbeIntent dispatcher bidirectional graceWindow (#797)
