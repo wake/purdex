@@ -198,6 +198,78 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			Before:        before,
 			After:         summarizeFrame(&stored),
 		}, err
+	case agentpkg.LifecycleUserPromptSubmit:
+		// L2 codex turn-aware attach/upsert (spec §3.3.B/C, plan §3 P3-T7a/T7b).
+		//
+		// Gate 1 — codex only. cc / opencode UserPromptSubmit + PreToolUse
+		// have no per-turn identity in their hook payloads; falling through
+		// to the existing generic frame path keeps their behavior unchanged
+		// (spec §5 row 17 / 17b regression guards).
+		if req.AgentType != "codex" {
+			break
+		}
+		// Gate 2 — sender owns its own frame. Existing narrow column update
+		// (frame_ops.go:440 UpdateHookPath branch) handles status / last_seen
+		// refresh; L2 turn-aware identity only exists on the parent's proxy
+		// ref, never on the sender's own frame.
+		if frame != nil {
+			break
+		}
+		// Gate 3 — must have an alive cross-type proxy parent.
+		parent, perr := m.findProxyParent(req)
+		if perr != nil {
+			return nil, FrameTraceMeta{}, perr
+		}
+		if parent == nil {
+			// No proxy parent. PreToolUse must NOT fall through to the
+			// generic frame-create path: it carries no Status (DeriveResult
+			// returns Status="" for PdxPreToolUse) and would materialize a
+			// standalone idle frame at frame_ops.go:475-485, contradicting
+			// "broker is starting work for a turn" semantics (spec §3.3.C.1
+			// + §5 row 20). UserPromptSubmit's existing Status=Running
+			// derive path stays unchanged for backward compat (v4 behavior).
+			if req.PurdexName == "PdxPreToolUse" {
+				projection, perr2 := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					Decision: "skipped",
+					Reason:   "pre_tool_without_proxy_parent",
+					Before:   map[string]any{},
+					After:    map[string]any{},
+				}, perr2
+			}
+			break
+		}
+		// First-time vs in-place upsert — caller-side classification keeps
+		// upsertProxyRefForBroker's helper signature frozen post-Phase 2.
+		// findProxyRefByBroker is a side-effect-free lookup; an in-flight
+		// concurrent attach between this check and the helper's own
+		// findProxyRefByBroker (inside the retry loop) only changes the
+		// trace reason, not the persisted shape.
+		isFirstAttach := findProxyRefByBroker(parent.Subagents, req.SenderPID, req.SenderStartTime) < 0
+		parentBefore := summarizeFrame(parent)
+		turnID := parseCodexTurnID(req.RawEvent)
+		persisted, stored, uerr := m.upsertProxyRefForBroker(*parent, req.SenderPID, req.SenderStartTime, turnID, broadcastTs)
+		if uerr != nil {
+			return nil, FrameTraceMeta{}, uerr
+		}
+		if !persisted {
+			// Parent vanished mid-flight (concurrent SessionEnd / sweep).
+			// Fall through to the generic frame path as a recovery.
+			break
+		}
+		reason := "proxy_subagent_upserted_on_user_prompt"
+		if isFirstAttach {
+			reason = "proxy_subagent_attached_on_user_prompt"
+		}
+		projection, err := m.projectPane(req.TmuxPaneID)
+		return projection, FrameTraceMeta{
+			FrameID:       stored.FrameID,
+			ParentFrameID: stored.ParentFrameID,
+			Decision:      "updated_frame",
+			Reason:        reason,
+			Before:        parentBefore,
+			After:         summarizeFrame(&stored),
+		}, err
 	}
 
 	// Proxy subagent fast-path (Phase 2 PR-2b, plan §1.4): when a SessionStart

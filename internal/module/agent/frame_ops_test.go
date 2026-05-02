@@ -4718,3 +4718,309 @@ func TestDetachProxyRefForSenderTurnWithRetry_RetryOnConflict(t *testing.T) {
 		t.Fatalf("surviving ref PID = %d, want 999 (racer)", stored.Subagents[0].SourcePID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// L2 Phase 3 P3-T7a/T7b/T8a/T8b/T9 — TurnAwareProxyDetach integration tests
+// (spec §5 rows 1-20 / plan §3 P3-T7a..T9)
+//
+// All rows live in the single TestApplyFrameEvent_TurnAwareProxyDetach
+// table-driven test below. Subtests are named by spec §5 row number for
+// fast triage on failure.
+// ---------------------------------------------------------------------------
+
+// turnAwareEnv captures the shared liveness/proc seams that every codex L2
+// integration row toggles. Most rows want findProxyParent to succeed via a
+// direct PPID hit; helper centralizes the cleanup boilerplate.
+func turnAwareEnvAlive(t *testing.T, parentPID int, parentStartTime string) {
+	t.Helper()
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		// Senders' PPID points to the parent (covers row setups where the
+		// codex sender is a direct child of the cc parent process).
+		return agentpkg.ProcessInfo{PID: pid, PPID: parentPID}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == parentPID {
+			return parentStartTime, nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+}
+
+// turnAwareEnvNoParent stubs the seams so findProxyParent always returns nil
+// (used by row 20 PreToolUse no-parent guard test).
+func turnAwareEnvNoParent(t *testing.T) {
+	t.Helper()
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		// PPID=1 -> walk terminates immediately, no proxy parent.
+		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+	}
+	processStartTimeFn = func(int) (string, error) { return "other", nil }
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+}
+
+// seedProxyRef seeds a parent frame with the supplied proxy refs. Returns
+// the reloaded parent (so callers see the LastSeenAt UpsertIfUnchanged
+// uses for optimistic-concurrency).
+func seedProxyRef(t *testing.T, m *Module, paneID, parentType string, parentPID int, parentStartTime string, lastSeenAt int64, refs []agentpkg.SubagentRef) store.Frame {
+	t.Helper()
+	parent := seedFrame(t, m, paneID, parentType, parentPID, parentStartTime, lastSeenAt)
+	if len(refs) > 0 {
+		parent.Subagents = refs
+		if _, err := m.frames.Upsert(parent); err != nil {
+			t.Fatalf("seedProxyRef upsert: %v", err)
+		}
+		reloaded, err := m.frames.GetByIdentity(paneID, parentPID, parentStartTime)
+		if err != nil || reloaded == nil {
+			t.Fatalf("seedProxyRef reload: %v / %v", err, reloaded)
+		}
+		parent = *reloaded
+	}
+	return parent
+}
+
+// rawTurn returns a raw codex hook payload carrying turn_id=value (or no
+// turn_id when value is the empty string).
+func rawTurn(value string) json.RawMessage {
+	if value == "" {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(`{"turn_id":"` + value + `"}`)
+}
+
+func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
+	// Row 1: parent cc + 1 ref(PID=42, t1, turnID="") (SessionStart attached)
+	// → UserPromptSubmit from PID=42 raw turn_id="t_a" → in-place upsert
+	// SourceTurnID="t_a"; trace upserted_on_user_prompt.
+	t.Run("row01_user_prompt_in_place_upsert_from_empty_turn", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxUserPromptSubmit",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_upserted_on_user_prompt" {
+			t.Fatalf("reason = %q, want proxy_subagent_upserted_on_user_prompt; meta=%+v", meta.Reason, meta)
+		}
+		final, err := m.frames.GetByIdentity("%5", 100, "t100")
+		if err != nil || final == nil {
+			t.Fatalf("reload parent: %v / %v", err, final)
+		}
+		if len(final.Subagents) != 1 {
+			t.Fatalf("Subagents count = %d, want 1 (in-place upsert); refs=%+v", len(final.Subagents), final.Subagents)
+		}
+		got := final.Subagents[0]
+		if got.SourceTurnID != "t_a" || got.SourcePID != 42 || got.SourceStartTime != "t1" || !got.IsProxy {
+			t.Fatalf("ref after upsert = %+v, want PID=42 StartTime=t1 turnID=t_a IsProxy=true", got)
+		}
+	})
+
+	// Row 5: parent cc + 1 ref(PID=42, t1, turnID="t_a")
+	// → UserPromptSubmit from PID=42 raw turn_id="t_b"
+	// → ref.SourceTurnID overwritten t_a→t_b in-place (still 1 ref).
+	t.Run("row05_user_prompt_overwrites_existing_turn_in_place", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+			SourceTurnID: "t_a",
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxUserPromptSubmit",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_b"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 300)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_upserted_on_user_prompt" {
+			t.Fatalf("reason = %q, want proxy_subagent_upserted_on_user_prompt", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 {
+			t.Fatalf("Subagents = %+v, want 1 ref (in-place overwrite, no append)", final.Subagents)
+		}
+		if final.Subagents[0].SourceTurnID != "t_b" {
+			t.Fatalf("ref.SourceTurnID = %q, want t_b", final.Subagents[0].SourceTurnID)
+		}
+	})
+
+	// Row 7: parent cc + 0 refs (resumeThread first dispatch, no SessionStart)
+	// → UserPromptSubmit from PID=42 raw turn_id="t_a" AgentType=codex
+	// → first-time attach via append; ref ID == "proxy:codex:42:t1".
+	t.Run("row07_user_prompt_first_time_attach_resume_thread", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, nil)
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxUserPromptSubmit",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_attached_on_user_prompt" {
+			t.Fatalf("reason = %q, want proxy_subagent_attached_on_user_prompt", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 {
+			t.Fatalf("Subagents = %+v, want exactly 1 ref after first attach", final.Subagents)
+		}
+		got := final.Subagents[0]
+		wantID := "proxy:codex:42:t1"
+		if got.ID != wantID {
+			t.Fatalf("ref.ID = %q, want %q (deterministic, mirrors SessionStart fast-path)", got.ID, wantID)
+		}
+		if got.Type != "codex" || !got.IsProxy || got.SourcePID != 42 || got.SourceStartTime != "t1" || got.SourceTurnID != "t_a" {
+			t.Fatalf("ref = %+v, want IsProxy=true Type=codex PID=42 StartTime=t1 turnID=t_a", got)
+		}
+
+		// Subsequent same-broker upsert reuses ID (no second ref).
+		req2 := req
+		req2.RawEvent = rawTurn("t_b")
+		_, meta2, err := m.applyFrameEvent(req2, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 300)
+		if err != nil {
+			t.Fatalf("applyFrameEvent #2: %v", err)
+		}
+		if meta2.Reason != "proxy_subagent_upserted_on_user_prompt" {
+			t.Fatalf("reason #2 = %q, want proxy_subagent_upserted_on_user_prompt", meta2.Reason)
+		}
+		final2, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final2 == nil || len(final2.Subagents) != 1 {
+			t.Fatalf("Subagents after re-upsert = %+v, want still 1 ref", final2.Subagents)
+		}
+		if final2.Subagents[0].ID != wantID {
+			t.Fatalf("re-upsert ref.ID drift: %q, want %q", final2.Subagents[0].ID, wantID)
+		}
+	})
+
+	// Row 17: opencode UserPromptSubmit (AgentType != codex) → must break
+	// early; existing generic path runs. Subagents on the cc parent must
+	// remain unchanged. (Spec §5 row 17 isolation guard.)
+	t.Run("row17_opencode_user_prompt_breaks_early_no_mutation", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		// Register opencode provider distinct from cc/codex (matches §5 row).
+		m.registry.Register(&fakeAgentProvider{
+			typeName: "opencode",
+			derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		})
+		parent := seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, nil)
+		// Empty refs; we assert on Subagents staying empty/zero-length.
+		_ = parent
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxUserPromptSubmit",
+			AgentType:  "opencode", SenderPID: 99, SenderStartTime: "t99",
+			RawEvent: rawTurn("ignored"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		// Generic path runs (cross-type proxy fast-path is gated to
+		// LifecycleSessionStart and does NOT run for UserPromptSubmit), so
+		// the opencode sender either attaches as proxy via reconcile or
+		// creates a standalone frame. EITHER way — the cc parent's
+		// Subagents must NOT have a SourceTurnID="ignored" written by
+		// the new lifecycle case.
+		_ = meta
+		final, err := m.frames.GetByIdentity("%5", 100, "t100")
+		if err != nil || final == nil {
+			t.Fatalf("reload parent: %v / %v", err, final)
+		}
+		for _, ref := range final.Subagents {
+			if ref.SourceTurnID == "ignored" {
+				t.Fatalf("opencode UserPromptSubmit leaked SourceTurnID=ignored onto cc parent ref %+v", ref)
+			}
+		}
+	})
+
+	// Row 17b: cc UserPromptSubmit on existing cc frame (AgentType != codex)
+	// → must break early; existing narrow UpdateHookPath runs. Subagents
+	// unchanged; no SourceTurnID written.
+	t.Run("row17b_cc_user_prompt_breaks_early_keeps_existing_subagents", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		// Seed cc frame for PID=10. UserPromptSubmit lands on this frame.
+		f := seedFrame(t, m, "%5", "cc", 10, "t10", 50)
+		f.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: false, ID: "task-existing", Type: "cc", StartedAt: 50,
+		}}
+		if _, err := m.frames.Upsert(f); err != nil {
+			t.Fatalf("seed cc subagent: %v", err)
+		}
+		// Must use a process info stub that returns valid info for PID=10
+		// (frame != nil path goes through readProcessInfoFn at frame_ops.go:251).
+		origInfo := readProcessInfoFn
+		readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+			return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+		}
+		t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxUserPromptSubmit",
+			AgentType:  "cc", SenderPID: 10, SenderStartTime: "t10",
+			RawEvent: rawTurn("ignored"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		// New lifecycle case must NOT have surfaced any of the new reasons.
+		switch meta.Reason {
+		case "proxy_subagent_attached_on_user_prompt",
+			"proxy_subagent_upserted_on_user_prompt",
+			"pre_tool_without_proxy_parent":
+			t.Fatalf("cc UserPromptSubmit ran new lifecycle case; reason=%q", meta.Reason)
+		}
+		final, err := m.frames.GetByIdentity("%5", 10, "t10")
+		if err != nil || final == nil {
+			t.Fatalf("reload cc frame: %v / %v", err, final)
+		}
+		if len(final.Subagents) != 1 || final.Subagents[0].ID != "task-existing" {
+			t.Fatalf("Subagents = %+v, want existing native ref preserved", final.Subagents)
+		}
+		for _, ref := range final.Subagents {
+			if ref.SourceTurnID == "ignored" {
+				t.Fatalf("cc UserPromptSubmit leaked SourceTurnID=ignored onto ref %+v", ref)
+			}
+		}
+	})
+}
