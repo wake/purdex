@@ -235,14 +235,39 @@ func (o *probeOrchestrator) makeCallback(session, agentType string) probe.Screen
 //     legacy MetricProbeGraceWindowSuppressed semantics stay intact;
 //     ProbeIntent callers pass probeIntentOnDrop so each drop reason routes
 //     to its own counter + dev log line for fault isolation.
+//   - PostGraceWindow / PostGraceWindowSet: optional caller override of the
+//     step 2 post-direction graceWindow (W6-6 R3 F5). Set
+//     PostGraceWindowSet=true to use the supplied PostGraceWindow value
+//     verbatim; PostGraceWindow=0 disables the step 2 grace check entirely
+//     (used by the dispatcher's ScreenChange Kind because the hook ARMS
+//     the detector — the legacy 2s "prefer hook" semantics are inverted
+//     for hook-armed observers, see probeIntentPostGraceWindow). Leave
+//     PostGraceWindowSet=false to preserve legacy 2s probeGraceWindow
+//     semantics — the legacy interpretScreenEvent path takes this default.
 type probeGuardArgs struct {
-	Session    string
-	AgentType  string
-	Reason     string
-	Signal     agentpkg.Signal
-	Mapping    func(agentpkg.Signal) agentpkg.Status
-	StaleCheck func(*Module) bool
-	OnDrop     func(reason string)
+	Session            string
+	AgentType          string
+	Reason             string
+	Signal             agentpkg.Signal
+	Mapping            func(agentpkg.Signal) agentpkg.Status
+	StaleCheck         func(*Module) bool
+	OnDrop             func(reason string)
+	PostGraceWindow    time.Duration
+	PostGraceWindowSet bool
+}
+
+// effectivePostGraceWindow returns the post-direction graceWindow value
+// step 2 of applyProbeGuards must apply. Returns the caller's explicit
+// override when PostGraceWindowSet=true (including 0 for "disabled");
+// otherwise returns the legacy probeGraceWindow default so the ScreenChange
+// watcher path (interpretScreenEvent → applyProbeGuards) keeps its original
+// 2s hook-authority semantics. See probeIntentPostGraceWindow for the
+// dispatcher's by-Kind override rationale.
+func (args probeGuardArgs) effectivePostGraceWindow() time.Duration {
+	if args.PostGraceWindowSet {
+		return args.PostGraceWindow
+	}
+	return probeGraceWindow
 }
 
 // applyProbeGuards runs the shared probe-status-transition pipeline:
@@ -285,12 +310,22 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 	}
 
 	// 2. graceWindow suppression (independent graceMu — no nesting w/ m.mu).
-	if m.probeOrch != nil {
+	//
+	// Window value is per-caller (W6-6 R3 F5): legacy ScreenChange watcher
+	// path leaves PostGraceWindowSet=false → effectivePostGraceWindow()
+	// returns probeGraceWindow (2s) so existing hook-authority semantics
+	// stay intact. The dispatcher's ProbeIntent path overrides per-Kind
+	// (probeIntentPostGraceWindow): ScreenChange returns 0 (bypass — hook
+	// ARMS the detector, Signal IS the expected response) while
+	// ProcessDead and other kinds keep the 2s default. window <= 0 skips
+	// the grace branch entirely.
+	postGrace := args.effectivePostGraceWindow()
+	if postGrace > 0 && m.probeOrch != nil {
 		o := m.probeOrch
 		o.graceMu.Lock()
 		last, hasHook := o.lastHookAt[args.Session]
 		o.graceMu.Unlock()
-		if hasHook && orchNowFn().Sub(last) < probeGraceWindow {
+		if hasHook && orchNowFn().Sub(last) < postGrace {
 			agentpkg.MetricProbeGraceWindowSuppressed.Add(1)
 			if isDevMode() {
 				log.Printf("[probe] graceWindow suppress session=%s agent=%s reason=%s",

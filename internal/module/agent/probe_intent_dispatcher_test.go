@@ -1511,3 +1511,58 @@ func TestReplayStatus_TriggersProbeIntent_PreGraceConsistent(t *testing.T) {
 		t.Fatalf("currentStatus = %q, want error after replay-driven apply", gotStatus)
 	}
 }
+
+// TestConsumeSignals_ProcessDead_PostGraceStillSuppresses pins R3 F5
+// regression: the by-Kind post-grace specialization (probeIntentPostGrace
+// Window) MUST keep the legacy 2s hook-authority semantics for
+// ProcessDead. Without explicit coverage, a future drift that mistakenly
+// sets ProcessDead's post-grace to 0 (or removes the default branch
+// entirely) would silently regress the W6-3 race-competitor protection
+// — ProcessDead detector emits "PaneAlive=false" on its own polling
+// schedule, which CAN race a same-session SessionEnd hook; the 2s
+// graceWindow is the original hook-authority guard for that race.
+//
+// This test mirrors TestConsumeSignals_PreGrace_Table case_5 but stays
+// as a permanent stand-alone regression so the F5 by-Kind asymmetry
+// is explicit (ScreenChange = 0 bypass / ProcessDead = 2s legacy).
+func TestConsumeSignals_ProcessDead_PostGraceStillSuppresses(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	m.sessions = &fakeSessionProvider{}
+	installPreGraceEmitOnceDetector(t, m, agentpkg.Signal{
+		Kind:      agentpkg.ProbeIntentKindProcessDead,
+		PaneAlive: true,
+		PaneID:    "%5",
+		SenderPID: 4242,
+	})
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	// Hook BEFORE the signal — emulates the standard post-direction race
+	// where the dispatcher's post-grace window must drop the probe.
+	m.probeOrch.recordHookAt("work")
+
+	before := snapshotPreGraceMetrics()
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+	// Wait for the dispatcher's post-grace early check to drop
+	// (consumeSignals.go: `signalAt.Sub(last) < probeGraceWindow`). For
+	// ProcessDead the window stays 2s, so this drop fires immediately
+	// when consumeSignals reads the Signal.
+	waitFor(t, 2*time.Second, func() bool {
+		now := snapshotPreGraceMetrics()
+		return (now.droppedGrace - before.droppedGrace) >= 1
+	}, "ProcessDead Signal dropped via post graceWindow (legacy 2s)")
+
+	after := snapshotPreGraceMetrics()
+	// Must increment BOTH the legacy global counter AND the per-reason
+	// ProbeIntent counter (dual-count pattern at consumeSignals' early
+	// post-grace check; mirrors applyProbeGuards step 2 dual-count).
+	if got := after.graceWindowSup - before.graceWindowSup; got != 1 {
+		t.Errorf("MetricProbeGraceWindowSuppressed delta = %d, want 1 (ProcessDead must NOT bypass post-grace)", got)
+	}
+	if got := after.droppedGrace - before.droppedGrace; got != 1 {
+		t.Errorf("MetricProbeIntentDroppedGrace delta = %d, want 1 (ProcessDead must NOT bypass post-grace)", got)
+	}
+	if got := after.applied - before.applied; got != 0 {
+		t.Errorf("MetricProbeIntentApplied delta = %d, want 0 (post graceWindow must block apply)", got)
+	}
+}

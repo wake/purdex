@@ -439,3 +439,86 @@ func readCurrentStatus(m *Module, session string) agentpkg.Status {
 	defer m.mu.Unlock()
 	return m.currentStatus[session]
 }
+
+// TestDispatcher_ScreenChange_IgnoresEntryHookPostGrace pins R3 F5: the
+// PdxPermissionRequest hook arms the ScreenChange detector — the
+// resulting ScreenChange Signal IS the expected response to the hook,
+// not a race competitor. Therefore the dispatcher's post-grace window
+// (consumeSignals early check, pre-applyProbeGuards) must NOT suppress
+// ScreenChange Signals that arrive within probeGraceWindow of the hook
+// that armed them.
+//
+// Without the F5 fix: detector emits ~1.6s after hook (dialog render
+// 1.5s + user reaction ~0.1s typical timing), signalAt - lastHookAt <
+// probeGraceWindow=2s, dispatcher early-check drops with reason=grace.
+// Detector is emit-once + already torn down → status stays Waiting
+// indefinitely until next hook.
+//
+// With the F5 fix: probeIntentPostGraceWindow(ScreenChange)=0 → bypass
+// the early post-grace check; Signal proceeds through pre-grace hold
+// (300ms) into applyProbeGuards.
+//
+// Hook → Signal → Running flips status; no grace-suppress counter
+// increment.
+func TestDispatcher_ScreenChange_IgnoresEntryHookPostGrace(t *testing.T) {
+	m, fw, sub := setupScreenChangeIntegration(t, func() bool { return true })
+
+	seedWaitingFrame(t, m, "work", "%5", "codex", 4242)
+
+	// Simulate the entry hook (PdxPermissionRequest) — this records
+	// lastHookAt[work]=now AND drives applyStatus(Waiting) which arms
+	// the ScreenChange detector.
+	m.probeOrch.recordHookAt("work")
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusWaiting)
+	waitFor(t, time.Second, fw.hasCallback, "screen watcher callback registered")
+
+	before := snapshotPreGraceMetrics()
+
+	// Phase A complete → Phase B emit. Both events fire well within
+	// probeGraceWindow (2s) of recordHookAt above; pre-fix would drop
+	// the resulting Signal at the consumeSignals post-grace check.
+	fw.fire(probe.ScreenChangeEvent{Kind: probe.ScreenStable})
+	fw.fire(probe.ScreenChangeEvent{Kind: probe.ScreenChanged})
+
+	waitStatus(t, m, "work", agentpkg.StatusRunning, 2*time.Second,
+		"currentStatus → Running after ScreenChange Signal (post-grace bypass for ScreenChange)")
+
+	// Allow consumeSignals to bump MetricProbeIntentApplied AFTER the
+	// status flip. applyProbeGuards mutates currentStatus inside step 4
+	// (under m.mu) and broadcasts; the dispatcher then increments
+	// MetricProbeIntentApplied lock-free outside the critical section.
+	// Without this, the snapshot under -race can race the increment and
+	// observe applied delta=0 even though status already advanced.
+	waitFor(t, time.Second, func() bool {
+		return metricInt("purdex_probe_intent_applied_total") > before.applied
+	}, "MetricProbeIntentApplied incremented after ScreenChange apply")
+
+	after := snapshotPreGraceMetrics()
+	// The ScreenChange Signal must reach applyProbeGuards and apply.
+	if got := after.applied - before.applied; got < 1 {
+		t.Errorf("MetricProbeIntentApplied delta = %d, want >= 1 (ScreenChange Signal must not be suppressed by post-grace)", got)
+	}
+	// Must NOT increment grace-suppress counters — the bypass means
+	// neither the early check nor applyProbeGuards step 2 ran the
+	// grace branch.
+	if got := after.graceWindowSup - before.graceWindowSup; got != 0 {
+		t.Errorf("MetricProbeGraceWindowSuppressed delta = %d, want 0 (ScreenChange must bypass post-grace)", got)
+	}
+	if got := after.droppedGrace - before.droppedGrace; got != 0 {
+		t.Errorf("MetricProbeIntentDroppedGrace delta = %d, want 0 (ScreenChange must bypass post-grace)", got)
+	}
+
+	// Confirm the broadcast carries Status=running so SPA observes the
+	// transition (corollary: applied=true ⇒ broadcast happened).
+	got := drainBroadcasts(sub, 100*time.Millisecond)
+	hasRunning := false
+	for _, n := range got {
+		if n.Status == string(agentpkg.StatusRunning) && n.AgentType == "codex" {
+			hasRunning = true
+			break
+		}
+	}
+	if !hasRunning {
+		t.Errorf("expected at least one Running broadcast, got %d envelopes", len(got))
+	}
+}

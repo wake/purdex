@@ -698,6 +698,7 @@ m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
 | 想拿掉 mutex-protected `closed bool` flag（改回 v5 「不需要額外 close 同步」）| v6.1 round 6 P1 finding 已驗證：watchLoop callback 是 inline sync call 在 watchLoop goroutine 內，prober.StopWatch 不等 callback 完成；wrap goroutine close(out) 緊接 detector return 而 cb 仍可能在 select case `out <- sig:` 內，Go select 隨機選送 case → panic on closed channel。closed flag 是必要的鎖序保證 |
 | 想用 atomic.Bool 取代 mutex-protected `closed bool` | atomic.Bool Load/Store 之間仍有 window：cb load closed=false → cb 進 select case → main store closed=true → wrap close(out) → cb 仍可能 panic。mutex 給 cb 與 main 序列化 critical section，是 race-free 的唯一簡單做法 |
 | 想改 Prober.StopWatch 為 sync 等 watchLoop 結束 | 需動 probe primitive，影響 sweep / orchestrator 既有 caller；scope 越界。W6-6 detector 內加 closed flag 是局部 fix，scope 對齊本 PR |
+| 想為 ScreenChange Kind 拿掉 post-grace bypass / 把 ScreenChange post-grace 改回 `probeGraceWindow=2s` | R3 codex review 已驗證：detector 在 PdxPermissionRequest hook 後 ~1.6s 左右 emit Signal（dialog 渲染 1.5s + 使用者反應 0.1s 是常見 timing），`signalAt - lastHookAt < 2s` 會 drop reason=grace；detector emit-once 已 teardown，卡 waiting 直到下個 hook。Post-grace 對 ScreenChange 語意 inverted — hook 是 detector 的 arm 觸發源（不是 race competitor）；hook → signal 是 contract 預期路徑而非要抑制的衝突。pre-grace（J3 generic）不受影響；post-grace by-Kind 特化是必要的 hook-authority 模型差異化（ScreenChange=hook-armed observer / ProcessDead=race-competitor）。spec §0.4 + §0.5 contract 隱含此語意但未明文寫；R3 fix 落 `dispatcher.probeIntentPostGraceWindow` + `applyProbeGuards.effectivePostGraceWindow` 雙層特化。 |
 
 ---
 

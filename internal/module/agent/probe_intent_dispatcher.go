@@ -32,6 +32,48 @@ import (
 // values may evolve independently.
 const probeIntentPreGraceWindow = 300 * time.Millisecond
 
+// probeIntentPostGraceWindow returns the post-direction graceWindow value
+// to apply for a given ProbeIntent Kind. ScreenChange is hook-armed (the
+// PdxPermissionRequest hook IS the trigger source for arming the
+// detector, NOT a race competitor against it), so the legacy 2s "prefer
+// hook authority" suppression is contextually inverted — it would drop
+// the very Signal that the hook authorized observing.
+//
+// Hook-authority model — by-Kind asymmetry rationale:
+//
+//   - ScreenChange (Kind=screen_change, returns 0):
+//     hook ARMS the detector. Detector emits ~1.6s after hook (dialog
+//     render 1.5s + user reaction ~0.1s typical timing). The Signal IS
+//     the expected response to the hook, not a competing observation.
+//     A 2s post-grace would drop the very emission this hook permitted.
+//
+//   - ProcessDead and other kinds (default, returns probeGraceWindow):
+//     detector polls independently of hooks. A poll's PaneAlive=false
+//     emission CAN race a same-session SessionEnd hook; the 2s window
+//     defers to the hook (authoritative source) when a hook fires within
+//     the window. Legacy W6-3 semantics — preserved.
+//
+// This differs from probeIntentPreGraceWindow which is generic across all
+// Kinds (J3 contract; spec
+// `docs/specs/2026-05-01-probe-intent-bidirectional-grace-window-spec.md`).
+// Pre-grace handles "Signal arrived BEFORE hook", post-grace handles
+// "hook already arrived, suppress probe". The asymmetry is intentional —
+// ScreenChange's contract is "observe user reaction to dialog the hook
+// just raised", which makes hook → Signal the EXPECTED timeline rather
+// than a race.
+//
+// Spec drift anchor: see W6-6 spec §8 entry — switching ScreenChange to
+// a non-zero post-grace window or removing the default branch silently
+// regresses W6-3 race-competitor protection.
+func probeIntentPostGraceWindow(kind agentpkg.ProbeIntentKind) time.Duration {
+	switch kind {
+	case agentpkg.ProbeIntentKindScreenChange:
+		return 0
+	default:
+		return probeGraceWindow
+	}
+}
+
 // probeIntentOnDrop is the OnDrop callback installed on probeGuardArgs by
 // the dispatcher's consumeSignals path. It maps the canonical drop-reason
 // string (per applyProbeGuards contract) to the matching expvar counter
@@ -572,6 +614,14 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 // would otherwise leak. Re-running applyStatus with the freshly applied
 // status walks lifecycle case 3 (active && !shouldActive) → cancel +
 // delete.
+//
+// Post-grace is now per-Kind (W6-6 R3 F5): ScreenChange = 0 (bypass)
+// because the hook ARMS the detector — the Signal is the expected
+// response, not a race competitor. ProcessDead and other Kinds default
+// to probeGraceWindow=2s for legacy hook-authority semantics. See
+// probeIntentPostGraceWindow + spec §8 drift anchor. Pre-grace (J3
+// generic 300ms) remains unaffected — it's a generic-Kind contract
+// (W6-3 §9.14).
 func (d *probeIntentDispatcher) consumeSignals(
 	ctx context.Context,
 	session, agentType string,
@@ -601,6 +651,14 @@ func (d *probeIntentDispatcher) consumeSignals(
 		// (session, kind) consistent across drop reasons.
 		onDrop := probeIntentOnDropForSession(session, intent.Kind)
 
+		// Post-direction graceWindow is per-Kind (R3 F5): ScreenChange = 0
+		// (hook ARMS the detector — Signal is the expected response, not
+		// a race competitor; legacy 2s would drop the very emission the
+		// hook permitted). ProcessDead and other kinds = probeGraceWindow
+		// (legacy hook-authority semantics for race-competitor signals).
+		// See probeIntentPostGraceWindow + spec §8 drift anchor.
+		postGrace := probeIntentPostGraceWindow(intent.Kind)
+
 		// Post-direction graceWindow pre-check using signalAt as the
 		// reference time. Without this, the 300ms pre-grace hold below
 		// would shift applyProbeGuards' decision time forward by 300ms
@@ -615,12 +673,18 @@ func (d *probeIntentDispatcher) consumeSignals(
 		//   switch which increments MetricProbeIntentDroppedGrace.
 		// Do NOT also bump MetricProbeIntentDroppedGrace explicitly — that
 		// would double-count via the helper switch (per spec §3.4 R4).
-		if d.parent.probeOrch != nil {
+		//
+		// When postGrace == 0 (ScreenChange Kind), the entire branch is
+		// skipped — Signal proceeds straight into the pre-grace hold and
+		// applyProbeGuards (which also receives PostGraceWindow=0 to keep
+		// the bypass consistent across both layers; W6-3 §9.14 by-Kind
+		// hook-authority asymmetry).
+		if postGrace > 0 && d.parent.probeOrch != nil {
 			o := d.parent.probeOrch
 			o.graceMu.Lock()
 			last, hasHook := o.lastHookAt[session]
 			o.graceMu.Unlock()
-			if hasHook && !last.After(signalAt) && signalAt.Sub(last) < probeGraceWindow {
+			if hasHook && !last.After(signalAt) && signalAt.Sub(last) < postGrace {
 				agentpkg.MetricProbeGraceWindowSuppressed.Add(1)
 				onDrop("grace")
 				continue
@@ -668,13 +732,15 @@ func (d *probeIntentDispatcher) consumeSignals(
 		}
 
 		applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{
-			Session:    session,
-			AgentType:  agentType,
-			Reason:     "probe-intent:" + string(intent.Kind),
-			Signal:     sig,
-			Mapping:    intent.OnSignal,
-			StaleCheck: makeProbeIntentStaleCheck(session, intent.Kind, agentType, generation),
-			OnDrop:     onDrop,
+			Session:            session,
+			AgentType:          agentType,
+			Reason:             "probe-intent:" + string(intent.Kind),
+			Signal:             sig,
+			Mapping:            intent.OnSignal,
+			StaleCheck:         makeProbeIntentStaleCheck(session, intent.Kind, agentType, generation),
+			OnDrop:             onDrop,
+			PostGraceWindow:    postGrace,
+			PostGraceWindowSet: true,
 		})
 		if !applied {
 			continue
