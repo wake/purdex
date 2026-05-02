@@ -175,8 +175,9 @@ export const useAgentStore = create<AgentState>()(
         // both literals during the transition.
         const rawName = event.raw_event_name
         const isNotification = rawName === 'Notification' || rawName === 'PdxNotification'
+        const notificationSilent = event.detail?.notification_silent === true
         const isActionable = status === 'waiting' || status === 'error' ||
-          (status === 'idle' && !isNotification)
+          (status === 'idle' && !isNotification && !notificationSilent)
         const activeInfo = getActiveSessionInfo()
         const activeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
         if (isActionable && activeKey !== key) {
