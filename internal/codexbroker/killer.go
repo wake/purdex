@@ -198,27 +198,54 @@ func defaultPgidLookup(pid int) (int, error) {
 // pgid <= 1 (defensive against init / kernel weirdness). Polls the lister
 // until the process exits or TermTimeout elapses.
 //
-// Returns true iff the process is observed gone within budget. The caller
-// (Run wiring in task P) records the latency and proceeds to Step 4 on
-// false.
-func (ks *KillSequence) stepSIGTERM(ctx context.Context) bool {
+// Per spec §5.4 line 434 ("immediately before SIGTERM/SIGKILL") and PR
+// review finding A: stepSIGTERM re-verifies (pid, lstart, cmdline) just
+// before invoking Signaller.Kill. A drift between Step 0 and this point
+// (PID-reuse during the audit/graceful window) returns
+// (false, identityMismatchErr) and the caller (Run) MUST abort the
+// remaining steps.
+//
+// Returns (true, nil) iff the process is observed gone within budget.
+// (false, nil) on a normal failure (timeout, getpgid error, signaller nil).
+// (false, *identityMismatchErr) on an identity drift.
+func (ks *KillSequence) stepSIGTERM(ctx context.Context) (bool, error) {
 	return ks.signalAndWait(ctx, syscall.SIGTERM, ks.termBudget())
 }
 
 // stepSIGKILL implements spec §5.4 Step 4 (line 455): unconditional SIGKILL
-// to -pgid. Same pgid-safety guards as stepSIGTERM. Polls until reap or
-// KillTimeout. False here means the process group ignored even SIGKILL —
-// rare, but recorded as KillOk=false in the kill result postscript.
-func (ks *KillSequence) stepSIGKILL(ctx context.Context) bool {
+// to -pgid. Same pgid-safety guards + identity re-verification as
+// stepSIGTERM (PR review finding A: a drift between Step 3 and Step 4 must
+// also abort). Polls until reap or KillTimeout. (false, nil) means the
+// process group ignored even SIGKILL — rare, but recorded as
+// KillOk=false in the kill result postscript.
+func (ks *KillSequence) stepSIGKILL(ctx context.Context) (bool, error) {
 	return ks.signalAndWait(ctx, syscall.SIGKILL, ks.killBudget())
 }
 
 // signalAndWait is the shared body of Steps 3 and 4. The pgid resolution
 // and pgid≤1 refusal sit here so a future Step (e.g. SIGUSR1 fault probe)
 // shares the same safety guard.
-func (ks *KillSequence) signalAndWait(ctx context.Context, sig syscall.Signal, budget time.Duration) bool {
+//
+// PR review finding A — re-verification semantics:
+//
+//   - Identity is re-fetched immediately before any signal reaches the
+//     kernel. This is the spec §5.4 line 434 "immediately before
+//     SIGTERM/SIGKILL" requirement.
+//   - On mismatch the function returns (false, *identityMismatchErr) with
+//     ZERO signals sent. The caller (Run) is responsible for propagating
+//     the typed error so the sweep handler can quarantine instead of
+//     retry-killing.
+//   - The Step 0 verify in Run is retained as a fail-fast guard against
+//     wasted Step 1 audit-preimage I/O when identity is already wrong.
+func (ks *KillSequence) signalAndWait(ctx context.Context, sig syscall.Signal, budget time.Duration) (bool, error) {
 	if ks.Signaller == nil {
-		return false
+		return false, nil
+	}
+	// Re-verify identity *immediately before* the signal is sent. PID-reuse
+	// during the audit/graceful window between Step 0 and here would
+	// otherwise cause us to SIGTERM/SIGKILL an unrelated process group.
+	if ok, detail := VerifyIdentity(ks.Rec, ks.Lister); !ok {
+		return false, &identityMismatchErr{detail: detail}
 	}
 	lookup := ks.PgidLookup
 	if lookup == nil {
@@ -226,17 +253,17 @@ func (ks *KillSequence) signalAndWait(ctx context.Context, sig syscall.Signal, b
 	}
 	pgid, err := lookup(ks.Rec.PID)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	if pgid <= 1 {
 		// Defensive: signalling pgid 1 (init) or 0 (current pgrp) is
 		// catastrophic. Spec §5.4 line 451 mandates refusal.
-		return false
+		return false, nil
 	}
 	if err := ks.Signaller.Kill(-pgid, sig); err != nil {
-		return false
+		return false, nil
 	}
-	return ks.waitForExit(ctx, budget)
+	return ks.waitForExit(ctx, budget), nil
 }
 
 // waitForExit polls the lister at 20ms cadence until the row for ks.Rec.PID
@@ -413,12 +440,25 @@ func (ks *KillSequence) Run(ctx context.Context, decision DecisionResult, verifi
 	// If graceful already took effect, skip Steps 3 and 4.
 	if !res.GracefulOk {
 		t1 := time.Now()
-		res.TermOk = ks.stepSIGTERM(ctx)
+		termOk, termErr := ks.stepSIGTERM(ctx)
+		res.TermOk = termOk
 		res.StepLatencyMs[1] = time.Since(t1).Milliseconds()
+		if IsIdentityMismatch(termErr) {
+			// Identity drifted between Step 0 and Step 3. Abort cleanup +
+			// further signals; the caller (sweep handler) translates this
+			// into an E2 quarantine entry.
+			res.Err = termErr
+			return res, termErr
+		}
 		if !res.TermOk {
 			t2 := time.Now()
-			res.KillOk = ks.stepSIGKILL(ctx)
+			killOk, killErr := ks.stepSIGKILL(ctx)
+			res.KillOk = killOk
 			res.StepLatencyMs[2] = time.Since(t2).Milliseconds()
+			if IsIdentityMismatch(killErr) {
+				res.Err = killErr
+				return res, killErr
+			}
 		}
 	}
 

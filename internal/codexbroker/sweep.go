@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -62,7 +63,30 @@ type SweepHandler struct {
 
 	// Quarantine is consulted before any kill: a quarantined broker is
 	// excluded from evaluation entirely.
+	//
+	// PR review finding C: when KillSequence.Run returns identityMismatchErr
+	// the handler appends a fresh QuarantineEntry to this in-memory file via
+	// QuarantineStore.AddEntry and persists it through QuarantineStore.Save.
+	// Subsequent sweeps see the entry via IsQuarantined and skip the broker
+	// before any further kill attempt — preventing the indefinite-retry hole.
 	Quarantine *QuarantineFile
+
+	// QuarantineStore + QuarantinePath persist E2 entries. Both must be set
+	// for finding-C persistence to engage; if either is nil the handler
+	// still updates the in-memory Quarantine but logs a warning rather than
+	// silently dropping forensic data.
+	QuarantineStore *QuarantineStore
+	QuarantinePath  string
+
+	// Lister captures the live (pid, lstart, cmdline) tuple at quarantine
+	// time so the persisted QuarantineEntry contains the *suspicious*
+	// fingerprint (the new process that took the PID), not the dead
+	// broker's recorded identity. Production wires NewPsLister(); tests
+	// inject a fake.
+	Lister ProcessLister
+
+	// QuarantineRetentionDays defaults to 7 (spec §5.3). Tests can shorten.
+	QuarantineRetentionDays int
 
 	// Registry is read-only in P2 (spawn-time write deferred to PR-G).
 	Registry LaunchRegistryReader
@@ -199,7 +223,19 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 			}
 			_, killErr := runner.Run(ctx, decision, verifier)
 			if killErr != nil {
-				resp.Errors = append(resp.Errors, rec.Key+": "+killErr.Error())
+				if IsIdentityMismatch(killErr) {
+					// PR review finding C — translate Step 0 identity drift
+					// into an E2 quarantine entry instead of silently looping
+					// next sweep. AddEntry is idempotent on brokerKey so a
+					// re-quarantine on subsequent sweep is a no-op.
+					if quarantined, qErr := h.recordQuarantine(ctx, rec); qErr != nil {
+						resp.Errors = append(resp.Errors, rec.Key+": quarantine save failed: "+qErr.Error())
+					} else if quarantined {
+						resp.Quarantined = append(resp.Quarantined, rec.Key)
+					}
+				} else {
+					resp.Errors = append(resp.Errors, rec.Key+": "+killErr.Error())
+				}
 			} else {
 				resp.Applied = append(resp.Applied, rec.Key)
 				if h.E1Tracker != nil {
@@ -250,6 +286,89 @@ func (h *SweepHandler) acquireLocks(ctx context.Context, mode, brokerKey string)
 func (h *SweepHandler) brokerMu(key string) *sync.RWMutex {
 	v, _ := h.perBrokerMu.LoadOrStore(key, &sync.RWMutex{})
 	return v.(*sync.RWMutex)
+}
+
+// recordQuarantine appends an E2 entry for rec.Key to the in-memory
+// QuarantineFile, snapshots the live (pid, lstart, cmdline) tuple as the
+// suspicious fingerprint, and atomically saves quarantine.json. Used by
+// HandleSweep when KillSequence.Run reports identityMismatchErr (PR review
+// finding C).
+//
+// Returns (added, error). added=true means the entry was appended in
+// memory (regardless of save outcome — the entry is in-memory consistent).
+// error is non-nil only when the disk save fails after the in-memory
+// append; the caller surfaces the save error in resp.Errors so operators
+// can investigate without the broker being silently un-quarantined.
+//
+// If h.QuarantineStore or h.QuarantinePath is nil/empty, persistence is
+// skipped (added=true, error=nil); the in-memory append still protects
+// the current daemon's lifetime against retry-loops.
+func (h *SweepHandler) recordQuarantine(ctx context.Context, rec BrokerRecord) (bool, error) {
+	if h.Quarantine == nil {
+		h.Quarantine = &QuarantineFile{Version: 1}
+	}
+	now := time.Now().UTC()
+	retention := h.QuarantineRetentionDays
+	if retention <= 0 {
+		retention = 7
+	}
+	fp := h.snapshotFingerprint(ctx, rec)
+	entry := QuarantineEntry{
+		BrokerKey:     rec.Key,
+		PID:           rec.PID,
+		Lstart:        rec.Lstart,
+		QuarantinedAt: now,
+		Reason:        "pid_reuse_suspicion",
+		Fingerprint:   fp,
+		ExpiresAt:     now.Add(time.Duration(retention) * 24 * time.Hour),
+	}
+	store := h.QuarantineStore
+	if store == nil {
+		store = &QuarantineStore{}
+	}
+	h.Quarantine = store.AddEntry(h.Quarantine, entry)
+	if h.QuarantinePath == "" {
+		// In-memory only; warn through return but treat as added.
+		return true, nil
+	}
+	if err := store.Save(h.QuarantinePath, h.Quarantine); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// snapshotFingerprint fetches the *current* row for rec.PID and returns it
+// as a BrokerFingerprint. The fields capture the *suspicious* identity (the
+// process that the PID now points to), which is what an operator needs to
+// triage. Falls back to rec's recorded values when the lister is missing
+// or the row vanished between detection and snapshot.
+func (h *SweepHandler) snapshotFingerprint(ctx context.Context, rec BrokerRecord) BrokerFingerprint {
+	fp := BrokerFingerprint{
+		Cmdline: "",
+		PidFile: rec.PidFile,
+	}
+	if h.Lister == nil {
+		return fp
+	}
+	listCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	rows, err := h.Lister.List(listCtx)
+	if err != nil {
+		return fp
+	}
+	for _, row := range rows {
+		if row.PID == rec.PID {
+			fp.Cmdline = row.Cmdline
+			// Best-effort: parse executable as the first cmdline token.
+			if idx := strings.IndexByte(row.Cmdline, ' '); idx > 0 {
+				fp.Executable = row.Cmdline[:idx]
+			} else {
+				fp.Executable = row.Cmdline
+			}
+			break
+		}
+	}
+	return fp
 }
 
 // lockWriteCtx attempts to acquire a write-lock on mu, but bails out if ctx

@@ -357,7 +357,10 @@ func TestStepSIGTERM_ProcessExitsGracefully(t *testing.T) {
 		PgidLookup:  fakePgidLooker(4321, nil),
 		TermTimeout: 500 * time.Millisecond,
 	}
-	ok := ks.stepSIGTERM(context.Background())
+	ok, err := ks.stepSIGTERM(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected stepSIGTERM err: %v", err)
+	}
 	if !ok {
 		t.Fatalf("expected stepSIGTERM=true after process exits")
 	}
@@ -382,7 +385,7 @@ func TestStepSIGTERM_Timeout_ProcStillAlive(t *testing.T) {
 		PgidLookup:  fakePgidLooker(4321, nil),
 		TermTimeout: 80 * time.Millisecond,
 	}
-	if ok := ks.stepSIGTERM(context.Background()); ok {
+	if ok, _ := ks.stepSIGTERM(context.Background()); ok {
 		t.Errorf("expected stepSIGTERM=false on timeout")
 	}
 }
@@ -402,7 +405,7 @@ func TestStepSIGTERM_PgidLeOne_Refused(t *testing.T) {
 		PgidLookup:  fakePgidLooker(1, nil),
 		TermTimeout: 100 * time.Millisecond,
 	}
-	if ok := ks.stepSIGTERM(context.Background()); ok {
+	if ok, _ := ks.stepSIGTERM(context.Background()); ok {
 		t.Errorf("expected stepSIGTERM=false on pgid=1")
 	}
 	if got := sig.snapshot(); len(got) != 0 {
@@ -422,7 +425,7 @@ func TestStepSIGTERM_PgidLookupError_Refused(t *testing.T) {
 		PgidLookup:  fakePgidLooker(0, errors.New("getpgid ESRCH")),
 		TermTimeout: 100 * time.Millisecond,
 	}
-	if ok := ks.stepSIGTERM(context.Background()); ok {
+	if ok, _ := ks.stepSIGTERM(context.Background()); ok {
 		t.Errorf("expected stepSIGTERM=false on getpgid error")
 	}
 	if got := sig.snapshot(); len(got) != 0 {
@@ -445,8 +448,8 @@ func TestStepSIGKILL_KillsStubbornProcess(t *testing.T) {
 		PgidLookup:  fakePgidLooker(4321, nil),
 		KillTimeout: 500 * time.Millisecond,
 	}
-	if ok := ks.stepSIGKILL(context.Background()); !ok {
-		t.Errorf("expected stepSIGKILL=true after process gone")
+	if ok, err := ks.stepSIGKILL(context.Background()); !ok {
+		t.Errorf("expected stepSIGKILL=true after process gone, err=%v", err)
 	}
 	calls := sig.snapshot()
 	if len(calls) != 1 || calls[0].sig != syscall.SIGKILL || calls[0].pid != -4321 {
@@ -469,7 +472,7 @@ func TestStepSIGKILL_2sTimeout_Partial(t *testing.T) {
 		PgidLookup:  fakePgidLooker(4321, nil),
 		KillTimeout: 80 * time.Millisecond,
 	}
-	if ok := ks.stepSIGKILL(context.Background()); ok {
+	if ok, _ := ks.stepSIGKILL(context.Background()); ok {
 		t.Errorf("expected stepSIGKILL=false on timeout")
 	}
 }
@@ -485,7 +488,7 @@ func TestStepSIGKILL_PgidLeOne_Refused(t *testing.T) {
 		PgidLookup:  fakePgidLooker(1, nil),
 		KillTimeout: 100 * time.Millisecond,
 	}
-	if ok := ks.stepSIGKILL(context.Background()); ok {
+	if ok, _ := ks.stepSIGKILL(context.Background()); ok {
 		t.Errorf("expected stepSIGKILL=false on pgid=1")
 	}
 	if got := sig.snapshot(); len(got) != 0 {
@@ -837,6 +840,160 @@ func TestKillSequence_AppendPostscript_OnSuccess(t *testing.T) {
 	// Postscript should have killSequence.termOk=true marshalled.
 	if !strings.Contains(string(body), `"termOk": true`) {
 		t.Errorf("postscript did not include termOk=true; body=%s", string(body))
+	}
+}
+
+// -- PR review finding A: re-verify identity at every signal step --------
+
+// driftLister is a ProcessLister whose return values can be mutated mid-run
+// to simulate identity drift between Step 0 and Step 3 / Step 4 (PID-reuse
+// race within the kill sequence). It also implements clearPID so the
+// signaller fakes can model "process actually died" without exposing the
+// inner dynamicLister.
+type driftLister struct {
+	mu         sync.Mutex
+	rows       []RawProcess
+	swapAfter  int                            // call # at which to swap to swapRows
+	swapRows   []RawProcess
+	calls      int
+	transition func(prev []RawProcess) []RawProcess
+}
+
+func (l *driftLister) List(_ context.Context) ([]RawProcess, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls++
+	// swap once after the configured call number (e.g. swapAfter=1 means
+	// the first List() returns rows; the second + onward returns swapRows).
+	if l.calls > l.swapAfter && (l.transition != nil || l.swapRows != nil) {
+		if l.transition != nil {
+			l.rows = l.transition(l.rows)
+			l.transition = nil
+		} else if l.swapRows != nil {
+			l.rows = l.swapRows
+			l.swapRows = nil
+		}
+	}
+	out := make([]RawProcess, len(l.rows))
+	copy(out, l.rows)
+	return out, nil
+}
+
+func (l *driftLister) clearPID(pid int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := l.rows[:0]
+	for _, row := range l.rows {
+		if row.PID != pid {
+			out = append(out, row)
+		}
+	}
+	l.rows = out
+}
+
+// TestStepSIGTERM_ReVerifiesIdentity_AbortsOnDrift — finding A regression:
+// stepSIGTERM must re-fetch identity *immediately* before syscall.Kill so
+// a PID-reuse during the audit/graceful window does not result in signalling
+// an unrelated process group.
+//
+// Setup: lister returns the same PID with a DIFFERENT lstart at the moment
+// stepSIGTERM is called (i.e., the original broker exited and the kernel
+// handed the same PID to a fresh unrelated process between Step 0 and
+// here).
+//
+// Expectation: stepSIGTERM aborts before sending SIGTERM and returns
+// (false, identityMismatchErr). Zero signals are recorded.
+func TestStepSIGTERM_ReVerifiesIdentity_AbortsOnDrift(t *testing.T) {
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
+	driftedLstart := lstart.Add(1 * time.Hour)
+	lister := NewFakeProcessLister([]RawProcess{{
+		PID: 4321, Lstart: driftedLstart, Cmdline: "/usr/bin/zsh -i",
+	}})
+	sig := &capturingSignaller{}
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      lister,
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(4321, nil),
+		TermTimeout: 100 * time.Millisecond,
+	}
+	ok, err := ks.stepSIGTERM(context.Background())
+	if ok {
+		t.Errorf("expected stepSIGTERM=false on identity drift")
+	}
+	if !IsIdentityMismatch(err) {
+		t.Errorf("expected identityMismatchErr from stepSIGTERM, got %v", err)
+	}
+	if got := sig.snapshot(); len(got) != 0 {
+		t.Errorf("expected zero signals on identity drift, got %+v", got)
+	}
+}
+
+// TestStepSIGKILL_ReVerifiesIdentity_AbortsOnDrift — finding A regression:
+// same as the SIGTERM test, applied to Step 4 SIGKILL. A drift between Step
+// 3 and Step 4 (e.g., the stubborn process finally died and PID was reused
+// during the SIGTERM-budget poll) must abort the SIGKILL too.
+func TestStepSIGKILL_ReVerifiesIdentity_AbortsOnDrift(t *testing.T) {
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
+	lister := &driftLister{
+		rows: []RawProcess{{PID: 4321, Lstart: lstart.Add(2 * time.Hour), Cmdline: "/usr/bin/zsh"}},
+	}
+	sig := &capturingSignaller{}
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      lister,
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(4321, nil),
+		KillTimeout: 100 * time.Millisecond,
+	}
+	ok, err := ks.stepSIGKILL(context.Background())
+	if ok {
+		t.Errorf("expected stepSIGKILL=false on identity drift")
+	}
+	if !IsIdentityMismatch(err) {
+		t.Errorf("expected identityMismatchErr from stepSIGKILL, got %v", err)
+	}
+	if got := sig.snapshot(); len(got) != 0 {
+		t.Errorf("expected zero signals on identity drift, got %+v", got)
+	}
+}
+
+// TestKillSequenceRun_DriftBetweenStep0AndStep3_AbortsAndReturnsMismatch —
+// finding A end-to-end: Step 0 succeeds, then identity drifts before Step 3.
+// Run must propagate the identity-mismatch error and NOT send any signal.
+func TestKillSequenceRun_DriftBetweenStep0AndStep3_AbortsAndReturnsMismatch(t *testing.T) {
+	dir := t.TempDir()
+	auditDir := dir + "/audit"
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{Key: "drift", PID: 4321, Lstart: lstart}
+	driftedLstart := lstart.Add(1 * time.Hour)
+	// Step 0 (call 1) returns matching row; subsequent calls return drifted.
+	lister := &driftLister{
+		rows: []RawProcess{{PID: 4321, Lstart: lstart, Cmdline: "node app-server-broker.mjs"}},
+		swapAfter: 1, // first call (Step 0) sees match; later calls see drift
+		swapRows: []RawProcess{{PID: 4321, Lstart: driftedLstart, Cmdline: "/usr/bin/zsh"}},
+	}
+	sig := &capturingSignaller{}
+	ks := &KillSequence{
+		Rec:             rec,
+		Lister:          lister,
+		Signaller:       sig,
+		FS:              auditFS{},
+		AuditDir:        auditDir,
+		PgidLookup:      fakePgidLooker(4321, nil),
+		GracefulTimeout: 10 * time.Millisecond,
+		TermTimeout:     50 * time.Millisecond,
+		KillTimeout:     50 * time.Millisecond,
+	}
+	_, err := ks.Run(context.Background(), DecisionResult{Reason: "idle_timeout", Kill: true}, &fakeSocketVerifier{})
+	if !IsIdentityMismatch(err) {
+		t.Fatalf("expected identityMismatchErr from Run after drift, got %v", err)
+	}
+	// Zero signals must have reached the kernel.
+	if got := sig.snapshot(); len(got) != 0 {
+		t.Errorf("expected zero signals on Step 3 drift, got %+v", got)
 	}
 }
 

@@ -88,7 +88,10 @@ func (m *Module) Init(_ *core.Core) error {
 	// E1 tracker — daemon-lifetime in-memory.
 	m.e1Tracker = NewE1Tracker()
 
-	// Sweep handler.
+	// Sweep handler. PR review finding C: wire QuarantineStore +
+	// QuarantinePath + Lister so an identity-mismatch from KillSequence.Run
+	// translates into a persisted E2 quarantine entry instead of being
+	// silently logged.
 	m.sweepHandler = &SweepHandler{
 		ScanFn: func(ctx context.Context) ([]BrokerRecord, error) {
 			res, err := m.scanner.Scan(ctx)
@@ -97,11 +100,14 @@ func (m *Module) Init(_ *core.Core) error {
 			}
 			return res.Brokers, nil
 		},
-		EvalFn:        EvalDecision,
-		KillerFactory: m.buildKillSequence,
-		Quarantine:    m.quarantine,
-		Registry:      m.launchRegistry,
-		E1Tracker:     m.e1Tracker,
+		EvalFn:          EvalDecision,
+		KillerFactory:   m.buildKillSequence,
+		Quarantine:      m.quarantine,
+		QuarantineStore: &QuarantineStore{},
+		QuarantinePath:  quarantinePath(root),
+		Lister:          NewPsLister(),
+		Registry:        m.launchRegistry,
+		E1Tracker:       m.e1Tracker,
 		BaseDecisionOpts: DecisionOpts{
 			FS:     NewOsFS(),
 			Lister: NewPsLister(),

@@ -263,11 +263,18 @@ type BrokerDecision struct {
 }
 
 // SweepResponse is the JSON body returned by POST /api/codex/brokers/sweep.
+//
+// Quarantined holds brokerKeys that the sweep handler moved into E2
+// quarantine (PR review finding C). A broker can appear in both Evaluated
+// and Quarantined when its kill attempt aborts at Step 0 (PID-reuse race
+// inside the kill sequence) — Applied stays empty because no signal
+// reached the kernel.
 type SweepResponse struct {
-	DryRun    bool             `json:"dryRun"`
-	Evaluated []BrokerDecision `json:"evaluated"`
-	Applied   []string         `json:"applied"`
-	Errors    []string         `json:"errors,omitempty"`
+	DryRun      bool             `json:"dryRun"`
+	Evaluated   []BrokerDecision `json:"evaluated"`
+	Applied     []string         `json:"applied"`
+	Quarantined []string         `json:"quarantined,omitempty"`
+	Errors      []string         `json:"errors,omitempty"`
 }
 
 // BrokerFingerprint is the P2 broker identity tuple used for E2 PID-reuse

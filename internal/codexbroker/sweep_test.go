@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -763,5 +764,101 @@ func TestSweepHandler_Concurrency_NoDeadlock(t *testing.T) {
 	}
 }
 
+// -- PR review finding C: identityMismatchErr persists quarantine --------
+
+// identityMismatchKiller is a KillRunner that always returns
+// identityMismatchErr from Step 0. Used to assert the sweep handler
+// translates that error into a persisted QuarantineEntry.
+type identityMismatchKiller struct{}
+
+func (identityMismatchKiller) Run(_ context.Context, _ DecisionResult, _ SocketVerifier) (KillResult, error) {
+	return KillResult{}, &identityMismatchErr{detail: "lstart-drift"}
+}
+
+// TestSweepHandler_IdentityMismatch_PersistsQuarantine — finding C: when
+// KillSequence.Run returns identityMismatchErr, the handler must build a
+// QuarantineEntry from the live broker fingerprint, append it to the in-
+// memory QuarantineFile, atomically save quarantine.json, surface the
+// quarantined key in the response, and ensure subsequent sweeps skip the
+// broker via IsQuarantined.
+func TestSweepHandler_IdentityMismatch_PersistsQuarantine(t *testing.T) {
+	tmp := t.TempDir()
+	qPath := filepath.Join(tmp, "quarantine.json")
+	qf := &QuarantineFile{Version: 1}
+	scan := &fakeScanner{brokers: []BrokerRecord{{
+		Key:     "k1",
+		PID:     4321,
+		Lstart:  time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+		Cwd:     "/tmp/x",
+		PidFile: "/tmp/x/.codex/pid",
+	}}}
+	eval := &stubDecisionEvaluator{by: map[string]DecisionResult{
+		"k1": {Kill: true, Reason: "foreign_quarantine"},
+	}}
+	h := newSweepHandlerForTest(scan, &fakeKiller{}, eval, emptyRegistry{}, qf)
+	// Override killer factory to always return identityMismatch.
+	h.KillerFactory = func(_ BrokerRecord) KillRunner { return identityMismatchKiller{} }
+	h.QuarantineStore = &QuarantineStore{}
+	h.QuarantinePath = qPath
+	// Provide a lister so the handler can fetch live fingerprint for the
+	// QuarantineEntry. Same matching cmdline as the broker.
+	h.Lister = NewFakeProcessLister([]RawProcess{{
+		PID:     4321,
+		Lstart:  time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC), // drifted
+		Cmdline: "/usr/bin/zsh",
+	}})
+
+	// First sweep — operator override on k1 → kill triggers identity
+	// mismatch → quarantine persists.
+	req := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=apply&brokerKey=k1", nil)
+	w := httptest.NewRecorder()
+	h.HandleSweep(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp SweepResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	// Quarantine must contain k1 in memory.
+	if !IsQuarantined(qf, "k1") {
+		t.Errorf("expected k1 quarantined in memory, got %+v", qf.Entries)
+	}
+	// Quarantine must be saved on disk.
+	if _, err := os.Stat(qPath); err != nil {
+		t.Errorf("expected quarantine.json saved, stat err: %v", err)
+	}
+	// Response should NOT include k1 in Applied (kill was aborted).
+	for _, key := range resp.Applied {
+		if key == "k1" {
+			t.Errorf("identity-mismatch broker should not appear in Applied; got %v", resp.Applied)
+		}
+	}
+	// Response should surface quarantined key.
+	foundQ := false
+	for _, key := range resp.Quarantined {
+		if key == "k1" {
+			foundQ = true
+		}
+	}
+	if !foundQ {
+		t.Errorf("expected k1 in resp.Quarantined, got %+v", resp.Quarantined)
+	}
+
+	// Second sweep — same broker; should be skipped by IsQuarantined check
+	// before EvalFn / KillerFactory.
+	scan2 := &fakeScanner{brokers: []BrokerRecord{{Key: "k1"}}}
+	h.ScanFn = scan2.scanForSweep
+	req2 := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=apply&brokerKey=k1", nil)
+	w2 := httptest.NewRecorder()
+	h.HandleSweep(w2, req2)
+	var resp2 SweepResponse
+	_ = json.NewDecoder(w2.Body).Decode(&resp2)
+	if len(resp2.Evaluated) != 0 {
+		t.Errorf("expected k1 skipped by quarantine on 2nd sweep; got evaluated=%+v", resp2.Evaluated)
+	}
+}
+
 // _ keeps unused-import linter quiet if the package surface trims later.
 var _ = filepath.Join
+var _ = os.Stat
