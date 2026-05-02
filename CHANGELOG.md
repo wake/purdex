@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.288] - 2026-05-03
+
+### Refactor(settings): PR-2 — Editor consolidation, Sync modularize, Quick Commands header (#825)
+
+Completes the settings architecture cleanup started in alpha.287 PR-1. The
+Editor module's three sidebar entries (`editor` / `link-detect` /
+`open-behavior`) collapse into a single Editor settings page with the two
+removed sections rendered as embedded subsections; `/settings/link-detect`
+and `/settings/open-behavior` URLs alias to `/settings/editor` via the
+extended `URL_ALIASES` map. Sync upgrades from a built-in legacy section
+to a structural module (non-`disableable`), so it picks up the puzzle icon
+and the modules-group ordering naturally without changing engine
+lifecycle. Quick Commands settings adopts the Appearance/Terminal header
+pattern (bare `<div>` outer, `<h2>` + `<p>` description). All module-owned
+order values now flow through `SETTINGS_ORDER` constants — the PR-1
+transitional `*_PR1` keys are removed in favor of the final
+`MODULE_EDITOR=11`, `MODULE_QUICK_COMMANDS=12`,
+`MODULE_PERFORMANCE_MONITOR=13`, `MODULE_SYNC=14` values.
+
+URL alias resolution uses `Object.hasOwn` to guard against
+prototype-property collisions (e.g. a hypothetical section with localId
+`constructor`) and self-heals to `firstSelectable` instead of a stale
+`lastSection` whenever the canonical alias target is unselectable —
+covering both fresh-mount and mounted-then-navigate paths.
+
+Follow-up issue #822 tracks extracting `<ModuleOwnedPuzzleIcon>` as a
+shared component across the three sidebar callers.
+
 ## [1.0.0-alpha.287] - 2026-05-03
 
 ### Refactor(settings): PR-1 sidebar order and spacing cleanup (#816)
