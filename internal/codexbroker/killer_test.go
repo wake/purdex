@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -557,7 +558,86 @@ func TestStepVerifyGone_ListerError(t *testing.T) {
 	}
 }
 
+// -- Task O: Step 6 cleanup with socket verification ---------------------
+
+// fakeSocketVerifier returns a fixed (held, err) regardless of input.
+type fakeSocketVerifier struct {
+	held bool
+	err  error
+}
+
+func (f *fakeSocketVerifier) AnyPidHoldsSocket(_ string, _ time.Duration) (bool, error) {
+	return f.held, f.err
+}
+
+// TestStepCleanup_SocketNotHeld_Removed — verifier reports no holders →
+// SocketDir gets RemoveAll'd.
+func TestStepCleanup_SocketNotHeld_Removed(t *testing.T) {
+	dir := t.TempDir()
+	// Create a fake socket-dir layout.
+	sockDir := dir + "/cxc-test"
+	if err := os.MkdirAll(sockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sockDir+"/broker.sock", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := BrokerRecord{Key: "k1", PID: 4321, SocketDir: sockDir}
+	ks := &KillSequence{Rec: rec}
+	verifier := &fakeSocketVerifier{held: false}
+	ok := ks.stepCleanup(context.Background(), verifier)
+	if !ok {
+		t.Errorf("expected stepCleanup=true when socket not held")
+	}
+	if pathExistsKT(sockDir) {
+		t.Errorf("expected SocketDir removed, still exists at %s", sockDir)
+	}
+}
+
+// TestStepCleanup_SocketHeld_Deferred — verifier reports held → SocketDir
+// is NOT removed; step returns false to signal defer.
+func TestStepCleanup_SocketHeld_Deferred(t *testing.T) {
+	dir := t.TempDir()
+	sockDir := dir + "/cxc-test"
+	if err := os.MkdirAll(sockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sockDir+"/broker.sock", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := BrokerRecord{Key: "k1", PID: 4321, SocketDir: sockDir}
+	ks := &KillSequence{Rec: rec}
+	verifier := &fakeSocketVerifier{held: true}
+	ok := ks.stepCleanup(context.Background(), verifier)
+	if ok {
+		t.Errorf("expected stepCleanup=false when socket held")
+	}
+	if !pathExistsKT(sockDir) {
+		t.Errorf("expected SocketDir preserved when held; missing at %s", sockDir)
+	}
+}
+
+// TestStepCleanup_NoSocketDir_SkipsVerify — empty SocketDir → step returns
+// true immediately, no verifier call.
+func TestStepCleanup_NoSocketDir_SkipsVerify(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, SocketDir: ""}
+	ks := &KillSequence{Rec: rec}
+	verifier := &fakeSocketVerifier{held: true} // would defer if called
+	ok := ks.stepCleanup(context.Background(), verifier)
+	if !ok {
+		t.Errorf("expected stepCleanup=true when SocketDir empty")
+	}
+}
+
 // -- Test helpers used across Tasks L–P ----------------------------------
+
+// pathExistsKT reports whether a filesystem path is reachable. The KT suffix
+// keeps it from clashing with similarly-named helpers elsewhere in the
+// package's test suite.
+func pathExistsKT(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
 
 // _ keeps the imports we need across the file alive (some tests below use
 // strings/atomic; this no-op keeps the linter quiet if a future refactor

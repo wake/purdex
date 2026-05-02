@@ -2,6 +2,8 @@ package codexbroker
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -324,6 +326,45 @@ func rowMatchesFamily(row RawProcess, lstart time.Time) bool {
 		return false
 	}
 	return strings.Contains(row.Cmdline, brokerTaskWorkerCmdlineMarker)
+}
+
+// DefaultSocketVerifyTimeout caps the spec §5.4 line 461 socket-inode
+// verification budget. lsof / proc walk must complete inside this window or
+// cleanup is deferred conservatively (held=true).
+const DefaultSocketVerifyTimeout = 1 * time.Second
+
+// stepCleanup implements spec §5.4 Step 6 (lines 461-462): if the broker
+// owned a cxc-* socket dir, verify no live pid still holds the socket
+// inode; if free, RemoveAll the dir. If still held, defer (return false)
+// so the next sweep retries — preventing removal of a socket still in use
+// by a stray child.
+//
+// Returns true on successful cleanup OR on a no-op when the broker had no
+// SocketDir. Returns false only when the verifier reports held — the
+// caller (Run wiring in task P) records that in the audit postscript.
+func (ks *KillSequence) stepCleanup(_ context.Context, verifier SocketVerifier) bool {
+	sockDir := ks.Rec.SocketDir
+	if sockDir == "" {
+		return true
+	}
+	if verifier != nil {
+		// Look for a broker.sock under the dir; the verifier expects a
+		// concrete socket path. Fall back to the dir itself if the
+		// canonical socket name isn't there yet.
+		sockPath := filepath.Join(sockDir, "broker.sock")
+		if _, err := os.Stat(sockPath); err != nil {
+			sockPath = sockDir
+		}
+		held, vErr := verifier.AnyPidHoldsSocket(sockPath, DefaultSocketVerifyTimeout)
+		if vErr == nil && held {
+			return false
+		}
+	}
+	if err := os.RemoveAll(sockDir); err != nil {
+		// Treat removal failure as defer: next sweep can retry.
+		return false
+	}
+	return true
 }
 
 // processGone returns true iff the lister no longer returns a row whose
