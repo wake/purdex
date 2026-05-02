@@ -156,6 +156,19 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().subagents[`${H}:dev`]).toEqual([a])
   })
 
+  it('event with null subagents clears existing subagents', () => {
+    const a = ref('agent-A')
+    useAgentStore.setState({ subagents: { [`${H}:dev`]: [a] } })
+    useAgentStore.getState().handleNormalizedEvent(H, 'dev', {
+      agent_type: 'cc',
+      status: 'running',
+      subagents: null,
+      raw_event_name: 'PdxUserPromptSubmit',
+      broadcast_ts: Date.now(),
+    })
+    expect(useAgentStore.getState().subagents[`${H}:dev`]).toBeUndefined()
+  })
+
   it('markRead → clears unread', () => {
     useAgentStore.setState({ unread: { [`${H}:dev`]: true } })
     useAgentStore.getState().markRead(H, 'dev')
