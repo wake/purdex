@@ -410,9 +410,9 @@ func isENOENT(err error) bool {
 // Registry, Panes) are interfaces so unit tests can run without filesystem
 // or network access.
 //
-// Task G will add an E1Tracker field; this struct intentionally keeps the
-// surface minimal in task F so tests don't depend on types that don't yet
-// exist.
+// E1Tracker (added in task G) is daemon-lifetime and owned by Module. May
+// be nil in narrow test paths; production wiring (task R) always supplies
+// a non-nil tracker.
 type DecisionOpts struct {
 	FS             FS
 	Lister         ProcessLister
@@ -422,6 +422,7 @@ type DecisionOpts struct {
 	IdleTimeout    time.Duration
 	ResultWindow   time.Duration
 	StaleThreshold time.Duration
+	E1Tracker      *E1Tracker
 }
 
 // EvalDecision composes predicates A/B/C with the idle-timeout gate to
@@ -496,8 +497,15 @@ func EvalDecision(ctx context.Context, rec BrokerRecord, opts DecisionOpts) Deci
 	}
 	idleExpired := idleSeconds < 0 || float64(idleSeconds) >= idleTimeout.Seconds()
 
-	// E1 / E2 override hooks land in tasks G and H respectively. Task F's
-	// composer leaves both override flags false for now.
+	// E1 — daemon-lifetime tracker (task G). Nil-safe so unit tests can
+	// omit it; production wiring (task R) always supplies one.
+	if opts.E1Tracker != nil {
+		triggered, _ := opts.E1Tracker.Observe(rec, now)
+		if triggered {
+			res.OverrideE1 = true
+		}
+	}
+	// E2 override hook lands in task H.
 
 	// Baseline kill rule per spec §5.1 line 371.
 	res.Kill = !aTrue && !bTrue && !cTrue && idleExpired
