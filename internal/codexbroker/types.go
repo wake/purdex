@@ -2,6 +2,10 @@ package codexbroker
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -206,4 +210,198 @@ func (m *SourceMask) UnmarshalJSON(data []byte) error {
 	}
 	*m = out
 	return nil
+}
+
+// -- P2 type extensions (per plan §3 / task A) ----------------------------
+//
+// All P2 additions are additive — no existing P1 type is modified. These
+// types power the decision layer (PredicateResult/DecisionResult), the
+// quarantine + launch registry persistence (QuarantineEntry, LaunchEntry),
+// the kill-sequence audit dump (AuditDump), and the predicate-A/B inputs
+// (StateJobLite + ReadStateJobs helper).
+
+// PredicateResult is the per-predicate evidence summary captured in the
+// decision trace. The {A,B,C}Detail strings are short human-readable
+// explanations suitable for audit dumps and operator dashboards.
+type PredicateResult struct {
+	A       bool   `json:"a"`
+	ADetail string `json:"aDetail,omitempty"`
+	B       bool   `json:"b"`
+	BDetail string `json:"bDetail,omitempty"`
+	C       bool   `json:"c"`
+	CDetail string `json:"cDetail,omitempty"`
+}
+
+// DecisionResult composes the three predicates plus idle/override flags into
+// the baseline kill verdict.
+//
+// Per round-3 finding #1: Kill reflects ONLY the baseline rule
+// (¬A ∧ ¬B ∧ ¬C ∧ idleExpired). Foreign-quarantine classification is reported
+// separately via Reason="foreign_quarantine" + AnomaliesAdded=[AnomalyForeignOwner].
+// The sweep handler combines them per the kill-semantics table in plan §4 task Q.
+type DecisionResult struct {
+	Predicates     PredicateResult `json:"predicates"`
+	IdleSeconds    int             `json:"idleSeconds"`
+	OverrideE1     bool            `json:"overrideE1"`
+	OverrideE2     bool            `json:"overrideE2"`
+	Kill           bool            `json:"kill"`
+	Reason         string          `json:"reason,omitempty"`
+	AnomaliesAdded []AnomalyCode   `json:"anomaliesAdded,omitempty"`
+}
+
+// SweepRequest captures the parsed query parameters of POST /api/codex/brokers/sweep.
+type SweepRequest struct {
+	Mode      string `json:"mode"`
+	BrokerKey string `json:"brokerKey,omitempty"`
+}
+
+// BrokerDecision pairs a BrokerRecord with its DecisionResult for the sweep
+// response body.
+type BrokerDecision struct {
+	Broker   BrokerRecord   `json:"broker"`
+	Decision DecisionResult `json:"decision"`
+}
+
+// SweepResponse is the JSON body returned by POST /api/codex/brokers/sweep.
+type SweepResponse struct {
+	DryRun    bool             `json:"dryRun"`
+	Evaluated []BrokerDecision `json:"evaluated"`
+	Applied   []string         `json:"applied"`
+	Errors    []string         `json:"errors,omitempty"`
+}
+
+// BrokerFingerprint is the P2 broker identity tuple used for E2 PID-reuse
+// detection (spec §5.3 line 400).
+type BrokerFingerprint struct {
+	Executable string `json:"executable"`
+	Cmdline    string `json:"cmdline"`
+	PidFile    string `json:"pidFile"`
+}
+
+// QuarantineEntry is one record in audit/quarantine.json. Schema matches
+// spec §5.3 lines 408-422.
+type QuarantineEntry struct {
+	BrokerKey     string            `json:"brokerKey"`
+	PID           int               `json:"pid"`
+	Lstart        time.Time         `json:"lstart"`
+	QuarantinedAt time.Time         `json:"quarantinedAt"`
+	Reason        string            `json:"reason"`
+	Fingerprint   BrokerFingerprint `json:"fingerprint"`
+	ExpiresAt     time.Time         `json:"expiresAt"`
+}
+
+// QuarantineFile is the on-disk container for QuarantineEntry slices, with a
+// schema version field so future migrations remain reversible.
+type QuarantineFile struct {
+	Version int               `json:"version"`
+	Entries []QuarantineEntry `json:"entries"`
+}
+
+// LaunchEntry is one record in launch-registry.json. The registry maps a
+// brokerKey to the originating tmux pane / caller session so predicate C
+// can decide whether the broker is still purdex-owned.
+type LaunchEntry struct {
+	BrokerKey       string    `json:"brokerKey"`
+	Pid             int       `json:"pid"`
+	Lstart          time.Time `json:"lstart"`
+	TmuxPane        string    `json:"tmuxPane"`
+	CallerSessionID string    `json:"callerSessionId"`
+	LaunchedAt      time.Time `json:"launchedAt"`
+}
+
+// LaunchRegistryFile is the on-disk container for LaunchEntry slices.
+//
+// P2 reads this file but does NOT write to it during sweep operations. The
+// spawn-time write path is deferred to PR-G (Lights spawn-hook integration)
+// per plan §11 promise #1. On mlab the file will initially be absent, which
+// causes every visible broker to be classified as foreign_quarantine.
+type LaunchRegistryFile struct {
+	Version int           `json:"version"`
+	Entries []LaunchEntry `json:"entries"`
+}
+
+// AuditKillSequence is the kill-result postscript appended to the audit
+// preimage after the kill sequence completes. Spec §5.5 lines 495-500.
+type AuditKillSequence struct {
+	GracefulOk    bool     `json:"gracefulOk"`
+	TermOk        bool     `json:"termOk"`
+	KillOk        bool     `json:"killOk"`
+	StepLatencyMs [3]int64 `json:"stepLatencyMs"`
+}
+
+// AuditDump is the full audit/orphan-<key>-<ts>.json payload. Spec §5.5
+// lines 481-502.
+type AuditDump struct {
+	KilledAt      time.Time         `json:"killedAt"`
+	Reason        string            `json:"reason"`
+	Broker        BrokerRecord      `json:"broker"`
+	Decision      DecisionResult    `json:"decision"`
+	KillSequence  AuditKillSequence `json:"killSequence"`
+	BrokerLogTail []string          `json:"brokerLogTail"`
+}
+
+// StateJobLite is the minimal per-job record extracted from
+// state.json.jobs[]. P1's BrokerRecord only carries the rollup JobCounts +
+// LastJobUpdatedAt; predicates A and B both need per-job detail.
+//
+// The *int Pid is essential for the spec §5.2 stale-running rule
+// (spec lines 386-390): a nil pid past staleRunningThreshold is terminal-
+// abandoned; a non-nil pid must be verified alive AND cmdline-matched.
+type StateJobLite struct {
+	ID          string     `json:"id"`
+	Status      string     `json:"status"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	Pid         *int       `json:"pid"`
+}
+
+// E1State tracks the daemon-lifetime view of one broker's E1 ENOENT
+// observations. Two ENOENT scans separated by ≥60 s confirm E1
+// (spec §5.3 line 399). The struct lives in types.go so the tracker
+// (Module field) and the override evaluator share one shape.
+type E1State struct {
+	BrokerKey        string     `json:"brokerKey"`
+	FirstSeenAt      time.Time  `json:"firstSeenAt"`
+	FirstConfirmedAt *time.Time `json:"firstConfirmedAt,omitempty"`
+}
+
+// stateJobsFile mirrors the subset of state.json that ReadStateJobs cares
+// about; private so the public surface stays minimal.
+type stateJobsFile struct {
+	Jobs []StateJobLite `json:"jobs"`
+}
+
+// ReadStateJobs loads <stateDir>/state.json and decodes only the jobs[] slice
+// into StateJobLite. Returns (nil, nil) when:
+//   - the file is absent on disk (treated as "no jobs" — broker may simply
+//     not have dispatched anything yet);
+//   - the file exists but jobs[] is empty.
+//
+// Returns a parse error when the JSON is malformed; callers (predicate A
+// composer in EvalDecision, task F) should treat parse errors as a degraded
+// path and tag AnomalyStateJSONUnreadable.
+func ReadStateJobs(fs FS, stateDir string) ([]StateJobLite, error) {
+	if stateDir == "" {
+		return nil, nil
+	}
+	rc, err := fs.Open(filepath.Join(stateDir, "state.json"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, err
+	}
+	var f stateJobsFile
+	if err := json.Unmarshal(body, &f); err != nil {
+		return nil, err
+	}
+	if len(f.Jobs) == 0 {
+		return nil, nil
+	}
+	return f.Jobs, nil
 }
