@@ -33,7 +33,10 @@ export function ModulesSwitchboardSection({ ctx: _ctx }: Props = {}) {
   const modules = getModules().filter((m) => m.disableable === true)
 
   return (
-    <div className="p-6 space-y-6">
+    // Spec §4.5 — outer wrapper drops `p-6` because GlobalSettingsPage
+    // already pads the section container; doubling up was producing
+    // visible inset drift versus other module-owned sections.
+    <div className="space-y-6">
       {hasPending && <ReloadBanner t={t} />}
       <div className="space-y-4">
         {modules.map((m) => (
