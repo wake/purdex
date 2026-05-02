@@ -103,7 +103,27 @@ export const SETTINGS_ORDER = {
 
 **Run**: `cd spa && npx vitest run lib/__tests__/settings-order-pr1` → 綠。
 
-### Task 1.4 — 改 puzzle icon 三 caller（一次到位）
+### Task 1.4 — 寫 puzzle icon 測試（先紅）
+
+新增 `spa/src/components/settings/SettingsSidebar.test.tsx`（如已存在則 append）。最穩的測法是 mock `@phosphor-icons/react` 攔截 props：
+
+```tsx
+// vi.mock('@phosphor-icons/react', () => ({
+//   PuzzlePiece: ({ weight, className, ...rest }) => (
+//     <i data-testid="puzzle" data-weight={weight} className={className} {...rest} />
+//   ),
+//   /* ...其他在這個檔案會渲染的 icon 也要 mock 成 minimal stub... */
+// }))
+//
+// 1.4.a — render SettingsSidebar 並確認 module-owned row 的 puzzle:
+//          dataset.weight === 'bold'
+//          className 不含 'rotate-[30deg]'
+// 1.4.b — render SettingsSidebar 並確認 built-in row 沒有 [data-testid="puzzle"]
+```
+
+WorkspaceSettingsPage / HostSidebar 採同樣 mock 法在它們既有的 test 檔（如有）追加同樣斷言；如測試檔不存在不新建（避免 PR-1 範圍膨脹）。
+
+### Task 1.5 — 改 puzzle icon 三 caller（讓 1.4 紅 → 綠）
 
 三個檔案，改法相同：
 
@@ -124,21 +144,7 @@ export const SETTINGS_ORDER = {
 2. `spa/src/features/workspace/components/WorkspaceSettingsPage.tsx:162-167`
 3. `spa/src/components/hosts/HostSidebar.tsx:124-129`（size={10} 不動）
 
-### Task 1.5 — 寫 puzzle icon 測試（守住三 caller）
-
-新增 `spa/src/components/settings/SettingsSidebar.test.tsx`（如已存在則 append）：
-
-```tsx
-// 1.5.a — Sidebar puzzle row className 不含 'rotate-[30deg]'
-// 1.5.b — Sidebar puzzle weight prop = 'bold'
-//   用 rendered DOM SVG 看不到 weight prop，改測 className 是 fill / bold 對應的 svg path
-//   Phosphor Icons 的 bold 與 fill 渲染 stroke-width 不同；最簡單測法是
-//   render PuzzlePiece 直接，比對 outerHTML 含 'stroke-width' (bold) 而非 'fill="currentColor"'
-//   （或更簡單：mock @phosphor-icons/react 接收 weight prop，比對 prop 值）
-// 1.5.c — module-owned row 顯示 puzzle，built-in row 不顯示
-```
-
-**WorkspaceSettingsPage.test.tsx** / **HostSidebar.test.tsx**（如已存在）追加同樣斷言。如不存在不新建（避免 PR-1 範圍膨脹）。
+如 WorkspaceSettingsPage / HostSidebar 既有 test 在 1.4 已加斷言，三個檔案要在同一 commit 改完才會全綠。
 
 ### Task 1.6 — `ModulesSwitchboardSection` 拿掉 `p-6`
 
@@ -167,13 +173,14 @@ cd spa && npx vitest run && pnpm run lint
 - [ ] A4：ModulesSwitchboard outer wrapper 無 `p-6`
 - [ ] A5：vitest 全綠
 
-### PR-1 Commits（建議切分）
+### PR-1 Commits（每個 commit 都可獨立通過 CI）
 
-1. `feat(settings): introduce SETTINGS_ORDER constants` (Task 1.1)
-2. `test(settings): add PR-1 sidebar order assertions (red)` (Task 1.2)
-3. `refactor(settings): reorder sidebar entries per PR-1 transitional table` (Task 1.3)
-4. `style(settings): puzzle icon → bold weight, no rotation` (Task 1.4 + 1.5)
-5. `refactor(settings): drop double p-6 from ModulesSwitchboardSection` (Task 1.6)
+每個 commit 內先寫紅測試（local 確認失敗），再加實作讓綠 — 同 commit 提交以維持 CI 綠。
+
+1. `feat(settings): introduce SETTINGS_ORDER constants` (Task 1.1，純常數新增，無測試)
+2. `refactor(settings): reorder sidebar to PR-1 transitional table + add order assertions` (Task 1.2 + 1.3 同 commit：紅測試 + register-modules order 改動同時提交)
+3. `style(settings): puzzle icon bold + no rotation, with three-caller assertions` (Task 1.4 + 1.5 同 commit：mock-prop 紅測試 + 三 caller icon 改動同時提交)
+4. `refactor(settings): drop double p-6 from ModulesSwitchboardSection` (Task 1.6)
 
 ---
 
@@ -197,20 +204,30 @@ cd spa && npx vitest run && pnpm run lint
 //   （用 within(<screen text=link_detect.title 的 section>) 鎖定範圍避免誤點 sidebar）
 // 2.1.e — 父頁無重複 h3（h3 數 = 2）
 // 2.1.f — Editor 段落內無多餘 outer p-6（render 後 outer div 的 className 不含 'p-6'）
+// 2.1.g — workspace / host scope 不回歸：
+//   editorModuleDefinition.settings 仍含 { localId: 'workspace-home-path', scope: 'workspace' }
+//                                      + { localId: 'host-home-path', scope: 'host' }
+//   purdex scope 只剩 { localId: 'editor' }
 ```
 
 ### Task 2.2 — 寫 URL alias 測試（先紅）
 
-新增 `spa/src/components/SettingsPage.test.tsx`（如已存在則 append）。Setup：mock `wouter` `useLocation` 起點為 `/settings/link-detect`，再以 `useLocation` setter 觀察 replace 後路徑。
+新增 `spa/src/components/SettingsPage.test.tsx`（如已存在則 append）。每個 case `beforeEach` 必須：
+- `resetLastSection()`（avoid SettingsPage module-level `lastSection` 跨測試污染）
+- 以 `memoryLocation`（wouter `wouter/memory-location`）注入 wouter Router，初始 path 設為該 case 的起點
+- 用 isolated registry：beforeEach 跑 `resetSettingsContributionsForHmr()` + 重新 register 一份穩定 contribution 集合（至少含 `editor` 與 `appearance`，appearance order=0 為 known first selectable）
 
 ```tsx
-// 2.2.a — start at /settings/link-detect → setLocation called with '/settings/editor', { replace: true }
+// 2.2.a — start at /settings/link-detect → location 在 mount 後 effects 跑完變成 '/settings/editor'
 // 2.2.b — start at /settings/open-behavior → 同上
-// 2.2.c — start at /settings/editor-buffers → 維持既有 alias 行為（existing test 保留）
-// 2.2.d — start at /settings/editor → 不 replace（identity，避免無限循環）
-// 2.2.e — start at /settings/link-detect 時 Editor module 被 disable（mock useModuleEnabledStore）
-//          → 不 mount Editor，self-heal 走 default 路徑（不要求 hard 404）
-// 2.2.f — alias map identity case: rawUrlSection === canonical 不重複 setLocation
+// 2.2.c — start at /settings/editor-buffers → 維持既有 alias 行為（既有測試保留）
+// 2.2.d — start at /settings/editor → location 維持不變（identity，避免無限循環 / 多餘 history entry）
+// 2.2.e — start at /settings/link-detect 時 alias canonical target ('editor') 不 selectable（mock
+//          useModuleEnabledStore 讓 editor module disabled，dispatch 後 listContributions 不含 'editor'）
+//          → location 自我修復到 firstSelectable（在 fixture 下 = 'appearance' = order 0）
+//            而非停在 '/settings/editor' 或 '/settings/link-detect'。
+// 2.2.f — alias map identity case：rawUrlSection === canonical（editor）不重複觸發 setLocation
+//          （spy useLocation setter 確認 mount + 後續 effect 不對同 path 多次 replace）
 ```
 
 ### Task 2.3 — 寫 Sync modularize 測試（先紅）
@@ -242,9 +259,29 @@ cd spa && npx vitest run && pnpm run lint
 // 2.4.e — commands list 既有功能（edit / delete）仍可用（既有測試保留）
 ```
 
-### Task 2.5 — Editor 三頁合一實作（讓 2.1 / 2.2 紅 → 綠）
+### Task 2.5 — 寫 PR-2 final order assertion（先紅）
 
-#### 2.5.1 重組 `EditorPurdexSettingsSection`
+新增 `spa/src/lib/__tests__/settings-order-pr2.test.ts`（取代 PR-1 的 transitional test）：
+
+```ts
+// 2.5.a — listContributions('purdex') ASC 順序 = §4.1.3 final 表
+//   appearance(0), terminal(1), interface(2), [electron(5)?],
+//   module-config(10), editor(11), quick-commands(12),
+//   performance-monitor(13), sync(14),
+//   [dev-environment(20)?], [tmux-agent-monitor(21)?]
+// 2.5.b — sidebar 不含 'open-behavior' / 'link-detect' rows
+// 2.5.c — registerBuiltinModules 後每個 settings entry 的 order 值都來自 SETTINGS_ORDER
+//          —— 範圍限定：只看 register-modules/index.tsx + editor-module.tsx 的 settings declaration
+//             區塊（new-tab provider / interface subsection 等不在這條規則內）。
+//             實作上：對 listContributions('purdex') 的每筆 entry 比對其 order 值落在
+//             Object.values(SETTINGS_ORDER) 集合內，若有 hard-code（不等於任一常數）則 fail。
+```
+
+PR-2 task 2.1-2.5 全部寫完先確認紅。`settings-order-pr1.test.ts` 在 task 2.10 PR-2 final order 全綠之後刪除（先有 final test 綠、再刪 transitional）。
+
+### Task 2.6 — Editor 三頁合一實作（讓 2.1 / 2.2 / 2.5 紅 → 部分綠）
+
+#### 2.6.1 重組 `EditorPurdexSettingsSection`
 
 `spa/src/components/settings/EditorPurdexSettingsSection.tsx`：
 
@@ -273,7 +310,7 @@ export function EditorPurdexSettingsSection(_props: Props) {
 }
 ```
 
-#### 2.5.2 縮減 `editorModuleDefinition.settings`
+#### 2.6.2 縮減 `editorModuleDefinition.settings`
 
 `spa/src/lib/register-modules/editor-module.tsx`：
 
@@ -308,7 +345,7 @@ export function EditorPurdexSettingsSection(_props: Props) {
 
 `EditorOpenBehaviorSection` / `EditorLinkDetectionSection` 兩個 component 不刪、不重寫；只是 register-modules 不再單獨註冊，由 `EditorPurdexSettingsSection` import。
 
-#### 2.5.3 URL alias map
+#### 2.6.3 URL alias map
 
 `spa/src/components/SettingsPage.tsx`：
 
@@ -333,7 +370,7 @@ export function EditorPurdexSettingsSection(_props: Props) {
 
 Self-heal 既有的 `setLocation(`/settings/${urlSection}`, { replace: true })` 路徑會自動把 URL replace 為 canonical `/settings/editor`，行為不變。
 
-### Task 2.6 — Sync modularize 實作（讓 2.3 紅 → 綠）
+### Task 2.7 — Sync modularize 實作（讓 2.3 紅 → 綠）
 
 `spa/src/lib/register-modules/index.tsx`：
 
@@ -362,9 +399,9 @@ Self-heal 既有的 `setLocation(`/settings/${urlSection}`, { replace: true })` 
 
 `registerSyncContributors()` call 維持目前位置不挪。
 
-### Task 2.7 — Quick Commands 頁首 + Performance Monitor / Editor 收尾 order
+### Task 2.8 — Quick Commands 頁首 + Performance Monitor / Editor 收尾 order
 
-#### 2.7.1 Quick Commands
+#### 2.8.1 Quick Commands
 
 `spa/src/components/settings/QuickCommandsSettingsSection.tsx`：
 
@@ -386,7 +423,7 @@ Self-heal 既有的 `setLocation(`/settings/${urlSection}`, { replace: true })` 
 
 `registerModule({ id: 'quick-commands', ..., order: 15 })` → `SETTINGS_ORDER.MODULE_QUICK_COMMANDS` (=12)。
 
-#### 2.7.2 Performance Monitor
+#### 2.8.2 Performance Monitor
 
 `spa/src/lib/register-modules/index.tsx`：
 
@@ -405,7 +442,7 @@ Self-heal 既有的 `setLocation(`/settings/${urlSection}`, { replace: true })` 
   })
 ```
 
-#### 2.7.3 i18n 新增 key
+#### 2.8.3 i18n 新增 key
 
 `spa/src/locales/en-US.ts`（或對應 i18n source）：
 
@@ -421,25 +458,11 @@ Self-heal 既有的 `setLocation(`/settings/${urlSection}`, { replace: true })` 
 
 其他 locale 比照。
 
-### Task 2.8 — 寫 PR-2 final order 測試
+### Task 2.9 — 刪除 PR-1 transitional order 測試
 
-新增 `spa/src/lib/__tests__/settings-order-pr2.test.ts`：
+`settings-order-pr2.test.ts` 已在 task 2.5 寫紅、task 2.6-2.8 實作後綠。確認綠後刪除 `spa/src/lib/__tests__/settings-order-pr1.test.ts`（transitional order 在 PR-2 final 後不再適用）。
 
-```ts
-// 2.8.a — listContributions('purdex') ASC 順序 = §4.1.3 final 表
-//   appearance(0), terminal(1), interface(2), [electron(5)?],
-//   module-config(10), editor(11), quick-commands(12),
-//   performance-monitor(13), sync(14),
-//   [dev-environment(20)?], [tmux-agent-monitor(21)?]
-// 2.8.b — sidebar 不含 'open-behavior' / 'link-detect' rows
-// 2.8.c — 每個 entry 用的 order 值都來自 SETTINGS_ORDER（grep editorModuleDefinition / register-modules
-//          的 order 值，確認都是 SETTINGS_ORDER.X 而非 hard-coded number）
-//          —— 用測試保證未來 reviewer 看 git diff 直接擋住
-```
-
-刪除 `settings-order-pr1.test.ts`（它的 transitional order 在 PR-2 已不適用）。
-
-### Task 2.9 — 跑全部測試 + lint + 手動驗證
+### Task 2.10 — 跑全部測試 + lint + 手動驗證
 
 ```bash
 cd spa && npx vitest run && pnpm run lint && pnpm run build
@@ -448,6 +471,8 @@ cd spa && npx vitest run && pnpm run lint && pnpm run build
 手動（mlab dev server + Air `.app`）：
 - `/settings` sidebar 順序與 §4.1.3 一致
 - 直接訪問 `/settings/link-detect` + `/settings/open-behavior` 自動 replace 為 `/settings/editor`
+- 直接訪問 `/settings/sync`（升格 module 後 deep link 仍可達 SyncSection）
+- Editor module 在 Modules switchboard 改成 disabled → 訪問 `/settings/link-detect` 不 mount Editor、URL self-heal 到第一個 selectable section
 - Editor 頁三段都顯示且互動正常
 - Sync row 顯示 puzzle icon
 - ModulesSwitchboard 不列 Sync
@@ -463,15 +488,15 @@ cd spa && npx vitest run && pnpm run lint && pnpm run build
 - [ ] A11：Quick Commands h2 + p + outer 無 p-6（test 2.4.a-c 綠）
 - [ ] A12：vitest + lint + build 全綠
 
-### PR-2 Commits（建議切分）
+### PR-2 Commits（每個 commit 都可獨立通過 CI — slice 內 red+green 同 commit）
 
-1. `test(settings): add PR-2 red tests for editor consolidation / alias / sync` (Task 2.1-2.4)
-2. `refactor(editor): collapse open-behavior + link-detect into Editor settings page` (Task 2.5)
-3. `feat(settings): URL alias map for legacy editor sub-section paths` (Task 2.5.3)
-4. `feat(sync): upgrade Sync to a structural module (non-disableable)` (Task 2.6)
-5. `style(quick-commands): unify settings page header to Appearance pattern` (Task 2.7.1)
-6. `refactor(settings): switch all module-owned orders to SETTINGS_ORDER constants` (Task 2.7.2 + 2.8)
-7. `i18n(settings): add quick_commands.desc` (Task 2.7.3)
+1. `feat(editor): consolidate open-behavior + link-detect into Editor settings page` (Task 2.1 紅 + Task 2.6.1/2.6.2 實作 + Task 2.9 刪 PR-1 test 同 commit；測試 + 實作不分開)
+2. `feat(settings): URL alias map for legacy editor sub-section paths` (Task 2.2 紅 + Task 2.6.3 實作同 commit)
+3. `feat(sync): upgrade Sync to a structural module (non-disableable)` (Task 2.3 紅 + Task 2.7 實作同 commit)
+4. `style(quick-commands): unify settings page header to Appearance pattern + add desc i18n` (Task 2.4 紅 + Task 2.8.1/2.8.3 實作同 commit)
+5. `refactor(settings): switch all module-owned orders to SETTINGS_ORDER constants` (Task 2.5 紅 + Task 2.8.2 實作同 commit；final order test 在這個 commit 才綠 — 因為要等 perf-monitor / quick-commands / editor / sync 都改完才會 final)
+
+⚠️ 順序很重要：commit 5（final order）必須是最後一個，因為它要等前 4 個 commit 全到位後才會綠。如要更穩，可在 commit 1-4 內把 PR-1 transitional test 暫時排除（skip 或刪）；然後 commit 5 一起恢復正確 final 行為。或乾脆 commit 1 開頭就刪 PR-1 transitional，PR-1 與 PR-2 一起共用 final order test（PR-1 在 PR merge 前已綠，PR-2 開始時 transitional test 即已落主幹）。實作時擇一即可。
 
 ---
 
