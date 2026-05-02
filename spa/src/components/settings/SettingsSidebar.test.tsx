@@ -11,7 +11,7 @@ vi.mock('@phosphor-icons/react', () => {
   type StubProps = {
     weight?: string
     className?: string
-    'aria-hidden'?: boolean | string
+    'aria-hidden'?: boolean | 'true' | 'false'
     children?: ReactNode
   }
   const PuzzlePiece = ({ weight, className, ...rest }: StubProps) => (
