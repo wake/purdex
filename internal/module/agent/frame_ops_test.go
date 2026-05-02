@@ -4200,3 +4200,105 @@ func TestCandidateHasOwnedState_EmptySubagentsReturnsFalse(t *testing.T) {
 		t.Fatal("candidateHasOwnedState = true, want false (empty subagents — no state to preserve)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// L2 Phase 2 P2-T4 — subagentRefMatches turn-aware + findProxyRefByBroker
+// (spec §3.2 / plan §2 P2-T4)
+// ---------------------------------------------------------------------------
+
+// TestSubagentRefMatches_TurnAware pins the spec §3.2.A behavior of
+// subagentRefMatches when at least one side is IsProxy=true, plus the
+// existing native-ref ID equality semantics (rows f/g — L2/v2 fix
+// regression guards).
+func TestSubagentRefMatches_TurnAware(t *testing.T) {
+	cases := []struct {
+		name string
+		a    agentpkg.SubagentRef
+		b    agentpkg.SubagentRef
+		want bool
+	}{
+		{
+			name: "a — both turnIDs empty, process fallback matches",
+			a:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1"},
+			b:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1"},
+			want: true,
+		},
+		{
+			name: "b — one side turnID empty (process fallback)",
+			a:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1"},
+			b:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a"},
+			want: true,
+		},
+		{
+			name: "c — both turnIDs non-empty and equal",
+			a:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a"},
+			b:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a"},
+			want: true,
+		},
+		{
+			name: "d — both turnIDs non-empty but different (turn-level no match)",
+			a:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a"},
+			b:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_b"},
+			want: false,
+		},
+		{
+			name: "e — IsProxy mismatch (cross-namespace)",
+			a:    agentpkg.SubagentRef{IsProxy: true, SourcePID: 42, SourceStartTime: "t1"},
+			b:    agentpkg.SubagentRef{IsProxy: false, ID: "task-x"},
+			want: false,
+		},
+		{
+			name: "f — native ref same ID (L2/v2 regression pin)",
+			a:    agentpkg.SubagentRef{IsProxy: false, ID: "task-x"},
+			b:    agentpkg.SubagentRef{IsProxy: false, ID: "task-x"},
+			want: true,
+		},
+		{
+			name: "g — native ref different ID (L2/v2 regression pin)",
+			a:    agentpkg.SubagentRef{IsProxy: false, ID: "task-x"},
+			b:    agentpkg.SubagentRef{IsProxy: false, ID: "task-y"},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := subagentRefMatches(tc.a, tc.b); got != tc.want {
+				t.Fatalf("subagentRefMatches(%+v, %+v) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+			// Symmetry: matches must be symmetric — swap arguments and re-check.
+			if got := subagentRefMatches(tc.b, tc.a); got != tc.want {
+				t.Fatalf("subagentRefMatches(%+v, %+v) reverse = %v, want %v", tc.b, tc.a, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFindProxyRefByBroker covers the new process-level lookup helper
+// per spec §3.2.B. Lookup is by (PID, StartTime) only — turnID is
+// intentionally NOT compared so attach/upsert can locate the existing
+// broker ref to mutate-in-place rather than appending a duplicate
+// (spec §3.2 F1 fix).
+func TestFindProxyRefByBroker(t *testing.T) {
+	refs := []agentpkg.SubagentRef{
+		{IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a"},
+		{IsProxy: true, SourcePID: 43, SourceStartTime: "t2", SourceTurnID: "t_b"},
+		{IsProxy: false, ID: "task-x"}, // native ref must never match
+	}
+	cases := []struct {
+		name      string
+		pid       int
+		startTime string
+		want      int
+	}{
+		{name: "a — match first proxy ref", pid: 42, startTime: "t1", want: 0},
+		{name: "b — match second proxy ref", pid: 43, startTime: "t2", want: 1},
+		{name: "c — no match (PID/StartTime miss)", pid: 99, startTime: "tX", want: -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := findProxyRefByBroker(refs, tc.pid, tc.startTime); got != tc.want {
+				t.Fatalf("findProxyRefByBroker(refs, %d, %q) = %d, want %d", tc.pid, tc.startTime, got, tc.want)
+			}
+		})
+	}
+}

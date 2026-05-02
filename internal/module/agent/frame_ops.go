@@ -625,17 +625,62 @@ func updateSubagents(current []agentpkg.SubagentRef, lifecycle agentpkg.Lifecycl
 }
 
 // subagentRefMatches returns true when two refs identify the same subagent.
-// Proxy refs compare by (SourcePID, SourceStartTime); native refs compare by
-// ID. Cross-kind (one proxy, one native) is never a match — preserves the
-// isolation between the two namespaces (see updateSubagents doc).
+// Proxy refs compare by (SourcePID, SourceStartTime) plus a turn-aware
+// SourceTurnID equality (L2 spec §3.2.A): if either side's SourceTurnID is
+// empty the comparison falls back to process-level (preserves backward-compat
+// with refs persisted before SourceTurnID was added and with cc/opencode
+// providers that never populate it); if both sides are non-empty they must
+// equal exactly. Native refs compare by ID. Cross-kind (one proxy, one
+// native) is never a match — preserves the isolation between the two
+// namespaces (see updateSubagents doc).
+//
+// This helper is used for turn-aware Stop targeted detach. Process-level
+// lookup (used by attach/upsert in upsertProxyRefForBroker) goes through
+// findProxyRefByBroker — DO NOT reuse this helper there: its turn-aware
+// gate would treat a (PID, StartTime, turn_b) lookup against an existing
+// (PID, StartTime, turn_a) ref as no-match and trigger an append-duplicate
+// regression (spec §3.2 F1 fix).
 func subagentRefMatches(a, b agentpkg.SubagentRef) bool {
 	if a.IsProxy != b.IsProxy {
 		return false
 	}
 	if a.IsProxy {
-		return a.SourcePID == b.SourcePID && a.SourceStartTime == b.SourceStartTime
+		if a.SourcePID != b.SourcePID || a.SourceStartTime != b.SourceStartTime {
+			return false
+		}
+		// Process-level fallback: an unset SourceTurnID on either side
+		// (legacy ref pre-L2, SessionStart attach without turn_id, or a
+		// non-codex provider that never populates the field) reduces the
+		// equality test to (PID, StartTime). Both sides non-empty → exact
+		// turn equality (spec §3.2.A turn-level identity).
+		if a.SourceTurnID == "" || b.SourceTurnID == "" {
+			return true
+		}
+		return a.SourceTurnID == b.SourceTurnID
 	}
 	return a.ID == b.ID
+}
+
+// findProxyRefByBroker returns the index of the proxy ref matching this
+// broker (PID + StartTime), regardless of SourceTurnID. Used for upsert/
+// replace where the intent is to mutate a single broker's existing ref to
+// a new turn_id (in-place) rather than appending a duplicate ref. Returns
+// -1 if no proxy ref matches.
+//
+// Process-level only — turn-aware equality lives in subagentRefMatches and
+// is intentionally NOT reused here. Reusing subagentRefMatches would make
+// upsert miss an existing ref whose SourceTurnID differs from the incoming
+// turnID, causing a duplicate ref to be appended (spec §3.2 F1 fix).
+// Likewise, Stop targeted detach must NOT reuse this helper — that would
+// drop a stale-turn ref whose owning broker has already moved on to a new
+// turn (spec §3.2 F1 fix, dual direction).
+func findProxyRefByBroker(refs []agentpkg.SubagentRef, pid int, startTime string) int {
+	for i, ref := range refs {
+		if ref.IsProxy && ref.SourcePID == pid && ref.SourceStartTime == startTime {
+			return i
+		}
+	}
+	return -1
 }
 
 func syncProjectionState(currentStatus map[string]agentpkg.Status, subagents map[string][]agentpkg.SubagentRef, tmuxSession string, projection *SessionProjection) {
