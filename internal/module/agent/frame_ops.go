@@ -1244,7 +1244,14 @@ func (m *Module) upsertProxyRefForBroker(parent store.Frame, pid int, startTime 
 		next := make([]agentpkg.SubagentRef, len(current.Subagents))
 		copy(next, current.Subagents)
 		if idx >= 0 {
-			next[idx].SourceTurnID = turnID
+			// Preserve existing turn_id when the incoming parse failed
+			// (turnID == ""). A malformed PreToolUse hook payload must not
+			// downgrade an already-attached turn-aware ref to empty —
+			// otherwise a subsequent empty-turn Stop fallback would wildcard
+			// detach the ref under cross-turn concurrency (round-2 A2).
+			if turnID != "" || next[idx].SourceTurnID == "" {
+				next[idx].SourceTurnID = turnID
+			}
 			next[idx].StartedAt = broadcastTs
 		} else {
 			next = append(next, agentpkg.SubagentRef{

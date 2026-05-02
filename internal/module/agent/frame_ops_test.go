@@ -4424,6 +4424,51 @@ func TestUpsertProxyRefForBroker_InPlaceOverwritesExistingTurnID(t *testing.T) {
 	}
 }
 
+// TestUpsertProxyRefForBroker_PreservesExistingTurnIDOnEmptyParse covers the
+// round-2 A2 invariant: when the incoming turnID == "" (parse failed on a
+// malformed PreToolUse hook payload), the helper must NOT downgrade an
+// already-attached turn-aware ref to empty. Otherwise a subsequent empty-turn
+// Stop fallback would wildcard detach the ref under cross-turn concurrency.
+func TestUpsertProxyRefForBroker_PreservesExistingTurnIDOnEmptyParse(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:42:t1",
+		Type:            "codex",
+		StartedAt:       50,
+		SourcePID:       42,
+		SourceStartTime: "t1",
+		IsProxy:         true,
+		SourceTurnID:    "t_a",
+	}}
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed parent ref: %v", err)
+	}
+	reloaded, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || reloaded == nil {
+		t.Fatalf("reload parent: %v / %v", err, reloaded)
+	}
+
+	// Incoming turnID = "" simulates a malformed PreToolUse raw_event whose
+	// parseCodexTurnID returned "". The existing ref is "t_a" — it must stay.
+	persisted, stored, err := m.upsertProxyRefForBroker(*reloaded, 42, "t1", "", 300)
+	if err != nil {
+		t.Fatalf("upsertProxyRefForBroker: %v", err)
+	}
+	if !persisted {
+		t.Fatalf("persisted = false, want true")
+	}
+	if len(stored.Subagents) != 1 {
+		t.Fatalf("Subagents count = %d, want 1; refs=%+v", len(stored.Subagents), stored.Subagents)
+	}
+	if stored.Subagents[0].SourceTurnID != "t_a" {
+		t.Fatalf("ref.SourceTurnID = %q, want t_a (preserved across empty parse)", stored.Subagents[0].SourceTurnID)
+	}
+	if stored.Subagents[0].StartedAt != 300 {
+		t.Fatalf("ref.StartedAt = %d, want 300 (broadcastTs still bumps)", stored.Subagents[0].StartedAt)
+	}
+}
+
 // TestUpsertProxyRefForBroker_RetryOnConflict covers case (d): the first
 // UpsertIfUnchanged conflicts (a concurrent writer bumped LastSeenAt
 // between the caller's read and our write); the helper reloads, re-runs
