@@ -61,6 +61,7 @@ import {
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
 import { QuickCommandsSettingsSection } from '../../components/settings/QuickCommandsSettingsSection'
+import { SETTINGS_ORDER } from '../settings-order'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -178,7 +179,7 @@ export function registerBuiltinModules(): void {
     settings: [{
       localId: 'performance-monitor',
       scope: 'purdex',
-      order: 6,
+      order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR_PR1,
       labelKey: 'performance_monitor.title',
       component: PerformanceMonitorSettingsSection,
     }],
@@ -206,7 +207,7 @@ export function registerBuiltinModules(): void {
       {
         localId: 'quick-commands',
         scope: 'purdex',
-        order: 10, // between editor (9) and sync (11), after module-config (8)
+        order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS_PR1,
         labelKey: 'settings.section.quick_commands',
         component: QuickCommandsSettingsSection,
       },
@@ -246,22 +247,22 @@ export function registerBuiltinModules(): void {
   })
 
   // Settings sections
-  registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: 0, component: AppearanceSection })
-  registerSettingsSection({ id: 'terminal', label: 'settings.section.terminal', order: 1, component: TerminalSection })
+  registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: SETTINGS_ORDER.APPEARANCE, component: AppearanceSection })
+  registerSettingsSection({ id: 'terminal', label: 'settings.section.terminal', order: SETTINGS_ORDER.TERMINAL, component: TerminalSection })
   registerSettingsSection({
     id: 'interface',
     label: 'settings.section.interface',
-    order: 2,
+    order: SETTINGS_ORDER.INTERFACE,
     component: InterfaceSectionHost,
   })
-  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 11, component: SyncSection })
+  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: SETTINGS_ORDER.SYNC_PR1, component: SyncSection })
   // Modules Switchboard — replaces the long-dormant `globalConfig` UI with a
   // module enable/disable panel. Keeps the id `module-config` for URL
   // stability (`/settings/module-config`).
   registerSettingsSection({
     id: 'module-config',
     label: 'settings.section.modules',
-    order: 8,
+    order: SETTINGS_ORDER.MODULE_CONFIG,
     component: ModulesSwitchboardSection,
   })
 
@@ -314,7 +315,7 @@ export function registerBuiltinModules(): void {
     registerSettingsSection({
       id: 'electron',
       label: 'settings.section.electron',
-      order: 5,
+      order: SETTINGS_ORDER.ELECTRON,
       component: ElectronSection,
     })
   }
@@ -323,7 +324,7 @@ export function registerBuiltinModules(): void {
     registerSettingsSection({
       id: 'dev-environment',
       label: 'settings.section.dev_environment',
-      order: 20,
+      order: SETTINGS_ORDER.DEV_ENVIRONMENT,
       component: DevEnvironmentSection,
     })
   }
@@ -332,7 +333,7 @@ export function registerBuiltinModules(): void {
     registerSettingsSection({
       id: 'tmux-agent-monitor',
       label: 'settings.section.tmux_agent_monitor',
-      order: 21,
+      order: SETTINGS_ORDER.TMUX_AGENT_MONITOR,
       component: TmuxAgentMonitorSection,
     })
   }

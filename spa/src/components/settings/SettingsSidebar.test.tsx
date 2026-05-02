@@ -1,5 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import type { ReactNode } from 'react'
+
+// Mock <PuzzlePiece> so we can assert on the `weight` and `className`
+// props SettingsSidebar passes to it. The real Phosphor SVG render
+// is expensive and opaque to weight / className assertions;
+// intercepting the component lets us hold the rotate-bold contract
+// on the prop boundary instead of the rendered output. Spec §4.6.
+vi.mock('@phosphor-icons/react', () => {
+  type StubProps = {
+    weight?: string
+    className?: string
+    'aria-hidden'?: boolean | 'true' | 'false'
+    children?: ReactNode
+  }
+  const PuzzlePiece = ({ weight, className, ...rest }: StubProps) => (
+    <span
+      data-testid="puzzle"
+      data-weight={weight}
+      className={className}
+      {...rest}
+    />
+  )
+  return { PuzzlePiece }
+})
+
 import { SettingsSidebar } from './SettingsSidebar'
 import { registerSettingsSection, clearSettingsSectionRegistry } from '../../lib/settings-section-registry'
 import {
@@ -129,6 +154,35 @@ describe('SettingsSidebar (F7: disabled-by-ctx)', () => {
     expect(row.getAttribute('data-disabled-ctx')).toBeNull()
     fireEvent.click(screen.getByText('AliveLabel'))
     expect(onSelect).toHaveBeenCalledWith('alive')
+  })
+
+  it('module-owned puzzle icon is bold + not rotated', () => {
+    // Spec §4.6 — Settings sidebar puzzle icon must be `weight="bold"`
+    // and have no `rotate-[30deg]` class. Asserted at the Phosphor prop
+    // boundary via the module-level mock above.
+    registerSettingsContribution({
+      moduleId: 'mod',
+      id: 'mod.alive',
+      localId: 'alive',
+      scope: 'purdex',
+      order: 5,
+      labelKey: 'AliveLabel',
+      component: FakeComp,
+    })
+
+    render(<SettingsSidebar activeSection="appearance" onSelectSection={vi.fn()} />)
+    const puzzles = screen.getAllByTestId('puzzle')
+    // Exactly one module-owned row exists in this fixture (`alive`).
+    expect(puzzles).toHaveLength(1)
+    expect(puzzles[0].getAttribute('data-weight')).toBe('bold')
+    expect(puzzles[0].className).not.toContain('rotate-')
+  })
+
+  it('built-in row does not render a puzzle icon', () => {
+    // Only the dispatched legacy `appearance` row exists here — no
+    // module-owned contribution, so no puzzle icon should render.
+    render(<SettingsSidebar activeSection="appearance" onSelectSection={vi.fn()} />)
+    expect(screen.queryByTestId('puzzle')).toBeNull()
   })
 
   it('omitted `disabled` defaults to enabled', () => {

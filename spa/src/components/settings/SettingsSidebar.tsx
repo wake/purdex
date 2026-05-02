@@ -87,8 +87,8 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
               {row.moduleOwned && (
                 <PuzzlePiece
                   size={12}
-                  weight="fill"
-                  className="flex-shrink-0 rotate-[30deg] text-text-muted"
+                  weight="bold"
+                  className="flex-shrink-0 text-text-muted"
                   aria-hidden
                 />
               )}
