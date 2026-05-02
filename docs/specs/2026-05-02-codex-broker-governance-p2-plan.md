@@ -41,7 +41,7 @@ internal/codexbroker/
   decision_test.go
   staleness.go          stale-running detection per spec §5.2; pid *int decode + cmdline verify
   staleness_test.go
-  override.go           E1 (consecutive ENOENT scan) + E2 (fingerprint mismatch)
+  override.go           E1 (consecutive ENOENT scan, daemon-lifetime tracker) + E2 (fingerprint mismatch)
   override_test.go
   quarantine.go         quarantine.json atomic R/W + schema + boot-restore
   quarantine_test.go
@@ -92,12 +92,19 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - Add `QuarantineEntry` and `QuarantineFile` structs matching the spec §5.3 JSON schema (line 408-422).
 - Add `LaunchEntry{BrokerKey, Pid, Lstart, TmuxPane, CallerSessionID, LaunchedAt string}` and `LaunchRegistry{Version int; Entries []LaunchEntry}`.
 - Add `AuditDump` struct matching spec §5.5 JSON schema (line 481-502).
+- Add `StateJobLite{ID, Status string; UpdatedAt time.Time; CompletedAt *time.Time; Pid *int}` — the minimal per-job record predicates A and B need from `state.json.jobs[]`. P1's `BrokerRecord` only carries the rollup `JobCounts` + `LastJobUpdatedAt`, so P2 must read per-job detail itself. The `*int` Pid is essential for the spec §5.2 stale-running rule (lines 386-390).
+- Add helper `ReadStateJobs(fs FS, stateDir string) ([]StateJobLite, error)` that opens `<stateDir>/state.json` and decodes only the `jobs[]` slice into `StateJobLite`. Returns `(nil, nil)` if the file is absent or the jobs array is empty (consistent with P1 anomaly tagging — file-absent is reported separately). Errors only propagate for genuine parse failures so predicate A can degrade gracefully.
+- Add `E1State{BrokerKey string; FirstSeenAt time.Time; FirstConfirmedAt *time.Time}`. The struct lives in `types.go` so the daemon-lifetime tracker (Module field, see Task G) and the override evaluator (Task G) share the same shape.
 - No removal of existing P1 types.
 
 **TDD tests**:
 - `TestDecisionResult_JSONRoundTrip` — encode + decode without loss including non-empty `AnomaliesAdded`.
 - `TestQuarantineEntry_ExpiresAt` — verify time arithmetic from `quarantinedAt + 7*24h`.
 - `TestAuditDump_JSONRoundTrip` — round-trip including `killSequence.stepLatencyMs`.
+- `TestReadStateJobs_HappyPath` — fixture `state.json` with 3 jobs decodes into 3 `StateJobLite` with correct `*int` Pid (one nil, two populated) and `*time.Time` CompletedAt.
+- `TestReadStateJobs_FileMissing` — returns `(nil, nil)`, no error.
+- `TestReadStateJobs_EmptyJobs` — `state.json` exists but `jobs:[]` → returns `(nil, nil)`.
+- `TestReadStateJobs_MalformedJSON` — returns parse error so predicate A can fall through to a documented degraded path.
 
 **Acceptance**: `go test ./internal/codexbroker/...` compiles and new type tests pass.
 
@@ -112,9 +119,9 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Pre-condition**: Task A done (uses `PredicateResult`).
 
 **Scope**:
-- `IsStaleRunning(job StateJob, lister ProcessLister, threshold time.Duration) (stale bool, detail string)` where `StateJob` is a minimal struct with `{Status, UpdatedAt time.Time, Pid *int}`.
+- `IsStaleRunning(job StateJobLite, lister ProcessLister, threshold time.Duration) (stale bool, detail string)`. `StateJobLite` is the shared minimal job record introduced in Task A (`{ID, Status string; UpdatedAt time.Time; CompletedAt *time.Time; Pid *int}`).
 - Per spec §5.2 lines 378-390: decode `pid` as `*int`; if nil and age > threshold → stale; if non-nil, verify via `lister.List` that pid is still alive and cmdline matches an expected broker task-worker shape (`app-server-broker.mjs`); mismatch → stale.
-- `StaleRunningCount(jobs []StateJob, lister ProcessLister, threshold time.Duration) int` — rolls up stale count for the decision layer.
+- `StaleRunningCount(jobs []StateJobLite, lister ProcessLister, threshold time.Duration) int` — rolls up stale count for the decision layer.
 - Threshold default constant `DefaultStaleRunningThreshold = 1 * time.Hour`.
 
 **TDD tests**:
@@ -138,18 +145,21 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Pre-condition**: Task B done.
 
 **Scope**:
-- `EvalPredicateA(ctx context.Context, rec BrokerRecord, lister ProcessLister, dialer Dialer) (bool, string)`.
-- Strategy: (1) attempt RPC `thread/list` on `rec.Endpoint` via `dialer`; if ≥1 thread with `status=active` or pending approval → true; if RPC unreachable but `state.json` shows a job `status ∈ {queued, running}` that is NOT stale (Task B) → true (conflict rule: RPC stall does not penalise broker, per spec §5.1 lines 367-368); (2) stale-running downgrade applies only to running entries; if all running entries are stale → contributes false.
+- `EvalPredicateA(ctx context.Context, rec BrokerRecord, jobs []StateJobLite, lister ProcessLister, dialer Dialer) (bool, string)`. `jobs` is the per-job slice produced by `ReadStateJobs` (Task A) — caller is `EvalDecision` (Task F). Predicate A does not re-read `state.json` itself.
+- Strategy: (1) attempt RPC `thread/list` on `rec.Endpoint` via `dialer`; if ≥1 thread with `status=active` or pending approval → true; if RPC unreachable but `jobs` contains an entry with `status ∈ {queued, running}` that is NOT stale (Task B `IsStaleRunning(job, lister, ...) == false`) → true (conflict rule: RPC stall does not penalise broker, per spec §5.1 lines 367-368); (2) stale-running downgrade applies only to running entries — `IsStaleRunning` per job; if all running entries are stale → contributes false.
 - RPC budget: `gracefulShutdownTimeoutSeconds` default 5 s (compile-time constant).
 - `threadListResponse` private struct for JSON decode of broker RPC response — minimal: `{threads: [{id, status}]}`.
+- Note on test caller convention: tests construct `[]StateJobLite` directly; production callers use `ReadStateJobs(fs, rec.StateDir)` upstream — when that helper returns an error, `EvalDecision` (Task F) feeds an empty slice and tags `state_json_unreadable` anomaly into `result.AnomaliesAdded` (degraded path).
 
 **TDD tests**:
 - `TestEvalPredicateA_RPCActiveThread` — fake dialer returns active thread → true.
-- `TestEvalPredicateA_RPCUnreachable_StateRunning_NotStale` → true (conflict rule).
-- `TestEvalPredicateA_RPCUnreachable_StateRunning_Stale` → false.
+- `TestEvalPredicateA_RPCUnreachable_StateRunning_NotStale` → true (conflict rule); `jobs[]` contains a running job with non-nil pid that the fake lister reports alive with broker cmdline.
+- `TestEvalPredicateA_RPCUnreachable_StateRunning_Stale` → false; running job pid is nil and `UpdatedAt` is older than `DefaultStaleRunningThreshold`.
+- `TestEvalPredicateA_RPCDown_StateJobsStale_ReturnsFalse` — RPC dialer returns error; `jobs[]` contains 2 running jobs both stale (one nil-pid past threshold, one non-nil-pid that lister reports dead) → predicate A returns false. This is the explicit fallback-correctness test the predicate signature change enables.
 - `TestEvalPredicateA_RPCUnreachable_StateQueued` → true.
 - `TestEvalPredicateA_RPCOk_NoThreads_StateEmpty` → false.
 - `TestEvalPredicateA_RPCTimeout_StateEmpty` → false (RPC timeout ≠ active).
+- `TestEvalPredicateA_RPCDown_NilJobs` → false (degraded path: caller passed empty slice because `ReadStateJobs` failed).
 
 **Acceptance**: predicate A tests all green.
 
@@ -164,8 +174,8 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Pre-condition**: Task A done.
 
 **Scope**:
-- `EvalPredicateB(rec BrokerRecord, fs FS, window time.Duration) (bool, string)`.
-- Reads `state.json.jobs[]`; for each job with `completedAt` within `window` and `status ∈ {completed}`, checks `fs.Stat(stateDir/jobs/<id>.json)` exists and `fs.Open` + decode succeeds (has `result` or `rendered` field). Any one such job → true.
+- `EvalPredicateB(rec BrokerRecord, jobs []StateJobLite, fs FS, window time.Duration) (bool, string)`. Receives the same shared `[]StateJobLite` slice the decision composer (Task F) read once via `ReadStateJobs` — predicate B does not re-read `state.json`.
+- For each job with `CompletedAt` non-nil and within `window` and `Status == "completed"`, checks `fs.Stat(stateDir/jobs/<id>.json)` exists and `fs.Open` + decode succeeds (has `result` or `rendered` field). Any one such job → true.
 - `DefaultRecentResultWindow = 30 * time.Minute`.
 - Uses `FS` interface from P1 — no real I/O in tests.
 
@@ -219,6 +229,7 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Scope**:
 - `EvalDecision(ctx context.Context, rec BrokerRecord, opts DecisionOpts) DecisionResult` composing A/B/C.
   - `DecisionOpts` carries: `FS`, `ProcessLister`, `Dialer`, `Registry LaunchRegistryReader`, `IdleTimeout time.Duration`, `ResultWindow time.Duration`, `StaleThreshold time.Duration`.
+  - **Reads per-job state once**: calls `ReadStateJobs(opts.FS, rec.StateDir)` once at the top of evaluation; passes the resulting `[]StateJobLite` to predicate A and (per §5.2) to predicate B. On `ReadStateJobs` error, feeds an empty slice and adds `state_json_unreadable` to `result.AnomaliesAdded` so audit trace explains the degraded predicate result.
 - **Foreign-broker pre-filter** (spec §5.1 line 371 + §2 line 44): evaluated **before** the kill rule so it strictly precedes the idle-timeout kill path.
   - Inputs: `opts.Registry`. The registry MAY be `nil` (defensive — Module wiring failure), `Empty()==true` (P2 expected steady state on mlab), or have entries.
   - Detection: `isForeign := opts.Registry == nil || opts.Registry.Empty() || lookupMiss(opts.Registry, rec.BrokerKey)`. If `isForeign` is true OR `rec.Anomalies` already contains `AnomalyForeignOwner` (forward-compatible with future P1 changes) → set `result.AnomaliesAdded += AnomalyForeignOwner` (only if not already in `rec.Anomalies` to avoid duplicate audit entries), `result.Kill = false`, `result.Reason = "foreign_quarantine"`. Predicate trace is still populated for forensics.
@@ -245,27 +256,38 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 
 ---
 
-### Task G — `override.go`: E1 (consecutive ENOENT scan)
+### Task G — `override.go`: E1 (consecutive ENOENT scan, daemon-lifetime tracker)
 
 **Files**: `override.go`, `override_test.go`
 
-**Pre-condition**: Task A done.
+**Pre-condition**: Task A done (provides shared `E1State`).
 
 **Scope**:
-- `E1State{BrokerKey string; FirstSeenAt time.Time; FirstConfirmedAt *time.Time}` — in-memory per sweep; P2 does not persist E1 state across daemon restarts (per spec §5.3 — two consecutive scans ≥ 60 s apart; the two scans are manual sweeps in P2, no daemon-lifetime memory needed).
-- `EvalE1(rec BrokerRecord, prior *E1State, now time.Time) (triggered bool, newState *E1State)`: if `rec.Anomalies` contains `AnomalyCwdMissing` (definitive ENOENT, not transient), record the observation. If a prior observation exists and `now - prior.FirstSeenAt >= 60s`, E1 is triggered. Return updated state for caller to store.
-- Note: in P2 (manual sweep only), the caller is `sweep.go` which invokes two scans at ≥60 s gap — or the user may call apply after a prior dry-run that recorded the state. The E1 state is passed in the sweep request context; P3 will promote it to daemon-lifetime.
+- `E1Tracker` struct: `{ Mu sync.Mutex; States map[string]*E1State }` (key = `brokerKey`). Owned by `Module` (see Task R wiring); injected into `SweepHandler`. Daemon-lifetime in-memory only — **not** sweep-local. Spec §5.3 line 399 requires two ENOENT observations ≥ 60 s apart, which CANNOT be satisfied by a per-sweep map because each `POST /sweep` is an independent HTTP request and any sweep-local state is discarded on response. Daemon restart resets the tracker (acceptable: the 60 s clock starts again, which is conservative — spec does not require persistence).
+- `(*E1Tracker).Observe(rec BrokerRecord, now time.Time) (triggered bool, state E1State)`:
+  - Acquire `Mu`; defer release.
+  - If `rec.Anomalies` contains `AnomalyCwdMissing` (definitive ENOENT, not transient):
+    - If `States[rec.BrokerKey] == nil` → store new `E1State{BrokerKey, FirstSeenAt: now}`; return `(false, ...)`.
+    - Else if `now - prior.FirstSeenAt >= 60s` → set `prior.FirstConfirmedAt = &now`; return `(true, *prior)`.
+    - Else (gap < 60s) → return `(false, *prior)` without mutation.
+  - If `rec.Anomalies` does NOT contain `AnomalyCwdMissing` (cwd recovered or only transient errors): clear `States[rec.BrokerKey]` so a future ENOENT chain restarts cleanly. Return `(false, E1State{})`.
+- `(*E1Tracker).Snapshot() map[string]E1State` — for debug endpoints / tests.
+- `(*E1Tracker).Reset(brokerKey string)` — for `mode=apply` post-kill cleanup so a respawned broker doesn't inherit a stale 60 s clock.
+- Constructor: `NewE1Tracker() *E1Tracker` returns ready-to-use tracker.
+- The override decision flows: `EvalDecision` (Task F) calls `opts.E1Tracker.Observe(rec, now)`; if triggered, sets `result.OverrideE1 = true`. `DecisionOpts` gains an `E1Tracker *E1Tracker` field (already passed via Module).
 
 **TDD tests**:
-- `TestE1_FirstObservation_NotTriggered` — returns new state, not triggered.
-- `TestE1_SecondObservation_TooSoon` — gap < 60 s → not triggered.
-- `TestE1_SecondObservation_GapExceeded` → triggered=true.
-- `TestE1_TransientError_NoE1` — ESTALE anomaly does NOT feed E1.
-- `TestE1_NoPriorState_Nil` — nil prior → first observation recorded.
+- `TestE1Tracker_FirstObservation_NotTriggered` — single Observe call → state stored, not triggered.
+- `TestE1Tracker_SecondObservation_TooSoon` — two Observes 30 s apart → not triggered, state retained.
+- `TestE1Tracker_DryRunThenApplyAfter60s_Triggers` — two Observes ≥60 s apart (simulating a dry-run sweep at t=0 followed by an apply sweep at t≥60 s) → second call returns triggered=true. **This is the core regression test for the daemon-lifetime promotion** — would fail with the original sweep-local design.
+- `TestE1Tracker_TransientError_NoE1` — Observe with `AnomalyCwdTransientStatError` only → tracker does NOT record state; subsequent ENOENT starts fresh 60 s clock.
+- `TestE1Tracker_CwdRecovered_StateCleared` — Observe with ENOENT, then Observe with no anomaly → state cleared; next ENOENT restarts clock.
+- `TestE1Tracker_ConcurrentObserves_Safe` — `go test -race`: 100 concurrent Observes for distinct brokerKeys do not corrupt the map.
+- `TestE1Tracker_Reset_ClearsState` — Reset(key) drops the state; subsequent Observe is fresh-first.
 
-**Acceptance**: E1 tests all green.
+**Acceptance**: E1 tests all green; `go test -race ./internal/codexbroker/...` clean.
 
-**Commit**: `feat(codexbroker): E1 emergency override — consecutive ENOENT (P2 task G)`
+**Commit**: `feat(codexbroker): E1 emergency override — daemon-lifetime tracker (P2 task G)`
 
 ---
 
@@ -506,7 +528,7 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Pre-condition**: Tasks F, G, H, I, P all done (decision + kill + quarantine + registry available).
 
 **Scope**:
-- `SweepHandler` struct holding `Scanner *Scanner`, `Quarantine *QuarantineStore`, `Registry *LaunchRegistryFile`, `KillerFactory func(BrokerRecord) *KillSequence`, `SF *singleflight.Group`.
+- `SweepHandler` struct holding `Scanner *Scanner`, `Quarantine *QuarantineStore`, `Registry *LaunchRegistryFile`, `E1Tracker *E1Tracker` (daemon-lifetime, see Task G), `KillerFactory func(BrokerRecord) *KillSequence`, plus the concurrency primitives defined in Finding #4 (replaces the originally-considered `SF *singleflight.Group`).
 - `func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request)`:
   - Method guard: 405 for non-POST.
   - Parse `mode` query param (default `dry-run`); `apply` enables kills.
@@ -515,7 +537,7 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
   - Run `Scanner.Scan(ctx)` to get current inventory.
   - For each `BrokerRecord` (filtered by brokerKey if set): check quarantine (`IsQuarantined`) → skip if quarantined; call `EvalDecision`; populate `SweepResponse.Evaluated`.
   - **Operator override path** (spec §5.1 line 371 "Operator may still issue a manual sweep with `mode=apply&brokerKey=<...>` to override"): when `mode=apply` AND `brokerKey` filter is set AND the resulting `DecisionResult.Reason == "foreign_quarantine"`, the kill is *still* skipped by default in P2. The override semantic ships as a separate `&force=true` query param ONLY recognised in conjunction with explicit `brokerKey`. P2 default behaviour: `force` not set → foreign brokers never killed via sweep API. Logged at audit-info level when `force=true&brokerKey=<X>` triggers a kill on a foreign broker; the audit dump `reason` field becomes `"manual_sweep_force"`. `mode=apply` (no brokerKey, no force) NEVER kills foreign brokers — this is the mlab-safe default that prevents the 50+ broker mass-kill scenario.
-  - If `mode=apply` and `DecisionResult.Kill=true` (or `force=true` foreign override path): call `KillSequence.Run`; record outcome in `SweepResponse.Applied` or `SweepResponse.Errors`.
+  - If `mode=apply` and `DecisionResult.Kill=true` (or `force=true` foreign override path): call `KillSequence.Run`; on success call `h.E1Tracker.Reset(rec.BrokerKey)` so a respawned broker doesn't inherit a stale 60 s clock; record outcome in `SweepResponse.Applied` or `SweepResponse.Errors`.
   - Return `200 JSON SweepResponse`.
 - Timeout: 30 s for `mode=apply` (accounts for graceful + SIGTERM + SIGKILL budget); 10 s for `mode=dry-run`.
 
@@ -545,15 +567,17 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Pre-condition**: Task Q done.
 
 **Scope**:
-- Add `SweepHandler`, `QuarantineStore`, `LaunchRegistryFile` fields to `Module`.
-- `Module.Init`: after constructing Scanner, load `quarantine.json` (error-tolerant: missing file is empty registry), load `launch-registry.json` (same), construct `SweepHandler`.
+- Add `SweepHandler`, `QuarantineStore`, `LaunchRegistryFile`, `E1Tracker` fields to `Module`.
+- `Module.Init`: after constructing Scanner, load `quarantine.json` (error-tolerant: missing file is empty registry), load `launch-registry.json` (same), construct `E1Tracker := NewE1Tracker()` (no persisted state — daemon-lifetime in-memory only), construct `SweepHandler` injecting all four (Scanner, QuarantineStore, LaunchRegistryFile, E1Tracker).
 - `Module.RegisterRoutes`: add `POST /api/codex/brokers/sweep`.
 - No changes to `GET /api/codex/brokers` handler.
 - No `Module.Start` goroutine (P3 concern — audit pruner + tick will live here).
+- Daemon restart drops `E1Tracker` state — documented as acceptable (spec §5.3 only requires two scans ≥60 s apart; restart conservatively restarts the 60 s clock).
 
 **TDD tests**:
 - `TestModule_RegistersSweepRoute` — mux has both GET and POST paths after init.
 - `TestModule_Init_QuarantineMissing_OK` — no quarantine.json → init succeeds with empty quarantine.
+- `TestModule_Init_E1TrackerEmpty` — fresh `Module.Init` produces an `E1Tracker` whose `Snapshot()` returns an empty map.
 
 **Acceptance**: daemon builds and starts; both routes visible; `go test ./internal/codexbroker/...` green.
 
@@ -691,7 +715,8 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | False-positive kill on idle broker | Idle timeout gate (default 30 min) AND all three predicates false required. Foreign-broker gets quarantine-only path. E1 requires two confirmed ENOENT scans ≥ 60 s apart. Dry-run mode available for operator review before apply. |
 | Daemon crash during kill sequence | Step 1 writes audit preimage before any signal. Atomic rename ensures preimage is either complete or absent (no partial JSON). On daemon restart, `quarantine.json` is loaded; broker is re-evaluated from scratch; previous kill result in audit dir provides forensics. |
 | Killing wrong broker (pgid ≤ 1) | Step 3 always calls `unix.Getpgid(pid)` and refuses to signal if `pgid <= 1`. Test `TestStepSIGTERM_PgidLeOne_Refused` enforces this. |
-| Network-mounted cwd transient stat failure triggering E1 | E1 requires definitive `ENOENT` (`os.IsNotExist` strictly). ESTALE / EIO / EACCES / generic timeout feed `cwd_transient_stat_error` anomaly and skip E1 accumulation. `TestE1_TransientError_NoE1` enforces this. |
+| Network-mounted cwd transient stat failure triggering E1 | E1 requires definitive `ENOENT` (`os.IsNotExist` strictly). ESTALE / EIO / EACCES / generic timeout feed `cwd_transient_stat_error` anomaly and skip E1 accumulation. `TestE1Tracker_TransientError_NoE1` enforces this. |
+| **E1 cross-sweep state lost** (sweep handler can't accumulate observations) | `E1Tracker` is daemon-lifetime in-memory (Task G), owned by `Module`, injected into `SweepHandler`. Two sweeps ≥60 s apart now correctly trigger E1. Restart resets the 60 s clock — documented as conservative behaviour, not a regression. `TestE1Tracker_DryRunThenApplyAfter60s_Triggers` is the regression test. |
 | Quarantine file corrupt on boot | `QuarantineStore.Load` treats `json.Unmarshal` failure as an empty registry + logs a warning. Boot continues. Corrupt file is renamed to `.bak-<ts>` for forensics. |
 | Scan amplification on concurrent sweep requests | `SweepHandler` uses `singleflight.Group` per brokerKey (or `"__all__"`). Concurrent dry-run + apply for same key: apply waits for in-flight dry-run scan; does not double-scan. `TestSweepHandler_Singleflight_ConcurrentRequests` enforces this. |
 | macOS no /proc for sockverify | `sockverify_darwin.go` uses `proc_pidinfo` via `syscall.Syscall6` (no CGo, no fork). If `proc_pidinfo` returns EPERM, falls back to `lsof -nP` with 1 s timeout. Budget-exceeded or both-failed → `held=true` (conservative defer). |
@@ -704,13 +729,13 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 
 | Task | Est. LOC (impl + test) | Notes |
 |---|---|---|
-| A types | 80 + 50 | Additive to types.go |
+| A types | 130 + 80 | Additive to types.go (+ StateJobLite + ReadStateJobs helper + E1State + tests) |
 | B staleness | 60 + 80 | |
-| C pred A | 80 + 100 | RPC + state.json |
-| D pred B | 50 + 80 | |
+| C pred A | 90 + 130 | RPC + jobs param + RPC-down stale fallback test |
+| D pred B | 50 + 80 | shared []StateJobLite |
 | E pred C | 70 + 90 | tmux pane verify |
-| F kill rule | 60 + 80 | compose A/B/C |
-| G E1 override | 40 + 60 | |
+| F kill rule | 90 + 110 | compose A/B/C + foreign-broker pre-filter + ReadStateJobs orchestration |
+| G E1 override | 80 + 110 | daemon-lifetime tracker + concurrent-safe map + Reset/Snapshot |
 | H E2 + quarantine | 100 + 120 | atomic file I/O |
 | I launch registry | 80 + 100 | |
 | J Step 0 verify | 40 + 60 | |
@@ -724,9 +749,9 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | R module wiring | 40 + 40 | |
 | S integration test | 0 + 150 | |
 | T live verify + PR | 0 + 0 | operational |
-| **Total** | **~1210 + ~1580** | **~2800 lines** |
+| **Total** | **~1330 + ~1700** | **~3030 lines** |
 
-Production LOC ~1210 is within spec §9 PR-C range of 700-1000 for the "decision predicates + emergency overrides + kill sequence + audit" surface; test code pushes total above that range consistent with TDD-first approach. Reviewer note: impl-only LOC is within estimate; test density is intentional.
+Production LOC ~1330 is slightly above spec §9 PR-C range of 700-1000 for the "decision predicates + emergency overrides + kill sequence + audit" surface; the +120 over the original estimate is the cost of the round-1 plan-review fixes (foreign-broker pre-filter, daemon-lifetime E1Tracker, StateJobLite + ReadStateJobs helper, per-broker RWMutex). Test density is intentional. Reviewer note: each line of impl over the original estimate maps directly to a regression test for a specific finding.
 
 **Cycle time estimate**: codex plan review (1 round, 0-1 medium findings expected) → subagent 1 TDD tasks A–K (~6-8 h) → subagent 2 TDD tasks L–T (~5-7 h) → PR open → R1 standard (~1 h review) → R2 three-parallel adversarial → finding triage and fixes → squash → bump.
 
