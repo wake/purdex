@@ -10,6 +10,7 @@
 //
 //	Path                                                    | trigger | verify | frame | projection | emit | probe-intent
 //	cc/codex/opencode valid main (UserPromptSubmit/Stop/...) | yes     | yes    | yes   | yes        | yes  | —
+//	codex PreToolUse without proxy parent (L2 round-1 fix)  | yes     | yes    | yes(*)| —          | —    | —
 //	any agent invalid catalog miss (BogusEvent)             | yes     | yes(*) | —     | —          | —    | —
 //	cc/codex/opencode subagent updated_frame                | yes     | yes    | yes   | yes        | yes  | —
 //	cc/codex/opencode subagent frame_missing/id_missing     | yes     | yes    | yes   | yes        | —    | —
@@ -47,6 +48,15 @@
 //     subscriber (sendSnapshot); neither call enters handleEvent and therefore
 //     does not begin a hook trace chain. They are state-reconstruction paths,
 //     not hook events, and intentionally lie outside the trace step model.
+//
+//   - codex PreToolUse without proxy parent (L2 round-1 fix): the
+//     LifecyclePreToolUse handler emits a synthetic frame step
+//     decision=skipped / reason=pre_tool_without_proxy_parent_skipped and
+//     short-circuits before projection/emit when no parent frame nor proxy
+//     candidate exists for the sender. This is a legitimate dispatch
+//     terminator (not an error) — bare PreToolUse from a codex peer with no
+//     attached parent has no L2 ref to upsert. Tracking the skip on the
+//     frame step keeps the chain observable (round-2 D4).
 package agent
 
 import (

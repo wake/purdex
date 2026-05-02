@@ -89,6 +89,12 @@ func (f *fakeAgentProvider) DeriveStatus(eventName string, raw json.RawMessage) 
 var fakeDefaultEvents = []agentpkg.HookEventSpec{
 	{PurdexName: "PdxSessionStart", UpstreamKeys: []string{"SessionStart"}, Lifecycle: agentpkg.LifecycleSessionStart},
 	{PurdexName: "PdxUserPromptSubmit", UpstreamKeys: []string{"UserPromptSubmit"}, Lifecycle: agentpkg.LifecycleUserPromptSubmit},
+	// L2 alpha.282: PdxPreToolUse shares LifecycleUserPromptSubmit so the
+	// new turn-aware case body in applyFrameEvent dispatches uniformly for
+	// codex (catalog-driven, mirrors codex/events.go). cc handlers reach
+	// the case body through the AgentType gate and break to the generic
+	// path — pre-L2 cc behavior unchanged.
+	{PurdexName: "PdxPreToolUse", UpstreamKeys: []string{"PreToolUse"}, Lifecycle: agentpkg.LifecycleUserPromptSubmit},
 	{PurdexName: "PdxStop", UpstreamKeys: []string{"Stop"}, Lifecycle: agentpkg.LifecycleStop},
 	{PurdexName: "PdxStopFailure", UpstreamKeys: []string{"StopFailure"}, Lifecycle: agentpkg.LifecycleStopFailure},
 	{PurdexName: "PdxSessionEnd", UpstreamKeys: []string{"SessionEnd"}, Lifecycle: agentpkg.LifecycleSessionEnd},

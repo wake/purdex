@@ -353,6 +353,51 @@ func TestHandleEvent_RejectsLegacyPayload(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_NormalizesSenderStartTime pins the round-2 A3 boundary
+// canonicalization: a hook payload whose sender_start_time field is padded
+// with surrounding whitespace must reach downstream identity lookups in
+// trimmed form. verify.go:52 already TrimSpaces both sides of its compare,
+// but findProxyRefForBroker / removeProxyRefForSender / GetByIdentity use
+// the raw EventRequest field as an exact-match key — without normalization
+// at the boundary, padded payloads pass verify yet split identity from
+// non-padded events for the same broker.
+func TestHandleEvent_NormalizesSenderStartTime(t *testing.T) {
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
+
+	// Padded sender_start_time. The actualStart returned by
+	// processStartTimeFn (set in newTestModule) is the canonical form, so
+	// verify accepts via TrimSpace. We then assert the stored frame's
+	// ProcessStartTime is the trimmed value — proving handleEvent
+	// canonicalized req.SenderStartTime before frame_ops consumed it.
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"  Sun Apr 20 01:30:00 2026  ","purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	frames, err := m.frames.ListByPane("%9")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if frames[0].ProcessStartTime != "Sun Apr 20 01:30:00 2026" {
+		t.Errorf("ProcessStartTime = %q, want trimmed canonical form", frames[0].ProcessStartTime)
+	}
+}
+
 // TestHandleEvent_StoresAgentType verifies that accepted hooks project agent
 // identity into frames instead of keeping a dual-written legacy row.
 func TestHandleEvent_StoresAgentType(t *testing.T) {
@@ -2444,5 +2489,43 @@ func TestHandleEvent_MidConnectionGone_NoParentFallback(t *testing.T) {
 	}
 	if frameStep.ParentFrameID != "" {
 		t.Errorf("frame step ParentFrameID = %q, want empty", frameStep.ParentFrameID)
+	}
+}
+
+// TestHandleEvent_PreToolUse_NoParent_NoBroadcast verifies that a codex
+// PdxPreToolUse event arriving with no proxy parent in the pane short-circuits
+// after the frame_apply trace step — full broadcast path must not run, no
+// frame is created, currentStatus is not mutated. Spec §3.3.C.1 + §5 row 20.
+// Round-1 codex review (PR #801) blocker fix.
+func TestHandleEvent_PreToolUse_NoParent_NoBroadcast(t *testing.T) {
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "codex",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			// PdxPreToolUse derive: Valid=true, Status="" (mirrors codex
+			// status.go new case at codex/status.go).
+			return agentpkg.DeriveResult{Valid: true}
+		},
+	})
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":42,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxPreToolUse","raw_event":{"turn_id":"t_a"},"agent_type":"codex"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 (no frame should be created on PreToolUse no-parent skip)", len(frames))
+	}
+	if got, ok := m.currentStatus["work"]; ok && got != "" {
+		t.Fatalf("currentStatus[\"work\"] = %q, want unset (no broadcast path should run)", got)
 	}
 }

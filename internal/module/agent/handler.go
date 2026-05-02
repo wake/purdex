@@ -151,6 +151,15 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize sender_start_time once at the boundary. verify.go:52 already
+	// TrimSpaces both sides of its compare, but downstream identity lookups
+	// (findProxyRefByBroker, removeProxyRefForSender, GetByIdentity) use
+	// req.SenderStartTime as a raw exact-match key. Without canonicalization
+	// here, a hook payload with a padded value (e.g. " t1 ") would pass
+	// verify yet miss every L2 lookup, leaking refs or splitting identity
+	// (round-2 A3).
+	req.SenderStartTime = strings.TrimSpace(req.SenderStartTime)
+
 	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.PurdexName == "" || req.SenderPID == 0 {
 		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return
@@ -315,6 +324,21 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	if isDevMode() {
 		log.Printf("[handler] frame_apply session=%s frame_id=%s lifecycle=%s decision=%s chain_id=%s",
 			req.TmuxSession, frameMeta.FrameID, req.PurdexName, frameMeta.Decision, trace.ChainID())
+	}
+	// L2: PreToolUse no-parent path is detail-only by design (spec §3.3.C.1
+	// + row 20). applyFrameEvent already returned a skipped trace reason
+	// without mutating Subagents or creating a frame. Without this short
+	// circuit, the rest of the handler path would still rebuild projection,
+	// delete legacy events, and broadcast a normalized event with empty
+	// Status (which buildProjectionNormalized maps to StatusClear),
+	// contradicting "no status broadcast" semantics. Round-1 codex review
+	// finding (PR #801).
+	if frameMeta.Decision == "skipped" && frameMeta.Reason == "pre_tool_without_proxy_parent" {
+		trace.Finish("completed", "pre_tool_without_proxy_parent_skipped")
+		traceFinished = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		return
 	}
 	projection := paneProjection
 	if req.TmuxSession != "" {

@@ -306,9 +306,10 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	}
 }
 
-// expectedCodexInstallerNames is the post-expansion 9-event installer set
-// (plan §1.4 / issue #613). Shared across TestMergeCodexHooks_* so the
-// installer tests migrate off codexHookEvents cleanly.
+// expectedCodexInstallerNames is the post-expansion installer set
+// (plan §1.4 / issue #613, plus L2 PreToolUse for codex non-prompt turn
+// proxy attach). Shared across TestMergeCodexHooks_* so the installer
+// tests migrate off codexHookEvents cleanly.
 var expectedCodexInstallerNames = []string{
 	"SessionStart",
 	"UserPromptSubmit",
@@ -319,6 +320,7 @@ var expectedCodexInstallerNames = []string{
 	"Notification",
 	"PermissionRequest",
 	"SessionEnd",
+	"PreToolUse",
 }
 
 // TestCodexInstallHooks_Writes9EventsAfterExpansion is the primary issue
@@ -337,8 +339,8 @@ func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
 	m := readHooksFile(t, path)
 	hooks := hooksSection(t, m)
 
-	if len(hooks) != 9 {
-		t.Errorf("codex installer wrote %d events, want 9 (issue #613 expansion)", len(hooks))
+	if len(hooks) != len(expectedCodexInstallerNames) {
+		t.Errorf("codex installer wrote %d events, want %d (issue #613 expansion + L2 PreToolUse)", len(hooks), len(expectedCodexInstallerNames))
 	}
 
 	wantExpanded := []string{
@@ -348,6 +350,7 @@ func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
 		"Notification",
 		"PermissionRequest",
 		"SessionEnd",
+		"PreToolUse",
 	}
 	for _, name := range wantExpanded {
 		if _, ok := hooks[name]; !ok {
@@ -710,8 +713,8 @@ func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
 	}
-	if len(status.Events) != 9 {
-		t.Errorf("CheckHooks reported %d events, want 9", len(status.Events))
+	if len(status.Events) != len(expectedCodexInstallerNames) {
+		t.Errorf("CheckHooks reported %d events, want %d", len(status.Events), len(expectedCodexInstallerNames))
 	}
 	// status.Events is keyed by PurdexName post P3-T4; expectedCodexInstallerNames
 	// is the upstream-key list, so flip via the catalog's UpstreamKey ↔
@@ -1415,6 +1418,7 @@ func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 		"PdxStopFailure":   true,
 		"PdxNotification":  true,
 		"PdxSessionEnd":    true,
+		"PdxPreToolUse":    true,
 	}
 	if len(status.UpgradesAvailable) != len(want) {
 		t.Fatalf("UpgradesAvailable=%v, want %d entries", status.UpgradesAvailable, len(want))

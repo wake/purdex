@@ -181,6 +181,20 @@ func TestCodexDeriveStatus_PdxStopFailure(t *testing.T) {
 	}
 }
 
+// TestDeriveCodexStatus_PdxPreToolUse asserts PdxPreToolUse returns
+// Valid=true with Status="" so that handler.go does not early-return on the
+// Valid=false branch and the new LifecycleUserPromptSubmit case in
+// applyFrameEvent can run for codex non-prompt turns (spec §3.3.C strategy a).
+func TestDeriveCodexStatus_PdxPreToolUse(t *testing.T) {
+	r := deriveWithRaw("PdxPreToolUse", `{"hook":"PdxPreToolUse"}`)
+	if !r.Valid {
+		t.Fatalf("expected Valid=true, got %+v", r)
+	}
+	if r.Status != "" {
+		t.Fatalf("expected empty Status (detail-only), got %q", r.Status)
+	}
+}
+
 // TestCodexDeriveStatus_LegacyNames_Invalid asserts the pre-W2 raw
 // event-name literals are no longer a catalog match for codex post-P2-T1.
 // Phase 2's daemon path falls back through isLegacyHookForUnmigrated only

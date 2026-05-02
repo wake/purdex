@@ -70,6 +70,13 @@ func deriveCodexStatus(eventName string, rawEvent json.RawMessage) agent.DeriveR
 			Valid:  true,
 			Detail: map[string]any{"agent_id": raw["agent_id"]},
 		}
+
+	case "PdxPreToolUse":
+		// L2: detail-only Valid=true so handler.go does not early-return on
+		// the Valid=false branch; the new LifecycleUserPromptSubmit case in
+		// applyFrameEvent then attaches the codex broker proxy ref for
+		// non-prompt turns (spec §3.3.C strategy a).
+		return agent.DeriveResult{Valid: true}
 	}
 
 	return agent.DeriveResult{Valid: false}

@@ -198,6 +198,229 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			Before:        before,
 			After:         summarizeFrame(&stored),
 		}, err
+	case agentpkg.LifecycleUserPromptSubmit:
+		// L2 codex turn-aware attach/upsert (spec §3.3.B/C, plan §3 P3-T7a/T7b).
+		//
+		// Gate 1 — codex only. cc / opencode UserPromptSubmit + PreToolUse
+		// have no per-turn identity in their hook payloads; falling through
+		// to the existing generic frame path keeps their behavior unchanged
+		// (spec §5 row 17 / 17b regression guards).
+		if req.AgentType != "codex" {
+			break
+		}
+		// Gate 2 — sender owns its own frame. Existing narrow column update
+		// (UpdateHookPath branch above) handles status / last_seen refresh;
+		// L2 turn-aware identity only exists on the parent's proxy ref,
+		// never on the sender's own frame.
+		if frame != nil {
+			break
+		}
+		// Gate 3 — must have an alive cross-type proxy parent.
+		parent, perr := m.findProxyParent(req)
+		if perr != nil {
+			return nil, FrameTraceMeta{}, perr
+		}
+		if parent == nil {
+			// No proxy parent. PreToolUse must NOT fall through to the
+			// generic frame-create path: it carries no Status (DeriveResult
+			// returns Status="" for PdxPreToolUse) and would materialize a
+			// standalone idle frame in the SessionStart attach branch below,
+			// contradicting "broker is starting work for a turn" semantics
+			// (spec §3.3.C.1 + §5 row 20). UserPromptSubmit's existing
+			// Status=Running derive path stays unchanged for backward compat
+			// (v4 behavior).
+			if req.PurdexName == "PdxPreToolUse" {
+				projection, perr2 := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					Decision: "skipped",
+					Reason:   "pre_tool_without_proxy_parent",
+					Before:   map[string]any{},
+					After:    map[string]any{},
+				}, perr2
+			}
+			break
+		}
+		// First-time vs in-place upsert — caller-side classification keeps
+		// upsertProxyRefForBroker's helper signature frozen post-Phase 2.
+		// findProxyRefByBroker is a side-effect-free lookup; an in-flight
+		// concurrent attach between this check and the helper's own
+		// findProxyRefByBroker (inside the retry loop) only changes the
+		// trace reason, not the persisted shape.
+		isFirstAttach := findProxyRefByBroker(parent.Subagents, req.SenderPID, req.SenderStartTime) < 0
+		parentBefore := summarizeFrame(parent)
+		turnID := parseCodexTurnID(req.RawEvent)
+		persisted, stored, uerr := m.upsertProxyRefForBroker(*parent, req.SenderPID, req.SenderStartTime, turnID, broadcastTs)
+		if uerr != nil {
+			return nil, FrameTraceMeta{}, uerr
+		}
+		if !persisted {
+			// Parent vanished mid-flight (concurrent SessionEnd / sweep).
+			// Fall through to the generic frame path as a recovery.
+			break
+		}
+		reason := "proxy_subagent_upserted_on_user_prompt"
+		if isFirstAttach {
+			reason = "proxy_subagent_attached_on_user_prompt"
+		}
+		projection, err := m.projectPane(req.TmuxPaneID)
+		return projection, FrameTraceMeta{
+			FrameID:       stored.FrameID,
+			ParentFrameID: stored.ParentFrameID,
+			Decision:      "updated_frame",
+			Reason:        reason,
+			Before:        parentBefore,
+			After:         summarizeFrame(&stored),
+		}, err
+	case agentpkg.LifecycleStop, agentpkg.LifecycleStopFailure:
+		// L2 codex turn-aware Stop targeted detach (spec §3.3.D + plan
+		// §3 P3-T8a). All detach goes through pane-scan helpers; we never
+		// call findProxyParent on the Stop path because the sender's PPID
+		// chain may have already been torn down by the time the hook
+		// arrives (B1/v2 fix).
+		//
+		// Gate 1 — sender owns its own frame. Standalone agent Stop is
+		// the J3 dispatcher's territory (lights-rebuild ProbeIntent), not
+		// L2 proxy detach (spec §3.3.D + §5 row 12).
+		if frame != nil {
+			break
+		}
+		// Gate 2 — non-codex providers fall back to wildcard process-level
+		// detach (cc/opencode have no per-turn identity). Mirrors the
+		// long-standing PR-2b SessionEnd path.
+		if req.AgentType != "codex" {
+			removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs)
+			if derr != nil {
+				return nil, FrameTraceMeta{}, derr
+			}
+			if removed {
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       ownerAfter.FrameID,
+					ParentFrameID: ownerAfter.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "proxy_subagent_detached_on_stop",
+					Before:        ownerBefore,
+					After:         ownerAfterMap,
+				}, perr
+			}
+			// No matching ref — fall through to generic post-switch path
+			// so legacy behavior (no frame mutation, projection refresh)
+			// stays observable.
+			break
+		}
+		// Codex three sub-case dispatch (spec §3.3.D table).
+		turnID := parseCodexTurnID(req.RawEvent)
+		if turnID != "" {
+			// (a) Targeted detach by (PID, StartTime, TurnID).
+			removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSenderTurn(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, turnID, broadcastTs)
+			if derr != nil {
+				return nil, FrameTraceMeta{}, derr
+			}
+			if removed {
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       ownerAfter.FrameID,
+					ParentFrameID: ownerAfter.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "proxy_subagent_detached_on_stop_turn",
+					Before:        ownerBefore,
+					After:         ownerAfterMap,
+				}, perr
+			}
+			// Stop's turn doesn't match any live ref. Could be late Stop
+			// after a turn-change upsert overwrote SourceTurnID, or a
+			// stale-tombstone Stop after a previous detach (idempotent
+			// no-op). Trace stop_no_match either way.
+			projection, perr := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "proxy_subagent_stop_no_match",
+				Before:   map[string]any{},
+				After:    map[string]any{},
+			}, perr
+		}
+		// (b)/(c) — codex Stop with empty/parse-failed turn_id. Pane-scan
+		// for the matching broker ref (PID, StartTime) to make the
+		// fallback decision; any non-matching broker's SourceTurnID is
+		// irrelevant (H1/v2 fix).
+		paneFrames, perr := m.frames.ListByPane(req.TmuxPaneID)
+		if perr != nil {
+			return nil, FrameTraceMeta{}, perr
+		}
+		var matched *agentpkg.SubagentRef
+		for i := range paneFrames {
+			idx := findProxyRefByBroker(paneFrames[i].Subagents, req.SenderPID, req.SenderStartTime)
+			if idx >= 0 {
+				ref := paneFrames[i].Subagents[idx]
+				matched = &ref
+				break
+			}
+		}
+		if matched == nil {
+			// No broker ref to detach — silently drop the Stop. Trace as
+			// stop_no_match so the chain remains observable; this also
+			// covers idempotent re-Stop after a previous successful
+			// detach (row 14 lower-confidence branch).
+			projection, perr2 := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "proxy_subagent_stop_no_match",
+				Before:   map[string]any{},
+				After:    map[string]any{},
+			}, perr2
+		}
+		if matched.SourceTurnID != "" {
+			// (b) Matching broker has a live SourceTurnID (a previous
+			// upsert recorded a turn_id). Stop with empty turn_id is
+			// almost certainly a malformed payload, NOT a legitimate
+			// "broker is finished" signal — keep the ref so the
+			// conservative behavior preserves the lit dot until either
+			// the next upsert or governance sweep clears it.
+			projection, perr2 := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "proxy_subagent_stop_parse_failed",
+				Before:   map[string]any{},
+				After:    map[string]any{},
+			}, perr2
+		}
+		// (c) Matching broker has empty SourceTurnID (SessionStart
+		// attached but no UserPromptSubmit/PreToolUse upsert ever
+		// recorded a turn) → empty-turn-only detach. Round-2 A1: a
+		// process-level wildcard here would TOCTOU-race a concurrent
+		// UserPromptSubmit that upgrades the ref to turn-aware between
+		// our ListByPane scan above and the detach helper. Re-verify
+		// SourceTurnID == "" inside the optimistic-concurrency loop by
+		// reusing removeProxyRefForSenderTurn with turnID == "" — the
+		// match condition becomes (PID, StartTime, SourceTurnID == "")
+		// and any concurrent upgrade falls into the no-match branch
+		// (proxy_subagent_stop_no_match below).
+		removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSenderTurn(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, "", broadcastTs)
+		if derr != nil {
+			return nil, FrameTraceMeta{}, derr
+		}
+		if removed {
+			projection, perr2 := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				FrameID:       ownerAfter.FrameID,
+				ParentFrameID: ownerAfter.ParentFrameID,
+				Decision:      "updated_frame",
+				Reason:        "proxy_subagent_detached_on_stop",
+				Before:        ownerBefore,
+				After:         ownerAfterMap,
+			}, perr2
+		}
+		// Pane-scan saw a matching ref but the helper found nothing —
+		// concurrent writer detached between scan and helper. Trace
+		// stop_no_match so the chain accurately reflects "ref already
+		// gone" without claiming to have detached it twice.
+		projection, perr2 := m.projectPane(req.TmuxPaneID)
+		return projection, FrameTraceMeta{
+			Decision: "skipped",
+			Reason:   "proxy_subagent_stop_no_match",
+			Before:   map[string]any{},
+			After:    map[string]any{},
+		}, perr2
 	}
 
 	// Proxy subagent fast-path (Phase 2 PR-2b, plan §1.4): when a SessionStart
@@ -625,17 +848,62 @@ func updateSubagents(current []agentpkg.SubagentRef, lifecycle agentpkg.Lifecycl
 }
 
 // subagentRefMatches returns true when two refs identify the same subagent.
-// Proxy refs compare by (SourcePID, SourceStartTime); native refs compare by
-// ID. Cross-kind (one proxy, one native) is never a match — preserves the
-// isolation between the two namespaces (see updateSubagents doc).
+// Proxy refs compare by (SourcePID, SourceStartTime) plus a turn-aware
+// SourceTurnID equality (L2 spec §3.2.A): if either side's SourceTurnID is
+// empty the comparison falls back to process-level (preserves backward-compat
+// with refs persisted before SourceTurnID was added and with cc/opencode
+// providers that never populate it); if both sides are non-empty they must
+// equal exactly. Native refs compare by ID. Cross-kind (one proxy, one
+// native) is never a match — preserves the isolation between the two
+// namespaces (see updateSubagents doc).
+//
+// This helper is used for turn-aware Stop targeted detach. Process-level
+// lookup (used by attach/upsert in upsertProxyRefForBroker) goes through
+// findProxyRefByBroker — DO NOT reuse this helper there: its turn-aware
+// gate would treat a (PID, StartTime, turn_b) lookup against an existing
+// (PID, StartTime, turn_a) ref as no-match and trigger an append-duplicate
+// regression (spec §3.2 F1 fix).
 func subagentRefMatches(a, b agentpkg.SubagentRef) bool {
 	if a.IsProxy != b.IsProxy {
 		return false
 	}
 	if a.IsProxy {
-		return a.SourcePID == b.SourcePID && a.SourceStartTime == b.SourceStartTime
+		if a.SourcePID != b.SourcePID || a.SourceStartTime != b.SourceStartTime {
+			return false
+		}
+		// Process-level fallback: an unset SourceTurnID on either side
+		// (legacy ref pre-L2, SessionStart attach without turn_id, or a
+		// non-codex provider that never populates the field) reduces the
+		// equality test to (PID, StartTime). Both sides non-empty → exact
+		// turn equality (spec §3.2.A turn-level identity).
+		if a.SourceTurnID == "" || b.SourceTurnID == "" {
+			return true
+		}
+		return a.SourceTurnID == b.SourceTurnID
 	}
 	return a.ID == b.ID
+}
+
+// findProxyRefByBroker returns the index of the proxy ref matching this
+// broker (PID + StartTime), regardless of SourceTurnID. Used for upsert/
+// replace where the intent is to mutate a single broker's existing ref to
+// a new turn_id (in-place) rather than appending a duplicate ref. Returns
+// -1 if no proxy ref matches.
+//
+// Process-level only — turn-aware equality lives in subagentRefMatches and
+// is intentionally NOT reused here. Reusing subagentRefMatches would make
+// upsert miss an existing ref whose SourceTurnID differs from the incoming
+// turnID, causing a duplicate ref to be appended (spec §3.2 F1 fix).
+// Likewise, Stop targeted detach must NOT reuse this helper — that would
+// drop a stale-turn ref whose owning broker has already moved on to a new
+// turn (spec §3.2 F1 fix, dual direction).
+func findProxyRefByBroker(refs []agentpkg.SubagentRef, pid int, startTime string) int {
+	for i, ref := range refs {
+		if ref.IsProxy && ref.SourcePID == pid && ref.SourceStartTime == startTime {
+			return i
+		}
+	}
+	return -1
 }
 
 func syncProjectionState(currentStatus map[string]agentpkg.Status, subagents map[string][]agentpkg.SubagentRef, tmuxSession string, projection *SessionProjection) {
@@ -826,11 +1094,72 @@ func (m *Module) removeProxyRefForSender(paneID string, senderPID int, senderSta
 	return false, store.Frame{}, nil, nil, nil
 }
 
+// removeProxyRefForSenderTurn mirrors removeProxyRefForSender with a
+// turn-aware identity gate (L2 spec §3.3.D). Scans the pane's frames for
+// the proxy SubagentRef whose (SourcePID, SourceStartTime, SourceTurnID)
+// triple matches the sender + turn that emitted Stop, then drops only that
+// ref via detachProxyRefForSenderTurnWithRetry. Pane-scan (not parent-
+// bound) intentionally — Stop hooks do not carry the parent FrameID and a
+// SessionStart-attached ref may live on any frame in the pane.
+//
+// Returns (removed, ownerFrameAfter, ownerBefore, ownerAfter, err) with
+// the same shape as removeProxyRefForSender so the two coexist as siblings
+// rather than divergent return contracts. ownerBefore / ownerAfter are
+// summarizeFrame outputs (any-typed for trace plumbing). When nothing
+// matched returns (false, zeroFrame, nil, nil, nil).
+//
+// Process-level wildcard detach (used by Stop with empty/missing turn_id
+// and by SessionEnd) goes through the existing removeProxyRefForSender;
+// the two functions intentionally coexist (spec §3.2 boundary).
+func (m *Module) removeProxyRefForSenderTurn(paneID string, senderPID int, senderStartTime, turnID string, broadcastTs int64) (bool, store.Frame, any, any, error) {
+	if m.frames == nil {
+		return false, store.Frame{}, nil, nil, nil
+	}
+	frames, err := m.frames.ListByPane(paneID)
+	if err != nil {
+		return false, store.Frame{}, nil, nil, err
+	}
+	for _, frame := range frames {
+		if !subagentsContainProxySenderTurn(frame.Subagents, senderPID, senderStartTime, turnID) {
+			continue
+		}
+		before := summarizeFrame(&frame)
+		detached, stored, derr := m.detachProxyRefForSenderTurnWithRetry(frame, senderPID, senderStartTime, turnID, broadcastTs)
+		if derr != nil {
+			return false, store.Frame{}, nil, nil, derr
+		}
+		if detached {
+			return true, stored, before, summarizeFrame(&stored), nil
+		}
+		// Frame vanished or its ref was already removed by a concurrent
+		// writer. Continue scanning other frames in the pane — a different
+		// owner may still carry our sender's proxy ref for this turn.
+	}
+	return false, store.Frame{}, nil, nil, nil
+}
+
 // subagentsContainProxySender is a side-effect-free check used to short-
 // circuit frames that don't need the read-modify-write retry loop.
 func subagentsContainProxySender(refs []agentpkg.SubagentRef, senderPID int, senderStartTime string) bool {
 	for _, ref := range refs {
 		if ref.IsProxy && ref.SourcePID == senderPID && ref.SourceStartTime == senderStartTime {
+			return true
+		}
+	}
+	return false
+}
+
+// subagentsContainProxySenderTurn mirrors subagentsContainProxySender for
+// the L2 turn-aware Stop targeted detach path (spec §3.3.D). All three
+// identity fields (PID, StartTime, TurnID) must match — process-level
+// matches alone are insufficient: a Stop carrying turn_b should not detach
+// a ref whose owning broker has already moved on to turn_a in flight.
+func subagentsContainProxySenderTurn(refs []agentpkg.SubagentRef, senderPID int, senderStartTime, turnID string) bool {
+	for _, ref := range refs {
+		if ref.IsProxy &&
+			ref.SourcePID == senderPID &&
+			ref.SourceStartTime == senderStartTime &&
+			ref.SourceTurnID == turnID {
 			return true
 		}
 	}
@@ -884,6 +1213,89 @@ func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.Subage
 	return m.mutateSubagentsWithRetry(parent, agentpkg.LifecycleSubagentStart, ref, broadcastTs)
 }
 
+// upsertProxyRefForBroker inserts or in-place mutates a single broker's
+// proxy ref on a parent frame, under optimistic concurrency. Used by the
+// L2 codex turn-aware attach/upsert path (UserPromptSubmit / PreToolUse,
+// spec §3.3.B/C and §3.4):
+//
+//   - If a proxy ref matching (pid, startTime) already exists, mutate its
+//     SourceTurnID to turnID and refresh StartedAt — does NOT append a
+//     duplicate even when SourceTurnID differs from the incoming turnID.
+//   - Otherwise, append a new proxy ref with full identity. The ID format
+//     is "proxy:codex:<pid>:<startTime>" matching the SessionStart fast-
+//     path's proxy attach branch so a SessionStart followed by an upsert
+//     on the same broker reuses the same ID rather than diverging.
+//
+// Each attempt re-issues UpsertIfUnchanged; on conflict the parent is
+// reloaded via GetByIdentity and findProxyRefByBroker re-runs against the
+// fresh refs (a concurrent attach by a SessionStart on the same broker
+// could have appended a ref between attempts, in which case we mutate the
+// just-attached ref rather than appending another).
+//
+// Returns (true, stored, nil) on success; (false, zeroFrame, nil) when
+// the parent frame was deleted mid-flight (caller decides whether to fall
+// back). Errors are surfaced for storage failures or exhausted retries.
+//
+// Does NOT reuse mutateSubagentsWithRetry. That helper's SubagentStart
+// branch routes through updateSubagents → subagentRefMatches (turn-aware),
+// which would treat a (PID, StartTime, turn_b) request against an existing
+// (PID, StartTime, turn_a) ref as no-match and append a duplicate (spec
+// §3.4 F1 fix). The dedicated process-level lookup here keeps the upsert
+// at exactly one ref per broker.
+func (m *Module) upsertProxyRefForBroker(parent store.Frame, pid int, startTime string, turnID string, broadcastTs int64) (bool, store.Frame, error) {
+	current := parent
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		expected := current.LastSeenAt
+		idx := findProxyRefByBroker(current.Subagents, pid, startTime)
+		// Build the next Subagents slice. Allocate a fresh backing array so
+		// an in-place mutation does not surprise the caller's snapshot or
+		// the store layer (Upsert marshals the slice into JSON).
+		next := make([]agentpkg.SubagentRef, len(current.Subagents))
+		copy(next, current.Subagents)
+		if idx >= 0 {
+			// Unconditional overwrite. A parse-failed upsert (turnID == "")
+			// downgrades the ref's SourceTurnID to empty rather than
+			// preserving the previous turn — see the round-2/round-3
+			// trade-off documented in spec §3.4 (parse-failure semantics):
+			// preserving t_old here would let a legitimate late Stop(t_old)
+			// targeted-detach the still-active ref of the next turn (the
+			// more common race), so we accept the rarer double-malformed
+			// race (parse-failed upsert + parse-failed empty-turn Stop) as
+			// a known limitation instead.
+			next[idx].SourceTurnID = turnID
+			next[idx].StartedAt = broadcastTs
+		} else {
+			next = append(next, agentpkg.SubagentRef{
+				ID:              fmt.Sprintf("proxy:codex:%d:%s", pid, startTime),
+				Type:            "codex",
+				StartedAt:       broadcastTs,
+				SourcePID:       pid,
+				SourceStartTime: startTime,
+				IsProxy:         true,
+				SourceTurnID:    turnID,
+			})
+		}
+		current.Subagents = next
+		current.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if ok {
+			return true, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(parent.PaneID, parent.PID, parent.ProcessStartTime)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if reloaded == nil {
+			return false, store.Frame{}, nil
+		}
+		current = *reloaded
+	}
+	return false, store.Frame{}, fmt.Errorf("upsertProxyRefForBroker: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, parent.FrameID)
+}
+
 // detachProxyRefWithRetry mirrors attachProxyRefWithRetry for the SessionEnd
 // cleanup path: reload parent, filter out the matching proxy ref, persist
 // via UpsertIfUnchanged, retry on conflict. Returns (false, zeroFrame, nil)
@@ -926,6 +1338,58 @@ func (m *Module) detachProxyRefWithRetry(owner store.Frame, senderPID int, sende
 		current = *reloaded
 	}
 	return false, store.Frame{}, fmt.Errorf("proxy detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
+}
+
+// detachProxyRefForSenderTurnWithRetry mirrors detachProxyRefWithRetry
+// for the L2 turn-aware detach path: reload owner, filter out the proxy
+// ref whose (PID, StartTime, TurnID) triple matches, persist via
+// UpsertIfUnchanged, retry on conflict. All three identity fields must
+// match to drop — process-level matches alone are insufficient (spec
+// §3.3.D, see subagentsContainProxySenderTurn doc).
+//
+// Returns (false, zeroFrame, nil) when the ref is already gone or the
+// frame was deleted mid-flight. Caller continues scanning other frames in
+// the pane (top-level loop in removeProxyRefForSenderTurn).
+func (m *Module) detachProxyRefForSenderTurnWithRetry(owner store.Frame, senderPID int, senderStartTime, turnID string, broadcastTs int64) (bool, store.Frame, error) {
+	current := owner
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		hit := -1
+		for i, ref := range current.Subagents {
+			if ref.IsProxy &&
+				ref.SourcePID == senderPID &&
+				ref.SourceStartTime == senderStartTime &&
+				ref.SourceTurnID == turnID {
+				hit = i
+				break
+			}
+		}
+		if hit < 0 {
+			// Ref already removed or turn drift by a concurrent writer.
+			return false, store.Frame{}, nil
+		}
+		expected := current.LastSeenAt
+		filtered := make([]agentpkg.SubagentRef, 0, len(current.Subagents)-1)
+		filtered = append(filtered, current.Subagents[:hit]...)
+		filtered = append(filtered, current.Subagents[hit+1:]...)
+		current.Subagents = filtered
+		current.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if ok {
+			return true, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(owner.PaneID, owner.PID, owner.ProcessStartTime)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if reloaded == nil {
+			return false, store.Frame{}, nil
+		}
+		current = *reloaded
+	}
+	return false, store.Frame{}, fmt.Errorf("proxy turn detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
 }
 
 // firstAliveAgentInTreeFn is the test seam that indirects
