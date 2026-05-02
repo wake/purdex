@@ -5023,4 +5023,88 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 			}
 		}
 	})
+
+	// Row 2: parent cc + 1 ref(PID=42, t1, turnID="") (SessionStart attached)
+	// → PreToolUse from PID=42 raw turn_id="t_a" → shares the same upsert
+	// path as UserPromptSubmit; SourceTurnID set to "t_a" in-place.
+	t.Run("row02_pre_tool_use_shares_upsert_path", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxPreToolUse",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		// PdxPreToolUse derive returns Status="" Detail-only; passing the
+		// equivalent DeriveResult here mirrors the codex deriveCodexStatus
+		// case body (catalog wired in P1-T1).
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Detail: map[string]any{}}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_upserted_on_user_prompt" {
+			t.Fatalf("reason = %q, want proxy_subagent_upserted_on_user_prompt (PreToolUse shares path)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 {
+			t.Fatalf("Subagents = %+v, want exactly 1 ref after PreToolUse upsert", final.Subagents)
+		}
+		if final.Subagents[0].SourceTurnID != "t_a" {
+			t.Fatalf("ref.SourceTurnID = %q, want t_a", final.Subagents[0].SourceTurnID)
+		}
+	})
+
+	// Row 20: pane has 0 frames + 0 refs → PreToolUse from PID=42 with no
+	// proxy parent (findProxyParent returns nil), AgentType=codex → new
+	// lifecycle case must return early with Reason="pre_tool_without_proxy_parent",
+	// NOT fall through to the generic frame-create path. (Spec §3.3.C.1
+	// + §5 row 20 — PreToolUse Status="" would otherwise materialize a
+	// standalone idle frame.)
+	t.Run("row20_pre_tool_no_parent_skips_no_frame_created", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		// No seeded frames; pane is empty.
+		turnAwareEnvNoParent(t)
+
+		// Snapshot frame count before.
+		before, err := m.frames.ListByPane("%5")
+		if err != nil {
+			t.Fatalf("ListByPane before: %v", err)
+		}
+		if len(before) != 0 {
+			t.Fatalf("pane has %d frames before, want 0", len(before))
+		}
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxPreToolUse",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Detail: map[string]any{}}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Decision != "skipped" || meta.Reason != "pre_tool_without_proxy_parent" {
+			t.Fatalf("meta = %+v, want Decision=skipped Reason=pre_tool_without_proxy_parent", meta)
+		}
+
+		// Strict: m.frames count unchanged, no new standalone frame.
+		after, err := m.frames.ListByPane("%5")
+		if err != nil {
+			t.Fatalf("ListByPane after: %v", err)
+		}
+		if len(after) != 0 {
+			t.Fatalf("pane has %d frames after, want 0 (no idle standalone frame); frames=%+v", len(after), after)
+		}
+		// currentStatus must NOT have been written for this session.
+		if _, ok := m.currentStatus["work"]; ok {
+			t.Fatalf("currentStatus[work] was written; PreToolUse no-parent must not broadcast status")
+		}
+	})
 }
