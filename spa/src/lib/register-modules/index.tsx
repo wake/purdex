@@ -179,7 +179,7 @@ export function registerBuiltinModules(): void {
     settings: [{
       localId: 'performance-monitor',
       scope: 'purdex',
-      order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR_PR1,
+      order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR,
       labelKey: 'performance_monitor.title',
       component: PerformanceMonitorSettingsSection,
     }],
@@ -207,9 +207,29 @@ export function registerBuiltinModules(): void {
       {
         localId: 'quick-commands',
         scope: 'purdex',
-        order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS_PR1,
+        order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS,
         labelKey: 'settings.section.quick_commands',
         component: QuickCommandsSettingsSection,
+      },
+    ],
+  })
+
+  // Sync — promoted from a built-in section to a structural module
+  // (spec §4.3, PR-2). Intentionally NOT marked `disableable`: turning
+  // Sync off requires engine + contributor wiring that is a future spec
+  // item. The module-owned route makes Sync render with the puzzle icon
+  // in the sidebar, matching its peer surface area (engine, 7
+  // contributors, dedicated store).
+  registerModule({
+    id: 'sync',
+    name: 'Sync',
+    settings: [
+      {
+        localId: 'sync',
+        scope: 'purdex',
+        order: SETTINGS_ORDER.MODULE_SYNC,
+        labelKey: 'settings.section.sync',
+        component: SyncSection,
       },
     ],
   })
@@ -255,7 +275,9 @@ export function registerBuiltinModules(): void {
     order: SETTINGS_ORDER.INTERFACE,
     component: InterfaceSectionHost,
   })
-  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: SETTINGS_ORDER.SYNC_PR1, component: SyncSection })
+  // Sync was promoted to a structural module above (spec §4.3, PR-2);
+  // its `registerSettingsSection({ id: 'sync', ... })` call lived here
+  // and is intentionally removed.
   // Modules Switchboard — replaces the long-dormant `globalConfig` UI with a
   // module enable/disable panel. Keeps the id `module-config` for URL
   // stability (`/settings/module-config`).

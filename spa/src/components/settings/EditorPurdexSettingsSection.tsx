@@ -5,6 +5,8 @@ import {
   type TabSizeOption,
 } from '../../stores/useEditorSettingsStore'
 import { SettingItem } from './SettingItem'
+import { EditorOpenBehaviorSection } from './editor/EditorOpenBehaviorSection'
+import { EditorLinkDetectionSection } from './editor/EditorLinkDetectionSection'
 
 interface Props {
   ctx: SettingsContextFor<'purdex'>
@@ -15,8 +17,13 @@ interface Props {
  *
  * Renders Monaco preference controls using the canonical
  * `<h2>` + `<SettingItem>` layout shared with Appearance, Terminal,
- * Sync, etc. Buffer CRUD lives in the dedicated `EditorBuffersPane`
- * (spec §4.5). Tiptap wiring is deferred; see the trailing note.
+ * Sync, etc. Spec §4.2 (PR-2) collapses the previously separate
+ * `open-behavior` / `link-detect` sidebar entries into inline segments
+ * within this page — `EditorOpenBehaviorSection` /
+ * `EditorLinkDetectionSection` are reused verbatim, just mounted here
+ * instead of registered as standalone contributions. Buffer CRUD lives
+ * in the dedicated `EditorBuffersPane` (spec §4.5). Tiptap wiring is
+ * deferred; see the trailing note.
  */
 export function EditorPurdexSettingsSection(_props: Props) {
   const t = useI18nStore((s) => s.t)
@@ -117,6 +124,11 @@ export function EditorPurdexSettingsSection(_props: Props) {
           className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
         />
       </SettingItem>
+
+      {/* PR-2 (spec §4.2): inlined segments. The two child components
+          provide their own <h3> + description; no extra wrapping needed. */}
+      <EditorOpenBehaviorSection />
+      <EditorLinkDetectionSection />
 
       <p className="text-xs text-text-muted mt-4">
         {t('settings.editor.tiptap_note')}

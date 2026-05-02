@@ -9,6 +9,26 @@ import { WorkspaceSettingsPage } from '../features/workspace/components/Workspac
 // Persists across unmount/remount (keepAliveCount=0 destroys component on tab switch)
 let lastSection: string | null = null
 
+/**
+ * Legacy URL aliases — keep prior `/settings/<id>` URLs resolving after the
+ * sidebar restructure:
+ *
+ *   - `editor-buffers` → `editor` (HSR collapse, alpha series).
+ *   - `link-detect` / `open-behavior` → `editor` (PR-2 collapse;
+ *     spec §4.2.3).
+ *
+ * The map is consulted before the normal selection logic; the
+ * `setLocation(.., { replace: true })` self-heal path that already runs for
+ * any deep-link rewrites the URL to the canonical id so bookmarks land on a
+ * consistent path. Plain object lookup, no prefix matching — adding a new
+ * alias is a one-line edit.
+ */
+const URL_ALIASES: Record<string, string> = {
+  'editor-buffers': 'editor',
+  'link-detect': 'editor',
+  'open-behavior': 'editor',
+}
+
 /** @internal test-only — must co-locate to access module-scoped variable */
 // eslint-disable-next-line react-refresh/only-export-components
 export function resetLastSection() { lastSection = null }
@@ -66,15 +86,31 @@ function GlobalSettingsPage() {
     : null
   const parts = pathAfterSettings ? pathAfterSettings.split('/') : []
   const rawUrlSection = parts[0] || null
-  // Legacy URL alias: pre-HSR the Editor Buffers tab lived at
-  // `/settings/editor-buffers`; the new Editor section id is `editor`.
-  // Bookmarks / browser history entries must keep resolving — map the old
-  // id to the new one before the normal selection logic runs.
-  const urlSection = rawUrlSection === 'editor-buffers' ? 'editor' : rawUrlSection
+  // Legacy URL aliases (spec §4.2.3): keep prior `/settings/<id>` URLs
+  // resolving after sidebar restructure (`editor-buffers` → `editor` from
+  // the HSR series; `link-detect` / `open-behavior` → `editor` from PR-2).
+  // R3: use Object.hasOwn so a section localId that collides with an
+  // inherited property name (`constructor`, `toString`, etc.) does not
+  // resolve to that prototype function and corrupt routing.
+  const aliasResolved =
+    rawUrlSection !== null && Object.hasOwn(URL_ALIASES, rawUrlSection)
+  const urlSection = aliasResolved
+    ? URL_ALIASES[rawUrlSection as keyof typeof URL_ALIASES]
+    : rawUrlSection
   const urlSubsection = parts[1] || null
+
+  // R2 attack finding: when the URL is a legacy alias (`link-detect` /
+  // `open-behavior` / `editor-buffers`) and the canonical target is not
+  // selectable (e.g. Editor module disabled), do NOT fall back to
+  // `lastSection` — that would land the bookmark on whatever Settings
+  // page the user happened to last visit. Force `firstSelectable` so
+  // legacy bookmarks have a stable, predictable destination.
+  const aliasCanonicalUnselectable =
+    aliasResolved && urlSection !== null && !isSelectable(urlSection)
 
   const [activeSection, setActiveSection] = useState(() => {
     if (urlSection && isSelectable(urlSection)) return urlSection
+    if (aliasCanonicalUnselectable) return firstSelectable
     if (lastSection && isSelectable(lastSection)) return lastSection
     return firstSelectable
   })
@@ -97,7 +133,18 @@ function GlobalSettingsPage() {
   useEffect(() => {
     if (!urlSection) return
     if (!isSelectable(urlSection)) {
-      setLocation(`/settings/${activeSection}`, { replace: true })
+      // R4 P2: when self-healing an alias whose canonical target is
+      // unselectable AFTER mount (history nav / in-app location change
+      // to /settings/link-detect while the page is already on
+      // quick-commands), use firstSelectable instead of activeSection.
+      // The initial-state branch already does this for fresh mounts;
+      // mirror the rule here so bookmark behavior never depends on
+      // prior in-session navigation state.
+      const target = aliasCanonicalUnselectable ? firstSelectable : activeSection
+      if (aliasCanonicalUnselectable && activeSection !== firstSelectable) {
+        setActiveSection(firstSelectable)
+      }
+      setLocation(`/settings/${target}`, { replace: true })
       return
     }
     // Legacy URL alias (spec §4.2): if the raw URL was rewritten to a new

@@ -34,20 +34,28 @@ export function QuickCommandsSettingsSection({ ctx: _ctx }: Props = {}) {
   const dialogOpen = creating || editing !== null
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
+    // Spec §4.4 (PR-2): outer wrapper is bare `<div>` (no `p-6` /
+    // `space-y-X`) — GlobalSettingsPage pads the section container,
+    // and Appearance / Terminal use the same naked outer with element-
+    // level `mb-*` for spacing. Header mirrors those sections (`<h2>`
+    // + `<p>` description) with the `+ New` trigger floated right.
+    <div>
+      <div>
         <h2 className="text-lg text-text-primary">{t('settings.quick_commands.title')}</h2>
-        <button
-          ref={triggerRef}
-          type="button"
-          onClick={() => {
-            setEditing(null)
-            setCreating(true)
-          }}
-          className="flex items-center gap-1 px-3 py-1.5 rounded text-xs text-text-primary border border-border-default hover:bg-surface-secondary cursor-pointer"
-        >
-          <Plus size={12} /> {t('settings.quick_commands.new')}
-        </button>
+        <p className="text-xs text-text-secondary mb-6">{t('settings.quick_commands.desc')}</p>
+        <div className="flex items-center justify-end mb-3">
+          <button
+            ref={triggerRef}
+            type="button"
+            onClick={() => {
+              setEditing(null)
+              setCreating(true)
+            }}
+            className="flex items-center gap-1 px-3 py-1.5 rounded text-xs text-text-primary border border-border-default hover:bg-surface-secondary cursor-pointer"
+          >
+            <Plus size={12} /> {t('settings.quick_commands.new')}
+          </button>
+        </div>
       </div>
 
       {commands.length === 0 ? (

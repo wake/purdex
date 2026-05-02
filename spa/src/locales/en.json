@@ -806,6 +806,7 @@
 
   "settings.section.quick_commands": "Quick Commands",
   "settings.quick_commands.title": "Quick Commands",
+  "settings.quick_commands.desc": "Manage commands and where they appear in the UI.",
   "settings.quick_commands.new": "New",
   "settings.quick_commands.edit": "Edit Quick Command",
   "settings.quick_commands.empty": "No quick commands yet — Start by creating one.",

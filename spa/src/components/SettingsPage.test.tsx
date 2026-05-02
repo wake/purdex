@@ -20,10 +20,11 @@ import { SettingsPage, resetLastSection, useSettingsRoute } from './SettingsPage
 import { registerSettingsSection, clearSettingsSectionRegistry } from '../lib/settings-section-registry'
 import { clearContributions, registerSettingsContribution } from '../lib/settings-contribution-registry'
 import { dispatchSettingsContributions } from '../lib/dispatch-settings-contributions'
-import { clearModuleRegistry } from '../lib/module-registry'
+import { clearModuleRegistry, registerModule } from '../lib/module-registry'
 import type { SettingsContext } from '../lib/settings-contribution-types'
 import { AppearanceSection } from './settings/AppearanceSection'
 import { TerminalSection } from './settings/TerminalSection'
+import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import type { Pane } from '../types/tab'
 
 const settingsPane: Pane = {
@@ -373,6 +374,7 @@ describe('SettingsPage (legacy editor-buffers alias)', () => {
     clearSettingsSectionRegistry()
     clearContributions()
     clearModuleRegistry()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
   })
 
   it('L1-1: redirects /settings/editor-buffers to the new `editor` section', async () => {
@@ -415,5 +417,329 @@ describe('SettingsPage (legacy editor-buffers alias)', () => {
     await waitFor(() => {
       expect((history as string[]).at(-1)).toBe('/settings/editor')
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PR-2 (spec §4.2.3) — URL alias map covers `link-detect` / `open-behavior`
+// in addition to the existing `editor-buffers` legacy alias. Bookmarks /
+// history entries pointing at the now-collapsed sub-section URLs must
+// continue to land on the consolidated Editor page.
+//
+// Fixture rules (plan §Task 2.2):
+//   - `appearance` registered via legacy `registerSettingsSection` (always
+//     selectable; serves as the firstSelectable fallback when editor is
+//     disabled).
+//   - `editor` registered via `registerModule({ disableable: true })` so
+//     `useModuleEnabledStore` can gate it through the dispatch filter.
+// ---------------------------------------------------------------------------
+
+describe('SettingsPage (PR-2 alias map: link-detect / open-behavior)', () => {
+  const EditorBody = () => <div>EDITOR_SECTION_BODY</div>
+  const AppearanceBody = () => <div>APPEARANCE_SECTION_BODY</div>
+  const QcBody = () => <div>QC_SECTION_BODY</div>
+
+  function setupFixture(): void {
+    resetLastSection()
+    clearSettingsSectionRegistry()
+    clearContributions()
+    clearModuleRegistry()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+    // Plan §Task 2.2 calls for `appearance` registered via legacy
+    // `registerSettingsSection` to serve as the firstSelectable fallback.
+    // The legacy adapter pushes onto a queue that is drained on the first
+    // dispatch — but redispatch (e.g. inside 2.2.e after toggling editor
+    // off) will not re-emit those entries because the queue is empty by
+    // then. A non-disableable `registerModule` call is the equivalent
+    // "always-selectable" fixture that survives any number of dispatches.
+    registerModule({
+      id: '_appearance-fixture',
+      name: 'AppearanceFixture',
+      settings: [
+        {
+          localId: 'appearance',
+          scope: 'purdex',
+          order: 0,
+          labelKey: 'Appearance',
+          component: AppearanceBody,
+        },
+      ],
+    })
+    // Editor as a real disableable module so 2.2.e (alias canonical not
+    // selectable) can drive `useModuleEnabledStore.setEnabled('editor', false)`
+    // and the dispatch filter actually drops the contribution.
+    registerModule({
+      id: 'editor',
+      name: 'Editor',
+      disableable: true,
+      settings: [
+        {
+          localId: 'editor',
+          scope: 'purdex',
+          order: 11,
+          labelKey: 'Editor',
+          component: EditorBody,
+        },
+      ],
+    })
+    // Non-disableable third section used by the lastSection-pollution
+    // test ('R2 attack') to simulate a previously-visited Settings page
+    // that lastSection captures, distinct from both appearance (which
+    // would overlap with firstSelectable) and editor (the alias target).
+    registerModule({
+      id: '_qc-fixture',
+      name: 'QcFixture',
+      settings: [
+        {
+          localId: 'quick-commands',
+          scope: 'purdex',
+          order: 12,
+          labelKey: 'QuickCommands',
+          component: QcBody,
+        },
+      ],
+    })
+    dispatchSettingsContributions()
+  }
+
+  beforeEach(() => {
+    setupFixture()
+  })
+
+  it('2.2.a: /settings/link-detect resolves to /settings/editor', async () => {
+    const { hook, history } = memoryLocation({
+      path: '/settings/link-detect',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('EDITOR_SECTION_BODY')).toBeTruthy()
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/editor')
+    })
+  })
+
+  it('2.2.b: /settings/open-behavior resolves to /settings/editor', async () => {
+    const { hook, history } = memoryLocation({
+      path: '/settings/open-behavior',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('EDITOR_SECTION_BODY')).toBeTruthy()
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/editor')
+    })
+  })
+
+  it('2.2.c: /settings/editor-buffers still resolves to /settings/editor (existing alias preserved)', async () => {
+    const { hook, history } = memoryLocation({
+      path: '/settings/editor-buffers',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('EDITOR_SECTION_BODY')).toBeTruthy()
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/editor')
+    })
+  })
+
+  it('2.2.d: /settings/editor stays at /settings/editor (canonical identity, no extra history entry)', async () => {
+    const { hook, history } = memoryLocation({
+      path: '/settings/editor',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('EDITOR_SECTION_BODY')).toBeTruthy()
+    // Allow self-heal effects to settle, then assert the path did not change.
+    await new Promise((r) => setTimeout(r, 30))
+    expect((history as string[]).at(-1)).toBe('/settings/editor')
+  })
+
+  it('2.2.e: when alias canonical (editor) is disabled, URL self-heals to firstSelectable (appearance)', async () => {
+    // Disable the editor module BEFORE rendering so dispatch's filter drops
+    // the editor contribution from `listContributions`. The non-disableable
+    // appearance fixture survives the second dispatch automatically.
+    useModuleEnabledStore.getState().setEnabled('editor', false)
+    dispatchSettingsContributions()
+
+    const { hook, history } = memoryLocation({
+      path: '/settings/link-detect',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    // Editor body must NOT mount because the contribution is gone; the
+    // firstSelectable fallback (appearance) is what renders.
+    expect(screen.queryByText('EDITOR_SECTION_BODY')).toBeNull()
+    expect(screen.getByText('APPEARANCE_SECTION_BODY')).toBeTruthy()
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/appearance')
+    })
+  })
+
+  it('R3 P2: section ids matching Object.prototype names must not resolve through alias map', async () => {
+    // R3 P2 finding: URL_ALIASES is a plain object. A bare bracket
+    // lookup (`URL_ALIASES[rawUrlSection]`) hits inherited properties
+    // for keys like `constructor` / `toString` / `hasOwnProperty`,
+    // returning the prototype function instead of falling through to
+    // the raw section id. Visiting `/settings/constructor` must
+    // resolve to the literal `constructor` localId (here registered
+    // as a fixture) — not be canonicalized to whatever Function.toString
+    // happens to coerce into.
+    registerModule({
+      id: '_proto-fixture',
+      name: 'ProtoFixture',
+      settings: [
+        {
+          localId: 'constructor',
+          scope: 'purdex',
+          order: 50,
+          labelKey: 'Constructor',
+          component: () => <div>PROTO_SECTION_BODY</div>,
+        },
+      ],
+    })
+    dispatchSettingsContributions()
+
+    const { hook } = memoryLocation({
+      path: '/settings/constructor',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('PROTO_SECTION_BODY')).toBeTruthy()
+  })
+
+  it('R2 attack: alias canonical disabled MUST ignore stale lastSection and use firstSelectable', async () => {
+    // R2 attack-side finding: SettingsPage holds a module-level
+    // `lastSection`. If a previous render pushed it (e.g. user just
+    // visited /settings/quick-commands), then the user opens a legacy
+    // alias path with the canonical disabled, the page used to fall
+    // through to that stale lastSection — making bookmark behavior
+    // depend on prior session history. Fix: when the URL is an alias
+    // and the canonical target isn't selectable, ignore lastSection
+    // and use firstSelectable instead.
+
+    // Step 1: pollute lastSection by rendering at /settings/quick-commands.
+    // The non-disableable appearance fixture and quick-commands contribution
+    // are both registered by the suite's beforeEach.
+    {
+      const { hook } = memoryLocation({
+        path: '/settings/quick-commands',
+        record: true,
+      })
+      const { unmount } = render(
+        <Router hook={hook}>
+          <SettingsPage pane={settingsPane} isActive />
+        </Router>,
+      )
+      // Wait for render so lastSection captures 'quick-commands'.
+      await waitFor(() => {
+        expect(screen.getByText('QC_SECTION_BODY')).toBeTruthy()
+      })
+      unmount()
+    }
+
+    // Step 2: disable editor so the alias canonical (editor) is unselectable.
+    useModuleEnabledStore.getState().setEnabled('editor', false)
+    dispatchSettingsContributions()
+
+    // Step 3: open /settings/link-detect — alias resolves to editor,
+    // editor is unselectable, lastSection still 'quick-commands'. The
+    // page MUST land on appearance (firstSelectable), not quick-commands.
+    const { hook, history } = memoryLocation({
+      path: '/settings/link-detect',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.queryByText('QC_SECTION_BODY')).toBeNull()
+    expect(screen.getByText('APPEARANCE_SECTION_BODY')).toBeTruthy()
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/appearance')
+    })
+  })
+
+  it('R4 P2: alias canonical disabled MUST self-heal to firstSelectable even when navigating after mount', async () => {
+    // R4 P2 finding: the initial-state branch handles `aliasCanonicalUnselectable`,
+    // but the self-heal `useEffect` did not — so navigating to the alias path
+    // AFTER mount (history nav / in-app location change) would replace the URL
+    // with `activeSection` (a stale section like quick-commands) instead of
+    // firstSelectable. This test mounts at quick-commands first, disables
+    // editor, then navigates to /settings/link-detect via in-app location
+    // change and expects the URL + body to land on appearance.
+
+    // Step 1: mount at quick-commands so activeSection captures it.
+    const { hook, history, navigate } = memoryLocation({
+      path: '/settings/quick-commands',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    await waitFor(() => {
+      expect(screen.getByText('QC_SECTION_BODY')).toBeTruthy()
+    })
+
+    // Step 2: disable editor so its contribution is dropped from listContributions.
+    useModuleEnabledStore.getState().setEnabled('editor', false)
+    dispatchSettingsContributions()
+
+    // Step 3: in-app navigate to /settings/link-detect (alias canonical = editor,
+    // now unselectable). Self-heal must replace to firstSelectable (appearance),
+    // not stay on quick-commands.
+    navigate('/settings/link-detect')
+
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/appearance')
+    })
+    expect(screen.getByText('APPEARANCE_SECTION_BODY')).toBeTruthy()
+    expect(screen.queryByText('QC_SECTION_BODY')).toBeNull()
+  })
+
+  it('2.2.f: identity case (editor → editor) does not push a duplicate history entry', async () => {
+    const { hook, history } = memoryLocation({
+      path: '/settings/editor',
+      record: true,
+    })
+    const initialLength = (history as string[]).length
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('EDITOR_SECTION_BODY')).toBeTruthy()
+    await new Promise((r) => setTimeout(r, 30))
+    // memoryLocation records every change; with `replace: true` semantics the
+    // entry count should not grow when path === canonical. We assert exactly
+    // no growth so a regression that re-entered setLocation on every render
+    // would fail loudly.
+    expect((history as string[]).length).toBe(initialLength)
   })
 })

@@ -14,8 +14,6 @@ import { ManageBuffersNewTabCard } from '../../components/editor/ManageBuffersNe
 import { EditorHomePathWorkspaceSection } from '../../components/editor/EditorHomePathWorkspaceSection'
 import { EditorHomePathHostSection } from '../../components/editor/EditorHomePathHostSection'
 import { EditorPurdexSettingsSection } from '../../components/settings/EditorPurdexSettingsSection'
-import { EditorLinkDetectionSection } from '../../components/settings/editor/EditorLinkDetectionSection'
-import { EditorOpenBehaviorSection } from '../../components/settings/editor/EditorOpenBehaviorSection'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'])
 const PDF_EXTS = new Set(['pdf'])
@@ -33,29 +31,17 @@ export const editorModuleDefinition: ModuleDefinition = {
     { kind: 'pdf-preview', component: PdfPreviewPane },
   ],
   settings: [
-    // PR-1 transitional values (spec §4.1.4); PR-2 collapses link-detect +
-    // open-behavior into editor and switches `editor` to
-    // SETTINGS_ORDER_PR2_FUTURE.MODULE_EDITOR (=11).
+    // Spec §4.2 (PR-2): the previously separate `link-detect` /
+    // `open-behavior` purdex contributions were collapsed into inline
+    // segments within `EditorPurdexSettingsSection`. The single canonical
+    // purdex entry is `editor`; legacy URLs continue to resolve via
+    // `URL_ALIASES` in `SettingsPage.tsx`.
     {
       localId: 'editor',
       scope: 'purdex',
-      order: SETTINGS_ORDER.MODULE_EDITOR_PR1,
+      order: SETTINGS_ORDER.MODULE_EDITOR,
       labelKey: 'settings.section.editor',
       component: EditorPurdexSettingsSection,
-    },
-    {
-      localId: 'link-detect',
-      scope: 'purdex',
-      order: SETTINGS_ORDER.MODULE_EDITOR_LINK_DETECT_PR1,
-      labelKey: 'settings.editor.link_detect.title',
-      component: EditorLinkDetectionSection,
-    },
-    {
-      localId: 'open-behavior',
-      scope: 'purdex',
-      order: SETTINGS_ORDER.MODULE_EDITOR_OPEN_BEHAVIOR_PR1,
-      labelKey: 'settings.editor.open_behavior.title',
-      component: EditorOpenBehaviorSection,
     },
     {
       localId: 'workspace-home-path',

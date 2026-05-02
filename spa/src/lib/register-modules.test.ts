@@ -353,15 +353,18 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     // `workspace` row stays removed (PR-3 decision 5a — nothing
     // consumes the reserved-items plumbing and the entry itself is dead).
     //
-    // Always-on: appearance / terminal / interface / sync / module-config.
+    // Always-on: appearance / terminal / interface / module-config.
     // Electron / dev-environment / tmux-agent-monitor are gated by
-    // PlatformCapabilities / import.meta.env.DEV.
-    // `editor-buffers` was removed when the Editor module migrated to HSR —
-    // see R1-3 below.
-    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config']) {
+    // PlatformCapabilities / import.meta.env.DEV. `sync` was promoted to
+    // a structural module by PR-2 (spec §4.3) and is no longer a legacy
+    // section; `editor-buffers` was removed when the Editor module
+    // migrated to HSR — see R1-3 below.
+    for (const id of ['appearance', 'terminal', 'interface', 'module-config']) {
       expect(legacyIds).toContain(id)
     }
-    expect(legacyIds.length).toBeGreaterThanOrEqual(5)
+    expect(legacyIds.length).toBeGreaterThanOrEqual(4)
+    // Sync no longer surfaces under the legacy adapter namespace.
+    expect(legacyIds).not.toContain('sync')
   })
 
   it('PR-3: reserved workspace section is no longer registered', () => {
@@ -424,11 +427,13 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     // Legacy view is the filtered `_builtin.legacy-section.*` entries.
     // After the F3 follow-up `module-config` is back (tracked by #574 for
     // removal alongside globalConfig deprecation).  Reserved `workspace`
-    // stays removed.
-    for (const id of ['appearance', 'terminal', 'interface', 'sync', 'module-config']) {
+    // stays removed. PR-2 (spec §4.3) promoted `sync` to a structural
+    // module so it no longer appears in the legacy view.
+    for (const id of ['appearance', 'terminal', 'interface', 'module-config']) {
       expect(legacyView).toContain(id)
     }
     expect(legacyView).not.toContain('workspace')
+    expect(legacyView).not.toContain('sync')
     // Post-HSR: legacy view no longer carries editor-buffers (migrated to
     // editor module's HSR settings — R1-3).
     expect(legacyView).not.toContain('editor-buffers')
@@ -586,20 +591,20 @@ describe('Commit 1: Editor HSR migration', () => {
     clearAll()
   })
 
-  it('R1-1: editor module declares exactly 5 settings entries (3 HSR + link-detect + open-behavior)', () => {
-    // P3 added link-detect (file-path link toggles, migrated from Terminal).
-    // P5 added open-behavior (popupOnMissingFile + autoSearchLayer1) — owned by
-    // Editor because the popup belongs to the file-open pipeline.
+  it('R1-1: editor module declares exactly 3 settings entries after PR-2 consolidation', () => {
+    // Spec §4.2 (PR-2): the previously separate `link-detect` and
+    // `open-behavior` purdex contributions were collapsed into inline
+    // segments inside `EditorPurdexSettingsSection`. The editor module
+    // now exposes one purdex entry (`editor`) plus the existing
+    // workspace-home-path / host-home-path scopes (HSR).
     registerBuiltinModules()
     const editor = getModules().find((m) => m.id === 'editor')
     expect(editor).toBeDefined()
-    expect(editor?.settings?.length).toBe(5)
+    expect(editor?.settings?.length).toBe(3)
     const localIds = editor?.settings?.map((s) => s.localId).sort()
     expect(localIds).toEqual([
       'editor',
       'host-home-path',
-      'link-detect',
-      'open-behavior',
       'workspace-home-path',
     ])
   })
