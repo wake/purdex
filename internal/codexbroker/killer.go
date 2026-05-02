@@ -87,3 +87,17 @@ type KillResult struct {
 	CleanedUp     bool
 	Err           error
 }
+
+// runStep1 writes the audit preimage. Per spec §5.4 line 465, this MUST
+// commit before any signal is sent to the broker, so KillSequence.Run
+// (task P) aborts the entire sequence on any error from this method.
+//
+// Returns the audit file path on success (used by Step 6's
+// AppendPostscript) or "" + err on failure.
+//
+// The broker.log tail is read via ks.FS so test scaffolding can inject
+// in-memory fixtures without touching disk.
+func (ks *KillSequence) runStep1(_ context.Context, decision DecisionResult) (string, error) {
+	tail := ReadBrokerLogTail(ks.Rec.StateDir, ks.FS, DefaultBrokerLogTailLines)
+	return WritePreimage(ks.AuditDir, ks.Rec, decision, tail)
+}
