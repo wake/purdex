@@ -89,9 +89,14 @@ function GlobalSettingsPage() {
   // Legacy URL aliases (spec §4.2.3): keep prior `/settings/<id>` URLs
   // resolving after sidebar restructure (`editor-buffers` → `editor` from
   // the HSR series; `link-detect` / `open-behavior` → `editor` from PR-2).
-  const urlSection = rawUrlSection
-    ? URL_ALIASES[rawUrlSection] ?? rawUrlSection
-    : null
+  // R3: use Object.hasOwn so a section localId that collides with an
+  // inherited property name (`constructor`, `toString`, etc.) does not
+  // resolve to that prototype function and corrupt routing.
+  const aliasResolved =
+    rawUrlSection !== null && Object.hasOwn(URL_ALIASES, rawUrlSection)
+  const urlSection = aliasResolved
+    ? URL_ALIASES[rawUrlSection as keyof typeof URL_ALIASES]
+    : rawUrlSection
   const urlSubsection = parts[1] || null
 
   // R2 attack finding: when the URL is a legacy alias (`link-detect` /
@@ -100,7 +105,6 @@ function GlobalSettingsPage() {
   // `lastSection` — that would land the bookmark on whatever Settings
   // page the user happened to last visit. Force `firstSelectable` so
   // legacy bookmarks have a stable, predictable destination.
-  const aliasResolved = rawUrlSection !== null && rawUrlSection in URL_ALIASES
   const aliasCanonicalUnselectable =
     aliasResolved && urlSection !== null && !isSelectable(urlSection)
 

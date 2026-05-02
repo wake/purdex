@@ -595,6 +595,42 @@ describe('SettingsPage (PR-2 alias map: link-detect / open-behavior)', () => {
     })
   })
 
+  it('R3 P2: section ids matching Object.prototype names must not resolve through alias map', async () => {
+    // R3 P2 finding: URL_ALIASES is a plain object. A bare bracket
+    // lookup (`URL_ALIASES[rawUrlSection]`) hits inherited properties
+    // for keys like `constructor` / `toString` / `hasOwnProperty`,
+    // returning the prototype function instead of falling through to
+    // the raw section id. Visiting `/settings/constructor` must
+    // resolve to the literal `constructor` localId (here registered
+    // as a fixture) — not be canonicalized to whatever Function.toString
+    // happens to coerce into.
+    registerModule({
+      id: '_proto-fixture',
+      name: 'ProtoFixture',
+      settings: [
+        {
+          localId: 'constructor',
+          scope: 'purdex',
+          order: 50,
+          labelKey: 'Constructor',
+          component: () => <div>PROTO_SECTION_BODY</div>,
+        },
+      ],
+    })
+    dispatchSettingsContributions()
+
+    const { hook } = memoryLocation({
+      path: '/settings/constructor',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.getByText('PROTO_SECTION_BODY')).toBeTruthy()
+  })
+
   it('R2 attack: alias canonical disabled MUST ignore stale lastSection and use firstSelectable', async () => {
     // R2 attack-side finding: SettingsPage holds a module-level
     // `lastSection`. If a previous render pushed it (e.g. user just
