@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,6 +120,24 @@ type SweepHandler struct {
 	// Concurrency primitives. Initialised lazily in HandleSweep.
 	globalApplyMu sync.RWMutex
 	perBrokerMu   sync.Map // map[brokerKey]*sync.RWMutex
+
+	// quarantineMu serialises recordQuarantine appends + Save across
+	// concurrent filtered applies and gates IsQuarantined reads from
+	// HandleSweep. Filtered applies for distinct broker keys hold only
+	// their own perBrokerMu but share h.Quarantine; without this mutex
+	// two simultaneous identity-mismatch quarantines could race the
+	// slice append and the file write, dropping one entry.
+	// (PR review R3 finding #3.)
+	quarantineMu sync.RWMutex
+}
+
+// isQuarantinedSafe reads h.Quarantine under quarantineMu.RLock so concurrent
+// recordQuarantine writers (which hold quarantineMu.Lock) cannot race a slice
+// growth observed by IsQuarantined.
+func (h *SweepHandler) isQuarantinedSafe(key string) bool {
+	h.quarantineMu.RLock()
+	defer h.quarantineMu.RUnlock()
+	return IsQuarantined(h.Quarantine, key)
 }
 
 // HandleSweep is the HTTP entry point.
@@ -210,7 +230,7 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 		if brokerKey != "" && rec.Key != brokerKey {
 			continue
 		}
-		if IsQuarantined(h.Quarantine, rec.Key) {
+		if h.isQuarantinedSafe(rec.Key) {
 			continue
 		}
 
@@ -349,6 +369,13 @@ func (h *SweepHandler) brokerMu(key string) *sync.RWMutex {
 // skipped (added=true, error=nil); the in-memory append still protects
 // the current daemon's lifetime against retry-loops.
 func (h *SweepHandler) recordQuarantine(ctx context.Context, rec BrokerRecord) (bool, error) {
+	// Snapshot fingerprint *outside* the lock — uses the lister and may
+	// take ~1s; we don't want to serialise lister calls.
+	fp := h.snapshotFingerprint(ctx, rec)
+
+	h.quarantineMu.Lock()
+	defer h.quarantineMu.Unlock()
+
 	if h.Quarantine == nil {
 		h.Quarantine = &QuarantineFile{Version: 1}
 	}
@@ -357,7 +384,6 @@ func (h *SweepHandler) recordQuarantine(ctx context.Context, rec BrokerRecord) (
 	if retention <= 0 {
 		retention = 7
 	}
-	fp := h.snapshotFingerprint(ctx, rec)
 	entry := QuarantineEntry{
 		BrokerKey:     rec.Key,
 		PID:           rec.PID,
@@ -375,6 +401,12 @@ func (h *SweepHandler) recordQuarantine(ctx context.Context, rec BrokerRecord) (
 	if h.QuarantinePath == "" {
 		// In-memory only; warn through return but treat as added.
 		return true, nil
+	}
+	// Ensure parent directory exists — on a fresh profile audit/ may not
+	// exist yet because Step 0 mismatch returns before WritePreimage runs.
+	// (PR review R3 finding #2.)
+	if err := os.MkdirAll(filepath.Dir(h.QuarantinePath), 0o755); err != nil {
+		return true, err
 	}
 	if err := store.Save(h.QuarantinePath, h.Quarantine); err != nil {
 		return true, err

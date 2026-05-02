@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -928,6 +929,103 @@ func TestSweepHandler_IdentityMismatch_PersistsQuarantine(t *testing.T) {
 	_ = json.NewDecoder(w2.Body).Decode(&resp2)
 	if len(resp2.Evaluated) != 0 {
 		t.Errorf("expected k1 skipped by quarantine on 2nd sweep; got evaluated=%+v", resp2.Evaluated)
+	}
+}
+
+// TestSweepHandler_IdentityMismatch_QuarantinePathParentMissing — PR review
+// R3 finding #2: on a fresh profile, audit/ may not exist when Step 0
+// identity mismatch occurs (Step 0 returns before WritePreimage creates the
+// audit dir). recordQuarantine must MkdirAll the parent before saving.
+func TestSweepHandler_IdentityMismatch_QuarantinePathParentMissing(t *testing.T) {
+	tmp := t.TempDir()
+	// Use a parent that does NOT yet exist — recordQuarantine must create it.
+	qPath := filepath.Join(tmp, "audit", "quarantine.json")
+	qf := &QuarantineFile{Version: 1}
+	scan := &fakeScanner{brokers: []BrokerRecord{{
+		Key:    "k1",
+		PID:    4321,
+		Lstart: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+	}}}
+	eval := &stubDecisionEvaluator{by: map[string]DecisionResult{
+		"k1": {Kill: true, Reason: "foreign_quarantine"},
+	}}
+	h := newSweepHandlerForTest(scan, &fakeKiller{}, eval, emptyRegistry{}, qf)
+	h.KillerFactory = func(_ BrokerRecord) KillRunner { return identityMismatchKiller{} }
+	h.QuarantineStore = &QuarantineStore{}
+	h.QuarantinePath = qPath
+	h.Lister = NewFakeProcessLister([]RawProcess{{
+		PID: 4321, Lstart: time.Now(), Cmdline: "/usr/bin/zsh",
+	}})
+
+	req := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=apply&brokerKey=k1", nil)
+	w := httptest.NewRecorder()
+	h.HandleSweep(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp SweepResponse
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	for _, e := range resp.Errors {
+		if strings.Contains(e, "quarantine save failed") {
+			t.Errorf("expected MkdirAll to enable save; got error %q", e)
+		}
+	}
+	if _, err := os.Stat(qPath); err != nil {
+		t.Errorf("expected quarantine.json saved into freshly-created parent dir; stat err: %v", err)
+	}
+}
+
+// TestSweepHandler_IdentityMismatch_ConcurrentQuarantine_NoRace — PR review
+// R3 finding #3: filtered applies for distinct broker keys hold only their
+// own perBrokerMu but share h.Quarantine. Two simultaneous identity-mismatch
+// quarantines must be serialised so neither slice append nor file save races.
+// Asserts both entries land and the file persists both.
+func TestSweepHandler_IdentityMismatch_ConcurrentQuarantine_NoRace(t *testing.T) {
+	tmp := t.TempDir()
+	qPath := filepath.Join(tmp, "quarantine.json")
+	qf := &QuarantineFile{Version: 1}
+	rec1 := BrokerRecord{Key: "k1", PID: 1001, Lstart: time.Now()}
+	rec2 := BrokerRecord{Key: "k2", PID: 2002, Lstart: time.Now()}
+	scan := &fakeScanner{brokers: []BrokerRecord{rec1, rec2}}
+	eval := &stubDecisionEvaluator{by: map[string]DecisionResult{
+		"k1": {Kill: true, Reason: "foreign_quarantine"},
+		"k2": {Kill: true, Reason: "foreign_quarantine"},
+	}}
+	h := newSweepHandlerForTest(scan, &fakeKiller{}, eval, emptyRegistry{}, qf)
+	h.KillerFactory = func(_ BrokerRecord) KillRunner { return identityMismatchKiller{} }
+	h.QuarantineStore = &QuarantineStore{}
+	h.QuarantinePath = qPath
+	h.Lister = NewFakeProcessLister([]RawProcess{
+		{PID: 1001, Lstart: time.Now(), Cmdline: "/usr/bin/zsh"},
+		{PID: 2002, Lstart: time.Now(), Cmdline: "/usr/bin/zsh"},
+	})
+
+	// Fire two filtered applies in parallel. Per the lock table they take
+	// disjoint perBrokerMu but share globalApplyMu.RLock — so they run
+	// concurrently and would race on h.Quarantine without quarantineMu.
+	var wg sync.WaitGroup
+	doApply := func(key string) {
+		defer wg.Done()
+		req := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=apply&brokerKey="+key, nil)
+		w := httptest.NewRecorder()
+		h.HandleSweep(w, req)
+	}
+	wg.Add(2)
+	go doApply("k1")
+	go doApply("k2")
+	wg.Wait()
+
+	if !IsQuarantined(qf, "k1") || !IsQuarantined(qf, "k2") {
+		t.Errorf("both keys must be quarantined; got entries=%+v", qf.Entries)
+	}
+	// Reload from disk and confirm both entries persisted (the actual race
+	// would drop one entry on disk even if memory looks consistent).
+	loaded, err := (&QuarantineStore{}).Load(qPath)
+	if err != nil {
+		t.Fatalf("load quarantine.json: %v", err)
+	}
+	if !IsQuarantined(loaded, "k1") || !IsQuarantined(loaded, "k2") {
+		t.Errorf("both keys must persist on disk; got %+v", loaded.Entries)
 	}
 }
 

@@ -56,7 +56,16 @@ func VerifyIdentity(rec BrokerRecord, lister ProcessLister) (bool, string) {
 		if !strings.Contains(row.Cmdline, brokerTaskWorkerCmdlineMarker) {
 			return false, "cmdline-mismatch"
 		}
-		// Lstart tolerance check.
+		// Lstart tolerance check. Guard against int64 overflow in
+		// time.Sub when one side is the zero value (year 1 vs now would
+		// produce math.MinInt64 nanoseconds, which negates to itself —
+		// the abs trick at line below silently passes through). PR
+		// review R3 finding A: explicit zero-equality comparison closes
+		// the loophole where a real ps row with an unset Lstart would
+		// be reported as "match".
+		if row.Lstart.IsZero() != rec.Lstart.IsZero() {
+			return false, "lstart-zero-mismatch"
+		}
 		drift := row.Lstart.Sub(rec.Lstart)
 		if drift < 0 {
 			drift = -drift

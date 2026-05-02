@@ -75,6 +75,41 @@ func TestVerifyIdentity_CmdlineMismatch(t *testing.T) {
 	}
 }
 
+// TestVerifyIdentity_LstartZeroVsNonZero — PR review R3 finding A regression:
+// time.Time.Sub between time.Time{} (year 1) and time.Now() overflows to
+// math.MinInt64 nanoseconds, which negates to itself, so the abs-then-tolerance
+// trick silently passes through as "match". The explicit zero-equality guard
+// closes that loophole.
+func TestVerifyIdentity_LstartZeroVsNonZero(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lister := NewFakeProcessLister([]RawProcess{{
+		PID:     4321,
+		Lstart:  time.Time{}, // zero
+		Cmdline: "node app-server-broker.mjs",
+	}})
+	ok, detail := VerifyIdentity(rec, lister)
+	if ok {
+		t.Errorf("expected ok=false on zero vs non-zero Lstart, got match")
+	}
+	if detail != "lstart-zero-mismatch" {
+		t.Errorf("expected detail=lstart-zero-mismatch, got %q", detail)
+	}
+}
+
+// TestVerifyIdentity_LstartBothZero — both zero is treated as match (does
+// happen on platforms or fixtures where Lstart is intentionally unset).
+func TestVerifyIdentity_LstartBothZero(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321} // zero Lstart
+	lister := NewFakeProcessLister([]RawProcess{{
+		PID:     4321,
+		Cmdline: "node app-server-broker.mjs",
+	}})
+	ok, _ := VerifyIdentity(rec, lister)
+	if !ok {
+		t.Errorf("expected ok=true when both Lstart are zero")
+	}
+}
+
 // TestVerifyIdentity_LstartTolerance_1s — lstart drift within ±1s is
 // accepted (round-trip via ps formatting can shift seconds).
 func TestVerifyIdentity_LstartTolerance_1s(t *testing.T) {
@@ -345,9 +380,10 @@ func fakePgidLooker(pgid int, err error) func(int) (int, error) {
 // TestStepSIGTERM_ProcessExitsGracefully — fake signaller records SIGTERM;
 // after the kill, the lister returns no row for the pid → step returns true.
 func TestStepSIGTERM_ProcessExitsGracefully(t *testing.T) {
-	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lstart := time.Now()
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
 	lister := newDynamicLister([]RawProcess{{
-		PID: 4321, Cmdline: "node app-server-broker.mjs",
+		PID: 4321, Cmdline: "node app-server-broker.mjs", Lstart: lstart,
 	}})
 	sig := &capturingSignaller{clears: lister}
 	ks := &KillSequence{
@@ -373,9 +409,10 @@ func TestStepSIGTERM_ProcessExitsGracefully(t *testing.T) {
 // TestStepSIGTERM_Timeout_ProcStillAlive — signaller does not clear the row;
 // stepSIGTERM should time out → false.
 func TestStepSIGTERM_Timeout_ProcStillAlive(t *testing.T) {
-	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lstart := time.Now()
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
 	lister := newDynamicLister([]RawProcess{{
-		PID: 4321, Cmdline: "node app-server-broker.mjs",
+		PID: 4321, Cmdline: "node app-server-broker.mjs", Lstart: lstart,
 	}})
 	sig := &capturingSignaller{} // no clears → process stays alive
 	ks := &KillSequence{
@@ -393,9 +430,10 @@ func TestStepSIGTERM_Timeout_ProcStillAlive(t *testing.T) {
 // TestStepSIGTERM_PgidLeOne_Refused — getpgid returns 1 → stepSIGTERM
 // refuses to signal and returns false. Defends against init / kernel oddities.
 func TestStepSIGTERM_PgidLeOne_Refused(t *testing.T) {
-	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lstart := time.Now()
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
 	lister := newDynamicLister([]RawProcess{{
-		PID: 4321, Cmdline: "node app-server-broker.mjs",
+		PID: 4321, Cmdline: "node app-server-broker.mjs", Lstart: lstart,
 	}})
 	sig := &capturingSignaller{}
 	ks := &KillSequence{
@@ -416,11 +454,12 @@ func TestStepSIGTERM_PgidLeOne_Refused(t *testing.T) {
 // TestStepSIGTERM_PgidLookupError_Refused — getpgid returns an error → no
 // signal sent. (Kernel weirdness defence.)
 func TestStepSIGTERM_PgidLookupError_Refused(t *testing.T) {
-	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lstart := time.Now()
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
 	sig := &capturingSignaller{}
 	ks := &KillSequence{
 		Rec:         rec,
-		Lister:      newDynamicLister([]RawProcess{{PID: 4321, Cmdline: "node app-server-broker.mjs"}}),
+		Lister:      newDynamicLister([]RawProcess{{PID: 4321, Cmdline: "node app-server-broker.mjs", Lstart: lstart}}),
 		Signaller:   sig,
 		PgidLookup:  fakePgidLooker(0, errors.New("getpgid ESRCH")),
 		TermTimeout: 100 * time.Millisecond,
@@ -436,9 +475,10 @@ func TestStepSIGTERM_PgidLookupError_Refused(t *testing.T) {
 // TestStepSIGKILL_KillsStubbornProcess — signaller clears the row; lister
 // returns empty → stepSIGKILL true.
 func TestStepSIGKILL_KillsStubbornProcess(t *testing.T) {
-	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lstart := time.Now()
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
 	lister := newDynamicLister([]RawProcess{{
-		PID: 4321, Cmdline: "node app-server-broker.mjs",
+		PID: 4321, Cmdline: "node app-server-broker.mjs", Lstart: lstart,
 	}})
 	sig := &capturingSignaller{clears: lister}
 	ks := &KillSequence{
@@ -460,9 +500,10 @@ func TestStepSIGKILL_KillsStubbornProcess(t *testing.T) {
 // TestStepSIGKILL_2sTimeout_Partial — lister never returns empty → false.
 // Caller (Run wiring in task P) records KillOk=false on the result.
 func TestStepSIGKILL_2sTimeout_Partial(t *testing.T) {
-	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lstart := time.Now()
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
 	lister := newDynamicLister([]RawProcess{{
-		PID: 4321, Cmdline: "node app-server-broker.mjs",
+		PID: 4321, Cmdline: "node app-server-broker.mjs", Lstart: lstart,
 	}})
 	sig := &capturingSignaller{}
 	ks := &KillSequence{
@@ -479,11 +520,12 @@ func TestStepSIGKILL_2sTimeout_Partial(t *testing.T) {
 
 // TestStepSIGKILL_PgidLeOne_Refused — pgid=1 → stepSIGKILL refuses.
 func TestStepSIGKILL_PgidLeOne_Refused(t *testing.T) {
-	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lstart := time.Now()
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
 	sig := &capturingSignaller{}
 	ks := &KillSequence{
 		Rec:         rec,
-		Lister:      newDynamicLister([]RawProcess{{PID: 4321, Cmdline: "node app-server-broker.mjs"}}),
+		Lister:      newDynamicLister([]RawProcess{{PID: 4321, Cmdline: "node app-server-broker.mjs", Lstart: lstart}}),
 		Signaller:   sig,
 		PgidLookup:  fakePgidLooker(1, nil),
 		KillTimeout: 100 * time.Millisecond,
