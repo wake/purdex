@@ -209,9 +209,9 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			break
 		}
 		// Gate 2 — sender owns its own frame. Existing narrow column update
-		// (frame_ops.go:440 UpdateHookPath branch) handles status / last_seen
-		// refresh; L2 turn-aware identity only exists on the parent's proxy
-		// ref, never on the sender's own frame.
+		// (UpdateHookPath branch above) handles status / last_seen refresh;
+		// L2 turn-aware identity only exists on the parent's proxy ref,
+		// never on the sender's own frame.
 		if frame != nil {
 			break
 		}
@@ -224,10 +224,11 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// No proxy parent. PreToolUse must NOT fall through to the
 			// generic frame-create path: it carries no Status (DeriveResult
 			// returns Status="" for PdxPreToolUse) and would materialize a
-			// standalone idle frame at frame_ops.go:475-485, contradicting
-			// "broker is starting work for a turn" semantics (spec §3.3.C.1
-			// + §5 row 20). UserPromptSubmit's existing Status=Running
-			// derive path stays unchanged for backward compat (v4 behavior).
+			// standalone idle frame in the SessionStart attach branch below,
+			// contradicting "broker is starting work for a turn" semantics
+			// (spec §3.3.C.1 + §5 row 20). UserPromptSubmit's existing
+			// Status=Running derive path stays unchanged for backward compat
+			// (v4 behavior).
 			if req.PurdexName == "PdxPreToolUse" {
 				projection, perr2 := m.projectPane(req.TmuxPaneID)
 				return projection, FrameTraceMeta{
@@ -1093,7 +1094,7 @@ func (m *Module) removeProxyRefForSender(paneID string, senderPID int, senderSta
 	return false, store.Frame{}, nil, nil, nil
 }
 
-// removeProxyRefForSenderTurn mirrors removeProxyRefForSender:798 with a
+// removeProxyRefForSenderTurn mirrors removeProxyRefForSender with a
 // turn-aware identity gate (L2 spec §3.3.D). Scans the pane's frames for
 // the proxy SubagentRef whose (SourcePID, SourceStartTime, SourceTurnID)
 // triple matches the sender + turn that emitted Stop, then drops only that
@@ -1222,8 +1223,8 @@ func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.Subage
 //     duplicate even when SourceTurnID differs from the incoming turnID.
 //   - Otherwise, append a new proxy ref with full identity. The ID format
 //     is "proxy:codex:<pid>:<startTime>" matching the SessionStart fast-
-//     path (frame_ops.go:218) so a SessionStart followed by an upsert on
-//     the same broker reuses the same ID rather than diverging.
+//     path's proxy attach branch so a SessionStart followed by an upsert
+//     on the same broker reuses the same ID rather than diverging.
 //
 // Each attempt re-issues UpsertIfUnchanged; on conflict the parent is
 // reloaded via GetByIdentity and findProxyRefByBroker re-runs against the
@@ -1337,7 +1338,7 @@ func (m *Module) detachProxyRefWithRetry(owner store.Frame, senderPID int, sende
 	return false, store.Frame{}, fmt.Errorf("proxy detach: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, owner.FrameID)
 }
 
-// detachProxyRefForSenderTurnWithRetry mirrors detachProxyRefWithRetry:887
+// detachProxyRefForSenderTurnWithRetry mirrors detachProxyRefWithRetry
 // for the L2 turn-aware detach path: reload owner, filter out the proxy
 // ref whose (PID, StartTime, TurnID) triple matches, persist via
 // UpsertIfUnchanged, retry on conflict. All three identity fields must

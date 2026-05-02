@@ -4583,7 +4583,7 @@ func TestSubagentsContainProxySenderTurn(t *testing.T) {
 }
 
 // TestRemoveProxyRefForSenderTurn_PaneScan covers the top-level pane-scan
-// helper. Mirrors removeProxyRefForSender:798 control flow but adds a
+// helper. Mirrors removeProxyRefForSender control flow but adds a
 // turnID gate so only the matching turn's ref is detached. 5 cases.
 func TestRemoveProxyRefForSenderTurn_PaneScan(t *testing.T) {
 	t.Run("a — single frame with matching ref detaches", func(t *testing.T) {
@@ -4770,7 +4770,7 @@ func TestRemoveProxyRefForSenderTurn_PaneScan(t *testing.T) {
 }
 
 // TestDetachProxyRefForSenderTurnWithRetry_RetryOnConflict covers the
-// retry path on the frame-level helper. Mirrors detachProxyRefWithRetry:887
+// retry path on the frame-level helper. Mirrors detachProxyRefWithRetry
 // retry semantics with the turn-aware filter.
 func TestDetachProxyRefForSenderTurnWithRetry_RetryOnConflict(t *testing.T) {
 	m := newProxyTestModule(t)
