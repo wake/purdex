@@ -586,20 +586,20 @@ describe('Commit 1: Editor HSR migration', () => {
     clearAll()
   })
 
-  it('R1-1: editor module declares exactly 5 settings entries (3 HSR + link-detect + open-behavior)', () => {
-    // P3 added link-detect (file-path link toggles, migrated from Terminal).
-    // P5 added open-behavior (popupOnMissingFile + autoSearchLayer1) — owned by
-    // Editor because the popup belongs to the file-open pipeline.
+  it('R1-1: editor module declares exactly 3 settings entries after PR-2 consolidation', () => {
+    // Spec §4.2 (PR-2): the previously separate `link-detect` and
+    // `open-behavior` purdex contributions were collapsed into inline
+    // segments inside `EditorPurdexSettingsSection`. The editor module
+    // now exposes one purdex entry (`editor`) plus the existing
+    // workspace-home-path / host-home-path scopes (HSR).
     registerBuiltinModules()
     const editor = getModules().find((m) => m.id === 'editor')
     expect(editor).toBeDefined()
-    expect(editor?.settings?.length).toBe(5)
+    expect(editor?.settings?.length).toBe(3)
     const localIds = editor?.settings?.map((s) => s.localId).sort()
     expect(localIds).toEqual([
       'editor',
       'host-home-path',
-      'link-detect',
-      'open-behavior',
       'workspace-home-path',
     ])
   })
