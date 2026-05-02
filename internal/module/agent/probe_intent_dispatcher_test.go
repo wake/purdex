@@ -801,19 +801,31 @@ func TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown(t *testing.T) {
 	}, "rearm with new generation after graceWindow drop (F1 round-3 follow-up)")
 }
 
-// TestConsumeSignals_ZeroEmitDetectorExit_TearsDownAndRearms pins
-// W6-6 R4 F6: a detector that returns WITHOUT emitting any Signal
-// (e.g. screen-change watchLoop baseline-fail observed via wh.Done())
-// must trigger consumeSignals' zero-emit teardown — !appliedAny path —
-// which removes the active intent so a subsequent applyStatus on the
-// same OnEntryStatus rearms a fresh detector.
+// TestConsumeSignals_ZeroEmitDetectorExit_TearsDownAndRearms pins the
+// generic dispatcher hygiene: any detector that returns WITHOUT
+// emitting any Signal — for example a one-shot detector that observes
+// no qualifying event before its ctx cancel, or a guard-drop path
+// that bails before any Signal is produced — must trigger
+// consumeSignals' zero-emit teardown (`!appliedAny` branch), which
+// removes the active intent so a subsequent applyStatus on the same
+// OnEntryStatus can rearm a fresh detector.
+//
+// Note (W6-6 R5 F7): the W6-6 R4 F6 "ScreenChange watchLoop
+// baseline-fail observed via wh.Done()" case that originally
+// motivated this test was reverted by F7. Baseline capture failure
+// is now retried inside the probe layer rather than surfacing as a
+// detector lifecycle event, so the screen-change detector no longer
+// returns zero-emit on transient capture failures. This pin still
+// matters as a Kind-agnostic dispatcher hygiene guard: it prevents
+// any future detector from silently stranding its active intent if
+// it returns without emitting and without lifecycle ctx cancel.
 //
 // Without this end-to-end pin, regressing the dispatcher's existing
 // `if !appliedAny` teardown (or removing the rearm via applyStatus)
-// would silently strand the watcherless intent: the active entry
-// would persist, case-4 lifecycle target match would short-circuit
-// every subsequent Waiting hook, and approval ScreenChanges would be
-// missed indefinitely until an unrelated lifecycle cancellation.
+// would silently strand a watcherless intent: the active entry would
+// persist, case-4 lifecycle target match would short-circuit every
+// subsequent Waiting hook, and qualifying events would be missed
+// indefinitely until an unrelated lifecycle cancellation.
 //
 // Test scaffolding:
 //   - detector stub returns immediately (zero emits) on first arm,

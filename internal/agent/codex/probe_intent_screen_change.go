@@ -113,24 +113,27 @@ const screenChangeTopLines = 10
 //	        return err == nil && t == "codex"
 //	    }
 //
-// Why observe wh.Done() (v6.2 round 4 R4 P2 fix):
+// Detector lifecycle vs WatchHandle.Done() (W6-6 R5 F7 contract):
 //
-//	prober.Watch starts a watchLoop goroutine that may exit immediately
-//	if the baseline capture-pane call fails (transient tmux error, pane
-//	just closed, server hiccup). The cb is never invoked in that case,
-//	so emittedCh stays open; ctx is never cancelled by the dispatcher
-//	(which still believes the intent is armed); the detector main
-//	goroutine would park forever, leaving an active-but-watcherless
-//	intent that case-4 lifecycle skips on subsequent Waiting hooks.
-//	Observing wh.Done() lets the detector return promptly when the
-//	watchLoop has exited, so the wrap goroutine closes out and
-//	consumeSignals' zero-emit teardown clears the active entry and
-//	re-arms a fresh detector via applyStatus.
+//	The Watch() call returns a WatchHandle whose Done() channel closes
+//	when the underlying watchLoop goroutine exits. That signal is used
+//	for ownership-aware teardown (StopWatchOwned via F1) and as a
+//	teardown-hygiene observation point in tests, but it is NOT a
+//	detector-level lifecycle signal. The detector's state machine is
+//	driven exclusively by ScreenStable / ScreenChanged callbacks and
+//	ctx.Done(); baseline capture failure is a probe-internal transient
+//	condition that the watchLoop now retries (see
+//	internal/agent/probe/activity.go's watchLoop GoDoc), so the
+//	detector must not observe Done() as "watcher gone, give up".
 //
-//	Zero-value WatchHandle's Done() returns nil (disabled select case)
-//	— fake watchers in tests can keep returning WatchHandle{} without
-//	triggering premature exit. Production prober binds a real
-//	close-on-exit channel.
+//	An earlier R4 F6 attempt added `case <-wh.Done()` to the main
+//	select arm so the detector could re-arm via the dispatcher's
+//	!appliedAny teardown path on persistent capture-pane failure.
+//	R5 codex review found that pattern produced a tight rearm loop
+//	under sustained tmux failures (zero-emit return → teardown →
+//	applyStatus rearm → next Watch fails baseline → repeat). F7
+//	reverts the observation here and shifts the retry into the probe
+//	layer; baseline failure no longer surfaces as a lifecycle event.
 //
 // Why mutex-protected closed bool (v6.1 round 6 P1 fix):
 //
@@ -241,15 +244,13 @@ func StartScreenChangeDetector(
 		}
 	}
 	wh := prober.Watch(paneID, probe.WatchOptions{TopLines: screenChangeTopLines}, cb)
+	// W6-6 R5 F7: detector lifecycle is driven only by emit (via cb) or
+	// ctx.Done(). wh.Done() is intentionally NOT observed here — see
+	// the GoDoc above for the reasoning. Baseline capture failure is a
+	// probe-internal transient state handled by the watchLoop's retry
+	// behavior, not a detector lifecycle event.
 	select {
 	case <-emittedCh:
-	case <-wh.Done():
-		// W6-6 R4 F6: watchLoop exited before any emit — typically
-		// initial capture-pane failure (transient tmux unresponsive,
-		// pane just closed). Detector returns without emit; the wrap
-		// goroutine closes `out`; consumeSignals' !appliedAny teardown
-		// clears the active intent and re-arms via applyStatus when
-		// currentStatus is still in OnEntryStatus.
 	case <-ctx.Done():
 	}
 	// W6-6 R2 F1 fix: ownership-aware teardown. StopWatchOwned only

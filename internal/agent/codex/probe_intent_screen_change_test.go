@@ -3,6 +3,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/agent/probe"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // fakeWatcher is a deterministic screenWatcher test double. Watch
@@ -579,15 +581,112 @@ func TestStartScreenChangeDetector_NoCloseRace(t *testing.T) {
 	cancel()
 }
 
-// W6-6 R5 F7: the prior R4 F6 test
-// `TestStartScreenChangeDetector_WatchDoneBeforeEmit_ReturnsAndStopsOwned`
-// is removed in this commit because the probe contract no longer treats
-// baseline capture failure as a watcher lifecycle event — watchLoop now
-// retries instead of self-cleaning + closing Done(). The detector-side
-// revert (removing `case <-wh.Done()`) and the new
-// `TransientBaselineFailureRecoversAndEmits` regression pin land in the
-// follow-up F7-2 commit, after the probe layer's retry behavior is
-// already in place.
+// W6-6 R5 F7 detector-side regression pin: a transient baseline-capture
+// failure must NOT cause the detector to give up. The probe layer's
+// watchLoop retries the baseline silently (see
+// internal/agent/probe/activity_test.go for the probe-level
+// pins); the detector should observe a normal Phase A → Phase B
+// progression on recovery and emit exactly one Signal.
+//
+// This test uses a real *probe.Prober wired to a scripted top-lines
+// executor whose first call returns an error (transient capture-pane
+// failure) and subsequent calls return real content. The detector must
+// see ScreenStable from the eventually-stable post-recovery captures
+// and then emit ScreenChanged when the content flips. Pinning that
+// "F6 lifecycle observation" is gone for good — if a future change
+// re-adds `case <-wh.Done()` to the detector's main select, the
+// detector would still pass this test (Done() doesn't close on
+// baseline failure under F7), but the failure mode the F6 test
+// originally guarded against is now handled inside the probe layer
+// where it belongs.
+type scriptedTopLinesExecutor struct {
+	*tmux.FakeExecutor
+
+	mu     sync.Mutex
+	target string
+	script []scriptedTopLinesStep
+}
+
+type scriptedTopLinesStep struct {
+	content string
+	err     error
+}
+
+func (e *scriptedTopLinesExecutor) CapturePaneTopLines(target string, n int) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if target != e.target {
+		return "", errors.New("scriptedTopLines: unexpected target")
+	}
+	if len(e.script) == 0 {
+		return "", errors.New("scriptedTopLines: empty script")
+	}
+	var step scriptedTopLinesStep
+	if len(e.script) == 1 {
+		step = e.script[0] // sticky last step
+	} else {
+		step = e.script[0]
+		e.script = e.script[1:]
+	}
+	return step.content, step.err
+}
+
+func TestStartScreenChangeDetector_TransientBaselineFailureRecoversAndEmits(t *testing.T) {
+	// Real prober uses the production poll interval (500ms). The
+	// detector's screen-watcher GoDoc surface is intentionally narrow
+	// (Watch / StopWatchOwned), so reaching across packages to override
+	// the poll interval would couple this test to internal probe
+	// helpers. Default cadence: baseline retry → seed → 3 stable ticks
+	// (≈1.5s) → ScreenStable → 1 diff tick (≈0.5s) → ScreenChanged → emit.
+	// Total ≈ 2-3s; we allow 5s for CI flake margin.
+	exec := &scriptedTopLinesExecutor{
+		FakeExecutor: tmux.NewFakeExecutor(),
+		target:       "%5",
+		script: []scriptedTopLinesStep{
+			{err: errors.New("transient capture failure")}, // baseline retry round 1
+			{content: "stable-screen"},                      // first success: seeds baseline silently
+			{content: "stable-screen"},                      // stable tick 1
+			{content: "stable-screen"},                      // stable tick 2
+			{content: "stable-screen"},                      // stable tick 3 → ScreenStable
+			{content: "approval-rendered"},                  // sticky → fires ScreenChanged
+		},
+	}
+	prober := probe.New(exec)
+
+	out := make(chan agent.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	t.Cleanup(func() { prober.StopAllWatches() })
+
+	done := runDetector(ctx, prober, func() bool { return true }, "%5", 4242, out)
+
+	// Detector must emit exactly one Signal once the watcher recovers
+	// from the transient baseline failure (Phase A from stable ticks,
+	// Phase B from "approval-rendered" diff).
+	select {
+	case sig := <-out:
+		if sig.Kind != agent.ProbeIntentKindScreenChange {
+			t.Fatalf("Kind = %q, want %q", sig.Kind, agent.ProbeIntentKindScreenChange)
+		}
+		if sig.PaneID != "%5" {
+			t.Fatalf("PaneID = %q, want %%5", sig.PaneID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("detector did not emit after baseline retry recovery — F7 contract regression?")
+	}
+
+	// Detector should now return through emittedCh.
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("detector did not return after emit")
+	}
+
+	// Watcher must be cleaned up by StopWatchOwned post-emit.
+	if prober.HasWatcher("%5") {
+		t.Error("HasWatcher still true after detector teardown")
+	}
+}
 
 // --- P1-T5: onScreenChange mapper tests (internal — exercises the
 // unexported mapper directly, mirroring the onProcessDead pattern in
