@@ -684,6 +684,45 @@ describe('SettingsPage (PR-2 alias map: link-detect / open-behavior)', () => {
     })
   })
 
+  it('R4 P2: alias canonical disabled MUST self-heal to firstSelectable even when navigating after mount', async () => {
+    // R4 P2 finding: the initial-state branch handles `aliasCanonicalUnselectable`,
+    // but the self-heal `useEffect` did not — so navigating to the alias path
+    // AFTER mount (history nav / in-app location change) would replace the URL
+    // with `activeSection` (a stale section like quick-commands) instead of
+    // firstSelectable. This test mounts at quick-commands first, disables
+    // editor, then navigates to /settings/link-detect via in-app location
+    // change and expects the URL + body to land on appearance.
+
+    // Step 1: mount at quick-commands so activeSection captures it.
+    const { hook, history, navigate } = memoryLocation({
+      path: '/settings/quick-commands',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    await waitFor(() => {
+      expect(screen.getByText('QC_SECTION_BODY')).toBeTruthy()
+    })
+
+    // Step 2: disable editor so its contribution is dropped from listContributions.
+    useModuleEnabledStore.getState().setEnabled('editor', false)
+    dispatchSettingsContributions()
+
+    // Step 3: in-app navigate to /settings/link-detect (alias canonical = editor,
+    // now unselectable). Self-heal must replace to firstSelectable (appearance),
+    // not stay on quick-commands.
+    navigate('/settings/link-detect')
+
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/appearance')
+    })
+    expect(screen.getByText('APPEARANCE_SECTION_BODY')).toBeTruthy()
+    expect(screen.queryByText('QC_SECTION_BODY')).toBeNull()
+  })
+
   it('2.2.f: identity case (editor → editor) does not push a duplicate history entry', async () => {
     const { hook, history } = memoryLocation({
       path: '/settings/editor',

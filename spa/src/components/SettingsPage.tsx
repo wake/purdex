@@ -133,7 +133,18 @@ function GlobalSettingsPage() {
   useEffect(() => {
     if (!urlSection) return
     if (!isSelectable(urlSection)) {
-      setLocation(`/settings/${activeSection}`, { replace: true })
+      // R4 P2: when self-healing an alias whose canonical target is
+      // unselectable AFTER mount (history nav / in-app location change
+      // to /settings/link-detect while the page is already on
+      // quick-commands), use firstSelectable instead of activeSection.
+      // The initial-state branch already does this for fresh mounts;
+      // mirror the rule here so bookmark behavior never depends on
+      // prior in-session navigation state.
+      const target = aliasCanonicalUnselectable ? firstSelectable : activeSection
+      if (aliasCanonicalUnselectable && activeSection !== firstSelectable) {
+        setActiveSection(firstSelectable)
+      }
+      setLocation(`/settings/${target}`, { replace: true })
       return
     }
     // Legacy URL alias (spec §4.2): if the raw URL was rewritten to a new
