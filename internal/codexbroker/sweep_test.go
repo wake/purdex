@@ -764,6 +764,78 @@ func TestSweepHandler_Concurrency_NoDeadlock(t *testing.T) {
 	}
 }
 
+// -- PR review finding F: per-broker lock honours ctx --------------------
+
+// TestSweepHandler_PerBrokerLockTimeout_503 — finding F regression: a
+// filtered apply on brokerKey=k1 that arrives while another filtered
+// apply on the same broker is in flight must NOT block indefinitely on
+// the per-broker mutex. If the request context expires before the per-
+// broker write lock is acquired, the handler returns 503 + Retry-After
+// instead of stalling.
+//
+// Setup: first apply holds the per-broker lock for 200ms via a slow
+// killer; second apply arrives 10ms later with a 30ms ctx deadline. The
+// second must return 503 within ~50ms.
+func TestSweepHandler_PerBrokerLockTimeout_503(t *testing.T) {
+	scan := &fakeScanner{brokers: []BrokerRecord{{Key: "k1"}}}
+	killer := &fakeKiller{delay: 200 * time.Millisecond}
+	eval := &stubDecisionEvaluator{by: map[string]DecisionResult{
+		"k1": {Kill: true, Reason: "idle_timeout"},
+	}}
+	h := newSweepHandlerForTest(scan, killer, eval, newPopulatedRegistry("k1"), &QuarantineFile{Version: 1})
+
+	// First apply: hold the per-broker write lock.
+	go func() {
+		req := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=apply&brokerKey=k1", nil)
+		h.HandleSweep(httptest.NewRecorder(), req)
+	}()
+	time.Sleep(10 * time.Millisecond)
+
+	// Second apply with a tight ctx deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=apply&brokerKey=k1", nil)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	start := time.Now()
+	h.HandleSweep(w, req)
+	elapsed := time.Since(start)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 (per-broker ctx timeout)", w.Code)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("HandleSweep stalled %v on per-broker lock; expected ~30ms ctx-deadline", elapsed)
+	}
+	if got := w.Header().Get("Retry-After"); got == "" {
+		t.Errorf("expected Retry-After header on 503")
+	}
+}
+
+// TestSweepHandler_CtxExpiresAfterLockAcquired_503 — finding F: even when
+// the per-broker lock acquisition succeeds, an already-expired request
+// context must short-circuit the scan rather than running the full
+// kill-eligibility evaluation (which holds the lock longer than the
+// caller is waiting for).
+func TestSweepHandler_CtxExpiresAfterLockAcquired_503(t *testing.T) {
+	scan := &fakeScanner{brokers: []BrokerRecord{{Key: "k1"}}, delay: 50 * time.Millisecond}
+	killer := &fakeKiller{}
+	eval := &stubDecisionEvaluator{}
+	h := newSweepHandlerForTest(scan, killer, eval, newPopulatedRegistry("k1"), &QuarantineFile{Version: 1})
+
+	// Pre-cancelled ctx so lock acquisition will succeed but ctx.Err is
+	// non-nil immediately afterwards.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest("POST", "/api/codex/brokers/sweep?mode=apply&brokerKey=k1", nil)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.HandleSweep(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 (ctx expired before scan)", w.Code)
+	}
+}
+
 // -- PR review finding C: identityMismatchErr persists quarantine --------
 
 // identityMismatchKiller is a KillRunner that always returns

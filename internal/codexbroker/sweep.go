@@ -176,6 +176,16 @@ func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseLocks()
 
+	// PR review finding F: re-check ctx after acquisition. A request whose
+	// deadline expired while the lock acquisition goroutine was racing
+	// would otherwise still run the full scan + decision evaluation under
+	// a doomed budget.
+	if err := ctx.Err(); err != nil {
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "sweep ctx expired"})
+		return
+	}
+
 	brokers, scanErr := h.ScanFn(ctx)
 	if scanErr != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": scanErr.Error()})
@@ -293,13 +303,26 @@ func (h *SweepHandler) acquireLocks(ctx context.Context, mode, brokerKey string)
 	}
 
 	// Then per-broker mutex (always required for filtered paths).
+	//
+	// PR review finding F: previously this called pm.Lock() / pm.RLock()
+	// directly, ignoring ctx. A queued same-broker apply could stall
+	// indefinitely while waiting on the per-broker lock; the request
+	// context's deadline + client cancel were both ineffective. Now both
+	// branches use lockWriteCtx / lockReadCtx so an expired ctx triggers
+	// 503 + Retry-After at the handler entry instead.
 	pm := h.brokerMu(brokerKey)
 	if mode == "apply" {
-		pm.Lock()
+		if err := lockWriteCtx(ctx, pm); err != nil {
+			h.globalApplyMu.RUnlock()
+			return nil, err
+		}
 		return func() { pm.Unlock(); h.globalApplyMu.RUnlock() }, nil
 	}
 	// Filtered dry-run.
-	pm.RLock()
+	if err := lockReadCtx(ctx, pm); err != nil {
+		h.globalApplyMu.RUnlock()
+		return nil, err
+	}
 	return func() { pm.RUnlock(); h.globalApplyMu.RUnlock() }, nil
 }
 
