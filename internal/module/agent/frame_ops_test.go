@@ -4711,6 +4711,62 @@ func TestRemoveProxyRefForSenderTurn_PaneScan(t *testing.T) {
 			t.Fatalf("Subagents = %+v, want unchanged turn t_a", final.Subagents)
 		}
 	})
+
+	// Round-2 A1 invariant: when called with turnID == "" (the empty-Stop
+	// fallback path), the helper must NOT drop a ref that has been upgraded
+	// to a non-empty SourceTurnID. Mirrors the TOCTOU window where Stop's
+	// case (c) ListByPane saw an empty ref but a concurrent UserPromptSubmit
+	// upsert upgraded it before our detach helper ran.
+	t.Run("f — turnID == \"\" rejects upgraded turn-aware ref (round-2 A1)", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		f := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+		f.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: true, SourcePID: 42, SourceStartTime: "t1", SourceTurnID: "t_a",
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		}}
+		if _, err := m.frames.Upsert(f); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		removed, _, _, _, err := m.removeProxyRefForSenderTurn("%5", 42, "t1", "", 100)
+		if err != nil {
+			t.Fatalf("removeProxyRefForSenderTurn: %v", err)
+		}
+		if removed {
+			t.Fatalf("removed = true, want false (empty-turn helper must not drop upgraded ref)")
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 || final.Subagents[0].SourceTurnID != "t_a" {
+			t.Fatalf("Subagents = %+v, want preserved turn=t_a", final.Subagents)
+		}
+	})
+
+	// Round-2 A1 positive path: turnID == "" matches refs with SourceTurnID
+	// == "" (the legitimate case (c) detach when SessionStart attached a ref
+	// but no UserPromptSubmit/PreToolUse ever upserted a turn).
+	t.Run("g — turnID == \"\" matches empty ref (round-2 A1 positive)", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		f := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+		f.Subagents = []agentpkg.SubagentRef{{
+			IsProxy: true, SourcePID: 42, SourceStartTime: "t1", /* SourceTurnID="" */
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		}}
+		if _, err := m.frames.Upsert(f); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		removed, _, _, _, err := m.removeProxyRefForSenderTurn("%5", 42, "t1", "", 100)
+		if err != nil {
+			t.Fatalf("removeProxyRefForSenderTurn: %v", err)
+		}
+		if !removed {
+			t.Fatalf("removed = false, want true (empty turn matches empty ref)")
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after detach", final.Subagents)
+		}
+	})
 }
 
 // TestDetachProxyRefForSenderTurnWithRetry_RetryOnConflict covers the
@@ -5309,6 +5365,80 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
 		if final == nil || len(final.Subagents) != 0 {
 			t.Fatalf("Subagents = %+v, want empty after wildcard detach", final.Subagents)
+		}
+	})
+
+	// Row 8b (round-2 A1 race regression): parent cc + 1 ref(PID=42, t1,
+	// turnID="") races a UserPromptSubmit upsert(turn=t_a) against an empty-
+	// turn malformed Stop (case (c) wildcard fallback path). Without the A1
+	// fix, the case-(c) wildcard detach (removeProxyRefForSender) could
+	// observe empty SourceTurnID at ListByPane time, then drop the upgraded
+	// ref under (PID, StartTime) wildcard match between scan and helper.
+	// With the fix, case (c) re-issues the detach via
+	// removeProxyRefForSenderTurn(..., "") which re-verifies SourceTurnID ==
+	// "" inside the optimistic-concurrency loop and bails when the ref has
+	// been upgraded to a non-empty turn_id.
+	//
+	// All race orderings must converge on a stable end state with exactly
+	// one ref carrying SourceTurnID="t_a"; never zero refs (would mean the
+	// upgraded ref was wildcard-dropped) and never one ref with empty
+	// turn_id (would mean upsert silently rolled back).
+	t.Run("row08b_concurrent_empty_stop_vs_upsert_upgrade_race", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+			// SourceTurnID intentionally empty (matches case (c) entry).
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		base := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			AgentType: "codex", SenderPID: 42, SenderStartTime: "t1",
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			req := base
+			req.PurdexName = "PdxUserPromptSubmit"
+			req.RawEvent = rawTurn("t_a")
+			_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+			if err != nil {
+				t.Errorf("UserPromptSubmit: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			req := base
+			req.PurdexName = "PdxStop"
+			req.RawEvent = rawTurn("") // malformed → empty turn_id
+			_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+			if err != nil {
+				t.Errorf("Stop: %v", err)
+			}
+		}()
+		wg.Wait()
+
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil {
+			t.Fatalf("parent frame missing after race")
+		}
+		// Forbidden (i): zero refs (would mean wildcard detach dropped the
+		// ref AFTER upsert successfully upgraded it — the A1 bug shape).
+		if len(final.Subagents) == 0 {
+			t.Errorf("forbidden: zero refs after empty-Stop vs upsert race (A1 regression)")
+		}
+		// Forbidden (ii): two-or-more refs (would mean upsert appended a
+		// fresh ref alongside an undeleted upgraded one — F1 regression).
+		if len(final.Subagents) >= 2 {
+			t.Errorf("forbidden: %d refs, want exactly 1; refs=%+v", len(final.Subagents), final.Subagents)
+		}
+		// Forbidden (iii): single ref with empty SourceTurnID (would mean
+		// upsert's upgrade silently rolled back, leaving the ref reachable
+		// only via the now-expanded empty-turn detach contract).
+		if len(final.Subagents) == 1 && final.Subagents[0].SourceTurnID == "" {
+			t.Errorf("forbidden: single ref retains empty turn_id; ref=%+v", final.Subagents[0])
 		}
 	})
 

@@ -385,8 +385,16 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}
 		// (c) Matching broker has empty SourceTurnID (SessionStart
 		// attached but no UserPromptSubmit/PreToolUse upsert ever
-		// recorded a turn) → wildcard process-level detach.
-		removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs)
+		// recorded a turn) → empty-turn-only detach. Round-2 A1: a
+		// process-level wildcard here would TOCTOU-race a concurrent
+		// UserPromptSubmit that upgrades the ref to turn-aware between
+		// our ListByPane scan above and the detach helper. Re-verify
+		// SourceTurnID == "" inside the optimistic-concurrency loop by
+		// reusing removeProxyRefForSenderTurn with turnID == "" — the
+		// match condition becomes (PID, StartTime, SourceTurnID == "")
+		// and any concurrent upgrade falls into the no-match branch
+		// (proxy_subagent_stop_no_match below).
+		removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSenderTurn(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, "", broadcastTs)
 		if derr != nil {
 			return nil, FrameTraceMeta{}, derr
 		}
