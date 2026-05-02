@@ -929,6 +929,80 @@ func (m *Module) attachProxyRefWithRetry(parent store.Frame, ref agentpkg.Subage
 	return m.mutateSubagentsWithRetry(parent, agentpkg.LifecycleSubagentStart, ref, broadcastTs)
 }
 
+// upsertProxyRefForBroker inserts or in-place mutates a single broker's
+// proxy ref on a parent frame, under optimistic concurrency. Used by the
+// L2 codex turn-aware attach/upsert path (UserPromptSubmit / PreToolUse,
+// spec §3.3.B/C and §3.4):
+//
+//   - If a proxy ref matching (pid, startTime) already exists, mutate its
+//     SourceTurnID to turnID and refresh StartedAt — does NOT append a
+//     duplicate even when SourceTurnID differs from the incoming turnID.
+//   - Otherwise, append a new proxy ref with full identity. The ID format
+//     is "proxy:codex:<pid>:<startTime>" matching the SessionStart fast-
+//     path (frame_ops.go:218) so a SessionStart followed by an upsert on
+//     the same broker reuses the same ID rather than diverging.
+//
+// Each attempt re-issues UpsertIfUnchanged; on conflict the parent is
+// reloaded via GetByIdentity and findProxyRefByBroker re-runs against the
+// fresh refs (a concurrent attach by a SessionStart on the same broker
+// could have appended a ref between attempts, in which case we mutate the
+// just-attached ref rather than appending another).
+//
+// Returns (true, stored, nil) on success; (false, zeroFrame, nil) when
+// the parent frame was deleted mid-flight (caller decides whether to fall
+// back). Errors are surfaced for storage failures or exhausted retries.
+//
+// Does NOT reuse mutateSubagentsWithRetry. That helper's SubagentStart
+// branch routes through updateSubagents → subagentRefMatches (turn-aware),
+// which would treat a (PID, StartTime, turn_b) request against an existing
+// (PID, StartTime, turn_a) ref as no-match and append a duplicate (spec
+// §3.4 F1 fix). The dedicated process-level lookup here keeps the upsert
+// at exactly one ref per broker.
+func (m *Module) upsertProxyRefForBroker(parent store.Frame, pid int, startTime string, turnID string, broadcastTs int64) (bool, store.Frame, error) {
+	current := parent
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		expected := current.LastSeenAt
+		idx := findProxyRefByBroker(current.Subagents, pid, startTime)
+		// Build the next Subagents slice. Allocate a fresh backing array so
+		// an in-place mutation does not surprise the caller's snapshot or
+		// the store layer (Upsert marshals the slice into JSON).
+		next := make([]agentpkg.SubagentRef, len(current.Subagents))
+		copy(next, current.Subagents)
+		if idx >= 0 {
+			next[idx].SourceTurnID = turnID
+			next[idx].StartedAt = broadcastTs
+		} else {
+			next = append(next, agentpkg.SubagentRef{
+				ID:              fmt.Sprintf("proxy:codex:%d:%s", pid, startTime),
+				Type:            "codex",
+				StartedAt:       broadcastTs,
+				SourcePID:       pid,
+				SourceStartTime: startTime,
+				IsProxy:         true,
+				SourceTurnID:    turnID,
+			})
+		}
+		current.Subagents = next
+		current.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if ok {
+			return true, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(parent.PaneID, parent.PID, parent.ProcessStartTime)
+		if err != nil {
+			return false, store.Frame{}, err
+		}
+		if reloaded == nil {
+			return false, store.Frame{}, nil
+		}
+		current = *reloaded
+	}
+	return false, store.Frame{}, fmt.Errorf("upsertProxyRefForBroker: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, parent.FrameID)
+}
+
 // detachProxyRefWithRetry mirrors attachProxyRefWithRetry for the SessionEnd
 // cleanup path: reload parent, filter out the matching proxy ref, persist
 // via UpsertIfUnchanged, retry on conflict. Returns (false, zeroFrame, nil)

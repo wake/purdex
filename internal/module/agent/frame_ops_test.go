@@ -4302,3 +4302,183 @@ func TestFindProxyRefByBroker(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// L2 Phase 2 P2-T5 — upsertProxyRefForBroker
+// (spec §3.4 / plan §2 P2-T5)
+// ---------------------------------------------------------------------------
+
+// TestUpsertProxyRefForBroker_AppendsWhenNoExistingRef covers case (a):
+// parent has no matching broker ref → helper appends one with full identity
+// (PID, StartTime, turnID) and ID = "proxy:codex:<pid>:<startTime>"
+// (matches SessionStart fast-path at frame_ops.go:218).
+func TestUpsertProxyRefForBroker_AppendsWhenNoExistingRef(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+
+	persisted, stored, err := m.upsertProxyRefForBroker(parent, 42, "t1", "t_a", 100)
+	if err != nil {
+		t.Fatalf("upsertProxyRefForBroker: %v", err)
+	}
+	if !persisted {
+		t.Fatalf("persisted = false, want true")
+	}
+	if len(stored.Subagents) != 1 {
+		t.Fatalf("Subagents count = %d, want 1; refs=%+v", len(stored.Subagents), stored.Subagents)
+	}
+	got := stored.Subagents[0]
+	wantID := "proxy:codex:42:t1"
+	if !got.IsProxy || got.SourcePID != 42 || got.SourceStartTime != "t1" ||
+		got.SourceTurnID != "t_a" || got.ID != wantID || got.Type != "codex" || got.StartedAt != 100 {
+		t.Fatalf("appended ref = %+v, want IsProxy=true PID=42 StartTime=t1 TurnID=t_a ID=%q Type=codex StartedAt=100", got, wantID)
+	}
+	if stored.LastSeenAt != 100 {
+		t.Fatalf("stored.LastSeenAt = %d, want 100", stored.LastSeenAt)
+	}
+}
+
+// TestUpsertProxyRefForBroker_InPlaceFromEmptyTurnID covers case (b):
+// parent already has a proxy ref with empty SourceTurnID (SessionStart
+// attached without turn_id) → helper mutates SourceTurnID in-place; still
+// 1 ref (no append).
+func TestUpsertProxyRefForBroker_InPlaceFromEmptyTurnID(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:42:t1",
+		Type:            "codex",
+		StartedAt:       50,
+		SourcePID:       42,
+		SourceStartTime: "t1",
+		IsProxy:         true,
+		// SourceTurnID intentionally empty.
+	}}
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed parent ref: %v", err)
+	}
+	parent, _ = func() (store.Frame, error) {
+		got, err := m.frames.GetByIdentity("%5", 100, "t100")
+		return *got, err
+	}()
+
+	persisted, stored, err := m.upsertProxyRefForBroker(parent, 42, "t1", "t_a", 200)
+	if err != nil {
+		t.Fatalf("upsertProxyRefForBroker: %v", err)
+	}
+	if !persisted {
+		t.Fatalf("persisted = false, want true")
+	}
+	if len(stored.Subagents) != 1 {
+		t.Fatalf("Subagents count = %d, want 1 (in-place mutation, not append); refs=%+v", len(stored.Subagents), stored.Subagents)
+	}
+	got := stored.Subagents[0]
+	if got.SourceTurnID != "t_a" {
+		t.Fatalf("ref.SourceTurnID = %q, want t_a (in-place upsert)", got.SourceTurnID)
+	}
+	if got.SourcePID != 42 || got.SourceStartTime != "t1" || !got.IsProxy {
+		t.Fatalf("ref identity drifted: %+v", got)
+	}
+	if got.StartedAt != 200 {
+		t.Fatalf("ref.StartedAt = %d, want 200 (recency refresh)", got.StartedAt)
+	}
+}
+
+// TestUpsertProxyRefForBroker_InPlaceOverwritesExistingTurnID covers case (c):
+// parent already has a proxy ref with SourceTurnID="t_a" → helper mutates
+// SourceTurnID to "t_b" in-place; still 1 ref (NOT appended). Spec §3.4
+// guards against the v3 F1 race where a turn-aware lookup would mistake
+// (PID, t1, t_b) for "no existing ref" and append a duplicate.
+func TestUpsertProxyRefForBroker_InPlaceOverwritesExistingTurnID(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+	parent.Subagents = []agentpkg.SubagentRef{{
+		ID:              "proxy:codex:42:t1",
+		Type:            "codex",
+		StartedAt:       50,
+		SourcePID:       42,
+		SourceStartTime: "t1",
+		IsProxy:         true,
+		SourceTurnID:    "t_a",
+	}}
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed parent ref: %v", err)
+	}
+	reloaded, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || reloaded == nil {
+		t.Fatalf("reload parent: %v / %v", err, reloaded)
+	}
+
+	persisted, stored, err := m.upsertProxyRefForBroker(*reloaded, 42, "t1", "t_b", 300)
+	if err != nil {
+		t.Fatalf("upsertProxyRefForBroker: %v", err)
+	}
+	if !persisted {
+		t.Fatalf("persisted = false, want true")
+	}
+	if len(stored.Subagents) != 1 {
+		t.Fatalf("Subagents count = %d, want 1 (in-place overwrite, not append); refs=%+v", len(stored.Subagents), stored.Subagents)
+	}
+	if stored.Subagents[0].SourceTurnID != "t_b" {
+		t.Fatalf("ref.SourceTurnID = %q, want t_b (overwrite)", stored.Subagents[0].SourceTurnID)
+	}
+}
+
+// TestUpsertProxyRefForBroker_RetryOnConflict covers case (d): the first
+// UpsertIfUnchanged conflicts (a concurrent writer bumped LastSeenAt
+// between the caller's read and our write); the helper reloads, re-runs
+// findProxyRefByBroker against the fresh refs, and the second attempt
+// succeeds. Mirrors the race-injection pattern from
+// TestProxySubagent_ConcurrentAttachesBothLand (PR17 #632).
+func TestUpsertProxyRefForBroker_RetryOnConflict(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
+
+	// Inject a concurrent racer write BEFORE our upsert call. The racer
+	// adds an unrelated proxy ref and bumps LastSeenAt to 60. Our caller's
+	// `parent` snapshot is still at LastSeenAt=50, so the helper's first
+	// UpsertIfUnchanged(expected=50) fails; the helper reloads, sees the
+	// racer's ref + LastSeenAt=60, and the second attempt succeeds —
+	// preserving both the racer's ref and our newly-appended ref.
+	racer := agentpkg.SubagentRef{
+		ID:              "proxy:codex:999:t999",
+		Type:            "codex",
+		StartedAt:       55,
+		SourcePID:       999,
+		SourceStartTime: "t999",
+		IsProxy:         true,
+		SourceTurnID:    "t_x",
+	}
+	cur, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || cur == nil {
+		t.Fatalf("racer baseline read: %v / %v", err, cur)
+	}
+	cur.Subagents = append(cur.Subagents, racer)
+	cur.LastSeenAt = 60
+	if _, err := m.frames.Upsert(*cur); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	// Call helper with the STALE parent (LastSeenAt=50). First attempt
+	// conflicts, reload picks up racer + LastSeenAt=60, second attempt
+	// merges and succeeds.
+	persisted, stored, err := m.upsertProxyRefForBroker(parent, 42, "t1", "t_a", 100)
+	if err != nil {
+		t.Fatalf("upsertProxyRefForBroker: %v", err)
+	}
+	if !persisted {
+		t.Fatalf("persisted = false, want true after retry")
+	}
+	if len(stored.Subagents) != 2 {
+		t.Fatalf("Subagents count = %d, want 2 (racer + new); refs=%+v", len(stored.Subagents), stored.Subagents)
+	}
+	pids := map[int]bool{}
+	for _, ref := range stored.Subagents {
+		pids[ref.SourcePID] = true
+	}
+	if !pids[42] || !pids[999] {
+		t.Fatalf("Subagents PIDs = %v, want both 42 and 999", pids)
+	}
+	if stored.LastSeenAt != 100 {
+		t.Fatalf("stored.LastSeenAt = %d, want 100", stored.LastSeenAt)
+	}
+}
