@@ -14,7 +14,7 @@ After P2 merges, the daemon can evaluate three predicates (A: active execution, 
 
 No automatic triggers ship in this PR. Every kill in P2 requires explicit human action via the sweep API.
 
-Acceptance is defined by: all unit tests green, integration test passes, `mode=dry-run` correctly classifies the ~50 orphan brokers visible on mlab, `mode=apply&brokerKey=<known-orphan>` (operator-explicit override per spec §5.1 line 371) produces a complete `audit/orphan-*.json` preimage + postscript, unfiltered `mode=apply` (no `brokerKey`) issues zero kills against any foreign broker on mlab (mass-kill safety), and zero false-positive kills in the dry-run run.
+Acceptance is defined by: all unit tests green, integration test passes, `mode=dry-run` correctly classifies the ~50 orphan brokers visible on mlab, `mode=apply&brokerKey=<known-orphan>` (operator-explicit override per spec §5.1 line 371) produces a complete `audit/orphan-*.json` preimage + postscript when the targeted broker satisfies baseline kill (¬A∧¬B∧¬C ∧ idle expired), unfiltered `mode=apply` (no `brokerKey`) issues zero kills against any foreign broker on mlab (mass-kill safety), operator override on a baseline-alive foreign broker (predicate A/B/C true OR idle not expired) does NOT kill the broker (alive-protection invariant), and zero false-positive kills in the dry-run run.
 
 ---
 
@@ -230,25 +230,28 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - `EvalDecision(ctx context.Context, rec BrokerRecord, opts DecisionOpts) DecisionResult` composing A/B/C.
   - `DecisionOpts` carries: `FS`, `ProcessLister`, `Dialer`, `Registry LaunchRegistryReader`, `IdleTimeout time.Duration`, `ResultWindow time.Duration`, `StaleThreshold time.Duration`.
   - **Reads per-job state once**: calls `ReadStateJobs(opts.FS, rec.StateDir)` once at the top of evaluation; passes the resulting `[]StateJobLite` to predicate A and (per §5.2) to predicate B. On `ReadStateJobs` error, feeds an empty slice and adds `state_json_unreadable` to `result.AnomaliesAdded` so audit trace explains the degraded predicate result.
-- **Foreign-broker pre-filter** (spec §5.1 line 371 + §2 line 44): evaluated **before** the kill rule so it strictly precedes the idle-timeout kill path.
+- **Two-layer responsibility** (round-3 finding #1 fix): the decision layer evaluates only the **baseline kill rule** (predicates + idle); foreign-broker classification is a separate orthogonal flag. The sweep handler (Task Q) is responsible for combining them per spec §5.1 line 371. This split prevents the bug where a `brokerKey`-explicit override kills a still-running foreign broker — the override only removes the foreign quarantine *guard*, never the baseline-alive protection.
+- **Conflict rule**: any predicate true → baseline `Kill=false` (positive liveness wins, spec §5.1 lines 367-368).
+- **Baseline kill rule**: `Kill = ¬A ∧ ¬B ∧ ¬C ∧ idleSeconds >= idleTimeout.Seconds()` per spec §5.1 line 371. `idleSeconds` is derived from `rec.LastJobUpdatedAt` (P1 field) vs now; nil `LastJobUpdatedAt` → treated as `age = ∞` (most permissive kill direction — broker never dispatched a job is a valid orphan candidate). **`Kill` reflects the baseline rule only — it does NOT short-circuit on foreign-quarantine status.** A foreign broker that is also baseline-killable has `Kill=true`; the sweep handler then decides whether to honour it depending on whether the request is unfiltered (NEVER kill foreign — mass-kill safety) or filtered with explicit `brokerKey` (operator override unblocks the foreign guard, baseline `Kill=true` is then honoured).
+- **Foreign-broker classification** (spec §5.1 line 371 + §2 line 44): evaluated for every record so audit trace + sweep-handler logic both see it.
   - Inputs: `opts.Registry`. The registry MAY be `nil` (defensive — Module wiring failure), `Empty()==true` (P2 expected steady state on mlab), or have entries.
-  - Detection: `isForeign := opts.Registry == nil || opts.Registry.Empty() || lookupMiss(opts.Registry, rec.BrokerKey)`. If `isForeign` is true OR `rec.Anomalies` already contains `AnomalyForeignOwner` (forward-compatible with future P1 changes) → set `result.AnomaliesAdded += AnomalyForeignOwner` (only if not already in `rec.Anomalies` to avoid duplicate audit entries), `result.Kill = false`, `result.Reason = "foreign_quarantine"`. Predicate trace is still populated for forensics.
-  - Note: `EvalDecision` always returns `Kill=false` for foreign brokers; it has no notion of "operator override" because that is a transport-layer (sweep handler) concern, not a decision-layer concern. The sweep handler (Task Q) implements spec §5.1 line 371 ("Operator may still issue a manual sweep with `mode=apply&brokerKey=<...>` to override") by treating an explicit `brokerKey` filter on `mode=apply` as an explicit operator decision to kill that specific broker even when `Reason == "foreign_quarantine"`. No separate `force` flag is introduced — the explicit `brokerKey` IS the override semantic, matching the spec wording verbatim. Tested in Task Q with `TestSweepHandler_BrokerKeyApply_OverridesForeignQuarantine`.
-- **Conflict rule**: any predicate true → `Kill=false` (positive liveness wins, spec §5.1 lines 367-368).
-- **Kill rule**: `Kill = ¬A ∧ ¬B ∧ ¬C ∧ idleSeconds >= idleTimeout.Seconds()` per spec §5.1 line 371. `idleSeconds` is derived from `rec.LastJobUpdatedAt` (P1 field) vs now; nil `LastJobUpdatedAt` → treated as `age = ∞` (most permissive kill direction — broker never dispatched a job is a valid orphan candidate).
-- Return `DecisionResult` with full predicate trace + `AnomaliesAdded` slice.
+  - Detection: `isForeign := opts.Registry == nil || opts.Registry.Empty() || lookupMiss(opts.Registry, rec.BrokerKey)`. If `isForeign` is true OR `rec.Anomalies` already contains `AnomalyForeignOwner` (forward-compatible with future P1 changes) → set `result.AnomaliesAdded += AnomalyForeignOwner` (only if not already in `rec.Anomalies` to avoid duplicate audit entries), and **set `result.Reason = "foreign_quarantine"` (overriding any baseline reason like `"idle_timeout"`)**. The `Reason` becomes the audit-trail primary classification: foreign-quarantine takes precedence in the audit string because that is the semantically-dominant reason for any operator action on this broker. The baseline reason is implied by `Kill==true`; if the operator overrides foreign-quarantine, the audit handler (Task Q) emits `"manual_sweep_override"` to capture both layers.
+  - Note: `EvalDecision` is purely decision-layer; the operator-override semantic lives entirely in the sweep handler (Task Q). No `force` flag exists at any layer — the explicit `brokerKey` filter IS the override per spec wording.
+- Return `DecisionResult` with full predicate trace, baseline `Kill`, classification `Reason`, and `AnomaliesAdded` slice.
 
-**TDD tests**:
-- `TestEvalDecision_ATrue_NoKill`.
+**TDD tests** (revised after round-3 finding #1: baseline Kill no longer mutated by foreign filter):
+- `TestEvalDecision_ATrue_NoKill` — predicate A true → baseline `Kill=false`.
 - `TestEvalDecision_BTrue_NoKill`.
 - `TestEvalDecision_CTrue_NoKill`.
-- `TestEvalDecision_AllFalse_IdleExpired_Kill` — registry has matching entry; only then idle-timeout kill path triggers.
-- `TestEvalDecision_AllFalse_IdleNotExpired_NoKill`.
-- `TestEvalDecision_ForeignBroker_AllFalse_NoKill` — `rec.Anomalies` already carries `AnomalyForeignOwner` (forward-compat path).
-- `TestEvalDecision_RegistryMissing_AllForeignQuarantine` — registry `Empty()==true`; **all** brokers (regardless of A/B/C) get `AnomaliesAdded=[AnomalyForeignOwner]`, `Kill=false`, `Reason="foreign_quarantine"`. Mlab-realistic test for the P2-launches-without-spawn-hook scenario.
-- `TestEvalDecision_RegistryNil_AllForeignQuarantine` — defensive: `opts.Registry == nil` treated identically.
-- `TestEvalDecision_RegistryHasOtherKey_ThisIsForeign` — registry populated but lookup miss for this brokerKey → `Reason="foreign_quarantine"`.
-- `TestEvalDecision_NilLastJobUpdatedAt_IdleInfinite_Kill` (idle=∞ treated as expired) — uses populated registry to clear the foreign filter.
+- `TestEvalDecision_AllFalse_IdleExpired_BaselineKill` — registry has matching entry; baseline `Kill=true`, `Reason="idle_timeout"`, `AnomaliesAdded` empty.
+- `TestEvalDecision_AllFalse_IdleNotExpired_NoKill` — baseline `Kill=false`.
+- `TestEvalDecision_Foreign_AllFalse_IdleNotExpired_NoKill_PlusForeignAnomaly` — foreign + not idle → baseline `Kill=false` (idle protects), `Reason="foreign_quarantine"`, `AnomaliesAdded=[AnomalyForeignOwner]`.
+- `TestEvalDecision_Foreign_AllFalse_IdleExpired_BaselineKillTrue_PlusForeignAnomaly` — round-3 regression: foreign + idle + ¬A∧¬B∧¬C → baseline `Kill=true`, `Reason="foreign_quarantine"`, `AnomaliesAdded=[AnomalyForeignOwner]`. Decision layer reports both: kill is baseline-valid AND broker is foreign — sweep handler decides what to do.
+- `TestEvalDecision_Foreign_PredicateATrue_NoKill_PlusForeignAnomaly` — round-3 regression: foreign + predicate A true (broker actively running) → baseline `Kill=false` (alive protection wins over both idle and foreign), `Reason="foreign_quarantine"`, `AnomaliesAdded=[AnomalyForeignOwner]`. Operator-explicit override on this broker MUST NOT kill it (Task Q test enforces).
+- `TestEvalDecision_RegistryMissing_AllForeign_BaselinePerBroker` — registry `Empty()==true`; every broker gets `AnomaliesAdded=[AnomalyForeignOwner]` + `Reason="foreign_quarantine"`; baseline `Kill` follows per-broker A/B/C/idle. Mlab-realistic; replaces the v2 test that forced `Kill=false`.
+- `TestEvalDecision_RegistryNil_AllForeign_BaselinePerBroker` — defensive: `opts.Registry == nil` treated identically.
+- `TestEvalDecision_RegistryHasOtherKey_ThisIsForeign` — registry populated but lookup miss for this brokerKey → `Reason="foreign_quarantine"`, baseline `Kill` per A/B/C/idle.
+- `TestEvalDecision_NilLastJobUpdatedAt_IdleInfinite_BaselineKill` (idle=∞ treated as expired) — uses populated registry, baseline `Kill=true`, `Reason="idle_timeout"`.
 
 **Acceptance**: decision composition tests all green; `go test -race ./internal/codexbroker/...` clean.
 
@@ -547,15 +550,19 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
   - Acquire locks per the table above; defer release in reverse order.
   - Run `Scanner.Scan(ctx)` to get current inventory.
   - For each `BrokerRecord` (filtered by brokerKey if set): check quarantine (`IsQuarantined`) → skip if quarantined; call `EvalDecision`; populate `SweepResponse.Evaluated`.
-  - **Kill semantics — apply path** (spec §5.1 line 371): the sweep handler decides whether to honour `DecisionResult.Reason == "foreign_quarantine"` based on whether the operator made an explicit per-broker decision:
-    | mode | brokerKey | DecisionResult.Reason | Kill issued? | Audit reason |
-    |------|-----------|-----------------------|--------------|--------------|
-    | apply | unset (`__all__`) | (any) | only if `Kill=true` AND not `foreign_quarantine` | per `DecisionResult.Reason` |
-    | apply | set | `foreign_quarantine` | **yes** — `brokerKey` filter is the operator's explicit override per spec §5.1 line 371 | `manual_sweep_override` |
-    | apply | set | (anything else where `Kill=true`) | yes | per `DecisionResult.Reason` |
-    | apply | set | `Kill=false` and not `foreign_quarantine` | no — broker is alive (predicate true) | n/a |
+  - **Kill semantics — apply path** (spec §5.1 line 371; round-3 finding #1: baseline `Kill` is the alive-protection gate; foreign-quarantine is a separate guard the operator can override): the sweep handler combines `DecisionResult.Kill` (baseline) and `DecisionResult.Reason == "foreign_quarantine"` (foreign flag) by mode/brokerKey:
+    | mode | brokerKey | baseline `Kill` | foreign? | Kill issued? | Audit reason |
+    |------|-----------|-----------------|----------|--------------|--------------|
+    | apply | unset (`__all__`) | true | no | yes | per baseline (`idle_timeout` etc.) |
+    | apply | unset (`__all__`) | true | **yes** | **no** — mass-kill safety; foreign quarantine guard wins on unfiltered path | n/a (broker remains in `foreign_quarantine`) |
+    | apply | unset (`__all__`) | false | (any) | no — baseline alive-protection wins | n/a |
+    | apply | set | true | no | yes | per baseline |
+    | apply | set | true | yes | **yes** — `brokerKey` filter is the operator's explicit override per spec §5.1 line 371; foreign guard is unblocked, baseline `Kill=true` is honoured | **`manual_sweep_override`** (audit captures both: original `foreign_quarantine` reason + operator decision) |
+    | apply | set | **false** | (any) | **no** — alive-protection always wins; operator override only unblocks foreign guard, never bypasses baseline alive predicates | n/a |
     
-    Mlab safety: unfiltered `mode=apply` on the 50+ pre-existing brokers issues **zero** kills because every broker is `foreign_quarantine` (registry empty) and the unfiltered path requires `Reason != "foreign_quarantine"`. The only path to kill a foreign broker is `mode=apply&brokerKey=<X>` — the operator naming a specific broker is the override.
+    **Critical invariant** (round-3 finding #1): operator override (`brokerKey` filter) NEVER kills a broker whose baseline `Kill=false`. If A or B or C is true (broker actively running) or idle has not expired, the broker is protected even from operator-explicit override. Override only removes the foreign-quarantine guard; it does not relax the alive-protection invariant.
+    
+    Mlab safety: unfiltered `mode=apply` on the 50+ pre-existing foreign brokers issues **zero** kills (row 2 of the table). The only path to kill a foreign broker is `mode=apply&brokerKey=<X>` AND baseline `Kill=true` (¬A∧¬B∧¬C ∧ idle expired).
   - If kill is to be issued per the table above: call `KillSequence.Run`; on success call `h.E1Tracker.Reset(rec.BrokerKey)` so a respawned broker doesn't inherit a stale 60 s clock; record outcome in `SweepResponse.Applied` or `SweepResponse.Errors`.
   - Return `200 JSON SweepResponse`.
 - Timeout: 30 s for `mode=apply` (accounts for graceful + SIGTERM + SIGKILL budget); 10 s for `mode=dry-run`. Lock waits are bounded by the request context — if `globalApplyMu` is held by an `__all__ apply` already in flight, a queued request waits up to its own context deadline; on timeout the handler returns 503 + a `Retry-After` hint rather than starving.
@@ -566,8 +573,10 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - `TestSweepHandler_BrokerKeyFilter` — brokerKey=X → only record with matching key evaluated.
 - `TestSweepHandler_QuarantinedSkipped` — broker in quarantine → not in evaluated list.
 - `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` — unfiltered mode=apply with empty registry on 50 brokers; **zero** kills issued; all decisions are `foreign_quarantine`. Mlab mass-kill safety regression test.
-- `TestSweepHandler_BrokerKeyApply_OverridesForeignQuarantine` — `mode=apply&brokerKey=<X>` with empty registry → `Reason="foreign_quarantine"` BUT KillSequence IS invoked because the explicit `brokerKey` filter is itself the spec §5.1 line 371 operator override; audit dump reason=`manual_sweep_override`. This is the round-2 finding #1 acceptance regression test.
-- `TestSweepHandler_BrokerKeyApply_AlivePredicate_NoKill` — `mode=apply&brokerKey=<X>` where predicate A is true (broker actively running) → kill NOT issued (operator override does not kill an alive broker; only suppresses the foreign-quarantine guard).
+- `TestSweepHandler_BrokerKeyApply_OverridesForeignQuarantine_BaselineKillTrue` — `mode=apply&brokerKey=<X>` with empty registry; foreign + ¬A∧¬B∧¬C + idle expired → baseline `Kill=true`, `Reason="foreign_quarantine"`; KillSequence IS invoked because the explicit `brokerKey` filter unblocks the foreign guard and baseline `Kill=true` is honoured; audit dump reason=`manual_sweep_override`. Round-2 finding #1 acceptance regression test.
+- `TestSweepHandler_BrokerKeyApply_AlivePredicate_NoKill` — `mode=apply&brokerKey=<X>` where predicate A is true (broker actively running) → baseline `Kill=false` → kill NOT issued. Round-3 finding #1 regression: operator override only suppresses foreign-quarantine guard, NEVER bypasses baseline alive-protection.
+- `TestSweepHandler_BrokerKeyApply_IdleNotExpired_NoKill` — `mode=apply&brokerKey=<X>` where A/B/C all false but idle has NOT expired → baseline `Kill=false` → kill NOT issued. Round-3 finding #1 regression: idle-protection is part of baseline; operator override does not bypass it.
+- `TestSweepHandler_UnfilteredApply_BaselineKillButForeign_NoKill` — `mode=apply` (unfiltered), broker is foreign + baseline `Kill=true`; KillSequence NOT invoked because unfiltered path requires non-foreign. Mlab mass-kill safety regression specifically for the case where baseline kill IS valid but unfiltered should still skip.
 - `TestSweepHandler_MethodNotPost_405`.
 - `TestSweepHandler_ScanFailure_503`.
 
@@ -623,11 +632,12 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - Spawn a real `app-server-broker.mjs serve --cwd <tmpdir>` broker. `t.Cleanup` immediately registered to `SIGKILL` + `RemoveAll`.
 - Wait for broker.json + socket (poll 5 s).
 - Run `POST /api/codex/brokers/sweep?mode=dry-run` against a live daemon instance (or via direct `SweepHandler` with a real Scanner).
-- Assert: the spawned broker appears in `evaluated`, all three predicates evaluated, `Kill=false` for the live broker.
-- Kill the broker externally (SIGTERM). Wait 2 s.
+- Assert: the spawned broker appears in `evaluated`, all three predicates evaluated, baseline `Kill=false` for the live broker (predicate A is true → alive protection).
+- **Alive-protection invariant assertion** (round-3 finding #1): while the broker is still live, run `POST .../sweep?mode=apply&brokerKey=<key>` → `applied` list MUST be empty (operator override does NOT kill an alive broker even when foreign).
+- Kill the broker externally (SIGTERM). Wait 2 s. The cwd still exists, so the broker will appear as foreign (no registry entry) + idle past threshold (no jobs progressing).
+- **Mass-kill safety assertion** (round-2 finding #1): run `POST .../sweep?mode=apply` (unfiltered, no brokerKey) → `applied` list MUST be empty even though the dead broker is in `evaluated` with baseline `Kill=true` AND `Reason="foreign_quarantine"`. Unfiltered apply path NEVER kills foreign brokers.
 - Run `POST .../sweep?mode=apply&brokerKey=<key>` (operator-explicit override per spec §5.1 line 371).
 - Assert: `applied` list contains the brokerKey; `audit/orphan-<key>-*.json` exists; preimage + postscript both present; audit `reason` is `manual_sweep_override` (because integration test runs with empty registry — same path mlab will exercise); `cxc-*` dir removed.
-- Additional safety assertion: prior to the operator-explicit apply, run `POST .../sweep?mode=apply` (unfiltered, no brokerKey) → `applied` list MUST be empty even though the dead broker is in `evaluated` with `Reason="foreign_quarantine"`. This integration-tests the round-2 finding #1 mass-kill safety property.
 
 **Acceptance**:
 - `go test -tags=integration ./internal/codexbroker/...` passes on mlab with node available.
@@ -751,7 +761,8 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | **Unfiltered dry-run vs filtered apply race on same broker** (round-2 finding #2) | Unfiltered dry-run (`mode=dry-run` with no `brokerKey`) cannot pre-declare which per-broker mutexes it will need (broker set is only known after `Scanner.Scan` — and a broker may appear mid-scan). Solution per consulting Path X: unfiltered dry-run takes `globalApplyMu.Lock()` (write-mode). This blocks ALL other sweep requests for the duration of the dry-run, including parallel dry-runs. Trade-off accepted because dry-runs are operator-initiated and bounded in latency (no kill, only inventory + decision compute). `TestSweepHandler_UnfilteredDryRun_Exclusive` is the regression test. Filtered dry-run keeps the cheaper RLock+RLock path. |
 | macOS no /proc for sockverify | `sockverify_darwin.go` uses `proc_pidinfo` via `syscall.Syscall6` (no CGo, no fork). If `proc_pidinfo` returns EPERM, falls back to `lsof -nP` with 1 s timeout. Budget-exceeded or both-failed → `held=true` (conservative defer). |
 | Symlink/realpath edge cases for cwd | All cwd comparisons in P2 use `EvalSymlinks` chain inherited from P1 — same `FS.EvalSymlinks` call path as P1. No new cwd hashing in P2; comparisons use the resolved `BrokerRecord.CwdResolved` field. |
-| **Mlab 50+ existing brokers mass-kill** (P2 ships before spawn-hook populates registry) | `EvalDecision` foreign-broker pre-filter (Task F): empty/missing registry → `Reason="foreign_quarantine"`, `Kill=false`, regardless of A/B/C. Sweep handler unfiltered `mode=apply` (no `brokerKey`) NEVER kills foreign brokers — every record's `Reason="foreign_quarantine"` and unfiltered apply requires `Reason != "foreign_quarantine"`. `TestEvalDecision_RegistryMissing_AllForeignQuarantine` and `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` are mlab-safety regression tests. The only path to kill a foreign broker is operator-explicit `?mode=apply&brokerKey=<X>` (the brokerKey filter IS the spec §5.1 line 371 override — no separate `force` flag, per round-2 finding #1 consulting recommendation Path D). |
+| **Mlab 50+ existing brokers mass-kill** (P2 ships before spawn-hook populates registry) | Two-layer guard (Task F + Task Q, round-3 finding #1 corrected): `EvalDecision` classifies every broker without registry entry as `Reason="foreign_quarantine"` and adds `AnomalyForeignOwner`, but `Kill` follows the baseline rule (¬A∧¬B∧¬C∧idle) so the sweep handler still sees alive-protection separately. Sweep handler unfiltered `mode=apply` (no `brokerKey`) NEVER kills any broker whose `Reason="foreign_quarantine"`, regardless of baseline `Kill`. The only path to kill a foreign broker is operator-explicit `?mode=apply&brokerKey=<X>` AND baseline `Kill=true` (¬A∧¬B∧¬C∧idle expired) — alive-protection is never overridden. Tests `TestEvalDecision_RegistryMissing_AllForeign_BaselinePerBroker`, `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills`, `TestSweepHandler_UnfilteredApply_BaselineKillButForeign_NoKill`, `TestSweepHandler_BrokerKeyApply_AlivePredicate_NoKill` enforce both layers. |
+| **Operator override killing alive broker** (round-3 finding #1) | Round-3 review caught a draft semantic where operator override (`brokerKey` filter) would have killed even baseline-alive foreign brokers. Fixed by separating `EvalDecision.Kill` (baseline only) from foreign-classification (`Reason` + `AnomaliesAdded`). Sweep handler kill-semantics table requires baseline `Kill=true` for ANY kill path (filtered or unfiltered). `TestSweepHandler_BrokerKeyApply_AlivePredicate_NoKill` and `TestSweepHandler_BrokerKeyApply_IdleNotExpired_NoKill` are the regression tests. |
 
 ---
 
