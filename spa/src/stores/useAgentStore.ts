@@ -53,7 +53,7 @@ export interface NormalizedEvent {
   agent_type: string
   status: string             // running | waiting | idle | error | clear
   model?: string
-  subagents?: SubagentRef[]
+  subagents?: SubagentRef[] | null
   raw_event_name: string
   broadcast_ts: number
   detail?: Record<string, unknown>
@@ -142,11 +142,11 @@ export const useAgentStore = create<AgentState>()(
       }
 
       // Store subagents
-      if (event.subagents) {
+      if ('subagents' in event) {
+        const subagents = event.subagents ?? []
         set((s) => ({
-          subagents: event.subagents!.length > 0
-            ? { ...s.subagents, [key]: event.subagents! }
-             
+          subagents: subagents.length > 0
+            ? { ...s.subagents, [key]: subagents }
             : (() => { const { [key]: _, ...rest } = s.subagents; return rest })(),
         }))
       }

@@ -895,6 +895,26 @@ func TestBuildNormalized_WithSubagents(t *testing.T) {
 	}
 }
 
+func TestBuildProjectionNormalized_NilSubagentsSerializesEmptyArray(t *testing.T) {
+	projection := &SessionProjection{
+		TopFrame: &store.Frame{
+			AgentType: "cc",
+			Status:    agentpkg.StatusRunning,
+		},
+		Subagents: nil,
+	}
+
+	normalized := buildProjectionNormalized(projection, "cc", "PdxPostToolUse", 1, agentpkg.DeriveResult{Valid: true})
+	if normalized.Subagents == nil {
+		t.Fatal("Subagents should be non-nil empty slice, got nil")
+	}
+
+	data, _ := json.Marshal(normalized)
+	if !strings.Contains(string(data), `"subagents":[]`) {
+		t.Errorf("JSON should contain \"subagents\":[], got %s", string(data))
+	}
+}
+
 // --- Bug 0b: RenameSession transfers in-memory state ---
 
 func TestRenameSession(t *testing.T) {
