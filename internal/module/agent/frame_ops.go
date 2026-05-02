@@ -1253,14 +1253,16 @@ func (m *Module) upsertProxyRefForBroker(parent store.Frame, pid int, startTime 
 		next := make([]agentpkg.SubagentRef, len(current.Subagents))
 		copy(next, current.Subagents)
 		if idx >= 0 {
-			// Preserve existing turn_id when the incoming parse failed
-			// (turnID == ""). A malformed PreToolUse hook payload must not
-			// downgrade an already-attached turn-aware ref to empty —
-			// otherwise a subsequent empty-turn Stop fallback would wildcard
-			// detach the ref under cross-turn concurrency (round-2 A2).
-			if turnID != "" || next[idx].SourceTurnID == "" {
-				next[idx].SourceTurnID = turnID
-			}
+			// Unconditional overwrite. A parse-failed upsert (turnID == "")
+			// downgrades the ref's SourceTurnID to empty rather than
+			// preserving the previous turn — see the round-2/round-3
+			// trade-off documented in spec §3.4 (parse-failure semantics):
+			// preserving t_old here would let a legitimate late Stop(t_old)
+			// targeted-detach the still-active ref of the next turn (the
+			// more common race), so we accept the rarer double-malformed
+			// race (parse-failed upsert + parse-failed empty-turn Stop) as
+			// a known limitation instead.
+			next[idx].SourceTurnID = turnID
 			next[idx].StartedAt = broadcastTs
 		} else {
 			next = append(next, agentpkg.SubagentRef{

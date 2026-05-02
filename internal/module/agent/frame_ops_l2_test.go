@@ -237,12 +237,22 @@ func TestUpsertProxyRefForBroker_InPlaceOverwritesExistingTurnID(t *testing.T) {
 	}
 }
 
-// TestUpsertProxyRefForBroker_PreservesExistingTurnIDOnEmptyParse covers the
-// round-2 A2 invariant: when the incoming turnID == "" (parse failed on a
-// malformed PreToolUse hook payload), the helper must NOT downgrade an
-// already-attached turn-aware ref to empty. Otherwise a subsequent empty-turn
-// Stop fallback would wildcard detach the ref under cross-turn concurrency.
-func TestUpsertProxyRefForBroker_PreservesExistingTurnIDOnEmptyParse(t *testing.T) {
+// TestUpsertProxyRefForBroker_DowngradesOnEmptyParse pins the round-3
+// trade-off resolution: when the incoming turnID == "" (parse failure on a
+// malformed PreToolUse/UserPromptSubmit hook payload), the helper
+// unconditionally overwrites the ref's SourceTurnID with the empty value
+// rather than preserving the previous turn.
+//
+// This is a deliberate design choice on a physical-tradeoff boundary, NOT
+// a one-true-answer. The previous turn_id cannot be safely preserved
+// because a legitimate late Stop(t_old) would then targeted-detach the
+// ref of the next turn — the more common race in normal codex CLI traffic
+// (every turn boundary). Downgrading to empty accepts the rarer
+// double-malformed case (parse-failed upsert + parse-failed empty-turn
+// Stop) as a known limitation; spec §3.4 documents this. See PR #801
+// round-2 A2 / round-3 P2 / consulting-review history for the full
+// derivation.
+func TestUpsertProxyRefForBroker_DowngradesOnEmptyParse(t *testing.T) {
 	m := newProxyTestModule(t)
 	parent := seedFrame(t, m, "%5", "cc", 100, "t100", 50)
 	parent.Subagents = []agentpkg.SubagentRef{{
@@ -262,8 +272,10 @@ func TestUpsertProxyRefForBroker_PreservesExistingTurnIDOnEmptyParse(t *testing.
 		t.Fatalf("reload parent: %v / %v", err, reloaded)
 	}
 
-	// Incoming turnID = "" simulates a malformed PreToolUse raw_event whose
-	// parseCodexTurnID returned "". The existing ref is "t_a" — it must stay.
+	// Incoming turnID = "" simulates a malformed UserPromptSubmit/PreToolUse
+	// raw_event whose parseCodexTurnID returned "". The existing ref carries
+	// SourceTurnID="t_a"; the spec choice is to OVERWRITE it with "" so that
+	// a late legitimate Stop(t_a) cannot targeted-detach this ref.
 	persisted, stored, err := m.upsertProxyRefForBroker(*reloaded, 42, "t1", "", 300)
 	if err != nil {
 		t.Fatalf("upsertProxyRefForBroker: %v", err)
@@ -274,8 +286,8 @@ func TestUpsertProxyRefForBroker_PreservesExistingTurnIDOnEmptyParse(t *testing.
 	if len(stored.Subagents) != 1 {
 		t.Fatalf("Subagents count = %d, want 1; refs=%+v", len(stored.Subagents), stored.Subagents)
 	}
-	if stored.Subagents[0].SourceTurnID != "t_a" {
-		t.Fatalf("ref.SourceTurnID = %q, want t_a (preserved across empty parse)", stored.Subagents[0].SourceTurnID)
+	if stored.Subagents[0].SourceTurnID != "" {
+		t.Fatalf("ref.SourceTurnID = %q, want \"\" (downgrade on empty parse — spec §3.4 known-limitation choice)", stored.Subagents[0].SourceTurnID)
 	}
 	if stored.Subagents[0].StartedAt != 300 {
 		t.Fatalf("ref.StartedAt = %d, want 300 (broadcastTs still bumps)", stored.Subagents[0].StartedAt)
