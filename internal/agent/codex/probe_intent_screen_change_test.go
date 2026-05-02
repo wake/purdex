@@ -3,7 +3,6 @@ package codex
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/agent/probe"
-	"github.com/wake/purdex/internal/tmux"
 )
 
 // fakeWatcher is a deterministic screenWatcher test double. Watch
@@ -581,76 +579,15 @@ func TestStartScreenChangeDetector_NoCloseRace(t *testing.T) {
 	cancel()
 }
 
-// W6-6 R4 F6 — baseline-fail watchLoop exit path. The codex detector
-// must observe `wh.Done()` so a transient capture-pane failure
-// (tmux unresponsive, pane just closed) does NOT leave the detector
-// parked forever. Without the Done() select arm the dispatcher would
-// keep the ScreenChange intent armed with no live watcher and
-// subsequent Waiting hooks would hit the case-4 lifecycle short-
-// circuit, missing the approval ScreenChange.
-//
-// This test uses the REAL *probe.Prober wired to a tmux executor that
-// errors CapturePaneTopLines on every call → watchLoop fails baseline
-// → self-cleanup → close(done) → detector main goroutine wakes from
-// `<-wh.Done()` → returns. The wrap goroutine then closes `out`.
-//
-// Why real prober (not fakeWatcher): the contract is the lifecycle
-// signaling between probe.Prober and the codex detector. fakeWatcher
-// returns WatchHandle{} whose Done() is nil (disabled select case)
-// — that's correct production-API hygiene but it can't drive this
-// path. Real prober is the cleanest fixture (cf. spec instruction
-// "Test 2 option b").
-type erroringTopLinesExecutor struct {
-	*tmux.FakeExecutor
-}
-
-func (e *erroringTopLinesExecutor) CapturePaneTopLines(target string, n int) (string, error) {
-	return "", errors.New("simulated tmux capture-pane failure")
-}
-
-func TestStartScreenChangeDetector_WatchDoneBeforeEmit_ReturnsAndStopsOwned(t *testing.T) {
-	// Real prober wired to an executor whose CapturePaneTopLines errors
-	// → baseline fail → watchLoop self-cleans + closes done.
-	exec := &erroringTopLinesExecutor{FakeExecutor: tmux.NewFakeExecutor()}
-	prober := probe.New(exec)
-
-	out := make(chan agent.Signal, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	done := runDetector(ctx, prober, func() bool { return true }, "%5", 4242, out)
-
-	// Detector must return WITHOUT emit and WITHOUT external ctx cancel —
-	// the only signal that wakes it is `<-wh.Done()`.
-	select {
-	case <-done:
-		// expected: detector observed wh.Done() close and returned.
-	case <-time.After(2 * time.Second):
-		t.Fatal("detector did not return after baseline-fail watchLoop exit (Done() not observed)")
-	}
-
-	// out must remain empty — no signal was ever produced.
-	select {
-	case sig := <-out:
-		t.Fatalf("unexpected signal from baseline-failed watcher: %+v", sig)
-	default:
-		// expected
-	}
-
-	// Watcher map must be cleared (watchLoop self-cleanup ran).
-	if prober.HasWatcher("%5") {
-		t.Error("HasWatcher still true after baseline-fail self-cleanup")
-	}
-
-	// External ctx was never cancelled — proves Done() (not ctx) was the
-	// signal that woke the detector.
-	select {
-	case <-ctx.Done():
-		t.Fatal("ctx unexpectedly cancelled — test fixture compromised")
-	default:
-		// expected: ctx still live
-	}
-}
+// W6-6 R5 F7: the prior R4 F6 test
+// `TestStartScreenChangeDetector_WatchDoneBeforeEmit_ReturnsAndStopsOwned`
+// is removed in this commit because the probe contract no longer treats
+// baseline capture failure as a watcher lifecycle event — watchLoop now
+// retries instead of self-cleaning + closing Done(). The detector-side
+// revert (removing `case <-wh.Done()`) and the new
+// `TransientBaselineFailureRecoversAndEmits` regression pin land in the
+// follow-up F7-2 commit, after the probe layer's retry behavior is
+// already in place.
 
 // --- P1-T5: onScreenChange mapper tests (internal — exercises the
 // unexported mapper directly, mirroring the onProcessDead pattern in

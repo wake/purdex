@@ -39,6 +39,34 @@ var watchPollInterval = 500 * time.Millisecond
 // programming error: Watch logs a warning and returns the zero-value
 // WatchHandle without registering. StopWatchOwned on a zero handle is a
 // no-op.
+//
+// Baseline capture failure semantics (W6-6 R5 F7 contract reframe):
+//
+//	watchLoop tries to capture the baseline immediately so the happy path
+//	timing is unchanged (`IdleStableTicks=3` ≈ 1.5s for the first
+//	ScreenStable). If that immediate capture fails (transient tmux error,
+//	pane just closed, server hiccup), the watcher does NOT exit, does
+//	NOT clear the watcher map entry, and does NOT close the WatchHandle
+//	Done channel. It enters the regular 500ms poll loop and treats every
+//	tick before the first successful capture as a baseline-establishment
+//	tick — symmetric with mid-loop tmux-error skip. Callers must not
+//	treat baseline failure as a lifecycle event; it is a probe-internal
+//	transient state that resolves itself when capture-pane recovers, and
+//	only ctx cancel / StopWatch / StopWatchOwned / replacement / shutdown
+//	tear the watcher down.
+//
+//	History: an earlier R2 fix had baseline failure self-cleanup the map
+//	entry and exit the goroutine (so `HasWatcher` did not report a stale
+//	live watcher). R4 F6 then surfaced this exit through `WatchHandle.Done()`
+//	to the codex ScreenChange detector, which observed it as a re-arm
+//	signal. R5 found that pattern produced a tight rearm loop under
+//	persistent capture-pane failure: detector returned with zero emit →
+//	dispatcher !appliedAny teardown → applyStatus rearmed → watch
+//	immediately failed baseline again → repeat. F7 reverts both: baseline
+//	fail is now treated as transient at the probe layer (this function's
+//	contract) and detector lifecycle no longer observes Done(). The
+//	`Done()` API is preserved for teardown observability tests but is
+//	NOT a detector-level lifecycle signal.
 func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback) WatchHandle {
 	if opts.TopLines > 0 && opts.BottomLines > 0 {
 		log.Printf("[probe] Watch(%q): TopLines=%d and BottomLines=%d are mutually exclusive; ignoring",
@@ -183,6 +211,17 @@ func hashContent(s string) uint32 {
 // watchPollInterval and fires ScreenChanged on each diff tick, ScreenStable
 // every idleStable consecutive identical-hash ticks. No emit-once flags;
 // orchestrator owns transition dedup.
+//
+// Baseline establishment (W6-6 R5 F7): the loop tries to capture the
+// baseline immediately so happy-path timing is unchanged. If that capture
+// fails, the loop does NOT exit and does NOT close `done`. It enters the
+// regular ticker loop and treats each subsequent tick as another baseline
+// attempt until one succeeds; the first successful capture seeds the
+// rolling baseline (no ScreenChanged is fired for that tick). Mid-loop
+// tmux errors after the baseline is established still skip the tick. Both
+// paths are now symmetric: capture failure never produces a false event
+// nor tears the watcher down — only ctx cancel / StopWatch /
+// StopWatchOwned / replacement / shutdown end the watcher.
 func (p *Prober) watchLoop(
 	ctx context.Context,
 	id *watcherID,
@@ -199,16 +238,20 @@ func (p *Prober) watchLoop(
 		p.watcherMu.Unlock()
 	}
 
-	baselineContent, ok := capture()
-	if !ok {
-		// R2 fix: baseline-fail self-cleanup. Watcher map already holds our
-		// entry; the goroutine is about to exit, so we must drop our own
-		// entry (only-if-still-mine via id) lest HasWatcher report a stale
-		// live watcher.
-		cleanup()
-		return
+	// Try the immediate baseline capture. Success preserves the existing
+	// happy-path timing (next tick after IdleStableTicks ≈ 1.5s yields the
+	// first ScreenStable). Failure is fine: haveBaseline stays false and
+	// the ticker loop will retry until capture-pane recovers.
+	var (
+		baselineContent string
+		baselineHash    uint32
+		haveBaseline    bool
+	)
+	if content, ok := capture(); ok {
+		baselineContent = content
+		baselineHash = hashContent(content)
+		haveBaseline = true
 	}
-	baselineHash := hashContent(baselineContent)
 
 	ticker := time.NewTicker(watchPollInterval)
 	defer ticker.Stop()
@@ -222,10 +265,25 @@ func (p *Prober) watchLoop(
 		case <-ticker.C:
 			current, ok := capture()
 			if !ok {
-				// tmux error — skip this tick, do NOT fire a false event.
+				// tmux error — skip this tick. Symmetric for "still
+				// establishing baseline" and "mid-loop transient error":
+				// in both cases we do NOT fire a false event and do NOT
+				// tear the watcher down.
 				continue
 			}
 			currentHash := hashContent(current)
+			if !haveBaseline {
+				// First successful capture after a baseline-establishment
+				// retry window. Seed the rolling baseline; do NOT fire
+				// ScreenChanged (no prior baseline to diff against). Reset
+				// stableCount so a continuously-identical pane still needs
+				// idleStable ticks before the next ScreenStable.
+				baselineContent = current
+				baselineHash = currentHash
+				haveBaseline = true
+				stableCount = 0
+				continue
+			}
 			if currentHash != baselineHash {
 				cb(ScreenChangeEvent{
 					Kind:       ScreenChanged,
