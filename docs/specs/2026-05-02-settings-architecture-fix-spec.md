@@ -97,7 +97,7 @@
 
 ### 4.1 Sidebar 順序
 
-設定新的 order 區段（保留 0-29 的數字空間）：
+#### 4.1.1 Order band 設計
 
 | 區段 | 範圍 | 用途 |
 |---|---|---|
@@ -105,55 +105,119 @@
 | Top conditional built-in | 5 – 9 | Electron |
 | Modules switchboard | 10 | `module-config` |
 | Module-owned | 11 – 19 | Editor / Quick Commands / Performance Monitor / Sync |
-| Tail built-in | 20 – 29 | Sync 升格後保留：Dev Environment / Tmux Agent Monitor |
+| Tail built-in | 20 – 29 | Dev Environment / Tmux Agent Monitor |
 
-新 order 表：
+#### 4.1.2 集中常數（PR-1 新增）
 
-| id | order | source | label |
+新增 `spa/src/lib/settings-order.ts`：
+
+```ts
+export const SETTINGS_ORDER = {
+  // Top built-in
+  APPEARANCE: 0,
+  TERMINAL: 1,
+  INTERFACE: 2,
+  // Top conditional
+  ELECTRON: 5,
+  // Modules switchboard (single, top of modules group)
+  MODULE_CONFIG: 10,
+  // Module-owned (PR-2 final state — PR-1 uses transitional values per §4.1.4)
+  MODULE_EDITOR: 11,
+  MODULE_QUICK_COMMANDS: 12,
+  MODULE_PERFORMANCE_MONITOR: 13,
+  MODULE_SYNC: 14,
+  // Tail built-in
+  DEV_ENVIRONMENT: 20,
+  TMUX_AGENT_MONITOR: 21,
+} as const
+```
+
+`register-modules/index.tsx` + `editor-module.tsx` + 任何新增 settings 註冊一律從這個檔案 import，禁止 hard-code 數字。Linter / review 守住（spec acceptance A_C1）。
+
+#### 4.1.3 PR-2 final order 表
+
+| id | order（常數） | source | label |
 |---|---|---|---|
-| appearance | 0 | built-in | settings.section.appearance |
-| terminal | 1 | built-in | settings.section.terminal |
-| interface | 2 | built-in | settings.section.interface |
-| electron | 5 | built-in（條件） | settings.section.electron |
-| module-config | 10 | built-in | settings.section.modules |
-| editor | 11 | module-owned | settings.section.editor |
-| quick-commands | 12 | module-owned | settings.section.quick_commands |
-| performance-monitor | 13 | module-owned | performance_monitor.title |
-| sync | 14 | module-owned（升格） | settings.section.sync |
-| dev-environment | 20 | built-in（dev） | settings.section.dev_environment |
-| tmux-agent-monitor | 21 | built-in（dev） | settings.section.tmux_agent_monitor |
+| appearance | 0 (`APPEARANCE`) | built-in | settings.section.appearance |
+| terminal | 1 (`TERMINAL`) | built-in | settings.section.terminal |
+| interface | 2 (`INTERFACE`) | built-in | settings.section.interface |
+| electron | 5 (`ELECTRON`) | built-in（條件） | settings.section.electron |
+| module-config | 10 (`MODULE_CONFIG`) | built-in | settings.section.modules |
+| editor | 11 (`MODULE_EDITOR`) | module-owned | settings.section.editor |
+| quick-commands | 12 (`MODULE_QUICK_COMMANDS`) | module-owned | settings.section.quick_commands |
+| performance-monitor | 13 (`MODULE_PERFORMANCE_MONITOR`) | module-owned | performance_monitor.title |
+| sync | 14 (`MODULE_SYNC`) | module-owned（升格） | settings.section.sync |
+| dev-environment | 20 (`DEV_ENVIRONMENT`) | built-in（dev） | settings.section.dev_environment |
+| tmux-agent-monitor | 21 (`TMUX_AGENT_MONITOR`) | built-in（dev） | settings.section.tmux_agent_monitor |
 
 說明：
-- module-owned 區段內部排序按 alpha：Editor (11) → Quick Commands (12) → Performance Monitor (13) → Sync (14)；任何 listing 沿用 `order ASC`，sidebar 與 switchboard 一致
+- module-owned 內部排序：Editor (11) → Quick Commands (12) → Performance Monitor (13) → Sync (14)
 - `link-detect`、`open-behavior` 兩個 entry 不再出現在 sidebar（從 `editorModuleDefinition.settings` 移除）
+
+#### 4.1.4 PR-1 過渡 order 表
+
+PR-1 不收編 Editor，因此 `open-behavior` / `link-detect` / `editor` 仍是三個獨立 entry。為了讓 `module-config` 在 PR-1 結束時就落在所有 module-owned 之上、避免 final-state 與過渡 state 互相打架，PR-1 對所有 module-owned entry 各加固定 offset（+10）後排：
+
+| id | PR-1 order | 變化 | source |
+|---|---|---|---|
+| appearance | 0 | 不動 | built-in |
+| terminal | 1 | 不動 | built-in |
+| interface | 2 | 不動 | built-in |
+| electron | 5 | 不動 | built-in（條件） |
+| **module-config** | **10** | 8 → 10（解 collision） | built-in |
+| **performance-monitor** | **11** | 6 → 11 | module-owned |
+| **open-behavior** | **12** | 7 → 12 | module-owned |
+| **link-detect** | **13** | 8 → 13 | module-owned |
+| **editor** | **14** | 9 → 14 | module-owned |
+| **quick-commands** | **15** | 10 → 15 | module-owned |
+| **sync** | **16** | 11 → 16（仍 built-in） | built-in（PR-2 才升格） |
+| dev-environment | 20 | 不動 | built-in（dev） |
+| tmux-agent-monitor | 21 | 不動 | built-in（dev） |
+
+PR-1 對應的常數 import 是「過渡值」— 為了避免 PR-1 / PR-2 兩次改 SETTINGS_ORDER 的可讀性混亂，採用以下做法：
+- `SETTINGS_ORDER` 一次定義成 PR-2 final 值（§4.1.2）
+- PR-1 只把 `module-config` 的 `order` 從 8 改成 `SETTINGS_ORDER.MODULE_CONFIG`（=10）
+- PR-1 對其他 module-owned 沿用 6/7/8/9/10/11 的舊值（不挪）
+- 結果 PR-1 sidebar：`appearance(0) → terminal(1) → interface(2) → electron(5) → performance-monitor(6) → open-behavior(7) → link-detect(8) → editor(9) → quick-commands(10) → module-config(10, alphabetically 同數時不保證；改用 11 確保排在後）`
+
+⚠️ **Re-evaluate**: order 8/8 collision 與「module-config 排到 modules 群組頂端」這兩個要求只有 PR-1 動更多 entry 才能同時滿足。下兩個方案二選一：
+
+**方案 A（PR-1 完整重排，PR-2 只動收編）— 推薦**
+- PR-1 直接套 §4.1.4 過渡 order 表（performance-monitor / open-behavior / link-detect / editor / quick-commands / sync 都改 order）
+- PR-2 只改：editor 14 → 11、移除 open-behavior + link-detect、quick-commands 15 → 12、performance-monitor 11 → 13、sync 16 → 14（升格時改 source）
+- 優點：使用者在 PR-1 結束時就看到「modules 群組成形」；PR-2 是純結構變更，不再動順序
+- 缺點：PR-1 改的 order 比較多
+
+**方案 B（PR-1 最小，PR-2 完整重排）**
+- PR-1 只改 `module-config` 8 → 10（解 collision），sidebar 仍混雜
+- PR-2 同時做 Editor 收編 + Sync 升格 + 完整 order 重排
+- 優點：PR-1 純粹 cosmetic
+- 缺點：PR-1 結束時 sidebar 仍亂；PR-2 變動範圍變大
+
+**選方案 A**。PR-1 的「視覺/順序」名字本來就涵蓋順序重排；PR-2 聚焦「結構變更」更乾淨。
 
 ### 4.2 Editor 三頁合一
 
 #### 4.2.1 `EditorPurdexSettingsSection` 重組
 
-新結構（單一 page，三段落）：
+`EditorOpenBehaviorSection` 與 `EditorLinkDetectionSection` 既有實作已自帶 `<h3>` + 段落 desc + `SettingItem` 序列（page 與 embedded 兩種用途都已適用），父頁直接 import 不再外加 heading：
 
 ```tsx
 <div>
-  <h2>{t('settings.section.editor')}</h2>          // sidebar 同名
+  <h2>{t('settings.section.editor')}</h2>
   <p>{t('settings.editor.desc')}</p>
 
-  {/* Section 1：Monaco 偏好 — 既有 SettingItem 序列 */}
+  {/* Monaco 偏好 — 既有 SettingItem 序列，無 h3 */}
   <SettingItem ... />  // tab_size / insert_spaces / word_wrap / line_numbers / minimap / font_size
 
-  {/* Section 2：Open Behavior */}
-  <h3>{t('settings.editor.open_behavior.title')}</h3>
-  <EditorOpenBehaviorSection />
-
-  {/* Section 3：Link Detection */}
-  <h3>{t('settings.editor.link_detect.title')}</h3>
-  <EditorLinkDetectionSection />
+  <EditorOpenBehaviorSection />   {/* 內含 h3 + SettingItems */}
+  <EditorLinkDetectionSection />  {/* 內含 h3 + SettingItems */}
 
   <p>{t('settings.editor.tiptap_note')}</p>
 </div>
 ```
 
-H3 標題樣式：`text-base text-text-primary mt-8 mb-2`（沿用 Appearance / Terminal 內部分隔的視覺節奏）。`<EditorOpenBehaviorSection />` 與 `<EditorLinkDetectionSection />` 內部 outer `<div>` / `<h2>` 由各自 component 拿掉（如有），確保段落 heading 由父頁負責。
+兩個 child component 不重寫；只是從 sidebar 直接 mount 改成 EditorPurdexSettingsSection import。具體 outer wrapper / 重複 heading 風險的細節由 plan 階段處理。
 
 #### 4.2.2 `editorModuleDefinition.settings` 縮減
 
@@ -312,12 +376,12 @@ Acceptance：
 3. `SettingsPage` URL alias map 擴充
 4. Sync `registerSettingsSection` → `registerModule`
 5. Quick Commands 頁首改 `<h2>` + `<p>`
-6. 新增 i18n：`settings.quick_commands.desc`
+6. 新增 i18n：`settings.quick_commands.desc`（既有 `settings.editor.link_detect.title` 與 `settings.editor.open_behavior.title` 兩個 key 不動，從 sidebar label 用途自然轉成 section heading 用途）
 
 Acceptance：
 - A6：`/settings` sidebar 只剩一個 Editor entry（`Open Behavior`、`Link Detection` 不在 sidebar）
 - A7：Editor 頁內可看到三段：Monaco 偏好 / Open Behavior / Link Detection；功能行為與舊頁等價（既有測試 pass）
-- A8：`/settings/link-detect` + `/settings/open-behavior` 開啟後 URL 自動 replace 為 `/settings/editor` 並 mount Editor 頁
+- A8：`/settings/link-detect` + `/settings/open-behavior` 在 Editor module 啟用時自動 replace 為 `/settings/editor` 並 mount Editor 頁；Editor module 被 disable 時走既有 self-heal（不要求 hard 404）
 - A9：`/settings/sync` 開啟後仍 mount SyncSection；sidebar 上 Sync row 顯示 puzzle icon
 - A10：Sync 在 ModulesSwitchboard 中**不**出現（disableable !== true）
 - A11：Quick Commands 頁首結構與 Appearance / Terminal 視覺一致（h2 + p + 主要內容）
