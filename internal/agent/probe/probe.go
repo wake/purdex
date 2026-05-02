@@ -94,9 +94,64 @@ type Prober struct {
 	watchers  map[string]watchEntry // target → active watcher
 }
 
+// watcherID is the per-watcher identity token. Pointer-equality on
+// *watcherID is the unique-per-call discriminator used by watchLoop's
+// self-cleanup and by StopWatchOwned. The struct intentionally carries
+// a non-zero-size field so the runtime cannot coalesce two distinct
+// `new(watcherID)` allocations into the same address (Go is allowed to
+// alias zero-size struct pointers — `&struct{}{}` may equal another
+// `&struct{}{}` — which would silently break ownership).
+type watcherID struct {
+	_ [1]byte
+}
+
 type watchEntry struct {
 	cancel func()
-	id     *struct{} // unique identity token for the active watcher
+	id     *watcherID // unique identity token for the active watcher
+}
+
+// WatchHandle is an opaque ownership token returned by Watch and
+// consumed by StopWatchOwned. It binds a stop request to the specific
+// watchEntry that Watch installed, so a stale stop call (e.g. a
+// detector teardown that races a same-target re-arm) cannot
+// accidentally cancel a replacement watcher installed by a later
+// Watch.
+//
+// Callers MUST treat WatchHandle as opaque — fields are unexported.
+// Zero-value WatchHandle never matches any live entry; passing it to
+// StopWatchOwned is a no-op that returns false.
+//
+// Why unexported fields: production code should always derive
+// handles from Watch. Anything that constructs a WatchHandle by hand
+// is fabricating ownership it never had — the type system refuses
+// that statically.
+//
+// Done channel (W6-6 R4 F6): closed when the underlying watchLoop
+// exits — baseline-capture failure, StopWatch / StopWatchOwned cancel,
+// same-target replacement cancel, StopAllWatches, or daemon shutdown.
+// One-shot signal; once closed it stays closed. Callers (notably the
+// codex ScreenChange detector) observe Done() so a transient capture
+// failure does not park the detector forever waiting on emit/ctx.
+// Zero-value WatchHandle returns a nil channel from Done(), which
+// disables the select case rather than firing it spuriously — this
+// keeps test fakes that fabricate WatchHandle{} compatible.
+type WatchHandle struct {
+	target string
+	id     *watcherID
+	done   <-chan struct{}
+}
+
+// Done returns a channel that is closed when the watchLoop backing
+// this handle has exited. See the WatchHandle GoDoc for the full
+// lifecycle contract.
+//
+// Zero-value WatchHandle returns nil — production callers selecting
+// on Done() must therefore tolerate a nil channel (which disables
+// the select case rather than firing it). This is intentional: it
+// lets test fakes that return WatchHandle{} from a faked Watch stay
+// compatible without inadvertently signaling premature exit.
+func (h WatchHandle) Done() <-chan struct{} {
+	return h.done
 }
 
 // New creates a Prober backed by the given tmux executor.

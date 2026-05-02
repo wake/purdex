@@ -345,6 +345,22 @@ const (
 	// is no longer in the pane PID tree (W6-3+W6-4 combined: PaneAlive=true
 	// → caller maps to error; false → caller maps to clear).
 	ProbeIntentKindProcessDead ProbeIntentKind = "process_dead"
+
+	// ProbeIntentKindScreenChange — detector observes the top N lines of a
+	// pane via probe.Prober.Watch; once ScreenStable arms the detector,
+	// the next ScreenChanged event emits a Signal with PaneAlive=true.
+	// Used by the codex provider (W6-6) to recover the missing
+	// permission-approval transition: codex 0.125.0 fires PdxPermissionRequest
+	// (status → waiting) but does NOT emit any hook when the user approves
+	// the modal dialog, so lights stay stuck at waiting until the next
+	// PdxStop arrives. The detector is dumb (single Signal, no time
+	// judgement); reject-path race is handled by the dispatcher's J3
+	// pre-grace + classifyAsHookRace cover. Signal.PaneAlive is always
+	// true for this Kind — capture-pane errors do not fire callbacks
+	// (the watch loop skips error ticks rather than re-emitting). See
+	// docs/specs/2026-05-01-w6-6-codex-screen-change-probe-spec.md
+	// (v6.1 final, 7 round codex spec review).
+	ProbeIntentKindScreenChange ProbeIntentKind = "screen_change"
 )
 
 // Signal is the runtime observation emitted by a detector. W6-3 finalize

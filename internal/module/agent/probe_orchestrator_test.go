@@ -736,10 +736,13 @@ func newRecordingProber() *recordingProber {
 	return &recordingProber{watchOpts: make(map[string]probe.WatchOptions)}
 }
 
-func (r *recordingProber) Watch(target string, opts probe.WatchOptions, _ probe.ScreenChangeCallback) {
+func (r *recordingProber) Watch(target string, opts probe.WatchOptions, _ probe.ScreenChangeCallback) probe.WatchHandle {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.watchOpts[target] = opts
+	// W6-6 R2 F1: orchestrator calls StopWatch (target-only) so the
+	// returned handle is unused; return zero value.
+	return probe.WatchHandle{}
 }
 
 func (r *recordingProber) StopWatch(target string) {

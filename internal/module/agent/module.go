@@ -151,6 +151,26 @@ func New(events *store.AgentEventStore) (*Module, error) {
 		switch kind {
 		case agentpkg.ProbeIntentKindProcessDead:
 			codex.StartProcessDeadDetector(ctx, mod.tmux, paneID, senderPID, out)
+		case agentpkg.ProbeIntentKindScreenChange:
+			// W6-6: codex permission-approval recovery. The detector
+			// observes top-10 lines of the pane via mod.prober.Watch
+			// and emits one Signal once Phase A (ScreenStable) +
+			// Phase B (ScreenChanged) complete with a verified codex
+			// identity.
+			//
+			// isCodexAlive resolves identity via FirstAliveAgentInTree
+			// rather than IsAliveFor: FirstAliveAgentInTree internally
+			// uses tmux ActivePanePID(target) which honors paneID `%N`
+			// targets exactly, while IsAliveFor's PanePID resolves a
+			// pane id target to the FIRST pane of its window — wrong
+			// for non-first siblings. The IsAliveFor inconsistency is
+			// pre-existing infrastructure tracked in a follow-up issue
+			// (W6-6 spec §11 line 744).
+			isCodexAlive := func() bool {
+				t, _, err := mod.prober.FirstAliveAgentInTree(paneID)
+				return err == nil && t == "codex"
+			}
+			codex.StartScreenChangeDetector(ctx, mod.prober, isCodexAlive, paneID, senderPID, out)
 		default:
 			defaultStartProbeIntentDetector(ctx, mod, kind, paneID, senderPID, out)
 		}
@@ -158,9 +178,10 @@ func New(events *store.AgentEventStore) (*Module, error) {
 	// supportedKinds MUST mirror the switch above. Lifecycle fails closed
 	// for any kind missing here (audit F6). Adding a new kind requires
 	// extending both the switch and this map together; the drift test
-	// `TestStartDetectorSwitchMatchesSupportedKinds` enforces parity.
+	// `TestProbeIntentDrift_AllDeclaredKindsHaveDispatcherCase` enforces parity.
 	m.probeIntentDisp.supportedKinds = map[agentpkg.ProbeIntentKind]struct{}{
-		agentpkg.ProbeIntentKindProcessDead: {},
+		agentpkg.ProbeIntentKindProcessDead:  {},
+		agentpkg.ProbeIntentKindScreenChange: {},
 	}
 	return m, nil
 }

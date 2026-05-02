@@ -53,24 +53,38 @@ func (p *Provider) IsAlive(tmuxTarget string) bool {
 }
 
 // ProbeIntents declares the probe-driven status transitions for the codex
-// agent. W6-3 first PR scope: one intent — ProcessDead — that recovers the
-// missing StopFailure transition codex 0.124.0 does not emit. Future W6 PRs
-// MAY append more intents but MUST keep ProcessDead present and stable.
+// agent. Two intents:
+//
+//  1. ProbeIntentKindProcessDead (W6-3): recovers the missing StopFailure
+//     transition codex 0.124.0 does not emit. Gates on {Running, Waiting}
+//     because the inference makes sense any time codex is supposed to be
+//     working. PaneAlive=true → Error, false → Clear.
+//  2. ProbeIntentKindScreenChange (W6-6): recovers the missing
+//     permission-approval transition. codex 0.125.0 fires
+//     PdxPermissionRequest → status=waiting but emits NO hook when the
+//     user approves the modal dialog, leaving lights stuck at waiting.
+//     The detector watches the top 10 lines of the pane via
+//     probe.Prober.Watch and emits a single Signal once Phase A
+//     (ScreenStable) completes and the next ScreenChanged event arrives.
+//     Gates on {Waiting} only — running is the target status (not an
+//     entry point) and idle / error / clear already have hook authority.
+//
+// Slice order is stable (ProcessDead first, ScreenChange second) so test
+// fixtures can index by position without churning on future entries.
 //
 // Implements agent.ProbeIntentProvider (optional capability — providers
 // without ProbeIntents behave identically to pre-W6-3).
-//
-// Per spec §4.1: gating set {Running, Waiting} mirrors the only states where
-// codex is supposed to be doing work; OnSignal mapping (PaneAlive=true →
-// Error, false → Clear) splits W6-3 (codex died with pane intact) from W6-4
-// (entire pane disappeared) on the runtime observation captured by
-// StartProcessDeadDetector.
 func (p *Provider) ProbeIntents() []agent.ProbeIntent {
 	return []agent.ProbeIntent{
 		{
 			Kind:          agent.ProbeIntentKindProcessDead,
 			OnEntryStatus: []agent.Status{agent.StatusRunning, agent.StatusWaiting},
 			OnSignal:      onProcessDead,
+		},
+		{
+			Kind:          agent.ProbeIntentKindScreenChange,
+			OnEntryStatus: []agent.Status{agent.StatusWaiting},
+			OnSignal:      onScreenChange,
 		},
 	}
 }
@@ -88,4 +102,21 @@ func onProcessDead(sig agent.Signal) agent.Status {
 		return agent.StatusError
 	}
 	return agent.StatusClear
+}
+
+// onScreenChange maps a ScreenChange signal to StatusRunning. Defends
+// against dispatcher misuse: a Signal carrying a non-ScreenChange Kind
+// returns "" (drop the signal) rather than mapping to Running. Mirrors
+// onProcessDead's defensive shape.
+//
+// PaneAlive is intentionally NOT inspected here: the detector contract
+// (see probe_intent_screen_change.go) guarantees PaneAlive=true for every
+// ScreenChange Signal — capture-pane errors are skipped at the watcher
+// loop tick rather than re-emitted as PaneAlive=false. Adding a
+// PaneAlive check would be dead code noise.
+func onScreenChange(sig agent.Signal) agent.Status {
+	if sig.Kind != agent.ProbeIntentKindScreenChange {
+		return ""
+	}
+	return agent.StatusRunning
 }

@@ -88,9 +88,10 @@ func TestCodexSupportedStatuses_DerivesFromEvents(t *testing.T) {
 // --- P2-T3: ProbeIntents() declaration tests ---
 
 // TestProvider_ProbeIntents_DeclaresProcessDead asserts the codex provider
-// declares exactly one ProbeIntent and its Kind is ProcessDead. This is the
-// W6-3 + W6-4 first PR scope; subsequent W6 PRs MAY append more intents but
-// MUST keep ProcessDead present and stable.
+// declares ProcessDead as the first ProbeIntent (W6-3 + W6-4 scope) and
+// the slice has at least one entry. The assertion is index-stable: future
+// W6 PRs MAY append more intents at later positions but MUST keep
+// ProcessDead at index 0 (per provider.go contract: stable order).
 func TestProvider_ProbeIntents_DeclaresProcessDead(t *testing.T) {
 	p := codex.NewProvider()
 	pip, ok := any(p).(agent.ProbeIntentProvider)
@@ -98,11 +99,11 @@ func TestProvider_ProbeIntents_DeclaresProcessDead(t *testing.T) {
 		t.Fatalf("codex.Provider does not implement agent.ProbeIntentProvider")
 	}
 	intents := pip.ProbeIntents()
-	if len(intents) != 1 {
-		t.Fatalf("ProbeIntents() len = %d, want 1 (W6-3 first PR scope)", len(intents))
+	if len(intents) == 0 {
+		t.Fatalf("ProbeIntents() returned empty slice")
 	}
 	if intents[0].Kind != agent.ProbeIntentKindProcessDead {
-		t.Errorf("ProbeIntents()[0].Kind = %q, want %q", intents[0].Kind, agent.ProbeIntentKindProcessDead)
+		t.Errorf("ProbeIntents()[0].Kind = %q, want %q (ProcessDead must remain at index 0)", intents[0].Kind, agent.ProbeIntentKindProcessDead)
 	}
 	if intents[0].OnSignal == nil {
 		t.Errorf("ProbeIntents()[0].OnSignal = nil, want non-nil mapper")
@@ -130,6 +131,44 @@ func TestProvider_ProbeIntents_OnEntryStatusContainsRunningWaiting(t *testing.T)
 		if !gating[want] {
 			t.Errorf("OnEntryStatus missing %q (have %v)", want, intents[0].OnEntryStatus)
 		}
+	}
+}
+
+// TestProvider_ProbeIntents_HasScreenChangeAsSecondEntry asserts the W6-6
+// addition: ProbeIntents() returns exactly 2 entries, with the second
+// entry declaring Kind=ScreenChange + OnEntryStatus={Waiting} +
+// non-nil OnSignal. Position-sensitive (per provider.go contract: stable
+// order — ProcessDead at 0, ScreenChange at 1).
+func TestProvider_ProbeIntents_HasScreenChangeAsSecondEntry(t *testing.T) {
+	p := codex.NewProvider()
+	pip, ok := any(p).(agent.ProbeIntentProvider)
+	if !ok {
+		t.Fatalf("codex.Provider does not implement agent.ProbeIntentProvider")
+	}
+	intents := pip.ProbeIntents()
+	if len(intents) != 2 {
+		t.Fatalf("ProbeIntents() len = %d, want 2 (W6-6: ProcessDead + ScreenChange)", len(intents))
+	}
+	second := intents[1]
+	if second.Kind != agent.ProbeIntentKindScreenChange {
+		t.Errorf("ProbeIntents()[1].Kind = %q, want %q", second.Kind, agent.ProbeIntentKindScreenChange)
+	}
+	if second.OnSignal == nil {
+		t.Errorf("ProbeIntents()[1].OnSignal = nil, want non-nil mapper")
+	}
+	// OnEntryStatus must contain Waiting (sole gating status — running
+	// is the target, idle/error/clear have hook authority).
+	gating := make(map[agent.Status]bool, len(second.OnEntryStatus))
+	for _, s := range second.OnEntryStatus {
+		gating[s] = true
+	}
+	if !gating[agent.StatusWaiting] {
+		t.Errorf("ProbeIntents()[1].OnEntryStatus missing Waiting (have %v)", second.OnEntryStatus)
+	}
+	// OnEntryStatus must NOT contain Running (running is the target;
+	// see provider.go contract).
+	if gating[agent.StatusRunning] {
+		t.Errorf("ProbeIntents()[1].OnEntryStatus must not contain Running (target status), have %v", second.OnEntryStatus)
 	}
 }
 

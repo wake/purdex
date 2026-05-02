@@ -220,29 +220,228 @@ func TestWatch_StopWatch_CancelsLoop(t *testing.T) {
 	}
 }
 
-// PR4b — baseline capture failure cleans the watcher map entry (R2 fix).
-func TestWatch_BaselineFailure_CleansMapEntry(t *testing.T) {
+// W6-6 R5 F7 (replaces R2/R4 F6 baseline-fail-self-cleanup contract):
+// baseline capture failure is a probe-internal transient state, not a
+// watcher lifecycle event. watchLoop must NOT exit, must NOT clear the
+// map entry, and must NOT close WatchHandle.Done() when the immediate
+// baseline capture fails — it should keep ticking and adopt the first
+// successful capture as the baseline.
+//
+// Why the contract reframed: the earlier R2 self-cleanup + R4 F6
+// `WatchHandle.Done()` lifecycle signal produced a tight rearm loop
+// when capture-pane was persistently failing — the codex ScreenChange
+// detector observed Done(), returned with zero emit, dispatcher !appliedAny
+// teardown rearmed via applyStatus, the next Watch hit baseline-fail
+// again, etc. R5 reverted both: baseline failure stays inside the probe
+// (this test) and the detector lifecycle no longer observes Done().
+func TestWatch_BaselineFailure_KeepsMapEntryAndHandle(t *testing.T) {
 	probe.SetWatchPollIntervalForTest(t, fastPoll)
-	// First call returns err; subsequent calls (none expected) would return content.
+	// Repeated capture errors — never recovers within the test window.
+	// Pins the worst-case path for the F7 contract: even with persistent
+	// failure, the watcher does NOT exit, does NOT clear the entry, and
+	// does NOT close Done().
 	exec := newScripted("sess:", []scriptedCapture{
 		{err: errors.New("boom")},
-		{content: "should-not-be-read"},
 	})
 	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
 
-	p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {
-		t.Fatal("callback fired despite baseline failure")
+	cbFired := atomic.Int32{}
+	h := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {
+		cbFired.Add(1)
 	})
 
-	// Within 200ms the goroutine must self-cleanup the entry.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if !p.HasWatcher("sess:") {
-			return // success
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Allow many poll ticks — the watcher must stay live the whole time
+	// because every capture call is errorring.
+	time.Sleep(80 * time.Millisecond)
+
+	if !p.HasWatcher("sess:") {
+		t.Error("HasWatcher = false after persistent baseline failure; expected map entry to persist")
 	}
-	t.Fatal("HasWatcher still true 200ms after baseline failure; map entry leaked")
+
+	select {
+	case <-h.Done():
+		t.Error("WatchHandle.Done() closed during persistent baseline failure; expected watcher to keep retrying")
+	default:
+		// expected
+	}
+
+	// No callback can fire because no successful capture ever happened.
+	if got := cbFired.Load(); got != 0 {
+		t.Errorf("callback fired %d times despite persistent capture failure, want 0", got)
+	}
+
+	// Tmux call count must have grown — proves the loop is actively
+	// retrying, not parked.
+	if got := exec.Calls(); got < 2 {
+		t.Errorf("tmux capture call count = %d, want ≥ 2 (loop should keep retrying)", got)
+	}
+
+	// Stop explicitly — Done() must close on cancel teardown.
+	p.StopWatch("sess:")
+	select {
+	case <-h.Done():
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("WatchHandle.Done() did not close after StopWatch")
+	}
+}
+
+// W6-6 R5 F7: after a transient baseline-capture failure, the first
+// successful capture is adopted as the rolling baseline (no
+// ScreenChanged for that seeding tick). The next tick that diverges
+// from that baseline produces ScreenChanged with the new content. This
+// pins the symmetric mid-loop / baseline-establishment behavior.
+func TestWatch_BaselineFailure_RetriesUntilFirstSuccessfulCapture(t *testing.T) {
+	probe.SetWatchPollIntervalForTest(t, fastPoll)
+	// err, err, baseline, changed (sticky).
+	exec := newScripted("sess:", []scriptedCapture{
+		{err: errors.New("boom1")},
+		{err: errors.New("boom2")},
+		{content: "baseline"},
+		{content: "changed"},
+	})
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	ch := make(chan probe.ScreenChangeEvent, 8)
+	p.Watch("sess:", probe.WatchOptions{}, func(ev probe.ScreenChangeEvent) {
+		ch <- ev
+	})
+
+	// Expect the first event to be ScreenChanged with content "changed"
+	// — proves the seeding tick did NOT emit (baseline established
+	// silently) and the next tick produced the diff.
+	select {
+	case ev := <-ch:
+		if ev.Kind != probe.ScreenChanged {
+			t.Fatalf("first event kind = %q, want %q", ev.Kind, probe.ScreenChanged)
+		}
+		if ev.Content != "changed" {
+			t.Fatalf("first event content = %q, want \"changed\" (seeding tick must not emit)", ev.Content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no ScreenChanged event after baseline retry recovery")
+	}
+
+	// Watcher must still be live (no exit on transient capture errors).
+	if !p.HasWatcher("sess:") {
+		t.Error("HasWatcher = false; watcher should still be live after recovery")
+	}
+}
+
+// W6-6 R5 F7: after a transient baseline failure, the watcher can still
+// emit ScreenStable when the first successful capture is followed by
+// IdleStableTicks identical captures. Pins that "false ScreenChanged
+// from seeding" cannot happen.
+func TestWatch_BaselineFailure_FirstSuccessCanEmitStable(t *testing.T) {
+	probe.SetWatchPollIntervalForTest(t, fastPoll)
+	// err then 5 identical "same" (sticky after that) → with
+	// IdleStableTicks=3, after seeding (no fire) we get 3 identical
+	// stable ticks → ScreenStable fires once.
+	exec := newScripted("sess:", []scriptedCapture{
+		{err: errors.New("boom")},
+		{content: "same"},
+	})
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	ch := make(chan probe.ScreenChangeEvent, 8)
+	p.Watch("sess:", probe.WatchOptions{IdleStableTicks: 3}, func(ev probe.ScreenChangeEvent) {
+		ch <- ev
+	})
+
+	// First event must be ScreenStable (no false ScreenChanged from the
+	// seeding tick).
+	select {
+	case ev := <-ch:
+		if ev.Kind != probe.ScreenStable {
+			t.Fatalf("first event kind = %q, want %q (no false ScreenChanged from seeding)", ev.Kind, probe.ScreenStable)
+		}
+		if ev.Content != "same" {
+			t.Fatalf("first event content = %q, want \"same\"", ev.Content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no ScreenStable event after baseline retry recovery")
+	}
+}
+
+// W6-6 R5 F7: WatchHandle.Done() must NOT close while watchLoop is
+// merely retrying the baseline. Done() only closes on real teardown:
+// ctx cancel / StopWatch / StopWatchOwned / replacement / shutdown.
+// Pin the contract by exercising a transient baseline error then an
+// explicit StopWatchOwned — Done() closes only after the latter.
+func TestWatch_BaselineFailure_DoesNotCloseHandleDoneUntilStopped(t *testing.T) {
+	probe.SetWatchPollIntervalForTest(t, fastPoll)
+	exec := newScripted("sess:", []scriptedCapture{
+		{err: errors.New("boom")},
+		{content: "baseline"},
+	})
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	h := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+
+	// Allow several ticks — Done() must remain open across the baseline
+	// retry window and into the post-recovery steady state.
+	time.Sleep(80 * time.Millisecond)
+	select {
+	case <-h.Done():
+		t.Fatal("Done() closed before any teardown happened")
+	default:
+		// expected
+	}
+
+	// Now request a real teardown via StopWatchOwned. Done() must close.
+	if !p.StopWatchOwned(h) {
+		t.Fatal("StopWatchOwned(h) = false, want true (h owns the live entry)")
+	}
+	select {
+	case <-h.Done():
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("Done() did not close after StopWatchOwned cancel")
+	}
+}
+
+// W6-6 R4 F6: zero-value WatchHandle.Done() returns nil — production
+// callers that select on Done() must therefore tolerate a nil channel
+// (which disables the select case rather than firing it). Test fakes
+// across the codebase (probe_orchestrator_test.go fakeProber,
+// codex/probe_intent_screen_change_test.go fakeWatcher,
+// module/agent/probe_intent_dispatcher_codex_wire_test.go
+// fakeScreenWatcher) all return WatchHandle{} from Watch; this pin
+// ensures the contract stays compatible.
+func TestWatchHandle_Zero_DoneIsNil(t *testing.T) {
+	var zero probe.WatchHandle
+	if ch := zero.Done(); ch != nil {
+		t.Errorf("zero WatchHandle.Done() = %v, want nil (must disable select case in callers)", ch)
+	}
+}
+
+// W6-6 R4 F6: StopWatchOwned-induced cleanup also closes Done().
+// Pins the contract that ANY watchLoop exit (baseline fail / ctx
+// cancel via StopWatchOwned / StopWatch / StopAllWatches / same-target
+// replacement) yields a closed Done(). Detector teardown after a
+// successful emit relies on this implicitly (watchLoop already ran
+// through cleanup by the time the detector returns; selecting on
+// Done() in that case observes a closed channel, not a leak).
+func TestWatch_StopWatchOwned_ClosesHandleDone(t *testing.T) {
+	probe.SetWatchPollIntervalForTest(t, fastPoll)
+	exec := newScripted("sess:", []scriptedCapture{{content: "baseline"}})
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	h := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+	if !p.StopWatchOwned(h) {
+		t.Fatal("StopWatchOwned(h) = false, want true (h owns the live entry)")
+	}
+	select {
+	case <-h.Done():
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("WatchHandle.Done() did not close after StopWatchOwned cancel")
+	}
 }
 
 // PR5 — TopLines path ignores changes outside top N; full-pane (opts={})
@@ -374,5 +573,93 @@ func TestWatch_TmuxErrorTickSkipped(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("ScreenChanged did not fire after recovery tick")
+	}
+}
+
+// W6-6 R2 F1: ownership-aware StopWatchOwned tests.
+//
+// The dispatcher detector teardown path can race a same-target Watch
+// re-arm: detector1 main goroutine wakes from <-ctx.Done() and calls
+// StopWatch(target) AFTER detector2 has already installed its own
+// watcher for the same target via Watch (which internally cancels the
+// previous entry and replaces it). The legacy StopWatch matches by
+// target string only, so detector1's late teardown silently kills
+// detector2's freshly-installed watcher.
+//
+// StopWatchOwned takes a WatchHandle (returned by Watch) that captures
+// the watcher's identity token. The implementation only cancels +
+// deletes the entry when entry.id == handle.id, so a stale handle
+// cannot reach a replacement watcher.
+
+// TestProber_StopWatchOwned_OnlyCancelsOwnEntry pins the canonical
+// race: two consecutive Watch calls on the same target install two
+// watchers (the second's existing.cancel() retires the first's
+// watchLoop, then installs a fresh entry). StopWatchOwned with the
+// FIRST handle must report false and leave the second watcher intact.
+//
+// Default poll interval (500ms) is intentional — the test never lets a
+// tick fire, just exercises the watcher map state. Using fastPoll +
+// SetWatchPollIntervalForTest leaves a t.Cleanup that races a still-
+// running watchLoop goroutine reading watchPollInterval; the canonical
+// pre-existing tests work around this by capturing pollInterval into
+// a local before the goroutine starts, but the simpler fix here is to
+// avoid the override entirely (the test doesn't depend on tick rate).
+func TestProber_StopWatchOwned_OnlyCancelsOwnEntry(t *testing.T) {
+	exec := tmux.NewFakeExecutor()
+	exec.SetPaneContent("sess:", "baseline")
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	h1 := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+	h2 := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+
+	if got := p.StopWatchOwned(h1); got {
+		t.Errorf("StopWatchOwned(h1) = true, want false (h1 no longer owns the entry)")
+	}
+	if !p.HasWatcher("sess:") {
+		t.Errorf("HasWatcher(sess:) = false, want true (h2 must still be active)")
+	}
+	if got := p.StopWatchOwned(h2); !got {
+		t.Errorf("StopWatchOwned(h2) = false, want true (h2 owns the live entry)")
+	}
+	if p.HasWatcher("sess:") {
+		t.Errorf("HasWatcher(sess:) = true, want false after StopWatchOwned(h2)")
+	}
+}
+
+// TestProber_StopWatchOwned_NoEntry_ReturnsFalse pins the
+// nothing-to-stop case: StopWatchOwned on a target that was never
+// watched returns false (idempotent, no panic).
+func TestProber_StopWatchOwned_NoEntry_ReturnsFalse(t *testing.T) {
+	exec := tmux.NewFakeExecutor()
+	p := probe.New(exec)
+
+	// Construct a synthetic handle. Production code only obtains
+	// handles from Watch; this test reaches for the zero value to
+	// confirm no-watcher == false.
+	var zero probe.WatchHandle
+	if got := p.StopWatchOwned(zero); got {
+		t.Errorf("StopWatchOwned(zero handle, no entry) = true, want false")
+	}
+}
+
+// TestProber_StopWatchOwned_AfterStopWatch_ReturnsFalse pins the
+// legacy-API interaction: StopWatch (target-only) clears the entry,
+// so a later StopWatchOwned with a stale handle returns false even
+// though it once owned the entry.
+func TestProber_StopWatchOwned_AfterStopWatch_ReturnsFalse(t *testing.T) {
+	exec := tmux.NewFakeExecutor()
+	exec.SetPaneContent("sess:", "baseline")
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	h := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+	p.StopWatch("sess:")
+
+	if got := p.StopWatchOwned(h); got {
+		t.Errorf("StopWatchOwned(h) after StopWatch = true, want false")
+	}
+	if p.HasWatcher("sess:") {
+		t.Errorf("HasWatcher(sess:) = true, want false after StopWatch")
 	}
 }
