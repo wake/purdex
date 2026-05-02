@@ -157,13 +157,23 @@ func TestSweepIntegration_RealBroker_DryRunThenApply(t *testing.T) {
 		}
 	}
 	if ourKey == "" {
-		// Environmental skip: the real broker may not have written its
-		// state-dir into the canonical location yet (codex CLI lifecycle
-		// varies by version). The mass-kill safety + override semantics are
-		// covered by unit tests (TestSweepHandler_*); this integration test
-		// is a smoke test only. Log + skip rather than fail so a CI run on
-		// a machine without an installed codex broker doesn't show red.
-		t.Skipf("integration smoke skipped: spawned broker (cwd=%s) did not appear in scanner evaluated list within budget — this is environmental and covered by unit tests", cwdDir)
+		// PR review finding G: the spawned broker NOT appearing in the
+		// scanner inventory IS a Task S regression scenario — the whole
+		// point of this integration test is to catch breakage in the
+		// scanner discovery + production wiring path. Skipping here masked
+		// real regressions.
+		//
+		// Allow opt-out via PDX_INTEGRATION_SKIP_ON_DISCOVERY=1 for CI
+		// machines where a codex broker can be spawned but its state-dir
+		// genuinely lives outside the canonical PluginDataRoot (e.g.
+		// container sandboxes). Default behaviour is t.Fatalf.
+		if os.Getenv("PDX_INTEGRATION_SKIP_ON_DISCOVERY") == "1" {
+			t.Skipf("scanner-discovery skip requested via env: spawned broker (cwd=%s) not in evaluated list", cwdDir)
+		}
+		t.Fatalf("REGRESSION: spawned broker (cwd=%s) did not appear in scanner inventory; "+
+			"this indicates a break in scanner discovery, production wiring, or PluginDataRoot resolution. "+
+			"Set PDX_INTEGRATION_SKIP_ON_DISCOVERY=1 to opt out on environments where the broker lives outside the canonical data root.",
+			cwdDir)
 	}
 
 	// Kill the broker externally so it becomes process-dead. The state-dir
@@ -197,10 +207,8 @@ func TestSweepIntegration_RealBroker_DryRunThenApply(t *testing.T) {
 	}
 	var filteredResp SweepResponse
 	_ = json.NewDecoder(w.Body).Decode(&filteredResp)
-	// Note: Step 0 identity verify will likely fail because the process is
-	// already dead by SIGTERM above — that surfaces as an error in the
-	// Errors slice rather than Applied. The operative integration assertion
-	// is that the audit reason flipped, NOT that a kill succeeded.
+	// Audit reason must always flip to manual_sweep_override on filtered
+	// apply against a foreign-quarantine broker, regardless of kill outcome.
 	found := false
 	for _, ev := range filteredResp.Evaluated {
 		if ev.Broker.Key == ourKey && ev.Decision.Reason == "manual_sweep_override" {
@@ -209,6 +217,65 @@ func TestSweepIntegration_RealBroker_DryRunThenApply(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected manual_sweep_override audit reason for filtered apply on %s; got evaluated=%+v", ourKey, filteredResp.Evaluated)
+	}
+
+	// PR review finding G: the post-kill outcome MUST satisfy at least one
+	// of two acceptance branches; previously only the audit-reason flip was
+	// asserted, masking regressions in scanner discovery, real apply,
+	// Step 0 behaviour, and audit creation.
+	//
+	//   Branch 1 (kill applied): rec.Key in resp.Applied, an
+	//   audit/orphan-<key>-<unixTs>.json file exists with the
+	//   "manual_sweep_override" reason, and the cxc-* socket dir is
+	//   removed (or the response surfaces a defer reason in Errors).
+	//
+	//   Branch 2 (identity mismatch quarantined): rec.Key in
+	//   resp.Quarantined — Step 0 saw a drift between scanner snapshot
+	//   and live ps row (PID-reuse race). The handler must have appended
+	//   to the in-memory quarantine. (Audit file may or may not exist
+	//   depending on Step 0 sequence.)
+	branch1Applied := false
+	for _, k := range filteredResp.Applied {
+		if k == ourKey {
+			branch1Applied = true
+		}
+	}
+	branch2Quarantined := false
+	for _, k := range filteredResp.Quarantined {
+		if k == ourKey {
+			branch2Quarantined = true
+		}
+	}
+	switch {
+	case branch1Applied:
+		// Verify audit dump exists with the manual_sweep_override reason.
+		entries, _ := os.ReadDir(auditDir)
+		auditFound := false
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), "orphan-"+ourKey+"-") {
+				continue
+			}
+			body, rerr := os.ReadFile(filepath.Join(auditDir, e.Name()))
+			if rerr != nil {
+				t.Errorf("audit read: %v", rerr)
+				continue
+			}
+			if !strings.Contains(string(body), "manual_sweep_override") {
+				t.Errorf("audit file %s does not contain manual_sweep_override reason; body=%s", e.Name(), string(body))
+			}
+			auditFound = true
+		}
+		if !auditFound {
+			t.Errorf("REGRESSION: branch 1 (kill applied) but no orphan-%s-*.json audit file in %s", ourKey, auditDir)
+		}
+	case branch2Quarantined:
+		// Identity-mismatch path. No further on-disk assertion required at
+		// this level; the unit test
+		// TestSweepHandler_IdentityMismatch_PersistsQuarantine covers the
+		// in-memory + disk semantics of the quarantine append.
+	default:
+		t.Fatalf("REGRESSION: filtered apply on %s neither killed (Applied=%v) nor quarantined (Quarantined=%v) — Errors=%v",
+			ourKey, filteredResp.Applied, filteredResp.Quarantined, filteredResp.Errors)
 	}
 }
 
