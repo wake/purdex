@@ -1,7 +1,7 @@
 import type { LinkMatcher } from '../types'
 
 // 絕對路徑：必須以 `/` 開頭 + 末段 name.ext（支援多重副檔名如 .d.ts / .min.js）
-export const ABS_RE = /(?<![\w/:~])(\/(?:[\w.-]+\/)*[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
+export const ABS_RE = /(?<![\w/:~.])(\/(?:[\w.-]+\/)*[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g
 
 // Tilde 路徑：以 ~/ 開頭 + 末段 name.ext（支援 dotdir 與多重副檔名）
 export const TILDE_RE = /(?<![\w/:~])(~\/(?:[\w.-]+\/)*[\w-]+(?:\.[A-Za-z0-9]+)+)(?::(\d+)(?::(\d+))?)?/g

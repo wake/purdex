@@ -48,6 +48,10 @@ describe('createFilePathMatcher — absolute', () => {
   it('does NOT pick /foo.ts out of ~/foo.ts', () => {
     expect(make().provide('open ~/foo.ts')).toHaveLength(0)
   })
+
+  it('does NOT pick /CLAUDE.md out of ./CLAUDE.md', () => {
+    expect(make().provide('open ./CLAUDE.md')).toHaveLength(0)
+  })
 })
 
 describe('createFilePathMatcher — relativeSlash', () => {
@@ -59,6 +63,13 @@ describe('createFilePathMatcher — relativeSlash', () => {
     expect(r).toHaveLength(1)
     expect(r[0].text).toBe('src/App.tsx')
     expect(r[0].meta).toEqual({ path: 'src/App.tsx' })
+  })
+
+  it('matches ./CLAUDE.md', () => {
+    const r = make().provide('edit ./CLAUDE.md now')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('./CLAUDE.md')
+    expect(r[0].meta).toEqual({ path: './CLAUDE.md' })
   })
 
   it('matches internal/agent/cc/extract.go:14', () => {
