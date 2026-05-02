@@ -132,6 +132,39 @@ describe('QuickCommandsSettingsSection', () => {
     ).not.toThrow()
   })
 
+  // PR-2 (spec §4.4) — header pattern unified with Appearance / Terminal:
+  // outer wrapper drops `p-6` (GlobalSettingsPage already pads), and a
+  // `<p>` description follows the `<h2>` title.
+  it('outer wrapper does not include p-6 (relies on GlobalSettingsPage padding)', () => {
+    const { container } = render(<QuickCommandsSettingsSection />)
+    const outer = container.firstElementChild as HTMLElement
+    expect(outer.className).not.toMatch(/\bp-6\b/)
+  })
+
+  it('renders an h2 title followed by a p description (Appearance/Terminal pattern)', () => {
+    const { container } = render(<QuickCommandsSettingsSection />)
+    const h2 = container.querySelector('h2')
+    expect(h2).not.toBeNull()
+    expect(h2!.textContent).toMatch(/Quick Commands/i)
+    // The description `<p>` must be a sibling of the `<h2>` (not the
+    // empty-state `<p>` deeper in the commands list). Walk forward from
+    // the heading to its next element-level sibling.
+    const desc = h2!.nextElementSibling as HTMLElement | null
+    expect(desc).not.toBeNull()
+    expect(desc!.tagName.toLowerCase()).toBe('p')
+    // Description text must come from the new i18n key — t() with an
+    // unknown key returns the raw key, so a successful resolution means
+    // the textContent is NOT the literal key string.
+    expect(desc!.textContent).not.toBe('settings.quick_commands.desc')
+    expect(desc!.textContent?.length ?? 0).toBeGreaterThan(0)
+  })
+
+  it('+ New trigger still opens the dialog with empty fields (header refactor preserves CRUD)', () => {
+    render(<QuickCommandsSettingsSection />)
+    fireEvent.click(screen.getByRole('button', { name: /New/i }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
   // codex round-1 C15 — keyboard accessibility on multi-select mount chips
   it('mount-target chips support Space/Enter activation and ArrowRight/ArrowLeft roving focus', () => {
     render(<QuickCommandsSettingsSection />)
