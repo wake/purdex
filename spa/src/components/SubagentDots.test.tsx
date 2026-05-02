@@ -11,6 +11,8 @@ function makeRef(partial: Partial<SubagentRef>): SubagentRef {
     source_pid: partial.source_pid ?? 0,
     source_start_time: partial.source_start_time ?? '',
     is_proxy: partial.is_proxy,
+    delegating: partial.delegating,
+    delegating_tool_use_ids: partial.delegating_tool_use_ids,
   }
 }
 
@@ -64,5 +66,45 @@ describe('SubagentDots', () => {
     expect(dot.getAttribute('data-is-proxy')).toBe('false')
     expect(dot.style.backgroundColor).toBe('rgb(96, 165, 250)')
     expect(dot.style.border).toBe('')
+  })
+
+  // Phase 4 (issue #821): delegating flag composes with is_proxy via OR to
+  // render orange. Both signals indicate "agent is awaiting downstream"; they
+  // coexist without interference. Spec §3.6 / §6.4.
+
+  it('delegating=true, is_proxy=false → orange + data-delegating="true"', () => {
+    const refs = [makeRef({ id: 'd1', type: 'cc', is_proxy: false, delegating: true })]
+    const { container } = render(<SubagentDots refs={refs} />)
+    const dot = container.querySelector<HTMLElement>('[data-testid="subagent-dot"]')!
+    expect(dot.style.backgroundColor).toBe('rgb(249, 115, 22)')
+    expect(dot.getAttribute('data-delegating')).toBe('true')
+    expect(dot.getAttribute('data-is-proxy')).toBe('false')
+  })
+
+  it('delegating=false, is_proxy=true → orange + data-delegating="false"', () => {
+    const refs = [makeRef({ id: 'd2', type: 'codex', is_proxy: true, delegating: false })]
+    const { container } = render(<SubagentDots refs={refs} />)
+    const dot = container.querySelector<HTMLElement>('[data-testid="subagent-dot"]')!
+    expect(dot.style.backgroundColor).toBe('rgb(249, 115, 22)')
+    expect(dot.getAttribute('data-delegating')).toBe('false')
+    expect(dot.getAttribute('data-is-proxy')).toBe('true')
+  })
+
+  it('delegating=true, is_proxy=true → orange + both attrs true (OR composition)', () => {
+    const refs = [makeRef({ id: 'd3', type: 'codex', is_proxy: true, delegating: true })]
+    const { container } = render(<SubagentDots refs={refs} />)
+    const dot = container.querySelector<HTMLElement>('[data-testid="subagent-dot"]')!
+    expect(dot.style.backgroundColor).toBe('rgb(249, 115, 22)')
+    expect(dot.getAttribute('data-delegating')).toBe('true')
+    expect(dot.getAttribute('data-is-proxy')).toBe('true')
+  })
+
+  it('delegating=false, is_proxy=false → blue + both attrs false', () => {
+    const refs = [makeRef({ id: 'd4', type: 'cc', is_proxy: false, delegating: false })]
+    const { container } = render(<SubagentDots refs={refs} />)
+    const dot = container.querySelector<HTMLElement>('[data-testid="subagent-dot"]')!
+    expect(dot.style.backgroundColor).toBe('rgb(96, 165, 250)')
+    expect(dot.getAttribute('data-delegating')).toBe('false')
+    expect(dot.getAttribute('data-is-proxy')).toBe('false')
   })
 })
