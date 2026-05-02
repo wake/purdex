@@ -272,6 +272,60 @@ func (ks *KillSequence) killBudget() time.Duration {
 	return DefaultKillTimeout
 }
 
+// DefaultVerifyGoneTimeout caps the spec §5.4 Step 5 lister scan; spec
+// describes Step 5 as best-effort and bounds it tightly so a slow ps
+// doesn't stall the kill sequence.
+const DefaultVerifyGoneTimeout = 2 * time.Second
+
+// stepVerifyGone implements spec §5.4 Step 5 (lines 457-459): re-list the
+// process table and confirm no pid in the original (pid, lstart) family
+// remains. The "family" is defined as either:
+//
+//   - a row whose PID equals ks.Rec.PID, OR
+//   - a row whose Lstart matches ks.Rec.Lstart (within ±1s tolerance,
+//     identical to the VerifyIdentity tolerance) AND whose Cmdline contains
+//     the broker task-worker marker.
+//
+// Best-effort: if the lister errors out, returns true so cleanup is not
+// blocked by transient ps unavailability. The kill itself is deemed
+// complete after Step 4; Step 5 is a sanity probe only.
+func (ks *KillSequence) stepVerifyGone(ctx context.Context) bool {
+	if ks.Lister == nil {
+		return true
+	}
+	listCtx, cancel := context.WithTimeout(ctx, DefaultVerifyGoneTimeout)
+	defer cancel()
+	rows, err := ks.Lister.List(listCtx)
+	if err != nil {
+		// Spec §5.4 line 459: best-effort. A transient lister failure
+		// must not gate cleanup.
+		return true
+	}
+	for _, row := range rows {
+		if row.PID == ks.Rec.PID {
+			return false
+		}
+		if !ks.Rec.Lstart.IsZero() && rowMatchesFamily(row, ks.Rec.Lstart) {
+			return false
+		}
+	}
+	return true
+}
+
+func rowMatchesFamily(row RawProcess, lstart time.Time) bool {
+	if row.Lstart.IsZero() {
+		return false
+	}
+	drift := row.Lstart.Sub(lstart)
+	if drift < 0 {
+		drift = -drift
+	}
+	if drift > lstartTolerance {
+		return false
+	}
+	return strings.Contains(row.Cmdline, brokerTaskWorkerCmdlineMarker)
+}
+
 // processGone returns true iff the lister no longer returns a row whose
 // pid matches ks.Rec.PID. A nil lister or a lister error returns false
 // (conservative: do not declare graceful success unless we positively

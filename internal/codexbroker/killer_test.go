@@ -492,6 +492,71 @@ func TestStepSIGKILL_PgidLeOne_Refused(t *testing.T) {
 	}
 }
 
+// -- Task N: Step 5 verify family gone -----------------------------------
+
+// errLister is a ProcessLister that always returns an error.
+type errLister struct{ err error }
+
+func (l errLister) List(_ context.Context) ([]RawProcess, error) {
+	return nil, l.err
+}
+
+// TestStepVerifyGone_AllGone — lister returns no rows for our pid or any
+// child sharing our lstart → step returns true.
+func TestStepVerifyGone_AllGone(t *testing.T) {
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
+	// Lister returns an unrelated process whose lstart is different.
+	lister := newDynamicLister([]RawProcess{{
+		PID: 9999, Lstart: lstart.Add(1 * time.Hour),
+		Cmdline: "/usr/bin/zsh -i",
+	}})
+	ks := &KillSequence{Rec: rec, Lister: lister}
+	if ok := ks.stepVerifyGone(context.Background()); !ok {
+		t.Errorf("expected stepVerifyGone=true with no family rows")
+	}
+}
+
+// TestStepVerifyGone_StrayChildRemains — lister returns a child whose lstart
+// matches the original family → false.
+func TestStepVerifyGone_StrayChildRemains(t *testing.T) {
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
+	lister := newDynamicLister([]RawProcess{{
+		// Child of the broker — same lstart, different pid.
+		PID: 4322, PPID: 4321, Lstart: lstart,
+		Cmdline: "node app-server-broker.mjs --task-worker",
+	}})
+	ks := &KillSequence{Rec: rec, Lister: lister}
+	if ok := ks.stepVerifyGone(context.Background()); ok {
+		t.Errorf("expected stepVerifyGone=false with stray child")
+	}
+}
+
+// TestStepVerifyGone_OurPidStillThere — the original pid is still present →
+// false (most direct evidence the kill failed).
+func TestStepVerifyGone_OurPidStillThere(t *testing.T) {
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: lstart}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Lstart: lstart, Cmdline: "node app-server-broker.mjs",
+	}})
+	ks := &KillSequence{Rec: rec, Lister: lister}
+	if ok := ks.stepVerifyGone(context.Background()); ok {
+		t.Errorf("expected stepVerifyGone=false when our pid is still listed")
+	}
+}
+
+// TestStepVerifyGone_ListerError — best-effort: a lister error returns true
+// rather than blocking cleanup. Spec §5.4 lines 458-459.
+func TestStepVerifyGone_ListerError(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	ks := &KillSequence{Rec: rec, Lister: errLister{err: errors.New("ps unavailable")}}
+	if ok := ks.stepVerifyGone(context.Background()); !ok {
+		t.Errorf("expected stepVerifyGone=true on lister error (best-effort)")
+	}
+}
+
 // -- Test helpers used across Tasks L–P ----------------------------------
 
 // _ keeps the imports we need across the file alive (some tests below use
