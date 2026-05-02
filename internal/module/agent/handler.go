@@ -151,6 +151,15 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize sender_start_time once at the boundary. verify.go:52 already
+	// TrimSpaces both sides of its compare, but downstream identity lookups
+	// (findProxyRefByBroker, removeProxyRefForSender, GetByIdentity) use
+	// req.SenderStartTime as a raw exact-match key. Without canonicalization
+	// here, a hook payload with a padded value (e.g. " t1 ") would pass
+	// verify yet miss every L2 lookup, leaking refs or splitting identity
+	// (round-2 A3).
+	req.SenderStartTime = strings.TrimSpace(req.SenderStartTime)
+
 	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.PurdexName == "" || req.SenderPID == 0 {
 		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return

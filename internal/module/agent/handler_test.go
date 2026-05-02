@@ -353,6 +353,51 @@ func TestHandleEvent_RejectsLegacyPayload(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_NormalizesSenderStartTime pins the round-2 A3 boundary
+// canonicalization: a hook payload whose sender_start_time field is padded
+// with surrounding whitespace must reach downstream identity lookups in
+// trimmed form. verify.go:52 already TrimSpaces both sides of its compare,
+// but findProxyRefForBroker / removeProxyRefForSender / GetByIdentity use
+// the raw EventRequest field as an exact-match key — without normalization
+// at the boundary, padded payloads pass verify yet split identity from
+// non-padded events for the same broker.
+func TestHandleEvent_NormalizesSenderStartTime(t *testing.T) {
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
+
+	// Padded sender_start_time. The actualStart returned by
+	// processStartTimeFn (set in newTestModule) is the canonical form, so
+	// verify accepts via TrimSpace. We then assert the stored frame's
+	// ProcessStartTime is the trimmed value — proving handleEvent
+	// canonicalized req.SenderStartTime before frame_ops consumed it.
+	body := `{"tmux_session":"dev","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"  Sun Apr 20 01:30:00 2026  ","purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	m.handleEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	frames, err := m.frames.ListByPane("%9")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	if frames[0].ProcessStartTime != "Sun Apr 20 01:30:00 2026" {
+		t.Errorf("ProcessStartTime = %q, want trimmed canonical form", frames[0].ProcessStartTime)
+	}
+}
+
 // TestHandleEvent_StoresAgentType verifies that accepted hooks project agent
 // identity into frames instead of keeping a dual-written legacy row.
 func TestHandleEvent_StoresAgentType(t *testing.T) {
