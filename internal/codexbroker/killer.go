@@ -101,3 +101,90 @@ func (ks *KillSequence) runStep1(_ context.Context, decision DecisionResult) (st
 	tail := ReadBrokerLogTail(ks.Rec.StateDir, ks.FS, DefaultBrokerLogTailLines)
 	return WritePreimage(ks.AuditDir, ks.Rec, decision, tail)
 }
+
+// stepGraceful implements spec §5.4 Step 2: dial the broker's unix socket
+// endpoint and POST a shutdown request, then poll the lister until the
+// broker process exits or GracefulTimeout elapses.
+//
+// Returns true iff the broker is observed to be gone within budget. A
+// missing endpoint, nil dialer/lister, dial failure, or RPC timeout all
+// surface as false; the caller proceeds to Step 3 (SIGTERM).
+//
+// The graceful path is best-effort: SIGTERM is the reliable kill path per
+// plan §3 / §9, and the audit preimage already committed in Step 1 is the
+// durable record regardless of whether graceful succeeds.
+func (ks *KillSequence) stepGraceful(ctx context.Context) bool {
+	if ks.Rec.Endpoint == "" || ks.Dialer == nil {
+		return false
+	}
+	addr := strings.TrimPrefix(ks.Rec.Endpoint, "unix:")
+	if addr == ks.Rec.Endpoint {
+		// Non-unix endpoint scheme — we don't speak it in P2.
+		return false
+	}
+
+	budget := ks.GracefulTimeout
+	if budget <= 0 {
+		budget = DefaultGracefulShutdownTimeout
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	// Fire-and-forget the shutdown request in a goroutine; the actual
+	// liveness signal is the lister no longer returning a row for our pid,
+	// not the HTTP response code. The goroutine is bounded by rpcCtx.
+	go func() {
+		conn, err := ks.Dialer.Dial("unix", addr)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if dl, ok := rpcCtx.Deadline(); ok {
+			_ = conn.SetDeadline(dl)
+		}
+		req := "POST /shutdown HTTP/1.1\r\nHost: broker\r\nContent-Length: 0\r\n\r\n"
+		_, _ = conn.Write([]byte(req))
+		// Read at most one byte of the response so we don't block on a
+		// shutdown handler that closes the conn before flushing.
+		var buf [1]byte
+		_, _ = conn.Read(buf[:])
+	}()
+
+	// Poll the lister at a moderate cadence until either the process is
+	// gone or the budget expires.
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if ks.processGone(rpcCtx) {
+			return true
+		}
+		select {
+		case <-rpcCtx.Done():
+			return false
+		case <-ticker.C:
+			// next tick
+		}
+	}
+}
+
+// processGone returns true iff the lister no longer returns a row whose
+// pid matches ks.Rec.PID. A nil lister or a lister error returns false
+// (conservative: do not declare graceful success unless we positively
+// confirm the row is gone).
+func (ks *KillSequence) processGone(ctx context.Context) bool {
+	if ks.Lister == nil {
+		return false
+	}
+	listCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	rows, err := ks.Lister.List(listCtx)
+	if err != nil {
+		return false
+	}
+	for _, row := range rows {
+		if row.PID == ks.Rec.PID {
+			return false
+		}
+	}
+	return true
+}
