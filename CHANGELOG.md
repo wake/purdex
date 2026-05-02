@@ -28,6 +28,19 @@ covering both fresh-mount and mounted-then-navigate paths.
 Follow-up issue #822 tracks extracting `<ModuleOwnedPuzzleIcon>` as a
 shared component across the three sidebar callers.
 
+### Fix(agent): ignore detached frames in pane projection (#826)
+
+Pane/session projections now ignore alive-but-detached agent frame rows whose
+process no longer belongs to the current tmux pane tree. This prevents stale
+standalone Codex broker frames from becoming the tab's top agent after the real
+foreground agent exits; when no pane-owned frame remains, the projection emits
+`status=clear` so the SPA returns to the terminal icon.
+
+The filter is projection-only and fail-open on transient tmux/process lookup
+errors. Detached broker rows remain in the database for telemetry/history; they
+are just ineligible to represent the current pane unless their process ancestry
+includes the pane PID and their PID start time still matches.
+
 ## [1.0.0-alpha.287] - 2026-05-03
 
 ### Refactor(settings): PR-1 sidebar order and spacing cleanup (#816)
