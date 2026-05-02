@@ -218,37 +218,72 @@ func TestIntegration_ScreenChange_LongDialogNaturalCover(t *testing.T) {
 // ScreenChanged events drop; later applyStatus(Idle) (PdxStop hook
 // cover) takes the session to Idle WITHOUT a Running intermediate.
 // By contract: lights waiting → idle, skipping running phase.
+//
+// W6-6 R2 F2: rewritten to wait past probeIntentPreGraceWindow before
+// asserting status. The previous version slept only 80ms — well below
+// the 300ms J3 pre-grace hold. Even a broken detector (e.g. emit while
+// armed=false) would have its Signal queued in consumeSignals' pre-
+// grace timer, so the 80ms assertion observed Waiting regardless of
+// detector correctness. The subsequent applyStatus(Idle) then cancels
+// the active intent → pre-grace cancel path → Signal dropped, masking
+// the broken detector. Now we wait probeIntentPreGraceWindow + buffer
+// (350ms) before asserting; an erroneous emit would have flushed
+// through pre-grace into applyProbeGuards by then and updated
+// currentStatus.
 func TestIntegration_ScreenChange_Case2FastWithOutput(t *testing.T) {
-	m, fw, _ := setupScreenChangeIntegration(t, func() bool { return true })
+	m, fw, sub := setupScreenChangeIntegration(t, func() bool { return true })
 
 	seedWaitingFrame(t, m, "work", "%5", "codex", 4242)
 	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusWaiting)
 	waitFor(t, time.Second, fw.hasCallback, "screen watcher callback registered")
 
-	// Many ScreenChanged events with NO ScreenStable — armed stays false.
+	// Many ScreenChanged events with NO ScreenStable — armed stays
+	// false. A correct detector drops every event; a broken detector
+	// (emit while armed=false) would queue Signals in the dispatcher.
 	for i := 0; i < 8; i++ {
 		fw.fire(probe.ScreenChangeEvent{Kind: probe.ScreenChanged})
 	}
 
-	// Sleep briefly — no emit must arrive.
-	time.Sleep(80 * time.Millisecond)
+	// Wait past probeIntentPreGraceWindow + buffer so any erroneous
+	// emit has time to clear the J3 pre-grace hold and reach
+	// applyProbeGuards / applyStatus. 50ms buffer covers timer
+	// scheduler jitter and the goroutine handoff between consumeSignals
+	// and applyProbeGuards. A broken detector would have updated
+	// currentStatus to Running by now; a correct detector hasn't even
+	// emitted, so nothing flows through.
+	time.Sleep(probeIntentPreGraceWindow + 50*time.Millisecond)
+
+	// Assertions on detector correctness:
+	//   1. currentStatus stays Waiting (detector dropped all events).
 	if got := readCurrentStatus(m, "work"); got != agentpkg.StatusWaiting {
-		t.Fatalf("currentStatus = %q during case-2 armed=false, want Waiting", got)
+		t.Fatalf("currentStatus = %q after pre-grace window, want Waiting (detector should not emit while armed=false)", got)
+	}
+	//   2. ScreenChange active entry is still in place (no teardown
+	//      triggered because no transition occurred).
+	if _, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindScreenChange); !ok {
+		t.Fatalf("ScreenChange active entry missing — detector path took an unexpected teardown branch")
+	}
+	//   3. No Running broadcast was emitted (would indicate a Signal
+	//      flowed through applyStatus). Empty broadcast slice is fine
+	//      — the dispatcher is idle.
+	for _, n := range drainBroadcasts(sub, 50*time.Millisecond) {
+		if n.Status == string(agentpkg.StatusRunning) {
+			t.Errorf("unexpected Running broadcast during armed=false: %+v", n)
+		}
 	}
 
-	// PdxStop hook simulated: applyStatus(Idle).
+	// Now simulate the PdxStop hook → Idle. ScreenChange entry torn
+	// down (case 3 — Idle ∉ {Waiting}); no spurious Running flip.
 	m.mu.Lock()
 	m.currentStatus["work"] = agentpkg.StatusIdle
 	m.mu.Unlock()
 	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusIdle)
 
-	// ScreenChange entry torn down (case 3 — Idle ∉ {Waiting}).
 	waitFor(t, 2*time.Second, func() bool {
 		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindScreenChange)
 		return !ok
 	}, "ScreenChange entry torn down on Idle")
 
-	// Status stayed at Idle (no spurious Running flip).
 	if got := readCurrentStatus(m, "work"); got != agentpkg.StatusIdle {
 		t.Errorf("currentStatus = %q after PdxStop, want Idle (case 2 by-contract)", got)
 	}
