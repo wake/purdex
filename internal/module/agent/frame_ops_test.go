@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -5500,6 +5501,272 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
 		if final == nil || len(final.Subagents) != 0 {
 			t.Fatalf("Subagents = %+v, want empty after cc Stop wildcard detach", final.Subagents)
+		}
+	})
+
+	// Row 14: parent cc + 1 ref(PID=42, t1, turnID="t_a"). Sequential:
+	// Stop(t_a) → Stop(t_a) again → call 1 detached, call 2 no-op trace
+	// stop_no_match (idempotent / retry-safe).
+	t.Run("row14_codex_stop_idempotent_second_call_no_match", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta1, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("Stop call 1: %v", err)
+		}
+		if meta1.Reason != "proxy_subagent_detached_on_stop_turn" {
+			t.Fatalf("call 1 reason = %q, want proxy_subagent_detached_on_stop_turn", meta1.Reason)
+		}
+
+		_, meta2, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 300)
+		if err != nil {
+			t.Fatalf("Stop call 2: %v", err)
+		}
+		if meta2.Reason != "proxy_subagent_stop_no_match" {
+			t.Fatalf("call 2 reason = %q, want proxy_subagent_stop_no_match (idempotent no-op)", meta2.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after both Stops", final.Subagents)
+		}
+	})
+
+	// Row 15: parent cc + 1 ref(PID=42, t1, turnID="") (SessionStart attached).
+	// Sequential lifecycle: UserPromptSubmit(t_a) → PreToolUse(t_a) ×2 → Stop(t_a).
+	// Verifies the full attach → upsert → upsert(idempotent) → detach pipeline
+	// stays at exactly 1 ref through every middle step and lands at 0 after Stop.
+	t.Run("row15_codex_full_lifecycle_sequential", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		base := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			AgentType: "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+
+		steps := []struct {
+			name       string
+			purdex     string
+			result     agentpkg.DeriveResult
+			ts         int64
+			wantReason string
+			wantRefs   int
+			wantTurnID string
+		}{
+			{"user_prompt", "PdxUserPromptSubmit", agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 100, "proxy_subagent_upserted_on_user_prompt", 1, "t_a"},
+			{"pre_tool_1", "PdxPreToolUse", agentpkg.DeriveResult{Valid: true, Detail: map[string]any{}}, 200, "proxy_subagent_upserted_on_user_prompt", 1, "t_a"},
+			{"pre_tool_2", "PdxPreToolUse", agentpkg.DeriveResult{Valid: true, Detail: map[string]any{}}, 300, "proxy_subagent_upserted_on_user_prompt", 1, "t_a"},
+		}
+		for _, step := range steps {
+			req := base
+			req.PurdexName = step.purdex
+			_, meta, err := m.applyFrameEvent(req, step.result, step.ts)
+			if err != nil {
+				t.Fatalf("step %s: %v", step.name, err)
+			}
+			if meta.Reason != step.wantReason {
+				t.Fatalf("step %s reason = %q, want %q", step.name, meta.Reason, step.wantReason)
+			}
+			final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+			if final == nil || len(final.Subagents) != step.wantRefs {
+				t.Fatalf("step %s Subagents count = %d, want %d; refs=%+v", step.name, len(final.Subagents), step.wantRefs, final.Subagents)
+			}
+			if final.Subagents[0].SourceTurnID != step.wantTurnID {
+				t.Fatalf("step %s ref.SourceTurnID = %q, want %q", step.name, final.Subagents[0].SourceTurnID, step.wantTurnID)
+			}
+		}
+
+		// Final Stop(t_a) → targeted detach.
+		stopReq := base
+		stopReq.PurdexName = "PdxStop"
+		_, stopMeta, err := m.applyFrameEvent(stopReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 400)
+		if err != nil {
+			t.Fatalf("Stop step: %v", err)
+		}
+		if stopMeta.Reason != "proxy_subagent_detached_on_stop_turn" {
+			t.Fatalf("Stop reason = %q, want proxy_subagent_detached_on_stop_turn", stopMeta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents after Stop = %+v, want empty", final.Subagents)
+		}
+	})
+
+	// Row 15b: 3-goroutine same-turn upsert race. parent cc + 1 ref(PID=42,
+	// t1, turnID=""). Three concurrent calls — UserPromptSubmit(t_a) +
+	// PreToolUse(t_a) + PreToolUse(t_a) — must converge to exactly one
+	// ref with turnID="t_a". Forbidden final states asserted independently
+	// (no `Equal` shortcut that conflates outcomes).
+	t.Run("row15b_concurrent_same_turn_upsert_race", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		base := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			AgentType: "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		callers := []struct {
+			purdex string
+			result agentpkg.DeriveResult
+			ts     int64
+		}{
+			{"PdxUserPromptSubmit", agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 100},
+			{"PdxPreToolUse", agentpkg.DeriveResult{Valid: true, Detail: map[string]any{}}, 200},
+			{"PdxPreToolUse", agentpkg.DeriveResult{Valid: true, Detail: map[string]any{}}, 300},
+		}
+		var wg sync.WaitGroup
+		for _, c := range callers {
+			wg.Add(1)
+			go func(c struct {
+				purdex string
+				result agentpkg.DeriveResult
+				ts     int64
+			}) {
+				defer wg.Done()
+				req := base
+				req.PurdexName = c.purdex
+				_, _, err := m.applyFrameEvent(req, c.result, c.ts)
+				if err != nil {
+					// Don't fail from the goroutine; record via t.Errorf
+					// from the callsite is unsafe. Instead use t.Errorf
+					// (testing.T.Errorf is goroutine-safe per docs).
+					t.Errorf("applyFrameEvent: %v", err)
+				}
+			}(c)
+		}
+		wg.Wait()
+
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil {
+			t.Fatalf("parent frame missing after race")
+		}
+		// Forbidden state (i): ≥ 2 refs.
+		if len(final.Subagents) >= 2 {
+			t.Errorf("forbidden: Subagents count = %d, want exactly 1; refs=%+v", len(final.Subagents), final.Subagents)
+		}
+		// Forbidden state (ii): 0 refs.
+		if len(final.Subagents) == 0 {
+			t.Errorf("forbidden: Subagents empty after concurrent upsert; want exactly 1 ref")
+		}
+		// Forbidden state (iii): ref with turnID != "t_a".
+		if len(final.Subagents) == 1 && final.Subagents[0].SourceTurnID != "t_a" {
+			t.Errorf("forbidden: ref.SourceTurnID = %q, want t_a; ref=%+v", final.Subagents[0].SourceTurnID, final.Subagents[0])
+		}
+	})
+
+	// Row 16: parent cc + 1 ref(PID=42, t1, turnID="t_a"). Concurrent:
+	// goroutine A UserPromptSubmit(t_b), goroutine B Stop(t_a). Two valid
+	// final states (per spec §5 row 16). Forbidden states asserted
+	// independently.
+	t.Run("row16_concurrent_turn_change_vs_stop_race", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		base := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			AgentType: "codex", SenderPID: 42, SenderStartTime: "t1",
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			req := base
+			req.PurdexName = "PdxUserPromptSubmit"
+			req.RawEvent = rawTurn("t_b")
+			_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+			if err != nil {
+				t.Errorf("UserPromptSubmit: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			req := base
+			req.PurdexName = "PdxStop"
+			req.RawEvent = rawTurn("t_a")
+			_, _, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+			if err != nil {
+				t.Errorf("Stop: %v", err)
+			}
+		}()
+		wg.Wait()
+
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil {
+			t.Fatalf("parent frame missing after race")
+		}
+		// Independent forbidden state assertions (NOT joined via single
+		// Equal; spec §5 row 16 + §5.1 explicit requirement).
+		// Forbidden (i): zero refs.
+		if len(final.Subagents) == 0 {
+			t.Errorf("forbidden: zero refs after concurrent attach+detach race")
+		}
+		// Forbidden (ii): 2+ refs.
+		if len(final.Subagents) >= 2 {
+			t.Errorf("forbidden: %d refs, want exactly 1; refs=%+v", len(final.Subagents), final.Subagents)
+		}
+		// Forbidden (iii): single ref with turnID = "t_a" (Stop's turn,
+		// neither UserPromptSubmit-overwritten t_b nor a fresh attach
+		// after detach).
+		if len(final.Subagents) == 1 && final.Subagents[0].SourceTurnID == "t_a" {
+			t.Errorf("forbidden: single ref retains stale turnID=t_a; ref=%+v", final.Subagents[0])
+		}
+	})
+
+	// Row 19: parent cc + 1 ref(PID=42, t1, turnID="t_a"). Stop arrives
+	// from PID=42 with stale SourceStartTime=t_OLD (PID-reuse scenario).
+	// Ref kept (StartTime mismatch); trace stop_no_match.
+	t.Run("row19_codex_stop_pid_reuse_stale_start_time", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t_OLD",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_stop_no_match" {
+			t.Fatalf("reason = %q, want proxy_subagent_stop_no_match (PID-reuse stale)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 {
+			t.Fatalf("Subagents = %+v, want unchanged (PID-reuse safety)", final.Subagents)
+		}
+		if final.Subagents[0].SourceTurnID != "t_a" || final.Subagents[0].SourceStartTime != "t1" {
+			t.Fatalf("ref drifted: %+v, want PID=42 StartTime=t1 turnID=t_a", final.Subagents[0])
 		}
 	})
 }
