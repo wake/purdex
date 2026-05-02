@@ -5031,6 +5031,46 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		}
 	})
 
+	// Row 7b (round-2 D1): parent cc + 0 refs (resumeThread first dispatch,
+	// no SessionStart) → first hook is PdxPreToolUse from PID=42 raw
+	// turn_id="t_a" AgentType=codex → first-time attach via append; ref ID
+	// == "proxy:codex:42:t1". Pins spec §2.2: the first hook on a recovered
+	// thread can legitimately be PreToolUse (not just UserPromptSubmit) when
+	// the codex CLI emits PreToolUse before its first UserPromptSubmit.
+	// Row 7 covered UserPromptSubmit only; this case proves the same upsert
+	// path runs for PreToolUse.
+	t.Run("row07b_pre_tool_first_time_attach_resume_thread", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, nil)
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxPreToolUse",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_attached_on_user_prompt" {
+			t.Fatalf("reason = %q, want proxy_subagent_attached_on_user_prompt (PreToolUse shares the upsert path)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 {
+			t.Fatalf("Subagents = %+v, want exactly 1 ref after first PreToolUse attach", final.Subagents)
+		}
+		got := final.Subagents[0]
+		wantID := "proxy:codex:42:t1"
+		if got.ID != wantID {
+			t.Fatalf("ref.ID = %q, want %q", got.ID, wantID)
+		}
+		if got.Type != "codex" || !got.IsProxy || got.SourcePID != 42 || got.SourceStartTime != "t1" || got.SourceTurnID != "t_a" {
+			t.Fatalf("ref = %+v, want IsProxy=true Type=codex PID=42 StartTime=t1 turnID=t_a", got)
+		}
+	})
+
 	// Row 17: opencode UserPromptSubmit (AgentType != codex) → must break
 	// early; existing generic path runs. Subagents on the cc parent must
 	// remain unchanged. (Spec §5 row 17 isolation guard.)
@@ -5062,7 +5102,6 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		// creates a standalone frame. EITHER way — the cc parent's
 		// Subagents must NOT have a SourceTurnID="ignored" written by
 		// the new lifecycle case.
-		_ = meta
 		final, err := m.frames.GetByIdentity("%5", 100, "t100")
 		if err != nil || final == nil {
 			t.Fatalf("reload parent: %v / %v", err, final)
@@ -5071,6 +5110,26 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 			if ref.SourceTurnID == "ignored" {
 				t.Fatalf("opencode UserPromptSubmit leaked SourceTurnID=ignored onto cc parent ref %+v", ref)
 			}
+		}
+		// Round-2 D3: strengthen the isolation guard. The cc parent must
+		// have zero Subagents (UserPromptSubmit must not attach any ref —
+		// proxy reconcile + fast-path are SessionStart-gated) AND meta.Reason
+		// must not be drawn from the L2 vocabulary (any new reason added by
+		// the L2 dispatch would mean opencode was incorrectly routed through
+		// the codex-only branch).
+		if len(final.Subagents) != 0 {
+			t.Errorf("Subagents = %+v, want empty (opencode UserPromptSubmit must not attach a ref)", final.Subagents)
+		}
+		l2Reasons := map[string]struct{}{
+			"proxy_subagent_attached_on_user_prompt":  {},
+			"proxy_subagent_upserted_on_user_prompt":  {},
+			"proxy_subagent_detached_on_stop_turn":    {},
+			"proxy_subagent_stop_no_match":            {},
+			"proxy_subagent_stop_parse_failed":        {},
+			"pre_tool_without_proxy_parent_skipped":   {},
+		}
+		if _, isL2 := l2Reasons[meta.Reason]; isL2 {
+			t.Errorf("meta.Reason = %q, must not be in L2 vocabulary for opencode UserPromptSubmit", meta.Reason)
 		}
 	})
 
@@ -5676,6 +5735,50 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
 		if final == nil || len(final.Subagents) != 0 {
 			t.Fatalf("Subagents = %+v, want empty after cc Stop wildcard detach", final.Subagents)
+		}
+	})
+
+	// Row 18b (round-2 D2): opencode Stop with no turn_id in raw, ref has
+	// empty SourceTurnID → wildcard detach via §3.3.D non-codex fallback
+	// (case (b) at frame_ops.go:289). Pins the opencode Stop branch
+	// explicitly — row 11 covers cc SessionEnd under opencode parent and
+	// row 18 covers cc Stop, but the AgentType=opencode + Stop combination
+	// had no dedicated row before this.
+	t.Run("row18b_opencode_stop_wildcard_fallback", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		// Parent cc + cross-type opencode proxy ref (legitimate
+		// opencode-under-cc shape from PR-2b).
+		m.registry.Register(&fakeAgentProvider{
+			typeName: "opencode",
+			derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		})
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:opencode:42:t1", Type: "opencode", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+			// SourceTurnID intentionally empty (opencode never populates it).
+		}})
+		origInfo := readProcessInfoFn
+		readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+			return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
+		}
+		t.Cleanup(func() { readProcessInfoFn = origInfo })
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "opencode", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: json.RawMessage(`{}`),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_detached_on_stop" {
+			t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop (opencode wildcard fallback)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after opencode Stop wildcard detach", final.Subagents)
 		}
 	})
 
