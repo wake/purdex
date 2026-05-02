@@ -270,6 +270,148 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			Before:        parentBefore,
 			After:         summarizeFrame(&stored),
 		}, err
+	case agentpkg.LifecycleStop, agentpkg.LifecycleStopFailure:
+		// L2 codex turn-aware Stop targeted detach (spec §3.3.D + plan
+		// §3 P3-T8a). All detach goes through pane-scan helpers; we never
+		// call findProxyParent on the Stop path because the sender's PPID
+		// chain may have already been torn down by the time the hook
+		// arrives (B1/v2 fix).
+		//
+		// Gate 1 — sender owns its own frame. Standalone agent Stop is
+		// the J3 dispatcher's territory (lights-rebuild ProbeIntent), not
+		// L2 proxy detach (spec §3.3.D + §5 row 12).
+		if frame != nil {
+			break
+		}
+		// Gate 2 — non-codex providers fall back to wildcard process-level
+		// detach (cc/opencode have no per-turn identity). Mirrors the
+		// long-standing PR-2b SessionEnd path.
+		if req.AgentType != "codex" {
+			removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs)
+			if derr != nil {
+				return nil, FrameTraceMeta{}, derr
+			}
+			if removed {
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       ownerAfter.FrameID,
+					ParentFrameID: ownerAfter.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "proxy_subagent_detached_on_stop",
+					Before:        ownerBefore,
+					After:         ownerAfterMap,
+				}, perr
+			}
+			// No matching ref — fall through to generic post-switch path
+			// so legacy behavior (no frame mutation, projection refresh)
+			// stays observable.
+			break
+		}
+		// Codex three sub-case dispatch (spec §3.3.D table).
+		turnID := parseCodexTurnID(req.RawEvent)
+		if turnID != "" {
+			// (a) Targeted detach by (PID, StartTime, TurnID).
+			removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSenderTurn(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, turnID, broadcastTs)
+			if derr != nil {
+				return nil, FrameTraceMeta{}, derr
+			}
+			if removed {
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       ownerAfter.FrameID,
+					ParentFrameID: ownerAfter.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "proxy_subagent_detached_on_stop_turn",
+					Before:        ownerBefore,
+					After:         ownerAfterMap,
+				}, perr
+			}
+			// Stop's turn doesn't match any live ref. Could be late Stop
+			// after a turn-change upsert overwrote SourceTurnID, or a
+			// stale-tombstone Stop after a previous detach (idempotent
+			// no-op). Trace stop_no_match either way.
+			projection, perr := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "proxy_subagent_stop_no_match",
+				Before:   map[string]any{},
+				After:    map[string]any{},
+			}, perr
+		}
+		// (b)/(c) — codex Stop with empty/parse-failed turn_id. Pane-scan
+		// for the matching broker ref (PID, StartTime) to make the
+		// fallback decision; any non-matching broker's SourceTurnID is
+		// irrelevant (H1/v2 fix).
+		paneFrames, perr := m.frames.ListByPane(req.TmuxPaneID)
+		if perr != nil {
+			return nil, FrameTraceMeta{}, perr
+		}
+		var matched *agentpkg.SubagentRef
+		for i := range paneFrames {
+			idx := findProxyRefByBroker(paneFrames[i].Subagents, req.SenderPID, req.SenderStartTime)
+			if idx >= 0 {
+				ref := paneFrames[i].Subagents[idx]
+				matched = &ref
+				break
+			}
+		}
+		if matched == nil {
+			// No broker ref to detach — silently drop the Stop. Trace as
+			// stop_no_match so the chain remains observable; this also
+			// covers idempotent re-Stop after a previous successful
+			// detach (row 14 lower-confidence branch).
+			projection, perr2 := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "proxy_subagent_stop_no_match",
+				Before:   map[string]any{},
+				After:    map[string]any{},
+			}, perr2
+		}
+		if matched.SourceTurnID != "" {
+			// (b) Matching broker has a live SourceTurnID (a previous
+			// upsert recorded a turn_id). Stop with empty turn_id is
+			// almost certainly a malformed payload, NOT a legitimate
+			// "broker is finished" signal — keep the ref so the
+			// conservative behavior preserves the lit dot until either
+			// the next upsert or governance sweep clears it.
+			projection, perr2 := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				Decision: "skipped",
+				Reason:   "proxy_subagent_stop_parse_failed",
+				Before:   map[string]any{},
+				After:    map[string]any{},
+			}, perr2
+		}
+		// (c) Matching broker has empty SourceTurnID (SessionStart
+		// attached but no UserPromptSubmit/PreToolUse upsert ever
+		// recorded a turn) → wildcard process-level detach.
+		removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs)
+		if derr != nil {
+			return nil, FrameTraceMeta{}, derr
+		}
+		if removed {
+			projection, perr2 := m.projectPane(req.TmuxPaneID)
+			return projection, FrameTraceMeta{
+				FrameID:       ownerAfter.FrameID,
+				ParentFrameID: ownerAfter.ParentFrameID,
+				Decision:      "updated_frame",
+				Reason:        "proxy_subagent_detached_on_stop",
+				Before:        ownerBefore,
+				After:         ownerAfterMap,
+			}, perr2
+		}
+		// Pane-scan saw a matching ref but the helper found nothing —
+		// concurrent writer detached between scan and helper. Trace
+		// stop_no_match so the chain accurately reflects "ref already
+		// gone" without claiming to have detached it twice.
+		projection, perr2 := m.projectPane(req.TmuxPaneID)
+		return projection, FrameTraceMeta{
+			Decision: "skipped",
+			Reason:   "proxy_subagent_stop_no_match",
+			Before:   map[string]any{},
+			After:    map[string]any{},
+		}, perr2
 	}
 
 	// Proxy subagent fast-path (Phase 2 PR-2b, plan §1.4): when a SessionStart

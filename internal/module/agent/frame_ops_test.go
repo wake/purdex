@@ -5107,4 +5107,234 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 			t.Fatalf("currentStatus[work] was written; PreToolUse no-parent must not broadcast status")
 		}
 	})
+
+	// Row 3: parent cc + 1 ref(PID=42, t1, turnID="t_a")
+	// → Stop from PID=42 raw turn_id="t_a", AgentType=codex
+	// → targeted detach via removeProxyRefForSenderTurn; trace
+	// proxy_subagent_detached_on_stop_turn.
+	t.Run("row03_codex_stop_targeted_detach_match", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+		}})
+		// Stop sender does not need PPID walk (detach is pane-scan), but
+		// readProcessInfoFn is invoked once when frame == nil after the L2
+		// case breaks (none here — case returns before generic path).
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_detached_on_stop_turn" {
+			t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop_turn; meta=%+v", meta.Reason, meta)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after targeted detach", final.Subagents)
+		}
+	})
+
+	// Row 4: parent cc + 1 ref(PID=42, t1, turnID="t_a")
+	// → Stop from PID=42 raw turn_id="t_b" (turn mismatch)
+	// → ref kept; trace proxy_subagent_stop_no_match.
+	t.Run("row04_codex_stop_turn_mismatch_keeps_ref", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_b"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_stop_no_match" {
+			t.Fatalf("reason = %q, want proxy_subagent_stop_no_match", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 || final.Subagents[0].SourceTurnID != "t_a" {
+			t.Fatalf("Subagents = %+v, want unchanged turn t_a", final.Subagents)
+		}
+	})
+
+	// Row 6: parent cc + 1 ref(PID=42, t1, turnID="t_a")
+	// → StopFailure from PID=42 raw turn_id="t_a"
+	// → targeted detach (StopFailure parity with Stop).
+	t.Run("row06_codex_stop_failure_parity_with_stop", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStopFailure",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_detached_on_stop_turn" {
+			t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop_turn (StopFailure parity)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after StopFailure detach", final.Subagents)
+		}
+	})
+
+	// Row 8: parent cc + 1 ref(PID=42, t1, turnID="t_a")
+	// → Stop from PID=42 with missing turn_id, AgentType=codex
+	// → matching broker ref has SourceTurnID="t_a" (non-empty) → SKIP detach;
+	// trace proxy_subagent_stop_parse_failed.
+	t.Run("row08_codex_stop_parse_failed_skip_with_existing_turn", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn(""),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_stop_parse_failed" {
+			t.Fatalf("reason = %q, want proxy_subagent_stop_parse_failed", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 || final.Subagents[0].SourceTurnID != "t_a" {
+			t.Fatalf("Subagents = %+v, want unchanged (skip detach)", final.Subagents)
+		}
+	})
+
+	// Row 9: parent cc + 1 ref(PID=42, t1, turnID="") (SessionStart attached
+	// but never upserted with turn_id) → Stop from PID=42 with empty
+	// turn_id, AgentType=codex → matching broker ref also has empty
+	// SourceTurnID → wildcard detach via removeProxyRefForSender; trace
+	// proxy_subagent_detached_on_stop.
+	t.Run("row09_codex_stop_empty_ref_wildcard_fallback", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+			ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+			SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+			// SourceTurnID intentionally empty.
+		}})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn(""),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_detached_on_stop" {
+			t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 0 {
+			t.Fatalf("Subagents = %+v, want empty after wildcard detach", final.Subagents)
+		}
+	})
+
+	// Row 10: parent cc + 1 ref(PID=42, t1, turnID="t_a") + 1 ref(PID=43,
+	// t2, turnID="t_x") → Stop from PID=42 raw turn_id="t_a"
+	// → only PID=42 ref dropped; PID=43 untouched.
+	t.Run("row10_codex_stop_multi_broker_isolation", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+			{ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+				SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a"},
+			{ID: "proxy:codex:43:t2", Type: "codex", StartedAt: 50,
+				SourcePID: 43, SourceStartTime: "t2", IsProxy: true, SourceTurnID: "t_x"},
+		})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn("t_a"),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_detached_on_stop_turn" {
+			t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop_turn", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 {
+			t.Fatalf("Subagents count = %d, want 1 (PID=43 ref kept); refs=%+v", len(final.Subagents), final.Subagents)
+		}
+		if final.Subagents[0].SourcePID != 43 || final.Subagents[0].SourceTurnID != "t_x" {
+			t.Fatalf("surviving ref = %+v, want PID=43 turnID=t_x", final.Subagents[0])
+		}
+	})
+
+	// Mixed-broker H1/v2 fix: parent cc + 1 ref(PID=42, t1, turnID="") +
+	// 1 ref(PID=43, t2, turnID="t_x") → Stop from PID=42 with empty turn_id
+	// → matching broker (PID=42) has empty SourceTurnID → wildcard detach
+	// PID=42 ref. Must NOT be misled by PID=43's turnID="t_x" into the
+	// parse_failed skip path.
+	t.Run("row09b_codex_stop_mixed_broker_uses_matching_ref_only", func(t *testing.T) {
+		m := newProxyTestModule(t)
+		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+			{ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+				SourcePID: 42, SourceStartTime: "t1", IsProxy: true /* SourceTurnID="" */},
+			{ID: "proxy:codex:43:t2", Type: "codex", StartedAt: 50,
+				SourcePID: 43, SourceStartTime: "t2", IsProxy: true, SourceTurnID: "t_x"},
+		})
+		turnAwareEnvAlive(t, 100, "t100")
+
+		req := EventRequest{
+			TmuxSession: "work", TmuxPaneID: "%5",
+			PurdexName: "PdxStop",
+			AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+			RawEvent: rawTurn(""),
+		}
+		_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+		if err != nil {
+			t.Fatalf("applyFrameEvent: %v", err)
+		}
+		if meta.Reason != "proxy_subagent_detached_on_stop" {
+			t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop (matching broker has empty turn → wildcard)", meta.Reason)
+		}
+		final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+		if final == nil || len(final.Subagents) != 1 {
+			t.Fatalf("Subagents count = %d, want 1 (PID=43 kept); refs=%+v", len(final.Subagents), final.Subagents)
+		}
+		if final.Subagents[0].SourcePID != 43 {
+			t.Fatalf("surviving ref PID = %d, want 43", final.Subagents[0].SourcePID)
+		}
+	})
 }
