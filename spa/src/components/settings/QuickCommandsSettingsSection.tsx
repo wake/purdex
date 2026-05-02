@@ -34,12 +34,12 @@ export function QuickCommandsSettingsSection({ ctx: _ctx }: Props = {}) {
   const dialogOpen = creating || editing !== null
 
   return (
-    // Spec §4.4 (PR-2): outer wrapper drops `p-6` because
-    // GlobalSettingsPage already pads the section container; doubling up
-    // produced visible inset drift versus Appearance / Terminal. The
-    // header now mirrors those sections (`<h2>` + `<p>` description) with
-    // the `+ New` trigger floated to the right above the list.
-    <div className="space-y-4">
+    // Spec §4.4 (PR-2): outer wrapper is bare `<div>` (no `p-6` /
+    // `space-y-X`) — GlobalSettingsPage pads the section container,
+    // and Appearance / Terminal use the same naked outer with element-
+    // level `mb-*` for spacing. Header mirrors those sections (`<h2>`
+    // + `<p>` description) with the `+ New` trigger floated right.
+    <div>
       <div>
         <h2 className="text-lg text-text-primary">{t('settings.quick_commands.title')}</h2>
         <p className="text-xs text-text-secondary mb-6">{t('settings.quick_commands.desc')}</p>

@@ -37,24 +37,25 @@ afterEach(() => {
 })
 
 describe('PR-2 final sidebar order (spec §4.1.3)', () => {
-  it('purdex-scope contributions match the exact PR-2 final ASC list', () => {
-    const KNOWN_ALWAYS_ON = new Set([
-      'appearance',
-      'terminal',
-      'interface',
-      'module-config',
-      'editor',
-      'quick-commands',
-      'performance-monitor',
-      'sync',
-    ])
+  // Optional caps-gated entries — must be enumerated explicitly so the
+  // strict ASC test below can allow them through but reject any other
+  // localId. R2 structural finding: a previous KNOWN_ALWAYS_ON filter
+  // would silently let an unexpected new row sneak in by simply not
+  // checking against it; explicit allow-listing closes that hole.
+  const OPTIONAL_GATED = new Set([
+    'electron',           // canSystemTray
+    'dev-environment',    // devUpdateEnabled
+    'tmux-agent-monitor', // DEV || devUpdateEnabled
+  ])
 
+  it('purdex-scope contributions match the exact PR-2 final ASC list (no unexpected rows)', () => {
     const items = listContributions('purdex')
-      .filter((c) => KNOWN_ALWAYS_ON.has(c.localId))
       .map((c) => ({ id: c.localId, order: c.order }))
       .sort((a, b) => a.order - b.order)
 
-    expect(items).toEqual([
+    // Step 1: every always-on entry is present in the exact required position.
+    const alwaysOn = items.filter((x) => !OPTIONAL_GATED.has(x.id))
+    expect(alwaysOn).toEqual([
       { id: 'appearance',          order: SETTINGS_ORDER.APPEARANCE },                  // 0
       { id: 'terminal',            order: SETTINGS_ORDER.TERMINAL },                    // 1
       { id: 'interface',           order: SETTINGS_ORDER.INTERFACE },                   // 2
@@ -63,6 +64,34 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       { id: 'quick-commands',      order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS },       // 12
       { id: 'performance-monitor', order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR },  // 13
       { id: 'sync',                order: SETTINGS_ORDER.MODULE_SYNC },                 // 14
+    ])
+
+    // Step 2: any entry not in the always-on list must be one of the
+    // explicitly allowed gated ids — nothing else.
+    const expectedAlwaysOnIds = new Set([
+      'appearance', 'terminal', 'interface', 'module-config',
+      'editor', 'quick-commands', 'performance-monitor', 'sync',
+    ])
+    const unexpected = items
+      .map((x) => x.id)
+      .filter((id) => !expectedAlwaysOnIds.has(id) && !OPTIONAL_GATED.has(id))
+    expect(unexpected).toEqual([])
+  })
+
+  it('module-owned band (10 < order < 20) contains exactly the expected ids in order', () => {
+    // Distinct from the "module-config above every module-owned" test below:
+    // this guard pins the *contents* of the band, not just relative order,
+    // so a stray legacy section squeezed into 10.5 / 12.5 / 13.5 fails here.
+    const moduleBand = listContributions('purdex')
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .filter((c) => c.order > SETTINGS_ORDER.MODULE_CONFIG && c.order < 20)
+      .map((c) => c.localId)
+    expect(moduleBand).toEqual([
+      'editor',
+      'quick-commands',
+      'performance-monitor',
+      'sync',
     ])
   })
 

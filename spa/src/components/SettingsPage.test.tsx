@@ -437,6 +437,7 @@ describe('SettingsPage (legacy editor-buffers alias)', () => {
 describe('SettingsPage (PR-2 alias map: link-detect / open-behavior)', () => {
   const EditorBody = () => <div>EDITOR_SECTION_BODY</div>
   const AppearanceBody = () => <div>APPEARANCE_SECTION_BODY</div>
+  const QcBody = () => <div>QC_SECTION_BODY</div>
 
   function setupFixture(): void {
     resetLastSection()
@@ -478,6 +479,23 @@ describe('SettingsPage (PR-2 alias map: link-detect / open-behavior)', () => {
           order: 11,
           labelKey: 'Editor',
           component: EditorBody,
+        },
+      ],
+    })
+    // Non-disableable third section used by the lastSection-pollution
+    // test ('R2 attack') to simulate a previously-visited Settings page
+    // that lastSection captures, distinct from both appearance (which
+    // would overlap with firstSelectable) and editor (the alias target).
+    registerModule({
+      id: '_qc-fixture',
+      name: 'QcFixture',
+      settings: [
+        {
+          localId: 'quick-commands',
+          scope: 'purdex',
+          order: 12,
+          labelKey: 'QuickCommands',
+          component: QcBody,
         },
       ],
     })
@@ -571,6 +589,59 @@ describe('SettingsPage (PR-2 alias map: link-detect / open-behavior)', () => {
     // Editor body must NOT mount because the contribution is gone; the
     // firstSelectable fallback (appearance) is what renders.
     expect(screen.queryByText('EDITOR_SECTION_BODY')).toBeNull()
+    expect(screen.getByText('APPEARANCE_SECTION_BODY')).toBeTruthy()
+    await waitFor(() => {
+      expect((history as string[]).at(-1)).toBe('/settings/appearance')
+    })
+  })
+
+  it('R2 attack: alias canonical disabled MUST ignore stale lastSection and use firstSelectable', async () => {
+    // R2 attack-side finding: SettingsPage holds a module-level
+    // `lastSection`. If a previous render pushed it (e.g. user just
+    // visited /settings/quick-commands), then the user opens a legacy
+    // alias path with the canonical disabled, the page used to fall
+    // through to that stale lastSection — making bookmark behavior
+    // depend on prior session history. Fix: when the URL is an alias
+    // and the canonical target isn't selectable, ignore lastSection
+    // and use firstSelectable instead.
+
+    // Step 1: pollute lastSection by rendering at /settings/quick-commands.
+    // The non-disableable appearance fixture and quick-commands contribution
+    // are both registered by the suite's beforeEach.
+    {
+      const { hook } = memoryLocation({
+        path: '/settings/quick-commands',
+        record: true,
+      })
+      const { unmount } = render(
+        <Router hook={hook}>
+          <SettingsPage pane={settingsPane} isActive />
+        </Router>,
+      )
+      // Wait for render so lastSection captures 'quick-commands'.
+      await waitFor(() => {
+        expect(screen.getByText('QC_SECTION_BODY')).toBeTruthy()
+      })
+      unmount()
+    }
+
+    // Step 2: disable editor so the alias canonical (editor) is unselectable.
+    useModuleEnabledStore.getState().setEnabled('editor', false)
+    dispatchSettingsContributions()
+
+    // Step 3: open /settings/link-detect — alias resolves to editor,
+    // editor is unselectable, lastSection still 'quick-commands'. The
+    // page MUST land on appearance (firstSelectable), not quick-commands.
+    const { hook, history } = memoryLocation({
+      path: '/settings/link-detect',
+      record: true,
+    })
+    render(
+      <Router hook={hook}>
+        <SettingsPage pane={settingsPane} isActive />
+      </Router>,
+    )
+    expect(screen.queryByText('QC_SECTION_BODY')).toBeNull()
     expect(screen.getByText('APPEARANCE_SECTION_BODY')).toBeTruthy()
     await waitFor(() => {
       expect((history as string[]).at(-1)).toBe('/settings/appearance')

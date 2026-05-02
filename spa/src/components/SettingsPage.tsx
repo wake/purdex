@@ -94,8 +94,19 @@ function GlobalSettingsPage() {
     : null
   const urlSubsection = parts[1] || null
 
+  // R2 attack finding: when the URL is a legacy alias (`link-detect` /
+  // `open-behavior` / `editor-buffers`) and the canonical target is not
+  // selectable (e.g. Editor module disabled), do NOT fall back to
+  // `lastSection` — that would land the bookmark on whatever Settings
+  // page the user happened to last visit. Force `firstSelectable` so
+  // legacy bookmarks have a stable, predictable destination.
+  const aliasResolved = rawUrlSection !== null && rawUrlSection in URL_ALIASES
+  const aliasCanonicalUnselectable =
+    aliasResolved && urlSection !== null && !isSelectable(urlSection)
+
   const [activeSection, setActiveSection] = useState(() => {
     if (urlSection && isSelectable(urlSection)) return urlSection
+    if (aliasCanonicalUnselectable) return firstSelectable
     if (lastSection && isSelectable(lastSection)) return lastSection
     return firstSelectable
   })
