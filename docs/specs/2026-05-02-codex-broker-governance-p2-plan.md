@@ -14,7 +14,7 @@ After P2 merges, the daemon can evaluate three predicates (A: active execution, 
 
 No automatic triggers ship in this PR. Every kill in P2 requires explicit human action via the sweep API.
 
-Acceptance is defined by: all unit tests green, integration test passes, `mode=dry-run` correctly classifies the ~50 orphan brokers visible on mlab, `mode=apply` on a known-orphan produces a complete `audit/orphan-*.json` preimage + postscript, and zero false-positive kills in the dry-run run.
+Acceptance is defined by: all unit tests green, integration test passes, `mode=dry-run` correctly classifies the ~50 orphan brokers visible on mlab, `mode=apply&brokerKey=<known-orphan>` (operator-explicit override per spec §5.1 line 371) produces a complete `audit/orphan-*.json` preimage + postscript, unfiltered `mode=apply` (no `brokerKey`) issues zero kills against any foreign broker on mlab (mass-kill safety), and zero false-positive kills in the dry-run run.
 
 ---
 
@@ -233,7 +233,7 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - **Foreign-broker pre-filter** (spec §5.1 line 371 + §2 line 44): evaluated **before** the kill rule so it strictly precedes the idle-timeout kill path.
   - Inputs: `opts.Registry`. The registry MAY be `nil` (defensive — Module wiring failure), `Empty()==true` (P2 expected steady state on mlab), or have entries.
   - Detection: `isForeign := opts.Registry == nil || opts.Registry.Empty() || lookupMiss(opts.Registry, rec.BrokerKey)`. If `isForeign` is true OR `rec.Anomalies` already contains `AnomalyForeignOwner` (forward-compatible with future P1 changes) → set `result.AnomaliesAdded += AnomalyForeignOwner` (only if not already in `rec.Anomalies` to avoid duplicate audit entries), `result.Kill = false`, `result.Reason = "foreign_quarantine"`. Predicate trace is still populated for forensics.
-  - Note: this returns immediately with the predicates evaluated for trace; no kill path can override it within `EvalDecision`. The sweep handler (Task Q) honours operator-explicit `mode=apply&brokerKey=<X>` separately by bypassing the foreign filter — that path is documented in Task Q and tested with `TestSweepHandler_OperatorOverride_ForeignBrokerKilled`.
+  - Note: `EvalDecision` always returns `Kill=false` for foreign brokers; it has no notion of "operator override" because that is a transport-layer (sweep handler) concern, not a decision-layer concern. The sweep handler (Task Q) implements spec §5.1 line 371 ("Operator may still issue a manual sweep with `mode=apply&brokerKey=<...>` to override") by treating an explicit `brokerKey` filter on `mode=apply` as an explicit operator decision to kill that specific broker even when `Reason == "foreign_quarantine"`. No separate `force` flag is introduced — the explicit `brokerKey` IS the override semantic, matching the spec wording verbatim. Tested in Task Q with `TestSweepHandler_BrokerKeyApply_OverridesForeignQuarantine`.
 - **Conflict rule**: any predicate true → `Kill=false` (positive liveness wins, spec §5.1 lines 367-368).
 - **Kill rule**: `Kill = ¬A ∧ ¬B ∧ ¬C ∧ idleSeconds >= idleTimeout.Seconds()` per spec §5.1 line 371. `idleSeconds` is derived from `rec.LastJobUpdatedAt` (P1 field) vs now; nil `LastJobUpdatedAt` → treated as `age = ∞` (most permissive kill direction — broker never dispatched a job is a valid orphan candidate).
 - Return `DecisionResult` with full predicate trace + `AnomaliesAdded` slice.
@@ -533,21 +533,30 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
   - `globalApplyMu sync.RWMutex` (one per `SweepHandler`). Acquired in **write** mode by `__all__ apply`; in **read** mode by every other request (filtered apply + any dry-run). This blocks `__all__ apply` from running concurrently with anything else, while letting non-`__all__` work proceed in parallel.
   - `perBrokerMu sync.Map[brokerKey]*sync.RWMutex`. After releasing/holding the outer `globalApplyMu` read-lock, filtered apply acquires the per-broker mutex in **write** mode for its specific brokerKey; filtered or `__all__` dry-run acquires it in **read** mode. Construction uses `LoadOrStore(&sync.RWMutex{})` for one-shot init.
   - **Lock order is fixed**: `globalApplyMu` always before `perBrokerMu`. `__all__ apply` only ever holds `globalApplyMu.Lock()` (does not touch any per-broker mutex — the global write-lock already excludes everything else). This makes deadlock impossible by construction (no inversion possible).
-  - Mapping query params → lock acquisition pattern:
-    | mode | brokerKey | globalApplyMu | perBrokerMu(brokerKey) |
-    |------|-----------|---------------|------------------------|
-    | dry-run | (any) | RLock | RLock |
-    | apply | set | RLock | Lock (write) |
-    | apply | unset (`__all__`) | Lock (write) | n/a |
+  - Mapping query params → lock acquisition pattern (round-2 finding #2 — unfiltered dry-run case made explicit per consulting recommendation Path X):
+    | mode | brokerKey | globalApplyMu | perBrokerMu(brokerKey) | rationale |
+    |------|-----------|---------------|------------------------|-----------|
+    | dry-run | set | RLock | RLock | filtered dry-run touches one broker; cannot race with apply on a different broker, only with apply on same broker (RLock vs Lock blocks correctly). |
+    | dry-run | unset (`__all__`) | **Lock (write)** | n/a | unfiltered dry-run iterates the entire inventory; specifying which per-broker mutexes to take is undefined at request time (newly discovered brokers mid-scan would not be locked). Taking the global write-lock keeps the design simple, prevents apply on any broker from racing the dry-run snapshot, and is acceptable because dry-run latency is bounded (no kill, just inventory + decision compute). Trade-off: blocks parallel dry-runs — accepted because the dashboard expectation is one operator-initiated sweep at a time, not a high-QPS endpoint. |
+    | apply | set | RLock | Lock (write) | filtered apply mutates one broker; per-broker write-lock excludes other apply on same key + serialises against same-broker dry-run. |
+    | apply | unset (`__all__`) | Lock (write) | n/a | unfiltered apply needs full exclusivity to avoid double-signal across overlapping `__all__` invocations. |
 - `func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request)`:
   - Method guard: 405 for non-POST.
   - Parse `mode` query param (default `dry-run`); `apply` enables kills.
-  - Parse optional `brokerKey` filter and optional `force` flag (foreign-broker override; only honoured with explicit `brokerKey`).
+  - Parse optional `brokerKey` filter. **No `force` flag** — round-2 finding #1 consulting recommendation Path D: `mode=apply&brokerKey=<X>` is itself the spec §5.1 line 371 operator override; introducing a separate `force` flag was redundant scope creep beyond spec.
   - Acquire locks per the table above; defer release in reverse order.
   - Run `Scanner.Scan(ctx)` to get current inventory.
   - For each `BrokerRecord` (filtered by brokerKey if set): check quarantine (`IsQuarantined`) → skip if quarantined; call `EvalDecision`; populate `SweepResponse.Evaluated`.
-  - **Operator override path** (spec §5.1 line 371 "Operator may still issue a manual sweep with `mode=apply&brokerKey=<...>` to override"): when `mode=apply` AND `brokerKey` filter is set AND the resulting `DecisionResult.Reason == "foreign_quarantine"`, the kill is *still* skipped by default in P2. The override semantic ships as a separate `&force=true` query param ONLY recognised in conjunction with explicit `brokerKey`. P2 default behaviour: `force` not set → foreign brokers never killed via sweep API. Logged at audit-info level when `force=true&brokerKey=<X>` triggers a kill on a foreign broker; the audit dump `reason` field becomes `"manual_sweep_force"`. `mode=apply` (no brokerKey, no force) NEVER kills foreign brokers — this is the mlab-safe default that prevents the 50+ broker mass-kill scenario.
-  - If `mode=apply` and `DecisionResult.Kill=true` (or `force=true` foreign override path): call `KillSequence.Run`; on success call `h.E1Tracker.Reset(rec.BrokerKey)` so a respawned broker doesn't inherit a stale 60 s clock; record outcome in `SweepResponse.Applied` or `SweepResponse.Errors`.
+  - **Kill semantics — apply path** (spec §5.1 line 371): the sweep handler decides whether to honour `DecisionResult.Reason == "foreign_quarantine"` based on whether the operator made an explicit per-broker decision:
+    | mode | brokerKey | DecisionResult.Reason | Kill issued? | Audit reason |
+    |------|-----------|-----------------------|--------------|--------------|
+    | apply | unset (`__all__`) | (any) | only if `Kill=true` AND not `foreign_quarantine` | per `DecisionResult.Reason` |
+    | apply | set | `foreign_quarantine` | **yes** — `brokerKey` filter is the operator's explicit override per spec §5.1 line 371 | `manual_sweep_override` |
+    | apply | set | (anything else where `Kill=true`) | yes | per `DecisionResult.Reason` |
+    | apply | set | `Kill=false` and not `foreign_quarantine` | no — broker is alive (predicate true) | n/a |
+    
+    Mlab safety: unfiltered `mode=apply` on the 50+ pre-existing brokers issues **zero** kills because every broker is `foreign_quarantine` (registry empty) and the unfiltered path requires `Reason != "foreign_quarantine"`. The only path to kill a foreign broker is `mode=apply&brokerKey=<X>` — the operator naming a specific broker is the override.
+  - If kill is to be issued per the table above: call `KillSequence.Run`; on success call `h.E1Tracker.Reset(rec.BrokerKey)` so a respawned broker doesn't inherit a stale 60 s clock; record outcome in `SweepResponse.Applied` or `SweepResponse.Errors`.
   - Return `200 JSON SweepResponse`.
 - Timeout: 30 s for `mode=apply` (accounts for graceful + SIGTERM + SIGKILL budget); 10 s for `mode=dry-run`. Lock waits are bounded by the request context — if `globalApplyMu` is held by an `__all__ apply` already in flight, a queued request waits up to its own context deadline; on timeout the handler returns 503 + a `Retry-After` hint rather than starving.
 
@@ -556,24 +565,25 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - `TestSweepHandler_Apply_KillsOrphan` — mode=apply, fake KillSequence → applied list populated; populated registry has the brokerKey so foreign filter does not block.
 - `TestSweepHandler_BrokerKeyFilter` — brokerKey=X → only record with matching key evaluated.
 - `TestSweepHandler_QuarantinedSkipped` — broker in quarantine → not in evaluated list.
-- `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` — mode=apply with empty registry on 50 brokers; **zero** kills issued; all decisions are `foreign_quarantine`. Mlab-safety regression test.
-- `TestSweepHandler_OperatorOverride_ForeignBrokerKilled` — `mode=apply&brokerKey=<X>&force=true` with empty registry → KillSequence invoked; audit dump reason=`manual_sweep_force`.
-- `TestSweepHandler_Apply_NoForce_ForeignBrokerNotKilled` — `mode=apply&brokerKey=<X>` without `force` and no registry entry → kill NOT invoked.
+- `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` — unfiltered mode=apply with empty registry on 50 brokers; **zero** kills issued; all decisions are `foreign_quarantine`. Mlab mass-kill safety regression test.
+- `TestSweepHandler_BrokerKeyApply_OverridesForeignQuarantine` — `mode=apply&brokerKey=<X>` with empty registry → `Reason="foreign_quarantine"` BUT KillSequence IS invoked because the explicit `brokerKey` filter is itself the spec §5.1 line 371 operator override; audit dump reason=`manual_sweep_override`. This is the round-2 finding #1 acceptance regression test.
+- `TestSweepHandler_BrokerKeyApply_AlivePredicate_NoKill` — `mode=apply&brokerKey=<X>` where predicate A is true (broker actively running) → kill NOT issued (operator override does not kill an alive broker; only suppresses the foreign-quarantine guard).
 - `TestSweepHandler_MethodNotPost_405`.
 - `TestSweepHandler_ScanFailure_503`.
 
-**Concurrency TDD tests** (replace the originally-planned singleflight test; round-1 finding #4):
+**Concurrency TDD tests** (replace the originally-planned singleflight test; round-1 finding #4 + round-2 finding #2 unfiltered dry-run exclusivity):
 - `TestSweepHandler_ConcurrentApplyApply_SerializedPerBroker` — two goroutines POST `apply&brokerKey=X` concurrently; assert KillSequence.Run is invoked exactly twice in serial (not concurrently), and the second invocation observes the post-first-kill state. No double-signal in the same lstart window.
 - `TestSweepHandler_AllApply_BlocksFilteredApply_SameBroker` — start `__all__ apply` (slow KillSequence stub), then start `apply&brokerKey=X`; assert the second request blocks until the first completes; assert no two `KillSequence.Run` invocations are in flight at the same time.
-- `TestSweepHandler_DryRun_ReadLock_NoBlockOtherDryRun` — two concurrent `dry-run` requests run their `Scanner.Scan` in parallel (use a barrier-style fake Scanner that asserts both goroutines reach the barrier before either proceeds); confirms read-lock semantics.
-- `TestSweepHandler_DryRunBlocksApplySameBroker` — dry-run for brokerKey=X holds RLock; concurrent apply&brokerKey=X must wait. Asserts ordering invariant (no kill executes while a dry-run snapshot of the same broker is mid-flight).
+- `TestSweepHandler_FilteredDryRun_ReadLock_NoBlockOtherFilteredDryRun` — two concurrent `dry-run&brokerKey=X` and `dry-run&brokerKey=Y` requests run their `Scanner.Scan` in parallel (barrier-style fake Scanner). Confirms read-lock semantics for filtered dry-runs across distinct brokers.
+- `TestSweepHandler_UnfilteredDryRun_Exclusive` — round-2 finding #2 regression: concurrent unfiltered `mode=dry-run` + any other request (including another unfiltered dry-run, filtered apply, `__all__ apply`) → second request blocks until the first releases the global write-lock. Asserts the consulting recommendation Path X invariant: unfiltered dry-run is fully exclusive, preventing any apply from racing the inventory snapshot.
+- `TestSweepHandler_DryRunBlocksApplySameBroker` — filtered dry-run for brokerKey=X holds RLock; concurrent filtered apply&brokerKey=X must wait. Asserts ordering invariant (no kill executes while a same-broker dry-run snapshot is mid-flight).
 - `TestSweepHandler_AllApplyExclusive` — concurrent `__all__ apply` + any other request: assert only one of them is in flight at a time, regardless of mode/brokerKey of the other.
 - `TestSweepHandler_LockTimeout_503` — long-running `__all__ apply` + queued request whose context deadline expires before the global lock is released: assert 503 + `Retry-After` header, no panic, no goroutine leak.
-- `TestSweepHandler_Concurrency_NoDeadlock` (`go test -race`): 50 mixed concurrent requests (random mix of dry-run / filtered apply / `__all__ apply`), all complete within a generous wallclock budget, no race detector hits.
+- `TestSweepHandler_Concurrency_NoDeadlock` (`go test -race`): 50 mixed concurrent requests (random mix of filtered/unfiltered dry-run, filtered apply, `__all__ apply`), all complete within a generous wallclock budget, no race detector hits.
 
-**Acceptance**: sweep handler tests green; singleflight coalesces concurrent requests.
+**Acceptance**: sweep handler tests green; mlab unfiltered apply against empty registry issues zero kills (mass-kill safety); operator-explicit `mode=apply&brokerKey=<X>` correctly overrides foreign quarantine and triggers KillSequence.
 
-**Commit**: `feat(codexbroker): POST /api/codex/brokers/sweep handler + singleflight gate (P2 task Q)`
+**Commit**: `feat(codexbroker): POST /api/codex/brokers/sweep handler + RWMutex serialisation (P2 task Q)`
 
 ---
 
@@ -615,8 +625,9 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - Run `POST /api/codex/brokers/sweep?mode=dry-run` against a live daemon instance (or via direct `SweepHandler` with a real Scanner).
 - Assert: the spawned broker appears in `evaluated`, all three predicates evaluated, `Kill=false` for the live broker.
 - Kill the broker externally (SIGTERM). Wait 2 s.
-- Run `POST .../sweep?mode=apply&brokerKey=<key>`.
-- Assert: `applied` list contains the brokerKey; `audit/orphan-<key>-*.json` exists; preimage + postscript both present; `cxc-*` dir removed.
+- Run `POST .../sweep?mode=apply&brokerKey=<key>` (operator-explicit override per spec §5.1 line 371).
+- Assert: `applied` list contains the brokerKey; `audit/orphan-<key>-*.json` exists; preimage + postscript both present; audit `reason` is `manual_sweep_override` (because integration test runs with empty registry — same path mlab will exercise); `cxc-*` dir removed.
+- Additional safety assertion: prior to the operator-explicit apply, run `POST .../sweep?mode=apply` (unfiltered, no brokerKey) → `applied` list MUST be empty even though the dead broker is in `evaluated` with `Reason="foreign_quarantine"`. This integration-tests the round-2 finding #1 mass-kill safety property.
 
 **Acceptance**:
 - `go test -tags=integration ./internal/codexbroker/...` passes on mlab with node available.
@@ -633,7 +644,8 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - Build daemon: `go build -o bin/pdx ./cmd/pdx` in worktree.
 - Restart daemon with new build.
 - **Dry-run sweep** against all brokers: `curl -X POST -H "X-Pdx-Token: ..." "http://100.64.0.2:7860/api/codex/brokers/sweep?mode=dry-run" | jq '.evaluated | length'`. Verify ≥ 50 brokers evaluated. Spot-check 5 records: predicates A/B/C match expected hand-evaluated state for known-idle orphans.
-- **Apply sweep on one known-orphan**: identify a broker with all predicates false + idle > 30 min from the dry-run output. Issue `?mode=apply&brokerKey=<key>`. Verify `applied` list populated, audit file written, cxc-* dir removed (or defer logged if socket still held).
+- **Mass-kill safety pre-check**: issue `?mode=apply` (no brokerKey) first. Verify `applied` list is **empty** despite ≥ 50 brokers in `evaluated` (because every record has `Reason="foreign_quarantine"` while registry is empty pre-PR-G). If even one kill fires here, STOP — the unfiltered safety guard is broken and should not ship.
+- **Apply sweep on one known-orphan via operator override**: identify a broker with all predicates false + idle > 30 min from the dry-run output. Issue `?mode=apply&brokerKey=<key>` (the operator-explicit `brokerKey` filter is the spec §5.1 line 371 override). Verify `applied` list populated, audit file written with `reason="manual_sweep_override"`, cxc-* dir removed (or defer logged if socket still held).
 - Verify `GET /api/codex/brokers` still returns 200 after sweep (P1 endpoint untouched).
 - Capture output for PR description body including: evaluated count, one sample DecisionResult trace, audit file content, before/after process count via `ps -ef | grep app-server-broker | wc -l`.
 - Open PR via `gh pr create`.
@@ -718,7 +730,7 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | Reviewer | Focus prompt seed |
 |---|---|
 | Attack | Find: PID-reuse race between Step 0 verify and Step 3 SIGTERM (window where pid is reused between check and kill); fingerprint forgery via argv injection; quarantine bypass (path where `Kill=true` is returned despite quarantine entry); kill loop if broker respawns during sweep; pgid=1 edge case on abnormal broker invocation; concurrent-apply correctness — confirm sweep handler RWMutex layering serialises every (apply, apply) and (apply, dry-run) pair on the same brokerKey, no double-signal in same lstart window, no deadlock between `__all__ apply` and filtered requests; lock-acquisition starvation under heavy `__all__ apply` load. |
-| Defense | Verify: foreign-broker quarantine boundary — confirm `mode=apply` (no `force`, with or without `brokerKey`) NEVER kills a broker whose registry lookup misses; the only kill path for foreign brokers is `mode=apply&brokerKey=<X>&force=true`; mlab-empty-registry case classifies all 50+ brokers as `foreign_quarantine` with zero kills issued; launch registry missing fallback — predicate C must return false (not panic) when registry absent; E1 transient-ENOENT false positive — ESTALE/EIO/EACCES must not accumulate toward E1; `mode=apply` behaviour is a strict superset of `mode=dry-run` evaluated list (no extra kills not in dry-run); audit preimage must be committed before any signal reaches broker. |
+| Defense | Verify: foreign-broker quarantine boundary — confirm unfiltered `mode=apply` (no `brokerKey`) NEVER kills a broker whose registry lookup misses; the only kill path for foreign brokers is operator-explicit `mode=apply&brokerKey=<X>` (the `brokerKey` filter IS the spec §5.1 line 371 override — no separate `force` flag); mlab-empty-registry case classifies all 50+ brokers as `foreign_quarantine` with zero kills issued via the unfiltered path; launch registry missing fallback — predicate C must return false (not panic) when registry absent; E1 transient-ENOENT false positive — ESTALE/EIO/EACCES must not accumulate toward E1; `mode=apply` behaviour is a strict superset of `mode=dry-run` evaluated list (no extra kills not in dry-run); audit preimage must be committed before any signal reaches broker; **scope correction validation** (round-2 finding #1) — judge whether deferring registry-write to PR-G is acceptable given the safety property holds, or whether spec §5.1 line 369 wording demands spawn-write in P2. |
 | Health | Check: `codexbroker` package SRP — `decision.go` vs `killer.go` vs `sweep.go` responsibility boundaries; `audit.go` not leaking into `killer.go` beyond the two defined call sites; `sockverify_darwin.go` / `sockverify_linux.go` / `sockverify_other.go` — are the three files the right split or should interface be extracted to `sockverify.go`; file sizes (anything > 300 LOC needs justification); test fixture ownership clear (no cross-task shared mutable fixtures). |
 
 ---
@@ -736,9 +748,10 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | **E1 cross-sweep state lost** (sweep handler can't accumulate observations) | `E1Tracker` is daemon-lifetime in-memory (Task G), owned by `Module`, injected into `SweepHandler`. Two sweeps ≥60 s apart now correctly trigger E1. Restart resets the 60 s clock — documented as conservative behaviour, not a regression. `TestE1Tracker_DryRunThenApplyAfter60s_Triggers` is the regression test. |
 | Quarantine file corrupt on boot | `QuarantineStore.Load` treats `json.Unmarshal` failure as an empty registry + logs a warning. Boot continues. Corrupt file is renamed to `.bak-<ts>` for forensics. |
 | Concurrent-sweep correctness (operations lost / double-signal) | `SweepHandler` uses two-layer `sync.RWMutex` (Task Q): `globalApplyMu` excludes `__all__ apply` from any other request; `perBrokerMu` (sync.Map of *RWMutex) serialises filtered apply per brokerKey. Lock order is fixed (`globalApplyMu` → `perBrokerMu`) — deadlock impossible by construction. Replaces the originally-planned `singleflight.Group`, which would have coalesced distinct apply requests and silently dropped operations. Tested by `TestSweepHandler_ConcurrentApplyApply_SerializedPerBroker`, `TestSweepHandler_AllApplyExclusive`, `TestSweepHandler_Concurrency_NoDeadlock` under `-race`. |
+| **Unfiltered dry-run vs filtered apply race on same broker** (round-2 finding #2) | Unfiltered dry-run (`mode=dry-run` with no `brokerKey`) cannot pre-declare which per-broker mutexes it will need (broker set is only known after `Scanner.Scan` — and a broker may appear mid-scan). Solution per consulting Path X: unfiltered dry-run takes `globalApplyMu.Lock()` (write-mode). This blocks ALL other sweep requests for the duration of the dry-run, including parallel dry-runs. Trade-off accepted because dry-runs are operator-initiated and bounded in latency (no kill, only inventory + decision compute). `TestSweepHandler_UnfilteredDryRun_Exclusive` is the regression test. Filtered dry-run keeps the cheaper RLock+RLock path. |
 | macOS no /proc for sockverify | `sockverify_darwin.go` uses `proc_pidinfo` via `syscall.Syscall6` (no CGo, no fork). If `proc_pidinfo` returns EPERM, falls back to `lsof -nP` with 1 s timeout. Budget-exceeded or both-failed → `held=true` (conservative defer). |
 | Symlink/realpath edge cases for cwd | All cwd comparisons in P2 use `EvalSymlinks` chain inherited from P1 — same `FS.EvalSymlinks` call path as P1. No new cwd hashing in P2; comparisons use the resolved `BrokerRecord.CwdResolved` field. |
-| **Mlab 50+ existing brokers mass-kill** (P2 ships before spawn-hook populates registry) | `EvalDecision` foreign-broker pre-filter (Task F): empty/missing registry → `Reason="foreign_quarantine"`, `Kill=false`, regardless of A/B/C. Sweep handler `mode=apply` (no `&force`) NEVER kills foreign brokers. `TestEvalDecision_RegistryMissing_AllForeignQuarantine` and `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` are mlab-safety regression tests. Operator override only via explicit `?mode=apply&brokerKey=<X>&force=true`. |
+| **Mlab 50+ existing brokers mass-kill** (P2 ships before spawn-hook populates registry) | `EvalDecision` foreign-broker pre-filter (Task F): empty/missing registry → `Reason="foreign_quarantine"`, `Kill=false`, regardless of A/B/C. Sweep handler unfiltered `mode=apply` (no `brokerKey`) NEVER kills foreign brokers — every record's `Reason="foreign_quarantine"` and unfiltered apply requires `Reason != "foreign_quarantine"`. `TestEvalDecision_RegistryMissing_AllForeignQuarantine` and `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` are mlab-safety regression tests. The only path to kill a foreign broker is operator-explicit `?mode=apply&brokerKey=<X>` (the brokerKey filter IS the spec §5.1 line 371 override — no separate `force` flag, per round-2 finding #1 consulting recommendation Path D). |
 
 ---
 
@@ -762,13 +775,13 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | N Step 5 verify | 30 + 50 | |
 | O sockverify + Step 6 | 120 + 80 | 3 platform files |
 | P wire KillSequence.Run | 50 + 60 | |
-| Q sweep handler | 130 + 200 | two-layer RWMutex + 7 concurrency tests under -race |
+| Q sweep handler | 125 + 220 | two-layer RWMutex + brokerKey-as-override (no `force`) + 8 concurrency tests under -race incl. unfiltered-dry-run exclusivity |
 | R module wiring | 40 + 40 | |
 | S integration test | 0 + 150 | |
 | T live verify + PR | 0 + 0 | operational |
-| **Total** | **~1360 + ~1780** | **~3140 lines** |
+| **Total** | **~1355 + ~1800** | **~3155 lines** |
 
-Production LOC ~1360 is slightly above spec §9 PR-C range of 700-1000 for the "decision predicates + emergency overrides + kill sequence + audit" surface; the +150 over the original estimate is the cost of the round-1 plan-review fixes (foreign-broker pre-filter, daemon-lifetime E1Tracker, StateJobLite + ReadStateJobs helper, two-layer RWMutex sweep concurrency). Test density is intentional. Reviewer note: each line of impl over the original estimate maps directly to a regression test for a specific finding.
+Production LOC ~1355 is slightly above spec §9 PR-C range of 700-1000 for the "decision predicates + emergency overrides + kill sequence + audit" surface; the +145 over the original estimate is the cost of the round-1 + round-2 plan-review fixes (foreign-broker pre-filter, daemon-lifetime E1Tracker, StateJobLite + ReadStateJobs helper, two-layer RWMutex sweep concurrency, brokerKey-as-override semantic with explicit scope correction). Test density is intentional. Reviewer note: each line of impl over the original estimate maps directly to a regression test for a specific finding.
 
 **Cycle time estimate**: codex plan review (1 round, 0-1 medium findings expected) → subagent 1 TDD tasks A–K (~6-8 h) → subagent 2 TDD tasks L–T (~5-7 h) → PR open → R1 standard (~1 h review) → R2 three-parallel adversarial → finding triage and fixes → squash → bump.
 
@@ -789,6 +802,6 @@ This plan does **not** implement:
 
 **Promises P2 makes about future phases**:
 
-1. **Launch registry write point is P3**: `launchregistry.go` defines the schema and `Register`/`Remove` methods but P2 does not call them from broker spawn paths. P3 hooks into daemon's ExitWorktree to call `Remove`, and the Lights PR-G hooks into broker spawn to call `Register`.
+1. **Launch registry write point is P3 / Lights PR-G — explicit scope correction from spec §5.1 line 369**: spec wording reads "Purdex must persist a `(brokerKey, pid, lstart) → (tmuxPane, callerSessionID, launchedAt)` mapping at broker spawn time ... The registry schema and persistence point are P2 implementation work but are surfaced here so P1 inventory does not foreclose the design." Plan v3 implements the **schema and persistence I/O** (atomic load/save in `launchregistry.go`) and the **read API** (`Lookup`, `Empty`) but does NOT implement the **spawn-time write** because the daemon currently has no broker-spawn path it owns (verified by codex consulting against `internal/module/session/handler.go`, `internal/tmux/executor.go`, `internal/agent/codex/hooks.go`, `cmd/pdx/hook.go` — purdex creates tmux sessions and installs hook commands, but the broker process is spawned by codex CLI / opencode plugin from those panes; no daemon-owned spawn callback exists). Adding a spawn callback would require coordination with the codex CLI / opencode plugin lifecycle and is therefore deferred to PR-G (Lights spawn-hook integration). P3 will additionally hook ExitWorktree → `Remove`. To compensate for the missing write, P2 ships the **explicit operator override** path: `mode=apply&brokerKey=<X>` overrides foreign-quarantine per spec §5.1 line 371. Reviewer should note this as a **scope correction**, not an omission, and judge whether the safety property (unfiltered apply NEVER mass-kills foreign brokers) plus the explicit override is sufficient for production rollout. If reviewer disagrees and requires spawn-write in P2, the next plan revision must add a Lights-coordination subtask and bump LOC estimate substantially.
 2. **Sweep handler is the P3 tick's code path**: `SweepHandler.HandleSweep` logic is reused by the P3 tick goroutine by calling `sweep.go`'s core function directly — the HTTP surface is not duplicated.
 3. **Predicate result fields in BrokerRecord for P3 augmented GET**: `DecisionResult` is defined as a standalone struct in P2; P3 adds it to `BrokerRecord` in the `GET /api/codex/brokers` response per spec §6.3.
