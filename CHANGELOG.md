@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.287] - 2026-05-03
+
+### Refactor(settings): PR-1 sidebar order and spacing cleanup (#816)
+
+Adds the first settings architecture cleanup slice: centralises sidebar order in
+`SETTINGS_ORDER`, applies the PR-1 transitional settings order, switches puzzle
+icons to upright bold styling, and removes duplicate Modules Switchboard padding.
+This keeps the visual/sidebar cleanup separate from later Editor consolidation
+and Sync modularisation work.
+
+### Fix(spa): silence empty opencode stop notifications (#823)
+
+OpenCode `PdxStop` events derived from `session.status.idle` now carry
+`notification_silent=true` metadata. The SPA still applies the idle status for
+lights, but skips unread markers and desktop notifications for these empty Stop
+events so users no longer see generic `Task completed` notifications with no
+actionable content.
+
 ## [1.0.0-alpha.286] - 2026-05-03
 
 ### Feat(codexbroker): P2 — decision predicates + kill sequence + manual sweep API (#813)
