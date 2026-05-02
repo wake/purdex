@@ -10,7 +10,8 @@ import (
 
 // expectedCodexInstallableEventNames lists the hook events Purdex currently
 // installs for Codex, keyed on PurdexName (Pdx-prefixed) post P3-T4. Used for
-// runtime catalog assertions.
+// runtime catalog assertions. L2 (alpha.282) added PdxPreToolUse to the
+// installable set as the codex non-prompt turn attach trigger.
 var expectedCodexInstallableEventNames = []string{
 	"PdxSessionStart",
 	"PdxUserPromptSubmit",
@@ -21,6 +22,7 @@ var expectedCodexInstallableEventNames = []string{
 	"PdxNotification",
 	"PdxPermissionRequest",
 	"PdxSessionEnd",
+	"PdxPreToolUse",
 }
 
 // expectedCodexEventNames lists the upstream event-name keys Codex's
@@ -38,6 +40,7 @@ var expectedCodexEventNames = []string{
 	"Notification",
 	"PermissionRequest",
 	"SessionEnd",
+	"PreToolUse",
 }
 
 // expectedCodexCurrentUpstreamEventNames is pinned to Codex hooks docs,
@@ -66,7 +69,7 @@ var expectedCodexCatalogHandling = map[string]agent.HookHandling{
 	"PdxNotification":      agent.HookHandlingStatus,
 	"PdxPermissionRequest": agent.HookHandlingStatus,
 	"PdxSessionEnd":        agent.HookHandlingStatus,
-	"PdxPreToolUse":        agent.HookHandlingUnsupported,
+	"PdxPreToolUse":        agent.HookHandlingDetail,
 	"PdxPostToolUse":       agent.HookHandlingUnsupported,
 }
 
@@ -222,7 +225,7 @@ func TestCodexEventsFutureOnlyFlags(t *testing.T) {
 		"PdxNotification":      true,
 		"PdxPermissionRequest": false,
 		"PdxSessionEnd":        true,
-		"PdxPreToolUse":        false,
+		"PdxPreToolUse":        true,
 		"PdxPostToolUse":       false,
 	}
 	p := codex.NewProvider()
@@ -311,6 +314,10 @@ var expectedCodexLifecycle = map[string]agent.LifecycleEventKind{
 	"PdxSessionEnd":        agent.LifecycleSessionEnd,
 	"PdxSubagentStart":     agent.LifecycleSubagentStart,
 	"PdxSubagentStop":      agent.LifecycleSubagentStop,
+	// L2: PdxPreToolUse shares the UserPromptSubmit lifecycle so the new
+	// applyFrameEvent case attaches the codex broker proxy ref for
+	// non-prompt turns (spec §3.3.C strategy a).
+	"PdxPreToolUse": agent.LifecycleUserPromptSubmit,
 }
 
 // codexLegacyMetadata locks EmitsStatus / Description / FutureOnly / Handling
@@ -333,7 +340,7 @@ var expectedCodexPreservedMetadata = map[string]codexLegacyMetadata{
 	"PdxNotification":      {[]agent.Status{agent.StatusWaiting, agent.StatusIdle}, "Permission/elicitation/idle prompt notifications", true, ""},
 	"PdxPermissionRequest": {[]agent.Status{agent.StatusWaiting}, "Tool permission request awaiting user approval", false, ""},
 	"PdxSessionEnd":        {[]agent.Status{agent.StatusClear}, "Codex session ended", true, ""},
-	"PdxPreToolUse":        {[]agent.Status{}, "Tool call about to execute", false, agent.HookHandlingUnsupported},
+	"PdxPreToolUse":        {[]agent.Status{}, "Tool call about to execute", true, ""},
 	"PdxPostToolUse":       {[]agent.Status{}, "Tool call completed", false, agent.HookHandlingUnsupported},
 }
 

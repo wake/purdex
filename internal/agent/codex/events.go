@@ -88,12 +88,20 @@ var codexEventSpecs = []agent.HookEventSpec{
 		FutureOnly:   true,
 	},
 	{
+		// L2: PreToolUse is the codex non-prompt turn attach trigger
+		// (per spec §3.3.C strategy a). Lifecycle moves from None to
+		// UserPromptSubmit so applyFrameEvent's new lifecycle case picks
+		// it up; Handling is omitted so EffectiveHookHandling resolves to
+		// HookHandlingDetail (empty EmitsStatus → detail). FutureOnly=true
+		// keeps CheckHooks tolerant of legacy users who installed before
+		// the L2 catalog expansion (mirrors the SubagentStart/Stop /
+		// SessionEnd / StopFailure / Notification expansion gating).
 		PurdexName:   "PdxPreToolUse",
 		UpstreamKeys: []string{"PreToolUse"},
-		Lifecycle:    agent.LifecycleNone,
+		Lifecycle:    agent.LifecycleUserPromptSubmit,
 		EmitsStatus:  []agent.Status{},
 		Description:  "Tool call about to execute",
-		Handling:     agent.HookHandlingUnsupported,
+		FutureOnly:   true,
 	},
 	{
 		PurdexName:   "PdxPostToolUse",

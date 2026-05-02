@@ -66,6 +66,10 @@ var providerFixtures = map[string][]driftFixture{
 		{"PdxSessionEnd", `{}`, agent.StatusClear, true},
 		{"PdxSubagentStart", `{"agent_id":"a"}`, "", true},
 		{"PdxSubagentStop", `{"agent_id":"a"}`, "", true},
+		// L2: PdxPreToolUse is detail-only (Valid=true, Status="") so the
+		// new applyFrameEvent LifecycleUserPromptSubmit case can attach the
+		// codex broker proxy ref for non-prompt turns (spec §3.3.C).
+		{"PdxPreToolUse", `{}`, "", true},
 	},
 	"opencode": {
 		{"PdxSessionStart", `{}`, agent.StatusIdle, true},
