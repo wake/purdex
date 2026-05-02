@@ -2549,3 +2549,339 @@ func TestHandleEvent_PreToolUse_NoParent_NoBroadcast(t *testing.T) {
 		t.Fatalf("currentStatus[\"work\"] = %q, want unset (no broadcast path should run)", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 P3-T1 — Delegation flag end-to-end via handler
+// (spec §3.2 / §6.3 / plan §3 P3-T1)
+//
+// These tests exercise the full handler.go wiring of ExtractDelegationHint +
+// markDelegatingRef / unmarkDelegatingRef. Each test seeds a cc frame via
+// PdxSessionStart + PdxSubagentStart (with a fake provider that emits the
+// agent_id) so that markDelegatingRef can locate the matching SubagentRef.
+// ---------------------------------------------------------------------------
+
+// delegationModule constructs a Module wired for cc Bash delegation tests:
+// fake tmux + sessions + core, plus a fake cc provider that emits agent_id
+// on PdxSubagentStart. After this helper a SessionStart + SubagentStart pair
+// can be injected to materialise the SubagentRef.
+func delegationModule(t *testing.T) *Module {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, raw json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "PdxSessionStart":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			case "PdxSubagentStart":
+				// Pass through agent_id from raw event payload — handler turns
+				// this into the cc native SubagentRef on the frame.
+				var payload struct {
+					AgentID string `json:"agent_id"`
+				}
+				_ = json.Unmarshal(raw, &payload)
+				if payload.AgentID == "" {
+					payload.AgentID = "agent-X"
+				}
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": payload.AgentID}}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+	return m
+}
+
+// seedCCFrameWithSubagent fires SessionStart + SubagentStart to create a cc
+// frame in pane %5 with one native SubagentRef whose ID == agentID. Returns
+// after the frame is observable via ListByPane.
+func seedCCFrameWithSubagent(t *testing.T, m *Module, agentID string) {
+	t.Helper()
+	bodies := []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{"agent_id":"` + agentID + `"},"agent_type":"cc"}`,
+	}
+	for _, body := range bodies {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("seed body %q: status = %d (body=%s)", body, w.Code, w.Body.String())
+		}
+	}
+}
+
+// findCCFrame returns the (only) cc frame on pane %5; fatals if missing.
+func findCCFrame(t *testing.T, m *Module) []agentpkg.SubagentRef {
+	t.Helper()
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (delegation tests rely on a single seeded frame)", len(frames))
+	}
+	return frames[0].Subagents
+}
+
+// findRefByID linear-scans subagents; fatals when not found.
+func findRefByID(t *testing.T, refs []agentpkg.SubagentRef, agentID string) agentpkg.SubagentRef {
+	t.Helper()
+	for _, r := range refs {
+		if r.ID == agentID {
+			return r
+		}
+	}
+	t.Fatalf("no SubagentRef with ID=%q in %+v", agentID, refs)
+	return agentpkg.SubagentRef{}
+}
+
+// containsString helper for slice membership checks in delegation tests.
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+const codexCompanionBashCommand = `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --background "review main"`
+
+// preToolUseBody emits a cc PdxPreToolUse event for pane %5 with the given
+// command + agent_id + tool_use_id. Set agentType to "" to default to "cc".
+func preToolUseBody(agentType, command, agentID, toolUseID string) string {
+	if agentType == "" {
+		agentType = "cc"
+	}
+	raw := map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "Bash",
+		"tool_input": map[string]any{
+			"command":     command,
+			"description": "test",
+		},
+		"tool_use_id": toolUseID,
+		"agent_id":    agentID,
+		"agent_type":  "general-purpose",
+	}
+	rawJSON, _ := json.Marshal(raw)
+	return `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxPreToolUse","raw_event":` + string(rawJSON) + `,"agent_type":"` + agentType + `"}`
+}
+
+// postToolUseBody emits PdxPostToolUse (or PdxPostToolUseFailure when failure
+// is true) for pane %5 with the given tool_use_id + agent_id. tool_input is
+// omitted — Post events do not carry the command.
+func postToolUseBody(failure bool, agentID, toolUseID string) string {
+	purdex := "PdxPostToolUse"
+	if failure {
+		purdex = "PdxPostToolUseFailure"
+	}
+	raw := map[string]any{
+		"hook_event_name": "PostToolUse",
+		"tool_name":       "Bash",
+		"tool_response":   map[string]any{"stdout": "", "stderr": "", "exit_code": 0},
+		"tool_use_id":     toolUseID,
+		"agent_id":        agentID,
+		"agent_type":      "general-purpose",
+	}
+	rawJSON, _ := json.Marshal(raw)
+	return `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"` + purdex + `","raw_event":` + string(rawJSON) + `,"agent_type":"cc"}`
+}
+
+func sendBody(t *testing.T, m *Module, body string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+// 1. PreToolUse Bash with codex-companion command marks Delegating=true.
+func TestHandleEvent_CCPreToolUseBashCodexCompanion_MarksDelegating(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !ref.Delegating {
+		t.Fatalf("Delegating = false, want true (ref=%+v)", ref)
+	}
+	if !containsString(ref.DelegatingToolUseIDs, "tool-use-T1") {
+		t.Fatalf("DelegatingToolUseIDs = %v, want it to contain tool-use-T1", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 2. PostToolUse after a mark removes the tool_use_id and clears Delegating.
+func TestHandleEvent_CCPostToolUseBashAfterMark_UnmarksDelegating(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+
+	// Pin Red visibility: confirm the mark step took effect before unmarking,
+	// otherwise this test would silently pass with no wiring at all.
+	preRef := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !preRef.Delegating || !containsString(preRef.DelegatingToolUseIDs, "tool-use-T1") {
+		t.Fatalf("pre-unmark precondition failed: ref=%+v (mark step did not run)", preRef)
+	}
+
+	sendBody(t, m, postToolUseBody(false, "agent-X", "tool-use-T1"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false after unmark (ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 3. PostToolUseFailure after a mark also unmarks (B3 path).
+func TestHandleEvent_CCPostToolUseFailureBashAfterMark_UnmarksDelegating(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+
+	// Pin Red visibility: confirm the mark step took effect (B3 unmark path
+	// only runs through PostToolUseFailure when wiring covers all three event
+	// names).
+	preRef := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !preRef.Delegating || !containsString(preRef.DelegatingToolUseIDs, "tool-use-T1") {
+		t.Fatalf("pre-unmark precondition failed: ref=%+v (mark step did not run)", preRef)
+	}
+
+	sendBody(t, m, postToolUseBody(true, "agent-X", "tool-use-T1"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false after PostToolUseFailure unmark (ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 4. PreToolUse Bash with a non-codex command does NOT mark.
+func TestHandleEvent_CCPreToolUseBashNonCodex_NoMark(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+
+	sendBody(t, m, preToolUseBody("cc", "pnpm build", "agent-X", "tool-use-Tnoop"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false (non-codex Bash should not mark; ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 5. Top-level cc PreToolUse (agent_id=="") never marks — extractor rejects.
+func TestHandleEvent_CCPreToolUseBashTopLevelNoAgentID_NoMark(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "", "tool-use-Ttop"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false (top-level cc has no agent_id; ref=%+v)", ref)
+	}
+}
+
+// 6. Concurrent two codex-companion Bash invocations (B2 verification): both
+// tool_use_ids accumulate; unmarking one leaves the other; unmarking the
+// second clears Delegating.
+func TestHandleEvent_CCPreToolUseConcurrentTwoCodexBash_BothTracked(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-A"))
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-B"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !ref.Delegating {
+		t.Fatalf("Delegating = false, want true with two outstanding tool_use_ids (ref=%+v)", ref)
+	}
+	if !containsString(ref.DelegatingToolUseIDs, "tool-use-A") || !containsString(ref.DelegatingToolUseIDs, "tool-use-B") {
+		t.Fatalf("DelegatingToolUseIDs = %v, want both tool-use-A and tool-use-B", ref.DelegatingToolUseIDs)
+	}
+
+	// Unmark A — Delegating still true with B remaining.
+	sendBody(t, m, postToolUseBody(false, "agent-X", "tool-use-A"))
+	ref = findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !ref.Delegating {
+		t.Fatalf("Delegating = false after unmarking A, want true (B still active); ref=%+v", ref)
+	}
+	if containsString(ref.DelegatingToolUseIDs, "tool-use-A") {
+		t.Fatalf("DelegatingToolUseIDs still contains tool-use-A after unmark: %v", ref.DelegatingToolUseIDs)
+	}
+	if !containsString(ref.DelegatingToolUseIDs, "tool-use-B") {
+		t.Fatalf("DelegatingToolUseIDs missing tool-use-B: %v", ref.DelegatingToolUseIDs)
+	}
+
+	// Unmark B — Delegating clears.
+	sendBody(t, m, postToolUseBody(false, "agent-X", "tool-use-B"))
+	ref = findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true after both unmarks, want false (ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty after both unmarks", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 7. F4 / AC10 — codex agent_type PreToolUse Bash with codex-companion
+// command must NOT touch the cc frame's Delegating flag. Handler-level gate
+// `req.AgentType == "cc"` is the wall.
+func TestHandleEvent_CodexAgentTypePreToolUseBashCodexCompanion_NoMark(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+	// codex provider must exist or handleEvent rejects the agent_type lookup.
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "codex",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true} },
+	})
+
+	sendBody(t, m, preToolUseBody("codex", codexCompanionBashCommand, "agent-X", "tool-use-Tcodex"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false (codex agent_type must not flow through delegation wiring; ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty (codex agent_type must not mark)", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 8. F4 / AC10 — opencode agent_type PreToolUse Bash with codex-companion
+// command must NOT touch the cc frame's Delegating flag.
+func TestHandleEvent_OpencodeAgentTypePreToolUseBashCodexCompanion_NoMark(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "opencode",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true} },
+	})
+
+	sendBody(t, m, preToolUseBody("opencode", codexCompanionBashCommand, "agent-X", "tool-use-Topencode"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false (opencode agent_type must not flow through delegation wiring; ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty (opencode agent_type must not mark)", ref.DelegatingToolUseIDs)
+	}
+}

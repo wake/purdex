@@ -218,6 +218,36 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	broadcastTs := time.Now().UnixNano()
 
+	// Delegation flag wiring — independent of PathHint extraction. Detect cc
+	// subagent invoking codex-companion via Bash and mark / unmark Delegating
+	// flag on the matching SubagentRef. Spec §3.2 + §3.3. PathHint and
+	// delegation are emitted from the same raw cc PreToolUse / PostToolUse /
+	// PostToolUseFailure event but are extracted independently — neither
+	// depends on the other's dedup state or module fields (delegation does
+	// not need m.core / m.pathHintDedup / m.pathHintBuffer; spec §3.2 / plan
+	// §0.3 F6). This block is therefore a sibling of the PathHint block, not
+	// nested inside its conditional.
+	if req.AgentType == "cc" &&
+		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUse" || req.PurdexName == "PdxPostToolUseFailure") {
+		if hint, ok := ExtractDelegationHint(req.RawEvent, req.PurdexName); ok {
+			if hint.IsCodexMark {
+				if err := m.markDelegatingRef(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, hint.AgentID, hint.ToolUseID, broadcastTs); err != nil {
+					if isDevMode() {
+						log.Printf("[delegation] mark error: %v", err)
+					}
+					// fail-soft: do not abort handler (mirrors PathHint pattern)
+				}
+			} else if hint.IsUnmark {
+				if err := m.unmarkDelegatingRef(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, hint.AgentID, hint.ToolUseID, broadcastTs); err != nil {
+					if isDevMode() {
+						log.Printf("[delegation] unmark error: %v", err)
+					}
+					// fail-soft
+				}
+			}
+		}
+	}
+
 	// Find provider
 	var provider agentpkg.AgentProvider
 	if m.registry != nil {

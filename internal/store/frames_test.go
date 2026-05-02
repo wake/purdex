@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -259,7 +260,9 @@ func TestFrames_UpsertAndReadSubagentRefs(t *testing.T) {
 	if len(got.Subagents) != 1 {
 		t.Fatalf("subagents len = %d, want 1", len(got.Subagents))
 	}
-	if got.Subagents[0] != want[0] {
+	// SubagentRef contains slice fields (DelegatingToolUseIDs) so == is not
+	// usable; compare via reflect.DeepEqual.
+	if !reflect.DeepEqual(got.Subagents[0], want[0]) {
 		t.Fatalf("subagents[0] = %+v, want %+v", got.Subagents[0], want[0])
 	}
 }
