@@ -4201,3 +4201,380 @@ func TestCandidateHasOwnedState_EmptySubagentsReturnsFalse(t *testing.T) {
 		t.Fatal("candidateHasOwnedState = true, want false (empty subagents — no state to preserve)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 P2-T1 — markDelegatingRef / unmarkDelegatingRef
+// (spec §3.5 / plan §2 P2-T1)
+// ---------------------------------------------------------------------------
+
+// seedFrameWithSubagents installs `refs` on the seeded frame's Subagents
+// slice via Upsert, then re-reads through GetByIdentity to return a fresh
+// snapshot reflecting the persisted LastSeenAt. Local helper for the
+// delegating-ref tests below; not promoted to package-wide fixtures because
+// other tests already have their own subagent seeding ergonomics.
+func seedFrameWithSubagents(t *testing.T, m *Module, paneID, agentType string, pid int, startTime string, lastSeenAt int64, refs []agentpkg.SubagentRef) store.Frame {
+	t.Helper()
+	parent := seedFrame(t, m, paneID, agentType, pid, startTime, lastSeenAt)
+	parent.Subagents = refs
+	if _, err := m.frames.Upsert(parent); err != nil {
+		t.Fatalf("seed parent ref: %v", err)
+	}
+	got, err := m.frames.GetByIdentity(paneID, pid, startTime)
+	if err != nil || got == nil {
+		t.Fatalf("reload parent: %v / %v", err, got)
+	}
+	return *got
+}
+
+// nativeSubagentRef returns a non-proxy SubagentRef as the cc native
+// SubagentStart payload would shape it (ID = agent_id string).
+func nativeSubagentRef(agentID string, startedAt int64) agentpkg.SubagentRef {
+	return agentpkg.SubagentRef{
+		ID:        agentID,
+		Type:      "task",
+		StartedAt: startedAt,
+	}
+}
+
+func TestMarkDelegatingRef_AppendsToolUseIDOnMatchingRef(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("markDelegatingRef: %v", err)
+	}
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 1 {
+		t.Fatalf("Subagents count = %d, want 1; refs=%+v", len(got.Subagents), got.Subagents)
+	}
+	ref := got.Subagents[0]
+	if !ref.Delegating {
+		t.Fatalf("ref.Delegating = false, want true (after mark)")
+	}
+	if len(ref.DelegatingToolUseIDs) != 1 || ref.DelegatingToolUseIDs[0] != "tool-T1" {
+		t.Fatalf("ref.DelegatingToolUseIDs = %v, want [tool-T1]", ref.DelegatingToolUseIDs)
+	}
+	if got.LastSeenAt != 100 {
+		t.Fatalf("LastSeenAt = %d, want 100", got.LastSeenAt)
+	}
+}
+
+func TestMarkDelegatingRef_DedupesRepeatedToolUseID(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("first mark: %v", err)
+	}
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 110); err != nil {
+		t.Fatalf("second mark (dedupe): %v", err)
+	}
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	ref := got.Subagents[0]
+	if len(ref.DelegatingToolUseIDs) != 1 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want single entry (deduped)", ref.DelegatingToolUseIDs)
+	}
+	if !ref.Delegating {
+		t.Fatalf("ref.Delegating = false, want true after dedupe re-mark")
+	}
+}
+
+func TestMarkDelegatingRef_NoOpWhenAgentIDNotFound(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	// Mark with agent-Z (not present) → silent no-op (spec L7 race:
+	// PreToolUse arrived before SubagentStart established the ref).
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-Z", "tool-T1", 100); err != nil {
+		t.Fatalf("markDelegatingRef returned error on missing ref, want nil (silent no-op): %v", err)
+	}
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 1 {
+		t.Fatalf("Subagents count = %d, want 1 (unchanged); refs=%+v", len(got.Subagents), got.Subagents)
+	}
+	if got.Subagents[0].Delegating {
+		t.Fatalf("ref.Delegating = true, want false (no-op)")
+	}
+	if len(got.Subagents[0].DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty (no-op)", got.Subagents[0].DelegatingToolUseIDs)
+	}
+}
+
+func TestMarkDelegatingRef_NoOpWhenFrameMissing(t *testing.T) {
+	m := newProxyTestModule(t)
+	// No frame seeded for pid=999.
+	if err := m.markDelegatingRef("%5", 999, "tNone", "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("markDelegatingRef on missing frame returned error, want nil silent no-op: %v", err)
+	}
+}
+
+func TestMarkDelegatingRef_RetryOnUpsertConflict(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	// Inject a concurrent racer write BEFORE our mark call. The racer
+	// adds an unrelated proxy ref and bumps LastSeenAt to 60. Our caller's
+	// `parent` snapshot is still at LastSeenAt=50, so the helper's first
+	// UpsertIfUnchanged(expected=50) fails; the helper reloads, sees the
+	// racer's ref + LastSeenAt=60, and the second attempt succeeds —
+	// preserving both the racer's ref and our delegating mark on agent-A.
+	racer := agentpkg.SubagentRef{
+		ID:              "proxy:codex:999:t999",
+		Type:            "codex",
+		StartedAt:       55,
+		SourcePID:       999,
+		SourceStartTime: "t999",
+		IsProxy:         true,
+		SourceTurnID:    "t_x",
+	}
+	cur, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || cur == nil {
+		t.Fatalf("racer baseline read: %v / %v", err, cur)
+	}
+	cur.Subagents = append(cur.Subagents, racer)
+	cur.LastSeenAt = 60
+	if _, err := m.frames.Upsert(*cur); err != nil {
+		t.Fatalf("racer Upsert: %v", err)
+	}
+
+	// Call helper; helper reloads internally on first conflict.
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("markDelegatingRef: %v", err)
+	}
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 2 {
+		t.Fatalf("Subagents count = %d, want 2 (racer + native); refs=%+v", len(got.Subagents), got.Subagents)
+	}
+	var native agentpkg.SubagentRef
+	for _, ref := range got.Subagents {
+		if !ref.IsProxy && ref.ID == "agent-A" {
+			native = ref
+		}
+	}
+	if !native.Delegating || len(native.DelegatingToolUseIDs) != 1 || native.DelegatingToolUseIDs[0] != "tool-T1" {
+		t.Fatalf("native ref after retry = %+v, want Delegating=true ToolUseIDs=[tool-T1]", native)
+	}
+}
+
+func TestUnmarkDelegatingRef_RemovesToolUseID(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	if err := m.unmarkDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 110); err != nil {
+		t.Fatalf("unmark: %v", err)
+	}
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	ref := got.Subagents[0]
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty after unmark", ref.DelegatingToolUseIDs)
+	}
+	if ref.Delegating {
+		t.Fatalf("ref.Delegating = true, want false after list emptied")
+	}
+}
+
+func TestUnmarkDelegatingRef_DelegatingFalseWhenListEmpties(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	// Mark exactly one tool use, then unmark it. Verify the invariant
+	// Delegating == len(DelegatingToolUseIDs) > 0 flips to false.
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	if err := m.unmarkDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 110); err != nil {
+		t.Fatalf("unmark: %v", err)
+	}
+	got, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if got.Subagents[0].Delegating {
+		t.Fatalf("Delegating = true, want false (invariant: len==0 → false)")
+	}
+}
+
+func TestUnmarkDelegatingRef_DelegatingTrueWhenOthersStillActive(t *testing.T) {
+	// B2 verification: two concurrent codex Bash calls (T1, T2) from the
+	// same subagent. unmarking T2 should leave [T1] in the list, with
+	// Delegating still true.
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("mark T1: %v", err)
+	}
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T2", 105); err != nil {
+		t.Fatalf("mark T2: %v", err)
+	}
+	if err := m.unmarkDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T2", 110); err != nil {
+		t.Fatalf("unmark T2: %v", err)
+	}
+	got, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	ref := got.Subagents[0]
+	if len(ref.DelegatingToolUseIDs) != 1 || ref.DelegatingToolUseIDs[0] != "tool-T1" {
+		t.Fatalf("DelegatingToolUseIDs = %v, want [tool-T1]", ref.DelegatingToolUseIDs)
+	}
+	if !ref.Delegating {
+		t.Fatalf("ref.Delegating = false, want true (T1 still active)")
+	}
+}
+
+func TestUnmarkDelegatingRef_NoOpWhenToolUseIDNotInList(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("mark T1: %v", err)
+	}
+	// Unmark a different tool_use_id that was never marked → list unchanged.
+	if err := m.unmarkDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T2", 110); err != nil {
+		t.Fatalf("unmark unknown: %v", err)
+	}
+	got, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	ref := got.Subagents[0]
+	if len(ref.DelegatingToolUseIDs) != 1 || ref.DelegatingToolUseIDs[0] != "tool-T1" {
+		t.Fatalf("DelegatingToolUseIDs = %v, want [tool-T1] (unchanged)", ref.DelegatingToolUseIDs)
+	}
+	if !ref.Delegating {
+		t.Fatalf("ref.Delegating = false, want true (T1 still in list)")
+	}
+}
+
+func TestUnmarkDelegatingRef_NoOpAfterSubagentStop(t *testing.T) {
+	// Simulate PostToolUse arriving after SubagentStop has already removed
+	// the ref. unmarkDelegatingRef must be a silent no-op (return nil, no
+	// frame mutation).
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	// Run real SubagentStop flow — removes the ref.
+	stopRef := nativeSubagentRef("agent-A", 0)
+	if _, _, err := m.mutateSubagentsWithRetry(parent, agentpkg.LifecycleSubagentStop, stopRef, 80); err != nil {
+		t.Fatalf("SubagentStop: %v", err)
+	}
+	before, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if len(before.Subagents) != 0 {
+		t.Fatalf("Subagents count after Stop = %d, want 0", len(before.Subagents))
+	}
+
+	// PostToolUse late arrival — must silently no-op.
+	if err := m.unmarkDelegatingRef("%5", 100, "t100", "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("unmarkDelegatingRef post-Stop returned error, want nil: %v", err)
+	}
+	after, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if len(after.Subagents) != 0 {
+		t.Fatalf("Subagents count after late unmark = %d, want 0 (frame unchanged)", len(after.Subagents))
+	}
+}
+
+func TestSubagentStopRemovesRefIncludingDelegatingFlag(t *testing.T) {
+	// Regression: existing SubagentStop flow (mutateSubagentsWithRetry +
+	// updateSubagents → LifecycleSubagentStop branch) removes the ref
+	// entirely, including any Delegating / DelegatingToolUseIDs state.
+	// The delegating-flag fields must NOT linger after a stop.
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	mid, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if !mid.Subagents[0].Delegating {
+		t.Fatalf("pre-Stop Delegating = false, want true")
+	}
+
+	// Trigger SubagentStop on agent-A through the existing path.
+	stopRef := nativeSubagentRef("agent-A", 0)
+	if _, _, err := m.mutateSubagentsWithRetry(*mid, agentpkg.LifecycleSubagentStop, stopRef, 110); err != nil {
+		t.Fatalf("SubagentStop: %v", err)
+	}
+	got, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if len(got.Subagents) != 0 {
+		t.Fatalf("Subagents count after Stop = %d, want 0 (ref removed)", len(got.Subagents))
+	}
+}
+
+func TestDelegatingNativeRef_CoexistsWith_RealIsProxyRef_OnSameParent(t *testing.T) {
+	// AC8 / F5 coverage: parent.Subagents holds both a native ref (with
+	// Delegating set) and a real IsProxy ref. Mutating the native ref must
+	// not touch the proxy ref's identity fields (IsProxy, SourceTurnID,
+	// SourcePID/StartTime), and vice versa.
+	m := newProxyTestModule(t)
+	proxyRef := agentpkg.SubagentRef{
+		ID:              "proxy:codex:999:t999",
+		Type:            "codex",
+		StartedAt:       55,
+		SourcePID:       999,
+		SourceStartTime: "t999",
+		IsProxy:         true,
+		SourceTurnID:    "t_x",
+	}
+	native := nativeSubagentRef("agent-A", 40)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		native,
+		proxyRef,
+	})
+
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", "tool-T1", 100); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	got, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if len(got.Subagents) != 2 {
+		t.Fatalf("Subagents count = %d, want 2 (native + proxy coexist)", len(got.Subagents))
+	}
+	var n, p agentpkg.SubagentRef
+	for _, ref := range got.Subagents {
+		if ref.IsProxy {
+			p = ref
+		} else {
+			n = ref
+		}
+	}
+	if !n.Delegating || len(n.DelegatingToolUseIDs) != 1 || n.DelegatingToolUseIDs[0] != "tool-T1" {
+		t.Fatalf("native ref after mark = %+v, want Delegating=true ToolUseIDs=[tool-T1]", n)
+	}
+	// Proxy ref untouched: identity fields preserved exactly, no
+	// delegating fields leaked into it.
+	if !p.IsProxy || p.SourcePID != 999 || p.SourceStartTime != "t999" || p.SourceTurnID != "t_x" || p.ID != "proxy:codex:999:t999" {
+		t.Fatalf("proxy ref drifted: %+v", p)
+	}
+	if p.Delegating || len(p.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("proxy ref leaked delegating fields: %+v", p)
+	}
+}

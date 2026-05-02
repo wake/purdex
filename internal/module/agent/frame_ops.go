@@ -1751,3 +1751,168 @@ func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
 	}
 	return nil, nil
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 P2-T1 — markDelegatingRef / unmarkDelegatingRef
+// (spec §3.5 / plan §2 P2-T1)
+// ---------------------------------------------------------------------------
+
+// markDelegatingRef appends toolUseID to DelegatingToolUseIDs (deduped) and
+// sets Delegating=true on the SubagentRef whose ID matches agentID, on the
+// frame at (paneID, senderPID, senderStartTime). Idempotent — re-mark with
+// same toolUseID is a no-op (slice membership check).
+//
+// Mirror upsertProxyRefForBroker pattern (frame_ops.go:1216-1297). Does NOT
+// reuse mutateSubagentsWithRetry — that helper's SubagentStart branch routes
+// through updateSubagents → subagentRefMatches (turn-aware), which only
+// supports SubagentStart append-if-missing / SubagentStop remove-matching,
+// not in-place mutation of an existing ref's fields (frame_ops.go:825-848 /
+// plan §0.3 B1). Same UpsertIfUnchanged retry cap (proxyUpsertMaxAttempts).
+//
+// Race scope (spec L7): when PreToolUse arrives before SubagentStart has
+// established the ref (regression #10/#12), this is a silent no-op — by
+// design, since attaching a flag to a non-existent ref has no meaningful
+// semantics; recovers when subagent ends or on the next tool use.
+//
+// Invariant: Delegating == len(DelegatingToolUseIDs) > 0.
+func (m *Module) markDelegatingRef(paneID string, senderPID int, senderStartTime string, agentID, toolUseID string, broadcastTs int64) error {
+	parent, err := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
+	if err != nil {
+		return err
+	}
+	if parent == nil {
+		// Spec L7: PreToolUse-before-SubagentStart silent no-op.
+		return nil
+	}
+
+	current := *parent
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		expected := current.LastSeenAt
+
+		idx := -1
+		for i, ref := range current.Subagents {
+			if ref.ID == agentID {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			// Ref not present — spec §3.5 race: PreToolUse beat SubagentStart.
+			return nil
+		}
+
+		// Build a fresh slice so mutating next[idx] never aliases the caller's
+		// snapshot or any other reader of current.Subagents.
+		next := make([]agentpkg.SubagentRef, len(current.Subagents))
+		copy(next, current.Subagents)
+
+		// Dedupe append toolUseID into a fresh backing array (avoid sharing
+		// with the existing ref's slice).
+		ids := make([]string, 0, len(next[idx].DelegatingToolUseIDs)+1)
+		ids = append(ids, next[idx].DelegatingToolUseIDs...)
+		already := false
+		for _, id := range ids {
+			if id == toolUseID {
+				already = true
+				break
+			}
+		}
+		if !already {
+			ids = append(ids, toolUseID)
+		}
+		next[idx].DelegatingToolUseIDs = ids
+		next[idx].Delegating = len(ids) > 0
+
+		current.Subagents = next
+		current.LastSeenAt = broadcastTs
+		ok, _, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+
+		reloaded, rerr := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
+		if rerr != nil {
+			return rerr
+		}
+		if reloaded == nil {
+			// Frame disappeared mid-flight — silent no-op (mirror
+			// upsertProxyRefForBroker's reload-nil branch).
+			return nil
+		}
+		current = *reloaded
+	}
+	return fmt.Errorf("markDelegatingRef: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, current.FrameID)
+}
+
+// unmarkDelegatingRef removes toolUseID from DelegatingToolUseIDs on the ref
+// whose ID == agentID, then recomputes Delegating = len(remaining) > 0. No-op
+// if ref not found, ID not in slice, or whole frame missing (covers
+// PostToolUse arriving after SubagentStop, PostToolUseFailure for non-codex
+// Bash, etc.).
+//
+// Mirror upsertProxyRefForBroker pattern (frame_ops.go:1216-1297). Does NOT
+// reuse mutateSubagentsWithRetry — see markDelegatingRef rationale.
+//
+// Invariant: Delegating == len(DelegatingToolUseIDs) > 0.
+func (m *Module) unmarkDelegatingRef(paneID string, senderPID int, senderStartTime string, agentID, toolUseID string, broadcastTs int64) error {
+	parent, err := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
+	if err != nil {
+		return err
+	}
+	if parent == nil {
+		return nil
+	}
+
+	current := *parent
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		expected := current.LastSeenAt
+
+		idx := -1
+		for i, ref := range current.Subagents {
+			if ref.ID == agentID {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil
+		}
+
+		next := make([]agentpkg.SubagentRef, len(current.Subagents))
+		copy(next, current.Subagents)
+
+		// Filter into a fresh slice (do not mutate the caller's backing
+		// array via append/in-place writes).
+		filtered := make([]string, 0, len(next[idx].DelegatingToolUseIDs))
+		for _, id := range next[idx].DelegatingToolUseIDs {
+			if id != toolUseID {
+				filtered = append(filtered, id)
+			}
+		}
+		next[idx].DelegatingToolUseIDs = filtered
+		next[idx].Delegating = len(filtered) > 0
+
+		current.Subagents = next
+		current.LastSeenAt = broadcastTs
+		ok, _, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+
+		reloaded, rerr := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
+		if rerr != nil {
+			return rerr
+		}
+		if reloaded == nil {
+			return nil
+		}
+		current = *reloaded
+	}
+	return fmt.Errorf("unmarkDelegatingRef: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, current.FrameID)
+}
