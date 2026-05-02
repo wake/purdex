@@ -55,14 +55,16 @@ interface ShouldNotifyParams {
   focusedCompositeKey: string
   hasTab: boolean
   settings: NotificationSettings
+  notificationSilent?: boolean
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName: rawEventName, compositeKey: ck, focusedCompositeKey, hasTab, settings } = params
+  const { derived, eventName: rawEventName, compositeKey: ck, focusedCompositeKey, hasTab, settings, notificationSilent = false } = params
   // W2 transition: cc broadcasts PdxXxx; legacy literal keys live in shouldNotify
   // suppression checks and NotificationSettings.events. Normalize once at entry.
   const eventName = normalizeEventName(rawEventName)
   if (derived !== 'waiting' && derived !== 'idle' && derived !== 'error') return false
+  if (notificationSilent) return false
   // Informational Notification subtypes (idle_prompt, auth_success) derive to 'idle'
   // but should not trigger desktop notifications — consistent with unread marking logic.
   if (derived === 'idle' && eventName === 'Notification') return false
@@ -111,7 +113,15 @@ export function useNotificationDispatcher(): void {
         const activeInfo = getActiveSessionInfo()
         const focusedCompositeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
 
-        if (!shouldNotify({ derived, eventName: event.raw_event_name, compositeKey: compositeKeyStr, focusedCompositeKey, hasTab, settings })) continue
+        if (!shouldNotify({
+          derived,
+          eventName: event.raw_event_name,
+          compositeKey: compositeKeyStr,
+          focusedCompositeKey,
+          hasTab,
+          settings,
+          notificationSilent: event.detail?.notification_silent === true,
+        })) continue
 
         const sessionsMap = useSessionStore.getState().sessions
         const hostSessions = sessionsMap[hostId] ?? []

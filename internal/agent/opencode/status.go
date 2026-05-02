@@ -20,7 +20,10 @@ func deriveOpenCodeStatus(eventName string, rawEvent json.RawMessage) agent.Deri
 	case "PdxPermissionRequest":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusWaiting, Detail: detailSubset(raw, "request_type", "permission", "patterns", "questions")}
 	case "PdxStop":
-		return agent.DeriveResult{Valid: true, Status: agent.StatusIdle}
+		return agent.DeriveResult{Valid: true, Status: agent.StatusIdle, Detail: map[string]any{
+			"notification_silent": true,
+			"stop_source":          "session.status.idle",
+		}}
 	case "PdxStopFailure":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: detailSubset(raw, "error", "error_details")}
 	case "PdxSessionEnd":

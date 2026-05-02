@@ -72,6 +72,12 @@ func TestOpenCodeDeriveStatus_PdxStop(t *testing.T) {
 	if !r.Valid || r.Status != agent.StatusIdle {
 		t.Fatalf("expected idle, got %+v", r)
 	}
+	if r.Detail["notification_silent"] != true {
+		t.Fatalf("notification_silent = %#v, want true", r.Detail["notification_silent"])
+	}
+	if r.Detail["stop_source"] != "session.status.idle" {
+		t.Fatalf("stop_source = %#v, want session.status.idle", r.Detail["stop_source"])
+	}
 }
 
 func TestOpenCodeDeriveStatus_PdxStopFailure(t *testing.T) {

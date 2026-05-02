@@ -20,6 +20,9 @@ describe('shouldNotify', () => {
   it('returns true for idle event', () => {
     expect(shouldNotify({ derived: 'idle', eventName: 'Stop', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
   })
+  it('returns false for notification_silent event', () => {
+    expect(shouldNotify({ derived: 'idle', eventName: 'PdxStop', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings, notificationSilent: true })).toBe(false)
+  })
   it('returns false for running event', () => {
     expect(shouldNotify({ derived: 'running', eventName: 'UserPromptSubmit', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(false)
   })

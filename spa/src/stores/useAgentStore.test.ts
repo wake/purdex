@@ -252,6 +252,19 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().unread[`${H}:dev`]).toBe(true)
   })
 
+  it('silent Stop → idle, does NOT mark unread', () => {
+    const event: NormalizedEvent = {
+      agent_type: 'opencode',
+      status: 'idle',
+      raw_event_name: 'PdxStop',
+      broadcast_ts: Date.now(),
+      detail: { notification_silent: true, stop_source: 'session.status.idle' },
+    }
+    useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
+    expect(useAgentStore.getState().statuses[`${H}:dev`]).toBe('idle')
+    expect(useAgentStore.getState().unread[`${H}:dev`]).toBeUndefined()
+  })
+
   it('Stop → does NOT mark unread when focused', () => {
     const tab = { ...createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 't1' }
     useTabStore.setState({ tabs: { t1: tab }, activeTabId: 't1' })
