@@ -1,6 +1,8 @@
 # L2 Proxy detach on Stop — Implementation Plan
 
-> **Status**：v2（plan-review round 1 採納 2 blocker + 3 high + 3 medium + 2 low 全 10 條；row 重新分配 / pane-scan 對齊 spec / T7+T8 拆 a/b → 12 task / risks 對齊 spec §7）
+> **Status**：v3（plan-review round 2 採納 1 medium + 2 low —— AC5/AC6/AC8 grep 移出 markdown table cell 走 raw pipe / row count wording 修正 22 labeled rows + 50 cases / T7b row 2 regression confirmation wording；plan freeze）
+>
+> v2 採納 round 1 全 10 條（2 blocker + 3 high + 3 medium + 2 low）；v3 採納 round 2 全 3 條（0 blocker + 0 high + 1 medium + 2 low）
 > **依賴 spec**：`docs/specs/2026-05-01-lights-l2-proxy-detach-on-stop-spec.md` v5 final
 > **Worktree**：`.claude/worktrees/lights-l2-proxy-detach` / branch `worktree-lights-l2-proxy-detach`
 > **Base**：`origin/main` @ alpha.281（J3 `56b3ba55` + bump `5736f87e`）
@@ -292,7 +294,8 @@ T7a / T7b / T8a / T8b / T9 涉及 `applyFrameEvent` switch case 新增 + 行為�
 
 **Test**：
 
-- TDD 順序：先 row 2（共用路徑）→ 應已綠（catalog wired in T1，case body in T7a）→ 加 row 20（no-parent guard）→ fail → 補 PreToolUse-specific skip return → 綠
+- **T7b 真正 red→green checkpoint 是 row 20**（PreToolUse no-parent guard）。Row 2 是 T7a shared case body 的 regression confirmation —— catalog wired in T1，case body in T7a，所以 row 2 在 T7b 起始時應已綠（純驗 PreToolUse 走進共用 upsert 路徑）
+- TDD 順序：先補 row 20 → fail → 加 PreToolUse-specific skip return → 綠 → 補 row 2 regression check（應已綠）
 
 **Acceptance**：
 - 2 row 全綠
@@ -387,19 +390,45 @@ T7a / T7b / T8a / T8b / T9 涉及 `applyFrameEvent` switch case 新增 + 行為�
 
 ## 4. Phase 4：文件 commit + 整合驗證
 
-### P4-T10 — Plan v2 commit + spec drift check + 整合驗證
+### P4-T10 — Plan freeze commit + spec drift check + 整合驗證
 
-**目標**：本 plan v2 落 commit；最後跑 full test + lint + build；spec / plan / impl 三層一致性 check。
+**目標**：本 plan freeze 版（v3）落 commit；最後跑 full test + lint + build；spec / plan / impl 三層一致性 check。
 
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `docs/specs/2026-05-02-lights-l2-proxy-detach-plan.md` | 本檔 v2 commit |
+| `docs/specs/2026-05-02-lights-l2-proxy-detach-plan.md` | 本檔 v3 commit |
 | (verify only) | `go build ./...` / `go test ./...` / `go test -race ./internal/module/agent/...` / `cd spa && pnpm run lint && pnpm run build` 全綠 |
-| (verify only) | spec AC5 grep（**M2/v2 fix —— shell 可執行版**）：`rg '"(proxy_subagent_attached\|proxy_subagent_detached\|proxy_subagent_detached_on_stop\|proxy_subagent_detached_on_stop_turn\|proxy_subagent_stop_no_match\|proxy_subagent_stop_parse_failed\|proxy_subagent_upserted_on_user_prompt\|proxy_subagent_attached_on_user_prompt\|user_prompt_without_proxy_parent\|pre_tool_without_proxy_parent)"' --type go`（**markdown render 把 `|` 顯示成 `\|`，shell 內請用 raw `|`**）—— 結果應只列 §7 vocabulary，無多餘 reason 字串 |
-| (verify only) | spec AC6 LOC bound（**M3/v2 fix —— per-file precise**）：`git diff --numstat origin/main -- internal/module/agent/frame_ops.go internal/module/agent/raw_codex_event.go internal/agent/codex/events.go internal/module/agent/frame_ops_test.go docs/specs/2026-05-02-lights-l2-proxy-detach-plan.md` 確認 `frame_ops.go` ≤ 280 / `raw_codex_event.go` ≤ 50 / `events.go` ≤ 10 / 新 test ≤ 400 ；總量 `git diff --shortstat origin/main` 確認 ≤ 850 |
-| (verify only) | spec AC8 grep：`rg 'PdxPreToolUse|HookHandlingUnsupported|LifecycleNone' internal/agent/codex internal/agent/cc internal/agent/opencode` —— 確認 cc/opencode 不變 |
+| (verify only) | spec AC5 / AC6 / AC8 grep —— 見下方 fenced code block（**M2/v3 fix —— 移出 table cell 走 raw pipe，避 markdown escape 踩雷**） |
+
+**AC5 verify**（trace reason vocabulary，結果應只列 §7 vocabulary 無多餘 reason）：
+
+```bash
+rg '"(proxy_subagent_attached|proxy_subagent_detached|proxy_subagent_detached_on_stop|proxy_subagent_detached_on_stop_turn|proxy_subagent_stop_no_match|proxy_subagent_stop_parse_failed|proxy_subagent_upserted_on_user_prompt|proxy_subagent_attached_on_user_prompt|user_prompt_without_proxy_parent|pre_tool_without_proxy_parent)"' --type go
+```
+
+**AC6 verify**（per-file LOC cap + 總量 ≤850）：
+
+```bash
+git diff --numstat origin/main -- \
+  internal/module/agent/frame_ops.go \
+  internal/module/agent/raw_codex_event.go \
+  internal/agent/codex/events.go \
+  internal/module/agent/frame_ops_test.go \
+  docs/specs/2026-05-02-lights-l2-proxy-detach-plan.md
+git diff --shortstat origin/main
+```
+
+對 cap：`frame_ops.go` ≤ 280 / `raw_codex_event.go` ≤ 50 / `events.go` ≤ 10 / 新 test ≤ 400 / 總量 ≤ 850。
+
+**AC8 verify**（catalog change cc/opencode 隔離）：
+
+```bash
+rg 'PdxPreToolUse|HookHandlingUnsupported|LifecycleNone' internal/agent/codex internal/agent/cc internal/agent/opencode
+```
+
+確認 cc/opencode 結果不變（與 baseline 對照）。
 
 **Test**：N/A（純驗證）
 
@@ -451,7 +480,7 @@ PR 建立流程（per CLAUDE.md「完整開發流程」第 7-9 步 + spec §10�
 | `TestDetachProxyRefForSenderTurnWithRetry` | P2-T6 | 1 |
 | `TestApplyFrameEvent_TurnAwareProxyDetach` (spec §5 全表) | P3-T7a+T7b+T8a+T8b+T9 | 20 (row 1-20) |
 
-**新增 test 小計**：48 cases（其中 spec §5 full table 20 row + 28 helper-level case）
+**新增 test 小計**：50 cases（其中 spec §5 全部 labeled rows 22 個（rows 1-20 加 b-row extension 15b + 17b）+ 28 helper-level case）
 
 ### Regression（既有 test zero regression）
 
@@ -540,7 +569,7 @@ Phase 4 PR squash merge 後獨立 bump PR：
 | Phase 1 P1-T1~T3 | 3 task 全 commit + Subagent A 全綠 + race 全綠 | ⏳ |
 | Phase 2 P2-T4~T6 | 3 task 全 commit + Subagent B 全綠 + race 全綠 | ⏳ |
 | Phase 3 P3-T7a/T7b/T8a/T8b/T9 | 5 task 全 commit + spec §5 全 20 row 全綠 + race -count=10 全綠 | ⏳ |
-| Phase 4 P4-T10 | plan v2 commit + AC1-AC8 全 satisfied + grep 結果乾淨 | ⏳ |
+| Phase 4 P4-T10 | plan v3 freeze commit + AC1-AC8 全 satisfied + grep 結果乾淨 | ⏳ |
 | PR + codex review 兩輪 | 0 critical/P1 + known issue 追蹤化 | ⏳ |
 | Squash merge → main | branch 刪除 + worktree 清理 | ⏳ |
 | Bump PR alpha.282 (or next) | merge | ⏳ |
