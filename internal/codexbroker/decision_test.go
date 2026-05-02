@@ -449,3 +449,261 @@ func TestEvalPredicateC_RegistryEntry_NoPane(t *testing.T) {
 		t.Errorf("expected C=false (pane closed)")
 	}
 }
+
+// ----- Task F — EvalDecision composer (two-layer responsibility) ---------
+
+// decisionOptsAllFalse constructs a populated DecisionOpts where every
+// predicate-leg fails by default. Tests override individual fields to flip
+// one leg true.
+func decisionOptsAllFalse(_ bool) DecisionOpts {
+	return DecisionOpts{
+		FS:             newMemFS(),
+		Lister:         NewFakeProcessLister(nil),
+		Dialer:         &fakeDialer{dialErr: errors.New("dial err")},
+		Registry:       &fakeRegistry{entries: map[string]LaunchEntry{}},
+		Panes:          &fakePaneLister{},
+		IdleTimeout:    30 * time.Minute,
+		ResultWindow:   DefaultRecentResultWindow,
+		StaleThreshold: DefaultStaleRunningThreshold,
+	}
+}
+
+func brokerWithLastJobAge(d time.Duration) BrokerRecord {
+	rec := brokerRecord()
+	t := time.Now().Add(-d)
+	rec.LastJobUpdatedAt = &t
+	return rec
+}
+
+// TestEvalDecision_ATrue_NoKill — predicate A true → baseline Kill=false.
+func TestEvalDecision_ATrue_NoKill(t *testing.T) {
+	rec := brokerWithLastJobAge(2 * time.Hour) // idle expired
+	opts := decisionOptsAllFalse(false)
+	// Force RPC to return active thread → A true.
+	opts.Dialer = &fakeDialer{respondWith: `{"threads":[{"id":"t1","status":"active"}]}`}
+	// Registry has matching entry so foreign would NOT fire.
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{rec.Key: {BrokerKey: rec.Key, TmuxPane: "%1"}}}
+	opts.Panes = &fakePaneLister{live: map[string]bool{"%1": true}}
+	res := EvalDecision(context.Background(), rec, opts)
+	if res.Kill {
+		t.Errorf("expected Kill=false (A true), got %+v", res)
+	}
+	if !res.Predicates.A {
+		t.Errorf("expected A=true, got %+v", res.Predicates)
+	}
+}
+
+// TestEvalDecision_BTrue_NoKill — predicate B true → baseline Kill=false.
+func TestEvalDecision_BTrue_NoKill(t *testing.T) {
+	rec := brokerWithLastJobAge(2 * time.Hour)
+	rec.StateDir = "/state"
+	opts := decisionOptsAllFalse(false)
+	// Plant a recent completed job + readable result file.
+	now := time.Now()
+	body := `{"jobs":[{"id":"j1","status":"completed","updatedAt":"` + now.Add(-5*time.Minute).Format(time.RFC3339) + `","completedAt":"` + now.Add(-5*time.Minute).Format(time.RFC3339) + `","pid":null}]}`
+	fs := newMemFS()
+	fs.writeFile("/state/state.json", body)
+	fs.writeFile("/state/jobs/j1.json", `{"result":"ok"}`)
+	opts.FS = fs
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{rec.Key: {BrokerKey: rec.Key, TmuxPane: "%1"}}}
+	opts.Panes = &fakePaneLister{live: map[string]bool{}}
+	res := EvalDecision(context.Background(), rec, opts)
+	if res.Kill {
+		t.Errorf("expected Kill=false (B true), got %+v", res)
+	}
+	if !res.Predicates.B {
+		t.Errorf("expected B=true, got %+v", res.Predicates)
+	}
+}
+
+// TestEvalDecision_CTrue_NoKill — predicate C true → baseline Kill=false.
+func TestEvalDecision_CTrue_NoKill(t *testing.T) {
+	rec := brokerWithLastJobAge(2 * time.Hour)
+	rec.Cwd = "/tmp/work"
+	rec.CwdExists = true
+	opts := decisionOptsAllFalse(false)
+	opts.FS = memFSWithCwd("/tmp/work")
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{rec.Key: {BrokerKey: rec.Key, TmuxPane: "%1"}}}
+	opts.Panes = &fakePaneLister{live: map[string]bool{"%1": true}}
+	res := EvalDecision(context.Background(), rec, opts)
+	if res.Kill {
+		t.Errorf("expected Kill=false (C true), got %+v", res)
+	}
+	if !res.Predicates.C {
+		t.Errorf("expected C=true, got %+v", res.Predicates)
+	}
+}
+
+// TestEvalDecision_AllFalse_IdleExpired_BaselineKill — registry has matching
+// entry; baseline Kill=true, Reason=idle_timeout, AnomaliesAdded empty.
+func TestEvalDecision_AllFalse_IdleExpired_BaselineKill(t *testing.T) {
+	rec := brokerWithLastJobAge(2 * time.Hour) // idle expired
+	rec.Cwd = "/tmp/missing"
+	rec.CwdExists = false
+	rec.Anomalies = []Anomaly{{Code: AnomalyCwdMissing}}
+	opts := decisionOptsAllFalse(false)
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{rec.Key: {BrokerKey: rec.Key, TmuxPane: "%1"}}}
+	res := EvalDecision(context.Background(), rec, opts)
+	if !res.Kill {
+		t.Errorf("expected Kill=true (all false + idle), got %+v", res)
+	}
+	if res.Reason != "idle_timeout" {
+		t.Errorf("expected Reason=idle_timeout, got %q", res.Reason)
+	}
+	if len(res.AnomaliesAdded) != 0 {
+		t.Errorf("expected no AnomaliesAdded, got %+v", res.AnomaliesAdded)
+	}
+}
+
+// TestEvalDecision_AllFalse_IdleNotExpired_NoKill — baseline Kill=false.
+func TestEvalDecision_AllFalse_IdleNotExpired_NoKill(t *testing.T) {
+	rec := brokerWithLastJobAge(5 * time.Minute) // not expired
+	opts := decisionOptsAllFalse(false)
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{rec.Key: {BrokerKey: rec.Key, TmuxPane: "%1"}}}
+	res := EvalDecision(context.Background(), rec, opts)
+	if res.Kill {
+		t.Errorf("expected Kill=false (idle not expired), got %+v", res)
+	}
+}
+
+// TestEvalDecision_Foreign_AllFalse_IdleNotExpired_NoKill_PlusForeignAnomaly
+// — foreign + not idle → baseline Kill=false (idle protects),
+// Reason=foreign_quarantine, AnomaliesAdded=[AnomalyForeignOwner].
+func TestEvalDecision_Foreign_AllFalse_IdleNotExpired_NoKill_PlusForeignAnomaly(t *testing.T) {
+	rec := brokerWithLastJobAge(5 * time.Minute)
+	opts := decisionOptsAllFalse(false)
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{}} // empty
+	res := EvalDecision(context.Background(), rec, opts)
+	if res.Kill {
+		t.Errorf("expected Kill=false (idle not expired protects), got %+v", res)
+	}
+	if res.Reason != "foreign_quarantine" {
+		t.Errorf("expected Reason=foreign_quarantine, got %q", res.Reason)
+	}
+	if len(res.AnomaliesAdded) != 1 || res.AnomaliesAdded[0] != AnomalyForeignOwner {
+		t.Errorf("expected AnomaliesAdded=[foreign_owner], got %+v", res.AnomaliesAdded)
+	}
+}
+
+// TestEvalDecision_Foreign_AllFalse_IdleExpired_BaselineKillTrue_PlusForeignAnomaly
+// — round-3 regression: foreign + idle + ¬A∧¬B∧¬C → baseline Kill=true,
+// Reason=foreign_quarantine, AnomaliesAdded=[AnomalyForeignOwner].
+//
+// The decision layer reports both: kill IS baseline-valid, AND broker is
+// foreign — sweep handler decides whether to honour it.
+func TestEvalDecision_Foreign_AllFalse_IdleExpired_BaselineKillTrue_PlusForeignAnomaly(t *testing.T) {
+	rec := brokerWithLastJobAge(2 * time.Hour) // idle expired
+	opts := decisionOptsAllFalse(false)
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{}} // empty
+	res := EvalDecision(context.Background(), rec, opts)
+	if !res.Kill {
+		t.Fatalf("expected Kill=true (baseline kill valid for foreign + idle), got %+v", res)
+	}
+	if res.Reason != "foreign_quarantine" {
+		t.Errorf("expected Reason=foreign_quarantine, got %q", res.Reason)
+	}
+	if len(res.AnomaliesAdded) != 1 || res.AnomaliesAdded[0] != AnomalyForeignOwner {
+		t.Errorf("expected AnomaliesAdded=[foreign_owner], got %+v", res.AnomaliesAdded)
+	}
+}
+
+// TestEvalDecision_Foreign_PredicateATrue_NoKill_PlusForeignAnomaly —
+// round-3 regression: foreign + predicate A true → baseline Kill=false
+// (alive protection wins over both idle and foreign).
+//
+// Operator-explicit override on this broker MUST NOT kill it (the sweep
+// handler test in task Q enforces).
+func TestEvalDecision_Foreign_PredicateATrue_NoKill_PlusForeignAnomaly(t *testing.T) {
+	rec := brokerWithLastJobAge(2 * time.Hour)
+	opts := decisionOptsAllFalse(false)
+	opts.Dialer = &fakeDialer{respondWith: `{"threads":[{"id":"t1","status":"active"}]}`}
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{}}
+	res := EvalDecision(context.Background(), rec, opts)
+	if res.Kill {
+		t.Errorf("expected Kill=false (alive protection wins), got %+v", res)
+	}
+	if res.Reason != "foreign_quarantine" {
+		t.Errorf("expected Reason=foreign_quarantine, got %q", res.Reason)
+	}
+	if !res.Predicates.A {
+		t.Errorf("expected A=true, got %+v", res.Predicates)
+	}
+}
+
+// TestEvalDecision_RegistryMissing_AllForeign_BaselinePerBroker — registry
+// Empty()==true; every broker gets AnomaliesAdded=[AnomalyForeignOwner] +
+// Reason=foreign_quarantine; baseline Kill follows per-broker.
+func TestEvalDecision_RegistryMissing_AllForeign_BaselinePerBroker(t *testing.T) {
+	idleRec := brokerWithLastJobAge(2 * time.Hour)
+	freshRec := brokerWithLastJobAge(5 * time.Minute)
+	opts := decisionOptsAllFalse(false)
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{}}
+
+	idleRes := EvalDecision(context.Background(), idleRec, opts)
+	if !idleRes.Kill {
+		t.Errorf("idle broker baseline kill should be true: %+v", idleRes)
+	}
+	if idleRes.Reason != "foreign_quarantine" {
+		t.Errorf("idle broker reason %q want foreign_quarantine", idleRes.Reason)
+	}
+
+	freshRes := EvalDecision(context.Background(), freshRec, opts)
+	if freshRes.Kill {
+		t.Errorf("fresh broker baseline kill should be false: %+v", freshRes)
+	}
+	if freshRes.Reason != "foreign_quarantine" {
+		t.Errorf("fresh broker reason %q want foreign_quarantine", freshRes.Reason)
+	}
+}
+
+// TestEvalDecision_RegistryNil_AllForeign_BaselinePerBroker — defensive:
+// opts.Registry == nil treated identically to Empty().
+func TestEvalDecision_RegistryNil_AllForeign_BaselinePerBroker(t *testing.T) {
+	rec := brokerWithLastJobAge(2 * time.Hour)
+	opts := decisionOptsAllFalse(false)
+	opts.Registry = nil
+	res := EvalDecision(context.Background(), rec, opts)
+	if !res.Kill {
+		t.Errorf("expected Kill=true (idle expired baseline), got %+v", res)
+	}
+	if res.Reason != "foreign_quarantine" {
+		t.Errorf("expected Reason=foreign_quarantine, got %q", res.Reason)
+	}
+	if len(res.AnomaliesAdded) != 1 {
+		t.Errorf("expected one anomaly added, got %+v", res.AnomaliesAdded)
+	}
+}
+
+// TestEvalDecision_RegistryHasOtherKey_ThisIsForeign — registry populated
+// but lookup miss for this brokerKey → foreign_quarantine.
+func TestEvalDecision_RegistryHasOtherKey_ThisIsForeign(t *testing.T) {
+	rec := brokerWithLastJobAge(2 * time.Hour)
+	opts := decisionOptsAllFalse(false)
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{
+		"someotherkey": {BrokerKey: "someotherkey", TmuxPane: "%99"},
+	}}
+	res := EvalDecision(context.Background(), rec, opts)
+	if !res.Kill {
+		t.Errorf("expected Kill=true (idle expired), got %+v", res)
+	}
+	if res.Reason != "foreign_quarantine" {
+		t.Errorf("expected Reason=foreign_quarantine, got %q", res.Reason)
+	}
+}
+
+// TestEvalDecision_NilLastJobUpdatedAt_IdleInfinite_BaselineKill — nil
+// LastJobUpdatedAt → idle=∞ → idle considered expired, baseline kill true
+// (uses populated registry so reason stays idle_timeout).
+func TestEvalDecision_NilLastJobUpdatedAt_IdleInfinite_BaselineKill(t *testing.T) {
+	rec := brokerRecord() // no LastJobUpdatedAt
+	rec.LastJobUpdatedAt = nil
+	opts := decisionOptsAllFalse(false)
+	opts.Registry = &fakeRegistry{entries: map[string]LaunchEntry{rec.Key: {BrokerKey: rec.Key, TmuxPane: "%1"}}}
+	res := EvalDecision(context.Background(), rec, opts)
+	if !res.Kill {
+		t.Errorf("expected Kill=true (nil idle treated as expired), got %+v", res)
+	}
+	if res.Reason != "idle_timeout" {
+		t.Errorf("expected Reason=idle_timeout, got %q", res.Reason)
+	}
+}

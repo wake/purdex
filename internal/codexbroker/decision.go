@@ -405,3 +405,125 @@ func isENOENT(err error) bool {
 	}
 	return os.IsNotExist(err)
 }
+
+// DecisionOpts configures EvalDecision. The seams (FS, Lister, Dialer,
+// Registry, Panes) are interfaces so unit tests can run without filesystem
+// or network access.
+//
+// Task G will add an E1Tracker field; this struct intentionally keeps the
+// surface minimal in task F so tests don't depend on types that don't yet
+// exist.
+type DecisionOpts struct {
+	FS             FS
+	Lister         ProcessLister
+	Dialer         Dialer
+	Registry       LaunchRegistryReader
+	Panes          PaneAliveChecker
+	IdleTimeout    time.Duration
+	ResultWindow   time.Duration
+	StaleThreshold time.Duration
+}
+
+// EvalDecision composes predicates A/B/C with the idle-timeout gate to
+// produce the baseline kill verdict.
+//
+// Two-layer responsibility (round-3 finding #1):
+//
+//   - DecisionResult.Kill reflects ONLY the baseline rule
+//     (¬A ∧ ¬B ∧ ¬C ∧ idleExpired). It is NOT short-circuited by
+//     foreign-quarantine status. A foreign broker that is also baseline-
+//     killable has Kill=true; the sweep handler decides whether to honour
+//     it depending on whether the request is unfiltered (NEVER kills
+//     foreign — mass-kill safety) or filtered with explicit brokerKey
+//     (operator override unblocks the foreign guard, baseline Kill=true is
+//     then honoured).
+//
+//   - Foreign classification is reported separately via
+//     Reason="foreign_quarantine" + AnomaliesAdded=[AnomalyForeignOwner].
+//     Foreign reason takes precedence over baseline Reason
+//     ("idle_timeout") in the audit trail because foreign is the
+//     semantically-dominant reason for any operator action on this broker.
+//
+// EvalDecision reads state.json once at the top via ReadStateJobs and feeds
+// the resulting []StateJobLite into both predicate A and predicate B. On
+// ReadStateJobs error, an empty slice is fed and AnomalyStateJSONUnreadable
+// is added to AnomaliesAdded so the audit trace explains the degraded
+// predicate result.
+func EvalDecision(ctx context.Context, rec BrokerRecord, opts DecisionOpts) DecisionResult {
+	now := time.Now()
+
+	// Read state.json once; predicates A and B share the slice.
+	jobs, jobsErr := ReadStateJobs(opts.FS, rec.StateDir)
+	res := DecisionResult{}
+	if jobsErr != nil {
+		// Don't double-tag if the inventory layer already noted it.
+		if !recordHasAnomaly(rec, AnomalyStateJSONUnreadable) {
+			res.AnomaliesAdded = append(res.AnomaliesAdded, AnomalyStateJSONUnreadable)
+		}
+	}
+
+	// Predicate A.
+	aTrue, aDetail := EvalPredicateA(ctx, rec, jobs, opts.Lister, opts.Dialer)
+	res.Predicates.A = aTrue
+	res.Predicates.ADetail = aDetail
+
+	// Predicate B.
+	bWindow := opts.ResultWindow
+	if bWindow <= 0 {
+		bWindow = DefaultRecentResultWindow
+	}
+	bTrue, bDetail := EvalPredicateB(rec, jobs, opts.FS, bWindow)
+	res.Predicates.B = bTrue
+	res.Predicates.BDetail = bDetail
+
+	// Predicate C.
+	cTrue, cDetail := EvalPredicateC(rec, opts.FS, opts.Registry, opts.Panes)
+	res.Predicates.C = cTrue
+	res.Predicates.CDetail = cDetail
+
+	// Idle calculation — nil LastJobUpdatedAt is treated as ∞ (most permissive
+	// kill direction; a broker that never dispatched a job is a valid orphan
+	// candidate per plan task F).
+	idleSeconds := -1
+	if rec.LastJobUpdatedAt != nil {
+		idleSeconds = int(now.Sub(*rec.LastJobUpdatedAt).Seconds())
+	}
+	res.IdleSeconds = idleSeconds
+
+	idleTimeout := opts.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = 30 * time.Minute
+	}
+	idleExpired := idleSeconds < 0 || float64(idleSeconds) >= idleTimeout.Seconds()
+
+	// E1 / E2 override hooks land in tasks G and H respectively. Task F's
+	// composer leaves both override flags false for now.
+
+	// Baseline kill rule per spec §5.1 line 371.
+	res.Kill = !aTrue && !bTrue && !cTrue && idleExpired
+
+	// Foreign classification — orthogonal to baseline kill, computed for
+	// every record so the sweep handler and audit trail both see it.
+	isForeign := false
+	switch {
+	case opts.Registry == nil:
+		isForeign = true
+	case opts.Registry.Empty():
+		isForeign = true
+	default:
+		if _, ok := opts.Registry.Lookup(rec.Key); !ok {
+			isForeign = true
+		}
+	}
+	if isForeign || recordHasAnomaly(rec, AnomalyForeignOwner) {
+		// Add the anomaly only if the inventory layer hasn't already.
+		if !recordHasAnomaly(rec, AnomalyForeignOwner) {
+			res.AnomaliesAdded = append(res.AnomaliesAdded, AnomalyForeignOwner)
+		}
+		res.Reason = "foreign_quarantine"
+	} else if res.Kill {
+		res.Reason = "idle_timeout"
+	}
+
+	return res
+}
