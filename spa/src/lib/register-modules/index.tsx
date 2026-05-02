@@ -179,7 +179,7 @@ export function registerBuiltinModules(): void {
     settings: [{
       localId: 'performance-monitor',
       scope: 'purdex',
-      order: 11, // PR-1 transitional value (spec §4.1.4); PR-2 → SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR
+      order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR_PR1,
       labelKey: 'performance_monitor.title',
       component: PerformanceMonitorSettingsSection,
     }],
@@ -207,7 +207,7 @@ export function registerBuiltinModules(): void {
       {
         localId: 'quick-commands',
         scope: 'purdex',
-        order: 15, // PR-1 transitional value (spec §4.1.4); PR-2 → SETTINGS_ORDER.MODULE_QUICK_COMMANDS
+        order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS_PR1,
         labelKey: 'settings.section.quick_commands',
         component: QuickCommandsSettingsSection,
       },
@@ -255,7 +255,7 @@ export function registerBuiltinModules(): void {
     order: SETTINGS_ORDER.INTERFACE,
     component: InterfaceSectionHost,
   })
-  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: 16, component: SyncSection }) // PR-1 transitional (spec §4.1.4); PR-2 promotes to module + SETTINGS_ORDER.MODULE_SYNC
+  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: SETTINGS_ORDER.SYNC_PR1, component: SyncSection })
   // Modules Switchboard — replaces the long-dormant `globalConfig` UI with a
   // module enable/disable panel. Keeps the id `module-config` for URL
   // stability (`/settings/module-config`).

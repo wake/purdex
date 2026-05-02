@@ -356,12 +356,12 @@ registerModule({
 範圍（純視覺、無行為改變）：
 
 1. Puzzle icon：rotate-0 + weight=bold（含 spa 內所有 `<PuzzlePiece>` 用法）
-2. Sidebar order 重排：electron 5（不動）、module-config 10、editor 11、quick-commands 12、performance-monitor 13、dev-environment 20（不動）、tmux-agent-monitor 21（不動）。Sync 暫留 11（PR-2 才升格 + 改 14）
+2. Sidebar order 重排為 §4.1.4 PR-1 transitional table（module-config 10、performance-monitor 11、open-behavior 12、link-detect 13、editor 14、quick-commands 15、sync 16；其餘不動）。**注意**：本表是過渡值；PR-2 才會把 Editor 三 entry 收編 + Sync 升格成 module，並切到 §4.1.3 final 表
 3. Padding 一律拿掉 `p-X` outer wrapper：`ModulesSwitchboardSection` / 其他帶 padding 的 module section
 4. **不**碰 Editor 三頁、不碰 Sync 註冊方式、不碰 Quick Commands 頁首
 
 Acceptance：
-- A1：Sidebar visual order = §4.1 表（Sync 仍在 11）
+- A1：Sidebar visual order = §4.1.4 PR-1 transitional 表
 - A2：SettingsSidebar / WorkspaceSettingsPage / HostSidebar 三處 puzzle icon 皆為直立（無 `rotate`）+ bold weight
 - A3：所有 sidebar URL（既有 + new）正常解析
 - A4：Settings 內容不雙 pad（screenshot 比較或 test 斷言 outer 無 `p-6`）

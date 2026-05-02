@@ -39,43 +39,67 @@ afterEach(() => {
 })
 
 describe('PR-1 transitional sidebar order (spec §4.1.4)', () => {
-  it('purdex-scope contributions are in PR-1 transitional ASC order', () => {
+  it('purdex-scope contributions match the exact PR-1 transitional ASC list', () => {
+    // Take only entries we own + control in the PR-1 fixture. Optional
+    // entries gated by env / caps (electron / dev-environment /
+    // tmux-agent-monitor) are filtered out so the assertion is stable
+    // across DEV vs prod-like jsdom runs. The list below is the ENTIRE
+    // expected ordered set under those conditions — toEqual rejects any
+    // unexpected entry that sneaks in between known ids.
+    const KNOWN_ALWAYS_ON = new Set([
+      'appearance',
+      'terminal',
+      'interface',
+      'module-config',
+      'performance-monitor',
+      'open-behavior',
+      'link-detect',
+      'editor',
+      'quick-commands',
+      'sync',
+    ])
+
     const items = listContributions('purdex')
+      .filter((c) => KNOWN_ALWAYS_ON.has(c.localId))
       .map((c) => ({ id: c.localId, order: c.order }))
       .sort((a, b) => a.order - b.order)
-    const ids = items.map((x) => x.id)
 
-    // The bootstrap harness registers every built-in module + dispatches the
-    // contributions; in jsdom (no electronAPI, but DEV / devUpdateEnabled are
-    // still effectively true via Vite import.meta.env.DEV), expect the
-    // following always-on transitional set.
-    //
-    // Built-in section IDs visible in `listContributions('purdex')` after
-    // dispatch land under `_builtin.legacy-section.<id>` but expose their
-    // `localId` (= the human-readable id) at the top level.
-    expect(ids).toContain('appearance')
-    expect(ids).toContain('terminal')
-    expect(ids).toContain('interface')
-    expect(ids).toContain('module-config')
-    expect(ids).toContain('performance-monitor')
-    expect(ids).toContain('open-behavior')
-    expect(ids).toContain('link-detect')
-    expect(ids).toContain('editor')
-    expect(ids).toContain('quick-commands')
-    expect(ids).toContain('sync')
+    expect(items).toEqual([
+      { id: 'appearance',          order: SETTINGS_ORDER.APPEARANCE },           // 0
+      { id: 'terminal',            order: SETTINGS_ORDER.TERMINAL },             // 1
+      { id: 'interface',           order: SETTINGS_ORDER.INTERFACE },            // 2
+      { id: 'module-config',       order: SETTINGS_ORDER.MODULE_CONFIG },        // 10
+      { id: 'performance-monitor', order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR_PR1 }, // 11
+      { id: 'open-behavior',       order: SETTINGS_ORDER.MODULE_EDITOR_OPEN_BEHAVIOR_PR1 }, // 12
+      { id: 'link-detect',         order: SETTINGS_ORDER.MODULE_EDITOR_LINK_DETECT_PR1 },   // 13
+      { id: 'editor',              order: SETTINGS_ORDER.MODULE_EDITOR_PR1 },               // 14
+      { id: 'quick-commands',      order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS_PR1 },       // 15
+      { id: 'sync',                order: SETTINGS_ORDER.SYNC_PR1 },                        // 16
+    ])
+  })
 
-    // Order assertions for each entry that is always present.
-    const orderOf = (localId: string) => items.find((i) => i.id === localId)!.order
-    expect(orderOf('appearance')).toBe(0)
-    expect(orderOf('terminal')).toBe(1)
-    expect(orderOf('interface')).toBe(2)
-    expect(orderOf('module-config')).toBe(SETTINGS_ORDER.MODULE_CONFIG) // = 10
-    expect(orderOf('performance-monitor')).toBe(11)
-    expect(orderOf('open-behavior')).toBe(12)
-    expect(orderOf('link-detect')).toBe(13)
-    expect(orderOf('editor')).toBe(14)
-    expect(orderOf('quick-commands')).toBe(15)
-    expect(orderOf('sync')).toBe(16)
+  it('no contribution sneaks in between module-config and the modules-group tail', () => {
+    // After module-config (=10) there must be ONLY the PR-1 module-owned
+    // entries — performance-monitor through sync — until tail-built-in
+    // (>= 20). This guard catches a hypothetical legacy section
+    // registered with order 10.5 / 12.5 / etc. which would still pass the
+    // unique-order check below but visually break the modules group.
+    const PR1_MODULE_GROUP_IDS = [
+      'performance-monitor',
+      'open-behavior',
+      'link-detect',
+      'editor',
+      'quick-commands',
+      'sync',
+    ]
+    const items = listContributions('purdex')
+      .slice()
+      .sort((a, b) => a.order - b.order)
+
+    const between = items
+      .filter((c) => c.order > SETTINGS_ORDER.MODULE_CONFIG && c.order < 20)
+      .map((c) => c.localId)
+    expect(between).toEqual(PR1_MODULE_GROUP_IDS)
   })
 
   it('module-config sits above every module-owned contribution', () => {

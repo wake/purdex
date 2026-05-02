@@ -1,5 +1,6 @@
 import type { ModuleDefinition } from '../module-registry'
 import type { PaneContent } from '../../types/tab'
+import { SETTINGS_ORDER } from '../settings-order'
 import {
   registerNewTabProvider,
   unregisterNewTabProvidersByModule,
@@ -33,26 +34,26 @@ export const editorModuleDefinition: ModuleDefinition = {
   ],
   settings: [
     // PR-1 transitional values (spec §4.1.4); PR-2 collapses link-detect +
-    // open-behavior into editor and bumps editor order to
-    // SETTINGS_ORDER.MODULE_EDITOR (=11).
+    // open-behavior into editor and switches `editor` to
+    // SETTINGS_ORDER_PR2_FUTURE.MODULE_EDITOR (=11).
     {
       localId: 'editor',
       scope: 'purdex',
-      order: 14,
+      order: SETTINGS_ORDER.MODULE_EDITOR_PR1,
       labelKey: 'settings.section.editor',
       component: EditorPurdexSettingsSection,
     },
     {
       localId: 'link-detect',
       scope: 'purdex',
-      order: 13,
+      order: SETTINGS_ORDER.MODULE_EDITOR_LINK_DETECT_PR1,
       labelKey: 'settings.editor.link_detect.title',
       component: EditorLinkDetectionSection,
     },
     {
       localId: 'open-behavior',
       scope: 'purdex',
-      order: 12,
+      order: SETTINGS_ORDER.MODULE_EDITOR_OPEN_BEHAVIOR_PR1,
       labelKey: 'settings.editor.open_behavior.title',
       component: EditorOpenBehaviorSection,
     },
