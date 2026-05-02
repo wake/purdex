@@ -42,9 +42,18 @@ func (s *LaunchRegistry) Load(path string) (*LaunchRegistryFile, error) {
 
 // Save writes f to path atomically (write-to-tmp + os.Rename). On any I/O
 // failure the original file is left untouched.
+//
+// PR review finding H: Save now ensures filepath.Dir(path) exists via
+// os.MkdirAll before writing the temp file. The canonical path under
+// pluginDataRoot exists today, but the API should own its own first-write
+// behaviour so fresh profiles or relocated data roots work without an
+// out-of-band MkdirAll dance from the caller.
 func (s *LaunchRegistry) Save(path string, f *LaunchRegistryFile) error {
 	body, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"

@@ -110,8 +110,8 @@ func TestLaunchRegistry_Empty_AfterRegister(t *testing.T) {
 	}
 }
 
-// TestLaunchRegistry_AtomicSave — write to a missing-parent path → fail;
-// original file untouched.
+// TestLaunchRegistry_AtomicSave — saving to a fresh path leaves the file
+// readable; saving again leaves the original untouched on success.
 func TestLaunchRegistry_AtomicSave(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "launch.json")
@@ -121,15 +121,45 @@ func TestLaunchRegistry_AtomicSave(t *testing.T) {
 	if err := store.Save(path, original); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(filepath.Join(dir, "missing-subdir", "launch.json"), original); err == nil {
-		t.Errorf("expected error writing to missing parent")
-	}
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(body) == 0 {
-		t.Errorf("original file emptied")
+		t.Errorf("expected body persisted")
+	}
+}
+
+// TestLaunchRegistry_Save_CreatesMissingParent — PR review finding H: Save
+// must own its first-write behaviour for fresh profiles or relocated data
+// roots. The previous implementation called os.WriteFile(path+".tmp")
+// directly, which fails when the parent dir does not yet exist. Now
+// MkdirAll(filepath.Dir(path), 0755) runs first.
+func TestLaunchRegistry_Save_CreatesMissingParent(t *testing.T) {
+	dir := t.TempDir()
+	// Two missing levels under tmpdir.
+	path := filepath.Join(dir, "missing-1", "missing-2", "launch.json")
+	store := &LaunchRegistry{}
+	f := &LaunchRegistryFile{Version: 1}
+	f = store.Register(f, LaunchEntry{BrokerKey: "fresh", Pid: 4321})
+	if err := store.Save(path, f); err != nil {
+		t.Fatalf("Save with missing parent dir failed: %v", err)
+	}
+	// File must be readable.
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after Save: %v", err)
+	}
+	if len(body) == 0 {
+		t.Errorf("Save produced empty file")
+	}
+	// Round-trip via Load to verify integrity.
+	out, err := store.Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	if got, ok := out.Lookup("fresh"); !ok || got.Pid != 4321 {
+		t.Errorf("round-trip failed: ok=%v entry=%+v", ok, got)
 	}
 }
 
