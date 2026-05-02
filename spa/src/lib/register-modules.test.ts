@@ -378,10 +378,15 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     // F3 follow-up restored `module-config` — removing it left
     // `ModuleDefinition.globalConfig` API live-but-unreachable (silent
     // dead-end). Deferred removal to HSR PR-5 tracked by #574.
+    //
+    // Order moved 8 → 10 by settings-architecture-fix PR-1 (spec §4.1.4)
+    // so the Modules Switchboard sits at the top of the modules group
+    // instead of colliding with link-detect. Sourced from SETTINGS_ORDER
+    // constants now.
     const contribs = listContributions('purdex')
     const entry = contribs.find((c) => c.localId === 'module-config')
     expect(entry).toBeDefined()
-    expect(entry?.order).toBe(8)
+    expect(entry?.order).toBe(10)
     expect(getSettingsSections().find((s) => s.id === 'module-config')).toBeDefined()
   })
 

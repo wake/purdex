@@ -32,24 +32,27 @@ export const editorModuleDefinition: ModuleDefinition = {
     { kind: 'pdf-preview', component: PdfPreviewPane },
   ],
   settings: [
+    // PR-1 transitional values (spec §4.1.4); PR-2 collapses link-detect +
+    // open-behavior into editor and bumps editor order to
+    // SETTINGS_ORDER.MODULE_EDITOR (=11).
     {
       localId: 'editor',
       scope: 'purdex',
-      order: 9,
+      order: 14,
       labelKey: 'settings.section.editor',
       component: EditorPurdexSettingsSection,
     },
     {
       localId: 'link-detect',
       scope: 'purdex',
-      order: 8,
+      order: 13,
       labelKey: 'settings.editor.link_detect.title',
       component: EditorLinkDetectionSection,
     },
     {
       localId: 'open-behavior',
       scope: 'purdex',
-      order: 7,
+      order: 12,
       labelKey: 'settings.editor.open_behavior.title',
       component: EditorOpenBehaviorSection,
     },
