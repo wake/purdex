@@ -41,12 +41,11 @@ export const SETTINGS_ORDER = {
 新增 `spa/src/lib/__tests__/settings-order-pr1.test.ts`：
 
 ```ts
-// 1.2.a — listContributions('purdex') after registerBuiltinModules 順序
-//   expected (ASC): appearance(0), terminal(1), interface(2),
-//                   [electron(5)?],  ← caps 條件可 mock 成 true
-//                   performance-monitor(11), open-behavior(12),
-//                   link-detect(13), editor(14), quick-commands(15),
-//                   module-config(10) [插在 interface 與 perf-monitor 之間]
+// 1.2.a — listContributions('purdex') + listSettingsSections() 合併後 ASC：
+//   appearance(0), terminal(1), interface(2), [electron(5)?],
+//   module-config(10), performance-monitor(11), open-behavior(12),
+//   link-detect(13), editor(14), quick-commands(15), sync(16),
+//   [dev-environment(20)?], [tmux-agent-monitor(21)?]
 //   ⚠️ 用 listContributions + registerSettingsSection 兩個 source 合併斷言
 //
 // 1.2.b — module-config 必須出現在所有 module-owned (puzzle) 上方:
@@ -215,7 +214,9 @@ cd spa && npx vitest run && pnpm run lint
 新增 `spa/src/components/SettingsPage.test.tsx`（如已存在則 append）。每個 case `beforeEach` 必須：
 - `resetLastSection()`（avoid SettingsPage module-level `lastSection` 跨測試污染）
 - 以 `memoryLocation`（wouter `wouter/memory-location`）注入 wouter Router，初始 path 設為該 case 的起點
-- 用 isolated registry：beforeEach 跑 `resetSettingsContributionsForHmr()` + 重新 register 一份穩定 contribution 集合（至少含 `editor` 與 `appearance`，appearance order=0 為 known first selectable）
+- 用 isolated registry：beforeEach 跑 `resetSettingsContributionsForHmr()` + 重新 register 一份穩定 fixture：
+  - `appearance` 用 legacy `registerSettingsSection({ id: 'appearance', order: 0, ... })` — 永遠 selectable，當 firstSelectable fallback
+  - `editor` **必須**用 `registerModule({ id: 'editor', disableable: true, settings: [{ localId: 'editor', scope: 'purdex', order: 11, ... }] })` 註冊；否則 2.2.e 的 `useModuleEnabledStore` mock 對 legacy 註冊路徑無效，editor 不會從 listContributions 移除
 
 ```tsx
 // 2.2.a — start at /settings/link-detect → location 在 mount 後 effects 跑完變成 '/settings/editor'
@@ -270,14 +271,18 @@ cd spa && npx vitest run && pnpm run lint
 //   performance-monitor(13), sync(14),
 //   [dev-environment(20)?], [tmux-agent-monitor(21)?]
 // 2.5.b — sidebar 不含 'open-behavior' / 'link-detect' rows
-// 2.5.c — registerBuiltinModules 後每個 settings entry 的 order 值都來自 SETTINGS_ORDER
-//          —— 範圍限定：只看 register-modules/index.tsx + editor-module.tsx 的 settings declaration
-//             區塊（new-tab provider / interface subsection 等不在這條規則內）。
-//             實作上：對 listContributions('purdex') 的每筆 entry 比對其 order 值落在
-//             Object.values(SETTINGS_ORDER) 集合內，若有 hard-code（不等於任一常數）則 fail。
+// 2.5.c — listContributions('purdex') 每筆 entry 的 order 值都落在
+//          `Object.values(SETTINGS_ORDER)` 集合內（防止非法 / 未經規劃的 order）。
+//          ⚠️ 限制：runtime 拿不到「來源是常數還是 hard-code 數字」的資訊，所以這條
+//          只能擋「order 值非法」，擋不到「值碰巧等於常數但來自 hard-code」。後者由
+//          code review + commit 訊息守住，不在 test 範圍。
 ```
 
-PR-2 task 2.1-2.5 全部寫完先確認紅。`settings-order-pr1.test.ts` 在 task 2.10 PR-2 final order 全綠之後刪除（先有 final test 綠、再刪 transitional）。
+PR-2 commit 流程明確一條路徑：
+- commit 1（Editor 收編）的開頭就 `git rm` 掉 `spa/src/lib/__tests__/settings-order-pr1.test.ts`，避免 commit 1-4 過程中 transitional test 因為某些 entry 已改、某些尚未改而紅
+- `settings-order-pr2.test.ts`（Task 2.5）在 commit 5（最後一個 commit）才**新增**並讓綠 — 此時 perf-monitor / quick-commands / editor / sync 都已改完
+- commit 1-4 期間 sidebar order 已經沒有任何專屬 test 守住（因 PR-1 transitional 已刪、PR-2 final 還沒加），這是預期窗口
+- 其他 PR-2 紅測試（Task 2.1 / 2.2 / 2.3 / 2.4）對應的實作落在同一個 commit 內，commit 1-4 個別都綠
 
 ### Task 2.6 — Editor 三頁合一實作（讓 2.1 / 2.2 / 2.5 紅 → 部分綠）
 
@@ -444,23 +449,23 @@ Self-heal 既有的 `setLocation(`/settings/${urlSection}`, { replace: true })` 
 
 #### 2.8.3 i18n 新增 key
 
-`spa/src/locales/en-US.ts`（或對應 i18n source）：
+`spa/src/locales/en.json`：
 
-```ts
-'settings.quick_commands.desc': 'Manage commands and where they appear in the UI.',
+```json
+"settings.quick_commands.desc": "Manage commands and where they appear in the UI."
 ```
 
-`zh-TW.ts`：
+`spa/src/locales/zh-TW.json`：
 
-```ts
-'settings.quick_commands.desc': '管理快捷指令以及它們在介面中出現的位置。',
+```json
+"settings.quick_commands.desc": "管理快捷指令以及它們在介面中出現的位置。"
 ```
 
-其他 locale 比照。
+其他 locale（如有）比照。
 
-### Task 2.9 — 刪除 PR-1 transitional order 測試
+### Task 2.9 — Sanity check（沒有專用實作步驟）
 
-`settings-order-pr2.test.ts` 已在 task 2.5 寫紅、task 2.6-2.8 實作後綠。確認綠後刪除 `spa/src/lib/__tests__/settings-order-pr1.test.ts`（transitional order 在 PR-2 final 後不再適用）。
+刪除動作已在 commit 1 做，final order test 在 commit 5 引入。本 task 只是 commit 流程上的 checkpoint：在開 PR 前確認 `settings-order-pr1.test.ts` 不存在、`settings-order-pr2.test.ts` 綠。
 
 ### Task 2.10 — 跑全部測試 + lint + 手動驗證
 
@@ -494,9 +499,12 @@ cd spa && npx vitest run && pnpm run lint && pnpm run build
 2. `feat(settings): URL alias map for legacy editor sub-section paths` (Task 2.2 紅 + Task 2.6.3 實作同 commit)
 3. `feat(sync): upgrade Sync to a structural module (non-disableable)` (Task 2.3 紅 + Task 2.7 實作同 commit)
 4. `style(quick-commands): unify settings page header to Appearance pattern + add desc i18n` (Task 2.4 紅 + Task 2.8.1/2.8.3 實作同 commit)
-5. `refactor(settings): switch all module-owned orders to SETTINGS_ORDER constants` (Task 2.5 紅 + Task 2.8.2 實作同 commit；final order test 在這個 commit 才綠 — 因為要等 perf-monitor / quick-commands / editor / sync 都改完才會 final)
+5. `refactor(settings): switch all module-owned orders to SETTINGS_ORDER constants + add PR-2 final order test` (Task 2.8.2 實作 + Task 2.5 final order test 在這個 commit 內**新增**並讓綠)
 
-⚠️ 順序很重要：commit 5（final order）必須是最後一個，因為它要等前 4 個 commit 全到位後才會綠。如要更穩，可在 commit 1-4 內把 PR-1 transitional test 暫時排除（skip 或刪）；然後 commit 5 一起恢復正確 final 行為。或乾脆 commit 1 開頭就刪 PR-1 transitional，PR-1 與 PR-2 一起共用 final order test（PR-1 在 PR merge 前已綠，PR-2 開始時 transitional test 即已落主幹）。實作時擇一即可。
+關鍵點：
+- commit 1 開頭就 `git rm spa/src/lib/__tests__/settings-order-pr1.test.ts` — transitional test 在 PR-2 一啟動就刪
+- final order test 直到 commit 5 才**新增**（不是在 commit 1-4 中先以紅狀態存在）
+- commit 1-4 期間沒有 sidebar order 專屬 test 守護是預期窗口；其他 PR-2 紅測試（Task 2.1/2.2/2.3/2.4）對應實作落在同一 commit 內，個別 commit 都綠
 
 ---
 
