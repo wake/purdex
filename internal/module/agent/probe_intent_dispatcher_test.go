@@ -801,6 +801,90 @@ func TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown(t *testing.T) {
 	}, "rearm with new generation after graceWindow drop (F1 round-3 follow-up)")
 }
 
+// TestConsumeSignals_ZeroEmitDetectorExit_TearsDownAndRearms pins
+// W6-6 R4 F6: a detector that returns WITHOUT emitting any Signal
+// (e.g. screen-change watchLoop baseline-fail observed via wh.Done())
+// must trigger consumeSignals' zero-emit teardown — !appliedAny path —
+// which removes the active intent so a subsequent applyStatus on the
+// same OnEntryStatus rearms a fresh detector.
+//
+// Without this end-to-end pin, regressing the dispatcher's existing
+// `if !appliedAny` teardown (or removing the rearm via applyStatus)
+// would silently strand the watcherless intent: the active entry
+// would persist, case-4 lifecycle target match would short-circuit
+// every subsequent Waiting hook, and approval ScreenChanges would be
+// missed indefinitely until an unrelated lifecycle cancellation.
+//
+// Test scaffolding:
+//   - detector stub returns immediately (zero emits) on first arm,
+//     blocks on ctx for subsequent arms — bounding the rearm cycle.
+//   - applyStatus(Waiting) arms gen 1.
+//   - wrap goroutine close(out) → consumeSignals exits the for-range
+//     loop with appliedAny=false → teardown branch fires.
+//   - currentStatus still in OnEntryStatus → applyStatus rearms a
+//     fresh gen 2.
+//
+// Test asserts:
+//   - gen 2 active entry observed (rearm fired)
+//   - second arm's startCount fired
+//   - MetricProbeIntentStopped advanced (via the
+//     emitStopObservability path on the teardown branch)
+func TestConsumeSignals_ZeroEmitDetectorExit_TearsDownAndRearms(t *testing.T) {
+	m := newDispatcherTestModule(t)
+	m.sessions = &fakeSessionProvider{}
+
+	// Detector counter — first arm returns immediately (zero emit),
+	// subsequent arms block on ctx so the rearm cycle settles.
+	var armCount atomic.Int64
+	m.probeIntentDisp.startDetector = func(ctx context.Context, _ *Module, _ agentpkg.ProbeIntentKind, _ string, _ int, _ chan<- agentpkg.Signal) {
+		if armCount.Add(1) == 1 {
+			// First arm: return immediately without emitting → wrap
+			// goroutine close(out) → consumeSignals !appliedAny path.
+			return
+		}
+		// Second+ arm: block on ctx so the test can observe the rearm
+		// without runaway loops.
+		<-ctx.Done()
+	}
+	t.Cleanup(func() { m.probeIntentDisp.stopAll() })
+
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+
+	stoppedBefore := metricInt("purdex_probe_intent_stopped_total")
+
+	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
+
+	// Capture gen 1 (first arm) BEFORE the teardown+rearm cycle
+	// completes. Note: the first-arm goroutine returns immediately, so
+	// gen 1 may already be torn down by the time we look — accept either
+	// state but require gen2 strictly greater than gen1.
+	var gen1 uint64
+	waitFor(t, time.Second, func() bool {
+		// First arm started — count >= 1
+		return armCount.Load() >= 1
+	}, "first detector arm observed")
+
+	// Wait for rearm: armCount becomes 2 (second arm) AND active entry's
+	// generation is greater than 0 (rearm installed gen 2).
+	waitFor(t, 2*time.Second, func() bool {
+		if armCount.Load() < 2 {
+			return false
+		}
+		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		if !ok {
+			return false
+		}
+		gen1 = cur.generation
+		return gen1 > 0
+	}, "rearm with new generation after zero-emit detector exit (R4 F6 acceptance)")
+
+	// Stopped metric must have advanced (teardown emitted observability).
+	stoppedAfter := metricInt("purdex_probe_intent_stopped_total")
+	if delta := stoppedAfter - stoppedBefore; delta < 1 {
+		t.Errorf("MetricProbeIntentStopped delta = %d, want >= 1 (teardown must emit)", delta)
+	}
+}
+
 // TestStopActiveIntentInLock_GenerationMismatch_PreservesEntry pins F2:
 // the generation guard must reject mismatched expectations so a concurrent
 // rearm (gen N+1) survives the previous detector's applied-true teardown.

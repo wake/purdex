@@ -113,6 +113,25 @@ const screenChangeTopLines = 10
 //	        return err == nil && t == "codex"
 //	    }
 //
+// Why observe wh.Done() (v6.2 round 4 R4 P2 fix):
+//
+//	prober.Watch starts a watchLoop goroutine that may exit immediately
+//	if the baseline capture-pane call fails (transient tmux error, pane
+//	just closed, server hiccup). The cb is never invoked in that case,
+//	so emittedCh stays open; ctx is never cancelled by the dispatcher
+//	(which still believes the intent is armed); the detector main
+//	goroutine would park forever, leaving an active-but-watcherless
+//	intent that case-4 lifecycle skips on subsequent Waiting hooks.
+//	Observing wh.Done() lets the detector return promptly when the
+//	watchLoop has exited, so the wrap goroutine closes out and
+//	consumeSignals' zero-emit teardown clears the active entry and
+//	re-arms a fresh detector via applyStatus.
+//
+//	Zero-value WatchHandle's Done() returns nil (disabled select case)
+//	— fake watchers in tests can keep returning WatchHandle{} without
+//	triggering premature exit. Production prober binds a real
+//	close-on-exit channel.
+//
 // Why mutex-protected closed bool (v6.1 round 6 P1 fix):
 //
 //	The dispatcher wrap goroutine calls close(out) immediately after
@@ -224,6 +243,13 @@ func StartScreenChangeDetector(
 	wh := prober.Watch(paneID, probe.WatchOptions{TopLines: screenChangeTopLines}, cb)
 	select {
 	case <-emittedCh:
+	case <-wh.Done():
+		// W6-6 R4 F6: watchLoop exited before any emit — typically
+		// initial capture-pane failure (transient tmux unresponsive,
+		// pane just closed). Detector returns without emit; the wrap
+		// goroutine closes `out`; consumeSignals' !appliedAny teardown
+		// clears the active intent and re-arms via applyStatus when
+		// currentStatus is still in OnEntryStatus.
 	case <-ctx.Done():
 	}
 	// W6-6 R2 F1 fix: ownership-aware teardown. StopWatchOwned only

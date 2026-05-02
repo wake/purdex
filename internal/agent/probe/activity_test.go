@@ -245,6 +245,94 @@ func TestWatch_BaselineFailure_CleansMapEntry(t *testing.T) {
 	t.Fatal("HasWatcher still true 200ms after baseline failure; map entry leaked")
 }
 
+// W6-6 R4 F6: WatchHandle.Done() closes when the watchLoop goroutine
+// exits. This is the lifecycle signal the codex ScreenChange detector
+// observes so it does NOT park forever after a baseline-capture failure
+// (transient tmux unresponsive, pane just closed, server hiccup).
+//
+// Without Done() the detector would only wake on emit (cb) or ctx
+// cancel; a baseline-failed watchLoop never fires cb and the dispatcher
+// keeps the intent armed (no upstream lifecycle cancel) → active intent
+// stays without a live watcher → case-4 lifecycle target match
+// short-circuits subsequent Waiting hooks → approval ScreenChanges are
+// missed until an unrelated lifecycle cancel.
+//
+// Production prober binds a real close-on-exit channel; zero-value
+// WatchHandle returns a nil channel from Done() (disabled select case)
+// so test fakes that fabricate WatchHandle{} do not signal premature
+// exit by accident — see the orchestrator/screen-watcher fakes.
+func TestWatch_BaselineFailure_ClosesHandleDone(t *testing.T) {
+	probe.SetWatchPollIntervalForTest(t, fastPoll)
+	exec := newScripted("sess:", []scriptedCapture{
+		{err: errors.New("boom")},
+		{content: "should-not-be-read"},
+	})
+	p := probe.New(exec)
+
+	cbFired := atomic.Int32{}
+	h := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {
+		cbFired.Add(1)
+	})
+
+	// Done() must close once watchLoop exits (baseline fail → cleanup
+	// → return). Allow generous wall-clock slack — fastPoll keeps the
+	// underlying ticker irrelevant because baseline runs before the
+	// first tick.
+	select {
+	case <-h.Done():
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("WatchHandle.Done() did not close after baseline failure")
+	}
+
+	if got := cbFired.Load(); got != 0 {
+		t.Errorf("callback fired %d times despite baseline failure, want 0", got)
+	}
+	if p.HasWatcher("sess:") {
+		t.Error("HasWatcher still true after watchLoop self-cleanup")
+	}
+}
+
+// W6-6 R4 F6: zero-value WatchHandle.Done() returns nil — production
+// callers that select on Done() must therefore tolerate a nil channel
+// (which disables the select case rather than firing it). Test fakes
+// across the codebase (probe_orchestrator_test.go fakeProber,
+// codex/probe_intent_screen_change_test.go fakeWatcher,
+// module/agent/probe_intent_dispatcher_codex_wire_test.go
+// fakeScreenWatcher) all return WatchHandle{} from Watch; this pin
+// ensures the contract stays compatible.
+func TestWatchHandle_Zero_DoneIsNil(t *testing.T) {
+	var zero probe.WatchHandle
+	if ch := zero.Done(); ch != nil {
+		t.Errorf("zero WatchHandle.Done() = %v, want nil (must disable select case in callers)", ch)
+	}
+}
+
+// W6-6 R4 F6: StopWatchOwned-induced cleanup also closes Done().
+// Pins the contract that ANY watchLoop exit (baseline fail / ctx
+// cancel via StopWatchOwned / StopWatch / StopAllWatches / same-target
+// replacement) yields a closed Done(). Detector teardown after a
+// successful emit relies on this implicitly (watchLoop already ran
+// through cleanup by the time the detector returns; selecting on
+// Done() in that case observes a closed channel, not a leak).
+func TestWatch_StopWatchOwned_ClosesHandleDone(t *testing.T) {
+	probe.SetWatchPollIntervalForTest(t, fastPoll)
+	exec := newScripted("sess:", []scriptedCapture{{content: "baseline"}})
+	p := probe.New(exec)
+	t.Cleanup(func() { p.StopAllWatches() })
+
+	h := p.Watch("sess:", probe.WatchOptions{}, func(probe.ScreenChangeEvent) {})
+	if !p.StopWatchOwned(h) {
+		t.Fatal("StopWatchOwned(h) = false, want true (h owns the live entry)")
+	}
+	select {
+	case <-h.Done():
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("WatchHandle.Done() did not close after StopWatchOwned cancel")
+	}
+}
+
 // PR5 — TopLines path ignores changes outside top N; full-pane (opts={})
 // path catches them.
 func TestWatch_TopLinesIgnoresBottomChanges(t *testing.T) {

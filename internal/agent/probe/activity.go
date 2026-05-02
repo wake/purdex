@@ -61,8 +61,17 @@ func (p *Prober) Watch(target string, opts WatchOptions, cb ScreenChangeCallback
 	p.watchers[target] = watchEntry{cancel: cancel, id: id}
 	p.watcherMu.Unlock()
 
-	go p.watchLoop(ctx, id, target, captureFn, idleStable, cb)
-	return WatchHandle{target: target, id: id}
+	// W6-6 R4 F6: bind a close-on-exit channel to the handle so callers
+	// can observe watchLoop termination (baseline-fail / cancel /
+	// replacement / shutdown) without polling map state. The wrap
+	// goroutine's only job is to defer-close `done` after watchLoop
+	// returns; watchLoop itself owns map cleanup as before.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.watchLoop(ctx, id, target, captureFn, idleStable, cb)
+	}()
+	return WatchHandle{target: target, id: id, done: done}
 }
 
 // StopWatch cancels the active watcher for the given target. Idempotent.
