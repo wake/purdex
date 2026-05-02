@@ -11,12 +11,19 @@ package agent
 //     empty. omitempty keeps the wire format backward-compatible — old
 //     subagents_json blobs deserialize to "". No DB migration needed
 //     (subagents_json is an opaque TEXT blob; see frames.go).
+//   - Delegating / DelegatingToolUseIDs: cc subagent 跑 Bash invoking
+//     codex-companion 時的旁路 flag，與 IsProxy（cross-type PPID 驗證）正交。
+//     Invariant: Delegating == len(DelegatingToolUseIDs) > 0，由
+//     markDelegatingRef / unmarkDelegatingRef 共同維持（spec §3.5）。Both
+//     omitempty so pre-existing subagents_json blobs deserialize cleanly.
 type SubagentRef struct {
-	ID              string `json:"id"`
-	Type            string `json:"type"`
-	StartedAt       int64  `json:"started_at"`
-	SourcePID       int    `json:"source_pid"`
-	SourceStartTime string `json:"source_start_time"`
-	IsProxy         bool   `json:"is_proxy,omitempty"`
-	SourceTurnID    string `json:"source_turn_id,omitempty"`
+	ID                   string   `json:"id"`
+	Type                 string   `json:"type"`
+	StartedAt            int64    `json:"started_at"`
+	SourcePID            int      `json:"source_pid"`
+	SourceStartTime      string   `json:"source_start_time"`
+	IsProxy              bool     `json:"is_proxy,omitempty"`
+	SourceTurnID         string   `json:"source_turn_id,omitempty"`
+	Delegating           bool     `json:"delegating,omitempty"`
+	DelegatingToolUseIDs []string `json:"delegating_tool_use_ids,omitempty"`
 }

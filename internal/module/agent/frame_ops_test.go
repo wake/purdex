@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -514,7 +515,7 @@ func TestUpdateSubagents_StartAddsRef(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
-	if got[0] != start {
+	if !reflect.DeepEqual(got[0], start) {
 		t.Fatalf("got[0] = %+v, want %+v", got[0], start)
 	}
 }
@@ -526,7 +527,7 @@ func TestUpdateSubagents_StartDuplicateIDKeepsExisting(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
-	if got[0] != existing {
+	if !reflect.DeepEqual(got[0], existing) {
 		t.Fatalf("got[0] = %+v, want %+v (no overwrite)", got[0], existing)
 	}
 }
@@ -538,7 +539,7 @@ func TestUpdateSubagents_StopRemovesByID(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
-	if got[0] != b {
+	if !reflect.DeepEqual(got[0], b) {
 		t.Fatalf("got[0] = %+v, want %+v", got[0], b)
 	}
 }
@@ -558,7 +559,7 @@ func TestUpdateSubagents_StopMissingIsNoop(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
-	if got[0] != a {
+	if !reflect.DeepEqual(got[0], a) {
 		t.Fatalf("got[0] = %+v, want %+v", got[0], a)
 	}
 }
