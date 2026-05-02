@@ -3,8 +3,19 @@ package codexbroker
 import (
 	"context"
 	"strings"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+// DefaultTermTimeout is the spec §5.4 line 452 budget for SIGTERM to take
+// effect.
+const DefaultTermTimeout = 5 * time.Second
+
+// DefaultKillTimeout is the spec §5.4 line 455 budget for SIGKILL to be
+// reaped by the kernel.
+const DefaultKillTimeout = 2 * time.Second
 
 // lstartTolerance is the wallclock slack accepted between BrokerRecord.Lstart
 // and the freshly-fetched ps row in VerifyIdentity. The tolerance defends
@@ -74,6 +85,12 @@ type KillSequence struct {
 	GracefulTimeout time.Duration // default DefaultGracefulShutdownTimeout
 	TermTimeout     time.Duration // default 5s
 	KillTimeout     time.Duration // default 2s
+
+	// PgidLookup is the seam over unix.Getpgid so tests can drive Step 3 and
+	// Step 4 without spawning a real process group. Production wiring leaves
+	// the field nil and falls through to defaultPgidLookup which calls
+	// unix.Getpgid directly.
+	PgidLookup func(pid int) (int, error)
 }
 
 // KillResult is the audit-postscript payload (spec §5.5 lines 495-500)
@@ -165,6 +182,94 @@ func (ks *KillSequence) stepGraceful(ctx context.Context) bool {
 			// next tick
 		}
 	}
+}
+
+// defaultPgidLookup is the production unix.Getpgid wrapper. Returning the
+// raw os/syscall error lets stepSIGTERM/SIGKILL distinguish ESRCH from
+// other failures if needed in future.
+func defaultPgidLookup(pid int) (int, error) {
+	return unix.Getpgid(pid)
+}
+
+// stepSIGTERM implements spec §5.4 Step 3 (lines 448-453): resolve the
+// target process group and send SIGTERM to -pgid. Refuses to signal if
+// pgid <= 1 (defensive against init / kernel weirdness). Polls the lister
+// until the process exits or TermTimeout elapses.
+//
+// Returns true iff the process is observed gone within budget. The caller
+// (Run wiring in task P) records the latency and proceeds to Step 4 on
+// false.
+func (ks *KillSequence) stepSIGTERM(ctx context.Context) bool {
+	return ks.signalAndWait(ctx, syscall.SIGTERM, ks.termBudget())
+}
+
+// stepSIGKILL implements spec §5.4 Step 4 (line 455): unconditional SIGKILL
+// to -pgid. Same pgid-safety guards as stepSIGTERM. Polls until reap or
+// KillTimeout. False here means the process group ignored even SIGKILL —
+// rare, but recorded as KillOk=false in the kill result postscript.
+func (ks *KillSequence) stepSIGKILL(ctx context.Context) bool {
+	return ks.signalAndWait(ctx, syscall.SIGKILL, ks.killBudget())
+}
+
+// signalAndWait is the shared body of Steps 3 and 4. The pgid resolution
+// and pgid≤1 refusal sit here so a future Step (e.g. SIGUSR1 fault probe)
+// shares the same safety guard.
+func (ks *KillSequence) signalAndWait(ctx context.Context, sig syscall.Signal, budget time.Duration) bool {
+	if ks.Signaller == nil {
+		return false
+	}
+	lookup := ks.PgidLookup
+	if lookup == nil {
+		lookup = defaultPgidLookup
+	}
+	pgid, err := lookup(ks.Rec.PID)
+	if err != nil {
+		return false
+	}
+	if pgid <= 1 {
+		// Defensive: signalling pgid 1 (init) or 0 (current pgrp) is
+		// catastrophic. Spec §5.4 line 451 mandates refusal.
+		return false
+	}
+	if err := ks.Signaller.Kill(-pgid, sig); err != nil {
+		return false
+	}
+	return ks.waitForExit(ctx, budget)
+}
+
+// waitForExit polls the lister at 20ms cadence until the row for ks.Rec.PID
+// is gone or budget expires. The polling is identical to stepGraceful's
+// inner loop but does not rely on the dialer.
+func (ks *KillSequence) waitForExit(ctx context.Context, budget time.Duration) bool {
+	waitCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if ks.processGone(waitCtx) {
+			return true
+		}
+		select {
+		case <-waitCtx.Done():
+			return false
+		case <-ticker.C:
+			// next tick
+		}
+	}
+}
+
+func (ks *KillSequence) termBudget() time.Duration {
+	if ks.TermTimeout > 0 {
+		return ks.TermTimeout
+	}
+	return DefaultTermTimeout
+}
+
+func (ks *KillSequence) killBudget() time.Duration {
+	if ks.KillTimeout > 0 {
+		return ks.KillTimeout
+	}
+	return DefaultKillTimeout
 }
 
 // processGone returns true iff the lister no longer returns a row whose

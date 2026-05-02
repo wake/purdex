@@ -332,6 +332,166 @@ func TestStepGraceful_DialerNil(t *testing.T) {
 	}
 }
 
+// -- Task M: Steps 3+4 SIGTERM + SIGKILL ---------------------------------
+
+// fakePgidLooker pretends getpgid() returns the configured value; tests can
+// override the production lookup via KillSequence.PgidLookup so the kill
+// path can be exercised without spawning a real process group.
+func fakePgidLooker(pgid int, err error) func(int) (int, error) {
+	return func(_ int) (int, error) { return pgid, err }
+}
+
+// TestStepSIGTERM_ProcessExitsGracefully — fake signaller records SIGTERM;
+// after the kill, the lister returns no row for the pid → step returns true.
+func TestStepSIGTERM_ProcessExitsGracefully(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Cmdline: "node app-server-broker.mjs",
+	}})
+	sig := &capturingSignaller{clears: lister}
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      lister,
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(4321, nil),
+		TermTimeout: 500 * time.Millisecond,
+	}
+	ok := ks.stepSIGTERM(context.Background())
+	if !ok {
+		t.Fatalf("expected stepSIGTERM=true after process exits")
+	}
+	calls := sig.snapshot()
+	if len(calls) != 1 || calls[0].sig != syscall.SIGTERM || calls[0].pid != -4321 {
+		t.Errorf("expected one SIGTERM to -4321, got %+v", calls)
+	}
+}
+
+// TestStepSIGTERM_Timeout_ProcStillAlive — signaller does not clear the row;
+// stepSIGTERM should time out → false.
+func TestStepSIGTERM_Timeout_ProcStillAlive(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Cmdline: "node app-server-broker.mjs",
+	}})
+	sig := &capturingSignaller{} // no clears → process stays alive
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      lister,
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(4321, nil),
+		TermTimeout: 80 * time.Millisecond,
+	}
+	if ok := ks.stepSIGTERM(context.Background()); ok {
+		t.Errorf("expected stepSIGTERM=false on timeout")
+	}
+}
+
+// TestStepSIGTERM_PgidLeOne_Refused — getpgid returns 1 → stepSIGTERM
+// refuses to signal and returns false. Defends against init / kernel oddities.
+func TestStepSIGTERM_PgidLeOne_Refused(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Cmdline: "node app-server-broker.mjs",
+	}})
+	sig := &capturingSignaller{}
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      lister,
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(1, nil),
+		TermTimeout: 100 * time.Millisecond,
+	}
+	if ok := ks.stepSIGTERM(context.Background()); ok {
+		t.Errorf("expected stepSIGTERM=false on pgid=1")
+	}
+	if got := sig.snapshot(); len(got) != 0 {
+		t.Errorf("expected zero signals on pgid=1, got %+v", got)
+	}
+}
+
+// TestStepSIGTERM_PgidLookupError_Refused — getpgid returns an error → no
+// signal sent. (Kernel weirdness defence.)
+func TestStepSIGTERM_PgidLookupError_Refused(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	sig := &capturingSignaller{}
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      newDynamicLister([]RawProcess{{PID: 4321, Cmdline: "node app-server-broker.mjs"}}),
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(0, errors.New("getpgid ESRCH")),
+		TermTimeout: 100 * time.Millisecond,
+	}
+	if ok := ks.stepSIGTERM(context.Background()); ok {
+		t.Errorf("expected stepSIGTERM=false on getpgid error")
+	}
+	if got := sig.snapshot(); len(got) != 0 {
+		t.Errorf("expected zero signals on getpgid error, got %+v", got)
+	}
+}
+
+// TestStepSIGKILL_KillsStubbornProcess — signaller clears the row; lister
+// returns empty → stepSIGKILL true.
+func TestStepSIGKILL_KillsStubbornProcess(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Cmdline: "node app-server-broker.mjs",
+	}})
+	sig := &capturingSignaller{clears: lister}
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      lister,
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(4321, nil),
+		KillTimeout: 500 * time.Millisecond,
+	}
+	if ok := ks.stepSIGKILL(context.Background()); !ok {
+		t.Errorf("expected stepSIGKILL=true after process gone")
+	}
+	calls := sig.snapshot()
+	if len(calls) != 1 || calls[0].sig != syscall.SIGKILL || calls[0].pid != -4321 {
+		t.Errorf("expected one SIGKILL to -4321, got %+v", calls)
+	}
+}
+
+// TestStepSIGKILL_2sTimeout_Partial — lister never returns empty → false.
+// Caller (Run wiring in task P) records KillOk=false on the result.
+func TestStepSIGKILL_2sTimeout_Partial(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Cmdline: "node app-server-broker.mjs",
+	}})
+	sig := &capturingSignaller{}
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      lister,
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(4321, nil),
+		KillTimeout: 80 * time.Millisecond,
+	}
+	if ok := ks.stepSIGKILL(context.Background()); ok {
+		t.Errorf("expected stepSIGKILL=false on timeout")
+	}
+}
+
+// TestStepSIGKILL_PgidLeOne_Refused — pgid=1 → stepSIGKILL refuses.
+func TestStepSIGKILL_PgidLeOne_Refused(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321, Lstart: time.Now()}
+	sig := &capturingSignaller{}
+	ks := &KillSequence{
+		Rec:         rec,
+		Lister:      newDynamicLister([]RawProcess{{PID: 4321, Cmdline: "node app-server-broker.mjs"}}),
+		Signaller:   sig,
+		PgidLookup:  fakePgidLooker(1, nil),
+		KillTimeout: 100 * time.Millisecond,
+	}
+	if ok := ks.stepSIGKILL(context.Background()); ok {
+		t.Errorf("expected stepSIGKILL=false on pgid=1")
+	}
+	if got := sig.snapshot(); len(got) != 0 {
+		t.Errorf("expected zero signals on pgid=1, got %+v", got)
+	}
+}
+
 // -- Test helpers used across Tasks L–P ----------------------------------
 
 // _ keeps the imports we need across the file alive (some tests below use
