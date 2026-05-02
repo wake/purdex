@@ -61,7 +61,7 @@ import {
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
 import { QuickCommandsSettingsSection } from '../../components/settings/QuickCommandsSettingsSection'
-import { SETTINGS_ORDER } from '../settings-order'
+import { SETTINGS_ORDER, SETTINGS_ORDER_PR2_FUTURE } from '../settings-order'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -214,6 +214,26 @@ export function registerBuiltinModules(): void {
     ],
   })
 
+  // Sync — promoted from a built-in section to a structural module
+  // (spec §4.3, PR-2). Intentionally NOT marked `disableable`: turning
+  // Sync off requires engine + contributor wiring that is a future spec
+  // item. The module-owned route makes Sync render with the puzzle icon
+  // in the sidebar, matching its peer surface area (engine, 7
+  // contributors, dedicated store).
+  registerModule({
+    id: 'sync',
+    name: 'Sync',
+    settings: [
+      {
+        localId: 'sync',
+        scope: 'purdex',
+        order: SETTINGS_ORDER_PR2_FUTURE.MODULE_SYNC,
+        labelKey: 'settings.section.sync',
+        component: SyncSection,
+      },
+    ],
+  })
+
   // FS backends
   registerBuiltinFsBackends(caps)
 
@@ -255,7 +275,9 @@ export function registerBuiltinModules(): void {
     order: SETTINGS_ORDER.INTERFACE,
     component: InterfaceSectionHost,
   })
-  registerSettingsSection({ id: 'sync', label: 'settings.section.sync', order: SETTINGS_ORDER.SYNC_PR1, component: SyncSection })
+  // Sync was promoted to a structural module above (spec §4.3, PR-2);
+  // its `registerSettingsSection({ id: 'sync', ... })` call lived here
+  // and is intentionally removed.
   // Modules Switchboard — replaces the long-dormant `globalConfig` UI with a
   // module enable/disable panel. Keeps the id `module-config` for URL
   // stability (`/settings/module-config`).
