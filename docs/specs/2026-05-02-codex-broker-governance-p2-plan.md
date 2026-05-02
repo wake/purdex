@@ -528,18 +528,28 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 **Pre-condition**: Tasks F, G, H, I, P all done (decision + kill + quarantine + registry available).
 
 **Scope**:
-- `SweepHandler` struct holding `Scanner *Scanner`, `Quarantine *QuarantineStore`, `Registry *LaunchRegistryFile`, `E1Tracker *E1Tracker` (daemon-lifetime, see Task G), `KillerFactory func(BrokerRecord) *KillSequence`, plus the concurrency primitives defined in Finding #4 (replaces the originally-considered `SF *singleflight.Group`).
+- `SweepHandler` struct holding `Scanner *Scanner`, `Quarantine *QuarantineStore`, `Registry *LaunchRegistryFile`, `E1Tracker *E1Tracker` (daemon-lifetime, see Task G), `KillerFactory func(BrokerRecord) *KillSequence`, plus the concurrency primitives below.
+- **Concurrency design** (replaces the originally-considered `singleflight.Group` per round-1 finding #4): `singleflight` semantics coalesce concurrent calls to share *one* result, which is wrong for sweeps — a dry-run sneaking in front of an apply would cause the apply to read the dry-run response and silently skip kills (operation lost); a `__all__` apply colliding with a filtered apply on the same broker could double-signal (PID-reuse race). The replacement uses two layers of `sync.RWMutex`:
+  - `globalApplyMu sync.RWMutex` (one per `SweepHandler`). Acquired in **write** mode by `__all__ apply`; in **read** mode by every other request (filtered apply + any dry-run). This blocks `__all__ apply` from running concurrently with anything else, while letting non-`__all__` work proceed in parallel.
+  - `perBrokerMu sync.Map[brokerKey]*sync.RWMutex`. After releasing/holding the outer `globalApplyMu` read-lock, filtered apply acquires the per-broker mutex in **write** mode for its specific brokerKey; filtered or `__all__` dry-run acquires it in **read** mode. Construction uses `LoadOrStore(&sync.RWMutex{})` for one-shot init.
+  - **Lock order is fixed**: `globalApplyMu` always before `perBrokerMu`. `__all__ apply` only ever holds `globalApplyMu.Lock()` (does not touch any per-broker mutex — the global write-lock already excludes everything else). This makes deadlock impossible by construction (no inversion possible).
+  - Mapping query params → lock acquisition pattern:
+    | mode | brokerKey | globalApplyMu | perBrokerMu(brokerKey) |
+    |------|-----------|---------------|------------------------|
+    | dry-run | (any) | RLock | RLock |
+    | apply | set | RLock | Lock (write) |
+    | apply | unset (`__all__`) | Lock (write) | n/a |
 - `func (h *SweepHandler) HandleSweep(w http.ResponseWriter, r *http.Request)`:
   - Method guard: 405 for non-POST.
   - Parse `mode` query param (default `dry-run`); `apply` enables kills.
-  - Parse optional `brokerKey` filter.
-  - Singleflight key: `brokerKey` (or `"__all__"`).
+  - Parse optional `brokerKey` filter and optional `force` flag (foreign-broker override; only honoured with explicit `brokerKey`).
+  - Acquire locks per the table above; defer release in reverse order.
   - Run `Scanner.Scan(ctx)` to get current inventory.
   - For each `BrokerRecord` (filtered by brokerKey if set): check quarantine (`IsQuarantined`) → skip if quarantined; call `EvalDecision`; populate `SweepResponse.Evaluated`.
   - **Operator override path** (spec §5.1 line 371 "Operator may still issue a manual sweep with `mode=apply&brokerKey=<...>` to override"): when `mode=apply` AND `brokerKey` filter is set AND the resulting `DecisionResult.Reason == "foreign_quarantine"`, the kill is *still* skipped by default in P2. The override semantic ships as a separate `&force=true` query param ONLY recognised in conjunction with explicit `brokerKey`. P2 default behaviour: `force` not set → foreign brokers never killed via sweep API. Logged at audit-info level when `force=true&brokerKey=<X>` triggers a kill on a foreign broker; the audit dump `reason` field becomes `"manual_sweep_force"`. `mode=apply` (no brokerKey, no force) NEVER kills foreign brokers — this is the mlab-safe default that prevents the 50+ broker mass-kill scenario.
   - If `mode=apply` and `DecisionResult.Kill=true` (or `force=true` foreign override path): call `KillSequence.Run`; on success call `h.E1Tracker.Reset(rec.BrokerKey)` so a respawned broker doesn't inherit a stale 60 s clock; record outcome in `SweepResponse.Applied` or `SweepResponse.Errors`.
   - Return `200 JSON SweepResponse`.
-- Timeout: 30 s for `mode=apply` (accounts for graceful + SIGTERM + SIGKILL budget); 10 s for `mode=dry-run`.
+- Timeout: 30 s for `mode=apply` (accounts for graceful + SIGTERM + SIGKILL budget); 10 s for `mode=dry-run`. Lock waits are bounded by the request context — if `globalApplyMu` is held by an `__all__ apply` already in flight, a queued request waits up to its own context deadline; on timeout the handler returns 503 + a `Retry-After` hint rather than starving.
 
 **TDD tests**:
 - `TestSweepHandler_DryRun_NoKills` — mode=dry-run, one broker qualifies for kill → evaluated list populated, applied empty.
@@ -552,7 +562,14 @@ Tasks are ordered to minimise rework. Each task is one TDD cycle; commit boundar
 - `TestSweepHandler_MethodNotPost_405`.
 - `TestSweepHandler_ScanFailure_503`.
 
-(Concurrency tests covered separately in Finding #4 section, replacing the original singleflight test.)
+**Concurrency TDD tests** (replace the originally-planned singleflight test; round-1 finding #4):
+- `TestSweepHandler_ConcurrentApplyApply_SerializedPerBroker` — two goroutines POST `apply&brokerKey=X` concurrently; assert KillSequence.Run is invoked exactly twice in serial (not concurrently), and the second invocation observes the post-first-kill state. No double-signal in the same lstart window.
+- `TestSweepHandler_AllApply_BlocksFilteredApply_SameBroker` — start `__all__ apply` (slow KillSequence stub), then start `apply&brokerKey=X`; assert the second request blocks until the first completes; assert no two `KillSequence.Run` invocations are in flight at the same time.
+- `TestSweepHandler_DryRun_ReadLock_NoBlockOtherDryRun` — two concurrent `dry-run` requests run their `Scanner.Scan` in parallel (use a barrier-style fake Scanner that asserts both goroutines reach the barrier before either proceeds); confirms read-lock semantics.
+- `TestSweepHandler_DryRunBlocksApplySameBroker` — dry-run for brokerKey=X holds RLock; concurrent apply&brokerKey=X must wait. Asserts ordering invariant (no kill executes while a dry-run snapshot of the same broker is mid-flight).
+- `TestSweepHandler_AllApplyExclusive` — concurrent `__all__ apply` + any other request: assert only one of them is in flight at a time, regardless of mode/brokerKey of the other.
+- `TestSweepHandler_LockTimeout_503` — long-running `__all__ apply` + queued request whose context deadline expires before the global lock is released: assert 503 + `Retry-After` header, no panic, no goroutine leak.
+- `TestSweepHandler_Concurrency_NoDeadlock` (`go test -race`): 50 mixed concurrent requests (random mix of dry-run / filtered apply / `__all__ apply`), all complete within a generous wallclock budget, no race detector hits.
 
 **Acceptance**: sweep handler tests green; singleflight coalesces concurrent requests.
 
@@ -700,7 +717,7 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 
 | Reviewer | Focus prompt seed |
 |---|---|
-| Attack | Find: PID-reuse race between Step 0 verify and Step 3 SIGTERM (window where pid is reused between check and kill); fingerprint forgery via argv injection; quarantine bypass (path where `Kill=true` is returned despite quarantine entry); kill loop if broker respawns during sweep; pgid=1 edge case on abnormal broker invocation; singleflight gate not covering all concurrent-apply paths. |
+| Attack | Find: PID-reuse race between Step 0 verify and Step 3 SIGTERM (window where pid is reused between check and kill); fingerprint forgery via argv injection; quarantine bypass (path where `Kill=true` is returned despite quarantine entry); kill loop if broker respawns during sweep; pgid=1 edge case on abnormal broker invocation; concurrent-apply correctness — confirm sweep handler RWMutex layering serialises every (apply, apply) and (apply, dry-run) pair on the same brokerKey, no double-signal in same lstart window, no deadlock between `__all__ apply` and filtered requests; lock-acquisition starvation under heavy `__all__ apply` load. |
 | Defense | Verify: foreign-broker quarantine boundary — confirm `mode=apply` (no `force`, with or without `brokerKey`) NEVER kills a broker whose registry lookup misses; the only kill path for foreign brokers is `mode=apply&brokerKey=<X>&force=true`; mlab-empty-registry case classifies all 50+ brokers as `foreign_quarantine` with zero kills issued; launch registry missing fallback — predicate C must return false (not panic) when registry absent; E1 transient-ENOENT false positive — ESTALE/EIO/EACCES must not accumulate toward E1; `mode=apply` behaviour is a strict superset of `mode=dry-run` evaluated list (no extra kills not in dry-run); audit preimage must be committed before any signal reaches broker. |
 | Health | Check: `codexbroker` package SRP — `decision.go` vs `killer.go` vs `sweep.go` responsibility boundaries; `audit.go` not leaking into `killer.go` beyond the two defined call sites; `sockverify_darwin.go` / `sockverify_linux.go` / `sockverify_other.go` — are the three files the right split or should interface be extracted to `sockverify.go`; file sizes (anything > 300 LOC needs justification); test fixture ownership clear (no cross-task shared mutable fixtures). |
 
@@ -718,7 +735,7 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | Network-mounted cwd transient stat failure triggering E1 | E1 requires definitive `ENOENT` (`os.IsNotExist` strictly). ESTALE / EIO / EACCES / generic timeout feed `cwd_transient_stat_error` anomaly and skip E1 accumulation. `TestE1Tracker_TransientError_NoE1` enforces this. |
 | **E1 cross-sweep state lost** (sweep handler can't accumulate observations) | `E1Tracker` is daemon-lifetime in-memory (Task G), owned by `Module`, injected into `SweepHandler`. Two sweeps ≥60 s apart now correctly trigger E1. Restart resets the 60 s clock — documented as conservative behaviour, not a regression. `TestE1Tracker_DryRunThenApplyAfter60s_Triggers` is the regression test. |
 | Quarantine file corrupt on boot | `QuarantineStore.Load` treats `json.Unmarshal` failure as an empty registry + logs a warning. Boot continues. Corrupt file is renamed to `.bak-<ts>` for forensics. |
-| Scan amplification on concurrent sweep requests | `SweepHandler` uses `singleflight.Group` per brokerKey (or `"__all__"`). Concurrent dry-run + apply for same key: apply waits for in-flight dry-run scan; does not double-scan. `TestSweepHandler_Singleflight_ConcurrentRequests` enforces this. |
+| Concurrent-sweep correctness (operations lost / double-signal) | `SweepHandler` uses two-layer `sync.RWMutex` (Task Q): `globalApplyMu` excludes `__all__ apply` from any other request; `perBrokerMu` (sync.Map of *RWMutex) serialises filtered apply per brokerKey. Lock order is fixed (`globalApplyMu` → `perBrokerMu`) — deadlock impossible by construction. Replaces the originally-planned `singleflight.Group`, which would have coalesced distinct apply requests and silently dropped operations. Tested by `TestSweepHandler_ConcurrentApplyApply_SerializedPerBroker`, `TestSweepHandler_AllApplyExclusive`, `TestSweepHandler_Concurrency_NoDeadlock` under `-race`. |
 | macOS no /proc for sockverify | `sockverify_darwin.go` uses `proc_pidinfo` via `syscall.Syscall6` (no CGo, no fork). If `proc_pidinfo` returns EPERM, falls back to `lsof -nP` with 1 s timeout. Budget-exceeded or both-failed → `held=true` (conservative defer). |
 | Symlink/realpath edge cases for cwd | All cwd comparisons in P2 use `EvalSymlinks` chain inherited from P1 — same `FS.EvalSymlinks` call path as P1. No new cwd hashing in P2; comparisons use the resolved `BrokerRecord.CwdResolved` field. |
 | **Mlab 50+ existing brokers mass-kill** (P2 ships before spawn-hook populates registry) | `EvalDecision` foreign-broker pre-filter (Task F): empty/missing registry → `Reason="foreign_quarantine"`, `Kill=false`, regardless of A/B/C. Sweep handler `mode=apply` (no `&force`) NEVER kills foreign brokers. `TestEvalDecision_RegistryMissing_AllForeignQuarantine` and `TestSweepHandler_ApplyAll_RegistryEmpty_NoKills` are mlab-safety regression tests. Operator override only via explicit `?mode=apply&brokerKey=<X>&force=true`. |
@@ -745,13 +762,13 @@ Between task groups (after F, after P), run `go test -race ./internal/codexbroke
 | N Step 5 verify | 30 + 50 | |
 | O sockverify + Step 6 | 120 + 80 | 3 platform files |
 | P wire KillSequence.Run | 50 + 60 | |
-| Q sweep handler | 100 + 120 | singleflight |
+| Q sweep handler | 130 + 200 | two-layer RWMutex + 7 concurrency tests under -race |
 | R module wiring | 40 + 40 | |
 | S integration test | 0 + 150 | |
 | T live verify + PR | 0 + 0 | operational |
-| **Total** | **~1330 + ~1700** | **~3030 lines** |
+| **Total** | **~1360 + ~1780** | **~3140 lines** |
 
-Production LOC ~1330 is slightly above spec §9 PR-C range of 700-1000 for the "decision predicates + emergency overrides + kill sequence + audit" surface; the +120 over the original estimate is the cost of the round-1 plan-review fixes (foreign-broker pre-filter, daemon-lifetime E1Tracker, StateJobLite + ReadStateJobs helper, per-broker RWMutex). Test density is intentional. Reviewer note: each line of impl over the original estimate maps directly to a regression test for a specific finding.
+Production LOC ~1360 is slightly above spec §9 PR-C range of 700-1000 for the "decision predicates + emergency overrides + kill sequence + audit" surface; the +150 over the original estimate is the cost of the round-1 plan-review fixes (foreign-broker pre-filter, daemon-lifetime E1Tracker, StateJobLite + ReadStateJobs helper, two-layer RWMutex sweep concurrency). Test density is intentional. Reviewer note: each line of impl over the original estimate maps directly to a regression test for a specific finding.
 
 **Cycle time estimate**: codex plan review (1 round, 0-1 medium findings expected) → subagent 1 TDD tasks A–K (~6-8 h) → subagent 2 TDD tasks L–T (~5-7 h) → PR open → R1 standard (~1 h review) → R2 three-parallel adversarial → finding triage and fixes → squash → bump.
 
