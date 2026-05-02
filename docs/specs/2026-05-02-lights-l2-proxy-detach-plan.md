@@ -1,10 +1,10 @@
 # L2 Proxy detach on Stop — Implementation Plan
 
-> **Status**：v1（first draft，待 codex 1 輪 plan review）
+> **Status**：v2（plan-review round 1 採納 2 blocker + 3 high + 3 medium + 2 low 全 10 條；row 重新分配 / pane-scan 對齊 spec / T7+T8 拆 a/b → 12 task / risks 對齊 spec §7）
 > **依賴 spec**：`docs/specs/2026-05-01-lights-l2-proxy-detach-on-stop-spec.md` v5 final
 > **Worktree**：`.claude/worktrees/lights-l2-proxy-detach` / branch `worktree-lights-l2-proxy-detach`
 > **Base**：`origin/main` @ alpha.281（J3 `56b3ba55` + bump `5736f87e`）
-> **拆分**：Phase 1（T1+T2+T3 純函式層 — Subagent A）→ Phase 2（T4+T5+T6 helper 層 — Subagent B 與 A 並行）→ Phase 3（T7+T8+T9 integration — 主 session）→ Phase 4（T10 doc + 整合驗證）→ PR
+> **拆分**：Phase 1（T1+T2+T3 純函式層 — Subagent A）→ Phase 2（T4+T5+T6 helper 層 — Subagent B，**Phase 1 全 commit 後啟動避 subagent.go 寫衝突**）→ Phase 3（T7a+T7b+T8a+T8b+T9 integration — 主 session）→ Phase 4（T10 doc + 整合驗證）→ PR
 
 ---
 
@@ -19,11 +19,11 @@ L2 codex broker turn-aware proxy detach — long-lived broker 完成 logical dis
 - #2：兩個獨立 lookup helper（`subagentRefMatches` turn-aware / `findProxyRefByBroker` process-level，註解互引避 DRY refactor）
 - #3：codex 解析 `parseCodexTurnID`（fail-soft）
 - #4：`upsertProxyRefForBroker` 新 helper（不 reuse `mutateSubagentsWithRetry`，避 v3 F1 race）
-- #5：`removeProxyRefForSenderTurn` + `detachProxyRefForSenderTurnWithRetry` mirror 既有 helper pattern
+- #5：`removeProxyRefForSenderTurn` + `detachProxyRefForSenderTurnWithRetry` mirror 既有 helper pattern；**signature 對齊既有 `removeProxyRefForSender(paneID, pid, startTime, broadcastTs)` —— pane-scan 而非 parent-bound**（spec §3.3.D 表簽名所示）
 - #6：`PdxPreToolUse` catalog change（`LifecycleNone` → `LifecycleUserPromptSubmit`，`Handling` 欄位 omitted → `EffectiveHookHandling` default `HookHandlingDetail`）+ `deriveCodexStatus` 新 case 回 `Valid: true`
 - #7：`applyFrameEvent` 兩新 lifecycle case
-  - `LifecycleUserPromptSubmit`：codex gate 後 attach/upsert（含 PreToolUse no-parent skip guard，per spec §3.3.C.1）
-  - `LifecycleStop, LifecycleStopFailure`：三 sub-case dispatch（per spec §3.3.D table）
+  - `LifecycleUserPromptSubmit`：codex gate 後 attach/upsert（含 PreToolUse no-parent skip guard，per spec §3.3.C.1）—— attach 階段走 `findProxyParent`（PPID walk）對稱 SessionStart fast-path
+  - `LifecycleStop, LifecycleStopFailure`：三 sub-case dispatch（per spec §3.3.D table）—— **不走 `findProxyParent`**，所有 detach 走 pane-scan helper 對稱既有 `removeProxyRefForSender`
 - #8：完整 test matrix（spec §5 row 1-20，含 row 16 concurrency strict 三 forbidden state 斷言）
 
 **Out-of-scope reaffirm**（spec §6）：
@@ -39,7 +39,7 @@ L2 codex broker turn-aware proxy detach — long-lived broker 完成 logical dis
 - 總 production code：~280-380 行（含 spec §4 表的 7 file 改動，AC6 cap 對齊）
 - 總 test code：~280-400 行（spec §5 全 20 row + concurrency pattern）
 - 預估 PR diff：~525-735 raw / ≤850 effective（spec AC6 cap）
-- 預估時間：6-9 小時 subagent TDD（Phase 1+2 並行 ~3hr / Phase 3 integration ~3hr / Phase 4 整合 ~1hr）+ 兩輪 codex review 2-3hr
+- 預估時間：6-9 小時 subagent TDD（Phase 1 ~2hr / Phase 2 ~2.5hr / Phase 3 ~3.5hr / Phase 4 ~1hr）+ 兩輪 codex review 2-3hr
 
 ### 0.3 鎖序與不變式（per spec §3.4）
 
@@ -50,16 +50,19 @@ L2 codex broker turn-aware proxy detach — long-lived broker 完成 logical dis
 - `parseCodexTurnID` 為純函式，fail-soft（JSON parse error / 缺 field → ""）
 - 新 lifecycle case 第一行 `if req.AgentType != "codex" { break }` —— cc/opencode 走 fall-through 既有 path 不變
 - PreToolUse no-parent path **skip return early**，**不 fall through generic frame-creation**（spec §3.3.C.1 + §5 row 20）
+- Stop case 對 detach 對象的查找走 **pane-scan**（`ListByPane` + `subagentsContainProxySender`-style filter），對齊既有 `removeProxyRefForSender:798` 設計；不走 `findProxyParent` PPID walk
 
 ### 0.4 Spec 收斂歷程備註
 
 Spec v1 → v5 共 5 輪 codex review 收斂（核心 race → 設計缺陷 → impl typo → wording）。**不再審 spec**，剩餘風險靠 PR review 兜底（spec §10 兩輪 codex review）。
 
+Plan v1 → v2 採納 codex round-1 review 全 10 finding（job `task-mondbqoz-liqpwd`）：B1 pane-scan 對齊 / B2 row 重分派 / H1 parse-failure 用 matching broker ref / H2 §7 spec 對齊 / H3 T7+T8 拆 a/b / M1-M3 wording / L1-L2 nitpick。
+
 ---
 
 ## 1. Phase 1：純函式層（Subagent A）
 
-可獨立完成，與 Phase 2 並行。Subagent A 拿全部 T1+T2+T3，每 task 獨立 commit。
+可獨立完成。Subagent A 拿全部 T1+T2+T3，每 task 獨立 commit。Phase 1 全 commit 後再啟動 Subagent B（避免兩 subagent 同時改 `subagent.go` 衝突）。
 
 ### P1-T1 — `PdxPreToolUse` catalog 改 + `deriveCodexStatus` 新 case + 既有 fixture 修
 
@@ -137,7 +140,7 @@ Spec v1 → v5 共 5 輪 codex review 收斂（核心 race → 設計缺陷 → 
 
 **Acceptance**：
 - 不引入 panic 或 error 回傳路徑（只回 string）
-- Reuse `path_hint_extractor.go:15` 64KB cap 模式（spec §7 risk row 7）—— 但 `json.Unmarshal` 自身已 bounded，本 case 不需新 cap
+- 不新增 cap；`RawEvent` 來源沿用既有 hook ingestion 限制（`path_hint_extractor.go:15` 64KB cap 在 ingestion 上游已套），parser 本身只做 fail-soft unmarshal（**L1/v2 fix**）
 - 5 case 全綠
 
 **估計**：~25 行 production / ~30 行 test
@@ -146,11 +149,9 @@ Spec v1 → v5 共 5 輪 codex review 收斂（核心 race → 設計缺陷 → 
 
 ---
 
-## 2. Phase 2：Helper 層（Subagent B，可與 Phase 1 並行）
+## 2. Phase 2：Helper 層（Subagent B，Phase 1 全 commit 後啟動）
 
-依賴 P1-T2 的 `SubagentRef.SourceTurnID` field 才能 compile，但 Phase 1 / 2 可同時開兩 worktree branch 寫，T2 早完成 → T4 可開工。為簡化派發，**Subagent B 在 Phase 1 全 done 後再啟動**（避免兩 subagent 改 subagent.go 衝突）。
-
-主 session 在 Phase 1 全 commit 後，把 worktree HEAD push 給 Subagent B，再 Subagent B 派 T4-T6。
+依賴 P1-T2 的 `SubagentRef.SourceTurnID` field。為避免 Subagent A / B 同時改 `subagent.go` 衝突，**Subagent B 等 Phase 1 三 commit 全進 worktree branch 後啟動**（保守序列）。主 session 在 Phase 1 全 commit 後 push HEAD 給 Subagent B。
 
 ### P2-T4 — `subagentRefMatches` turn-aware 升級 + `findProxyRefByBroker` 新增
 
@@ -161,8 +162,8 @@ Spec v1 → v5 共 5 輪 codex review 收斂（核心 race → 設計缺陷 → 
 | 檔案 | 改動 |
 |---|---|
 | `internal/module/agent/frame_ops.go:631-639` | 改 `subagentRefMatches` 對 `IsProxy=true` ref：兩端 `SourceTurnID` 任一為 "" → 回 process-level（PID + StartTime）；兩端非空 → 比 `SourceTurnID`。註解：`// turn-aware equality; 用於 Stop targeted detach。process-level lookup 走 findProxyRefByBroker（不 reuse 此 helper，避免 turn_id mismatch 被當 no-match → 重複 append duplicate ref，per spec §3.2 F1 fix）`。 |
-| `internal/module/agent/frame_ops.go`（新增 helper）| `findProxyRefByBroker(refs []SubagentRef, pid int, startTime string) int` —— 純 process-level lookup，回 index 或 -1。註解：`// process-level lookup; 用於 attach/upsert（in-place 改 SourceTurnID）。turn-aware equality 走 subagentRefMatches（不 reuse 此 helper，避 Stop targeted detach 撞上 stale-turn ref，per spec §3.2 F1 fix）`。 |
-| `internal/module/agent/frame_ops_test.go` | `TestSubagentRefMatches_TurnAware`：5 case—（a）兩端 turn_id 都 ""（process fallback）→ true；（b）一端 ""，另端非空 → true（fallback）；（c）兩端非空且相等 → true；（d）兩端非空但不等 → false；（e）IsProxy 一邊 true 一邊 false → false。`TestFindProxyRefByBroker`：3 case—（a）match 第一個 → 回 0；（b）match 第二個 → 回 1；（c）no match → 回 -1。 |
+| `internal/module/agent/frame_ops.go`（新增 helper）| `findProxyRefByBroker(refs []SubagentRef, pid int, startTime string) int` —— 純 process-level lookup，回 index 或 -1。註解：`// process-level lookup; 用於 attach/upsert（in-place 改 SourceTurnID）+ Stop empty-turnID parse-failure 分支判 SourceTurnID。turn-aware equality 走 subagentRefMatches（不 reuse 此 helper，避 Stop targeted detach 撞上 stale-turn ref，per spec §3.2 F1 fix）`。 |
+| `internal/module/agent/frame_ops_test.go` | `TestSubagentRefMatches_TurnAware`：**7 case**—（a）兩端 turn_id 都 ""（process fallback）→ true；（b）一端 ""，另端非空 → true（fallback）；（c）兩端非空且相等 → true；（d）兩端非空但不等 → false；（e）IsProxy 一邊 true 一邊 false → false；**（f）native ref same `ID` → true**；**（g）native ref different `ID` → false**（**L2/v2 fix**）。`TestFindProxyRefByBroker`：3 case—（a）match 第一個 → 回 0；（b）match 第二個 → 回 1；（c）no match → 回 -1。 |
 
 **Test**：
 
@@ -172,8 +173,9 @@ Spec v1 → v5 共 5 輪 codex review 收斂（核心 race → 設計缺陷 → 
 **Acceptance**：
 - 兩 helper 註解明寫互不 reuse 的理由（spec §3.2 cross-reference 防 DRY refactor）
 - 既有調用 `subagentRefMatches` 的 path 全部編譯通過（grep 確認）
+- native `IsProxy=false` 路徑明確 pin 在 ID equality（L2/v2 fix）
 
-**估計**：~40 行 production / ~50 行 test
+**估計**：~40 行 production / ~60 行 test
 
 **依賴**：P1-T2（`SourceTurnID` field 必需）
 
@@ -206,29 +208,31 @@ Spec v1 → v5 共 5 輪 codex review 收斂（核心 race → 設計缺陷 → 
 
 ---
 
-### P2-T6 — `removeProxyRefForSenderTurn` + `detachProxyRefForSenderTurnWithRetry`
+### P2-T6 — pane-scan `removeProxyRefForSenderTurn` + `detachProxyRefForSenderTurnWithRetry`
 
-**目標**：mirror 既有 `removeProxyRefForSender`（`frame_ops.go:798`）+ `detachProxyRefWithRetry`（`frame_ops.go:887-929`）pattern，但 detach 條件改成「ALL three 身分欄位 (PID + StartTime + TurnID) 都 match」才 remove。
+**目標**：mirror 既有 `removeProxyRefForSender`（`frame_ops.go:798`）+ `detachProxyRefWithRetry`（`frame_ops.go:887-929`）pattern，**signature 對齊 pane-scan**（B1/v2 fix）：top-level `removeProxyRefForSenderTurn(paneID, pid, startTime, turnID, broadcastTs)` 走 `ListByPane` 找 owner frame，再呼叫 frame-level `detachProxyRefForSenderTurnWithRetry(frame, pid, startTime, turnID, broadcastTs)` 做 retry-safe detach。
 
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `internal/module/agent/frame_ops.go`（新增）| `removeProxyRefForSenderTurn(refs []SubagentRef, pid int, startTime, turnID string) ([]SubagentRef, bool)` —— filter 出 non-match；只當 ref `IsProxy && SourcePID == pid && SourceStartTime == startTime && SourceTurnID == turnID` 三全 match 才 drop。回新 slice + removed bool。 |
-| `internal/module/agent/frame_ops.go`（新增）| `detachProxyRefForSenderTurnWithRetry(...)` —— wrap 上面 helper 的 retry loop，仿 `detachProxyRefWithRetry:887-929` 結構（reload + filter + UpsertIfUnchanged + retry up to 3）。 |
-| `internal/module/agent/frame_ops_test.go` | `TestRemoveProxyRefForSenderTurn`：4 case—（a）三身分全 match → drop，retain 其他；（b）PID match 但 turn_id 不 match → keep；（c）turn_id match 但 PID 不 match → keep；（d）IsProxy=false ref → 永不 drop（即使三 ID 字串巧合 match）。`TestDetachProxyRefForSenderTurnWithRetry`：1 case retry 路徑（mock conflict-then-success）。 |
+| `internal/module/agent/frame_ops.go`（新增 top-level helper）| `removeProxyRefForSenderTurn(paneID string, pid int, startTime, turnID string, broadcastTs int64) (bool, store.Frame, any, any, error)` —— **pane-scan**：(1) `ListByPane(paneID)` → frames；(2) for each frame → `subagentsContainProxySenderTurn(frame.Subagents, pid, startTime, turnID)` 預檢；(3) 命中 → 呼 `detachProxyRefForSenderTurnWithRetry(frame, pid, startTime, turnID, broadcastTs)`；(4) 找不到 owner → 回 `(false, zero, nil, nil, nil)`。**Signature / control flow 對齊 `removeProxyRefForSender:798-827`**。 |
+| `internal/module/agent/frame_ops.go`（新增 frame-level helper）| `detachProxyRefForSenderTurnWithRetry(frame, pid, startTime, turnID, broadcastTs)` —— wrap retry loop，filter `refs[i].IsProxy && refs[i].SourcePID == pid && refs[i].SourceStartTime == startTime && refs[i].SourceTurnID == turnID` 三全 match 才 drop（process-level filter 用既有 `removeProxyRefForSender` path，turn-level filter 走此新 helper）。retry 仿 `detachProxyRefWithRetry:887-929` 結構（reload + filter + UpsertIfUnchanged + retry up to 3）。 |
+| `internal/module/agent/frame_ops.go`（新增 pure filter helper）| `subagentsContainProxySenderTurn(refs []SubagentRef, pid int, startTime, turnID string) bool` —— mirror `subagentsContainProxySender:831-838`，多 turnID 三全 match 才 true。 |
+| `internal/module/agent/frame_ops_test.go` | `TestRemoveProxyRefForSenderTurn_PaneScan`：5 case—（a）pane 內 1 frame 有 matching ref → 1 detach；（b）pane 內 2 frame 各有 matching broker 但 turnID 不同 → 只 detach 對應 turnID 那 frame；（c）pane 內無 frame match → 回 false；（d）IsProxy=false ref 即使 ID 字串巧合 → 不 drop；（e）turnID 不 match → 不 drop。`TestDetachProxyRefForSenderTurnWithRetry`：1 case retry 路徑（mock conflict-then-success）。 |
 
 **Test**：
 
-- TDD 順序：先寫 `TestRemoveProxyRefForSenderTurn` 4 case → fail → 寫 pure helper → 綠 → 加 retry test → fail → 加 retry wrapper → 綠
+- TDD 順序：先寫 `subagentsContainProxySenderTurn` 純 helper → 4 case → 綠 → 寫 `detachProxyRefForSenderTurnWithRetry` retry → 綠 → 寫 top-level `removeProxyRefForSenderTurn` pane-scan → 5 case → 綠
 - Race-mode test 包含
 
 **Acceptance**：
 - 不複用 `removeProxyRefForSender`（process-level）—— 兩函式並存（per spec §3.2 boundary）
+- Top-level signature 是 `(paneID, pid, startTime, turnID, ts)` —— **pane-scan 對齊 spec §3.3.D 表所示簽名**（B1/v2 fix）
 - Retry 邏輯與既有 `detachProxyRefWithRetry` 行為一致（max 3, etag-based）
 - `go test -race` 全綠
 
-**估計**：~50 行 production / ~70 行 test
+**估計**：~70 行 production / ~80 行 test
 
 **依賴**：P2-T4（`subagentRefMatches` turn-aware 完成；雖此 helper 不直接用，但 race semantics 對齊）
 
@@ -236,108 +240,165 @@ Spec v1 → v5 共 5 輪 codex review 收斂（核心 race → 設計缺陷 → 
 
 ## 3. Phase 3：Integration（主 session）
 
-T7 / T8 / T9 涉及 `applyFrameEvent` switch case 新增 + 行為串接，cross-cutting 高、需 spec / fast-path / generic path 全圖在腦中，**主 session 自己做不派 subagent**。可派第三 subagent 但承擔協調成本。
+T7a / T7b / T8a / T8b / T9 涉及 `applyFrameEvent` switch case 新增 + 行為串接，cross-cutting 高、需 spec / fast-path / generic path 全圖在腦中，**主 session 自己做不派 subagent**。
 
-### P3-T7 — `LifecycleUserPromptSubmit` case 新增（含 PreToolUse no-parent guard）
+**Row 重新分配（B2/v2 fix）**：
+- T7a UserPromptSubmit case body：rows **1, 5, 7, 17, 17b**
+- T7b PreToolUse case wiring + no-parent guard：rows **2, 20**
+- T8a codex Stop targeted detach + sub-cases：rows **3, 4, 6, 8, 9, 10**
+- T8b regression / fallback：rows **11, 12, 13, 18**
+- T9 advanced / concurrency / PID-reuse：rows **14, 15, 15b, 16, 19**
 
-**目標**：在 `applyFrameEvent`（`frame_ops.go:61`）lifecycle switch 新增 `case agentpkg.LifecycleUserPromptSubmit:` —— 處理 codex `PdxUserPromptSubmit` + `PdxPreToolUse`（共用 case body）。codex AgentType gate + frame == nil + proxy parent + upsert。**PreToolUse no-parent 必 skip return early，不 fall through generic path**（spec §3.3.C.1 + §5 row 20）。
+每個 task 的 acceptance 只認自己 row 全綠，不跨 task。
+
+### P3-T7a — `LifecycleUserPromptSubmit` case body（codex gate + UserPromptSubmit attach/upsert）
+
+**目標**：在 `applyFrameEvent`（`frame_ops.go:61`）lifecycle switch 新增 `case agentpkg.LifecycleUserPromptSubmit:` —— 處理 codex `PdxUserPromptSubmit`（PreToolUse 在 T7b 接同 case body）。codex AgentType gate + frame == nil + proxy parent 找 + upsert。
 
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `internal/module/agent/frame_ops.go`（switch case 新增）| 第一行 `if req.AgentType != "codex" { break }`（cc/opencode fall through 到既有 generic path 不變，per spec §3.3.B + §5 row 17/17b）。第二行 `if frame != nil { break }`（既有 narrow `UpdateHookPath:440` 處理）。第三行 `parent := findProxyParent(req)`，若 `nil` AND req.Hook == "PdxPreToolUse" → trace `Decision: "skipped", Reason: "pre_tool_without_proxy_parent"` **return early**（per spec §3.3.C.1 + §5 row 20，不 fall through `frame_ops.go:251` onward 的 generic frame 創建）。第四行 `parent == nil` 且 hook 非 PreToolUse（即 UserPromptSubmit）→ break 讓既有 generic path 處理（保持 v4 行為）。第五行 `turnID := parseCodexTurnID(req.RawEvent)`（fail-soft → ""）。第六行 `upsertProxyRefForBroker(parent, req.SourcePID, req.SourceStartTime, turnID, req.BroadcastTs)`，trace `Reason: "proxy_subagent_attached_on_user_prompt"`（首次 attach）or `"proxy_subagent_upserted_on_user_prompt"`（in-place upsert）。 |
-| `internal/module/agent/frame_ops_test.go`（test 新增 row 1, 2, 5, 6, 7, 17, 17b, 20）| 8 row 從 spec §5 表抓 setup + action + expected + validates 寫 table-driven。每 row 用 store mock + helper assert frame.Subagents 結果 + trace reason 結果。 |
+| `internal/module/agent/frame_ops.go`（switch case 新增）| 第一行 `if req.AgentType != "codex" { break }`（cc/opencode fall through 到既有 generic path 不變，per spec §3.3.B + §5 row 17/17b）。第二行 `if frame != nil { break }`（既有 narrow `UpdateHookPath:440` 處理）。第三行 `parent := findProxyParent(req)`，若 nil → 對 `PdxUserPromptSubmit` 走 break 讓既有 generic path 處理（保持 v4 行為，per spec §3.3.C.1 區分）。第四行 `turnID := parseCodexTurnID(req.RawEvent)`（fail-soft → ""）。第五行 `upsertProxyRefForBroker(parent, req.SourcePID, req.SourceStartTime, turnID, req.BroadcastTs)`，trace `Reason: "proxy_subagent_attached_on_user_prompt"`（首次 attach）or `"proxy_subagent_upserted_on_user_prompt"`（in-place upsert）。 |
+| `internal/module/agent/frame_ops_test.go`（test 新增 row 1, 5, 7, 17, 17b）| 5 row 從 spec §5 表抓 setup + action + expected + validates 寫 table-driven。每 row 用 store mock + helper assert frame.Subagents 結果 + trace reason 結果。 |
 
 **Test**：
 
-- TDD 順序：8 row 一輪寫 → 跑 fail → 補 case body 路徑 → 綠
+- TDD 順序：5 row 一輪寫 → 跑 fail → 補 case body → 綠
 - Row 17（opencode break early）+ row 17b（cc break early）必驗 cc/opencode 走原有路徑不變（regression guard）
-- Row 20（PreToolUse no-parent）必驗 frame 沒被創、`Subagents` 沒 mutate、無 broadcast
 
 **Acceptance**：
-- 8 row 全綠
+- 5 row 全綠
 - cc/opencode 既有 frame_ops 行為 zero regression（既有 cc/opencode 相關 test 也跑）
 - `go test -race ./internal/module/agent/...` 全綠
-- AC1 satisfied：無新 exported types，5 helper 都 unexported（per spec AC1）
+- AC1 satisfied（無新 exported types）
 
-**估計**：~80 行 production / ~150 行 test
+**估計**：~50 行 production / ~100 行 test
 
 **依賴**：P1-T1, P1-T2, P1-T3, P2-T4, P2-T5（全部 Phase 1+2 完）
 
 ---
 
-### P3-T8 — `LifecycleStop, LifecycleStopFailure` case 新增（三 sub-case dispatch）
+### P3-T7b — PreToolUse wiring 進同 case body + no-parent guard
 
-**目標**：在 `applyFrameEvent` switch 新增 `case agentpkg.LifecycleStop, agentpkg.LifecycleStopFailure:` —— L2 核心 detach 邏輯，三 sub-case dispatch（per spec §3.3.D table）。
+**目標**：T7a 同 lifecycle case 已 wire UserPromptSubmit；T7b 補 PreToolUse 走入同 case（catalog change 在 T1 已做，這裡是 case body 的差異化處理：no-parent guard）。
 
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `internal/module/agent/frame_ops.go`（switch case 新增）| 第一行 `if frame != nil { break }`（standalone agent，J3 dispatcher 處理，per spec §3.3.D）。第二行 `parent := findProxyParent(req)`，若 nil break（無 proxy parent，無 detach 對象）。第三行 `if req.AgentType != "codex" { wildcard detach via removeProxyRefForSender; trace "proxy_subagent_detached_on_stop"; break }`。第四行 `turnID := parseCodexTurnID(req.RawEvent)`。第五行（codex 三 sub-case）：(a) `turnID != ""` → `detachProxyRefForSenderTurnWithRetry(...)`，trace `proxy_subagent_detached_on_stop_turn` or `proxy_subagent_stop_no_match`（找不到 match）；(b) `turnID == ""` AND parent 內 ref 有 `SourceTurnID != ""` → **skip**, trace `proxy_subagent_stop_parse_failed`；(c) `turnID == ""` AND parent 內 ref `SourceTurnID == ""` → wildcard `removeProxyRefForSender`, trace `proxy_subagent_detached_on_stop`。 |
-| `internal/module/agent/frame_ops_test.go`（test 新增 row 3, 4, 6, 8, 9, 10, 11, 12, 13）| 9 row 表驅動。Row 11 用 `parent opencode + 1 ref(PID=42, t1, turnID="", Type=cc)` 跨 type proxy ref（spec §5 row 11 description）。Row 13 native ref（IsProxy=false）isolation guard。 |
+| `internal/module/agent/frame_ops.go`（同 T7a case body 內加分支）| T7a 第三行的 `parent == nil` 分支：若 `req.Hook == "PdxPreToolUse"` → trace `Decision: "skipped", Reason: "pre_tool_without_proxy_parent"` **return early**（per spec §3.3.C.1 + §5 row 20，不 fall through `frame_ops.go:251` onward 的 generic frame 創建）。若是 `PdxUserPromptSubmit` 維持 break（T7a 既定行為）。 |
+| `internal/module/agent/frame_ops_test.go`（test 新增 row 2, 20）| Row 2 verify PreToolUse from PID=42 raw turn_id="t_a" + parent 已存在 → 共用 T7a upsert 路徑得相同結果。Row 20 verify PreToolUse no-parent → frame 沒被創、`Subagents` 沒 mutate、無 broadcast、trace `pre_tool_without_proxy_parent`。 |
 
 **Test**：
 
-- TDD 順序：9 row 一輪寫 → fail → 補 sub-case dispatch → 綠
-- Row 11（opencode SessionEnd 既有路徑 unchanged）regression guard 是必跑
-- Row 12（standalone Stop, frame != nil）必驗 frame.Subagents zero touch
-- Row 13（native ref）必驗 IsProxy gate 工作
+- TDD 順序：先 row 2（共用路徑）→ 應已綠（catalog wired in T1，case body in T7a）→ 加 row 20（no-parent guard）→ fail → 補 PreToolUse-specific skip return → 綠
 
 **Acceptance**：
-- 9 row 全綠
-- 三 sub-case trace reason 與 spec §3.3.D table 完全對應
-- AC8 grep 驗：cc/opencode 內 `PdxPreToolUse` reference（若有）不變
-- `go test -race ./internal/module/agent/...` 全綠
+- 2 row 全綠
+- Row 20 strict assert：`m.frames` count 不變、無 `frame_apply` log line for new frame、無 `currentStatus[tmuxSession]` write
+- T7a 既有 5 row 仍綠（regression）
 
-**估計**：~80 行 production / ~150 行 test
+**估計**：~15 行 production / ~50 行 test
 
-**依賴**：P3-T7（共用 case body 結構）+ P2-T6（detach helper 必需）
+**依賴**：T7a
 
 ---
 
-### P3-T9 — Concurrent test 補（row 14, 15, 15b, 19）
+### P3-T8a — `LifecycleStop, LifecycleStopFailure` case body（codex Stop 三 sub-case）
 
-**目標**：補 4 個進階場景 test —— row 14 idempotency / row 15 sequential 全流程 / row 15b 同 turn 並發 upsert race-safety / row 19 PID-reuse safety。Row 15b / 16 用 `sync.WaitGroup` + 2 goroutine pattern（per spec §5.1 + 仿 `internal/store/agent_event_test.go:198`）。
+**目標**：在 `applyFrameEvent` switch 新增 `case agentpkg.LifecycleStop, agentpkg.LifecycleStopFailure:` —— L2 核心 detach 邏輯，codex 路徑三 sub-case dispatch（per spec §3.3.D table）。**全程 pane-scan，不走 `findProxyParent`**（B1/v2 fix）。Non-codex 走 cc/opencode wildcard fallback（T8b 補 row 11/18 regression）。
 
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `internal/module/agent/frame_ops_test.go`（test 新增 row 14, 15, 15b, 16, 18, 19）| Row 14 sequential idempotent Stop。Row 15 完整 lifecycle（SessionStart attach → UserPromptSubmit upsert → PreToolUse upsert × 2 → Stop detach）。Row 15b 3 goroutine 同 turn upsert 並發 → exactly 1 ref 結果（forbidden states 三條斷言：≥2 refs / 0 refs / turnID != "t_a"）。Row 16 2 goroutine UserPromptSubmit(t_b) + Stop(t_a) 並發 → 兩 valid final state 之一（forbidden states 顯式列出）。Row 18 cc Stop fallback。Row 19 stale SourceStartTime（PID-reuse）→ ref kept + trace `proxy_subagent_stop_no_match`。 |
+| `internal/module/agent/frame_ops.go`（switch case 新增）| 第一行 `if frame != nil { break }`（standalone agent，J3 dispatcher 處理，per spec §3.3.D + §5 row 12）。第二行 `if req.AgentType != "codex" { /* 走 wildcard fallback */ removeProxyRefForSender(req.PaneID, req.SourcePID, req.SourceStartTime, req.BroadcastTs); trace "proxy_subagent_detached_on_stop"; break }`。第三行 `turnID := parseCodexTurnID(req.RawEvent)`。第四行（codex 三 sub-case）：(a) `turnID != ""` → `removeProxyRefForSenderTurn(req.PaneID, req.SourcePID, req.SourceStartTime, turnID, req.BroadcastTs)`（pane-scan helper from T6），結果 detached → trace `proxy_subagent_detached_on_stop_turn`，未 detached → trace `proxy_subagent_stop_no_match`；(b) `turnID == ""` → **pane-scan 找 matching broker ref**：`ListByPane(paneID)` → for each frame `findProxyRefByBroker(frame.Subagents, req.SourcePID, req.SourceStartTime)` 找到 → 看該 ref 的 `SourceTurnID`；ref.SourceTurnID != "" → **skip detach**, trace `proxy_subagent_stop_parse_failed`（H1/v2 fix —— 用 matching broker ref 判，非任意 ref）；ref.SourceTurnID == "" → wildcard `removeProxyRefForSender`, trace `proxy_subagent_detached_on_stop`；(c) pane-scan 找不到 matching broker → break（無 detach 對象，trace 略）。 |
+| `internal/module/agent/frame_ops_test.go`（test 新增 row 3, 4, 6, 8, 9, 10）| 6 row 表驅動。Row 6 是 StopFailure parity（必驗 LifecycleStop / LifecycleStopFailure 兩 enum 都 match 同 case body）。Row 10 multi-broker isolation（PID=42 detach 不影響 PID=43）。 |
 
 **Test**：
 
-- TDD 順序：6 row 一輪寫 → fail → spec strict 斷言全綠才 PASS
-- Row 15b / 16 必跑 race mode（`go test -race`）多次 stress（建議 `-count=10`）
-- Row 16 用 spec §5 表內 forbidden state 完整列：zero refs / 兩 ref / 單 ref turnID="t_a"
+- TDD 順序：6 row 一輪寫 → fail → 補三 sub-case dispatch → 綠
+- Row 8（codex empty turnID + ref 非空 turnID）必驗 H1/v2：用 matching broker ref 判，不是任意 ref —— 加 mixed-broker test：parent 含 ref(PID=42, turnID="") + ref(PID=43, turnID="t_x")，sender PID=42 Stop 空 turnID → 該走 wildcard（PID=42 ref turnID 是 ""），不被 PID=43 的 turnID 影響
 
 **Acceptance**：
 - 6 row 全綠
+- 三 sub-case trace reason 與 spec §3.3.D table 完全對應
+- Mixed-broker parse-failure case 綠（H1/v2 fix）
+- `go test -race ./internal/module/agent/...` 全綠
+
+**估計**：~60 行 production / ~120 行 test
+
+**依賴**：P2-T6（detach helper 必需）
+
+---
+
+### P3-T8b — Stop case regression / fallback rows
+
+**目標**：補 spec §5 表的 cc/opencode wildcard regression rows（11, 18）+ standalone Stop short-circuit row（12）+ native isolation row（13）。覆蓋 T8a 的 non-codex fallback branch + frame != nil short-circuit + native ref isolation。
+
+**改動**：
+
+| 檔案 | 改動 |
+|---|---|
+| `internal/module/agent/frame_ops_test.go`（test 新增 row 11, 12, 13, 18）| Row 11 `parent opencode + 1 ref(PID=42, t1, turnID="", Type=cc)` cross-type proxy + AgentType=cc SessionEnd → wildcard `removeProxyRefForSender` 既有路徑 unchanged。Row 12 sender 自己 own frame → frame.Subagents 不變、無 detach attempt（first-line short-circuit）。Row 13 native ref（IsProxy=false）isolation —— even with PID/turnID 巧合 match string，不 drop。Row 18 cc Stop with no turn_id + ref 空 SourceTurnID → wildcard detach via §3.3.D fallback。 |
+
+**Test**：
+
+- TDD 順序：4 row 一輪寫 → 應 mostly 綠（regression coverage，T8a 已實作 fallback path）→ 任何 fail 修
+- Row 11 必驗 SessionEnd 既有路徑 zero-touch（T8a 不加 SessionEnd handler）
+
+**Acceptance**：
+- 4 row 全綠
+- AC8 grep 驗：cc/opencode 內 `PdxPreToolUse` reference（若有）不變
+
+**估計**：~5 行 production（修補若有）/ ~80 行 test
+
+**依賴**：T8a
+
+---
+
+### P3-T9 — Advanced / concurrency / PID-reuse tests
+
+**目標**：補 5 個進階場景 test —— row 14 idempotency / row 15 sequential 全流程 / row 15b 同 turn 並發 upsert race-safety / row 16 turn-change vs Stop 並發 / row 19 PID-reuse safety。Row 15b / 16 用 `sync.WaitGroup` + 多 goroutine pattern（per spec §5.1 + 仿 `internal/store/agent_event_test.go:198`）。
+
+**改動**：
+
+| 檔案 | 改動 |
+|---|---|
+| `internal/module/agent/frame_ops_test.go`（test 新增 row 14, 15, 15b, 16, 19）| Row 14 sequential idempotent Stop（call 1 detach / call 2 no-op）。Row 15 完整 lifecycle（SessionStart attach → UserPromptSubmit upsert → PreToolUse upsert × 2 → Stop detach）。Row 15b 3 goroutine 同 turn upsert 並發 → exactly 1 ref 結果（forbidden states 三條斷言：≥2 refs / 0 refs / turnID != "t_a"）。Row 16 2 goroutine UserPromptSubmit(t_b) + Stop(t_a) 並發 → 兩 valid final state 之一（forbidden states 顯式列出）。Row 19 stale SourceStartTime（PID-reuse）→ ref kept + trace `proxy_subagent_stop_no_match`。 |
+
+**Test**：
+
+- TDD 順序：5 row 一輪寫 → fail → spec strict 斷言全綠才 PASS
+- Row 15b / 16 必跑 race mode（`go test -race`）多次 stress（`-count=10`）
+- Row 16 用 spec §5 表內 forbidden state 完整列：zero refs / 兩 ref / 單 ref turnID="t_a"
+
+**Acceptance**：
+- 5 row 全綠
 - `go test -race -count=10 ./internal/module/agent/...` 不出 data race
 - AC2 satisfied（spec §5 全 20 row 全綠，含 row 16 strict assertion）
 
 **估計**：~120 行 test
 
-**依賴**：P3-T7 + P3-T8（兩 case body 都完）
+**依賴**：T7a + T7b + T8a + T8b（全 case body 完）
 
 ---
 
 ## 4. Phase 4：文件 commit + 整合驗證
 
-### P4-T10 — Plan v1 commit + spec drift check + 整合驗證
+### P4-T10 — Plan v2 commit + spec drift check + 整合驗證
 
-**目標**：本 plan 落 commit；最後跑 full test + lint + build；spec / plan / impl 三層一致性 check。
+**目標**：本 plan v2 落 commit；最後跑 full test + lint + build；spec / plan / impl 三層一致性 check。
 
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `docs/specs/2026-05-02-lights-l2-proxy-detach-plan.md` | 本檔 commit |
+| `docs/specs/2026-05-02-lights-l2-proxy-detach-plan.md` | 本檔 v2 commit |
 | (verify only) | `go build ./...` / `go test ./...` / `go test -race ./internal/module/agent/...` / `cd spa && pnpm run lint && pnpm run build` 全綠 |
-| (verify only) | spec AC5 grep：`rg '"(proxy_subagent_attached\|proxy_subagent_detached\|proxy_subagent_detached_on_stop\|proxy_subagent_detached_on_stop_turn\|proxy_subagent_stop_no_match\|proxy_subagent_stop_parse_failed\|proxy_subagent_upserted_on_user_prompt\|proxy_subagent_attached_on_user_prompt\|user_prompt_without_proxy_parent\|pre_tool_without_proxy_parent)"' --type go`（注意：shell 內 `\|` 改 `|`）—— 結果應只列 §7 vocabulary，無多餘 reason 字串 |
-| (verify only) | spec AC6 LOC bound：`git diff origin/main --stat` 確認 `frame_ops.go` ≤ 280 / `raw_codex_event.go` ≤ 50 / `events.go` ≤ 10 / 新 test ≤ 400 / 總 PR diff ≤ 850 |
+| (verify only) | spec AC5 grep（**M2/v2 fix —— shell 可執行版**）：`rg '"(proxy_subagent_attached\|proxy_subagent_detached\|proxy_subagent_detached_on_stop\|proxy_subagent_detached_on_stop_turn\|proxy_subagent_stop_no_match\|proxy_subagent_stop_parse_failed\|proxy_subagent_upserted_on_user_prompt\|proxy_subagent_attached_on_user_prompt\|user_prompt_without_proxy_parent\|pre_tool_without_proxy_parent)"' --type go`（**markdown render 把 `|` 顯示成 `\|`，shell 內請用 raw `|`**）—— 結果應只列 §7 vocabulary，無多餘 reason 字串 |
+| (verify only) | spec AC6 LOC bound（**M3/v2 fix —— per-file precise**）：`git diff --numstat origin/main -- internal/module/agent/frame_ops.go internal/module/agent/raw_codex_event.go internal/agent/codex/events.go internal/module/agent/frame_ops_test.go docs/specs/2026-05-02-lights-l2-proxy-detach-plan.md` 確認 `frame_ops.go` ≤ 280 / `raw_codex_event.go` ≤ 50 / `events.go` ≤ 10 / 新 test ≤ 400 ；總量 `git diff --shortstat origin/main` 確認 ≤ 850 |
 | (verify only) | spec AC8 grep：`rg 'PdxPreToolUse|HookHandlingUnsupported|LifecycleNone' internal/agent/codex internal/agent/cc internal/agent/opencode` —— 確認 cc/opencode 不變 |
 
 **Test**：N/A（純驗證）
@@ -358,8 +419,8 @@ T7 / T8 / T9 涉及 `applyFrameEvent` switch case 新增 + 行為串接，cross-
 PR 建立流程（per CLAUDE.md「完整開發流程」第 7-9 步 + spec §10）：
 
 1. P1 (T1+T2+T3) Subagent A 跑 → 3 commit
-2. P2 (T4+T5+T6) Subagent B 跑（Phase 1 後啟動避衝突）→ 3 commit
-3. P3 (T7+T8+T9) 主 session integration → 3 commit
+2. P2 (T4+T5+T6) Subagent B 跑（**Phase 1 三 commit 全進 worktree branch 後啟動**避 subagent.go 寫衝突）→ 3 commit
+3. P3 (T7a+T7b+T8a+T8b+T9) 主 session integration → 5 commit
 4. P4 (T10) plan commit + 全綠 verify → 1 commit
 5. `gh pr create` — title `[L2] Codex broker turn-aware proxy detach on Stop`；body 含 §summary（spec §1 + 5 輪 review 收斂） / §test plan（spec §5 全 20 row + spec §9 mlab 7 場景）/ §spec / §plan
 6. **Round 1 standard codex review**：`/codex:review --base origin/main --background`，focus per spec §10：identity model correctness / in-place upsert race-safety / fallback cross-provider / catalog migration safety
@@ -370,7 +431,7 @@ PR 建立流程（per CLAUDE.md「完整開發流程」第 7-9 步 + spec §10�
    - 檔案體質：`frame_ops.go` 是否撐爆（spec §4 表估 +200-280 LOC，加上既有 ~1500 → 約 1800，應提 follow-up issue 切分）/ `raw_codex_event.go` 為 new file SRP / `frame_ops_test.go` 切分合理性
 9. 收斂 round 2 finding 直到 0 critical/P1（per `feedback_codex_review_termination`）；medium 屬 known issue 化追蹤入 `gh issue`
 10. squash merge → main
-11. 起 bump PR alpha.282（`bump-alpha-282` 獨立 worktree；VERSION + package.json + spa/package.json + CHANGELOG.md 同步；CHANGELOG 加 L2 entry）
+11. 起 bump PR alpha.282（**注意：W6-6 並行 session 也準備 alpha.282；若 W6-6 先 ship，本 PR 改用下個編號**）（`bump-alpha-XXX` 獨立 worktree；VERSION + package.json + spa/package.json + CHANGELOG.md 同步；CHANGELOG 加 L2 entry）
 
 ---
 
@@ -383,14 +444,14 @@ PR 建立流程（per CLAUDE.md「完整開發流程」第 7-9 步 + spec §10�
 | `TestDeriveCodexStatus_PdxPreToolUse` | P1-T1 | 1 |
 | `TestSubagentRef_JSONRoundTrip_SourceTurnID` | P1-T2 | 2 |
 | `TestParseCodexTurnID` | P1-T3 | 5 |
-| `TestSubagentRefMatches_TurnAware` | P2-T4 | 5 |
+| `TestSubagentRefMatches_TurnAware` | P2-T4 | 7（含 native 2 case，L2/v2 fix） |
 | `TestFindProxyRefByBroker` | P2-T4 | 3 |
 | `TestUpsertProxyRefForBroker` | P2-T5 | 4 |
-| `TestRemoveProxyRefForSenderTurn` | P2-T6 | 4 |
+| `TestRemoveProxyRefForSenderTurn_PaneScan` | P2-T6 | 5 |
 | `TestDetachProxyRefForSenderTurnWithRetry` | P2-T6 | 1 |
-| `TestApplyFrameEvent_TurnAwareProxyDetach` (spec §5 全表) | P3-T7+T8+T9 | 20 (row 1-20) |
+| `TestApplyFrameEvent_TurnAwareProxyDetach` (spec §5 全表) | P3-T7a+T7b+T8a+T8b+T9 | 20 (row 1-20) |
 
-**新增 test 小計**：45 cases（其中 spec §5 full table 20 row + 25 helper-level case）
+**新增 test 小計**：48 cases（其中 spec §5 full table 20 row + 28 helper-level case）
 
 ### Regression（既有 test zero regression）
 
@@ -412,11 +473,11 @@ mlab post-merge daemon update 後 7 場景：
 
 ### Test 總計
 
-- ~45 新 unit test + ~0 既有 test 修正（除 events_test fixture 1 處）+ 7 mlab 場景
+- ~48 新 unit test + ~0 既有 test 修正（除 events_test fixture 1 處）+ 7 mlab 場景
 
 ---
 
-## 7. Known issues / risks
+## 7. Known issues / risks（H2/v2 對齊 spec §7）
 
 ### 已知接受限制（spec §3.5 已寫，non-blocking for ship）
 
@@ -425,17 +486,23 @@ mlab post-merge daemon update 後 7 場景：
 3. **L3 cc/opencode 未來若加 long-lived broker**：必先補 dispatch identity（forward constraint，spec §3.5 L3）
 4. **L4 codex schema 演化**：`parseCodexTurnID` fail-soft 到 ""，最壞 case 退化到 v1 行為的 §3.3.D conservative（非 wildcard detach，per F3 fix）
 
-### 風險與對策
+### 風險與對策（H2/v2 fix —— 對齊 spec §7 一對一搬入 + 額外 plan-side 風險）
 
-| 風險 | 機率 | 影響 | 對策 |
-|---|---|---|---|
-| codex round 2 adversarial 提議倒退 spec §3.5 L1 / L4 已知 limitation | medium | low | spec 5 輪收斂結果為基線；倒退提議必須有新證據才採納，spec drift 防線（per `feedback_codex_pr_review_spec_alignment`）|
-| `frame_ops.go` 撐爆過大（既有 ~1500 行 + 280 → ~1800）| medium | low | round 2 file-health 視角必驗；若被 flag 則開 follow-up issue 切分 helper 到獨立 file（不在本 PR 兌現）|
-| `findProxyRefByBroker` 與 `subagentRefMatches` 後人 DRY refactor 重蹈 v3 F1 race | low | high | 兩 helper 註解互引（spec §3.2 cross-reference）；PR review checklist 確認兩 helper 並存；test row 5 strict assertion（同 turn upsert 不 dup）|
-| `PdxPreToolUse` catalog change 破壞既有 codex consumer | low | medium | spec AC8 grep + P1-T1 既有 fixture 修；cc/opencode 隔離（不動其 events.go）|
-| Row 15b / 16 race-mode flake | medium | medium | `-count=10` stress 跑；spec §5.1 pattern 仿 `agent_event_test.go:198`；用 store fake mutex 而非 production etag race |
-| `req.RawEvent` parser bypass attack | low | low | reuse `path_hint_extractor.go:15` 64KB cap；`parseCodexTurnID` 純 unmarshal anonymous struct，bounded |
-| out-of-order attach（spec §3.5 L2）導致使用者 confusion | low | low | trace `proxy_subagent_stop_no_match` 在 daemon log 可看；spec §9 verification 場景 4 含驗證 |
+| Risk | Source | Mitigation |
+|---|---|---|
+| **Codex schema drops/renames `turn_id`** | spec §7 | `parseCodexTurnID` fail-soft；§3.3.D table 4 parse outcome 全 cover；followup phase if upstream changes |
+| **`findProxyRefByBroker` and `subagentRefMatches` semantically diverge over time** | spec §7 | Inline cross-reference comments（spec §3.2 + §4 (g)）；PR review checklist 確認兩 helper 並存不被 merge |
+| **In-place upsert in `upsertProxyRefForBroker` introduces new retry path** | spec §7 | Reuses existing `UpsertIfUnchanged` etag mechanism；row 16 explicitly tests concurrency |
+| **Catalog change for `PdxPreToolUse` (HookHandlingUnsupported → omitted Handling) breaks existing code paths** | spec §7 | grep `HookHandlingUnsupported` and `LifecycleNone` consumers in `internal/agent/codex/`；AC8 grep 強制 |
+| **Empty-tool turns leave stale-light** | spec §7 / §3.5 L1 | 已知 limitation；followup metric: count `proxy_subagent_stop_parse_failed` and `proxy_subagent_stop_no_match` traces |
+| **Trace reason vocabulary expansion** | spec §7 | AC5 enforces `rg` checklist；plan §6 P4-T10 跑 grep |
+| **`req.RawEvent` parser bypass attack** | spec §7 | reuses existing 64KB cap in `path_hint_extractor.go:15`；新 parser shares same Unmarshal path |
+| **Provider drift between cc/opencode/codex paths in same code** | spec §7 | Codex-specific logic isolated in `raw_codex_event.go` and gated by `req.AgentType == "codex"`；cc/opencode paths 走既有 wildcard helpers |
+| **Hook propagation latency unclear** | spec §7 | §9 verification uses **trace timestamps**（daemon-side）rather than wall-clock guesses |
+| **codex round 2 adversarial 提議倒退 spec §3.5 known limitation** | plan-added | spec 5 輪收斂結果為基線；倒退提議必須有新證據才採納（per `feedback_codex_pr_review_spec_alignment`）|
+| **`frame_ops.go` 撐爆過大（既有 ~1500 行 + 280 → ~1800）** | plan-added | round 2 file-health 視角必驗；若被 flag 則開 follow-up issue 切分 helper 到獨立 file（不在本 PR 兌現）|
+| **Row 15b / 16 race-mode flake** | plan-added | `-count=10` stress 跑；spec §5.1 pattern 仿 `agent_event_test.go:198`；用 store fake mutex 而非 production etag race |
+| **out-of-order attach (spec §3.5 L2) 導致使用者 confusion** | plan-added | trace `proxy_subagent_stop_no_match` 在 daemon log 可看；spec §9 verification 場景 4 含驗證 |
 
 ### Rollback 計畫
 
@@ -450,7 +517,7 @@ mlab post-merge daemon update 後 7 場景：
 ## 8. Bump PR
 
 Phase 4 PR squash merge 後獨立 bump PR：
-- VERSION: alpha.281 → alpha.282
+- VERSION: alpha.281 → alpha.282（**或 W6-6 ship 後改下個編號**）
 - spa/package.json + package.json 同步
 - CHANGELOG.md 加：
   ```
@@ -461,7 +528,7 @@ Phase 4 PR squash merge 後獨立 bump PR：
     - 三層 attach trigger（SessionStart / UserPromptSubmit / PreToolUse）+ Stop targeted detach
     - empty-tool turn 已知 limitation（spec §3.5 L1，等下個 upsert / governance P2/P3 cleanup）
   ```
-- bump PR 用獨立 worktree：`bump-alpha-282`
+- bump PR 用獨立 worktree：`bump-alpha-XXX`
 - L2 ship 後下個 phase 候選：L1 OpenCode subagent idle filter / 治理 P2+P3（per kickoff）
 
 ---
@@ -472,11 +539,11 @@ Phase 4 PR squash merge 後獨立 bump PR：
 |---|---|---|
 | Phase 1 P1-T1~T3 | 3 task 全 commit + Subagent A 全綠 + race 全綠 | ⏳ |
 | Phase 2 P2-T4~T6 | 3 task 全 commit + Subagent B 全綠 + race 全綠 | ⏳ |
-| Phase 3 P3-T7~T9 | 3 task 全 commit + spec §5 全 20 row 全綠 + race -count=10 全綠 | ⏳ |
-| Phase 4 P4-T10 | plan commit + AC1-AC8 全 satisfied + grep 結果乾淨 | ⏳ |
+| Phase 3 P3-T7a/T7b/T8a/T8b/T9 | 5 task 全 commit + spec §5 全 20 row 全綠 + race -count=10 全綠 | ⏳ |
+| Phase 4 P4-T10 | plan v2 commit + AC1-AC8 全 satisfied + grep 結果乾淨 | ⏳ |
 | PR + codex review 兩輪 | 0 critical/P1 + known issue 追蹤化 | ⏳ |
 | Squash merge → main | branch 刪除 + worktree 清理 | ⏳ |
-| Bump PR alpha.282 | merge | ⏳ |
+| Bump PR alpha.282 (or next) | merge | ⏳ |
 | mlab live verify §9 7 場景 | post-merge 跑（ship gate 為場景 1+2，其餘 follow-up 觀察） | ⏳ |
 
 ---
@@ -491,15 +558,17 @@ Phase 4 PR squash merge 後獨立 bump PR：
 - T3：`parseCodexTurnID` 純函式 + 5-case test
 - 完成 criteria：3 commit + `go test ./internal/agent/...` 綠 + `go build ./...` 綠
 
-**Subagent B（Phase 2，Phase 1 後啟動）**：
-- T4：`subagentRefMatches` turn-aware + `findProxyRefByBroker` 新增
+**Subagent B（Phase 2，Phase 1 三 commit 全進 worktree branch 後啟動）**：
+- T4：`subagentRefMatches` turn-aware + `findProxyRefByBroker` 新增（含 native 2 case，L2/v2 fix）
 - T5：`upsertProxyRefForBroker` + retry helper
-- T6：`removeProxyRefForSenderTurn` + `detachProxyRefForSenderTurnWithRetry`
+- T6：pane-scan `removeProxyRefForSenderTurn` + `detachProxyRefForSenderTurnWithRetry`（B1/v2 fix —— signature 對齊 `removeProxyRefForSender(paneID, ...)`）
 - 完成 criteria：3 commit + `go test -race ./internal/module/agent/...` 綠 + `go build ./...` 綠
 
 **主 session（Phase 3+4）**：
-- T7：`LifecycleUserPromptSubmit` case + 8 row test
-- T8：`LifecycleStop, LifecycleStopFailure` case + 9 row test
-- T9：concurrent test row 14 / 15 / 15b / 16 / 18 / 19
+- T7a：`LifecycleUserPromptSubmit` case body + 5 row test (1, 5, 7, 17, 17b)
+- T7b：PreToolUse wiring 進同 case body + no-parent guard + 2 row test (2, 20)
+- T8a：`LifecycleStop, LifecycleStopFailure` case body + codex 三 sub-case + 6 row test (3, 4, 6, 8, 9, 10)
+- T8b：Stop case regression / fallback 4 row test (11, 12, 13, 18)
+- T9：advanced / concurrency / PID-reuse 5 row test (14, 15, 15b, 16, 19)
 - T10：plan commit + 全綠 verify + AC1-AC8 check
 - 完成 criteria：spec §5 全 20 row + helper test 全綠 + race -count=10 + lint + build 全綠
