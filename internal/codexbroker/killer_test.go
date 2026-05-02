@@ -629,6 +629,217 @@ func TestStepCleanup_NoSocketDir_SkipsVerify(t *testing.T) {
 	}
 }
 
+// -- Task P: wire KillSequence.Run ---------------------------------------
+
+// TestKillSequence_HappyPath_AllSteps — full Steps 0-6 with all fakes.
+// Graceful succeeds, no SIGTERM/SIGKILL needed but they may run depending
+// on lister timing — the contract under test is: Run returns a populated
+// KillResult, the audit file exists with both preimage and postscript,
+// and the SocketDir is removed.
+func TestKillSequence_HappyPath_AllSteps(t *testing.T) {
+	dir := t.TempDir()
+	auditDir := dir + "/audit"
+	sockDir := dir + "/cxc-x"
+	if err := os.MkdirAll(sockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sockDir+"/broker.sock", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{
+		Key:       "happy",
+		PID:       4321,
+		Lstart:    lstart,
+		Endpoint:  "unix:" + sockDir + "/broker.sock",
+		SocketDir: sockDir,
+		StateDir:  dir + "/state",
+		Cwd:       "/tmp/x",
+	}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Lstart: lstart,
+		Cmdline: "node /opt/codex/dist/app-server-broker.mjs serve --cwd /tmp/x",
+	}})
+	dialer := &killDialer{}
+	sig := &capturingSignaller{clears: lister}
+	verifier := &fakeSocketVerifier{held: false}
+
+	ks := &KillSequence{
+		Rec:             rec,
+		Lister:          lister,
+		Dialer:          dialer,
+		Signaller:       sig,
+		FS:              auditFS{},
+		AuditDir:        auditDir,
+		PgidLookup:      fakePgidLooker(4321, nil),
+		GracefulTimeout: 100 * time.Millisecond,
+		TermTimeout:     100 * time.Millisecond,
+		KillTimeout:     100 * time.Millisecond,
+	}
+	// Drop the row 30ms in so graceful succeeds.
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		lister.clearAll()
+	}()
+	res, err := ks.Run(context.Background(), DecisionResult{Reason: "idle_timeout", Kill: true}, verifier)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.CleanedUp {
+		t.Errorf("expected CleanedUp=true")
+	}
+	if pathExistsKT(sockDir) {
+		t.Errorf("expected SocketDir removed; still exists at %s", sockDir)
+	}
+	// Audit file should exist with the orphan- prefix.
+	entries, _ := os.ReadDir(auditDir)
+	if len(entries) == 0 {
+		t.Fatalf("expected audit file, got none in %s", auditDir)
+	}
+	found := false
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "orphan-happy-") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected orphan-happy-*.json in audit dir; got %v", entries)
+	}
+}
+
+// TestKillSequence_StepLatencyMs_Populated — verify the three latency
+// slots are populated after a Run that exercises graceful + SIGTERM (we
+// drop the row only after a SIGTERM).
+func TestKillSequence_StepLatencyMs_Populated(t *testing.T) {
+	dir := t.TempDir()
+	auditDir := dir + "/audit"
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{
+		Key:    "lat",
+		PID:    4321,
+		Lstart: lstart,
+		// no Endpoint → graceful skips quickly
+	}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Lstart: lstart,
+		Cmdline: "node app-server-broker.mjs",
+	}})
+	sig := &capturingSignaller{clears: lister, delay: 30 * time.Millisecond}
+	ks := &KillSequence{
+		Rec:             rec,
+		Lister:          lister,
+		Signaller:       sig,
+		FS:              auditFS{},
+		AuditDir:        auditDir,
+		PgidLookup:      fakePgidLooker(4321, nil),
+		GracefulTimeout: 30 * time.Millisecond,
+		TermTimeout:     500 * time.Millisecond,
+		KillTimeout:     500 * time.Millisecond,
+	}
+	res, err := ks.Run(context.Background(), DecisionResult{Reason: "idle_timeout", Kill: true}, &fakeSocketVerifier{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Step 2 (graceful) ran but produced no exit (no endpoint) — latency
+	// non-negative.
+	if res.StepLatencyMs[0] < 0 {
+		t.Errorf("graceful latency negative: %d", res.StepLatencyMs[0])
+	}
+	// SIGTERM ran with a 30ms delay before the row cleared → polling the
+	// 20ms ticker at least once gives a positive latency.
+	if res.StepLatencyMs[1] <= 0 {
+		t.Errorf("expected positive SIGTERM latency, got %d", res.StepLatencyMs[1])
+	}
+}
+
+// TestKillSequence_E2Abort_IdentityMismatch — Step 0 mismatch → Run returns
+// non-nil error, no signals sent, no audit preimage written.
+func TestKillSequence_E2Abort_IdentityMismatch(t *testing.T) {
+	dir := t.TempDir()
+	auditDir := dir + "/audit"
+	rec := BrokerRecord{
+		Key:    "e2",
+		PID:    4321,
+		Lstart: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+	}
+	// Lister returns a different lstart → identity mismatch.
+	lister := NewFakeProcessLister([]RawProcess{{
+		PID: 4321, Lstart: time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC),
+		Cmdline: "node app-server-broker.mjs",
+	}})
+	sig := &capturingSignaller{}
+	ks := &KillSequence{
+		Rec:        rec,
+		Lister:     lister,
+		Signaller:  sig,
+		FS:         auditFS{},
+		AuditDir:   auditDir,
+		PgidLookup: fakePgidLooker(4321, nil),
+	}
+	_, err := ks.Run(context.Background(), DecisionResult{Reason: "idle_timeout", Kill: true}, &fakeSocketVerifier{})
+	if err == nil {
+		t.Fatalf("expected error on identity mismatch")
+	}
+	if got := sig.snapshot(); len(got) != 0 {
+		t.Errorf("expected zero signals on identity mismatch, got %+v", got)
+	}
+	// No audit file should have been written either.
+	entries, _ := os.ReadDir(auditDir)
+	if len(entries) > 0 {
+		t.Errorf("expected no audit files on identity mismatch; got %v", entries)
+	}
+}
+
+// TestKillSequence_AppendPostscript_OnSuccess — after a successful Run,
+// the audit dump JSON contains both the preimage Reason and the kill
+// postscript.
+func TestKillSequence_AppendPostscript_OnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	auditDir := dir + "/audit"
+	lstart := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	rec := BrokerRecord{
+		Key:    "post",
+		PID:    4321,
+		Lstart: lstart,
+	}
+	lister := newDynamicLister([]RawProcess{{
+		PID: 4321, Lstart: lstart,
+		Cmdline: "node app-server-broker.mjs",
+	}})
+	sig := &capturingSignaller{clears: lister}
+	ks := &KillSequence{
+		Rec:             rec,
+		Lister:          lister,
+		Signaller:       sig,
+		FS:              auditFS{},
+		AuditDir:        auditDir,
+		PgidLookup:      fakePgidLooker(4321, nil),
+		GracefulTimeout: 30 * time.Millisecond,
+		TermTimeout:     500 * time.Millisecond,
+		KillTimeout:     500 * time.Millisecond,
+	}
+	res, err := ks.Run(context.Background(), DecisionResult{Reason: "idle_timeout", Kill: true}, &fakeSocketVerifier{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.TermOk {
+		t.Errorf("expected TermOk=true (process cleared on SIGTERM)")
+	}
+	entries, _ := os.ReadDir(auditDir)
+	if len(entries) == 0 {
+		t.Fatalf("expected audit file, got none")
+	}
+	body, err := os.ReadFile(auditDir + "/" + entries[0].Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Postscript should have killSequence.termOk=true marshalled.
+	if !strings.Contains(string(body), `"termOk": true`) {
+		t.Errorf("postscript did not include termOk=true; body=%s", string(body))
+	}
+}
+
 // -- Test helpers used across Tasks L–P ----------------------------------
 
 // pathExistsKT reports whether a filesystem path is reachable. The KT suffix

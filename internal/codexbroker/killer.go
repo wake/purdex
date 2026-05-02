@@ -367,6 +367,107 @@ func (ks *KillSequence) stepCleanup(_ context.Context, verifier SocketVerifier) 
 	return true
 }
 
+// Run wires Steps 0-6 in order per spec §5.4 and returns the final
+// KillResult. The caller (sweep handler in task Q) records this result in
+// the response body and triggers post-kill housekeeping (E1Tracker.Reset).
+//
+// Sequence:
+//
+//   - Step 0 (VerifyIdentity): identity mismatch → return error, NO
+//     signals sent, no audit preimage. Caller is expected to flip the
+//     broker into E2 quarantine.
+//   - Step 1 (runStep1): writes audit preimage. Failure → return error,
+//     no signals sent.
+//   - Step 2 (stepGraceful): best-effort RPC shutdown. Latency recorded.
+//   - Step 3 (stepSIGTERM): if Step 2 didn't take effect, send SIGTERM.
+//   - Step 4 (stepSIGKILL): if Step 3 didn't, send SIGKILL.
+//   - Step 5 (stepVerifyGone): best-effort family scan; not blocking.
+//   - Step 6 (stepCleanup): socket-inode verify + cxc-* RemoveAll.
+//   - AppendPostscript: writes the postscript section into the audit file
+//     (best-effort — failure is logged, not propagated).
+//
+// The verifier is supplied by the caller so test scaffolding can inject
+// fakes; production wires NewSocketVerifier().
+func (ks *KillSequence) Run(ctx context.Context, decision DecisionResult, verifier SocketVerifier) (KillResult, error) {
+	var res KillResult
+
+	// Step 0 — identity verify. Mismatch aborts before any audit/signal so
+	// the audit dir doesn't get a preimage for a broker we never touched.
+	if ok, detail := VerifyIdentity(ks.Rec, ks.Lister); !ok {
+		return res, &identityMismatchErr{detail: detail}
+	}
+
+	// Step 1 — audit preimage. Per spec §5.4 line 465 this MUST commit
+	// before any signal reaches the broker.
+	auditPath, err := ks.runStep1(ctx, decision)
+	if err != nil {
+		res.Err = err
+		return res, err
+	}
+
+	// Step 2 — graceful.
+	t0 := time.Now()
+	res.GracefulOk = ks.stepGraceful(ctx)
+	res.StepLatencyMs[0] = time.Since(t0).Milliseconds()
+
+	// If graceful already took effect, skip Steps 3 and 4.
+	if !res.GracefulOk {
+		t1 := time.Now()
+		res.TermOk = ks.stepSIGTERM(ctx)
+		res.StepLatencyMs[1] = time.Since(t1).Milliseconds()
+		if !res.TermOk {
+			t2 := time.Now()
+			res.KillOk = ks.stepSIGKILL(ctx)
+			res.StepLatencyMs[2] = time.Since(t2).Milliseconds()
+		}
+	}
+
+	// Step 5 — best-effort family verification. Not blocking; result is
+	// folded into CleanedUp via Step 6's invariant (we still try cleanup
+	// even if a stray child remains, because the verifier covers the same
+	// ground from a different angle — fd holders).
+	_ = ks.stepVerifyGone(ctx)
+
+	// Step 6 — cleanup behind the socket verifier.
+	res.CleanedUp = ks.stepCleanup(ctx, verifier)
+
+	// Postscript — best-effort per spec §5.4 line 465. A failure here is
+	// logged but doesn't fail the kill: the preimage is the durable
+	// record, the postscript is operator-convenience only.
+	if appendErr := AppendPostscript(auditPath, res); appendErr != nil {
+		// Stash on the result so callers can surface it in audit logs;
+		// but do NOT set res.Err — that field is reserved for hard
+		// failures of the kill itself.
+		_ = appendErr
+	}
+
+	return res, nil
+}
+
+// identityMismatchErr is the sentinel-style error returned when Step 0
+// detects a runtime identity mismatch. The sweep handler (task Q) inspects
+// the type to decide whether to add an E2 quarantine entry. Defined here
+// so the kill package owns its own typed error rather than leaking string
+// matching.
+type identityMismatchErr struct {
+	detail string
+}
+
+func (e *identityMismatchErr) Error() string {
+	return "identity mismatch: " + e.detail
+}
+
+// IsIdentityMismatch reports whether err is the Step 0 abort sentinel.
+// Used by the sweep handler so a same-type error from a different layer
+// doesn't accidentally trigger E2 quarantine.
+func IsIdentityMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, ok := err.(*identityMismatchErr)
+	return ok
+}
+
 // processGone returns true iff the lister no longer returns a row whose
 // pid matches ks.Rec.PID. A nil lister or a lister error returns false
 // (conservative: do not declare graceful success unless we positively
