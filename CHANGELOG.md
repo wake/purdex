@@ -1,5 +1,59 @@
 # Changelog
 
+## [1.0.0-alpha.286] - 2026-05-03
+
+### Feat(codexbroker): P2 — decision predicates + kill sequence + manual sweep API (#813)
+
+Phase P2 of the codex broker governance series. Builds on alpha.280 P1
+inventory; adds decision evaluation (predicates A/B/C + stale-running
+detection + emergency overrides E1/E2 + foreign-broker quarantine) and the
+operator-driven kill sequence (Step 0 identity verify → audit preimage →
+graceful RPC → SIGTERM → SIGKILL → verify-gone → cleanup with socket-inode
+verification + audit postscript). New endpoint `POST /api/codex/brokers/sweep`
+with `mode=dry-run|apply` and optional `brokerKey` filter.
+
+Mass-kill safety guarantees on mlab steady state (50+ pre-existing brokers
+with empty launch registry):
+
+- Unfiltered `mode=apply` issues zero kills against any foreign broker —
+  every record's `Reason="foreign_quarantine"` blocks the unfiltered path.
+- Operator override `mode=apply&brokerKey=<X>` (the spec §5.1 line 371
+  manual override semantic — no separate `force` flag) is the only path
+  that can kill a foreign broker, and only when baseline `Kill=true`
+  (¬A∧¬B∧¬C ∧ idle expired). Alive predicates ALWAYS protect.
+- Identity-mismatch on Step 0 re-verify (and re-verify before every
+  signal) auto-quarantines the broker rather than retrying.
+- Quarantine load corruption fails closed: apply returns 503 until the
+  operator clears the renamed `.bak` file and restarts the daemon.
+
+Concurrency model: two-layer `sync.RWMutex` (`globalApplyMu` + per-broker
+`sync.Map[brokerKey]*sync.RWMutex`) with fixed lock order — deadlock
+impossible by construction. Unfiltered dry-run takes the global write
+lock to avoid lock-storm on 50+ broker scans. `quarantineMu` serialises
+shared quarantine state across concurrent filtered applies. Identity
+re-verification happens immediately before EACH `syscall.Kill` to defend
+against PID-reuse during the audit/graceful window.
+
+Plan + PR went through 5 rounds of plan review (converged at 0 finding)
+and 4 rounds of PR review (R1 standard + R2 three-parallel adversarial
++ R3 standard + R4 standard final 0 finding) before merge. 27 commits
+on top of plan v5; full audit trail in commit messages.
+
+Known follow-up gaps tracked as separate issues:
+
+- Darwin sockverify: CGo-free libproc binding (currently uses `lsof`
+  fallback; spec §5.4 line 472 explicitly accepts `lsof` as bounded
+  fallback).
+- Linux sockverify: inode-based verification via parsing `socket:[inode]`
+  fd targets (currently forces `lsof` fallback after R1 finding caught
+  path-comparison bug).
+- Integration test: full sweep contract assertion gated on real broker
+  discovery; sandbox uses `PDX_INTEGRATION_SKIP_ON_DISCOVERY=1` env var
+  opt-out.
+
+P3 (automatic triggers, daemon tick, ExitWorktree hook, SPA dashboard)
+deferred to later PRs per spec §9 build sequence.
+
 ## [1.0.0-alpha.285] - 2026-05-03
 
 ### Fix(spa): clear stale subagent dots (#814)
