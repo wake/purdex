@@ -61,7 +61,7 @@ import {
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
 import { QuickCommandsSettingsSection } from '../../components/settings/QuickCommandsSettingsSection'
-import { SETTINGS_ORDER, SETTINGS_ORDER_PR2_FUTURE } from '../settings-order'
+import { SETTINGS_ORDER } from '../settings-order'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
   const handleSelect = (content: PaneContent) => {
@@ -179,7 +179,7 @@ export function registerBuiltinModules(): void {
     settings: [{
       localId: 'performance-monitor',
       scope: 'purdex',
-      order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR_PR1,
+      order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR,
       labelKey: 'performance_monitor.title',
       component: PerformanceMonitorSettingsSection,
     }],
@@ -207,7 +207,7 @@ export function registerBuiltinModules(): void {
       {
         localId: 'quick-commands',
         scope: 'purdex',
-        order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS_PR1,
+        order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS,
         labelKey: 'settings.section.quick_commands',
         component: QuickCommandsSettingsSection,
       },
@@ -227,7 +227,7 @@ export function registerBuiltinModules(): void {
       {
         localId: 'sync',
         scope: 'purdex',
-        order: SETTINGS_ORDER_PR2_FUTURE.MODULE_SYNC,
+        order: SETTINGS_ORDER.MODULE_SYNC,
         labelKey: 'settings.section.sync',
         component: SyncSection,
       },

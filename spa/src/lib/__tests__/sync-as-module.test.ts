@@ -5,7 +5,7 @@ import { getModule, getModules } from '../module-registry'
 import { isModuleOwnedContribution } from '../settings-contribution-types'
 import { useModuleEnabledStore } from '../../stores/useModuleEnabledStore'
 import { syncEngine } from '../sync/register-sync'
-import { SETTINGS_ORDER_PR2_FUTURE } from '../settings-order'
+import { SETTINGS_ORDER } from '../settings-order'
 import {
   clearAllBuiltinModuleRegistries,
   resetAndRegisterBuiltinModules,
@@ -52,11 +52,7 @@ describe('Sync modularize (spec §4.3)', () => {
     const purdex = listContributions('purdex')
     const syncContrib = purdex.find((c) => c.localId === 'sync')
     expect(syncContrib).toBeDefined()
-    // Until commit 5 swaps Performance Monitor / Editor / Quick Commands /
-    // Sync to the final SETTINGS_ORDER constants, the sync entry should at
-    // minimum match the canonical PR-2 final value defined in
-    // SETTINGS_ORDER_PR2_FUTURE.MODULE_SYNC.
-    expect(syncContrib!.order).toBe(SETTINGS_ORDER_PR2_FUTURE.MODULE_SYNC)
+    expect(syncContrib!.order).toBe(SETTINGS_ORDER.MODULE_SYNC)
   })
 
   it('2.3.e: stale `useModuleEnabledStore` entry { sync: false } does NOT drop the contribution', () => {

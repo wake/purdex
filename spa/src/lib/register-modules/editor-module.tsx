@@ -39,7 +39,7 @@ export const editorModuleDefinition: ModuleDefinition = {
     {
       localId: 'editor',
       scope: 'purdex',
-      order: SETTINGS_ORDER.MODULE_EDITOR_PR1,
+      order: SETTINGS_ORDER.MODULE_EDITOR,
       labelKey: 'settings.section.editor',
       component: EditorPurdexSettingsSection,
     },
