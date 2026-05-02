@@ -168,3 +168,46 @@ func TestEvalDecision_E1Tracker_OverrideE1True(t *testing.T) {
 		t.Errorf("expected OverrideE1=true, got %+v", res)
 	}
 }
+
+// ----- Task H — E2 fingerprint mismatch quarantine -----------------------
+
+// TestEvalE2_FingerprintMatch_NoTrigger — same fingerprint → not triggered.
+func TestEvalE2_FingerprintMatch_NoTrigger(t *testing.T) {
+	rec := BrokerRecord{
+		Key:    "k1",
+		PID:    4321,
+		Lstart: time.Now().Add(-2 * time.Hour),
+	}
+	known := BrokerFingerprint{
+		Executable: "/usr/bin/node",
+		Cmdline:    "node app-server-broker.mjs",
+		PidFile:    "/tmp/cxc-X/broker.pid",
+	}
+	live := known
+	triggered, _ := EvalE2(rec, live, &known)
+	if triggered {
+		t.Errorf("expected not triggered on match")
+	}
+}
+
+// TestEvalE2_FingerprintMismatch_Triggered — mismatch → triggered.
+func TestEvalE2_FingerprintMismatch_Triggered(t *testing.T) {
+	rec := BrokerRecord{Key: "k1", PID: 4321}
+	known := BrokerFingerprint{Executable: "/usr/bin/node", Cmdline: "node a"}
+	live := BrokerFingerprint{Executable: "/usr/bin/python3", Cmdline: "python3 b"}
+	triggered, _ := EvalE2(rec, live, &known)
+	if !triggered {
+		t.Errorf("expected triggered on mismatch")
+	}
+}
+
+// TestEvalE2_NoKnownFingerprint_NoTrigger — no historical fingerprint to
+// compare against → cannot fire E2.
+func TestEvalE2_NoKnownFingerprint_NoTrigger(t *testing.T) {
+	rec := BrokerRecord{Key: "k1"}
+	live := BrokerFingerprint{Executable: "/usr/bin/node", Cmdline: "node a"}
+	triggered, _ := EvalE2(rec, live, nil)
+	if triggered {
+		t.Errorf("nil knownFingerprint must not trigger")
+	}
+}

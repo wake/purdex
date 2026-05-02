@@ -93,3 +93,27 @@ func (t *E1Tracker) Reset(brokerKey string) {
 	defer t.mu.Unlock()
 	delete(t.states, brokerKey)
 }
+
+// EvalE2 implements spec §5.3 row E2: the live (pid, lstart, executable,
+// cmdline) fingerprint mismatches the most-recently-known fingerprint for
+// this brokerKey → quarantine, not kill.
+//
+// knownFingerprint may be nil when no historical fingerprint is available
+// for the broker (P2 ships before the spawn-time write path; the
+// fingerprint store land in a follow-up). When nil, E2 cannot fire — return
+// false with a "no-baseline" detail so the audit trace explains why.
+//
+// The match check uses Executable + Cmdline + PidFile (PID/Lstart are
+// already part of the runtime identity tuple checked in Step 0; the
+// fingerprint is the on-disk shape that survives PID rotation).
+func EvalE2(rec BrokerRecord, live BrokerFingerprint, knownFingerprint *BrokerFingerprint) (bool, string) {
+	if knownFingerprint == nil {
+		return false, "no-baseline"
+	}
+	if live.Executable == knownFingerprint.Executable &&
+		live.Cmdline == knownFingerprint.Cmdline &&
+		live.PidFile == knownFingerprint.PidFile {
+		return false, "match"
+	}
+	return true, "mismatch"
+}
