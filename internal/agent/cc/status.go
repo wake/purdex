@@ -81,12 +81,19 @@ func deriveCCStatus(purdexName string, rawEvent json.RawMessage) agent.DeriveRes
 		}
 
 	case "PdxStopFailure":
+		// agent_id surfaces the failing subagent's identity (cc emits this
+		// for in-flight Task subagents that terminate abnormally — the
+		// 1573-event dthn telemetry sample carried it on 97.9% of
+		// chains). Pass through nil-safe; downstream applyFrameEvent
+		// pre-checks ref presence before mutating, so a nil agent_id is
+		// harmless.
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusError,
 			Detail: map[string]any{
 				"error_details": raw["error_details"],
 				"error":         raw["error"],
+				"agent_id":      raw["agent_id"],
 			},
 		}
 

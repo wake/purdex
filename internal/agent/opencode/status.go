@@ -25,7 +25,13 @@ func deriveOpenCodeStatus(eventName string, rawEvent json.RawMessage) agent.Deri
 			"stop_source":          "session.status.idle",
 		}}
 	case "PdxStopFailure":
-		return agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: detailSubset(raw, "error", "error_details")}
+		// agent_id surfaces the failing subagent's identity for parity
+		// with cc/codex. opencode plugin_template currently does NOT
+		// emit agent_id on session.error so detailSubset omits the key
+		// in practice — derive contract is pinned for the day the
+		// plugin adds it (no daemon-side change required when that
+		// happens).
+		return agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: detailSubset(raw, "error", "error_details", "agent_id")}
 	case "PdxSessionEnd":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusClear}
 	default:

@@ -111,6 +111,39 @@ func TestDeriveCCStatus_PdxStopFailure_Error(t *testing.T) {
 	}
 }
 
+// TestDeriveCCStatus_PdxStopFailure_AgentIdInDetail pins the spec §3.1
+// contract: cc PdxStopFailure derive must surface raw["agent_id"] into
+// Detail so downstream applyFrameEvent can pre-check ref presence and
+// detach the matching native SubagentRef on rate-limit storms.
+func TestDeriveCCStatus_PdxStopFailure_AgentIdInDetail(t *testing.T) {
+	r := deriveViaProvider("PdxStopFailure", map[string]any{
+		"agent_id": "aac56e6312afceb04",
+		"error":    "rate_limit",
+	})
+	if !r.Valid {
+		t.Fatalf("expected Valid=true, got %+v", r)
+	}
+	if r.Detail["agent_id"] != "aac56e6312afceb04" {
+		t.Fatalf("Detail[agent_id] = %#v, want aac56e6312afceb04", r.Detail["agent_id"])
+	}
+}
+
+// TestDeriveCCStatus_PdxStopFailure_AgentIdMissing locks down the nil-safe
+// branch: when raw payload omits agent_id, Detail["agent_id"] must be nil
+// (key set, value nil) so handler's type assertion `agentID, _ := ...(string)`
+// yields "" and the legacy break path fires.
+func TestDeriveCCStatus_PdxStopFailure_AgentIdMissing(t *testing.T) {
+	r := deriveViaProvider("PdxStopFailure", map[string]any{
+		"error": "rate_limit",
+	})
+	if !r.Valid {
+		t.Fatalf("expected Valid=true, got %+v", r)
+	}
+	if r.Detail["agent_id"] != nil {
+		t.Fatalf("Detail[agent_id] = %#v, want nil for missing key", r.Detail["agent_id"])
+	}
+}
+
 func TestDeriveCCStatus_PdxSessionEnd_Clear(t *testing.T) {
 	r := deriveViaProvider("PdxSessionEnd", map[string]any{})
 	if !r.Valid || r.Status != agent.StatusClear {

@@ -52,12 +52,16 @@ func deriveCodexStatus(eventName string, rawEvent json.RawMessage) agent.DeriveR
 		return agent.DeriveResult{Valid: true, Status: agent.StatusIdle}
 
 	case "PdxStopFailure":
+		// agent_id surfaces the failing subagent's identity for parity
+		// with cc; nil-safe pass-through, downstream pre-checks before
+		// mutating native ref list.
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusError,
 			Detail: map[string]any{
 				"error_details": raw["error_details"],
 				"error":         raw["error"],
+				"agent_id":      raw["agent_id"],
 			},
 		}
 

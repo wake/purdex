@@ -181,6 +181,30 @@ func TestCodexDeriveStatus_PdxStopFailure(t *testing.T) {
 	}
 }
 
+// TestCodexDeriveStatus_PdxStopFailure_AgentIdInDetail mirrors cc spec §3.1
+// for codex provider: raw["agent_id"] must surface into Detail so the
+// handler-side native detach branch can read the failing subagent ID.
+func TestCodexDeriveStatus_PdxStopFailure_AgentIdInDetail(t *testing.T) {
+	r := deriveWithRaw("PdxStopFailure", `{"agent_id":"codex-sub-1","error":"rate_limit"}`)
+	if !r.Valid {
+		t.Fatalf("expected Valid, got %+v", r)
+	}
+	if r.Detail["agent_id"] != "codex-sub-1" {
+		t.Fatalf("Detail[agent_id] = %#v, want codex-sub-1", r.Detail["agent_id"])
+	}
+}
+
+// TestCodexDeriveStatus_PdxStopFailure_AgentIdMissing locks down nil-safe.
+func TestCodexDeriveStatus_PdxStopFailure_AgentIdMissing(t *testing.T) {
+	r := deriveWithRaw("PdxStopFailure", `{"error":"rate_limit"}`)
+	if !r.Valid {
+		t.Fatalf("expected Valid, got %+v", r)
+	}
+	if r.Detail["agent_id"] != nil {
+		t.Fatalf("Detail[agent_id] = %#v, want nil for missing key", r.Detail["agent_id"])
+	}
+}
+
 // TestDeriveCodexStatus_PdxPreToolUse asserts PdxPreToolUse returns
 // Valid=true with Status="" so that handler.go does not early-return on the
 // Valid=false branch and the new LifecycleUserPromptSubmit case in
