@@ -16,6 +16,7 @@ import { WorkspaceIcon } from './WorkspaceIcon'
 
 import { WorkspaceIconPicker } from './WorkspaceIconPicker'
 import { WorkspaceDeleteDialog } from './WorkspaceDeleteDialog'
+import { ModuleConfigSection } from '../../../components/settings/ModuleConfigSection'
 
 interface Props {
   workspaceId: string
@@ -124,6 +125,9 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
             onWeightChange={(w) => setWorkspaceIconWeight(workspaceId, w)}
           />
         </section>
+
+        {/* Module Settings */}
+        <ModuleConfigSection scope={{ workspaceId }} />
 
         {/* Registry-driven workspace-scoped contributions.
             F2: mirror PR-2's SettingsSidebar disabled-row pattern —
