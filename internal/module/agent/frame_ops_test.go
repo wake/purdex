@@ -4578,3 +4578,139 @@ func TestDelegatingNativeRef_CoexistsWith_RealIsProxyRef_OnSameParent(t *testing
 		t.Fatalf("proxy ref leaked delegating fields: %+v", p)
 	}
 }
+
+// TestMarkDelegatingRef_SkipsProxyRefWithSameID pins the round-1 third-pass
+// codex finding (PR #829): when a proxy ref happens to share an ID with a
+// native cc subagent and is ordered before the native ref in
+// parent.Subagents, markDelegatingRef must skip the proxy ref and mutate
+// the native ref only — otherwise the proxy turns orange-via-delegation
+// while the native cc subagent stays blue, defeating the visual signal.
+//
+// Pairs with TestUpdateSubagents_ProxyNativeIDNamespacesAreIsolated (U6)
+// which pins kind-aware identity on the SubagentStart/Stop append/remove
+// path; this test extends the same isolation guarantee to the delegating
+// flag mutation path.
+func TestMarkDelegatingRef_SkipsProxyRefWithSameID(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Proxy ref is INTENTIONALLY ordered before the native ref so the linear
+	// scan would hit the proxy first if !ref.IsProxy guard were missing.
+	proxyRef := agentpkg.SubagentRef{
+		ID:              "agent-X",
+		Type:            "codex",
+		StartedAt:       30,
+		SourcePID:       999,
+		SourceStartTime: "t999",
+		IsProxy:         true,
+		SourceTurnID:    "t_x",
+	}
+	nativeRef := nativeSubagentRef("agent-X", 40)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		proxyRef,
+		nativeRef,
+	})
+
+	if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-X", "tool-T1", 100); err != nil {
+		t.Fatalf("markDelegatingRef: %v", err)
+	}
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 2 {
+		t.Fatalf("Subagents count = %d, want 2 (proxy + native preserved); refs=%+v", len(got.Subagents), got.Subagents)
+	}
+
+	// Pull both refs out by IsProxy regardless of ordering.
+	var p, n agentpkg.SubagentRef
+	for _, ref := range got.Subagents {
+		if ref.IsProxy {
+			p = ref
+		} else {
+			n = ref
+		}
+	}
+	// Proxy ref MUST remain unmarked (cc-native delegation flag must not
+	// leak to a same-ID proxy ref).
+	if p.Delegating {
+		t.Fatalf("proxy ref absorbed Delegating flag despite IsProxy=true: %+v", p)
+	}
+	if len(p.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("proxy ref DelegatingToolUseIDs = %v, want empty", p.DelegatingToolUseIDs)
+	}
+	// Proxy identity fields untouched.
+	if !p.IsProxy || p.ID != "agent-X" || p.SourcePID != 999 || p.SourceStartTime != "t999" || p.SourceTurnID != "t_x" {
+		t.Fatalf("proxy ref identity drifted: %+v", p)
+	}
+	// Native ref MUST hold the flag.
+	if !n.Delegating {
+		t.Fatalf("native ref Delegating = false, want true (mark should target native, not proxy)")
+	}
+	if len(n.DelegatingToolUseIDs) != 1 || n.DelegatingToolUseIDs[0] != "tool-T1" {
+		t.Fatalf("native ref DelegatingToolUseIDs = %v, want [tool-T1]", n.DelegatingToolUseIDs)
+	}
+	if n.IsProxy {
+		t.Fatalf("native ref drifted to IsProxy=true: %+v", n)
+	}
+}
+
+// TestUnmarkDelegatingRef_SkipsProxyRefWithSameID — sister test for the
+// unmark path. Pre-condition simulates a hypothetical pre-existing crossed
+// state: both proxy and native refs (sharing ID) carry the same toolUseID
+// in their DelegatingToolUseIDs slice. unmarkDelegatingRef must clear only
+// the native ref's slice, leaving the proxy ref's slice untouched.
+func TestUnmarkDelegatingRef_SkipsProxyRefWithSameID(t *testing.T) {
+	m := newProxyTestModule(t)
+	// Same ordering as the mark sister test: proxy first.
+	proxyRef := agentpkg.SubagentRef{
+		ID:                   "agent-X",
+		Type:                 "codex",
+		StartedAt:            30,
+		SourcePID:            999,
+		SourceStartTime:      "t999",
+		IsProxy:              true,
+		SourceTurnID:         "t_x",
+		Delegating:           true,
+		DelegatingToolUseIDs: []string{"tool-T1"},
+	}
+	nativeRef := nativeSubagentRef("agent-X", 40)
+	nativeRef.Delegating = true
+	nativeRef.DelegatingToolUseIDs = []string{"tool-T1"}
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		proxyRef,
+		nativeRef,
+	})
+
+	if err := m.unmarkDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-X", "tool-T1", 110); err != nil {
+		t.Fatalf("unmarkDelegatingRef: %v", err)
+	}
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 2 {
+		t.Fatalf("Subagents count = %d, want 2; refs=%+v", len(got.Subagents), got.Subagents)
+	}
+	var p, n agentpkg.SubagentRef
+	for _, ref := range got.Subagents {
+		if ref.IsProxy {
+			p = ref
+		} else {
+			n = ref
+		}
+	}
+	// Proxy ref's pre-existing crossed state MUST be left intact —
+	// unmarkDelegatingRef has no business touching proxy ref state.
+	if !p.Delegating {
+		t.Fatalf("proxy ref Delegating cleared by unmark, want preserved (proxy state untouched): %+v", p)
+	}
+	if len(p.DelegatingToolUseIDs) != 1 || p.DelegatingToolUseIDs[0] != "tool-T1" {
+		t.Fatalf("proxy ref DelegatingToolUseIDs = %v, want [tool-T1] (unchanged)", p.DelegatingToolUseIDs)
+	}
+	// Native ref's flag MUST be cleared.
+	if n.Delegating {
+		t.Fatalf("native ref Delegating = true, want false after unmark: %+v", n)
+	}
+	if len(n.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("native ref DelegatingToolUseIDs = %v, want empty after unmark", n.DelegatingToolUseIDs)
+	}
+}

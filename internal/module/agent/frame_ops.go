@@ -1774,6 +1774,16 @@ func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
 // design, since attaching a flag to a non-existent ref has no meaningful
 // semantics; recovers when subagent ends or on the next tool use.
 //
+// Lookup excludes proxy refs (ref.IsProxy=true) even when their ID matches:
+// Delegating is a cc-native subagent state by design (spec §3.1). If a proxy
+// ref happens to share an ID with a real native subagent (rare namespace
+// collision pinned by TestUpdateSubagents_ProxyNativeIDNamespacesAreIsolated)
+// the proxy ref must not absorb the flag — otherwise the native ref stays
+// blue while the proxy ref ends up orange-via-delegation, defeating the
+// visual signal. Mirror filter applied in unmarkDelegatingRef. The IsProxy
+// invariant rule (plan §0.3 B-rule) is preserved: this filter only reads
+// IsProxy, never writes it.
+//
 // Invariant: Delegating == len(DelegatingToolUseIDs) > 0.
 func (m *Module) markDelegatingRef(paneID string, senderPID int, senderStartTime string, agentID, toolUseID string, broadcastTs int64) error {
 	parent, err := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
@@ -1791,7 +1801,9 @@ func (m *Module) markDelegatingRef(paneID string, senderPID int, senderStartTime
 
 		idx := -1
 		for i, ref := range current.Subagents {
-			if ref.ID == agentID {
+			// Skip proxy refs even on ID match — see helper comment for
+			// the namespace-collision rationale.
+			if ref.ID == agentID && !ref.IsProxy {
 				idx = i
 				break
 			}
@@ -1856,6 +1868,10 @@ func (m *Module) markDelegatingRef(paneID string, senderPID int, senderStartTime
 // Mirror upsertProxyRefForBroker pattern (frame_ops.go:1216-1297). Does NOT
 // reuse mutateSubagentsWithRetry — see markDelegatingRef rationale.
 //
+// Lookup excludes proxy refs (ref.IsProxy=true) for the same reason as
+// markDelegatingRef: Delegating is a cc-native subagent state. See
+// markDelegatingRef helper comment for the namespace-collision rationale.
+//
 // Invariant: Delegating == len(DelegatingToolUseIDs) > 0.
 func (m *Module) unmarkDelegatingRef(paneID string, senderPID int, senderStartTime string, agentID, toolUseID string, broadcastTs int64) error {
 	parent, err := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
@@ -1872,7 +1888,8 @@ func (m *Module) unmarkDelegatingRef(paneID string, senderPID int, senderStartTi
 
 		idx := -1
 		for i, ref := range current.Subagents {
-			if ref.ID == agentID {
+			// Skip proxy refs even on ID match — see markDelegatingRef.
+			if ref.ID == agentID && !ref.IsProxy {
 				idx = i
 				break
 			}
