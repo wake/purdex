@@ -567,24 +567,21 @@ describe('debounce isolation guards', () => {
     expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
   })
 
-  it('debounce__unread_badge_unaffected — unread set even when notification suppressed', () => {
-    // First event: sets debounce window
-    useAgentStore.getState().handleNormalizedEvent('host', 'sess', {
-      agent_type: 'cc',
-      status: 'error',
-      raw_event_name: 'StopFailure',
-      broadcast_ts: 1,
-      detail: { error: 'rate_limit' },
-    })
-    // unread should be set after first event (not focused)
-    expect(useAgentStore.getState().unread['host:sess']).toBe(true)
+  it('debounce__unread_badge_unaffected — unread set even when shouldNotify returns false (suppressed)', () => {
+    const ck = 'host:sess'
+    // Step 1: establish debounce window by calling shouldNotify → true
+    const suppressed = shouldNotify(makeErrorParams(ck, 'rate_limit'))
+    expect(suppressed).toBe(true) // first event passes
 
-    // Reset unread to verify second event also sets it
+    // Step 2: reset unread, then fire second event through handleNormalizedEvent
     useAgentStore.setState({ unread: {} })
+    vi.setSystemTime(1_000) // within the 60s window
 
-    // Second event (same key): notification is debounced by shouldNotify,
-    // but handleNormalizedEvent still sets unread
-    vi.setSystemTime(1_000)
+    // Step 3: confirm shouldNotify returns false (debounce suppressed)
+    const blocked = shouldNotify(makeErrorParams(ck, 'rate_limit'))
+    expect(blocked).toBe(false)
+
+    // Step 4: drive handleNormalizedEvent — unread path must NOT be gated by shouldNotify
     useAgentStore.getState().handleNormalizedEvent('host', 'sess', {
       agent_type: 'cc',
       status: 'error',
@@ -592,7 +589,9 @@ describe('debounce isolation guards', () => {
       broadcast_ts: 2,
       detail: { error: 'rate_limit' },
     })
-    // unread badge is set independently of debounce (it's in handleNormalizedEvent, not shouldNotify)
-    expect(useAgentStore.getState().unread['host:sess']).toBe(true)
+
+    // Step 5: unread must be true even though shouldNotify returned false
+    // This test FAILS if a future change gates the unread write on shouldNotify's return value.
+    expect(useAgentStore.getState().unread[ck]).toBe(true)
   })
 })
