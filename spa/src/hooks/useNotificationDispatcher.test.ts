@@ -439,3 +439,64 @@ describe('debounce cleanup', () => {
     expect(result).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// P3-T3: isolation guards (waiting / unread badge)
+// ---------------------------------------------------------------------------
+
+describe('debounce isolation guards', () => {
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounce__waiting_not_debounced — 5 consecutive waiting events all pass', () => {
+    const params = {
+      derived: 'waiting' as const,
+      eventName: 'PermissionRequest',
+      compositeKey: 'host:sess',
+      focusedCompositeKey: '',
+      hasTab: true,
+      settings: errorSettings,
+    }
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(1_000)
+      expect(shouldNotify(params)).toBe(true)
+    }
+  })
+
+  it('debounce__unread_badge_unaffected — unread set even when notification suppressed', () => {
+    // First event: sets debounce window
+    useAgentStore.getState().handleNormalizedEvent('host', 'sess', {
+      agent_type: 'cc',
+      status: 'error',
+      raw_event_name: 'StopFailure',
+      broadcast_ts: 1,
+      detail: { error: 'rate_limit' },
+    })
+    // unread should be set after first event (not focused)
+    expect(useAgentStore.getState().unread['host:sess']).toBe(true)
+
+    // Reset unread to verify second event also sets it
+    useAgentStore.setState({ unread: {} })
+
+    // Second event (same key): notification is debounced by shouldNotify,
+    // but handleNormalizedEvent still sets unread
+    vi.setSystemTime(1_000)
+    useAgentStore.getState().handleNormalizedEvent('host', 'sess', {
+      agent_type: 'cc',
+      status: 'error',
+      raw_event_name: 'StopFailure',
+      broadcast_ts: 2,
+      detail: { error: 'rate_limit' },
+    })
+    // unread badge is set independently of debounce (it's in handleNormalizedEvent, not shouldNotify)
+    expect(useAgentStore.getState().unread['host:sess']).toBe(true)
+  })
+})
