@@ -35,6 +35,7 @@ import enLocale from '../locales/en.json'
 import zhLocale from '../locales/zh-TW.json'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { PlaceholderSettingsSection } from '../components/settings/PlaceholderSettingsSection'
+import { sortDisableableModulesForSwitchboard } from '../components/settings/ModulesSwitchboardSection'
 
 const FakeComponent = () => null
 
@@ -809,5 +810,28 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
       expect((enLocale as Record<string, string>)[k]).toBeTruthy()
       expect((zhLocale as Record<string, string>)[k]).toBeTruthy()
     }
+  })
+
+  it('T2b / §I2: switchboard order matches disableable purdex contributions ASC by min order', () => {
+    registerBuiltinModules()
+
+    // Expected: every disableable module's first purdex-scope contribution
+    // order, sorted ASC by that order — exactly mirrors the Settings sidebar
+    // relative position for the disableable subset (Sync excluded; not
+    // disableable). Computed independently of the Switchboard sort logic
+    // so the two derivations cross-check each other.
+    const expected = listContributions('purdex')
+      .filter((c) => {
+        const m = getModule(c.moduleId)
+        return m?.disableable === true
+      })
+      .sort((a, b) => a.order - b.order)
+      .reduce<string[]>((acc, c) => {
+        if (!acc.includes(c.moduleId)) acc.push(c.moduleId)
+        return acc
+      }, [])
+
+    const actual = sortDisableableModulesForSwitchboard(getModules()).map((m) => m.id)
+    expect(actual).toEqual(expected)
   })
 })

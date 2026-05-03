@@ -4,6 +4,40 @@ import { useModuleEnabledStore } from '../../stores/useModuleEnabledStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { ToggleSwitch } from './ToggleSwitch'
 
+// Spec §4.4 / §I2 — sort key for the Modules Switchboard. We pick the
+// minimum order across all purdex-scope contributions of a module so the
+// Switchboard mirrors the Settings sidebar relative position (sidebar
+// sorts purdex contributions ASC by `order`; the first one wins). With
+// spec §I1 guaranteeing every disableable module has at least one
+// purdex-scope contribution, this returns a finite number in production;
+// the `Number.POSITIVE_INFINITY` fallback is a defensive tie-break that
+// should not fire. `localeCompare` provides a stable secondary sort if
+// two modules ever share a sort key.
+//
+// Exported for unit testing — `ModulesSwitchboardSection.test.tsx` and
+// `register-modules.test.ts` (T2b) assert the function output directly,
+// avoiding having to render the full Switchboard tree.
+export function sortDisableableModulesForSwitchboard(
+  modules: ModuleDefinition[],
+): ModuleDefinition[] {
+  return [...modules]
+    .filter((m) => m.disableable === true)
+    .map((m) => {
+      const purdexOrders = (m.settings ?? [])
+        .filter((s) => s.scope === 'purdex')
+        .map((s) => s.order)
+      const order = purdexOrders.length === 0
+        ? Number.POSITIVE_INFINITY
+        : Math.min(...purdexOrders)
+      return { module: m, order }
+    })
+    .sort((a, b) => {
+      if (a.order !== b.order) return a.order - b.order
+      return a.module.name.localeCompare(b.module.name)
+    })
+    .map(({ module }) => module)
+}
+
 type T = (key: string) => string
 
 // Registered through `registerSettingsSection()` (legacy adapter), which
@@ -30,7 +64,7 @@ export function ModulesSwitchboardSection({ ctx: _ctx }: Props = {}) {
   const t = useI18nStore((s) => s.t)
   const hasPending = useModuleEnabledStore((s) => s.hasPendingChanges())
 
-  const modules = getModules().filter((m) => m.disableable === true)
+  const modules = sortDisableableModulesForSwitchboard(getModules())
 
   return (
     // Spec §4.5 — outer wrapper drops `p-6` because GlobalSettingsPage
