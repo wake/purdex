@@ -128,6 +128,67 @@ func TestDeriveCCStatus_PdxSubagentStart_DetailOnly(t *testing.T) {
 	}
 }
 
+// TestDeriveCCStatus_PdxPreToolUse_DetailOnly pins the round-1 codex review fix:
+// production cc provider must classify PdxPreToolUse as Valid=true (detail-only)
+// so handler.go reaches the broadcast path. Before the fix, this returned
+// Valid=false, so the delegation flag mark would mutate the frame DB but never
+// emit to the SPA. Mirrors the existing PdxSubagentStart detail-only pattern.
+func TestDeriveCCStatus_PdxPreToolUse_DetailOnly(t *testing.T) {
+	r := deriveViaProvider("PdxPreToolUse", map[string]any{
+		"tool_name":   "Bash",
+		"tool_use_id": "T1",
+		"agent_id":    "agent-X",
+	})
+	if !r.Valid {
+		t.Fatalf("PdxPreToolUse should be valid (detail-only); got %+v", r)
+	}
+	if r.Status != "" {
+		t.Fatalf("PdxPreToolUse should not set status (detail-only); got %s", r.Status)
+	}
+	if r.Detail == nil {
+		t.Fatal("PdxPreToolUse should carry Detail map")
+	}
+	if r.Detail["tool_name"] != "Bash" {
+		t.Errorf("Detail[tool_name] = %v, want Bash", r.Detail["tool_name"])
+	}
+	if r.Detail["tool_use_id"] != "T1" {
+		t.Errorf("Detail[tool_use_id] = %v, want T1", r.Detail["tool_use_id"])
+	}
+	if r.Detail["agent_id"] != "agent-X" {
+		t.Errorf("Detail[agent_id] = %v, want agent-X", r.Detail["agent_id"])
+	}
+}
+
+// TestDeriveCCStatus_PdxPostToolUseFailure_DetailOnly is the sister pin for the
+// unmark broadcast path. Same rationale as PdxPreToolUse — without the fix the
+// production cc provider returned Valid=false and the unmark would silently
+// mutate DB without broadcasting cleared state.
+func TestDeriveCCStatus_PdxPostToolUseFailure_DetailOnly(t *testing.T) {
+	r := deriveViaProvider("PdxPostToolUseFailure", map[string]any{
+		"tool_name":   "Bash",
+		"tool_use_id": "T2",
+		"agent_id":    "agent-Y",
+	})
+	if !r.Valid {
+		t.Fatalf("PdxPostToolUseFailure should be valid (detail-only); got %+v", r)
+	}
+	if r.Status != "" {
+		t.Fatalf("PdxPostToolUseFailure should not set status (detail-only); got %s", r.Status)
+	}
+	if r.Detail == nil {
+		t.Fatal("PdxPostToolUseFailure should carry Detail map")
+	}
+	if r.Detail["tool_name"] != "Bash" {
+		t.Errorf("Detail[tool_name] = %v, want Bash", r.Detail["tool_name"])
+	}
+	if r.Detail["tool_use_id"] != "T2" {
+		t.Errorf("Detail[tool_use_id] = %v, want T2", r.Detail["tool_use_id"])
+	}
+	if r.Detail["agent_id"] != "agent-Y" {
+		t.Errorf("Detail[agent_id] = %v, want agent-Y", r.Detail["agent_id"])
+	}
+}
+
 func TestDeriveCCStatus_PdxModelExtraction(t *testing.T) {
 	r := deriveViaProvider("PdxSessionStart", map[string]any{"source": "startup", "modelName": "opus-4"})
 	if r.Model != "opus-4" {

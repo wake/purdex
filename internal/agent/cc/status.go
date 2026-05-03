@@ -101,6 +101,40 @@ func deriveCCStatus(purdexName string, rawEvent json.RawMessage) agent.DeriveRes
 			Valid:  true,
 			Detail: map[string]any{"agent_id": raw["agent_id"]},
 		}
+
+	case "PdxPreToolUse":
+		// Detail-only valid (Status=""): handler.go uses PreToolUse to drive
+		// the delegation flag mark for codex-companion Bash invocations
+		// (issue #821). Returning Valid=false here would drop the request
+		// down handler.go's invalid-skip return — the DB mutation would
+		// happen in the pre-derive block but no broadcast would reach the
+		// SPA. Mirrors the existing PdxSubagentStart / PdxSubagentStop
+		// detail-only pattern (events.go line 11-15 EmitsStatus convention).
+		return agent.DeriveResult{
+			Valid: true,
+			Detail: map[string]any{
+				"tool_name":   raw["tool_name"],
+				"tool_use_id": raw["tool_use_id"],
+				"agent_id":    raw["agent_id"],
+			},
+		}
+
+	case "PdxPostToolUseFailure":
+		// Detail-only valid (Status=""): symmetric counterpart for the
+		// delegation unmark path. Without this case, a failed
+		// codex-companion Bash would clear the DB Delegating flag silently
+		// (handler invalid-skip return) and the SPA would stay orange.
+		// Status="" so PostToolUseFailure does not pollute the
+		// idle/running/waiting status derivation — failure semantics live
+		// in PdxStopFailure, not here.
+		return agent.DeriveResult{
+			Valid: true,
+			Detail: map[string]any{
+				"tool_name":   raw["tool_name"],
+				"tool_use_id": raw["tool_use_id"],
+				"agent_id":    raw["agent_id"],
+			},
+		}
 	}
 
 	return agent.DeriveResult{Valid: false}

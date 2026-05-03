@@ -2885,3 +2885,112 @@ func TestHandleEvent_OpencodeAgentTypePreToolUseBashCodexCompanion_NoMark(t *tes
 		t.Fatalf("DelegatingToolUseIDs = %v, want empty (opencode agent_type must not mark)", ref.DelegatingToolUseIDs)
 	}
 }
+
+// delegationModuleWithRealCCProvider mirrors delegationModule but registers the
+// production cc.Provider rather than fakeAgentProvider. This pins the round-1
+// codex review fix: production deriveCCStatus must classify PdxPreToolUse and
+// PdxPostToolUseFailure as Valid=true (detail-only) so handler.go reaches
+// projectionForSession + emitHookToSession (broadcast). The fake provider used
+// by P3-T1's eight cases always returns Valid=true and therefore masked the
+// catalog gap.
+func delegationModuleWithRealCCProvider(t *testing.T) *Module {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	return m
+}
+
+// seedCCFrameWithSubagentReal seeds a cc frame on pane %5 with one
+// SubagentRef. Uses the production-provider module variant so the seed events
+// (SessionStart, SubagentStart) flow through the real deriveCCStatus catalog.
+func seedCCFrameWithSubagentReal(t *testing.T, m *Module, agentID string) {
+	t.Helper()
+	bodies := []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{"source":"startup"},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{"agent_id":"` + agentID + `"},"agent_type":"cc"}`,
+	}
+	for _, body := range bodies {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("seed body %q: status = %d (body=%s)", body, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestHandleEvent_CCPreToolUseBashCodexCompanion_BroadcastsViaProductionDeriveStatus
+// pins the round-1 codex review finding: before the deriveCCStatus fix, the
+// production cc provider returned Valid=false on PdxPreToolUse so handler.go
+// hit the invalid-skip return at line ~287 — the delegation flag mark would
+// mutate the frame DB but never broadcast. The SPA therefore never saw the
+// orange dot. This test uses the real cc.NewProvider so the catalog gap is
+// regression-locked, and asserts a broadcast actually fires after the mark.
+func TestHandleEvent_CCPreToolUseBashCodexCompanion_BroadcastsViaProductionDeriveStatus(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+
+	// Subscribe AFTER seed so seed broadcasts don't leak into the mark drain.
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+
+	// 1. DB-level: mark took effect (mirrors the existing P3-T1 assertion).
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !ref.Delegating {
+		t.Fatalf("Delegating = false, want true after PreToolUse codex-companion (ref=%+v)", ref)
+	}
+
+	// 2. Broadcast-level: the production deriveCCStatus catalog gap previously
+	// returned Valid=false here, so handler hit invalid-skip and never reached
+	// emitHookToSession. After the fix the mark must broadcast so the SPA can
+	// render the orange dot. drainBroadcasts only returns "hook" envelopes.
+	msgs := drainBroadcasts(sub, 200*time.Millisecond)
+	if len(msgs) == 0 {
+		t.Fatal("no hook broadcast after PreToolUse mark — production cc provider returned Valid=false and handler took the invalid-skip return path (round-1 codex finding)")
+	}
+}
+
+// TestHandleEvent_CCPostToolUseFailureBashAfterMark_BroadcastsViaProductionDeriveStatus
+// is the sister regression test for the unmark broadcast path. Without the
+// status.go fix, PostToolUseFailure was Valid=false in production so the
+// unmark would clear the DB flag silently — the SPA would stay orange after
+// the codex-companion call failed.
+func TestHandleEvent_CCPostToolUseFailureBashAfterMark_BroadcastsViaProductionDeriveStatus(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+
+	// Mark first (this exercises the PreToolUse broadcast path too).
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+	preRef := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !preRef.Delegating {
+		t.Fatalf("pre-unmark precondition failed: ref=%+v", preRef)
+	}
+
+	// Subscribe AFTER mark so the drain only sees the unmark broadcast.
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, postToolUseBody(true, "agent-X", "tool-use-T1"))
+
+	// 1. DB-level: unmark took effect.
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true after PostToolUseFailure unmark, want false (ref=%+v)", ref)
+	}
+
+	// 2. Broadcast-level: the unmark must surface to the SPA so the orange dot
+	// clears. Pre-fix, PostToolUseFailure was Valid=false → invalid-skip → no
+	// broadcast → SPA stuck orange.
+	msgs := drainBroadcasts(sub, 200*time.Millisecond)
+	if len(msgs) == 0 {
+		t.Fatal("no hook broadcast after PostToolUseFailure unmark — production cc provider returned Valid=false and handler took the invalid-skip return path (round-1 codex finding)")
+	}
+}
