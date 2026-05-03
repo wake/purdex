@@ -25,6 +25,20 @@ const proxyMaxDepth = 5
 // that hit this limit are genuine hot loops, not ordinary concurrency.
 const proxyUpsertMaxAttempts = 3
 
+// MaxDelegatingToolUseIDs caps DelegatingToolUseIDs slice growth per
+// SubagentRef. Spec §10 risk table pre-acknowledged that a degenerate hook
+// stream (missing PostToolUse / hook resends with new tool_use_id) could
+// inflate subagents_json unboundedly — making UpsertIfUnchanged, projection
+// broadcast, and SPA payload progressively slower or out-of-budget — and
+// recommended "defensive cap at ~32 entries with log-and-discard if needed".
+// Round-2 codex three-parallel adversarial review (PR #829, finding #2)
+// triggered enforcement.
+//
+// On overflow, oldest IDs evict first (FIFO). The Delegating flag stays
+// true so the visual signal does not flap; dev-mode log surfaces hook stream
+// health for operators.
+const MaxDelegatingToolUseIDs = 32
+
 // nativeBaselineKey identifies a native (IsProxy=false) subagent ref for the
 // SessionStart filter-merge baseline (Phase 3.5 plan §2.2.2 v12 T1 fix). The
 // triple (Type, ID, StartedAt) survives ID collision between an old-session
@@ -1831,6 +1845,17 @@ func (m *Module) markDelegatingRef(paneID string, senderPID int, senderStartTime
 		}
 		if !already {
 			ids = append(ids, toolUseID)
+		}
+		// FIFO evict-oldest enforcement (spec §10 / round-2 finding #2).
+		// Cap kicks in when degenerate hook streams keep mark'ing without
+		// matching PostToolUse — preserves Delegating=true so the visual
+		// signal does not flap; surfaces a dev-mode log for operators.
+		if len(ids) > MaxDelegatingToolUseIDs {
+			if isDevMode() {
+				log.Printf("[delegation] cap reached: evicting %d oldest entries (agent_id=%s pane=%s)",
+					len(ids)-MaxDelegatingToolUseIDs, agentID, paneID)
+			}
+			ids = ids[len(ids)-MaxDelegatingToolUseIDs:]
 		}
 		next[idx].DelegatingToolUseIDs = ids
 		next[idx].Delegating = len(ids) > 0

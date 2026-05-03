@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -4712,5 +4713,55 @@ func TestUnmarkDelegatingRef_SkipsProxyRefWithSameID(t *testing.T) {
 	}
 	if len(n.DelegatingToolUseIDs) != 0 {
 		t.Fatalf("native ref DelegatingToolUseIDs = %v, want empty after unmark", n.DelegatingToolUseIDs)
+	}
+}
+
+// TestMarkDelegatingRef_CapsToolUseIDsAt32 pins the round-2 codex three-
+// parallel adversarial review finding #2 (medium, PR #829):
+// DelegatingToolUseIDs slice had no per-ref cap, so a degenerate hook stream
+// (missing PostToolUse / hook resends with new tool_use_id) could inflate
+// subagents_json unboundedly. Spec §10 risk table pre-acknowledged the issue
+// and recommended "defensive cap at ~32 entries with log-and-discard if
+// needed"; this test locks the cap at MaxDelegatingToolUseIDs with FIFO
+// evict-oldest behaviour. Delegating must remain true throughout (no flap).
+func TestMarkDelegatingRef_CapsToolUseIDsAt32(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("agent-A", 40),
+	})
+
+	const overflow = 3
+	total := MaxDelegatingToolUseIDs + overflow
+	for i := 0; i < total; i++ {
+		toolUseID := fmt.Sprintf("tool-T%d", i)
+		// Distinct broadcastTs per mark so LastSeenAt advances and tests
+		// don't accidentally hit UpsertIfUnchanged conflict noise.
+		if err := m.markDelegatingRef(parent.PaneID, parent.PID, parent.ProcessStartTime, "agent-A", toolUseID, int64(100+i)); err != nil {
+			t.Fatalf("mark #%d: %v", i, err)
+		}
+	}
+
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 1 {
+		t.Fatalf("Subagents count = %d, want 1", len(got.Subagents))
+	}
+	ref := got.Subagents[0]
+	if len(ref.DelegatingToolUseIDs) != MaxDelegatingToolUseIDs {
+		t.Fatalf("DelegatingToolUseIDs len = %d, want %d (cap)", len(ref.DelegatingToolUseIDs), MaxDelegatingToolUseIDs)
+	}
+	// FIFO evict-oldest: oldest `overflow` entries dropped, newest
+	// MaxDelegatingToolUseIDs entries kept in original order.
+	for i := 0; i < MaxDelegatingToolUseIDs; i++ {
+		want := fmt.Sprintf("tool-T%d", i+overflow)
+		if ref.DelegatingToolUseIDs[i] != want {
+			t.Fatalf("DelegatingToolUseIDs[%d] = %q, want %q (FIFO evict-oldest)", i, ref.DelegatingToolUseIDs[i], want)
+		}
+	}
+	// Visual signal must not flap.
+	if !ref.Delegating {
+		t.Fatalf("ref.Delegating = false, want true throughout cap enforcement")
 	}
 }
