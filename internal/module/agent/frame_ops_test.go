@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -4765,3 +4766,533 @@ func TestMarkDelegatingRef_CapsToolUseIDsAt32(t *testing.T) {
 		t.Fatalf("ref.Delegating = false, want true throughout cap enforcement")
 	}
 }
+
+// findNativeRefByID — pure helper unit tests (P1-T2). Spec §3.2 / §6.1 pin
+// the contract: native ref lookup gates the StopFailure detach branch so a
+// non-matching agent_id never triggers a phantom mutation.
+
+func TestFindNativeRefByID_HitsNativeRef(t *testing.T) {
+	refs := []agentpkg.SubagentRef{
+		{ID: "x", IsProxy: false},
+	}
+	if got := findNativeRefByID(refs, "x"); got != 0 {
+		t.Fatalf("findNativeRefByID = %d, want 0", got)
+	}
+}
+
+func TestFindNativeRefByID_SkipsProxyRefWithSameID(t *testing.T) {
+	// Proxy IDs are constructed `proxy:<type>:<pid>:<startTime>` and never
+	// collide with native cc Task IDs in practice — but the helper must
+	// still skip proxy refs even on a synthetic same-ID match, otherwise
+	// StopFailure could detach a proxy ref masquerading as native.
+	refs := []agentpkg.SubagentRef{
+		{ID: "x", IsProxy: true, SourcePID: 100, SourceStartTime: "Sun Apr 20 01:00:00 2026"},
+	}
+	if got := findNativeRefByID(refs, "x"); got != -1 {
+		t.Fatalf("findNativeRefByID = %d, want -1 (proxy ref must be skipped)", got)
+	}
+}
+
+func TestFindNativeRefByID_EmptyIdReturnsNotFound(t *testing.T) {
+	// Empty agent_id in the StopFailure payload must short-circuit to
+	// the legacy break path; helper returns -1 before any scan so the
+	// caller can rely on a single negative-id sentinel.
+	refs := []agentpkg.SubagentRef{
+		{ID: "x", IsProxy: false},
+	}
+	if got := findNativeRefByID(refs, ""); got != -1 {
+		t.Fatalf("findNativeRefByID(_, \"\") = %d, want -1", got)
+	}
+	// Empty refs + empty id → -1 too.
+	if got := findNativeRefByID(nil, ""); got != -1 {
+		t.Fatalf("findNativeRefByID(nil, \"\") = %d, want -1", got)
+	}
+}
+
+func TestFindNativeRefByID_NotFoundReturnsNegativeOne(t *testing.T) {
+	refs := []agentpkg.SubagentRef{
+		{ID: "y", IsProxy: false},
+		{ID: "z", IsProxy: false},
+	}
+	if got := findNativeRefByID(refs, "x"); got != -1 {
+		t.Fatalf("findNativeRefByID = %d, want -1", got)
+	}
+}
+
+// LifecycleStopFailure native subagent detach branch (P1-T3b). Spec §3.2 +
+// §6.1 + plan §1 P1-T3b table. Covers seven scenarios:
+//   1. Hits — payload agent_id matches an existing native ref → detach +
+//      trace `native_subagent_detached_on_stop_failure`.
+//   2. Misses_NoNativeDetachTrace — payload agent_id does not match any
+//      held native ref → break path; legacy generic post-switch fires
+//      (status=error, LastSeenAt refreshed); reason is NOT the new detach
+//      reason.
+//   3. NoAgentId_LegacyBehaviour — payload omits agent_id → same as miss.
+//   4. EmptyAgentId_LegacyBehaviour — payload `agent_id: ""` → same as
+//      miss; helper short-circuits at id == "".
+//   5. PreservesProxyRefs — frame holds both native + proxy refs; only
+//      the matching native ref is detached, proxy ref untouched.
+//   6. FrameNil_FallthroughToProxyDetach — frame == nil; fallthrough
+//      reaches the LifecycleStop body's existing codex/proxy branches
+//      unchanged.
+//   7. FrameDeletedMidFlight — pre-check matches but mutate returns
+//      applied=false because a concurrent SessionEnd / sweep deleted the
+//      frame; trace reason `frame_missing`.
+
+func newStopFailurePane() string { return "%50" }
+
+func buildStopFailureRequest(paneID string, senderPID int, senderStartTime, agentID, agentType string) (EventRequest, agentpkg.DeriveResult) {
+	rawJSON, _ := json.Marshal(map[string]any{
+		"agent_id":        agentID,
+		"agent_type":      "general-purpose",
+		"hook_event_name": "StopFailure",
+		"error":           "rate_limit",
+	})
+	req := EventRequest{
+		TmuxSession:     "work",
+		TmuxPaneID:      paneID,
+		PurdexName:      "PdxStopFailure",
+		AgentType:       agentType,
+		SenderPID:       senderPID,
+		SenderStartTime: senderStartTime,
+		RawEvent:        rawJSON,
+	}
+	detail := map[string]any{
+		"error_details": nil,
+		"error":         "rate_limit",
+	}
+	// Spec §3.1: cc/codex carry agent_id even when nil (map literal); we
+	// mirror that here. Empty-string and missing tests override below.
+	if agentID != "<missing>" {
+		detail["agent_id"] = agentID
+	}
+	result := agentpkg.DeriveResult{
+		Valid:  true,
+		Status: agentpkg.StatusError,
+		Detail: detail,
+	}
+	return req, result
+}
+
+func TestStopFailure_NativeDetach_Hits(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+	})
+
+	req, result := buildStopFailureRequest(pane, parent.PID, parent.ProcessStartTime, "match-id", "cc")
+	_, meta, err := m.applyFrameEvent(req, result, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("Decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
+	}
+	if meta.Reason != "native_subagent_detached_on_stop_failure" {
+		t.Fatalf("Reason = %q, want native_subagent_detached_on_stop_failure (meta=%+v)", meta.Reason, meta)
+	}
+	got, err := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
+	if err != nil || got == nil {
+		t.Fatalf("reload parent: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty after native detach", got.Subagents)
+	}
+	// PR-A round-1 codex review P1 (thread 019ded5d): atomic ref+status
+	// write — frame.Status MUST persist as error after detach. Earlier
+	// implementation called mutateSubagentsWithRetry alone, which only
+	// touches Subagents+LastSeenAt and skipped the post-switch
+	// UpdateHookPath status update.
+	if got.Status != agentpkg.StatusError {
+		t.Fatalf("Status = %q, want %q after StopFailure detach (codex round-1 P1)", got.Status, agentpkg.StatusError)
+	}
+	if got.LastSeenAt != 200 {
+		t.Fatalf("LastSeenAt = %d, want 200 (broadcastTs)", got.LastSeenAt)
+	}
+}
+
+func TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	// Frame holds a single native ref whose ID does NOT match the
+	// incoming StopFailure payload.
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("no-match-id", 40),
+	})
+
+	req, result := buildStopFailureRequest(pane, parent.PID, parent.ProcessStartTime, "different-id", "cc")
+	preTs := int64(200)
+	_, meta, err := m.applyFrameEvent(req, result, preTs)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+
+	// (a) ref-presence pre-check did NOT match → no native detach trace step.
+	if meta.Reason == "native_subagent_detached_on_stop_failure" {
+		t.Fatalf("Reason = %q, want non-detach (legacy break path); meta=%+v", meta.Reason, meta)
+	}
+	// (b) generic post-switch path executed → Decision updated_frame +
+	// Reason ∈ {parent_frame_found, daemon_restart_recovery, no_parent_fallback}.
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("Decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
+	}
+	switch meta.Reason {
+	case "parent_frame_found", "daemon_restart_recovery", "no_parent_fallback":
+		// expected legacy reasons
+	default:
+		t.Fatalf("Reason = %q, want one of parent_frame_found/daemon_restart_recovery/no_parent_fallback", meta.Reason)
+	}
+	// (c) Legacy semantics preserved: status=error, LastSeenAt refreshed,
+	// ref still present (because not matched).
+	got, err := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
+	if err != nil || got == nil {
+		t.Fatalf("reload parent: %v / %v", err, got)
+	}
+	if got.Status != agentpkg.StatusError {
+		t.Fatalf("Status = %q, want error", got.Status)
+	}
+	if got.LastSeenAt < preTs {
+		t.Fatalf("LastSeenAt = %d, want >= %d (refresh)", got.LastSeenAt, preTs)
+	}
+	if len(got.Subagents) != 1 || got.Subagents[0].ID != "no-match-id" {
+		t.Fatalf("Subagents = %+v, want unchanged [no-match-id]", got.Subagents)
+	}
+}
+
+func TestStopFailure_NoAgentId_LegacyBehaviour(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("no-match-id", 40),
+	})
+
+	// Use the "<missing>" sentinel to omit agent_id from Detail entirely.
+	req, result := buildStopFailureRequest(pane, parent.PID, parent.ProcessStartTime, "<missing>", "cc")
+	if _, present := result.Detail["agent_id"]; present {
+		t.Fatalf("test setup: agent_id should be absent for missing case")
+	}
+
+	_, meta, err := m.applyFrameEvent(req, result, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "native_subagent_detached_on_stop_failure" {
+		t.Fatalf("Reason = %q, want legacy break (no agent_id)", meta.Reason)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("Decision = %q, want updated_frame (legacy break)", meta.Decision)
+	}
+	got, err := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 1 {
+		t.Fatalf("Subagents = %+v, want unchanged", got.Subagents)
+	}
+}
+
+func TestStopFailure_EmptyAgentId_LegacyBehaviour(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("no-match-id", 40),
+	})
+
+	// Explicit empty string — exercises findNativeRefByID's id == "" early
+	// short-circuit.
+	req, result := buildStopFailureRequest(pane, parent.PID, parent.ProcessStartTime, "", "cc")
+	if result.Detail["agent_id"] != "" {
+		t.Fatalf("test setup: expected empty-string agent_id, got %#v", result.Detail["agent_id"])
+	}
+
+	_, meta, err := m.applyFrameEvent(req, result, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "native_subagent_detached_on_stop_failure" {
+		t.Fatalf("Reason = %q, want legacy break (empty agent_id)", meta.Reason)
+	}
+	got, err := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 1 {
+		t.Fatalf("Subagents = %+v, want unchanged", got.Subagents)
+	}
+}
+
+func TestStopFailure_PreservesProxyRefs(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	// Frame holds one native + one proxy ref. StopFailure agent_id matches
+	// only the native — proxy must survive untouched.
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+		{ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50, SourcePID: 42, SourceStartTime: "t1", IsProxy: true},
+	})
+
+	req, result := buildStopFailureRequest(pane, parent.PID, parent.ProcessStartTime, "match-id", "cc")
+	_, meta, err := m.applyFrameEvent(req, result, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "native_subagent_detached_on_stop_failure" {
+		t.Fatalf("Reason = %q, want native_subagent_detached_on_stop_failure", meta.Reason)
+	}
+	got, err := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if len(got.Subagents) != 1 {
+		t.Fatalf("Subagents = %+v, want exactly one ref (proxy preserved)", got.Subagents)
+	}
+	if !got.Subagents[0].IsProxy || got.Subagents[0].SourcePID != 42 {
+		t.Fatalf("surviving ref = %+v, want the proxy", got.Subagents[0])
+	}
+}
+
+func TestStopFailure_FrameNil_FallthroughToProxyDetach(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	// Parent owns no frame for the senderPID — but a parent frame in the
+	// pane carries a proxy ref for the broker. StopFailure for that broker
+	// should fallthrough to LifecycleStop's wildcard process-level proxy
+	// detach for non-codex / wildcard branch.
+	_ = seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		{ID: "proxy:cc:42:t1", Type: "cc", StartedAt: 50, SourcePID: 42, SourceStartTime: "t1", IsProxy: true},
+	})
+
+	// Sender == proxy broker (PID 42, t1) with no own frame: triggers
+	// the frame == nil path → fallthrough into LifecycleStop body.
+	// AgentType "cc" means non-codex branch → wildcard removeProxyRefForSender.
+	req, result := buildStopFailureRequest(pane, 42, "t1", "anything", "cc")
+	_, meta, err := m.applyFrameEvent(req, result, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_detached_on_stop" {
+		t.Fatalf("Reason = %q, want proxy_subagent_detached_on_stop (fallthrough wildcard detach)", meta.Reason)
+	}
+}
+
+// TestStopFailure_FixtureReplay_DthnPayload pins the cc upstream payload
+// shape against a recorded production sample (spec §1.2 chain `c02151f0...`).
+// If cc ever changes the StopFailure payload schema in a way that breaks
+// our agent_id surfacing (rename, nesting under a different parent key,
+// removal entirely) this test fails at PR-CI time rather than silently
+// accumulating refs in production again.
+//
+// The fixture file is sanitised (cwd / transcript / session_id replaced
+// with fixture-friendly tokens) but `agent_id`, `error`, `agent_type`,
+// `hook_event_name` keep their original schema and value shape from
+// dthn pane %50.
+func TestStopFailure_FixtureReplay_DthnPayload(t *testing.T) {
+	raw, err := os.ReadFile("testdata/dthn_stopfailure_2026_05_03.json")
+	if err != nil {
+		t.Fatalf("load fixture: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	agentID, _ := payload["agent_id"].(string)
+	if agentID == "" {
+		t.Fatalf("fixture missing agent_id (rate-limit cleanup contract pin); payload=%+v", payload)
+	}
+
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef(agentID, 40),
+	})
+
+	// Provider derive (cc) surfaces agent_id into Detail; mirror that
+	// here so the handler-side pre-check works on the same shape it
+	// would see in production.
+	result := agentpkg.DeriveResult{
+		Valid:  true,
+		Status: agentpkg.StatusError,
+		Detail: map[string]any{
+			"error_details": payload["error_details"],
+			"error":         payload["error"],
+			"agent_id":      payload["agent_id"],
+		},
+	}
+	req := EventRequest{
+		TmuxSession:     "work",
+		TmuxPaneID:      pane,
+		PurdexName:      "PdxStopFailure",
+		AgentType:       "cc",
+		SenderPID:       parent.PID,
+		SenderStartTime: parent.ProcessStartTime,
+		RawEvent:        json.RawMessage(raw),
+	}
+
+	_, meta, err := m.applyFrameEvent(req, result, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "native_subagent_detached_on_stop_failure" {
+		t.Fatalf("Reason = %q, want native_subagent_detached_on_stop_failure (cc payload schema drift?); meta=%+v", meta.Reason, meta)
+	}
+	got, gerr := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
+	if gerr != nil || got == nil {
+		t.Fatalf("reload: %v / %v", gerr, got)
+	}
+	if len(got.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty after fixture replay detach", got.Subagents)
+	}
+}
+
+// TestStopFailure_FrameAbsentBeforePreCheck verifies the user-visible safety
+// contract: when a frame is gone before applyFrameEvent even sees it, the
+// StopFailure path never emits a successful native detach trace. This is
+// the "post-delete state" sanity check; the actual mid-flight delete
+// (pre-check pass + UpsertIfUnchanged finds row deleted) is exercised
+// directly at the helper level by
+// TestMutateSubagentsAndStatusWithRetry_FrameDeletedMidFlight (R2 defender
+// finding: original test name "FrameDeletedMidFlight" was misleading).
+func TestStopFailure_FrameAbsentBeforePreCheck(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+	})
+
+	// Delete frame BEFORE applyFrameEvent runs — applyFrameEvent's top
+	// GetByIdentity returns nil, so the StopFailure case fallthroughs to
+	// LifecycleStop body. cc wildcard branch hits removeProxyRefForSender,
+	// finds nothing for senderPID=100, breaks to generic post-switch path.
+	// The new native detach reason MUST NOT be emitted.
+	if err := m.frames.Delete(parent.FrameID); err != nil {
+		t.Fatalf("simulate concurrent delete: %v", err)
+	}
+	req, result := buildStopFailureRequest(pane, parent.PID, parent.ProcessStartTime, "match-id", "cc")
+	_, meta, err := m.applyFrameEvent(req, result, 300)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason == "native_subagent_detached_on_stop_failure" {
+		t.Fatalf("Reason = %q, want non-detach for deleted frame", meta.Reason)
+	}
+}
+
+// PR-A round-2 codex review (threads 019ded61/62/63) caught that the
+// retry loop did not re-check ref presence after each reload, allowing
+// a phantom native_subagent_detached_on_stop_failure trace under
+// concurrent SubagentStop / parallel StopFailure races. The four tests
+// below exercise mutateSubagentsAndStatusWithRetry directly to cover
+// each detachOutcome branch precisely.
+
+func TestMutateSubagentsAndStatusWithRetry_DetachedSuccessfully(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+	})
+
+	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
+	outcome, stored, err := m.mutateSubagentsAndStatusWithRetry(parent, ref, agentpkg.StatusError, 200)
+	if err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if outcome != detachOutcomeDetached {
+		t.Fatalf("outcome = %v, want detachOutcomeDetached", outcome)
+	}
+	if len(stored.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty", stored.Subagents)
+	}
+	if stored.Status != agentpkg.StatusError {
+		t.Fatalf("Status = %q, want %q", stored.Status, agentpkg.StatusError)
+	}
+	if stored.LastSeenAt != 200 {
+		t.Fatalf("LastSeenAt = %d, want 200", stored.LastSeenAt)
+	}
+}
+
+// TestMutateSubagentsAndStatusWithRetry_RefAlreadyAbsentAfterReload covers
+// the R2 phantom-detach race: caller's pre-check passed (ref existed
+// when we built `frame`), but a concurrent writer detached the same ref
+// before our first UpsertIfUnchanged committed. Our reload reveals the
+// ref already gone — helper must NOT report Detached.
+func TestMutateSubagentsAndStatusWithRetry_RefAlreadyAbsentAfterReload(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	// Step 1: seed frame WITH the target ref; remember this stale baseline.
+	stale := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+	})
+	// Step 2: simulate concurrent writer that already removed the ref AND
+	// bumped LastSeenAt. Helper's first UpsertIfUnchanged will fail
+	// (expected stale.LastSeenAt=50 vs current 999); reload returns the
+	// post-race state — ref already gone.
+	racePost := stale
+	racePost.Subagents = []agentpkg.SubagentRef{}
+	racePost.LastSeenAt = 999
+	ok, _, err := m.frames.UpsertIfUnchanged(racePost, stale.LastSeenAt)
+	if err != nil || !ok {
+		t.Fatalf("seed race-post state: ok=%v err=%v", ok, err)
+	}
+	// Step 3: invoke helper with the STALE baseline (caller's view from
+	// before the race). On first UpsertIfUnchanged conflict, helper
+	// reloads → racePost (ref already absent) → returns RefAlreadyAbsent
+	// without committing a phantom detach.
+	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
+	outcome, _, err := m.mutateSubagentsAndStatusWithRetry(stale, ref, agentpkg.StatusError, 1500)
+	if err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if outcome != detachOutcomeRefAlreadyAbsent {
+		t.Fatalf("outcome = %v, want detachOutcomeRefAlreadyAbsent (phantom-detach race not handled)", outcome)
+	}
+	// DB-level invariant: the post-race state stays untouched (helper did
+	// NOT issue a write since ref was already absent on retry baseline).
+	got, _ := m.frames.GetByIdentity(pane, stale.PID, stale.ProcessStartTime)
+	if got == nil || got.LastSeenAt != 999 {
+		t.Fatalf("got = %+v, want post-race state preserved (LastSeenAt=999)", got)
+	}
+}
+
+// TestMutateSubagentsAndStatusWithRetry_FrameDeletedMidFlight exercises
+// the pre-check-passes-but-row-deleted path that the original
+// FrameDeletedMidFlight test name claimed but did not actually cover
+// (R2 defender finding).
+func TestMutateSubagentsAndStatusWithRetry_FrameDeletedMidFlight(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	stale := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+	})
+	// Simulate concurrent SessionEnd / sweep: delete the row entirely.
+	if err := m.frames.Delete(stale.FrameID); err != nil {
+		t.Fatalf("simulate delete: %v", err)
+	}
+	// Helper sees pre-check pass on stale baseline (ref present), then
+	// UpsertIfUnchanged conflicts, GetByIdentity returns nil → FrameMissing.
+	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
+	outcome, _, err := m.mutateSubagentsAndStatusWithRetry(stale, ref, agentpkg.StatusError, 200)
+	if err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if outcome != detachOutcomeFrameMissing {
+		t.Fatalf("outcome = %v, want detachOutcomeFrameMissing", outcome)
+	}
+}
+
+// TestMutateSubagentsAndStatusWithRetry_RetryExhaustionContract documents
+// the helper's "exceeded retries" path. The actual triggering of three
+// consecutive UpsertIfUnchanged conflicts is covered at applyFrameEvent
+// level by TestPhase35_IT9_FilterMergeExhaustedRetryAbortsApply (line ~3702),
+// which uses the existing processStartTimeFn module seam to drive
+// row-mutation between attempts. mutateSubagentsAndStatusWithRetry shares
+// the same OCC UpsertIfUnchanged + GetByIdentity reload pattern, so its
+// exhaustion behaviour is structurally inherited; adding a duplicate
+// race-driving test here would require a new module-level seam without
+// new coverage value (R2 health finding tracked as fact rather than
+// blocker per round-2 thread 019ded63).
+//
+// Caller behaviour (applyFrameEvent's LifecycleStopFailure case) propagates
+// the helper's error verbatim via `return nil, FrameTraceMeta{}, merr`,
+// surfacing as a 500 from the HTTP handler — consistent with the
+// pre-existing exhaustion path on the SessionStart filter-merge code.

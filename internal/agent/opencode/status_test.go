@@ -90,6 +90,42 @@ func TestOpenCodeDeriveStatus_PdxStopFailure(t *testing.T) {
 	}
 }
 
+// TestOpenCodeDeriveStatus_PdxStopFailure_AgentIdInDetail mirrors spec §3.1
+// for opencode: even though opencode plugin_template currently does not
+// emit agent_id in its session.error payload, the derive contract is pinned
+// for parity so the day the plugin adds it, native detach activates without
+// further daemon code change. detailSubset sets the key only when the raw
+// payload carries it.
+func TestOpenCodeDeriveStatus_PdxStopFailure_AgentIdInDetail(t *testing.T) {
+	r := deriveViaProvider("PdxStopFailure", map[string]any{
+		"agent_id": "opencode-sub-1",
+		"error":    "rate_limit",
+	})
+	if !r.Valid || r.Status != agent.StatusError {
+		t.Fatalf("expected error, got %+v", r)
+	}
+	if r.Detail["agent_id"] != "opencode-sub-1" {
+		t.Fatalf("Detail[agent_id] = %#v, want opencode-sub-1", r.Detail["agent_id"])
+	}
+}
+
+// TestOpenCodeDeriveStatus_PdxStopFailure_AgentIdMissing pins the
+// detailSubset semantics: when raw payload omits agent_id, the key is
+// absent from Detail (not present-with-nil). Handler-side type assertion
+// `Detail["agent_id"].(string)` still yields "" via the zero-value branch
+// so behaviour is identical to cc/codex's nil-key case.
+func TestOpenCodeDeriveStatus_PdxStopFailure_AgentIdMissing(t *testing.T) {
+	r := deriveViaProvider("PdxStopFailure", map[string]any{
+		"error": "rate_limit",
+	})
+	if !r.Valid || r.Status != agent.StatusError {
+		t.Fatalf("expected error, got %+v", r)
+	}
+	if _, present := r.Detail["agent_id"]; present {
+		t.Fatalf("expected Detail[agent_id] absent for missing key (detailSubset omits absent keys), got %#v", r.Detail["agent_id"])
+	}
+}
+
 func TestOpenCodeDeriveStatus_PdxSessionEnd(t *testing.T) {
 	r := deriveViaProvider("PdxSessionEnd", map[string]any{})
 	if !r.Valid || r.Status != agent.StatusClear {
