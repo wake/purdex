@@ -73,7 +73,7 @@ Bash tool input schema:
 { "tool_name": "Bash", "tool_input": { "command": "npm test", "description": "...", "timeout": 120000, "run_in_background": false } }
 ```
 
-`PostToolUseFailure` already in cc events catalog at `internal/agent/cc/events.go:125-131` (Lifecycle: None, Handling: Ignored). This spec re-purposes its raw event stream for unmark — Lifecycle classification stays None.
+`PostToolUseFailure` already in cc events catalog at `internal/agent/cc/events.go:127-133` (Lifecycle: None; Handling defaults to `detail` because `EmitsStatus` is empty — see `EffectiveHookHandling` in `internal/agent/provider.go`). The default `detail` classification is what makes the installer write the hook into `~/.claude/settings.json`, which is required for unmark to fire on Bash failure paths. This spec re-purposes its raw event stream for unmark — Lifecycle classification stays None.
 
 ### 2.2 Daemon already extracts cc raw event in PreToolUse / PostToolUse
 
@@ -104,15 +104,13 @@ Confirmed against plugin v1.0.2 in-scope delegation dispatch sites (the read-onl
 
 ### 2.6 Background Bash lifecycle (background dispatch flows)
 
-`/codex:review --background` and `/codex:adversarial-review --background` invoke Bash with `run_in_background: true` (plugin `commands/review.md:52-58`, `commands/adversarial-review.md:56-63`). Anthropic's hook spec does **not** publicly document whether `PostToolUse` fires:
-- (a) immediately after the background process is **launched** (returns to caller), or
-- (b) when the background process **exits**.
+`/codex:review --background` and `/codex:adversarial-review --background` invoke Bash with `run_in_background: true` (plugin `commands/review.md:52-58`, `commands/adversarial-review.md:56-63`). Anthropic's hook spec does **not** publicly document whether `PostToolUse` fires immediately on launch (lifecycle a) or at process exit (lifecycle b).
 
-Empirically this needs **mlab fixture verification** (test plan §6.3). Spec design accommodates both:
-- If (a): orange dot fires briefly (PreToolUse) then clears (PostToolUse) — visible only as a flicker. The cc-native dot remains blue while subagent awaits the background completion via `BashOutput` polls (which fire as **new tool uses**, not the original one). **Acknowledged limitation L6 — background dispatches may not stay orange for full duration**. Workaround would be tracking `BashOutput` polls keyed to the original `tool_use_id` (out of scope for this spec).
-- If (b): orange dot stays for full background duration — matches AC1/AC2 directly.
+**Verified via 2026-05-03 mlab fixture (post-ship)**: lifecycle **(a) confirmed** — `PostToolUse` fires within ≤1 s of `PreToolUse` regardless of the background process's actual runtime (sleep-8 fixture: PreToolUse 17:12:01 → PostToolUse 17:12:02 → background exit 17:12:09–10).
 
-§4 AC1/AC2 are scoped to **foreground** dispatches; background AC is split into AC1b/AC2b conditional on lifecycle (a)/(b).
+Therefore background dispatches show **only an orange flicker**: PreToolUse marks Delegating=true, PostToolUse clears it almost immediately, and the cc-native dot stays blue for the remainder of the background subprocess (which is observed via `BashOutput` polls firing as **new tool uses**, not the original one). Tracking the full background duration would require keying on the original `tool_use_id` across `BashOutput` polls — **out of scope for this spec**, captured as known limitation **L6**.
+
+§4 AC1/AC2 cover foreground dispatches; AC1b/AC2b are scoped to the confirmed flicker-only background behaviour.
 
 ---
 
@@ -305,9 +303,9 @@ type SubagentRef = {
 | AC | Description |
 |---|---|
 | AC1 | `/codex:rescue` (foreground) inside cc session → cc tab shows orange dot for the duration of the codex-companion Bash call |
-| AC1b | `/codex:rescue --background` → orange dot fires at PreToolUse; behaviour at PostToolUse depends on cc lifecycle semantics (see §2.6 — verified in §6.3 fixture). Either way, no functional regression. |
+| AC1b | `/codex:rescue --background` → orange dot fires at PreToolUse and clears at PostToolUse within ≤1 s (lifecycle a, confirmed §2.6) — visible only as a flicker; no functional regression. |
 | AC2 | `/codex:review` (foreground) and `/codex:adversarial-review` (foreground) show orange the same way |
-| AC2b | `/codex:review --background` and `/codex:adversarial-review --background` follow AC1b semantics |
+| AC2b | `/codex:review --background` and `/codex:adversarial-review --background` follow AC1b flicker semantics |
 | AC3 | `/codex:adversarial-review` running 3 parallel codex jobs (foreground) shows 3 orange dots (one per forwarder subagent), capped at SubagentDots max=3 |
 | AC4 | cc subagent running non-codex Bash (`pnpm build`, `git push`, `pytest`, etc.) shows blue dot — no false orange |
 | AC5 | `PostToolUse(Bash)` for the same `tool_use_id` removes from `DelegatingToolUseIDs`; if list becomes empty, `Delegating=false` → dot returns to blue |
@@ -334,7 +332,7 @@ type SubagentRef = {
 | 6 | cc Task subagent runs 2 parallel codex Bash (T1 first, T2 second), T2 completes first | Orange (still) | B2 fix: list has [T1,T2]; remove T2 leaves [T1]; Delegating still true |
 | 6b | Continue 6: T1 completes | Blue | List empty → Delegating=false |
 | 7 | `/codex:adversarial-review --wait` foreground with 3 parallel forwarder subagents each spawning codex | 3 orange | Each subagent has own agent_id; each ref independently marked |
-| 8 | `/codex:adversarial-review --background` (3 parallel background) | flicker (per AC1b — depends on cc lifecycle) | L6 known limitation |
+| 8 | `/codex:adversarial-review --background` (3 parallel background) | 3 flickers (PreToolUse → PostToolUse within ≤1 s, lifecycle a confirmed) | L6 known limitation |
 | 9 | codex running in a different pane (independent, not via cc) | Unaffected | codex hook events still go to codex frame projection; no mutation on cc |
 | 10 | opencode running anything | Unaffected | `req.AgentType == "cc"` gate |
 | 11 | Native delegating ref + legitimate IsProxy ref on same parent (e.g. user runs codex CLI directly in same pane while a cc subagent also delegates) | 2 orange dots | F5 / AC8: both render orange; SubagentDots renders both as separate dots (cap 3); detach paths independent |
@@ -387,11 +385,7 @@ Table-driven, modeled on `path_hint_extractor_test.go`:
 
 Inject fixture cc PreToolUse(Bash codex command) → daemon round-trip → assert frame.Subagents[i].Delegating == true and tool_use_id in list. Then PostToolUse → assert removed and Delegating=false. Then SubagentStop → assert ref removed.
 
-**Background lifecycle fixture (M1 verification)**: Inject cc PreToolUse(Bash) with `tool_input.run_in_background=true`, then capture the subsequent hook stream. Assert:
-- Whether PostToolUse fires immediately (lifecycle a) or later (lifecycle b).
-- Update L6 limitation wording in spec post-merge based on observed behaviour.
-
-This fixture is **mlab live verification** in §test plan — daemon unit tests use synthetic fixtures of both shapes to keep the implementation neutral.
+**Background lifecycle fixture (M1 verification)**: ✅ verified 2026-05-03 post-ship via mlab live fixture — PreToolUse fires at launch and PostToolUse fires within ≤1 s, regardless of background subprocess runtime (sleep-8 fixture: 17:12:01 → 17:12:02 → background exit 17:12:09–10). cc 1.x uses **lifecycle (a)**. Daemon unit tests retain synthetic fixtures of both shapes for forward compatibility — this keeps the implementation neutral if cc semantics change in a future release.
 
 ### 6.4 SPA — `SubagentDots.test.tsx`
 
@@ -420,7 +414,7 @@ Add four cases:
 | L3 | Codex actually hung (broker dead, codex_worker zombie) but cc Bash still awaits → dot stays orange "forever" until cc's own Bash timeout fires | **This is the desired signal**, not a bug. User sees orange too long → user intervenes. Pairs with cc's built-in Bash subprocess timeout as system-side backstop. |
 | L4 | Manual `codex` CLI invocation outside the companion (e.g. user runs `codex exec` directly in a cc Task subagent's Bash) | Out of scope — `codex-companion.mjs` is the canonical delegation entrypoint; raw CLI invocations are an edge case to revisit only if used in practice. |
 | L5 | (covered by B2 fix) — DelegatingToolUseIDs as slice handles concurrent codex Bash calls correctly regardless of completion order. | Addressed in §3.1, AC5c, regression #6/#6b. |
-| L6 | Background Bash dispatches (`run_in_background: true`) may show only orange flicker if cc fires PostToolUse on launch (not exit). Not yet confirmed which lifecycle cc 1.x uses — see §6.3 fixture verification. | Acceptable: foreground dispatches (the common case) are unaffected. If background flicker proves painful, follow-up issue can extend tracking via `BashOutput` polls keyed to original `tool_use_id`. AC1b/AC2b explicitly conditional on lifecycle. |
+| L6 | Background Bash dispatches (`run_in_background: true`) show only an orange flicker — cc 1.x fires `PostToolUse` within ≤1 s of `PreToolUse` regardless of background subprocess runtime (lifecycle a, confirmed via 2026-05-03 mlab fixture; see §2.6). | Acceptable: foreground dispatches (the common case) are unaffected. If background flicker proves painful, follow-up issue can extend tracking via `BashOutput` polls keyed to original `tool_use_id`. AC1b/AC2b reflect the confirmed flicker semantics. |
 | L7 | M2 race: PreToolUse(Bash codex-companion) arriving before matching SubagentStart establishes the ref → silent no-op, dot stays blue. | Acceptable: rare timing window (cc subagent first action before any tool use is unusual); recovers when subagent ends → dot goes away naturally. Non-recovery is by design. |
 
 ---
