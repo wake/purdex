@@ -967,6 +967,33 @@ func findProxyRefByBroker(refs []agentpkg.SubagentRef, pid int, startTime string
 	return -1
 }
 
+// findNativeRefByID returns the index of the native (non-proxy) SubagentRef
+// with the given ID, or -1 when no such ref exists. Pure read, no side
+// effects.
+//
+// Callers use this to gate destructive native-ref operations (PdxStopFailure
+// → LifecycleSubagentStop) so that a missing or non-matching agent_id is
+// never reported as a successful detach. mutateSubagentsWithRetry's
+// `applied=true` only signals UpsertIfUnchanged committed (LastSeenAt always
+// refreshes) — it does NOT prove a ref was actually removed (spec §2.3).
+// Without this pre-check we would broadcast a phantom "detached" trace step
+// on every mismatched payload.
+//
+// Empty id short-circuits to -1 so the legacy break path fires for payloads
+// whose agent_id field is absent (`raw["agent_id"] == nil` → "" via type
+// assertion at the call site) or explicitly empty.
+func findNativeRefByID(refs []agentpkg.SubagentRef, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i, ref := range refs {
+		if !ref.IsProxy && ref.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
 func syncProjectionState(currentStatus map[string]agentpkg.Status, subagents map[string][]agentpkg.SubagentRef, tmuxSession string, projection *SessionProjection) {
 	if projection == nil || projection.TopFrame == nil {
 		delete(currentStatus, tmuxSession)

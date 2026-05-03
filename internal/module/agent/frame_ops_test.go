@@ -4765,3 +4765,55 @@ func TestMarkDelegatingRef_CapsToolUseIDsAt32(t *testing.T) {
 		t.Fatalf("ref.Delegating = false, want true throughout cap enforcement")
 	}
 }
+
+// findNativeRefByID — pure helper unit tests (P1-T2). Spec §3.2 / §6.1 pin
+// the contract: native ref lookup gates the StopFailure detach branch so a
+// non-matching agent_id never triggers a phantom mutation.
+
+func TestFindNativeRefByID_HitsNativeRef(t *testing.T) {
+	refs := []agentpkg.SubagentRef{
+		{ID: "x", IsProxy: false},
+	}
+	if got := findNativeRefByID(refs, "x"); got != 0 {
+		t.Fatalf("findNativeRefByID = %d, want 0", got)
+	}
+}
+
+func TestFindNativeRefByID_SkipsProxyRefWithSameID(t *testing.T) {
+	// Proxy IDs are constructed `proxy:<type>:<pid>:<startTime>` and never
+	// collide with native cc Task IDs in practice — but the helper must
+	// still skip proxy refs even on a synthetic same-ID match, otherwise
+	// StopFailure could detach a proxy ref masquerading as native.
+	refs := []agentpkg.SubagentRef{
+		{ID: "x", IsProxy: true, SourcePID: 100, SourceStartTime: "Sun Apr 20 01:00:00 2026"},
+	}
+	if got := findNativeRefByID(refs, "x"); got != -1 {
+		t.Fatalf("findNativeRefByID = %d, want -1 (proxy ref must be skipped)", got)
+	}
+}
+
+func TestFindNativeRefByID_EmptyIdReturnsNotFound(t *testing.T) {
+	// Empty agent_id in the StopFailure payload must short-circuit to
+	// the legacy break path; helper returns -1 before any scan so the
+	// caller can rely on a single negative-id sentinel.
+	refs := []agentpkg.SubagentRef{
+		{ID: "x", IsProxy: false},
+	}
+	if got := findNativeRefByID(refs, ""); got != -1 {
+		t.Fatalf("findNativeRefByID(_, \"\") = %d, want -1", got)
+	}
+	// Empty refs + empty id → -1 too.
+	if got := findNativeRefByID(nil, ""); got != -1 {
+		t.Fatalf("findNativeRefByID(nil, \"\") = %d, want -1", got)
+	}
+}
+
+func TestFindNativeRefByID_NotFoundReturnsNegativeOne(t *testing.T) {
+	refs := []agentpkg.SubagentRef{
+		{ID: "y", IsProxy: false},
+		{ID: "z", IsProxy: false},
+	}
+	if got := findNativeRefByID(refs, "x"); got != -1 {
+		t.Fatalf("findNativeRefByID = %d, want -1", got)
+	}
+}
