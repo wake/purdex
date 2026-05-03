@@ -538,6 +538,35 @@ describe('debounce isolation guards', () => {
     }
   })
 
+  it('debounce__subscribe_skips_when_lastEvents_unchanged — Object.keys not called on unrelated state mutation', () => {
+    // The early-exit guard prevents Object.keys(prevState.lastEvents) enumeration
+    // when lastEvents reference is unchanged (common case on every setState).
+    const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: { error: 'rate_limit' } }
+    const lastEvents = { 'host:sess': fakeEvent }
+    useAgentStore.setState({ lastEvents })
+
+    const objectKeysSpy = vi.spyOn(Object, 'keys')
+
+    // Mutate state NOT touching lastEvents — subscription must early-exit, no Object.keys on lastEvents
+    useAgentStore.setState({ unread: { 'host:sess': true } })
+
+    // Object.keys may be called for other reasons; what matters is it was NOT called with lastEvents
+    const calledWithLastEvents = objectKeysSpy.mock.calls.some(
+      ([arg]) => arg === lastEvents,
+    )
+    expect(calledWithLastEvents).toBe(false)
+
+    objectKeysSpy.mockRestore()
+
+    // Confirm purge still fires when lastEvents DOES change (clearSession)
+    shouldNotify(makeErrorParams('host:sess', 'rate_limit'))
+    vi.setSystemTime(1_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(false)
+    useAgentStore.getState().clearSession('host', 'sess')
+    vi.setSystemTime(2_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
   it('debounce__unread_badge_unaffected — unread set even when notification suppressed', () => {
     // First event: sets debounce window
     useAgentStore.getState().handleNormalizedEvent('host', 'sess', {

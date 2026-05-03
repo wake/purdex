@@ -85,6 +85,10 @@ export function __purgeDebounceForHostForTests(hostId: string): void {
 // Subscribe to store changes to clean up debounce state when sessions/hosts are removed.
 // Module-level subscription: registered once at import time, no teardown needed for this pattern.
 useAgentStore.subscribe((state, prevState) => {
+  // Fast-path: skip enumeration entirely when lastEvents reference is unchanged.
+  // Why: handleNormalizedEvent triggers multiple setState calls per event; most don't touch lastEvents.
+  if (state.lastEvents === prevState.lastEvents) return
+
   // Detect removed sessions (lastEvents key disappeared)
   for (const key of Object.keys(prevState.lastEvents)) {
     if (!(key in state.lastEvents)) {
