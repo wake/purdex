@@ -1,7 +1,19 @@
 # Rate-limit subagent cleanup + notification debounce — Implementation Plan
 
-> **Status**：v1（plan 初稿，待 codex round 1 review）
+> **Status**：v2（plan-review round 1 收 3 P1 + 5 P2 + 4 fact + 2 nit；v2 全採納）
 >
+> v1 → v2 修：
+> - **P1.1 §7 test instrumentation**: `counterFrameStore` 設計不可行（`Module.frames` 是 `*store.FramesStore` concrete type，無 interface 可 wrap）。改用 `applyFrameEvent` 回傳的 `FrameTraceMeta.Reason` 直接驗證 — `Misses_NoMutation` assert `Reason ∈ {"parent_frame_found", "daemon_restart_recovery", "no_parent_fallback"}`（generic post-switch path），`Hits` assert `Reason == "native_subagent_detached_on_stop_failure"`. 完全可從單 unit test 驗證、無需 store-level fake.
+> - **P1.2 §4 P3-T2**: `shouldNotify` signature 必須加 `detail` 或 `errorString` 參數（既有 `ShouldNotifyParams` 沒帶 `detail`）。改動表更新含 caller signature 變更.
+> - **P1.3 Phase 2 backup**: `.mode insert <table>` 不可行（無對應表）。改用 `sqlite3 .backup` 整庫備份；補 restore SQL.
+> - P2: P1-T3 拆兩 commit (case-split-only / native-detach-impl) 降 review surface
+> - P2: P3-T1 + P3-T2 合併（key builder + state 沒行為，與 shouldNotify integration 同 commit 較自然）
+> - P2: P3-T2 明說 `eventName` 用 normalized（與 dispatcher 既有 normalize pattern 對齊；`PdxStopFailure` 與 `StopFailure` 共 bucket — acceptable）
+> - P2: §4 Round 2 adversarial 防守 focus 加具體 spec drift gate（PR-A diff 不 touch SPA / PR-B 不 touch daemon）
+> - P2: Phase 2 重寫 restart 行為描述（不靠 in-memory map reload，靠下次 projection 從 DB 投影）
+> - fact 採納（無修改），nit 修正 case count + `seenAtRef` 描述
+
+
 > **依賴 spec**：`docs/specs/2026-05-03-rate-limit-subagent-cleanup-spec.md` v3 + follow-ups（spec round 3 codex review approve to enter plan，2 個非阻塞點已 inline 修正）
 > **Worktree**：`.claude/worktrees/rate-limit-cleanup` / branch `worktree-rate-limit-cleanup`
 > **Base**：`origin/main` @ alpha.289 (`401a785c chore: bump 1.0.0-alpha.289`)
@@ -53,7 +65,7 @@
 - **不污染 `unread`**（spec §4.5）— debounce 只走 `shouldNotify` 的 OS notification path；`useAgentStore.handleNormalizedEvent` 內的 `unread[ck]=true` 路徑零修改
 - **不擋非 error**（spec §4.5）— `shouldNotify` 內 `if (derived === 'error')` gate
 - **Key 對稱**（spec §4.4 / §4.6）— 編碼 `buildDebounceKey([ck, eventName, errorString])` 與解碼 `JSON.parse(rawKey)[0/1/2]` 共用同一 helper / 反向操作；測試 `debounce__key_uses_json_array_not_pipe_join` 鎖定
-- **State 為 module-level 不進 zustand**（spec §4.3）— 模仿既有 `seenAtRef` pattern；test 用 `__resetDebounceStateForTests()` 清狀態
+- **State 為 module-level 不進 zustand**（spec §4.3）— dispatcher-private ephemeral state，無 cross-component subscription、無持久化；test 用 `__resetDebounceStateForTests()` 清狀態
 
 ### 0.4 Subagent 切分
 
@@ -107,34 +119,46 @@
 3. 跑 `go test ./internal/module/agent/... -run TestFindNativeRefByID -v` 全綠
 4. **Commit**: `feat(daemon): add findNativeRefByID pure helper for pre-check ref presence`
 
-### P1-T3 — `applyFrameEvent` 拆 `LifecycleStopFailure` 獨立 case + native detach 邏輯
+### P1-T3a — `applyFrameEvent` 拆 `LifecycleStopFailure` 獨立 case（split-only，零行為改動）
 
-**目標**：spec §3.2 全套。把現行 `case agentpkg.LifecycleStop, agentpkg.LifecycleStopFailure:` 拆成：
-- `case agentpkg.LifecycleStopFailure:` — 新增 `frame != nil` 分支：pre-check + mutate + trace reason `native_subagent_detached_on_stop_failure`；mismatched / no agent_id → break；frame == nil → `fallthrough`
-- `case agentpkg.LifecycleStop:` — 既有 body 完整保留（從原本聯合 case 抄出來）
+**目標**：把現行 `case agentpkg.LifecycleStop, agentpkg.LifecycleStopFailure:` 拆成兩個 case，body 完全相同（從聯合 case 完整複製）。**這 commit 不引入新邏輯**，純結構手術，方便 P1-T3b 在乾淨基礎上加 native detach 邏輯。
 
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `internal/module/agent/frame_ops.go` | line 288 拆 case；新 `LifecycleStopFailure` body ~50 LOC（per spec §3.2 全文）；trace reason 常數 placement: `internal/module/agent/trace.go` 或 `frame_ops.go` 內聯（檢查既有 reason 怎麼放）。原 line 288-424 body 改 placement 到新 `case LifecycleStop:` 下；fallthrough 從 LifecycleStopFailure no-frame branch 進入 |
-| `internal/module/agent/frame_ops_test.go` | + 6 case，per spec §6.1（直接表）：<br>`TestStopFailure_NativeDetach_Hits`<br>`TestStopFailure_NativeDetach_Misses_NoMutation` — 三條 assertion：(a) FrameTraceMeta.Reason ≠ `"native_subagent_detached_on_stop_failure"`; (b) trace pipeline emit legacy `UpdateHookPath` step (透過 spy on `m.frames.UpsertIfUnchanged` call counter — 0 invocation 時等同無 mutate); (c) `frame.Status` post = `error`, `LastSeenAt` 已 refresh<br>`TestStopFailure_NoAgentId_LegacyBehaviour` — payload 缺 `agent_id` field<br>`TestStopFailure_EmptyAgentId_LegacyBehaviour` — payload `agent_id: ""`<br>`TestStopFailure_PreservesProxyRefs` — frame 同時有 native + proxy；只 native 被 detach<br>`TestStopFailure_FrameNil_FallthroughToProxyDetach` — frame==nil，走原 codex turn-aware path<br>`TestStopFailure_FrameDeletedMidFlight` — pre-check pass 但 mutate 回 false (concurrent delete)；trace reason `frame_missing` |
-
-**Test Instrumentation 細節（addresses spec §6.1 codex round-3 P2）**：
-- spy/call-counter 於 `m.frames.UpsertIfUnchanged`：用 fake store wrapping production interface，於 test setup 注入；計 `UpsertIfUnchanged` 被呼叫次數
-- 測試 `Misses_NoMutation` assertion (b) 寫法：`require.Equal(t, 0, fakeStore.UpsertCallCount, "mutateSubagentsWithRetry must not run when ref absent")`
-- 既有 fakes 在 `internal/module/agent/fakes_test.go`，verify call-counter 可加上去；若沒有則 inline test fake
+| `internal/module/agent/frame_ops.go` | line 288 從聯合 case 拆成 `case agentpkg.LifecycleStopFailure:` 與 `case agentpkg.LifecycleStop:` 兩 case，body 各自一份完整副本（duplication 暫時接受 — P1-T3b 馬上會在 StopFailure 分支加新邏輯，並在 frame==nil 走 fallthrough 收回 duplication） |
+| 無 test 改動 | 既有 `frame_ops_l2_test.go` / `handler_test.go` 全套既有 test 做 regression guard |
 
 **TDD 步驟**：
-1. 寫 7 個 test case（全 Red），包含 spy fake 的 call-counter setup
-2. 拆 case 結構（先讓 `case LifecycleStop:` 與 `case LifecycleStopFailure:` 各自編譯通過、body 都 break）
-3. 加 `LifecycleStopFailure` 內的 pre-check + mutate + trace reason 邏輯（Green）
-4. 加 fallthrough（Green）
-5. 跑 `go test ./internal/module/agent/... -run TestStopFailure -v` 全綠
-6. 跑 `go test ./internal/module/agent/... -count=10 -race` race-mode 10 輪確保拆 case 沒引入 race
-7. 跑 `go test ./internal/module/agent/...` 全套確保 `frame_ops_l2_test.go` 既有 L2 test 零 regression（spec AC2）
-8. Lint + vet
-9. **Commit**: `feat(daemon): native subagent detach on PdxStopFailure (closes dthn-class accumulation)`
+1. 拆 case，body 重複
+2. 跑 `go test ./internal/module/agent/...` 全套 — 期望全綠（零行為改動）
+3. 跑 `go test ./internal/module/agent/... -count=10 -race`
+4. Lint + vet
+5. **Commit**: `refactor(daemon): split LifecycleStopFailure case from LifecycleStop (no behaviour change)`
+
+### P1-T3b — `LifecycleStopFailure` 加 native detach 邏輯 + fallthrough
+
+**目標**：spec §3.2 全套。在 P1-T3a 的乾淨基礎上：
+- `case LifecycleStopFailure:` — 新增 `frame != nil` 分支：pre-check + mutate + trace reason `native_subagent_detached_on_stop_failure`；mismatched / no agent_id → break；frame == nil → `fallthrough` 進 `LifecycleStop` body 收回 P1-T3a 的 duplication
+- `case LifecycleStop:` body 不變（已 P1-T3a 拆出）
+
+**改動**：
+
+| 檔案 | 改動 |
+|---|---|
+| `internal/module/agent/frame_ops.go` | `LifecycleStopFailure` body 重寫成 spec §3.2 完整 snippet：(1) `frame != nil` 分支 pre-check via `findNativeRefByID` (Phase P1-T2 已加) (2) 命中 → `mutateSubagentsWithRetry(LifecycleSubagentStop, ref)` → 報 `Decision="updated_frame"` `Reason="native_subagent_detached_on_stop_failure"` 或 `Reason="frame_missing"`（concurrent delete） (3) 不命中 / 缺 / 空 agent_id → `break`（走 generic post-switch） (4) `frame == nil` → `fallthrough` 進 `LifecycleStop` 既有 codex/proxy detach 路徑（P1-T3a 拆出的副本被 fallthrough 收掉）|
+| `internal/module/agent/frame_ops_test.go` | + 6 case，per spec §6.1（直接表）：<br>`TestStopFailure_NativeDetach_Hits` — assert `meta.Reason == "native_subagent_detached_on_stop_failure"` + DB ref 確實被移除<br>`TestStopFailure_NativeDetach_Misses_NoMutation` — assert `meta.Reason ∈ {"parent_frame_found", "daemon_restart_recovery", "no_parent_fallback"}` + DB Status=error / LastSeenAt 已 refresh（per §7 instrumentation）<br>`TestStopFailure_NoAgentId_LegacyBehaviour` — payload 缺 `agent_id` field；同 Misses behaviour<br>`TestStopFailure_EmptyAgentId_LegacyBehaviour` — payload `agent_id: ""`；同 Misses behaviour<br>`TestStopFailure_PreservesProxyRefs` — frame 同時有 native + proxy；只 native 被 detach<br>`TestStopFailure_FrameNil_FallthroughToProxyDetach` — frame==nil，走原 codex turn-aware proxy detach；assert reason `proxy_subagent_detached_on_stop` (or family)<br>`TestStopFailure_FrameDeletedMidFlight` — pre-check pass 但 mutate 回 `applied=false`；trace reason `frame_missing` |
+
+**TDD 步驟**：
+1. 寫 7 個 test case（紅）
+2. 加 native detach 邏輯（綠）
+3. 加 fallthrough，把 P1-T3a 的副本收掉（綠）
+4. 跑 `go test ./internal/module/agent/... -run TestStopFailure -v` 全綠
+5. 跑 `go test ./internal/module/agent/... -count=10 -race` race-mode 10 輪
+6. 跑 `go test ./internal/module/agent/...` 全套確保 `frame_ops_l2_test.go` 既有 L2 test 零 regression（spec AC2）
+7. Lint + vet
+8. **Commit**: `feat(daemon): native subagent detach on PdxStopFailure (closes dthn-class accumulation)`
 
 ### P1-T4 — Fixture replay regression guard
 
@@ -168,7 +192,7 @@
 
 ## 2. Phase 1 → Phase 2 過渡：PR-A merge + dthn 現場 SQL cleanup（operational）
 
-PR-A merge 後依 spec §5 操作序：
+PR-A merge 後依 spec §5 操作序執行。**這不是 plan task**；主 session 在 PR-A merge 後手動執行。後續 Phase 3 PR-B 不依賴 cleanup 結果（PR-B 是 SPA-only）。
 
 ```bash
 # 1. 確認版本
@@ -180,15 +204,12 @@ pgrep -lf 'pdx serve'   # 只有一個 PID
 # 3. 停 daemon
 brew services stop pdx  # 或 kill <pid>
 
-# 4. 備份
+# 4. 整庫備份（PR-A merge 是不可逆 SQL UPDATE 前的最後保障）
 mkdir -p ~/.config/pdx/backups
-sqlite3 ~/.config/pdx/agent_events.db <<'EOF' > ~/.config/pdx/backups/2026-05-03-pre-cleanup.sql
-.headers on
-.mode insert agent_frames_pre_cleanup_backup
-SELECT pane_id, frame_id, agent_type, subagents_json, last_seen_at
-FROM agent_frames
-WHERE json_array_length(subagents_json) > 100;
-EOF
+TS=$(date +%Y-%m-%d-%H%M%S)
+sqlite3 ~/.config/pdx/agent_events.db ".backup '/Users/wake/.config/pdx/backups/agent_events-pre-cleanup-${TS}.db'"
+# Verify backup readable
+sqlite3 ~/.config/pdx/backups/agent_events-pre-cleanup-${TS}.db "SELECT COUNT(*) FROM agent_frames;"
 
 # 5. 檢查影響面
 sqlite3 ~/.config/pdx/agent_events.db "SELECT pane_id, agent_type, json_array_length(subagents_json) AS n_refs FROM agent_frames WHERE json_array_length(subagents_json) > 100 ORDER BY n_refs DESC;"
@@ -201,59 +222,64 @@ WHERE json_array_length(subagents_json) > 100;
 COMMIT;
 EOF
 
-# 7. 啟 daemon
+# 7. 啟 daemon — 注意：daemon restart 不會「預載」in-memory frame state；
+#    下一次 hook event / projection 查詢觸發 m.frames.ListByPane / GetByIdentity
+#    才會從 DB 投影出當前狀態。SPA 透過下一次 hook broadcast 收到清空後的 subagents。
 brew services start pdx
 
 # 8. 觀察 1 個 cc Task cycle 後再次 query 確認沒再累積
+sqlite3 ~/.config/pdx/agent_events.db "SELECT pane_id, json_array_length(subagents_json) FROM agent_frames WHERE json_array_length(subagents_json) > 0;"
 ```
 
-**不是 plan task，主 session 在 PR-A merge 後手動執行**。後續 Phase 3 PR-B 不依賴 cleanup 結果（PR-B 是 SPA-only）。
+**Restore 步驟**（若 cleanup 後出現問題需回滾）：
+
+```bash
+# 停 daemon
+brew services stop pdx
+# 整庫覆蓋（最後備份的時間戳依 step 4 實際輸出）
+cp ~/.config/pdx/backups/agent_events-pre-cleanup-2026-05-03-XXXXXX.db ~/.config/pdx/agent_events.db
+brew services start pdx
+```
+
+**WAL 檔注意**：`.backup` 已含 WAL 內容。restore 後 daemon 啟動會重建 `.db-shm` 與 `.db-wal`，無需手動處理。
 
 ---
 
 ## 3. Phase 3：PR-B SPA notification debounce（Subagent B）
 
-### P3-T1 — `buildDebounceKey` + module-level state Map + `__resetDebounceStateForTests`
+### P3-T1 — `buildDebounceKey` + state Map + `shouldNotify` 整合 sliding debounce（合併原 v1 P3-T1 + P3-T2）
 
-**目標**：spec §4.2 / §4.3 / §4.6。建立 dispatcher-private 狀態管理 + key builder。test reset helper 必要（避免 module-level Map 跨 test 污染）。
+**目標**：spec §4.1 / §4.2 / §4.3 / §4.6。建立 dispatcher-private 狀態 + key builder + sliding gate 整合到 `shouldNotify`。一個 commit — key builder + state 沒有獨立行為，與 shouldNotify integration 同 commit 較自然。
 
-**改動**：
+**Signature change**：既有 `ShouldNotifyParams`（[useNotificationDispatcher.ts:55](spa/src/hooks/useNotificationDispatcher.ts) 確認）**沒有 `detail`**，只有 `notificationSilent`。本 task 必須加新欄位 — 兩選一：
 
-| 檔案 | 改動 |
-|---|---|
-| `spa/src/hooks/useNotificationDispatcher.ts` | +25 LOC：`const ERROR_NOTIFY_WINDOW_MS = 60_000`；`const errorDebounceState = new Map<string, { silentUntil: number }>()`；`function buildDebounceKey(ck, eventName, detailError)` JSON.stringify 三元 array；`export function __resetDebounceStateForTests()`（測試專用 export，名稱以 `__` 前綴 + `ForTests` 後綴標 deliberate test seam）|
-| `spa/src/hooks/useNotificationDispatcher.test.ts` | + `describe('buildDebounceKey')`：4 case — 正常字串 / 含 `\|` 字元 / detailError undefined→empty / detailError null→empty |
+- **選項 A（推薦）**：`ShouldNotifyParams` 加 `errorString?: string`，由 caller (line 113-128) 從 `event.detail?.error` 抽出、normalize 成 string 後傳入。優點：`shouldNotify` 簽章接收 plain string、好 unit test
+- **選項 B**：傳整個 `event.detail`，`shouldNotify` 內 `String(detail?.error ?? '')`。簽章彈性但 caller 邊界較髒
 
-**TDD 步驟**：
-1. 寫 4 個 buildDebounceKey test（Red）
-2. 加 const + helper + reset export（Green）
-3. 跑 `cd spa && npx vitest run --reporter verbose useNotificationDispatcher` 全綠
-4. **Commit**: `feat(spa): debounce key builder + dispatcher state map for error notifications`
+選項 A，理由：與既有 `notificationSilent` boolean 對齊（caller 抽出後傳 plain primitive），測試 setup 簡潔。
 
-### P3-T2 — `shouldNotify` 整合 sliding debounce
-
-**目標**：spec §4.1 / §4.6。在 `shouldNotify` 既有檢查鏈尾端、`return true` 之前加 error-debounce gate。trailing-edge sliding：window 內 silentUntil 持續延長並 return false；window 過則 notify + reset。
+**Event name 用 normalized 還是 raw**：spec 說 `raw_event_name`，但 dispatcher [既有 normalize pattern](spa/src/hooks/useNotificationDispatcher.ts:65) 在 `shouldNotify` 入口先 normalize。**plan v2 決策**：用 normalized，與既有 dispatcher 行為對齊。語意：`PdxStopFailure` 與 legacy `StopFailure`（W2 transition 期間）共 debounce bucket — 可接受，因為這兩個其實是同一事件的兩個命名 phase。
 
 **改動**：
 
 | 檔案 | 改動 |
 |---|---|
-| `spa/src/hooks/useNotificationDispatcher.ts` | +20 LOC：`shouldNotify` 函式體加段（per spec §4.6 整段 snippet）；signature 不變（既有 args 已含 `derived` / `eventName` / `compositeKey` / `detail`）|
-| `spa/src/hooks/useNotificationDispatcher.test.ts` | + per spec §6.2 quantitative cases：<br>`debounce__first_error_passes`<br>`debounce__second_error_within_window_blocked_and_extends` — 用 `vi.useFakeTimers()` + `vi.setSystemTime()` 控時鐘<br>`debounce__error_after_silence_window_passes`<br>`debounce__storm_100_events_yields_one_notification`（AC5 anchor）<br>`debounce__different_keys_independent`（host / session / eventName / errorString 四個維度）<br>`debounce__key_uses_json_array_not_pipe_join`（spec key collision rebuke test）|
+| `spa/src/hooks/useNotificationDispatcher.ts` | ~50 LOC：<br>(1) `const ERROR_NOTIFY_WINDOW_MS = 60_000`<br>(2) `const errorDebounceState = new Map<string, { silentUntil: number }>()`<br>(3) `function buildDebounceKey(ck: string, eventName: string, errorString: string): string { return JSON.stringify([ck, eventName, errorString]) }`<br>(4) `export function __resetDebounceStateForTests()` 清 Map（測試專用 export，`__` + `ForTests` 命名標 deliberate test seam）<br>(5) `ShouldNotifyParams` 加 `errorString?: string`<br>(6) `useNotificationDispatcher` 主體 caller 從 `event.detail?.error` 抽 → `String(... ?? '')` → 傳入 `shouldNotify`<br>(7) `shouldNotify` 函式體加 sliding gate（per spec §4.6 snippet 但用 `errorString` 參數而非 `args.detail?.error`）|
+| `spa/src/hooks/useNotificationDispatcher.test.ts` | + per spec §6.2 全表 quantitative cases：<br>`debounce__first_error_passes`<br>`debounce__second_error_within_window_blocked_and_extends` — `vi.useFakeTimers()` + `vi.setSystemTime()` 控時鐘<br>`debounce__error_after_silence_window_passes`<br>`debounce__storm_100_events_yields_one_notification`（AC5 anchor）<br>`debounce__different_keys_independent`<br>`debounce__key_uses_json_array_not_pipe_join`（spec key collision rebuke test）<br>+ `describe('buildDebounceKey')` 4 sub-case（正常 / 含 `\|` / undefined / null）|
 
 **Test Instrumentation 細節**：
-- `vi.useFakeTimers()` + `vi.setSystemTime(Date.now() + N_ms)` 控制 `Date.now()`，避免實時 60s flake
-- 100-event storm test：迴圈內 `vi.advanceTimersByTime(600)` 模擬 1.67 Hz；assert 只有第一筆 return true
-- key collision test：`compositeKey="a|b"` + `eventName="c"` + `error="d|e"` vs 同 `JSON.stringify` 輸出，assert 不同 keys
+- `vi.useFakeTimers()` + `vi.setSystemTime()`：避實時 60s 等待 / flake
+- 100-event storm test：迴圈內 `vi.advanceTimersByTime(600)` 模擬 1.67 Hz；assert 只第一筆 `shouldNotify` return true
+- key collision test：`ck="a|b"` + `eventName="c"` + `errorString="d|e"` vs `ck="a"` + `eventName="b|c"` + `errorString="d|e"`，assert 不同 JSON output
 
 **TDD 步驟**：
-1. 寫 6 個 sliding debounce test case（Red）
-2. 改 `shouldNotify` 加 gate（Green）
-3. 跑 `cd spa && npx vitest run useNotificationDispatcher` 全綠
-4. 跑 `cd spa && npx vitest run --reporter verbose --testNamePattern="storm_100"` 確認量化 test 通過
+1. 寫 10 個 test case（含 buildDebounceKey 4 sub-case）（Red）
+2. 加 const + helper + reset export + signature change + caller wiring + shouldNotify gate（Green）
+3. 跑 `cd spa && pnpm install && npx vitest run --reporter verbose useNotificationDispatcher` 全綠
+4. 跑 `cd spa && pnpm run lint && pnpm run build` 確保 type 正確（signature change ripple 不破其他 caller）
 5. **Commit**: `feat(spa): trailing-edge sliding debounce for error notifications`
 
-### P3-T3 — Cleanup 兩 path（per-session / TTL）
+### P3-T2 — Cleanup 兩 path（per-session / TTL）
 
 **目標**：spec §4.4。`clearSession` / `removeHost` 觸發時清相關 entries；`shouldNotify` 熱路徑做 TTL self-cleanup（stale entries `silentUntil < now - 5×WINDOW_MS` 移除）。
 
@@ -276,7 +302,7 @@ brew services start pdx
 4. 跑 vitest 全綠
 5. **Commit**: `feat(spa): debounce cleanup on clearSession/removeHost + TTL self-cleanup`
 
-### P3-T4 — Unread badge / waiting / non-error 隔離測試
+### P3-T3 — Unread badge / waiting / non-error 隔離測試
 
 **目標**：spec AC6 / AC7 / §4.5 — debounce **不能** mask `unread` 寫入、不能擋 `waiting`、不能影響 hook broadcast。
 
@@ -292,7 +318,7 @@ brew services start pdx
 3. 跑 vitest
 4. **Commit**: `test(spa): debounce isolation guards (waiting / unread badge)`
 
-### P3-T5 — PR-B push + Round 1 codex review
+### P3-T4 — PR-B push + Round 1 codex review
 
 **步驟**：
 1. 跑全 SPA test sweep：`cd spa && pnpm install && npx vitest run && pnpm run lint && pnpm run build`
@@ -314,9 +340,9 @@ brew services start pdx
 
 **Round 2 三平行 adversarial review**：
 - 觸發：`/codex:adversarial-review --base main --background <focus>` 三次（攻擊/防守/體質）
-- 攻擊 focus：「race condition、null payload、time-based fake timer flake、Map memory leak、cleanup helper 反向 parse 失敗」
-- 防守 focus：「PR-A 有沒有越界做 PR-B 的事；PR-B 有沒有不該 mask 的事；spec §3 / §4 邊界是否守住；既有 invariant（IsProxy / unread boolean / lifecycle / trace pipeline）零修改」
-- 體質 focus：「frame_ops.go 拆 case 後檔案大小、test instrumentation 是否複雜化過頭、SRP、命名一致性」
+- 攻擊 focus：「race condition、null payload、time-based fake timer flake、Map memory leak、cleanup helper 反向 parse 失敗、空 agent_id / 異常 JSON 字符的 buildDebounceKey 行為、StopFailure trigger 與 SubagentStop 同 ID 同時 race 的 idempotency」
+- 防守 focus：「**diff 邊界守住**：PR-A diff 不應 touch `spa/`；PR-B diff 不應 touch `internal/` 或 `cmd/`。**Invariant 守住**：IsProxy attach/detach 路徑零修改、unread boolean 寫入路徑零修改、L2 turn-aware proxy detach 零 regression、`frame_ops_l2_test.go` 既有測試全綠、既有 trace reason 字面零碰撞、`useNotificationDispatcher` 既有 caller signature 改動 ripple 沒破其他元件。**Spec drift 守住**：spec §3 / §4 邊界、Out-of-scope §9 沒被偷渡」
+- 體質 focus：「frame_ops.go 拆 case 後檔案大小、test instrumentation 是否複雜化過頭、SRP、命名一致性、`__resetDebounceStateForTests` 是否暴露過多測試 hook、PR-A 與 PR-B 各自 LOC 是否真的在 spec AC9 cap 內」
 
 **Finding 處理**：依 `feedback_dev_process.md` — 嚴重性信心 / 關聯 / 複雜度三維表；高關聯 + 高信心 + 低複雜聯集全修；低關聯 + 中高複雜延後（gh issue）；只有 trade-off 不確定時停下找 user。
 
@@ -354,30 +380,61 @@ brew services start pdx
 
 ---
 
-## 7. Test Instrumentation Strategy（spec §6.1 codex round-3 P2）
+## 7. Test Instrumentation Strategy（spec §6.1 codex round-3 P2 + plan round-1 P1.1）
 
-**問題**：spec §6.1 `TestStopFailure_NativeDetach_Misses_NoMutation` 的 assertion (a) 「subagents bit-identical」不夠 — miss-ref 走 mutate 也會寫回相同 slice。
+**問題**：spec §6.1 `TestStopFailure_NativeDetach_Misses_NoMutation` 的 assertion 「subagents bit-identical / no-mutate-call」需要可驗證機制。原 v1 草案 `counterFrameStore` fake **不可行** — `internal/module/agent/module.go:31` 是 `frames *store.FramesStore` concrete type，沒有 `store.FrameStore` interface 可包；`fakes_test.go` 也沒有 frame-store fake 可擴展。
 
-**Plan-level decision**：用 **fake frame store with call counter**：
+**Plan v2 decision**：用 **`applyFrameEvent` 回傳的 `FrameTraceMeta.Reason` 行為差異**驗證。spec §3.2 兩 path 自然 emit 不同 trace reason：
+
+| Path | Decision | Reason | Notes |
+|---|---|---|---|
+| `Hits`（agent_id 命中 native ref） | `updated_frame` | `native_subagent_detached_on_stop_failure` | 新增 reason |
+| `Misses_NoMutation`（agent_id 不命中 / 缺 / 空） | `updated_frame` | `parent_frame_found` 或 `daemon_restart_recovery` 或 `no_parent_fallback` | 既有 reason，由 generic post-switch path 在 `frame_ops.go:771-775` 賦值 |
+| `FrameDeletedMidFlight` | `skipped` | `frame_missing` | 既有 reason |
+| `FrameNil_FallthroughToProxyDetach` | depends on proxy detach inner branch | `proxy_subagent_detached_on_stop` 或 `proxy_subagent_stop_no_match` 等 | 既有 reason，零修改 |
+
+**Test pattern**：直接呼叫 `m.applyFrameEvent(req, result, ts)` → 取回傳 `FrameTraceMeta` → assert `Reason` 值。無需 store-level wrap 或 spy；既有 `frame_ops_test.go` 已用這 pattern（多處）。
 
 ```go
-type counterFrameStore struct {
-    inner store.FrameStore
-    UpsertCallCount int
-    GetCallCount    int
+func TestStopFailure_NativeDetach_Misses_NoMutation(t *testing.T) {
+    m, _ := setupTestModule(t)  // existing helper or build inline
+    paneID, frameID := seedCCFrameWithoutNativeRef(t, m, "no-match-id")  // helpers in fakes_test.go pattern
+    req := buildPdxStopFailureRequest(paneID, "different-id")  // agent_id mismatch
+    result := agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: map[string]any{"agent_id": "different-id", "error": "rate_limit"}}
+
+    _, meta, err := m.applyFrameEvent(req, result, time.Now().UnixNano())
+    require.NoError(t, err)
+    // (a) ref-presence pre-check did NOT match → no native detach trace step:
+    require.NotEqual(t, "native_subagent_detached_on_stop_failure", meta.Reason)
+    // (b) generic post-switch path executed (legacy behaviour preserved):
+    require.Equal(t, "updated_frame", meta.Decision)
+    require.Contains(t, []string{"parent_frame_found", "daemon_restart_recovery", "no_parent_fallback"}, meta.Reason)
+    // (c) frame Status now error, LastSeenAt refreshed (verify via DB read):
+    refreshed := getFrameByID(t, m, frameID)
+    require.Equal(t, agent.StatusError, refreshed.Status)
+    require.Greater(t, refreshed.LastSeenAt, /*pre-event timestamp*/)
 }
-func (c *counterFrameStore) UpsertIfUnchanged(f store.Frame, expected int64) (bool, store.Frame, error) {
-    c.UpsertCallCount++
-    return c.inner.UpsertIfUnchanged(f, expected)
-}
-// ... GetByIdentity / ListByPane 透傳 ...
 ```
 
-於 test setup wrap production store；assertion 寫 `require.Equal(t, 0, fakeStore.UpsertCallCount, "no UpsertIfUnchanged call expected when ref absent")`。
+```go
+func TestStopFailure_NativeDetach_Hits(t *testing.T) {
+    m, _ := setupTestModule(t)
+    paneID, frameID := seedCCFrameWithNativeRef(t, m, "match-id")
+    req := buildPdxStopFailureRequest(paneID, "match-id")
+    result := agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: map[string]any{"agent_id": "match-id", "error": "rate_limit"}}
 
-**Placement**：`internal/module/agent/fakes_test.go`（既有 test fakes 集中地）— 加 `counterFrameStore` type，方便其他 test 復用 call counter pattern。
+    _, meta, err := m.applyFrameEvent(req, result, time.Now().UnixNano())
+    require.NoError(t, err)
+    require.Equal(t, "updated_frame", meta.Decision)
+    require.Equal(t, "native_subagent_detached_on_stop_failure", meta.Reason)
+    refreshed := getFrameByID(t, m, frameID)
+    require.Empty(t, refreshed.Subagents)  // ref actually removed
+}
+```
 
-**驗證**：`TestStopFailure_NativeDetach_Misses_NoMutation` 用此 fake；`TestStopFailure_NativeDetach_Hits` 反向用同 fake assert UpsertCallCount > 0（cross-validate fake 本身正確）。
+**Cross-validation**：兩 test reciprocally guarantee — `Hits` 沒 emit 新 reason 時就是 bug 在於 pre-check 過嚴；`Misses` emit 新 reason 時就是 bug 在於 pre-check 沒擋住誤判。Reason mismatch 是直接、確定的失敗信號。
+
+**Placement**：seed helpers (`seedCCFrameWithNativeRef` / `seedCCFrameWithoutNativeRef` / `getFrameByID` / `buildPdxStopFailureRequest`) 視既有 `fakes_test.go` 內容判斷 — 既有 helper 復用優先，缺則加。
 
 ---
 
