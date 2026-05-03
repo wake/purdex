@@ -218,6 +218,36 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	broadcastTs := time.Now().UnixNano()
 
+	// Delegation flag wiring — independent of PathHint extraction. Detect cc
+	// subagent invoking codex-companion via Bash and mark / unmark Delegating
+	// flag on the matching SubagentRef. Spec §3.2 + §3.3. PathHint and
+	// delegation are emitted from the same raw cc PreToolUse / PostToolUse /
+	// PostToolUseFailure event but are extracted independently — neither
+	// depends on the other's dedup state or module fields (delegation does
+	// not need m.core / m.pathHintDedup / m.pathHintBuffer; spec §3.2 / plan
+	// §0.3 F6). This block is therefore a sibling of the PathHint block, not
+	// nested inside its conditional.
+	if req.AgentType == "cc" &&
+		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUse" || req.PurdexName == "PdxPostToolUseFailure") {
+		if hint, ok := ExtractDelegationHint(req.RawEvent, req.PurdexName); ok {
+			if hint.IsCodexMark {
+				if err := m.markDelegatingRef(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, hint.AgentID, hint.ToolUseID, broadcastTs); err != nil {
+					if isDevMode() {
+						log.Printf("[delegation] mark error: %v", err)
+					}
+					// fail-soft: do not abort handler (mirrors PathHint pattern)
+				}
+			} else if hint.IsUnmark {
+				if err := m.unmarkDelegatingRef(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, hint.AgentID, hint.ToolUseID, broadcastTs); err != nil {
+					if isDevMode() {
+						log.Printf("[delegation] unmark error: %v", err)
+					}
+					// fail-soft
+				}
+			}
+		}
+	}
+
 	// Find provider
 	var provider agentpkg.AgentProvider
 	if m.registry != nil {
@@ -310,6 +340,76 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	// Detail-only no-frame-mutation guard for cc PreToolUse / PostToolUseFailure
+	// (round-2 codex three-parallel adversarial review finding #1, PR #829).
+	// These events were upgraded to Valid=true in commit b121eb26 to enable the
+	// Delegating mark/unmark broadcast, but applyFrameEvent's
+	// LifecycleNone+Status="" path falls back to StatusIdle and CREATES a new
+	// frame when none exists (frame_ops.go:530-532, generic post-switch
+	// create-new-frame block). A tool-precursor / tool-failure event must NOT
+	// resurrect a torn-down frame.
+	//
+	// The delegation mutation block above (handler.go:230) is safe on its own:
+	// it goes through GetByIdentity + UpsertIfUnchanged and is a silent no-op
+	// when frame is missing (spec L7). The only remaining risk is the
+	// downstream applyFrameEvent invitation; this short-circuit removes it.
+	//
+	// Behavior:
+	//   - Frame already mutated by delegation block above (when applicable).
+	//   - If frame exists for this session: rebuild projection, broadcast.
+	//   - If frame missing: 200 ok, no broadcast, no mutation. PreToolUse /
+	//     PostToolUseFailure must not resurrect.
+	//
+	// Compared to the LifecycleSubagentStart/Stop short-circuit at
+	// handler.go:410-441, this branch is stricter: it bypasses applyFrameEvent
+	// entirely (the SubagentStart/Stop path still calls applyFrameEvent for the
+	// detail-only Subagents membership update; here there is no Subagents
+	// mutation to perform).
+	if req.AgentType == "cc" &&
+		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUseFailure") {
+		if req.TmuxSession == "" {
+			trace.Finish("completed", "detail_only_no_session")
+			traceFinished = true
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		}
+		projection, perr := m.projectionForSession(req.TmuxSession)
+		if perr != nil {
+			log.Printf("[handler] detail-only projection: %v", perr)
+			trace.Finish("aborted", "projection_failed")
+			traceFinished = true
+			http.Error(w, `{"error":"projection failed"}`, http.StatusInternalServerError)
+			return
+		}
+		if projection == nil || projection.TopFrame == nil {
+			// No frame to broadcast; PreToolUse / PostToolUseFailure must
+			// not resurrect a torn-down frame. The delegation mutation
+			// block above already silent no-op'd (spec L7).
+			trace.Finish("completed", "detail_only_no_frame")
+			traceFinished = true
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		}
+		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
+		emitDecision, emitReason := m.emitHookToSession(req, normalized)
+		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
+		if isDevMode() {
+			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s detail_only=true",
+				req.TmuxSession, m.hasSubscribers(), emitDecision, emitReason, normalized.RawEventName, trace.ChainID())
+		}
+		if emitDecision == "broadcasted" {
+			trace.Finish("completed", "detail_only_broadcasted")
+		} else {
+			trace.Finish("completed", "detail_only_emit_skipped")
+		}
+		traceFinished = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		return
 	}
 
 	paneProjection, frameMeta, err := m.applyFrameEvent(req, result, broadcastTs)

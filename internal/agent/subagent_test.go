@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -34,7 +35,7 @@ func TestSubagentRef_JSONRoundTripFull(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got != ref {
+	if !reflect.DeepEqual(got, ref) {
 		t.Errorf("round trip mismatch: got %+v, want %+v", got, ref)
 	}
 }
@@ -83,7 +84,7 @@ func TestSubagentRef_JSONRoundTrip_SourceTurnID(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got != ref {
+	if !reflect.DeepEqual(got, ref) {
 		t.Errorf("round trip mismatch: got %+v, want %+v", got, ref)
 	}
 
@@ -112,6 +113,60 @@ func TestSubagentRef_JSONRoundTrip_SourceTurnID(t *testing.T) {
 	}
 }
 
+// TestSubagentRef_DelegatingFields_OmitemptyJSON is the Phase 1 P1-T1 contract
+// test for the cc-native delegation flag (spec §3.1 / §3.5). Both
+// Delegating and DelegatingToolUseIDs ride the omitempty wire pattern so
+// existing subagents_json blobs deserialize cleanly (no DB migration). When
+// either is set, the keys must appear in the marshaled output.
+func TestSubagentRef_DelegatingFields_OmitemptyJSON(t *testing.T) {
+	// Case (a): zero-value Delegating fields → keys omitted.
+	zero := SubagentRef{
+		ID:        "a",
+		Type:      "cc",
+		StartedAt: 1,
+	}
+	data, err := json.Marshal(zero)
+	if err != nil {
+		t.Fatalf("Marshal zero: %v", err)
+	}
+	s := string(data)
+	if strings.Contains(s, "delegating") {
+		t.Errorf("delegating-related keys must be omitted on zero value, got: %s", s)
+	}
+
+	// Case (b): set Delegating=true + populated tool_use_ids → keys present.
+	marked := SubagentRef{
+		ID:                   "a",
+		Type:                 "cc",
+		StartedAt:            1,
+		Delegating:           true,
+		DelegatingToolUseIDs: []string{"toolUseA"},
+	}
+	data2, err := json.Marshal(marked)
+	if err != nil {
+		t.Fatalf("Marshal marked: %v", err)
+	}
+	s2 := string(data2)
+	if !strings.Contains(s2, `"delegating":true`) {
+		t.Errorf("missing delegating:true: %s", s2)
+	}
+	if !strings.Contains(s2, `"delegating_tool_use_ids":["toolUseA"]`) {
+		t.Errorf("missing delegating_tool_use_ids array: %s", s2)
+	}
+
+	// Round-trip preserves the slice.
+	var got SubagentRef
+	if err := json.Unmarshal(data2, &got); err != nil {
+		t.Fatalf("Unmarshal marked: %v", err)
+	}
+	if !got.Delegating {
+		t.Errorf("expected Delegating=true after round-trip, got false")
+	}
+	if len(got.DelegatingToolUseIDs) != 1 || got.DelegatingToolUseIDs[0] != "toolUseA" {
+		t.Errorf("DelegatingToolUseIDs round-trip mismatch: %+v", got.DelegatingToolUseIDs)
+	}
+}
+
 func TestSubagentRef_NativeZeroSourceFieldsValid(t *testing.T) {
 	ref := SubagentRef{
 		ID:        "a",
@@ -134,7 +189,7 @@ func TestSubagentRef_NativeZeroSourceFieldsValid(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got != ref {
+	if !reflect.DeepEqual(got, ref) {
 		t.Errorf("round trip mismatch: got %+v, want %+v", got, ref)
 	}
 }

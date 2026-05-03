@@ -13,11 +13,16 @@ interface Props {
 // codex shelling out to cc and triggering cc's own SubagentStart hook) versus
 // a native sub-task spawned inside the agent's own tool loop. Type family is
 // already conveyed by the agent icon in the parent indicator.
+//
+// Delegating: cc native subagent inferred to be invoking codex-companion
+// via Bash sniff (spec §3.6); orthogonal to is_proxy and rendered with
+// the same orange via OR composition. Both signals indicate "agent is
+// awaiting downstream"; they coexist without interference.
 const NATIVE_COLOR = '#60a5fa'  // blue
 const PROXY_COLOR = '#f97316'   // orange
 
 const dotStyle = (ref: SubagentRef): CSSProperties => ({
-  backgroundColor: ref.is_proxy ? PROXY_COLOR : NATIVE_COLOR,
+  backgroundColor: (ref.is_proxy || ref.delegating) ? PROXY_COLOR : NATIVE_COLOR,
 })
 
 const DOT_SIZES: Record<number, number> = { 1: 4, 2: 3.5, 3: 3 }
@@ -53,6 +58,7 @@ export function SubagentDots({ refs, left: leftOverride }: Props) {
             data-testid="subagent-dot"
             data-subagent-type={ref.type}
             data-is-proxy={ref.is_proxy ? 'true' : 'false'}
+            data-delegating={ref.delegating ? 'true' : 'false'}
             className="absolute rounded-full animate-breathe"
             style={{
               width: dotSize,

@@ -20,7 +20,9 @@ var expectedCCInstallableEventNames = []string{
 	"PdxNotification",
 	"PdxPermissionRequest",
 	"PdxSessionEnd",
+	"PdxPreToolUse",
 	"PdxPostToolUse",
+	"PdxPostToolUseFailure",
 }
 
 // expectedCCEventNames lists the upstream event-name keys that cc's installer
@@ -38,7 +40,9 @@ var expectedCCEventNames = []string{
 	"Notification",
 	"PermissionRequest",
 	"SessionEnd",
+	"PreToolUse",
 	"PostToolUse",
+	"PostToolUseFailure",
 }
 
 // expectedCCCatalogHandling is pinned to the Claude Code hooks reference,
@@ -49,11 +53,11 @@ var expectedCCCatalogHandling = map[string]agent.HookHandling{
 	"PdxSessionStart":        agent.HookHandlingStatus,
 	"PdxUserPromptSubmit":    agent.HookHandlingStatus,
 	"PdxUserPromptExpansion": agent.HookHandlingUnsupported,
-	"PdxPreToolUse":          agent.HookHandlingUnsupported,
+	"PdxPreToolUse":          agent.HookHandlingDetail,
 	"PdxPermissionRequest":   agent.HookHandlingStatus,
 	"PdxPermissionDenied":    agent.HookHandlingIgnored,
 	"PdxPostToolUse":         agent.HookHandlingStatus,
-	"PdxPostToolUseFailure":  agent.HookHandlingIgnored,
+	"PdxPostToolUseFailure":  agent.HookHandlingDetail,
 	"PdxPostToolBatch":       agent.HookHandlingUnsupported,
 	"PdxNotification":        agent.HookHandlingStatus,
 	"PdxSubagentStart":       agent.HookHandlingDetail,
@@ -189,13 +193,19 @@ func TestCCEvents_EmitsStatusForNotification(t *testing.T) {
 }
 
 // TestCCEvents_DetailOnlyHaveEmptyEmitsStatus enforces detail-only events
-// (SubagentStart/Stop) declare EmitsStatus as an empty slice — not nil — so
-// drift tooling and Inspector UI can distinguish "explicitly empty" from
-// "unknown".
+// (SubagentStart/Stop, PreToolUse, PostToolUseFailure) declare EmitsStatus as
+// an empty slice — not nil — so drift tooling and Inspector UI can
+// distinguish "explicitly empty" from "unknown".
 func TestCCEvents_DetailOnlyHaveEmptyEmitsStatus(t *testing.T) {
 	p := NewProvider(nil, nil, nil, nil)
+	detailOnlyNames := map[string]bool{
+		"PdxSubagentStart":      true,
+		"PdxSubagentStop":       true,
+		"PdxPreToolUse":         true,
+		"PdxPostToolUseFailure": true,
+	}
 	for _, e := range p.Events() {
-		if e.PurdexName != "PdxSubagentStart" && e.PurdexName != "PdxSubagentStop" {
+		if !detailOnlyNames[e.PurdexName] {
 			continue
 		}
 		if e.EmitsStatus == nil {
@@ -203,6 +213,34 @@ func TestCCEvents_DetailOnlyHaveEmptyEmitsStatus(t *testing.T) {
 		}
 		if len(e.EmitsStatus) != 0 {
 			t.Errorf("cc %s EmitsStatus = %v, want empty", e.PurdexName, e.EmitsStatus)
+		}
+	}
+}
+
+// TestCCEvents_DelegationHooksInstallable pins the round-1 codex re-review P1
+// fix: cc must install PreToolUse + PostToolUseFailure hooks so the
+// delegation flag wiring (PR #829, issue #821) actually receives events on
+// fresh installs. Removing Handling: HookHandlingUnsupported/Ignored makes
+// EffectiveHookHandling fall back to HookHandlingDetail (since EmitsStatus
+// is empty), which makes IsInstallableHookSpec return true and lets
+// mergeClaudeHooks write both keys into ~/.claude/settings.json.
+func TestCCEvents_DelegationHooksInstallable(t *testing.T) {
+	p := NewProvider(nil, nil, nil, nil)
+	required := map[string]bool{
+		"PdxPreToolUse":         false,
+		"PdxPostToolUseFailure": false,
+	}
+	for _, e := range p.Events() {
+		if _, ok := required[e.PurdexName]; ok {
+			if !agent.IsInstallableHookSpec(e) {
+				t.Errorf("cc %s must be installable for delegation flag wiring (PR #829)", e.PurdexName)
+			}
+			required[e.PurdexName] = true
+		}
+	}
+	for name, found := range required {
+		if !found {
+			t.Errorf("cc catalog missing %s entry", name)
 		}
 	}
 }
@@ -262,10 +300,10 @@ var expectedCCPreservedMetadata = map[string]ccLegacyMetadata{
 	"PdxPermissionRequest":   {[]agent.Status{agent.StatusWaiting}, "Tool permission request awaiting user approval", false, ""},
 	"PdxSessionEnd":          {[]agent.Status{agent.StatusClear}, "Claude Code session ended", false, ""},
 	"PdxUserPromptExpansion": {[]agent.Status{}, "User command expanded before model processing", false, agent.HookHandlingUnsupported},
-	"PdxPreToolUse":          {[]agent.Status{}, "Tool call about to execute", false, agent.HookHandlingUnsupported},
+	"PdxPreToolUse":          {[]agent.Status{}, "Tool call about to execute", false, ""},
 	"PdxPermissionDenied":    {[]agent.Status{}, "Tool permission denied by auto mode classifier", false, agent.HookHandlingIgnored},
 	"PdxPostToolUse":         {[]agent.Status{agent.StatusRunning}, "Tool call completed successfully (signals running after permission grant)", false, ""},
-	"PdxPostToolUseFailure":  {[]agent.Status{}, "Tool call failed", false, agent.HookHandlingIgnored},
+	"PdxPostToolUseFailure":  {[]agent.Status{}, "Tool call failed", false, ""},
 	"PdxPostToolBatch":       {[]agent.Status{}, "Parallel tool call batch resolved", false, agent.HookHandlingUnsupported},
 	"PdxTaskCreated":         {[]agent.Status{}, "Task was created", false, agent.HookHandlingIgnored},
 	"PdxTaskCompleted":       {[]agent.Status{}, "Task was completed", false, agent.HookHandlingIgnored},

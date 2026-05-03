@@ -2549,3 +2549,618 @@ func TestHandleEvent_PreToolUse_NoParent_NoBroadcast(t *testing.T) {
 		t.Fatalf("currentStatus[\"work\"] = %q, want unset (no broadcast path should run)", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 P3-T1 — Delegation flag end-to-end via handler
+// (spec §3.2 / §6.3 / plan §3 P3-T1)
+//
+// These tests exercise the full handler.go wiring of ExtractDelegationHint +
+// markDelegatingRef / unmarkDelegatingRef. Each test seeds a cc frame via
+// PdxSessionStart + PdxSubagentStart (with a fake provider that emits the
+// agent_id) so that markDelegatingRef can locate the matching SubagentRef.
+// ---------------------------------------------------------------------------
+
+// delegationModule constructs a Module wired for cc Bash delegation tests:
+// fake tmux + sessions + core, plus a fake cc provider that emits agent_id
+// on PdxSubagentStart. After this helper a SessionStart + SubagentStart pair
+// can be injected to materialise the SubagentRef.
+func delegationModule(t *testing.T) *Module {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, raw json.RawMessage) agentpkg.DeriveResult {
+			switch event {
+			case "PdxSessionStart":
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			case "PdxSubagentStart":
+				// Pass through agent_id from raw event payload — handler turns
+				// this into the cc native SubagentRef on the frame.
+				var payload struct {
+					AgentID string `json:"agent_id"`
+				}
+				_ = json.Unmarshal(raw, &payload)
+				if payload.AgentID == "" {
+					payload.AgentID = "agent-X"
+				}
+				return agentpkg.DeriveResult{Valid: true, Detail: map[string]any{"agent_id": payload.AgentID}}
+			default:
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			}
+		},
+	})
+	return m
+}
+
+// seedCCFrameWithSubagent fires SessionStart + SubagentStart to create a cc
+// frame in pane %5 with one native SubagentRef whose ID == agentID. Returns
+// after the frame is observable via ListByPane.
+func seedCCFrameWithSubagent(t *testing.T, m *Module, agentID string) {
+	t.Helper()
+	bodies := []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{"agent_id":"` + agentID + `"},"agent_type":"cc"}`,
+	}
+	for _, body := range bodies {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("seed body %q: status = %d (body=%s)", body, w.Code, w.Body.String())
+		}
+	}
+}
+
+// findCCFrame returns the (only) cc frame on pane %5; fatals if missing.
+func findCCFrame(t *testing.T, m *Module) []agentpkg.SubagentRef {
+	t.Helper()
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1 (delegation tests rely on a single seeded frame)", len(frames))
+	}
+	return frames[0].Subagents
+}
+
+// findRefByID linear-scans subagents; fatals when not found.
+func findRefByID(t *testing.T, refs []agentpkg.SubagentRef, agentID string) agentpkg.SubagentRef {
+	t.Helper()
+	for _, r := range refs {
+		if r.ID == agentID {
+			return r
+		}
+	}
+	t.Fatalf("no SubagentRef with ID=%q in %+v", agentID, refs)
+	return agentpkg.SubagentRef{}
+}
+
+// containsString helper for slice membership checks in delegation tests.
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+const codexCompanionBashCommand = `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task --background "review main"`
+
+// preToolUseBody emits a cc PdxPreToolUse event for pane %5 with the given
+// command + agent_id + tool_use_id. Set agentType to "" to default to "cc".
+func preToolUseBody(agentType, command, agentID, toolUseID string) string {
+	if agentType == "" {
+		agentType = "cc"
+	}
+	raw := map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "Bash",
+		"tool_input": map[string]any{
+			"command":     command,
+			"description": "test",
+		},
+		"tool_use_id": toolUseID,
+		"agent_id":    agentID,
+		"agent_type":  "general-purpose",
+	}
+	rawJSON, _ := json.Marshal(raw)
+	return `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxPreToolUse","raw_event":` + string(rawJSON) + `,"agent_type":"` + agentType + `"}`
+}
+
+// postToolUseBody emits PdxPostToolUse (or PdxPostToolUseFailure when failure
+// is true) for pane %5 with the given tool_use_id + agent_id. tool_input is
+// omitted — Post events do not carry the command.
+func postToolUseBody(failure bool, agentID, toolUseID string) string {
+	purdex := "PdxPostToolUse"
+	if failure {
+		purdex = "PdxPostToolUseFailure"
+	}
+	raw := map[string]any{
+		"hook_event_name": "PostToolUse",
+		"tool_name":       "Bash",
+		"tool_response":   map[string]any{"stdout": "", "stderr": "", "exit_code": 0},
+		"tool_use_id":     toolUseID,
+		"agent_id":        agentID,
+		"agent_type":      "general-purpose",
+	}
+	rawJSON, _ := json.Marshal(raw)
+	return `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"` + purdex + `","raw_event":` + string(rawJSON) + `,"agent_type":"cc"}`
+}
+
+func sendBody(t *testing.T, m *Module, body string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+// 1. PreToolUse Bash with codex-companion command marks Delegating=true.
+func TestHandleEvent_CCPreToolUseBashCodexCompanion_MarksDelegating(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !ref.Delegating {
+		t.Fatalf("Delegating = false, want true (ref=%+v)", ref)
+	}
+	if !containsString(ref.DelegatingToolUseIDs, "tool-use-T1") {
+		t.Fatalf("DelegatingToolUseIDs = %v, want it to contain tool-use-T1", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 2. PostToolUse after a mark removes the tool_use_id and clears Delegating.
+func TestHandleEvent_CCPostToolUseBashAfterMark_UnmarksDelegating(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+
+	// Pin Red visibility: confirm the mark step took effect before unmarking,
+	// otherwise this test would silently pass with no wiring at all.
+	preRef := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !preRef.Delegating || !containsString(preRef.DelegatingToolUseIDs, "tool-use-T1") {
+		t.Fatalf("pre-unmark precondition failed: ref=%+v (mark step did not run)", preRef)
+	}
+
+	sendBody(t, m, postToolUseBody(false, "agent-X", "tool-use-T1"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false after unmark (ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 3. PostToolUseFailure after a mark also unmarks (B3 path).
+func TestHandleEvent_CCPostToolUseFailureBashAfterMark_UnmarksDelegating(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+
+	// Pin Red visibility: confirm the mark step took effect (B3 unmark path
+	// only runs through PostToolUseFailure when wiring covers all three event
+	// names).
+	preRef := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !preRef.Delegating || !containsString(preRef.DelegatingToolUseIDs, "tool-use-T1") {
+		t.Fatalf("pre-unmark precondition failed: ref=%+v (mark step did not run)", preRef)
+	}
+
+	sendBody(t, m, postToolUseBody(true, "agent-X", "tool-use-T1"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false after PostToolUseFailure unmark (ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 4. PreToolUse Bash with a non-codex command does NOT mark.
+func TestHandleEvent_CCPreToolUseBashNonCodex_NoMark(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+
+	sendBody(t, m, preToolUseBody("cc", "pnpm build", "agent-X", "tool-use-Tnoop"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false (non-codex Bash should not mark; ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 5. Top-level cc PreToolUse (agent_id=="") never marks — extractor rejects.
+func TestHandleEvent_CCPreToolUseBashTopLevelNoAgentID_NoMark(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "", "tool-use-Ttop"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false (top-level cc has no agent_id; ref=%+v)", ref)
+	}
+}
+
+// 6. Concurrent two codex-companion Bash invocations (B2 verification): both
+// tool_use_ids accumulate; unmarking one leaves the other; unmarking the
+// second clears Delegating.
+func TestHandleEvent_CCPreToolUseConcurrentTwoCodexBash_BothTracked(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-A"))
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-B"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !ref.Delegating {
+		t.Fatalf("Delegating = false, want true with two outstanding tool_use_ids (ref=%+v)", ref)
+	}
+	if !containsString(ref.DelegatingToolUseIDs, "tool-use-A") || !containsString(ref.DelegatingToolUseIDs, "tool-use-B") {
+		t.Fatalf("DelegatingToolUseIDs = %v, want both tool-use-A and tool-use-B", ref.DelegatingToolUseIDs)
+	}
+
+	// Unmark A — Delegating still true with B remaining.
+	sendBody(t, m, postToolUseBody(false, "agent-X", "tool-use-A"))
+	ref = findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !ref.Delegating {
+		t.Fatalf("Delegating = false after unmarking A, want true (B still active); ref=%+v", ref)
+	}
+	if containsString(ref.DelegatingToolUseIDs, "tool-use-A") {
+		t.Fatalf("DelegatingToolUseIDs still contains tool-use-A after unmark: %v", ref.DelegatingToolUseIDs)
+	}
+	if !containsString(ref.DelegatingToolUseIDs, "tool-use-B") {
+		t.Fatalf("DelegatingToolUseIDs missing tool-use-B: %v", ref.DelegatingToolUseIDs)
+	}
+
+	// Unmark B — Delegating clears.
+	sendBody(t, m, postToolUseBody(false, "agent-X", "tool-use-B"))
+	ref = findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true after both unmarks, want false (ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty after both unmarks", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 7. F4 / AC10 — codex agent_type PreToolUse Bash with codex-companion
+// command must NOT touch the cc frame's Delegating flag. Handler-level gate
+// `req.AgentType == "cc"` is the wall.
+func TestHandleEvent_CodexAgentTypePreToolUseBashCodexCompanion_NoMark(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+	// codex provider must exist or handleEvent rejects the agent_type lookup.
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "codex",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true} },
+	})
+
+	sendBody(t, m, preToolUseBody("codex", codexCompanionBashCommand, "agent-X", "tool-use-Tcodex"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false (codex agent_type must not flow through delegation wiring; ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty (codex agent_type must not mark)", ref.DelegatingToolUseIDs)
+	}
+}
+
+// 8. F4 / AC10 — opencode agent_type PreToolUse Bash with codex-companion
+// command must NOT touch the cc frame's Delegating flag.
+func TestHandleEvent_OpencodeAgentTypePreToolUseBashCodexCompanion_NoMark(t *testing.T) {
+	m := delegationModule(t)
+	seedCCFrameWithSubagent(t, m, "agent-X")
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "opencode",
+		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true} },
+	})
+
+	sendBody(t, m, preToolUseBody("opencode", codexCompanionBashCommand, "agent-X", "tool-use-Topencode"))
+
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true, want false (opencode agent_type must not flow through delegation wiring; ref=%+v)", ref)
+	}
+	if len(ref.DelegatingToolUseIDs) != 0 {
+		t.Fatalf("DelegatingToolUseIDs = %v, want empty (opencode agent_type must not mark)", ref.DelegatingToolUseIDs)
+	}
+}
+
+// delegationModuleWithRealCCProvider mirrors delegationModule but registers the
+// production cc.Provider rather than fakeAgentProvider. This pins the round-1
+// codex review fix: production deriveCCStatus must classify PdxPreToolUse and
+// PdxPostToolUseFailure as Valid=true (detail-only) so handler.go reaches
+// projectionForSession + emitHookToSession (broadcast). The fake provider used
+// by P3-T1's eight cases always returns Valid=true and therefore masked the
+// catalog gap.
+func delegationModuleWithRealCCProvider(t *testing.T) *Module {
+	t.Helper()
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	return m
+}
+
+// seedCCFrameWithSubagentReal seeds a cc frame on pane %5 with one
+// SubagentRef. Uses the production-provider module variant so the seed events
+// (SessionStart, SubagentStart) flow through the real deriveCCStatus catalog.
+func seedCCFrameWithSubagentReal(t *testing.T, m *Module, agentID string) {
+	t.Helper()
+	bodies := []string{
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{"source":"startup"},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSubagentStart","raw_event":{"agent_id":"` + agentID + `"},"agent_type":"cc"}`,
+	}
+	for _, body := range bodies {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		m.handleEvent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("seed body %q: status = %d (body=%s)", body, w.Code, w.Body.String())
+		}
+	}
+}
+
+// TestHandleEvent_CCPreToolUseBashCodexCompanion_BroadcastsViaProductionDeriveStatus
+// pins the round-1 codex review finding: before the deriveCCStatus fix, the
+// production cc provider returned Valid=false on PdxPreToolUse so handler.go
+// hit the invalid-skip return at line ~287 — the delegation flag mark would
+// mutate the frame DB but never broadcast. The SPA therefore never saw the
+// orange dot. This test uses the real cc.NewProvider so the catalog gap is
+// regression-locked, and asserts a broadcast actually fires after the mark.
+func TestHandleEvent_CCPreToolUseBashCodexCompanion_BroadcastsViaProductionDeriveStatus(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+
+	// Subscribe AFTER seed so seed broadcasts don't leak into the mark drain.
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+
+	// 1. DB-level: mark took effect (mirrors the existing P3-T1 assertion).
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !ref.Delegating {
+		t.Fatalf("Delegating = false, want true after PreToolUse codex-companion (ref=%+v)", ref)
+	}
+
+	// 2. Broadcast-level: the production deriveCCStatus catalog gap previously
+	// returned Valid=false here, so handler hit invalid-skip and never reached
+	// emitHookToSession. After the fix the mark must broadcast so the SPA can
+	// render the orange dot. drainBroadcasts only returns "hook" envelopes.
+	msgs := drainBroadcasts(sub, 200*time.Millisecond)
+	if len(msgs) == 0 {
+		t.Fatal("no hook broadcast after PreToolUse mark — production cc provider returned Valid=false and handler took the invalid-skip return path (round-1 codex finding)")
+	}
+}
+
+// TestHandleEvent_CCPostToolUseFailureBashAfterMark_BroadcastsViaProductionDeriveStatus
+// is the sister regression test for the unmark broadcast path. Without the
+// status.go fix, PostToolUseFailure was Valid=false in production so the
+// unmark would clear the DB flag silently — the SPA would stay orange after
+// the codex-companion call failed.
+func TestHandleEvent_CCPostToolUseFailureBashAfterMark_BroadcastsViaProductionDeriveStatus(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+
+	// Mark first (this exercises the PreToolUse broadcast path too).
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-T1"))
+	preRef := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if !preRef.Delegating {
+		t.Fatalf("pre-unmark precondition failed: ref=%+v", preRef)
+	}
+
+	// Subscribe AFTER mark so the drain only sees the unmark broadcast.
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, postToolUseBody(true, "agent-X", "tool-use-T1"))
+
+	// 1. DB-level: unmark took effect.
+	ref := findRefByID(t, findCCFrame(t, m), "agent-X")
+	if ref.Delegating {
+		t.Fatalf("Delegating = true after PostToolUseFailure unmark, want false (ref=%+v)", ref)
+	}
+
+	// 2. Broadcast-level: the unmark must surface to the SPA so the orange dot
+	// clears. Pre-fix, PostToolUseFailure was Valid=false → invalid-skip → no
+	// broadcast → SPA stuck orange.
+	msgs := drainBroadcasts(sub, 200*time.Millisecond)
+	if len(msgs) == 0 {
+		t.Fatal("no hook broadcast after PostToolUseFailure unmark — production cc provider returned Valid=false and handler took the invalid-skip return path (round-1 codex finding)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Round-2 codex three-parallel adversarial review finding #1 (PR #829):
+// detail-only PreToolUse / PostToolUseFailure must NOT trigger frame mutation
+// or resurrect torn-down frames. Commit b121eb26 upgraded these events to
+// Valid=true so the Delegating broadcast can fire, but applyFrameEvent's
+// LifecycleNone+Status="" path falls back to StatusIdle and creates a new
+// frame when none exists. The detail-only short-circuit branch in handler.go
+// (between error guard and applyFrameEvent) closes that hole.
+//
+// These tests use the real cc.Provider (delegationModuleWithRealCCProvider)
+// so the production catalog gap is regression-locked end-to-end.
+// ---------------------------------------------------------------------------
+
+// findCCFrameRow returns the (only) cc store.Frame row on pane %5; fatals if
+// missing. Mirrors findCCFrame but exposes the full Frame struct so tests can
+// observe LastSeenAt and other top-level fields, not just Subagents.
+func findCCFrameRow(t *testing.T, m *Module) store.Frame {
+	t.Helper()
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	return frames[0]
+}
+
+// nonCodexBashCommand is a Bash command that delegation_extractor will reject
+// (no codex-companion path). Used by the detail-only no-mutation tests to
+// drive the handler through PreToolUse / PostToolUseFailure WITHOUT firing
+// markDelegatingRef / unmarkDelegatingRef — proving any LastSeenAt change
+// must have come from applyFrameEvent's LifecycleNone fallback path (the
+// resurrection / mutation behavior the short-circuit closes).
+const nonCodexBashCommand = `pnpm build`
+
+// 1. Detail-only PreToolUse with NO existing frame must not resurrect.
+func TestHandleEvent_CCPreToolUseDetailOnly_DoesNotCreateFrameWhenMissing(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	// NO seed — pane %5 has no frame.
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-Tghost"))
+
+	// 1. Frame store must remain empty — PreToolUse must not resurrect.
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 (PreToolUse must not create / resurrect frames; frames=%+v)", len(frames), frames)
+	}
+
+	// 2. No broadcast — no frame to project from.
+	msgs := drainBroadcasts(sub, 100*time.Millisecond)
+	if len(msgs) != 0 {
+		t.Fatalf("got %d broadcasts, want 0 (no frame, no projection, no broadcast); msgs=%+v", len(msgs), msgs)
+	}
+}
+
+// 2. Detail-only PreToolUse with existing frame must broadcast WITHOUT
+// running applyFrameEvent. We send a non-codex Bash command so the
+// delegation block also skips, isolating the test to the new short-circuit
+// branch: any LastSeenAt change would have to come from applyFrameEvent's
+// LifecycleNone fallback (which the short-circuit must skip).
+func TestHandleEvent_CCPreToolUseDetailOnly_NoMutationWhenFrameExists(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+
+	beforeFrame := findCCFrameRow(t, m)
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, preToolUseBody("cc", nonCodexBashCommand, "agent-X", "tool-use-Tnoop"))
+
+	afterFrame := findCCFrameRow(t, m)
+
+	// 1. Frame still exists (broadcast surfaces existing-frame projection).
+	if afterFrame.FrameID != beforeFrame.FrameID {
+		t.Fatalf("FrameID changed: before=%s after=%s (frame must not be replaced)", beforeFrame.FrameID, afterFrame.FrameID)
+	}
+
+	// 2. No applyFrameEvent mutation: LastSeenAt unchanged. The delegation
+	// block was skipped (non-codex command, ExtractDelegationHint returns
+	// ok=false) so the only path that could touch LastSeenAt is
+	// applyFrameEvent's UpdateHookPath narrow-column update — exactly what
+	// the new short-circuit must prevent.
+	if afterFrame.LastSeenAt != beforeFrame.LastSeenAt {
+		t.Fatalf("LastSeenAt changed: before=%d after=%d (applyFrameEvent must not run on detail-only PreToolUse)", beforeFrame.LastSeenAt, afterFrame.LastSeenAt)
+	}
+
+	// 3. Status unchanged.
+	if afterFrame.Status != beforeFrame.Status {
+		t.Fatalf("Status changed: before=%s after=%s (applyFrameEvent's StatusIdle fallback must not run)", beforeFrame.Status, afterFrame.Status)
+	}
+
+	// 4. Broadcast must still fire — the SPA needs the projection refresh
+	// even when frame state is unchanged (e.g. delegation flag downstream).
+	msgs := drainBroadcasts(sub, 200*time.Millisecond)
+	if len(msgs) == 0 {
+		t.Fatal("no hook broadcast — detail-only PreToolUse with existing frame must broadcast existing-frame projection")
+	}
+}
+
+// 3. Detail-only PostToolUseFailure with NO existing frame must not resurrect.
+func TestHandleEvent_CCPostToolUseFailureDetailOnly_DoesNotCreateFrameWhenMissing(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, postToolUseBody(true, "agent-X", "tool-use-Tghost"))
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 (PostToolUseFailure must not create / resurrect frames; frames=%+v)", len(frames), frames)
+	}
+
+	msgs := drainBroadcasts(sub, 100*time.Millisecond)
+	if len(msgs) != 0 {
+		t.Fatalf("got %d broadcasts, want 0; msgs=%+v", len(msgs), msgs)
+	}
+}
+
+// 4. Detail-only PostToolUseFailure with existing frame must broadcast
+// WITHOUT running applyFrameEvent. We send agent_id="agent-Y" with no
+// matching ref (the seed is agent-X), so unmarkDelegatingRef hits its
+// NoOpWhenAgentIDNotFound early-return (P2-T1 case #3) and never calls
+// UpsertIfUnchanged. Any LastSeenAt change must therefore be
+// applyFrameEvent's LifecycleNone fallback — exactly what the new
+// short-circuit must prevent.
+func TestHandleEvent_CCPostToolUseFailureDetailOnly_NoMutationWhenFrameExists(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+
+	beforeFrame := findCCFrameRow(t, m)
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	// agent-Y has no matching ref → unmarkDelegatingRef early-returns
+	// without UpsertIfUnchanged → any LastSeenAt change must therefore be
+	// applyFrameEvent's LifecycleNone fallback (which the short-circuit
+	// must skip).
+	sendBody(t, m, postToolUseBody(true, "agent-Y", "tool-use-Tghost"))
+
+	afterFrame := findCCFrameRow(t, m)
+
+	if afterFrame.FrameID != beforeFrame.FrameID {
+		t.Fatalf("FrameID changed: before=%s after=%s", beforeFrame.FrameID, afterFrame.FrameID)
+	}
+	if afterFrame.LastSeenAt != beforeFrame.LastSeenAt {
+		t.Fatalf("LastSeenAt changed: before=%d after=%d (applyFrameEvent must not run on detail-only PostToolUseFailure)", beforeFrame.LastSeenAt, afterFrame.LastSeenAt)
+	}
+	if afterFrame.Status != beforeFrame.Status {
+		t.Fatalf("Status changed: before=%s after=%s", beforeFrame.Status, afterFrame.Status)
+	}
+
+	msgs := drainBroadcasts(sub, 200*time.Millisecond)
+	if len(msgs) == 0 {
+		t.Fatal("no hook broadcast — detail-only PostToolUseFailure with existing frame must broadcast existing-frame projection")
+	}
+}

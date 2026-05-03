@@ -25,6 +25,20 @@ const proxyMaxDepth = 5
 // that hit this limit are genuine hot loops, not ordinary concurrency.
 const proxyUpsertMaxAttempts = 3
 
+// MaxDelegatingToolUseIDs caps DelegatingToolUseIDs slice growth per
+// SubagentRef. Spec §10 risk table pre-acknowledged that a degenerate hook
+// stream (missing PostToolUse / hook resends with new tool_use_id) could
+// inflate subagents_json unboundedly — making UpsertIfUnchanged, projection
+// broadcast, and SPA payload progressively slower or out-of-budget — and
+// recommended "defensive cap at ~32 entries with log-and-discard if needed".
+// Round-2 codex three-parallel adversarial review (PR #829, finding #2)
+// triggered enforcement.
+//
+// On overflow, oldest IDs evict first (FIFO). The Delegating flag stays
+// true so the visual signal does not flap; dev-mode log surfaces hook stream
+// health for operators.
+const MaxDelegatingToolUseIDs = 32
+
 // nativeBaselineKey identifies a native (IsProxy=false) subagent ref for the
 // SessionStart filter-merge baseline (Phase 3.5 plan §2.2.2 v12 T1 fix). The
 // triple (Type, ID, StartedAt) survives ID collision between an old-session
@@ -1797,4 +1811,197 @@ func (m *Module) findProxyParent(req EventRequest) (*store.Frame, error) {
 		ppid = ancestorInfo.PPID
 	}
 	return nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 P2-T1 — markDelegatingRef / unmarkDelegatingRef
+// (spec §3.5 / plan §2 P2-T1)
+// ---------------------------------------------------------------------------
+
+// markDelegatingRef appends toolUseID to DelegatingToolUseIDs (deduped) and
+// sets Delegating=true on the SubagentRef whose ID matches agentID, on the
+// frame at (paneID, senderPID, senderStartTime). Idempotent — re-mark with
+// same toolUseID is a no-op (slice membership check).
+//
+// Mirror upsertProxyRefForBroker pattern (frame_ops.go:1216-1297). Does NOT
+// reuse mutateSubagentsWithRetry — that helper's SubagentStart branch routes
+// through updateSubagents → subagentRefMatches (turn-aware), which only
+// supports SubagentStart append-if-missing / SubagentStop remove-matching,
+// not in-place mutation of an existing ref's fields (frame_ops.go:825-848 /
+// plan §0.3 B1). Same UpsertIfUnchanged retry cap (proxyUpsertMaxAttempts).
+//
+// Race scope (spec L7): when PreToolUse arrives before SubagentStart has
+// established the ref (regression #10/#12), this is a silent no-op — by
+// design, since attaching a flag to a non-existent ref has no meaningful
+// semantics; recovers when subagent ends or on the next tool use.
+//
+// Lookup excludes proxy refs (ref.IsProxy=true) even when their ID matches:
+// Delegating is a cc-native subagent state by design (spec §3.1). If a proxy
+// ref happens to share an ID with a real native subagent (rare namespace
+// collision pinned by TestUpdateSubagents_ProxyNativeIDNamespacesAreIsolated)
+// the proxy ref must not absorb the flag — otherwise the native ref stays
+// blue while the proxy ref ends up orange-via-delegation, defeating the
+// visual signal. Mirror filter applied in unmarkDelegatingRef. The IsProxy
+// invariant rule (plan §0.3 B-rule) is preserved: this filter only reads
+// IsProxy, never writes it.
+//
+// Invariant: Delegating == len(DelegatingToolUseIDs) > 0.
+func (m *Module) markDelegatingRef(paneID string, senderPID int, senderStartTime string, agentID, toolUseID string, broadcastTs int64) error {
+	parent, err := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
+	if err != nil {
+		return err
+	}
+	if parent == nil {
+		// Spec L7: PreToolUse-before-SubagentStart silent no-op.
+		return nil
+	}
+
+	current := *parent
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		expected := current.LastSeenAt
+
+		idx := -1
+		for i, ref := range current.Subagents {
+			// Skip proxy refs even on ID match — see helper comment for
+			// the namespace-collision rationale.
+			if ref.ID == agentID && !ref.IsProxy {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			// Ref not present — spec §3.5 race: PreToolUse beat SubagentStart.
+			return nil
+		}
+
+		// Build a fresh slice so mutating next[idx] never aliases the caller's
+		// snapshot or any other reader of current.Subagents.
+		next := make([]agentpkg.SubagentRef, len(current.Subagents))
+		copy(next, current.Subagents)
+
+		// Dedupe append toolUseID into a fresh backing array (avoid sharing
+		// with the existing ref's slice).
+		ids := make([]string, 0, len(next[idx].DelegatingToolUseIDs)+1)
+		ids = append(ids, next[idx].DelegatingToolUseIDs...)
+		already := false
+		for _, id := range ids {
+			if id == toolUseID {
+				already = true
+				break
+			}
+		}
+		if !already {
+			ids = append(ids, toolUseID)
+		}
+		// FIFO evict-oldest enforcement (spec §10 / round-2 finding #2).
+		// Cap kicks in when degenerate hook streams keep mark'ing without
+		// matching PostToolUse — preserves Delegating=true so the visual
+		// signal does not flap; surfaces a dev-mode log for operators.
+		if len(ids) > MaxDelegatingToolUseIDs {
+			if isDevMode() {
+				log.Printf("[delegation] cap reached: evicting %d oldest entries (agent_id=%s pane=%s)",
+					len(ids)-MaxDelegatingToolUseIDs, agentID, paneID)
+			}
+			ids = ids[len(ids)-MaxDelegatingToolUseIDs:]
+		}
+		next[idx].DelegatingToolUseIDs = ids
+		next[idx].Delegating = len(ids) > 0
+
+		current.Subagents = next
+		current.LastSeenAt = broadcastTs
+		ok, _, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+
+		reloaded, rerr := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
+		if rerr != nil {
+			return rerr
+		}
+		if reloaded == nil {
+			// Frame disappeared mid-flight — silent no-op (mirror
+			// upsertProxyRefForBroker's reload-nil branch).
+			return nil
+		}
+		current = *reloaded
+	}
+	return fmt.Errorf("markDelegatingRef: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, current.FrameID)
+}
+
+// unmarkDelegatingRef removes toolUseID from DelegatingToolUseIDs on the ref
+// whose ID == agentID, then recomputes Delegating = len(remaining) > 0. No-op
+// if ref not found, ID not in slice, or whole frame missing (covers
+// PostToolUse arriving after SubagentStop, PostToolUseFailure for non-codex
+// Bash, etc.).
+//
+// Mirror upsertProxyRefForBroker pattern (frame_ops.go:1216-1297). Does NOT
+// reuse mutateSubagentsWithRetry — see markDelegatingRef rationale.
+//
+// Lookup excludes proxy refs (ref.IsProxy=true) for the same reason as
+// markDelegatingRef: Delegating is a cc-native subagent state. See
+// markDelegatingRef helper comment for the namespace-collision rationale.
+//
+// Invariant: Delegating == len(DelegatingToolUseIDs) > 0.
+func (m *Module) unmarkDelegatingRef(paneID string, senderPID int, senderStartTime string, agentID, toolUseID string, broadcastTs int64) error {
+	parent, err := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
+	if err != nil {
+		return err
+	}
+	if parent == nil {
+		return nil
+	}
+
+	current := *parent
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		expected := current.LastSeenAt
+
+		idx := -1
+		for i, ref := range current.Subagents {
+			// Skip proxy refs even on ID match — see markDelegatingRef.
+			if ref.ID == agentID && !ref.IsProxy {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil
+		}
+
+		next := make([]agentpkg.SubagentRef, len(current.Subagents))
+		copy(next, current.Subagents)
+
+		// Filter into a fresh slice (do not mutate the caller's backing
+		// array via append/in-place writes).
+		filtered := make([]string, 0, len(next[idx].DelegatingToolUseIDs))
+		for _, id := range next[idx].DelegatingToolUseIDs {
+			if id != toolUseID {
+				filtered = append(filtered, id)
+			}
+		}
+		next[idx].DelegatingToolUseIDs = filtered
+		next[idx].Delegating = len(filtered) > 0
+
+		current.Subagents = next
+		current.LastSeenAt = broadcastTs
+		ok, _, err := m.frames.UpsertIfUnchanged(current, expected)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+
+		reloaded, rerr := m.frames.GetByIdentity(paneID, senderPID, senderStartTime)
+		if rerr != nil {
+			return rerr
+		}
+		if reloaded == nil {
+			return nil
+		}
+		current = *reloaded
+	}
+	return fmt.Errorf("unmarkDelegatingRef: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, current.FrameID)
 }

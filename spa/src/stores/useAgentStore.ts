@@ -46,6 +46,8 @@ export interface SubagentRef {
   source_pid: number
   source_start_time: string
   is_proxy?: boolean
+  delegating?: boolean
+  delegating_tool_use_ids?: string[]
 }
 
 /** Normalized event from backend (replaces AgentHookEvent). */
