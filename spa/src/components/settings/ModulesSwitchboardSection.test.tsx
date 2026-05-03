@@ -112,4 +112,50 @@ describe('ModulesSwitchboardSection', () => {
     expect(desc).toBeTruthy()
     expect((desc!.textContent ?? '').length).toBeGreaterThan(0)
   })
+
+  // ---------------------------------------------------------------------
+  // Spec §6 T1 / T2 — sort by purdex contribution order so the
+  // Switchboard mirrors the Settings sidebar relative ordering.
+  // ---------------------------------------------------------------------
+
+  it('T1: renders disableable modules sorted by purdex contribution order', () => {
+    const Comp = () => null
+    registerModule({
+      id: 'aaa',
+      name: 'AAA',
+      disableable: true,
+      settings: [{ localId: 'aaa', scope: 'purdex', order: 30, labelKey: 'x', component: Comp }],
+    })
+    registerModule({
+      id: 'bbb',
+      name: 'BBB',
+      disableable: true,
+      settings: [{ localId: 'bbb', scope: 'purdex', order: 10, labelKey: 'y', component: Comp }],
+    })
+    registerModule({
+      id: 'ccc',
+      name: 'CCC',
+      disableable: true,
+      settings: [{ localId: 'ccc', scope: 'purdex', order: 20, labelKey: 'z', component: Comp }],
+    })
+
+    render(<ModulesSwitchboardSection ctx={purdexCtx} />)
+    const rows = Array.from(document.querySelectorAll('[data-module-id]'))
+    expect(rows.map((r) => r.getAttribute('data-module-id'))).toEqual(['bbb', 'ccc', 'aaa'])
+  })
+
+  it('T2: disableable module without purdex contribution falls back to last (alphabetical tie-break)', () => {
+    const Comp = () => null
+    registerModule({
+      id: 'ordered',
+      name: 'Ordered',
+      disableable: true,
+      settings: [{ localId: 'ordered', scope: 'purdex', order: 5, labelKey: 'x', component: Comp }],
+    })
+    registerModule({ id: 'no-settings', name: 'NoSettings', disableable: true })
+
+    render(<ModulesSwitchboardSection ctx={purdexCtx} />)
+    const rows = Array.from(document.querySelectorAll('[data-module-id]'))
+    expect(rows.map((r) => r.getAttribute('data-module-id'))).toEqual(['ordered', 'no-settings'])
+  })
 })

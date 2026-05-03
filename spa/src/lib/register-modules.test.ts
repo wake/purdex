@@ -34,6 +34,7 @@ import { clearHostBuiltinSources } from './host-builtin-sections'
 import enLocale from '../locales/en.json'
 import zhLocale from '../locales/zh-TW.json'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
+import { PlaceholderSettingsSection } from '../components/settings/PlaceholderSettingsSection'
 
 const FakeComponent = () => null
 
@@ -733,5 +734,78 @@ describe('Commit 2: EditorBuffersPane + NewTab entry', () => {
     registerBuiltinModules()
     const editorMod = getModules().find((m) => m.id === 'editor')
     expect(editorMod?.panes?.find((p) => p.kind === 'editor-buffers')).toBeDefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Settings sidebar alignment (spec §3 I1 / §6 T3-T7 + T9 locale guard).
+// Every disableable module must declare at least one purdex-scope settings
+// contribution so the Settings sidebar mirrors the Modules Switchboard.
+// ---------------------------------------------------------------------------
+
+describe('Settings sidebar alignment (spec §3 I1)', () => {
+  beforeEach(() => {
+    clearAll()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  })
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+    clearAll()
+  })
+
+  it('T3 / I1: every disableable module declares at least one purdex-scope settings contribution', () => {
+    registerBuiltinModules()
+    const violations = getModules()
+      .filter((m) => m.disableable === true)
+      .filter((m) => !(m.settings ?? []).some((s) => s.scope === 'purdex'))
+      .map((m) => m.id)
+    expect(violations).toEqual([])
+  })
+
+  it('T4: browser registers a purdex placeholder with settings.section.browser label', () => {
+    registerBuiltinModules()
+    const browser = getModule('browser')
+    const purdex = browser?.settings?.find((s) => s.scope === 'purdex')
+    expect(purdex).toBeDefined()
+    expect(purdex?.labelKey).toBe('settings.section.browser')
+    expect(purdex?.component).toBe(PlaceholderSettingsSection)
+  })
+
+  it('T5: files registers a purdex placeholder with settings.section.files label', () => {
+    registerBuiltinModules()
+    const files = getModule('files')
+    const purdex = files?.settings?.find((s) => s.scope === 'purdex')
+    expect(purdex).toBeDefined()
+    expect(purdex?.labelKey).toBe('settings.section.files')
+    expect(purdex?.component).toBe(PlaceholderSettingsSection)
+  })
+
+  it('T6: memory-monitor purdex labelKey switched to settings.section.monitor', () => {
+    registerBuiltinModules()
+    const m = getModule('memory-monitor')
+    const purdex = m?.settings?.find((s) => s.scope === 'purdex')
+    expect(purdex?.labelKey).toBe('settings.section.monitor')
+  })
+
+  it('T7: quick-commands purdex labelKey switched to settings.section.commands', () => {
+    registerBuiltinModules()
+    const m = getModule('quick-commands')
+    const purdex = m?.settings?.find((s) => s.scope === 'purdex')
+    expect(purdex?.labelKey).toBe('settings.section.commands')
+  })
+
+  it('T9 / F6: locale JSON has new short-label keys + placeholder string in en + zh-TW', () => {
+    const required = [
+      'settings.section.browser',
+      'settings.section.commands',
+      'settings.section.files',
+      'settings.section.monitor',
+      'settings.module.no_purdex_settings',
+    ] as const
+    for (const k of required) {
+      expect((enLocale as Record<string, string>)[k]).toBeTruthy()
+      expect((zhLocale as Record<string, string>)[k]).toBeTruthy()
+    }
   })
 })
