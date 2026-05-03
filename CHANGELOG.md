@@ -1,5 +1,59 @@
 # Changelog
 
+## [1.0.0-alpha.291] - 2026-05-03
+
+### Fix(files): Files module disableable + close SR-2 (#833)
+
+Closes SR-2 from codex review of PR #617. The Files module previously
+declared its `projectPath` setting via the deprecated
+`ModuleDefinition.workspaceConfig` API, whose render path
+(`WorkspaceSettingsPage` → `ModuleConfigSection` →
+`getModulesWithWorkspaceConfig()`) bypassed the Modules Switchboard's
+`useModuleEnabledStore` filter. As a result, marking Files as
+`disableable: true` would have been a lie — toggling it off would still
+leave the workspace `projectPath` editor visible. SR-2's protective
+workaround was to leave Files un-toggleable until the migration landed.
+
+This release migrates Files to the contribution-registry path
+(`settings: [{ scope: 'workspace' }]`), wires it through
+`dispatchSettingsContributions`'s disable filter, and marks Files
+`disableable: true`. The behavior matches Editor / Quick Commands /
+Performance Monitor: toggling Files off in `/settings/module-config`
+shows the ReloadBanner; after reload, the workspace settings page no
+longer renders the Files header / `projectPath` input. Storage shape
+is unchanged — `useWorkspaceStore.workspaces[wsId].moduleConfig.files.projectPath`
+still backs the value, so all existing readers (`FileTreeView`,
+`file-open-bootstrap.ts`) keep working without modification.
+
+The PR also hardens `FileTreeView`'s `projectPath` selector (replacing
+an unsafe `as string | undefined` cast with a `typeof === 'string'`
+guard, defending against a poisoned-persist payload that could have
+caused a render crash) and removes the now-empty
+`DEPRECATED_LEGACY_CONFIG_EXEMPT` set in
+`dispatch-settings-contributions.ts`. The
+`SETTINGS_ORDER.WORKSPACE_FILES = 10` constant is added (first
+workspace-scope entry), and the `settings-order.ts` docblock is
+expanded to clarify per-scope ordering. Three new i18n keys land in
+both English and 繁體中文.
+
+PR review history: 2 spec-review rounds + 2 plan-review rounds +
+1 standard PR review (0 finding, approved) + 1 three-parallel
+adversarial PR review (0 P0/P1; 4 P2/P3 fixed in-PR; 5 P3 deferred to
+follow-up issues #834-#839). The adversarial review caught one critical
+escape-hatch issue early — removing the `<ModuleConfigSection>` mount
+in `WorkspaceSettingsPage` would have detached the only render path
+for any module still using the deprecated `workspaceConfig` API while
+the API itself was kept alive — and the mount was restored in commit
+`09bcc61e`. Full removal of the legacy renderer + `workspaceConfig`
+field + helper functions is tracked as follow-up F-1.
+
+Files: `register-modules/index.tsx`, `dispatch-settings-contributions.ts`,
+`FileTreeView.tsx`, `FilesWorkspaceSettingsSection.tsx` (new),
+`settings-order.ts`, `register-modules.test.ts`,
+`WorkspaceSettingsPage.registry.test.tsx`,
+`FilesWorkspaceSettingsSection.test.tsx` (new), `en.json`, `zh-TW.json`,
+`docs/specs/2026-05-03-files-disableable-sr2-{spec,plan}.md` (new).
+
 ## [1.0.0-alpha.290] - 2026-05-03
 
 ### Fix(daemon): PdxStopFailure native subagent detach (rate-limit cleanup) (#832)
