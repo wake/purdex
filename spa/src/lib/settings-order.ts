@@ -1,7 +1,14 @@
 /**
  * Centralized order constants for the Settings sidebar.
  *
- * The sidebar is grouped into bands so visual ordering communicates intent:
+ * Order values are **scoped per settings scope** (`purdex` / `workspace` /
+ * `host`); the sidebar sorts each scope's contributions independently. The
+ * tables below describe the visual bands within each scope. Numbers can
+ * legitimately repeat across scopes (e.g. purdex `MODULE_CONFIG = 10` and
+ * workspace `WORKSPACE_FILES = 10`) — they never compete because contribution
+ * lists are filtered by scope before sorting.
+ *
+ * **purdex scope** — sidebar at `/settings`:
  *
  *   | Band                        | Range  | Examples                                  |
  *   |-----------------------------|--------|-------------------------------------------|
@@ -10,6 +17,18 @@
  *   | Modules switchboard         | 10     | `module-config` (single header row)       |
  *   | Module-owned                | 11–19  | Editor / Quick Commands / Perf / Sync     |
  *   | Tail built-in               | 20–29  | Dev Environment / Tmux Agent Monitor      |
+ *
+ * **workspace scope** — sidebar at `/settings/workspaces/<id>`:
+ *
+ *   | Band                        | Range  | Examples                                  |
+ *   |-----------------------------|--------|-------------------------------------------|
+ *   | Module-owned                | 0 – 19 | Editor home path (inline 0) / Files (10)  |
+ *
+ * **host scope** — sidebar at `/settings/hosts/<id>`:
+ *
+ *   | Band                        | Range   | Examples                                 |
+ *   |-----------------------------|---------|------------------------------------------|
+ *   | Module-owned                | 0 – 199 | Editor home path (inline 100)            |
  *
  * `register-modules/index.tsx`, `editor-module.tsx`, and any future
  * `registerSettingsSection` / `registerModule({ settings: [...] })` call
@@ -21,6 +40,7 @@
  * was promoted to a structural module.
  */
 export const SETTINGS_ORDER = {
+  // ---- purdex scope ---------------------------------------------------
   // Top built-in (core) — always present.
   APPEARANCE: 0,
   TERMINAL: 1,
@@ -37,4 +57,6 @@ export const SETTINGS_ORDER = {
   // Tail built-in — dev / debug surfaces.
   DEV_ENVIRONMENT: 20,
   TMUX_AGENT_MONITOR: 21,
+  // ---- workspace scope ------------------------------------------------
+  WORKSPACE_FILES: 10,
 } as const

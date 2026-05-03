@@ -22,6 +22,7 @@
   "modules.browser.description": "內嵌網頁瀏覽器面板（需桌面版）",
   "modules.memory_monitor.description": "主機、面板、client 與 daemon 效能指標",
   "modules.quick_commands.description": "讓你在 Workspace 與 Host 入口快速執行常用指令",
+  "modules.files.description": "工作區與 Session 檔案樹，可點擊開啟至 Editor",
   "module.disabled.title": "{{module}} 模組目前已停用",
   "module.disabled.body": "啟用後重載即可恢復這個 {{paneKind}} 分頁。",
   "module.disabled.enable": "啟用",
@@ -143,6 +144,7 @@
   "settings.interface.canvas_drop_here": "拖曳 module 到此",
   "settings.section.agent": "Agent",
   "settings.section.editor": "編輯器",
+  "settings.section.files_workspace": "檔案",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent 通知與 Hook 設定",
@@ -162,6 +164,8 @@
   "settings.agent.hook.install": "安裝 Hook",
   "settings.agent.hook.remove": "移除 Hook",
   "settings.agent.no_agents": "尚未偵測到任何 Agent。啟動 Claude Code 後會出現設定。",
+
+  "settings.files.project_path.label": "專案路徑",
 
   "settings.editor.title": "編輯器",
   "settings.editor.desc": "應用程式內建 Monaco 程式碼編輯器的偏好設定。",
