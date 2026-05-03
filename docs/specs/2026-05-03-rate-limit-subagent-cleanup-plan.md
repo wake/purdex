@@ -462,7 +462,12 @@ func TestStopFailure_NativeDetach_Hits(t *testing.T) {
 
 **測試保證範圍誠實標示**：`FrameTraceMeta.Reason` 比對證明的是「沒走 detach branch」，**不嚴格**證明「`mutateSubagentsWithRetry` 沒被呼叫」（理論上 miss-ref mutate 也會寫回等價 slice + refresh LastSeenAt，但 spec §3.2 設計 break 路徑就是不 call mutate，所以行為契約已鎖住）。要進一步嚴格驗證 mutate-not-called 需要 instrumentation 級改動（`Module.frames` 抽 interface）— 本 PR 不擴大 scope。
 
-**Placement**：example 中 `newTestModule` / `seedFrame` / `seedFrameWithSubagents` 是既有 helper 名（驗於 `internal/module/agent/fakes_test.go`）；`buildPdxStopFailureRequest` 若不存在則 inline 構造 EventRequest（payload shape per spec §1.2 fixture）。實作時 subagent 應先 grep 既有 helper signature 後再 reuse / 新建。
+**Placement / helper 真實位置**：
+- `newTestModule(t)` — `internal/module/agent/handler_test.go`
+- `seedFrame(t, m, agentType, status)` 與 `seedFrameWithSubagents(t, m, frame, refs)` — `internal/module/agent/frame_ops_test.go`
+- `buildPdxStopFailureRequest(...)` 不存在；實作時 inline 構造 `EventRequest`（payload shape per spec §1.2 fixture）或新建 helper
+
+**實作前必跑**：subagent 在 P1-T3b 開頭先 `grep -n "func newTestModule\|func seedFrame" internal/module/agent/`，確認既有 signature；範例 code 是 illustrative，最終 call site 以 grep 結果為準。
 
 ---
 
