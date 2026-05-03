@@ -40,21 +40,13 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
     [],
   )
 
-  // Spec §I2 — same `order` value tie-break by `moduleId`, then `localId`,
-  // so the relative position of two same-order contributions is fully
-  // deterministic. The Modules Switchboard uses the same `moduleId` tie
-  // breaker (`ModulesSwitchboardSection.sortDisableableModulesForSwitchboard`)
-  // — without a shared rule, two disableable modules sharing an order would
-  // appear in different orders across the two surfaces, silently breaking
-  // I2 even though both panes are deterministic in isolation. Sort happens
-  // before mapping so we still have access to `moduleId` / `localId`.
+  // `listContributions('purdex')` already returns a deterministically
+  // sorted array (by `order`, then `moduleId`, then `localId` — see
+  // settings-contribution-registry.ts). Spec §I2 alignment is enforced
+  // at the registry layer, so the sidebar / `GlobalSettingsPage`
+  // auto-mount / Switchboard derivation all see the same order — no
+  // local re-sort needed.
   const rows: SidebarRow[] = listContributions('purdex')
-    .slice()
-    .sort((a, b) => {
-      if (a.order !== b.order) return a.order - b.order
-      if (a.moduleId !== b.moduleId) return a.moduleId.localeCompare(b.moduleId)
-      return a.localId.localeCompare(b.localId)
-    })
     .map<SidebarRow>((c) => {
       const isDisabled = c.disabled ? c.disabled(ctx) === true : false
       return {

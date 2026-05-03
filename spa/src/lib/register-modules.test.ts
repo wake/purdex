@@ -890,17 +890,13 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
     })
     dispatchSettingsContributions()
 
-    // Sidebar derivation — same logic as SettingsSidebar.tsx.
+    // Sidebar derivation — `listContributions('purdex')` is the canonical
+    // source of truth for sidebar order (deterministic comparator lives in
+    // settings-contribution-registry.ts).
     const sidebarRelativeIds = listContributions('purdex')
       .filter((c) => {
         const m = getModule(c.moduleId)
         return m?.disableable === true
-      })
-      .slice()
-      .sort((a, b) => {
-        if (a.order !== b.order) return a.order - b.order
-        if (a.moduleId !== b.moduleId) return a.moduleId.localeCompare(b.moduleId)
-        return a.localId.localeCompare(b.localId)
       })
       .map((c) => c.moduleId)
 
@@ -916,5 +912,39 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
     // And they must AGREE (same relative order on both surfaces).
     expect(switchboardIds.filter((id) => id === 'alpha' || id === 'zeta'))
       .toEqual(['alpha', 'zeta'])
+  })
+
+  it('R3-P2 / centralized comparator: listContributions returns deterministic order so SettingsPage default-mount agrees with sidebar', () => {
+    // Round-3 finding R3-P2 (codex review-moq3...): SettingsSidebar applied
+    // a local tie-break, but GlobalSettingsPage in SettingsPage.tsx mounts
+    // `sections[0]` from `listContributions('purdex')` directly — without
+    // the same tie-break the auto-mounted default page can be a different
+    // contribution than the sidebar's first visible row when two purdex
+    // entries share the same `order`. Fix: deterministic comparator now
+    // lives inside `listContributions`, so every consumer sees the same
+    // (order, moduleId, localId) sequence.
+    registerModule({
+      id: 'beta',
+      name: 'Beta',
+      settings: [
+        { localId: 'b1', scope: 'purdex', order: 99, labelKey: 'b1', component: FakeComponent },
+      ],
+    })
+    registerModule({
+      id: 'alphax',
+      name: 'AlphaX',
+      settings: [
+        { localId: 'a1', scope: 'purdex', order: 99, labelKey: 'a1', component: FakeComponent },
+      ],
+    })
+    dispatchSettingsContributions()
+
+    // First call (sidebar) and second call (SettingsPage default-mount) — both
+    // arrays must yield the same `localId` ordering for the same-order pair.
+    const callA = listContributions('purdex').map((c) => c.localId)
+    const callB = listContributions('purdex').map((c) => c.localId)
+    expect(callA).toEqual(callB)
+    // moduleId tie-break: 'alphax' < 'beta'.
+    expect(callA.indexOf('a1')).toBeLessThan(callA.indexOf('b1'))
   })
 })
