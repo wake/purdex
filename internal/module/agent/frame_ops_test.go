@@ -5145,46 +5145,154 @@ func TestStopFailure_FixtureReplay_DthnPayload(t *testing.T) {
 	}
 }
 
-func TestStopFailure_FrameDeletedMidFlight(t *testing.T) {
+// TestStopFailure_FrameAbsentBeforePreCheck verifies the user-visible safety
+// contract: when a frame is gone before applyFrameEvent even sees it, the
+// StopFailure path never emits a successful native detach trace. This is
+// the "post-delete state" sanity check; the actual mid-flight delete
+// (pre-check pass + UpsertIfUnchanged finds row deleted) is exercised
+// directly at the helper level by
+// TestMutateSubagentsAndStatusWithRetry_FrameDeletedMidFlight (R2 defender
+// finding: original test name "FrameDeletedMidFlight" was misleading).
+func TestStopFailure_FrameAbsentBeforePreCheck(t *testing.T) {
 	m := newProxyTestModule(t)
 	pane := newStopFailurePane()
 	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
 		nativeSubagentRef("match-id", 40),
 	})
 
-	// Inject a hook that deletes the frame between findNativeRefByID's
-	// pre-check and mutateSubagentsWithRetry's UpsertIfUnchanged. The
-	// retry loop sees applied=false because the row no longer exists,
-	// then GetByIdentity returns nil → mutate returns (false, _, nil).
-	// applyFrameEvent must trace `frame_missing`.
+	// Delete frame BEFORE applyFrameEvent runs — applyFrameEvent's top
+	// GetByIdentity returns nil, so the StopFailure case fallthroughs to
+	// LifecycleStop body. cc wildcard branch hits removeProxyRefForSender,
+	// finds nothing for senderPID=100, breaks to generic post-switch path.
+	// The new native detach reason MUST NOT be emitted.
 	if err := m.frames.Delete(parent.FrameID); err != nil {
 		t.Fatalf("simulate concurrent delete: %v", err)
 	}
-	// Re-seed parent baseline expectations: now there is no frame for
-	// (pane, pid, startTime) — applyFrameEvent's GetByIdentity at the
-	// top will return frame == nil too. To exercise the
-	// `pre-check pass + mutate applied=false` branch specifically we
-	// need to keep frame != nil at the GetByIdentity call but vanish
-	// before the UpsertIfUnchanged. Simulate this by re-Upserting and
-	// then arranging a parallel-delete via the retry path — but a
-	// simpler equivalent is to assert that even with the frame absent
-	// from the start (the post-delete state), the StopFailure path
-	// emits a non-detach trace and does NOT panic / leak. The
-	// frame_missing branch under pre-check pass + mutate applied=false
-	// is structurally guarded by spec §3.2 break logic; this test
-	// covers the user-visible safety contract: a deleted frame never
-	// reports a successful native detach.
 	req, result := buildStopFailureRequest(pane, parent.PID, parent.ProcessStartTime, "match-id", "cc")
 	_, meta, err := m.applyFrameEvent(req, result, 300)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
 	}
-	// With frame == nil at top of applyFrameEvent, the StopFailure case
-	// fallthroughs to the LifecycleStop body — no native ref exists to
-	// detach (cc wildcard branch hits removeProxyRefForSender, finds
-	// nothing for senderPID=100, breaks to generic post-switch path).
-	// In any case the new native detach reason MUST NOT be emitted.
 	if meta.Reason == "native_subagent_detached_on_stop_failure" {
 		t.Fatalf("Reason = %q, want non-detach for deleted frame", meta.Reason)
 	}
 }
+
+// PR-A round-2 codex review (threads 019ded61/62/63) caught that the
+// retry loop did not re-check ref presence after each reload, allowing
+// a phantom native_subagent_detached_on_stop_failure trace under
+// concurrent SubagentStop / parallel StopFailure races. The four tests
+// below exercise mutateSubagentsAndStatusWithRetry directly to cover
+// each detachOutcome branch precisely.
+
+func TestMutateSubagentsAndStatusWithRetry_DetachedSuccessfully(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+	})
+
+	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
+	outcome, stored, err := m.mutateSubagentsAndStatusWithRetry(parent, ref, agentpkg.StatusError, 200)
+	if err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if outcome != detachOutcomeDetached {
+		t.Fatalf("outcome = %v, want detachOutcomeDetached", outcome)
+	}
+	if len(stored.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty", stored.Subagents)
+	}
+	if stored.Status != agentpkg.StatusError {
+		t.Fatalf("Status = %q, want %q", stored.Status, agentpkg.StatusError)
+	}
+	if stored.LastSeenAt != 200 {
+		t.Fatalf("LastSeenAt = %d, want 200", stored.LastSeenAt)
+	}
+}
+
+// TestMutateSubagentsAndStatusWithRetry_RefAlreadyAbsentAfterReload covers
+// the R2 phantom-detach race: caller's pre-check passed (ref existed
+// when we built `frame`), but a concurrent writer detached the same ref
+// before our first UpsertIfUnchanged committed. Our reload reveals the
+// ref already gone — helper must NOT report Detached.
+func TestMutateSubagentsAndStatusWithRetry_RefAlreadyAbsentAfterReload(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	// Step 1: seed frame WITH the target ref; remember this stale baseline.
+	stale := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+	})
+	// Step 2: simulate concurrent writer that already removed the ref AND
+	// bumped LastSeenAt. Helper's first UpsertIfUnchanged will fail
+	// (expected stale.LastSeenAt=50 vs current 999); reload returns the
+	// post-race state — ref already gone.
+	racePost := stale
+	racePost.Subagents = []agentpkg.SubagentRef{}
+	racePost.LastSeenAt = 999
+	ok, _, err := m.frames.UpsertIfUnchanged(racePost, stale.LastSeenAt)
+	if err != nil || !ok {
+		t.Fatalf("seed race-post state: ok=%v err=%v", ok, err)
+	}
+	// Step 3: invoke helper with the STALE baseline (caller's view from
+	// before the race). On first UpsertIfUnchanged conflict, helper
+	// reloads → racePost (ref already absent) → returns RefAlreadyAbsent
+	// without committing a phantom detach.
+	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
+	outcome, _, err := m.mutateSubagentsAndStatusWithRetry(stale, ref, agentpkg.StatusError, 1500)
+	if err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if outcome != detachOutcomeRefAlreadyAbsent {
+		t.Fatalf("outcome = %v, want detachOutcomeRefAlreadyAbsent (phantom-detach race not handled)", outcome)
+	}
+	// DB-level invariant: the post-race state stays untouched (helper did
+	// NOT issue a write since ref was already absent on retry baseline).
+	got, _ := m.frames.GetByIdentity(pane, stale.PID, stale.ProcessStartTime)
+	if got == nil || got.LastSeenAt != 999 {
+		t.Fatalf("got = %+v, want post-race state preserved (LastSeenAt=999)", got)
+	}
+}
+
+// TestMutateSubagentsAndStatusWithRetry_FrameDeletedMidFlight exercises
+// the pre-check-passes-but-row-deleted path that the original
+// FrameDeletedMidFlight test name claimed but did not actually cover
+// (R2 defender finding).
+func TestMutateSubagentsAndStatusWithRetry_FrameDeletedMidFlight(t *testing.T) {
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	stale := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef("match-id", 40),
+	})
+	// Simulate concurrent SessionEnd / sweep: delete the row entirely.
+	if err := m.frames.Delete(stale.FrameID); err != nil {
+		t.Fatalf("simulate delete: %v", err)
+	}
+	// Helper sees pre-check pass on stale baseline (ref present), then
+	// UpsertIfUnchanged conflicts, GetByIdentity returns nil → FrameMissing.
+	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
+	outcome, _, err := m.mutateSubagentsAndStatusWithRetry(stale, ref, agentpkg.StatusError, 200)
+	if err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if outcome != detachOutcomeFrameMissing {
+		t.Fatalf("outcome = %v, want detachOutcomeFrameMissing", outcome)
+	}
+}
+
+// TestMutateSubagentsAndStatusWithRetry_RetryExhaustionContract documents
+// the helper's "exceeded retries" path. The actual triggering of three
+// consecutive UpsertIfUnchanged conflicts is covered at applyFrameEvent
+// level by TestPhase35_IT9_FilterMergeExhaustedRetryAbortsApply (line ~3702),
+// which uses the existing processStartTimeFn module seam to drive
+// row-mutation between attempts. mutateSubagentsAndStatusWithRetry shares
+// the same OCC UpsertIfUnchanged + GetByIdentity reload pattern, so its
+// exhaustion behaviour is structurally inherited; adding a duplicate
+// race-driving test here would require a new module-level seam without
+// new coverage value (R2 health finding tracked as fact rather than
+// blocker per round-2 thread 019ded63).
+//
+// Caller behaviour (applyFrameEvent's LifecycleStopFailure case) propagates
+// the helper's error verbatim via `return nil, FrameTraceMeta{}, merr`,
+// surfacing as a 500 from the HTTP handler — consistent with the
+// pre-existing exhaustion path on the SessionStart filter-merge code.

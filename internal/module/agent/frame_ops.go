@@ -325,50 +325,35 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				// frame's AgentType.
 				Type: frame.AgentType,
 			}
-			// PR-A round-1 codex review P1 (thread 019ded5d): mutate ref
-			// removal AND Status update in the same UpsertIfUnchanged
-			// transaction. The plain mutateSubagentsWithRetry helper only
-			// touches Subagents+LastSeenAt — using it alone would skip the
-			// post-switch UpdateHookPath path that normally writes
-			// Status=error, leaving the parent frame stuck in its prior
-			// status (e.g. running) after a subagent rate-limit failure.
-			// We mirror mutateSubagentsWithRetry's OCC loop structure but
-			// add a Status field write so detach + status are atomic from
-			// the SPA's viewpoint.
-			current := *frame
-			var stored store.Frame
-			applied := false
-			for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
-				expected := current.LastSeenAt
-				current.Subagents = updateSubagents(current.Subagents, agentpkg.LifecycleSubagentStop, ref)
-				current.Status = result.Status
-				current.LastSeenAt = broadcastTs
-				ok, s, uerr := m.frames.UpsertIfUnchanged(current, expected)
-				if uerr != nil {
-					return nil, FrameTraceMeta{}, uerr
-				}
-				if ok {
-					stored = s
-					applied = true
-					break
-				}
-				reloaded, rerr := m.frames.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
-				if rerr != nil {
-					return nil, FrameTraceMeta{}, rerr
-				}
-				if reloaded == nil {
-					// Frame deleted mid-flight; fall through to
-					// frame_missing trace below.
-					break
-				}
-				current = *reloaded
+			// PR-A round-2 codex review (threads 019ded61/62/63):
+			// mutateSubagentsAndStatusWithRetry handles three concerns:
+			//  1. atomic ref removal + Status=error write (R1 P1 fix)
+			//  2. per-attempt ref-presence re-check (R2 phantom-detach fix)
+			//  3. retry exhaustion vs frame deletion distinguished
+			outcome, stored, merr := m.mutateSubagentsAndStatusWithRetry(*frame, ref, result.Status, broadcastTs)
+			if merr != nil {
+				// Retry exhausted (frame still exists but every
+				// UpsertIfUnchanged conflicted). Surface as handler
+				// error per mutateSubagentsWithRetry contract.
+				return nil, FrameTraceMeta{}, merr
 			}
-			if !applied {
-				// Frame deleted mid-flight (concurrent SessionEnd or
-				// sweep deleted the row between our pre-check and the
-				// UpsertIfUnchanged). Trace as frame_missing — the
-				// existing reason already used elsewhere for
-				// "row disappeared between read and write".
+			switch outcome {
+			case detachOutcomeDetached:
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       stored.FrameID,
+					ParentFrameID: stored.ParentFrameID,
+					Decision:      "updated_frame",
+					Reason:        "native_subagent_detached_on_stop_failure",
+					Before:        before,
+					After:         summarizeFrame(&stored),
+				}, perr
+			case detachOutcomeFrameMissing:
+				// Concurrent SessionEnd / sweep deleted the row
+				// between our pre-check and the retry. Use the
+				// existing frame_missing reason already used
+				// elsewhere for "row disappeared between read and
+				// write".
 				projection, perr := m.projectPane(req.TmuxPaneID)
 				return projection, FrameTraceMeta{
 					Decision: "skipped",
@@ -376,16 +361,17 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 					Before:   before,
 					After:    map[string]any{},
 				}, perr
+			case detachOutcomeRefAlreadyAbsent:
+				// Race lost — another writer detached the same ref
+				// between our pre-check and a retry baseline. We
+				// did NOT mutate; fall through to legacy
+				// post-switch UpdateHookPath path so StopFailure
+				// semantics (Status=error, LastSeenAt refresh)
+				// still take effect. The trace step is whatever
+				// the legacy path emits (parent_frame_found etc.),
+				// honestly reflecting "didn't take detach branch".
+				break
 			}
-			projection, perr := m.projectPane(req.TmuxPaneID)
-			return projection, FrameTraceMeta{
-				FrameID:       stored.FrameID,
-				ParentFrameID: stored.ParentFrameID,
-				Decision:      "updated_frame",
-				Reason:        "native_subagent_detached_on_stop_failure",
-				Before:        before,
-				After:         summarizeFrame(&stored),
-			}, perr
 		}
 		// frame == nil: collapse onto the existing LifecycleStop body so
 		// codex turn-aware proxy detach + cc/opencode wildcard
@@ -1400,6 +1386,106 @@ func (m *Module) mutateSubagentsWithRetry(frame store.Frame, lifecycle agentpkg.
 		current = *reloaded
 	}
 	return false, store.Frame{}, fmt.Errorf("subagent mutation %s: exceeded %d retries for frame %s", lifecycle, proxyUpsertMaxAttempts, frame.FrameID)
+}
+
+// detachOutcome categorizes the result of mutateSubagentsAndStatusWithRetry
+// so the caller can pick the right trace reason and broadcast path. The
+// four outcomes are intentionally disjoint: each represents a distinct
+// observable state in the storage layer that must produce a distinct
+// trace step (per PR-A round-2 adversarial review, thread 019ded6{1,2,3}).
+//
+// PR-A round-2 codex review (R2) found that an inline retry loop folding
+// "ref already gone after reload" and "retries exhausted" into a single
+// frame_missing outcome could:
+//
+//  1. emit a phantom native_subagent_detached_on_stop_failure trace
+//     when a concurrent writer detached the same ref between our
+//     pre-check and a retry attempt;
+//  2. silently drop the StopFailure status update under retry exhaustion
+//     without surfacing an error to the caller.
+//
+// This helper fixes both by re-checking ref presence on every retry
+// baseline and reporting the four outcomes separately.
+type detachOutcome int
+
+const (
+	// detachOutcomeDetached: this attempt's UpsertIfUnchanged succeeded and
+	// the target ref was actually present in the baseline that committed.
+	// Caller emits native_subagent_detached_on_stop_failure.
+	detachOutcomeDetached detachOutcome = iota
+	// detachOutcomeRefAlreadyAbsent: a reload showed the target ref no
+	// longer present (concurrent SubagentStop or another StopFailure for
+	// the same agent_id won the race). No mutation issued for this path.
+	// Caller MUST fall back to legacy post-switch status update so
+	// StopFailure semantics still write Status=error / refresh LastSeenAt.
+	detachOutcomeRefAlreadyAbsent
+	// detachOutcomeFrameMissing: a reload returned nil because the row
+	// was deleted concurrently (SessionEnd / sweep). Caller emits
+	// frame_missing trace.
+	detachOutcomeFrameMissing
+)
+
+// mutateSubagentsAndStatusWithRetry atomically removes a native ref AND
+// updates frame Status in a single UpsertIfUnchanged transaction. Mirrors
+// mutateSubagentsWithRetry's OCC retry loop but adds two contracts the
+// plain helper does not provide:
+//
+//  1. Per-attempt ref-presence re-check: if the target ref disappears
+//     between attempts (concurrent writer wins the race), abort with
+//     detachOutcomeRefAlreadyAbsent so caller can avoid emitting a phantom
+//     detach trace.
+//  2. Atomic Status field write: Status persists in the same row update
+//     as the Subagents change, eliminating the race window between
+//     "ref removed" and "status updated to error" that a two-step
+//     (mutate then UpdateHookPath) approach would leak.
+//
+// Retry exhaustion (UpsertIfUnchanged keeps conflicting while the row
+// still exists across all proxyUpsertMaxAttempts iterations) returns an
+// error, mirroring mutateSubagentsWithRetry's contract — the caller
+// surfaces this via the standard handler error path.
+//
+// PR-A round-2 codex review threads 019ded61 / 019ded62 / 019ded63.
+func (m *Module) mutateSubagentsAndStatusWithRetry(
+	frame store.Frame,
+	ref agentpkg.SubagentRef,
+	status agentpkg.Status,
+	broadcastTs int64,
+) (detachOutcome, store.Frame, error) {
+	current := frame
+	for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+		// Per-attempt re-check (R2 attacker / defender / health fix).
+		// On the first iteration this re-confirms the caller's
+		// pre-check (cheap, O(n) scan); on later iterations after a
+		// reload it catches the race where another writer already
+		// detached the ref. Without this, updateSubagents would
+		// no-op and we'd commit Status+LastSeenAt under the new
+		// "native_subagent_detached_on_stop_failure" reason despite
+		// not actually removing anything.
+		if findNativeRefByID(current.Subagents, ref.ID) < 0 {
+			return detachOutcomeRefAlreadyAbsent, current, nil
+		}
+		expected := current.LastSeenAt
+		next := current
+		next.Subagents = updateSubagents(current.Subagents, agentpkg.LifecycleSubagentStop, ref)
+		next.Status = status
+		next.LastSeenAt = broadcastTs
+		ok, stored, err := m.frames.UpsertIfUnchanged(next, expected)
+		if err != nil {
+			return 0, store.Frame{}, err
+		}
+		if ok {
+			return detachOutcomeDetached, stored, nil
+		}
+		reloaded, err := m.frames.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
+		if err != nil {
+			return 0, store.Frame{}, err
+		}
+		if reloaded == nil {
+			return detachOutcomeFrameMissing, store.Frame{}, nil
+		}
+		current = *reloaded
+	}
+	return 0, store.Frame{}, fmt.Errorf("subagent+status mutation: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, frame.FrameID)
 }
 
 // attachProxyRefWithRetry is a thin wrapper over mutateSubagentsWithRetry
