@@ -17,6 +17,7 @@ import { ToggleSwitch } from './ToggleSwitch'
 // Exported for unit testing — `ModulesSwitchboardSection.test.tsx` and
 // `register-modules.test.ts` (T2b) assert the function output directly,
 // avoiding having to render the full Switchboard tree.
+// eslint-disable-next-line react-refresh/only-export-components
 export function sortDisableableModulesForSwitchboard(
   modules: ModuleDefinition[],
 ): ModuleDefinition[] {
