@@ -4899,6 +4899,17 @@ func TestStopFailure_NativeDetach_Hits(t *testing.T) {
 	if len(got.Subagents) != 0 {
 		t.Fatalf("Subagents = %+v, want empty after native detach", got.Subagents)
 	}
+	// PR-A round-1 codex review P1 (thread 019ded5d): atomic ref+status
+	// write — frame.Status MUST persist as error after detach. Earlier
+	// implementation called mutateSubagentsWithRetry alone, which only
+	// touches Subagents+LastSeenAt and skipped the post-switch
+	// UpdateHookPath status update.
+	if got.Status != agentpkg.StatusError {
+		t.Fatalf("Status = %q, want %q after StopFailure detach (codex round-1 P1)", got.Status, agentpkg.StatusError)
+	}
+	if got.LastSeenAt != 200 {
+		t.Fatalf("LastSeenAt = %d, want 200 (broadcastTs)", got.LastSeenAt)
+	}
 }
 
 func TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace(t *testing.T) {

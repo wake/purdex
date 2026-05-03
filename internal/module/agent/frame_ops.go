@@ -325,9 +325,43 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				// frame's AgentType.
 				Type: frame.AgentType,
 			}
-			applied, stored, merr := m.mutateSubagentsWithRetry(*frame, agentpkg.LifecycleSubagentStop, ref, broadcastTs)
-			if merr != nil {
-				return nil, FrameTraceMeta{}, merr
+			// PR-A round-1 codex review P1 (thread 019ded5d): mutate ref
+			// removal AND Status update in the same UpsertIfUnchanged
+			// transaction. The plain mutateSubagentsWithRetry helper only
+			// touches Subagents+LastSeenAt — using it alone would skip the
+			// post-switch UpdateHookPath path that normally writes
+			// Status=error, leaving the parent frame stuck in its prior
+			// status (e.g. running) after a subagent rate-limit failure.
+			// We mirror mutateSubagentsWithRetry's OCC loop structure but
+			// add a Status field write so detach + status are atomic from
+			// the SPA's viewpoint.
+			current := *frame
+			var stored store.Frame
+			applied := false
+			for attempt := 0; attempt < proxyUpsertMaxAttempts; attempt++ {
+				expected := current.LastSeenAt
+				current.Subagents = updateSubagents(current.Subagents, agentpkg.LifecycleSubagentStop, ref)
+				current.Status = result.Status
+				current.LastSeenAt = broadcastTs
+				ok, s, uerr := m.frames.UpsertIfUnchanged(current, expected)
+				if uerr != nil {
+					return nil, FrameTraceMeta{}, uerr
+				}
+				if ok {
+					stored = s
+					applied = true
+					break
+				}
+				reloaded, rerr := m.frames.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
+				if rerr != nil {
+					return nil, FrameTraceMeta{}, rerr
+				}
+				if reloaded == nil {
+					// Frame deleted mid-flight; fall through to
+					// frame_missing trace below.
+					break
+				}
+				current = *reloaded
 			}
 			if !applied {
 				// Frame deleted mid-flight (concurrent SessionEnd or
