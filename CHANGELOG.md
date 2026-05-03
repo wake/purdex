@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.0.0-alpha.289] - 2026-05-03
+
+### Feat(lights): cc Bash sniff delegating flag for codex visibility (#829)
+
+Closes issue #821. When cc invokes `/codex:rescue`, `/codex:review`, or
+`/codex:adversarial-review`, the cc tab now shows the **orange dot**
+(delegating) instead of the misleading **blue native dot**. Pure cc-side
+detection via `PreToolUse(Bash)` command sniff with token-boundary check
+on `codex-companion.mjs` — no codex plugin cooperation, no `IsProxy`
+invariant pollution, zero dependence on governance phases.
+
+Adds two omitempty fields to `SubagentRef` (`Delegating bool` +
+`DelegatingToolUseIDs []string`, invariant
+`Delegating == len(DelegatingToolUseIDs) > 0`), a pure-function
+`ExtractDelegationHint` extractor with no-regex token detection, two
+`mark` / `unmark` helpers mirroring the `upsertProxyRefForBroker`
+optimistic-concurrency retry loop, and a handler wiring block that
+mark/unmark by `tool_use_id` on cc PreToolUse / PostToolUse /
+PostToolUseFailure. SPA `SubagentDots` composes
+`is_proxy || delegating` to render orange and exposes a new
+`data-delegating` attribute alongside the unchanged `data-is-proxy`.
+
+To reach the new wiring on cc's side, this release upgrades
+`PdxPreToolUse` and `PdxPostToolUseFailure` from
+`HookHandlingUnsupported` / `HookHandlingIgnored` to detail-only
+installable: `cc/status.go` returns `Valid=true` with `Status=""` and a
+`tool_use_id` / `agent_id` detail, and `cc/events.go` drops the handling
+annotation so `mergeClaudeHooks` writes both keys into
+`~/.claude/settings.json` on hook merge.
+
+A handler short-circuit guards detail-only PreToolUse / PostToolUseFailure
+from `applyFrameEvent`'s `LifecycleNone+Status=""` fallback so the new
+events cannot resurrect torn-down frames as `StatusIdle`. Mark/unmark
+lookup excludes `IsProxy=true` refs to keep the visual signal native-only
+even if a proxy ref happens to share an ID with a native subagent.
+`DelegatingToolUseIDs` is capped at 32 entries with FIFO evict-oldest so
+a degenerate hook stream cannot inflate `subagents_json` unboundedly;
+the Delegating flag stays true throughout cap enforcement so the
+visual signal does not flap.
+
+User action required for existing managed installs: cc's
+`~/.claude/settings.json` must be re-merged so `PreToolUse` and
+`PostToolUseFailure` hook entries land — run `pdx install hooks`,
+relaunch the daemon with the managed-install path, or use Settings →
+Hooks → Reinstall. Fresh installs pick up the new keys automatically on
+first hook merge.
+
 ## [1.0.0-alpha.288] - 2026-05-03
 
 ### Refactor(settings): PR-2 — Editor consolidation, Sync modularize, Quick Commands header (#825)
