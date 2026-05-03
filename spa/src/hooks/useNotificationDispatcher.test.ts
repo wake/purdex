@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick, buildDebounceKey, __resetDebounceStateForTests } from './useNotificationDispatcher'
+import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick, buildDebounceKey, __resetDebounceStateForTests, __purgeDebounceForHostForTests } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 import { useTabStore } from '../stores/useTabStore'
@@ -390,6 +390,32 @@ describe('debounce cleanup', () => {
     // Next event should pass (window cleared)
     vi.setSystemTime(2_000)
     expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__remove_host_with_colon_in_hostid — purge correctly matches compositeKeys when hostId contains colon', () => {
+    // hostId = "mlab:abc123", compositeKey = "mlab:abc123:s1"
+    // Old code: split(':')[0] = "mlab" ≠ "mlab:abc123" → entry NOT removed (bug)
+    // Fixed code: startsWith("mlab:abc123:") → entry removed correctly
+    const ckTarget = 'mlab:abc123:s1'
+    const ckOther = 'mlab:def456:s1'
+
+    // Seed both debounce entries
+    shouldNotify(makeErrorParams(ckTarget, 'rate_limit'))
+    shouldNotify(makeErrorParams(ckOther, 'rate_limit'))
+
+    vi.setSystemTime(1_000)
+    // Both blocked
+    expect(shouldNotify(makeErrorParams(ckTarget, 'rate_limit'))).toBe(false)
+    expect(shouldNotify(makeErrorParams(ckOther, 'rate_limit'))).toBe(false)
+
+    // Directly call purgeDebounceForHost with the colon-containing hostId
+    __purgeDebounceForHostForTests('mlab:abc123')
+
+    vi.setSystemTime(2_000)
+    // "mlab:abc123" entries cleared → passes
+    expect(shouldNotify(makeErrorParams(ckTarget, 'rate_limit'))).toBe(true)
+    // "mlab:def456" entry untouched → still blocked
+    expect(shouldNotify(makeErrorParams(ckOther, 'rate_limit'))).toBe(false)
   })
 
   it('debounce__remove_host_resets — all keys for host cleared on removeHost', () => {

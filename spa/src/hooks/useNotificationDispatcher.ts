@@ -61,10 +61,17 @@ function purgeDebounceForCompositeKey(ck: string): void {
 /** Remove all debounce entries for all sessions under a given hostId. */
 function purgeDebounceForHost(hostId: string): void {
   const toDelete: string[] = []
+  // Why: use startsWith(hostId + ':') instead of split(':')[0] so hostIds
+  // that themselves contain ':' (e.g. "mlab:abc123") match correctly.
   forEachDebounceKey((parsed, rawKey) => {
-    if (parsed[0].split(':')[0] === hostId) toDelete.push(rawKey)
+    if (parsed[0].startsWith(hostId + ':')) toDelete.push(rawKey)
   })
   for (const k of toDelete) errorDebounceState.delete(k)
+}
+
+/** Testing-only seam: expose purgeDebounceForHost for unit tests. */
+export function __purgeDebounceForHostForTests(hostId: string): void {
+  purgeDebounceForHost(hostId)
 }
 
 // Subscribe to store changes to clean up debounce state when sessions/hosts are removed.
