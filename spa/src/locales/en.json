@@ -22,6 +22,7 @@
   "modules.browser.description": "Embedded web browser pane (requires desktop app)",
   "modules.memory_monitor.description": "Host, pane, client, and daemon performance metrics",
   "modules.quick_commands.description": "Quickly run frequently-used commands from Workspace and Host entry points",
+  "modules.files.description": "Workspace and session file tree, with click-to-open into the Editor",
   "module.disabled.title": "{{module}} module is disabled",
   "module.disabled.body": "Enable it and reload to restore this {{paneKind}} pane.",
   "module.disabled.enable": "Enable",
@@ -143,6 +144,7 @@
   "settings.interface.canvas_drop_here": "Drop module here",
   "settings.section.agent": "Agent",
   "settings.section.editor": "Editor",
+  "settings.section.files_workspace": "Files",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent notification and hook settings",
@@ -162,6 +164,8 @@
   "settings.agent.hook.install": "Install Hook",
   "settings.agent.hook.remove": "Remove Hook",
   "settings.agent.no_agents": "No agents detected yet. Start a Claude Code session to see agent settings.",
+
+  "settings.files.project_path.label": "Project path",
 
   "settings.editor.title": "Editor",
   "settings.editor.desc": "Preferences for the in-app Monaco code editor.",

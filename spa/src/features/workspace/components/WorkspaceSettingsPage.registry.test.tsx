@@ -19,6 +19,9 @@ import type {
   SettingsContext,
   SettingsContextFor,
 } from '../../../lib/settings-contribution-types'
+import { registerBuiltinModules } from '../../../lib/register-modules'
+import { clearModuleRegistry } from '../../../lib/module-registry'
+import { useModuleEnabledStore } from '../../../stores/useModuleEnabledStore'
 
 // --------------------------------------------------------------------------
 // Shared harness
@@ -249,5 +252,55 @@ describe('WorkspaceSettingsPage — workspace-scoped registry rendering', () => 
     expect(screen.queryByText('PURDEX_BODY')).toBeNull()
     expect(screen.queryByText('HOST_LABEL')).toBeNull()
     expect(screen.queryByText('HOST_BODY')).toBeNull()
+  })
+})
+
+describe('WorkspaceSettingsPage — Files module integration (SR-2)', () => {
+  let wsId: string
+
+  beforeEach(() => {
+    cleanup()
+    clearModuleRegistry()
+    clearContributions()
+    useWorkspaceStore.getState().reset()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+    wsId = makeWorkspace('Test WS')
+  })
+
+  afterEach(() => {
+    cleanup()
+    clearContributions()
+    clearModuleRegistry()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  })
+
+  // CRITICAL: same-test before/after compare to prove SR-2 fix actually wires
+  // the disable filter (codex R1 P0). Reuse render() output to verify the
+  // legacy hardcoded `'專案路徑'` label is also gone — that string used to
+  // come from ConfigField + ModuleConfigSection's deprecated path; if it
+  // still shows up, the SR-2 mount removal is incomplete.
+  //
+  // Asserted text uses the resolved en values ('Files' / 'Project path')
+  // because test-setup.ts registers built-in locales, so useI18nStore.t()
+  // returns translations rather than the raw keys (matches the user-visible
+  // contract).
+  it('reload-after-disable: Files header/input render when enabled, disappear when disabled before bootstrap', () => {
+    // Step 1 — Files enabled (default) → header + input rendered
+    registerBuiltinModules()
+    const { unmount } = render(<WorkspaceSettingsPage workspaceId={wsId} />)
+    expect(screen.getByRole('heading', { level: 3, name: /Files/i })).toBeInTheDocument()
+    expect(screen.getByLabelText('Project path')).toBeInTheDocument()
+    // Legacy hardcoded label from old ConfigField path must be gone
+    expect(screen.queryByText('專案路徑')).toBeNull()
+    unmount()
+
+    // Step 2 — reset registries + state, bootstrap with Files persisted-disabled
+    clearModuleRegistry()
+    clearContributions()
+    useModuleEnabledStore.setState({ enabled: { files: false }, baseline: null })
+    registerBuiltinModules()
+    render(<WorkspaceSettingsPage workspaceId={wsId} />)
+    expect(screen.queryByRole('heading', { level: 3, name: /Files/i })).toBeNull()
+    expect(screen.queryByLabelText('Project path')).toBeNull()
   })
 })

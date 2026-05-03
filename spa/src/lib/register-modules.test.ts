@@ -8,11 +8,13 @@ vi.mock('../features/workspace/lib/icon-path-cache', () => ({
 
 import {
   clearModuleRegistry,
+  getModule,
   getModules,
   getPaneRenderer,
   registerModule,
   type ModuleDefinition,
 } from './module-registry'
+import { SETTINGS_ORDER } from './settings-order'
 import { clearNewTabRegistry, getNewTabProviders } from './new-tab-registry'
 import {
   clearSettingsSectionRegistry,
@@ -476,15 +478,10 @@ describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', (
     expect(msgs.some((m: string) => m.includes('fakews') && m.includes('deprecated'))).toBe(true)
   })
 
-  it('does NOT warn for files module (exempted during transition)', () => {
-    registerModule({
-      id: 'files',
-      name: 'Files',
-      workspaceConfig: [{ key: 'projectPath', type: 'string', label: '專案路徑' }],
-    })
-    dispatchSettingsContributions()
+  it('does NOT emit any deprecation warning for the real Files bootstrap', () => {
+    registerBuiltinModules()
     const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
-    expect(msgs.some((m: string) => m.includes('files') && m.includes('deprecated'))).toBe(false)
+    expect(msgs.some((m) => m.includes('files') && m.includes('deprecated'))).toBe(false)
   })
 
   it('does NOT warn for modules using new `settings` field', () => {
@@ -570,6 +567,53 @@ describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', (
       (c) => String(c[0]).includes('retrymod') && String(c[0]).includes('deprecated'),
     ).length
     expect(afterHits).toBe(1)
+  })
+})
+
+describe('Files module — SR-2 fix (disable filter via settings contribution)', () => {
+  beforeEach(() => {
+    clearAll()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  })
+
+  afterEach(() => {
+    clearAll()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  })
+
+  it('Files registers with disableable: true + descriptionKey + no workspaceConfig', () => {
+    registerBuiltinModules()
+    const filesMod = getModule('files')!
+    expect(filesMod.disableable).toBe(true)
+    expect(filesMod.descriptionKey).toBe('modules.files.description')
+    expect(filesMod.workspaceConfig).toBeUndefined()
+  })
+
+  it('Files contributes a workspace-scope settings entry with correct localId/order', () => {
+    registerBuiltinModules()
+    const list = listContributions('workspace')
+    const filesEntry = list.find((c) => c.id === 'files.workspace-files')
+    expect(filesEntry).toBeDefined()
+    expect(filesEntry?.scope).toBe('workspace')
+    expect(filesEntry?.order).toBe(SETTINGS_ORDER.WORKSPACE_FILES)
+    expect(filesEntry?.labelKey).toBe('settings.section.files_workspace')
+    expect(filesEntry?.moduleId).toBe('files')
+  })
+
+  // CRITICAL: same-test before/after compare to avoid false-green from
+  // "Files never had a workspace contribution to begin with" (codex R1 P0).
+  it('reload-after-disable: Files contribution present when enabled, absent when disabled before bootstrap', () => {
+    // Step 1 — Files enabled (default) → Files contribution present
+    registerBuiltinModules()
+    const enabledList = listContributions('workspace')
+    expect(enabledList.find((c) => c.id === 'files.workspace-files')).toBeDefined()
+
+    // Step 2 — reset state and bootstrap with Files persisted-disabled
+    clearAll()
+    useModuleEnabledStore.setState({ enabled: { files: false }, baseline: null })
+    registerBuiltinModules()
+    const disabledList = listContributions('workspace')
+    expect(disabledList.find((c) => c.id === 'files.workspace-files')).toBeUndefined()
   })
 })
 

@@ -21,7 +21,8 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
   const source: FileSource = useMemo(() => ({ type: 'daemon' as const, hostId: activeHostId }), [activeHostId])
 
   const workspace = useWorkspaceStore((s) => s.workspaces.find((ws) => ws.id === workspaceId))
-  const projectPath = workspace?.moduleConfig?.['files']?.['projectPath'] as string | undefined
+  const rawProjectPath = workspace?.moduleConfig?.['files']?.['projectPath']
+  const projectPath = typeof rawProjectPath === 'string' && rawProjectPath !== '' ? rawProjectPath : undefined
   const setModuleConfig = useWorkspaceStore((s) => s.setModuleConfig)
 
   const [inputValue, setInputValue] = useState('')

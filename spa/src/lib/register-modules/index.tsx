@@ -61,6 +61,7 @@ import {
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
 import { QuickCommandsSettingsSection } from '../../components/settings/QuickCommandsSettingsSection'
+import { FilesWorkspaceSettingsSection } from '../../components/settings/FilesWorkspaceSettingsSection'
 import { SETTINGS_ORDER } from '../settings-order'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
@@ -240,13 +241,16 @@ export function registerBuiltinModules(): void {
   registerModule({
     id: 'files',
     name: 'Files',
-    // SR-2 (codex review #617): intentionally NOT flagged disableable yet.
-    // The module's only settings surface lives in `workspaceConfig`, which
-    // `WorkspaceSettingsPage` renders through `ModuleConfigSection` — a path
-    // that does not consult `useModuleEnabledStore`. Toggling would be a lie
-    // until PR 3 wires workspace-scope legacy contributions into the filter.
-    workspaceConfig: [
-      { key: 'projectPath', type: 'string', label: '專案路徑' },
+    disableable: true,
+    descriptionKey: 'modules.files.description',
+    settings: [
+      {
+        localId: 'workspace-files',
+        scope: 'workspace',
+        order: SETTINGS_ORDER.WORKSPACE_FILES,
+        labelKey: 'settings.section.files_workspace',
+        component: FilesWorkspaceSettingsSection,
+      },
     ],
     views: [
       {
