@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -5061,6 +5062,75 @@ func TestStopFailure_FrameNil_FallthroughToProxyDetach(t *testing.T) {
 	}
 	if meta.Reason != "proxy_subagent_detached_on_stop" {
 		t.Fatalf("Reason = %q, want proxy_subagent_detached_on_stop (fallthrough wildcard detach)", meta.Reason)
+	}
+}
+
+// TestStopFailure_FixtureReplay_DthnPayload pins the cc upstream payload
+// shape against a recorded production sample (spec §1.2 chain `c02151f0...`).
+// If cc ever changes the StopFailure payload schema in a way that breaks
+// our agent_id surfacing (rename, nesting under a different parent key,
+// removal entirely) this test fails at PR-CI time rather than silently
+// accumulating refs in production again.
+//
+// The fixture file is sanitised (cwd / transcript / session_id replaced
+// with fixture-friendly tokens) but `agent_id`, `error`, `agent_type`,
+// `hook_event_name` keep their original schema and value shape from
+// dthn pane %50.
+func TestStopFailure_FixtureReplay_DthnPayload(t *testing.T) {
+	raw, err := os.ReadFile("testdata/dthn_stopfailure_2026_05_03.json")
+	if err != nil {
+		t.Fatalf("load fixture: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	agentID, _ := payload["agent_id"].(string)
+	if agentID == "" {
+		t.Fatalf("fixture missing agent_id (rate-limit cleanup contract pin); payload=%+v", payload)
+	}
+
+	m := newProxyTestModule(t)
+	pane := newStopFailurePane()
+	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+		nativeSubagentRef(agentID, 40),
+	})
+
+	// Provider derive (cc) surfaces agent_id into Detail; mirror that
+	// here so the handler-side pre-check works on the same shape it
+	// would see in production.
+	result := agentpkg.DeriveResult{
+		Valid:  true,
+		Status: agentpkg.StatusError,
+		Detail: map[string]any{
+			"error_details": payload["error_details"],
+			"error":         payload["error"],
+			"agent_id":      payload["agent_id"],
+		},
+	}
+	req := EventRequest{
+		TmuxSession:     "work",
+		TmuxPaneID:      pane,
+		PurdexName:      "PdxStopFailure",
+		AgentType:       "cc",
+		SenderPID:       parent.PID,
+		SenderStartTime: parent.ProcessStartTime,
+		RawEvent:        json.RawMessage(raw),
+	}
+
+	_, meta, err := m.applyFrameEvent(req, result, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "native_subagent_detached_on_stop_failure" {
+		t.Fatalf("Reason = %q, want native_subagent_detached_on_stop_failure (cc payload schema drift?); meta=%+v", meta.Reason, meta)
+	}
+	got, gerr := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
+	if gerr != nil || got == nil {
+		t.Fatalf("reload: %v / %v", gerr, got)
+	}
+	if len(got.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty after fixture replay detach", got.Subagents)
 	}
 }
 

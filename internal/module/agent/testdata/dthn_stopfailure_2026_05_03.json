@@ -1,0 +1,8 @@
+{
+  "session_id": "f828329e-fixture-sanitized-uuid",
+  "agent_id": "aac56e6312afceb04",
+  "agent_type": "general-purpose",
+  "hook_event_name": "StopFailure",
+  "error": "rate_limit",
+  "last_assistant_message": "You're out of extra usage · resets 2:30pm (Asia/Taipei)"
+}
