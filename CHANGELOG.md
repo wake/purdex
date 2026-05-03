@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.0.0-alpha.290] - 2026-05-03
+
+### Fix(daemon): PdxStopFailure native subagent detach (rate-limit cleanup) (#832)
+
+Closes the dthn-class accumulation bug where cc subagent failures via
+the rate-limit error path leak native `SubagentRef` entries into
+`agent_frames.subagents_json`. Empirical observation against dthn (pane
+`%50`) showed **3944** native refs accumulated, with **97.9%** of
+`SubagentStart` events terminating via `PdxStopFailure` (carrying the
+failing subagent's `agent_id`) instead of `PdxSubagentStop`. The
+existing `LifecycleStopFailure` handler dropped the payload's `agent_id`
+on the floor when `frame != nil`, so native refs had no GC path —
+projection broadcasts grew without bound and SPA showed permanent
+"subagent in flight" lights.
+
+This release teaches the daemon to detach matching native refs when
+`PdxStopFailure` carries an `agent_id`. Three providers (cc/codex/
+opencode) now surface `agent_id` in `DeriveResult.Detail`. A new pure
+helper `findNativeRefByID` gates the detach so a non-matching payload
+never triggers a phantom mutation. The `LifecycleStopFailure` case is
+split from `LifecycleStop`; the new branch invokes the new
+`mutateSubagentsAndStatusWithRetry` helper which atomically removes the
+ref **and** writes `Status=error` in the same `UpsertIfUnchanged`
+transaction. Four disjoint outcomes (`Detached` / `RefAlreadyAbsent` /
+`FrameMissing` / retry-exhaustion-error) each map to a distinct trace
+reason — retry races no longer emit phantom detach traces, and retry
+exhaustion no longer collapses into `frame_missing`. New trace reason:
+`native_subagent_detached_on_stop_failure`. Existing `frame_missing`
+reason reused for concurrent SessionEnd race.
+
+Three rounds of codex review converged across spec (P1×3 → P1×2 → fact
++ P2), plan (P1×3 → P1 + P2×3 → fact), and code (R1 P1 atomic write →
+R2 three parallel adversarial 2 high + 2 medium → R3 0 finding). PR
+size: ~225 production + ~720 test LOC across 7 commits, exceeding spec
+AC9 cap of 500 in service of race-safety guarantees forced by R2 review.
+
+Operational follow-up: dthn pane `%50` retains 3944 historical refs
+whose terminal `StopFailure` events predate trace retention; these
+won't self-heal via the new code path (cc emits each `agent_id`'s
+terminal event exactly once). One-shot SQL cleanup per spec §5
+(backup → `BEGIN; UPDATE agent_frames SET subagents_json='[]' WHERE
+json_array_length(subagents_json) > 100; COMMIT;` → daemon restart) is
+the expected primary recovery path.
+
+PR-B (SPA notification debounce for derived=error during rate-limit
+storms) is a separate forthcoming PR per spec §11 sequencing.
+
 ## [1.0.0-alpha.289] - 2026-05-03
 
 ### Feat(lights): cc Bash sniff delegating flag for codex visibility (#829)
