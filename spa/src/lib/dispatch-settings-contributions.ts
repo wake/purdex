@@ -27,15 +27,11 @@ import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 const LEGACY_SECTION_MODULE_ID = '_builtin.legacy-section'
 
 // PR-5 deprecation: module authors using `globalConfig` / `workspaceConfig`
-// should migrate to `settings: [{ scope, localId }]`. Empty exempt set kept
-// as a future-friendly escape hatch — add a moduleId here to silence the
-// deprecation warning while a migration is in flight.
-const DEPRECATED_LEGACY_CONFIG_EXEMPT: ReadonlySet<string> = new Set()
+// should migrate to `settings: [{ scope, localId }]`.
 const warnedDeprecationKeys = new Set<string>()
 
 function warnLegacyConfigDeprecations(modules: readonly ModuleDefinition[]): void {
   for (const m of modules) {
-    if (DEPRECATED_LEGACY_CONFIG_EXEMPT.has(m.id)) continue
     if (m.globalConfig && m.globalConfig.length > 0) {
       const key = `${m.id}:global`
       if (!warnedDeprecationKeys.has(key)) {
