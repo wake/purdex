@@ -34,8 +34,7 @@
 
 ### Non-Goals
 - N1: 不擴大 disable 範圍至 `views`（spec I4 不變量：disable 只影響 `dispatchSettingsContributions`，file-tree workspace/session view 仍可被加進 sidebar）。
-- N2: 不刪 `ModuleConfigSection.tsx` / `ModuleDefinition.workspaceConfig` 欄位 / `getModulesWithWorkspaceConfig` helper。Files 遷出後 `getModulesWith*Config()` 自動回 `[]`，`ModuleConfigSection` 自動 `return null`。完整拆 follow-up issue。  
-  **In scope（codex review round-2）**：本 PR 會移除 `WorkspaceSettingsPage.tsx` 對 `<ModuleConfigSection>` 的 mount call（dead-render housekeeping），但 `ModuleConfigSection.tsx` 元件本體與其自身 test 都不動。
+- N2: 不刪 `ModuleConfigSection.tsx` / `ModuleDefinition.workspaceConfig` 欄位 / `getModulesWithWorkspaceConfig` helper。Files 遷出後 `getModulesWith*Config()` 自動回 `[]`，`ModuleConfigSection` 自動 `return null`。**Mount call 也保留**（codex PR adversarial round-1 high finding）— `WorkspaceSettingsPage.tsx` 仍 mount `<ModuleConfigSection scope={{ workspaceId }} />`，作為 in-flight migration / out-of-tree module 仍用 `workspaceConfig` 時的 escape hatch render path。完整拆（mount + component + helpers + 欄位）一次清在 follow-up F-1，避免本 PR 把 escape hatch 拆一半。
 - N3: 不加 Files purdex-scope placeholder / settings page。對齊 Browser 的處理（disableable 但 purdex sidebar 無條目）；Files 設定本就是 workspace 範疇，purdex 沒東西可放，placeholder 是 dead UX。
 - N4: 不調整 PR-2 落地的 purdex sidebar 順序（`MODULE_EDITOR` / `MODULE_QUICK_COMMANDS` / `MODULE_PERFORMANCE_MONITOR` / `MODULE_SYNC` 不動）。本 PR 只新增 workspace-scope 常數 `WORKSPACE_FILES`（§4.1）— Files contribution 是 workspace scope，跟 purdex sidebar 順序無關。
 

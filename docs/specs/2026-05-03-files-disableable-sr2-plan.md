@@ -323,8 +323,9 @@ Spec: docs/specs/2026-05-03-files-disableable-sr2-spec.md §4.2
 - `spa/src/lib/register-modules/index.tsx`
 - `spa/src/lib/dispatch-settings-contributions.ts`
 - `spa/src/lib/register-modules.test.ts`（修既有測試）
-- `spa/src/features/workspace/components/WorkspaceSettingsPage.tsx`（移除 ModuleConfigSection 渲染掛載點）
+- ~~`spa/src/features/workspace/components/WorkspaceSettingsPage.tsx`（移除 ModuleConfigSection 渲染掛載點）~~ — **撤銷**，見 §3.4。
 - 不動：`spa/src/components/settings/ModuleConfigSection.tsx`（自然 dead；follow-up issue 拆）
+- 不動：`spa/src/features/workspace/components/WorkspaceSettingsPage.tsx`（mount 點保留作 escape hatch）
 
 ### 3.2 `register-modules/index.tsx` Files 區塊改寫
 
@@ -380,34 +381,18 @@ import { FilesWorkspaceSettingsSection } from '../../components/settings/FilesWo
 +const DEPRECATED_LEGACY_CONFIG_EXEMPT: ReadonlySet<string> = new Set()
 ```
 
-### 3.4 `WorkspaceSettingsPage.tsx` 移除 ModuleConfigSection 掛載點
+### 3.4 `WorkspaceSettingsPage.tsx` mount 處理
 
-```diff
- import { WorkspaceIconPicker } from './WorkspaceIconPicker'
- import { WorkspaceDeleteDialog } from './WorkspaceDeleteDialog'
--import { ModuleConfigSection } from '../../../components/settings/ModuleConfigSection'
+**最終決定（codex PR adversarial round-1 high finding）**：mount call **保留不動**。
 
- ...
+原 plan 是移除 `<ModuleConfigSection>` 的 import + mount（housekeeping 動機）。但 codex PR adversarial review 抓到：移除 mount 會把 deprecated `workspaceConfig` API 的唯一 render 入口拆掉，而 `DEPRECATED_LEGACY_CONFIG_EXEMPT` 仍是 supported escape hatch、`ModuleConfigSection.tsx` 也仍存在 — 這對任何 in-flight migration 或 out-of-tree 仍用 `workspaceConfig` 的 module 是 silent failure。
 
-         {/* Icon */}
-         <section className="mb-8">
-           ...
-         </section>
+修正方案：
+- `WorkspaceSettingsPage.tsx` 不動 — `import { ModuleConfigSection }` 保留、`<ModuleConfigSection scope={{ workspaceId }} />` mount call 保留。
+- 對 Files migration 無功能影響：Files 拔 `workspaceConfig` 後 `getModulesWithWorkspaceConfig()` 回 `[]`，`ModuleConfigSection.tsx:16` 的 early return 讓元件不輸出 DOM。
+- 完整拆（mount + ModuleConfigSection.tsx + helpers + workspaceConfig/globalConfig 欄位）一次清在 F-1 follow-up，**不在本 PR 切兩半**。
 
--        {/* Module Settings */}
--        <ModuleConfigSection scope={{ workspaceId }} />
--
-         {/* Registry-driven workspace-scoped contributions.
-             ... */}
-         {workspaceContributions.map((c) => {
-```
-
-**理由更正（codex round-1 P1）**：Files 拔 `workspaceConfig` 後 `getModulesWithWorkspaceConfig()` 自動回 `[]`，`ModuleConfigSection.tsx:16` 的 `if (modules.length === 0) return null` 會讓元件不渲染任何 DOM。所以「移除 mount」**不是功能上必要**（disable filter 已透過 `settings: [...]` 路徑生效），而是 housekeeping：
-
-- 移除後讀者看 `WorkspaceSettingsPage.tsx` 不會再對「為什麼有個 `<ModuleConfigSection>` 但好像沒輸出」困惑。
-- 與 spec N2「不刪 `ModuleConfigSection.tsx` 檔案 / 欄位 / helper」對齊：本 PR 只拔 mount call，`ModuleConfigSection.tsx` 元件本體仍在。
-
-> 風險評估：若 `ModuleConfigSection.tsx` 被任何**外部**（test / dev tool / story）引用，移除 import 不會影響它們。`rg "ModuleConfigSection" spa/src` 確認過：唯二引用是 `WorkspaceSettingsPage.tsx`（mount 點 — 本 PR 移除）和 `ModuleConfigSection.test.tsx`（自身測試 — 不動）。
+> 風險評估：完全不動 `WorkspaceSettingsPage.tsx`，等於本 PR 對該檔 0 改動。實作上 commit 3 確實執行過「拔 mount」，後續 commit 09bcc61e 把它恢復回來；plan 此處保留歷史脈絡是為了讓 reviewer 看到決策軌跡。
 
 ### 3.5 修既有測試 `register-modules.test.ts`
 
@@ -644,7 +629,7 @@ Plan: [`2026-05-03-files-disableable-sr2-plan.md`](docs/specs/2026-05-03-files-d
 
 - `register-modules/index.tsx` — Files: `disableable: true` + `settings: [...]` + drop SR-2 inline comment
 - `dispatch-settings-contributions.ts` — drop `'files'` from `DEPRECATED_LEGACY_CONFIG_EXEMPT` + update surrounding comment
-- `WorkspaceSettingsPage.tsx` — drop now-dead `<ModuleConfigSection>` mount
+- `WorkspaceSettingsPage.tsx` — **unchanged** (commit 3 originally removed the `<ModuleConfigSection>` mount, but PR adversarial review flagged this as detaching the only escape-hatch render path while the `workspaceConfig` API is still officially deprecated-but-supported; commit 09bcc61e restored it. Full removal deferred to F-1.)
 - New: `FilesWorkspaceSettingsSection.tsx` — workspace-scope settings UI for projectPath (storage path unchanged)
 - New: `SETTINGS_ORDER.WORKSPACE_FILES = 10` — first workspace-scope constant
 - 3 new i18n keys (en + zh-TW)
@@ -680,6 +665,6 @@ All existing readers (`FileTreeView`, `file-open-bootstrap.ts`) untouched.
 
 ## 7. Resolved decisions（codex round-1 review 後收斂）
 
-- Q1（resolved）：commit 3 移除 `<ModuleConfigSection>` mount 不拆獨立 commit。理由更正（codex R1 P1.5）— 移除**不是**功能需要，是 housekeeping；但歸到 commit 3 仍合理，因 commit 3 是「Files 遷移與 SR-2 收尾」單一語意。spec N2 講「不刪 component file」與本 PR 拔 mount 不矛盾（檔案保留、call site 拔）。
+- Q1（re-resolved，PR adversarial round-1）：mount 不移除。原 plan 是 commit 3 housekeeping 拔 mount；PR adversarial review 抓到 escape-hatch 矛盾後，commit 09bcc61e 恢復 mount。完整拆收進 F-1。Spec N2 同步更新明寫「mount 也保留」。
 - Q2（resolved）：不收編 Editor 的 inline `workspace-home-path` / `host-home-path` 進 SETTINGS_ORDER。理由：（1）超出本 PR scope；（2）Editor 既有風格穩定；（3）`settings-order.ts` 註解 workspace band 已標明 Editor inline 0 是 known legacy；（4）codex R1 Q2 確認此判斷正確。改用 follow-up issue（已收進 spec §9 F-X 之外的 backlog）。
 - Q3（resolved）：`registerBuiltinModules()` 在測試環境可直接呼叫，不需先補 stub。codex R1 Q3 已確認：`getPlatformCapabilities()` 對缺 `window.electronAPI` 是 safe fallback、FS / sync registry 寫入都是同步 in-memory。窄 fixture fallback 已從 plan 移除（codex R1 P1.4）。
