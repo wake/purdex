@@ -8,8 +8,12 @@ import "github.com/wake/purdex/internal/agent"
 // Ordering matches the installer's emit order and plan §1.4 cc table.
 //
 // EmitsStatus semantics:
-//   - Detail-only events (SubagentStart/Stop) declare an empty slice — they
-//     produce Valid=true with Status="" at runtime.
+//   - Detail-only events (SubagentStart/Stop, PreToolUse, PostToolUseFailure)
+//     declare an empty slice — they produce Valid=true with Status="" at
+//     runtime. PreToolUse + PostToolUseFailure are routed via handler.go's
+//     delegation extractor (PR #829, issue #821) to mark/unmark the
+//     Delegating flag for codex-companion Bash invocations; they must stay
+//     installable so cc actually fires them on fresh installs.
 //   - Polymorphic events (Notification) declare the union across sub-branches
 //     (permission_prompt / elicitation_dialog → Waiting; idle_prompt /
 //     auth_success → Idle). Drift test pins each sub-branch separately.
@@ -104,7 +108,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Lifecycle:    agent.LifecycleNone,
 		EmitsStatus:  []agent.Status{},
 		Description:  "Tool call about to execute",
-		Handling:     agent.HookHandlingUnsupported,
 	},
 	{
 		PurdexName:   "PdxPermissionDenied",
@@ -127,7 +130,6 @@ var ccEventSpecs = []agent.HookEventSpec{
 		Lifecycle:    agent.LifecycleNone,
 		EmitsStatus:  []agent.Status{},
 		Description:  "Tool call failed",
-		Handling:     agent.HookHandlingIgnored,
 	},
 	{
 		PurdexName:   "PdxPostToolBatch",

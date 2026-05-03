@@ -52,6 +52,14 @@ var providerFixtures = map[string][]driftFixture{
 		{"PdxSessionEnd", `{}`, agent.StatusClear, true},
 		{"PdxSubagentStart", `{"agent_id":"a"}`, "", true}, // Valid=true, Status="" (filtered)
 		{"PdxSubagentStop", `{"agent_id":"a"}`, "", true},  // Valid=true, Status="" (filtered)
+		// PR #829 / issue #821: cc PreToolUse + PostToolUseFailure are
+		// detail-only valid (Valid=true, Status="") so handler.go's
+		// delegation extractor can mark/unmark the Delegating flag for
+		// codex-companion Bash invocations. Removing Handling from events.go
+		// makes both spec entries installable; the fixtures here cover the
+		// installer-iteration drift contract.
+		{"PdxPreToolUse", `{"tool_name":"Bash","tool_use_id":"t","agent_id":"a"}`, "", true},
+		{"PdxPostToolUseFailure", `{"tool_name":"Bash","tool_use_id":"t","agent_id":"a"}`, "", true},
 	},
 	"codex": {
 		{"PdxSessionStart", `{}`, agent.StatusIdle, true},
