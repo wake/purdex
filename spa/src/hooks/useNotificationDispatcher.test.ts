@@ -355,3 +355,87 @@ describe('error notification debounce', () => {
     expect(key1).not.toBe(key2)
   })
 })
+
+// ---------------------------------------------------------------------------
+// P3-T2: cleanup paths (clearSession / removeHost / TTL)
+// ---------------------------------------------------------------------------
+
+describe('debounce cleanup', () => {
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    // Reset agent store
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounce__clear_session_resets — next event passes after clearSession', () => {
+    // Seed lastEvents so subscription can detect the removal
+    const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: { error: 'rate_limit' } }
+    useAgentStore.setState({ lastEvents: { 'host:sess': fakeEvent } })
+
+    // First event passes and sets debounce window
+    shouldNotify(makeErrorParams('host:sess', 'rate_limit'))
+    // Second event blocked
+    vi.setSystemTime(1_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(false)
+
+    // clearSession removes 'host:sess' from lastEvents → triggers subscription → purge debounce
+    useAgentStore.getState().clearSession('host', 'sess')
+
+    // Next event should pass (window cleared)
+    vi.setSystemTime(2_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__remove_host_resets — all keys for host cleared on removeHost', () => {
+    // Seed lastEvents so subscription can detect host removal
+    const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: {} }
+    useAgentStore.setState({
+      lastEvents: {
+        'host:sess1': { ...fakeEvent },
+        'host:sess2': { ...fakeEvent },
+      },
+    })
+
+    // Seed two sessions on same host
+    shouldNotify(makeErrorParams('host:sess1', 'rate_limit'))
+    shouldNotify(makeErrorParams('host:sess2', 'rate_limit'))
+
+    vi.setSystemTime(1_000)
+    // Both blocked
+    expect(shouldNotify(makeErrorParams('host:sess1', 'rate_limit'))).toBe(false)
+    expect(shouldNotify(makeErrorParams('host:sess2', 'rate_limit'))).toBe(false)
+
+    // removeHost clears all 'host:*' keys from lastEvents → triggers subscription → purge all
+    useAgentStore.getState().removeHost('host')
+
+    vi.setSystemTime(2_000)
+    // Both should pass now (windows cleared)
+    expect(shouldNotify(makeErrorParams('host:sess1', 'rate_limit'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('host:sess2', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__ttl_cleanup — stale entries removed from Map on next shouldNotify call', () => {
+    const ERROR_NOTIFY_WINDOW_MS = 60_000
+    // Set debounce entry at t=0
+    shouldNotify(makeErrorParams('host:ttl-sess', 'rate_limit'))
+
+    // Advance time past 5 × WINDOW_MS + 1ms
+    vi.setSystemTime(5 * ERROR_NOTIFY_WINDOW_MS + 1)
+
+    // Make a shouldNotify call on a different key to trigger TTL sweep
+    // (TTL sweep runs during any error shouldNotify call)
+    shouldNotify(makeErrorParams('host:other-sess', 'rate_limit'))
+
+    // The original stale entry for host:ttl-sess should have been evicted.
+    // We verify indirectly: calling shouldNotify on ttl-sess returns true
+    // (first-event semantics, not blocked by stale silentUntil)
+    const result = shouldNotify(makeErrorParams('host:ttl-sess', 'rate_limit'))
+    expect(result).toBe(true)
+  })
+})

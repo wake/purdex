@@ -37,6 +37,55 @@ export function __resetDebounceStateForTests(): void {
   errorDebounceState.clear()
 }
 
+/** Iterate debounce Map, parsing each key once and calling cb(parsed, rawKey). */
+function forEachDebounceKey(cb: (parsed: [string, string, string], rawKey: string) => void): void {
+  for (const rawKey of errorDebounceState.keys()) {
+    try {
+      const parsed = JSON.parse(rawKey) as [string, string, string]
+      cb(parsed, rawKey)
+    } catch {
+      // Defensive: skip malformed keys (should never happen under normal use)
+    }
+  }
+}
+
+/** Remove all debounce entries for a given compositeKey (hostId:sessionCode). */
+function purgeDebounceForCompositeKey(ck: string): void {
+  const toDelete: string[] = []
+  forEachDebounceKey((parsed, rawKey) => {
+    if (parsed[0] === ck) toDelete.push(rawKey)
+  })
+  for (const k of toDelete) errorDebounceState.delete(k)
+}
+
+/** Remove all debounce entries for all sessions under a given hostId. */
+function purgeDebounceForHost(hostId: string): void {
+  const toDelete: string[] = []
+  forEachDebounceKey((parsed, rawKey) => {
+    if (parsed[0].split(':')[0] === hostId) toDelete.push(rawKey)
+  })
+  for (const k of toDelete) errorDebounceState.delete(k)
+}
+
+// Subscribe to store changes to clean up debounce state when sessions/hosts are removed.
+// Module-level subscription: registered once at import time, no teardown needed for this pattern.
+useAgentStore.subscribe((state, prevState) => {
+  // Detect removed sessions (lastEvents key disappeared)
+  for (const key of Object.keys(prevState.lastEvents)) {
+    if (!(key in state.lastEvents)) {
+      purgeDebounceForCompositeKey(key)
+    }
+  }
+  // Detect removed hosts (any key whose host prefix is gone)
+  const prevHostIds = new Set(Object.keys(prevState.lastEvents).map(k => k.split(':')[0]))
+  const currHostIds = new Set(Object.keys(state.lastEvents).map(k => k.split(':')[0]))
+  for (const hostId of prevHostIds) {
+    if (!currHostIds.has(hostId)) {
+      purgeDebounceForHost(hostId)
+    }
+  }
+})
+
 export type NotificationAction =
   | { kind: 'open-session'; hostId: string; sessionCode: string }
   | { kind: 'open-host'; hostId: string }
