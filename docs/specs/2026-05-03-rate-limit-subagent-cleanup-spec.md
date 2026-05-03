@@ -416,7 +416,7 @@ Not a code change. Captured here so PR-A's verification plan can reference it.
 | Test | Behaviour asserted |
 |---|---|
 | `TestStopFailure_NativeDetach_Hits` | `frame.Subagents` has native ref `{ID: X}`; `PdxStopFailure` payload `{agent_id: X}` arrives; ref removed; trace reason `native_subagent_detached_on_stop_failure` |
-| `TestStopFailure_NativeDetach_Misses_NoMutation` | `frame.Subagents` empty (or contains only refs whose IDs differ from payload `agent_id`); payload `{agent_id: X}` arrives; assertions: (a) **`mutateSubagentsWithRetry` is NOT called** (subagents list bit-identical pre/post); (b) NO `native_subagent_detached_on_stop_failure` trace step recorded; (c) legacy post-switch `UpdateHookPath` path DOES execute — `frame.Status` becomes `error`, `LastSeenAt` refreshes, normalized event broadcast — preserving v0 behaviour bit-exactly for unrecognised payloads. Asserts pre-check correctness without breaking legacy semantics. |
+| `TestStopFailure_NativeDetach_Misses_NoMutation` | `frame.Subagents` empty (or contains only refs whose IDs differ from payload `agent_id`); payload `{agent_id: X}` arrives; assertions: (a) `applyFrameEvent` returned `FrameTraceMeta.Reason != "native_subagent_detached_on_stop_failure"` (the only behaviourally-distinct trace signal of the new code path); (b) `mutateSubagentsWithRetry` not invoked — verified either via a spy/call-counter wrapper around the frame store interface, or by asserting the trace pipeline emits the legacy `UpdateHookPath` step rather than a frame-level mutation step. Plan §test-instrumentation will pick the concrete mechanism; "subagents bit-identical pre/post" alone is **not** sufficient evidence (a miss-ref mutate would also write back the same slice). (c) Legacy post-switch `UpdateHookPath` path DOES execute — `frame.Status` becomes `error`, `LastSeenAt` refreshes, normalized event broadcast — preserving v0 behaviour bit-exactly for unrecognised payloads. Together (a)+(b)+(c) prove pre-check correctness without breaking legacy semantics. |
 | `TestStopFailure_NoAgentId_LegacyBehaviour` | payload omits `agent_id` field entirely; existing `frame != nil` break path preserved; no detach, no trace change |
 | `TestStopFailure_EmptyAgentId_LegacyBehaviour` | payload contains `agent_id: ""` (explicit empty string from upstream); same behaviour as missing field. Locks down the empty-string branch since `findNativeRefByID` returns -1 early when id is empty |
 | `TestStopFailure_PreservesProxyRefs` | `frame.Subagents` has `{ID:X, IsProxy:false}` AND `{ID:Y, IsProxy:true, SourcePID:P}`; payload `{agent_id:X}`; only X removed, Y untouched |
@@ -481,7 +481,7 @@ Optimistic-concurrency retry path (`mutateSubagentsWithRetry`) is already covere
 - Rate-limit retry-throttling for cc itself (upstream concern)
 - daemon-side broadcast suppression / coalescing (would mask trace fidelity)
 - adding a `last_seen_at` timestamp to native refs to enable a TTL sweep (broader schema change; revisit if Phase 1 turns out insufficient)
-- opencode plugin emitting `StopFailure` (currently doesn't; out of scope here)
+- opencode plugin extending `PdxStopFailure` payload with `agent_id` (currently emits the event but without `agent_id`, so opencode native detach is a silent no-op until the plugin template is updated; that template change is out of scope here)
 - Migrating PR-B's debounce state into zustand (architectural divergence, no concrete benefit)
 - SPA-side suppression of `unread` badge during error storms (deliberately preserved)
 
