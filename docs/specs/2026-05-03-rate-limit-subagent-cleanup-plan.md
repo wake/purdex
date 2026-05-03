@@ -1,6 +1,14 @@
 # Rate-limit subagent cleanup + notification debounce — Implementation Plan
 
-> **Status**：v2（plan-review round 1 收 3 P1 + 5 P2 + 4 fact + 2 nit；v2 全採納）
+> **Status**：v3（plan-review round 2 收 1 P1 + 3 P2 + 1 nit；v3 全採納；待 round 3 final approve）
+>
+> v2 → v3 修：
+> - **P1 Phase 2 restore WAL**：restore 前必先 `rm -f .db-wal .db-shm`，避免新 `.db` 與舊 WAL 不一致；指令補進 §2 流程
+> - **P2 §7 test 命名語意過強**：`TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace` → `TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace`。`FrameTraceMeta.Reason` 比對證明的是「沒走 detach branch」而非嚴格「mutate 沒被 call」；前者已足以鎖住 spec §3.2 行為契約
+> - **P2 AC 表 phase/task 編號 stale**：v2 把 P3-T1+T2 合併、P3-T3→T2、T4→T3、T5→T4；AC table 對應修正（AC5→P3-T1 / AC6→P3-T3 / AC7→P3-T2 / AC8→P3-T4 / AC9→P3-T4）
+> - **nit §7 helper 名稱**：example 改用既有 helper 名稱 `newTestModule` / `seedFrame` / `seedFrameWithSubagents` / `m.frames.GetByIdentity`，避免 subagent 誤找
+
+> **Previous status**：v2（plan-review round 1 收 3 P1 + 5 P2 + 4 fact + 2 nit；v2 全採納）
 >
 > v1 → v2 修：
 > - **P1.1 §7 test instrumentation**: `counterFrameStore` 設計不可行（`Module.frames` 是 `*store.FramesStore` concrete type，無 interface 可 wrap）。改用 `applyFrameEvent` 回傳的 `FrameTraceMeta.Reason` 直接驗證 — `Misses_NoMutation` assert `Reason ∈ {"parent_frame_found", "daemon_restart_recovery", "no_parent_fallback"}`（generic post-switch path），`Hits` assert `Reason == "native_subagent_detached_on_stop_failure"`. 完全可從單 unit test 驗證、無需 store-level fake.
@@ -148,7 +156,7 @@
 | 檔案 | 改動 |
 |---|---|
 | `internal/module/agent/frame_ops.go` | `LifecycleStopFailure` body 重寫成 spec §3.2 完整 snippet：(1) `frame != nil` 分支 pre-check via `findNativeRefByID` (Phase P1-T2 已加) (2) 命中 → `mutateSubagentsWithRetry(LifecycleSubagentStop, ref)` → 報 `Decision="updated_frame"` `Reason="native_subagent_detached_on_stop_failure"` 或 `Reason="frame_missing"`（concurrent delete） (3) 不命中 / 缺 / 空 agent_id → `break`（走 generic post-switch） (4) `frame == nil` → `fallthrough` 進 `LifecycleStop` 既有 codex/proxy detach 路徑（P1-T3a 拆出的副本被 fallthrough 收掉）|
-| `internal/module/agent/frame_ops_test.go` | + 6 case，per spec §6.1（直接表）：<br>`TestStopFailure_NativeDetach_Hits` — assert `meta.Reason == "native_subagent_detached_on_stop_failure"` + DB ref 確實被移除<br>`TestStopFailure_NativeDetach_Misses_NoMutation` — assert `meta.Reason ∈ {"parent_frame_found", "daemon_restart_recovery", "no_parent_fallback"}` + DB Status=error / LastSeenAt 已 refresh（per §7 instrumentation）<br>`TestStopFailure_NoAgentId_LegacyBehaviour` — payload 缺 `agent_id` field；同 Misses behaviour<br>`TestStopFailure_EmptyAgentId_LegacyBehaviour` — payload `agent_id: ""`；同 Misses behaviour<br>`TestStopFailure_PreservesProxyRefs` — frame 同時有 native + proxy；只 native 被 detach<br>`TestStopFailure_FrameNil_FallthroughToProxyDetach` — frame==nil，走原 codex turn-aware proxy detach；assert reason `proxy_subagent_detached_on_stop` (or family)<br>`TestStopFailure_FrameDeletedMidFlight` — pre-check pass 但 mutate 回 `applied=false`；trace reason `frame_missing` |
+| `internal/module/agent/frame_ops_test.go` | + 6 case，per spec §6.1（直接表）：<br>`TestStopFailure_NativeDetach_Hits` — assert `meta.Reason == "native_subagent_detached_on_stop_failure"` + DB ref 確實被移除<br>`TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace` — assert `meta.Reason ∈ {"parent_frame_found", "daemon_restart_recovery", "no_parent_fallback"}` + DB Status=error / LastSeenAt 已 refresh（per §7 instrumentation）<br>`TestStopFailure_NoAgentId_LegacyBehaviour` — payload 缺 `agent_id` field；同 Misses behaviour<br>`TestStopFailure_EmptyAgentId_LegacyBehaviour` — payload `agent_id: ""`；同 Misses behaviour<br>`TestStopFailure_PreservesProxyRefs` — frame 同時有 native + proxy；只 native 被 detach<br>`TestStopFailure_FrameNil_FallthroughToProxyDetach` — frame==nil，走原 codex turn-aware proxy detach；assert reason `proxy_subagent_detached_on_stop` (or family)<br>`TestStopFailure_FrameDeletedMidFlight` — pre-check pass 但 mutate 回 `applied=false`；trace reason `frame_missing` |
 
 **TDD 步驟**：
 1. 寫 7 個 test case（紅）
@@ -236,12 +244,18 @@ sqlite3 ~/.config/pdx/agent_events.db "SELECT pane_id, json_array_length(subagen
 ```bash
 # 停 daemon
 brew services stop pdx
+# 移除舊 WAL/SHM — 否則新 .db 與舊 WAL 不一致，啟動可能讀到 stale state
+rm -f ~/.config/pdx/agent_events.db-wal ~/.config/pdx/agent_events.db-shm
 # 整庫覆蓋（最後備份的時間戳依 step 4 實際輸出）
 cp ~/.config/pdx/backups/agent_events-pre-cleanup-2026-05-03-XXXXXX.db ~/.config/pdx/agent_events.db
+# 啟動 — daemon 第一次寫入時會重建空的 .db-wal / .db-shm
 brew services start pdx
 ```
 
-**WAL 檔注意**：`.backup` 已含 WAL 內容。restore 後 daemon 啟動會重建 `.db-shm` 與 `.db-wal`，無需手動處理。
+**WAL 檔注意**：
+- `.backup` API 產生 source DB 的一致 snapshot（含 WAL 中已提交內容），備份時 daemon 已停所以新寫入也不會發生 — `.backup` 本身正確
+- **Restore 時必須先刪舊 `.db-wal` / `.db-shm`**，因為這兩檔是 persistent state 的一部分；單獨覆蓋 `.db` 會讓新 DB 與舊 WAL 不一致，啟動讀到混合狀態（rare 但 destructive）
+- 不需要在 `.backup` 前強制 `WAL checkpoint`；`.backup` 已是正確 snapshot 路徑（見 [SQLite backup API](https://www.sqlite.org/backup.html) + [WAL doc](https://www.sqlite.org/wal.html)）
 
 ---
 
@@ -355,14 +369,14 @@ brew services start pdx
 | AC | Validated by | Phase |
 |---|---|---|
 | AC1 dthn 不再累積 | Phase 2 SQL cleanup + 1 Task cycle 觀察 + Phase 1 fixture replay test | P1-T4 + Phase 2 |
-| AC2 frame==nil 路徑零 regression | `go test ./internal/module/agent/... -run "L2|Stop"` 既有 L2 test 全綠 | P1-T3 |
-| AC3 no/empty agent_id legacy preserve | `TestStopFailure_NoAgentId_LegacyBehaviour` + `TestStopFailure_EmptyAgentId_LegacyBehaviour` | P1-T3 |
-| AC4 no phantom detach broadcast | `TestStopFailure_NativeDetach_Misses_NoMutation` 三條 assertion | P1-T3 |
-| AC5 ≥98.8% suppression | `debounce__storm_100_events_yields_one_notification` | P3-T2 |
-| AC6 unread badge unaffected | `debounce__unread_badge_unaffected` | P3-T4 |
-| AC7 cleanup 清 state | `debounce__clear_session_resets` + `debounce__remove_host_resets` | P3-T3 |
-| AC8 lint / type clean | `go vet ./...` + `pnpm run lint` + `pnpm run build` | P1-T5, P3-T5 |
-| AC9 LOC cap | PR diff `+/- LOC` ≤ 500 (PR-A) / ≤ 300 (PR-B) | P1-T5, P3-T5 |
+| AC2 frame==nil 路徑零 regression | `go test ./internal/module/agent/... -run "L2|Stop"` 既有 L2 test 全綠 | P1-T3a + P1-T3b |
+| AC3 no/empty agent_id legacy preserve | `TestStopFailure_NoAgentId_LegacyBehaviour` + `TestStopFailure_EmptyAgentId_LegacyBehaviour` | P1-T3b |
+| AC4 no phantom detach broadcast | `TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace` 三條 assertion | P1-T3b |
+| AC5 ≥98.8% suppression | `debounce__storm_100_events_yields_one_notification` | P3-T1 |
+| AC6 unread badge unaffected | `debounce__unread_badge_unaffected` | P3-T3 |
+| AC7 cleanup 清 state | `debounce__clear_session_resets` + `debounce__remove_host_resets` | P3-T2 |
+| AC8 lint / type clean | `go vet ./...` + `pnpm run lint` + `pnpm run build` | P1-T5, P3-T4 |
+| AC9 LOC cap | PR diff `+/- LOC` ≤ 500 (PR-A) / ≤ 300 (PR-B) | P1-T5, P3-T4 |
 
 ---
 
@@ -382,7 +396,7 @@ brew services start pdx
 
 ## 7. Test Instrumentation Strategy（spec §6.1 codex round-3 P2 + plan round-1 P1.1）
 
-**問題**：spec §6.1 `TestStopFailure_NativeDetach_Misses_NoMutation` 的 assertion 「subagents bit-identical / no-mutate-call」需要可驗證機制。原 v1 草案 `counterFrameStore` fake **不可行** — `internal/module/agent/module.go:31` 是 `frames *store.FramesStore` concrete type，沒有 `store.FrameStore` interface 可包；`fakes_test.go` 也沒有 frame-store fake 可擴展。
+**問題**：spec §6.1 `TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace` 的 assertion 「subagents bit-identical / no-mutate-call」需要可驗證機制。原 v1 草案 `counterFrameStore` fake **不可行** — `internal/module/agent/module.go:31` 是 `frames *store.FramesStore` concrete type，沒有 `store.FrameStore` interface 可包；`fakes_test.go` 也沒有 frame-store fake 可擴展。
 
 **Plan v2 decision**：用 **`applyFrameEvent` 回傳的 `FrameTraceMeta.Reason` 行為差異**驗證。spec §3.2 兩 path 自然 emit 不同 trace reason：
 
@@ -396,45 +410,59 @@ brew services start pdx
 **Test pattern**：直接呼叫 `m.applyFrameEvent(req, result, ts)` → 取回傳 `FrameTraceMeta` → assert `Reason` 值。無需 store-level wrap 或 spy；既有 `frame_ops_test.go` 已用這 pattern（多處）。
 
 ```go
-func TestStopFailure_NativeDetach_Misses_NoMutation(t *testing.T) {
-    m, _ := setupTestModule(t)  // existing helper or build inline
-    paneID, frameID := seedCCFrameWithoutNativeRef(t, m, "no-match-id")  // helpers in fakes_test.go pattern
-    req := buildPdxStopFailureRequest(paneID, "different-id")  // agent_id mismatch
-    result := agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: map[string]any{"agent_id": "different-id", "error": "rate_limit"}}
+func TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace(t *testing.T) {
+    m := newTestModule(t)
+    frame := seedFrame(t, m, "cc", agent.StatusRunning)
+    // seed frame with a native ref whose ID will NOT match the StopFailure payload
+    seedFrameWithSubagents(t, m, frame, []agent.SubagentRef{{ID: "no-match-id"}})
 
-    _, meta, err := m.applyFrameEvent(req, result, time.Now().UnixNano())
+    req := buildPdxStopFailureRequest(frame.PaneID, "different-id", frame.PID, frame.ProcessStartTime)
+    result := agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: map[string]any{"agent_id": "different-id", "error": "rate_limit"}}
+    preTs := time.Now().UnixNano()
+    _, meta, err := m.applyFrameEvent(req, result, preTs)
     require.NoError(t, err)
+
     // (a) ref-presence pre-check did NOT match → no native detach trace step:
     require.NotEqual(t, "native_subagent_detached_on_stop_failure", meta.Reason)
     // (b) generic post-switch path executed (legacy behaviour preserved):
     require.Equal(t, "updated_frame", meta.Decision)
     require.Contains(t, []string{"parent_frame_found", "daemon_restart_recovery", "no_parent_fallback"}, meta.Reason)
     // (c) frame Status now error, LastSeenAt refreshed (verify via DB read):
-    refreshed := getFrameByID(t, m, frameID)
+    refreshed, err := m.frames.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
+    require.NoError(t, err)
+    require.NotNil(t, refreshed)
     require.Equal(t, agent.StatusError, refreshed.Status)
-    require.Greater(t, refreshed.LastSeenAt, /*pre-event timestamp*/)
+    require.GreaterOrEqual(t, refreshed.LastSeenAt, preTs)
+    // ref still present (because not matched)
+    require.Len(t, refreshed.Subagents, 1)
+    require.Equal(t, "no-match-id", refreshed.Subagents[0].ID)
 }
 ```
 
 ```go
 func TestStopFailure_NativeDetach_Hits(t *testing.T) {
-    m, _ := setupTestModule(t)
-    paneID, frameID := seedCCFrameWithNativeRef(t, m, "match-id")
-    req := buildPdxStopFailureRequest(paneID, "match-id")
-    result := agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: map[string]any{"agent_id": "match-id", "error": "rate_limit"}}
+    m := newTestModule(t)
+    frame := seedFrame(t, m, "cc", agent.StatusRunning)
+    seedFrameWithSubagents(t, m, frame, []agent.SubagentRef{{ID: "match-id"}})
 
+    req := buildPdxStopFailureRequest(frame.PaneID, "match-id", frame.PID, frame.ProcessStartTime)
+    result := agent.DeriveResult{Valid: true, Status: agent.StatusError, Detail: map[string]any{"agent_id": "match-id", "error": "rate_limit"}}
     _, meta, err := m.applyFrameEvent(req, result, time.Now().UnixNano())
     require.NoError(t, err)
     require.Equal(t, "updated_frame", meta.Decision)
     require.Equal(t, "native_subagent_detached_on_stop_failure", meta.Reason)
-    refreshed := getFrameByID(t, m, frameID)
+    refreshed, err := m.frames.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
+    require.NoError(t, err)
+    require.NotNil(t, refreshed)
     require.Empty(t, refreshed.Subagents)  // ref actually removed
 }
 ```
 
 **Cross-validation**：兩 test reciprocally guarantee — `Hits` 沒 emit 新 reason 時就是 bug 在於 pre-check 過嚴；`Misses` emit 新 reason 時就是 bug 在於 pre-check 沒擋住誤判。Reason mismatch 是直接、確定的失敗信號。
 
-**Placement**：seed helpers (`seedCCFrameWithNativeRef` / `seedCCFrameWithoutNativeRef` / `getFrameByID` / `buildPdxStopFailureRequest`) 視既有 `fakes_test.go` 內容判斷 — 既有 helper 復用優先，缺則加。
+**測試保證範圍誠實標示**：`FrameTraceMeta.Reason` 比對證明的是「沒走 detach branch」，**不嚴格**證明「`mutateSubagentsWithRetry` 沒被呼叫」（理論上 miss-ref mutate 也會寫回等價 slice + refresh LastSeenAt，但 spec §3.2 設計 break 路徑就是不 call mutate，所以行為契約已鎖住）。要進一步嚴格驗證 mutate-not-called 需要 instrumentation 級改動（`Module.frames` 抽 interface）— 本 PR 不擴大 scope。
+
+**Placement**：example 中 `newTestModule` / `seedFrame` / `seedFrameWithSubagents` 是既有 helper 名（驗於 `internal/module/agent/fakes_test.go`）；`buildPdxStopFailureRequest` 若不存在則 inline 構造 EventRequest（payload shape per spec §1.2 fixture）。實作時 subagent 應先 grep 既有 helper signature 後再 reuse / 新建。
 
 ---
 
