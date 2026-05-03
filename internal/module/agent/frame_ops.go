@@ -286,160 +286,80 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			After:         summarizeFrame(&stored),
 		}, err
 	case agentpkg.LifecycleStopFailure:
-		// P1-T3a structural split: case body is a verbatim copy of the
-		// LifecycleStop branch below. P1-T3b will replace this body with
-		// the native subagent detach branch + fallthrough to LifecycleStop
-		// for the frame == nil tail. No behaviour change in this commit.
+		// Native subagent failure path: payload's agent_id identifies
+		// the failing subagent (not the main session). Empirically this
+		// is how cc reports rate_limit and other subagent terminations
+		// (~98% of observed Task failures in dthn telemetry, 2026-05-03,
+		// spec §1.2). Without this branch native SubagentRefs accumulate
+		// forever — the only GC path is LifecycleSessionEnd, which never
+		// fires on a long-running cc session that retries through
+		// rate-limit storms (frame_ops.go old §288-300 was a no-op for
+		// frame != nil).
 		//
-		// L2 codex turn-aware Stop targeted detach (spec §3.3.D + plan
-		// §3 P3-T8a). All detach goes through pane-scan helpers; we never
-		// call findProxyParent on the Stop path because the sender's PPID
-		// chain may have already been torn down by the time the hook
-		// arrives (B1/v2 fix).
-		//
-		// Gate 1 — sender owns its own frame. Standalone agent Stop is
-		// the J3 dispatcher's territory (lights-rebuild ProbeIntent), not
-		// L2 proxy detach (spec §3.3.D + §5 row 12).
+		// Two-step gate: pre-check ref presence with the pure helper,
+		// then mutate. mutateSubagentsWithRetry's `applied=true` does
+		// NOT mean a ref was removed — it only means UpsertIfUnchanged
+		// committed (LastSeenAt always refreshes regardless of whether
+		// the target ref was present, spec §2.3). Without the pre-check
+		// we'd broadcast a phantom "detached" trace step on every
+		// mismatched payload.
 		if frame != nil {
-			break
-		}
-		// Gate 2 — non-codex providers fall back to wildcard process-level
-		// detach (cc/opencode have no per-turn identity). Mirrors the
-		// long-standing PR-2b SessionEnd path.
-		if req.AgentType != "codex" {
-			removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs)
-			if derr != nil {
-				return nil, FrameTraceMeta{}, derr
-			}
-			if removed {
-				projection, perr := m.projectPane(req.TmuxPaneID)
-				return projection, FrameTraceMeta{
-					FrameID:       ownerAfter.FrameID,
-					ParentFrameID: ownerAfter.ParentFrameID,
-					Decision:      "updated_frame",
-					Reason:        "proxy_subagent_detached_on_stop",
-					Before:        ownerBefore,
-					After:         ownerAfterMap,
-				}, perr
-			}
-			// No matching ref — fall through to generic post-switch path
-			// so legacy behavior (no frame mutation, projection refresh)
-			// stays observable.
-			break
-		}
-		// Codex three sub-case dispatch (spec §3.3.D table).
-		turnID := parseCodexTurnID(req.RawEvent)
-		if turnID != "" {
-			// (a) Targeted detach by (PID, StartTime, TurnID).
-			removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSenderTurn(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, turnID, broadcastTs)
-			if derr != nil {
-				return nil, FrameTraceMeta{}, derr
-			}
-			if removed {
-				projection, perr := m.projectPane(req.TmuxPaneID)
-				return projection, FrameTraceMeta{
-					FrameID:       ownerAfter.FrameID,
-					ParentFrameID: ownerAfter.ParentFrameID,
-					Decision:      "updated_frame",
-					Reason:        "proxy_subagent_detached_on_stop_turn",
-					Before:        ownerBefore,
-					After:         ownerAfterMap,
-				}, perr
-			}
-			// Stop's turn doesn't match any live ref. Could be late Stop
-			// after a turn-change upsert overwrote SourceTurnID, or a
-			// stale-tombstone Stop after a previous detach (idempotent
-			// no-op). Trace stop_no_match either way.
-			projection, perr := m.projectPane(req.TmuxPaneID)
-			return projection, FrameTraceMeta{
-				Decision: "skipped",
-				Reason:   "proxy_subagent_stop_no_match",
-				Before:   map[string]any{},
-				After:    map[string]any{},
-			}, perr
-		}
-		// (b)/(c) — codex Stop with empty/parse-failed turn_id. Pane-scan
-		// for the matching broker ref (PID, StartTime) to make the
-		// fallback decision; any non-matching broker's SourceTurnID is
-		// irrelevant (H1/v2 fix).
-		paneFrames, perr := m.frames.ListByPane(req.TmuxPaneID)
-		if perr != nil {
-			return nil, FrameTraceMeta{}, perr
-		}
-		var matched *agentpkg.SubagentRef
-		for i := range paneFrames {
-			idx := findProxyRefByBroker(paneFrames[i].Subagents, req.SenderPID, req.SenderStartTime)
-			if idx >= 0 {
-				ref := paneFrames[i].Subagents[idx]
-				matched = &ref
+			agentID, _ := result.Detail["agent_id"].(string)
+			if agentID == "" || findNativeRefByID(frame.Subagents, agentID) < 0 {
+				// No payload agent_id, or payload references a ref we
+				// don't hold. Trace as no-detach for observability;
+				// preserve legacy post-switch UpdateHookPath +
+				// projection refresh by breaking. We do NOT mutate
+				// frame here — even though mutateSubagentsWithRetry
+				// would be data-safe (returns same slice), it would
+				// refresh LastSeenAt and consume an OCC attempt for
+				// no benefit.
 				break
 			}
-		}
-		if matched == nil {
-			// No broker ref to detach — silently drop the Stop. Trace as
-			// stop_no_match so the chain remains observable; this also
-			// covers idempotent re-Stop after a previous successful
-			// detach (row 14 lower-confidence branch).
-			projection, perr2 := m.projectPane(req.TmuxPaneID)
+			ref := agentpkg.SubagentRef{
+				ID: agentID,
+				// Type: native ref match is by ID alone (spec §2.4 +
+				// subagentRefMatches at frame_ops.go:913); Type is
+				// informational. Mirror the SubagentStart construction
+				// pattern at frame_ops.go:171-184 by using the parent
+				// frame's AgentType.
+				Type: frame.AgentType,
+			}
+			applied, stored, merr := m.mutateSubagentsWithRetry(*frame, agentpkg.LifecycleSubagentStop, ref, broadcastTs)
+			if merr != nil {
+				return nil, FrameTraceMeta{}, merr
+			}
+			if !applied {
+				// Frame deleted mid-flight (concurrent SessionEnd or
+				// sweep deleted the row between our pre-check and the
+				// UpsertIfUnchanged). Trace as frame_missing — the
+				// existing reason already used elsewhere for
+				// "row disappeared between read and write".
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					Decision: "skipped",
+					Reason:   "frame_missing",
+					Before:   before,
+					After:    map[string]any{},
+				}, perr
+			}
+			projection, perr := m.projectPane(req.TmuxPaneID)
 			return projection, FrameTraceMeta{
-				Decision: "skipped",
-				Reason:   "proxy_subagent_stop_no_match",
-				Before:   map[string]any{},
-				After:    map[string]any{},
-			}, perr2
-		}
-		if matched.SourceTurnID != "" {
-			// (b) Matching broker has a live SourceTurnID (a previous
-			// upsert recorded a turn_id). Stop with empty turn_id is
-			// almost certainly a malformed payload, NOT a legitimate
-			// "broker is finished" signal — keep the ref so the
-			// conservative behavior preserves the lit dot until either
-			// the next upsert or governance sweep clears it.
-			projection, perr2 := m.projectPane(req.TmuxPaneID)
-			return projection, FrameTraceMeta{
-				Decision: "skipped",
-				Reason:   "proxy_subagent_stop_parse_failed",
-				Before:   map[string]any{},
-				After:    map[string]any{},
-			}, perr2
-		}
-		// (c) Matching broker has empty SourceTurnID (SessionStart
-		// attached but no UserPromptSubmit/PreToolUse upsert ever
-		// recorded a turn) → empty-turn-only detach. Round-2 A1: a
-		// process-level wildcard here would TOCTOU-race a concurrent
-		// UserPromptSubmit that upgrades the ref to turn-aware between
-		// our ListByPane scan above and the detach helper. Re-verify
-		// SourceTurnID == "" inside the optimistic-concurrency loop by
-		// reusing removeProxyRefForSenderTurn with turnID == "" — the
-		// match condition becomes (PID, StartTime, SourceTurnID == "")
-		// and any concurrent upgrade falls into the no-match branch
-		// (proxy_subagent_stop_no_match below).
-		removed, ownerAfter, ownerBefore, ownerAfterMap, derr := m.removeProxyRefForSenderTurn(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, "", broadcastTs)
-		if derr != nil {
-			return nil, FrameTraceMeta{}, derr
-		}
-		if removed {
-			projection, perr2 := m.projectPane(req.TmuxPaneID)
-			return projection, FrameTraceMeta{
-				FrameID:       ownerAfter.FrameID,
-				ParentFrameID: ownerAfter.ParentFrameID,
+				FrameID:       stored.FrameID,
+				ParentFrameID: stored.ParentFrameID,
 				Decision:      "updated_frame",
-				Reason:        "proxy_subagent_detached_on_stop",
-				Before:        ownerBefore,
-				After:         ownerAfterMap,
-			}, perr2
+				Reason:        "native_subagent_detached_on_stop_failure",
+				Before:        before,
+				After:         summarizeFrame(&stored),
+			}, perr
 		}
-		// Pane-scan saw a matching ref but the helper found nothing —
-		// concurrent writer detached between scan and helper. Trace
-		// stop_no_match so the chain accurately reflects "ref already
-		// gone" without claiming to have detached it twice.
-		projection, perr2 := m.projectPane(req.TmuxPaneID)
-		return projection, FrameTraceMeta{
-			Decision: "skipped",
-			Reason:   "proxy_subagent_stop_no_match",
-			Before:   map[string]any{},
-			After:    map[string]any{},
-		}, perr2
+		// frame == nil: collapse onto the existing LifecycleStop body so
+		// codex turn-aware proxy detach + cc/opencode wildcard
+		// process-level detach paths are reused unchanged. The
+		// `if frame != nil { break }` guard at the top of the
+		// LifecycleStop case body is a no-op here because frame is
+		// nil by precondition.
+		fallthrough
 	case agentpkg.LifecycleStop:
 		// L2 codex turn-aware Stop targeted detach (spec §3.3.D + plan
 		// §3 P3-T8a). All detach goes through pane-scan helpers; we never
