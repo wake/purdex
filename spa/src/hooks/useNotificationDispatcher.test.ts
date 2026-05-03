@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick } from './useNotificationDispatcher'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick, buildDebounceKey, __resetDebounceStateForTests } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 import { useTabStore } from '../stores/useTabStore'
@@ -14,6 +14,11 @@ const defaultSettings: NotificationSettings = {
 }
 
 describe('shouldNotify', () => {
+  beforeEach(() => {
+    // Reset debounce state so error-event tests in this suite don't bleed into each other
+    __resetDebounceStateForTests()
+  })
+
   it('returns true for waiting event with matching tab', () => {
     expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
   })
@@ -222,5 +227,131 @@ describe('handleNotificationClick workspace switching', () => {
     for (const ws of wsState.workspaces) {
       expect(ws.tabs).toHaveLength(0)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P3-T1: buildDebounceKey + state Map + shouldNotify integration
+// ---------------------------------------------------------------------------
+
+const errorSettings: NotificationSettings = {
+  enabled: true, events: {}, notifyWithoutTab: true, reopenTabOnClick: false,
+}
+
+function makeErrorParams(ck: string, errorString: string, eventName = 'StopFailure'): Parameters<typeof shouldNotify>[0] {
+  return {
+    derived: 'error',
+    eventName,
+    compositeKey: ck,
+    focusedCompositeKey: '',
+    hasTab: true,
+    settings: errorSettings,
+    errorString,
+  }
+}
+
+describe('buildDebounceKey', () => {
+  it('normal inputs produce a stable JSON array string', () => {
+    const key = buildDebounceKey('host:sess', 'StopFailure', 'rate_limit')
+    expect(key).toBe(JSON.stringify(['host:sess', 'StopFailure', 'rate_limit']))
+  })
+
+  it('inputs containing pipe characters are not confused with separators', () => {
+    const key1 = buildDebounceKey('a|b', 'c', 'd|e')
+    const key2 = buildDebounceKey('a', 'b|c', 'd|e')
+    expect(key1).not.toBe(key2)
+  })
+
+  it('undefined errorString maps to empty string', () => {
+    const key = buildDebounceKey('host:sess', 'StopFailure', undefined as unknown as string)
+    expect(key).toBe(JSON.stringify(['host:sess', 'StopFailure', '']))
+  })
+
+  it('null errorString maps to empty string', () => {
+    const key = buildDebounceKey('host:sess', 'StopFailure', null as unknown as string)
+    expect(key).toBe(JSON.stringify(['host:sess', 'StopFailure', '']))
+  })
+})
+
+describe('error notification debounce', () => {
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounce__test_reset_helper — reset clears state so tests are order-independent', () => {
+    shouldNotify(makeErrorParams('host:sess', 'rate_limit'))
+    __resetDebounceStateForTests()
+    // After reset, same key should pass again (first-event semantics)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__first_error_passes', () => {
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__second_error_within_window_blocked_and_extends', () => {
+    // t=0: first event passes, silentUntil = 60_000
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+
+    // t=30_000: second event — still within window; should be blocked and extend silentUntil to 90_000
+    vi.setSystemTime(30_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(false)
+
+    // t=65_000: would have passed under original window (60_000), but extension moved it to 90_000
+    vi.setSystemTime(65_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(false)
+  })
+
+  it('debounce__error_after_silence_window_passes', () => {
+    // t=0: first event
+    shouldNotify(makeErrorParams('host:sess', 'rate_limit'))
+    // t=70_000: window expired (>60_000 silence); should pass again
+    vi.setSystemTime(70_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__storm_100_events_yields_one_notification', () => {
+    // 100 events at ~1.67 Hz (600ms intervals) over ~60s
+    let passCount = 0
+    for (let i = 0; i < 100; i++) {
+      vi.advanceTimersByTime(600)
+      if (shouldNotify(makeErrorParams('host:sess', 'rate_limit'))) {
+        passCount++
+      }
+    }
+    // The first event (at t=600ms) should pass; all subsequent should be blocked
+    // and the sliding window keeps extending
+    expect(passCount).toBe(1)
+  })
+
+  it('debounce__different_keys_independent', () => {
+    // (a) same session + different detail.error both pass
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('host:sess', 'auth_failed'))).toBe(true)
+
+    __resetDebounceStateForTests()
+
+    // (b) same error + different sessions both pass
+    expect(shouldNotify(makeErrorParams('host:sess1', 'rate_limit'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('host:sess2', 'rate_limit'))).toBe(true)
+
+    __resetDebounceStateForTests()
+
+    // (c) same session + same error + different eventName both pass
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit', 'StopFailure'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit', 'Stop'))).toBe(true)
+  })
+
+  it('debounce__key_uses_json_array_not_pipe_join — no key collision', () => {
+    // Collision rebuke: these two triples would collide with pipe-join but not JSON.stringify
+    const key1 = buildDebounceKey('a|b', 'c', 'd|e')
+    const key2 = buildDebounceKey('a', 'b|c', 'd|e')
+    expect(key1).not.toBe(key2)
   })
 })

@@ -16,6 +16,27 @@ import { useHostStore } from '../stores/useHostStore'
 import { createTab } from '../types/tab'
 import { STORAGE_KEYS } from '../lib/storage'
 
+// ---------------------------------------------------------------------------
+// Error notification debounce (spec §4)
+// ---------------------------------------------------------------------------
+
+const ERROR_NOTIFY_WINDOW_MS = 60_000
+
+/** Module-level debounce state. Not in Zustand — dispatcher-private ephemeral state. */
+const errorDebounceState = new Map<string, { silentUntil: number }>()
+
+/** Build a collision-free debounce key from the 3-tuple that identifies an error bucket. */
+export function buildDebounceKey(ck: string, eventName: string, errorString: string): string {
+  // Why: JSON.stringify over a fixed-length array escapes separator chars,
+  // preventing collisions that a pipe-join scheme would produce.
+  return JSON.stringify([ck, eventName, String(errorString ?? '')])
+}
+
+/** Testing-only seam: clear module-level Map between tests. */
+export function __resetDebounceStateForTests(): void {
+  errorDebounceState.clear()
+}
+
 export type NotificationAction =
   | { kind: 'open-session'; hostId: string; sessionCode: string }
   | { kind: 'open-host'; hostId: string }
@@ -56,10 +77,12 @@ interface ShouldNotifyParams {
   hasTab: boolean
   settings: NotificationSettings
   notificationSilent?: boolean
+  /** Caller extracts from event.detail?.error before passing in (spec §4, option A). */
+  errorString?: string
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName: rawEventName, compositeKey: ck, focusedCompositeKey, hasTab, settings, notificationSilent = false } = params
+  const { derived, eventName: rawEventName, compositeKey: ck, focusedCompositeKey, hasTab, settings, notificationSilent = false, errorString } = params
   // W2 transition: cc broadcasts PdxXxx; legacy literal keys live in shouldNotify
   // suppression checks and NotificationSettings.events. Normalize once at entry.
   const eventName = normalizeEventName(rawEventName)
@@ -74,6 +97,28 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
   // Only suppress when user is actively looking at this session:
   // both the app window must be focused AND the session tab must be active.
   if (focusedCompositeKey === ck && document.hasFocus()) return false
+
+  // Trailing-edge sliding debounce for error notifications (spec §4.1–§4.3).
+  // Gate is only for derived==='error'; waiting/idle are not affected.
+  if (derived === 'error') {
+    const key = buildDebounceKey(ck, eventName, errorString ?? '')
+    const now = Date.now()
+
+    // TTL self-cleanup: amortised sweep of entries stale beyond 5×WINDOW_MS.
+    for (const [k, v] of errorDebounceState) {
+      if (v.silentUntil < now - 5 * ERROR_NOTIFY_WINDOW_MS) errorDebounceState.delete(k)
+    }
+
+    const entry = errorDebounceState.get(key)
+    if (entry && now < entry.silentUntil) {
+      // Within silence window: extend (trailing-edge sliding) and suppress.
+      entry.silentUntil = now + ERROR_NOTIFY_WINDOW_MS
+      return false
+    }
+    // First event or window expired: open new window and let through.
+    errorDebounceState.set(key, { silentUntil: now + ERROR_NOTIFY_WINDOW_MS })
+  }
+
   return true
 }
 
@@ -113,6 +158,9 @@ export function useNotificationDispatcher(): void {
         const activeInfo = getActiveSessionInfo()
         const focusedCompositeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
 
+        // Extract errorString before passing to shouldNotify (spec §4, option A).
+        const errorString = String(event.detail?.error ?? '')
+
         if (!shouldNotify({
           derived,
           eventName: event.raw_event_name,
@@ -121,6 +169,7 @@ export function useNotificationDispatcher(): void {
           hasTab,
           settings,
           notificationSilent: event.detail?.notification_silent === true,
+          errorString,
         })) continue
 
         const sessionsMap = useSessionStore.getState().sessions
