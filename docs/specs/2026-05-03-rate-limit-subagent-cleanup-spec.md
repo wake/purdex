@@ -1,10 +1,19 @@
 # Spec — Rate-limit subagent cleanup + notification debounce
 
-**Date**: 2026-05-03 (v1 → v2)
+**Date**: 2026-05-03 (v1 → v2 → v3)
 **Branch**: `worktree-rate-limit-cleanup`
 **Baseline**: origin/main `401a785c` (alpha.289)
 
-**v2 supersedes v1**. v1 codex review (`task-mopk1n84-e61c4i`, thread `019ded1e-ca04-7583-bfbf-b28d2eee134f`) found 3 P1 + 5 P2 + 1 nit findings. v2 addresses all of them:
+**v3 supersedes v2**. v2 codex review (`task-mopkf73y-c4bjsx`, thread `019ded28-6dad-7930-9df0-d04a29c72724`) found 2 P1 + 3 P2 + 1 fact + 1 nit (residual matrix from v1 → v2 transition). v3 addresses all of them:
+- P1: §6.1 `TestStopFailure_NativeDetach_Misses_NoMutation` assertion rewritten — break path DOES execute legacy `UpdateHookPath` (Status=error, LastSeenAt refresh, broadcast); test asserts only "no `mutateSubagentsWithRetry`, no `native_subagent_detached_on_stop_failure` trace step", not "no broadcast change".
+- P1: §10 verification plan rewritten — SQL is the immediate cleanup step, not "observe first then SQL if slow". Aligns with §5 / §11.
+- P2: §4.6 snippet updated to `JSON.stringify` (was still pipe-join).
+- P2: §4.4 cleanup description updated — uses key-builder reverse decode (`JSON.parse(key)[0] === ck`), not prefix-match.
+- P2: §5 SQL operational sequence adds `SELECT` backup + `BEGIN/COMMIT` transaction + multi-process check.
+- fact: §2.2 opencode "currently does not emit StopFailure" corrected — opencode `session.error` DOES emit `PdxStopFailure` via plugin_template.go; missing piece is `agent_id` in payload, not the event itself.
+- nit: §3.2 "two new trace reasons" softened to "one new reason; existing `frame_missing` is reused".
+
+**v2 superseded v1**. v1 codex review (`task-mopk1n84-e61c4i`, thread `019ded1e-ca04-7583-bfbf-b28d2eee134f`) found 3 P1 + 5 P2 + 1 nit findings. v2 addressed all of them:
 - P1.1 `mutateSubagentsWithRetry` `applied=true` does **not** mean a ref was actually removed (it only signals `UpsertIfUnchanged` succeeded; `LastSeenAt` always refreshes regardless of ref-list change). v2 adds an explicit pre-check via new helper `findNativeRefByID` so we never broadcast a phantom detach.
 - P1.2 dthn cleanup: SQL is the **expected primary cleanup path**, not a fallback; PR-A only handles future StopFailure events, and historical refs whose terminal `StopFailure` predates trace retention will never be re-emitted.
 - P1.3 AC5 99% number arithmetic mismatch (1/90 = 98.89%, not 99%). v2 reframes as "≥98.8% suppression over a 100-event window".
@@ -106,7 +115,7 @@ case "PdxStopFailure":
 ```
 `agent_id` is in `raw_event` but not in `result.Detail`. Phase 1 must either (a) extend the derive to add `agent_id` to `Detail`, or (b) parse `req.RawEvent` directly in the handler. Option (a) keeps the boundary clean (provider owns the raw→Detail mapping); chosen.
 
-`internal/agent/codex/status.go:67` and `internal/agent/opencode/status.go:27` use the same pattern and need the same one-line addition for parity. cc emits `PdxStopFailure` reliably (3005 observed in dthn telemetry). codex emits `PdxStopFailure` from agent SDK (catalog entry `FutureOnly:true`). opencode catalog has the entry but **the plan must verify** against `internal/agent/opencode/plugin_template.go` whether `tool.execute.after` / `session.error` failure paths actually emit `PdxStopFailure` with `agent_id` — if the upstream source is dead, the derive change remains no-op-safe (tests assert nil → empty string round-trip), but the §6.1 opencode test row should be marked "currently inactive emission, derive contract still pinned".
+`internal/agent/codex/status.go:67` and `internal/agent/opencode/status.go:27` use the same pattern and need the same one-line addition for parity. cc emits `PdxStopFailure` reliably (3005 observed in dthn telemetry). codex emits `PdxStopFailure` from agent SDK (catalog entry `FutureOnly:true`). opencode currently emits `PdxStopFailure` via `internal/agent/opencode/plugin_template.go`'s `session.error` handler, but the payload **does not include `agent_id`** — so even with the derive change applied, opencode's native detach remains a silent no-op until the plugin template is updated to surface the failing subagent's `agent_id`. The derive change is still made for parity (cheap, future-proofs the day opencode adds the field), and the test matrix marks the opencode "currently inactive native-detach behaviour, derive contract pinned" status explicitly.
 
 ### 2.3 `updateSubagents` is data-idempotent but `mutateSubagentsWithRetry` is **not** observation-idempotent
 
@@ -256,9 +265,10 @@ case agentpkg.LifecycleStop:
     // ... existing logic at frame_ops.go:288-424 unchanged ...
 ```
 
-Two new trace reasons:
-- `native_subagent_detached_on_stop_failure` — agent_id matched a native ref, ref removed
-- (no new reason for the no-match path — falling through to legacy `break` reaches the post-switch `UpdateHookPath` path; existing trace pipeline records that branch)
+Trace reasons:
+- **New**: `native_subagent_detached_on_stop_failure` — agent_id matched a native ref, ref removed
+- **Reused (existing)**: `frame_missing` — `findNativeRefByID` ≥0 but `mutateSubagentsWithRetry` returned `applied=false` (concurrent SessionEnd / sweep deleted the frame mid-flight). Same string already used elsewhere in `frame_ops.go` for the same semantic ("frame disappeared between read and write"), so reuse is intentional, not collision.
+- **No-match no-op (no new reason)**: `findNativeRefByID < 0` → `break` → legacy post-switch `UpdateHookPath` path (status/lastSeen update, normalized broadcast). Existing trace pipeline records that branch as it always has.
 
 Existing `proxy_subagent_detached_on_stop` covers the `frame==nil` branch and is unchanged.
 
@@ -319,7 +329,7 @@ Module-level `Map<string, { silentUntil: number }>` in `useNotificationDispatche
 ### 4.4 Cleanup
 
 Two cleanup paths:
-1. **Per-session**: on `clearSession(hostId, sessionCode)` (agent store action) and `removeHost(hostId)` — wipe entries whose key prefix matches. Hooks already exist; debounce module subscribes.
+1. **Per-session / per-host**: on `clearSession(hostId, sessionCode)` and `removeHost(hostId)` — iterate Map keys and decode each via `JSON.parse(key)` (the array form `[compositeKey, eventName, errorString]`). Compare `parsedKey[0]` to the target compositeKey, or compare `parsedKey[0].split(':')[0]` to the target hostId for `removeHost`. Prefix string match does **not** work because keys are JSON-stringified arrays (`"[\"hostA:sX\",\"Stop\",\"\"]"`). Helper `forEachDebounceKey((parsed, rawKey) => ...)` keeps the parse-once-per-iteration pattern in one place.
 2. **TTL self-cleanup**: in the `shouldNotify` hot path, if an existing entry's `silentUntil < now - 5×WINDOW_MS` it is stale and can be removed in-place. Bounds memory across long-running app.
 
 ### 4.5 Scope limits
@@ -331,10 +341,14 @@ Two cleanup paths:
 ### 4.6 `shouldNotify` integration
 
 ```ts
+function buildDebounceKey(ck: string, eventName: string, detailError: unknown): string {
+  return JSON.stringify([ck, eventName, String(detailError ?? '')])
+}
+
 function shouldNotify(args): boolean {
   // ... existing checks ...
   if (derived === 'error') {
-    const key = `${ck}|${eventName}|${String(args.detail?.error ?? '')}`
+    const key = buildDebounceKey(ck, eventName, args.detail?.error)
     const now = Date.now()
     const entry = errorDebounceState.get(key)
     if (entry && now < entry.silentUntil) {
@@ -348,6 +362,8 @@ function shouldNotify(args): boolean {
 }
 ```
 
+Same `buildDebounceKey` helper used by cleanup paths (§4.4) so encode/decode stay symmetric.
+
 ---
 
 ## 5. Design — Phase 3 (operational)
@@ -358,10 +374,34 @@ Reasoning: PR-A only handles `PdxStopFailure` events arriving *after* the fix is
 
 Operational sequence:
 1. Confirm PR-A daemon binary is deployed (`pdx --version` ≥ next alpha).
-2. Stop daemon (`brew services stop pdx` or signal handler).
-3. SQL: `UPDATE agent_frames SET subagents_json='[]' WHERE pane_id='%50';` (and any other pane suffering the same accumulation — query first: `SELECT pane_id, json_array_length(subagents_json) FROM agent_frames WHERE json_array_length(subagents_json) > 100;`).
-4. Start daemon. In-memory `m.subagents` map rebuilds from DB on first projection.
-5. SPA reconciles via the next hook broadcast (or via WS replay on reconnect).
+2. Confirm no second `pdx serve` instance is running (`pgrep -lf 'pdx serve'` should return one PID — the production daemon — and nothing else; abort if a dev instance is also live).
+3. Stop daemon (`brew services stop pdx` or `kill <pid>`).
+4. **Backup** affected rows before destructive UPDATE:
+   ```sql
+   .headers on
+   .mode insert agent_frames_pre_cleanup_backup
+   SELECT pane_id, frame_id, agent_type, subagents_json, last_seen_at
+   FROM agent_frames
+   WHERE json_array_length(subagents_json) > 100;
+   ```
+   Pipe to a `.sql` file (`> ~/.config/pdx/backups/2026-05-03-pre-cleanup.sql`) so a `RESTORE` is a one-liner if the cleanup turns out wrong.
+5. **Inspect** which panes actually need cleanup:
+   ```sql
+   SELECT pane_id, agent_type, json_array_length(subagents_json) AS n_refs
+   FROM agent_frames
+   WHERE json_array_length(subagents_json) > 100
+   ORDER BY n_refs DESC;
+   ```
+6. **Cleanup** in a transaction so a partial failure rolls back:
+   ```sql
+   BEGIN;
+   UPDATE agent_frames SET subagents_json='[]'
+   WHERE json_array_length(subagents_json) > 100;
+   COMMIT;
+   ```
+   Threshold `100` is conservative — well above any plausible live subagent count, well below dthn's 3944. Adjust per inspection output if a different cutoff fits.
+7. Start daemon. In-memory `m.subagents` map rebuilds from DB on first projection.
+8. SPA reconciles via the next hook broadcast (or via WS replay on reconnect).
 
 Self-heal observation is **opportunistic** — useful only if a long-running cc session is still firing live `PdxStopFailure` events whose `agent_id` happens to match an existing ref (rare, since terminated subagents don't fire again).
 
@@ -376,7 +416,7 @@ Not a code change. Captured here so PR-A's verification plan can reference it.
 | Test | Behaviour asserted |
 |---|---|
 | `TestStopFailure_NativeDetach_Hits` | `frame.Subagents` has native ref `{ID: X}`; `PdxStopFailure` payload `{agent_id: X}` arrives; ref removed; trace reason `native_subagent_detached_on_stop_failure` |
-| `TestStopFailure_NativeDetach_Misses_NoMutation` | `frame.Subagents` empty; payload `{agent_id: X}`; **no `mutateSubagentsWithRetry` call**, no `LastSeenAt` refresh, no broadcast change, no trace step claiming detach. Asserts pre-check correctness. |
+| `TestStopFailure_NativeDetach_Misses_NoMutation` | `frame.Subagents` empty (or contains only refs whose IDs differ from payload `agent_id`); payload `{agent_id: X}` arrives; assertions: (a) **`mutateSubagentsWithRetry` is NOT called** (subagents list bit-identical pre/post); (b) NO `native_subagent_detached_on_stop_failure` trace step recorded; (c) legacy post-switch `UpdateHookPath` path DOES execute — `frame.Status` becomes `error`, `LastSeenAt` refreshes, normalized event broadcast — preserving v0 behaviour bit-exactly for unrecognised payloads. Asserts pre-check correctness without breaking legacy semantics. |
 | `TestStopFailure_NoAgentId_LegacyBehaviour` | payload omits `agent_id` field entirely; existing `frame != nil` break path preserved; no detach, no trace change |
 | `TestStopFailure_EmptyAgentId_LegacyBehaviour` | payload contains `agent_id: ""` (explicit empty string from upstream); same behaviour as missing field. Locks down the empty-string branch since `findNativeRefByID` returns -1 early when id is empty |
 | `TestStopFailure_PreservesProxyRefs` | `frame.Subagents` has `{ID:X, IsProxy:false}` AND `{ID:Y, IsProxy:true, SourcePID:P}`; payload `{agent_id:X}`; only X removed, Y untouched |
@@ -450,8 +490,8 @@ Optimistic-concurrency retry path (`mutateSubagentsWithRetry`) is already covere
 ## 10. Verification plan
 
 1. **PR-A unit tests**: `go test ./internal/module/agent/... ./internal/agent/...` green.
-2. **PR-A live verification (mlab)**: with daemon built from PR-A, simulate dthn-class flow via `pdx hook --agent cc PdxSubagentStart` then `pdx hook --agent cc PdxStopFailure` with the same `agent_id` and confirm `subagents_json` in DB drops by one ref. Replay with mismatched `agent_id` to confirm no-op.
-3. **PR-A dthn cleanup**: after PR-A merges to main and a fresh daemon binary is in place, observe `agent_frames.subagents_json` for pane `%50` over 5 min — should drain at the rate cc fires `PdxStopFailure`. If still not converging fully, run the SQL from §5.
+2. **PR-A live verification (mlab)**: with daemon built from PR-A, simulate dthn-class flow via `pdx hook --agent cc PdxSubagentStart` then `pdx hook --agent cc PdxStopFailure` with the same `agent_id` and confirm `subagents_json` in DB drops by one ref. Replay with mismatched `agent_id` and confirm: (a) no `mutateSubagentsWithRetry` invocation in trace; (b) frame `Status` still updates to `error` and `LastSeenAt` still refreshes (legacy behaviour preserved).
+3. **PR-A dthn cleanup**: after PR-A merges to main and a fresh daemon binary is deployed, run §5 SQL operational sequence directly. Self-heal observation is **not** the primary recovery path — historical refs whose terminal `StopFailure` is already in the past will never be re-emitted by cc, so observation alone won't drain the accumulated 3944 refs. After SQL cleanup, watch `SELECT pane_id, json_array_length(subagents_json) FROM agent_frames` for one cc Task cycle to confirm zero re-accumulation under live `PdxStopFailure` traffic.
 4. **PR-B unit tests**: `cd spa && npx vitest run` for `useNotificationDispatcher.test.ts` green.
 5. **PR-B manual SPA**: trigger 30 consecutive `derived=error` events for a session in dev; confirm exactly one OS notification fires, unread badge sticks, subsequent same-error events do not re-trigger.
 
