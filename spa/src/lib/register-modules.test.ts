@@ -81,7 +81,9 @@ describe('registerBuiltinModules', () => {
 
     const contribution = listContributions('purdex').find((item) => item.id === 'memory-monitor.performance-monitor')
     expect(contribution?.localId).toBe('performance-monitor')
-    expect(contribution?.labelKey).toBe('performance_monitor.title')
+    // Sidebar short label switched to `settings.section.monitor` (spec §4.5).
+    // Inner-page heading + pane label still resolve `performance_monitor.title`.
+    expect(contribution?.labelKey).toBe('settings.section.monitor')
   })
 
   it('hides Performance Monitor settings page when the module is disabled', () => {

@@ -8,19 +8,24 @@ import {
 import { isModuleOwnedContribution } from '../settings-contribution-types'
 import { SETTINGS_ORDER } from '../settings-order'
 
-// Spec §4.1.3 — PR-2 final sidebar order. With Editor consolidated and
-// Sync promoted to a structural module, the always-on purdex-scope
-// sidebar order is:
+// Spec §4.1.3 (PR-2) refined by 2026-05-03 settings-modules-order spec
+// §4.1: the module-owned band is now alphabetical by English sidebar
+// short label (Browser / Commands / Editor / Files / Monitor / Sync),
+// and Browser + Files declare a purdex-scope placeholder so every
+// disableable module carries an entry (spec §I1). The always-on
+// purdex-scope sidebar order is:
 //
 //   appearance(0)
 //   terminal(1)
 //   interface(2)
 //   electron(5)             — gated by canSystemTray; filtered out
 //   module-config(10)
-//   editor(11)
+//   browser(11)
 //   quick-commands(12)
-//   performance-monitor(13)
-//   sync(14)
+//   editor(13)
+//   files(14)
+//   performance-monitor(15)
+//   sync(16)
 //   dev-environment(20)     — only when caps.devUpdateEnabled
 //   tmux-agent-monitor(21)  — DEV or devUpdateEnabled
 //
@@ -60,17 +65,20 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       { id: 'terminal',            order: SETTINGS_ORDER.TERMINAL },                    // 1
       { id: 'interface',           order: SETTINGS_ORDER.INTERFACE },                   // 2
       { id: 'module-config',       order: SETTINGS_ORDER.MODULE_CONFIG },               // 10
-      { id: 'editor',              order: SETTINGS_ORDER.MODULE_EDITOR },               // 11
+      { id: 'browser',             order: SETTINGS_ORDER.MODULE_BROWSER },              // 11
       { id: 'quick-commands',      order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS },       // 12
-      { id: 'performance-monitor', order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR },  // 13
-      { id: 'sync',                order: SETTINGS_ORDER.MODULE_SYNC },                 // 14
+      { id: 'editor',              order: SETTINGS_ORDER.MODULE_EDITOR },               // 13
+      { id: 'files',               order: SETTINGS_ORDER.MODULE_FILES },                // 14
+      { id: 'performance-monitor', order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR },  // 15
+      { id: 'sync',                order: SETTINGS_ORDER.MODULE_SYNC },                 // 16
     ])
 
     // Step 2: any entry not in the always-on list must be one of the
     // explicitly allowed gated ids — nothing else.
     const expectedAlwaysOnIds = new Set([
       'appearance', 'terminal', 'interface', 'module-config',
-      'editor', 'quick-commands', 'performance-monitor', 'sync',
+      'browser', 'quick-commands', 'editor', 'files',
+      'performance-monitor', 'sync',
     ])
     const unexpected = items
       .map((x) => x.id)
@@ -82,14 +90,18 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     // Distinct from the "module-config above every module-owned" test below:
     // this guard pins the *contents* of the band, not just relative order,
     // so a stray legacy section squeezed into 10.5 / 12.5 / 13.5 fails here.
+    // Order is alphabetical by English sidebar short label
+    // (Browser / Commands / Editor / Files / Monitor / Sync — spec §3.1).
     const moduleBand = listContributions('purdex')
       .slice()
       .sort((a, b) => a.order - b.order)
       .filter((c) => c.order > SETTINGS_ORDER.MODULE_CONFIG && c.order < 20)
       .map((c) => c.localId)
     expect(moduleBand).toEqual([
-      'editor',
+      'browser',
       'quick-commands',
+      'editor',
+      'files',
       'performance-monitor',
       'sync',
     ])

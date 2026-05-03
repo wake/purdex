@@ -23,7 +23,9 @@ describe('register-modules — quick-commands module', () => {
     expect(settings[0]).toMatchObject({
       localId: 'quick-commands',
       scope: 'purdex',
-      labelKey: 'settings.section.quick_commands',
+      // Sidebar short label switched to `settings.section.commands`
+      // (spec §4.5); module.name + inner page still say "Quick Commands".
+      labelKey: 'settings.section.commands',
     })
   })
 })
