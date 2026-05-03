@@ -2994,3 +2994,173 @@ func TestHandleEvent_CCPostToolUseFailureBashAfterMark_BroadcastsViaProductionDe
 		t.Fatal("no hook broadcast after PostToolUseFailure unmark — production cc provider returned Valid=false and handler took the invalid-skip return path (round-1 codex finding)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Round-2 codex three-parallel adversarial review finding #1 (PR #829):
+// detail-only PreToolUse / PostToolUseFailure must NOT trigger frame mutation
+// or resurrect torn-down frames. Commit b121eb26 upgraded these events to
+// Valid=true so the Delegating broadcast can fire, but applyFrameEvent's
+// LifecycleNone+Status="" path falls back to StatusIdle and creates a new
+// frame when none exists. The detail-only short-circuit branch in handler.go
+// (between error guard and applyFrameEvent) closes that hole.
+//
+// These tests use the real cc.Provider (delegationModuleWithRealCCProvider)
+// so the production catalog gap is regression-locked end-to-end.
+// ---------------------------------------------------------------------------
+
+// findCCFrameRow returns the (only) cc store.Frame row on pane %5; fatals if
+// missing. Mirrors findCCFrame but exposes the full Frame struct so tests can
+// observe LastSeenAt and other top-level fields, not just Subagents.
+func findCCFrameRow(t *testing.T, m *Module) store.Frame {
+	t.Helper()
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+	return frames[0]
+}
+
+// nonCodexBashCommand is a Bash command that delegation_extractor will reject
+// (no codex-companion path). Used by the detail-only no-mutation tests to
+// drive the handler through PreToolUse / PostToolUseFailure WITHOUT firing
+// markDelegatingRef / unmarkDelegatingRef — proving any LastSeenAt change
+// must have come from applyFrameEvent's LifecycleNone fallback path (the
+// resurrection / mutation behavior the short-circuit closes).
+const nonCodexBashCommand = `pnpm build`
+
+// 1. Detail-only PreToolUse with NO existing frame must not resurrect.
+func TestHandleEvent_CCPreToolUseDetailOnly_DoesNotCreateFrameWhenMissing(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	// NO seed — pane %5 has no frame.
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, preToolUseBody("cc", codexCompanionBashCommand, "agent-X", "tool-use-Tghost"))
+
+	// 1. Frame store must remain empty — PreToolUse must not resurrect.
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 (PreToolUse must not create / resurrect frames; frames=%+v)", len(frames), frames)
+	}
+
+	// 2. No broadcast — no frame to project from.
+	msgs := drainBroadcasts(sub, 100*time.Millisecond)
+	if len(msgs) != 0 {
+		t.Fatalf("got %d broadcasts, want 0 (no frame, no projection, no broadcast); msgs=%+v", len(msgs), msgs)
+	}
+}
+
+// 2. Detail-only PreToolUse with existing frame must broadcast WITHOUT
+// running applyFrameEvent. We send a non-codex Bash command so the
+// delegation block also skips, isolating the test to the new short-circuit
+// branch: any LastSeenAt change would have to come from applyFrameEvent's
+// LifecycleNone fallback (which the short-circuit must skip).
+func TestHandleEvent_CCPreToolUseDetailOnly_NoMutationWhenFrameExists(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+
+	beforeFrame := findCCFrameRow(t, m)
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, preToolUseBody("cc", nonCodexBashCommand, "agent-X", "tool-use-Tnoop"))
+
+	afterFrame := findCCFrameRow(t, m)
+
+	// 1. Frame still exists (broadcast surfaces existing-frame projection).
+	if afterFrame.FrameID != beforeFrame.FrameID {
+		t.Fatalf("FrameID changed: before=%s after=%s (frame must not be replaced)", beforeFrame.FrameID, afterFrame.FrameID)
+	}
+
+	// 2. No applyFrameEvent mutation: LastSeenAt unchanged. The delegation
+	// block was skipped (non-codex command, ExtractDelegationHint returns
+	// ok=false) so the only path that could touch LastSeenAt is
+	// applyFrameEvent's UpdateHookPath narrow-column update — exactly what
+	// the new short-circuit must prevent.
+	if afterFrame.LastSeenAt != beforeFrame.LastSeenAt {
+		t.Fatalf("LastSeenAt changed: before=%d after=%d (applyFrameEvent must not run on detail-only PreToolUse)", beforeFrame.LastSeenAt, afterFrame.LastSeenAt)
+	}
+
+	// 3. Status unchanged.
+	if afterFrame.Status != beforeFrame.Status {
+		t.Fatalf("Status changed: before=%s after=%s (applyFrameEvent's StatusIdle fallback must not run)", beforeFrame.Status, afterFrame.Status)
+	}
+
+	// 4. Broadcast must still fire — the SPA needs the projection refresh
+	// even when frame state is unchanged (e.g. delegation flag downstream).
+	msgs := drainBroadcasts(sub, 200*time.Millisecond)
+	if len(msgs) == 0 {
+		t.Fatal("no hook broadcast — detail-only PreToolUse with existing frame must broadcast existing-frame projection")
+	}
+}
+
+// 3. Detail-only PostToolUseFailure with NO existing frame must not resurrect.
+func TestHandleEvent_CCPostToolUseFailureDetailOnly_DoesNotCreateFrameWhenMissing(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, postToolUseBody(true, "agent-X", "tool-use-Tghost"))
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frame count = %d, want 0 (PostToolUseFailure must not create / resurrect frames; frames=%+v)", len(frames), frames)
+	}
+
+	msgs := drainBroadcasts(sub, 100*time.Millisecond)
+	if len(msgs) != 0 {
+		t.Fatalf("got %d broadcasts, want 0; msgs=%+v", len(msgs), msgs)
+	}
+}
+
+// 4. Detail-only PostToolUseFailure with existing frame must broadcast
+// WITHOUT running applyFrameEvent. We send agent_id="agent-Y" with no
+// matching ref (the seed is agent-X), so unmarkDelegatingRef hits its
+// NoOpWhenAgentIDNotFound early-return (P2-T1 case #3) and never calls
+// UpsertIfUnchanged. Any LastSeenAt change must therefore be
+// applyFrameEvent's LifecycleNone fallback — exactly what the new
+// short-circuit must prevent.
+func TestHandleEvent_CCPostToolUseFailureDetailOnly_NoMutationWhenFrameExists(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+
+	beforeFrame := findCCFrameRow(t, m)
+
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	// agent-Y has no matching ref → unmarkDelegatingRef early-returns
+	// without UpsertIfUnchanged → any LastSeenAt change must therefore be
+	// applyFrameEvent's LifecycleNone fallback (which the short-circuit
+	// must skip).
+	sendBody(t, m, postToolUseBody(true, "agent-Y", "tool-use-Tghost"))
+
+	afterFrame := findCCFrameRow(t, m)
+
+	if afterFrame.FrameID != beforeFrame.FrameID {
+		t.Fatalf("FrameID changed: before=%s after=%s", beforeFrame.FrameID, afterFrame.FrameID)
+	}
+	if afterFrame.LastSeenAt != beforeFrame.LastSeenAt {
+		t.Fatalf("LastSeenAt changed: before=%d after=%d (applyFrameEvent must not run on detail-only PostToolUseFailure)", beforeFrame.LastSeenAt, afterFrame.LastSeenAt)
+	}
+	if afterFrame.Status != beforeFrame.Status {
+		t.Fatalf("Status changed: before=%s after=%s", beforeFrame.Status, afterFrame.Status)
+	}
+
+	msgs := drainBroadcasts(sub, 200*time.Millisecond)
+	if len(msgs) == 0 {
+		t.Fatal("no hook broadcast — detail-only PostToolUseFailure with existing frame must broadcast existing-frame projection")
+	}
+}
