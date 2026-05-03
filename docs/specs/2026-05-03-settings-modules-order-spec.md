@@ -13,6 +13,14 @@ PR #604 (HSR alpha.213) → #623 (Editor restructure alpha.219) → #707 (Editor
 2. **「所有 disableable module 都有 settings page」規則未落地**：本 session 確立的新規則 — 每個 disableable module 在 Settings sidebar (purdex scope) 都要有 entry，即使是空 placeholder。目前 Browser / Files 都無 purdex-scope contribution，在 Switchboard 看得到（Browser）或在 sidebar 完全看不到（Files purdex 部分），跟 Editor / Performance Monitor / Quick Commands 不一致。
 3. **Sidebar label 過長**：`Performance Monitor` / `Quick Commands` 在窄 sidebar 顯得冗長，user 要求短名 `Monitor` / `Commands`。
 
+### 1.1 推翻 SR-2 spec N3
+
+`docs/specs/2026-05-03-files-disableable-sr2-spec.md` §N3 明寫「不加 Files purdex-scope placeholder / settings page」（理由：Files 設定是 workspace 範疇，purdex 沒東西可放）。本 spec **顯式推翻 N3**，理由：
+- 新規則「所有 disableable module 都有 purdex settings entry」優先於「沒東西可放」的 dead-UX 顧慮
+- Switchboard / sidebar mental model 一致性是 user-facing 強需求；user 從 Switchboard 看到 Files，再到 sidebar 找不到，會誤以為 module 漏掉
+- placeholder 成本低（單一共用 component + 一句 i18n 文案），UX 一致性回饋大
+- SR-2 spec N3 的「沒東西可放」改為由 placeholder 顯式陳述，而非用「不放」隱式表達
+
 ## 2. 範圍 + Non-goals
 
 ### 範圍（in scope）
@@ -36,11 +44,26 @@ PR #604 (HSR alpha.213) → #623 (Editor restructure alpha.219) → #707 (Editor
 
 ## 3. 不變量
 
-- **I1**：每個 `disableable: true` 的 module 必須在 purdex scope 註冊**至少一個** settings contribution（即使是空 placeholder）。違反者 lint / test 應抓出（見 §6）
-- **I2**：Settings sidebar (purdex scope) 與 Modules Switchboard 對同一批 module 的相對順序必須一致。Switchboard 排序 key = module 第一個 purdex-scope contribution 的 `order`；fallback 至 `Number.POSITIVE_INFINITY` + `module.name` 字母排（v1 不該觸發 fallback，因 I1 保證有 purdex entry）
-- **I3**：SETTINGS_ORDER 常數名稱綁 module identity（如 `MODULE_QUICK_COMMANDS`），值反映 sidebar 顯示位置。未來 sidebar label 變更不應牽動常數命名
+- **I1**：每個 `disableable: true` 的 module（檢查 `getModules()` 回傳的 definition，非 `listContributions('purdex')`，因為 disabled module 會在 dispatch 時被跳過）必須在 `module.settings` 宣告**至少一個** purdex-scope contribution（即使是空 placeholder）。違反者 test 應抓出（見 §6 T3）
+- **I2**：Settings sidebar (purdex scope) 與 Modules Switchboard 對「`disableable === true` 的 module-owned contributions」的**相對順序**必須一致。Sync 只參與 sidebar order，不參與 Switchboard 比對（Sync 非 disableable）。Switchboard 排序 key = module 第一個 purdex-scope contribution 的 `order`；fallback 至 `Number.POSITIVE_INFINITY` + `module.name` localeCompare（v1 不該觸發 fallback，因 I1 保證有 purdex entry）
+- **I3**：SETTINGS_ORDER 常數名稱綁 module identity（如 `MODULE_QUICK_COMMANDS`），常數值反映 sidebar 顯示位置。未來 sidebar label 變更不應牽動常數命名
 - **I4**：sidebar label 短名 (`Monitor` / `Commands`) 不取代 `module.name` 全名 — Switchboard / pane label / inner page heading 仍用全名 (`Performance Monitor` / `Quick Commands`)。語意分工：sidebar = navigation 短名；其他 = 識別全名
-- **I5**：placeholder settings page 是 view-only，不寫資料、不訂 store。內容固定為 i18n 文案 `settings.module.no_purdex_settings`（內容統一；view 視覺一致，跟 Browser / Files 一個 component 共用）
+- **I5**：placeholder settings page 是 view-only，不寫資料、不訂 store。內容固定為 i18n 文案 `settings.module.no_purdex_settings`（內容統一；view 視覺一致，跟 Browser / Files 一個 component 共用）。Component test 守「只渲染 i18n 文案、無 store subscription」靠 mock store assertion 達成（見 §6 T8）
+
+### 3.1 排序基準說明
+
+**「字母序」**指 **English / default sidebar short label** 的排序（穩定基準），不隨 runtime locale 動態排序：
+
+| Module | English short label | Sort position |
+|---|---|---|
+| browser | Browser | 1 |
+| quick-commands | Commands | 2 |
+| editor | Editor | 3 |
+| files | Files | 4 |
+| memory-monitor | Monitor | 5 |
+| sync | Sync | 6 |
+
+→ SETTINGS_ORDER 數值（11–16）一次寫死於 source code，不會因為使用者切到 zh-TW（`瀏覽器/指令/編輯器/檔案/監控/同步`）而改變。zh-TW 字面字母序與 English 不同 — 這是預期行為，不是 bug。
 
 ## 4. 設計
 
@@ -197,12 +220,13 @@ placeholder 本身就是「無設定」的視覺確認；不需特殊禁止 — 
 |---|---|---|
 | T1 | `ModulesSwitchboardSection.test.tsx` | 三個 disableable module（不同 order）→ 渲染順序按 order 升冪 |
 | T2 | `ModulesSwitchboardSection.test.tsx` | disableable module 無 purdex contribution → 排在最後（fallback 行為） |
-| T3 | `register-modules.test.ts` | I1 invariant：每個 disableable module 都有 purdex-scope contribution（含 Browser / Files / Editor / memory-monitor / quick-commands） |
+| T2b | `ModulesSwitchboardSection.test.tsx`（整合） | Switchboard DOM row 順序 vs purdex contribution 中 module-owned + disableable 子集的 order 升冪一致 |
+| T3 | `register-modules.test.ts` | I1 invariant：呼叫 `registerBuiltinModules()` 後，`getModules()` 中所有 `disableable === true` 的 module 都至少有一個 purdex-scope settings contribution（含 Browser / Files / Editor / memory-monitor / quick-commands） |
 | T4 | `register-modules.test.ts` | Browser 有 purdex settings entry，labelKey = `settings.section.browser`，component 為 placeholder |
 | T5 | `register-modules.test.ts` | Files 有 purdex settings entry，labelKey = `settings.section.files`，component 為 placeholder |
 | T6 | `register-modules.test.ts` | memory-monitor labelKey = `settings.section.monitor`（取代既有 `performance_monitor.title` assertion at register-modules.test.ts:83） |
 | T7 | `register-modules.quick-commands.test.tsx` | quick-commands labelKey = `settings.section.commands`（取代既有 `settings.section.quick_commands`） |
-| T8 | `PlaceholderSettingsSection.test.tsx` | 渲染含 `settings.module.no_purdex_settings` 文字 |
+| T8 | `PlaceholderSettingsSection.test.tsx` | 渲染含 `settings.module.no_purdex_settings` 文字；mock store 後驗證無 store subscription（I5） |
 
 ### 手動驗證
 
