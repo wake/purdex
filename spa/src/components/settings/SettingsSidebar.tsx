@@ -40,7 +40,21 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
     [],
   )
 
+  // Spec §I2 — same `order` value tie-break by `moduleId`, then `localId`,
+  // so the relative position of two same-order contributions is fully
+  // deterministic. The Modules Switchboard uses the same `moduleId` tie
+  // breaker (`ModulesSwitchboardSection.sortDisableableModulesForSwitchboard`)
+  // — without a shared rule, two disableable modules sharing an order would
+  // appear in different orders across the two surfaces, silently breaking
+  // I2 even though both panes are deterministic in isolation. Sort happens
+  // before mapping so we still have access to `moduleId` / `localId`.
   const rows: SidebarRow[] = listContributions('purdex')
+    .slice()
+    .sort((a, b) => {
+      if (a.order !== b.order) return a.order - b.order
+      if (a.moduleId !== b.moduleId) return a.moduleId.localeCompare(b.moduleId)
+      return a.localId.localeCompare(b.localId)
+    })
     .map<SidebarRow>((c) => {
       const isDisabled = c.disabled ? c.disabled(ctx) === true : false
       return {
@@ -52,7 +66,6 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
         moduleOwned: isModuleOwnedContribution(c),
       }
     })
-    .sort((a, b) => a.order - b.order)
 
   return (
     <div className="w-48 border-r border-border-subtle bg-surface-primary py-3 pl-2 flex-shrink-0">

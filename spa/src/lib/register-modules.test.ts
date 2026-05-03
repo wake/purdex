@@ -834,4 +834,87 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
     const actual = sortDisableableModulesForSwitchboard(getModules()).map((m) => m.id)
     expect(actual).toEqual(expected)
   })
+
+  // -- Round-2 adversarial review fixes ------------------------------------
+
+  it('R2-F2 / I1 enforcement: dispatch throws when a disableable module has no purdex contribution', () => {
+    // Authoring error: someone marks a module disableable but forgets the
+    // sidebar entry. Must fail loudly at dispatch time, not silently leave
+    // the module visible only in the Switchboard.
+    registerModule({
+      id: 'naked-disableable',
+      name: 'Naked Disableable',
+      disableable: true,
+      // no settings: [...] entry
+    })
+    // Defaults a fresh disableable module to enabled (per useModuleEnabledStore
+    // initial-snapshot semantics) so the dispatch path exercises the I1 check.
+    expect(() => dispatchSettingsContributions()).toThrow(
+      /naked-disableable.*purdex.*§I1/,
+    )
+  })
+
+  it('R2-F2 / I1 enforcement: dispatch passes when a disableable module has a workspace + purdex contribution (Files shape)', () => {
+    registerModule({
+      id: 'files-shape',
+      name: 'Files Shape',
+      disableable: true,
+      settings: [
+        { localId: 'ws', scope: 'workspace', order: 0, labelKey: 'a', component: FakeComponent },
+        { localId: 'pdx', scope: 'purdex', order: 99, labelKey: 'b', component: FakeComponent },
+      ],
+    })
+    expect(() => dispatchSettingsContributions()).not.toThrow()
+  })
+
+  it('R2-F1 / shared comparator: equal-order tie-break by moduleId on both surfaces (sidebar + switchboard)', () => {
+    // Two disableable modules sharing the same purdex order. The sidebar
+    // sorts contributions and the switchboard sorts modules; without a
+    // shared tie-breaker the relative order diverges. Both surfaces must
+    // agree because user-visible navigation is the same conceptual list.
+    registerModule({
+      id: 'zeta',
+      name: 'Zeta', // intentionally last alphabetically by display name
+      disableable: true,
+      settings: [
+        { localId: 'zeta', scope: 'purdex', order: 50, labelKey: 'zeta', component: FakeComponent },
+      ],
+    })
+    registerModule({
+      id: 'alpha',
+      name: 'Alpha',
+      disableable: true,
+      settings: [
+        { localId: 'alpha', scope: 'purdex', order: 50, labelKey: 'alpha', component: FakeComponent },
+      ],
+    })
+    dispatchSettingsContributions()
+
+    // Sidebar derivation — same logic as SettingsSidebar.tsx.
+    const sidebarRelativeIds = listContributions('purdex')
+      .filter((c) => {
+        const m = getModule(c.moduleId)
+        return m?.disableable === true
+      })
+      .slice()
+      .sort((a, b) => {
+        if (a.order !== b.order) return a.order - b.order
+        if (a.moduleId !== b.moduleId) return a.moduleId.localeCompare(b.moduleId)
+        return a.localId.localeCompare(b.localId)
+      })
+      .map((c) => c.moduleId)
+
+    // Switchboard derivation — same logic as
+    // sortDisableableModulesForSwitchboard().
+    const switchboardIds = sortDisableableModulesForSwitchboard(getModules()).map((m) => m.id)
+
+    // Both surfaces must put alpha before zeta (moduleId tie-break),
+    // ignoring the display name "Zeta"/"Alpha" — moduleId is canonical.
+    expect(sidebarRelativeIds[0]).toBe('alpha')
+    expect(sidebarRelativeIds[1]).toBe('zeta')
+    expect(switchboardIds.indexOf('alpha')).toBeLessThan(switchboardIds.indexOf('zeta'))
+    // And they must AGREE (same relative order on both surfaces).
+    expect(switchboardIds.filter((id) => id === 'alpha' || id === 'zeta'))
+      .toEqual(['alpha', 'zeta'])
+  })
 })

@@ -145,6 +145,27 @@ export function buildSettingsContributionBatch(
   }
 
   for (const module of modules) {
+    // Spec §I1 (modules-switchboard sidebar alignment) — every
+    // `disableable: true` module must declare at least one purdex-scope
+    // settings contribution so it has a Settings sidebar entry to pair
+    // with its Modules Switchboard row. Without this, the module would
+    // show in the Switchboard but have nowhere in the sidebar to land,
+    // breaking the user mental model. Throw at build time (always runs,
+    // regardless of the module's current enabled/disabled state) so
+    // authoring errors fail loudly instead of silently regressing UX.
+    if (module.disableable === true) {
+      const hasPurdex = (module.settings ?? []).some((s) => s.scope === 'purdex')
+      if (!hasPurdex) {
+        throw new Error(
+          `settings-contribution-registry: disableable module "${module.id}" ` +
+            `must declare at least one settings contribution with scope='purdex' ` +
+            `(spec §I1 — modules switchboard sidebar alignment). Without it, ` +
+            `the module appears in the Modules Switchboard but not in the ` +
+            `Settings sidebar.`,
+        )
+      }
+    }
+
     // Modules Switchboard: disabled modules skip their entire `settings: [...]`
     // block (all scopes). Note the filter precedes the localId/collision
     // checks, so a disabled module's localIds cannot clash with an enabled

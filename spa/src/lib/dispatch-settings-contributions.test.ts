@@ -439,7 +439,11 @@ describe('dispatchSettingsContributions', () => {
         id: 'a',
         name: 'A',
         disableable: true,
+        // The purdex stub satisfies spec §I1 (every disableable module must
+        // declare at least one purdex contribution); the test is about the
+        // disable filter on host-scope contributions, not about I1.
         settings: [
+          { localId: 'pdx-stub', scope: 'purdex', order: 0, labelKey: 'a.pdx', component: FakeComponent },
           { localId: 'host-stuff', scope: 'host', order: 0, labelKey: 'a.host', component: FakeComponent },
         ],
       })
@@ -455,7 +459,9 @@ describe('dispatchSettingsContributions', () => {
         id: 'a',
         name: 'A',
         disableable: true,
+        // Purdex stub for spec §I1 — see T2-5 note.
         settings: [
+          { localId: 'pdx-stub', scope: 'purdex', order: 0, labelKey: 'a.pdx', component: FakeComponent },
           { localId: 'ws-section', scope: 'workspace', order: 0, labelKey: 'a.ws', component: FakeComponent },
         ],
       })
