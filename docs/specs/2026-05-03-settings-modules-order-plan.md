@@ -7,14 +7,14 @@
 
 ## 0. 排版總覽
 
-從 spec §3.1 / §4.1 落到具體 commit 切分：
+從 spec §3.1 / §4.1 落到具體 commit 切分（修 codex finding F1 / F2 / TDD slicing：把對齊既有 test 併入 C2，C4 僅整理）：
 
-| Commit | 主題 | 檔案 (高層) | 預估 |
+| Commit | 主題 | 檔案 (高層) | TDD 狀態 |
 |---|---|---|---|
-| C1 | 新 i18n keys + PlaceholderSettingsSection + 失敗測試 | locales / new component / test scaffolding | 紅燈 |
-| C2 | SETTINGS_ORDER 重排 + register-modules Browser/Files purdex contribution + memory-monitor/quick-commands labelKey 切換 | settings-order.ts / register-modules/index.tsx | 過 T3-T7 |
-| C3 | ModulesSwitchboardSection 排序改 + 失敗測試先 → 實作 | switchboard component + test | 過 T1-T2 |
-| C4 | 既有 test 對齊（labelKey 變動） | register-modules.test.ts / register-modules.quick-commands.test.tsx | 全綠 |
+| C1 | 新 i18n keys + PlaceholderSettingsSection + 新測試（紅）+ 既有 test 暫不動 | locales / new component / 4 個新 test 檔/區段 | 紅（新測試紅） |
+| C2 | SETTINGS_ORDER 重排 + register-modules Browser/Files purdex contribution + memory-monitor/quick-commands labelKey 切換 + **同 commit 對齊既有 labelKey assertion** | settings-order.ts / register-modules/index.tsx / register-modules.test.ts:83 / register-modules.quick-commands.test.tsx:26 | T3-T7 + 既有 assertions 過 |
+| C3 | ModulesSwitchboardSection 排序改 + sort key 用 `Math.min(...purdex orders)` | switchboard component | T1-T2-T2b 過 |
+| C4 | 全套 vitest / lint / build 整理 + locale JSON assertion 補測（F6） | register-modules.test.ts locale 區段 / 已就位的 test 檔最後 polish | 全綠 |
 
 預估 net diff ~150 行（新增 component + i18n + 測試 - 舊 labelKey 替換）。
 
@@ -22,30 +22,33 @@
 
 ### 1.1 新增 `spa/src/components/settings/PlaceholderSettingsSection.test.tsx`
 
+採 repo 既有的 `vi.hoisted` mock pattern（見 `ModulesSwitchboardSection.test.tsx` for ref；codex F2）：
+
 ```tsx
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { PlaceholderSettingsSection } from './PlaceholderSettingsSection'
 
-// I5: component must render only the i18n string. The store-subscription
-// guard prevents future drift where someone wires in store reads.
-const useI18nStoreMock = vi.fn()
+const useI18nStoreMock = vi.hoisted(() => vi.fn())
 vi.mock('../../stores/useI18nStore', () => ({
   useI18nStore: (selector: (s: unknown) => unknown) => useI18nStoreMock(selector),
 }))
 
+import { PlaceholderSettingsSection } from './PlaceholderSettingsSection'
+
 describe('PlaceholderSettingsSection', () => {
-  it('renders the no-purdex-settings i18n string', () => {
+  it('renders the no-purdex-settings i18n key', () => {
     useI18nStoreMock.mockImplementation((sel) => sel({ t: (k: string) => k }))
     render(<PlaceholderSettingsSection />)
     expect(screen.getByText('settings.module.no_purdex_settings')).toBeTruthy()
   })
 
-  it('subscribes only to t (no other store reads)', () => {
+  it('guards the intended i18n selector shape (no extra store subscriptions)', () => {
     useI18nStoreMock.mockClear()
     useI18nStoreMock.mockImplementation((sel) => sel({ t: (k: string) => k }))
     render(<PlaceholderSettingsSection />)
-    // Exactly one selector call — for `t`.
+    // Single selector call for `t`. Cannot prove zero subscriptions to other
+    // stores at the test level — this is a shape guard, not an exhaustive
+    // I5 enforcement; reviewers still inspect imports during PR review.
     expect(useI18nStoreMock).toHaveBeenCalledTimes(1)
   })
 })
@@ -89,20 +92,31 @@ it('T2: disableable module without purdex contribution falls back to last alphab
   expect(rows.map((r) => r.getAttribute('data-module-id'))).toEqual(['ordered', 'no-settings'])
 })
 
-it('T2b: integration — switchboard order matches sidebar disableable subset', () => {
-  // After registerBuiltinModules, the switchboard's row order must match
-  // the order of disableable purdex contributions in listContributions('purdex').
+// T2b 移到 register-modules.test.ts（codex F4）— `clearAll()` pattern + locale
+// imports 都已就位，不需要在 ModulesSwitchboardSection.test.tsx 重建一份完整 reset
+```
+
+T2b 放在 `register-modules.test.ts`：
+
+```ts
+it('T2b: switchboard row order matches disableable purdex contributions order', () => {
   registerBuiltinModules()
-  const purdexEntries = listContributions('purdex').filter((c) => {
-    const m = getModuleById(c.moduleId)
-    return m?.disableable === true
-  })
-  const expectedOrder = purdexEntries.map((c) => c.moduleId)
-  render(<ModulesSwitchboardSection ctx={purdexCtx} />)
-  const rows = Array.from(document.querySelectorAll('[data-module-id]'))
-  expect(rows.map((r) => r.getAttribute('data-module-id'))).toEqual(expectedOrder)
+  const expectedOrder = listContributions('purdex')
+    .filter((c) => {
+      const m = getModule(c.moduleId)
+      return m?.disableable === true
+    })
+    .sort((a, b) => a.order - b.order)
+    .map((c) => c.moduleId)
+  // Render Switchboard via wrapping it; or assert via direct call to its
+  // sorting logic if extracted as `sortDisableableModulesForSwitchboard()`.
+  // Simplest is DOM-level via `render()`; reuse existing render helpers.
+  // ...
+  expect(switchboardRowIds).toEqual(expectedOrder)
 })
 ```
+
+> **建議**：在 `ModulesSwitchboardSection.tsx` 把排序邏輯抽 `export function sortDisableableModulesForSwitchboard(modules: ModuleDefinition[])`，T2b 只 assert 函數輸出，避免重 render 整套 boot。Switchboard 本身仍呼叫此函數。
 
 ### 1.4 擴充 `register-modules.test.ts`（T3-T7 + I1 invariant）
 
@@ -121,7 +135,7 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
 
   it('T4: browser registers a purdex placeholder with settings.section.browser label', () => {
     registerBuiltinModules()
-    const browser = getModuleById('browser')
+    const browser = getModule('browser')
     const purdex = browser?.settings?.find((s) => s.scope === 'purdex')
     expect(purdex?.labelKey).toBe('settings.section.browser')
     expect(purdex?.component).toBe(PlaceholderSettingsSection)
@@ -129,7 +143,7 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
 
   it('T5: files registers a purdex placeholder with settings.section.files label', () => {
     registerBuiltinModules()
-    const files = getModuleById('files')
+    const files = getModule('files')
     const purdex = files?.settings?.find((s) => s.scope === 'purdex')
     expect(purdex?.labelKey).toBe('settings.section.files')
     expect(purdex?.component).toBe(PlaceholderSettingsSection)
@@ -137,21 +151,35 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
 
   it('T6: memory-monitor purdex labelKey switched to settings.section.monitor', () => {
     registerBuiltinModules()
-    const m = getModuleById('memory-monitor')
+    const m = getModule('memory-monitor')
     const purdex = m?.settings?.find((s) => s.scope === 'purdex')
     expect(purdex?.labelKey).toBe('settings.section.monitor')
   })
 
   it('T7: quick-commands purdex labelKey switched to settings.section.commands', () => {
     registerBuiltinModules()
-    const m = getModuleById('quick-commands')
+    const m = getModule('quick-commands')
     const purdex = m?.settings?.find((s) => s.scope === 'purdex')
     expect(purdex?.labelKey).toBe('settings.section.commands')
+  })
+
+  it('T9 / F6: locale JSON has new short-label keys + placeholder string', () => {
+    const required = [
+      'settings.section.browser',
+      'settings.section.commands',
+      'settings.section.files',
+      'settings.section.monitor',
+      'settings.module.no_purdex_settings',
+    ] as const
+    for (const k of required) {
+      expect((enLocale as Record<string, string>)[k]).toBeTruthy()
+      expect((zhLocale as Record<string, string>)[k]).toBeTruthy()
+    }
   })
 })
 ```
 
-> 注意：實際 `getModuleById` helper 若不存在，改用 `getModules().find((m) => m.id === '...')`。確認 `module-registry.ts` 出口。
+API 名稱已對齊 `getModule()`（not `getModuleById`）— 已 confirm in `module-registry.ts:122`。
 
 ### 1.5 修改既有 assertion
 
@@ -337,28 +365,43 @@ registerModule({
 
 ### 2.5 `spa/src/components/settings/ModulesSwitchboardSection.tsx`
 
-```tsx
-export function ModulesSwitchboardSection({ ctx: _ctx }: Props = {}) {
-  const t = useI18nStore((s) => s.t)
-  const hasPending = useModuleEnabledStore((s) => s.hasPendingChanges())
+把排序抽出獨立函數，T2b 直接 assert（codex F4）。Sort key 用 `Math.min(...purdex orders)` 避免「first-found」對未來多 purdex page 不穩（codex F3）：
 
-  // Spec §I2 — sort by the module's first purdex-scope settings.order so
-  // Switchboard rows match the sidebar's relative position for the same
-  // disableable subset. Fallback (no purdex contribution) goes to the end
-  // by module.name; spec §I1 means this fallback should never trigger in
-  // production but stays as a safety net for local-test edge cases.
-  const modules = getModules()
+```tsx
+import type { ModuleDefinition } from '../../lib/module-registry'
+
+// Exported for unit tests + future reuse. Sort key = the minimum order
+// across all purdex-scope contributions of the module. With spec §I1
+// guaranteeing at least one such contribution per disableable module,
+// this returns a finite number; fallback `Number.POSITIVE_INFINITY` is a
+// safety net that should not fire in production. Tie-break by name with
+// localeCompare for determinism.
+export function sortDisableableModulesForSwitchboard(
+  modules: ModuleDefinition[],
+): ModuleDefinition[] {
+  return [...modules]
     .filter((m) => m.disableable === true)
-    .map((m) => ({
-      module: m,
-      order: m.settings?.find((s) => s.scope === 'purdex')?.order
-        ?? Number.POSITIVE_INFINITY,
-    }))
+    .map((m) => {
+      const purdexOrders = (m.settings ?? [])
+        .filter((s) => s.scope === 'purdex')
+        .map((s) => s.order)
+      const order = purdexOrders.length === 0
+        ? Number.POSITIVE_INFINITY
+        : Math.min(...purdexOrders)
+      return { module: m, order }
+    })
     .sort((a, b) => {
       if (a.order !== b.order) return a.order - b.order
       return a.module.name.localeCompare(b.module.name)
     })
     .map(({ module }) => module)
+}
+
+export function ModulesSwitchboardSection({ ctx: _ctx }: Props = {}) {
+  const t = useI18nStore((s) => s.t)
+  const hasPending = useModuleEnabledStore((s) => s.hasPendingChanges())
+
+  const modules = sortDisableableModulesForSwitchboard(getModules())
 
   return (
     <div className="space-y-6">
@@ -373,16 +416,23 @@ export function ModulesSwitchboardSection({ ctx: _ctx }: Props = {}) {
 }
 ```
 
-> 移除 AR-3 註解的 `useMemo` 警告 — 排序邏輯不需要 memo（同樣每 render 重算），現有註解仍有效。
+> AR-3 註解的「不 memoize 排序」精神保留 — 函數每 render 重算，HMR 不殘留。
 
-## 3. 對齊既有 test（C4）
+## 3. 對齊既有 test（已併入 C2 — codex F1）
+
+C2 同 commit 對齊 labelKey assertion，避免 C2 → C4 之間 vitest 卡紅：
 
 - `register-modules.test.ts:83`：`expect(...).toBe('performance_monitor.title')` → `'settings.section.monitor'`
 - `register-modules.quick-commands.test.tsx:26`：`labelKey: 'settings.section.quick_commands'` → `'settings.section.commands'`
 
 不需動的：
 - `pane-labels.test.ts:80` — 仍 `performance_monitor.title`（pane label 路徑未變）
-- `MemoryMonitorPage` 的內部測試（如有）— 內頁標題仍是 `performance_monitor.title`
+- `MemoryMonitorPage.tsx:284` — 內頁標題仍呼 `performance_monitor.title`（不動）
+
+C4 的角色降級為「全套整理」：
+- 確認所有 vitest 綠
+- 跑 lint / build
+- T9 locale assertion 補上（如尚未隨 C1 加入）
 
 ## 4. Acceptance / verification
 
@@ -407,19 +457,20 @@ pnpm run build
 2. Sidebar 從上至下顯示：
    `Appearance / Terminal / Interface / Electron / Modules / Browser / Commands / Editor / Files / Monitor / Sync / Dev Environment / Tmux Agent Monitor`
 3. 點 Browser → 右側 placeholder「This module has no global settings.」
-4. 點 Files → 右側 placeholder（workspace 設定不在這裡，仍在 workspace settings page）
-5. 點 Monitor → 右側 `MemoryMonitorPage` 內頁仍顯示「Performance Monitor」標題 + 完整 dashboard
-6. 點 Commands → 右側 Quick Commands 完整設定面板（內頁標題仍可顯示 "Quick Commands"）
-7. 進 Modules Switchboard：清單從上到下 = Browser / Quick Commands / Editor / Files / Performance Monitor（**全名**，相對順序對齊 sidebar）
-8. 切 zh-TW：sidebar 短名 `瀏覽器 / 指令 / 編輯器 / 檔案 / 監控 / 同步`
-9. 隨機 disable 一個 module → reload → 該 module 從 sidebar 與 Switchboard 都消失（既有 disable filter 行為，未動）
+4. 點 Files → 右側 placeholder（**purdex** scope；workspace 設定不在這裡）
+5. **Files workspace settings regression check（codex F6）**：進 `/settings/workspaces/<id>` → 確認 `Files (Workspace)` 仍顯示，可編輯 `projectPath`，存檔後再進來顯示已存值 — 確認 PR #833 路徑未壞
+6. 點 Monitor → 右側 `MemoryMonitorPage` 內頁仍顯示「Performance Monitor」標題 + 完整 dashboard
+7. 點 Commands → 右側 Quick Commands 完整設定面板（內頁標題仍可顯示 "Quick Commands"）
+8. 進 Modules Switchboard：清單從上到下 = Browser / Quick Commands / Editor / Files / Performance Monitor（**全名**，相對順序對齊 sidebar）
+9. 切 zh-TW：sidebar 短名 `瀏覽器 / 指令 / 編輯器 / 檔案 / 監控 / 同步`
+10. 隨機 disable 一個 module → reload → 該 module 從 sidebar 與 Switchboard 都消失（既有 disable filter 行為，未動）
 
 ## 5. 風險 / Edge cases
 
 | 風險 | 緩解 |
 |---|---|
 | 既有 dispatch 路徑對 Files 多一個 contribution 的影響 | dispatch logic 已支援多 contribution；測試 T2b + 全套 vitest 守住 |
-| `performance_monitor.title` 同時被 sidebar 與 inner page 用，切 sidebar labelKey 後是否有殘留？ | grep 確認只有 `register-modules/index.tsx:184` 使用作 labelKey；切後 inner page 仍呼 i18n key 取「Performance Monitor」 |
+| `performance_monitor.title` 同時被 sidebar 與 inner page 用，切 sidebar labelKey 後是否有殘留？ | 雙重 grep 結論（codex F5）：(a) `register-modules/index.tsx` **不再** 用 `performance_monitor.title` 作 sidebar labelKey；(b) `performance_monitor.title` 仍存在於 `pane-labels.ts:45` / `MemoryMonitorPage.tsx:284` / `pane-labels.test.ts:80` / locale JSON，由既有 `pane-labels.test.ts` 守住 |
 | Browser placeholder 與 Switchboard 介面落差（user 期待 Browser tab 設定但看到空頁） | i18n 文案 "no global settings" 顯式說明；可選後續 issue 加「Browser 設定請至 pane 內右鍵」連結 |
 | HMR + getModules() 排序時序 | 既有 AR-3 註解保留 — 不 memoize，每 render 重算，HMR 不會殘留 |
 | Files settings array 順序敏感性 | 排序 `.find((s) => s.scope === 'purdex')` 取第一個 — Files 兩個 contribution 不同 scope，無歧義 |
@@ -428,11 +479,11 @@ pnpm run build
 
 按 commit 順序：
 
-1. **C1**：寫 PlaceholderSettingsSection + 加 i18n keys + Switchboard 測試 + register-modules.test.ts T3-T7
-2. **C2**：改 settings-order.ts + register-modules/index.tsx (Browser/Files/memory-monitor/quick-commands) → T3-T7 過
-3. **C3**：改 ModulesSwitchboardSection 排序 → T1/T2/T2b 過
-4. **C4**：對齊既有 test（labelKey 變動）→ 全綠
-5. **手動驗證**：cd spa && pnpm run dev → 跑 §4 manual checklist
+1. **C1**：寫 PlaceholderSettingsSection（component + test）+ 加 i18n keys (en + zh-TW) + 加 Switchboard 新測試（T1/T2 紅）+ register-modules.test.ts T3-T9 紅
+2. **C2**：改 settings-order.ts + register-modules/index.tsx (Browser/Files/memory-monitor/quick-commands) + **同 commit** 對齊既有 labelKey assertion → T3-T9 過
+3. **C3**：抽 `sortDisableableModulesForSwitchboard` + ModulesSwitchboardSection 用之 + T2b assert 函數輸出 → T1/T2/T2b 過
+4. **C4**：全套 vitest / lint / build → 全綠
+5. **手動驗證**：cd spa && pnpm run dev → 跑 §4 manual checklist（含 Files workspace regression check）
 6. PR 開出 → 兩輪 codex review
 
 ## 7. PR / commit message 草稿
