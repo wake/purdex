@@ -25,6 +25,13 @@ const ERROR_NOTIFY_WINDOW_MS = 60_000
 /** Module-level debounce state. Not in Zustand — dispatcher-private ephemeral state. */
 const errorDebounceState = new Map<string, { silentUntil: number }>()
 
+// Max debounce entries: prevents unbounded growth with high-cardinality errorStrings.
+// Oldest entry (insertion order) is evicted when the cap is reached.
+const MAX_DEBOUNCE_ENTRIES = 1000
+
+// Throttle TTL sweep to at most once per ERROR_NOTIFY_WINDOW_MS to avoid O(N) on every event.
+let lastSweepAt = 0
+
 /** Build a collision-free debounce key from the 3-tuple that identifies an error bucket. */
 export function buildDebounceKey(ck: string, eventName: string, errorString: string): string {
   // Why: JSON.stringify over a fixed-length array escapes separator chars,
@@ -32,9 +39,10 @@ export function buildDebounceKey(ck: string, eventName: string, errorString: str
   return JSON.stringify([ck, eventName, String(errorString ?? '')])
 }
 
-/** Testing-only seam: clear module-level Map between tests. */
+/** Testing-only seam: clear module-level Map and sweep timer between tests. */
 export function __resetDebounceStateForTests(): void {
   errorDebounceState.clear()
+  lastSweepAt = 0
 }
 
 /** Iterate debounce Map, parsing each key once and calling cb(parsed, rawKey). */
@@ -160,9 +168,13 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
     const key = buildDebounceKey(ck, eventName, errorString ?? '')
     const now = Date.now()
 
-    // TTL self-cleanup: amortised sweep of entries stale beyond 5×WINDOW_MS.
-    for (const [k, v] of errorDebounceState) {
-      if (v.silentUntil < now - 5 * ERROR_NOTIFY_WINDOW_MS) errorDebounceState.delete(k)
+    // TTL self-cleanup: throttled sweep — at most once per ERROR_NOTIFY_WINDOW_MS.
+    // Why: avoids O(N) scan on every high-frequency error event.
+    if (now - lastSweepAt >= ERROR_NOTIFY_WINDOW_MS) {
+      for (const [k, v] of errorDebounceState) {
+        if (v.silentUntil < now - 5 * ERROR_NOTIFY_WINDOW_MS) errorDebounceState.delete(k)
+      }
+      lastSweepAt = now
     }
 
     const entry = errorDebounceState.get(key)
@@ -171,7 +183,11 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
       entry.silentUntil = now + ERROR_NOTIFY_WINDOW_MS
       return false
     }
-    // First event or window expired: open new window and let through.
+    // First event or window expired: enforce hard cap before inserting new entry.
+    if (entry == null && errorDebounceState.size >= MAX_DEBOUNCE_ENTRIES) {
+      // Evict oldest entry (Map preserves insertion order).
+      errorDebounceState.delete(errorDebounceState.keys().next().value as string)
+    }
     errorDebounceState.set(key, { silentUntil: now + ERROR_NOTIFY_WINDOW_MS })
   }
 

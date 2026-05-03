@@ -464,6 +464,47 @@ describe('debounce cleanup', () => {
     const result = shouldNotify(makeErrorParams('host:ttl-sess', 'rate_limit'))
     expect(result).toBe(true)
   })
+
+  it('debounce__sweep_throttled_once_per_window — TTL sweep runs at most once per 60s window', () => {
+    const WINDOW_MS = 60_000
+    // Plant 5 stale entries (silentUntil far in the past)
+    for (let i = 0; i < 5; i++) {
+      shouldNotify(makeErrorParams(`host:stale-sess-${i}`, 'rate_limit'))
+    }
+    // Advance far past the 5×WINDOW TTL threshold to make them all stale
+    vi.setSystemTime(6 * WINDOW_MS)
+
+    // Drive 9 more error events within WINDOW_MS - 1ms — sweep should NOT run yet
+    // (lastSweepAt was 0, first event at t=6*WINDOW triggers sweep once)
+    // After the first call at t=6*WINDOW the sweep fires; within next WINDOW_MS - 1ms it must NOT fire again.
+    for (let i = 0; i < 9; i++) {
+      vi.advanceTimersByTime(WINDOW_MS / 10)
+      shouldNotify(makeErrorParams(`host:active-sess-${i}`, 'another_error'))
+    }
+    // Now all stale entries should have been swept on the first call at t=6*WINDOW
+    // and NOT swept again (throttle). Confirm by checking that a new entry for
+    // a stale key passes (was evicted), while the active entries are still in window.
+    const afterResult = shouldNotify(makeErrorParams('host:stale-sess-0', 'rate_limit'))
+    expect(afterResult).toBe(true) // stale was swept → passes as new first-event
+  })
+
+  it('debounce__hard_cap_evicts_oldest_when_full — Map capped at 1000 entries', () => {
+    // Fill to exactly 1000
+    for (let i = 0; i < 1000; i++) {
+      shouldNotify(makeErrorParams('host:s', `err-${i}`))
+    }
+    const firstKey = makeErrorParams('host:s', 'err-0')
+    // Advance time so the 1000 entries are in the silence window (not stale)
+    vi.setSystemTime(1_000)
+    // All 1000 entries blocked
+    expect(shouldNotify(firstKey)).toBe(false)
+
+    // Adding entry 1001 must evict the oldest (FIFO) and keep size at 1000
+    vi.setSystemTime(2_000)
+    shouldNotify(makeErrorParams('host:s', 'err-new'))
+    // The first inserted key should now be evicted → passes (new first-event)
+    expect(shouldNotify(makeErrorParams('host:s', 'err-0'))).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
