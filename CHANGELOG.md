@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.0.0-alpha.292] - 2026-05-04
+
+### Feat(spa): Trailing-edge sliding debounce for error notifications (#842)
+
+PR-B of the rate-limit-cleanup work (PR-A `#832` shipped at alpha.290).
+Adds a 60s trailing-edge sliding debounce in
+`useNotificationDispatcher.shouldNotify` for `derived === 'error'`,
+keyed by `JSON.stringify([compositeKey, eventName, errorString])`.
+First error in a bucket fires the OS notification; subsequent same-key
+arrivals within the window extend `silentUntil` and return `false`. A
+storm of 100 events ≈ 1 notification (≥99% suppression — spec AC5),
+matching the dthn-class scenario where cc was firing ~1.5 Hz of
+`PdxStopFailure` during a rate-limit window.
+
+Cleanup runs on `clearSession` / `removeHost` via a single module-level
+store subscription (no reverse import) plus a throttled TTL self-cleanup
+(at most once per `ERROR_NOTIFY_WINDOW_MS`). The Map is hard-capped at
+1000 entries with FIFO eviction so a high-cardinality `errorString`
+storm cannot blow up the renderer. The `unread` badge and
+`derived === 'waiting'` / `'idle'` paths are deliberately untouched —
+debounce only gates desktop notifications, not the in-app sticky state.
+
+Three rounds of codex review (R1 standard 0 / R2 三平行 6 dedup → 4
+fixed in PR + 1 spec amend + 3 follow-up issues / R3 standard 0). R2
+landed: colon-safe `removeHost` cleanup (\`startsWith\` instead of
+\`split(':')[0]\`), throttled sweep + hard-cap, subscribe early-exit on
+\`lastEvents === prevState.lastEvents\`, and a rewritten unread-badge
+test that actually drives the suppression path. Spec AC9 was amended
+retrospectively to mark the LOC cap as informational rather than a
+hard ceiling.
+
+Follow-up tracking: #844 (errorString normalization), #845 (extract
+`errorNotificationDebounce.ts` module), #846 (test seam naming
+review).
+
 ## [1.0.0-alpha.291] - 2026-05-03
 
 ### Fix(files): Files module disableable + close SR-2 (#833)
