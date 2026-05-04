@@ -78,7 +78,19 @@ export function listContributions<S extends SettingsScope>(
   for (const c of contributions.values()) {
     if (c.scope === scope) out.push(c as unknown as SettingsContribution<S>)
   }
-  out.sort((a, b) => a.order - b.order)
+  // Spec §I2 (modules-switchboard sidebar alignment) — deterministic
+  // comparator: (order, moduleId, localId). Centralized here so every
+  // consumer (SettingsSidebar, GlobalSettingsPage default-mount logic,
+  // tests) sees the exact same ordering. Without the moduleId/localId
+  // tie-break, two contributions sharing an `order` would be returned in
+  // insertion order — which the sidebar then re-sorts deterministically,
+  // letting the visible row order diverge from the auto-mounted default
+  // section.
+  out.sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order
+    if (a.moduleId !== b.moduleId) return a.moduleId.localeCompare(b.moduleId)
+    return a.localId.localeCompare(b.localId)
+  })
   return out
 }
 

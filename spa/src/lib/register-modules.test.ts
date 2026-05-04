@@ -34,6 +34,8 @@ import { clearHostBuiltinSources } from './host-builtin-sections'
 import enLocale from '../locales/en.json'
 import zhLocale from '../locales/zh-TW.json'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
+import { PlaceholderSettingsSection } from '../components/settings/PlaceholderSettingsSection'
+import { sortDisableableModulesForSwitchboard } from '../components/settings/ModulesSwitchboardSection'
 
 const FakeComponent = () => null
 
@@ -80,7 +82,9 @@ describe('registerBuiltinModules', () => {
 
     const contribution = listContributions('purdex').find((item) => item.id === 'memory-monitor.performance-monitor')
     expect(contribution?.localId).toBe('performance-monitor')
-    expect(contribution?.labelKey).toBe('performance_monitor.title')
+    // Sidebar short label switched to `settings.section.monitor` (spec §4.5).
+    // Inner-page heading + pane label still resolve `performance_monitor.title`.
+    expect(contribution?.labelKey).toBe('settings.section.monitor')
   })
 
   it('hides Performance Monitor settings page when the module is disabled', () => {
@@ -733,5 +737,214 @@ describe('Commit 2: EditorBuffersPane + NewTab entry', () => {
     registerBuiltinModules()
     const editorMod = getModules().find((m) => m.id === 'editor')
     expect(editorMod?.panes?.find((p) => p.kind === 'editor-buffers')).toBeDefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Settings sidebar alignment (spec §3 I1 / §6 T3-T7 + T9 locale guard).
+// Every disableable module must declare at least one purdex-scope settings
+// contribution so the Settings sidebar mirrors the Modules Switchboard.
+// ---------------------------------------------------------------------------
+
+describe('Settings sidebar alignment (spec §3 I1)', () => {
+  beforeEach(() => {
+    clearAll()
+    useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  })
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+    clearAll()
+  })
+
+  it('T3 / I1: every disableable module declares at least one purdex-scope settings contribution', () => {
+    registerBuiltinModules()
+    const violations = getModules()
+      .filter((m) => m.disableable === true)
+      .filter((m) => !(m.settings ?? []).some((s) => s.scope === 'purdex'))
+      .map((m) => m.id)
+    expect(violations).toEqual([])
+  })
+
+  it('T4: browser registers a purdex placeholder with settings.section.browser label', () => {
+    registerBuiltinModules()
+    const browser = getModule('browser')
+    const purdex = browser?.settings?.find((s) => s.scope === 'purdex')
+    expect(purdex).toBeDefined()
+    expect(purdex?.labelKey).toBe('settings.section.browser')
+    expect(purdex?.component).toBe(PlaceholderSettingsSection)
+  })
+
+  it('T5: files registers a purdex placeholder with settings.section.files label', () => {
+    registerBuiltinModules()
+    const files = getModule('files')
+    const purdex = files?.settings?.find((s) => s.scope === 'purdex')
+    expect(purdex).toBeDefined()
+    expect(purdex?.labelKey).toBe('settings.section.files')
+    expect(purdex?.component).toBe(PlaceholderSettingsSection)
+  })
+
+  it('T6: memory-monitor purdex labelKey switched to settings.section.monitor', () => {
+    registerBuiltinModules()
+    const m = getModule('memory-monitor')
+    const purdex = m?.settings?.find((s) => s.scope === 'purdex')
+    expect(purdex?.labelKey).toBe('settings.section.monitor')
+  })
+
+  it('T7: quick-commands purdex labelKey switched to settings.section.commands', () => {
+    registerBuiltinModules()
+    const m = getModule('quick-commands')
+    const purdex = m?.settings?.find((s) => s.scope === 'purdex')
+    expect(purdex?.labelKey).toBe('settings.section.commands')
+  })
+
+  it('T9 / F6: locale JSON has new short-label keys + placeholder string in en + zh-TW', () => {
+    const required = [
+      'settings.section.browser',
+      'settings.section.commands',
+      'settings.section.files',
+      'settings.section.monitor',
+      'settings.module.no_purdex_settings',
+    ] as const
+    for (const k of required) {
+      expect((enLocale as Record<string, string>)[k]).toBeTruthy()
+      expect((zhLocale as Record<string, string>)[k]).toBeTruthy()
+    }
+  })
+
+  it('T2b / §I2: switchboard order matches disableable purdex contributions ASC by min order', () => {
+    registerBuiltinModules()
+
+    // Expected: every disableable module's first purdex-scope contribution
+    // order, sorted ASC by that order — exactly mirrors the Settings sidebar
+    // relative position for the disableable subset (Sync excluded; not
+    // disableable). Computed independently of the Switchboard sort logic
+    // so the two derivations cross-check each other.
+    const expected = listContributions('purdex')
+      .filter((c) => {
+        const m = getModule(c.moduleId)
+        return m?.disableable === true
+      })
+      .sort((a, b) => a.order - b.order)
+      .reduce<string[]>((acc, c) => {
+        if (!acc.includes(c.moduleId)) acc.push(c.moduleId)
+        return acc
+      }, [])
+
+    const actual = sortDisableableModulesForSwitchboard(getModules()).map((m) => m.id)
+    expect(actual).toEqual(expected)
+  })
+
+  // -- Round-2 adversarial review fixes ------------------------------------
+
+  it('R2-F2 / I1 enforcement: dispatch throws when a disableable module has no purdex contribution', () => {
+    // Authoring error: someone marks a module disableable but forgets the
+    // sidebar entry. Must fail loudly at dispatch time, not silently leave
+    // the module visible only in the Switchboard.
+    registerModule({
+      id: 'naked-disableable',
+      name: 'Naked Disableable',
+      disableable: true,
+      // no settings: [...] entry
+    })
+    // Defaults a fresh disableable module to enabled (per useModuleEnabledStore
+    // initial-snapshot semantics) so the dispatch path exercises the I1 check.
+    expect(() => dispatchSettingsContributions()).toThrow(
+      /naked-disableable.*purdex.*§I1/,
+    )
+  })
+
+  it('R2-F2 / I1 enforcement: dispatch passes when a disableable module has a workspace + purdex contribution (Files shape)', () => {
+    registerModule({
+      id: 'files-shape',
+      name: 'Files Shape',
+      disableable: true,
+      settings: [
+        { localId: 'ws', scope: 'workspace', order: 0, labelKey: 'a', component: FakeComponent },
+        { localId: 'pdx', scope: 'purdex', order: 99, labelKey: 'b', component: FakeComponent },
+      ],
+    })
+    expect(() => dispatchSettingsContributions()).not.toThrow()
+  })
+
+  it('R2-F1 / shared comparator: equal-order tie-break by moduleId on both surfaces (sidebar + switchboard)', () => {
+    // Two disableable modules sharing the same purdex order. The sidebar
+    // sorts contributions and the switchboard sorts modules; without a
+    // shared tie-breaker the relative order diverges. Both surfaces must
+    // agree because user-visible navigation is the same conceptual list.
+    registerModule({
+      id: 'zeta',
+      name: 'Zeta', // intentionally last alphabetically by display name
+      disableable: true,
+      settings: [
+        { localId: 'zeta', scope: 'purdex', order: 50, labelKey: 'zeta', component: FakeComponent },
+      ],
+    })
+    registerModule({
+      id: 'alpha',
+      name: 'Alpha',
+      disableable: true,
+      settings: [
+        { localId: 'alpha', scope: 'purdex', order: 50, labelKey: 'alpha', component: FakeComponent },
+      ],
+    })
+    dispatchSettingsContributions()
+
+    // Sidebar derivation — `listContributions('purdex')` is the canonical
+    // source of truth for sidebar order (deterministic comparator lives in
+    // settings-contribution-registry.ts).
+    const sidebarRelativeIds = listContributions('purdex')
+      .filter((c) => {
+        const m = getModule(c.moduleId)
+        return m?.disableable === true
+      })
+      .map((c) => c.moduleId)
+
+    // Switchboard derivation — same logic as
+    // sortDisableableModulesForSwitchboard().
+    const switchboardIds = sortDisableableModulesForSwitchboard(getModules()).map((m) => m.id)
+
+    // Both surfaces must put alpha before zeta (moduleId tie-break),
+    // ignoring the display name "Zeta"/"Alpha" — moduleId is canonical.
+    expect(sidebarRelativeIds[0]).toBe('alpha')
+    expect(sidebarRelativeIds[1]).toBe('zeta')
+    expect(switchboardIds.indexOf('alpha')).toBeLessThan(switchboardIds.indexOf('zeta'))
+    // And they must AGREE (same relative order on both surfaces).
+    expect(switchboardIds.filter((id) => id === 'alpha' || id === 'zeta'))
+      .toEqual(['alpha', 'zeta'])
+  })
+
+  it('R3-P2 / centralized comparator: listContributions returns deterministic order so SettingsPage default-mount agrees with sidebar', () => {
+    // Round-3 finding R3-P2 (codex review-moq3...): SettingsSidebar applied
+    // a local tie-break, but GlobalSettingsPage in SettingsPage.tsx mounts
+    // `sections[0]` from `listContributions('purdex')` directly — without
+    // the same tie-break the auto-mounted default page can be a different
+    // contribution than the sidebar's first visible row when two purdex
+    // entries share the same `order`. Fix: deterministic comparator now
+    // lives inside `listContributions`, so every consumer sees the same
+    // (order, moduleId, localId) sequence.
+    registerModule({
+      id: 'beta',
+      name: 'Beta',
+      settings: [
+        { localId: 'b1', scope: 'purdex', order: 99, labelKey: 'b1', component: FakeComponent },
+      ],
+    })
+    registerModule({
+      id: 'alphax',
+      name: 'AlphaX',
+      settings: [
+        { localId: 'a1', scope: 'purdex', order: 99, labelKey: 'a1', component: FakeComponent },
+      ],
+    })
+    dispatchSettingsContributions()
+
+    // First call (sidebar) and second call (SettingsPage default-mount) — both
+    // arrays must yield the same `localId` ordering for the same-order pair.
+    const callA = listContributions('purdex').map((c) => c.localId)
+    const callB = listContributions('purdex').map((c) => c.localId)
+    expect(callA).toEqual(callB)
+    // moduleId tie-break: 'alphax' < 'beta'.
+    expect(callA.indexOf('a1')).toBeLessThan(callA.indexOf('b1'))
   })
 })

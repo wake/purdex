@@ -62,6 +62,7 @@ import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
 import { QuickCommandsSettingsSection } from '../../components/settings/QuickCommandsSettingsSection'
 import { FilesWorkspaceSettingsSection } from '../../components/settings/FilesWorkspaceSettingsSection'
+import { PlaceholderSettingsSection } from '../../components/settings/PlaceholderSettingsSection'
 import { SETTINGS_ORDER } from '../settings-order'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
@@ -170,6 +171,19 @@ export function registerBuiltinModules(): void {
     disableable: true,
     descriptionKey: 'modules.browser.description',
     panes: [{ kind: 'browser', component: BrowserPaneWrapper }],
+    // Spec §I1 — every disableable module must declare at least one
+    // purdex-scope settings entry so the Settings sidebar mirrors the
+    // Modules Switchboard. Browser has no global config to expose; the
+    // shared placeholder renders a neutral "no global settings" message.
+    settings: [
+      {
+        localId: 'browser',
+        scope: 'purdex',
+        order: SETTINGS_ORDER.MODULE_BROWSER,
+        labelKey: 'settings.section.browser',
+        component: PlaceholderSettingsSection,
+      },
+    ],
   })
   registerModule({
     id: 'memory-monitor',
@@ -181,7 +195,9 @@ export function registerBuiltinModules(): void {
       localId: 'performance-monitor',
       scope: 'purdex',
       order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR,
-      labelKey: 'performance_monitor.title',
+      // Sidebar short label switched to settings.section.monitor (spec §4.5);
+      // the inner page heading + pane label still use performance_monitor.title.
+      labelKey: 'settings.section.monitor',
       component: PerformanceMonitorSettingsSection,
     }],
   })
@@ -209,7 +225,9 @@ export function registerBuiltinModules(): void {
         localId: 'quick-commands',
         scope: 'purdex',
         order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS,
-        labelKey: 'settings.section.quick_commands',
+        // Sidebar short label switched to settings.section.commands
+        // (spec §4.5); module.name + inner page still say "Quick Commands".
+        labelKey: 'settings.section.commands',
         component: QuickCommandsSettingsSection,
       },
     ],
@@ -250,6 +268,16 @@ export function registerBuiltinModules(): void {
         order: SETTINGS_ORDER.WORKSPACE_FILES,
         labelKey: 'settings.section.files_workspace',
         component: FilesWorkspaceSettingsSection,
+      },
+      // Spec §I1 — Files has workspace-scope settings but no global ones;
+      // the purdex placeholder keeps the Settings sidebar entry alongside
+      // the Modules Switchboard row.
+      {
+        localId: 'files',
+        scope: 'purdex',
+        order: SETTINGS_ORDER.MODULE_FILES,
+        labelKey: 'settings.section.files',
+        component: PlaceholderSettingsSection,
       },
     ],
     views: [

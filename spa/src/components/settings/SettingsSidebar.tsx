@@ -40,6 +40,12 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
     [],
   )
 
+  // `listContributions('purdex')` already returns a deterministically
+  // sorted array (by `order`, then `moduleId`, then `localId` — see
+  // settings-contribution-registry.ts). Spec §I2 alignment is enforced
+  // at the registry layer, so the sidebar / `GlobalSettingsPage`
+  // auto-mount / Switchboard derivation all see the same order — no
+  // local re-sort needed.
   const rows: SidebarRow[] = listContributions('purdex')
     .map<SidebarRow>((c) => {
       const isDisabled = c.disabled ? c.disabled(ctx) === true : false
@@ -52,7 +58,6 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
         moduleOwned: isModuleOwnedContribution(c),
       }
     })
-    .sort((a, b) => a.order - b.order)
 
   return (
     <div className="w-48 border-r border-border-subtle bg-surface-primary py-3 pl-2 flex-shrink-0">
