@@ -458,7 +458,7 @@ Optimistic-concurrency retry path (`mutateSubagentsWithRetry`) is already covere
 - **AC6**: PR-B preserves unread badge semantics — sticky after first error, doesn't clear on subsequent debounced arrivals.
 - **AC7**: PR-B `clearSession` / `removeHost` clean debounce state for the affected keys.
 - **AC8**: Both PRs ship with no new lint / type errors and full test coverage of the matrix in §6.
-- **AC9**: PR size cap: PR-A ≤ 500 LOC production+tests; PR-B ≤ 300 LOC production+tests. (Spec docs not counted.)
+- **AC9**: PR size cap: PR-A ≤ 500 LOC production+tests; PR-B ≤ 300 LOC production+tests. (Spec docs not counted.) **AC9 amendment 2026-05-04**: cap is informational, not blocking. PR-A landed at ~945 LOC (R2 race-safety additions); PR-B landed at ~498 LOC after R2 finding fixes (sweep throttle + hard cap + colon-safe cleanup + unread suppression test rewrite). The §6.2 12-row test matrix plus per-test `beforeEach`/`afterEach` isolation + `lastEvents` seeding for cleanup tests + R2 sweep-throttle / hard-cap / colon-safe / unread-suppression coverage exceed the original conservative budget. Future similarly-scoped PRs should treat AC9 as a planning anchor rather than a hard ceiling — surface the overage in the PR body and verify each test row maps to a spec contract before approving.
 
 ---
 

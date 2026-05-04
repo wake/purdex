@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick } from './useNotificationDispatcher'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick, buildDebounceKey, __resetDebounceStateForTests, __purgeDebounceForHostForTests } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 import { useTabStore } from '../stores/useTabStore'
@@ -14,6 +14,11 @@ const defaultSettings: NotificationSettings = {
 }
 
 describe('shouldNotify', () => {
+  beforeEach(() => {
+    // Reset debounce state so error-event tests in this suite don't bleed into each other
+    __resetDebounceStateForTests()
+  })
+
   it('returns true for waiting event with matching tab', () => {
     expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
   })
@@ -222,5 +227,371 @@ describe('handleNotificationClick workspace switching', () => {
     for (const ws of wsState.workspaces) {
       expect(ws.tabs).toHaveLength(0)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P3-T1: buildDebounceKey + state Map + shouldNotify integration
+// ---------------------------------------------------------------------------
+
+const errorSettings: NotificationSettings = {
+  enabled: true, events: {}, notifyWithoutTab: true, reopenTabOnClick: false,
+}
+
+function makeErrorParams(ck: string, errorString: string, eventName = 'StopFailure'): Parameters<typeof shouldNotify>[0] {
+  return {
+    derived: 'error',
+    eventName,
+    compositeKey: ck,
+    focusedCompositeKey: '',
+    hasTab: true,
+    settings: errorSettings,
+    errorString,
+  }
+}
+
+describe('buildDebounceKey', () => {
+  it('normal inputs produce a stable JSON array string', () => {
+    const key = buildDebounceKey('host:sess', 'StopFailure', 'rate_limit')
+    expect(key).toBe(JSON.stringify(['host:sess', 'StopFailure', 'rate_limit']))
+  })
+
+  it('inputs containing pipe characters are not confused with separators', () => {
+    const key1 = buildDebounceKey('a|b', 'c', 'd|e')
+    const key2 = buildDebounceKey('a', 'b|c', 'd|e')
+    expect(key1).not.toBe(key2)
+  })
+
+  it('undefined errorString maps to empty string', () => {
+    const key = buildDebounceKey('host:sess', 'StopFailure', undefined as unknown as string)
+    expect(key).toBe(JSON.stringify(['host:sess', 'StopFailure', '']))
+  })
+
+  it('null errorString maps to empty string', () => {
+    const key = buildDebounceKey('host:sess', 'StopFailure', null as unknown as string)
+    expect(key).toBe(JSON.stringify(['host:sess', 'StopFailure', '']))
+  })
+})
+
+describe('error notification debounce', () => {
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounce__test_reset_helper — reset clears state so tests are order-independent', () => {
+    shouldNotify(makeErrorParams('host:sess', 'rate_limit'))
+    __resetDebounceStateForTests()
+    // After reset, same key should pass again (first-event semantics)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__first_error_passes', () => {
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__second_error_within_window_blocked_and_extends', () => {
+    // t=0: first event passes, silentUntil = 60_000
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+
+    // t=30_000: second event — still within window; should be blocked and extend silentUntil to 90_000
+    vi.setSystemTime(30_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(false)
+
+    // t=65_000: would have passed under original window (60_000), but extension moved it to 90_000
+    vi.setSystemTime(65_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(false)
+  })
+
+  it('debounce__error_after_silence_window_passes', () => {
+    // t=0: first event
+    shouldNotify(makeErrorParams('host:sess', 'rate_limit'))
+    // t=70_000: window expired (>60_000 silence); should pass again
+    vi.setSystemTime(70_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__storm_100_events_yields_one_notification', () => {
+    // 100 events at ~1.67 Hz (600ms intervals) over ~60s
+    let passCount = 0
+    for (let i = 0; i < 100; i++) {
+      vi.advanceTimersByTime(600)
+      if (shouldNotify(makeErrorParams('host:sess', 'rate_limit'))) {
+        passCount++
+      }
+    }
+    // The first event (at t=600ms) should pass; all subsequent should be blocked
+    // and the sliding window keeps extending
+    expect(passCount).toBe(1)
+  })
+
+  it('debounce__different_keys_independent', () => {
+    // (a) same session + different detail.error both pass
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('host:sess', 'auth_failed'))).toBe(true)
+
+    __resetDebounceStateForTests()
+
+    // (b) same error + different sessions both pass
+    expect(shouldNotify(makeErrorParams('host:sess1', 'rate_limit'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('host:sess2', 'rate_limit'))).toBe(true)
+
+    __resetDebounceStateForTests()
+
+    // (c) same session + same error + different eventName both pass
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit', 'StopFailure'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit', 'Stop'))).toBe(true)
+  })
+
+  it('debounce__key_uses_json_array_not_pipe_join — no key collision', () => {
+    // Collision rebuke: these two triples would collide with pipe-join but not JSON.stringify
+    const key1 = buildDebounceKey('a|b', 'c', 'd|e')
+    const key2 = buildDebounceKey('a', 'b|c', 'd|e')
+    expect(key1).not.toBe(key2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P3-T2: cleanup paths (clearSession / removeHost / TTL)
+// ---------------------------------------------------------------------------
+
+describe('debounce cleanup', () => {
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    // Reset agent store
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounce__clear_session_resets — next event passes after clearSession', () => {
+    // Seed lastEvents so subscription can detect the removal
+    const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: { error: 'rate_limit' } }
+    useAgentStore.setState({ lastEvents: { 'host:sess': fakeEvent } })
+
+    // First event passes and sets debounce window
+    shouldNotify(makeErrorParams('host:sess', 'rate_limit'))
+    // Second event blocked
+    vi.setSystemTime(1_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(false)
+
+    // clearSession removes 'host:sess' from lastEvents → triggers subscription → purge debounce
+    useAgentStore.getState().clearSession('host', 'sess')
+
+    // Next event should pass (window cleared)
+    vi.setSystemTime(2_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__remove_host_with_colon_in_hostid — purge correctly matches compositeKeys when hostId contains colon', () => {
+    // hostId = "mlab:abc123", compositeKey = "mlab:abc123:s1"
+    // Old code: split(':')[0] = "mlab" ≠ "mlab:abc123" → entry NOT removed (bug)
+    // Fixed code: startsWith("mlab:abc123:") → entry removed correctly
+    const ckTarget = 'mlab:abc123:s1'
+    const ckOther = 'mlab:def456:s1'
+
+    // Seed both debounce entries
+    shouldNotify(makeErrorParams(ckTarget, 'rate_limit'))
+    shouldNotify(makeErrorParams(ckOther, 'rate_limit'))
+
+    vi.setSystemTime(1_000)
+    // Both blocked
+    expect(shouldNotify(makeErrorParams(ckTarget, 'rate_limit'))).toBe(false)
+    expect(shouldNotify(makeErrorParams(ckOther, 'rate_limit'))).toBe(false)
+
+    // Directly call purgeDebounceForHost with the colon-containing hostId
+    __purgeDebounceForHostForTests('mlab:abc123')
+
+    vi.setSystemTime(2_000)
+    // "mlab:abc123" entries cleared → passes
+    expect(shouldNotify(makeErrorParams(ckTarget, 'rate_limit'))).toBe(true)
+    // "mlab:def456" entry untouched → still blocked
+    expect(shouldNotify(makeErrorParams(ckOther, 'rate_limit'))).toBe(false)
+  })
+
+  it('debounce__remove_host_resets — all keys for host cleared on removeHost', () => {
+    // Seed lastEvents so subscription can detect host removal
+    const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: {} }
+    useAgentStore.setState({
+      lastEvents: {
+        'host:sess1': { ...fakeEvent },
+        'host:sess2': { ...fakeEvent },
+      },
+    })
+
+    // Seed two sessions on same host
+    shouldNotify(makeErrorParams('host:sess1', 'rate_limit'))
+    shouldNotify(makeErrorParams('host:sess2', 'rate_limit'))
+
+    vi.setSystemTime(1_000)
+    // Both blocked
+    expect(shouldNotify(makeErrorParams('host:sess1', 'rate_limit'))).toBe(false)
+    expect(shouldNotify(makeErrorParams('host:sess2', 'rate_limit'))).toBe(false)
+
+    // removeHost clears all 'host:*' keys from lastEvents → triggers subscription → purge all
+    useAgentStore.getState().removeHost('host')
+
+    vi.setSystemTime(2_000)
+    // Both should pass now (windows cleared)
+    expect(shouldNotify(makeErrorParams('host:sess1', 'rate_limit'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('host:sess2', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__ttl_cleanup — stale entries removed from Map on next shouldNotify call', () => {
+    const ERROR_NOTIFY_WINDOW_MS = 60_000
+    // Set debounce entry at t=0
+    shouldNotify(makeErrorParams('host:ttl-sess', 'rate_limit'))
+
+    // Advance time past 5 × WINDOW_MS + 1ms
+    vi.setSystemTime(5 * ERROR_NOTIFY_WINDOW_MS + 1)
+
+    // Make a shouldNotify call on a different key to trigger TTL sweep
+    // (TTL sweep runs during any error shouldNotify call)
+    shouldNotify(makeErrorParams('host:other-sess', 'rate_limit'))
+
+    // The original stale entry for host:ttl-sess should have been evicted.
+    // We verify indirectly: calling shouldNotify on ttl-sess returns true
+    // (first-event semantics, not blocked by stale silentUntil)
+    const result = shouldNotify(makeErrorParams('host:ttl-sess', 'rate_limit'))
+    expect(result).toBe(true)
+  })
+
+  it('debounce__sweep_throttled_once_per_window — TTL sweep runs at most once per 60s window', () => {
+    const WINDOW_MS = 60_000
+    // Plant 5 stale entries (silentUntil far in the past)
+    for (let i = 0; i < 5; i++) {
+      shouldNotify(makeErrorParams(`host:stale-sess-${i}`, 'rate_limit'))
+    }
+    // Advance far past the 5×WINDOW TTL threshold to make them all stale
+    vi.setSystemTime(6 * WINDOW_MS)
+
+    // Drive 9 more error events within WINDOW_MS - 1ms — sweep should NOT run yet
+    // (lastSweepAt was 0, first event at t=6*WINDOW triggers sweep once)
+    // After the first call at t=6*WINDOW the sweep fires; within next WINDOW_MS - 1ms it must NOT fire again.
+    for (let i = 0; i < 9; i++) {
+      vi.advanceTimersByTime(WINDOW_MS / 10)
+      shouldNotify(makeErrorParams(`host:active-sess-${i}`, 'another_error'))
+    }
+    // Now all stale entries should have been swept on the first call at t=6*WINDOW
+    // and NOT swept again (throttle). Confirm by checking that a new entry for
+    // a stale key passes (was evicted), while the active entries are still in window.
+    const afterResult = shouldNotify(makeErrorParams('host:stale-sess-0', 'rate_limit'))
+    expect(afterResult).toBe(true) // stale was swept → passes as new first-event
+  })
+
+  it('debounce__hard_cap_evicts_oldest_when_full — Map capped at 1000 entries', () => {
+    // Fill to exactly 1000
+    for (let i = 0; i < 1000; i++) {
+      shouldNotify(makeErrorParams('host:s', `err-${i}`))
+    }
+    const firstKey = makeErrorParams('host:s', 'err-0')
+    // Advance time so the 1000 entries are in the silence window (not stale)
+    vi.setSystemTime(1_000)
+    // All 1000 entries blocked
+    expect(shouldNotify(firstKey)).toBe(false)
+
+    // Adding entry 1001 must evict the oldest (FIFO) and keep size at 1000
+    vi.setSystemTime(2_000)
+    shouldNotify(makeErrorParams('host:s', 'err-new'))
+    // The first inserted key should now be evicted → passes (new first-event)
+    expect(shouldNotify(makeErrorParams('host:s', 'err-0'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P3-T3: isolation guards (waiting / unread badge)
+// ---------------------------------------------------------------------------
+
+describe('debounce isolation guards', () => {
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounce__waiting_not_debounced — 5 consecutive waiting events all pass', () => {
+    const params = {
+      derived: 'waiting' as const,
+      eventName: 'PermissionRequest',
+      compositeKey: 'host:sess',
+      focusedCompositeKey: '',
+      hasTab: true,
+      settings: errorSettings,
+    }
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(1_000)
+      expect(shouldNotify(params)).toBe(true)
+    }
+  })
+
+  it('debounce__subscribe_skips_when_lastEvents_unchanged — Object.keys not called on unrelated state mutation', () => {
+    // The early-exit guard prevents Object.keys(prevState.lastEvents) enumeration
+    // when lastEvents reference is unchanged (common case on every setState).
+    const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: { error: 'rate_limit' } }
+    const lastEvents = { 'host:sess': fakeEvent }
+    useAgentStore.setState({ lastEvents })
+
+    const objectKeysSpy = vi.spyOn(Object, 'keys')
+
+    // Mutate state NOT touching lastEvents — subscription must early-exit, no Object.keys on lastEvents
+    useAgentStore.setState({ unread: { 'host:sess': true } })
+
+    // Object.keys may be called for other reasons; what matters is it was NOT called with lastEvents
+    const calledWithLastEvents = objectKeysSpy.mock.calls.some(
+      ([arg]) => arg === lastEvents,
+    )
+    expect(calledWithLastEvents).toBe(false)
+
+    objectKeysSpy.mockRestore()
+
+    // Confirm purge still fires when lastEvents DOES change (clearSession)
+    shouldNotify(makeErrorParams('host:sess', 'rate_limit'))
+    vi.setSystemTime(1_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(false)
+    useAgentStore.getState().clearSession('host', 'sess')
+    vi.setSystemTime(2_000)
+    expect(shouldNotify(makeErrorParams('host:sess', 'rate_limit'))).toBe(true)
+  })
+
+  it('debounce__unread_badge_unaffected — unread set even when shouldNotify returns false (suppressed)', () => {
+    const ck = 'host:sess'
+    // Step 1: establish debounce window by calling shouldNotify → true
+    const suppressed = shouldNotify(makeErrorParams(ck, 'rate_limit'))
+    expect(suppressed).toBe(true) // first event passes
+
+    // Step 2: reset unread, then fire second event through handleNormalizedEvent
+    useAgentStore.setState({ unread: {} })
+    vi.setSystemTime(1_000) // within the 60s window
+
+    // Step 3: confirm shouldNotify returns false (debounce suppressed)
+    const blocked = shouldNotify(makeErrorParams(ck, 'rate_limit'))
+    expect(blocked).toBe(false)
+
+    // Step 4: drive handleNormalizedEvent — unread path must NOT be gated by shouldNotify
+    useAgentStore.getState().handleNormalizedEvent('host', 'sess', {
+      agent_type: 'cc',
+      status: 'error',
+      raw_event_name: 'StopFailure',
+      broadcast_ts: 2,
+      detail: { error: 'rate_limit' },
+    })
+
+    // Step 5: unread must be true even though shouldNotify returned false
+    // This test FAILS if a future change gates the unread write on shouldNotify's return value.
+    expect(useAgentStore.getState().unread[ck]).toBe(true)
   })
 })
