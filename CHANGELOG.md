@@ -1,5 +1,67 @@
 # Changelog
 
+## [1.0.0-alpha.293] - 2026-05-04
+
+### Fix(settings): Align modules switchboard with sidebar order (#843)
+
+The Modules Switchboard now mirrors the Settings sidebar's relative
+order for the disableable subset. Previously the Switchboard rendered
+modules in registration order while the sidebar sorted by
+`SETTINGS_ORDER` — same conceptual list, two different visible
+sequences. The Switchboard sort key is now the minimum `order` across
+a module's purdex contributions; tie-break by `module.id` agrees with
+the sidebar's `(order, moduleId, localId)` triple comparator. `Sync`
+remains sidebar-only because it is not `disableable`.
+
+Browser and Files now declare a purdex-scope placeholder settings page
+via the shared `PlaceholderSettingsSection` component. Every
+`disableable` module now has a Settings sidebar entry — invariant **I1**
+in the new spec — so the Modules Switchboard ↔ sidebar mental model
+stays consistent. The Files purdex placeholder explicitly supersedes
+§N3 of `2026-05-03-files-disableable-sr2-spec.md` (PR #833): the prior
+"no global settings" UX argument is replaced with an explicit
+placeholder so users following the Switchboard never end up with no
+sidebar landing.
+
+`SETTINGS_ORDER` is reordered alphabetically by **English short**
+sidebar label (B / C / E / F / M / Sync). Constant names stay bound to
+module identity (`MODULE_QUICK_COMMANDS` even though the sidebar shows
+"Commands") so future label changes do not ripple into the constants
+table. Two sidebar labels are shortened: `Performance Monitor` →
+`Monitor` and `Quick Commands` → `Commands`. The Switchboard rows,
+pane labels and inner page headings continue to use the full
+`module.name` ("Performance Monitor" / "Quick Commands") — sidebar =
+navigation short, switchboard / pane = identity full. Five new i18n
+keys land in both English and 繁體中文.
+
+`listContributions(scope)` is now the single source of truth for
+sidebar order with a deterministic `(order, moduleId, localId)` triple
+comparator. `SettingsSidebar` and `GlobalSettingsPage`'s default-mount
+logic in `SettingsPage.tsx` both consume it without local re-sorts —
+for equal-order pairs the auto-mounted default page can no longer
+diverge from the first visible sidebar row. `dispatchSettingsContributions`
+now throws at registration time when a `disableable` module declares
+no purdex contribution, so authoring errors fail loudly instead of
+silently leaving the module visible only in the Switchboard. The
+Switchboard sort uses `reduce` (not `Math.min(...orders)`) to remove
+the spread-arg upper-bound risk if a module ever declares many purdex
+contributions.
+
+PR review history: 1 spec-review round (3 medium → all addressed) +
+1 plan-review round (4 medium + 2 low → all addressed) + R1 standard
+PR review (0 finding) + R2 three-perspective adversarial review
+(2 medium + 1 low → all fixed in-PR) + R3 standard verify (1 P2 → fixed
+via centralized comparator) + R4 standard verify (0 finding).
+
+Files: `register-modules/index.tsx`, `settings-order.ts`,
+`dispatch-settings-contributions.ts`, `settings-contribution-registry.ts`,
+`SettingsSidebar.tsx`, `ModulesSwitchboardSection.tsx`,
+`PlaceholderSettingsSection.tsx` (new), `register-modules.test.ts`,
+`register-modules.quick-commands.test.tsx`,
+`settings-order-pr2.test.ts`, `dispatch-settings-contributions.test.ts`,
+`PlaceholderSettingsSection.test.tsx` (new),
+`ModulesSwitchboardSection.test.tsx`, `en.json`, `zh-TW.json`.
+
 ## [1.0.0-alpha.292] - 2026-05-04
 
 ### Feat(spa): Trailing-edge sliding debounce for error notifications (#842)
