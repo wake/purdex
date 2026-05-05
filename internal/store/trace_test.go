@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"testing"
 )
 
@@ -754,6 +755,199 @@ func TestTraceStore_PruneCascadesStepsToChainsAfterEviction(t *testing.T) {
 	}
 	if orphans != 0 {
 		t.Errorf("orphan steps = %d (stepCount=%d, chainCount=%d): ON DELETE CASCADE did not fire — foreign_keys pragma missing on prune connection", orphans, stepCount, chainCount)
+	}
+}
+
+// openFileTraceStore opens a file-backed AgentEventStore in t.TempDir() and
+// warms the pool to maxConns concurrent connections before returning
+// the TraceStore. This exercises the pool-PRAGMA path that :memory: skips.
+func openFileTraceStore(t *testing.T) *TraceStore {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := OpenAgentEvent(path)
+	if err != nil {
+		t.Fatalf("OpenAgentEvent: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	// Warm 4 idle pool connections so subsequent migration/ops fan out.
+	ctx := context.Background()
+	conns := make([]*sql.Conn, 4)
+	for i := range conns {
+		c, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("db.Conn warm %d: %v", i, err)
+		}
+		conns[i] = c
+	}
+	for _, c := range conns {
+		_ = c.Close()
+	}
+
+	ts, err := s.Traces()
+	if err != nil {
+		t.Fatalf("Traces: %v", err)
+	}
+	ts.maxChains = 10
+	ts.maxSteps = 1000
+	return ts
+}
+
+// TestMigrateTraceDB_RunsOnPinnedConnection verifies that migrateTraceDB
+// succeeds against a file-backed pool with FK=1 on all pool connections.
+// Before the fix, the FK=OFF PRAGMA on a random pool connection left other
+// connections with FK=ON during DDL, breaking schema creation.
+func TestMigrateTraceDB_RunsOnPinnedConnection(t *testing.T) {
+	s := openFileTraceStore(t)
+
+	// Save a chain with steps to confirm schema is fully functional.
+	record := TraceRecord{
+		Chain: TraceChain{
+			ChainID:        "pinned-chain",
+			StartedAt:      1,
+			CompletedAt:    2,
+			TerminalStatus: "done",
+			TmuxSession:    "proj-pinned",
+			PaneID:         "%1",
+			RootAgentType:  "cc",
+			RootEventName:  "Stop",
+			RootReason:     "ok",
+		},
+		Steps: []TraceStep{
+			{StepID: "pinned-s1", ChainID: "pinned-chain", Seq: 1, Kind: "root", TmuxSession: "proj-pinned", PaneID: "%1", AgentType: "cc", EventName: "Stop", CreatedAt: 1},
+			{StepID: "pinned-s2", ChainID: "pinned-chain", ParentStepID: "pinned-s1", Seq: 2, Kind: "terminal", TmuxSession: "proj-pinned", PaneID: "%1", AgentType: "cc", EventName: "Stop", CreatedAt: 2},
+		},
+	}
+	if err := s.SaveChain(record); err != nil {
+		t.Fatalf("SaveChain: %v", err)
+	}
+
+	got, err := s.GetChainRecord("pinned-chain")
+	if err != nil {
+		t.Fatalf("GetChainRecord: %v", err)
+	}
+	if got == nil || len(got.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %v", got)
+	}
+}
+
+// TestMigrateTraceDB_CascadeRegression_FileBackedPool runs the prune-cascade
+// scenario (F3) on a file-backed pool to ensure FK enforcement works across
+// pool connections — the scenario that :memory: single-conn tests cannot catch.
+func TestMigrateTraceDB_CascadeRegression_FileBackedPool(t *testing.T) {
+	s := openFileTraceStore(t)
+	s.maxChains = 5
+	s.maxSteps = 1000
+
+	for i := 0; i < 20; i++ {
+		chainID := fmt.Sprintf("fp-chain-%02d", i)
+		record := TraceRecord{
+			Chain: TraceChain{
+				ChainID:          chainID,
+				StartedAt:        int64(i + 1),
+				CompletedAt:      int64(i + 2),
+				TerminalStatus:   "done",
+				TerminalReason:   "ok",
+				TmuxSession:      "proj-fp",
+				PaneID:           "%8",
+				RootAgentType:    "cc",
+				RootEventName:    "Stop",
+				RootReason:       "ok",
+				LatestStepKind:   "terminal",
+				LatestDecision:   "done",
+				LatestStepReason: "ok",
+			},
+			Steps: []TraceStep{
+				{StepID: fmt.Sprintf("fp%02d-1", i), ChainID: chainID, Seq: 1, Kind: "root", TmuxSession: "proj-fp", PaneID: "%8", AgentType: "cc", EventName: "Stop", CreatedAt: int64(i*10 + 1)},
+				{StepID: fmt.Sprintf("fp%02d-2", i), ChainID: chainID, ParentStepID: fmt.Sprintf("fp%02d-1", i), Seq: 2, Kind: "terminal", TmuxSession: "proj-fp", PaneID: "%8", AgentType: "cc", EventName: "Stop", CreatedAt: int64(i*10 + 2)},
+			},
+		}
+		if err := s.SaveChain(record); err != nil {
+			t.Fatalf("SaveChain %d: %v", i, err)
+		}
+	}
+
+	var chainCount, orphans int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM agent_trace_chains").Scan(&chainCount); err != nil {
+		t.Fatalf("count chains: %v", err)
+	}
+	if err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM agent_trace_steps
+		WHERE chain_id NOT IN (SELECT chain_id FROM agent_trace_chains)
+	`).Scan(&orphans); err != nil {
+		t.Fatalf("count orphans: %v", err)
+	}
+	if chainCount > 5 {
+		t.Errorf("chainCount = %d, want ≤5", chainCount)
+	}
+	if orphans != 0 {
+		t.Errorf("orphan steps = %d after file-backed pool prune: ON DELETE CASCADE did not fire", orphans)
+	}
+}
+
+// TestMigrateTraceDB_CleansLegacyOrphans verifies that migrateTraceDB
+// deletes pre-existing orphan agent_trace_steps (rows whose chain_id has no
+// corresponding agent_trace_chains row) accumulated while FK enforcement was
+// unreliable.
+func TestMigrateTraceDB_CleansLegacyOrphans(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orphan.db")
+
+	// First open: create schema and seed orphan steps via a pinned conn with FK off.
+	s1, err := OpenAgentEvent(path)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+
+	ctx := context.Background()
+	conn, err := s1.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("get conn: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatalf("fk off: %v", err)
+	}
+
+	// Ensure trace tables exist before inserting.
+	if _, err := s1.Traces(); err != nil {
+		t.Fatalf("first Traces: %v", err)
+	}
+
+	// Insert 5 orphan steps — chain_id 'ghost-chain' never appears in agent_trace_chains.
+	for i := 1; i <= 5; i++ {
+		if _, err := conn.ExecContext(ctx,
+			`INSERT INTO agent_trace_steps (step_id, chain_id, parent_step_id, seq, kind, tmux_session, pane_id, agent_type, frame_id, parent_frame_id, event_name, decision, reason, payload_json, before_json, after_json, created_at)
+			 VALUES (?, 'ghost-chain', NULL, ?, 'root', '', '', '', '', '', '', '', '', 'null', 'null', 'null', ?)`,
+			fmt.Sprintf("ghost-step-%d", i), i, i,
+		); err != nil {
+			t.Fatalf("insert orphan step %d: %v", i, err)
+		}
+	}
+	_ = conn.Close()
+	_ = s1.Close()
+
+	// Second open re-runs migrateTraceDB, which must delete the 5 orphans.
+	s2, err := OpenAgentEvent(path)
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	defer s2.Close()
+
+	if _, err := s2.Traces(); err != nil {
+		t.Fatalf("second Traces: %v", err)
+	}
+
+	var orphanCount int
+	if err := s2.db.QueryRow(`
+		SELECT COUNT(*) FROM agent_trace_steps
+		WHERE NOT EXISTS (
+			SELECT 1 FROM agent_trace_chains
+			WHERE agent_trace_chains.chain_id = agent_trace_steps.chain_id
+		)
+	`).Scan(&orphanCount); err != nil {
+		t.Fatalf("count orphans: %v", err)
+	}
+	if orphanCount != 0 {
+		t.Errorf("orphan steps after migration = %d, want 0", orphanCount)
 	}
 }
 
