@@ -687,3 +687,71 @@ func seedIntermediateTraceData(t *testing.T, db *sql.DB) {
 		t.Fatalf("seed step: %v", err)
 	}
 }
+
+// TestTraceStore_PruneCascadesStepsToChainsAfterEviction verifies that when
+// pruneTraceChains evicts old chains, their steps are also removed via
+// ON DELETE CASCADE. Saves more chains than maxChains so prune fires, then
+// asserts no orphan steps remain.
+//
+// Why: without foreign_keys pragma active on the connection that executes the
+// prune DELETE, SQLite silently skips the cascade — leaving steps referencing
+// deleted chains (orphans). This was the root cause of the 18 GB DB bloat
+// (137,550 steps vs 10,000 chains).
+func TestTraceStore_PruneCascadesStepsToChainsAfterEviction(t *testing.T) {
+	s := openTestTraceStore(t)
+	s.maxChains = 5
+	s.maxSteps = 1000
+
+	// Save 20 chains, each with 3 steps → 60 steps total.
+	// After prune: ≤5 chains remain; all surviving steps must reference a
+	// surviving chain.
+	for i := 0; i < 20; i++ {
+		chainID := fmt.Sprintf("cascade-chain-%02d", i)
+		record := TraceRecord{
+			Chain: TraceChain{
+				ChainID:          chainID,
+				StartedAt:        int64(i + 1),
+				CompletedAt:      int64(i + 2),
+				TerminalStatus:   "done",
+				TerminalReason:   "ok",
+				TmuxSession:      "proj-cascade",
+				PaneID:           "%7",
+				RootAgentType:    "cc",
+				RootEventName:    "Stop",
+				RootReason:       "bootstrap",
+				LatestStepKind:   "terminal",
+				LatestDecision:   "done",
+				LatestStepReason: "ok",
+			},
+			Steps: []TraceStep{
+				{StepID: fmt.Sprintf("s%02d-1", i), ChainID: chainID, Seq: 1, Kind: "root", TmuxSession: "proj-cascade", PaneID: "%7", AgentType: "cc", EventName: "Stop", CreatedAt: int64(i*10 + 1)},
+				{StepID: fmt.Sprintf("s%02d-2", i), ChainID: chainID, ParentStepID: fmt.Sprintf("s%02d-1", i), Seq: 2, Kind: "decision", TmuxSession: "proj-cascade", PaneID: "%7", AgentType: "cc", EventName: "Stop", CreatedAt: int64(i*10 + 2)},
+				{StepID: fmt.Sprintf("s%02d-3", i), ChainID: chainID, ParentStepID: fmt.Sprintf("s%02d-2", i), Seq: 3, Kind: "terminal", TmuxSession: "proj-cascade", PaneID: "%7", AgentType: "cc", EventName: "Stop", CreatedAt: int64(i*10 + 3)},
+			},
+		}
+		if err := s.SaveChain(record); err != nil {
+			t.Fatalf("SaveChain %d: %v", i, err)
+		}
+	}
+
+	var chainCount, stepCount, orphans int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM agent_trace_chains").Scan(&chainCount); err != nil {
+		t.Fatalf("count chains: %v", err)
+	}
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM agent_trace_steps").Scan(&stepCount); err != nil {
+		t.Fatalf("count steps: %v", err)
+	}
+	if err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM agent_trace_steps
+		WHERE chain_id NOT IN (SELECT chain_id FROM agent_trace_chains)
+	`).Scan(&orphans); err != nil {
+		t.Fatalf("count orphans: %v", err)
+	}
+
+	if chainCount > 5 {
+		t.Errorf("chainCount = %d, want ≤5", chainCount)
+	}
+	if orphans != 0 {
+		t.Errorf("orphan steps = %d (stepCount=%d, chainCount=%d): ON DELETE CASCADE did not fire — foreign_keys pragma missing on prune connection", orphans, stepCount, chainCount)
+	}
+}

@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -257,5 +258,45 @@ func TestAgentEventStore_TracesDefaults(t *testing.T) {
 	}
 	if traces.maxSteps != 100000 {
 		t.Fatalf("maxSteps = %d, want 100000", traces.maxSteps)
+	}
+}
+
+// TestOpenAgentEvent_AllPoolConnsHaveForeignKeysEnabled forces acquisition of
+// every connection in the pool (cap=4) and asserts each one reports
+// foreign_keys=1.
+//
+// Why: PRAGMA foreign_keys is per-connection in SQLite. A post-Open db.Exec
+// only enables it on whichever single connection is checked out at that
+// moment. The remaining pool connections are dialled later without FK enabled,
+// so ON DELETE CASCADE silently does not fire for ~75 % of transactions.
+// Moving the pragma into the DSN _pragma parameter causes the driver to apply
+// it on every new connection at dial time, making the pool fully consistent.
+func TestOpenAgentEvent_AllPoolConnsHaveForeignKeysEnabled(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenAgentEvent(filepath.Join(dir, "x.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	ctx := context.Background()
+	const n = 4
+	conns := make([]*sql.Conn, n)
+	for i := range conns {
+		c, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Conn %d: %v", i, err)
+		}
+		conns[i] = c
+	}
+	for i, c := range conns {
+		var fk int
+		if err := c.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil {
+			t.Fatalf("conn %d: query foreign_keys: %v", i, err)
+		}
+		if fk != 1 {
+			t.Errorf("conn %d: foreign_keys = %d, want 1", i, fk)
+		}
+		_ = c.Close()
 	}
 }
