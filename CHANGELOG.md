@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.0.0-alpha.294] - 2026-05-05
+
+### Fix(store): SQLite foreign_keys via DSN _pragma + pin trace migration to single conn (#849)
+
+Investigating an 18.3 GB `agent_events.db` revealed that `agent_trace_steps`
+had grown to 137,550 rows while `agent_trace_chains` was correctly capped at
+exactly 10,000 — a 13.75 : 1 ratio that contradicts the schema-defined
+`ON DELETE CASCADE`. Root cause: SQLite's `PRAGMA foreign_keys` is
+per-connection, but the daemon enabled it via a single post-`Open`
+`db.Exec("PRAGMA foreign_keys = ON")`. With `db.SetMaxOpenConns(4)`, only
+~25 % of `BeginTx` calls landed on the FK-enabled connection. Cascade
+silently no-op'd on the other 75 %, leaving orphan trace_steps every time
+`pruneTraceChains` evicted a chain.
+
+Fix moves FK enablement into the DSN `_pragma=foreign_keys(1)` parameter
+(applied by `modernc.org/sqlite` at every new-connection dial) and
+removes the post-`Open` `db.Exec`. The `:memory:` test path keeps the
+explicit Exec since it always runs at `MaxOpenConns(1)` (no pool-miss
+risk).
+
+Round-2 codex adversarial review (3-way fan-out) caught a related
+secondary bug: `migrateTraceDB` itself toggled `PRAGMA foreign_keys`
+through the pool, conflicting with the new always-on DSN behaviour and
+risking failed schema rebuilds against legacy DBs. Migration now acquires
+a single `*sql.Conn` at entry, runs all DDL through that pinned
+connection, and ends with a one-time orphan cleanup
+(`DELETE FROM agent_trace_steps WHERE NOT EXISTS chain`) so existing
+deployments are repaired idempotently.
+
+Three rounds of codex review (R1 standard 0 / R2 三平行 4 dedup → 3 fixed
+in PR + 1 follow-up issue / R3 standard 0). Follow-up #850 tracks
+extracting the magic-`4` pool-size constant for test parameterization.
+
+Live impact verified on mlab: DB shrank from 17 GB to 52 MB after a
+manual SQL trim + VACUUM (this PR ensures alpha.294+ daemons no longer
+leak orphans in the first place).
+
 ## [1.0.0-alpha.293] - 2026-05-04
 
 ### Fix(settings): Align modules switchboard with sidebar order (#843)
