@@ -31,7 +31,13 @@ func OpenAgentEvent(path string) (*AgentEventStore, error) {
 		// concurrent hooks/sweep/checkpoint without changing durability.
 		// 500ms catches typical SSD checkpoint contention (<300ms observed)
 		// without blocking the hot path past user-perceived UI latency.
-		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(500)"
+		//
+		// foreign_keys(1): enable ON DELETE CASCADE enforcement. Must live in
+		// the DSN _pragma param (applied by the driver at every new-connection
+		// dial time) rather than a post-Open db.Exec, which would only reach
+		// whichever single pool connection happened to be checked out and leave
+		// the remaining 3 connections with FK silently disabled.
+		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(500)&_pragma=foreign_keys(1)"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -41,16 +47,18 @@ func OpenAgentEvent(path string) (*AgentEventStore, error) {
 		// Keep a single connection so the in-memory schema is shared across
 		// all queries and transactions in tests.
 		db.SetMaxOpenConns(1)
+		// :memory: skips the DSN _pragma path above, so enable FK explicitly.
+		// Safe on a single connection — no pool-miss risk.
+		if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("enable foreign keys: %w", err)
+		}
 	} else {
 		// File-backed: bound the pool so concurrent goroutines can't fan out
 		// fds. agent_event DB is shared with FramesStore + TraceStore via
 		// .Frames() / .Traces(), so cap=4 governs all three together.
 		db.SetMaxOpenConns(4)
 		db.SetMaxIdleConns(4)
-	}
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 	if err := migrateAgentEventDB(db); err != nil {
 		db.Close()
