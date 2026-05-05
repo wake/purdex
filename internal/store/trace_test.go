@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -632,7 +633,7 @@ func seedLegacyTraceData(t *testing.T, db *sql.DB) {
 func seedIntermediateTraceSchema(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	if err := createTraceChainsTable(db); err != nil {
+	if err := createTraceChainsTable(context.Background(), db); err != nil {
 		t.Fatalf("create chains: %v", err)
 	}
 	if _, err := db.Exec(`
@@ -755,3 +756,4 @@ func TestTraceStore_PruneCascadesStepsToChainsAfterEviction(t *testing.T) {
 		t.Errorf("orphan steps = %d (stepCount=%d, chainCount=%d): ON DELETE CASCADE did not fire — foreign_keys pragma missing on prune connection", orphans, stepCount, chainCount)
 	}
 }
+
