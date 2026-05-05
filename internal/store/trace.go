@@ -87,56 +87,79 @@ type TraceStore struct {
 	maxSteps  int
 }
 
+// sqlQuerier is satisfied by both *sql.DB and *sql.Conn so migration helpers
+// can be called on a pinned connection without duplicating function bodies.
+type sqlQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// migrateTraceDB pins a single pool connection for the entire migration so
+// that "PRAGMA foreign_keys = OFF" and the subsequent DDL all execute on the
+// same connection. Without pinning, the DSN foreign_keys(1) pragma (active on
+// every other pool connection) would cause DROP TABLE / ALTER TABLE to fail
+// when cascading FK children exist.
 func migrateTraceDB(db *sql.DB) error {
-	if err := setTraceForeignKeys(db, false); err != nil {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = setTraceForeignKeys(db, true)
-	}()
+	defer conn.Close()
 
-	chainCols, err := tableColumns(db, "agent_trace_chains")
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, "PRAGMA foreign_keys = ON") //nolint:errcheck
+
+	chainCols, err := tableColumns(ctx, conn, "agent_trace_chains")
 	if err != nil {
 		return err
 	}
 	if len(chainCols) == 0 {
-		if err := createTraceChainsTable(db); err != nil {
+		if err := createTraceChainsTable(ctx, conn); err != nil {
 			return err
 		}
 	} else if needsChainRebuild(chainCols) {
-		if err := rebuildLegacyTraceChains(db); err != nil {
+		if err := rebuildLegacyTraceChains(ctx, conn); err != nil {
 			return err
 		}
 	}
 
-	stepCols, err := tableColumns(db, "agent_trace_steps")
+	stepCols, err := tableColumns(ctx, conn, "agent_trace_steps")
 	if err != nil {
 		return err
 	}
 	if len(stepCols) == 0 {
-		if err := createTraceStepsTable(db); err != nil {
+		if err := createTraceStepsTable(ctx, conn); err != nil {
 			return err
 		}
-	} else if needsStepRebuild(stepCols, db) {
-		if err := rebuildLegacyTraceSteps(db); err != nil {
+	} else if needsStepRebuild(ctx, stepCols, conn) {
+		if err := rebuildLegacyTraceSteps(ctx, conn); err != nil {
 			return err
 		}
 	}
 
-	return createTraceIndexes(db)
-}
-
-func setTraceForeignKeys(db *sql.DB, enabled bool) error {
-	state := "OFF"
-	if enabled {
-		state = "ON"
+	if err := createTraceIndexes(ctx, conn); err != nil {
+		return err
 	}
-	_, err := db.Exec("PRAGMA foreign_keys = " + state)
+
+	// Clean up orphan steps that accumulated while FK enforcement was
+	// unreliable (pool-PRAGMA leak in earlier daemon versions). Safe no-op
+	// on already-clean DBs.
+	_, err = conn.ExecContext(ctx, `
+		DELETE FROM agent_trace_steps
+		WHERE NOT EXISTS (
+			SELECT 1 FROM agent_trace_chains
+			WHERE agent_trace_chains.chain_id = agent_trace_steps.chain_id
+		)
+	`)
 	return err
 }
 
-func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
-	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+func tableColumns(ctx context.Context, q sqlQuerier, table string) (map[string]bool, error) {
+	rows, err := q.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +208,7 @@ func needsChainRebuild(cols map[string]bool) bool {
 	return false
 }
 
-func needsStepRebuild(cols map[string]bool, db *sql.DB) bool {
+func needsStepRebuild(ctx context.Context, cols map[string]bool, q sqlQuerier) bool {
 	required := []string{
 		"seq",
 		"kind",
@@ -207,11 +230,11 @@ func needsStepRebuild(cols map[string]bool, db *sql.DB) bool {
 			return true
 		}
 	}
-	return !hasStepParentCompositeFK(db)
+	return !hasStepParentCompositeFK(ctx, q)
 }
 
-func hasStepParentCompositeFK(db *sql.DB) bool {
-	rows, err := db.Query(`PRAGMA foreign_key_list(agent_trace_steps)`)
+func hasStepParentCompositeFK(ctx context.Context, q sqlQuerier) bool {
+	rows, err := q.QueryContext(ctx, `PRAGMA foreign_key_list(agent_trace_steps)`)
 	if err != nil {
 		return false
 	}
@@ -263,8 +286,8 @@ func hasStepParentCompositeFK(db *sql.DB) bool {
 	return false
 }
 
-func createTraceChainsTable(db *sql.DB) error {
-	_, err := db.Exec(`
+func createTraceChainsTable(ctx context.Context, q sqlQuerier) error {
+	_, err := q.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS agent_trace_chains (
 			chain_id           TEXT PRIMARY KEY,
 			started_at         INTEGER NOT NULL DEFAULT 0,
@@ -286,8 +309,8 @@ func createTraceChainsTable(db *sql.DB) error {
 	return err
 }
 
-func createTraceStepsTable(db *sql.DB) error {
-	_, err := db.Exec(`
+func createTraceStepsTable(ctx context.Context, q sqlQuerier) error {
+	_, err := q.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS agent_trace_steps (
 			step_id         TEXT PRIMARY KEY,
 			chain_id        TEXT NOT NULL,
@@ -313,43 +336,43 @@ func createTraceStepsTable(db *sql.DB) error {
 	return err
 }
 
-func createTraceIndexes(db *sql.DB) error {
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_started ON agent_trace_chains(started_at DESC, chain_id DESC)`); err != nil {
+func createTraceIndexes(ctx context.Context, q sqlQuerier) error {
+	if _, err := q.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_chains_started ON agent_trace_chains(started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_session_started ON agent_trace_chains(tmux_session, started_at DESC, chain_id DESC)`); err != nil {
+	if _, err := q.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_chains_session_started ON agent_trace_chains(tmux_session, started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_pane_started ON agent_trace_chains(pane_id, started_at DESC, chain_id DESC)`); err != nil {
+	if _, err := q.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_chains_pane_started ON agent_trace_chains(pane_id, started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_chains_agent_event_started ON agent_trace_chains(root_agent_type, root_event_name, started_at DESC, chain_id DESC)`); err != nil {
+	if _, err := q.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_chains_agent_event_started ON agent_trace_chains(root_agent_type, root_event_name, started_at DESC, chain_id DESC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_steps_chain_seq ON agent_trace_steps(chain_id, seq ASC, created_at ASC, step_id ASC)`); err != nil {
+	if _, err := q.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_steps_chain_seq ON agent_trace_steps(chain_id, seq ASC, created_at ASC, step_id ASC)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_trace_steps_chain_step ON agent_trace_steps(chain_id, step_id)`); err != nil {
+	if _, err := q.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_trace_steps_chain_step ON agent_trace_steps(chain_id, step_id)`); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_trace_steps_parent ON agent_trace_steps(chain_id, parent_step_id)`); err != nil {
+	if _, err := q.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_steps_parent ON agent_trace_steps(chain_id, parent_step_id)`); err != nil {
 		return err
 	}
 	return nil
 }
 
-func rebuildLegacyTraceChains(db *sql.DB) error {
-	stepCounts, err := legacyTraceStepCounts(db)
+func rebuildLegacyTraceChains(ctx context.Context, q sqlQuerier) error {
+	stepCounts, err := legacyTraceStepCounts(ctx, q)
 	if err != nil {
 		return err
 	}
-	if _, err := db.Exec(`ALTER TABLE agent_trace_chains RENAME TO agent_trace_chains_legacy`); err != nil {
+	if _, err := q.ExecContext(ctx, `ALTER TABLE agent_trace_chains RENAME TO agent_trace_chains_legacy`); err != nil {
 		return err
 	}
-	if err := createTraceChainsTable(db); err != nil {
+	if err := createTraceChainsTable(ctx, q); err != nil {
 		return err
 	}
-	_, err = db.Exec(`
+	_, err = q.ExecContext(ctx, `
 		INSERT INTO agent_trace_chains (
 			chain_id, started_at, completed_at, terminal_status, terminal_reason,
 			tmux_session, pane_id, root_agent_type, root_event_name, root_reason,
@@ -378,17 +401,17 @@ func rebuildLegacyTraceChains(db *sql.DB) error {
 	}
 	if len(stepCounts) > 0 {
 		for chainID, count := range stepCounts {
-			if _, err := db.Exec(`UPDATE agent_trace_chains SET step_count = ? WHERE chain_id = ?`, count, chainID); err != nil {
+			if _, err := q.ExecContext(ctx, `UPDATE agent_trace_chains SET step_count = ? WHERE chain_id = ?`, count, chainID); err != nil {
 				return err
 			}
 		}
 	}
-	_, err = db.Exec(`DROP TABLE agent_trace_chains_legacy`)
+	_, err = q.ExecContext(ctx, `DROP TABLE agent_trace_chains_legacy`)
 	return err
 }
 
-func legacyTraceStepCounts(db *sql.DB) (map[string]int, error) {
-	exists, err := traceTableExists(db, "agent_trace_steps")
+func legacyTraceStepCounts(ctx context.Context, q sqlQuerier) (map[string]int, error) {
+	exists, err := traceTableExists(ctx, q, "agent_trace_steps")
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +419,7 @@ func legacyTraceStepCounts(db *sql.DB) (map[string]int, error) {
 		return map[string]int{}, nil
 	}
 
-	rows, err := db.Query(`SELECT chain_id, COUNT(*) FROM agent_trace_steps GROUP BY chain_id`)
+	rows, err := q.QueryContext(ctx, `SELECT chain_id, COUNT(*) FROM agent_trace_steps GROUP BY chain_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -414,9 +437,9 @@ func legacyTraceStepCounts(db *sql.DB) (map[string]int, error) {
 	return counts, rows.Err()
 }
 
-func traceTableExists(db *sql.DB, table string) (bool, error) {
+func traceTableExists(ctx context.Context, q sqlQuerier, table string) (bool, error) {
 	var name string
-	err := db.QueryRow(`
+	err := q.QueryRowContext(ctx, `
 		SELECT name
 		FROM sqlite_master
 		WHERE type = 'table' AND name = ?
@@ -430,16 +453,16 @@ func traceTableExists(db *sql.DB, table string) (bool, error) {
 	return true, nil
 }
 
-func rebuildLegacyTraceSteps(db *sql.DB) error {
-	cols, err := tableColumns(db, "agent_trace_steps")
+func rebuildLegacyTraceSteps(ctx context.Context, q sqlQuerier) error {
+	cols, err := tableColumns(ctx, q, "agent_trace_steps")
 	if err != nil {
 		return err
 	}
-	stepRows, err := traceTableRowCount(db, "agent_trace_steps")
+	stepRows, err := traceTableRowCount(ctx, q, "agent_trace_steps")
 	if err != nil {
 		return err
 	}
-	chainRows, err := traceTableRowCount(db, "agent_trace_chains")
+	chainRows, err := traceTableRowCount(ctx, q, "agent_trace_chains")
 	if err != nil {
 		return err
 	}
@@ -447,7 +470,7 @@ func rebuildLegacyTraceSteps(db *sql.DB) error {
 		return fmt.Errorf("cannot migrate legacy trace steps without legacy trace chains")
 	}
 	if stepRows > 0 && chainRows > 0 {
-		orphanSteps, err := legacyTraceOrphanStepCount(db)
+		orphanSteps, err := legacyTraceOrphanStepCount(ctx, q)
 		if err != nil {
 			return err
 		}
@@ -455,10 +478,10 @@ func rebuildLegacyTraceSteps(db *sql.DB) error {
 			return fmt.Errorf("cannot migrate legacy trace steps with %d orphan step references", orphanSteps)
 		}
 	}
-	if _, err := db.Exec(`ALTER TABLE agent_trace_steps RENAME TO agent_trace_steps_legacy`); err != nil {
+	if _, err := q.ExecContext(ctx, `ALTER TABLE agent_trace_steps RENAME TO agent_trace_steps_legacy`); err != nil {
 		return err
 	}
-	if err := createTraceStepsTable(db); err != nil {
+	if err := createTraceStepsTable(ctx, q); err != nil {
 		return err
 	}
 	var copyQuery string
@@ -538,26 +561,26 @@ func rebuildLegacyTraceSteps(db *sql.DB) error {
 			ORDER BY s.chain_id ASC, s.step_index ASC, s.created_at ASC, s.step_id ASC
 		`
 	}
-	_, err = db.Exec(copyQuery)
+	_, err = q.ExecContext(ctx, copyQuery)
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`DROP TABLE agent_trace_steps_legacy`)
+	_, err = q.ExecContext(ctx, `DROP TABLE agent_trace_steps_legacy`)
 	return err
 }
 
-func traceTableRowCount(db *sql.DB, table string) (int, error) {
+func traceTableRowCount(ctx context.Context, q sqlQuerier, table string) (int, error) {
 	var count int
-	err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count)
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
 	return count, nil
 }
 
-func legacyTraceOrphanStepCount(db *sql.DB) (int, error) {
+func legacyTraceOrphanStepCount(ctx context.Context, q sqlQuerier) (int, error) {
 	var count int
-	err := db.QueryRow(`
+	err := q.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM agent_trace_steps s
 		LEFT JOIN agent_trace_chains c ON c.chain_id = s.chain_id
