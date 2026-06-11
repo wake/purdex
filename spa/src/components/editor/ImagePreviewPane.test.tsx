@@ -6,9 +6,14 @@ import type { FileSource } from '../../types/fs'
 import { getFsBackend } from '../../lib/fs-backend'
 
 const read = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
+// Stable backend instance — mirrors production getFsBackend, which returns a
+// Map-cached instance (not a fresh object per call). Now that the render-phase
+// reset compares the backend object to detect a session change, a per-call-new
+// mock would falsely read every rerender as a backend change.
+const backendInstance = { read }
 
 vi.mock('../../lib/fs-backend', () => ({
-  getFsBackend: vi.fn(() => ({ read })),
+  getFsBackend: vi.fn(() => backendInstance),
 }))
 
 // Track defineProperty installs so we can restore between tests.
@@ -27,7 +32,7 @@ function makePane(filePath: string, source: FileSource = { type: 'inapp' }): Pan
 
 beforeEach(() => {
   read.mockClear()
-  vi.mocked(getFsBackend).mockReturnValue({ read } as unknown as ReturnType<typeof getFsBackend>)
+  vi.mocked(getFsBackend).mockReturnValue(backendInstance as unknown as ReturnType<typeof getFsBackend>)
 
   // Polyfill ResizeObserver (jsdom lacks it).
   globalThis.ResizeObserver = class {
@@ -348,5 +353,33 @@ describe('ImagePreviewPane', () => {
     rerender(<ImagePreviewPane pane={makePane('/late.png')} isActive={true} />)
     await screen.findByRole('img')
     expect(read).toHaveBeenCalledWith('/late.png')
+  })
+
+  // Method-E: a backend change for the SAME identity invalidates the preview
+  // session — stale error must drop and a successful re-read on the re-registered
+  // backend must clear the prior error banner (the R4 recovery case).
+  it('drops stale preview/error when the backend changes for the same identity (E)', async () => {
+    imgComplete = true
+    imgNaturalW = 100
+    imgNaturalH = 100
+    boxW = 500
+    boxH = 500
+
+    // First read fails → error banner shown.
+    read.mockRejectedValueOnce(new Error('read failed'))
+    const { rerender } = render(
+      <ImagePreviewPane pane={makePane('/x.png')} isActive={true} />,
+    )
+    await waitFor(() => expect(screen.getByText('read failed')).toBeInTheDocument())
+
+    // Same identity, backend re-registered (new instance); next read succeeds.
+    const reregistered = { read }
+    vi.mocked(getFsBackend).mockReturnValue(
+      reregistered as unknown as ReturnType<typeof getFsBackend>,
+    )
+    rerender(<ImagePreviewPane pane={makePane('/x.png')} isActive={true} />)
+
+    await screen.findByRole('img')
+    expect(screen.queryByText('read failed')).toBeNull()
   })
 })

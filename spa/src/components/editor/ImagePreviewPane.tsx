@@ -22,34 +22,41 @@ function ImagePreviewPaneInner({ source, filePath }: { source: FileSource; fileP
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
 
-  // Reset zoom + measured natural size during render when the buffer changes
-  // (the React-recommended "adjust state on prop change" pattern, avoiding a
-  // setState-in-effect reset that would cascade-render and trip the lint rule).
-  // Identity is the composite (source, filePath) key so that switching to the
-  // same path on a different source (e.g. another daemon host, or inapp↔daemon)
-  // still resets zoom/natural rather than carrying over stale measurements.
+  // A preview "session" is identified by the composite (identity, backend): the
+  // identity (source+filePath, capturing daemon hostId) AND the resolved backend
+  // object together decide which preview is showing. Switching files/hosts, or
+  // having the backend become available / re-registered, all invalidate the
+  // current session. We reset on exactly that composite — the same one the read
+  // effect below depends on — so "when to drop stale preview state" and "when to
+  // re-read" are ONE rule rather than two (the earlier split — reset on identity
+  // only, read on [identity, backend] — is what left same-identity backend
+  // changes half-reset and took several review rounds to surface).
+  //
+  // Done synchronously during render (React's "adjust state on prop change"
+  // pattern) so switching never paints the old image / stale error for a frame
+  // before an effect commits. The old objectUrl is still revoked by the read
+  // effect's cleanup, so no blob URL leaks. `box` is container measurement, not
+  // session state, so it is deliberately not reset here. getFsBackend returns a
+  // stable Map-cached instance, so comparing the backend object does not loop.
   const identity = bufferKey(source, filePath)
   const [seenIdentity, setSeenIdentity] = useState(identity)
-  if (seenIdentity !== identity) {
+  const [seenBackend, setSeenBackend] = useState(backend)
+  if (seenIdentity !== identity || seenBackend !== backend) {
     setSeenIdentity(identity)
+    setSeenBackend(backend)
     setZoom('fit')
     setNatural(null)
-    // Clear the previous preview synchronously *during render* (not in the read
-    // effect below) so switching files never paints the old image or a stale
-    // error banner for a frame before the effect commits. The old objectUrl is
-    // still revoked by the read effect's cleanup, so no blob URL leaks.
     setObjectUrl(null)
     setError(null)
   }
 
-  // Re-read whenever the identity (composite source+filePath key, which also
-  // captures daemon hostId so a same-path/different-host switch re-reads) OR the
-  // backend changes. Depending ALSO on `backend` is what makes a backend that
-  // becomes available after first render — or is re-registered — trigger a
-  // re-read instead of sticking on "No FS backend"/stale content; in the steady
-  // state getFsBackend returns a stable instance so this does not re-run per
-  // render. The objectUrl/error reset is done synchronously during render above
-  // (not here), so no stale frame is painted. filePath is covered by identity.
+  // Re-read whenever the session (identity, backend) changes — the same composite
+  // the render-phase reset above keys off. Resetting preview state happens there
+  // (render phase), not here, so no stale frame is painted. On success we also
+  // clear `error` before setting the new objectUrl: this covers a same-session
+  // re-read that recovers from a prior failure (the reset above only fires on a
+  // session *change*, so a success within the same session must clear the stale
+  // error itself or `if (error) return` would keep short-circuiting the render).
   useEffect(() => {
     if (!backend) return
     let url: string | null = null
@@ -58,6 +65,7 @@ function ImagePreviewPaneInner({ source, filePath }: { source: FileSource; fileP
       .then((data) => {
         if (stale) return
         url = URL.createObjectURL(new Blob([new Uint8Array(data)]))
+        setError(null)
         setObjectUrl(url)
       })
       .catch((err: Error) => { if (!stale) setError(err.message) })
