@@ -3,11 +3,12 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 import { ImagePreviewPane } from './ImagePreviewPane'
 import type { Pane } from '../../types/tab'
 import type { FileSource } from '../../types/fs'
+import { getFsBackend } from '../../lib/fs-backend'
 
 const read = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
 
 vi.mock('../../lib/fs-backend', () => ({
-  getFsBackend: () => ({ read }),
+  getFsBackend: vi.fn(() => ({ read })),
 }))
 
 // Track defineProperty installs so we can restore between tests.
@@ -26,6 +27,7 @@ function makePane(filePath: string, source: FileSource = { type: 'inapp' }): Pan
 
 beforeEach(() => {
   read.mockClear()
+  vi.mocked(getFsBackend).mockReturnValue({ read } as unknown as ReturnType<typeof getFsBackend>)
 
   // Polyfill ResizeObserver (jsdom lacks it).
   globalThis.ResizeObserver = class {
@@ -320,5 +322,31 @@ describe('ImagePreviewPane', () => {
     await screen.findByRole('img')
 
     expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock')
+  })
+
+  // P3: a backend unavailable on first render but available afterwards (same
+  // source/filePath, so identity is unchanged) must still trigger a re-read
+  // rather than sticking on "No FS backend". Guards the read effect's `backend`
+  // dependency (keying off identity alone would miss this).
+  it('re-reads when the backend becomes available after first render (P3)', async () => {
+    imgComplete = true
+    imgNaturalW = 100
+    imgNaturalH = 100
+    boxW = 500
+    boxH = 500
+
+    // First render: backend not yet registered.
+    vi.mocked(getFsBackend).mockReturnValueOnce(undefined)
+    const { rerender } = render(
+      <ImagePreviewPane pane={makePane('/late.png')} isActive={true} />,
+    )
+    expect(screen.getByText('No FS backend')).toBeInTheDocument()
+    expect(read).not.toHaveBeenCalled()
+
+    // Backend becomes available; identity unchanged, only the `backend` dep
+    // flips — which must still drive a re-read.
+    rerender(<ImagePreviewPane pane={makePane('/late.png')} isActive={true} />)
+    await screen.findByRole('img')
+    expect(read).toHaveBeenCalledWith('/late.png')
   })
 })

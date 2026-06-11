@@ -34,21 +34,24 @@ function ImagePreviewPaneInner({ source, filePath }: { source: FileSource; fileP
     setSeenIdentity(identity)
     setZoom('fit')
     setNatural(null)
-  }
-
-  // Key the read effect off the stable composite identity string rather than the
-  // `backend` object's identity: the backend is resolved fresh on every render and
-  // would otherwise re-run this effect each render (and, with the synchronous
-  // reset below, loop forever). `identity` changes exactly when source or filePath
-  // changes — which is precisely when a re-read is needed.
-  useEffect(() => {
-    if (!backend) return
-    // Clear any previously loaded image / error so switching files immediately
-    // falls back to Loading instead of leaving the old image (or a stale error
-    // banner) on screen until the new read resolves. The previous objectUrl is
-    // still revoked by this effect's cleanup, so no blob URL leaks.
+    // Clear the previous preview synchronously *during render* (not in the read
+    // effect below) so switching files never paints the old image or a stale
+    // error banner for a frame before the effect commits. The old objectUrl is
+    // still revoked by the read effect's cleanup, so no blob URL leaks.
     setObjectUrl(null)
     setError(null)
+  }
+
+  // Re-read whenever the identity (composite source+filePath key, which also
+  // captures daemon hostId so a same-path/different-host switch re-reads) OR the
+  // backend changes. Depending ALSO on `backend` is what makes a backend that
+  // becomes available after first render — or is re-registered — trigger a
+  // re-read instead of sticking on "No FS backend"/stale content; in the steady
+  // state getFsBackend returns a stable instance so this does not re-run per
+  // render. The objectUrl/error reset is done synchronously during render above
+  // (not here), so no stale frame is painted. filePath is covered by identity.
+  useEffect(() => {
+    if (!backend) return
     let url: string | null = null
     let stale = false
     backend.read(filePath)
@@ -60,7 +63,7 @@ function ImagePreviewPaneInner({ source, filePath }: { source: FileSource; fileP
       .catch((err: Error) => { if (!stale) setError(err.message) })
     return () => { stale = true; if (url) URL.revokeObjectURL(url) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity])
+  }, [identity, backend])
 
   const measureNatural = useCallback(() => {
     const img = imgRef.current
