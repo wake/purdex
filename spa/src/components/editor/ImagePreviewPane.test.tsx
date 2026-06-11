@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { ImagePreviewPane } from './ImagePreviewPane'
 import type { Pane } from '../../types/tab'
+import type { FileSource } from '../../types/fs'
 
 const read = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
 
@@ -16,10 +17,10 @@ let imgNaturalH = 0
 let boxW = 0
 let boxH = 0
 
-function makePane(filePath: string): Pane {
+function makePane(filePath: string, source: FileSource = { type: 'inapp' }): Pane {
   return {
     id: 'p1',
-    content: { kind: 'image-preview', source: { type: 'inapp' }, filePath },
+    content: { kind: 'image-preview', source, filePath },
   }
 }
 
@@ -193,5 +194,131 @@ describe('ImagePreviewPane', () => {
     fireEvent.load(img)
     await waitFor(() => expect(img.className).toContain('cursor-zoom-in'))
     expect(img.className).not.toContain('cursor-zoom-out')
+  })
+
+  // F5: same filePath but a different source must also reset zoom/natural.
+  it('resets to fit mode when only the source changes for the same filePath (F5)', async () => {
+    imgComplete = true
+    imgNaturalW = 2000
+    imgNaturalH = 2000
+    boxW = 500
+    boxH = 500
+
+    const { rerender } = render(
+      <ImagePreviewPane
+        pane={makePane('/same.png', { type: 'daemon', hostId: 'h1' })}
+        isActive={true}
+      />,
+    )
+    let img = await screen.findByRole('img')
+    fireEvent.load(img)
+    await waitFor(() => expect(img.className).toContain('cursor-zoom-in'))
+
+    // Toggle to actual size.
+    fireEvent.click(img)
+    await waitFor(() => expect(img.className).toContain('cursor-zoom-out'))
+
+    // Same filePath, different daemon host → should reset back to fit.
+    rerender(
+      <ImagePreviewPane
+        pane={makePane('/same.png', { type: 'daemon', hostId: 'h2' })}
+        isActive={true}
+      />,
+    )
+    img = await screen.findByRole('img')
+    fireEvent.load(img)
+    await waitFor(() => expect(img.className).toContain('cursor-zoom-in'))
+    expect(img.className).not.toContain('cursor-zoom-out')
+  })
+
+  // F4(a): switching files must not leave the previous image's objectUrl on
+  // screen during the new read — it should fall back to Loading immediately.
+  it('clears the previous image during the next read when switching files (F4)', async () => {
+    imgComplete = true
+    imgNaturalW = 2000
+    imgNaturalH = 2000
+    boxW = 500
+    boxH = 500
+
+    // First file loads successfully.
+    const { rerender } = render(
+      <ImagePreviewPane pane={makePane('/a.png')} isActive={true} />,
+    )
+    await screen.findByRole('img')
+
+    // Hold the next read pending so we can observe the transition state.
+    let resolveB: (data: Uint8Array) => void = () => {}
+    read.mockImplementationOnce(
+      () => new Promise<Uint8Array>((resolve) => { resolveB = resolve }),
+    )
+
+    rerender(<ImagePreviewPane pane={makePane('/b.png')} isActive={true} />)
+
+    // While B is still loading, the old image must be gone (Loading shown).
+    await waitFor(() => expect(screen.queryByRole('img')).toBeNull())
+    expect(screen.getByText('Loading...')).toBeInTheDocument()
+
+    // Resolve B → image reappears.
+    resolveB(new Uint8Array([4, 5, 6]))
+    await screen.findByRole('img')
+  })
+
+  // F4(b): a prior read failure shows an error banner; switching to a file that
+  // reads successfully must clear that sticky error.
+  it('clears a prior error banner when switching to a file that loads (F4)', async () => {
+    imgComplete = true
+    imgNaturalW = 100
+    imgNaturalH = 100
+    boxW = 500
+    boxH = 500
+
+    // First read rejects → error banner.
+    read.mockRejectedValueOnce(new Error('read failed'))
+    const { rerender } = render(
+      <ImagePreviewPane pane={makePane('/bad.png')} isActive={true} />,
+    )
+    await waitFor(() => expect(screen.getByText('read failed')).toBeInTheDocument())
+
+    // Switch to a file that reads fine → error cleared, image shown.
+    rerender(<ImagePreviewPane pane={makePane('/good.png')} isActive={true} />)
+    await screen.findByRole('img')
+    expect(screen.queryByText('read failed')).toBeNull()
+  })
+
+  // H1c: revokeObjectURL must be called on unmount (and when switching files)
+  // so blob URLs do not leak.
+  it('revokes the object URL on unmount (H1c)', async () => {
+    imgComplete = true
+    imgNaturalW = 100
+    imgNaturalH = 100
+    boxW = 500
+    boxH = 500
+
+    const { unmount } = render(
+      <ImagePreviewPane pane={makePane('/leak.png')} isActive={true} />,
+    )
+    await screen.findByRole('img')
+
+    unmount()
+
+    expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock')
+  })
+
+  it('revokes the previous object URL when switching files (H1c)', async () => {
+    imgComplete = true
+    imgNaturalW = 100
+    imgNaturalH = 100
+    boxW = 500
+    boxH = 500
+
+    const { rerender } = render(
+      <ImagePreviewPane pane={makePane('/first.png')} isActive={true} />,
+    )
+    await screen.findByRole('img')
+
+    rerender(<ImagePreviewPane pane={makePane('/second.png')} isActive={true} />)
+    await screen.findByRole('img')
+
+    expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock')
   })
 })

@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { getFsBackend } from '../../lib/fs-backend'
+import { bufferKey } from '../../lib/editor-buffer-key'
 import type { FileSource } from '../../types/fs'
 
 export function ImagePreviewPane({ pane }: PaneRendererProps) {
@@ -21,18 +22,33 @@ function ImagePreviewPaneInner({ source, filePath }: { source: FileSource; fileP
   const containerRef = useRef<HTMLDivElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
 
-  // Reset zoom + measured natural size during render when the file changes
+  // Reset zoom + measured natural size during render when the buffer changes
   // (the React-recommended "adjust state on prop change" pattern, avoiding a
   // setState-in-effect reset that would cascade-render and trip the lint rule).
-  const [seenFilePath, setSeenFilePath] = useState(filePath)
-  if (seenFilePath !== filePath) {
-    setSeenFilePath(filePath)
+  // Identity is the composite (source, filePath) key so that switching to the
+  // same path on a different source (e.g. another daemon host, or inapp↔daemon)
+  // still resets zoom/natural rather than carrying over stale measurements.
+  const identity = bufferKey(source, filePath)
+  const [seenIdentity, setSeenIdentity] = useState(identity)
+  if (seenIdentity !== identity) {
+    setSeenIdentity(identity)
     setZoom('fit')
     setNatural(null)
   }
 
+  // Key the read effect off the stable composite identity string rather than the
+  // `backend` object's identity: the backend is resolved fresh on every render and
+  // would otherwise re-run this effect each render (and, with the synchronous
+  // reset below, loop forever). `identity` changes exactly when source or filePath
+  // changes — which is precisely when a re-read is needed.
   useEffect(() => {
     if (!backend) return
+    // Clear any previously loaded image / error so switching files immediately
+    // falls back to Loading instead of leaving the old image (or a stale error
+    // banner) on screen until the new read resolves. The previous objectUrl is
+    // still revoked by this effect's cleanup, so no blob URL leaks.
+    setObjectUrl(null)
+    setError(null)
     let url: string | null = null
     let stale = false
     backend.read(filePath)
@@ -43,7 +59,8 @@ function ImagePreviewPaneInner({ source, filePath }: { source: FileSource; fileP
       })
       .catch((err: Error) => { if (!stale) setError(err.message) })
     return () => { stale = true; if (url) URL.revokeObjectURL(url) }
-  }, [backend, filePath])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity])
 
   const measureNatural = useCallback(() => {
     const img = imgRef.current

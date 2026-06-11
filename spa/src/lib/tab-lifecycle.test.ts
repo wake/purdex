@@ -6,6 +6,7 @@ import { useWorkspaceStore } from '../features/workspace/store'
 import { useEditorStore } from '../stores/useEditorStore'
 import { createTab } from '../types/tab'
 import type { PaneContent, PaneLayout } from '../types/tab'
+import type { FileSource } from '../types/fs'
 import { closeTab } from './tab-lifecycle'
 import { bufferKey } from './editor-buffer-key'
 
@@ -91,12 +92,12 @@ describe('closeTab — unsaved editor warning', () => {
   let closeSpy: ReturnType<typeof vi.spyOn>
   let confirmSpy: ReturnType<typeof vi.spyOn>
 
-  function editorContent(filePath: string): PaneContent {
-    return { kind: 'editor', source: { type: 'inapp' }, filePath }
+  function editorContent(filePath: string, source: FileSource = { type: 'inapp' }): PaneContent {
+    return { kind: 'editor', source, filePath }
   }
 
-  function seedBuffer(filePath: string, isDirty: boolean) {
-    const key = bufferKey({ type: 'inapp' }, filePath)
+  function seedBuffer(filePath: string, isDirty: boolean, source: FileSource = { type: 'inapp' }) {
+    const key = bufferKey(source, filePath)
     useEditorStore.setState({
       buffers: {
         ...useEditorStore.getState().buffers,
@@ -154,6 +155,34 @@ describe('closeTab — unsaved editor warning', () => {
   it('does not confirm when editor buffer is clean', () => {
     seedBuffer('/a.md', false)
     const id = addTabWithLayout({ type: 'leaf', pane: { id: 'p1', content: editorContent('/a.md') } })
+
+    closeTab(id)
+
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(closeSpy).toHaveBeenCalledWith(id, undefined)
+  })
+
+  it('confirms and closes when a daemon-sourced editor is dirty (H1a)', () => {
+    const daemon: FileSource = { type: 'daemon', hostId: 'h1' }
+    seedBuffer('/a.md', true, daemon)
+    const id = addTabWithLayout({
+      type: 'leaf',
+      pane: { id: 'p1', content: editorContent('/a.md', daemon) },
+    })
+
+    closeTab(id)
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(closeSpy).toHaveBeenCalledWith(id, undefined)
+  })
+
+  it('does not confirm when a daemon-sourced editor buffer is clean (H1a)', () => {
+    const daemon: FileSource = { type: 'daemon', hostId: 'h1' }
+    seedBuffer('/a.md', false, daemon)
+    const id = addTabWithLayout({
+      type: 'leaf',
+      pane: { id: 'p1', content: editorContent('/a.md', daemon) },
+    })
 
     closeTab(id)
 
