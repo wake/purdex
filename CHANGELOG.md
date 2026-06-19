@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.295] - 2026-06-19
+
+### Feat(editor): close dirty-guard, image viewer zoom, monaco scroll buffer (#852)
+
+Three editor open/close/preview UX improvements addressing user requests:
+
+- **Tab close dirty-guard** — `closeTab` scans the tab's pane tree and prompts
+  `window.confirm` when any editor pane's buffer is dirty (including untitled
+  drafts with unsaved content); cancelling aborts the close. A shared
+  `bufferKey` helper was extracted so the guard, `EditorPane`, and
+  `EditorBuffersPane` key buffers identically.
+- **Image preview fit/actual zoom** — oversized images (natural > container)
+  become click-to-toggle between fit (`object-contain`) and actual size with
+  zoom-in/zoom-out cursors and a scrollable container; cached/HMR-complete
+  images measure synchronously. Preview state (zoom/natural/objectUrl/error)
+  resets on the composite `(identity, backend)` session.
+- **Monaco scroll buffer** — `scrollBeyondLastLine: true` keeps a scroll buffer
+  past the last line.
+
+Two rounds of codex review plus three incremental rounds and a two-perspective
+consulting pass converged the image-preview state machine (R5 0 findings).
+86 tests / lint / build green. Follow-ups: #853 (broader dirty protection
+across pane-level close / workspace move / window close), #854 (untitled name
+race).
+
 ## [1.0.0-alpha.294] - 2026-05-05
 
 ### Fix(store): SQLite foreign_keys via DSN _pragma + pin trace migration to single conn (#849)
