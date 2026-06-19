@@ -97,7 +97,7 @@ export function MonacoWrapper({ content, language, modelId, isActive, initialVie
         wordWrap,
         tabSize,
         insertSpaces,
-        scrollBeyondLastLine: false,
+        scrollBeyondLastLine: true,
         automaticLayout: true,
       }}
     />

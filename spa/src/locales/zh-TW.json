@@ -469,6 +469,7 @@
   "settings.monitor.loading": "正在載入 trace 資料...",
 
   "editor.provider_label": "編輯器",
+  "editor.close_dirty_confirm": "此檔案有未儲存的變更，仍要關閉嗎？",
   "editor.new_file": "新增檔案",
   "editor.new_markdown": "新增 Markdown",
   "editor.settings.home_path.workspace": "家目錄（Workspace）",

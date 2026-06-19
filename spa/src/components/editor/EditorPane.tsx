@@ -11,6 +11,7 @@ import { EditorToolbar } from './EditorToolbar'
 import { EditorStatusBar } from './EditorStatusBar'
 import { RenamePopover } from '../RenamePopover'
 import { findPane } from '../../lib/pane-tree'
+import { bufferKey } from '../../lib/editor-buffer-key'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 import {
@@ -22,11 +23,6 @@ import {
 const TiptapEditor = lazy(() =>
   import('./TiptapEditor').then((m) => ({ default: m.TiptapEditor }))
 )
-
-function bufferKey(source: FileSource, filePath: string): string {
-  if (source.type === 'daemon') return `daemon:${source.hostId}:${filePath}`
-  return `${source.type}:${filePath}`
-}
 
 function isUntitledPath(filePath: string): boolean {
   return filePath.startsWith('untitled:')

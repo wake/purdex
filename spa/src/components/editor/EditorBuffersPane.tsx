@@ -3,6 +3,7 @@ import { FilePlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icon
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { getFsBackend } from '../../lib/fs-backend'
 import { scanPaneTree } from '../../lib/pane-tree'
+import { bufferKey } from '../../lib/editor-buffer-key'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -12,14 +13,6 @@ import type { FileSource } from '../../types/fs'
 import type { Pane, PaneContent, Tab } from '../../types/tab'
 import { RenamePopover } from '../RenamePopover'
 import { createMetadata } from '../../lib/editor-language'
-
-// Local copy of EditorPane's private `bufferKey` helper — until a shared
-// util is extracted, keep the formula in lock-step.  inapp sources alone
-// are relevant here, but the helper is kept source-aware for parity.
-function bufferKeyFor(source: FileSource, filePath: string): string {
-  if (source.type === 'daemon') return `daemon:${source.hostId}:${filePath}`
-  return `${source.type}:${filePath}`
-}
 
 // v1.5 G1 fix — mirror EditorPane's rename three-step sync (backend →
 // tab-layout → editor-store). Without this, renaming via the buffers
@@ -38,8 +31,8 @@ async function performBufferRename(fromPath: string, targetPath: string) {
   await backend.rename(fromPath, targetPath)
   const source: FileSource = { type: 'inapp' }
   useTabStore.getState().renameEditorPanes(source, fromPath, targetPath)
-  const oldKey = bufferKeyFor(source, fromPath)
-  const newKey = bufferKeyFor(source, targetPath)
+  const oldKey = bufferKey(source, fromPath)
+  const newKey = bufferKey(source, targetPath)
   const currentBuffer = useEditorStore.getState().buffers[oldKey]
   const nextMetadata = currentBuffer?.languageSource === 'manual'
     ? { language: currentBuffer.language, languageSource: 'manual' as const }
@@ -221,7 +214,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
     const dirtyHits = openPanes.filter(([, pane]) => {
       const content = pane.content
       if (content.kind !== 'editor') return false
-      const key = bufferKeyFor(content.source, content.filePath)
+      const key = bufferKey(content.source, content.filePath)
       return useEditorStore.getState().buffers[key]?.isDirty === true
     })
 
@@ -256,7 +249,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
       for (const [tabId, pane] of openPanes) {
         useTabStore.getState().closePane(tabId, pane.id)
         if (pane.content.kind === 'editor') {
-          const key = bufferKeyFor(pane.content.source, pane.content.filePath)
+          const key = bufferKey(pane.content.source, pane.content.filePath)
           useEditorStore.getState().closePane(pane.id, key)
         }
       }
@@ -303,7 +296,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
         const c = p.content
         if (c.kind !== 'editor') return
         if (c.source.type !== 'inapp') return
-        const key = bufferKeyFor(c.source, c.filePath)
+        const key = bufferKey(c.source, c.filePath)
         if (useEditorStore.getState().buffers[key]?.isDirty === true) return
         found = p.id
       })

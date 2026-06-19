@@ -5,6 +5,7 @@ import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import type { Pane } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
+import { bufferKey } from '../../../lib/editor-buffer-key'
 
 const getFsBackendMock = vi.hoisted(() => vi.fn())
 const editorStatusBarMock = vi.hoisted(() => vi.fn())
@@ -103,7 +104,7 @@ function createBackend(): FsBackend & {
 }
 
 function getBufferKey(filePath: string): string {
-  return `inapp:${filePath}`
+  return bufferKey({ type: 'inapp' }, filePath)
 }
 
 function registerTabPane(pane: Pane, tabId = 'tab-1') {

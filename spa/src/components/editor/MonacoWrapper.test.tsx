@@ -227,4 +227,25 @@ describe('MonacoWrapper', () => {
       }),
     )
   })
+
+  it('enables scrollBeyondLastLine so the bottom has a scroll buffer', () => {
+    render(
+      <MonacoWrapper
+        content="hello"
+        language="markdown"
+        modelId="model-1"
+        isActive={true}
+        initialViewState={null}
+        onChange={() => {}}
+        onCursorChange={() => {}}
+        onViewStateChange={() => {}}
+        onSave={() => {}}
+      />,
+    )
+
+    const lastCall = editorPropsSpy.mock.calls.at(-1)?.[0] as { options: Record<string, unknown> }
+    expect(lastCall.options).toEqual(
+      expect.objectContaining({ scrollBeyondLastLine: true }),
+    )
+  })
 })

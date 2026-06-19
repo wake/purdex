@@ -469,6 +469,7 @@
   "settings.monitor.loading": "Loading trace data...",
 
   "editor.provider_label": "Editor",
+  "editor.close_dirty_confirm": "This file has unsaved changes. Close anyway?",
   "editor.new_file": "New File",
   "editor.new_markdown": "New Markdown",
   "editor.settings.home_path.workspace": "Home Path (Workspace)",
