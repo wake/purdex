@@ -59,7 +59,18 @@
 
 ## 5. Acceptance Criteria（= 測試契約，`fs-backend-inapp.test.ts`）
 
-> **測試隔離（codex review #1）**：每個 case 開始前 `await closeAllIDB()` + `await indexedDB.deleteDatabase('pdx-inapp-fs')`（await 刪除完成）確保乾淨——fake-indexeddb 為記憶體實作、跨 case 持久。
+> **測試隔離（codex review #1 + plan-review #1）**：每個 case 開始前 `await closeAllIDB()`，再以 helper 刪庫。**`indexedDB.deleteDatabase` 回傳 `IDBOpenDBRequest`（非 Promise），不可直接 `await`** —— 必須包成 Promise，等 `onsuccess` resolve、`onerror` reject、`onblocked` 視為**測試失敗**（代表有連線沒關乾淨，會與下個 case 競態）：
+> ```ts
+> function deleteInappDB(): Promise<void> {
+>   return new Promise((resolve, reject) => {
+>     const req = indexedDB.deleteDatabase('pdx-inapp-fs')
+>     req.onsuccess = () => resolve()
+>     req.onerror = () => reject(req.error)
+>     req.onblocked = () => reject(new Error('deleteDatabase blocked — connection not closed'))
+>   })
+> }
+> ```
+> 每 case 前 `await closeAllIDB()` + `await deleteInappDB()`。fake-indexeddb 為記憶體實作、跨 case 持久，須顯式清。
 >
 > **persist 驗證的關鍵**：`openIDB` 按 `(name, version)` 共用 cache 連線，所以**單純 `new InAppBackend()` 只會拿到同一個 cached connection，驗到的是 singleton reuse 而非真 persist**。persist 類測試（AC2 / AC11）必須在建立第二個 backend 前 **先 `await closeAllIDB()`** 關閉 cache 連線（模擬 app 進程結束），讓新實例重新 `openIDB` 開啟落地的 DB，才真正驗證資料持久化。
 
@@ -76,6 +87,7 @@
 - **AC11（persist 全面）**：write 多檔 + mkdir → **`await closeAllIDB()`** → 重建 backend → `list` / `stat` / `rename` / `delete` 對 persisted 資料皆正確生效。
 - **AC12（保留 overwrite 語意，對應 I6）**：`rename` 到已存在 target → 覆寫且**不 throw**；`mkdir` 已存在 path → **不 throw**；`write` 到 parent 為既有檔（非 dir）的路徑時不額外 throw（沿用既有寬鬆行為，不向真 FS 靠攏）。
 - **AC13（rename non-recursive，對應 I7）**：`write('/buffer/d/a.txt')` → `rename('/buffer/d', '/buffer/e')` → 只搬 `/buffer/d` entry 本身；子項 `/buffer/d/a.txt` 仍在原 path（驗證 non-recursive，與既有一致）。
+- **AC14（binary / empty payload persist，對應 §4.1 Uint8Array structured-clone，plan-review #3）**：`write` 一個**空** `Uint8Array(0)` 與一個**非文字 bytes**（如 `[0, 255, 128, 1]`）→ `await closeAllIDB()` → 重建 backend → `read` 兩者皆 **byte 級原樣讀回**（不只靠文字內容驗證，確保 binary content 經 IDB structured-clone 無損）。
 
 ## 6. Commit 切分（單一 PR）
 

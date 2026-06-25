@@ -30,10 +30,10 @@
 
 **移除** `private store = new Map()`。
 
-**TDD 順序**
-1. 新建/補 `fs-backend-inapp.test.ts`，先寫 **AC2 persist 紅**（write → `closeAllIDB()` → new instance → read）——確認現行 Map 版無法通過（或新 IDB 未實作前紅）。
-2. 實作 IDB-backed → AC1-13 全綠。
-3. 測試隔離：`beforeEach`/`afterEach` `await closeAllIDB()` + `await indexedDB.deleteDatabase('pdx-inapp-fs')`。
+**TDD 順序（plan-review #1 / #4）**
+1. 改造既有 `fs-backend-inapp.test.ts`（已有 8 基本測試，**無 persist、無 IDB 隔離**）。測試隔離 helper：`beforeEach` `await closeAllIDB()` + `await deleteInappDB()`，其中 **`deleteInappDB` 是 spec §5 的 Promise-wrapped `deleteDatabase`（等 `onsuccess`、`onblocked` 當失敗）—— 絕不可直接 `await indexedDB.deleteDatabase(...)`**（它回 `IDBOpenDBRequest` 非 Promise，await 不會等刪除完成）。
+2. **先寫紅燈（把本輪 review 釘死的風險一起打紅）**：AC2（persist）+ AC12（overwrite 語意）+ AC13（rename non-recursive）+ 至少一個 **persisted delete & rename** case（write → `closeAllIDB()` → 重建 → delete/rename 仍正確），加 AC14（binary/empty persist）。確認現行 Map 版/未實作前皆紅。
+3. 實作 IDB-backed → **AC1-14 全綠**。
 
 ## 2. 整合驗證
 ```
@@ -44,7 +44,8 @@ npx vitest run src/lib/fs-backend-inapp.test.ts \
 pnpm run lint
 pnpm run build
 ```
-- 通過標準：`fs-backend-inapp.test.ts` 13 AC 全綠 + **caller regression**（EditorPane / EditorBuffersPane 用 inapp backend，尤其 EditorBuffersPane blind-overwrite 補償 `:140`）不回歸 / lint clean / build 通過。
+- 通過標準：`fs-backend-inapp.test.ts` **14 AC 全綠** / lint clean / build 通過。
+- **caller regression（plan-review #2）**：跑 `EditorPane.test.tsx` + `EditorBuffersPane.test.tsx` 確認不回歸——但**這兩份測試把 backend mock 掉了**（`EditorPane.test.tsx:13` / `EditorBuffersPane.test.tsx:28`），只驗 caller 對 `FsBackend` 契約的**用法**，**驗不到真 IDB persist / blind-overwrite 整合**。為補此缺，在 `fs-backend-inapp.test.ts` 內加一個**薄 integration case**：用真 `InAppBackend` 經 `getFsBackend({ type: 'inapp' })`（registry 取用）走 `write → closeAllIDB() → 重建 read` 端到端，驗證 registry 路徑下 persist 正常（不另開重元件測試）。
 - 完整套件既有 pre-existing failures（origin/main alpha.295 同樣 fail）不在範圍。
 
 ## 3. Commit
@@ -53,11 +54,13 @@ pnpm run build
 ## 4. 風險
 | 風險 | 等級 | 緩解 |
 |------|------|------|
-| AC2 假驗 persist（cache 連線） | 高→已解 | spec/測試強制 `closeAllIDB()` 後重開（codex review #1） |
-| 實作者把 blind overwrite / 不驗 parent「修正」成 throw | 中 | I6 + AC12 釘死契約 |
+| AC2 假驗 persist（cache 連線） | 高→已解 | spec/測試強制 `closeAllIDB()` 後重開（spec-review #1） |
+| `deleteDatabase` 誤當 Promise → 隔離失真、case 競態 | 高→已解 | spec §5 Promise-wrapped `deleteInappDB` + `onblocked` 當失敗（plan-review #1） |
+| 實作者把 blind overwrite / 不驗 parent「修正」成 throw | 中 | I6 + AC12 釘死契約，TDD 先紅（plan-review #4） |
 | `idb` 套件 transaction API 用錯（多 put 單 tx / cursor 刪 prefix） | 中 | 對照 `snapshot-store.ts` 既有用法；AC1/3/8 覆蓋 |
+| binary / 空 `Uint8Array` 經 IDB structured-clone 失真 | 低 | AC14 覆蓋空 + 非文字 bytes 的 persist round-trip（plan-review #3） |
 | fake-indexeddb 與真 IDB 行為差異 | 低 | 既有 sync 測試已大量用 fake-indexeddb，先例充分 |
-| caller 用 inapp 的 regression | 中 | §2 納入 EditorPane/EditorBuffersPane targeted 測試 |
+| caller mock 掉 backend → 驗不到真整合 | 中 | §2 補薄 integration case（真 InAppBackend 經 registry round-trip，plan-review #2） |
 
 ## 5. 開發方式
 - 依 `feedback_subagent_tdd_priority` 派 subagent 跑 TDD（寫 13 AC + 實作 + 驗證）；主 session 整合驗證 + 切 commit + PR。
