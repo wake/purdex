@@ -22,6 +22,14 @@ function deleteInappDB(): Promise<void> {
   })
 }
 
+// Simulate a process restart: close cached IDB connections so a fresh
+// InAppBackend must reopen the landed DB (rather than reuse the openIDB
+// singleton connection, which would only prove cache reuse, not persistence).
+async function reopenBackend(): Promise<InAppBackend> {
+  await closeAllIDB()
+  return new InAppBackend()
+}
+
 const enc = (s: string) => new TextEncoder().encode(s)
 const dec = (b: Uint8Array) => new TextDecoder().decode(b)
 
@@ -44,17 +52,14 @@ describe('InAppBackend (IndexedDB-backed)', () => {
   // AC1
   it('AC1: write then read returns the content', async () => {
     await backend.write('/buffer/a.txt', enc('hello world'))
-    const result = await backend.read('/buffer/a.txt')
-    expect(dec(result)).toBe('hello world')
+    expect(dec(await backend.read('/buffer/a.txt'))).toBe('hello world')
   })
 
-  // AC2 — persist core: write → closeAllIDB (simulate restart) → new backend → read
+  // AC2 — persist core: write → reopen (simulate restart) → read
   it('AC2: content persists across backend re-creation (closeAllIDB)', async () => {
     await backend.write('/buffer/a.txt', enc('persist me'))
-    await closeAllIDB()
-    const fresh = new InAppBackend()
-    const result = await fresh.read('/buffer/a.txt')
-    expect(dec(result)).toBe('persist me')
+    const fresh = await reopenBackend()
+    expect(dec(await fresh.read('/buffer/a.txt'))).toBe('persist me')
   })
 
   // AC3 — auto-create parent directories
@@ -127,45 +132,41 @@ describe('InAppBackend (IndexedDB-backed)', () => {
     ).rejects.toThrow()
   })
 
-  // AC11 — full persist: write multiple + mkdir → closeAllIDB → rebuild →
-  // list / stat / rename / delete on persisted data all work.
-  it('AC11: list/stat/rename/delete all work on persisted data after rebuild', async () => {
+  // AC11 — persisted list + stat after rebuild (split from delete/rename below
+  // so a failure points at one invariant; codex health-review #1).
+  it('AC11: persisted list + stat work after rebuild', async () => {
     await backend.write('/buffer/x.txt', enc('x'))
     await backend.write('/buffer/y.txt', enc('y'))
     await backend.mkdir('/buffer/dir')
-    await closeAllIDB()
+    const fresh = await reopenBackend()
 
-    const fresh = new InAppBackend()
-
-    // list
-    const entries = await fresh.list('/buffer')
-    expect(entries.map((e) => e.name)).toEqual(['dir', 'x.txt', 'y.txt'])
-
-    // stat
+    expect((await fresh.list('/buffer')).map((e) => e.name)).toEqual([
+      'dir',
+      'x.txt',
+      'y.txt',
+    ])
     const xstat = await fresh.stat('/buffer/x.txt')
     expect(xstat.size).toBe(1)
     expect(xstat.isFile).toBe(true)
-
-    // rename
-    await fresh.rename('/buffer/x.txt', '/buffer/z.txt')
-    expect(dec(await fresh.read('/buffer/z.txt'))).toBe('x')
-    await expect(fresh.read('/buffer/x.txt')).rejects.toThrow()
-
-    // delete
-    await fresh.delete('/buffer/y.txt')
-    await expect(fresh.read('/buffer/y.txt')).rejects.toThrow()
   })
 
-  // AC11b — persisted delete (dir) and rename across rebuild
+  // AC11b — persisted recursive delete after rebuild
   it('AC11b: persisted recursive delete works after rebuild', async () => {
     await backend.write('/buffer/d/a.txt', enc('a'))
     await backend.write('/buffer/d/sub/b.txt', enc('b'))
-    await closeAllIDB()
-
-    const fresh = new InAppBackend()
+    const fresh = await reopenBackend()
     await fresh.delete('/buffer/d')
     await expect(fresh.read('/buffer/d/a.txt')).rejects.toThrow()
     await expect(fresh.read('/buffer/d/sub/b.txt')).rejects.toThrow()
+  })
+
+  // AC11c — persisted rename after rebuild
+  it('AC11c: persisted rename works after rebuild', async () => {
+    await backend.write('/buffer/x.txt', enc('x'))
+    const fresh = await reopenBackend()
+    await fresh.rename('/buffer/x.txt', '/buffer/z.txt')
+    expect(dec(await fresh.read('/buffer/z.txt'))).toBe('x')
+    await expect(fresh.read('/buffer/x.txt')).rejects.toThrow()
   })
 
   // AC12 — preserve lenient overwrite semantics (I6): rename to existing target
@@ -213,9 +214,8 @@ describe('InAppBackend (IndexedDB-backed)', () => {
     const binary = new Uint8Array([0, 255, 128, 1])
     await backend.write('/buffer/empty.bin', empty)
     await backend.write('/buffer/bytes.bin', binary)
-    await closeAllIDB()
+    const fresh = await reopenBackend()
 
-    const fresh = new InAppBackend()
     const emptyOut = await fresh.read('/buffer/empty.bin')
     const binaryOut = await fresh.read('/buffer/bytes.bin')
     expect(Array.from(emptyOut)).toEqual([])
