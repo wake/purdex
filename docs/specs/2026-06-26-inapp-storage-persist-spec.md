@@ -31,8 +31,10 @@
 - **I1**：`InAppBackend` 仍 `implements FsBackend`，method 簽章與回傳型別不變（皆 async）。
 - **I2**：`read` 找不到路徑仍 `throw`（`InAppBackend: file not found: <path>`）；`stat` / `rename` 找不到仍 throw（保留既有契約，呼叫端如 `EditorPane.tsx:150` 依賴 catch → 開空 buffer）。
 - **I3**：`write` 仍 auto-create parent directories；`delete` 仍遞迴刪 prefix 子項；`list` 仍只回 direct children（無額外 slash）、dir-first + name 排序。
-- **I4**：IDB 為 **per-origin**。Electron bundled（`app://`）與 dev server（`http://100.64.0.2:5174`）是不同 origin → 各自獨立 IDB。此為「本地持久」語義的正常結果（known limitation，記入 §7）。
+- **I4**：IDB 為 **per-origin** —— **任何 origin 變動（protocol / host / port 任一不同）都會切到另一份獨立的 In-App Storage**。包含 Electron bundled（`app://`）vs dev server，以及 dev 時 `localhost` / LAN IP / port 不同的情況。此為「本地持久」語義的正常結果（known limitation，記入 §7）。
 - **I5**：`write`（含 auto-create dirs + 寫檔）在**單一 readwrite transaction** 內完成，確保原子性，避免半寫狀態。
+- **I6（保留既有寬鬆語意，不向真 FS 靠攏）**：本案只換儲存層，既有的寬鬆行為**一律保留、不得改成像真實 FS 的 throw**：`rename(from, to)` 對已存在的 `to` 為 **blind overwrite**（不 throw）；`mkdir(path)` 對已存在 path 直接覆寫為 dir entry（不 throw）；`write` 只確保每層 parent path 有 entry，**不驗證 parent 是否真為 directory**。（呼叫端如 `EditorBuffersPane.tsx:140` 已對 blind overwrite 自行補償。）
+- **I7（rename non-recursive）**：`rename(from, to)` 只搬 `from` 單一 entry，**不遞迴搬子項**（與既有 Map 版一致）。inapp UI 為 flat `/buffer/*`、無資料夾 rename 入口；directory rename 的子項語意維持 non-recursive，本案不擴張。
 
 ## 4. 實作要點
 
@@ -57,10 +59,12 @@
 
 ## 5. Acceptance Criteria（= 測試契約，`fs-backend-inapp.test.ts`）
 
-> 測試隔離：每個 case 前後以 `closeAllIDB()` + 刪除 `pdx-inapp-fs`（或唯一化 db）確保乾淨；fake-indexeddb 為記憶體實作、跨 case 持久，需顯式清。
+> **測試隔離（codex review #1）**：每個 case 開始前 `await closeAllIDB()` + `await indexedDB.deleteDatabase('pdx-inapp-fs')`（await 刪除完成）確保乾淨——fake-indexeddb 為記憶體實作、跨 case 持久。
+>
+> **persist 驗證的關鍵**：`openIDB` 按 `(name, version)` 共用 cache 連線，所以**單純 `new InAppBackend()` 只會拿到同一個 cached connection，驗到的是 singleton reuse 而非真 persist**。persist 類測試（AC2 / AC11）必須在建立第二個 backend 前 **先 `await closeAllIDB()`** 關閉 cache 連線（模擬 app 進程結束），讓新實例重新 `openIDB` 開啟落地的 DB，才真正驗證資料持久化。
 
 - **AC1**：`write('/buffer/a.txt', X)` → `read` 回 X。
-- **AC2（persist 核心）**：`write` 後**建立全新 `InAppBackend` 實例**（模擬重啟，同一 IDB）→ `read('/buffer/a.txt')` 仍回 X。
+- **AC2（persist 核心）**：`write('/buffer/a.txt', X)` → **`await closeAllIDB()`**（關閉 cache 連線，模擬重啟）→ **建立全新 `InAppBackend` 實例**（觸發重新 `openIDB` 開啟同一落地 DB）→ `read('/buffer/a.txt')` 仍回 X。
 - **AC3**：`write('/buffer/sub/a.txt', X)` → `stat('/buffer/sub')` isDirectory=true（auto-create parent）。
 - **AC4**：`stat` 回正確 `size` / `mtime` / `isDirectory` / `isFile`。
 - **AC5**：`list` 回 direct children，dir-first + name 排序；不含孫層。
@@ -69,7 +73,9 @@
 - **AC8**：`delete(dir)` → 遞迴刪：子檔 `read` throw。
 - **AC9**：`rename(from, to)` → `read(to)` 回內容、`read(from)` throw。
 - **AC10**：`read` / `stat` / `rename` 對不存在路徑 throw（契約保留）。
-- **AC11（persist 全面）**：write 多檔 + mkdir → 重建 backend → `list` / `stat` / `rename` / `delete` 對 persisted 資料皆正確生效。
+- **AC11（persist 全面）**：write 多檔 + mkdir → **`await closeAllIDB()`** → 重建 backend → `list` / `stat` / `rename` / `delete` 對 persisted 資料皆正確生效。
+- **AC12（保留 overwrite 語意，對應 I6）**：`rename` 到已存在 target → 覆寫且**不 throw**；`mkdir` 已存在 path → **不 throw**；`write` 到 parent 為既有檔（非 dir）的路徑時不額外 throw（沿用既有寬鬆行為，不向真 FS 靠攏）。
+- **AC13（rename non-recursive，對應 I7）**：`write('/buffer/d/a.txt')` → `rename('/buffer/d', '/buffer/e')` → 只搬 `/buffer/d` entry 本身；子項 `/buffer/d/a.txt` 仍在原 path（驗證 non-recursive，與既有一致）。
 
 ## 6. Commit 切分（單一 PR）
 
@@ -80,5 +86,5 @@
 ## 7. Out of Scope / Known Limitations
 
 - 跨機同步 / daemon 雙寫 / 衝突 diff（§N1）—— 若日後要，屬 sync roadmap P5 content-addressed 範疇。
-- **IDB per-origin（I4）**：dev server 與 bundled `.app` 是不同 origin，各自獨立 In-App Storage；切換 dev/bundled 看不到對方的 inapp 檔。屬本地持久正常語義，不在本次處理。
+- **IDB per-origin（I4）**：**任何 origin 變動（protocol / host / port）都產生獨立的 In-App Storage** —— dev server vs bundled `.app`、以及 dev 時 `localhost` / LAN IP / port 不同皆然；切換時看不到對方的 inapp 檔。屬本地持久正常語義，不在本次處理。
 - 既有記憶體 inapp 檔已遺失，不遷移（§N3）。
