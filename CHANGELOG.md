@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.296] - 2026-06-26
+
+### Feat(editor): persist In-App Storage to IndexedDB (fixes #856) (#858)
+
+新建文件預設存到 In-App Storage（`inapp` source），但 `InAppBackend` 底層是純記憶體
+`Map` —— 存檔對記憶體成功、UI 顯示已存，但 app upgrade/重啟即遺失，重開 tab（已
+persist）變空白 + dirty。改用 **IndexedDB**（復用既有 `openIDB`）持久化，重啟後讀得回。
+
+七個 `FsBackend` method 行為契約完全不變（只換儲存層）：`read`/`stat`/`rename` 對缺失
+路徑仍 throw（`EditorPane` mount catch 依賴）；`write` 為單一 readwrite transaction，
+auto-create parent dirs 且不驗證 parent 是否為 directory；`rename`/`mkdir` 保留
+blind-overwrite；`rename` 只搬單一 entry（non-recursive）。
+
+20 tests（AC1-14，含 persist-across-`closeAllIDB`、空 `Uint8Array` 與非文字 bytes 的
+byte 級 round-trip、registry 薄整合驗證）。spec/plan 各一輪 codex review（各 4 finding
+全修——點破 AC2 假驗 persist 須先 `closeAllIDB`、`indexedDB.deleteDatabase` 非 Promise
+須 wrap）；PR R1 標準 0 finding + R2 三平行（攻擊確認 transaction auto-commit 安全、防守
+0 blocker、體質 H1 拆測試 + H3 對齊 IDB upgrade style）收斂。
+
+Scope = 止血（本地持久），不做跨機同步 / 衝突 diff。Known limitation：IndexedDB
+per-origin，dev server 與 bundled `.app` 各自獨立 store。延後追蹤：#859（write quota
+UI recovery）、#860（`list(missing)` cross-backend contract）。
+
 ## [1.0.0-alpha.295] - 2026-06-19
 
 ### Feat(editor): close dirty-guard, image viewer zoom, monaco scroll buffer (#852)
