@@ -109,10 +109,14 @@ export function TiptapEditor({ content, isActive, initialViewState, onChange, on
   }, [isActive])
 
   // Save viewState on unmount — useLayoutEffect cleanup runs before safelyDetachRef,
-  // so containerRef.current is still valid when we read scrollTop (AC5, M2)
+  // so containerRef.current is still valid when we read scrollTop (AC5, M2).
+  // We intentionally read containerRef.current AT cleanup time (the unmount
+  // scrollTop), not a mount-time snapshot — so the exhaustive-deps "copy to a
+  // variable" suggestion does not apply here.
   useLayoutEffect(() => {
     return () => {
       onViewStateChangeRef.current?.({
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- read live scrollTop at unmount
         scrollTop: containerRef.current?.scrollTop ?? 0,
         selection: editorRef.current
           ? { from: editorRef.current.state.selection.from, to: editorRef.current.state.selection.to }
