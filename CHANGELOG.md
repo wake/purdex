@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.299] - 2026-06-26
+
+### Fix(sync+test): clear host token as null sentinel + fix stale TabBar tooltip test (#674)
+
+修兩個 origin/main 既有、互相獨立的 baseline 測試失敗（共 4 個 test）。
+
+- **Sync host token 清除契約**：`hostsContributor.deserialize` 在 host 為新增、或 id 撞名但
+  endpoint（ip/port）不同時須清除 token（安全：避免 bearer token 重送到不同/惡意 daemon）。
+  原寫 `undefined`，改採 **`null`** 明確 sentinel（「已清除，需 re-auth」），`null` 比
+  `undefined` 多了跨 JSON persist 邊界存活的語意。`HostConfig.token` 放寬為 `string | null`，
+  下游 `string | undefined` sink 於邊界 coalesce `?? undefined` 收斂。抽
+  `mergeHostsPreservingTokens` helper 讓 **`full-replace` 與 `field-merge` 兩個 merge mode
+  共用同一契約**（原 field-merge 在 conflict 選 remote hosts 時會靜默丟失所有本地 token）。
+- **TabBar pinned tooltip stale test**：`HoverTooltip` 已 `createPortal` `role="tooltip"`
+  到 `document.body`，test 卻在 tab 子樹內查 → 改用 `screen.getByRole('tooltip', { name })`
+  按可及性名稱定位（純 test-only，無 impl 變更）。
+
 ## [1.0.0-alpha.298] - 2026-06-26
 
 ### Fix(editor): prevent Loading editor flicker on markdown buffer switch (#863)
