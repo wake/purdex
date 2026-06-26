@@ -1,7 +1,7 @@
 # Spec — Editor 切換分頁 focus + markdown(wysiwyg) scroll/cursor 保留（#857）
 
 > Date: 2026-06-26
-> Status: Draft v5（spec 2 輪 + plan-review 2 輪收斂；inlineContent 前置檢查；AC7/AC8 強化；I6 transient reuse 加 key + known-limitation）
+> Status: Draft v6（+PR R1/R2 三平行收斂；D2 selection kind；D1 unmount race→useLayoutEffect；A1' EditorPane viewState gating；I6 transient lazy 不可達）
 > Repo: purdex / branch: `worktree-md-editor-focus-scroll`
 > Issue: #857
 
@@ -22,7 +22,7 @@
 ### Goals
 - **G1（focus 時序）**：切到 editor 分頁時，無論 editor 在 `isActive=true` 之前或之後才 ready，都要 focus。修法：editor ready 時若當前 isActive 則 focus —— Monaco `handleMount` 設 `editorRef` 後補 `focus()`；Tiptap 在 one-shot ready effect（`editor` 變 truthy、EditorContent DOM 已掛載後，見 §4.2）補 `focusEditable()`。以 ref 取最新 isActive 避免 closure stale。既有 `[isActive]` effect 保留（涵蓋「editor 已 ready、之後才 isActive 變 true」）。ready-path 補 focus 與既有 `[isActive]` effect 在某些時序可能都觸發，focus 兩次無害（不綁「只 focus 一次」契約，見 AC1/AC2）。
 - **G2（Tiptap viewState）**：`TiptapEditor`（wysiwyg）保存/恢復 **scrollTop + 游標 selection**，比照 Monaco viewState 模式：
-  - `EditorPaneState` 新增 `tiptapViewState: { scrollTop: number; selection: { from: number; to: number } | null } | null`（初始 null）。
+  - `EditorPaneState` 新增 `tiptapViewState: { scrollTop: number; selection: { type: 'text' | 'node'; from: number; to: number } | null } | null`（初始 null；selection 含 kind，D2）。
   - 新增 `saveTiptapViewState(paneId, viewState)` action。
   - `EditorPane` 傳 `initialViewState={paneState?.tiptapViewState ?? null}` + `onViewStateChange` 給 `TiptapEditor`。
   - `TiptapEditor` unmount cleanup 時保存當前 scrollTop（scroll container）+ selection（`from`/`to`）。**editor instance 必須以 ref（`editorRef`）持有**：`[]` cleanup 的閉包抓的是初次 render 的 `editor`（=null），讀不到 live editor（與 Monaco `editorRef` 同理）；cleanup 讀 `editorRef.current?.state.selection` + `containerRef.current?.scrollTop`。
@@ -42,10 +42,11 @@
   2. `const $from = doc.resolve(from), $to = doc.resolve(to)`；**僅當** `$from.parent.inlineContent && $to.parent.inlineContent` 才 `TextSelection.create(doc, from, to)` —— 保留原 range（含非 collapsed，對齊 AC6）。
   3. 否則退化 `Selection.near($from)`（回最近合法 `Selection`，不 throw；本地實證 `near(resolve(0))` 回 `1..1`）。
   `Selection.near` 只接受單一 `ResolvedPos`、回傳最近合法 selection（可能收斂成 caret），**不是** range restore 的等價方案 —— 只作 inlineContent 檢查未過時的退化路徑。任何情況下 scroll 仍 restore。
+  **node selection（D2）**：`tiptapViewState.selection` 帶 `type: 'text' | 'node'`（save 時 `editor.state.selection instanceof NodeSelection` 判定）。restore **先**處理 node：若 `type === 'node'` 且 `doc.resolve(clampFrom).nodeAfter` 為 selectable → `NodeSelection.create(doc, from)`（保留 node selection，如 horizontal rule），否則 fall through 上述 text path。避免 block node selection 切回降級成文字 caret。
 - **I3（restore→focus 順序）**：restore 時序 = selection → scrollTop → focus(若 isActive)。focus 不得覆寫已 restore 的 scrollTop（focusEditable 後若瀏覽器 scrollIntoView caret，因 caret 已在 restore 的 selection 處、scroll 已對位，不會跳）。本契約以「restore 的呼叫順序早於 focus」為可單元測形式驗證（見 AC8）。
 - **I4**：`tiptapViewState` 與 `monacoViewState` 同為 paneState 欄位、同生命週期（pane 關閉即清）；wysiwyg/raw 各自獨立 viewState，互不干擾。
 - **I5（one-shot initial restore 時序）**：initial restore/focus 必須在 editor 已建立 **且** editable DOM 已 render 之後，以 **one-shot effect**（`didRestoreRef` 守門，只跑一次）執行；不可只掛 `onCreate`（可能早於 EditorContent 掛 DOM）。初次 mount 既有的 content sync effect（`setContent`）會把 selection 重設到 doc 開頭 —— 實作必須確保初次 content sync **不重設** 已 restore 的 selection/scroll（例如以 `hasInitializedRef` 跳過初次 sync，或讓 one-shot restore 在初次 sync 之後執行）。
-- **I6（Tiptap key — 堵 transient 跨 buffer reuse）**：`EditorPane` 對 `TiptapEditor` 加 `key={buffer.modelId}`（對齊既有 Monaco 分支 `EditorPane.tsx:422`），buffer 身份變即 remount → 重置 `didRestoreRef`/`hasInitializedRef`。**背景（plan-review round-1 Finding 2 → round-2 修正）**：`attachPane`（`:113-115`）是 commit 後 effect，切到另一已載入 markdown buffer 的**第一個 render** 仍讀到舊 `paneState.editorMode='wysiwyg'` → 進入 Tiptap 分支；無 key 時 React reconcile **重用同一 TiptapEditor 實例一個 render**（`didRestoreRef` stale），effect 跑完才 `createPaneState` reset `editorMode→raw`、切 Monaco。故 transient reuse **可達（一個 render）**，但**最終穩定態為 Monaco**（raw）。`key` 使 buffer 身份變即 remount，堵此 transient。回歸測試策略見 plan（最終穩定態 Monaco 使 RTL 難以觀測 transient；需 unmock 整合測試）。
+- **I6（Tiptap key + EditorPane viewState gating — 防 stale paneState，defense-in-depth）**：(a) `EditorPane` 對 `TiptapEditor` 加 `key={buffer.modelId}`（對齊 Monaco 分支 `:422`）；(b) `EditorPane` **僅在 `paneState?.bufferKey === key`**（paneState 已對齊當前 buffer）才傳 `initialViewState`/`onViewStateChange`，否則 `null`/`undefined`（R2 attack A1）。**背景**：`attachPane`（`:113-115`）是 commit 後 effect，切到另一 markdown buffer 的第一個 render 仍讀舊 `paneState`。**但此 transient 在實務不可達**：`TiptapEditor` 是 `lazy()`（`EditorPane.tsx:23`），過渡 render 顯示 Suspense fallback（Tiptap 未 mount），`attachPane` reset `editorMode→raw` 先於 lazy resolve，pane 最終落在 Monaco。故 (a)(b) 為 **defense-in-depth**（防未來非 lazy / paneState↔buffer 不對齊），列 known-limitation（§7）不寫脆弱測試（依賴 React.lazy cache + test 順序）。
 
 ## 4. 實作要點
 
@@ -58,9 +59,9 @@
 - `EditorPane.tsx`：wysiwyg 分支（`:435`）加 `key={buffer.modelId}`（I6，對齊 Monaco 分支 `:422`）+ 傳 `initialViewState={paneState?.tiptapViewState ?? null}` + `onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}`。
 - `TiptapEditor.tsx`：
   - 新 props：`initialViewState`、`onViewStateChange`。`onViewStateChangeRef` 同步（mirror MonacoWrapper `:47-49,71-76`）。
-  - **`editorRef`**：新增 `editorRef`，effect 同步 `editorRef.current = editor`（editor 變化時更新）。`[]` cleanup 必須讀 `editorRef.current`，**不可**讀 render 閉包的 `editor`（初次為 null，I3-cleanup 對應 finding #3）。
+  - **`editorRef`**：新增 `editorRef`，以 **`useLayoutEffect`** 同步 `editorRef.current = editor`（**非 `useEffect`**，R2 D1：unmount cleanup 是 layout effect，若 `editorRef`/`didRestoreRef` 在 passive effect 才設，editor-ready commit 後**立刻** unmount 時 layout cleanup 會看到舊值 `null`/`false` → viewState 遺失；故 one-shot restore effect 也用 `useLayoutEffect`）。`[]` cleanup 必須讀 `editorRef.current`，**不可**讀 render 閉包的 `editor`（初次為 null，finding #3）。
   - scroll container = `containerRef`（既有 `:72` `tiptap-scroll-root`）。
-  - unmount cleanup **`useLayoutEffect`**（`[]`）：**先 `if (!didRestoreRef.current) return`**（editor 從未 ready / restore 未跑 → 本元件未接管 viewState，不可寫回，否則把既存 `tiptapViewState` 覆寫成 `scrollTop:0`/`selection:null`，破壞「慢 ready 仍保留」目標，R1 P2）；再 `onViewStateChangeRef.current?.({ scrollTop: containerRef.current?.scrollTop ?? 0, selection: editorRef.current ? { from: editorRef.current.state.selection.from, to: editorRef.current.state.selection.to } : null })`。**必須用 `useLayoutEffect` 而非 `useEffect`**：`useEffect` 的 passive cleanup 在 React detach DOM ref 之後執行，`containerRef.current` 已是 null、`scrollTop` 讀成 0（實測）；`useLayoutEffect` cleanup 在 ref detach 前執行，能讀到正確 scrollTop。（Monaco 用 `useEffect` 安全是因它讀 editor 實例 ref，非 DOM ref。）
+  - unmount cleanup **`useLayoutEffect`**（`[]`）：**先 `if (!didRestoreRef.current) return`**（editor 從未 ready / restore 未跑 → 本元件未接管 viewState，不可寫回，否則把既存 `tiptapViewState` 覆寫成 `scrollTop:0`/`selection:null`，破壞「慢 ready 仍保留」目標，R1 P2）；再 `onViewStateChangeRef.current?.({ scrollTop: containerRef.current?.scrollTop ?? 0, selection: editorRef.current ? { type: <NodeSelection?'node':'text'>, from: …, to: … } : null })`（selection 帶 kind，D2）。**必須用 `useLayoutEffect` 而非 `useEffect`**：`useEffect` 的 passive cleanup 在 React detach DOM ref 之後執行，`containerRef.current` 已是 null、`scrollTop` 讀成 0（實測）；`useLayoutEffect` cleanup 在 ref detach 前執行，能讀到正確 scrollTop。（Monaco 用 `useEffect` 安全是因它讀 editor 實例 ref，非 DOM ref。）
   - **one-shot initial restore**（I5）：`didRestoreRef`（初 false）守門的 effect，依賴 `[editor]`；當 `editor` truthy 且 `!didRestoreRef.current` 時執行一次並設 `didRestoreRef.current = true`：
     1. selection restore（若 `initialViewState?.selection`，依 I2，**抽純函式 `resolveRestoreSelection(doc, saved)`** 以便用真實 PM doc 單元測）：clamp from/to → `doc.resolve` 兩端 → 檢查 `$from.parent.inlineContent && $to.parent.inlineContent`，是則 `TextSelection.create(doc, from, to)`、否則 `Selection.near($from)`；再 `editor.view.dispatch(editor.state.tr.setSelection(sel))`。
     2. scroll restore：`containerRef.current.scrollTop = initialViewState.scrollTop`。
@@ -104,4 +105,5 @@
 - 不碰 Monaco（raw）viewState（N1）；不做跨 session persist（N2）。
 - content 外部 reload 後 selection 精準復原不保證（N3，clamp 安全退回）。
 - BUG1 的 focus 補強針對「切換分頁/mode 後 editor 才 ready」；若有其他 focus 競爭來源（如同時彈 dialog）不在此處理。
-- **I6 transient（known-limitation）**：切到另一已載入 markdown buffer 的第一個 render 會有 transient TiptapEditor reuse，已以 `key={buffer.modelId}` 堵之；其殘留副作用（一個 render、最終穩定態為 Monaco、最壞使 B 的 `tiptapViewState` 退化為 `scrollTop:0`）極小。觀測 transient 需 unmock TiptapEditor 的整合測試（jsdom 跑 ProseMirror，成本高），**不寫**（使用者決定，YAGNI）；`key` 的正確性由「對齊 Monaco 既有模式 + buffer identity 一致」保證。
+- **I6 transient cross-buffer（known-limitation）**：切到另一已載入 markdown buffer 的「stale paneState 套到新 buffer」transient，在實務**不可達** —— `TiptapEditor` 是 `lazy()`，過渡 render 顯示 Suspense fallback、`attachPane` reset `editorMode→raw` 先於 lazy resolve，pane 最終落在 Monaco（R2 attack A1 查證）。仍加雙重防護：`key={buffer.modelId}`（remount）+ EditorPane `bufferKey === key` viewState gating。**不寫測試**：可觀測測試依賴 React.lazy cache + test 順序（脆弱），且場景不可達（使用者決定，YAGNI）。
+- **AC1 Monaco focus（mock-limited）**：同步 Monaco `onMount` mock 下既有 `[isActive]` effect 已 focus，AC1 無法隔離新 `handleMount` path（已標註於測試 + 此處）；真實 late-ready bug 僅生產可重現，改 mock 為非同步會破壞其他 7 個 MonacoWrapper 測試（R2 health H2）。

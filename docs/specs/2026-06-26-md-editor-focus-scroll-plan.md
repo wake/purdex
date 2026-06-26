@@ -773,3 +773,15 @@ git commit -m "feat(editor): wire Tiptap viewState through EditorPane (#857)"
 **待驗風險（實作時注意）：**
 - Task 2 改 `beforeEach` 預設後，既有 4 個「editor 已就緒」測試需確認仍綠（`makeMockEditor()` 提供 `commands.setContent` 等）。
 - Task 6 既有 wysiwyg 測試（行 154+）會經過改動後的 TiptapEditor mock（now capture props 並 render `<button>`）；確認既有斷言（`data-editor-mode` 等查 status bar、不依賴 tiptap mock 內容）不破。
+
+---
+
+## PR Review 處置（R1 + R2 三平行）— code 已更新，本段為軌跡
+
+> 實作以 code/spec 為 SOT；以下偏離了上方 Task 原文，spec v6 已同步。
+
+- **R1 P2（unmount 未 ready 覆寫）**：unmount cleanup 加 `if (!didRestoreRef.current) return`（editor 從未 ready / restore 未跑 → 不寫回，避免把既存 viewState 覆寫成 `scrollTop:0`）。
+- **R2 D1（unmount race，high）**：`editorRef` 同步 effect + one-shot restore effect 改 **`useLayoutEffect`**（非上方 Task 5 寫的 `useEffect`）—— 否則 editor-ready commit 後立刻 unmount 時，layout cleanup 早於 passive effect，看到 `editorRef=null`/`didRestoreRef=false` → viewState 遺失。AC5 改走 `null→editor` transition（M1）才測得到 cleanup 讀 `editorRef` 而非閉包。
+- **R2 D2（NodeSelection 降級，medium）**：`TiptapViewState.selection` 加 `type: 'text' | 'node'`；save 以 `instanceof NodeSelection` 判定；`resolveRestoreSelection` 先處理 node（`NodeSelection.isSelectable` → `NodeSelection.create`）再 fall through text path。Task 4 測試加 hr schema 的 node 還原 + 退化。所有既有 `selection: {from,to}` literal 補 `type`。
+- **R2 A1（stale paneState，high）+ H3**：EditorPane 僅在 `paneState?.bufferKey === key` 才傳 viewState props（見 I6）。transient 因 `TiptapEditor` lazy 不可達 → 不寫脆弱測試（known-limitation）。
+- **R2 H2（AC1 mock-limited）**：AC1 測試加註解標明同步 mock 限制。
