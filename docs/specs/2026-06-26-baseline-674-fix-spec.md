@@ -16,8 +16,9 @@
 
 ### 修法（採 `null` sentinel）
 1. `HostConfig.token` 型別 `token?: string` → `token?: string | null`。`null` = 明確「已清除，需 re-auth」，且 JSON 序列化會保留（`undefined` 會被 drop）。
-2. `hosts.ts:63` `: undefined` → `: null`。
+2. endpoint 不符時寫 `: null`（非 `undefined`）。
 3. 既有 3 個 test 不動（已 assert `null`），轉綠。
+3b. **兩個 merge mode 一致**（codex PR R2 adversarial，medium）：抽 `mergeHostsPreservingTokens(current, incomingHosts)` helper，**`full-replace` 與 `field-merge` 共用**。原本 `field-merge` 在 `resolved.hosts === 'remote'` 時 raw 套用 token-stripped 的 incoming hosts（`resolveConflicts` → engine.ts:177 overlay remote），會把**所有**本地 token 靜默清成 `undefined`（連 same-endpoint 也丟、且跳過 `null` re-auth sentinel）。改用 helper 後兩路徑語意一致。補 field-merge 回歸 test（same-endpoint 保留 / endpoint 變更 + 新 host → `null`）。
 4. **Ripple 收斂於 store/sync 邊界**：下游只接受 `string | undefined` 的 sink，於 call site coalesce `?? undefined`，不改其簽章、不讓 `null` 語意外溢到 UI/health 層（codex spec review P1：`DevEnvironmentSection` 為已知型別破口，須列入；`tsc` 已權威確認以下為完整集合）：
    - `spa/src/hooks/useMultiHostEventWs.ts:79` 餵給 `checkHealth(getToken?: () => string | undefined)`：`...hosts[hostId]?.token` → `... ?? undefined`。
    - `spa/src/components/hosts/OverviewSection.tsx:139` 餵給 `TokenField(token?: string)`：`token={host.token}` → `token={host.token ?? undefined}`。
