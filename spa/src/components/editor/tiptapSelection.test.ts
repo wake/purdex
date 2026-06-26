@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { it, expect } from 'vitest'
 import { Schema } from '@tiptap/pm/model'
 import { TextSelection, Selection } from '@tiptap/pm/state'
 import { resolveRestoreSelection } from './tiptapSelection'

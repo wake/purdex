@@ -685,6 +685,7 @@ describe('EditorBuffersPane', () => {
           showDiff: false,
           cursorPosition: { line: 1, column: 1 },
           monacoViewState: null,
+          tiptapViewState: null,
         },
       },
     })
@@ -761,6 +762,7 @@ describe('EditorBuffersPane', () => {
           showDiff: false,
           cursorPosition: { line: 1, column: 1 },
           monacoViewState: null,
+          tiptapViewState: null,
         },
       },
     })
@@ -818,6 +820,7 @@ describe('EditorBuffersPane', () => {
           showDiff: false,
           cursorPosition: { line: 1, column: 1 },
           monacoViewState: null,
+          tiptapViewState: null,
         },
       },
     })
@@ -872,6 +875,7 @@ describe('EditorBuffersPane', () => {
           showDiff: false,
           cursorPosition: { line: 1, column: 1 },
           monacoViewState: null,
+          tiptapViewState: null,
         },
       },
     })

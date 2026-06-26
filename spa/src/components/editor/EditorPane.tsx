@@ -433,9 +433,12 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         ) : (
           <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>}>
             <TiptapEditor
+              key={buffer.modelId}
               content={buffer.content}
               isActive={isActive}
+              initialViewState={paneState?.tiptapViewState ?? null}
               onChange={(md) => useEditorStore.getState().updateContent(key, md)}
+              onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}
               onSave={handleSave}
             />
           </Suspense>
