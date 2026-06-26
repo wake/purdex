@@ -1,7 +1,7 @@
 # Spec — Editor 切換分頁 focus + markdown(wysiwyg) scroll/cursor 保留（#857）
 
 > Date: 2026-06-26
-> Status: Draft v6（+PR R1/R2 三平行收斂；D2 selection kind；D1 unmount race→useLayoutEffect；A1' EditorPane viewState gating；I6 transient lazy 不可達）
+> Status: Draft v7（+PR R3：A1' 的 lazy-不可達前提被推翻〔lazy cache 後同步 mount〕→ 改 gating render〔stale 時不 mount Tiptap〕+ regression test）
 > Repo: purdex / branch: `worktree-md-editor-focus-scroll`
 > Issue: #857
 
@@ -46,7 +46,7 @@
 - **I3（restore→focus 順序）**：restore 時序 = selection → scrollTop → focus(若 isActive)。focus 不得覆寫已 restore 的 scrollTop（focusEditable 後若瀏覽器 scrollIntoView caret，因 caret 已在 restore 的 selection 處、scroll 已對位，不會跳）。本契約以「restore 的呼叫順序早於 focus」為可單元測形式驗證（見 AC8）。
 - **I4**：`tiptapViewState` 與 `monacoViewState` 同為 paneState 欄位、同生命週期（pane 關閉即清）；wysiwyg/raw 各自獨立 viewState，互不干擾。
 - **I5（one-shot initial restore 時序）**：initial restore/focus 必須在 editor 已建立 **且** editable DOM 已 render 之後，以 **one-shot effect**（`didRestoreRef` 守門，只跑一次）執行；不可只掛 `onCreate`（可能早於 EditorContent 掛 DOM）。初次 mount 既有的 content sync effect（`setContent`）會把 selection 重設到 doc 開頭 —— 實作必須確保初次 content sync **不重設** 已 restore 的 selection/scroll（例如以 `hasInitializedRef` 跳過初次 sync，或讓 one-shot restore 在初次 sync 之後執行）。
-- **I6（Tiptap key + EditorPane viewState gating — 防 stale paneState，defense-in-depth）**：(a) `EditorPane` 對 `TiptapEditor` 加 `key={buffer.modelId}`（對齊 Monaco 分支 `:422`）；(b) `EditorPane` **僅在 `paneState?.bufferKey === key`**（paneState 已對齊當前 buffer）才傳 `initialViewState`/`onViewStateChange`，否則 `null`/`undefined`（R2 attack A1）。**背景**：`attachPane`（`:113-115`）是 commit 後 effect，切到另一 markdown buffer 的第一個 render 仍讀舊 `paneState`。**但此 transient 在實務不可達**：`TiptapEditor` 是 `lazy()`（`EditorPane.tsx:23`），過渡 render 顯示 Suspense fallback（Tiptap 未 mount），`attachPane` reset `editorMode→raw` 先於 lazy resolve，pane 最終落在 Monaco。故 (a)(b) 為 **defense-in-depth**（防未來非 lazy / paneState↔buffer 不對齊），列 known-limitation（§7）不寫脆弱測試（依賴 React.lazy cache + test 順序）。
+- **I6（Tiptap key + EditorPane gating render — 防 stale paneState）**：(a) `key={buffer.modelId}`（對齊 Monaco `:422`）；(b) `EditorPane` wysiwyg 分支**僅在 `paneState?.bufferKey === key`**（paneState 已對齊 buffer）才 **render** `TiptapEditor`，否則 render fallback（loading）、**不 mount**（gating render，**非** 傳 null props）。**背景（R2 attack A1 → R3）**：`attachPane`（`:113-115`）是 commit 後 effect，切到另一 buffer 的第一個 render 仍讀舊 `paneState`。**`React.lazy` resolve 後 cache hit 會同步 mount**（R3 讀 react source 證實 `_status===1` 同步回傳），故 transient **可達（第二次起）** —— 推翻先前「lazy 不可達」判斷。若用 props gating（傳 null）→ Tiptap mount with null → one-shot restore 鎖 `didRestoreRef` → 漏 restore。**gating render** 徹底解：stale 時根本不 mount Tiptap，等 `bufferKey === key` 才 mount with 正確 viewState。regression test 見 §7。
 
 ## 4. 實作要點
 
@@ -56,7 +56,7 @@
 
 ### 4.2 BUG2 Tiptap viewState
 - `useEditorStore`：`EditorPaneState` 加 `tiptapViewState`；`createPaneState` 初始 `null`；新增 `saveTiptapViewState(paneId, vs)` action（mirror `saveMonacoViewState`）。
-- `EditorPane.tsx`：wysiwyg 分支（`:435`）加 `key={buffer.modelId}`（I6，對齊 Monaco 分支 `:422`）+ 傳 `initialViewState={paneState?.tiptapViewState ?? null}` + `onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}`。
+- `EditorPane.tsx`：wysiwyg 分支加 `key={buffer.modelId}`（對齊 Monaco `:422`）；**僅在 `paneState?.bufferKey === key` 才 render `TiptapEditor`**（gating render，I6），傳 `initialViewState={paneState.tiptapViewState ?? null}` + `onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}`；否則 render loading fallback。
 - `TiptapEditor.tsx`：
   - 新 props：`initialViewState`、`onViewStateChange`。`onViewStateChangeRef` 同步（mirror MonacoWrapper `:47-49,71-76`）。
   - **`editorRef`**：新增 `editorRef`，以 **`useLayoutEffect`** 同步 `editorRef.current = editor`（**非 `useEffect`**，R2 D1：unmount cleanup 是 layout effect，若 `editorRef`/`didRestoreRef` 在 passive effect 才設，editor-ready commit 後**立刻** unmount 時 layout cleanup 會看到舊值 `null`/`false` → viewState 遺失；故 one-shot restore effect 也用 `useLayoutEffect`）。`[]` cleanup 必須讀 `editorRef.current`，**不可**讀 render 閉包的 `editor`（初次為 null，finding #3）。
@@ -105,5 +105,5 @@
 - 不碰 Monaco（raw）viewState（N1）；不做跨 session persist（N2）。
 - content 外部 reload 後 selection 精準復原不保證（N3，clamp 安全退回）。
 - BUG1 的 focus 補強針對「切換分頁/mode 後 editor 才 ready」；若有其他 focus 競爭來源（如同時彈 dialog）不在此處理。
-- **I6 transient cross-buffer（known-limitation）**：切到另一已載入 markdown buffer 的「stale paneState 套到新 buffer」transient，在實務**不可達** —— `TiptapEditor` 是 `lazy()`，過渡 render 顯示 Suspense fallback、`attachPane` reset `editorMode→raw` 先於 lazy resolve，pane 最終落在 Monaco（R2 attack A1 查證）。仍加雙重防護：`key={buffer.modelId}`（remount）+ EditorPane `bufferKey === key` viewState gating。**不寫測試**：可觀測測試依賴 React.lazy cache + test 順序（脆弱），且場景不可達（使用者決定，YAGNI）。
+- **I6 stale paneState 跨 buffer（已修，R3）**：切 buffer 的 transient render（`paneState.bufferKey !== key`；`React.lazy` cache 後同步 mount，故可達）原會讓 Tiptap 用 stale/null viewState mount 並鎖 `didRestoreRef` → 漏 restore。改 **gating render**（stale 時不 render/mount Tiptap，等 `paneState` 對齊）徹底解。**有 regression test**：warm `React.lazy` cache + freeze `attachPane` 確定性重現 transient，驗 gate 阻止 mount（`EditorPane.test.tsx`，移除 gate 即紅 = 非 vacuous）。
 - **AC1 Monaco focus（mock-limited）**：同步 Monaco `onMount` mock 下既有 `[isActive]` effect 已 focus，AC1 無法隔離新 `handleMount` path（已標註於測試 + 此處）；真實 late-ready bug 僅生產可重現，改 mock 為非同步會破壞其他 7 個 MonacoWrapper 測試（R2 health H2）。

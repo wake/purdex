@@ -914,14 +914,39 @@ describe('EditorPane', () => {
     expect(useEditorStore.getState().paneStates[pane.id].tiptapViewState).toEqual({ scrollTop: 42, selection: { type: 'text', from: 2, to: 3 } })
   })
 
-  // NOTE (R2 attack A1 / I6): EditorPane only hands viewState to TiptapEditor when
-  // paneState.bufferKey === key (the EditorPane.tsx guard). The "stale viewState on
-  // buffer switch" path is unreachable in practice because TiptapEditor is lazy: the
-  // transient render shows the Suspense fallback (Tiptap not mounted), and the
-  // post-commit attachPane effect resets paneState→raw before lazy resolves, so the
-  // pane lands on Monaco. A test here would depend on React.lazy cache + test order,
-  // so the guard is kept as defense-in-depth and documented as a known-limitation
-  // (spec §7) rather than covered by a brittle test.
+  it('does not mount TiptapEditor against stale paneState even when lazy is cached (R3 gating render)', async () => {
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/g-a.md'), '# A', { language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8' })
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/g-b.md'), '# B', { language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8' })
+
+    // 1) Warm the React.lazy cache so TiptapEditor mounts SYNCHRONOUSLY afterwards
+    //    (this is exactly the condition R3 flagged: lazy cached → no Suspense gap).
+    useEditorStore.getState().attachPane('pane-warm', getBufferKey('/notes/g-a.md'))
+    useEditorStore.getState().setEditorMode('pane-warm', 'wysiwyg')
+    const warm = render(<EditorPane pane={createPane('/notes/g-a.md', 'pane-warm')} isActive />)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    warm.unmount()
+
+    // 2) Pane aligned to buffer A in wysiwyg, then FREEZE attachPane so paneState
+    //    stays on A while we render the pane pointing at buffer B — deterministically
+    //    reproducing the transient window (paneState.bufferKey=A, key=B) without
+    //    racing the post-commit effect.
+    useEditorStore.getState().attachPane('pane-gate', getBufferKey('/notes/g-a.md'))
+    useEditorStore.getState().setEditorMode('pane-gate', 'wysiwyg')
+    const spy = vi.spyOn(useEditorStore.getState(), 'attachPane').mockImplementation(() => {})
+    try {
+      tiptapPropsSpy.mockClear()
+      render(<EditorPane pane={createPane('/notes/g-b.md', 'pane-gate')} isActive />)
+      // lazy is cached now; WITHOUT the gating render TiptapEditor would mount
+      // synchronously against the stale paneState and lock didRestoreRef. The gate
+      // (bufferKey === key) must prevent the mount entirely.
+      expect(tiptapPropsSpy).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('tiptap-editor')).toBeNull()
+    } finally {
+      spy.mockRestore()
+    }
+  })
 
   it('does not overwrite dirty content during active reload', async () => {
     const backend = createBackend()
