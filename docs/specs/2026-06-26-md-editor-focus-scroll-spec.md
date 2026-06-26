@@ -1,7 +1,7 @@
 # Spec — Editor 切換分頁 focus + markdown(wysiwyg) scroll/cursor 保留（#857）
 
 > Date: 2026-06-26
-> Status: Draft v3（codex round-1 6 + round-2 2 finding 已修；待 plan）
+> Status: Draft v4（spec round-1/2 + plan-review 2 finding 已修；TextSelection.create 不 throw → inlineContent 前置檢查；I6 換 buffer remount）
 > Repo: purdex / branch: `worktree-md-editor-focus-scroll`
 > Issue: #857
 
@@ -37,14 +37,15 @@
 ## 3. Invariants
 
 - **I1**：focus 補強只在 editor ready **且** 當前 isActive=true 時觸發；isActive=false 時 editor ready 不得 focus（不搶別的 pane 焦點）。
-- **I2（selection 合法 restore，單一路徑）**：Tiptap selection restore 必須走**單一路徑**、優先保留原 range，不可 throw：
+- **I2（selection 合法 restore，inlineContent 前置檢查）**：Tiptap selection restore 必須走**單一路徑**、優先保留原 range，不可 throw。**關鍵事實（本地 `prosemirror-state` 實證）：`TextSelection.create` 對非 textblock 位置不會 throw —— 只 `console.warn` 並回傳一個非法 selection**（`create(doc,0,0)` 回 `TextSelection 0..0`，`resolve(0).parent.inlineContent === false`）。因此**不可**用 `try/catch` 判斷合法性，必須**前置檢查 `inlineContent`**：
   1. `from`/`to` **各自** clamp 到 `[0, doc.content.size]`（`doc.resolve(pos)` 越界會 `throw RangeError`，故必須先 clamp 再 resolve）。
-  2. **優先** `try { sel = TextSelection.create(doc, clampFrom, clampTo) }` —— 成功即保留原 range（含非 collapsed 選取，對齊 AC6）。
-  3. **僅當 create 失敗**（位置非 textblock / 非法）才退化：`Selection.near(doc.resolve(clampFrom))`（找最近合法單點）或 `Selection.atEnd(doc)`。
-  `Selection.near` 只接受單一 `ResolvedPos`、回傳最近合法 `Selection`（可能收斂成 caret / node selection），**不是** range restore 的等價方案，**不可**與 `TextSelection.create` 並列同級 —— 只作 create 失敗時的退化路徑。任何情況下 scroll 仍 restore。
+  2. `const $from = doc.resolve(from), $to = doc.resolve(to)`；**僅當** `$from.parent.inlineContent && $to.parent.inlineContent` 才 `TextSelection.create(doc, from, to)` —— 保留原 range（含非 collapsed，對齊 AC6）。
+  3. 否則退化 `Selection.near($from)`（回最近合法 `Selection`，不 throw；本地實證 `near(resolve(0))` 回 `1..1`）。
+  `Selection.near` 只接受單一 `ResolvedPos`、回傳最近合法 selection（可能收斂成 caret），**不是** range restore 的等價方案 —— 只作 inlineContent 檢查未過時的退化路徑。任何情況下 scroll 仍 restore。
 - **I3（restore→focus 順序）**：restore 時序 = selection → scrollTop → focus(若 isActive)。focus 不得覆寫已 restore 的 scrollTop（focusEditable 後若瀏覽器 scrollIntoView caret，因 caret 已在 restore 的 selection 處、scroll 已對位，不會跳）。本契約以「restore 的呼叫順序早於 focus」為可單元測形式驗證（見 AC8）。
 - **I4**：`tiptapViewState` 與 `monacoViewState` 同為 paneState 欄位、同生命週期（pane 關閉即清）；wysiwyg/raw 各自獨立 viewState，互不干擾。
 - **I5（one-shot initial restore 時序）**：initial restore/focus 必須在 editor 已建立 **且** editable DOM 已 render 之後，以 **one-shot effect**（`didRestoreRef` 守門，只跑一次）執行；不可只掛 `onCreate`（可能早於 EditorContent 掛 DOM）。初次 mount 既有的 content sync effect（`setContent`）會把 selection 重設到 doc 開頭 —— 實作必須確保初次 content sync **不重設** 已 restore 的 selection/scroll（例如以 `hasInitializedRef` 跳過初次 sync，或讓 one-shot restore 在初次 sync 之後執行）。
+- **I6（Tiptap key — 防禦性對齊 Monaco）**：`EditorPane` 對 `TiptapEditor` 加 `key={buffer.modelId}`（對齊既有 Monaco 分支 `EditorPane.tsx:422`），buffer 身份變即 remount → 重置 `didRestoreRef`/`hasInitializedRef`。**背景**：plan-review Finding 2 原指「同 pane wysiwyg 切到另一已載入 markdown buffer 時 restore 不重跑」，但經查證**當前架構不可達** —— `attachPane`（`:113-115`，`key` 變即觸發）對新 buffer 呼叫 `createPaneState`，把 `editorMode` 重置為 `raw`，故換 buffer 必離開 wysiwyg、TiptapEditor unmount（之後切回 wysiwyg 是全新 mount、`didRestoreRef` fresh、restore 正常）。對比 Monaco（raw 換 buffer 後仍 raw、實例維持、需 key 換 model），Tiptap 換 buffer 必經 raw 中轉。此 key 為**防禦性 + 消除與 Monaco 的不一致 + 防未來架構變動**，非修當前 bug；故**不寫不可達的回歸測試**。
 
 ## 4. 實作要點
 
@@ -54,18 +55,18 @@
 
 ### 4.2 BUG2 Tiptap viewState
 - `useEditorStore`：`EditorPaneState` 加 `tiptapViewState`；`createPaneState` 初始 `null`；新增 `saveTiptapViewState(paneId, vs)` action（mirror `saveMonacoViewState`）。
-- `EditorPane.tsx`：wysiwyg 分支（`:435`）傳 `initialViewState={paneState?.tiptapViewState ?? null}` + `onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}`。
+- `EditorPane.tsx`：wysiwyg 分支（`:435`）加 `key={buffer.modelId}`（I6，對齊 Monaco 分支 `:422`）+ 傳 `initialViewState={paneState?.tiptapViewState ?? null}` + `onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}`。
 - `TiptapEditor.tsx`：
   - 新 props：`initialViewState`、`onViewStateChange`。`onViewStateChangeRef` 同步（mirror MonacoWrapper `:47-49,71-76`）。
   - **`editorRef`**：新增 `editorRef`，effect 同步 `editorRef.current = editor`（editor 變化時更新）。`[]` cleanup 必須讀 `editorRef.current`，**不可**讀 render 閉包的 `editor`（初次為 null，I3-cleanup 對應 finding #3）。
   - scroll container = `containerRef`（既有 `:72` `tiptap-scroll-root`）。
   - unmount cleanup effect（`[]`）：`onViewStateChangeRef.current({ scrollTop: containerRef.current?.scrollTop ?? 0, selection: editorRef.current ? { from: editorRef.current.state.selection.from, to: editorRef.current.state.selection.to } : null })`。
   - **one-shot initial restore**（I5）：`didRestoreRef`（初 false）守門的 effect，依賴 `[editor]`；當 `editor` truthy 且 `!didRestoreRef.current` 時執行一次並設 `didRestoreRef.current = true`：
-    1. selection restore（若 `initialViewState?.selection`，依 I2 單一路徑）：`const { doc } = editor.state; const max = doc.content.size; const f = clamp(sel.from, 0, max), t = clamp(sel.to, 0, max);` 先 `try { s = TextSelection.create(doc, f, t) } catch { s = Selection.near(doc.resolve(f)) /* 或 Selection.atEnd(doc) */ }`，再 `editor.view.dispatch(editor.state.tr.setSelection(s))`。`TextSelection.create` 成功時保留原 range（AC6）；僅失敗時退化（AC7）。
+    1. selection restore（若 `initialViewState?.selection`，依 I2，**抽純函式 `resolveRestoreSelection(doc, saved)`** 以便用真實 PM doc 單元測）：clamp from/to → `doc.resolve` 兩端 → 檢查 `$from.parent.inlineContent && $to.parent.inlineContent`，是則 `TextSelection.create(doc, from, to)`、否則 `Selection.near($from)`；再 `editor.view.dispatch(editor.state.tr.setSelection(sel))`。
     2. scroll restore：`containerRef.current.scrollTop = initialViewState.scrollTop`。
     3. 若 `isActiveRef.current` 才 `focusEditable()`（順序晚於 1、2，I3）。
   - 既有 `setContent` content-sync effect（`:54-61`）需確保**初次 mount 不重設** restore 後的 selection/scroll（I5）—— 以 `hasInitializedRef` 跳過初次 sync（首次只標記、不 `setContent`，content 已由 `useEditor({ content })` 初始化），之後外部 content 變化照舊 sync。
-  - imports：`TextSelection`（主路徑）+ `Selection`（退化 `near`/`atEnd`）from `@tiptap/pm/state`。
+  - imports：`TextSelection`（inlineContent 通過時）+ `Selection`（退化 `near`）from `@tiptap/pm/state`；`resolveRestoreSelection` 在 `tiptapSelection.ts`。
 
 ## 5. Acceptance Criteria（= 測試契約）
 
@@ -87,7 +88,7 @@
 - **AC4**：`EditorPaneState.tiptapViewState` 初始 `null`；`saveTiptapViewState` 寫入 `{ scrollTop, selection }`。
 - **AC5**：`TiptapEditor` unmount → `onViewStateChange` 收到當前 `scrollTop` + selection `{ from, to }`，且 selection 取自 **`editorRef.current.state.selection`**（live editor，非初次 render 閉包的 null editor，finding #3）。**前提 M1/M2**：mock 須走 `null→editor` transition 且暴露可變 `state.selection`，否則「錯抓初次 null 閉包」測不出。
 - **AC6（range 完整保留）**：mount with `initialViewState`（合法、`from≠to` 的 range）→ scrollTop 套到 scroll container；selection **完整 restore 成原 range**（`from`/`to` 與輸入一致，**不**收斂成 caret）—— 走 `TextSelection.create` 主路徑（前提 M1/M2）。
-- **AC7（非法才退化，I2）**：`initialViewState.selection` 超過 doc size 或落在非法（非 textblock）位置 → restore **不 throw**；各自 clamp 後 `TextSelection.create` 失敗，才退化到 `Selection.near`/`atEnd` 的合法落點（scroll 仍 restore）。合法 range（AC6）不得走此退化路徑。建議直接用真實 `@tiptap/pm/state` 對真 doc 驗證（前提 M4）。
+- **AC7（非法位置退化，I2）**：`initialViewState.selection` 超過 doc size 或落在非 inlineContent 位置（如 `pos 0`，parent=doc）→ restore **不 throw**；經 inlineContent 前置檢查退化到 `Selection.near` 的合法落點（如 `pos 0` → `from >= 1`）。**不可**依賴 `TextSelection.create` 丟錯（它不丟、只 warn —— 本案核心修正點）。合法 range（AC6）不得走退化路徑。直接用真實 `@tiptap/pm/state` 對真 doc 驗證（前提 M4）。
 - **AC8（restore 早於 focus，I3，順序契約）**：以 spy 記錄呼叫順序，驗證 selection restore + scrollTop 設定 **皆早於** `focusEditable()`。不依賴真實 caret scrollIntoView（jsdom 不支援；既有 test 將 `@tiptap/react` mock，focus 為 spy）—— 改驗可單元測的順序契約而非最終 scrollTop 數值。**前提 M1/M2**：mock 須經 `null→editor` ready transition 且暴露可變 `state.selection` / `view.dispatch`，否則 one-shot restore 從未觸發也能測綠。
 - **AC9（EditorPane wiring 整合，finding #4）**：`EditorPane` wysiwyg 分支確實把 `paneState.tiptapViewState` 以 `initialViewState` 傳入 `TiptapEditor`，且 `onViewStateChange` 回呼確實呼叫 `saveTiptapViewState(paneId, vs)` 寫回 store（驗 prop 傳遞 + store 回寫，補 AC4-8 只各驗單側之缺口）。**前提 M3**：`EditorPane` 的 `TiptapEditor` mock 須 capture 兩 props 並能觸發 `onViewStateChange`。
 

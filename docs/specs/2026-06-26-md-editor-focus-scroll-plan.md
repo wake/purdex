@@ -16,8 +16,10 @@
 - PM import 一律 `@tiptap/pm/state`（`TextSelection`, `Selection`）/ `@tiptap/pm/model`（測試建 schema/doc）—— 直接依賴，勿用 `prosemirror-*`。
 - Editor 型別：`import { type Editor } from '@tiptap/react'`。
 - I1：focus 補強只在 editor ready **且** isActive=true 觸發；isActive=false 不得 focus。
+- I2：selection restore 用 **inlineContent 前置檢查**（`$from.parent.inlineContent && $to.parent.inlineContent` → `TextSelection.create`，否則 `Selection.near($from)`）。**不可**用 try/catch —— `TextSelection.create` 對非法位置不 throw、只 warn（已本地實證）。
 - I3：restore 順序 = selection → scrollTop → focus(若 isActive)。
 - I5：one-shot restore（`didRestoreRef` 守門）在 editor ready 後執行；初次 content sync 必須跳過（`hasInitializedRef`），不得重設 restore 後的 selection/scroll。
+- I6：`EditorPane` Tiptap 分支加 `key={buffer.modelId}`（防禦性對齊 Monaco；換 buffer 經 attachPane reset→raw 使 Tiptap unmount，場景不可達，不寫回歸測試）。
 - 測試前提 M1–M4（spec §5.0）：`useEditor` mock 走 `null→editor` transition；editor mock 含可變 `state.selection`/`state.tr`/`view.dispatch`；`EditorPane` 的 `TiptapEditor` mock capture props；selection 純函式測用真實 PM。
 - Commit 分組（PR squash-merge 收斂為 spec §6 的 2 邏輯 commit）：
   - **focus**（Task 1–2）：`fix(editor): focus editor on activation even when it mounts after isActive (#857)`
@@ -382,7 +384,9 @@ it('clamps an out-of-range selection without throwing (AC7)', () => {
 
 it('falls back to a legal selection for an illegal (non-textblock) position (AC7)', () => {
   const doc = makeDoc()
-  // pos 0 is before the paragraph → TextSelection.create throws → fallback
+  // pos 0 is before the paragraph → resolve(0).parent is the doc node
+  // (inlineContent === false) → degrade to Selection.near (NOT via a throw —
+  // TextSelection.create would silently return an illegal 0..0 here).
   const sel = resolveRestoreSelection(doc, { from: 0, to: 0 })
   expect(sel).toBeInstanceOf(Selection)
   // near(resolve(0)) lands inside the textblock (pos >= 1)
@@ -411,9 +415,14 @@ import { Selection, TextSelection } from '@tiptap/pm/state'
 const clamp = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi)
 
 /**
- * Resolve a saved {from,to} into a legal ProseMirror Selection.
- * Single path: clamp each end → TextSelection.create (keeps range) →
- * Selection.near → Selection.atEnd. Never throws (I2).
+ * Resolve a saved {from,to} into a legal ProseMirror Selection (I2).
+ *
+ * NOTE: TextSelection.create does NOT throw on non-textblock positions — it
+ * only console.warn's and returns an *illegal* selection (verified locally:
+ * create(doc,0,0) -> TextSelection 0..0). So we MUST check inlineContent up
+ * front rather than relying on try/catch. clamp first (doc.resolve throws
+ * RangeError out of range); keep the range when both ends are inline content,
+ * otherwise degrade to Selection.near (which never throws).
  */
 export function resolveRestoreSelection(
   doc: ProsemirrorNode,
@@ -422,15 +431,12 @@ export function resolveRestoreSelection(
   const max = doc.content.size
   const from = clamp(saved.from, 0, max)
   const to = clamp(saved.to, 0, max)
-  try {
+  const $from = doc.resolve(from)
+  const $to = doc.resolve(to)
+  if ($from.parent.inlineContent && $to.parent.inlineContent) {
     return TextSelection.create(doc, from, to)
-  } catch {
-    try {
-      return Selection.near(doc.resolve(clamp(from, 0, max)))
-    } catch {
-      return Selection.atEnd(doc)
-    }
   }
+  return Selection.near($from)
 }
 ```
 
@@ -690,10 +696,11 @@ Expected: FAIL（TiptapEditor 未收到 `initialViewState` / 點擊不寫回 sto
 
 - [ ] **Step 3: 實作**
 
-`EditorPane.tsx` wysiwyg 分支（行 435-440）：
+`EditorPane.tsx` wysiwyg 分支（行 435-440）。加 `key={buffer.modelId}`（I6，防禦性對齊 Monaco 分支 `:422` — 換 buffer 必經 attachPane reset→raw 使 Tiptap unmount，故此 key 是一致性/防未來而非修當前 bug）：
 
 ```tsx
             <TiptapEditor
+              key={buffer.modelId}
               content={buffer.content}
               isActive={isActive}
               initialViewState={paneState?.tiptapViewState ?? null}
@@ -728,14 +735,18 @@ git commit -m "feat(editor): wire Tiptap viewState through EditorPane (#857)"
 - G1 focus → Task 1（Monaco AC1）+ Task 2（Tiptap AC2/AC3）。
 - G2 viewState → Task 3（store AC4）+ Task 4（selection helper AC6/AC7）+ Task 5（save/restore AC5/AC8）+ Task 6（wiring AC9）。
 - I1（active-only focus）→ Task 1/2 `isActiveRef` gate + AC3。
-- I2（合法 fallback）→ Task 4 純函式 + AC6/AC7。
+- I2（inlineContent 前置檢查）→ Task 4 純函式 `resolveRestoreSelection` + AC6/AC7。
 - I3（restore→focus 順序）→ Task 5 effect 內順序 + AC8。
 - I4（同生命週期）→ Task 3 paneState 欄位、隨 pane 清。
 - I5（one-shot + 跳過初次 sync）→ Task 5 `didRestoreRef` + `hasInitializedRef`。
+- I6（Tiptap key 防禦）→ Task 6 `key={buffer.modelId}`（plan-review Finding 2 場景查證不可達，採防禦性 key、不寫回歸測試）。
 - M1–M4（mock 前提）→ Task 2 `makeMockEditor`/null-transition、Task 4 真實 PM、Task 6 prop capture。
 - N1–N4（non-goals）：未碰 Monaco viewState / persist / reload / 模式轉換邏輯。✓
 
-**設計偏離 spec 之處（明示）：** spec §4.2 把 selection restore 寫 inline；plan 抽成純函式 `resolveRestoreSelection`（Task 4）以真實 PM doc 單元測（對齊 M4，行為等價）。TiptapEditor 測試 mock 此 helper 專注 wiring/順序。
+**plan-review（round-1）處置（明示）：**
+- Finding 1（high，已修）：`TextSelection.create` 對非法位置**不 throw、只 warn**（已本地用真實 PM 實證：`create(doc,0,0)` 回 `TextSelection 0..0`）。`resolveRestoreSelection`（Task 4）改為 **inlineContent 前置檢查**而非 try/catch；spec I2/§4.2/AC7 同步更新。
+- Finding 2（high，查證後不可達）：「換 buffer 不 restore」場景因 `attachPane` reset `editorMode`→`raw`（換 buffer 必離開 wysiwyg、Tiptap unmount）而**當前架構不可達**。採防禦性 `key={buffer.modelId}`（Task 6）對齊 Monaco 分支、消除不一致，**不寫不可達的回歸測試**（使用者確認）。
+- 設計：selection restore 抽純函式 `resolveRestoreSelection` 以真實 PM doc 單元測 AC6/AC7（對齊 M4）；TiptapEditor 測試 mock 此 helper 專注 wiring/順序。
 
 **Placeholder scan：** 無 TODO/TBD；每 code step 含完整 code。
 
