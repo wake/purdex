@@ -157,6 +157,15 @@ describe('MonacoWrapper', () => {
     expect(secondOnSave).toHaveBeenCalledTimes(1)
   })
 
+  it('focuses the editor when it mounts while the pane is already active (AC1)', () => {
+    render(
+      <MonacoWrapper content="hello" language="markdown" modelId="model-1" isActive={true}
+        initialViewState={null} onChange={() => {}} onCursorChange={() => {}}
+        onViewStateChange={() => {}} onSave={() => {}} />,
+    )
+    expect(editorMock.focus).toHaveBeenCalled()
+  })
+
   it('focuses the editor when the pane becomes active', () => {
     const { rerender } = render(
       <MonacoWrapper
