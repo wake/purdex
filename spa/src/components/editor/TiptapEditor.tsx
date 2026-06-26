@@ -1,6 +1,7 @@
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
+import { NodeSelection } from '@tiptap/pm/state'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { resolveRestoreSelection } from './tiptapSelection'
 import type { TiptapViewState } from '../../stores/useEditorStore'
@@ -67,13 +68,20 @@ export function TiptapEditor({ content, isActive, initialViewState, onChange, on
     },
   })
 
-  // Keep editorRef in sync for unmount cleanup (reads from live ref, not stale closure)
-  useEffect(() => {
+  // Keep editorRef in sync for unmount cleanup. useLayoutEffect (not useEffect):
+  // the unmount cleanup below is also a layout effect and reads editorRef +
+  // didRestoreRef. If these were passive effects, an unmount right after the
+  // editor-ready commit would run the layout cleanup BEFORE these passive effects
+  // set the refs (editorRef still null, didRestoreRef still false) — silently
+  // dropping the viewState (R2 defense D1).
+  useLayoutEffect(() => {
     editorRef.current = editor ?? null
   }, [editor])
 
-  // One-shot ready handler: restore selection + scroll BEFORE focus (AC8, I3)
-  useEffect(() => {
+  // One-shot ready handler: restore selection + scroll BEFORE focus (AC8, I3).
+  // useLayoutEffect so didRestoreRef ownership is set in the same commit phase the
+  // unmount cleanup reads from (R2 defense D1).
+  useLayoutEffect(() => {
     if (!editor) return
     if (didRestoreRef.current) return
     didRestoreRef.current = true
@@ -123,7 +131,11 @@ export function TiptapEditor({ content, isActive, initialViewState, onChange, on
         // eslint-disable-next-line react-hooks/exhaustive-deps -- read live scrollTop at unmount
         scrollTop: containerRef.current?.scrollTop ?? 0,
         selection: editorRef.current
-          ? { from: editorRef.current.state.selection.from, to: editorRef.current.state.selection.to }
+          ? {
+              type: editorRef.current.state.selection instanceof NodeSelection ? 'node' : 'text',
+              from: editorRef.current.state.selection.from,
+              to: editorRef.current.state.selection.to,
+            }
           : null,
       })
     }

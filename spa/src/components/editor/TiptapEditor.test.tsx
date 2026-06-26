@@ -115,18 +115,27 @@ describe('TiptapEditor', () => {
     expect(focusSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('saves scrollTop + live selection on unmount from editorRef (AC5, M2)', () => {
+  it('saves scrollTop + live selection on unmount via null→editor transition (AC5, M1/M2)', () => {
     const ed = makeMockEditor({ state: { selection: { from: 4, to: 9 }, tr: { setSelection: vi.fn().mockReturnThis() } } })
-    useEditorSpy.mockReturnValue(ed)
     const onViewStateChange = vi.fn()
-    const { unmount, container } = render(
+    // M1: start with editor NOT ready, then become ready. This is the only shape
+    // that catches a regression where cleanup reads a stale render-time `editor`
+    // closure (null on first render) instead of editorRef.current (R2 health H1).
+    useEditorSpy.mockReturnValue(undefined)
+    const { rerender, unmount, container } = render(
+      <TiptapEditor content="hi" isActive={false} initialViewState={null}
+        onChange={() => {}} onViewStateChange={onViewStateChange} onSave={() => {}} />,
+    )
+    useEditorSpy.mockReturnValue(ed)
+    rerender(
       <TiptapEditor content="hi" isActive={false} initialViewState={null}
         onChange={() => {}} onViewStateChange={onViewStateChange} onSave={() => {}} />,
     )
     const scrollRoot = container.querySelector('[data-testid="tiptap-scroll-root"]') as HTMLElement
     Object.defineProperty(scrollRoot, 'scrollTop', { value: 88, writable: true, configurable: true })
     unmount()
-    expect(onViewStateChange).toHaveBeenCalledWith({ scrollTop: 88, selection: { from: 4, to: 9 } })
+    // selection now carries its kind ('text' for a plain object selection, D2)
+    expect(onViewStateChange).toHaveBeenCalledWith({ scrollTop: 88, selection: { type: 'text', from: 4, to: 9 } })
   })
 
   it('restores selection AND scroll BEFORE focus on ready (AC8, I3)', () => {
@@ -136,7 +145,7 @@ describe('TiptapEditor', () => {
       state: { selection: { from: 1, to: 1 }, doc: {}, tr: { setSelection } },
       view: { dispatch },
     })
-    const initial = { scrollTop: 50, selection: { from: 2, to: 5 } }
+    const initial = { scrollTop: 50, selection: { type: 'text' as const, from: 2, to: 5 } }
     let scrollAtFocus = -1
     focusSpy.mockImplementation(() => {
       const root = document.querySelector('[data-testid="tiptap-scroll-root"]') as HTMLElement | null
@@ -161,7 +170,7 @@ describe('TiptapEditor', () => {
     useEditorSpy.mockReturnValue(undefined)
     const onViewStateChange = vi.fn()
     const { unmount } = render(
-      <TiptapEditor content="hi" isActive={false} initialViewState={{ scrollTop: 100, selection: { from: 5, to: 5 } }}
+      <TiptapEditor content="hi" isActive={false} initialViewState={{ scrollTop: 100, selection: { type: 'text', from: 5, to: 5 } }}
         onChange={() => {}} onViewStateChange={onViewStateChange} onSave={() => {}} />,
     )
     unmount()

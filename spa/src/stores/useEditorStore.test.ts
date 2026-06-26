@@ -248,10 +248,10 @@ describe('useEditorStore', () => {
     store.attachPane('p1', 'k1')
     expect(useEditorStore.getState().paneStates['p1'].tiptapViewState).toBeNull()
 
-    store.saveTiptapViewState('p1', { scrollTop: 120, selection: { from: 3, to: 7 } })
+    store.saveTiptapViewState('p1', { scrollTop: 120, selection: { type: 'text', from: 3, to: 7 } })
     expect(useEditorStore.getState().paneStates['p1'].tiptapViewState).toEqual({
       scrollTop: 120,
-      selection: { from: 3, to: 7 },
+      selection: { type: 'text', from: 3, to: 7 },
     })
   })
 

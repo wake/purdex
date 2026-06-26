@@ -1,5 +1,5 @@
 import type { Node as ProsemirrorNode } from '@tiptap/pm/model'
-import { Selection, TextSelection } from '@tiptap/pm/state'
+import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state'
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi)
 
@@ -15,10 +15,19 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), h
  */
 export function resolveRestoreSelection(
   doc: ProsemirrorNode,
-  saved: { from: number; to: number },
+  saved: { type: 'text' | 'node'; from: number; to: number },
 ): Selection {
   const max = doc.content.size
   const from = clamp(saved.from, 0, max)
+  // Node selection (e.g. a selected horizontal rule): restore as NodeSelection
+  // when the clamped position still points at a selectable node. Otherwise fall
+  // through to the text path so we never throw and never lose the scroll (D2).
+  if (saved.type === 'node') {
+    const node = doc.resolve(from).nodeAfter
+    if (node && NodeSelection.isSelectable(node)) {
+      return NodeSelection.create(doc, from)
+    }
+  }
   const to = clamp(saved.to, 0, max)
   const $from = doc.resolve(from)
   const $to = doc.resolve(to)

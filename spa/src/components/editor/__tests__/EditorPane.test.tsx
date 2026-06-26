@@ -45,7 +45,7 @@ vi.mock('../TiptapEditor', () => ({
     return (
       <button
         data-testid="tiptap-editor"
-        onClick={() => props.onViewStateChange({ scrollTop: 42, selection: { from: 2, to: 3 } })}
+        onClick={() => props.onViewStateChange({ scrollTop: 42, selection: { type: 'text', from: 2, to: 3 } })}
       />
     )
   },
@@ -900,19 +900,28 @@ describe('EditorPane', () => {
     })
     useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/vs.md'))
     useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
-    useEditorStore.getState().saveTiptapViewState(pane.id, { scrollTop: 7, selection: { from: 1, to: 1 } })
+    useEditorStore.getState().saveTiptapViewState(pane.id, { scrollTop: 7, selection: { type: 'text', from: 1, to: 1 } })
 
     render(<EditorPane pane={pane} isActive />)
     await waitFor(() => screen.getByTestId('tiptap-editor'))
 
     // initialViewState 確實傳入
     expect(tiptapPropsSpy).toHaveBeenLastCalledWith(
-      expect.objectContaining({ initialViewState: { scrollTop: 7, selection: { from: 1, to: 1 } } }),
+      expect.objectContaining({ initialViewState: { scrollTop: 7, selection: { type: 'text', from: 1, to: 1 } } }),
     )
     // onViewStateChange 回呼確實寫回 store
     fireEvent.click(screen.getByTestId('tiptap-editor'))
-    expect(useEditorStore.getState().paneStates[pane.id].tiptapViewState).toEqual({ scrollTop: 42, selection: { from: 2, to: 3 } })
+    expect(useEditorStore.getState().paneStates[pane.id].tiptapViewState).toEqual({ scrollTop: 42, selection: { type: 'text', from: 2, to: 3 } })
   })
+
+  // NOTE (R2 attack A1 / I6): EditorPane only hands viewState to TiptapEditor when
+  // paneState.bufferKey === key (the EditorPane.tsx guard). The "stale viewState on
+  // buffer switch" path is unreachable in practice because TiptapEditor is lazy: the
+  // transient render shows the Suspense fallback (Tiptap not mounted), and the
+  // post-commit attachPane effect resets paneState→raw before lazy resolves, so the
+  // pane lands on Monaco. A test here would depend on React.lazy cache + test order,
+  // so the guard is kept as defense-in-depth and documented as a known-limitation
+  // (spec §7) rather than covered by a brittle test.
 
   it('does not overwrite dirty content during active reload', async () => {
     const backend = createBackend()

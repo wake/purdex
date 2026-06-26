@@ -432,13 +432,18 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           />
         ) : (
           <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>}>
+            {/* R2 attack A1: attachPane resets paneState in a post-commit effect, so
+                the first render after switching buffers may still hold the PREVIOUS
+                buffer's viewState. Only hand viewState to TiptapEditor once paneState
+                has caught up to this buffer (bufferKey === key), else the new editor
+                would restore stale scroll/selection onto the new buffer. */}
             <TiptapEditor
               key={buffer.modelId}
               content={buffer.content}
               isActive={isActive}
-              initialViewState={paneState?.tiptapViewState ?? null}
+              initialViewState={paneState?.bufferKey === key ? (paneState.tiptapViewState ?? null) : null}
               onChange={(md) => useEditorStore.getState().updateContent(key, md)}
-              onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}
+              onViewStateChange={paneState?.bufferKey === key ? (vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs) : undefined}
               onSave={handleSave}
             />
           </Suspense>

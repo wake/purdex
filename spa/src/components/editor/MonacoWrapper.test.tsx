@@ -157,7 +157,15 @@ describe('MonacoWrapper', () => {
     expect(secondOnSave).toHaveBeenCalledTimes(1)
   })
 
-  it('focuses the editor when it mounts while the pane is already active (AC1)', () => {
+  // AC1 — MOCK-LIMITED COVERAGE (R2 health H2): this mock invokes `onMount`
+  // synchronously during render, so the pre-existing `[isActive]` effect already
+  // focuses at mount and this assertion cannot ISOLATE the new handleMount focus
+  // path — both satisfy `toHaveBeenCalled()`. It documents intent and guards
+  // against losing focus entirely, but the real late-ready bug (Monaco's async
+  // onMount firing after the `[isActive]` effect ran with a null editorRef) is
+  // only reproducible in production. Making the mock defer onMount would break the
+  // other 7 MonacoWrapper tests that rely on synchronous mount. See spec §5.0.
+  it('focuses the editor when it mounts while the pane is already active (AC1, mock-limited)', () => {
     render(
       <MonacoWrapper content="hello" language="markdown" modelId="model-1" isActive={true}
         initialViewState={null} onChange={() => {}} onCursorChange={() => {}}

@@ -26,7 +26,7 @@ export interface EditorBuffer extends EditorBufferMetadata {
 
 export interface TiptapViewState {
   scrollTop: number
-  selection: { from: number; to: number } | null
+  selection: { type: 'text' | 'node'; from: number; to: number } | null
 }
 
 export interface EditorPaneState {
