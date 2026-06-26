@@ -24,12 +24,18 @@ export interface EditorBuffer extends EditorBufferMetadata {
   modelId: string
 }
 
+export interface TiptapViewState {
+  scrollTop: number
+  selection: { from: number; to: number } | null
+}
+
 export interface EditorPaneState {
   bufferKey: string
   editorMode: EditorMode
   showDiff: boolean
   cursorPosition: { line: number; column: number }
   monacoViewState: editor.ICodeEditorViewState | null
+  tiptapViewState: TiptapViewState | null
 }
 
 interface EditorState {
@@ -48,6 +54,7 @@ interface EditorState {
   setShowDiff: (paneId: string, showDiff: boolean) => void
   updateCursor: (paneId: string, line: number, column: number) => void
   saveMonacoViewState: (paneId: string, viewState: editor.ICodeEditorViewState | null) => void
+  saveTiptapViewState: (paneId: string, viewState: TiptapViewState | null) => void
   clearAllBuffers: () => void
 }
 
@@ -60,6 +67,7 @@ function createPaneState(bufferKey: string): EditorPaneState {
     showDiff: false,
     cursorPosition: { line: 1, column: 1 },
     monacoViewState: null,
+    tiptapViewState: null,
   }
 }
 
@@ -297,6 +305,20 @@ export const useEditorStore = create<EditorState>()((set) => ({
         [paneId]: {
           ...paneState,
           monacoViewState: viewState,
+        },
+      },
+    }
+  }),
+
+  saveTiptapViewState: (paneId, viewState) => set((s) => {
+    const paneState = s.paneStates[paneId]
+    if (!paneState) return s
+    return {
+      paneStates: {
+        ...s.paneStates,
+        [paneId]: {
+          ...paneState,
+          tiptapViewState: viewState,
         },
       },
     }

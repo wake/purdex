@@ -241,4 +241,23 @@ describe('useEditorStore', () => {
     const buf = useEditorStore.getState().buffers['key1']
     expect(buf.lastStat).toEqual({ mtime: 1000, size: 30 })
   })
+
+  it('tiptapViewState defaults to null and saveTiptapViewState writes it (AC4)', () => {
+    const store = useEditorStore.getState()
+    store.openBuffer('k1', 'hello', { language: 'markdown' })
+    store.attachPane('p1', 'k1')
+    expect(useEditorStore.getState().paneStates['p1'].tiptapViewState).toBeNull()
+
+    store.saveTiptapViewState('p1', { scrollTop: 120, selection: { from: 3, to: 7 } })
+    expect(useEditorStore.getState().paneStates['p1'].tiptapViewState).toEqual({
+      scrollTop: 120,
+      selection: { from: 3, to: 7 },
+    })
+  })
+
+  it('saveTiptapViewState on a missing pane is a no-op (AC4)', () => {
+    const before = useEditorStore.getState().paneStates
+    useEditorStore.getState().saveTiptapViewState('nope', { scrollTop: 1, selection: null })
+    expect(useEditorStore.getState().paneStates).toBe(before)
+  })
 })
