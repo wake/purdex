@@ -19,7 +19,7 @@
 - I2：selection restore 用 **inlineContent 前置檢查**（`$from.parent.inlineContent && $to.parent.inlineContent` → `TextSelection.create`，否則 `Selection.near($from)`）。**不可**用 try/catch —— `TextSelection.create` 對非法位置不 throw、只 warn（已本地實證）。
 - I3：restore 順序 = selection → scrollTop → focus(若 isActive)。
 - I5：one-shot restore（`didRestoreRef` 守門）在 editor ready 後執行；初次 content sync 必須跳過（`hasInitializedRef`），不得重設 restore 後的 selection/scroll。
-- I6：`EditorPane` Tiptap 分支加 `key={buffer.modelId}`（防禦性對齊 Monaco；換 buffer 經 attachPane reset→raw 使 Tiptap unmount，場景不可達，不寫回歸測試）。
+- I6：`EditorPane` Tiptap 分支加 `key={buffer.modelId}`（堵 transient 跨 buffer reuse + 對齊 Monaco；known-limitation 不寫整合回歸測試）。
 - 測試前提 M1–M4（spec §5.0）：`useEditor` mock 走 `null→editor` transition；editor mock 含可變 `state.selection`/`state.tr`/`view.dispatch`；`EditorPane` 的 `TiptapEditor` mock capture props；selection 純函式測用真實 PM。
 - Commit 分組（PR squash-merge 收斂為 spec §6 的 2 邏輯 commit）：
   - **focus**（Task 1–2）：`fix(editor): focus editor on activation even when it mounts after isActive (#857)`
@@ -375,11 +375,17 @@ it('preserves a legal range selection (AC6)', () => {
   expect(sel.to).toBe(6)
 })
 
-it('clamps an out-of-range selection without throwing (AC7)', () => {
-  const doc = makeDoc()
+it('clamps an out-of-range selection to a legal inline position (AC7)', () => {
+  const doc = makeDoc() // size 13; pos 13 is after the paragraph (parent=doc, not inline)
   expect(() => resolveRestoreSelection(doc, { from: 999, to: 1000 })).not.toThrow()
   const sel = resolveRestoreSelection(doc, { from: 999, to: 1000 })
-  expect(sel.to).toBeLessThanOrEqual(doc.content.size)
+  // clamp -> 13 (inlineContent false) -> Selection.near -> 12 (inline). Must NOT
+  // assert only `to <= size`: create(doc,13,13) returns an illegal 13..13 that
+  // ALSO satisfies `<= size`, so that weak assertion would false-green the old
+  // try/catch path. Assert the endpoints land in inlineContent instead.
+  expect(doc.resolve(sel.from).parent.inlineContent).toBe(true)
+  expect(doc.resolve(sel.to).parent.inlineContent).toBe(true)
+  expect(sel.from).toBeLessThan(doc.content.size)
 })
 
 it('falls back to a legal selection for an illegal (non-textblock) position (AC7)', () => {
@@ -491,26 +497,35 @@ it('saves scrollTop + live selection on unmount from editorRef (AC5, M2)', () =>
   expect(onViewStateChange).toHaveBeenCalledWith({ scrollTop: 88, selection: { from: 4, to: 9 } })
 })
 
-it('restores selection + scroll BEFORE focus on ready (AC8, I3)', () => {
+it('restores selection AND scroll BEFORE focus on ready (AC8, I3)', () => {
   const dispatch = vi.fn()
+  const setSelection = vi.fn().mockReturnValue('TR')
   const ed = makeMockEditor({
-    state: { selection: { from: 1, to: 1 }, tr: { setSelection: vi.fn().mockReturnValue('TR'), doc: {} }, doc: {} },
+    state: { selection: { from: 1, to: 1 }, doc: {}, tr: { setSelection } },
     view: { dispatch },
   })
-  useEditorSpy.mockReturnValue(undefined)
   const initial = { scrollTop: 50, selection: { from: 2, to: 5 } }
-  const { rerender } = render(
-    <TiptapEditor content="hi" isActive={true} initialViewState={initial}
-      onChange={() => {}} onViewStateChange={() => {}} onSave={() => {}} />,
-  )
+  // focusSpy reads the scroll container's scrollTop at focus time → proves
+  // scroll was already restored BEFORE focus (I3). Query the DOM inside the
+  // spy (the container is mounted in the same commit; a captured variable
+  // would still be undefined when the effect runs).
+  let scrollAtFocus = -1
+  focusSpy.mockImplementation(() => {
+    const root = document.querySelector('[data-testid="tiptap-scroll-root"]') as HTMLElement | null
+    if (scrollAtFocus === -1 && root) scrollAtFocus = root.scrollTop
+  })
   useEditorSpy.mockReturnValue(ed)
-  rerender(
+  render(
     <TiptapEditor content="hi" isActive={true} initialViewState={initial}
       onChange={() => {}} onViewStateChange={() => {}} onSave={() => {}} />,
   )
-  // selection restore (dispatch) 早於 focus
+  // (1) selection restore goes through resolveRestoreSelection (mocked → {__fake})
+  expect(setSelection).toHaveBeenCalledWith({ __fake: 'selection' })
+  // (2) selection dispatch happens before the first focus call
   expect(dispatch).toHaveBeenCalled()
   expect(dispatch.mock.invocationCallOrder[0]).toBeLessThan(focusSpy.mock.invocationCallOrder[0])
+  // (3) scroll was restored before focus (scrollTop already 50 at focus time)
+  expect(scrollAtFocus).toBe(50)
 })
 ```
 
@@ -739,13 +754,15 @@ git commit -m "feat(editor): wire Tiptap viewState through EditorPane (#857)"
 - I3（restore→focus 順序）→ Task 5 effect 內順序 + AC8。
 - I4（同生命週期）→ Task 3 paneState 欄位、隨 pane 清。
 - I5（one-shot + 跳過初次 sync）→ Task 5 `didRestoreRef` + `hasInitializedRef`。
-- I6（Tiptap key 防禦）→ Task 6 `key={buffer.modelId}`（plan-review Finding 2 場景查證不可達，採防禦性 key、不寫回歸測試）。
+- I6（Tiptap key）→ Task 6 `key={buffer.modelId}`（堵 transient reuse；known-limitation 不寫整合回歸測試）。
 - M1–M4（mock 前提）→ Task 2 `makeMockEditor`/null-transition、Task 4 真實 PM、Task 6 prop capture。
 - N1–N4（non-goals）：未碰 Monaco viewState / persist / reload / 模式轉換邏輯。✓
 
 **plan-review（round-1）處置（明示）：**
 - Finding 1（high，已修）：`TextSelection.create` 對非法位置**不 throw、只 warn**（已本地用真實 PM 實證：`create(doc,0,0)` 回 `TextSelection 0..0`）。`resolveRestoreSelection`（Task 4）改為 **inlineContent 前置檢查**而非 try/catch；spec I2/§4.2/AC7 同步更新。
-- Finding 2（high，查證後不可達）：「換 buffer 不 restore」場景因 `attachPane` reset `editorMode`→`raw`（換 buffer 必離開 wysiwyg、Tiptap unmount）而**當前架構不可達**。採防禦性 `key={buffer.modelId}`（Task 6）對齊 Monaco 分支、消除不一致，**不寫不可達的回歸測試**（使用者確認）。
+- Finding 2（round-1 high → round-2 修正）：`attachPane` 是 commit 後 effect，切到另一已載入 markdown buffer 的**第一個 render** 仍讀舊 `paneState.editorMode='wysiwyg'` → transient TiptapEditor reuse **可達一個 render**（最終穩定態為 Monaco/raw）。採 `key={buffer.modelId}`（Task 6）堵此 transient + 對齊 Monaco。**known-limitation 不寫回歸測試**（使用者決定）：mock TiptapEditor 測不出真 cleanup 副作用；「驗 remount with new modelId」因最終態 Monaco 而 query 不到；真正可觀測的（transient 污染 B 的 `tiptapViewState`）需 unmock 整合測試（jsdom 跑 ProseMirror，成本高），危害極小（一個 render，最壞 `scrollTop:0`）不值得。
+- Finding 1b（round-2 high，已修）：AC7 越界 case 原只驗 `to <= size`，**假綠** —— `create(doc,size,size)` 回非法 `size..size` 也滿足。已改驗退化結果落在 `inlineContent`（本地實證 `near(resolve(13))` 回 `12..12`、inline true）。
+- Finding 3（round-2 medium，已修）：AC8 原只驗 `dispatch < focus`，未驗 scroll 順序。已補「focus 時 scroll container `scrollTop` 已 = restore 值」+ 驗 `tr.setSelection` 收到 helper 回傳值。
 - 設計：selection restore 抽純函式 `resolveRestoreSelection` 以真實 PM doc 單元測 AC6/AC7（對齊 M4）；TiptapEditor 測試 mock 此 helper 專注 wiring/順序。
 
 **Placeholder scan：** 無 TODO/TBD；每 code step 含完整 code。
