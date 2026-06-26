@@ -617,10 +617,10 @@ useEffect(() => {
 }, [editor])
 ```
 
-新增 unmount cleanup（從 live editorRef 存）：
+新增 unmount cleanup（從 live editorRef 存）。**必須 `useLayoutEffect`**（非 `useEffect`，見下）：
 
 ```tsx
-useEffect(() => {
+useLayoutEffect(() => {
   return () => {
     onViewStateChangeRef.current?.({
       scrollTop: containerRef.current?.scrollTop ?? 0,
@@ -633,6 +633,7 @@ useEffect(() => {
 ```
 
 > `editorRef` 而非 render 閉包的 `editor`：`[]` cleanup 閉包初次抓的 `editor` 為 null（finding #3）。
+> **`useLayoutEffect` 而非 `useEffect`**（實測）：`useEffect` 的 passive cleanup 在 React detach DOM ref 之後跑，`containerRef.current` 已 null、`scrollTop` 讀成 0；`useLayoutEffect` cleanup 在 ref detach 前跑，能讀正確 scrollTop。`editorRef` 是普通實例 ref（不被 detach），兩種 effect 都讀得到。記得 `import { useLayoutEffect } from 'react'`。
 
 - [ ] **Step 4: 跑測試確認通過**
 

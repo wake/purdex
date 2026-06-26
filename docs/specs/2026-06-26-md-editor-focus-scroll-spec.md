@@ -60,7 +60,7 @@
   - 新 props：`initialViewState`、`onViewStateChange`。`onViewStateChangeRef` 同步（mirror MonacoWrapper `:47-49,71-76`）。
   - **`editorRef`**：新增 `editorRef`，effect 同步 `editorRef.current = editor`（editor 變化時更新）。`[]` cleanup 必須讀 `editorRef.current`，**不可**讀 render 閉包的 `editor`（初次為 null，I3-cleanup 對應 finding #3）。
   - scroll container = `containerRef`（既有 `:72` `tiptap-scroll-root`）。
-  - unmount cleanup effect（`[]`）：`onViewStateChangeRef.current({ scrollTop: containerRef.current?.scrollTop ?? 0, selection: editorRef.current ? { from: editorRef.current.state.selection.from, to: editorRef.current.state.selection.to } : null })`。
+  - unmount cleanup **`useLayoutEffect`**（`[]`）：`onViewStateChangeRef.current?.({ scrollTop: containerRef.current?.scrollTop ?? 0, selection: editorRef.current ? { from: editorRef.current.state.selection.from, to: editorRef.current.state.selection.to } : null })`。**必須用 `useLayoutEffect` 而非 `useEffect`**：`useEffect` 的 passive cleanup 在 React detach DOM ref 之後執行，`containerRef.current` 已是 null、`scrollTop` 讀成 0（實測）；`useLayoutEffect` cleanup 在 ref detach 前執行，能讀到正確 scrollTop。（Monaco 用 `useEffect` 安全是因它讀 editor 實例 ref，非 DOM ref。）
   - **one-shot initial restore**（I5）：`didRestoreRef`（初 false）守門的 effect，依賴 `[editor]`；當 `editor` truthy 且 `!didRestoreRef.current` 時執行一次並設 `didRestoreRef.current = true`：
     1. selection restore（若 `initialViewState?.selection`，依 I2，**抽純函式 `resolveRestoreSelection(doc, saved)`** 以便用真實 PM doc 單元測）：clamp from/to → `doc.resolve` 兩端 → 檢查 `$from.parent.inlineContent && $to.parent.inlineContent`，是則 `TextSelection.create(doc, from, to)`、否則 `Selection.near($from)`；再 `editor.view.dispatch(editor.state.tr.setSelection(sel))`。
     2. scroll restore：`containerRef.current.scrollTop = initialViewState.scrollTop`。
