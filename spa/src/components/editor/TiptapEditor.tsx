@@ -13,6 +13,8 @@ interface Props {
 export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
   const onSaveRef = useRef(onSave)
   const containerRef = useRef<HTMLDivElement>(null)
+  const isActiveRef = useRef(isActive)
+  const didRestoreRef = useRef(false)
 
   const focusEditable = () => {
     containerRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus()
@@ -21,6 +23,10 @@ export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
   useEffect(() => {
     onSaveRef.current = onSave
   }, [onSave])
+
+  useEffect(() => {
+    isActiveRef.current = isActive
+  }, [isActive])
 
   // Track whether the latest content change came from user typing (onUpdate)
   // to prevent the sync useEffect from re-setting content that just came from the editor
@@ -49,6 +55,14 @@ export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
       },
     },
   })
+
+  // One-shot ready handler. A later task will prepend selection/scroll restore here, before focus.
+  useEffect(() => {
+    if (!editor) return
+    if (didRestoreRef.current) return
+    didRestoreRef.current = true
+    if (isActiveRef.current) focusEditable()
+  }, [editor])
 
   // Sync external content changes (e.g., reload from disk)
   useEffect(() => {

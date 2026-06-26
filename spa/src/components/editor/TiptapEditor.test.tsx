@@ -22,15 +22,23 @@ vi.mock('@tiptap/markdown', () => ({
   Markdown: {},
 }))
 
+function makeMockEditor(overrides: Record<string, unknown> = {}) {
+  return {
+    getMarkdown: () => 'hello',
+    commands: { setContent: vi.fn() },
+    state: {
+      selection: { from: 1, to: 1 },
+      tr: { setSelection: vi.fn().mockReturnThis() },
+    },
+    view: { dispatch: vi.fn() },
+    ...overrides,
+  }
+}
+
 describe('TiptapEditor', () => {
   beforeEach(() => {
     focusSpy.mockReset()
-    useEditorSpy.mockReturnValue({
-      getMarkdown: () => 'hello',
-      commands: {
-        setContent: vi.fn(),
-      },
-    })
+    useEditorSpy.mockReturnValue(makeMockEditor())
   })
 
   it('uses a dedicated scroll container instead of putting prose on it', () => {
@@ -73,6 +81,24 @@ describe('TiptapEditor', () => {
     rerender(<TiptapEditor content="# Hello" isActive={true} onChange={() => {}} onSave={() => {}} />)
 
     expect(focusSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('focuses on the null→editor ready transition when active (AC2, M1)', () => {
+    useEditorSpy.mockReturnValue(undefined) // editor 尚未 ready
+    const { rerender } = render(<TiptapEditor content="# Hi" isActive={true} onChange={() => {}} onSave={() => {}} />)
+    focusSpy.mockClear()
+    useEditorSpy.mockReturnValue(makeMockEditor()) // editor ready
+    rerender(<TiptapEditor content="# Hi" isActive={true} onChange={() => {}} onSave={() => {}} />)
+    expect(focusSpy).toHaveBeenCalled()
+  })
+
+  it('does NOT focus on ready transition when inactive (AC3, I1)', () => {
+    useEditorSpy.mockReturnValue(undefined)
+    const { rerender } = render(<TiptapEditor content="# Hi" isActive={false} onChange={() => {}} onSave={() => {}} />)
+    focusSpy.mockClear()
+    useEditorSpy.mockReturnValue(makeMockEditor())
+    rerender(<TiptapEditor content="# Hi" isActive={false} onChange={() => {}} onSave={() => {}} />)
+    expect(focusSpy).not.toHaveBeenCalled()
   })
 
   it('focuses the editable content when clicking empty editor space', () => {
