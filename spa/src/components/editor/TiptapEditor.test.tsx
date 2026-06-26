@@ -155,4 +155,17 @@ describe('TiptapEditor', () => {
     // scroll restored before focus (scrollTop already 50 at focus time)
     expect(scrollAtFocus).toBe(50)
   })
+
+  it('does NOT overwrite existing viewState when unmounted before editor is ready (R1 P2)', () => {
+    // editor never becomes ready (stuck at null → restore never ran)
+    useEditorSpy.mockReturnValue(undefined)
+    const onViewStateChange = vi.fn()
+    const { unmount } = render(
+      <TiptapEditor content="hi" isActive={false} initialViewState={{ scrollTop: 100, selection: { from: 5, to: 5 } }}
+        onChange={() => {}} onViewStateChange={onViewStateChange} onSave={() => {}} />,
+    )
+    unmount()
+    // must not clobber the stored viewState with scrollTop:0/selection:null
+    expect(onViewStateChange).not.toHaveBeenCalled()
+  })
 })

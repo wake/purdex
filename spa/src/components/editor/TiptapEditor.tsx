@@ -115,6 +115,10 @@ export function TiptapEditor({ content, isActive, initialViewState, onChange, on
   // variable" suggestion does not apply here.
   useLayoutEffect(() => {
     return () => {
+      // If the editor never became ready (restore never ran), this component
+      // never took ownership of the viewState — writing back here would clobber
+      // the stored tiptapViewState with scrollTop:0/selection:null (R1 P2).
+      if (!didRestoreRef.current) return
       onViewStateChangeRef.current?.({
         // eslint-disable-next-line react-hooks/exhaustive-deps -- read live scrollTop at unmount
         scrollTop: containerRef.current?.scrollTop ?? 0,
