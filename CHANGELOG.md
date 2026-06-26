@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.298] - 2026-06-26
+
+### Fix(editor): prevent Loading editor flicker on markdown buffer switch (#863)
+
+同一 pane 從一個 markdown buffer（`wysiwyg` 模式）切到另一個 markdown buffer 時，UI
+先 paint 一幀 `Loading editor…` fallback（閃爍 + 一瞬焦點中斷）才落到目標 editor。根因是
+`attachPane` 為 post-commit `useEffect`：切 buffer 的第一個 render 仍看到舊 buffer 的
+stale `paneState`（`editorMode=wysiwyg`、`bufferKey=舊`），stale `editorMode` 驅動
+wysiwyg 分支，被 PR #862 的 gating render 擋成 `Loading editor…`。
+
+- **修法**：render 階段同步派生 `alignedPaneState`（僅當 `paneState.bufferKey === key`
+  才信任，否則退回 fresh-pane 預設 raw + null viewState）。`attachPane` 對齊後本就會把
+  `paneState` 重建為這些預設值，故 stale 視窗直接 render 最終態的 raw Monaco —— 不閃爍，
+  也不外洩舊 buffer 的 mode / viewState / cursor / diff 狀態到新 buffer。
+- **連帶**：移除 PR #862 的 R3 post-commit gating fallback。wysiwyg 分支前提變為
+  `bufferKey === key`，stale 視窗不可能 mount `TiptapEditor`，`didRestoreRef` 不會被
+  stale `paneState` 污染（比 R3 更強的保護）。
+
 ## [1.0.0-alpha.297] - 2026-06-26
 
 ### Feat(editor): focus on switch + markdown wysiwyg scroll/cursor restore (#857)
