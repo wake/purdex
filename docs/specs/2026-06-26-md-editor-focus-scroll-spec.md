@@ -1,7 +1,7 @@
 # Spec — Editor 切換分頁 focus + markdown(wysiwyg) scroll/cursor 保留（#857）
 
 > Date: 2026-06-26
-> Status: Draft v7（+PR R3：A1' 的 lazy-不可達前提被推翻〔lazy cache 後同步 mount〕→ 改 gating render〔stale 時不 mount Tiptap〕+ regression test）
+> Status: Draft v8 — ready to ship（PR R1/R2/R3/R4 收斂：核心 focus + viewState 正確；R4 剩 cosmetic 閃爍 → issue #863 延後）
 > Repo: purdex / branch: `worktree-md-editor-focus-scroll`
 > Issue: #857
 
@@ -107,3 +107,4 @@
 - BUG1 的 focus 補強針對「切換分頁/mode 後 editor 才 ready」；若有其他 focus 競爭來源（如同時彈 dialog）不在此處理。
 - **I6 stale paneState 跨 buffer（已修，R3）**：切 buffer 的 transient render（`paneState.bufferKey !== key`；`React.lazy` cache 後同步 mount，故可達）原會讓 Tiptap 用 stale/null viewState mount 並鎖 `didRestoreRef` → 漏 restore。改 **gating render**（stale 時不 render/mount Tiptap，等 `paneState` 對齊）徹底解。**有 regression test**：warm `React.lazy` cache + freeze `attachPane` 確定性重現 transient，驗 gate 阻止 mount（`EditorPane.test.tsx`，移除 gate 即紅 = 非 vacuous）。
 - **AC1 Monaco focus（mock-limited）**：同步 Monaco `onMount` mock 下既有 `[isActive]` effect 已 focus，AC1 無法隔離新 `handleMount` path（已標註於測試 + 此處）；真實 late-ready bug 僅生產可重現，改 mock 為非同步會破壞其他 7 個 MonacoWrapper 測試（R2 health H2）。
+- **markdown buffer 切換 transient loading paint（延後，issue #863）**：切 markdown A(wysiwyg)→B 時，`attachPane` 是 post-commit `useEffect`，transient render 走 gating fallback paint 一次 `Loading editor…` 才落到 B 的 editor（R4 medium，cosmetic 一 frame）。非本 PR 正確性回歸（既有 attachPane 時序，PR 前 transient 也閃）；根治需把 `attachPane` 提前到 paint 前（`useLayoutEffect`），影響全 EditorPane、超本 PR Tiptap scope，故延後 **issue #863**。
