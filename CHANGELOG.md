@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.0-alpha.297] - 2026-06-26
+
+### Feat(editor): focus on switch + markdown wysiwyg scroll/cursor restore (#857)
+
+切換到 editor 分頁時兩個 UX 缺陷：(1) markdown editor 不自動 focus —— focus 只依賴
+`[isActive]`，但 editor 的 ready 時機（Monaco async `handleMount` / Tiptap lazy+Suspense）
+可能晚於 `isActive` 變 true，`focus()` no-op 且不重試；(2) markdown wysiwyg(Tiptap) 切回
+跳到最後 —— Tiptap 完全沒 viewState 持久化，切回 `setContent`+`focusEditable` 把游標拉到
+末尾。
+
+- **focus**：Monaco `handleMount` + Tiptap one-shot ready effect 在 editor ready 時若
+  `isActiveRef.current` 補 focus（避 stale closure），保留既有 `[isActive]` effect。
+- **viewState**：新增 `tiptapViewState` paneState 欄位 + `saveTiptapViewState`；Tiptap
+  unmount（`useLayoutEffect` + `didRestoreRef` guard，避免 ref detach 後讀 scrollTop=0 /
+  editor-ready commit 後立刻 unmount 漏存）存 scroll + selection（`type: 'text' | 'node'`，
+  保留 `NodeSelection` 如 horizontal rule）；one-shot restore（selection→scroll→focus，
+  paint 前 layout effect）。`resolveRestoreSelection` 用 **inlineContent 前置檢查**（本地
+  實證 `TextSelection.create` 對非法位置不 throw、只 `console.warn`）。
+- **EditorPane gating render**：僅在 `paneState.bufferKey === key`（paneState 已對齊 buffer）
+  才 render `TiptapEditor` —— stale paneState 根本不 mount，避免 `React.lazy` cache 後同步
+  mount 用 stale viewState 鎖 `didRestoreRef`。
+
+spec 2 輪 + plan 2 輪 codex review；PR R1 標準 + R2 三平行（攻擊/防守/體質）+ R3 + R4 收斂
+（D1 unmount race→`useLayoutEffect` / D2 NodeSelection / R3 props-gating→gating render /
+R4 cosmetic 閃爍）。161 tests 綠、lint 0、build ok。延後追蹤：#863（markdown↔markdown buffer
+切換 transient `Loading editor…` paint，根因既有 `attachPane` post-commit 時序）。
+
 ## [1.0.0-alpha.296] - 2026-06-26
 
 ### Feat(editor): persist In-App Storage to IndexedDB (fixes #856) (#858)
