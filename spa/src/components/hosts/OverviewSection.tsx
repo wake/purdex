@@ -136,7 +136,7 @@ export function OverviewSection({ hostId }: Props) {
           onSave={(v) => updateHost(hostId, { port: parseInt(v, 10) || 7860 })}
         />
         <TokenField
-          token={host.token}
+          token={host.token ?? undefined}
           ip={host.ip}
           port={host.port}
           onSave={(token) => {

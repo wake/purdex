@@ -60,7 +60,10 @@ export function createHostsContributor(): SyncContributor {
             currentHost.port === host.port
           mergedHosts[id] = {
             ...host,
-            token: sameEndpoint ? currentHost.token : undefined,
+            // Preserve the token only when endpoint identity matches; otherwise write
+            // an explicit `null` ("cleared, re-auth required") rather than `undefined`,
+            // so the cleared state survives serialization and is unambiguous downstream.
+            token: sameEndpoint ? currentHost.token : null,
           }
         }
         useHostStore.setState({

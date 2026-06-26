@@ -10,7 +10,10 @@ export interface HostConfig {
   name: string
   ip: string
   port: number
-  token?: string
+  // `null` is the explicit "token cleared, re-auth required" sentinel written by
+  // the sync deserialize path when a host is new or its endpoint (ip/port) changed.
+  // Distinct from `undefined` (field simply absent); `null` survives JSON round-trips.
+  token?: string | null
   order: number
 }
 
@@ -40,7 +43,7 @@ interface HostState {
   runtime: Record<string, HostRuntime>
   activeHostId: string | null
 
-  addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string }) => string
+  addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
   updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
   removeHost: (hostId: string) => void
   reorderHosts: (orderedIds: string[]) => void

@@ -285,4 +285,29 @@ describe('hostsContributor.deserialize (full-replace, token preservation)', () =
     expect(s.hosts.h1.port).toBe(9999)
     expect(s.hosts.h1.token).toBeNull()
   })
+
+  it('cleared token survives the JSON persist boundary as null (the reason it is not undefined)', () => {
+    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null })
+
+    const contributor = createHostsContributor()
+    contributor.deserialize(
+      {
+        version: 1,
+        data: {
+          hosts: { hNew: { id: 'hNew', name: 'new', ip: '10.0.0.2', port: 7860, order: 0 } },
+          hostOrder: ['hNew'],
+          activeHostId: null,
+        },
+      },
+      { type: 'full-replace' },
+    )
+
+    // zustand persist serializes via JSON.stringify; undefined would drop the key
+    // entirely, losing the "explicitly cleared, re-auth required" signal on rehydrate.
+    // null keeps the key with an unambiguous value across the boundary.
+    const host = useHostStore.getState().hosts.hNew
+    const roundTripped = JSON.parse(JSON.stringify(host)) as { token?: unknown }
+    expect('token' in roundTripped).toBe(true)
+    expect(roundTripped.token).toBeNull()
+  })
 })
