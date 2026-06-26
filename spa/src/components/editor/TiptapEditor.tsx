@@ -1,20 +1,27 @@
-import { useEditor, EditorContent } from '@tiptap/react'
+import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
+import { resolveRestoreSelection } from './tiptapSelection'
+import type { TiptapViewState } from '../../stores/useEditorStore'
 
 interface Props {
   content: string // raw markdown
   isActive: boolean
+  initialViewState?: TiptapViewState | null
   onChange: (markdown: string) => void
+  onViewStateChange?: (viewState: TiptapViewState) => void
   onSave: () => void
 }
 
-export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
+export function TiptapEditor({ content, isActive, initialViewState, onChange, onViewStateChange, onSave }: Props) {
   const onSaveRef = useRef(onSave)
   const containerRef = useRef<HTMLDivElement>(null)
   const isActiveRef = useRef(isActive)
   const didRestoreRef = useRef(false)
+  const editorRef = useRef<Editor | null>(null)
+  const onViewStateChangeRef = useRef(onViewStateChange)
+  const hasInitializedRef = useRef(false)
 
   const focusEditable = () => {
     containerRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus()
@@ -23,6 +30,10 @@ export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
   useEffect(() => {
     onSaveRef.current = onSave
   }, [onSave])
+
+  useEffect(() => {
+    onViewStateChangeRef.current = onViewStateChange
+  }, [onViewStateChange])
 
   useEffect(() => {
     isActiveRef.current = isActive
@@ -56,17 +67,35 @@ export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
     },
   })
 
-  // One-shot ready handler. A later task will prepend selection/scroll restore here, before focus.
+  // Keep editorRef in sync for unmount cleanup (reads from live ref, not stale closure)
+  useEffect(() => {
+    editorRef.current = editor ?? null
+  }, [editor])
+
+  // One-shot ready handler: restore selection + scroll BEFORE focus (AC8, I3)
   useEffect(() => {
     if (!editor) return
     if (didRestoreRef.current) return
     didRestoreRef.current = true
+    const vs = initialViewState
+    if (vs?.selection) {
+      const sel = resolveRestoreSelection(editor.state.doc, vs.selection)
+      editor.view.dispatch(editor.state.tr.setSelection(sel))
+    }
+    if (vs && containerRef.current) {
+      containerRef.current.scrollTop = vs.scrollTop
+    }
     if (isActiveRef.current) focusEditable()
-  }, [editor])
+  }, [editor]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync external content changes (e.g., reload from disk)
+  // Sync external content changes (e.g., reload from disk).
+  // Skip the very first render — useEditor already initialized with the content prop.
   useEffect(() => {
     if (!editor) return
+    if (!hasInitializedRef.current) {
+      hasInitializedRef.current = true
+      return
+    }
     if (internalUpdateRef.current) {
       internalUpdateRef.current = false
       return
@@ -78,6 +107,19 @@ export function TiptapEditor({ content, isActive, onChange, onSave }: Props) {
     if (!isActive) return
     focusEditable()
   }, [isActive])
+
+  // Save viewState on unmount — useLayoutEffect cleanup runs before safelyDetachRef,
+  // so containerRef.current is still valid when we read scrollTop (AC5, M2)
+  useLayoutEffect(() => {
+    return () => {
+      onViewStateChangeRef.current?.({
+        scrollTop: containerRef.current?.scrollTop ?? 0,
+        selection: editorRef.current
+          ? { from: editorRef.current.state.selection.from, to: editorRef.current.state.selection.to }
+          : null,
+      })
+    }
+  }, [])
 
   if (!editor) return null
 

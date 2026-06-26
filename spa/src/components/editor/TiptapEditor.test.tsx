@@ -22,6 +22,10 @@ vi.mock('@tiptap/markdown', () => ({
   Markdown: {},
 }))
 
+vi.mock('./tiptapSelection', () => ({
+  resolveRestoreSelection: vi.fn(() => ({ __fake: 'selection' })),
+}))
+
 function makeMockEditor(overrides: Record<string, unknown> = {}) {
   return {
     getMarkdown: () => 'hello',
@@ -109,5 +113,46 @@ describe('TiptapEditor', () => {
     fireEvent.mouseDown(screen.getByTestId('tiptap-scroll-root'))
 
     expect(focusSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('saves scrollTop + live selection on unmount from editorRef (AC5, M2)', () => {
+    const ed = makeMockEditor({ state: { selection: { from: 4, to: 9 }, tr: { setSelection: vi.fn().mockReturnThis() } } })
+    useEditorSpy.mockReturnValue(ed)
+    const onViewStateChange = vi.fn()
+    const { unmount, container } = render(
+      <TiptapEditor content="hi" isActive={false} initialViewState={null}
+        onChange={() => {}} onViewStateChange={onViewStateChange} onSave={() => {}} />,
+    )
+    const scrollRoot = container.querySelector('[data-testid="tiptap-scroll-root"]') as HTMLElement
+    Object.defineProperty(scrollRoot, 'scrollTop', { value: 88, writable: true, configurable: true })
+    unmount()
+    expect(onViewStateChange).toHaveBeenCalledWith({ scrollTop: 88, selection: { from: 4, to: 9 } })
+  })
+
+  it('restores selection AND scroll BEFORE focus on ready (AC8, I3)', () => {
+    const dispatch = vi.fn()
+    const setSelection = vi.fn().mockReturnValue('TR')
+    const ed = makeMockEditor({
+      state: { selection: { from: 1, to: 1 }, doc: {}, tr: { setSelection } },
+      view: { dispatch },
+    })
+    const initial = { scrollTop: 50, selection: { from: 2, to: 5 } }
+    let scrollAtFocus = -1
+    focusSpy.mockImplementation(() => {
+      const root = document.querySelector('[data-testid="tiptap-scroll-root"]') as HTMLElement | null
+      if (scrollAtFocus === -1 && root) scrollAtFocus = root.scrollTop
+    })
+    useEditorSpy.mockReturnValue(ed)
+    render(
+      <TiptapEditor content="hi" isActive={true} initialViewState={initial}
+        onChange={() => {}} onViewStateChange={() => {}} onSave={() => {}} />,
+    )
+    // selection restore goes through resolveRestoreSelection (mocked → {__fake})
+    expect(setSelection).toHaveBeenCalledWith({ __fake: 'selection' })
+    // selection dispatch before first focus
+    expect(dispatch).toHaveBeenCalled()
+    expect(dispatch.mock.invocationCallOrder[0]).toBeLessThan(focusSpy.mock.invocationCallOrder[0])
+    // scroll restored before focus (scrollTop already 50 at focus time)
+    expect(scrollAtFocus).toBe(50)
   })
 })
