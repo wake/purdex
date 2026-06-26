@@ -92,10 +92,18 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   const currentName = displayName(filePath, untitled)
   const buffer = useEditorStore((s) => s.buffers[key])
   const paneState = useEditorStore((s) => s.paneStates[paneId])
+  // Only trust paneState once attachPane has rebound it to THIS buffer. Right after
+  // a buffer switch, the first render still sees paneState belonging to the previous
+  // buffer (attachPane is a post-commit effect). Deriving the aligned view
+  // synchronously — falling back to fresh-pane defaults (raw + null viewState) when
+  // it hasn't caught up — keeps the stale paneState off-screen. This fixes the #863
+  // `Loading editor…` flicker without leaking the old buffer's mode/viewState/cursor
+  // onto the new one (attachPane rebuilds paneState to these exact defaults anyway).
+  const alignedPaneState = paneState?.bufferKey === key ? paneState : undefined
   const isMarkdown = buffer?.language === 'markdown'
-  const editorMode = paneState?.editorMode ?? 'raw'
+  const editorMode = alignedPaneState?.editorMode ?? 'raw'
   const effectiveEditorMode = isMarkdown ? editorMode : 'raw'
-  const showDiff = paneState?.showDiff ?? false
+  const showDiff = alignedPaneState?.showDiff ?? false
   const canSave = buffer ? (buffer.isDirty || !buffer.lastStat) : false
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
   const [renameMode, setRenameMode] = useState<'rename' | 'save'>('rename')
@@ -424,38 +432,37 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
             language={buffer.language}
             modelId={buffer.modelId}
             isActive={isActive}
-            initialViewState={paneState?.monacoViewState ?? null}
+            initialViewState={alignedPaneState?.monacoViewState ?? null}
             onChange={(value) => useEditorStore.getState().updateContent(key, value)}
             onCursorChange={handleCursorChange}
             onViewStateChange={handleViewStateChange}
             onSave={handleSave}
           />
-        ) : paneState?.bufferKey === key ? (
+        ) : (
+          /* wysiwyg path. effectiveEditorMode === 'wysiwyg' requires alignedPaneState
+             (editorMode came from alignedPaneState?.editorMode ?? 'raw'), so paneState
+             is guaranteed already rebound to THIS buffer — the stale-paneState window
+             can never reach here (it derives raw and renders Monaco instead). Mounting
+             TiptapEditor against the aligned paneState is therefore safe: its one-shot
+             restore reads the correct tiptapViewState and didRestoreRef is never locked
+             against a stale state (supersedes PR #862's R3 post-commit gating). */
           <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>}>
             <TiptapEditor
               key={buffer.modelId}
               content={buffer.content}
               isActive={isActive}
-              initialViewState={paneState.tiptapViewState ?? null}
+              initialViewState={alignedPaneState?.tiptapViewState ?? null}
               onChange={(md) => useEditorStore.getState().updateContent(key, md)}
               onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}
               onSave={handleSave}
             />
           </Suspense>
-        ) : (
-          /* R3: paneState hasn't caught up to this buffer yet (attachPane is a
-             post-commit effect). Do NOT mount TiptapEditor against a stale/empty
-             paneState — once React.lazy is cached, Tiptap mounts synchronously and
-             its one-shot restore would lock didRestoreRef before the real viewState
-             arrives, silently dropping the restore. Render a fallback until
-             paneState.bufferKey === key. */
-          <div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>
         )}
       </div>
       <EditorStatusBar
         source={source}
-        line={paneState?.cursorPosition.line ?? 1}
-        column={paneState?.cursorPosition.column ?? 1}
+        line={alignedPaneState?.cursorPosition.line ?? 1}
+        column={alignedPaneState?.cursorPosition.column ?? 1}
         language={buffer.language}
         eol={buffer.eol}
         encoding={buffer.encoding}

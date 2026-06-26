@@ -10,13 +10,17 @@ import { bufferKey } from '../../../lib/editor-buffer-key'
 const getFsBackendMock = vi.hoisted(() => vi.fn())
 const editorStatusBarMock = vi.hoisted(() => vi.fn())
 const tiptapPropsSpy = vi.hoisted(() => vi.fn())
+const monacoPropsSpy = vi.hoisted(() => vi.fn())
 
 vi.mock('../../../lib/fs-backend', () => ({
   getFsBackend: getFsBackendMock,
 }))
 
 vi.mock('../MonacoWrapper', () => ({
-  MonacoWrapper: ({ isActive }: { isActive?: boolean }) => <div data-testid="monaco-wrapper" data-active={isActive ? 'true' : 'false'} />,
+  MonacoWrapper: (props: { isActive?: boolean; initialViewState?: unknown }) => {
+    monacoPropsSpy(props)
+    return <div data-testid="monaco-wrapper" data-active={props.isActive ? 'true' : 'false'} />
+  },
 }))
 
 vi.mock('../DiffView', () => ({
@@ -914,7 +918,7 @@ describe('EditorPane', () => {
     expect(useEditorStore.getState().paneStates[pane.id].tiptapViewState).toEqual({ scrollTop: 42, selection: { type: 'text', from: 2, to: 3 } })
   })
 
-  it('does not mount TiptapEditor against stale paneState even when lazy is cached (R3 gating render)', async () => {
+  it('does not mount TiptapEditor against stale paneState even when lazy is cached (stale→raw derivation, supersedes R3 gating)', async () => {
     const backend = createBackend()
     getFsBackendMock.mockReturnValue(backend)
     useEditorStore.getState().openBuffer(getBufferKey('/notes/g-a.md'), '# A', { language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8' })
@@ -938,11 +942,59 @@ describe('EditorPane', () => {
     try {
       tiptapPropsSpy.mockClear()
       render(<EditorPane pane={createPane('/notes/g-b.md', 'pane-gate')} isActive />)
-      // lazy is cached now; WITHOUT the gating render TiptapEditor would mount
-      // synchronously against the stale paneState and lock didRestoreRef. The gate
-      // (bufferKey === key) must prevent the mount entirely.
+      // lazy is cached now; WITHOUT the stale→raw derivation TiptapEditor would mount
+      // synchronously against the stale paneState and lock didRestoreRef. Because the
+      // stale paneState (bufferKey=A ≠ key=B) is treated as unaligned, editorMode
+      // falls back to raw and the wysiwyg branch is never reached — raw Monaco mounts
+      // instead, so Tiptap is never instantiated against a stale state.
       expect(tiptapPropsSpy).not.toHaveBeenCalled()
       expect(screen.queryByTestId('tiptap-editor')).toBeNull()
+      expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('switching to a new markdown buffer while previous mode was wysiwyg renders raw Monaco, not a Loading editor flicker (#863)', async () => {
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/f-a.md'), '# A', { language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8' })
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/f-b.md'), '# B', { language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8' })
+
+    // Pane aligned to buffer A in wysiwyg, carrying stale A-only state across every
+    // paneState-derived field — proves NONE of it leaks onto buffer B's render:
+    // monacoViewState (must not seed B's Monaco), showDiff (must not pre-mount
+    // DiffView), cursorPosition (must not leak to the status bar).
+    useEditorStore.getState().attachPane('pane-flicker', getBufferKey('/notes/f-a.md'))
+    useEditorStore.getState().setEditorMode('pane-flicker', 'wysiwyg')
+    useEditorStore.getState().saveMonacoViewState('pane-flicker', { stale: 'A' } as unknown as import('monaco-editor').editor.ICodeEditorViewState)
+    useEditorStore.getState().setShowDiff('pane-flicker', true)
+    useEditorStore.getState().updateCursor('pane-flicker', 5, 9)
+
+    // Freeze attachPane so paneState stays stale on A (bufferKey=A) while we render
+    // the pane now pointing at buffer B — deterministically reproducing the transient
+    // window that #863 paints as a `Loading editor…` flicker.
+    const spy = vi.spyOn(useEditorStore.getState(), 'attachPane').mockImplementation(() => {})
+    try {
+      tiptapPropsSpy.mockClear()
+      monacoPropsSpy.mockClear()
+      editorStatusBarMock.mockClear()
+      render(<EditorPane pane={createPane('/notes/f-b.md', 'pane-flicker')} isActive />)
+
+      // AC1: raw Monaco shown; no Tiptap; no `Loading editor…` fallback.
+      expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+      expect(screen.queryByTestId('tiptap-editor')).toBeNull()
+      expect(tiptapPropsSpy).not.toHaveBeenCalled()
+      expect(screen.queryByText(/Loading editor/)).toBeNull()
+
+      // AC2: Monaco receives null initialViewState — stale A viewState must not leak.
+      expect(monacoPropsSpy).toHaveBeenCalled()
+      expect(monacoPropsSpy.mock.calls.every(([p]) => p.initialViewState === null)).toBe(true)
+
+      // AC5: stale showDiff must not pre-mount DiffView; stale cursor must not leak.
+      expect(screen.queryByTestId('diff-view')).toBeNull()
+      expect(editorStatusBarMock).toHaveBeenCalled()
+      expect(editorStatusBarMock.mock.calls.at(-1)?.[0]).toMatchObject({ line: 1, column: 1 })
     } finally {
       spy.mockRestore()
     }
