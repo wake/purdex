@@ -33,6 +33,7 @@ export function MonacoWrapper({ content, language, modelId, isActive, initialVie
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const onSaveRef = useRef(onSave)
   const onViewStateChangeRef = useRef(onViewStateChange)
+  const isActiveRef = useRef(isActive)
   const tabSize = useEditorSettingsStore((s) => s.tabSize)
   const insertSpaces = useEditorSettingsStore((s) => s.insertSpaces)
   const wordWrap = useEditorSettingsStore((s) => s.wordWrap)
@@ -48,6 +49,10 @@ export function MonacoWrapper({ content, language, modelId, isActive, initialVie
     onViewStateChangeRef.current = onViewStateChange
   }, [onViewStateChange])
 
+  useEffect(() => {
+    isActiveRef.current = isActive
+  }, [isActive])
+
   const handleBeforeMount: BeforeMount = useCallback((monaco) => {
     monaco.editor.defineTheme(PURDEX_THEME_ID, PURDEX_THEME_DATA)
   }, [])
@@ -56,6 +61,9 @@ export function MonacoWrapper({ content, language, modelId, isActive, initialVie
     editorRef.current = ed
     if (initialViewState) {
       ed.restoreViewState(initialViewState)
+    }
+    if (isActiveRef.current) {
+      ed.focus()
     }
     ed.addAction({
       id: 'purdex-save',

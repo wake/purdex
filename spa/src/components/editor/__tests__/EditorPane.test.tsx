@@ -9,6 +9,7 @@ import { bufferKey } from '../../../lib/editor-buffer-key'
 
 const getFsBackendMock = vi.hoisted(() => vi.fn())
 const editorStatusBarMock = vi.hoisted(() => vi.fn())
+const tiptapPropsSpy = vi.hoisted(() => vi.fn())
 
 vi.mock('../../../lib/fs-backend', () => ({
   getFsBackend: getFsBackendMock,
@@ -39,7 +40,15 @@ vi.mock('../EditorStatusBar', () => ({
 }))
 
 vi.mock('../TiptapEditor', () => ({
-  TiptapEditor: () => <div data-testid="tiptap-editor" />,
+  TiptapEditor: (props: { initialViewState: unknown; onViewStateChange: (vs: unknown) => void }) => {
+    tiptapPropsSpy(props)
+    return (
+      <button
+        data-testid="tiptap-editor"
+        onClick={() => props.onViewStateChange({ scrollTop: 42, selection: { type: 'text', from: 2, to: 3 } })}
+      />
+    )
+  },
 }))
 
 function createPane(filePath = '/notes/editor.md', paneId = 'pane-editor'): Pane {
@@ -880,6 +889,63 @@ describe('EditorPane', () => {
         lastStat: { mtime: 789, size: 18 },
       })
     })
+  })
+
+  it('passes tiptapViewState into TiptapEditor and saves it back on change (AC9)', async () => {
+    const pane = createPane('/notes/vs.md', 'pane-vs')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/vs.md'), '# hello', {
+      language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/vs.md'))
+    useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+    useEditorStore.getState().saveTiptapViewState(pane.id, { scrollTop: 7, selection: { type: 'text', from: 1, to: 1 } })
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    // initialViewState 確實傳入
+    expect(tiptapPropsSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ initialViewState: { scrollTop: 7, selection: { type: 'text', from: 1, to: 1 } } }),
+    )
+    // onViewStateChange 回呼確實寫回 store
+    fireEvent.click(screen.getByTestId('tiptap-editor'))
+    expect(useEditorStore.getState().paneStates[pane.id].tiptapViewState).toEqual({ scrollTop: 42, selection: { type: 'text', from: 2, to: 3 } })
+  })
+
+  it('does not mount TiptapEditor against stale paneState even when lazy is cached (R3 gating render)', async () => {
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/g-a.md'), '# A', { language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8' })
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/g-b.md'), '# B', { language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8' })
+
+    // 1) Warm the React.lazy cache so TiptapEditor mounts SYNCHRONOUSLY afterwards
+    //    (this is exactly the condition R3 flagged: lazy cached → no Suspense gap).
+    useEditorStore.getState().attachPane('pane-warm', getBufferKey('/notes/g-a.md'))
+    useEditorStore.getState().setEditorMode('pane-warm', 'wysiwyg')
+    const warm = render(<EditorPane pane={createPane('/notes/g-a.md', 'pane-warm')} isActive />)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    warm.unmount()
+
+    // 2) Pane aligned to buffer A in wysiwyg, then FREEZE attachPane so paneState
+    //    stays on A while we render the pane pointing at buffer B — deterministically
+    //    reproducing the transient window (paneState.bufferKey=A, key=B) without
+    //    racing the post-commit effect.
+    useEditorStore.getState().attachPane('pane-gate', getBufferKey('/notes/g-a.md'))
+    useEditorStore.getState().setEditorMode('pane-gate', 'wysiwyg')
+    const spy = vi.spyOn(useEditorStore.getState(), 'attachPane').mockImplementation(() => {})
+    try {
+      tiptapPropsSpy.mockClear()
+      render(<EditorPane pane={createPane('/notes/g-b.md', 'pane-gate')} isActive />)
+      // lazy is cached now; WITHOUT the gating render TiptapEditor would mount
+      // synchronously against the stale paneState and lock didRestoreRef. The gate
+      // (bufferKey === key) must prevent the mount entirely.
+      expect(tiptapPropsSpy).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('tiptap-editor')).toBeNull()
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('does not overwrite dirty content during active reload', async () => {

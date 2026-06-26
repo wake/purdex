@@ -430,15 +430,26 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
             onViewStateChange={handleViewStateChange}
             onSave={handleSave}
           />
-        ) : (
+        ) : paneState?.bufferKey === key ? (
           <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>}>
             <TiptapEditor
+              key={buffer.modelId}
               content={buffer.content}
               isActive={isActive}
+              initialViewState={paneState.tiptapViewState ?? null}
               onChange={(md) => useEditorStore.getState().updateContent(key, md)}
+              onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}
               onSave={handleSave}
             />
           </Suspense>
+        ) : (
+          /* R3: paneState hasn't caught up to this buffer yet (attachPane is a
+             post-commit effect). Do NOT mount TiptapEditor against a stale/empty
+             paneState — once React.lazy is cached, Tiptap mounts synchronously and
+             its one-shot restore would lock didRestoreRef before the real viewState
+             arrives, silently dropping the restore. Render a fallback until
+             paneState.bufferKey === key. */
+          <div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>
         )}
       </div>
       <EditorStatusBar
