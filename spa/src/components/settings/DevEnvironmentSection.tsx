@@ -32,7 +32,7 @@ export function DevEnvironmentSection() {
   const t = useI18nStore((s) => s.t)
   const firstHostId = useHostStore((s) => s.hostOrder[0] ?? '')
   const daemonBase = useHostStore((s) => s.getDaemonBase(firstHostId))
-  const token = useHostStore((s) => firstHostId ? s.hosts[firstHostId]?.token : undefined)
+  const token = useHostStore((s) => firstHostId ? (s.hosts[firstHostId]?.token ?? undefined) : undefined)
 
   const spaSource: 'dev' | 'bundled' = window.location.protocol === 'app:' ? 'bundled' : 'dev'
 

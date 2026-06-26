@@ -76,7 +76,7 @@ export function useMultiHostEventWs() {
       }
 
       const sm = new ConnectionStateMachine(
-        () => checkHealth(baseUrl, () => useHostStore.getState().hosts[hostId]?.token),
+        () => checkHealth(baseUrl, () => useHostStore.getState().hosts[hostId]?.token ?? undefined),
         (result) => {
           useHostStore.getState().setRuntime(hostId, {
             status: statusMap[result.daemon],

@@ -97,13 +97,15 @@ describe('TabBar', () => {
 
   it('renders pinned tabs as icon-only with HoverTooltip label', () => {
     const { container } = render(<TabBar tabs={pinnedTabs} activeTabId="t1" {...defaultHandlers} />)
-    // Pinned tab no longer uses native title attr — label comes via HoverTooltip.
-    const pinnedRoot = container.querySelector('[data-tab-id="p1"]')!
-    const tooltip = pinnedRoot.querySelector('[role="tooltip"]')!
+    // Pinned tab no longer uses native title attr — label comes via HoverTooltip,
+    // which portals its role="tooltip" element to document.body (NOT inside the tab
+    // subtree). Scope by accessible name to the target pinned tab's tooltip.
+    const tooltip = screen.getByRole('tooltip', { name: 'aaa001' })
     expect(tooltip).toBeInTheDocument()
     expect(tooltip.textContent).toBe('aaa001')
     // Pinned tab should not render the label as a visible (non-tooltip) text node
     // inside the button — only the icon + the (visually hidden until hover) tooltip.
+    const pinnedRoot = container.querySelector('[data-tab-id="p1"]')!
     expect(pinnedRoot.querySelector('span.overflow-hidden')).toBeNull()
   })
 

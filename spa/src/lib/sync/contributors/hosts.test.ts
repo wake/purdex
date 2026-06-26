@@ -178,6 +178,42 @@ describe('createHostsContributor', () => {
     // activeHostId stays local
     expect(state.activeHostId).toBe(localHostId)
   })
+
+  it('field-merge with resolved.hosts=remote enforces the same token contract as full-replace', () => {
+    useHostStore.setState({
+      hosts: {
+        same: { id: 'same', name: 'same', ip: '10.0.0.1', port: 7860, token: 'KEEP', order: 0 },
+        moved: { id: 'moved', name: 'moved', ip: '10.0.0.2', port: 7860, token: 'STALE', order: 1 },
+      },
+      hostOrder: ['same', 'moved'],
+      activeHostId: 'same',
+    })
+
+    // Incoming hosts are token-stripped (serialize() drops token). `same` keeps its
+    // endpoint; `moved` reuses the id at a different ip; `fresh` is new.
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        hosts: {
+          same: { id: 'same', name: 'same', ip: '10.0.0.1', port: 7860, order: 0 },
+          moved: { id: 'moved', name: 'moved', ip: '203.0.113.9', port: 7860, order: 1 },
+          fresh: { id: 'fresh', name: 'fresh', ip: '10.0.0.3', port: 7860, order: 2 },
+        },
+        hostOrder: ['same', 'moved', 'fresh'],
+        activeHostId: 'same',
+      },
+    }
+
+    contributor.deserialize(incoming, {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'local' },
+    })
+
+    const s = useHostStore.getState()
+    expect(s.hosts.same.token).toBe('KEEP') // same endpoint → preserved
+    expect(s.hosts.moved.token).toBeNull() // endpoint changed → cleared (re-auth)
+    expect(s.hosts.fresh.token).toBeNull() // new host → cleared
+  })
 })
 
 describe('hostsContributor.deserialize (full-replace, token preservation)', () => {
@@ -284,5 +320,30 @@ describe('hostsContributor.deserialize (full-replace, token preservation)', () =
     const s = useHostStore.getState()
     expect(s.hosts.h1.port).toBe(9999)
     expect(s.hosts.h1.token).toBeNull()
+  })
+
+  it('cleared token survives the JSON persist boundary as null (the reason it is not undefined)', () => {
+    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null })
+
+    const contributor = createHostsContributor()
+    contributor.deserialize(
+      {
+        version: 1,
+        data: {
+          hosts: { hNew: { id: 'hNew', name: 'new', ip: '10.0.0.2', port: 7860, order: 0 } },
+          hostOrder: ['hNew'],
+          activeHostId: null,
+        },
+      },
+      { type: 'full-replace' },
+    )
+
+    // zustand persist serializes via JSON.stringify; undefined would drop the key
+    // entirely, losing the "explicitly cleared, re-auth required" signal on rehydrate.
+    // null keeps the key with an unambiguous value across the boundary.
+    const host = useHostStore.getState().hosts.hNew
+    const roundTripped = JSON.parse(JSON.stringify(host)) as { token?: unknown }
+    expect('token' in roundTripped).toBe(true)
+    expect(roundTripped.token).toBeNull()
   })
 })
