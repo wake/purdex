@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { FloppyDisk, GitDiff } from '@phosphor-icons/react'
 import type { FileSource } from '../../types/fs'
 import { getFsBackend } from '../../lib/fs-backend'
+import { STORAGE_ROOT } from '../../lib/storage-paths'
 import { BreadcrumbPopover } from './BreadcrumbPopover'
 
 interface Props {
@@ -48,7 +49,7 @@ export function EditorToolbar({
     let names: string[] = []
     if (backend) {
       try {
-        const entries = await backend.list('/buffer')
+        const entries = await backend.list(STORAGE_ROOT)
         names = entries.filter((e) => !e.isDir).map((e) => e.name).sort((a, b) => a.localeCompare(b))
       } catch {
         names = []

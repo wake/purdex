@@ -13,6 +13,7 @@ import type { FileSource } from '../../types/fs'
 import type { Pane, PaneContent, Tab } from '../../types/tab'
 import { RenamePopover } from '../RenamePopover'
 import { createMetadata } from '../../lib/editor-language'
+import { STORAGE_ROOT, join } from '../../lib/storage-paths'
 
 // v1.5 G1 fix — mirror EditorPane's rename three-step sync (backend →
 // tab-layout → editor-store). Without this, renaming via the buffers
@@ -74,7 +75,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
       return
     }
     backend
-      .list('/buffer')
+      .list(STORAGE_ROOT)
       .then((entries) => {
         if (stale) return
         const filtered = entries
@@ -115,7 +116,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
   const handleNew = useCallback(async () => {
     const backend = getFsBackend({ type: 'inapp' })
     if (!backend) return
-    const path = `/buffer/Untitled-${Date.now()}.md`
+    const path = join(STORAGE_ROOT, `Untitled-${Date.now()}.md`)
     try {
       await backend.write(path, new Uint8Array(0))
       refresh()
@@ -135,8 +136,8 @@ export function EditorBuffersPane(_: PaneRendererProps) {
       if (!renameTarget) return
       const backend = getFsBackend({ type: 'inapp' })
       if (!backend) return
-      const fromPath = `/buffer/${renameTarget}`
-      const targetPath = `/buffer/${newName}`
+      const fromPath = join(STORAGE_ROOT, renameTarget)
+      const targetPath = join(STORAGE_ROOT, newName)
       // F4 (spec §4.5): `InAppBackend.rename` is a blind overwrite
       // (store.set(to, ...) + store.delete(from)); a collision silently
       // destroys the existing file. Pre-check with `stat` so the rename
@@ -179,7 +180,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
     const backend = getFsBackend({ type: 'inapp' })
     if (!backend) return
 
-    const targets = selectedArray.map((n) => `/buffer/${n}`)
+    const targets = selectedArray.map((n) => join(STORAGE_ROOT, n))
 
     // Snapshot every editor pane whose content points at one of the
     // targeted paths. This is shared by the locked/dirty pre-check and
@@ -273,7 +274,7 @@ export function EditorBuffersPane(_: PaneRendererProps) {
   // the wrong row) and silently no-op'd. Toolbar Open and row double-
   // click now share one entry point.
   const openBufferByName = useCallback((name: string) => {
-    const path = `/buffer/${name}`
+    const path = join(STORAGE_ROOT, name)
     const newContent: PaneContent = {
       kind: 'editor',
       source: { type: 'inapp' },

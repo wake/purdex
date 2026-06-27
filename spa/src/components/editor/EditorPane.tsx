@@ -12,6 +12,7 @@ import { EditorStatusBar } from './EditorStatusBar'
 import { RenamePopover } from '../RenamePopover'
 import { findPane } from '../../lib/pane-tree'
 import { bufferKey } from '../../lib/editor-buffer-key'
+import { STORAGE_ROOT, join } from '../../lib/storage-paths'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 import {
@@ -405,7 +406,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           const currentBuf = useEditorStore.getState().buffers[currentKey]
           if (currentBuf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
 
-          const path = `/buffer/Untitled-${Date.now()}.md`
+          const path = join(STORAGE_ROOT, `Untitled-${Date.now()}.md`)
           const backend = getFsBackend({ type: 'inapp' })
           if (!backend) return
           await backend.write(path, new Uint8Array(0))
