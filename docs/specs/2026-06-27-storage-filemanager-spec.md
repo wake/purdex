@@ -82,22 +82,32 @@ Storage open MUST resolve the pane kind via the registry — `getDefaultOpener(f
 extension (Phase 1a). It must NOT hardcode `{kind:'editor'}` (today's bug at
 `EditorBuffersPane.openBufferByName:277` AND `EditorPane.onBufferSwitch:377`).
 
-- **Non-singleton open helper (R2-3)**: do NOT route through `openSingletonTab`
-  (`useTabStore.ts:185`) — it dedupes by content and `editor`/`image-preview`/`pdf-preview`
-  treat the same path as the same content (`pane-utils.ts:3`), which would violate the
-  new-tab contract. Add a registry-based helper `openInAppFile(path)` with this **exact
-  contract** (codex R3 — `insertTab` only places an existing tabId; tab creation is
-  `createTab`+`addTab`):
-  1. Resolve content via `getDefaultOpener(file)` → `createContent({type:'inapp'}, path)`.
-  2. **Dedup scope = the active workspace.** Scan the active workspace's tabs for one whose
-     content is exactly this `(inapp, path)`. If found → `setActiveTab(tabId)` (focus), done.
-  3. Else → `createTab(content)` + `addTab(tab)` + `setActiveTab(tab.id)` in the **active
-     workspace** (mirrors today's Rule-3 fallback at `EditorBuffersPane.tsx:326-328`).
-  4. **Never** reuse/mutate an unrelated editor pane (the old smart-open hijack), and never
-     blind-duplicate a file already open *in the active workspace*.
-  - **Out of scope (documented)**: cross-workspace dedup. A file already open in *another*
-    workspace opens a fresh tab in the active one rather than switching workspaces (avoids
-    surprising workspace jumps); a global "focus across workspaces" is a future refinement.
+- **Reuse the modern open pipeline (codex plan-R1 P1, supersedes R2-3 framing)**: the
+  `defaultTabOpener` pattern (`file-open-bootstrap.ts:194`) already IS "open or focus" +
+  workspace placement + cluster insert + `ws.activeTabId` sync:
+  `getDefaultOpener(file)` → `createContent(source, file)` →
+  `afterTabId = computeClusterInsertTarget(workspaceId, isFileKind)` →
+  `tabId = openSingletonTab(content, { afterTabId })` → `insertTab(tabId, workspaceId,
+  afterTabId)`. `openSingletonTab` (`useTabStore.ts:185`) dedupes by **exact filePath** for
+  `editor`/`image-preview`/`pdf-preview` (`pane-utils.ts:13-15`, inapp has no hostId) — so an
+  already-open file is **focused**, a different file gets a **new tab**, and an *unrelated*
+  editor pane is **never** reused (kills the old smart-open hijack). This was earlier
+  mis-framed (R2-3) as "non-singleton needed" under a literal "always new tab" reading; the
+  **open-or-focus** contract the user chose IS singleton-by-path, so we reuse this pipeline.
+- **`openInAppFile(path)`** reuses ONLY the **core open sequence** above (it is just five
+  calls and works for `{type:'inapp'}`), NOT the daemon-shaped `createOpenFileService`
+  (codex plan-R2 P1): that service requires `hostId`, scopes its cache by `hostId/cwd`, and
+  its missing-file flow runs daemon session/workspace search + popup
+  (`file-open/open-file.ts:11,111`) — wrong for in-app. In-app missing-file handling is
+  minimal (the tree only offers existing entries; a stat-gate + silent no-op/refresh
+  suffices). It must NOT hand-roll `createTab`/`addTab` without `insertTab` (that skips
+  workspace placement + active sync).
+- **Inherited open-or-focus edge cases (codex plan-R2 P2, documented not changed)**:
+  `openSingletonTab` scans each tab's **primary pane only** — a file already open in a
+  *split's secondary pane* won't dedup and may open a duplicate (accepted, inherited). Cross
+  workspace: `insertTab` **rehomes** the matched tab into the current workspace
+  (`workspace/store.ts:140`), it is not an in-place focus. Both are existing shared-pipeline
+  semantics, consistent with `FileTreeView`.
 - **All In-App open entry points route through `openInAppFile`**: the Storage tree click AND
   the breadcrumb-popover quick-switch (R2-1 — so switching to a png/pdf opens the right
   viewer, not a text editor).
@@ -150,9 +160,11 @@ testable.
   existing editor pane mutated, no cross-tab `setActiveTab` hijack). Covers the 5
   smart-open-bound tests to rewrite: B2-7/8/9/15/18
   (`EditorBuffersPane.test.tsx:337,362,387,592,899`).
-- **Open-or-focus**: opening a file already open **in the active workspace** focuses that tab
-  (`setActiveTab`) instead of duplicating it; otherwise `createTab`+`addTab` a new tab in the
-  active workspace — never reusing/mutating an unrelated editor pane.
+- **Open-or-focus** (via the reused pipeline): opening an already-open file focuses its tab
+  (`openSingletonTab` matches by exact filePath) rather than duplicating; a different file
+  gets a new tab placed via `insertTab` + cluster target; an unrelated editor pane is never
+  reused. Cross-workspace behavior is whatever the shared pipeline already does (inherited,
+  consistent with `FileTreeView`).
 - Opening a `.png` mounts `image-preview`; `.pdf` mounts `pdf-preview`; `.md` mounts editor —
   via the registry, from BOTH the tree click AND the breadcrumb-popover switch (R2-1), not a
   hardcoded editor kind.
