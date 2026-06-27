@@ -2,8 +2,22 @@ import { useState } from 'react'
 import { FloppyDisk, GitDiff } from '@phosphor-icons/react'
 import type { FileSource } from '../../types/fs'
 import { getFsBackend } from '../../lib/fs-backend'
-import { STORAGE_ROOT } from '../../lib/storage-paths'
+import { STORAGE_ROOT, relativeToRoot } from '../../lib/storage-paths'
+import { listTreeUnder, type TreeNode } from '../../lib/storage-tree'
 import { BreadcrumbPopover } from './BreadcrumbPopover'
+
+/**
+ * Flatten a recursive `TreeNode[]` to its file leaves (directories are not
+ * switch targets — they only contribute path prefixes to the labels). The
+ * pre-order walk preserves the dirs-first/name order from `listTreeUnder`.
+ */
+function fileLeaves(nodes: TreeNode[], out: TreeNode[] = []): TreeNode[] {
+  for (const node of nodes) {
+    if (node.isDir) fileLeaves(node.children ?? [], out)
+    else out.push(node)
+  }
+  return out
+}
 
 interface Props {
   source: FileSource
@@ -49,8 +63,14 @@ export function EditorToolbar({
     let names: string[] = []
     if (backend) {
       try {
-        const entries = await backend.list(STORAGE_ROOT)
-        names = entries.filter((e) => !e.isDir).map((e) => e.name).sort((a, b) => a.localeCompare(b))
+        // Recursive enumeration (not the flat single-level `list`) so nested
+        // files are switchable; each leaf is labeled by its path relative to
+        // STORAGE_ROOT (e.g. `dir/sub/c.md`). BreadcrumbPopover re-joins the
+        // label onto STORAGE_ROOT to recover the full switch target.
+        const tree = await listTreeUnder(backend, STORAGE_ROOT)
+        names = fileLeaves(tree)
+          .map((node) => relativeToRoot(node.path))
+          .sort((a, b) => a.localeCompare(b))
       } catch {
         names = []
       }

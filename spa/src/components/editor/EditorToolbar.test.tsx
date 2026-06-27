@@ -27,10 +27,25 @@ vi.mock('../../lib/fs-backend', () => ({
 describe('EditorToolbar', () => {
   beforeEach(() => {
     backendListMock.mockReset()
-    backendListMock.mockResolvedValue([
-      { name: 'a.md', isDir: false, size: 0 },
-      { name: 'b.md', isDir: false, size: 0 },
-    ])
+    // Path-aware list so the chip click can drive `listTreeUnder`'s recursive
+    // descent: `/buffer` has a `dir/` subfolder plus two root files; `dir/`
+    // holds a nested .md and .png.
+    backendListMock.mockImplementation(async (path: string) => {
+      if (path === '/buffer') {
+        return [
+          { name: 'dir', isDir: true, size: 0 },
+          { name: 'a.md', isDir: false, size: 0 },
+          { name: 'b.md', isDir: false, size: 0 },
+        ]
+      }
+      if (path === '/buffer/dir') {
+        return [
+          { name: 'x.md', isDir: false, size: 0 },
+          { name: 'pic.png', isDir: false, size: 0 },
+        ]
+      }
+      return []
+    })
   })
 
   it('shows a Purdex prefix and hides the buffer segment for in-app paths', () => {
@@ -180,6 +195,52 @@ describe('EditorToolbar', () => {
     } finally {
       window.confirm = originalConfirm
     }
+  })
+
+  it('T6-1: popover lists nested files with their full relative paths', async () => {
+    render(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/a.md"
+        isDirty={false}
+        onSave={() => {}}
+        onBufferSwitch={() => {}}
+        onManage={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Purdex/ }))
+
+    // Nested files appear labeled by their path relative to STORAGE_ROOT,
+    // not just their basenames — this is the regression vs the old flat list.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'dir/x.md' })).toBeInTheDocument(),
+    )
+    expect(screen.getByRole('button', { name: 'dir/pic.png' })).toBeInTheDocument()
+    // Root-level files remain present.
+    expect(screen.getByRole('button', { name: /^a\.md$/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^b\.md$/ })).toBeInTheDocument()
+  })
+
+  it('T6-2: selecting a nested .png fires onBufferSwitch with the full path', async () => {
+    const onBufferSwitch = vi.fn()
+    render(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/a.md"
+        isDirty={false}
+        onSave={() => {}}
+        onBufferSwitch={onBufferSwitch}
+        onManage={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Purdex/ }))
+    const pngButton = await waitFor(() => screen.getByRole('button', { name: 'dir/pic.png' }))
+    fireEvent.click(pngButton)
+
+    expect(onBufferSwitch).toHaveBeenCalledTimes(1)
+    expect(onBufferSwitch).toHaveBeenCalledWith('/buffer/dir/pic.png')
   })
 
   it('C3-6: popover buffer-switch respects dirty-guard both ways', async () => {
