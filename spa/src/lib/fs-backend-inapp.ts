@@ -1,6 +1,7 @@
 import type { IDBPDatabase } from 'idb'
 import { openIDB } from './storage/idb'
 import type { FsBackend } from './fs-backend'
+import { join } from './storage-paths'
 import type { FileStat, FileEntry } from '../types/fs'
 
 const DB_NAME = 'pdx-inapp-fs'
@@ -177,5 +178,40 @@ export class InAppBackend implements FsBackend {
       await store.delete(key)
     }
     await tx.done
+  }
+
+  async createUnique(dir: string, baseName = 'Untitled', ext: 'md' | 'txt'): Promise<string> {
+    const db = await this.db()
+    const now = Date.now()
+    const MAX = 10_000
+    // store.add() is the single serialization point: it throws ConstraintError
+    // if the keyPath (path) already exists, unlike put()'s blind overwrite. So
+    // concurrent callers — e.g. a rapid double "New file" click (#854) — each
+    // win exactly one distinct key; the loser retries the next suffix instead
+    // of sharing the key. A fresh tx per attempt because a ConstraintError
+    // aborts the transaction it occurred in.
+    for (let n = 0; n < MAX; n++) {
+      const name = n === 0 ? baseName : `${baseName}-${n}`
+      const path = join(dir, `${name}.${ext}`)
+      const tx = db.transaction(STORE, 'readwrite')
+      try {
+        await tx.store.add({
+          path,
+          content: new Uint8Array(0),
+          isDirectory: false,
+          mtime: now,
+        } satisfies StoredFile)
+        await tx.done
+        return path
+      } catch (err) {
+        // A failed add() aborts its transaction, so tx.done rejects with an
+        // AbortError. We left it un-awaited (we threw out of the try first), so
+        // observe it here to avoid an unhandled rejection before retrying.
+        tx.done.catch(() => {})
+        if ((err as { name?: string } | null)?.name === 'ConstraintError') continue
+        throw err
+      }
+    }
+    throw new Error(`InAppBackend.createUnique: exhausted ${MAX} candidates under ${dir}`)
   }
 }

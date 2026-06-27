@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { InAppBackend } from './fs-backend-inapp'
+import { listTreeUnder } from './storage-tree'
 import { closeAllIDB } from './storage/idb'
 import {
   registerFsBackend,
@@ -311,5 +312,66 @@ describe('InAppBackend (IndexedDB-backed)', () => {
     expect(dec(await reg2!.read('/buffer/reg.txt'))).toBe('via registry')
 
     clearFsBackendRegistry()
+  })
+})
+
+// T1b-2 — createUnique: atomic eager reservation of a unique empty file via
+// IDB store.add (the single serialization point that fixes #854's double-click
+// shared-key race).
+describe('InAppBackend.createUnique (atomic eager namer)', () => {
+  let backend: InAppBackend
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    backend = new InAppBackend()
+  })
+
+  // T2-1: empty dir → first candidate, ext honored (bare, no leading dot).
+  it('T2-1: reserves /buffer/Untitled.md on an empty dir', async () => {
+    const path = await backend.createUnique('/buffer', 'Untitled', 'md')
+    expect(path).toBe('/buffer/Untitled.md')
+    expect((await backend.read(path)).byteLength).toBe(0)
+  })
+
+  it('T2-1: honors a txt extension', async () => {
+    const path = await backend.createUnique('/buffer', 'Untitled', 'txt')
+    expect(path).toBe('/buffer/Untitled.txt')
+  })
+
+  // T2-2: collision → increment the suffix.
+  it('T2-2: returns /buffer/Untitled-1.md when /buffer/Untitled.md exists', async () => {
+    await backend.write('/buffer/Untitled.md', enc(''))
+    const path = await backend.createUnique('/buffer', 'Untitled', 'md')
+    expect(path).toBe('/buffer/Untitled-1.md')
+  })
+
+  it('T2-2: skips multiple existing candidates', async () => {
+    await backend.write('/buffer/Untitled.md', enc(''))
+    await backend.write('/buffer/Untitled-1.md', enc(''))
+    await backend.write('/buffer/Untitled-2.md', enc(''))
+    const path = await backend.createUnique('/buffer', 'Untitled', 'md')
+    expect(path).toBe('/buffer/Untitled-3.md')
+  })
+
+  // T2-3: #854 race — concurrent callers must get distinct keys, no shared key.
+  it('T2-3: concurrent createUnique calls reserve distinct paths (#854)', async () => {
+    const [a, b] = await Promise.all([
+      backend.createUnique('/buffer', 'Untitled', 'md'),
+      backend.createUnique('/buffer', 'Untitled', 'md'),
+    ])
+    expect(a).not.toBe(b)
+    const names = (await backend.list('/buffer')).map((e) => e.name).sort()
+    expect(names).toEqual(['Untitled-1.md', 'Untitled.md'])
+  })
+
+  // T2-4: reserved file is empty and shows up in a recursive tree enumeration.
+  it('T2-4: reserved file is empty and appears under listTreeUnder', async () => {
+    const path = await backend.createUnique('/buffer', 'Untitled', 'md')
+    const stat = await backend.stat(path)
+    expect(stat.size).toBe(0)
+    expect(stat.isFile).toBe(true)
+    const tree = await listTreeUnder(backend, '/buffer')
+    expect(tree.map((n) => n.path)).toContain('/buffer/Untitled.md')
   })
 })

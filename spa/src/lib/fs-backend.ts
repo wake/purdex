@@ -12,6 +12,15 @@ export interface FsBackend {
   mkdir(path: string, recursive?: boolean): Promise<void>
   delete(path: string, recursive?: boolean): Promise<void>
   rename(from: string, to: string): Promise<void>
+  /**
+   * Atomically reserve a unique empty file under `dir`. Loops candidate names
+   * `<baseName>`, `<baseName>-1`, … forming each path as `dir/<name>.<ext>`
+   * (`ext` is bare — no leading dot) and reserves the first free key in a way
+   * that is safe against concurrent callers (the single serialization point
+   * that fixes the double-new-file shared-key race, #854). Returns the reserved
+   * path.
+   */
+  createUnique(dir: string, baseName: string, ext: 'md' | 'txt'): Promise<string>
 }
 
 const backends = new Map<string, FsBackend>()

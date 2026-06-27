@@ -9,11 +9,12 @@
  * (`parentOf(fromPath)`), delete removes the exact selected paths. The
  * dirty-pane confirm + locked-tab refusal guards are preserved verbatim.
  *
- * Folder mkdir / rename / recursive move / the unified `createUniqueInAppFile`
- * namer are explicitly deferred to Phase 1b — new-file here still lands flat at
- * the storage root (acceptable until 1b introduces folders).
+ * Phase 1b: new-file now goes through the unified eager `createUniqueInAppFile`
+ * namer (atomic IDB reservation, #854) and accepts a `targetDir`. Folder mkdir /
+ * rename / recursive move land in their own 1b tasks.
  */
 import { getFsBackend } from '../../../lib/fs-backend'
+import { createUniqueInAppFile } from '../../../lib/inapp-namer'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { scanPaneTree } from '../../../lib/pane-tree'
 import { isFilePaneContent } from '../../../lib/pane-utils'
@@ -48,16 +49,17 @@ export async function performBufferRename(fromPath: string, targetPath: string) 
   useEditorStore.getState().renameBuffer(oldKey, newKey, nextMetadata)
 }
 
-/** Create a new empty markdown file at the storage root. Flat-only in 1a. */
-export async function createStorageFile(): Promise<{ error?: string }> {
-  const backend = getFsBackend({ type: 'inapp' })
-  // A missing backend is a real failure, not a silent success (codex R3): surface
-  // it like a write error so handleNew shows the banner instead of refreshing as if
-  // a file were created.
-  if (!backend) return { error: 'InApp backend unavailable' }
-  const path = join(STORAGE_ROOT, `Untitled-${Date.now()}.md`)
+/**
+ * Create a new empty markdown file under `targetDir` (defaults to the storage
+ * root). Uses the unified eager `createUniqueInAppFile` namer — the atomic IDB
+ * `add` reservation that gives a collision-free `Untitled[-N].md` even under a
+ * rapid double-click (#854), replacing the old `Date.now()` suffix. A missing
+ * backend surfaces as an error (codex R3) so handleNew shows the banner instead
+ * of refreshing as if a file were created.
+ */
+export async function createStorageFile(targetDir: string = STORAGE_ROOT): Promise<{ error?: string }> {
   try {
-    await backend.write(path, new Uint8Array(0))
+    await createUniqueInAppFile(targetDir, 'md')
     return {}
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }

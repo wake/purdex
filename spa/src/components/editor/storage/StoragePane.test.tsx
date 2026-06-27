@@ -18,6 +18,7 @@ type MockBackend = {
   stat: Mock
   read: Mock
   mkdir: Mock
+  createUnique: Mock
   id: 'inapp'
   label: string
   available: () => boolean
@@ -293,6 +294,7 @@ beforeEach(() => {
     stat: vi.fn().mockResolvedValue({ size: 0, mtime: 0, isDirectory: false, isFile: true } as FileStat),
     read: vi.fn().mockResolvedValue(new Uint8Array(0)),
     mkdir: vi.fn().mockResolvedValue(undefined),
+    createUnique: vi.fn().mockResolvedValue('/buffer/Untitled.md'),
   }
 
   vi.stubGlobal('confirm', vi.fn(() => true))
@@ -335,18 +337,17 @@ describe('StoragePane', () => {
     })
   })
 
-  it('B2-4: New calls backend.write with Untitled-<timestamp>.md and refreshes', async () => {
+  it('B2-4: New calls backend.createUnique(root, Untitled, md) and refreshes', async () => {
     mockBackend.list.mockResolvedValue([] as FileEntry[])
     render(<StoragePane pane={makePane()} isActive />)
     await screen.findByText('editor.buffers.empty')
     fireEvent.click(screen.getByTestId('toolbar-new'))
     await waitFor(() => {
-      expect(mockBackend.write).toHaveBeenCalledTimes(1)
+      expect(mockBackend.createUnique).toHaveBeenCalledTimes(1)
     })
-    const [path, content] = mockBackend.write.mock.calls[0]
-    expect(path).toMatch(/^\/buffer\/Untitled-\d+\.md$/)
-    expect(content).toBeInstanceOf(Uint8Array)
-    expect(content.byteLength).toBe(0)
+    // Eager unified namer (#854): no blind write(), reservation is atomic.
+    expect(mockBackend.createUnique).toHaveBeenCalledWith('/buffer', 'Untitled', 'md')
+    expect(mockBackend.write).not.toHaveBeenCalled()
     // Refresh: list called a second time once the hook re-reads.
     await waitFor(() => {
       expect(mockBackend.list).toHaveBeenCalledTimes(2)

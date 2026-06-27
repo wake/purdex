@@ -42,4 +42,11 @@ export class LocalBackend implements FsBackend {
   async rename(from: string, to: string): Promise<void> {
     return this.api.rename(from, to)
   }
+
+  // The eager-unique-name reservation (#854) is an In-App-only flow; the Local
+  // and Daemon backends have no atomic add primitive exposed and no UI entry
+  // point that calls this, so it is intentionally unsupported here.
+  async createUnique(): Promise<string> {
+    throw new Error('LocalBackend: createUnique is not supported')
+  }
 }

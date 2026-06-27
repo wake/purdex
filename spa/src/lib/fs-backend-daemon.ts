@@ -68,6 +68,11 @@ export class DaemonBackend implements FsBackend {
   async rename(from: string, to: string): Promise<void> {
     await this.post('/api/fs/rename', { from, to })
   }
+
+  // In-App-only flow (#854); no daemon endpoint / UI entry point uses it.
+  async createUnique(_dir: string, _baseName: string, _ext: 'md' | 'txt'): Promise<string> {
+    throw new Error('DaemonBackend: createUnique is not supported')
+  }
 }
 
 /**
@@ -98,5 +103,6 @@ export function createDaemonBackendForHost(hostId: string): FsBackend {
     mkdir: (path, recursive) => getDaemon().mkdir(path, recursive),
     delete: (path, recursive) => getDaemon().delete(path, recursive),
     rename: (from, to) => getDaemon().rename(from, to),
+    createUnique: (dir, baseName, ext) => getDaemon().createUnique(dir, baseName, ext),
   }
 }
