@@ -334,7 +334,7 @@ describe('deleteStorageEntries — recursive folder delete + descendant-aware gu
     }))
 
     // Case 1: cancel → cancelled, nothing deleted.
-    const cancelSpy = vi.fn(() => false)
+    const cancelSpy = vi.fn((_message?: string) => false)
     window.confirm = cancelSpy
     const cancelled = await deleteStorageEntries(['/buffer/a'], t)
     expect(cancelled).toEqual({ status: 'cancelled' })
@@ -343,7 +343,7 @@ describe('deleteStorageEntries — recursive folder delete + descendant-aware gu
     expect((await real.stat('/buffer/a/b.md')).isDirectory).toBe(false)
 
     // Case 2: confirm → deleted (folder + descendant gone).
-    const okSpy = vi.fn(() => true)
+    const okSpy = vi.fn((_message?: string) => true)
     window.confirm = okSpy
     const deleted = await deleteStorageEntries(['/buffer/a'], t)
     expect(deleted).toEqual({ status: 'deleted' })
@@ -354,7 +354,7 @@ describe('deleteStorageEntries — recursive folder delete + descendant-aware gu
 
   it('T5-4: file delete (1a regression) still guarded + works', async () => {
     await real.write('/buffer/x.md', enc('XX'))
-    const okSpy = vi.fn(() => true)
+    const okSpy = vi.fn((_message?: string) => true)
     window.confirm = okSpy
 
     const res = await deleteStorageEntries(['/buffer/x.md'], t)

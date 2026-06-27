@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useDraggable, useDroppable } from '@dnd-kit/core'
 import { CaretRight, CaretDown } from '@phosphor-icons/react'
 import { ICON_MAP } from '../../tab-icon-map'
 import { fileIconForPath } from '../../../lib/file-icon'
@@ -71,6 +72,14 @@ interface StorageRowProps {
  * selection (and selecting never expands). **Double-click** opens a file or
  * toggles a folder's expansion. Text files additionally render a word count
  * (decoded from the backend bytes); binary files show size only.
+ *
+ * Drag-and-drop move (T1b-6b): every row is a `useDraggable` source keyed by its
+ * full path; **folder** rows are additionally `useDroppable` drop targets (files
+ * pass `disabled` so they never accept a drop — the root region in `StoragePane`
+ * is the other target). The `PointerSensor` activation distance (5px, set in
+ * `StoragePane`) keeps a stationary click/double-click from starting a drag, so
+ * select/open/toggle coexist with dragging. `StoragePane.onDragEnd` resolves the
+ * active path + drop target into a `moveStorageEntry` call.
  */
 export function StorageRow({
   node,
@@ -83,6 +92,24 @@ export function StorageRow({
 }: StorageRowProps) {
   const text = isTextNode(node)
   const [wordCount, setWordCount] = useState<number | null>(null)
+
+  // Drag source (every row) + drop target (folders only — files disable the
+  // droppable). One DOM node carries both refs via the merge callback below.
+  const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
+    id: node.path,
+  })
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: node.path,
+    disabled: !node.isDir,
+  })
+  const setRowRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      setDragRef(el)
+      setDropRef(el)
+    },
+    [setDragRef, setDropRef],
+  )
+  const dropActive = node.isDir && isOver
 
   useEffect(() => {
     // Rows are keyed by full path in `StorageTree`, so `text` is constant for a
@@ -126,22 +153,31 @@ export function StorageRow({
 
   return (
     <div
+      ref={setRowRef}
+      {...attributes}
+      {...listeners}
       data-testid="buffer-row"
       data-name={node.name}
       data-path={node.path}
       data-isdir={node.isDir ? 'true' : 'false'}
       data-icon={iconName}
+      data-drop-over={dropActive ? 'true' : 'false'}
       role="button"
       tabIndex={0}
       aria-selected={selected}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
-      style={{ paddingLeft: 8 + depth * 16 }}
+      style={{
+        paddingLeft: 8 + depth * 16,
+        ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}),
+      }}
       className={
         'w-full flex items-center gap-1.5 pr-3 py-1.5 text-left text-xs transition-colors cursor-pointer ' +
         (selected
           ? 'bg-surface-selected text-text-primary'
-          : 'text-text-secondary hover:bg-surface-hover')
+          : 'text-text-secondary hover:bg-surface-hover') +
+        (dropActive ? ' ring-1 ring-inset ring-accent bg-surface-hover' : '') +
+        (isDragging ? ' opacity-50' : '')
       }
     >
       {node.isDir ? (
@@ -149,6 +185,7 @@ export function StorageRow({
           type="button"
           data-testid="buffer-caret"
           onClick={handleCaretClick}
+          onPointerDown={(e) => e.stopPropagation()}
           aria-label={expanded ? 'Collapse' : 'Expand'}
           className="shrink-0 flex items-center justify-center text-text-muted hover:text-text-primary"
         >

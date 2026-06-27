@@ -1,4 +1,13 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
 import { FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icons/react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -7,14 +16,16 @@ import { useWorkspaceStore } from '../../../features/workspace/store'
 import { useStorageTree } from '../../../hooks/useStorageTree'
 import { findPane } from '../../../lib/pane-tree'
 import { openInAppFile } from '../../../lib/open-in-app-file'
-import { basename, join, parentOf } from '../../../lib/storage-paths'
+import { STORAGE_ROOT, basename, join, parentOf } from '../../../lib/storage-paths'
 import { findNode, targetDirOf } from '../../../lib/storage-tree'
 import { RenamePopover } from '../../RenamePopover'
 import { StorageTree } from './StorageTree'
 import {
+  computeMoveFromDragEnd,
   createStorageFile,
   createStorageFolder,
   deleteStorageEntries,
+  moveStorageEntry,
   renameStorageEntry,
 } from './storage-actions'
 
@@ -36,6 +47,35 @@ function resolveWorkspaceId(paneId: string): string | null {
     }
   }
   return null
+}
+
+/**
+ * The scrollable tree region, made a single `useDroppable` drop target keyed by
+ * `STORAGE_ROOT` (drop here → move to the storage root). It must live in its own
+ * component because `useDroppable` has to run *inside* the `DndContext` that
+ * `StoragePane` renders. `closestCenter` collision detection lets a nested
+ * folder droppable win when the pointer is over it, falling back to this root
+ * zone for empty space / file rows.
+ */
+function StorageRegionDropZone({
+  targetDir,
+  children,
+}: {
+  targetDir: string
+  children: ReactNode
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: STORAGE_ROOT })
+  return (
+    <div
+      ref={setNodeRef}
+      className={'flex-1 overflow-y-auto' + (isOver ? ' bg-surface-hover/50' : '')}
+      data-testid="storage-tree-region"
+      data-target-dir={targetDir}
+      data-root-over={isOver ? 'true' : 'false'}
+    >
+      {children}
+    </div>
+  )
 }
 
 /**
@@ -186,6 +226,34 @@ export function StoragePane({ pane }: PaneRendererProps) {
     if (singleSelected) handleOpen(singleSelected)
   }, [singleSelected, handleOpen])
 
+  // --- Drag-and-drop move (T1b-6b) ---
+
+  // Mirror RegionManager: a 5px activation distance so a stationary
+  // click/double-click never starts a drag — select/open/toggle coexist with
+  // dragging.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const move = computeMoveFromDragEnd(event.active, event.over)
+      if (!move) return
+      setActionError(null)
+      const res = await moveStorageEntry(move.from, move.targetDir)
+      if ('ok' in res) {
+        // Keep the moved entry selected at its new home so a follow-up action
+        // still targets it once the tree rebuilds.
+        setSelected(new Set([join(move.targetDir, basename(move.from))]))
+        refresh()
+      } else if (res.kind === 'exists') {
+        setActionError(t('editor.buffers.rename_exists_error'))
+      } else if (res.kind === 'error') {
+        setActionError(res.message)
+      }
+      // 'noop' (inert / self / own-descendant): silent.
+    },
+    [refresh, t],
+  )
+
   // --- Render ---
 
   const hasAny = tree.length > 0
@@ -254,31 +322,31 @@ export function StoragePane({ pane }: PaneRendererProps) {
         </button>
       </div>
 
-      {/* Body: tree (left) + placeholder Backups sidebar (right). */}
+      {/* Body: tree (left) + placeholder Backups sidebar (right). The tree is a
+          DnD surface: rows are drag sources, folder rows + the root region are
+          drop targets, and a drop calls `moveStorageEntry` via `handleDragEnd`. */}
       <div className="flex-1 flex overflow-hidden">
-        <div
-          className="flex-1 overflow-y-auto"
-          data-testid="storage-tree-region"
-          data-target-dir={targetDir}
-        >
-          {error && <div className="p-4 text-xs text-red-400">{error}</div>}
-          {!error && !hasAny && (
-            <div className="p-8 flex flex-col items-center justify-center text-text-muted">
-              <Stack size={32} className="mb-2 opacity-50" />
-              <p className="text-sm">{t('editor.buffers.empty')}</p>
-            </div>
-          )}
-          {!error && hasAny && (
-            <StorageTree
-              tree={tree}
-              expanded={expanded}
-              selected={selected}
-              onToggle={toggle}
-              onSelect={handleSelect}
-              onOpen={handleOpen}
-            />
-          )}
-        </div>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <StorageRegionDropZone targetDir={targetDir}>
+            {error && <div className="p-4 text-xs text-red-400">{error}</div>}
+            {!error && !hasAny && (
+              <div className="p-8 flex flex-col items-center justify-center text-text-muted">
+                <Stack size={32} className="mb-2 opacity-50" />
+                <p className="text-sm">{t('editor.buffers.empty')}</p>
+              </div>
+            )}
+            {!error && hasAny && (
+              <StorageTree
+                tree={tree}
+                expanded={expanded}
+                selected={selected}
+                onToggle={toggle}
+                onSelect={handleSelect}
+                onOpen={handleOpen}
+              />
+            )}
+          </StorageRegionDropZone>
+        </DndContext>
         <aside
           data-testid="storage-backups-placeholder"
           className="w-48 shrink-0 border-l border-border-subtle p-3 text-xs text-text-muted"

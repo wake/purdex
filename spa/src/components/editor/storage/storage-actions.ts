@@ -228,6 +228,27 @@ export async function moveStorageEntry(
   }
 }
 
+/**
+ * Pure resolver for a drag-and-drop drop (T1b-6b): maps the dnd-kit `active`
+ * (the dragged row, id = full path) and `over` (the drop target, id = a folder
+ * path OR the `STORAGE_ROOT` sentinel on the root region) into the
+ * `{ from, targetDir }` pair to hand to `moveStorageEntry`. Returns `null` when
+ * the drop landed on empty space (`over` is nullish) so the caller no-ops.
+ *
+ * The over-id IS the target directory in both cases (a folder path, or the root
+ * sentinel which equals the real root dir), so no branch is needed. All the
+ * inert-move / self / own-descendant / collision guards stay in
+ * `moveStorageEntry` — this is a thin, unit-testable mapping kept here (rather
+ * than in the pane component) so the `.tsx` only exports components.
+ */
+export function computeMoveFromDragEnd(
+  active: { id: string | number } | null | undefined,
+  over: { id: string | number } | null | undefined,
+): { from: string; targetDir: string } | null {
+  if (!active || !over) return null
+  return { from: String(active.id), targetDir: String(over.id) }
+}
+
 export type DeleteOutcome =
   | { status: 'deleted' }
   | { status: 'cancelled' }

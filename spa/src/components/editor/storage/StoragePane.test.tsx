@@ -1,12 +1,39 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Mock } from 'vitest'
-import { useState } from 'react'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { useState, type ReactNode } from 'react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { StoragePane } from './StoragePane'
+import { computeMoveFromDragEnd } from './storage-actions'
 import { openInAppFile } from '../../../lib/open-in-app-file'
 import type { Pane, Tab } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 import type { FileEntry, FileStat, FileSource } from '../../../types/fs'
+import type { DragEndEvent } from '@dnd-kit/core'
+
+// dnd-kit is mocked to a lightweight harness: DndContext captures the
+// `onDragEnd` callback so tests can drive a drop synthetically (real pointer
+// drag is impractical in jsdom — the plan endorses a pure handler +
+// onDragEnd-capture smoke). The draggable/droppable hooks become no-ops so rows
+// still render and the existing click/double-click suite keeps passing.
+let mockDragEnd: ((event: DragEndEvent) => void | Promise<void>) | undefined
+vi.mock('@dnd-kit/core', () => ({
+  DndContext: ({ children, onDragEnd }: { children: ReactNode; onDragEnd: (e: DragEndEvent) => void }) => {
+    mockDragEnd = onDragEnd
+    return children
+  },
+  useDraggable: () => ({
+    attributes: {},
+    listeners: {},
+    setNodeRef: () => undefined,
+    transform: null,
+    isDragging: false,
+  }),
+  useDroppable: () => ({ setNodeRef: () => undefined, isOver: false }),
+  PointerSensor: class {},
+  useSensor: () => ({}),
+  useSensors: () => [],
+  closestCenter: () => [],
+}))
 
 // Mock fs-backend: list/write/delete/rename/read are per-test spies. The helper
 // below installs a fresh mock into the registry before each test.
@@ -227,6 +254,7 @@ function pathAwareList(paths: Map<string, { isDir: boolean; size: number }>): Mo
 
 beforeEach(() => {
   eventLog.length = 0
+  mockDragEnd = undefined
   setPaneContentSpy.mockReset()
   setActiveTabSpy.mockReset()
   addTabSpy.mockReset()
@@ -1394,6 +1422,144 @@ describe('StoragePane', () => {
         .map((r) => r.getAttribute('data-path'))
       expect(names).toContain('/buffer/New Folder')
       expect(names).toContain('/buffer/New Folder 1')
+    })
+  })
+
+  // --- Drag-and-drop move wiring (Phase 1b T1b-6b) ---
+
+  describe('computeMoveFromDragEnd (pure drop resolver)', () => {
+    it('maps a file dropped on a folder to {from, targetDir=folder}', () => {
+      expect(
+        computeMoveFromDragEnd({ id: '/buffer/a.md' }, { id: '/buffer/dir' }),
+      ).toEqual({ from: '/buffer/a.md', targetDir: '/buffer/dir' })
+    })
+
+    it('maps the root sentinel over-id to a STORAGE_ROOT targetDir', () => {
+      expect(
+        computeMoveFromDragEnd({ id: '/buffer/dir/a.md' }, { id: '/buffer' }),
+      ).toEqual({ from: '/buffer/dir/a.md', targetDir: '/buffer' })
+    })
+
+    it('returns null when there is no drop target (dropped on empty space)', () => {
+      expect(computeMoveFromDragEnd({ id: '/buffer/a.md' }, null)).toBeNull()
+    })
+  })
+
+  it('T6b-1: dragging a file onto a folder moves it into that folder and refreshes', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/a.md', { isDir: false, size: 3 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.stat.mockRejectedValue(new Error('not found')) // no collision
+    mockBackend.rename = vi.fn(async (from: string, to: string) => {
+      const meta = paths.get(from)!
+      paths.delete(from)
+      paths.set(to, meta)
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    expect(mockDragEnd).toBeTypeOf('function') // DndContext mounted + wired
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/a.md' },
+        over: { id: '/buffer/dir' },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).toHaveBeenCalledWith('/buffer/a.md', '/buffer/dir/a.md')
+    // Tree refreshed: the file now lives under the (expandable) folder.
+    await waitFor(() => {
+      const names = screen.getAllByTestId('buffer-row').map((r) => r.getAttribute('data-path'))
+      expect(names).not.toContain('/buffer/a.md')
+    })
+  })
+
+  it('T6b-2: dropping a nested file on the root region moves it to STORAGE_ROOT', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/a.md', { isDir: false, size: 3 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.stat.mockRejectedValue(new Error('not found'))
+    mockBackend.rename = vi.fn(async (from: string, to: string) => {
+      const meta = paths.get(from)!
+      paths.delete(from)
+      paths.set(to, meta)
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/dir/a.md' },
+        over: { id: '/buffer' },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).toHaveBeenCalledWith('/buffer/dir/a.md', '/buffer/a.md')
+  })
+
+  it('T6b-3: dropping onto self or own descendant is a no-op (no backend mutation)', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/sub', { isDir: true, size: 0 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    // onto self
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/dir' },
+        over: { id: '/buffer/dir' },
+      } as unknown as DragEndEvent)
+    })
+    // into own descendant
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/dir' },
+        over: { id: '/buffer/dir/sub' },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+    expect(mockBackend.stat).not.toHaveBeenCalled()
+  })
+
+  it('T6b-3b: dropping onto an existing same-named entry surfaces the inline exists error', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/a.md', { isDir: false, size: 3 }],
+      ['/buffer/a.md', { isDir: false, size: 9 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    // The target /buffer/dir/a.md already exists.
+    mockBackend.stat.mockImplementation(async (p: string) => {
+      if (paths.has(p)) return { size: 0, mtime: 0, isDirectory: false, isFile: true } as FileStat
+      throw new Error('not found')
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/a.md' },
+        over: { id: '/buffer/dir' },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getByText('editor.buffers.rename_exists_error')).toBeTruthy()
+    })
+  })
+
+  it('T6b-4: click still selects and double-click still opens (no DnD regression)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'a.md', isDir: false, size: 3 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-selected')).toBe('true')
+    fireEvent.doubleClick(row)
+    await waitFor(() => {
+      expect(openInAppFile).toHaveBeenCalledWith('/buffer/a.md', 'ws1')
     })
   })
 })
