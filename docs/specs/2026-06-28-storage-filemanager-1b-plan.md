@@ -63,7 +63,9 @@ entry points → no shared bufferKey" is thereby satisfiable by the single atomi
    returns the reserved path. `add` is the single serialization point, so concurrent callers
    from any entry point get distinct keys. Confirmed sound + non-conflicting with existing
    `write`/`put` by codex review. `createUniqueInAppFile(dir, ext)` in `inapp-namer.ts` wraps
-   it. **`ext` is a required parameter** (preserves `.txt`/`.md`).
+   it. **`ext` contract: `'md' | 'txt'` (bare, no leading dot)**; backend forms the path as
+   `join(dir, name + '.' + ext)`. UI buttons map label → bare ext in their click handler (never
+   pass `'.md'`) — single normalization point, avoids `Untitled..md`.
 2. **Immediate persist does not clobber typed content** (codex-verified): `EditorPane` opens a
    real path via `read`→`openBuffer` with no redundant `write` on open. All three new-file
    entries now reserve eagerly (see Spec amendment).
@@ -74,10 +76,15 @@ entry points → no shared bufferKey" is thereby satisfiable by the single atomi
    if a folder is selected, `parentOf(path)` if a file is selected, else `STORAGE_ROOT`.
 4. **In-place rename only in T1b-4**; cross-directory move is exclusively T1b-6 (drag).
 5. **Folder rename/move re-points every descendant open pane** (codex P1-2 / verified). New
-   bulk helper `remapPanesUnder(source, from, to)`: collect every open pane whose
-   `pane.content.filePath === from || .startsWith(from + '/')` across **editor + image-preview
-   + pdf-preview** kinds, then re-point each to `to + filePath.slice(from.length)` (panes +
-   their editor buffers). Single-file rename keeps using `performBufferRename`.
+   **pure** helper `remapPanesUnder(source, from, to)` — **does NOT touch the backend**: collect
+   every open pane whose `pane.content.filePath === from || .startsWith(from + '/')` across
+   **editor + image-preview + pdf-preview** kinds, then for each call
+   `renameEditorPanes(source, oldPath, newPath)` + (editor only) `renameBuffer(oldKey, newKey,
+   metadata)`. A single file = one iteration. The lone `backend.rename` lives **only** in the
+   caller (`renameStorageEntry` / `moveStorageEntry`), called **exactly once** before
+   `remapPanesUnder` — so file and folder share one path and there is no double-rename. This
+   replaces the old `performBufferRename` (`storage-actions.ts:33-48`), whose embedded
+   `backend.rename` is hoisted into the caller during the refactor.
 6. **Descendant guard matches on `pane.content.filePath`, NOT `bufferKey`** (codex P2-4):
    `p === target || p.startsWith(target + '/')` (the trailing slash avoids `/buffer/a` matching
    `/buffer/ab`). Derive `bufferKey` from `filePath` only when looking up a dirty buffer.
@@ -115,11 +122,19 @@ T1b-4 (rename + bulk re-point) → T1b-5 (delete) → **T1b-6a** (pure move help
   - `storage-actions.ts:58` `createStorageFile(targetDir)` → `createUniqueInAppFile(targetDir,
     'md')`.
   - `EditorPane.tsx:424` new buffer → `createUniqueInAppFile(STORAGE_ROOT, 'md')` then open.
-  - `EditorNewTabSection.tsx:18-70` → `.txt`/`.md` buttons call `createUniqueInAppFile(
-    STORAGE_ROOT, ext)`, open the **real** path (no `untitled:`). Remove `nextUntitledName`.
-    If `UntitledDocumentState`/`untitled:` handling becomes fully unreferenced after this,
-    note it (de,ad-code removal is a **separate cleanup commit**, not folded here, to keep the
-    diff surgical — verify references first via grep).
+  - `EditorNewTabSection.tsx:18-70` → `.txt`/`.md` buttons map to bare ext and call
+    `createUniqueInAppFile(STORAGE_ROOT, ext)`, open the **real** path (no `untitled:`). Remove
+    only the `nextUntitledName` **producer**.
+    - **MUST NOT touch the `untitled:` runtime contract** (codex R2 P2-3): `EditorPane` still
+      loads/renames/saves existing `untitled:` panes (`EditorPane.tsx:161,236,330`) and
+      `useTabStore` **persists** pane content (`useTabStore.ts:432`), so users may already have
+      persisted `untitled:` tabs. Those must keep working. `UntitledDocumentState` /
+      `renameEditorPanes` `options.untitled` / `renameEditorPanesInLayout`'s untitled branch
+      stay intact. Any dead-code removal is a **separate issue** requiring a persisted-tab
+      migration or explicit compat strategy — out of scope for this PR.
+    - Pre-change grep to scope the producer vs consumers: `rg -n "nextUntitledName|
+      UntitledDocumentState|untitledStoragePath|untitledSuggestedName|hasBeenRenamed|untitled:"
+      spa/src/{components,lib,stores,types}`.
 - **Tests** (`fs-backend-inapp.test.ts`, `inapp-namer.test.ts`, `EditorNewTabSection.test.tsx`):
   - T2-1 `createUnique` → `/buffer/Untitled.md` on empty dir; `.txt` ext honored.
   - T2-2 collision: seed `/buffer/Untitled.md` → `/buffer/Untitled-1.md`.
@@ -142,13 +157,17 @@ T1b-4 (rename + bulk re-point) → T1b-5 (delete) → **T1b-6a** (pure move help
 - **Dep:** T1b-0, T1b-2.
 
 ### T1b-4 — In-place rename (file + folder) + bulk descendant re-point
-- **storage-actions.ts** `renameStorageEntry(from, newName)`: compute `to = join(parentOf(
-  from), newName)`; **pre-check `stat(to)` before any mutation** → `{kind:'exists'}`; then
-  `backend.rename(from, to)` (recursive re-key via T1b-1).
-- **New** `remapPanesUnder(source, from, to)` (decision 5/6): for files, equals current
-  `performBufferRename`; for folders, enumerate open panes where `filePath === from ||
-  startsWith(from+'/')` (editor/image/pdf) and re-point each pane + its buffer to the mapped
-  path. `renameStorageEntry` dispatches file→`performBufferRename`, folder→`remapPanesUnder`.
+- **storage-actions.ts** `renameStorageEntry(from, newName)` — **one uniform path for file and
+  folder** (no branch, no double-rename): (1) `to = join(parentOf(from), newName)`; (2)
+  pre-check `stat(to)` before any mutation → `{kind:'exists'}`; (3) **exactly one**
+  `await backend.rename(from, to)` (recursive re-key via T1b-1); (4) `remapPanesUnder(source,
+  from, to)`.
+- **Refactor** the existing `performBufferRename` (`storage-actions.ts:33-48`) into the **pure**
+  `remapPanesUnder(source, from, to)` of decision 5 — it performs only pane+buffer remap and
+  **no** `backend.rename` (that call is hoisted up into step 3). For a single file this is one
+  iteration carrying the language metadata as before; for a folder it iterates every descendant
+  pane (`filePath === from || startsWith(from+'/')`, editor/image/pdf). This is the **only**
+  remaining caller-side backend mutation point for rename.
 - **StoragePane.tsx** `handleRenameConfirm`: works for file or folder selection; surface
   `exists` inline; on ok `refresh()` + re-select by new path.
 - **Tests**:
