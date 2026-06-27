@@ -169,7 +169,22 @@ export type DeleteOutcome =
   | { status: 'error'; message: string }
 
 /**
- * Delete the given **full paths**. Preserves the v1.4/v1.5 guards:
+ * True when `filePath` is one of the deleted `targets` OR a descendant of any
+ * target folder. The trailing slash stops `/buffer/a` from matching the sibling
+ * `/buffer/ab` (decision 6); the exact-equality branch keeps a file target
+ * matching its own open pane. A folder delete therefore drags every open
+ * descendant pane through the same locked/dirty guards + close-before-delete
+ * sequence as an exact hit.
+ */
+function isAffectedByTargets(filePath: string, targets: string[]): boolean {
+  return targets.some((target) => filePath === target || filePath.startsWith(target + '/'))
+}
+
+/**
+ * Delete the given **full paths** (files or folders). Preserves the v1.4/v1.5
+ * guards, now folder-aware — a folder target sweeps every descendant
+ * (recursive) and the guards consider any open DESCENDANT pane affected, not
+ * just an exact path match (decision 6, T1b-5):
  *   - F2: refuse outright if any affected editor pane lives in a locked tab.
  *   - F5/F6: dirty-specific confirm wins over single / multi confirm.
  *   - G2: close every affected pane AND drop its editor-store buffer + paneState
@@ -190,9 +205,10 @@ export async function deleteStorageEntries(
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       // Cover editor AND the file-preview kinds (image-preview / pdf-preview)
-      // so deleting a png/pdf open in a preview pane fires the locked-tab
-      // refusal, closes the pane, and leaves no stale tab behind.
-      if (isFilePaneContent(c) && c.source.type === 'inapp' && targets.includes(c.filePath)) {
+      // so deleting a png/pdf open in a preview pane — or anything nested under
+      // a deleted folder — fires the locked-tab refusal, closes the pane, and
+      // leaves no stale tab behind.
+      if (isFilePaneContent(c) && c.source.type === 'inapp' && isAffectedByTargets(c.filePath, targets)) {
         openPanes.push([tabId, pane])
       }
     })
@@ -235,9 +251,16 @@ export async function deleteStorageEntries(
         useEditorStore.getState().closePane(pane.id, key)
       }
     }
-    // Step 2: delete the files.
+    // Step 2: delete each target. Folders go through the recursive sweep
+    // (prefix-delete of every descendant); files use the plain non-recursive
+    // delete. A stat failure (e.g. the entry vanished under a concurrent op) is
+    // treated as a non-folder and still attempted.
     for (const path of targets) {
-      await backend.delete(path)
+      const isDir = await backend
+        .stat(path)
+        .then((s) => s.isDirectory)
+        .catch(() => false)
+      await backend.delete(path, isDir)
     }
     return { status: 'deleted' }
   } catch (err) {

@@ -335,7 +335,7 @@ describe('StoragePane', () => {
     fireEvent.click(row) // select
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/foo.md')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/foo.md', false)
     })
   })
 
@@ -522,7 +522,7 @@ describe('StoragePane', () => {
     fireEvent.click(row)
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md', false)
     })
     const firstDeleteIdx = eventLog.findIndex((e) => e.startsWith('delete:'))
     const closeIdxs = eventLog
@@ -570,7 +570,7 @@ describe('StoragePane', () => {
     fireEvent.click(row)
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/p.png')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/p.png', false)
     })
     const firstDeleteIdx = eventLog.findIndex((e) => e.startsWith('delete:'))
     const closeIdxs = eventLog
@@ -711,7 +711,7 @@ describe('StoragePane', () => {
       fireEvent.click(screen.getByTestId('toolbar-delete'))
       expect(confirmTrue).toHaveBeenCalledWith('editor.buffers.delete_one_confirm')
       await waitFor(() => {
-        expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/only.md')
+        expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/only.md', false)
       })
     }
   })
@@ -935,7 +935,7 @@ describe('StoragePane', () => {
     fireEvent.click(screen.getByTestId('toolbar-delete'))
 
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md', false)
     })
     const editorState = editorModule.useEditorStore.getState()
     expect(editorState.buffers['inapp:/buffer/x.md']).toBeUndefined()
@@ -1166,7 +1166,7 @@ describe('StoragePane', () => {
     fireEvent.click(leafRow)
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/a/b/x.md')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/a/b/x.md', false)
     })
   })
 

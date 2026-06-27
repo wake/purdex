@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   createStorageFile,
   createStorageFolder,
+  deleteStorageEntries,
   renameStorageEntry,
 } from './storage-actions'
 import { InAppBackend } from '../../../lib/fs-backend-inapp'
@@ -253,5 +254,129 @@ describe('renameStorageEntry — file + folder via one backend.rename + pure rem
     expect(tab.layout.pane.content).toMatchObject({ kind: 'image-preview', filePath: '/buffer/z/p.png' })
     // A preview pane has no editor buffer — none must be conjured by the remap.
     expect(useEditorStore.getState().buffers['inapp:/buffer/z/p.png']).toBeUndefined()
+  })
+})
+
+// --- T1b-5: recursive delete with folder-aware locked/dirty guards ------------
+//
+// Same real-backend harness: a folder delete must sweep every descendant
+// (recursive), and the locked/dirty guards must fire when ANY affected pane is a
+// descendant of a deleted folder (not just an exact-path match). The window
+// confirm is stubbed per-case.
+
+describe('deleteStorageEntries — recursive folder delete + descendant-aware guards (T1b-5)', () => {
+  let real: InAppBackend
+  const enc = (s: string) => new TextEncoder().encode(s)
+  const t: (key: string, params?: Record<string, string | number>) => string = (k) => k
+  const originalConfirm = window.confirm
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+    window.confirm = () => true
+  })
+
+  afterEach(() => {
+    window.confirm = originalConfirm
+  })
+
+  it('T5-1: folder delete removes the folder + ALL descendants (list empty under it)', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    await real.write('/buffer/a/c/d.md', enc('DD'))
+    await real.write('/buffer/keep.md', enc('K'))
+
+    const res = await deleteStorageEntries(['/buffer/a'], t)
+
+    expect(res).toEqual({ status: 'deleted' })
+    await expect(real.stat('/buffer/a')).rejects.toThrow()
+    await expect(real.stat('/buffer/a/b.md')).rejects.toThrow()
+    await expect(real.stat('/buffer/a/c/d.md')).rejects.toThrow()
+    // Sibling outside the folder is untouched.
+    expect(await real.list('/buffer')).toEqual([
+      expect.objectContaining({ name: 'keep.md', isDir: false }),
+    ])
+  })
+
+  it('T5-2: a descendant open in a LOCKED tab refuses the whole delete (nothing deleted)', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    useTabStore.setState({
+      tabs: { T1: { ...makeEditorTab('T1', 'P1', '/buffer/a/b.md'), locked: true } },
+      tabOrder: ['T1'],
+      activeTabId: 'T1',
+      visitHistory: [],
+    })
+
+    const res = await deleteStorageEntries(['/buffer/a'], t)
+
+    expect(res.status).toBe('refused')
+    // Refused before any mutation: the folder + descendant are intact.
+    expect((await real.stat('/buffer/a')).isDirectory).toBe(true)
+    expect(new TextDecoder().decode(await real.read('/buffer/a/b.md'))).toBe('BB')
+  })
+
+  it('T5-3: a DIRTY descendant triggers the dirty confirm — confirm deletes, cancel no-ops', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    useTabStore.setState({
+      tabs: { T1: makeEditorTab('T1', 'P1', '/buffer/a/b.md') },
+      tabOrder: ['T1'],
+      activeTabId: 'T1',
+      visitHistory: [],
+    })
+    seedBuffer('/buffer/a/b.md', 'P1')
+    // Mark the descendant buffer dirty so the dirty-specific confirm wins.
+    useEditorStore.setState((s) => ({
+      buffers: { ...s.buffers, 'inapp:/buffer/a/b.md': { ...s.buffers['inapp:/buffer/a/b.md'], isDirty: true } },
+    }))
+
+    // Case 1: cancel → cancelled, nothing deleted.
+    const cancelSpy = vi.fn(() => false)
+    window.confirm = cancelSpy
+    const cancelled = await deleteStorageEntries(['/buffer/a'], t)
+    expect(cancelled).toEqual({ status: 'cancelled' })
+    expect(cancelSpy).toHaveBeenCalledTimes(1)
+    expect(cancelSpy.mock.calls[0][0]).toContain('delete_dirty_confirm')
+    expect((await real.stat('/buffer/a/b.md')).isDirectory).toBe(false)
+
+    // Case 2: confirm → deleted (folder + descendant gone).
+    const okSpy = vi.fn(() => true)
+    window.confirm = okSpy
+    const deleted = await deleteStorageEntries(['/buffer/a'], t)
+    expect(deleted).toEqual({ status: 'deleted' })
+    expect(okSpy.mock.calls[0][0]).toContain('delete_dirty_confirm')
+    await expect(real.stat('/buffer/a')).rejects.toThrow()
+    await expect(real.stat('/buffer/a/b.md')).rejects.toThrow()
+  })
+
+  it('T5-4: file delete (1a regression) still guarded + works', async () => {
+    await real.write('/buffer/x.md', enc('XX'))
+    const okSpy = vi.fn(() => true)
+    window.confirm = okSpy
+
+    const res = await deleteStorageEntries(['/buffer/x.md'], t)
+
+    expect(res).toEqual({ status: 'deleted' })
+    expect(okSpy).toHaveBeenCalledTimes(1)
+    // A lone file uses the single-file confirm, not the dirty one.
+    expect(okSpy.mock.calls[0][0]).toContain('delete_one_confirm')
+    await expect(real.stat('/buffer/x.md')).rejects.toThrow()
+  })
+
+  it('T5-4b: file delete open in a LOCKED tab is refused (regression)', async () => {
+    await real.write('/buffer/x.md', enc('XX'))
+    useTabStore.setState({
+      tabs: { T1: { ...makeEditorTab('T1', 'P1', '/buffer/x.md'), locked: true } },
+      tabOrder: ['T1'],
+      activeTabId: 'T1',
+      visitHistory: [],
+    })
+
+    const res = await deleteStorageEntries(['/buffer/x.md'], t)
+
+    expect(res.status).toBe('refused')
+    expect(new TextDecoder().decode(await real.read('/buffer/x.md'))).toBe('XX')
   })
 })
