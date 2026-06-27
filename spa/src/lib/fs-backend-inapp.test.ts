@@ -169,16 +169,11 @@ describe('InAppBackend (IndexedDB-backed)', () => {
     await expect(fresh.read('/buffer/x.txt')).rejects.toThrow()
   })
 
-  // AC12 — preserve lenient overwrite semantics (I6): rename to existing target
-  // overwrites and does NOT throw; mkdir on existing path does NOT throw; write
-  // to a path whose parent is an existing file does NOT throw.
-  it('AC12: rename to existing target blind-overwrites without throwing', async () => {
-    await backend.write('/buffer/a.txt', enc('AAA'))
-    await backend.write('/buffer/b.txt', enc('BBB'))
-    await backend.rename('/buffer/a.txt', '/buffer/b.txt')
-    expect(dec(await backend.read('/buffer/b.txt'))).toBe('AAA')
-    await expect(backend.read('/buffer/a.txt')).rejects.toThrow()
-  })
+  // AC12 — mkdir + write retain lenient overwrite semantics (I6). NOTE: rename
+  // collision is NO LONGER lenient as of Phase 1b T1 — see "1b T1: rename
+  // collision" cases below, which require rename to refuse before any mutation
+  // (spec AC-1b: "File rename to an existing path is refused before any backend
+  // mutation").
 
   it('AC12: mkdir on existing path does not throw', async () => {
     await backend.mkdir('/buffer/d')
@@ -196,16 +191,91 @@ describe('InAppBackend (IndexedDB-backed)', () => {
     expect(dec(await backend.read('/buffer/parent/child.txt'))).toBe('child')
   })
 
-  // AC13 — rename is non-recursive (I7): only the single entry moves
-  it('AC13: rename is non-recursive — children stay at original paths', async () => {
-    await backend.write('/buffer/d/a.txt', enc('a'))
-    await backend.mkdir('/buffer/d')
-    await backend.rename('/buffer/d', '/buffer/e')
-    // /buffer/d entry itself moved
-    const eStat = await backend.stat('/buffer/e')
-    expect(eStat.isDirectory).toBe(true)
-    // child stays at original path (non-recursive)
-    expect(dec(await backend.read('/buffer/d/a.txt'))).toBe('a')
+  // AC13 (Phase 1b T1) — rename is now dir-aware + recursive: moving a folder
+  // re-keys EVERY descendant and removes all old paths (spec §2 gap P2-7 / AC-1b).
+  it('AC13: rename moves a directory recursively — all descendants re-keyed, old paths gone', async () => {
+    // seed a 2-level nested tree with distinct contents
+    await backend.mkdir('/buffer/a')
+    await backend.write('/buffer/a/x.md', enc('X-CONTENT'))
+    await backend.mkdir('/buffer/a/b')
+    await backend.write('/buffer/a/b/y.md', enc('Y-CONTENT'))
+
+    await backend.rename('/buffer/a', '/buffer/z')
+
+    // new tree exists with IDENTICAL content
+    expect((await backend.stat('/buffer/z')).isDirectory).toBe(true)
+    expect(dec(await backend.read('/buffer/z/x.md'))).toBe('X-CONTENT')
+    expect((await backend.stat('/buffer/z/b')).isDirectory).toBe(true)
+    expect(dec(await backend.read('/buffer/z/b/y.md'))).toBe('Y-CONTENT')
+
+    // every old /buffer/a* key is gone
+    await expect(backend.stat('/buffer/a')).rejects.toThrow()
+    await expect(backend.read('/buffer/a/x.md')).rejects.toThrow()
+    await expect(backend.stat('/buffer/a/b')).rejects.toThrow()
+    await expect(backend.read('/buffer/a/b/y.md')).rejects.toThrow()
+    // /buffer parent only contains the moved dir now
+    expect((await backend.list('/buffer')).map((e) => e.name)).toEqual(['z'])
+  })
+
+  // 1b T1 — a move is not a content edit: every moved descendant keeps its mtime
+  it('1b T1: recursive move preserves each descendant mtime (not a content edit)', async () => {
+    await backend.mkdir('/buffer/a')
+    await backend.write('/buffer/a/x.md', enc('X'))
+    await backend.write('/buffer/a/b/y.md', enc('Y')) // auto-creates /buffer/a/b
+
+    // capture original mtimes
+    const m = {
+      a: (await backend.stat('/buffer/a')).mtime,
+      x: (await backend.stat('/buffer/a/x.md')).mtime,
+      b: (await backend.stat('/buffer/a/b')).mtime,
+      y: (await backend.stat('/buffer/a/b/y.md')).mtime,
+    }
+
+    await backend.rename('/buffer/a', '/buffer/z')
+
+    expect((await backend.stat('/buffer/z')).mtime).toBe(m.a)
+    expect((await backend.stat('/buffer/z/x.md')).mtime).toBe(m.x)
+    expect((await backend.stat('/buffer/z/b')).mtime).toBe(m.b)
+    expect((await backend.stat('/buffer/z/b/y.md')).mtime).toBe(m.y)
+  })
+
+  // 1b T1 — collision over the target subtree must throw with NO partial mutation:
+  // reject if `to` exists OR any `${to}/`-prefixed key exists, and leave the
+  // original tree fully intact (spec AC-1b: refused before any backend mutation).
+  it('1b T1: rename throws when `to` exactly exists, original tree intact', async () => {
+    await backend.mkdir('/buffer/a')
+    await backend.write('/buffer/a/x.md', enc('X'))
+    await backend.write('/buffer/z', enc('OCCUPIED')) // exact `to` collision
+
+    await expect(backend.rename('/buffer/a', '/buffer/z')).rejects.toThrow()
+
+    // nothing moved: original tree intact, target untouched
+    expect((await backend.stat('/buffer/a')).isDirectory).toBe(true)
+    expect(dec(await backend.read('/buffer/a/x.md'))).toBe('X')
+    expect(dec(await backend.read('/buffer/z'))).toBe('OCCUPIED')
+  })
+
+  it('1b T1: rename throws when a `${to}/child` key exists, original tree intact', async () => {
+    await backend.mkdir('/buffer/a')
+    await backend.write('/buffer/a/x.md', enc('X'))
+    // no exact /buffer/z, but a descendant of the target already exists
+    await backend.write('/buffer/z/occupied.md', enc('OCCUPIED'))
+
+    await expect(backend.rename('/buffer/a', '/buffer/z')).rejects.toThrow()
+
+    // original tree intact
+    expect((await backend.stat('/buffer/a')).isDirectory).toBe(true)
+    expect(dec(await backend.read('/buffer/a/x.md'))).toBe('X')
+    // target subtree untouched
+    expect(dec(await backend.read('/buffer/z/occupied.md'))).toBe('OCCUPIED')
+  })
+
+  // 1b T1 — file move regression: single-entry re-key still works
+  it('1b T1: rename moves a single file correctly (regression)', async () => {
+    await backend.write('/buffer/a/x.md', enc('FILE'))
+    await backend.rename('/buffer/a/x.md', '/buffer/a/y.md')
+    expect(dec(await backend.read('/buffer/a/y.md'))).toBe('FILE')
+    await expect(backend.read('/buffer/a/x.md')).rejects.toThrow()
   })
 
   // AC14 — binary / empty payload persists byte-for-byte across rebuild

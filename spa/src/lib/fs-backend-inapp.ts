@@ -142,14 +142,40 @@ export class InAppBackend implements FsBackend {
     const db = await this.db()
     const tx = db.transaction(STORE, 'readwrite')
     const store = tx.store
-    const entry = (await store.get(from)) as StoredFile | undefined
-    if (!entry) {
+
+    // Dir-aware recursive move: select `from` itself plus every descendant
+    // (`from/`-prefixed key). A file move is the single-key case of this.
+    const fromPrefix = from + '/'
+    const allKeys = (await store.getAllKeys()) as string[]
+    const sourceKeys = allKeys.filter(
+      (k) => k === from || k.startsWith(fromPrefix),
+    )
+    if (sourceKeys.length === 0) {
       await tx.done
       throw new Error(`InAppBackend: path not found: ${from}`)
     }
-    // Blind overwrite of target (I6); only the single entry moves (I7).
-    await store.put({ ...entry, path: to } satisfies StoredFile)
-    await store.delete(from)
+
+    // Full collision scan over the WHOLE target subtree BEFORE any mutation:
+    // reject if `to` exists or any `${to}/`-prefixed key exists (spec AC-1b —
+    // refused before any backend mutation). idb auto-aborts the tx on throw.
+    const toPrefix = to + '/'
+    const collision = allKeys.some(
+      (k) => k === to || k.startsWith(toPrefix),
+    )
+    if (collision) {
+      await tx.done
+      throw new Error(`InAppBackend: rename target already exists: ${to}`)
+    }
+
+    // Re-key every entry in one transaction, preserving each entry's mtime
+    // (a move is not a content edit, so we must NOT bump mtime).
+    for (const key of sourceKeys) {
+      const entry = (await store.get(key)) as StoredFile | undefined
+      if (!entry) continue
+      const newKey = to + key.slice(from.length)
+      await store.put({ ...entry, path: newKey } satisfies StoredFile)
+      await store.delete(key)
+    }
     await tx.done
   }
 }
