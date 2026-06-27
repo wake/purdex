@@ -6,7 +6,7 @@ import {
   unregisterNewTabProvidersByModule,
 } from '../new-tab-registry'
 import { EditorPane } from '../../components/editor/EditorPane'
-import { EditorBuffersPane } from '../../components/editor/EditorBuffersPane'
+import { StoragePane } from '../../components/editor/storage/StoragePane'
 import { ImagePreviewPane } from '../../components/editor/ImagePreviewPane'
 import { PdfPreviewPane } from '../../components/editor/PdfPreviewPane'
 import { EditorNewTabSection } from '../../components/editor/EditorNewTabSection'
@@ -26,7 +26,7 @@ export const editorModuleDefinition: ModuleDefinition = {
   descriptionKey: 'modules.editor.description',
   panes: [
     { kind: 'editor', component: EditorPane },
-    { kind: 'editor-buffers', component: EditorBuffersPane },
+    { kind: 'editor-buffers', component: StoragePane },
     { kind: 'image-preview', component: ImagePreviewPane },
     { kind: 'pdf-preview', component: PdfPreviewPane },
   ],
