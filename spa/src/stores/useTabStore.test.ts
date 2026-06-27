@@ -299,6 +299,35 @@ describe('useTabStore', () => {
         expect(filePaths).toEqual(['/notes/b.md', '/notes/b.md'])
       }
     })
+
+    it('renames matching image-preview and pdf-preview panes', () => {
+      const imgTab = createTab({ kind: 'image-preview', source: { type: 'inapp' }, filePath: '/buffer/p.png' })
+      const pdfTab = createTab({ kind: 'pdf-preview', source: { type: 'inapp' }, filePath: '/buffer/p.png' })
+      useTabStore.getState().addTab(imgTab)
+      useTabStore.getState().addTab(pdfTab)
+
+      useTabStore.getState().renameEditorPanes({ type: 'inapp' }, '/buffer/p.png', '/buffer/q.png')
+
+      const img = useTabStore.getState().tabs[imgTab.id].layout
+      const pdf = useTabStore.getState().tabs[pdfTab.id].layout
+      expect(img.type === 'leaf' && img.pane.content.kind === 'image-preview' && img.pane.content.filePath).toBe('/buffer/q.png')
+      expect(pdf.type === 'leaf' && pdf.pane.content.kind === 'pdf-preview' && pdf.pane.content.filePath).toBe('/buffer/q.png')
+    })
+
+    it('preserves untitled handling for editor panes (preview broadening does not regress)', () => {
+      const untitled = { name: 'Untitled', suggestedExtension: '.md' as const, hasBeenRenamed: false }
+      const editorTab = createTab({ kind: 'editor', source: { type: 'inapp' }, filePath: '/buffer/u.md', untitled })
+      useTabStore.getState().addTab(editorTab)
+
+      // No untitled option → the field is cleared (existing contract).
+      useTabStore.getState().renameEditorPanes({ type: 'inapp' }, '/buffer/u.md', '/buffer/named.md')
+      const after = useTabStore.getState().tabs[editorTab.id].layout
+      expect(after.type).toBe('leaf')
+      if (after.type === 'leaf' && after.pane.content.kind === 'editor') {
+        expect(after.pane.content.filePath).toBe('/buffer/named.md')
+        expect(after.pane.content.untitled).toBeUndefined()
+      }
+    })
   })
 
   describe('updateSessionCache', () => {

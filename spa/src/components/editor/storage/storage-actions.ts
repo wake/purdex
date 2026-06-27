@@ -16,6 +16,7 @@
 import { getFsBackend } from '../../../lib/fs-backend'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { scanPaneTree } from '../../../lib/pane-tree'
+import { isFilePaneContent } from '../../../lib/pane-utils'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { createMetadata } from '../../../lib/editor-language'
@@ -120,7 +121,10 @@ export async function deleteStorageEntries(
   for (const [tabId, tab] of Object.entries(tabs) as Array<[string, Tab]>) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
-      if (c.kind === 'editor' && c.source.type === 'inapp' && targets.includes(c.filePath)) {
+      // Cover editor AND the file-preview kinds (image-preview / pdf-preview)
+      // so deleting a png/pdf open in a preview pane fires the locked-tab
+      // refusal, closes the pane, and leaves no stale tab behind.
+      if (isFilePaneContent(c) && c.source.type === 'inapp' && targets.includes(c.filePath)) {
         openPanes.push([tabId, pane])
       }
     })

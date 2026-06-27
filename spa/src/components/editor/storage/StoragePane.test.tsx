@@ -158,6 +158,25 @@ function makeEditorTab(tabId: string, paneId: string, filePath: string, locked =
   }
 }
 
+function makePreviewTab(
+  tabId: string,
+  paneId: string,
+  filePath: string,
+  kind: 'image-preview' | 'pdf-preview',
+  locked = false,
+): Tab {
+  return {
+    id: tabId,
+    pinned: false,
+    locked,
+    createdAt: Date.now(),
+    layout: {
+      type: 'leaf',
+      pane: { id: paneId, content: { kind, source: { type: 'inapp' }, filePath } },
+    },
+  }
+}
+
 function makeNonEditorTab(tabId: string, paneId: string): Tab {
   return {
     id: tabId,
@@ -495,6 +514,54 @@ describe('StoragePane', () => {
       { name: 'x.md', isDir: false, size: 10 },
     ] as FileEntry[])
     tabStoreState.tabs = { TA: makeEditorTab('TA', 'P1', '/buffer/x.md', true) }
+    tabStoreState.tabOrder = ['TA']
+    tabStoreState.activeTabId = 'TA'
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await waitFor(() => {
+      expect(screen.getByText('editor.buffers.delete_locked_refused')).toBeTruthy()
+    })
+    expect(mockBackend.delete).not.toHaveBeenCalled()
+    expect(closePaneSpy).not.toHaveBeenCalled()
+    expect(tabStoreState.tabs.TA).toBeDefined()
+  })
+
+  it('B2-11b: delete closes an open image-preview / pdf-preview pane before backend.delete', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'p.png', isDir: false, size: 10 },
+    ] as FileEntry[])
+    tabStoreState.tabs = {
+      TA: makePreviewTab('TA', 'P1', '/buffer/p.png', 'image-preview'),
+      TB: makePreviewTab('TB', 'P2', '/buffer/p.png', 'pdf-preview'),
+    }
+    tabStoreState.tabOrder = ['TA', 'TB']
+    tabStoreState.activeTabId = 'TA'
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await waitFor(() => {
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/p.png')
+    })
+    const firstDeleteIdx = eventLog.findIndex((e) => e.startsWith('delete:'))
+    const closeIdxs = eventLog
+      .map((e, i) => (e.startsWith('close:') ? i : -1))
+      .filter((i) => i !== -1)
+    expect(closeIdxs.length).toBe(2)
+    for (const i of closeIdxs) {
+      expect(i).toBeLessThan(firstDeleteIdx)
+    }
+    expect(closePaneSpy).toHaveBeenCalledWith('TA', 'P1')
+    expect(closePaneSpy).toHaveBeenCalledWith('TB', 'P2')
+  })
+
+  it('B2-11c: delete refused when a preview pane sits in a locked tab (v1.4 F2)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'p.png', isDir: false, size: 10 },
+    ] as FileEntry[])
+    tabStoreState.tabs = { TA: makePreviewTab('TA', 'P1', '/buffer/p.png', 'image-preview', true) }
     tabStoreState.tabOrder = ['TA']
     tabStoreState.activeTabId = 'TA'
     render(<StoragePane pane={makePane()} isActive />)

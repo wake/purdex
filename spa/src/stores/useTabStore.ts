@@ -4,7 +4,7 @@ import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern } fr
 import type { FileSource } from '../types/fs'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern } from '../lib/pane-tree'
-import { contentMatches } from '../lib/pane-utils'
+import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { UntitledDocumentState } from '../types/tab'
 
@@ -75,6 +75,10 @@ function sourceMatches(a: FileSource, b: FileSource): boolean {
   return true
 }
 
+// Despite the name, this now rewrites filePath for ALL file-preview pane kinds
+// (editor + image-preview + pdf-preview), so renaming a png/pdf open in a
+// preview pane doesn't strand it on the old path. The exported
+// `renameEditorPanes` name is kept to avoid rippling through call sites.
 function renameEditorPanesInLayout(
   layout: PaneLayout,
   source: FileSource,
@@ -84,17 +88,19 @@ function renameEditorPanesInLayout(
 ): PaneLayout {
   if (layout.type === 'leaf') {
     const content = layout.pane.content
-    if (content.kind === 'editor' && content.filePath === oldPath && sourceMatches(content.source, source)) {
+    if (isFilePaneContent(content) && content.filePath === oldPath && sourceMatches(content.source, source)) {
+      // `untitled` is editor-only; preview panes have no such field.
+      const nextContent =
+        content.kind === 'editor'
+          ? {
+              ...content,
+              filePath: newPath,
+              ...(options?.untitled === undefined ? { untitled: undefined } : { untitled: options.untitled }),
+            }
+          : { ...content, filePath: newPath }
       return {
         type: 'leaf',
-        pane: {
-          ...layout.pane,
-          content: {
-            ...content,
-            filePath: newPath,
-            ...(options?.untitled === undefined ? { untitled: undefined } : { untitled: options.untitled }),
-          },
-        },
+        pane: { ...layout.pane, content: nextContent },
       }
     }
     return layout
