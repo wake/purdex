@@ -40,11 +40,16 @@ vi.mock('../../../lib/open-in-app-file', () => ({
   openInAppFile: vi.fn(() => 'opened-tab'),
 }))
 
-// Workspace store: StoragePane.resolveWorkspaceId falls back to the active
-// workspace when the pane isn't found in any tab layout (the harness case).
+// Workspace store: StoragePane.resolveWorkspaceId maps the owning tab → its
+// workspace (R2-2 — no activeWorkspaceId guess). The Storage pane lives in
+// `storageTab` (seeded into the tab store below), which this mock maps to ws1;
+// any other / missing tab resolves to null (the "no owning workspace" case).
 vi.mock('../../../features/workspace/store', () => ({
   useWorkspaceStore: {
-    getState: () => ({ activeWorkspaceId: 'ws1', findWorkspaceByTab: () => null }),
+    getState: () => ({
+      activeWorkspaceId: 'ws1',
+      findWorkspaceByTab: (tabId: string) => (tabId === 'storageTab' ? { id: 'ws1' } : null),
+    }),
   },
 }))
 
@@ -143,6 +148,22 @@ function RenameHarness({
 
 function makePane(): Pane {
   return { id: 'bufpane', content: { kind: 'editor-buffers' } }
+}
+
+/**
+ * The tab that hosts the Storage pane itself, so `resolveWorkspaceId` finds
+ * `bufpane` in a tab and maps it (→ ws1) instead of returning null. Seeded into
+ * the default tab store; open tests that reassign `tabStoreState.tabs` spread
+ * this back in.
+ */
+function makeStorageTab(): Tab {
+  return {
+    id: 'storageTab',
+    pinned: false,
+    locked: false,
+    createdAt: Date.now(),
+    layout: { type: 'leaf', pane: { id: 'bufpane', content: { kind: 'editor-buffers' } } },
+  }
 }
 
 function makeEditorTab(tabId: string, paneId: string, filePath: string, locked = false): Tab {
@@ -249,9 +270,9 @@ beforeEach(() => {
   )
 
   tabStoreState = {
-    tabs: {},
-    tabOrder: [],
-    activeTabId: null,
+    tabs: { storageTab: makeStorageTab() },
+    tabOrder: ['storageTab'],
+    activeTabId: 'storageTab',
     setPaneContent: setPaneContentSpy,
     setActiveTab: setActiveTabSpy,
     addTab: addTabSpy,
@@ -374,6 +395,7 @@ describe('StoragePane', () => {
     ] as FileEntry[])
     // Editor tabs exist — the old smart-open would have hijacked one of them.
     tabStoreState.tabs = {
+      storageTab: makeStorageTab(),
       TA: makeEditorTab('TA', 'P1', '/buffer/other.md'),
       TB: makeEditorTab('TB', 'P2', '/buffer/another.md'),
     }
@@ -397,6 +419,7 @@ describe('StoragePane', () => {
       { name: 'target.md', isDir: false, size: 10 },
     ] as FileEntry[])
     tabStoreState.tabs = {
+      storageTab: makeStorageTab(),
       TA: makeNonEditorTab('TA', 'PA'),
       TB: makeEditorTab('TB', 'P2', '/buffer/existing.md'),
     }
@@ -417,7 +440,7 @@ describe('StoragePane', () => {
     mockBackend.list.mockResolvedValue([
       { name: 'report.pdf', isDir: false, size: 2048 },
     ] as FileEntry[])
-    tabStoreState.tabs = { TA: makeNonEditorTab('TA', 'PA') }
+    tabStoreState.tabs = { storageTab: makeStorageTab(), TA: makeNonEditorTab('TA', 'PA') }
     tabStoreState.tabOrder = ['TA']
     tabStoreState.activeTabId = 'TA'
     render(<StoragePane pane={makePane()} isActive />)
@@ -434,6 +457,7 @@ describe('StoragePane', () => {
       { name: 'pic.png', isDir: false, size: 4096 },
     ] as FileEntry[])
     tabStoreState.tabs = {
+      storageTab: makeStorageTab(),
       TA: makeEditorTab('TA', 'P1', '/buffer/dirty.md', false),
       TB: {
         id: 'TB',
@@ -1025,6 +1049,60 @@ describe('StoragePane', () => {
     expect(png.textContent).toContain('4096 B')
     expect(png.textContent).not.toContain('words')
     expect(mockBackend.read).not.toHaveBeenCalledWith('/buffer/pic.png')
+  })
+
+  it('N4b: a text file over the size cap shows size only and is NOT read (R2-3)', async () => {
+    const big = 300 * 1024 // > WORD_COUNT_MAX_BYTES (256 KiB)
+    mockBackend.list.mockResolvedValue([
+      { name: 'big.md', isDir: false, size: big },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    expect(row.textContent).toContain(`${big} B`)
+    expect(row.textContent).not.toContain('words')
+    expect(mockBackend.read).not.toHaveBeenCalled()
+  })
+
+  it('N4c: an unknown-extension row shows size only and is NOT read (R2-3)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'blob.bin', isDir: false, size: 12 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    expect(row.textContent).toContain('12 B')
+    expect(row.textContent).not.toContain('words')
+    expect(mockBackend.read).not.toHaveBeenCalled()
+  })
+
+  it('R2-2: passes a null workspace id straight through when the pane has no owning workspace', async () => {
+    // bufpane is in no tab → resolveWorkspaceId returns null (no active guess).
+    tabStoreState.tabs = {}
+    tabStoreState.tabOrder = []
+    tabStoreState.activeTabId = null
+    mockBackend.list.mockResolvedValue([
+      { name: 'x.md', isDir: false, size: 5 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.doubleClick(row)
+    await waitFor(() => {
+      expect(openInAppFile).toHaveBeenCalledWith('/buffer/x.md', null)
+    })
+  })
+
+  it('R2-1: refreshes the tree when openInAppFile aborts (stale/missing entry)', async () => {
+    ;(openInAppFile as unknown as Mock).mockResolvedValue(undefined)
+    mockBackend.list.mockResolvedValue([
+      { name: 'stale.md', isDir: false, size: 5 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    mockBackend.list.mockClear()
+    fireEvent.doubleClick(row)
+    await waitFor(() => {
+      // refresh() bumps the tree nonce → re-lists the root.
+      expect(mockBackend.list).toHaveBeenCalled()
+    })
   })
 
   it('N5: rename of a nested leaf file targets its full path (same directory)', async () => {

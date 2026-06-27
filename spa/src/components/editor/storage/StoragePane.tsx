@@ -21,18 +21,19 @@ import {
  * the right workspace (`openInAppFile` → `computeClusterInsertTarget` /
  * `insertTab` are workspace-scoped). We walk the tab layouts to find which tab
  * owns `paneId` (same inline scan as `EditorPane.findTabIdForPane`), then map
- * tab → workspace; the active workspace is the fallback when the pane isn't
- * found in any layout (e.g. unit harnesses).
+ * tab → workspace. Returns `null` when the pane has no owning workspace — we do
+ * NOT guess the active workspace (R2-2): `openInAppFile` refuses a null id
+ * rather than land the tab in the wrong place.
  */
-function resolveWorkspaceId(paneId: string): string {
+function resolveWorkspaceId(paneId: string): string | null {
   const wsState = useWorkspaceStore.getState()
   const { tabs } = useTabStore.getState()
   for (const [tabId, tab] of Object.entries(tabs)) {
     if (findPane(tab.layout, paneId)) {
-      return wsState.findWorkspaceByTab(tabId)?.id ?? wsState.activeWorkspaceId ?? ''
+      return wsState.findWorkspaceByTab(tabId)?.id ?? null
     }
   }
-  return wsState.activeWorkspaceId ?? ''
+  return null
 }
 
 /**
@@ -74,10 +75,14 @@ export function StoragePane({ pane }: PaneRendererProps) {
   }, [])
 
   const handleOpen = useCallback(
-    (path: string) => {
-      openInAppFile(path, resolveWorkspaceId(pane.id))
+    async (path: string) => {
+      // Pass the possibly-null workspace id straight through (R2-2). When the
+      // open is aborted — refused, or stat-gated because the entry is stale
+      // (R2-1) — refresh the tree so the missing row disappears.
+      const tabId = await openInAppFile(path, resolveWorkspaceId(pane.id))
+      if (!tabId) refresh()
     },
-    [pane.id],
+    [pane.id, refresh],
   )
 
   // --- Actions ---

@@ -2,6 +2,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { getDefaultOpener } from './file-opener-registry'
 import { computeClusterInsertTarget } from './tab-insert/compute-cluster-insert-target'
+import { getFsBackend } from './fs-backend'
 import { basename } from './storage-paths'
 import type { FileInfo } from '../types/fs'
 import type { PaneContent } from '../types/tab'
@@ -24,26 +25,49 @@ import type { PaneContent } from '../types/tab'
  *   - workspace placement + cluster insert + `ws.activeTabId` sync via
  *     `insertTab`.
  *
- * `workspaceId` is the source workspace (from the pane/popover context) — it
- * is required because `computeClusterInsertTarget` / `insertTab` are
- * workspace-scoped.
+ * `workspaceId` is the source workspace (from the pane/popover context). It is
+ * `string | null`: a `null` id means the caller could not resolve an owning
+ * workspace, so we **refuse** the open rather than fall back to `''`/the active
+ * workspace (`computeClusterInsertTarget('')` anchors on the global active tab
+ * and `insertTab(_, '')` no-ops, landing the tab in the wrong place — R2-2).
  *
- * Missing-file handling is intentionally minimal: the tree only offers
- * existing entries, so there is no stat-gate here. The Phase 1c
- * download-disposition for non-previewable binaries (docx/xlsx/zip…) is NOT
- * handled here — Phase 1a covers image/pdf/editor only.
+ * Missing-file handling is a minimal **stat-gate** (R2-1): we `stat` the path
+ * first and ABORT when it does not exist. Skipping this lets a deleted/stale
+ * path open as an empty editor buffer whose next save would resurrect the file.
+ * The tree only offers existing entries, but it can go stale between render and
+ * click, so the gate is load-bearing. The Phase 1c download-disposition for
+ * non-previewable binaries (docx/xlsx/zip…) is NOT handled here — Phase 1a
+ * covers image/pdf/editor only.
  *
- * @returns the id of the opened (or focused) tab, or `undefined` when no
- *   opener matches the file.
+ * @returns the id of the opened (or focused) tab, or `undefined` when the open
+ *   is refused (null workspace), the file is missing, or no opener matches.
  */
-export function openInAppFile(path: string, workspaceId: string): string | undefined {
+export async function openInAppFile(
+  path: string,
+  workspaceId: string | null,
+): Promise<string | undefined> {
+  // R2-2: refuse rather than guess a workspace.
+  if (workspaceId == null) return undefined
+
+  // R2-1: stat-gate — never open a pane for a missing/stale path.
+  const backend = getFsBackend({ type: 'inapp' })
+  if (!backend) return undefined
+  let size = 0
+  try {
+    const stat = await backend.stat(path)
+    if (stat.isDirectory) return undefined
+    size = stat.size
+  } catch {
+    return undefined
+  }
+
   const name = basename(path)
   const extension = name.includes('.') ? name.split('.').pop()! : ''
   const file: FileInfo = {
     name,
     path,
     extension,
-    size: 0,
+    size,
     isDirectory: false,
   }
 

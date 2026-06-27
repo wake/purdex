@@ -86,15 +86,16 @@ function findTabIdForPane(paneId: string): string | undefined {
  * / `insertTab` are workspace-scoped). Mirrors `StoragePane.resolveWorkspaceId`
  * (built here on the existing `findTabIdForPane`): map the owning tab → its
  * workspace, falling back to the active workspace when the pane isn't found in
- * any layout (e.g. unit harnesses).
+ * any layout. Returns `null` when the pane has no owning workspace — we do NOT
+ * guess the active workspace (R2-2); `openInAppFile` refuses a null id.
  */
-function resolveWorkspaceId(paneId: string): string {
+function resolveWorkspaceId(paneId: string): string | null {
   const wsState = useWorkspaceStore.getState()
   const tabId = findTabIdForPane(paneId)
   if (tabId) {
-    return wsState.findWorkspaceByTab(tabId)?.id ?? wsState.activeWorkspaceId ?? ''
+    return wsState.findWorkspaceByTab(tabId)?.id ?? null
   }
-  return wsState.activeWorkspaceId ?? ''
+  return null
 }
 
 // Outer component does kind guard to avoid hooks-after-early-return
@@ -404,8 +405,9 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           // png/pdf resolves to the right preview pane (open-or-focus) instead
           // of the old hardcoded `{ kind: 'editor' }` swapped in place. The
           // current pane's buffer is left intact; the target opens or focuses
-          // its own tab in this workspace.
-          openInAppFile(newKey, resolveWorkspaceId(paneId))
+          // its own tab in this workspace. `openInAppFile` is async (stat-gate,
+          // R2-1) and self-aborts on a missing/refused target — fire-and-forget.
+          void openInAppFile(newKey, resolveWorkspaceId(paneId))
         }}
         onManage={() => {
           useTabStore.getState().openSingletonTab({ kind: 'editor-buffers' })

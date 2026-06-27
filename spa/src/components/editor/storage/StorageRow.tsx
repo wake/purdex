@@ -6,25 +6,28 @@ import { getFsBackend } from '../../../lib/fs-backend'
 import type { TreeNode } from '../../../lib/storage-tree'
 
 /**
- * Extensions treated as binary — these rows show **size only**, never a word
- * count (we don't decode their bytes). Everything else is treated as text and
- * gets a word count (spec §4: "Text-file rows show word count; binary rows show
- * size only"). A denylist keeps unknown/extensionless files (e.g. `.log`,
- * `README`) on the text path, which is the friendlier default for a notes-style
- * In-App store.
+ * Explicit **allowlist** of extensions we treat as word-countable text (spec §4:
+ * "Text-file rows show word count; binary rows show size only"). Only these
+ * rows read + decode their bytes — an allowlist (vs the former binary denylist)
+ * means unknown/binary extensions never trigger a `backend.read` and are never
+ * decoded into a garbage word count (R2-3). `.log`, `.env`, `.gitignore` etc.
+ * are included so notes-style entries still count.
  */
-const BINARY_EXTS = new Set([
-  // images
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'tiff', 'avif',
-  // documents / pdf
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
-  // archives
-  'zip', 'tar', 'gz', 'tgz', 'rar', '7z',
-  // audio / video
-  'mp3', 'wav', 'flac', 'ogg', 'm4a', 'mp4', 'mov', 'mkv', 'avi',
-  // misc binary
-  'wasm', 'bin', 'exe', 'dll', 'so', 'dylib',
+const TEXT_EXTS = new Set([
+  'md', 'markdown', 'txt', 'text',
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs',
+  'json', 'css', 'scss', 'html', 'xml',
+  'yaml', 'yml', 'toml', 'csv',
+  'sh', 'py', 'rs', 'go', 'c', 'h', 'cpp',
+  'sql', 'log', 'ini', 'env', 'gitignore',
 ])
+
+/**
+ * Word count reads + decodes the whole file, so we cap it: rows above this size
+ * show size only and never read (R2-3 — render cost was the sum of all visible
+ * text file sizes).
+ */
+const WORD_COUNT_MAX_BYTES = 256 * 1024
 
 function extensionOf(path: string): string {
   const base = path.split('/').pop() ?? path
@@ -33,9 +36,15 @@ function extensionOf(path: string): string {
   return base.slice(dot + 1).toLowerCase()
 }
 
+/**
+ * A row gets a word count only when its extension is on the text allowlist AND
+ * it is within the size cap; everything else (dirs, binaries, unknown exts,
+ * oversized text) shows size only and is never read.
+ */
 function isTextNode(node: TreeNode): boolean {
   if (node.isDir) return false
-  return !BINARY_EXTS.has(extensionOf(node.path))
+  if (node.size > WORD_COUNT_MAX_BYTES) return false
+  return TEXT_EXTS.has(extensionOf(node.path))
 }
 
 interface StorageRowProps {
