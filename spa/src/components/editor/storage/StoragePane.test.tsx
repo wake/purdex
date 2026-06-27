@@ -1074,6 +1074,20 @@ describe('StoragePane', () => {
     expect(mockBackend.read).not.toHaveBeenCalled()
   })
 
+  it('N4d: a leading-dot dotfile on the text allowlist still shows a word count (R3)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: '.env', isDir: false, size: 11 },
+    ] as FileEntry[])
+    mockBackend.read.mockImplementation(async (path: string) => {
+      if (path === '/buffer/.env') return new TextEncoder().encode('A=1 B=2 C=3')
+      return new Uint8Array(0)
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    await waitFor(() => expect(row.textContent).toContain('3 words'))
+    expect(mockBackend.read).toHaveBeenCalledWith('/buffer/.env')
+  })
+
   it('R2-2: passes a null workspace id straight through when the pane has no owning workspace', async () => {
     // bufpane is in no tab → resolveWorkspaceId returns null (no active guess).
     tabStoreState.tabs = {}

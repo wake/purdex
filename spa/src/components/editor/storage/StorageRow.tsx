@@ -32,7 +32,10 @@ const WORD_COUNT_MAX_BYTES = 256 * 1024
 function extensionOf(path: string): string {
   const base = path.split('/').pop() ?? path
   const dot = base.lastIndexOf('.')
-  if (dot <= 0) return ''
+  if (dot < 0) return ''
+  // Leading-dot dotfiles (.env, .gitignore) have their name AS the extension token
+  // for allowlist purposes (codex R3); a bare `dot === 0` would otherwise yield ''.
+  if (dot === 0) return base.slice(1).toLowerCase()
   return base.slice(dot + 1).toLowerCase()
 }
 

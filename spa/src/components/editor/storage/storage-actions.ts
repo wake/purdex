@@ -51,7 +51,10 @@ export async function performBufferRename(fromPath: string, targetPath: string) 
 /** Create a new empty markdown file at the storage root. Flat-only in 1a. */
 export async function createStorageFile(): Promise<{ error?: string }> {
   const backend = getFsBackend({ type: 'inapp' })
-  if (!backend) return {}
+  // A missing backend is a real failure, not a silent success (codex R3): surface
+  // it like a write error so handleNew shows the banner instead of refreshing as if
+  // a file were created.
+  if (!backend) return { error: 'InApp backend unavailable' }
   const path = join(STORAGE_ROOT, `Untitled-${Date.now()}.md`)
   try {
     await backend.write(path, new Uint8Array(0))
@@ -77,7 +80,9 @@ export async function renameStorageEntry(
   newName: string,
 ): Promise<RenameOutcome> {
   const backend = getFsBackend({ type: 'inapp' })
-  if (!backend) return { ok: true }
+  // Missing backend = failure, not success (codex R3): returning ok:true would close
+  // the rename popover and clear selection as if the rename happened.
+  if (!backend) return { kind: 'error', message: 'InApp backend unavailable' }
   const targetPath = join(parentOf(fromPath), newName)
   if (targetPath !== fromPath) {
     const exists = await backend
