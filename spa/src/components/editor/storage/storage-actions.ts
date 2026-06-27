@@ -12,8 +12,9 @@
  * Phase 1b: new-file now goes through the unified eager `createUniqueInAppFile`
  * namer (atomic IDB reservation, #854) and accepts a `targetDir`. Folder mkdir
  * (`createStorageFolder`) and in-place rename of files AND folders
- * (`renameStorageEntry` + the pure `remapPanesUnder` re-point) have landed;
- * recursive move (drag) lands in T1b-6.
+ * (`renameStorageEntry` + the pure `remapPanesUnder` re-point) have landed.
+ * The recursive move data layer (`moveStorageEntry`, T1b-6a) reuses that same
+ * single-rename + `remapPanesUnder` path; the drag-and-drop wiring is T1b-6b.
  */
 import { getFsBackend } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
@@ -23,7 +24,7 @@ import { isFilePaneContent } from '../../../lib/pane-utils'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { createMetadata } from '../../../lib/editor-language'
-import { STORAGE_ROOT, join, parentOf } from '../../../lib/storage-paths'
+import { STORAGE_ROOT, basename, join, parentOf } from '../../../lib/storage-paths'
 import type { FileSource } from '../../../types/fs'
 import type { Pane, Tab } from '../../../types/tab'
 
@@ -156,6 +157,71 @@ export async function renameStorageEntry(
     // The ONLY backend mutation for rename — exactly once, file and folder alike.
     await backend.rename(fromPath, targetPath)
     remapPanesUnder({ type: 'inapp' }, fromPath, targetPath)
+    return { ok: true }
+  } catch (err) {
+    return { kind: 'error', message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+export type MoveOutcome =
+  | { ok: true }
+  | { kind: 'noop' }
+  | { kind: 'exists' }
+  | { kind: 'error'; message: string }
+
+/**
+ * Move a **file or folder** (`from`) into `targetDir`, keeping its basename —
+ * the data layer behind drag-and-drop (T1b-6a; the DnD wiring is T1b-6b). It
+ * shares the exact rename machinery: the destination is `targetDir/basename`,
+ * and a successful move is one recursive `backend.rename` (folder descendants
+ * re-keyed by T1b-1) followed by the pure `remapPanesUnder` re-point (T1b-4) —
+ * so a folder move re-points every open descendant pane in one shot.
+ *
+ * Three branches diverge BEFORE any mutation, so `backend.rename` fires exactly
+ * once on the success path and zero times otherwise:
+ *   - **no-op** (`{kind:'noop'}`, no `stat`, no mutation) when the move is inert:
+ *     dropping onto the current parent (`targetDir === parentOf(from)`, which
+ *     also covers `to === from`), onto the entry itself (`targetDir === from`),
+ *     or into its own descendant (`targetDir` is a `from/`-prefixed path) — the
+ *     last guard stops a folder being moved inside itself (decision 6).
+ *   - **collision** (`{kind:'exists'}`) when `stat(to)` resolves — a same-named
+ *     entry already lives in the target dir; refused before mutation (F4).
+ *   - otherwise the single `backend.rename(from, to)` + `remapPanesUnder`.
+ */
+export async function moveStorageEntry(
+  from: string,
+  targetDir: string,
+): Promise<MoveOutcome> {
+  const backend = getFsBackend({ type: 'inapp' })
+  // Missing backend = failure, not success (codex R3): a fake ok would clear the
+  // drag selection as if the move had happened.
+  if (!backend) return { kind: 'error', message: 'InApp backend unavailable' }
+
+  const to = join(targetDir, basename(from))
+
+  // No-op guards (no stat, no mutation): already there, onto self, or into own
+  // descendant. `targetDir === parentOf(from)` subsumes the `to === from` case.
+  if (
+    targetDir === parentOf(from) ||
+    to === from ||
+    targetDir === from ||
+    targetDir.startsWith(from + '/')
+  ) {
+    return { kind: 'noop' }
+  }
+
+  // Collision pre-check before any backend mutation (F4): a same-named sibling
+  // already in the target dir refuses the move.
+  const exists = await backend
+    .stat(to)
+    .then(() => true)
+    .catch(() => false)
+  if (exists) return { kind: 'exists' }
+
+  try {
+    // The ONLY backend mutation for move — exactly once, file and folder alike.
+    await backend.rename(from, to)
+    remapPanesUnder({ type: 'inapp' }, from, to)
     return { ok: true }
   } catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) }

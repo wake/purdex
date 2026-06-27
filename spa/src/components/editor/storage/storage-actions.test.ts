@@ -3,6 +3,7 @@ import {
   createStorageFile,
   createStorageFolder,
   deleteStorageEntries,
+  moveStorageEntry,
   renameStorageEntry,
 } from './storage-actions'
 import { InAppBackend } from '../../../lib/fs-backend-inapp'
@@ -378,5 +379,141 @@ describe('deleteStorageEntries — recursive folder delete + descendant-aware gu
 
     expect(res.status).toBe('refused')
     expect(new TextDecoder().decode(await real.read('/buffer/x.md'))).toBe('XX')
+  })
+})
+
+// --- T1b-6a: pure recursive move (drag target = a directory) via a SINGLE
+// backend.rename + pure remapPanesUnder --------------------------------------
+//
+// Same real-backend + real-store harness as rename: `moveStorageEntry(from,
+// targetDir)` computes `to = targetDir/basename(from)` and re-uses the exact
+// rename machinery — one recursive backend.rename (T1b-1) + the pure
+// remapPanesUnder re-point (T1b-4). The no-op guards (already-there / into self
+// / into own descendant) and the pre-mutation collision check must fire WITHOUT
+// any backend.rename, asserted with a spy.
+
+describe('moveStorageEntry — pure recursive move + guards (T1b-6a)', () => {
+  let real: InAppBackend
+  const enc = (s: string) => new TextEncoder().encode(s)
+  const dec = (b: Uint8Array) => new TextDecoder().decode(b)
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+  })
+
+  it('T6-1: move a file into a folder — old gone, new under folder, content intact, one rename', async () => {
+    await real.write('/buffer/x.md', enc('hello'))
+    await real.mkdir('/buffer/dir')
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await moveStorageEntry('/buffer/x.md', '/buffer/dir')
+
+    expect(res).toEqual({ ok: true })
+    expect(renameSpy).toHaveBeenCalledTimes(1)
+    expect(renameSpy).toHaveBeenCalledWith('/buffer/x.md', '/buffer/dir/x.md')
+    await expect(real.stat('/buffer/x.md')).rejects.toThrow()
+    expect(dec(await real.read('/buffer/dir/x.md'))).toBe('hello')
+  })
+
+  it('T6-2: move a folder into another folder — ≥2 nested descendants re-keyed (AC-1b), one rename', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    await real.write('/buffer/a/c/d.md', enc('DD'))
+    await real.mkdir('/buffer/dest')
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await moveStorageEntry('/buffer/a', '/buffer/dest')
+
+    expect(res).toEqual({ ok: true })
+    expect(renameSpy).toHaveBeenCalledTimes(1)
+    expect(renameSpy).toHaveBeenCalledWith('/buffer/a', '/buffer/dest/a')
+    expect(dec(await real.read('/buffer/dest/a/b.md'))).toBe('BB')
+    expect(dec(await real.read('/buffer/dest/a/c/d.md'))).toBe('DD')
+    await expect(real.stat('/buffer/a')).rejects.toThrow()
+    await expect(real.stat('/buffer/a/b.md')).rejects.toThrow()
+    await expect(real.stat('/buffer/a/c/d.md')).rejects.toThrow()
+  })
+
+  it('T6-3a: move onto the CURRENT parent dir — no-op, no mutation', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await moveStorageEntry('/buffer/a/b.md', '/buffer/a')
+
+    expect(res).toEqual({ kind: 'noop' })
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect(dec(await real.read('/buffer/a/b.md'))).toBe('BB')
+  })
+
+  it('T6-3b: move a folder onto ITSELF — no-op, no mutation', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await moveStorageEntry('/buffer/a', '/buffer/a')
+
+    expect(res).toEqual({ kind: 'noop' })
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect((await real.stat('/buffer/a')).isDirectory).toBe(true)
+    expect(dec(await real.read('/buffer/a/b.md'))).toBe('BB')
+  })
+
+  it('T6-3c: move a folder into its OWN descendant — no-op, no mutation', async () => {
+    await real.write('/buffer/a/c/d.md', enc('DD'))
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await moveStorageEntry('/buffer/a', '/buffer/a/c')
+
+    expect(res).toEqual({ kind: 'noop' })
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect(dec(await real.read('/buffer/a/c/d.md'))).toBe('DD')
+  })
+
+  it('T6-4: move where the target name already exists — refused (exists), no mutation', async () => {
+    await real.write('/buffer/x.md', enc('AAA'))
+    await real.write('/buffer/dir/x.md', enc('BBB')) // collision at /buffer/dir/x.md
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await moveStorageEntry('/buffer/x.md', '/buffer/dir')
+
+    expect(res).toEqual({ kind: 'exists' })
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect(dec(await real.read('/buffer/x.md'))).toBe('AAA')
+    expect(dec(await real.read('/buffer/dir/x.md'))).toBe('BBB')
+  })
+
+  it('T6-5: moving a folder with an OPEN editor descendant re-points the pane (no stale buffer)', async () => {
+    await real.write('/buffer/a/b.md', enc('content'))
+    await real.mkdir('/buffer/dest')
+    useTabStore.setState({
+      tabs: { T1: makeEditorTab('T1', 'P1', '/buffer/a/b.md') },
+      tabOrder: ['T1'],
+      activeTabId: 'T1',
+      visitHistory: [],
+    })
+    seedBuffer('/buffer/a/b.md', 'P1')
+
+    const res = await moveStorageEntry('/buffer/a', '/buffer/dest')
+
+    expect(res).toEqual({ ok: true })
+    const tab = useTabStore.getState().tabs.T1
+    if (tab.layout.type !== 'leaf') throw new Error('expected leaf')
+    expect(tab.layout.pane.content).toMatchObject({ kind: 'editor', filePath: '/buffer/dest/a/b.md' })
+    const ed = useEditorStore.getState()
+    expect(ed.buffers['inapp:/buffer/dest/a/b.md']).toBeDefined()
+    expect(ed.buffers['inapp:/buffer/a/b.md']).toBeUndefined()
+    expect(ed.paneStates.P1?.bufferKey).toBe('inapp:/buffer/dest/a/b.md')
+  })
+
+  it('T6-error: surfaces a backend rename failure as a kind:error outcome', async () => {
+    await real.write('/buffer/x.md', enc('hello'))
+    vi.spyOn(real, 'rename').mockRejectedValueOnce(new Error('boom'))
+
+    const res = await moveStorageEntry('/buffer/x.md', '/buffer/dir')
+
+    expect(res).toEqual({ kind: 'error', message: 'boom' })
   })
 })
