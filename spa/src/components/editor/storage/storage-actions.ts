@@ -10,8 +10,10 @@
  * dirty-pane confirm + locked-tab refusal guards are preserved verbatim.
  *
  * Phase 1b: new-file now goes through the unified eager `createUniqueInAppFile`
- * namer (atomic IDB reservation, #854) and accepts a `targetDir`. Folder mkdir /
- * rename / recursive move land in their own 1b tasks.
+ * namer (atomic IDB reservation, #854) and accepts a `targetDir`. Folder mkdir
+ * (`createStorageFolder`) and in-place rename of files AND folders
+ * (`renameStorageEntry` + the pure `remapPanesUnder` re-point) have landed;
+ * recursive move (drag) lands in T1b-6.
  */
 import { getFsBackend } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
@@ -27,26 +29,59 @@ import type { Pane, Tab } from '../../../types/tab'
 
 export type Translate = (key: string, params?: Record<string, string | number>) => string
 
-// v1.5 G1 fix — mirror EditorPane's rename three-step sync (backend →
-// tab-layout → editor-store). Without this, renaming via the storage pane
-// leaves the editor store keyed by the old path: a subsequent Save would write
-// to the stale filename and a re-open would resurrect a ghost buffer. The
-// `renameBuffer` metadata argument also refreshes language + languageSource
-// when crossing file extensions (preserve a manual override, otherwise
-// recompute from the new path — same contract as `EditorPane.handleRenameSubmit`).
-export async function performBufferRename(fromPath: string, targetPath: string) {
-  const backend = getFsBackend({ type: 'inapp' })
-  if (!backend) throw new Error('InApp backend unavailable')
-  await backend.rename(fromPath, targetPath)
-  const source: FileSource = { type: 'inapp' }
-  useTabStore.getState().renameEditorPanes(source, fromPath, targetPath)
-  const oldKey = bufferKey(source, fromPath)
-  const newKey = bufferKey(source, targetPath)
-  const currentBuffer = useEditorStore.getState().buffers[oldKey]
-  const nextMetadata = currentBuffer?.languageSource === 'manual'
-    ? { language: currentBuffer.language, languageSource: 'manual' as const }
-    : createMetadata(source, targetPath)
-  useEditorStore.getState().renameBuffer(oldKey, newKey, nextMetadata)
+/**
+ * remapPanesUnder — PURE pane + buffer re-point for a rename/move that has
+ * ALREADY happened at the backend layer. It performs NO backend mutation: the
+ * single `backend.rename` lives in the caller (`renameStorageEntry`, and the
+ * future `moveStorageEntry`) and runs exactly once BEFORE this helper, so file
+ * and folder share one code path and there is no double-rename.
+ *
+ * It enumerates every open file pane — editor + image-preview + pdf-preview —
+ * whose `content.filePath` is `from` itself OR a `from/`-prefixed descendant
+ * (the trailing slash stops `/buffer/a` from matching `/buffer/ab`, decision 6),
+ * then for each affected path:
+ *   - re-points the tab layout via `renameEditorPanes(source, oldPath, newPath)`
+ *     (which already rewrites all three file-pane kinds), and
+ *   - for editor panes only, re-keys the editor-store buffer via
+ *     `renameBuffer(oldKey, newKey, metadata)`. The metadata mirrors the old
+ *     single-path `performBufferRename` / `EditorPane.handleRenameSubmit`:
+ *     preserve a manual language override, otherwise recompute from the new
+ *     path so crossing extensions refreshes the language.
+ *
+ * A single-file rename is the one-iteration case (`from === filePath`, so
+ * `newPath = to`); a folder rename iterates every open descendant.
+ */
+export function remapPanesUnder(source: FileSource, from: string, to: string): void {
+  const fromPrefix = from + '/'
+  // Collect each affected open path once, tracking whether any pane on that path
+  // is an editor (→ it also needs an editor-store buffer re-key, not just a
+  // layout re-point).
+  const affected = new Map<string, boolean>()
+  const { tabs } = useTabStore.getState()
+  for (const tab of Object.values(tabs)) {
+    scanPaneTree(tab.layout, (pane) => {
+      const c = pane.content
+      if (!isFilePaneContent(c)) return
+      if (c.source.type !== source.type) return
+      if (c.source.type === 'daemon' && source.type === 'daemon' && c.source.hostId !== source.hostId) return
+      if (c.filePath === from || c.filePath.startsWith(fromPrefix)) {
+        affected.set(c.filePath, (affected.get(c.filePath) ?? false) || c.kind === 'editor')
+      }
+    })
+  }
+
+  for (const [oldPath, hasEditor] of affected) {
+    const newPath = to + oldPath.slice(from.length)
+    useTabStore.getState().renameEditorPanes(source, oldPath, newPath)
+    if (!hasEditor) continue
+    const oldKey = bufferKey(source, oldPath)
+    const newKey = bufferKey(source, newPath)
+    const currentBuffer = useEditorStore.getState().buffers[oldKey]
+    const nextMetadata = currentBuffer?.languageSource === 'manual'
+      ? { language: currentBuffer.language, languageSource: 'manual' as const }
+      : createMetadata(source, newPath)
+    useEditorStore.getState().renameBuffer(oldKey, newKey, nextMetadata)
+  }
 }
 
 /**
@@ -92,10 +127,14 @@ export type RenameOutcome =
   | { kind: 'error'; message: string }
 
 /**
- * Rename a leaf file identified by its **full path**. `newName` is a basename;
- * the file stays in its own directory (`parentOf(fromPath)`). A `stat` pre-check
- * aborts before any backend mutation if the destination already exists (F4 —
- * `InAppBackend.rename` is a blind overwrite).
+ * In-place rename of a **file or folder** identified by its full path —
+ * one uniform path, no branch, no double-rename (T1b-4). `newName` is a
+ * basename; the entry stays in its own directory (`parentOf(fromPath)`). A
+ * `stat` pre-check aborts before any backend mutation if the destination
+ * already exists (F4). The lone backend mutation is a single
+ * `backend.rename` (recursive re-key of folder descendants, T1b-1), followed
+ * by the pure `remapPanesUnder` re-point — so a folder rename moves every
+ * descendant and re-points every open descendant pane in one shot.
  */
 export async function renameStorageEntry(
   fromPath: string,
@@ -114,7 +153,9 @@ export async function renameStorageEntry(
     if (exists) return { kind: 'exists' }
   }
   try {
-    await performBufferRename(fromPath, targetPath)
+    // The ONLY backend mutation for rename — exactly once, file and folder alike.
+    await backend.rename(fromPath, targetPath)
+    remapPanesUnder({ type: 'inapp' }, fromPath, targetPath)
     return { ok: true }
   } catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) }

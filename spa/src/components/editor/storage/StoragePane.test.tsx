@@ -1304,6 +1304,70 @@ describe('StoragePane', () => {
     })
   })
 
+  // --- In-place rename of a folder selection (Phase 1b T1b-4) ---
+
+  it('T4-UI-1: renaming a selected folder routes through backend.rename and re-selects the new path', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.stat.mockRejectedValue(new Error('not found'))
+    // Re-key the fixture like the real recursive backend.rename (T1b-1).
+    mockBackend.rename = vi.fn(async (from: string, to: string) => {
+      for (const [p, meta] of Array.from(paths)) {
+        if (p === from || p.startsWith(from + '/')) {
+          paths.delete(p)
+          paths.set(to + p.slice(from.length), meta)
+        }
+      }
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    const folder = await screen.findByTestId('buffer-row')
+    fireEvent.click(folder) // select the folder
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    expect((input as HTMLInputElement).value).toBe('dir')
+    fireEvent.change(input, { target: { value: 'docs' } })
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+    await waitFor(() => {
+      expect(mockBackend.rename).toHaveBeenCalledWith('/buffer/dir', '/buffer/docs')
+    })
+    expect(mockBackend.rename).toHaveBeenCalledTimes(1)
+    // Tree rebuilt → the renamed folder is present and re-selected by new path.
+    await waitFor(() => {
+      const row = screen
+        .getAllByTestId('buffer-row')
+        .find((r) => r.getAttribute('data-path') === '/buffer/docs')
+      expect(row).toBeTruthy()
+      expect(row!.getAttribute('aria-selected')).toBe('true')
+    })
+  })
+
+  it('T4-UI-2: folder rename onto an existing name shows the inline exists error (no mutation)', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/a', { isDir: true, size: 0 }],
+        ['/buffer/z', { isDir: true, size: 0 }],
+      ]),
+    )
+    mockBackend.stat.mockImplementation(async (p: string) => {
+      if (p === '/buffer/z') return { size: 0, mtime: 0, isDirectory: true, isFile: false } as FileStat
+      throw new Error('not found')
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    const rows = await screen.findAllByTestId('buffer-row')
+    fireEvent.click(rows.find((r) => r.getAttribute('data-path') === '/buffer/a')!)
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    fireEvent.change(input, { target: { value: 'z' } })
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+    await waitFor(() => {
+      expect(screen.getByTestId('rename-error').textContent).toBe('editor.buffers.rename_exists_error')
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+  })
+
   it('T3-3: New Folder does not overwrite an existing folder — it increments the name', async () => {
     // A "New Folder" already exists (e.g. from a prior session); creating
     // another must not clobber it (decision 7 — add-reserve increments).

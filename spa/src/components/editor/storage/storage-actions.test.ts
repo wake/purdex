@@ -4,6 +4,11 @@ import {
   createStorageFolder,
   renameStorageEntry,
 } from './storage-actions'
+import { InAppBackend } from '../../../lib/fs-backend-inapp'
+import { closeAllIDB } from '../../../lib/storage/idb'
+import { useTabStore } from '../../../stores/useTabStore'
+import { useEditorStore } from '../../../stores/useEditorStore'
+import type { Tab } from '../../../types/tab'
 
 // Configurable backend: default null so we exercise the "missing backend" guard.
 let backend: unknown = null
@@ -55,5 +60,198 @@ describe('createStorageFolder — mkdirUnique delegation (T1b-3)', () => {
     backend = { mkdirUnique: vi.fn().mockRejectedValue(new Error('boom')) }
     const res = await createStorageFolder('/buffer')
     expect('error' in res && res.error).toBe('boom')
+  })
+})
+
+// --- T1b-4: in-place rename (file + folder) via a SINGLE backend.rename +
+// pure remapPanesUnder -------------------------------------------------------
+//
+// These cases exercise the REAL InAppBackend (fake-indexeddb) + the REAL tab /
+// editor stores, so we verify the full path: one backend re-key (recursive for
+// folders, T1b-1) followed by a pure pane/buffer re-point that touches NO
+// backend. The fs-backend module mock returns whatever `backend` points at, so
+// assigning a real InAppBackend here routes storage-actions through it.
+
+function deleteInappDB(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase('pdx-inapp-fs')
+    req.onsuccess = () => resolve()
+    req.onerror = () => reject(req.error)
+    req.onblocked = () => reject(new Error('deleteDatabase blocked — connection not closed'))
+  })
+}
+
+function makeEditorTab(tabId: string, paneId: string, filePath: string): Tab {
+  return {
+    id: tabId,
+    pinned: false,
+    locked: false,
+    createdAt: Date.now(),
+    layout: {
+      type: 'leaf',
+      pane: { id: paneId, content: { kind: 'editor', source: { type: 'inapp' }, filePath } },
+    },
+  }
+}
+
+function makePreviewTab(
+  tabId: string,
+  paneId: string,
+  filePath: string,
+  kind: 'image-preview' | 'pdf-preview',
+): Tab {
+  return {
+    id: tabId,
+    pinned: false,
+    locked: false,
+    createdAt: Date.now(),
+    layout: {
+      type: 'leaf',
+      pane: { id: paneId, content: { kind, source: { type: 'inapp' }, filePath } },
+    },
+  }
+}
+
+function seedBuffer(filePath: string, paneId: string, languageSource: 'extension' | 'manual' = 'extension', language = 'markdown') {
+  useEditorStore.setState({
+    buffers: {
+      [`inapp:${filePath}`]: {
+        content: 'X',
+        savedContent: 'X',
+        isDirty: false,
+        lastStat: null,
+        modelId: 'm1',
+        language,
+        languageSource,
+        eol: 'lf',
+        encoding: 'utf8',
+      },
+    },
+    paneStates: {
+      [paneId]: {
+        bufferKey: `inapp:${filePath}`,
+        editorMode: 'raw',
+        showDiff: false,
+        cursorPosition: { line: 1, column: 1 },
+        monacoViewState: null,
+        tiptapViewState: null,
+      },
+    },
+  })
+}
+
+describe('renameStorageEntry — file + folder via one backend.rename + pure remapPanesUnder (T1b-4)', () => {
+  let real: InAppBackend
+  const enc = (s: string) => new TextEncoder().encode(s)
+  const dec = (b: Uint8Array) => new TextDecoder().decode(b)
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real // overrides the top-level `backend = null`
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+  })
+
+  it('T4-1: file rename — old gone, new present, content + mtime intact, exactly one backend.rename', async () => {
+    await real.write('/buffer/a.md', enc('hello'))
+    const before = await real.stat('/buffer/a.md')
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await renameStorageEntry('/buffer/a.md', 'b.md')
+
+    expect(res).toEqual({ ok: true })
+    expect(renameSpy).toHaveBeenCalledTimes(1)
+    expect(renameSpy).toHaveBeenCalledWith('/buffer/a.md', '/buffer/b.md')
+    await expect(real.stat('/buffer/a.md')).rejects.toThrow()
+    expect(dec(await real.read('/buffer/b.md'))).toBe('hello')
+    expect((await real.stat('/buffer/b.md')).mtime).toBe(before.mtime)
+  })
+
+  it('T4-2: file rename onto an existing path — refused, NO mutation (source + target untouched)', async () => {
+    await real.write('/buffer/a.md', enc('AAA'))
+    await real.write('/buffer/b.md', enc('BBB'))
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await renameStorageEntry('/buffer/a.md', 'b.md')
+
+    expect(res).toEqual({ kind: 'exists' })
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect(dec(await real.read('/buffer/a.md'))).toBe('AAA')
+    expect(dec(await real.read('/buffer/b.md'))).toBe('BBB')
+  })
+
+  it('T4-3: folder rename moves ≥2 nested descendants (AC-1b), one backend.rename', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    await real.write('/buffer/a/c/d.md', enc('DD'))
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await renameStorageEntry('/buffer/a', 'z')
+
+    expect(res).toEqual({ ok: true })
+    expect(renameSpy).toHaveBeenCalledTimes(1)
+    expect(renameSpy).toHaveBeenCalledWith('/buffer/a', '/buffer/z')
+    expect(dec(await real.read('/buffer/z/b.md'))).toBe('BB')
+    expect(dec(await real.read('/buffer/z/c/d.md'))).toBe('DD')
+    await expect(real.stat('/buffer/a')).rejects.toThrow()
+    await expect(real.stat('/buffer/a/b.md')).rejects.toThrow()
+    await expect(real.stat('/buffer/a/c/d.md')).rejects.toThrow()
+  })
+
+  it('T4-4: folder rename onto an existing folder name — refused before any mutation', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    await real.write('/buffer/z/keep.md', enc('K')) // z already exists as a dir
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await renameStorageEntry('/buffer/a', 'z')
+
+    expect(res).toEqual({ kind: 'exists' })
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect(dec(await real.read('/buffer/a/b.md'))).toBe('BB')
+    expect(dec(await real.read('/buffer/z/keep.md'))).toBe('K')
+  })
+
+  it('T4-5: folder rename re-points an open EDITOR descendant pane (no stale/orphan buffer)', async () => {
+    await real.write('/buffer/a/b.md', enc('content'))
+    useTabStore.setState({
+      tabs: { T1: makeEditorTab('T1', 'P1', '/buffer/a/b.md') },
+      tabOrder: ['T1'],
+      activeTabId: 'T1',
+      visitHistory: [],
+    })
+    seedBuffer('/buffer/a/b.md', 'P1')
+
+    const res = await renameStorageEntry('/buffer/a', 'z')
+
+    expect(res).toEqual({ ok: true })
+    const tab = useTabStore.getState().tabs.T1
+    expect(tab.layout.type).toBe('leaf')
+    if (tab.layout.type !== 'leaf') throw new Error('expected leaf')
+    expect(tab.layout.pane.content).toMatchObject({ kind: 'editor', filePath: '/buffer/z/b.md' })
+    const ed = useEditorStore.getState()
+    expect(ed.buffers['inapp:/buffer/z/b.md']).toBeDefined()
+    expect(ed.buffers['inapp:/buffer/a/b.md']).toBeUndefined()
+    expect(ed.paneStates.P1?.bufferKey).toBe('inapp:/buffer/z/b.md')
+  })
+
+  it('T4-5b: folder rename re-points an open IMAGE-PREVIEW descendant pane (no spurious editor buffer)', async () => {
+    await real.write('/buffer/a/p.png', enc('PNG'))
+    useTabStore.setState({
+      tabs: { T2: makePreviewTab('T2', 'P2', '/buffer/a/p.png', 'image-preview') },
+      tabOrder: ['T2'],
+      activeTabId: 'T2',
+      visitHistory: [],
+    })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+
+    const res = await renameStorageEntry('/buffer/a', 'z')
+
+    expect(res).toEqual({ ok: true })
+    const tab = useTabStore.getState().tabs.T2
+    if (tab.layout.type !== 'leaf') throw new Error('expected leaf')
+    expect(tab.layout.pane.content).toMatchObject({ kind: 'image-preview', filePath: '/buffer/z/p.png' })
+    // A preview pane has no editor buffer — none must be conjured by the remap.
+    expect(useEditorStore.getState().buffers['inapp:/buffer/z/p.png']).toBeUndefined()
   })
 })

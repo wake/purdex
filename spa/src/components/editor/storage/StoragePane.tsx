@@ -7,7 +7,7 @@ import { useWorkspaceStore } from '../../../features/workspace/store'
 import { useStorageTree } from '../../../hooks/useStorageTree'
 import { findPane } from '../../../lib/pane-tree'
 import { openInAppFile } from '../../../lib/open-in-app-file'
-import { basename } from '../../../lib/storage-paths'
+import { basename, join, parentOf } from '../../../lib/storage-paths'
 import { findNode, targetDirOf } from '../../../lib/storage-tree'
 import { RenamePopover } from '../../RenamePopover'
 import { StorageTree } from './StorageTree'
@@ -141,9 +141,12 @@ export function StoragePane({ pane }: PaneRendererProps) {
       if (!renameTarget) return
       const res = await renameStorageEntry(renameTarget, newName)
       if ('ok' in res) {
+        // Re-select by the new full path (file or folder) so a follow-up action
+        // keeps targeting the renamed entry once the tree rebuilds.
+        const newPath = join(parentOf(renameTarget), newName)
         setRenameTarget(null)
         setRenameError(null)
-        setSelected(new Set())
+        setSelected(new Set([newPath]))
         refresh()
       } else if (res.kind === 'exists') {
         setRenameError(t('editor.buffers.rename_exists_error'))
