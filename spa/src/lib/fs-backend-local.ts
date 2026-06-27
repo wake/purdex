@@ -42,4 +42,8 @@ export class LocalBackend implements FsBackend {
   async rename(from: string, to: string): Promise<void> {
     return this.api.rename(from, to)
   }
+
+  // The eager-unique-name reservation (#854) is an In-App-only capability
+  // (`SupportsUniqueCreate`); LocalBackend deliberately does NOT implement it
+  // (codex H1) — no atomic add primitive, no UI entry point.
 }

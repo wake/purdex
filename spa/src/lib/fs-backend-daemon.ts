@@ -68,6 +68,10 @@ export class DaemonBackend implements FsBackend {
   async rename(from: string, to: string): Promise<void> {
     await this.post('/api/fs/rename', { from, to })
   }
+
+  // The unique-name reservation (#854) is an In-App-only capability
+  // (`SupportsUniqueCreate`); DaemonBackend deliberately does NOT implement it
+  // (codex H1) — no daemon endpoint / UI entry point uses it.
 }
 
 /**

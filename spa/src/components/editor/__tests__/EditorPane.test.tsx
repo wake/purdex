@@ -108,6 +108,8 @@ function createBackend(): FsBackend & {
     mkdir: vi.fn(),
     delete: vi.fn(),
     rename: vi.fn(),
+    createUnique: vi.fn(),
+    mkdirUnique: vi.fn(),
   } as FsBackend & {
     read: ReturnType<typeof vi.fn>
     write: ReturnType<typeof vi.fn>

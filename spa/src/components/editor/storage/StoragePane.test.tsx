@@ -1,12 +1,38 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Mock } from 'vitest'
-import { useState } from 'react'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { useState, type ReactNode } from 'react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { StoragePane } from './StoragePane'
 import { openInAppFile } from '../../../lib/open-in-app-file'
 import type { Pane, Tab } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 import type { FileEntry, FileStat, FileSource } from '../../../types/fs'
+import type { DragEndEvent } from '@dnd-kit/core'
+
+// dnd-kit is mocked to a lightweight harness: DndContext captures the
+// `onDragEnd` callback so tests can drive a drop synthetically (real pointer
+// drag is impractical in jsdom — the plan endorses a pure handler +
+// onDragEnd-capture smoke). The draggable/droppable hooks become no-ops so rows
+// still render and the existing click/double-click suite keeps passing.
+let mockDragEnd: ((event: DragEndEvent) => void | Promise<void>) | undefined
+vi.mock('@dnd-kit/core', () => ({
+  DndContext: ({ children, onDragEnd }: { children: ReactNode; onDragEnd: (e: DragEndEvent) => void }) => {
+    mockDragEnd = onDragEnd
+    return children
+  },
+  useDraggable: () => ({
+    attributes: {},
+    listeners: {},
+    setNodeRef: () => undefined,
+    transform: null,
+    isDragging: false,
+  }),
+  useDroppable: () => ({ setNodeRef: () => undefined, isOver: false }),
+  PointerSensor: class {},
+  useSensor: () => ({}),
+  useSensors: () => [],
+  closestCenter: () => [],
+}))
 
 // Mock fs-backend: list/write/delete/rename/read are per-test spies. The helper
 // below installs a fresh mock into the registry before each test.
@@ -18,6 +44,8 @@ type MockBackend = {
   stat: Mock
   read: Mock
   mkdir: Mock
+  mkdirUnique: Mock
+  createUnique: Mock
   id: 'inapp'
   label: string
   available: () => boolean
@@ -29,6 +57,12 @@ const eventLog: string[] = []
 vi.mock('../../../lib/fs-backend', () => ({
   getFsBackend: () => mockBackend as unknown as FsBackend,
   registerFsBackend: vi.fn(),
+  // The capability guards (codex H1) narrow a resolved backend; mirror the real
+  // typeof check against the mock backend.
+  supportsCreateUnique: (b: { createUnique?: unknown } | undefined) =>
+    typeof b?.createUnique === 'function',
+  supportsMkdirUnique: (b: { mkdirUnique?: unknown } | undefined) =>
+    typeof b?.mkdirUnique === 'function',
 }))
 
 // Open routing is the StoragePane's collaboration boundary: the pane resolves
@@ -225,6 +259,7 @@ function pathAwareList(paths: Map<string, { isDir: boolean; size: number }>): Mo
 
 beforeEach(() => {
   eventLog.length = 0
+  mockDragEnd = undefined
   setPaneContentSpy.mockReset()
   setActiveTabSpy.mockReset()
   addTabSpy.mockReset()
@@ -293,6 +328,8 @@ beforeEach(() => {
     stat: vi.fn().mockResolvedValue({ size: 0, mtime: 0, isDirectory: false, isFile: true } as FileStat),
     read: vi.fn().mockResolvedValue(new Uint8Array(0)),
     mkdir: vi.fn().mockResolvedValue(undefined),
+    mkdirUnique: vi.fn().mockResolvedValue('/buffer/New Folder'),
+    createUnique: vi.fn().mockResolvedValue('/buffer/Untitled.md'),
   }
 
   vi.stubGlobal('confirm', vi.fn(() => true))
@@ -331,22 +368,21 @@ describe('StoragePane', () => {
     fireEvent.click(row) // select
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/foo.md')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/foo.md', false)
     })
   })
 
-  it('B2-4: New calls backend.write with Untitled-<timestamp>.md and refreshes', async () => {
+  it('B2-4: New calls backend.createUnique(root, Untitled, md) and refreshes', async () => {
     mockBackend.list.mockResolvedValue([] as FileEntry[])
     render(<StoragePane pane={makePane()} isActive />)
     await screen.findByText('editor.buffers.empty')
     fireEvent.click(screen.getByTestId('toolbar-new'))
     await waitFor(() => {
-      expect(mockBackend.write).toHaveBeenCalledTimes(1)
+      expect(mockBackend.createUnique).toHaveBeenCalledTimes(1)
     })
-    const [path, content] = mockBackend.write.mock.calls[0]
-    expect(path).toMatch(/^\/buffer\/Untitled-\d+\.md$/)
-    expect(content).toBeInstanceOf(Uint8Array)
-    expect(content.byteLength).toBe(0)
+    // Eager unified namer (#854): no blind write(), reservation is atomic.
+    expect(mockBackend.createUnique).toHaveBeenCalledWith('/buffer', 'Untitled', 'md')
+    expect(mockBackend.write).not.toHaveBeenCalled()
     // Refresh: list called a second time once the hook re-reads.
     await waitFor(() => {
       expect(mockBackend.list).toHaveBeenCalledTimes(2)
@@ -519,7 +555,7 @@ describe('StoragePane', () => {
     fireEvent.click(row)
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md', false)
     })
     const firstDeleteIdx = eventLog.findIndex((e) => e.startsWith('delete:'))
     const closeIdxs = eventLog
@@ -567,7 +603,7 @@ describe('StoragePane', () => {
     fireEvent.click(row)
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/p.png')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/p.png', false)
     })
     const firstDeleteIdx = eventLog.findIndex((e) => e.startsWith('delete:'))
     const closeIdxs = eventLog
@@ -640,8 +676,10 @@ describe('StoragePane', () => {
     tabStoreState.activeTabId = 'TA'
     render(<StoragePane pane={makePane()} isActive />)
     const rows = await screen.findAllByTestId('buffer-row')
-    fireEvent.click(rows[0]) // x.md
-    fireEvent.click(rows[1]) // y.md
+    fireEvent.click(rows[0]) // x.md (plain click selects only x.md)
+    // Modifier click adds y.md to the multi-selection (codex B5: plain click no
+    // longer accretes — additive multi-select needs cmd/ctrl/shift).
+    fireEvent.click(rows[1], { ctrlKey: true }) // + y.md
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
       expect(screen.getByText('editor.buffers.delete_locked_refused')).toBeTruthy()
@@ -708,7 +746,7 @@ describe('StoragePane', () => {
       fireEvent.click(screen.getByTestId('toolbar-delete'))
       expect(confirmTrue).toHaveBeenCalledWith('editor.buffers.delete_one_confirm')
       await waitFor(() => {
-        expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/only.md')
+        expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/only.md', false)
       })
     }
   })
@@ -932,7 +970,7 @@ describe('StoragePane', () => {
     fireEvent.click(screen.getByTestId('toolbar-delete'))
 
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md', false)
     })
     const editorState = editorModule.useEditorStore.getState()
     expect(editorState.buffers['inapp:/buffer/x.md']).toBeUndefined()
@@ -967,10 +1005,11 @@ describe('StoragePane', () => {
     expect(folderA.getAttribute('data-isdir')).toBe('true')
     expect(screen.queryByText('x.md')).toBeNull()
 
-    // Expand a → b appears; expand b → x.md appears.
-    fireEvent.click(folderA)
+    // Expand a → b appears; expand b → x.md appears. (Double-click toggles
+    // expand now that single-click selects the folder — T0-1.)
+    fireEvent.doubleClick(folderA)
     const folderB = await screen.findByText('b')
-    fireEvent.click(folderB)
+    fireEvent.doubleClick(folderB.closest('[data-testid="buffer-row"]')!)
     const leaf = await screen.findByText('x.md')
     const leafRow = leaf.closest('[data-testid="buffer-row"]')
     expect(leafRow?.getAttribute('data-path')).toBe('/buffer/a/b/x.md')
@@ -990,8 +1029,9 @@ describe('StoragePane', () => {
     render(<StoragePane pane={makePane()} isActive />)
     const d1 = await screen.findByText('d1')
     const d2 = await screen.findByText('d2')
-    fireEvent.click(d1.closest('[data-testid="buffer-row"]')!)
-    fireEvent.click(d2.closest('[data-testid="buffer-row"]')!)
+    // Double-click expands the folders (single-click now selects — T0-1).
+    fireEvent.doubleClick(d1.closest('[data-testid="buffer-row"]')!)
+    fireEvent.doubleClick(d2.closest('[data-testid="buffer-row"]')!)
     const leaves = await screen.findAllByText('x.md')
     const row1 = leaves[0].closest('[data-testid="buffer-row"]') as HTMLElement
     const row2 = leaves[1].closest('[data-testid="buffer-row"]') as HTMLElement
@@ -1017,8 +1057,8 @@ describe('StoragePane', () => {
     // Collapsed folder → Folder; png → FilePng.
     expect(byPath('/buffer/dir').getAttribute('data-icon')).toBe('Folder')
     expect(byPath('/buffer/pic.png').getAttribute('data-icon')).toBe('FilePng')
-    // Expand the folder → it switches to FolderOpen, and the md row resolves.
-    fireEvent.click(byPath('/buffer/dir'))
+    // Expand the folder (double-click) → it switches to FolderOpen, and the md row resolves.
+    fireEvent.doubleClick(byPath('/buffer/dir'))
     await waitFor(() => {
       const updated = screen.getAllByTestId('buffer-row')
       const dir = updated.find((r) => r.getAttribute('data-path') === '/buffer/dir')!
@@ -1129,8 +1169,9 @@ describe('StoragePane', () => {
     )
     mockBackend.stat.mockRejectedValue(new Error('not found'))
     render(<StoragePane pane={makePane()} isActive />)
-    fireEvent.click(await screen.findByText('a').then((n) => n.closest('[data-testid="buffer-row"]')!))
-    fireEvent.click((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
+    // Double-click expands the folders (single-click now selects — T0-1).
+    fireEvent.doubleClick(await screen.findByText('a').then((n) => n.closest('[data-testid="buffer-row"]')!))
+    fireEvent.doubleClick((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
     const leafRow = (await screen.findByText('x.md')).closest('[data-testid="buffer-row"]')!
     fireEvent.click(leafRow) // select
     fireEvent.click(screen.getByTestId('toolbar-rename'))
@@ -1153,13 +1194,492 @@ describe('StoragePane', () => {
       ]),
     )
     render(<StoragePane pane={makePane()} isActive />)
-    fireEvent.click((await screen.findByText('a')).closest('[data-testid="buffer-row"]')!)
-    fireEvent.click((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
+    // Double-click expands the folders (single-click now selects — T0-1).
+    fireEvent.doubleClick((await screen.findByText('a')).closest('[data-testid="buffer-row"]')!)
+    fireEvent.doubleClick((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
     const leafRow = (await screen.findByText('x.md')).closest('[data-testid="buffer-row"]')!
     fireEvent.click(leafRow)
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
-      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/a/b/x.md')
+      expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/a/b/x.md', false)
     })
+  })
+
+  // --- Folder-selectable tree + target model (Phase 1b T1b-0) ---
+
+  it('T0-1: clicking a folder name selects it (selected style), without expanding or opening', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    const folder = await screen.findByTestId('buffer-row')
+    expect(folder.getAttribute('data-path')).toBe('/buffer/dir')
+    fireEvent.click(folder)
+    // Folder shows the selected style and stays collapsed; no tab opened.
+    expect(folder.getAttribute('aria-selected')).toBe('true')
+    expect(screen.queryByText('x.md')).toBeNull()
+    expect(openInAppFile).not.toHaveBeenCalled()
+  })
+
+  it('T0-1b: the caret toggles expand independently of selection', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByTestId('buffer-row') // wait for the async tree build
+    const rowByPath = (p: string) =>
+      screen.getAllByTestId('buffer-row').find((r) => r.getAttribute('data-path') === p)!
+    fireEvent.click(rowByPath('/buffer/dir')) // select the folder
+    expect(rowByPath('/buffer/dir').getAttribute('aria-selected')).toBe('true')
+    // Expanding via the caret reveals the child but leaves selection intact.
+    fireEvent.click(within(rowByPath('/buffer/dir')).getByTestId('buffer-caret'))
+    await screen.findByText('x.md')
+    expect(rowByPath('/buffer/dir').getAttribute('aria-selected')).toBe('true')
+    expect(rowByPath('/buffer/dir/x.md').getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('T0-2: targetDir derives from selection (none→root, folder→self, file→parent)', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    const region = await screen.findByTestId('storage-tree-region')
+    await screen.findByTestId('buffer-row') // wait for the async tree build
+    const rowByPath = (p: string) =>
+      screen.getAllByTestId('buffer-row').find((r) => r.getAttribute('data-path') === p)!
+    // Nothing selected → storage root.
+    expect(region.getAttribute('data-target-dir')).toBe('/buffer')
+    // Folder selected → the folder itself.
+    fireEvent.click(rowByPath('/buffer/dir'))
+    expect(region.getAttribute('data-target-dir')).toBe('/buffer/dir')
+    // Deselect, expand (caret = no selection), select the nested file → its parent.
+    fireEvent.click(rowByPath('/buffer/dir'))
+    fireEvent.click(within(rowByPath('/buffer/dir')).getByTestId('buffer-caret'))
+    await screen.findByText('x.md')
+    fireEvent.click(rowByPath('/buffer/dir/x.md'))
+    expect(region.getAttribute('data-target-dir')).toBe('/buffer/dir')
+  })
+
+  it('T0-3: double-clicking a folder toggles expand and never opens a tab', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    const folder = await screen.findByTestId('buffer-row')
+    fireEvent.doubleClick(folder)
+    await screen.findByText('x.md') // expanded
+    expect(openInAppFile).not.toHaveBeenCalled()
+  })
+
+  // --- New Folder (mkdir) + New File targetDir wiring (Phase 1b T1b-3) ---
+
+  it('T3-1: New Folder creates a directory (mkdirUnique) that appears in the tree', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>()
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.mkdirUnique = vi.fn(async (dir: string) => {
+      const path = `${dir}/New Folder`
+      paths.set(path, { isDir: true, size: 0 })
+      return path
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+    fireEvent.click(screen.getByTestId('toolbar-new-folder'))
+    await waitFor(() => {
+      // No selection → targets the storage root.
+      expect(mockBackend.mkdirUnique).toHaveBeenCalledWith('/buffer')
+    })
+    const row = await screen.findByTestId('buffer-row')
+    expect(row.getAttribute('data-path')).toBe('/buffer/New Folder')
+    expect(row.getAttribute('data-isdir')).toBe('true')
+    // The new folder is auto-selected.
+    expect(row.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('T3-2: a New File created with the new folder selected lands inside it (folder accepts children)', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>()
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.mkdirUnique = vi.fn(async (dir: string) => {
+      const path = `${dir}/New Folder`
+      paths.set(path, { isDir: true, size: 0 })
+      return path
+    })
+    mockBackend.createUnique = vi.fn(async (dir: string, base: string, ext: string) => {
+      const path = `${dir}/${base}.${ext}`
+      paths.set(path, { isDir: false, size: 0 })
+      return path
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+    // New Folder → auto-selected + auto-expanded.
+    fireEvent.click(screen.getByTestId('toolbar-new-folder'))
+    await screen.findByTestId('buffer-row') // tree rebuilt → selection resolves to the folder
+    // New File now targets the selected folder (T1b-0 wiring).
+    fireEvent.click(screen.getByTestId('toolbar-new'))
+    await waitFor(() => {
+      expect(mockBackend.createUnique).toHaveBeenCalledWith('/buffer/New Folder', 'Untitled', 'md')
+    })
+    // The child file shows up under the (auto-expanded) folder.
+    await waitFor(() => {
+      const child = screen
+        .getAllByTestId('buffer-row')
+        .find((r) => r.getAttribute('data-path') === '/buffer/New Folder/Untitled.md')
+      expect(child).toBeTruthy()
+    })
+  })
+
+  // --- In-place rename of a folder selection (Phase 1b T1b-4) ---
+
+  it('T4-UI-1: renaming a selected folder routes through backend.rename and re-selects the new path', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.stat.mockRejectedValue(new Error('not found'))
+    // Re-key the fixture like the real recursive backend.rename (T1b-1).
+    mockBackend.rename = vi.fn(async (from: string, to: string) => {
+      for (const [p, meta] of Array.from(paths)) {
+        if (p === from || p.startsWith(from + '/')) {
+          paths.delete(p)
+          paths.set(to + p.slice(from.length), meta)
+        }
+      }
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    const folder = await screen.findByTestId('buffer-row')
+    fireEvent.click(folder) // select the folder
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    expect((input as HTMLInputElement).value).toBe('dir')
+    fireEvent.change(input, { target: { value: 'docs' } })
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+    await waitFor(() => {
+      expect(mockBackend.rename).toHaveBeenCalledWith('/buffer/dir', '/buffer/docs')
+    })
+    expect(mockBackend.rename).toHaveBeenCalledTimes(1)
+    // Tree rebuilt → the renamed folder is present and re-selected by new path.
+    await waitFor(() => {
+      const row = screen
+        .getAllByTestId('buffer-row')
+        .find((r) => r.getAttribute('data-path') === '/buffer/docs')
+      expect(row).toBeTruthy()
+      expect(row!.getAttribute('aria-selected')).toBe('true')
+    })
+  })
+
+  it('T4-UI-2: folder rename onto an existing name shows the inline exists error (no mutation)', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/a', { isDir: true, size: 0 }],
+        ['/buffer/z', { isDir: true, size: 0 }],
+      ]),
+    )
+    mockBackend.stat.mockImplementation(async (p: string) => {
+      if (p === '/buffer/z') return { size: 0, mtime: 0, isDirectory: true, isFile: false } as FileStat
+      throw new Error('not found')
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    const rows = await screen.findAllByTestId('buffer-row')
+    fireEvent.click(rows.find((r) => r.getAttribute('data-path') === '/buffer/a')!)
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    fireEvent.change(input, { target: { value: 'z' } })
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+    await waitFor(() => {
+      expect(screen.getByTestId('rename-error').textContent).toBe('editor.buffers.rename_exists_error')
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+  })
+
+  it('T3-3: New Folder does not overwrite an existing folder — it increments the name', async () => {
+    // A "New Folder" already exists (e.g. from a prior session); creating
+    // another must not clobber it (decision 7 — add-reserve increments).
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/New Folder', { isDir: true, size: 0 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.mkdirUnique = vi.fn(async (dir: string) => {
+      let n = 0
+      let path = `${dir}/New Folder`
+      while (paths.has(path)) {
+        n += 1
+        path = `${dir}/New Folder ${n}`
+      }
+      paths.set(path, { isDir: true, size: 0 })
+      return path
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByTestId('buffer-row')
+    fireEvent.click(screen.getByTestId('toolbar-new-folder'))
+    await waitFor(() => {
+      const names = screen
+        .getAllByTestId('buffer-row')
+        .map((r) => r.getAttribute('data-path'))
+      expect(names).toContain('/buffer/New Folder')
+      expect(names).toContain('/buffer/New Folder 1')
+    })
+  })
+
+  // --- Drag-and-drop move wiring (Phase 1b T1b-6b) ---
+  // The pure resolver `computeMoveFromDragEnd` is unit-tested in
+  // `storage-dnd.test.ts`; the cases below drive the wired `onDragEnd` with a
+  // synthetic drop event whose `over.data.current.targetDir` mirrors what the
+  // row / root droppables publish (codex B1).
+
+  it('T6b-1: dragging a file onto a folder moves it into that folder and refreshes', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/a.md', { isDir: false, size: 3 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.stat.mockRejectedValue(new Error('not found')) // no collision
+    mockBackend.rename = vi.fn(async (from: string, to: string) => {
+      const meta = paths.get(from)!
+      paths.delete(from)
+      paths.set(to, meta)
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    expect(mockDragEnd).toBeTypeOf('function') // DndContext mounted + wired
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/a.md' },
+        over: { id: '/buffer/dir', data: { current: { targetDir: '/buffer/dir' } } },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).toHaveBeenCalledWith('/buffer/a.md', '/buffer/dir/a.md')
+    // Tree refreshed: the file now lives under the (expandable) folder.
+    await waitFor(() => {
+      const names = screen.getAllByTestId('buffer-row').map((r) => r.getAttribute('data-path'))
+      expect(names).not.toContain('/buffer/a.md')
+    })
+  })
+
+  it('T6b-2: dropping a nested file on the root region moves it to STORAGE_ROOT', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/a.md', { isDir: false, size: 3 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.stat.mockRejectedValue(new Error('not found'))
+    mockBackend.rename = vi.fn(async (from: string, to: string) => {
+      const meta = paths.get(from)!
+      paths.delete(from)
+      paths.set(to, meta)
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/dir/a.md' },
+        over: { id: '/buffer', data: { current: { targetDir: '/buffer' } } },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).toHaveBeenCalledWith('/buffer/dir/a.md', '/buffer/a.md')
+  })
+
+  it('T6b-3: dropping onto self or own descendant is a no-op (no backend mutation)', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/sub', { isDir: true, size: 0 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    // onto self
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/dir' },
+        over: { id: '/buffer/dir', data: { current: { targetDir: '/buffer/dir' } } },
+      } as unknown as DragEndEvent)
+    })
+    // into own descendant
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/dir' },
+        over: { id: '/buffer/dir/sub', data: { current: { targetDir: '/buffer/dir/sub' } } },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+    expect(mockBackend.stat).not.toHaveBeenCalled()
+  })
+
+  it('T6b-3b: dropping onto an existing same-named entry surfaces the inline exists error', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/a.md', { isDir: false, size: 3 }],
+      ['/buffer/a.md', { isDir: false, size: 9 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    // The target /buffer/dir/a.md already exists.
+    mockBackend.stat.mockImplementation(async (p: string) => {
+      if (paths.has(p)) return { size: 0, mtime: 0, isDirectory: false, isFile: true } as FileStat
+      throw new Error('not found')
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/a.md' },
+        over: { id: '/buffer/dir', data: { current: { targetDir: '/buffer/dir' } } },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getByText('editor.buffers.rename_exists_error')).toBeTruthy()
+    })
+  })
+
+  it('T6b-4: click still selects and double-click still opens (no DnD regression)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'a.md', isDir: false, size: 3 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-selected')).toBe('true')
+    fireEvent.doubleClick(row)
+    await waitFor(() => {
+      expect(openInAppFile).toHaveBeenCalledWith('/buffer/a.md', 'ws1')
+    })
+  })
+
+  it('B1-UI: dropping a file onto a same-dir sibling is a no-op (targetDir = shared parent)', async () => {
+    // The sibling row publishes /buffer as its targetDir; the move then collapses
+    // to a no-op (targetDir === parentOf(from)) instead of bouncing to root.
+    mockBackend.list.mockResolvedValue([
+      { name: 'a.md', isDir: false, size: 3 },
+      { name: 'b.md', isDir: false, size: 3 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    await act(async () => {
+      await mockDragEnd!({
+        active: { id: '/buffer/a.md' },
+        over: { id: '/buffer/b.md', data: { current: { targetDir: '/buffer' } } },
+      } as unknown as DragEndEvent)
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+    expect(mockBackend.stat).not.toHaveBeenCalled()
+  })
+
+  // --- Folder Open guard (codex B3) ---
+
+  it('B3: selecting a folder disables the toolbar Open button (folders are not openable)', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/note.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    const rowByPath = (p: string) =>
+      screen.getAllByTestId('buffer-row').find((r) => r.getAttribute('data-path') === p)!
+    const openBtn = screen.getByTestId('toolbar-open') as HTMLButtonElement
+    // Folder selected → Open disabled, and clicking it never routes to open.
+    fireEvent.click(rowByPath('/buffer/dir'))
+    expect(openBtn.disabled).toBe(true)
+    fireEvent.click(openBtn)
+    expect(openInAppFile).not.toHaveBeenCalled()
+    // A file selection re-enables Open.
+    fireEvent.click(rowByPath('/buffer/note.md'))
+    expect(openBtn.disabled).toBe(false)
+  })
+
+  // --- Selection model: plain click never toggles off (codex B5) ---
+
+  it('B5: a second plain click keeps the row selected (no toggle-off)', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'a.md', isDir: false, size: 3 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-selected')).toBe('true')
+    // Pre-fix this second plain click toggled the row OFF (the click→click→
+    // dblclick sequence stranded the action target); now it stays selected.
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('B5b: a modifier click toggles the row out of a multi-selection', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'a.md', isDir: false, size: 3 },
+      { name: 'b.md', isDir: false, size: 3 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const rows = await screen.findAllByTestId('buffer-row')
+    fireEvent.click(rows[0]) // a.md
+    fireEvent.click(rows[1], { metaKey: true }) // + b.md
+    expect(rows[0].getAttribute('aria-selected')).toBe('true')
+    expect(rows[1].getAttribute('aria-selected')).toBe('true')
+    // Modifier-click b.md again → toggles it back out.
+    fireEvent.click(rows[1], { metaKey: true })
+    expect(rows[1].getAttribute('aria-selected')).toBe('false')
+    expect(rows[0].getAttribute('aria-selected')).toBe('true')
+  })
+
+  // --- Same-name rename closes the popover without a backend rename (codex B4) ---
+
+  it('B4-UI: confirming a rename with the SAME name closes the popover and never calls backend.rename', async () => {
+    mockBackend.list.mockResolvedValue([
+      { name: 'foo.md', isDir: false, size: 10 },
+    ] as FileEntry[])
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    fireEvent.click(row)
+    fireEvent.click(screen.getByTestId('toolbar-rename'))
+    const input = await screen.findByTestId('rename-input')
+    expect((input as HTMLInputElement).value).toBe('foo.md')
+    // Confirm with the unchanged name.
+    fireEvent.click(screen.getByTestId('rename-confirm'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('rename-popover-harness')).toBeNull()
+    })
+    expect(mockBackend.rename).not.toHaveBeenCalled()
+    expect(mockBackend.stat).not.toHaveBeenCalled()
+  })
+
+  // --- D2: rapid double new-file converges on the atomic namer (no shared key) ---
+
+  it('D2: rapid double New File routes through the atomic createUnique namer with no shared key', async () => {
+    let n = 0
+    mockBackend.list.mockResolvedValue([] as FileEntry[])
+    // Atomic reservation: each call hands back a distinct path (mirrors the IDB
+    // `add` serialization point) — never a Date.now()-style shared key.
+    mockBackend.createUnique = vi.fn(async () => {
+      n += 1
+      return n === 1 ? '/buffer/Untitled.md' : `/buffer/Untitled-${n - 1}.md`
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+    const newBtn = screen.getByTestId('toolbar-new')
+    // Two rapid clicks. The busy-disable guard may serialize them to a single
+    // reservation, but whatever fires goes through the atomic namer — no blind
+    // write, and any reservations are distinct (no shared key, #854).
+    fireEvent.click(newBtn)
+    fireEvent.click(newBtn)
+    await waitFor(() => {
+      expect(mockBackend.createUnique).toHaveBeenCalled()
+    })
+    expect(mockBackend.write).not.toHaveBeenCalled()
+    const reserved = await Promise.all(
+      (mockBackend.createUnique as Mock).mock.results.map((r) => r.value),
+    )
+    // No two reservations collide on the same key.
+    expect(new Set(reserved).size).toBe(reserved.length)
   })
 })

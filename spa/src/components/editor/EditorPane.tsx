@@ -14,7 +14,8 @@ import { EditorStatusBar } from './EditorStatusBar'
 import { RenamePopover } from '../RenamePopover'
 import { findPane } from '../../lib/pane-tree'
 import { bufferKey } from '../../lib/editor-buffer-key'
-import { STORAGE_ROOT, join } from '../../lib/storage-paths'
+import { STORAGE_ROOT } from '../../lib/storage-paths'
+import { createUniqueInAppFile } from '../../lib/inapp-namer'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 import {
@@ -421,10 +422,14 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           const currentBuf = useEditorStore.getState().buffers[currentKey]
           if (currentBuf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
 
-          const path = join(STORAGE_ROOT, `Untitled-${Date.now()}.md`)
-          const backend = getFsBackend({ type: 'inapp' })
-          if (!backend) return
-          await backend.write(path, new Uint8Array(0))
+          // Eager unified namer (#854): atomically reserve a unique empty file
+          // (collision-free even on a rapid double-click) and open its real path.
+          let path: string
+          try {
+            path = await createUniqueInAppFile(STORAGE_ROOT, 'md')
+          } catch {
+            return
+          }
           const tabId = findTabIdForPane(paneId)
           if (!tabId) return
           useTabStore.getState().setPaneContent(tabId, paneId, {

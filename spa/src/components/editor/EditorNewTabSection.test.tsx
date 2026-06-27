@@ -4,99 +4,87 @@ import { EditorNewTabSection } from './EditorNewTabSection'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useTabStore } from '../../stores/useTabStore'
 
-const getFsBackendMock = vi.hoisted(() => vi.fn())
+const createUniqueInAppFileMock = vi.hoisted(() => vi.fn())
 
-vi.mock('../../lib/fs-backend', () => ({
-  getFsBackend: getFsBackendMock,
+vi.mock('../../lib/inapp-namer', () => ({
+  createUniqueInAppFile: createUniqueInAppFileMock,
 }))
 
-describe('EditorNewTabSection', () => {
+describe('EditorNewTabSection (eager reserved files — T1b-2)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useEditorStore.getState().clearAllBuffers()
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   })
 
-  it('creates an untitled markdown document without writing to backend', async () => {
-    const backend = {
-      list: vi.fn(async () => []),
-      write: vi.fn(),
-    }
+  // T2-5: New Markdown reserves a REAL path (not an `untitled:` virtual path).
+  it('New Markdown reserves a real /buffer path and opens it (no untitled:)', async () => {
+    createUniqueInAppFileMock.mockResolvedValue('/buffer/Untitled.md')
     const onSelect = vi.fn()
-    getFsBackendMock.mockReturnValue(backend)
 
     render(<EditorNewTabSection onSelect={onSelect} />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New Markdown' }))
 
     await waitFor(() => {
       expect(onSelect).toHaveBeenCalledWith({
         kind: 'editor',
         source: { type: 'inapp' },
-        filePath: 'untitled:Untitled',
-        untitled: {
-          name: 'Untitled',
-          suggestedExtension: '.md',
-          hasBeenRenamed: false,
-        },
+        filePath: '/buffer/Untitled.md',
       })
     })
-
-    expect(backend.write).not.toHaveBeenCalled()
+    expect(createUniqueInAppFileMock).toHaveBeenCalledWith('/buffer', 'md')
+    const content = onSelect.mock.calls[0][0]
+    expect(content.filePath.startsWith('untitled:')).toBe(false)
+    expect(content.untitled).toBeUndefined()
   })
 
-  it('uses the next readable untitled name when a draft with the same template exists', async () => {
-    const backend = {
-      list: vi.fn(async () => []),
-    }
+  // T2-5: New File maps the button label to the bare `txt` ext.
+  it('New File reserves a real .txt path via the bare txt extension', async () => {
+    createUniqueInAppFileMock.mockResolvedValue('/buffer/Untitled.txt')
     const onSelect = vi.fn()
-    getFsBackendMock.mockReturnValue(backend)
-
-    useTabStore.setState({
-      tabs: {
-        'tab-1': {
-          id: 'tab-1',
-          pinned: false,
-          locked: false,
-          createdAt: 1,
-          layout: {
-            type: 'leaf',
-            pane: {
-              id: 'pane-1',
-              content: {
-                kind: 'editor',
-                source: { type: 'inapp' },
-                filePath: 'untitled:Untitled',
-                untitled: {
-                  name: 'Untitled',
-                  suggestedExtension: '.txt',
-                  hasBeenRenamed: false,
-                },
-              },
-            },
-          },
-        },
-      },
-      tabOrder: ['tab-1'],
-      activeTabId: 'tab-1',
-      visitHistory: [],
-    })
 
     render(<EditorNewTabSection onSelect={onSelect} />)
-
     fireEvent.click(screen.getByRole('button', { name: 'New File' }))
 
     await waitFor(() => {
       expect(onSelect).toHaveBeenCalledWith({
         kind: 'editor',
         source: { type: 'inapp' },
-        filePath: 'untitled:Untitled-1',
-        untitled: {
-          name: 'Untitled-1',
-          suggestedExtension: '.txt',
-          hasBeenRenamed: false,
-        },
+        filePath: '/buffer/Untitled.txt',
       })
     })
+    expect(createUniqueInAppFileMock).toHaveBeenCalledWith('/buffer', 'txt')
+  })
+
+  // T2-5: rapid double-click → two distinct reserved paths, never a shared key.
+  it('rapid double new-file gets distinct reserved paths (no shared key)', async () => {
+    createUniqueInAppFileMock
+      .mockResolvedValueOnce('/buffer/Untitled.md')
+      .mockResolvedValueOnce('/buffer/Untitled-1.md')
+    const onSelect = vi.fn()
+
+    render(<EditorNewTabSection onSelect={onSelect} />)
+    const btn = screen.getByRole('button', { name: 'New Markdown' })
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+
+    await waitFor(() => {
+      expect(onSelect).toHaveBeenCalledTimes(2)
+    })
+    const paths = onSelect.mock.calls.map((c) => c[0].filePath)
+    expect(new Set(paths).size).toBe(2)
+  })
+
+  it('does not call onSelect when the namer fails (backend unavailable)', async () => {
+    createUniqueInAppFileMock.mockRejectedValue(new Error('InApp backend unavailable'))
+    const onSelect = vi.fn()
+
+    render(<EditorNewTabSection onSelect={onSelect} />)
+    fireEvent.click(screen.getByRole('button', { name: 'New Markdown' }))
+
+    await waitFor(() => {
+      expect(createUniqueInAppFileMock).toHaveBeenCalled()
+    })
+    expect(onSelect).not.toHaveBeenCalled()
   })
 })

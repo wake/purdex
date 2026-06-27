@@ -1,6 +1,7 @@
 import type { IDBPDatabase } from 'idb'
 import { openIDB } from './storage/idb'
-import type { FsBackend } from './fs-backend'
+import type { FsBackend, SupportsUniqueCreate } from './fs-backend'
+import { join } from './storage-paths'
 import type { FileStat, FileEntry } from '../types/fs'
 
 const DB_NAME = 'pdx-inapp-fs'
@@ -14,7 +15,7 @@ interface StoredFile {
   mtime: number
 }
 
-export class InAppBackend implements FsBackend {
+export class InAppBackend implements FsBackend, SupportsUniqueCreate {
   id = 'inapp'
   label = 'In-App Storage'
 
@@ -142,14 +143,108 @@ export class InAppBackend implements FsBackend {
     const db = await this.db()
     const tx = db.transaction(STORE, 'readwrite')
     const store = tx.store
-    const entry = (await store.get(from)) as StoredFile | undefined
-    if (!entry) {
+
+    // Dir-aware recursive move: select `from` itself plus every descendant
+    // (`from/`-prefixed key). A file move is the single-key case of this.
+    const fromPrefix = from + '/'
+    const allKeys = (await store.getAllKeys()) as string[]
+    const sourceKeys = allKeys.filter(
+      (k) => k === from || k.startsWith(fromPrefix),
+    )
+    if (sourceKeys.length === 0) {
       await tx.done
       throw new Error(`InAppBackend: path not found: ${from}`)
     }
-    // Blind overwrite of target (I6); only the single entry moves (I7).
-    await store.put({ ...entry, path: to } satisfies StoredFile)
-    await store.delete(from)
+
+    // Full collision scan over the WHOLE target subtree BEFORE any mutation:
+    // reject if `to` exists or any `${to}/`-prefixed key exists (spec AC-1b —
+    // refused before any backend mutation). idb auto-aborts the tx on throw.
+    const toPrefix = to + '/'
+    const collision = allKeys.some(
+      (k) => k === to || k.startsWith(toPrefix),
+    )
+    if (collision) {
+      await tx.done
+      throw new Error(`InAppBackend: rename target already exists: ${to}`)
+    }
+
+    // Re-key every entry in one transaction, preserving each entry's mtime
+    // (a move is not a content edit, so we must NOT bump mtime).
+    for (const key of sourceKeys) {
+      const entry = (await store.get(key)) as StoredFile | undefined
+      if (!entry) continue
+      const newKey = to + key.slice(from.length)
+      await store.put({ ...entry, path: newKey } satisfies StoredFile)
+      await store.delete(key)
+    }
     await tx.done
+  }
+
+  async createUnique(dir: string, baseName = 'Untitled', ext: 'md' | 'txt'): Promise<string> {
+    const db = await this.db()
+    const now = Date.now()
+    const MAX = 10_000
+    // store.add() is the single serialization point: it throws ConstraintError
+    // if the keyPath (path) already exists, unlike put()'s blind overwrite. So
+    // concurrent callers — e.g. a rapid double "New file" click (#854) — each
+    // win exactly one distinct key; the loser retries the next suffix instead
+    // of sharing the key. A fresh tx per attempt because a ConstraintError
+    // aborts the transaction it occurred in.
+    for (let n = 0; n < MAX; n++) {
+      const name = n === 0 ? baseName : `${baseName}-${n}`
+      const path = join(dir, `${name}.${ext}`)
+      const tx = db.transaction(STORE, 'readwrite')
+      try {
+        await tx.store.add({
+          path,
+          content: new Uint8Array(0),
+          isDirectory: false,
+          mtime: now,
+        } satisfies StoredFile)
+        await tx.done
+        return path
+      } catch (err) {
+        // A failed add() aborts its transaction, so tx.done rejects with an
+        // AbortError. We left it un-awaited (we threw out of the try first), so
+        // observe it here to avoid an unhandled rejection before retrying.
+        tx.done.catch(() => {})
+        if ((err as { name?: string } | null)?.name === 'ConstraintError') continue
+        throw err
+      }
+    }
+    throw new Error(`InAppBackend.createUnique: exhausted ${MAX} candidates under ${dir}`)
+  }
+
+  async mkdirUnique(dir: string, baseName = 'New Folder'): Promise<string> {
+    const db = await this.db()
+    const now = Date.now()
+    const MAX = 10_000
+    // Symmetric with createUnique (decision 7): store.add() is the single
+    // serialization point, so a rapid double "New Folder" click each wins a
+    // distinct key instead of clobbering. Folder candidates use a SPACE suffix
+    // ("New Folder", "New Folder 1", …) and carry NO extension. A fresh tx per
+    // attempt because a ConstraintError aborts the transaction it occurred in.
+    for (let n = 0; n < MAX; n++) {
+      const name = n === 0 ? baseName : `${baseName} ${n}`
+      const path = join(dir, name)
+      const tx = db.transaction(STORE, 'readwrite')
+      try {
+        await tx.store.add({
+          path,
+          content: new Uint8Array(0),
+          isDirectory: true,
+          mtime: now,
+        } satisfies StoredFile)
+        await tx.done
+        return path
+      } catch (err) {
+        // Observe the aborted tx's rejection to avoid an unhandled rejection
+        // before retrying the next suffix.
+        tx.done.catch(() => {})
+        if ((err as { name?: string } | null)?.name === 'ConstraintError') continue
+        throw err
+      }
+    }
+    throw new Error(`InAppBackend.mkdirUnique: exhausted ${MAX} candidates under ${dir}`)
   }
 }

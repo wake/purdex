@@ -5,10 +5,11 @@ interface StorageTreeProps {
   tree: TreeNode[]
   /** Full paths of currently expanded directories. */
   expanded: Set<string>
-  /** Full paths of currently selected (leaf-file) nodes. */
+  /** Full paths of currently selected nodes (files OR folders — T1b-0). */
   selected: Set<string>
   onToggle: (path: string) => void
-  onSelect: (path: string) => void
+  /** Select a row; `additive` (modifier held) toggles into a multi-selection. */
+  onSelect: (path: string, additive: boolean) => void
   onOpen: (path: string) => void
 }
 
