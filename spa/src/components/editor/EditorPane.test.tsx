@@ -33,6 +33,12 @@ vi.mock('../../lib/open-in-app-file', () => ({
   openInAppFile: (...args: unknown[]) => openInAppFileMock(...args),
 }))
 
+// D2: the "new buffer" entry point reserves through the unified atomic namer.
+const createUniqueInAppFileMock = vi.hoisted(() => vi.fn())
+vi.mock('../../lib/inapp-namer', () => ({
+  createUniqueInAppFile: createUniqueInAppFileMock,
+}))
+
 // Path-aware backend so the chip click drives `listTreeUnder`.
 const listMock = vi.fn()
 vi.mock('../../lib/fs-backend', () => ({
@@ -125,5 +131,36 @@ describe('EditorPane — breadcrumb quick-switch (T6)', () => {
 
     expect(openInAppFileMock).toHaveBeenCalledTimes(1)
     expect(openInAppFileMock).toHaveBeenCalledWith('/buffer/root.md', WS_ID)
+  })
+
+  // D2 (AC-1b clause 6): the breadcrumb "new buffer" reserves through the atomic
+  // namer; two reservations get distinct real paths — never a shared key.
+  it('D2: new buffer routes through createUniqueInAppFile with distinct paths (no shared key)', async () => {
+    // Empty buffer dir → the popover renders its "new buffer" affordance.
+    listMock.mockResolvedValue([])
+    createUniqueInAppFileMock
+      .mockResolvedValueOnce('/buffer/Untitled.md')
+      .mockResolvedValueOnce('/buffer/Untitled-1.md')
+    const setPaneContentSpy = vi
+      .spyOn(useTabStore.getState(), 'setPaneContent')
+      .mockImplementation(() => {})
+    renderPane()
+
+    // First reservation.
+    fireEvent.click(screen.getByRole('button', { name: /Purdex/ }))
+    const firstBtn = await waitFor(() => screen.getByTestId('breadcrumb-popover-new-buffer'))
+    fireEvent.click(firstBtn)
+    await waitFor(() => expect(setPaneContentSpy).toHaveBeenCalledTimes(1))
+
+    // Second reservation (reopen the popover; the first dismissed it).
+    fireEvent.click(screen.getByRole('button', { name: /Purdex/ }))
+    const secondBtn = await waitFor(() => screen.getByTestId('breadcrumb-popover-new-buffer'))
+    fireEvent.click(secondBtn)
+    await waitFor(() => expect(setPaneContentSpy).toHaveBeenCalledTimes(2))
+
+    expect(createUniqueInAppFileMock).toHaveBeenCalledWith('/buffer', 'md')
+    const filePaths = setPaneContentSpy.mock.calls.map((c) => (c[2] as { filePath: string }).filePath)
+    expect(filePaths).toEqual(['/buffer/Untitled.md', '/buffer/Untitled-1.md'])
+    expect(new Set(filePaths).size).toBe(2)
   })
 })
