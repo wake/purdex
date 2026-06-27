@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.300] - 2026-06-27
+
+### Feat(storage): In-App nested file manager — "Storage" (subsystem 1, Phase 1a) (#869)
+
+把「Manage buffers」升級為完整的巢狀檔案管理 **Storage**（純前端，後端沿用
+`InAppBackend` / IndexedDB，已支援巢狀）。spec + plan 各 3 輪 codex review 收斂後，
+依 plan 切 10 個 TDD task 派 subagent 實作；PR 3 輪 review（R1 2 P1 / R2 1 high+2 medium /
+R3 2 P2+1 P3）全收斂。
+
+- **修兩個實測症狀**：① 清單裸文字、無法一眼識別 → 巢狀樹 + Phosphor 檔案/資料夾 icon +
+  row metadata（size + 文字檔字數，二進位/超 256KB/未知型別只顯 size）；② smart-open 跨 tab
+  劫持「開錯/開不了」→ 改走 `openInAppFile`（open-or-focus + registry dispatch：png→圖片
+  檢視器 / pdf→PDF 檢視器 / md→編輯器；先 stat 確認存在才開，避免把 stale/已刪檔開成空白
+  editor）。
+- **巢狀樹**：`listTreeUnder` full-recursive + `useStorageTree`（full-path node identity）；
+  展開收合；`STORAGE_ROOT` 集中原本寫死 7+ 處 `/buffer`。
+- **元件拆分**：462 行 `EditorBuffersPane` → `storage/` 四模組（StoragePane 兩區框架含右側
+  daemon 備份 placeholder / StorageTree / StorageRow / storage-actions，leaf CRUD 改
+  full-path、保留 dirty/locked 守衛、rename/delete 同步 image/pdf preview pane）。
+- **tab icon** 與 tree row 共用 `fileIconForPath`；breadcrumb popover 巢狀化並走
+  `openInAppFile`；改名 Buffers→「Storage」（en + zh-TW「儲存空間」）。
+
+範圍外（後續）：Phase 1b（mkdir / 資料夾搬移 + 後端遞迴 / 拖曳 / 統一 new-file namer #854）、
+Phase 1c（上傳/下載 / quota）、子系統 2（daemon 備份還原 snapshot 版本庫，右側欄）。
+
 ## [1.0.0-alpha.299] - 2026-06-26
 
 ### Fix(sync+test): clear host token as null sentinel + fix stale TabBar tooltip test (#674)
