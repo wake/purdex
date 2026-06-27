@@ -180,10 +180,18 @@ testable.
   `moveDir` helper) to re-key **every** `from/`-prefixed descendant entry in one transaction.
   Folder rename/move UI MUST NOT ship on the single-entry rename.
 - **New folder (mkdir)** — currently absent; create under the selected dir.
-- **Unified new-file helper** (§#854, codex P2-5): one `createUniqueInAppFile(dir)` used by
-  **all three** entry points (`EditorPane.tsx:408`, `EditorBuffersPane.tsx:115`,
-  `EditorNewTabSection.tsx:17`), name generated against the live tree with collision guard —
-  so the dup-bufferKey race can't return from another entry.
+- **Unified new-file helper** (§#854, codex P2-5): one `createUniqueInAppFile(dir, ext)` used
+  by **all three** entry points (`EditorPane.tsx:408`, `EditorBuffersPane.tsx:115`,
+  `EditorNewTabSection.tsx:17`), with **atomic IDB `add()` reservation** (not scan-then-write)
+  as the single serialization point — so the dup-bufferKey race can't return from another
+  entry.
+  - **Amendment (1b plan, 2026-06-28)**: the three entries were not symmetric —
+    `EditorPane`/`EditorBuffersPane` already eagerly write an empty file, but
+    `EditorNewTabSection` used a **lazy in-memory `untitled:`** buffer (UntitledDocumentState,
+    rename-before-save, `.txt`/`.md`). **Decision: converge all three on eager reservation.**
+    EditorNewTabSection now reserves a real file via `createUniqueInAppFile(dir, ext)`; the
+    `.txt`/`.md` choice is preserved as `ext`. The `untitled:` virtual path is no longer
+    produced by this entry. See `2026-06-28-storage-filemanager-1b-plan.md` §"Spec amendment".
 - File rename (in-place + across dirs); collision pre-check (reuse `stat` guard
   `EditorBuffersPane.tsx:144-153`).
 - Recursive delete; preserve locked-tab refusal + dirty-pane confirm guards
