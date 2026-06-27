@@ -18,6 +18,12 @@ let backend: unknown = null
 vi.mock('../../../lib/fs-backend', () => ({
   getFsBackend: () => backend,
   registerFsBackend: vi.fn(),
+  // Capability guards (codex H1) — narrow via the same typeof check the real
+  // module uses, so the configurable `backend` here flows through unchanged.
+  supportsCreateUnique: (b: { createUnique?: unknown } | undefined | null) =>
+    typeof b?.createUnique === 'function',
+  supportsMkdirUnique: (b: { mkdirUnique?: unknown } | undefined | null) =>
+    typeof b?.mkdirUnique === 'function',
 }))
 
 beforeEach(() => {
@@ -515,5 +521,127 @@ describe('moveStorageEntry — pure recursive move + guards (T1b-6a)', () => {
     const res = await moveStorageEntry('/buffer/x.md', '/buffer/dir')
 
     expect(res).toEqual({ kind: 'error', message: 'boom' })
+  })
+})
+
+// --- codex B2: deleting a folder + one of its descendants together must not
+// half-delete then error on the now-missing descendant -----------------------
+
+describe('deleteStorageEntries — overlapping (folder + descendant) selection is normalized (B2)', () => {
+  let real: InAppBackend
+  const enc = (s: string) => new TextEncoder().encode(s)
+  const t: (key: string, params?: Record<string, string | number>) => string = (k) => k
+  const originalConfirm = window.confirm
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+    window.confirm = () => true
+  })
+
+  afterEach(() => {
+    window.confirm = originalConfirm
+  })
+
+  it('B2: selecting a folder AND its descendant deletes cleanly (status deleted, not error)', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    await real.write('/buffer/a/c/d.md', enc('DD'))
+    // Select the folder AND a nested descendant of it. Pre-fix the loop deleted
+    // the folder recursively, then re-deleted the now-missing descendant →
+    // not-found → status:error after the folder was already (partly) gone.
+    const deleteSpy = vi.spyOn(real, 'delete')
+
+    const res = await deleteStorageEntries(['/buffer/a', '/buffer/a/c/d.md'], t)
+
+    expect(res).toEqual({ status: 'deleted' })
+    // The descendant covered by the folder ancestor is dropped from the set, so
+    // exactly one delete (the folder) runs.
+    expect(deleteSpy).toHaveBeenCalledTimes(1)
+    expect(deleteSpy).toHaveBeenCalledWith('/buffer/a', true)
+    await expect(real.stat('/buffer/a')).rejects.toThrow()
+    await expect(real.stat('/buffer/a/c/d.md')).rejects.toThrow()
+  })
+
+  it('B2: a non-overlapping multi-select still deletes every target', async () => {
+    await real.write('/buffer/x.md', enc('XX'))
+    await real.write('/buffer/y.md', enc('YY'))
+
+    const res = await deleteStorageEntries(['/buffer/x.md', '/buffer/y.md'], t)
+
+    expect(res).toEqual({ status: 'deleted' })
+    await expect(real.stat('/buffer/x.md')).rejects.toThrow()
+    await expect(real.stat('/buffer/y.md')).rejects.toThrow()
+  })
+})
+
+// --- codex B4: renaming to the current name is a no-op success ----------------
+
+describe('renameStorageEntry — same-name rename is a no-op success (B4)', () => {
+  let real: InAppBackend
+  const enc = (s: string) => new TextEncoder().encode(s)
+  const dec = (b: Uint8Array) => new TextDecoder().decode(b)
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+  })
+
+  it('B4: rename to the same basename returns ok WITHOUT calling backend.rename', async () => {
+    await real.write('/buffer/foo.md', enc('hello'))
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await renameStorageEntry('/buffer/foo.md', 'foo.md')
+
+    expect(res).toEqual({ ok: true })
+    expect(renameSpy).not.toHaveBeenCalled()
+    // Untouched: the same-name short-circuit never reached the collision scan
+    // (which would have rejected the source as its own target).
+    expect(dec(await real.read('/buffer/foo.md'))).toBe('hello')
+  })
+
+  it('B4: same-name rename of a folder is also a no-op success', async () => {
+    await real.write('/buffer/dir/x.md', enc('X'))
+    const renameSpy = vi.spyOn(real, 'rename')
+
+    const res = await renameStorageEntry('/buffer/dir', 'dir')
+
+    expect(res).toEqual({ ok: true })
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect(dec(await real.read('/buffer/dir/x.md'))).toBe('X')
+  })
+})
+
+// --- codex D2 (AC-1b clause 6): rapid/concurrent new-file reservations from the
+// Storage entry point converge on the atomic namer — distinct keys, never shared
+
+describe('createStorageFile — concurrent reservations get distinct keys (D2 / #854)', () => {
+  let real: InAppBackend
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+  })
+
+  it('D2: two concurrent createStorageFile calls reserve two distinct paths (no shared key)', async () => {
+    const [a, b] = await Promise.all([
+      createStorageFile('/buffer'),
+      createStorageFile('/buffer'),
+    ])
+    expect(a.error).toBeUndefined()
+    expect(b.error).toBeUndefined()
+    // Both reservations materialized as two distinct files under /buffer.
+    const entries = await real.list('/buffer')
+    const names = entries.map((e) => e.name).sort()
+    expect(names).toEqual(['Untitled-1.md', 'Untitled.md'])
   })
 })

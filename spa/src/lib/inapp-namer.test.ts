@@ -5,6 +5,10 @@ const getFsBackendMock = vi.hoisted(() => vi.fn())
 
 vi.mock('./fs-backend', () => ({
   getFsBackend: getFsBackendMock,
+  // Capability guard (codex H1): mirror the real typeof narrow so the mocked
+  // backend (or undefined) flows through createUniqueInAppFile unchanged.
+  supportsCreateUnique: (b: { createUnique?: unknown } | undefined) =>
+    typeof b?.createUnique === 'function',
 }))
 
 describe('createUniqueInAppFile (single namer over the InApp backend)', () => {

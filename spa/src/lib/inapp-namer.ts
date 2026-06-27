@@ -9,15 +9,17 @@
  * (IDB `store.add`); this wrapper only resolves the backend and forwards the
  * bare extension (`'md' | 'txt'`, no leading dot — the backend forms the path).
  */
-import { getFsBackend } from './fs-backend'
+import { getFsBackend, supportsCreateUnique } from './fs-backend'
 
 /**
  * Reserve a new unique empty `Untitled[-N].<ext>` file under `dir` and return
- * its full path. Throws if the In-App backend is unavailable so callers can
+ * its full path. Throws if the In-App backend is unavailable OR does not provide
+ * the unique-create capability (codex H1: `createUnique` lives on the optional
+ * `SupportsUniqueCreate` capability, not the base `FsBackend`) so callers can
  * surface the failure instead of silently creating nothing.
  */
 export async function createUniqueInAppFile(dir: string, ext: 'md' | 'txt'): Promise<string> {
   const backend = getFsBackend({ type: 'inapp' })
-  if (!backend) throw new Error('InApp backend unavailable')
+  if (!supportsCreateUnique(backend)) throw new Error('InApp backend unavailable')
   return backend.createUnique(dir, 'Untitled', ext)
 }

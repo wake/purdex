@@ -69,15 +69,9 @@ export class DaemonBackend implements FsBackend {
     await this.post('/api/fs/rename', { from, to })
   }
 
-  // In-App-only flow (#854); no daemon endpoint / UI entry point uses it.
-  async createUnique(_dir: string, _baseName: string, _ext: 'md' | 'txt'): Promise<string> {
-    throw new Error('DaemonBackend: createUnique is not supported')
-  }
-
-  // In-App-only flow (#854); no daemon endpoint / UI entry point uses it.
-  async mkdirUnique(_dir: string, _baseName?: string): Promise<string> {
-    throw new Error('DaemonBackend: mkdirUnique is not supported')
-  }
+  // The unique-name reservation (#854) is an In-App-only capability
+  // (`SupportsUniqueCreate`); DaemonBackend deliberately does NOT implement it
+  // (codex H1) — no daemon endpoint / UI entry point uses it.
 }
 
 /**
@@ -108,7 +102,5 @@ export function createDaemonBackendForHost(hostId: string): FsBackend {
     mkdir: (path, recursive) => getDaemon().mkdir(path, recursive),
     delete: (path, recursive) => getDaemon().delete(path, recursive),
     rename: (from, to) => getDaemon().rename(from, to),
-    createUnique: (dir, baseName, ext) => getDaemon().createUnique(dir, baseName, ext),
-    mkdirUnique: (dir, baseName) => getDaemon().mkdirUnique(dir, baseName),
   }
 }

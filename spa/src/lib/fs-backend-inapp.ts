@@ -1,6 +1,6 @@
 import type { IDBPDatabase } from 'idb'
 import { openIDB } from './storage/idb'
-import type { FsBackend } from './fs-backend'
+import type { FsBackend, SupportsUniqueCreate } from './fs-backend'
 import { join } from './storage-paths'
 import type { FileStat, FileEntry } from '../types/fs'
 
@@ -15,7 +15,7 @@ interface StoredFile {
   mtime: number
 }
 
-export class InAppBackend implements FsBackend {
+export class InAppBackend implements FsBackend, SupportsUniqueCreate {
   id = 'inapp'
   label = 'In-App Storage'
 

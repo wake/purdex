@@ -12,6 +12,18 @@ export interface FsBackend {
   mkdir(path: string, recursive?: boolean): Promise<void>
   delete(path: string, recursive?: boolean): Promise<void>
   rename(from: string, to: string): Promise<void>
+}
+
+/**
+ * Optional capability for the atomic unique-name reservation flow (#854). It is
+ * an In-App-only concern: only `InAppBackend` has an atomic `add` primitive (IDB
+ * `store.add` throws on a duplicate key) and only the In-App storage UI mints
+ * `Untitled[-N]` / `New Folder[ N]` names this way. Keeping it OFF the base
+ * `FsBackend` interface (codex H1) stops the Local/Daemon backends from having
+ * to carry `not-supported` stubs that exist only to satisfy a contract no caller
+ * exercises. Consumers narrow to this capability via `supports*` guards below.
+ */
+export interface SupportsUniqueCreate {
   /**
    * Atomically reserve a unique empty file under `dir`. Loops candidate names
    * `<baseName>`, `<baseName>-1`, … forming each path as `dir/<name>.<ext>`
@@ -29,6 +41,20 @@ export interface FsBackend {
    * existing folder (#854-class race). Returns the reserved path.
    */
   mkdirUnique(dir: string, baseName?: string): Promise<string>
+}
+
+/** Narrow a resolved backend to the unique-file-create capability (codex H1). */
+export function supportsCreateUnique(
+  backend: FsBackend | undefined,
+): backend is FsBackend & Pick<SupportsUniqueCreate, 'createUnique'> {
+  return typeof (backend as Partial<SupportsUniqueCreate> | undefined)?.createUnique === 'function'
+}
+
+/** Narrow a resolved backend to the unique-folder-create capability (codex H1). */
+export function supportsMkdirUnique(
+  backend: FsBackend | undefined,
+): backend is FsBackend & Pick<SupportsUniqueCreate, 'mkdirUnique'> {
+  return typeof (backend as Partial<SupportsUniqueCreate> | undefined)?.mkdirUnique === 'function'
 }
 
 const backends = new Map<string, FsBackend>()

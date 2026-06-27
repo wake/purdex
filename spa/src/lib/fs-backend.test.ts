@@ -15,8 +15,6 @@ function createMockBackend(id: string): FsBackend {
     mkdir: async () => {},
     delete: async () => {},
     rename: async () => {},
-    createUnique: async () => '',
-    mkdirUnique: async () => '',
   }
 }
 

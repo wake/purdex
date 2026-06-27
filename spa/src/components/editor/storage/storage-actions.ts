@@ -16,7 +16,7 @@
  * The recursive move data layer (`moveStorageEntry`, T1b-6a) reuses that same
  * single-rename + `remapPanesUnder` path; the drag-and-drop wiring is T1b-6b.
  */
-import { getFsBackend } from '../../../lib/fs-backend'
+import { getFsBackend, supportsMkdirUnique } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { scanPaneTree } from '../../../lib/pane-tree'
@@ -113,7 +113,9 @@ export async function createStorageFolder(
   targetDir: string = STORAGE_ROOT,
 ): Promise<{ path: string } | { error: string }> {
   const backend = getFsBackend({ type: 'inapp' })
-  if (!backend) return { error: 'InApp backend unavailable' }
+  // Narrow to the mkdir-unique capability (codex H1) — it lives on the optional
+  // `SupportsUniqueCreate`, not the base `FsBackend`.
+  if (!supportsMkdirUnique(backend)) return { error: 'InApp backend unavailable' }
   try {
     const path = await backend.mkdirUnique(targetDir)
     return { path }
@@ -146,13 +148,17 @@ export async function renameStorageEntry(
   // the rename popover and clear selection as if the rename happened.
   if (!backend) return { kind: 'error', message: 'InApp backend unavailable' }
   const targetPath = join(parentOf(fromPath), newName)
-  if (targetPath !== fromPath) {
-    const exists = await backend
-      .stat(targetPath)
-      .then(() => true)
-      .catch(() => false)
-    if (exists) return { kind: 'exists' }
-  }
+  // Same-name rename is a no-op success (codex B4): if the new basename equals
+  // the current one, `targetPath === fromPath`. Short-circuit BEFORE the stat /
+  // rename — otherwise `backend.rename(from, from)` runs its collision scan and
+  // sees the source itself as a same-path collision, rejecting a confirmation
+  // the user meant as "keep the name". Returning ok closes the popover cleanly.
+  if (targetPath === fromPath) return { ok: true }
+  const exists = await backend
+    .stat(targetPath)
+    .then(() => true)
+    .catch(() => false)
+  if (exists) return { kind: 'exists' }
   try {
     // The ONLY backend mutation for rename — exactly once, file and folder alike.
     await backend.rename(fromPath, targetPath)
@@ -228,27 +234,6 @@ export async function moveStorageEntry(
   }
 }
 
-/**
- * Pure resolver for a drag-and-drop drop (T1b-6b): maps the dnd-kit `active`
- * (the dragged row, id = full path) and `over` (the drop target, id = a folder
- * path OR the `STORAGE_ROOT` sentinel on the root region) into the
- * `{ from, targetDir }` pair to hand to `moveStorageEntry`. Returns `null` when
- * the drop landed on empty space (`over` is nullish) so the caller no-ops.
- *
- * The over-id IS the target directory in both cases (a folder path, or the root
- * sentinel which equals the real root dir), so no branch is needed. All the
- * inert-move / self / own-descendant / collision guards stay in
- * `moveStorageEntry` — this is a thin, unit-testable mapping kept here (rather
- * than in the pane component) so the `.tsx` only exports components.
- */
-export function computeMoveFromDragEnd(
-  active: { id: string | number } | null | undefined,
-  over: { id: string | number } | null | undefined,
-): { from: string; targetDir: string } | null {
-  if (!active || !over) return null
-  return { from: String(active.id), targetDir: String(over.id) }
-}
-
 export type DeleteOutcome =
   | { status: 'deleted' }
   | { status: 'cancelled' }
@@ -286,6 +271,17 @@ export async function deleteStorageEntries(
   const backend = getFsBackend({ type: 'inapp' })
   if (!backend) return { status: 'cancelled' }
 
+  // Normalize the selection (codex B2): drop any target already covered by an
+  // ancestor target (`t` is under some other `o`). Selecting a folder AND one of
+  // its descendants would otherwise recursively delete the folder first, then
+  // re-delete the now-missing descendant — a not-found error AFTER the panes are
+  // already closed and the folder partially gone (half-deleted state). The
+  // pane-close scan, the confirm count and the delete loop all operate on this
+  // normalized set so each surviving target is deleted exactly once.
+  const normalized = targets.filter(
+    (t) => !targets.some((o) => o !== t && t.startsWith(o + '/')),
+  )
+
   const { tabs } = useTabStore.getState()
   const openPanes: Array<[string, Pane]> = []
   for (const [tabId, tab] of Object.entries(tabs) as Array<[string, Tab]>) {
@@ -295,7 +291,7 @@ export async function deleteStorageEntries(
       // so deleting a png/pdf open in a preview pane — or anything nested under
       // a deleted folder — fires the locked-tab refusal, closes the pane, and
       // leaves no stale tab behind.
-      if (isFilePaneContent(c) && c.source.type === 'inapp' && isAffectedByTargets(c.filePath, targets)) {
+      if (isFilePaneContent(c) && c.source.type === 'inapp' && isAffectedByTargets(c.filePath, normalized)) {
         openPanes.push([tabId, pane])
       }
     })
@@ -319,12 +315,12 @@ export async function deleteStorageEntries(
     if (!window.confirm(t('editor.buffers.delete_dirty_confirm', { count: dirtyHits.length }))) {
       return { status: 'cancelled' }
     }
-  } else if (targets.length === 1) {
+  } else if (normalized.length === 1) {
     if (!window.confirm(t('editor.buffers.delete_one_confirm'))) {
       return { status: 'cancelled' }
     }
   } else {
-    if (!window.confirm(t('editor.buffers.confirm_delete', { count: targets.length }))) {
+    if (!window.confirm(t('editor.buffers.confirm_delete', { count: normalized.length }))) {
       return { status: 'cancelled' }
     }
   }
@@ -338,11 +334,11 @@ export async function deleteStorageEntries(
         useEditorStore.getState().closePane(pane.id, key)
       }
     }
-    // Step 2: delete each target. Folders go through the recursive sweep
-    // (prefix-delete of every descendant); files use the plain non-recursive
-    // delete. A stat failure (e.g. the entry vanished under a concurrent op) is
-    // treated as a non-folder and still attempted.
-    for (const path of targets) {
+    // Step 2: delete each NORMALIZED target. Folders go through the recursive
+    // sweep (prefix-delete of every descendant); files use the plain
+    // non-recursive delete. A stat failure (e.g. the entry vanished under a
+    // concurrent op) is treated as a non-folder and still attempted.
+    for (const path of normalized) {
       const isDir = await backend
         .stat(path)
         .then((s) => s.isDirectory)

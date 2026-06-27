@@ -43,16 +43,7 @@ export class LocalBackend implements FsBackend {
     return this.api.rename(from, to)
   }
 
-  // The eager-unique-name reservation (#854) is an In-App-only flow; the Local
-  // and Daemon backends have no atomic add primitive exposed and no UI entry
-  // point that calls this, so it is intentionally unsupported here.
-  async createUnique(): Promise<string> {
-    throw new Error('LocalBackend: createUnique is not supported')
-  }
-
-  // Like createUnique, the atomic folder reservation (#854) is an In-App-only
-  // flow with no Local atomic-add primitive and no UI entry point.
-  async mkdirUnique(): Promise<string> {
-    throw new Error('LocalBackend: mkdirUnique is not supported')
-  }
+  // The eager-unique-name reservation (#854) is an In-App-only capability
+  // (`SupportsUniqueCreate`); LocalBackend deliberately does NOT implement it
+  // (codex H1) — no atomic add primitive, no UI entry point.
 }
