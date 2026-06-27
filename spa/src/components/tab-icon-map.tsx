@@ -1,4 +1,9 @@
-import { Plus, TerminalWindow, ChatCircleDots, House, ClockCounterClockwise, Sliders, SmileySad, Globe, HardDrives, TextAlignLeft } from '@phosphor-icons/react'
+import {
+  Plus, TerminalWindow, ChatCircleDots, House, ClockCounterClockwise, Sliders, SmileySad, Globe, HardDrives, TextAlignLeft,
+  File, FileText, FileMd, FileTs, FileTsx, FileJs, FileJsx, FileVue, FilePy, FileRs, FileC, FileCpp, FileCss, FileHtml,
+  FileCode, FileCsv, FilePdf, FilePng, FileJpg, FileSvg, FileImage, FileDoc, FileXls, FilePpt, FileZip, FileArchive,
+  FileAudio, FileVideo, FileSql, Folder, FolderOpen,
+} from '@phosphor-icons/react'
 
 // Filled TerminalWindow variant — inlined to avoid a named component export in
 // this otherwise-constant module (react-refresh/only-export-components).
@@ -13,4 +18,36 @@ export const ICON_MAP: Record<string, React.ComponentType<{ size: number; classN
   Globe,
   HardDrives,
   TextAlignLeft,
+  // File-type icons (shared by tabs + storage rows; see lib/file-icon.ts).
+  File,
+  FileText,
+  FileMd,
+  FileTs,
+  FileTsx,
+  FileJs,
+  FileJsx,
+  FileVue,
+  FilePy,
+  FileRs,
+  FileC,
+  FileCpp,
+  FileCss,
+  FileHtml,
+  FileCode,
+  FileCsv,
+  FilePdf,
+  FilePng,
+  FileJpg,
+  FileSvg,
+  FileImage,
+  FileDoc,
+  FileXls,
+  FilePpt,
+  FileZip,
+  FileArchive,
+  FileAudio,
+  FileVideo,
+  FileSql,
+  Folder,
+  FolderOpen,
 }
