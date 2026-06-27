@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { FilePlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icons/react'
+import { FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icons/react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -13,6 +13,7 @@ import { RenamePopover } from '../../RenamePopover'
 import { StorageTree } from './StorageTree'
 import {
   createStorageFile,
+  createStorageFolder,
   deleteStorageEntries,
   renameStorageEntry,
 } from './storage-actions'
@@ -102,11 +103,29 @@ export function StoragePane({ pane }: PaneRendererProps) {
   const handleNew = useCallback(async () => {
     setBusy(true)
     setActionError(null)
-    const res = await createStorageFile()
+    // T1b-0 wiring: the new file lands in the selected folder (or the parent of
+    // a selected file, else the storage root).
+    const res = await createStorageFile(targetDir)
     setBusy(false)
     if (res.error) setActionError(res.error)
     else refresh()
-  }, [refresh])
+  }, [refresh, targetDir])
+
+  const handleNewFolder = useCallback(async () => {
+    setBusy(true)
+    setActionError(null)
+    const res = await createStorageFolder(targetDir)
+    setBusy(false)
+    if ('error' in res) {
+      setActionError(res.error)
+      return
+    }
+    // Auto-expand the (empty) new folder and select it so a follow-up New File
+    // immediately targets it, then refresh to materialize the row.
+    if (!expanded.has(res.path)) toggle(res.path)
+    setSelected(new Set([res.path]))
+    refresh()
+  }, [refresh, targetDir, expanded, toggle])
 
   const handleOpenRename = useCallback(() => {
     if (!singleSelected) return
@@ -188,6 +207,16 @@ export function StoragePane({ pane }: PaneRendererProps) {
         >
           <FilePlus size={14} />
           {t('editor.buffers.new')}
+        </button>
+        <button
+          data-testid="toolbar-new-folder"
+          onClick={handleNewFolder}
+          disabled={toolbarBusy}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          title={t('editor.buffers.new_folder')}
+        >
+          <FolderPlus size={14} />
+          {t('editor.buffers.new_folder')}
         </button>
         <button
           data-testid="toolbar-rename"

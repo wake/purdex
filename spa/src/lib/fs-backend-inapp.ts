@@ -214,4 +214,37 @@ export class InAppBackend implements FsBackend {
     }
     throw new Error(`InAppBackend.createUnique: exhausted ${MAX} candidates under ${dir}`)
   }
+
+  async mkdirUnique(dir: string, baseName = 'New Folder'): Promise<string> {
+    const db = await this.db()
+    const now = Date.now()
+    const MAX = 10_000
+    // Symmetric with createUnique (decision 7): store.add() is the single
+    // serialization point, so a rapid double "New Folder" click each wins a
+    // distinct key instead of clobbering. Folder candidates use a SPACE suffix
+    // ("New Folder", "New Folder 1", …) and carry NO extension. A fresh tx per
+    // attempt because a ConstraintError aborts the transaction it occurred in.
+    for (let n = 0; n < MAX; n++) {
+      const name = n === 0 ? baseName : `${baseName} ${n}`
+      const path = join(dir, name)
+      const tx = db.transaction(STORE, 'readwrite')
+      try {
+        await tx.store.add({
+          path,
+          content: new Uint8Array(0),
+          isDirectory: true,
+          mtime: now,
+        } satisfies StoredFile)
+        await tx.done
+        return path
+      } catch (err) {
+        // Observe the aborted tx's rejection to avoid an unhandled rejection
+        // before retrying the next suffix.
+        tx.done.catch(() => {})
+        if ((err as { name?: string } | null)?.name === 'ConstraintError') continue
+        throw err
+      }
+    }
+    throw new Error(`InAppBackend.mkdirUnique: exhausted ${MAX} candidates under ${dir}`)
+  }
 }

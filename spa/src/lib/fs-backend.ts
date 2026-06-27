@@ -21,6 +21,14 @@ export interface FsBackend {
    * path.
    */
   createUnique(dir: string, baseName: string, ext: 'md' | 'txt'): Promise<string>
+  /**
+   * Atomically reserve a unique empty DIRECTORY under `dir`. Loops candidate
+   * names `<baseName>`, `<baseName> 1`, … (space-separated suffix, no extension)
+   * and reserves the first free key via the same single serialization point as
+   * `createUnique` — so a rapid double "New Folder" click cannot clobber an
+   * existing folder (#854-class race). Returns the reserved path.
+   */
+  mkdirUnique(dir: string, baseName?: string): Promise<string>
 }
 
 const backends = new Map<string, FsBackend>()

@@ -37,6 +37,7 @@ export function registerBuiltinFsBackends(caps: PlatformCapabilities): void {
       delete: (path, recursive) => getDaemon().delete(path, recursive),
       rename: (from, to) => getDaemon().rename(from, to),
       createUnique: (dir, baseName, ext) => getDaemon().createUnique(dir, baseName, ext),
+      mkdirUnique: (dir, baseName) => getDaemon().mkdirUnique(dir, baseName),
     })
   }
 

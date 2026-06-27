@@ -18,6 +18,7 @@ type MockBackend = {
   stat: Mock
   read: Mock
   mkdir: Mock
+  mkdirUnique: Mock
   createUnique: Mock
   id: 'inapp'
   label: string
@@ -294,6 +295,7 @@ beforeEach(() => {
     stat: vi.fn().mockResolvedValue({ size: 0, mtime: 0, isDirectory: false, isFile: true } as FileStat),
     read: vi.fn().mockResolvedValue(new Uint8Array(0)),
     mkdir: vi.fn().mockResolvedValue(undefined),
+    mkdirUnique: vi.fn().mockResolvedValue('/buffer/New Folder'),
     createUnique: vi.fn().mockResolvedValue('/buffer/Untitled.md'),
   }
 
@@ -1244,5 +1246,90 @@ describe('StoragePane', () => {
     fireEvent.doubleClick(folder)
     await screen.findByText('x.md') // expanded
     expect(openInAppFile).not.toHaveBeenCalled()
+  })
+
+  // --- New Folder (mkdir) + New File targetDir wiring (Phase 1b T1b-3) ---
+
+  it('T3-1: New Folder creates a directory (mkdirUnique) that appears in the tree', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>()
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.mkdirUnique = vi.fn(async (dir: string) => {
+      const path = `${dir}/New Folder`
+      paths.set(path, { isDir: true, size: 0 })
+      return path
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+    fireEvent.click(screen.getByTestId('toolbar-new-folder'))
+    await waitFor(() => {
+      // No selection → targets the storage root.
+      expect(mockBackend.mkdirUnique).toHaveBeenCalledWith('/buffer')
+    })
+    const row = await screen.findByTestId('buffer-row')
+    expect(row.getAttribute('data-path')).toBe('/buffer/New Folder')
+    expect(row.getAttribute('data-isdir')).toBe('true')
+    // The new folder is auto-selected.
+    expect(row.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('T3-2: a New File created with the new folder selected lands inside it (folder accepts children)', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>()
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.mkdirUnique = vi.fn(async (dir: string) => {
+      const path = `${dir}/New Folder`
+      paths.set(path, { isDir: true, size: 0 })
+      return path
+    })
+    mockBackend.createUnique = vi.fn(async (dir: string, base: string, ext: string) => {
+      const path = `${dir}/${base}.${ext}`
+      paths.set(path, { isDir: false, size: 0 })
+      return path
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+    // New Folder → auto-selected + auto-expanded.
+    fireEvent.click(screen.getByTestId('toolbar-new-folder'))
+    await screen.findByTestId('buffer-row') // tree rebuilt → selection resolves to the folder
+    // New File now targets the selected folder (T1b-0 wiring).
+    fireEvent.click(screen.getByTestId('toolbar-new'))
+    await waitFor(() => {
+      expect(mockBackend.createUnique).toHaveBeenCalledWith('/buffer/New Folder', 'Untitled', 'md')
+    })
+    // The child file shows up under the (auto-expanded) folder.
+    await waitFor(() => {
+      const child = screen
+        .getAllByTestId('buffer-row')
+        .find((r) => r.getAttribute('data-path') === '/buffer/New Folder/Untitled.md')
+      expect(child).toBeTruthy()
+    })
+  })
+
+  it('T3-3: New Folder does not overwrite an existing folder — it increments the name', async () => {
+    // A "New Folder" already exists (e.g. from a prior session); creating
+    // another must not clobber it (decision 7 — add-reserve increments).
+    const paths = new Map<string, { isDir: boolean; size: number }>([
+      ['/buffer/New Folder', { isDir: true, size: 0 }],
+    ])
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.mkdirUnique = vi.fn(async (dir: string) => {
+      let n = 0
+      let path = `${dir}/New Folder`
+      while (paths.has(path)) {
+        n += 1
+        path = `${dir}/New Folder ${n}`
+      }
+      paths.set(path, { isDir: true, size: 0 })
+      return path
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByTestId('buffer-row')
+    fireEvent.click(screen.getByTestId('toolbar-new-folder'))
+    await waitFor(() => {
+      const names = screen
+        .getAllByTestId('buffer-row')
+        .map((r) => r.getAttribute('data-path'))
+      expect(names).toContain('/buffer/New Folder')
+      expect(names).toContain('/buffer/New Folder 1')
+    })
   })
 })

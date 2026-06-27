@@ -375,3 +375,73 @@ describe('InAppBackend.createUnique (atomic eager namer)', () => {
     expect(tree.map((n) => n.path)).toContain('/buffer/Untitled.md')
   })
 })
+
+// T1b-3 — mkdirUnique: atomic eager reservation of a unique DIRECTORY via the
+// same IDB store.add serialization point as createUnique. Folder candidates use
+// a SPACE-separated suffix ("New Folder", "New Folder 1", …), unlike files'
+// hyphen, matching the plan's T3-3 expectation.
+describe('InAppBackend.mkdirUnique (atomic eager folder namer)', () => {
+  let backend: InAppBackend
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    backend = new InAppBackend()
+  })
+
+  // M1: empty dir → first candidate is a real directory entry.
+  it('M1: reserves /buffer/New Folder as a directory on an empty dir', async () => {
+    const path = await backend.mkdirUnique('/buffer')
+    expect(path).toBe('/buffer/New Folder')
+    const stat = await backend.stat(path)
+    expect(stat.isDirectory).toBe(true)
+    expect(stat.isFile).toBe(false)
+  })
+
+  it('M1: honors a custom baseName', async () => {
+    const path = await backend.mkdirUnique('/buffer', 'Docs')
+    expect(path).toBe('/buffer/Docs')
+    expect((await backend.stat(path)).isDirectory).toBe(true)
+  })
+
+  // M2: collision → space-separated increment.
+  it('M2: returns "/buffer/New Folder 1" when "/buffer/New Folder" exists', async () => {
+    await backend.mkdir('/buffer/New Folder')
+    const path = await backend.mkdirUnique('/buffer')
+    expect(path).toBe('/buffer/New Folder 1')
+  })
+
+  it('M2: skips multiple existing candidates', async () => {
+    await backend.mkdir('/buffer/New Folder')
+    await backend.mkdir('/buffer/New Folder 1')
+    await backend.mkdir('/buffer/New Folder 2')
+    const path = await backend.mkdirUnique('/buffer')
+    expect(path).toBe('/buffer/New Folder 3')
+  })
+
+  // M3: concurrent double-create must yield TWO distinct folders (no overwrite),
+  // exercising the add-reserve race fix (decision 7).
+  it('M3: concurrent mkdirUnique calls reserve distinct folders (no overwrite)', async () => {
+    const [a, b] = await Promise.all([
+      backend.mkdirUnique('/buffer'),
+      backend.mkdirUnique('/buffer'),
+    ])
+    expect(a).not.toBe(b)
+    const names = (await backend.list('/buffer')).map((e) => e.name).sort()
+    expect(names).toEqual(['New Folder', 'New Folder 1'])
+    // both are real directories
+    for (const p of [a, b]) {
+      expect((await backend.stat(p)).isDirectory).toBe(true)
+    }
+  })
+
+  // M4: the reserved folder is a real directory that accepts children.
+  it('M4: the reserved folder accepts a child file', async () => {
+    const dir = await backend.mkdirUnique('/buffer')
+    await backend.write(`${dir}/note.md`, enc('hi'))
+    const tree = await listTreeUnder(backend, '/buffer')
+    const folder = tree.find((n) => n.path === dir)
+    expect(folder?.isDir).toBe(true)
+    expect(folder?.children?.map((c) => c.path)).toContain(`${dir}/note.md`)
+  })
+})

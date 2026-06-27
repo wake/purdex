@@ -73,6 +73,11 @@ export class DaemonBackend implements FsBackend {
   async createUnique(_dir: string, _baseName: string, _ext: 'md' | 'txt'): Promise<string> {
     throw new Error('DaemonBackend: createUnique is not supported')
   }
+
+  // In-App-only flow (#854); no daemon endpoint / UI entry point uses it.
+  async mkdirUnique(_dir: string, _baseName?: string): Promise<string> {
+    throw new Error('DaemonBackend: mkdirUnique is not supported')
+  }
 }
 
 /**
@@ -104,5 +109,6 @@ export function createDaemonBackendForHost(hostId: string): FsBackend {
     delete: (path, recursive) => getDaemon().delete(path, recursive),
     rename: (from, to) => getDaemon().rename(from, to),
     createUnique: (dir, baseName, ext) => getDaemon().createUnique(dir, baseName, ext),
+    mkdirUnique: (dir, baseName) => getDaemon().mkdirUnique(dir, baseName),
   }
 }

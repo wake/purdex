@@ -49,4 +49,10 @@ export class LocalBackend implements FsBackend {
   async createUnique(): Promise<string> {
     throw new Error('LocalBackend: createUnique is not supported')
   }
+
+  // Like createUnique, the atomic folder reservation (#854) is an In-App-only
+  // flow with no Local atomic-add primitive and no UI entry point.
+  async mkdirUnique(): Promise<string> {
+    throw new Error('LocalBackend: mkdirUnique is not supported')
+  }
 }

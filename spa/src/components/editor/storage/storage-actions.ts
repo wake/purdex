@@ -66,6 +66,26 @@ export async function createStorageFile(targetDir: string = STORAGE_ROOT): Promi
   }
 }
 
+/**
+ * Create a new empty folder under `targetDir` (defaults to the storage root)
+ * via the atomic `mkdirUnique` reservation (decision 7), giving a collision-free
+ * `New Folder[ N]` even under a rapid double-click. Returns the reserved path or
+ * an error (a missing backend is a failure, not a silent success — symmetric
+ * with `createStorageFile`).
+ */
+export async function createStorageFolder(
+  targetDir: string = STORAGE_ROOT,
+): Promise<{ path: string } | { error: string }> {
+  const backend = getFsBackend({ type: 'inapp' })
+  if (!backend) return { error: 'InApp backend unavailable' }
+  try {
+    const path = await backend.mkdirUnique(targetDir)
+    return { path }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export type RenameOutcome =
   | { ok: true }
   | { kind: 'exists' }

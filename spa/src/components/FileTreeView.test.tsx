@@ -28,6 +28,7 @@ const mockBackend = {
   delete: vi.fn(),
   rename: vi.fn(),
   createUnique: vi.fn(),
+  mkdirUnique: vi.fn(),
 }
 
 beforeEach(() => {
