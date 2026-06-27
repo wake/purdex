@@ -8,7 +8,8 @@ interface StorageTreeProps {
   /** Full paths of currently selected nodes (files OR folders — T1b-0). */
   selected: Set<string>
   onToggle: (path: string) => void
-  onSelect: (path: string) => void
+  /** Select a row; `additive` (modifier held) toggles into a multi-selection. */
+  onSelect: (path: string, additive: boolean) => void
   onOpen: (path: string) => void
 }
 

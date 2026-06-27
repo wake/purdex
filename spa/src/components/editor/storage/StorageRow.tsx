@@ -4,6 +4,7 @@ import { CaretRight, CaretDown } from '@phosphor-icons/react'
 import { ICON_MAP } from '../../tab-icon-map'
 import { fileIconForPath } from '../../../lib/file-icon'
 import { getFsBackend } from '../../../lib/fs-backend'
+import { parentOf } from '../../../lib/storage-paths'
 import type { TreeNode } from '../../../lib/storage-tree'
 
 /**
@@ -57,7 +58,12 @@ interface StorageRowProps {
   selected: boolean
   expanded: boolean
   onToggle: (path: string) => void
-  onSelect: (path: string) => void
+  /**
+   * Select this row. `additive` (cmd/ctrl/shift held) toggles the row in a
+   * multi-selection; a plain click (additive=false) replaces the selection with
+   * just this row (codex B5).
+   */
+  onSelect: (path: string, additive: boolean) => void
   onOpen: (path: string) => void
 }
 
@@ -93,14 +99,23 @@ export function StorageRow({
   const text = isTextNode(node)
   const [wordCount, setWordCount] = useState<number | null>(null)
 
-  // Drag source (every row) + drop target (folders only — files disable the
-  // droppable). One DOM node carries both refs via the merge callback below.
+  // The directory a drop onto THIS row targets (codex B1): a folder accepts
+  // children into itself; a file resolves to its parent dir (dropping onto a
+  // file means "into the folder it lives in"). Published on the droppable's
+  // `data.targetDir` so the drop resolver reads an authoritative value instead
+  // of inferring it from the over-id — which previously let a drop onto a file
+  // row (no droppable then) fall through to the root zone and move to root.
+  const targetDir = node.isDir ? node.path : parentOf(node.path)
+
+  // Drag source (every row) + drop target (EVERY row now — files route a drop
+  // to their parent dir via `targetDir`). One DOM node carries both refs via the
+  // merge callback below.
   const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
     id: node.path,
   })
   const { setNodeRef: setDropRef, isOver } = useDroppable({
     id: node.path,
-    disabled: !node.isDir,
+    data: { targetDir },
   })
   const setRowRef = useCallback(
     (el: HTMLDivElement | null) => {
@@ -138,8 +153,14 @@ export function StorageRow({
   const Icon = ICON_MAP[iconName] ?? ICON_MAP.File
 
   // Single click selects (file or folder); double-click opens a file or toggles
-  // a folder's expansion. The caret has its own handler below.
-  const handleClick = () => onSelect(node.path)
+  // a folder's expansion. A plain click selects ONLY this row (replacing the
+  // selection); a modifier click (cmd/ctrl/shift) toggles it into a
+  // multi-selection (codex B5) — so the click→click→double-click sequence no
+  // longer toggles the row off and leaves a stale/empty action target. The
+  // caret has its own handler below.
+  const isAdditive = (e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) =>
+    e.metaKey || e.ctrlKey || e.shiftKey
+  const handleClick = (e: React.MouseEvent) => onSelect(node.path, isAdditive(e))
   const handleDoubleClick = () => {
     if (node.isDir) onToggle(node.path)
     else onOpen(node.path)
@@ -149,6 +170,19 @@ export function StorageRow({
     // selection (and vice versa).
     e.stopPropagation()
     onToggle(node.path)
+  }
+  // Keyboard parity for the `role="button"` row (codex B6): Enter mirrors the
+  // double-click (file → open, folder → toggle); Space selects (additive with a
+  // modifier). preventDefault on Space stops the page from scrolling.
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (node.isDir) onToggle(node.path)
+      else onOpen(node.path)
+    } else if (e.key === ' ') {
+      e.preventDefault()
+      onSelect(node.path, isAdditive(e))
+    }
   }
 
   return (
@@ -162,11 +196,13 @@ export function StorageRow({
       data-isdir={node.isDir ? 'true' : 'false'}
       data-icon={iconName}
       data-drop-over={dropActive ? 'true' : 'false'}
+      data-target-dir={targetDir}
       role="button"
       tabIndex={0}
       aria-selected={selected}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
+      onKeyDown={handleKeyDown}
       style={{
         paddingLeft: 8 + depth * 16,
         ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}),

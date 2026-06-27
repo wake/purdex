@@ -21,13 +21,13 @@ import { findNode, targetDirOf } from '../../../lib/storage-tree'
 import { RenamePopover } from '../../RenamePopover'
 import { StorageTree } from './StorageTree'
 import {
-  computeMoveFromDragEnd,
   createStorageFile,
   createStorageFolder,
   deleteStorageEntries,
   moveStorageEntry,
   renameStorageEntry,
 } from './storage-actions'
+import { computeMoveFromDragEnd } from './storage-dnd'
 
 /**
  * Resolve the workspace that hosts this Storage pane, so opened files land in
@@ -64,7 +64,13 @@ function StorageRegionDropZone({
   targetDir: string
   children: ReactNode
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: STORAGE_ROOT })
+  // Publish `STORAGE_ROOT` as this zone's authoritative drop target dir (codex
+  // B1) so a drop on empty space / between rows resolves to the storage root via
+  // the same `over.data.targetDir` channel the row droppables use.
+  const { setNodeRef, isOver } = useDroppable({
+    id: STORAGE_ROOT,
+    data: { targetDir: STORAGE_ROOT },
+  })
   return (
     <div
       ref={setNodeRef}
@@ -118,8 +124,14 @@ export function StoragePane({ pane }: PaneRendererProps) {
 
   // --- Selection / open ---
 
-  const handleSelect = useCallback((path: string) => {
+  // Plain click → select ONLY this row (replace selection). Modifier click
+  // (cmd/ctrl/shift, surfaced as `additive`) → toggle into a multi-selection
+  // (codex B5). A plain click never deselects, so the click→click→double-click
+  // sequence leaves the row selected instead of toggling it off and stranding a
+  // stale rename/new/move target.
+  const handleSelect = useCallback((path: string, additive: boolean) => {
     setSelected((prev) => {
+      if (!additive) return new Set([path])
       const next = new Set(prev)
       if (next.has(path)) next.delete(path)
       else next.add(path)
@@ -223,8 +235,11 @@ export function StoragePane({ pane }: PaneRendererProps) {
   }, [selectedArray, t, refresh])
 
   const handleOpenSelected = useCallback(() => {
-    if (singleSelected) handleOpen(singleSelected)
-  }, [singleSelected, handleOpen])
+    // Only files open (codex B3): a folder is not openable, so guard here as
+    // well as disabling the toolbar button — a folder must never be handed to
+    // openInAppFile.
+    if (singleSelected && !selectedNode?.isDir) handleOpen(singleSelected)
+  }, [singleSelected, selectedNode, handleOpen])
 
   // --- Drag-and-drop move (T1b-6b) ---
 
@@ -259,7 +274,9 @@ export function StoragePane({ pane }: PaneRendererProps) {
   const hasAny = tree.length > 0
   const canRename = selectedArray.length === 1
   const canDelete = selectedArray.length >= 1
-  const canOpen = selectedArray.length === 1
+  // Open is only valid for a single FILE selection (codex B3): a folder is not
+  // openable, so the toolbar Open button disables when a folder is selected.
+  const canOpen = singleSelected !== null && !selectedNode?.isDir
   const toolbarBusy = busy || loading
 
   return (
