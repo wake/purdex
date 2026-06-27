@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { listTreeUnder, type TreeNode } from './storage-tree'
+import { listTreeUnder, findNode, targetDirOf, type TreeNode } from './storage-tree'
+import { STORAGE_ROOT } from './storage-paths'
 import type { FsBackend } from './fs-backend'
 import type { FileEntry } from '../types/fs'
 
@@ -118,5 +119,67 @@ describe('listTreeUnder', () => {
     const empty: TreeNode = tree[0]
     expect(empty.isDir).toBe(true)
     expect(empty.children).toEqual([])
+  })
+})
+
+// Fixture tree used by findNode / targetDirOf:
+//   /buffer/dir            (folder)
+//   /buffer/dir/b.md       (file)
+//   /buffer/dir/sub        (folder)
+//   /buffer/dir/sub/c.txt  (file)
+//   /buffer/a.md           (file)
+function sampleTree(): TreeNode[] {
+  return [
+    {
+      path: '/buffer/dir',
+      name: 'dir',
+      isDir: true,
+      size: 0,
+      children: [
+        {
+          path: '/buffer/dir/sub',
+          name: 'sub',
+          isDir: true,
+          size: 0,
+          children: [{ path: '/buffer/dir/sub/c.txt', name: 'c.txt', isDir: false, size: 3 }],
+        },
+        { path: '/buffer/dir/b.md', name: 'b.md', isDir: false, size: 7 },
+      ],
+    },
+    { path: '/buffer/a.md', name: 'a.md', isDir: false, size: 5 },
+  ]
+}
+
+describe('findNode', () => {
+  it('finds a top-level node by full path', () => {
+    expect(findNode(sampleTree(), '/buffer/a.md')?.name).toBe('a.md')
+    expect(findNode(sampleTree(), '/buffer/dir')?.isDir).toBe(true)
+  })
+
+  it('finds a deeply nested node by full path', () => {
+    const node = findNode(sampleTree(), '/buffer/dir/sub/c.txt')
+    expect(node?.path).toBe('/buffer/dir/sub/c.txt')
+    expect(node?.isDir).toBe(false)
+  })
+
+  it('returns null for an unknown path', () => {
+    expect(findNode(sampleTree(), '/buffer/nope.md')).toBeNull()
+    expect(findNode([], '/buffer/a.md')).toBeNull()
+  })
+})
+
+describe('targetDirOf (T0-2)', () => {
+  it('returns the folder itself when a folder is selected', () => {
+    expect(targetDirOf(findNode(sampleTree(), '/buffer/dir'))).toBe('/buffer/dir')
+    expect(targetDirOf(findNode(sampleTree(), '/buffer/dir/sub'))).toBe('/buffer/dir/sub')
+  })
+
+  it('returns the parent directory when a file is selected', () => {
+    expect(targetDirOf(findNode(sampleTree(), '/buffer/a.md'))).toBe(STORAGE_ROOT)
+    expect(targetDirOf(findNode(sampleTree(), '/buffer/dir/sub/c.txt'))).toBe('/buffer/dir/sub')
+  })
+
+  it('returns the storage root when nothing is selected', () => {
+    expect(targetDirOf(null)).toBe(STORAGE_ROOT)
   })
 })

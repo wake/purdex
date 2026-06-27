@@ -8,6 +8,7 @@ import { useStorageTree } from '../../../hooks/useStorageTree'
 import { findPane } from '../../../lib/pane-tree'
 import { openInAppFile } from '../../../lib/open-in-app-file'
 import { basename } from '../../../lib/storage-paths'
+import { findNode, targetDirOf } from '../../../lib/storage-tree'
 import { RenamePopover } from '../../RenamePopover'
 import { StorageTree } from './StorageTree'
 import {
@@ -62,6 +63,17 @@ export function StoragePane({ pane }: PaneRendererProps) {
 
   const selectedArray = useMemo(() => Array.from(selected), [selected])
   const singleSelected = selectedArray.length === 1 ? selectedArray[0] : null
+
+  // Resolve the single selection back to its TreeNode so we know whether it is a
+  // folder, then derive the directory that nesting-aware actions (new file / new
+  // folder / drop) should target (T1b-0): folder → itself, file → parent, no
+  // single selection → storage root. Exposed on the tree region below so later
+  // 1b tasks (and tests) can consume it.
+  const selectedNode = useMemo(
+    () => (singleSelected ? findNode(tree, singleSelected) : null),
+    [singleSelected, tree],
+  )
+  const targetDir = useMemo(() => targetDirOf(selectedNode), [selectedNode])
 
   // --- Selection / open ---
 
@@ -212,7 +224,11 @@ export function StoragePane({ pane }: PaneRendererProps) {
 
       {/* Body: tree (left) + placeholder Backups sidebar (right). */}
       <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 overflow-y-auto">
+        <div
+          className="flex-1 overflow-y-auto"
+          data-testid="storage-tree-region"
+          data-target-dir={targetDir}
+        >
           {error && <div className="p-4 text-xs text-red-400">{error}</div>}
           {!error && !hasAny && (
             <div className="p-8 flex flex-col items-center justify-center text-text-muted">

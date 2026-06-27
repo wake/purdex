@@ -62,8 +62,14 @@ interface StorageRowProps {
 
 /**
  * A single storage tree row: type icon (`fileIconForPath` → `ICON_MAP`) + name +
- * metadata. Folders show a caret and toggle expand on click; files select on
- * click and open on double-click. Text files additionally render a word count
+ * metadata.
+ *
+ * Selection vs expand are separate gestures (T1b-0): a **single click anywhere
+ * on the row selects** the node (file or folder), so a folder can be the target
+ * of nesting-aware actions. The **caret** is its own button that toggles
+ * expand/collapse and stops propagation, so expanding a folder never changes the
+ * selection (and selecting never expands). **Double-click** opens a file or
+ * toggles a folder's expansion. Text files additionally render a word count
  * (decoded from the backend bytes); binary files show size only.
  */
 export function StorageRow({
@@ -104,38 +110,50 @@ export function StorageRow({
   const iconName = fileIconForPath(node.path, { isDir: node.isDir, expanded })
   const Icon = ICON_MAP[iconName] ?? ICON_MAP.File
 
-  const handleClick = () => {
-    if (node.isDir) onToggle(node.path)
-    else onSelect(node.path)
-  }
+  // Single click selects (file or folder); double-click opens a file or toggles
+  // a folder's expansion. The caret has its own handler below.
+  const handleClick = () => onSelect(node.path)
   const handleDoubleClick = () => {
-    if (!node.isDir) onOpen(node.path)
+    if (node.isDir) onToggle(node.path)
+    else onOpen(node.path)
+  }
+  const handleCaretClick = (e: React.MouseEvent) => {
+    // Stop the row's select handler so expand/collapse is independent of
+    // selection (and vice versa).
+    e.stopPropagation()
+    onToggle(node.path)
   }
 
   return (
-    <button
+    <div
       data-testid="buffer-row"
       data-name={node.name}
       data-path={node.path}
       data-isdir={node.isDir ? 'true' : 'false'}
       data-icon={iconName}
+      role="button"
+      tabIndex={0}
       aria-selected={selected}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       style={{ paddingLeft: 8 + depth * 16 }}
       className={
-        'w-full flex items-center gap-1.5 pr-3 py-1.5 text-left text-xs transition-colors ' +
+        'w-full flex items-center gap-1.5 pr-3 py-1.5 text-left text-xs transition-colors cursor-pointer ' +
         (selected
           ? 'bg-surface-selected text-text-primary'
           : 'text-text-secondary hover:bg-surface-hover')
       }
     >
       {node.isDir ? (
-        expanded ? (
-          <CaretDown size={12} className="shrink-0 text-text-muted" />
-        ) : (
-          <CaretRight size={12} className="shrink-0 text-text-muted" />
-        )
+        <button
+          type="button"
+          data-testid="buffer-caret"
+          onClick={handleCaretClick}
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+          className="shrink-0 flex items-center justify-center text-text-muted hover:text-text-primary"
+        >
+          {expanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
+        </button>
       ) : (
         <span className="w-3 shrink-0" />
       )}
@@ -147,6 +165,6 @@ export function StorageRow({
           {text && wordCount !== null ? ` · ${wordCount} words` : ''}
         </span>
       )}
-    </button>
+    </div>
   )
 }

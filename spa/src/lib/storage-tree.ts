@@ -10,7 +10,7 @@
  * directories are distinct nodes (`/buffer/d1/x.md` ≠ `/buffer/d2/x.md`).
  */
 import type { FsBackend } from './fs-backend'
-import { join } from './storage-paths'
+import { join, parentOf, STORAGE_ROOT } from './storage-paths'
 
 export interface TreeNode {
   /** Full path under the storage root, e.g. `/buffer/dir/b.md`. The identity. */
@@ -55,4 +55,34 @@ export async function listTreeUnder(backend: FsBackend, root: string): Promise<T
     }
   }
   return sortNodes(nodes)
+}
+
+/**
+ * Depth-first lookup of the node whose full `path` matches, or `null`. Used by
+ * the Storage pane to resolve the current selection (a path) back to its
+ * `TreeNode` so it can read `isDir` for the `targetDir` derivation (T1b-0).
+ */
+export function findNode(nodes: TreeNode[], path: string): TreeNode | null {
+  for (const node of nodes) {
+    if (node.path === path) return node
+    if (node.children) {
+      const found = findNode(node.children, path)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+/**
+ * The directory that nesting-aware actions (new file / new folder / drop-to)
+ * should target given the current single selection (T1b-0, decision 3):
+ *
+ * - a selected **folder** → the folder itself,
+ * - a selected **file** → its parent directory,
+ * - **no** selection (or a non-single selection resolving to `null`) → the
+ *   storage root.
+ */
+export function targetDirOf(node: TreeNode | null): string {
+  if (!node) return STORAGE_ROOT
+  return node.isDir ? node.path : parentOf(node.path)
 }

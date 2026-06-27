@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Mock } from 'vitest'
 import { useState } from 'react'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { StoragePane } from './StoragePane'
 import { openInAppFile } from '../../../lib/open-in-app-file'
 import type { Pane, Tab } from '../../../types/tab'
@@ -967,10 +967,11 @@ describe('StoragePane', () => {
     expect(folderA.getAttribute('data-isdir')).toBe('true')
     expect(screen.queryByText('x.md')).toBeNull()
 
-    // Expand a → b appears; expand b → x.md appears.
-    fireEvent.click(folderA)
+    // Expand a → b appears; expand b → x.md appears. (Double-click toggles
+    // expand now that single-click selects the folder — T0-1.)
+    fireEvent.doubleClick(folderA)
     const folderB = await screen.findByText('b')
-    fireEvent.click(folderB)
+    fireEvent.doubleClick(folderB.closest('[data-testid="buffer-row"]')!)
     const leaf = await screen.findByText('x.md')
     const leafRow = leaf.closest('[data-testid="buffer-row"]')
     expect(leafRow?.getAttribute('data-path')).toBe('/buffer/a/b/x.md')
@@ -990,8 +991,9 @@ describe('StoragePane', () => {
     render(<StoragePane pane={makePane()} isActive />)
     const d1 = await screen.findByText('d1')
     const d2 = await screen.findByText('d2')
-    fireEvent.click(d1.closest('[data-testid="buffer-row"]')!)
-    fireEvent.click(d2.closest('[data-testid="buffer-row"]')!)
+    // Double-click expands the folders (single-click now selects — T0-1).
+    fireEvent.doubleClick(d1.closest('[data-testid="buffer-row"]')!)
+    fireEvent.doubleClick(d2.closest('[data-testid="buffer-row"]')!)
     const leaves = await screen.findAllByText('x.md')
     const row1 = leaves[0].closest('[data-testid="buffer-row"]') as HTMLElement
     const row2 = leaves[1].closest('[data-testid="buffer-row"]') as HTMLElement
@@ -1017,8 +1019,8 @@ describe('StoragePane', () => {
     // Collapsed folder → Folder; png → FilePng.
     expect(byPath('/buffer/dir').getAttribute('data-icon')).toBe('Folder')
     expect(byPath('/buffer/pic.png').getAttribute('data-icon')).toBe('FilePng')
-    // Expand the folder → it switches to FolderOpen, and the md row resolves.
-    fireEvent.click(byPath('/buffer/dir'))
+    // Expand the folder (double-click) → it switches to FolderOpen, and the md row resolves.
+    fireEvent.doubleClick(byPath('/buffer/dir'))
     await waitFor(() => {
       const updated = screen.getAllByTestId('buffer-row')
       const dir = updated.find((r) => r.getAttribute('data-path') === '/buffer/dir')!
@@ -1129,8 +1131,9 @@ describe('StoragePane', () => {
     )
     mockBackend.stat.mockRejectedValue(new Error('not found'))
     render(<StoragePane pane={makePane()} isActive />)
-    fireEvent.click(await screen.findByText('a').then((n) => n.closest('[data-testid="buffer-row"]')!))
-    fireEvent.click((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
+    // Double-click expands the folders (single-click now selects — T0-1).
+    fireEvent.doubleClick(await screen.findByText('a').then((n) => n.closest('[data-testid="buffer-row"]')!))
+    fireEvent.doubleClick((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
     const leafRow = (await screen.findByText('x.md')).closest('[data-testid="buffer-row"]')!
     fireEvent.click(leafRow) // select
     fireEvent.click(screen.getByTestId('toolbar-rename'))
@@ -1153,13 +1156,92 @@ describe('StoragePane', () => {
       ]),
     )
     render(<StoragePane pane={makePane()} isActive />)
-    fireEvent.click((await screen.findByText('a')).closest('[data-testid="buffer-row"]')!)
-    fireEvent.click((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
+    // Double-click expands the folders (single-click now selects — T0-1).
+    fireEvent.doubleClick((await screen.findByText('a')).closest('[data-testid="buffer-row"]')!)
+    fireEvent.doubleClick((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
     const leafRow = (await screen.findByText('x.md')).closest('[data-testid="buffer-row"]')!
     fireEvent.click(leafRow)
     fireEvent.click(screen.getByTestId('toolbar-delete'))
     await waitFor(() => {
       expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/a/b/x.md')
     })
+  })
+
+  // --- Folder-selectable tree + target model (Phase 1b T1b-0) ---
+
+  it('T0-1: clicking a folder name selects it (selected style), without expanding or opening', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    const folder = await screen.findByTestId('buffer-row')
+    expect(folder.getAttribute('data-path')).toBe('/buffer/dir')
+    fireEvent.click(folder)
+    // Folder shows the selected style and stays collapsed; no tab opened.
+    expect(folder.getAttribute('aria-selected')).toBe('true')
+    expect(screen.queryByText('x.md')).toBeNull()
+    expect(openInAppFile).not.toHaveBeenCalled()
+  })
+
+  it('T0-1b: the caret toggles expand independently of selection', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByTestId('buffer-row') // wait for the async tree build
+    const rowByPath = (p: string) =>
+      screen.getAllByTestId('buffer-row').find((r) => r.getAttribute('data-path') === p)!
+    fireEvent.click(rowByPath('/buffer/dir')) // select the folder
+    expect(rowByPath('/buffer/dir').getAttribute('aria-selected')).toBe('true')
+    // Expanding via the caret reveals the child but leaves selection intact.
+    fireEvent.click(within(rowByPath('/buffer/dir')).getByTestId('buffer-caret'))
+    await screen.findByText('x.md')
+    expect(rowByPath('/buffer/dir').getAttribute('aria-selected')).toBe('true')
+    expect(rowByPath('/buffer/dir/x.md').getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('T0-2: targetDir derives from selection (none→root, folder→self, file→parent)', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    const region = await screen.findByTestId('storage-tree-region')
+    await screen.findByTestId('buffer-row') // wait for the async tree build
+    const rowByPath = (p: string) =>
+      screen.getAllByTestId('buffer-row').find((r) => r.getAttribute('data-path') === p)!
+    // Nothing selected → storage root.
+    expect(region.getAttribute('data-target-dir')).toBe('/buffer')
+    // Folder selected → the folder itself.
+    fireEvent.click(rowByPath('/buffer/dir'))
+    expect(region.getAttribute('data-target-dir')).toBe('/buffer/dir')
+    // Deselect, expand (caret = no selection), select the nested file → its parent.
+    fireEvent.click(rowByPath('/buffer/dir'))
+    fireEvent.click(within(rowByPath('/buffer/dir')).getByTestId('buffer-caret'))
+    await screen.findByText('x.md')
+    fireEvent.click(rowByPath('/buffer/dir/x.md'))
+    expect(region.getAttribute('data-target-dir')).toBe('/buffer/dir')
+  })
+
+  it('T0-3: double-clicking a folder toggles expand and never opens a tab', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/dir/x.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    const folder = await screen.findByTestId('buffer-row')
+    fireEvent.doubleClick(folder)
+    await screen.findByText('x.md') // expanded
+    expect(openInAppFile).not.toHaveBeenCalled()
   })
 })
