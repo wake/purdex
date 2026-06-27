@@ -4,6 +4,7 @@ import { getFsBackend } from '../../lib/fs-backend'
 import { scanPaneTree } from '../../lib/pane-tree'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { STORAGE_ROOT, isUnderRoot, relativeToRoot } from '../../lib/storage-paths'
 import type { PaneContent } from '../../types/tab'
 import type { FileSource } from '../../types/fs'
 
@@ -30,13 +31,13 @@ export function EditorNewTabSection({ onSelect }: Props) {
           return
         }
         const path = pane.content.filePath
-        if (path.startsWith('/buffer/')) {
-          usedFilenames.add(path.slice('/buffer/'.length))
+        if (isUnderRoot(path)) {
+          usedFilenames.add(relativeToRoot(path))
         }
       })
     }
 
-    const entries = await backend.list('/buffer')
+    const entries = await backend.list(STORAGE_ROOT)
     for (const entry of entries) {
       if (!entry.isDir) usedFilenames.add(entry.name)
     }

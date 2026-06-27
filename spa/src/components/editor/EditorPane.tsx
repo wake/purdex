@@ -3,8 +3,10 @@ import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getFsBackend } from '../../lib/fs-backend'
+import { openInAppFile } from '../../lib/open-in-app-file'
 import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
 import { EditorToolbar } from './EditorToolbar'
@@ -12,6 +14,7 @@ import { EditorStatusBar } from './EditorStatusBar'
 import { RenamePopover } from '../RenamePopover'
 import { findPane } from '../../lib/pane-tree'
 import { bufferKey } from '../../lib/editor-buffer-key'
+import { STORAGE_ROOT, join } from '../../lib/storage-paths'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 import {
@@ -75,6 +78,24 @@ function findTabIdForPane(paneId: string): string | undefined {
     if (findPane(tab.layout, paneId)) return tabId
   }
   return undefined
+}
+
+/**
+ * Resolve the workspace that hosts this pane, so a buffer-switch opens the
+ * file into the right workspace (`openInAppFile` → `computeClusterInsertTarget`
+ * / `insertTab` are workspace-scoped). Mirrors `StoragePane.resolveWorkspaceId`
+ * (built here on the existing `findTabIdForPane`): map the owning tab → its
+ * workspace, falling back to the active workspace when the pane isn't found in
+ * any layout. Returns `null` when the pane has no owning workspace — we do NOT
+ * guess the active workspace (R2-2); `openInAppFile` refuses a null id.
+ */
+function resolveWorkspaceId(paneId: string): string | null {
+  const wsState = useWorkspaceStore.getState()
+  const tabId = findTabIdForPane(paneId)
+  if (tabId) {
+    return wsState.findWorkspaceByTab(tabId)?.id ?? null
+  }
+  return null
 }
 
 // Outer component does kind guard to avoid hooks-after-early-return
@@ -375,23 +396,18 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           setRenameWarning(undefined)
         }}
         onBufferSwitch={(newKey) => {
-          // Dirty-guard (spec v1.3 §4.8): prompt before swapping content of a
-          // dirty pane. Smart-open from EditorBuffersPane intentionally
-          // bypasses this — that flow has different mental semantics.
+          // Dirty-guard (spec v1.3 §4.8): prompt before leaving a dirty pane.
           const currentKey = bufferKey({ type: 'inapp' }, filePath)
           const currentBuf = useEditorStore.getState().buffers[currentKey]
           if (currentBuf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
 
-          const tabId = findTabIdForPane(paneId)
-          if (!tabId) return
-          useTabStore.getState().setPaneContent(tabId, paneId, {
-            kind: 'editor',
-            source: { type: 'inapp' },
-            filePath: newKey,
-          })
-          // NOTE: NEVER call `attachPane` here. EditorPane's own
-          // `useEffect(() => attachPane(paneId, key), [paneId, key])`
-          // rebinds the editor store when React re-renders with the new key.
+          // T6 (spec §3.3): route through the opener registry so a nested
+          // png/pdf resolves to the right preview pane (open-or-focus) instead
+          // of the old hardcoded `{ kind: 'editor' }` swapped in place. The
+          // current pane's buffer is left intact; the target opens or focuses
+          // its own tab in this workspace. `openInAppFile` is async (stat-gate,
+          // R2-1) and self-aborts on a missing/refused target — fire-and-forget.
+          void openInAppFile(newKey, resolveWorkspaceId(paneId))
         }}
         onManage={() => {
           useTabStore.getState().openSingletonTab({ kind: 'editor-buffers' })
@@ -405,7 +421,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           const currentBuf = useEditorStore.getState().buffers[currentKey]
           if (currentBuf?.isDirty && !window.confirm(t('editor.buffers.confirm_switch_dirty'))) return
 
-          const path = `/buffer/Untitled-${Date.now()}.md`
+          const path = join(STORAGE_ROOT, `Untitled-${Date.now()}.md`)
           const backend = getFsBackend({ type: 'inapp' })
           if (!backend) return
           await backend.write(path, new Uint8Array(0))

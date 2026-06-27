@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Check, FilePlus, Stack } from '@phosphor-icons/react'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { STORAGE_ROOT, join } from '../../lib/storage-paths'
 
 interface BreadcrumbPopoverProps {
   buffers: string[]
@@ -102,7 +103,7 @@ export function BreadcrumbPopover({
       ) : (
         <ul className="flex-1 min-h-0 overflow-y-auto py-1">
           {buffers.map((name) => {
-            const fullPath = `/buffer/${name}`
+            const fullPath = join(STORAGE_ROOT, name)
             const isCurrent = fullPath === currentBufferKey
             return (
               <li key={name}>

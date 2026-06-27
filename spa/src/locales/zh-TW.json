@@ -477,7 +477,7 @@
   "editor.settings.home_path.description": "終端機連結中的 ~/foo 會以此目錄展開。Workspace 優先於 Host，未設定則回退到 pane shell。",
   "editor.settings.home_path.placeholder": "自動偵測 pane shell",
   "editor.settings.home_path.clear": "清除",
-  "editor.buffers.tab_title": "暫存檔",
+  "editor.buffers.tab_title": "儲存空間",
   "editor.buffers.empty": "尚無暫存檔",
   "editor.buffers.new": "新增暫存檔",
   "editor.buffers.rename": "重新命名",
@@ -490,7 +490,7 @@
   "editor.buffers.delete_locked_refused": "此暫存檔在鎖定的分頁中開啟。請先解鎖或關閉該分頁。",
   "editor.buffers.delete_dirty_confirm": "刪除 {{count}} 個有未儲存變更的暫存檔？",
   "editor.buffers.delete_one_confirm": "確定刪除此暫存檔？",
-  "newTab.editor.buffers.label": "管理暫存檔",
+  "newTab.editor.buffers.label": "儲存空間",
 
   "monitor.provider_label": "效能監控",
   "monitor.requires_app": "需要安裝桌面版本",

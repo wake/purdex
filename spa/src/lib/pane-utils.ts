@@ -1,5 +1,24 @@
 import type { PaneContent } from '../types/tab'
 
+/**
+ * Pane kinds that hold an open file from a `FileSource` + `filePath`: the
+ * editor plus the file-preview kinds the opener registry produces (png →
+ * image-preview, pdf → pdf-preview). Storage rename/delete must treat all
+ * three uniformly so a renamed/deleted file doesn't strand a preview tab.
+ */
+export type FilePaneContent = Extract<
+  PaneContent,
+  { kind: 'editor' | 'image-preview' | 'pdf-preview' }
+>
+
+export function isFilePaneContent(content: PaneContent): content is FilePaneContent {
+  return (
+    content.kind === 'editor' ||
+    content.kind === 'image-preview' ||
+    content.kind === 'pdf-preview'
+  )
+}
+
 export function contentMatches(a: PaneContent, b: PaneContent): boolean {
   if (a.kind !== b.kind) return false
   if (a.kind === 'tmux-session') return false // sessions are never singletons
