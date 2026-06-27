@@ -134,4 +134,28 @@ describe('getPaneIcon', () => {
   it('A2-3: returns Stack for editor-buffers', () => {
     expect(getPaneIcon({ kind: 'editor-buffers' })).toBe('Stack')
   })
+
+  it('T3: returns file icon for inapp editor pane by extension', () => {
+    expect(getPaneIcon({ kind: 'editor', filePath: '/buffer/x.md', source: { type: 'inapp' } })).toBe('FileMd')
+  })
+
+  it('T3: returns file icon for inapp image-preview pane', () => {
+    expect(getPaneIcon({ kind: 'image-preview', filePath: '/buffer/p.png', source: { type: 'inapp' } })).toBe('FilePng')
+  })
+
+  it('T3: returns file icon for inapp pdf-preview pane', () => {
+    expect(getPaneIcon({ kind: 'pdf-preview', filePath: '/buffer/d.pdf', source: { type: 'inapp' } })).toBe('FilePdf')
+  })
+
+  it('T3: leaves daemon editor pane unchanged', () => {
+    expect(getPaneIcon({ kind: 'editor', filePath: '/buffer/x.md', source: { type: 'daemon', hostId: 'h1' } })).toBe('TextAlignLeft')
+  })
+
+  it('T3: leaves daemon image-preview pane unchanged', () => {
+    expect(getPaneIcon({ kind: 'image-preview', filePath: '/buffer/p.png', source: { type: 'daemon', hostId: 'h1' } })).toBe('Image')
+  })
+
+  it('T3: leaves inapp editor diff mode as GitDiff', () => {
+    expect(getPaneIcon({ kind: 'editor', filePath: '/buffer/x.md', source: { type: 'inapp' }, diff: { against: 'saved' } })).toBe('GitDiff')
+  })
 })

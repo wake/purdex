@@ -1,4 +1,5 @@
 import type { PaneContent } from '../types/tab'
+import { fileIconForPath } from './file-icon'
 
 export type TFunction = (key: string, params?: Record<string, string | number>) => string
 
@@ -77,10 +78,14 @@ export function getPaneIcon(content: PaneContent): string {
     case 'editor-buffers':
       return 'Stack'
     case 'editor':
-      return content.diff ? 'GitDiff' : 'TextAlignLeft'
+      if (content.diff) return 'GitDiff'
+      if (content.source.type === 'inapp') return fileIconForPath(content.filePath)
+      return 'TextAlignLeft'
     case 'image-preview':
+      if (content.source.type === 'inapp') return fileIconForPath(content.filePath)
       return 'Image'
     case 'pdf-preview':
+      if (content.source.type === 'inapp') return fileIconForPath(content.filePath)
       return 'FilePdf'
   }
 }

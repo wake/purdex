@@ -477,7 +477,7 @@
   "editor.settings.home_path.description": "Tilde-prefixed paths (~/foo) in terminal links expand against this directory. Workspace overrides host; empty falls back to pane shell.",
   "editor.settings.home_path.placeholder": "Auto-detect from pane shell",
   "editor.settings.home_path.clear": "Clear",
-  "editor.buffers.tab_title": "Buffers",
+  "editor.buffers.tab_title": "Storage",
   "editor.buffers.empty": "No buffers yet",
   "editor.buffers.new": "New Buffer",
   "editor.buffers.rename": "Rename",
@@ -490,7 +490,7 @@
   "editor.buffers.delete_locked_refused": "This buffer is open in a locked tab. Unlock or close the tab first.",
   "editor.buffers.delete_dirty_confirm": "Delete {{count}} buffer(s) with unsaved changes?",
   "editor.buffers.delete_one_confirm": "Delete this buffer?",
-  "newTab.editor.buffers.label": "Manage Buffers",
+  "newTab.editor.buffers.label": "Storage",
 
   "monitor.provider_label": "Performance Monitor",
   "monitor.requires_app": "Requires desktop app",
