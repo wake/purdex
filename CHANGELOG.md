@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.301] - 2026-06-28
+
+### Feat(storage): In-App nested CRUD + recursive folder move (subsystem 1, Phase 1b) (#871)
+
+在 1a 巢狀樹之上補齊資料夾級操作。純前端（IndexedDB `InAppBackend`），無 daemon 改動。
+Detailed plan 經 3 輪 codex review 收斂 SHIP-READY；依 plan 切 8 個 TDD task 派 subagent 實作；
+PR 兩輪深度 review（R1 標準 + R2 攻擊/防守/體質）共 9 findings，fix-wave 全修後確認 review
+APPROVE-TO-MERGE。
+
+- **統一 eager 新檔 namer（修 #854 dup-bufferKey race）**：`InAppBackend.createUnique` 用
+  IDB `store.add()` 作單一序列化點原子保留檔名；`createUniqueInAppFile(dir, ext)` 收斂三個
+  new-file 入口（StoragePane / EditorPane 新 buffer / EditorNewTabSection）。後者由 lazy
+  in-memory `untitled:` 改為 eager 立即建檔（`.txt`/`.md` 以 `ext: 'md'|'txt'` 保留），既有
+  `untitled:` runtime contract 不動。
+- **資料夾可選 + 新增資料夾**：tree selection 從「只選檔案」擴成可選資料夾（單擊 name 選取 /
+  caret 獨立展開 / modifier 多選）+ `targetDir` 衍生；toolbar New Folder（`mkdirUnique`
+  add-reserve）+ New File 落在選中目錄。
+- **改名（檔案 + 資料夾）**：`renameStorageEntry` 統一路徑、**恰好一次** `backend.rename`，
+  把舊 `performBufferRename` 重構為 pure `remapPanesUnder`（不碰後端，re-point 含 editor /
+  image / pdf 的後代開啟 pane）；碰撞 pre-check + 同名 no-op。
+- **遞迴刪除**：locked/dirty 守衛擴成涵蓋資料夾後代（`filePath` 前綴比對）；重疊 target 正規化
+  避免半刪；資料夾走遞迴刪除。
+- **拖曳搬移**：dnd-kit `DndContext`（每列 droppable 攜帶權威 `targetDir`：資料夾→自身、
+  檔案→父目錄、root→`/buffer`）+ pure `moveStorageEntry`（self/descendant/same-parent no-op
+  + 碰撞）；保留 click-select / double-click-open / 鍵盤 a11y 共存。
+- **體質**：`createUnique`/`mkdirUnique` 改 `SupportsUniqueCreate` capability interface（不再
+  強制所有 backend stub）；DnD resolver 抽到獨立 `storage-dnd.ts`。延後體質債 #872-#875。
+
 ## [1.0.0-alpha.300] - 2026-06-27
 
 ### Feat(storage): In-App nested file manager — "Storage" (subsystem 1, Phase 1a) (#869)
