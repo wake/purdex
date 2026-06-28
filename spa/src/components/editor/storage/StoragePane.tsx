@@ -112,6 +112,10 @@ export function StoragePane({ pane }: PaneRendererProps) {
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [actionError, setActionError] = useState<string | null>(null)
+  // Upload-only soft warning (over the size cap) — rendered amber, below errors.
+  // Kept separate from `actionError` (red) so a too-large rejection reads as a
+  // recoverable warning, not a hard failure (T1c-4).
+  const [actionWarning, setActionWarning] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [renameError, setRenameError] = useState<string | null>(null)
@@ -168,6 +172,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
   const handleNew = useCallback(async () => {
     setBusy(true)
     setActionError(null)
+    setActionWarning(null)
     // T1b-0 wiring: the new file lands in the selected folder (or the parent of
     // a selected file, else the storage root).
     const res = await createStorageFile(targetDir)
@@ -179,6 +184,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
   const handleNewFolder = useCallback(async () => {
     setBusy(true)
     setActionError(null)
+    setActionWarning(null)
     const res = await createStorageFolder(targetDir)
     setBusy(false)
     if ('error' in res) {
@@ -237,6 +243,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
     if (selectedArray.length === 0) return
     setBusy(true)
     setActionError(null)
+    setActionWarning(null)
     const res = await deleteStorageEntries(selectedArray, t)
     setBusy(false)
     if (res.status === 'deleted') {
@@ -257,23 +264,41 @@ export function StoragePane({ pane }: PaneRendererProps) {
   // --- Upload (file picker + native OS-file drop, T1c-1) ---
 
   // Ingest OS files into the current `targetDir`. Shared by the picker and the
-  // native drop. Reflects partial success in the inline banner (codex R1 F5):
-  // any failure names the count + first failed file; all-success clears it.
+  // native drop. Reflects partial success in the inline banner (codex R1 F5) and
+  // distinguishes the T1c-4 guard outcomes by typed reason:
+  //   - a quota failure (store full) → red error banner (takes precedence);
+  //   - else if EVERY failure is too-large → amber warning naming the first file
+  //     + the cap in MB (a soft, recoverable rejection, not a hard error);
+  //   - else → the generic partial message (count + first failed file).
+  // All-success clears both banners.
   const ingestFiles = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return
       setBusy(true)
       setActionError(null)
+      setActionWarning(null)
       const summary = await uploadFiles(targetDir, files)
       setBusy(false)
-      if (summary.failed.length > 0) {
-        setActionError(
-          t('editor.buffers.upload_partial', {
-            uploaded: summary.uploaded.length,
-            failed: summary.failed.length,
-            name: summary.failed[0].name,
-          }),
-        )
+      const { failed } = summary
+      if (failed.length > 0) {
+        const quota = failed.find((f) => f.kind === 'quota')
+        const tooLarge = failed.filter((f) => f.kind === 'too-large')
+        if (quota) {
+          setActionError(t('editor.buffers.upload_quota', { name: quota.name }))
+        } else if (tooLarge.length === failed.length) {
+          const capMb = Math.round((tooLarge[0].cap ?? 0) / (1024 * 1024))
+          setActionWarning(
+            t('editor.buffers.upload_too_large', { name: tooLarge[0].name, cap: capMb }),
+          )
+        } else {
+          setActionError(
+            t('editor.buffers.upload_partial', {
+              uploaded: summary.uploaded.length,
+              failed: failed.length,
+              name: failed[0].name,
+            }),
+          )
+        }
       }
       refresh()
     },
@@ -319,6 +344,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
     // in downloadStorageFile; surface any failure in the inline banner.
     if (!singleSelected || selectedNode?.isDir) return
     setActionError(null)
+    setActionWarning(null)
     const res = await downloadStorageFile(singleSelected)
     if ('error' in res) setActionError(res.error)
   }, [singleSelected, selectedNode])
@@ -335,6 +361,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
       const move = computeMoveFromDragEnd(event.active, event.over)
       if (!move) return
       setActionError(null)
+      setActionWarning(null)
       const res = await moveStorageEntry(move.from, move.targetDir)
       if ('ok' in res) {
         // Keep the moved entry selected at its new home so a follow-up action
@@ -463,6 +490,11 @@ export function StoragePane({ pane }: PaneRendererProps) {
             onNativeDrop={handleNativeDrop}
           >
             {error && <div className="p-4 text-xs text-red-400">{error}</div>}
+            {!error && actionWarning && (
+              <div data-testid="storage-warning" className="p-4 text-xs text-amber-400">
+                {actionWarning}
+              </div>
+            )}
             {!error && !hasAny && (
               <div className="p-8 flex flex-col items-center justify-center text-text-muted">
                 <Stack size={32} className="mb-2 opacity-50" />

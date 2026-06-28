@@ -19,6 +19,7 @@
 import { getFsBackend, supportsCreateUnique, supportsMkdirUnique } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
 import { triggerDownload } from '../../../lib/download-file'
+import { isQuotaError } from '../../../lib/quota'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { scanPaneTree } from '../../../lib/pane-tree'
 import { isFilePaneContent } from '../../../lib/pane-utils'
@@ -165,52 +166,104 @@ function splitFileName(fileName: string): { baseName: string; ext: string } {
 }
 
 /**
- * Ingest a single OS file into `targetDir` (Phase 1c T1c-1, happy path). Parses
- * the name into `(baseName, ext)`, reads the bytes, and reserves a unique key
- * via the atomic `createUnique(dir, base, ext, bytes)` — so the unique-name
- * reservation AND the byte write land on one `add` (no overwrite race; a
- * collision increments the `-N` suffix, decision 4). Any file type is accepted;
- * there is NO size cap or quota handling here — those land in T1c-4, which
- * widens this result shape. A missing/incapable backend or a read/write failure
- * surfaces as `{ error }` (never a silent no-op).
+ * Soft upper bound on a single uploaded file (~25 MB, T1c-4 decision 5). A file
+ * over the cap is rejected BEFORE any write (no `createUnique`, no byte read into
+ * IDB), surfacing as a `tooLarge` result rather than letting a large blob bloat
+ * the In-App store. The cap is "soft": it is enforced per-file at ingest, not a
+ * hard quota — the genuine IDB quota is caught separately at write time.
  */
-export async function uploadFile(
-  targetDir: string,
-  file: File,
-): Promise<{ path: string } | { error: string }> {
+export const SOFT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+/**
+ * Sentinel message returned by `uploadFile` when a write fails because the
+ * backing store is full (`isQuotaError`). `uploadFiles` matches on it to tag the
+ * failure `kind: 'quota'` so the UI can show a distinct "storage full" banner
+ * instead of a generic error — keeping `uploadFile`'s public result the plain
+ * `{ path } | { error } | { tooLarge }` union (the quota case is an `{ error }`).
+ */
+export const QUOTA_ERROR_MESSAGE = 'Storage quota exceeded'
+
+export type UploadResult =
+  | { path: string }
+  | { error: string }
+  | { tooLarge: { name: string; cap: number } }
+
+/**
+ * Ingest a single OS file into `targetDir` (Phase 1c; T1c-1 happy path widened
+ * by T1c-4, which owns ALL upload guards). Order of guards:
+ *   1. Missing/incapable backend → `{ error }` (never a silent no-op).
+ *   2. **Size cap before any write** (decision 5): `file.size > SOFT_MAX_UPLOAD_BYTES`
+ *      → `{ tooLarge: { name, cap } }`. `createUnique` is NOT called and the bytes
+ *      are NOT read — the over-cap file never touches the store.
+ *   3. Otherwise parse `(baseName, ext)`, read bytes, and reserve a unique key
+ *      via the atomic `createUnique(dir, base, ext, bytes)` — unique-name
+ *      reservation AND byte write on one `add` (no overwrite race; `-N` suffix on
+ *      collision, decision 4). A thrown quota exhaustion is caught via the shared
+ *      `isQuotaError` and surfaced as `{ error: QUOTA_ERROR_MESSAGE }` (never
+ *      silent); any other throw surfaces its message. Any file type is accepted.
+ */
+export async function uploadFile(targetDir: string, file: File): Promise<UploadResult> {
   const backend = getFsBackend({ type: 'inapp' })
   // Narrow to the unique-create capability (codex H1) — it lives on the optional
   // `SupportsUniqueCreate`, not the base `FsBackend`.
   if (!supportsCreateUnique(backend)) return { error: 'InApp backend unavailable' }
+  // Size cap is checked BEFORE the read+write (decision 5): an over-cap file is
+  // rejected without ever reading its bytes or reserving a name.
+  if (file.size > SOFT_MAX_UPLOAD_BYTES) {
+    return { tooLarge: { name: file.name, cap: SOFT_MAX_UPLOAD_BYTES } }
+  }
   try {
     const { baseName, ext } = splitFileName(file.name)
     const bytes = new Uint8Array(await file.arrayBuffer())
     const path = await backend.createUnique(targetDir, baseName, ext, bytes)
     return { path }
   } catch (err) {
+    // A full store throws a quota DOMException at write time; surface it as a
+    // distinct (sentinel) error so the caller can show a "storage full" banner.
+    if (isQuotaError(err)) return { error: QUOTA_ERROR_MESSAGE }
     return { error: err instanceof Error ? err.message : String(err) }
   }
 }
 
+/** Why a single upload failed — lets the UI pick the right banner (T1c-4). */
+export type UploadFailureKind = 'too-large' | 'quota' | 'other'
+
+export interface UploadFailure {
+  name: string
+  reason: string
+  kind: UploadFailureKind
+  /** The soft cap in bytes — present only for `kind: 'too-large'`. */
+  cap?: number
+}
+
 export interface UploadSummary {
   uploaded: string[]
-  failed: { name: string; reason: string }[]
+  failed: UploadFailure[]
 }
 
 /**
  * Ingest multiple OS files into `targetDir`, reporting PARTIAL success (codex R1
  * F5): every uploaded path lands in `uploaded`, and each failure lands in
- * `failed` with the file name + reason — the caller surfaces both in one banner
+ * `failed` with a TYPED reason (T1c-4) so the caller can render a too-large
+ * warning, a quota error, or a generic partial message — all in one banner
  * rather than aborting on the first error. Files are processed sequentially so
  * the atomic `-N` suffixing stays deterministic for same-named drops.
  */
 export async function uploadFiles(targetDir: string, files: File[]): Promise<UploadSummary> {
   const uploaded: string[] = []
-  const failed: { name: string; reason: string }[] = []
+  const failed: UploadFailure[] = []
   for (const file of files) {
     const res = await uploadFile(targetDir, file)
-    if ('path' in res) uploaded.push(res.path)
-    else failed.push({ name: file.name, reason: res.error })
+    if ('path' in res) {
+      uploaded.push(res.path)
+    } else if ('tooLarge' in res) {
+      failed.push({ name: res.tooLarge.name, reason: 'too-large', kind: 'too-large', cap: res.tooLarge.cap })
+    } else {
+      // `{ error }`: the quota sentinel becomes `kind: 'quota'`, everything else
+      // is `kind: 'other'` (a generic failure carrying its raw message).
+      const kind: UploadFailureKind = res.error === QUOTA_ERROR_MESSAGE ? 'quota' : 'other'
+      failed.push({ name: file.name, reason: res.error, kind })
+    }
   }
   return { uploaded, failed }
 }

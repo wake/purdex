@@ -8,6 +8,8 @@ import {
   renameStorageEntry,
   uploadFile,
   uploadFiles,
+  SOFT_MAX_UPLOAD_BYTES,
+  QUOTA_ERROR_MESSAGE,
 } from './storage-actions'
 import { InAppBackend } from '../../../lib/fs-backend-inapp'
 import { closeAllIDB } from '../../../lib/storage/idb'
@@ -784,12 +786,72 @@ describe('uploadFile / uploadFiles — OS-file ingest via atomic createUnique (T
     const bad = new File([new Uint8Array([2])], 'bad.bin')
     const summary = await uploadFiles('/buffer', [good, bad])
     expect(summary.uploaded).toEqual(['/buffer/ok.txt'])
-    expect(summary.failed).toEqual([{ name: 'bad.bin', reason: 'disk boom' }])
+    expect(summary.failed).toEqual([{ name: 'bad.bin', reason: 'disk boom', kind: 'other' }])
   })
 
   it('missing backend → uploadFile returns an error (no silent no-op)', async () => {
     backend = null
     const res = await uploadFile('/buffer', new File([new Uint8Array([1])], 'x.txt'))
     expect('error' in res && res.error).toBeTruthy()
+  })
+})
+
+// --- T1c-4: soft size cap + quota guard on upload (owns ALL upload guards) -----
+//
+// The cap is checked BEFORE any write (an over-cap file never reaches
+// `createUnique`); a quota throw at write time is caught via the shared
+// `isQuotaError` and surfaced (never silent). `uploadFiles` folds both into the
+// summary's `failed[]` with the right typed reason.
+
+/** A File whose `size` is forced past the cap WITHOUT allocating the bytes. */
+function oversizedFile(name: string, size: number): File {
+  const file = new File([new Uint8Array([0])], name)
+  Object.defineProperty(file, 'size', { value: size })
+  return file
+}
+
+describe('uploadFile / uploadFiles — size cap + quota guards (T1c-4)', () => {
+  it('T4-1: a file over the cap returns { tooLarge } and never calls createUnique', async () => {
+    const createUnique = vi.fn()
+    backend = { createUnique }
+    const file = oversizedFile('huge.bin', SOFT_MAX_UPLOAD_BYTES + 1)
+    const res = await uploadFile('/buffer', file)
+    expect(res).toEqual({ tooLarge: { name: 'huge.bin', cap: SOFT_MAX_UPLOAD_BYTES } })
+    expect(createUnique).not.toHaveBeenCalled()
+  })
+
+  it('a file exactly at the cap is accepted (boundary is strictly-greater)', async () => {
+    const createUnique = vi.fn(async () => '/buffer/edge.bin')
+    backend = { createUnique }
+    const res = await uploadFile('/buffer', oversizedFile('edge.bin', SOFT_MAX_UPLOAD_BYTES))
+    expect(res).toEqual({ path: '/buffer/edge.bin' })
+    expect(createUnique).toHaveBeenCalledTimes(1)
+  })
+
+  it('T4-2: a QuotaExceededError thrown by the write surfaces as { error } (not silent)', async () => {
+    const createUnique = vi.fn(async () => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    backend = { createUnique }
+    const res = await uploadFile('/buffer', new File([new Uint8Array([1])], 'x.txt'))
+    expect(res).toEqual({ error: QUOTA_ERROR_MESSAGE })
+  })
+
+  it('uploadFiles folds tooLarge + quota into failed[] with typed reasons', async () => {
+    const createUnique = vi.fn(async (dir: string, base: string, ext: string) => {
+      if (base === 'boom') throw new DOMException('full', 'QuotaExceededError')
+      return ext === '' ? `${dir}/${base}` : `${dir}/${base}.${ext}`
+    })
+    backend = { createUnique }
+    const summary = await uploadFiles('/buffer', [
+      new File([new Uint8Array([1])], 'ok.txt'),
+      oversizedFile('huge.bin', SOFT_MAX_UPLOAD_BYTES + 1),
+      new File([new Uint8Array([2])], 'boom.bin'),
+    ])
+    expect(summary.uploaded).toEqual(['/buffer/ok.txt'])
+    expect(summary.failed).toEqual([
+      { name: 'huge.bin', reason: 'too-large', kind: 'too-large', cap: SOFT_MAX_UPLOAD_BYTES },
+      { name: 'boom.bin', reason: QUOTA_ERROR_MESSAGE, kind: 'quota' },
+    ])
   })
 })

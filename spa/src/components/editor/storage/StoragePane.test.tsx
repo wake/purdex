@@ -3,6 +3,7 @@ import type { Mock } from 'vitest'
 import { useState, type ReactNode } from 'react'
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { StoragePane } from './StoragePane'
+import { SOFT_MAX_UPLOAD_BYTES } from './storage-actions'
 import { openInAppFile } from '../../../lib/open-in-app-file'
 import { triggerDownload } from '../../../lib/download-file'
 import type { Pane, Tab } from '../../../types/tab'
@@ -1885,5 +1886,43 @@ describe('StoragePane — upload via picker + native OS-file drop (T1c-1)', () =
     await waitFor(() => expect(screen.getByText('editor.buffers.upload_partial')).toBeTruthy())
     const calls = (mockBackend.createUnique as Mock).mock.calls.map((c) => c[1])
     expect(calls).toEqual(['ok', 'bad'])
+  })
+
+  // --- T1c-4: size cap warning + quota error banner -------------------------
+
+  /** A File whose `size` is forced past the cap WITHOUT allocating the bytes. */
+  function oversizedFile(name: string, size: number): File {
+    const file = new File([new Uint8Array([0])], name)
+    Object.defineProperty(file, 'size', { value: size })
+    return file
+  }
+
+  it('T4-1: an over-cap file shows the amber too-large WARNING and never writes', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    await uploadViaPicker([oversizedFile('huge.bin', SOFT_MAX_UPLOAD_BYTES + 1)])
+
+    const warning = await screen.findByTestId('storage-warning')
+    expect(warning.textContent).toBe('editor.buffers.upload_too_large')
+    expect(warning.className).toContain('text-amber-400')
+    expect(mockBackend.createUnique).not.toHaveBeenCalled()
+  })
+
+  it('T4-2: a quota write failure shows the red quota ERROR banner (not silent)', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>()
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.createUnique = vi.fn(async () => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    await uploadViaPicker([new File([new Uint8Array([1])], 'x.txt')])
+
+    const banner = await screen.findByText('editor.buffers.upload_quota')
+    expect(banner.className).toContain('text-red-400')
+    expect(screen.queryByTestId('storage-warning')).toBeNull()
   })
 })

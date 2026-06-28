@@ -1,4 +1,5 @@
 import { openIDB } from '../storage/idb'
+import { isQuotaError } from '../quota'
 import type { SyncBundle } from './types'
 import type { SnapshotMetadata, SnapshotTrigger, StoredSnapshot } from './snapshot-types'
 import { computeCompaction } from './snapshot-compaction'
@@ -14,16 +15,6 @@ function genId(): string {
 
 function computeBundleSize(bundle: SyncBundle): number {
   return new TextEncoder().encode(JSON.stringify(bundle)).byteLength
-}
-
-function isQuotaError(err: unknown): boolean {
-  if (err instanceof DOMException) {
-    if (err.name === 'QuotaExceededError') return true
-    // Historic numeric codes: 22 (standard), 1014 (Firefox).
-    const code = (err as DOMException & { code?: number }).code
-    if (code === 22 || code === 1014) return true
-  }
-  return false
 }
 
 export interface SnapshotStore {
