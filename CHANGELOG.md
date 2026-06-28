@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.305] - 2026-06-29
+
+### Feat(storage+browser): post-2b UI polish (#883)
+
+使用者實測 Phase 2b 後的 4 項 UI/UX polish（輕量 self-review；vitest 3616 / lint / build 全綠）。
+
+- **調亮文字**：Storage 檔名 `text-text-secondary`→`primary`、size/words metric `muted`→`secondary`；
+  備份側欄面板 `muted`→`secondary`、標題 →`primary`。
+- **「New Buffer」→「New File」**：`editor.buffers.new`（en `New File` / zh-TW `新增檔案`），對齊
+  Editor 區措辭。
+- **隱藏 URL 歷史 dropdown（邏輯保留）**：`BrowserNewTabSection` 加 `SHOW_URL_HISTORY_DROPDOWN`
+  flag gate render，history store / 鍵盤導航 / outside-click / scroll-into-view 全留，翻 flag 即還原。
+- **啟動時檢查一次 backup**：backup auto-trigger 加 `runInitialCheck`，app boot 時 host 就緒即跑一次
+  `backupNow`（未就緒則等首個 host 出現時觸發一次，idempotent，dispose 清乾淨）；靠 no-op 抑制 +
+  daemon content-keyed no-op，內容沒變只是輕量 round-trip。
+
 ## [1.0.0-alpha.304] - 2026-06-29
 
 ### Feat(storage): front-end backup engine — Phase 2b (subsystem 2) (#881)
