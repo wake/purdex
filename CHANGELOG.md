@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.302] - 2026-06-28
+
+### Feat(storage): In-App upload / download / binary-disposition / quota (subsystem 1, Phase 1c) (#877)
+
+子系統 1 第三階段：在 1a 巢狀樹 + 1b 巢狀 CRUD 之上補齊檔案進出。純前端（IndexedDB
+`InAppBackend`），無 daemon/Electron-IPC 改動。Detailed plan 經 3 輪 codex review 收斂
+SHIP-READY；4 個 TDD task 派 subagent；PR 兩輪深度 review（R1 標準 + R2 攻擊/防守/體質）
+共 7 findings + 確認 review 補 1 項 defense-in-depth，全修後 full suite 3555 綠。
+
+- **上傳**：toolbar file picker + OS 檔案拖入（native HTML5 drop，用 `dataTransfer.files`
+  與 1b dnd-kit node-move 區分共存）；泛化 `createUnique(dir, base, ext: string, content?)`
+  以 IDB `store.add()` 原子保留+寫入（不覆蓋；suffix `-N`）；**file.name sanitise**（展平
+  basename、去控制字元、拒 `.`/`..`/路徑分隔符、`isUnderRoot` + traversal 段防線）防 path
+  traversal/隱藏資料；`uploadFiles → UploadSummary{uploaded[], failed[]}` typed kind 回報。
+- **下載/匯出**：單檔 `backend.read`→Blob→anchor download（byte-identical）；抽共用
+  `lib/download-file.ts`。
+- **非可預覽 binary 開檔→下載 disposition**：`openInAppFile` 對 `DOWNLOAD_EXTS`
+  （docx/xlsx/zip…）read+download 不掛 editor；抽 leaf lib `lib/file-extension-roles.ts`
+  （`roleForExtension`，registry 與 openInAppFile 單一 SOT）；修 .docx 掛 monaco 變亂碼。
+- **軟上限 ~25MB**（write 前擋）+ **quota 錯誤**（`isQuotaError` lift 到 `lib/quota.ts`，
+  write catch）→ inline banner warning/error 分流。
+- 體質債延後 #872/#873（storage-actions/StoragePane 拆分，1c 已註記加劇）。
+
 ## [1.0.0-alpha.301] - 2026-06-28
 
 ### Feat(storage): In-App nested CRUD + recursive folder move (subsystem 1, Phase 1b) (#871)
