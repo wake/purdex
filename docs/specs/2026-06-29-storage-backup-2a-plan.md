@@ -50,7 +50,16 @@ event) so 2b has a stable target.
 4. **`POST /snapshot` is one `BEGIN IMMEDIATE` transaction** (spec §4.3, P1-3): read head → validate
    (§4.2) → **content-keyed no-op check** (manifest == head's canonical manifest → return head id,
    no row, regardless of `parentId`, R3-Pa) → insert with `is_fork = parentId != head` (only when
-   content differs) → GC (§4.5), all in the same tx. Concurrency asserted via `busy_timeout`.
+   content differs) → GC (§4.5), all in the same tx.
+5. **Deterministic serialisation test seam.** A bare two-goroutine race can pass even on a broken
+   impl (where read-head and insert are *not* in one `BEGIN IMMEDIATE`) if the scheduler happens to
+   not interleave them. So `BackupStore` carries an unexported `afterReadHead func()` hook (nil in
+   prod, zero cost). The serialisation test injects a barrier into it that (a) blocks writer-1
+   *after* it has read head but *before* insert, (b) launches writer-2 and asserts writer-2 cannot
+   commit ahead (it blocks on `busy_timeout` because writer-1 holds the `BEGIN IMMEDIATE` write
+   lock), (c) releases writer-1, then asserts writer-2 **re-read the now-advanced head** (its
+   `is_fork`/`parent` reflect writer-1's row). This forces the race window rather than hoping for it.
+   On a broken non-transactional impl the test deterministically fails.
 5. **Manifest is stored canonical** (sorted by path). The daemon **rejects** an unsorted manifest
    (`400`), it does not re-sort (R2-Pc) — so the byte-form used for no-op compare is unambiguous.
    No-op compare is on the **canonical JSON manifest string** of head vs incoming.
@@ -116,9 +125,11 @@ event) so 2b has a stable target.
   - **fork**: differing content, `parentId==head` → `is_fork=false`; stale `parentId` → `is_fork=true`;
     both rows present, neither overwritten.
   - **serialisation** (uses `openTempBackupStore(t)`, file-backed, `MaxOpenConns(2)` — NOT
-    `:memory:`, per groundwork): two goroutines `AppendSnapshot` same `parentId` differing content —
-    not both `is_fork=false` (one sees the other's row); no `SQLITE_BUSY` surfaced (busy_timeout);
-    run with `-race`.
+    `:memory:`, per groundwork; **deterministic via the `afterReadHead` barrier seam**, Design 5):
+    writer-1 blocked after read-head/before-insert; writer-2 (same `parentId`, differing content)
+    must block on `busy_timeout` not commit ahead; after releasing writer-1, writer-2 **re-reads the
+    advanced head** so the two rows are not both `is_fork=false` and no `SQLITE_BUSY` is surfaced. A
+    broken non-`BEGIN IMMEDIATE` impl fails this deterministically. Run with `-race`.
   - handler (`httptest`) `POST /api/backup/snapshot`: maps the above to `200{snapshotId,isFork,
     currentHeadId}` / `409` / `400`.
 - **Impl**: store `AppendSnapshot` (tx: read head row+manifest → `ValidateManifest` → parent/size/
@@ -127,10 +138,17 @@ event) so 2b has a stable target.
 - **AC**: AC-2a no-op / fork / serialisation / validation-409-400 bullets.
 
 ### T2a-4 — GC (grace + ancestor closure, injected clock)
-- **Test**: with `now` injected: insert >100 snapshots (or rows aged past 90 days) → surplus deleted
-  but **ancestor closure of survivors retained** (a kept row's `parent_id` never dangles); blobs
-  referenced by no survivor **and** `created_at` past grace → deleted; blobs still referenced (incl.
-  shared across ≥2 snapshots) or within grace → retained. Run via both the append tx and `Start()`.
+- **Test** (keep-set is a **union, NOT a hard cap** — spec §4.5: `latest 100 by id ∪ within 90 days
+  ∪ ancestor closure`), with `now` injected, ≥4 explicit fixtures:
+  1. **>100 snapshots, ALL within 90 days → none deleted** (the 90-day arm of the union keeps them;
+     count alone must NOT trigger deletion — this is the anti-hard-cap assertion).
+  2. **>100 snapshots with some aged past 90 days → only rows in neither the latest-100 nor the
+     90-day window (and not an ancestor) are deleted**; rows in any union arm survive.
+  3. **ancestor closure**: a survivor's `parent_id` ancestor that is itself past both windows is
+     **still retained** (no dangling `parent_id`).
+  4. **blob grace**: blobs referenced by no survivor **and** `created_at` past grace → deleted;
+     blobs still referenced (incl. **shared across ≥2 snapshots**) or **within grace** → retained.
+  Run via both the append tx and `Start()`.
 - **Impl**: store `gc(tx, storeID, now)` — compute keep-set (latest 100 by id ∪ within-90d ∪
   ancestor closure via `parent_id` walk), delete others, then delete unreferenced+past-grace blobs.
   Wire into `AppendSnapshot`'s tx (replace the T2a-3 stub) and `Start()`.
