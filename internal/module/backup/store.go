@@ -334,15 +334,3 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// gcTx runs garbage collection for one store inside an existing transaction.
-// T2a-3 stub: replaced with the real keep-set / grace-period implementation in
-// T2a-4.
-func (s *BackupStore) gcTx(ctx context.Context, conn *sql.Conn, storeID string, now int64) error {
-	return nil
-}
-
-// GC runs garbage collection across all store_ids using the given clock.
-// T2a-0 stub: replaced with the real implementation in T2a-4.
-func (s *BackupStore) GC(now int64) error {
-	return nil
-}
