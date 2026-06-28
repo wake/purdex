@@ -23,6 +23,14 @@ event) so 2b has a stable target.
 - **Test conventions** (`internal/store/agent_event_test.go:15-23`): `openTestX(t)` helper opening
   `:memory:` with `t.Helper()`+`t.Cleanup(close)`; `httptest.NewRequest/NewRecorder`
   (`config_handler_test.go:42-51`); testify `require`/`assert`.
+- **Concurrency/lock tests use a file-backed temp DB**, NOT `:memory:` — a `:memory:` store sets
+  `SetMaxOpenConns(1)` (`meta.go:56`), so goroutines just queue on the one connection and never
+  exercise real SQLite writer contention / `busy_timeout`. The repo's `BEGIN IMMEDIATE`/busy_timeout
+  tests use a `t.TempDir()` file DB on the `MaxOpenConns(2)` path (`agent_event_test.go:183`,
+  `pragma_test.go:49`). Provide **two** helpers: `openTestBackupStore(t)` (`:memory:`, normal tests)
+  and `openTempBackupStore(t)` (temp-file, the serialisation test only).
+- **`backup:done` test** uses the broadcaster's existing `AddTestSubscriber()`
+  (`internal/core/events.go:112`) to capture emitted envelopes — no bespoke spy.
 
 ## Design decisions
 
@@ -61,18 +69,20 @@ event) so 2b has a stable target.
   index exist (query `sqlite_master`); a second `OpenBackup` on a temp-file path is idempotent (no
   error, no dup). `module_test.go`: `New().Name()=="backup"`, `Dependencies()==nil`.
 - **Impl**: `store.go` `OpenBackup(path)` (DSN/WAL/busy_timeout/conns per Design 2, `now` field) +
-  `migrate` (the two `CREATE TABLE IF NOT EXISTS` + index from spec §4.1) + `Close()`. `module.go`
-  skeleton (`Init` opens `backup.db`, holds `core`; `RegisterRoutes` empty for now; `Start` logs +
-  runs `store.GC(now)` once; `Stop` closes). Wire `c.AddModule(backupmod.New())` at
-  `cmd/pdx/main.go:247`-adjacent.
+  `migrate` (the two `CREATE TABLE IF NOT EXISTS` + index from spec §4.1) + `Close()` + a
+  **compile-safe no-op `GC(now)` stub** (replaced with the real impl in T2a-4, so `Start()`'s wiring
+  lands here once and stays green). `module.go` skeleton (`Init` opens `backup.db`, holds `core`;
+  `RegisterRoutes` empty for now; `Start` logs + calls `store.GC(now)`; `Stop` closes). Wire
+  `c.AddModule(backupmod.New())` at `cmd/pdx/main.go:247`-adjacent.
 - **AC**: schema present; module registers; `go test ./...` still green.
 
 ### T2a-1 — manifest validation (pure functions)
 - **Test** (`validate_test.go`): table-driven over `ValidateManifest(entries)`:
   - OK: canonical sorted file+dir tree.
-  - `400` causes: unsorted / duplicate path / path with `..`, leading `/`, backslash, empty
-    segment / `kind` not in {file,dir} / `kind:'dir'` with non-empty hash|size|words / `kind:'file'`
-    hash not 64-hex / **prefix-conflict** (`a` is file while `a/b` exists) / ancestor-not-derivable.
+  - `400` causes: unsorted / duplicate path / **empty path `""`** / path with `..`, **`.` (incl.
+    `a/./b`)**, leading `/`, backslash, empty segment / `kind` not in {file,dir} / `kind:'dir'` with
+    non-empty hash|size|words / `kind:'file'` hash not 64-hex / **prefix-conflict** (`a` is file
+    while `a/b` exists) / ancestor-not-derivable.
   - Returns a typed error (or `(bool, reason)`) the handler maps to `400`.
 - **Impl**: `validate.go` — pure: canonical-order check, path-rule check, per-kind field check,
   tree well-formedness (build prefix set; no file path is a strict prefix-ancestor of another).
@@ -97,12 +107,18 @@ event) so 2b has a stable target.
   - missing blob → error mapped to `409`, **no row**.
   - validation failures (reuse T2a-1) + `parentId` cross-store / nonexistent + `size`≠blob length →
     `400`, no row.
+  - **manifest item count > cap → `413`, no row** (spec §4.2 (h); a handler-level input cap, caught
+    before the store call).
   - **no-op (content-keyed)**: manifest == head's canonical manifest → `result.written=false`,
-    returns head id, **no row**, *even with a stale `parentId`* (assert the cross-device case).
+    returns head id, **no row**, *even with a stale `parentId`* (assert the cross-device case). **Two
+    explicit trigger cases** (AC-2a / R2-Pf): `trigger:'auto'` head-equal → no row; **`trigger:
+    'pre-restore'` head-equal → no row**, returns head id.
   - **fork**: differing content, `parentId==head` → `is_fork=false`; stale `parentId` → `is_fork=true`;
     both rows present, neither overwritten.
-  - **serialisation**: two goroutines `AppendSnapshot` same `parentId` differing content — not both
-    `is_fork=false` (one sees the other's row); no `SQLITE_BUSY` surfaced (busy_timeout).
+  - **serialisation** (uses `openTempBackupStore(t)`, file-backed, `MaxOpenConns(2)` — NOT
+    `:memory:`, per groundwork): two goroutines `AppendSnapshot` same `parentId` differing content —
+    not both `is_fork=false` (one sees the other's row); no `SQLITE_BUSY` surfaced (busy_timeout);
+    run with `-race`.
   - handler (`httptest`) `POST /api/backup/snapshot`: maps the above to `200{snapshotId,isFork,
     currentHeadId}` / `409` / `400`.
 - **Impl**: store `AppendSnapshot` (tx: read head row+manifest → `ValidateManifest` → parent/size/
@@ -129,10 +145,11 @@ event) so 2b has a stable target.
 - **AC**: AC-2a history/get bullets.
 
 ### T2a-6 — `backup:done` broadcast + payload contract
-- **Test**: subscribe a fake `EventSubscriber` (or capture via a broadcast spy injected into the
-  module); a **committed** snapshot (T2a-3 written=true) broadcasts exactly one `backup:done` with
-  `session==""` and `value` = JSON `{storeId,snapshotId,currentHeadId,device,trigger,createdAt}`; a
-  **no-op-suppressed** post broadcasts **nothing**.
+- **Test**: capture envelopes via the broadcaster's existing `AddTestSubscriber()`
+  (`events.go:112`, per groundwork — no bespoke spy); a **committed** snapshot (T2a-3 written=true)
+  broadcasts exactly one `backup:done` with `session==""` and `value` = JSON
+  `{storeId,snapshotId,currentHeadId,device,trigger,createdAt}`; a **no-op-suppressed** post
+  (both `trigger:'auto'` and `trigger:'pre-restore'`, head-equal) broadcasts **nothing**.
 - **Impl**: in the snapshot handler, after a `written` append commits, `c.Events.Broadcast("",
   "backup:done", string(json))`. (Front-end `HostEvent` union update is **2b**, not here — 2a just
   emits the documented wire event.)
