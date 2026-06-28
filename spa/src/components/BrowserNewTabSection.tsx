@@ -4,6 +4,14 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useBrowserHistoryStore } from '../stores/useBrowserHistoryStore'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
 
+/**
+ * Hidden-but-retained: the URL-history suggestion dropdown is intentionally not
+ * rendered for now (per UX feedback) while ALL of its logic — history store,
+ * keyboard navigation, outside-click close, scroll-into-view — is kept intact.
+ * Flip to `true` to restore the dropdown with no other change.
+ */
+const SHOW_URL_HISTORY_DROPDOWN = false
+
 export function BrowserNewTabSection({ onSelect }: NewTabProviderProps) {
   const t = useI18nStore((s) => s.t)
   const urls = useBrowserHistoryStore((s) => s.urls)
@@ -124,7 +132,7 @@ export function BrowserNewTabSection({ onSelect }: NewTabProviderProps) {
           className="flex-1 bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 focus:border-border-active focus:outline-none"
         />
       </form>
-      {showDropdown && filtered.length > 0 && (
+      {SHOW_URL_HISTORY_DROPDOWN && showDropdown && filtered.length > 0 && (
         <div
           ref={dropdownRef}
           className="absolute right-2 mt-1 bg-surface-elevated border border-border-default rounded-md shadow-lg max-h-48 overflow-y-auto z-10"

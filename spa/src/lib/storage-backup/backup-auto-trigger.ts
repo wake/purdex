@@ -25,6 +25,12 @@ export interface BackupAutoTriggerOptions {
   backupNow: (hostId: string) => void | Promise<void>
   /** Debounce window in ms (default 2000). */
   delayMs?: number
+  /**
+   * Run one backup check at creation (app boot), as soon as a host is
+   * resolvable. Lets a device that launches with un-backed-up `/buffer` content
+   * capture it without waiting for an edit. Fires exactly once.
+   */
+  runInitialCheck?: boolean
 }
 
 export interface BackupAutoTrigger {
@@ -32,7 +38,7 @@ export interface BackupAutoTrigger {
 }
 
 export function createBackupAutoTrigger(opts: BackupAutoTriggerOptions): BackupAutoTrigger {
-  const { backend, resolveHostId, subscribeHost, backupNow, delayMs = 2000 } = opts
+  const { backend, resolveHostId, subscribeHost, backupNow, delayMs = 2000, runInitialCheck = false } = opts
 
   let timer: ReturnType<typeof setTimeout> | null = null
   let pendingHost: string | null = null
@@ -69,10 +75,33 @@ export function createBackupAutoTrigger(opts: BackupAutoTriggerOptions): BackupA
     }
   })
 
+  // Initial boot check (item 2): back up once as soon as a host is resolvable.
+  // backupNow's own no-op suppression + the daemon's content-keyed no-op mean an
+  // unchanged tree is just a cheap round-trip, not a new snapshot. If no host is
+  // resolvable yet (daemon still connecting), defer to the first host-store
+  // change that yields one — then fire exactly once and drop the listener.
+  let initUnsub: (() => void) | null = null
+  if (runInitialCheck) {
+    const host = resolveHostId()
+    if (host) {
+      void backupNow(host)
+    } else {
+      initUnsub = subscribeHost(() => {
+        const h = resolveHostId()
+        if (!h) return
+        initUnsub?.()
+        initUnsub = null
+        void backupNow(h)
+      })
+    }
+  }
+
   return {
     dispose: () => {
       unsubMutation()
       unsubHost()
+      initUnsub?.()
+      initUnsub = null
       clearPending()
     },
   }
@@ -95,5 +124,7 @@ export function startBackupAutoTrigger(): BackupAutoTrigger | null {
     },
     subscribeHost: (cb) => useHostStore.subscribe(cb),
     backupNow: (hostId) => useBackupStore.getState().backupNow(hostId),
+    // Check once on boot whether the In-App tree needs a backup (item 2).
+    runInitialCheck: true,
   })
 }

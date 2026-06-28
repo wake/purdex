@@ -479,7 +479,7 @@
   "editor.settings.home_path.clear": "清除",
   "editor.buffers.tab_title": "儲存空間",
   "editor.buffers.empty": "尚無暫存檔",
-  "editor.buffers.new": "新增暫存檔",
+  "editor.buffers.new": "新增檔案",
   "editor.buffers.new_folder": "新增資料夾",
   "editor.buffers.rename": "重新命名",
   "editor.buffers.delete": "刪除",
