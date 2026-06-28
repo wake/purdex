@@ -178,7 +178,7 @@ export function StorageRow({
         'w-full flex items-center gap-1.5 pr-3 py-1.5 text-left text-xs transition-colors cursor-pointer ' +
         (selected
           ? 'bg-surface-selected text-text-primary'
-          : 'text-text-secondary hover:bg-surface-hover') +
+          : 'text-text-primary hover:bg-surface-hover') +
         (dropActive ? ' ring-1 ring-inset ring-accent bg-surface-hover' : '') +
         (isDragging ? ' opacity-50' : '')
       }
@@ -200,7 +200,7 @@ export function StorageRow({
       <Icon size={14} className="shrink-0 text-text-muted" />
       <span className="truncate flex-1">{node.name}</span>
       {!node.isDir && (
-        <span className="shrink-0 text-text-muted tabular-nums">
+        <span className="shrink-0 text-text-secondary tabular-nums">
           {node.size} B
           {text && wordCount !== null ? ` · ${wordCount} words` : ''}
         </span>

@@ -46,9 +46,9 @@ export function BackupStatusSidebar() {
   return (
     <aside
       data-testid="storage-backups-panel"
-      className="w-48 shrink-0 border-l border-border-subtle p-3 text-xs text-text-muted"
+      className="w-48 shrink-0 border-l border-border-subtle p-3 text-xs text-text-secondary"
     >
-      <div className="mb-2 font-medium text-text-secondary">
+      <div className="mb-2 font-medium text-text-primary">
         {t('editor.buffers.backup.title')}
       </div>
 
