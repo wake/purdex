@@ -33,7 +33,9 @@ func (m *BackupModule) Init(c *core.Core) error {
 
 // RegisterRoutes wires up all /api/backup/* endpoints.
 func (m *BackupModule) RegisterRoutes(mux *http.ServeMux) {
-	// Routes are registered in later tasks (blob/missing/snapshot/history/get).
+	mux.HandleFunc("PUT /api/backup/blob/{hash}", m.handlePutBlob)
+	mux.HandleFunc("GET /api/backup/blob/{hash}", m.handleGetBlob)
+	mux.HandleFunc("POST /api/backup/missing", m.handleMissing)
 }
 
 // Start logs a banner and runs a best-effort startup GC.

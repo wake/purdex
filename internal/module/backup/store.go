@@ -1,12 +1,19 @@
 package backup
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+// ErrHashMismatch is returned by PutBlob when sha256(content) != the claimed
+// hash. The handler maps it to HTTP 400.
+var ErrHashMismatch = errors.New("blob content hash mismatch")
 
 // ManifestEntry is one entry in a snapshot manifest. Directory entries
 // (Kind=="dir") carry Hash=="", Size==0, Words==0 so empty dirs round-trip.
@@ -94,6 +101,52 @@ func (s *BackupStore) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_snap_store ON backup_snapshots(store_id, id);
 	`)
 	return err
+}
+
+// PutBlob stores content under hash after verifying sha256(content)==hash.
+// Idempotent: a re-PUT of an existing hash is a no-op (INSERT OR IGNORE).
+// Returns ErrHashMismatch if the content does not hash to the claimed value.
+func (s *BackupStore) PutBlob(hash string, content []byte) error {
+	sum := sha256.Sum256(content)
+	if hex.EncodeToString(sum[:]) != hash {
+		return ErrHashMismatch
+	}
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO backup_blobs (hash, content, size, created_at) VALUES (?, ?, ?, ?)`,
+		hash, content, len(content), s.now(),
+	)
+	return err
+}
+
+// GetBlob returns the content stored under hash. found is false (no error) when
+// the blob is absent.
+func (s *BackupStore) GetBlob(hash string) (content []byte, found bool, err error) {
+	err = s.db.QueryRow(`SELECT content FROM backup_blobs WHERE hash = ?`, hash).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return content, true, nil
+}
+
+// MissingBlobs returns the subset of hashes the daemon does not have, preserving
+// input order.
+func (s *BackupStore) MissingBlobs(hashes []string) ([]string, error) {
+	missing := make([]string, 0)
+	for _, h := range hashes {
+		var one int
+		err := s.db.QueryRow(`SELECT 1 FROM backup_blobs WHERE hash = ?`, h).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			missing = append(missing, h)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return missing, nil
 }
 
 // GC runs garbage collection across all store_ids using the given clock.
