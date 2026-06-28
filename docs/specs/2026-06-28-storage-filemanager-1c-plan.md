@@ -64,6 +64,16 @@ the browser anchor pattern, which works inside the Electron WebContents too.
    `-N` on collision, matching the existing namer). Ext-less names (`README`) → `ext = ''`;
    `createUnique` must form the path without a trailing dot in that case. **Any file type
    accepted.**
+   - **Contract change (codex R2 NEW-P2)**: `createUnique`'s `ext` is today typed `'md' | 'txt'`
+     (`fs-backend.ts` `SupportsUniqueCreate` + `fs-backend-inapp.ts`). Upload needs arbitrary
+     extensions (`png`/`pdf`/`docx`/`zip`/ext-less `''`), so **widen `ext` to `string`** at the
+     interface and impl, and update every touch point in the same commit so it compiles:
+     `fs-backend.ts` (`SupportsUniqueCreate.createUnique` signature), `fs-backend-inapp.ts`
+     (`createUnique` impl + the path-forming line — no trailing dot when `ext === ''`),
+     `inapp-namer.ts` (still passes `'md'`/`'txt'` — fine under `string`), and the
+     `createUnique`-typed mocks/guards in `fs-backend-inapp.test.ts` / `fs-backend.test.ts` /
+     `storage-actions.test.ts`. 1b's 3-arg callers stay valid (4th `content` optional,
+     defaulting to empty).
 5. **Soft size cap ~25 MB checked before write.** `SOFT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024`.
    A file over the cap is rejected with an inline-banner **warning** before any write. On the
    write itself, `QuotaExceededError` is caught via the exported `isQuotaError` and surfaced as
