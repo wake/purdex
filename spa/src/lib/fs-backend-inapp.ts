@@ -1,6 +1,6 @@
 import type { IDBPDatabase } from 'idb'
 import { openIDB } from './storage/idb'
-import type { FsBackend, SupportsUniqueCreate } from './fs-backend'
+import type { FsBackend, SupportsUniqueCreate, SupportsMutationEvents } from './fs-backend'
 import { join } from './storage-paths'
 import type { FileStat, FileEntry } from '../types/fs'
 
@@ -15,9 +15,24 @@ interface StoredFile {
   mtime: number
 }
 
-export class InAppBackend implements FsBackend, SupportsUniqueCreate {
+export class InAppBackend implements FsBackend, SupportsUniqueCreate, SupportsMutationEvents {
   id = 'inapp'
   label = 'In-App Storage'
+
+  // Subscribers notified after every committed tree mutation (Phase 2b). The
+  // persistent backup auto-trigger subscribes here so a `/buffer` edit schedules
+  // a debounced backup even with the Storage pane closed. Additive — no behaviour
+  // change for non-subscribers.
+  private mutationListeners = new Set<() => void>()
+
+  onMutation(cb: () => void): () => void {
+    this.mutationListeners.add(cb)
+    return () => this.mutationListeners.delete(cb)
+  }
+
+  private emitMutation(): void {
+    for (const cb of this.mutationListeners) cb()
+  }
 
   // Lazy, cached IDB connection. openIDB shares the connection per (name,
   // version) so multiple InAppBackend instances reuse a single handle; tests
@@ -71,6 +86,7 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate {
       mtime: now,
     } satisfies StoredFile)
     await tx.done
+    this.emitMutation()
   }
 
   async stat(path: string): Promise<FileStat> {
@@ -121,6 +137,7 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate {
       isDirectory: true,
       mtime: Date.now(),
     } satisfies StoredFile)
+    this.emitMutation()
   }
 
   async delete(path: string, _recursive?: boolean): Promise<void> {
@@ -137,6 +154,7 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate {
       }
     }
     await tx.done
+    this.emitMutation()
   }
 
   async rename(from: string, to: string): Promise<void> {
@@ -178,6 +196,7 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate {
       await store.delete(key)
     }
     await tx.done
+    this.emitMutation()
   }
 
   async createUnique(
@@ -214,6 +233,7 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate {
           mtime: now,
         } satisfies StoredFile)
         await tx.done
+        this.emitMutation()
         return path
       } catch (err) {
         // A failed add() aborts its transaction, so tx.done rejects with an
@@ -248,6 +268,7 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate {
           mtime: now,
         } satisfies StoredFile)
         await tx.done
+        this.emitMutation()
         return path
       } catch (err) {
         // Observe the aborted tx's rejection to avoid an unhandled rejection

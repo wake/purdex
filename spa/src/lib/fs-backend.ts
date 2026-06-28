@@ -56,6 +56,28 @@ export interface SupportsUniqueCreate {
   mkdirUnique(dir: string, baseName?: string): Promise<string>
 }
 
+/**
+ * Optional capability: notify on every tree-mutating commit (Phase 2b). Only the
+ * In-App backend implements it — it is what the persistent backup auto-trigger
+ * subscribes to so editing a `/buffer` file (even with the Storage pane closed)
+ * schedules a debounced backup. Additive and off the base `FsBackend` so the
+ * Local/Daemon backends carry no stub; consumers narrow via the guard below.
+ */
+export interface SupportsMutationEvents {
+  /**
+   * Subscribe `cb` to fire after each committed tree mutation (write / delete /
+   * mkdir / rename and the unique-create paths). Returns an unsubscribe fn.
+   */
+  onMutation(cb: () => void): () => void
+}
+
+/** Narrow a resolved backend to the mutation-events capability (Phase 2b). */
+export function supportsMutationEvents(
+  backend: FsBackend | undefined,
+): backend is FsBackend & SupportsMutationEvents {
+  return typeof (backend as Partial<SupportsMutationEvents> | undefined)?.onMutation === 'function'
+}
+
 /** Narrow a resolved backend to the unique-file-create capability (codex H1). */
 export function supportsCreateUnique(
   backend: FsBackend | undefined,
