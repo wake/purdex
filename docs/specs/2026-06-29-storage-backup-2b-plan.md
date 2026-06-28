@@ -180,10 +180,11 @@ right sidebar shows backup status. No daemon changes (2a is the contract).
     `StoragePane`).
   - debounce coalesces rapid mutations into one `backupNow` after ~2 s (fake timers).
   - **host capture, cancel-only** (R1-P1d / R2-P2a): the scheduled backup uses the hostId resolved
-    **at mutation time** (`activeHostId ?? hostOrder[0]`); switching active host before the timer
-    fires **cancels** the pending backup (it is **never retargeted** to the new host — a stale
-    mutation must not be backed up to the wrong daemon); a fresh mutation then schedules anew. Assert
-    with fake timers + host switch.
+    **at mutation time** (`activeHostId ?? hostOrder[0]`); if the **resolved host changes** before
+    the timer fires — whether via an active-host switch **or** a `hostOrder[0]` fallback change — the
+    pending backup is **cancelled** (it is **never retargeted** to the new host — a stale mutation
+    must not be backed up to the wrong daemon); a fresh mutation then schedules anew. Assert with
+    fake timers + an active-host switch **and** a fallback-change case.
   - **unmount cleanup** (R1-P3b): disposing the trigger clears a pending timer (no late
     `backupNow`).
 - **Impl**: add the emitter to `InAppBackend` (additive — fire from `write`/`delete`/`mkdir`/`rename`
