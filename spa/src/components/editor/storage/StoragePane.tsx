@@ -19,6 +19,7 @@ import { openInAppFile } from '../../../lib/open-in-app-file'
 import { STORAGE_ROOT, basename, join, parentOf } from '../../../lib/storage-paths'
 import { findNode, targetDirOf } from '../../../lib/storage-tree'
 import { RenamePopover } from '../../RenamePopover'
+import { BackupStatusSidebar } from './BackupStatusSidebar'
 import { StorageTree } from './StorageTree'
 import {
   createStorageFile,
@@ -521,12 +522,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
             )}
           </StorageRegionDropZone>
         </DndContext>
-        <aside
-          data-testid="storage-backups-placeholder"
-          className="w-48 shrink-0 border-l border-border-subtle p-3 text-xs text-text-muted"
-        >
-          Backups (coming soon)
-        </aside>
+        <BackupStatusSidebar />
       </div>
 
       {renameTarget && (

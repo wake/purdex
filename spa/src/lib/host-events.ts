@@ -10,6 +10,7 @@ export interface HostEvent {
     | 'agent.status'
     | 'agent.status.cleared'
     | 'agent.path_hint'
+    | 'backup:done'
   session: string
   value: string
 }

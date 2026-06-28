@@ -5,51 +5,19 @@ import { ICON_MAP } from '../../tab-icon-map'
 import { fileIconForPath } from '../../../lib/file-icon'
 import { getFsBackend } from '../../../lib/fs-backend'
 import { parentOf } from '../../../lib/storage-paths'
+import { isWordCountable, wordCountFor } from '../../../lib/text-metrics'
 import type { TreeNode } from '../../../lib/storage-tree'
-
-/**
- * Explicit **allowlist** of extensions we treat as word-countable text (spec §4:
- * "Text-file rows show word count; binary rows show size only"). Only these
- * rows read + decode their bytes — an allowlist (vs the former binary denylist)
- * means unknown/binary extensions never trigger a `backend.read` and are never
- * decoded into a garbage word count (R2-3). `.log`, `.env`, `.gitignore` etc.
- * are included so notes-style entries still count.
- */
-const TEXT_EXTS = new Set([
-  'md', 'markdown', 'txt', 'text',
-  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs',
-  'json', 'css', 'scss', 'html', 'xml',
-  'yaml', 'yml', 'toml', 'csv',
-  'sh', 'py', 'rs', 'go', 'c', 'h', 'cpp',
-  'sql', 'log', 'ini', 'env', 'gitignore',
-])
-
-/**
- * Word count reads + decodes the whole file, so we cap it: rows above this size
- * show size only and never read (R2-3 — render cost was the sum of all visible
- * text file sizes).
- */
-const WORD_COUNT_MAX_BYTES = 256 * 1024
-
-function extensionOf(path: string): string {
-  const base = path.split('/').pop() ?? path
-  const dot = base.lastIndexOf('.')
-  if (dot < 0) return ''
-  // Leading-dot dotfiles (.env, .gitignore) have their name AS the extension token
-  // for allowlist purposes (codex R3); a bare `dot === 0` would otherwise yield ''.
-  if (dot === 0) return base.slice(1).toLowerCase()
-  return base.slice(dot + 1).toLowerCase()
-}
 
 /**
  * A row gets a word count only when its extension is on the text allowlist AND
  * it is within the size cap; everything else (dirs, binaries, unknown exts,
- * oversized text) shows size only and is never read.
+ * oversized text) shows size only and is never read. The allowlist + cap + count
+ * now live in the shared `text-metrics` util (T2b-1) so the backup manifest
+ * builder computes the identical metric (R1-P1c).
  */
 function isTextNode(node: TreeNode): boolean {
   if (node.isDir) return false
-  if (node.size > WORD_COUNT_MAX_BYTES) return false
-  return TEXT_EXTS.has(extensionOf(node.path))
+  return isWordCountable(node.path, node.size)
 }
 
 interface StorageRowProps {
@@ -138,8 +106,7 @@ export function StorageRow({
       .read(node.path)
       .then((bytes) => {
         if (cancelled) return
-        const str = new TextDecoder().decode(bytes)
-        setWordCount(str.split(/\s+/).filter(Boolean).length)
+        setWordCount(wordCountFor(node.path, bytes))
       })
       .catch(() => {
         if (!cancelled) setWordCount(null)

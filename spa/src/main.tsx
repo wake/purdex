@@ -5,6 +5,7 @@ import App from './App.tsx'
 import { registerBuiltinLocales } from './lib/register-locales'
 import { registerBuiltinThemes } from './lib/register-themes'
 import { registerBuiltinModules } from './lib/register-modules'
+import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -13,6 +14,13 @@ import { useLayoutStore } from './stores/useLayoutStore'
 registerBuiltinLocales()
 registerBuiltinThemes()
 registerBuiltinModules()
+
+// Persistent In-App backup auto-trigger (Phase 2b): subscribes to /buffer
+// mutations and debounces a backup to the active host's daemon. Lives here
+// (app bootstrap), not in StoragePane, so editing a buffer with the Storage
+// pane closed still backs up (R1-C1). Module-scope so it persists for the
+// app's lifetime; never disposed.
+startBackupAutoTrigger()
 
 useLayoutStore.getState().reconcileViews()
 
