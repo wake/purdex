@@ -7,6 +7,7 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
 import { dispatchAgentWsEvent, isAgentWsEvent } from '../lib/agent-ws'
+import { dispatchBackupWsEvent } from '../lib/storage-backup/backup-ws-dispatch'
 import { usePathCacheStore } from '../stores/path-cache/usePathCacheStore'
 import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { scanPaneTree } from '../lib/pane-tree'
@@ -147,6 +148,12 @@ export function useMultiHostEventWs() {
             useHostStore.getState().setRuntime(hostId, {
               tmuxState: event.value === 'ok' ? 'ok' : 'unavailable',
             })
+          }
+          if (event.type === 'backup:done') {
+            // Cross-device backup refresh (spec §4.6). The dispatch helper
+            // ignores this device's own posts (already reflected by backupNow).
+            dispatchBackupWsEvent(hostId, event)
+            return
           }
           if (event.type === 'handoff') {
             const store = useStreamStore.getState()
