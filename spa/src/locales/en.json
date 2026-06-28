@@ -479,7 +479,7 @@
   "editor.settings.home_path.clear": "Clear",
   "editor.buffers.tab_title": "Storage",
   "editor.buffers.empty": "No buffers yet",
-  "editor.buffers.new": "New Buffer",
+  "editor.buffers.new": "New File",
   "editor.buffers.new_folder": "New Folder",
   "editor.buffers.rename": "Rename",
   "editor.buffers.delete": "Delete",
