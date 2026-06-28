@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import { createSnapshotStore } from '../snapshot-store'
-import { closeAllIDB } from '../../storage/idb'
+import { closeAllIDB, openIDB } from '../../storage/idb'
 import type { SyncBundle } from '../types'
 
 const bundle = (device = 'dev-a'): SyncBundle => ({
@@ -161,5 +161,68 @@ describe('SnapshotStore.rotateSessionPristine (Adv-1 atomicity)', () => {
     expect(pristine).toHaveLength(1)
     // Whichever rotation committed last is the winner.
     expect([metaA.id, metaB.id]).toContain(pristine[0].id)
+  })
+})
+
+// --- C5 (T4-4): the quota-retry fallback still works through the LIFTED
+// `isQuotaError` (now imported from lib/quota). A first put that throws a quota
+// DOMException must trigger compaction + a successful retry — proving the lift
+// did not break detection.
+describe('SnapshotStore.createSnapshot — quota-retry via the lifted isQuotaError (C5)', () => {
+  beforeEach(async () => {
+    await closeAllIDB()
+    indexedDB.deleteDatabase('purdex-sync-test')
+  })
+
+  it('a quota-failed first put triggers compaction then a successful retry', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+
+    // openIDB caches by (name, version), so this resolves to the SAME connection
+    // the store uses → overriding `db.put` here intercepts the store's writes.
+    const db = await openIDB('purdex-sync-test', 1, () => {})
+    const realPut = db.put.bind(db)
+    let putCalls = 0
+    // Override the idb shorthand `put`: reject the FIRST call with a quota
+    // DOMException (as a full IDB would), pass every later call through.
+    const dbWithPut = db as unknown as { put: typeof db.put }
+    dbWithPut.put = ((storeName: string, value: unknown) => {
+      putCalls += 1
+      if (putCalls === 1) {
+        return Promise.reject(new DOMException('quota exceeded', 'QuotaExceededError'))
+      }
+      return realPut(storeName as never, value as never)
+    }) as typeof db.put
+
+    try {
+      const meta = await store.createSnapshot(bundle(), 'manual')
+      // First put rejected (quota) → compactFn() → retry put succeeded.
+      expect(putCalls).toBeGreaterThanOrEqual(2)
+      // The snapshot persisted despite the initial quota failure.
+      const fetched = await store.getLocal(meta.id)
+      expect(fetched).not.toBeNull()
+    } finally {
+      delete (db as unknown as { put?: unknown }).put
+    }
+  })
+
+  it('a NON-quota put error is NOT retried — it propagates', async () => {
+    const store = createSnapshotStore('purdex-sync-test')
+    await store.init()
+    const db = await openIDB('purdex-sync-test', 1, () => {})
+    let putCalls = 0
+    const dbWithPut = db as unknown as { put: typeof db.put }
+    dbWithPut.put = (() => {
+      putCalls += 1
+      return Promise.reject(new Error('disk on fire'))
+    }) as typeof db.put
+
+    try {
+      await expect(store.createSnapshot(bundle(), 'manual')).rejects.toThrow('disk on fire')
+      // No compaction-retry for a non-quota error: put attempted exactly once.
+      expect(putCalls).toBe(1)
+    } finally {
+      delete (db as unknown as { put?: unknown }).put
+    }
   })
 })
