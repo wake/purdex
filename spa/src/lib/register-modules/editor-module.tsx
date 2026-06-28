@@ -14,9 +14,11 @@ import { ManageBuffersNewTabCard } from '../../components/editor/ManageBuffersNe
 import { EditorHomePathWorkspaceSection } from '../../components/editor/EditorHomePathWorkspaceSection'
 import { EditorHomePathHostSection } from '../../components/editor/EditorHomePathHostSection'
 import { EditorPurdexSettingsSection } from '../../components/settings/EditorPurdexSettingsSection'
+import { IMAGE_EXTS, PDF_EXTS } from '../file-extension-roles'
 
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'])
-const PDF_EXTS = new Set(['pdf'])
+// Non-dir files that are NOT image/pdf still match the monaco editor here.
+// Download-disposition for non-previewable binaries (docx/zip/…) is handled
+// upstream in `open-in-app-file.ts` via `roleForExtension`, before dispatch.
 const BINARY_EXTS = new Set([...IMAGE_EXTS, ...PDF_EXTS])
 
 export const editorModuleDefinition: ModuleDefinition = {

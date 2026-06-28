@@ -9,24 +9,36 @@ import {
 import { registerFsBackend, clearFsBackendRegistry } from './fs-backend'
 import { editorModuleDefinition } from './register-modules/editor-module'
 import { getPrimaryPane } from './pane-tree'
+import { triggerDownload } from './download-file'
 import type { PaneContent } from '../types/tab'
 import type { FsBackend } from './fs-backend'
 import type { FileStat } from '../types/fs'
+
+// T1c-3: the download-disposition branch calls triggerDownload (side-effect,
+// no tab). Mock it so jsdom never performs a real anchor download and we can
+// assert the bytes/filename it was handed.
+vi.mock('./download-file', () => ({ triggerDownload: vi.fn() }))
 
 // stat-gate (R2-1): openInAppFile stats the path before opening. The spy
 // resolves (file exists) by default; individual tests make it reject to
 // simulate a missing/stale entry.
 const statMock = vi.fn<(path: string) => Promise<FileStat>>()
+// T1c-3: download-disposition reads bytes before triggerDownload.
+const readMock = vi.fn<(path: string) => Promise<Uint8Array>>()
 
 function registerStatBackend(): void {
   clearFsBackendRegistry()
   statMock.mockReset()
   statMock.mockResolvedValue({ size: 0, mtime: 0, isDirectory: false, isFile: true })
+  readMock.mockReset()
+  readMock.mockResolvedValue(new Uint8Array([1, 2, 3]))
+  vi.mocked(triggerDownload).mockClear()
   registerFsBackend('inapp', {
     id: 'inapp',
     label: 'In-App',
     available: () => true,
     stat: statMock,
+    read: readMock,
   } as unknown as FsBackend)
 }
 
@@ -155,5 +167,49 @@ describe('openInAppFile', () => {
     expect(useTabStore.getState().tabOrder).toHaveLength(0)
     // Refused before touching the backend.
     expect(statMock).not.toHaveBeenCalled()
+  })
+
+  // --- T1c-3: binary open-disposition (non-previewable → download, no tab) ---
+
+  it('T3-1: opening a .docx triggers a download and opens NO tab', async () => {
+    readMock.mockResolvedValue(new Uint8Array([10, 20, 30]))
+    const tabId = await openInAppFile('/buffer/report.docx', 'w1')
+    // No tab opened — download is a side-effect, not a pane.
+    expect(tabId).toBeUndefined()
+    expect(useTabStore.getState().tabOrder).toHaveLength(0)
+    // Bytes read and handed to triggerDownload with the basename.
+    expect(readMock).toHaveBeenCalledWith('/buffer/report.docx')
+    expect(triggerDownload).toHaveBeenCalledTimes(1)
+    const [blobArg, nameArg] = vi.mocked(triggerDownload).mock.calls[0]
+    expect(blobArg).toBeInstanceOf(Blob)
+    expect(nameArg).toBe('report.docx')
+  })
+
+  it('T3-2: opening a .png still mounts the image-preview pane (no download)', async () => {
+    const tabId = await openInAppFile('/buffer/p.png', 'w1')
+    expect(primaryContent(tabId!)?.kind).toBe('image-preview')
+    expect(triggerDownload).not.toHaveBeenCalled()
+  })
+
+  it('T3-3: opening a .md still mounts the monaco editor (no download)', async () => {
+    const tabId = await openInAppFile('/buffer/x.md', 'w1')
+    expect(primaryContent(tabId!)?.kind).toBe('editor')
+    expect(triggerDownload).not.toHaveBeenCalled()
+  })
+
+  it('T3-4: opening a .zip triggers a download and opens NO tab', async () => {
+    const tabId = await openInAppFile('/buffer/bundle.zip', 'w1')
+    expect(tabId).toBeUndefined()
+    expect(useTabStore.getState().tabOrder).toHaveLength(0)
+    expect(triggerDownload).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(triggerDownload).mock.calls[0][1]).toBe('bundle.zip')
+  })
+
+  it('T3: a missing .docx (stat rejects) does NOT download (stat-gate still applies)', async () => {
+    statMock.mockRejectedValue(new Error('not found'))
+    const tabId = await openInAppFile('/buffer/ghost.docx', 'w1')
+    expect(tabId).toBeUndefined()
+    expect(triggerDownload).not.toHaveBeenCalled()
+    expect(readMock).not.toHaveBeenCalled()
   })
 })
