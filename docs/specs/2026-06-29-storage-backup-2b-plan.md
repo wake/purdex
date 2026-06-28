@@ -26,6 +26,19 @@ right sidebar shows backup status. No daemon changes (2a is the contract).
 - **R1-P3a**: intra-snapshot duplicate-content blobs PUT once — T2b-1/T2b-3.
 - **R1-P3b**: debounce timer is cleared on unmount/dispose — T2b-6.
 
+### R2 plan-review fixes folded in (codex `task-mqy8v5z4`)
+- **R2-P1a**: `backupNow` converges local lineage on **any successful `postSnapshot`**, including a
+  server **no-op** that returns the head id — else a lagging local lineage whose manifest already
+  equals head re-posts the same no-op forever — Design 3, T2b-3.
+- **R2-P1b**: the mutation emitter also fires for `createUnique` (new file) and `mkdirUnique` (new
+  folder) — creating an empty `Untitled` / empty dir with no later edit must still schedule a backup
+  — Design 6, T2b-6.
+- **R2-P2a**: a pending debounce timer is **only ever cancelled, never retargeted** to a new host;
+  host resolution uses `activeHostId ?? hostOrder[0]` (repo convention) — Design 1, T2b-6.
+- **R2-P2b**: the canonical comparator sorts by **UTF-8 bytes** (matching the daemon), not
+  `localeCompare`/JS string order — a non-ASCII path that sorts differently would pass client tests
+  but get a daemon `400 unsorted` — T2b-1.
+
 ## Existing groundwork (verified, reused)
 
 - **Right-sidebar placeholder** (`StoragePane.tsx:524-529`): `<aside
@@ -52,23 +65,30 @@ right sidebar shows backup status. No daemon changes (2a is the contract).
 1. **Backup targets the active host's daemon.** The In-App tree is browser-local; a snapshot store
    lives on a daemon. `store_id` fixed `'inapp:buffer'` (spec §4.1) → each daemon holds an
    independent backup of this client's tree (the device-A-backs-up / device-B-restores model). Back
-   up to `useHostStore.activeHostId`. **Local backup state is keyed by hostId**
-   (`Record<hostId, HostBackupState>`) so switching hosts never causes a spurious self-fork.
+   up to the resolved host **`activeHostId ?? hostOrder[0]`** (repo convention, `useHostStore.ts:146`,
+   R2-P2a). **Local backup state is keyed by hostId** (`Record<hostId, HostBackupState>`) so
+   switching hosts never causes a spurious self-fork.
 2. **`lib/crypto-hash.ts`**: `sha256Hex(bytes): Promise<string>` via `crypto.subtle.digest`,
    64-char lowercase hex (matches daemon blob hash).
 3. **`useBackupStore` (Zustand)** holds `byHost: Record<hostId, {status:'idle'|'backing-up'|'error',
    lastBackupAt:number|null, lastError:string|null, lastSnapshotId:number|null,
-   lastManifestJSON:string|null}>`. Actions: `backupNow(hostId)` (the engine, advances lineage on a
-   written post); **`applyRemoteBackupDone(hostId, payload)`** (R1-P1a) — updates **only**
-   `lastBackupAt`/status for a cross-device refresh, and **must never** touch `lastSnapshotId` /
-   `lastManifestJSON` (those are own-lineage and only `backupNow` may advance them).
+   lastManifestJSON:string|null}>`. Actions: `backupNow(hostId)` (the engine; **converges local
+   lineage on ANY successful `postSnapshot` — a written insert OR a server no-op that returns the
+   head id** — setting `lastSnapshotId` to the returned id and `lastManifestJSON` to the just-built
+   manifest, R2-P1a, so a lagging local lineage doesn't re-post the same no-op forever);
+   **`applyRemoteBackupDone(hostId, payload)`** (R1-P1a) — updates **only** `lastBackupAt`/status for
+   a cross-device refresh, and **must never** touch `lastSnapshotId` / `lastManifestJSON` (those are
+   own-lineage and only `backupNow` may advance them).
 4. **Client-side no-op suppression** (spec §4.6, R3-Pa): build canonical manifest; if its JSON equals
    this host's `lastManifestJSON`, skip the whole round-trip.
 5. **`parentId` = this host's own `lastSnapshotId`** (spec P1-1), never the response's
-   `currentHeadId`. After a written post, advance `lastSnapshotId` to the returned `snapshotId`.
+   `currentHeadId`. After any successful post (written or no-op), advance `lastSnapshotId` to the
+   returned `snapshotId` (Design 3).
 6. **In-App mutation event** (T2b-6): `InAppBackend` gains `onMutation(cb): () => void`, fired after
-   every `write`/`delete`/`mkdir`/`rename` commit (NOT `replaceTree` — that's 2c, R1-P2c). Additive,
-   no behaviour change for non-subscribers.
+   every tree-mutating commit — `write`/`delete`/`mkdir`/`rename` **and the unique-create paths
+   `createUnique` (new file) + `mkdirUnique` (new folder)** (R2-P1b: a new empty `Untitled` / empty
+   dir must schedule a backup even with no later edit). **NOT `replaceTree`** — that's 2c (R1-P2c).
+   Additive, no behaviour change for non-subscribers.
 
 ## TDD tasks (each: failing test → impl → green → independent commit)
 
@@ -87,15 +107,18 @@ right sidebar shows backup status. No daemon changes (2a is the contract).
     word count; a binary file → 0; a text file over the 256 KB cap → 0 (or capped per existing
     rule); `StorageRow` still renders the same counts (no regression).
   - **builder**: seed a nested tree incl. an **empty dir**, two files with **identical bytes**, a
-    binary file. `buildManifest(backend)` → `{ entries, blobs: Map<hash,bytes> }` where entries are
-    root-relative, **byte-lexicographically sorted by `path`** (assert a case that breaks
-    dirs-first/`localeCompare` — e.g. a file `a.txt` vs dir `B/` must sort by raw path, R1-P2b),
-    dirs `kind:'dir' hash:'' size:0 words:0`, files carry sha256+size+words; the **empty dir is
-    present**; the two identical-byte files share one hash and `blobs` has **one** entry for it
-    (R1-P3a).
+    binary file, **and a non-ASCII filename** (e.g. `中文.txt` / an emoji). `buildManifest(backend)`
+    → `{ entries, blobs: Map<hash,bytes> }` where entries are root-relative and sorted by **UTF-8
+    bytes of `path`** matching the daemon's order (R2-P2b). Assert two cases that break naive order:
+    (i) ASCII `a.txt` vs dir `B/` sort by raw path not dirs-first/`localeCompare`; (ii) the non-ASCII
+    path sorts where its **UTF-8 byte sequence** places it (NOT JS `<` / `localeCompare`, which would
+    pass here but get a daemon `400 unsorted`). Dirs `kind:'dir' hash:'' size:0 words:0`, files carry
+    sha256+size+words; the **empty dir is present**; the two identical-byte files share one hash and
+    `blobs` has **one** entry (R1-P3a).
 - **Impl**: extract `lib/text-metrics.ts` (`wordCountFor(path, bytes)`) shared by `StorageRow` +
-  builder. `buildManifest` walks `listTreeUnder`, reads files, hashes (T2b-0), then **sorts entries
-  by relative path** as the final step; dedups blobs by hash.
+  builder. `buildManifest` walks `listTreeUnder`, reads files, hashes (T2b-0), then sorts entries by
+  a **UTF-8-byte comparator** (encode each path with `TextEncoder` and compare byte arrays, matching
+  Go's string byte order) as the final step; dedups blobs by hash.
 
 ### T2b-2 — backup API client
 - **Test** (mocked `hostFetch`): `postMissing(host, hashes)` → `{missing}`; `putBlob(host, hash,
@@ -108,7 +131,12 @@ right sidebar shows backup status. No daemon changes (2a is the contract).
 - **Test** (mocked api + fake-idb):
   - first `backupNow(host)`: builds manifest, all hashes missing, each blob PUT once, posts, advances
     `lastSnapshotId` to returned id, sets `lastManifestJSON`, `status:'idle'`, `lastBackupAt`.
-  - **no-op** (manifest == `lastManifestJSON`): skips negotiation + post.
+  - **no-op** (manifest == local `lastManifestJSON`): skips negotiation + post.
+  - **stale-lineage server no-op converges** (R2-P1a): local `lastSnapshotId` is stale/null but the
+    built manifest already equals the daemon head, so `postSnapshot` returns the head id with
+    `written:false` (or equivalent) — `backupNow` **converges** `lastSnapshotId` to that returned id
+    and sets `lastManifestJSON`, so an immediate second `backupNow` is suppressed client-side (no
+    repeated no-op POST).
   - **dedup**: one file's content changed → only the new blob PUT, posts once.
   - **same-bytes rename** (R1-P1b): `/buffer/a.txt`→`/buffer/b.txt`, identical bytes → `missing=[]`,
     **0 PUT**, **1 POST** (manifest differs by path so it's not a no-op).
@@ -141,20 +169,28 @@ right sidebar shows backup status. No daemon changes (2a is the contract).
 
 ### T2b-6 — In-App mutation emitter + persistent debounced auto-backup
 - **Test**:
-  - `InAppBackend.onMutation(cb)` fires after `write`/`delete`/`mkdir`/`rename` (NOT `replaceTree`,
-    R1-P2c); unsubscribe stops it.
+  - `InAppBackend.onMutation(cb)` fires after `write`/`delete`/`mkdir`/`rename` **and the
+    unique-create paths `createUnique`/`mkdirUnique`** (R2-P1b; NOT `replaceTree`, R1-P2c);
+    unsubscribe stops it.
+  - **empty create schedules backup** (R2-P1b): creating a new empty file via
+    `createUniqueInAppFile` (`inapp-namer.ts:21`) or a new empty folder via `mkdirUnique`
+    (`storage-actions.ts:122`) — with **no subsequent edit** — still schedules a backup.
   - **persistent trigger** (R1-C1): editing an In-App file via `EditorPane` **with the Storage pane
     NOT mounted** still schedules a backup (the trigger lives in a persistent layer, not
     `StoragePane`).
   - debounce coalesces rapid mutations into one `backupNow` after ~2 s (fake timers).
-  - **host capture** (R1-P1d): the scheduled backup uses the hostId **at mutation time**; switching
-    active host before the timer fires cancels/redirects so the tree isn't backed up to the wrong
-    daemon (assert with fake timers + host switch).
+  - **host capture, cancel-only** (R1-P1d / R2-P2a): the scheduled backup uses the hostId resolved
+    **at mutation time** (`activeHostId ?? hostOrder[0]`); switching active host before the timer
+    fires **cancels** the pending backup (it is **never retargeted** to the new host — a stale
+    mutation must not be backed up to the wrong daemon); a fresh mutation then schedules anew. Assert
+    with fake timers + host switch.
   - **unmount cleanup** (R1-P3b): disposing the trigger clears a pending timer (no late
     `backupNow`).
-- **Impl**: add the emitter to `InAppBackend` (additive); a persistent `backupAutoTrigger`
-  (initialised at app/editor-module bootstrap, NOT in `StoragePane`) that subscribes, debounces
-  ~2 s capturing the mutation-time hostId, calls `backupNow`, and exposes `dispose()`.
+- **Impl**: add the emitter to `InAppBackend` (additive — fire from `write`/`delete`/`mkdir`/`rename`
+  and the `createUnique`/`mkdirUnique` commit points); a persistent `backupAutoTrigger` (initialised
+  at app/editor-module bootstrap, NOT in `StoragePane`) that subscribes, debounces ~2 s capturing the
+  mutation-time resolved hostId, **cancels (never retargets) on host switch**, calls `backupNow`, and
+  exposes `dispose()`.
 
 ## Verification (before PR)
 - `cd <worktree>/spa && pnpm install` (main Claude) then `npx vitest run` green, `pnpm run lint`
