@@ -26,7 +26,7 @@ import { isFilePaneContent } from '../../../lib/pane-utils'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { createMetadata } from '../../../lib/editor-language'
-import { STORAGE_ROOT, basename, join, parentOf } from '../../../lib/storage-paths'
+import { STORAGE_ROOT, basename, join, parentOf, isUnderRoot } from '../../../lib/storage-paths'
 import type { FileSource } from '../../../types/fs'
 import type { Pane, Tab } from '../../../types/tab'
 
@@ -158,11 +158,43 @@ export async function downloadStorageFile(
  * everything after the LAST dot; an ext-less name (`README`) and a dotfile
  * (`.env`, a leading dot at index 0) both yield `ext = ''` so the whole name is
  * preserved. `archive.tar.gz` → (`archive.tar`, `gz`).
+ *
+ * A name whose LAST dot is the final character (`foo.`) keeps the trailing dot
+ * as part of the basename (`{ baseName: 'foo.', ext: '' }`) rather than silently
+ * collapsing to `foo` (C1) — the stored name must never be rewritten to a
+ * different one behind the user's back.
  */
 function splitFileName(fileName: string): { baseName: string; ext: string } {
   const dot = fileName.lastIndexOf('.')
-  if (dot <= 0) return { baseName: fileName, ext: '' }
+  if (dot <= 0 || dot === fileName.length - 1) return { baseName: fileName, ext: '' }
   return { baseName: fileName.slice(0, dot), ext: fileName.slice(dot + 1) }
+}
+
+/**
+ * Sanitise an OS-provided `file.name` into a safe single-segment basename, or
+ * `null` when the name cannot yield a valid entry (C1 — path-traversal / hidden
+ * data). The browser File API hands back whatever the OS reported, which for a
+ * dropped folder or a crafted archive entry can contain path separators
+ * (`sub/evil.txt`, `..\\x`), a traversal token (`..`), control characters, or be
+ * blank — any of which, fed straight into `createUnique` + `join`, could write
+ * OUTSIDE the selected dir or to a key the tree never surfaces.
+ *
+ * Steps: take the BASENAME only (drop every `/`- or `\\`-delimited directory
+ * component, so an OS folder structure is flattened into the target dir rather
+ * than recreated), strip control characters, trim surrounding whitespace, then
+ * reject an empty or dot-only result (`''`, `.`, `..`, `...`).
+ */
+function sanitizeUploadName(rawName: string): string | null {
+  // Basename only: a folder structure in the dropped name is flattened, and a
+  // `../` traversal loses its separators so it can never escape `targetDir`.
+  const base = rawName.split(/[/\\]/).pop() ?? ''
+  // Drop NUL + other C0 control characters that have no place in a file name.
+  // eslint-disable-next-line no-control-regex -- intentional C0 control-char strip
+  const stripped = base.replace(/[\u0000-\u001f]/g, '').trim()
+  // Empty (incl. a pure-whitespace or pure-control name) or a dot-only token
+  // (`.` / `..` / `...`) is not a usable file name.
+  if (stripped === '' || /^\.+$/.test(stripped)) return null
+  return stripped
 }
 
 /**
@@ -175,53 +207,73 @@ function splitFileName(fileName: string): { baseName: string; ext: string } {
 export const SOFT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 /**
- * Sentinel message returned by `uploadFile` when a write fails because the
- * backing store is full (`isQuotaError`). `uploadFiles` matches on it to tag the
- * failure `kind: 'quota'` so the UI can show a distinct "storage full" banner
- * instead of a generic error — keeping `uploadFile`'s public result the plain
- * `{ path } | { error } | { tooLarge }` union (the quota case is an `{ error }`).
+ * Outcome of a single `uploadFile`, a TYPED discriminated union (codex R2 C4):
+ * the failure variants carry their own `kind` so `uploadFiles` and the banner
+ * branch on a tag rather than string-matching a sentinel message. A `too-large`
+ * / `quota` failure already names the (sanitised) file; a generic `error`
+ * carries its raw message.
  */
-export const QUOTA_ERROR_MESSAGE = 'Storage quota exceeded'
-
 export type UploadResult =
   | { path: string }
-  | { error: string }
-  | { tooLarge: { name: string; cap: number } }
+  | { kind: 'too-large'; name: string; cap: number }
+  | { kind: 'quota'; name: string }
+  | { kind: 'error'; name: string; message: string }
 
 /**
  * Ingest a single OS file into `targetDir` (Phase 1c; T1c-1 happy path widened
  * by T1c-4, which owns ALL upload guards). Order of guards:
- *   1. Missing/incapable backend → `{ error }` (never a silent no-op).
- *   2. **Size cap before any write** (decision 5): `file.size > SOFT_MAX_UPLOAD_BYTES`
- *      → `{ tooLarge: { name, cap } }`. `createUnique` is NOT called and the bytes
- *      are NOT read — the over-cap file never touches the store.
- *   3. Otherwise parse `(baseName, ext)`, read bytes, and reserve a unique key
- *      via the atomic `createUnique(dir, base, ext, bytes)` — unique-name
- *      reservation AND byte write on one `add` (no overwrite race; `-N` suffix on
- *      collision, decision 4). A thrown quota exhaustion is caught via the shared
- *      `isQuotaError` and surfaced as `{ error: QUOTA_ERROR_MESSAGE }` (never
- *      silent); any other throw surfaces its message. Any file type is accepted.
+ *   1. Missing/incapable backend → `{ kind: 'error' }` (never a silent no-op).
+ *   2. **Sanitise `file.name`** (C1): flatten to a basename, strip control
+ *      characters, reject empty / dot-only / traversal names — so an OS-provided
+ *      name carrying `/`, `\\`, or `..` can never write outside `targetDir` or to
+ *      an invisible key. A rejected name → `{ kind: 'error' }`.
+ *   3. **Size cap before any write** (decision 5): `file.size > SOFT_MAX_UPLOAD_BYTES`
+ *      → `{ kind: 'too-large' }`. `createUnique` is NOT called and the bytes are
+ *      NOT read — the over-cap file never touches the store.
+ *   4. Otherwise parse `(baseName, ext)`, defensively re-check the candidate path
+ *      stays under the storage root, read bytes, and reserve a unique key via the
+ *      atomic `createUnique(dir, base, ext, bytes)` — unique-name reservation AND
+ *      byte write on one `add` (no overwrite race; `-N` suffix on collision,
+ *      decision 4). A thrown quota exhaustion is caught via the shared
+ *      `isQuotaError` and surfaced as `{ kind: 'quota' }` (never silent); any
+ *      other throw surfaces as `{ kind: 'error' }`. Any file type is accepted.
  */
 export async function uploadFile(targetDir: string, file: File): Promise<UploadResult> {
   const backend = getFsBackend({ type: 'inapp' })
   // Narrow to the unique-create capability (codex H1) — it lives on the optional
   // `SupportsUniqueCreate`, not the base `FsBackend`.
-  if (!supportsCreateUnique(backend)) return { error: 'InApp backend unavailable' }
+  if (!supportsCreateUnique(backend)) {
+    return { kind: 'error', name: file.name, message: 'InApp backend unavailable' }
+  }
+  // C1 (security / data-loss): sanitise the OS-provided name BEFORE it forms a
+  // key — a name with path separators or a traversal token must never escape the
+  // selected dir or land on a key the tree cannot show.
+  const safeName = sanitizeUploadName(file.name)
+  if (safeName == null) {
+    return { kind: 'error', name: file.name, message: `Invalid file name: ${file.name}` }
+  }
   // Size cap is checked BEFORE the read+write (decision 5): an over-cap file is
   // rejected without ever reading its bytes or reserving a name.
   if (file.size > SOFT_MAX_UPLOAD_BYTES) {
-    return { tooLarge: { name: file.name, cap: SOFT_MAX_UPLOAD_BYTES } }
+    return { kind: 'too-large', name: safeName, cap: SOFT_MAX_UPLOAD_BYTES }
+  }
+  const { baseName, ext } = splitFileName(safeName)
+  // Defense-in-depth (C1): every `createUnique` candidate lives directly under
+  // `targetDir`, so verifying the un-suffixed path stays under the storage root
+  // catches a non-root `targetDir` before any byte is read or written.
+  const candidate = join(targetDir, ext === '' ? baseName : `${baseName}.${ext}`)
+  if (!isUnderRoot(candidate)) {
+    return { kind: 'error', name: file.name, message: `Invalid file name: ${file.name}` }
   }
   try {
-    const { baseName, ext } = splitFileName(file.name)
     const bytes = new Uint8Array(await file.arrayBuffer())
     const path = await backend.createUnique(targetDir, baseName, ext, bytes)
     return { path }
   } catch (err) {
-    // A full store throws a quota DOMException at write time; surface it as a
-    // distinct (sentinel) error so the caller can show a "storage full" banner.
-    if (isQuotaError(err)) return { error: QUOTA_ERROR_MESSAGE }
-    return { error: err instanceof Error ? err.message : String(err) }
+    // A full store throws a quota DOMException at write time; tag it `quota` so
+    // the caller can show a distinct "storage full" banner.
+    if (isQuotaError(err)) return { kind: 'quota', name: safeName }
+    return { kind: 'error', name: safeName, message: err instanceof Error ? err.message : String(err) }
   }
 }
 
@@ -256,13 +308,14 @@ export async function uploadFiles(targetDir: string, files: File[]): Promise<Upl
     const res = await uploadFile(targetDir, file)
     if ('path' in res) {
       uploaded.push(res.path)
-    } else if ('tooLarge' in res) {
-      failed.push({ name: res.tooLarge.name, reason: 'too-large', kind: 'too-large', cap: res.tooLarge.cap })
+    } else if (res.kind === 'too-large') {
+      // Read the typed kind straight off the result (codex R2 C4) — no string
+      // sentinel round-trip.
+      failed.push({ name: res.name, reason: 'too-large', kind: 'too-large', cap: res.cap })
+    } else if (res.kind === 'quota') {
+      failed.push({ name: res.name, reason: 'quota', kind: 'quota' })
     } else {
-      // `{ error }`: the quota sentinel becomes `kind: 'quota'`, everything else
-      // is `kind: 'other'` (a generic failure carrying its raw message).
-      const kind: UploadFailureKind = res.error === QUOTA_ERROR_MESSAGE ? 'quota' : 'other'
-      failed.push({ name: file.name, reason: res.error, kind })
+      failed.push({ name: res.name, reason: res.message, kind: 'other' })
     }
   }
   return { uploaded, failed }

@@ -9,7 +9,6 @@ import {
   uploadFile,
   uploadFiles,
   SOFT_MAX_UPLOAD_BYTES,
-  QUOTA_ERROR_MESSAGE,
 } from './storage-actions'
 import { InAppBackend } from '../../../lib/fs-backend-inapp'
 import { closeAllIDB } from '../../../lib/storage/idb'
@@ -789,10 +788,93 @@ describe('uploadFile / uploadFiles — OS-file ingest via atomic createUnique (T
     expect(summary.failed).toEqual([{ name: 'bad.bin', reason: 'disk boom', kind: 'other' }])
   })
 
-  it('missing backend → uploadFile returns an error (no silent no-op)', async () => {
+  it('missing backend → uploadFile returns a typed error (no silent no-op)', async () => {
     backend = null
     const res = await uploadFile('/buffer', new File([new Uint8Array([1])], 'x.txt'))
-    expect('error' in res && res.error).toBeTruthy()
+    expect(res).toEqual({ kind: 'error', name: 'x.txt', message: expect.any(String) })
+  })
+})
+
+// --- codex R2 C1: file.name sanitisation (path-traversal / hidden-data guard)
+//
+// The browser File API hands back whatever the OS reported. A name carrying a
+// path separator or a traversal token must never form a key OUTSIDE the target
+// dir or one the tree cannot surface. uploadFile flattens to a basename, strips
+// control characters, and rejects empty / dot-only names — proven here against
+// a REAL InAppBackend so we can also assert NOTHING escaped the storage root.
+
+describe('uploadFile — file.name sanitisation (C1 security)', () => {
+  let real: InAppBackend
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+  })
+
+  /** Every key written to the real backend must live under the storage root. */
+  async function assertAllKeysUnderRoot(): Promise<string[]> {
+    const db = await (real as unknown as { db(): Promise<{ getAllKeys(store: string): Promise<string[]> }> }).db()
+    const keys = await db.getAllKeys('files')
+    for (const k of keys) {
+      expect(k === '/buffer' || k.startsWith('/buffer/')).toBe(true)
+    }
+    return keys
+  }
+
+  it('flattens a name carrying a forward slash to its basename (no nested key)', async () => {
+    const res = await uploadFile('/buffer', new File([new Uint8Array([1])], 'sub/evil.txt'))
+    expect(res).toEqual({ path: '/buffer/evil.txt' })
+    // The flattened file is a DIRECT child of /buffer — no stray `sub` dir, and
+    // crucially no invisible `/buffer/sub/evil.txt` the tree could not show.
+    const keys = await assertAllKeysUnderRoot()
+    expect(keys).toEqual(['/buffer/evil.txt'])
+  })
+
+  it('flattens a name carrying a backslash to its basename', async () => {
+    const res = await uploadFile('/buffer', new File([new Uint8Array([2])], 'sub\\evil.txt'))
+    expect(res).toEqual({ path: '/buffer/evil.txt' })
+    await assertAllKeysUnderRoot()
+  })
+
+  it('a `../` traversal name flattens to its basename and never escapes the root', async () => {
+    const res = await uploadFile('/buffer', new File([new Uint8Array([3])], '../evil.txt'))
+    expect(res).toEqual({ path: '/buffer/evil.txt' })
+    const keys = await assertAllKeysUnderRoot()
+    expect(keys).toEqual(['/buffer/evil.txt'])
+  })
+
+  it('rejects a `..` traversal token (no write)', async () => {
+    const res = await uploadFile('/buffer', new File([new Uint8Array([4])], '..'))
+    expect(res).toMatchObject({ kind: 'error' })
+    expect(await assertAllKeysUnderRoot()).toEqual([])
+  })
+
+  it('rejects a lone `.` name (no write)', async () => {
+    const res = await uploadFile('/buffer', new File([new Uint8Array([5])], '.'))
+    expect(res).toMatchObject({ kind: 'error' })
+    expect(await assertAllKeysUnderRoot()).toEqual([])
+  })
+
+  it('rejects a pure-whitespace name (no write)', async () => {
+    const res = await uploadFile('/buffer', new File([new Uint8Array([6])], '   '))
+    expect(res).toMatchObject({ kind: 'error' })
+    expect(await assertAllKeysUnderRoot()).toEqual([])
+  })
+
+  it('strips control characters from the name before reserving the key', async () => {
+    const res = await uploadFile('/buffer', new File([new Uint8Array([7])], 'a\u0000\u0001b.txt'))
+    expect(res).toEqual({ path: '/buffer/ab.txt' })
+    await assertAllKeysUnderRoot()
+  })
+
+  it('does NOT silently rewrite a trailing-dot name (`foo.` stays `foo.`, not `foo`)', async () => {
+    const res = await uploadFile('/buffer', new File([new Uint8Array([8])], 'foo.'))
+    // The trailing dot is preserved as part of the basename — never collapsed to
+    // `/buffer/foo` behind the user's back.
+    expect(res).toEqual({ path: '/buffer/foo.' })
+    expect(await assertAllKeysUnderRoot()).toEqual(['/buffer/foo.'])
   })
 })
 
@@ -811,12 +893,12 @@ function oversizedFile(name: string, size: number): File {
 }
 
 describe('uploadFile / uploadFiles — size cap + quota guards (T1c-4)', () => {
-  it('T4-1: a file over the cap returns { tooLarge } and never calls createUnique', async () => {
+  it('T4-1: a file over the cap returns a typed too-large result and never calls createUnique', async () => {
     const createUnique = vi.fn()
     backend = { createUnique }
     const file = oversizedFile('huge.bin', SOFT_MAX_UPLOAD_BYTES + 1)
     const res = await uploadFile('/buffer', file)
-    expect(res).toEqual({ tooLarge: { name: 'huge.bin', cap: SOFT_MAX_UPLOAD_BYTES } })
+    expect(res).toEqual({ kind: 'too-large', name: 'huge.bin', cap: SOFT_MAX_UPLOAD_BYTES })
     expect(createUnique).not.toHaveBeenCalled()
   })
 
@@ -828,13 +910,13 @@ describe('uploadFile / uploadFiles — size cap + quota guards (T1c-4)', () => {
     expect(createUnique).toHaveBeenCalledTimes(1)
   })
 
-  it('T4-2: a QuotaExceededError thrown by the write surfaces as { error } (not silent)', async () => {
+  it('T4-2: a QuotaExceededError thrown by the write surfaces as a typed quota result (not silent)', async () => {
     const createUnique = vi.fn(async () => {
       throw new DOMException('full', 'QuotaExceededError')
     })
     backend = { createUnique }
     const res = await uploadFile('/buffer', new File([new Uint8Array([1])], 'x.txt'))
-    expect(res).toEqual({ error: QUOTA_ERROR_MESSAGE })
+    expect(res).toEqual({ kind: 'quota', name: 'x.txt' })
   })
 
   it('uploadFiles folds tooLarge + quota into failed[] with typed reasons', async () => {
@@ -851,7 +933,7 @@ describe('uploadFile / uploadFiles — size cap + quota guards (T1c-4)', () => {
     expect(summary.uploaded).toEqual(['/buffer/ok.txt'])
     expect(summary.failed).toEqual([
       { name: 'huge.bin', reason: 'too-large', kind: 'too-large', cap: SOFT_MAX_UPLOAD_BYTES },
-      { name: 'boom.bin', reason: QUOTA_ERROR_MESSAGE, kind: 'quota' },
+      { name: 'boom.bin', reason: 'quota', kind: 'quota' },
     ])
   })
 })
