@@ -46,7 +46,10 @@ export async function postMissing(hostId: string, hashes: string[]): Promise<str
 export async function putBlob(hostId: string, hash: string, bytes: Uint8Array): Promise<void> {
   const res = await hostFetch(hostId, `/api/backup/blob/${hash}`, {
     method: 'PUT',
-    body: bytes,
+    // A Uint8Array is a valid fetch body (BufferSource). Cast around the TS 5.7
+    // `Uint8Array<ArrayBufferLike>` vs `BodyInit` mismatch; the exact bytes are
+    // sent raw (the URL carries the content hash the daemon re-verifies).
+    body: bytes as unknown as BodyInit,
   })
   if (res.status !== 204) throw new Error(`backup/blob PUT failed: ${res.status}`)
 }
