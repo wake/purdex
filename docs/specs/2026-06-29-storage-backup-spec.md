@@ -2,7 +2,8 @@
 
 - **Base**: alpha.302 (`938e5f08`)
 - **Scope**: `daemon` (Go: new `backup` module) + `spa` (Storage pane right sidebar)
-- **Status**: draft → codex review **R4** (R1 + R2 + R3 findings folded in, see §0)
+- **Status**: **FINAL — codex R4 SHIP-READY** (R1+R2+R3 folded in over 4 rounds: 13→7→4→0
+  findings; R4's lone P2 — preview force-remount — folded in too, see §0). Ready for plan.
 - **Memory**: [[kickoff_storage_feature]]
 - **Predecessor**: subsystem 1 (In-App nested file manager) shipped alpha.300/301/302. This spec
   fills the **right-sidebar placeholder** reserved in the subsystem 1 spec (§3.1: "備份（即將推出）"
@@ -231,8 +232,13 @@ safety backup**. Because un-flushed editor state lives in Zustand, not IndexedDB
    restored content. Dirty buffers were already refused at step 1, so every open `inapp` pane is
    **clean**; after the replace, the client: (a) **closes** open `inapp` panes whose path is no
    longer in the tree; (b) **reloads** clean `inapp` editor buffers whose content changed, updating
-   their `lastStat`; (c) **refreshes/closes** `image-preview`/`pdf-preview` panes for changed/removed
-   paths. Reuse subsystem 1's close-pane-then-mutate ordering (`storage-actions.ts:531`).
+   their `lastStat` (via the existing `reloadBuffer`, which re-aligns
+   `content/savedContent/isDirty/lastStat` together, `useEditorStore.ts:239`); (c) for
+   `image-preview`/`pdf-preview` panes: **close** a removed path's pane, and for a changed path
+   **force-remount (close + reopen)** — these components only re-read on `source/filePath/backend`
+   change (`ImagePreviewPane.tsx:41`, `PdfPreviewPane.tsx:19`), so a same-path content change needs a
+   remount, **not** an in-place "refresh" (R4-P2). Reuse subsystem 1's close-pane-then-mutate ordering
+   (`storage-actions.ts:531`).
 5. The next debounced auto-backup of the restored tree links `parentId:` the restore-point id from
    step 2 (timeline stays continuous). Restore itself writes **nothing** to the daemon beyond step 2.
 
@@ -369,7 +375,9 @@ capability and 2c tests assert on it.
 - **Pane reconciliation** (R3-Pb): after a restore, an open `inapp` editor pane for a path **removed**
   by the restore is closed; an open clean `inapp` editor whose content **changed** is reloaded with
   the restored bytes and updated `lastStat` (a subsequent save does **not** re-write the pre-restore
-  content); a preview pane for a changed/removed path is refreshed/closed.
+  content — assert `savedContent/isDirty/lastStat` all updated); a preview pane for a **removed** path
+  is closed, and for a **changed** path is **force-remounted (close+reopen)** so it shows the new
+  bytes — an in-place refresh is insufficient (R4-P2), asserted in RTL.
 - A snapshot whose `parentId` is not the prior head renders a fork/branch indicator.
 - vitest + RTL; lint + build green.
 
