@@ -115,12 +115,36 @@ func (m *BackupModule) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Broadcast backup:done only when a new row was actually committed — a
+	// no-op-suppressed post broadcasts nothing (§4.6, R2-Pd).
+	if result.Written && m.core != nil && m.core.Events != nil {
+		payload, _ := json.Marshal(backupDonePayload{
+			StoreID:       result.StoreID,
+			SnapshotID:    result.SnapshotID,
+			CurrentHeadID: result.CurrentHeadID,
+			Device:        result.Device,
+			Trigger:       result.Trigger,
+			CreatedAt:     result.CreatedAt,
+		})
+		m.core.Events.Broadcast("", "backup:done", string(payload))
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"snapshotId":    result.SnapshotID,
 		"isFork":        result.IsFork,
 		"currentHeadId": result.CurrentHeadID,
 	})
+}
+
+// backupDonePayload is the JSON value of a backup:done host-event (§4.6).
+type backupDonePayload struct {
+	StoreID       string `json:"storeId"`
+	SnapshotID    int64  `json:"snapshotId"`
+	CurrentHeadID int64  `json:"currentHeadId"`
+	Device        string `json:"device"`
+	Trigger       string `json:"trigger"`
+	CreatedAt     int64  `json:"createdAt"`
 }
 
 // handleHistory lists a store's snapshots newest-first: GET /api/backup/history?storeId=.
