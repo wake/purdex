@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.304] - 2026-06-29
+
+### Feat(storage): front-end backup engine — Phase 2b (subsystem 2) (#881)
+
+子系統 2 第二階段：前端 `spa/` 備份引擎，驅動已 ship 的 2a daemon backup API。把 Storage pane
+右側欄的「備份（即將推出）」placeholder 填成實際備份引擎：監聽 In-App（IndexedDB `/buffer`）變更
+→ debounce ~2s → walk 整棵樹 → 瀏覽器 sha256 → per-blob negotiation 上傳 → POST snapshot →
+右側欄狀態。Plan 經 codex 3 輪 review（R3 READY-TO-IMPLEMENT，R1 1C+4P1+4P2+2P3 / R2 4 findings
+全收斂），7 個 vertical-slice TDD task 派 subagent；full suite **322 files / 3612 tests** 全綠、
+lint clean、build OK。
+
+- **新 util**：`lib/crypto-hash.ts`（WebCrypto sha256，對齊 daemon lowercase hex）、`lib/text-metrics.ts`
+  （從 `StorageRow` 抽出 word-count SOT，row 與 manifest builder 算出同一指標，無回歸）。
+- **manifest builder**（`lib/storage-backup/manifest.ts`）：walk tree、**UTF-8 byte comparator**
+  canonical sort（配 daemon Go byte order，否則 `400 unsorted`）、空 dir 進 manifest、blob dedup。
+- **API client**（`backup-api.ts`）：`postMissing`/`putBlob`/`postSnapshot` over `hostFetch`，
+  錯誤冒泡 HTTP status 供 engine 區分 409/400/413。
+- **engine + `useBackupStore`**（per-host keyed）：client no-op suppression、任何成功 post（含
+  server no-op 回 head）皆收斂 lineage、`parentId`=自身 prior（await 前同步捕捉，Design 5）、
+  `applyRemoteBackupDone` status-only 不污染 lineage、same-bytes rename（0 PUT/1 POST）。
+- **`backup:done`** 加進 `HostEvent` union + `useMultiHostEventWs` dispatch（只跨裝置 refresh，
+  own-device 忽略）；`backup-ws-dispatch.ts` 可單測 seam。
+- **右側欄狀態面板**（`BackupStatusSidebar.tsx`）：上次備份/備份中/inline error/尚未備份；i18n en+zh-TW。
+- **In-App mutation emitter + 常駐 auto-trigger**：`InAppBackend.onMutation`（write/delete/mkdir/
+  rename + unique-create，**非** replaceTree）；掛 app bootstrap（`main.tsx`，**非** StoragePane，
+  Storage pane 未開也備份）；debounce capture mutation-time host、host 變更 cancel-only never retarget。
+
+### 不在本階段
+2c（前端還原 UI：history/viewer、dirty-block guard、atomic `replaceTree`、pane reconciliation、
+fork 顯示）後續 PR。
+
 ## [1.0.0-alpha.303] - 2026-06-29
 
 ### Feat(storage): daemon backup/restore snapshot store — Phase 2a (subsystem 2) (#879)
