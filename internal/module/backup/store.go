@@ -327,6 +327,104 @@ func (s *BackupStore) AppendSnapshot(req AppendRequest) (AppendResult, error) {
 	}, nil
 }
 
+// SnapshotSummary is a history row summarised from its manifest (no blob bytes).
+type SnapshotSummary struct {
+	ID        int64  `json:"id"`
+	Device    string `json:"device"`
+	ParentID  *int64 `json:"parentId"`
+	IsFork    bool   `json:"isFork"`
+	Trigger   string `json:"trigger"`
+	CreatedAt int64  `json:"createdAt"`
+	FileCount int    `json:"fileCount"`
+	DirCount  int    `json:"dirCount"`
+	TotalSize int64  `json:"totalSize"`
+}
+
+// SnapshotDetail is a single snapshot with its full manifest.
+type SnapshotDetail struct {
+	ID        int64           `json:"id"`
+	StoreID   string          `json:"storeId"`
+	Device    string          `json:"device"`
+	ParentID  *int64          `json:"parentId"`
+	IsFork    bool            `json:"isFork"`
+	Trigger   string          `json:"trigger"`
+	CreatedAt int64           `json:"createdAt"`
+	Manifest  []ManifestEntry `json:"manifest"`
+}
+
+func nullToPtr(n sql.NullInt64) *int64 {
+	if !n.Valid {
+		return nil
+	}
+	v := n.Int64
+	return &v
+}
+
+// ListHistory returns the store's snapshots newest-first, summarised from each
+// manifest (fileCount/dirCount/totalSize), without blob bytes.
+func (s *BackupStore) ListHistory(storeID string) ([]SnapshotSummary, error) {
+	rows, err := s.db.Query(
+		`SELECT id, device, parent_id, is_fork, trigger, created_at, manifest
+		 FROM backup_snapshots WHERE store_id = ? ORDER BY id DESC`, storeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]SnapshotSummary, 0)
+	for rows.Next() {
+		var sum SnapshotSummary
+		var parent sql.NullInt64
+		var isFork int
+		var manifest string
+		if err := rows.Scan(&sum.ID, &sum.Device, &parent, &isFork, &sum.Trigger, &sum.CreatedAt, &manifest); err != nil {
+			return nil, err
+		}
+		sum.ParentID = nullToPtr(parent)
+		sum.IsFork = isFork != 0
+
+		var entries []ManifestEntry
+		if err := json.Unmarshal([]byte(manifest), &entries); err == nil {
+			for _, e := range entries {
+				switch e.Kind {
+				case "file":
+					sum.FileCount++
+					sum.TotalSize += e.Size
+				case "dir":
+					sum.DirCount++
+				}
+			}
+		}
+		out = append(out, sum)
+	}
+	return out, rows.Err()
+}
+
+// GetSnapshot returns one snapshot with its full manifest. found is false (no
+// error) when the id does not exist.
+func (s *BackupStore) GetSnapshot(id int64) (detail SnapshotDetail, found bool, err error) {
+	var parent sql.NullInt64
+	var isFork int
+	var manifest string
+	err = s.db.QueryRow(
+		`SELECT id, store_id, device, parent_id, is_fork, trigger, created_at, manifest
+		 FROM backup_snapshots WHERE id = ?`, id,
+	).Scan(&detail.ID, &detail.StoreID, &detail.Device, &parent, &isFork, &detail.Trigger, &detail.CreatedAt, &manifest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SnapshotDetail{}, false, nil
+	}
+	if err != nil {
+		return SnapshotDetail{}, false, err
+	}
+	detail.ParentID = nullToPtr(parent)
+	detail.IsFork = isFork != 0
+	detail.Manifest = make([]ManifestEntry, 0)
+	if err := json.Unmarshal([]byte(manifest), &detail.Manifest); err != nil {
+		return SnapshotDetail{}, false, err
+	}
+	return detail, true, nil
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1

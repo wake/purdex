@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 )
 
 const (
@@ -120,6 +121,42 @@ func (m *BackupModule) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		"isFork":        result.IsFork,
 		"currentHeadId": result.CurrentHeadID,
 	})
+}
+
+// handleHistory lists a store's snapshots newest-first: GET /api/backup/history?storeId=.
+func (m *BackupModule) handleHistory(w http.ResponseWriter, r *http.Request) {
+	store := r.URL.Query().Get("storeId")
+	if store == "" {
+		http.Error(w, "storeId required", http.StatusBadRequest)
+		return
+	}
+	entries, err := m.store.ListHistory(store)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
+
+// handleGetSnapshot returns one snapshot with its manifest: GET /api/backup/snapshot/{id}.
+func (m *BackupModule) handleGetSnapshot(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid snapshot id", http.StatusBadRequest)
+		return
+	}
+	detail, found, err := m.store.GetSnapshot(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "snapshot not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(detail)
 }
 
 // handleMissing returns the subset of requested hashes the daemon lacks:
