@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Mock } from 'vitest'
 import { useState, type ReactNode } from 'react'
-import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act, createEvent } from '@testing-library/react'
 import { StoragePane } from './StoragePane'
 import { SOFT_MAX_UPLOAD_BYTES } from './storage-actions'
 import { openInAppFile } from '../../../lib/open-in-app-file'
@@ -97,14 +97,20 @@ vi.mock('../../../features/workspace/store', () => ({
   },
 }))
 
+// i18n is a hoisted spy so the upload banner tests (C6) can assert the
+// interpolation PARAMS (name / cap / counts), not just the key. The spy still
+// returns the key with any `{{var}}` placeholders substituted, so the existing
+// `getByText('editor.buffers.…')` assertions (keys carry no placeholders) hold.
+const { tSpy } = vi.hoisted(() => ({
+  tSpy: vi.fn((key: string, params?: Record<string, string | number>): string => {
+    if (!params) return key
+    return key.replace(/\{\{(\w+)\}\}/g, (_, k) => String(params[k] ?? ''))
+  }),
+}))
+
 vi.mock('../../../stores/useI18nStore', () => ({
   useI18nStore: (selector: (s: { t: (k: string, p?: Record<string, string | number>) => string }) => unknown) =>
-    selector({
-      t: (key: string, params?: Record<string, string | number>): string => {
-        if (!params) return key
-        return key.replace(/\{\{(\w+)\}\}/g, (_, k) => String(params[k] ?? ''))
-      },
-    }),
+    selector({ t: tSpy }),
 }))
 
 const setPaneContentSpy = vi.fn()
@@ -278,6 +284,7 @@ beforeEach(() => {
   ;(openInAppFile as unknown as Mock).mockReset()
   ;(openInAppFile as unknown as Mock).mockReturnValue('opened-tab')
   ;(triggerDownload as unknown as Mock).mockReset()
+  tSpy.mockClear()
 
   setPaneContentSpy.mockImplementation((tabId: string, paneId: string) => {
     eventLog.push(`setPaneContent:${tabId}:${paneId}`)
@@ -1862,6 +1869,25 @@ describe('StoragePane — upload via picker + native OS-file drop (T1c-1)', () =
     expect(mockBackend.createUnique).not.toHaveBeenCalled()
   })
 
+  it('C3: dropping an OS FOLDER (types:[Files] but files:[]) is preventDefaulted and not ingested', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    const region = screen.getByTestId('storage-tree-region')
+    // An OS folder drag reports the `Files` type but yields an EMPTY files list.
+    // The handler must claim it (preventDefault) so it never falls back to the
+    // browser default — yet must NOT try to ingest a zero-file drop.
+    const dropEvent = createEvent.drop(region, {
+      dataTransfer: { files: [], types: ['Files'] },
+    })
+    await act(async () => {
+      fireEvent(region, dropEvent)
+    })
+    expect(dropEvent.defaultPrevented).toBe(true)
+    expect(mockBackend.createUnique).not.toHaveBeenCalled()
+  })
+
   it('T1-6: a partial failure surfaces an inline banner naming the first failed file', async () => {
     const paths = new Map<string, { isDir: boolean; size: number }>()
     mockBackend.list = pathAwareList(paths)
@@ -1880,10 +1906,15 @@ describe('StoragePane — upload via picker + native OS-file drop (T1c-1)', () =
       new File([new Uint8Array([2])], 'bad.bin'),
     ])
 
-    // Banner reflects partial success: the inline error renders the partial key
-    // (the i18n mock returns the key, not the interpolated EN/zh-TW string). The
-    // good file still uploaded, the bad one failed.
+    // Banner reflects partial success. C6: assert the i18n call carries the
+    // right interpolation params (uploaded/failed counts + the first failed
+    // name), not just the key.
     await waitFor(() => expect(screen.getByText('editor.buffers.upload_partial')).toBeTruthy())
+    expect(tSpy).toHaveBeenCalledWith('editor.buffers.upload_partial', {
+      uploaded: 1,
+      failed: 1,
+      name: 'bad.bin',
+    })
     const calls = (mockBackend.createUnique as Mock).mock.calls.map((c) => c[1])
     expect(calls).toEqual(['ok', 'bad'])
   })
@@ -1907,6 +1938,11 @@ describe('StoragePane — upload via picker + native OS-file drop (T1c-1)', () =
     const warning = await screen.findByTestId('storage-warning')
     expect(warning.textContent).toBe('editor.buffers.upload_too_large')
     expect(warning.className).toContain('text-amber-400')
+    // C6: the warning interpolates the file name + the cap in MB (25 = 25 MiB).
+    expect(tSpy).toHaveBeenCalledWith('editor.buffers.upload_too_large', {
+      name: 'huge.bin',
+      cap: 25,
+    })
     expect(mockBackend.createUnique).not.toHaveBeenCalled()
   })
 
@@ -1923,6 +1959,8 @@ describe('StoragePane — upload via picker + native OS-file drop (T1c-1)', () =
 
     const banner = await screen.findByText('editor.buffers.upload_quota')
     expect(banner.className).toContain('text-red-400')
+    // C6: the quota error names the file that could not be saved.
+    expect(tSpy).toHaveBeenCalledWith('editor.buffers.upload_quota', { name: 'x.txt' })
     expect(screen.queryByTestId('storage-warning')).toBeNull()
   })
 })

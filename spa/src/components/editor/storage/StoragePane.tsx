@@ -328,11 +328,19 @@ export function StoragePane({ pane }: PaneRendererProps) {
 
   const handleNativeDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
-      const files = e.dataTransfer?.files
-      // No files → this is a dnd-kit internal node drag; do NOT preventDefault,
-      // do NOT ingest — let dnd-kit's pointer-event flow own it.
-      if (!files || files.length === 0) return
+      const dt = e.dataTransfer
+      // Not an OS-file drag (no `Files` type) → this is a dnd-kit internal node
+      // move; do NOT preventDefault, do NOT ingest — let dnd-kit's pointer-event
+      // flow own it.
+      if (!dt?.types?.includes('Files')) return
+      // It IS an OS-file drag — claim it so the browser never falls back to its
+      // default drop (navigating to / opening the dropped item). This covers
+      // dropping an OS FOLDER, which reports `types: ['Files']` but an EMPTY
+      // `files` list (codex R2 C3): without preventDefault the folder drop would
+      // leak to the browser default.
       e.preventDefault()
+      const files = dt.files
+      if (!files || files.length === 0) return
       void ingestFiles(Array.from(files))
     },
     [ingestFiles],

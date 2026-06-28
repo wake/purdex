@@ -35,6 +35,17 @@ describe('editorModuleDefinition.fileOpeners', () => {
     expect(opener?.match({ name: 'src', path: '/src', extension: '', size: 0, isDirectory: true })).toBe(false)
   })
 
+  it('C7: monaco-editor opener excludes DOWNLOAD_EXTS so the registry agrees with open-in-app disposition', () => {
+    // A .docx (and other non-previewable binaries) must NOT match monaco — they
+    // are routed to a download by `roleForExtension`, and the registry matcher
+    // now shares that single SOT (`roleForExtension(ext) === 'text'`).
+    const opener = editorModuleDefinition.fileOpeners?.find((o) => o.id === 'monaco-editor')
+    expect(opener?.match({ name: 'a.docx', path: '/a.docx', extension: 'docx', size: 1, isDirectory: false })).toBe(false)
+    expect(opener?.match({ name: 'a.zip', path: '/a.zip', extension: 'zip', size: 1, isDirectory: false })).toBe(false)
+    // An ext-less name is still text → monaco.
+    expect(opener?.match({ name: 'README', path: '/README', extension: '', size: 1, isDirectory: false })).toBe(true)
+  })
+
   describe('registerEditorNewTabProviders', () => {
     beforeEach(() => clearNewTabRegistry())
     afterEach(() => clearNewTabRegistry())

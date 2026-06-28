@@ -14,12 +14,7 @@ import { ManageBuffersNewTabCard } from '../../components/editor/ManageBuffersNe
 import { EditorHomePathWorkspaceSection } from '../../components/editor/EditorHomePathWorkspaceSection'
 import { EditorHomePathHostSection } from '../../components/editor/EditorHomePathHostSection'
 import { EditorPurdexSettingsSection } from '../../components/settings/EditorPurdexSettingsSection'
-import { IMAGE_EXTS, PDF_EXTS } from '../file-extension-roles'
-
-// Non-dir files that are NOT image/pdf still match the monaco editor here.
-// Download-disposition for non-previewable binaries (docx/zip/…) is handled
-// upstream in `open-in-app-file.ts` via `roleForExtension`, before dispatch.
-const BINARY_EXTS = new Set([...IMAGE_EXTS, ...PDF_EXTS])
+import { IMAGE_EXTS, PDF_EXTS, roleForExtension } from '../file-extension-roles'
 
 export const editorModuleDefinition: ModuleDefinition = {
   id: 'editor',
@@ -83,8 +78,13 @@ export const editorModuleDefinition: ModuleDefinition = {
       id: 'monaco-editor',
       label: 'Text Editor',
       icon: 'File',
+      // Monaco owns only the `text` role — the SAME classification
+      // `open-in-app-file.ts` uses for disposition (codex R2 C7), so a registry
+      // caller and `openInAppFile` agree: image/pdf hit their preview panes, the
+      // non-previewable binaries in DOWNLOAD_EXTS (docx/zip/…) are excluded here
+      // and routed to a download, and everything else falls through to monaco.
       match: (file) =>
-        !file.isDirectory && !BINARY_EXTS.has(file.extension.toLowerCase()),
+        !file.isDirectory && roleForExtension(file.extension) === 'text',
       priority: 'default',
       createContent: (source, file) =>
         ({ kind: 'editor', source, filePath: file.path }) as PaneContent,

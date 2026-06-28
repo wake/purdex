@@ -212,4 +212,16 @@ describe('openInAppFile', () => {
     expect(triggerDownload).not.toHaveBeenCalled()
     expect(readMock).not.toHaveBeenCalled()
   })
+
+  it('C2: a .docx deleted BETWEEN stat and read (read rejects) quietly refuses — no throw, no tab, no download', async () => {
+    // TOCTOU: stat resolves (file existed), but the read fails (the entry was
+    // removed, or the backend errored, in the gap). The download branch must
+    // swallow it and return undefined, matching the stat-gate's silent abort —
+    // never an unhandled rejection.
+    statMock.mockResolvedValue({ size: 4, mtime: 0, isDirectory: false, isFile: true })
+    readMock.mockRejectedValue(new Error('vanished'))
+    await expect(openInAppFile('/buffer/gone.docx', 'w1')).resolves.toBeUndefined()
+    expect(useTabStore.getState().tabOrder).toHaveLength(0)
+    expect(triggerDownload).not.toHaveBeenCalled()
+  })
 })

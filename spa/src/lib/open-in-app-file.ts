@@ -74,8 +74,17 @@ export async function openInAppFile(
   // exists, so the `read` cannot resurrect a stale file. Returns `undefined`:
   // no tab is opened. (Image/pdf → preview pane; text/code → monaco below.)
   if (roleForExtension(extension) === 'download') {
-    const bytes = await backend.read(path)
-    triggerDownload(new Blob([new Uint8Array(bytes)]), name)
+    // The stat-gate proved the path existed a moment ago, but the entry can be
+    // deleted (or the read otherwise fail) between the stat and this read — a
+    // TOCTOU window. Guard the read+download so a failure quietly refuses (no
+    // tab, no throw), consistent with the stat-gate's silent abort above
+    // (codex R2 C2), rather than escaping as an unhandled rejection.
+    try {
+      const bytes = await backend.read(path)
+      triggerDownload(new Blob([new Uint8Array(bytes)]), name)
+    } catch {
+      return undefined
+    }
     return undefined
   }
 
