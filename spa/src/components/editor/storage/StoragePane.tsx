@@ -8,7 +8,7 @@ import {
   useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icons/react'
+import { DownloadSimple, FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icons/react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -24,6 +24,7 @@ import {
   createStorageFile,
   createStorageFolder,
   deleteStorageEntries,
+  downloadStorageFile,
   moveStorageEntry,
   renameStorageEntry,
 } from './storage-actions'
@@ -241,6 +242,16 @@ export function StoragePane({ pane }: PaneRendererProps) {
     if (singleSelected && !selectedNode?.isDir) handleOpen(singleSelected)
   }, [singleSelected, selectedNode, handleOpen])
 
+  const handleDownload = useCallback(async () => {
+    // Single-file only (T1c-2): a folder is not downloadable, so guard here as
+    // well as disabling the toolbar button. The byte read + OS download happen
+    // in downloadStorageFile; surface any failure in the inline banner.
+    if (!singleSelected || selectedNode?.isDir) return
+    setActionError(null)
+    const res = await downloadStorageFile(singleSelected)
+    if ('error' in res) setActionError(res.error)
+  }, [singleSelected, selectedNode])
+
   // --- Drag-and-drop move (T1b-6b) ---
 
   // Mirror RegionManager: a 5px activation distance so a stationary
@@ -277,6 +288,9 @@ export function StoragePane({ pane }: PaneRendererProps) {
   // Open is only valid for a single FILE selection (codex B3): a folder is not
   // openable, so the toolbar Open button disables when a folder is selected.
   const canOpen = singleSelected !== null && !selectedNode?.isDir
+  // Download is single-file only (T1c-2): a folder is not downloadable, same
+  // guard as Open.
+  const canDownload = canOpen
   const toolbarBusy = busy || loading
 
   return (
@@ -336,6 +350,16 @@ export function StoragePane({ pane }: PaneRendererProps) {
         >
           <FolderOpen size={14} />
           {t('editor.buffers.open')}
+        </button>
+        <button
+          data-testid="toolbar-download"
+          onClick={handleDownload}
+          disabled={!canDownload || toolbarBusy}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          title={t('editor.buffers.download')}
+        >
+          <DownloadSimple size={14} />
+          {t('editor.buffers.download')}
         </button>
       </div>
 

@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { StoragePane } from './StoragePane'
 import { openInAppFile } from '../../../lib/open-in-app-file'
+import { triggerDownload } from '../../../lib/download-file'
 import type { Pane, Tab } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 import type { FileEntry, FileStat, FileSource } from '../../../types/fs'
@@ -72,6 +73,14 @@ vi.mock('../../../lib/fs-backend', () => ({
 // `lib/open-in-app-file.test.ts`; here we only assert the pane routes through it.
 vi.mock('../../../lib/open-in-app-file', () => ({
   openInAppFile: vi.fn(() => 'opened-tab'),
+}))
+
+// The Download toolbar button routes through the real `downloadStorageFile`
+// (which reads via the mocked backend) but the final OS download is the shared
+// `triggerDownload` util — stub it so jsdom's missing createObjectURL /
+// navigation never fires, and so we can assert the download was dispatched.
+vi.mock('../../../lib/download-file', () => ({
+  triggerDownload: vi.fn(),
 }))
 
 // Workspace store: StoragePane.resolveWorkspaceId maps the owning tab → its
@@ -267,6 +276,7 @@ beforeEach(() => {
   renameEditorPanesSpy.mockReset()
   ;(openInAppFile as unknown as Mock).mockReset()
   ;(openInAppFile as unknown as Mock).mockReturnValue('opened-tab')
+  ;(triggerDownload as unknown as Mock).mockReset()
 
   setPaneContentSpy.mockImplementation((tabId: string, paneId: string) => {
     eventLog.push(`setPaneContent:${tabId}:${paneId}`)
@@ -1597,6 +1607,58 @@ describe('StoragePane', () => {
     // A file selection re-enables Open.
     fireEvent.click(rowByPath('/buffer/note.md'))
     expect(openBtn.disabled).toBe(false)
+  })
+
+  // --- Download / export a stored file (T1c-2) ---
+
+  it('T2-2a: selecting a file enables Download and clicking dispatches downloadStorageFile', async () => {
+    const bytes = new TextEncoder().encode('hello world')
+    mockBackend.list.mockResolvedValue([
+      { name: 'note.md', isDir: false, size: bytes.byteLength },
+    ] as FileEntry[])
+    mockBackend.read.mockResolvedValue(bytes)
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    const downloadBtn = screen.getByTestId('toolbar-download') as HTMLButtonElement
+    // No selection → disabled.
+    expect(downloadBtn.disabled).toBe(true)
+    fireEvent.click(row) // select the file
+    expect(downloadBtn.disabled).toBe(false)
+    fireEvent.click(downloadBtn)
+    await waitFor(() => {
+      // downloadStorageFile read the file's bytes …
+      expect(mockBackend.read).toHaveBeenCalledWith('/buffer/note.md')
+    })
+    await waitFor(() => {
+      // … and handed them to the shared download util as a Blob named by basename.
+      expect(triggerDownload).toHaveBeenCalledTimes(1)
+    })
+    const [blob, filename] = (triggerDownload as unknown as Mock).mock.calls[0]
+    expect(blob).toBeInstanceOf(Blob)
+    expect(filename).toBe('note.md')
+  })
+
+  it('T2-2b: selecting a folder disables Download and clicking never downloads', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/note.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    const rowByPath = (p: string) =>
+      screen.getAllByTestId('buffer-row').find((r) => r.getAttribute('data-path') === p)!
+    const downloadBtn = screen.getByTestId('toolbar-download') as HTMLButtonElement
+    // Folder selected → Download disabled, and a click never reads / downloads.
+    fireEvent.click(rowByPath('/buffer/dir'))
+    expect(downloadBtn.disabled).toBe(true)
+    fireEvent.click(downloadBtn)
+    expect(triggerDownload).not.toHaveBeenCalled()
+    expect(mockBackend.read).not.toHaveBeenCalledWith('/buffer/dir')
+    // A file selection re-enables Download.
+    fireEvent.click(rowByPath('/buffer/note.md'))
+    expect(downloadBtn.disabled).toBe(false)
   })
 
   // --- Selection model: plain click never toggles off (codex B5) ---

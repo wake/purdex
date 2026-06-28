@@ -3,11 +3,13 @@ import {
   createStorageFile,
   createStorageFolder,
   deleteStorageEntries,
+  downloadStorageFile,
   moveStorageEntry,
   renameStorageEntry,
 } from './storage-actions'
 import { InAppBackend } from '../../../lib/fs-backend-inapp'
 import { closeAllIDB } from '../../../lib/storage/idb'
+import { triggerDownload } from '../../../lib/download-file'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import type { Tab } from '../../../types/tab'
@@ -24,6 +26,13 @@ vi.mock('../../../lib/fs-backend', () => ({
     typeof b?.createUnique === 'function',
   supportsMkdirUnique: (b: { mkdirUnique?: unknown } | undefined | null) =>
     typeof b?.mkdirUnique === 'function',
+}))
+
+// Stub the shared download util so the OS-file download is observable without
+// jsdom's unimplemented createObjectURL / navigation. We capture the Blob it is
+// handed and assert byte-identity against the stored content.
+vi.mock('../../../lib/download-file', () => ({
+  triggerDownload: vi.fn(),
 }))
 
 beforeEach(() => {
@@ -643,5 +652,62 @@ describe('createStorageFile — concurrent reservations get distinct keys (D2 / 
     const entries = await real.list('/buffer')
     const names = entries.map((e) => e.name).sort()
     expect(names).toEqual(['Untitled-1.md', 'Untitled.md'])
+  })
+})
+
+// --- T1c-2: download / export a stored file via the shared triggerDownload util
+//
+// Real InAppBackend (fake-indexeddb) so the download reads back the exact bytes
+// that were written; triggerDownload is mocked (module-level) so we can capture
+// the Blob and assert byte-identity + filename without jsdom's missing
+// createObjectURL.
+
+describe('downloadStorageFile — byte-identical export via shared triggerDownload (T1c-2)', () => {
+  let real: InAppBackend
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+    ;(triggerDownload as unknown as ReturnType<typeof vi.fn>).mockReset()
+  })
+
+  it('T2-1: reads the stored bytes and hands triggerDownload a byte-identical Blob named by basename', async () => {
+    // Arbitrary binary content (incl. a zero byte) so any text round-trip bug
+    // would corrupt it.
+    const bytes = new Uint8Array([0x00, 0x01, 0x42, 0xff, 0x10, 0x7a])
+    await real.write('/buffer/sub/report.bin', bytes)
+
+    const res = await downloadStorageFile('/buffer/sub/report.bin')
+
+    expect(res).toEqual({ ok: true })
+    expect(triggerDownload).toHaveBeenCalledTimes(1)
+    const [blob, filename] = (triggerDownload as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(filename).toBe('report.bin')
+    expect(blob).toBeInstanceOf(Blob)
+    // Byte-identical: read the Blob back and compare every byte.
+    const roundTrip = new Uint8Array(await (blob as Blob).arrayBuffer())
+    expect(Array.from(roundTrip)).toEqual(Array.from(bytes))
+  })
+
+  it('T2-1b: missing backend returns an error and never calls triggerDownload', async () => {
+    backend = null
+    const res = await downloadStorageFile('/buffer/x.md')
+    expect('error' in res && res.error).toBeTruthy()
+    expect(triggerDownload).not.toHaveBeenCalled()
+  })
+
+  it('T2-1c: a directory path is a read failure → error, no download', async () => {
+    await real.write('/buffer/dir/f.md', new TextEncoder().encode('x'))
+    const res = await downloadStorageFile('/buffer/dir')
+    expect('error' in res && res.error).toBeTruthy()
+    expect(triggerDownload).not.toHaveBeenCalled()
+  })
+
+  it('T2-1d: a missing file is a read failure → error, no download', async () => {
+    const res = await downloadStorageFile('/buffer/nope.md')
+    expect('error' in res && res.error).toBeTruthy()
+    expect(triggerDownload).not.toHaveBeenCalled()
   })
 })

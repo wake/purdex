@@ -18,6 +18,7 @@
  */
 import { getFsBackend, supportsMkdirUnique } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
+import { triggerDownload } from '../../../lib/download-file'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { scanPaneTree } from '../../../lib/pane-tree'
 import { isFilePaneContent } from '../../../lib/pane-utils'
@@ -119,6 +120,32 @@ export async function createStorageFolder(
   try {
     const path = await backend.mkdirUnique(targetDir)
     return { path }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Download (export) a single stored file to the OS via the shared
+ * `triggerDownload` util (Phase 1c T1c-2). Reads the exact bytes from the
+ * backend and hands them off as a `Blob` named by the file's basename, so the
+ * saved file is byte-identical to what is stored. A missing backend, a
+ * directory path, or a missing file all surface as `{ error }` (never a silent
+ * no-op) and never reach `triggerDownload`. Folder downloads are out of scope in
+ * 1c — the caller disables the button for a folder selection.
+ */
+export async function downloadStorageFile(
+  path: string,
+): Promise<{ ok: true } | { error: string }> {
+  const backend = getFsBackend({ type: 'inapp' })
+  if (!backend) return { error: 'InApp backend unavailable' }
+  try {
+    const bytes = await backend.read(path)
+    // Re-wrap into a fresh ArrayBuffer-backed view so the Blob part is a plain
+    // `Uint8Array<ArrayBuffer>` (the backend's `Uint8Array<ArrayBufferLike>`
+    // does not satisfy `BlobPart` under strict TS) — mirrors Image/PdfPreview.
+    triggerDownload(new Blob([new Uint8Array(bytes)]), basename(path))
+    return { ok: true }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }

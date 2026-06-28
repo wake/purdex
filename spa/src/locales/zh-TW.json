@@ -484,6 +484,7 @@
   "editor.buffers.rename": "重新命名",
   "editor.buffers.delete": "刪除",
   "editor.buffers.open": "開啟",
+  "editor.buffers.download": "下載",
   "editor.buffers.confirm_delete": "刪除 {{count}} 個暫存檔？",
   "editor.buffers.confirm_switch_dirty": "目前暫存檔有未儲存的變更，仍要切換嗎？",
   "editor.buffers.rename_slash_error": "不支援子資料夾",
