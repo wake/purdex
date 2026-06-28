@@ -57,8 +57,9 @@ event) so 2b has a stable target.
    prod, zero cost). The serialisation test injects a barrier into it that (a) blocks writer-1
    *after* it has read head but *before* insert, (b) launches writer-2 and asserts writer-2 cannot
    commit ahead (it blocks on `busy_timeout` because writer-1 holds the `BEGIN IMMEDIATE` write
-   lock), (c) releases writer-1, then asserts writer-2 **re-read the now-advanced head** (its
-   `is_fork`/`parent` reflect writer-1's row). This forces the race window rather than hoping for it.
+   lock), (c) releases writer-1; writer-2 then acquires the write lock (obtainable only after
+   writer-1 commits) and **observes the advanced head**, so its `is_fork`/`parent` reflect writer-1's
+   row. This forces the race window rather than hoping for it.
    On a broken non-transactional impl the test deterministically fails.
 5. **Manifest is stored canonical** (sorted by path). The daemon **rejects** an unsorted manifest
    (`400`), it does not re-sort (R2-Pc) — so the byte-form used for no-op compare is unambiguous.
@@ -127,8 +128,9 @@ event) so 2b has a stable target.
   - **serialisation** (uses `openTempBackupStore(t)`, file-backed, `MaxOpenConns(2)` — NOT
     `:memory:`, per groundwork; **deterministic via the `afterReadHead` barrier seam**, Design 5):
     writer-1 blocked after read-head/before-insert; writer-2 (same `parentId`, differing content)
-    must block on `busy_timeout` not commit ahead; after releasing writer-1, writer-2 **re-reads the
-    advanced head** so the two rows are not both `is_fork=false` and no `SQLITE_BUSY` is surfaced. A
+    must block on `busy_timeout` not commit ahead; after releasing writer-1, writer-2 acquires the
+    lock and **observes the advanced head** so the two rows are not both `is_fork=false` and no
+    `SQLITE_BUSY` is surfaced. A
     broken non-`BEGIN IMMEDIATE` impl fails this deterministically. Run with `-race`.
   - handler (`httptest`) `POST /api/backup/snapshot`: maps the above to `200{snapshotId,isFork,
     currentHeadId}` / `409` / `400`.
