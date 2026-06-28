@@ -2,7 +2,7 @@
 
 - **Base**: alpha.302 (`938e5f08`)
 - **Scope**: `daemon` (Go: new `backup` module) + `spa` (Storage pane right sidebar)
-- **Status**: draft → codex review **R2** (R1 findings folded in, see §0)
+- **Status**: draft → codex review **R3** (R1 + R2 findings folded in, see §0)
 - **Memory**: [[kickoff_storage_feature]]
 - **Predecessor**: subsystem 1 (In-App nested file manager) shipped alpha.300/301/302. This spec
   fills the **right-sidebar placeholder** reserved in the subsystem 1 spec (§3.1: "備份（即將推出）"
@@ -31,6 +31,22 @@ version store: blobs (deduped by hash) + snapshots (immutable manifests linked b
 - **P2-5**: `backup:done` host-event is defined in **2a AC**; 2b refreshes locally and treats WS as
   cross-device-only, never a phase blocker — §4.6, AC-2a/2b.
 - **P3-1**: device id = `useSyncStore.getState().getClientId()` (reused, not a Sync dependency) — §3.
+
+### R2 review fixes folded in (codex `task-mqy4foin`) — R1's C1/C2/P1-1/P1-2/P1-3/P2-1/P2-4/P3-1 confirmed sealed
+- **R2-Pa**: restore is **atomic** — fetch+verify **all** blobs first, then a **single IDB
+  transaction** clears root and rewrites (backend `replaceTree`); no half-applied tree — §4.4, AC-2c.
+- **R2-Pb**: manifest must be a **well-formed tree** — no `path` is both a file and another entry's
+  ancestor; every entry's ancestor dirs are derivable; else `400` — §4.2, AC-2a.
+- **R2-Pc**: **canonical manifest order** — entries sorted by root-relative `path` lexicographically;
+  no-op compare and fork detection use this normal form — §4.1, §4.2, AC-2a/2b.
+- **R2-Pd**: `backup:done` `value` is a defined JSON schema `{storeId, snapshotId, currentHeadId,
+  device, trigger, createdAt}`, `session:''` — §4.6, AC-2a.
+- **R2-Pe**: `kind:'dir'` entries are **validated** (`hash=='' && size==0 && words==0` else `400`) —
+  §4.2, AC-2a.
+- **R2-Pf**: no-op suppression **applies to `pre-restore`** too — if the current tree equals head,
+  the existing head **is** the safety restore-point; no new row — §4.4.
+- **R2-Pg**: "dirty/locked In-App buffer" is **defined** — any dirty `inapp` editor buffer, or any
+  `locked` tab containing an `inapp` editor pane — §4.4, AC-2c.
 
 ## 1. Goal & non-overlap with sync
 
@@ -121,6 +137,16 @@ CREATE INDEX IF NOT EXISTS idx_snap_store ON backup_snapshots(store_id, id);
   `{ path, kind: 'file'|'dir', hash, size, words }`. **Directory entries** (`kind:'dir'`) carry
   `hash:'' , size:0, words:0` and exist so empty dirs round-trip (C2). **File entries** carry the
   blob hash, byte size, and word count (text only; 0 for binary — same metric as subsystem 1 rows).
+- **Canonical order** (R2-Pc): manifest entries are sorted by root-relative `path`, ascending
+  lexicographically (byte order), with **no duplicates**. Both the client (before posting) and the
+  daemon (before no-op compare / fork detection) treat this as the manifest's normal form — two
+  backups of identical content always serialise to byte-identical manifests, so traversal order can
+  never produce a false fork or a spurious snapshot. The daemon **rejects an unsorted manifest with
+  `400`** (it does not silently re-sort — a mis-ordered manifest signals a buggy client).
+- **Well-formed tree** (R2-Pb): the manifest must describe a valid tree — no `path` is both a file
+  and a prefix-ancestor of another entry (`a` as `kind:'file'` while `a/b` exists is rejected), and
+  every entry's ancestor directory chain is derivable from the path. `STORAGE_ROOT` itself is
+  implicit and not listed.
 - **store_id**: a single logical In-App store today → constant `'inapp:buffer'`. Column kept so a
   future multi-store split needs no migration. **Not** a security boundary (single-user daemon).
 
@@ -130,7 +156,7 @@ CREATE INDEX IF NOT EXISTS idx_snap_store ON backup_snapshots(store_id, id);
 |---|---|---|
 | `POST /api/backup/missing` | negotiation | `{hashes:[...]}` → `{missing:[...]}` (subset daemon lacks). Caps `len(hashes)` (e.g. ≤10k); over → `413`. |
 | `PUT  /api/backup/blob/{hash}` | upload one blob | raw body → `204`. Reads `cap+1` (~30 MB); over → **`413`**, nothing stored. Computes sha256; ≠ `{hash}` → **`400`**, nothing stored. `{hash}` must be 64-char lowercase hex else `400`. Idempotent (existing hash → `204`). |
-| `POST /api/backup/snapshot` | append snapshot | `{storeId, device, parentId, trigger, manifest:[{path,kind,hash,size,words}]}` → `{snapshotId, isFork, currentHeadId}`. Validation (all → `400` unless noted), in one `BEGIN IMMEDIATE` txn: (a) `parentId` is null **or** an existing snapshot of the **same `storeId`**; (b) every manifest `path` is **root-relative, non-empty, no `.`/`..`/leading-slash/backslash**, and **unique**; (c) `kind∈{file,dir}`; (d) for `kind:'file'`: `hash` is 64-hex, the blob **exists** in `backup_blobs` (else **`409`** — finish blob upload first), and `size` **equals** the stored blob's byte length; (e) manifest item count cap (e.g. ≤50k). **No-op suppression**: if `parentId == head` and the manifest is byte-identical to head's, return head's `snapshotId` with no new row (P1-4). Otherwise insert with `is_fork = (parentId != head)`, then GC (§4.5). |
+| `POST /api/backup/snapshot` | append snapshot | `{storeId, device, parentId, trigger, manifest:[{path,kind,hash,size,words}]}` → `{snapshotId, isFork, currentHeadId}`. Validation (all → `400` unless noted), in one `BEGIN IMMEDIATE` txn: (a) `parentId` is null **or** an existing snapshot of the **same `storeId`**; (b) every manifest `path` is **root-relative, non-empty, no `.`/`..`/leading-slash/backslash**, and **unique**; (c) `kind∈{file,dir}`; (d) for `kind:'file'`: `hash` is 64-hex, the blob **exists** in `backup_blobs` (else **`409`** — finish blob upload first), and `size` **equals** the stored blob's byte length; (e) for `kind:'dir'`: `hash==''`, `size==0`, `words==0` (R2-Pe); (f) manifest is in **canonical order** (sorted by `path`, no dups) — unsorted → `400`, daemon does not re-sort (R2-Pc); (g) manifest is a **well-formed tree** — no file `path` is a prefix-ancestor of another entry (R2-Pb); (h) manifest item count cap (e.g. ≤50k). **No-op suppression** (applies to **all** triggers incl. `pre-restore`, R2-Pf): if `parentId == head` and the manifest equals head's (canonical form), return head's `snapshotId` with no new row (P1-4). Otherwise insert with `is_fork = (parentId != head)`, then GC (§4.5). |
 | `GET  /api/backup/history?storeId=` | list | → `[{id, device, parentId, isFork, trigger, createdAt, fileCount, dirCount, totalSize}]` (summarised, newest first, no blob bytes). |
 | `GET  /api/backup/snapshot/{id}` | one manifest | → `{id, storeId, device, parentId, isFork, trigger, createdAt, manifest:[{path,kind,hash,size,words}]}`. |
 | `GET  /api/backup/blob/{hash}` | download blob | raw bytes (restore). `404` if absent. |
@@ -165,17 +191,26 @@ safety backup**. Because un-flushed editor state lives in Zustand, not IndexedDB
 (`useEditorStore`, `EditorPane.tsx:274`), restore **hard-blocks on any dirty/locked In-App buffer**
 (C1):
 
-1. **Pre-flight guard**: if any In-App editor buffer is dirty or locked, **refuse** the restore and
+1. **Pre-flight guard** (R2-Pg): a **dirty/locked In-App buffer** is defined as **any `inapp`
+   editor buffer with `isDirty` (`useEditorStore`, `:19`), or any `locked` tab (`Tab.locked`,
+   `types/tab.ts:5`) whose panes include an `inapp` editor (`source.type==='inapp'`)** — the same
+   surface `tab-lifecycle.ts:9` already scans on close. If any exists, **refuse** the restore and
    prompt the user to Save or Discard first. (A safety snapshot of `/buffer` could not capture the
    un-flushed buffer, so "continue anyway" is **not** offered — that would break reversibility.)
 2. Client backs up the **current** tree → `POST /snapshot` with `trigger:'pre-restore'`,
-   `parentId:` its own last snapshotId. This is the safety restore-point — fully reversible.
-3. Client fetches `GET /snapshot/{S}` → first creates every `kind:'dir'` entry (so empty dirs
-   survive, C2), then for each `kind:'file'` entry `GET /blob/{hash}` and writes it → **replaces**
-   the tree under `STORAGE_ROOT` (clear root, then write every manifest entry). Paths are
-   re-validated client-side before any write (§4.2 path rules, defence-in-depth).
-4. The next debounced auto-backup of the restored tree links `parentId:` the pre-restore snapshot
-   (timeline stays continuous). Restore itself writes **nothing** to the daemon beyond step 2.
+   `parentId:` its own last snapshotId. This is the safety restore-point. **If the current tree
+   already equals head, no-op suppression returns the existing head id (R2-Pf) — that head IS the
+   restore-point; no redundant row is written.** Either way the client records the resulting id as
+   the restore-point.
+3. Client fetches `GET /snapshot/{S}`, then **downloads and verifies every `kind:'file'` blob
+   (`GET /blob/{hash}`, checking sha256 + size) into memory FIRST**. Only once **all** blobs are
+   present and valid does it apply the restore as a **single atomic IndexedDB transaction** via a
+   new backend `replaceTree(root, entries)` that clears `STORAGE_ROOT` and writes every entry (dirs
+   first so empty dirs survive, C2) in one txn (R2-Pa). A mid-way `404`/network/IDB error aborts
+   **before** any local mutation — the tree is never left half-applied. Paths are re-validated
+   client-side before the write (§4.2 rules, defence-in-depth).
+4. The next debounced auto-backup of the restored tree links `parentId:` the restore-point id from
+   step 2 (timeline stays continuous). Restore itself writes **nothing** to the daemon beyond step 2.
 
 ### 4.5 GC (retention)
 
@@ -192,7 +227,21 @@ Inside the same `POST /snapshot` transaction (and on `Start()`), per `store_id`:
 One transaction; counts logged. Constants (`maxSnapshots=100`, `maxAgeDays=90`, `blobGrace=1h`),
 trivially tunable.
 
-### 4.6 Front-end (Storage pane right sidebar)
+### 4.6 `backup:done` event contract (defined in 2a, R2-Pd)
+
+After a snapshot is **committed** (and only when a new row was actually written — a no-op-suppressed
+post broadcasts nothing), the daemon calls `EventsBroadcaster.Broadcast(session, type, value)` with
+`type:'backup:done'`, **`session:''`** (this is a store-level, not session-level, event), and
+`value` = JSON string of:
+```json
+{ "storeId": "inapp:buffer", "snapshotId": 42, "currentHeadId": 42, "device": "macbook:a3f9d2",
+  "trigger": "auto", "createdAt": 1751230000 }
+```
+`backup:done` is added to the front-end `HostEvent` `type` union (`spa/src/lib/host-events.ts:3`).
+The 2a AC asserts the broadcast fires once per committed snapshot with this payload; 2b consumes it
+**only** to refresh when a *different* `device` posts (its own posts refresh locally).
+
+### 4.7 Front-end (Storage pane right sidebar)
 
 Subsystem 1 reserved the right sidebar as a collapsed "備份（即將推出）" placeholder. Here it
 becomes:
@@ -226,9 +275,13 @@ timing) is **defined and asserted here** so 2b has a stable contract.
 - `POST /missing` returns exactly the input subset the daemon lacks; over the count cap → `413`.
 - `POST /snapshot` validation: missing blob → `409` no row; `parentId` of another `storeId` or a
   non-existent id → `400`; duplicate manifest path → `400`; a path containing `..`/leading-slash →
-  `400`; `size` ≠ blob length → `400`; bad `kind` → `400`. None write a row.
-- **No-op suppression**: posting a manifest byte-identical to head with `parentId==head` returns
-  head's id and writes **no** new row.
+  `400`; `size` ≠ blob length → `400`; bad `kind` → `400`; a `kind:'dir'` entry with non-empty
+  `hash`/non-zero `size`/`words` → `400` (R2-Pe); an **unsorted/non-canonical** manifest → `400`
+  (R2-Pc); a **prefix-conflict** manifest (`a` is a file while `a/b` exists) → `400` (R2-Pb). None
+  write a row.
+- **No-op suppression**: posting a canonical manifest equal to head with `parentId==head` returns
+  head's id and writes **no** new row — for `trigger:'auto'` **and** `trigger:'pre-restore'`
+  (R2-Pf).
 - **Fork**: `parentId == head` → `is_fork:false`; stale `parentId` → `is_fork:true`; both rows
   present, neither overwritten, `parent_id` preserved; response carries `currentHeadId`.
 - **Serialisation**: two concurrent `POST /snapshot` with the same `parentId` don't both yield
@@ -240,7 +293,9 @@ timing) is **defined and asserted here** so 2b has a stable contract.
   **keeps ancestor closure** of survivors; blobs referenced by no survivor **and** past grace are
   removed, blobs still referenced (incl. shared across ≥2 snapshots) survive; an unattached blob
   within grace is **not** reaped.
-- `backup:done` is broadcast after a committed snapshot with the documented payload.
+- `backup:done` is broadcast **once per committed snapshot** with the §4.6 payload (`session:''`,
+  `value` carrying `storeId/snapshotId/currentHeadId/device/trigger/createdAt`); a **no-op-suppressed
+  post broadcasts nothing**.
 - `:memory:` SQLite + `httptest`; `go test ./...` + `go vet` clean.
 
 ### Phase 2b — front-end backup engine + status
@@ -265,25 +320,33 @@ cross-device refresh only.
 
 ### Phase 2c — front-end restore + history/fork UI
 History list, manifest viewer, explicit restore with dirty/locked **hard-block** + mandatory
-pre-restore snapshot + dir-then-file replace, fork/branch indicator.
+pre-restore snapshot + **atomic `replaceTree`** (fetch-all-then-single-IDB-txn) dir-then-file
+replace, fork/branch indicator. Adds `replaceTree(root, entries)` to `InAppBackend`.
 
 **AC-2c**
 - History renders snapshots (device, relative time, trigger, fork badge) newest-first.
 - Selecting a snapshot shows its manifest (paths + kind + size + words) without downloading blobs.
-- **Restore guard**: with any dirty/locked In-App buffer, restore is **refused** with a Save/Discard
-  prompt (no "continue anyway").
-- **Restore**: a pre-restore snapshot is posted **first** (assert order), then the tree is replaced
-  to exactly match the chosen manifest — every `kind:'dir'` recreated (incl. **empty** dirs), every
-  file byte-identical, paths not in the manifest removed.
+- **Restore guard** (R2-Pg): with a dirty `inapp` buffer **or** a `locked` tab containing an `inapp`
+  editor pane, restore is **refused** with a Save/Discard prompt (no "continue anyway"); a clean
+  tree proceeds.
+- **Restore order**: a pre-restore snapshot is posted **first** (assert order); if the current tree
+  equals head, no new row is written and head is recorded as the restore-point (R2-Pf).
+- **Restore atomicity** (R2-Pa): with all blobs available, the tree is replaced to exactly match the
+  chosen manifest — every `kind:'dir'` recreated (incl. **empty** dirs), every file byte-identical,
+  paths not in the manifest removed. **A simulated mid-restore failure (a `GET /blob` 404 / rejected
+  fetch) leaves the In-App tree completely unchanged** (no partial delete/write) — asserted: the
+  `replaceTree` IDB transaction is entered only after every blob is fetched and verified.
 - A snapshot whose `parentId` is not the prior head renders a fork/branch indicator.
 - vitest + RTL; lint + build green.
 
 ## 6. Testing
 TDD per phase. Daemon: `:memory:` SQLite, `httptest`, testify; hash-verify, `413`/`400`/`409`,
-no-op suppression, fork + `BEGIN IMMEDIATE` serialisation, GC with shared blobs + ancestor closure +
-grace. Front-end: fake-indexeddb + mocked fetch (2b: dedup, no-op, parentId advance, dir manifest),
-RTL + restore round-trip incl. empty-dir + dirty-block (2c). `go test ./...` and `pnpm run lint` +
-`pnpm run build` + `npx vitest run` green each phase.
+canonical-order + prefix-conflict + dir-entry rejection, no-op suppression (auto + pre-restore),
+fork + `BEGIN IMMEDIATE` serialisation, GC with shared blobs + ancestor closure + grace,
+`backup:done` payload. Front-end: fake-indexeddb + mocked fetch (2b: dedup, no-op, parentId advance,
+dir manifest, canonical order), RTL + restore round-trip incl. empty-dir + dirty-block + **atomic
+mid-failure rollback** (2c). `go test ./...` and `pnpm run lint` + `pnpm run build` +
+`npx vitest run` green each phase.
 
 ## 7. Non-goals
 - **Per-file restore / per-file history** — whole-snapshot restore only (user decision §2).
