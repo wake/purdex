@@ -6,6 +6,8 @@ import {
   downloadStorageFile,
   moveStorageEntry,
   renameStorageEntry,
+  uploadFile,
+  uploadFiles,
 } from './storage-actions'
 import { InAppBackend } from '../../../lib/fs-backend-inapp'
 import { closeAllIDB } from '../../../lib/storage/idb'
@@ -709,5 +711,85 @@ describe('downloadStorageFile — byte-identical export via shared triggerDownlo
     const res = await downloadStorageFile('/buffer/nope.md')
     expect('error' in res && res.error).toBeTruthy()
     expect(triggerDownload).not.toHaveBeenCalled()
+  })
+})
+
+// --- T1c-1: upload (OS-file ingest) via the atomic createUnique(+content) ------
+//
+// Real InAppBackend so the byte write + atomic -N suffix collision are genuinely
+// exercised; uploadFiles partial-success is asserted with a stub backend so one
+// file can deterministically fail.
+
+describe('uploadFile / uploadFiles — OS-file ingest via atomic createUnique (T1c-1)', () => {
+  let real: InAppBackend
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+  })
+
+  it('T1-1: stores a file with its bytes under a parsed (baseName, ext)', async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' })
+    const res = await uploadFile('/buffer', file)
+    expect(res).toEqual({ path: '/buffer/photo.png' })
+    expect(Array.from(await real.read('/buffer/photo.png'))).toEqual([1, 2, 3])
+  })
+
+  it('parses an ext-less name with NO trailing dot', async () => {
+    const file = new File([new Uint8Array([9])], 'README')
+    const res = await uploadFile('/buffer', file)
+    expect(res).toEqual({ path: '/buffer/README' })
+    expect(Array.from(await real.read('/buffer/README'))).toEqual([9])
+  })
+
+  it('splits on the LAST dot (archive.tar.gz → archive.tar + gz)', async () => {
+    const file = new File([new Uint8Array([4])], 'archive.tar.gz')
+    const res = await uploadFile('/buffer', file)
+    expect(res).toEqual({ path: '/buffer/archive.tar.gz' })
+  })
+
+  it('T1-3: a name collision reserves an atomic -N suffix, original intact', async () => {
+    await real.write('/buffer/report.pdf', new Uint8Array([0]))
+    const file = new File([new Uint8Array([7, 7])], 'report.pdf')
+    const res = await uploadFile('/buffer', file)
+    expect(res).toEqual({ path: '/buffer/report-1.pdf' })
+    expect(Array.from(await real.read('/buffer/report.pdf'))).toEqual([0])
+    expect(Array.from(await real.read('/buffer/report-1.pdf'))).toEqual([7, 7])
+  })
+
+  it('T1-5: uploadFiles returns every uploaded path in the summary (no failures)', async () => {
+    const files = [
+      new File([new Uint8Array([1])], 'a.txt'),
+      new File([new Uint8Array([2])], 'b.png'),
+      new File([new Uint8Array([3])], 'c.docx'),
+    ]
+    const summary = await uploadFiles('/buffer', files)
+    expect(summary.failed).toEqual([])
+    expect(summary.uploaded.sort()).toEqual(
+      ['/buffer/a.txt', '/buffer/b.png', '/buffer/c.docx'].sort(),
+    )
+  })
+
+  it('T1-6: a partial failure populates BOTH uploaded and failed (not just the first error)', async () => {
+    // Stub backend so a specific file name throws — one good, one bad.
+    backend = {
+      createUnique: vi.fn(async (dir: string, base: string, ext: string) => {
+        if (base === 'bad') throw new Error('disk boom')
+        return ext === '' ? `${dir}/${base}` : `${dir}/${base}.${ext}`
+      }),
+    }
+    const good = new File([new Uint8Array([1])], 'ok.txt')
+    const bad = new File([new Uint8Array([2])], 'bad.bin')
+    const summary = await uploadFiles('/buffer', [good, bad])
+    expect(summary.uploaded).toEqual(['/buffer/ok.txt'])
+    expect(summary.failed).toEqual([{ name: 'bad.bin', reason: 'disk boom' }])
+  })
+
+  it('missing backend → uploadFile returns an error (no silent no-op)', async () => {
+    backend = null
+    const res = await uploadFile('/buffer', new File([new Uint8Array([1])], 'x.txt'))
+    expect('error' in res && res.error).toBeTruthy()
   })
 })

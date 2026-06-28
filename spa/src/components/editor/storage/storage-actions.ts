@@ -16,7 +16,7 @@
  * The recursive move data layer (`moveStorageEntry`, T1b-6a) reuses that same
  * single-rename + `remapPanesUnder` path; the drag-and-drop wiring is T1b-6b.
  */
-import { getFsBackend, supportsMkdirUnique } from '../../../lib/fs-backend'
+import { getFsBackend, supportsCreateUnique, supportsMkdirUnique } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
 import { triggerDownload } from '../../../lib/download-file'
 import { bufferKey } from '../../../lib/editor-buffer-key'
@@ -149,6 +149,70 @@ export async function downloadStorageFile(
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/**
+ * Split a file's basename into `(baseName, ext)` for `createUnique`, matching
+ * the path-forming rule there (`ext === ''` → no trailing dot). The extension is
+ * everything after the LAST dot; an ext-less name (`README`) and a dotfile
+ * (`.env`, a leading dot at index 0) both yield `ext = ''` so the whole name is
+ * preserved. `archive.tar.gz` → (`archive.tar`, `gz`).
+ */
+function splitFileName(fileName: string): { baseName: string; ext: string } {
+  const dot = fileName.lastIndexOf('.')
+  if (dot <= 0) return { baseName: fileName, ext: '' }
+  return { baseName: fileName.slice(0, dot), ext: fileName.slice(dot + 1) }
+}
+
+/**
+ * Ingest a single OS file into `targetDir` (Phase 1c T1c-1, happy path). Parses
+ * the name into `(baseName, ext)`, reads the bytes, and reserves a unique key
+ * via the atomic `createUnique(dir, base, ext, bytes)` — so the unique-name
+ * reservation AND the byte write land on one `add` (no overwrite race; a
+ * collision increments the `-N` suffix, decision 4). Any file type is accepted;
+ * there is NO size cap or quota handling here — those land in T1c-4, which
+ * widens this result shape. A missing/incapable backend or a read/write failure
+ * surfaces as `{ error }` (never a silent no-op).
+ */
+export async function uploadFile(
+  targetDir: string,
+  file: File,
+): Promise<{ path: string } | { error: string }> {
+  const backend = getFsBackend({ type: 'inapp' })
+  // Narrow to the unique-create capability (codex H1) — it lives on the optional
+  // `SupportsUniqueCreate`, not the base `FsBackend`.
+  if (!supportsCreateUnique(backend)) return { error: 'InApp backend unavailable' }
+  try {
+    const { baseName, ext } = splitFileName(file.name)
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const path = await backend.createUnique(targetDir, baseName, ext, bytes)
+    return { path }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+export interface UploadSummary {
+  uploaded: string[]
+  failed: { name: string; reason: string }[]
+}
+
+/**
+ * Ingest multiple OS files into `targetDir`, reporting PARTIAL success (codex R1
+ * F5): every uploaded path lands in `uploaded`, and each failure lands in
+ * `failed` with the file name + reason — the caller surfaces both in one banner
+ * rather than aborting on the first error. Files are processed sequentially so
+ * the atomic `-N` suffixing stays deterministic for same-named drops.
+ */
+export async function uploadFiles(targetDir: string, files: File[]): Promise<UploadSummary> {
+  const uploaded: string[] = []
+  const failed: { name: string; reason: string }[] = []
+  for (const file of files) {
+    const res = await uploadFile(targetDir, file)
+    if ('path' in res) uploaded.push(res.path)
+    else failed.push({ name: file.name, reason: res.error })
+  }
+  return { uploaded, failed }
 }
 
 export type RenameOutcome =

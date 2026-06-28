@@ -8,7 +8,7 @@ import {
   useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { DownloadSimple, FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icons/react'
+import { DownloadSimple, FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen, UploadSimple } from '@phosphor-icons/react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -27,6 +27,7 @@ import {
   downloadStorageFile,
   moveStorageEntry,
   renameStorageEntry,
+  uploadFiles,
 } from './storage-actions'
 import { computeMoveFromDragEnd } from './storage-dnd'
 
@@ -60,9 +61,13 @@ function resolveWorkspaceId(paneId: string): string | null {
  */
 function StorageRegionDropZone({
   targetDir,
+  onNativeDragOver,
+  onNativeDrop,
   children,
 }: {
   targetDir: string
+  onNativeDragOver: (e: React.DragEvent<HTMLDivElement>) => void
+  onNativeDrop: (e: React.DragEvent<HTMLDivElement>) => void
   children: ReactNode
 }) {
   // Publish `STORAGE_ROOT` as this zone's authoritative drop target dir (codex
@@ -79,6 +84,12 @@ function StorageRegionDropZone({
       data-testid="storage-tree-region"
       data-target-dir={targetDir}
       data-root-over={isOver ? 'true' : 'false'}
+      // Native OS-file drop (Phase 1c decision 1). HTML5 drag events carrying
+      // `DataTransfer.files` are a SEPARATE event stream from dnd-kit's pointer
+      // events, so these handlers only fire for an OS-file drag; an internal
+      // node move (no files) is ignored and left entirely to dnd-kit.
+      onDragOver={onNativeDragOver}
+      onDrop={onNativeDrop}
     >
       {children}
     </div>
@@ -106,6 +117,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
   const [renameError, setRenameError] = useState<string | null>(null)
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
   const renameAnchorRef = useRef<HTMLButtonElement | null>(null)
+  const uploadInputRef = useRef<HTMLInputElement | null>(null)
 
   const error = actionError ?? treeError
 
@@ -242,6 +254,65 @@ export function StoragePane({ pane }: PaneRendererProps) {
     if (singleSelected && !selectedNode?.isDir) handleOpen(singleSelected)
   }, [singleSelected, selectedNode, handleOpen])
 
+  // --- Upload (file picker + native OS-file drop, T1c-1) ---
+
+  // Ingest OS files into the current `targetDir`. Shared by the picker and the
+  // native drop. Reflects partial success in the inline banner (codex R1 F5):
+  // any failure names the count + first failed file; all-success clears it.
+  const ingestFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return
+      setBusy(true)
+      setActionError(null)
+      const summary = await uploadFiles(targetDir, files)
+      setBusy(false)
+      if (summary.failed.length > 0) {
+        setActionError(
+          t('editor.buffers.upload_partial', {
+            uploaded: summary.uploaded.length,
+            failed: summary.failed.length,
+            name: summary.failed[0].name,
+          }),
+        )
+      }
+      refresh()
+    },
+    [targetDir, refresh, t],
+  )
+
+  const handleUploadClick = useCallback(() => {
+    uploadInputRef.current?.click()
+  }, [])
+
+  const handleUploadChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files ? Array.from(e.target.files) : []
+      // Clear the value so re-selecting the SAME file fires change again.
+      e.target.value = ''
+      await ingestFiles(files)
+    },
+    [ingestFiles],
+  )
+
+  // Native OS-file drag (decision 1). `preventDefault` on dragover is what makes
+  // the region a valid drop target; only act when the drag actually carries
+  // files so an internal dnd-kit node move passes straight through.
+  const handleNativeDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (e.dataTransfer?.types?.includes('Files')) e.preventDefault()
+  }, [])
+
+  const handleNativeDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      const files = e.dataTransfer?.files
+      // No files → this is a dnd-kit internal node drag; do NOT preventDefault,
+      // do NOT ingest — let dnd-kit's pointer-event flow own it.
+      if (!files || files.length === 0) return
+      e.preventDefault()
+      void ingestFiles(Array.from(files))
+    },
+    [ingestFiles],
+  )
+
   const handleDownload = useCallback(async () => {
     // Single-file only (T1c-2): a folder is not downloadable, so guard here as
     // well as disabling the toolbar button. The byte read + OS download happen
@@ -321,6 +392,24 @@ export function StoragePane({ pane }: PaneRendererProps) {
           {t('editor.buffers.new_folder')}
         </button>
         <button
+          data-testid="toolbar-upload"
+          onClick={handleUploadClick}
+          disabled={toolbarBusy}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          title={t('editor.buffers.upload')}
+        >
+          <UploadSimple size={14} />
+          {t('editor.buffers.upload')}
+        </button>
+        <input
+          ref={uploadInputRef}
+          type="file"
+          multiple
+          data-testid="upload-input"
+          className="hidden"
+          onChange={handleUploadChange}
+        />
+        <button
           data-testid="toolbar-rename"
           ref={renameAnchorRef}
           onClick={handleOpenRename}
@@ -368,7 +457,11 @@ export function StoragePane({ pane }: PaneRendererProps) {
           drop targets, and a drop calls `moveStorageEntry` via `handleDragEnd`. */}
       <div className="flex-1 flex overflow-hidden">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <StorageRegionDropZone targetDir={targetDir}>
+          <StorageRegionDropZone
+            targetDir={targetDir}
+            onNativeDragOver={handleNativeDragOver}
+            onNativeDrop={handleNativeDrop}
+          >
             {error && <div className="p-4 text-xs text-red-400">{error}</div>}
             {!error && !hasAny && (
               <div className="p-8 flex flex-col items-center justify-center text-text-muted">

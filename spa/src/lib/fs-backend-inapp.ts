@@ -180,10 +180,20 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate {
     await tx.done
   }
 
-  async createUnique(dir: string, baseName = 'Untitled', ext: 'md' | 'txt'): Promise<string> {
+  async createUnique(
+    dir: string,
+    baseName = 'Untitled',
+    ext: string,
+    content?: Uint8Array,
+  ): Promise<string> {
     const db = await this.db()
     const now = Date.now()
     const MAX = 10_000
+    // The reserved file's bytes: the caller-supplied `content` (OS-file upload,
+    // Phase 1c) or an empty buffer (1b's new-file namer). Reused across retries —
+    // only the winning add() persists, and idb structured-clones the value, so
+    // sharing the reference is safe.
+    const bytes = content ?? new Uint8Array(0)
     // store.add() is the single serialization point: it throws ConstraintError
     // if the keyPath (path) already exists, unlike put()'s blind overwrite. So
     // concurrent callers — e.g. a rapid double "New file" click (#854) — each
@@ -192,12 +202,14 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate {
     // aborts the transaction it occurred in.
     for (let n = 0; n < MAX; n++) {
       const name = n === 0 ? baseName : `${baseName}-${n}`
-      const path = join(dir, `${name}.${ext}`)
+      // An ext-less name (`README`, ext === '') must not carry a trailing dot.
+      const fileName = ext === '' ? name : `${name}.${ext}`
+      const path = join(dir, fileName)
       const tx = db.transaction(STORE, 'readwrite')
       try {
         await tx.store.add({
           path,
-          content: new Uint8Array(0),
+          content: bytes,
           isDirectory: false,
           mtime: now,
         } satisfies StoredFile)
