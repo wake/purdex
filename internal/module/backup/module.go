@@ -36,6 +36,7 @@ func (m *BackupModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/backup/blob/{hash}", m.handlePutBlob)
 	mux.HandleFunc("GET /api/backup/blob/{hash}", m.handleGetBlob)
 	mux.HandleFunc("POST /api/backup/missing", m.handleMissing)
+	mux.HandleFunc("POST /api/backup/snapshot", m.handleSnapshot)
 }
 
 // Start logs a banner and runs a best-effort startup GC.

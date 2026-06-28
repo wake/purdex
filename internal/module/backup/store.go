@@ -1,9 +1,11 @@
 package backup
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,6 +16,37 @@ import (
 // ErrHashMismatch is returned by PutBlob when sha256(content) != the claimed
 // hash. The handler maps it to HTTP 400.
 var ErrHashMismatch = errors.New("blob content hash mismatch")
+
+// ErrInvalidRequest wraps any append validation failure (manifest, parent, or
+// size). The handler maps it to HTTP 400.
+var ErrInvalidRequest = errors.New("invalid snapshot request")
+
+// ErrBlobMissing is returned when a manifest references a blob the daemon does
+// not have. The handler maps it to HTTP 409 (finish blob upload first).
+var ErrBlobMissing = errors.New("referenced blob missing")
+
+// AppendRequest is the input to AppendSnapshot.
+type AppendRequest struct {
+	StoreID  string
+	Device   string
+	ParentID *int64 // nil = root (first backup)
+	Trigger  string
+	Manifest []ManifestEntry
+}
+
+// AppendResult is the outcome of AppendSnapshot. Written distinguishes a real
+// insert from a content-keyed no-op (where no new row was written and
+// SnapshotID is the existing head's id).
+type AppendResult struct {
+	StoreID       string
+	SnapshotID    int64
+	CurrentHeadID int64
+	IsFork        bool
+	Device        string
+	Trigger       string
+	CreatedAt     int64
+	Written       bool
+}
 
 // ManifestEntry is one entry in a snapshot manifest. Directory entries
 // (Kind=="dir") carry Hash=="", Size==0, Words==0 so empty dirs round-trip.
@@ -149,9 +182,167 @@ func (s *BackupStore) MissingBlobs(hashes []string) ([]string, error) {
 	return missing, nil
 }
 
+// AppendSnapshot runs the whole append sequence — read head → validate →
+// parent/blob/size checks → content-keyed no-op → insert → GC — inside a single
+// BEGIN IMMEDIATE transaction (spec §4.3, P1-3) so two concurrent posts cannot
+// both record is_fork=false against the same head.
+func (s *BackupStore) AppendSnapshot(req AppendRequest) (AppendResult, error) {
+	now := s.now()
+	ctx := context.Background()
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return AppendResult{}, err
+	}
+	defer conn.Close()
+
+	// BEGIN IMMEDIATE acquires the RESERVED write lock up front, so a second
+	// concurrent writer blocks (busy_timeout) here rather than reading a stale
+	// head. Manual SQL because database/sql's Begin uses a deferred tx.
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return AppendResult{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	// 1. Read the current store head (max id for this store).
+	var headID int64
+	var headManifest string
+	err = conn.QueryRowContext(ctx,
+		`SELECT id, manifest FROM backup_snapshots WHERE store_id = ? ORDER BY id DESC LIMIT 1`,
+		req.StoreID,
+	).Scan(&headID, &headManifest)
+	if errors.Is(err, sql.ErrNoRows) {
+		headID, headManifest = 0, ""
+	} else if err != nil {
+		return AppendResult{}, err
+	}
+
+	// Test seam (Design 5): force the read-head/insert race window deterministically.
+	if s.afterReadHead != nil {
+		s.afterReadHead()
+	}
+
+	// 2. Validate the manifest (pure, §4.2).
+	if err := ValidateManifest(req.Manifest); err != nil {
+		return AppendResult{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+
+	// 3. parentId must be null or an existing snapshot of the SAME store.
+	if req.ParentID != nil {
+		var one int
+		e := conn.QueryRowContext(ctx,
+			`SELECT 1 FROM backup_snapshots WHERE id = ? AND store_id = ?`,
+			*req.ParentID, req.StoreID,
+		).Scan(&one)
+		if errors.Is(e, sql.ErrNoRows) {
+			return AppendResult{}, fmt.Errorf("%w: parentId %d not found in store %q", ErrInvalidRequest, *req.ParentID, req.StoreID)
+		} else if e != nil {
+			return AppendResult{}, e
+		}
+	}
+
+	// 4. Each file entry's blob must exist, and its size must match.
+	for _, ent := range req.Manifest {
+		if ent.Kind != "file" {
+			continue
+		}
+		var size int64
+		e := conn.QueryRowContext(ctx, `SELECT size FROM backup_blobs WHERE hash = ?`, ent.Hash).Scan(&size)
+		if errors.Is(e, sql.ErrNoRows) {
+			return AppendResult{}, fmt.Errorf("%w: %s (%q)", ErrBlobMissing, ent.Hash, ent.Path)
+		} else if e != nil {
+			return AppendResult{}, e
+		}
+		if size != ent.Size {
+			return AppendResult{}, fmt.Errorf("%w: size %d != blob length %d for %q", ErrInvalidRequest, ent.Size, size, ent.Path)
+		}
+	}
+
+	// 5. Canonical manifest JSON (entries already validated canonical/sorted).
+	manifestJSON, err := json.Marshal(req.Manifest)
+	if err != nil {
+		return AppendResult{}, err
+	}
+
+	// 6. Content-keyed no-op (R3-Pa): identical to head → no row, regardless of
+	// parentId. Only fires when a head exists.
+	if headID != 0 && string(manifestJSON) == headManifest {
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			return AppendResult{}, err
+		}
+		committed = true
+		return AppendResult{
+			StoreID:       req.StoreID,
+			SnapshotID:    headID,
+			CurrentHeadID: headID,
+			IsFork:        false,
+			Written:       false,
+		}, nil
+	}
+
+	// 7. Insert — is_fork is evaluated only when content differs from head.
+	var parentVal int64
+	var parentArg interface{}
+	if req.ParentID != nil {
+		parentVal = *req.ParentID
+		parentArg = *req.ParentID
+	}
+	isFork := parentVal != headID
+	res, err := conn.ExecContext(ctx,
+		`INSERT INTO backup_snapshots (store_id, device, parent_id, is_fork, trigger, created_at, manifest)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		req.StoreID, req.Device, parentArg, boolToInt(isFork), req.Trigger, now, string(manifestJSON),
+	)
+	if err != nil {
+		return AppendResult{}, err
+	}
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return AppendResult{}, err
+	}
+
+	// 8. GC within the same transaction.
+	if err := s.gcTx(ctx, conn, req.StoreID, now); err != nil {
+		return AppendResult{}, err
+	}
+
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return AppendResult{}, err
+	}
+	committed = true
+	return AppendResult{
+		StoreID:       req.StoreID,
+		SnapshotID:    newID,
+		CurrentHeadID: newID,
+		IsFork:        isFork,
+		Device:        req.Device,
+		Trigger:       req.Trigger,
+		CreatedAt:     now,
+		Written:       true,
+	}, nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// gcTx runs garbage collection for one store inside an existing transaction.
+// T2a-3 stub: replaced with the real keep-set / grace-period implementation in
+// T2a-4.
+func (s *BackupStore) gcTx(ctx context.Context, conn *sql.Conn, storeID string, now int64) error {
+	return nil
+}
+
 // GC runs garbage collection across all store_ids using the given clock.
-// T2a-0 stub: replaced with the real keep-set / grace-period implementation in
-// T2a-4. Present now so Start()'s wiring lands once and stays green.
+// T2a-0 stub: replaced with the real implementation in T2a-4.
 func (s *BackupStore) GC(now int64) error {
 	return nil
 }
