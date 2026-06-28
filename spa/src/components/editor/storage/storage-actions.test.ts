@@ -851,6 +851,15 @@ describe('uploadFile — file.name sanitisation (C1 security)', () => {
     expect(await assertAllKeysUnderRoot()).toEqual([])
   })
 
+  it('rejects an un-normalized traversal in targetDir before any write (C1b defense-in-depth)', async () => {
+    // `isUnderRoot` is a prefix check and `join` keeps `..` literal, so a
+    // targetDir carrying a traversal token must be rejected by the explicit
+    // segment guard, not slip a `/buffer/../evil.txt` candidate past the root.
+    const res = await uploadFile('/buffer/..', new File([new Uint8Array([9])], 'evil.txt'))
+    expect(res).toMatchObject({ kind: 'error' })
+    expect(await assertAllKeysUnderRoot()).toEqual([])
+  })
+
   it('rejects a lone `.` name (no write)', async () => {
     const res = await uploadFile('/buffer', new File([new Uint8Array([5])], '.'))
     expect(res).toMatchObject({ kind: 'error' })

@@ -260,9 +260,14 @@ export async function uploadFile(targetDir: string, file: File): Promise<UploadR
   const { baseName, ext } = splitFileName(safeName)
   // Defense-in-depth (C1): every `createUnique` candidate lives directly under
   // `targetDir`, so verifying the un-suffixed path stays under the storage root
-  // catches a non-root `targetDir` before any byte is read or written.
+  // catches a non-root `targetDir` before any byte is read or written. `join`
+  // keeps `..`/`.` as literal segments and `isUnderRoot` is a prefix check, so a
+  // `targetDir` carrying an un-normalized traversal token (e.g. `/buffer/..`)
+  // could otherwise slip a `/buffer/../x` candidate past the root guard — reject
+  // any traversal segment explicitly (codex 1c fix-wave confirm, C1b).
   const candidate = join(targetDir, ext === '' ? baseName : `${baseName}.${ext}`)
-  if (!isUnderRoot(candidate)) {
+  const hasTraversal = candidate.split('/').some((seg) => seg === '..' || seg === '.')
+  if (hasTraversal || !isUnderRoot(candidate)) {
     return { kind: 'error', name: file.name, message: `Invalid file name: ${file.name}` }
   }
   try {
