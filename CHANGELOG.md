@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.303] - 2026-06-29
+
+### Feat(storage): daemon backup/restore snapshot store — Phase 2a (subsystem 2) (#879)
+
+子系統 2 第一階段：daemon 端 content-addressed append-only snapshot 版本庫，為前端 In-App
+（IndexedDB `/buffer`）檔案樹提供跨裝置備份/還原的後端。純 Go daemon，無前端改動。Spec 經
+4 輪 codex review（13→7→4→0 findings）收斂 SHIP-READY，plan 經 3 輪 review READY-TO-IMPLEMENT；
+7 個 vertical-slice TDD task 派 subagent；PR 兩輪深度 review（標準 + 攻擊/防守/體質）+ 兩輪確認
+共 1 P1 + 5 P2 + 2 P3 findings 全修（1 path-encoding 誤報排除），full suite 全綠。
+
+- **新 module** `internal/module/backup/`（比照 sync 四層）+ 獨立 `backup.db`（無 FK，references
+  在 handler 驗證，避開 #850 DSN-pragma 坑）：`backup_blobs`（sha256 去重、immutable）+
+  `backup_snapshots`（append-only，parent_id DAG）。
+- **API** `/api/backup/`：`POST /missing`（per-blob negotiation）、`PUT/GET /blob/{hash}`（raw
+  blob，cap+1→413、sha256 驗證、冪等、404）、`POST /snapshot`（單一 `BEGIN IMMEDIATE` txn：
+  read head→validate→content-keyed no-op→fork→insert→GC）、`GET /history`、`GET /snapshot/{id}`。
+- **正確性保證**：content-keyed no-op（manifest==head 即不寫列，與 parentId 無關，跨裝置不產生
+  重複 fork）；`is_fork` 僅 content differs 時評估；GC union keep-set（latest 100 ∪ 90 天 ∪
+  ancestor closure，非 hard cap）+ blob refcount/grace；manifest canonical order + well-formed
+  tree 驗證；`backup:done` 廣播僅 committed write（no-op 不廣播）。
+- **DoS 防線**：snapshot/missing body streaming decode（item cap+1 即 413，不先 materialize）+
+  `MaxBytesReader` 硬上限 + 外層 object 收尾/EOF 驗證（拒 truncated/trailing）。
+- **體質**：store 拆 `blob_store`/`snapshot_store`/`query_store`/`gc` 分檔；serialisation 以
+  deterministic `afterReadHead` barrier 測（broken 非交易實作穩定失敗）。
+
+### 不在本階段
+2b（前端備份引擎）、2c（前端還原 UI + fork 顯示）各自後續 PR。
+
 ## [1.0.0-alpha.302] - 2026-06-28
 
 ### Feat(storage): In-App upload / download / binary-disposition / quota (subsystem 1, Phase 1c) (#877)
