@@ -22,6 +22,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { pluralKey } from '../../lib/plural'
 import { useSettingsRoute } from '../SettingsPage'
 import { SnapshotHistoryPage } from '../../features/settings/sections/sync-history/SnapshotHistoryPage'
+import { triggerDownload } from '../../lib/download-file'
 
 type ProviderId = 'off' | 'daemon' | 'file'
 
@@ -38,15 +39,6 @@ function formatRelativeTime(t: ReturnType<typeof useI18nStore.getState>['t'], ms
   if (diffHr < 24) return t('settings.sync.time.hoursAgo', { n: diffHr })
   const diffDay = Math.floor(diffHr / 24)
   return t('settings.sync.time.daysAgo', { n: diffDay })
-}
-
-function triggerDownload(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
 }
 
 export function SyncSection() {

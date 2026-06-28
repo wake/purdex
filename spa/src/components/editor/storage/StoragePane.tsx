@@ -8,7 +8,7 @@ import {
   useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen } from '@phosphor-icons/react'
+import { DownloadSimple, FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen, UploadSimple } from '@phosphor-icons/react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -24,8 +24,10 @@ import {
   createStorageFile,
   createStorageFolder,
   deleteStorageEntries,
+  downloadStorageFile,
   moveStorageEntry,
   renameStorageEntry,
+  uploadFiles,
 } from './storage-actions'
 import { computeMoveFromDragEnd } from './storage-dnd'
 
@@ -59,9 +61,13 @@ function resolveWorkspaceId(paneId: string): string | null {
  */
 function StorageRegionDropZone({
   targetDir,
+  onNativeDragOver,
+  onNativeDrop,
   children,
 }: {
   targetDir: string
+  onNativeDragOver: (e: React.DragEvent<HTMLDivElement>) => void
+  onNativeDrop: (e: React.DragEvent<HTMLDivElement>) => void
   children: ReactNode
 }) {
   // Publish `STORAGE_ROOT` as this zone's authoritative drop target dir (codex
@@ -78,6 +84,12 @@ function StorageRegionDropZone({
       data-testid="storage-tree-region"
       data-target-dir={targetDir}
       data-root-over={isOver ? 'true' : 'false'}
+      // Native OS-file drop (Phase 1c decision 1). HTML5 drag events carrying
+      // `DataTransfer.files` are a SEPARATE event stream from dnd-kit's pointer
+      // events, so these handlers only fire for an OS-file drag; an internal
+      // node move (no files) is ignored and left entirely to dnd-kit.
+      onDragOver={onNativeDragOver}
+      onDrop={onNativeDrop}
     >
       {children}
     </div>
@@ -100,11 +112,16 @@ export function StoragePane({ pane }: PaneRendererProps) {
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [actionError, setActionError] = useState<string | null>(null)
+  // Upload-only soft warning (over the size cap) — rendered amber, below errors.
+  // Kept separate from `actionError` (red) so a too-large rejection reads as a
+  // recoverable warning, not a hard failure (T1c-4).
+  const [actionWarning, setActionWarning] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [renameError, setRenameError] = useState<string | null>(null)
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
   const renameAnchorRef = useRef<HTMLButtonElement | null>(null)
+  const uploadInputRef = useRef<HTMLInputElement | null>(null)
 
   const error = actionError ?? treeError
 
@@ -155,6 +172,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
   const handleNew = useCallback(async () => {
     setBusy(true)
     setActionError(null)
+    setActionWarning(null)
     // T1b-0 wiring: the new file lands in the selected folder (or the parent of
     // a selected file, else the storage root).
     const res = await createStorageFile(targetDir)
@@ -166,6 +184,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
   const handleNewFolder = useCallback(async () => {
     setBusy(true)
     setActionError(null)
+    setActionWarning(null)
     const res = await createStorageFolder(targetDir)
     setBusy(false)
     if ('error' in res) {
@@ -224,6 +243,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
     if (selectedArray.length === 0) return
     setBusy(true)
     setActionError(null)
+    setActionWarning(null)
     const res = await deleteStorageEntries(selectedArray, t)
     setBusy(false)
     if (res.status === 'deleted') {
@@ -241,6 +261,102 @@ export function StoragePane({ pane }: PaneRendererProps) {
     if (singleSelected && !selectedNode?.isDir) handleOpen(singleSelected)
   }, [singleSelected, selectedNode, handleOpen])
 
+  // --- Upload (file picker + native OS-file drop, T1c-1) ---
+
+  // Ingest OS files into the current `targetDir`. Shared by the picker and the
+  // native drop. Reflects partial success in the inline banner (codex R1 F5) and
+  // distinguishes the T1c-4 guard outcomes by typed reason:
+  //   - a quota failure (store full) → red error banner (takes precedence);
+  //   - else if EVERY failure is too-large → amber warning naming the first file
+  //     + the cap in MB (a soft, recoverable rejection, not a hard error);
+  //   - else → the generic partial message (count + first failed file).
+  // All-success clears both banners.
+  const ingestFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return
+      setBusy(true)
+      setActionError(null)
+      setActionWarning(null)
+      const summary = await uploadFiles(targetDir, files)
+      setBusy(false)
+      const { failed } = summary
+      if (failed.length > 0) {
+        const quota = failed.find((f) => f.kind === 'quota')
+        const tooLarge = failed.filter((f) => f.kind === 'too-large')
+        if (quota) {
+          setActionError(t('editor.buffers.upload_quota', { name: quota.name }))
+        } else if (tooLarge.length === failed.length) {
+          const capMb = Math.round((tooLarge[0].cap ?? 0) / (1024 * 1024))
+          setActionWarning(
+            t('editor.buffers.upload_too_large', { name: tooLarge[0].name, cap: capMb }),
+          )
+        } else {
+          setActionError(
+            t('editor.buffers.upload_partial', {
+              uploaded: summary.uploaded.length,
+              failed: failed.length,
+              name: failed[0].name,
+            }),
+          )
+        }
+      }
+      refresh()
+    },
+    [targetDir, refresh, t],
+  )
+
+  const handleUploadClick = useCallback(() => {
+    uploadInputRef.current?.click()
+  }, [])
+
+  const handleUploadChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files ? Array.from(e.target.files) : []
+      // Clear the value so re-selecting the SAME file fires change again.
+      e.target.value = ''
+      await ingestFiles(files)
+    },
+    [ingestFiles],
+  )
+
+  // Native OS-file drag (decision 1). `preventDefault` on dragover is what makes
+  // the region a valid drop target; only act when the drag actually carries
+  // files so an internal dnd-kit node move passes straight through.
+  const handleNativeDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (e.dataTransfer?.types?.includes('Files')) e.preventDefault()
+  }, [])
+
+  const handleNativeDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      const dt = e.dataTransfer
+      // Not an OS-file drag (no `Files` type) → this is a dnd-kit internal node
+      // move; do NOT preventDefault, do NOT ingest — let dnd-kit's pointer-event
+      // flow own it.
+      if (!dt?.types?.includes('Files')) return
+      // It IS an OS-file drag — claim it so the browser never falls back to its
+      // default drop (navigating to / opening the dropped item). This covers
+      // dropping an OS FOLDER, which reports `types: ['Files']` but an EMPTY
+      // `files` list (codex R2 C3): without preventDefault the folder drop would
+      // leak to the browser default.
+      e.preventDefault()
+      const files = dt.files
+      if (!files || files.length === 0) return
+      void ingestFiles(Array.from(files))
+    },
+    [ingestFiles],
+  )
+
+  const handleDownload = useCallback(async () => {
+    // Single-file only (T1c-2): a folder is not downloadable, so guard here as
+    // well as disabling the toolbar button. The byte read + OS download happen
+    // in downloadStorageFile; surface any failure in the inline banner.
+    if (!singleSelected || selectedNode?.isDir) return
+    setActionError(null)
+    setActionWarning(null)
+    const res = await downloadStorageFile(singleSelected)
+    if ('error' in res) setActionError(res.error)
+  }, [singleSelected, selectedNode])
+
   // --- Drag-and-drop move (T1b-6b) ---
 
   // Mirror RegionManager: a 5px activation distance so a stationary
@@ -253,6 +369,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
       const move = computeMoveFromDragEnd(event.active, event.over)
       if (!move) return
       setActionError(null)
+      setActionWarning(null)
       const res = await moveStorageEntry(move.from, move.targetDir)
       if ('ok' in res) {
         // Keep the moved entry selected at its new home so a follow-up action
@@ -277,6 +394,9 @@ export function StoragePane({ pane }: PaneRendererProps) {
   // Open is only valid for a single FILE selection (codex B3): a folder is not
   // openable, so the toolbar Open button disables when a folder is selected.
   const canOpen = singleSelected !== null && !selectedNode?.isDir
+  // Download is single-file only (T1c-2): a folder is not downloadable, same
+  // guard as Open.
+  const canDownload = canOpen
   const toolbarBusy = busy || loading
 
   return (
@@ -306,6 +426,24 @@ export function StoragePane({ pane }: PaneRendererProps) {
           <FolderPlus size={14} />
           {t('editor.buffers.new_folder')}
         </button>
+        <button
+          data-testid="toolbar-upload"
+          onClick={handleUploadClick}
+          disabled={toolbarBusy}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          title={t('editor.buffers.upload')}
+        >
+          <UploadSimple size={14} />
+          {t('editor.buffers.upload')}
+        </button>
+        <input
+          ref={uploadInputRef}
+          type="file"
+          multiple
+          data-testid="upload-input"
+          className="hidden"
+          onChange={handleUploadChange}
+        />
         <button
           data-testid="toolbar-rename"
           ref={renameAnchorRef}
@@ -337,6 +475,16 @@ export function StoragePane({ pane }: PaneRendererProps) {
           <FolderOpen size={14} />
           {t('editor.buffers.open')}
         </button>
+        <button
+          data-testid="toolbar-download"
+          onClick={handleDownload}
+          disabled={!canDownload || toolbarBusy}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          title={t('editor.buffers.download')}
+        >
+          <DownloadSimple size={14} />
+          {t('editor.buffers.download')}
+        </button>
       </div>
 
       {/* Body: tree (left) + placeholder Backups sidebar (right). The tree is a
@@ -344,8 +492,17 @@ export function StoragePane({ pane }: PaneRendererProps) {
           drop targets, and a drop calls `moveStorageEntry` via `handleDragEnd`. */}
       <div className="flex-1 flex overflow-hidden">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <StorageRegionDropZone targetDir={targetDir}>
+          <StorageRegionDropZone
+            targetDir={targetDir}
+            onNativeDragOver={handleNativeDragOver}
+            onNativeDrop={handleNativeDrop}
+          >
             {error && <div className="p-4 text-xs text-red-400">{error}</div>}
+            {!error && actionWarning && (
+              <div data-testid="storage-warning" className="p-4 text-xs text-amber-400">
+                {actionWarning}
+              </div>
+            )}
             {!error && !hasAny && (
               <div className="p-8 flex flex-col items-center justify-center text-text-muted">
                 <Stack size={32} className="mb-2 opacity-50" />

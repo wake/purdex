@@ -223,6 +223,37 @@ describe('SyncSection subsection routing', () => {
     fireEvent.click(screen.getByRole('button', { name: /history/i }))
     expect(fn).toHaveBeenCalledWith('history')
   })
+
+  // Regression (Phase 1c T2-3): Export All still downloads through the shared
+  // `triggerDownload` util after it was lifted out of this component into
+  // `lib/download-file.ts`. jsdom implements neither createObjectURL nor
+  // revokeObjectURL, so we stub them and assert the anchor-download dance fires
+  // unchanged (object URL → <a download> → click → revoke).
+  it('Export All triggers a download via the shared triggerDownload util', () => {
+    useSyncStore.getState().setActiveProvider('file')
+
+    const createObjectURL = vi.fn(() => 'blob:sync-export')
+    const revokeObjectURL = vi.fn()
+    ;(URL as unknown as { createObjectURL: unknown }).createObjectURL = createObjectURL
+    ;(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = revokeObjectURL
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {})
+    const createElementSpy = vi.spyOn(document, 'createElement')
+
+    render(<SyncSection />)
+    fireEvent.click(screen.getByRole('button', { name: /Export All|匯出全部/i }))
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    const anchor = createElementSpy.mock.results.find(
+      (r) => r.value instanceof HTMLAnchorElement,
+    )?.value as HTMLAnchorElement
+    expect(anchor).toBeInstanceOf(HTMLAnchorElement)
+    // Sync export keeps its `.purdex-sync` filename suffix.
+    expect(anchor.download).toMatch(/\.purdex-sync$/)
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:sync-export')
+  })
 })
 
 // ---------------------------------------------------------------------------

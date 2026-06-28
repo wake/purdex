@@ -16,15 +16,17 @@
  * The recursive move data layer (`moveStorageEntry`, T1b-6a) reuses that same
  * single-rename + `remapPanesUnder` path; the drag-and-drop wiring is T1b-6b.
  */
-import { getFsBackend, supportsMkdirUnique } from '../../../lib/fs-backend'
+import { getFsBackend, supportsCreateUnique, supportsMkdirUnique } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
+import { triggerDownload } from '../../../lib/download-file'
+import { isQuotaError } from '../../../lib/quota'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { scanPaneTree } from '../../../lib/pane-tree'
 import { isFilePaneContent } from '../../../lib/pane-utils'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { createMetadata } from '../../../lib/editor-language'
-import { STORAGE_ROOT, basename, join, parentOf } from '../../../lib/storage-paths'
+import { STORAGE_ROOT, basename, join, parentOf, isUnderRoot } from '../../../lib/storage-paths'
 import type { FileSource } from '../../../types/fs'
 import type { Pane, Tab } from '../../../types/tab'
 
@@ -122,6 +124,206 @@ export async function createStorageFolder(
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/**
+ * Download (export) a single stored file to the OS via the shared
+ * `triggerDownload` util (Phase 1c T1c-2). Reads the exact bytes from the
+ * backend and hands them off as a `Blob` named by the file's basename, so the
+ * saved file is byte-identical to what is stored. A missing backend, a
+ * directory path, or a missing file all surface as `{ error }` (never a silent
+ * no-op) and never reach `triggerDownload`. Folder downloads are out of scope in
+ * 1c — the caller disables the button for a folder selection.
+ */
+export async function downloadStorageFile(
+  path: string,
+): Promise<{ ok: true } | { error: string }> {
+  const backend = getFsBackend({ type: 'inapp' })
+  if (!backend) return { error: 'InApp backend unavailable' }
+  try {
+    const bytes = await backend.read(path)
+    // Re-wrap into a fresh ArrayBuffer-backed view so the Blob part is a plain
+    // `Uint8Array<ArrayBuffer>` (the backend's `Uint8Array<ArrayBufferLike>`
+    // does not satisfy `BlobPart` under strict TS) — mirrors Image/PdfPreview.
+    triggerDownload(new Blob([new Uint8Array(bytes)]), basename(path))
+    return { ok: true }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Split a file's basename into `(baseName, ext)` for `createUnique`, matching
+ * the path-forming rule there (`ext === ''` → no trailing dot). The extension is
+ * everything after the LAST dot; an ext-less name (`README`) and a dotfile
+ * (`.env`, a leading dot at index 0) both yield `ext = ''` so the whole name is
+ * preserved. `archive.tar.gz` → (`archive.tar`, `gz`).
+ *
+ * A name whose LAST dot is the final character (`foo.`) keeps the trailing dot
+ * as part of the basename (`{ baseName: 'foo.', ext: '' }`) rather than silently
+ * collapsing to `foo` (C1) — the stored name must never be rewritten to a
+ * different one behind the user's back.
+ */
+function splitFileName(fileName: string): { baseName: string; ext: string } {
+  const dot = fileName.lastIndexOf('.')
+  if (dot <= 0 || dot === fileName.length - 1) return { baseName: fileName, ext: '' }
+  return { baseName: fileName.slice(0, dot), ext: fileName.slice(dot + 1) }
+}
+
+/**
+ * Sanitise an OS-provided `file.name` into a safe single-segment basename, or
+ * `null` when the name cannot yield a valid entry (C1 — path-traversal / hidden
+ * data). The browser File API hands back whatever the OS reported, which for a
+ * dropped folder or a crafted archive entry can contain path separators
+ * (`sub/evil.txt`, `..\\x`), a traversal token (`..`), control characters, or be
+ * blank — any of which, fed straight into `createUnique` + `join`, could write
+ * OUTSIDE the selected dir or to a key the tree never surfaces.
+ *
+ * Steps: take the BASENAME only (drop every `/`- or `\\`-delimited directory
+ * component, so an OS folder structure is flattened into the target dir rather
+ * than recreated), strip control characters, trim surrounding whitespace, then
+ * reject an empty or dot-only result (`''`, `.`, `..`, `...`).
+ */
+function sanitizeUploadName(rawName: string): string | null {
+  // Basename only: a folder structure in the dropped name is flattened, and a
+  // `../` traversal loses its separators so it can never escape `targetDir`.
+  const base = rawName.split(/[/\\]/).pop() ?? ''
+  // Drop NUL + other C0 control characters that have no place in a file name.
+  // eslint-disable-next-line no-control-regex -- intentional C0 control-char strip
+  const stripped = base.replace(/[\u0000-\u001f]/g, '').trim()
+  // Empty (incl. a pure-whitespace or pure-control name) or a dot-only token
+  // (`.` / `..` / `...`) is not a usable file name.
+  if (stripped === '' || /^\.+$/.test(stripped)) return null
+  return stripped
+}
+
+/**
+ * Soft upper bound on a single uploaded file (~25 MB, T1c-4 decision 5). A file
+ * over the cap is rejected BEFORE any write (no `createUnique`, no byte read into
+ * IDB), surfacing as a `tooLarge` result rather than letting a large blob bloat
+ * the In-App store. The cap is "soft": it is enforced per-file at ingest, not a
+ * hard quota — the genuine IDB quota is caught separately at write time.
+ */
+export const SOFT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+/**
+ * Outcome of a single `uploadFile`, a TYPED discriminated union (codex R2 C4):
+ * the failure variants carry their own `kind` so `uploadFiles` and the banner
+ * branch on a tag rather than string-matching a sentinel message. A `too-large`
+ * / `quota` failure already names the (sanitised) file; a generic `error`
+ * carries its raw message.
+ */
+export type UploadResult =
+  | { path: string }
+  | { kind: 'too-large'; name: string; cap: number }
+  | { kind: 'quota'; name: string }
+  | { kind: 'error'; name: string; message: string }
+
+/**
+ * Ingest a single OS file into `targetDir` (Phase 1c; T1c-1 happy path widened
+ * by T1c-4, which owns ALL upload guards). Order of guards:
+ *   1. Missing/incapable backend → `{ kind: 'error' }` (never a silent no-op).
+ *   2. **Sanitise `file.name`** (C1): flatten to a basename, strip control
+ *      characters, reject empty / dot-only / traversal names — so an OS-provided
+ *      name carrying `/`, `\\`, or `..` can never write outside `targetDir` or to
+ *      an invisible key. A rejected name → `{ kind: 'error' }`.
+ *   3. **Size cap before any write** (decision 5): `file.size > SOFT_MAX_UPLOAD_BYTES`
+ *      → `{ kind: 'too-large' }`. `createUnique` is NOT called and the bytes are
+ *      NOT read — the over-cap file never touches the store.
+ *   4. Otherwise parse `(baseName, ext)`, defensively re-check the candidate path
+ *      stays under the storage root, read bytes, and reserve a unique key via the
+ *      atomic `createUnique(dir, base, ext, bytes)` — unique-name reservation AND
+ *      byte write on one `add` (no overwrite race; `-N` suffix on collision,
+ *      decision 4). A thrown quota exhaustion is caught via the shared
+ *      `isQuotaError` and surfaced as `{ kind: 'quota' }` (never silent); any
+ *      other throw surfaces as `{ kind: 'error' }`. Any file type is accepted.
+ */
+export async function uploadFile(targetDir: string, file: File): Promise<UploadResult> {
+  const backend = getFsBackend({ type: 'inapp' })
+  // Narrow to the unique-create capability (codex H1) — it lives on the optional
+  // `SupportsUniqueCreate`, not the base `FsBackend`.
+  if (!supportsCreateUnique(backend)) {
+    return { kind: 'error', name: file.name, message: 'InApp backend unavailable' }
+  }
+  // C1 (security / data-loss): sanitise the OS-provided name BEFORE it forms a
+  // key — a name with path separators or a traversal token must never escape the
+  // selected dir or land on a key the tree cannot show.
+  const safeName = sanitizeUploadName(file.name)
+  if (safeName == null) {
+    return { kind: 'error', name: file.name, message: `Invalid file name: ${file.name}` }
+  }
+  // Size cap is checked BEFORE the read+write (decision 5): an over-cap file is
+  // rejected without ever reading its bytes or reserving a name.
+  if (file.size > SOFT_MAX_UPLOAD_BYTES) {
+    return { kind: 'too-large', name: safeName, cap: SOFT_MAX_UPLOAD_BYTES }
+  }
+  const { baseName, ext } = splitFileName(safeName)
+  // Defense-in-depth (C1): every `createUnique` candidate lives directly under
+  // `targetDir`, so verifying the un-suffixed path stays under the storage root
+  // catches a non-root `targetDir` before any byte is read or written. `join`
+  // keeps `..`/`.` as literal segments and `isUnderRoot` is a prefix check, so a
+  // `targetDir` carrying an un-normalized traversal token (e.g. `/buffer/..`)
+  // could otherwise slip a `/buffer/../x` candidate past the root guard — reject
+  // any traversal segment explicitly (codex 1c fix-wave confirm, C1b).
+  const candidate = join(targetDir, ext === '' ? baseName : `${baseName}.${ext}`)
+  const hasTraversal = candidate.split('/').some((seg) => seg === '..' || seg === '.')
+  if (hasTraversal || !isUnderRoot(candidate)) {
+    return { kind: 'error', name: file.name, message: `Invalid file name: ${file.name}` }
+  }
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const path = await backend.createUnique(targetDir, baseName, ext, bytes)
+    return { path }
+  } catch (err) {
+    // A full store throws a quota DOMException at write time; tag it `quota` so
+    // the caller can show a distinct "storage full" banner.
+    if (isQuotaError(err)) return { kind: 'quota', name: safeName }
+    return { kind: 'error', name: safeName, message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Why a single upload failed — lets the UI pick the right banner (T1c-4). */
+export type UploadFailureKind = 'too-large' | 'quota' | 'other'
+
+export interface UploadFailure {
+  name: string
+  reason: string
+  kind: UploadFailureKind
+  /** The soft cap in bytes — present only for `kind: 'too-large'`. */
+  cap?: number
+}
+
+export interface UploadSummary {
+  uploaded: string[]
+  failed: UploadFailure[]
+}
+
+/**
+ * Ingest multiple OS files into `targetDir`, reporting PARTIAL success (codex R1
+ * F5): every uploaded path lands in `uploaded`, and each failure lands in
+ * `failed` with a TYPED reason (T1c-4) so the caller can render a too-large
+ * warning, a quota error, or a generic partial message — all in one banner
+ * rather than aborting on the first error. Files are processed sequentially so
+ * the atomic `-N` suffixing stays deterministic for same-named drops.
+ */
+export async function uploadFiles(targetDir: string, files: File[]): Promise<UploadSummary> {
+  const uploaded: string[] = []
+  const failed: UploadFailure[] = []
+  for (const file of files) {
+    const res = await uploadFile(targetDir, file)
+    if ('path' in res) {
+      uploaded.push(res.path)
+    } else if (res.kind === 'too-large') {
+      // Read the typed kind straight off the result (codex R2 C4) — no string
+      // sentinel round-trip.
+      failed.push({ name: res.name, reason: 'too-large', kind: 'too-large', cap: res.cap })
+    } else if (res.kind === 'quota') {
+      failed.push({ name: res.name, reason: 'quota', kind: 'quota' })
+    } else {
+      failed.push({ name: res.name, reason: res.message, kind: 'other' })
+    }
+  }
+  return { uploaded, failed }
 }
 
 export type RenameOutcome =

@@ -376,6 +376,54 @@ describe('InAppBackend.createUnique (atomic eager namer)', () => {
   })
 })
 
+// T1c-1 — createUnique generalized: optional initial `content` written on the
+// same atomic add(), arbitrary `ext` (widened from 'md'|'txt'), and ext-less
+// names with NO trailing dot. The 1b 3-arg callers stay unaffected (empty file).
+describe('InAppBackend.createUnique (content + arbitrary extension, Phase 1c T1c-1)', () => {
+  let backend: InAppBackend
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    backend = new InAppBackend()
+  })
+
+  it('writes the supplied bytes into the reserved file (byte-identical)', async () => {
+    const bytes = new Uint8Array([0x00, 0x10, 0xff, 0x42, 0x7a])
+    const path = await backend.createUnique('/buffer', 'photo', 'png', bytes)
+    expect(path).toBe('/buffer/photo.png')
+    expect(Array.from(await backend.read(path))).toEqual(Array.from(bytes))
+  })
+
+  it('accepts arbitrary extensions (pdf / docx)', async () => {
+    const p1 = await backend.createUnique('/buffer', 'doc', 'pdf', new Uint8Array([1]))
+    const p2 = await backend.createUnique('/buffer', 'sheet', 'docx', new Uint8Array([2]))
+    expect(p1).toBe('/buffer/doc.pdf')
+    expect(p2).toBe('/buffer/sheet.docx')
+  })
+
+  it('forms an ext-less name (README) with NO trailing dot', async () => {
+    const path = await backend.createUnique('/buffer', 'README', '', new Uint8Array([5]))
+    expect(path).toBe('/buffer/README')
+    expect((await backend.stat(path)).isFile).toBe(true)
+    expect(Array.from(await backend.read(path))).toEqual([5])
+  })
+
+  it('collision still increments the -N suffix and leaves the original content intact', async () => {
+    await backend.createUnique('/buffer', 'a', 'bin', new Uint8Array([1]))
+    const path = await backend.createUnique('/buffer', 'a', 'bin', new Uint8Array([2, 2]))
+    expect(path).toBe('/buffer/a-1.bin')
+    expect(Array.from(await backend.read('/buffer/a.bin'))).toEqual([1])
+    expect(Array.from(await backend.read('/buffer/a-1.bin'))).toEqual([2, 2])
+  })
+
+  it('a 1b 3-arg call (no content) still reserves an EMPTY file', async () => {
+    const path = await backend.createUnique('/buffer', 'Untitled', 'md')
+    expect(path).toBe('/buffer/Untitled.md')
+    expect((await backend.read(path)).byteLength).toBe(0)
+  })
+})
+
 // T1b-3 — mkdirUnique: atomic eager reservation of a unique DIRECTORY via the
 // same IDB store.add serialization point as createUnique. Folder candidates use
 // a SPACE-separated suffix ("New Folder", "New Folder 1", …), unlike files'

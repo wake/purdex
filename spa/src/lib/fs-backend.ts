@@ -25,14 +25,27 @@ export interface FsBackend {
  */
 export interface SupportsUniqueCreate {
   /**
-   * Atomically reserve a unique empty file under `dir`. Loops candidate names
+   * Atomically reserve a unique file under `dir`. Loops candidate names
    * `<baseName>`, `<baseName>-1`, … forming each path as `dir/<name>.<ext>`
    * (`ext` is bare — no leading dot) and reserves the first free key in a way
    * that is safe against concurrent callers (the single serialization point
    * that fixes the double-new-file shared-key race, #854). Returns the reserved
    * path.
+   *
+   * `ext` is a plain string (Phase 1c widened it from `'md' | 'txt'`) so OS-file
+   * upload can reserve arbitrary extensions (`png` / `pdf` / `docx` / …). An
+   * empty `ext` (an ext-less name like `README`) forms the path WITHOUT a
+   * trailing dot. The optional `content` seeds the reserved file's bytes on the
+   * same atomic `add` — so upload's unique-name reservation AND its byte write
+   * happen as one operation (no overwrite race). It defaults to empty, so the 1b
+   * 3-arg callers (which mint empty `Untitled[-N]` files) are unaffected.
    */
-  createUnique(dir: string, baseName: string, ext: 'md' | 'txt'): Promise<string>
+  createUnique(
+    dir: string,
+    baseName: string,
+    ext: string,
+    content?: Uint8Array,
+  ): Promise<string>
   /**
    * Atomically reserve a unique empty DIRECTORY under `dir`. Loops candidate
    * names `<baseName>`, `<baseName> 1`, … (space-separated suffix, no extension)

@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Mock } from 'vitest'
 import { useState, type ReactNode } from 'react'
-import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act, createEvent } from '@testing-library/react'
 import { StoragePane } from './StoragePane'
+import { SOFT_MAX_UPLOAD_BYTES } from './storage-actions'
 import { openInAppFile } from '../../../lib/open-in-app-file'
+import { triggerDownload } from '../../../lib/download-file'
 import type { Pane, Tab } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 import type { FileEntry, FileStat, FileSource } from '../../../types/fs'
@@ -74,6 +76,14 @@ vi.mock('../../../lib/open-in-app-file', () => ({
   openInAppFile: vi.fn(() => 'opened-tab'),
 }))
 
+// The Download toolbar button routes through the real `downloadStorageFile`
+// (which reads via the mocked backend) but the final OS download is the shared
+// `triggerDownload` util — stub it so jsdom's missing createObjectURL /
+// navigation never fires, and so we can assert the download was dispatched.
+vi.mock('../../../lib/download-file', () => ({
+  triggerDownload: vi.fn(),
+}))
+
 // Workspace store: StoragePane.resolveWorkspaceId maps the owning tab → its
 // workspace (R2-2 — no activeWorkspaceId guess). The Storage pane lives in
 // `storageTab` (seeded into the tab store below), which this mock maps to ws1;
@@ -87,14 +97,20 @@ vi.mock('../../../features/workspace/store', () => ({
   },
 }))
 
+// i18n is a hoisted spy so the upload banner tests (C6) can assert the
+// interpolation PARAMS (name / cap / counts), not just the key. The spy still
+// returns the key with any `{{var}}` placeholders substituted, so the existing
+// `getByText('editor.buffers.…')` assertions (keys carry no placeholders) hold.
+const { tSpy } = vi.hoisted(() => ({
+  tSpy: vi.fn((key: string, params?: Record<string, string | number>): string => {
+    if (!params) return key
+    return key.replace(/\{\{(\w+)\}\}/g, (_, k) => String(params[k] ?? ''))
+  }),
+}))
+
 vi.mock('../../../stores/useI18nStore', () => ({
   useI18nStore: (selector: (s: { t: (k: string, p?: Record<string, string | number>) => string }) => unknown) =>
-    selector({
-      t: (key: string, params?: Record<string, string | number>): string => {
-        if (!params) return key
-        return key.replace(/\{\{(\w+)\}\}/g, (_, k) => String(params[k] ?? ''))
-      },
-    }),
+    selector({ t: tSpy }),
 }))
 
 const setPaneContentSpy = vi.fn()
@@ -267,6 +283,8 @@ beforeEach(() => {
   renameEditorPanesSpy.mockReset()
   ;(openInAppFile as unknown as Mock).mockReset()
   ;(openInAppFile as unknown as Mock).mockReturnValue('opened-tab')
+  ;(triggerDownload as unknown as Mock).mockReset()
+  tSpy.mockClear()
 
   setPaneContentSpy.mockImplementation((tabId: string, paneId: string) => {
     eventLog.push(`setPaneContent:${tabId}:${paneId}`)
@@ -1599,6 +1617,58 @@ describe('StoragePane', () => {
     expect(openBtn.disabled).toBe(false)
   })
 
+  // --- Download / export a stored file (T1c-2) ---
+
+  it('T2-2a: selecting a file enables Download and clicking dispatches downloadStorageFile', async () => {
+    const bytes = new TextEncoder().encode('hello world')
+    mockBackend.list.mockResolvedValue([
+      { name: 'note.md', isDir: false, size: bytes.byteLength },
+    ] as FileEntry[])
+    mockBackend.read.mockResolvedValue(bytes)
+    render(<StoragePane pane={makePane()} isActive />)
+    const row = await screen.findByTestId('buffer-row')
+    const downloadBtn = screen.getByTestId('toolbar-download') as HTMLButtonElement
+    // No selection → disabled.
+    expect(downloadBtn.disabled).toBe(true)
+    fireEvent.click(row) // select the file
+    expect(downloadBtn.disabled).toBe(false)
+    fireEvent.click(downloadBtn)
+    await waitFor(() => {
+      // downloadStorageFile read the file's bytes …
+      expect(mockBackend.read).toHaveBeenCalledWith('/buffer/note.md')
+    })
+    await waitFor(() => {
+      // … and handed them to the shared download util as a Blob named by basename.
+      expect(triggerDownload).toHaveBeenCalledTimes(1)
+    })
+    const [blob, filename] = (triggerDownload as unknown as Mock).mock.calls[0]
+    expect(blob).toBeInstanceOf(Blob)
+    expect(filename).toBe('note.md')
+  })
+
+  it('T2-2b: selecting a folder disables Download and clicking never downloads', async () => {
+    mockBackend.list = pathAwareList(
+      new Map([
+        ['/buffer/dir', { isDir: true, size: 0 }],
+        ['/buffer/note.md', { isDir: false, size: 3 }],
+      ]),
+    )
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findAllByTestId('buffer-row')
+    const rowByPath = (p: string) =>
+      screen.getAllByTestId('buffer-row').find((r) => r.getAttribute('data-path') === p)!
+    const downloadBtn = screen.getByTestId('toolbar-download') as HTMLButtonElement
+    // Folder selected → Download disabled, and a click never reads / downloads.
+    fireEvent.click(rowByPath('/buffer/dir'))
+    expect(downloadBtn.disabled).toBe(true)
+    fireEvent.click(downloadBtn)
+    expect(triggerDownload).not.toHaveBeenCalled()
+    expect(mockBackend.read).not.toHaveBeenCalledWith('/buffer/dir')
+    // A file selection re-enables Download.
+    fireEvent.click(rowByPath('/buffer/note.md'))
+    expect(downloadBtn.disabled).toBe(false)
+  })
+
   // --- Selection model: plain click never toggles off (codex B5) ---
 
   it('B5: a second plain click keeps the row selected (no toggle-off)', async () => {
@@ -1681,5 +1751,216 @@ describe('StoragePane', () => {
     )
     // No two reservations collide on the same key.
     expect(new Set(reserved).size).toBe(reserved.length)
+  })
+})
+
+// --- T1c-1: upload (file picker + native OS-file drop) -----------------------
+//
+// `openInAppFile` is mocked here (its kind dispatch — png→image-preview /
+// pdf→pdf-preview / docx→download — is proven in lib/open-in-app-file.test.ts).
+// These cases assert the StoragePane wiring: the picker / native drop ingests
+// files via the atomic `createUnique(dir, base, ext, bytes)`, the file appears
+// in the tree after refresh, opening routes through `openInAppFile`, and a
+// no-files drop never touches upload (dnd-kit node move untouched).
+
+describe('StoragePane — upload via picker + native OS-file drop (T1c-1)', () => {
+  /** A `createUnique` that records bytes and materializes the path in `paths`. */
+  function wireUploadBackend() {
+    const paths = new Map<string, { isDir: boolean; size: number }>()
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.createUnique = vi.fn(async (dir: string, base: string, ext: string) => {
+      const fileName = ext === '' ? base : `${base}.${ext}`
+      const path = `${dir}/${fileName}`
+      paths.set(path, { isDir: false, size: 1 })
+      return path
+    })
+    return paths
+  }
+
+  async function uploadViaPicker(files: File[]) {
+    const input = screen.getByTestId('upload-input') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(input, { target: { files } })
+    })
+  }
+
+  it('T1-1: uploading an image via the picker stores its bytes (png ext), shows it in the tree, and opening routes through openInAppFile', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    await uploadViaPicker([new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' })])
+
+    await waitFor(() => expect(mockBackend.createUnique).toHaveBeenCalled())
+    const [dir, base, ext, bytes] = (mockBackend.createUnique as Mock).mock.calls[0]
+    expect(dir).toBe('/buffer')
+    expect(base).toBe('photo')
+    expect(ext).toBe('png')
+    expect(Array.from(bytes as Uint8Array)).toEqual([1, 2, 3])
+
+    const row = await screen.findByTestId('buffer-row')
+    expect(row.getAttribute('data-path')).toBe('/buffer/photo.png')
+    fireEvent.doubleClick(row)
+    await waitFor(() => expect(openInAppFile).toHaveBeenCalledWith('/buffer/photo.png', 'ws1'))
+  })
+
+  it('T1-1b: uploading a .pdf stores it and opening routes through openInAppFile (→ pdf-preview)', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    await uploadViaPicker([new File([new Uint8Array([8])], 'doc.pdf', { type: 'application/pdf' })])
+
+    await waitFor(() => expect(mockBackend.createUnique).toHaveBeenCalled())
+    expect((mockBackend.createUnique as Mock).mock.calls[0][2]).toBe('pdf')
+    const row = await screen.findByTestId('buffer-row')
+    expect(row.getAttribute('data-path')).toBe('/buffer/doc.pdf')
+    fireEvent.doubleClick(row)
+    await waitFor(() => expect(openInAppFile).toHaveBeenCalledWith('/buffer/doc.pdf', 'ws1'))
+  })
+
+  it('T1-2: uploading a .docx stores it and opening routes through openInAppFile (→ download)', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    await uploadViaPicker([new File([new Uint8Array([5])], 'sheet.docx')])
+
+    await waitFor(() => expect(mockBackend.createUnique).toHaveBeenCalled())
+    expect((mockBackend.createUnique as Mock).mock.calls[0][2]).toBe('docx')
+    const row = await screen.findByTestId('buffer-row')
+    expect(row.getAttribute('data-path')).toBe('/buffer/sheet.docx')
+    fireEvent.doubleClick(row)
+    await waitFor(() => expect(openInAppFile).toHaveBeenCalledWith('/buffer/sheet.docx', 'ws1'))
+  })
+
+  it('T1-4: a native drop carrying dataTransfer.files ingests them', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    const region = screen.getByTestId('storage-tree-region')
+    await act(async () => {
+      fireEvent.drop(region, {
+        dataTransfer: { files: [new File([new Uint8Array([9])], 'dropped.txt')], types: ['Files'] },
+      })
+    })
+
+    await waitFor(() => expect(mockBackend.createUnique).toHaveBeenCalled())
+    const [dir, base, ext] = (mockBackend.createUnique as Mock).mock.calls[0]
+    expect(dir).toBe('/buffer')
+    expect(base).toBe('dropped')
+    expect(ext).toBe('txt')
+    const row = await screen.findByTestId('buffer-row')
+    expect(row.getAttribute('data-path')).toBe('/buffer/dropped.txt')
+  })
+
+  it('T1-4: a native drop with NO files is ignored (dnd-kit node move untouched)', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    const region = screen.getByTestId('storage-tree-region')
+    fireEvent.drop(region, { dataTransfer: { files: [], types: [] } })
+    // Let any stray microtask settle.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(mockBackend.createUnique).not.toHaveBeenCalled()
+  })
+
+  it('C3: dropping an OS FOLDER (types:[Files] but files:[]) is preventDefaulted and not ingested', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    const region = screen.getByTestId('storage-tree-region')
+    // An OS folder drag reports the `Files` type but yields an EMPTY files list.
+    // The handler must claim it (preventDefault) so it never falls back to the
+    // browser default — yet must NOT try to ingest a zero-file drop.
+    const dropEvent = createEvent.drop(region, {
+      dataTransfer: { files: [], types: ['Files'] },
+    })
+    await act(async () => {
+      fireEvent(region, dropEvent)
+    })
+    expect(dropEvent.defaultPrevented).toBe(true)
+    expect(mockBackend.createUnique).not.toHaveBeenCalled()
+  })
+
+  it('T1-6: a partial failure surfaces an inline banner naming the first failed file', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>()
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.createUnique = vi.fn(async (dir: string, base: string, ext: string) => {
+      if (base === 'bad') throw new Error('boom')
+      const fileName = ext === '' ? base : `${base}.${ext}`
+      const path = `${dir}/${fileName}`
+      paths.set(path, { isDir: false, size: 1 })
+      return path
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    await uploadViaPicker([
+      new File([new Uint8Array([1])], 'ok.txt'),
+      new File([new Uint8Array([2])], 'bad.bin'),
+    ])
+
+    // Banner reflects partial success. C6: assert the i18n call carries the
+    // right interpolation params (uploaded/failed counts + the first failed
+    // name), not just the key.
+    await waitFor(() => expect(screen.getByText('editor.buffers.upload_partial')).toBeTruthy())
+    expect(tSpy).toHaveBeenCalledWith('editor.buffers.upload_partial', {
+      uploaded: 1,
+      failed: 1,
+      name: 'bad.bin',
+    })
+    const calls = (mockBackend.createUnique as Mock).mock.calls.map((c) => c[1])
+    expect(calls).toEqual(['ok', 'bad'])
+  })
+
+  // --- T1c-4: size cap warning + quota error banner -------------------------
+
+  /** A File whose `size` is forced past the cap WITHOUT allocating the bytes. */
+  function oversizedFile(name: string, size: number): File {
+    const file = new File([new Uint8Array([0])], name)
+    Object.defineProperty(file, 'size', { value: size })
+    return file
+  }
+
+  it('T4-1: an over-cap file shows the amber too-large WARNING and never writes', async () => {
+    wireUploadBackend()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    await uploadViaPicker([oversizedFile('huge.bin', SOFT_MAX_UPLOAD_BYTES + 1)])
+
+    const warning = await screen.findByTestId('storage-warning')
+    expect(warning.textContent).toBe('editor.buffers.upload_too_large')
+    expect(warning.className).toContain('text-amber-400')
+    // C6: the warning interpolates the file name + the cap in MB (25 = 25 MiB).
+    expect(tSpy).toHaveBeenCalledWith('editor.buffers.upload_too_large', {
+      name: 'huge.bin',
+      cap: 25,
+    })
+    expect(mockBackend.createUnique).not.toHaveBeenCalled()
+  })
+
+  it('T4-2: a quota write failure shows the red quota ERROR banner (not silent)', async () => {
+    const paths = new Map<string, { isDir: boolean; size: number }>()
+    mockBackend.list = pathAwareList(paths)
+    mockBackend.createUnique = vi.fn(async () => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('editor.buffers.empty')
+
+    await uploadViaPicker([new File([new Uint8Array([1])], 'x.txt')])
+
+    const banner = await screen.findByText('editor.buffers.upload_quota')
+    expect(banner.className).toContain('text-red-400')
+    // C6: the quota error names the file that could not be saved.
+    expect(tSpy).toHaveBeenCalledWith('editor.buffers.upload_quota', { name: 'x.txt' })
+    expect(screen.queryByTestId('storage-warning')).toBeNull()
   })
 })
