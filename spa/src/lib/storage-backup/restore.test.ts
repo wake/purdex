@@ -114,13 +114,13 @@ describe('restoreSnapshot', () => {
     expect(dec(await backend.read('/buffer/a.txt'))).toBe('orig')
   })
 
-  it('aborts before apply if the local /buffer tree changes during restore (no silent overwrite)', async () => {
+  it('aborts (no overwrite) when a concurrent /buffer write lands during restore', async () => {
     // A concurrent local write (e.g. another pane autosave) lands AFTER the
-    // baseline + safety snapshot but BEFORE apply. It is not in the safety
-    // snapshot, so restore must abort rather than wipe it (codex 2c-1 R2 Critical).
+    // revision baseline + safety snapshot but BEFORE apply. It bumps the tree
+    // revision, so replaceTree's in-txn revision guard aborts the wipe rather
+    // than silently overwriting it (codex 2c-1 R3 Critical, atomic guard).
     await backend.write('/buffer/a.txt', enc('orig'))
     const { detail, blobs } = await makeSnapshot({ 'a.txt': 'restored' })
-    const replaceSpy = vi.spyOn(backend, 'replaceTree')
 
     await expect(
       restoreSnapshot({
@@ -130,14 +130,13 @@ describe('restoreSnapshot', () => {
         findConflicts: () => [],
         preRestore: vi.fn().mockResolvedValue(50),
         getSnapshot: vi.fn(async () => {
-          await backend.write('/buffer/new.txt', enc('concurrent'))
+          await backend.write('/buffer/new.txt', enc('concurrent')) // bumps revision
           return detail
         }),
         getBlob: vi.fn(async (_h: string, hash: string) => blobs.get(hash)!),
       }),
-    ).rejects.toThrow(/changed during restore/i)
+    ).rejects.toThrow(/tree changed during restore/i)
 
-    expect(replaceSpy).not.toHaveBeenCalled()
     // Both the original and the concurrent write survive — tree never wiped.
     expect(dec(await backend.read('/buffer/a.txt'))).toBe('orig')
     expect(dec(await backend.read('/buffer/new.txt'))).toBe('concurrent')

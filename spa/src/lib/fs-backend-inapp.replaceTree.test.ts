@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { InAppBackend } from './fs-backend-inapp'
 import { closeAllIDB } from './storage/idb'
-import { supportsReplaceTree, type ReplaceEntry } from './fs-backend'
+import { supportsReplaceTree, TreeRevisionMismatchError, type ReplaceEntry } from './fs-backend'
 
 function deleteInappDB(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -126,5 +126,47 @@ describe('InAppBackend.replaceTree', () => {
     }
     // Nothing mutated by any rejected call.
     expect(dec(await backend.read('/buffer/keep.txt'))).toBe('keep')
+  })
+
+  it('bumps a monotonic revision on each mutation, exposed via getRevision', async () => {
+    expect(await backend.getRevision()).toBe(0)
+    await backend.write('/buffer/a.txt', enc('a'))
+    const r1 = await backend.getRevision()
+    expect(r1).toBeGreaterThan(0)
+    await backend.mkdir('/buffer/d')
+    const r2 = await backend.getRevision()
+    expect(r2).toBeGreaterThan(r1)
+    await backend.delete('/buffer/a.txt')
+    expect(await backend.getRevision()).toBeGreaterThan(r2)
+  })
+
+  it('aborts replaceTree with TreeRevisionMismatchError when expectedRevision is stale (tree intact)', async () => {
+    await backend.write('/buffer/a.txt', enc('orig'))
+    const stale = await backend.getRevision()
+    await backend.write('/buffer/b.txt', enc('concurrent')) // advances the revision
+
+    await expect(
+      backend.replaceTree(
+        '/buffer',
+        [{ relPath: 'a.txt', isDir: false, bytes: enc('restored') }],
+        stale,
+      ),
+    ).rejects.toBeInstanceOf(TreeRevisionMismatchError)
+
+    // The wipe never happened — both files survive with their bytes.
+    expect(dec(await backend.read('/buffer/a.txt'))).toBe('orig')
+    expect(dec(await backend.read('/buffer/b.txt'))).toBe('concurrent')
+  })
+
+  it('applies replaceTree when expectedRevision matches, then advances the revision', async () => {
+    await backend.write('/buffer/a.txt', enc('orig'))
+    const rev = await backend.getRevision()
+    await backend.replaceTree(
+      '/buffer',
+      [{ relPath: 'a.txt', isDir: false, bytes: enc('restored') }],
+      rev,
+    )
+    expect(dec(await backend.read('/buffer/a.txt'))).toBe('restored')
+    expect(await backend.getRevision()).toBeGreaterThan(rev)
   })
 })

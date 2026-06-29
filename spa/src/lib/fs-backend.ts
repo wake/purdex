@@ -92,12 +92,31 @@ export interface ReplaceEntry {
  */
 export interface SupportsReplaceTree {
   /**
+   * A monotonic revision that every tree mutation bumps. Restore captures it
+   * BEFORE the pre-restore snapshot and passes it back as `replaceTree`'s
+   * `expectedRevision`, so a concurrent local write between capture and apply is
+   * detected INSIDE the replace transaction and the wipe is aborted (no silent
+   * overwrite of un-snapshotted changes — the only fully-atomic guard).
+   */
+  getRevision(): Promise<number>
+  /**
    * Clear everything under `root` and write `entries` (dirs first so empty dirs
    * survive) as a single atomic transaction. Each `relPath` is re-validated
-   * before any mutation. Does NOT emit `onMutation` — restore must not
+   * before any mutation. When `expectedRevision` is given, the transaction first
+   * re-reads the stored revision and **aborts without mutating** if it no longer
+   * matches (a concurrent write landed) — the check and the wipe share ONE txn,
+   * so there is no lossy window. Does NOT emit `onMutation` — restore must not
    * self-trigger an auto-backup.
    */
-  replaceTree(root: string, entries: ReplaceEntry[]): Promise<void>
+  replaceTree(root: string, entries: ReplaceEntry[], expectedRevision?: number): Promise<void>
+}
+
+/** Thrown by `replaceTree` when `expectedRevision` no longer matches (concurrent write). */
+export class TreeRevisionMismatchError extends Error {
+  constructor(expected: number, actual: number) {
+    super(`replaceTree: tree changed during restore (expected revision ${expected}, found ${actual})`)
+    this.name = 'TreeRevisionMismatchError'
+  }
 }
 
 /** Narrow a resolved backend to the atomic-subtree-replace capability (2c). */

@@ -813,10 +813,13 @@ describe('uploadFile — file.name sanitisation (C1 security)', () => {
     backend = real
   })
 
-  /** Every key written to the real backend must live under the storage root. */
+  /** Every TREE key written to the real backend must live under the storage root.
+   * The backend's internal reserved revision record (a non-path meta key) is not
+   * a tree entry and is excluded here. */
   async function assertAllKeysUnderRoot(): Promise<string[]> {
     const db = await (real as unknown as { db(): Promise<{ getAllKeys(store: string): Promise<string[]> }> }).db()
-    const keys = await db.getAllKeys('files')
+    const allKeys = await db.getAllKeys('files')
+    const keys = allKeys.filter((k) => k.startsWith('/'))
     for (const k of keys) {
       expect(k === '/buffer' || k.startsWith('/buffer/')).toBe(true)
     }

@@ -77,13 +77,24 @@ export async function restoreSnapshot(deps: RestoreSnapshotDeps): Promise<Restor
   const conflicts = deps.findConflicts()
   if (conflicts.length > 0) return { status: 'blocked', conflicts }
 
-  // (2) Capture the baseline tree NOW — before pre-restore — so it reflects the
-  // exact state the safety snapshot will preserve, and so the change diff (and
-  // the pre-apply race check below) anchor on the same `before` (codex 2c-1 R2).
-  const before = await buildManifest(deps.backend)
-  const beforeKey = JSON.stringify(before.entries)
+  // (2) Require the atomic-replace capability and capture the tree REVISION NOW —
+  // before pre-restore. This is the anchor for the apply-time race guard: any
+  // local `/buffer` write between here and the apply bumps the revision, and
+  // replaceTree (below) re-checks it INSIDE its own transaction, so a concurrent
+  // write can never be silently overwritten (codex 2c-1 R3, Critical). A second
+  // manifest scan would be non-atomic and lossy — the revision is the only sound
+  // guard.
+  const backend = deps.backend
+  if (!supportsReplaceTree(backend)) {
+    throw new Error('restore: backend does not support replaceTree')
+  }
+  const beforeRevision = await backend.getRevision()
 
-  // (3) Pre-restore safety snapshot (always posts; id = restore-point). With
+  // (3) Baseline manifest for the change diff (2c-2 pane reconciliation). The
+  // revision above — not this snapshot — is the data-safety anchor.
+  const before = await buildManifest(backend)
+
+  // (4) Pre-restore safety snapshot (always posts; id = restore-point). With
   // forcePost, a success ALWAYS yields a numeric id (a real row or the
   // content-keyed head); `null` means the snapshot failed (daemon down, build /
   // post error). Restore is destructive, so abort BEFORE touching the tree — a
@@ -94,7 +105,7 @@ export async function restoreSnapshot(deps: RestoreSnapshotDeps): Promise<Restor
     throw new Error('restore: pre-restore safety snapshot failed; aborting (no restore-point)')
   }
 
-  // (4) Fetch + verify EVERY file blob into memory before any mutation. The blob
+  // (5) Fetch + verify EVERY file blob into memory before any mutation. The blob
   // FETCH is deduped by hash (one download per distinct content), but the
   // per-entry SIZE assertion runs for every file entry — a corrupt manifest with
   // the same hash but a conflicting declared size must not pass (codex 2c-1 R2).
@@ -116,32 +127,26 @@ export async function restoreSnapshot(deps: RestoreSnapshotDeps): Promise<Restor
     }
   }
 
-  // (5) Pre-apply race check (codex 2c-1 R2, Critical). The guard ran once at the
-  // start, but pre-restore + blob fetch are async — a concurrent local `/buffer`
-  // write (e.g. another pane's autosave) or a newly-dirty buffer in that window
-  // is NOT captured by the safety snapshot. Re-check immediately before the wipe;
-  // if local state changed since the baseline, ABORT rather than silently
-  // overwrite un-snapshotted changes (spec §4.4 reversibility, R2-Pa/R2-Pg).
+  // (6) Pre-apply guard for un-flushed editor state. Dirty/locked buffers live in
+  // Zustand (NOT IndexedDB), so the revision check cannot see them — re-run the
+  // conflict guard here. (The IDB race — a concurrent committed `/buffer` write —
+  // is handled atomically by replaceTree's revision check below, not by a second
+  // non-atomic manifest scan.)
   if (deps.findConflicts().length > 0) {
     throw new Error('restore: a buffer became dirty/locked during restore; aborted (no overwrite)')
   }
-  const current = await buildManifest(deps.backend)
-  if (JSON.stringify(current.entries) !== beforeKey) {
-    throw new Error('restore: /buffer changed during restore; aborted (no overwrite)')
-  }
 
-  // (6) Apply atomically. The checks above mean this is the FIRST IDB mutation.
-  if (!supportsReplaceTree(deps.backend)) {
-    throw new Error('restore: backend does not support replaceTree')
-  }
+  // (7) Apply atomically. replaceTree re-checks `beforeRevision` inside its txn
+  // and throws TreeRevisionMismatchError (no mutation) if a local write landed
+  // since step 2 — the only fully-atomic overwrite guard.
   const replaceEntries: ReplaceEntry[] = detail.manifest.map((e) =>
     e.kind === 'dir'
       ? { relPath: e.path, isDir: true }
       : { relPath: e.path, isDir: false, bytes: blobs.get(e.hash) },
   )
-  await deps.backend.replaceTree(STORAGE_ROOT, replaceEntries)
+  await backend.replaceTree(STORAGE_ROOT, replaceEntries, beforeRevision)
 
-  // (7) Report the diff for 2c-2 pane reconciliation.
+  // (8) Report the diff for 2c-2 pane reconciliation.
   const changed = diffManifests(before.entries, detail.manifest)
   return { status: 'done', restorePointId, changed }
 }
