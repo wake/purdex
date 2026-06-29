@@ -192,3 +192,68 @@ describe('useBackupStore — backup engine', () => {
     expect(state('h1')).toBeUndefined() // h1 untouched
   })
 })
+
+describe('useBackupStore — generalised backupNow (2c-1 T3a)', () => {
+  it('returns the daemon snapshotId on a successful post', async () => {
+    await backend.write('/buffer/a.txt', enc('hi'))
+    postSnapshot.mockResolvedValue({ snapshotId: 7, isFork: false, currentHeadId: 7 })
+    const id = await useBackupStore.getState().backupNow('h1')
+    expect(id).toBe(7)
+  })
+
+  it('default auto still suppresses an unchanged tree client-side, returning the head id', async () => {
+    await backend.write('/buffer/a.txt', enc('hi'))
+    postSnapshot.mockResolvedValue({ snapshotId: 5, isFork: false, currentHeadId: 5 })
+    await useBackupStore.getState().backupNow('h1')
+    postSnapshot.mockClear()
+
+    const id = await useBackupStore.getState().backupNow('h1') // unchanged tree
+    expect(postSnapshot).not.toHaveBeenCalled()
+    expect(id).toBe(5) // the already-converged head, no new post
+  })
+
+  it('forcePost POSTs even when the manifest equals lastManifestJSON, with the given trigger', async () => {
+    await backend.write('/buffer/a.txt', enc('hi'))
+    postSnapshot.mockResolvedValue({ snapshotId: 5, isFork: false, currentHeadId: 5 })
+    await useBackupStore.getState().backupNow('h1')
+    postSnapshot.mockClear()
+    postSnapshot.mockResolvedValue({ snapshotId: 6, isFork: false, currentHeadId: 6 })
+
+    const id = await useBackupStore
+      .getState()
+      .backupNow('h1', { trigger: 'pre-restore', forcePost: true })
+    expect(postSnapshot).toHaveBeenCalledTimes(1) // suppression bypassed
+    expect(postSnapshot.mock.calls[0][1].trigger).toBe('pre-restore')
+    expect(id).toBe(6)
+  })
+
+  it('serialises a concurrent auto-backup and pre-restore on one host (no interleaved POST)', async () => {
+    await backend.write('/buffer/a.txt', enc('hi'))
+    let release1!: () => void
+    postSnapshot
+      .mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            release1 = () => r({ snapshotId: 1, isFork: false, currentHeadId: 1 })
+          }),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve({ snapshotId: 2, isFork: false, currentHeadId: 2 }),
+      )
+
+    const p1 = useBackupStore.getState().backupNow('h1') // auto
+    const p2 = useBackupStore.getState().backupNow('h1', { forcePost: true }) // pre-restore
+
+    // The first reaches its POST; the second has NOT started one (single-flight).
+    await vi.waitFor(() => expect(postSnapshot).toHaveBeenCalledTimes(1))
+    expect(postSnapshot).toHaveBeenCalledTimes(1)
+
+    release1()
+    const [id1, id2] = await Promise.all([p1, p2])
+    expect(postSnapshot).toHaveBeenCalledTimes(2)
+    expect(id1).toBe(1)
+    expect(id2).toBe(2)
+    // The pre-restore's parentId is the auto-backup's own returned id (1).
+    expect(postSnapshot.mock.calls[1][1].parentId).toBe(1)
+  })
+})

@@ -71,6 +71,61 @@ export interface SupportsMutationEvents {
   onMutation(cb: () => void): () => void
 }
 
+/**
+ * One entry of a `replaceTree` payload (Phase 2c restore). `relPath` is ALWAYS
+ * root-relative (e.g. `a/b.md`) — NEVER leading-slash, `STORAGE_ROOT`-prefixed,
+ * or absolute; the backend forms the stored key as `join(root, relPath)`. A dir
+ * entry carries no `bytes`; a file entry carries its restored content.
+ */
+export interface ReplaceEntry {
+  relPath: string
+  isDir: boolean
+  bytes?: Uint8Array
+}
+
+/**
+ * Optional capability: atomically replace an entire subtree (Phase 2c restore).
+ * Only the In-App backend implements it — restore clears `STORAGE_ROOT` and
+ * rewrites the snapshot's manifest in ONE IndexedDB transaction so a failure
+ * never leaves the tree half-applied (R2-Pa). Additive and off the base
+ * `FsBackend`; consumers narrow via the guard below.
+ */
+export interface SupportsReplaceTree {
+  /**
+   * A monotonic revision that every tree mutation bumps. Restore captures it
+   * BEFORE the pre-restore snapshot and passes it back as `replaceTree`'s
+   * `expectedRevision`, so a concurrent local write between capture and apply is
+   * detected INSIDE the replace transaction and the wipe is aborted (no silent
+   * overwrite of un-snapshotted changes — the only fully-atomic guard).
+   */
+  getRevision(): Promise<number>
+  /**
+   * Clear everything under `root` and write `entries` (dirs first so empty dirs
+   * survive) as a single atomic transaction. Each `relPath` is re-validated
+   * before any mutation. When `expectedRevision` is given, the transaction first
+   * re-reads the stored revision and **aborts without mutating** if it no longer
+   * matches (a concurrent write landed) — the check and the wipe share ONE txn,
+   * so there is no lossy window. Does NOT emit `onMutation` — restore must not
+   * self-trigger an auto-backup.
+   */
+  replaceTree(root: string, entries: ReplaceEntry[], expectedRevision?: number): Promise<void>
+}
+
+/** Thrown by `replaceTree` when `expectedRevision` no longer matches (concurrent write). */
+export class TreeRevisionMismatchError extends Error {
+  constructor(expected: number, actual: number) {
+    super(`replaceTree: tree changed during restore (expected revision ${expected}, found ${actual})`)
+    this.name = 'TreeRevisionMismatchError'
+  }
+}
+
+/** Narrow a resolved backend to the atomic-subtree-replace capability (2c). */
+export function supportsReplaceTree(
+  backend: FsBackend | undefined,
+): backend is FsBackend & SupportsReplaceTree {
+  return typeof (backend as Partial<SupportsReplaceTree> | undefined)?.replaceTree === 'function'
+}
+
 /** Narrow a resolved backend to the mutation-events capability (Phase 2b). */
 export function supportsMutationEvents(
   backend: FsBackend | undefined,
