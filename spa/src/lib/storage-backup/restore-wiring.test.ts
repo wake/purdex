@@ -24,6 +24,7 @@ import { bufferKey } from '../editor-buffer-key'
 beforeEach(() => {
   restoreSnapshot.mockReset()
   applyReconciliation.mockReset()
+  applyReconciliation.mockResolvedValue({ failed: [] }) // best-effort default
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useEditorStore.setState({ buffers: {}, paneStates: {} })
 })

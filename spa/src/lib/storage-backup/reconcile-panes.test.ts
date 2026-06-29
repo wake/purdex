@@ -236,4 +236,28 @@ describe('applyReconciliation', () => {
 
     expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
   })
+
+  it('isolates a failing action (best-effort) and still applies the rest (codex R2 H2/H3)', async () => {
+    // A reload whose readFile will throw (no file provided) + a removed preview
+    // to close. The reload must fail in isolation without aborting the close.
+    const edTab = leafTab(editor(inapp, '/buffer/bad.md'))
+    const pvTab = leafTab({ kind: 'pdf-preview', source: inapp, filePath: '/buffer/gone.pdf' })
+    useTabStore.setState({
+      tabs: { [edTab.id]: edTab, [pvTab.id]: pvTab },
+      tabOrder: [edTab.id, pvTab.id],
+      activeTabId: edTab.id,
+    })
+
+    const result = await applyReconciliation(
+      { added: [], removed: ['gone.pdf'], modified: ['bad.md'] },
+      ['bad.md'], // bad.md is still a file → planned as reload; readFile will throw
+      liveDeps({}), // empty → readFile('/buffer/bad.md') throws
+    )
+
+    // The failing reload is recorded, not thrown...
+    expect(result.failed).toHaveLength(1)
+    expect(result.failed[0].action.kind).toBe('reload-editor')
+    // ...and the unrelated removed-preview close STILL happened.
+    expect(useTabStore.getState().tabs[pvTab.id]).toBeUndefined()
+  })
 })

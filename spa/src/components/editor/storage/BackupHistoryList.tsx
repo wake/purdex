@@ -48,9 +48,15 @@ interface BackupHistoryListProps {
 export function BackupHistoryList({ hostId, onSelect }: BackupHistoryListProps) {
   const t = useI18nStore((s) => s.t)
   const lastBackupAt = useBackupStore((s) => (hostId ? s.byHost[hostId]?.lastBackupAt ?? null : null))
-  const [rows, setRows] = useState<SnapshotSummary[] | null>(null)
+  // Rows are TAGGED with the host they were fetched for. Rendering checks the tag
+  // against the current hostId, so on a host switch the previous host's rows are
+  // hidden in the SAME synchronous render — even before the (deferred) effect
+  // refetches — eliminating a stale, clickable snapshot from the wrong host
+  // (codex 2c-2 R2 H1; the earlier deferred setRows(null) still left one render).
+  const [rows, setRows] = useState<{ host: string; data: SnapshotSummary[] } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const visibleRows = rows && rows.host === hostId ? rows.data : null
 
   useEffect(() => {
     let cancelled = false
@@ -65,17 +71,13 @@ export function BackupHistoryList({ hostId, onSelect }: BackupHistoryListProps) 
           setLoading(false)
           return undefined
         }
-        // Clear the previous host's rows BEFORE awaiting the new fetch, so a
-        // host switch never leaves stale (clickable) snapshots from host A
-        // visible while hostId is already host B (codex 2c-2 R1 P2).
-        setRows(null)
         setLoading(true)
         setError(null)
         return getHistory(hostId, STORE_ID)
       })
       .then((h) => {
-        if (cancelled || h === undefined) return
-        setRows(h)
+        if (cancelled || h === undefined || !hostId) return
+        setRows({ host: hostId, data: h })
         setLoading(false)
       })
       .catch((e: unknown) => {
@@ -94,7 +96,7 @@ export function BackupHistoryList({ hostId, onSelect }: BackupHistoryListProps) 
     <div className="mt-3" data-testid="backup-history">
       <div className="mb-1 font-medium text-text-primary">{t('editor.buffers.backup.history.heading')}</div>
 
-      {loading && rows === null && (
+      {loading && visibleRows === null && (
         <div data-testid="backup-history-loading" className="text-text-muted">
           {t('editor.buffers.backup.history.loading')}
         </div>
@@ -106,15 +108,15 @@ export function BackupHistoryList({ hostId, onSelect }: BackupHistoryListProps) 
         </div>
       )}
 
-      {!error && rows !== null && rows.length === 0 && (
+      {!error && visibleRows !== null && visibleRows.length === 0 && (
         <div data-testid="backup-history-empty" className="text-text-muted">
           {t('editor.buffers.backup.history.empty')}
         </div>
       )}
 
-      {!error && rows !== null && rows.length > 0 && (
+      {!error && visibleRows !== null && visibleRows.length > 0 && (
         <ul className="flex flex-col gap-1">
-          {rows.map((row) => (
+          {visibleRows.map((row) => (
             <li key={row.id}>
               <button
                 type="button"

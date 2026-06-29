@@ -99,33 +99,50 @@ export interface ReconcileDeps {
   remountPane: (tabId: string, paneId: string) => string | null
 }
 
+/** Outcome of a best-effort reconciliation: which actions (if any) failed. */
+export interface ReconcileResult {
+  failed: Array<{ action: PaneAction; error: string }>
+}
+
 /**
  * Execute the reconciliation plan. Editor closes follow the close-pane-before
  * (storage-actions §531, G2): tab pane first, then the editor buffer/pane state.
+ *
+ * **Best-effort, never throws** (codex 2c-2 R2 H2/H3): this runs AFTER restore
+ * has already committed `replaceTree`, so a failure here is NOT a restore failure
+ * and must not be reported as a rollback. Each action is isolated — one failing
+ * `readFile` does not abort the rest, leaving the UI in a mixed state. Failures
+ * are collected and returned so the caller can log / surface them as non-fatal.
  */
 export async function applyReconciliation(
   changed: RestoreChange,
   restoredFiles: Iterable<string>,
   deps: ReconcileDeps,
-): Promise<void> {
+): Promise<ReconcileResult> {
   const actions = planReconciliation(changed, deps.getTabs(), restoredFiles)
+  const failed: ReconcileResult['failed'] = []
   for (const action of actions) {
-    switch (action.kind) {
-      case 'close-editor':
-        deps.closeTabPane(action.tabId, action.paneId)
-        deps.closeEditorPane(action.paneId, bufferKey(action.source, action.filePath))
-        break
-      case 'reload-editor': {
-        const { content, stat } = await deps.readFile(action.filePath)
-        deps.reloadBuffer(bufferKey(action.source, action.filePath), content, stat)
-        break
+    try {
+      switch (action.kind) {
+        case 'close-editor':
+          deps.closeTabPane(action.tabId, action.paneId)
+          deps.closeEditorPane(action.paneId, bufferKey(action.source, action.filePath))
+          break
+        case 'reload-editor': {
+          const { content, stat } = await deps.readFile(action.filePath)
+          deps.reloadBuffer(bufferKey(action.source, action.filePath), content, stat)
+          break
+        }
+        case 'close-preview':
+          deps.closeTabPane(action.tabId, action.paneId)
+          break
+        case 'remount-preview':
+          deps.remountPane(action.tabId, action.paneId)
+          break
       }
-      case 'close-preview':
-        deps.closeTabPane(action.tabId, action.paneId)
-        break
-      case 'remount-preview':
-        deps.remountPane(action.tabId, action.paneId)
-        break
+    } catch (e) {
+      failed.push({ action, error: e instanceof Error ? e.message : String(e) })
     }
   }
+  return { failed }
 }

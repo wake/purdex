@@ -15,10 +15,15 @@ import { useEditorStore } from '../../stores/useEditorStore'
 
 /**
  * Restore the active host's In-App tree to `snapshotId`. Returns the orchestrator
- * result (`blocked` with conflicts, or `done`). On `done` it reconciles every
- * open In-App pane (close/reload/remount) against the restore's `changed` diff.
- * Throws (the orchestrator guarantees the tree is untouched/rolled back) on a
- * pre-restore or blob-verify failure — the caller surfaces it.
+ * result (`blocked` with conflicts, or `done`).
+ *
+ * Failure semantics (codex 2c-2 R2 H2): `restoreSnapshot` only ever throws
+ * BEFORE it commits `replaceTree` (guard returns blocked; pre-restore / blob /
+ * revision failures all abort with the tree untouched), so a throw here IS a
+ * true "tree untouched" restore failure the caller may surface as such. Once it
+ * returns `done` the tree is committed; the subsequent pane reconciliation runs
+ * **best-effort** (never throws) — a reconcile glitch is a UI-alignment issue,
+ * NOT a restore rollback, so it must not turn into a restore-failed error.
  */
 export async function runRestore(hostId: string, snapshotId: number): Promise<RestoreResult> {
   const backend = getFsBackend({ type: 'inapp' })
@@ -40,7 +45,9 @@ export async function runRestore(hostId: string, snapshotId: number): Promise<Re
   })
 
   if (result.status === 'done') {
-    await applyReconciliation(result.changed, result.restoredFiles, {
+    // Best-effort, post-commit: never let a reconcile glitch surface as a restore
+    // failure (the tree is already restored). Failures are logged, not thrown.
+    const recon = await applyReconciliation(result.changed, result.restoredFiles, {
       getTabs: () => useTabStore.getState().tabs,
       readFile: async (fullPath) => {
         const bytes = await backend.read(fullPath)
@@ -55,6 +62,14 @@ export async function runRestore(hostId: string, snapshotId: number): Promise<Re
       reloadBuffer: (key, content, stat) => useEditorStore.getState().reloadBuffer(key, content, stat),
       remountPane: (tabId, paneId) => useTabStore.getState().remountPane(tabId, paneId),
     })
+    if (recon.failed.length > 0) {
+      // Non-fatal: restore committed; some panes could not be realigned (they
+      // self-heal on next interaction). Surface, never silent (no throw).
+      console.warn(
+        `restore: ${recon.failed.length} pane(s) could not be reconciled`,
+        recon.failed.map((f) => `${f.action.kind}:${f.error}`),
+      )
+    }
   }
   return result
 }

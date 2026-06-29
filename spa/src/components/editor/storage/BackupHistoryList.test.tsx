@@ -71,6 +71,28 @@ describe('BackupHistoryList (Phase 2c T5)', () => {
     expect(getHistory).toHaveBeenCalledTimes(2)
   })
 
+  it('hides host A rows the instant hostId switches to B, before B resolves (no stale clickable snapshot, codex R2 H1)', async () => {
+    // Deferred created up-front (not inside the mock) so resolving it never races
+    // the microtask that invokes getHistory.
+    let resolveB!: (v: SnapshotSummary[]) => void
+    const bPending = new Promise<SnapshotSummary[]>((r) => { resolveB = r })
+    getHistory.mockImplementation((hostId: string) =>
+      hostId === 'host-A' ? Promise.resolve([summary({ id: 1, device: 'c_A' })]) : bPending,
+    )
+    const { rerender } = render(<BackupHistoryList hostId="host-A" />)
+    await waitFor(() => expect(screen.getAllByTestId('backup-history-row')).toHaveLength(1))
+
+    // Switch to B while B's fetch is still pending: host A's rows must vanish in
+    // this render — they belong to A and must not be clickable under hostId B.
+    rerender(<BackupHistoryList hostId="host-B" />)
+    expect(screen.queryAllByTestId('backup-history-row')).toHaveLength(0)
+
+    // Once B resolves, B's rows appear.
+    await act(async () => { resolveB([summary({ id: 9, device: 'c_B' })]) })
+    await waitFor(() => expect(screen.getAllByTestId('backup-history-row')).toHaveLength(1))
+    expect(screen.getByTestId('backup-history-row')).toHaveTextContent('c_B')
+  })
+
   it('refetches and shows host B history after switching from host A', async () => {
     getHistory.mockImplementation((hostId: string) =>
       Promise.resolve(hostId === 'host-A' ? [summary({ id: 1, device: 'c_A' })] : [summary({ id: 9, device: 'c_B' }), summary({ id: 8, device: 'c_B' })]),
