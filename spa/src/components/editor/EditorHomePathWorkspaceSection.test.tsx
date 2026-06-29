@@ -33,11 +33,13 @@ describe('EditorHomePathWorkspaceSection', () => {
     expect(input.value).toBe('/Users/x')
   })
 
-  it('writes to workspace store on change (commit on blur)', () => {
+  it('writes to workspace store only when Save is clicked', () => {
     render(<EditorHomePathWorkspaceSection ctx={ctx} />)
     const input = screen.getByLabelText(/home path/i) as HTMLInputElement
     fireEvent.change(input, { target: { value: '/Users/foo' } })
     fireEvent.blur(input)
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toBeUndefined()
+    fireEvent.click(screen.getByRole('button', { name: /save|儲存/i }))
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ homePath: '/Users/foo' })
   })
 
@@ -53,7 +55,7 @@ describe('EditorHomePathWorkspaceSection', () => {
     render(<EditorHomePathWorkspaceSection ctx={{ scope: 'workspace', workspaceId: 'wsA' }} />)
     const input = screen.getByLabelText(/home path/i) as HTMLInputElement
     fireEvent.change(input, { target: { value: '/Users/foo' } })
-    fireEvent.blur(input)
+    fireEvent.click(screen.getByRole('button', { name: /save|儲存/i }))
     expect(useWorkspaceSettingsStore.getState().get('wsB', 'editor')).toBeUndefined()
   })
 
@@ -63,21 +65,21 @@ describe('EditorHomePathWorkspaceSection', () => {
     expect(container.innerHTML).toBe('')
   })
 
-  it('normalizes trailing whitespace back to the input on blur (R1 codex)', () => {
+  it('normalizes trailing whitespace back to the input on Save (R1 codex)', () => {
     useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/x' })
     render(<EditorHomePathWorkspaceSection ctx={ctx} />)
     const input = screen.getByLabelText(/home path/i) as HTMLInputElement
     fireEvent.change(input, { target: { value: '/Users/x ' } })
-    fireEvent.blur(input)
+    fireEvent.click(screen.getByRole('button', { name: /save|儲存/i }))
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ homePath: '/Users/x' })
     expect(input.value).toBe('/Users/x')
   })
 
-  it('normalizes pure-whitespace input to empty on blur when nothing is stored', () => {
+  it('normalizes pure-whitespace input to empty on Save when nothing is stored', () => {
     render(<EditorHomePathWorkspaceSection ctx={ctx} />)
     const input = screen.getByLabelText(/home path/i) as HTMLInputElement
     fireEvent.change(input, { target: { value: '   ' } })
-    fireEvent.blur(input)
+    fireEvent.click(screen.getByRole('button', { name: /save|儲存/i }))
     expect(input.value).toBe('')
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toBeUndefined()
   })
@@ -96,7 +98,7 @@ describe('EditorHomePathWorkspaceSection', () => {
     })
   })
 
-  it('Blur-to-empty only drops homePath, preserving sibling editor settings (R2 codex)', () => {
+  it('Save-to-empty only drops homePath, preserving sibling editor settings (R2 codex)', () => {
     useWorkspaceSettingsStore.getState().set('wsA', 'editor', {
       homePath: '/Users/x',
       wrap: true,
@@ -104,7 +106,7 @@ describe('EditorHomePathWorkspaceSection', () => {
     render(<EditorHomePathWorkspaceSection ctx={ctx} />)
     const input = screen.getByLabelText(/home path/i) as HTMLInputElement
     fireEvent.change(input, { target: { value: '' } })
-    fireEvent.blur(input)
+    fireEvent.click(screen.getByRole('button', { name: /save|儲存/i }))
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ wrap: true })
   })
 
@@ -129,7 +131,7 @@ describe('EditorHomePathWorkspaceSection', () => {
     act(() => {
       useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/new' })
     })
-    fireEvent.blur(input)
+    fireEvent.click(screen.getByRole('button', { name: /save|儲存/i }))
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ homePath: '/Users/new' })
   })
 
@@ -141,7 +143,7 @@ describe('EditorHomePathWorkspaceSection', () => {
     act(() => {
       useWorkspaceSettingsStore.getState().set('wsA', 'editor', { homePath: '/Users/external' })
     })
-    fireEvent.blur(input)
+    fireEvent.click(screen.getByRole('button', { name: /cancel|取消/i }))
     expect(useWorkspaceSettingsStore.getState().get('wsA', 'editor')).toEqual({ homePath: '/Users/external' })
     expect(input.value).toBe('/Users/external')
   })

@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { ModuleConfigSection } from './ModuleConfigSection'
+
+const mockSetGlobalModuleConfig = vi.hoisted(() => vi.fn())
+const mockSetModuleConfig = vi.hoisted(() => vi.fn())
 
 // Mock module-registry
 vi.mock('../../lib/module-registry', () => ({
@@ -11,13 +14,13 @@ vi.mock('../../lib/module-registry', () => ({
 // Mock stores
 vi.mock('../../stores/useModuleConfigStore', () => ({
   useModuleConfigStore: Object.assign(vi.fn(() => undefined), {
-    getState: () => ({ setGlobalModuleConfig: vi.fn() }),
+    getState: () => ({ setGlobalModuleConfig: mockSetGlobalModuleConfig }),
   }),
 }))
 
 vi.mock('../../features/workspace/store', () => ({
   useWorkspaceStore: Object.assign(vi.fn(() => undefined), {
-    getState: () => ({ setModuleConfig: vi.fn() }),
+    getState: () => ({ setModuleConfig: mockSetModuleConfig }),
   }),
 }))
 
@@ -27,6 +30,8 @@ import type { ModuleDefinition } from '../../lib/module-registry'
 describe('ModuleConfigSection', () => {
   beforeEach(() => {
     vi.mocked(getModulesWithGlobalConfig).mockReturnValue([])
+    mockSetGlobalModuleConfig.mockClear()
+    mockSetModuleConfig.mockClear()
   })
 
   it('renders nothing when no modules have config', () => {
@@ -77,9 +82,18 @@ describe('ModuleConfigSection', () => {
     it('associates label with input via htmlFor', () => {
       render(<ModuleConfigSection scope="global" />)
       const input = screen.getByRole('textbox')
-      const label = input.closest('div')?.querySelector('label')
+      const label = screen.getByText('API URL')
       expect(label).toBeTruthy()
-      expect(label!.getAttribute('for')).toBe(input.id)
+      expect(label.getAttribute('for')).toBe(input.id)
+    })
+
+    it('commits text config only when Save is clicked', () => {
+      render(<ModuleConfigSection scope="global" />)
+      const input = screen.getByRole('textbox')
+      fireEvent.change(input, { target: { value: 'https://example.com' } })
+      expect(mockSetGlobalModuleConfig).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: /save/i }))
+      expect(mockSetGlobalModuleConfig).toHaveBeenCalledWith('test-mod', 'apiUrl', 'https://example.com')
     })
   })
 })

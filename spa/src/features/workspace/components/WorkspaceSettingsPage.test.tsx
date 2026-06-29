@@ -25,12 +25,23 @@ describe('WorkspaceSettingsPage', () => {
     expect(input).toBeInTheDocument()
   })
 
-  it('updates workspace name on input change + blur', () => {
+  it('updates workspace name only when Save is clicked', () => {
     render(<WorkspaceSettingsPage workspaceId={wsId} />)
     const input = screen.getByDisplayValue('Test WS')
     fireEvent.change(input, { target: { value: 'Renamed' } })
     fireEvent.blur(input)
+    expect(useWorkspaceStore.getState().workspaces[0].name).toBe('Test WS')
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
     expect(useWorkspaceStore.getState().workspaces[0].name).toBe('Renamed')
+  })
+
+  it('cancels a pending workspace name edit', () => {
+    render(<WorkspaceSettingsPage workspaceId={wsId} />)
+    const input = screen.getByDisplayValue('Test WS') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Draft' } })
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    expect(input.value).toBe('Test WS')
+    expect(useWorkspaceStore.getState().workspaces[0].name).toBe('Test WS')
   })
 
   it('has maxLength on name input to prevent excessively long names', () => {
