@@ -123,7 +123,10 @@ export function startBackupAutoTrigger(): BackupAutoTrigger | null {
       return s.activeHostId ?? s.hostOrder[0]
     },
     subscribeHost: (cb) => useHostStore.subscribe(cb),
-    backupNow: (hostId) => useBackupStore.getState().backupNow(hostId),
+    // The auto-trigger ignores the returned snapshotId (2c-1 T3a widened it).
+    backupNow: (hostId) => {
+      void useBackupStore.getState().backupNow(hostId)
+    },
     // Check once on boot whether the In-App tree needs a backup (item 2).
     runInitialCheck: true,
   })
