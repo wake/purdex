@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.307] - 2026-06-29
+
+### Feat(storage): restore UI — history/viewer/restore + pane reconciliation (Phase 2c-2) (#887)
+
+子系統 2 Phase 2c-2：前端還原 UI，把已 ship 的 2c-1 還原引擎接到 Storage pane 右側欄 + modal。
+**Storage 子系統 2（daemon 備份/還原版本庫）全系列（2a/2b/2c）完成。** spec §4.4/§4.7 + AC-2c。
+4 TDD task；PR 經 codex 標準 + 三視角 + **5 輪深度 review**，逐層關閉「跨 host UI 狀態」整類問題
+（2 P2 + 3 high + 2 medium 全修），full suite 3692 綠、lint、build 通過。
+
+- **history list**（`BackupHistoryList`，右側欄）：`getHistory` newest-first + device/相對時間/trigger/
+  **fork badge**；loading/error/empty；fetch deps `[hostId, lastBackupAt]`；rows 以 host tag 標記，
+  切 host 同步隱藏舊主機的列（不可誤點）。
+- **manifest viewer modal**（`BackupSnapshotModal`）：點 row 開 modal，`getSnapshot` 列檔案清單
+  （path/kind/size/words，**不下載 blob**）+ header（device/time/trigger/fork）+ Close/Restore。
+- **restore wiring**（`restore-wiring.runRestore`）：綁 live deps（dirty/locked guard、pre-restore
+  forcePost、read API、backend）；done 後跑 pane reconciliation；backing-up 禁用；blocked 只列衝突
+  中止（不隱式 save/discard）；pre-commit 失敗才報 restore error（樹未動），post-commit reconcile
+  best-effort 不 throw。
+- **pane reconciliation**（`reconcile-panes` + `pane-tree.remountLeaf` + `useTabStore.remountPane`）：
+  還原後對齊開啟的 In-App pane —— close removed editor / reload changed clean editor
+  （savedContent+isDirty+lastStat）/ preview **force-remount**（換 leaf pane.id 強制 re-read）；
+  file→dir 轉換視為 close；failure-isolated。
+- **跨 host 安全**：selection 綁 host、restore outcome 以 request token request-scoped、success
+  banner host-scoped —— 任何 host 切換都不會用錯 host 還原或把 A 的狀態顯示在 B。
+
 ## [1.0.0-alpha.306] - 2026-06-29
 
 ### Feat(storage): restore engine — Phase 2c-1 (subsystem 2) (#885)
