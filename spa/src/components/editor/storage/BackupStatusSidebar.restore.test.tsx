@@ -108,6 +108,28 @@ describe('BackupStatusSidebar restore flow (Phase 2c T7)', () => {
     expect(runRestore).not.toHaveBeenCalled()
   })
 
+  it('ignores an in-flight restore that resolves after a host switch — no leak onto host B (codex R4)', async () => {
+    setHostState({ status: 'idle' })
+    let resolveA!: (r: RestoreResult) => void
+    runRestore.mockReturnValue(new Promise<RestoreResult>((r) => { resolveA = r }))
+
+    await openModal() // host-A modal open
+    fireEvent.click(screen.getByTestId('backup-snapshot-restore')) // start A restore (pending)
+
+    // Switch to host B and open a B snapshot while A's restore is still in flight.
+    await act(async () => { useHostStore.setState({ activeHostId: 'host-B' }) })
+    const rb = await screen.findByTestId('backup-history-row')
+    fireEvent.click(rb)
+    await screen.findByTestId('backup-snapshot-modal') // B modal open
+
+    // A's restore now resolves `done` — it must NOT close B's modal or flag success.
+    await act(async () => {
+      resolveA({ status: 'done', restorePointId: 1, changed: { added: [], removed: [], modified: [] }, restoredFiles: [] })
+    })
+    expect(screen.getByTestId('backup-snapshot-modal')).toBeInTheDocument()
+    expect(screen.queryByTestId('backup-restore-success')).toBeNull()
+  })
+
   it('throw: shows an inline restore error and keeps the modal open', async () => {
     setHostState({ status: 'idle' })
     runRestore.mockRejectedValue(new Error('pre-restore safety snapshot failed'))
