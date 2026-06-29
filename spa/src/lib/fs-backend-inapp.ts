@@ -1,6 +1,12 @@
 import type { IDBPDatabase } from 'idb'
 import { openIDB } from './storage/idb'
-import type { FsBackend, SupportsUniqueCreate, SupportsMutationEvents } from './fs-backend'
+import type {
+  FsBackend,
+  SupportsUniqueCreate,
+  SupportsMutationEvents,
+  SupportsReplaceTree,
+  ReplaceEntry,
+} from './fs-backend'
 import { join } from './storage-paths'
 import type { FileStat, FileEntry } from '../types/fs'
 
@@ -15,7 +21,9 @@ interface StoredFile {
   mtime: number
 }
 
-export class InAppBackend implements FsBackend, SupportsUniqueCreate, SupportsMutationEvents {
+export class InAppBackend
+  implements FsBackend, SupportsUniqueCreate, SupportsMutationEvents, SupportsReplaceTree
+{
   id = 'inapp'
   label = 'In-App Storage'
 
@@ -279,5 +287,98 @@ export class InAppBackend implements FsBackend, SupportsUniqueCreate, SupportsMu
       }
     }
     throw new Error(`InAppBackend.mkdirUnique: exhausted ${MAX} candidates under ${dir}`)
+  }
+
+  /**
+   * Atomically replace everything under `root` with `entries` (Phase 2c
+   * restore). Re-validates each root-relative `relPath` BEFORE opening the
+   * transaction (defence-in-depth, §4.2), then in ONE readwrite txn: (a) clears
+   * the `root` subtree, (b) writes dir entries first so empty dirs survive (C2),
+   * (c) writes file entries. Because clear + write share one txn, any failure
+   * aborts it → IndexedDB rolls back, so the prior tree is never left
+   * half-cleared (R2-Pa). Deliberately does NOT emit `onMutation`: restore must
+   * not re-trigger an auto-backup (consistent with 2b's exclusion).
+   */
+  async replaceTree(root: string, entries: ReplaceEntry[]): Promise<void> {
+    // (0) Validate every relPath up-front. A bad entry rejects before any
+    // mutation so a malformed manifest can never corrupt the tree.
+    const seen = new Set<string>()
+    const planned = entries.map((e) => {
+      const rel = e.relPath
+      if (typeof rel !== 'string' || rel === '') {
+        throw new Error(`InAppBackend.replaceTree: empty relPath`)
+      }
+      if (rel.startsWith('/') || rel.includes('\\')) {
+        throw new Error(`InAppBackend.replaceTree: relPath must be root-relative: ${rel}`)
+      }
+      const segs = rel.split('/')
+      if (segs.some((s) => s === '' || s === '.' || s === '..')) {
+        throw new Error(`InAppBackend.replaceTree: illegal segment in relPath: ${rel}`)
+      }
+      if (seen.has(rel)) {
+        throw new Error(`InAppBackend.replaceTree: duplicate relPath: ${rel}`)
+      }
+      seen.add(rel)
+      return { rel, isDir: e.isDir, bytes: e.bytes ?? new Uint8Array(0) }
+    })
+    // Prefix-conflict: a file entry must not be an ancestor directory of another
+    // entry. (Listed dir entries are fine — that is the normal nesting case.)
+    const kindByRel = new Map(planned.map((p) => [p.rel, p.isDir]))
+    for (const p of planned) {
+      const segs = p.rel.split('/')
+      for (let i = 1; i < segs.length; i++) {
+        const ancestor = segs.slice(0, i).join('/')
+        if (kindByRel.get(ancestor) === false) {
+          throw new Error(
+            `InAppBackend.replaceTree: ${ancestor} is a file but used as a directory of ${p.rel}`,
+          )
+        }
+      }
+    }
+
+    const db = await this.db()
+    const now = Date.now()
+    const tx = db.transaction(STORE, 'readwrite')
+    try {
+      const store = tx.store
+      // (a) Clear the whole root subtree (strict children, prefix match).
+      const prefix = root.endsWith('/') ? root : root + '/'
+      const keys = (await store.getAllKeys()) as string[]
+      for (const key of keys) {
+        if (key.startsWith(prefix)) await store.delete(key)
+      }
+      // (b) Dirs first so a deeper file's parent already exists and empty dirs
+      // round-trip; (c) then files.
+      for (const p of planned) {
+        if (!p.isDir) continue
+        await store.put({
+          path: join(root, p.rel),
+          content: new Uint8Array(0),
+          isDirectory: true,
+          mtime: now,
+        } satisfies StoredFile)
+      }
+      for (const p of planned) {
+        if (p.isDir) continue
+        await store.put({
+          path: join(root, p.rel),
+          content: p.bytes,
+          isDirectory: false,
+          mtime: now,
+        } satisfies StoredFile)
+      }
+      await tx.done
+    } catch (err) {
+      // Abort so the queued deletes/puts roll back rather than auto-committing
+      // when the (still-open) txn goes idle; observe the abort's rejection.
+      try {
+        tx.abort()
+      } catch {
+        // already aborting / aborted
+      }
+      tx.done.catch(() => {})
+      throw err
+    }
+    // Intentionally NO emitMutation() — see method doc.
   }
 }
