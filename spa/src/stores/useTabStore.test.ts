@@ -278,6 +278,48 @@ describe('useTabStore', () => {
     })
   })
 
+  describe('remountPane', () => {
+    it('replaces the target pane id in place and returns the new id', () => {
+      const content: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/buffer/a.png' }
+      const tab = createTab(content)
+      useTabStore.getState().addTab(tab)
+      const oldId = tab.layout.type === 'leaf' ? tab.layout.pane.id : ''
+
+      const newId = useTabStore.getState().remountPane(tab.id, oldId)
+      expect(newId).not.toBeNull()
+      expect(newId).not.toBe(oldId)
+      const updated = useTabStore.getState().tabs[tab.id]
+      expect(updated.layout.type).toBe('leaf')
+      if (updated.layout.type === 'leaf') {
+        expect(updated.layout.pane.id).toBe(newId)
+        expect(updated.layout.pane.content).toEqual(content)
+      }
+    })
+
+    it('only touches the target leaf in a split (sibling preserved)', () => {
+      const content: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/buffer/a.png' }
+      const tab = createTab(content)
+      useTabStore.getState().addTab(tab)
+      const firstId = tab.layout.type === 'leaf' ? tab.layout.pane.id : ''
+      useTabStore.getState().splitPane(tab.id, firstId, 'h', { kind: 'dashboard' })
+      const split = useTabStore.getState().tabs[tab.id].layout
+      const siblingId = split.type === 'split' && split.children[1].type === 'leaf' ? split.children[1].pane.id : ''
+
+      const newId = useTabStore.getState().remountPane(tab.id, firstId)
+      const after = useTabStore.getState().tabs[tab.id].layout
+      if (after.type === 'split') {
+        expect(after.children[0].type === 'leaf' && after.children[0].pane.id).toBe(newId)
+        expect(after.children[1].type === 'leaf' && after.children[1].pane.id).toBe(siblingId)
+      }
+    })
+
+    it('returns null for an unknown pane', () => {
+      const tab = createTab({ kind: 'dashboard' })
+      useTabStore.getState().addTab(tab)
+      expect(useTabStore.getState().remountPane(tab.id, 'nope')).toBeNull()
+    })
+  })
+
   describe('renameEditorPanes', () => {
     it('renames matching editor panes in a split layout', () => {
       const content: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' }

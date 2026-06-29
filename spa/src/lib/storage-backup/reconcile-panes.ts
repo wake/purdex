@@ -1,0 +1,123 @@
+/**
+ * reconcile-panes — bring open In-App panes back in line with the tree after a
+ * restore (Phase 2c, R3-Pb / R4-P2). Restore refuses while any inapp buffer is
+ * dirty/locked (restore-guard), so every open inapp pane here is clean: we may
+ * close / reload / remount it without losing edits.
+ *
+ * `planReconciliation` is pure (diff + a tab snapshot → an action list) so it is
+ * unit-testable headlessly; `applyReconciliation` executes the actions through
+ * injected store/backend operations (the live wiring supplies the real stores).
+ *
+ * Path mapping: the restore `changed` diff carries ROOT-RELATIVE manifest paths
+ * (`a.txt`, `sub/b.md`); pane `filePath`s are FULL paths (`/buffer/a.txt`). We
+ * compare via `relativeToRoot(filePath)`. `added` never applies to an
+ * already-open pane (its path existed in the pre-restore tree), so only
+ * `removed` + `modified` drive actions.
+ */
+import type { Tab, PaneContent } from '../../types/tab'
+import type { FileSource } from '../../types/fs'
+import { scanPaneTree } from '../pane-tree'
+import { relativeToRoot } from '../storage-paths'
+import { bufferKey } from '../editor-buffer-key'
+import type { RestoreChange } from './restore'
+
+/** One reconciliation step against a specific open pane. */
+export type PaneAction =
+  | { kind: 'close-editor'; tabId: string; paneId: string; source: FileSource; filePath: string }
+  | { kind: 'reload-editor'; tabId: string; paneId: string; source: FileSource; filePath: string }
+  | { kind: 'close-preview'; tabId: string; paneId: string }
+  | { kind: 'remount-preview'; tabId: string; paneId: string }
+
+/** True for an inapp file-bearing pane content (editor / image / pdf). */
+function inappFilePath(content: PaneContent): string | null {
+  if (content.kind !== 'editor' && content.kind !== 'image-preview' && content.kind !== 'pdf-preview') {
+    return null
+  }
+  return content.source.type === 'inapp' ? content.filePath : null
+}
+
+/**
+ * Diff every open inapp pane (across ALL tabs, every split leaf) against the
+ * restore `changed` set and return the actions needed to reconcile them.
+ */
+export function planReconciliation(
+  changed: RestoreChange,
+  tabs: Record<string, Tab>,
+): PaneAction[] {
+  const removed = new Set(changed.removed)
+  const modified = new Set(changed.modified)
+  const actions: PaneAction[] = []
+
+  for (const tab of Object.values(tabs)) {
+    scanPaneTree(tab.layout, (pane) => {
+      const content = pane.content
+      const filePath = inappFilePath(content)
+      if (filePath === null) return
+      const rel = relativeToRoot(filePath)
+      const isRemoved = removed.has(rel)
+      const isModified = modified.has(rel)
+      if (!isRemoved && !isModified) return
+
+      if (content.kind === 'editor') {
+        actions.push(
+          isRemoved
+            ? { kind: 'close-editor', tabId: tab.id, paneId: pane.id, source: content.source, filePath }
+            : { kind: 'reload-editor', tabId: tab.id, paneId: pane.id, source: content.source, filePath },
+        )
+      } else {
+        // image-preview / pdf-preview
+        actions.push(
+          isRemoved
+            ? { kind: 'close-preview', tabId: tab.id, paneId: pane.id }
+            : { kind: 'remount-preview', tabId: tab.id, paneId: pane.id },
+        )
+      }
+    })
+  }
+  return actions
+}
+
+/** Injected operations so the apply step stays decoupled from the live stores. */
+export interface ReconcileDeps {
+  getTabs: () => Record<string, Tab>
+  /** Read a restored file's bytes back as text + stat (full path). */
+  readFile: (fullPath: string) => Promise<{ content: string; stat: { mtime: number; size: number } }>
+  /** Close a pane in the tab store (mirrors storage-actions G2 ordering). */
+  closeTabPane: (tabId: string, paneId: string) => void
+  /** Close the matching editor buffer/pane state. */
+  closeEditorPane: (paneId: string, expectedBufferKey: string) => void
+  /** Re-align a clean buffer to the restored bytes (content/saved/dirty/stat). */
+  reloadBuffer: (bufferKey: string, content: string, stat: { mtime: number; size: number }) => void
+  /** Remount a leaf (new pane id) to force a preview re-read. */
+  remountPane: (tabId: string, paneId: string) => string | null
+}
+
+/**
+ * Execute the reconciliation plan. Editor closes follow the close-pane-before
+ * (storage-actions §531, G2): tab pane first, then the editor buffer/pane state.
+ */
+export async function applyReconciliation(
+  changed: RestoreChange,
+  deps: ReconcileDeps,
+): Promise<void> {
+  const actions = planReconciliation(changed, deps.getTabs())
+  for (const action of actions) {
+    switch (action.kind) {
+      case 'close-editor':
+        deps.closeTabPane(action.tabId, action.paneId)
+        deps.closeEditorPane(action.paneId, bufferKey(action.source, action.filePath))
+        break
+      case 'reload-editor': {
+        const { content, stat } = await deps.readFile(action.filePath)
+        deps.reloadBuffer(bufferKey(action.source, action.filePath), content, stat)
+        break
+      }
+      case 'close-preview':
+        deps.closeTabPane(action.tabId, action.paneId)
+        break
+      case 'remount-preview':
+        deps.remountPane(action.tabId, action.paneId)
+        break
+    }
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, swapPaneContent } from './pane-tree'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, swapPaneContent, remountLeaf } from './pane-tree'
 import type { PaneLayout, Pane, PaneContent } from '../types/tab'
 
 // ── helpers for new tests ──────────────────────────────────────────────────
@@ -337,6 +337,44 @@ describe('applyLayoutPattern', () => {
           expect(row.children).toHaveLength(2)
         }
       })
+    }
+  })
+})
+
+describe('remountLeaf', () => {
+  it('assigns a fresh pane id to the target leaf, content unchanged', () => {
+    const content: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/buffer/a.png' }
+    const layout: PaneLayout = { type: 'leaf', pane: { id: 'p1', content } }
+    const res = remountLeaf(layout, 'p1')
+    expect(res).not.toBeNull()
+    expect(res!.newPaneId).not.toBe('p1')
+    if (res!.layout.type === 'leaf') {
+      expect(res!.layout.pane.id).toBe(res!.newPaneId)
+      // Content is preserved verbatim (same object reference is fine).
+      expect(res!.layout.pane.content).toBe(content)
+    }
+  })
+
+  it('returns null when the paneId is not present', () => {
+    const layout: PaneLayout = { type: 'leaf', pane: { id: 'p1', content: { kind: 'dashboard' } } }
+    expect(remountLeaf(layout, 'nope')).toBeNull()
+  })
+
+  it('remounts a leaf in place inside a split, leaving the sibling untouched', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')])
+    const res = remountLeaf(layout, 'p1')
+    expect(res).not.toBeNull()
+    const { layout: next, newPaneId } = res!
+    if (next.type === 'split') {
+      // Same tree position (index 0), new id.
+      const first = next.children[0]
+      const second = next.children[1]
+      expect(first.type === 'leaf' && first.pane.id).toBe(newPaneId)
+      // Sibling is the exact same object (untouched).
+      expect(second).toBe(layout.children[1])
+      // Split shape preserved.
+      expect(next.id).toBe('s1')
+      expect(next.sizes).toEqual(layout.sizes)
     }
   })
 })

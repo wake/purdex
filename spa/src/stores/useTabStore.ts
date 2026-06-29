@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern } from '../types/tab'
 import type { FileSource } from '../types/fs'
 import { createTab } from '../types/tab'
-import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern } from '../lib/pane-tree'
+import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern, remountLeaf } from '../lib/pane-tree'
 import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { UntitledDocumentState } from '../types/tab'
@@ -139,6 +139,7 @@ interface TabState {
   renameEditorPanes: (source: FileSource, oldPath: string, newPath: string, options?: { untitled?: UntitledDocumentState }) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
   closePane: (tabId: string, paneId: string) => void
+  remountPane: (tabId: string, paneId: string) => string | null
   resizePanes: (tabId: string, splitId: string, sizes: number[]) => void
   applyLayout: (tabId: string, pattern: LayoutPattern) => void
   setTabLayout: (tabId: string, layout: PaneLayout) => void
@@ -296,6 +297,18 @@ export const useTabStore = create<TabState>()(
           return
         }
         set({ tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } })
+      },
+
+      remountPane: (tabId, paneId) => {
+        const state = get()
+        const tab = state.tabs[tabId]
+        if (!tab) return null
+        // Swap the leaf's pane.id in place → new React key → forced remount of
+        // just that leaf (Phase 2c restore preview refresh). Returns the new id.
+        const res = remountLeaf(tab.layout, paneId)
+        if (!res) return null
+        set({ tabs: { ...state.tabs, [tabId]: { ...tab, layout: res.layout } } })
+        return res.newPaneId
       },
 
       resizePanes: (tabId, splitId, sizes) =>
