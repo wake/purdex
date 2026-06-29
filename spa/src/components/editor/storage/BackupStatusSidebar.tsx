@@ -1,6 +1,7 @@
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useBackupStore } from '../../../stores/useBackupStore'
+import { BackupHistoryList } from './BackupHistoryList'
 
 /**
  * Relative "time ago" for a past epoch-ms timestamp, reusing the same i18n keys
@@ -46,7 +47,7 @@ export function BackupStatusSidebar() {
   return (
     <aside
       data-testid="storage-backups-panel"
-      className="w-48 shrink-0 border-l border-border-subtle p-3 text-xs text-text-secondary"
+      className="flex w-48 shrink-0 flex-col overflow-y-auto border-l border-border-subtle p-3 text-xs text-text-secondary"
     >
       <div className="mb-2 font-medium text-text-primary">
         {t('editor.buffers.backup.title')}
@@ -75,6 +76,8 @@ export function BackupStatusSidebar() {
       {status === 'idle' && lastBackupAt === null && (
         <div data-testid="backup-never">{t('editor.buffers.backup.never')}</div>
       )}
+
+      <BackupHistoryList hostId={hostId} />
     </aside>
   )
 }
