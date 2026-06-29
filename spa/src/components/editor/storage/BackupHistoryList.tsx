@@ -53,18 +53,24 @@ export function BackupHistoryList({ hostId, onSelect }: BackupHistoryListProps) 
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!hostId) {
-      setRows(null)
-      setError(null)
-      setLoading(false)
-      return
-    }
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    getHistory(hostId, STORE_ID)
+    // Defer every setState off the synchronous effect body
+    // (react-hooks/set-state-in-effect), matching useStorageTree's pattern.
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return undefined
+        if (!hostId) {
+          setRows(null)
+          setError(null)
+          setLoading(false)
+          return undefined
+        }
+        setLoading(true)
+        setError(null)
+        return getHistory(hostId, STORE_ID)
+      })
       .then((h) => {
-        if (cancelled) return
+        if (cancelled || h === undefined) return
         setRows(h)
         setLoading(false)
       })

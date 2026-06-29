@@ -53,11 +53,17 @@ export function BackupSnapshotModal({
 
   useEffect(() => {
     let cancelled = false
-    setDetail(null)
-    setError(null)
-    getSnapshot(hostId, snapshot.id)
+    // Defer setState off the synchronous effect body
+    // (react-hooks/set-state-in-effect), matching useStorageTree's pattern.
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return undefined
+        setDetail(null)
+        setError(null)
+        return getSnapshot(hostId, snapshot.id)
+      })
       .then((d) => {
-        if (!cancelled) setDetail(d)
+        if (!cancelled && d !== undefined) setDetail(d)
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))

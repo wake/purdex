@@ -365,7 +365,7 @@ describe('remountLeaf', () => {
     const res = remountLeaf(layout, 'p1')
     expect(res).not.toBeNull()
     const { layout: next, newPaneId } = res!
-    if (next.type === 'split') {
+    if (next.type === 'split' && layout.type === 'split') {
       // Same tree position (index 0), new id.
       const first = next.children[0]
       const second = next.children[1]

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { BackupStatusSidebar } from './BackupStatusSidebar'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useBackupStore } from '../../../stores/useBackupStore'
@@ -19,9 +19,9 @@ vi.mock('../../../lib/storage-backup/backup-api', () => ({
   getBlob: vi.fn(),
 }))
 
-const runRestore = vi.fn<() => Promise<RestoreResult>>()
+const runRestore = vi.fn<(hostId: string, snapshotId: number) => Promise<RestoreResult>>()
 vi.mock('../../../lib/storage-backup/restore-wiring', () => ({
-  runRestore: (...a: unknown[]) => runRestore(...a),
+  runRestore: (hostId: string, snapshotId: number) => runRestore(hostId, snapshotId),
 }))
 
 const ACTIVE = 'host-A'
