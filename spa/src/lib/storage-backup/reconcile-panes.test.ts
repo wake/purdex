@@ -32,7 +32,7 @@ const empty: RestoreChange = { added: [], removed: [], modified: [] }
 describe('planReconciliation', () => {
   it('closes an inapp editor whose path was removed', () => {
     const tab = leafTab(editor(inapp, '/buffer/a.md'))
-    const actions = planReconciliation({ ...empty, removed: ['a.md'] }, { [tab.id]: tab })
+    const actions = planReconciliation({ ...empty, removed: ['a.md'] }, { [tab.id]: tab }, [])
     expect(actions).toContainEqual<PaneAction>({
       kind: 'close-editor',
       tabId: tab.id,
@@ -44,7 +44,7 @@ describe('planReconciliation', () => {
 
   it('reloads an inapp editor whose content changed', () => {
     const tab = leafTab(editor(inapp, '/buffer/a.md'))
-    const actions = planReconciliation({ ...empty, modified: ['a.md'] }, { [tab.id]: tab })
+    const actions = planReconciliation({ ...empty, modified: ['a.md'] }, { [tab.id]: tab }, ['a.md'])
     expect(actions).toContainEqual<PaneAction>({
       kind: 'reload-editor',
       tabId: tab.id,
@@ -62,6 +62,7 @@ describe('planReconciliation', () => {
     const actions = planReconciliation(
       { added: [], removed: ['x.png'], modified: ['y.pdf'] },
       { [removedTab.id]: removedTab, [changedTab.id]: changedTab },
+      ['y.pdf'],
     )
     expect(actions).toContainEqual<PaneAction>({ kind: 'close-preview', tabId: removedTab.id, paneId: removedId })
     expect(actions).toContainEqual<PaneAction>({ kind: 'remount-preview', tabId: changedTab.id, paneId: changedId })
@@ -73,6 +74,7 @@ describe('planReconciliation', () => {
     const actions = planReconciliation(
       { added: ['new.md'], removed: ['a.md'], modified: ['a.md'] },
       { [daemonTab.id]: daemonTab, [cleanTab.id]: cleanTab },
+      ['new.md', 'keep.md'],
     )
     expect(actions).toEqual([])
   })
@@ -94,11 +96,33 @@ describe('planReconciliation', () => {
         sizes: [50, 50],
       },
     }
-    const actions = planReconciliation({ added: [], removed: [], modified: ['a.md', 'b.png'] }, { [tab.id]: tab })
+    const actions = planReconciliation(
+      { added: [], removed: [], modified: ['a.md', 'b.png'] },
+      { [tab.id]: tab },
+      ['a.md', 'b.png'],
+    )
     expect(actions).toContainEqual<PaneAction>({
       kind: 'reload-editor', tabId: 'split-tab', paneId: 'L', source: inapp, filePath: '/buffer/a.md',
     })
     expect(actions).toContainEqual<PaneAction>({ kind: 'remount-preview', tabId: 'split-tab', paneId: 'R' })
+  })
+
+  it('closes an open file pane when a modified path became a directory (file→dir, codex 2c-2 R1)', () => {
+    const edTab = leafTab(editor(inapp, '/buffer/note.md'))
+    const edId = 'pane-' + seq
+    const pvTab = leafTab({ kind: 'image-preview', source: inapp, filePath: '/buffer/pic.png' })
+    const pvId = 'pane-' + seq
+    // Both paths are `modified` but NEITHER is a file in the restored tree
+    // (they became directories) — restoredFiles is empty.
+    const actions = planReconciliation(
+      { added: [], removed: [], modified: ['note.md', 'pic.png'] },
+      { [edTab.id]: edTab, [pvTab.id]: pvTab },
+      [],
+    )
+    expect(actions).toContainEqual<PaneAction>({
+      kind: 'close-editor', tabId: edTab.id, paneId: edId, source: inapp, filePath: '/buffer/note.md',
+    })
+    expect(actions).toContainEqual<PaneAction>({ kind: 'close-preview', tabId: pvTab.id, paneId: pvId })
   })
 })
 
@@ -134,7 +158,7 @@ describe('applyReconciliation', () => {
     useEditorStore.getState().openBuffer(key, 'old', { language: 'markdown' })
     useEditorStore.getState().attachPane(paneId, key)
 
-    await applyReconciliation({ added: [], removed: ['gone.md'], modified: [] }, liveDeps({}))
+    await applyReconciliation({ added: [], removed: ['gone.md'], modified: [] }, [], liveDeps({}))
 
     expect(useTabStore.getState().tabs[tab.id]).toBeUndefined() // last pane → tab closed
     expect(useEditorStore.getState().buffers[key]).toBeUndefined()
@@ -151,6 +175,7 @@ describe('applyReconciliation', () => {
 
     await applyReconciliation(
       { added: [], removed: [], modified: ['a.md'] },
+      ['a.md'],
       liveDeps({ '/buffer/a.md': { content: 'restored bytes', stat: { mtime: 999, size: 14 } } }),
     )
 
@@ -183,7 +208,7 @@ describe('applyReconciliation', () => {
     }
     useTabStore.setState({ tabs: { [tab.id]: tab }, tabOrder: [tab.id], activeTabId: tab.id })
 
-    await applyReconciliation({ added: [], removed: [], modified: ['b.png'] }, liveDeps({}))
+    await applyReconciliation({ added: [], removed: [], modified: ['b.png'] }, ['b.png'], liveDeps({}))
 
     const after = useTabStore.getState().tabs[tab.id].layout
     expect(after.type).toBe('split')
@@ -207,7 +232,7 @@ describe('applyReconciliation', () => {
     const tab = leafTab({ kind: 'pdf-preview', source: inapp, filePath: '/buffer/doc.pdf' })
     useTabStore.setState({ tabs: { [tab.id]: tab }, tabOrder: [tab.id], activeTabId: tab.id })
 
-    await applyReconciliation({ added: [], removed: ['doc.pdf'], modified: [] }, liveDeps({}))
+    await applyReconciliation({ added: [], removed: ['doc.pdf'], modified: [] }, [], liveDeps({}))
 
     expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
   })

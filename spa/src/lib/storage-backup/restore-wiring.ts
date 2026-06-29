@@ -40,7 +40,7 @@ export async function runRestore(hostId: string, snapshotId: number): Promise<Re
   })
 
   if (result.status === 'done') {
-    await applyReconciliation(result.changed, {
+    await applyReconciliation(result.changed, result.restoredFiles, {
       getTabs: () => useTabStore.getState().tabs,
       readFile: async (fullPath) => {
         const bytes = await backend.read(fullPath)

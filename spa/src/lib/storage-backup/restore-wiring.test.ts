@@ -31,9 +31,10 @@ beforeEach(() => {
 describe('runRestore', () => {
   it('runs pane reconciliation with the changed diff on a done result', async () => {
     const changed = { added: [], removed: ['x'], modified: ['y'] }
-    restoreSnapshot.mockResolvedValue({ status: 'done', restorePointId: 7, changed })
+    const restoredFiles = ['y']
+    restoreSnapshot.mockResolvedValue({ status: 'done', restorePointId: 7, changed, restoredFiles })
     const result = await runRestore('host-A', 42)
-    expect(result).toEqual({ status: 'done', restorePointId: 7, changed })
+    expect(result).toEqual({ status: 'done', restorePointId: 7, changed, restoredFiles })
     expect(applyReconciliation).toHaveBeenCalledTimes(1)
     expect(applyReconciliation.mock.calls[0][0]).toEqual(changed)
   })

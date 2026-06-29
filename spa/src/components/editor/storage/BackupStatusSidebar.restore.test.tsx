@@ -86,7 +86,7 @@ describe('BackupStatusSidebar restore flow (Phase 2c T7)', () => {
 
   it('done: closes the modal and surfaces success', async () => {
     setHostState({ status: 'idle' })
-    runRestore.mockResolvedValue({ status: 'done', restorePointId: 3, changed: { added: [], removed: [], modified: [] } })
+    runRestore.mockResolvedValue({ status: 'done', restorePointId: 3, changed: { added: [], removed: [], modified: [] }, restoredFiles: [] })
     await openModal()
     fireEvent.click(screen.getByTestId('backup-snapshot-restore'))
 

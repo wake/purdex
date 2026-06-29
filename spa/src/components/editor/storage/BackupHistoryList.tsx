@@ -65,6 +65,10 @@ export function BackupHistoryList({ hostId, onSelect }: BackupHistoryListProps) 
           setLoading(false)
           return undefined
         }
+        // Clear the previous host's rows BEFORE awaiting the new fetch, so a
+        // host switch never leaves stale (clickable) snapshots from host A
+        // visible while hostId is already host B (codex 2c-2 R1 P2).
+        setRows(null)
         setLoading(true)
         setError(null)
         return getHistory(hostId, STORE_ID)

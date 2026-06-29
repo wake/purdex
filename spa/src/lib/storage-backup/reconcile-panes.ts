@@ -43,9 +43,11 @@ function inappFilePath(content: PaneContent): string | null {
 export function planReconciliation(
   changed: RestoreChange,
   tabs: Record<string, Tab>,
+  restoredFiles: Iterable<string>,
 ): PaneAction[] {
   const removed = new Set(changed.removed)
   const modified = new Set(changed.modified)
+  const fileRels = new Set(restoredFiles)
   const actions: PaneAction[] = []
 
   for (const tab of Object.values(tabs)) {
@@ -58,16 +60,21 @@ export function planReconciliation(
       const isModified = modified.has(rel)
       if (!isRemoved && !isModified) return
 
+      // A `modified` path whose restored entry is no longer a FILE (file→dir
+      // transition, codex 2c-2 R1) is, for an open file pane, equivalent to a
+      // removal — reloading/ remounting it would read a directory. Close it.
+      const gone = isRemoved || !fileRels.has(rel)
+
       if (content.kind === 'editor') {
         actions.push(
-          isRemoved
+          gone
             ? { kind: 'close-editor', tabId: tab.id, paneId: pane.id, source: content.source, filePath }
             : { kind: 'reload-editor', tabId: tab.id, paneId: pane.id, source: content.source, filePath },
         )
       } else {
         // image-preview / pdf-preview
         actions.push(
-          isRemoved
+          gone
             ? { kind: 'close-preview', tabId: tab.id, paneId: pane.id }
             : { kind: 'remount-preview', tabId: tab.id, paneId: pane.id },
         )
@@ -98,9 +105,10 @@ export interface ReconcileDeps {
  */
 export async function applyReconciliation(
   changed: RestoreChange,
+  restoredFiles: Iterable<string>,
   deps: ReconcileDeps,
 ): Promise<void> {
-  const actions = planReconciliation(changed, deps.getTabs())
+  const actions = planReconciliation(changed, deps.getTabs(), restoredFiles)
   for (const action of actions) {
     switch (action.kind) {
       case 'close-editor':
