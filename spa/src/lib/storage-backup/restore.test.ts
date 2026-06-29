@@ -114,6 +114,94 @@ describe('restoreSnapshot', () => {
     expect(dec(await backend.read('/buffer/a.txt'))).toBe('orig')
   })
 
+  it('aborts before apply if the local /buffer tree changes during restore (no silent overwrite)', async () => {
+    // A concurrent local write (e.g. another pane autosave) lands AFTER the
+    // baseline + safety snapshot but BEFORE apply. It is not in the safety
+    // snapshot, so restore must abort rather than wipe it (codex 2c-1 R2 Critical).
+    await backend.write('/buffer/a.txt', enc('orig'))
+    const { detail, blobs } = await makeSnapshot({ 'a.txt': 'restored' })
+    const replaceSpy = vi.spyOn(backend, 'replaceTree')
+
+    await expect(
+      restoreSnapshot({
+        hostId: 'h1',
+        snapshotId: 99,
+        backend,
+        findConflicts: () => [],
+        preRestore: vi.fn().mockResolvedValue(50),
+        getSnapshot: vi.fn(async () => {
+          await backend.write('/buffer/new.txt', enc('concurrent'))
+          return detail
+        }),
+        getBlob: vi.fn(async (_h: string, hash: string) => blobs.get(hash)!),
+      }),
+    ).rejects.toThrow(/changed during restore/i)
+
+    expect(replaceSpy).not.toHaveBeenCalled()
+    // Both the original and the concurrent write survive — tree never wiped.
+    expect(dec(await backend.read('/buffer/a.txt'))).toBe('orig')
+    expect(dec(await backend.read('/buffer/new.txt'))).toBe('concurrent')
+  })
+
+  it('aborts before apply if a buffer becomes dirty/locked during restore', async () => {
+    await backend.write('/buffer/a.txt', enc('orig'))
+    const { detail, blobs } = await makeSnapshot({ 'a.txt': 'restored' })
+    const replaceSpy = vi.spyOn(backend, 'replaceTree')
+    const findConflicts = vi
+      .fn()
+      .mockReturnValueOnce([]) // clean at start
+      .mockReturnValue([{ type: 'dirty', tabId: 't1', filePath: '/buffer/a.txt' }]) // dirty by apply
+
+    await expect(
+      restoreSnapshot({
+        hostId: 'h1',
+        snapshotId: 99,
+        backend,
+        findConflicts,
+        preRestore: vi.fn().mockResolvedValue(50),
+        getSnapshot: vi.fn().mockResolvedValue(detail),
+        getBlob: vi.fn(async (_h: string, hash: string) => blobs.get(hash)!),
+      }),
+    ).rejects.toThrow(/dirty/i)
+
+    expect(replaceSpy).not.toHaveBeenCalled()
+    expect(dec(await backend.read('/buffer/a.txt'))).toBe('orig')
+  })
+
+  it('rejects a manifest with the same hash but a conflicting declared size (per-entry size check)', async () => {
+    await backend.write('/buffer/x.txt', enc('orig'))
+    const bytes = enc('shared')
+    const hash = await sha256Hex(bytes)
+    const detail: SnapshotDetail = {
+      id: 99,
+      storeId: 'inapp:buffer',
+      device: 'c_abc',
+      parentId: null,
+      isFork: false,
+      trigger: 'auto',
+      createdAt: 0,
+      manifest: [
+        { path: 'a.txt', kind: 'file', hash, size: bytes.byteLength, words: 0 },
+        { path: 'b.txt', kind: 'file', hash, size: bytes.byteLength + 7, words: 0 }, // same hash, wrong size
+      ],
+    }
+    const replaceSpy = vi.spyOn(backend, 'replaceTree')
+
+    await expect(
+      restoreSnapshot({
+        hostId: 'h1',
+        snapshotId: 99,
+        backend,
+        findConflicts: () => [],
+        preRestore: vi.fn().mockResolvedValue(50),
+        getSnapshot: vi.fn().mockResolvedValue(detail),
+        getBlob: vi.fn(async () => bytes),
+      }),
+    ).rejects.toThrow(/size mismatch/i)
+
+    expect(replaceSpy).not.toHaveBeenCalled()
+  })
+
   it('posts the pre-restore safety snapshot BEFORE fetching any blob', async () => {
     await backend.write('/buffer/a.md', enc('orig'))
     const { detail, blobs } = await makeSnapshot({ 'a.md': 'restored' })

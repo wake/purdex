@@ -77,7 +77,13 @@ export async function restoreSnapshot(deps: RestoreSnapshotDeps): Promise<Restor
   const conflicts = deps.findConflicts()
   if (conflicts.length > 0) return { status: 'blocked', conflicts }
 
-  // (2) Pre-restore safety snapshot (always posts; id = restore-point). With
+  // (2) Capture the baseline tree NOW — before pre-restore — so it reflects the
+  // exact state the safety snapshot will preserve, and so the change diff (and
+  // the pre-apply race check below) anchor on the same `before` (codex 2c-1 R2).
+  const before = await buildManifest(deps.backend)
+  const beforeKey = JSON.stringify(before.entries)
+
+  // (3) Pre-restore safety snapshot (always posts; id = restore-point). With
   // forcePost, a success ALWAYS yields a numeric id (a real row or the
   // content-keyed head); `null` means the snapshot failed (daemon down, build /
   // post error). Restore is destructive, so abort BEFORE touching the tree — a
@@ -88,28 +94,43 @@ export async function restoreSnapshot(deps: RestoreSnapshotDeps): Promise<Restor
     throw new Error('restore: pre-restore safety snapshot failed; aborting (no restore-point)')
   }
 
-  // Capture the current (pre-restore) tree for the change diff. Read-only — the
-  // tree is still untouched at this point.
-  const before = await buildManifest(deps.backend)
-
-  // (3) Fetch + verify EVERY file blob into memory before any mutation.
+  // (4) Fetch + verify EVERY file blob into memory before any mutation. The blob
+  // FETCH is deduped by hash (one download per distinct content), but the
+  // per-entry SIZE assertion runs for every file entry — a corrupt manifest with
+  // the same hash but a conflicting declared size must not pass (codex 2c-1 R2).
   const detail = await deps.getSnapshot(deps.hostId, deps.snapshotId)
   const blobs = new Map<string, Uint8Array>()
   for (const entry of detail.manifest) {
     if (entry.kind !== 'file') continue
-    if (blobs.has(entry.hash)) continue
-    const bytes = await deps.getBlob(deps.hostId, entry.hash)
-    const hash = await sha256Hex(bytes)
-    if (hash !== entry.hash) {
-      throw new Error(`restore: blob hash mismatch for ${entry.path} (expected ${entry.hash})`)
+    let bytes = blobs.get(entry.hash)
+    if (!bytes) {
+      bytes = await deps.getBlob(deps.hostId, entry.hash)
+      const hash = await sha256Hex(bytes)
+      if (hash !== entry.hash) {
+        throw new Error(`restore: blob hash mismatch for ${entry.path} (expected ${entry.hash})`)
+      }
+      blobs.set(entry.hash, bytes)
     }
     if (bytes.byteLength !== entry.size) {
       throw new Error(`restore: blob size mismatch for ${entry.path}`)
     }
-    blobs.set(entry.hash, bytes)
   }
 
-  // (4) Apply atomically. The guard above means this is the FIRST IDB mutation.
+  // (5) Pre-apply race check (codex 2c-1 R2, Critical). The guard ran once at the
+  // start, but pre-restore + blob fetch are async — a concurrent local `/buffer`
+  // write (e.g. another pane's autosave) or a newly-dirty buffer in that window
+  // is NOT captured by the safety snapshot. Re-check immediately before the wipe;
+  // if local state changed since the baseline, ABORT rather than silently
+  // overwrite un-snapshotted changes (spec §4.4 reversibility, R2-Pa/R2-Pg).
+  if (deps.findConflicts().length > 0) {
+    throw new Error('restore: a buffer became dirty/locked during restore; aborted (no overwrite)')
+  }
+  const current = await buildManifest(deps.backend)
+  if (JSON.stringify(current.entries) !== beforeKey) {
+    throw new Error('restore: /buffer changed during restore; aborted (no overwrite)')
+  }
+
+  // (6) Apply atomically. The checks above mean this is the FIRST IDB mutation.
   if (!supportsReplaceTree(deps.backend)) {
     throw new Error('restore: backend does not support replaceTree')
   }
@@ -120,7 +141,7 @@ export async function restoreSnapshot(deps: RestoreSnapshotDeps): Promise<Restor
   )
   await deps.backend.replaceTree(STORAGE_ROOT, replaceEntries)
 
-  // (5) Report the diff for 2c-2 pane reconciliation.
+  // (7) Report the diff for 2c-2 pane reconciliation.
   const changed = diffManifests(before.entries, detail.manifest)
   return { status: 'done', restorePointId, changed }
 }
