@@ -49,26 +49,35 @@ export function BackupStatusSidebar() {
   const lastBackupAt = state?.lastBackupAt ?? null
   const lastError = state?.lastError ?? null
 
-  const [selected, setSelected] = useState<SnapshotSummary | null>(null)
+  // Selection is TAGGED with the host the snapshot belongs to. A snapshot id is
+  // only meaningful for its own host's daemon, so the modal renders / restores
+  // ONLY while `selected.hostId === hostId`. Switching host therefore makes a
+  // stale selection inert in the same render — it can never drive
+  // runRestore(hostB, snapshotIdFromHostA) (codex 2c-2 R3 H1, cross-host hazard).
+  const [selected, setSelected] = useState<{ hostId: string; snapshot: SnapshotSummary } | null>(null)
   const [restoreBusy, setRestoreBusy] = useState(false)
   const [conflicts, setConflicts] = useState<RestoreConflict[] | null>(null)
   const [restoreError, setRestoreError] = useState<string | null>(null)
   const [restoredOk, setRestoredOk] = useState(false)
 
+  const activeSelection = selected && selected.hostId === hostId ? selected : null
+
   const handleSelect = (snapshot: SnapshotSummary) => {
-    setSelected(snapshot)
+    if (!hostId) return
+    setSelected({ hostId, snapshot })
     setConflicts(null)
     setRestoreError(null)
     setRestoredOk(false)
   }
 
   const handleRestore = async () => {
-    if (!hostId || !selected) return
+    if (!activeSelection) return
     setRestoreBusy(true)
     setConflicts(null)
     setRestoreError(null)
     try {
-      const result = await runRestore(hostId, selected.id)
+      // Scope to the snapshot's OWN host, never the (possibly switched) live host.
+      const result = await runRestore(activeSelection.hostId, activeSelection.snapshot.id)
       if (result.status === 'blocked') {
         // Block only — list conflicts, never implicitly save/discard (codex P3).
         setConflicts(result.conflicts)
@@ -125,10 +134,10 @@ export function BackupStatusSidebar() {
 
       <BackupHistoryList hostId={hostId} onSelect={handleSelect} />
 
-      {hostId && selected && (
+      {activeSelection && (
         <BackupSnapshotModal
-          hostId={hostId}
-          snapshot={selected}
+          hostId={activeSelection.hostId}
+          snapshot={activeSelection.snapshot}
           onClose={() => setSelected(null)}
           onRestore={handleRestore}
           restoreDisabled={status === 'backing-up'}

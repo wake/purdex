@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { BackupStatusSidebar } from './BackupStatusSidebar'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useBackupStore } from '../../../stores/useBackupStore'
@@ -92,6 +92,20 @@ describe('BackupStatusSidebar restore flow (Phase 2c T7)', () => {
 
     await waitFor(() => expect(screen.queryByTestId('backup-snapshot-modal')).toBeNull())
     expect(screen.getByTestId('backup-restore-success')).toBeInTheDocument()
+  })
+
+  it('drops a stale snapshot selection on host switch — cannot restore host A snapshot under host B (codex R3 H1)', async () => {
+    setHostState({ status: 'idle' })
+    await openModal() // modal open for the host-A snapshot
+    expect(screen.getByTestId('backup-snapshot-modal')).toBeInTheDocument()
+
+    // Switch active host to B while the modal is open.
+    await act(async () => { useHostStore.setState({ activeHostId: 'host-B' }) })
+
+    // The modal vanishes (selection belonged to host A) so there is no Restore
+    // button to drive runRestore('host-B', hostA-snapshot-id).
+    await waitFor(() => expect(screen.queryByTestId('backup-snapshot-modal')).toBeNull())
+    expect(runRestore).not.toHaveBeenCalled()
   })
 
   it('throw: shows an inline restore error and keeps the modal open', async () => {
