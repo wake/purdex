@@ -1,6 +1,12 @@
+import { useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useBackupStore } from '../../../stores/useBackupStore'
+import { BackupHistoryList } from './BackupHistoryList'
+import { BackupSnapshotModal } from './BackupSnapshotModal'
+import type { SnapshotSummary } from '../../../lib/storage-backup/backup-api'
+import type { RestoreConflict } from '../../../lib/storage-backup/restore-guard'
+import { runRestore } from '../../../lib/storage-backup/restore-wiring'
 
 /**
  * Relative "time ago" for a past epoch-ms timestamp, reusing the same i18n keys
@@ -43,10 +49,82 @@ export function BackupStatusSidebar() {
   const lastBackupAt = state?.lastBackupAt ?? null
   const lastError = state?.lastError ?? null
 
+  // Selection is TAGGED with the host the snapshot belongs to. A snapshot id is
+  // only meaningful for its own host's daemon, so the modal renders / restores
+  // ONLY while `selected.hostId === hostId`. Switching host therefore makes a
+  // stale selection inert in the same render — it can never drive
+  // runRestore(hostB, snapshotIdFromHostA) (codex 2c-2 R3 H1, cross-host hazard).
+  const [selected, setSelected] = useState<{ hostId: string; snapshot: SnapshotSummary } | null>(null)
+  const [restoreBusy, setRestoreBusy] = useState(false)
+  const [conflicts, setConflicts] = useState<RestoreConflict[] | null>(null)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  // The host whose restore just succeeded — the banner shows ONLY under that host
+  // so a success on A never appears under B after a switch (codex 2c-2 R5).
+  const [restoredOkHost, setRestoredOkHost] = useState<string | null>(null)
+
+  const activeSelection = selected && selected.hostId === hostId ? selected : null
+
+  // A monotonic token for the in-flight restore request. The selection key (host
+  // + snapshot) bumps it, so an async restore that resolves AFTER the user
+  // switched host / selection is ignored — its `done`/error must not close or
+  // mis-flag a DIFFERENT host's modal/banner (codex 2c-2 R4, host-scoping leak).
+  const restoreReq = useRef(0)
+  const selKey = activeSelection ? `${activeSelection.hostId}:${activeSelection.snapshot.id}` : 'none'
+  useEffect(() => {
+    restoreReq.current += 1 // invalidate any in-flight restore from the prior selection
+    let cancelled = false
+    // Reset the transient restore state for the new selection (deferred off the
+    // effect body to satisfy react-hooks/set-state-in-effect). The success
+    // banner (`restoredOkHost`) is intentionally NOT reset here — it persists
+    // after the modal closes and is itself host-scoped at render time.
+    Promise.resolve().then(() => {
+      if (cancelled) return
+      setRestoreBusy(false)
+      setConflicts(null)
+      setRestoreError(null)
+    })
+    return () => { cancelled = true }
+  }, [selKey])
+
+  const handleSelect = (snapshot: SnapshotSummary) => {
+    if (!hostId) return
+    setSelected({ hostId, snapshot })
+    setConflicts(null)
+    setRestoreError(null)
+    setRestoredOkHost(null)
+  }
+
+  const handleRestore = async () => {
+    if (!activeSelection) return
+    const myReq = restoreReq.current
+    setRestoreBusy(true)
+    setConflicts(null)
+    setRestoreError(null)
+    try {
+      // Scope to the snapshot's OWN host, never the (possibly switched) live host.
+      const result = await runRestore(activeSelection.hostId, activeSelection.snapshot.id)
+      if (restoreReq.current !== myReq) return // selection/host changed mid-flight — ignore
+      if (result.status === 'blocked') {
+        // Block only — list conflicts, never implicitly save/discard (codex P3).
+        setConflicts(result.conflicts)
+      } else {
+        // Done: reconciliation already ran inside runRestore; close + signal
+        // (scoped to the host that was actually restored).
+        setSelected(null)
+        setRestoredOkHost(activeSelection.hostId)
+      }
+    } catch (err) {
+      if (restoreReq.current !== myReq) return
+      setRestoreError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (restoreReq.current === myReq) setRestoreBusy(false)
+    }
+  }
+
   return (
     <aside
       data-testid="storage-backups-panel"
-      className="w-48 shrink-0 border-l border-border-subtle p-3 text-xs text-text-secondary"
+      className="flex w-48 shrink-0 flex-col overflow-y-auto border-l border-border-subtle p-3 text-xs text-text-secondary"
     >
       <div className="mb-2 font-medium text-text-primary">
         {t('editor.buffers.backup.title')}
@@ -74,6 +152,27 @@ export function BackupStatusSidebar() {
 
       {status === 'idle' && lastBackupAt === null && (
         <div data-testid="backup-never">{t('editor.buffers.backup.never')}</div>
+      )}
+
+      {restoredOkHost !== null && restoredOkHost === hostId && (
+        <div data-testid="backup-restore-success" className="mt-1 text-emerald-400">
+          {t('editor.buffers.backup.restore.success')}
+        </div>
+      )}
+
+      <BackupHistoryList hostId={hostId} onSelect={handleSelect} />
+
+      {activeSelection && (
+        <BackupSnapshotModal
+          hostId={activeSelection.hostId}
+          snapshot={activeSelection.snapshot}
+          onClose={() => setSelected(null)}
+          onRestore={handleRestore}
+          restoreDisabled={status === 'backing-up'}
+          restoreBusy={restoreBusy}
+          conflicts={conflicts}
+          restoreError={restoreError}
+        />
       )}
     </aside>
   )

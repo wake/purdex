@@ -30,7 +30,18 @@ export interface RestoreChange {
 
 export type RestoreResult =
   | { status: 'blocked'; conflicts: RestoreConflict[] }
-  | { status: 'done'; restorePointId: number; changed: RestoreChange }
+  | {
+      status: 'done'
+      restorePointId: number
+      changed: RestoreChange
+      /**
+       * Root-relative paths that are FILES in the restored tree. Pane
+       * reconciliation needs this to tell a content change (still a file →
+       * reload/remount) from a kind change (a path that became a directory →
+       * the open file pane must close, not reload a directory). (codex 2c-2 R1)
+       */
+      restoredFiles: string[]
+    }
 
 export interface RestoreSnapshotDeps {
   hostId: string
@@ -146,7 +157,8 @@ export async function restoreSnapshot(deps: RestoreSnapshotDeps): Promise<Restor
   )
   await backend.replaceTree(STORAGE_ROOT, replaceEntries, beforeRevision)
 
-  // (8) Report the diff for 2c-2 pane reconciliation.
+  // (8) Report the diff + restored file set for 2c-2 pane reconciliation.
   const changed = diffManifests(before.entries, detail.manifest)
-  return { status: 'done', restorePointId, changed }
+  const restoredFiles = detail.manifest.filter((e) => e.kind === 'file').map((e) => e.path)
+  return { status: 'done', restorePointId, changed, restoredFiles }
 }

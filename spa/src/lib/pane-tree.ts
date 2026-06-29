@@ -51,6 +51,35 @@ export function getLayoutKey(layout: PaneLayout): string {
 }
 
 /**
+ * Clone the leaf identified by `paneId` IN PLACE with a fresh `pane.id`, leaving
+ * its content (and every sibling) untouched. Because the layout renderer keys
+ * each leaf by `pane.id` (`getLayoutKey`), swapping the id changes the React key
+ * → forces an unmount+remount of just that leaf, so a preview pane re-runs its
+ * `[identity, backend]` read effect and shows freshly-restored bytes WITHOUT
+ * moving the leaf or disturbing the split layout (Phase 2c restore, R4-P2).
+ * Returns `null` when `paneId` is not in the tree.
+ */
+export function remountLeaf(
+  layout: PaneLayout,
+  paneId: string,
+): { layout: PaneLayout; newPaneId: string } | null {
+  if (layout.type === 'leaf') {
+    if (layout.pane.id !== paneId) return null
+    const newPaneId = generateId()
+    return { layout: { type: 'leaf', pane: { ...layout.pane, id: newPaneId } }, newPaneId }
+  }
+  for (let i = 0; i < layout.children.length; i++) {
+    const res = remountLeaf(layout.children[i], paneId)
+    if (res) {
+      const children = [...layout.children]
+      children[i] = res.layout
+      return { layout: { ...layout, children }, newPaneId: res.newPaneId }
+    }
+  }
+  return null
+}
+
+/**
  * Find the tab ID containing a session pane matching the given session code.
  */
 export function findTabBySessionCode(
