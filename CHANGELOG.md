@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.306] - 2026-06-29
+
+### Feat(storage): restore engine — Phase 2c-1 (subsystem 2) (#885)
+
+子系統 2 Phase 2c-1：前端還原引擎（headless，無 UI；由後續 2c-2 接上 history/viewer/restore UI +
+pane reconciliation）。spec §4.4 + AC-2c。plan 經 codex 2 輪 review（R1 1C+2P1+2P2+1P3 → 全修 →
+R2 READY-TO-IMPLEMENT）；5 個 TDD task 派 subagent 實作；PR 經 codex 標準 + 三視角 + 2 確認輪
+（共修 1 P1 + 1 Critical + 1 medium，最終 R4 approve）。full suite 3651 綠、lint、build 通過。
+
+- **讀取 client**（`backup-api`）：`getHistory`/`getSnapshot`/`getBlob` + `SnapshotSummary`/
+  `SnapshotDetail` 型別；404 用 typed `BackupNotFoundError`。
+- **`SupportsReplaceTree` capability + guard**（鏡像 `SupportsUniqueCreate`）；`InAppBackend.replaceTree`：
+  單一 IDB txn 清空 root 子樹 → dirs-first → files，前置 relPath 全驗證，失敗 abort 回滾，不 emit
+  `onMutation`（restore 不自觸發 auto-backup）。
+- **原子還原守衛**：`InAppBackend` 維護 monotonic tree revision（每個 mutation txn 內 bump）；
+  `replaceTree(…, expectedRevision)` 在自己 txn 內、刪除前重驗 revision，不符即 `TreeRevisionMismatchError`
+  不 mutate —— 消除「pre-restore 後到 apply 前的本機寫入被靜默覆寫」的資料遺失窗口。
+- **`backupNow(hostId, {trigger?,forcePost?})`** 回傳 `snapshotId|null`；`forcePost` 繞過 client no-op
+  （pre-restore 一定 POST）；per-host single-flight（restore 與 auto-backup 不重疊）。
+- **`restoreSnapshot(deps)`** orchestrator：guard → capture revision → pre-restore（forcePost）→
+  getSnapshot + 逐 blob 驗 sha256/size（per-entry）→ apply-time guard re-check → atomic
+  `replaceTree(expectedRevision)`。任一失敗在任何 IDB 寫入前 abort（R2-Pa）。
+- **`findRestoreConflicts`** pure guard：dirty inapp buffer / locked tab 含 inapp editor pane（R2-Pg）。
+
+### 不在本階段
+2c-2：history sidebar list + manifest modal + Restore 按鈕 wiring + pane reconciliation（含
+`remountPane` primitive）+ fork 指示。
+
 ## [1.0.0-alpha.305] - 2026-06-29
 
 ### Feat(storage+browser): post-2b UI polish (#883)
