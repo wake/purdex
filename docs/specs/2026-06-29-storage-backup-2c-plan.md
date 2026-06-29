@@ -74,25 +74,25 @@ Add to the existing client:
 ### T3 — restore orchestrator (`lib/storage-backup/restore.ts`)
 `restoreSnapshot(deps)` — dependency-injected, no store/React imports, so 2c-1 tests it with spies
 and 2c-2 supplies live deps. Order **exactly** per §4.4:
-0. **Acquire the per-host backup lock** (T3a single-flight) — wait for any in-flight auto-backup on
-   the same host to finish, and hold the lock through step 2 so a debounced auto-backup cannot
-   interleave the pre-restore (codex P1-a). Released after step 2 (the actual restore writes nothing
-   to the daemon).
-1. **Guard** (T4) — if blocked, return `{ status:'blocked', conflicts }` **without** any network/IDB
-   (and without taking the lock effects).
-2. **Pre-restore snapshot** — build current manifest (`buildManifest`), negotiate+upload missing
+1. **Guard first** (T4) — runs **before** any lock/network/IDB. If blocked, return
+   `{ status:'blocked', conflicts }` immediately (nothing acquired, nothing written).
+2. **Acquire the per-host backup lock** (T3a single-flight) — wait for any in-flight auto-backup on
+   the same host to finish, and hold the lock through the pre-restore so a debounced auto-backup
+   cannot interleave it (codex P1-a). Released after the pre-restore (the actual restore writes
+   nothing to the daemon).
+3. **Pre-restore snapshot** — build current manifest (`buildManifest`), negotiate+upload missing
    blobs, `postSnapshot(trigger:'pre-restore', parentId: own last id)`; record returned id as the
    restore-point. **Must always reach the daemon (codex C1):** call the 2b engine with
    `forcePost:true` so the *client-side* no-op suppression is bypassed — otherwise a tree equal to
    `lastManifestJSON` would short-circuit and never POST, leaving no restore-point. The daemon's
    *content-keyed* no-op still returns the existing head id (R2-Pf/R3-Pa); that head **is** the
    restore-point. Record the returned id (new or head).
-3. **Fetch + verify all blobs** — `getSnapshot(S)`; for every `kind:'file'` entry `getBlob(hash)`,
+4. **Fetch + verify all blobs** — `getSnapshot(S)`; for every `kind:'file'` entry `getBlob(hash)`,
    assert sha256(bytes)==hash **and** bytes.length==size, into an in-memory `Map`. Any failure →
    **throw before any IDB mutation** (R2-Pa atomicity); tree untouched.
-4. **`replaceTree`** — via `supportsReplaceTree` guard; build `ReplaceEntry[]` from the manifest
+5. **`replaceTree`** — via `supportsReplaceTree` guard; build `ReplaceEntry[]` from the manifest
    (dirs + files with fetched bytes).
-5. **Return** `{ status:'done', restorePointId, changed:{added,removed,modified} }` computed by
+6. **Return** `{ status:'done', restorePointId, changed:{added,removed,modified} }` computed by
    diffing the pre-restore manifest vs the restored manifest (paths + content hash) — 2c-2 uses this
    for pane reconciliation. **No reconciliation here** (UI-coupled → 2c-2).
 - **T3a — generalise the backup engine + add per-host single-flight**:
@@ -171,9 +171,11 @@ split layout. `openInAppFile` (singleton focus) and `setPaneContent` (same id, n
 insufficient and must NOT be used for this.
 - Add pure `pane-tree.ts` helper `remountLeaf(layout, paneId): { layout, newPaneId } | null` —
   clones the target leaf at the **same tree position** with a fresh id, content unchanged.
-- Add `useTabStore.remountPane(tabId, paneId)` — applies `remountLeaf`; if the remounted pane was
-  `activePaneId`, migrate it to `newPaneId`. (Preview panes hold no `useEditorStore` buffer, so no
-  buffer/paneState migration is needed beyond active-pane.)
+- Add `useTabStore.remountPane(tabId, paneId)` — applies `remountLeaf` and sets the new layout.
+  **Note (codex P2 nit):** `useTabStore` tracks only `activeTabId`, **not** any pane-level active id
+  — do **not** invent an `activePaneId` field. Remounting a leaf in the same tab/position needs no
+  active-pane migration; just confirm no other store holds a stale pane-id reference (preview panes
+  hold no `useEditorStore` buffer, so there is nothing else to migrate).
 - Both are headless-unit-testable (pane-tree pure; store action with the zustand harness).
 
 Using `restoreSnapshot`'s `changed` diff, after `replaceTree` (dirty buffers already refused, so all
