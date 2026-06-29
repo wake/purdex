@@ -30,7 +30,7 @@ export interface RestoreChange {
 
 export type RestoreResult =
   | { status: 'blocked'; conflicts: RestoreConflict[] }
-  | { status: 'done'; restorePointId: number | null; changed: RestoreChange }
+  | { status: 'done'; restorePointId: number; changed: RestoreChange }
 
 export interface RestoreSnapshotDeps {
   hostId: string
@@ -77,8 +77,16 @@ export async function restoreSnapshot(deps: RestoreSnapshotDeps): Promise<Restor
   const conflicts = deps.findConflicts()
   if (conflicts.length > 0) return { status: 'blocked', conflicts }
 
-  // (2) Pre-restore safety snapshot (always posts; id = restore-point).
+  // (2) Pre-restore safety snapshot (always posts; id = restore-point). With
+  // forcePost, a success ALWAYS yields a numeric id (a real row or the
+  // content-keyed head); `null` means the snapshot failed (daemon down, build /
+  // post error). Restore is destructive, so abort BEFORE touching the tree — a
+  // wipe with no restore-point would leave nothing to roll back to (R2-Pa,
+  // codex 2c-1 R1 P1). Nothing has mutated yet, so throwing is safe.
   const restorePointId = await deps.preRestore()
+  if (restorePointId === null) {
+    throw new Error('restore: pre-restore safety snapshot failed; aborting (no restore-point)')
+  }
 
   // Capture the current (pre-restore) tree for the change diff. Read-only — the
   // tree is still untouched at this point.

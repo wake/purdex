@@ -85,6 +85,35 @@ describe('restoreSnapshot', () => {
     expect(dec(await backend.read('/buffer/a.txt'))).toBe('orig')
   })
 
+  it('aborts (throws) and touches nothing when the pre-restore snapshot fails (null)', async () => {
+    // forcePost pre-restore returns null ONLY on failure (daemon down, build /
+    // post error). With no restore-point, restore must NOT proceed to wipe the
+    // tree — there would be nothing to roll back to (codex 2c-1 R1 P1).
+    await backend.write('/buffer/a.txt', enc('orig'))
+    const preRestore = vi.fn().mockResolvedValue(null)
+    const getSnapshot = vi.fn()
+    const getBlob = vi.fn()
+    const replaceSpy = vi.spyOn(backend, 'replaceTree')
+
+    await expect(
+      restoreSnapshot({
+        hostId: 'h1',
+        snapshotId: 99,
+        backend,
+        findConflicts: () => [],
+        preRestore,
+        getSnapshot,
+        getBlob,
+      }),
+    ).rejects.toThrow(/pre-restore/i)
+
+    expect(preRestore).toHaveBeenCalledTimes(1)
+    expect(getSnapshot).not.toHaveBeenCalled() // aborted before any fetch
+    expect(getBlob).not.toHaveBeenCalled()
+    expect(replaceSpy).not.toHaveBeenCalled() // tree never mutated
+    expect(dec(await backend.read('/buffer/a.txt'))).toBe('orig')
+  })
+
   it('posts the pre-restore safety snapshot BEFORE fetching any blob', async () => {
     await backend.write('/buffer/a.md', enc('orig'))
     const { detail, blobs } = await makeSnapshot({ 'a.md': 'restored' })
