@@ -6,6 +6,7 @@ import {
   type SnapshotSummary,
   type SnapshotDetail,
 } from '../../../lib/storage-backup/backup-api'
+import type { RestoreConflict } from '../../../lib/storage-backup/restore-guard'
 
 interface BackupSnapshotModalProps {
   hostId: string
@@ -15,6 +16,12 @@ interface BackupSnapshotModalProps {
   onRestore?: () => void
   /** Disable Restore (e.g. host is currently backing up — T7). */
   restoreDisabled?: boolean
+  /** Restore in progress — disables + relabels the button (T7). */
+  restoreBusy?: boolean
+  /** Pre-flight conflicts that blocked the restore; restore was NOT applied (T7). */
+  conflicts?: RestoreConflict[] | null
+  /** Inline restore error; the tree is guaranteed untouched/rolled back (T7). */
+  restoreError?: string | null
 }
 
 /** Human-readable byte size. */
@@ -36,6 +43,9 @@ export function BackupSnapshotModal({
   onClose,
   onRestore,
   restoreDisabled,
+  restoreBusy,
+  conflicts,
+  restoreError,
 }: BackupSnapshotModalProps) {
   const t = useI18nStore((s) => s.t)
   const [detail, setDetail] = useState<SnapshotDetail | null>(null)
@@ -145,6 +155,36 @@ export function BackupSnapshotModal({
           )}
         </div>
 
+        {/* Blocked-by-conflicts notice — restore was NOT applied (T7, codex P3:
+            list only, no implicit save/discard). */}
+        {conflicts && conflicts.length > 0 && (
+          <div
+            data-testid="backup-restore-conflicts"
+            className="border-t border-border-subtle px-4 py-3 text-xs text-amber-400"
+          >
+            <div className="font-medium">{t('editor.buffers.backup.restore.blockedTitle')}</div>
+            <div className="mt-0.5 text-text-muted">{t('editor.buffers.backup.restore.blockedHint')}</div>
+            <ul className="mt-1 flex flex-col gap-0.5">
+              {conflicts.map((c, i) => (
+                <li key={`${c.type}-${c.tabId}-${c.filePath}-${i}`} className="truncate">
+                  {c.type === 'dirty'
+                    ? t('editor.buffers.backup.restore.conflictDirty', { path: c.filePath })
+                    : t('editor.buffers.backup.restore.conflictLocked', { path: c.filePath })}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {restoreError && (
+          <div
+            data-testid="backup-restore-error"
+            className="border-t border-border-subtle px-4 py-3 text-xs text-red-400"
+          >
+            {t('editor.buffers.backup.restore.error', { message: restoreError })}
+          </div>
+        )}
+
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 border-t border-border-subtle px-4 py-3">
           <button
@@ -156,10 +196,12 @@ export function BackupSnapshotModal({
           <button
             data-testid="backup-snapshot-restore"
             onClick={() => onRestore?.()}
-            disabled={restoreDisabled}
+            disabled={restoreDisabled || restoreBusy}
             className="rounded-md bg-accent px-3 py-1.5 text-xs text-text-inverse hover:bg-accent-hover disabled:opacity-50"
           >
-            {t('editor.buffers.backup.viewer.restore')}
+            {restoreBusy
+              ? t('editor.buffers.backup.viewer.restoring')
+              : t('editor.buffers.backup.viewer.restore')}
           </button>
         </div>
       </div>

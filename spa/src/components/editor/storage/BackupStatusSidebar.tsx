@@ -5,6 +5,8 @@ import { useBackupStore } from '../../../stores/useBackupStore'
 import { BackupHistoryList } from './BackupHistoryList'
 import { BackupSnapshotModal } from './BackupSnapshotModal'
 import type { SnapshotSummary } from '../../../lib/storage-backup/backup-api'
+import type { RestoreConflict } from '../../../lib/storage-backup/restore-guard'
+import { runRestore } from '../../../lib/storage-backup/restore-wiring'
 
 /**
  * Relative "time ago" for a past epoch-ms timestamp, reusing the same i18n keys
@@ -48,6 +50,39 @@ export function BackupStatusSidebar() {
   const lastError = state?.lastError ?? null
 
   const [selected, setSelected] = useState<SnapshotSummary | null>(null)
+  const [restoreBusy, setRestoreBusy] = useState(false)
+  const [conflicts, setConflicts] = useState<RestoreConflict[] | null>(null)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [restoredOk, setRestoredOk] = useState(false)
+
+  const handleSelect = (snapshot: SnapshotSummary) => {
+    setSelected(snapshot)
+    setConflicts(null)
+    setRestoreError(null)
+    setRestoredOk(false)
+  }
+
+  const handleRestore = async () => {
+    if (!hostId || !selected) return
+    setRestoreBusy(true)
+    setConflicts(null)
+    setRestoreError(null)
+    try {
+      const result = await runRestore(hostId, selected.id)
+      if (result.status === 'blocked') {
+        // Block only — list conflicts, never implicitly save/discard (codex P3).
+        setConflicts(result.conflicts)
+      } else {
+        // Done: reconciliation already ran inside runRestore; close + signal.
+        setSelected(null)
+        setRestoredOk(true)
+      }
+    } catch (err) {
+      setRestoreError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRestoreBusy(false)
+    }
+  }
 
   return (
     <aside
@@ -82,13 +117,24 @@ export function BackupStatusSidebar() {
         <div data-testid="backup-never">{t('editor.buffers.backup.never')}</div>
       )}
 
-      <BackupHistoryList hostId={hostId} onSelect={setSelected} />
+      {restoredOk && (
+        <div data-testid="backup-restore-success" className="mt-1 text-emerald-400">
+          {t('editor.buffers.backup.restore.success')}
+        </div>
+      )}
+
+      <BackupHistoryList hostId={hostId} onSelect={handleSelect} />
 
       {hostId && selected && (
         <BackupSnapshotModal
           hostId={hostId}
           snapshot={selected}
           onClose={() => setSelected(null)}
+          onRestore={handleRestore}
+          restoreDisabled={status === 'backing-up'}
+          restoreBusy={restoreBusy}
+          conflicts={conflicts}
+          restoreError={restoreError}
         />
       )}
     </aside>

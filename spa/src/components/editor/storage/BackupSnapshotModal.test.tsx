@@ -77,4 +77,45 @@ describe('BackupSnapshotModal (Phase 2c T6)', () => {
     fireEvent.click(screen.getByTestId('backup-snapshot-restore'))
     expect(onRestore).toHaveBeenCalled()
   })
+
+  it('disables Restore (and shows restoring label) while busy or disabled', async () => {
+    getSnapshot.mockResolvedValue(detail)
+    const onRestore = vi.fn()
+    render(
+      <BackupSnapshotModal hostId="host-A" snapshot={summary} onClose={() => {}} onRestore={onRestore} restoreBusy restoreDisabled />,
+    )
+    await waitFor(() => expect(screen.getByText('a.md')).toBeInTheDocument())
+    const btn = screen.getByTestId('backup-snapshot-restore') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn).toHaveTextContent(/restoring|還原中/i)
+    fireEvent.click(btn)
+    expect(onRestore).not.toHaveBeenCalled()
+  })
+
+  it('renders the blocked conflict list (dirty + locked) without restoring', async () => {
+    getSnapshot.mockResolvedValue(detail)
+    render(
+      <BackupSnapshotModal
+        hostId="host-A"
+        snapshot={summary}
+        onClose={() => {}}
+        onRestore={() => {}}
+        conflicts={[
+          { type: 'dirty', tabId: 't1', filePath: '/buffer/a.md' },
+          { type: 'locked', tabId: 't2', filePath: '/buffer/b.md' },
+        ]}
+      />,
+    )
+    const block = await screen.findByTestId('backup-restore-conflicts')
+    expect(block).toHaveTextContent('/buffer/a.md')
+    expect(block).toHaveTextContent('/buffer/b.md')
+  })
+
+  it('renders an inline restore error', async () => {
+    getSnapshot.mockResolvedValue(detail)
+    render(
+      <BackupSnapshotModal hostId="host-A" snapshot={summary} onClose={() => {}} onRestore={() => {}} restoreError="no restore-point" />,
+    )
+    expect(await screen.findByTestId('backup-restore-error')).toHaveTextContent('no restore-point')
+  })
 })
