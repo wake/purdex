@@ -58,7 +58,9 @@ export function BackupStatusSidebar() {
   const [restoreBusy, setRestoreBusy] = useState(false)
   const [conflicts, setConflicts] = useState<RestoreConflict[] | null>(null)
   const [restoreError, setRestoreError] = useState<string | null>(null)
-  const [restoredOk, setRestoredOk] = useState(false)
+  // The host whose restore just succeeded — the banner shows ONLY under that host
+  // so a success on A never appears under B after a switch (codex 2c-2 R5).
+  const [restoredOkHost, setRestoredOkHost] = useState<string | null>(null)
 
   const activeSelection = selected && selected.hostId === hostId ? selected : null
 
@@ -72,9 +74,9 @@ export function BackupStatusSidebar() {
     restoreReq.current += 1 // invalidate any in-flight restore from the prior selection
     let cancelled = false
     // Reset the transient restore state for the new selection (deferred off the
-    // effect body to satisfy react-hooks/set-state-in-effect). `restoredOk` is
-    // intentionally NOT reset here — the success banner persists after the modal
-    // closes (selection → none).
+    // effect body to satisfy react-hooks/set-state-in-effect). The success
+    // banner (`restoredOkHost`) is intentionally NOT reset here — it persists
+    // after the modal closes and is itself host-scoped at render time.
     Promise.resolve().then(() => {
       if (cancelled) return
       setRestoreBusy(false)
@@ -89,7 +91,7 @@ export function BackupStatusSidebar() {
     setSelected({ hostId, snapshot })
     setConflicts(null)
     setRestoreError(null)
-    setRestoredOk(false)
+    setRestoredOkHost(null)
   }
 
   const handleRestore = async () => {
@@ -106,9 +108,10 @@ export function BackupStatusSidebar() {
         // Block only — list conflicts, never implicitly save/discard (codex P3).
         setConflicts(result.conflicts)
       } else {
-        // Done: reconciliation already ran inside runRestore; close + signal.
+        // Done: reconciliation already ran inside runRestore; close + signal
+        // (scoped to the host that was actually restored).
         setSelected(null)
-        setRestoredOk(true)
+        setRestoredOkHost(activeSelection.hostId)
       }
     } catch (err) {
       if (restoreReq.current !== myReq) return
@@ -151,7 +154,7 @@ export function BackupStatusSidebar() {
         <div data-testid="backup-never">{t('editor.buffers.backup.never')}</div>
       )}
 
-      {restoredOk && (
+      {restoredOkHost !== null && restoredOkHost === hostId && (
         <div data-testid="backup-restore-success" className="mt-1 text-emerald-400">
           {t('editor.buffers.backup.restore.success')}
         </div>

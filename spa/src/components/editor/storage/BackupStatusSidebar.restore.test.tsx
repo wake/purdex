@@ -130,6 +130,19 @@ describe('BackupStatusSidebar restore flow (Phase 2c T7)', () => {
     expect(screen.queryByTestId('backup-restore-success')).toBeNull()
   })
 
+  it('does not show host A restore success banner under host B after a switch (codex R5)', async () => {
+    setHostState({ status: 'idle' })
+    runRestore.mockResolvedValue({ status: 'done', restorePointId: 3, changed: { added: [], removed: [], modified: [] }, restoredFiles: [] })
+    await openModal()
+    fireEvent.click(screen.getByTestId('backup-snapshot-restore'))
+    await screen.findByTestId('backup-restore-success') // banner under host A
+
+    await act(async () => { useHostStore.setState({ activeHostId: 'host-B' }) })
+
+    // The success belonged to host A — it must not render under host B.
+    await waitFor(() => expect(screen.queryByTestId('backup-restore-success')).toBeNull())
+  })
+
   it('throw: shows an inline restore error and keeps the modal open', async () => {
     setHostState({ status: 'idle' })
     runRestore.mockRejectedValue(new Error('pre-restore safety snapshot failed'))
