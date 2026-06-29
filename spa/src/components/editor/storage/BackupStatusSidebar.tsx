@@ -1,7 +1,10 @@
+import { useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useBackupStore } from '../../../stores/useBackupStore'
 import { BackupHistoryList } from './BackupHistoryList'
+import { BackupSnapshotModal } from './BackupSnapshotModal'
+import type { SnapshotSummary } from '../../../lib/storage-backup/backup-api'
 
 /**
  * Relative "time ago" for a past epoch-ms timestamp, reusing the same i18n keys
@@ -44,6 +47,8 @@ export function BackupStatusSidebar() {
   const lastBackupAt = state?.lastBackupAt ?? null
   const lastError = state?.lastError ?? null
 
+  const [selected, setSelected] = useState<SnapshotSummary | null>(null)
+
   return (
     <aside
       data-testid="storage-backups-panel"
@@ -77,7 +82,15 @@ export function BackupStatusSidebar() {
         <div data-testid="backup-never">{t('editor.buffers.backup.never')}</div>
       )}
 
-      <BackupHistoryList hostId={hostId} />
+      <BackupHistoryList hostId={hostId} onSelect={setSelected} />
+
+      {hostId && selected && (
+        <BackupSnapshotModal
+          hostId={hostId}
+          snapshot={selected}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </aside>
   )
 }
