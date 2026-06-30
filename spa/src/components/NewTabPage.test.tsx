@@ -203,4 +203,28 @@ describe('NewTabPage — module-aware provider filter', () => {
     expect(screen.queryByTestId('card-editor-buffers')).toBeNull()
     expect(screen.queryByTestId('card-sessions')).toBeNull()
   })
+
+  it('grid root fills its mount with h-full (not flex-1) so the scrollable column is bounded', () => {
+    // The new-tab pane mounts under TabContent's position:absolute wrapper (a
+    // plain block, not a flex container), so a `flex-1` root collapses to
+    // content height and the inner `overflow-y-auto` column never gets a
+    // bounded height to scroll within. The root must claim height via `h-full`
+    // (resolves against the block parent's definite inset:0 height), matching
+    // EditorPane. Guards against regressing the start-screen scroll.
+    registerNewTabProvider({
+      id: 'sessions',
+      label: 'session.provider_label',
+      icon: 'List',
+      order: 0,
+      component: FakeSessionsCard,
+    })
+    primeLayout(['sessions'])
+
+    const { container } = render(<NewTabPage onSelect={() => {}} />)
+    const root = container.firstChild as HTMLElement
+    expect(root.className).toContain('h-full')
+    expect(root.className).not.toContain('flex-1')
+    // The scroll column is still present underneath.
+    expect((root.firstChild as HTMLElement).className).toContain('overflow-y-auto')
+  })
 })

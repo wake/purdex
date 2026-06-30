@@ -24,6 +24,18 @@ describe('HistoryPage', () => {
     expect(screen.getByText('No browsing history yet')).toBeTruthy()
   })
 
+  it('root fills its mount with h-full (not flex-1) so the overflow-y-auto list is scrollable', () => {
+    // Same root cause as the new-tab start screen: the history pane mounts
+    // under TabContent's position:absolute (block) wrapper, so a `flex-1` root
+    // collapses to content height and its own `overflow-y-auto` never gets a
+    // bounded height to scroll within. Must claim height via `h-full`.
+    const { container } = render(<HistoryPage {...makePaneProps()} />)
+    const root = container.firstChild as HTMLElement
+    expect(root.className).toContain('h-full')
+    expect(root.className).not.toContain('flex-1')
+    expect(root.className).toContain('overflow-y-auto')
+  })
+
   it('renders browse records in reverse chronological order', () => {
     const content1: PaneContent = { kind: 'dashboard' }
     const content2: PaneContent = { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }
