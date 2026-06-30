@@ -45,12 +45,12 @@ export function NewTabPage({ onSelect }: Props) {
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
 
   if (!hydrated) {
-    return <div className="flex-1" />
+    return <div className="h-full w-full" />
   }
 
   if (providers.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center" data-testid="newtab-empty-state">
+      <div className="h-full w-full flex items-center justify-center" data-testid="newtab-empty-state">
         <p className="text-sm text-text-secondary">{t('page.newtab.empty')}</p>
       </div>
     )
@@ -66,7 +66,7 @@ export function NewTabPage({ onSelect }: Props) {
   const hasAnyVisibleEntry = profile.columns.some((col) => col.some((id) => byId[id]))
   if (!hasAnyVisibleEntry) {
     return (
-      <div className="flex-1 flex items-center justify-center" data-testid="newtab-empty-state">
+      <div className="h-full w-full flex items-center justify-center" data-testid="newtab-empty-state">
         <p className="text-sm text-text-secondary">{t('page.newtab.empty')}</p>
       </div>
     )
@@ -75,7 +75,7 @@ export function NewTabPage({ onSelect }: Props) {
   const gridCols = colsClass(profile.columns.length)
 
   return (
-    <div className={`flex-1 grid overflow-hidden gap-6 px-6 pt-8 ${gridCols}`}>
+    <div className={`h-full w-full grid overflow-hidden gap-6 px-6 pt-8 ${gridCols}`}>
       {profile.columns.map((col, i) => (
         <div key={`${profileKey}-${i}`} className="flex flex-col gap-6 overflow-y-auto">
           {col.map((id) => {

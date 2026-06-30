@@ -16,7 +16,7 @@ export function HistoryPage(_props: PaneRendererProps) {
   const sorted = [...browseHistory].reverse()
 
   return (
-    <div className="flex-1 flex flex-col overflow-y-auto p-4">
+    <div className="h-full w-full flex flex-col overflow-y-auto p-4">
       <h2 className="text-sm font-medium text-text-secondary mb-4">{t('page.history.title')}</h2>
       {sorted.length === 0 && (
         <p className="text-sm text-text-muted">{t('page.history.empty')}</p>
