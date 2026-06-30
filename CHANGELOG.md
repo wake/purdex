@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.308] - 2026-06-30
+
+### Fix(spa): image/pdf preview fill height via h-full, not flex-1 (#889)
+
+修正在 tab 內瀏覽圖片時「寬度等比縮、高度卻不縮、且無法捲動」的 layout bug（PDF 預覽同症狀）。
+
+根因：`ImagePreviewPane` / `PdfPreviewPane` root 用 `flex-1` 撐高，但 `TabContent` 的每分頁掛載
+層是 `position:absolute inset:0` 的純 block（非 flex container），`flex-1` 在其下失效 → root 塌成
+內容高 → 內層容器無明確高度 → `<img>` 的 `max-height:100%`（PDF 為 iframe 的 `h-full`）解析成
+`none`，只剩寬度受限 → 直幅圖/PDF 高度溢出被 `overflow-hidden` 裁掉、不可捲。split / 有 header 的
+情境父層是 flex 容器故不受影響，僅「單一整頁」會中。
+
+修法：兩個 pane root `flex-1` → `h-full w-full`，對齊既有的 `EditorPane`（`h-full` 能解析到 block
+父層的 inset:0 明確高度）。恢復 `object-contain` 長邊優先等比縮，並讓 actual 模式的捲動路徑可達。
+回歸測試斷言兩 pane root 用 `h-full` 且非 `flex-1`；vitest 3694 綠、lint、build 通過，codex review 0 findings。
+
 ## [1.0.0-alpha.307] - 2026-06-29
 
 ### Feat(storage): restore UI — history/viewer/restore + pane reconciliation (Phase 2c-2) (#887)
