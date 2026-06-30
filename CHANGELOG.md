@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.309] - 2026-06-30
+
+### Fix(spa): new-tab / history panes fill height via h-full, not flex-1 (#891)
+
+修正「起始畫面（new-tab）」與「History pane」**無法捲動**的 layout bug——延續 #889 的同一 bug class。
+
+根因：`NewTabPage` / `HistoryPage` root 用 `flex-1` 撐高，但 `TabContent` 的每分頁掛載層是
+`position:absolute inset:0` 純 block（非 flex container），`flex-1` 在其下失效 → root 塌成內容高 →
+內層 `overflow-y-auto`（new-tab 欄 / history 列表）拿不到有界高度就不能捲。`EditorPane` / `TerminalView`
+本來就用 `h-full w-full` 故正常。
+
+修法：兩 pane root（NewTabPage 含 grid + empty-state + placeholder 四個 return）`flex-1` → `h-full w-full`。
+`HostPage` / `SettingsPage` root 是 `flex h-full`、scroll 容器為正確 flex child，**不受影響、未動**。回歸測試
+斷言兩 root 用 `h-full` 且非 `flex-1`；vitest 3696 綠、lint、build 通過，codex review 0 findings。
+
 ## [1.0.0-alpha.308] - 2026-06-30
 
 ### Fix(spa): image/pdf preview fill height via h-full, not flex-1 (#889)
