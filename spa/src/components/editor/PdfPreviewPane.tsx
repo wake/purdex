@@ -43,7 +43,7 @@ function PdfPreviewPaneInner({ source, filePath }: { source: FileSource; filePat
   const fileName = filePath.split('/').pop() ?? ''
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="h-full w-full flex flex-col overflow-hidden">
       <div className="px-3 py-1 border-b border-border-subtle bg-surface-secondary text-xs text-text-secondary truncate">
         {fileName}
       </div>
