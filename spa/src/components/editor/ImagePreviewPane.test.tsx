@@ -161,6 +161,30 @@ describe('ImagePreviewPane', () => {
     expect(container.className).toContain('min-h-0')
   })
 
+  it('fills its mount with an explicit height (h-full) so the fit-height chain works under a non-flex parent', async () => {
+    // Root cause of the "width fits but height does not, and cannot scroll"
+    // bug: the per-tab mount wrapper in TabContent is position:absolute inset:0
+    // (a plain block, not a flex container), so a `flex-1` root collapses to
+    // content height. Without a definite height, the inner container has no
+    // height for the image's max-height:100% to resolve against (it computes to
+    // `none`), leaving only width constrained → tall images overflow and the
+    // overflow is clipped, unscrollable. The pane must claim height the same way
+    // EditorPane does — `h-full w-full` — which resolves against the block
+    // parent's definite (inset:0) height. Guards against regressing back to
+    // `flex-1`.
+    imgComplete = true
+    imgNaturalW = 2000
+    imgNaturalH = 2000
+    boxW = 500
+    boxH = 500
+
+    const img = await renderAndMeasure('/big.png')
+    const container = img.parentElement as HTMLElement
+    const root = container.parentElement as HTMLElement
+    expect(root.className).toContain('h-full')
+    expect(root.className).not.toContain('flex-1')
+  })
+
   it('measures oversized synchronously for a cached/HMR-complete image without a load event (AC17b)', async () => {
     imgComplete = true
     imgNaturalW = 2000

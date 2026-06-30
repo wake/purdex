@@ -129,7 +129,7 @@ function ImagePreviewPaneInner({ source, filePath }: { source: FileSource; fileP
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+    <div className="h-full w-full flex flex-col overflow-hidden min-h-0">
       <div className="px-3 py-1 border-b border-border-subtle bg-surface-secondary text-xs text-text-secondary truncate">
         {fileName}
       </div>
