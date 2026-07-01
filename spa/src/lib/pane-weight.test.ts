@@ -14,11 +14,11 @@ const browser: PaneContent = { kind: 'browser', url: 'https://x' }
 const image: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/a.png' }
 
 describe('isLightTab', () => {
-  it('a single editor / preview / settings pane is light', () => {
+  it('self-contained, statically-rendered kinds are light', () => {
     expect(isLightTab(leaf(editor))).toBe(true)
     expect(isLightTab(leaf(image))).toBe(true)
-    expect(isLightTab(leaf({ kind: 'settings', scope: 'global' }))).toBe(true)
-    expect(isLightTab(leaf({ kind: 'new-tab' }))).toBe(true)
+    expect(isLightTab(leaf({ kind: 'dashboard' }))).toBe(true)
+    expect(isLightTab(leaf({ kind: 'history' }))).toBe(true)
   })
 
   it('a terminal or browser pane is heavy (not light)', () => {
@@ -26,12 +26,15 @@ describe('isLightTab', () => {
     expect(isLightTab(leaf(browser))).toBe(false)
   })
 
-  it('background-working / unknown kinds are heavy (allowlist: not always-alive)', () => {
+  it('background-working / extensible-host / unknown kinds are heavy (allowlist)', () => {
     // memory-monitor polls while mounted → must be bounded, not always alive.
     expect(isLightTab(leaf({ kind: 'memory-monitor' }))).toBe(false)
     // editor-buffers (storage pane) + hosts do their own fetching → heavy.
     expect(isLightTab(leaf({ kind: 'editor-buffers' }))).toBe(false)
     expect(isLightTab(leaf({ kind: 'hosts' }))).toBe(false)
+    // settings / new-tab host extensible child components that can fetch/stream.
+    expect(isLightTab(leaf({ kind: 'settings', scope: 'global' }))).toBe(false)
+    expect(isLightTab(leaf({ kind: 'new-tab' }))).toBe(false)
   })
 
   it('a split is heavy if ANY leaf is heavy', () => {

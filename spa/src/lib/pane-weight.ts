@@ -1,22 +1,26 @@
 import type { PaneLayout } from '../types/tab'
 import { collectLeaves } from './pane-tree'
 
-// Explicit ALLOWLIST of "light" pane kinds — cheap, static content that does no
-// background work while hidden, so it is safe to keep mounted across tab switches
-// (preserving editor scroll/mode, form inputs, …). Anything NOT listed here is
-// treated as heavy and bound by keepAliveCount — an allowlist so a new/unknown
-// pane kind defaults to the conservative (bounded) side. Deliberately excludes:
-// tmux-session / browser (GPU/WebContents memory) and memory-monitor / hosts /
-// editor-buffers (background polling / fetching that must not run unbounded for
-// hidden tabs).
+// Explicit ALLOWLIST of "light" pane kinds — self-contained renderers that load
+// once and do NO background work (no polling, streams, or fetch loops) while
+// hidden, so they are safe to keep mounted across tab switches (preserving editor
+// scroll/mode, etc.). Anything NOT listed is heavy and bound by keepAliveCount —
+// an allowlist so new/unknown kinds default to the conservative (bounded) side.
+//
+// Deliberately EXCLUDED (all bounded):
+//   - tmux-session / browser: GPU / WebContents memory.
+//   - memory-monitor: polls metrics while mounted.
+//   - hosts / editor-buffers: their own fetching.
+//   - settings / new-tab: host EXTENSIBLE child components (settings sections,
+//     new-tab provider cards) that can run daemon checks / streams / fetches —
+//     unbounded background work if kept alive. Only self-contained, statically
+//     rendered kinds qualify below.
 const LIGHT_PANE_KINDS = new Set<string>([
   'editor',
   'image-preview',
   'pdf-preview',
-  'new-tab',
   'dashboard',
   'history',
-  'settings',
 ])
 
 /**
