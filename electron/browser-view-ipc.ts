@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, shell } from 'electron'
 import { isAllowedUrl } from './browser-view-manager'
 import type { BrowserViewManager } from './browser-view-manager'
 import type { MiniWindowManager } from './mini-browser-window'
@@ -71,6 +71,13 @@ export function registerBrowserViewIpc(
     miniWindowManager.moveToTab(paneId)
   })
 
+  // Open a URL in the OS default browser. Scheme-guarded (http/https only) so a
+  // stray token can never hand file:// or a custom scheme to the OS handler.
+  ipcMain.handle('shell:open-external', (_event, url: string) => {
+    if (!isAllowedUrl(url)) return
+    return shell.openExternal(url)
+  })
+
   // --- State request (SPA loaded after view was created) ---
 
   ipcMain.handle('browser-view:request-state', (_event, paneId: string) => {
@@ -85,7 +92,9 @@ export function registerBrowserViewIpc(
     if (!isAllowedUrl(data.url)) return
 
     if (data.shiftKey) {
-      miniWindowManager.open(entry.window, data.url)
+      // Shift+Click inside a browser pane → OS default browser (consistent with
+      // terminal-link shift+click). Plain click still opens an in-app tab.
+      shell.openExternal(data.url)
     } else {
       // Notify parent window SPA to open new browser tab
       try {

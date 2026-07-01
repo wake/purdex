@@ -84,6 +84,7 @@ interface Window {
     browserViewPrint: (paneId: string) => Promise<void>
     destroyBrowserView: (paneId: string) => Promise<void>
     browserViewOpenMiniWindow: (url: string) => Promise<void>
+    openExternalUrl: (url: string) => Promise<void>
     browserViewMoveToTab: (paneId: string) => Promise<void>
     requestBrowserViewState: (paneId: string) => Promise<void>
     onBrowserViewStateUpdate: (callback: (paneId: string, state: { url: string; title: string; canGoBack: boolean; canGoForward: boolean; isLoading: boolean }) => void) => () => void

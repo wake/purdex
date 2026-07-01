@@ -396,7 +396,7 @@ export function registerBuiltinModules(): void {
     urlOpener: {
       isElectron: caps.isElectron,
       openBrowserTab,
-      openMiniWindow: (url) => window.electronAPI?.browserViewOpenMiniWindow(url),
+      openExternal: (url) => window.electronAPI?.openExternalUrl(url),
     },
     filePathOpener: {
       // P5: file-path opener now drives the openFile pipeline (stat → cache
