@@ -61,7 +61,13 @@ export function useTabAlivePool(activeTabId: string | null, tabs: MinimalTab[]) 
     } else {
       const alive: string[] = []
       const pinnedAlive: string[] = []
-      const maxNormal = keepAliveCount + 1 // +1 for active tab
+      // keepAliveCount is the number of INACTIVE heavy tabs kept. The active tab
+      // only claims one of those slots when it is itself heavy; when the active
+      // tab is light it is kept alive separately and must not shrink the heavy
+      // budget. (With no light tabs the active tab is heavy → +1 → byte-identical
+      // to the original.)
+      const activeIsHeavy = activeTabId ? !tabMap.get(activeTabId)?.light : false
+      const maxNormal = keepAliveCount + (activeIsHeavy ? 1 : 0)
       let normalCount = 0
 
       for (const id of h) {

@@ -60,6 +60,26 @@ describe('useTabAlivePool', () => {
     expect(result.current.aliveIds).not.toContain('term')
   })
 
+  it('an active LIGHT tab does not shrink the heavy budget (maxNormal = keepAliveCount)', () => {
+    resetSettings({ keepAliveCount: 1 })
+    const tabs: MockTab[] = [
+      { id: 'term1', pinned: false },
+      { id: 'term2', pinned: false },
+      { id: 'ed', pinned: false, light: true },
+    ]
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'term1' as string } },
+    )
+    rerender({ activeId: 'term2' })
+    rerender({ activeId: 'ed' })
+    // active is light → keepAliveCount(1) heavy tabs kept = term2 (most recent
+    // heavy). term1 evicted. ed (light) always alive.
+    expect(result.current.aliveIds).toContain('ed')
+    expect(result.current.aliveIds).toContain('term2')
+    expect(result.current.aliveIds).not.toContain('term1')
+  })
+
   it('keepAliveCount=0: pool only contains activeTabId', () => {
     const tabs: MockTab[] = [
       { id: 'a', pinned: false },

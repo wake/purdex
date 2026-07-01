@@ -26,6 +26,14 @@ describe('isLightTab', () => {
     expect(isLightTab(leaf(browser))).toBe(false)
   })
 
+  it('background-working / unknown kinds are heavy (allowlist: not always-alive)', () => {
+    // memory-monitor polls while mounted → must be bounded, not always alive.
+    expect(isLightTab(leaf({ kind: 'memory-monitor' }))).toBe(false)
+    // editor-buffers (storage pane) + hosts do their own fetching → heavy.
+    expect(isLightTab(leaf({ kind: 'editor-buffers' }))).toBe(false)
+    expect(isLightTab(leaf({ kind: 'hosts' }))).toBe(false)
+  })
+
   it('a split is heavy if ANY leaf is heavy', () => {
     const editorPlusTerminal: PaneLayout = {
       type: 'split', id: 'sp', direction: 'h', sizes: [50, 50],

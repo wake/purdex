@@ -1,18 +1,30 @@
 import type { PaneLayout } from '../types/tab'
 import { collectLeaves } from './pane-tree'
 
-// "Heavy" panes are the memory/GPU-heavy renderers that keepAliveCount is meant
-// to bound: tmux terminals (xterm / WebGL contexts) and browser panes (Electron
-// WebContentsView). Every other pane kind (editor, previews, settings, history,
-// new-tab, dashboard, …) is cheap.
-const HEAVY_PANE_KINDS = new Set<string>(['tmux-session', 'browser'])
+// Explicit ALLOWLIST of "light" pane kinds — cheap, static content that does no
+// background work while hidden, so it is safe to keep mounted across tab switches
+// (preserving editor scroll/mode, form inputs, …). Anything NOT listed here is
+// treated as heavy and bound by keepAliveCount — an allowlist so a new/unknown
+// pane kind defaults to the conservative (bounded) side. Deliberately excludes:
+// tmux-session / browser (GPU/WebContents memory) and memory-monitor / hosts /
+// editor-buffers (background polling / fetching that must not run unbounded for
+// hidden tabs).
+const LIGHT_PANE_KINDS = new Set<string>([
+  'editor',
+  'image-preview',
+  'pdf-preview',
+  'new-tab',
+  'dashboard',
+  'history',
+  'settings',
+])
 
 /**
- * A tab is "light" when it contains NO heavy pane. Light tabs are kept alive
- * across tab switches regardless of keepAliveCount, so their state (editor
- * scroll/mode, form inputs, …) is preserved and they never remount. keepAliveCount
- * only bounds heavy tabs.
+ * A tab is "light" only when EVERY pane is a known-light kind. Light tabs are
+ * kept alive across tab switches regardless of keepAliveCount, so they never
+ * remount and their state is preserved. Any heavy (or unknown) pane makes the
+ * whole tab heavy → bound by keepAliveCount.
  */
 export function isLightTab(layout: PaneLayout): boolean {
-  return !collectLeaves(layout).some((pane) => HEAVY_PANE_KINDS.has(pane.content.kind))
+  return collectLeaves(layout).every((pane) => LIGHT_PANE_KINDS.has(pane.content.kind))
 }
