@@ -3,6 +3,19 @@ import { isAllowedUrl } from './browser-view-manager'
 import type { BrowserViewManager } from './browser-view-manager'
 import type { MiniWindowManager } from './mini-browser-window'
 
+// Open a URL in the OS default browser, scheme-guarded and never rejecting.
+// shell.openExternal can reject (no OS handler, platform failure); we catch so
+// neither the fire-and-forget link-click path nor the ipcMain.handle path can
+// surface an unhandled promise rejection in the main process.
+async function openAllowedExternalUrl(url: string): Promise<void> {
+  if (!isAllowedUrl(url)) return
+  try {
+    await shell.openExternal(url)
+  } catch (err) {
+    console.error('[browser-view] shell.openExternal failed:', err)
+  }
+}
+
 export function registerBrowserViewIpc(
   manager: BrowserViewManager,
   miniWindowManager: MiniWindowManager,
@@ -73,10 +86,9 @@ export function registerBrowserViewIpc(
 
   // Open a URL in the OS default browser. Scheme-guarded (http/https only) so a
   // stray token can never hand file:// or a custom scheme to the OS handler.
-  ipcMain.handle('shell:open-external', (_event, url: string) => {
-    if (!isAllowedUrl(url)) return
-    return shell.openExternal(url)
-  })
+  // Always resolves (failures are caught + logged), so the renderer's invoke
+  // never rejects.
+  ipcMain.handle('shell:open-external', (_event, url: string) => openAllowedExternalUrl(url))
 
   // --- State request (SPA loaded after view was created) ---
 
@@ -94,7 +106,8 @@ export function registerBrowserViewIpc(
     if (data.shiftKey) {
       // Shift+Click inside a browser pane → OS default browser (consistent with
       // terminal-link shift+click). Plain click still opens an in-app tab.
-      shell.openExternal(data.url)
+      // Fire-and-forget; the helper catches so there is no unhandled rejection.
+      void openAllowedExternalUrl(data.url)
     } else {
       // Notify parent window SPA to open new browser tab
       try {
