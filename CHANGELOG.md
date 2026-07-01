@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.311] - 2026-07-01
+
+### Fix(spa): keep light (non-terminal) tabs alive across switches (#897)
+
+修正 **Live Mode（及任何 editor tab）切走再切回會「重新載入」回到頂端**。根因：`keepAliveCount` 預設 0，alive pool 只保留 active tab → editor 每次切 tab 都 unmount+remount → viewState 還原不穩 → 回頂 + reload flash。而 `keepAliveCount` 本質是 terminal renderer（xterm/WebGL）記憶體設定，editor 被連坐 evict。
+
+修法：把 tab 分 **light vs heavy**。heavy = 含 `tmux-session` / `browser` pane（GPU/WebContents 記憶體）；light = 自足、一次性載入、不做背景工作的渲染器（allowlist：`editor` / `image-preview` / `pdf-preview` / `dashboard` / `history`）。light tab 不受 keepAliveCount 連坐，以獨立 LRU（`LIGHT_KEEP_ALIVE_MAX = 8`，most-recent-first）保活 → 工作集切 tab 不 remount、scroll/mode 原生保留、記憶體有界。heavy tab 維持原 keepAliveCount LRU（無 light tab 時 alive set byte-identical）。
+
+- 新 `isLightTab(layout)`（`lib/pane-weight.ts`）用 light allowlist 掃 leaves（未知/未來 kind 預設 heavy，保守）。
+- `useTabAlivePool` 加 optional `light`：bounded light LRU + budget-aware history trim（不因大量 heavy 訪問而遺忘仍在預算內的 light tab）+ pinned light/heavy 皆豁免預算 + active 恆存活。
+- PR 經 codex 6 輪 adversarial review 逐一關閉：memory-monitor/settings/new-tab 誤分類（背景輪詢/可擴充 host）、light 無上限記憶體、history trim invariant、pinned light 契約——最終 approve。
+
+**純 SPA → HMR 即時生效。** 取捨：最多 8 個近期 light tab 常駐（editor/Monaco/Tiptap，遠小於 terminal GPU）；terminal 記憶體行為完全不變。
+
 ## [1.0.0-alpha.310] - 2026-07-01
 
 Batch A — editor markdown + terminal-link 使用者需求。
