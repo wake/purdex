@@ -93,17 +93,22 @@ export function useTabAlivePool(activeTabId: string | null, tabs: MinimalTab[]) 
     // Light tabs bypass keepAliveCount but are LRU-bounded to
     // LIGHT_KEEP_ALIVE_MAX (most-recent-first via history) so retention is not
     // unbounded. The active tab is always the head of history, so if it is light
-    // it is always within the budget → always alive.
+    // it is always within the budget → always alive. Pinned light tabs are
+    // budget-exempt (the keepAlivePinned contract), matching pinned heavy tabs.
     const seen = new Set(heavyAlive)
     const result = [...heavyAlive]
     let lightCount = 0
     for (const id of h) {
-      if (lightCount >= LIGHT_KEEP_ALIVE_MAX) break
       const tab = tabMap.get(id)
       if (!tab || !tab.light || seen.has(id)) continue
-      seen.add(id)
-      result.push(id)
-      lightCount++
+      if (keepAlivePinned && tab.pinned) {
+        seen.add(id)
+        result.push(id)
+      } else if (lightCount < LIGHT_KEEP_ALIVE_MAX) {
+        seen.add(id)
+        result.push(id)
+        lightCount++
+      }
     }
     return result
     // historyRef.current is mutated synchronously above, not a reactive dep

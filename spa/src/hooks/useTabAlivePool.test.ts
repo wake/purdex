@@ -103,6 +103,21 @@ describe('useTabAlivePool', () => {
     }
   })
 
+  it('pinned light tabs are budget-exempt (keepAlivePinned keeps all, even beyond MAX)', () => {
+    resetSettings({ keepAliveCount: 0, keepAlivePinned: true })
+    const n = LIGHT_KEEP_ALIVE_MAX + 2
+    const tabs: MockTab[] = Array.from({ length: n }, (_, i) => ({
+      id: `ed${i}`, pinned: true, light: true,
+    }))
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'ed0' as string } },
+    )
+    for (let i = 1; i < n; i++) rerender({ activeId: `ed${i}` })
+    // All pinned light tabs stay alive despite exceeding LIGHT_KEEP_ALIVE_MAX.
+    for (let i = 0; i < n; i++) expect(result.current.aliveIds).toContain(`ed${i}`)
+  })
+
   it('an active LIGHT tab does not shrink the heavy budget (maxNormal = keepAliveCount)', () => {
     resetSettings({ keepAliveCount: 1 })
     const tabs: MockTab[] = [
