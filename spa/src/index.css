@@ -152,11 +152,20 @@ button:disabled {
   border-radius: 4px;
 }
 
-/* Blockquote — left rule, muted text */
+/* Blockquote — left rule, muted text. Also neutralise Tailwind prose's
+   italic + medium weight + inserted curly quote marks (open-quote/close-quote
+   on blockquote p ::before/::after), none of which Outline uses. */
 .tiptap-editor blockquote {
   border-inline-start: 3px solid var(--border-default);
   color: var(--text-secondary);
   padding-inline: 1em;
+  font-style: normal;
+  font-weight: normal;
+  quotes: none;
+}
+.tiptap-editor blockquote p:first-of-type::before,
+.tiptap-editor blockquote p:last-of-type::after {
+  content: none;
 }
 
 /* Tables — cell padding / borders / zebra rows; horizontally scrollable */
