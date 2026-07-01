@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useTabAlivePool } from './useTabAlivePool'
+import { useTabAlivePool, LIGHT_KEEP_ALIVE_MAX } from './useTabAlivePool'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 
 function resetSettings(overrides?: { keepAliveCount?: number; keepAlivePinned?: boolean }) {
@@ -18,16 +18,37 @@ interface MockTab { id: string; pinned: boolean; light?: boolean }
 describe('useTabAlivePool', () => {
   beforeEach(() => resetSettings())
 
-  it('light tabs stay alive at keepAliveCount=0 (not just the active tab)', () => {
-    // Editor/preview/settings tabs are light → always kept alive so they never
-    // remount on a tab switch, independent of the terminal-oriented keepAliveCount.
+  it('recently-visited light tabs stay alive at keepAliveCount=0 (not just the active tab)', () => {
+    // Editor/preview tabs are light → kept alive across switches (up to
+    // LIGHT_KEEP_ALIVE_MAX), independent of the terminal-oriented keepAliveCount.
     const tabs: MockTab[] = [
       { id: 'ed1', pinned: false, light: true },
       { id: 'ed2', pinned: false, light: true },
     ]
-    const { result } = renderHook(() => useTabAlivePool('ed1', tabs))
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'ed1' as string } },
+    )
+    rerender({ activeId: 'ed2' }) // visit ed2 so it enters history
+    rerender({ activeId: 'ed1' })
     expect(result.current.aliveIds).toContain('ed1')
     expect(result.current.aliveIds).toContain('ed2')
+  })
+
+  it('light tabs are LRU-bounded to LIGHT_KEEP_ALIVE_MAX (oldest evicted)', () => {
+    const n = LIGHT_KEEP_ALIVE_MAX + 1
+    const tabs: MockTab[] = Array.from({ length: n }, (_, i) => ({
+      id: `ed${i}`, pinned: false, light: true,
+    }))
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'ed0' as string } },
+    )
+    for (let i = 1; i < n; i++) rerender({ activeId: `ed${i}` })
+    // Visited ed0..ed{n-1}; keep the MAX most recent → ed0 (oldest) evicts.
+    expect(result.current.aliveIds).toHaveLength(LIGHT_KEEP_ALIVE_MAX)
+    expect(result.current.aliveIds).toContain(`ed${n - 1}`)
+    expect(result.current.aliveIds).not.toContain('ed0')
   })
 
   it('heavy tabs remain bounded by keepAliveCount=0 (only the active heavy tab)', () => {
@@ -49,11 +70,12 @@ describe('useTabAlivePool', () => {
       ({ activeId }) => useTabAlivePool(activeId, tabs),
       { initialProps: { activeId: 'term' as string } },
     )
-    // term active heavy → alive; both editors light → alive.
-    expect(result.current.aliveIds).toEqual(expect.arrayContaining(['term', 'ed1', 'ed2']))
+    // Active heavy terminal is alive; editors not visited yet.
+    expect(result.current.aliveIds).toContain('term')
 
-    // Switch to a light tab: the heavy terminal is no longer active → evicted
-    // (keepAliveCount=0), but both editors stay alive.
+    // Visit both editors, then land on ed1: the heavy terminal is no longer
+    // active → evicted (keepAliveCount=0), but both light editors stay alive.
+    rerender({ activeId: 'ed2' })
     rerender({ activeId: 'ed1' })
     expect(result.current.aliveIds).toContain('ed1')
     expect(result.current.aliveIds).toContain('ed2')
