@@ -143,13 +143,20 @@ button:disabled {
   font-size: 90%;
 }
 
-/* Inline code — mono, faint fill, small radius */
+/* Inline code — mono, faint fill, small radius. Also neutralise Tailwind
+   prose's injected backticks (code ::before/::after content:"`") and its 600
+   weight, neither of which Outline uses. */
 .tiptap-editor :not(pre) > code {
   font-family: var(--tiptap-font-mono);
   font-size: 90%;
+  font-weight: normal;
   background: var(--surface-secondary);
   padding: 0.15em 0.35em;
   border-radius: 4px;
+}
+.tiptap-editor :not(pre) > code::before,
+.tiptap-editor :not(pre) > code::after {
+  content: none;
 }
 
 /* Blockquote — left rule, muted text. Also neutralise Tailwind prose's
