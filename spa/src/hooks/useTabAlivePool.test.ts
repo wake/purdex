@@ -13,10 +13,52 @@ function resetSettings(overrides?: { keepAliveCount?: number; keepAlivePinned?: 
   })
 }
 
-interface MockTab { id: string; pinned: boolean }
+interface MockTab { id: string; pinned: boolean; light?: boolean }
 
 describe('useTabAlivePool', () => {
   beforeEach(() => resetSettings())
+
+  it('light tabs stay alive at keepAliveCount=0 (not just the active tab)', () => {
+    // Editor/preview/settings tabs are light → always kept alive so they never
+    // remount on a tab switch, independent of the terminal-oriented keepAliveCount.
+    const tabs: MockTab[] = [
+      { id: 'ed1', pinned: false, light: true },
+      { id: 'ed2', pinned: false, light: true },
+    ]
+    const { result } = renderHook(() => useTabAlivePool('ed1', tabs))
+    expect(result.current.aliveIds).toContain('ed1')
+    expect(result.current.aliveIds).toContain('ed2')
+  })
+
+  it('heavy tabs remain bounded by keepAliveCount=0 (only the active heavy tab)', () => {
+    const tabs: MockTab[] = [
+      { id: 't1', pinned: false }, // heavy (light omitted)
+      { id: 't2', pinned: false },
+    ]
+    const { result } = renderHook(() => useTabAlivePool('t1', tabs))
+    expect(result.current.aliveIds).toEqual(['t1'])
+  })
+
+  it('mixed pool at keepAliveCount=0: all light alive + only the active heavy', () => {
+    const tabs: MockTab[] = [
+      { id: 'term', pinned: false }, // heavy
+      { id: 'ed1', pinned: false, light: true },
+      { id: 'ed2', pinned: false, light: true },
+    ]
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'term' as string } },
+    )
+    // term active heavy → alive; both editors light → alive.
+    expect(result.current.aliveIds).toEqual(expect.arrayContaining(['term', 'ed1', 'ed2']))
+
+    // Switch to a light tab: the heavy terminal is no longer active → evicted
+    // (keepAliveCount=0), but both editors stay alive.
+    rerender({ activeId: 'ed1' })
+    expect(result.current.aliveIds).toContain('ed1')
+    expect(result.current.aliveIds).toContain('ed2')
+    expect(result.current.aliveIds).not.toContain('term')
+  })
 
   it('keepAliveCount=0: pool only contains activeTabId', () => {
     const tabs: MockTab[] = [

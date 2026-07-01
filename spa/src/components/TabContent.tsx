@@ -1,5 +1,6 @@
 import { PaneLayoutRenderer } from './PaneLayoutRenderer'
 import { useTabAlivePool } from '../hooks/useTabAlivePool'
+import { isLightTab } from '../lib/pane-weight'
 import type { Tab } from '../types/tab'
 
 interface Props {
@@ -10,7 +11,7 @@ interface Props {
 export function TabContent({ activeTab, allTabs }: Props) {
   const { aliveIds, poolVersion } = useTabAlivePool(
     activeTab?.id ?? null,
-    allTabs.map((t) => ({ id: t.id, pinned: t.pinned })),
+    allTabs.map((t) => ({ id: t.id, pinned: t.pinned, light: isLightTab(t.layout) })),
   )
 
   const tabMap = new Map(allTabs.map((t) => [t.id, t]))

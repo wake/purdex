@@ -4,6 +4,11 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 interface MinimalTab {
   id: string
   pinned: boolean
+  // Light tabs (no terminal/browser pane) are cheap and always kept alive so
+  // their state survives tab switches without a remount. keepAliveCount bounds
+  // only heavy tabs. Absent → treated as heavy (preserves callers/tests that
+  // don't classify their tabs).
+  light?: boolean
 }
 
 export function useTabAlivePool(activeTabId: string | null, tabs: MinimalTab[]) {
@@ -46,29 +51,43 @@ export function useTabAlivePool(activeTabId: string | null, tabs: MinimalTab[]) 
 
   const aliveIds = useMemo(() => {
     const h = historyRef.current
+
+    // Heavy tabs (terminal/browser) follow the keepAliveCount LRU exactly as
+    // before. Light tabs are excluded from that bound and appended afterwards,
+    // so with no light tabs the result is byte-identical to the original.
+    let heavyAlive: string[]
     if (keepAliveCount === 0) {
-      return activeTabId ? [activeTabId] : []
-    }
+      heavyAlive = activeTabId && !tabMap.get(activeTabId)?.light ? [activeTabId] : []
+    } else {
+      const alive: string[] = []
+      const pinnedAlive: string[] = []
+      const maxNormal = keepAliveCount + 1 // +1 for active tab
+      let normalCount = 0
 
-    const alive: string[] = []
-    const pinnedAlive: string[] = []
-    const maxNormal = keepAliveCount + 1 // +1 for active tab
-    let normalCount = 0
-
-    for (const id of h) {
-      const tab = tabMap.get(id)
-      if (!tab) continue
-      if (keepAlivePinned && tab.pinned) {
-        // Pinned tabs kept alive separately, don't count toward normal limit
-        pinnedAlive.push(id)
-      } else {
-        if (normalCount < maxNormal) {
+      for (const id of h) {
+        const tab = tabMap.get(id)
+        if (!tab || tab.light) continue
+        if (keepAlivePinned && tab.pinned) {
+          // Pinned tabs kept alive separately, don't count toward normal limit
+          pinnedAlive.push(id)
+        } else if (normalCount < maxNormal) {
           alive.push(id)
           normalCount++
         }
       }
+      heavyAlive = [...pinnedAlive, ...alive]
     }
-    return [...pinnedAlive, ...alive]
+
+    // Light tabs are cheap → always alive, independent of keepAliveCount.
+    const seen = new Set(heavyAlive)
+    const result = [...heavyAlive]
+    for (const t of tabMap.values()) {
+      if (t.light && !seen.has(t.id)) {
+        seen.add(t.id)
+        result.push(t.id)
+      }
+    }
+    return result
     // historyRef.current is mutated synchronously above, not a reactive dep
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId, keepAliveCount, keepAlivePinned, tabMap, settingsVersion])
