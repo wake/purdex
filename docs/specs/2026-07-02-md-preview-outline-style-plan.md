@@ -13,9 +13,10 @@
 **檔案**：`spa/src/index.css`、`spa/src/components/editor/TiptapEditor.tsx`（僅去 `prose-sm`）、`TiptapEditor.test.tsx`（斷言）。
 
 ### Task 1.1 — 去 `prose-sm`（TDD）
-- **測試（先）**：`TiptapEditor.test.tsx` 加一條：渲染後 editor 容器 class **不含 `prose-sm`**、仍含 `tiptap-editor prose prose-invert`。
-  - 註：class 設在 `editorProps.attributes`（`TiptapEditor.tsx:62`），測試取 `[contenteditable]` 或 `.tiptap-editor` node 的 className 斷言。
-- **實作**：移除 `TiptapEditor.tsx:62` class 字串中的 `prose-sm`。
+- **測試（先）**，`TiptapEditor.test.tsx`：
+  - **必須更新既有測試**：現有 `applies typography classes to the editable root`（約 :62-67）斷言 `data-editor-class` 含 `'prose prose-invert prose-sm max-w-none'`——去 `prose-sm` 後**這條會紅**，改斷言 `'prose prose-invert max-w-none'`（去掉 prose-sm 後仍為連續子字串）＋顯式 `expect(...).not.stringContaining('prose-sm')`。
+  - **加便宜 smoke test（回應 codex）**：editable root 的 `data-editor-class` 仍含 `tiptap-editor`——整個 `.tiptap-editor` CSS scope 建立在此 class 上，class 名被改則 CI 現在抓不到。
+- **實作**：移除 `TiptapEditor.tsx:62` class 字串中的 `prose-sm`（其餘保留，含 `max-w-none`；`max-w-none` 由 Task 3.1 才移到 wrapper）。
 - **commit**：`refactor(editor): drop prose-sm from Tiptap; explicit CSS owns type scale`
 
 ### Task 1.2 — Outline `.tiptap-editor` 樣式塊（CSS，無單元測試）
@@ -44,12 +45,13 @@
 **檔案**：`spa/src/stores/useEditorSettingsStore.ts`、`useEditorSettingsStore.test.ts`（既有或新建）。
 
 ### Task 2.1 — store 欄位 + setter + sanitize + persist（TDD）
-- **測試（先）**，於 store 測試檔：
+- **測試（先）**，`useEditorSettingsStore.test.ts`，**併入既有 rehydrate 信任邊界測法（回應 codex；真正該守的是 `persist.rehydrate()` 行為，非 helper-level partialize）**：
   1. 初始 `contentWidth === 'narrow'`。
   2. `setContentWidth('full')` → state 為 `'full'`。
-  3. `partialize` 產出含 `contentWidth`；rehydrate（merge）後保留 persisted 值。
-  4. `sanitize`/`merge` 對非法 persisted（`'wide'` / `123` / `null` / 缺欄）→ 落回 `'narrow'`。
-  5. `reset()` → 回 `'narrow'`。
+  3. `setContentWidth('full')` 後，`localStorage[EDITOR_SETTINGS]` envelope 的 `state.contentWidth === 'full'`（比照 S1-6）。
+  4. **rehydrate happy-path（比照 S1-9）**：直接寫 envelope `state.contentWidth='full'` → `await persist.rehydrate()` → state 為 `'full'`。
+  5. **rehydrate 非法值（比照 S1-7）**：envelope `state.contentWidth='wide'`（或 `123`/`null`/缺欄）→ rehydrate 後落回 `'narrow'`。
+  6. `reset()` → 回 `'narrow'`。
 - **實作**（對照既有 `fontSize` 等欄位模式）：
   - `export type ContentWidthOption = 'narrow' | 'full'`
   - interface 加 `contentWidth: ContentWidthOption` + `setContentWidth`
@@ -69,13 +71,23 @@
 
 ### Task 3.1 — TiptapEditor 寬度 wrapper（TDD）
 - **測試（先）**，`TiptapEditor.test.tsx`：
-  1. `contentWidth="narrow"` → 內層 wrapper 帶限寬 class（如 `max-w-[52em] mx-auto` 或 `data-content-width="narrow"`）。
-  2. `contentWidth="full"` → wrapper 無限寬（滿寬）。
-  3. **切 prop `narrow`→`full` 不 remount**：rerender 前後 `[contenteditable]` DOM node 為同一 reference（editor instance 未重建）；scroll root `scrollTop` 不被歸零（設一個 scrollTop 再切 prop，斷言不變）。
+  1. `contentWidth="narrow"` → 內層 wrapper 帶限寬 class（斷言確切字串 `max-w-[52em] mx-auto box-border px-4`，或 `data-content-width="narrow"`）。
+  2. `contentWidth="full"` → wrapper 為滿寬（`max-w-none`，無 52em）。
+  3. **切 prop `narrow`↔`full` 不重跑 restore/focus/viewState、scrollTop 不歸零（回應 codex Blocker 1，改用行為斷言為主證據）**：既有 harness 已把 `@tiptap/react` 全 mock、且已有 `resolveRestoreSelection`（mock spy）、`editor.view.dispatch`（vi.fn）、`focusSpy`。作法——render `narrow`（觸發一次 restore/focus）記下各 spy call count 與 scroll root `scrollTop`（先設一非零值），`rerender` 成 `full`：
+     - `resolveRestoreSelection` **call count 不變**（restore 不重跑）
+     - `editor.view.dispatch` **不再被呼叫**（selection 不重設）
+     - `focusSpy` **不再被呼叫**（focus 不重打）
+     - `onViewStateChange` **在 rerender 過程未被觸發**（未誤判為 unmount 寫回）
+     - `tiptap-scroll-root.scrollTop` **維持原值**（不歸零）
+     - DOM node reference 相同僅作**輔助**佐證，**不**當「editor instance 未重建」的主要證據（mock 下 instance identity 由 mock 決定，不反映真實生命週期）。
 - **實作**：
   - Props 加 `contentWidth?: ContentWidthOption`（default `'narrow'`）。
-  - 現 `TiptapEditor.tsx:160` 內層 div 依 `contentWidth` 套 class：`narrow` → `max-w-[52em] mx-auto px-4`（`box-sizing: border-box`，padding 在 52em 內）；`full` → `max-w-none px-4`。**水平 padding 從 editorProps class（62 行）移到此 wrapper**；editor class 的 `px-4` 拿掉、`py-4` 保留（垂直）。
+  - 現 `TiptapEditor.tsx:160` 內層 div 依 `contentWidth` 套 class：
+    - `narrow` → **`max-w-[52em] mx-auto box-border px-4`**（`box-border` = `box-sizing: border-box`，**使 padding 計入 52em 之內**，落實 spec §4.1；回應 codex Blocker 2——無 `box-border` 則 padding 加在 52em 外、量測偏掉）
+    - `full` → `max-w-none px-4`
+  - **水平 padding 從 editorProps class（`:62` 的 `px-4`）移到此 wrapper**；editor root class 去 `px-4`、**保留 `max-w-none`**（讓 prose 不自我限縮到 65ch，改由 wrapper 統一控寬）、`py-4` 保留（垂直）。
   - scroll 容器（151-154）與 viewState 還原/focus 邏輯**完全不動**。
+- **已知風險（明寫，回應 codex）**：padding 換位置不影響 scroll root 的 scrollTop 讀寫（仍是同一 container），但 `narrow` 文字 measure 變窄後 reflow，**同一 scrollTop 數值可能對應不同視覺位置**——本 task 只保證「scrollTop 不歸零」，**不保證視覺 anchor 完全不位移**（spec §7 已列為接受風險）。
 - **commit**：`feat(editor): apply content-width wrapper in TiptapEditor`
 
 ### Task 3.2 — EditorStatusBar 寬度 toggle（TDD）
@@ -118,11 +130,12 @@
   - reload 後維持選擇。
   - raw/diff 無 toggle。
 
-## 相依與順序
+## 相依與順序（回應 codex：區分硬依賴 vs 視覺整合依賴）
 
-- Phase 1、Phase 2 互相獨立，可先做任一或並行。
-- Phase 3 依賴 Phase 2（store）與 Phase 1（wrapper 樣式協調）。
-- 建議：subagent A 做 Phase 1、subagent B 做 Phase 2（並行）→ 主 session 整合 → Phase 3（依序 3.1→3.2→3.3，或 3.1/3.2 並行後 3.3）。
+- Phase 1、Phase 2 互相獨立，可並行。
+- **硬依賴**：Phase 3 → Phase 2（`contentWidth` store 需先存在，`3.2`/`3.3` 讀它）。
+- **僅視覺整合依賴**（非技術依賴）：Phase 3 → Phase 1（Task `3.1` 的 wrapper 只要測試不把 typography class 綁死，其實 Phase 2 完成即可先做，不必等 Phase 1）。
+- 建議：subagent A 做 Phase 1、subagent B 做 Phase 2（並行）→ 主 session 整合 → Phase 3（`3.1`/`3.2` 可並行、`3.3` 最後接線）。
 
 ## 非目標（重申）
 
