@@ -25,7 +25,11 @@ export function TiptapEditor({ content, isActive, initialViewState, onChange, on
   const hasInitializedRef = useRef(false)
 
   const focusEditable = () => {
-    containerRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus()
+    // preventScroll: refocusing on tab re-activation (the isActive false→true
+    // effect) must NOT scroll the caret into view — that jumps a scrolled
+    // document back to the top on every tab switch. Scroll position is owned by
+    // the container / restored viewState, never by focus.
+    containerRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus({ preventScroll: true })
   }
 
   useEffect(() => {
