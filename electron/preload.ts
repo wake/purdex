@@ -53,6 +53,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Browser View — mini window
   browserViewOpenMiniWindow: (url: string) =>
     ipcRenderer.invoke('browser-view:open-mini-window', url),
+  // Open a URL in the OS default browser (main-process shell.openExternal).
+  openExternalUrl: (url: string) =>
+    ipcRenderer.invoke('shell:open-external', url),
   browserViewMoveToTab: (paneId: string) =>
     ipcRenderer.invoke('browser-view:move-to-tab', paneId),
 

@@ -7,7 +7,7 @@ describe('registerBuiltinTerminalLinks', () => {
 
   it('registers both url and file-path matchers', () => {
     registerBuiltinTerminalLinks({
-      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openExternal: () => {} },
       filePathOpener: {
         tryOpenFile: async () => {},
         openAsBuffer: () => {},
@@ -24,7 +24,7 @@ describe('registerBuiltinTerminalLinks', () => {
 
   it('is idempotent — double call does not double-register matchers or openers', () => {
     const deps = {
-      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openExternal: () => {} },
       filePathOpener: {
         tryOpenFile: async () => {},
         openAsBuffer: () => {},
@@ -51,7 +51,7 @@ describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
 
   it('registers all 4 file-path matchers', () => {
     registerBuiltinTerminalLinks({
-      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openExternal: () => {} },
       filePathOpener: {
         tryOpenFile: async () => {},
         openAsBuffer: () => {},
@@ -75,7 +75,7 @@ describe('registerBuiltinTerminalLinks — 4 file-path matchers', () => {
   // independent and always registers.
   it('skips ALL four file-path matchers when fileMatchersEnabled=false', () => {
     registerBuiltinTerminalLinks({
-      urlOpener: { isElectron: false, openBrowserTab: () => {}, openMiniWindow: () => {} },
+      urlOpener: { isElectron: false, openBrowserTab: () => {}, openExternal: () => {} },
       filePathOpener: {
         tryOpenFile: async () => {},
         openAsBuffer: () => {},
