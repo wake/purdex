@@ -85,6 +85,9 @@ describe('TiptapEditor', () => {
     rerender(<TiptapEditor content="# Hello" isActive={true} onChange={() => {}} onSave={() => {}} />)
 
     expect(focusSpy).toHaveBeenCalledTimes(1)
+    // Re-activation focus must not scroll the caret into view — otherwise a
+    // scrolled document jumps to the top on every tab switch back.
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true })
   })
 
   it('focuses on the null→editor ready transition when active (AC2, M1)', () => {

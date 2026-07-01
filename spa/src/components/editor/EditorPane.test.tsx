@@ -25,7 +25,7 @@ vi.mock('./MonacoWrapper', () => ({ MonacoWrapper: () => <div data-testid="monac
 vi.mock('./DiffView', () => ({ DiffView: () => null }))
 vi.mock('./EditorStatusBar', () => ({ EditorStatusBar: () => null }))
 vi.mock('../RenamePopover', () => ({ RenamePopover: () => null }))
-vi.mock('./TiptapEditor', () => ({ TiptapEditor: () => null }))
+vi.mock('./TiptapEditor', () => ({ TiptapEditor: () => <div data-testid="tiptap" /> }))
 
 // The unit under test: the quick-switch must route through openInAppFile.
 const openInAppFileMock = vi.fn()
@@ -162,5 +162,24 @@ describe('EditorPane — breadcrumb quick-switch (T6)', () => {
     const filePaths = setPaneContentSpy.mock.calls.map((c) => (c[2] as { filePath: string }).filePath)
     expect(filePaths).toEqual(['/buffer/Untitled.md', '/buffer/Untitled-1.md'])
     expect(new Set(filePaths).size).toBe(2)
+  })
+
+  it('opens a markdown file in Live Mode (wysiwyg) by default', async () => {
+    // beforeEach seeds a markdown buffer at FILE. With no explicit user mode
+    // choice (paneState.editorMode null), markdown must resolve to wysiwyg.
+    renderPane()
+    expect(await screen.findByTestId('tiptap')).toBeTruthy()
+    expect(screen.queryByTestId('monaco')).toBeNull()
+  })
+
+  it('opens a non-markdown file in raw (Monaco) by default', async () => {
+    // Same path, but the buffer language is plaintext → default resolves to raw.
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+    useEditorStore.getState().openBuffer(bufferKey({ type: 'inapp' }, FILE), 'plain', {
+      language: 'plaintext',
+    })
+    renderPane()
+    expect(await screen.findByTestId('monaco')).toBeTruthy()
+    expect(screen.queryByTestId('tiptap')).toBeNull()
   })
 })

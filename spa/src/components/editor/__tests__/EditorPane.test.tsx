@@ -205,7 +205,7 @@ describe('EditorPane', () => {
   })
 
   it('passes active state through to the editor content for refocus', async () => {
-    const pane = createPane('/notes/focus.md')
+    const pane = createPane('/notes/focus.txt')
     const backend = createBackend()
     getFsBackendMock.mockReturnValue(backend)
     backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
@@ -219,7 +219,7 @@ describe('EditorPane', () => {
     const { rerender } = render(<EditorPane pane={pane} isActive={false} />)
 
     await waitFor(() => {
-      expect(useEditorStore.getState().buffers[getBufferKey('/notes/focus.md')]).toBeDefined()
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/focus.txt')]).toBeDefined()
     })
 
     rerender(<EditorPane pane={pane} isActive />)

@@ -25,7 +25,9 @@ describe('useEditorStore', () => {
     })
     expect(state.paneStates['pane-b']).toMatchObject({
       bufferKey: 'key1',
-      editorMode: 'raw',
+      // null = no explicit choice yet; the component resolves the language
+      // default (markdown → wysiwyg, else raw) at render time.
+      editorMode: null,
       showDiff: false,
       cursorPosition: { line: 1, column: 1 },
     })
@@ -56,7 +58,9 @@ describe('useEditorStore', () => {
     expect(useEditorStore.getState().buffers['key-a']).toBeUndefined()
     expect(useEditorStore.getState().paneStates['pane-a']).toMatchObject({
       bufferKey: 'key-b',
-      editorMode: 'raw',
+      // switching buffers resets pane-local state to fresh defaults; editorMode
+      // null means "resolve language default at render" (key-b is markdown → wysiwyg).
+      editorMode: null,
       showDiff: false,
       cursorPosition: { line: 1, column: 1 },
     })

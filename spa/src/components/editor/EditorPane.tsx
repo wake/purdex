@@ -123,7 +123,19 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   // onto the new one (attachPane rebuilds paneState to these exact defaults anyway).
   const alignedPaneState = paneState?.bufferKey === key ? paneState : undefined
   const isMarkdown = buffer?.language === 'markdown'
-  const editorMode = alignedPaneState?.editorMode ?? 'raw'
+  // Mode resolution, in order of precedence:
+  //   1. stale/unaligned paneState → raw. Deriving raw while paneState hasn't
+  //      rebound to THIS buffer keeps the #863 invariant: Tiptap (lazy) never
+  //      mounts against a stale paneState, and no `Loading editor…` Suspense
+  //      flicker paints during a buffer switch. The wysiwyg default only kicks
+  //      in once aligned.
+  //   2. aligned + explicit user choice (concrete editorMode) → that choice; it
+  //      wins and survives remounts.
+  //   3. aligned + no choice (editorMode null) → language default: markdown opens
+  //      in Live Mode (wysiwyg), everything else raw.
+  const editorMode = alignedPaneState
+    ? (alignedPaneState.editorMode ?? (isMarkdown ? 'wysiwyg' : 'raw'))
+    : 'raw'
   const effectiveEditorMode = isMarkdown ? editorMode : 'raw'
   const showDiff = alignedPaneState?.showDiff ?? false
   const canSave = buffer ? (buffer.isDirty || !buffer.lastStat) : false
@@ -460,13 +472,14 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
             onSave={handleSave}
           />
         ) : (
-          /* wysiwyg path. effectiveEditorMode === 'wysiwyg' requires alignedPaneState
-             (editorMode came from alignedPaneState?.editorMode ?? 'raw'), so paneState
-             is guaranteed already rebound to THIS buffer — the stale-paneState window
-             can never reach here (it derives raw and renders Monaco instead). Mounting
-             TiptapEditor against the aligned paneState is therefore safe: its one-shot
-             restore reads the correct tiptapViewState and didRestoreRef is never locked
-             against a stale state (supersedes PR #862's R3 post-commit gating). */
+          /* wysiwyg path. effectiveEditorMode === 'wysiwyg' requires alignedPaneState:
+             the mode resolution derives raw whenever paneState is stale/unaligned (the
+             markdown → wysiwyg default only applies once aligned), so paneState is
+             guaranteed already rebound to THIS buffer here — the stale-paneState window
+             can never reach this branch (it derives raw and renders Monaco instead).
+             Mounting TiptapEditor against the aligned paneState is therefore safe: its
+             one-shot restore reads the correct tiptapViewState and didRestoreRef is never
+             locked against a stale state (supersedes PR #862's R3 post-commit gating). */
           <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading editor...</div>}>
             <TiptapEditor
               key={buffer.modelId}
