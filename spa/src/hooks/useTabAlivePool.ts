@@ -110,13 +110,31 @@ export function useTabAlivePool(activeTabId: string | null, tabs: MinimalTab[]) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId, keepAliveCount, keepAlivePinned, tabMap, settingsVersion])
 
-  // Trim history to prevent unbounded growth
+  // Trim history to prevent unbounded growth WITHOUT dropping any tab that could
+  // still be kept alive. A plain length cap is wrong here: light and heavy tabs
+  // share one history, so after enough heavy visits a still-recent light tab
+  // would slide past the cut and be forgotten (then remount, losing its state).
+  // Instead keep, newest-first, the LIGHT_KEEP_ALIVE_MAX most-recent light tabs,
+  // a generous heavy buffer, and all pinned tabs; drop the rest.
   useEffect(() => {
-    const maxHistory = Math.max(keepAliveCount + 10, 20)
-    if (historyRef.current.length > maxHistory) {
-      historyRef.current = historyRef.current.slice(0, maxHistory)
+    const h = historyRef.current
+    const heavyBudget = Math.max(keepAliveCount + 10, 20)
+    let lightKept = 0
+    let heavyKept = 0
+    const kept: string[] = []
+    for (const id of h) {
+      const tab = tabMap.get(id)
+      if (!tab) continue // closed tab (already filtered at render, defensive)
+      if (keepAlivePinned && tab.pinned) {
+        kept.push(id)
+      } else if (tab.light) {
+        if (lightKept < LIGHT_KEEP_ALIVE_MAX) { kept.push(id); lightKept++ }
+      } else if (heavyKept < heavyBudget) {
+        kept.push(id); heavyKept++
+      }
     }
-  }, [activeTabId, keepAliveCount])
+    if (kept.length !== h.length) historyRef.current = kept
+  }, [activeTabId, keepAliveCount, keepAlivePinned, tabMap])
 
   return { aliveIds, poolVersion: settingsVersion }
 }

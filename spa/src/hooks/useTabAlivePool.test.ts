@@ -82,6 +82,27 @@ describe('useTabAlivePool', () => {
     expect(result.current.aliveIds).not.toContain('term')
   })
 
+  it('keeps light tabs alive after many interleaved heavy-tab visits (history trim invariant)', () => {
+    const lightTabs: MockTab[] = Array.from({ length: LIGHT_KEEP_ALIVE_MAX }, (_, i) => ({
+      id: `ed${i}`, pinned: false, light: true,
+    }))
+    const heavyTabs: MockTab[] = Array.from({ length: 25 }, (_, i) => ({ id: `t${i}`, pinned: false }))
+    const tabs = [...lightTabs, ...heavyTabs]
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'ed0' as string } },
+    )
+    // Visit all light tabs, then churn through far more heavy tabs than the old
+    // length-based history cap would retain.
+    for (let i = 1; i < LIGHT_KEEP_ALIVE_MAX; i++) rerender({ activeId: `ed${i}` })
+    for (let i = 0; i < 25; i++) rerender({ activeId: `t${i}` })
+    // Every light tab (none evicted by the light LRU — exactly MAX of them) must
+    // still be alive despite the heavy churn.
+    for (let i = 0; i < LIGHT_KEEP_ALIVE_MAX; i++) {
+      expect(result.current.aliveIds).toContain(`ed${i}`)
+    }
+  })
+
   it('an active LIGHT tab does not shrink the heavy budget (maxNormal = keepAliveCount)', () => {
     resetSettings({ keepAliveCount: 1 })
     const tabs: MockTab[] = [
