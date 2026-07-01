@@ -40,6 +40,13 @@ describe('useEditorSettingsStore', () => {
     // P5: open-behavior toggles default ON — popup + auto layer-1 search.
     expect(s.popupOnMissingFile).toBe(true)
     expect(s.autoSearchLayer1).toBe(true)
+    // Tiptap Live Mode content-width preference defaults to narrow (centered).
+    expect(s.contentWidth).toBe('narrow')
+  })
+
+  it('S1-1c: setContentWidth toggles the store', () => {
+    useEditorSettingsStore.getState().setContentWidth('full')
+    expect(useEditorSettingsStore.getState().contentWidth).toBe('full')
   })
 
   it('S1-1b: setPopupOnMissingFile / setAutoSearchLayer1 toggle the store', () => {
@@ -74,6 +81,7 @@ describe('useEditorSettingsStore', () => {
       setLineNumbers,
       setMinimap,
       setFontSize,
+      setContentWidth,
       reset,
     } = useEditorSettingsStore.getState()
     setTabSize(8)
@@ -82,6 +90,7 @@ describe('useEditorSettingsStore', () => {
     setLineNumbers('off')
     setMinimap(false)
     setFontSize(18)
+    setContentWidth('full')
     reset()
     const s = useEditorSettingsStore.getState()
     expect(s.tabSize).toBe(2)
@@ -90,6 +99,7 @@ describe('useEditorSettingsStore', () => {
     expect(s.lineNumbers).toBe('on')
     expect(s.minimap).toBe(true)
     expect(s.fontSize).toBe(13)
+    expect(s.contentWidth).toBe('narrow')
   })
 
   it('S1-6: setWordWrap("off") persists to localStorage under EDITOR_SETTINGS', () => {
@@ -186,5 +196,57 @@ describe('useEditorSettingsStore', () => {
     expect(s.insertSpaces).toBe(true)
     expect(s.lineNumbers).toBe('on')
     expect(s.minimap).toBe(true)
+  })
+
+  it('S1-10: setContentWidth("full") persists to localStorage under EDITOR_SETTINGS', () => {
+    useEditorSettingsStore.getState().setContentWidth('full')
+    const raw = localStorage.getItem(STORAGE_KEYS.EDITOR_SETTINGS)
+    expect(raw).toBeTruthy()
+    const parsed = JSON.parse(raw!)
+    expect(parsed.state.contentWidth).toBe('full')
+  })
+
+  it('S1-11: happy-path rehydrate restores persisted contentWidth', async () => {
+    // Baseline in-memory state is the default.
+    expect(useEditorSettingsStore.getState().contentWidth).toBe('narrow')
+
+    localStorage.setItem(
+      STORAGE_KEYS.EDITOR_SETTINGS,
+      JSON.stringify({
+        state: {
+          tabSize: 2,
+          insertSpaces: true,
+          wordWrap: 'on',
+          lineNumbers: 'on',
+          minimap: true,
+          fontSize: 13,
+          contentWidth: 'full',
+        },
+        version: 1,
+      }),
+    )
+
+    await useEditorSettingsStore.persist.rehydrate()
+    expect(useEditorSettingsStore.getState().contentWidth).toBe('full')
+  })
+
+  it('S1-12: rehydrate with invalid contentWidth falls back to narrow', async () => {
+    for (const bad of ['wide', 123, null]) {
+      localStorage.setItem(
+        STORAGE_KEYS.EDITOR_SETTINGS,
+        JSON.stringify({ state: { contentWidth: bad }, version: 1 }),
+      )
+      await useEditorSettingsStore.persist.rehydrate()
+      expect(useEditorSettingsStore.getState().contentWidth).toBe('narrow')
+      resetStore()
+    }
+
+    // Missing field also falls back to narrow.
+    localStorage.setItem(
+      STORAGE_KEYS.EDITOR_SETTINGS,
+      JSON.stringify({ state: { wordWrap: 'off' }, version: 1 }),
+    )
+    await useEditorSettingsStore.persist.rehydrate()
+    expect(useEditorSettingsStore.getState().contentWidth).toBe('narrow')
   })
 })
