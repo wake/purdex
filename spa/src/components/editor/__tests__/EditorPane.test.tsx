@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorPane } from '../EditorPane'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
+import { useEditorSettingsStore } from '../../../stores/useEditorSettingsStore'
 import type { Pane } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 import { bufferKey } from '../../../lib/editor-buffer-key'
@@ -28,7 +29,7 @@ vi.mock('../DiffView', () => ({
 }))
 
 vi.mock('../EditorStatusBar', () => ({
-  EditorStatusBar: (props: { language: string; eol: 'lf' | 'crlf'; encoding: 'utf8'; isMarkdown: boolean; editorMode: 'raw' | 'wysiwyg' }) => {
+  EditorStatusBar: (props: { language: string; eol: 'lf' | 'crlf'; encoding: 'utf8'; isMarkdown: boolean; editorMode: 'raw' | 'wysiwyg'; contentWidth?: 'narrow' | 'full'; onContentWidthChange?: (v: 'narrow' | 'full') => void }) => {
     editorStatusBarMock(props)
     return (
       <div
@@ -144,6 +145,7 @@ describe('EditorPane', () => {
     vi.clearAllMocks()
     useEditorStore.getState().clearAllBuffers()
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
   })
 
   it('preserves pane-local editor state across unmount when the pane still exists in tabs', async () => {
@@ -918,6 +920,71 @@ describe('EditorPane', () => {
     // onViewStateChange 回呼確實寫回 store
     fireEvent.click(screen.getByTestId('tiptap-editor'))
     expect(useEditorStore.getState().paneStates[pane.id].tiptapViewState).toEqual({ scrollTop: 42, selection: { type: 'text', from: 2, to: 3 } })
+  })
+
+  it('passes the store contentWidth into TiptapEditor (wysiwyg path)', async () => {
+    useEditorSettingsStore.setState({ contentWidth: 'full' })
+    const pane = createPane('/notes/cw.md', 'pane-cw')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/cw.md'), '# hello', {
+      language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/cw.md'))
+    useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    expect(tiptapPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ contentWidth: 'full' }))
+  })
+
+  it('passes contentWidth + onContentWidthChange into EditorStatusBar and the callback updates the store', async () => {
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    const pane = createPane('/notes/cw2.md', 'pane-cw2')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/cw2.md'), '# hello', {
+      language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/cw2.md'))
+    useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    expect(editorStatusBarMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ contentWidth: 'narrow', onContentWidthChange: expect.any(Function) }),
+    )
+
+    const onContentWidthChange = editorStatusBarMock.mock.calls.at(-1)?.[0].onContentWidthChange as (v: 'narrow' | 'full') => void
+    act(() => onContentWidthChange('full'))
+    expect(useEditorSettingsStore.getState().contentWidth).toBe('full')
+  })
+
+  it('keeps the store contentWidth after a raw ↔ live round trip (AC8)', async () => {
+    useEditorSettingsStore.setState({ contentWidth: 'full' })
+    const pane = createPane('/notes/cw3.md', 'pane-cw3')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/cw3.md'), '# hello', {
+      language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/cw3.md'))
+    useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    expect(tiptapPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ contentWidth: 'full' }))
+
+    // Switch to raw and back to wysiwyg.
+    act(() => useEditorStore.getState().setEditorMode(pane.id, 'raw'))
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+    tiptapPropsSpy.mockClear()
+    act(() => useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg'))
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    expect(tiptapPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ contentWidth: 'full' }))
   })
 
   it('does not mount TiptapEditor against stale paneState even when lazy is cached (stale→raw derivation, supersedes R3 gating)', async () => {
