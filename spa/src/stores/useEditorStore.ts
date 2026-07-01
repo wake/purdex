@@ -31,7 +31,10 @@ export interface TiptapViewState {
 
 export interface EditorPaneState {
   bufferKey: string
-  editorMode: EditorMode
+  // null = no explicit user choice yet → resolve to the language default at
+  // render time (markdown → 'wysiwyg' Live Mode, everything else → 'raw').
+  // A concrete value means the user picked it; that survives remounts.
+  editorMode: EditorMode | null
   showDiff: boolean
   cursorPosition: { line: number; column: number }
   monacoViewState: editor.ICodeEditorViewState | null
@@ -63,7 +66,7 @@ let nextModelId = 1
 function createPaneState(bufferKey: string): EditorPaneState {
   return {
     bufferKey,
-    editorMode: 'raw',
+    editorMode: null,
     showDiff: false,
     cursorPosition: { line: 1, column: 1 },
     monacoViewState: null,
