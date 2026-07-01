@@ -79,9 +79,11 @@ Outline 的編輯器與 Purdex 同屬 **ProseMirror** 家族，樣式可近乎 1
 
 - **靜態（Phase 1）**：字級、行高、標題、間距、code、清單、blockquote、表格——這些不隨狀態改變，寫進 `index.css` 針對 `.tiptap-editor`（ProseMirror 容器已帶此 class）。用 `.tiptap-editor` 前綴確保只作用於本編輯器，不污染其他 prose 使用處。
 - **動態（Phase 3）**：只有「內容寬度」隨偏好改變。**不**在 `useEditor` 初始化的 class 上改（那需 `setOptions` 重設、易與 viewState 打架），改在 `<EditorContent>` 外層包一個**置中欄 wrapper**，其 class 依 `contentWidth` prop：
-  - `narrow` → `max-width: 52em; margin-inline: auto;`（＋水平 padding）
+  - `narrow` → `max-width: 52em; margin-inline: auto;`（＋水平 padding，見下）
   - `full` → 無 max-width（等同現狀）。
-  - ProseMirror 節點填滿 wrapper；水平 padding 移到 wrapper，垂直 padding 保留。
+  - ProseMirror 節點填滿 wrapper；**水平 padding 由 Phase 3 一併移到 wrapper**（Phase 1 不碰 padding），垂直 padding 保留。
+
+**padding 與 52em 的關係（明訂，回應 codex 2b）**：wrapper 採 `box-sizing: border-box`，`max-width: 52em` 為**欄寬含水平 padding**（padding 在 52em 之內）。故實際文字 measure ≈ `52em − 2×水平 padding`（約 48–50em），略窄於 52em、更貼近舒適閱讀甜蜜點；此為刻意取捨，非 bug。Outline 的 `documentWidth` 是純內容欄、gutter 另計，我們以「52em 含 padding」近似之，避免再引入 gutter 常數。
 
 > 為何不用 `prose` 內建 `max-w-*`：Tailwind prose 的 `max-w-none` 目前寫死在 editor class；用獨立 wrapper 控制寬度可保 `useEditor` 設定不變（避免 remount / viewState 風險），且 `narrow/full` 切換是純 class 替換、可反應式。
 
@@ -102,16 +104,17 @@ interface EditorSettingsState {
 - `DEFAULT_EDITOR_SETTINGS.contentWidth = 'narrow'`。
 - `sanitize`：加 `isContentWidth` guard，非法值 → 落回 default。
 - `partialize` / `merge` 一併納入。
-- 更新檔頭 doc 註解：此 store 現同時服務 Monaco 與 **Tiptap 的 `contentWidth`**（原註「Only MonacoWrapper reads」需修正）。
+- **改寫檔頭整段 doc 註解（`useEditorSettingsStore.ts:5-16`，回應 codex 4）**：現註解整段假設「Monaco-only / Only MonacoWrapper reads」已失真（設定頁、file-open 流程、本次 Tiptap `contentWidth` 都會讀）。改為「global editor preferences（Monaco + Tiptap 共用）」，避免誤導後續 reviewer。
 - **不註冊 syncManager**（與既有 editor 偏好一致，device-local）。
 
 ### 4.3 Toggle UI（EditorStatusBar）
 
 - 新增 optional props：`contentWidth?: ContentWidthOption`、`onContentWidthChange?: (v) => void`。
-- **僅當 `editorMode === 'wysiwyg'` 且 `onContentWidthChange` 存在**時渲染（raw mode 不顯示——寬度只對 Live Mode 有意義）。
+- **唯一顯示條件（回應 codex Blocker）**：`editorMode === 'wysiwyg' && onContentWidthChange != null` 時渲染，否則不渲染。此條件已**完整涵蓋**「非 Live Mode 不顯示」；不需要、也不應該再用「isMarkdown」二次判斷——因為進到 wysiwyg 的前提本就是 markdown-capable buffer（`canUseLiveMode = isMarkdown || language === 'markdown'`，見 `EditorStatusBar.tsx:84` / `EditorPane.tsx:506`）。**一個 language 被手動設為 markdown 的非 `.md` 檔進 Live Mode 時，toggle 應照常顯示**（這是預期行為，非例外）。§6 驗收改以「Live Mode」為準，不再用「非 markdown 檔」措辭。
 - 位置：Live Mode 鈕**左側**（同一 `ml-auto` 群組內）。
-- 型式：與現有 language/mode 鈕一致的小按鈕，點擊在 `narrow ⇄ full` 間切換（兩態直接 toggle，不必下拉選單）。
-- 標籤/圖示：用 Phosphor icon 表達寬窄（如 `ArrowsInLineHorizontal` / `ArrowsOutLineHorizontal`），附 `title`。i18n 走既有 `useI18nStore`（若狀態列其他文字已 i18n；否則沿用現有硬字串風格保持一致）。
+- 型式：與現有 language/mode 鈕一致的小按鈕，點擊在 `narrow ⇄ full` 間直接切換（兩態 toggle，不下拉選單）。
+- **標籤（定案，回應 codex 5-Q1）**：icon（Phosphor `ArrowsInLineHorizontal` narrow / `ArrowsOutLineHorizontal` full）**＋ `title` tooltip**（如 `Narrow width` / `Full width`）。**不做 icon-only 無提示**。
+- **i18n 策略（定案，回應 codex 6a）**：狀態列現有文字（`Source`/`Live Mode`/語言名）**皆為硬編碼英文、未走 i18n**。本次 toggle 的 `title` **沿用同一硬字串慣例**，**不新增 i18n key**，保持狀態列一致；全面國際化另案處理（如需可列 follow-up issue）。
 
 ### 4.4 EditorPane 接線
 
@@ -131,9 +134,22 @@ interface EditorSettingsState {
 
 ### Phase 1 — Outline 靜態 prose 樣式（CSS-only）
 
-- **範圍**：`spa/src/index.css` 加 `.tiptap-editor` 樣式塊；移除 editor class 的 `prose-sm`（改由 CSS 明確定字級）。
-- **交付**：字級階層（28/22/18/16/15/16）、`line-height: 1.7`、標題 600＋無底線＋margin、區塊間距、code（mono＋`6px`＋淡底）、行內 code、清單、blockquote、表格；全部深色。
-- **驗證**：`pnpm run build` + lint 綠；手動截圖對照 Outline 參考。純 CSS 難 TDD——測試僅斷言 editor class **不再含 `prose-sm`**（TiptapEditor 既有測試延伸）。
+- **範圍**：`spa/src/index.css` 加 `.tiptap-editor` 樣式塊；移除 editor class 的 `prose-sm`（改由 CSS 明確定字級）。**Phase 1 不碰 padding / 寬度責任**（水平 padding 與置中欄留給 Phase 3，回應 codex 1a），僅處理 typography 與去 `prose-sm`。
+- **明確需覆寫的 selector 清單（回應 codex 3c，避免半數仍吃 typography 預設）**，一律以 `.tiptap-editor` 前綴限定：
+  | selector | 覆寫 |
+  |----------|------|
+  | `.tiptap-editor` | `line-height: 1.7`（CJK 舒適，Outline 複雜文字依據） |
+  | `.tiptap-editor h1..h6` | 字級 28/22/18/16/15/15、`font-weight: 600`、`margin: 1em 0 0.25em`、**無 `border-bottom`** |
+  | `.tiptap-editor h* + p` | `margin-top: 0.25em`（標題黏近內文） |
+  | `.tiptap-editor p` | 字級 16、頂層區塊 `margin: .5em 0` |
+  | `.tiptap-editor ul, ol` | 縮排 + item 間距 |
+  | `.tiptap-editor pre` | mono、`border-radius: 6px`、淡底、`overflow-x: auto`（保留橫捲，見風險 3b） |
+  | `.tiptap-editor code`（inline） | mono、`font-size: 90%`、淡底、小圓角 |
+  | `.tiptap-editor blockquote` | 左邊框、灰字、`padding-inline` |
+  | `.tiptap-editor table` | cell padding、border、隔行淡底、外層 `overflow-x: auto` |
+  | `.tiptap-editor > :first-child` | `margin-top: 0` |
+  - 顏色一律**沿用深色**（既有 CSS 變數 / `prose-invert`），不套 Outline 淺色。
+- **驗證**：`pnpm run build` + lint 綠；測試斷言 editor class **不再含 `prose-sm`**（TiptapEditor 既有測試延伸）。純 CSS 難 TDD，**手動比對樣本清單（回應 codex 6c）**必須逐項截圖對照 Outline：①段落 ②h1/h2/h3 三層標題 ③blockquote ④inline code ⑤code block（含長行橫捲）⑥ul 與 ol ⑦table（含寬表橫捲）。
 - **Review 大小**：小（單檔 CSS + 一處 class 字串）。
 
 ### Phase 2 — `contentWidth` 全域偏好（store，強 TDD）
@@ -149,11 +165,12 @@ interface EditorSettingsState {
 
 ### Phase 3 — 寬度套用 + 狀態列 toggle（元件 TDD）
 
-- **範圍**：`TiptapEditor.tsx`（prop + wrapper class）、`EditorStatusBar.tsx`（toggle）、`EditorPane.tsx`（接線）。
+- **範圍**：`TiptapEditor.tsx`（prop + wrapper class + 水平 padding 移入 wrapper）、`EditorStatusBar.tsx`（toggle）、`EditorPane.tsx`（接線）。
 - **驗證（TDD）**：
-  - `EditorStatusBar`：wysiwyg 時渲染寬度 toggle；raw 時不渲染；點擊呼叫 `onContentWidthChange` 傳另一態；顯示反映當前 `contentWidth`。
+  - `EditorStatusBar`：wysiwyg 時渲染寬度 toggle；raw 時不渲染；點擊呼叫 `onContentWidthChange` 傳另一態；顯示（icon + title）反映當前 `contentWidth`。
   - `EditorPane`：從 store 讀 `contentWidth` 並傳入 TiptapEditor 與 StatusBar（可用既有 EditorPane 測試延伸 / mock store）。
   - `TiptapEditor`：`narrow` 套限寬 class、`full` 不套（斷言 wrapper class）。
+  - **切寬度不 remount / scrollTop 不歸零（回應 codex 1b，本 phase 最易回歸點）**：改變 `contentWidth` prop 後，同一 ProseMirror 節點 / editor instance 不被重建（`key` 不變、`useEditor` 不重跑），且 scroll root 的 `scrollTop` 不因 class 切換被歸零。以 rerender 前後同一 DOM node reference / instance identity 斷言。
 - **Review 大小**：中（3 檔，含 UI）。
 
 **Phase 相依**：1 獨立可先；2 獨立；3 依賴 2（需 store）。可 1→2→3 順序，或 1、2 並行後 3。
@@ -162,13 +179,17 @@ interface EditorSettingsState {
 
 ## 6. 驗收準則（整體）
 
-1. Markdown Live Mode 預設呈現：限寬置中 `52em`、行高 1.7、標題無底線、字級階層如上，深色。
+1. Markdown Live Mode 預設呈現：限寬置中 `52em`（含 padding）、行高 1.7、標題無底線、字級階層如上，深色。
 2. 狀態列（Live Mode 時）出現寬度 toggle；切 `full` 立即滿寬、切 `narrow` 立即限寬置中。
 3. 偏好持久化：重載後維持上次選擇；預設 `narrow`。
-4. Raw（Monaco）模式不受影響、無寬度 toggle。
-5. 非 markdown 檔不顯示寬度 toggle。
-6. `cd spa && npx vitest run` 全綠、`pnpm run lint` 綠、`pnpm run build` 綠。
-7. 既有 viewState 還原 / focus / handoff 行為不回歸。
+4. Raw（Monaco）模式與 Diff 模式不受影響、無寬度 toggle。
+5. **寬度 toggle 僅在 Live Mode（wysiwyg）顯示**（非 Live Mode——即 raw/diff——不顯示；一個 language=markdown 的非 `.md` 檔在 Live Mode 時**照常顯示**）。
+6. **切換寬度不使 editor remount、不丟失 selection、不掉 focus、不把 scrollTop 歸零**（回應 codex 6a/1b）。
+7. **`narrow` 下寬表格與長 code block 仍可讀**：以外層 `overflow-x: auto` 保留橫向捲動，不被 `52em` 裁切（回應 codex 3b）。
+8. **raw ↔ live 往返後**，`contentWidth` 仍沿用 store 值（回應 codex 6b）。
+9. **CJK 長文 + code/table 人工檢查**（回應 codex 5-Q3）：以中文長文（含三層標題、清單、寬表、長 code）實測 `52em` 閱讀觀感，作為是否需微調的依據；本次先忠實沿用 `52em`。
+10. `cd spa && npx vitest run` 全綠、`pnpm run lint` 綠、`pnpm run build` 綠。
+11. 既有 viewState 還原 / focus / handoff 行為不回歸。
 
 ---
 
@@ -179,13 +200,15 @@ interface EditorSettingsState {
 | `.tiptap-editor` 樣式外溢到其他 prose 使用處 | 一律以 `.tiptap-editor` 前綴限定；grep 確認無其他元件複用此 class |
 | 去 `prose-sm` 後 Tailwind prose 預設值回大，與自訂衝突 | CSS 明確覆寫關鍵屬性；build 後截圖驗證 |
 | wrapper 改結構影響 scroll/viewState 還原 | 只在既有內層 div 加寬度 class，不動 scroll 容器與還原邏輯；Phase 3 測試守住 |
-| store doc 註「僅 Monaco」失真 | Phase 2 一併修正註解，避免誤導後續開發 |
+| store doc 註「僅 Monaco」失真 | Phase 2 改寫整段檔頭註解為 global editor preferences |
 | CJK 行高 1.7 對純英文檔略鬆 | 可接受；Outline 亦對多語系統一放鬆；如反彈再 follow-up 分語系 |
+| **切寬度 reflow 後 scroll 體感跳動**（scrollTop 數值不變，但段落高度改變致視角瞬移，回應 codex 3a） | 列為已知風險；驗收 AC6 只保證「不歸零」，體感位移屬 reflow 物理性質，接受；如反彈可 follow-up 記錄切換前錨點段落再校正 |
+| **`narrow` 下寬表格 / 長 code block 橫向溢出被裁**（回應 codex 3b） | `pre` / `table` 外層 `overflow-x: auto`；AC7 守住 |
 
 ---
 
-## 8. 未決 / 待 codex 檢視
+## 8. 未決事項的定案（原待 codex，已採納其判斷）
 
-1. Toggle 用「兩態直接切」還是「下拉（跟 Live Mode 一致）」？本 spec 採兩態直切（更快）；請 codex 評 UX 一致性。
-2. 寬度只作用 Live Mode，raw/diff 不顯示 toggle——是否有使用者會期待 raw 也限寬？（本 spec 判定否。）
-3. `52em` 是否直接沿用，或因 Purdex 深色 + 中文再微調？（本 spec 先沿用權威值，實測後可調。）
+1. **Toggle 型式** → **兩態直接切**（非下拉）。codex 同意：只有 2 值，下拉多一步、收益低。保留 icon + `title` tooltip，不做 icon-only。
+2. **寬度只作用 Live Mode**（raw/diff 不顯示 toggle）→ **維持**。codex 同意：raw 是 Monaco 有自身閱讀語意、diff 更不該混入。
+3. **`52em`** → **先忠實沿用**，不先做 Purdex 微調。codex 同意，但要求驗收補 CJK 長文 + code/table 人工檢查（已納入 AC9），作為日後是否微調的依據。
