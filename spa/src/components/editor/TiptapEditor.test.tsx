@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TiptapEditor } from './TiptapEditor'
+import { resolveRestoreSelection } from './tiptapSelection'
 
 const useEditorSpy = vi.hoisted(() => vi.fn())
 const editorClassRef = vi.hoisted(() => ({ current: '' }))
@@ -180,6 +181,76 @@ describe('TiptapEditor', () => {
     expect(dispatch.mock.invocationCallOrder[0]).toBeLessThan(focusSpy.mock.invocationCallOrder[0])
     // scroll restored before focus (scrollTop already 50 at focus time)
     expect(scrollAtFocus).toBe(50)
+  })
+
+  it('centers the content wrapper when contentWidth is narrow', () => {
+    render(<TiptapEditor content="# Hello" isActive={false} contentWidth="narrow" onChange={() => {}} onSave={() => {}} />)
+
+    const wrapper = screen.getByTestId('editor-content').parentElement as HTMLElement
+    expect(wrapper.className).toContain('max-w-[52em]')
+    expect(wrapper.className).toContain('mx-auto')
+    expect(wrapper.className).toContain('box-border')
+  })
+
+  it('lets the content wrapper span full width when contentWidth is full', () => {
+    render(<TiptapEditor content="# Hello" isActive={false} contentWidth="full" onChange={() => {}} onSave={() => {}} />)
+
+    const wrapper = screen.getByTestId('editor-content').parentElement as HTMLElement
+    expect(wrapper.className).toContain('max-w-none')
+    expect(wrapper.className).not.toContain('max-w-[52em]')
+  })
+
+  it('defaults to narrow when contentWidth is not provided', () => {
+    render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
+
+    const wrapper = screen.getByTestId('editor-content').parentElement as HTMLElement
+    expect(wrapper.className).toContain('max-w-[52em]')
+  })
+
+  it('moves horizontal padding off the editable root onto the wrapper (keeps max-w-none / py-4)', () => {
+    render(<TiptapEditor content="# Hello" isActive={false} contentWidth="narrow" onChange={() => {}} onSave={() => {}} />)
+
+    // Horizontal padding now lives on the width wrapper; the editable root keeps
+    // max-w-none (so prose does not self-limit to 65ch) and its vertical padding.
+    const editorClass = screen.getByTestId('editor-content').getAttribute('data-editor-class') ?? ''
+    expect(editorClass).not.toContain('px-4')
+    expect(editorClass).toContain('max-w-none')
+    expect(editorClass).toContain('py-4')
+  })
+
+  it('does not rerun restore/focus/viewState or reset scroll when contentWidth toggles', () => {
+    const dispatch = vi.fn()
+    const ed = makeMockEditor({
+      state: { selection: { from: 1, to: 1 }, doc: {}, tr: { setSelection: vi.fn().mockReturnThis() } },
+      view: { dispatch },
+    })
+    useEditorSpy.mockReturnValue(ed)
+    const onViewStateChange = vi.fn()
+    const initial = { scrollTop: 30, selection: { type: 'text' as const, from: 2, to: 5 } }
+
+    const { rerender } = render(
+      <TiptapEditor content="hi" isActive={true} initialViewState={initial} contentWidth="narrow"
+        onChange={() => {}} onViewStateChange={onViewStateChange} onSave={() => {}} />,
+    )
+
+    // Snapshot the one-shot restore/focus footprint after the initial (narrow) render.
+    const restoreCalls = vi.mocked(resolveRestoreSelection).mock.calls.length
+    const dispatchCalls = dispatch.mock.calls.length
+    const focusCalls = focusSpy.mock.calls.length
+    const scrollRoot = screen.getByTestId('tiptap-scroll-root')
+    Object.defineProperty(scrollRoot, 'scrollTop', { value: 77, writable: true, configurable: true })
+    onViewStateChange.mockClear()
+
+    rerender(
+      <TiptapEditor content="hi" isActive={true} initialViewState={initial} contentWidth="full"
+        onChange={() => {}} onViewStateChange={onViewStateChange} onSave={() => {}} />,
+    )
+
+    expect(vi.mocked(resolveRestoreSelection).mock.calls.length).toBe(restoreCalls) // restore not re-run
+    expect(dispatch.mock.calls.length).toBe(dispatchCalls) // selection not re-dispatched
+    expect(focusSpy.mock.calls.length).toBe(focusCalls) // focus not re-fired
+    expect(onViewStateChange).not.toHaveBeenCalled() // no phantom unmount write-back
+    expect(scrollRoot.scrollTop).toBe(77) // scroll position preserved
   })
 
   it('does NOT overwrite existing viewState when unmounted before editor is ready (R1 P2)', () => {

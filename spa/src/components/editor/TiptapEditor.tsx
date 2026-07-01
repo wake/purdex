@@ -5,17 +5,19 @@ import { NodeSelection } from '@tiptap/pm/state'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { resolveRestoreSelection } from './tiptapSelection'
 import type { TiptapViewState } from '../../stores/useEditorStore'
+import type { ContentWidthOption } from '../../stores/useEditorSettingsStore'
 
 interface Props {
   content: string // raw markdown
   isActive: boolean
   initialViewState?: TiptapViewState | null
+  contentWidth?: ContentWidthOption
   onChange: (markdown: string) => void
   onViewStateChange?: (viewState: TiptapViewState) => void
   onSave: () => void
 }
 
-export function TiptapEditor({ content, isActive, initialViewState, onChange, onViewStateChange, onSave }: Props) {
+export function TiptapEditor({ content, isActive, initialViewState, contentWidth = 'narrow', onChange, onViewStateChange, onSave }: Props) {
   const onSaveRef = useRef(onSave)
   const containerRef = useRef<HTMLDivElement>(null)
   const isActiveRef = useRef(isActive)
@@ -59,7 +61,7 @@ export function TiptapEditor({ content, isActive, initialViewState, onChange, on
     },
     editorProps: {
       attributes: {
-        class: 'tiptap-editor prose prose-invert max-w-none min-h-full px-4 py-4 focus:outline-none',
+        class: 'tiptap-editor prose prose-invert max-w-none min-h-full py-4 focus:outline-none',
       },
       handleKeyDown: (_view, event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === 's') {
@@ -157,7 +159,11 @@ export function TiptapEditor({ content, isActive, initialViewState, onChange, on
         focusEditable()
       }}
     >
-      <div className="min-h-full [&_.tiptap-editor]:min-h-full [&_.tiptap-editor]:cursor-text">
+      <div
+        className={`min-h-full ${
+          contentWidth === 'full' ? 'max-w-none px-4' : 'max-w-[52em] mx-auto box-border px-4'
+        } [&_.tiptap-editor]:min-h-full [&_.tiptap-editor]:cursor-text`}
+      >
         <EditorContent editor={editor} />
       </div>
     </div>
