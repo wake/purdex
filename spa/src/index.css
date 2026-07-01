@@ -62,3 +62,114 @@ button:disabled {
 @utility animate-breathe {
   animation: breathe 2s ease-in-out infinite;
 }
+
+/* === Markdown Live Mode (Tiptap) — Outline-style reading typography ===
+   Scoped strictly to `.tiptap-editor` (only TiptapEditor uses this class;
+   MessageBubble uses generic prose and is unaffected). Sizes / weights /
+   spacing are ported from Outline (getoutline.com, ProseMirror family);
+   colours stay on the existing theme variables (never override prose-invert
+   hues). line-height 1.7 follows Outline's complex-script relaxation, which
+   also suits CJK. Width / centering / padding are intentionally NOT set here
+   (owned by a later phase). */
+.tiptap-editor {
+  --tiptap-font-sans: -apple-system, BlinkMacSystemFont, Inter, "Segoe UI", Roboto, Oxygen, sans-serif;
+  --tiptap-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-family: var(--tiptap-font-sans);
+  line-height: 1.7;
+}
+
+/* Top-level block rhythm */
+.tiptap-editor > * {
+  margin: 0.5em 0;
+}
+.tiptap-editor > :first-child {
+  margin-top: 0;
+}
+
+/* Headings — 600 weight, no underline, tight bottom margin */
+.tiptap-editor :is(h1, h2, h3, h4, h5, h6) {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1em 0 0.25em;
+  border-bottom: 0;
+}
+.tiptap-editor h1 {
+  font-size: 28px;
+}
+.tiptap-editor h2 {
+  font-size: 22px;
+}
+.tiptap-editor h3 {
+  font-size: 18px;
+}
+.tiptap-editor h4 {
+  font-size: 16px;
+}
+.tiptap-editor :is(h5, h6) {
+  font-size: 15px;
+}
+/* A paragraph directly after a heading hugs it */
+.tiptap-editor :is(h1, h2, h3, h4, h5, h6) + p {
+  margin-top: 0.25em;
+}
+
+/* Body copy */
+.tiptap-editor p {
+  font-size: 16px;
+}
+
+/* Lists — reasonable indent + item spacing */
+.tiptap-editor :is(ul, ol) {
+  padding-inline-start: 1.5em;
+}
+.tiptap-editor li {
+  margin: 0.25em 0;
+}
+.tiptap-editor li > :is(ul, ol) {
+  margin: 0.25em 0;
+}
+
+/* Code blocks — mono, faint fill, rounded, horizontally scrollable */
+.tiptap-editor pre {
+  font-family: var(--tiptap-font-mono);
+  background: var(--surface-secondary);
+  border-radius: 6px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+}
+.tiptap-editor pre code {
+  background: none;
+  padding: 0;
+  font-size: 90%;
+}
+
+/* Inline code — mono, faint fill, small radius */
+.tiptap-editor :not(pre) > code {
+  font-family: var(--tiptap-font-mono);
+  font-size: 90%;
+  background: var(--surface-secondary);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+
+/* Blockquote — left rule, muted text */
+.tiptap-editor blockquote {
+  border-inline-start: 3px solid var(--border-default);
+  color: var(--text-secondary);
+  padding-inline: 1em;
+}
+
+/* Tables — cell padding / borders / zebra rows; horizontally scrollable */
+.tiptap-editor .tableWrapper {
+  overflow-x: auto;
+}
+.tiptap-editor table {
+  border-collapse: collapse;
+}
+.tiptap-editor :is(th, td) {
+  border: 1px solid var(--border-default);
+  padding: 0.4em 0.6em;
+}
+.tiptap-editor tbody tr:nth-child(odd) {
+  background: color-mix(in srgb, var(--surface-secondary) 50%, transparent);
+}
