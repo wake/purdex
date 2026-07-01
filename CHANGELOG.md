@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.310] - 2026-07-01
+
+Batch A — editor markdown + terminal-link 使用者需求。
+
+### Feat(spa): markdown opens in Live Mode + fix Live Mode scroll jump on tab switch (#894)
+
+- **markdown 預設 Live Mode**：`.md` 從 raw（Monaco）改為預設進 **Live Mode（Tiptap wysiwyg）**；非 markdown 維持 raw。`EditorPaneState.editorMode` 改為 `EditorMode | null`（null = 未明確選擇 → render 時解析語言預設），使用者明確切換的具體值優先且跨 remount 保留。語言預設只在 paneState 對齊 buffer 後套用，保住 #863 不變式（Tiptap lazy 不對 stale 掛載、buffer 切換不閃 Loading）。
+- **修 Live Mode 切 tab 跳頂**：`isActive` false→true 的重新聚焦改用 `.focus({ preventScroll: true })`，避免把游標（頂端）捲進視野造成整頁跳頂。
+- （探索過的「明確 mode 選擇跨 pane 換檔持久化」因 stale-path meta-drift 撤回；切 tab 的 mode 保持在 keep-alive 下本就 work。）
+
+### Feat: shift+click a URL opens the OS default browser, not a mini window (#895)
+
+終端機（及 browser pane 內）URL 的 shift+click 從「Electron 迷你視窗」改為「**OS 預設瀏覽器**」（一般點擊仍開 app 內 tab）。SPA url opener 的 `openMiniWindow` dep 換成 `openExternal`，接到新的 `openExternalUrl` bridge → main 端 `shell:open-external` handler，經 `isAllowedUrl`（`new URL().protocol` 對 http/https 白名單）scheme 防護後 `shell.openExternal`。統一 `openAllowedExternalUrl` helper try/catch 避免 unhandled rejection。迷你視窗保留給 browser pane pop-out。**⚠️ 含 Electron main/preload 改動，Air 端需重打包 + dev update 才生效。**
+
 ## [1.0.0-alpha.309] - 2026-06-30
 
 ### Fix(spa): new-tab / history panes fill height via h-full, not flex-1 (#891)
