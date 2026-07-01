@@ -59,7 +59,7 @@ export function TiptapEditor({ content, isActive, initialViewState, onChange, on
     },
     editorProps: {
       attributes: {
-        class: 'tiptap-editor prose prose-invert prose-sm max-w-none min-h-full px-4 py-4 focus:outline-none',
+        class: 'tiptap-editor prose prose-invert max-w-none min-h-full px-4 py-4 focus:outline-none',
       },
       handleKeyDown: (_view, event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === 's') {

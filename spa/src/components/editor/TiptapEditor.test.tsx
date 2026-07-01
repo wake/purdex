@@ -58,9 +58,23 @@ describe('TiptapEditor', () => {
   it('applies typography classes to the editable root', () => {
     render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
 
+    // prose-sm dropped: explicit .tiptap-editor CSS now owns the type scale.
     expect(screen.getByTestId('editor-content')).toHaveAttribute(
       'data-editor-class',
-      expect.stringContaining('prose prose-invert prose-sm max-w-none'),
+      expect.stringContaining('prose prose-invert max-w-none'),
+    )
+    expect(screen.getByTestId('editor-content')).toHaveAttribute(
+      'data-editor-class',
+      expect.not.stringContaining('prose-sm'),
+    )
+  })
+
+  it('keeps the tiptap-editor class the CSS scope depends on', () => {
+    render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
+
+    expect(screen.getByTestId('editor-content')).toHaveAttribute(
+      'data-editor-class',
+      expect.stringContaining('tiptap-editor'),
     )
   })
 
