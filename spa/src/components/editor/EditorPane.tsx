@@ -506,7 +506,11 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         isMarkdown={isMarkdown}
         editorMode={effectiveEditorMode}
         contentWidth={contentWidth}
-        onContentWidthChange={(value) => useEditorSettingsStore.getState().setContentWidth(value)}
+        // Width toggle is a Live-Mode-only control: while DiffView is mounted the
+        // Tiptap surface is gone, so withhold the handler (EditorStatusBar hides
+        // the toggle when onContentWidthChange is absent) even though editorMode
+        // may still read 'wysiwyg' (AC4: raw/diff show no toggle).
+        onContentWidthChange={showDiff ? undefined : (value) => useEditorSettingsStore.getState().setContentWidth(value)}
         onLanguageChange={(language) => useEditorStore.getState().setBufferLanguage(key, language)}
         onModeChange={(mode) => {
           if (!isMarkdown && mode === 'wysiwyg') return

@@ -962,6 +962,30 @@ describe('EditorPane', () => {
     expect(useEditorSettingsStore.getState().contentWidth).toBe('full')
   })
 
+  it('withholds the width-toggle handler while DiffView is active, even entering diff from Live Mode (AC4)', async () => {
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    const pane = createPane('/notes/cw-diff.md', 'pane-cw-diff')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/cw-diff.md'), '# hello', {
+      language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/cw-diff.md'))
+    useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    // Live Mode exposes the handler → toggle visible.
+    expect(editorStatusBarMock.mock.calls.at(-1)?.[0].onContentWidthChange).toEqual(expect.any(Function))
+
+    // Enter diff: DiffView mounts and Tiptap unmounts, but editorMode stays
+    // 'wysiwyg'. The handler must be withheld so EditorStatusBar hides the toggle.
+    act(() => useEditorStore.getState().setShowDiff(pane.id, true))
+    await waitFor(() => {
+      expect(editorStatusBarMock.mock.calls.at(-1)?.[0].onContentWidthChange).toBeUndefined()
+    })
+  })
+
   it('keeps the store contentWidth after a raw ↔ live round trip (AC8)', async () => {
     useEditorSettingsStore.setState({ contentWidth: 'full' })
     const pane = createPane('/notes/cw3.md', 'pane-cw3')
