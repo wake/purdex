@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useTabAlivePool } from './useTabAlivePool'
+import { useTabAlivePool, LIGHT_KEEP_ALIVE_MAX } from './useTabAlivePool'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 
 function resetSettings(overrides?: { keepAliveCount?: number; keepAlivePinned?: boolean }) {
@@ -13,10 +13,130 @@ function resetSettings(overrides?: { keepAliveCount?: number; keepAlivePinned?: 
   })
 }
 
-interface MockTab { id: string; pinned: boolean }
+interface MockTab { id: string; pinned: boolean; light?: boolean }
 
 describe('useTabAlivePool', () => {
   beforeEach(() => resetSettings())
+
+  it('recently-visited light tabs stay alive at keepAliveCount=0 (not just the active tab)', () => {
+    // Editor/preview tabs are light → kept alive across switches (up to
+    // LIGHT_KEEP_ALIVE_MAX), independent of the terminal-oriented keepAliveCount.
+    const tabs: MockTab[] = [
+      { id: 'ed1', pinned: false, light: true },
+      { id: 'ed2', pinned: false, light: true },
+    ]
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'ed1' as string } },
+    )
+    rerender({ activeId: 'ed2' }) // visit ed2 so it enters history
+    rerender({ activeId: 'ed1' })
+    expect(result.current.aliveIds).toContain('ed1')
+    expect(result.current.aliveIds).toContain('ed2')
+  })
+
+  it('light tabs are LRU-bounded to LIGHT_KEEP_ALIVE_MAX (oldest evicted)', () => {
+    const n = LIGHT_KEEP_ALIVE_MAX + 1
+    const tabs: MockTab[] = Array.from({ length: n }, (_, i) => ({
+      id: `ed${i}`, pinned: false, light: true,
+    }))
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'ed0' as string } },
+    )
+    for (let i = 1; i < n; i++) rerender({ activeId: `ed${i}` })
+    // Visited ed0..ed{n-1}; keep the MAX most recent → ed0 (oldest) evicts.
+    expect(result.current.aliveIds).toHaveLength(LIGHT_KEEP_ALIVE_MAX)
+    expect(result.current.aliveIds).toContain(`ed${n - 1}`)
+    expect(result.current.aliveIds).not.toContain('ed0')
+  })
+
+  it('heavy tabs remain bounded by keepAliveCount=0 (only the active heavy tab)', () => {
+    const tabs: MockTab[] = [
+      { id: 't1', pinned: false }, // heavy (light omitted)
+      { id: 't2', pinned: false },
+    ]
+    const { result } = renderHook(() => useTabAlivePool('t1', tabs))
+    expect(result.current.aliveIds).toEqual(['t1'])
+  })
+
+  it('mixed pool at keepAliveCount=0: all light alive + only the active heavy', () => {
+    const tabs: MockTab[] = [
+      { id: 'term', pinned: false }, // heavy
+      { id: 'ed1', pinned: false, light: true },
+      { id: 'ed2', pinned: false, light: true },
+    ]
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'term' as string } },
+    )
+    // Active heavy terminal is alive; editors not visited yet.
+    expect(result.current.aliveIds).toContain('term')
+
+    // Visit both editors, then land on ed1: the heavy terminal is no longer
+    // active → evicted (keepAliveCount=0), but both light editors stay alive.
+    rerender({ activeId: 'ed2' })
+    rerender({ activeId: 'ed1' })
+    expect(result.current.aliveIds).toContain('ed1')
+    expect(result.current.aliveIds).toContain('ed2')
+    expect(result.current.aliveIds).not.toContain('term')
+  })
+
+  it('keeps light tabs alive after many interleaved heavy-tab visits (history trim invariant)', () => {
+    const lightTabs: MockTab[] = Array.from({ length: LIGHT_KEEP_ALIVE_MAX }, (_, i) => ({
+      id: `ed${i}`, pinned: false, light: true,
+    }))
+    const heavyTabs: MockTab[] = Array.from({ length: 25 }, (_, i) => ({ id: `t${i}`, pinned: false }))
+    const tabs = [...lightTabs, ...heavyTabs]
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'ed0' as string } },
+    )
+    // Visit all light tabs, then churn through far more heavy tabs than the old
+    // length-based history cap would retain.
+    for (let i = 1; i < LIGHT_KEEP_ALIVE_MAX; i++) rerender({ activeId: `ed${i}` })
+    for (let i = 0; i < 25; i++) rerender({ activeId: `t${i}` })
+    // Every light tab (none evicted by the light LRU — exactly MAX of them) must
+    // still be alive despite the heavy churn.
+    for (let i = 0; i < LIGHT_KEEP_ALIVE_MAX; i++) {
+      expect(result.current.aliveIds).toContain(`ed${i}`)
+    }
+  })
+
+  it('pinned light tabs are budget-exempt (keepAlivePinned keeps all, even beyond MAX)', () => {
+    resetSettings({ keepAliveCount: 0, keepAlivePinned: true })
+    const n = LIGHT_KEEP_ALIVE_MAX + 2
+    const tabs: MockTab[] = Array.from({ length: n }, (_, i) => ({
+      id: `ed${i}`, pinned: true, light: true,
+    }))
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'ed0' as string } },
+    )
+    for (let i = 1; i < n; i++) rerender({ activeId: `ed${i}` })
+    // All pinned light tabs stay alive despite exceeding LIGHT_KEEP_ALIVE_MAX.
+    for (let i = 0; i < n; i++) expect(result.current.aliveIds).toContain(`ed${i}`)
+  })
+
+  it('an active LIGHT tab does not shrink the heavy budget (maxNormal = keepAliveCount)', () => {
+    resetSettings({ keepAliveCount: 1 })
+    const tabs: MockTab[] = [
+      { id: 'term1', pinned: false },
+      { id: 'term2', pinned: false },
+      { id: 'ed', pinned: false, light: true },
+    ]
+    const { result, rerender } = renderHook(
+      ({ activeId }) => useTabAlivePool(activeId, tabs),
+      { initialProps: { activeId: 'term1' as string } },
+    )
+    rerender({ activeId: 'term2' })
+    rerender({ activeId: 'ed' })
+    // active is light → keepAliveCount(1) heavy tabs kept = term2 (most recent
+    // heavy). term1 evicted. ed (light) always alive.
+    expect(result.current.aliveIds).toContain('ed')
+    expect(result.current.aliveIds).toContain('term2')
+    expect(result.current.aliveIds).not.toContain('term1')
+  })
 
   it('keepAliveCount=0: pool only contains activeTabId', () => {
     const tabs: MockTab[] = [
