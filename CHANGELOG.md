@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.312] - 2026-07-03
+
+### Feat(editor): Outline-style markdown Live Mode + content-width toggle (#899)
+
+markdown「Live Mode」（Tiptap WYSIWYG）套用 **Outline（getoutline.com，同屬 ProseMirror 家族）** 的閱讀排版，解決先前 `max-w-none` 貼齊面板、寬螢幕單行字元數暴增（100+）閱讀不適的問題。樣式數值直接取自 Outline 原始碼：內容欄 `52em`、字級 h1 28 / h2 22 / h3 18 / h4 16 / h5-6 15、行高 `1.7`（沿用 Outline 對複雜文字的放鬆，含 CJK）、標題無底線 600 粗、code `6px` 圓角。
+
+新增**內容寬度切換**（全域偏好、持久化）：`narrow`（限寬置中 52em，預設）⇄ `full`（滿寬）；toggle 位於狀態列 Live Mode 鈕旁，**僅 Live Mode 顯示**。
+
+- 樣式 scope 於 `.tiptap-editor`，**顏色全用既有 theme CSS 變數**（跨主題自適應，不改配色）；不影響 `MessageBubble` 等泛用 prose 使用處。
+- 系統性中和 Tailwind Typography 外洩的 prose 預設：blockquote 斜體 + open/close-quote 彎引號、inline code 注入的 backtick + 600 粗細（掃過 built CSS 全部 4 條 pseudo-content 規則確認無殘留）。
+- 寬度偏好放 `useEditorSettingsStore`（persist + sanitize + rehydrate 信任邊界）；寬度改由 `<EditorContent>` 外層置中欄 wrapper（`max-w-[52em] mx-auto box-border`）控制，`useEditor` 初始化不變，避免 remount / viewState 風險。
+- Spec + Plan 各經 codex 跨模型審閱定稿；PR 經 codex 兩輪深度 review（R1 blockquote pseudo 外洩 / 排除 h2 padding 誤報；R2 Diff view toggle 洩漏 AC4 + inline code backtick）全數修正。
+
+**純 SPA → HMR 即時生效。** 取捨：`52em` 先忠實沿用 Outline 值，CJK 長文觀感可後續微調。
+
 ## [1.0.0-alpha.311] - 2026-07-01
 
 ### Fix(spa): keep light (non-terminal) tabs alive across switches (#897)
