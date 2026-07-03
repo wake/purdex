@@ -1,9 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { CaretUp } from '@phosphor-icons/react'
+import { CaretUp, ArrowsInLineHorizontal, ArrowsOutLineHorizontal } from '@phosphor-icons/react'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useHostStore } from '../../stores/useHostStore'
 import type { FileSource } from '../../types/fs'
 import type { EditorEol, EditorEncoding } from '../../stores/useEditorStore'
+import type { ContentWidthOption } from '../../stores/useEditorSettingsStore'
 
 interface Props {
   source: FileSource
@@ -14,6 +15,8 @@ interface Props {
   encoding: EditorEncoding
   isMarkdown: boolean
   editorMode: 'raw' | 'wysiwyg'
+  contentWidth?: ContentWidthOption
+  onContentWidthChange?: (value: ContentWidthOption) => void
   onModeChange?: (mode: 'raw' | 'wysiwyg') => void
   onLanguageChange?: (language: string) => void
 }
@@ -55,7 +58,7 @@ function languageLabel(language: string): string {
   return LANGUAGE_OPTIONS.find((option) => option.value === language)?.label ?? language
 }
 
-export function EditorStatusBar({ source, line, column, language, eol, encoding, isMarkdown, editorMode, onModeChange, onLanguageChange }: Props) {
+export function EditorStatusBar({ source, line, column, language, eol, encoding, isMarkdown, editorMode, contentWidth = 'narrow', onContentWidthChange, onModeChange, onLanguageChange }: Props) {
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
   const modeMenuRef = useRef<HTMLDivElement>(null)
@@ -119,6 +122,18 @@ export function EditorStatusBar({ source, line, column, language, eol, encoding,
               </div>
             )}
           </div>
+        )}
+        {editorMode === 'wysiwyg' && onContentWidthChange && (
+          <button
+            type="button"
+            title={contentWidth === 'full' ? 'Full width' : 'Narrow width'}
+            onClick={() => onContentWidthChange(contentWidth === 'narrow' ? 'full' : 'narrow')}
+            className="flex items-center gap-1 px-2 py-0.5 rounded border border-border-subtle text-[10px] text-text-secondary hover:bg-surface-hover transition-colors"
+          >
+            {contentWidth === 'full'
+              ? <ArrowsOutLineHorizontal size={12} />
+              : <ArrowsInLineHorizontal size={12} />}
+          </button>
         )}
         {onModeChange && (
           <div className="relative" ref={modeMenuRef}>

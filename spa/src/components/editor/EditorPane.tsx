@@ -2,6 +2,7 @@
 import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
+import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -114,6 +115,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   const currentName = displayName(filePath, untitled)
   const buffer = useEditorStore((s) => s.buffers[key])
   const paneState = useEditorStore((s) => s.paneStates[paneId])
+  const contentWidth = useEditorSettingsStore((s) => s.contentWidth)
   // Only trust paneState once attachPane has rebound it to THIS buffer. Right after
   // a buffer switch, the first render still sees paneState belonging to the previous
   // buffer (attachPane is a post-commit effect). Deriving the aligned view
@@ -485,6 +487,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
               key={buffer.modelId}
               content={buffer.content}
               isActive={isActive}
+              contentWidth={contentWidth}
               initialViewState={alignedPaneState?.tiptapViewState ?? null}
               onChange={(md) => useEditorStore.getState().updateContent(key, md)}
               onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}
@@ -502,6 +505,12 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         encoding={buffer.encoding}
         isMarkdown={isMarkdown}
         editorMode={effectiveEditorMode}
+        contentWidth={contentWidth}
+        // Width toggle is a Live-Mode-only control: while DiffView is mounted the
+        // Tiptap surface is gone, so withhold the handler (EditorStatusBar hides
+        // the toggle when onContentWidthChange is absent) even though editorMode
+        // may still read 'wysiwyg' (AC4: raw/diff show no toggle).
+        onContentWidthChange={showDiff ? undefined : (value) => useEditorSettingsStore.getState().setContentWidth(value)}
         onLanguageChange={(language) => useEditorStore.getState().setBufferLanguage(key, language)}
         onModeChange={(mode) => {
           if (!isMarkdown && mode === 'wysiwyg') return

@@ -172,6 +172,155 @@ describe('EditorStatusBar', () => {
     expect(controls).toContainElement(screen.getByTitle('Select language'))
   })
 
+  it('renders the content-width toggle in Live Mode when onContentWidthChange is provided', () => {
+    render(
+      <EditorStatusBar
+        source={{ type: 'inapp' }}
+        line={1}
+        column={1}
+        language="markdown"
+        eol="lf"
+        encoding="utf8"
+        isMarkdown
+        editorMode="wysiwyg"
+        contentWidth="narrow"
+        onContentWidthChange={() => {}}
+        onModeChange={() => {}}
+        onLanguageChange={() => {}}
+      />,
+    )
+
+    expect(screen.getByTitle('Narrow width')).toBeInTheDocument()
+  })
+
+  it('does not render the content-width toggle in raw mode', () => {
+    render(
+      <EditorStatusBar
+        source={{ type: 'inapp' }}
+        line={1}
+        column={1}
+        language="markdown"
+        eol="lf"
+        encoding="utf8"
+        isMarkdown
+        editorMode="raw"
+        contentWidth="narrow"
+        onContentWidthChange={() => {}}
+        onModeChange={() => {}}
+        onLanguageChange={() => {}}
+      />,
+    )
+
+    expect(screen.queryByTitle('Narrow width')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Full width')).not.toBeInTheDocument()
+  })
+
+  it('does not render the content-width toggle without an onContentWidthChange handler', () => {
+    render(
+      <EditorStatusBar
+        source={{ type: 'inapp' }}
+        line={1}
+        column={1}
+        language="markdown"
+        eol="lf"
+        encoding="utf8"
+        isMarkdown
+        editorMode="wysiwyg"
+        contentWidth="narrow"
+        onModeChange={() => {}}
+        onLanguageChange={() => {}}
+      />,
+    )
+
+    expect(screen.queryByTitle('Narrow width')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Full width')).not.toBeInTheDocument()
+  })
+
+  it('toggles between narrow and full on click', () => {
+    const onContentWidthChange = vi.fn()
+    const { rerender } = render(
+      <EditorStatusBar
+        source={{ type: 'inapp' }}
+        line={1}
+        column={1}
+        language="markdown"
+        eol="lf"
+        encoding="utf8"
+        isMarkdown
+        editorMode="wysiwyg"
+        contentWidth="narrow"
+        onContentWidthChange={onContentWidthChange}
+        onModeChange={() => {}}
+        onLanguageChange={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByTitle('Narrow width'))
+    expect(onContentWidthChange).toHaveBeenCalledWith('full')
+
+    rerender(
+      <EditorStatusBar
+        source={{ type: 'inapp' }}
+        line={1}
+        column={1}
+        language="markdown"
+        eol="lf"
+        encoding="utf8"
+        isMarkdown
+        editorMode="wysiwyg"
+        contentWidth="full"
+        onContentWidthChange={onContentWidthChange}
+        onModeChange={() => {}}
+        onLanguageChange={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByTitle('Full width'))
+    expect(onContentWidthChange).toHaveBeenLastCalledWith('narrow')
+  })
+
+  it('reflects the current contentWidth in the toggle title', () => {
+    const { rerender } = render(
+      <EditorStatusBar
+        source={{ type: 'inapp' }}
+        line={1}
+        column={1}
+        language="markdown"
+        eol="lf"
+        encoding="utf8"
+        isMarkdown
+        editorMode="wysiwyg"
+        contentWidth="narrow"
+        onContentWidthChange={() => {}}
+        onModeChange={() => {}}
+        onLanguageChange={() => {}}
+      />,
+    )
+
+    expect(screen.getByTitle('Narrow width')).toBeInTheDocument()
+    expect(screen.queryByTitle('Full width')).not.toBeInTheDocument()
+
+    rerender(
+      <EditorStatusBar
+        source={{ type: 'inapp' }}
+        line={1}
+        column={1}
+        language="markdown"
+        eol="lf"
+        encoding="utf8"
+        isMarkdown
+        editorMode="wysiwyg"
+        contentWidth="full"
+        onContentWidthChange={() => {}}
+        onModeChange={() => {}}
+        onLanguageChange={() => {}}
+      />,
+    )
+
+    expect(screen.getByTitle('Full width')).toBeInTheDocument()
+    expect(screen.queryByTitle('Narrow width')).not.toBeInTheDocument()
+  })
+
   it('keeps cursor info and hides selectors only when changes are unavailable', () => {
     render(
       <EditorStatusBar

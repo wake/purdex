@@ -3,20 +3,26 @@ import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
 
 /**
- * User-controlled Monaco code-editor preferences.
+ * User-controlled global editor preferences, shared across both editor
+ * surfaces: the Monaco code editor and the Tiptap Live Mode renderer.
  *
- * Scope: Purdex global. Not per-host / per-workspace; same editor preferences
- * apply across every `/buffer/*` document and any other Monaco instance.
+ * Scope: Purdex global. Not per-host / per-workspace; the same preferences
+ * apply across every `/buffer/*` document and any other editor instance.
  * Not registered with `syncManager` — editor preferences are a device-local
  * choice (the small-screen laptop may want fontSize 11 while the big monitor
  * uses 14) rather than shared config.
  *
- * Tiptap integration is explicitly out of scope for this PR — see spec §2
- * non-goals. Only `MonacoWrapper` reads from this store.
+ * Consumers:
+ * - `MonacoWrapper` reads the code-editor prefs (tabSize / wordWrap /
+ *   lineNumbers / minimap / fontSize / insertSpaces).
+ * - Tiptap Live Mode (`TiptapEditor` via `EditorPane`) reads `contentWidth`,
+ *   the narrow (centered, ~52em) vs full (edge-to-edge) content-width
+ *   preference for rendered markdown.
  */
 export type WordWrapOption = 'on' | 'off'
 export type LineNumbersOption = 'on' | 'off'
 export type TabSizeOption = 2 | 4 | 8
+export type ContentWidthOption = 'narrow' | 'full'
 
 const FONT_SIZE_MIN = 10
 const FONT_SIZE_MAX = 24
@@ -45,6 +51,13 @@ export interface EditorSettingsState {
    */
   autoSearchLayer1: boolean
 
+  /**
+   * Tiptap Live Mode content-width preference. `narrow` centers rendered
+   * markdown within a ~52em column (Outline-style reading measure); `full`
+   * lets content span the editor edge-to-edge. Read by `TiptapEditor`.
+   */
+  contentWidth: ContentWidthOption
+
   setTabSize: (value: TabSizeOption) => void
   setInsertSpaces: (value: boolean) => void
   setWordWrap: (value: WordWrapOption) => void
@@ -53,6 +66,7 @@ export interface EditorSettingsState {
   setFontSize: (value: number) => void
   setPopupOnMissingFile: (value: boolean) => void
   setAutoSearchLayer1: (value: boolean) => void
+  setContentWidth: (value: ContentWidthOption) => void
   reset: () => void
 }
 
@@ -65,6 +79,7 @@ export const DEFAULT_EDITOR_SETTINGS = {
   fontSize: 13,
   popupOnMissingFile: true,
   autoSearchLayer1: true,
+  contentWidth: 'narrow' as ContentWidthOption,
 } as const
 
 function isTabSize(v: unknown): v is TabSizeOption {
@@ -77,6 +92,10 @@ function isWordWrap(v: unknown): v is WordWrapOption {
 
 function isLineNumbers(v: unknown): v is LineNumbersOption {
   return v === 'on' || v === 'off'
+}
+
+function isContentWidth(v: unknown): v is ContentWidthOption {
+  return v === 'narrow' || v === 'full'
 }
 
 function clampFontSize(value: number): number {
@@ -93,7 +112,7 @@ function clampFontSize(value: number): number {
  */
 function sanitize(raw: unknown): Partial<Pick<
   EditorSettingsState,
-  'tabSize' | 'insertSpaces' | 'wordWrap' | 'lineNumbers' | 'minimap' | 'fontSize' | 'popupOnMissingFile' | 'autoSearchLayer1'
+  'tabSize' | 'insertSpaces' | 'wordWrap' | 'lineNumbers' | 'minimap' | 'fontSize' | 'popupOnMissingFile' | 'autoSearchLayer1' | 'contentWidth'
 >> {
   if (raw === null || typeof raw !== 'object') return {}
   const src = raw as Record<string, unknown>
@@ -109,6 +128,7 @@ function sanitize(raw: unknown): Partial<Pick<
   }
   if (typeof src.popupOnMissingFile === 'boolean') out.popupOnMissingFile = src.popupOnMissingFile
   if (typeof src.autoSearchLayer1 === 'boolean') out.autoSearchLayer1 = src.autoSearchLayer1
+  if (isContentWidth(src.contentWidth)) out.contentWidth = src.contentWidth
 
   return out
 }
@@ -126,6 +146,7 @@ export const useEditorSettingsStore = create<EditorSettingsState>()(
       setFontSize: (value) => set({ fontSize: clampFontSize(value) }),
       setPopupOnMissingFile: (popupOnMissingFile) => set({ popupOnMissingFile }),
       setAutoSearchLayer1: (autoSearchLayer1) => set({ autoSearchLayer1 }),
+      setContentWidth: (contentWidth) => set({ contentWidth }),
       reset: () => set({ ...DEFAULT_EDITOR_SETTINGS }),
     }),
     {
@@ -142,6 +163,7 @@ export const useEditorSettingsStore = create<EditorSettingsState>()(
         fontSize: state.fontSize,
         popupOnMissingFile: state.popupOnMissingFile,
         autoSearchLayer1: state.autoSearchLayer1,
+        contentWidth: state.contentWidth,
       }),
       merge: (persisted, current) => {
         const clean = sanitize(persisted)
