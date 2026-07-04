@@ -339,6 +339,10 @@
   "tab.rename_session": "Rename Session",
   "tab.rename_placeholder": "Session name",
   "tab.rename_invalid_format": "Only letters, numbers, hyphens, and underscores",
+  "pane.split_horizontal": "Split Horizontal",
+  "pane.split_vertical": "Split Vertical",
+  "pane.close": "Close pane",
+  "pane.detach": "Detach to tab",
 
   "nav.scroll_left": "Scroll left",
   "nav.scroll_right": "Scroll right",
