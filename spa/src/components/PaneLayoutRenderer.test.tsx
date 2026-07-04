@@ -1,15 +1,19 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, cleanup, type RenderResult } from '@testing-library/react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, cleanup, fireEvent, createEvent, type RenderResult } from '@testing-library/react'
 import { PaneLayoutRenderer } from './PaneLayoutRenderer'
 import { isGrid4 } from './pane-layout-grid'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
-import type { PaneLayout } from '../types/tab'
+import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../features/workspace/store'
+import type { PaneLayout, Tab } from '../types/tab'
 
 beforeEach(() => {
   cleanup()
   clearModuleRegistry()
   useModuleEnabledStore.setState({ enabled: {}, baseline: null })
+  useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+  useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
 })
 
 describe('isGrid4', () => {
@@ -365,5 +369,153 @@ describe('PaneLayoutRenderer', () => {
     expect(screen.getByTestId('dash-tr').textContent).toBe('tr')
     expect(screen.getByTestId('dash-bl').textContent).toBe('bl')
     expect(screen.getByTestId('dash-br').textContent).toBe('br')
+  })
+})
+
+describe('PaneLayoutRenderer context menu', () => {
+  function registerDash() {
+    registerModule({
+      id: 'dashboard',
+      name: 'Dashboard',
+      panes: [{ kind: 'dashboard', component: ({ pane }) => <div data-testid={`dash-${pane.id}`}>{pane.id}</div> }],
+    })
+  }
+  function registerEditor() {
+    registerModule({
+      id: 'editor',
+      name: 'Editor',
+      panes: [{ kind: 'editor', component: ({ pane }) => <div data-testid={`ed-${pane.id}`}>{pane.id}</div> }],
+    })
+  }
+  function seedTab(layout: PaneLayout): Tab {
+    const tab: Tab = { id: 't1', pinned: false, locked: false, createdAt: 0, layout }
+    useTabStore.setState({ tabs: { t1: tab }, tabOrder: ['t1'], activeTabId: 't1', visitHistory: [] })
+    return tab
+  }
+  const singleLeaf: PaneLayout = { type: 'leaf', pane: { id: 'p1', content: { kind: 'dashboard' } } }
+  const splitLeaves: PaneLayout = {
+    type: 'split', id: 's1', direction: 'h',
+    children: [
+      { type: 'leaf', pane: { id: 'p1', content: { kind: 'dashboard' } } },
+      { type: 'leaf', pane: { id: 'p2', content: { kind: 'dashboard' } } },
+    ],
+    sizes: [50, 50],
+  }
+
+  it('opens the pane menu and prevents default on a non-editor right-click', () => {
+    registerDash()
+    seedTab(singleLeaf)
+    render(<PaneLayoutRenderer layout={singleLeaf} tabId="t1" isActive={true} />)
+    const wrapper = screen.getByTestId('dash-p1').parentElement!
+    const ev = createEvent.contextMenu(wrapper, { clientX: 50, clientY: 60 })
+    fireEvent(wrapper, ev)
+    expect(ev.defaultPrevented).toBe(true)
+    expect(screen.getByText('Split Horizontal')).toBeInTheDocument()
+  })
+
+  it('does NOT intercept a right-click on an editor leaf (keeps Monaco native menu)', () => {
+    registerEditor()
+    const layout: PaneLayout = { type: 'leaf', pane: { id: 'p1', content: { kind: 'editor', source: { type: 'inapp' }, filePath: '/a.md' } } }
+    seedTab(layout)
+    render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+    const wrapper = screen.getByTestId('ed-p1').parentElement!
+    const ev = createEvent.contextMenu(wrapper)
+    fireEvent(wrapper, ev)
+    expect(ev.defaultPrevented).toBe(false)
+    expect(screen.queryByText('Split Horizontal')).not.toBeInTheDocument()
+  })
+
+  it('lets Shift+right-click through as an escape hatch (native menu)', () => {
+    registerDash()
+    seedTab(singleLeaf)
+    render(<PaneLayoutRenderer layout={singleLeaf} tabId="t1" isActive={true} />)
+    const wrapper = screen.getByTestId('dash-p1').parentElement!
+    const ev = createEvent.contextMenu(wrapper, { shiftKey: true })
+    fireEvent(wrapper, ev)
+    expect(ev.defaultPrevented).toBe(false)
+    expect(screen.queryByText('Split Horizontal')).not.toBeInTheDocument()
+  })
+
+  it('stops propagation so a parent context-menu handler is not invoked', () => {
+    registerDash()
+    seedTab(singleLeaf)
+    const parentSpy = vi.fn()
+    render(
+      <div onContextMenu={parentSpy}>
+        <PaneLayoutRenderer layout={singleLeaf} tabId="t1" isActive={true} />
+      </div>,
+    )
+    const wrapper = screen.getByTestId('dash-p1').parentElement!
+    fireEvent.contextMenu(wrapper)
+    expect(parentSpy).not.toHaveBeenCalled()
+  })
+
+  it('single-pane menu hides Close/Detach (canDetach false)', () => {
+    registerDash()
+    seedTab(singleLeaf)
+    render(<PaneLayoutRenderer layout={singleLeaf} tabId="t1" isActive={true} />)
+    fireEvent.contextMenu(screen.getByTestId('dash-p1').parentElement!)
+    expect(screen.getByText('Split Horizontal')).toBeInTheDocument()
+    expect(screen.queryByText('Close pane')).not.toBeInTheDocument()
+    expect(screen.queryByText('Detach to tab')).not.toBeInTheDocument()
+  })
+
+  it('split-pane menu shows Close/Detach (canDetach true)', () => {
+    registerDash()
+    seedTab(splitLeaves)
+    render(<PaneLayoutRenderer layout={splitLeaves} tabId="t1" isActive={true} />)
+    fireEvent.contextMenu(screen.getByTestId('dash-p1').parentElement!)
+    expect(screen.getByText('Close pane')).toBeInTheDocument()
+    expect(screen.getByText('Detach to tab')).toBeInTheDocument()
+  })
+
+  it('wires split-h to splitPaneBlank(tabId, paneId, "h")', () => {
+    registerDash()
+    seedTab(singleLeaf)
+    const spy = vi.spyOn(useTabStore.getState(), 'splitPaneBlank').mockImplementation(() => {})
+    render(<PaneLayoutRenderer layout={singleLeaf} tabId="t1" isActive={true} />)
+    fireEvent.contextMenu(screen.getByTestId('dash-p1').parentElement!)
+    fireEvent.click(screen.getByText('Split Horizontal'))
+    expect(spy).toHaveBeenCalledWith('t1', 'p1', 'h')
+  })
+
+  it('wires split-v to splitPaneBlank(tabId, paneId, "v")', () => {
+    registerDash()
+    seedTab(singleLeaf)
+    const spy = vi.spyOn(useTabStore.getState(), 'splitPaneBlank').mockImplementation(() => {})
+    render(<PaneLayoutRenderer layout={singleLeaf} tabId="t1" isActive={true} />)
+    fireEvent.contextMenu(screen.getByTestId('dash-p1').parentElement!)
+    fireEvent.click(screen.getByText('Split Vertical'))
+    expect(spy).toHaveBeenCalledWith('t1', 'p1', 'v')
+  })
+
+  it('wires close to closePane(tabId, paneId)', () => {
+    registerDash()
+    seedTab(splitLeaves)
+    const spy = vi.spyOn(useTabStore.getState(), 'closePane').mockImplementation(() => {})
+    render(<PaneLayoutRenderer layout={splitLeaves} tabId="t1" isActive={true} />)
+    fireEvent.contextMenu(screen.getByTestId('dash-p1').parentElement!)
+    fireEvent.click(screen.getByText('Close pane'))
+    expect(spy).toHaveBeenCalledWith('t1', 'p1')
+  })
+
+  it('detach reuses the PaneHeader onDetach flow: detachPane + insertTab + setActiveTab', () => {
+    registerDash()
+    seedTab(splitLeaves)
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'w1', name: 'W', tabs: ['t1'], activeTabId: 't1' }],
+      activeWorkspaceId: 'w1',
+    })
+    const detachSpy = vi.spyOn(useTabStore.getState(), 'detachPane').mockReturnValue('new-tab-id')
+    const insertSpy = vi.spyOn(useWorkspaceStore.getState(), 'insertTab').mockImplementation(() => {})
+    const setActiveSpy = vi.spyOn(useTabStore.getState(), 'setActiveTab').mockImplementation(() => {})
+
+    render(<PaneLayoutRenderer layout={splitLeaves} tabId="t1" isActive={true} />)
+    fireEvent.contextMenu(screen.getByTestId('dash-p1').parentElement!)
+    fireEvent.click(screen.getByText('Detach to tab'))
+
+    expect(detachSpy).toHaveBeenCalledWith('t1', 'p1', 't1')
+    expect(insertSpy).toHaveBeenCalledWith('new-tab-id', 'w1', 't1')
+    expect(setActiveSpy).toHaveBeenCalledWith('new-tab-id')
   })
 })

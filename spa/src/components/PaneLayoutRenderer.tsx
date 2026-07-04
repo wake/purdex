@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
 import type { ComponentType } from 'react'
 import { resolvePaneRenderer } from '../lib/module-registry'
-import { getLayoutKey, collectLeaves, swapPaneContent } from '../lib/pane-tree'
+import { getLayoutKey, collectLeaves, swapPaneContent, countLeaves } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
+import { PaneContextMenu, type PaneMenuAction } from './PaneContextMenu'
 import { QuickCommandMenu } from './QuickCommandMenu'
 import { isGrid4 } from './pane-layout-grid'
 import { executeCommand } from '../lib/execute-command'
@@ -41,6 +42,10 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   const [pinnedEnabled] = useState(() => useModuleEnabledStore.getState().enabled)
   const isEnabledSnapshot = (moduleId: string) => isModuleEnabledIn(pinnedEnabled, moduleId)
 
+  // Right-click pane menu. Each leaf renders its own PaneLayoutRenderer
+  // instance, so this per-instance state is scoped to a single pane.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+
   if (layout.type === 'leaf') {
     const resolution = resolvePaneRenderer(
       layout.pane.content.kind,
@@ -65,6 +70,48 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const paneKind = resolution.paneKind
       Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
     }
+    const leafContent = layout.pane.content
+
+    // Right-click interception: editor(Monaco) panes are never intercepted so
+    // their native menu survives; Shift+right-click is a universal escape hatch
+    // that lets the native menu through (xterm/browser). Everything else opens
+    // the PaneContextMenu. stopPropagation prevents ancestor splits from also
+    // handling the event.
+    const handleContextMenu = (e: React.MouseEvent) => {
+      if (leafContent.kind === 'editor' || e.shiftKey) return
+      e.preventDefault()
+      e.stopPropagation()
+      setMenu({ x: e.clientX, y: e.clientY })
+    }
+
+    const paneMenu = menu ? (
+      <PaneContextMenu
+        position={menu}
+        canDetach={(() => {
+          const tab = useTabStore.getState().tabs[tabId]
+          return tab ? countLeaves(tab.layout) > 1 : false
+        })()}
+        onClose={() => setMenu(null)}
+        onAction={(action: PaneMenuAction) => {
+          const paneId = layout.pane.id
+          if (action === 'split-h') {
+            useTabStore.getState().splitPaneBlank(tabId, paneId, 'h')
+          } else if (action === 'split-v') {
+            useTabStore.getState().splitPaneBlank(tabId, paneId, 'v')
+          } else if (action === 'close') {
+            useTabStore.getState().closePane(tabId, paneId)
+          } else if (action === 'detach') {
+            const newTabId = useTabStore.getState().detachPane(tabId, paneId, tabId)
+            if (newTabId) {
+              const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
+              if (ws) useWorkspaceStore.getState().insertTab(newTabId, ws.id, tabId)
+              useTabStore.getState().setActiveTab(newTabId)
+            }
+          }
+        }}
+      />
+    ) : null
+
     if (showHeader) {
       const allLeaves = (() => {
         const tab = useTabStore.getState().tabs[tabId]
@@ -77,7 +124,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const content = layout.pane.content
 
       return (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden" onContextMenu={handleContextMenu}>
           <PaneHeader
             title={content.kind}
             onClose={() => useTabStore.getState().closePane(tabId, layout.pane.id)}
@@ -107,10 +154,19 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
             ) : undefined}
           />
           <Component pane={layout.pane} isActive={isActive} />
+          {paneMenu}
         </div>
       )
     }
-    return <Component pane={layout.pane} isActive={isActive} />
+    // No-header case = a top-level single leaf, whose parent (TabContent's
+    // `.absolute inset-0`) is a block, not a flex container. Use w/h-full so the
+    // wrapper fills that box and gives the pane component a flex context.
+    return (
+      <div className="w-full h-full flex overflow-hidden min-w-0 min-h-0" onContextMenu={handleContextMenu}>
+        <Component pane={layout.pane} isActive={isActive} />
+        {paneMenu}
+      </div>
+    )
   }
 
   if (layout.children.length === 0) {
