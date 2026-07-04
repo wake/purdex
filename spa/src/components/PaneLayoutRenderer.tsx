@@ -158,11 +158,16 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
         </div>
       )
     }
-    // No-header case = a top-level single leaf, whose parent (TabContent's
-    // `.absolute inset-0`) is a block, not a flex container. Use w/h-full so the
-    // wrapper fills that box and gives the pane component a flex context.
+    // No-header case = a top-level single leaf. Its parent (TabContent's
+    // `.absolute inset-0`) is a BLOCK box, and the bare `<Component>` previously
+    // filled it via the component's own h-full/w-full (or block full-width).
+    // Keep this wrapper a block (NOT flex): a flex row would size children that
+    // only set `h-full`/`flex h-full` (BrowserPane, HostPage, SettingsPage) to
+    // content width and shrink them left (R1 P1 regression). `h-full w-full`
+    // preserves the exact prior block context; the wrapper exists only to carry
+    // onContextMenu.
     return (
-      <div className="w-full h-full flex overflow-hidden min-w-0 min-h-0" onContextMenu={handleContextMenu}>
+      <div className="h-full w-full" onContextMenu={handleContextMenu}>
         <Component pane={layout.pane} isActive={isActive} />
         {paneMenu}
       </div>
