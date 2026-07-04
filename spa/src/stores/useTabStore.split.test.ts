@@ -48,6 +48,51 @@ describe('splitPane', () => {
   })
 })
 
+describe('splitPaneBlank', () => {
+  it('splits a leaf into a horizontal split with a blank new-tab pane, preserving the original content', () => {
+    const tab = addTab({ kind: 'dashboard' })
+    const paneId = (tab.layout as { pane: { id: string } }).pane.id
+
+    useTabStore.getState().splitPaneBlank(tab.id, paneId, 'h')
+
+    const layout = useTabStore.getState().tabs[tab.id].layout
+    expect(layout.type).toBe('split')
+    if (layout.type !== 'split') return
+    expect(layout.direction).toBe('h')
+    expect(layout.sizes).toEqual([50, 50])
+    expect(layout.children).toHaveLength(2)
+    // Original content preserved in the first child.
+    const first = layout.children[0]
+    expect(first.type).toBe('leaf')
+    if (first.type === 'leaf') expect(first.pane.content).toEqual({ kind: 'dashboard' })
+    // New child is a blank new-tab pane.
+    const second = layout.children[1]
+    expect(second.type).toBe('leaf')
+    if (second.type === 'leaf') expect(second.pane.content).toEqual({ kind: 'new-tab' })
+  })
+
+  it('splits vertically', () => {
+    const tab = addTab({ kind: 'dashboard' })
+    const paneId = (tab.layout as { pane: { id: string } }).pane.id
+
+    useTabStore.getState().splitPaneBlank(tab.id, paneId, 'v')
+
+    const layout = useTabStore.getState().tabs[tab.id].layout
+    expect(layout.type).toBe('split')
+    if (layout.type !== 'split') return
+    expect(layout.direction).toBe('v')
+    expect(layout.sizes).toEqual([50, 50])
+    const second = layout.children[1]
+    if (second.type === 'leaf') expect(second.pane.content).toEqual({ kind: 'new-tab' })
+  })
+
+  it('is a no-op for a nonexistent tab', () => {
+    const stateBefore = useTabStore.getState().tabs
+    useTabStore.getState().splitPaneBlank('nonexistent-tab-id', 'pane-id', 'h')
+    expect(useTabStore.getState().tabs).toBe(stateBefore)
+  })
+})
+
 describe('closePane', () => {
   it('closes the entire tab when the tab has only one pane', () => {
     const tab = addTab()
