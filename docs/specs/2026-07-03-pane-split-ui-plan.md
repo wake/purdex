@@ -1,10 +1,10 @@
 # Plan — Pane Split UI
 
 **Spec**: `2026-07-03-pane-split-ui-spec.md`
-**Branch 策略**: 依 spec §5 PR 分組拆 **三個獨立 PR**（各自 codex 兩輪 review）：
-- **PR-A** = Phase 1 + 2（右鍵選單 + splitPaneBlank + StatusBar 入口）
-- **PR-B** = Phase 3（跨 workspace 拉 tab）
-- **PR-C** = Phase 4（移除 grid-4）
+**Branch 策略**（**更新**：原規劃 3 PR，PR-C 因 codex Round-2 揭露的邏輯相依併入 PR-A）：
+- **PR-A** = Phase 1 + 2 + **4**（右鍵選單 + splitPaneBlank + StatusBar 入口 + **移除 grid-4**）。
+  - grid-4 移除本規劃為獨立 PR-C，但 Round-2 對抗 review 發現：PR-A 開放任意 leaf split 後，在 grid-4 形狀內 split 仍命中 `isGrid4` 硬編碼連動 resize（bug）。此為**邏輯相依**（非僅 merge conflict），故必須與 PR-A 同時移除 → 併入 PR-A（PR #901）。
+- **PR-B** = Phase 3（跨 workspace 拉 tab）。
 
 紀律：TDD（先失敗測試再實作）、每 task 獨立 commit、subagent 開發、主 session 整合/review。三 PR 各自從 origin/main 開分支（B、C 不依賴 A 的程式碼，可平行；但為 review 清晰按序 A→B→C 出）。
 
