@@ -34,22 +34,25 @@
 
 ### Task A3 — `PaneLayoutRenderer` 右鍵接線（TDD）
 - **檔案**：`spa/src/components/PaneLayoutRenderer.tsx`、對應 test。
-- **測試（先）**：
-  - 非 editor leaf（如 dashboard/history/tmux-session mock）右鍵 → `preventDefault` 被呼叫、選單開（menu state set，座標 = 事件座標）。
-  - editor leaf 右鍵 → **不** preventDefault、**不**開選單（放行 Monaco）。
-  - 攔截型 leaf 的 **`Shift`+右鍵** → 不 preventDefault、不開選單（escape hatch）。
-  - 選單 action 接線：`split-h/split-v` → `splitPaneBlank`；`close` → `closePane`；`detach` → `detachPane`(+ workspace insert，與既有 PaneHeader onDetach 一致)。
-  - `canDetach` 傳入 = `countLeaves(tab.layout) > 1`。
-- **實作**：leaf 渲染的最外層容器加 `onContextMenu`（判 `content.kind === 'editor'` 放行、`e.shiftKey` 放行、否則 `preventDefault()+stopPropagation()` 開選單）；本地 state 存 `{paneId, x, y} | null`；渲染 `PaneContextMenu`。detach 邏輯複用既有 onDetach（PaneLayoutRenderer 內已有範式 :84-90）。
+- **測試（先，回應 codex 測法建議）**：
+  - **每條測試先 seed store**：`useTabStore.setState` 放入含目標 layout 的 `tabs[t1]`，render 時傳 `tabId="t1"`——`canDetach`/`detachPane`/`closePane` 都讀 `useTabStore.getState().tabs[tabId]`（`PaneLayoutRenderer.tsx:68/83`），不 seed 會測成假陽性。
+  - 非 editor leaf 右鍵 → 選單開（斷言 `PaneContextMenu` 出現 / 座標 = 事件座標）；攔截驗證用 **`fireEvent.contextMenu` 後 `event.defaultPrevented === true`**（不 spy method）。
+  - editor leaf 右鍵 → 不開選單、`defaultPrevented === false`（放行 Monaco）。
+  - 攔截型 leaf **`Shift`+右鍵** → 不開選單、`defaultPrevented === false`（escape hatch）。
+  - **`stopPropagation`**：在 leaf wrapper 外層再包一個帶 `onContextMenu` spy 的父節點，非 editor 右鍵後父 spy **未被呼叫**（冒泡被止）。
+  - `canDetach`：單-pane layout → 選單無 Close/Detach；split layout（countLeaves>1）→ 有。
+  - action 接線：`split-h/split-v` → `splitPaneBlank(t1, paneId, dir)`；`close` → `closePane(t1, paneId)`；`detach` → **與既有 PaneHeader onDetach 完全一致**：`detachPane(t1, paneId, t1)` 回 newTabId 後 `insertTab(newTabId, ws.id, t1)`（插在原 tab 之後）+ `setActiveTab(newTabId)`（斷言三者，非只斷言「有 detach」）。
+- **實作**：leaf 最外層容器加 `onContextMenu`（`content.kind === 'editor'` 或 `e.shiftKey` → return 放行；否則 `preventDefault()+stopPropagation()` 開選單）；本地 state `{paneId,x,y}|null`；渲染 `PaneContextMenu`；detach 複用既有 onDetach 範式（`PaneLayoutRenderer.tsx:84-90`）。
 - **commit**：`feat(panes): right-click context menu to split/close/detach panes`
 
 ### Task A4 — StatusBar 分割鈕（TDD）
 - **檔案**：`spa/src/components/StatusBar.tsx`、`StatusBar.test.tsx`。
 - **測試（先）**：
-  - tmux-session active tab → 顯示 split-H / split-V 鈕（by title/role）。
-  - 點擊 → `useTabStore.splitPaneBlank(activeTab.id, primaryPaneId, 'h'|'v')`（primary = `getPrimaryPane`）。
+  - tmux-session active tab（單 leaf）→ 顯示 split-H / split-V 鈕（by title/role）。
+  - **split-layout tab（回應 codex）**：primary pane 為 tmux-session 的巢狀 layout → 鈕仍顯示，點擊呼叫 `splitPaneBlank(activeTab.id, getPrimaryPane(layout).id, dir)`（守住 primary 解析非單純 leaf 的情況）。
+  - 點擊 → `splitPaneBlank(activeTab.id, primaryPaneId, 'h'|'v')`。
   - 無 active tab / editor pane（StatusBar 本就 null）→ 不顯示。
-- **實作**：在 `terminal/stream` 膠囊所在的 `ml-auto` 群組加兩顆小鈕（Phosphor `Columns`/`Rows` + title），呼叫 `splitPaneBlank`。
+- **實作**：在 `terminal/stream` 膠囊所在的 `ml-auto` 群組加兩顆小鈕（Phosphor `Columns`/`Rows` + title），呼叫 `splitPaneBlank`（paneId = `getPrimaryPane(activeTab.layout).id`）。
 - **commit**：`feat(statusbar): split-H/V buttons for terminal panes`
 
 **PR-A 驗收**：AC1/2/3、AC5（塌陷沿用引擎）、AC7/8。vitest/lint/build 綠。
@@ -64,22 +67,26 @@
 - **測試（先）**：
   - guard：來源不存在 / locked / `countLeaves>1` / kind 不在 allowlist / source===target → no-op（回傳 false 或不變）。
   - happy：`setPaneContent(target, targetPane, sourcePrimaryContent)` 被呼叫且內容正確；來源 tab 經 `closeTabInWorkspace(source,{skipHistory:true})` 移除 → 全域 tabs 無該 id、來源 workspace.tabs 無該 id。
-  - active fallback：來源是其 ws 的 activeTabId → 搬後該 ws.activeTabId 與全域 activeTabId 皆非 null（選到 fallback）。
-  - 無 dirty-confirm：來源是 dirty editor → 不呼叫 `window.confirm`、buffer 仍在 `useEditorStore`。
+  - **active fallback（回應 codex，拆 2 條、斷定 fallback id 非只 non-null）**：
+    (a) 來源是其 ws activeTabId **但非全域 activeTabId** → 搬後全域 active **保持原值**、ws.activeTabId 切到預期 fallback id（`visitHistory → adjacent`）。
+    (b) 來源**同時是全域 activeTabId** → 全域 active 切到**預期 fallback id**（明確斷言）。
+  - **無 dirty-confirm（回應 codex，斷 2 點）**：來源 dirty editor → (1) `window.confirm` spy **未被呼叫**（證明沒走 `tab-lifecycle::closeTab`），(2) `useEditorStore.buffers[bufferKey(...)]` **仍存在**。
 - **實作**：依 spec §3.2.1 三步；讀 `getPrimaryPane` 取來源 content；用 `useWorkspaceStore.closeTabInWorkspace`。
 - **commit**：`feat(panes): moveTabContentIntoPane helper (pull tab into pane)`
 
-### Task B2 — `NewPanePage`「Bring in an open tab」區塊（TDD）
-- **檔案**：`spa/src/components/NewPanePage.tsx`、`NewPanePage.test.tsx`（新/延伸）。
+### Task B2 — `NewTabPage`「Bring in an open tab」區塊（TDD）
+> **⚠️ 回應 codex Blocker**：`new-tab` pane 真正渲染的是 `NewTabPaneWrapper → <NewTabPage>`（`register-modules/index.tsx:66`），**不是** `NewPanePage.tsx`（後者是**未接線孤兒**，勿改）。B2 必須改 `NewTabPage`，否則測過也碰不到真實路徑、無法滿足 AC4。
+- **檔案**：`spa/src/components/NewTabPage.tsx`、`spa/src/lib/register-modules/index.tsx`（`NewTabPaneWrapper` 傳 context）、`NewTabPage.test.tsx`（新/延伸）。
+- **拿到 tabId/paneId（已解，非探勘）**：`NewTabPaneWrapper` 已用 `pane.id` + `findPane` 反查 `tabId`（`index.tsx:66-72`）。在 wrapper 內把 `currentTabId`（已算）+ `currentPaneId = pane.id` 傳給 `NewTabPage` 的新區塊（或新 card），**不改** `module-registry`/`PaneRendererProps` 型別。
 - **測試（先）**：
   - 列舉：跨所有 workspace 的 tab，過濾 = 單-pane（`countLeaves===1`）且 primary kind ∈ allowlist 且 `!locked` 且非「本 pane 所在 tab」；每項顯示 tab 名 + 所屬 workspace 名。
   - browser tab、多-pane tab、locked tab、自身 tab → 不出現。
-  - 點一項 → 呼叫 `moveTabContentIntoPane(sourceId, currentTabId, currentPaneId)`。
-  - 無可搬 tab → 該區塊不顯示（或顯示空狀態）。
-- **實作**：`NewPanePage` 需知道自己的 `tabId`/`paneId`（目前 props 只有 `onSelect`）→ 由呼叫端（pane 'new-tab' content 的 renderer）多傳 `tabId`/`paneId`；查 `useTabStore.tabs` + `useWorkspaceStore.findWorkspaceByTab`。
+  - 點一項 → `moveTabContentIntoPane(sourceId, currentTabId, currentPaneId)`。
+  - 無可搬 tab → 該區塊不顯示（或空狀態）。
+- **實作**：`NewTabPage` 加「Bring in an open tab」區塊（接受 optional `currentTabId`/`currentPaneId`；缺省時不渲染該區塊，兼容其他呼叫路徑）；查 `useTabStore.tabs` + `useWorkspaceStore.findWorkspaceByTab` + `MOVABLE_KINDS`。
 - **commit**：`feat(panes): pull an open tab into a split pane (cross-workspace)`
 
-**PR-B 驗收**：AC4。vitest/lint/build 綠。**注意**：需確認 `new-tab` pane renderer 如何傳 `tabId/paneId` 給 `NewPanePage`（探勘 registry 綁定；若現無、Task B2 含此接線）。
+**PR-B 驗收**：AC4。vitest/lint/build 綠。
 
 ---
 
@@ -89,8 +96,8 @@
 - **檔案**：`types/tab.ts`、`lib/pane-tree.ts`、`components/PaneLayoutRenderer.tsx`、`components/pane-layout-grid.ts`（刪）、`components/TitleBar.tsx`、`PaneLayoutRenderer.test.tsx`、`pane-tree.test.ts`。
 - **測試（先/更新）**：
   - `applyLayoutPattern` 型別只剩 `single|split-h|split-v`（grid-4 case 移除；既有 grid-4 測試案例刪除/改寫）。
-  - **相容回歸**：手造一個 grid-4 形狀 layout（v-split of two h-splits）餵給 `PaneLayoutRenderer` → 正確渲染 4 個 leaf（通用遞迴路徑），不 crash、不走特例。
-  - `TitleBar` 不再渲染 grid 鈕（只 3 顆）。
+  - **相容回歸（結構斷言，不用 snapshot；回應 codex C1）**：手造 grid-4 形狀 layout（v-split of two h-splits）餵給 `PaneLayoutRenderer` → 4 個 leaf 都被通用遞迴路徑渲染出（by testid/內容）、不 crash。
+  - `TitleBar` 不再渲染 grid 鈕（只 3 顆）；`LayoutPattern` 型別不再接受 `'grid-4'`。
 - **實作**：依 spec §3.3 全部移除點；刪 `pane-layout-grid.ts`；`TitleBar` 去 `grid-4` pattern + `GridFour` import；`PaneLayoutRenderer` 去 `isGrid4` 分支與硬編碼 grid 渲染 + import。
 - **commit**：`refactor(panes): remove hardcoded grid-4 special case`
 
@@ -102,9 +109,13 @@
 - `cd spa && npx vitest run` 全綠、`pnpm run lint` 綠、`pnpm run build` 綠。
 - 手動（SPA HMR）：右鍵分割 / StatusBar 分割 / 拉 tab 雙邊檢視 / 塌回單 pane / TitleBar 剩 3 鈕。
 
+## 分支順序（回應 codex：A3 與 C1 都改 `PaneLayoutRenderer.tsx`）
+- PR-B 與 PR-A **程式碼獨立**（`new-tab` pane 本就存在，B 不吃 A 的 `splitPaneBlank`），可先後獨立出。
+- **PR-C 在 PR-A 之後做**（非平行）：A3 與 C1 都改 `PaneLayoutRenderer.tsx` 與其 test，平行會 merge conflict。序列 A→（B）→C，C 從已含 A 的 main rebase。
+
 ## 探勘待辦（實作時確認，非阻塞）
-1. `new-tab` pane content 的 renderer 綁定（`module-registry`）如何把 `tabId/paneId` 傳給 `NewPanePage`（Task B2 需要）。
-2. `PaneLayoutRenderer` 非 editor leaf 的最外層容器確切位置（Task A3 掛 `onContextMenu`）。
+1. `PaneLayoutRenderer` 非 editor leaf 的最外層容器確切位置（Task A3 掛 `onContextMenu` 的節點）。
+（B2 的 tabId/paneId 取得已解決，見 Task B2。）
 
 ## 非目標（重申）
 不新增 active-pane / 不動分割引擎與 PaneSplitter / 不做鍵盤快捷 / 拉 tab 不支援 browser 與分割-tab / 不改 PaneHeader 顯示條件。

@@ -21,7 +21,7 @@ Purdex 的 tab 支援任意巢狀 pane 分割，**引擎已全齊，只缺 UI �
 | `resizePanes` / `detachPane` / `setPaneContent` / `setTabLayout` | `useTabStore.ts:314/346/259/339` |
 | `newTabPane()`（產 `new-tab` content leaf，**目前 private**） | `pane-tree.ts:141` |
 | 通用遞迴 split 渲染 + `PaneSplitter` 拖動 | `PaneLayoutRenderer.tsx` / `PaneSplitter.tsx` |
-| 空白 pane 內容選單頁 `NewPanePage`（現只列 dashboard/history/hosts） | `NewPanePage.tsx` |
+| `new-tab` pane 實際渲染元件 `NewTabPage`（經 `NewTabPaneWrapper`，`register-modules/index.tsx:66`；wrapper 已用 `pane.id` 反查 `tabId`）。注意 `NewPanePage.tsx` 是**未接線的孤兒元件**，勿改它 | `NewTabPage.tsx` / `register-modules/index.tsx` |
 | Tab 右鍵選單模式（本次 mirror） | `TabContextMenu.tsx`（fixed 定位 `{x,y}` + `onClose` + `MenuItem[]`） |
 | 全域底部 `StatusBar`（僅 active tab 的 primary pane；editor 時回 null；tmux-session 顯示 terminal/stream viewMode 膠囊 :213-239） | `StatusBar.tsx` |
 
@@ -75,7 +75,7 @@ Purdex 的 tab 支援任意巢狀 pane 分割，**引擎已全齊，只缺 UI �
 ### 3.2 分割新格的內容
 
 - 預設 = 空白 **New Tab 頁**：新增便利 action **`splitPaneBlank(tabId, paneId, dir)`**（新 action，**不改** 既有 `splitPane` 簽章與呼叫端，非破壞性）。內部直接把 content literal **`{ kind: 'new-tab' }`** 餵給既有 `splitAtPane`（後者自行產生新 leaf 的 pane id，`pane-tree.ts:98`）。**不 export** `newTabPane`（回應 codex S2：API 面不必放大；store 只需 content literal）。
-- `NewPanePage` 加新區塊 **「Bring in an open tab」**（跨 workspace 拉 tab）。
+- `NewTabPage`（真正的 new-tab 渲染元件）加新區塊 **「Bring in an open tab」**（跨 workspace 拉 tab）。`NewTabPaneWrapper` 已知 `pane.id` 並反查 `tabId`，把 `currentTabId`/`currentPaneId` 傳給該區塊，**不需**改 `module-registry`/`PaneRendererProps` 型別。
 
 #### 3.2.1 pull-in 流程 — `moveTabContentIntoPane` helper（回應 codex Blocker 1）
 
@@ -94,7 +94,7 @@ moveTabContentIntoPane(sourceTabId, targetTabId, targetPaneId)
 #### 3.2.2 v1 可搬移的 content kind allowlist（回應 codex Blocker 2）
 
 **v1 allowlist**：`editor`、`tmux-session`、`image-preview`、`pdf-preview`（正是「開在別的 tab、想並排檢視」的文件/終端）。
-**排除**：`browser`（`destroyBrowserViewIfNeeded` 的 BrowserView 生命週期綁 tab，搬移需 re-parent，v1 不做）、其餘 kind。allowlist 保守、可日後擴充。`NewPanePage` 只列「單-pane 且 primary kind ∈ allowlist」的 tab，並排除自身所在 tab；每項標明所屬 workspace。
+**排除**：`browser`（`destroyBrowserViewIfNeeded` 的 BrowserView 生命週期綁 tab，搬移需 re-parent，v1 不做）、其餘 kind。allowlist 保守、可日後擴充。「Bring in an open tab」只列「單-pane 且 primary kind ∈ allowlist 且 `!locked`」的 tab，並排除自身所在 tab；每項標明所屬 workspace。
 
 #### 3.2.3 locked / active 語意
 
@@ -123,7 +123,7 @@ moveTabContentIntoPane(sourceTabId, targetTabId, targetPaneId)
 | `useTabStore.ts` | 加 `splitPaneBlank`（傳 `{kind:'new-tab'}`，不改既有 `splitPane`）；`applyLayoutPattern` 去 grid-4 |
 | `pane-tree.ts` | `applyLayoutPattern` 去 grid-4（**不** export `newTabPane`） |
 | `lib/pane-move.ts`（新，或置於 tab-lifecycle） | `moveTabContentIntoPane` helper（§3.2.1，經 `closeTabInWorkspace`） |
-| `NewPanePage.tsx` | 加「Bring in an open tab」區塊（跨 workspace 列 allowlist 單-pane tab + 呼叫 `moveTabContentIntoPane`） |
+| `NewTabPage.tsx`（+ `NewTabPaneWrapper` 傳 `currentTabId/paneId`） | 加「Bring in an open tab」區塊（跨 workspace 列 allowlist 單-pane tab + 呼叫 `moveTabContentIntoPane`）。**不改** `NewPanePage.tsx`（孤兒） |
 | `StatusBar.tsx` | terminal pane split-H/V 鈕（作用 primary pane） |
 | `TitleBar.tsx` | patterns 去 grid-4；去 `GridFour` import |
 | `tab.ts` | `LayoutPattern` 去 grid-4 |
@@ -144,7 +144,7 @@ moveTabContentIntoPane(sourceTabId, targetTabId, targetPaneId)
 - **Review 大小**：小。
 
 ### Phase 3 — 「Bring in an open tab」（跨 workspace 拉 tab）
-- `moveTabContentIntoPane` helper（§3.2.1，經 `closeTabInWorkspace({skipHistory:true})`）+ `NewPanePage` 區塊（跨 workspace 列 **allowlist 單-pane** tab、標 workspace、排除自身、排除 locked）。
+- `moveTabContentIntoPane` helper（§3.2.1，經 `closeTabInWorkspace({skipHistory:true})`）+ `NewTabPage` 區塊（跨 workspace 列 **allowlist 單-pane** tab、標 workspace、排除自身、排除 locked）。
 - TDD：
   - 列舉：跨 ws 正確、只 allowlist 單-pane、排除自身/locked。
   - pull-in：目標格顯示來源內容；來源 tab 從全域 **與來源 workspace 皆移除**（孤兒防護）。
