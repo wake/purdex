@@ -22,11 +22,11 @@ describe('TitleBar', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     render(<TitleBar title="test" />)
     const buttons = screen.getByTestId('layout-buttons').querySelectorAll('button')
-    // 4 region toggles + 4 layout patterns = 8 buttons (CollapseButton now
-    // lives in the dedicated sidebar-toggle slot on the left).
-    expect(buttons).toHaveLength(8)
-    // Only layout pattern buttons (last 4, indices 4-7) should be disabled
-    for (let i = 4; i < 8; i++) {
+    // 4 region toggles + 3 layout patterns = 7 buttons (CollapseButton now
+    // lives in the dedicated sidebar-toggle slot on the left; grid-4 removed).
+    expect(buttons).toHaveLength(7)
+    // Only layout pattern buttons (last 3, indices 4-6) should be disabled
+    for (let i = 4; i < 7; i++) {
       expect(buttons[i]).toHaveProperty('disabled', true)
     }
   })
@@ -64,7 +64,7 @@ describe('TitleBar', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     render(<TitleBar title="test" />)
     const buttons = screen.getByTestId('layout-buttons').querySelectorAll('button')
-    for (let i = 4; i < 8; i++) {
+    for (let i = 4; i < 7; i++) {
       expect(buttons[i]).toHaveProperty('disabled', true)
     }
   })

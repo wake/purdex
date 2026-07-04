@@ -153,25 +153,6 @@ describe('resizePanes', () => {
 })
 
 describe('applyLayout', () => {
-  it('applies grid-4 pattern creating 4-pane layout', () => {
-    const tab = addTab()
-    useTabStore.getState().applyLayout(tab.id, 'grid-4')
-
-    const layout = useTabStore.getState().tabs[tab.id].layout
-    expect(layout.type).toBe('split')
-    if (layout.type === 'split') {
-      expect(layout.direction).toBe('v')
-      expect(layout.children).toHaveLength(2)
-      layout.children.forEach((child) => {
-        expect(child.type).toBe('split')
-        if (child.type === 'split') {
-          expect(child.direction).toBe('h')
-          expect(child.children).toHaveLength(2)
-        }
-      })
-    }
-  })
-
   it('applies single pattern to flatten a split layout back to one pane', () => {
     const tab = addTab()
     const paneId = (tab.layout as { pane: { id: string } }).pane.id

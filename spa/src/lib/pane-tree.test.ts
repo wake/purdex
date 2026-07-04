@@ -323,22 +323,6 @@ describe('applyLayoutPattern', () => {
     }
   })
 
-  it('grid-4 creates a 2x2 layout', () => {
-    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2'), mkLeaf('p3'), mkLeaf('p4')])
-    const result = applyLayoutPattern(layout, 'grid-4')
-    expect(result.type).toBe('split')
-    if (result.type === 'split') {
-      expect(result.direction).toBe('v')
-      expect(result.children).toHaveLength(2)
-      result.children.forEach((row) => {
-        expect(row.type).toBe('split')
-        if (row.type === 'split') {
-          expect(row.direction).toBe('h')
-          expect(row.children).toHaveLength(2)
-        }
-      })
-    }
-  })
 })
 
 describe('remountLeaf', () => {
