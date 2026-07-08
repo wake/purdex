@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.313] - 2026-07-08
+
+### Feat(panes): pane split UI — 右鍵選單 + StatusBar 分割鈕 + 移除 grid-4 (#901)
+
+為既有 tab 分割引擎補**互動式 UI 入口**（引擎原已支援任意巢狀，僅缺入口）：
+
+- **Pane 右鍵選單**（非 editor pane）：`Split Horizontal` / `Split Vertical`（恆有）＋ `Close pane` / `Detach to tab`（僅 `countLeaves>1` 時）。editor(Monaco) pane **不攔截右鍵**（保留原生選單）；攔截型 pane 的 **`Shift`+右鍵** 為 escape hatch 放行原生選單（xterm/browser）。
+- **StatusBar 分割鈕**：終端機 pane 在 `terminal/stream` 膠囊旁加 split-H/V 鈕，作用於 primary pane。
+- **`splitPaneBlank`**：新 store action，分割切出空白 New Tab 格（不改既有 `splitPane`）。
+- **移除 grid-4 硬編碼特例**：田字版型的連動分隔線特例移除，grid-4 形狀改由通用遞迴 renderer 渲染、各 split 獨立 resize，與任意巢狀相容。TitleBar 版型鈕保留 single / split-h / split-v。
+
+設計經 brainstorming 定案、spec+plan 各過 codex 審；PR 經 codex 兩輪 + 最終確認 review（R1 修單-pane wrapper flex→block 縮寬回歸；R2 修選單 stale 誤關整個 tab + grid-4 內 split 連動 resize 衝突；final 抓出 browser pane 右鍵入口受 BrowserView overlay 阻擋 → 追蹤 #902）。
+
+**純 SPA → HMR 即時生效。** 已知限制：browser pane 右鍵分割需 Electron IPC（追蹤 #902）。剩 PR-B（跨 workspace 拉 tab）待做。
+
 ## [1.0.0-alpha.312] - 2026-07-03
 
 ### Feat(editor): Outline-style markdown Live Mode + content-width toggle (#899)
