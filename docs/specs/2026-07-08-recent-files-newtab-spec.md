@@ -157,51 +157,50 @@ Recently opened                         ← only when list non-empty
 - **Host badge**: resolve display name from the host/workspace store by
   `source.hostId`; fall back to the raw hostId when the host is unknown/removed.
 
-### 5.2 Click → best-effort re-open
+### 5.2 Click → in-place open, toast on failure
 The recent entry stores only `source/path/name/kind` (§3) — it does **not**
-persist the original `OpenFileContext` (cwd / sourceWorkspaceId / sessionCode).
-We therefore do NOT claim byte-for-byte "same open path"; instead re-open is
-**best-effort**: attempt to open, and on a genuine not-found surface the existing
-file-not-found popup (matching the "attempt open, fail → popup" requirement). The
-popup's Layer-1/2/3 candidate search runs with a **degraded context** (see below)
-— its primary (stat succeeds → open) path is unaffected; only the fuzzy fallback
-search is narrower. This is a deliberate YAGNI choice over persisting per-entry
-open context.
+persist an `OpenFileContext`. Re-open is **best-effort and in-place**: a row
+click reuses the section's existing `onSelect(content)` callback, which replaces
+the current new-tab pane with the file pane (identical to how **New File** opens
+— `register-modules/index.tsx:69`, `setPaneContent`). No new tab, no workspace
+plumbing, no context reconstruction.
 
-Row click resolves a **target workspace** first: the workspace that owns the
-new-tab pane (passed into the component, §5.3). If none can be resolved (home-mode
-standalone new-tab), the open is refused with a console warn rather than guessing
-the active workspace (mirrors `openInAppFile`'s null-workspace refusal).
+A shared helper `openRecentEntry(entry, onSelect)`
+(`spa/src/lib/recent-files/open-recent-entry.ts`) does a source-specific
+pre-flight, then either opens in place or shows a toast:
+- **content** is built directly from the entry:
+  `{ kind: entry.kind, source: entry.source, filePath: entry.path } as PaneContent`
+  (kind is already known — no opener re-match needed).
+- `daemon`: **guard host existence first** — if
+  `useHostStore.getState().hosts` no longer contains `source.hostId`, show
+  `useUndoToast.show(t('editor.recent.host_gone', { host }))` and abort. This is
+  load-bearing: `createDaemonBackendForHost` → `getDaemonBase(hostId)` silently
+  falls back to the active/first host for an unknown id, which would otherwise
+  stat/open the **wrong host's** same-path file (codex safety finding). When the
+  host exists, `stat(path)` via `createDaemonBackendForHost(source.hostId)`;
+  exists → `onSelect(content)`; not-found/error → `useUndoToast.show(t('editor.recent.open_failed', { name }))`.
+- `local`: `stat` via `getFsBackend({ type: 'local' })` when present; exists →
+  `onSelect(content)`; missing/error → toast. If no local backend is registered
+  (non-Electron), fall back to `onSelect(content)` (best-effort).
+- `inapp`: `stat` via `getFsBackend({ type: 'inapp' })`; exists →
+  `onSelect(content)`; missing → toast.
 
-Dispatch by source type:
-- `daemon`: **guard host existence first** — if `useHostStore` no longer knows
-  `source.hostId`, show a toast/error and abort. This is load-bearing:
-  `createDaemonBackendForHost` → `getDaemonBase(hostId)` falls back to the
-  active/first host for an unknown id, which would otherwise stat/open the
-  **wrong host's** same-path file (codex safety finding). When the host exists,
-  build `FileInfo` + a degraded `OpenFileContext` (hostId = `source.hostId`,
-  sourceWorkspaceId = resolved target workspace, cwd = file dirname, sessionCode =
-  undefined) and call `tryOpenFileForFileTree` (stat-gated; missing → popup).
-- `local`: open directly via the default tab-opener dispatcher (local files do
-  not use the daemon stat/popup service). If the file vanished, the editor
-  surfaces its own load error.
-- `inapp`: call `openInAppFile(path, targetWorkspaceId)` (already stat-gated;
-  returns undefined and no-ops when the storage entry is gone).
+All `stat` calls are wrapped in `try/catch`; any throw → the open-failed toast
+(no unhandled rejection). `openRecentEntry` is `async`; the row `onClick` calls
+it as `void openRecentEntry(entry, onSelect)`.
 
-Row click awaits the returned promise inside a `try/catch` and logs failures, so
-a rejected open never becomes an unhandled rejection (mirrors FileTreeView and
-terminal-link openers).
-
-### 5.3 Wiring / testability
-`EditorNewTabSection` receives, via props (injected at registration in the editor
-module), (a) the resolved **target workspace id** for the new-tab pane and
-(b) the open dispatchers (daemon / local / inapp). It does not import
-bootstrap singletons directly — this keeps the component unit-testable with
-fakes (see §7).
+### 5.3 Testability
+`openRecentEntry` is a standalone module tested in isolation (host-guard,
+stat-exists → onSelect, stat-missing → toast, per source type) with faked
+backends / stores. `EditorNewTabSection` is tested by mocking `openRecentEntry`
+and asserting a row click calls it with the right entry + the section's
+`onSelect`. The component keeps its single existing `onSelect` prop — no
+NewTabProvider contract change.
 
 ### 5.4 i18n
 New keys under `editor.recent.*`:
-`title`, `filter.all`, `filter.text`, `filter.image`, `filter.pdf`.
+`title`, `filter.all`, `filter.text`, `filter.image`, `filter.pdf`,
+`open_failed` (params: `{ name }`), `host_gone` (params: `{ host }`).
 Add to every locale file the project ships.
 
 ## 6. Edge Cases
@@ -224,13 +223,15 @@ Add to every locale file the project ships.
   cap 50, distinct entries for same path across hosts, `clear`.
 - `record-recent-file.test.ts`: records editor/image/pdf; ignores non-file
   kinds; derives basename; sets kind; dedups via store.
+- `open-recent-entry.test.ts`: daemon host present + stat exists → calls
+  `onSelect` with `{kind, source, filePath}`; daemon host **absent** → toast,
+  no `onSelect`, no daemon backend built (wrong-host guard); daemon stat 404 →
+  toast; inapp stat missing → toast; inapp exists → onSelect; local with no
+  backend → onSelect (best-effort); any thrown stat → toast (no rejection).
 - `EditorNewTabSection.test.tsx`: renders Recently-opened only when non-empty;
   fixed chips render; chip filters rows by kind; host badge shows for daemon and
-  not for local/inapp; row click invokes the injected open dispatcher with the
-  right args; **daemon row whose host is unknown aborts with a toast and does
-  NOT call the open dispatcher**; **click on a standalone (no-workspace) new-tab
-  refuses gracefully**; a rejected dispatcher promise is caught (no unhandled
-  rejection); buttons still create files as before.
+  not for local/inapp; row click calls `openRecentEntry(entry, onSelect)`
+  (mocked) with the right entry; buttons still create files as before.
 - `saveUntitledBuffer` record coverage: saving a fresh untitled buffer records
   the entry keyed by the **new** `nextPath` (not the stale Untitled path); an
   already-named existing file is NOT double-recorded on save.
@@ -238,17 +239,20 @@ Add to every locale file the project ships.
 ## 8. Files Touched
 - New: `spa/src/stores/useRecentFilesStore.ts` (+ test)
 - New: `spa/src/lib/recent-files/record-recent-file.ts` (+ test)
-- Edit: `spa/src/lib/storage.ts` (STORAGE_KEYS.RECENT_FILES)
+- New: `spa/src/lib/recent-files/open-recent-entry.ts` (+ test) — host-guarded
+  stat + in-place open / toast
+- Edit: `spa/src/lib/storage/keys.ts` (STORAGE_KEYS.RECENT_FILES)
 - Edit: `spa/src/lib/register-modules/file-open-bootstrap.ts` (record in
   `defaultTabOpener` AND popup `onOpenPath`)
 - Edit: `spa/src/lib/open-in-app-file.ts` (record on inapp open)
 - Edit: `spa/src/components/editor/EditorPane.tsx` (record inside
   `saveUntitledBuffer`, keyed by `nextPath`)
 - Edit: `spa/src/components/editor/EditorNewTabSection.tsx` (+ test) — list UI +
-  host-guarded / workspace-resolved click dispatch
-- Edit: `spa/src/lib/register-modules/editor-module.tsx` — inject target
-  workspace id + open dispatchers into the new-tab section
-- Edit: locale files — `editor.recent.*` keys
+  chips + host badge + row click → `openRecentEntry`
+- Edit: locale files — `editor.recent.*` keys (incl. `open_failed`, `host_gone`)
+
+> No `NewTabProvider` / `NewTabPage` contract change — the section keeps its
+> single `onSelect` prop.
 
 ## 9. Phasing (for the plan)
 - **Phase A** — Store + recorder + wiring at the three record points, no UI.
