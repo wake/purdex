@@ -118,6 +118,54 @@ describe('moveTabContentIntoPane', () => {
     })
   })
 
+  // === Target existence guard ===========================================
+  //
+  // `setPaneContent` / `updatePaneInLayout` silently no-op for stale tab/pane
+  // ids. Without a target guard the mover would inject nothing yet still retire
+  // the source tab — a content-loss path violating AC4 ("content enters this
+  // pane, THEN the source disappears").
+  describe('target existence guard (no content-loss when target is stale)', () => {
+    it('target tab does not exist → false, source preserved', () => {
+      const source = seedTab(editorContent('/a.ts'))
+
+      const result = moveTabContentIntoPane(source.id, 'missing-target', 'any-pane')
+
+      expect(result).toBe(false)
+      expect(useTabStore.getState().tabs[source.id]).toBeDefined()
+    })
+
+    it('target pane does not exist in the target tab → false, source preserved', () => {
+      const source = seedTab(editorContent('/a.ts'))
+      const target = seedTab({ kind: 'new-tab' })
+
+      const result = moveTabContentIntoPane(source.id, target.id, 'ghost-pane')
+
+      expect(result).toBe(false)
+      expect(useTabStore.getState().tabs[source.id]).toBeDefined()
+      // Target untouched
+      expect(getPrimaryPane(useTabStore.getState().tabs[target.id].layout).content).toEqual({ kind: 'new-tab' })
+    })
+
+    it('editor source + stale target → no orphan paneState, buffer + source preserved', () => {
+      const filePath = '/orphan.ts'
+      const source = seedTab(editorContent(filePath))
+      const sourcePaneId = primaryPaneId(source.id)
+      const key = bufferKey(DAEMON_SOURCE, filePath)
+      useEditorStore.getState().openBuffer(key, 'saved', { language: 'typescript' })
+      useEditorStore.getState().updateContent(key, 'unsaved')
+      useEditorStore.getState().attachPane(sourcePaneId, key)
+
+      const result = moveTabContentIntoPane(source.id, 'missing-target', 'ghost-pane')
+
+      expect(result).toBe(false)
+      // Guard runs BEFORE the editor pre-bind → no orphan paneState created.
+      expect(useEditorStore.getState().paneStates['ghost-pane']).toBeUndefined()
+      // Buffer + source survive intact.
+      expect(useEditorStore.getState().buffers[key]).toBeDefined()
+      expect(useTabStore.getState().tabs[source.id]).toBeDefined()
+    })
+  })
+
   // === Happy path =======================================================
 
   it('injects source primary content into the target pane and removes the source tab', () => {

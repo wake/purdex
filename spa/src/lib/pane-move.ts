@@ -1,7 +1,7 @@
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useEditorStore } from '../stores/useEditorStore'
-import { countLeaves, getPrimaryPane } from './pane-tree'
+import { countLeaves, getPrimaryPane, findPane } from './pane-tree'
 import { bufferKey } from './editor-buffer-key'
 
 /**
@@ -44,6 +44,17 @@ export function moveTabContentIntoPane(
 
   const sourceContent = getPrimaryPane(source.layout).content
   if (!(MOVABLE_KINDS as readonly string[]).includes(sourceContent.kind)) return false
+
+  // Target tab + pane must still exist. `setPaneContent` / `updatePaneInLayout`
+  // are silent no-ops for stale tab/pane ids, so without this guard a stale
+  // target (reentrant layout change, stale UI) would let us retire the source
+  // tab below while the content never lands in any pane — a content-loss path
+  // that violates AC4 ("content enters this pane, THEN the source disappears").
+  // It also prevents the editor pre-bind from creating an orphan paneState
+  // pointing at a non-existent pane.
+  const target = tabStore.tabs[targetTabId]
+  if (!target) return false
+  if (!findPane(target.layout, targetPaneId)) return false
 
   // 1. For editor content, pre-bind the target pane to the buffer BEFORE we
   //    mutate the tab tree. A dirty editor buffer is ref-counted by the
