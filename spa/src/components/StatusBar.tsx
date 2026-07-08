@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { CaretUp, CircleNotch, CheckCircle, XCircle, LockSimple } from '@phosphor-icons/react'
+import { CaretUp, CircleNotch, CheckCircle, XCircle, LockSimple, Columns, Rows } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
+import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
@@ -210,7 +211,21 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
           {paneTitle}
         </span>
       )}
-      <span className={`${paneTitle ? '' : 'ml-auto'} flex items-center`}>
+      <span className={`${paneTitle ? '' : 'ml-auto'} flex items-center gap-1`}>
+        <button
+          title={t('pane.split_horizontal')}
+          onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, getPrimaryPane(activeTab.layout).id, 'h')}
+          className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
+        >
+          <Columns size={12} />
+        </button>
+        <button
+          title={t('pane.split_vertical')}
+          onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, getPrimaryPane(activeTab.layout).id, 'v')}
+          className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
+        >
+          <Rows size={12} />
+        </button>
         <div className="relative" ref={menuRef}>
           <button
             title={t('nav.toggle_view')}

@@ -8,7 +8,9 @@ import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
+import { useTabStore } from '../stores/useTabStore'
 import { compositeKey } from '../lib/composite-key'
+import type { PaneLayout } from '../types/tab'
 
 const HOST_ID = 'test-host'
 
@@ -90,6 +92,53 @@ describe('StatusBar', () => {
     fireEvent.click(streamOption[streamOption.length - 1])
     // Should pass tabId, paneId, and mode
     expect(onChange).toHaveBeenCalledWith('t1', expect.any(String), 'stream')
+  })
+
+  it('shows split-H / split-V buttons for a tmux-session tab', () => {
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTitle('Split Horizontal')).toBeInTheDocument()
+    expect(screen.getByTitle('Split Vertical')).toBeInTheDocument()
+  })
+
+  it('clicking split-H calls splitPaneBlank with the primary pane id', () => {
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    const paneId = (tab.layout as { pane: { id: string } }).pane.id
+    const spy = vi.spyOn(useTabStore.getState(), 'splitPaneBlank').mockImplementation(() => {})
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    fireEvent.click(screen.getByTitle('Split Horizontal'))
+    expect(spy).toHaveBeenCalledWith('t1', paneId, 'h')
+    fireEvent.click(screen.getByTitle('Split Vertical'))
+    expect(spy).toHaveBeenCalledWith('t1', paneId, 'v')
+  })
+
+  it('shows split buttons for a split-layout tab whose primary pane is a tmux-session, using the primary pane id', () => {
+    const primaryPane = { id: 'primary-pane', content: { kind: 'tmux-session' as const, hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' as const, cachedName: '', tmuxInstance: '' } }
+    const layout: PaneLayout = {
+      type: 'split', id: 's1', direction: 'h',
+      children: [
+        { type: 'leaf', pane: primaryPane },
+        { type: 'leaf', pane: { id: 'other', content: { kind: 'new-tab' } } },
+      ],
+      sizes: [50, 50],
+    }
+    const tab = { ...makeTab('t1', { kind: 'new-tab' }), layout }
+    const spy = vi.spyOn(useTabStore.getState(), 'splitPaneBlank').mockImplementation(() => {})
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTitle('Split Horizontal')).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('Split Horizontal'))
+    expect(spy).toHaveBeenCalledWith('t1', 'primary-pane', 'h')
+  })
+
+  it('does not show split buttons for an editor tab (bar is null)', () => {
+    const tab = makeTab('t1', { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' })
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    expect(screen.queryByTitle('Split Horizontal')).toBeNull()
+  })
+
+  it('does not show split buttons when there is no active tab', () => {
+    render(<StatusBar activeTab={null} onViewModeChange={vi.fn()} />)
+    expect(screen.queryByTitle('Split Horizontal')).toBeNull()
   })
 
   it('falls back to sessionCode when session not in store', () => {

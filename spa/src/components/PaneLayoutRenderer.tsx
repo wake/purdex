@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react'
 import type { ComponentType } from 'react'
 import { resolvePaneRenderer } from '../lib/module-registry'
-import { getLayoutKey, collectLeaves, swapPaneContent } from '../lib/pane-tree'
+import { getLayoutKey, collectLeaves, swapPaneContent, countLeaves, findPane } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
+import { PaneContextMenu, type PaneMenuAction } from './PaneContextMenu'
 import { QuickCommandMenu } from './QuickCommandMenu'
-import { isGrid4 } from './pane-layout-grid'
 import { executeCommand } from '../lib/execute-command'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
@@ -14,11 +14,7 @@ import {
   isModuleEnabledIn,
 } from '../stores/useModuleEnabledStore'
 import { DisabledModulePlaceholder } from './modules/DisabledModulePlaceholder'
-import type { PaneLayout, Pane, SplitLayout } from '../types/tab'
-
-function isSplit(layout: PaneLayout): layout is SplitLayout {
-  return layout.type === 'split'
-}
+import type { PaneLayout, Pane } from '../types/tab'
 
 interface Props {
   layout: PaneLayout
@@ -40,6 +36,10 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   // fully-immediate is tracked in issue #678.
   const [pinnedEnabled] = useState(() => useModuleEnabledStore.getState().enabled)
   const isEnabledSnapshot = (moduleId: string) => isModuleEnabledIn(pinnedEnabled, moduleId)
+
+  // Right-click pane menu. Each leaf renders its own PaneLayoutRenderer
+  // instance, so this per-instance state is scoped to a single pane.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
 
   if (layout.type === 'leaf') {
     const resolution = resolvePaneRenderer(
@@ -65,6 +65,64 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const paneKind = resolution.paneKind
       Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
     }
+    const leafContent = layout.pane.content
+
+    // Right-click interception: editor(Monaco) panes are never intercepted so
+    // their native menu survives; Shift+right-click is a universal escape hatch
+    // that lets the native menu through (xterm/browser). Everything else opens
+    // the PaneContextMenu. stopPropagation prevents ancestor splits from also
+    // handling the event.
+    const handleContextMenu = (e: React.MouseEvent) => {
+      if (leafContent.kind === 'editor' || e.shiftKey) return
+      e.preventDefault()
+      e.stopPropagation()
+      setMenu({ x: e.clientX, y: e.clientY })
+    }
+
+    const paneMenu = menu ? (
+      <PaneContextMenu
+        position={menu}
+        canDetach={(() => {
+          const tab = useTabStore.getState().tabs[tabId]
+          return tab ? countLeaves(tab.layout) > 1 : false
+        })()}
+        onClose={() => setMenu(null)}
+        onAction={(action: PaneMenuAction) => {
+          const paneId = layout.pane.id
+          // Action-time guard against a stale menu. The menu captured this
+          // pane's id at open time, but by the time it is clicked another path
+          // may have mutated the tree. Re-read the LIVE layout and bail if:
+          //  - the tab is gone,
+          //  - this pane no longer exists in the tree, or
+          //  - the tab collapsed to a single leaf and the action is close/detach
+          //    (closePane on a lone leaf escalates to closeTab → loses the whole
+          //    tab; single-leaf detach returns null). Split stays valid on any
+          //    live pane.
+          const tab = useTabStore.getState().tabs[tabId]
+          if (!tab) { setMenu(null); return }
+          if (!findPane(tab.layout, paneId)) { setMenu(null); return }
+          if ((action === 'close' || action === 'detach') && countLeaves(tab.layout) <= 1) {
+            setMenu(null)
+            return
+          }
+          if (action === 'split-h') {
+            useTabStore.getState().splitPaneBlank(tabId, paneId, 'h')
+          } else if (action === 'split-v') {
+            useTabStore.getState().splitPaneBlank(tabId, paneId, 'v')
+          } else if (action === 'close') {
+            useTabStore.getState().closePane(tabId, paneId)
+          } else if (action === 'detach') {
+            const newTabId = useTabStore.getState().detachPane(tabId, paneId, tabId)
+            if (newTabId) {
+              const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
+              if (ws) useWorkspaceStore.getState().insertTab(newTabId, ws.id, tabId)
+              useTabStore.getState().setActiveTab(newTabId)
+            }
+          }
+        }}
+      />
+    ) : null
+
     if (showHeader) {
       const allLeaves = (() => {
         const tab = useTabStore.getState().tabs[tabId]
@@ -77,7 +135,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const content = layout.pane.content
 
       return (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden" onContextMenu={handleContextMenu}>
           <PaneHeader
             title={content.kind}
             onClose={() => useTabStore.getState().closePane(tabId, layout.pane.id)}
@@ -107,84 +165,30 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
             ) : undefined}
           />
           <Component pane={layout.pane} isActive={isActive} />
+          {paneMenu}
         </div>
       )
     }
-    return <Component pane={layout.pane} isActive={isActive} />
+    // No-header case = a top-level single leaf. Its parent (TabContent's
+    // `.absolute inset-0`) is a BLOCK box, and the bare `<Component>` previously
+    // filled it via the component's own h-full/w-full (or block full-width).
+    // Keep this wrapper a block (NOT flex): a flex row would size children that
+    // only set `h-full`/`flex h-full` (BrowserPane, HostPage, SettingsPage) to
+    // content width and shrink them left (R1 P1 regression). `h-full w-full`
+    // preserves the exact prior block context; the wrapper exists only to carry
+    // onContextMenu.
+    return (
+      <div className="h-full w-full" onContextMenu={handleContextMenu}>
+        <Component pane={layout.pane} isActive={isActive} />
+        {paneMenu}
+      </div>
+    )
   }
 
   if (layout.children.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-text-muted">
         Empty split layout
-      </div>
-    )
-  }
-
-  if (isSplit(layout) && isGrid4(layout)) {
-    const topSplit = layout.children[0] as SplitLayout
-    const bottomSplit = layout.children[1] as SplitLayout
-
-    const handleHorizontalResize = (index: number, deltaPx: number) => {
-      const container = containerRef.current
-      if (!container) return
-      const containerWidth = container.offsetWidth
-      if (containerWidth === 0) return
-      const percentDelta = (deltaPx / containerWidth) * 100
-      // Read fresh layout from store to avoid stale closure
-      const currentTab = useTabStore.getState().tabs[tabId]
-      if (!currentTab || !isSplit(currentTab.layout) || !isGrid4(currentTab.layout)) return
-      const freshTop = currentTab.layout.children[0] as SplitLayout
-      const freshBottom = currentTab.layout.children[1] as SplitLayout
-      for (const split of [freshTop, freshBottom]) {
-        const totalPercent = split.sizes[index] + split.sizes[index + 1]
-        const newLeft = Math.max(10, Math.min(totalPercent - 10, split.sizes[index] + percentDelta))
-        const newRight = totalPercent - newLeft
-        useTabStore.getState().resizePanes(tabId, split.id, [newLeft, newRight])
-      }
-    }
-
-    const handleVerticalResize = (index: number, deltaPx: number) => {
-      const container = containerRef.current
-      if (!container) return
-      const containerHeight = container.offsetHeight
-      if (containerHeight === 0) return
-      const percentDelta = (deltaPx / containerHeight) * 100
-      // Read fresh layout from store to avoid stale closure
-      const currentTab = useTabStore.getState().tabs[tabId]
-      if (!currentTab || !isSplit(currentTab.layout) || !isGrid4(currentTab.layout)) return
-      const totalPercent = currentTab.layout.sizes[index] + currentTab.layout.sizes[index + 1]
-      const newTop = Math.max(10, Math.min(totalPercent - 10, currentTab.layout.sizes[index] + percentDelta))
-      const newBottom = totalPercent - newTop
-      useTabStore.getState().resizePanes(tabId, currentTab.layout.id, [newTop, newBottom])
-    }
-
-    return (
-      <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
-        {/* Top row */}
-        <div style={{ flex: `${layout.sizes[0]} 0 0%` }} className="min-h-0 flex flex-row overflow-hidden">
-          {topSplit.children.map((child, i) => (
-            <div key={getLayoutKey(child)} className="contents">
-              {i > 0 && <PaneSplitter direction="h" onResize={(d) => handleHorizontalResize(i - 1, d)} />}
-              <div style={{ flex: `${topSplit.sizes[i]} 0 0%` }} className="min-w-0 min-h-0 flex overflow-hidden">
-                <PaneLayoutRenderer layout={child} tabId={tabId} isActive={isActive} showHeader={true} />
-              </div>
-            </div>
-          ))}
-        </div>
-        {/* Vertical splitter */}
-        <PaneSplitter direction="v" onResize={(d) => handleVerticalResize(0, d)} />
-        {/* Bottom row */}
-        <div style={{ flex: `${layout.sizes[1]} 0 0%` }} className="min-h-0 flex flex-row overflow-hidden">
-          {bottomSplit.children.map((child, i) => (
-            <div key={getLayoutKey(child)} className="contents">
-              {i > 0 && <PaneSplitter direction="h" onResize={(d) => handleHorizontalResize(i - 1, d)} />}
-              <div style={{ flex: `${bottomSplit.sizes[i]} 0 0%` }} className="min-w-0 min-h-0 flex overflow-hidden">
-                <PaneLayoutRenderer layout={child} tabId={tabId} isActive={isActive} showHeader={true} />
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     )
   }

@@ -16,7 +16,7 @@ export type PaneLayout =
   | { type: 'leaf'; pane: Pane }
   | SplitLayout
 
-export type LayoutPattern = 'single' | 'split-h' | 'split-v' | 'grid-4'
+export type LayoutPattern = 'single' | 'split-h' | 'split-v'
 
 // === Pane (content slot) ===
 export interface Pane {

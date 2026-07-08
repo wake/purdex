@@ -160,9 +160,5 @@ export function applyLayoutPattern(layout: PaneLayout, pattern: LayoutPattern): 
     case 'single': return { type: 'leaf', pane: p(0) }
     case 'split-h': return { type: 'split', id: generateId(), direction: 'h', children: [{ type: 'leaf', pane: p(0) }, { type: 'leaf', pane: p(1) }], sizes: [50, 50] }
     case 'split-v': return { type: 'split', id: generateId(), direction: 'v', children: [{ type: 'leaf', pane: p(0) }, { type: 'leaf', pane: p(1) }], sizes: [50, 50] }
-    case 'grid-4': return { type: 'split', id: generateId(), direction: 'v', children: [
-      { type: 'split', id: generateId(), direction: 'h', children: [{ type: 'leaf', pane: p(0) }, { type: 'leaf', pane: p(1) }], sizes: [50, 50] },
-      { type: 'split', id: generateId(), direction: 'h', children: [{ type: 'leaf', pane: p(2) }, { type: 'leaf', pane: p(3) }], sizes: [50, 50] },
-    ], sizes: [50, 50] }
   }
 }

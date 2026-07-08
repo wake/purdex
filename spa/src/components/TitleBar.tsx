@@ -1,4 +1,4 @@
-import { Columns, Rows, GridFour, Square, SidebarSimple, SquareHalfBottom, Warning } from '@phosphor-icons/react'
+import { Columns, Rows, Square, SidebarSimple, SquareHalfBottom, Warning } from '@phosphor-icons/react'
 import { useLocation } from 'wouter'
 import { useTabStore } from '../stores/useTabStore'
 import { useLayoutStore } from '../stores/useLayoutStore'
@@ -15,7 +15,6 @@ const patterns: { pattern: LayoutPattern; icon: typeof Square; label: string }[]
   { pattern: 'single', icon: Square, label: 'Single pane' },
   { pattern: 'split-h', icon: Columns, label: 'Split horizontal' },
   { pattern: 'split-v', icon: Rows, label: 'Split vertical' },
-  { pattern: 'grid-4', icon: GridFour, label: 'Grid' },
 ]
 
 const regionToggles: { region: SidebarRegion; icon: typeof SidebarSimple; label: string; mirror?: boolean }[] = [

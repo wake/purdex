@@ -138,6 +138,7 @@ interface TabState {
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
   renameEditorPanes: (source: FileSource, oldPath: string, newPath: string, options?: { untitled?: UntitledDocumentState }) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
+  splitPaneBlank: (tabId: string, paneId: string, direction: 'h' | 'v') => void
   closePane: (tabId: string, paneId: string) => void
   remountPane: (tabId: string, paneId: string) => string | null
   resizePanes: (tabId: string, splitId: string, sizes: number[]) => void
@@ -283,6 +284,15 @@ export const useTabStore = create<TabState>()(
           const tab = state.tabs[tabId]
           if (!tab) return state
           const newLayout = splitAtPane(tab.layout, paneId, direction, content)
+          if (newLayout === tab.layout) return state
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
+        }),
+
+      splitPaneBlank: (tabId, paneId, direction) =>
+        set((state) => {
+          const tab = state.tabs[tabId]
+          if (!tab) return state
+          const newLayout = splitAtPane(tab.layout, paneId, direction, { kind: 'new-tab' })
           if (newLayout === tab.layout) return state
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
