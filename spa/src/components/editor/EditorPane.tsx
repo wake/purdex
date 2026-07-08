@@ -17,6 +17,7 @@ import { findPane } from '../../lib/pane-tree'
 import { bufferKey } from '../../lib/editor-buffer-key'
 import { STORAGE_ROOT } from '../../lib/storage-paths'
 import { createUniqueInAppFile } from '../../lib/inapp-namer'
+import { recordRecentFile } from '../../lib/recent-files/record-recent-file'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 import {
@@ -276,6 +277,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       useTabStore.getState().renameEditorPanes(source, filePath, nextPath)
       useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
       useEditorStore.getState().markSaved(nextKey, { mtime: newStat.mtime, size: newStat.size })
+      recordRecentFile({ kind: 'editor', source, filePath: nextPath })
       useEditorStore.getState().setShowDiff(paneId, false)
       setRenameAnchorRect(null)
       setRenameInitialValue(undefined)
@@ -308,6 +310,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       await backend.write(filePath, encoded)
       const newStat = await backend.stat(filePath)
       useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })
+      recordRecentFile({ kind: 'editor', source, filePath })
       useEditorStore.getState().setShowDiff(paneId, false)
     } catch (err) {
       console.error('[editor] Save failed:', err)

@@ -1,0 +1,870 @@
+# Recent Files in Editor New-Tab — Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Add a "Recently opened" list (local + remote + in-app files) beneath the New File buttons in the Editor new-tab section, with a fixed type filter, host badges, and in-place re-open.
+
+**Architecture:** A persisted zustand store (`useRecentFilesStore`) holds a global, de-duplicated, most-recent-first list (cap 50). A `recordRecentFile` helper is called at the user-initiated open chokepoints (`defaultTabOpener`, missing-file popup `onOpenPath`, `openInAppFile`) and, for new files, inside `saveUntitledBuffer` (keyed by the post-rename path). The `EditorNewTabSection` renders the list; a row click routes through `openRecentEntry`, which host-guards + stats and either opens in place via the section's existing `onSelect(content)` or shows a toast.
+
+**Tech Stack:** React 19, Zustand 5 (+ persist), Tailwind 4, Phosphor Icons, Vitest.
+
+## Global Constraints
+
+- Package manager: **pnpm** (not npm). Tests: `cd spa && npx vitest run`. Lint: `cd spa && pnpm run lint`.
+- Work entirely inside the worktree `.claude/worktrees/recent-files-newtab/`; every Bash prefixed with `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab && `; Edit/Write use absolute paths under that worktree.
+- TDD: failing test first, minimal impl, green, commit. One task = one commit.
+- `MAX_RECENT = 50`. Dedup key includes host for daemon sources.
+- Do NOT change the `NewTabProvider` / `NewTabPage` contract; `EditorNewTabSection` keeps its single `onSelect` prop.
+- Reference spec: `docs/specs/2026-07-08-recent-files-newtab-spec.md`.
+
+---
+
+## File Structure
+
+- `spa/src/lib/storage/keys.ts` — add `RECENT_FILES` key (edit).
+- `spa/src/stores/useRecentFilesStore.ts` — persisted store (new).
+- `spa/src/lib/recent-files/record-recent-file.ts` — recorder helper (new).
+- `spa/src/lib/recent-files/open-recent-entry.ts` — click dispatcher (new).
+- `spa/src/lib/register-modules/file-open-bootstrap.ts` — 2 record calls (edit).
+- `spa/src/lib/open-in-app-file.ts` — 1 record call (edit).
+- `spa/src/components/editor/EditorPane.tsx` — 1 record call in `saveUntitledBuffer` (edit).
+- `spa/src/components/editor/EditorNewTabSection.tsx` — list UI (edit).
+- locale files under `spa/src/**/locales` (or wherever i18n strings live) — `editor.recent.*`.
+
+---
+
+## Phase A — Store + recording (no UI)
+
+### Task A1: `useRecentFilesStore` + storage key
+
+**Files:**
+- Modify: `spa/src/lib/storage/keys.ts`
+- Create: `spa/src/stores/useRecentFilesStore.ts`
+- Test: `spa/src/stores/useRecentFilesStore.test.ts`
+
+**Interfaces:**
+- Produces:
+  ```ts
+  export type RecentFileKind = 'editor' | 'image-preview' | 'pdf-preview'
+  export interface RecentFileEntry {
+    source: FileSource
+    path: string
+    name: string
+    kind: RecentFileKind
+    openedAt: number
+  }
+  export function recentKey(source: FileSource, path: string): string
+  // store: files: RecentFileEntry[]; addRecent(entry): void; clear(): void
+  ```
+
+- [ ] **Step 1: Add the storage key**
+
+In `spa/src/lib/storage/keys.ts`, add inside the `STORAGE_KEYS` object (after `PATH_CACHE_V1`):
+```ts
+  RECENT_FILES: 'purdex-recent-files',
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Create `spa/src/stores/useRecentFilesStore.test.ts`:
+```ts
+import { describe, it, expect, beforeEach } from 'vitest'
+import { useRecentFilesStore, recentKey, type RecentFileEntry } from './useRecentFilesStore'
+import type { FileSource } from '../types/fs'
+
+const entry = (over: Partial<RecentFileEntry> = {}): RecentFileEntry => ({
+  source: { type: 'inapp' },
+  path: '/buffer/a.md',
+  name: 'a.md',
+  kind: 'editor',
+  openedAt: 1,
+  ...over,
+})
+
+describe('useRecentFilesStore', () => {
+  beforeEach(() => useRecentFilesStore.setState({ files: [] }))
+
+  it('adds to front', () => {
+    useRecentFilesStore.getState().addRecent(entry({ path: '/x.md', name: 'x.md' }))
+    useRecentFilesStore.getState().addRecent(entry({ path: '/y.md', name: 'y.md' }))
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual(['/y.md', '/x.md'])
+  })
+
+  it('dedups by source+path, moving to front', () => {
+    useRecentFilesStore.getState().addRecent(entry({ path: '/x.md' }))
+    useRecentFilesStore.getState().addRecent(entry({ path: '/y.md' }))
+    useRecentFilesStore.getState().addRecent(entry({ path: '/x.md', openedAt: 9 }))
+    const files = useRecentFilesStore.getState().files
+    expect(files.map((f) => f.path)).toEqual(['/x.md', '/y.md'])
+    expect(files[0].openedAt).toBe(9)
+  })
+
+  it('treats same path on different hosts as distinct', () => {
+    const d1: FileSource = { type: 'daemon', hostId: 'h1' }
+    const d2: FileSource = { type: 'daemon', hostId: 'h2' }
+    useRecentFilesStore.getState().addRecent(entry({ source: d1, path: '/p' }))
+    useRecentFilesStore.getState().addRecent(entry({ source: d2, path: '/p' }))
+    expect(useRecentFilesStore.getState().files).toHaveLength(2)
+  })
+
+  it('caps at 50, dropping oldest', () => {
+    for (let i = 0; i < 55; i++) {
+      useRecentFilesStore.getState().addRecent(entry({ path: `/f${i}.md` }))
+    }
+    const files = useRecentFilesStore.getState().files
+    expect(files).toHaveLength(50)
+    expect(files[0].path).toBe('/f54.md')
+    expect(files.at(-1)?.path).toBe('/f5.md')
+  })
+
+  it('recentKey distinguishes source type + host', () => {
+    expect(recentKey({ type: 'inapp' }, '/p')).not.toBe(recentKey({ type: 'local' }, '/p'))
+    expect(recentKey({ type: 'daemon', hostId: 'h1' }, '/p'))
+      .not.toBe(recentKey({ type: 'daemon', hostId: 'h2' }, '/p'))
+  })
+
+  it('clear empties the list', () => {
+    useRecentFilesStore.getState().addRecent(entry())
+    useRecentFilesStore.getState().clear()
+    expect(useRecentFilesStore.getState().files).toEqual([])
+  })
+})
+```
+
+- [ ] **Step 3: Run it — expect FAIL**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/stores/useRecentFilesStore.test.ts`
+Expected: FAIL (module not found).
+
+- [ ] **Step 4: Implement the store**
+
+Create `spa/src/stores/useRecentFilesStore.ts`:
+```ts
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import type { FileSource } from '../types/fs'
+
+const MAX_RECENT = 50
+
+export type RecentFileKind = 'editor' | 'image-preview' | 'pdf-preview'
+
+export interface RecentFileEntry {
+  source: FileSource
+  path: string
+  name: string
+  kind: RecentFileKind
+  openedAt: number
+}
+
+/** Dedup identity: source type (+ host for daemon) plus the path. */
+export function recentKey(source: FileSource, path: string): string {
+  const sourceKey = source.type === 'daemon' ? `daemon:${source.hostId}` : source.type
+  return `${sourceKey} ${path}`
+}
+
+interface RecentFilesState {
+  files: RecentFileEntry[]
+  addRecent: (entry: RecentFileEntry) => void
+  clear: () => void
+}
+
+export const useRecentFilesStore = create<RecentFilesState>()(
+  persist(
+    (set) => ({
+      files: [],
+      addRecent: (entry) =>
+        set((state) => {
+          const key = recentKey(entry.source, entry.path)
+          const filtered = state.files.filter(
+            (f) => recentKey(f.source, f.path) !== key,
+          )
+          return { files: [entry, ...filtered].slice(0, MAX_RECENT) }
+        }),
+      clear: () => set({ files: [] }),
+    }),
+    {
+      name: STORAGE_KEYS.RECENT_FILES,
+      storage: purdexStorage,
+    },
+  ),
+)
+```
+
+- [ ] **Step 5: Run it — expect PASS**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/stores/useRecentFilesStore.test.ts`
+Expected: PASS (6 tests).
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab && git add -A && git commit -m "feat(recent-files): persisted useRecentFilesStore + storage key
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task A2: `recordRecentFile` helper
+
+**Files:**
+- Create: `spa/src/lib/recent-files/record-recent-file.ts`
+- Test: `spa/src/lib/recent-files/record-recent-file.test.ts`
+
+**Interfaces:**
+- Consumes: `useRecentFilesStore.addRecent` (A1).
+- Produces: `export function recordRecentFile(content: PaneContent): void`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `spa/src/lib/recent-files/record-recent-file.test.ts`:
+```ts
+import { describe, it, expect, beforeEach } from 'vitest'
+import { recordRecentFile } from './record-recent-file'
+import { useRecentFilesStore } from '../../stores/useRecentFilesStore'
+import type { PaneContent } from '../../types/tab'
+
+describe('recordRecentFile', () => {
+  beforeEach(() => useRecentFilesStore.setState({ files: [] }))
+
+  it('records an editor file with basename + kind', () => {
+    recordRecentFile({ kind: 'editor', source: { type: 'inapp' }, filePath: '/docs/a.md' } as PaneContent)
+    const f = useRecentFilesStore.getState().files
+    expect(f).toHaveLength(1)
+    expect(f[0]).toMatchObject({ kind: 'editor', name: 'a.md', path: '/docs/a.md' })
+    expect(f[0].openedAt).toBeGreaterThan(0)
+  })
+
+  it('records image-preview and pdf-preview', () => {
+    recordRecentFile({ kind: 'image-preview', source: { type: 'local' }, filePath: '/i.png' } as PaneContent)
+    recordRecentFile({ kind: 'pdf-preview', source: { type: 'daemon', hostId: 'h' }, filePath: '/d.pdf' } as PaneContent)
+    expect(useRecentFilesStore.getState().files.map((f) => f.kind)).toEqual(['pdf-preview', 'image-preview'])
+  })
+
+  it('ignores non-file pane kinds', () => {
+    recordRecentFile({ kind: 'new-tab' } as PaneContent)
+    recordRecentFile({ kind: 'tmux-session', sessionCode: 'x', mode: 'terminal' } as PaneContent)
+    expect(useRecentFilesStore.getState().files).toHaveLength(0)
+  })
+
+  it('skips an unsaved untitled editor buffer', () => {
+    recordRecentFile({
+      kind: 'editor', source: { type: 'inapp' }, filePath: '/buffer/Untitled.md',
+      untitled: { name: 'Untitled.md', hasBeenRenamed: false },
+    } as PaneContent)
+    expect(useRecentFilesStore.getState().files).toHaveLength(0)
+  })
+})
+```
+
+- [ ] **Step 2: Run it — expect FAIL**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/lib/recent-files/record-recent-file.test.ts`
+Expected: FAIL (module not found).
+
+- [ ] **Step 3: Implement**
+
+Create `spa/src/lib/recent-files/record-recent-file.ts`:
+```ts
+import { useRecentFilesStore, type RecentFileKind } from '../../stores/useRecentFilesStore'
+import type { PaneContent } from '../../types/tab'
+
+const FILE_KINDS = new Set<RecentFileKind>(['editor', 'image-preview', 'pdf-preview'])
+
+/**
+ * Record a user-opened file into the recent list. Only file panes
+ * (editor / image-preview / pdf-preview) are recorded; a still-unsaved
+ * untitled editor buffer is skipped (it enters Recent on first save via
+ * saveUntitledBuffer). Safe to call from any open chokepoint.
+ */
+export function recordRecentFile(content: PaneContent): void {
+  if (!FILE_KINDS.has(content.kind as RecentFileKind)) return
+  // Narrowed: file kinds all carry `source` + `filePath`.
+  const c = content as Extract<PaneContent, { source: unknown; filePath: string }>
+  if (content.kind === 'editor' && content.untitled && !content.untitled.hasBeenRenamed) return
+  const name = c.filePath.split('/').pop() ?? c.filePath
+  useRecentFilesStore.getState().addRecent({
+    source: c.source,
+    path: c.filePath,
+    name,
+    kind: content.kind as RecentFileKind,
+    openedAt: Date.now(),
+  })
+}
+```
+
+> If the `Extract<...>` narrowing does not typecheck against the actual
+> `PaneContent` union, replace it with an explicit switch on `content.kind`
+> that reads `content.source` / `content.filePath` in each file-kind branch.
+> Keep behavior identical.
+
+- [ ] **Step 4: Run it — expect PASS**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/lib/recent-files/record-recent-file.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab && git add -A && git commit -m "feat(recent-files): recordRecentFile helper
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task A3: Wire recording into the open chokepoints
+
+**Files:**
+- Modify: `spa/src/lib/register-modules/file-open-bootstrap.ts` (`defaultTabOpener` ~194; popup `onOpenPath` ~162)
+- Modify: `spa/src/lib/open-in-app-file.ts` (after `createContent`, ~104)
+- Modify: `spa/src/components/editor/EditorPane.tsx` (TWO points — `handleSave` normal-save branch after `markSaved` (~310), and `saveUntitledBuffer` after `markSaved` (~283))
+- Test: `spa/src/lib/open-in-app-file.test.ts` (extend); `spa/src/components/editor/__tests__/EditorPane.test.tsx` (extend save test)
+
+**Interfaces:**
+- Consumes: `recordRecentFile` (A2).
+
+> **Hook-point correction (codex plan review):** the eager New File created by
+> `EditorNewTabSection.createFile` has NO `untitled` metadata, so it saves via
+> `handleSave`'s **normal-save branch** (`EditorPane.tsx:304-311`), NOT
+> `saveUntitledBuffer`. Record after `markSaved` in BOTH: `handleSave:310`
+> (covers eager New Files + existing re-saves) and `saveUntitledBuffer:283`
+> (legacy `untitled:` first-save, keyed by `nextPath`). `createFile` itself does
+> NOT record (opening ≠ saving).
+
+- [ ] **Step 1: Write the failing test (inapp open records)**
+
+Add to `spa/src/lib/open-in-app-file.test.ts` (follow the file's existing setup/mocks; add a `useRecentFilesStore` reset in the relevant `beforeEach`):
+```ts
+import { useRecentFilesStore } from '../stores/useRecentFilesStore'
+// ...
+it('records the opened file in recent list', async () => {
+  useRecentFilesStore.setState({ files: [] })
+  // arrange an existing inapp text file `/notes/x.md` in the test's inapp backend
+  // (mirror however other passing tests in this file seed the backend), then:
+  await openInAppFile('/notes/x.md', 'ws-1')
+  const files = useRecentFilesStore.getState().files
+  expect(files.map((f) => f.path)).toContain('/notes/x.md')
+})
+```
+
+> Match the existing test harness in `open-in-app-file.test.ts` for seeding the
+> inapp backend + workspace. If that harness makes an integration assertion
+> awkward, assert only that `useRecentFilesStore` contains the path after a
+> successful open (the download / missing branches must NOT record).
+
+- [ ] **Step 2: Run it — expect FAIL**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/lib/open-in-app-file.test.ts`
+Expected: FAIL (recent list empty).
+
+- [ ] **Step 3: Wire all four call sites**
+
+`file-open-bootstrap.ts` — add import at top:
+```ts
+import { recordRecentFile } from '../recent-files/record-recent-file'
+```
+In `defaultTabOpener`, right after `const content = opener.createContent(source, file)`:
+```ts
+  recordRecentFile(content)
+```
+In `buildPopupController().show(...).onOpenPath`, right after `const content = opener.createContent(spec.source, file)`:
+```ts
+  recordRecentFile(content)
+```
+
+`open-in-app-file.ts` — add import:
+```ts
+import { recordRecentFile } from './recent-files/record-recent-file'
+```
+Right after `const content = opener.createContent({ type: 'inapp' }, file)`:
+```ts
+  recordRecentFile(content)
+```
+
+`EditorPane.tsx` — add import:
+```ts
+import { recordRecentFile } from '../../lib/recent-files/record-recent-file'
+```
+In `saveUntitledBuffer`'s `try`, immediately after
+`useEditorStore.getState().markSaved(nextKey, { mtime: newStat.mtime, size: newStat.size })`:
+```ts
+      recordRecentFile({ kind: 'editor', source, filePath: nextPath })
+```
+In `handleSave`'s normal-save `try` (the `else` branch, no `buf.untitled`),
+immediately after `useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })`:
+```ts
+      recordRecentFile({ kind: 'editor', source, filePath })
+```
+
+- [ ] **Step 3b: Failing test — New-File save records**
+
+Extend `spa/src/components/editor/__tests__/EditorPane.test.tsx` (reuse its
+existing save-flow harness; add a `useRecentFilesStore.setState({ files: [] })`
+reset). After a normal save of a named inapp file (no untitled metadata),
+assert the store contains its path:
+```ts
+import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+// ... within the existing save describe, after triggering a successful handleSave:
+expect(useRecentFilesStore.getState().files.map((f) => f.path)).toContain(FILE)
+```
+
+> Match the file's existing save test (`__tests__/EditorPane.test.tsx:667`) for
+> how it seeds a dirty buffer and invokes save. Assert only the store membership.
+
+- [ ] **Step 4: Run the targeted + full suite — expect PASS**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/lib/open-in-app-file.test.ts src/components/editor/__tests__/EditorPane.test.tsx && npx vitest run`
+Expected: PASS; full suite green.
+
+- [ ] **Step 5: Lint + commit**
+
+```bash
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && pnpm run lint
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab && git add -A && git commit -m "feat(recent-files): record on open (tree/terminal-link/popup/inapp) + on untitled save
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Phase B — UI
+
+### Task B1: `openRecentEntry` click dispatcher
+
+**Files:**
+- Create: `spa/src/lib/recent-files/open-recent-entry.ts`
+- Test: `spa/src/lib/recent-files/open-recent-entry.test.ts`
+
+**Interfaces:**
+- Consumes: `RecentFileEntry` (A1); `getFsBackend` (`../fs-backend`); `createDaemonBackendForHost` (`../fs-backend-daemon`); `useHostStore`; `useUndoToast`; i18n `t`.
+- Produces:
+  ```ts
+  export async function openRecentEntry(
+    entry: RecentFileEntry,
+    onSelect: (content: PaneContent) => void,
+  ): Promise<void>
+  ```
+
+- [ ] **Step 1: Write the failing test**
+
+Create `spa/src/lib/recent-files/open-recent-entry.test.ts`:
+```ts
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { openRecentEntry } from './open-recent-entry'
+import type { RecentFileEntry } from '../../stores/useRecentFilesStore'
+
+const hosts = vi.hoisted(() => ({ value: {} as Record<string, { name: string }> }))
+const toastShow = vi.hoisted(() => vi.fn())
+const daemonStat = vi.hoisted(() => vi.fn())
+const inappStat = vi.hoisted(() => vi.fn())
+
+vi.mock('../../stores/useHostStore', () => ({
+  useHostStore: { getState: () => ({ hosts: hosts.value }) },
+}))
+vi.mock('../../stores/useUndoToast', () => ({
+  useUndoToast: { getState: () => ({ show: toastShow }) },
+}))
+vi.mock('../fs-backend-daemon', () => ({
+  createDaemonBackendForHost: () => ({ stat: daemonStat }),
+}))
+vi.mock('../fs-backend', () => ({
+  getFsBackend: (s: { type: string }) => (s.type === 'inapp' ? { stat: inappStat } : undefined),
+}))
+vi.mock('../../stores/useI18nStore', () => ({
+  useI18nStore: { getState: () => ({ t: (k: string) => k }) },
+}))
+
+const daemonEntry = (): RecentFileEntry => ({
+  source: { type: 'daemon', hostId: 'h1' }, path: '/p/a.md', name: 'a.md', kind: 'editor', openedAt: 1,
+})
+
+describe('openRecentEntry', () => {
+  beforeEach(() => {
+    hosts.value = { h1: { name: 'mlab' } }
+    toastShow.mockReset(); daemonStat.mockReset(); inappStat.mockReset()
+  })
+
+  it('daemon host present + stat ok → onSelect, no toast', async () => {
+    daemonStat.mockResolvedValue({ isFile: true })
+    const onSelect = vi.fn()
+    await openRecentEntry(daemonEntry(), onSelect)
+    expect(onSelect).toHaveBeenCalledWith({ kind: 'editor', source: { type: 'daemon', hostId: 'h1' }, filePath: '/p/a.md' })
+    expect(toastShow).not.toHaveBeenCalled()
+  })
+
+  it('daemon host absent → toast, no onSelect, no stat', async () => {
+    hosts.value = {}
+    const onSelect = vi.fn()
+    await openRecentEntry(daemonEntry(), onSelect)
+    expect(daemonStat).not.toHaveBeenCalled()
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(toastShow).toHaveBeenCalled()
+  })
+
+  it('daemon stat throws → toast, no onSelect', async () => {
+    daemonStat.mockRejectedValue(Object.assign(new Error('x'), { status: 404 }))
+    const onSelect = vi.fn()
+    await openRecentEntry(daemonEntry(), onSelect)
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(toastShow).toHaveBeenCalled()
+  })
+
+  it('inapp stat ok → onSelect; missing → toast', async () => {
+    inappStat.mockResolvedValueOnce({ isFile: true })
+    const onSelect = vi.fn()
+    const e: RecentFileEntry = { source: { type: 'inapp' }, path: '/b.md', name: 'b.md', kind: 'editor', openedAt: 1 }
+    await openRecentEntry(e, onSelect)
+    expect(onSelect).toHaveBeenCalled()
+
+    inappStat.mockRejectedValueOnce(new Error('ENOENT'))
+    const onSelect2 = vi.fn()
+    await openRecentEntry(e, onSelect2)
+    expect(onSelect2).not.toHaveBeenCalled()
+    expect(toastShow).toHaveBeenCalled()
+  })
+
+  it('local with no backend → onSelect (best-effort)', async () => {
+    const onSelect = vi.fn()
+    const e: RecentFileEntry = { source: { type: 'local' }, path: '/l.md', name: 'l.md', kind: 'editor', openedAt: 1 }
+    await openRecentEntry(e, onSelect)
+    expect(onSelect).toHaveBeenCalled()
+  })
+})
+```
+
+- [ ] **Step 2: Run it — expect FAIL**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/lib/recent-files/open-recent-entry.test.ts`
+Expected: FAIL (module not found).
+
+- [ ] **Step 3: Implement**
+
+Create `spa/src/lib/recent-files/open-recent-entry.ts`:
+```ts
+import type { PaneContent } from '../../types/tab'
+import type { RecentFileEntry } from '../../stores/useRecentFilesStore'
+import { getFsBackend } from '../fs-backend'
+import { createDaemonBackendForHost } from '../fs-backend-daemon'
+import { useHostStore } from '../../stores/useHostStore'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { useI18nStore } from '../../stores/useI18nStore'
+
+/**
+ * Re-open a recent entry in place via the section's `onSelect`. Best-effort:
+ * a daemon entry is host-guarded (avoids getDaemonBase's wrong-host fallback)
+ * and stat-checked; failures raise a toast instead of opening.
+ */
+export async function openRecentEntry(
+  entry: RecentFileEntry,
+  onSelect: (content: PaneContent) => void,
+): Promise<void> {
+  const t = useI18nStore.getState().t
+  const content = { kind: entry.kind, source: entry.source, filePath: entry.path } as PaneContent
+
+  const fail = () =>
+    useUndoToast.getState().show(t('editor.recent.open_failed', { name: entry.name }))
+
+  try {
+    if (entry.source.type === 'daemon') {
+      const hostId = entry.source.hostId
+      const host = useHostStore.getState().hosts[hostId]
+      if (!host) {
+        useUndoToast.getState().show(t('editor.recent.host_gone', { host: hostId }))
+        return
+      }
+      const stat = await createDaemonBackendForHost(hostId).stat(entry.path)
+      if (stat.isDirectory) { fail(); return }
+      onSelect(content)
+      return
+    }
+
+    // local / inapp: stat via the registered backend when available.
+    const backend = getFsBackend(entry.source)
+    if (!backend) {
+      // No backend (e.g. local outside Electron) — best-effort open.
+      onSelect(content)
+      return
+    }
+    const stat = await backend.stat(entry.path)
+    if (stat.isDirectory) { fail(); return }
+    onSelect(content)
+  } catch {
+    fail()
+  }
+}
+```
+
+- [ ] **Step 4: Run it — expect PASS**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/lib/recent-files/open-recent-entry.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab && git add -A && git commit -m "feat(recent-files): openRecentEntry — host-guarded stat + in-place open / toast
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task B2: `EditorNewTabSection` recent list UI
+
+**Files:**
+- Modify: `spa/src/components/editor/EditorNewTabSection.tsx`
+- Test: `spa/src/components/editor/EditorNewTabSection.test.tsx` (extend)
+- Modify: i18n locale file(s) — add `editor.recent.*` keys in every locale the repo ships (locate via `rg -l "editor.new_file" spa/src`).
+
+**Interfaces:**
+- Consumes: `useRecentFilesStore` (A1); `openRecentEntry` (B1); `useHostStore` (host badge name); `useI18nStore`.
+
+- [ ] **Step 1: Add i18n keys**
+
+Find the locale files: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab && rg -l "\"editor\"" spa/src --iglob '*.ts' --iglob '*.json' | head`. In each, alongside the existing `editor.new_file` / `editor.new_markdown` entries, add (translate `zh`/`en` appropriately; keep English fallback if only one locale object):
+```
+editor.recent.title        → "最近開啟" / "Recently opened"
+editor.recent.filter.all   → "全部" / "All"
+editor.recent.filter.text  → "文字" / "Text"
+editor.recent.filter.image → "圖片" / "Image"
+editor.recent.filter.pdf   → "PDF" / "PDF"
+editor.recent.open_failed  → "無法開啟 {name}" / "Couldn't open {name}"
+editor.recent.host_gone    → "主機 {host} 已移除" / "Host {host} was removed"
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Extend `spa/src/components/editor/EditorNewTabSection.test.tsx`. Mock `openRecentEntry` and seed the store:
+```ts
+import { useRecentFilesStore, type RecentFileEntry } from '../../stores/useRecentFilesStore'
+import * as openMod from '../../lib/recent-files/open-recent-entry'
+// ... existing imports / render helper ...
+
+const seed = (files: RecentFileEntry[]) => useRecentFilesStore.setState({ files })
+
+const mk = (over: Partial<RecentFileEntry>): RecentFileEntry => ({
+  source: { type: 'inapp' }, path: '/a.md', name: 'a.md', kind: 'editor', openedAt: 1, ...over,
+})
+
+describe('EditorNewTabSection — recent list', () => {
+  beforeEach(() => seed([]))
+
+  it('hides the recent section when empty', () => {
+    render(<EditorNewTabSection onSelect={() => {}} />)
+    expect(screen.queryByText('editor.recent.title')).toBeNull()
+  })
+
+  it('renders rows and the fixed chips when non-empty', () => {
+    seed([mk({ path: '/x.md', name: 'x.md', kind: 'editor' })])
+    render(<EditorNewTabSection onSelect={() => {}} />)
+    expect(screen.getByText('editor.recent.title')).toBeInTheDocument()
+    expect(screen.getByText('editor.recent.filter.all')).toBeInTheDocument()
+    expect(screen.getByText('x.md')).toBeInTheDocument()
+  })
+
+  it('filters rows by kind chip', async () => {
+    seed([
+      mk({ path: '/t.md', name: 't.md', kind: 'editor' }),
+      mk({ path: '/i.png', name: 'i.png', kind: 'image-preview' }),
+    ])
+    render(<EditorNewTabSection onSelect={() => {}} />)
+    await userEvent.click(screen.getByText('editor.recent.filter.image'))
+    expect(screen.queryByText('t.md')).toBeNull()
+    expect(screen.getByText('i.png')).toBeInTheDocument()
+  })
+
+  it('shows host badge only for daemon rows', () => {
+    seed([mk({ source: { type: 'daemon', hostId: 'h1' }, path: '/d.md', name: 'd.md' })])
+    render(<EditorNewTabSection onSelect={() => {}} />)
+    // host badge shows the host display name or id
+    expect(screen.getByTestId('recent-host-badge')).toBeInTheDocument()
+  })
+
+  it('row click calls openRecentEntry with the entry + onSelect', async () => {
+    const spy = vi.spyOn(openMod, 'openRecentEntry').mockResolvedValue()
+    const onSelect = vi.fn()
+    const entry = mk({ path: '/x.md', name: 'x.md' })
+    seed([entry])
+    render(<EditorNewTabSection onSelect={onSelect} />)
+    await userEvent.click(screen.getByText('x.md'))
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ path: '/x.md' }), onSelect)
+  })
+})
+```
+
+> **i18n reality (codex plan review):** this repo's tests render REAL locale
+> strings, not echoed keys (existing assertions use `'New File'` / `'New
+> Markdown'`). So assert the real English text you add in Step 1 — `'Recently
+> opened'`, `'All'`, `'Image'` — NOT the i18n keys. The snippet above uses keys
+> for brevity; translate each `getByText('editor.recent.*')` to its English
+> string when writing the test. If host-name resolution needs `useHostStore`,
+> ensure the store has `{ h1: { name: 'mlab' } }` (seed it like other tests do).
+
+- [ ] **Step 3: Run it — expect FAIL**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/components/editor/EditorNewTabSection.test.tsx`
+Expected: FAIL.
+
+- [ ] **Step 4: Implement the UI**
+
+Replace `spa/src/components/editor/EditorNewTabSection.tsx` with (keeps the two buttons; adds the recent list):
+```tsx
+import { useCallback, useMemo, useState } from 'react'
+import { FilePlus, FileText, Image as ImageIcon, FilePdf } from '@phosphor-icons/react'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { useRecentFilesStore, type RecentFileKind } from '../../stores/useRecentFilesStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { openRecentEntry } from '../../lib/recent-files/open-recent-entry'
+import { createUniqueInAppFile } from '../../lib/inapp-namer'
+import { STORAGE_ROOT } from '../../lib/storage-paths'
+import type { PaneContent } from '../../types/tab'
+import type { FileSource } from '../../types/fs'
+
+interface Props {
+  onSelect: (content: PaneContent) => void
+}
+
+type FilterKey = 'all' | RecentFileKind
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: 'editor.recent.filter.all' },
+  { key: 'editor', label: 'editor.recent.filter.text' },
+  { key: 'image-preview', label: 'editor.recent.filter.image' },
+  { key: 'pdf-preview', label: 'editor.recent.filter.pdf' },
+]
+
+function KindIcon({ kind }: { kind: RecentFileKind }) {
+  if (kind === 'image-preview') return <ImageIcon size={16} />
+  if (kind === 'pdf-preview') return <FilePdf size={16} />
+  return <FileText size={16} />
+}
+
+export function EditorNewTabSection({ onSelect }: Props) {
+  const t = useI18nStore((s) => s.t)
+  const files = useRecentFilesStore((s) => s.files)
+  const hosts = useHostStore((s) => s.hosts)
+  const [filter, setFilter] = useState<FilterKey>('all')
+
+  const createFile = useCallback(async (ext: 'txt' | 'md') => {
+    const source: FileSource = { type: 'inapp' }
+    let filePath: string
+    try {
+      filePath = await createUniqueInAppFile(STORAGE_ROOT, ext)
+    } catch (err) {
+      console.error('[editor] failed to reserve a new file', err)
+      return
+    }
+    onSelect({ kind: 'editor', source, filePath })
+  }, [onSelect])
+
+  const visible = useMemo(
+    () => (filter === 'all' ? files : files.filter((f) => f.kind === filter)),
+    [files, filter],
+  )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex gap-2">
+        <button
+          className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border-subtle bg-surface-secondary hover:bg-surface-hover text-text-primary text-sm transition-colors"
+          onClick={() => createFile('txt')}
+        >
+          <FilePlus size={16} />
+          {t('editor.new_file')}
+        </button>
+        <button
+          className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border-subtle bg-surface-secondary hover:bg-surface-hover text-text-primary text-sm transition-colors"
+          onClick={() => createFile('md')}
+        >
+          <FileText size={16} />
+          {t('editor.new_markdown')}
+        </button>
+      </div>
+
+      {files.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h4 className="text-xs font-medium text-text-secondary px-1">{t('editor.recent.title')}</h4>
+          <div className="flex gap-1">
+            {FILTERS.map((f) => (
+              <button
+                key={f.key}
+                onClick={() => setFilter(f.key)}
+                className={`px-2 py-0.5 rounded text-xs transition-colors ${
+                  filter === f.key
+                    ? 'bg-surface-active text-text-primary'
+                    : 'text-text-secondary hover:bg-surface-hover'
+                }`}
+              >
+                {t(f.label)}
+              </button>
+            ))}
+          </div>
+          <ul className="flex flex-col">
+            {visible.map((entry) => {
+              const badge =
+                entry.source.type === 'daemon'
+                  ? hosts[entry.source.hostId]?.name ?? entry.source.hostId
+                  : null
+              return (
+                <li key={`${entry.source.type}:${entry.source.type === 'daemon' ? entry.source.hostId : ''}:${entry.path}`}>
+                  <button
+                    onClick={() => void openRecentEntry(entry, onSelect)}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-hover text-left transition-colors"
+                  >
+                    <span className="text-text-muted flex-shrink-0"><KindIcon kind={entry.kind} /></span>
+                    <span className="text-sm text-text-primary truncate" title={entry.path}>{entry.name}</span>
+                    <span className="text-xs text-text-muted truncate flex-1" title={entry.path}>{entry.path}</span>
+                    {badge && (
+                      <span
+                        data-testid="recent-host-badge"
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-surface-secondary text-text-secondary flex-shrink-0"
+                      >
+                        {badge}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+> If `bg-surface-active` is not a token in this repo, use the same selected-chip
+> treatment the codebase already uses for toggle chips (grep an existing chip/tab
+> component). Do not invent new color tokens.
+
+- [ ] **Step 5: Run it — expect PASS**
+
+Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run src/components/editor/EditorNewTabSection.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 6: Full suite + lint + build**
+
+Run:
+```bash
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab/spa && npx vitest run && pnpm run lint && pnpm run build
+```
+Expected: all green.
+
+- [ ] **Step 7: Commit**
+
+```bash
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/recent-files-newtab && git add -A && git commit -m "feat(recent-files): recent list UI in editor new-tab section
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Self-Review Notes (author)
+
+- Spec §3 store → A1. §4 recorder + hooks → A2/A3. §5.1 UI + §5.2 click + §5.3 testability → B1/B2. §5.4 i18n → B2 Step 1. §6 edge cases: host-gone guard (B1), cap/dedup (A1), empty filter subset (B2 renders empty `<ul>`), hydration (persisted store renders empty until hydrated — no gate needed since empty list simply hides the section).
+- Types consistent: `RecentFileEntry`, `RecentFileKind`, `recentKey`, `recordRecentFile`, `openRecentEntry` names identical across tasks.
+- No placeholders except the two clearly-flagged "match existing harness" notes in A3/B2 tests, which depend on the target file's current mock setup and must be read at implementation time.

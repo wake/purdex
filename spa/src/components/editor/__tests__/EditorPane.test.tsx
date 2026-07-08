@@ -4,6 +4,7 @@ import { EditorPane } from '../EditorPane'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useEditorSettingsStore } from '../../../stores/useEditorSettingsStore'
+import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
 import type { Pane } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 import { bufferKey } from '../../../lib/editor-buffer-key'
@@ -146,6 +147,7 @@ describe('EditorPane', () => {
     useEditorStore.getState().clearAllBuffers()
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    useRecentFilesStore.setState({ files: [] })
   })
 
   it('preserves pane-local editor state across unmount when the pane still exists in tabs', async () => {
@@ -794,6 +796,8 @@ describe('EditorPane', () => {
       isDirty: false,
       lastStat: { mtime: 456, size: 15 },
     })
+
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toContain('/notes/save.md')
   })
 
   it('keeps the buffer dirty when save fails', async () => {

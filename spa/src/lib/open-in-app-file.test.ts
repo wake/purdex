@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { openInAppFile } from './open-in-app-file'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { useRecentFilesStore } from '../stores/useRecentFilesStore'
 import {
   clearAllForHmr,
   registerFileOpener,
@@ -74,6 +75,7 @@ describe('openInAppFile', () => {
     registerEditorOpeners()
     registerStatBackend()
     setupWorkspace()
+    useRecentFilesStore.setState({ files: [] })
   })
 
   it('opens a .md file as an editor pane (registry dispatch)', async () => {
@@ -83,6 +85,12 @@ describe('openInAppFile', () => {
     expect(content?.kind).toBe('editor')
     expect((content as { filePath: string }).filePath).toBe('/buffer/x.md')
     expect((content as { source: { type: string } }).source.type).toBe('inapp')
+  })
+
+  it('records the opened file in recent list', async () => {
+    await openInAppFile('/buffer/x.md', 'w1')
+    const files = useRecentFilesStore.getState().files
+    expect(files.map((f) => f.path)).toContain('/buffer/x.md')
   })
 
   it('opens a .png file as an image-preview pane (registry dispatch)', async () => {
