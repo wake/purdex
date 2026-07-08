@@ -52,6 +52,13 @@ describe('createFilePathMatcher — absolute', () => {
   it('does NOT pick /CLAUDE.md out of ./CLAUDE.md', () => {
     expect(make().provide('open ./CLAUDE.md')).toHaveLength(0)
   })
+
+  it('matches hyphenated dotted segment /a/b/foo.pre-edit.md', () => {
+    const r = make().provide('see /a/b/foo.pre-edit.md here')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('/a/b/foo.pre-edit.md')
+    expect(r[0].meta).toEqual({ path: '/a/b/foo.pre-edit.md' })
+  })
 })
 
 describe('createFilePathMatcher — relativeSlash', () => {
@@ -101,6 +108,18 @@ describe('createFilePathMatcher — relativeSlash', () => {
 
   it('does NOT match dir/1.2.3 (all-digit extensions)', () => {
     expect(make().provide('cd dir/1.2.3')).toHaveLength(0)
+  })
+
+  it('matches hyphenated dotted segment docs/souls/morphy.pre-edit.SOUL.md', () => {
+    const r = make().provide('edit docs/souls/morphy.pre-edit.SOUL.md ok')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('docs/souls/morphy.pre-edit.SOUL.md')
+    expect(r[0].meta).toEqual({ path: 'docs/souls/morphy.pre-edit.SOUL.md' })
+  })
+
+  it('matches hyphenated dotted segment with line:col', () => {
+    const r = make().provide('internal/x/morphy.pre-edit.SOUL.md:12:3')
+    expect(r[0].meta).toEqual({ path: 'internal/x/morphy.pre-edit.SOUL.md', line: 12, col: 3 })
   })
 })
 
@@ -161,6 +180,23 @@ describe('createFilePathMatcher — bare', () => {
     expect(r).toHaveLength(1)
     expect(r[0].text).toBe('foo.d.ts')
   })
+
+  it('matches hyphenated dotted segment report.pre-edit.md', () => {
+    const r = make().provide('see report.pre-edit.md')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('report.pre-edit.md')
+    expect(r[0].meta).toEqual({ path: 'report.pre-edit.md' })
+  })
+
+  it('does NOT consume a trailing hyphen after ext foo.md-', () => {
+    const r = make().provide('see foo.md- ok')
+    expect(r[0].text).toBe('foo.md')
+    expect(r[0].meta).toEqual({ path: 'foo.md' })
+  })
+
+  it('does NOT match IP address 192.168.1.1 (hyphen regression guard)', () => {
+    expect(make().provide('ping 192.168.1.1 x')).toHaveLength(0)
+  })
 })
 
 describe('createFilePathMatcher — tilde', () => {
@@ -197,5 +233,12 @@ describe('createFilePathMatcher — tilde', () => {
 
   it('returns [] when flag off', () => {
     expect(make(false).provide('~/foo.ts')).toHaveLength(0)
+  })
+
+  it('matches hyphenated dotted segment ~/d/bar.min-2.js', () => {
+    const r = make().provide('open ~/d/bar.min-2.js')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('~/d/bar.min-2.js')
+    expect(r[0].meta).toEqual({ path: '~/d/bar.min-2.js' })
   })
 })
