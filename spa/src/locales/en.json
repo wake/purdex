@@ -366,6 +366,7 @@
 
   "page.newtab.title": "New Tab",
   "page.newtab.empty": "No content providers registered",
+  "page.newtab.bringInTab": "Bring in an open tab",
   "page.history.title": "History",
   "page.history.empty": "No browsing history yet",
   "page.dashboard.title": "Dashboard",

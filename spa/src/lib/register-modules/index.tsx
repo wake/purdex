@@ -66,16 +66,21 @@ import { PlaceholderSettingsSection } from '../../components/settings/Placeholde
 import { SETTINGS_ORDER } from '../settings-order'
 
 function NewTabPaneWrapper({ pane }: PaneRendererProps) {
+  // Reverse-lookup the owning tab from the pane id. Subscribing to `tabs` keeps
+  // `currentTabId` correct if the layout changes under us, and lets the
+  // "Bring in an open tab" section (rendered inside NewTabPage) target this pane.
+  const tabs = useTabStore((s) => s.tabs)
+  const currentTabId = Object.keys(tabs).find((id) =>
+    findPane(tabs[id].layout, pane.id) !== undefined,
+  )
   const handleSelect = (content: PaneContent) => {
-    const { tabs } = useTabStore.getState()
-    const tabId = Object.keys(tabs).find((id) =>
-      findPane(tabs[id].layout, pane.id) !== undefined,
-    )
-    if (!tabId) return
-    useTabStore.getState().setPaneContent(tabId, pane.id, content)
-    useTabStore.getState().setActiveTab(tabId)
+    if (!currentTabId) return
+    useTabStore.getState().setPaneContent(currentTabId, pane.id, content)
+    useTabStore.getState().setActiveTab(currentTabId)
   }
-  return <NewTabPage onSelect={handleSelect} />
+  return (
+    <NewTabPage onSelect={handleSelect} currentTabId={currentTabId} currentPaneId={pane.id} />
+  )
 }
 
 function BrowserPaneWrapper({ pane }: PaneRendererProps) {

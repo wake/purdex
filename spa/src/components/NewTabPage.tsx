@@ -3,16 +3,31 @@ import { getNewTabProviders } from '../lib/new-tab-registry'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
+import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../features/workspace/store'
+import { useSessionStore } from '../stores/useSessionStore'
 import { useBreakpoint } from '../hooks/useBreakpoint'
 import { resolveProfile } from '../lib/resolve-profile'
 import { colsClass } from '../lib/cols-class'
+import { countLeaves, getPrimaryPane } from '../lib/pane-tree'
+import { getPaneLabel } from '../lib/pane-labels'
+import { moveTabContentIntoPane, MOVABLE_KINDS } from '../lib/pane-move'
 import type { PaneContent } from '../types/tab'
 
 interface Props {
   onSelect: (content: PaneContent) => void
+  /**
+   * When this new-tab pane is mounted inside a real tab (the normal case), the
+   * pane renderer passes the owning tab + pane ids. Their presence unlocks the
+   * "Bring in an open tab" section, which pulls another single-pane tab's
+   * content into THIS pane. Omitted on unwired call paths (the section then
+   * simply does not render).
+   */
+  currentTabId?: string
+  currentPaneId?: string
 }
 
-export function NewTabPage({ onSelect }: Props) {
+export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
   const t = useI18nStore((s) => s.t)
   const [hydrated, setHydrated] = useState(useNewTabLayoutStore.persist.hasHydrated())
   useEffect(() => {
@@ -44,6 +59,41 @@ export function NewTabPage({ onSelect }: Props) {
   }, [])
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
 
+  // "Bring in an open tab" — enumerate every OTHER open tab (across all
+  // workspaces) whose content can be relocated into this pane. Subscribing to
+  // `tabs` / `workspaces` / `sessions` (not empty-deps snapshots) keeps the
+  // list live as tabs open, close, rename, or move.
+  const tabs = useTabStore((s) => s.tabs)
+  const workspaces = useWorkspaceStore((s) => s.workspaces)
+  const sessions = useSessionStore((s) => s.sessions)
+  const bringInCandidates = useMemo(() => {
+    if (!currentTabId || !currentPaneId) return []
+    const sessionByCode = new Map<string, { name: string }>()
+    for (const list of Object.values(sessions)) {
+      for (const sess of list) sessionByCode.set(sess.code, sess)
+    }
+    const sessionLookup = { getByCode: (code: string) => sessionByCode.get(code) }
+    const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
+    const movable = MOVABLE_KINDS as readonly string[]
+    const out: { tabId: string; label: string; workspaceName: string }[] = []
+    for (const ws of workspaces) {
+      for (const tabId of ws.tabs) {
+        if (tabId === currentTabId) continue
+        const tab = tabs[tabId]
+        if (!tab || tab.locked) continue
+        if (countLeaves(tab.layout) !== 1) continue
+        const content = getPrimaryPane(tab.layout).content
+        if (!movable.includes(content.kind)) continue
+        out.push({
+          tabId,
+          label: getPaneLabel(content, sessionLookup, workspaceLookup, t),
+          workspaceName: ws.name,
+        })
+      }
+    }
+    return out
+  }, [currentTabId, currentPaneId, tabs, workspaces, sessions, t])
+
   if (!hydrated) {
     return <div className="h-full w-full" />
   }
@@ -74,7 +124,7 @@ export function NewTabPage({ onSelect }: Props) {
 
   const gridCols = colsClass(profile.columns.length)
 
-  return (
+  const grid = (
     <div className={`h-full w-full grid overflow-hidden gap-6 px-6 pt-8 ${gridCols}`}>
       {profile.columns.map((col, i) => (
         <div key={`${profileKey}-${i}`} className="flex flex-col gap-6 overflow-y-auto">
@@ -95,6 +145,37 @@ export function NewTabPage({ onSelect }: Props) {
           })}
         </div>
       ))}
+    </div>
+  )
+
+  // No pane context, or nothing movable → render the bare grid unchanged so the
+  // start-screen layout (and its h-full scroll contract) is untouched.
+  if (bringInCandidates.length === 0) return grid
+
+  return (
+    <div className="h-full w-full flex flex-col overflow-hidden">
+      <section
+        className="w-full flex-shrink-0 px-6 pt-6"
+        data-testid="newtab-bring-in"
+      >
+        <h3 className="text-sm font-medium text-text-secondary mb-2 px-2">
+          {t('page.newtab.bringInTab')}
+        </h3>
+        <div className="flex flex-col gap-1">
+          {bringInCandidates.map((c) => (
+            <button
+              key={c.tabId}
+              type="button"
+              onClick={() => moveTabContentIntoPane(c.tabId, currentTabId!, currentPaneId!)}
+              className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-sm text-text-primary hover:bg-white/5 cursor-pointer"
+            >
+              <span className="truncate">{c.label}</span>
+              <span className="flex-shrink-0 text-xs text-text-muted">{c.workspaceName}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+      <div className="flex-1 min-h-0">{grid}</div>
     </div>
   )
 }
