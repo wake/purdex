@@ -5,6 +5,7 @@ import { createDaemonBackendForHost } from '../fs-backend-daemon'
 import { useHostStore } from '../../stores/useHostStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { recordRecentFile } from './record-recent-file'
 
 /**
  * Re-open a recent entry in place via the section's `onSelect`. Best-effort:
@@ -21,6 +22,15 @@ export async function openRecentEntry(
   const fail = () =>
     useUndoToast.getState().show(t('editor.recent.open_failed', { name: entry.name }))
 
+  // Re-record on a successful reopen so the entry moves to the front and its
+  // openedAt refreshes — this path bypasses defaultTabOpener / save hooks, so
+  // without this a file reopened only via the Recent list would never update
+  // its recency and could be evicted while still in active use.
+  const open = () => {
+    recordRecentFile(content)
+    onSelect(content)
+  }
+
   try {
     if (entry.source.type === 'daemon') {
       const hostId = entry.source.hostId
@@ -31,7 +41,7 @@ export async function openRecentEntry(
       }
       const stat = await createDaemonBackendForHost(hostId).stat(entry.path)
       if (stat.isDirectory) { fail(); return }
-      onSelect(content)
+      open()
       return
     }
 
@@ -39,12 +49,12 @@ export async function openRecentEntry(
     const backend = getFsBackend(entry.source)
     if (!backend) {
       // No backend (e.g. local outside Electron) — best-effort open.
-      onSelect(content)
+      open()
       return
     }
     const stat = await backend.stat(entry.path)
     if (stat.isDirectory) { fail(); return }
-    onSelect(content)
+    open()
   } catch {
     fail()
   }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { openRecentEntry } from './open-recent-entry'
-import type { RecentFileEntry } from '../../stores/useRecentFilesStore'
+import { useRecentFilesStore, type RecentFileEntry } from '../../stores/useRecentFilesStore'
 
 const hosts = vi.hoisted(() => ({ value: {} as Record<string, { name: string }> }))
 const toastShow = vi.hoisted(() => vi.fn())
@@ -77,5 +77,19 @@ describe('openRecentEntry', () => {
     const e: RecentFileEntry = { source: { type: 'local' }, path: '/l.md', name: 'l.md', kind: 'editor', openedAt: 1 }
     await openRecentEntry(e, onSelect)
     expect(onSelect).toHaveBeenCalled()
+  })
+
+  it('re-records the entry on a successful open (recency refresh)', async () => {
+    useRecentFilesStore.setState({ files: [] })
+    daemonStat.mockResolvedValue({ isFile: true })
+    await openRecentEntry(daemonEntry(), vi.fn())
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toContain('/p/a.md')
+  })
+
+  it('does NOT re-record when the open fails', async () => {
+    useRecentFilesStore.setState({ files: [] })
+    daemonStat.mockRejectedValue(new Error('missing'))
+    await openRecentEntry(daemonEntry(), vi.fn())
+    expect(useRecentFilesStore.getState().files).toHaveLength(0)
   })
 })
