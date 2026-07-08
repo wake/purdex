@@ -197,6 +197,32 @@ describe('createFilePathMatcher — bare', () => {
   it('does NOT match IP address 192.168.1.1 (hyphen regression guard)', () => {
     expect(make().provide('ping 192.168.1.1 x')).toHaveLength(0)
   })
+
+  it('does NOT match semver prerelease v1.2.3-beta', () => {
+    expect(make().provide('got v1.2.3-beta released')).toHaveLength(0)
+  })
+
+  it('does NOT match semver prerelease 1.2.3-rc.1', () => {
+    expect(make().provide('at 1.2.3-rc.1 tag')).toHaveLength(0)
+  })
+
+  it('DOES match bar.min-2.js (real file with hyphen ext)', () => {
+    const r = make().provide('open bar.min-2.js')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('bar.min-2.js')
+  })
+
+  it('DOES match data.2024-01.json (real file with hyphen ext)', () => {
+    const r = make().provide('see data.2024-01.json')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('data.2024-01.json')
+  })
+
+  it('DOES still match tarball v1.2.3.tar.gz:10', () => {
+    const r = make().provide('got v1.2.3.tar.gz:10')
+    expect(r[0].text).toBe('v1.2.3.tar.gz:10')
+    expect(r[0].meta).toEqual({ path: 'v1.2.3.tar.gz', line: 10 })
+  })
 })
 
 describe('createFilePathMatcher — tilde', () => {
