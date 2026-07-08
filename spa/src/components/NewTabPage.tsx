@@ -68,11 +68,6 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
   const sessions = useSessionStore((s) => s.sessions)
   const bringInCandidates = useMemo(() => {
     if (!currentTabId || !currentPaneId) return []
-    const sessionByCode = new Map<string, { name: string }>()
-    for (const list of Object.values(sessions)) {
-      for (const sess of list) sessionByCode.set(sess.code, sess)
-    }
-    const sessionLookup = { getByCode: (code: string) => sessionByCode.get(code) }
     const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
     const movable = MOVABLE_KINDS as readonly string[]
     const out: { tabId: string; label: string; workspaceName: string }[] = []
@@ -84,6 +79,15 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
         if (countLeaves(tab.layout) !== 1) continue
         const content = getPrimaryPane(tab.layout).content
         if (!movable.includes(content.kind)) continue
+        // Scope the session lookup to THIS content's own host — session codes
+        // are only unique per host, so a flat cross-host code→session map would
+        // mislabel one tab with another host's session name.
+        const sessionLookup = {
+          getByCode: (code: string) =>
+            content.kind === 'tmux-session'
+              ? (sessions[content.hostId] ?? []).find((sess) => sess.code === code)
+              : undefined,
+        }
         out.push({
           tabId,
           label: getPaneLabel(content, sessionLookup, workspaceLookup, t),

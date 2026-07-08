@@ -12,6 +12,8 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { useSessionStore } from '../stores/useSessionStore'
+import type { Session } from '../lib/host-api'
 import { createTab, type PaneContent, type Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import * as paneMove from '../lib/pane-move'
@@ -286,6 +288,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
   beforeEach(() => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     useWorkspaceStore.getState().reset()
+    useSessionStore.setState({ sessions: {} })
     vi.mocked(paneMove.moveTabContentIntoPane).mockClear()
     seedProvidersForGrid()
   })
@@ -293,6 +296,59 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
   afterEach(() => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     useWorkspaceStore.getState().reset()
+    useSessionStore.setState({ sessions: {} })
+  })
+
+  it('labels tmux sessions by their own host when two hosts share a session code', () => {
+    // Two different hosts each have a live session with the SAME code but a
+    // DIFFERENT name. A flat code→session map (across all hosts) collapses them
+    // and mislabels one tab with the other host's name; the lookup must be
+    // scoped by each candidate's hostId.
+    const mkSession = (code: string, name: string): Session => ({
+      code,
+      name,
+      cwd: '/',
+      mode: 'terminal',
+      cc_session_id: '',
+      cc_model: '',
+      has_relay: false,
+    })
+    useSessionStore.setState({
+      sessions: {
+        hostA: [mkSession('dup', 'server-alpha')],
+        hostB: [mkSession('dup', 'server-beta')],
+      },
+    })
+
+    const { tab: current } = seedWorkspaceTab('WS', { kind: 'new-tab' })
+    seedWorkspaceTab('WS', {
+      kind: 'tmux-session',
+      hostId: 'hostA',
+      sessionCode: 'dup',
+      mode: 'terminal',
+      cachedName: 'cached-A',
+      tmuxInstance: 'default',
+    })
+    seedWorkspaceTab('WS', {
+      kind: 'tmux-session',
+      hostId: 'hostB',
+      sessionCode: 'dup',
+      mode: 'terminal',
+      cachedName: 'cached-B',
+      tmuxInstance: 'default',
+    })
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={primaryPaneId(current)}
+      />,
+    )
+
+    // Each candidate resolves against its OWN host's session list.
+    expect(screen.getByText('server-alpha')).toBeTruthy()
+    expect(screen.getByText('server-beta')).toBeTruthy()
   })
 
   it('lists movable tabs across workspaces with their tab name + workspace name', () => {
