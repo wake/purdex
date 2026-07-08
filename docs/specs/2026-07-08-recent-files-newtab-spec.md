@@ -110,25 +110,29 @@ There are **three** user-initiated open paths to hook (codex spec review):
 ### 4.2 New files (record on save, not on creation)
 Per product decision: a file created via **New File / New Markdown** must NOT
 appear in Recent until it is **saved**.
-- `EditorNewTabSection.createFile` (which reserves `/buffer/Untitled[-N].<ext>`
-  and opens it) does **not** call the recorder.
-- **Hook point = `saveUntitledBuffer(nextName)`** (`EditorPane.tsx:262`), NOT
-  `handleSave`. A brand-new untitled buffer does not persist through `handleSave`
-  directly: `handleSave` opens the rename popover when `!hasBeenRenamed` and
-  returns; the actual write happens in `handleRenameSubmit → saveUntitledBuffer`,
-  which also renames the pane/buffer to `nextPath`. Recording must therefore run
-  **inside `saveUntitledBuffer` after a successful write, using `nextPath`** — at
-  the `handleSave` callsite `paneContent.filePath` is still the stale Untitled
-  path. This single point covers legacy `untitled:` and reserved-`/buffer/`
-  new files alike.
-- Existing (already-named) files do NOT need a save hook: they are already
-  recorded on open (§4.1). We deliberately skip re-recording on every existing
-  save to keep the hook surface minimal; recency for existing files is set at
-  open time, which is sufficient.
 
-Net effect: existing files enter Recent on open; freshly-created scratch files
-enter Recent only once their first save (rename-submit) lands, keyed by the
-final `nextPath`.
+Reality check (codex plan review): `EditorNewTabSection.createFile` eagerly
+reserves a **real** `/buffer/Untitled[-N].<ext>` file via `createUniqueInAppFile`
+and opens `{ kind:'editor', source, filePath }` **with no `untitled` metadata**.
+Such a file therefore does NOT flow through `saveUntitledBuffer` — that path only
+runs when `buf.untitled` is set. It persists through `handleSave`'s **normal-save
+branch** instead. So:
+- `createFile` does **not** call the recorder (→ "opening doesn't count").
+- **Two save hook points in `EditorPane.tsx`, each right after its `markSaved`:**
+  1. `handleSave` normal-save branch (`EditorPane.tsx:310`) — covers the eager
+     New File's first real save **and** any re-save of an existing named file.
+     Record `{ kind:'editor', source, filePath }` (both in scope).
+  2. `saveUntitledBuffer` (`EditorPane.tsx:283`, after its `markSaved(nextKey…)`)
+     — covers the legacy `untitled:` first-save, keyed by the post-rename
+     `nextPath` (at that point `filePath` is still the stale Untitled path).
+- Recording on every save is harmless: an existing file already recorded on open
+  is simply refreshed to the front (dedup). We do NOT try to distinguish an
+  eager-new-file's first save from an existing save — unnecessary and both should
+  record.
+
+Net effect: existing files enter Recent on open (§4.1); a New-File-created file
+enters Recent only once the user actually saves it (`handleSave` write), keyed by
+its real path.
 
 ## 5. UI — `EditorNewTabSection`
 
@@ -151,8 +155,9 @@ Recently opened                         ← only when list non-empty
 - **Fixed chips**: `全部 / 文字 / 圖片 / PDF` mapping to
   `all / editor / image-preview / pdf-preview`. Selected chip filters the list;
   default `all`. Chip selection is component-local state (not persisted).
-- **Row**: kind/extension icon (reuse `fileIconForPath` / `getPaneIcon` logic) +
-  basename (single line, `truncate`, `title={path}`) + dim relative-ish path +
+- **Row**: kind-based icon (`FileText` for editor, `Image` for image-preview,
+  `FilePdf` for pdf-preview — extension-aware `fileIconForPath` is a nice-to-have,
+  not required) + basename (single line, `truncate`, `title={path}`) + dim path +
   host badge for `source.type === 'daemon'`.
 - **Host badge**: resolve display name from the host/workspace store by
   `source.hostId`; fall back to the raw hostId when the host is unknown/removed.
@@ -178,12 +183,13 @@ pre-flight, then either opens in place or shows a toast:
   falls back to the active/first host for an unknown id, which would otherwise
   stat/open the **wrong host's** same-path file (codex safety finding). When the
   host exists, `stat(path)` via `createDaemonBackendForHost(source.hostId)`;
-  exists → `onSelect(content)`; not-found/error → `useUndoToast.show(t('editor.recent.open_failed', { name }))`.
-- `local`: `stat` via `getFsBackend({ type: 'local' })` when present; exists →
-  `onSelect(content)`; missing/error → toast. If no local backend is registered
-  (non-Electron), fall back to `onSelect(content)` (best-effort).
-- `inapp`: `stat` via `getFsBackend({ type: 'inapp' })`; exists →
-  `onSelect(content)`; missing → toast.
+  resolves to a **file** (`stat.isFile`, not a directory) → `onSelect(content)`;
+  not-found / not-a-file / error → `useUndoToast.show(t('editor.recent.open_failed', { name }))`.
+- `local`: `stat` via `getFsBackend({ type: 'local' })` when present; file →
+  `onSelect(content)`; missing / not-a-file / error → toast. If no local backend
+  is registered (non-Electron), fall back to `onSelect(content)` (best-effort).
+- `inapp`: `stat` via `getFsBackend({ type: 'inapp' })`; file →
+  `onSelect(content)`; missing / not-a-file → toast.
 
 All `stat` calls are wrapped in `try/catch`; any throw → the open-failed toast
 (no unhandled rejection). `openRecentEntry` is `async`; the row `onClick` calls
