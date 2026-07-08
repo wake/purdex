@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorNewTabSection } from './EditorNewTabSection'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useRecentFilesStore, type RecentFileEntry } from '../../stores/useRecentFilesStore'
+import { useHostStore } from '../../stores/useHostStore'
+import * as openMod from '../../lib/recent-files/open-recent-entry'
 
 const createUniqueInAppFileMock = vi.hoisted(() => vi.fn())
 
@@ -86,5 +89,62 @@ describe('EditorNewTabSection (eager reserved files — T1b-2)', () => {
       expect(createUniqueInAppFileMock).toHaveBeenCalled()
     })
     expect(onSelect).not.toHaveBeenCalled()
+  })
+})
+
+const seed = (files: RecentFileEntry[]) => useRecentFilesStore.setState({ files })
+
+const mk = (over: Partial<RecentFileEntry>): RecentFileEntry => ({
+  source: { type: 'inapp' }, path: '/a.md', name: 'a.md', kind: 'editor', openedAt: 1, ...over,
+})
+
+describe('EditorNewTabSection — recent list', () => {
+  beforeEach(() => {
+    seed([])
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+  })
+
+  it('hides the recent section when empty', () => {
+    render(<EditorNewTabSection onSelect={() => {}} />)
+    expect(screen.queryByText('Recently opened')).toBeNull()
+  })
+
+  it('renders rows and the fixed chips when non-empty', () => {
+    seed([mk({ path: '/x.md', name: 'x.md', kind: 'editor' })])
+    render(<EditorNewTabSection onSelect={() => {}} />)
+    expect(screen.getByText('Recently opened')).toBeInTheDocument()
+    expect(screen.getByText('All')).toBeInTheDocument()
+    expect(screen.getByText('x.md')).toBeInTheDocument()
+  })
+
+  it('filters rows by kind chip', () => {
+    seed([
+      mk({ path: '/t.md', name: 't.md', kind: 'editor' }),
+      mk({ path: '/i.png', name: 'i.png', kind: 'image-preview' }),
+    ])
+    render(<EditorNewTabSection onSelect={() => {}} />)
+    fireEvent.click(screen.getByText('Image'))
+    expect(screen.queryByText('t.md')).toBeNull()
+    expect(screen.getByText('i.png')).toBeInTheDocument()
+  })
+
+  it('shows host badge only for daemon rows', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
+      hostOrder: ['h1'],
+    })
+    seed([mk({ source: { type: 'daemon', hostId: 'h1' }, path: '/d.md', name: 'd.md' })])
+    render(<EditorNewTabSection onSelect={() => {}} />)
+    expect(screen.getByTestId('recent-host-badge')).toBeInTheDocument()
+  })
+
+  it('row click calls openRecentEntry with the entry + onSelect', () => {
+    const spy = vi.spyOn(openMod, 'openRecentEntry').mockResolvedValue()
+    const onSelect = vi.fn()
+    const entry = mk({ path: '/x.md', name: 'x.md' })
+    seed([entry])
+    render(<EditorNewTabSection onSelect={onSelect} />)
+    fireEvent.click(screen.getByText('x.md'))
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ path: '/x.md' }), onSelect)
   })
 })
