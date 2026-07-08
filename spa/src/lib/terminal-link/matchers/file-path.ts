@@ -35,6 +35,9 @@ type MatchResult = {
 // e.g. "data.2024-01.json" → false (json is a real ext → keep)
 // e.g. "morphy.pre-edit.SOUL.md" → false (pre-edit not version-like → keep)
 // Note: "bar.123" → true (rotated-log style rejected; trade-off documented).
+// Note: a sole numeric-hyphen extension with no real ext after it — e.g.
+// "report.2024-01", "build.123-rc" — is likewise rejected (same trade-off:
+// indistinguishable from a version/date; these were never links pre-change).
 function allExtensionsVersionLike(path: string): boolean {
   // Extract the filename from any preceding path segments
   const name = path.split('/').pop() ?? path
