@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.314] - 2026-07-08
+
+### Feat(editor): 新分頁「最近開啟」檔案清單 (#905)
+
+在 Editor 新分頁區塊、New File 按鈕下方加入**最近開啟檔案清單**，涵蓋本機 / 遠端(daemon) / in-app 檔案。
+
+- **資料層** `useRecentFilesStore`（persist localStorage，仿 browser history）：entry = `{source, path, name, kind, openedAt}`，以 `source(+host)+path` 去重、most-recent-first、cap 50。
+- **記錄規則**：現有檔**開啟即記**（`defaultTabOpener`、missing-file popup `onOpenPath`、`openInAppFile`）；新建檔**存檔才記**（`EditorPane.handleSave` 一般存檔分支 + `saveUntitledBuffer`）；從清單重開亦刷新 recency。不攔 tab restore 避免污染。
+- **UI**：固定 chips（全部 / 文字 / 圖片 / PDF）；每列 kind 圖示 + 檔名（截斷 + tooltip）+ 淡路徑 + daemon host badge。
+- **點擊**：best-effort 就地開（沿用 `onSelect`，與 New File 一致）。daemon 先驗 host 存在（擋 `getDaemonBase` fallback 開錯主機）+ stat（含 isFile 守衛）；成功開、找不到 / 非檔案 / 錯誤跳 toast。
+
+設計經 brainstorming 定案、spec+plan 各過一輪 codex 跨模型審並整合缺口；實作以 subagent-driven TDD 分 5 task（store→recorder→wiring→openRecentEntry→UI）；PR 經 codex 兩輪（R1 修 reopen 未刷新 recency；R2 三視角指出 daemon pane host-blind / read 失敗開空 buffer / persist 無 guard 皆為既有全 app 行為，追蹤 #906/#907/#908）。全套 vitest 3772 綠、lint / build 通過。
+
+### Fix(terminal-link): 檔名點分段允許連字號 (#904)
+
+終端機 pane 的檔案連結自動偵測在檔名**點分段含連字號**時會截斷（如 `docs/souls/morphy.pre-edit.SOUL.md` 只抓到 `docs/souls/morphy.pre`）。四條路徑 regex（ABS/TILDE/REL/BARE）的副檔名鏈由 `(?:\.[A-Za-z0-9]+)+` 改為 `(?:\.[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)+`——允許段內以單一連字號連接的英數群組（`pre-edit`、`min-2`、`2024-01`），且不吃前導 / 結尾 `-`。
+
+同步強化版本字串排除（`allExtensionsVersionLike`）：`v1.2.3-beta` 等 semver prerelease 不再被誤判成假連結，`bar.min-2.js` / `v1.2.3.tar.gz` 等真檔名仍連結。純數字-prerelease 單一副檔名（`report.2024-01`）維持既有 IP/版本取捨不連結。TDD；全套 3756 綠。
+
 ## [1.0.0-alpha.313] - 2026-07-08
 
 ### Feat(panes): pane split UI — 右鍵選單 + StatusBar 分割鈕 + 移除 grid-4 (#901)
