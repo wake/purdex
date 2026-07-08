@@ -6,6 +6,7 @@ import { getFsBackend } from './fs-backend'
 import { basename } from './storage-paths'
 import { roleForExtension } from './file-extension-roles'
 import { triggerDownload } from './download-file'
+import { recordRecentFile } from './recent-files/record-recent-file'
 import type { FileInfo } from '../types/fs'
 import type { PaneContent } from '../types/tab'
 
@@ -100,6 +101,7 @@ export async function openInAppFile(
   if (!opener) return undefined
 
   const content = opener.createContent({ type: 'inapp' }, file)
+  recordRecentFile(content)
   const afterTabId = computeClusterInsertTarget(workspaceId, isFileKind)
   const tabId = useTabStore.getState().openSingletonTab(content, { afterTabId })
   useWorkspaceStore.getState().insertTab(tabId, workspaceId, afterTabId)

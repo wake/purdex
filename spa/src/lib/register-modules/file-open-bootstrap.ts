@@ -17,6 +17,7 @@ import {
   type SearchRootCapability,
 } from '../file-open'
 import { createDaemonBackendForHost } from '../fs-backend-daemon'
+import { recordRecentFile } from '../recent-files/record-recent-file'
 import type { FileInfo, FileSource } from '../../types/fs'
 import type { PaneContent } from '../../types/tab'
 
@@ -162,6 +163,7 @@ function buildPopupController(): PopupController {
           const opener = getDefaultOpener(file)
           if (!opener) return
           const content = opener.createContent(spec.source, file)
+          recordRecentFile(content)
           const afterTabId = computeClusterInsertTarget(targetWs, isFileKind)
           const tabId = useTabStore.getState().openSingletonTab(content, { afterTabId })
           useWorkspaceStore.getState().insertTab(tabId, targetWs, afterTabId)
@@ -195,6 +197,7 @@ function defaultTabOpener(file: FileInfo, source: FileSource, ctx: OpenFileConte
   const opener = getDefaultOpener(file)
   if (!opener) return
   const content = opener.createContent(source, file)
+  recordRecentFile(content)
   const afterTabId = computeClusterInsertTarget(ctx.sourceWorkspaceId, isFileKind)
   const tabId = useTabStore.getState().openSingletonTab(content, { afterTabId })
   useWorkspaceStore.getState().insertTab(tabId, ctx.sourceWorkspaceId, afterTabId)
