@@ -244,4 +244,80 @@ describe('moveTabContentIntoPane', () => {
       expect(useEditorStore.getState().buffers[key].isDirty).toBe(true)
     })
   })
+
+  // === Pre-bind target pane to editor buffer (dirty-buffer loss race) =====
+  //
+  // A dirty editor tab's real content lives in `useEditorStore`, ref-counted
+  // by the paneStates that reference its bufferKey. When the source EditorPane
+  // unmounts (post-move) it runs `closePane(sourcePaneId, key)`, which drops
+  // the buffer once NO paneState references it. If the target pane has not yet
+  // registered its own reference (its `attachPane` is a mount-time effect that
+  // runs AFTER the source unmount cleanup in the same commit), the ref-count
+  // hits zero and the unsaved buffer is destroyed. The mover must pre-bind the
+  // target pane to the buffer BEFORE retiring the source so the count never
+  // reaches zero.
+  describe('pre-binds the target pane to the editor buffer (prevents dirty loss)', () => {
+    const filePath = '/dirty-move.ts'
+
+    function seedDirtyEditorMove() {
+      const content = editorContent(filePath)
+      const source = seedTab(content)
+      const sourcePaneId = primaryPaneId(source.id)
+      const target = seedTab({ kind: 'new-tab' })
+      const targetPaneId = primaryPaneId(target.id)
+
+      const key = bufferKey(DAEMON_SOURCE, filePath)
+      useEditorStore.getState().openBuffer(key, 'saved', { language: 'typescript' })
+      useEditorStore.getState().updateContent(key, 'saved + unsaved edits')
+      // The source EditorPane owns the only reference before the move.
+      useEditorStore.getState().attachPane(sourcePaneId, key)
+      expect(useEditorStore.getState().buffers[key].isDirty).toBe(true)
+
+      return { sourceId: source.id, sourcePaneId, targetId: target.id, targetPaneId, key }
+    }
+
+    it('binds the target pane to the buffer key during the move', () => {
+      const { sourceId, targetId, targetPaneId, key } = seedDirtyEditorMove()
+
+      const result = moveTabContentIntoPane(sourceId, targetId, targetPaneId)
+
+      expect(result).toBe(true)
+      // The target pane now references the buffer — proof the move pre-bound it.
+      expect(useEditorStore.getState().paneStates[targetPaneId]?.bufferKey).toBe(key)
+    })
+
+    it('keeps the dirty buffer alive when the source pane unmount races the move', () => {
+      const { sourceId, sourcePaneId, targetId, targetPaneId, key } = seedDirtyEditorMove()
+
+      moveTabContentIntoPane(sourceId, targetId, targetPaneId)
+      // Simulate the source EditorPane's unmount cleanup firing AFTER the move
+      // but BEFORE the target EditorPane mounts. Without the pre-bind, this
+      // drops the ref-count to zero and destroys the unsaved buffer.
+      useEditorStore.getState().closePane(sourcePaneId, key)
+
+      expect(useEditorStore.getState().buffers[key]).toBeDefined()
+      expect(useEditorStore.getState().buffers[key].isDirty).toBe(true)
+      expect(useEditorStore.getState().buffers[key].content).toBe('saved + unsaved edits')
+    })
+
+    it('does not pre-bind editor state for non-editor movable content', () => {
+      const content: PaneContent = {
+        kind: 'tmux-session',
+        hostId: 'h1',
+        sessionCode: 'abc',
+        mode: 'terminal',
+        cachedName: 'sess',
+        tmuxInstance: 'default',
+      }
+      const source = seedTab(content)
+      const target = seedTab({ kind: 'new-tab' })
+      const targetPaneId = primaryPaneId(target.id)
+
+      const result = moveTabContentIntoPane(source.id, target.id, targetPaneId)
+
+      expect(result).toBe(true)
+      // No editor paneState was created for the target pane.
+      expect(useEditorStore.getState().paneStates[targetPaneId]).toBeUndefined()
+    })
+  })
 })

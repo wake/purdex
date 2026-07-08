@@ -1,6 +1,8 @@
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { useEditorStore } from '../stores/useEditorStore'
 import { countLeaves, getPrimaryPane } from './pane-tree'
+import { bufferKey } from './editor-buffer-key'
 
 /**
  * Pane-content kinds that may be pulled out of a tab and dropped into another
@@ -43,9 +45,22 @@ export function moveTabContentIntoPane(
   const sourceContent = getPrimaryPane(source.layout).content
   if (!(MOVABLE_KINDS as readonly string[]).includes(sourceContent.kind)) return false
 
-  // 1. Inject source content into the target pane.
+  // 1. For editor content, pre-bind the target pane to the buffer BEFORE we
+  //    mutate the tab tree. A dirty editor buffer is ref-counted by the
+  //    paneStates referencing its key; the source EditorPane's unmount cleanup
+  //    (closePane) destroys the buffer once no paneState references it. That
+  //    cleanup runs synchronously in the same React commit as this move, BEFORE
+  //    the target EditorPane mounts and registers its own reference — so the
+  //    ref-count would momentarily hit zero and the unsaved edits would be lost.
+  //    Attaching the target here keeps the count > 0 across the unmount; the
+  //    target EditorPane's own attachPane on mount then no-ops (same key).
+  if (sourceContent.kind === 'editor') {
+    const key = bufferKey(sourceContent.source, sourceContent.filePath)
+    useEditorStore.getState().attachPane(targetPaneId, key)
+  }
+  // 2. Inject source content into the target pane.
   tabStore.setPaneContent(targetTabId, targetPaneId, sourceContent)
-  // 2. Retire the source tab as a move (workspace-aware, no dirty-confirm).
+  // 3. Retire the source tab as a move (workspace-aware, no dirty-confirm).
   useWorkspaceStore.getState().closeTabInWorkspace(sourceTabId, { skipHistory: true })
 
   return true
