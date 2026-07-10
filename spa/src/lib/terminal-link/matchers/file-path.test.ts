@@ -59,6 +59,15 @@ describe('createFilePathMatcher — absolute', () => {
     expect(r[0].text).toBe('/a/b/foo.pre-edit.md')
     expect(r[0].meta).toEqual({ path: '/a/b/foo.pre-edit.md' })
   })
+
+  it('keeps + build-metadata in dotted segment (custom-css tarball)', () => {
+    const path =
+      '/Users/wake/Workspace/wake/mattermost-custom-css-plugin/dist/com.wake.custom-css-0.0.0+075a408.tar.gz'
+    const r = make().provide(`built ${path} ok`)
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe(path)
+    expect(r[0].meta).toEqual({ path })
+  })
 })
 
 describe('createFilePathMatcher — relativeSlash', () => {
@@ -222,6 +231,25 @@ describe('createFilePathMatcher — bare', () => {
     const r = make().provide('got v1.2.3.tar.gz:10')
     expect(r[0].text).toBe('v1.2.3.tar.gz:10')
     expect(r[0].meta).toEqual({ path: 'v1.2.3.tar.gz', line: 10 })
+  })
+
+  it('does NOT match semver build metadata v1.0.0+build123', () => {
+    expect(make().provide('released v1.0.0+build123 today')).toHaveLength(0)
+  })
+
+  it('does NOT match semver build metadata 1.0.0+abc', () => {
+    expect(make().provide('tag 1.0.0+abc here')).toHaveLength(0)
+  })
+
+  it('does NOT match numeric-hyphen date-like report.2024-01', () => {
+    expect(make().provide('see report.2024-01 log')).toHaveLength(0)
+  })
+
+  it('DOES match tarball with + build metadata name-0.0.0+075a408.tar.gz', () => {
+    const r = make().provide('built com.wake.custom-css-0.0.0+075a408.tar.gz ok')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('com.wake.custom-css-0.0.0+075a408.tar.gz')
+    expect(r[0].meta).toEqual({ path: 'com.wake.custom-css-0.0.0+075a408.tar.gz' })
   })
 })
 
