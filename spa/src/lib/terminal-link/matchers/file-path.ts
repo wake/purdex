@@ -24,13 +24,8 @@ type MatchResult = {
   meta?: Record<string, unknown>
 }
 
-// Valid SemVer build metadata: dot-separated identifiers of alnum + hyphen
-// (e.g. "075a408", "build-123", "exp.sha.5114f85").
-const BUILD_METADATA_RE = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*$/
-
 // Returns true if every extension part (parts after the base) is "version-like":
-// pure digits, optionally plus a single `-<alnum>` prerelease. (Build metadata
-// `+...` is stripped by the caller before this runs, see allExtensionsVersionLike.)
+// pure digits, optionally plus a single `-<alnum>` prerelease.
 // e.g. "192.168.1.1" → base "192", exts 168/1/1 all numeric → true
 // e.g. "1.2.3-rc.1"  → 2, 3-rc, 1 all version-like → true
 // e.g. "foo.d.ts"    → false (exts include letters → keep)
@@ -42,36 +37,35 @@ function extensionsVersionLike(name: string): boolean {
 }
 
 // Returns true when the filename should NOT be linkified because it is an
-// IP / decimal / bare SemVer rather than a real path.
+// IP / decimal / bare SemVer (including build metadata) rather than a real path.
 //
-// SemVer build metadata (everything after the first `+`) is handled specially:
-// per SemVer it is dot-separated alnum/hyphen identifiers, so segments like
-// `sha` or `exp` look like real extensions but are not. When the tail after `+`
-// is valid build metadata, the name is version-like only if the part BEFORE the
-// `+` is itself a pure version — so bare SemVer such as "1.0.0+build-123" or
-// "1.0.0+exp.sha.5114f85" is rejected, while a real file merely carrying build
-// metadata before a genuine extension (e.g. "pkg-0.0.0+075a408.tar.gz", whose
-// `.tar.gz` is a real ext, so its pre-`+` part is not a pure version) stays
-// linkable.
-// e.g. "v1.2.3-beta"  → true (reject semver)
-// e.g. "v1.2.3.tar.gz" → false (tar, gz are letters → keep)
-// e.g. "com.wake.custom-css-0.0.0+075a408.tar.gz" → false (pre has non-version
-//        segments like `wake` + real `.tar.gz` → keep)
-// e.g. "bar.min-2.js"  → false (min-2 not version-like, js is a real ext → keep)
-// e.g. "data.2024-01.json" → false (json is a real ext → keep)
-// e.g. "morphy.pre-edit.SOUL.md" → false (pre-edit not version-like → keep)
-// Note: "bar.123" → true (rotated-log style rejected; trade-off documented).
-// Note: a sole numeric-hyphen extension with no real ext after it — e.g.
-// "report.2024-01", "build.123-rc" — is likewise rejected (same trade-off:
+// The `+` build-metadata ambiguity (is `.tar.gz` after `+075a408` build
+// metadata or a real extension?) is resolved by a single robust signal: a real
+// file ends in an ALPHABETIC extension (txt, gz, log, md, ts, …), whereas IP
+// octets, version numbers, and SemVer build-metadata identifiers (hashes like
+// 075a408 / 5114f85) do not. So a purely alphabetic final segment means "real
+// file → keep". Otherwise we strip any build metadata (everything from the
+// first `+`) and reject only when the remaining core is a pure version.
+//
+// keep:   foo.d.ts · v1.2.3.tar.gz · morphy.pre-edit.SOUL.md · data.2024-01.json
+//         pkg-0.0.0+075a408.tar.gz · v1.0.0+build123.txt · report.2024+01.log
+// reject: 192.168.1.1 · 1.2.3 · v1.2.3-beta · 1.2.3-rc.1 · report.2024-01 ·
+//         bar.123 · 1.0.0+abc · 1.0.0+build-123 · 1.0.0+exp.sha.5114f85
+// Note: a sole numeric-hyphen extension with no real (alphabetic) ext after it —
+// e.g. "report.2024-01", "build.123-rc", "bar.123" — is rejected (trade-off:
 // indistinguishable from a version/date; these were never links pre-change).
 function allExtensionsVersionLike(path: string): boolean {
   // Extract the filename from any preceding path segments
   const name = path.split('/').pop() ?? path
+  const parts = name.split('.')
+  if (parts.length < 2) return false
+  // A real trailing extension (pure letters) → treat as a real file, keep it.
+  if (/^[A-Za-z]+$/.test(parts[parts.length - 1])) return false
+  // Otherwise strip SemVer build metadata and require the core to be a pure
+  // version (so "1.0.0+exp.sha.5114f85" rejects but any alpha-ext file above
+  // has already returned).
   const plusIdx = name.indexOf('+')
-  if (plusIdx >= 0 && BUILD_METADATA_RE.test(name.slice(plusIdx + 1))) {
-    return extensionsVersionLike(name.slice(0, plusIdx))
-  }
-  return extensionsVersionLike(name)
+  return extensionsVersionLike(plusIdx >= 0 ? name.slice(0, plusIdx) : name)
 }
 
 function runRegex(line: string, re: RegExp): MatchResult[] {

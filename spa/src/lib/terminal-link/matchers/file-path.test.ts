@@ -259,6 +259,18 @@ describe('createFilePathMatcher — bare', () => {
     expect(r[0].text).toBe('com.wake.custom-css-0.0.0+075a408.tar.gz')
     expect(r[0].meta).toEqual({ path: 'com.wake.custom-css-0.0.0+075a408.tar.gz' })
   })
+
+  it('DOES match a + build-metadata name ending in a real ext v1.0.0+build123.txt', () => {
+    const r = make().provide('wrote v1.0.0+build123.txt here')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('v1.0.0+build123.txt')
+  })
+
+  it('DOES match report.2024+01.log (trailing real ext keeps it a file)', () => {
+    const r = make().provide('tail report.2024+01.log now')
+    expect(r).toHaveLength(1)
+    expect(r[0].text).toBe('report.2024+01.log')
+  })
 })
 
 describe('createFilePathMatcher — tilde', () => {
