@@ -241,6 +241,14 @@ describe('createFilePathMatcher — bare', () => {
     expect(make().provide('tag 1.0.0+abc here')).toHaveLength(0)
   })
 
+  it('does NOT match semver with hyphenated build metadata 1.0.0+build-123', () => {
+    expect(make().provide('release 1.0.0+build-123 shipped')).toHaveLength(0)
+  })
+
+  it('does NOT match semver with dotted build metadata 1.0.0+exp.sha.5114f85', () => {
+    expect(make().provide('version 1.0.0+exp.sha.5114f85 here')).toHaveLength(0)
+  })
+
   it('does NOT match numeric-hyphen date-like report.2024-01', () => {
     expect(make().provide('see report.2024-01 log')).toHaveLength(0)
   })
