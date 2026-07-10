@@ -249,27 +249,34 @@ describe('createFilePathMatcher — bare', () => {
     expect(make().provide('version 1.0.0+exp.sha.5114f85 here')).toHaveLength(0)
   })
 
+  it('does NOT match semver whose build metadata ends in letters 1.0.0+exp.sha', () => {
+    expect(make().provide('build 1.0.0+exp.sha done')).toHaveLength(0)
+  })
+
+  it('does NOT match semver 1.0.0+abc.def (dotted alpha build metadata)', () => {
+    expect(make().provide('tag 1.0.0+abc.def now')).toHaveLength(0)
+  })
+
   it('does NOT match numeric-hyphen date-like report.2024-01', () => {
     expect(make().provide('see report.2024-01 log')).toHaveLength(0)
   })
 
-  it('DOES match tarball with + build metadata name-0.0.0+075a408.tar.gz', () => {
+  // Chosen bias (see allExtensionsVersionLike): a filename whose stem before `+`
+  // is itself a bare version is sacrificed (not linkified), preferred over
+  // linkifying the common `1.0.0+exp.sha`-style version noise in terminals.
+  it('does NOT match a bare-version stem + real ext v1.0.0+build123.txt (trade-off)', () => {
+    expect(make().provide('wrote v1.0.0+build123.txt here')).toHaveLength(0)
+  })
+
+  it('does NOT match report.2024+01.log (bare-version stem trade-off)', () => {
+    expect(make().provide('tail report.2024+01.log now')).toHaveLength(0)
+  })
+
+  it('DOES match tarball with + build metadata name-0.0.0+075a408.tar.gz (package stem)', () => {
     const r = make().provide('built com.wake.custom-css-0.0.0+075a408.tar.gz ok')
     expect(r).toHaveLength(1)
     expect(r[0].text).toBe('com.wake.custom-css-0.0.0+075a408.tar.gz')
     expect(r[0].meta).toEqual({ path: 'com.wake.custom-css-0.0.0+075a408.tar.gz' })
-  })
-
-  it('DOES match a + build-metadata name ending in a real ext v1.0.0+build123.txt', () => {
-    const r = make().provide('wrote v1.0.0+build123.txt here')
-    expect(r).toHaveLength(1)
-    expect(r[0].text).toBe('v1.0.0+build123.txt')
-  })
-
-  it('DOES match report.2024+01.log (trailing real ext keeps it a file)', () => {
-    const r = make().provide('tail report.2024+01.log now')
-    expect(r).toHaveLength(1)
-    expect(r[0].text).toBe('report.2024+01.log')
   })
 })
 

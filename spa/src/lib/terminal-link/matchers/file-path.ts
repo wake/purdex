@@ -39,31 +39,26 @@ function extensionsVersionLike(name: string): boolean {
 // Returns true when the filename should NOT be linkified because it is an
 // IP / decimal / bare SemVer (including build metadata) rather than a real path.
 //
-// The `+` build-metadata ambiguity (is `.tar.gz` after `+075a408` build
-// metadata or a real extension?) is resolved by a single robust signal: a real
-// file ends in an ALPHABETIC extension (txt, gz, log, md, ts, …), whereas IP
-// octets, version numbers, and SemVer build-metadata identifiers (hashes like
-// 075a408 / 5114f85) do not. So a purely alphabetic final segment means "real
-// file → keep". Otherwise we strip any build metadata (everything from the
-// first `+`) and reject only when the remaining core is a pure version.
+// SemVer `+` build metadata creates an inherent ambiguity: a trailing dotted
+// identifier (`.sha`, `.log`) is syntactically indistinguishable as "build
+// metadata identifier" vs "real file extension". We resolve it with a
+// deliberate bias — do NOT linkify bare version strings (common terminal
+// noise like `1.0.0+exp.sha`) — by stripping everything from the first `+` and
+// rejecting when the remaining core is a pure version. Real build artifacts
+// carry a package-name stem (e.g. `com.wake.custom-css-0.0.0+075a408.tar.gz`),
+// so their core is not a pure version and they stay linkable.
 //
 // keep:   foo.d.ts · v1.2.3.tar.gz · morphy.pre-edit.SOUL.md · data.2024-01.json
-//         pkg-0.0.0+075a408.tar.gz · v1.0.0+build123.txt · report.2024+01.log
-// reject: 192.168.1.1 · 1.2.3 · v1.2.3-beta · 1.2.3-rc.1 · report.2024-01 ·
-//         bar.123 · 1.0.0+abc · 1.0.0+build-123 · 1.0.0+exp.sha.5114f85
-// Note: a sole numeric-hyphen extension with no real (alphabetic) ext after it —
-// e.g. "report.2024-01", "build.123-rc", "bar.123" — is rejected (trade-off:
-// indistinguishable from a version/date; these were never links pre-change).
+//         com.wake.custom-css-0.0.0+075a408.tar.gz (package stem → not a version)
+// reject: 192.168.1.1 · 1.2.3 · v1.2.3-beta · 1.2.3-rc.1 · report.2024-01 · bar.123
+//         1.0.0+abc · 1.0.0+build-123 · 1.0.0+exp.sha · 1.0.0+exp.sha.5114f85
+// Trade-off (chosen bias): a filename whose stem before `+` is itself a bare
+// version — e.g. "v1.0.0+build123.txt", "report.2024+01.log" — is sacrificed
+// (not linkified), preferred over linkifying the far more common version noise.
 function allExtensionsVersionLike(path: string): boolean {
   // Extract the filename from any preceding path segments
   const name = path.split('/').pop() ?? path
-  const parts = name.split('.')
-  if (parts.length < 2) return false
-  // A real trailing extension (pure letters) → treat as a real file, keep it.
-  if (/^[A-Za-z]+$/.test(parts[parts.length - 1])) return false
-  // Otherwise strip SemVer build metadata and require the core to be a pure
-  // version (so "1.0.0+exp.sha.5114f85" rejects but any alpha-ext file above
-  // has already returned).
+  // Strip SemVer build metadata (from the first `+`); reject a pure-version core.
   const plusIdx = name.indexOf('+')
   return extensionsVersionLike(plusIdx >= 0 ? name.slice(0, plusIdx) : name)
 }
