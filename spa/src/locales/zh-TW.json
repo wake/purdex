@@ -366,6 +366,7 @@
 
   "page.newtab.title": "新增分頁",
   "page.newtab.empty": "尚未登錄任何內容提供者",
+  "page.newtab.bringInTab": "帶入已開啟的分頁",
   "page.history.title": "歷史記錄",
   "page.history.empty": "尚無瀏覽記錄",
   "page.dashboard.title": "儀表板",

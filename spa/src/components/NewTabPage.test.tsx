@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { NewTabPage } from './NewTabPage'
 import {
   registerNewTabProvider,
@@ -10,6 +10,19 @@ import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
+import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../features/workspace/store'
+import { useSessionStore } from '../stores/useSessionStore'
+import type { Session } from '../lib/host-api'
+import { createTab, type PaneContent, type Tab } from '../types/tab'
+import { getPrimaryPane } from '../lib/pane-tree'
+import * as paneMove from '../lib/pane-move'
+
+// Keep MOVABLE_KINDS (imported by NewTabPage) real; only spy the mover.
+vi.mock('../lib/pane-move', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/pane-move')>()
+  return { ...actual, moveTabContentIntoPane: vi.fn(() => true) }
+})
 
 // Commit 2 — A2-4 / A2-5: NewTabPage module-aware filter (spec §4.9.3).
 //
@@ -226,5 +239,232 @@ describe('NewTabPage — module-aware provider filter', () => {
     expect(root.className).not.toContain('flex-1')
     // The scroll column is still present underneath.
     expect((root.firstChild as HTMLElement).className).toContain('overflow-y-auto')
+  })
+})
+
+// PR-B Task B2 — "Bring in an open tab" cross-workspace section.
+//
+// NewTabPage, when mounted inside a real `new-tab` pane, receives that pane's
+// tab + pane ids. It then surfaces every OTHER open tab (across all
+// workspaces) whose content can be relocated (single-pane + MOVABLE_KINDS +
+// not locked), so the user can pull it into this split pane. Clicking a row
+// calls `moveTabContentIntoPane(sourceTabId, currentTabId, currentPaneId)`.
+
+const BRING_IN_TITLE = 'page.newtab.bringInTab' // i18n key (t = identity in tests)
+
+function seedProvidersForGrid() {
+  // The section only renders on the happy grid path, so register at least one
+  // provider + prime a single-column layout like the tests above.
+  registerNewTabProvider({
+    id: 'sessions',
+    label: 'session.provider_label',
+    icon: 'List',
+    order: 0,
+    component: FakeSessionsCard,
+  })
+  primeLayout(['sessions'])
+}
+
+function primaryPaneId(tab: Tab): string {
+  return getPrimaryPane(tab.layout).id
+}
+
+/** Create a tab in a fresh workspace named `wsName`; returns tab + ws id. */
+function seedWorkspaceTab(wsName: string, content: PaneContent): { tab: Tab; wsId: string } {
+  const ws = useWorkspaceStore.getState().addWorkspace(wsName)
+  const tab = createTab(content)
+  useTabStore.getState().addTab(tab)
+  useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+  return { tab, wsId: ws.id }
+}
+
+const editorContent = (filePath: string): PaneContent => ({
+  kind: 'editor',
+  source: { type: 'daemon', hostId: 'h1' },
+  filePath,
+})
+
+describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useSessionStore.setState({ sessions: {} })
+    vi.mocked(paneMove.moveTabContentIntoPane).mockClear()
+    seedProvidersForGrid()
+  })
+
+  afterEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useSessionStore.setState({ sessions: {} })
+  })
+
+  it('labels tmux sessions by their own host when two hosts share a session code', () => {
+    // Two different hosts each have a live session with the SAME code but a
+    // DIFFERENT name. A flat code→session map (across all hosts) collapses them
+    // and mislabels one tab with the other host's name; the lookup must be
+    // scoped by each candidate's hostId.
+    const mkSession = (code: string, name: string): Session => ({
+      code,
+      name,
+      cwd: '/',
+      mode: 'terminal',
+      cc_session_id: '',
+      cc_model: '',
+      has_relay: false,
+    })
+    useSessionStore.setState({
+      sessions: {
+        hostA: [mkSession('dup', 'server-alpha')],
+        hostB: [mkSession('dup', 'server-beta')],
+      },
+    })
+
+    const { tab: current } = seedWorkspaceTab('WS', { kind: 'new-tab' })
+    seedWorkspaceTab('WS', {
+      kind: 'tmux-session',
+      hostId: 'hostA',
+      sessionCode: 'dup',
+      mode: 'terminal',
+      cachedName: 'cached-A',
+      tmuxInstance: 'default',
+    })
+    seedWorkspaceTab('WS', {
+      kind: 'tmux-session',
+      hostId: 'hostB',
+      sessionCode: 'dup',
+      mode: 'terminal',
+      cachedName: 'cached-B',
+      tmuxInstance: 'default',
+    })
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={primaryPaneId(current)}
+      />,
+    )
+
+    // Each candidate resolves against its OWN host's session list.
+    expect(screen.getByText('server-alpha')).toBeTruthy()
+    expect(screen.getByText('server-beta')).toBeTruthy()
+  })
+
+  it('lists movable tabs across workspaces with their tab name + workspace name', () => {
+    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+    seedWorkspaceTab('Alpha', editorContent('/proj/readme.md'))
+    seedWorkspaceTab('Beta', {
+      kind: 'tmux-session',
+      hostId: 'h1',
+      sessionCode: 's1',
+      mode: 'terminal',
+      cachedName: 'build-server',
+      tmuxInstance: 'default',
+    })
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={primaryPaneId(current)}
+      />,
+    )
+
+    expect(screen.getByText(BRING_IN_TITLE)).toBeTruthy()
+    // Editor tab: basename label + its workspace name.
+    expect(screen.getByText('readme.md')).toBeTruthy()
+    expect(screen.getAllByText('Alpha').length).toBeGreaterThan(0)
+    // tmux tab: cachedName label + its workspace name.
+    expect(screen.getByText('build-server')).toBeTruthy()
+    expect(screen.getByText('Beta')).toBeTruthy()
+  })
+
+  it('excludes browser tabs, multi-pane tabs, locked tabs, and the current tab', () => {
+    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+
+    // browser — not a MOVABLE_KIND.
+    seedWorkspaceTab('Alpha', { kind: 'browser', url: 'https://example.com' })
+    // multi-pane editor tab.
+    const { tab: multi } = seedWorkspaceTab('Alpha', editorContent('/multi.ts'))
+    useTabStore.getState().splitPaneBlank(multi.id, primaryPaneId(multi), 'h')
+    // locked editor tab.
+    const { tab: locked } = seedWorkspaceTab('Alpha', editorContent('/locked.ts'))
+    useTabStore.getState().toggleLock(locked.id)
+    // a self-referential movable tab (same id as current) is impossible, but
+    // seed another movable so the section renders and we can assert exclusions.
+    seedWorkspaceTab('Beta', editorContent('/keep.ts'))
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={primaryPaneId(current)}
+      />,
+    )
+
+    expect(screen.getByText('keep.ts')).toBeTruthy()
+    expect(screen.queryByText('example.com')).toBeNull()
+    expect(screen.queryByText('multi.ts')).toBeNull()
+    expect(screen.queryByText('locked.ts')).toBeNull()
+  })
+
+  it('does not list the current tab even if it is single-pane + movable', () => {
+    const { tab: current } = seedWorkspaceTab('Alpha', editorContent('/current.ts'))
+    seedWorkspaceTab('Alpha', editorContent('/other.ts'))
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={primaryPaneId(current)}
+      />,
+    )
+
+    expect(screen.getByText('other.ts')).toBeTruthy()
+    expect(screen.queryByText('current.ts')).toBeNull()
+  })
+
+  it('clicking a row calls moveTabContentIntoPane(sourceId, currentTabId, currentPaneId)', () => {
+    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+    const { tab: source } = seedWorkspaceTab('Beta', editorContent('/pull-me.ts'))
+    const currentPane = primaryPaneId(current)
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={currentPane}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('pull-me.ts'))
+
+    expect(paneMove.moveTabContentIntoPane).toHaveBeenCalledTimes(1)
+    expect(paneMove.moveTabContentIntoPane).toHaveBeenCalledWith(source.id, current.id, currentPane)
+  })
+
+  it('does not render the section when currentTabId / currentPaneId are absent', () => {
+    seedWorkspaceTab('Alpha', editorContent('/x.ts'))
+
+    render(<NewTabPage onSelect={() => {}} />)
+
+    expect(screen.queryByText(BRING_IN_TITLE)).toBeNull()
+  })
+
+  it('does not render the section when there are no movable tabs to bring in', () => {
+    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+    // Only non-movable / current tabs exist.
+    seedWorkspaceTab('Alpha', { kind: 'browser', url: 'https://only.example.com' })
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={primaryPaneId(current)}
+      />,
+    )
+
+    expect(screen.queryByText(BRING_IN_TITLE)).toBeNull()
   })
 })
