@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.315] - 2026-07-11
+
+### Feat(panes): 跨 workspace 把已開分頁拉進分割格 (#910)
+
+pane split UI 的 Phase 3（承接 alpha.313 PR-A 的右鍵分割 + StatusBar 分割鈕）：在空白 New Tab 分割格可**把已開的分頁（跨 workspace）拉進來**做雙邊檢視。
+
+- **`moveTabContentIntoPane` 搬移原語**（`lib/pane-move.ts`）：guard（來源存在 / `!locked` / `countLeaves===1` / kind ∈ `MOVABLE_KINDS` / 非自身 / **target tab+pane 存在**）後 `setPaneContent` 注入目標格，再經 `closeTabInWorkspace({skipHistory:true})` 退場。刻意走搬移語意（非 `tab-lifecycle::closeTab` 銷毀語意）→ 跳過誤報 dirty-confirm、內建 active fallback。allowlist = `editor / tmux-session / image-preview / pdf-preview`（排除 browser 的 BrowserView 生命週期）。
+- **`NewTabPage`「Bring in an open tab」區塊**：跨所有 workspace 列「單-pane 且 primary kind ∈ allowlist 且 `!locked` 且非本 tab」候選，標所屬 workspace 名；點擊即搬入。`NewTabPaneWrapper` render 時反查 `currentTabId` 傳入；無候選時回裸 grid 保護既有 h-full 捲動契約。
+- codex 三輪跨模型審抓出並修復三個資料安全問題：editor 未存 buffer 於 pull-in 時因 unmount `closePane` 早於 mount `attachPane` 遺失（pre-bind 目標 pane 引用）、跨 host 相同 sessionCode 誤標名稱（改用 `hostId` scope lookup）、stale target 時內容遺失（加 target 存在性 guard）。subagent-driven TDD；全套 vitest 3808 綠 / lint / build。
+
+### Fix(terminal-link): 檔名點分段允許 `+` build metadata (#911)
+
+終端機檔案連結偵測在語義版本 build metadata 的 `+` 處截斷（`com.wake.custom-css-0.0.0+075a408.tar.gz` 只抓到 `...0.0.0`）。四條路徑 regex（ABS/TILDE/REL/BARE）的副檔名鏈由 `(?:-[A-Za-z0-9]+)*` 擴為 `(?:[-+][A-Za-z0-9]+)*`，讓 `+` 比照連字號納入合法字元（承接 alpha.314 #904 連字號修正的同家族延伸）。
+
+版本字串排除採**明確 bias — 不 linkify 版本雜訊**：從第一個 `+` 切開，前段為純版本號者不當連結（`1.0.0+exp.sha`、`1.0.0+build-123` 等終端常見版本輸出）。真實 build 產物帶套件名 stem（`com.wake.custom-css-...`）故前段非純版本、仍可點。取捨：stem 本身為裸版本號的檔名（`v1.0.0+build123.txt`）不連結——罕見，優於把大量版本雜訊變成死連結。此邊界（`.sha` build 識別碼 vs `.log` 真副檔名語法無法區分）經 codex 三輪確認為物理互斥，由使用者定案 bias。TDD；全套 3795 綠。
+
 ## [1.0.0-alpha.314] - 2026-07-08
 
 ### Feat(editor): 新分頁「最近開啟」檔案清單 (#905)
