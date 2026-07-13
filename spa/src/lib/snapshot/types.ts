@@ -28,5 +28,9 @@ export interface RestoreReport extends EnsureReport {
 // 失敗契約：三動作成功 resolve RestoreReport；replaceTabSnapshot throw 時包成
 // RestoreError（帶已收集含 rebuiltButUnattached 的 report）reject，UI catch 後讀 e.report。
 export class RestoreError extends Error {
-  constructor(public report: RestoreReport, public cause?: unknown) { super('restore failed') }
+  readonly report: RestoreReport
+  constructor(report: RestoreReport, cause?: unknown) {
+    super('restore failed', { cause })
+    this.report = report
+  }
 }

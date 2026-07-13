@@ -5,7 +5,7 @@ export const SNAPSHOT_KEY = 'purdex-workspace-snapshot'
 export const SNAPSHOT_PREV_KEY = 'purdex-workspace-snapshot-prev'
 
 function readSnapshotFromKey(key: string): WorkspaceSnapshot | null {
-  const raw = browserStorage.getItem(key)
+  const raw = browserStorage.getItem(key) as string | null
   if (raw == null) return null
   try {
     const parsed = JSON.parse(raw) as WorkspaceSnapshot
