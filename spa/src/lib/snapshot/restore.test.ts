@@ -59,8 +59,10 @@ describe('ensureSessions', () => {
   it('1. all sessions live → all reattached; createSession never called', async () => {
     const sessionMeta: Record<string, Record<string, SessionMeta>> = {
       hostA: {
-        code1: meta({ hostId: 'hostA', sessionCode: 'code1' }),
-        code2: meta({ hostId: 'hostA', sessionCode: 'code2' }),
+        // Reattach now requires code AND name match, so the meta name must equal
+        // the live session's name (same session survived the daemon restart).
+        code1: meta({ hostId: 'hostA', sessionCode: 'code1', name: 'live1' }),
+        code2: meta({ hostId: 'hostA', sessionCode: 'code2', name: 'live2' }),
       },
     }
     vi.mocked(listSessions).mockResolvedValue([
@@ -181,7 +183,9 @@ describe('ensureSessions', () => {
       B: { shared: meta({ hostId: 'B', sessionCode: 'shared', name: 'b-name', cwd: '/b' }) },
     }
     vi.mocked(listSessions).mockImplementation(async (hostId: string) => {
-      if (hostId === 'A') return [session({ code: 'shared', name: 'a-live' })]
+      // Reattach requires code AND name match: host A's live session shares the
+      // meta's name ('a-name'), so it legitimately reattaches.
+      if (hostId === 'A') return [session({ code: 'shared', name: 'a-name' })]
       if (hostId === 'B') return []
       throw new Error(`unexpected host ${hostId}`)
     })
@@ -220,6 +224,67 @@ describe('ensureSessions', () => {
       expect(entry.session.name).toBe('daemon-renamed')
       expect(entry.session.code).toBe('daemon-assigned-code')
     }
+  })
+
+  it('9. code AND name match → reattached; createSession NOT called', async () => {
+    const sessionMeta: Record<string, Record<string, SessionMeta>> = {
+      hostA: {
+        code1: meta({ hostId: 'hostA', sessionCode: 'code1', name: 'same-name', cwd: '/w' }),
+      },
+    }
+    vi.mocked(listSessions).mockResolvedValue([session({ code: 'code1', name: 'same-name' })])
+
+    const { remap, report } = await ensureSessions(sessionMeta)
+
+    expect(createSession).not.toHaveBeenCalled()
+    const entry = remap.hostA.code1
+    expect(entry.status).toBe('reattached')
+    if (entry.status === 'reattached') {
+      expect(entry.newCode).toBe('code1')
+      expect(entry.session.name).toBe('same-name')
+    }
+    expect(report).toEqual({ reattached: 1, rebuilt: 0, failed: 0 })
+  })
+
+  it('10. code matches but name differs (code reused for another session), restorable + rebuild default → rebuilt via meta; unrelated live session untouched', async () => {
+    const sessionMeta: Record<string, Record<string, SessionMeta>> = {
+      hostA: {
+        code1: meta({ hostId: 'hostA', sessionCode: 'code1', name: 'my-name', cwd: '/mine', mode: 'terminal' }),
+      },
+    }
+    // Live list has a DIFFERENT session that reused code1 after the restart.
+    vi.mocked(listSessions).mockResolvedValue([session({ code: 'code1', name: 'someone-elses' })])
+    vi.mocked(createSession).mockImplementation(async (_h, name, cwd, mode) =>
+      session({ code: 'rebuilt-code', name, cwd, mode }),
+    )
+
+    const { remap, report } = await ensureSessions(sessionMeta)
+
+    // Rebuild from the snapshot's meta, NOT adoption of the unrelated live session.
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(createSession).toHaveBeenCalledWith('hostA', 'my-name', '/mine', 'terminal')
+    const entry = remap.hostA.code1
+    expect(entry.status).toBe('rebuilt')
+    if (entry.status === 'rebuilt') {
+      expect(entry.newCode).toBe('rebuilt-code')
+      expect(entry.session.code).toBe('rebuilt-code')
+    }
+    expect(report).toEqual({ reattached: 0, rebuilt: 1, failed: 0 })
+  })
+
+  it('11. code matches but name differs, rebuild:false → failed; createSession NOT called', async () => {
+    const sessionMeta: Record<string, Record<string, SessionMeta>> = {
+      hostA: {
+        code1: meta({ hostId: 'hostA', sessionCode: 'code1', name: 'my-name', cwd: '/mine' }),
+      },
+    }
+    vi.mocked(listSessions).mockResolvedValue([session({ code: 'code1', name: 'someone-elses' })])
+
+    const { remap, report } = await ensureSessions(sessionMeta, { rebuild: false })
+
+    expect(createSession).not.toHaveBeenCalled()
+    expect(remap.hostA.code1.status).toBe('failed')
+    expect(report).toEqual({ reattached: 0, rebuilt: 0, failed: 1 })
   })
 })
 

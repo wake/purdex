@@ -58,7 +58,12 @@ export async function ensureSessions(
         continue
       }
 
-      const alive = live.find((s) => s.code === oldCode)
+      // Reattach ONLY when a live session matches BOTH code AND name. After a
+      // daemon/tmux restart a code can be reused for a DIFFERENT session, so a
+      // code-only match could adopt the wrong session (wrong cwd/process). A
+      // code match with a mismatched name means an unrelated session took the
+      // code → do NOT adopt it; fall through to the dead path (rebuild/fail).
+      const alive = live.find((s) => s.code === oldCode && s.name === meta.name)
       if (alive) {
         perHostRemap[oldCode] = { status: 'reattached', newCode: oldCode, session: alive }
         report.reattached++
