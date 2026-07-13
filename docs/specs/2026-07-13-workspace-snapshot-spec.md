@@ -3,40 +3,41 @@
 **Date**: 2026-07-13
 **Branch**: `worktree-workspace-snapshot`
 **Author**: Claude (Opus 4.8) + Wake
-**狀態**: Draft（待 codex 審）
+**狀態**: Draft v2（已納入 codex 第一輪 review 六項修正：#1 複合鍵 Blocker、#2 visitHistory、#3 重建收窄、#4 best-effort 取代、#5 restorable、#6 session store 同步）
 
 ---
 
 ## 1. 背景與現況
 
-Purdex 的 tab / workspace / pane 結構**本來就會持久化到 localStorage**（`purdex-tabs` / `purdex-workspaces`），重開 app 時 tab 會自動還原。但有一個缺口：terminal（tmux-session）pane 在前端只存 `sessionCode`（daemon 對 tmux session 的編碼參照），**不存 tmux session name，也不存 cwd**。因此：
+Purdex 的 tab / workspace / pane 結構**本來就會持久化到 localStorage**（`purdex-tabs` / `purdex-workspaces`），重開 app 時 tab 會自動還原。缺口在於 terminal（tmux-session）pane 在前端只存 `sessionCode`（daemon 對 tmux session 的 host-local 編碼參照），**不存 tmux session name，也不存 cwd**。因此：
 
-- 重開機 / tmux server 重啟 / 換機器後，舊 `sessionCode` 一律失效 → 自動還原的 terminal tab 會顯示為「已終止」，**無法自動把工作環境重建回來**。
-- 使用者失去「我當時在哪些目錄開了哪些終端機」的資訊。
+- **伺服器重開機 / tmux server 重啟 / 換機器**後，舊 `sessionCode` 一律失效 → 自動還原的 terminal tab 顯示為「已終止」，**無法自動把工作環境重建回來**。這正是本功能要解的**唯一核心痛點**（使用者親自定位）。
+- 單純關掉 app 重開、或更新 Electron（不動 daemon）→ session 還活著、code 不變，**現在就會自動接回**，不是本功能目標。
 
-本功能新增「工作區快照」：在拍快照的當下，額外記錄每個 tmux session 的 **name + cwd（+ 當時在跑的 current_command，僅供顯示）**，讓還原時能對已死掉的 session **依 name + cwd 用 `tmux new-session` 重建**，達成「一鍵重建工作環境」。
+本功能新增「工作區快照」：拍快照當下額外記錄每個 tmux session 的 **name + cwd（+ 當時 current_command，僅顯示）**，讓還原時對已死掉的 session **依 name + cwd 用 `tmux new-session` 重建**，達成「一鍵重建工作環境」。
 
 ### 引擎盤點（已存在，本次沿用，不改）
 
 | 能力 | 位置 |
 |------|------|
 | Tab / Pane / PaneContent / SplitLayout / Workspace 型別 | `spa/src/types/tab.ts` |
-| `listSessions(hostId)` → 每個 session 帶 `code / name / cwd / mode / current_command` | `spa/src/lib/host-api.ts:94` |
-| `createSession(hostId, name, cwd, mode)` → **已支援指定 name + cwd** | `spa/src/lib/host-api.ts:100` |
-| `fetchSessionCwd(hostId, code)`（單抓，備援） | `spa/src/lib/host-api.ts:157` |
-| daemon cwd SOT = tmux `pane_current_path` | `internal/module/session/cwd_handler.go` / `service.go` |
-| Tab store（persist `purdex-tabs`，partialize `tabs/tabOrder/activeTabId`） | `spa/src/stores/useTabStore.ts:454` |
-| Workspace store（persist `purdex-workspaces`，partialize `workspaces/activeWorkspaceId`） | `spa/src/features/workspace/store.ts:292` |
-| `scanPaneTree(layout, fn)`（唯讀走訪所有 pane）/ `collectLeaves` / `updatePaneInLayout` / `findTabBySessionCode` | `spa/src/lib/pane-tree.ts` |
-| Terminated 標記機制（`TerminatedReason` / `markTerminated` / `markHostTerminated`） | `spa/src/types/tab.ts` / `useTabStore.ts` |
-| 統一 storage backend `purdexStorage` + keys | `spa/src/lib/storage/index.ts` / `keys.ts` |
+| `listSessions(hostId)` → 每 session 帶 `code / name / cwd / mode / current_command` | `spa/src/lib/host-api.ts:94` |
+| `createSession(hostId, name, cwd, mode)` → **已支援指定 name + cwd**，回傳完整 `Session` | `spa/src/lib/host-api.ts:100` |
+| `fetchSessionCwd(hostId, code)`（單抓備援） | `spa/src/lib/host-api.ts:157` |
+| daemon cwd SOT = tmux `pane_current_path`；建立走 `tmux new-session -c cwd` | `internal/module/session/cwd_handler.go` / `internal/tmux/executor.go:187` |
+| **sessionCode 是 host-local**（`compositeKey(hostId, code)`；「sibling hosts can mint identical codes」；測試釘住跨 host 同 code 不互清） | `spa/src/lib/composite-key.ts` / `useMultiHostEventWs.ts:128` / `stores/path-cache/usePathCacheStore.test.ts:112` |
+| Tab store（persist `purdex-tabs`，partialize `tabs/tabOrder/activeTabId`；另有**非 persist** `visitHistory`） | `spa/src/stores/useTabStore.ts:127/454` |
+| Workspace store（persist `purdex-workspaces`，partialize `workspaces/activeWorkspaceId`；關 tab 讀 `visitHistory` 選下一個） | `spa/src/features/workspace/store.ts:195/292` |
+| `scanPaneTree` / `collectLeaves` / `updatePaneInLayout` / `findTabBySessionCode` | `spa/src/lib/pane-tree.ts` |
+| Terminated 標記（`TerminatedReason` / `markTerminated`） | `spa/src/types/tab.ts` / `useTabStore.ts` |
+| storage backend `purdexStorage`（**每次 setItem 立即 localStorage + `syncManager.notify` 廣播**） | `spa/src/lib/storage/browser-backend.ts` / `sync.ts:15` |
+| pane 內容用 `useSessionStore.sessions[hostId]` 查 session；名稱快取只在 WS 事件更新 | `spa/src/components/SessionPaneContent.tsx:27` / `useMultiHostEventWs.ts:103` |
 | Settings section 註冊 `registerSettingsSection({ id, label, order, component })` | `spa/src/lib/settings-section-registry.ts` |
-| 既有 section 元件範例 | `spa/src/components/settings/*SettingsSection.tsx` |
 
 ### 關鍵事實
 
-- **純前端 SPA 功能**：capture 靠 `listSessions`、restore 靠 `createSession(name, cwd, mode)`，daemon **大概率零改動**。唯一待探明：重建時 daemon 遇到「同 name 已存在的 session」的行為（§8 風險）。
-- terminal pane 存的 `sessionCode` 在重建後**必然改變**，任何還原都必須改寫 layout 樹裡的 code（→ §3.3 重映射表）。
+- **純前端 SPA 功能**：capture 靠 `listSessions`、restore 靠 `createSession(name, cwd, mode)`，daemon **大概率零改動**（唯一待探明：撞同名 session，§8.1）。
+- terminal pane 的 `sessionCode` **host-local**，重建後必變 → 任何還原都必須以 **(hostId, sessionCode) 複合鍵**改寫 layout 樹（§3.3）。
 
 ---
 
@@ -44,18 +45,18 @@ Purdex 的 tab / workspace / pane 結構**本來就會持久化到 localStorage*
 
 ### 目標
 
-1. 使用者可**拍下**當前整個工作區狀態的快照：所有 workspace / tab / pane 結構 + 每個 tmux session 的 `hostId / name / cwd / current_command`。
-2. **單一份**快照，存 localStorage，再拍即覆蓋；還原前自動存一份 `-prev` 後悔藥。
-3. 還原時對 tmux session：**活著直接接回、已死依 name+cwd 自動重建**、host 離線則標 terminated（隔離失敗，不中斷整體）。
-4. Settings 新增「Snapshot」section 頁，分 **Tmux Sessions / Tabs** 兩區，含**即時健康度對帳**（🟢活著 / 🔴已死 / ⚪離線）。
-5. 三個還原動作（可分別執行）：**重建所有 session**（Tmux 區）、**還原 tab 佈局**（Tab 區）、**全部還原**（頂部）；外加 **復原上次還原**（讀 `-prev`）。
+1. **拍下**當前整個工作區狀態：所有 workspace / tab / pane 結構 + 每個 tmux session 的 `hostId / sessionCode / name / cwd / current_command`。
+2. **單一份**快照存 localStorage，再拍即覆蓋；還原前自動存 `-prev` 後悔藥。
+3. 還原 tmux session：**活著直接接回、已死且 cwd 可得則依 name+cwd 自動重建**、否則標 terminated（隔離失敗，不中斷整體）。
+4. Settings 新增「Snapshot」section 頁，分 **Tmux Sessions / Tabs** 兩區 + **即時健康度對帳**。
+5. 三個可分別執行的還原動作：**重建所有 session**、**還原 tab 佈局**、**全部還原**；外加 **復原上次還原**。
 
 ### 非目標
 
-- **不自動重跑** session 內原本在跑的程式（claude / vim…）。`current_command` 僅顯示，供使用者手動判斷。理由：任意命令自動執行有安全風險，且程式內部狀態（vim buffer、claude 對話）無法靠命令名還原。
-- **不記錄** app-frame 側欄/面板佈局（`purdex-layout`）—— 使用者明確排除，只記 tab/workspace。
+- **不自動重跑** session 內原本在跑的程式（claude / vim…）。`current_command` 僅顯示（安全＋內部狀態無法還原）。
+- **不記錄** app-frame 側欄/面板佈局（`purdex-layout`，使用者明確排除）。
 - **不做多份具名快照**（單一份覆蓋式）。
-- **不新增跨裝置 sync**：快照存本機 localStorage，不進 `purdex-sync` snapshot-store。
+- **不進** `purdex-sync` snapshot-store、不做跨裝置 sync（本機 localStorage）。
 - **不改** tab/workspace persist 格式與既有 store action 語意。
 
 ---
@@ -67,105 +68,124 @@ Purdex 的 tab / workspace / pane 結構**本來就會持久化到 localStorage*
 快照存 localStorage，key = `purdex-workspace-snapshot`（正本）與 `purdex-workspace-snapshot-prev`（還原前自動備份）。
 
 ```ts
+interface SessionMeta {
+  hostId: string
+  sessionCode: string              // 拍快照當下的 code（host-local）
+  name: string
+  mode: 'terminal' | 'stream'
+  cwd?: string                     // 抓不到則 undefined（不是空字串）
+  currentCommand?: string          // 顯示用；抓不到則省略
+  restorable: boolean              // cwd 有值且 host 可達才 true
+  captureError?: 'host-unreachable' | 'session-dead-at-capture'
+}
+
 interface WorkspaceSnapshot {
   version: 1
   capturedAt: number
-  // 沿用兩個 store 既有 partialize 的形狀，避免格式漂移
-  tabs: Record<string, Tab>          // 完整 tab + layout 樹
+  // 沿用兩 store 既有 partialize 形狀，避免格式漂移
+  tabs: Record<string, Tab>
   tabOrder: string[]
   activeTabId: string | null
   workspaces: Workspace[]
   activeWorkspaceId: string | null
-  // sidecar：拍快照當下每個 tmux-session pane 的 tmux 側資訊
-  sessionMeta: Record<string, {      // key = 拍快照當下的 sessionCode
-    hostId: string
-    name: string
-    cwd: string
-    mode: 'terminal' | 'stream'
-    currentCommand?: string          // 顯示用；抓不到則省略
-  }>
+  // sidecar：以 (hostId, sessionCode) 複合鍵巢狀索引
+  sessionMeta: Record<string, Record<string, SessionMeta>>  // [hostId][sessionCode]
 }
 ```
 
-- `sessionMeta` 的 key 是**拍快照當下**的 `sessionCode`，作為與 layout 樹裡 pane 對接的橋樑。
-- 讀 / 寫透過 `purdexStorage`（與其他 store 一致），非直接 `localStorage`。
+- **複合鍵（codex Blocker #1）**：`sessionCode` **host-local**（`composite-key.ts`、`useMultiHostEventWs.ts:128` 註解、`usePathCacheStore.test.ts:112` 測試皆釘住）。`sessionMeta` 以 `[hostId][sessionCode]` 巢狀索引；`Remap`（§3.3）與 `remapLayoutSessions`（§3.4）一律以 **(hostId, sessionCode)** 對帳，禁用裸 code。
+- **`restorable`（codex #5）**：僅當 `cwd` 有值（tmux `pane_current_path` 成功）且 host 可達才 `true`。cwd 不明者**不進 `createSession`**（避免 `tmux new-session -c ''` 開在錯目錄），restore 時直接標 terminated。
+- 讀 / 寫透過 `purdexStorage`，非直接 `localStorage`。
 
 ### 3.2 拍快照（capture）
 
-`captureSnapshot(): Promise<CaptureResult>`：
+`captureSnapshot(now: number): Promise<CaptureResult>`：
 
-1. 從 `useTabStore.getState()` 取 `tabs / tabOrder / activeTabId`；從 `useWorkspaceStore.getState()` 取 `workspaces / activeWorkspaceId`。（用既有 partialize 形狀。）
-2. `scanPaneTree` 走過每個 tab.layout，收集所有 `kind === 'tmux-session'` 的 pane，取得 `{ sessionCode, hostId, mode }`，依 `hostId` 分組。
-3. 每個涉及的 host **呼叫一次** `listSessions(hostId)`（一次拿全部，優於逐一 `fetchSessionCwd`）。用回傳結果比對出每個 pane 的 `name / cwd / current_command`，填入 `sessionMeta`。
-   - host `listSessions` 失敗 → 該 host 的 pane 記為 name 用 `cachedName`、cwd 空字串，並在 `CaptureResult` 累計 `unresolved` 計數（不中斷）。
-   - session 已不在清單（拍快照當下就死了）→ 同上，用 `cachedName`、空 cwd。
-4. 組出 `WorkspaceSnapshot`（`capturedAt` 由呼叫端注入，見下），整包覆蓋寫入 `purdex-workspace-snapshot`。
-5. 回傳 `CaptureResult { total, resolved, unresolved }` 供 UI toast。
+1. 從 `useTabStore.getState()` 取 `tabs / tabOrder / activeTabId`；`useWorkspaceStore.getState()` 取 `workspaces / activeWorkspaceId`。
+2. `scanPaneTree` 走每個 tab.layout，收集所有 `kind === 'tmux-session'` 的 pane（`{ sessionCode, hostId, mode }`），依 `hostId` 分組。
+3. 每個涉及 host **呼叫一次** `listSessions(hostId)`，依 `(hostId, sessionCode)` 比對出 `name / cwd / current_command`，填 `sessionMeta[hostId][sessionCode]`，`restorable = true`。
+   - host `listSessions` 失敗 → `name = cachedName`、`cwd = undefined`、`restorable = false`、`captureError = 'host-unreachable'`，累計 `unresolved`（不中斷）。
+   - session 已不在清單（拍當下就死）→ `name = cachedName`、`cwd = undefined`、`restorable = false`、`captureError = 'session-dead-at-capture'`。
+4. 組出 `WorkspaceSnapshot`（`capturedAt = now`），整包覆蓋寫 `purdex-workspace-snapshot`。
+5. 回傳 `CaptureResult { total, resolved, unresolved }` 供 toast。
 
-> **時間戳**：`capturedAt` 不在純函式內部產生（利於測試決定性）。由 UI 呼叫端以 `Date.now()` 帶入 capture 參數。
+> **決定性**：`capturedAt` 不在函式內呼叫 `Date.now()`，由 UI 帶入（`now`），利於單元測試決定性斷言。
 
-### 3.3 sessionCode 重映射（restore 的共同核心）
+### 3.3 sessionCode 重映射（restore 共同核心）
 
-terminal pane 嵌的是 sessionCode，重建出的 code 必然不同，故任何 restore 都繞不開一張 `oldCode → newCode | null` 表。
+terminal pane 嵌 host-local code，重建後必變，故任何 restore 都繞不開以 **(hostId, oldCode)** 為鍵的重映射表。
 
-`ensureSessions(sessionMeta): Promise<Remap>`：
+```ts
+type RemapEntry =
+  | { status: 'reattached'; newCode: string; session: Session }  // 活著，code 不變
+  | { status: 'rebuilt';    newCode: string; session: Session }  // 依 name+cwd 重建
+  | { status: 'failed' }                                         // 無法重建 → 標 terminated
+type Remap = Record<string /* hostId */, Record<string /* oldCode */, RemapEntry>>
+```
 
-- 蒐集 `sessionMeta` 涉及的所有 hostId，每個 host **呼叫一次** `listSessions(hostId)` 得「目前活著」的 code 清單（並偵測 host 是否可達）。
-- 對 `sessionMeta` 每筆：
-  - **活著**（oldCode ∈ 活著清單）→ `newCode = oldCode`（直接接回，內容不動）。
-  - **已死** 且 host 可達 → `createSession(hostId, name, cwd, mode)` → `newCode = 新 code`。
-  - **host 離線** 或 `createSession` 失敗 → `newCode = null`（該 pane 之後標 terminated）。
-- 回傳 `Remap = Map<oldCode, string | null>` + `EnsureReport { reattached, rebuilt, failed }`。
+`ensureSessions(sessionMeta): Promise<{ remap: Remap; report: EnsureReport }>`：
+
+- 蒐集涉及的 hostId，每個 host **呼叫一次** `listSessions(hostId)`（成功回應 = host 可達訊號）。
+- 對 `sessionMeta[hostId][oldCode]` 每筆：
+  - **活著**（oldCode ∈ 該 host 活著清單）→ `reattached`，`newCode = oldCode`，`session` = 該筆。
+  - **已死** 且 `restorable`（host 可達 + cwd 有值）→ `createSession(hostId, name, cwd, mode)` → `rebuilt`，`newCode` = 回傳 session code，`session` = 回傳物件（**含 daemon 實際採用的 name**，§8.1）。
+  - **host 離線** / **`restorable === false`（cwd 不明）** / `createSession` 失敗 → `failed`（後續標 terminated；**不呼叫 `createSession('', …)`**）。
+- **回傳完整 `Session` 物件**（codex #6），供 restore 後同步 `useSessionStore` + `cachedName`。
+- `EnsureReport { reattached, rebuilt, failed }` 供 toast。
 
 ### 3.4 套用重映射到 layout 樹
 
-`remapLayoutSessions(layout, remap): PaneLayout`（純函式，基於 `updatePaneInLayout` / `scanPaneTree`）：
+`remapLayoutSessions(layout, remap, opts?): PaneLayout`（純函式，基於 `updatePaneInLayout` / `scanPaneTree`），對每個 `tmux-session` pane 以 **(pane.hostId, pane.sessionCode)** 查 `remap`：
 
-- 走過樹，對每個 `tmux-session` pane：
-  - `remap` 有 `newCode`（非 null）→ 設 `sessionCode = newCode`，清除 `terminated`。
-  - `remap` 為 `null` → 保留原 code，設 `terminated`（沿用 `TerminatedReason`）。
-  - `remap` 無此 code（理論上不會，防禦性）→ 原樣不動。
+- `reattached` / `rebuilt` → 設 `sessionCode = newCode`、`cachedName = session.name`，清除 `terminated`。
+- `failed` → 保留原 code，設 `terminated`（`TerminatedReason`）。
+- remap 無此 (hostId, code)（防禦性）→ 原樣不動。
+- `opts.onlyTerminated`（供「重建所有 session」，§3.5）為 true 時**只處理原本 `terminated` 的 pane**，活著的 pane 完全不碰。
 
 ### 3.5 三個還原動作
 
-全部建立在 §3.3 / §3.4 primitive 上，共用同一套邏輯：
+全部建立在 §3.3 / §3.4 primitive 上：
 
 | 動作 | 位置 | 步驟 |
 |------|------|------|
-| **重建所有 session** | Tmux 區 | `remap = ensureSessions(snapshot.sessionMeta)` → 對**當前已開**的 `useTabStore.tabs` 各 layout 套 `remapLayoutSessions` → `setState` 更新 tabs。**不動 tab 結構**（不新增/刪除 tab、不碰 workspace）。 |
-| **還原 tab 佈局** | Tab 區 | 只針對「目前還活著」做輕量對帳（`listSessions` 比對；死掉者標 terminated，**不重建**——重建是 Tmux 區職責）→ 以 `snapshot.tabs/tabOrder/activeTabId` + `snapshot.workspaces/activeWorkspaceId` **原子取代** store。 |
-| **全部還原** | 頂部 | `remap = ensureSessions(...)` → 對 `snapshot.tabs` 各 layout 套 `remapLayoutSessions` → 以改寫後結果 + workspaces **原子取代**兩 store。（= §3.2 完整流程） |
+| **重建所有 session** | Tmux 區 | `ensureSessions(snapshot.sessionMeta)` → 對**當前已開** `useTabStore.tabs` 套 `remapLayoutSessions(…, { onlyTerminated: true })`（見「收窄語意」）→ `replaceTabState`（僅 tabs）+ 同步 session store。**不動 tab 結構**、不碰 workspace、不寫 `-prev`。 |
+| **還原 tab 佈局** | Tab 區 | 對「目前還活著」依 (hostId,code) 輕量對帳（死掉標 terminated，**不重建**）→ `replaceTabSnapshot(snapshot)` 取代 tab/workspace。 |
+| **全部還原** | 頂部 | `ensureSessions(...)` → 對 `snapshot.tabs` 套 `remapLayoutSessions` → `replaceTabSnapshot(改寫後)` + 同步 session store。（= §3.2 完整流程） |
 
-**原子取代**：以單次 `useTabStore.setState({ tabs, tabOrder, activeTabId })` + `useWorkspaceStore.setState({ workspaces, activeWorkspaceId })` 整包覆蓋；persist middleware 自動寫回 localStorage。中途失敗不留半套（先算完 remap + 改寫，最後才 setState）。
+**「重建所有 session」收窄語意（codex #3）**：此動作把 remap 套到**當前已開** tabs；若不限制、當前某 pane 的 (hostId, code) 剛好碰到 snapshot 舊 code，會誤改不屬該快照的 pane。故限制 `onlyTerminated: true` —— 活著的 pane 完全不碰、terminated 的本就壞了重建正是所需。**殘餘風險**（極罕見）：重開機後新 session 恰好複用某舊 code 值且該 pane 剛好 terminated；即便命中，也只是接到一個以正確 cwd 新建的 session，影響有限。此收窄使「還原 tab 佈局 → 重建所有 session」在**核心情境（persist 還原後 session 全死）**下等價於「全部還原」，但**不宣稱普遍等價**。
 
-**還原前自動備份**：任一「取代式」動作（還原 tab 佈局 / 全部還原）執行前，先把**當前** store 狀態 capture 成一份 `WorkspaceSnapshot` 寫入 `purdex-workspace-snapshot-prev`。「復原上次還原」= 讀 `-prev` 走「全部還原」流程。
+**取代語意（best-effort，非真原子）（codex #4）**：兩 store 各自 `setState` **並非真原子** —— `browserStorage.setItem` 每次立即 `localStorage.setItem` + `syncManager.notify`，其他視窗會立刻 rehydrate 單一 key，故中間有可觀察空窗。改用 coordinator：
 
-> 「重建所有 session」不取代 tab 結構、非破壞性，故不寫 `-prev`（僅改 sessionCode，可再拍/再還原）。
+- `validateSnapshotConsistency(snapshot)`：驗 `workspace.tabs` 每個 id、`activeTabId`、各 `workspace.activeTabId`、`activeWorkspaceId` 都能在 `tabs` 解析；不通過則中止、不動任何 store。
+- `replaceTabSnapshot(snapshot)`：先驗證 → 保存兩 store 舊值 → 依序 setState（tab 先、workspace 後）→ 任一步丟錯則**用舊值 rollback** 兩 store。
+- **visitHistory（codex #2）**：`useTabStore.visitHistory` 非 persist、workspace 關 tab 讀它選下一個（`workspace/store.ts:195`）；取代時把 `visitHistory` filter 成新 `tabOrder` 子集（移除指向已消失 tab 的引用），連同 `tabs/tabOrder/activeTabId` 一起 set。
+- spec 明訂此為 **best-effort 一致，非跨視窗真原子**。
+
+**同步 session store（codex #6）**：取代/重建後，用 `ensureSessions` 回傳的 `Session` 物件 upsert `useSessionStore`（`replaceHost` / 逐筆），並確保各 pane `cachedName` = daemon 回傳實際 name，避免 restore 後 UI 短暫顯示錯名 / 查不到新 session。
+
+**還原前自動備份**：任一「取代式」動作（還原 tab 佈局 / 全部還原）執行前，先把**當前** store capture 成 `WorkspaceSnapshot` 寫 `purdex-workspace-snapshot-prev`。「復原上次還原」= 讀 `-prev` 走「全部還原」。
+
+> 「重建所有 session」非破壞性（僅改 terminated pane 的 code），故不寫 `-prev`。
 
 ### 3.6 錯誤處理
 
-- capture：host 失敗僅該 host 記空 cwd，其餘照拍；toast「已拍快照：N 個終端機、其中 M 個路徑未能記錄」。
-- restore：逐 session 獨立失敗隔離（重建失敗只標該 pane terminated）；toast 彙總「X 直接接回 / Y 依路徑重建 / Z 無法重建」。
-- restore 全程「先算後套」：`ensureSessions` + `remapLayoutSessions` 完成後才 `setState`，避免半套狀態。
+- capture：host 失敗僅該 host 記 `restorable=false`（cwd undefined），其餘照拍；toast「已拍快照：N 個終端機、其中 M 個無法記錄路徑」。
+- restore：逐 session 獨立失敗隔離（重建失敗或 `restorable=false` 只標該 pane terminated，不 `createSession('')`）；toast 彙總「X 直接接回 / Y 依路徑重建 / Z 無法重建」。
+- restore「先算後套」：`ensureSessions` + `remapLayoutSessions` 完成後才進 `replaceTabSnapshot`（含一致性驗證 + rollback），失敗不留半套。
 
 ### 3.7 UI — Settings「Snapshot」section
 
-透過 `registerSettingsSection({ id: 'snapshot', label: 'Snapshot', order, component: SnapshotSettingsSection })` 註冊（order 置於既有 sections 之後，plan 階段定值）。
+`registerSettingsSection({ id: 'snapshot', label: 'Snapshot', order, component: SnapshotSettingsSection })`（order 置既有 sections 之後，plan 定值）。
 
 `SnapshotSettingsSection`：
 
-- **頂部列**：
-  - 「拍下快照」鈕（顯示 `capturedAt` 相對時間，例如「上次：3 小時前」）。
-  - 「全部還原」鈕（快照不存在時 disabled）。
-  - 「復原上次還原」鈕（`-prev` 不存在時 disabled）。
+- **頂部列**：「拍下快照」（顯示 `capturedAt` 相對時間）、「全部還原」（無快照 disabled）、「復原上次還原」（無 `-prev` disabled）。
 - **區塊 1 — Tmux Sessions**（對帳表）：
-  - 每列：`host / name / cwd / current_command（拍當下）/ 健康度`。
-  - 健康度：section 掛載時對各 host `listSessions` 即時對帳 → 🟢 活著（可接回）/ 🔴 已死（將依 cwd 重建）/ ⚪ host 離線（無法重建）。
-  - 區塊動作鈕：「重建所有 session」。
-- **區塊 2 — Tabs / Workspaces**：
-  - 樹狀列出 workspace → tab → pane（kind + 識別資訊：terminal 顯示 name、editor/preview 顯示 filePath、browser 顯示 url）。
-  - 區塊動作鈕：「還原 tab 佈局」。
-- 快照不存在時，兩區顯示 empty state（只給「拍下快照」）。
+  - 每列：`host / name / cwd（無值顯示「未記錄」）/ current_command（拍當下）/ 健康度`。
+  - 健康度：section 掛載時對各 host（依 hostId）`listSessions` 即時對帳 → 🟢 活著（可接回）/ 🔴 已死可重建（`restorable` 且 host 可達）/ ⚠️ 只能保留結構（`restorable=false`，無 cwd）/ ⚪ host 離線（無法重建）。
+  - 區塊鈕：「重建所有 session」（僅重建 🔴；⚠️/⚪ 維持 terminated）。
+- **區塊 2 — Tabs / Workspaces**：樹狀列 workspace → tab → pane（terminal 顯示 name、editor/preview 顯示 filePath、browser 顯示 url）。區塊鈕：「還原 tab 佈局」。
+- 無快照時兩區顯示 empty state（只給「拍下快照」）。
 
 ---
 
@@ -173,14 +193,14 @@ terminal pane 嵌的是 sessionCode，重建出的 code 必然不同，故任何
 
 | 檔案 | 類型 | 職責 |
 |------|------|------|
-| `spa/src/lib/snapshot/types.ts` | 新增 | `WorkspaceSnapshot` / `SessionMeta` / `Remap` / `CaptureResult` / `EnsureReport` 型別 |
+| `spa/src/lib/snapshot/types.ts` | 新增 | `WorkspaceSnapshot` / `SessionMeta`（含 `restorable`）/ `Remap`（複合鍵）/ `CaptureResult` / `EnsureReport` |
 | `spa/src/lib/snapshot/storage.ts` | 新增 | 讀/寫 `purdex-workspace-snapshot(-prev)`（走 `purdexStorage`） |
-| `spa/src/lib/snapshot/capture.ts` | 新增 | `captureSnapshot`（讀兩 store + `listSessions` 補 meta） |
-| `spa/src/lib/snapshot/restore.ts` | 新增 | `ensureSessions` / `remapLayoutSessions` / 三動作 orchestration + `-prev` 寫入 |
+| `spa/src/lib/snapshot/capture.ts` | 新增 | `captureSnapshot(now)`（讀兩 store + `listSessions` 依 (hostId,code) 補 meta） |
+| `spa/src/lib/snapshot/restore.ts` | 新增 | `ensureSessions`（回傳完整 Session）/ `remapLayoutSessions`（複合鍵、`onlyTerminated`）/ `validateSnapshotConsistency` / `replaceTabState` / `replaceTabSnapshot`（rollback + visitHistory filter + session store 同步）/ 三動作 + `-prev` |
 | `spa/src/components/settings/SnapshotSettingsSection.tsx` | 新增 | Settings section UI（兩區 + 健康度對帳 + 動作鈕 + toast） |
-| section 註冊呼叫點（對齊既有 `*SettingsSection` 註冊處） | 修改 | `registerSettingsSection(...)` |
+| section 註冊呼叫點（對齊既有 `*SettingsSection`） | 修改 | `registerSettingsSection(...)` |
 
-- **依賴方向**：UI → restore/capture → host-api + pane-tree + stores。純邏輯層（capture/restore/storage）不依賴 React，利於 Vitest 單元測試。
+- **依賴方向**：UI → restore/capture → host-api + pane-tree + stores。純邏輯層（capture/restore/storage）不依賴 React，利於 Vitest。
 
 ---
 
@@ -188,44 +208,48 @@ terminal pane 嵌的是 sessionCode，重建出的 code 必然不同，故任何
 
 ### Phase 1 — 資料模型 + capture + 持久化
 - `types.ts` / `storage.ts` / `capture.ts`。
-- `captureSnapshot` 產出 `WorkspaceSnapshot`（含 sessionMeta 正確對應 code→name/cwd/command）、寫入 localStorage。
-- **驗收**：mock 兩 store + mock `listSessions`，斷言快照內容正確；host 失敗時 `unresolved` 計數正確、不中斷。純邏輯，TDD。
+- **驗收**：mock 兩 store + mock `listSessions`，斷言 `sessionMeta` 依 (hostId,code) 巢狀正確、`restorable`/`captureError` 正確；host 失敗 `unresolved` 計數正確、不中斷；`capturedAt` 由入參決定。純邏輯 TDD。
 
 ### Phase 2 — restore 引擎 + 三動作
-- `restore.ts`：`ensureSessions`（重映射表）、`remapLayoutSessions`（純函式）、三個 orchestration 動作、`-prev` 寫入。
+- `restore.ts`：`ensureSessions`（複合鍵、回傳 Session）、`remapLayoutSessions`（複合鍵、`onlyTerminated`）、`validateSnapshotConsistency`、`replaceTabState`/`replaceTabSnapshot`（rollback + visitHistory filter + session store 同步）、三個 orchestration、`-prev`。
 - **驗收**：
-  - 「部分活著、部分已死、host 離線」情境 → `oldCode→newCode` 表正確、layout 樹 code 正確改寫、失敗 pane 標 terminated。
-  - 原子取代後兩 store 狀態 = 快照內容。
-  - 三動作語意各自正確（重建 session 不動 tab 結構；還原 tab 佈局不重建 session；全部還原兩者兼具）。
-  - `-prev` 於取代式動作前被寫入；「復原上次還原」能還回去。
-  - **撞名邊界**：先寫一個測試釘住 daemon `createSession` 對同名 session 的行為（§8 探明後補斷言）。
+  - **跨 host 同 code 不撞（#1）**：兩 host 各有相同 `sessionCode` 值，remap 依 (hostId,code) 各自對帳、不互污。
+  - 「部分活著 / 已死 / host 離線 / cwd 不明」→ 各 entry status 正確、layout 依複合鍵改寫、`failed` 與 `restorable=false` 標 terminated 且**未呼叫 `createSession('')`（#5）**。
+  - **取代一致性（#4）**：`validateSnapshotConsistency` 擋掉 workspace 指向不存在 tab 的壞快照；第二個 store setState 丟錯時兩 store 皆 rollback。
+  - **visitHistory（#2）**：取代後不含已消失 tab 引用；「restore 後立刻關 active tab」選到的下一個 tab 正確。
+  - **session store 同步（#6）**：`rebuilt` 後 `useSessionStore` 有新 session、pane `cachedName` = daemon 回傳實際 name。
+  - **重建收窄（#3）**：「重建所有 session」只改 `terminated` pane；當前有一活著且 code 恰等於某 snapshot 舊 code 的 pane 不被動到。
+  - 三動作語意各自正確；`-prev` 於取代式動作前寫入、「復原上次還原」能還回去。
+  - **撞名邊界（§8.1）**：先寫測試釘住 daemon `createSession` 對同名 session 的行為（探明後補斷言）。
 
 ### Phase 3 — Settings Snapshot section UI
 - `SnapshotSettingsSection.tsx` + 註冊。
-- 兩區呈現、掛載時即時健康度對帳、三顆動作鈕、toast 彙總、empty state。
-- **驗收**：React Testing Library — 健康度三態渲染、動作鈕觸發對應 orchestration（mock restore 層）、快照不存在時 empty state。
+- 兩區呈現、掛載時即時健康度四態對帳、三顆動作鈕、toast 彙總、empty state。
+- **驗收**：RTL — 健康度四態渲染、動作鈕觸發對應 orchestration（mock restore 層）、無快照時 empty state。
 
 ---
 
 ## 6. 測試策略
 
-- 純邏輯層（Phase 1/2）以 Vitest 單元測試為主，mock `host-api` 與兩 store（依 `feedback_zustand_harness_setstate` 的 merge-mode setState 慣例）。
-- UI 層（Phase 3）用 RTL，mock restore/capture 層，聚焦互動與狀態渲染。
-- 每個 Phase 獨立 commit；`cd spa && npx vitest run` + `pnpm run lint` + `pnpm run build` 全綠才進下一 Phase。
+- 純邏輯層（Phase 1/2）以 Vitest 為主，mock `host-api` 與兩 store（依 `feedback_zustand_harness_setstate` 的 merge-mode setState 慣例）。
+- UI 層（Phase 3）用 RTL，mock restore/capture 層。
+- 每 Phase 獨立 commit；`cd spa && npx vitest run` + `pnpm run lint` + `pnpm run build` 全綠才進下一 Phase。
 
 ---
 
 ## 7. 限制（寫進 UI 說明文案）
 
-- 重建的 session 只回到 **cwd**；原本在跑的程式不會自動重跑（僅顯示拍當下的 `current_command` 供參考）。
+- 重建的 session 只回到 **cwd**；原本在跑的程式不會自動重跑（僅顯示拍當下 `current_command`）。
 - `stream` mode session 重建後為空（Claude `-p` 串流不重播），同樣只還原 cwd。
-- 快照為**單一份**，再拍即覆蓋。跨裝置不同步（本機 localStorage）。
+- **cwd 記不到的 session（`restorable=false`）只保留 tab 結構、無法一鍵重建**，UI 明示、restore 標 terminated。
+- 「取代式」還原為 **best-effort 一致，非跨視窗真原子**（§3.5）。
+- 快照為**單一份**，再拍即覆蓋；跨裝置不同步（本機 localStorage）。
 
 ---
 
 ## 8. 待探明 / 風險
 
-1. **撞同名 session**（唯一可能碰 daemon 的點）：`createSession(hostId, name, cwd, mode)` 在 daemon 上已存在同 name 的 session 時的行為為何？（拒絕 / 自動改名 / 復用？）Phase 2 先寫一個測試/手動打 API 探明；若行為不利（例如靜默復用到錯的 session），再評估 daemon 端補「name 唯一性 / 回傳實際 name」。**這是 spec 唯一的開放技術問題。**
-2. **host 可達性判定**：`ensureSessions` 需區分「session 死了但 host 活著（可重建）」vs「host 離線（不可重建）」。以 `listSessions` 是否成功回應作為 host 可達訊號。
-3. **大量 session**：`ensureSessions` 對已死 session 逐一 `createSession`；session 很多時為序列/並行？plan 階段定（傾向有上限的並行 + 逐一失敗隔離）。
-4. **capturedAt 決定性**：純函式不呼叫 `Date.now()`，由 UI 帶入，確保單元測試可決定性斷言。
+1. **撞同名 session**（唯一可能碰 daemon 的點）：`createSession(hostId, name, cwd, mode)` 遇 daemon 上已存在同 name session 的行為？（拒絕 / 自動改名 / 復用？）Phase 2 先寫測試/手動打 API 探明。緩解已內建：`ensureSessions` 一律以 `createSession` **回傳物件的實際 code + name** 為準（§3.3），故即使 daemon 自動改名，前端仍對接正確 session；只有「靜默復用到錯 session」才需 daemon 端補 name 唯一性。**這是 spec 唯一開放技術問題。**
+2. **host 可達性判定**：`ensureSessions` 以 `listSessions` 是否成功回應區分「session 死但 host 活（可重建）」vs「host 離線（`failed`）」。
+3. **大量 session**：`ensureSessions` 對已死 session 逐一 `createSession`；量大時序列/並行？plan 定（傾向有上限並行 + 逐一失敗隔離）。
+4. **`replaceTabSnapshot` rollback 邊界**：第一個 `setState` 已 `syncManager.notify` 廣播後才 rollback，其他視窗仍可能短暫見中間態 —— §3.5 已明訂 best-effort、非承諾消除。plan 評估是否引入單一 batched key（超出本次範圍，先記錄）。
