@@ -209,7 +209,17 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   }
 
   return (
-    <div ref={containerRef} className={`flex-1 flex ${layout.direction === 'h' ? 'flex-row' : 'flex-col'} overflow-hidden`}>
+    // Height MUST come from h-full, not flex-1. A top-level split renders
+    // directly under TabContent's `.absolute inset-0` wrapper, which is a BLOCK
+    // box — `flex-1` (a flex-item property) is inert there, so the container
+    // collapses to CONTENT height and every pane below it becomes unbounded:
+    // an overflow-y-auto region inside a pane then grows to full content height
+    // and can never scroll (the tail is clipped by an ancestor overflow-hidden).
+    // `h-full w-full` resolves against the absolute wrapper's definite height,
+    // cascading a bounded height down through nested splits (whose parent is the
+    // flex child wrapper below, where 100% also resolves). w-full keeps a
+    // horizontal split full-width in that same block context.
+    <div ref={containerRef} className={`h-full w-full flex ${layout.direction === 'h' ? 'flex-row' : 'flex-col'} overflow-hidden`}>
       {layout.children.map((child, i) => (
         <div key={getLayoutKey(child)} className="contents">
           {i > 0 && (
