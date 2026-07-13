@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSession, listSessions } from '../host-api'
 import type { Session } from '../host-api'
+import type { PaneContent, PaneLayout } from '../../types/tab'
+import type { Remap } from './types'
 import type { SessionMeta } from './types'
-import { ensureSessions } from './restore'
+import { ensureSessions, remapLayoutSessions } from './restore'
 
 vi.mock('../host-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../host-api')>()),
@@ -202,5 +204,177 @@ describe('ensureSessions', () => {
       expect(entry.session.name).toBe('daemon-renamed')
       expect(entry.session.code).toBe('daemon-assigned-code')
     }
+  })
+})
+
+function tmuxPane(
+  id: string,
+  hostId: string,
+  sessionCode: string,
+  overrides?: Partial<Extract<PaneContent, { kind: 'tmux-session' }>>,
+): { type: 'leaf'; pane: { id: string; content: PaneContent } } {
+  return {
+    type: 'leaf',
+    pane: {
+      id,
+      content: {
+        kind: 'tmux-session',
+        hostId,
+        sessionCode,
+        mode: 'terminal',
+        cachedName: overrides?.cachedName ?? sessionCode,
+        tmuxInstance: overrides?.tmuxInstance ?? 'default',
+        ...overrides,
+      },
+    },
+  }
+}
+
+function tmux(content: PaneContent): Extract<PaneContent, { kind: 'tmux-session' }> {
+  if (content.kind !== 'tmux-session') throw new Error('expected tmux-session pane')
+  return content
+}
+
+describe('remapLayoutSessions', () => {
+  it('1. rebuilt entry → sessionCode=newCode, cachedName updated, terminated cleared', () => {
+    const layout = tmuxPane('p1', 'hostA', 'old1', {
+      cachedName: 'stale',
+      terminated: 'session-closed',
+    })
+    const remap: Remap = {
+      hostA: {
+        old1: {
+          status: 'rebuilt',
+          newCode: 'new1',
+          session: session({ code: 'new1', name: 'fresh-name' }),
+        },
+      },
+    }
+
+    const result = remapLayoutSessions(layout, remap)
+    const content = tmux((result as { pane: { content: PaneContent } }).pane.content)
+    expect(content.sessionCode).toBe('new1')
+    expect(content.cachedName).toBe('fresh-name')
+    expect(content.terminated).toBeUndefined()
+  })
+
+  it('2. failed entry → terminated set to exactly "tmux-restarted"', () => {
+    const layout = tmuxPane('p1', 'hostA', 'old1')
+    const remap: Remap = { hostA: { old1: { status: 'failed' } } }
+
+    const result = remapLayoutSessions(layout, remap)
+    const content = tmux((result as { pane: { content: PaneContent } }).pane.content)
+    expect(content.sessionCode).toBe('old1')
+    expect(content.terminated).toBe('tmux-restarted')
+  })
+
+  it('3. onlyTerminated:true → live pane matching a remap oldCode is NOT modified', () => {
+    const layout = tmuxPane('p1', 'hostA', 'old1', { cachedName: 'live-name' })
+    const remap: Remap = {
+      hostA: {
+        old1: {
+          status: 'rebuilt',
+          newCode: 'new1',
+          session: session({ code: 'new1', name: 'fresh-name' }),
+        },
+      },
+    }
+
+    const result = remapLayoutSessions(layout, remap, { onlyTerminated: true })
+    const content = tmux((result as { pane: { content: PaneContent } }).pane.content)
+    expect(content.sessionCode).toBe('old1')
+    expect(content.cachedName).toBe('live-name')
+    expect(content.terminated).toBeUndefined()
+  })
+
+  it('4. nested split with multiple tmux panes → all remapped by (hostId, sessionCode)', () => {
+    const layout: PaneLayout = {
+      type: 'split',
+      id: 's1',
+      direction: 'h',
+      sizes: [50, 50],
+      children: [
+        tmuxPane('p1', 'hostA', 'a1', { terminated: 'session-closed' }),
+        {
+          type: 'split',
+          id: 's2',
+          direction: 'v',
+          sizes: [50, 50],
+          children: [
+            tmuxPane('p2', 'hostB', 'b1'),
+            tmuxPane('p3', 'hostA', 'a2', { terminated: 'host-removed' }),
+          ],
+        },
+      ],
+    }
+    const remap: Remap = {
+      hostA: {
+        a1: { status: 'rebuilt', newCode: 'a1-new', session: session({ code: 'a1-new', name: 'A1' }) },
+        a2: { status: 'failed' },
+      },
+      hostB: {
+        b1: { status: 'reattached', newCode: 'b1', session: session({ code: 'b1', name: 'B1' }) },
+      },
+    }
+
+    const result = remapLayoutSessions(layout, remap)
+    const byId: Record<string, Extract<PaneContent, { kind: 'tmux-session' }>> = {}
+    const walk = (l: PaneLayout): void => {
+      if (l.type === 'leaf') {
+        byId[l.pane.id] = tmux(l.pane.content)
+      } else {
+        l.children.forEach(walk)
+      }
+    }
+    walk(result)
+
+    expect(byId.p1.sessionCode).toBe('a1-new')
+    expect(byId.p1.cachedName).toBe('A1')
+    expect(byId.p1.terminated).toBeUndefined()
+
+    expect(byId.p2.sessionCode).toBe('b1')
+    expect(byId.p2.cachedName).toBe('B1')
+    expect(byId.p2.terminated).toBeUndefined()
+
+    expect(byId.p3.sessionCode).toBe('a2')
+    expect(byId.p3.terminated).toBe('tmux-restarted')
+  })
+
+  it('5. no remap entry → pane left unchanged; non-tmux panes preserved', () => {
+    const layout: PaneLayout = {
+      type: 'split',
+      id: 's1',
+      direction: 'h',
+      sizes: [50, 50],
+      children: [
+        tmuxPane('p1', 'hostA', 'unknown'),
+        { type: 'leaf', pane: { id: 'p2', content: { kind: 'new-tab' } } },
+      ],
+    }
+    const remap: Remap = {
+      hostA: {
+        other: { status: 'rebuilt', newCode: 'x', session: session({ code: 'x', name: 'X' }) },
+      },
+    }
+
+    const result = remapLayoutSessions(layout, remap) as Extract<PaneLayout, { type: 'split' }>
+    const first = tmux((result.children[0] as { pane: { content: PaneContent } }).pane.content)
+    expect(first.sessionCode).toBe('unknown')
+    const second = (result.children[1] as { pane: { content: PaneContent } }).pane.content
+    expect(second.kind).toBe('new-tab')
+  })
+
+  it('6. pure: input layout is not mutated', () => {
+    const layout = tmuxPane('p1', 'hostA', 'old1')
+    const remap: Remap = {
+      hostA: {
+        old1: { status: 'rebuilt', newCode: 'new1', session: session({ code: 'new1', name: 'fresh' }) },
+      },
+    }
+
+    const result = remapLayoutSessions(layout, remap)
+    expect(tmux(layout.pane.content).sessionCode).toBe('old1')
+    expect(result).not.toBe(layout)
+    expect(tmux((result as { pane: { content: PaneContent } }).pane.content).sessionCode).toBe('new1')
   })
 })

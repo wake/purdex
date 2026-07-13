@@ -1,5 +1,7 @@
 import { createSession, listSessions } from '../host-api'
 import type { Session } from '../host-api'
+import { scanPaneTree, updatePaneInLayout } from '../pane-tree'
+import type { PaneContent, PaneLayout } from '../../types/tab'
 import type { EnsureReport, Remap, RemapEntry, SessionMeta } from './types'
 
 /**
@@ -69,4 +71,64 @@ export async function ensureSessions(
   }
 
   return { remap, report }
+}
+
+/**
+ * Rewrite every `tmux-session` pane in a layout tree against a {@link Remap}
+ * produced by {@link ensureSessions}, returning a NEW layout (input untouched).
+ *
+ * Per-pane behaviour (keyed by the composite `[hostId][sessionCode]`):
+ * - `reattached` / `rebuilt` → adopt `entry.newCode`, refresh `cachedName` from
+ *   `entry.session.name`, and clear any `terminated` marker (the session is now
+ *   attachable again).
+ * - `failed` → keep the pane's code but mark `terminated: 'tmux-restarted'`.
+ *   The reason is FIXED for the restore path (codex plan-review): restore never
+ *   guesses `'session-closed'` / `'host-removed'`.
+ * - no matching entry → pane left exactly as-is.
+ *
+ * `opts.onlyTerminated` guards the "rebuild all sessions" action (spec §3.5):
+ * when true, only panes that ALREADY carry a `terminated` marker are touched;
+ * live panes are never rewritten even if their key matches a remap entry.
+ */
+export function remapLayoutSessions(
+  layout: PaneLayout,
+  remap: Remap,
+  opts?: { onlyTerminated?: boolean },
+): PaneLayout {
+  const onlyTerminated = opts?.onlyTerminated === true
+
+  // Collect the intended content updates first (scan does not mutate), then fold
+  // them into fresh layouts via updatePaneInLayout so the input is never touched.
+  const updates: Array<{ paneId: string; content: PaneContent }> = []
+
+  scanPaneTree(layout, (pane) => {
+    const content = pane.content
+    if (content.kind !== 'tmux-session') return
+    if (onlyTerminated && content.terminated === undefined) return
+
+    const entry = remap[content.hostId]?.[content.sessionCode]
+    if (!entry) return
+
+    if (entry.status === 'failed') {
+      updates.push({
+        paneId: pane.id,
+        content: { ...content, terminated: 'tmux-restarted' },
+      })
+      return
+    }
+
+    // reattached | rebuilt — adopt new code/name, clear terminated marker.
+    const { terminated: _cleared, ...rest } = content
+    void _cleared
+    updates.push({
+      paneId: pane.id,
+      content: { ...rest, sessionCode: entry.newCode, cachedName: entry.session.name },
+    })
+  })
+
+  let result = layout
+  for (const { paneId, content } of updates) {
+    result = updatePaneInLayout(result, paneId, content)
+  }
+  return result
 }
