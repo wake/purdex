@@ -4,7 +4,18 @@ import { scanPaneTree, updatePaneInLayout } from '../pane-tree'
 import type { PaneContent, PaneLayout, Tab } from '../../types/tab'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
-import type { EnsureReport, Remap, RemapEntry, SessionMeta, WorkspaceSnapshot } from './types'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { buildSnapshot } from './capture'
+import { readPrevSnapshot, writePrevSnapshot } from './storage'
+import { RestoreError } from './types'
+import type {
+  EnsureReport,
+  Remap,
+  RemapEntry,
+  RestoreReport,
+  SessionMeta,
+  WorkspaceSnapshot,
+} from './types'
 
 /**
  * Reconcile persisted per-host session metadata against each host's live
@@ -278,4 +289,168 @@ export function replaceTabSnapshot(snap: WorkspaceSnapshot): void {
     useWorkspaceStore.setState(oldWs)
     throw err
   }
+}
+
+// ---------------------------------------------------------------------------
+// T7 — restore orchestration
+// ---------------------------------------------------------------------------
+
+/**
+ * Determinism seam for the orchestrators that snapshot the pre-restore world
+ * into the `-prev` backup. `now` is injected so tests never touch the clock;
+ * `buildSnapshotFn` lets tests substitute the capture path entirely. The UI
+ * layer (a later task) passes a real `Date.now()`; everything defaults here so
+ * production callers can invoke the orchestrators with no second argument.
+ */
+export interface RestoreDeps {
+  now?: number
+  buildSnapshotFn?: typeof buildSnapshot
+}
+
+/**
+ * Collect the daemon sessions that were freshly rebuilt (their tmux processes
+ * now exist) but which the front-end could NOT attach to a pane — reported to
+ * the user via {@link RestoreError} so nothing is silently orphaned. hostId
+ * comes from the outer remap key; name/cwd from the created Session object.
+ */
+function collectRebuilt(remap: Remap): RestoreReport['rebuiltButUnattached'] {
+  const out: RestoreReport['rebuiltButUnattached'] = []
+  for (const [hostId, perHost] of Object.entries(remap)) {
+    for (const entry of Object.values(perHost)) {
+      if (entry.status === 'rebuilt') {
+        out.push({ hostId, name: entry.session.name, cwd: entry.session.cwd })
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Push the reconciled sessions from a {@link Remap} into the session store.
+ *
+ * CRITICAL (codex plan-review): `useSessionStore.replaceHost` replaces the
+ * ENTIRE session array for a host. Calling it per-entry would clobber every
+ * earlier session under that host. So we aggregate ALL `reattached`/`rebuilt`
+ * sessions for a host into ONE array and call `replaceHost` exactly once per
+ * host. `failed` entries contribute no Session object.
+ */
+export function syncSessionStore(remap: Remap): void {
+  const { replaceHost } = useSessionStore.getState()
+  for (const [hostId, perHost] of Object.entries(remap)) {
+    const sessions: Session[] = []
+    for (const entry of Object.values(perHost)) {
+      if (entry.status === 'reattached' || entry.status === 'rebuilt') {
+        sessions.push(entry.session)
+      }
+    }
+    replaceHost(hostId, sessions)
+  }
+}
+
+/** Rewrite every tab's layout in a snapshot against a remap (input untouched). */
+function rewriteSnapshotTabs(
+  snap: WorkspaceSnapshot,
+  remap: Remap,
+  opts: { onlyTerminated?: boolean },
+): WorkspaceSnapshot {
+  const tabs: Record<string, Tab> = {}
+  for (const [id, t] of Object.entries(snap.tabs)) {
+    tabs[id] = { ...t, layout: remapLayoutSessions(t.layout, remap, opts) }
+  }
+  return { ...snap, tabs }
+}
+
+/**
+ * "Rebuild all sessions" action (spec §3.5, product decision "a"):
+ * non-destructive rebuild of every restorable-and-dead session in the snapshot
+ * — including orphans not referenced by any current tab — WITHOUT replacing the
+ * live tab/workspace structure. Only panes ALREADY terminated adopt the new
+ * codes (`onlyTerminated`), so live panes are never disturbed.
+ *
+ * Does NOT write the `-prev` backup (there is nothing to undo — the existing
+ * structure is preserved) and cannot reject on a validation failure because it
+ * uses {@link replaceTabState}, which does not validate navigation refs.
+ */
+export async function rebuildAllSessions(snap: WorkspaceSnapshot): Promise<RestoreReport> {
+  const { remap, report } = await ensureSessions(snap.sessionMeta)
+
+  const { tabs, tabOrder, activeTabId } = useTabStore.getState()
+  const rewritten: Record<string, Tab> = {}
+  for (const [id, t] of Object.entries(tabs)) {
+    rewritten[id] = { ...t, layout: remapLayoutSessions(t.layout, remap, { onlyTerminated: true }) }
+  }
+
+  replaceTabState(rewritten, tabOrder, activeTabId)
+  syncSessionStore(remap)
+  return { ...report, rebuiltButUnattached: [] }
+}
+
+/**
+ * "Restore tab layout" action: adopt the SNAPSHOT's tab/workspace structure but
+ * only reattach still-live sessions — dead sessions are marked terminated
+ * (`rebuild:false`, no `createSession`). The pre-restore world is backed up to
+ * `-prev` (built with {@link buildSnapshot} so the PRIMARY snapshot key is left
+ * intact — plan §T2/B1) BEFORE any store mutation, enabling {@link undoLastRestore}.
+ */
+export async function restoreTabLayout(
+  snap: WorkspaceSnapshot,
+  deps?: RestoreDeps,
+): Promise<RestoreReport> {
+  return applySnapshotRestore(snap, { rebuild: false }, deps)
+}
+
+/**
+ * "Restore everything" action: full rebuild of restorable-dead sessions PLUS
+ * adopting the snapshot's tab/workspace structure. Backs up the pre-restore
+ * world to `-prev` (via {@link buildSnapshot}, B1) before mutating stores.
+ */
+export async function restoreAll(
+  snap: WorkspaceSnapshot,
+  deps?: RestoreDeps,
+): Promise<RestoreReport> {
+  return applySnapshotRestore(snap, { rebuild: true }, deps)
+}
+
+/**
+ * Shared body of {@link restoreTabLayout} / {@link restoreAll}: reconcile
+ * sessions, back up `-prev`, then atomically replace the tab+workspace stores.
+ * If {@link replaceTabSnapshot} throws (bad navigation refs / setState failure),
+ * the daemon sessions we rebuilt stay alive — they are surfaced in
+ * `RestoreError.report.rebuiltButUnattached` (R3 B) and the front-end stores are
+ * rolled back inside {@link replaceTabSnapshot} (T6). We never delete daemon
+ * sessions on this path.
+ */
+async function applySnapshotRestore(
+  snap: WorkspaceSnapshot,
+  ensureOpts: { rebuild: boolean },
+  deps?: RestoreDeps,
+): Promise<RestoreReport> {
+  const now = deps?.now ?? Date.now()
+  const build = deps?.buildSnapshotFn ?? buildSnapshot
+
+  const { remap, report } = await ensureSessions(snap.sessionMeta, ensureOpts)
+  const rewritten = rewriteSnapshotTabs(snap, remap, {})
+
+  // B1: back up the CURRENT world before mutating stores. buildSnapshot MUST be
+  // used (never captureSnapshot) so the primary restore-source key is untouched.
+  writePrevSnapshot(await build(now))
+
+  try {
+    replaceTabSnapshot(rewritten)
+  } catch (cause) {
+    throw new RestoreError({ ...report, rebuiltButUnattached: collectRebuilt(remap) }, cause)
+  }
+
+  syncSessionStore(remap)
+  return { ...report, rebuiltButUnattached: [] }
+}
+
+/**
+ * Undo the most recent restore by replaying the `-prev` backup through
+ * {@link restoreAll}. Returns `null` when there is no backup to undo.
+ */
+export async function undoLastRestore(deps?: RestoreDeps): Promise<RestoreReport | null> {
+  const prev = readPrevSnapshot()
+  if (!prev) return null
+  return restoreAll(prev, deps)
 }

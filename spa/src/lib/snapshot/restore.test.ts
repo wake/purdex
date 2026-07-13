@@ -4,15 +4,23 @@ import type { Session } from '../host-api'
 import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import type { Remap } from './types'
 import type { SessionMeta, WorkspaceSnapshot } from './types'
+import { RestoreError } from './types'
 import {
   ensureSessions,
+  rebuildAllSessions,
   remapLayoutSessions,
   replaceTabSnapshot,
   replaceTabState,
+  restoreAll,
+  restoreTabLayout,
+  syncSessionStore,
+  undoLastRestore,
   validateSnapshotConsistency,
 } from './restore'
+import { readPrevSnapshot } from './storage'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
+import { useSessionStore } from '../../stores/useSessionStore'
 
 vi.mock('../host-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../host-api')>()),
@@ -631,5 +639,255 @@ describe('replaceTabSnapshot / replaceTabState', () => {
     const w = readWs()
     expect(w.workspaces).toEqual(seedWorkspaces())
     expect(w.activeWorkspaceId).toBe('oldws')
+  })
+})
+
+function tmuxTab(
+  id: string,
+  hostId: string,
+  sessionCode: string,
+  overrides?: Partial<Extract<PaneContent, { kind: 'tmux-session' }>>,
+): Tab {
+  return {
+    id,
+    pinned: false,
+    locked: false,
+    createdAt: 0,
+    layout: tmuxPane(`pane-${id}`, hostId, sessionCode, overrides),
+  }
+}
+
+function paneOf(t: Tab): Extract<PaneContent, { kind: 'tmux-session' }> {
+  return tmux((t.layout as { pane: { content: PaneContent } }).pane.content)
+}
+
+describe('T7 orchestration', () => {
+  const resetStores = (): void => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    vi.mocked(listSessions).mockReset()
+    vi.mocked(createSession).mockReset()
+    resetStores()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    resetStores()
+    localStorage.clear()
+  })
+
+  it('1. rebuildAllSessions rebuilds ALL restorable-dead incl orphans; no -prev written', async () => {
+    const sessionMeta: Record<string, Record<string, SessionMeta>> = {
+      hostA: {
+        s1: meta({ hostId: 'hostA', sessionCode: 's1', cwd: '/a' }),
+        s2: meta({ hostId: 'hostA', sessionCode: 's2', cwd: '/b' }),
+        s3: meta({ hostId: 'hostA', sessionCode: 's3', cwd: '/c' }),
+        s4: meta({ hostId: 'hostA', sessionCode: 's4', cwd: '/d' }), // orphan (no tab)
+        s5: meta({ hostId: 'hostA', sessionCode: 's5', cwd: '/e' }), // orphan (no tab)
+      },
+    }
+    // Current tabs reference s1..s3, each already marked terminated.
+    useTabStore.setState({
+      tabs: {
+        t1: tmuxTab('t1', 'hostA', 's1', { terminated: 'session-closed' }),
+        t2: tmuxTab('t2', 'hostA', 's2', { terminated: 'session-closed' }),
+        t3: tmuxTab('t3', 'hostA', 's3', { terminated: 'session-closed' }),
+      },
+      tabOrder: ['t1', 't2', 't3'],
+      activeTabId: 't1',
+      visitHistory: [],
+    })
+    vi.mocked(listSessions).mockResolvedValue([])
+    vi.mocked(createSession).mockImplementation(async (_h, name) => session({ code: `new-${name}`, name }))
+
+    const report = await rebuildAllSessions({ ...validSnapshot(), sessionMeta })
+
+    // All 5 restorable-dead sessions rebuilt (including the 2 orphans).
+    expect(createSession).toHaveBeenCalledTimes(5)
+    expect(report.rebuilt).toBe(5)
+    expect(report.rebuiltButUnattached).toEqual([])
+
+    const s = useTabStore.getState()
+    // Structure unchanged; only terminated panes adopt the new codes.
+    expect(s.tabOrder).toEqual(['t1', 't2', 't3'])
+    expect(paneOf(s.tabs.t1).sessionCode).toBe('new-s1')
+    expect(paneOf(s.tabs.t1).terminated).toBeUndefined()
+    expect(paneOf(s.tabs.t3).sessionCode).toBe('new-s3')
+
+    // rebuildAllSessions must NOT write the -prev backup.
+    expect(readPrevSnapshot()).toBeNull()
+  })
+
+  it('2. restoreTabLayout: dead terminated (no createSession), live reattached; -prev pre-mutation; stores = snapshot', async () => {
+    // OLD world uses new-tab panes so the -prev capture makes no listSessions call.
+    useTabStore.setState({ tabs: { oldT: tab('oldT') }, tabOrder: ['oldT'], activeTabId: 'oldT', visitHistory: [] })
+    useWorkspaceStore.setState({
+      workspaces: [workspace({ id: 'oldws', tabs: ['oldT'], activeTabId: 'oldT' })],
+      activeWorkspaceId: 'oldws',
+    })
+
+    const snap: WorkspaceSnapshot = {
+      version: 1,
+      capturedAt: 0,
+      tabs: { tl: tmuxTab('tl', 'hostA', 'live1'), td: tmuxTab('td', 'hostA', 'dead1') },
+      tabOrder: ['tl', 'td'],
+      activeTabId: 'tl',
+      workspaces: [workspace({ id: 'ws1', tabs: ['tl', 'td'], activeTabId: 'tl' })],
+      activeWorkspaceId: 'ws1',
+      sessionMeta: {
+        hostA: {
+          live1: meta({ hostId: 'hostA', sessionCode: 'live1' }),
+          dead1: meta({ hostId: 'hostA', sessionCode: 'dead1' }),
+        },
+      },
+    }
+    vi.mocked(listSessions).mockResolvedValue([session({ code: 'live1', name: 'live1' })])
+
+    await restoreTabLayout(snap, { now: 123 })
+
+    expect(createSession).not.toHaveBeenCalled()
+    const s = useTabStore.getState()
+    expect(s.tabOrder).toEqual(['tl', 'td'])
+    expect(paneOf(s.tabs.tl).sessionCode).toBe('live1')
+    expect(paneOf(s.tabs.tl).terminated).toBeUndefined()
+    expect(paneOf(s.tabs.td).terminated).toBe('tmux-restarted')
+
+    const w = useWorkspaceStore.getState()
+    expect(w.workspaces).toEqual(snap.workspaces)
+    expect(w.activeWorkspaceId).toBe('ws1')
+
+    // -prev captured the OLD world → it was built BEFORE the store mutation.
+    const prev = readPrevSnapshot()
+    expect(prev).not.toBeNull()
+    expect(Object.keys(prev!.tabs)).toEqual(['oldT'])
+  })
+
+  it('3. restoreAll: full rebuild + replace = snapshot; -prev written', async () => {
+    useTabStore.setState({ tabs: { oldT: tab('oldT') }, tabOrder: ['oldT'], activeTabId: 'oldT', visitHistory: [] })
+    useWorkspaceStore.setState({
+      workspaces: [workspace({ id: 'oldws', tabs: ['oldT'], activeTabId: 'oldT' })],
+      activeWorkspaceId: 'oldws',
+    })
+
+    const snap: WorkspaceSnapshot = {
+      version: 1,
+      capturedAt: 0,
+      tabs: { tl: tmuxTab('tl', 'hostA', 'live1'), td: tmuxTab('td', 'hostA', 'dead1') },
+      tabOrder: ['tl', 'td'],
+      activeTabId: 'tl',
+      workspaces: [workspace({ id: 'ws1', tabs: ['tl', 'td'], activeTabId: 'tl' })],
+      activeWorkspaceId: 'ws1',
+      sessionMeta: {
+        hostA: {
+          live1: meta({ hostId: 'hostA', sessionCode: 'live1' }),
+          dead1: meta({ hostId: 'hostA', sessionCode: 'dead1', name: 'd1', cwd: '/w' }),
+        },
+      },
+    }
+    vi.mocked(listSessions).mockResolvedValue([session({ code: 'live1', name: 'live1' })])
+    vi.mocked(createSession).mockImplementation(async (_h, name) => session({ code: `new-${name}`, name }))
+
+    await restoreAll(snap, { now: 999 })
+
+    expect(createSession).toHaveBeenCalledTimes(1)
+    const s = useTabStore.getState()
+    expect(paneOf(s.tabs.tl).sessionCode).toBe('live1')
+    expect(paneOf(s.tabs.td).sessionCode).toBe('new-d1')
+    expect(paneOf(s.tabs.td).terminated).toBeUndefined()
+    expect(useWorkspaceStore.getState().workspaces).toEqual(snap.workspaces)
+    expect(readPrevSnapshot()).not.toBeNull()
+  })
+
+  it('4. undoLastRestore restores the pre-restore world captured in -prev', async () => {
+    // pre-A world (new-tab panes → deterministic buildSnapshot, no listSessions).
+    useTabStore.setState({ tabs: { preA: tab('preA') }, tabOrder: ['preA'], activeTabId: 'preA', visitHistory: [] })
+    useWorkspaceStore.setState({
+      workspaces: [workspace({ id: 'wsPre', tabs: ['preA'], activeTabId: 'preA' })],
+      activeWorkspaceId: 'wsPre',
+    })
+    vi.mocked(listSessions).mockResolvedValue([])
+
+    const A = validSnapshot() // t1/t2, ws1, empty sessionMeta
+    await restoreAll(A, { now: 1 })
+    expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual(['t1', 't2'])
+
+    const undone = await undoLastRestore({ now: 2 })
+    expect(undone).not.toBeNull()
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual(['preA'])
+    expect(useTabStore.getState().tabOrder).toEqual(['preA'])
+    expect(useWorkspaceStore.getState().workspaces[0].id).toBe('wsPre')
+  })
+
+  it('4b. undoLastRestore with no -prev present returns null', async () => {
+    expect(readPrevSnapshot()).toBeNull()
+    expect(await undoLastRestore()).toBeNull()
+  })
+
+  it('5. restoreAll rejects with RestoreError listing rebuiltButUnattached when replace fails; stores unchanged', async () => {
+    useTabStore.setState({ tabs: { oldT: tab('oldT') }, tabOrder: ['oldT'], activeTabId: 'oldT', visitHistory: [] })
+    useWorkspaceStore.setState({
+      workspaces: [workspace({ id: 'oldws', tabs: ['oldT'], activeTabId: 'oldT' })],
+      activeWorkspaceId: 'oldws',
+    })
+
+    const snap: WorkspaceSnapshot = {
+      version: 1,
+      capturedAt: 0,
+      tabs: { td: tmuxTab('td', 'hostA', 'dead1') },
+      tabOrder: ['td'],
+      activeTabId: 'ghost', // navigation ref fails validation → replaceTabSnapshot throws
+      workspaces: [workspace({ id: 'ws1', tabs: ['td'], activeTabId: 'td' })],
+      activeWorkspaceId: 'ws1',
+      sessionMeta: { hostA: { dead1: meta({ hostId: 'hostA', sessionCode: 'dead1', name: 'd1', cwd: '/w' }) } },
+    }
+    vi.mocked(listSessions).mockResolvedValue([])
+    vi.mocked(createSession).mockResolvedValue(session({ code: 'new-d1', name: 'd1', cwd: '/w' }))
+
+    let err: unknown
+    await restoreAll(snap, { now: 5 }).catch((e) => {
+      err = e
+    })
+
+    expect(err).toBeInstanceOf(RestoreError)
+    expect((err as RestoreError).report.rebuiltButUnattached).toEqual([
+      { hostId: 'hostA', name: 'd1', cwd: '/w' },
+    ])
+    // Daemon session was created but the front-end stores are rolled back (T6).
+    expect(useTabStore.getState().tabOrder).toEqual(['oldT'])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('oldws')
+  })
+
+  it('6. syncSessionStore places rebuilt/reattached sessions into the session store', () => {
+    const remap: Remap = {
+      hostA: {
+        dead1: { status: 'rebuilt', newCode: 'new1', session: session({ code: 'new1', name: 'N1' }) },
+      },
+    }
+    syncSessionStore(remap)
+    const sessions = useSessionStore.getState().sessions.hostA
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0].code).toBe('new1')
+  })
+
+  it('7. syncSessionStore aggregates per host: ONE replaceHost call carrying BOTH sessions (no clobber)', () => {
+    const remap: Remap = {
+      hostA: {
+        a: { status: 'reattached', newCode: 'a', session: session({ code: 'a', name: 'A' }) },
+        b: { status: 'rebuilt', newCode: 'b', session: session({ code: 'b', name: 'B' }) },
+      },
+    }
+    const spy = vi.spyOn(useSessionStore.getState(), 'replaceHost')
+
+    syncSessionStore(remap)
+
+    const callsForHostA = spy.mock.calls.filter((c) => c[0] === 'hostA')
+    expect(callsForHostA).toHaveLength(1)
+    expect(callsForHostA[0][1]).toHaveLength(2)
+    expect(useSessionStore.getState().sessions.hostA).toHaveLength(2)
   })
 })
