@@ -1,7 +1,9 @@
 import { createSession, listSessions } from '../host-api'
 import type { Session } from '../host-api'
 import { scanPaneTree, updatePaneInLayout } from '../pane-tree'
-import type { PaneContent, PaneLayout } from '../../types/tab'
+import type { PaneContent, PaneLayout, Tab } from '../../types/tab'
+import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
 import type { EnsureReport, Remap, RemapEntry, SessionMeta, WorkspaceSnapshot } from './types'
 
 /**
@@ -200,4 +202,80 @@ export function validateSnapshotConsistency(
   }
 
   return { ok: true }
+}
+
+/**
+ * Replace ONLY the tab store's navigation state (does NOT touch the workspace
+ * store). `visitHistory` is NOT persisted, so it is not part of the snapshot;
+ * instead the CURRENT history is filtered to the ids that still exist in the
+ * new `tabOrder` (a subset of the new tab set), so closing the active tab
+ * afterwards still resolves to a live tab rather than a ghost.
+ */
+export function replaceTabState(
+  tabs: Record<string, Tab>,
+  tabOrder: string[],
+  activeTabId: string | null,
+): void {
+  const order = new Set(tabOrder)
+  const visitHistory = useTabStore.getState().visitHistory.filter((id) => order.has(id))
+  useTabStore.setState({ tabs, tabOrder, activeTabId, visitHistory })
+}
+
+/**
+ * Adopt a {@link WorkspaceSnapshot} into BOTH the tab store and the workspace
+ * store with best-effort atomicity.
+ *
+ * Sequence:
+ * 1. `validateSnapshotConsistency` — on failure THROW before touching any
+ *    store (navigation refs must be sound before the UI dereferences them).
+ * 2. Snapshot the OLD values of both stores for rollback.
+ * 3. Replace the tab store, THEN the workspace store.
+ * 4. If ANY setState throws, roll BOTH stores back to the captured old values
+ *    and rethrow — never leave a half-applied state. If the FIRST (tab)
+ *    setState throws, the workspace store was never given new values, so its
+ *    rollback is a no-op restoring the untouched old world.
+ *
+ * `visitHistory` is filtered against `snap.tabOrder` exactly as in
+ * {@link replaceTabState} (it is not carried in the snapshot).
+ */
+export function replaceTabSnapshot(snap: WorkspaceSnapshot): void {
+  const result = validateSnapshotConsistency(snap)
+  if (!result.ok) {
+    throw new Error(`snapshot consistency check failed: ${result.reason}`)
+  }
+
+  const tabState = useTabStore.getState()
+  const oldTab = {
+    tabs: tabState.tabs,
+    tabOrder: tabState.tabOrder,
+    activeTabId: tabState.activeTabId,
+    visitHistory: tabState.visitHistory,
+  }
+  const wsState = useWorkspaceStore.getState()
+  const oldWs = {
+    workspaces: wsState.workspaces,
+    activeWorkspaceId: wsState.activeWorkspaceId,
+  }
+
+  const order = new Set(snap.tabOrder)
+  const visitHistory = tabState.visitHistory.filter((id) => order.has(id))
+
+  try {
+    useTabStore.setState({
+      tabs: snap.tabs,
+      tabOrder: snap.tabOrder,
+      activeTabId: snap.activeTabId,
+      visitHistory,
+    })
+    useWorkspaceStore.setState({
+      workspaces: snap.workspaces,
+      activeWorkspaceId: snap.activeWorkspaceId,
+    })
+  } catch (err) {
+    // Roll BOTH stores back. If the tab setState threw, this restores it; the
+    // workspace rollback restores the (untouched) old world either way.
+    useTabStore.setState(oldTab)
+    useWorkspaceStore.setState(oldWs)
+    throw err
+  }
 }

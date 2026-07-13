@@ -1,10 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSession, listSessions } from '../host-api'
 import type { Session } from '../host-api'
 import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import type { Remap } from './types'
 import type { SessionMeta, WorkspaceSnapshot } from './types'
-import { ensureSessions, remapLayoutSessions, validateSnapshotConsistency } from './restore'
+import {
+  ensureSessions,
+  remapLayoutSessions,
+  replaceTabSnapshot,
+  replaceTabState,
+  validateSnapshotConsistency,
+} from './restore'
+import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
 
 vi.mock('../host-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../host-api')>()),
@@ -479,5 +487,149 @@ describe('validateSnapshotConsistency', () => {
       pane: { id: 'pane-t1', content: { kind: 'settings', scope: { workspaceId: 'ws-does-not-exist' } } },
     }
     expect(validateSnapshotConsistency(snap)).toEqual({ ok: true })
+  })
+})
+
+describe('replaceTabSnapshot / replaceTabState', () => {
+  // Seeded "OLD" world, deliberately disjoint from validSnapshot() ("NEW") so
+  // every assertion can tell restored-old apart from applied-new.
+  const seedTabs = (): Record<string, Tab> => ({ old1: tab('old1') })
+  const seedWorkspaces = (): Workspace[] => [
+    workspace({ id: 'oldws', tabs: ['old1'], activeTabId: 'old1' }),
+  ]
+
+  function readTab() {
+    const s = useTabStore.getState()
+    return { tabs: s.tabs, tabOrder: s.tabOrder, activeTabId: s.activeTabId, visitHistory: s.visitHistory }
+  }
+  function readWs() {
+    const s = useWorkspaceStore.getState()
+    return { workspaces: s.workspaces, activeWorkspaceId: s.activeWorkspaceId }
+  }
+
+  beforeEach(() => {
+    // Merge-mode setState, explicitly listing every mutable field we rely on so
+    // state cannot leak across tests.
+    useTabStore.setState({
+      tabs: seedTabs(),
+      tabOrder: ['old1'],
+      activeTabId: 'old1',
+      visitHistory: ['old1'],
+    })
+    useWorkspaceStore.setState({
+      workspaces: seedWorkspaces(),
+      activeWorkspaceId: 'oldws',
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    // Reset to clean defaults so no state bleeds into other suites.
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
+  })
+
+  it('1. valid snapshot → both stores equal snapshot; stale visitHistory ids dropped', () => {
+    // Current visitHistory has a live id (t2, in the new tabOrder) and a stale
+    // id (old1, gone from the new tab set). After replace only t2 survives.
+    useTabStore.setState({ visitHistory: ['t2', 'old1'] })
+    const snap = validSnapshot()
+
+    replaceTabSnapshot(snap)
+
+    const t = readTab()
+    expect(t.tabs).toEqual(snap.tabs)
+    expect(t.tabOrder).toEqual(['t1', 't2'])
+    expect(t.activeTabId).toBe('t1')
+    expect(t.visitHistory).toEqual(['t2']) // old1 dropped, t2 kept
+
+    const w = readWs()
+    expect(w.workspaces).toEqual(snap.workspaces)
+    expect(w.activeWorkspaceId).toBe('ws1')
+  })
+
+  it('2. malformed snapshot → throws and BOTH stores completely unchanged', () => {
+    const snap = validSnapshot()
+    snap.activeTabId = 'ghost' // fails validate check 2
+
+    expect(() => replaceTabSnapshot(snap)).toThrow()
+
+    const t = readTab()
+    expect(t.tabs).toEqual(seedTabs())
+    expect(t.tabOrder).toEqual(['old1'])
+    expect(t.activeTabId).toBe('old1')
+    expect(t.visitHistory).toEqual(['old1'])
+
+    const w = readWs()
+    expect(w.workspaces).toEqual(seedWorkspaces())
+    expect(w.activeWorkspaceId).toBe('oldws')
+  })
+
+  it('3. second setState (workspace) throws → BOTH stores roll back to old values', () => {
+    // Throw only on the replace call; the rollback call proceeds via the spy's
+    // call-through default.
+    vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+      throw new Error('boom-workspace')
+    })
+
+    expect(() => replaceTabSnapshot(validSnapshot())).toThrow('boom-workspace')
+
+    const t = readTab()
+    expect(t.tabs).toEqual(seedTabs())
+    expect(t.tabOrder).toEqual(['old1'])
+    expect(t.activeTabId).toBe('old1')
+    expect(t.visitHistory).toEqual(['old1'])
+
+    const w = readWs()
+    expect(w.workspaces).toEqual(seedWorkspaces())
+    expect(w.activeWorkspaceId).toBe('oldws')
+  })
+
+  it('4. first setState (tab) throws → workspace never replaced, tab rolled back, no half-apply', () => {
+    const tabSpy = vi
+      .spyOn(useTabStore, 'setState')
+      .mockImplementationOnce(() => {
+        throw new Error('boom-tab')
+      })
+    const wsSpy = vi.spyOn(useWorkspaceStore, 'setState')
+
+    expect(() => replaceTabSnapshot(validSnapshot())).toThrow('boom-tab')
+
+    // Workspace store was never given the NEW values (activeWorkspaceId 'ws1').
+    expect(wsSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ activeWorkspaceId: 'ws1' }),
+    )
+    // Workspace store remains the seeded OLD world.
+    const w = readWs()
+    expect(w.workspaces).toEqual(seedWorkspaces())
+    expect(w.activeWorkspaceId).toBe('oldws')
+
+    // Tab store rolled back to seeded OLD world (rollback setState is the spy's
+    // second call, which calls through).
+    expect(tabSpy).toHaveBeenCalled()
+    const t = readTab()
+    expect(t.tabs).toEqual(seedTabs())
+    expect(t.tabOrder).toEqual(['old1'])
+    expect(t.activeTabId).toBe('old1')
+    expect(t.visitHistory).toEqual(['old1'])
+  })
+
+  it('5. replaceTabState mutates ONLY the tab store; workspace store untouched', () => {
+    // visitHistory keeps ids present in the new tabOrder (n1), drops the rest.
+    useTabStore.setState({ visitHistory: ['n1', 'old1'] })
+
+    const newTabs: Record<string, Tab> = { n1: tab('n1') }
+    replaceTabState(newTabs, ['n1'], 'n1')
+
+    const t = readTab()
+    expect(t.tabs).toEqual(newTabs)
+    expect(t.tabOrder).toEqual(['n1'])
+    expect(t.activeTabId).toBe('n1')
+    expect(t.visitHistory).toEqual(['n1']) // old1 dropped
+
+    // Workspace store completely untouched.
+    const w = readWs()
+    expect(w.workspaces).toEqual(seedWorkspaces())
+    expect(w.activeWorkspaceId).toBe('oldws')
   })
 })
