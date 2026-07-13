@@ -52,25 +52,40 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
       const sessions = await listSessions(hostId)
       for (const ref of refs) {
         const live = sessions.find((s) => s.code === ref.sessionCode)
-        perHost[ref.sessionCode] = live
-          ? {
-              hostId,
-              sessionCode: ref.sessionCode,
-              name: live.name,
-              mode: ref.mode,
-              cwd: live.cwd,
-              currentCommand: live.current_command,
-              restorable: true,
-            }
-          : {
-              hostId,
-              sessionCode: ref.sessionCode,
-              name: ref.cachedName,
-              mode: ref.mode,
-              cwd: undefined,
-              restorable: false,
-              captureError: 'session-dead-at-capture',
-            }
+        perHost[ref.sessionCode] =
+          live && live.cwd
+            ? {
+                hostId,
+                sessionCode: ref.sessionCode,
+                name: live.name,
+                mode: ref.mode,
+                cwd: live.cwd,
+                currentCommand: live.current_command,
+                restorable: true,
+              }
+            : live
+              ? {
+                  // Live but no usable cwd: keep structure only, not restorable
+                  // (spec line 97 — cwd unknown must not feed createSession).
+                  // cwd stays undefined (spec line 76: not-captured means
+                  // undefined, never empty string); restorable stays false.
+                  hostId,
+                  sessionCode: ref.sessionCode,
+                  name: live.name,
+                  mode: ref.mode,
+                  cwd: undefined,
+                  currentCommand: live.current_command,
+                  restorable: false,
+                }
+              : {
+                  hostId,
+                  sessionCode: ref.sessionCode,
+                  name: ref.cachedName,
+                  mode: ref.mode,
+                  cwd: undefined,
+                  restorable: false,
+                  captureError: 'session-dead-at-capture',
+                }
       }
     } catch {
       for (const ref of refs) {

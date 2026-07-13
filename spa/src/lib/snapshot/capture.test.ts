@@ -151,6 +151,27 @@ describe('buildSnapshot / captureSnapshot', () => {
     })
   })
 
+  it('7. live session with empty cwd → not restorable, cwd stays undefined (not "")', async () => {
+    seedStores(
+      { t1: tab('t1', leaf('p1', tmuxContent('hostA', 'code1', 'cached1'))) },
+      ['t1'],
+      't1',
+    )
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ code: 'code1', name: 'live-name', cwd: '', current_command: 'bash' }),
+    ])
+
+    const result = await captureSnapshot(7000)
+    const stored = readSnapshot()!
+
+    expect(stored.sessionMeta.hostA.code1).toEqual({
+      hostId: 'hostA', sessionCode: 'code1', name: 'live-name', mode: 'terminal',
+      cwd: undefined, currentCommand: 'bash', restorable: false,
+    })
+    expect(stored.sessionMeta.hostA.code1.captureError).toBeUndefined()
+    expect(result).toEqual({ total: 1, resolved: 0, unresolved: 1 })
+  })
+
   it('5. no tmux panes → total=0, sessionMeta={}, still writes a snapshot', async () => {
     seedStores(
       { t1: tab('t1', leaf('p1', { kind: 'editor', source: { type: 'local' }, filePath: '/tmp/a.md' })) },
