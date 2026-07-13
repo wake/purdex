@@ -345,6 +345,11 @@ export function syncSessionStore(remap: Remap): void {
     const byCode = new Map<string, Session>(
       (state.sessions[hostId] ?? []).map((s) => [s.code, s]),
     )
+    // Drop this snapshot's own old codes first: a rebuilt oldCode→newCode (or a
+    // `failed` entry) must not leave the dead oldCode lingering as a ghost
+    // session. Unrelated live sessions on this host (not in the snapshot) are
+    // untouched, so they survive; reattached entries re-add their own code below.
+    for (const oldCode of Object.keys(perHost)) byCode.delete(oldCode)
     for (const entry of Object.values(perHost)) {
       if (entry.status === 'reattached' || entry.status === 'rebuilt') {
         byCode.set(entry.session.code, entry.session)
@@ -438,11 +443,12 @@ async function applySnapshotRestore(
   const { remap, report } = await ensureSessions(snap.sessionMeta, ensureOpts)
   const rewritten = rewriteSnapshotTabs(snap, remap, {})
 
-  // B1: back up the CURRENT world before mutating stores. buildSnapshot MUST be
-  // used (never captureSnapshot) so the primary restore-source key is untouched.
-  writePrevSnapshot(await build(now))
-
   try {
+    // B1: back up the CURRENT world before mutating stores. buildSnapshot MUST be
+    // used (never captureSnapshot) so the primary restore-source key is untouched.
+    // Kept inside the try so a backup-write failure (e.g. localStorage quota)
+    // still discloses the daemon sessions ensureSessions already created.
+    writePrevSnapshot(await build(now))
     replaceTabSnapshot(rewritten)
   } catch (cause) {
     throw new RestoreError({ ...report, rebuiltButUnattached: collectRebuilt(remap) }, cause)

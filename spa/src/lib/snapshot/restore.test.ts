@@ -909,4 +909,62 @@ describe('T7 orchestration', () => {
     // 'extra' must survive; the rebuilt 'new1' is upserted alongside it.
     expect(codes).toEqual(['extra', 'new1'])
   })
+
+  it('9. syncSessionStore drops the snapshot old code on rebuild (no ghost), keeping unrelated live sessions', () => {
+    // hostA store holds the OLD (now-dead) code plus an unrelated live session.
+    useSessionStore.setState({
+      sessions: {
+        hostA: [session({ code: 'old', name: 'Old' }), session({ code: 'extra', name: 'Extra' })],
+      },
+    })
+    const remap: Remap = {
+      hostA: {
+        old: { status: 'rebuilt', newCode: 'new', session: session({ code: 'new', name: 'New' }) },
+      },
+    }
+
+    syncSessionStore(remap)
+
+    const codes = useSessionStore.getState().sessions.hostA.map((s) => s.code).sort()
+    // 'old' must be gone (dead, replaced by 'new'); 'extra' preserved; 'new' added.
+    expect(codes).toEqual(['extra', 'new'])
+  })
+
+  it('10. restoreAll discloses rebuiltButUnattached when the -prev backup write fails; stores unchanged', async () => {
+    useTabStore.setState({ tabs: { oldT: tab('oldT') }, tabOrder: ['oldT'], activeTabId: 'oldT', visitHistory: [] })
+    useWorkspaceStore.setState({
+      workspaces: [workspace({ id: 'oldws', tabs: ['oldT'], activeTabId: 'oldT' })],
+      activeWorkspaceId: 'oldws',
+    })
+
+    // Snapshot has VALID navigation refs, so only the backup write can fail here.
+    const snap: WorkspaceSnapshot = {
+      version: 1,
+      capturedAt: 0,
+      tabs: { td: tmuxTab('td', 'hostA', 'dead1') },
+      tabOrder: ['td'],
+      activeTabId: 'td',
+      workspaces: [workspace({ id: 'ws1', tabs: ['td'], activeTabId: 'td' })],
+      activeWorkspaceId: 'ws1',
+      sessionMeta: { hostA: { dead1: meta({ hostId: 'hostA', sessionCode: 'dead1', name: 'd1', cwd: '/w' }) } },
+    }
+    vi.mocked(listSessions).mockResolvedValue([])
+    vi.mocked(createSession).mockResolvedValue(session({ code: 'new-d1', name: 'd1', cwd: '/w' }))
+
+    let err: unknown
+    await restoreAll(snap, {
+      now: 5,
+      buildSnapshotFn: () => Promise.reject(new Error('quota exceeded')),
+    }).catch((e) => {
+      err = e
+    })
+
+    expect(err).toBeInstanceOf(RestoreError)
+    expect((err as RestoreError).report.rebuiltButUnattached).toEqual([
+      { hostId: 'hostA', name: 'd1', cwd: '/w' },
+    ])
+    // Backup failed before any store mutation → stores untouched.
+    expect(useTabStore.getState().tabOrder).toEqual(['oldT'])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('oldws')
+  })
 })
