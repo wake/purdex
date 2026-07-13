@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.316] - 2026-07-14
+
+### Fix(new-tab): 「Bring in an open tab」僅在分割格顯示，不再外洩到全頁新分頁 (#913)
+
+「Bring in an open tab」區塊（alpha.315 #910 引入）原本會出現在**每個獨立的全頁新分頁**。根因：全頁新分頁本身就是「1 tab + 1 pane」，一律帶著 `currentTabId + currentPaneId`，而這是唯一的顯示 gate。此區塊只有在 new-tab pane 是**分割（split）的其中一格**時才有意義（把另一個 tab 的內容拉進這格對照檢視）。
+
+- `NewTabPage` 的 `bringInCandidates` 新增 gate：僅當擁有此 pane 的 tab 為分割狀態（`countLeaves(tab.layout) > 1`）時才列出候選。全頁新分頁回到原本裸啟動畫面（`h-full` 捲動契約不變），區塊只在 split 一格時重新出現。
+- 測試：新增「全頁新分頁即使有多個 movable tab 也不渲染區塊」；既有 bring-in 測試改以 `splitPaneBlank` 建構真實分割反映新語意；保留 current tab 不列入自身候選的驗證。全套 vitest 3820 綠 / lint / build。codex 兩輪跨模型審（標準 + 對抗性三視角）皆 approve、無實質發現。
+
 ## [1.0.0-alpha.315] - 2026-07-11
 
 ### Feat(panes): 跨 workspace 把已開分頁拉進分割格 (#910)
