@@ -3,7 +3,7 @@
 **Date**: 2026-07-13
 **Branch**: `worktree-workspace-snapshot`
 **Author**: Claude (Opus 4.8) + Wake
-**狀態**: Draft v3。v2 納入 codex R1 六項修正（#1 複合鍵 Blocker、#2 visitHistory、#3 重建 remap 收窄、#4 best-effort 取代、#5 restorable、#6 session store 同步）。v3 納入 codex R2 修正（validateSnapshotConsistency 拆五條、restore 對 daemon 副作用非交易性揭露、sync 檔路徑）**與使用者定案的產品決策**：「重建所有 session」重建快照裡**所有可觀測 session（不收窄、orphan 為預期）**，明確 override codex R2 對 orphan 的收窄建議（§3.5）。
+**狀態**: Draft v3。v2 納入 codex R1 六項修正（#1 複合鍵 Blocker、#2 visitHistory、#3 重建 remap 收窄、#4 best-effort 取代、#5 restorable、#6 session store 同步）。v3 納入 codex R2 修正（validateSnapshotConsistency 拆五條、restore 對 daemon 副作用非交易性揭露、sync 檔路徑）**與使用者定案的產品決策**：「重建所有 session」重建快照裡**所有可觀測 session（不收窄、orphan 為預期）**，明確 override codex R2 對 orphan 的收窄建議（§3.5）。**已通過 codex R3 複審（在接受 orphan 產品決策前提下 approve、可據以寫 plan）**，R3 兩小修已納入：§5 `createSession` 筆數斷言精確化（活著 session 走 reattached 不計入）、§3.5 validateSnapshotConsistency 範圍界定（僅驗導航參照）。
 
 ---
 
@@ -158,7 +158,7 @@ type Remap = Record<string /* hostId */, Record<string /* oldCode */, RemapEntry
 
 **取代語意（best-effort，非真原子）（codex #4）**：兩 store 各自 `setState` **並非真原子** —— `browserStorage.setItem` 每次立即 `localStorage.setItem` + `syncManager.notify`，其他視窗會立刻 rehydrate 單一 key，故中間有可觀察空窗。改用 coordinator：
 
-- `validateSnapshotConsistency(snapshot)`（codex R2 拆明五條，修正「全部驗在 `tabs`」的矛盾）：①`workspace.tabs` 每個 id ∈ `tabs`；②`activeTabId` ∈ `tabs`（或 `null`）；③各 `workspace.activeTabId` ∈ 該 `workspace.tabs`；④`activeWorkspaceId` ∈ `workspaces`（**非** `tabs`）或 `null`；⑤`tabOrder` 每個 id ∈ `tabs`。任一不通過則中止、不動任何 store。
+- `validateSnapshotConsistency(snapshot)`（codex R2 拆明五條，修正「全部驗在 `tabs`」的矛盾）：①`workspace.tabs` 每個 id ∈ `tabs`；②`activeTabId` ∈ `tabs`（或 `null`）；③各 `workspace.activeTabId` ∈ 該 `workspace.tabs`；④`activeWorkspaceId` ∈ `workspaces`（**非** `tabs`）或 `null`；⑤`tabOrder` 每個 id ∈ `tabs`。任一不通過則中止、不動任何 store。**範圍界定（codex R3）**：本檢查僅涵蓋 tab/workspace **導航參照**；**不驗** pane content 內部語意參照 —— 例如 `settings` pane 的 `scope.workspaceId` 指向已刪 workspace，該情況既有 UI 已顯示 `Workspace not found`、非致命，plan 可評估是否補驗（本次不擴張範圍）。
 - `replaceTabSnapshot(snapshot)`：先驗證 → 保存兩 store 舊值 → 依序 setState（tab 先、workspace 後）→ 任一步丟錯則**用舊值 rollback** 兩 store。
 - **visitHistory（codex #2）**：`useTabStore.visitHistory` 非 persist、workspace 關 tab 讀它選下一個（`workspace/store.ts:195`）；取代時把 `visitHistory` filter 成新 `tabOrder` 子集（移除指向已消失 tab 的引用），連同 `tabs/tabOrder/activeTabId` 一起 set。
 - spec 明訂此為 **best-effort 一致，非跨視窗真原子**。
@@ -220,7 +220,7 @@ type Remap = Record<string /* hostId */, Record<string /* oldCode */, RemapEntry
   - **取代一致性（#4 + R2 C）**：`validateSnapshotConsistency` 五條參照檢查各自擋掉對應壞快照（含 `activeWorkspaceId` 不在 `workspaces`、`tabOrder` 含幽靈 id、`workspace.activeTabId` 不在該 workspace）；第二個 store setState 丟錯時兩 store 皆 rollback。
   - **visitHistory（#2）**：取代後不含已消失 tab 引用；「restore 後立刻關 active tab」選到的下一個 tab 正確。
   - **session store 同步（#6）**：`rebuilt` 後 `useSessionStore` 有新 session、pane `cachedName` = daemon 回傳實際 name。
-  - **重建範圍 + remap 收窄（#3 + a 點產品決策）**：「重建所有 session」對整份 `sessionMeta` 重建（含當前 tab 未引用的 orphan —— 斷言 `createSession` 呼叫筆數 = restorable 總數，**不因當前 tab 未引用而略過**）；但 remap 只改 `terminated` pane —— 當前有一活著且 code 恰等於某 snapshot 舊 code 的 pane 不被動到。
+  - **重建範圍 + remap 收窄（#3 + a 點產品決策）**：「重建所有 session」對整份 `sessionMeta` 重建 —— 斷言 `createSession` 呼叫筆數 = 快照中 `restorable` **且** restore 當下對帳為「已死」的 session 數（即 🔴，含當前 tab 未引用的 orphan）；活著的 session 走 `reattached`、**不計入** create 筆數（codex R3）；且不因當前 tab 未引用而略過任何已死 orphan。但 remap 只改 `terminated` pane —— 當前有一活著且 code 恰等於某 snapshot 舊 code 的 pane 不被動到。
   - **daemon 副作用揭露（R2 B）**：`replaceTabSnapshot` 驗證失敗 / rollback 時，回傳含「已重建但未接上」session 清單供 UI 揭露。
   - 三動作語意各自正確；`-prev` 於取代式動作前寫入、「復原上次還原」能還回去。
   - **撞名邊界（§8.1）**：先寫測試釘住 daemon `createSession` 對同名 session 的行為（探明後補斷言）。
