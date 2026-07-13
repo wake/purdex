@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.317] - 2026-07-14
+
+### Fix(panes): 分割後 pane 內容無法捲動 — split 容器改用 h-full 取得有界高 (#916)
+
+分割（pane split）後 pane 內容無法捲動（如 new-tab 起始畫面在半高分割格搆不到底部）；全頁單葉分頁不受影響。
+
+- **根因**：頂層 split 直接掛在 `TabContent` 的 `<div class="absolute" style="inset:0">` **block** 容器下，而 split renderer 的 root 用 `flex-1`——flex-item 屬性在 block 父層失效 → split 容器塌陷成 content height → 往下每層 pane 失去有界高 → pane 內 `overflow-y-auto` 撐到全內容高、永不可捲，尾端被上層 `overflow-hidden` 裁掉。單葉全頁分頁走 `h-full w-full`（有界）故正常，形成「全頁可捲、分割不可捲」的差異。
+- **修法**：split 容器 root 由 `flex-1 flex …` 改為 `h-full w-full flex …`，對 absolute wrapper 的有界高解析成功並級聯穿透巢狀 split（其父為 flex wrapper，100% 同樣可解析），`w-full` 維持橫向分割滿寬。
+- 新增結構守衛測試（split root 必含 `h-full w-full`、不含 `flex-1`）。jsdom 不量佈局，另以 headless-chromium 佈局實測確認頂層與巢狀 split 皆從 `canScroll:false` → `canScroll:true`、last item 可達。全套 vitest 3821 綠 / lint / build。codex 兩輪（標準+對抗性三視角）皆 approve、無實質發現。純 SPA→HMR。
+
 ## [1.0.0-alpha.316] - 2026-07-14
 
 ### Fix(new-tab): 「Bring in an open tab」僅在分割格顯示，不再外洩到全頁新分頁 (#913)
