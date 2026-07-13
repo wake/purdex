@@ -2,7 +2,7 @@
 
 > **For agentic workers:** 依 `superpowers:subagent-driven-development` 每個 Task 派 fresh subagent（TDD：先寫測試→跑紅→實作→跑綠→commit），主 session 只做整合與 task 間 review。Steps 用 checkbox 追蹤。
 
-實作定稿 spec `docs/specs/2026-07-13-workspace-snapshot-spec.md`（`3d9c69b`，codex R1–R3 全過）。純前端 SPA 功能，daemon 大概率零改動（唯一待探明：§8.1 撞同名 session，Phase 2 T9 探）。
+實作定稿 spec `docs/specs/2026-07-13-workspace-snapshot-spec.md`（`3d9c69b`，codex R1–R3 全過）。純前端 SPA 功能，daemon 大概率零改動（唯一待探明：§8.1 撞同名 session，Phase 2 T3 探）。
 
 **Goal:** 拍下當前整個工作區（workspace/tab/pane 結構 + 每個 tmux session 的 name/cwd），讓伺服器重開機 / tmux 重啟後依 name+cwd 一鍵把工作環境重建回來。
 
@@ -96,6 +96,11 @@ export interface EnsureReport { reattached: number; rebuilt: number; failed: num
 export interface RestoreReport extends EnsureReport {
   rebuiltButUnattached: Array<{ hostId: string; name: string; cwd: string }>  // R3 B
 }
+// 失敗契約（codex 複審 B2）：三動作成功 resolve RestoreReport；replaceTabSnapshot throw
+// 時包成 RestoreError（帶已收集含 rebuiltButUnattached 的 report）reject，UI catch 後讀 e.report。
+export class RestoreError extends Error {
+  constructor(public report: RestoreReport, public cause?: unknown) { super('restore failed') }
+}
 // storage.ts (走 browserStorage，自己 JSON.stringify；key 常數見下)
 export const SNAPSHOT_KEY = 'purdex-workspace-snapshot'
 export const SNAPSHOT_PREV_KEY = 'purdex-workspace-snapshot-prev'
@@ -118,10 +123,17 @@ export function writePrevSnapshot(snap: WorkspaceSnapshot): void
 
 **Files:** Create `capture.ts`；Test `capture.test.ts`。
 **Consumes:** T1 型別 + `writeSnapshot`；`useTabStore`/`useWorkspaceStore` getState；`listSessions`；`scanPaneTree`。
-**Produces:** `export async function captureSnapshot(now: number): Promise<CaptureResult>`
+**Produces（拆兩個 API，codex 複審 B1）:**
+```ts
+export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot>  // 純建物件，不寫任何 storage
+export async function captureSnapshot(now: number): Promise<CaptureResult>    // = buildSnapshot + writeSnapshot 正本 + 回統計
+```
 
-邏輯：①`useTabStore.getState()` 取 `tabs/tabOrder/activeTabId`、`useWorkspaceStore.getState()` 取 `workspaces/activeWorkspaceId`。②對每個 tab.layout `scanPaneTree` 收集 `content.kind==='tmux-session'` 的 `{hostId, sessionCode, mode, cachedName}`，依 hostId 分組。③每個 host **呼叫一次** `listSessions(hostId)`：成功 → 對每個 code 在清單找 `s.code===sessionCode`，命中填 `{name:s.name, cwd:s.cwd, currentCommand:s.current_command, restorable:true}`；未命中（拍當下已死）→ `{name:cachedName, cwd:undefined, restorable:false, captureError:'session-dead-at-capture'}`。`listSessions` throw（host 不可達）→ 該 host 全部 code → `{name:cachedName, cwd:undefined, restorable:false, captureError:'host-unreachable'}`。④組 `WorkspaceSnapshot { version:1, capturedAt: now, … , sessionMeta }`，`writeSnapshot`。⑤回 `{ total, resolved(restorable=true 數), unresolved(restorable=false 數) }`。
+**`buildSnapshot(now)` 邏輯：**①`useTabStore.getState()` 取 `tabs/tabOrder/activeTabId`、`useWorkspaceStore.getState()` 取 `workspaces/activeWorkspaceId`。②對每個 tab.layout `scanPaneTree` 收集 `content.kind==='tmux-session'` 的 `{hostId, sessionCode, mode, cachedName}`，依 hostId 分組。③每個 host **呼叫一次** `listSessions(hostId)`：成功 → 對每個 code 在清單找 `s.code===sessionCode`，命中填 `{name:s.name, cwd:s.cwd, currentCommand:s.current_command, restorable:true}`；未命中（拍當下已死）→ `{name:cachedName, cwd:undefined, restorable:false, captureError:'session-dead-at-capture'}`。`listSessions` throw（host 不可達）→ 該 host 全部 code → `{name:cachedName, cwd:undefined, restorable:false, captureError:'host-unreachable'}`。④回 `WorkspaceSnapshot { version:1, capturedAt: now, … , sessionMeta }`（**不寫 storage**）。
 
+**`captureSnapshot(now)` 邏輯：**`const snap = await buildSnapshot(now)` → `writeSnapshot(snap)`（寫正本）→ 回 `{ total, resolved(restorable=true 數), unresolved(restorable=false 數) }`（由 `snap.sessionMeta` 統計）。
+
+> **B1 rationale**：`captureSnapshot` 會覆寫正本 snapshot；restore 前若要拍「當前態」寫 `-prev` 後悔藥（T7），**必須用 `buildSnapshot` 不碰正本**，否則會在還原前把正本覆寫成當前態、毀掉還原來源。
 > `capturedAt` 由入參 `now` 帶入（決定性測試）；不在函式內 `Date.now()`。
 
 **Tests（mock `host-api`：`vi.mock('../host-api', …{ …actual, listSessions: vi.fn() })`；`beforeEach` `setState` 植入兩 store + `localStorage.clear()`）:**
@@ -130,6 +142,7 @@ export function writePrevSnapshot(snap: WorkspaceSnapshot): void
 - host B `listSessions` reject → B 的 pane `restorable=false`+`captureError:'host-unreachable'`、A 照常；`unresolved` 計數正確、**不中斷**。
 - pane code 不在 live 清單 → `captureError:'session-dead-at-capture'`、`cwd===undefined`。
 - 無 tmux pane（純 editor/browser tab） → `total=0`、`sessionMeta` 為 `{}`、仍寫出快照。
+- **`buildSnapshot` 不寫 storage（B1）**：先 `writeSnapshot(舊快照)` → `buildSnapshot(now)` 回新物件但 `readSnapshot()` 仍為**舊快照**（未被覆寫）；改呼叫 `captureSnapshot(now)` 後 `readSnapshot()` 才變新物件。
 
 **Phase 1 done-criteria:** `npx vitest run`（新測試綠）；`pnpm run lint` + `pnpm run build` 綠。PR → codex 兩輪 review。
 
@@ -170,7 +183,7 @@ export async function ensureSessions(
 
 **Tests:**
 - `rebuilt` entry → pane 的 `sessionCode` 換成 newCode、`cachedName` 更新、`terminated` 清除。
-- `failed` → pane 標 `terminated`。
+- `failed` → pane 標 `terminated`，**斷言 `terminated === 'tmux-restarted'`（釘死具體值，防回退，codex 複審 I1）**。
 - **`onlyTerminated:true`**：一活 pane 的 (hostId,code) 恰等於某 remap 舊 code、但該 pane 非 terminated → **不被動到**（正確性防線，spec §3.5）。
 - split 樹（巢狀 SplitLayout）多 tmux pane → 全部依複合鍵改寫。
 
@@ -197,6 +210,7 @@ export function replaceTabSnapshot(snap: WorkspaceSnapshot): void    // 取代 t
 - `replaceTabSnapshot` 後兩 store = 快照內容；`visitHistory` 不含已消失 tab（restore 後立刻 `closeTabInWorkspace` active tab → 選到的下一個 tab 正確）。
 - 壞快照（validate 不過）→ throw、兩 store **完全未變**。
 - mock 第二個 `setState`（workspace）throw → 兩 store 皆 rollback 回舊值。
+- **mock 第一個 `setState`（tab）throw → workspace 完全未被呼叫、tab store rollback 回舊值、不留半套（codex 複審 I2，釘死「任一步 throw 全回滾」的第一分支）**。
 - `replaceTabState` 只動 tab store、不碰 workspace。
 
 ### T7 — 三動作 orchestration + `-prev` + rebuiltButUnattached（restore.ts）
