@@ -95,6 +95,33 @@ describe('PaneLayoutRenderer', () => {
     expect(screen.getByTestId('dash-right')).toBeTruthy()
   })
 
+  it('split container claims height via h-full (not flex-1) so panes stay bounded under a block parent', () => {
+    // A top-level split mounts under TabContent's `.absolute inset-0` BLOCK
+    // wrapper, where flex-1 is inert — the container would collapse to content
+    // height and an overflow-y-auto region inside any pane could never scroll
+    // (verified by layout measurement in split-pane-scroll headless repro).
+    // h-full resolves against the absolute wrapper's definite height. Guard the
+    // class so a refactor can't silently regress split-pane scrolling.
+    registerModule({
+      id: 'dashboard-split-root',
+      name: 'Dashboard',
+      panes: [{ kind: 'dashboard', component: ({ pane }) => <div>{pane.id}</div> }],
+    })
+    const layout: PaneLayout = {
+      type: 'split', id: 's1', direction: 'v',
+      children: [
+        { type: 'leaf', pane: { id: 'top', content: { kind: 'dashboard' } } },
+        { type: 'leaf', pane: { id: 'bot', content: { kind: 'dashboard' } } },
+      ],
+      sizes: [50, 50],
+    }
+    const { container } = render(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+    const root = container.firstChild as HTMLElement
+    expect(root.className).toContain('h-full')
+    expect(root.className).toContain('w-full')
+    expect(root.className).not.toContain('flex-1')
+  })
+
   it('renders nested splits', () => {
     registerModule({
       id: 'dashboard-nested',
