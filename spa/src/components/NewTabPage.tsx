@@ -18,10 +18,12 @@ interface Props {
   onSelect: (content: PaneContent) => void
   /**
    * When this new-tab pane is mounted inside a real tab (the normal case), the
-   * pane renderer passes the owning tab + pane ids. Their presence unlocks the
-   * "Bring in an open tab" section, which pulls another single-pane tab's
-   * content into THIS pane. Omitted on unwired call paths (the section then
-   * simply does not render).
+   * pane renderer passes the owning tab + pane ids. Their presence — AND the
+   * owning tab being split (more than one pane) — unlocks the "Bring in an open
+   * tab" section, which pulls another single-pane tab's content into THIS pane.
+   * A full-page new tab is a single pane, not a split target, so the section
+   * stays hidden there. Omitted on unwired call paths (the section then simply
+   * does not render).
    */
   currentTabId?: string
   currentPaneId?: string
@@ -67,7 +69,11 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const sessions = useSessionStore((s) => s.sessions)
   const bringInCandidates = useMemo(() => {
-    if (!currentTabId || !currentPaneId) return []
+    const currentTab = currentTabId ? tabs[currentTabId] : undefined
+    // Gate on the owning tab being a split (>1 pane). A full-page new tab is a
+    // single pane — not a pane-split target — so the section must stay hidden
+    // there; it only belongs when this new-tab pane is one cell of a split.
+    if (!currentTab || !currentPaneId || countLeaves(currentTab.layout) <= 1) return []
     const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
     const movable = MOVABLE_KINDS as readonly string[]
     const out: { tabId: string; label: string; workspaceName: string }[] = []

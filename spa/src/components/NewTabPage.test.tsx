@@ -278,6 +278,20 @@ function seedWorkspaceTab(wsName: string, content: PaneContent): { tab: Tab; wsI
   return { tab, wsId: ws.id }
 }
 
+/**
+ * Seed the "current" host tab as a real SPLIT — a `new-tab` pane split once so
+ * the owning tab has >1 pane. This is the only state in which the Bring-in
+ * section is meant to appear (a full-page new tab is single-pane and must NOT
+ * show it). Returns the tab + the surviving new-tab pane id (`splitPaneBlank`
+ * preserves the original pane id) to pass as `currentPaneId`.
+ */
+function seedSplitCurrentTab(wsName: string): { tab: Tab; paneId: string } {
+  const { tab } = seedWorkspaceTab(wsName, { kind: 'new-tab' })
+  const paneId = primaryPaneId(tab)
+  useTabStore.getState().splitPaneBlank(tab.id, paneId, 'h')
+  return { tab, paneId }
+}
+
 const editorContent = (filePath: string): PaneContent => ({
   kind: 'editor',
   source: { type: 'daemon', hostId: 'h1' },
@@ -320,7 +334,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
       },
     })
 
-    const { tab: current } = seedWorkspaceTab('WS', { kind: 'new-tab' })
+    const { tab: current, paneId } = seedSplitCurrentTab('WS')
     seedWorkspaceTab('WS', {
       kind: 'tmux-session',
       hostId: 'hostA',
@@ -342,7 +356,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
       <NewTabPage
         onSelect={() => {}}
         currentTabId={current.id}
-        currentPaneId={primaryPaneId(current)}
+        currentPaneId={paneId}
       />,
     )
 
@@ -352,7 +366,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
   })
 
   it('lists movable tabs across workspaces with their tab name + workspace name', () => {
-    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+    const { tab: current, paneId } = seedSplitCurrentTab('Alpha')
     seedWorkspaceTab('Alpha', editorContent('/proj/readme.md'))
     seedWorkspaceTab('Beta', {
       kind: 'tmux-session',
@@ -367,7 +381,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
       <NewTabPage
         onSelect={() => {}}
         currentTabId={current.id}
-        currentPaneId={primaryPaneId(current)}
+        currentPaneId={paneId}
       />,
     )
 
@@ -381,7 +395,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
   })
 
   it('excludes browser tabs, multi-pane tabs, locked tabs, and the current tab', () => {
-    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+    const { tab: current, paneId } = seedSplitCurrentTab('Alpha')
 
     // browser — not a MOVABLE_KIND.
     seedWorkspaceTab('Alpha', { kind: 'browser', url: 'https://example.com' })
@@ -399,7 +413,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
       <NewTabPage
         onSelect={() => {}}
         currentTabId={current.id}
-        currentPaneId={primaryPaneId(current)}
+        currentPaneId={paneId}
       />,
     )
 
@@ -409,9 +423,13 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
     expect(screen.queryByText('locked.ts')).toBeNull()
   })
 
-  it('does not list the current tab even if it is single-pane + movable', () => {
-    const { tab: current } = seedWorkspaceTab('Alpha', editorContent('/current.ts'))
-    seedWorkspaceTab('Alpha', editorContent('/other.ts'))
+  it('does not render the section on a full-page new tab (single pane, not a split)', () => {
+    // The core gate: a standalone new tab is a single-pane tab, NOT a pane-split
+    // target. Even with plenty of movable tabs available, the section must stay
+    // hidden — it only belongs when this new-tab pane is one cell of a split.
+    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+    seedWorkspaceTab('Alpha', editorContent('/movable-a.ts'))
+    seedWorkspaceTab('Beta', editorContent('/movable-b.ts'))
 
     render(
       <NewTabPage
@@ -421,14 +439,31 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
       />,
     )
 
+    expect(screen.queryByText(BRING_IN_TITLE)).toBeNull()
+    expect(screen.queryByText('movable-a.ts')).toBeNull()
+    expect(screen.queryByText('movable-b.ts')).toBeNull()
+  })
+
+  it('does not list the current tab among the candidates', () => {
+    const { tab: current, paneId } = seedSplitCurrentTab('Alpha')
+    seedWorkspaceTab('Alpha', editorContent('/other.ts'))
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={paneId}
+      />,
+    )
+
     expect(screen.getByText('other.ts')).toBeTruthy()
-    expect(screen.queryByText('current.ts')).toBeNull()
+    // The current (split) tab is never listed as a candidate for itself.
+    expect(screen.queryByText(BRING_IN_TITLE)).toBeTruthy()
   })
 
   it('clicking a row calls moveTabContentIntoPane(sourceId, currentTabId, currentPaneId)', () => {
-    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+    const { tab: current, paneId: currentPane } = seedSplitCurrentTab('Alpha')
     const { tab: source } = seedWorkspaceTab('Beta', editorContent('/pull-me.ts'))
-    const currentPane = primaryPaneId(current)
 
     render(
       <NewTabPage
@@ -453,7 +488,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
   })
 
   it('does not render the section when there are no movable tabs to bring in', () => {
-    const { tab: current } = seedWorkspaceTab('Alpha', { kind: 'new-tab' })
+    const { tab: current, paneId } = seedSplitCurrentTab('Alpha')
     // Only non-movable / current tabs exist.
     seedWorkspaceTab('Alpha', { kind: 'browser', url: 'https://only.example.com' })
 
@@ -461,7 +496,7 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
       <NewTabPage
         onSelect={() => {}}
         currentTabId={current.id}
-        currentPaneId={primaryPaneId(current)}
+        currentPaneId={paneId}
       />,
     )
 
