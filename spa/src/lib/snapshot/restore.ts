@@ -2,7 +2,7 @@ import { createSession, listSessions } from '../host-api'
 import type { Session } from '../host-api'
 import { scanPaneTree, updatePaneInLayout } from '../pane-tree'
 import type { PaneContent, PaneLayout } from '../../types/tab'
-import type { EnsureReport, Remap, RemapEntry, SessionMeta } from './types'
+import type { EnsureReport, Remap, RemapEntry, SessionMeta, WorkspaceSnapshot } from './types'
 
 /**
  * Reconcile persisted per-host session metadata against each host's live
@@ -131,4 +131,73 @@ export function remapLayoutSessions(
     result = updatePaneInLayout(result, paneId, content)
   }
   return result
+}
+
+/**
+ * Structural navigation-integrity guard for a {@link WorkspaceSnapshot}, run
+ * before restore adopts a snapshot. Validates ONLY tab/workspace navigation
+ * references — the ids the UI dereferences to render the tab bar and workspace
+ * switcher. Returns on the FIRST failing check with a short human-readable
+ * reason.
+ *
+ * Five checks (all must pass for `ok:true`):
+ * 1. Every id in each `workspace.tabs` exists as a key in `snap.tabs`.
+ * 2. `snap.activeTabId` is `null` or a key in `snap.tabs`.
+ * 3. Each `workspace.activeTabId` is `null` or belongs to THAT workspace's `tabs`.
+ * 4. `snap.activeWorkspaceId` is `null` or the id of some workspace.
+ * 5. Every id in `snap.tabOrder` exists as a key in `snap.tabs`.
+ *
+ * Deliberately NOT validated (scope decision R3 C): pane-content semantic
+ * references such as `settings.scope.workspaceId`. Those are content, not
+ * navigation, and a dangling one must never block a restore.
+ */
+export function validateSnapshotConsistency(
+  snap: WorkspaceSnapshot,
+): { ok: true } | { ok: false; reason: string } {
+  const tabExists = (id: string): boolean =>
+    Object.prototype.hasOwnProperty.call(snap.tabs, id)
+
+  // 1. Every workspace tab id must resolve to a real tab.
+  for (const ws of snap.workspaces) {
+    for (const tabId of ws.tabs) {
+      if (!tabExists(tabId)) {
+        return { ok: false, reason: `workspace "${ws.id}" references unknown tab "${tabId}"` }
+      }
+    }
+  }
+
+  // 2. activeTabId (nullable) must resolve to a real tab.
+  if (snap.activeTabId !== null && !tabExists(snap.activeTabId)) {
+    return { ok: false, reason: `activeTabId "${snap.activeTabId}" is not a known tab` }
+  }
+
+  // 3. Each workspace.activeTabId (nullable) must belong to that workspace.
+  for (const ws of snap.workspaces) {
+    if (ws.activeTabId !== null && !ws.tabs.includes(ws.activeTabId)) {
+      return {
+        ok: false,
+        reason: `workspace "${ws.id}" activeTabId "${ws.activeTabId}" is not in its tabs`,
+      }
+    }
+  }
+
+  // 4. activeWorkspaceId (nullable) must name an existing workspace.
+  if (
+    snap.activeWorkspaceId !== null &&
+    !snap.workspaces.some((ws) => ws.id === snap.activeWorkspaceId)
+  ) {
+    return {
+      ok: false,
+      reason: `activeWorkspaceId "${snap.activeWorkspaceId}" is not a known workspace`,
+    }
+  }
+
+  // 5. Every tabOrder id must resolve to a real tab.
+  for (const tabId of snap.tabOrder) {
+    if (!tabExists(tabId)) {
+      return { ok: false, reason: `tabOrder references unknown tab "${tabId}"` }
+    }
+  }
+
+  return { ok: true }
 }

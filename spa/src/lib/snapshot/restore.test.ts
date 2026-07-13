@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSession, listSessions } from '../host-api'
 import type { Session } from '../host-api'
-import type { PaneContent, PaneLayout } from '../../types/tab'
+import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import type { Remap } from './types'
-import type { SessionMeta } from './types'
-import { ensureSessions, remapLayoutSessions } from './restore'
+import type { SessionMeta, WorkspaceSnapshot } from './types'
+import { ensureSessions, remapLayoutSessions, validateSnapshotConsistency } from './restore'
 
 vi.mock('../host-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../host-api')>()),
@@ -376,5 +376,108 @@ describe('remapLayoutSessions', () => {
     expect(tmux(layout.pane.content).sessionCode).toBe('old1')
     expect(result).not.toBe(layout)
     expect(tmux((result as { pane: { content: PaneContent } }).pane.content).sessionCode).toBe('new1')
+  })
+})
+
+function tab(id: string): Tab {
+  return {
+    id,
+    pinned: false,
+    locked: false,
+    createdAt: 0,
+    layout: { type: 'leaf', pane: { id: `pane-${id}`, content: { kind: 'new-tab' } } },
+  }
+}
+
+function workspace(overrides: Partial<Workspace> & { id: string }): Workspace {
+  return {
+    name: overrides.id,
+    tabs: [],
+    activeTabId: null,
+    ...overrides,
+  }
+}
+
+/** Fully-consistent baseline snapshot: two tabs, one workspace holding both. */
+function validSnapshot(): WorkspaceSnapshot {
+  return {
+    version: 1,
+    capturedAt: 0,
+    tabs: { t1: tab('t1'), t2: tab('t2') },
+    tabOrder: ['t1', 't2'],
+    activeTabId: 't1',
+    workspaces: [workspace({ id: 'ws1', tabs: ['t1', 't2'], activeTabId: 't1' })],
+    activeWorkspaceId: 'ws1',
+    sessionMeta: {},
+  }
+}
+
+describe('validateSnapshotConsistency', () => {
+  it('fully-consistent snapshot → ok:true', () => {
+    expect(validateSnapshotConsistency(validSnapshot())).toEqual({ ok: true })
+  })
+
+  it('(i) workspace.tabs references a ghost tab id → ok:false', () => {
+    const snap = validSnapshot()
+    snap.workspaces[0].tabs = ['t1', 'ghost']
+    const result = validateSnapshotConsistency(snap)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason.length).toBeGreaterThan(0)
+  })
+
+  it('(ii) activeTabId is a ghost id → ok:false', () => {
+    const snap = validSnapshot()
+    snap.activeTabId = 'ghost'
+    const result = validateSnapshotConsistency(snap)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason.length).toBeGreaterThan(0)
+  })
+
+  it('(iii) workspace.activeTabId not in that workspace tabs → ok:false', () => {
+    const snap = validSnapshot()
+    // t2 exists as a tab but is NOT in ws1.tabs below.
+    snap.workspaces[0].tabs = ['t1']
+    snap.workspaces[0].activeTabId = 't2'
+    const result = validateSnapshotConsistency(snap)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason.length).toBeGreaterThan(0)
+  })
+
+  it('(iv) activeWorkspaceId is not any workspace id → ok:false', () => {
+    const snap = validSnapshot()
+    snap.activeWorkspaceId = 'ws-ghost'
+    const result = validateSnapshotConsistency(snap)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason.length).toBeGreaterThan(0)
+  })
+
+  it('(v) tabOrder references a ghost tab id → ok:false', () => {
+    const snap = validSnapshot()
+    snap.tabOrder = ['t1', 't2', 'ghost']
+    const result = validateSnapshotConsistency(snap)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason.length).toBeGreaterThan(0)
+  })
+
+  it('null activeTabId / activeWorkspaceId / workspace.activeTabId are allowed → ok:true', () => {
+    const snap = validSnapshot()
+    snap.activeTabId = null
+    snap.activeWorkspaceId = null
+    snap.workspaces[0].activeTabId = null
+    expect(validateSnapshotConsistency(snap)).toEqual({ ok: true })
+  })
+
+  it('pane settings.scope.workspaceId to a non-existent workspace does NOT fail (R3 C: only navigation refs validated)', () => {
+    // R3 C — scope decision: pane-content semantic refs (settings scope) are
+    // explicitly OUT of scope. A snapshot whose navigation refs are all valid
+    // stays ok:true regardless of any dangling scope reference embedded in a
+    // pane's content. Expressed as a valid snapshot: the point is that a
+    // non-navigation ref never affects the verdict.
+    const snap = validSnapshot()
+    snap.tabs.t1.layout = {
+      type: 'leaf',
+      pane: { id: 'pane-t1', content: { kind: 'settings', scope: { workspaceId: 'ws-does-not-exist' } } },
+    }
+    expect(validateSnapshotConsistency(snap)).toEqual({ ok: true })
   })
 })
