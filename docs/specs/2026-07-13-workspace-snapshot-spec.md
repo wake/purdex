@@ -3,7 +3,7 @@
 **Date**: 2026-07-13
 **Branch**: `worktree-workspace-snapshot`
 **Author**: Claude (Opus 4.8) + Wake
-**狀態**: Draft v2（已納入 codex 第一輪 review 六項修正：#1 複合鍵 Blocker、#2 visitHistory、#3 重建收窄、#4 best-effort 取代、#5 restorable、#6 session store 同步）
+**狀態**: Draft v3。v2 納入 codex R1 六項修正（#1 複合鍵 Blocker、#2 visitHistory、#3 重建 remap 收窄、#4 best-effort 取代、#5 restorable、#6 session store 同步）。v3 納入 codex R2 修正（validateSnapshotConsistency 拆五條、restore 對 daemon 副作用非交易性揭露、sync 檔路徑）**與使用者定案的產品決策**：「重建所有 session」重建快照裡**所有可觀測 session（不收窄、orphan 為預期）**，明確 override codex R2 對 orphan 的收窄建議（§3.5）。
 
 ---
 
@@ -30,7 +30,7 @@ Purdex 的 tab / workspace / pane 結構**本來就會持久化到 localStorage*
 | Workspace store（persist `purdex-workspaces`，partialize `workspaces/activeWorkspaceId`；關 tab 讀 `visitHistory` 選下一個） | `spa/src/features/workspace/store.ts:195/292` |
 | `scanPaneTree` / `collectLeaves` / `updatePaneInLayout` / `findTabBySessionCode` | `spa/src/lib/pane-tree.ts` |
 | Terminated 標記（`TerminatedReason` / `markTerminated`） | `spa/src/types/tab.ts` / `useTabStore.ts` |
-| storage backend `purdexStorage`（**每次 setItem 立即 localStorage + `syncManager.notify` 廣播**） | `spa/src/lib/storage/browser-backend.ts` / `sync.ts:15` |
+| storage backend `purdexStorage`（**每次 setItem 立即 localStorage + `syncManager.notify` 廣播**） | `spa/src/lib/storage/browser-backend.ts` / `spa/src/lib/storage/sync.ts:15` |
 | pane 內容用 `useSessionStore.sessions[hostId]` 查 session；名稱快取只在 WS 事件更新 | `spa/src/components/SessionPaneContent.tsx:27` / `useMultiHostEventWs.ts:103` |
 | Settings section 註冊 `registerSettingsSection({ id, label, order, component })` | `spa/src/lib/settings-section-registry.ts` |
 
@@ -148,15 +148,17 @@ type Remap = Record<string /* hostId */, Record<string /* oldCode */, RemapEntry
 
 | 動作 | 位置 | 步驟 |
 |------|------|------|
-| **重建所有 session** | Tmux 區 | `ensureSessions(snapshot.sessionMeta)` → 對**當前已開** `useTabStore.tabs` 套 `remapLayoutSessions(…, { onlyTerminated: true })`（見「收窄語意」）→ `replaceTabState`（僅 tabs）+ 同步 session store。**不動 tab 結構**、不碰 workspace、不寫 `-prev`。 |
+| **重建所有 session** | Tmux 區 | ①`ensureSessions(snapshot.sessionMeta)` —— **重建快照裡所有 `restorable` 且 host 可達的 session**，不限當前 tab 是否引用（見「重建範圍＝產品決策」）；②對**當前已開** tabs 套 `remapLayoutSessions(…, { onlyTerminated: true })`（只把 terminated pane 接到重建結果，活著的 pane 不碰）→ `replaceTabState`（僅 tabs）+ 同步 session store。**不動 tab 結構**、不碰 workspace、不寫 `-prev`。 |
 | **還原 tab 佈局** | Tab 區 | 對「目前還活著」依 (hostId,code) 輕量對帳（死掉標 terminated，**不重建**）→ `replaceTabSnapshot(snapshot)` 取代 tab/workspace。 |
 | **全部還原** | 頂部 | `ensureSessions(...)` → 對 `snapshot.tabs` 套 `remapLayoutSessions` → `replaceTabSnapshot(改寫後)` + 同步 session store。（= §3.2 完整流程） |
 
-**「重建所有 session」收窄語意（codex #3）**：此動作把 remap 套到**當前已開** tabs；若不限制、當前某 pane 的 (hostId, code) 剛好碰到 snapshot 舊 code，會誤改不屬該快照的 pane。故限制 `onlyTerminated: true` —— 活著的 pane 完全不碰、terminated 的本就壞了重建正是所需。**殘餘風險**（極罕見）：重開機後新 session 恰好複用某舊 code 值且該 pane 剛好 terminated；即便命中，也只是接到一個以正確 cwd 新建的 session，影響有限。此收窄使「還原 tab 佈局 → 重建所有 session」在**核心情境（persist 還原後 session 全死）**下等價於「全部還原」，但**不宣稱普遍等價**。
+**「重建所有 session」重建範圍＝產品決策（使用者定案，勿翻案）**：此動作對**整份** `snapshot.sessionMeta` 做 `ensureSessions`，重建快照裡**所有** `restorable` 且 host 可達的 session —— **刻意不限縮**在「當前已開 tab 仍引用的 session」。核心情境是伺服器重開機後 tmux 全滅，使用者要一次把**整個工作環境的 tmux session** 都拉回來；因此重建出當前畫面尚未接上的 session（orphan）是**預期行為、非缺陷** —— 隨後配合「還原 tab 佈局」/「全部還原」即接上，即使單獨執行，那些 session 也會出現在 daemon `listSessions` / Sessions 清單供手動接回。**codex R2 對 orphan 的收窄建議在此明確不採納。**
+
+**remap 套用範圍仍收窄（避免誤改活 pane，codex R1 #3）**：重建產生的 remap 僅以 `onlyTerminated: true` 套回當前 tabs 的 terminated pane —— 活著的 pane 完全不碰，杜絕「某活 pane 的 (hostId, code) 恰撞 snapshot 舊 code 而被誤改」。此為正確性防線，與上述重建範圍**獨立、互不影響**（重建範圍決定 daemon 上建哪些 session；remap 範圍決定改當前哪些 pane）。**副作用揭露**：本動作在 daemon 上實際建立 session（含 orphan），非唯讀；因僅新增 tmux session、不動 tab/workspace 結構，仍不寫 `-prev`。
 
 **取代語意（best-effort，非真原子）（codex #4）**：兩 store 各自 `setState` **並非真原子** —— `browserStorage.setItem` 每次立即 `localStorage.setItem` + `syncManager.notify`，其他視窗會立刻 rehydrate 單一 key，故中間有可觀察空窗。改用 coordinator：
 
-- `validateSnapshotConsistency(snapshot)`：驗 `workspace.tabs` 每個 id、`activeTabId`、各 `workspace.activeTabId`、`activeWorkspaceId` 都能在 `tabs` 解析；不通過則中止、不動任何 store。
+- `validateSnapshotConsistency(snapshot)`（codex R2 拆明五條，修正「全部驗在 `tabs`」的矛盾）：①`workspace.tabs` 每個 id ∈ `tabs`；②`activeTabId` ∈ `tabs`（或 `null`）；③各 `workspace.activeTabId` ∈ 該 `workspace.tabs`；④`activeWorkspaceId` ∈ `workspaces`（**非** `tabs`）或 `null`；⑤`tabOrder` 每個 id ∈ `tabs`。任一不通過則中止、不動任何 store。
 - `replaceTabSnapshot(snapshot)`：先驗證 → 保存兩 store 舊值 → 依序 setState（tab 先、workspace 後）→ 任一步丟錯則**用舊值 rollback** 兩 store。
 - **visitHistory（codex #2）**：`useTabStore.visitHistory` 非 persist、workspace 關 tab 讀它選下一個（`workspace/store.ts:195`）；取代時把 `visitHistory` filter 成新 `tabOrder` 子集（移除指向已消失 tab 的引用），連同 `tabs/tabOrder/activeTabId` 一起 set。
 - spec 明訂此為 **best-effort 一致，非跨視窗真原子**。
@@ -171,7 +173,7 @@ type Remap = Record<string /* hostId */, Record<string /* oldCode */, RemapEntry
 
 - capture：host 失敗僅該 host 記 `restorable=false`（cwd undefined），其餘照拍；toast「已拍快照：N 個終端機、其中 M 個無法記錄路徑」。
 - restore：逐 session 獨立失敗隔離（重建失敗或 `restorable=false` 只標該 pane terminated，不 `createSession('')`）；toast 彙總「X 直接接回 / Y 依路徑重建 / Z 無法重建」。
-- restore「先算後套」：`ensureSessions` + `remapLayoutSessions` 完成後才進 `replaceTabSnapshot`（含一致性驗證 + rollback），失敗不留半套。
+- restore「先算後套」：`ensureSessions` + `remapLayoutSessions` 完成後才進 `replaceTabSnapshot`（含一致性驗證 + rollback）。**「不留半套」僅指前端 store**（codex R2）：`replaceTabSnapshot` 失敗會用舊值 rollback 兩 store，但 `ensureSessions` 已在 daemon 建立的 session 是**真副作用、不會自動撤銷**；此時彙整「已重建但未接上」session 清單，toast + 日誌揭露（plan 評估是否補償刪除，見 §8.5）。
 
 ### 3.7 UI — Settings「Snapshot」section
 
@@ -183,7 +185,7 @@ type Remap = Record<string /* hostId */, Record<string /* oldCode */, RemapEntry
 - **區塊 1 — Tmux Sessions**（對帳表）：
   - 每列：`host / name / cwd（無值顯示「未記錄」）/ current_command（拍當下）/ 健康度`。
   - 健康度：section 掛載時對各 host（依 hostId）`listSessions` 即時對帳 → 🟢 活著（可接回）/ 🔴 已死可重建（`restorable` 且 host 可達）/ ⚠️ 只能保留結構（`restorable=false`，無 cwd）/ ⚪ host 離線（無法重建）。
-  - 區塊鈕：「重建所有 session」（僅重建 🔴；⚠️/⚪ 維持 terminated）。
+  - 區塊鈕：「重建所有 session」（重建**快照裡所有** 🔴，不限當前 tab 是否引用；⚠️/⚪ 維持 terminated）。
 - **區塊 2 — Tabs / Workspaces**：樹狀列 workspace → tab → pane（terminal 顯示 name、editor/preview 顯示 filePath、browser 顯示 url）。區塊鈕：「還原 tab 佈局」。
 - 無快照時兩區顯示 empty state（只給「拍下快照」）。
 
@@ -215,10 +217,11 @@ type Remap = Record<string /* hostId */, Record<string /* oldCode */, RemapEntry
 - **驗收**：
   - **跨 host 同 code 不撞（#1）**：兩 host 各有相同 `sessionCode` 值，remap 依 (hostId,code) 各自對帳、不互污。
   - 「部分活著 / 已死 / host 離線 / cwd 不明」→ 各 entry status 正確、layout 依複合鍵改寫、`failed` 與 `restorable=false` 標 terminated 且**未呼叫 `createSession('')`（#5）**。
-  - **取代一致性（#4）**：`validateSnapshotConsistency` 擋掉 workspace 指向不存在 tab 的壞快照；第二個 store setState 丟錯時兩 store 皆 rollback。
+  - **取代一致性（#4 + R2 C）**：`validateSnapshotConsistency` 五條參照檢查各自擋掉對應壞快照（含 `activeWorkspaceId` 不在 `workspaces`、`tabOrder` 含幽靈 id、`workspace.activeTabId` 不在該 workspace）；第二個 store setState 丟錯時兩 store 皆 rollback。
   - **visitHistory（#2）**：取代後不含已消失 tab 引用；「restore 後立刻關 active tab」選到的下一個 tab 正確。
   - **session store 同步（#6）**：`rebuilt` 後 `useSessionStore` 有新 session、pane `cachedName` = daemon 回傳實際 name。
-  - **重建收窄（#3）**：「重建所有 session」只改 `terminated` pane；當前有一活著且 code 恰等於某 snapshot 舊 code 的 pane 不被動到。
+  - **重建範圍 + remap 收窄（#3 + a 點產品決策）**：「重建所有 session」對整份 `sessionMeta` 重建（含當前 tab 未引用的 orphan —— 斷言 `createSession` 呼叫筆數 = restorable 總數，**不因當前 tab 未引用而略過**）；但 remap 只改 `terminated` pane —— 當前有一活著且 code 恰等於某 snapshot 舊 code 的 pane 不被動到。
+  - **daemon 副作用揭露（R2 B）**：`replaceTabSnapshot` 驗證失敗 / rollback 時，回傳含「已重建但未接上」session 清單供 UI 揭露。
   - 三動作語意各自正確；`-prev` 於取代式動作前寫入、「復原上次還原」能還回去。
   - **撞名邊界（§8.1）**：先寫測試釘住 daemon `createSession` 對同名 session 的行為（探明後補斷言）。
 
@@ -253,3 +256,4 @@ type Remap = Record<string /* hostId */, Record<string /* oldCode */, RemapEntry
 2. **host 可達性判定**：`ensureSessions` 以 `listSessions` 是否成功回應區分「session 死但 host 活（可重建）」vs「host 離線（`failed`）」。
 3. **大量 session**：`ensureSessions` 對已死 session 逐一 `createSession`；量大時序列/並行？plan 定（傾向有上限並行 + 逐一失敗隔離）。
 4. **`replaceTabSnapshot` rollback 邊界**：第一個 `setState` 已 `syncManager.notify` 廣播後才 rollback，其他視窗仍可能短暫見中間態 —— §3.5 已明訂 best-effort、非承諾消除。plan 評估是否引入單一 batched key（超出本次範圍，先記錄）。
+5. **restore 的 daemon 副作用非交易性（codex R2 B）**：`ensureSessions` 先在 daemon 建立 session，之後 `replaceTabSnapshot` 若一致性驗證失敗 / rollback，已建 session **不會自動刪除**（前端 store 乾淨，daemon 端多出 session）。緩解：restore 失敗時彙整「已重建但未接上」清單 toast + 日誌；plan 評估補償刪除或引導用「重建所有 session」重試接上。此與「重建所有 session」刻意產生的 orphan（§3.5）性質一致 —— daemon 端多出的 session 可被後續動作接回或手動清理，**不造成資料遺失**，故本次採「揭露而不自動刪除」。
