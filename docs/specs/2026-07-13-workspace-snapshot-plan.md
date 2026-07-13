@@ -157,14 +157,16 @@ export async function ensureSessions(
 - `restorable===false` 的已死筆 → `failed`、`createSession` **未**對它呼叫（不 `createSession('', …)`）。
 - `rebuild:false` → 所有已死一律 `failed`、`createSession` 完全未呼叫；活著仍 `reattached`。
 - `createSession` 對某筆 reject → 該筆 `failed`、其餘照常。
+- **host 離線**（`listSessions` throw）→ 該 host 所有 entry `failed`、`createSession` 未對該 host 呼叫（spec §3.3「session 死但 host 活」vs「host 離線」以 `listSessions` 成敗區分）。
 - **跨 host 同 code**：A、B 同 code，A 活 B 死 → `remap['A'][code].status==='reattached'`、`remap['B'][code].status==='rebuilt'`，不互污。
+- **撞同名 session（§8.1，原 T8 併入，codex plan-review Important）**：`createSession` mock 回傳 `name`/`code` 與請求不同（模擬 daemon 自動改名）→ entry `status==='rebuilt'`、`newCode`=回傳 `session.code`、`session.name`=回傳實際 name（前端一律以 `createSession` **回傳物件**為準，非請求值）。**手動探明**：Phase 2 期間對 daemon 手打一次同名 `POST /api/sessions`，記錄實際行為（拒絕/改名/復用）回填 spec §8.1。
 
 ### T4 — `remapLayoutSessions`（restore.ts）
 
 **Consumes:** `Remap`；`scanPaneTree`/`updatePaneInLayout`。
 **Produces:** `export function remapLayoutSessions(layout: PaneLayout, remap: Remap, opts?: { onlyTerminated?: boolean }): PaneLayout`（純函式）
 
-對每個 `tmux-session` pane 以 `(pane.hostId, pane.sessionCode)` 查 remap：`reattached`/`rebuilt` → 設 `sessionCode=newCode`、`cachedName=session.name`、刪 `terminated`；`failed` → 保留 code、設 `terminated:'tmux-restarted'`；查無 → 原樣。`opts.onlyTerminated===true` → 只處理原本帶 `terminated` 的 pane，活 pane 完全不碰。
+對每個 `tmux-session` pane 以 `(pane.hostId, pane.sessionCode)` 查 remap：`reattached`/`rebuilt` → 設 `sessionCode=newCode`、`cachedName=session.name`、刪 `terminated`；`failed` → 保留 code、設 `terminated:'tmux-restarted'`（**reason 定案，codex plan-review Minor**：restore 情境一律用 `'tmux-restarted'`，語意最貼近「session 因 tmux/host 重啟而失效需重建」；不臆測 `session-closed`/`host-removed`）；查無 → 原樣。`opts.onlyTerminated===true` → 只處理原本帶 `terminated` 的 pane，活 pane 完全不碰。
 
 **Tests:**
 - `rebuilt` entry → pane 的 `sessionCode` 換成 newCode、`cachedName` 更新、`terminated` 清除。
@@ -216,17 +218,15 @@ function syncSessionStore(remap: Remap): void   // 依 remap 的 session 物件 
 > `now` 由 caller（UI）帶入 orchestration（決定性）：三動作簽章實測時可再收一個 `now` 參數或注入 `captureSnapshot`；plan 實作時以 deps 注入 `capture`/`now` 便於測試。
 
 **Tests:**
-- **rebuildAllSessions 範圍（a 點）**：snapshot 有 5 個 restorable 已死 session（其中 2 個當前 tab 未引用）+ 當前 tabs 有對應 terminated pane → `createSession` 呼叫 5 次（含 2 orphan）；當前 tab 結構未變（只 terminated pane 換 code）；未寫 `-prev`。
+- **rebuildAllSessions 範圍（a 點）**：snapshot 有 5 個 restorable 已死 session（其中 2 個當前 tab 未引用）+ 當前 tabs 有對應 terminated pane → `createSession` 呼叫 5 次（含 2 orphan）；當前 tab 結構未變（只 terminated pane 換 code）；**未寫 `-prev`（斷言 `readPrevSnapshot()===null`）**。
 - **restoreTabLayout**：死的 pane 標 terminated（未 createSession）、活的接回；`-prev` 於執行前寫入；tab/workspace = snapshot。
 - **restoreAll**：全重建 + 取代 = snapshot；`-prev` 寫入。
 - **undoLastRestore**：先 restoreAll(A) 產生 `-prev`=舊態 → `undoLastRestore()` 還回舊態；無 `-prev` → 回 `null`。
 - **rebuiltButUnattached（R3 B）**：mock `replaceTabSnapshot` throw（validate 不過）→ `restoreAll` reject、`RestoreReport.rebuiltButUnattached` 含所有 rebuilt 的 `{hostId,name,cwd}`；前端 store 未變（rollback）。
 - **syncSessionStore**：`rebuilt` 後 `useSessionStore.sessions[host]` 含新 session、pane `cachedName`=daemon 回傳 name。
+- **syncSessionStore 聚合不互蓋（codex plan-review Important）**：單一 host 有 2 個 session（1 reattached + 1 rebuilt）→ `replaceHost` 對該 host **只呼叫一次**、`sessions[host]` 含**兩個** session（驗逐筆 replaceHost 互蓋的陷阱已避開）。
 
-### T8 — §8.1 撞同名 session 探明（測試釘住）
-
-**Files:** Test only（`restore.contention.test.ts`）+ plan 註記。
-探明 daemon `createSession` 遇同名 session 行為（Phase 2 期間手動打一次 `POST /api/sessions` 同名，記錄結果於 spec §8.1）。先寫測試：mock `createSession` 回「daemon 自動改名」的 session（`name` 與請求不同）→ 斷言 `ensureSessions` 以**回傳物件**的 code+name 為準（remap.session=回傳物件），前端對接正確。緩解已內建（§3.3），本 task 只釘行為 + 補斷言。
+> **§8.1 撞名探明併入 T3**（codex plan-review Important）：`ensureSessions` 的「以回傳物件為準」語意在 T3 完成時即被測試釘住，不另立晚於 T3 的 task。
 
 **Phase 2 done-criteria:** `npx vitest run` 綠；`pnpm run lint` + `pnpm run build` 綠。§8.1 探明結果回填 spec。PR → codex 兩輪 review（攻擊方重點：rollback / rebuiltButUnattached / 複合鍵不互污）。
 
@@ -234,7 +234,7 @@ function syncSessionStore(remap: Remap): void   // 依 remap 的 session 物件 
 
 ## Phase 3 — Settings「Snapshot」section UI（PR 3）
 
-### T10 — `SnapshotSettingsSection` 骨架 + 健康度對帳
+### T8 — `SnapshotSettingsSection` 骨架 + 健康度對帳
 
 **Files:** Create `spa/src/components/settings/SnapshotSettingsSection.tsx`；Test `SnapshotSettingsSection.test.tsx`。
 **Consumes:** `readSnapshot`；`listSessions`（掛載時對各 host 即時對帳）。範本 `SyncSection.tsx`（status tone toast + `SettingItem` + Phosphor icon 按鈕 + `busy` 並發保護 + `const t = useI18nStore(s=>s.t)`）。
@@ -246,7 +246,7 @@ function syncSessionStore(remap: Remap): void   // 依 remap 的 session 物件 
 - 區塊 2 渲染 workspace→tab→pane（terminal 顯 name、editor 顯 filePath、browser 顯 url）。
 - 無快照 → empty state（只顯「拍下快照」鈕）。
 
-### T11 — 三動作按鈕 wiring + toast
+### T9 — 三動作按鈕 wiring + toast
 
 **Files:** Modify `SnapshotSettingsSection.tsx`；Test 續 `SnapshotSettingsSection.test.tsx`。
 **Consumes:** T7 orchestration（`captureSnapshot`/`rebuildAllSessions`/`restoreTabLayout`/`restoreAll`/`undoLastRestore`）。
@@ -259,7 +259,7 @@ function syncSessionStore(remap: Remap): void   // 依 remap 的 session 物件 
 - `busy` 期間重複點擊只觸發一次。
 - 無 `-prev` → 復原鈕 `disabled`。
 
-### T12 — 註冊 section + i18n
+### T10 — 註冊 section + i18n
 
 **Files:** Modify `spa/src/lib/register-modules/index.tsx`（`registerSettingsSection({ id:'snapshot', label:'settings.section.snapshot', order: SETTINGS_ORDER.SNAPSHOT, component: SnapshotSettingsSection })`）+ `SETTINGS_ORDER` 加 `SNAPSHOT`（置既有之後）；i18n 檔加 `settings.section.snapshot` + 動作/健康度/toast 文案 key（en + zh-TW）。
 
@@ -271,9 +271,9 @@ function syncSessionStore(remap: Remap): void   // 依 remap 的 session 物件 
 
 ## Risks / notes
 
-- **§8.1 撞同名 session**（唯一碰 daemon 點）：Phase 2 T8 探明，緩解已內建（以 `createSession` 回傳實際 code+name 為準）。
+- **§8.1 撞同名 session**（唯一碰 daemon 點）：Phase 2 T3 探明（已併入），緩解已內建（以 `createSession` 回傳實際 code+name 為準）。
 - **§8.3 大量 session 重建**：`ensureSessions` 對已死逐一 `createSession`；量大時的並行/上限 —— Phase 2 T3 實作時傾向「有上限並行（如 `p-limit` 語意，手寫 chunk）+ 逐一失敗隔離」，測試以序列 mock 驗語意即可，並行度為效能優化不改語意。
 - **best-effort 取代跨視窗空窗**：`replaceTabSnapshot` 兩次 `setState` 各自 `syncManager.notify` 廣播，其他視窗短暫見中間態 —— spec §3.5 已明訂 best-effort、非承諾消除；不引入 batched key（超本次範圍）。
 - **daemon 副作用非交易性（R3 B）**：restore 失敗 rollback 只還原前端 store；已建 session 用 `rebuiltButUnattached` 揭露、不自動刪（與「重建所有 session」刻意 orphan 一致，不造成資料遺失）。
 - **`settings.scope.workspaceId`（R3 C）**：`validateSnapshotConsistency` 不驗；若指向已刪 workspace，既有 UI 顯示 `Workspace not found`（非致命）。
-- **`Date.now()` 注入**：`capture`/orchestration 的 `now` 由 UI 帶入以利決定性測試；只有 T11 UI 層實際呼叫 `Date.now()`。
+- **`Date.now()` 注入**：`capture`/orchestration 的 `now` 由 UI 帶入以利決定性測試；只有 T9 UI 層實際呼叫 `Date.now()`。
