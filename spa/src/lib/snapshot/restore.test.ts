@@ -890,4 +890,23 @@ describe('T7 orchestration', () => {
     expect(callsForHostA[0][1]).toHaveLength(2)
     expect(useSessionStore.getState().sessions.hostA).toHaveLength(2)
   })
+
+  it('8. syncSessionStore preserves host live sessions that are NOT in the snapshot remap', () => {
+    // hostA already has an unrelated live session opened outside this snapshot.
+    useSessionStore.setState({
+      sessions: { hostA: [session({ code: 'extra', name: 'Extra' })] },
+    })
+    const remap: Remap = {
+      hostA: {
+        dead1: { status: 'rebuilt', newCode: 'new1', session: session({ code: 'new1', name: 'N1' }) },
+      },
+    }
+
+    syncSessionStore(remap)
+
+    const sessions = useSessionStore.getState().sessions.hostA
+    const codes = sessions.map((s) => s.code).sort()
+    // 'extra' must survive; the rebuilt 'new1' is upserted alongside it.
+    expect(codes).toEqual(['extra', 'new1'])
+  })
 })

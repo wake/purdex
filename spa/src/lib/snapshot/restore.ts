@@ -335,15 +335,22 @@ function collectRebuilt(remap: Remap): RestoreReport['rebuiltButUnattached'] {
  * host. `failed` entries contribute no Session object.
  */
 export function syncSessionStore(remap: Remap): void {
-  const { replaceHost } = useSessionStore.getState()
+  const state = useSessionStore.getState()
+  const { replaceHost } = state
   for (const [hostId, perHost] of Object.entries(remap)) {
-    const sessions: Session[] = []
+    // `replaceHost` overwrites the host's whole session array, so seed from the
+    // host's EXISTING sessions and upsert by code — otherwise any live session
+    // on this host that isn't part of this snapshot (e.g. opened outside it)
+    // would be wiped from the store and vanish from the session-backed UI.
+    const byCode = new Map<string, Session>(
+      (state.sessions[hostId] ?? []).map((s) => [s.code, s]),
+    )
     for (const entry of Object.values(perHost)) {
       if (entry.status === 'reattached' || entry.status === 'rebuilt') {
-        sessions.push(entry.session)
+        byCode.set(entry.session.code, entry.session)
       }
     }
-    replaceHost(hostId, sessions)
+    replaceHost(hostId, Array.from(byCode.values()))
   }
 }
 
