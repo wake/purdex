@@ -6,8 +6,9 @@ import {
   writeSnapshot,
   readPrevSnapshot,
   writePrevSnapshot,
+  setSessionMetaCwd,
 } from './storage'
-import type { WorkspaceSnapshot } from './types'
+import type { SessionMeta, WorkspaceSnapshot } from './types'
 
 function makeSnapshot(overrides?: Partial<WorkspaceSnapshot>): WorkspaceSnapshot {
   return {
@@ -95,5 +96,126 @@ describe('snapshot storage', () => {
     expect(readPrevSnapshot()).toEqual(prev)
     expect(readSnapshot()).toEqual(current)
     expect(SNAPSHOT_KEY).not.toBe(SNAPSHOT_PREV_KEY)
+  })
+})
+
+describe('setSessionMetaCwd', () => {
+  function metaEntry(over: Partial<SessionMeta> & Pick<SessionMeta, 'hostId' | 'sessionCode' | 'name'>): SessionMeta {
+    return { mode: 'terminal', restorable: true, ...over }
+  }
+
+  function snapWithMeta(sessionMeta: WorkspaceSnapshot['sessionMeta']): WorkspaceSnapshot {
+    return makeSnapshot({ sessionMeta })
+  }
+
+  it('non-empty cwd sets cwd, restorable:true, clears captureError', () => {
+    const snap = snapWithMeta({
+      h1: { s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/old' }) },
+    })
+    const next = setSessionMetaCwd(snap, 'h1', 's1', '/new/path')
+    expect(next.sessionMeta.h1.s1).toMatchObject({
+      cwd: '/new/path',
+      restorable: true,
+    })
+    expect(next.sessionMeta.h1.s1.captureError).toBeUndefined()
+  })
+
+  it('trims surrounding whitespace from a non-empty cwd', () => {
+    const snap = snapWithMeta({
+      h1: { s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'work' }) },
+    })
+    const next = setSessionMetaCwd(snap, 'h1', 's1', '  /trimmed  ')
+    expect(next.sessionMeta.h1.s1.cwd).toBe('/trimmed')
+  })
+
+  it('non-empty cwd on a cwd-probe-failed / dead entry flips restorable true + clears captureError', () => {
+    const snap = snapWithMeta({
+      h1: {
+        s1: metaEntry({
+          hostId: 'h1',
+          sessionCode: 's1',
+          name: 'work',
+          restorable: false,
+          captureError: 'cwd-probe-failed',
+        }),
+      },
+    })
+    const next = setSessionMetaCwd(snap, 'h1', 's1', '/real/dir')
+    expect(next.sessionMeta.h1.s1).toMatchObject({ cwd: '/real/dir', restorable: true })
+    expect(next.sessionMeta.h1.s1.captureError).toBeUndefined()
+  })
+
+  it('empty string clears cwd, restorable:false, captureError undefined', () => {
+    const snap = snapWithMeta({
+      h1: { s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/x', restorable: true }) },
+    })
+    const next = setSessionMetaCwd(snap, 'h1', 's1', '')
+    expect(next.sessionMeta.h1.s1.cwd).toBeUndefined()
+    expect(next.sessionMeta.h1.s1.restorable).toBe(false)
+    expect(next.sessionMeta.h1.s1.captureError).toBeUndefined()
+  })
+
+  it('whitespace-only cwd clears cwd, restorable:false', () => {
+    const snap = snapWithMeta({
+      h1: { s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/x', restorable: true }) },
+    })
+    const next = setSessionMetaCwd(snap, 'h1', 's1', '   \t  ')
+    expect(next.sessionMeta.h1.s1.cwd).toBeUndefined()
+    expect(next.sessionMeta.h1.s1.restorable).toBe(false)
+    expect(next.sessionMeta.h1.s1.captureError).toBeUndefined()
+  })
+
+  it('does not mutate the input snapshot (new objects, original entry unchanged)', () => {
+    const original = metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/old', restorable: true })
+    const snap = snapWithMeta({ h1: { s1: original } })
+    const next = setSessionMetaCwd(snap, 'h1', 's1', '/new')
+
+    expect(next).not.toBe(snap)
+    expect(next.sessionMeta).not.toBe(snap.sessionMeta)
+    expect(next.sessionMeta.h1).not.toBe(snap.sessionMeta.h1)
+    expect(next.sessionMeta.h1.s1).not.toBe(original)
+    // Input entry untouched.
+    expect(original.cwd).toBe('/old')
+    expect(snap.sessionMeta.h1.s1.cwd).toBe('/old')
+  })
+
+  it('composite-key isolation: same code under a different host is untouched', () => {
+    const snap = snapWithMeta({
+      h1: { s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'a', cwd: '/a' }) },
+      h2: { s1: metaEntry({ hostId: 'h2', sessionCode: 's1', name: 'b', cwd: '/b' }) },
+    })
+    const next = setSessionMetaCwd(snap, 'h1', 's1', '/edited')
+    expect(next.sessionMeta.h1.s1.cwd).toBe('/edited')
+    // Different host, same code — reference and value preserved.
+    expect(next.sessionMeta.h2).toBe(snap.sessionMeta.h2)
+    expect(next.sessionMeta.h2.s1.cwd).toBe('/b')
+  })
+
+  it('composite-key isolation: sibling code under the same host is untouched', () => {
+    const snap = snapWithMeta({
+      h1: {
+        s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'a', cwd: '/a' }),
+        s2: metaEntry({ hostId: 'h1', sessionCode: 's2', name: 'b', cwd: '/b' }),
+      },
+    })
+    const before = snap.sessionMeta.h1.s2
+    const next = setSessionMetaCwd(snap, 'h1', 's1', '/edited')
+    expect(next.sessionMeta.h1.s1.cwd).toBe('/edited')
+    expect(next.sessionMeta.h1.s2).toBe(before)
+    expect(next.sessionMeta.h1.s2.cwd).toBe('/b')
+  })
+
+  it('unknown host → snapshot returned unchanged', () => {
+    const snap = snapWithMeta({
+      h1: { s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'a', cwd: '/a' }) },
+    })
+    expect(setSessionMetaCwd(snap, 'nope', 's1', '/x')).toBe(snap)
+  })
+
+  it('unknown code under a known host → snapshot returned unchanged', () => {
+    const snap = snapWithMeta({
+      h1: { s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'a', cwd: '/a' }) },
+    })
+    expect(setSessionMetaCwd(snap, 'h1', 'nope', '/x')).toBe(snap)
   })
 })

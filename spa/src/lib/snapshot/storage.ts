@@ -59,3 +59,39 @@ export function readPrevSnapshot(): WorkspaceSnapshot | null {
 export function writePrevSnapshot(snap: WorkspaceSnapshot): void {
   writeSnapshotToKey(SNAPSHOT_PREV_KEY, snap)
 }
+
+/**
+ * Return a NEW snapshot with the rebuild-target cwd of one captured session
+ * (composite key `[hostId][sessionCode]`) replaced by the user's trimmed input.
+ * The input snapshot is never mutated — only the changed host map + entry are
+ * spread into fresh objects.
+ *
+ * A non-empty cwd is authoritative: it sets `restorable: true` and clears any
+ * `captureError` (e.g. `cwd-probe-failed`), preserving the `restorable ⟺
+ * has-usable-cwd` invariant that capture.ts and `computeHealth`'s 🔴 predicate
+ * rely on. An empty (or whitespace-only) cwd makes the session structure-only
+ * (`restorable: false`, `cwd: undefined`). A missing target entry is a no-op —
+ * the original snapshot is returned unchanged.
+ */
+export function setSessionMetaCwd(
+  snap: WorkspaceSnapshot,
+  hostId: string,
+  sessionCode: string,
+  rawCwd: string,
+): WorkspaceSnapshot {
+  const meta = snap.sessionMeta[hostId]?.[sessionCode]
+  if (!meta) return snap
+
+  const cwd = rawCwd.trim()
+  const nextEntry = cwd
+    ? { ...meta, cwd, restorable: true, captureError: undefined }
+    : { ...meta, cwd: undefined, restorable: false, captureError: undefined }
+
+  return {
+    ...snap,
+    sessionMeta: {
+      ...snap.sessionMeta,
+      [hostId]: { ...snap.sessionMeta[hostId], [sessionCode]: nextEntry },
+    },
+  }
+}
