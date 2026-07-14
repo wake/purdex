@@ -558,6 +558,35 @@ describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
     })
   })
 
+  it('while an action is in flight (busy) → double-click a Directory cell does NOT open the editor, no writeSnapshot', async () => {
+    seedStatefulSnapshot(
+      makeSnapshot({
+        sessionMeta: { h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/x' }) } },
+      }),
+    )
+    // Never-resolving restore keeps `busy` (and busyRef) latched true.
+    let release!: (r: RestoreReport) => void
+    mockedRestoreAll.mockReturnValue(new Promise<RestoreReport>((r) => { release = r }))
+
+    render(<SnapshotSettingsSection />)
+    await waitFor(() => {
+      expect(screen.getByTestId('snapshot-health-h1-s1')).toBeTruthy()
+    })
+
+    fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
+    // Confirm the section is actually busy (rebuild button disabled).
+    await waitFor(() => {
+      expect((screen.getByTestId('snapshot-rebuild-btn') as HTMLButtonElement).disabled).toBe(true)
+    })
+
+    // The cell is disabled → double-click must not enter edit mode.
+    fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
+    expect(screen.queryByTestId('snapshot-cwd-input')).toBeNull()
+    expect(mockedWriteSnapshot).not.toHaveBeenCalled()
+
+    release(EMPTY_REPORT)
+  })
+
   it('committing an empty cwd → row becomes ⚠️ structure-only', async () => {
     seedStatefulSnapshot(
       makeSnapshot({

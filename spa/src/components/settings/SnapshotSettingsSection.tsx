@@ -167,6 +167,11 @@ export function SnapshotSettingsSection() {
   // `refresh()` so the row's health badge reflects the new restorable state. Pure
   // client-side: no daemon call, live sessions untouched.
   const handleCommitCwd = (hostId: string, code: string, value: string) => {
+    // Reject edits landing while a capture/restore/rebuild action is in flight:
+    // that action closed over the pre-edit snapshot and its result would silently
+    // overwrite this write. (The cell is also `disabled` while busy so a row
+    // normally cannot even enter edit mode — this guards the residual window.)
+    if (busyRef.current) return
     const cur = readSnapshot()
     if (!cur) return
     writeSnapshot(setSessionMetaCwd(cur, hostId, code, value))
@@ -450,6 +455,7 @@ function TmuxBlock({
                       <EditableCwdCell
                         cwd={meta.cwd}
                         onCommit={(v) => onCommitCwd(meta.hostId, meta.sessionCode, v)}
+                        disabled={busy}
                       />
                     </td>
                     <td className="py-1 pr-3 font-mono">{meta.currentCommand ?? '—'}</td>
