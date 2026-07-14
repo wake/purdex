@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.321] - 2026-07-14
+
+### Fix(snapshot): 擷取 cwd 改用 pane_current_path，非 session 起始目錄（`~`）(#926)
+
+Workspace Snapshot 實測發現 Sessions 對帳表的 Directory 欄大多顯示 `~`。根因：`capture.ts` 取 `listSessions().cwd`（= tmux `#{session_path}` = session 起始目錄，且不展開 `~`），非目前 pane 的實際 cwd。影響 UI 可讀性，且「Rebuild all」會把 session 重建到起始目錄（常是 home）而非實際工作目錄。
+
+- **修法**：live session 改用 `fetchSessionCwd`（daemon `/api/sessions/{code}/cwd` → tmux `#{pane_current_path}`）解析目前 pane 的絕對 cwd。每 host 仍只 `listSessions` 一次（liveness + name/current_command/mode）；per-session `fetchSessionCwd` **先按 `(host,code)` 去重**再 `Promise.all` 並發、各自 try/catch 隔離。
+- **fallback 可觀測**：`fetchSessionCwd` throw/空 → 退回 `listSessions().cwd` 並標 `captureError:'cwd-probe-failed'`（不再靜默偽裝成精準捕獲；non-empty 仍 restorable 保留 best-effort 重建）；兩者皆空 → restorable:false。dead / host-offline 分支不變。
+- codex 兩輪（標準 + 對抗性三視角）抓修 2：G1 同 session 多 pane 未去重的並發 `/cwd` race（last-writer 覆蓋真實 cwd）、G2 靜默 fallback 偽裝退化快照。subagent-driven TDD；`src/lib/snapshot/` 72 測試綠 / 全套 3931 / lint / build。純 SPA→HMR。
+
 ## [1.0.0-alpha.320] - 2026-07-14
 
 ### Feat(new-tab): Sessions 列表 tab 同款 agent 指示器 + 依 host 建立 session 並 attach (#923)
