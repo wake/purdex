@@ -68,6 +68,7 @@ export const SETTINGS_ORDER = {
   // Tail built-in — dev / debug surfaces.
   DEV_ENVIRONMENT: 20,
   TMUX_AGENT_MONITOR: 21,
+  SNAPSHOT: 22,
   // ---- workspace scope ------------------------------------------------
   WORKSPACE_FILES: 10,
 } as const

@@ -28,6 +28,7 @@ import { SETTINGS_ORDER } from '../settings-order'
 //   sync(16)
 //   dev-environment(20)     — only when caps.devUpdateEnabled
 //   tmux-agent-monitor(21)  — DEV or devUpdateEnabled
+//   snapshot(22)            — always-on (Workspace Snapshot, Phase 3)
 //
 // Optional caps-gated entries are excluded from the strict equality so
 // the assertion is stable across DEV / prod-like jsdom runs.
@@ -71,6 +72,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       { id: 'files',               order: SETTINGS_ORDER.MODULE_FILES },                // 14
       { id: 'performance-monitor', order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR },  // 15
       { id: 'sync',                order: SETTINGS_ORDER.MODULE_SYNC },                 // 16
+      { id: 'snapshot',            order: SETTINGS_ORDER.SNAPSHOT },                   // 22
     ])
 
     // Step 2: any entry not in the always-on list must be one of the
@@ -78,7 +80,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     const expectedAlwaysOnIds = new Set([
       'appearance', 'terminal', 'interface', 'module-config',
       'browser', 'quick-commands', 'editor', 'files',
-      'performance-monitor', 'sync',
+      'performance-monitor', 'sync', 'snapshot',
     ])
     const unexpected = items
       .map((x) => x.id)
