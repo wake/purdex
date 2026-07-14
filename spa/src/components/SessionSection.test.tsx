@@ -91,6 +91,62 @@ describe('SessionSection', () => {
     expect(screen.getByText('dev')).toBeInTheDocument()
   })
 
+  it('shows the session pane title after the code', () => {
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+        ],
+      },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    const row = screen.getByText('dev').closest('button') as HTMLElement
+    expect(row).toHaveTextContent('Reading memory')
+    // title trails the code within the row
+    expect(row.textContent!.indexOf('abc001')).toBeLessThan(row.textContent!.indexOf('Reading memory'))
+  })
+
+  it('caps the name at half-width only when a pane title shares the row', () => {
+    const LONG = 'a-very-long-session-name-that-would-overflow'
+    // With a title: name is truncatable AND capped so the title keeps room.
+    useSessionStore.setState({
+      sessions: { [HOST_ID]: [
+        { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+      ] },
+    })
+    const withTitle = render(<SessionSection onSelect={mockOnSelect} />)
+    const capped = screen.getByText(LONG)
+    expect(capped.className).toContain('truncate')
+    expect(capped.className).toContain('max-w-[50%]')
+    withTitle.unmount()
+
+    // Without a title: name is still truncatable but NOT capped — it may use the
+    // full remaining width instead of being stranded at half a row.
+    useSessionStore.setState({
+      sessions: { [HOST_ID]: [
+        { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+      ] },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    const uncapped = screen.getByText(LONG)
+    expect(uncapped.className).toContain('truncate')
+    expect(uncapped.className).not.toContain('max-w-[50%]')
+  })
+
+  it('omits the title span when the session has no pane title', () => {
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    const row = screen.getByText('dev').closest('button') as HTMLElement
+    expect(row).toHaveTextContent('dev')
+    expect(row).toHaveTextContent('abc001')
+  })
+
   it('calls onSelect when session is clicked', () => {
     useSessionStore.setState({
       sessions: {
