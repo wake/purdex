@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.320] - 2026-07-14
+
+### Feat(new-tab): Sessions 列表 tab 同款 agent 指示器 + 依 host 建立 session 並 attach (#923)
+
+New-Tab 起始畫面的 **Sessions 列表**兩項增強：
+
+- **① tab 同款 icon/status prefix**：每列改用 `<TabIcon>` 顯示與分頁一致的 agent 圖示（Claude Code / Codex / OpenCode）、執行狀態、subagent dots、unread，並跟隨使用者的 `tabIndicatorStyle` 設定。抽出共用 hook `useSessionAgentIndicator`（`compositeKey`→`useAgentStore` + `getAgentIcon` + `tabIndicatorStyle`），`useTabDisplay` 重構為消費此 hook（單一真相來源、行為等價），`SessionSection` 每列抽 `SessionRow`；無 agent 時 fallback 回終端機圖示。
+- **② 依 host 建立 session + attach**：每個 host 標題列（含單 host、含零 session 的 host）加獨立 `+` 建立鈕（header 改 `<div>`、collapse 與 `+` 為分離按鈕、`+` 不觸發收合、收合態點 `+` 會展開）。`NewTabSessionForm`（name/cwd/mode，沿用 `createSession()`）建立成功後直接 `onSelect` attach 進**當前 pane**（全頁 new-tab 或分割格皆適用）。`+`/submit 採 host 頁 offline 語意 disable（`!runtime || status!=='connected' || tmuxState==='unavailable'`）。
+
+多重資料安全守衛：blank code / host-live 送出前後雙重再查、`activeRef` mounted guard（cancel/collapse/host-removed/tab-switch/StrictMode double-invoke 皆不誤 attach 或 unmounted setState）、`creatingRef` 雙擊防護。
+
+spec + plan 各經 codex 跨模型審一輪並強化；subagent-driven TDD（2 phase 5 task）；PR 經 codex **4 輪** review（標準 + 對抗性三視角 + 2 確認輪）抓修 4 個問題（收合表單失效 / stale async attach / offline pre-POST / StrictMode activeRef）全數修復並附回歸測試。vitest 3927 綠 / lint / build。純 SPA→HMR。
+
 ## [1.0.0-alpha.319] - 2026-07-14
 
 ### Feat(snapshot): Settings「Snapshot」section UI（Phase 3）(#920)
