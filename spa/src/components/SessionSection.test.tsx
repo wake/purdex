@@ -363,6 +363,20 @@ describe('SessionSection', () => {
     expect(mockOnSelect).not.toHaveBeenCalled() // cancelled → no attach
   })
 
+  it('attaches after create under StrictMode (activeRef survives the double-invoke)', async () => {
+    const { StrictMode } = await import('react')
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+    vi.mocked(hostApi.createSession).mockResolvedValue(made())
+    render(<StrictMode><SessionSection onSelect={mockOnSelect} /></StrictMode>)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+    fireEvent.click(screen.getByText('Create'))
+    // StrictMode runs effect setup→cleanup→setup; a still-mounted form must stay
+    // active so the resolved create still attaches.
+    await waitFor(() => expect(mockOnSelect).toHaveBeenCalledWith({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'new001', mode: 'terminal', cachedName: 'built', tmuxInstance: '' }))
+  })
+
   it('disables submit and does not POST when the host goes offline after the form opens', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })

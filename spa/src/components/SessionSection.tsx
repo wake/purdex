@@ -82,7 +82,14 @@ function NewTabSessionForm({ hostId, disabled, onCreated, onCancel }: {
   // collapse, host removed, tab switch) so a resolved/rejected request can't
   // setState on a dead component or attach a session the user already dismissed.
   const activeRef = useRef(true)
-  useEffect(() => () => { activeRef.current = false }, [])
+  // Set true on every setup (not just via the ref initialiser) so React 19
+  // StrictMode's dev setup→cleanup→setup double-invoke leaves a still-mounted
+  // form active — otherwise the first cleanup pins it false and no create ever
+  // attaches. Real unmount runs the cleanup last, leaving it false.
+  useEffect(() => {
+    activeRef.current = true
+    return () => { activeRef.current = false }
+  }, [])
 
   const disabledSubmit = creating || !name.trim() || disabled
 
