@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.319] - 2026-07-14
+
+### Feat(snapshot): Settings「Snapshot」section UI（Phase 3）(#920)
+
+工作區快照 / 一鍵重建的**使用者入口**：Settings 新增「Snapshot」section，接上 alpha.318 的 headless capture/storage/restore 引擎。至此整個 Workspace Snapshot 功能（Phase 1+2+3）完整可用——拍下工作區、伺服器重開機 / tmux 重啟後依 name+cwd 一鍵重建。
+
+- **健康度四態對帳表**（掛載時各 host `listSessions` 即時對帳）：🟢 活（live 含 code+name，與引擎 reattach 規則一致）/ 🔴 已死可重建（restorable 且有 cwd 且 host 可達）/ ⚠️ 只保結構（不可重建）/ ⚪ host 離線。Tmux 區塊對帳表（host/name/cwd/current_command/健康度）+ Tabs 區塊樹（workspace→tab→pane）。
+- **三動作 + 復原**：拍快照、重建所有 session、還原 tab 佈局、全部還原、復原上次還原（無 `-prev` 時 disabled）。`useRef` 單飛守衛；toast 依 `RestoreReport` 彙總；restore 失敗以 error tone + `rebuiltButUnattached` 揭露。`SETTINGS_ORDER.SNAPSHOT=22` + 38 個 i18n key（en/zh-TW 對等）。
+- **codex 兩輪跨模型審**（標準 + 對抗性 3-parallel 攻擊/防守/體質）抓修 3 項：capture 後 `snap` mount 凍結不刷新致同頁 capture-then-restore 失效（改可變 state + mutation 後 refresh 重跑健康度對帳）、健康度 🔴 predicate 未含 `cwd` 與引擎 rebuild 規則不一致、`RestoreError` 失敗被降級成 warn（改 error tone + 保留揭露）。元件/測試拆 hook 重構延後 #921。
+- subagent-driven TDD；`SnapshotSettingsSection` 19 測試綠 / 全套 3910 / lint / build。純 SPA→HMR。
+
 ## [1.0.0-alpha.318] - 2026-07-14
 
 ### Feat(snapshot): 工作區快照 capture／storage／restore 引擎（Phase 1+2，headless）(#914)
