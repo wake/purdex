@@ -1,14 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { SnapshotSettingsSection } from './SnapshotSettingsSection'
-import type { SessionMeta, WorkspaceSnapshot } from '../../lib/snapshot/types'
+import { RestoreError } from '../../lib/snapshot/types'
+import type { RestoreReport, SessionMeta, WorkspaceSnapshot } from '../../lib/snapshot/types'
 import type { Session } from '../../lib/host-api'
 import type { PaneContent, Tab, Workspace } from '../../types/tab'
 import * as storageModule from '../../lib/snapshot/storage'
 import * as hostApiModule from '../../lib/host-api'
+import * as captureModule from '../../lib/snapshot/capture'
+import * as restoreModule from '../../lib/snapshot/restore'
 
 vi.mock('../../lib/snapshot/storage')
 vi.mock('../../lib/host-api')
+vi.mock('../../lib/snapshot/capture')
+vi.mock('../../lib/snapshot/restore')
+
+const EMPTY_REPORT: RestoreReport = { reattached: 0, rebuilt: 0, failed: 0, rebuiltButUnattached: [] }
 
 // ---- fixtures ------------------------------------------------------------
 
@@ -62,12 +69,42 @@ function makeSnapshot(over: Partial<WorkspaceSnapshot>): WorkspaceSnapshot {
 const mockedReadSnapshot = vi.mocked(storageModule.readSnapshot)
 const mockedReadPrev = vi.mocked(storageModule.readPrevSnapshot)
 const mockedListSessions = vi.mocked(hostApiModule.listSessions)
+const mockedCapture = vi.mocked(captureModule.captureSnapshot)
+const mockedRebuildAll = vi.mocked(restoreModule.rebuildAllSessions)
+const mockedRestoreTab = vi.mocked(restoreModule.restoreTabLayout)
+const mockedRestoreAll = vi.mocked(restoreModule.restoreAll)
+const mockedUndo = vi.mocked(restoreModule.undoLastRestore)
 
 beforeEach(() => {
   vi.clearAllMocks()
   mockedReadPrev.mockReturnValue(null)
   mockedListSessions.mockResolvedValue([])
+  // Safe defaults so an unstubbed click never crashes on `await undefined`.
+  mockedCapture.mockResolvedValue({ total: 0, resolved: 0, unresolved: 0 })
+  mockedRebuildAll.mockResolvedValue(EMPTY_REPORT)
+  mockedRestoreTab.mockResolvedValue(EMPTY_REPORT)
+  mockedRestoreAll.mockResolvedValue(EMPTY_REPORT)
+  mockedUndo.mockResolvedValue(EMPTY_REPORT)
 })
+
+/** A snapshot with one workspace/tab/session so all blocks + buttons render. */
+function snapWithData(): WorkspaceSnapshot {
+  const tab = leafTab('t1', {
+    kind: 'tmux-session',
+    hostId: 'h1',
+    sessionCode: 's1',
+    mode: 'terminal',
+    cachedName: 'work',
+    tmuxInstance: 'default',
+  })
+  return makeSnapshot({
+    tabs: { t1: tab },
+    tabOrder: ['t1'],
+    workspaces: [ws({ id: 'w1', name: 'Alpha', tabs: ['t1'] })],
+    activeWorkspaceId: 'w1',
+    sessionMeta: { h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/x' }) } },
+  })
+}
 
 describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
   it('live list missing the captured code → row is dead-rebuildable (red)', async () => {
@@ -203,5 +240,134 @@ describe('SnapshotSettingsSection — empty state (T8)', () => {
     expect(screen.queryByTestId('snapshot-tmux-block')).toBeNull()
     expect(screen.queryByTestId('snapshot-tabs-block')).toBeNull()
     expect(mockedListSessions).not.toHaveBeenCalled()
+  })
+})
+
+describe('SnapshotSettingsSection — action wiring (T9)', () => {
+  it('capture button → captureSnapshot(Date.now()) + success toast summarizing result', async () => {
+    mockedReadSnapshot.mockReturnValue(null)
+    mockedCapture.mockResolvedValue({ total: 4, resolved: 3, unresolved: 1 })
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.click(screen.getByTestId('snapshot-capture-btn'))
+
+    await waitFor(() => {
+      expect(mockedCapture).toHaveBeenCalledTimes(1)
+    })
+    // Only the UI layer supplies the clock.
+    expect(mockedCapture).toHaveBeenCalledWith(expect.any(Number))
+    const status = await screen.findByTestId('snapshot-status')
+    expect(status.getAttribute('data-tone')).toBe('success')
+    expect(status.getAttribute('data-total')).toBe('4')
+    expect(status.getAttribute('data-unresolved')).toBe('1')
+  })
+
+  it('rebuild button → rebuildAllSessions(snap)', async () => {
+    const snap = snapWithData()
+    mockedReadSnapshot.mockReturnValue(snap)
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.click(screen.getByTestId('snapshot-rebuild-btn'))
+
+    await waitFor(() => {
+      expect(mockedRebuildAll).toHaveBeenCalledTimes(1)
+    })
+    expect(mockedRebuildAll).toHaveBeenCalledWith(snap)
+  })
+
+  it('restore-tab button → restoreTabLayout(snap)', async () => {
+    const snap = snapWithData()
+    mockedReadSnapshot.mockReturnValue(snap)
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.click(screen.getByTestId('snapshot-restore-tab-btn'))
+
+    await waitFor(() => {
+      expect(mockedRestoreTab).toHaveBeenCalledWith(snap)
+    })
+  })
+
+  it('restore-all button → restoreAll(snap) + report toast (X reattached / Y rebuilt / Z failed)', async () => {
+    const snap = snapWithData()
+    mockedReadSnapshot.mockReturnValue(snap)
+    mockedRestoreAll.mockResolvedValue({ reattached: 2, rebuilt: 1, failed: 3, rebuiltButUnattached: [] })
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
+
+    await waitFor(() => {
+      expect(mockedRestoreAll).toHaveBeenCalledWith(snap)
+    })
+    const status = await screen.findByTestId('snapshot-status')
+    expect(status.getAttribute('data-tone')).toBe('success')
+    expect(status.getAttribute('data-reattached')).toBe('2')
+    expect(status.getAttribute('data-rebuilt')).toBe('1')
+    expect(status.getAttribute('data-failed')).toBe('3')
+  })
+
+  it('undo button → undoLastRestore(); disabled when no -prev, enabled with -prev', async () => {
+    const snap = snapWithData()
+    mockedReadSnapshot.mockReturnValue(snap)
+
+    // First render: no -prev → undo disabled.
+    mockedReadPrev.mockReturnValue(null)
+    const { unmount } = render(<SnapshotSettingsSection />)
+    expect((screen.getByTestId('snapshot-undo-btn') as HTMLButtonElement).disabled).toBe(true)
+    unmount()
+
+    // -prev present → undo enabled and wired.
+    mockedReadPrev.mockReturnValue(snap)
+    render(<SnapshotSettingsSection />)
+    const undoBtn = screen.getByTestId('snapshot-undo-btn') as HTMLButtonElement
+    expect(undoBtn.disabled).toBe(false)
+    fireEvent.click(undoBtn)
+    await waitFor(() => {
+      expect(mockedUndo).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('RestoreError with non-empty rebuiltButUnattached → warn toast listing name/cwd/host + console.warn', async () => {
+    const snap = snapWithData()
+    mockedReadSnapshot.mockReturnValue(snap)
+    const report: RestoreReport = {
+      reattached: 0,
+      rebuilt: 1,
+      failed: 0,
+      rebuiltButUnattached: [{ hostId: 'h9', name: 'orphan-sess', cwd: '/srv/app' }],
+    }
+    mockedRestoreAll.mockRejectedValue(new RestoreError(report))
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
+
+    const status = await screen.findByTestId('snapshot-status')
+    await waitFor(() => {
+      expect(status.getAttribute('data-tone')).toBe('warn')
+    })
+    const item = screen.getByTestId('snapshot-unattached-item')
+    expect(item.textContent).toContain('orphan-sess')
+    expect(item.textContent).toContain('/srv/app')
+    expect(item.textContent).toContain('h9')
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('busy guard: two synchronous clicks fire the action only once', async () => {
+    const snap = snapWithData()
+    mockedReadSnapshot.mockReturnValue(snap)
+    // Never-resolving promise keeps the single-flight guard latched.
+    let release!: (r: RestoreReport) => void
+    mockedRestoreAll.mockReturnValue(new Promise<RestoreReport>((r) => { release = r }))
+
+    render(<SnapshotSettingsSection />)
+    const btn = screen.getByTestId('snapshot-restore-all-btn')
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+
+    await waitFor(() => {
+      expect(mockedRestoreAll).toHaveBeenCalledTimes(1)
+    })
+    release(EMPTY_REPORT)
   })
 })

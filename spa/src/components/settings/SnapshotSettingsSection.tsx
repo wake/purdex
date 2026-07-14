@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
+  ArrowCounterClockwise,
   ArrowsClockwise,
   Camera,
   CheckCircle,
@@ -10,12 +11,37 @@ import {
 } from '@phosphor-icons/react'
 import { SettingItem } from './SettingItem'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { readSnapshot } from '../../lib/snapshot/storage'
+import { readPrevSnapshot, readSnapshot } from '../../lib/snapshot/storage'
+import { captureSnapshot } from '../../lib/snapshot/capture'
+import {
+  rebuildAllSessions,
+  restoreAll,
+  restoreTabLayout,
+  undoLastRestore,
+} from '../../lib/snapshot/restore'
+import { RestoreError } from '../../lib/snapshot/types'
+import type { RestoreReport, SessionMeta, WorkspaceSnapshot } from '../../lib/snapshot/types'
 import { listSessions } from '../../lib/host-api'
 import type { Session } from '../../lib/host-api'
 import { collectLeaves } from '../../lib/pane-tree'
-import type { SessionMeta, WorkspaceSnapshot } from '../../lib/snapshot/types'
 import type { PaneContent } from '../../types/tab'
+
+type Tone = 'idle' | 'busy' | 'success' | 'warn' | 'error'
+
+interface Status {
+  tone: Tone
+  message: string
+  /** data-* attributes exposed for tests / debugging (counts, totals). */
+  attrs?: Record<string, string | number>
+  /** Rebuilt-but-unattached sessions to disclose (R3 B), name/cwd/host each. */
+  unattached?: RestoreReport['rebuiltButUnattached']
+}
+
+const IDLE: Status = { tone: 'idle', message: '' }
+
+function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
 
 /** Per-host live-session lookup state: still loading, host offline, or the list. */
 type HostLive = 'loading' | 'offline' | Session[]
@@ -87,6 +113,14 @@ function formatRelativeTime(t: ReturnType<typeof useI18nStore.getState>['t'], ms
 export function SnapshotSettingsSection() {
   const t = useI18nStore((s) => s.t)
   const [snap] = useState<WorkspaceSnapshot | null>(() => readSnapshot())
+  const [busy, setBusy] = useState(false)
+  // Single-flight guard as a ref (not state) so two synchronous clicks — which
+  // share one render's `busy` closure — still only fire one action.
+  const busyRef = useRef(false)
+  const [status, setStatus] = useState<Status>(IDLE)
+  // Read fresh each render: setBusy re-renders after every action, so once a
+  // restore writes the `-prev` backup the Undo button re-enables on its own.
+  const hasPrev = readPrevSnapshot() !== null
   // Seed every captured host to 'loading' up front (lazy init) so the effect
   // only ever calls setState asynchronously from the resolve/reject callbacks.
   const [liveByHost, setLiveByHost] = useState<Record<string, HostLive>>(() =>
@@ -116,6 +150,89 @@ export function SnapshotSettingsSection() {
     }
   }, [snap])
 
+  const handleCapture = async () => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    setStatus({ tone: 'busy', message: t('settings.snapshot.toast.capturing') })
+    try {
+      // Only the UI layer reads the clock — the engine takes `now` as a param.
+      const res = await captureSnapshot(Date.now())
+      setStatus({
+        tone: 'success',
+        message: t('settings.snapshot.toast.captured', { total: res.total, unresolved: res.unresolved }),
+        attrs: { 'data-total': res.total, 'data-unresolved': res.unresolved },
+      })
+    } catch (e) {
+      setStatus({ tone: 'error', message: t('settings.snapshot.toast.captureFailed', { reason: errMessage(e) }) })
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  // Turn a resolved/collected RestoreReport into a status. A non-empty
+  // rebuiltButUnattached list is always WARN + console.warn (R3 B disclosure),
+  // regardless of whether the restore otherwise succeeded or threw.
+  const reportStatus = (report: RestoreReport, failed: boolean) => {
+    const attrs = {
+      'data-reattached': report.reattached,
+      'data-rebuilt': report.rebuilt,
+      'data-failed': report.failed,
+    }
+    if (report.rebuiltButUnattached.length > 0) {
+      console.warn('[snapshot] sessions rebuilt but could not be reattached', report.rebuiltButUnattached)
+      setStatus({
+        tone: 'warn',
+        message: t('settings.snapshot.toast.rebuiltUnattached'),
+        attrs,
+        unattached: report.rebuiltButUnattached,
+      })
+    } else if (failed) {
+      setStatus({ tone: 'error', message: t('settings.snapshot.toast.restoreError'), attrs })
+    } else {
+      setStatus({
+        tone: 'success',
+        message: t('settings.snapshot.toast.restoreReport', {
+          reattached: report.reattached,
+          rebuilt: report.rebuilt,
+          failed: report.failed,
+        }),
+        attrs,
+      })
+    }
+  }
+
+  const runRestore = async (action: () => Promise<RestoreReport | null>) => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    setStatus({ tone: 'busy', message: t('settings.snapshot.toast.restoring') })
+    try {
+      const report = await action()
+      if (report === null) {
+        // undoLastRestore with no `-prev` backup — nothing happened.
+        setStatus({ tone: 'warn', message: t('settings.snapshot.toast.undoNothing') })
+        return
+      }
+      reportStatus(report, false)
+    } catch (e) {
+      if (e instanceof RestoreError) {
+        reportStatus(e.report, true)
+      } else {
+        setStatus({ tone: 'error', message: t('settings.snapshot.toast.restoreFailed', { reason: errMessage(e) }) })
+      }
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  const handleRebuild = () => snap && runRestore(() => rebuildAllSessions(snap))
+  const handleRestoreTab = () => snap && runRestore(() => restoreTabLayout(snap))
+  const handleRestoreAll = () => snap && runRestore(() => restoreAll(snap))
+  const handleUndo = () => runRestore(() => undoLastRestore())
+
   return (
     <div>
       <h2 className="text-lg text-text-primary">{t('settings.section.snapshot')}</h2>
@@ -132,9 +249,11 @@ export function SnapshotSettingsSection() {
         <button
           type="button"
           data-testid="snapshot-capture-btn"
+          onClick={handleCapture}
+          disabled={busy}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <Camera size={14} />
+          <Camera size={14} className={busy ? 'animate-pulse' : ''} />
           {t('settings.snapshot.capture')}
         </button>
       </SettingItem>
@@ -145,9 +264,77 @@ export function SnapshotSettingsSection() {
         </p>
       ) : (
         <>
-          <TmuxBlock snap={snap} liveByHost={liveByHost} t={t} />
-          <TabsBlock snap={snap} t={t} />
+          <SettingItem
+            label={t('settings.snapshot.restore.label')}
+            description={t('settings.snapshot.restore.description')}
+          >
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="snapshot-restore-all-btn"
+                onClick={handleRestoreAll}
+                disabled={busy}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ArrowsClockwise size={14} />
+                {t('settings.snapshot.restore.all')}
+              </button>
+              <button
+                type="button"
+                data-testid="snapshot-undo-btn"
+                onClick={handleUndo}
+                disabled={busy || !hasPrev}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ArrowCounterClockwise size={14} />
+                {t('settings.snapshot.restore.undo')}
+              </button>
+            </div>
+          </SettingItem>
+
+          <TmuxBlock snap={snap} liveByHost={liveByHost} busy={busy} onRebuild={handleRebuild} t={t} />
+          <TabsBlock snap={snap} busy={busy} onRestoreLayout={handleRestoreTab} t={t} />
         </>
+      )}
+
+      <StatusLine status={status} />
+    </div>
+  )
+}
+
+function StatusLine({ status }: { status: Status }) {
+  if (status.tone === 'idle' || !status.message) return null
+  const Icon =
+    status.tone === 'success' ? CheckCircle
+    : status.tone === 'warn' ? Warning
+    : status.tone === 'error' ? WarningCircle
+    : CircleNotch
+  const color =
+    status.tone === 'success' ? 'text-green-500'
+    : status.tone === 'warn' ? 'text-yellow-500'
+    : status.tone === 'error' ? 'text-red-500'
+    : 'text-text-secondary'
+  return (
+    <div
+      data-testid="snapshot-status"
+      data-tone={status.tone}
+      {...status.attrs}
+      className={`mt-4 text-xs ${color}`}
+    >
+      <div className="flex items-start gap-1.5">
+        <Icon size={14} className={status.tone === 'busy' ? 'animate-spin mt-0.5' : 'mt-0.5'} />
+        <span>{status.message}</span>
+      </div>
+      {status.unattached && status.unattached.length > 0 && (
+        <ul className="mt-1 ml-5 flex flex-col gap-0.5 font-mono">
+          {status.unattached.map((s, i) => (
+            // name/cwd/host are runtime data (not i18n) — render literally so the
+            // disclosure is always legible regardless of the active locale.
+            <li key={`${s.hostId}:${s.name}:${i}`} data-testid="snapshot-unattached-item">
+              {s.name} · {s.cwd} · {s.hostId}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )
@@ -156,10 +343,14 @@ export function SnapshotSettingsSection() {
 function TmuxBlock({
   snap,
   liveByHost,
+  busy,
+  onRebuild,
   t,
 }: {
   snap: WorkspaceSnapshot
   liveByHost: Record<string, HostLive>
+  busy: boolean
+  onRebuild: () => void
   t: ReturnType<typeof useI18nStore.getState>['t']
 }) {
   const rows: SessionMeta[] = []
@@ -174,6 +365,8 @@ function TmuxBlock({
         <button
           type="button"
           data-testid="snapshot-rebuild-btn"
+          onClick={onRebuild}
+          disabled={busy}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <ArrowsClockwise size={14} />
@@ -229,9 +422,13 @@ function TmuxBlock({
 
 function TabsBlock({
   snap,
+  busy,
+  onRestoreLayout,
   t,
 }: {
   snap: WorkspaceSnapshot
+  busy: boolean
+  onRestoreLayout: () => void
   t: ReturnType<typeof useI18nStore.getState>['t']
 }) {
   return (
@@ -241,6 +438,8 @@ function TabsBlock({
         <button
           type="button"
           data-testid="snapshot-restore-tab-btn"
+          onClick={onRestoreLayout}
+          disabled={busy}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {t('settings.snapshot.tabs.restoreLayout')}
