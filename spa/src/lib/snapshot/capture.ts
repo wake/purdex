@@ -1,6 +1,6 @@
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
-import { listSessions } from '../host-api'
+import { listSessions, fetchSessionCwd } from '../host-api'
 import { scanPaneTree } from '../pane-tree'
 import { writeSnapshot } from './storage'
 import type { CaptureResult, SessionMeta, WorkspaceSnapshot } from './types'
@@ -50,43 +50,74 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
     const perHost: Record<string, SessionMeta> = {}
     try {
       const sessions = await listSessions(hostId)
-      for (const ref of refs) {
-        const live = sessions.find((s) => s.code === ref.sessionCode)
-        perHost[ref.sessionCode] =
-          live && live.cwd
+      // Dedup per-pane refs to one entry per sessionCode BEFORE probing: the same
+      // session can appear in multiple panes/tabs. Mode is per-session and
+      // name/currentCommand come from the live Session, so dropping duplicate
+      // pane refs is safe. This guarantees fetchSessionCwd is called at most once
+      // per unique session — no redundant calls and no race where a later
+      // fallback result overwrites an earlier successful pane_current_path.
+      const uniqueRefs = Array.from(
+        new Map(refs.map((ref) => [ref.sessionCode, ref])).values(),
+      )
+      // Resolve each live session's accurate cwd (pane_current_path) concurrently.
+      // fetchSessionCwd failures are isolated per-session: a rejection falls back
+      // to the session_path from listSessions rather than aborting the capture.
+      await Promise.all(
+        uniqueRefs.map(async (ref) => {
+          const live = sessions.find((s) => s.code === ref.sessionCode)
+          if (!live) {
+            perHost[ref.sessionCode] = {
+              hostId,
+              sessionCode: ref.sessionCode,
+              name: ref.cachedName,
+              mode: ref.mode,
+              cwd: undefined,
+              restorable: false,
+              captureError: 'session-dead-at-capture',
+            }
+            return
+          }
+
+          // Prefer the active pane's real current path; fall back to the
+          // session_path (unexpanded start dir) if the probe fails or is empty.
+          let probed = ''
+          try {
+            probed = await fetchSessionCwd(hostId, ref.sessionCode)
+          } catch {
+            probed = ''
+          }
+          // usedFallback: pane_current_path was unavailable and we resorted to
+          // the session_path. Flag it (cwd-probe-failed) so a degraded capture
+          // is observable rather than disguised as a clean pane_current_path.
+          const usedFallback = !probed
+          const cwd = probed || live.cwd
+
+          perHost[ref.sessionCode] = cwd
             ? {
                 hostId,
                 sessionCode: ref.sessionCode,
                 name: live.name,
                 mode: ref.mode,
-                cwd: live.cwd,
+                cwd,
                 currentCommand: live.current_command,
                 restorable: true,
+                ...(usedFallback ? { captureError: 'cwd-probe-failed' as const } : {}),
               }
-            : live
-              ? {
-                  // Live but no usable cwd: keep structure only, not restorable
-                  // (spec line 97 — cwd unknown must not feed createSession).
-                  // cwd stays undefined (spec line 76: not-captured means
-                  // undefined, never empty string); restorable stays false.
-                  hostId,
-                  sessionCode: ref.sessionCode,
-                  name: live.name,
-                  mode: ref.mode,
-                  cwd: undefined,
-                  currentCommand: live.current_command,
-                  restorable: false,
-                }
-              : {
-                  hostId,
-                  sessionCode: ref.sessionCode,
-                  name: ref.cachedName,
-                  mode: ref.mode,
-                  cwd: undefined,
-                  restorable: false,
-                  captureError: 'session-dead-at-capture',
-                }
-      }
+            : {
+                // Live but no usable cwd: keep structure only, not restorable
+                // (spec line 97 — cwd unknown must not feed createSession).
+                // cwd stays undefined (spec line 76: not-captured means
+                // undefined, never empty string); restorable stays false.
+                hostId,
+                sessionCode: ref.sessionCode,
+                name: live.name,
+                mode: ref.mode,
+                cwd: undefined,
+                currentCommand: live.current_command,
+                restorable: false,
+              }
+        }),
+      )
     } catch {
       for (const ref of refs) {
         perHost[ref.sessionCode] = {
