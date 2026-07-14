@@ -42,10 +42,13 @@ import { useSessionAgentIndicator } from './useSessionAgentIndicator'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { compositeKey } from '../lib/composite-key'
+import type { SubagentRef } from '../stores/useAgentStore'
+
+const ref: SubagentRef = { id: 'a', type: 'cc', started_at: 0, source_pid: 0, source_start_time: '' }
 
 beforeEach(() => {
   useAgentStore.setState({ statuses: {}, agentTypes: {}, subagents: {}, unread: {} })
-  useUISettingsStore.setState({ tabIndicatorStyle: 'iconDot', ccIconVariant: 'default', codexIconVariant: 'default' })
+  useUISettingsStore.setState({ tabIndicatorStyle: 'iconDot', ccIconVariant: 'bot', codexIconVariant: 'openai' })
 })
 
 describe('useSessionAgentIndicator', () => {
@@ -62,20 +65,20 @@ describe('useSessionAgentIndicator', () => {
     const ck = compositeKey('h1', 's1')
     useAgentStore.setState({
       statuses: { [ck]: 'running' },
-      agentTypes: { [ck]: 'claude' },
-      subagents: { [ck]: [{ id: 'a', status: 'running' } as never] },
+      agentTypes: { [ck]: 'cc' }, // getAgentIcon only knows 'cc' | 'codex' | 'opencode'
+      subagents: { [ck]: [ref] },
       unread: { [ck]: true },
     })
     const { result } = renderHook(() => useSessionAgentIndicator('h1', 's1'))
     expect(result.current.agentStatus).toBe('running')
-    expect(result.current.agentIcon).toBeTypeOf('function') // getAgentIcon('claude', ...) resolved a component
+    expect(result.current.agentIcon).toBeTypeOf('function') // getAgentIcon('cc', { ccVariant:'bot', ... }) resolved a component
     expect(result.current.subagentRefs).toHaveLength(1)
     expect(result.current.isUnread).toBe(true)
   })
 
   it('suppresses the agent icon when terminated', () => {
     const ck = compositeKey('h1', 's1')
-    useAgentStore.setState({ agentTypes: { [ck]: 'claude' } })
+    useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
     const { result } = renderHook(() => useSessionAgentIndicator('h1', 's1', { isTerminated: true }))
     expect(result.current.agentIcon).toBeUndefined()
   })
@@ -165,19 +168,28 @@ git commit -m "feat(new-tab): add useSessionAgentIndicator hook (shared tab/sess
 
 - [ ] **Step 1: Add a variant-update regression test**
 
-Append to `spa/src/hooks/useTabDisplay.test.ts` (adapt store-seed helpers to the file's existing pattern — seed a `tmux-session` tab with `agentTypes[ck]='claude'`):
+First read `spa/src/hooks/useTabDisplay.test.ts` to reuse its `makeTab(...)`
+helper and the exact `hostId`/`sessionCode` it bakes into the tab (needed for the
+composite key). Append (adjusting `makeTab`'s host/code into the `compositeKey`):
 
 ```ts
-it('re-resolves the agent icon when the cc icon variant changes', () => {
-  // seed a tmux-session tab whose ck has agentType 'claude' (reuse this file's helpers)
-  const first = renderTabDisplay() // -> returns result.current.IconComponent
-  useUISettingsStore.setState({ ccIconVariant: 'mono' })
-  const second = renderTabDisplay()
-  expect(second.IconComponent).not.toBe(first.IconComponent) // variant flows through the extracted hook
+it('re-resolves the cc agent icon when the cc icon variant changes', () => {
+  const tab = makeTab(/* a tmux-session tab, per this file's helper */)
+  // Seed a 'cc' agent for that tab's composite key (use makeTab's real host/code):
+  const ck = compositeKey(/* host */, /* code */)
+  useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
+  useUISettingsStore.setState({ tabIndicatorStyle: 'iconDot', ccIconVariant: 'bot', codexIconVariant: 'openai' })
+
+  const { result, rerender } = renderHook(() => useTabDisplay(tab))
+  const first = result.current.IconComponent
+  useUISettingsStore.setState({ ccIconVariant: 'star' }) // valid CcIconVariant
+  rerender()
+  expect(result.current.IconComponent).not.toBe(first) // variant flows through the extracted hook
 })
 ```
 
-(If the existing file already covers variant flow, keep that instead and skip this addition — do not duplicate.)
+(If the existing file already covers cc/codex variant flow through `IconComponent`,
+keep that instead and skip this addition — do not duplicate.)
 
 - [ ] **Step 2: Run the existing suite to confirm baseline green**
 
@@ -234,7 +246,7 @@ import { compositeKey } from '../lib/composite-key'
 it('renders the tab-style status indicator for a running-agent session', () => {
   useUISettingsStore.setState({ tabIndicatorStyle: 'dot' })
   const ck = compositeKey(HOST_ID, 'abc001')
-  useAgentStore.setState({ statuses: { [ck]: 'running' }, agentTypes: { [ck]: 'claude' }, subagents: {}, unread: {} })
+  useAgentStore.setState({ statuses: { [ck]: 'running' }, agentTypes: { [ck]: 'cc' }, subagents: {}, unread: {} })
   useSessionStore.setState({
     sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }] },
   })
@@ -244,7 +256,7 @@ it('renders the tab-style status indicator for a running-agent session', () => {
 })
 ```
 
-> Before writing, open `components/TabStatusIndicator.tsx` to use its real `data-testid` (or role). If it has none, assert on the rendered agent icon instead: seed no agent and assert the terminal icon is present, then seed an agent and assert an added element. Pick a stable selector that actually exists.
+> `TabStatusIndicator` renders `data-testid="tab-status-indicator"` (confirmed) — this test asserts the **status** branch appears in the row. Agent-icon *resolution* itself is covered by Task 1's hook test (asserting `getAgentIcon('cc', …)` returns a component); here we only need the running-agent status indicator to render in a non-`icon` style. Use `agentTypes: { [ck]: 'cc' }` (not a bogus type that would fall back to the terminal icon).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -323,10 +335,13 @@ In `SessionSection.test.tsx`:
 - Replace `does not show host header for single host`: now assert the single host shows a create affordance — `screen.getByTestId(`new-session-${HOST_ID}`)` is present — and that NO collapse toggle (`host-header-${HOST_ID}`) exists for a single host.
 - Add:
 
+Runtime fixtures use the real `HostRuntime` shape — only `status` is required,
+`tmuxState` is `'ok' | 'unavailable'` (no `as never` casts):
+
 ```ts
 it('renders header + create button for a connected host with zero sessions', () => {
   useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
-  useHostStore.setState((s) => ({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'available' } as never } }))
+  useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } } })
   render(<SessionSection onSelect={mockOnSelect} />)
   expect(screen.queryByText('No sessions available')).toBeNull()
   expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeInTheDocument()
@@ -340,7 +355,14 @@ it('shows the global empty message only when there are no hosts', () => {
 
 it('disables the create button when the host tmux is unavailable', () => {
   useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
-  useHostStore.setState((s) => ({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'unavailable' } as never } }))
+  useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'unavailable' } } })
+  render(<SessionSection onSelect={mockOnSelect} />)
+  expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeDisabled()
+})
+
+it('disables the create button when the host has no runtime (offline)', () => {
+  useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+  useHostStore.setState({ runtime: {} }) // runtime undefined → Host-page rule treats as offline
   render(<SessionSection onSelect={mockOnSelect} />)
   expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeDisabled()
 })
@@ -350,7 +372,7 @@ it('clicking the create button does not toggle collapse', () => {
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1', port: 7860, order: 0 }, [HOST_B]: { id: HOST_B, name: 'air', ip: '2', port: 7860, order: 1 } },
     hostOrder: [HOST_ID, HOST_B], activeHostId: HOST_ID,
-    runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'available' } as never },
+    runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } },
   })
   useSessionStore.setState({ sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }] } })
   render(<SessionSection onSelect={mockOnSelect} />)
@@ -401,53 +423,78 @@ git commit -m "feat(new-tab): per-host header with create button; render hosts w
 
 - [ ] **Step 1: Write the failing tests (mock `createSession`)**
 
-Extend the `vi.mock('../lib/host-api', …)` to also expose `createSession: vi.fn()`. Add:
+Extend `vi.mock('../lib/host-api', …)` to also expose `createSession: vi.fn()`,
+and in `beforeEach` add `vi.mocked(hostApi.createSession).mockReset()` so the
+create tests don't cross-contaminate. Use `waitFor` (import from
+`@testing-library/react`) for async assertions — never `findByTestId` on the
+`+` button, which exists before the create resolves. Resolved i18n strings:
+placeholder `Session Name` (`hosts.session_name`), button `Create`
+(`hosts.create`). A live runtime is `{ status: 'connected', tmuxState: 'ok' }`.
 
 ```ts
 import * as hostApi from '../lib/host-api'
+import { waitFor } from '@testing-library/react'
+
+const LIVE = { status: 'connected', tmuxState: 'ok' } as const
+const made = (over: Partial<{ code: string; name: string }> = {}) =>
+  ({ code: 'new001', name: 'built', cwd: '~', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, ...over })
 
 it('creates a session and attaches it into the current pane', async () => {
   useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
-  useHostStore.setState((s) => ({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'available' } as never } }))
-  vi.mocked(hostApi.createSession).mockResolvedValue({ code: 'new001', name: 'built', cwd: '~', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false })
+  useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+  vi.mocked(hostApi.createSession).mockResolvedValue(made())
   render(<SessionSection onSelect={mockOnSelect} />)
   fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
-  fireEvent.change(screen.getByPlaceholderText('Session name'), { target: { value: 'built' } })
+  fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
   fireEvent.click(screen.getByText('Create'))
-  await screen.findByTestId(`new-session-${HOST_ID}`) // let the async create settle
-  expect(hostApi.createSession).toHaveBeenCalledWith(HOST_ID, 'built', '~', 'terminal')
-  expect(mockOnSelect).toHaveBeenCalledWith({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'new001', mode: 'terminal', cachedName: 'built', tmuxInstance: '' })
+  await waitFor(() => expect(hostApi.createSession).toHaveBeenCalledWith(HOST_ID, 'built', '~', 'terminal'))
+  await waitFor(() => expect(mockOnSelect).toHaveBeenCalledWith({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'new001', mode: 'terminal', cachedName: 'built', tmuxInstance: '' }))
 })
 
 it('does not attach when the created session has a blank code', async () => {
   useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
-  useHostStore.setState((s) => ({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'available' } as never } }))
-  vi.mocked(hostApi.createSession).mockResolvedValue({ code: '', name: 'built', cwd: '~', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false })
+  useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+  vi.mocked(hostApi.createSession).mockResolvedValue(made({ code: '' }))
   render(<SessionSection onSelect={mockOnSelect} />)
   fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
-  fireEvent.change(screen.getByPlaceholderText('Session name'), { target: { value: 'built' } })
+  fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
   fireEvent.click(screen.getByText('Create'))
-  await screen.findByText(/failed|error/i)
+  await screen.findByText('Create failed') // inline error, form stays open
+  expect(screen.getByPlaceholderText('Session Name')).toBeInTheDocument()
   expect(mockOnSelect).not.toHaveBeenCalled()
 })
 
 it('does not attach when the host is removed while creating', async () => {
   useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
-  useHostStore.setState((s) => ({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'available' } as never } }))
+  useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
   vi.mocked(hostApi.createSession).mockImplementation(async () => {
-    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null }) // host vanishes mid-flight
-    return { code: 'new001', name: 'built', cwd: '~', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }
+    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null, runtime: {} }) // host vanishes mid-flight
+    return made()
   })
   render(<SessionSection onSelect={mockOnSelect} />)
   fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
-  fireEvent.change(screen.getByPlaceholderText('Session name'), { target: { value: 'built' } })
+  fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
   fireEvent.click(screen.getByText('Create'))
-  await screen.findByText(/failed|error/i)
-  expect(mockOnSelect).not.toHaveBeenCalled()
+  await waitFor(() => expect(hostApi.createSession).toHaveBeenCalled())
+  await waitFor(() => expect(mockOnSelect).not.toHaveBeenCalled())
+})
+
+it('submits create only once on a double click', async () => {
+  useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+  useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+  let resolve!: (v: ReturnType<typeof made>) => void
+  vi.mocked(hostApi.createSession).mockReturnValue(new Promise((r) => { resolve = r }))
+  render(<SessionSection onSelect={mockOnSelect} />)
+  fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+  fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+  const createBtn = screen.getByText('Create')
+  fireEvent.click(createBtn)
+  fireEvent.click(createBtn) // second click while in-flight must be a no-op
+  resolve(made())
+  await waitFor(() => expect(mockOnSelect).toHaveBeenCalled())
+  expect(hostApi.createSession).toHaveBeenCalledTimes(1)
 })
 ```
-
-> Use the real resolved i18n strings for `Session name` placeholder (`hosts.session_name`) and `Create` (`hosts.create`). Confirm the exact English values in `locales/en.json` before writing; adjust the selectors to match.
 
 - [ ] **Step 2: Run to verify failures**
 
@@ -456,7 +503,8 @@ Expected: FAIL — no form / `createSession` not wired.
 
 - [ ] **Step 3: Add `NewTabSessionForm` and wire it under the header**
 
-In `SessionSection.tsx`:
+In `SessionSection.tsx` (add `useRef` to the existing `react` import and
+`createSession` from host-api; `useHostStore` is already imported):
 
 ```tsx
 import { createSession } from '../lib/host-api'
@@ -472,11 +520,13 @@ function NewTabSessionForm({ hostId, onCreated, onCancel }: {
   const [mode, setMode] = useState('terminal')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+  const creatingRef = useRef(false) // synchronous double-submit guard (fires before `creating` state commits)
 
   const disabledSubmit = creating || !name.trim()
 
   const handleCreate = async () => {
-    if (!name.trim()) return
+    if (creatingRef.current || !name.trim()) return
+    creatingRef.current = true
     setCreating(true); setError('')
     try {
       const created = await createSession(hostId, name.trim(), cwd, mode)
@@ -490,6 +540,7 @@ function NewTabSessionForm({ hostId, onCreated, onCancel }: {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed')
     } finally {
+      creatingRef.current = false
       setCreating(false)
     }
   }
