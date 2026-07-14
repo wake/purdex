@@ -10,7 +10,18 @@ import * as hostApiModule from '../../lib/host-api'
 import * as captureModule from '../../lib/snapshot/capture'
 import * as restoreModule from '../../lib/snapshot/restore'
 
-vi.mock('../../lib/snapshot/storage')
+// Partial mock: stub the storage read/write boundary but keep the REAL
+// setSessionMetaCwd so the cwd-edit → restorable-flip drives end-to-end.
+vi.mock('../../lib/snapshot/storage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/snapshot/storage')>()
+  return {
+    ...actual,
+    readSnapshot: vi.fn(),
+    writeSnapshot: vi.fn(),
+    readPrevSnapshot: vi.fn(),
+    writePrevSnapshot: vi.fn(),
+  }
+})
 vi.mock('../../lib/host-api')
 vi.mock('../../lib/snapshot/capture')
 vi.mock('../../lib/snapshot/restore')
@@ -67,6 +78,7 @@ function makeSnapshot(over: Partial<WorkspaceSnapshot>): WorkspaceSnapshot {
 }
 
 const mockedReadSnapshot = vi.mocked(storageModule.readSnapshot)
+const mockedWriteSnapshot = vi.mocked(storageModule.writeSnapshot)
 const mockedReadPrev = vi.mocked(storageModule.readPrevSnapshot)
 const mockedListSessions = vi.mocked(hostApiModule.listSessions)
 const mockedCapture = vi.mocked(captureModule.captureSnapshot)
@@ -448,5 +460,127 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
       expect(mockedRestoreAll).toHaveBeenCalledTimes(1)
     })
     release(EMPTY_REPORT)
+  })
+})
+
+describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
+  /**
+   * Wire readSnapshot/writeSnapshot into a single mutable cell so a commit
+   * persists and the subsequent refresh() re-reads the updated snapshot — mirrors
+   * how the real storage boundary behaves so health reconciliation re-runs.
+   */
+  function seedStatefulSnapshot(initial: WorkspaceSnapshot) {
+    let current: WorkspaceSnapshot | null = initial
+    mockedReadSnapshot.mockImplementation(() => current)
+    mockedWriteSnapshot.mockImplementation((s: WorkspaceSnapshot) => {
+      current = s
+    })
+  }
+
+  it('double-click a Directory cell → editable input pre-filled with the cwd', () => {
+    mockedReadSnapshot.mockReturnValue(
+      makeSnapshot({
+        sessionMeta: { h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/x' }) } },
+      }),
+    )
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
+    expect((screen.getByTestId('snapshot-cwd-input') as HTMLInputElement).value).toBe('/x')
+  })
+
+  it('Enter commits → writeSnapshot called with the updated cwd', async () => {
+    seedStatefulSnapshot(
+      makeSnapshot({
+        sessionMeta: { h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/x' }) } },
+      }),
+    )
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
+    const input = screen.getByTestId('snapshot-cwd-input')
+    fireEvent.change(input, { target: { value: '/new/dir' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockedWriteSnapshot).toHaveBeenCalledTimes(1)
+    })
+    const persisted = mockedWriteSnapshot.mock.calls[0][0]
+    expect(persisted.sessionMeta.h1.s1.cwd).toBe('/new/dir')
+    expect(persisted.sessionMeta.h1.s1.restorable).toBe(true)
+    // The row now displays the persisted value after refresh().
+    await waitFor(() => {
+      expect(screen.getByTestId('snapshot-cwd-cell').textContent).toBe('/new/dir')
+    })
+  })
+
+  it('Esc cancels → no writeSnapshot, cell reverts to the original value', () => {
+    mockedReadSnapshot.mockReturnValue(
+      makeSnapshot({
+        sessionMeta: { h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'work', cwd: '/orig' }) } },
+      }),
+    )
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
+    const input = screen.getByTestId('snapshot-cwd-input')
+    fireEvent.change(input, { target: { value: '/discarded' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.blur(input)
+
+    expect(mockedWriteSnapshot).not.toHaveBeenCalled()
+    expect(screen.getByTestId('snapshot-cwd-cell').textContent).toBe('/orig')
+  })
+
+  it('editing a ⚠️ structure-only row to a real path → health flips to 🔴 dead-rebuildable', async () => {
+    seedStatefulSnapshot(
+      makeSnapshot({
+        sessionMeta: {
+          h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'work', restorable: false, cwd: undefined }) },
+        },
+      }),
+    )
+    // Host reachable, session not in the live list → structure now, dead after cwd.
+    mockedListSessions.mockResolvedValue([session({ code: 'other', name: 'other' })])
+
+    render(<SnapshotSettingsSection />)
+    await waitFor(() => {
+      expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('structure')
+    })
+
+    fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
+    const input = screen.getByTestId('snapshot-cwd-input')
+    fireEvent.change(input, { target: { value: '/real/dir' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('dead')
+    })
+  })
+
+  it('committing an empty cwd → row becomes ⚠️ structure-only', async () => {
+    seedStatefulSnapshot(
+      makeSnapshot({
+        sessionMeta: {
+          h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'work', restorable: true, cwd: '/x' }) },
+        },
+      }),
+    )
+    mockedListSessions.mockResolvedValue([session({ code: 'other', name: 'other' })])
+
+    render(<SnapshotSettingsSection />)
+    await waitFor(() => {
+      expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('dead')
+    })
+
+    fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
+    const input = screen.getByTestId('snapshot-cwd-input')
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('structure')
+    })
+    expect(mockedWriteSnapshot.mock.calls[0][0].sessionMeta.h1.s1.cwd).toBeUndefined()
   })
 })

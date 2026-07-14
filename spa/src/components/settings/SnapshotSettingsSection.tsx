@@ -10,8 +10,9 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react'
 import { SettingItem } from './SettingItem'
+import { EditableCwdCell } from './EditableCwdCell'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { readPrevSnapshot, readSnapshot } from '../../lib/snapshot/storage'
+import { readPrevSnapshot, readSnapshot, setSessionMetaCwd, writeSnapshot } from '../../lib/snapshot/storage'
 import { captureSnapshot } from '../../lib/snapshot/capture'
 import {
   rebuildAllSessions,
@@ -161,6 +162,16 @@ export function SnapshotSettingsSection() {
   // object, this bumps the `snap` reference → the reconciliation effect re-fires
   // and the restore handlers close over the latest snapshot on their next click.
   const refresh = () => setSnap(readSnapshot())
+
+  // Persist a manual cwd edit for one session, then re-read + re-reconcile via
+  // `refresh()` so the row's health badge reflects the new restorable state. Pure
+  // client-side: no daemon call, live sessions untouched.
+  const handleCommitCwd = (hostId: string, code: string, value: string) => {
+    const cur = readSnapshot()
+    if (!cur) return
+    writeSnapshot(setSessionMetaCwd(cur, hostId, code, value))
+    refresh()
+  }
 
   const handleCapture = async () => {
     if (busyRef.current) return
@@ -322,7 +333,14 @@ export function SnapshotSettingsSection() {
             </div>
           </SettingItem>
 
-          <TmuxBlock snap={snap} liveByHost={liveByHost} busy={busy} onRebuild={handleRebuild} t={t} />
+          <TmuxBlock
+            snap={snap}
+            liveByHost={liveByHost}
+            busy={busy}
+            onRebuild={handleRebuild}
+            onCommitCwd={handleCommitCwd}
+            t={t}
+          />
           <TabsBlock snap={snap} busy={busy} onRestoreLayout={handleRestoreTab} t={t} />
         </>
       )}
@@ -375,12 +393,14 @@ function TmuxBlock({
   liveByHost,
   busy,
   onRebuild,
+  onCommitCwd,
   t,
 }: {
   snap: WorkspaceSnapshot
   liveByHost: Record<string, HostLive>
   busy: boolean
   onRebuild: () => void
+  onCommitCwd: (hostId: string, code: string, value: string) => void
   t: ReturnType<typeof useI18nStore.getState>['t']
 }) {
   const rows: SessionMeta[] = []
@@ -426,7 +446,12 @@ function TmuxBlock({
                   <tr key={`${meta.hostId}:${meta.sessionCode}`} className="border-t border-border-default">
                     <td className="py-1 pr-3 text-text-primary">{meta.hostId}</td>
                     <td className="py-1 pr-3">{meta.name}</td>
-                    <td className="py-1 pr-3 font-mono">{meta.cwd ?? '—'}</td>
+                    <td className="py-1 pr-3 font-mono">
+                      <EditableCwdCell
+                        cwd={meta.cwd}
+                        onCommit={(v) => onCommitCwd(meta.hostId, meta.sessionCode, v)}
+                      />
+                    </td>
                     <td className="py-1 pr-3 font-mono">{meta.currentCommand ?? '—'}</td>
                     <td className="py-1">
                       <span
