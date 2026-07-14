@@ -56,7 +56,7 @@ function SessionRow({ hostId, session, disabled, onSelect }: {
       <span className={`truncate${session.pane_title ? ' max-w-[50%]' : ''}`}>{session.name}</span>
       <span className="text-xs text-text-secondary flex-shrink-0">{session.code}</span>
       {session.pane_title && (
-        <span className="text-xs text-text-muted truncate min-w-0 flex-1">{session.pane_title}</span>
+        <span className="text-xs text-text-secondary truncate min-w-0 flex-1">{session.pane_title}</span>
       )}
     </button>
   )
