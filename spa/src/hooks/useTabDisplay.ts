@@ -1,4 +1,3 @@
-import type { ComponentType } from 'react'
 import type { Tab } from '../types/tab'
 import type { AgentStatus, SubagentRef } from '../stores/useAgentStore'
 import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
@@ -11,14 +10,14 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
 import { compositeKey } from '../lib/composite-key'
-import { getAgentIcon } from '../lib/agent-icons'
 import { ICON_MAP } from '../components/tab-icon-map'
 import type { Session } from '../lib/host-api'
+import { useSessionAgentIndicator } from './useSessionAgentIndicator'
+import type { TabIconComponent } from './useSessionAgentIndicator'
 
 const EMPTY_SESSIONS: Session[] = []
-const EMPTY_SUBAGENT_REFS: SubagentRef[] = []
 
-export type TabIconComponent = ComponentType<{ size: number; className?: string }>
+export type { TabIconComponent }
 
 export interface TabDisplayData {
   displayTitle: string
@@ -49,14 +48,10 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const sessions = useSessionStore((s) => (hostId ? s.sessions[hostId] : undefined) ?? EMPTY_SESSIONS)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
 
-  const agentStatus = useAgentStore((s) => (ck ? s.statuses[ck] : undefined))
-  const isUnread = useAgentStore((s) => (ck ? !!s.unread[ck] : false))
-  const subagentRefs = useAgentStore((s) => (ck ? (s.subagents[ck] ?? EMPTY_SUBAGENT_REFS) : EMPTY_SUBAGENT_REFS))
+  const { agentIcon, agentStatus, subagentRefs, isUnread, tabIndicatorStyle } =
+    useSessionAgentIndicator(hostId, sessionCode, { isTerminated })
   const subagentCount = subagentRefs.length
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
-  const tabIndicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
-  const ccIconVariant = useUISettingsStore((s) => s.ccIconVariant)
-  const codexIconVariant = useUISettingsStore((s) => s.codexIconVariant)
   const dynamicTabName = useUISettingsStore((s) => s.dynamicTabName)
 
   const isHostOffline = useHostStore((s) => {
@@ -67,7 +62,6 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
 
   const iconName = getPaneIcon(primaryContent)
   const paneIcon = ICON_MAP[iconName]
-  const agentIcon = !isTerminated && agentType ? getAgentIcon(agentType, { ccVariant: ccIconVariant, codexVariant: codexIconVariant }) : undefined
   const IconComponent = (agentIcon ?? paneIcon) as TabIconComponent | undefined
 
   const sessionLookup = { getByCode: (code: string) => sessions.find((sess) => sess.code === code) }
