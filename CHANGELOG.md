@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.318] - 2026-07-14
+
+### Feat(snapshot): 工作區快照 capture／storage／restore 引擎（Phase 1+2，headless）(#914)
+
+工作區快照 / 一鍵重建的**純前端邏輯層**：拍下整個工作區（workspace/tab/pane 結構 + 每個 tmux session 的 name/cwd），讓伺服器重開機 / tmux 重啟後依 name+cwd 一鍵把工作環境重建回來。本版僅引擎，Settings UI 為後續 Phase 3。Spec/Plan 經 codex R1–R3 全過。
+
+- **Phase 1 資料模型 + capture + 持久化**：`types.ts`（`SessionMeta`/`WorkspaceSnapshot`/複合鍵 `Remap`/`RestoreReport`/`RestoreError`）、`storage.ts`（正本 + `-prev` 後悔藥 key，走 `browserStorage`）、`capture.ts`（`buildSnapshot` 純建物件不寫 storage、`captureSnapshot` 寫正本 + 統計；每 host 一次 `listSessions`，live 無 cwd / 已死 / host 不可達 → `restorable=false`）。
+- **Phase 2 restore 引擎 + 三動作**（`restore.ts`）：`ensureSessions`（對帳 + 重建，逐筆失敗隔離、以 `createSession` 回傳物件為準）、`remapLayoutSessions`（純函式改寫 layout 樹）、`validateSnapshotConsistency`（5 條導航守衛）、`replaceTabSnapshot`（整包取代兩 store，任一步 throw 全回滾）、三動作 orchestration（`rebuildAllSessions` 不收窄含 orphan、`restoreTabLayout`、`restoreAll`、`undoLastRestore`）、`syncSessionStore` per-host 聚合。
+- **實作中修正 plan 矛盾**：`-prev` 誤用 `captureSnapshot`（會覆寫正本毀還原來源）改用 `buildSnapshot`（B1）。
+- **codex 兩輪跨模型審**（標準 + 對抗性 3-parallel 攻擊/防守/體質）抓修 5 項：syncSessionStore 整包覆蓋抹掉非快照 live session（+ 修法引入的幽靈 session）、`writePrevSnapshot` 失敗未揭露已建 session、reattach 只憑 code → 改 **code+name 都吻合**（防 daemon 重啟 code 重用錯接）、storage 只驗 version → 加輕量 shape 守衛。駁回「pane mode 不同步」（誤報，違 app 慣例）。restore.ts 拆檔延後 #918。
+- subagent-driven TDD；`src/lib/snapshot/` 68 測試綠 / 全套 3889 / lint / build。純 SPA→HMR。
+
 ## [1.0.0-alpha.317] - 2026-07-14
 
 ### Fix(panes): 分割後 pane 內容無法捲動 — split 容器改用 h-full 取得有界高 (#916)
