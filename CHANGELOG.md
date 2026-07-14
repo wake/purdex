@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.324] - 2026-07-14
+
+### Feat(snapshot): Sessions 對帳表手動編輯 cwd（rebuild 落點）(#931)
+
+在 Snapshot Sessions 對帳表 double-click **Directory** 欄，手動修正/補上該 session 重建時的目標 cwd。純 client-side 改快照，不碰 daemon、不動 live session——只改「Rebuild all / Restore everything 對該 session 傳給 createSession 的 cwd」。承接 alpha.321（cwd 改用 pane_current_path），補上使用者直接控制落點的能力。
+
+- **所有列可編**：⚠️ 無 cwd 者補上路徑即變可重建（restorable:true）；🟢 live 設將來死掉的落點；空值清成 structure-only。
+- **`setSessionMetaCwd` 純函式**（storage.ts）：trim；非空 → cwd+restorable:true+清 captureError（手動值權威，蓋過 cwd-probe-failed/dead）；空 → cwd:undefined+restorable:false；複合鍵 `[host][code]` 定點更新、不 mutate；維持 `restorable ⟺ 有 cwd` 不變式（與 capture / computeHealth 🔴 predicate 一致）。
+- **`EditableCwdCell`** inline edit：double-click 進編輯（預填現值）、Enter/blur 存、Esc 取消；committedRef latch 防 Enter-then-blur 雙提交。存檔走 readSnapshot→setSessionMetaCwd→writeSnapshot→既有 refresh() 重讀+重跑健康度 → 該列 badge 即時更新（⚠️→🔴）。
+- **重拍整包覆蓋**手動編輯（不 sticky，定案）；無路徑驗證/無 `~` 展開。
+- codex 兩輪（標準+對抗性三視角）抓修 2：H1 cwd 編輯在 busyRef 單飛守衛外 → 與 in-flight capture/restore race + lost update（改 `disabled={busy}` 不進編輯 + commit busy 時 reject）、H2 Enter 在 IME composition 中誤 commit（compositionRef + isComposing 雙偵測，composing 時 Enter/Esc 不觸發——CJK 選字安全）。subagent-driven TDD；settings+snapshot 314 測試綠 / 全套 3963 / lint / build。純 SPA→HMR。
+
 ## [1.0.0-alpha.323] - 2026-07-14
 
 ### Style(new-tab): Sessions 列表標題亮度對齊 id (#929)
