@@ -106,6 +106,19 @@ describe('SessionSection', () => {
     expect(row.textContent!.indexOf('abc001')).toBeLessThan(row.textContent!.indexOf('Reading memory'))
   })
 
+  it('keeps the session name truncatable so a long name cannot overflow the row', () => {
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'a-very-long-session-name-that-would-overflow', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+        ],
+      },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    const nameSpan = screen.getByText('a-very-long-session-name-that-would-overflow')
+    expect(nameSpan.className).toContain('truncate') // overflow-hidden lets flex shrink+ellipsis it
+  })
+
   it('omits the title span when the session has no pane title', () => {
     useSessionStore.setState({
       sessions: {
