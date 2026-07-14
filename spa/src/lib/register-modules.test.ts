@@ -131,6 +131,22 @@ describe('registerBuiltinModules', () => {
     expect(monitor?.order).toBe(21)
   })
 
+  it('registers the Snapshot settings section (id=snapshot, order=22)', () => {
+    registerBuiltinModules()
+    const snapshot = getSettingsSections().find((s) => s.id === 'snapshot')
+    expect(snapshot).toBeDefined()
+    expect(snapshot?.label).toBe('settings.section.snapshot')
+    expect(snapshot?.order).toBe(SETTINGS_ORDER.SNAPSHOT)
+    expect(snapshot?.order).toBe(22)
+  })
+
+  it('both locales carry the settings.section.snapshot label', () => {
+    const en = enLocale as Record<string, string>
+    const zh = zhLocale as Record<string, string>
+    expect(en['settings.section.snapshot']).toBe('Snapshot')
+    expect(zh['settings.section.snapshot']).toBe('快照')
+  })
+
   it('registers interface section with order=2', () => {
     registerBuiltinModules()
     const sections = getSettingsSections()

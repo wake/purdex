@@ -27,6 +27,7 @@ import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentS
 import { TmuxAgentMonitorSection } from '../../components/settings/TmuxAgentMonitorSection'
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
 import { SyncSection } from '../../components/settings/SyncSection'
+import { SnapshotSettingsSection } from '../../components/settings/SnapshotSettingsSection'
 import { FileTreeWorkspaceView } from '../../components/FileTreeView'
 import { FileTreeSessionView } from '../../components/FileTreeSessionView'
 import { useTabStore } from '../../stores/useTabStore'
@@ -396,6 +397,14 @@ export function registerBuiltinModules(): void {
       component: TmuxAgentMonitorSection,
     })
   }
+
+  // Workspace Snapshot — capture / restore the tab + session layout (Phase 3).
+  registerSettingsSection({
+    id: 'snapshot',
+    label: 'settings.section.snapshot',
+    order: SETTINGS_ORDER.SNAPSHOT,
+    component: SnapshotSettingsSection,
+  })
 
   registerBuiltinTerminalLinks({
     urlOpener: {
