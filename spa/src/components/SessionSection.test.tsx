@@ -91,6 +91,35 @@ describe('SessionSection', () => {
     expect(screen.getByText('dev')).toBeInTheDocument()
   })
 
+  it('shows the session pane title after the code', () => {
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+        ],
+      },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    const row = screen.getByText('dev').closest('button') as HTMLElement
+    expect(row).toHaveTextContent('Reading memory')
+    // title trails the code within the row
+    expect(row.textContent!.indexOf('abc001')).toBeLessThan(row.textContent!.indexOf('Reading memory'))
+  })
+
+  it('omits the title span when the session has no pane title', () => {
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+        ],
+      },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    const row = screen.getByText('dev').closest('button') as HTMLElement
+    expect(row).toHaveTextContent('dev')
+    expect(row).toHaveTextContent('abc001')
+  })
+
   it('calls onSelect when session is clicked', () => {
     useSessionStore.setState({
       sessions: {

@@ -51,8 +51,11 @@ function SessionRow({ hostId, session, disabled, onSelect }: {
       <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
         <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={false} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
       </span>
-      <span className="truncate">{session.name}</span>
-      <span className="text-xs text-text-secondary ml-auto">{session.code}</span>
+      <span className="flex-shrink-0">{session.name}</span>
+      <span className="text-xs text-text-secondary flex-shrink-0">{session.code}</span>
+      {session.pane_title && (
+        <span className="text-xs text-text-muted truncate min-w-0">{session.pane_title}</span>
+      )}
     </button>
   )
 }
