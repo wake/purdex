@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.322] - 2026-07-14
+
+### Feat(new-tab): Sessions 列表在 session id 後顯示動態標題 (#925)
+
+New-Tab 的 Sessions 列表，每列在 **session code 之後**顯示該 session 的動態標題（`pane_title`，即 tab 上顯示的那種活動標題），填入原本空白區域。
+
+- `SessionRow` 由 `[icon] name  code(ml-auto)` 改為 `[icon] name  code  {pane_title}`；code 去掉 `ml-auto`、`pane_title` 接於其後、`text-text-muted` `truncate` 填滿剩餘空間；僅 `session.pane_title` 存在時渲染，不 gate on `dynamicTabName`。
+- Flex 佈局經 codex 4 輪 review + headless-chromium 實測收斂：name `truncate` 可截斷（防長名溢出）；**僅在有 pane_title 時**加 `max-w-[50%]` cap（保 title 可見、避免兩者皆長時 title 塌成 0px）；無 title 時 name 用全寬。code 恆 `flex-shrink-0`。
+- vitest 3930 綠 / lint / build。純 SPA→HMR。
+
 ## [1.0.0-alpha.321] - 2026-07-14
 
 ### Fix(snapshot): 擷取 cwd 改用 pane_current_path，非 session 起始目錄（`~`）(#926)
