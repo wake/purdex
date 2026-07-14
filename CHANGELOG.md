@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.323] - 2026-07-14
+
+### Style(new-tab): Sessions 列表標題亮度對齊 id (#929)
+
+New-Tab Sessions 列表的 session 動態標題（`pane_title`）由 `text-text-muted`（較暗）改為 `text-text-secondary`，與 session code（id）同亮度。純 SPA→HMR。
+
 ## [1.0.0-alpha.322] - 2026-07-14
 
 ### Feat(new-tab): Sessions 列表在 session id 後顯示動態標題 (#925)
