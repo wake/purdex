@@ -6,7 +6,7 @@ export interface SessionMeta {
   mode: 'terminal' | 'stream'
   cwd?: string; currentCommand?: string
   restorable: boolean
-  captureError?: 'host-unreachable' | 'session-dead-at-capture'
+  captureError?: 'host-unreachable' | 'session-dead-at-capture' | 'cwd-probe-failed'
 }
 export interface WorkspaceSnapshot {
   version: 1; capturedAt: number

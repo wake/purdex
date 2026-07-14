@@ -144,10 +144,11 @@ describe('buildSnapshot / captureSnapshot', () => {
     const result = await captureSnapshot(3000)
     const stored = readSnapshot()!
 
-    // code1: fetch rejected → fall back to session_path '~', still restorable.
+    // code1: fetch rejected → fall back to session_path '~', still restorable,
+    // but flagged degraded (cwd-probe-failed) so the fallback is observable.
     expect(stored.sessionMeta.hostA.code1).toEqual({
       hostId: 'hostA', sessionCode: 'code1', name: 'live1', mode: 'terminal',
-      cwd: '~', currentCommand: 'vim', restorable: true,
+      cwd: '~', currentCommand: 'vim', restorable: true, captureError: 'cwd-probe-failed',
     })
     // code2: unaffected by code1's failure — accurate cwd applied.
     expect(stored.sessionMeta.hostA.code2).toEqual({
@@ -223,7 +224,7 @@ describe('buildSnapshot / captureSnapshot', () => {
     expect(result).toEqual({ total: 1, resolved: 0, unresolved: 1 })
   })
 
-  it('7b. fetchSessionCwd resolves "" but session_path non-empty → falls back, restorable', async () => {
+  it('7b. fetchSessionCwd resolves "" but session_path non-empty → falls back, restorable, flagged degraded', async () => {
     seedStores(
       { t1: tab('t1', leaf('p1', tmuxContent('hostA', 'code1', 'cached1'))) },
       ['t1'],
@@ -239,6 +240,35 @@ describe('buildSnapshot / captureSnapshot', () => {
     expect(stored.sessionMeta.hostA.code1).toEqual({
       hostId: 'hostA', sessionCode: 'code1', name: 'live-name', mode: 'terminal',
       cwd: '/session/start', currentCommand: 'bash', restorable: true,
+      captureError: 'cwd-probe-failed',
+    })
+  })
+
+  it('G1. same session referenced by two panes probes cwd exactly once, deterministic', async () => {
+    // Same (hostA, code1) shown in two separate tabs → collectTmuxPanesByHost
+    // yields two per-pane refs for the SAME session. Without dedup this fires
+    // two concurrent fetchSessionCwd calls whose completion order is
+    // nondeterministic; here we assert exactly one probe and a stable cwd.
+    const tabs: Record<string, Tab> = {
+      t1: tab('t1', leaf('p1', tmuxContent('hostA', 'code1', 'cached1'))),
+      t2: tab('t2', leaf('p2', tmuxContent('hostA', 'code1', 'cached1'))),
+    }
+    seedStores(tabs, ['t1', 't2'], 't1')
+
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ code: 'code1', name: 'live1', cwd: '~', current_command: 'vim' }),
+    ])
+    mockCwds({ code1: '/real/pane/path' })
+
+    const snap = await buildSnapshot(8000)
+
+    // Deduped to one probe per (host, code).
+    expect(fetchSessionCwd).toHaveBeenCalledTimes(1)
+    expect(fetchSessionCwd).toHaveBeenCalledWith('hostA', 'code1')
+    // Deterministic: the single pane_current_path, never overwritten by a fallback.
+    expect(snap.sessionMeta.hostA.code1).toEqual({
+      hostId: 'hostA', sessionCode: 'code1', name: 'live1', mode: 'terminal',
+      cwd: '/real/pane/path', currentCommand: 'vim', restorable: true,
     })
   })
 

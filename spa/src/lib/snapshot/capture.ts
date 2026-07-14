@@ -50,11 +50,20 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
     const perHost: Record<string, SessionMeta> = {}
     try {
       const sessions = await listSessions(hostId)
+      // Dedup per-pane refs to one entry per sessionCode BEFORE probing: the same
+      // session can appear in multiple panes/tabs. Mode is per-session and
+      // name/currentCommand come from the live Session, so dropping duplicate
+      // pane refs is safe. This guarantees fetchSessionCwd is called at most once
+      // per unique session — no redundant calls and no race where a later
+      // fallback result overwrites an earlier successful pane_current_path.
+      const uniqueRefs = Array.from(
+        new Map(refs.map((ref) => [ref.sessionCode, ref])).values(),
+      )
       // Resolve each live session's accurate cwd (pane_current_path) concurrently.
       // fetchSessionCwd failures are isolated per-session: a rejection falls back
       // to the session_path from listSessions rather than aborting the capture.
       await Promise.all(
-        refs.map(async (ref) => {
+        uniqueRefs.map(async (ref) => {
           const live = sessions.find((s) => s.code === ref.sessionCode)
           if (!live) {
             perHost[ref.sessionCode] = {
@@ -71,13 +80,17 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
 
           // Prefer the active pane's real current path; fall back to the
           // session_path (unexpanded start dir) if the probe fails or is empty.
-          let cwd = ''
+          let probed = ''
           try {
-            cwd = await fetchSessionCwd(hostId, ref.sessionCode)
+            probed = await fetchSessionCwd(hostId, ref.sessionCode)
           } catch {
-            cwd = ''
+            probed = ''
           }
-          if (!cwd) cwd = live.cwd
+          // usedFallback: pane_current_path was unavailable and we resorted to
+          // the session_path. Flag it (cwd-probe-failed) so a degraded capture
+          // is observable rather than disguised as a clean pane_current_path.
+          const usedFallback = !probed
+          const cwd = probed || live.cwd
 
           perHost[ref.sessionCode] = cwd
             ? {
@@ -88,6 +101,7 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
                 cwd,
                 currentCommand: live.current_command,
                 restorable: true,
+                ...(usedFallback ? { captureError: 'cwd-probe-failed' as const } : {}),
               }
             : {
                 // Live but no usable cwd: keep structure only, not restorable
