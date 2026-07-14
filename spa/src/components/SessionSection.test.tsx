@@ -133,6 +133,23 @@ describe('SessionSection', () => {
     expect(uncapped.className).not.toContain('max-w-[50%]')
   })
 
+  it('renders the pane title at the same brightness as the code', () => {
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+        ],
+      },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    const codeCls = screen.getByText('abc001').className
+    const titleCls = screen.getByText('Reading memory').className
+    // The title should use the same text colour token as the code.
+    expect(codeCls).toContain('text-text-secondary')
+    expect(titleCls).toContain('text-text-secondary')
+    expect(titleCls).not.toContain('text-text-muted')
+  })
+
   it('omits the title span when the session has no pane title', () => {
     useSessionStore.setState({
       sessions: {
