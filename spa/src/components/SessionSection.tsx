@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -6,6 +6,7 @@ import { useSessionWatch } from '../hooks/useSessionWatch'
 import { useSessionAgentIndicator } from '../hooks/useSessionAgentIndicator'
 import { TabIcon } from './TabIcon'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
+import { createSession } from '../lib/host-api'
 import type { Session } from '../lib/host-api'
 import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
 
@@ -53,6 +54,67 @@ function SessionRow({ hostId, session, disabled, onSelect }: {
       <span className="truncate">{session.name}</span>
       <span className="text-xs text-text-secondary ml-auto">{session.code}</span>
     </button>
+  )
+}
+
+function NewTabSessionForm({ hostId, onCreated, onCancel }: {
+  hostId: string
+  onCreated: (content: { code: string; name: string; mode: string }) => void
+  onCancel: () => void
+}) {
+  const t = useI18nStore((s) => s.t)
+  const [name, setName] = useState('')
+  const [cwd, setCwd] = useState('~')
+  const [mode, setMode] = useState('terminal')
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+  const creatingRef = useRef(false) // synchronous double-submit guard (fires before `creating` state commits)
+
+  const disabledSubmit = creating || !name.trim()
+
+  const handleCreate = async () => {
+    if (creatingRef.current || !name.trim()) return
+    creatingRef.current = true
+    setCreating(true); setError('')
+    try {
+      const created = await createSession(hostId, name.trim(), cwd, mode)
+      // Guard 1 — blank code = failed create.
+      if (!created.code) { setError(t('hosts.create') + ' failed'); return }
+      // Guard 2 — host still live (removed/disconnected during the await must not attach).
+      const rt = useHostStore.getState().runtime[hostId]
+      const live = !!useHostStore.getState().hosts[hostId] && !!rt && rt.status === 'connected' && rt.tmuxState !== 'unavailable'
+      if (!live) { setError(t('hosts.create') + ' failed'); return }
+      onCreated({ code: created.code, name: created.name, mode })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed')
+    } finally {
+      creatingRef.current = false
+      setCreating(false)
+    }
+  }
+
+  return (
+    <div className="mx-3 my-1 p-2 bg-surface-secondary border border-border-default rounded-md">
+      <input placeholder={t('hosts.session_name')} value={name} autoFocus
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') handleCreate() }}
+        className="w-full bg-surface-primary border border-border-default rounded px-2 py-1 text-sm text-text-primary mb-1" />
+      <input placeholder={t('hosts.session_cwd')} value={cwd}
+        onChange={(e) => setCwd(e.target.value)}
+        className="w-full bg-surface-primary border border-border-default rounded px-2 py-1 text-sm text-text-muted mb-1" />
+      <select value={mode} onChange={(e) => setMode(e.target.value)}
+        className="bg-surface-primary border border-border-default rounded px-2 py-1 text-sm text-text-primary">
+        <option value="terminal">terminal</option>
+        <option value="stream">stream</option>
+      </select>
+      {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
+      <div className="flex gap-2 mt-2">
+        <button onClick={handleCreate} disabled={disabledSubmit}
+          className="px-2 py-1 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50">{t('hosts.create')}</button>
+        <button onClick={onCancel}
+          className="px-2 py-1 rounded text-xs bg-surface-tertiary text-text-secondary cursor-pointer">{t('common.cancel')}</button>
+      </div>
+    </div>
   )
 }
 
@@ -127,6 +189,16 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
                 <Plus size={14} />
               </button>
             </div>
+            {isExpanded && creatingHost === hostId && (
+              <NewTabSessionForm
+                hostId={hostId}
+                onCancel={() => setCreatingHost(null)}
+                onCreated={({ code, name, mode }) => {
+                  setCreatingHost(null)
+                  onSelect({ kind: 'tmux-session', hostId, sessionCode: code, mode: mode as 'terminal' | 'stream', cachedName: name, tmuxInstance: '' })
+                }}
+              />
+            )}
             {isExpanded && sessions.map((session) => (
               <SessionRow
                 key={`${hostId}:${session.code}`}

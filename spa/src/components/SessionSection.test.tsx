@@ -1,12 +1,13 @@
 // spa/src/components/SessionSection.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { SessionSection } from './SessionSection'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
+import * as hostApi from '../lib/host-api'
 
 vi.mock('../hooks/useSessionWatch', () => ({
   useSessionWatch: vi.fn(),
@@ -14,7 +15,7 @@ vi.mock('../hooks/useSessionWatch', () => ({
 
 vi.mock('../lib/host-api', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
-  return { ...actual, listSessions: vi.fn().mockResolvedValue([]) }
+  return { ...actual, listSessions: vi.fn().mockResolvedValue([]), createSession: vi.fn() }
 })
 
 const HOST_ID = 'test-host'
@@ -32,6 +33,7 @@ beforeEach(() => {
   })
   useAgentStore.setState({ statuses: {}, agentTypes: {}, subagents: {}, unread: {} })
   useUISettingsStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot', codexIconVariant: 'openai' })
+  vi.mocked(hostApi.createSession).mockReset()
 })
 
 describe('SessionSection', () => {
@@ -269,5 +271,65 @@ describe('SessionSection', () => {
     render(<SessionSection onSelect={mockOnSelect} />)
     // TabStatusIndicator renders a data-testid — assert the running indicator exists.
     expect(screen.getByTestId('tab-status-indicator')).toBeInTheDocument()
+  })
+
+  const LIVE = { status: 'connected', tmuxState: 'ok' } as const
+  const made = (over: Partial<{ code: string; name: string }> = {}) =>
+    ({ code: 'new001', name: 'built', cwd: '~', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, ...over })
+
+  it('creates a session and attaches it into the current pane', async () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+    vi.mocked(hostApi.createSession).mockResolvedValue(made())
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+    fireEvent.click(screen.getByText('Create'))
+    await waitFor(() => expect(hostApi.createSession).toHaveBeenCalledWith(HOST_ID, 'built', '~', 'terminal'))
+    await waitFor(() => expect(mockOnSelect).toHaveBeenCalledWith({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'new001', mode: 'terminal', cachedName: 'built', tmuxInstance: '' }))
+  })
+
+  it('does not attach when the created session has a blank code', async () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+    vi.mocked(hostApi.createSession).mockResolvedValue(made({ code: '' }))
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+    fireEvent.click(screen.getByText('Create'))
+    await screen.findByText('Create failed') // inline error, form stays open
+    expect(screen.getByPlaceholderText('Session Name')).toBeInTheDocument()
+    expect(mockOnSelect).not.toHaveBeenCalled()
+  })
+
+  it('does not attach when the host is removed while creating', async () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+    vi.mocked(hostApi.createSession).mockImplementation(async () => {
+      useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null, runtime: {} }) // host vanishes mid-flight
+      return made()
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+    fireEvent.click(screen.getByText('Create'))
+    await waitFor(() => expect(hostApi.createSession).toHaveBeenCalled())
+    await waitFor(() => expect(mockOnSelect).not.toHaveBeenCalled())
+  })
+
+  it('submits create only once on a double click', async () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+    let resolve!: (v: ReturnType<typeof made>) => void
+    vi.mocked(hostApi.createSession).mockReturnValue(new Promise((r) => { resolve = r }))
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+    const createBtn = screen.getByText('Create')
+    fireEvent.click(createBtn)
+    fireEvent.click(createBtn) // second click while in-flight must be a no-op
+    resolve(made())
+    await waitFor(() => expect(mockOnSelect).toHaveBeenCalled())
+    expect(hostApi.createSession).toHaveBeenCalledTimes(1)
   })
 })
