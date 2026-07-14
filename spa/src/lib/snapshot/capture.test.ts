@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
-import { listSessions } from '../host-api'
+import { listSessions, fetchSessionCwd } from '../host-api'
 import type { Session } from '../host-api'
 import type { Tab, PaneLayout, PaneContent } from '../../types/tab'
 import { readSnapshot, writeSnapshot } from './storage'
@@ -11,6 +11,7 @@ import { buildSnapshot, captureSnapshot } from './capture'
 vi.mock('../host-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../host-api')>()),
   listSessions: vi.fn(),
+  fetchSessionCwd: vi.fn(),
 }))
 
 function tmuxContent(
@@ -52,43 +53,54 @@ function seedStores(tabs: Record<string, Tab>, tabOrder: string[], activeTabId: 
   useWorkspaceStore.getState().reset()
 }
 
+/**
+ * Configure fetchSessionCwd mock keyed by sessionCode. Value can be a string
+ * (resolves to it) or an Error (rejects with it). Codes absent from the map
+ * reject (they should never be asked — e.g. dead sessions).
+ */
+function mockCwds(map: Record<string, string | Error>): void {
+  vi.mocked(fetchSessionCwd).mockImplementation(async (_hostId: string, code: string) => {
+    const v = map[code]
+    if (v instanceof Error) throw v
+    if (v === undefined) throw new Error(`unexpected fetchSessionCwd for ${code}`)
+    return v
+  })
+}
+
 describe('buildSnapshot / captureSnapshot', () => {
   beforeEach(() => {
     localStorage.clear()
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
     useWorkspaceStore.getState().reset()
     vi.mocked(listSessions).mockReset()
+    vi.mocked(fetchSessionCwd).mockReset()
   })
 
-  it('1. single host, two live tmux panes → nested sessionMeta + resolved=2', async () => {
-    const layout = split('s1', [
-      leaf('p1', tmuxContent('hostA', 'code1', 'cached1')),
-      leaf('p2', tmuxContent('hostA', 'code2', 'cached2')),
-    ])
-    seedStores({ t1: tab('t1', layout) }, ['t1'], 't1')
-
+  it('1. live session cwd comes from fetchSessionCwd (pane_current_path), not session_path', async () => {
+    seedStores(
+      { t1: tab('t1', leaf('p1', tmuxContent('hostA', 'code1', 'cached1'))) },
+      ['t1'],
+      't1',
+    )
+    // listSessions.cwd is the (unexpanded) session_path '~'; the real cwd differs.
     vi.mocked(listSessions).mockResolvedValue([
-      session({ code: 'code1', name: 'live1', cwd: '/a', current_command: 'vim' }),
-      session({ code: 'code2', name: 'live2', cwd: '/b', current_command: 'top' }),
+      session({ code: 'code1', name: 'live1', cwd: '~', current_command: 'vim' }),
     ])
+    mockCwds({ code1: '/Users/wake/Workspace/x' })
 
     const result = await captureSnapshot(1000)
 
     expect(listSessions).toHaveBeenCalledTimes(1)
     expect(listSessions).toHaveBeenCalledWith('hostA')
+    expect(fetchSessionCwd).toHaveBeenCalledWith('hostA', 'code1')
 
-    const stored = readSnapshot()
-    expect(stored).not.toBeNull()
-    expect(stored!.capturedAt).toBe(1000)
-    expect(stored!.sessionMeta.hostA.code1).toEqual({
+    const stored = readSnapshot()!
+    expect(stored.capturedAt).toBe(1000)
+    expect(stored.sessionMeta.hostA.code1).toEqual({
       hostId: 'hostA', sessionCode: 'code1', name: 'live1', mode: 'terminal',
-      cwd: '/a', currentCommand: 'vim', restorable: true,
+      cwd: '/Users/wake/Workspace/x', currentCommand: 'vim', restorable: true,
     })
-    expect(stored!.sessionMeta.hostA.code2).toEqual({
-      hostId: 'hostA', sessionCode: 'code2', name: 'live2', mode: 'terminal',
-      cwd: '/b', currentCommand: 'top', restorable: true,
-    })
-    expect(result).toEqual({ total: 2, resolved: 2, unresolved: 0 })
+    expect(result).toEqual({ total: 1, resolved: 1, unresolved: 0 })
   })
 
   it('2. cross-host same sessionCode literal stays independent (composite key)', async () => {
@@ -99,9 +111,13 @@ describe('buildSnapshot / captureSnapshot', () => {
     seedStores(tabs, ['t1', 't2'], 't1')
 
     vi.mocked(listSessions).mockImplementation(async (hostId: string) => {
-      if (hostId === 'hostA') return [session({ code: 'shared', name: 'a-name', cwd: '/host-a' })]
-      if (hostId === 'hostB') return [session({ code: 'shared', name: 'b-name', cwd: '/host-b' })]
+      if (hostId === 'hostA') return [session({ code: 'shared', name: 'a-name', cwd: '~' })]
+      if (hostId === 'hostB') return [session({ code: 'shared', name: 'b-name', cwd: '~' })]
       throw new Error(`unexpected host ${hostId}`)
+    })
+    vi.mocked(fetchSessionCwd).mockImplementation(async (hostId: string, code: string) => {
+      if (code !== 'shared') throw new Error(`unexpected code ${code}`)
+      return hostId === 'hostA' ? '/host-a' : '/host-b'
     })
 
     const snap = await buildSnapshot(2000)
@@ -112,7 +128,36 @@ describe('buildSnapshot / captureSnapshot', () => {
     expect(snap.sessionMeta.hostA.shared).not.toEqual(snap.sessionMeta.hostB.shared)
   })
 
-  it('3. one host unreachable does not interrupt the other host', async () => {
+  it('3. fetchSessionCwd rejection falls back to session_path; other sessions unaffected', async () => {
+    const layout = split('s1', [
+      leaf('p1', tmuxContent('hostA', 'code1', 'cached1')),
+      leaf('p2', tmuxContent('hostA', 'code2', 'cached2')),
+    ])
+    seedStores({ t1: tab('t1', layout) }, ['t1'], 't1')
+
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ code: 'code1', name: 'live1', cwd: '~', current_command: 'vim' }),
+      session({ code: 'code2', name: 'live2', cwd: '/b', current_command: 'top' }),
+    ])
+    mockCwds({ code1: new Error('cwd probe failed'), code2: '/real/b' })
+
+    const result = await captureSnapshot(3000)
+    const stored = readSnapshot()!
+
+    // code1: fetch rejected → fall back to session_path '~', still restorable.
+    expect(stored.sessionMeta.hostA.code1).toEqual({
+      hostId: 'hostA', sessionCode: 'code1', name: 'live1', mode: 'terminal',
+      cwd: '~', currentCommand: 'vim', restorable: true,
+    })
+    // code2: unaffected by code1's failure — accurate cwd applied.
+    expect(stored.sessionMeta.hostA.code2).toEqual({
+      hostId: 'hostA', sessionCode: 'code2', name: 'live2', mode: 'terminal',
+      cwd: '/real/b', currentCommand: 'top', restorable: true,
+    })
+    expect(result).toEqual({ total: 2, resolved: 2, unresolved: 0 })
+  })
+
+  it('3b. one host unreachable does not interrupt the other host', async () => {
     const tabs: Record<string, Tab> = {
       t1: tab('t1', leaf('p1', tmuxContent('hostA', 'codeA', 'cachedA'))),
       t2: tab('t2', leaf('p2', tmuxContent('hostB', 'codeB', 'cachedB'))),
@@ -120,14 +165,17 @@ describe('buildSnapshot / captureSnapshot', () => {
     seedStores(tabs, ['t1', 't2'], 't1')
 
     vi.mocked(listSessions).mockImplementation(async (hostId: string) => {
-      if (hostId === 'hostA') return [session({ code: 'codeA', name: 'live-a', cwd: '/a' })]
+      if (hostId === 'hostA') return [session({ code: 'codeA', name: 'live-a', cwd: '~' })]
       throw new Error('host B unreachable')
     })
+    mockCwds({ codeA: '/a' })
 
-    const result = await captureSnapshot(3000)
+    const result = await captureSnapshot(3500)
     const stored = readSnapshot()!
 
     expect(stored.sessionMeta.hostA.codeA).toMatchObject({ restorable: true, cwd: '/a' })
+    // Offline host: fetchSessionCwd never asked for its sessions.
+    expect(fetchSessionCwd).not.toHaveBeenCalledWith('hostB', expect.anything())
     expect(stored.sessionMeta.hostB.codeB).toEqual({
       hostId: 'hostB', sessionCode: 'codeB', name: 'cachedB', mode: 'terminal',
       cwd: undefined, restorable: false, captureError: 'host-unreachable',
@@ -135,23 +183,25 @@ describe('buildSnapshot / captureSnapshot', () => {
     expect(result).toEqual({ total: 2, resolved: 1, unresolved: 1 })
   })
 
-  it('4. pane code missing from live list → session-dead-at-capture', async () => {
+  it('4. pane code missing from live list → session-dead-at-capture, cwd never probed', async () => {
     seedStores(
       { t1: tab('t1', leaf('p1', tmuxContent('hostA', 'deadcode', 'cachedDead'))) },
       ['t1'],
       't1',
     )
     vi.mocked(listSessions).mockResolvedValue([session({ code: 'other-code' })])
+    mockCwds({}) // any call is a failure
 
     const snap = await buildSnapshot(4000)
 
+    expect(fetchSessionCwd).not.toHaveBeenCalled()
     expect(snap.sessionMeta.hostA.deadcode).toEqual({
       hostId: 'hostA', sessionCode: 'deadcode', name: 'cachedDead', mode: 'terminal',
       cwd: undefined, restorable: false, captureError: 'session-dead-at-capture',
     })
   })
 
-  it('7. live session with empty cwd → not restorable, cwd stays undefined (not "")', async () => {
+  it('7. fetchSessionCwd resolves "" and session_path also empty → not restorable, cwd undefined', async () => {
     seedStores(
       { t1: tab('t1', leaf('p1', tmuxContent('hostA', 'code1', 'cached1'))) },
       ['t1'],
@@ -160,6 +210,7 @@ describe('buildSnapshot / captureSnapshot', () => {
     vi.mocked(listSessions).mockResolvedValue([
       session({ code: 'code1', name: 'live-name', cwd: '', current_command: 'bash' }),
     ])
+    mockCwds({ code1: '' })
 
     const result = await captureSnapshot(7000)
     const stored = readSnapshot()!
@@ -172,6 +223,47 @@ describe('buildSnapshot / captureSnapshot', () => {
     expect(result).toEqual({ total: 1, resolved: 0, unresolved: 1 })
   })
 
+  it('7b. fetchSessionCwd resolves "" but session_path non-empty → falls back, restorable', async () => {
+    seedStores(
+      { t1: tab('t1', leaf('p1', tmuxContent('hostA', 'code1', 'cached1'))) },
+      ['t1'],
+      't1',
+    )
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ code: 'code1', name: 'live-name', cwd: '/session/start', current_command: 'bash' }),
+    ])
+    mockCwds({ code1: '' })
+
+    const stored = await buildSnapshot(7100)
+
+    expect(stored.sessionMeta.hostA.code1).toEqual({
+      hostId: 'hostA', sessionCode: 'code1', name: 'live-name', mode: 'terminal',
+      cwd: '/session/start', currentCommand: 'bash', restorable: true,
+    })
+  })
+
+  it('6b. two live sessions on one host both resolved independently (Promise.all)', async () => {
+    const layout = split('s1', [
+      leaf('p1', tmuxContent('hostA', 'code1', 'cached1')),
+      leaf('p2', tmuxContent('hostA', 'code2', 'cached2')),
+    ])
+    seedStores({ t1: tab('t1', layout) }, ['t1'], 't1')
+
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ code: 'code1', name: 'live1', cwd: '~' }),
+      session({ code: 'code2', name: 'live2', cwd: '~' }),
+    ])
+    mockCwds({ code1: '/real/one', code2: '/real/two' })
+
+    const snap = await buildSnapshot(6100)
+
+    expect(fetchSessionCwd).toHaveBeenCalledTimes(2)
+    expect(snap.sessionMeta.hostA.code1.cwd).toBe('/real/one')
+    expect(snap.sessionMeta.hostA.code2.cwd).toBe('/real/two')
+    expect(snap.sessionMeta.hostA.code1.restorable).toBe(true)
+    expect(snap.sessionMeta.hostA.code2.restorable).toBe(true)
+  })
+
   it('5. no tmux panes → total=0, sessionMeta={}, still writes a snapshot', async () => {
     seedStores(
       { t1: tab('t1', leaf('p1', { kind: 'editor', source: { type: 'local' }, filePath: '/tmp/a.md' })) },
@@ -182,6 +274,7 @@ describe('buildSnapshot / captureSnapshot', () => {
     const result = await captureSnapshot(5000)
 
     expect(listSessions).not.toHaveBeenCalled()
+    expect(fetchSessionCwd).not.toHaveBeenCalled()
     expect(result).toEqual({ total: 0, resolved: 0, unresolved: 0 })
     const stored = readSnapshot()
     expect(stored).not.toBeNull()
@@ -200,7 +293,8 @@ describe('buildSnapshot / captureSnapshot', () => {
       ['t1'],
       't1',
     )
-    vi.mocked(listSessions).mockResolvedValue([session({ code: 'code1', cwd: '/x' })])
+    vi.mocked(listSessions).mockResolvedValue([session({ code: 'code1', cwd: '~' })])
+    mockCwds({ code1: '/x' })
 
     const built = await buildSnapshot(6000)
     expect(built.capturedAt).toBe(6000)
