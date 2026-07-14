@@ -3,8 +3,58 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useSessionWatch } from '../hooks/useSessionWatch'
+import { useSessionAgentIndicator } from '../hooks/useSessionAgentIndicator'
+import { TabIcon } from './TabIcon'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
+import type { Session } from '../lib/host-api'
 import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight } from '@phosphor-icons/react'
+
+function SessionRow({ hostId, session, disabled, onSelect }: {
+  hostId: string
+  session: Session
+  disabled: boolean
+  onSelect: NewTabProviderProps['onSelect']
+}) {
+  const { agentIcon, agentStatus, subagentRefs, isUnread, tabIndicatorStyle } =
+    useSessionAgentIndicator(hostId, session.code)
+  const IconComponent = agentIcon ?? TerminalWindow
+  return (
+    <button
+      data-session-btn
+      className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/10 text-left text-sm text-text-primary cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-accent-muted"
+      disabled={disabled}
+      tabIndex={0}
+      onClick={() =>
+        onSelect({ kind: 'tmux-session', hostId, sessionCode: session.code, mode: 'terminal', cachedName: session.name, tmuxInstance: '' })
+      }
+      onKeyDown={(e) => {
+        const container = e.currentTarget.closest('[data-session-list]')
+        if (!container) return
+        const buttons = Array.from(container.querySelectorAll('button[data-session-btn]:not(:disabled)')) as HTMLElement[]
+        const currentIndex = buttons.indexOf(e.currentTarget)
+        if (currentIndex === -1) return
+        switch (e.key) {
+          case 'ArrowDown':
+          case 'j':
+            e.preventDefault()
+            buttons[Math.min(currentIndex + 1, buttons.length - 1)]?.focus()
+            break
+          case 'ArrowUp':
+          case 'k':
+            e.preventDefault()
+            buttons[Math.max(currentIndex - 1, 0)]?.focus()
+            break
+        }
+      }}
+    >
+      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
+        <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={false} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
+      </span>
+      <span className="truncate">{session.name}</span>
+      <span className="text-xs text-text-secondary ml-auto">{session.code}</span>
+    </button>
+  )
+}
 
 export function SessionSection({ onSelect }: NewTabProviderProps) {
   useSessionWatch()
@@ -58,39 +108,13 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
               </button>
             )}
             {isExpanded && sessions.map((session) => (
-              <button
+              <SessionRow
                 key={`${hostId}:${session.code}`}
-                data-session-btn
-                className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/10 text-left text-sm text-text-primary cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-accent-muted"
+                hostId={hostId}
+                session={session}
                 disabled={!!isOffline}
-                tabIndex={0}
-                onClick={() =>
-                  onSelect({ kind: 'tmux-session', hostId, sessionCode: session.code, mode: 'terminal', cachedName: session.name, tmuxInstance: '' })
-                }
-                onKeyDown={(e) => {
-                  const container = e.currentTarget.closest('[data-session-list]')
-                  if (!container) return
-                  const buttons = Array.from(container.querySelectorAll('button[data-session-btn]:not(:disabled)')) as HTMLElement[]
-                  const currentIndex = buttons.indexOf(e.currentTarget)
-                  if (currentIndex === -1) return
-                  switch (e.key) {
-                    case 'ArrowDown':
-                    case 'j':
-                      e.preventDefault()
-                      buttons[Math.min(currentIndex + 1, buttons.length - 1)]?.focus()
-                      break
-                    case 'ArrowUp':
-                    case 'k':
-                      e.preventDefault()
-                      buttons[Math.max(currentIndex - 1, 0)]?.focus()
-                      break
-                  }
-                }}
-              >
-                <TerminalWindow size={16} className="text-text-secondary flex-shrink-0" />
-                <span className="truncate">{session.name}</span>
-                <span className="text-xs text-text-secondary ml-auto">{session.code}</span>
-              </button>
+                onSelect={onSelect}
+              />
             ))}
           </div>
         )

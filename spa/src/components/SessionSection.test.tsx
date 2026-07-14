@@ -4,6 +4,9 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { SessionSection } from './SessionSection'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
+import { useAgentStore } from '../stores/useAgentStore'
+import { compositeKey } from '../lib/composite-key'
 
 vi.mock('../hooks/useSessionWatch', () => ({
   useSessionWatch: vi.fn(),
@@ -27,6 +30,8 @@ beforeEach(() => {
     hostOrder: [HOST_ID],
     activeHostId: HOST_ID,
   })
+  useAgentStore.setState({ statuses: {}, agentTypes: {}, subagents: {}, unread: {} })
+  useUISettingsStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot', codexIconVariant: 'openai' })
 })
 
 describe('SessionSection', () => {
@@ -214,5 +219,17 @@ describe('SessionSection', () => {
     const sessionButtons = screen.getAllByRole('button').filter((btn) => btn.hasAttribute('data-session-btn'))
     expect(sessionButtons).toHaveLength(1)
     expect(sessionButtons[0]).toHaveTextContent('dev')
+  })
+
+  it('renders the tab-style status indicator for a running-agent session', () => {
+    useUISettingsStore.setState({ tabIndicatorStyle: 'dot' })
+    const ck = compositeKey(HOST_ID, 'abc001')
+    useAgentStore.setState({ statuses: { [ck]: 'running' }, agentTypes: { [ck]: 'cc' }, subagents: {}, unread: {} })
+    useSessionStore.setState({
+      sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }] },
+    })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    // TabStatusIndicator renders a data-testid — assert the running indicator exists.
+    expect(screen.getByTestId('tab-status-indicator')).toBeInTheDocument()
   })
 })
