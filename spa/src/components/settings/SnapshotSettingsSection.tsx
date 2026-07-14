@@ -55,15 +55,16 @@ type Health = 'loading' | 'live' | 'dead' | 'structure' | 'offline'
  * different session after a tmux restart, so it is NOT "live").
  *
  * Precedence: an unreachable host wins (every row ⚪) → a live code+name match is
- * 🟢 → a non-restorable entry is ⚠️ (no cwd, cannot rebuild) → otherwise 🔴
- * (restorable + dead, so "Rebuild all" can recreate it).
+ * 🟢 → a non-restorable OR cwd-less entry is ⚠️ (the engine's `ensureSessions`
+ * refuses to rebuild without a cwd, so it can never be 🔴) → otherwise 🔴
+ * (restorable + cwd + dead, so "Rebuild all" can actually recreate it).
  */
 function computeHealth(meta: SessionMeta, live: HostLive): Health {
   if (live === 'loading') return 'loading'
   if (live === 'offline') return 'offline'
   const match = live.some((s) => s.code === meta.sessionCode && s.name === meta.name)
   if (match) return 'live'
-  if (!meta.restorable) return 'structure'
+  if (!meta.restorable || !meta.cwd) return 'structure'
   return 'dead'
 }
 
@@ -112,7 +113,7 @@ function formatRelativeTime(t: ReturnType<typeof useI18nStore.getState>['t'], ms
 
 export function SnapshotSettingsSection() {
   const t = useI18nStore((s) => s.t)
-  const [snap] = useState<WorkspaceSnapshot | null>(() => readSnapshot())
+  const [snap, setSnap] = useState<WorkspaceSnapshot | null>(() => readSnapshot())
   const [busy, setBusy] = useState(false)
   // Single-flight guard as a ref (not state) so two synchronous clicks — which
   // share one render's `busy` closure — still only fire one action.
@@ -129,12 +130,18 @@ export function SnapshotSettingsSection() {
       : {},
   )
 
-  // On mount (per snapshot), reconcile each captured host exactly once against
-  // its live session list. A rejection means the host is offline → every row for
-  // that host renders ⚪ and no createSession is ever attempted here.
+  // Per snapshot, reconcile each captured host exactly once against its live
+  // session list. A rejection means the host is offline → every row for that host
+  // renders ⚪ and no createSession is ever attempted here. Depends on `snap`, and
+  // `refresh()` yields a NEW snapshot reference, so a capture/restore/undo re-runs
+  // this reconciliation (not just the first mount). At the START we re-seed the
+  // current snapshot's hosts to 'loading' so a re-run drops stale per-host results;
+  // every subsequent setState happens in an async callback guarded by `cancelled`,
+  // so there is never a setState-after-unmount.
   useEffect(() => {
     if (!snap) return
     const hostIds = Object.keys(snap.sessionMeta)
+    setLiveByHost(Object.fromEntries(hostIds.map((h) => [h, 'loading' as HostLive])))
     let cancelled = false
     for (const hostId of hostIds) {
       listSessions(hostId)
@@ -150,6 +157,11 @@ export function SnapshotSettingsSection() {
     }
   }, [snap])
 
+  // Re-read the persisted snapshot into state. Because storage returns a fresh
+  // object, this bumps the `snap` reference → the reconciliation effect re-fires
+  // and the restore handlers close over the latest snapshot on their next click.
+  const refresh = () => setSnap(readSnapshot())
+
   const handleCapture = async () => {
     if (busyRef.current) return
     busyRef.current = true
@@ -163,6 +175,9 @@ export function SnapshotSettingsSection() {
         message: t('settings.snapshot.toast.captured', { total: res.total, unresolved: res.unresolved }),
         attrs: { 'data-total': res.total, 'data-unresolved': res.unresolved },
       })
+      // Pull the just-written snapshot into state: empty→populated transition,
+      // fresh capturedAt, and a re-reconciled health table.
+      refresh()
     } catch (e) {
       setStatus({ tone: 'error', message: t('settings.snapshot.toast.captureFailed', { reason: errMessage(e) }) })
     } finally {
@@ -171,25 +186,37 @@ export function SnapshotSettingsSection() {
     }
   }
 
-  // Turn a resolved/collected RestoreReport into a status. A non-empty
-  // rebuiltButUnattached list is always WARN + console.warn (R3 B disclosure),
-  // regardless of whether the restore otherwise succeeded or threw.
+  // Turn a resolved/collected RestoreReport into a status. `failed` (a RestoreError,
+  // stores rolled back) takes ERROR-tone precedence: the engine only ever fills
+  // rebuiltButUnattached on the failure path, so a non-empty list must NOT be
+  // downgraded to a mild warning. The disclosure (name/cwd/host) is always logged
+  // via console.warn and shown under the status, whichever tone wins.
   const reportStatus = (report: RestoreReport, failed: boolean) => {
     const attrs = {
       'data-reattached': report.reattached,
       'data-rebuilt': report.rebuilt,
       'data-failed': report.failed,
     }
-    if (report.rebuiltButUnattached.length > 0) {
-      console.warn('[snapshot] sessions rebuilt but could not be reattached', report.rebuiltButUnattached)
+    const unattached = report.rebuiltButUnattached
+    if (unattached.length > 0) {
+      console.warn('[snapshot] sessions rebuilt but could not be reattached', unattached)
+    }
+    if (failed) {
+      setStatus({
+        tone: 'error',
+        message: t('settings.snapshot.toast.restoreError'),
+        attrs,
+        unattached: unattached.length > 0 ? unattached : undefined,
+      })
+    } else if (unattached.length > 0) {
+      // Success-with-unattached — defensive only; the engine currently returns
+      // an empty list on every success path.
       setStatus({
         tone: 'warn',
         message: t('settings.snapshot.toast.rebuiltUnattached'),
         attrs,
-        unattached: report.rebuiltButUnattached,
+        unattached,
       })
-    } else if (failed) {
-      setStatus({ tone: 'error', message: t('settings.snapshot.toast.restoreError'), attrs })
     } else {
       setStatus({
         tone: 'success',
@@ -225,6 +252,9 @@ export function SnapshotSettingsSection() {
     } finally {
       busyRef.current = false
       setBusy(false)
+      // Restore/rebuild/undo mutate live sessions and the `-prev` backup, so the
+      // health table must re-reconcile and the handlers must use the latest snapshot.
+      refresh()
     }
   }
 

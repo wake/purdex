@@ -151,6 +151,23 @@ describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
     })
   })
 
+  it('restorable:true but cwd missing → structure-only (yellow), NOT dead — engine cannot rebuild without cwd (F2)', async () => {
+    mockedReadSnapshot.mockReturnValue(
+      makeSnapshot({
+        sessionMeta: {
+          h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'work', restorable: true, cwd: undefined }) },
+        },
+      }),
+    )
+    // Host reachable, no matching session → would be 🔴 dead if cwd were present.
+    mockedListSessions.mockResolvedValue([session({ code: 'other', name: 'other' })])
+
+    render(<SnapshotSettingsSection />)
+    await waitFor(() => {
+      expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('structure')
+    })
+  })
+
   it('restorable:false → structure-only (yellow)', async () => {
     mockedReadSnapshot.mockReturnValue(
       makeSnapshot({
@@ -326,7 +343,7 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     })
   })
 
-  it('RestoreError with non-empty rebuiltButUnattached → warn toast listing name/cwd/host + console.warn', async () => {
+  it('RestoreError with non-empty rebuiltButUnattached → ERROR toast (restore failed) still listing name/cwd/host + console.warn (F3)', async () => {
     const snap = snapWithData()
     mockedReadSnapshot.mockReturnValue(snap)
     const report: RestoreReport = {
@@ -342,15 +359,77 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
 
     const status = await screen.findByTestId('snapshot-status')
+    // A genuine RestoreError (stores rolled back) must surface as ERROR, not a
+    // mild warning — even though its report carries a rebuiltButUnattached list.
     await waitFor(() => {
-      expect(status.getAttribute('data-tone')).toBe('warn')
+      expect(status.getAttribute('data-tone')).toBe('error')
     })
+    // …and the disclosure (name/cwd/host) is still shown under the error.
     const item = screen.getByTestId('snapshot-unattached-item')
     expect(item.textContent).toContain('orphan-sess')
     expect(item.textContent).toContain('/srv/app')
     expect(item.textContent).toContain('h9')
     expect(warnSpy).toHaveBeenCalled()
     warnSpy.mockRestore()
+  })
+
+  it('clean success (empty rebuiltButUnattached) → success toast, no unattached list (F3)', async () => {
+    const snap = snapWithData()
+    mockedReadSnapshot.mockReturnValue(snap)
+    mockedRestoreAll.mockResolvedValue({ reattached: 3, rebuilt: 0, failed: 0, rebuiltButUnattached: [] })
+
+    render(<SnapshotSettingsSection />)
+    fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
+
+    const status = await screen.findByTestId('snapshot-status')
+    await waitFor(() => {
+      expect(status.getAttribute('data-tone')).toBe('success')
+    })
+    expect(status.getAttribute('data-reattached')).toBe('3')
+    expect(screen.queryByTestId('snapshot-unattached-item')).toBeNull()
+  })
+
+  it('capture on an empty page populates the section WITHOUT a remount (F1 refresh)', async () => {
+    const populated = snapWithData()
+    // Mounts empty; the post-capture refresh() re-reads storage and now finds a snapshot.
+    mockedReadSnapshot.mockReturnValueOnce(null).mockReturnValue(populated)
+    mockedCapture.mockResolvedValue({ total: 1, resolved: 1, unresolved: 0 })
+
+    render(<SnapshotSettingsSection />)
+    // Empty state: no restore/rebuild controls yet.
+    expect(screen.getByTestId('snapshot-empty')).toBeTruthy()
+    expect(screen.queryByTestId('snapshot-tmux-block')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('snapshot-capture-btn'))
+
+    // Same component instance leaves empty state and reveals the restore controls.
+    await waitFor(() => {
+      expect(screen.queryByTestId('snapshot-empty')).toBeNull()
+    })
+    expect(screen.getByTestId('snapshot-tmux-block')).toBeTruthy()
+    expect(screen.getByTestId('snapshot-restore-all-btn')).toBeTruthy()
+    expect(screen.getByTestId('snapshot-rebuild-btn')).toBeTruthy()
+  })
+
+  it('after a restore resolves, health reconciliation re-runs for the host (F1 refresh)', async () => {
+    // Fresh object each read so refresh() bumps the `snap` reference and re-fires the effect.
+    mockedReadSnapshot.mockImplementation(() => snapWithData())
+
+    render(<SnapshotSettingsSection />)
+    // Initial mount: one reconciliation pass for h1.
+    await waitFor(() => {
+      expect(mockedListSessions).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
+    await waitFor(() => {
+      expect(mockedRestoreAll).toHaveBeenCalledTimes(1)
+    })
+    // refresh() in runRestore's finally re-reconciles → listSessions('h1') again.
+    await waitFor(() => {
+      expect(mockedListSessions).toHaveBeenCalledTimes(2)
+    })
+    expect(mockedListSessions).toHaveBeenNthCalledWith(2, 'h1')
   })
 
   it('busy guard: two synchronous clicks fire the action only once', async () => {
