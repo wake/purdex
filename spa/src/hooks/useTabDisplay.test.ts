@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { renderHook, act } from '@testing-library/react'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { SubagentRef } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
@@ -9,6 +9,7 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
+import { compositeKey } from '../lib/composite-key'
 import { useTabDisplay } from './useTabDisplay'
 
 function makeTab(
@@ -152,6 +153,21 @@ describe('useTabDisplay — icon resolution', () => {
     const { result } = renderHook(() => useTabDisplay(makeTab({ terminated: true })))
     expect(result.current.IconComponent).toBeDefined()
     expect(result.current.isTerminated).toBe(true)
+  })
+
+  it('re-resolves the cc agent icon when the cc icon variant changes', () => {
+    const tab = makeTab()
+    const ck = compositeKey('h1', 'sc1')
+    useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
+    useUISettingsStore.setState({ tabIndicatorStyle: 'iconDot', ccIconVariant: 'bot', codexIconVariant: 'openai' })
+
+    const { result, rerender } = renderHook(() => useTabDisplay(tab))
+    const first = result.current.IconComponent
+    act(() => {
+      useUISettingsStore.setState({ ccIconVariant: 'star' }) // valid CcIconVariant
+    })
+    rerender()
+    expect(result.current.IconComponent).not.toBe(first) // variant flows through the extracted hook
   })
 })
 
