@@ -106,17 +106,31 @@ describe('SessionSection', () => {
     expect(row.textContent!.indexOf('abc001')).toBeLessThan(row.textContent!.indexOf('Reading memory'))
   })
 
-  it('keeps the session name truncatable so a long name cannot overflow the row', () => {
+  it('caps the name at half-width only when a pane title shares the row', () => {
+    const LONG = 'a-very-long-session-name-that-would-overflow'
+    // With a title: name is truncatable AND capped so the title keeps room.
     useSessionStore.setState({
-      sessions: {
-        [HOST_ID]: [
-          { code: 'abc001', name: 'a-very-long-session-name-that-would-overflow', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
-        ],
-      },
+      sessions: { [HOST_ID]: [
+        { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+      ] },
+    })
+    const withTitle = render(<SessionSection onSelect={mockOnSelect} />)
+    const capped = screen.getByText(LONG)
+    expect(capped.className).toContain('truncate')
+    expect(capped.className).toContain('max-w-[50%]')
+    withTitle.unmount()
+
+    // Without a title: name is still truncatable but NOT capped — it may use the
+    // full remaining width instead of being stranded at half a row.
+    useSessionStore.setState({
+      sessions: { [HOST_ID]: [
+        { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+      ] },
     })
     render(<SessionSection onSelect={mockOnSelect} />)
-    const nameSpan = screen.getByText('a-very-long-session-name-that-would-overflow')
-    expect(nameSpan.className).toContain('truncate') // overflow-hidden lets flex shrink+ellipsis it
+    const uncapped = screen.getByText(LONG)
+    expect(uncapped.className).toContain('truncate')
+    expect(uncapped.className).not.toContain('max-w-[50%]')
   })
 
   it('omits the title span when the session has no pane title', () => {
