@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -57,8 +57,17 @@ function SessionRow({ hostId, session, disabled, onSelect }: {
   )
 }
 
-function NewTabSessionForm({ hostId, onCreated, onCancel }: {
+/** Host-page offline semantics: the host still exists and its tmux is usable.
+ *  Read from the live store snapshot so it reflects state at call time. */
+function isHostLive(hostId: string): boolean {
+  const s = useHostStore.getState()
+  const rt = s.runtime[hostId]
+  return !!s.hosts[hostId] && !!rt && rt.status === 'connected' && rt.tmuxState !== 'unavailable'
+}
+
+function NewTabSessionForm({ hostId, disabled, onCreated, onCancel }: {
   hostId: string
+  disabled: boolean
   onCreated: (content: { code: string; name: string; mode: string }) => void
   onCancel: () => void
 }) {
@@ -69,27 +78,33 @@ function NewTabSessionForm({ hostId, onCreated, onCancel }: {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const creatingRef = useRef(false) // synchronous double-submit guard (fires before `creating` state commits)
+  // Liveness guard for the async create: flipped false on unmount (cancel,
+  // collapse, host removed, tab switch) so a resolved/rejected request can't
+  // setState on a dead component or attach a session the user already dismissed.
+  const activeRef = useRef(true)
+  useEffect(() => () => { activeRef.current = false }, [])
 
-  const disabledSubmit = creating || !name.trim()
+  const disabledSubmit = creating || !name.trim() || disabled
 
   const handleCreate = async () => {
-    if (creatingRef.current || !name.trim()) return
+    // Re-check host liveness synchronously at submit time (runtime may have gone
+    // offline since the form opened) — do not fire the POST for a dead host.
+    if (creatingRef.current || !name.trim() || disabled || !isHostLive(hostId)) return
     creatingRef.current = true
     setCreating(true); setError('')
     try {
       const created = await createSession(hostId, name.trim(), cwd, mode)
+      if (!activeRef.current) return // form was cancelled/unmounted during the request
       // Guard 1 — blank code = failed create.
       if (!created.code) { setError(t('hosts.create') + ' failed'); return }
       // Guard 2 — host still live (removed/disconnected during the await must not attach).
-      const rt = useHostStore.getState().runtime[hostId]
-      const live = !!useHostStore.getState().hosts[hostId] && !!rt && rt.status === 'connected' && rt.tmuxState !== 'unavailable'
-      if (!live) { setError(t('hosts.create') + ' failed'); return }
+      if (!isHostLive(hostId)) { setError(t('hosts.create') + ' failed'); return }
       onCreated({ code: created.code, name: created.name, mode })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed')
+      if (activeRef.current) setError(err instanceof Error ? err.message : 'Failed')
     } finally {
       creatingRef.current = false
-      setCreating(false)
+      if (activeRef.current) setCreating(false)
     }
   }
 
@@ -182,7 +197,13 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
               <button
                 data-testid={`new-session-${hostId}`}
                 disabled={createDisabled}
-                onClick={() => setCreatingHost((h) => (h === hostId ? null : hostId))}
+                onClick={() => {
+                  const opening = creatingHost !== hostId
+                  setCreatingHost(opening ? hostId : null)
+                  // Opening on a collapsed host must reveal the form (which is
+                  // gated behind isExpanded) — expand so the "+" isn't a no-op.
+                  if (opening) setExpanded((prev) => ({ ...prev, [hostId]: true }))
+                }}
                 className="ml-auto p-1 rounded hover:bg-white/10 text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 title={t('hosts.new_session')}
               >
@@ -192,6 +213,7 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
             {isExpanded && creatingHost === hostId && (
               <NewTabSessionForm
                 hostId={hostId}
+                disabled={createDisabled}
                 onCancel={() => setCreatingHost(null)}
                 onCreated={({ code, name, mode }) => {
                   setCreatingHost(null)

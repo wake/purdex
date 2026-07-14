@@ -1,6 +1,6 @@
 // spa/src/components/SessionSection.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import { SessionSection } from './SessionSection'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -331,5 +331,48 @@ describe('SessionSection', () => {
     resolve(made())
     await waitFor(() => expect(mockOnSelect).toHaveBeenCalled())
     expect(hostApi.createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('expands a collapsed host when its create button is clicked so the form is visible', () => {
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1', port: 7860, order: 0 }, [HOST_B]: { id: HOST_B, name: 'air', ip: '2', port: 7860, order: 1 } },
+      hostOrder: [HOST_ID, HOST_B], activeHostId: HOST_ID,
+      runtime: { [HOST_ID]: LIVE, [HOST_B]: LIVE },
+    })
+    useSessionStore.setState({ sessions: { [HOST_ID]: [], [HOST_B]: [] } })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`host-header-${HOST_B}`)) // collapse HOST_B
+    expect(screen.getByTestId(`host-header-${HOST_B}`)).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_B}`)) // + must re-expand and show the form
+    expect(screen.getByPlaceholderText('Session Name')).toBeInTheDocument()
+    expect(screen.getByTestId(`host-header-${HOST_B}`)).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('does not attach when the form is cancelled while a create is in flight', async () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+    let resolve!: (v: ReturnType<typeof made>) => void
+    vi.mocked(hostApi.createSession).mockReturnValue(new Promise((r) => { resolve = r }))
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+    fireEvent.click(screen.getByText('Create'))
+    fireEvent.click(screen.getByText('Cancel')) // unmounts the form mid-flight
+    await act(async () => { resolve(made()); await Promise.resolve() })
+    await waitFor(() => expect(hostApi.createSession).toHaveBeenCalled())
+    expect(mockOnSelect).not.toHaveBeenCalled() // cancelled → no attach
+  })
+
+  it('disables submit and does not POST when the host goes offline after the form opens', () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+    act(() => { useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } }) }) // host drops while form open
+    const createBtn = screen.getByText('Create')
+    expect(createBtn).toBeDisabled()
+    fireEvent.click(createBtn)
+    expect(hostApi.createSession).not.toHaveBeenCalled()
   })
 })
