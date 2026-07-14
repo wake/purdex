@@ -35,9 +35,46 @@ beforeEach(() => {
 })
 
 describe('SessionSection', () => {
-  it('shows no sessions message when empty', () => {
+  it('renders header + create button for a connected host with zero sessions', () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } } })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    expect(screen.queryByText('No sessions available')).toBeNull()
+    expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeInTheDocument()
+  })
+
+  it('shows the global empty message only when there are no hosts', () => {
+    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null })
     render(<SessionSection onSelect={mockOnSelect} />)
     expect(screen.getByText('No sessions available')).toBeInTheDocument()
+  })
+
+  it('disables the create button when the host tmux is unavailable', () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'unavailable' } } })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeDisabled()
+  })
+
+  it('disables the create button when the host has no runtime (offline)', () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: {} }) // runtime undefined → Host-page rule treats as offline
+    render(<SessionSection onSelect={mockOnSelect} />)
+    expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeDisabled()
+  })
+
+  it('clicking the create button does not toggle collapse', () => {
+    // multi-host so a collapse toggle exists
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1', port: 7860, order: 0 }, [HOST_B]: { id: HOST_B, name: 'air', ip: '2', port: 7860, order: 1 } },
+      hostOrder: [HOST_ID, HOST_B], activeHostId: HOST_ID,
+      runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } },
+    })
+    useSessionStore.setState({ sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }] } })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    expect(screen.getByTestId(`host-header-${HOST_ID}`)).toHaveAttribute('aria-expanded', 'true') // unchanged
+    expect(screen.getByText('dev')).toBeInTheDocument()
   })
 
   it('renders session buttons', () => {
@@ -82,6 +119,7 @@ describe('SessionSection', () => {
     })
     render(<SessionSection onSelect={mockOnSelect} />)
     expect(screen.queryByTestId(`host-header-${HOST_ID}`)).toBeNull()
+    expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeInTheDocument()
   })
 
   it('shows caret toggle on host header when multiple hosts', () => {

@@ -7,7 +7,7 @@ import { useSessionAgentIndicator } from '../hooks/useSessionAgentIndicator'
 import { TabIcon } from './TabIcon'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
 import type { Session } from '../lib/host-api'
-import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight } from '@phosphor-icons/react'
+import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
 
 function SessionRow({ hostId, session, disabled, onSelect }: {
   hostId: string
@@ -64,10 +64,9 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
   const runtime = useHostStore((s) => s.runtime)
   const t = useI18nStore((s) => s.t)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [creatingHost, setCreatingHost] = useState<string | null>(null)
 
-  const hasAnySessions = hostOrder.some((hid) => (sessionsMap[hid] ?? []).length > 0)
-
-  if (!hasAnySessions) {
+  if (hostOrder.length === 0) {
     return <p className="text-sm text-text-muted px-2">{t('session.no_sessions')}</p>
   }
 
@@ -80,33 +79,54 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
         const hostRuntime = runtime[hostId]
         const isOffline = hostRuntime && hostRuntime.status !== 'connected'
         const isExpanded = expanded[hostId] !== false
+        const createDisabled = !hostRuntime || hostRuntime.status !== 'connected' || hostRuntime.tmuxState === 'unavailable'
+
+        const statusDot = hostRuntime?.status === 'reconnecting' ? (
+          <Spinner size={8} className="text-yellow-400 animate-spin" />
+        ) : hostRuntime?.status === 'connected' ? (
+          <Circle size={8} weight="fill" className="text-green-400" />
+        ) : hostRuntime ? (
+          <Circle size={8} weight="fill" className="text-red-400" />
+        ) : (
+          <Circle size={8} weight="fill" className="text-text-muted" />
+        )
 
         return (
           <div key={hostId}>
-            {/* Host header — only show when multiple hosts */}
-            {hostOrder.length > 1 && (
+            <div className="flex items-center gap-1.5 px-3 py-1 mt-1 w-full">
+              {hostOrder.length > 1 ? (
+                <button
+                  data-testid={`host-header-${hostId}`}
+                  aria-expanded={isExpanded}
+                  onClick={() => setExpanded((prev) => ({ ...prev, [hostId]: !isExpanded }))}
+                  className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+                >
+                  {isExpanded ? <CaretDown size={10} className="text-text-muted" /> : <CaretRight size={10} className="text-text-muted" />}
+                  {statusDot}
+                  <span className="text-xs text-text-muted font-semibold">{host.name}</span>
+                  {isOffline && (
+                    <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
+                  )}
+                </button>
+              ) : (
+                <span className="flex items-center gap-1.5 flex-1 min-w-0">
+                  {statusDot}
+                  <span className="text-xs text-text-muted font-semibold">{host.name}</span>
+                  {isOffline && (
+                    <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
+                  )}
+                </span>
+              )}
               <button
-                data-testid={`host-header-${hostId}`}
-                aria-expanded={isExpanded}
-                onClick={() => setExpanded((prev) => ({ ...prev, [hostId]: !isExpanded }))}
-                className="flex items-center gap-1.5 px-3 py-1 mt-1 w-full cursor-pointer"
+                data-testid={`new-session-${hostId}`}
+                disabled={createDisabled}
+                onClick={() => setCreatingHost((h) => (h === hostId ? null : hostId))}
+                className="ml-auto p-1 rounded hover:bg-white/10 text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title={t('hosts.new_session')}
               >
-                {isExpanded ? <CaretDown size={10} className="text-text-muted" /> : <CaretRight size={10} className="text-text-muted" />}
-                {hostRuntime?.status === 'reconnecting' ? (
-                  <Spinner size={8} className="text-yellow-400 animate-spin" />
-                ) : hostRuntime?.status === 'connected' ? (
-                  <Circle size={8} weight="fill" className="text-green-400" />
-                ) : hostRuntime ? (
-                  <Circle size={8} weight="fill" className="text-red-400" />
-                ) : (
-                  <Circle size={8} weight="fill" className="text-text-muted" />
-                )}
-                <span className="text-xs text-text-muted font-semibold">{host.name}</span>
-                {isOffline && (
-                  <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
-                )}
+                <Plus size={14} />
               </button>
-            )}
+            </div>
             {isExpanded && sessions.map((session) => (
               <SessionRow
                 key={`${hostId}:${session.code}`}
