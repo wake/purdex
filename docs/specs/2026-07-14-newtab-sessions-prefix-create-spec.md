@@ -31,7 +31,13 @@ relative to the rest of the app:
 
 - No change to the Host page's session table or its create dialog.
 - No "active session" highlighting (matching a list row to an open pane).
-- No new create-session API; reuse `createSession()` from `host-api`.
+- No new create-session API; reuse `createSession()` from `host-api`. We accept
+  its coarse `"<status> <statusText>"` error (not the Host dialog's response-body
+  text) rather than changing `createSession()` — that signature is shared by all
+  callers and widening its behavior is out of scope.
+- No change to the **existing session-row** click/disable semantics (rows keep
+  today's `hostRuntime && status !== 'connected'` gate). Only the new create
+  ("+") affordance adopts the Host-page offline semantics (§5.3).
 - No delete/rename in the New-Tab list (those stay on the Host page).
 
 ## 4. Background (current code)
@@ -79,6 +85,12 @@ function useSessionAgentIndicator(
 ): SessionAgentIndicator
 ```
 
+**Type location (avoid a cycle).** `TabIconComponent` currently lives in
+`useTabDisplay.ts`. Since `useTabDisplay` will import the new hook and the new
+hook needs `TabIconComponent`, move the type into `useSessionAgentIndicator.ts`
+(or a small shared types module) and have `useTabDisplay` import it from there —
+preventing a `useTabDisplay ⇄ useSessionAgentIndicator` import cycle.
+
 Behavior (extracted verbatim from `useTabDisplay`'s agent layer):
 - `ck = sessionCode && hostId ? compositeKey(hostId, sessionCode) : undefined`.
 - Reads `statuses[ck]`, `agentTypes[ck]`, `subagents[ck] ?? []`, `unread[ck]`
@@ -108,23 +120,54 @@ all label/title logic. This is a behavior-preserving extraction; the existing 14
 
 ### 5.3 SessionSection: per-host create & attach (G2)
 
-- **Host header always rendered** (single- and multi-host), carrying: expand
-  caret (multi-host only), host status dot (existing logic), host name, and a
-  `+` new-session button on the right. `+` is disabled when the host is offline.
-  - Single-host case previously rendered no header; it now shows a compact header
-    so the `+` has a home. Expand/collapse stays multi-host-only.
-- **Inline create form** (`NewTabSessionForm`, local to SessionSection): clicking
-  `+` toggles a small form under that host with `name`, `cwd` (default `~`),
-  `mode` (`terminal|stream`) — same fields/labels as the Host page dialog. On
-  submit it calls `createSession(hostId, name.trim(), cwd, mode)`.
-  - **On success** → `onSelect({ kind:'tmux-session', hostId, sessionCode:
+**Always render a host header per host in `hostOrder`** — including hosts with
+**zero** sessions. Today the component early-returns a single global "No
+sessions available" when *no* host has any session, and renders a host header
+only when `hostOrder.length > 1`. Both must change so every host gets a create
+anchor:
+- Iterate `hostOrder`; for each existing host render a header (single- and
+  multi-host). If a host has no sessions, render a subtle per-host empty line
+  (e.g. `session.no_sessions`) under its header instead of hiding it.
+- The global early-return only applies when there are **no hosts at all**.
+
+**Header structure (no nested buttons).** The header is a `<div>` row, not a
+single button:
+- **Left**: in multi-host, a `<button>` wrapping caret + status dot + name that
+  toggles expand/collapse (single-host: same content as a non-interactive span,
+  no collapse). Status-dot logic unchanged.
+- **Right**: a **separate** `+` `<button>` (its own interactive element — never
+  nested in the collapse button) that toggles the inline create form. This
+  avoids illegal nested interactive elements and a `+` click never toggles
+  collapse.
+
+**`+` / create offline gate — Host-page semantics.** The create button and the
+create submit are disabled when the host is offline per the Host page's rule:
+`!runtime || runtime.status !== 'connected' || runtime.tmuxState ===
+'unavailable'` (stricter than the row gate; `tmuxState === 'unavailable'` must
+block create). The existing session-row gate is unchanged (§3).
+
+**Inline create form** (`NewTabSessionForm`, local to SessionSection): clicking
+`+` toggles a small form under that host with `name`, `cwd` (default `~`),
+`mode` (`terminal|stream`) — same fields/labels as the Host page dialog. On
+submit it calls `createSession(hostId, name.trim(), cwd, mode)` with a `creating`
+in-flight guard disabling submit.
+- **On success**, before attaching, apply two guards:
+  1. **Blank code** — if `!created.code`, treat as a failed create (show an
+     error, keep the form open, do **not** attach). Matches the repo's
+     "blank session code = failure" convention.
+  2. **Host still live** — re-read `useHostStore.getState()` and confirm
+     `hosts[hostId]` still exists and is connected (same offline rule as above).
+     A host removed/disconnected while `createSession` was in flight must not
+     attach into a pane pointing at a dead host; show an error instead.
+  - If both guards pass → `onSelect({ kind:'tmux-session', hostId, sessionCode:
     created.code, mode, cachedName: created.name, tmuxInstance:'' })`, then close
-    the form. This attaches the new session into the current pane (via the
-    wrapper's `setPaneContent` + `setActiveTab`). The `created.code` from the
-    response lets us attach immediately, before the WS session-list sync arrives.
-  - **On failure** → show the error text inline; do not attach; keep the form
-    open. A create in-flight guard (`creating`) disables the submit button.
-  - Empty `name` is a no-op (submit disabled), matching the Host dialog.
+    the form. This attaches into the current pane (wrapper's `setPaneContent` +
+    `setActiveTab`). Using `created.code` from the response lets us attach
+    immediately, before the WS session-list sync arrives.
+- **On failure** (network/HTTP throw, blank code, or dead host) → show the error
+  text inline; do not attach; keep the form open. Error text is the coarse
+  `createSession()` message (§3).
+- Empty `name` is a no-op (submit disabled), matching the Host dialog.
 
 ### 5.4 Reuse vs. duplication
 
@@ -151,14 +194,26 @@ SessionRow ─ useSessionAgentIndicator(hostId, code) ─▶ useAgentStore / use
 
 **`SessionSection.test` (extend existing)**
 - Row renders `<TabIcon>` prefix: no-agent → terminal icon; running agent →
-  status indicator present (assert via TabIcon output / testid).
+  status indicator present. Assert the status indicator DOM under a non-`icon`
+  `tabIndicatorStyle` (e.g. `dot` / `iconDot`) so the test exercises the real
+  prefix rather than only the terminal fallback.
 - Host header always present (incl. single host) with a `+` button.
-- `+` disabled when host offline.
+- **Zero sessions**: a connected host with no sessions still renders its header +
+  `+`, and creating works (no global "No sessions" swallow).
+- Clicking `+` toggles the form and does **not** collapse/expand the host.
+- `+` disabled when host offline per Host-page rule — cover `runtime`
+  undefined and `tmuxState === 'unavailable'`, not only `status !== 'connected'`.
 - Submitting the form calls `createSession` and, on success, `onSelect` with the
   correct `tmux-session` content (`created.code` / `created.name` / chosen mode).
-- Create failure surfaces the error and does not call `onSelect`.
+- **Race**: `createSession` resolves after the host is removed/disconnected →
+  no `onSelect`, error surfaced.
+- **Blank code**: `createSession` resolves with empty `code` → no `onSelect`,
+  error surfaced.
+- Create failure (throw) surfaces the error and does not call `onSelect`.
 
 **`useTabDisplay.test`** — unchanged, must stay green (equivalence guard).
+Additionally confirm a cc/codex icon-variant change still updates the resolved
+icon after the refactor (guards against the extraction dropping a variant input).
 
 ## 8. Phases
 
@@ -178,4 +233,8 @@ decided at plan time by review size.
   is intentional; `SessionPaneContent` connects by code, and the store fills in
   shortly after. No dependency on the list containing the new session first.
 - **Offline host** during create: `createSession` will fail → inline error; `+`
-  is already disabled when the host is known-offline.
+  is already disabled when the host is known-offline (Host-page rule).
+- **compositeKey delimiter**: agent state is keyed by `compositeKey(hostId,
+  sessionCode)` = `` `${hostId}:${sessionCode}` ``. Cross-host uniqueness holds as
+  long as `hostId`/`sessionCode` contain no ambiguating colon (existing
+  invariant already relied on by `useTabDisplay`); no design change needed.
