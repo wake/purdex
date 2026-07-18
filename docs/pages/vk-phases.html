@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>派工整合里程碑：最小可用在多遠（codex-reviewed）</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1a1d24; --muted:#5b6270; --line:#e3e6ec;
+    --accent:#3b6ef5; --accent-soft:#e8f0ff;
+    --s:#1f9d55; --s-bg:#e6f6ec; --m:#c77700; --m-bg:#fdf1dd; --l:#d23b3b; --l-bg:#fbe6e6;
+    --have:#1f9d55; --gap:#d23b3b; --code:#f0f2f6;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#0f1116;--panel:#171a21;--ink:#e6e9ef;--muted:#9aa2b1;--line:#262b35;
+      --accent:#6b9bff;--accent-soft:#1a2540;--s:#4cc98a;--s-bg:#153026;--m:#e0a84a;--m-bg:#332614;
+      --l:#f07171;--l-bg:#3a1e1e;--have:#4cc98a;--gap:#f07171;--code:#1e222b;}
+  }
+  :root[data-theme="dark"]{--bg:#0f1116;--panel:#171a21;--ink:#e6e9ef;--muted:#9aa2b1;--line:#262b35;
+    --accent:#6b9bff;--accent-soft:#1a2540;--s:#4cc98a;--s-bg:#153026;--m:#e0a84a;--m-bg:#332614;
+    --l:#f07171;--l-bg:#3a1e1e;--have:#4cc98a;--gap:#f07171;--code:#1e222b;}
+  :root[data-theme="light"]{--bg:#f7f8fa;--panel:#ffffff;--ink:#1a1d24;--muted:#5b6270;--line:#e3e6ec;
+    --accent:#3b6ef5;--accent-soft:#e8f0ff;--s:#1f9d55;--s-bg:#e6f6ec;--m:#c77700;--m-bg:#fdf1dd;
+    --l:#d23b3b;--l-bg:#fbe6e6;--have:#1f9d55;--gap:#d23b3b;--code:#f0f2f6;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif}
+  .wrap{max-width:920px;margin:0 auto;padding:0 20px 96px}
+  header.hero{padding:44px 0 22px;border-bottom:1px solid var(--line);margin-bottom:8px}
+  .eyebrow{color:var(--accent);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+  h1{font-size:28px;line-height:1.28;margin:.35em 0 .3em;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:15px;max-width:64ch}
+  .meta{color:var(--muted);font-size:12.5px;margin-top:14px}
+  h2{font-size:20px;margin:42px 0 12px;letter-spacing:-.01em}
+  h3{font-size:15.5px;margin:22px 0 8px}
+  p{margin:.5em 0} a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .verdict{background:linear-gradient(180deg,var(--accent-soft),transparent 72%)}
+  .lead{font-size:16.5px}
+  code{background:var(--code);padding:.12em .42em;border-radius:5px;font-size:.9em;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:20px}
+  .S{color:var(--s);background:var(--s-bg)} .M{color:var(--m);background:var(--m-bg)} .L{color:var(--l);background:var(--l-bg)}
+  .tblwrap{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:560px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--accent-soft);color:var(--ink);font-weight:700;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td.c,th.c{text-align:center}
+  .star{background:var(--s-bg)}
+  ul{margin:.4em 0;padding-left:1.25em} li{margin:.3em 0}
+  .callout{border:1px solid var(--line);background:var(--m-bg);border-radius:8px;padding:11px 16px;margin:12px 0;font-size:14px}
+  .callout.good{background:var(--s-bg)} .callout.bad{background:var(--l-bg)}
+  .k{color:var(--muted);font-size:12.5px}
+  .theme-toggle{position:fixed;top:14px;right:14px;background:var(--panel);border:1px solid var(--line);
+    border-radius:8px;padding:6px 11px;cursor:pointer;color:var(--muted);font-size:13px;z-index:10}
+  hr{border:none;border-top:1px solid var(--line);margin:34px 0}
+  .verb{display:inline-block;font-size:10.5px;font-weight:800;padding:1px 7px;border-radius:5px;letter-spacing:.02em}
+  .v-keep{color:var(--s);background:var(--s-bg)} .v-move{color:var(--m);background:var(--m-bg)} .v-split{color:var(--accent);background:var(--accent-soft)}
+  .track{border-left:0;padding-left:0;list-style:none;counter-reset:none}
+  .rail{position:relative;padding-left:26px;margin:16px 0}
+  .rail::before{content:"";position:absolute;left:8px;top:6px;bottom:6px;width:2px;background:var(--line)}
+  .stop{position:relative;margin:0 0 16px}
+  .stop::before{content:"";position:absolute;left:-22px;top:5px;width:11px;height:11px;border-radius:50%;
+    background:var(--panel);border:2px solid var(--accent)}
+  .stop.hit::before{background:var(--s);border-color:var(--s)}
+  .stop h3{margin:0 0 3px}
+  .dim{color:var(--muted)}
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="(function(){var r=document.documentElement;var d=(r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'));r.setAttribute('data-theme',d==='dark'?'light':'dark');})()">◐ 主題</button>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Ploom × Purdex · 派工整合</div>
+  <h1>最小可用在多遠？<br>里程碑拆分（codex-reviewed 修正版）</h1>
+  <p class="sub">我重排了里程碑，codex 跨模型 review 後推翻一個關鍵定位並抓出 4 個隱藏依賴。本頁是修正後的版本 + 演變紀錄。搭配<a href="./vk-build-vs-buy.html">第一頁：build-vs-buy 與落差評估</a>。</p>
+  <p class="meta">2026-07-18 · Codex review job <code>task-mrqbotke-z0tif4</code>（gpt-5.4，讀兩邊 repo 驗證）· 五層模型 <code>issue→dispatch→execution→attempt→session</code></p>
+</header>
+
+<h2>結論：最小可用不在 M0</h2>
+<div class="panel verdict">
+  <p class="lead"><b>M0 只是「能 demo 的 walking skeleton」，不是最小可用。</b>真正的最小可用落在 <b>M1（可靠）+ M1.5（能對結果動作的最小 follow-up）</b>。</p>
+  <p>Codex 的原話定調：<span class="dim">「照你現在的切法，最小可用不在 M0，在『M1 再加一個提前的最小 follow-up 切片』；M0 只是能 demo 的 walking skeleton。」</span></p>
+  <p>兩個關鍵理由：</p>
+  <ul>
+    <li><b>沒有恢復路徑 ≠ 脆，是 demo</b>：M0 無 lease，sleep/crash/daemon 掛就卡死。這不是「可用但脆」，是「還不能每天靠它」。→ 至少 <b>manual reclaim / force requeue 要進 M0</b>，自動 lease 進 M1。</li>
+    <li><b>只能看不能改 ≠ 可用</b>：M0–M3 若沒有 review 迴圈，等於「派出去、看結果、再手動切去別處接著做」。→ <b>「看 diff + free-text follow-up / rerun」要從 M4 前移到 M1.5</b>，inline review console 才留最後。</li>
+  </ul>
+  <div class="callout"><b>誠實修正</b>：M0 本身也<b>比我原估重一點</b>——要塞進 idempotency、manual reclaim、base_commit、最薄 attempt、deeplink 實作、repo_location scope 限縮（見下）。原本的「M＝主要接線」偏樂觀。</div>
+</div>
+
+<h2>最小可用落點（時間軸）</h2>
+<div class="rail">
+  <div class="stop">
+    <h3>M0 · Walking skeleton <span class="dim">— demo-able，還不能日常用</span></h3>
+    <p class="k">issue 派工 → Purdex 跑 <code>claude -p</code> → 狀態/diff 回填 issue + deeplink 看即時。跑得通，但沒恢復、只能看。</p>
+  </div>
+  <div class="stop">
+    <h3>M1 · Reliability <span class="dim">— 不會卡死</span></h3>
+    <p class="k">lease/auto-reclaim、observer/controller 分離（修 race）、完整狀態機、poll/claim 強化。</p>
+  </div>
+  <div class="stop hit">
+    <h3>M1.5 · ★ 最小可用 <span class="dim">— 能對結果動作</span></h3>
+    <p class="k">看 diff artifact + free-text follow-up / rerun。到這裡才是「可靠 + 能改」的真閉環，能每天靠它幹活。</p>
+  </div>
+  <div class="stop">
+    <h3>M2 → M4 · 中立化、隔離、完整 review console <span class="dim">— 往 VK 靠</span></h3>
+    <p class="k">codex provider、worktree 生命週期、inline review console。</p>
+  </div>
+</div>
+
+<h2>修正後里程碑表</h2>
+<p class="k">動作標記為 codex 的 keep / move / split 判定。<span class="badge S">S</span><span class="badge M">M</span><span class="badge L">L</span> 為工作量。</p>
+<div class="tblwrap"><table>
+<tr><th>里程碑</th><th>交付（能做什麼）</th><th class="c">量</th><th class="c">codex</th></tr>
+<tr><td><b>M0</b><br>Walking skeleton</td><td><code>execution_id</code> 穩定 handle + 最小事件契約 + dispatch 接線 + <code>claude -p</code> 包裝 + <b>idempotency</b> + <b>manual reclaim</b> + <b>base_commit 擷取</b> + <b>最薄 attempt(=1)</b> + diff artifact + 狀態回填 + deeplink。<span class="dim">scope：只支援有 repo_location 的 project；一 repo 一 live execution。</span></td><td class="c"><span class="badge M">M+</span></td><td class="c"><span class="verb v-split">split+move</span></td></tr>
+<tr><td><b>M1</b><br>Reliability</td><td>lease/auto-reclaim（crash/sleep 恢復）+ observer/controller 分離（修 <code>handler.go:92</code> race）+ 完整狀態機 + poll/claim 強化。</td><td class="c"><span class="badge M">M</span></td><td class="c"><span class="verb v-move">merge</span></td></tr>
+<tr class="star"><td><b>M1.5</b> ★<br>最小可用</td><td><b>看 diff artifact + free-text follow-up / rerun</b>。讓它「能改」不只「能看」——最小可用的真正下限。</td><td class="c"><span class="badge S">S–M</span></td><td class="c"><span class="verb v-split">前移自 M4</span></td></tr>
+<tr><td><b>M2</b><br>provider 中立</td><td>派工選 claude 或 codex，都走訂閱零 token（已有 <code>codex/provider.go</code> observe 骨架）。</td><td class="c"><span class="badge S">S–M</span></td><td class="c"><span class="verb v-keep">keep</span></td></tr>
+<tr><td><b>M3</b><br>worktree lifecycle</td><td>隔離 worktree（建/命名/清孤兒）+ 完整 attempt 語義（多次/並行）。穩定 diff base、可重現。<span class="dim">codex：worktree 應早於完整 review loop。</span></td><td class="c"><span class="badge M">M→L</span></td><td class="c"><span class="verb v-split">split</span></td></tr>
+<tr><td><b>M4</b><br>review console</td><td>inline hunk comment + 內嵌 execution UI + 完整 review console（issue 詳情頁擴成工作單+執行觀測）。</td><td class="c"><span class="badge L">L</span></td><td class="c"><span class="verb v-split">split+move</span></td></tr>
+<tr><td><b>M5+</b><br>parity</td><td>PR 建立 / dev server preview / attempt compare UI / 完整 MCP / multi-host scheduler。逐項獨立、按需求排。</td><td class="c">各異</td><td class="c"><span class="verb v-keep">keep</span></td></tr>
+<tr><td><b>Later</b><br>MM bridge</td><td>hermes 拉 agent/subagent 進 MM thread 即時對話（interactive lease 重機制）。</td><td class="c">—</td><td class="c"><span class="verb v-keep">keep 最後</span></td></tr>
+</table></div>
+
+<h2>兩側推進項目（逐里程碑展開）</h2>
+<p class="k">同一里程碑，三條泳道各自要做什麼：<b>Ploom</b>（控制面）· <b>縫</b>（契約/事件，兩邊共識）· <b>Purdex</b>（執行面）。<b>粗體</b>＝該階段最貴或最關鍵項；<span style="color:var(--m)">◆</span>＝上輪安全討論新增。</p>
+<div class="tblwrap"><table>
+<tr><th>里程碑</th><th>Ploom · 控制面</th><th>縫 · 契約/事件</th><th>Purdex · 執行面</th></tr>
+
+<tr><td><b>M0</b><br><span class="dim">skeleton<br>(demo)</span></td>
+<td><ul>
+<li>dispatch 資料表 + 1 個 dispatch API</li>
+<li>issue 上「派工」按鈕</li>
+<li>execution 狀態列顯示</li>
+<li>deeplink 觸發</li>
+<li><b>scope 限縮：只支援有 <code>repo_location</code> 的 project</b>（<code>projects.go:64</code>）</li>
+</ul></td>
+<td><ul>
+<li><code>DispatchRequested</code></li>
+<li><code>ExecutionAccepted{execution_id, base_commit, attempt_no=1}</code></li>
+<li><code>ExecutionLifecycle</code></li>
+<li><code>ExecutionArtifact{diff, transcript}</code></li>
+<li><b><code>idempotency_key</code></b>（防 double-click）</li>
+<li><code>execution_id</code>＝唯一對外 handle</li>
+<li><span style="color:var(--m)">◆</span> <code>sandbox_profile</code>（dispatch 請求、Purdex host policy clamp）</li>
+</ul></td>
+<td><ul>
+<li>接 dispatch endpoint + execution 記錄（<code>execution_id</code>+最小狀態機）包住現有 <code>claude -p</code></li>
+<li><b><code>base_commit</code> 擷取</b>（diff 穩定性）</li>
+<li>最薄 <code>attempt</code> row（=1，語義從第一天真）</li>
+<li>diff artifact 擷取 + 狀態回報</li>
+<li><b>manual reclaim / force requeue</b>（最小恢復路徑）</li>
+<li>deeplink 落點：OS protocol / session route（<b>非純接線</b>，S6 缺口）</li>
+<li><span style="color:var(--m)">◆</span><b> executor sandbox/permission 模式 + host 邊界定案</b>（A 軸安全，M0 就要決定）</li>
+<li>硬約束：同 repo/branch 一個 live execution</li>
+</ul></td></tr>
+
+<tr><td><b>M1</b><br><span class="dim">reliability</span></td>
+<td><ul>
+<li>blocked / needs_review 狀態顯示</li>
+<li>reclaim / requeue UI</li>
+</ul></td>
+<td><ul>
+<li>lease 語義（<code>lease_id</code>、過期）</li>
+<li>完整 lifecycle 狀態機<br>（queued→…→succeeded/failed/cancelled）</li>
+</ul></td>
+<td><ul>
+<li>lease / auto-reclaim（crash/sleep 恢復）</li>
+<li><b>observer/controller 分離</b>（修 <code>handler.go:92</code> 多 subscriber 寫 stdin race）</li>
+<li>poll/claim worker 強化</li>
+</ul></td></tr>
+
+<tr class="star"><td><b>M1.5</b> ★<br><span class="dim">最小可用</span></td>
+<td><ul>
+<li>issue 上看 diff artifact（唯讀）</li>
+<li>free-text follow-up 輸入框</li>
+<li>rerun 按鈕</li>
+</ul></td>
+<td><ul>
+<li><code>ExecutionControlRequest{follow_up}</code> 控制通道</li>
+<li>diff artifact 讀取契約</li>
+</ul></td>
+<td><ul>
+<li>follow-up 注入（stdin，<code>--input-format stream-json</code>）</li>
+<li>rerun（<code>--resume</code> 或新 attempt）</li>
+<li>diff artifact 提供</li>
+</ul></td></tr>
+
+<tr><td><b>M2</b><br><span class="dim">provider 中立</span></td>
+<td><ul>
+<li>派工時選 executor 下拉（claude / codex）</li>
+</ul></td>
+<td><ul>
+<li><code>desired_executor</code> 欄位</li>
+<li>normalize 標準（provider raw event <b>不穿縫</b>）</li>
+</ul></td>
+<td><ul>
+<li><b><code>codex exec --json</code> launch adapter</b>（<code>codex/provider.go</code>：observe→launch）</li>
+<li>codex JSONL → 中性 schema normalize</li>
+<li><code>codex --sandbox</code> 模式對應（接 A 軸）</li>
+</ul></td></tr>
+
+<tr><td><b>M3</b><br><span class="dim">worktree +<br>attempt</span></td>
+<td><ul>
+<li>attempt 列表 / 切換（基本）</li>
+</ul></td>
+<td><ul>
+<li>attempt 多筆語義（<code>attempt_no</code>&gt;1）</li>
+<li>worktree base/head 進 artifact</li>
+</ul></td>
+<td><ul>
+<li><b>worktree-per-execution</b>（建 / 命名 / 清孤兒）</li>
+<li>完整 attempt（多次 / 並行不同 agent）</li>
+<li>穩定 diff base/head 錨定</li>
+</ul></td></tr>
+
+<tr><td><b>M4</b><br><span class="dim">review<br>console</span></td>
+<td><ul>
+<li><b>issue 詳情頁 → execution review console</b>：inline hunk comment + 打包送回 + 內嵌 execution UI（不再只 deeplink）<span class="dim">← codex 認定最貴一塊</span></li>
+</ul></td>
+<td><ul>
+<li>review comment → follow-up command 契約</li>
+<li>hunk anchor</li>
+</ul></td>
+<td><ul>
+<li>inline-comment-driven follow-up 注入</li>
+<li>內嵌 UI 的 stream 供給</li>
+</ul></td></tr>
+
+<tr><td><b>M5+</b><br><span class="dim">parity</span></td>
+<td><ul>
+<li>attempt compare UI</li>
+</ul></td>
+<td><ul>
+<li>（依項目擴充契約）</li>
+</ul></td>
+<td><ul>
+<li>PR 建立（<code>gh</code>）· dev server preview</li>
+<li>multi-host scheduler · 完整 MCP surface</li>
+</ul></td></tr>
+
+<tr><td><b>Later</b><br><span class="dim">MM bridge</span></td>
+<td><ul>
+<li><span class="dim">(MM / hermes)</span> 固定 bot 控制入口 + webhook 動態身分</li>
+<li>thread ↔ issue 綁定</li>
+</ul></td>
+<td><ul>
+<li><b>interactive lease</b>（誰有 stdin 寫入權）</li>
+<li><code>execution_id + lease_id + seq</code> idempotency</li>
+<li>控制命令走控制通道（prompt injection 邊界）</li>
+</ul></td>
+<td><ul>
+<li>observer/controller lease 授權</li>
+<li>一 execution 一 controller、多 observer 唯讀</li>
+</ul></td></tr>
+</table></div>
+<div class="callout"><b>讀法</b>：由左到右就是一次派工的資料流向——Ploom 發 <code>dispatch</code> → 縫的事件契約 → Purdex 起 <code>execution</code> 回報。<b>Purdex 側的擔子明顯比 Ploom 重</b>（執行、恢復、隔離、安全都在這側），Ploom 側早期主要是「發起 + 觀測 + 回填」，到 M4 才長出昂貴的 review console。</div>
+
+<h2>M0 到底要裝什麼（codex 擴充後）</h2>
+<div class="panel">
+<p>codex 判定「demo-able」和「minimally usable」我原本混在一起。M0 要成為誠實的 walking skeleton，這些是<b>不能省的最小防呆與資料正確性</b>：</p>
+<ul>
+<li><b><code>execution_id</code> 當唯一對外穩定 handle</b>——<code>session_code</code> 不能外洩（session 死/host 換/tmux 重建都會破）。</li>
+<li><b><code>idempotency key</code>（原本我放 M1，錯）</b>——派工按鈕 double-click 就製造垃圾 execution，這是最小防呆不是 reliability polish。</li>
+<li><b>manual reclaim / force requeue</b>——沒有任何恢復路徑就只能算 demo；自動 lease 可延 M1，但人工重置要在 M0。</li>
+<li><b><code>base_commit</code> 在 <code>ExecutionAccepted</code> 就記</b>——沒有它，連最小 diff artifact 都不穩（review 看到的會是當下 repo 不是當時結果）。</li>
+<li><b>最薄 <code>attempt</code> row（硬限一 execution 一 attempt，<code>attempt_no=1</code> 從第一天就是真的）</b>——比「契約先放 attempt_no 卻沒語義」好，之後上多 attempt 不用改 event shape。</li>
+<li><b>deeplink 不是純接線</b>——Purdex 還沒有 OS protocol / session route（S6 草稿已明寫缺口），承諾 M0 有 deeplink 就要把這塊算進工作量。</li>
+<li><b>scope 限縮</b>——Ploom <code>native</code> project 不會自動有 <code>repo_location</code>（<code>projects.go:64</code>），M0 要嘛只支援有 repo location 的 project、要嘛補 repo 選擇綁定，否則「選 host+repo」的 scope 是假的。</li>
+</ul>
+</div>
+
+<h2>Codex 抓的 4 個隱藏依賴</h2>
+<div class="tblwrap"><table>
+<tr><th>依賴</th><th>原本放哪</th><th>該放哪</th><th>為什麼</th></tr>
+<tr><td>idempotency key</td><td>M1</td><td><b>M0</b></td><td>double-click 製造垃圾 execution＝最小防呆</td></tr>
+<tr><td><code>base_commit</code> 擷取</td><td>（沒列）</td><td><b>M0</b></td><td>沒它連最小 diff artifact 都不穩</td></tr>
+<tr><td>deeplink 的 OS protocol / session route</td><td>當「純接線」</td><td><b>算進 M0 工作量</b></td><td>Purdex 尚無此能力，S6 草稿已標缺口</td></tr>
+<tr><td>observer/controller race</td><td>M1</td><td><b>M0 就已存在</b></td><td>只要 M0 允許多視窗同看 live session，race 現在就在</td></tr>
+</table></div>
+
+<h2>worktree 延後的真實代價（比我表上重）</h2>
+<div class="callout bad">
+<p>codex：worktree 可延到 M3，但代價比「只是不能並行」重。真正會咬人的是：</p>
+<ul>
+<li>diff 沒穩定 base → review 看到當下 repo 不是當時 execution 結果</li>
+<li>人手動改 tree、agent 再跑 → artifact 歸屬會混</li>
+<li>retry / follow-up 吃到前一次殘留</li>
+<li>untracked / 暫存 / branch head 漂移污染結果</li>
+</ul>
+<p><b>硬前提</b>：M0–M2 延後 worktree 的話，必須寫死「同 repo/branch 只允許一個 live execution」，且 <code>ExecutionAccepted</code> 一定要記 <code>base_commit</code>。</p>
+</div>
+
+<h2>A 軸安全：sandbox 模式 + host 邊界（M0 必須定案）</h2>
+<p>worktree 管的是 B 軸（git 隔離 / 整潔）。真正的爆炸半徑控制是 A 軸，跟 worktree 無關，且 <b>M0 就要決定</b>——因為第一次派工就會有 agent 在某台機器上、以某種權限跑。</p>
+
+<h3>三層防禦（defense in depth）</h3>
+<div class="tblwrap"><table>
+<tr><th>層</th><th>機制</th><th>M0 選項</th></tr>
+<tr><td>1 · executor 權限/沙箱</td><td>agent 自己的權限模式（in-agent）</td><td>codex <code>--sandbox read-only|workspace-write|danger-full-access</code> + approval 門檻；claude <code>--permission-mode</code> + <code>--allowedTools</code>/<code>--disallowedTools</code>（<b>別用</b> <code>--dangerously-skip-permissions</code>）</td></tr>
+<tr><td>2 · OS 隔離</td><td>把 process 整個關起來</td><td>container（Sculptor 走這條）/ VM（Cursor cloud）/ 裸 process（現況）。M0 可先裸 process，但要清楚<b>這層是空的</b></td></tr>
+<tr><td>3 · host 邊界</td><td>派到哪台機器＝爆炸半徑邊界</td><td>主力開發機 vs 專用 / 可拋棄 exec host。dispatch 已帶 target host</td></tr>
+</table></div>
+
+<h3>M0 要做的三個決定</h3>
+<ul>
+<li>每個 executor 的<b>預設 sandbox 等級</b>（建議：codex <code>workspace-write</code> + approval；claude 非 bypass 的 permission-mode + tool allowlist）</li>
+<li>契約加 <code>sandbox_profile</code>：dispatch 可請求等級，但<b>由 Purdex（daemon＝信任邊界）依 host policy clamp</b>——Ploom 不能越權要求超過該 host 允許的等級（least privilege）</li>
+<li>host 邊界策略：execution 跑在使用者主機，還是指定的 exec host</li>
+</ul>
+
+<div class="callout good"><b>A 軸 × B 軸 = 完整安全</b>。sandbox/permission（A，防 agent 亂搞）＋ worktree/base_commit（B，防撞你的工作 + diff 可重現）。兩者正交、都要，但 <b>A 軸 M0 就得定，B 軸可延到 M3</b>。少了 A 軸，有沒有 worktree 都不安全。</div>
+
+<div class="callout"><b>待你拍板的設計點</b>：sandbox 等級由誰定？建議 <b>Purdex 持 per-host / per-executor 預設 policy</b>（daemon 是信任邊界），Ploom 的 dispatch 只能 <b>request</b>、Purdex <b>clamp</b>——只能降不能升。你認同「host policy 為準、dispatch 不能升級超過 host 允許」嗎？</div>
+
+<h2>演變紀錄：v1 草稿 → codex-reviewed</h2>
+<div class="tblwrap"><table>
+<tr><th>項目</th><th>v1 我的草稿</th><th>codex-reviewed 修正</th></tr>
+<tr><td>最小可用落點</td><td>M0（有用但脆）</td><td><b>M1 + M1.5</b>（M0 只是 demo）</td></tr>
+<tr><td>idempotency</td><td>M1</td><td>M0</td></tr>
+<tr><td>恢復路徑</td><td>M1 才補 lease</td><td>M0 至少要 manual reclaim</td></tr>
+<tr><td>base_commit</td><td>未列</td><td>M0 必須（diff 穩定性）</td></tr>
+<tr><td>attempt</td><td>M3 才做，契約先放 attempt_no</td><td>M0 建最薄 attempt(=1)，語義從第一天真</td></tr>
+<tr><td>diff review + follow-up</td><td>整包在 M4（最後）</td><td>拆兩塊：基本版前移 M1.5、console 留最後</td></tr>
+<tr><td>worktree + attempt</td><td>綁在 M3 同一里程碑</td><td>拆開：attempt 更早、worktree 早於 review loop</td></tr>
+<tr><td>deeplink</td><td>當純接線</td><td>算進 M0 工作量（缺 OS protocol）</td></tr>
+<tr><td>MM bridge 順序</td><td>最後</td><td>✅ keep（順序正確）</td></tr>
+</table></div>
+
+<hr>
+<p class="k">合成自：主 session 里程碑草稿 <code>phase-breakdown.md</code> + Codex review <code>task-mrqbotke-z0tif4</code>（讀 ploom/purdex 兩 repo 驗證）。此頁為討論底本，非定稿 spec。下一步討論建議：先敲定 M0 的邊界（含 codex 加的必需項）與「最小可用＝M1.5」這條線是否認可。</p>
+</div>
+</body>
+</html>

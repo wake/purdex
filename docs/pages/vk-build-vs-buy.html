@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ploom + Purdex ↔ Vibe Kanban：build-vs-buy 與落差評估</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1a1d24; --muted:#5b6270; --line:#e3e6ec;
+    --accent:#3b6ef5; --accent-soft:#e8f0ff;
+    --s:#1f9d55; --s-bg:#e6f6ec; --m:#c77700; --m-bg:#fdf1dd; --l:#d23b3b; --l-bg:#fbe6e6;
+    --have:#1f9d55; --gap:#d23b3b; --code:#f0f2f6;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0f1116; --panel:#171a21; --ink:#e6e9ef; --muted:#9aa2b1; --line:#262b35;
+      --accent:#6b9bff; --accent-soft:#1a2540;
+      --s:#4cc98a; --s-bg:#153026; --m:#e0a84a; --m-bg:#332614; --l:#f07171; --l-bg:#3a1e1e;
+      --have:#4cc98a; --gap:#f07171; --code:#1e222b;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0f1116; --panel:#171a21; --ink:#e6e9ef; --muted:#9aa2b1; --line:#262b35;
+    --accent:#6b9bff; --accent-soft:#1a2540; --s:#4cc98a; --s-bg:#153026; --m:#e0a84a;
+    --m-bg:#332614; --l:#f07171; --l-bg:#3a1e1e; --have:#4cc98a; --gap:#f07171; --code:#1e222b;
+  }
+  :root[data-theme="light"]{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1a1d24; --muted:#5b6270; --line:#e3e6ec;
+    --accent:#3b6ef5; --accent-soft:#e8f0ff; --s:#1f9d55; --s-bg:#e6f6ec; --m:#c77700;
+    --m-bg:#fdf1dd; --l:#d23b3b; --l-bg:#fbe6e6; --have:#1f9d55; --gap:#d23b3b; --code:#f0f2f6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px 96px}
+  header.hero{padding:44px 0 24px;border-bottom:1px solid var(--line);margin-bottom:8px}
+  .eyebrow{color:var(--accent);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+  h1{font-size:29px;line-height:1.25;margin:.35em 0 .3em;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:15px;max-width:66ch}
+  .meta{color:var(--muted);font-size:12.5px;margin-top:14px}
+  h2{font-size:21px;margin:44px 0 14px;padding-top:8px;letter-spacing:-.01em}
+  h3{font-size:16px;margin:26px 0 10px}
+  p{margin:.5em 0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .verdict{background:linear-gradient(180deg,var(--accent-soft),transparent 72%)}
+  .lead{font-size:16.5px}
+  code{background:var(--code);padding:.12em .42em;border-radius:5px;font-size:.9em;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  .flow{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;
+    background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;white-space:nowrap;margin:12px 0}
+  .flow b{color:var(--accent)}
+  .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:20px;vertical-align:middle}
+  .S{color:var(--s);background:var(--s-bg)} .M{color:var(--m);background:var(--m-bg)} .L{color:var(--l);background:var(--l-bg)}
+  .have{color:var(--have);font-weight:700} .gap{color:var(--gap);font-weight:700}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:6px;background:var(--accent-soft);color:var(--accent);font-weight:700;margin-left:6px}
+  .tblwrap{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--accent-soft);color:var(--ink);font-weight:700;white-space:nowrap;position:sticky;top:0}
+  tr:last-child td{border-bottom:none}
+  td.c,th.c{text-align:center}
+  ul{margin:.4em 0;padding-left:1.3em} li{margin:.28em 0}
+  details{border:1px solid var(--line);border-radius:10px;margin:12px 0;background:var(--panel);overflow:hidden}
+  details>summary{cursor:pointer;padding:13px 18px;font-weight:700;list-style:none;user-select:none;font-size:15px}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--accent)}
+  details[open]>summary::before{content:"▾ "}
+  details>summary:hover{background:var(--accent-soft)}
+  .di{padding:2px 20px 16px}
+  .callout{border:1px solid var(--line);background:var(--m-bg);border-radius:8px;padding:10px 16px;margin:12px 0;font-size:14px}
+  .callout.good{background:var(--s-bg)}
+  .callout.bad{background:var(--l-bg)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:680px){.two{grid-template-columns:1fr}}
+  .k{color:var(--muted);font-size:12.5px}
+  .theme-toggle{position:fixed;top:14px;right:14px;background:var(--panel);border:1px solid var(--line);
+    border-radius:8px;padding:6px 11px;cursor:pointer;color:var(--muted);font-size:13px;z-index:10}
+  .toc{font-size:14px;columns:2;gap:24px}
+  @media(max-width:560px){.toc{columns:1}}
+  .toc a{display:block;padding:3px 0}
+  hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+  .src{font-size:12px;color:var(--muted)}
+  .num{color:var(--accent);font-weight:800}
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="(function(){var r=document.documentElement;var d=(r.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'));r.setAttribute('data-theme',d==='dark'?'light':'dark');})()">◐ 主題</button>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Ploom × Purdex · 派工整合</div>
+  <h1>要不要拿 Vibe Kanban 當底層？<br>——build-vs-buy 與功能落差評估</h1>
+  <p class="sub">四份材料合成：VK 完整功能盤點 · 20+ 競品/參考掃描 · Codex 跨模型落差評估 · 主 session 落差評估。決策向為主、資料向為輔。</p>
+  <p class="meta">2026-07-18 · 資料來源：VK 官方文件全爬 + DeepWiki／20+ 工具網路查證／Codex job <code>task-mrqawkce-q17dth</code>（gpt-5.4）。點各區塊 ▸ 展開資料層。</p>
+</header>
+
+<div class="panel">
+  <div class="toc">
+    <a href="#verdict"><span class="num">1.</span> 一頁結論</a>
+    <a href="#model"><span class="num">2.</span> 五層資料模型（縫）</a>
+    <a href="#gap"><span class="num">3.</span> 雙平面落差（有/缺）</a>
+    <a href="#phase"><span class="num">4.</span> 分階規模 P0–P3</a>
+    <a href="#pitfalls"><span class="num">5.</span> 五個坑（Codex）</a>
+    <a href="#refs"><span class="num">6.</span> 最值得參考的對象</a>
+    <a href="#landscape"><span class="num">7.</span> 完整競品表</a>
+    <a href="#vk"><span class="num">8.</span> VK 功能全清單</a>
+  </div>
+</div>
+
+<!-- 1 -->
+<h2 id="verdict">1 · 一頁結論</h2>
+<div class="panel verdict">
+  <p class="lead"><b>VK 不是候選底層，是「終點藍圖 + 設計參考」。</b>build 在你已有的 Ploom + Purdex 上，不 buy。</p>
+  <ul>
+    <li><b>VK 之所以看起來大，是它把「看板 + 執行」塞進一個單機 App。</b>而這兩塊你已分別做好——看板是 Ploom（更深），執行 runtime 是 Purdex（還有 VK 沒有的多 host + snapshot）。要做的不是重造 VK，是<b>縫合兩個已蓋好的半邊</b>。</li>
+    <li><b>拿 VK 當 Ploom 底層＝倒退</b>：技術棧衝突（VK 是 Rust+Postgres，你全家是 Go+SQLite）、VK 缺你全部核心（org/權限/view/分享/wiki）、且 VK 已 sunsetting（2026-04-10 公司收攤、Cloud 多人版 30 天後永久關閉，只剩單機）。</li>
+    <li><b>拿 VK 當執行後端也弱</b>：UI 死綁、無對外正式 REST（只有 MCP，且繞它自己的 task 資料模型＝會變第二 SOT）、單機、Rust。同層 <b>CAO / Paseo / Overstory</b> 是更好的「借鑑」，而 Purdex daemon 是更好的「地基」。</li>
+    <li><b>真正的新工作 = 一條 dispatch 縫</b>（＝四層…其實是<b>五層</b>資料模型），而這條縫本來就在 roadmap 上（Ploom S6 + Purdex 執行層）——<b>不是額外範圍</b>。</li>
+    <li><b>順序（Codex 拍板）</b>：先釘 <code>execution / attempt</code> 模型 → 做 Purdex 執行 runtime → 做 diff review 迴圈 → MM bridge 最後。</li>
+  </ul>
+  <div class="callout good"><b>兩份評估的共識</b>：主 session 與 Codex 都認為「範圍沒想像大、前提是守 MVP 紀律」。<b>Codex 的關鍵加碼</b>：我原本的四層少了 <code>attempt</code> 一層——追平 VK 的重試/多次嘗試/review-後-follow-up 會沒地方放。已採納，見 §2。</div>
+</div>
+
+<!-- 2 -->
+<h2 id="model">2 · 那條縫：五層資料模型</h2>
+<p>Codex 獨立評估指出：最小合理形狀不是四層，而是<b>五層</b>。<code>attempt</code> 在 VK 是一等概念（VK 現行實作已從「Task Attempt」演進成 <code>Workspace → 多個 Session</code>，就是多次嘗試）——這與功能盤點交叉印證。</p>
+<div class="flow">issue → <b>dispatch</b> → <b>execution</b> → <b>attempt</b> → <b>session</b></div>
+<div class="two">
+  <div class="panel"><b>各層語義（別混）</b>
+    <ul>
+      <li><code>dispatch</code>＝控制面的一筆派工請求（帶 host/repo/prompt/idempotency）</li>
+      <li><code>execution</code>＝<b>穩定 handle</b>（<code>execution_id</code>，對外唯一穩定 ID）</li>
+      <li><code>attempt</code>＝同一 execution 的一次嘗試（重試/換做法/比較）</li>
+      <li><code>session</code>＝runtime 的 stdin/stdout transport 生命週期，<b>不能再當外部穩定 ID</b></li>
+    </ul>
+  </div>
+  <div class="panel"><b>最小事件契約（Codex 建議）</b>
+    <ul>
+      <li><code>DispatchRequested{dispatch_id, issue_id, desired_executor, repo_ref, prompt_ref, idempotency_key}</code></li>
+      <li><code>ExecutionAccepted{execution_id, dispatch_id, host_id, attempt_no}</code></li>
+      <li><code>ExecutionLifecycle{execution_id, seq, status, ts}</code> — 狀態機：<code>queued/claimed/preparing/running/blocked/needs_review/succeeded/failed/cancelled</code></li>
+      <li><code>ExecutionArtifact{execution_id, kind, ref}</code> — kind：<code>transcript/diff/log/snapshot</code></li>
+      <li><code>ExecutionControlRequest{execution_id, kind, payload}</code> — blocked-on-human / permission / follow-up</li>
+    </ul>
+  </div>
+</div>
+<div class="callout"><b>事件不要把 provider raw event 直接穿過縫。</b>Purdex 內部保留 provider-native stream，Ploom seam 只吃 normalized lifecycle/artifact/control events。</div>
+
+<!-- 3 -->
+<h2 id="gap">3 · 雙平面落差（有 / 缺）</h2>
+<p>Codex 讀了兩邊 repo 逐項驗證。<span class="have">綠＝已有</span>、<span class="gap">紅＝缺</span>，<span class="badge S">S</span><span class="badge M">M</span><span class="badge L">L</span> 為工作量。</p>
+
+<h3>Ploom 側（控制面）</h3>
+<div class="tblwrap"><table>
+<tr><th>項目</th><th class="c">狀態</th><th class="c">量</th><th>備註</th></tr>
+<tr><td>issue / board / kanban（比 VK 深：dependency/subtask/edit-history/sections）</td><td class="c"><span class="have">有</span></td><td class="c">—</td><td>S2 已 merge</td></tr>
+<tr><td>org / 權限 / view / 分享（VK 全無）</td><td class="c"><span class="have">有</span></td><td class="c">—</td><td>Ploom 存在的理由</td></tr>
+<tr><td><code>dispatch</code> 資料模型 + API + 授權 + CLI</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M</span></td><td>現在只有 issue/comment/view/share 端點</td></tr>
+<tr><td><code>execution</code> / <code>attempt</code> 資料模型</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge L">L</span></td><td>store 只有 issue/comment/file，無 runtime 單元</td></tr>
+<tr><td>issue 詳情頁擴成「工作單 + 執行觀測 pane」</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M</span></td><td>現掛 labels/subtasks/activity，無 execution pane</td></tr>
+<tr><td>execution timeline / live status / artifacts 區塊</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M–L</span></td><td>現有 activity 是社交/編輯事件非執行事件</td></tr>
+<tr><td>diff review + inline comment + 回送 follow-up 閉環</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge L">L</span></td><td><b>Ploom 最貴、風險最高</b>的一塊</td></tr>
+</table></div>
+<div class="callout"><b>Codex 修正我的直覺</b>：Ploom 最貴的不是 <code>dispatch</code>，是「把 issue 詳情頁變成 execution review console」。</div>
+
+<h3>Purdex 側（執行面）</h3>
+<div class="tblwrap"><table>
+<tr><th>項目</th><th class="c">狀態</th><th class="c">量</th><th>備註</th></tr>
+<tr><td>tmux 管理 / Stream 模式跑 <code>claude -p</code> 串流 / WS+Bearer</td><td class="c"><span class="have">有</span></td><td class="c">—</td><td>執行引擎半邊已在</td></tr>
+<tr><td>多 host（Tailscale）/ workspace snapshot</td><td class="c"><span class="have">有</span></td><td class="c">—</td><td><b>VK/CAO 都沒有</b></td></tr>
+<tr><td>Codex 基礎（<code>internal/agent/codex/provider.go</code>）</td><td class="c"><span class="have">半</span></td><td class="c"><span class="badge S">S→M</span></td><td>已能「觀測」Codex，缺「當 runtime 啟動管理」的 adapter</td></tr>
+<tr><td>provider-neutral launch adapter（<code>codex exec --json</code> 正規化）</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M–L</span></td><td>目前 preset 只有 <code>cc=claude -p</code></td></tr>
+<tr><td><code>execution_id</code> + 狀態機（對外穩定 handle）</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge L">L</span></td><td>現外部主鍵仍是 <code>session_code</code>/tmux session</td></tr>
+<tr><td>dispatch worker（poll/claim/report + idempotency + lease）</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M</span></td><td>claim 沒 lease → sleep/crash 卡死</td></tr>
+<tr><td>observer/controller 分離 + interactive lease</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M</span></td><td><code>handler.go:92</code> 多 subscriber 都能寫 stdin＝現成 race</td></tr>
+<tr><td>worktree-per-execution 生命週期</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M / L</span></td><td>簡版 M、追平 VK L；單人可先跳過（見下）</td></tr>
+<tr><td>diff 擷取 + base/head 錨定 + artifact retention</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M–L</span></td><td>diff review 迴圈的資料來源</td></tr>
+<tr><td>attempt/retry 語義</td><td class="c"><span class="gap">缺</span></td><td class="c"><span class="badge M">M</span></td><td>沒這層會把「重跑」和「同 session follow-up」混掉</td></tr>
+</table></div>
+<div class="callout"><b>worktree 對單人自用能不能跳過？</b>可以，但<b>只能當「MVP 降階」</b>：前提是同一 repo/branch 同時只允許一個 live execution、dirty tree 風險自負。一旦要並行執行 / 保留多 attempt / 穩定 diff review / 從 review 回送可重現的 follow-up，<b>worktree 幾乎是必要條件</b>。</div>
+
+<!-- 4 -->
+<h2 id="phase">4 · 分階規模 P0–P3</h2>
+<div class="tblwrap"><table>
+<tr><th>階段</th><th>內容</th><th class="c">量</th><th>要點</th></tr>
+<tr><td><b>P0 · 縫</b></td><td>五層模型 + 中性事件 schema + dispatch 傳輸</td><td class="c"><span class="badge M">M</span></td><td>不可跳，<b>本來就要做</b>（＝S6 核心）</td></tr>
+<tr><td><b>P1 · MVP 迴圈</b></td><td>issue → 派到某 host → <code>claude -p</code> 跑（已有）→ 串回 → 狀態/結果回填；執行檢視先走 deeplink 借 Purdex 現成 UI</td><td class="c"><span class="badge M">M</span></td><td>主要是接線，引擎已有</td></tr>
+<tr><td><b>P2 · provider 中立</b></td><td>加 <code>codex exec --json</code> adapter（已有 observe 骨架）</td><td class="c"><span class="badge S">S</span></td><td>不綁死一家</td></tr>
+<tr><td><b>P3 · 執行 polish</b></td><td>worktree 隔離 / diff review 迴圈 / attempt compare / PR 建立 / dev server</td><td class="c"><span class="badge L">L</span></td><td>逐項獨立、按需求排</td></tr>
+</table></div>
+<div class="two">
+  <div class="callout good"><b>有用的 VK 等價 MVP = P0+P1(+P2)</b>。Codex 認定的 MVP 範圍：單 issue dispatch、單 execution、單 repo、單 live runner、live status、deeplink、基本 diff 檔案/patch、free-text follow-up。<b>中大型，但還沒到過度工程</b>。</div>
+  <div class="callout bad"><b>追平 VK 全部 = 到 P3，範圍「大」</b>。真正貴的是 <code>attempt model + worktree lifecycle + diff review loop + provider-neutral executor + MCP surface</code> 整串一起上——<b>約 MVP 的 2–3 倍，非線性加法</b>。先延後：inline hunk comment、多 attempt UI、PR 自動化、完整 MCP、multi-host scheduler。</div>
+</div>
+<div class="callout"><b>是否過度工程？</b>若現在就把 MM bridge + 多 host 調度 + 完整 inline review + attempt compare 全開＝過度。只做 <code>Ploom issue → Purdex execution → 回 issue review</code>＝不過度，反而補上你現在缺的「work item 與 session 對齊」。</div>
+
+<!-- 5 -->
+<h2 id="pitfalls">5 · 五個一定會踩的坑（Codex）</h2>
+<div class="panel">
+<ul>
+  <li><b><code>local_dir</code> 不是控制面真相</b>——它是 host-relative path；多 host 下 Ploom 不能拿它當 SOT。</li>
+  <li><b><code>session_code</code> 不能做 stable handle</b>——session 死、host 換、tmux 重建都會破。對外只能 expose <code>execution_id</code>。</li>
+  <li><b><code>claim</code> 沒 lease 幾乎不夠</b>——laptop sleep / daemon crash 就能把 dispatch 卡死；最晚 MVP 第二刀就要補 reclaim。</li>
+  <li><b>prompt injection 不只在 MM</b>——Ploom 的 issue 描述 / comment / diff comment 都是 prompt boundary；控制命令（stop/resume/attach）要走控制通道、別混進 prompt。</li>
+  <li><b>單人 ≠ 低並發</b>——subagent / resume / review follow-up / multi-host 都是並發，別用「單人」當低並發的藉口。</li>
+</ul>
+<p class="k">另：現有 S6 草稿把 <code>daemon.host + session_code</code> 當 deeplink 核心（<code>2026-06-30-s6-purdex-dispatch-design.md</code>），太早綁死 transport，不適合長期演進——這正是要先抽 <code>execution_id</code> 的理由。</p>
+</div>
+
+<!-- 6 -->
+<h2 id="refs">6 · 最值得參考的對象（不是拿來用，是拿來抄設計）</h2>
+<p>競品掃描挖到一整排比 VK 更貼近「控制面/執行面分離」的實作。前五名：</p>
+<div class="tblwrap"><table>
+<tr><th>#</th><th>對象</th><th>為什麼值得抄</th></tr>
+<tr><td class="c">1</td><td><b>OpenAI Symphony</b><br><span class="k">Apache-2.0 · Elixir</span></td><td>業界「控制面/執行面分離」最乾淨、有實測（內部 3 週 PR +500%）。核心可抄：<b>issue tracker 只需被輪詢 + 能收 PR 結果，agent 內部狀態完全不用讓控制面知道</b>——跟 Ploom/Purdex 分工同構。抄它的輪詢頻率、per-issue workspace、崩潰自動重啟。</td></tr>
+<tr><td class="c">2</td><td><b>Centaur</b> (Paradigm)<br><span class="k">MIT · FastAPI+K8s</span></td><td>跟你「MM bridge」構想架構圖<b>幾乎一模一樣</b>：Slack thread 當控制入口、服務層管 agent session 生命週期、K8s/k3s 沙盒當執行面、事件串流回 thread。架構文件公開完整＝MM bridge 最佳逐段對照範例（延後做，但先讀）。</td></tr>
+<tr><td class="c">3</td><td><b>Paseo</b><br><span class="k">AGPL-3.0 · daemon+多client</span></td><td>執行面工具裡跟 <b>Purdex 定位最貼近</b>：常駐 daemon（非雲）+ 用你自己裝的官方 CLI/憑證（訂閱合規）+ 多前端 websocket 連進來。互補維度：Paseo 主打多 provider、Purdex 主打多 host——互相檢視對方沒做的。</td></tr>
+<tr><td class="c">4</td><td><b>Overstory</b><br><span class="k">開源 · AgentRuntime</span></td><td>headless <code>-p --output-format stream-json</code> → NDJSON → <code>parseEvents</code> → web UI，<b>跟 Purdex Stream 模式幾乎同一套做法</b>。工作量小、優先度高：直接對照「我們的 parseEvents 有沒有漏 edge case」。</td></tr>
+<tr><td class="c">5</td><td><b>Gastown</b> (Steve Yegge)<br><span class="k">開源 · Go</span></td><td>跟 Ploom <b>完全相反的取捨</b>：控制面不借外部 SaaS，把 issue（bead）直接存進 git + DoltHub 跨機聯邦。即使不採用，它劃出「自建協作平面」光譜另一端，幫你驗證 Ploom 的定位值不值（重了多少、換來 權限/view/wiki/分享）。</td></tr>
+</table></div>
+<div class="callout"><b>次要但要記錄</b>：<b>swarm-protocol</b>（控制面可輕到只剩 MCP 狀態同步——若 Ploom 顯得太重時的下限參照）／<b>Mattermost 官方 <code>mattermost-plugin-agents</code></b>（MM bridge 的官方技術先例，2026-06 剛修 thread context 遺失）／<b>ACP</b>（若 Purdex 未來要對外開放非 claude/codex 的 agent，優先對齊此協定而非自訂——已被 JetBrains/Google/GitHub/Devin 採用，逐漸成事實標準）。</div>
+
+<!-- 7 -->
+<h2 id="landscape">7 · 完整競品表（20+）</h2>
+<details>
+<summary>展開全部工具對照表</summary>
+<div class="di">
+<div class="tblwrap"><table>
+<tr><th>名稱</th><th>技術棧</th><th>定位</th><th class="c">中立</th><th class="c">Headless/MCP</th><th class="c">多Host</th><th>現況</th></tr>
+<tr><td>Vibe Kanban</td><td>Rust+TS+PG</td><td>Monolith（board+執行）</td><td class="c">是</td><td class="c">MCP</td><td class="c">否</td><td>棄養轉社群</td></tr>
+<tr><td>CAO (awslabs)</td><td>Python</td><td>Orchestrator</td><td class="c">是</td><td class="c">MCP</td><td class="c">?</td><td>活躍（2.2 加跨session記憶）</td></tr>
+<tr><td><b>OpenAI Symphony</b></td><td>Elixir</td><td><b>控制(Linear)/執行分離</b></td><td class="c">Codex</td><td class="c">輪詢API</td><td class="c">?</td><td>2026-04 發布，話題度高</td></tr>
+<tr><td><b>Centaur</b> (Paradigm)</td><td>FastAPI+K8s</td><td><b>Slack↔agent 分離</b></td><td class="c">有</td><td class="c">REST</td><td class="c">是</td><td>2026-05 開源</td></tr>
+<tr><td><b>Paseo</b></td><td>daemon+client</td><td><b>執行面獨立</b></td><td class="c">是(30+)</td><td class="c">WS</td><td class="c">近似</td><td>新興架構完整+手機app</td></tr>
+<tr><td><b>Overstory</b></td><td>AgentRuntime</td><td>執行面</td><td class="c">是(11)</td><td class="c">stream-json</td><td class="c">?</td><td>新，與 Purdex 同路數</td></tr>
+<tr><td><b>Gastown</b> (Yegge)</td><td>Go</td><td><b>控制面存 git</b></td><td class="c">是</td><td class="c">git-backed</td><td class="c">是(Dolt)</td><td>v1.2.1，熱度高</td></tr>
+<tr><td>swarm-protocol</td><td>Node+PG+MCP</td><td><b>純控制面(無UI)</b></td><td class="c">中立</td><td class="c">MCP本體</td><td class="c">是</td><td>新，定位精準</td></tr>
+<tr><td>Baton</td><td>Python</td><td>執行面(輪詢GH Issue)</td><td class="c">CC</td><td class="c">GH輪詢</td><td class="c">否</td><td>活躍小專案</td></tr>
+<tr><td>opencode</td><td>Go+TUI</td><td>執行面(harness)</td><td class="c">是</td><td class="c">有</td><td class="c">否</td><td>150K★/6.5M MAU（<b>自建harness→Claude訂閱被封</b>）</td></tr>
+<tr><td>Conductor</td><td>Mac native</td><td>Monolith</td><td class="c">是</td><td class="c">?</td><td class="c">否</td><td>閉源,$22M A輪</td></tr>
+<tr><td>Crystal</td><td>TS/Electron</td><td>Monolith</td><td class="c">是</td><td class="c">?</td><td class="c">否</td><td>活躍</td></tr>
+<tr><td>Claude Squad</td><td>Go/tmux</td><td>Monolith(TUI)</td><td class="c">是</td><td class="c">無</td><td class="c">否</td><td>與 Purdex 高度同構</td></tr>
+<tr><td>Sculptor (Imbue)</td><td>容器化</td><td>Monolith</td><td class="c">是</td><td class="c">?</td><td class="c">否</td><td>公司產品beta免費</td></tr>
+<tr><td>Paneflow</td><td>Rust+GPUI</td><td>Monolith(真終端)</td><td class="c">是</td><td class="c">唯讀MCP</td><td class="c">否</td><td>三平台原生</td></tr>
+<tr><td>Nimbalyst</td><td>桌面+手機</td><td>Monolith</td><td class="c">是</td><td class="c">?</td><td class="c">?</td><td>VK視覺化替代</td></tr>
+<tr><td>Parallel Code</td><td>桌面 App</td><td>Monolith</td><td class="c">是</td><td class="c">?</td><td class="c">否</td><td>VK 原生桌面替代</td></tr>
+<tr><td>OpenHands</td><td>Python</td><td><b>企業版有Control Plane</b></td><td class="c">是</td><td class="c">API/SDK</td><td class="c">是</td><td>76K★,活躍</td></tr>
+<tr><td>Devin Desktop</td><td>閉源</td><td><b>Command Center/雲+本機</b></td><td class="c">ACP</td><td class="c">API+ACP</td><td class="c">是</td><td>2026-06 上線</td></tr>
+<tr><td>Factory Droid</td><td>閉源</td><td>Monolith偏執行</td><td class="c">是</td><td class="c">droid exec</td><td class="c">?</td><td>Terminal-Bench #1</td></tr>
+<tr><td>Composio AO</td><td>TS</td><td>Monolith全自動</td><td class="c">是</td><td class="c">dashboard</td><td class="c">?</td><td>活躍,自我改進</td></tr>
+<tr><td>Bernstein</td><td>Python</td><td>執行面(合規稽核)</td><td class="c">是(44+)</td><td class="c">HMAC鏈</td><td class="c">?</td><td>air-gap 部署</td></tr>
+<tr><td>Centaur/Copilot agent</td><td>GH Actions</td><td><b>Issue→Actions沙盒分離</b></td><td class="c">否</td><td class="c">有</td><td class="c">否</td><td>GA,綁GitHub</td></tr>
+<tr><td>Cursor Automations</td><td>雲端VM</td><td><b>多來源觸發/雲沙盒</b></td><td class="c">否</td><td class="c">webhook</td><td class="c">否</td><td>2026-03 上線</td></tr>
+<tr><td>MM Agents Plugin</td><td>Go 外掛</td><td><b>MM thread↔agent 官方bridge</b></td><td class="c">是</td><td class="c">bridgeclient</td><td class="c">是</td><td>官方維護中</td></tr>
+<tr><td>ACP (協定)</td><td>JSON-RPC</td><td>協定層</td><td class="c">是</td><td class="c">協定本體</td><td class="c">—</td><td>逐漸成事實標準</td></tr>
+</table></div>
+<p class="src">完整短評與來源連結見 scratchpad <code>vk-competitors.md</code>。訂閱合規備註：opencode 這類「自建 harness」的第三方已被 Anthropic 封殺訂閱 OAuth（2026-01 起）；「包官方 CLI」的 orchestrator（VK/CAO/Claude Squad 等）不受影響。</p>
+</div>
+</details>
+
+<!-- 8 -->
+<h2 id="vk">8 · Vibe Kanban 功能全清單（對標標尺）</h2>
+<div class="callout bad"><b>務必納入評估</b>：VK 母公司 bloop 於 <b>2026-04-10 宣布關閉</b>，Cloud/多人協作 30 天後永久停止，只剩 <b>Local 單機</b>社群維護版。VK 的「團隊協作看板」是官方<b>主動放棄</b>的產品線——對標基準應以 <b>VK Local</b> 為主。</div>
+
+<details><summary>規劃 / 看板（Issue Management）</summary><div class="di">
+<ul>
+<li>六狀態欄：<code>Backlog / To do / In progress / In review / Done / Cancelled</code>（預設只顯前四）</li>
+<li>描述富文本＝<b>直接變成 agent 的 prompt</b>；Cloud 可建立時即掛 workspace 開跑</li>
+<li>優先序四級（Urgent/High/Medium/Low）；排序 Manual/Priority/Created/Updated/Title（只有 Manual 能拖拉）</li>
+<li>Sub-issue（parent/child，子完成不自動完成父、不可再巢狀）；issue 關聯 blocking/related/has_duplicate（走 MCP）</li>
+<li>篩選：Priority/Assignee(多選OR)/Tags(跨維度AND)；標題模糊搜尋 + Simple ID 跳轉；List View 看全部狀態</li>
+<li>兩種「tag」：專案分類 tag ＋ 全域文字模板 tag（<code>@mention</code> 插入預寫內容）</li>
+<li>看板自訂（Cloud）：增/改/隱藏欄位。<b>不支援</b> swimlane / custom fields / workflow automation</li>
+</ul>
+</div></details>
+
+<details><summary>任務執行（Workspaces / Sessions）★ 核心對標</summary><div class="di">
+<div class="callout"><b>術語演進</b>：舊 <code>Task → Task Attempt</code> → 現行 <code>Issue → Workspace(=worktree) → Session(=一次對話嘗試)</code>。<b>這就是 Codex 說的 execution/attempt/session 分層在真實產品裡的樣子。</b></div>
+<ul>
+<li><b>Workspace</b>＝隔離環境（1 worktree，可掛多 repo，各自 target/working branch）；建立時自動建 worktree + 自動命名 working branch（<code>vk/abc123-task</code>）+ 跑 setup script</li>
+<li><b>Session</b>＝與 agent 的一次對話；同 workspace 可多 session 並行、<b>共享檔案但不共享 context</b>；多 session 改同檔＝<b>last write wins</b>（無鎖/無合併）</li>
+<li><b>沒有 rerun 按鈕</b>：想重跑/換做法＝<b>開新 session</b>（全新 context window、同一批檔案）</li>
+<li>生命週期 Active/Archived（保留 worktree）/Deleted（不可逆，但 branch+commit 留 repo）；<b>啟動時自動清孤兒 worktree</b></li>
+<li>Git 操作內建：branch/PR(AI生描述,draft)/rebase/merge/push；agent 過程中<b>自動 commit</b></li>
+<li>後端 Executor 抽象：<code>StandardCodingAgentExecutor</code> trait（<code>spawn/spawn_follow_up/normalize_logs</code> → 統一 <code>NormalizedEntry</code> → WebSocket JSON patch 推前端）+ Approval 系統</li>
+<li>支援 10 種 agent：Claude Code / Codex / Copilot CLI / Gemini / Amp / Cursor Agent / OpenCode / Droid / CCR / Qwen（VK 不管訂閱，靠各 CLI 自認證）</li>
+<li>Agent Profile：plan mode/model/permission/sandbox 層級/approval 門檻（untrusted/on-failure/on-request/never）</li>
+<li>Repo 三腳本：setup（建立時跑一次）/ dev server（URL 印 stdout 才能偵測）/ cleanup（<b>必須 idempotent</b>）</li>
+</ul>
+</div></details>
+
+<details><summary>審查 / 迴圈（Review Loop）</summary><div class="di">
+<ul>
+<li>Changes 面板：檔案樹 + Unified/Side-by-side diff；「Never blindly trust agent output」</li>
+<li><b>Inline comment</b>：hover 留言，<b>不逐條送</b>而是打包（badge 標數量），送出時附文字</li>
+<li><b>review-feedback-fix loop</b>：agent 收所有 inline comment 當 context 逐一處理，重複到滿意；「重跑」＝開新 session</li>
+<li>Chat：使用者/agent/系統/錯誤四類訊息；編輯訊息＝建新分支；<code>@</code> 檔案 typeahead；agent 執行中可排隊訊息；context gauge</li>
+<li>Slash commands（依 agent 動態）；VSCode/Cursor/Windsurf 擴充（Logs/Diffs/Processes 三面板，須在 worktree 目錄開）</li>
+<li>內建瀏覽器預覽：Desktop/Mobile/Responsive + Inspect Mode（React/Vue/Svelte…）+ Eruda DevTools。<b>無自動化測試</b></li>
+</ul>
+</div></details>
+
+<details><summary>整合（GitHub / MCP / API）</summary><div class="di">
+<ul>
+<li>GitHub/Azure：靠 <code>gh</code>/<code>az</code> CLI 建 PR（自動預填標題/描述/base）。<b>無 webhook / 無雙向狀態同步</b></li>
+<li><b>VK 自家 MCP Server（30+ 工具）</b>供外部 client 呼叫：Context/Org/Project/Issue/Assignee/Tag/Relationship/Repo/Workspace-Session 全套。關鍵執行入口：<code>start_workspace</code>（建 workspace 並啟動一次 session）、<code>create_session</code>、<code>run_session_prompt</code>、<code>get_execution</code></li>
+<li>連外部 MCP（給 VK 內 agent 用，per-agent 設定，寫入 agent 全域設定檔）</li>
+<li>REST/WebSocket：<code>/workspaces</code> <code>/sessions</code>（含 <code>CreateFollowUpAttempt</code>）<code>/execution</code>；WS <code>stream_workspaces_ws</code> / <code>stream_workspace_diff_ws</code>。<b>但主要是內部前端用，無公開 REST 文件</b>——官方對外只主打 MCP</li>
+</ul>
+<div class="callout"><b>對我們的意義</b>：VK 的 MCP 是「board 工具的 API」——繞它自己的 project/task/workspace 資料模型。拿它當後端＝把 task 狀態複製進 VK＝<b>第二 SOT</b>。要當執行後端，CAO（execution-centric）/ 直驅官方 CLI（無狀態）都比它乾淨。</div>
+</div></details>
+
+<details><summary>設定 / 部署 & 明確「沒有」的東西</summary><div class="di">
+<ul>
+<li>安裝 <code>npx vibe-kanban</code>；本機 SQLite / Cloud PostgreSQL+ElectricSQL；認證 Cloud 只有 GitHub/Google OAuth（無 API key/SSO/帳號互聯）</li>
+<li>Docker Compose 自架（Caddy+PG+Electric+server）；組織角色只有 <b>Admin/Member 二元</b>（對專案存取權相同，差別只在組織管理）</li>
+<li>Remote Access 靠 VK Cloud 配對（<b>隨 Cloud 關閉會消失</b>）；另有 SSH「Open in VSCode」deep link</li>
+</ul>
+<b>VK 明確沒有</b>（＝ Ploom 的差異化）：細粒度權限（只有 Admin/Member）、跨組織/訪客分享、Wiki/知識庫、custom fields、swimlane、workflow automation、對外 webhook、SSO/API key、帳號互聯、瀏覽器自動化測試、多 session 寫入合併、正式對外 REST 文件。
+</div></details>
+
+<hr>
+<p class="src">合成自 4 份材料：<code>vk-features.md</code>（VK 官方文件全爬）、<code>vk-competitors.md</code>（20+ 工具查證）、Codex <code>task-mrqawkce-q17dth</code>、<code>my-gap-assessment.md</code>。此頁為討論底本，非定稿 spec。</p>
+</div>
+</body>
+</html>

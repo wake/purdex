@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ploom ↔ Purdex 派工整合脈絡</title>
+<style>
+:root{
+  --bg:#0e1116; --bg2:#161b22; --card:#1a2029; --line:#2b333f;
+  --fg:#e6edf3; --fg2:#9aa7b4; --fg3:#6e7b8a;
+  --accent:#58a6ff;
+  --c-pre:#8b949e;      /* 前置 */
+  --c-now:#3fb950;      /* 本輪 A+B */
+  --c-c:#d29922;        /* C 派工形狀 */
+  --c-ploom:#bc8cff;    /* Ploom 端 */
+  --radius:14px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif;
+}
+@media (prefers-color-scheme:light){
+  :root{
+    --bg:#f6f8fa; --bg2:#fff; --card:#fff; --line:#d8dee4;
+    --fg:#1f2328; --fg2:#57606a; --fg3:#8b949e;
+    --c-pre:#6e7781;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg); font-family:var(--sans);
+  line-height:1.6; font-size:15px;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:32px 22px 90px}
+header.hero{margin-bottom:26px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);font-weight:600}
+h1{font-size:29px;margin:.28em 0 .15em;letter-spacing:-.01em;line-height:1.2}
+.sub{color:var(--fg2);font-size:15.5px;max-width:70ch}
+.planes{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.pill{display:inline-flex;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--line);
+  border-radius:999px;padding:7px 14px;font-size:13.5px}
+.pill b{font-weight:700}
+.pill .code{font-family:var(--mono);font-size:12px;color:var(--fg2)}
+.arrow-pill{color:var(--fg3);align-self:center;font-size:15px}
+
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:26px 0 8px;padding:14px 16px;
+  background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius)}
+.legend .li{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--fg2)}
+.dot{width:11px;height:11px;border-radius:3px;flex:none}
+
+.flow{margin-top:22px;position:relative}
+.phase{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:0;margin:0 0 6px;overflow:hidden;position:relative}
+.phase .bar{position:absolute;left:0;top:0;bottom:0;width:5px}
+.phase .inner{padding:15px 18px 16px 22px}
+.phase .head{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap}
+.phase .pnum{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--fg3);
+  border:1px solid var(--line);border-radius:6px;padding:1px 7px}
+.phase h3{margin:0;font-size:16.5px;font-weight:650}
+.phase .side{font-size:11.5px;font-family:var(--mono);color:var(--fg2);margin-left:auto;
+  padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.phase .body{margin-top:9px;color:var(--fg2);font-size:14px}
+.phase .body .row{margin:3px 0}
+.phase code, .kv code{font-family:var(--mono);font-size:12.5px;background:var(--bg);
+  border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--fg)}
+.phase .note{margin-top:9px;font-size:12.8px;color:var(--fg3);border-left:2px solid var(--line);
+  padding-left:11px}
+.phase.now{box-shadow:0 0 0 1px var(--c-now)}
+.phase.now .side{color:var(--c-now);border-color:var(--c-now)}
+.connector{height:16px;display:flex;justify-content:center;align-items:center;color:var(--fg3);font-size:13px}
+
+.takeaways{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:30px}
+.ta{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:16px 17px}
+.ta h4{margin:0 0 7px;font-size:14.5px;display:flex;align-items:center;gap:8px}
+.ta h4 .n{font-family:var(--mono);font-size:11px;color:var(--bg);background:var(--accent);
+  width:19px;height:19px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;font-weight:700}
+.ta p{margin:0;color:var(--fg2);font-size:13.6px}
+.ta.hi{border-color:var(--c-now)}
+.ta.hi h4 .n{background:var(--c-now)}
+
+.sec-title{margin:40px 0 4px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);font-weight:700}
+
+.qs{margin-top:14px;display:flex;flex-direction:column;gap:11px}
+.q{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.q .qh{font-weight:650;font-size:14.5px;margin-bottom:5px}
+.q .qb{color:var(--fg2);font-size:13.6px}
+.q .tag{font-family:var(--mono);font-size:11px;color:var(--c-c);border:1px solid var(--line);
+  border-radius:999px;padding:1px 8px;margin-left:8px;vertical-align:middle}
+
+footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:var(--fg3);font-size:12px;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.mono{font-family:var(--mono)}
+a{color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">討論工作頁 · brainstorming</div>
+    <h1>Ploom ↔ Purdex 派工整合脈絡</h1>
+    <p class="sub">從「人在 Ploom 派一張工」到「agent 在 Purdex 跑起來」到「人點連結回到對話」的端到端旅程。用來定位 <b>deeplink 入口（本輪 A+B）</b> 在整條管線裡的角色，以及它與 <b>C 輪詢/派工形狀</b> 的邊界。</p>
+    <div class="planes">
+      <span class="pill"><b>Ploom</b> <span class="code">plm</span> · 控制平面／大腦</span>
+      <span class="arrow-pill">↔ 靠 API 串 ↔</span>
+      <span class="pill"><b>Purdex</b> <span class="code">pdx</span> · 執行平面／手腳</span>
+      <span class="pill" style="border-color:var(--accent)">連線方向 = <b>Pull</b>：Purdex daemon 持 token 主動輪詢 Ploom</span>
+    </div>
+  </header>
+
+  <div class="legend">
+    <span class="li"><span class="dot" style="background:var(--c-pre)"></span> 前置（一次性）</span>
+    <span class="li"><span class="dot" style="background:var(--c-c)"></span> C — 輪詢/派工形狀（<b>C 前那輪先討論</b>）</span>
+    <span class="li"><span class="dot" style="background:var(--c-now)"></span> A+B — deeplink 入口（<b>★ 本輪要做</b>）</span>
+    <span class="li"><span class="dot" style="background:var(--c-ploom)"></span> Ploom 端</span>
+  </div>
+
+  <div class="flow">
+
+    <div class="phase">
+      <div class="bar" style="background:var(--c-pre)"></div>
+      <div class="inner">
+        <div class="head"><span class="pnum">P0</span><h3>前置：daemon 註冊</h3><span class="side">前置 · Ploom</span></div>
+        <div class="body">
+          <div class="row">Purdex daemon 綁一個 Ploom <code>is_agent</code> 帳號 + S4 token。</div>
+          <div class="row">Ploom 存 daemon entity = <code>{ id, name, host(network 位址), account_id }</code></div>
+        </div>
+        <div class="note">⚠️ Ploom 這時記下的是 daemon 的「<b>network host</b>」（如 <span class="mono">100.64.0.2:7860</span>）—— 之後組 deeplink 用的就是它。</div>
+      </div>
+    </div>
+    <div class="connector">▼</div>
+
+    <div class="phase">
+      <div class="bar" style="background:var(--c-ploom)"></div>
+      <div class="inner">
+        <div class="head"><span class="pnum">P1</span><h3>人派工</h3><span class="side">Ploom</span></div>
+        <div class="body">
+          <div class="row">人：<code>plm issue dispatch #N</code>（或 UI）</div>
+          <div class="row">Ploom 建 pending dispatch <code>{ id, issue_id, daemon_id, status:pending }</code></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector">▼</div>
+
+    <div class="phase">
+      <div class="bar" style="background:var(--c-c)"></div>
+      <div class="inner">
+        <div class="head"><span class="pnum">P2</span><h3>daemon 輪詢領工</h3><span class="side">C 本輪不做 · Purdex daemon</span></div>
+        <div class="body">
+          <div class="row">daemon（持 token）→ poll <code>GET /daemon/dispatches?status=pending</code></div>
+          <div class="row">→ claim <code>POST /daemon/dispatches/{id}/claim</code>（pending→claimed）</div>
+          <div class="row">→ 抓完整 <code>GET /issues/{id}</code> + <code>GET /projects/{pid}/repo-locations</code>（S5）→ 拿 issue 內容 + local_dir</div>
+        </div>
+      </div>
+    </div>
+    <div class="connector">▼</div>
+
+    <div class="phase">
+      <div class="bar" style="background:var(--c-c)"></div>
+      <div class="inner">
+        <div class="head"><span class="pnum">P3</span><h3>daemon 本地起 agent</h3><span class="side">C 本輪不做 · Purdex daemon</span></div>
+        <div class="body">
+          <div class="row"><code>POST /api/sessions { name, cwd:local_dir, mode }</code> → <code>{ code }</code></div>
+          <div class="row"><code>POST /api/sessions/{code}/handoff { mode:stream, preset:cc }</code> → 起 claude</div>
+          <div class="row">（可選）send-keys 注入初始 prompt</div>
+        </div>
+      </div>
+    </div>
+    <div class="connector">▼</div>
+
+    <div class="phase">
+      <div class="bar" style="background:var(--c-c)"></div>
+      <div class="inner">
+        <div class="head"><span class="pnum">P4</span><h3>daemon 回報 → Ploom 組 deeplink</h3><span class="side">C 本輪不做 · Purdex → Ploom</span></div>
+        <div class="body">
+          <div class="row">daemon → <code>POST /daemon/dispatches/{id}/report { session_code, status:running }</code></div>
+          <div class="row">Ploom → 存 session_code；用 <code>daemon.host + session_code</code> 組 deeplink，存上 issue、秀出來</div>
+        </div>
+        <div class="note">deeplink 在這裡「<b>誕生</b>」，用的是 P0 存的 network host。這一步定義了 deeplink 該長怎樣。</div>
+      </div>
+    </div>
+    <div class="connector">▼</div>
+
+    <div class="phase now">
+      <div class="bar" style="background:var(--c-now)"></div>
+      <div class="inner">
+        <div class="head"><span class="pnum">P5</span><h3>人點 deeplink → 回到對話</h3><span class="side">★ A+B 本輪要做 · 人 + Purdex App/SPA</span></div>
+        <div class="body">
+          <div class="row">人在 issue 頁點 <code>purdex://…</code></div>
+          <div class="row">→ OS 喚起 Purdex App　<b style="color:var(--c-now)">← A</b>：scheme 註冊（<code>setAsDefaultProtocolClient</code> / <code>open-url</code>）</div>
+          <div class="row">→ App/SPA 解析 deeplink、定位／開啟對應 session tab　<b style="color:var(--c-now)">← B</b>：resolver</div>
+        </div>
+        <div class="note">本輪只做這一段的「消費端」。但消費端能吃什麼格式 = 替 Ploom 定義了 P4 該組什麼，所以 deeplink 格式帶<b>契約性質</b>。</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="sec-title">這張圖的三個結論</div>
+  <div class="takeaways">
+    <div class="ta hi">
+      <h4><span class="n">1</span>deeplink 是 P4↔P5 的契約</h4>
+      <p>本輪只做 P5 消費端，但「Purdex 能解什麼格式」等於替 Ploom 定義了 P4 該組什麼。所以 deeplink 格式雖在 Purdex 側先定，本質是跨兩平面的契約，也就是它<b>踩到「派工形狀」</b>的地方。</p>
+    </div>
+    <div class="ta">
+      <h4><span class="n">2</span>host 對應張力的根源</h4>
+      <p>P0/P4 用 daemon 的 <b>network host</b>；P5 定位 tab 用 Purdex 的 <b>前端隨機 hostId</b>（<span class="mono">HostConfig.id</span>，每 client 私有、Ploom 不知道）。兩套識別體系天生對不上，中間只能靠 daemon 的 <span class="mono">host_id</span> 搭橋。</p>
+    </div>
+    <div class="ta">
+      <h4><span class="n">3</span>單 daemon 下 host 維度可極簡</h4>
+      <p>第一切片是<b>單 daemon／單 host 假設</b>。只有一台 host 時「指向哪台」是廢話：resolver 大可只帶 <span class="mono">session_code</span>、掃本地所有 host 找哪台有它。host 對應的真正複雜度要到<b>多 daemon</b>（S6a，DEFER）才爆發。</p>
+    </div>
+  </div>
+
+  <div class="sec-title">業界參照與實例（列入評估）</div>
+  <p class="sub" style="margin:8px 0 2px;max-width:74ch">我們不是憑空設計。同型模式（thread／channel ↔ AI coding agent）業界已有 7 家在做，且有人自建整套、公開了踩坑結論。這些都拿來反推「派工形狀」。</p>
+
+  <div class="takeaways" style="margin-top:16px">
+    <div class="ta">
+      <h4>🏢 業界七家的共識</h4>
+      <p>Claude Code in Slack ／ Devin ／ Cursor bg agents ／ Copilot ／ Codex ／ Factory ／ Amp。一致做法：<b>thread（≙ issue）＝控制面＋通知面</b>，摘要／狀態／按鈕放 thread，plan／diff／transcript 放執行端用 deeplink 導流；觸發＝@mention＋自然語言＋結構化參數；狀態用輕量 badge（⏳✅❌）；<b>「blocked-on-human」是公認缺口</b>；issue : session 別寫死 1:1（Devin Managed 是一母任務多子 session）。</p>
+    </div>
+    <div class="ta" style="border-color:var(--c-ploom)">
+      <h4>🧪 Flycoder ／ Custie 實例（蔣定宇）</h4>
+      <p>有人把 Slack 改 AI 工作台用了半年，結論「<b>方向對了，房子錯了</b>」：Slack 為「人跟人聊天」蓋，AI 進來「只能睡沙發」，缺 <b>中斷跑到一半的 agent、看它做到哪一步、指定 skill／同時多 agent／agent 再開 subagent</b>。於是自建：channel＝工作目錄、agent/subagent 點名聊、<b>每步 activity 可見、隨時喊停或給下一步指令</b>。尖銳點出 <b>Slack 隱喻的天花板 ＝ Ploom 該超越處</b>。</p>
+    </div>
+  </div>
+
+  <div class="ta hi" style="margin-top:14px">
+    <h4><span class="n">★</span>對本輪 B resolver 的直接啟示：deeplink ＝ 穩定 handle，落點三段式</h4>
+    <p style="margin-bottom:11px">deeplink 不是「跳去看」的一次性連結，而是永不落空的 handle（Claude View Session：session 過期仍留 web history）。resolver 依 session 狀態分級落點，三段 Purdex 剛好都有現成拼圖：</p>
+    <div class="body" style="font-size:13.6px;color:var(--fg2)">
+      <div class="row" style="margin:5px 0">① 執行體活著（tmux session 在）　→　attach 現有 session tab　<span class="mono" style="color:var(--fg3)">（原本的 B）</span></div>
+      <div class="row" style="margin:5px 0">② tmux 沒了、有紀錄　→　<b style="color:var(--c-now)">workspace snapshot 一鍵重建</b>同 repo/branch/cwd　<span class="mono" style="color:var(--fg3)">（剛做完的資產）</span></div>
+      <div class="row" style="margin:5px 0">③ 完全過期　→　至少開唯讀 transcript　<span class="mono" style="color:var(--fg3)">（JSONL 歷史 / B7 線）</span></div>
+    </div>
+    <p style="margin-top:11px;font-size:13px;color:var(--fg3)">另外兩顆種子留給 C（派工形狀）那輪：blocked-on-human 做成一等狀態、dispatch 資料模型預留一對多。</p>
+  </div>
+
+  <div class="sec-title">待對齊 / 待討論</div>
+  <div class="qs">
+    <div class="q">
+      <div class="qh">① 切法對齊 <span class="tag">脈絡</span></div>
+      <div class="qb">「P5 = 本輪 A+B、P2–P4 = C（派工形狀那輪）、P0–P1 = Ploom 端」這個切分，跟你腦中的圖一致嗎？哪裡不一樣？</div>
+    </div>
+    <div class="q">
+      <div class="qh">② deeplink 格式該在哪一輪拍死 <span class="tag">契約</span></div>
+      <div class="qb">這輪就把 deeplink 格式定案（反正 Purdex 要先能解）？還是它歸到 C 的派工形狀一起談，本輪 A+B 先用一個暫定格式把管線打通？</div>
+    </div>
+    <div class="q">
+      <div class="qh">③ host 對應要不要現在就簡化掉 <span class="tag">altitude</span></div>
+      <div class="qb">接受「第一切片單 daemon → deeplink 只帶 session_code、resolver 掃本地 host」的極簡路線？還是你有預期很快要多 host、想現在就把 host 識別放進格式？</div>
+    </div>
+  </div>
+
+  <footer>
+    <span>Purdex · docs/pages · 討論工作頁（隨討論演進更新）</span>
+    <span class="mono">2026-07-15</span>
+  </footer>
+
+</div>
+</body>
+</html>
