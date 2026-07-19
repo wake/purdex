@@ -5,6 +5,7 @@ import App from './App.tsx'
 import { registerBuiltinLocales } from './lib/register-locales'
 import { registerBuiltinThemes } from './lib/register-themes'
 import { registerBuiltinModules } from './lib/register-modules'
+import { registerServiceWorker } from './lib/register-sw'
 import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
@@ -21,6 +22,9 @@ registerBuiltinModules()
 // pane closed still backs up (R1-C1). Module-scope so it persists for the
 // app's lifetime; never disposed.
 startBackupAutoTrigger()
+
+// Web PWA: register the service worker (no-op in Electron / non-http(s)).
+registerServiceWorker()
 
 useLayoutStore.getState().reconcileViews()
 
