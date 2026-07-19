@@ -106,30 +106,30 @@ export function AddHostDialog({ onClose, initial }: Props) {
     setStage('saving')
     setError('')
 
-    const upsertHost = () => {
-      const draftKey = hostEndpointKey({ scheme, ip: trimmedIp, port: portNum })
+    const upsertHost = (effScheme: 'http' | 'https', effToken: string | undefined) => {
+      const draftKey = hostEndpointKey({ scheme: effScheme, ip: trimmedIp, port: portNum })
       const hosts = useHostStore.getState().hosts
       const existingId = Object.keys(hosts).find((id) => hostEndpointKey(hosts[id]) === draftKey)
       let hostId: string
       if (existingId) {
-        useHostStore.getState().updateHost(existingId, { scheme, token: trimmedToken || undefined })
+        useHostStore.getState().updateHost(existingId, { scheme: effScheme, token: effToken || undefined })
         hostId = existingId
       } else {
-        hostId = addHost({ name: trimmedIp, ip: trimmedIp, port: portNum, scheme, token: trimmedToken || undefined })
+        hostId = addHost({ name: trimmedIp, ip: trimmedIp, port: portNum, scheme: effScheme, token: effToken || undefined })
       }
       useHostStore.getState().setActiveHost(hostId)
     }
 
     try {
       if (mode === 'direct') {
-        upsertHost()
+        upsertHost(scheme, undefined)
       } else if (mode === 'token') {
         await fetchTokenAuth(deriveDaemonBase({ scheme, ip: trimmedIp, port: portNum }), trimmedToken)
-        upsertHost()
+        upsertHost(scheme, trimmedToken)
       } else {
         // pairing — always http (LAN/tailnet)
         await fetchPairSetup(deriveDaemonBase({ scheme: 'http', ip: trimmedIp, port: portNum }), setupSecret, trimmedToken)
-        upsertHost()
+        upsertHost('http', trimmedToken)
       }
       setStage('done')
       onClose()
@@ -284,32 +284,34 @@ export function AddHostDialog({ onClose, initial }: Props) {
             </div>
           </div>
 
-          <div>
-            <label className="text-xs text-text-secondary block mb-1">{t('hosts.token')}</label>
-            <div className="flex gap-2">
-              <input
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder="purdex_..."
-                type="password"
-                disabled={!fieldsEnabled}
-                className="flex-1 bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono disabled:opacity-50"
-              />
-              {!useToken && (
-                <button
-                  onClick={handleGenerateToken}
+          {!(stage === 'manual' && !useToken) && (
+            <div>
+              <label className="text-xs text-text-secondary block mb-1">{t('hosts.token')}</label>
+              <div className="flex gap-2">
+                <input
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="purdex_..."
+                  type="password"
                   disabled={!fieldsEnabled}
-                  title={t('hosts.token_generate_hint')}
-                  className="px-2 py-2 rounded text-xs text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-50 flex items-center gap-1"
-                >
-                  <ArrowCounterClockwise size={14} />
-                </button>
+                  className="flex-1 bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono disabled:opacity-50"
+                />
+                {!useToken && (
+                  <button
+                    onClick={handleGenerateToken}
+                    disabled={!fieldsEnabled}
+                    title={t('hosts.token_generate_hint')}
+                    className="px-2 py-2 rounded text-xs text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <ArrowCounterClockwise size={14} />
+                  </button>
+                )}
+              </div>
+              {fieldsEnabled && token && !tokenValid && (
+                <p className="text-xs text-yellow-400 mt-1">{t('hosts.token_too_short')}</p>
               )}
             </div>
-            {fieldsEnabled && token && !tokenValid && (
-              <p className="text-xs text-yellow-400 mt-1">{t('hosts.token_too_short')}</p>
-            )}
-          </div>
+          )}
 
           {/* Error feedback */}
           {error && (

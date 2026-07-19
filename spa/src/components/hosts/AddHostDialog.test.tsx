@@ -249,6 +249,8 @@ describe('AddHostDialog', () => {
     expect((screen.getByRole('combobox', { name: /scheme/i }) as HTMLSelectElement).value).toBe('https')
     expect((screen.getByPlaceholderText('100.64.0.1') as HTMLInputElement).value).toBe('purdex.mlab.host')
     expect((screen.getByPlaceholderText('7860') as HTMLInputElement).value).toBe('443')
+    // Fix 2: token field/generate button must be hidden in direct (token-off) mode.
+    expect(screen.queryByPlaceholderText('purdex_...')).not.toBeInTheDocument()
     // 直接 Confirm（無 token）
     fireEvent.click(screen.getByText('Confirm'))
     await waitFor(() => {
@@ -261,5 +263,60 @@ describe('AddHostDialog', () => {
     expect(pairSetup).not.toHaveBeenCalled()
     expect(tokenAuth).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('direct mode hides the token field entirely (Fix 2)', () => {
+    render(<AddHostDialog onClose={vi.fn()} initial={{ scheme: 'http', ip: '10.0.0.1', port: '7860', useToken: false }} />)
+    expect(screen.queryByPlaceholderText('purdex_...')).not.toBeInTheDocument()
+  })
+
+  it('pairing after switching scheme to https and back to pairing mode still stores scheme=http (Fix 1)', async () => {
+    vi.spyOn(hostApi, 'fetchPairVerify').mockResolvedValue({ setupSecret: 'secret123' })
+    vi.spyOn(hostApi, 'fetchPairSetup').mockResolvedValue({ ok: true })
+    vi.spyOn(pairingCodec, 'generatePurdexToken').mockReturnValue('purdex_' + 'a'.repeat(40))
+    vi.spyOn(pairingCodec, 'decodePairingCode').mockReturnValue({
+      ip: '10.0.0.1',
+      port: 7860,
+      secret: 'abc123',
+    })
+    vi.spyOn(pairingCodec, 'cleanPairingInput').mockReturnValue('ABCDEFGHIJKLM')
+
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+
+    // Enter token mode and select https — sets the stale `scheme` state.
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.change(screen.getByRole('combobox', { name: /scheme/i }), { target: { value: 'https' } })
+
+    // Switch back to pairing mode (unchecks Use Token) — `scheme` state
+    // remains 'https' even though the selector is now hidden.
+    fireEvent.click(screen.getByRole('checkbox'))
+
+    // Run the pairing flow to completion.
+    fireEvent.change(screen.getByPlaceholderText('XXXX-XXXX-XXXXX'), {
+      target: { value: 'ABCD-EFGH-IJKLM' },
+    })
+    fireEvent.click(screen.getByText('Pair'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Paired successfully')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByText('Confirm'))
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled()
+    })
+
+    expect(hostApi.fetchPairSetup).toHaveBeenCalledWith(
+      'http://10.0.0.1:7860',
+      'secret123',
+      'purdex_' + 'a'.repeat(40),
+    )
+
+    const { hosts } = useHostStore.getState()
+    const hostIds = Object.keys(hosts)
+    expect(hostIds.length).toBe(1)
+    expect(hosts[hostIds[0]].scheme).toBe('http')
   })
 })

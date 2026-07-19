@@ -389,7 +389,7 @@ export function HostPage({ isActive }: PaneRendererProps) {
       <div className="flex-1 overflow-y-auto p-6">
         {suggestOrigin && (
           <div className="mb-3 rounded border border-border-default bg-surface-secondary px-3 py-2 text-sm flex items-center justify-between gap-2">
-            <span>{t('hosts.suggest_origin', { host: window.location.hostname })}</span>
+            <span>{t('hosts.suggest_origin', { host: window.location.host })}</span>
             <button
               className="px-2 py-1 rounded bg-accent text-white text-xs whitespace-nowrap"
               onClick={() => { setPrefillOrigin(true); setShowAddHost(true) }}
