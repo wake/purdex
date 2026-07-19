@@ -1,0 +1,18 @@
+{
+  "name": "e4_report_stale_seq",
+  "endpoint": "E4",
+  "kind": "request",
+  "http_status": 200,
+  "note": "seq ≤ ack_seq（重複/亂序）→ Ploom 丟棄但非錯誤，回 200 + 目前 ack_seq。冪等。",
+  "precondition": { "current_ack_seq": 3 },
+  "payload": {
+    "schema_version": 1,
+    "execution_id": "exc_9",
+    "status": "running",
+    "seq": 2
+  },
+  "response": {
+    "http_status": 200,
+    "payload": { "schema_version": 1, "ack_seq": 3 }
+  }
+}

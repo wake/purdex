@@ -1,0 +1,12 @@
+{
+  "name": "schema_incompatible",
+  "endpoint": "any",
+  "kind": "response",
+  "http_status": 400,
+  "note": "任一 payload 的 schema_version 不相容 → 明確拒（非 silent）。適用所有 endpoint。",
+  "request_that_triggers": { "schema_version": 2, "note": "daemon/Ploom 版本不一" },
+  "payload": {
+    "schema_version": 1,
+    "error": { "code": "schema_incompatible", "message": "unsupported schema_version: 2 (server supports 1)" }
+  }
+}

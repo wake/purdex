@@ -1,0 +1,17 @@
+{
+  "name": "e4_report_running",
+  "endpoint": "E4",
+  "kind": "request",
+  "http_status": 200,
+  "note": "running(seq=2)，僅在 accepted 已 ack 後發出",
+  "payload": {
+    "schema_version": 1,
+    "execution_id": "exc_9",
+    "status": "running",
+    "seq": 2
+  },
+  "response": {
+    "http_status": 200,
+    "payload": { "schema_version": 1, "ack_seq": 2 }
+  }
+}

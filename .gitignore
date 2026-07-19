@@ -8,3 +8,4 @@ spa/dist/
 .playwright-mcp/
 out/
 dist/
+.impeccable/

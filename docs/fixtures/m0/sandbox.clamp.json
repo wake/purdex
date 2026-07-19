@@ -1,0 +1,13 @@
+{
+  "name": "sandbox_clamp",
+  "endpoint": "sandbox",
+  "kind": "cases",
+  "note": "clamp = min(request, host_policy) 依全序 read-only⊏ask⊏workspace-write⊏danger-full；只降不升。多情境。",
+  "order": ["read-only", "ask", "workspace-write", "danger-full"],
+  "cases": [
+    { "request": "danger-full", "host_policy": "workspace-write", "effective": "workspace-write", "note": "request 寬 → clamp 到 host" },
+    { "request": "read-only",   "host_policy": "workspace-write", "effective": "read-only",       "note": "request 已較嚴 → 保留" },
+    { "request": null,          "host_policy": "ask",             "effective": "ask",             "note": "省略 → host 預設" },
+    { "request": "workspace-write", "host_policy": null,          "effective": "ask",             "note": "host 未設 → daemon 最嚴預設 ask（least privilege）" }
+  ]
+}

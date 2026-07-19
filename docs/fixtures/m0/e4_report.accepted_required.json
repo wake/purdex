@@ -1,0 +1,17 @@
+{
+  "name": "e4_report_accepted_required",
+  "endpoint": "E4",
+  "kind": "response",
+  "http_status": 409,
+  "note": "違反 ordering：accepted(seq=1) 尚未被 ack 就發 running/terminal。daemon 應補送 accepted 後重試。",
+  "request_that_triggers": {
+    "schema_version": 1,
+    "execution_id": "exc_9",
+    "status": "running",
+    "seq": 2
+  },
+  "payload": {
+    "schema_version": 1,
+    "error": { "code": "accepted_required", "message": "accepted(seq=1) must be acked before lifecycle reports" }
+  }
+}
