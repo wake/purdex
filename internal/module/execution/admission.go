@@ -52,9 +52,11 @@ type Admitter struct {
 	runGit func(ctx context.Context, dir string, args ...string) (string, error)
 }
 
-// NewAdmitter builds an Admitter over the execution store. allowedRoots, when
-// non-empty, restricts admissible repos to paths within those roots (spec §7.1);
-// nil/empty imposes no containment restriction.
+// NewAdmitter builds an Admitter over the execution store. allowedRoots is the
+// repo containment boundary (spec §7.1): only paths inside one of those roots may
+// ever be admitted. It is FAIL CLOSED — nil/empty admits nothing at all, because
+// repo_location comes from Ploom and an unrestricted daemon would run agents in
+// arbitrary checkouts on the host (see ErrNoAllowedRoots).
 func NewAdmitter(store liveChecker, allowedRoots []string) *Admitter {
 	return &Admitter{
 		store:        store,

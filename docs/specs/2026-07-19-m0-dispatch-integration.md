@@ -222,6 +222,7 @@ M0 terminal 偵測要分開兩件事：**「何時 terminal」（時點）** 與
 **派工被 daemon 受理（accepted）的前置條件**（任一不滿足 → `failed`，error 明列原因）：
 
 1. **Canonical repo key（codex R1 #4 + §18.3，M0 必做）**：以 `repo_location.local_dir` 解出 **canonical 絕對路徑**（resolve symlink、`..`、trailing slash）當單一鍵。防「symlink 與真實路徑各派一次工 → 繞過單 live 規則」。canonical 失敗 / 逃出允許根 → 拒（`failed`）。
+   - **允許根 = daemon config `dispatch.allowed_repo_roots`（多值），fail closed**：root 與 local_dir **都 canonicalize（EvalSymlinks）**後以 **path-segment 邊界**比對；**未設 / 空 → 所有派工一律拒**（`invalid_repo_location`），不是放行。理由：`repo_location` 由 Ploom 提供，sandbox clamp 只限制 execution **能做什麼**，不建立**哪些 repo 可被碰**的信任邊界；無邊界時惡意/過期派工可讓 daemon 在本機任一 git checkout 起 agent。
 2. **repo 乾淨 OR 同 repo 單一 live execution**：以 canonical key 判定。**「live」＝ execution `status ∈ {accepted, running}`**（**看 status，不看 `launch_state`**；R2 #1——避免完成的 execution 停在 `launch_state=launched` 被誤當 live，永久卡死同 repo 後續派工）。目標 repo 已有一條 live execution → 拒。單 canonical repo 同時只允許一條 live execution。
 3. **⚠️ Per-repo lock 跨 accept→launch，非 point check（codex R1 #4 TOCTOU）**：admission 檢查與「起 session + 寫 `launch_state=launching` + 記 `head_at_start`」須在**同一把 per-canonical-repo lock** 內原子完成，避免「檢查乾淨後、launch 前」有第二派工插入或 repo 被改。lock 為 daemon 行程內（M0 單 daemon 足夠）。
 4. **記錄 `head_at_start` + `dirty_at_start`**：受理時（持 lock）快照 repo HEAD commit 與 dirty 狀態，寫進 execution row（供 diff base 與事後稽核）。

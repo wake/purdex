@@ -198,11 +198,25 @@ func (m *DispatchModule) buildCoordinator(c *core.Core, store *execution.Executi
 		defer c.CfgMu.RUnlock()
 		return execution.LaunchConfig{Token: c.Cfg.Token, Port: c.Cfg.Port, Bind: c.Cfg.Bind}
 	})
-	// M0: no root containment (allowedRoots nil). A first-class allowlist config
-	// can restrict admissible repos later without touching this seam.
-	admitter := execution.NewAdmitter(store, nil)
+	// Repo containment (spec §7.1): only repos inside the configured roots may be
+	// admitted. Fail closed — an unset allowlist rejects every dispatch (the
+	// rejection is reported with a backing row, so Ploom is never left waiting).
+	admitter := execution.NewAdmitter(store, allowedRepoRoots(c))
 	reporter := launchReporter{}
 	return execution.NewCoordinator(admitter, store, reporter, launcher, hostSandboxPolicy(c))
+}
+
+// allowedRepoRoots snapshots the configured repo containment roots. An empty
+// result is meaningful (and deliberate): admission then rejects every dispatch
+// rather than defaulting to the whole filesystem.
+func allowedRepoRoots(c *core.Core) []string {
+	c.CfgMu.RLock()
+	defer c.CfgMu.RUnlock()
+	if len(c.Cfg.Dispatch.AllowedRepoRoots) == 0 {
+		log.Printf("[dispatch] no dispatch.allowed_repo_roots configured — every dispatch will be rejected")
+		return nil
+	}
+	return append([]string(nil), c.Cfg.Dispatch.AllowedRepoRoots...)
 }
 
 // hostSandboxPolicy resolves the daemon's authoritative sandbox host policy from

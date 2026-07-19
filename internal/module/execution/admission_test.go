@@ -34,16 +34,18 @@ func runGit(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, "git %v: %s", args, out)
 }
 
-// admitterFor builds an Admitter backed by a real in-memory store.
-func admitterFor(t *testing.T) (*Admitter, *ExecutionStore) {
+// admitterFor builds an Admitter backed by a real in-memory store, containing
+// admission to the given roots. Roots are mandatory (fail closed), so every test
+// states the boundary it admits within.
+func admitterFor(t *testing.T, roots ...string) (*Admitter, *ExecutionStore) {
 	t.Helper()
 	s := openTestStore(t)
-	return NewAdmitter(s, nil), s
+	return NewAdmitter(s, roots), s
 }
 
 func TestAdmit_CleanRepoSucceeds(t *testing.T) {
 	repo := initGitRepo(t)
-	a, _ := admitterFor(t)
+	a, _ := admitterFor(t, repo)
 
 	var got *Admission
 	err := a.WithRepoLock(context.Background(), repo, func(adm *Admission) error {
@@ -60,7 +62,7 @@ func TestAdmit_CleanRepoSucceeds(t *testing.T) {
 func TestAdmit_DirtyRepoRecordsDirty(t *testing.T) {
 	repo := initGitRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("x"), 0o644))
-	a, _ := admitterFor(t)
+	a, _ := admitterFor(t, repo)
 
 	var got *Admission
 	err := a.WithRepoLock(context.Background(), repo, func(adm *Admission) error {
@@ -73,7 +75,7 @@ func TestAdmit_DirtyRepoRecordsDirty(t *testing.T) {
 
 func TestAdmit_NonGitDirRejected(t *testing.T) {
 	dir := t.TempDir() // exists but is not a git repo
-	a, _ := admitterFor(t)
+	a, _ := admitterFor(t, dir)
 
 	called := false
 	err := a.WithRepoLock(context.Background(), dir, func(*Admission) error {
@@ -85,7 +87,7 @@ func TestAdmit_NonGitDirRejected(t *testing.T) {
 }
 
 func TestAdmit_NonCanonicalRejected(t *testing.T) {
-	a, _ := admitterFor(t)
+	a, _ := admitterFor(t, t.TempDir())
 	called := false
 	err := a.WithRepoLock(context.Background(), "", func(*Admission) error {
 		called = true
@@ -97,7 +99,7 @@ func TestAdmit_NonCanonicalRejected(t *testing.T) {
 
 func TestAdmit_SecondLiveRejected(t *testing.T) {
 	repo := initGitRepo(t)
-	a, s := admitterFor(t)
+	a, s := admitterFor(t, repo)
 
 	// First admission inserts a live row inside the lock.
 	err := a.WithRepoLock(context.Background(), repo, func(adm *Admission) error {
@@ -118,7 +120,7 @@ func TestAdmit_SecondLiveRejected(t *testing.T) {
 
 func TestAdmit_TerminalDoesNotBlock(t *testing.T) {
 	repo := initGitRepo(t)
-	a, s := admitterFor(t)
+	a, s := admitterFor(t, repo)
 
 	var firstID string
 	require.NoError(t, a.WithRepoLock(context.Background(), repo, func(adm *Admission) error {
@@ -144,7 +146,7 @@ func TestAdmit_SymlinkAliasBlockedByCanonicalKey(t *testing.T) {
 	repo := initGitRepo(t)
 	link := filepath.Join(t.TempDir(), "alias")
 	require.NoError(t, os.Symlink(repo, link))
-	a, s := admitterFor(t)
+	a, s := admitterFor(t, repo)
 
 	// Admit against the REAL path, insert a live row keyed by canonical path.
 	require.NoError(t, a.WithRepoLock(context.Background(), repo, func(adm *Admission) error {
@@ -165,7 +167,7 @@ func TestAdmit_SymlinkAliasBlockedByCanonicalKey(t *testing.T) {
 // other observes it and is rejected — no TOCTOU window between check and insert.
 func TestAdmit_ConcurrentTOCTOU(t *testing.T) {
 	repo := initGitRepo(t)
-	a, s := admitterFor(t)
+	a, s := admitterFor(t, repo)
 
 	const n = 8
 	var wg sync.WaitGroup
@@ -210,7 +212,7 @@ func TestAdmit_ConcurrentTOCTOU(t *testing.T) {
 // the lock so a later terminal + retry can proceed.
 func TestAdmit_LockReleasedAfterRejection(t *testing.T) {
 	repo := initGitRepo(t)
-	a, s := admitterFor(t)
+	a, s := admitterFor(t, repo)
 
 	var id string
 	require.NoError(t, a.WithRepoLock(context.Background(), repo, func(adm *Admission) error {
@@ -224,6 +226,66 @@ func TestAdmit_LockReleasedAfterRejection(t *testing.T) {
 	require.NoError(t, s.UpdateStatus(id, StatusRunning))
 	require.NoError(t, s.UpdateStatus(id, StatusFailed))
 	require.NoError(t, a.WithRepoLock(context.Background(), repo, func(*Admission) error { return nil }))
+}
+
+// F5 — admission is where the repo containment boundary is enforced, and it fails
+// closed: with no allowed roots configured, no dispatch may run anywhere.
+func TestAdmit_NoAllowedRoots_RejectsEverything(t *testing.T) {
+	repo := initGitRepo(t)
+	a, _ := admitterFor(t) // no roots
+
+	called := false
+	err := a.WithRepoLock(context.Background(), repo, func(*Admission) error {
+		called = true
+		return nil
+	})
+	require.ErrorIs(t, err, ErrNoAllowedRoots)
+	require.ErrorIs(t, err, ErrCanonical, "maps onto the invalid_repo_location report code")
+	require.False(t, called, "a perfectly valid repo is still inadmissible without a configured boundary")
+}
+
+func TestAdmit_RepoOutsideRoots_Rejected(t *testing.T) {
+	repo := initGitRepo(t)
+	a, _ := admitterFor(t, t.TempDir()) // an unrelated root
+
+	called := false
+	err := a.WithRepoLock(context.Background(), repo, func(*Admission) error {
+		called = true
+		return nil
+	})
+	require.ErrorIs(t, err, ErrCanonical)
+	require.False(t, called)
+}
+
+// The path is canonicalised before the containment check, so a symlink INSIDE an
+// allowed root that points outside it cannot smuggle an inadmissible repo in.
+func TestAdmit_SymlinkEscapeFromRoot_Rejected(t *testing.T) {
+	outside := initGitRepo(t)
+	root := t.TempDir()
+	link := filepath.Join(root, "sneaky")
+	require.NoError(t, os.Symlink(outside, link))
+	a, _ := admitterFor(t, root)
+
+	called := false
+	err := a.WithRepoLock(context.Background(), link, func(*Admission) error {
+		called = true
+		return nil
+	})
+	require.ErrorIs(t, err, ErrCanonical)
+	require.False(t, called)
+}
+
+// Multiple roots are supported; a repo under any one of them is admissible.
+func TestAdmit_RepoUnderOneOfSeveralRoots_Admitted(t *testing.T) {
+	repo := initGitRepo(t)
+	a, _ := admitterFor(t, t.TempDir(), filepath.Dir(repo), t.TempDir())
+
+	var got *Admission
+	require.NoError(t, a.WithRepoLock(context.Background(), repo, func(adm *Admission) error {
+		got = adm
+		return nil
+	}))
+	require.Equal(t, mustEval(t, repo), got.CanonicalPath)
 }
 
 func itoa(i int) string {

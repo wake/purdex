@@ -13,6 +13,18 @@ import (
 // treats this as a hard reject (the dispatch becomes `failed`).
 var ErrCanonical = errors.New("repo location not canonicalisable")
 
+// ErrNoAllowedRoots is the fail-closed rejection used when no allowed repo root
+// is configured. It wraps ErrCanonical so callers that already map ErrCanonical
+// onto the `invalid_repo_location` report code keep working.
+//
+// Repo paths arrive from Ploom (repo_location.local_dir) and are only as
+// trustworthy as that input: an unrestricted daemon would happily start an agent
+// in ANY git checkout on the host (and, under a wide host sandbox policy, write
+// to it). The sandbox clamp limits what an execution may do; it does not
+// establish which repos may be touched at all. So "no allowlist" means "nothing
+// is admissible", never "everything is".
+var ErrNoAllowedRoots = fmt.Errorf("%w: no allowed repo roots configured", ErrCanonical)
+
 // Canonicalize resolves localDir (repo_location.local_dir) to a single canonical
 // absolute key used for the per-repo lock and the single-live rule (spec §7.1).
 //
@@ -22,11 +34,15 @@ var ErrCanonical = errors.New("repo location not canonicalisable")
 // the "dispatch against the symlink to bypass single-live" hole. Because
 // EvalSymlinks requires the path to exist, a non-existent directory is rejected.
 //
-// When allowedRoots is non-empty, the resolved path must lie within one of the
-// (also symlink-resolved) roots; a path that escapes every root — whether via
-// ".." or via a symlink pointing outside — is rejected. An empty allowedRoots
-// imposes no containment restriction (M0 default when no allowlist is set).
+// The resolved path must lie within one of the (also symlink-resolved)
+// allowedRoots; a path that escapes every root — whether via ".." or via a
+// symlink pointing outside — is rejected, and so is EVERY path when no usable
+// root is configured (ErrNoAllowedRoots — fail closed, see above).
 func Canonicalize(localDir string, allowedRoots []string) (string, error) {
+	roots := usableRoots(allowedRoots)
+	if len(roots) == 0 {
+		return "", ErrNoAllowedRoots
+	}
 	if strings.TrimSpace(localDir) == "" {
 		return "", fmt.Errorf("%w: empty local_dir", ErrCanonical)
 	}
@@ -44,10 +60,22 @@ func Canonicalize(localDir string, allowedRoots []string) (string, error) {
 	}
 	resolved = filepath.Clean(resolved)
 
-	if len(allowedRoots) > 0 && !withinAnyRoot(resolved, allowedRoots) {
+	if !withinAnyRoot(resolved, roots) {
 		return "", fmt.Errorf("%w: %q escapes allowed roots", ErrCanonical, resolved)
 	}
 	return resolved, nil
+}
+
+// usableRoots drops blank entries so a config like `allowed_repo_roots = [""]`
+// cannot pass the fail-closed gate with a root that admits nothing meaningful.
+func usableRoots(roots []string) []string {
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if strings.TrimSpace(r) != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // withinAnyRoot reports whether resolved lies within at least one allowlist
