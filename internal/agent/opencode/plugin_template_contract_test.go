@@ -54,12 +54,18 @@ func loadPayloadFixture(t *testing.T, name string) fixtureEnvelope {
 type pluginSimState struct {
 	activeSubagents        map[string]string
 	suppressIdleForSession map[string]bool
+	// subagentSessions mirrors the JS template's Map keyed
+	// childSessionID → parentSessionID. Learned from session.created
+	// (info.parentID set) and used to gate every parent-level lifecycle
+	// emit for a child (subagent) session. See spec 2026-07-19.
+	subagentSessions map[string]string
 }
 
 func newPluginSimState() *pluginSimState {
 	return &pluginSimState{
 		activeSubagents:        make(map[string]string),
 		suppressIdleForSession: make(map[string]bool),
+		subagentSessions:       make(map[string]string),
 	}
 }
 
@@ -767,6 +773,190 @@ func TestOpenCodePluginTemplate_RenderedTemplateMatchesContracts(t *testing.T) {
 	if !reflect.DeepEqual(gotHooks, expectedHooks) {
 		t.Errorf("rendered strong-hook keys mismatch\n  got:  %v\n  want: %v", gotHooks, expectedHooks)
 	}
+}
+
+// childCreatedProps builds a session.created bus-event `properties` map
+// for a subagent (child) session: top-level sessionID plus info.id and
+// info.parentID (the authoritative child signal).
+func childCreatedProps(childID, parentID string) map[string]any {
+	return map[string]any{
+		"sessionID": childID,
+		"info": map[string]any{
+			"id":       childID,
+			"parentID": parentID,
+		},
+	}
+}
+
+// idleProps builds a session.status idle bus-event `properties` map.
+func idleProps(sessionID string) map[string]any {
+	return map[string]any{
+		"sessionID": sessionID,
+		"status":    map[string]any{"type": "idle"},
+	}
+}
+
+// errorProps builds a session.error bus-event `properties` map.
+func errorProps(sessionID string) map[string]any {
+	return map[string]any{
+		"sessionID": sessionID,
+		"error": map[string]any{
+			"name": "ProviderError",
+			"data": map[string]any{"message": "boom"},
+		},
+	}
+}
+
+// TestOpenCodePluginTemplate_ChildSessionGating covers the L1 fix: a
+// subagent (Task tool) runs as a child opencode session with its own full
+// lifecycle. The plugin must gate every parent-level Pdx* emit for a known
+// child, learning child→parent from session.created's info.parentID. The
+// subagent's real representation is already carried by
+// PdxSubagentStart/Stop (tool.execute.before/after) — unchanged here.
+func TestOpenCodePluginTemplate_ChildSessionGating(t *testing.T) {
+	t.Run("child_created_registers_and_no_emit", func(t *testing.T) {
+		s := newPluginSimState()
+		if _, ok := s.simulateBusEvent("session.created", childCreatedProps("child1", "parent1")); ok {
+			t.Fatal("child session.created must not emit PdxSessionStart")
+		}
+		if s.subagentSessions["child1"] != "parent1" {
+			t.Fatalf("child1 should be registered under parent1; map=%v", s.subagentSessions)
+		}
+	})
+
+	t.Run("parent_created_emits_and_not_registered", func(t *testing.T) {
+		s := newPluginSimState()
+		got, ok := s.simulateBusEvent("session.created", map[string]any{
+			"sessionID": "parent1",
+			"info":      map[string]any{"id": "parent1"},
+		})
+		if !ok || got.Name != "PdxSessionStart" {
+			t.Fatalf("parent session.created must emit PdxSessionStart; ok=%v name=%q", ok, got.Name)
+		}
+		if _, exists := s.subagentSessions["parent1"]; exists {
+			t.Fatal("parent must not be registered as a subagent session")
+		}
+	})
+
+	t.Run("child_created_fallback_to_info_id", func(t *testing.T) {
+		s := newPluginSimState()
+		// No top-level sessionID: only info.id + info.parentID. Proves the
+		// `sessionID || info.id` fallback registers under info.id.
+		if _, ok := s.simulateBusEvent("session.created", map[string]any{
+			"info": map[string]any{"id": "child2", "parentID": "parentX"},
+		}); ok {
+			t.Fatal("child session.created (no top-level sessionID) must not emit")
+		}
+		if s.subagentSessions["child2"] != "parentX" {
+			t.Fatalf("child2 must be registered under info.id fallback; map=%v", s.subagentSessions)
+		}
+	})
+
+	t.Run("child_idle_suppressed_parent_idle_emits", func(t *testing.T) {
+		s := newPluginSimState()
+		s.simulateBusEvent("session.created", childCreatedProps("child1", "parent1"))
+		if _, ok := s.simulateBusEvent("session.status", idleProps("child1")); ok {
+			t.Fatal("registered child idle must not emit PdxStop")
+		}
+		got, ok := s.simulateBusEvent("session.status", idleProps("parent1"))
+		if !ok || got.Name != "PdxStop" {
+			t.Fatalf("parent idle must emit PdxStop; ok=%v name=%q", ok, got.Name)
+		}
+	})
+
+	t.Run("child_error_gated_and_suppress_not_armed", func(t *testing.T) {
+		s := newPluginSimState()
+		s.simulateBusEvent("session.created", childCreatedProps("child1", "parent1"))
+		if _, ok := s.simulateBusEvent("session.error", errorProps("child1")); ok {
+			t.Fatal("registered child error must not emit PdxStopFailure")
+		}
+		// White-box: child error must NOT arm suppressIdleForSession — else a
+		// child-armed entry that no child idle ever clears would leak.
+		if s.suppressIdleForSession["child1"] {
+			t.Fatal("child error must NOT arm suppressIdleForSession[child1]")
+		}
+	})
+
+	t.Run("child_deleted_gated_and_removed", func(t *testing.T) {
+		s := newPluginSimState()
+		s.simulateBusEvent("session.created", childCreatedProps("child1", "parent1"))
+		if _, ok := s.simulateBusEvent("session.deleted", map[string]any{"sessionID": "child1"}); ok {
+			t.Fatal("registered child deleted must not emit PdxSessionEnd")
+		}
+		if _, exists := s.subagentSessions["child1"]; exists {
+			t.Fatal("child must be removed from subagentSessions after session.deleted")
+		}
+	})
+
+	t.Run("parent_deleted_emits_and_prunes_only_its_children", func(t *testing.T) {
+		s := newPluginSimState()
+		s.simulateBusEvent("session.created", childCreatedProps("child1", "parent1"))
+		s.simulateBusEvent("session.created", childCreatedProps("child2", "parent1"))
+		got, ok := s.simulateBusEvent("session.deleted", map[string]any{"sessionID": "parent1"})
+		if !ok || got.Name != "PdxSessionEnd" {
+			t.Fatalf("parent deleted must emit PdxSessionEnd; ok=%v name=%q", ok, got.Name)
+		}
+		if len(s.subagentSessions) != 0 {
+			t.Fatalf("parent1's children must all be pruned; map=%v", s.subagentSessions)
+		}
+	})
+
+	t.Run("sibling_parents_scoped_cleanup", func(t *testing.T) {
+		s := newPluginSimState()
+		s.simulateBusEvent("session.created", childCreatedProps("childA", "parentA"))
+		s.simulateBusEvent("session.created", childCreatedProps("childB", "parentB"))
+		s.simulateBusEvent("session.deleted", map[string]any{"sessionID": "parentA"})
+		if _, exists := s.subagentSessions["childA"]; exists {
+			t.Fatal("childA must be pruned when parentA is deleted")
+		}
+		if s.subagentSessions["childB"] != "parentB" {
+			t.Fatalf("childB must remain registered after parentA delete; map=%v", s.subagentSessions)
+		}
+		if _, ok := s.simulateBusEvent("session.status", idleProps("childB")); ok {
+			t.Fatal("childB idle must still be suppressed after sibling parentA deleted")
+		}
+	})
+
+	t.Run("multi_subagent_idles_suppressed_parent_stops_once", func(t *testing.T) {
+		s := newPluginSimState()
+		children := []string{"c1", "c2", "c3"}
+		for _, c := range children {
+			s.simulateBusEvent("session.created", childCreatedProps(c, "parent1"))
+		}
+		for _, c := range children {
+			if _, ok := s.simulateBusEvent("session.status", idleProps(c)); ok {
+				t.Fatalf("child %s idle must be suppressed", c)
+			}
+		}
+		got, ok := s.simulateBusEvent("session.status", idleProps("parent1"))
+		if !ok || got.Name != "PdxStop" {
+			t.Fatalf("parent idle must emit PdxStop; ok=%v name=%q", ok, got.Name)
+		}
+	})
+
+	t.Run("full_sequence_only_parent_stop_and_structures_clean", func(t *testing.T) {
+		s := newPluginSimState()
+		s.simulateBusEvent("session.created", childCreatedProps("child1", "parent1"))
+		if _, ok := s.simulateBusEvent("session.status", idleProps("child1")); ok {
+			t.Fatal("child idle must be suppressed")
+		}
+		if _, ok := s.simulateBusEvent("session.error", errorProps("child1")); ok {
+			t.Fatal("child error must be gated")
+		}
+		if _, ok := s.simulateBusEvent("session.deleted", map[string]any{"sessionID": "child1"}); ok {
+			t.Fatal("child deleted must be gated")
+		}
+		got, ok := s.simulateBusEvent("session.status", idleProps("parent1"))
+		if !ok || got.Name != "PdxStop" {
+			t.Fatalf("parent idle must emit PdxStop; ok=%v name=%q", ok, got.Name)
+		}
+		if len(s.subagentSessions) != 0 {
+			t.Fatalf("subagentSessions must be clean after sequence; map=%v", s.subagentSessions)
+		}
+		if len(s.suppressIdleForSession) != 0 {
+			t.Fatalf("suppressIdleForSession must be clean after sequence; map=%v", s.suppressIdleForSession)
+		}
+	})
 }
 
 // TestOpenCodePluginTemplate_RenderedTemplateContainsExpectedFilter
