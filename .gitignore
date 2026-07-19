@@ -8,3 +8,12 @@ spa/dist/
 .playwright-mcp/
 out/
 dist/
+
+# Purdex web (P1): embedded SPA build artifacts — populated at build time.
+# The placeholder index.html stays tracked so go:embed always compiles.
+# (The bare `dist/` rule above excludes any dist dir and blocks git from
+# recursing into it, so the dir itself must be re-included before its
+# contents can be selectively re-ignored.)
+!/internal/webui/dist/
+/internal/webui/dist/*
+!/internal/webui/dist/index.html
