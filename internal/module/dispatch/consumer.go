@@ -65,6 +65,21 @@ func (r launchReporter) EnqueueRunning(exec *execution.Execution) error {
 	return r.sender.Enqueue(exec.ExecutionID, exec.DispatchID, seqRunning, "running", payload)
 }
 
+// EnqueueFailed durably queues the terminal failed(seq=2) report for a pre-relay
+// launch failure. It rides seqFailed=2 on the already-enqueued accepted(1) — the
+// launch never reached running, so this is the execution's terminal report and
+// the outbox replays accepted→failed, unwedging Ploom without any reconcile pass.
+func (r launchReporter) EnqueueFailed(exec *execution.Execution, errCode, errMsg string) error {
+	payload, err := BuildTerminalPayload(exec.ExecutionID, seqFailed, "failed", nil, &ReportError{
+		Code:    errCode,
+		Message: errMsg,
+	})
+	if err != nil {
+		return err
+	}
+	return r.sender.Enqueue(exec.ExecutionID, exec.DispatchID, seqFailed, "failed", payload)
+}
+
 // acceptedRowFromExec projects a live execution row onto the accepted-report
 // immutable facts. It is the single mapping shared by the live enqueue path here
 // and the restart-reconstruction path (executionStoreReader.LoadAcceptedRow), so

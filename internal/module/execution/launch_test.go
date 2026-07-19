@@ -46,12 +46,16 @@ func (r *recorder) snapshot() []string {
 	return append([]string(nil), r.events...)
 }
 
-// fakeReporter records accepted/running enqueues and the row facts at each call.
+// fakeReporter records accepted/running/failed enqueues and the row facts at each
+// call.
 type fakeReporter struct {
-	rec          *recorder
-	acceptedExec *Execution
-	runningExec  *Execution
-	acceptedErr  error
+	rec           *recorder
+	acceptedExec  *Execution
+	runningExec   *Execution
+	failedExec    *Execution
+	failedErrCode string
+	failedErrMsg  string
+	acceptedErr   error
 }
 
 func (f *fakeReporter) EnqueueAccepted(exec *Execution) error {
@@ -66,6 +70,14 @@ func (f *fakeReporter) EnqueueAccepted(exec *Execution) error {
 func (f *fakeReporter) EnqueueRunning(exec *Execution) error {
 	f.runningExec = cloneExec(exec)
 	f.rec.add("running")
+	return nil
+}
+
+func (f *fakeReporter) EnqueueFailed(exec *Execution, errCode, errMsg string) error {
+	f.failedExec = cloneExec(exec)
+	f.failedErrCode = errCode
+	f.failedErrMsg = errMsg
+	f.rec.add("failed")
 	return nil
 }
 
@@ -178,10 +190,15 @@ func TestAccept_LaunchFailure_MarksFailedAfterAcceptedDurable(t *testing.T) {
 	require.Contains(t, err.Error(), "relay never connected")
 
 	// accepted was still enqueued (Ploom must not deadlock on accepted_required),
-	// running was not, and the row is failed with launch_state left at launching.
-	require.Equal(t, []string{"accepted", "launch"}, rec.snapshot())
+	// running was not, and a terminal failed(2) was enqueued so a reconcile pass is
+	// not needed to unwedge Ploom (ListLive never surfaces the terminal row).
+	require.Equal(t, []string{"accepted", "launch", "failed"}, rec.snapshot())
 	require.NotNil(t, fr.acceptedExec)
 	require.Nil(t, fr.runningExec)
+	require.NotNil(t, fr.failedExec, "pre-relay launch failure must enqueue a failed report")
+	require.Equal(t, "exc_fixed01", fr.failedExec.ExecutionID)
+	require.Equal(t, "launch_failed", fr.failedErrCode)
+	require.Contains(t, fr.failedErrMsg, "relay never connected")
 
 	got, ok, err := store.GetByID("exc_fixed01")
 	require.NoError(t, err)

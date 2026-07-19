@@ -241,8 +241,9 @@ func (m *DispatchModule) consumeSink(coord *execution.Coordinator) FetchSink {
 					log.Printf("[dispatch] report rejection dispatch=%s: %v", req.DispatchID, rerr)
 				}
 			default:
-				// Row (if created) is already marked failed by the Coordinator with
-				// accepted(1) durably enqueued; terminal failed is P.8's outcome path.
+				// Row (if created) is already marked failed by the Coordinator, which
+				// also enqueued accepted(1)+failed(2) durably — the outbox replays both
+				// to unwedge Ploom; no reconcile pass is needed for this failure.
 				log.Printf("[dispatch] launch failed dispatch=%s: %v", req.DispatchID, err)
 			}
 		}

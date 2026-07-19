@@ -234,6 +234,56 @@ func TestSlice_AdmissionRejected_ReportsFailed(t *testing.T) {
 	require.Equal(t, "repo_busy", got[1].errCode)
 }
 
+// TestSlice_LaunchFailure_ReportsFailed: a pre-relay launch failure (the launcher
+// errors before running is enqueued) must still surface a terminal failed report.
+// The row goes terminal, so ListLive-based reconcile can never see it — without
+// the Coordinator enqueuing failed(2) here, Ploom would stay wedged at accepted.
+// The outbox must replay accepted(1)→failed(2) end-to-end with launch_failed.
+func TestSlice_LaunchFailure_ReportsFailed(t *testing.T) {
+	fc := &fakeClient{
+		pending: []PendingDispatch{{DispatchID: "dsp_lf", IssueID: "iss_lf"}},
+		fetchFn: func(id string) (DispatchDetail, error) {
+			return DispatchDetail{
+				DispatchID:     id,
+				Issue:          Issue{IssueID: "iss_lf", Title: "Launch me"},
+				RepoLocation:   RepoLocation{ProjectID: "prj_1", LocalDir: "/canon/repo", IsOrigin: true},
+				SandboxProfile: "workspace-write",
+			}, nil
+		},
+	}
+	adm := &sliceAdmitter{adm: execution.Admission{CanonicalPath: "/canon/repo", HeadAtStart: "head01"}}
+	fl := &sliceLauncher{err: fmt.Errorf("relay never connected")}
+	f := newSliceFixture(t, fc, adm, fl)
+
+	require.NoError(t, f.worker.RunOnce(context.Background()))
+
+	// A row was created and driven terminal (failed); it is not live.
+	ids, err := f.outbox.DueExecutions(1 << 60)
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	execID := ids[0]
+	row, ok, err := f.store.GetByID(execID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, execution.StatusFailed, row.Status)
+
+	// Reconcile has nothing to do: ListLive excludes the terminal row.
+	live, err := f.store.ListLive()
+	require.NoError(t, err)
+	require.Empty(t, live)
+
+	// Outbox replays accepted(1) then failed(2) with launch_failed.
+	require.NoError(t, f.sender.Flush(context.Background()))
+	got := f.poster.sorted()
+	require.Len(t, got, 2)
+	require.Equal(t, "accepted", got[0].status)
+	require.Equal(t, 1, got[0].seq)
+	require.Equal(t, "failed", got[1].status)
+	require.Equal(t, 2, got[1].seq)
+	require.Equal(t, "launch_failed", got[1].errCode)
+	require.Equal(t, "dsp_lf", got[1].dispatchID)
+}
+
 // TestSlice_UnknownSandboxProfile_ReportsFailed: a dispatch requesting an unknown
 // sandbox profile is rejected at Accept (before any lock/row) and projected as
 // accepted(1)+failed(2) carrying unknown_sandbox_profile (spec §8.1 / fixture
