@@ -80,7 +80,11 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 			parentID = strMapVal(info, "parentID")
 		}
 		if parentID != "" {
-			s.subagentSessions[sid] = parentID
+			// Suppress the child start; only key a non-empty sid so an empty
+			// key can never swallow an unrelated empty-sid parent delete.
+			if sid != "" {
+				s.subagentSessions[sid] = parentID
+			}
 			return mappedHookEvent{}, false
 		}
 		return mappedHookEvent{
@@ -108,10 +112,10 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 		}, true
 	case "session.error":
 		sid := resolveSid(properties)
-		if _, isChild := s.subagentSessions[sid]; isChild {
-			return mappedHookEvent{}, false
-		}
 		if sid != "" {
+			if _, isChild := s.subagentSessions[sid]; isChild {
+				return mappedHookEvent{}, false
+			}
 			s.suppressIdleForSession[sid] = true
 		}
 		var errName, errDetails string
@@ -137,8 +141,10 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 			return mappedHookEvent{}, false
 		}
 		sid := resolveSid(properties)
-		if _, isChild := s.subagentSessions[sid]; isChild {
-			return mappedHookEvent{}, false
+		if sid != "" {
+			if _, isChild := s.subagentSessions[sid]; isChild {
+				return mappedHookEvent{}, false
+			}
 		}
 		if s.suppressIdleForSession[sid] {
 			delete(s.suppressIdleForSession, sid)
@@ -152,12 +158,21 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 		}, true
 	case "session.deleted":
 		sid := resolveSid(properties)
-		if _, isChild := s.subagentSessions[sid]; isChild {
-			delete(s.subagentSessions, sid)
+		parentID := ""
+		if info, ok := properties["info"].(map[string]any); ok {
+			parentID = strMapVal(info, "parentID")
+		}
+		if parentID != "" {
+			// Child delete: gate on the event's own parentID, not the map —
+			// reload-proof, so a child delete never emits PdxSessionEnd
+			// against the parent frame even if we never saw its created.
+			if sid != "" {
+				delete(s.subagentSessions, sid)
+			}
 			return mappedHookEvent{}, false
 		}
-		for childID, parentID := range s.subagentSessions {
-			if parentID == sid {
+		for childID, pid := range s.subagentSessions {
+			if pid == sid {
 				delete(s.subagentSessions, childID)
 			}
 		}
@@ -827,6 +842,20 @@ func childCreatedProps(childID, parentID string) map[string]any {
 	}
 }
 
+// childDeletedProps builds a session.deleted bus-event `properties` map
+// for a subagent (child) session. Real opencode publishes full info on
+// session.deleted (session.ts:624), so the child delete carries its own
+// info.parentID — the authoritative, reload-proof child signal.
+func childDeletedProps(childID, parentID string) map[string]any {
+	return map[string]any{
+		"sessionID": childID,
+		"info": map[string]any{
+			"id":       childID,
+			"parentID": parentID,
+		},
+	}
+}
+
 // idleProps builds a session.status idle bus-event `properties` map.
 func idleProps(sessionID string) map[string]any {
 	return map[string]any{
@@ -919,7 +948,7 @@ func TestOpenCodePluginTemplate_ChildSessionGating(t *testing.T) {
 	t.Run("child_deleted_gated_and_removed", func(t *testing.T) {
 		s := newPluginSimState()
 		s.simulateBusEvent("session.created", childCreatedProps("child1", "parent1"))
-		if _, ok := s.simulateBusEvent("session.deleted", map[string]any{"sessionID": "child1"}); ok {
+		if _, ok := s.simulateBusEvent("session.deleted", childDeletedProps("child1", "parent1")); ok {
 			t.Fatal("registered child deleted must not emit PdxSessionEnd")
 		}
 		if _, exists := s.subagentSessions["child1"]; exists {
@@ -982,7 +1011,7 @@ func TestOpenCodePluginTemplate_ChildSessionGating(t *testing.T) {
 		if _, ok := s.simulateBusEvent("session.error", errorProps("child1")); ok {
 			t.Fatal("child error must be gated")
 		}
-		if _, ok := s.simulateBusEvent("session.deleted", map[string]any{"sessionID": "child1"}); ok {
+		if _, ok := s.simulateBusEvent("session.deleted", childDeletedProps("child1", "parent1")); ok {
 			t.Fatal("child deleted must be gated")
 		}
 		got, ok := s.simulateBusEvent("session.status", idleProps("parent1"))

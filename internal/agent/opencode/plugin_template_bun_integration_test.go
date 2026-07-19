@@ -149,7 +149,7 @@ func TestRenderManagedPlugin_BunRuntimeGatesChildSessionLifecycle(t *testing.T) 
   await fire({ type: 'session.created', properties: { sessionID: 'child1', info: { id: 'child1', parentID: 'parent1' } } })
   await fire({ type: 'session.status', properties: { sessionID: 'child1', status: { type: 'idle' } } })
   await fire({ type: 'session.error', properties: { sessionID: 'child1', error: { name: 'ProviderError', data: { message: 'boom' } } } })
-  await fire({ type: 'session.deleted', properties: { sessionID: 'child1' } })
+  await fire({ type: 'session.deleted', properties: { sessionID: 'child1', info: { id: 'child1', parentID: 'parent1' } } })
   // Orphan child delete with NO prior created (reload / out-of-order): its
   // own info.parentID must gate it reload-proof, never deleting a frame.
   await fire({ type: 'session.deleted', properties: { sessionID: 'orphan1', info: { id: 'orphan1', parentID: 'parent1' } } })

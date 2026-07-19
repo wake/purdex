@@ -83,10 +83,11 @@ export const PurdexOpenCodeHooks = async () => {
           const sid = event.properties.sessionID || event.properties.info?.id || ''
           const parentID = event.properties.info?.parentID
           if (parentID) {
-            // Child (subagent) session: register and suppress the
-            // parent-level start. The subagent dot is owned by
-            // PdxSubagentStart/Stop instead.
-            subagentSessions.set(sid, parentID)
+            // Child (subagent) session: suppress the parent-level start
+            // (the subagent dot is owned by PdxSubagentStart/Stop) and
+            // register it. Only key a non-empty sid — an empty key would
+            // later swallow an unrelated empty-sid parent delete.
+            if (sid) subagentSessions.set(sid, parentID)
             return
           }
           await emit(PURDEX_EVENT.PdxSessionStart, { session_id: sid })
@@ -110,7 +111,7 @@ export const PurdexOpenCodeHooks = async () => {
           // Child error is pure noise at the parent level; also skip arming
           // suppressIdleForSession so no child-armed entry can leak (a child
           // idle would never clear it since child idles are gated too).
-          if (subagentSessions.has(sid)) return
+          if (sid && subagentSessions.has(sid)) return
           if (sid) suppressIdleForSession.add(sid)
           await emit(PURDEX_EVENT.PdxStopFailure, {
             error: event.properties.error?.name || '',
@@ -121,7 +122,7 @@ export const PurdexOpenCodeHooks = async () => {
         case 'session.status': {
           if (event.properties.status?.type !== 'idle') return
           const sid = event.properties.sessionID || event.properties.info?.id || ''
-          if (subagentSessions.has(sid)) return
+          if (sid && subagentSessions.has(sid)) return
           if (suppressIdleForSession.has(sid)) {
             suppressIdleForSession.delete(sid)
             return
@@ -131,14 +132,19 @@ export const PurdexOpenCodeHooks = async () => {
         }
         case 'session.deleted': {
           const sid = event.properties.sessionID || event.properties.info?.id || ''
-          if (subagentSessions.has(sid)) {
-            subagentSessions.delete(sid)
+          const parentID = event.properties.info?.parentID
+          if (parentID) {
+            // Child delete: gate on the event's own parentID, not the map —
+            // reload-proof (session.deleted carries full info per
+            // session.ts:624), so a child delete never deletes the PARENT
+            // frame even if we never saw this child's created.
+            if (sid) subagentSessions.delete(sid)
             return
           }
           // Parent delete: prune only this parent's children (never a
           // sibling parent's still-live children), then emit end.
-          for (const [childID, parentID] of subagentSessions) {
-            if (parentID === sid) subagentSessions.delete(childID)
+          for (const [childID, pid] of subagentSessions) {
+            if (pid === sid) subagentSessions.delete(childID)
           }
           await emit(PURDEX_EVENT.PdxSessionEnd, { session_id: sid })
           return

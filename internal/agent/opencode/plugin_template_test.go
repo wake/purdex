@@ -308,9 +308,9 @@ func TestRenderManagedPlugin_ChildSessionGatesAllLifecycleEmits(t *testing.T) {
 	body := renderManagedPlugin("/fake/pdx")
 	for _, want := range []string{
 		"subagentSessions.set(sid, parentID)",
-		"if (subagentSessions.has(sid)) return",
+		"if (sid && subagentSessions.has(sid)) return",
 		"subagentSessions.delete(sid)",
-		"if (parentID === sid) subagentSessions.delete(childID)",
+		"if (pid === sid) subagentSessions.delete(childID)",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered body missing child-gating construct %q", want)
