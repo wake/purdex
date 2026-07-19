@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.325] - 2026-07-19
+
+### Fix(opencode): child (subagent) session 事件不再劫持父 session 燈號 (#934)
+
+opencode 每次 subagent（Task tool）完成，父 session 的燈號會錯誤塌成 idle（甚至變紅／frame 被刪），即使父 session 還在跑。根因：opencode 把每個 subagent 開成獨立 **child session**，plugin 之前把 child 的每個生命週期事件（created/idle/error/deleted）都當父 session 的 `Pdx*` 事件 emit；daemon 用 `(pane, senderPID, senderStartTime)` 比對 frame（**非** opencode session_id），而單一 opencode process 的父子共用同一 pane／sender identity，所以 child 事件全落在父 frame 上。
+
+- **修法（純 plugin，daemon/SPA 不動）**：plugin 維護 `subagentSessions = Map(childSessionID → parentSessionID)`，從 `session.created` 的 `info.parentID` 學習，gate 掉 known child 的全部 parent-level emit。subagent 的真實表徵仍由 `PdxSubagentStart/Stop`（detail-only，不搶 frame）提供。
+- **reload-proof delete**：`session.deleted` 也 publish 完整 info（`session.ts:624`），故 child delete 直接用事件自帶 `info.parentID` 判定，即使 plugin reload 期間漏收該 child 的 created，也不會誤刪**父** frame。
+- **防禦**：`sid = sessionID || info.id` fallback；空 sid 不入 map；parent delete 只清 value 相符的 children（單 process 可有多 root session）。
+- **已知殘留（#935 追蹤）**：`session.status` idle 與 `session.error` 上游確實不帶 parentID（opencode #30043），故 plugin reload 中途的罕見窗口仍可能漏一次假 idle（`notification_silent`、可自我修正）／假 error；非回歸，且遠窄於修前的「每個 subagent 都漏」。
+- 上游 schema 對現行版本查證（`session.status` 無 parentID、`session.created`/`session.deleted` 帶完整 info）；codex spec+plan+PR 標準+對抗性 review 共 4 輪，抓修 reframe（僅擋 idle→擋全生命週期）、`Set`→`Map`、reload-window delete、空 sid 污染等；Go template + `pluginSimState` mirror 雙軌 + Bun 真 JS 序列測試；全套 go test（含 `-race`）綠。
+
 ## [1.0.0-alpha.324] - 2026-07-14
 
 ### Feat(snapshot): Sessions 對帳表手動編輯 cwd（rebuild 落點）(#931)
