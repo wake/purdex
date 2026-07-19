@@ -237,6 +237,49 @@ func (s *ExecutionStore) HasLiveByRepo(ctx context.Context, canonicalPath string
 	return true, nil
 }
 
+// ListLive returns every execution whose status is live (accepted or running),
+// oldest first (spec §5.4). It is the startup reconcile sweep's input: liveness
+// is read from status only (never launch_state), so terminal rows are never
+// returned — a second sweep after reconcile drove rows terminal is a no-op. The
+// row set is snapshotted before any per-row load so the single :memory: pinned
+// connection is released before loadByID re-acquires it.
+func (s *ExecutionStore) ListLive() ([]*Execution, error) {
+	ctx := context.Background()
+	ids, err := func() ([]string, error) {
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT execution_id FROM executions
+			   WHERE status IN (?, ?)
+			   ORDER BY created_at, execution_id`,
+			string(StatusAccepted), string(StatusRunning),
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return nil, err
+			}
+			out = append(out, id)
+		}
+		return out, rows.Err()
+	}()
+	if err != nil {
+		return nil, err
+	}
+	execs := make([]*Execution, 0, len(ids))
+	for _, id := range ids {
+		e, err := loadByID(ctx, s.db, id)
+		if err != nil {
+			return nil, err
+		}
+		execs = append(execs, e)
+	}
+	return execs, nil
+}
+
 // GetByID returns the execution with the given id. found is false (no error)
 // when the row is absent.
 func (s *ExecutionStore) GetByID(execID string) (*Execution, bool, error) {
