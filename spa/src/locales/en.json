@@ -869,6 +869,14 @@
   "notification.daemon_refused": "{{name}} — Daemon not running",
   "notification.tmux_down": "{{name}} — tmux environment unreachable",
 
+  "notifications.enable_prompt": "Enable browser notifications to get notified when an agent needs your attention.",
+  "notifications.enable": "Enable",
+  "notifications.browser_title": "Browser notifications",
+  "notifications.browser_desc": "Show a system notification when an agent needs your attention.",
+  "notifications.granted": "Enabled",
+  "notifications.denied": "Blocked (change in browser settings)",
+  "common.dismiss": "Dismiss",
+
   "hosts.pairing_code": "Pairing Code",
   "hosts.pair_button": "Pair",
   "hosts.use_token": "Connect with Token (existing Token)",

@@ -869,6 +869,14 @@
   "notification.daemon_refused": "{{name}} — Daemon 未啟動",
   "notification.tmux_down": "{{name}} — tmux 環境無法連線",
 
+  "notifications.enable_prompt": "啟用瀏覽器通知，agent 需要你注意時會收到通知。",
+  "notifications.enable": "啟用",
+  "notifications.browser_title": "瀏覽器通知",
+  "notifications.browser_desc": "agent 需要你注意時顯示系統通知。",
+  "notifications.granted": "已啟用",
+  "notifications.denied": "已封鎖（請至瀏覽器設定調整）",
+  "common.dismiss": "關閉",
+
   "hosts.pairing_code": "配對碼",
   "hosts.pair_button": "配對",
   "hosts.use_token": "使用 Token 連線（已有 Token）",

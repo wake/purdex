@@ -14,6 +14,8 @@ import { LocaleEditor } from './LocaleEditor'
 import { LocaleImportModal } from './LocaleImportModal'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { TabPosition } from '../../stores/useLayoutStore'
+import { getPlatformCapabilities } from '../../lib/platform'
+import { webNotificationPermission, requestWebNotificationPermission } from '../../lib/web-notifications'
 
 function exportTheme(theme: ThemeDefinition) {
   const data = JSON.stringify({ name: theme.name, tokens: theme.tokens }, null, 2)
@@ -54,6 +56,8 @@ export function AppearanceSection() {
   const [showImportModal, setShowImportModal] = useState(false)
   const [showLocaleEditor, setShowLocaleEditor] = useState(false)
   const [showLocaleImport, setShowLocaleImport] = useState(false)
+  const [webNotifyPermission, setWebNotifyPermission] = useState(webNotificationPermission)
+  const isElectron = getPlatformCapabilities().isElectron
   const allThemes = getAllThemes()
   const presetThemes = allThemes.filter((th) => th.builtin)
   const customThemeList = allThemes.filter((th) => !th.builtin)
@@ -87,6 +91,10 @@ export function AppearanceSection() {
 
   const handleLocaleImported = (localeId: string) => {
     setLocale(localeId)
+  }
+
+  const handleEnableWebNotifications = async () => {
+    setWebNotifyPermission(await requestWebNotificationPermission())
   }
 
   const TAB_POSITION_OPTIONS: { value: TabPosition; label: string }[] = [
@@ -227,6 +235,20 @@ export function AppearanceSection() {
           </p>
         </div>
       </SettingItem>
+
+      {!isElectron && webNotifyPermission !== 'unsupported' && (
+        <SettingItem label={t('notifications.browser_title')} description={t('notifications.browser_desc')}>
+          <button
+            className="px-2 py-1 rounded bg-accent text-white text-xs disabled:opacity-50"
+            disabled={webNotifyPermission === 'granted' || webNotifyPermission === 'denied'}
+            onClick={handleEnableWebNotifications}
+          >
+            {webNotifyPermission === 'granted' ? t('notifications.granted')
+              : webNotifyPermission === 'denied' ? t('notifications.denied')
+              : t('notifications.enable')}
+          </button>
+        </SettingItem>
+      )}
 
       {/* Locale customize + import */}
       <SettingItem label={t('settings.appearance.locale_customize.label')} description={t('settings.appearance.locale_customize.desc')}>

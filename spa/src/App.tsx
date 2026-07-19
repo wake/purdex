@@ -37,6 +37,7 @@ import { TabContextMenu } from './components/TabContextMenu'
 import { RenamePopover } from './components/RenamePopover'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { WebNotificationPrompt } from './components/WebNotificationPrompt'
 import { getPlatformCapabilities } from './lib/platform'
 import type { Tab } from './types/tab'
 import { GlobalUndoToast } from './components/GlobalUndoToast'
@@ -351,6 +352,7 @@ export default function App() {
         </div>
       </div>
       <GlobalUndoToast />
+      <WebNotificationPrompt />
     </Router>
     </ErrorBoundary>
   )
