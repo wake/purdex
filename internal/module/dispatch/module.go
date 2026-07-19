@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/execution"
 )
 
 // Environment keys for the Ploom connection. These are placeholder sourcing for
@@ -27,6 +29,8 @@ type DispatchModule struct {
 	client *Client
 	worker *Worker
 	sink   FetchSink
+	outbox *Outbox
+	sender *Sender
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -63,7 +67,64 @@ func (m *DispatchModule) Init(c *core.Core) error {
 		}
 	}
 	m.worker = NewWorker(m.client, WithSink(sink))
+
+	// P.4: durable report outbox + sender. The sender drains queued reports to
+	// Ploom with accepted-before-lifecycle ordering, an ack cursor, and
+	// retry/backoff. The execution store (published in the registry) is the
+	// durability-cut source for reconstructing a lost accepted from its row.
+	outbox, err := OpenOutbox(filepath.Join(c.Cfg.DataDir, "outbox.db"))
+	if err != nil {
+		return err
+	}
+	m.outbox = outbox
+	var opts []SenderOption
+	if reader := executionReader(c); reader != nil {
+		opts = append(opts, WithExecutionReader(reader))
+	}
+	m.sender = NewSender(m.outbox, m.client, opts...)
 	return nil
+}
+
+// executionReader adapts the registered execution store onto the report sender's
+// ExecutionReader (durability cut). Returns nil when the store is unavailable —
+// already-queued reports still replay; only reconstruction of a lost accepted is
+// skipped.
+func executionReader(c *core.Core) ExecutionReader {
+	svc, ok := c.Registry.Get(execution.RegistryKey)
+	if !ok {
+		return nil
+	}
+	store, ok := svc.(*execution.ExecutionStore)
+	if !ok {
+		return nil
+	}
+	return executionStoreReader{store}
+}
+
+// executionStoreReader bridges *execution.ExecutionStore to ExecutionReader,
+// projecting the durable row onto the accepted-report immutable facts.
+type executionStoreReader struct{ store *execution.ExecutionStore }
+
+func (r executionStoreReader) LoadAcceptedRow(execID string) (AcceptedRow, bool, error) {
+	e, ok, err := r.store.GetByID(execID)
+	if err != nil || !ok {
+		return AcceptedRow{}, ok, err
+	}
+	sessionCode := ""
+	if e.SessionCode.Valid {
+		sessionCode = e.SessionCode.String
+	}
+	return AcceptedRow{
+		ExecutionID:             e.ExecutionID,
+		DispatchID:              e.DispatchID,
+		RepoLocation:            e.RepoLocation,
+		Provider:                e.Provider,
+		AttemptNo:               e.AttemptNo,
+		EffectiveSandboxProfile: e.SandboxProfile,
+		HeadAtStart:             e.HeadAtStart,
+		DirtyAtStart:            e.DirtyAtStart,
+		SessionCode:             sessionCode,
+	}, true, nil
 }
 
 // RegisterRoutes reserves no HTTP surface; the dispatch consumer is pull-only.
@@ -83,6 +144,15 @@ func (m *DispatchModule) Start(_ context.Context) error {
 		defer m.wg.Done()
 		m.worker.Run(ctx)
 	}()
+	// P.4: startup replay + periodic drain of the durable report outbox. The
+	// first Flush inside Run replays any reports left unacked across a restart.
+	if m.sender != nil {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.sender.Run(ctx)
+		}()
+	}
 	log.Println("[dispatch] consumer started")
 	return nil
 }
@@ -92,6 +162,9 @@ func (m *DispatchModule) Stop(_ context.Context) error {
 	if m.cancel != nil {
 		m.cancel()
 		m.wg.Wait()
+	}
+	if m.outbox != nil {
+		return m.outbox.Close()
 	}
 	return nil
 }

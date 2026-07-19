@@ -9,6 +9,11 @@ import (
 	"github.com/wake/purdex/internal/core"
 )
 
+// RegistryKey is the service-locator key under which the execution store is
+// published for in-process consumers (the dispatch report sender's durability
+// cut, admission, reconcile).
+const RegistryKey = "execution.store"
+
 // ExecutionModule owns the Purdex-side execution runtime SOT: the execution row
 // store, execution_id generation, the state machine, and dispatch_id upsert
 // idempotency (spec §4.3/§5.1). M0 Task P.1 wires the store only; admission,
@@ -30,7 +35,11 @@ func (m *ExecutionModule) Init(c *core.Core) error {
 	dbPath := filepath.Join(c.Cfg.DataDir, "execution.db")
 	var err error
 	m.store, err = OpenExecution(dbPath)
-	return err
+	if err != nil {
+		return err
+	}
+	c.Registry.Register(RegistryKey, m.store)
+	return nil
 }
 
 // RegisterRoutes reserves the /api/execution/* namespace. P.1 exposes no HTTP
