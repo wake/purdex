@@ -28,7 +28,7 @@ describe('requestWebNotificationPermission', () => {
     expect(await requestWebNotificationPermission()).toBe('granted')
   })
   it('無 Notification → unsupported', async () => {
-    // @ts-expect-error 移除
+    // @ts-expect-error 測試需要移除 window.Notification 屬性
     delete window.Notification
     expect(await requestWebNotificationPermission()).toBe('unsupported')
   })
