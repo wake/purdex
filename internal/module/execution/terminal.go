@@ -145,20 +145,30 @@ func (p *TerminalProcessor) Handle(ctx context.Context, sessionCode string, exit
 	return p.reporter.EnqueueTerminal(exec, status, artifacts, errCode, errMsg)
 }
 
-// buildArtifacts assembles the pointer-first artifacts for a terminal report: a
-// diff (always for completed; for failed only when the tree actually changed) and
-// the transcript pointer. A diff-capture error is logged but never wedges the
-// report — the transcript pointer still ships.
+// buildArtifacts assembles the pointer-first artifacts for a terminal report via
+// the shared buildTerminalArtifacts helper (also used by the reconcile sweep).
 func (p *TerminalProcessor) buildArtifacts(ctx context.Context, exec *Execution, status Status) []Artifact {
+	return buildTerminalArtifacts(ctx, p.diff, p.logf, p.daemonID, exec, status)
+}
+
+// buildTerminalArtifacts assembles the pointer-first artifacts for a terminal
+// report: a diff (always for completed; for failed only when the tree actually
+// changed) and the transcript pointer. A diff-capture error is logged but never
+// wedges the report — the transcript pointer still ships. A nil diff func skips
+// diff capture entirely (transcript-only). Shared by the live terminal processor
+// (P.8) and the startup reconcile sweep (P.9).
+func buildTerminalArtifacts(ctx context.Context, diff diffFunc, logf func(format string, args ...any), daemonID string, exec *Execution, status Status) []Artifact {
 	var arts []Artifact
-	diffArt, err := p.diff(ctx, p.daemonID, exec.ExecutionID, exec.RepoLocation, exec.HeadAtStart)
-	switch {
-	case err != nil:
-		p.logf("[execution] diff capture execution=%s: %v", exec.ExecutionID, err)
-	case status == StatusCompleted || diffHasChanges(diffArt):
-		arts = append(arts, diffArt)
+	if diff != nil {
+		diffArt, err := diff(ctx, daemonID, exec.ExecutionID, exec.RepoLocation, exec.HeadAtStart)
+		switch {
+		case err != nil:
+			logf("[execution] diff capture execution=%s: %v", exec.ExecutionID, err)
+		case status == StatusCompleted || diffHasChanges(diffArt):
+			arts = append(arts, diffArt)
+		}
 	}
-	arts = append(arts, TranscriptArtifact(p.daemonID, exec.ExecutionID))
+	arts = append(arts, TranscriptArtifact(daemonID, exec.ExecutionID))
 	return arts
 }
 
