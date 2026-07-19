@@ -60,7 +60,16 @@ vi.mock('./hosts/LogsSection', () => ({
   LogsSection: (props: { hostId: string }) => <div data-testid="logs-section" data-host={props.hostId} />,
 }))
 vi.mock('./hosts/AddHostDialog', () => ({
-  AddHostDialog: (props: { onClose: () => void }) => <div data-testid="add-host-dialog" onClick={props.onClose} />,
+  AddHostDialog: (props: {
+    onClose: () => void
+    initial?: { scheme?: 'http' | 'https'; ip?: string; port?: string; useToken?: boolean }
+  }) => (
+    <div
+      data-testid="add-host-dialog"
+      data-initial={props.initial ? JSON.stringify(props.initial) : ''}
+      onClick={props.onClose}
+    />
+  ),
 }))
 
 import React from 'react'
@@ -923,5 +932,58 @@ describe('Test 14 — pickHostIdFallback (shared helper)', () => {
       </Router>,
     )
     expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', 'b')
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// P2a — first-connect origin suggestion (web + https + no usable https host).
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('HostPage — origin host suggestion (P2a)', () => {
+  let originalLocation: Location
+
+  beforeEach(() => {
+    originalLocation = window.location
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { value: originalLocation, writable: true })
+  })
+
+  it('web + https + 無 https host → 顯示連線建議，點擊後 AddHostDialog 收到 origin initial', () => {
+    Object.defineProperty(window, 'location', {
+      value: { ...originalLocation, protocol: 'https:', hostname: 'purdex.mlab.host', port: '' },
+      writable: true,
+    })
+
+    // seedHosts() (outer beforeEach) seeded two hosts with no `scheme` field
+    // — hostScheme() treats that as 'http', so no https host exists yet.
+    renderHostPage('/hosts')
+
+    const btn = screen.getByText(/connect to this daemon|連到本 daemon/i)
+    fireEvent.click(btn)
+
+    const dialog = screen.getByTestId('add-host-dialog')
+    const initial = JSON.parse(dialog.getAttribute('data-initial') ?? 'null')
+    expect(initial).toEqual({ scheme: 'https', ip: 'purdex.mlab.host', port: '443', useToken: false })
+  })
+
+  it('已有 https host → 不顯示建議', () => {
+    Object.defineProperty(window, 'location', {
+      value: { ...originalLocation, protocol: 'https:', hostname: 'purdex.mlab.host', port: '' },
+      writable: true,
+    })
+    useHostStore.setState({
+      hosts: {
+        [TEST_HOST_ID]: { id: TEST_HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0, scheme: 'https' },
+      },
+      hostOrder: [TEST_HOST_ID],
+      activeHostId: TEST_HOST_ID,
+      runtime: {},
+    })
+
+    renderHostPage('/hosts')
+
+    expect(screen.queryByText(/connect to this daemon|連到本 daemon/i)).not.toBeInTheDocument()
   })
 })

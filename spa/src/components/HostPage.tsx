@@ -7,6 +7,8 @@ import { listContributions } from '../lib/settings-contribution-registry'
 import type { SettingsContribution, SettingsContextFor } from '../lib/settings-contribution-types'
 import { useHostStore, type HostRuntime } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { getPlatformCapabilities } from '../lib/platform'
+import { shouldSuggestOriginHost, originHostDraft } from '../lib/origin-host-suggestion'
 import { HostSidebar } from './hosts/HostSidebar'
 import { AddHostDialog } from './hosts/AddHostDialog'
 
@@ -263,7 +265,23 @@ export function HostPage({ isActive }: PaneRendererProps) {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const activeHostId = useHostStore((s) => s.activeHostId)
   const [showAddHost, setShowAddHost] = useState(false)
+  const [prefillOrigin, setPrefillOrigin] = useState(false)
   const t = useI18nStore((s) => s.t)
+
+  // First-connect suggestion — web + https + no usable https host yet.
+  // NOTE: subscribe to the raw `hosts` record (stable reference unless the
+  // store mutates it) rather than mapping to a new array inside the
+  // selector — a selector that allocates a new array every call defeats
+  // useSyncExternalStore's reference-equality check and causes an infinite
+  // render loop.
+  const hostsRecord = useHostStore((s) => s.hosts)
+  const suggestOrigin =
+    typeof window !== 'undefined' &&
+    shouldSuggestOriginHost({
+      isElectron: getPlatformCapabilities().isElectron,
+      protocol: window.location.protocol,
+      hosts: hostOrder.map((id) => hostsRecord[id]),
+    })
 
   // R2 attacker A2 fix — snapshot module-scoped lastSelection ONCE per render
   // and pass it to every helper.  preResolveHostId, resolveSelection, and
@@ -369,9 +387,25 @@ export function HostPage({ isActive }: PaneRendererProps) {
         onAddHost={() => setShowAddHost(true)}
       />
       <div className="flex-1 overflow-y-auto p-6">
+        {suggestOrigin && (
+          <div className="mb-3 rounded border border-border-default bg-surface-secondary px-3 py-2 text-sm flex items-center justify-between gap-2">
+            <span>{t('hosts.suggest_origin', { host: window.location.hostname })}</span>
+            <button
+              className="px-2 py-1 rounded bg-accent text-white text-xs whitespace-nowrap"
+              onClick={() => { setPrefillOrigin(true); setShowAddHost(true) }}
+            >
+              {t('hosts.connect_this_daemon')}
+            </button>
+          </div>
+        )}
         {renderContent()}
       </div>
-      {showAddHost && <AddHostDialog onClose={() => setShowAddHost(false)} />}
+      {showAddHost && (
+        <AddHostDialog
+          onClose={() => { setShowAddHost(false); setPrefillOrigin(false) }}
+          initial={prefillOrigin ? originHostDraft({ hostname: window.location.hostname, port: window.location.port }) : undefined}
+        />
+      )}
     </div>
   )
 }

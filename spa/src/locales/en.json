@@ -880,6 +880,8 @@
   "hosts.token_too_short": "Token must be at least 20 characters",
   "hosts.confirm": "Confirm",
   "hosts.scheme": "Scheme",
+  "hosts.suggest_origin": "This page is served by the daemon at {{host}}. Connect to it?",
+  "hosts.connect_this_daemon": "Connect to this daemon",
   "hosts.mode_pairing_hint": "Daemon is waiting for pairing",
   "hosts.mode_pending_hint": "Enter the token shown in the daemon terminal",
   "hosts.mode_normal_hint": "Daemon is running — enter the configured token",
