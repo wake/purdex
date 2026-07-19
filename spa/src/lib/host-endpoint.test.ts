@@ -35,4 +35,12 @@ describe('host-endpoint', () => {
     expect(hostEndpointKey({ scheme: undefined, ip: 'h', port: 7860 })).toBe('http:h:7860')
     expect(hostEndpointKey({ scheme: 'https', ip: 'h', port: 7860 })).toBe('https:h:7860')
   })
+
+  it('deriveDaemonBase / deriveWsBase：對稱 port 省略規則（只省略該 scheme 的預設 port）', () => {
+    expect(deriveDaemonBase({ scheme: 'http', ip: 'h', port: 80 })).toBe('http://h')
+    expect(deriveDaemonBase({ scheme: 'http', ip: 'h', port: 443 })).toBe('http://h:443')
+    expect(deriveDaemonBase({ scheme: 'https', ip: 'h', port: 80 })).toBe('https://h:80')
+    expect(deriveWsBase({ scheme: 'http', ip: 'h', port: 80 })).toBe('ws://h')
+    expect(deriveWsBase({ scheme: 'https', ip: 'h', port: 80 })).toBe('wss://h:80')
+  })
 })

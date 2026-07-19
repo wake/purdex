@@ -46,13 +46,15 @@ describe('checkHealth', () => {
   })
 
   it('Phase 2 success: connected + ticket', async () => {
-    vi.spyOn(globalThis, 'fetch')
+    const spy = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(healthResponse())
       .mockResolvedValueOnce(ticketResponse('tk_123'))
     const result = await checkHealth('http://localhost:7860', () => 'mytoken')
     expect(result.daemon).toBe('connected')
     expect(result.ticket).toBe('tk_123')
     expect(result.mode).toBe('normal')
+    const secondCallInit = spy.mock.calls[1][1] as RequestInit
+    expect(secondCallInit.headers).toMatchObject({ Authorization: 'Bearer mytoken' })
   })
 
   it('Phase 2 returns 401 → auth-error', async () => {
