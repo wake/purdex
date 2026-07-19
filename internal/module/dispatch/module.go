@@ -31,12 +31,13 @@ const (
 // FetchSink is the seam where P.7 attaches execution create → admission → launch
 // → report. Depending on the execution module keeps that wiring ordering ready.
 type DispatchModule struct {
-	core   *core.Core
-	client *Client
-	worker *Worker
-	sink   FetchSink
-	outbox *Outbox
-	sender *Sender
+	core       *core.Core
+	client     *Client
+	worker     *Worker
+	sink       FetchSink
+	outbox     *Outbox
+	sender     *Sender
+	reconciler *execution.Reconciler
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -101,8 +102,25 @@ func (m *DispatchModule) Init(c *core.Core) error {
 	// completed/failed report through the same durable outbox.
 	m.wireTerminal(executionStore(c), terminalSeam(c), daemonID(c))
 
+	// P.9: assemble the startup reconcile sweep + manual reclaim. It needs the
+	// execution store (live rows), core tmux (session liveness probe + orphan
+	// kill), and the durable terminal outbox adapter (to enqueue recovered
+	// terminal reports for replay). Disabled if any is missing.
+	m.reconciler = m.buildReconciler(c)
+
 	m.worker = NewWorker(m.client, WithSink(m.sink))
 	return nil
+}
+
+// buildReconciler assembles the P.9 Reconciler from registry-published
+// dependencies. Returns nil (reconcile disabled) when the execution store or the
+// report sender is unavailable — the daemon still boots.
+func (m *DispatchModule) buildReconciler(c *core.Core) *execution.Reconciler {
+	store := executionStore(c)
+	if store == nil || m.sender == nil {
+		return nil
+	}
+	return execution.NewReconciler(store, c.Tmux, terminalReporter{sender: m.sender}, execution.BuildDiffArtifact, daemonID(c))
 }
 
 // streamTerminalSeam is the narrow slice of the stream module the terminal wiring
@@ -280,8 +298,14 @@ func (r executionStoreReader) LoadAcceptedRow(execID string) (AcceptedRow, bool,
 	return acceptedRowFromExec(e), true, nil
 }
 
-// RegisterRoutes reserves no HTTP surface; the dispatch consumer is pull-only.
-func (m *DispatchModule) RegisterRoutes(_ *http.ServeMux) {}
+// RegisterRoutes exposes the P.9 manual-reclaim endpoint when reconcile is wired;
+// the poll/claim/fetch consumer itself is pull-only. Auth is the global TokenAuth
+// middleware's job (this mux is wrapped by it in main).
+func (m *DispatchModule) RegisterRoutes(mux *http.ServeMux) {
+	if m.reconciler != nil {
+		mux.HandleFunc("POST /api/dispatch/reclaim", m.reconciler.ReclaimHandler())
+	}
+}
 
 // Start launches the poll loop in the background when a Ploom endpoint is
 // configured; otherwise it logs that the consumer is disabled.
@@ -292,6 +316,18 @@ func (m *DispatchModule) Start(_ context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
+
+	// P.9: run the startup reconcile sweep once before the poll loop drains new
+	// dispatches, so any execution wedged by a prior crash is driven terminal —
+	// unblocking its repo (admission is status-based) and enqueuing the recovered
+	// terminal report for the sender to replay. Best-effort: a sweep error must
+	// not stop the consumer from starting.
+	if m.reconciler != nil {
+		if err := m.reconciler.Reconcile(ctx); err != nil {
+			log.Printf("[dispatch] startup reconcile: %v", err)
+		}
+	}
+
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
