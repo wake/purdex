@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,6 +269,80 @@ func TestRenderManagedPlugin_NoLegacyEmitLiteral(t *testing.T) {
 		if strings.Contains(body, lit) {
 			t.Errorf("rendered body still contains legacy literal emit %q (P3-T3 should route via PURDEX_EVENT const)", lit)
 		}
+	}
+}
+
+// TestRenderManagedPlugin_GatesChildSessionLifecycle statically inspects
+// the rendered JS body for the L1 child-session gate so a Bun-less CI
+// still catches removal. It asserts the body (a) declares the
+// subagentSessions map, (b) reads the authoritative child signal
+// event.properties.info?.parentID, and (c) places the child-registration
+// branch before the parent PdxSessionStart emit (child-check first).
+func TestRenderManagedPlugin_GatesChildSessionLifecycle(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+
+	if !strings.Contains(body, "subagentSessions") {
+		t.Fatal("rendered body missing subagentSessions gate map")
+	}
+	if !strings.Contains(body, "event.properties.info?.parentID") {
+		t.Fatal("rendered body missing child signal event.properties.info?.parentID")
+	}
+
+	setIdx := strings.Index(body, "subagentSessions.set(sid, parentID)")
+	if setIdx < 0 {
+		t.Fatal("rendered body missing child registration subagentSessions.set(sid, parentID)")
+	}
+	emitIdx := strings.Index(body, "emit(PURDEX_EVENT.PdxSessionStart,")
+	if emitIdx < 0 {
+		t.Fatal("rendered body missing PdxSessionStart emit")
+	}
+	if setIdx > emitIdx {
+		t.Fatalf("child registration (idx %d) must precede PdxSessionStart emit (idx %d)", setIdx, emitIdx)
+	}
+}
+
+// TestRenderManagedPlugin_ChildSessionGatesAllLifecycleEmits asserts the
+// gate exists in every parent-level lifecycle branch (created / status /
+// error / deleted), so a partial revert of the fix is caught statically.
+func TestRenderManagedPlugin_ChildSessionGatesAllLifecycleEmits(t *testing.T) {
+	body := renderManagedPlugin("/fake/pdx")
+	for _, want := range []string{
+		"subagentSessions.set(sid, parentID)",
+		"if (subagentSessions.has(sid)) return",
+		"subagentSessions.delete(sid)",
+		"if (parentID === sid) subagentSessions.delete(childID)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered body missing child-gating construct %q", want)
+		}
+	}
+}
+
+// TestSubagentSessionCreatedFixtureCarriesParentID guards the fixture used
+// by the child-gating contract cases: it must be a session.created bus
+// event whose info.parentID is set (the authoritative child signal).
+func TestSubagentSessionCreatedFixtureCarriesParentID(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(payloadFixturesDir, "session.created.subagent.json"))
+	if err != nil {
+		t.Fatalf("read subagent fixture: %v", err)
+	}
+	var env struct {
+		Kind       string                 `json:"kind"`
+		EventType  string                 `json:"eventType"`
+		Properties map[string]interface{} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("parse subagent fixture: %v", err)
+	}
+	if env.Kind != "bus-event" || env.EventType != "session.created" {
+		t.Fatalf("fixture kind/eventType = %q/%q, want bus-event/session.created", env.Kind, env.EventType)
+	}
+	info, ok := env.Properties["info"].(map[string]any)
+	if !ok {
+		t.Fatal("fixture missing properties.info")
+	}
+	if pid, _ := info["parentID"].(string); pid == "" {
+		t.Fatal("fixture properties.info.parentID must be set for a subagent session.created")
 	}
 }
 
