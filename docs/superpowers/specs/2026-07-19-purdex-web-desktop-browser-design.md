@@ -115,7 +115,8 @@ Terminal / Stream / JSONL、Sessions 清單 / Dashboard / New Tab、Hosts 多 ho
 
 - **P0-a Host endpoint model 支援 scheme**：`HostConfig` 由 `ip + port` 擴充為能表達 `scheme(http|https) + host + optional port`（缺 port 時依 scheme 取 80/443）。`getDaemonBase()`/`getWsBase()` 從同一 endpoint 正確導出（`http↔ws`、`https↔wss`）。既有 `ip+port` host 需 migration（alpha 階段依 [[feedback_no_alpha_migration]] 可用簡單就地轉換，不需完整 persist migration 框架——由 plan 定）。
 - **P0-b token-off negotiation**：`checkHealth()` 在無 client token 時**仍嘗試 `POST /api/ws-ticket`**；`200`→token 關、取得 ticket；`401`→真 auth-error；`503`→依現況。使「token disabled」與「token required」可區分，token 關時 WS 能正常取得 ticket 並連線。
-- **驗收**：可新增一個 `https://<hostname>` 形式的 host；在 token 關的 daemon 上，health negotiation 產出 ticket、WS 連上。（此階段仍可在既有 Electron/dev 環境驗證，不需 web serving。）
+- **驗收（單元測試層級，不含 UI）**：透過 store API 建立 `scheme='https'` 的 host 時，`getDaemonBase`/`getWsBase` 正確導出 `https://`/`wss://`（443 省略 port）；`checkHealth` 對 token 關的 daemon（ws-ticket 200）產出 ticket、對 token-required（401）回 auth-error；endpoint identity（含 scheme）變更會觸發 event WS 重連。**「新增/編輯 https host 的 UI」（scheme 選擇、dedupe、驗證 base）歸 P2 首連 UX**（P0 的資料層足以讓 P2 UI 直接建立 https host）。
+- **已知限制（低優先）**：`useRelayWsManager` 在 relay 連線當下即時讀 `getWsBase`（故新建的 https host 的 stream 正確），但對「既有 host 於 stream 進行中途變更 scheme」不會即時重連 stream WS——列已知限制，非 P0 必修。
 
 ### P1 — Serving 地基（walking skeleton）
 
@@ -142,6 +143,7 @@ Terminal / Stream / JSONL、Sessions 清單 / Dashboard / New Tab、Hosts 多 ho
 **目標**：瀏覽器初次進入即能順利連上 host；桌面可「安裝成 app」且版本不卡舊。
 
 - **首連 UX**：Electron 版靠自動加 local host；web 沒有。web 首次進入須有清楚的「新增/選擇 host」入口（可預填當前 origin 對應的 daemon 作為建議 endpoint，含正確 scheme，但仍以顯式 host entity 存在，不硬編、不隱式同源連線）。
+- **host 端點 scheme UI（承接 P0 資料層）**：`AddHostDialog` 手動路徑加 `scheme`（http/https）選擇；健康檢查與驗證的 base URL 改用 `deriveDaemonBase`（不再寫死 `http://${ip}:${port}`）；existing-host dedupe 改用 `hostEndpointKey`（`http` vs `https` 同一 `host:port` 視為不同 endpoint，不誤判覆寫 token）。`OverviewSection` 可編輯既有 host 的 scheme。**pairing 流程維持 http（LAN/tailnet）不變**——pairing code 解碼恆為 http，https host 走手動新增。
 - **token 維持關**：本輪不做 token 輸入流程；UI/serving 不得假設「永遠無 token」。
 - **可安裝 PWA 殼**：`manifest.json`（名稱 / 圖示 / `display: standalone`）+ 圖示資產 + **service worker**（`vite-plugin-pwa`）。
 - **SW 版本對齊策略（重要，避免吐舊 SPA）**，採**保守最小快取**：

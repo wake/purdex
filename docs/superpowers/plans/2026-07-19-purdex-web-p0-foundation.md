@@ -27,8 +27,8 @@
 - **Create** `spa/src/stores/useHostStore.endpoint.test.ts` — store 層 endpoint 導出測試。
 - **Modify** `spa/src/hooks/useMultiHostEventWs.ts` — 2 處 configKey 改用 `hostEndpointKey`。
 - **Modify** `spa/src/components/MemoryMonitorPage.tsx` — `snapshotHostTargetKey` 納入 scheme（改用 `hostEndpointKey`）。
-- **Modify** `spa/src/lib/sync/contributors/hosts.ts` — `sameEndpoint` 改用 `hostEndpointKey`（scheme 變更即視為換 endpoint → token 重置）；export `mergeHostsPreservingTokens` 供測試。
-- **Create** `spa/src/lib/sync/contributors/hosts.test.ts`（若不存在）— scheme 變更 → token 重置回歸測試。
+- **Modify** `spa/src/lib/sync/contributors/hosts.ts` — `sameEndpoint` 改用 `hostEndpointKey`（scheme 變更即視為換 endpoint → token 重置）。
+- **Modify** `spa/src/lib/sync/contributors/hosts.test.ts`（**已存在**）— 於既有 `full-replace, token preservation` describe 內補 scheme 變更 case，走**公開 `createHostsContributor` API**（不 export 私有 helper）。
 - **Modify** `spa/src/lib/host-connection.ts` — `checkHealth` token-off negotiation。
 - **Modify** `spa/src/lib/host-connection.test.ts` — 更新既有「no token → auth-error」測試為新語意 + 補 token-off 200 case。
 
@@ -279,41 +279,44 @@ git commit -m "feat(host): HostConfig.scheme + store endpoint delegation (P0-a)"
 
 **Interfaces:**
 - Consumes: `hostEndpointKey`（Task 1）。
-- Produces: `mergeHostsPreservingTokens`（改為 `export`）。
+- Produces: 無新公開 API（改用既有 `createHostsContributor` 公開介面測試，不 export 私有 `mergeHostsPreservingTokens`）。
 
 - [ ] **Step 1: 寫失敗測試（scheme 變更 → token 重置）**
 
-先在 `spa/src/lib/sync/contributors/hosts.ts` 把 `mergeHostsPreservingTokens` 前面加 `export`（否則測試無法 import）。然後：
+在既有 `spa/src/lib/sync/contributors/hosts.test.ts` 的 `describe('hostsContributor.deserialize (full-replace, token preservation)', ...)` 區塊內（該檔已 import `createHostsContributor` / `useHostStore` 並有 `resetStore()` beforeEach）新增一個 case，沿用既有 `deserialize(..., { type: 'full-replace' })` pattern：
 
 ```ts
-// spa/src/lib/sync/contributors/hosts.test.ts
-import { describe, it, expect } from 'vitest'
-import { mergeHostsPreservingTokens } from './hosts'
-import type { HostConfig } from '../../../stores/useHostStore'
-
-function host(over: Partial<HostConfig>): HostConfig {
-  return { id: 'h1', name: 'h', ip: '10.0.0.1', port: 7860, order: 0, ...over }
-}
-
-describe('mergeHostsPreservingTokens', () => {
-  it('相同 endpoint → 保留現有 token', () => {
-    const current = { h1: host({ token: 'keep' }) }
-    const incoming = { h1: host({ token: 'incoming' }) }
-    expect(mergeHostsPreservingTokens(current, incoming).h1.token).toBe('keep')
-  })
-
   it('scheme 變更（http→https，ip/port 相同）視為換 endpoint → token 重置為 null', () => {
-    const current = { h1: host({ token: 'keep' }) } // scheme 缺省 = http
-    const incoming = { h1: host({ token: 'incoming', scheme: 'https' }) }
-    expect(mergeHostsPreservingTokens(current, incoming).h1.token).toBeNull()
+    useHostStore.setState({
+      hosts: {
+        // scheme 缺省 = http
+        h1: { id: 'h1', name: 'A', ip: '10.0.0.1', port: 7860, token: 'SECRET-A', order: 0 },
+      },
+      hostOrder: ['h1'],
+      activeHostId: 'h1',
+    })
+
+    const contributor = createHostsContributor()
+    contributor.deserialize(
+      {
+        version: 1,
+        data: {
+          hosts: { h1: { id: 'h1', name: 'A', ip: '10.0.0.1', port: 7860, scheme: 'https', order: 0 } },
+          hostOrder: ['h1'],
+          activeHostId: 'h1',
+        },
+      },
+      { type: 'full-replace' },
+    )
+
+    expect(useHostStore.getState().hosts.h1.token).toBeNull()
   })
-})
 ```
 
 - [ ] **Step 2: 跑測試確認失敗**
 
 Run: `cd spa && npx vitest run src/lib/sync/contributors/hosts.test.ts`
-Expected: FAIL（第二個 case：現況只比 ip/port，scheme 變更仍判 sameEndpoint → token 未重置）。
+Expected: FAIL（現況 `sameEndpoint` 只比 `ip`/`port`，scheme http→https 仍判同 endpoint → token 未重置，斷言 `toBeNull()` 失敗）。
 
 - [ ] **Step 3: 實作三處替換**
 
@@ -473,6 +476,13 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/web-version
 git add spa/src/lib/host-connection.ts spa/src/lib/host-connection.test.ts
 git commit -m "feat(host): token-off ws-ticket negotiation (P0-b)"
 ```
+
+---
+
+## Deferred / 已知取捨（codex plan review 後）
+
+- **`useRelayWsManager`（stream relay WS）scheme-change 重連**：該 manager 由 `relayStatus` 變化驅動，於 relay 連線當下即時讀 `getWsBase(hostId)`——故**新建的 https host 的 stream 一開始就走 wss，正確**。唯「既有 host 於 stream 進行中途變更 scheme」不會即時重連 stream WS。此為低關聯（mid-stream 改 scheme 極罕見）+ 中複雜（需在 relay-status 驅動的 manager 內加 endpoint identity 追蹤），依優先原則**延後**，記於 spec §5.0「已知限制」。event WS（`useMultiHostEventWs`）在 Task 3 後已會因 configKey 含 scheme 而重連。
+- **`MemoryMonitorPage` / `useMultiHostEventWs` 的 targeted 測試（codex I3）**：兩處為「把 inline `${ip}:${port}` 換成已被 Task 1 單元測試涵蓋的 `hostEndpointKey`」的**機械替換**。`snapshotHostTargetKey` 為 module-private、`useMultiHostEventWs` 無既有 hook test（需 WS mock，成本高、邊際價值低）。故不新增重量級元件/hook 測試，改以 **TypeScript typecheck + 全套 vitest 回歸**（Task 3 Step 4）+ `hostEndpointKey` 單元測試 保證正確性。sync contributor 則有真 targeted 回歸（Task 3 Step 1）。
 
 ---
 
