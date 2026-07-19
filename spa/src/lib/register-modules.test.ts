@@ -123,12 +123,23 @@ describe('registerBuiltinModules', () => {
     expect(electron).toBeDefined()
   })
 
-  it('registers tmux agent monitor section in dev mode', () => {
+  it('registers tmux agent monitor section in dev mode when running in Electron', () => {
+    ;(window as unknown as Record<string, unknown>).electronAPI = { tearOffTab: async () => {} }
     registerBuiltinModules()
     const monitor = getSettingsSections().find((s) => s.id === 'tmux-agent-monitor')
     expect(monitor).toBeDefined()
     expect(monitor?.label).toBe('settings.section.tmux_agent_monitor')
     expect(monitor?.order).toBe(21)
+  })
+
+  it('does not register tmux-agent-monitor on web (no electronAPI) even in DEV', () => {
+    // Web/browser scenario: no window.electronAPI present. vitest's default
+    // environment already has import.meta.env.DEV === true, so this proves
+    // the bare DEV branch alone must not be enough to register the section.
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI
+    registerBuiltinModules()
+    const monitor = getSettingsSections().find((s) => s.id === 'tmux-agent-monitor')
+    expect(monitor).toBeUndefined()
   })
 
   it('registers the Snapshot settings section (id=snapshot, order=22)', () => {

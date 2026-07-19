@@ -389,7 +389,7 @@ export function registerBuiltinModules(): void {
     })
   }
 
-  if (import.meta.env.DEV || caps.devUpdateEnabled) {
+  if ((import.meta.env.DEV || caps.devUpdateEnabled) && caps.isElectron) {
     registerSettingsSection({
       id: 'tmux-agent-monitor',
       label: 'settings.section.tmux_agent_monitor',
