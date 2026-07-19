@@ -4,6 +4,7 @@ import { useWebShortcuts } from './useWebShortcuts'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
+import { createTab } from '../types/tab'
 
 beforeEach(() => {
   delete (window as unknown as { electronAPI?: unknown }).electronAPI
@@ -41,12 +42,22 @@ describe('useWebShortcuts', () => {
     ta.remove()
   })
 
-  it('global（Cmd+Alt+ArrowRight）於 editable target → 仍觸發', () => {
-    // 先放兩個分頁以便 next-tab 有作用（只驗 preventDefault 觸發即可）
+  it('global（Cmd+Alt+ArrowRight）於 editable target → 仍觸發，activeTabId 實際切換', () => {
+    // 放兩個分頁，驗證 next-tab 真的執行（不只是 preventDefault）
+    const tab1 = createTab({ kind: 'new-tab' })
+    const tab2 = createTab({ kind: 'new-tab' })
+    useTabStore.getState().addTab(tab1)
+    useTabStore.getState().addTab(tab2)
+    useTabStore.getState().setActiveTab(tab1.id)
+    const wsId = useWorkspaceStore.getState().activeWorkspaceId!
+    useWorkspaceStore.getState().addTabToWorkspace(wsId, tab1.id)
+    useWorkspaceStore.getState().addTabToWorkspace(wsId, tab2.id)
+
     renderHook(() => useWebShortcuts())
     const ta = document.createElement('textarea'); document.body.appendChild(ta)
     const prevented = fire(ta, { key: 'ArrowRight', metaKey: true, altKey: true })
     expect(prevented).toHaveBeenCalled()
+    expect(useTabStore.getState().activeTabId).toBe(tab2.id)
     ta.remove()
   })
 

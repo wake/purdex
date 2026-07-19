@@ -14,7 +14,10 @@ export interface WebShortcut {
 }
 
 export const WEB_SHORTCUTS: readonly WebShortcut[] = [
-  // Tab index (Cmd/Ctrl+digit — may be browser-reserved; non-global, focus-guarded)
+  // Tab index (Cmd/Ctrl+digit — browser-reserved in a normal browser tab, so
+  // the page never receives the keydown there; reachable when installed as a
+  // standalone PWA, which has no browser tab bar to intercept it. Kept
+  // non-global + focus-guarded like the other app-view shortcuts below.)
   { primary: true, key: '1', action: 'switch-tab-1' },
   { primary: true, key: '2', action: 'switch-tab-2' },
   { primary: true, key: '3', action: 'switch-tab-3' },
