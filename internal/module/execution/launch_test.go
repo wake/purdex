@@ -73,9 +73,9 @@ func cloneExec(e *Execution) *Execution { c := *e; return &c }
 
 // fakeLauncher records the spec it received and returns a canned result/error.
 type fakeLauncher struct {
-	rec      *recorder
-	gotSpec  LaunchSpec
-	result   LaunchResult
+	rec       *recorder
+	gotSpec   LaunchSpec
+	result    LaunchResult
 	launchErr error
 	// inspect, if set, runs while "inside" Launch so tests can assert store
 	// state between accepted-enqueue and launched-commit.
