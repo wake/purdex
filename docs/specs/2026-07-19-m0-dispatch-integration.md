@@ -91,8 +91,9 @@ issue ──> dispatch ──> execution ──> attempt ──> session
 - **Retry/backoff**：Ploom 回 5xx → daemon 指數退避重試；401/403 → **永久失敗**（不重試，記錄）。
 - **Seq 冪等 + ack cursor（codex R1 #5）**：每筆 report 帶**單調遞增 `seq`**（per execution）。
   - Ploom 忽略 `seq ≤` 已接受的最大值（重複/亂序丟棄），並在 **report response 回 `ack_seq`**（目前已投影到的最大 seq）。
-  - **`accepted` 是 lifecycle 的前置**：daemon 必須先讓 `accepted`（seq=1，攜帶 `head_at_start`/`dirty_at_start`/`effective_sandbox_profile`/deeplink seed 等**不可補的 immutable metadata**）被 ack，**才**發送 `running`/`completed`/`failed`。避免「accepted 掉包但 running 成功 → Ploom 知道在跑卻永遠缺 base metadata」的不可收斂缺洞。
-  - **daemon 端持久化 outbound report**（含未 ack 的），daemon 重啟時**依 `ack_seq` replay 未確認的 report**。這是 M0 最小可靠投影，不是 M1 才補。
+  - **`accepted` 是 lifecycle 的前置**：daemon 必須先讓 `accepted`（seq=1，攜帶 `head_at_start`/`dirty_at_start`/`effective_sandbox_profile`/deeplink seed 等 immutable metadata）被 ack，**才**發送 `running`/`completed`/`failed`。避免「accepted 掉包但 running 成功 → Ploom 知道在跑卻永遠缺 base metadata」的不可收斂缺洞。
+  - **⚠️ Durability cut point（R2 #3，關鍵）**：`accepted` 的 immutable metadata **並非只存在記憶體**——它們**全部是 execution row 的持久欄位**（`head_at_start`/`dirty_at_start`/`sandbox_profile`/`execution_id`/`repo_location`），且在 **admission 同交易內、spawn 之前**就落 row（§4.3）。故 **`accepted` payload 永遠可從 durable row 重建**，daemon 重啟後即使 in-flight 的 accepted 掉了也能**由 row 重新產生並 replay**，不會「immutable metadata 永久遺失 → Ploom 卡死 `accepted_required`」。
+  - **持久化順序（crash-consistency cut）**：admission txn 落 row（含 accepted immutable facts）→ **durable enqueue `accepted` outbound report** →（釋放/持 lock）spawn。outbound queue 持久（含未 ack 者）；daemon 重啟依 `ack_seq` **從 row 重建 + replay** 未確認 report。這是 M0 最小可靠投影，不是 M1 才補。
 - **狀態單向**：Ploom 只投影 daemon 給的 runtime 狀態，**不自行推進**（projection SOT）。
 
 ---
@@ -120,12 +121,15 @@ issue ──> dispatch ──> execution ──> attempt ──> session
 
 - **建立**：Ploom 派工時**先 commit `dispatch` row（pending）**再無他事；daemon 之後才輪詢到。
 - **execution 冪等（row）**：daemon 在**單一交易內**以 `dispatch_id` upsert execution 投影——若該 `dispatch_id` 已有 execution，回**既有 `execution_id`**（不重建）。
-- **⚠️ Launch fence（codex R1 #3）**：row 冪等只擋「重複建 row」，**擋不住重複 launch side effect**。故 execution row 帶 **`launch_state`**（`none → launching → launched`）+ `session_code`：
-  - daemon 起 `claude -p` **前**，於同交易把 `launch_state` 設 `launching`（fence 標記）。
-  - recovery / 重派讀到 `launch_state ∈ {launching, launched}` → **不 relaunch**，改走 reconcile（§5.4）：檢查底層 session 是否還活，決定 `running` 或 `failed`。
-  - 這防「首次已起 session A，daemon 在寫 session_code / 發 accepted 前崩潰 → 重用同 execution_id 又起 session B → 一條 execution 底下兩 session、diff/transcript/seq 全混」。
+- **⚠️ Launch fence + 預生 handle（codex R1 #3 / R2 #1·#2）**：row 冪等只擋「重複建 row」，**擋不住重複 launch side effect**，且需一個 crash 後找得回 child 的**持久 handle**。故：
+  - **兩個正交欄位，別混用**（R2 #1）：
+    - **`status`**（`accepted / running / completed / failed`）＝**liveness 權威**。**「live execution」＝ `status ∈ {accepted, running}`**。admission 單 live 判定（§7）與 reconcile liveness **只看 `status`**，**不看 `launch_state`**。
+    - **`launch_state`**（`none → launching → launched`）＝**只用來決定「recovery 該不該 relaunch」的 fence**，與 liveness 無關；execution 到 terminal 後 `launch_state` 不再被當 live 判據。
+  - **預生 `session_code`（R2 #2，關鍵）**：daemon **在 spawn 前、admission 同交易內**就**預生** execution 的 `session_code`（runtime handle，daemon 產非 agent 給），與 `status=accepted / launch_state=launching` 一起落 row。故 crash 於 `cmd.Start()` 成功但寫 `launched` 前時，row 上**必有可探的 `session_code`**（絕不會是 NULL），reconcile 得以用它探 tmux session 活性（§5.4）→ 準確判 running/failed + 收孤兒，不再「找不到活 child」。
+  - recovery 讀到 `launch_state ∈ {launching, launched}` → **不 relaunch**，改走 reconcile（§5.4）。
+  - 這防「首次已起 session A，daemon 在寫 `launched` / 發 accepted 前崩潰 → 重用同 execution_id 又起 session B → 一條 execution 底下兩 session、diff/transcript/seq 全混」。
   - **M0 attempt=1 的安全前提**：一個 execution_id **至多綁一次成功 launch**。真要「重試/換做法」= **新 dispatch → 新 execution_id**（rerun 語意，非重用），attempt 資料層仍留 M3。
-- **execution row 欄位**（Purdex 側 runtime SOT）：`execution_id, dispatch_id, repo_location(canonical), provider, launch_state, session_code(nullable), attempt_no, status, seq_reported, head_at_start, dirty_at_start, sandbox_profile, created_at, updated_at`。〔**刪除** `callback_target`——pull 模型下無 Ploom→Purdex callback，此為 push 殘留（codex R1 #8）〕
+- **execution row 欄位**（Purdex 側 runtime SOT）：`execution_id, dispatch_id, repo_location(canonical), provider, launch_state, session_code(admission 預生·非 NULL), attempt_no, status, seq_reported, head_at_start, dirty_at_start, sandbox_profile, outcome_source(result|exit_only, nullable 至 terminal), created_at, updated_at`。〔`session_code` 因預生 handle 改為**非 NULL**（R2 #2）；**刪除** `callback_target`——pull 下無 Ploom→Purdex callback，push 殘留（R1 #8）〕
 - **雙側兩表非雙寫**：Purdex 存 execution runtime row；Ploom 存 execution **projection** row（+ 寫進 `issue_event` append-only 活動流）。兩表各自權威（runtime vs projection），靠 report + ack cursor 同步，**不共用一張表、不雙寫**。
 
 ### 4.4 `ExecutionControlRequest` — M0 移除（V1）
@@ -155,23 +159,37 @@ accepted ──> running ──> completed
 
 > **更正**：spec 初稿誤稱「relay 已 parse stream-json」。**現碼 `relay.go` 只逐行 tee stdout→WS，完全沒 parse**；ctx cancel→SIGTERM→5s→SIGKILL；subprocess 退出時送 WS close「subprocess exited」。故 `result` protocol event **不是**可靠的 terminal 觸發。
 
-M0 terminal 偵測分**兩種來源**，明列為新 seam（非假設現成）：
+M0 terminal 偵測要分開兩件事：**「何時 terminal」（時點）** 與 **「成功還失敗」（成敗分類）**。兩個訊號各管一件（codex R2 #4）：
 
-| 來源 | 角色 | 現況 | M0 新工作 |
-|------|------|------|-----------|
-| **process exit（含 exit code）/ ws close** | **權威 terminal**——decide `completed`(exit 0) / `failed`(非 0 / 被 signal / 異常) | relay 已在 subprocess 退出時關 WS，但**未把 exit code 冒到 execution 層** | relay/bridge 把「subprocess 退出 + exit code」路由到 execution 層 → 觸發 terminal report |
-| **`result` protocol event** | **僅 enrichment**（成功/失敗細節、usage、錯誤訊息）——**不**單獨判 terminal | 無 parse | 選擇性 parse `result` 充實 artifact/error，但**terminal 與否只認 process exit** |
+| 來源 | 管什麼 | 現況 | M0 新工作 |
+|------|--------|------|-----------|
+| **process exit（含 exit code）/ ws close** | **terminal 時點權威**——process 退出才算 terminal | relay 已在 subprocess 退出時關 WS，但**未把 exit code 冒到 execution 層** | relay/bridge 把「subprocess 退出 + exit code」路由到 execution 層 → 觸發 terminal report |
+| **`result` protocol event** | **成敗分類權威（存在時）**——`is_error`/`subtype`(success/refusal/error_max_turns/error_during_execution) 決定 completed vs failed | 無 parse | parse `result` 取 `is_error`/`subtype`/error 細節，做 outcome 分類 + 充實 artifact |
 
-- **異常路徑**：daemon 關閉 / relay 斷線 / context cancel → SIGTERM → 無 `result`。此時 process exit 仍發生 → execution → `failed`（若非乾淨退出）或由 §5.4 reconcile 判定。
-- **不得**在收到 `result` 但 process 尚未退出時就標 `completed`（避免過早 terminal）。
+**Outcome 分類規則（時點＝process exit，分類＝下表）**：
+
+| exit code | `result` event | 判定 |
+|-----------|----------------|------|
+| ≠ 0 / 被 signal / 異常 | 任意 | **failed** |
+| 0 | `result.is_error` = true（refusal / tool failure / agent error）| **failed**（帶 error 細節 artifact）|
+| 0 | `result` 成功 | **completed** |
+| 0 | **無 `result`**（M0 降階）| **completed**（degraded；記 `outcome_source=exit_only` 供稽核，見已知限制）|
+
+- **關鍵（R2 #4）**：`exit 0` **不等於** agent 成功。`claude -p` 可 exit 0 但 `result` 是 refusal/error → 必須靠 `result` 分類成 **failed**，不可只看 exit code 就投影 completed。
+- **異常路徑**：daemon 關閉 / relay 斷線 / SIGTERM → 通常無 `result`。process exit 仍發生 → 非乾淨退出 → `failed`；或由 §5.4 reconcile 判定。
+- **不得**在收到 `result` 但 process 尚未退出時就標 terminal（時點只認 process exit，避免過早 terminal）。
+- **已知限制**：`outcome_source=exit_only`（exit 0 但沒收到 result）罕見情況下可能把實際失敗誤標 completed；M0 記錄來源供稽核，穩健化留後續。
 
 ### 5.4 Manual reclaim + startup reconcile sweep（codex R1 #1，**M0 必做**）
 
 > 無此，claim 成功後 daemon 崩潰 / 主機重開 → dispatch 永停在 claimed/running，輪詢再也看不到（只吃 pending）→ **不可收斂殭屍**。
 
-- **Startup reconcile**：daemon 啟動時掃自己的 execution runtime row 中 **非 terminal**（`accepted`/`running`，或 `launch_state ∈ {launching, launched}`）者，逐一 reconcile：
-  - 底層 session 還活 → 續報 `running`（重掛 terminal 偵測）。
-  - session 已不在 → 依 `launch_state` 判 `failed`（起一半崩）或 `completed`（已跑完但 report 沒送出，靠 outbound replay §3.3 補）。
+- **Startup reconcile**：daemon 啟動時掃自己的 execution runtime row 中 **`status ∈ {accepted, running}`**（liveness 看 status，非 launch_state；R2 #1）者，逐一 reconcile。**探活用預生的 `session_code`**（§4.3 保證非 NULL；R2 #2）探對應 tmux session：
+  - **session 還活** → 續報 `running`、重掛 terminal 偵測（§5.3）。
+  - **session 已不在**：
+    - `launch_state=launched`（曾成功 launch）→ 視為已結束但 report 沒送出 → 交給 terminal 偵測/outcome 分類補判（能取到 exit/紀錄則據以 completed/failed，取不到則 `failed`），靠 outbound replay（§3.3）補送。
+    - `launch_state=launching`（起一半崩）→ **判 `failed`**，並**用 `session_code` 收孤兒**（kill 任何仍掛在該 session 的 subprocess，防孤兒繼續改 repo；R2 #2）。
+  - reconcile 後 status 進 terminal → 該 canonical repo 不再有 live execution（liveness 看 status），**解除** admission 對後續派工的阻塞（R2 #1）。
 - **Manual reclaim**：提供人工觸發的 reclaim（M0 可為 daemon 端點 / 手動指令），把卡住的 execution 拉回 reconcile。**自動 lease/heartbeat/timeout 留 M1**——M0 只保證「有辦法手動 + 啟動時自動 reconcile 一次」，不做常駐自動保命。
 - Ploom 側：dispatch 卡在 claimed/running 且對應 execution 被 reconcile 成 terminal → 依 report 更新投影（人工關 issue gate 不變）。
 
@@ -200,7 +218,7 @@ M0 terminal 偵測分**兩種來源**，明列為新 seam（非假設現成）�
 **派工被 daemon 受理（accepted）的前置條件**（任一不滿足 → `failed`，error 明列原因）：
 
 1. **Canonical repo key（codex R1 #4 + §18.3，M0 必做）**：以 `repo_location.local_dir` 解出 **canonical 絕對路徑**（resolve symlink、`..`、trailing slash）當單一鍵。防「symlink 與真實路徑各派一次工 → 繞過單 live 規則」。canonical 失敗 / 逃出允許根 → 拒（`failed`）。
-2. **repo 乾淨 OR 同 repo 單一 live execution**：以 canonical key 判定；目標 repo 已有一條 live（accepted/running/`launch_state≠none`）execution → 拒。單 canonical repo 同時只允許一條 live execution。
+2. **repo 乾淨 OR 同 repo 單一 live execution**：以 canonical key 判定。**「live」＝ execution `status ∈ {accepted, running}`**（**看 status，不看 `launch_state`**；R2 #1——避免完成的 execution 停在 `launch_state=launched` 被誤當 live，永久卡死同 repo 後續派工）。目標 repo 已有一條 live execution → 拒。單 canonical repo 同時只允許一條 live execution。
 3. **⚠️ Per-repo lock 跨 accept→launch，非 point check（codex R1 #4 TOCTOU）**：admission 檢查與「起 session + 寫 `launch_state=launching` + 記 `head_at_start`」須在**同一把 per-canonical-repo lock** 內原子完成，避免「檢查乾淨後、launch 前」有第二派工插入或 repo 被改。lock 為 daemon 行程內（M0 單 daemon 足夠）。
 4. **記錄 `head_at_start` + `dirty_at_start`**：受理時（持 lock）快照 repo HEAD commit 與 dirty 狀態，寫進 execution row（供 diff base 與事後稽核）。
 5. **已知殘留（M0 限制，明列非漏）**：M0 無 worktree，execution **執行中**使用者/外部 process 若改同 repo 檔（`git pull`、手動編輯），`git diff`（相對 `head_at_start`）會把外部變更一起算進 artifact。M0 靠「單 live execution + `dirty_at_start` 稽核」降風險，**完全隔離留 M3 worktree**。此為刻意取捨，非未察缺陷。
@@ -346,10 +364,11 @@ docs/specs/2026-06-30-s6-...md   → 更新：疊五層 + execution_id + pull（
 5. **admission rule**：目標 repo 已有 live execution 時，新派工被拒且 error 明確。
 6. **sandbox clamp**：request 一個比 host policy 寬的 profile → `effective_sandbox_profile` 被 clamp 到 host policy。
 7. **SOT 分工**：Ploom 只投影、不推進；Purdex runtime 為狀態權威。
-8. **crash 可收斂（reclaim）**：daemon 在 claim 後 / launch 後崩潰重啟 → startup reconcile 把卡住 execution 判成 running 或 terminal，dispatch 不成殭屍。
-9. **launch fence**：同 execution_id 崩潰後 recovery **不重複起第二個 session**（重試＝新 dispatch/新 execution_id）。
-10. **terminal 韌性**：SIGTERM/異常退出（無 `result`）仍能收到 process-exit → 標 `failed`；不在 `result`-before-exit 時過早標 completed。
-11. **測試全綠**：Purdex `go test ./...` + `vitest` + `lint` + `build`；Ploom `go test ./...`。
+8. **crash 可收斂（reclaim）**：daemon 在 launch 後崩潰重啟 → startup reconcile 用預生 `session_code` 探 tmux 活性 → 判 running 或 terminal，dispatch 不成殭屍；**完成的 execution 進 terminal 後，同 repo 後續派工不再被 admission 卡死**（liveness 看 status，R2 #1）。
+9. **launch fence + 孤兒收斂**：同 execution_id 崩潰後 recovery **不重複起第二個 session**；`launching` crash window 靠預生 `session_code` 探得回 child，判 failed 時**收孤兒**不留野 subprocess 改 repo（R2 #2）。
+10. **terminal 時點 vs 成敗分類**：時點認 process-exit；`exit 0 但 result.is_error`（refusal/tool failure）→ 正確標 **failed** 而非 completed（R2 #4）；不在 `result`-before-exit 時過早標 terminal。
+11. **accepted durability**：daemon 在 accepted in-flight 掉失後重啟 → 能**從 durable execution row 重建 accepted 並 replay**，Ploom 不永久卡 `accepted_required`（R2 #3）。
+12. **測試全綠**：Purdex `go test ./...` + `vitest` + `lint` + `build`；Ploom `go test ./...`。
 
 ---
 
