@@ -346,4 +346,30 @@ describe('hostsContributor.deserialize (full-replace, token preservation)', () =
     expect('token' in roundTripped).toBe(true)
     expect(roundTripped.token).toBeNull()
   })
+
+  it('scheme 變更（http→https，ip/port 相同）視為換 endpoint → token 重置為 null', () => {
+    useHostStore.setState({
+      hosts: {
+        // scheme 缺省 = http
+        h1: { id: 'h1', name: 'A', ip: '10.0.0.1', port: 7860, token: 'SECRET-A', order: 0 },
+      },
+      hostOrder: ['h1'],
+      activeHostId: 'h1',
+    })
+
+    const contributor = createHostsContributor()
+    contributor.deserialize(
+      {
+        version: 1,
+        data: {
+          hosts: { h1: { id: 'h1', name: 'A', ip: '10.0.0.1', port: 7860, scheme: 'https', order: 0 } },
+          hostOrder: ['h1'],
+          activeHostId: 'h1',
+        },
+      },
+      { type: 'full-replace' },
+    )
+
+    expect(useHostStore.getState().hosts.h1.token).toBeNull()
+  })
 })

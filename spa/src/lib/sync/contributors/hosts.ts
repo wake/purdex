@@ -3,6 +3,7 @@
 // =============================================================================
 
 import { useHostStore, type HostConfig } from '../../../stores/useHostStore'
+import { hostEndpointKey } from '../../host-endpoint'
 import type { SyncContributor, FullPayload, MergeStrategy } from '../types'
 
 // Apply an incoming (token-stripped) host map onto the current state, preserving
@@ -21,8 +22,7 @@ function mergeHostsPreservingTokens(
     const currentHost = current[id]
     const sameEndpoint =
       currentHost !== undefined &&
-      currentHost.ip === host.ip &&
-      currentHost.port === host.port
+      hostEndpointKey(currentHost) === hostEndpointKey(host)
     merged[id] = { ...host, token: sameEndpoint ? currentHost.token : null }
   }
   return merged

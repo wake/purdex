@@ -13,6 +13,7 @@ import {
   type MonitorSnapshot,
 } from '../lib/host-api'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
+import { hostEndpointKey } from '../lib/host-endpoint'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
@@ -495,7 +496,7 @@ function collectSnapshotHostTargets(activeHostId: string | null, rows: PaneRow[]
 }
 
 function snapshotHostTargetKey(host: HostConfig) {
-  return JSON.stringify([host.id, host.ip, host.port, host.token ?? ''])
+  return JSON.stringify([host.id, hostEndpointKey(host), host.token ?? ''])
 }
 
 async function fetchSnapshotResult(hostId: string, timeoutMS?: number): Promise<{ hostId: string; snapshot?: MonitorSnapshot; error?: unknown }> {

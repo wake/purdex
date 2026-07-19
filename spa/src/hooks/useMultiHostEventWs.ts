@@ -13,19 +13,20 @@ import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { scanPaneTree } from '../lib/pane-tree'
 import { hostWsUrl, fetchWsTicket, fetchHistory, type Session } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
+import { hostEndpointKey } from '../lib/host-endpoint'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
 
 interface HostEntry {
   conn: EventConnection
   sm: ConnectionStateMachine
-  configKey: string // "ip:port"
+  configKey: string // hostEndpointKey
 }
 
 export function useMultiHostEventWs() {
   const hostConfigKey = useHostStore((s) =>
     s.hostOrder.map((id) => {
       const h = s.hosts[id]
-      return h ? `${id}:${h.ip}:${h.port}` : id
+      return h ? `${id}:${hostEndpointKey(h)}` : id
     }).join(',')
   )
 
@@ -50,7 +51,7 @@ export function useMultiHostEventWs() {
       const host = hosts[hostId]
       if (!host) continue
 
-      const configKey = `${host.ip}:${host.port}`
+      const configKey = hostEndpointKey(host)
       const existing = entries.get(hostId)
 
       if (existing && existing.configKey === configKey) {
