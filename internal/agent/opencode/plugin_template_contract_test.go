@@ -273,8 +273,8 @@ func (s *pluginSimState) simulateToolExecuteAfter(input, output map[string]any) 
 }
 
 // resolveSid mirrors the JS template's defensive session-id resolution:
-// `event.properties.sessionID || event.properties.info?.id || ''`. The
-// generated SDK type lists only `info` for session.created/deleted, so the
+// prefer properties.sessionID, fall back to properties.info.id, else empty.
+// The generated SDK type lists only info for session.created/deleted, so the
 // top-level sessionID is not guaranteed across versions.
 func resolveSid(properties map[string]any) string {
 	if sid := strMapVal(properties, "sessionID"); sid != "" {
@@ -506,7 +506,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "session.created",
 			fixtureFile: "session.created.json",
 			kind:        "bus-event",
-			expectName: "PdxSessionStart",
+			expectName:  "PdxSessionStart",
 			expectPayload: map[string]any{
 				"session_id": "ses_fixture_session_created_001",
 			},
@@ -515,7 +515,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "permission.asked",
 			fixtureFile: "permission.asked.json",
 			kind:        "bus-event",
-			expectName: "PdxPermissionRequest",
+			expectName:  "PdxPermissionRequest",
 			expectPayload: map[string]any{
 				"request_type": "permission",
 				"permission":   "edit",
@@ -526,7 +526,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "question.asked",
 			fixtureFile: "question.asked.json",
 			kind:        "bus-event",
-			expectName: "PdxPermissionRequest",
+			expectName:  "PdxPermissionRequest",
 			expectPayload: map[string]any{
 				"request_type": "question",
 				"questions": []any{
@@ -539,7 +539,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "session.error",
 			fixtureFile: "session.error.json",
 			kind:        "bus-event",
-			expectName: "PdxStopFailure",
+			expectName:  "PdxStopFailure",
 			expectPayload: map[string]any{
 				"error":         "ProviderError",
 				"error_details": "request timed out",
@@ -549,7 +549,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "session.status",
 			fixtureFile: "session.status.json",
 			kind:        "bus-event",
-			expectName: "PdxStop",
+			expectName:  "PdxStop",
 			expectPayload: map[string]any{
 				"session_id": "ses_fixture_status_idle_001",
 			},
@@ -558,7 +558,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "session.deleted",
 			fixtureFile: "session.deleted.json",
 			kind:        "bus-event",
-			expectName: "PdxSessionEnd",
+			expectName:  "PdxSessionEnd",
 			expectPayload: map[string]any{
 				"session_id": "ses_fixture_deleted_001",
 			},
@@ -567,7 +567,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "chat.message",
 			fixtureFile: "chat.message.json",
 			kind:        "strong-hook",
-			expectName: "PdxUserPromptSubmit",
+			expectName:  "PdxUserPromptSubmit",
 			expectPayload: map[string]any{
 				"session_id": "ses_fixture_chat_001",
 				"message_id": "msg_fixture_chat_001",
@@ -580,7 +580,7 @@ func TestOpenCodePluginTemplate_UsesVerifiedEvents(t *testing.T) {
 			event:       "tool.execute.before",
 			fixtureFile: "tool.execute.before.json",
 			kind:        "strong-hook",
-			expectName: "PdxSubagentStart",
+			expectName:  "PdxSubagentStart",
 			expectPayload: map[string]any{
 				"agent_id":    "call_fixture_task_001",
 				"agent_type":  "Explore",
