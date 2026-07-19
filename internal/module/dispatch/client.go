@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,10 @@ var (
 	// ErrUnauthorized — token invalid or lacks permission (401/403). Permanent
 	// failure; the worker logs and does not retry.
 	ErrUnauthorized = errors.New("unauthorized")
+	// ErrAcceptedRequired — a lifecycle report (running/completed/failed) was
+	// sent before accepted(seq=1) was acked (409 accepted_required). The report
+	// sender must (re)send accepted, get it acked, then retry (m0-contract §4/§7).
+	ErrAcceptedRequired = errors.New("accepted report must be acked before lifecycle")
 )
 
 // PloomError is returned for wire failures that do not map to a sentinel above
@@ -211,6 +216,35 @@ func (c *Client) Fetch(ctx context.Context, dispatchID string) (DispatchDetail, 
 	}, nil
 }
 
+// ReportResult is the E4 report response: the highest per-execution seq Ploom
+// has projected. On a stale_seq (seq ≤ ack_seq) Ploom still replies 200 with the
+// current ack_seq — that is not an error, just a no-op the sender treats as a
+// cursor advance (m0-contract §4).
+type ReportResult struct {
+	AckSeq int
+}
+
+// Report performs E4: POST /daemon/dispatches/{id}/report with the given
+// pre-marshalled JSON payload (built by the outbox/report sender). It returns the
+// acked seq on success. On the ordering violation it returns ErrAcceptedRequired
+// (409 accepted_required); on auth failure ErrUnauthorized (401/403, permanent);
+// on 5xx a Retryable PloomError. A stale_seq is a normal 200 with ack_seq.
+func (c *Client) Report(ctx context.Context, dispatchID string, payload []byte) (ReportResult, error) {
+	path := "/daemon/dispatches/" + url.PathEscape(dispatchID) + "/report"
+	data, err := c.call(ctx, http.MethodPost, path, bytes.NewReader(payload))
+	if err != nil {
+		return ReportResult{}, err
+	}
+	var resp struct {
+		SchemaVersion int `json:"schema_version"`
+		AckSeq        int `json:"ack_seq"`
+	}
+	if err := decodeChecked(data, &resp); err != nil {
+		return ReportResult{}, err
+	}
+	return ReportResult{AckSeq: resp.AckSeq}, nil
+}
+
 // call issues one authenticated request and returns the raw body on HTTP 200, or
 // a classified error otherwise.
 func (c *Client) call(ctx context.Context, method, path string, body io.Reader) ([]byte, error) {
@@ -220,6 +254,9 @@ func (c *Client) call(ctx context.Context, method, path string, body io.Reader) 
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Purdex-Schema-Version", fmt.Sprintf("%d", SchemaVersion))
@@ -281,6 +318,8 @@ func classifyError(status int, data []byte) error {
 		return fmt.Errorf("%w: %s", ErrDispatchNotFound, msg)
 	case "schema_incompatible":
 		return fmt.Errorf("%w: %s", ErrSchemaIncompatible, msg)
+	case "accepted_required":
+		return fmt.Errorf("%w: %s", ErrAcceptedRequired, msg)
 	}
 	return &PloomError{HTTPStatus: status, Code: code, Message: msg}
 }
