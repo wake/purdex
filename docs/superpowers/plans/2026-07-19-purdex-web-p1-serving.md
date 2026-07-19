@@ -1,12 +1,14 @@
 # Purdex Web P1 — daemon 靜態託管 SPA Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **修訂 r2**（codex plan review 後）：dev override 改 `os.OpenRoot` containment；fallback 只在 stat 失敗時觸發（保留目錄語意）；`Handler` fail-fast 驗 `index.html`；補 IPWhitelist / pairing-mode / 裸路徑 redirect / OPTIONS preflight / HEAD 測試。
 
 **Goal:** 讓 daemon 在 `/` 提供 build 好的 SPA，並以明確路由/中介層矩陣確保 `/api/*`、`/ws/*` 仍走既有 auth，靜態殼在 auth 之前——使 `https://purdex.mlab.host/` 純瀏覽器可載入 app。
 
-**Architecture:** 新增 `internal/webui` 套件：`embed.FS`（production 烘焙）+ `PDX_SPA_DIR` 磁碟覆寫（dev 迭代），對外 `Handler(spaDir)` 回傳含 SPA history fallback、GET/HEAD 限定、path-traversal 安全（`fs.FS` + `http.FileServerFS`）的 handler。`cmd/pdx/main.go` 的 outer mux 抽成可測函式 `buildHTTPHandler(...)`，套用路由矩陣。
+**Architecture:** 新增 `internal/webui` 套件：`embed.FS`（production 烘焙）+ `PDX_SPA_DIR` 磁碟覆寫（dev 迭代，`os.OpenRoot` containment），對外 `Handler(spaDir)` 回傳含 SPA history fallback、GET/HEAD 限定、fail-fast 的 handler。`cmd/pdx/main.go` 的 outer mux 抽成可測函式 `buildHTTPHandler(...)`，套用路由矩陣。
 
-**Tech Stack:** Go / net/http（Go 1.22+ ServeMux method+pattern 路由）/ `embed` / `io/fs`。
+**Tech Stack:** Go 1.25 / net/http（Go 1.22+ ServeMux method+pattern 路由）/ `embed` / `io/fs` / `os.OpenRoot`（Go 1.24+）。
 
 ## Global Constraints
 
@@ -17,30 +19,31 @@
   | `/api/` prefix | `CORS`→`IPWhitelist`→`PairingGuard`→`TokenAuth`→`mux` | protected |
   | `/ws/` prefix | `CORS`→`IPWhitelist`→`PairingGuard`→`TokenAuth`→`mux` | protected；三條 WS 皆 `/ws/...` |
   | 其餘（static/SPA fallback） | `CORS`→`IPWhitelist`（**保留**）→ **bypass `PairingGuard` 與 `TokenAuth`** | 靜態殼 pre-auth |
-- 靜態 handler **僅接受 `GET`/`HEAD`**；非此二者回 `405`。
-- SPA history fallback：requested path 不對應實體檔時回 `index.html`（讓前端路由運作），**但 `/api/` 與 `/ws/` 不經過 static**（由 outer mux 前綴路由保證）。
-- **Path traversal 安全**：一律經 `io/fs`（`fs.Sub` / `os.DirFS`）+ `http.FileServerFS`，**禁止**手刻 `filepath.Join(dir, r.URL.Path)`。
+- 靜態 handler **僅接受 `GET`/`HEAD`**；非此二者回 `405`。**CORS preflight（`OPTIONS`）由最外層 `CORS` middleware 回 `204`，不會進到 static handler 的 405 分支。**
+- SPA history fallback：requested path **無法 stat 到既有 entry**（未知 client route、或 invalid/traversal 路徑）時回 `index.html`；**既有的檔案與目錄一律交給 `http.FileServerFS`**（保留標準靜態/目錄語意）。`/api/`、`/ws/` 不經 static（outer mux 前綴路由保證）。
+- **Path 安全**：embedded 用 `fs.Sub(embedded,"dist")`；dev override 用 `os.OpenRoot(spaDir).FS()`（symlink-contained，不會逃出 `spaDir`；Go 1.24+）。**禁止**手刻 `filepath.Join(dir, r.URL.Path)`。
+- `Handler` **fail-fast**：建構時 `fs.Stat(fsys,"index.html")`，缺檔即回 error（dev 路徑打錯/未 build 時立即失敗，而非首個請求才 404）。
 - 已驗證：repo 內所有 daemon 路由都在 `/api/` 或 `/ws/` 前綴下（無裸路徑），故 static 不會吃到任何 API/WS 路由。
-- 現有 middleware 簽章：`middleware.CORS(h)`、`middleware.IPWhitelist(cfg.Allow)(h)`、`middleware.PairingGuard(func() bool)(h)`、`middleware.TokenAuth(func() string, tickets)(h)`。
-- 測試：`go test ./...`；建置：`go build ./...`（在 worktree 根目錄）。
+- 現有 middleware：`middleware.CORS(h)`（OPTIONS→204）、`middleware.IPWhitelist(cfg.Allow)(h)`（`allow` 為空→放行；非空比對 `RemoteAddr`，不符回 `403`）、`middleware.PairingGuard(func()bool)(h)`（pairing 且非 `/api/pair/`→`503`）、`middleware.TokenAuth(func()string, middleware.TicketValidator)(h)`（token 為空→放行；否則需 Bearer/ticket，不符 `401`）。
+- 測試：`go test ./...`；建置：`go build ./...`（worktree 根）。
 - 每個 task 獨立 commit。
 
 ---
 
 ## File Structure
 
-- **Create** `internal/webui/webui.go` — `Handler(spaDir string) (http.Handler, error)`：選 fsys（`spaDir` 非空→`os.DirFS`，否則 `fs.Sub(embedded,"dist")`）；SPA fallback；GET/HEAD 限定。單一責任。
+- **Create** `internal/webui/webui.go` — `Handler(spaDir string) (http.Handler, error)`。
 - **Create** `internal/webui/embed.go` — `//go:embed all:dist` → `var embedded embed.FS`。
-- **Create** `internal/webui/dist/index.html` — 佔位頁（production build 會以真 `spa/dist` 覆蓋；確保 `go:embed` 可編譯）。
-- **Create** `internal/webui/webui_test.go` — Handler 行為測試（用 temp dir 當 spaDir）。
-- **Modify** `.gitignore` — 忽略 `internal/webui/dist/` 內除 `index.html` 佔位以外的建置產物（`assets/`、`icons/` 等）。
-- **Modify** `cmd/pdx/main.go` — 抽出 `buildHTTPHandler(...)`；套路由矩陣；讀 `PDX_SPA_DIR`；`Handler` 掛入 outer mux。
-- **Create** `cmd/pdx/serve_routing_test.go` — 路由矩陣測試（health bypass / `/api/` 與 `/ws/` protected / static 服務 / `/ws/` 不被 fallback 吃 / token-on 仍載靜態殼）。
-- **Modify** `CLAUDE.md`（「打包與更新」段）— 補 production embed 的 build 步驟與 dev 的 `PDX_SPA_DIR` 用法。
+- **Create** `internal/webui/dist/index.html` — 佔位頁（production build 以真 `spa/dist` 覆蓋；確保 `go:embed` 可編譯）。
+- **Create** `internal/webui/webui_test.go` — Handler 行為測試（temp dir 當 spaDir）。
+- **Modify** `.gitignore` — 忽略 `internal/webui/dist/` 內除 `index.html` 佔位外的建置產物。
+- **Modify** `cmd/pdx/main.go` — 抽 `buildHTTPHandler(...)`；套路由矩陣；讀 `PDX_SPA_DIR`。
+- **Create** `cmd/pdx/serve_routing_test.go` — 路由矩陣測試。
+- **Modify** `CLAUDE.md`（「打包與更新」段）— production embed build 步驟 + dev `PDX_SPA_DIR`。
 
 ---
 
-## Task 1: internal/webui 套件（embed + dev-dir override + SPA fallback）
+## Task 1: internal/webui 套件
 
 **Files:**
 - Create: `internal/webui/webui.go`, `internal/webui/embed.go`, `internal/webui/dist/index.html`
@@ -48,11 +51,11 @@
 - Test: `internal/webui/webui_test.go`
 
 **Interfaces:**
-- Produces: `func webui.Handler(spaDir string) (http.Handler, error)` — `spaDir==""` 用 embedded；否則用磁碟目錄。
+- Produces: `func webui.Handler(spaDir string) (http.Handler, error)` — `spaDir==""` 用 embedded；否則用磁碟目錄（`os.OpenRoot`）。缺 `index.html` 回 error。
 
 - [ ] **Step 1: 佔位頁 + embed + .gitignore**
 
-建 `internal/webui/dist/index.html`：
+`internal/webui/dist/index.html`：
 
 ```html
 <!doctype html>
@@ -63,7 +66,7 @@
 <body>Purdex SPA placeholder — build the SPA to populate this.</body>
 ```
 
-建 `internal/webui/embed.go`：
+`internal/webui/embed.go`：
 
 ```go
 package webui
@@ -78,11 +81,11 @@ import "embed"
 var embedded embed.FS
 ```
 
-於 `.gitignore` 末尾加入（忽略建置產物但保留佔位頁）：
+`.gitignore` 末尾：
 
 ```gitignore
-# Purdex web (P1): embedded SPA build artifacts — populated at build time,
-# placeholder index.html is tracked so go:embed always compiles.
+# Purdex web (P1): embedded SPA build artifacts — populated at build time.
+# The placeholder index.html stays tracked so go:embed always compiles.
 /internal/webui/dist/*
 !/internal/webui/dist/index.html
 ```
@@ -101,7 +104,6 @@ import (
 	"testing"
 )
 
-// tmpSPA writes a minimal SPA tree to a temp dir and returns its path.
 func tmpSPA(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -151,7 +153,20 @@ func TestHandler_SPAFallbackForUnknownPath(t *testing.T) {
 	}
 }
 
-func TestHandler_RejectsNonGet(t *testing.T) {
+func TestHandler_HeadRequests(t *testing.T) {
+	h, _ := Handler(tmpSPA(t))
+	// HEAD on an unknown client route must still succeed (fallback), body empty.
+	rec := doReq(t, h, "HEAD", "/some/client/route")
+	if rec.Code != 200 {
+		t.Fatalf("HEAD fallback: got %d", rec.Code)
+	}
+	rec2 := doReq(t, h, "HEAD", "/assets/app.js")
+	if rec2.Code != 200 {
+		t.Fatalf("HEAD asset: got %d", rec2.Code)
+	}
+}
+
+func TestHandler_RejectsNonGetHead(t *testing.T) {
 	h, _ := Handler(tmpSPA(t))
 	rec := doReq(t, h, "POST", "/")
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -161,11 +176,18 @@ func TestHandler_RejectsNonGet(t *testing.T) {
 
 func TestHandler_NoPathTraversal(t *testing.T) {
 	h, _ := Handler(tmpSPA(t))
-	// A traversal attempt must not escape the SPA root. With fs.FS semantics
-	// the cleaned path stays contained; worst case it falls back to index.
+	// A traversal attempt must not escape the SPA root; worst case it falls
+	// back to index.html (never leaks a file outside the root).
 	rec := doReq(t, h, "GET", "/../../etc/passwd")
 	if rec.Code == 200 && rec.Body.String() != "<html>ROOT</html>" {
 		t.Fatalf("traversal leaked: %q", rec.Body.String())
+	}
+}
+
+func TestHandler_FailFastMissingIndex(t *testing.T) {
+	// A dir without index.html must fail at construction, not at first request.
+	if _, err := Handler(t.TempDir()); err == nil {
+		t.Fatal("expected error for missing index.html, got nil")
 	}
 }
 ```
@@ -182,27 +204,39 @@ Expected: FAIL（`undefined: Handler`）。
 package webui
 
 import (
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
+	"strings"
 )
 
 // Handler serves the SPA. When spaDir is non-empty it serves that directory
-// from disk (dev iteration via PDX_SPA_DIR); otherwise it serves the embedded
-// production build. Unknown paths fall back to index.html (SPA history
-// routing). Only GET/HEAD are accepted — callers route /api/* and /ws/* to
-// the protected mux before reaching here.
+// from disk via os.OpenRoot (symlink-contained; cannot escape spaDir) for dev
+// iteration through PDX_SPA_DIR; otherwise it serves the embedded production
+// build. Unknown paths fall back to index.html (SPA history routing). Only
+// GET/HEAD are accepted — callers route /api/* and /ws/* to the protected mux
+// before reaching here, and CORS handles OPTIONS preflight upstream.
 func Handler(spaDir string) (http.Handler, error) {
 	var fsys fs.FS
 	if spaDir != "" {
-		fsys = os.DirFS(spaDir)
+		root, err := os.OpenRoot(spaDir)
+		if err != nil {
+			return nil, fmt.Errorf("webui: open spa dir %q: %w", spaDir, err)
+		}
+		fsys = root.FS()
 	} else {
 		sub, err := fs.Sub(embedded, "dist")
 		if err != nil {
 			return nil, err
 		}
 		fsys = sub
+	}
+
+	// Fail-fast: the SPA is unusable without index.html.
+	if _, err := fs.Stat(fsys, "index.html"); err != nil {
+		return nil, fmt.Errorf("webui: index.html missing under spa root: %w", err)
 	}
 
 	fileServer := http.FileServerFS(fsys)
@@ -213,51 +247,42 @@ func Handler(spaDir string) (http.Handler, error) {
 			return
 		}
 
-		// Resolve to an fs path. fs.FS rejects paths with ".." elements, so
-		// traversal cannot escape the SPA root.
 		p := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 		if p == "" || p == "." {
 			p = "index.html"
 		}
 
-		if info, err := fs.Stat(fsys, p); err != nil || info.IsDir() {
-			// Unknown path (or a directory) → SPA history fallback to index.html.
-			serveIndex(w, r, fsys)
+		// SPA history fallback: a path that doesn't stat to an existing entry
+		// (unknown client route, or an invalid/traversal path) serves
+		// index.html. Existing files AND directories fall through to
+		// FileServerFS, preserving standard static/dir semantics.
+		if _, err := fs.Stat(fsys, p); err != nil {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = "/"
+			fileServer.ServeHTTP(w, r2)
 			return
 		}
 		fileServer.ServeHTTP(w, r)
 	}), nil
 }
-
-func serveIndex(w http.ResponseWriter, r *http.Request, fsys fs.FS) {
-	data, err := fs.ReadFile(fsys, "index.html")
-	if err != nil {
-		http.Error(w, "index.html not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(data)
-}
 ```
-
-於 import 區加入 `"strings"`（`path.Clean` 與 `strings.TrimPrefix` 都會用到）：確保 import 為 `io/fs`、`net/http`、`os`、`path`、`strings`。
 
 - [ ] **Step 5: 跑測試確認通過**
 
 Run: `go test ./internal/webui/`
-Expected: PASS（5 tests）。
+Expected: PASS（7 tests）。
 
 - [ ] **Step 6: Commit**
 
 ```bash
 cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/web-version
 git add internal/webui/ .gitignore
-git commit -m "feat(webui): SPA serving handler with embed + PDX_SPA_DIR override (P1)"
+git commit -m "feat(webui): SPA serving handler (embed + PDX_SPA_DIR via os.OpenRoot) (P1)"
 ```
 
 ---
 
-## Task 2: main.go 路由矩陣（抽成可測函式 + wiring）
+## Task 2: main.go 路由矩陣
 
 **Files:**
 - Modify: `cmd/pdx/main.go`
@@ -265,7 +290,7 @@ git commit -m "feat(webui): SPA serving handler with embed + PDX_SPA_DIR overrid
 
 **Interfaces:**
 - Consumes: `webui.Handler`（Task 1）。
-- Produces: `func buildHTTPHandler(inner http.Handler, spa http.Handler, allow []string, isPairing func() bool, tokenFn func() string, tickets middleware.TicketValidator, health http.Handler) http.Handler` — 組出套用路由矩陣的 outer handler。**已確認型別**：`tickets` 用介面 `middleware.TicketValidator`（`c.Tickets` 為 `*core.TicketStore`，實作此介面，可直接傳入；test 傳 `nil` 亦合法）。module path = `github.com/wake/purdex`，故 import `github.com/wake/purdex/internal/webui`。
+- Produces: `func buildHTTPHandler(inner http.Handler, spa http.Handler, allow []string, isPairing func() bool, tokenFn func() string, tickets middleware.TicketValidator, health http.Handler) http.Handler`。**型別已確認**：`tickets` 用介面 `middleware.TicketValidator`（`c.Tickets` 為 `*core.TicketStore`，實作它；test 傳 `nil` 合法）。`core` import 在 `main.go` 已存在。
 
 - [ ] **Step 1: 寫失敗測試**
 
@@ -279,7 +304,6 @@ import (
 	"testing"
 )
 
-// stubHandler records whether it was reached and returns a marker.
 func stubHandler(marker string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
@@ -287,65 +311,123 @@ func stubHandler(marker string) http.Handler {
 	})
 }
 
-func buildTestHandler(tokenFn func() string) http.Handler {
+// buildTestHandler wires a minimal inner mux + SPA/health stubs through the
+// real buildHTTPHandler with the given auth/whitelist/pairing knobs.
+func buildTestHandler(tokenFn func() string, allow []string, isPairing func() bool) http.Handler {
 	inner := http.NewServeMux()
 	inner.Handle("GET /api/info", stubHandler("API_INFO"))
 	inner.Handle("/ws/host-events", stubHandler("WS"))
 	spa := stubHandler("SPA")
 	health := stubHandler("HEALTH")
-	return buildHTTPHandler(inner, spa, nil /*allow=all*/, func() bool { return false }, tokenFn, nil, health)
+	return buildHTTPHandler(inner, spa, allow, isPairing, tokenFn, nil, health)
 }
 
-func req(t *testing.T, h http.Handler, method, target string, auth string) *httptest.ResponseRecorder {
+func req(t *testing.T, h http.Handler, method, target, auth, remote string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(method, target, nil)
 	if auth != "" {
 		r.Header.Set("Authorization", auth)
+	}
+	if remote != "" {
+		r.RemoteAddr = remote
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	return rec
 }
 
+func tokenOn() string  { return "SEKRIT" }
+func tokenOff() string { return "" }
+func noPairing() bool  { return false }
+
 func TestRouting_HealthBypassesAuth(t *testing.T) {
-	h := buildTestHandler(func() string { return "SEKRIT" }) // token ON
-	rec := req(t, h, "GET", "/api/health", "")
+	h := buildTestHandler(tokenOn, nil, noPairing)
+	rec := req(t, h, "GET", "/api/health", "", "")
 	if rec.Body.String() != "HEALTH" {
 		t.Fatalf("health: got %q", rec.Body.String())
 	}
 }
 
 func TestRouting_StaticServedWithoutToken(t *testing.T) {
-	h := buildTestHandler(func() string { return "SEKRIT" }) // token ON
-	// Static shell must load even when a token is required (pre-auth).
-	rec := req(t, h, "GET", "/", "")
+	h := buildTestHandler(tokenOn, nil, noPairing) // token ON
+	rec := req(t, h, "GET", "/", "", "")
 	if rec.Body.String() != "SPA" {
-		t.Fatalf("static: got %q (code %d)", rec.Body.String(), rec.Code)
+		t.Fatalf("static root: got %q (code %d)", rec.Body.String(), rec.Code)
 	}
-	rec2 := req(t, h, "GET", "/assets/app.js", "")
+	rec2 := req(t, h, "GET", "/assets/app.js", "", "")
 	if rec2.Body.String() != "SPA" {
 		t.Fatalf("static asset: got %q", rec2.Body.String())
 	}
 }
 
 func TestRouting_ApiRequiresAuthWhenTokenSet(t *testing.T) {
-	h := buildTestHandler(func() string { return "SEKRIT" }) // token ON
-	rec := req(t, h, "GET", "/api/info", "") // no auth
+	h := buildTestHandler(tokenOn, nil, noPairing)
+	rec := req(t, h, "GET", "/api/info", "", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("api no-auth: got %d, want 401", rec.Code)
 	}
-	rec2 := req(t, h, "GET", "/api/info", "Bearer SEKRIT")
+	rec2 := req(t, h, "GET", "/api/info", "Bearer SEKRIT", "")
 	if rec2.Body.String() != "API_INFO" {
 		t.Fatalf("api with-auth: got %q (code %d)", rec2.Body.String(), rec2.Code)
 	}
 }
 
 func TestRouting_WsNotEatenByStaticFallback(t *testing.T) {
-	h := buildTestHandler(func() string { return "" }) // token OFF
-	// /ws/* must route to the protected mux (WS marker), not the SPA fallback.
-	rec := req(t, h, "GET", "/ws/host-events", "")
+	h := buildTestHandler(tokenOff, nil, noPairing)
+	rec := req(t, h, "GET", "/ws/host-events", "", "")
 	if rec.Body.String() != "WS" {
 		t.Fatalf("ws routing: got %q — static fallback ate the WS route", rec.Body.String())
+	}
+}
+
+func TestRouting_StaticStillSubjectToIPWhitelist(t *testing.T) {
+	h := buildTestHandler(tokenOff, []string{"127.0.0.1"}, noPairing)
+	// Disallowed source (httptest default RemoteAddr 192.0.2.1) → static blocked.
+	rec := req(t, h, "GET", "/", "", "192.0.2.1:1234")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("static from disallowed IP: got %d, want 403", rec.Code)
+	}
+	// Allowed source → static served.
+	rec2 := req(t, h, "GET", "/", "", "127.0.0.1:1234")
+	if rec2.Body.String() != "SPA" {
+		t.Fatalf("static from allowed IP: got %q (code %d)", rec2.Body.String(), rec2.Code)
+	}
+}
+
+func TestRouting_PairingModeBlocksApiButNotStatic(t *testing.T) {
+	inPairing := func() bool { return true }
+	h := buildTestHandler(tokenOff, nil, inPairing)
+	// Static shell must load during pairing (bypasses PairingGuard).
+	recStatic := req(t, h, "GET", "/", "", "")
+	if recStatic.Body.String() != "SPA" {
+		t.Fatalf("pairing static: got %q (code %d)", recStatic.Body.String(), recStatic.Code)
+	}
+	// A non-pairing API route is blocked with 503 while pairing.
+	recApi := req(t, h, "GET", "/api/info", "", "")
+	if recApi.Code != http.StatusServiceUnavailable {
+		t.Fatalf("pairing /api/info: got %d, want 503", recApi.Code)
+	}
+}
+
+func TestRouting_BareApiPrefixRedirects(t *testing.T) {
+	h := buildTestHandler(tokenOff, nil, noPairing)
+	// Go 1.22+ ServeMux redirects the bare prefix "/api" → "/api/". Lock this
+	// documented behavior change (no client depends on bare /api or /ws).
+	rec := req(t, h, "GET", "/api", "", "")
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("/api redirect: got %d, want 301", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/api/" {
+		t.Fatalf("/api redirect Location: got %q, want /api/", loc)
+	}
+}
+
+func TestRouting_OptionsPreflightHandledByCORS(t *testing.T) {
+	h := buildTestHandler(tokenOn, nil, noPairing)
+	// CORS middleware answers OPTIONS with 204 before reaching the SPA handler.
+	rec := req(t, h, "OPTIONS", "/", "", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS preflight: got %d, want 204", rec.Code)
 	}
 }
 ```
@@ -357,7 +439,7 @@ Expected: FAIL（`undefined: buildHTTPHandler`）。
 
 - [ ] **Step 3: 實作 buildHTTPHandler + 改 wiring**
 
-在 `cmd/pdx/main.go` 新增函式（放在 `main` 之外、檔案下方）：
+`cmd/pdx/main.go` 新增函式（`main` 之外）：
 
 ```go
 // buildHTTPHandler applies the P1 routing/middleware matrix:
@@ -365,7 +447,8 @@ Expected: FAIL（`undefined: buildHTTPHandler`）。
 //   /api/ , /ws/ (prefix)   → CORS→IPWhitelist→PairingGuard→TokenAuth→inner
 //   everything else         → CORS→IPWhitelist→spa (static shell, pre-auth)
 // All daemon routes live under /api/ or /ws/, so the static catch-all never
-// shadows an API/WS route; the SPA handler itself restricts to GET/HEAD.
+// shadows an API/WS route; the SPA handler itself restricts to GET/HEAD and
+// CORS answers OPTIONS upstream.
 func buildHTTPHandler(
 	inner http.Handler,
 	spa http.Handler,
@@ -391,9 +474,7 @@ func buildHTTPHandler(
 }
 ```
 
-> 型別已確認：`tickets` 用 `middleware.TicketValidator`（介面），`c.Tickets`（`*core.TicketStore`）實作它，`buildHTTPHandler(..., c.Tickets, ...)` 直接傳入即可。`core` import 在 `main.go` 已存在（`core.StatePairing`），無需為此新增。
-
-在 `main` 內，把現有的：
+在 `main` 內，把現有的（`cmd/pdx/main.go:193-205`）：
 
 ```go
 	outerMux := http.NewServeMux()
@@ -430,19 +511,17 @@ func buildHTTPHandler(
 	)
 ```
 
-並確認 `cmd/pdx/main.go` import 區含 `"os"`、`"github.com/<module>/internal/webui"`（module path 依 `go.mod`）。`srv.Handler = outerMux` 之後維持不變（`outerMux` 現為 `http.Handler`，`http.Server{Handler: outerMux}` 需相容——`buildHTTPHandler` 回傳 `http.Handler`，直接指派即可）。
-
-> 若 `srv := &http.Server{ Handler: outerMux }` 因型別（原為 `*http.ServeMux`）需調整，把欄位型別視為 `http.Handler` 即可（`http.Server.Handler` 本就是 `http.Handler`）。
+Import：確認 `cmd/pdx/main.go` 含 `"os"` 與 `"github.com/wake/purdex/internal/webui"`。`err` 若在該作用域已宣告，用 `spaHandler, err := ...` 前確認無重複宣告衝突（必要時改 `spaHandler, herr := webui.Handler(...)` 並檢查 `herr`）。`srv := &http.Server{ Handler: outerMux }` 中 `Handler` 欄位本為 `http.Handler`，`buildHTTPHandler` 回傳 `http.Handler`，直接指派相容。
 
 - [ ] **Step 4: 跑測試確認通過**
 
 Run: `go test ./cmd/pdx/ -run TestRouting`
-Expected: PASS（4 tests）。
+Expected: PASS（8 tests）。
 
 - [ ] **Step 5: 全套 daemon 測試 + build**
 
 Run: `go test ./...`
-Expected: 全綠（既有 events_test 等不受影響——路由改為前綴分流，`/api/health` 與各 `/api/`、`/ws/` 行為等價）。
+Expected: 全綠（路由改前綴分流，各既有 `/api/`、`/ws/` 行為等價）。
 Run: `go build ./...`
 Expected: 成功。
 
@@ -461,19 +540,17 @@ git commit -m "feat(serve): routing/middleware matrix with static SPA pre-auth (
 **Files:**
 - Modify: `CLAUDE.md`（「打包與更新」段落）
 
-**Interfaces:** 無程式碼介面；文件化 production embed build 與 dev `PDX_SPA_DIR`。
-
-- [ ] **Step 1: 於 CLAUDE.md「打包與更新」段補入下列小節**
+- [ ] **Step 1: 於 CLAUDE.md「打包與更新」段補入**
 
 ```markdown
 ### Web 版靜態託管（P1）
 
-- **Dev（本分支迭代）**：daemon 以環境變數 `PDX_SPA_DIR` 指向已 build 的 SPA 目錄即可即時服務，不必重編 Go binary：
-  `cd spa && pnpm run build`（產出 `spa/dist`）→ 啟動 daemon 時帶 `PDX_SPA_DIR=<repo>/spa/dist`。
+- **Dev（本分支迭代）**：daemon 以 `PDX_SPA_DIR` 指向已 build 的 SPA 目錄即可即時服務，不必重編 Go binary：
+  `cd spa && pnpm run build`（產出 `spa/dist`）→ 啟動 daemon 時帶 `PDX_SPA_DIR=<repo>/spa/dist`。目錄或 `index.html` 不存在時 daemon 會啟動即失敗（fail-fast）。
 - **Production（單一 binary）**：build 前把 SPA 產出複製進 embed 目錄再編 Go：
   `cd spa && pnpm run build && rm -rf ../internal/webui/dist && mkdir -p ../internal/webui/dist && cp -r dist/* ../internal/webui/dist/ && cd .. && go build ./cmd/pdx`
-  （`internal/webui/dist/` 的建置產物已於 `.gitignore` 忽略，僅 `index.html` 佔位頁入版控以確保 `go:embed` 恆可編譯。）
-- **掛 `purdex.mlab.host`**：於 repo 根 `herd proxy purdex.mlab http://127.0.0.1:7860`（或既有 valet proxy 機制），TLS 走 `*.mlab.host` wildcard 憑證。daemon 須綁可達位址（`bind` = tailnet IP 或 `127.0.0.1`，視 proxy 而定）。
+  （`internal/webui/dist/` 的建置產物已於 `.gitignore` 忽略，僅 `index.html` 佔位入版控以確保 `go:embed` 恆可編譯。）
+- **掛 `purdex.mlab.host`**：於 repo 根 `herd proxy purdex.mlab http://127.0.0.1:7860`（或既有 valet proxy），TLS 走 `*.mlab.host` wildcard 憑證。daemon 綁可達位址（`bind` 依 proxy 而定）。
 ```
 
 - [ ] **Step 2: Commit**
@@ -490,16 +567,16 @@ git commit -m "docs(webui): document P1 SPA build/serve (embed + PDX_SPA_DIR + p
 
 - [ ] `go test ./...` — 全綠。
 - [ ] `go build ./...` — 成功。
-- [ ] 手動 smoke（主 Claude，於 worktree）：`cd spa && pnpm run build`，然後以 `PDX_SPA_DIR=$(pwd)/spa/dist` 啟一個臨時 daemon（非動 mlab live daemon），`curl -s localhost:<port>/` 應回 SPA index、`curl -s localhost:<port>/api/health` 應回 health JSON、`curl -so /dev/null -w '%{http_code}' localhost:<port>/some/spa/route` 應為 200（fallback）。
-- [ ] **交付使用者手動步驟**（碰 mlab live daemon，不由主 Claude 執行）：Mini 重 build `bin/pdx`、以 `PDX_SPA_DIR` 或 embed 方式啟動、`herd proxy purdex.mlab → :7860`，瀏覽器驗 `https://purdex.mlab.host/`。
+- [ ] 手動 smoke（主 Claude，於 worktree，**不動 mlab live daemon**）：`cd spa && pnpm run build`，以 `PDX_SPA_DIR=$(pwd)/dist` 啟臨時 daemon（隨機 port），`curl -s localhost:<port>/` 回 SPA index、`/api/health` 回 health JSON、`/some/spa/route` 回 200（fallback）、`/assets/...` 回實體檔。
+- [ ] **交付使用者手動步驟**（碰 mlab live daemon）：Mini 重 build/啟動 daemon（`PDX_SPA_DIR` 或 embed）、`herd proxy purdex.mlab → :7860`，瀏覽器驗 `https://purdex.mlab.host/`。
 
 ---
 
 ## Self-Review 對照 spec
 
-- **spec §5.1 靜態託管 + embed.FS/fs.Sub/FileServerFS** → Task 1（`internal/webui`，`http.FileServerFS` + `fs.FS`，無手刻 join）。✅
-- **spec §5.1 路由/中介層矩陣**（health bypass / `/api/`、`/ws/` protected / static 保留 IPWhitelist 繞 TokenAuth+PairingGuard / 僅 GET·HEAD / `/ws/` 不被 fallback 吃）→ Task 2（`buildHTTPHandler` + 4 routing tests）。✅
-- **spec §6.4 靜態殼 pre-auth、token 開啟時仍載得出** → `TestRouting_StaticServedWithoutToken`（token ON 仍回 SPA）。✅
-- **spec §5.1 Dev vs Prod serving** → Task 1（`PDX_SPA_DIR` override）+ Task 3（文件）。✅
-- **spec §6 防繞路**：static handler 不連任何 daemon、SPA 內連線仍走 P0 顯式 host+ticket（本 phase 不改前端連線）。✅
-- 無 placeholder；`buildHTTPHandler` 簽章跨 Task 2 test/impl 一致（`tickets` 型別以 `c.Tickets` 實際型別對齊）。✅
+- **spec §5.1 靜態託管 + fs.Sub/FileServerFS + path 安全** → Task 1（`http.FileServerFS` + `fs.Sub`/`os.OpenRoot`，無手刻 join；fail-fast）。✅
+- **spec §5.1 路由/中介層矩陣** → Task 2（`buildHTTPHandler` + 8 routing tests，含 health bypass / static pre-auth / `/api` 需 auth / `/ws` 不被 fallback 吃 / **static 仍受 IPWhitelist** / **pairing mode 擋 /api 不擋 static** / 裸路徑 redirect / OPTIONS 204）。✅
+- **spec §6.4 靜態殼 pre-auth、token 開啟仍載得出、IPWhitelist 保留** → `TestRouting_StaticServedWithoutToken` + `TestRouting_StaticStillSubjectToIPWhitelist` + `TestRouting_PairingModeBlocksApiButNotStatic`。✅
+- **spec §5.1 Dev vs Prod serving** → Task 1（`PDX_SPA_DIR` via `os.OpenRoot`）+ Task 3（文件）。✅
+- **spec §6 防繞路**：static handler 不連任何 daemon；SPA 內連線仍走 P0 顯式 host+ticket（本 phase 不改前端連線）。✅
+- 無 placeholder；`buildHTTPHandler` 簽章跨 Task 2 test/impl 一致。✅
