@@ -15,11 +15,14 @@ export function shouldRegisterServiceWorker(opts: {
   return opts.protocol === 'https:' || opts.protocol === 'http:'
 }
 
-// Only reload when an updated SW takes over a page that already had a
-// controller. The first-ever control acquisition (no prior controller) must
-// NOT reload, or every first load would refresh once.
-export function shouldReloadOnControllerChange(hadController: boolean): boolean {
-  return hadController
+// Stateful transition for each 'controllerchange' event. The first event
+// observed on an uncontrolled page is the initial SW claim — it must NOT
+// reload (or every first load would refresh once). Every subsequent event
+// (or the first event on an already-controlled page) is a real update
+// takeover and must reload.
+export function nextControllerChange(controlled: boolean): { controlled: boolean; reload: boolean } {
+  if (!controlled) return { controlled: true, reload: false }
+  return { controlled: true, reload: true }
 }
 
 export function registerServiceWorker(): void {
@@ -31,13 +34,15 @@ export function registerServiceWorker(): void {
   })
   if (!ok) return
 
-  const hadController = !!navigator.serviceWorker.controller
+  let controlled = !!navigator.serviceWorker.controller
   let reloading = false
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloading) return
-    if (!shouldReloadOnControllerChange(hadController)) return
-    reloading = true
-    window.location.reload()
+    const res = nextControllerChange(controlled)
+    controlled = res.controlled
+    if (res.reload && !reloading) {
+      reloading = true
+      window.location.reload()
+    }
   })
   navigator.serviceWorker.register('/sw.js').catch(() => {
     // Best-effort: any http origin is attempted, but non-trustworthy origins

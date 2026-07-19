@@ -28,7 +28,12 @@ self.addEventListener('fetch', (event) => {
 
   // Only same-origin GET. Never touch API/WS — let them hit the network directly.
   if (req.method !== 'GET' || url.origin !== self.location.origin) return
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) return
+  if (
+    url.pathname === '/api' ||
+    url.pathname === '/ws' ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/ws/')
+  ) return
 
   // Navigations: network-first; fall back to the cached shell only when offline.
   if (req.mode === 'navigate') {
@@ -36,9 +41,12 @@ self.addEventListener('fetch', (event) => {
       fetch(req)
         .then((res) => {
           // Only persist a healthy HTML shell — never cache a 500 / error page
-          // / redirect body as the offline fallback.
+          // / redirect body as the offline fallback. Reject redirected or
+          // non-basic (opaque/cors) responses too: fetch() follows redirects,
+          // so a 302→login/maintenance page (or a cross-origin redirect
+          // target) could otherwise land in the cache with status 200.
           const ct = res.headers.get('content-type') || ''
-          if (res.status === 200 && ct.includes('text/html')) {
+          if (res.status === 200 && !res.redirected && res.type === 'basic' && ct.includes('text/html')) {
             const clone = res.clone()
             caches.open(CACHE).then((c) => c.put(SHELL, clone)).catch(() => {})
           }
@@ -58,7 +66,10 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(req)
       .then((res) => {
-        if (res.status === 200) {
+        // Reject redirected / non-basic responses for the same reason as the
+        // navigation branch above — never cache a redirect target as if it
+        // were the requested same-origin asset.
+        if (res.status === 200 && !res.redirected && res.type === 'basic') {
           const clone = res.clone()
           caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {})
         }
