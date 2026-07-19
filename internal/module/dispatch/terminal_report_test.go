@@ -13,49 +13,57 @@ import (
 	"github.com/wake/purdex/internal/relay"
 )
 
-func TestTerminalReporter_CompletedEnqueuesSeq3WithArtifacts(t *testing.T) {
-	fe := &fakeEnqueuer{}
-	r := terminalReporter{sender: fe}
+func TestTerminalReporter_CompletedBuildsSeq3WithArtifacts(t *testing.T) {
+	r := terminalReporter{}
 	arts := []execution.Artifact{
 		{Kind: "diff", Pointer: "pdx://dmn_1/execution/exc_9/diff", Meta: map[string]any{"files": 2, "add": 10, "del": 3}},
 		{Kind: "transcript", Pointer: "pdx://dmn_1/execution/exc_9/transcript"},
 	}
-	exec := &execution.Execution{ExecutionID: "exc_9", DispatchID: "dsp_9"}
+	// launch_state=launched → the execution had a running(2) report, so terminal is 3.
+	exec := &execution.Execution{ExecutionID: "exc_9", DispatchID: "dsp_9", LaunchState: execution.LaunchLaunched}
 
-	require.NoError(t, r.EnqueueTerminal(exec, execution.StatusCompleted, arts, "", ""))
+	env, err := r.BuildTerminal(exec, execution.StatusCompleted, arts, "", "")
+	require.NoError(t, err)
 
-	require.Len(t, fe.calls, 1)
-	c := fe.calls[0]
-	require.Equal(t, "exc_9", c.execID)
-	require.Equal(t, "dsp_9", c.dispatchID)
-	require.Equal(t, seqTerminal, c.seq)
-	require.Equal(t, "completed", c.status)
-	require.Equal(t, "completed", c.payload["status"])
-	require.EqualValues(t, seqTerminal, c.payload["seq"])
-	list, ok := c.payload["artifacts"].([]any)
+	require.Equal(t, seqTerminal, env.Seq)
+	require.Equal(t, "completed", env.Status)
+	payload := decodePayload(t, env)
+	require.Equal(t, "completed", payload["status"])
+	require.EqualValues(t, seqTerminal, payload["seq"])
+	list, ok := payload["artifacts"].([]any)
 	require.True(t, ok, "artifacts[] present")
 	require.Len(t, list, 2)
 	first := list[0].(map[string]any)
 	require.Equal(t, "diff", first["kind"])
 	require.Equal(t, "pdx://dmn_1/execution/exc_9/diff", first["pointer"])
 	// completed carries no error object.
-	require.NotContains(t, c.payload, "error")
+	require.NotContains(t, payload, "error")
 }
 
-func TestTerminalReporter_FailedEnqueuesError(t *testing.T) {
-	fe := &fakeEnqueuer{}
-	r := terminalReporter{sender: fe}
-	exec := &execution.Execution{ExecutionID: "exc_f", DispatchID: "dsp_f"}
+func TestTerminalReporter_FailedCarriesError(t *testing.T) {
+	exec := &execution.Execution{ExecutionID: "exc_f", DispatchID: "dsp_f", LaunchState: execution.LaunchLaunched}
 
-	require.NoError(t, r.EnqueueTerminal(exec, execution.StatusFailed, nil, "execution_error", "boom"))
+	env, err := terminalReporter{}.BuildTerminal(exec, execution.StatusFailed, nil, "execution_error", "boom")
+	require.NoError(t, err)
 
-	require.Len(t, fe.calls, 1)
-	c := fe.calls[0]
-	require.Equal(t, "failed", c.status)
-	errObj, ok := c.payload["error"].(map[string]any)
+	require.Equal(t, "failed", env.Status)
+	errObj, ok := decodePayload(t, env)["error"].(map[string]any)
 	require.True(t, ok, "failed carries error object")
 	require.Equal(t, "execution_error", errObj["code"])
 	require.Equal(t, "boom", errObj["message"])
+}
+
+// F4: an execution that never reached launched never had a running(2) report, so
+// its recovered terminal report must ride seq=2 — not 3, which would leave a hole
+// Ploom's ordered projection waits on forever.
+func TestTerminalReporter_NeverLaunched_UsesSeq2(t *testing.T) {
+	for _, ls := range []execution.LaunchState{execution.LaunchLaunching, execution.LaunchNone} {
+		exec := &execution.Execution{ExecutionID: "exc_n", DispatchID: "dsp_n", LaunchState: ls}
+		env, err := terminalReporter{}.BuildTerminal(exec, execution.StatusFailed, nil, "launch_failed", "gone")
+		require.NoError(t, err)
+		require.Equal(t, seqFailed, env.Seq, "launch_state=%s", ls)
+		require.EqualValues(t, seqFailed, decodePayload(t, env)["seq"])
+	}
 }
 
 // gitRepoWithChange creates a repo with a committed file, returns repo+head, then

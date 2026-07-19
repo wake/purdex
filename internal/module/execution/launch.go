@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 )
@@ -55,29 +54,33 @@ type Launcher interface {
 	Launch(ctx context.Context, spec LaunchSpec) (LaunchResult, error)
 }
 
-// LaunchReporter durably enqueues the accepted(seq=1) and running(seq=2) reports
-// for an execution. It is implemented in the dispatch module (which owns the
-// report outbox) and injected here: execution must not import dispatch (that
-// would cycle). The accepted report's immutable facts are all readable off the
-// passed *Execution, so a reconstructed accepted stays byte-identical (spec §3.3
-// durability cut).
+// LaunchReporter renders the accepted(seq=1) and running(seq=2) reports for an
+// execution. It is implemented in the dispatch module (which owns the E4 wire
+// format) and injected here: execution must not import dispatch (that would
+// cycle). These are pure builders — the store performs the durable enqueue inside
+// the same transaction as the transition being reported, so a report can never go
+// missing while its transition sticks (see store_report.go). The accepted report's
+// immutable facts are all readable off the passed *Execution, so a reconstructed
+// accepted stays byte-identical (spec §3.3 durability cut).
 type LaunchReporter interface {
-	EnqueueAccepted(exec *Execution) error
-	EnqueueRunning(exec *Execution) error
-	// EnqueueFailed durably queues the terminal failed report for a pre-relay
-	// launch failure (tmux create / token-file / send-keys / relay-connect
-	// timeout). It rides seq=2 on the already-enqueued accepted(1): the failure
-	// happened before running was ever enqueued, so ListLive-based reconcile (P.9)
-	// cannot see the terminal row and would otherwise leave Ploom wedged at
-	// accepted. errCode/errMsg populate the report's error object.
-	EnqueueFailed(exec *Execution, errCode, errMsg string) error
+	BuildAccepted(exec *Execution) (ReportEnvelope, error)
+	BuildRunning(exec *Execution) (ReportEnvelope, error)
+	// BuildFailed renders the terminal failed report for a pre-relay launch
+	// failure (tmux create / token-file / send-keys / relay-connect timeout). It
+	// rides seq=2 on the already-queued accepted(1): the failure happened before
+	// running was ever queued, so ListLive-based reconcile (P.9) cannot see the
+	// terminal row and would otherwise leave Ploom wedged at accepted.
+	// errCode/errMsg populate the report's error object.
+	BuildFailed(exec *Execution, errCode, errMsg string) (ReportEnvelope, error)
 }
 
 // launchStore is the slice of *ExecutionStore the durable cut writes through.
+// Every method commits its state change together with the report it implies, in
+// one transaction — that pairing is the durability guarantee, not an optimisation.
 type launchStore interface {
-	UpsertByDispatch(req NewExecution) (*Execution, bool, error)
-	MarkLaunched(execID, sessionCode string) error
-	UpdateStatus(execID string, to Status) error
+	UpsertByDispatchWithReport(req NewExecution, build ReportBuilder) (*Execution, bool, error)
+	MarkLaunchedWithReport(execID, sessionCode string, build ReportBuilder) (*Execution, error)
+	UpdateStatusWithReport(execID string, to Status, build ReportBuilder) error
 }
 
 // repoAdmitter is the admission seam (satisfied by *Admitter). WithRepoLock runs
@@ -164,10 +167,13 @@ func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution
 		execID := c.newID()
 		sessionName := SessionNameFor(execID)
 
-		// (b) insert the row at launch_state=launching (this makes the repo
-		// live under the held lock). Idempotent on dispatch_id: a re-delivery
-		// returns the existing row and skips launch.
-		exec, created, err := c.store.UpsertByDispatch(NewExecution{
+		// (b) insert the row at launch_state=launching (this makes the repo live
+		// under the held lock) AND durably queue accepted(seq=1) in the same
+		// transaction, so accepted is recoverable before spawn and a row can never
+		// occupy the repo without a report Ploom will eventually receive. Idempotent
+		// on dispatch_id: a re-delivery returns the existing row, skips the enqueue
+		// and skips launch.
+		exec, created, err := c.store.UpsertByDispatchWithReport(NewExecution{
 			ExecutionID:      execID,
 			DispatchID:       req.DispatchID,
 			RepoLocation:     adm.CanonicalPath,
@@ -178,7 +184,7 @@ func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution
 			HeadAtStart:      adm.HeadAtStart,
 			DirtyAtStart:     adm.DirtyAtStart,
 			SandboxProfile:   effective,
-		})
+		}, c.reporter.BuildAccepted)
 		if err != nil {
 			return fmt.Errorf("create execution row: %w", err)
 		}
@@ -188,13 +194,7 @@ func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution
 			return nil
 		}
 
-		// (c) durably enqueue accepted(seq=1) BEFORE spawn, so accepted is
-		// recoverable even if the daemon dies mid-launch.
-		if err := c.reporter.EnqueueAccepted(exec); err != nil {
-			return fmt.Errorf("enqueue accepted: %w", err)
-		}
-
-		// (d) launch: create session, spawn relay+claude -p, push the prompt,
+		// (c) launch: create session, spawn relay+claude -p, push the prompt,
 		// block until the relay connects.
 		lr, lerr := c.launcher.Launch(ctx, LaunchSpec{
 			ExecutionID:    exec.ExecutionID,
@@ -204,35 +204,29 @@ func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution
 			SandboxProfile: effective,
 		})
 		if lerr != nil {
-			// Mark failed so the single-live guard releases the repo.
-			if uerr := c.store.UpdateStatus(exec.ExecutionID, StatusFailed); uerr != nil {
-				c.logf("[execution] mark failed after launch error execution=%s: %v", exec.ExecutionID, uerr)
-			}
-			// Durably enqueue the terminal failed(seq=2) report. The failure hit
-			// before running was enqueued, so the row is now terminal and
-			// ListLive-based reconcile (P.9) will never surface it — without this
-			// report Ploom stays wedged at accepted. accepted(1) is already queued,
-			// so the outbox replays accepted→failed on the next flush.
-			if rerr := c.reporter.EnqueueFailed(exec, "launch_failed", lerr.Error()); rerr != nil {
-				c.logf("[execution] enqueue failed report after launch error execution=%s: %v", exec.ExecutionID, rerr)
+			// Mark failed (releasing the repo for the single-live guard) AND queue the
+			// terminal failed(seq=2) report atomically. The failure hit before running
+			// was queued, so a committed-failed row with no report would be invisible
+			// to ListLive-based reconcile (P.9) and leave Ploom wedged at accepted;
+			// pairing them means either both land or the row stays live for reconcile
+			// to finish. accepted(1) is already queued, so the outbox replays
+			// accepted→failed on the next flush.
+			if uerr := c.store.UpdateStatusWithReport(exec.ExecutionID, StatusFailed,
+				func(row *Execution) (ReportEnvelope, error) {
+					return c.reporter.BuildFailed(row, "launch_failed", lerr.Error())
+				}); uerr != nil {
+				c.logf("[execution] mark failed + report after launch error execution=%s: %v", exec.ExecutionID, uerr)
 			}
 			return fmt.Errorf("launch execution %s: %w", exec.ExecutionID, lerr)
 		}
 
-		// (e) commit the launched fence + session_code (+ status→running) and
-		// enqueue running(seq=2).
-		if err := c.store.MarkLaunched(exec.ExecutionID, lr.SessionCode); err != nil {
+		// (d) commit the launched fence + session_code (+ status→running) and queue
+		// running(seq=2) — one transaction, so a running row always has its report.
+		launched, err := c.store.MarkLaunchedWithReport(exec.ExecutionID, lr.SessionCode, c.reporter.BuildRunning)
+		if err != nil {
 			return fmt.Errorf("mark launched: %w", err)
 		}
-		exec.LaunchState = LaunchLaunched
-		exec.Status = StatusRunning
-		if lr.SessionCode != "" {
-			exec.SessionCode = sql.NullString{String: lr.SessionCode, Valid: true}
-		}
-		if err := c.reporter.EnqueueRunning(exec); err != nil {
-			return fmt.Errorf("enqueue running: %w", err)
-		}
-		result = exec
+		result = launched
 		return nil
 	})
 	if err != nil {

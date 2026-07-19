@@ -121,7 +121,7 @@ func (m *DispatchModule) buildReconciler(c *core.Core) *execution.Reconciler {
 	if store == nil || m.sender == nil {
 		return nil
 	}
-	return execution.NewReconciler(store, c.Tmux, terminalReporter{sender: m.sender}, execution.BuildDiffArtifact, daemonID(c))
+	return execution.NewReconciler(store, c.Tmux, terminalReporter{}, execution.BuildDiffArtifact, daemonID(c))
 }
 
 // streamTerminalSeam is the narrow slice of the stream module the terminal wiring
@@ -141,7 +141,7 @@ func (m *DispatchModule) wireTerminal(store *execution.ExecutionStore, seam stre
 	if store == nil || seam == nil || m.sender == nil {
 		return
 	}
-	proc := execution.NewTerminalProcessor(store, terminalReporter{sender: m.sender}, execution.BuildDiffArtifact, daemonID)
+	proc := execution.NewTerminalProcessor(store, terminalReporter{}, execution.BuildDiffArtifact, daemonID)
 	seam.SetTerminalHandler(func(code string, ev relay.TerminalEvent) {
 		res, ok := seam.LastResult(code)
 		outcome := execution.ResultOutcome{HasResult: ok, IsError: res.IsError, Subtype: res.Subtype}
@@ -198,7 +198,7 @@ func (m *DispatchModule) buildCoordinator(c *core.Core) *execution.Coordinator {
 	// M0: no root containment (allowedRoots nil). A first-class allowlist config
 	// can restrict admissible repos later without touching this seam.
 	admitter := execution.NewAdmitter(store, nil)
-	reporter := launchReporter{sender: m.sender}
+	reporter := launchReporter{}
 	return execution.NewCoordinator(admitter, store, reporter, launcher, hostSandboxPolicy(c))
 }
 

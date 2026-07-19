@@ -46,8 +46,10 @@ func (r *recorder) snapshot() []string {
 	return append([]string(nil), r.events...)
 }
 
-// fakeReporter records accepted/running/failed enqueues and the row facts at each
-// call.
+// fakeReporter records the accepted/running/failed report builds and the row facts
+// at each call. Builders run inside the store transaction that commits the
+// transition being reported, so a builder error here stands in for "the report
+// could not be queued" — the transition must then roll back.
 type fakeReporter struct {
 	rec           *recorder
 	acceptedExec  *Execution
@@ -56,29 +58,33 @@ type fakeReporter struct {
 	failedErrCode string
 	failedErrMsg  string
 	acceptedErr   error
+	runningErr    error
 }
 
-func (f *fakeReporter) EnqueueAccepted(exec *Execution) error {
+func (f *fakeReporter) BuildAccepted(exec *Execution) (ReportEnvelope, error) {
 	if f.acceptedErr != nil {
-		return f.acceptedErr
+		return ReportEnvelope{}, f.acceptedErr
 	}
 	f.acceptedExec = cloneExec(exec)
 	f.rec.add("accepted")
-	return nil
+	return ReportEnvelope{Seq: 1, Status: "accepted", Payload: []byte(`{"status":"accepted"}`)}, nil
 }
 
-func (f *fakeReporter) EnqueueRunning(exec *Execution) error {
+func (f *fakeReporter) BuildRunning(exec *Execution) (ReportEnvelope, error) {
+	if f.runningErr != nil {
+		return ReportEnvelope{}, f.runningErr
+	}
 	f.runningExec = cloneExec(exec)
 	f.rec.add("running")
-	return nil
+	return ReportEnvelope{Seq: 2, Status: "running", Payload: []byte(`{"status":"running"}`)}, nil
 }
 
-func (f *fakeReporter) EnqueueFailed(exec *Execution, errCode, errMsg string) error {
+func (f *fakeReporter) BuildFailed(exec *Execution, errCode, errMsg string) (ReportEnvelope, error) {
 	f.failedExec = cloneExec(exec)
 	f.failedErrCode = errCode
 	f.failedErrMsg = errMsg
 	f.rec.add("failed")
-	return nil
+	return ReportEnvelope{Seq: 2, Status: "failed", Payload: []byte(`{"status":"failed"}`)}, nil
 }
 
 func cloneExec(e *Execution) *Execution { c := *e; return &c }

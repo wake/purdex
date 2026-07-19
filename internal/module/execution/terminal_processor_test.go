@@ -27,15 +27,32 @@ func (f *fakeTerminalStore) GetBySessionCode(code string) (*Execution, bool, err
 	return e, ok, nil
 }
 
-func (f *fakeTerminalStore) MarkTerminal(execID string, to Status, source OutcomeSource) error {
+// MarkTerminalWithReport mirrors the real store: the report is built inside the
+// transition, so a build error aborts the transition (nothing is recorded).
+func (f *fakeTerminalStore) MarkTerminalWithReport(execID string, to Status, source OutcomeSource, build ReportBuilder) error {
 	if f.markErr != nil {
 		return f.markErr
+	}
+	if build != nil {
+		row := &Execution{ExecutionID: execID}
+		for _, e := range f.bySession {
+			if e.ExecutionID == execID {
+				row = e
+				break
+			}
+		}
+		committed := *row
+		committed.Status = to
+		committed.OutcomeSource = sql.NullString{String: string(source), Valid: true}
+		if _, err := build(&committed); err != nil {
+			return err
+		}
 	}
 	f.marked = append(f.marked, markCall{execID, to, source})
 	return nil
 }
 
-// fakeTerminalReporter captures the terminal report enqueue.
+// fakeTerminalReporter captures the terminal report builds.
 type fakeTerminalReporter struct {
 	calls []terminalCall
 	err   error
@@ -49,9 +66,12 @@ type terminalCall struct {
 	errMsg    string
 }
 
-func (f *fakeTerminalReporter) EnqueueTerminal(exec *Execution, status Status, artifacts []Artifact, errCode, errMsg string) error {
+func (f *fakeTerminalReporter) BuildTerminal(exec *Execution, status Status, artifacts []Artifact, errCode, errMsg string) (ReportEnvelope, error) {
 	f.calls = append(f.calls, terminalCall{exec, status, artifacts, errCode, errMsg})
-	return f.err
+	if f.err != nil {
+		return ReportEnvelope{}, f.err
+	}
+	return ReportEnvelope{Seq: 3, Status: string(status), Payload: []byte(`{"status":"` + string(status) + `"}`)}, nil
 }
 
 // stubDiff returns a fixed diff artifact with the given file/add/del counts.

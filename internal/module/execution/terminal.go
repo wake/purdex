@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -60,15 +59,18 @@ func ClassifyOutcome(exitCode int, signaled bool, res ResultOutcome) (Status, Ou
 // outcome atomically (fenced).
 type terminalStore interface {
 	GetBySessionCode(sessionCode string) (*Execution, bool, error)
-	MarkTerminal(execID string, to Status, source OutcomeSource) error
+	MarkTerminalWithReport(execID string, to Status, source OutcomeSource, build ReportBuilder) error
 }
 
-// TerminalReporter durably enqueues the completed/failed report (with its
-// pointer-first artifacts) for one execution. It is implemented in the dispatch
-// module, which owns the report outbox; execution must not import dispatch (that
-// would cycle), so it is injected. errCode/errMsg are populated only for failed.
+// TerminalReporter renders the completed/failed report (with its pointer-first
+// artifacts) for one execution. It is implemented in the dispatch module, which
+// owns the E4 wire format; execution must not import dispatch (that would cycle),
+// so it is injected. It is a pure builder: the store queues the rendered report
+// inside the same transaction that commits the terminal status, so the outcome
+// and the only durable copy of its payload can never be separated. errCode/errMsg
+// are populated only for failed.
 type TerminalReporter interface {
-	EnqueueTerminal(exec *Execution, status Status, artifacts []Artifact, errCode, errMsg string) error
+	BuildTerminal(exec *Execution, status Status, artifacts []Artifact, errCode, errMsg string) (ReportEnvelope, error)
 }
 
 // diffFunc captures the diff artifact for one execution; injected so the
@@ -123,26 +125,30 @@ func (p *TerminalProcessor) Handle(ctx context.Context, sessionCode string, exit
 	}
 
 	status, source := ClassifyOutcome(exitCode, signaled, res)
+	// Capture artifacts BEFORE the transaction: diff capture shells out to git and
+	// must never run under the store's write lock. The builder below only marshals.
 	artifacts := p.buildArtifacts(ctx, exec, status)
-
-	// Commit the terminal outcome first (fenced). If we lose the transition race
-	// (a concurrent reconcile/terminal already finished it) we must not enqueue a
-	// duplicate report.
-	if err := p.store.MarkTerminal(exec.ExecutionID, status, source); err != nil {
-		if errors.Is(err, ErrIllegalTransition) {
-			return nil
-		}
-		return err
-	}
-	// Reflect the committed status on the row copy handed to the reporter.
-	exec.Status = status
-	exec.OutcomeSource = sql.NullString{String: string(source), Valid: true}
 
 	var errCode, errMsg string
 	if status == StatusFailed {
 		errCode, errMsg = failureDetail(exitCode, signaled, res)
 	}
-	return p.reporter.EnqueueTerminal(exec, status, artifacts, errCode, errMsg)
+
+	// Commit the terminal outcome and its report together (fenced). Losing the
+	// transition race (a concurrent reconcile/terminal already finished it) yields
+	// ErrIllegalTransition and no report — no duplicate. A report that cannot be
+	// built/queued aborts the transition too, leaving the row live so the next
+	// reconcile pass retries it rather than stranding Ploom at running forever.
+	if err := p.store.MarkTerminalWithReport(exec.ExecutionID, status, source,
+		func(row *Execution) (ReportEnvelope, error) {
+			return p.reporter.BuildTerminal(row, status, artifacts, errCode, errMsg)
+		}); err != nil {
+		if errors.Is(err, ErrIllegalTransition) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // buildArtifacts assembles the pointer-first artifacts for a terminal report via

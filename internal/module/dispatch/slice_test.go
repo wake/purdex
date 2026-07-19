@@ -120,7 +120,7 @@ func newSliceFixture(t *testing.T, fc *fakeClient, adm *sliceAdmitter, fl *slice
 	sender := NewSender(outbox, poster, WithExecutionReader(executionStoreReader{store}))
 	// Host policy = danger-full so the slice exercises the full consume→launch→report
 	// path without the sandbox clamp narrowing the requested profiles.
-	coord := execution.NewCoordinator(adm, store, launchReporter{sender: sender}, fl, execution.ProfileDangerFull)
+	coord := execution.NewCoordinator(adm, store, launchReporter{}, fl, execution.ProfileDangerFull)
 
 	m := &DispatchModule{sender: sender}
 	worker := NewWorker(fc, WithSink(m.consumeSink(coord)))

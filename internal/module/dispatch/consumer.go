@@ -30,54 +30,56 @@ const (
 )
 
 // reportEnqueuer is the narrow slice of *Sender the consumer glue needs: durably
-// queue one already-built report payload. Tests inject a fake.
+// queue one already-built report payload. It is used only for reports that stand
+// alone (the admission-rejection projection, which has no execution row and so no
+// transition to pair with). Reports that accompany a state transition are queued
+// by the execution store inside that transition's transaction. Tests inject a fake.
 type reportEnqueuer interface {
 	Enqueue(executionID, dispatchID string, seq int, status string, payload []byte) error
 }
 
-// launchReporter adapts the dispatch report Sender onto execution.LaunchReporter,
-// so the execution Coordinator can durably enqueue accepted/running without
-// importing dispatch (which would cycle). accepted is built from the execution
-// row's immutable facts via the same BuildAcceptedPayload used for restart
-// reconstruction, so a live-enqueued accepted and a reconstructed one are
-// byte-identical (spec §3.3 durability cut).
-type launchReporter struct {
-	sender reportEnqueuer
-}
+// launchReporter adapts the E4 wire format onto execution.LaunchReporter, so the
+// execution Coordinator can render accepted/running/failed without importing
+// dispatch (which would cycle). These are pure builders: the execution store does
+// the durable enqueue inside the transaction that commits the transition being
+// reported. accepted is built from the execution row's immutable facts via the
+// same BuildAcceptedPayload used for restart reconstruction, so a live-built
+// accepted and a reconstructed one are byte-identical (spec §3.3 durability cut).
+type launchReporter struct{}
 
 var _ execution.LaunchReporter = launchReporter{}
 
-// EnqueueAccepted durably queues accepted(seq=1) from the execution row.
-func (r launchReporter) EnqueueAccepted(exec *execution.Execution) error {
+// BuildAccepted renders accepted(seq=1) from the execution row.
+func (launchReporter) BuildAccepted(exec *execution.Execution) (execution.ReportEnvelope, error) {
 	payload, err := BuildAcceptedPayload(acceptedRowFromExec(exec))
 	if err != nil {
-		return err
+		return execution.ReportEnvelope{}, err
 	}
-	return r.sender.Enqueue(exec.ExecutionID, exec.DispatchID, seqAccepted, "accepted", payload)
+	return execution.ReportEnvelope{Seq: seqAccepted, Status: "accepted", Payload: payload}, nil
 }
 
-// EnqueueRunning durably queues running(seq=2) once the agent's relay connected.
-func (r launchReporter) EnqueueRunning(exec *execution.Execution) error {
+// BuildRunning renders running(seq=2), queued as the agent's relay connects.
+func (launchReporter) BuildRunning(exec *execution.Execution) (execution.ReportEnvelope, error) {
 	payload, err := BuildRunningPayload(exec.ExecutionID, seqRunning)
 	if err != nil {
-		return err
+		return execution.ReportEnvelope{}, err
 	}
-	return r.sender.Enqueue(exec.ExecutionID, exec.DispatchID, seqRunning, "running", payload)
+	return execution.ReportEnvelope{Seq: seqRunning, Status: "running", Payload: payload}, nil
 }
 
-// EnqueueFailed durably queues the terminal failed(seq=2) report for a pre-relay
-// launch failure. It rides seqFailed=2 on the already-enqueued accepted(1) — the
-// launch never reached running, so this is the execution's terminal report and
-// the outbox replays accepted→failed, unwedging Ploom without any reconcile pass.
-func (r launchReporter) EnqueueFailed(exec *execution.Execution, errCode, errMsg string) error {
+// BuildFailed renders the terminal failed(seq=2) report for a pre-relay launch
+// failure. It rides seqFailed=2 on the already-queued accepted(1) — the launch
+// never reached running, so this is the execution's terminal report and the outbox
+// replays accepted→failed, unwedging Ploom without any reconcile pass.
+func (launchReporter) BuildFailed(exec *execution.Execution, errCode, errMsg string) (execution.ReportEnvelope, error) {
 	payload, err := BuildTerminalPayload(exec.ExecutionID, seqFailed, "failed", nil, &ReportError{
 		Code:    errCode,
 		Message: errMsg,
 	})
 	if err != nil {
-		return err
+		return execution.ReportEnvelope{}, err
 	}
-	return r.sender.Enqueue(exec.ExecutionID, exec.DispatchID, seqFailed, "failed", payload)
+	return execution.ReportEnvelope{Seq: seqFailed, Status: "failed", Payload: payload}, nil
 }
 
 // acceptedRowFromExec projects a live execution row onto the accepted-report
@@ -103,20 +105,30 @@ func acceptedRowFromExec(e *execution.Execution) AcceptedRow {
 	}
 }
 
-// terminalReporter adapts the dispatch report Sender onto
-// execution.TerminalReporter, so the execution TerminalProcessor can durably
-// enqueue the completed/failed report (with pointer-first artifacts) without
-// importing dispatch. It maps the execution-side Artifact onto the report
-// Artifact and stamps seqTerminal (running+1). execution never sees the seq.
-type terminalReporter struct {
-	sender reportEnqueuer
-}
+// terminalReporter adapts the E4 wire format onto execution.TerminalReporter, so
+// the execution TerminalProcessor and Reconciler can render the completed/failed
+// report (with pointer-first artifacts) without importing dispatch. It maps the
+// execution-side Artifact onto the report Artifact and stamps the terminal seq;
+// execution never computes a seq itself.
+type terminalReporter struct{}
 
 var _ execution.TerminalReporter = terminalReporter{}
 
-// EnqueueTerminal durably queues the terminal(seq=3) report. errCode/errMsg are
-// populated only for failed; completed carries no error object.
-func (r terminalReporter) EnqueueTerminal(exec *execution.Execution, status execution.Status, artifacts []execution.Artifact, errCode, errMsg string) error {
+// terminalSeq returns the seq a terminal report must carry, from the lifecycle the
+// execution actually had. running(2) is only ever queued by MarkLaunched, so a row
+// that never reached launch_state=launched never had a running report — its
+// terminal report must ride seq=2 (matching the pre-relay launch failure) rather
+// than leaving a hole at 2 that Ploom's ordered projection would wait on forever.
+func terminalSeq(exec *execution.Execution) int {
+	if exec.LaunchState == execution.LaunchLaunched {
+		return seqTerminal
+	}
+	return seqFailed
+}
+
+// BuildTerminal renders the terminal report. errCode/errMsg are populated only for
+// failed; completed carries no error object.
+func (terminalReporter) BuildTerminal(exec *execution.Execution, status execution.Status, artifacts []execution.Artifact, errCode, errMsg string) (execution.ReportEnvelope, error) {
 	reportArts := make([]Artifact, len(artifacts))
 	for i, a := range artifacts {
 		reportArts[i] = Artifact{Kind: a.Kind, Pointer: a.Pointer, Meta: a.Meta}
@@ -125,11 +137,12 @@ func (r terminalReporter) EnqueueTerminal(exec *execution.Execution, status exec
 	if status == execution.StatusFailed {
 		errObj = &ReportError{Code: errCode, Message: errMsg}
 	}
-	payload, err := BuildTerminalPayload(exec.ExecutionID, seqTerminal, string(status), reportArts, errObj)
+	seq := terminalSeq(exec)
+	payload, err := BuildTerminalPayload(exec.ExecutionID, seq, string(status), reportArts, errObj)
 	if err != nil {
-		return err
+		return execution.ReportEnvelope{}, err
 	}
-	return r.sender.Enqueue(exec.ExecutionID, exec.DispatchID, seqTerminal, string(status), payload)
+	return execution.ReportEnvelope{Seq: seq, Status: string(status), Payload: payload}, nil
 }
 
 // marshalRepoLocation serialises the full E3 repo_location object for durable

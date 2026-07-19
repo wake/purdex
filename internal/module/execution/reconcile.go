@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -34,7 +33,7 @@ type SessionControl interface {
 // gone) since both are legal edges.
 type reconcileStore interface {
 	ListLive() ([]*Execution, error)
-	MarkTerminal(execID string, to Status, source OutcomeSource) error
+	MarkTerminalWithReport(execID string, to Status, source OutcomeSource, build ReportBuilder) error
 }
 
 // Reconciler performs the startup reconcile sweep and manual reclaim. It never
@@ -146,18 +145,23 @@ func (r *Reconciler) reconcileOne(ctx context.Context, exec *Execution) error {
 // race (the row is already terminal) skips the enqueue so no duplicate report is
 // emitted — mirroring TerminalProcessor.Handle.
 func (r *Reconciler) finishFailed(ctx context.Context, exec *Execution, errCode, errMsg string) error {
-	if err := r.store.MarkTerminal(exec.ExecutionID, StatusFailed, OutcomeExitOnly); err != nil {
+	// Artifacts first: diff capture shells out to git and must stay outside the
+	// store transaction (the builder below only marshals).
+	arts := buildTerminalArtifacts(ctx, r.diff, r.logf, r.daemonID, exec, StatusFailed)
+
+	// failed + its report commit together. If the report cannot be queued the row
+	// stays live, so the NEXT sweep retries it — far better than a terminal row
+	// that ListLive hides while Ploom waits on a report nothing can rebuild.
+	if err := r.store.MarkTerminalWithReport(exec.ExecutionID, StatusFailed, OutcomeExitOnly,
+		func(row *Execution) (ReportEnvelope, error) {
+			return r.reporter.BuildTerminal(row, StatusFailed, arts, errCode, errMsg)
+		}); err != nil {
 		if errors.Is(err, ErrIllegalTransition) {
 			return nil // already terminal — idempotent no-op
 		}
 		return fmt.Errorf("reconcile: mark failed %s: %w", exec.ExecutionID, err)
 	}
-	// Reflect the committed status on the row copy handed to the reporter.
-	exec.Status = StatusFailed
-	exec.OutcomeSource = sql.NullString{String: string(OutcomeExitOnly), Valid: true}
-
-	arts := buildTerminalArtifacts(ctx, r.diff, r.logf, r.daemonID, exec, StatusFailed)
-	return r.reporter.EnqueueTerminal(exec, StatusFailed, arts, errCode, errMsg)
+	return nil
 }
 
 // Compile-time assertions the production types satisfy the reconcile ports.
