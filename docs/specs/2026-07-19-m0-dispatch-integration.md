@@ -125,11 +125,15 @@ issue ──> dispatch ──> execution ──> attempt ──> session
   - **兩個正交欄位，別混用**（R2 #1）：
     - **`status`**（`accepted / running / completed / failed`）＝**liveness 權威**。**「live execution」＝ `status ∈ {accepted, running}`**。admission 單 live 判定（§7）與 reconcile liveness **只看 `status`**，**不看 `launch_state`**。
     - **`launch_state`**（`none → launching → launched`）＝**只用來決定「recovery 該不該 relaunch」的 fence**，與 liveness 無關；execution 到 terminal 後 `launch_state` 不再被當 live 判據。
-  - **預生 `session_code`（R2 #2，關鍵）**：daemon **在 spawn 前、admission 同交易內**就**預生** execution 的 `session_code`（runtime handle，daemon 產非 agent 給），與 `status=accepted / launch_state=launching` 一起落 row。故 crash 於 `cmd.Start()` 成功但寫 `launched` 前時，row 上**必有可探的 `session_code`**（絕不會是 NULL），reconcile 得以用它探 tmux session 活性（§5.4）→ 準確判 running/failed + 收孤兒，不再「找不到活 child」。
+  - **⚠️ Durable handle 用 `session_name`，不是 `session_code`（R2 #2 / R3，關鍵——已對齊現碼）**：現碼 `session_code = EncodeSessionID($N)`，$N 是 **tmux session 建立後**才有的 tmux ID（`session/handler.go` 先 `NewSession`→`ListSessions` 拿 ID→`EncodeSessionID`；`codec.go`）→ **session_code 不可 spawn 前預生**。
+    - **正解**：tmux session 以 **daemon 自選的 `session_name`** 建立（現碼 `NewSession(name, cwd)` + `HasSession(name)` 去重本就 name-based）。故 **crash-recovery 的持久 handle ＝ `session_name`**（daemon deterministically 由 execution_id 生，如 `pdx-exec-<execution_id>`），**在 spawn 前、admission 同交易內落 row**（非 NULL）。
+    - **Handle 不變式**：必須 daemon spawn 前可知 + 持久 + crash 後可 probe（`HasSession(session_name)`）+ 可收孤兒（by name）。session_name 全滿足。
+    - **window 真正閉合**：`NewSession(session_name)` 是建立點；crash 若在「落 session_name → NewSession」之間 → 該 name 的 session 從未建立 → reconcile probe 不到 → 正確判 failed 且無孤兒可收；crash 若在 NewSession 成功後 → 該 name 的 session 存在 → reconcile probe 得到 → 判 running（並補算/記 session_code）。不再有「找不到活 child」的殘餘 window。
+    - **`session_code`（衍生）**：仍是 SPA/deeplink 對外 handle，tmux session 建立後 `EncodeSessionID` 算出並記 row（nullable 至建立），**不承擔 crash-recovery**。
   - recovery 讀到 `launch_state ∈ {launching, launched}` → **不 relaunch**，改走 reconcile（§5.4）。
   - 這防「首次已起 session A，daemon 在寫 `launched` / 發 accepted 前崩潰 → 重用同 execution_id 又起 session B → 一條 execution 底下兩 session、diff/transcript/seq 全混」。
   - **M0 attempt=1 的安全前提**：一個 execution_id **至多綁一次成功 launch**。真要「重試/換做法」= **新 dispatch → 新 execution_id**（rerun 語意，非重用），attempt 資料層仍留 M3。
-- **execution row 欄位**（Purdex 側 runtime SOT）：`execution_id, dispatch_id, repo_location(canonical), provider, launch_state, session_code(admission 預生·非 NULL), attempt_no, status, seq_reported, head_at_start, dirty_at_start, sandbox_profile, outcome_source(result|exit_only, nullable 至 terminal), created_at, updated_at`。〔`session_code` 因預生 handle 改為**非 NULL**（R2 #2）；**刪除** `callback_target`——pull 下無 Ploom→Purdex callback，push 殘留（R1 #8）〕
+- **execution row 欄位**（Purdex 側 runtime SOT）：`execution_id, dispatch_id, repo_location(canonical), provider, launch_state, session_name(admission 預生·非 NULL·crash-recovery handle), session_code(建立後衍生·nullable·deeplink handle), attempt_no, status, seq_reported, head_at_start, dirty_at_start, sandbox_profile, outcome_source(result|exit_only, nullable 至 terminal), created_at, updated_at`。〔crash-recovery handle 用 `session_name`（R3 對齊現碼 name-based 建立）；`session_code` 為衍生 deeplink handle 保持 nullable；**刪除** `callback_target`——pull 下無 Ploom→Purdex callback，push 殘留（R1 #8）〕
 - **雙側兩表非雙寫**：Purdex 存 execution runtime row；Ploom 存 execution **projection** row（+ 寫進 `issue_event` append-only 活動流）。兩表各自權威（runtime vs projection），靠 report + ack cursor 同步，**不共用一張表、不雙寫**。
 
 ### 4.4 `ExecutionControlRequest` — M0 移除（V1）
@@ -153,7 +157,7 @@ accepted ──> running ──> completed
 ### 5.2 沿用既有 `claude -p`（不新寫、不改 runner）
 
 - **起 session**：沿用既有 handoff / stream 啟動路徑（`config.go:79` 的 `claude -p --verbose --input-format stream-json --output-format stream-json`）+ `relay.go` 橋接。M0 **不改 relay/runner 本體**。
-- **execution wrapper**：新增薄層——以 `execution_id` 包住「一次 session 啟動」，記 runtime row、綁 `dispatch_id`。
+- **execution wrapper**：新增薄層——以 `execution_id` 包住「一次 session 啟動」，記 runtime row、綁 `dispatch_id`。**tmux session 以 daemon 自選的 `session_name`（由 execution_id deterministically 生）建立**（沿用現碼 `NewSession(name, cwd)`），使 crash-recovery handle 於 spawn 前可知（§4.3）。
 
 ### 5.3 ⚠️ Terminal 偵測 — 兩種來源，process-exit 為權威（codex R1 #2，前提已更正）
 
@@ -184,11 +188,11 @@ M0 terminal 偵測要分開兩件事：**「何時 terminal」（時點）** 與
 
 > 無此，claim 成功後 daemon 崩潰 / 主機重開 → dispatch 永停在 claimed/running，輪詢再也看不到（只吃 pending）→ **不可收斂殭屍**。
 
-- **Startup reconcile**：daemon 啟動時掃自己的 execution runtime row 中 **`status ∈ {accepted, running}`**（liveness 看 status，非 launch_state；R2 #1）者，逐一 reconcile。**探活用預生的 `session_code`**（§4.3 保證非 NULL；R2 #2）探對應 tmux session：
-  - **session 還活** → 續報 `running`、重掛 terminal 偵測（§5.3）。
-  - **session 已不在**：
-    - `launch_state=launched`（曾成功 launch）→ 視為已結束但 report 沒送出 → 交給 terminal 偵測/outcome 分類補判（能取到 exit/紀錄則據以 completed/failed，取不到則 `failed`），靠 outbound replay（§3.3）補送。
-    - `launch_state=launching`（起一半崩）→ **判 `failed`**，並**用 `session_code` 收孤兒**（kill 任何仍掛在該 session 的 subprocess，防孤兒繼續改 repo；R2 #2）。
+- **Startup reconcile**：daemon 啟動時掃自己的 execution runtime row 中 **`status ∈ {accepted, running}`**（liveness 看 status，非 launch_state；R2 #1）者，逐一 reconcile。**探活用預生的 `session_name`**（§4.3 保證非 NULL，`HasSession(session_name)`；R2 #2 / R3）：
+  - **session 還活**（`HasSession` 命中）→ 續報 `running`、必要時補算/記 `session_code`、重掛 terminal 偵測（§5.3）。
+  - **session 已不在**（`HasSession` 未中）：
+    - `launch_state=launched`（曾成功 launch）→ 已結束但 report 沒送出 → 交給 terminal/outcome 分類補判（取得到 exit/紀錄則據以 completed/failed，取不到則 `failed`），靠 outbound replay（§3.3）補送。
+    - `launch_state=launching`（起一半崩）→ **判 `failed`**；若 `session_name` 對應 session 仍在（極端交錯）則 **by-name kill 收孤兒**（防繼續改 repo；R2 #2）。
   - reconcile 後 status 進 terminal → 該 canonical repo 不再有 live execution（liveness 看 status），**解除** admission 對後續派工的阻塞（R2 #1）。
 - **Manual reclaim**：提供人工觸發的 reclaim（M0 可為 daemon 端點 / 手動指令），把卡住的 execution 拉回 reconcile。**自動 lease/heartbeat/timeout 留 M1**——M0 只保證「有辦法手動 + 啟動時自動 reconcile 一次」，不做常駐自動保命。
 - Ploom 側：dispatch 卡在 claimed/running 且對應 execution 被 reconcile 成 terminal → 依 report 更新投影（人工關 issue gate 不變）。
@@ -365,7 +369,7 @@ docs/specs/2026-06-30-s6-...md   → 更新：疊五層 + execution_id + pull（
 6. **sandbox clamp**：request 一個比 host policy 寬的 profile → `effective_sandbox_profile` 被 clamp 到 host policy。
 7. **SOT 分工**：Ploom 只投影、不推進；Purdex runtime 為狀態權威。
 8. **crash 可收斂（reclaim）**：daemon 在 launch 後崩潰重啟 → startup reconcile 用預生 `session_code` 探 tmux 活性 → 判 running 或 terminal，dispatch 不成殭屍；**完成的 execution 進 terminal 後，同 repo 後續派工不再被 admission 卡死**（liveness 看 status，R2 #1）。
-9. **launch fence + 孤兒收斂**：同 execution_id 崩潰後 recovery **不重複起第二個 session**；`launching` crash window 靠預生 `session_code` 探得回 child，判 failed 時**收孤兒**不留野 subprocess 改 repo（R2 #2）。
+9. **launch fence + 孤兒收斂**：同 execution_id 崩潰後 recovery **不重複起第二個 session**；`launching` crash window 靠**預生 `session_name`（`HasSession` probe）**探得回 child（session_code 不承擔此職，R3 對齊現碼），判 failed 時 **by-name 收孤兒**不留野 subprocess 改 repo（R2 #2）。
 10. **terminal 時點 vs 成敗分類**：時點認 process-exit；`exit 0 但 result.is_error`（refusal/tool failure）→ 正確標 **failed** 而非 completed（R2 #4）；不在 `result`-before-exit 時過早標 terminal。
 11. **accepted durability**：daemon 在 accepted in-flight 掉失後重啟 → 能**從 durable execution row 重建 accepted 並 replay**，Ploom 不永久卡 `accepted_required`（R2 #3）。
 12. **測試全綠**：Purdex `go test ./...` + `vitest` + `lint` + `build`；Ploom `go test ./...`。
