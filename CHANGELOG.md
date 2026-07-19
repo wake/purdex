@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.326] - 2026-07-19
+
+### Feat(m0): Ploom↔Purdex 派工整合 — 設計基礎 + Purdex 執行消費端 (#933, #937)
+
+M0 walking skeleton 的 **Purdex 側**：Ploom issue 派工 → daemon 輪詢領工 → 在指定 repo 起 `claude -p` → 狀態/diff 回報 → deeplink 觀看。Ploom 側為獨立 PR（另一 repo）。
+
+**設計基礎 (#933，docs-only)**：M0 spec（3 輪 codex 深審，findings 8→4→1→0）+ implementation plan + **共享 wire contract SOT**（`docs/specs/m0-contract.md`）+ 16 個 golden fixtures（`docs/fixtures/m0/`），作為兩 repo 各自 mock 的唯一真相。
+
+**執行消費端 (#937，12 個 TDD task)**
+- **傳輸**：pull 模型 —— `GET /daemon/dispatches?status=pending` → claim → 兩段式 fetch → report；Ploom 純 server 無 callback。
+- **execution runtime SOT**：`execution_id` 為唯一對外 handle；狀態機 + `dispatch_id` 冪等；`GET /api/execution/{id}` 唯讀投影。
+- **Crash-consistency**：狀態轉換與 report enqueue 在**同一 SQLite transaction**（outbox 併入 execution DB）；launch fence（`launch_state`）防重複 launch；`session_name` 為 crash-recovery handle（`HasSession` 探活、by-name 收孤兒）；startup reconcile sweep + manual reclaim（`POST /api/dispatch/reclaim`）；ack cursor + accepted-before-lifecycle ordering + 重啟 replay。
+- **Terminal 兩來源**：process-exit 決定**時點**（權威），`result.is_error` 決定**成敗**；exit 0 但無 result → completed(`exit_only`，degraded 並記錄來源）。
+- **Admission**：canonical repo key（EvalSymlinks 防別名繞過）+ per-repo lock 跨 accept→launch（防 TOCTOU）+ status-based 單一 live execution + `head_at_start`/`dirty_at_start` 快照。
+- **安全**：`dispatch.allowed_repo_roots` **fail closed**（未設則一律拒，建立 repo 信任邊界）；sandbox profile 全序 clamp（只降不升）映射 `claude --permission-mode`；派工 prompt 走 **relay stdin stream-json**（不進 tmux 指令列，零 injection）；缺依賴時停用 consumer 而非 claim-and-drop。
+- **Deeplink**：`purdex://execution/<id>` OS protocol handler（single-instance / open-url / 冷啟動 buffer / 單一落點視窗）+ SPA execution route 與 **observe-only** 詳情頁（不掛 stdin 寫入）。
+- **Artifact**：pointer-first（diff `{files,add,del}` 摘要 + transcript pointer，不 inline blob）。
+
+**Review**：codex 標準 review（3 項全修）+ 3-parallel adversarial（攻擊/防守/檔案體質，三份皆 needs-attention）收斂出 6 項，5 項修復、1 項（DB 層單-live guard，M0 單 daemon 前提外）→ issue #938。
+
+`go test ./...` 全綠 / vitest 3982 / lint / build 綠。
+
 ## [1.0.0-alpha.325] - 2026-07-19
 
 ### Fix(opencode): child (subagent) session 事件不再劫持父 session 燈號 (#934)
