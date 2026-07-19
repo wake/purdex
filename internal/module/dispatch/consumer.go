@@ -22,6 +22,10 @@ const (
 	seqAccepted = 1
 	seqRunning  = 2
 	seqFailed   = 2
+	// seqTerminal is the completed/failed report seq on the normal lifecycle
+	// (accepted=1 → running=2 → terminal=3). The pre-launch admission-reject
+	// failed above rides seqFailed=2 because it never reached running.
+	seqTerminal = 3
 )
 
 // reportEnqueuer is the narrow slice of *Sender the consumer glue needs: durably
@@ -80,6 +84,35 @@ func acceptedRowFromExec(e *execution.Execution) AcceptedRow {
 		DirtyAtStart:            e.DirtyAtStart,
 		SessionCode:             sessionCode,
 	}
+}
+
+// terminalReporter adapts the dispatch report Sender onto
+// execution.TerminalReporter, so the execution TerminalProcessor can durably
+// enqueue the completed/failed report (with pointer-first artifacts) without
+// importing dispatch. It maps the execution-side Artifact onto the report
+// Artifact and stamps seqTerminal (running+1). execution never sees the seq.
+type terminalReporter struct {
+	sender reportEnqueuer
+}
+
+var _ execution.TerminalReporter = terminalReporter{}
+
+// EnqueueTerminal durably queues the terminal(seq=3) report. errCode/errMsg are
+// populated only for failed; completed carries no error object.
+func (r terminalReporter) EnqueueTerminal(exec *execution.Execution, status execution.Status, artifacts []execution.Artifact, errCode, errMsg string) error {
+	reportArts := make([]Artifact, len(artifacts))
+	for i, a := range artifacts {
+		reportArts[i] = Artifact{Kind: a.Kind, Pointer: a.Pointer, Meta: a.Meta}
+	}
+	var errObj *ReportError
+	if status == execution.StatusFailed {
+		errObj = &ReportError{Code: errCode, Message: errMsg}
+	}
+	payload, err := BuildTerminalPayload(exec.ExecutionID, seqTerminal, string(status), reportArts, errObj)
+	if err != nil {
+		return err
+	}
+	return r.sender.Enqueue(exec.ExecutionID, exec.DispatchID, seqTerminal, string(status), payload)
 }
 
 // buildPrompt composes the agent's starting prompt from the fetched issue. The

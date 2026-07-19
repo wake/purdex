@@ -15,6 +15,7 @@ import (
 	"github.com/wake/purdex/internal/module/execution"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/module/stream"
+	"github.com/wake/purdex/internal/relay"
 )
 
 // Environment keys for the Ploom connection. These are placeholder sourcing for
@@ -93,8 +94,65 @@ func (m *DispatchModule) Init(c *core.Core) error {
 			m.sink = disabledLaunchSink
 		}
 	}
+
+	// P.8: wire the terminal-outcome seam. The stream module publishes itself as
+	// the seam (SetTerminalHandler + LastResult); on process exit the handler
+	// classifies the outcome, captures the diff artifact, and enqueues the
+	// completed/failed report through the same durable outbox.
+	m.wireTerminal(executionStore(c), terminalSeam(c), daemonID(c))
+
 	m.worker = NewWorker(m.client, WithSink(m.sink))
 	return nil
+}
+
+// streamTerminalSeam is the narrow slice of the stream module the terminal wiring
+// needs (satisfied by *stream.StreamModule): register the process-exit handler
+// and read the captured `result` for outcome classification.
+type streamTerminalSeam interface {
+	SetTerminalHandler(h stream.TerminalHandler)
+	LastResult(code string) (stream.ResultEvent, bool)
+}
+
+// wireTerminal registers the P.8 terminal handler on the stream seam. It no-ops
+// when any dependency is missing (no store / no seam / no Ploom sender) so the
+// daemon still boots. The handler resolves the execution by session_code,
+// classifies the outcome (exit code + captured result), and enqueues the terminal
+// report; it is idempotent (unknown/terminal/race → no report).
+func (m *DispatchModule) wireTerminal(store *execution.ExecutionStore, seam streamTerminalSeam, daemonID string) {
+	if store == nil || seam == nil || m.sender == nil {
+		return
+	}
+	proc := execution.NewTerminalProcessor(store, terminalReporter{sender: m.sender}, execution.BuildDiffArtifact, daemonID)
+	seam.SetTerminalHandler(func(code string, ev relay.TerminalEvent) {
+		res, ok := seam.LastResult(code)
+		outcome := execution.ResultOutcome{HasResult: ok, IsError: res.IsError, Subtype: res.Subtype}
+		if err := proc.Handle(context.Background(), code, ev.ExitCode, ev.Signaled, outcome); err != nil {
+			log.Printf("[dispatch] terminal handle session=%s: %v", code, err)
+		}
+	})
+}
+
+// terminalSeam resolves the stream-published terminal-outcome seam, or nil when
+// stream is not registered.
+func terminalSeam(c *core.Core) streamTerminalSeam {
+	svc, ok := c.Registry.Get(stream.TerminalSeamKey)
+	if !ok {
+		return nil
+	}
+	seam, _ := svc.(streamTerminalSeam)
+	return seam
+}
+
+// daemonID returns the daemon's host id for scoping artifact pointers, falling
+// back to a stable placeholder when unset.
+func daemonID(c *core.Core) string {
+	c.CfgMu.RLock()
+	id := c.Cfg.HostID
+	c.CfgMu.RUnlock()
+	if id == "" {
+		return "daemon"
+	}
+	return id
 }
 
 // buildCoordinator assembles the execution launch durable-cut Coordinator (P.6)
