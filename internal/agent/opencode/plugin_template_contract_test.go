@@ -74,10 +74,19 @@ func newPluginSimState() *pluginSimState {
 func (s *pluginSimState) simulateBusEvent(eventType string, properties map[string]any) (mappedHookEvent, bool) {
 	switch eventType {
 	case "session.created":
+		sid := resolveSid(properties)
+		parentID := ""
+		if info, ok := properties["info"].(map[string]any); ok {
+			parentID = strMapVal(info, "parentID")
+		}
+		if parentID != "" {
+			s.subagentSessions[sid] = parentID
+			return mappedHookEvent{}, false
+		}
 		return mappedHookEvent{
 			Name: "PdxSessionStart",
 			Payload: map[string]any{
-				"session_id": strMapVal(properties, "sessionID"),
+				"session_id": sid,
 			},
 		}, true
 	case "permission.asked":
@@ -98,9 +107,12 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 			},
 		}, true
 	case "session.error":
-		sessionID := strMapVal(properties, "sessionID")
-		if sessionID != "" {
-			s.suppressIdleForSession[sessionID] = true
+		sid := resolveSid(properties)
+		if _, isChild := s.subagentSessions[sid]; isChild {
+			return mappedHookEvent{}, false
+		}
+		if sid != "" {
+			s.suppressIdleForSession[sid] = true
 		}
 		var errName, errDetails string
 		if errObj, ok := properties["error"].(map[string]any); ok {
@@ -124,22 +136,35 @@ func (s *pluginSimState) simulateBusEvent(eventType string, properties map[strin
 		if strMapVal(statusObj, "type") != "idle" {
 			return mappedHookEvent{}, false
 		}
-		sessionID := strMapVal(properties, "sessionID")
-		if s.suppressIdleForSession[sessionID] {
-			delete(s.suppressIdleForSession, sessionID)
+		sid := resolveSid(properties)
+		if _, isChild := s.subagentSessions[sid]; isChild {
+			return mappedHookEvent{}, false
+		}
+		if s.suppressIdleForSession[sid] {
+			delete(s.suppressIdleForSession, sid)
 			return mappedHookEvent{}, false
 		}
 		return mappedHookEvent{
 			Name: "PdxStop",
 			Payload: map[string]any{
-				"session_id": sessionID,
+				"session_id": sid,
 			},
 		}, true
 	case "session.deleted":
+		sid := resolveSid(properties)
+		if _, isChild := s.subagentSessions[sid]; isChild {
+			delete(s.subagentSessions, sid)
+			return mappedHookEvent{}, false
+		}
+		for childID, parentID := range s.subagentSessions {
+			if parentID == sid {
+				delete(s.subagentSessions, childID)
+			}
+		}
 		return mappedHookEvent{
 			Name: "PdxSessionEnd",
 			Payload: map[string]any{
-				"session_id": strMapVal(properties, "sessionID"),
+				"session_id": sid,
 			},
 		}, true
 	}
@@ -245,6 +270,20 @@ func (s *pluginSimState) simulateToolExecuteAfter(input, output map[string]any) 
 			"output":     strMapVal(output, "output"),
 		},
 	}, true
+}
+
+// resolveSid mirrors the JS template's defensive session-id resolution:
+// `event.properties.sessionID || event.properties.info?.id || ''`. The
+// generated SDK type lists only `info` for session.created/deleted, so the
+// top-level sessionID is not guaranteed across versions.
+func resolveSid(properties map[string]any) string {
+	if sid := strMapVal(properties, "sessionID"); sid != "" {
+		return sid
+	}
+	if info, ok := properties["info"].(map[string]any); ok {
+		return strMapVal(info, "id")
+	}
+	return ""
 }
 
 func simAgentTypeFromArgs(args map[string]any) string {

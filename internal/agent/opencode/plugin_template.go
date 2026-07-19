@@ -44,6 +44,15 @@ func renderManagedPlugin(pdxPath string) string {
 export const PurdexOpenCodeHooks = async () => {
   const activeSubagents = new Map()
   const suppressIdleForSession = new Set()
+  // childSessionID -> parentSessionID. opencode runs each subagent (Task
+  // tool) as a child session with its own full lifecycle over the same
+  // tmux pane / sender identity as the parent. The daemon matches frames
+  // by (pane, senderPID) not opencode session_id, so re-emitting a child's
+  // lifecycle as a parent-level Pdx* event hijacks the parent frame
+  // (collapses idle / turns error / deletes the frame). Learn child->parent
+  // from session.created and gate every parent-level emit for a known
+  // child. The subagent is already represented by PdxSubagentStart/Stop.
+  const subagentSessions = new Map()
   const pdxPath = %q
   const PURDEX_EVENT = %s
 
@@ -70,9 +79,19 @@ export const PurdexOpenCodeHooks = async () => {
   return {
     event: async ({ event }) => {
       switch (event.type) {
-        case 'session.created':
-          await emit(PURDEX_EVENT.PdxSessionStart, { session_id: event.properties.sessionID })
+        case 'session.created': {
+          const sid = event.properties.sessionID || event.properties.info?.id || ''
+          const parentID = event.properties.info?.parentID
+          if (parentID) {
+            // Child (subagent) session: register and suppress the
+            // parent-level start. The subagent dot is owned by
+            // PdxSubagentStart/Stop instead.
+            subagentSessions.set(sid, parentID)
+            return
+          }
+          await emit(PURDEX_EVENT.PdxSessionStart, { session_id: sid })
           return
+        }
         case 'permission.asked':
           await emit(PURDEX_EVENT.PdxPermissionRequest, {
             request_type: 'permission',
@@ -86,24 +105,44 @@ export const PurdexOpenCodeHooks = async () => {
             questions: event.properties.questions,
           })
           return
-        case 'session.error':
-          if (event.properties.sessionID) suppressIdleForSession.add(event.properties.sessionID)
+        case 'session.error': {
+          const sid = event.properties.sessionID || event.properties.info?.id || ''
+          // Child error is pure noise at the parent level; also skip arming
+          // suppressIdleForSession so no child-armed entry can leak (a child
+          // idle would never clear it since child idles are gated too).
+          if (subagentSessions.has(sid)) return
+          if (sid) suppressIdleForSession.add(sid)
           await emit(PURDEX_EVENT.PdxStopFailure, {
             error: event.properties.error?.name || '',
             error_details: event.properties.error?.data?.message || '',
           })
           return
-        case 'session.status':
+        }
+        case 'session.status': {
           if (event.properties.status?.type !== 'idle') return
-          if (suppressIdleForSession.has(event.properties.sessionID)) {
-            suppressIdleForSession.delete(event.properties.sessionID)
+          const sid = event.properties.sessionID || event.properties.info?.id || ''
+          if (subagentSessions.has(sid)) return
+          if (suppressIdleForSession.has(sid)) {
+            suppressIdleForSession.delete(sid)
             return
           }
-          await emit(PURDEX_EVENT.PdxStop, { session_id: event.properties.sessionID })
+          await emit(PURDEX_EVENT.PdxStop, { session_id: sid })
           return
-        case 'session.deleted':
-          await emit(PURDEX_EVENT.PdxSessionEnd, { session_id: event.properties.sessionID })
+        }
+        case 'session.deleted': {
+          const sid = event.properties.sessionID || event.properties.info?.id || ''
+          if (subagentSessions.has(sid)) {
+            subagentSessions.delete(sid)
+            return
+          }
+          // Parent delete: prune only this parent's children (never a
+          // sibling parent's still-live children), then emit end.
+          for (const [childID, parentID] of subagentSessions) {
+            if (parentID === sid) subagentSessions.delete(childID)
+          }
+          await emit(PURDEX_EVENT.PdxSessionEnd, { session_id: sid })
           return
+        }
       }
     },
     'chat.message': async (input, output) => {
