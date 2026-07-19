@@ -11,8 +11,13 @@ export type ParsedRoute =
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'workspace-settings'; workspaceId: string }
   | { kind: 'workspace-session-tab'; workspaceId: string; tabId: string; mode: 'terminal' | 'stream' }
+  | { kind: 'execution'; executionId: string }
 
 const ID_PATTERN = /^[0-9a-z]{6}$/
+// Execution ids are daemon-minted opaque handles (contract §2: `exc_` + hex).
+// Kept permissive (safe URL token) so a future id scheme still round-trips, but
+// bounded to reject path traversal / injection in the deeplink path segment.
+const EXECUTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 // F6: share the source of truth for settings id grammar with the
 // contribution registry so a registration that passes `assertValid…` is
 // also guaranteed to round-trip through parseRoute(). Subsection uses
@@ -67,6 +72,13 @@ export function parseRoute(path: string): ParsedRoute | null {
 
   const segments = path.split('/').filter(Boolean)
 
+  // /execution/<id> — deeplink landing / detail page (Task P.12). Stable landing
+  // point so a deeplink never dead-ends: the page fetches the projection itself.
+  if (segments[0] === 'execution' && segments.length === 2) {
+    if (!EXECUTION_ID_PATTERN.test(segments[1])) return null
+    return { kind: 'execution', executionId: segments[1] }
+  }
+
   if (segments[0] === 't' && segments.length === 3) {
     if (!ID_PATTERN.test(segments[1])) return null
     return { kind: 'session-tab', tabId: segments[1], mode: validateMode(segments[2]) }
@@ -120,5 +132,7 @@ export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: stri
       return '/'
     case 'pdf-preview':
       return '/'
+    case 'execution':
+      return `/execution/${content.executionId}`
   }
 }

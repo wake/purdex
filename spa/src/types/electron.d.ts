@@ -99,6 +99,9 @@ interface Window {
     onNotificationClicked: (callback: (payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }) => void) => () => void
     focusMyWindow: () => void
 
+    // Deeplink (purdex://execution/<id>[?host=<hint>]) — consumed by the P.12 resolver
+    onDeeplinkNavigate: (callback: (payload: { executionId: string; host?: string }) => void) => () => void
+
     // Filesystem (LocalBackend)
     fs: {
       read: (path: string) => Promise<Uint8Array>

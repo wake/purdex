@@ -88,13 +88,18 @@ func (r *Relay) Run(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 
+	// stdoutDone is closed once the stdout goroutine has fully drained the pipe
+	// and stopped writing to the WS. Only then may the main goroutine reap the
+	// process and emit the terminal frame + close, keeping conn writes
+	// single-threaded (gorilla/websocket forbids concurrent writers).
+	stdoutDone := make(chan struct{})
+
 	// Subprocess stdout → line-buffered tee to stderr + send to daemon WS
 	// IMPORTANT: use bufio.Scanner for line-based reading to preserve NDJSON boundaries
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "subprocess exited"))
+		defer close(stdoutDone)
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB max line
 		for scanner.Scan() {
@@ -140,11 +145,46 @@ func (r *Relay) Run(ctx context.Context) error {
 		}
 	}()
 
+	// Reap the subprocess only after stdout is fully drained. Per the
+	// exec.StdoutPipe contract, Wait must not be called until all reads from the
+	// pipe have completed. Waiting on stdoutDone first also guarantees the stdout
+	// goroutine is no longer writing to conn, so the terminal frame + close below
+	// are emitted by a single writer.
+	<-stdoutDone
 	cmdErr := cmd.Wait()
+
+	// Emit the authoritative process-exit signal as an out-of-band binary frame
+	// (spec §5.3): terminal timing is decided by process exit, carrying the exit
+	// code / signal so the daemon's execution layer can act on it. This is
+	// additive — the line-by-line stream above is unchanged. Best-effort: if the
+	// WS is already broken the daemon falls back to §5.4 reconcile.
+	ev := terminalEventFromState(cmd.ProcessState)
+	if data, mErr := MarshalTerminalFrame(ev); mErr == nil {
+		conn.WriteMessage(websocket.BinaryMessage, data)
+	}
+	conn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "subprocess exited"))
+
 	wg.Wait()
 
 	if cmdErr != nil {
 		fmt.Fprintf(os.Stderr, "pdx relay: subprocess exited: %v\n", cmdErr)
 	}
 	return cmdErr
+}
+
+// terminalEventFromState builds the structured terminal event from the reaped
+// process state. ExitCode is -1 when the process did not exit normally; when it
+// was terminated by a signal, the signal number is recorded.
+func terminalEventFromState(ps *os.ProcessState) TerminalEvent {
+	ev := TerminalEvent{Type: TerminalEventType, ExitCode: -1}
+	if ps == nil {
+		return ev
+	}
+	ev.ExitCode = ps.ExitCode()
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		ev.Signaled = true
+		ev.Signal = int(ws.Signal())
+	}
+	return ev
 }

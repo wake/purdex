@@ -114,6 +114,12 @@ export function useRouteSync() {
         }
         break
       }
+      case 'execution':
+        // Read-only detail landing (Task P.12). Singleton per execution id; the
+        // page fetches its own projection so a direct URL / back-forward never
+        // dead-ends.
+        openSingletonTab({ kind: 'execution', executionId: parsed.executionId })
+        break
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openSingletonTab, setActiveTab: stable Zustand selectors
   }, [location, hydrated])
