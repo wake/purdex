@@ -97,7 +97,10 @@ func (f *fakeLauncher) Launch(ctx context.Context, spec LaunchSpec) (LaunchResul
 func newCoordFixture(t *testing.T, fl *fakeLauncher, fr *fakeReporter, adm *fakeAdmitter) (*Coordinator, *ExecutionStore) {
 	t.Helper()
 	store := openTestStore(t)
-	c := NewCoordinator(adm, store, fr, fl)
+	// Host policy = danger-full (widest) so these fixtures exercise the durable-cut
+	// ordering without the clamp narrowing the requested profile; sandbox clamp is
+	// covered explicitly by TestAccept_ClampsSandboxProfile below.
+	c := NewCoordinator(adm, store, fr, fl, ProfileDangerFull)
 	// deterministic id so session_name is predictable.
 	c.newID = func() string { return "exc_fixed01" }
 	return c, store
@@ -225,6 +228,79 @@ func TestAccept_AdmissionRejected_NoRow(t *testing.T) {
 	// Nothing ran; no row created.
 	require.Empty(t, rec.snapshot())
 	_, ok, err := store.GetByID("exc_fixed01")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+// TestAccept_ClampsSandboxProfile: a request wider than the host policy is
+// narrowed to the host policy, and the EFFECTIVE profile lands on the row, the
+// accepted report, and the launch spec.
+func TestAccept_ClampsSandboxProfile(t *testing.T) {
+	rec := &recorder{}
+	adm := &fakeAdmitter{adm: Admission{CanonicalPath: "/canon/repo", HeadAtStart: "h"}}
+	fr := &fakeReporter{rec: rec}
+	fl := &fakeLauncher{rec: rec, result: LaunchResult{SessionCode: "c"}}
+	store := openTestStore(t)
+	// Host policy ask; dispatch requests the widest profile → clamp down to ask.
+	c := NewCoordinator(adm, store, fr, fl, ProfileAsk)
+	c.newID = func() string { return "exc_clamp1" }
+
+	exec, err := c.Accept(context.Background(), LaunchRequest{
+		DispatchID:     "dsp_c",
+		RepoLocation:   "/raw",
+		SandboxProfile: "danger-full",
+	})
+	require.NoError(t, err)
+
+	// Effective profile persisted on the row + carried into the launch spec.
+	require.Equal(t, "ask", exec.SandboxProfile)
+	require.Equal(t, "ask", fl.gotSpec.SandboxProfile)
+	got, ok, err := store.GetByID("exc_clamp1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "ask", got.SandboxProfile)
+	// Accepted report reflects the effective (clamped) profile, not the request.
+	require.Equal(t, "ask", fr.acceptedExec.SandboxProfile)
+}
+
+// TestAccept_OmittedSandboxProfile_UsesHostDefault: an empty request inherits the
+// host policy.
+func TestAccept_OmittedSandboxProfile_UsesHostDefault(t *testing.T) {
+	rec := &recorder{}
+	adm := &fakeAdmitter{adm: Admission{CanonicalPath: "/canon/repo", HeadAtStart: "h"}}
+	fr := &fakeReporter{rec: rec}
+	fl := &fakeLauncher{rec: rec, result: LaunchResult{SessionCode: "c"}}
+	store := openTestStore(t)
+	c := NewCoordinator(adm, store, fr, fl, ProfileWorkspaceWrite)
+	c.newID = func() string { return "exc_omit1" }
+
+	exec, err := c.Accept(context.Background(), LaunchRequest{DispatchID: "dsp_o", RepoLocation: "/raw"})
+	require.NoError(t, err)
+	require.Equal(t, "workspace-write", exec.SandboxProfile)
+}
+
+// TestAccept_UnknownSandboxProfile_FailsClosed: an unknown request profile is
+// rejected before any lock is taken or row created.
+func TestAccept_UnknownSandboxProfile_FailsClosed(t *testing.T) {
+	rec := &recorder{}
+	adm := &fakeAdmitter{adm: Admission{CanonicalPath: "/canon/repo", HeadAtStart: "h"}}
+	fr := &fakeReporter{rec: rec}
+	fl := &fakeLauncher{rec: rec}
+	store := openTestStore(t)
+	c := NewCoordinator(adm, store, fr, fl, ProfileDangerFull)
+	c.newID = func() string { return "exc_unk1" }
+
+	_, err := c.Accept(context.Background(), LaunchRequest{
+		DispatchID:     "dsp_u",
+		RepoLocation:   "/raw",
+		SandboxProfile: "yolo-mode",
+	})
+	require.ErrorIs(t, err, ErrUnknownProfile)
+
+	// Fail-closed: admission never invoked, no row, nothing enqueued/launched.
+	require.Equal(t, 0, adm.calls)
+	require.Empty(t, rec.snapshot())
+	_, ok, err := store.GetByID("exc_unk1")
 	require.NoError(t, err)
 	require.False(t, ok)
 }

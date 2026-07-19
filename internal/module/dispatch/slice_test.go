@@ -26,9 +26,11 @@ import (
 type sliceAdmitter struct {
 	adm      execution.Admission
 	admitErr error
+	calls    int
 }
 
 func (a *sliceAdmitter) WithRepoLock(_ context.Context, _ string, fn func(*execution.Admission) error) error {
+	a.calls++
 	if a.admitErr != nil {
 		return a.admitErr
 	}
@@ -116,7 +118,9 @@ func newSliceFixture(t *testing.T, fc *fakeClient, adm *sliceAdmitter, fl *slice
 
 	poster := &slicePoster{}
 	sender := NewSender(outbox, poster, WithExecutionReader(executionStoreReader{store}))
-	coord := execution.NewCoordinator(adm, store, launchReporter{sender: sender}, fl)
+	// Host policy = danger-full so the slice exercises the full consume→launch→report
+	// path without the sandbox clamp narrowing the requested profiles.
+	coord := execution.NewCoordinator(adm, store, launchReporter{sender: sender}, fl, execution.ProfileDangerFull)
 
 	m := &DispatchModule{sender: sender}
 	worker := NewWorker(fc, WithSink(m.consumeSink(coord)))
@@ -214,6 +218,40 @@ func TestSlice_AdmissionRejected_ReportsFailed(t *testing.T) {
 	require.Equal(t, "failed", got[1].status)
 	require.Equal(t, "dsp_busy", got[1].dispatchID)
 	require.Equal(t, "repo_busy", got[1].errCode)
+}
+
+// TestSlice_UnknownSandboxProfile_ReportsFailed: a dispatch requesting an unknown
+// sandbox profile is rejected at Accept (before any lock/row) and projected as
+// accepted(1)+failed(2) carrying unknown_sandbox_profile (spec §8.1 / fixture
+// sandbox.unknown.json).
+func TestSlice_UnknownSandboxProfile_ReportsFailed(t *testing.T) {
+	fc := &fakeClient{
+		pending: []PendingDispatch{{DispatchID: "dsp_yolo", IssueID: "iss_3"}},
+		fetchFn: func(id string) (DispatchDetail, error) {
+			return DispatchDetail{
+				DispatchID:     id,
+				Issue:          Issue{IssueID: "iss_3", Title: "Third dispatch"},
+				RepoLocation:   RepoLocation{LocalDir: "/canon/repo"},
+				SandboxProfile: "yolo-mode",
+			}, nil
+		},
+	}
+	adm := &sliceAdmitter{adm: execution.Admission{CanonicalPath: "/canon/repo", HeadAtStart: "h"}}
+	fl := &sliceLauncher{}
+	f := newSliceFixture(t, fc, adm, fl)
+
+	require.NoError(t, f.worker.RunOnce(context.Background()))
+
+	// Admission was never invoked (fail-closed before the lock); nothing launched.
+	require.Zero(t, adm.calls)
+	require.Equal(t, execution.LaunchSpec{}, fl.gotSpec)
+
+	require.NoError(t, f.sender.Flush(context.Background()))
+	got := f.poster.sorted()
+	require.Len(t, got, 2)
+	require.Equal(t, "accepted", got[0].status)
+	require.Equal(t, "failed", got[1].status)
+	require.Equal(t, "unknown_sandbox_profile", got[1].errCode)
 }
 
 // ---- module wiring ------------------------------------------------------------

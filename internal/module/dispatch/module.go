@@ -198,7 +198,24 @@ func (m *DispatchModule) buildCoordinator(c *core.Core) *execution.Coordinator {
 	// can restrict admissible repos later without touching this seam.
 	admitter := execution.NewAdmitter(store, nil)
 	reporter := launchReporter{sender: m.sender}
-	return execution.NewCoordinator(admitter, store, reporter, launcher)
+	return execution.NewCoordinator(admitter, store, reporter, launcher, hostSandboxPolicy(c))
+}
+
+// hostSandboxPolicy resolves the daemon's authoritative sandbox host policy from
+// config (spec §8.1). Empty → least-privilege default (ask); a misconfigured
+// value fails closed to the same strict default (logged) rather than silently
+// widening — the daemon still boots.
+func hostSandboxPolicy(c *core.Core) execution.Profile {
+	c.CfgMu.RLock()
+	raw := c.Cfg.Dispatch.SandboxHostPolicy
+	c.CfgMu.RUnlock()
+	policy, err := execution.ResolveHostPolicy(raw)
+	if err != nil {
+		log.Printf("[dispatch] invalid sandbox host policy %q: %v — defaulting to %s",
+			raw, err, execution.DefaultHostPolicy)
+		return execution.DefaultHostPolicy
+	}
+	return policy
 }
 
 // consumeSink is the P.7 tail of the consume loop: for each claimed+fetched
@@ -217,7 +234,7 @@ func (m *DispatchModule) consumeSink(coord *execution.Coordinator) FetchSink {
 		}
 		if _, err := coord.Accept(ctx, req); err != nil {
 			switch {
-			case errors.Is(err, execution.ErrRepoBusy), errors.Is(err, execution.ErrCanonical):
+			case errors.Is(err, execution.ErrRepoBusy), errors.Is(err, execution.ErrCanonical), errors.Is(err, execution.ErrUnknownProfile):
 				log.Printf("[dispatch] admission rejected dispatch=%s: %v", req.DispatchID, err)
 				if rerr := reportAdmissionRejected(m.sender, newRejectionID(), req.DispatchID, cd.Detail, err); rerr != nil {
 					log.Printf("[dispatch] report rejection dispatch=%s: %v", req.DispatchID, rerr)

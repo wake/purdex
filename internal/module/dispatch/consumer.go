@@ -181,6 +181,8 @@ func rejectionCode(err error) string {
 		return "repo_busy"
 	case errors.Is(err, execution.ErrCanonical):
 		return "invalid_repo_location"
+	case errors.Is(err, execution.ErrUnknownProfile):
+		return "unknown_sandbox_profile"
 	default:
 		return "launch_failed"
 	}

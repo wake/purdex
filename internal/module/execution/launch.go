@@ -101,6 +101,11 @@ type Coordinator struct {
 	store    launchStore
 	reporter LaunchReporter
 	launcher Launcher
+	// hostPolicy is the daemon's already-resolved sandbox host policy (the sole
+	// authority): every dispatch's requested profile is clamped down to it at
+	// Accept time (spec §8.1). Callers pass an explicit resolved Profile so the
+	// zero value can never silently over-restrict.
+	hostPolicy Profile
 	// newID generates the execution_id (and, via SessionNameFor, the session
 	// name) before the row is inserted; overridable in tests.
 	newID func() string
@@ -109,15 +114,18 @@ type Coordinator struct {
 
 // NewCoordinator builds a launch coordinator. admitter is typically *Admitter;
 // store is *ExecutionStore; reporter is the dispatch-side outbox adapter;
-// launcher is the real tmux/relay launcher (launcher.go).
-func NewCoordinator(admitter repoAdmitter, store launchStore, reporter LaunchReporter, launcher Launcher) *Coordinator {
+// launcher is the real tmux/relay launcher (launcher.go). hostPolicy is the
+// daemon's resolved sandbox host policy (see ResolveHostPolicy) — the authority a
+// dispatch's requested profile is clamped against.
+func NewCoordinator(admitter repoAdmitter, store launchStore, reporter LaunchReporter, launcher Launcher, hostPolicy Profile) *Coordinator {
 	return &Coordinator{
-		admitter: admitter,
-		store:    store,
-		reporter: reporter,
-		launcher: launcher,
-		newID:    newExecutionID,
-		logf:     log.Printf,
+		admitter:   admitter,
+		store:      store,
+		reporter:   reporter,
+		launcher:   launcher,
+		hostPolicy: hostPolicy,
+		newID:      newExecutionID,
+		logf:       log.Printf,
 	}
 }
 
@@ -126,8 +134,19 @@ func NewCoordinator(admitter repoAdmitter, store launchStore, reporter LaunchRep
 // failure surface as errors for the caller (P.7) to turn into a failed report;
 // on launch failure the row is already marked failed here so the repo unblocks.
 func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution, error) {
+	// Clamp the requested sandbox profile against the daemon host policy BEFORE
+	// taking any repo lock, so an unknown request fails closed (ErrUnknownProfile)
+	// with no row and no lock held. The clamped effective value is what lands on
+	// the row and drives the launch --permission-mode flag; the raw request never
+	// widens past the host policy (spec §8.1, only-narrows).
+	effProfile, err := Clamp(req.SandboxProfile, c.hostPolicy)
+	if err != nil {
+		return nil, err
+	}
+	effective := effProfile.String()
+
 	var result *Execution
-	err := c.admitter.WithRepoLock(ctx, req.RepoLocation, func(adm *Admission) error {
+	err = c.admitter.WithRepoLock(ctx, req.RepoLocation, func(adm *Admission) error {
 		// (a) pre-generate execution_id + deterministic session_name.
 		execID := c.newID()
 		sessionName := SessionNameFor(execID)
@@ -144,7 +163,7 @@ func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution
 			LaunchState:    LaunchLaunching,
 			HeadAtStart:    adm.HeadAtStart,
 			DirtyAtStart:   adm.DirtyAtStart,
-			SandboxProfile: req.SandboxProfile,
+			SandboxProfile: effective,
 		})
 		if err != nil {
 			return fmt.Errorf("create execution row: %w", err)
@@ -168,7 +187,7 @@ func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution
 			SessionName:    sessionName,
 			Cwd:            adm.CanonicalPath,
 			Prompt:         req.Prompt,
-			SandboxProfile: req.SandboxProfile,
+			SandboxProfile: effective,
 		})
 		if lerr != nil {
 			// Mark failed so the single-live guard releases the repo; reconcile
