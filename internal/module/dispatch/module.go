@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -24,6 +25,18 @@ const (
 	envPloomURL   = "PDX_PLOOM_URL"
 	envPloomToken = "PDX_PLOOM_TOKEN"
 )
+
+// ErrMissingDependency is returned by Init when a Ploom endpoint is configured
+// but one of the consumer's mandatory internal dependencies is absent (or
+// published under the wrong type).
+//
+// Why this is fatal rather than a degradation: claiming a dispatch (E2) is an
+// irreversible move on Ploom's side, and M0 has no dispatch expiry. If the
+// daemon cannot create a durable execution row AND queue its report chain, a
+// claimed dispatch is wedged forever — Ploom holds it as claimed while nothing
+// local exists to reconcile or report. So the consumer either has everything it
+// needs to be accountable for a claim, or it must never claim at all.
+var ErrMissingDependency = errors.New("dispatch dependency unavailable")
 
 // DispatchModule wires the Ploom consumer: it polls pending dispatches, claims
 // them, and fetches their full detail (M0 Task P.3). It stops at fetch — the
@@ -54,17 +67,43 @@ func (m *DispatchModule) Name() string { return "dispatch" }
 func (m *DispatchModule) Dependencies() []string { return []string{"execution", "stream"} }
 
 // Init reads the Ploom connection (URL + Bearer token) from the environment and
-// builds the client, report sender, and consume→launch sink. When no URL is
-// configured the consumer stays disabled so the daemon still boots (M0 has no
-// default Ploom endpoint yet).
+// builds the client, report sender, and consume→launch sink.
+//
+// Two distinct "off" states, deliberately different:
+//   - No Ploom URL → the consumer is simply not configured. Nothing is claimed,
+//     nothing is owed, and the daemon boots normally (M0 has no default endpoint).
+//   - A Ploom URL IS configured but an internal dependency is missing → hard
+//     error (ErrMissingDependency). Half a consumer would claim dispatches it can
+//     never account for, so it must not exist at all.
 func (m *DispatchModule) Init(c *core.Core) error {
 	m.core = c
 
 	baseURL := os.Getenv(envPloomURL)
 	token := os.Getenv(envPloomToken)
 	if baseURL == "" {
-		return nil // consumer disabled — see Start
+		return nil // consumer not configured — see Start
 	}
+
+	// Mandatory dependency gate (fail closed, BEFORE any client exists):
+	//   - execution store: the durable runtime row + the report outbox living in
+	//     the same database (atomic transition+report);
+	//   - relay gateway: the launcher's probe/push path — without it nothing can
+	//     ever reach running;
+	//   - terminal seam: the only producer of the completed/failed report, so
+	//     without it every launched execution wedges Ploom at running.
+	store := executionStore(c)
+	if store == nil {
+		return fmt.Errorf("%w: execution store (registry key %q)", ErrMissingDependency, execution.RegistryKey)
+	}
+	gw := relayGateway(c)
+	if gw == nil {
+		return fmt.Errorf("%w: stream relay gateway (registry key %q)", ErrMissingDependency, stream.RelayGatewayKey)
+	}
+	seam := terminalSeam(c)
+	if seam == nil {
+		return fmt.Errorf("%w: stream terminal seam (registry key %q)", ErrMissingDependency, stream.TerminalSeamKey)
+	}
+
 	m.client = NewClient(baseURL, token)
 
 	// P.4: durable report outbox + sender — built BEFORE the sink because the
@@ -75,52 +114,33 @@ func (m *DispatchModule) Init(c *core.Core) error {
 	//
 	// The outbox is a view over the EXECUTION database (execution owns the
 	// report_outbox table), which is what makes "commit the state transition and
-	// enqueue its report" a single atomic transaction. Without the execution store
-	// there are no executions to report on, so the consumer simply runs
-	// report-less (launch is disabled on the same condition below).
-	if store := executionStore(c); store != nil {
-		m.outbox = store.Outbox()
-		m.sender = NewSender(m.outbox, m.client, WithExecutionReader(executionStoreReader{store}))
-	} else {
-		log.Printf("[dispatch] reporting disabled: execution store unavailable")
-	}
+	// enqueue its report" a single atomic transaction.
+	m.outbox = store.Outbox()
+	m.sender = NewSender(m.outbox, m.client, WithExecutionReader(executionStoreReader{store}))
 
-	// P.7: assemble the launch durable-cut sink. A test may pre-inject m.sink;
-	// otherwise build the real consume→launch sink when the execution store and
-	// relay gateway are both available, degrading to a log-only sink if not (the
-	// poll/claim/fetch pipeline still runs — nothing launches).
+	// P.7: assemble the launch durable-cut sink (a test may pre-inject m.sink).
 	if m.sink == nil {
-		if coord := m.buildCoordinator(c); coord != nil {
-			m.sink = m.consumeSink(coord)
-		} else {
-			m.sink = disabledLaunchSink
-		}
+		m.sink = m.consumeSink(m.buildCoordinator(c, store, gw))
 	}
 
 	// P.8: wire the terminal-outcome seam. The stream module publishes itself as
 	// the seam (SetTerminalHandler + LastResult); on process exit the handler
 	// classifies the outcome, captures the diff artifact, and enqueues the
 	// completed/failed report through the same durable outbox.
-	m.wireTerminal(executionStore(c), terminalSeam(c), daemonID(c))
+	m.wireTerminal(store, seam, daemonID(c))
 
-	// P.9: assemble the startup reconcile sweep + manual reclaim. It needs the
+	// P.9: assemble the startup reconcile sweep + manual reclaim, over the
 	// execution store (live rows), core tmux (session liveness probe + orphan
-	// kill), and the durable terminal outbox adapter (to enqueue recovered
-	// terminal reports for replay). Disabled if any is missing.
-	m.reconciler = m.buildReconciler(c)
+	// kill), and the durable terminal outbox adapter.
+	m.reconciler = m.buildReconciler(c, store)
 
 	m.worker = NewWorker(m.client, WithSink(m.sink))
 	return nil
 }
 
-// buildReconciler assembles the P.9 Reconciler from registry-published
-// dependencies. Returns nil (reconcile disabled) when the execution store or the
-// report sender is unavailable — the daemon still boots.
-func (m *DispatchModule) buildReconciler(c *core.Core) *execution.Reconciler {
-	store := executionStore(c)
-	if store == nil || m.sender == nil {
-		return nil
-	}
+// buildReconciler assembles the P.9 Reconciler over the (already validated)
+// execution store.
+func (m *DispatchModule) buildReconciler(c *core.Core, store *execution.ExecutionStore) *execution.Reconciler {
 	return execution.NewReconciler(store, c.Tmux, terminalReporter{}, execution.BuildDiffArtifact, daemonID(c))
 }
 
@@ -132,15 +152,11 @@ type streamTerminalSeam interface {
 	LastResult(code string) (stream.ResultEvent, bool)
 }
 
-// wireTerminal registers the P.8 terminal handler on the stream seam. It no-ops
-// when any dependency is missing (no store / no seam / no Ploom sender) so the
-// daemon still boots. The handler resolves the execution by session_code,
+// wireTerminal registers the P.8 terminal handler on the stream seam (both are
+// validated non-nil by Init). The handler resolves the execution by session_code,
 // classifies the outcome (exit code + captured result), and enqueues the terminal
 // report; it is idempotent (unknown/terminal/race → no report).
 func (m *DispatchModule) wireTerminal(store *execution.ExecutionStore, seam streamTerminalSeam, daemonID string) {
-	if store == nil || seam == nil || m.sender == nil {
-		return
-	}
 	proc := execution.NewTerminalProcessor(store, terminalReporter{}, execution.BuildDiffArtifact, daemonID)
 	seam.SetTerminalHandler(func(code string, ev relay.TerminalEvent) {
 		res, ok := seam.LastResult(code)
@@ -175,21 +191,10 @@ func daemonID(c *core.Core) string {
 }
 
 // buildCoordinator assembles the execution launch durable-cut Coordinator (P.6)
-// from the registry-published dependencies: the execution store (row store +
+// over the dependencies Init already validated: the execution store (row store +
 // launch fence), the stream relay gateway (probe/push relay), core tmux, and the
-// live daemon connection config. Returns nil (launch disabled) if the store or
-// gateway is unavailable.
-func (m *DispatchModule) buildCoordinator(c *core.Core) *execution.Coordinator {
-	store := executionStore(c)
-	if store == nil {
-		log.Printf("[dispatch] launch disabled: execution store unavailable")
-		return nil
-	}
-	gw := relayGateway(c)
-	if gw == nil {
-		log.Printf("[dispatch] launch disabled: stream relay gateway unavailable")
-		return nil
-	}
+// live daemon connection config.
+func (m *DispatchModule) buildCoordinator(c *core.Core, store *execution.ExecutionStore, gw execution.RelayGateway) *execution.Coordinator {
 	launcher := execution.NewRealLauncher(c.Tmux, gw, session.EncodeSessionID, func() execution.LaunchConfig {
 		c.CfgMu.RLock()
 		defer c.CfgMu.RUnlock()
@@ -251,14 +256,6 @@ func (m *DispatchModule) consumeSink(coord *execution.Coordinator) FetchSink {
 	}
 }
 
-// disabledLaunchSink drops a claimed dispatch when launch is unavailable (no
-// execution store / relay gateway). The dispatch was already claimed on Ploom;
-// M0 leaves it for Ploom-side expiry (there is no row to reconcile).
-func disabledLaunchSink(_ context.Context, cd ClaimedDispatch) {
-	log.Printf("[dispatch] launch disabled — dropping claimed dispatch=%s issue=%s repo=%s",
-		cd.Pending.DispatchID, cd.Detail.Issue.IssueID, cd.Detail.RepoLocation.LocalDir)
-}
-
 // newRejectionID mints a synthetic execution_id for an admission-rejection failed
 // projection. No execution row is created for a rejection (admission never
 // captured head/dirty and single-live must not admit it), so the id only keys
@@ -318,8 +315,10 @@ func (m *DispatchModule) RegisterRoutes(mux *http.ServeMux) {
 // Start launches the poll loop in the background when a Ploom endpoint is
 // configured; otherwise it logs that the consumer is disabled.
 func (m *DispatchModule) Start(_ context.Context) error {
+	// No worker means Init either found no Ploom endpoint or failed closed on a
+	// missing dependency. Either way nothing may poll or claim.
 	if m.worker == nil {
-		log.Printf("[dispatch] consumer disabled (%s not set)", envPloomURL)
+		log.Printf("[dispatch] consumer not started (%s unset or dependencies unavailable)", envPloomURL)
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())

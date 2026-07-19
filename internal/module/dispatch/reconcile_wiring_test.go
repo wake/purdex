@@ -32,6 +32,7 @@ func newReconcileWiringCore(t *testing.T) (*core.Core, *execution.ExecutionStore
 	reg := core.NewServiceRegistry()
 	reg.Register(execution.RegistryKey, store)
 	reg.Register(stream.RelayGatewayKey, bridge.New())
+	reg.Register(stream.TerminalSeamKey, &fakeSeam{})
 
 	fe := tmux.NewFakeExecutor()
 	c := core.New(core.CoreDeps{

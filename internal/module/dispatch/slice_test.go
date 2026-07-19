@@ -335,6 +335,7 @@ func newWiringCore(t *testing.T, withGateway bool) *core.Core {
 
 	reg := core.NewServiceRegistry()
 	reg.Register(execution.RegistryKey, store)
+	reg.Register(stream.TerminalSeamKey, &fakeSeam{})
 	if withGateway {
 		reg.Register(stream.RelayGatewayKey, bridge.New())
 	}
@@ -357,15 +358,13 @@ func TestModule_Init_BuildsLaunchSink(t *testing.T) {
 	t.Cleanup(func() { _ = m.Stop(context.Background()) })
 }
 
-func TestModule_Init_GatewayMissing_DegradesGracefully(t *testing.T) {
+// F2: a missing relay gateway can no longer degrade into claim-and-drop — Init
+// fails closed and the worker is never built (see dependency_test.go).
+func TestModule_Init_GatewayMissing_FailsClosed(t *testing.T) {
 	c := newWiringCore(t, false) // no relay gateway registered
 	m := New()
-	require.NotPanics(t, func() {
-		require.NoError(t, m.Init(c))
-	})
-	require.NotNil(t, m.worker, "consumer still polls even with launch disabled")
-	require.NotNil(t, m.sink)
-	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+	require.ErrorIs(t, m.Init(c), ErrMissingDependency)
+	require.Nil(t, m.worker, "consumer must not poll or claim without a launch path")
 }
 
 func TestModule_Init_NoPloomURL_Disabled(t *testing.T) {
