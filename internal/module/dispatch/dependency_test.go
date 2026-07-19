@@ -78,8 +78,9 @@ func TestModule_Init_MissingDependency_FailsClosed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New()
-			err := m.Init(newDepCore(t, tc.parts, "https://ploom.test"))
-			require.ErrorIs(t, err, ErrMissingDependency)
+			// Dispatch-scoped fail-closed: the daemon still boots (Init returns nil),
+			// but the consumer is not built at all so nothing can poll or claim.
+			require.NoError(t, m.Init(newDepCore(t, tc.parts, "https://ploom.test")))
 			require.Nil(t, m.worker, "worker must not exist — nothing may poll or claim")
 			require.Nil(t, m.client, "no Ploom client is built when deps are missing")
 			require.Nil(t, m.sink)
@@ -98,8 +99,8 @@ func TestModule_DependencyMissing_NeverPollsOrClaims(t *testing.T) {
 	defer srv.Close()
 
 	m := New()
-	// Relay gateway missing → Init must fail and Start must be inert.
-	require.Error(t, m.Init(newDepCore(t, depParts{store: true, seam: true}, srv.URL)))
+	// Relay gateway missing → consumer disabled and Start must be inert.
+	require.NoError(t, m.Init(newDepCore(t, depParts{store: true, seam: true}, srv.URL)))
 	require.NoError(t, m.Start(context.Background()))
 	time.Sleep(100 * time.Millisecond)
 	require.NoError(t, m.Stop(context.Background()))
@@ -133,8 +134,9 @@ func TestModule_Init_WrongTypedDependency_FailsClosed(t *testing.T) {
 	c.Registry.Register(execution.RegistryKey, "not-a-store")
 
 	m := New()
-	require.ErrorIs(t, m.Init(c), ErrMissingDependency)
-	require.Nil(t, m.worker)
+	require.NoError(t, m.Init(c))
+	require.Nil(t, m.worker, "wrong-typed dep is as disabling as a missing one")
+	require.Nil(t, m.client)
 }
 
 // Sanity: the terminal seam we inject is the one the module drives.

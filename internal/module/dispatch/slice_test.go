@@ -500,13 +500,15 @@ func TestModule_Init_BuildsLaunchSink(t *testing.T) {
 	t.Cleanup(func() { _ = m.Stop(context.Background()) })
 }
 
-// F2: a missing relay gateway can no longer degrade into claim-and-drop — Init
-// fails closed and the worker is never built (see dependency_test.go).
+// F2: a missing relay gateway can no longer degrade into claim-and-drop — the
+// consumer is disabled entirely and the worker is never built, while the rest of
+// the daemon still boots (see dependency_test.go).
 func TestModule_Init_GatewayMissing_FailsClosed(t *testing.T) {
 	c := newWiringCore(t, false) // no relay gateway registered
 	m := New()
-	require.ErrorIs(t, m.Init(c), ErrMissingDependency)
+	require.NoError(t, m.Init(c), "a dispatch-scoped fault must not abort daemon boot")
 	require.Nil(t, m.worker, "consumer must not poll or claim without a launch path")
+	require.Nil(t, m.client, "no Ploom client when the consumer is disabled")
 }
 
 func TestModule_Init_NoPloomURL_Disabled(t *testing.T) {

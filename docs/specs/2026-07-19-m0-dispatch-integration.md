@@ -133,7 +133,7 @@ issue ──> dispatch ──> execution ──> attempt ──> session
   - recovery 讀到 `launch_state ∈ {launching, launched}` → **不 relaunch**，改走 reconcile（§5.4）。
   - 這防「首次已起 session A，daemon 在寫 `launched` / 發 accepted 前崩潰 → 重用同 execution_id 又起 session B → 一條 execution 底下兩 session、diff/transcript/seq 全混」。
   - **M0 attempt=1 的安全前提**：一個 execution_id **至多綁一次成功 launch**。真要「重試/換做法」= **新 dispatch → 新 execution_id**（rerun 語意，非重用），attempt 資料層仍留 M3。
-- **execution row 欄位**（Purdex 側 runtime SOT）：`execution_id, dispatch_id, repo_location(canonical), provider, launch_state, session_name(admission 預生·非 NULL·crash-recovery handle), session_code(建立後衍生·nullable·deeplink handle), attempt_no, status, seq_reported, head_at_start, dirty_at_start, sandbox_profile, outcome_source(result|exit_only, nullable 至 terminal), created_at, updated_at`。〔crash-recovery handle 用 `session_name`（R3 對齊現碼 name-based 建立）；`session_code` 為衍生 deeplink handle 保持 nullable；**刪除** `callback_target`——pull 下無 Ploom→Purdex callback，push 殘留（R1 #8）〕
+- **execution row 欄位**（Purdex 側 runtime SOT）：`execution_id, dispatch_id, repo_location(canonical), provider, launch_state, session_name(admission 預生·非 NULL·crash-recovery handle), session_code(建立後衍生·nullable·deeplink handle), attempt_no, status, seq_reported, head_at_start, dirty_at_start, sandbox_profile, outcome_source(`result`|`exit_only`|`rejected`, nullable 至 terminal；`rejected`＝admission/containment 拒絕而未曾 launch，見 §7.6), created_at, updated_at`。〔crash-recovery handle 用 `session_name`（R3 對齊現碼 name-based 建立）；`session_code` 為衍生 deeplink handle 保持 nullable；**刪除** `callback_target`——pull 下無 Ploom→Purdex callback，push 殘留（R1 #8）〕
 - **雙側兩表非雙寫**：Purdex 存 execution runtime row；Ploom 存 execution **projection** row（+ 寫進 `issue_event` append-only 活動流）。兩表各自權威（runtime vs projection），靠 report + ack cursor 同步，**不共用一張表、不雙寫**。
 
 ### 4.4 `ExecutionControlRequest` — M0 移除（V1）
@@ -227,6 +227,15 @@ M0 terminal 偵測要分開兩件事：**「何時 terminal」（時點）** 與
 3. **⚠️ Per-repo lock 跨 accept→launch，非 point check（codex R1 #4 TOCTOU）**：admission 檢查與「起 session + 寫 `launch_state=launching` + 記 `head_at_start`」須在**同一把 per-canonical-repo lock** 內原子完成，避免「檢查乾淨後、launch 前」有第二派工插入或 repo 被改。lock 為 daemon 行程內（M0 單 daemon 足夠）。
 4. **記錄 `head_at_start` + `dirty_at_start`**：受理時（持 lock）快照 repo HEAD commit 與 dirty 狀態，寫進 execution row（供 diff base 與事後稽核）。
 5. **已知殘留（M0 限制，明列非漏）**：M0 無 worktree，execution **執行中**使用者/外部 process 若改同 repo 檔（`git pull`、手動編輯），`git diff`（相對 `head_at_start`）會把外部變更一起算進 artifact。M0 靠「單 live execution + `dirty_at_start` 稽核」降風險，**完全隔離留 M3 worktree**。此為刻意取捨，非未察缺陷。
+
+### 7.6 Rejection 的表示：**必須有 backing row**（codex R2 #F3）
+
+派工被拒（repo busy / canonical 失敗 / 無 allowed root / unknown sandbox profile）時，**不得**送「沒有 runtime row 的合成 accepted」——那會讓 Ploom 有 execution projection、Purdex runtime SOT 卻無對應 execution，**兩側永久不一致**且無法查詢/reconcile/重建。
+
+- **建一筆真的 execution row**：真 `execution_id`、`status=failed`（terminal）、`outcome_source=rejected`、`launch_state=none`、記錄 rejection errCode 與原始 `repo_location`。
+- **契約不變**：仍投影 `accepted(1) + failed(2)`（契約禁裸 failed），但**有 backing row**，故可被 `GET /api/execution/{id}` 查到、accepted 可從 row 重建 replay。
+- **`effective_sandbox_profile` 必須是 clamp 後值**，不得 echo E3 的 raw request（如 host=`ask` + request=`danger-full` → echo `ask`）；unknown profile 無法 clamp 時 **fail closed 用最嚴值**，不得 echo 非法 enum。
+- 建 row 與兩筆 report **在同一 transaction**（沿用 §3.3 durability cut）；report 建不出來就整筆 rollback（terminal row 對 `ListLive` 不可見，此處遺失的 report 將永遠無法重建）。
 
 ---
 

@@ -3,7 +3,6 @@ package dispatch
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -28,13 +27,35 @@ const (
 // but one of the consumer's mandatory internal dependencies is absent (or
 // published under the wrong type).
 //
-// Why this is fatal rather than a degradation: claiming a dispatch (E2) is an
-// irreversible move on Ploom's side, and M0 has no dispatch expiry. If the
-// daemon cannot create a durable execution row AND queue its report chain, a
-// claimed dispatch is wedged forever — Ploom holds it as claimed while nothing
-// local exists to reconcile or report. So the consumer either has everything it
-// needs to be accountable for a claim, or it must never claim at all.
+// Why the consumer refuses to exist rather than degrade: claiming a dispatch
+// (E2) is an irreversible move on Ploom's side, and M0 has no dispatch expiry.
+// If the daemon cannot create a durable execution row AND queue its report
+// chain, a claimed dispatch is wedged forever — Ploom holds it as claimed while
+// nothing local exists to reconcile or report. So the consumer either has
+// everything it needs to be accountable for a claim, or it must never claim at
+// all. The fault is dispatch-scoped, so it disables the consumer (logged) and
+// lets the rest of the daemon boot.
 var ErrMissingDependency = errors.New("dispatch dependency unavailable")
+
+// missingDependency names the first absent mandatory dependency, or "" when all
+// are present. Each is required to be accountable for a claim:
+//   - execution store: the durable runtime row + the report outbox in the same
+//     database (atomic transition+report);
+//   - relay gateway: the launcher's probe/push path — without it nothing reaches
+//     running;
+//   - terminal seam: the only producer of the completed/failed report, so
+//     without it every launched execution wedges Ploom at running.
+func missingDependency(store *execution.ExecutionStore, gw execution.RelayGateway, seam streamTerminalSeam) string {
+	switch {
+	case store == nil:
+		return "execution store (registry key " + execution.RegistryKey + ")"
+	case gw == nil:
+		return "stream relay gateway (registry key " + stream.RelayGatewayKey + ")"
+	case seam == nil:
+		return "stream terminal seam (registry key " + stream.TerminalSeamKey + ")"
+	}
+	return ""
+}
 
 // DispatchModule wires the Ploom consumer: it polls pending dispatches, claims
 // them, and fetches their full detail (M0 Task P.3). It stops at fetch — the
@@ -70,9 +91,13 @@ func (m *DispatchModule) Dependencies() []string { return []string{"execution", 
 // Two distinct "off" states, deliberately different:
 //   - No Ploom URL → the consumer is simply not configured. Nothing is claimed,
 //     nothing is owed, and the daemon boots normally (M0 has no default endpoint).
-//   - A Ploom URL IS configured but an internal dependency is missing → hard
-//     error (ErrMissingDependency). Half a consumer would claim dispatches it can
-//     never account for, so it must not exist at all.
+//   - A Ploom URL IS configured but an internal dependency is missing → the
+//     consumer is NOT built at all (client/sink/worker stay nil, so Start is
+//     inert and nothing is ever polled or claimed) and the failure is logged
+//     loudly. Half a consumer would claim dispatches it can never account for,
+//     so it must not exist — but that is a dispatch-scoped fault, so it must not
+//     take down a daemon whose primary job (terminals, sessions, files) is
+//     unrelated. Fail closed for dispatch, stay up for everything else.
 func (m *DispatchModule) Init(c *core.Core) error {
 	m.core = c
 
@@ -90,16 +115,15 @@ func (m *DispatchModule) Init(c *core.Core) error {
 	//   - terminal seam: the only producer of the completed/failed report, so
 	//     without it every launched execution wedges Ploom at running.
 	store := executionStore(c)
-	if store == nil {
-		return fmt.Errorf("%w: execution store (registry key %q)", ErrMissingDependency, execution.RegistryKey)
-	}
 	gw := relayGateway(c)
-	if gw == nil {
-		return fmt.Errorf("%w: stream relay gateway (registry key %q)", ErrMissingDependency, stream.RelayGatewayKey)
-	}
 	seam := terminalSeam(c)
-	if seam == nil {
-		return fmt.Errorf("%w: stream terminal seam (registry key %q)", ErrMissingDependency, stream.TerminalSeamKey)
+	if missing := missingDependency(store, gw, seam); missing != "" {
+		// Dispatch-scoped fail-closed: leave client/sink/worker nil so Start is
+		// inert — nothing polls, nothing claims, nothing is owed to Ploom. The
+		// rest of the daemon still boots.
+		log.Printf("dispatch: DISABLED — %v: %s (PDX_PLOOM_URL is set; no dispatch will be polled or claimed)",
+			ErrMissingDependency, missing)
+		return nil
 	}
 
 	m.client = NewClient(baseURL, token)
