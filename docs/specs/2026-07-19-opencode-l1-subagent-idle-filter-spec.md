@@ -71,10 +71,10 @@ const sid = event.properties.sessionID || event.properties.info?.id || ''
 
 | Event | New behavior |
 |---|---|
-| `session.created` | `parentID = event.properties.info?.parentID`. If truthy → `subagentSessions.set(sid, parentID)` and **return without emitting `PdxSessionStart`**. Parent (no `parentID`) → emit `PdxSessionStart` unchanged. |
-| `session.status` idle | if `subagentSessions.has(sid)` → **return** (no `PdxStop`). Else existing `suppressIdleForSession` + `PdxStop` path unchanged. |
-| `session.error` | if `subagentSessions.has(sid)` → **return** (no `PdxStopFailure`, and do **not** arm `suppressIdleForSession`). Else existing behavior unchanged. |
-| `session.deleted` | if `subagentSessions.has(sid)` → `subagentSessions.delete(sid)` and **return** (no `PdxSessionEnd`). Else (this sid is a **parent**): delete every entry whose value === `sid` (its children only — never a sibling parent's children), then emit `PdxSessionEnd` unchanged. |
+| `session.created` | `parentID = event.properties.info?.parentID`. If truthy (child) → **return without emitting `PdxSessionStart`**, and `subagentSessions.set(sid, parentID)` **only if `sid` is non-empty** (an empty sid is unkeyable — still suppress its start, but never register `''`). Parent (no `parentID`) → emit `PdxSessionStart` unchanged. |
+| `session.status` idle | if `sid` non-empty and `subagentSessions.has(sid)` → **return** (no `PdxStop`). Else existing `suppressIdleForSession` + `PdxStop` path unchanged. |
+| `session.error` | if `sid` non-empty and `subagentSessions.has(sid)` → **return** (no `PdxStopFailure`, and do **not** arm `suppressIdleForSession`). Else existing behavior unchanged. |
+| `session.deleted` | **`session.deleted` also publishes full `info` (`session.ts:624`), so gate on the event, not the map** — reload-proof. If `event.properties.info?.parentID` truthy (child, even one whose `created` we never saw) → also `subagentSessions.delete(sid)` if keyed, and **return** (no `PdxSessionEnd`). Else (parent): delete every map entry whose value === `sid` (its children only — never a sibling's), then emit `PdxSessionEnd` unchanged. |
 
 `PdxSubagentStart` / `PdxSubagentStop` (from `tool.execute.before/after`) are **unchanged** —
 they remain the sole, correct source of subagent presence.
@@ -93,15 +93,20 @@ they remain the sole, correct source of subagent presence.
    Keying child→parent and deleting only the matching parent's children on parent delete is
    correct and bounds growth. Per-child `session.deleted` also prunes. Worst case (children never
    individually deleted) the map is O(child sessions seen in this process) — negligible.
-4. **No SDK fetch fallback in this PR.** The fix assumes the plugin observes a child's
-   `session.created` before the child's later events — true for the normal lifecycle. The only
-   miss window is a child already mid-flight when the plugin is (re)loaded (`pdx setup` / reload).
-   In that window an unknown child's `session.status` idle emits a false `PdxStop`, its
-   `session.error` a false `PdxStopFailure` (parent turns red), and its `session.deleted` a false
-   `PdxSessionEnd` (**parent frame deleted**) — all identical to today's behavior, so **not a
-   regression**, but the deleted/error blast radius is larger than idle. Documented limitation;
-   SDK-fetch hardening (fetch session parentID for an unknown sid before emitting) tracked as a
-   follow-up issue.
+4. **Reload / out-of-order window (codex adversarial review, `review-mrrdoijw-0ennkw`).** The
+   map is only populated after a child's `session.created`. If the plugin is (re)loaded while a
+   subagent is mid-flight, or an event arrives before that child's `created`, the map is empty for
+   it. Mitigation by event-carried signal:
+   - **`session.deleted` is gated on the event's own `info.parentID`, not the map** — reload-proof.
+     This removes the highest-impact failure (a child delete deleting the **parent frame**), since
+     the child's delete event carries `parentID` even if we never saw its `created` (`session.ts:624`).
+   - **`session.status` idle and `session.error` genuinely lack `parentID`** (#30043; SDK
+     `EventSessionError` = `{sessionID?, error?}`), so they stay map-based. In the narrow reload
+     window an unknown child's idle emits a false `PdxStop` (derived `notification_silent`, so no
+     desktop notification, and self-corrects on the parent's next event) or its error a false
+     `PdxStopFailure` (red until the next event). Both are **recoverable** and strictly narrower
+     than today's always-leak — not a regression. SDK-fetch/startup-hydration hardening for these
+     two is tracked as a follow-up issue.
 
 ### Non-goals
 
