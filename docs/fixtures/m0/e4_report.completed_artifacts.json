@@ -1,0 +1,29 @@
+{
+  "name": "e4_report_completed_artifacts",
+  "endpoint": "E4",
+  "kind": "request",
+  "http_status": 200,
+  "note": "completed(seq=3) 帶 pointer-first diff artifact（meta 只摘要、不 inline blob）",
+  "payload": {
+    "schema_version": 1,
+    "execution_id": "exc_9",
+    "status": "completed",
+    "seq": 3,
+    "artifacts": [
+      {
+        "kind": "diff",
+        "pointer": "pdx://dmn_1/execution/exc_9/diff",
+        "meta": { "files": 4, "add": 120, "del": 8 }
+      },
+      {
+        "kind": "transcript",
+        "pointer": "pdx://dmn_1/execution/exc_9/transcript",
+        "meta": { "lines": 512 }
+      }
+    ]
+  },
+  "response": {
+    "http_status": 200,
+    "payload": { "schema_version": 1, "ack_seq": 3 }
+  }
+}

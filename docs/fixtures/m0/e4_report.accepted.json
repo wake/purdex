@@ -1,0 +1,24 @@
+{
+  "name": "e4_report_accepted",
+  "endpoint": "E4",
+  "kind": "request",
+  "http_status": 200,
+  "note": "accepted(seq=1) 攜帶 immutable metadata；必先被 ack 才可發 lifecycle。response 回 ack_seq。",
+  "payload": {
+    "schema_version": 1,
+    "dispatch_id": "dsp_a1",
+    "execution_id": "exc_9",
+    "attempt_no": 1,
+    "provider": "claude",
+    "status": "accepted",
+    "seq": 1,
+    "effective_sandbox_profile": "ask",
+    "head_at_start": "abc123def4567890abc123def4567890abc12345",
+    "dirty_at_start": false,
+    "session_code": null
+  },
+  "response": {
+    "http_status": 200,
+    "payload": { "schema_version": 1, "ack_seq": 1 }
+  }
+}

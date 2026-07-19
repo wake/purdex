@@ -1,0 +1,12 @@
+{
+  "name": "e2_claim_success",
+  "endpoint": "E2",
+  "kind": "response",
+  "http_status": 200,
+  "note": "首次 claim，原子 pending→claimed",
+  "payload": {
+    "schema_version": 1,
+    "dispatch_id": "dsp_a1",
+    "status": "claimed"
+  }
+}
