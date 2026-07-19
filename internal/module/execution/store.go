@@ -46,10 +46,21 @@ type Execution struct {
 // execution row. SessionCode is intentionally absent — it is nullable and
 // assigned later (after tmux session creation).
 type NewExecution struct {
-	DispatchID     string
-	RepoLocation   string
-	Provider       string
-	SessionName    string
+	// ExecutionID, when non-empty, is used verbatim as the new row's primary
+	// key instead of a store-generated one. The launch durable cut (P.6) sets
+	// it so that SessionName can be derived deterministically from the same
+	// execution_id before the row is inserted (spec §4.3). Empty → the store
+	// generates a fresh exc_-prefixed id.
+	ExecutionID  string
+	DispatchID   string
+	RepoLocation string
+	Provider     string
+	SessionName  string
+	// LaunchState is the launch fence the row is created with. Empty → LaunchNone.
+	// The launch durable cut inserts the row already at LaunchLaunching (spec
+	// §4.3), so a crash between row insert and NewSession is reconciled as a
+	// failed launch rather than relaunched.
+	LaunchState    LaunchState
 	HeadAtStart    string
 	DirtyAtStart   bool
 	SandboxProfile string
@@ -161,13 +172,22 @@ func (s *ExecutionStore) UpsertByDispatch(req NewExecution) (*Execution, bool, e
 		return exec, false, nil
 	}
 
-	// New dispatch → insert with a freshly generated execution_id.
+	// New dispatch → insert. The execution_id and launch_state may be supplied
+	// by the caller (launch durable cut, so SessionName can be derived from the
+	// same id before insert); otherwise they default.
 	now := s.now()
 	provider := req.Provider
 	if provider == "" {
 		provider = "claude"
 	}
-	execID := newExecutionID()
+	execID := req.ExecutionID
+	if execID == "" {
+		execID = newExecutionID()
+	}
+	launchState := req.LaunchState
+	if launchState == "" {
+		launchState = LaunchNone
+	}
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO executions (
 			execution_id, dispatch_id, repo_location, provider, launch_state,
@@ -175,7 +195,7 @@ func (s *ExecutionStore) UpsertByDispatch(req NewExecution) (*Execution, bool, e
 			head_at_start, dirty_at_start, sandbox_profile, outcome_source,
 			created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-		execID, req.DispatchID, req.RepoLocation, provider, string(LaunchNone),
+		execID, req.DispatchID, req.RepoLocation, provider, string(launchState),
 		req.SessionName, 1, string(StatusAccepted), 0,
 		req.HeadAtStart, boolToInt(req.DirtyAtStart), req.SandboxProfile,
 		now, now,
@@ -268,6 +288,70 @@ func (s *ExecutionStore) UpdateStatus(execID string, to Status) error {
 		string(to), s.now(), execID,
 	); err != nil {
 		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// MarkLaunched commits the successful-launch transition (spec §4.3): it advances
+// launch_state launching→launched, records the derived session_code (the deeplink
+// handle), and advances status accepted→running — all in one atomic UPDATE so
+// there is a single durable "launched" boundary. It is fenced on the prior state
+// (WHERE launch_state='launching' AND status='accepted'): a second call, a call
+// after the execution already failed, or a call on a terminal row affects zero
+// rows and returns ErrIllegalTransition, so recovery/retries can never revive a
+// finished execution or double-launch. sessionCode "" is stored as NULL.
+func (s *ExecutionStore) MarkLaunched(execID, sessionCode string) error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	var exists int
+	err = conn.QueryRowContext(ctx,
+		`SELECT 1 FROM executions WHERE execution_id = ?`, execID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	var code any
+	if sessionCode != "" {
+		code = sessionCode
+	}
+	res, err := conn.ExecContext(ctx, `
+		UPDATE executions
+		   SET launch_state = ?, status = ?, session_code = ?, updated_at = ?
+		 WHERE execution_id = ? AND launch_state = ? AND status = ?`,
+		string(LaunchLaunched), string(StatusRunning), code, s.now(),
+		execID, string(LaunchLaunching), string(StatusAccepted),
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: mark launched requires launching+accepted", ErrIllegalTransition)
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return err
