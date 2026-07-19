@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/probe"
@@ -11,6 +12,22 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 )
+
+// RelayGatewayKey is the service-locator key under which the stream bridge is
+// published as the relay gateway. In-process launch consumers (dispatch's M0
+// launch durable cut, P.7) resolve it and use it as an execution.RelayGateway
+// (HasRelay / SubscriberToRelay) — the bridge is the daemon's single relay
+// registry, so a from-zero launch must probe/push through the same instance the
+// WS relay handlers register into. Registration is additive: it does not change
+// any existing bridge/relay/stream behaviour.
+const RelayGatewayKey = "stream.relaygateway"
+
+// TerminalSeamKey is the service-locator key under which the StreamModule is
+// published as the terminal-outcome seam. The execution terminal wiring (P.8)
+// resolves it to register a TerminalHandler (SetTerminalHandler) and read the
+// captured `result` (LastResult). Publishing the module is additive: it changes
+// no existing bridge/relay/stream behaviour.
+const TerminalSeamKey = "stream.terminalseam"
 
 type livenessProber interface {
 	IsAliveFor(agentType, target string) bool
@@ -26,6 +43,18 @@ type StreamModule struct {
 	ccOps    agentcc.CCOperator
 	prober   livenessProber
 	locks    *handoffLocks
+
+	// termMu guards termHandler, the single upper-layer seam that consumes the
+	// authoritative process-exit terminal signal (spec §5.3). The execution
+	// layer (P.8) registers a handler via SetTerminalHandler.
+	termMu      sync.RWMutex
+	termHandler TerminalHandler
+
+	// resultMu guards results, the per-session-code capture of the CC `result`
+	// event (spec §5.3 outcome classification). Additive: capture is read-only
+	// w.r.t. the fan-out; the terminal handler reads it via LastResult.
+	resultMu sync.RWMutex
+	results  map[string]ResultEvent
 }
 
 // New creates a new StreamModule.
@@ -39,6 +68,15 @@ func (m *StreamModule) Dependencies() []string { return []string{"session", "age
 func (m *StreamModule) Init(c *core.Core) error {
 	m.core = c
 	m.bridge = bridge.New()
+	// Publish the bridge as the relay gateway so in-process launch consumers
+	// (dispatch P.7) probe/push relays through this same instance. Registered
+	// before any dependent module Init runs — dispatch depends on "stream", so
+	// topological Init ordering guarantees the key exists when dispatch reads it.
+	c.Registry.Register(RelayGatewayKey, m.bridge)
+	// Publish the module itself as the terminal-outcome seam (P.8 wiring resolves
+	// it to SetTerminalHandler + LastResult). Additive registration.
+	m.results = make(map[string]ResultEvent)
+	c.Registry.Register(TerminalSeamKey, m)
 	m.sessions = c.Registry.MustGet(session.RegistryKey).(session.SessionProvider)
 	m.ccOps = c.Registry.MustGet(agentcc.OperatorKey).(agentcc.CCOperator)
 	m.prober = c.Registry.MustGet("agent.prober").(*probe.Prober)

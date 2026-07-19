@@ -46,6 +46,10 @@ export type PaneContent =
   | { kind: 'editor-buffers' }
   | { kind: 'image-preview'; source: FileSource; filePath: string }
   | { kind: 'pdf-preview'; source: FileSource; filePath: string }
+  // Execution detail page (M0 dispatch, Task P.12). Observe-only landing when a
+  // deeplink cannot focus a live session tab; `host` is the optional daemon hint
+  // carried by the deeplink. Never attaches a stdin write path.
+  | { kind: 'execution'; executionId: string; host?: string }
 
 // === Workspace ===
 export type IconWeight = 'bold' | 'regular' | 'thin' | 'light' | 'fill' | 'duotone'

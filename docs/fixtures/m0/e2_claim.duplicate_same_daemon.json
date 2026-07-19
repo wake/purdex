@@ -1,0 +1,13 @@
+{
+  "name": "e2_claim_duplicate_same_daemon",
+  "endpoint": "E2",
+  "kind": "response",
+  "http_status": 200,
+  "note": "同 daemon 重複 claim = 冪等；若已建 execution 則帶回既有 execution_id",
+  "payload": {
+    "schema_version": 1,
+    "dispatch_id": "dsp_a1",
+    "status": "claimed",
+    "execution_id": "exc_9"
+  }
+}

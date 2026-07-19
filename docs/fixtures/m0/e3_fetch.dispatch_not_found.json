@@ -1,0 +1,11 @@
+{
+  "name": "e3_fetch_dispatch_not_found",
+  "endpoint": "E3",
+  "kind": "response",
+  "http_status": 404,
+  "note": "不存在 OR 非 caller daemon 的 dispatch → 相同回應（fail-closed，不洩漏存在性、不區分 not_owner）。同 code 亦用於 E2 claim。",
+  "payload": {
+    "schema_version": 1,
+    "error": { "code": "dispatch_not_found", "message": "dispatch not found" }
+  }
+}

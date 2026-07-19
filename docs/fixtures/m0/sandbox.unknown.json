@@ -1,0 +1,12 @@
+{
+  "name": "sandbox_unknown",
+  "endpoint": "sandbox",
+  "kind": "response",
+  "http_status": 422,
+  "note": "request 為未知 enum → 拒（不 silent 放寬也不 silent 收嚴）",
+  "request_that_triggers": { "sandbox_profile": "yolo-mode" },
+  "payload": {
+    "schema_version": 1,
+    "error": { "code": "unknown_sandbox_profile", "message": "unknown sandbox_profile: yolo-mode" }
+  }
+}

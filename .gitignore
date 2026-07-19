@@ -8,6 +8,7 @@ spa/dist/
 .playwright-mcp/
 out/
 dist/
+.impeccable/
 
 # Purdex web (P1): embedded SPA build artifacts — populated at build time.
 # The placeholder index.html stays tracked so go:embed always compiles.

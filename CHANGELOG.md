@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.0.0-alpha.326] - 2026-07-19
+
+### Feat(m0): Ploom↔Purdex 派工整合 — 設計基礎 + Purdex 執行消費端 (#933, #937)
+
+M0 walking skeleton 的 **Purdex 側**：Ploom issue 派工 → daemon 輪詢領工 → 在指定 repo 起 `claude -p` → 狀態/diff 回報 → deeplink 觀看。Ploom 側為獨立 PR（另一 repo）。
+
+**設計基礎 (#933，docs-only)**：M0 spec（3 輪 codex 深審，findings 8→4→1→0）+ implementation plan + **共享 wire contract SOT**（`docs/specs/m0-contract.md`）+ 16 個 golden fixtures（`docs/fixtures/m0/`），作為兩 repo 各自 mock 的唯一真相。
+
+**執行消費端 (#937，12 個 TDD task)**
+- **傳輸**：pull 模型 —— `GET /daemon/dispatches?status=pending` → claim → 兩段式 fetch → report；Ploom 純 server 無 callback。
+- **execution runtime SOT**：`execution_id` 為唯一對外 handle；狀態機 + `dispatch_id` 冪等；`GET /api/execution/{id}` 唯讀投影。
+- **Crash-consistency**：狀態轉換與 report enqueue 在**同一 SQLite transaction**（outbox 併入 execution DB）；launch fence（`launch_state`）防重複 launch；`session_name` 為 crash-recovery handle（`HasSession` 探活、by-name 收孤兒）；startup reconcile sweep + manual reclaim（`POST /api/dispatch/reclaim`）；ack cursor + accepted-before-lifecycle ordering + 重啟 replay。
+- **Terminal 兩來源**：process-exit 決定**時點**（權威），`result.is_error` 決定**成敗**；exit 0 但無 result → completed(`exit_only`，degraded 並記錄來源）。
+- **Admission**：canonical repo key（EvalSymlinks 防別名繞過）+ per-repo lock 跨 accept→launch（防 TOCTOU）+ status-based 單一 live execution + `head_at_start`/`dirty_at_start` 快照。
+- **安全**：`dispatch.allowed_repo_roots` **fail closed**（未設則一律拒，建立 repo 信任邊界）；sandbox profile 全序 clamp（只降不升）映射 `claude --permission-mode`；派工 prompt 走 **relay stdin stream-json**（不進 tmux 指令列，零 injection）；缺依賴時停用 consumer 而非 claim-and-drop。
+- **Deeplink**：`purdex://execution/<id>` OS protocol handler（single-instance / open-url / 冷啟動 buffer / 單一落點視窗）+ SPA execution route 與 **observe-only** 詳情頁（不掛 stdin 寫入）。
+- **Artifact**：pointer-first（diff `{files,add,del}` 摘要 + transcript pointer，不 inline blob）。
+
+**Review**：codex 標準 review（3 項全修）+ 3-parallel adversarial（攻擊/防守/檔案體質，三份皆 needs-attention）收斂出 6 項，5 項修復、1 項（DB 層單-live guard，M0 單 daemon 前提外）→ issue #938。
+
+`go test ./...` 全綠 / vitest 3982 / lint / build 綠。
+
+## [1.0.0-alpha.325] - 2026-07-19
+
+### Fix(opencode): child (subagent) session 事件不再劫持父 session 燈號 (#934)
+
+opencode 每次 subagent（Task tool）完成，父 session 的燈號會錯誤塌成 idle（甚至變紅／frame 被刪），即使父 session 還在跑。根因：opencode 把每個 subagent 開成獨立 **child session**，plugin 之前把 child 的每個生命週期事件（created/idle/error/deleted）都當父 session 的 `Pdx*` 事件 emit；daemon 用 `(pane, senderPID, senderStartTime)` 比對 frame（**非** opencode session_id），而單一 opencode process 的父子共用同一 pane／sender identity，所以 child 事件全落在父 frame 上。
+
+- **修法（純 plugin，daemon/SPA 不動）**：plugin 維護 `subagentSessions = Map(childSessionID → parentSessionID)`，從 `session.created` 的 `info.parentID` 學習，gate 掉 known child 的全部 parent-level emit。subagent 的真實表徵仍由 `PdxSubagentStart/Stop`（detail-only，不搶 frame）提供。
+- **reload-proof delete**：`session.deleted` 也 publish 完整 info（`session.ts:624`），故 child delete 直接用事件自帶 `info.parentID` 判定，即使 plugin reload 期間漏收該 child 的 created，也不會誤刪**父** frame。
+- **防禦**：`sid = sessionID || info.id` fallback；空 sid 不入 map；parent delete 只清 value 相符的 children（單 process 可有多 root session）。
+- **已知殘留（#935 追蹤）**：`session.status` idle 與 `session.error` 上游確實不帶 parentID（opencode #30043），故 plugin reload 中途的罕見窗口仍可能漏一次假 idle（`notification_silent`、可自我修正）／假 error；非回歸，且遠窄於修前的「每個 subagent 都漏」。
+- 上游 schema 對現行版本查證（`session.status` 無 parentID、`session.created`/`session.deleted` 帶完整 info）；codex spec+plan+PR 標準+對抗性 review 共 4 輪，抓修 reframe（僅擋 idle→擋全生命週期）、`Set`→`Map`、reload-window delete、空 sid 污染等；Go template + `pluginSimState` mirror 雙軌 + Bun 真 JS 序列測試；全套 go test（含 `-race`）綠。
+
 ## [1.0.0-alpha.324] - 2026-07-14
 
 ### Feat(snapshot): Sessions 對帳表手動編輯 cwd（rebuild 落點）(#931)

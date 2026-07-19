@@ -1,0 +1,20 @@
+{
+  "name": "e4_report_accepted_to_completed_direct",
+  "endpoint": "E4",
+  "kind": "request",
+  "http_status": 200,
+  "note": "seq 只要求單調遞增、accepted=1；此為直接 accepted(1)→completed(2) 的合法序（無中間 running），佐證 seq 值非固定 2/3。artifacts 亦可附。",
+  "payload": {
+    "schema_version": 1,
+    "execution_id": "exc_10",
+    "status": "completed",
+    "seq": 2,
+    "artifacts": [
+      { "kind": "diff", "pointer": "pdx://dmn_1/execution/exc_10/diff", "meta": { "files": 1, "add": 3, "del": 0 } }
+    ]
+  },
+  "response": {
+    "http_status": 200,
+    "payload": { "schema_version": 1, "ack_seq": 2 }
+  }
+}

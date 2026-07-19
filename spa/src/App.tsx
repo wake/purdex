@@ -22,6 +22,7 @@ import { useWebShortcuts } from './hooks/useWebShortcuts'
 import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useElectronIpc } from './hooks/useElectronIpc'
+import { useDeeplinkResolver } from './hooks/useDeeplinkResolver'
 import { useNewTabBootstrap } from './hooks/useNewTabBootstrap'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { useWorkspaceWindowActions } from './hooks/useWorkspaceWindowActions'
@@ -76,6 +77,9 @@ export default function App() {
   useShortcuts()
   useWebShortcuts()
   useNotificationDispatcher()
+  // Must precede useElectronIpc: the deeplink resolver has to subscribe before
+  // `spa:ready` is sent, or a buffered cold-start deeplink flush is missed.
+  useDeeplinkResolver()
   useElectronIpc()
   useNewTabBootstrap()
 

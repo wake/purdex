@@ -53,6 +53,8 @@ export function getPaneLabel(
     case 'image-preview':
     case 'pdf-preview':
       return content.filePath.split('/').pop() ?? content.filePath
+    case 'execution':
+      return t('page.pane.execution')
   }
 }
 
@@ -87,5 +89,7 @@ export function getPaneIcon(content: PaneContent): string {
     case 'pdf-preview':
       if (content.source.type === 'inapp') return fileIconForPath(content.filePath)
       return 'FilePdf'
+    case 'execution':
+      return 'Robot'
   }
 }

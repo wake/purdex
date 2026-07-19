@@ -111,6 +111,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   focusMyWindow: () => ipcRenderer.send('notification:focus-window'),
 
+  // Deeplink (purdex://execution/<id>[?host=<hint>]) — main parses the OS
+  // protocol URL and broadcasts here; the SPA resolver (P.12) navigates.
+  onDeeplinkNavigate: (callback: (payload: { executionId: string; host?: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { executionId: string; host?: string }) =>
+      callback(payload)
+    ipcRenderer.on('deeplink:navigate', handler)
+    return () => ipcRenderer.removeListener('deeplink:navigate', handler)
+  },
+
   // Filesystem (LocalBackend)
   fs: {
     read: (path: string) => ipcRenderer.invoke('fs:read', path),

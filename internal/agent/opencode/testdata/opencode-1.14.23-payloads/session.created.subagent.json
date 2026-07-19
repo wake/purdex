@@ -1,0 +1,17 @@
+{
+  "kind": "bus-event",
+  "eventType": "session.created",
+  "properties": {
+    "sessionID": "ses_fixture_subagent_child_001",
+    "info": {
+      "id": "ses_fixture_subagent_child_001",
+      "parentID": "ses_fixture_session_created_001",
+      "version": "1.14.23",
+      "title": "fixture subagent session",
+      "time": {
+        "created": 1730000000000,
+        "updated": 1730000000000
+      }
+    }
+  }
+}

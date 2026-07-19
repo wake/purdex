@@ -1,0 +1,14 @@
+{
+  "name": "e1_pending_list_success",
+  "endpoint": "E1",
+  "kind": "response",
+  "http_status": 200,
+  "note": "輪詢最小清單，只回 caller daemon 自己的 pending dispatch（daemon_id + membership 雙層隔離）",
+  "payload": {
+    "schema_version": 1,
+    "dispatches": [
+      { "dispatch_id": "dsp_a1", "issue_id": "iss_42" },
+      { "dispatch_id": "dsp_a2", "issue_id": "iss_43" }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "e3_fetch_success",
+  "endpoint": "E3",
+  "kind": "response",
+  "http_status": 200,
+  "note": "兩段式② claim 後抓完整 issue + repo_location(S5) + sandbox_profile(request)",
+  "payload": {
+    "schema_version": 1,
+    "dispatch_id": "dsp_a1",
+    "issue": {
+      "issue_id": "iss_42",
+      "title": "Add pagination to task list",
+      "body": "As a user I want paginated results..."
+    },
+    "repo_location": {
+      "project_id": "prj_1",
+      "remote_url": "git@github.com:wake/example.git",
+      "owner": "wake",
+      "repo": "example",
+      "local_dir": "/Users/wake/Workspace/wake/example",
+      "is_origin": true
+    },
+    "sandbox_profile": "workspace-write"
+  }
+}

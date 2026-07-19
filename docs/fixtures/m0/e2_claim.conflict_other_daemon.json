@@ -1,0 +1,11 @@
+{
+  "name": "e2_claim_conflict_other_daemon",
+  "endpoint": "E2",
+  "kind": "response",
+  "http_status": 409,
+  "note": "他 daemon 已 claim；caller 應跳過此 dispatch，不重試",
+  "payload": {
+    "schema_version": 1,
+    "error": { "code": "already_claimed", "message": "dispatch claimed by another daemon" }
+  }
+}

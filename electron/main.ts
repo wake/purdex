@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, Notification, protocol, net } from 'electron'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
 import { MiniWindowManager } from './mini-browser-window'
@@ -8,6 +8,7 @@ import { registerFsIpc } from './fs-ipc'
 import { createTray } from './tray'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
+import { pickDeeplinkTarget } from './deeplink'
 
 // Register custom protocol before app is ready (Electron requirement).
 // 'app://' replaces 'file://' for bundled SPA, enabling standard CORS behavior.
@@ -19,9 +20,90 @@ protocol.registerSchemesAsPrivileged([{
 const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
 const miniWindowManager = new MiniWindowManager(browserViewManager)
-windowManager.setOnWindowClosed((win) => browserViewManager.cleanupForWindow(win))
+windowManager.setOnWindowClosed((win) => {
+  browserViewManager.cleanupForWindow(win)
+  try {
+    readyWebContentsIds.delete(win.webContents.id)
+  } catch {
+    // webContents already destroyed — id no longer relevant, ignore.
+  }
+})
 let metricsInterval: ReturnType<typeof setInterval> | null = null
 let updateInProgress = false
+
+// ── OS protocol handler (purdex://) ─────────────────────────────────────────
+// Deeplink format: purdex://execution/<execution_id>[?host=<hint>]
+// M0: observe-only navigation. main parses the URL and broadcasts to renderers
+// (reusing the notification-click pipeline template); the SPA resolver (P.12)
+// decides which window has the tab and focuses it, or falls back to a detail
+// page. This handler never writes stdin — deeplink is navigation only.
+const DEEPLINK_SCHEME = 'purdex'
+const DEEPLINK_CHANNEL = 'deeplink:navigate'
+
+interface ExecutionDeeplink {
+  executionId: string
+  host?: string
+}
+
+// Renderers that have signalled `spa:ready` and can receive a broadcast now.
+// A deeplink arriving before any SPA is ready (cold start) is buffered and
+// flushed to the first renderer that becomes ready.
+const readyWebContentsIds = new Set<number>()
+let pendingDeeplinks: ExecutionDeeplink[] = []
+// macOS `open-url` and the initial argv deeplink can arrive before the app is
+// ready — BrowserWindow cannot be created yet, so raw URLs wait here.
+const preReadyDeeplinkUrls: string[] = []
+let appReady = false
+
+function parseDeeplink(rawUrl: string): ExecutionDeeplink | null {
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    return null
+  }
+  if (url.protocol !== `${DEEPLINK_SCHEME}:`) return null
+  // purdex://execution/<id> → hostname = 'execution', pathname = '/<id>'
+  if (url.hostname !== 'execution') return null
+  const executionId = decodeURIComponent(url.pathname.replace(/^\/+/, '').split('/')[0] ?? '')
+  if (!executionId) return null
+  const host = url.searchParams.get('host')
+  return host ? { executionId, host } : { executionId }
+}
+
+function findDeeplinkArg(argv: readonly string[]): string | null {
+  return argv.find((a) => a.startsWith(`${DEEPLINK_SCHEME}://`)) ?? null
+}
+
+// Deliver a deeplink to a SINGLE window (the focused one if ready, else the first
+// ready one); buffer if none are ready yet (cold start). Broadcasting to every
+// renderer made each one run the resolver and open its own detail page while
+// fighting for focus — the deeplink names one execution, so exactly one window
+// should react. The cold-start buffer is still drained to a single window by the
+// spa:ready handler below.
+function deliverDeeplink(dl: ExecutionDeeplink): void {
+  const ready = windowManager
+    .getAllWindows()
+    .filter((win) => !win.isDestroyed() && readyWebContentsIds.has(win.webContents.id))
+  const target = pickDeeplinkTarget(ready, BrowserWindow.getFocusedWindow())
+  if (!target) {
+    pendingDeeplinks.push(dl)
+    return
+  }
+  target.webContents.send(DEEPLINK_CHANNEL, dl)
+}
+
+// Entry point for a deeplink once the app is ready: wake/focus a window, parse,
+// and deliver to a single landing window. Malformed URLs are logged and dropped.
+function handleDeeplink(rawUrl: string): void {
+  const dl = parseDeeplink(rawUrl)
+  if (!dl) {
+    console.warn('[deeplink] ignored malformed url:', rawUrl)
+    return
+  }
+  windowManager.showOrCreate()
+  deliverDeeplink(dl)
+}
 
 function registerIpcHandlers(): void {
   // Window Management
@@ -91,6 +173,19 @@ function registerIpcHandlers(): void {
     })
     notification.on('close', release)
     notification.show()
+  })
+
+  // Deeplink readiness — track which renderers can receive a broadcast and
+  // flush any deeplink that arrived before an SPA was ready (cold start).
+  // This is an additional `spa:ready` listener alongside the per-window ones
+  // in WindowManager; both fire independently.
+  ipcMain.on('spa:ready', (event) => {
+    readyWebContentsIds.add(event.sender.id)
+    if (pendingDeeplinks.length > 0) {
+      const drain = pendingDeeplinks
+      pendingDeeplinks = []
+      for (const dl of drain) event.sender.send(DEEPLINK_CHANNEL, dl)
+    }
   })
 
   // SPA requests its window to be focused (after handling notification click)
@@ -178,51 +273,95 @@ function startMetricsPolling(): void {
   }, 30_000) // 30 seconds
 }
 
-app.whenReady().then(() => {
-  // Serve bundled renderer files via app:// protocol
-  const rendererRoot = join(__dirname, '../renderer')
-  protocol.handle('app', (req) => {
-    let pathname = new URL(req.url).pathname
-    if (pathname === '/') pathname = '/index.html'
-    const resolved = join(rendererRoot, pathname)
-    if (!resolved.startsWith(rendererRoot)) {
-      return new Response('Forbidden', { status: 403 })
-    }
-    return net.fetch('file://' + resolved)
-  })
+// Register purdex:// as the OS default handler for this app. In a packaged app
+// a bare call suffices; when run via `electron .` (dev) the launcher path and
+// the app entry argv must be passed so the OS invokes the right binary.
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(DEEPLINK_SCHEME, process.execPath, [resolve(process.argv[1])])
+  }
+} else {
+  app.setAsDefaultProtocolClient(DEEPLINK_SCHEME)
+}
 
-  registerIpcHandlers()
-  createTray(windowManager)
-
-  const keybindings = getDefaultKeybindings()
-  const menuTemplate = buildMenuTemplate(
-    keybindings,
-    (action) => {
-      const focused = BrowserWindow.getFocusedWindow()
-      if (focused && !focused.isDestroyed()) {
-        focused.webContents.send('shortcut:execute', { action })
-      }
-    },
-    { 'new-window': () => windowManager.createWindow() },
-  )
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate))
-
-  windowManager.createWindow()
-
-  startMetricsPolling()
-
-  app.on('activate', () => {
+// Single-instance lock: a deeplink launched while the app is already running
+// spawns a second process. On Windows/Linux the OS passes the URL via that
+// process's argv; we forward it to the primary via `second-instance` and quit
+// the secondary. Without the lock a duplicate app window would open per click.
+const gotInstanceLock = app.requestSingleInstanceLock()
+if (!gotInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv) => {
+    // Windows/Linux warm deeplink arrives in the second instance's argv.
     windowManager.showOrCreate()
+    const url = findDeeplinkArg(argv)
+    if (url) handleDeeplink(url)
   })
-})
 
-// macOS: close window ≠ quit app
-app.on('window-all-closed', () => {
-  // no-op on macOS — tray keeps running
-})
+  // macOS delivers deeplinks via `open-url`, which can fire before the app is
+  // ready. Buffer pre-ready URLs; process them once whenReady resolves.
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    if (appReady) handleDeeplink(url)
+    else preReadyDeeplinkUrls.push(url)
+  })
 
-app.on('before-quit', () => {
-  if (metricsInterval) clearInterval(metricsInterval)
-  miniWindowManager.closeAll()
-  browserViewManager.destroyAll()
-})
+  app.whenReady().then(() => {
+    // Serve bundled renderer files via app:// protocol
+    const rendererRoot = join(__dirname, '../renderer')
+    protocol.handle('app', (req) => {
+      let pathname = new URL(req.url).pathname
+      if (pathname === '/') pathname = '/index.html'
+      const resolved = join(rendererRoot, pathname)
+      if (!resolved.startsWith(rendererRoot)) {
+        return new Response('Forbidden', { status: 403 })
+      }
+      return net.fetch('file://' + resolved)
+    })
+
+    registerIpcHandlers()
+    createTray(windowManager)
+
+    const keybindings = getDefaultKeybindings()
+    const menuTemplate = buildMenuTemplate(
+      keybindings,
+      (action) => {
+        const focused = BrowserWindow.getFocusedWindow()
+        if (focused && !focused.isDestroyed()) {
+          focused.webContents.send('shortcut:execute', { action })
+        }
+      },
+      { 'new-window': () => windowManager.createWindow() },
+    )
+    Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate))
+
+    windowManager.createWindow()
+
+    startMetricsPolling()
+
+    app.on('activate', () => {
+      windowManager.showOrCreate()
+    })
+
+    // Cold start: process any deeplink that launched the app.
+    appReady = true
+    // Windows/Linux: the initial deeplink is in the launch argv.
+    const argvDeeplink = findDeeplinkArg(process.argv)
+    if (argvDeeplink) handleDeeplink(argvDeeplink)
+    // macOS: replay any open-url events buffered before ready.
+    const buffered = preReadyDeeplinkUrls.splice(0)
+    for (const url of buffered) handleDeeplink(url)
+  })
+
+  // macOS: close window ≠ quit app
+  app.on('window-all-closed', () => {
+    // no-op on macOS — tray keeps running
+  })
+
+  app.on('before-quit', () => {
+    if (metricsInterval) clearInterval(metricsInterval)
+    miniWindowManager.closeAll()
+    browserViewManager.destroyAll()
+  })
+}
