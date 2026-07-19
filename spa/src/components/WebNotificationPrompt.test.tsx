@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { WebNotificationPrompt } from './WebNotificationPrompt'
 import { STORAGE_KEYS } from '../lib/storage/keys'
@@ -11,10 +11,28 @@ function stubNotification(permission: NotificationPermission, requestPermission 
 }
 
 describe('WebNotificationPrompt', () => {
+  let originalNotificationDescriptor: PropertyDescriptor | undefined
+  let originalElectronAPIDescriptor: PropertyDescriptor | undefined
+
   beforeEach(() => {
+    originalNotificationDescriptor = Object.getOwnPropertyDescriptor(window, 'Notification')
+    originalElectronAPIDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI')
     delete (window as unknown as { electronAPI?: unknown }).electronAPI
     localStorage.clear()
     stubNotification('default')
+  })
+
+  afterEach(() => {
+    if (originalNotificationDescriptor) {
+      Object.defineProperty(window, 'Notification', originalNotificationDescriptor)
+    } else {
+      delete (window as unknown as { Notification?: unknown }).Notification
+    }
+    if (originalElectronAPIDescriptor) {
+      Object.defineProperty(window, 'electronAPI', originalElectronAPIDescriptor)
+    } else {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI
+    }
   })
 
   it('web + default → 顯示提示', () => {

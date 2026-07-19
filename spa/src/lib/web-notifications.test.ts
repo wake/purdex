@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { shouldOfferWebNotifications, requestWebNotificationPermission, getWebNotifyDismissed, setWebNotifyDismissed } from './web-notifications'
 
 function stubNotification(impl: Partial<{ permission: NotificationPermission; requestPermission: unknown }>) {
@@ -19,12 +19,34 @@ describe('shouldOfferWebNotifications', () => {
 })
 
 describe('requestWebNotificationPermission', () => {
+  let originalNotificationDescriptor: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    originalNotificationDescriptor = Object.getOwnPropertyDescriptor(window, 'Notification')
+  })
+
+  afterEach(() => {
+    if (originalNotificationDescriptor) {
+      Object.defineProperty(window, 'Notification', originalNotificationDescriptor)
+    } else {
+      delete (window as unknown as { Notification?: unknown }).Notification
+    }
+  })
+
   it('Promise 版 → resolved 值', async () => {
     stubNotification({ requestPermission: vi.fn().mockResolvedValue('granted') })
     expect(await requestWebNotificationPermission()).toBe('granted')
   })
   it('callback 版 → 正規化為 permission', async () => {
     stubNotification({ requestPermission: (cb: (p: NotificationPermission) => void) => cb('granted') })
+    expect(await requestWebNotificationPermission()).toBe('granted')
+  })
+  it('callback 版（非同步觸發）→ resolved 值，不會 hang 或重複 resolve', async () => {
+    stubNotification({
+      requestPermission: (cb: (p: NotificationPermission) => void) => {
+        setTimeout(() => cb('granted'), 0)
+      },
+    })
     expect(await requestWebNotificationPermission()).toBe('granted')
   })
   it('無 Notification → unsupported', async () => {

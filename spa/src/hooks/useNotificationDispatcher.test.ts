@@ -194,6 +194,35 @@ describe('handleNotificationClick workspace switching', () => {
     focusSpy.mockRestore()
   })
 
+  it('electron: prefers focusMyWindow over window.focus() (open-session)', () => {
+    const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+    const focusMyWindow = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { value: { focusMyWindow }, writable: true, configurable: true })
+    const focusSpy = vi.spyOn(window, 'focus').mockImplementation(() => {})
+
+    handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+
+    expect(focusMyWindow).toHaveBeenCalled()
+    expect(focusSpy).not.toHaveBeenCalled()
+    focusSpy.mockRestore()
+  })
+
+  it('unhandled click (no matching tab, reopenTabOnClick=false): does not focus the window', () => {
+    // No tab created for SESSION_CODE, and reopenTabOnClick defaults to false
+    // (agents: {} reset in outer beforeEach) → handleNotificationClick's
+    // internal `handled` guard stays false, so neither focus path should fire.
+    const focusMyWindow = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { value: { focusMyWindow }, writable: true, configurable: true })
+    const focusSpy = vi.spyOn(window, 'focus').mockImplementation(() => {})
+
+    handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+
+    expect(focusSpy).not.toHaveBeenCalled()
+    expect(focusMyWindow).not.toHaveBeenCalled()
+    focusSpy.mockRestore()
+  })
+
   it('switches to Home when tab is standalone (not in any workspace)', () => {
     // Setup: tab not in any workspace, active workspace is wsA
     const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
