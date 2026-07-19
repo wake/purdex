@@ -194,6 +194,29 @@ func (s *ExecutionStore) UpsertByDispatch(req NewExecution) (*Execution, bool, e
 	return exec, true, nil
 }
 
+// HasLiveByRepo reports whether the given canonical repo path already has a live
+// execution — one whose status is accepted or running (spec §7.2). Liveness is
+// read from status only, never from launch_state: a completed execution left at
+// launch_state=launched must not keep a repo permanently blocked (R2 #1). The
+// caller (admission) holds the per-repo lock across this check and the
+// subsequent row insert, so the check is not a racy point-in-time read.
+func (s *ExecutionStore) HasLiveByRepo(ctx context.Context, canonicalPath string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM executions
+		   WHERE repo_location = ? AND status IN (?, ?)
+		   LIMIT 1`,
+		canonicalPath, string(StatusAccepted), string(StatusRunning),
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // GetByID returns the execution with the given id. found is false (no error)
 // when the row is absent.
 func (s *ExecutionStore) GetByID(execID string) (*Execution, bool, error) {
