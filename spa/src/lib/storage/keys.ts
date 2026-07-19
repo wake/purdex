@@ -25,4 +25,5 @@ export const STORAGE_KEYS = {
   SYNC_STATE: 'purdex-sync-state',
   PATH_CACHE_V1: 'purdex-path-cache-v1',
   RECENT_FILES: 'purdex-recent-files',
+  WEB_NOTIFICATION_DISMISSED: 'purdex-webnotify-dismissed',
 } as const
