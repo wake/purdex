@@ -155,11 +155,30 @@ func TestRealLauncher_SessionAlreadyExists(t *testing.T) {
 	require.Empty(t, exec.KeysSent(), "must not spawn into a pre-existing session")
 }
 
-func TestBuildRelayCommand_NoPrompt(t *testing.T) {
+func TestBuildRelayCommand_AppendsPermissionMode(t *testing.T) {
+	// The effective profile maps onto a --permission-mode flag appended after the
+	// static claude command (P.10).
 	cmd := buildRelayCommand("CODEX", "0.0.0.0", 9000, "/tmp/purdex-token-x", "danger-full")
 	require.Equal(t,
-		"pdx relay --session CODEX --daemon ws://0.0.0.0:9000 --token-file /tmp/purdex-token-x -- "+claudeBaseCommand,
+		"pdx relay --session CODEX --daemon ws://0.0.0.0:9000 --token-file /tmp/purdex-token-x -- "+
+			claudeBaseCommand+" --permission-mode bypassPermissions",
 		cmd)
+}
+
+func TestPermissionModeFlag_Mapping(t *testing.T) {
+	cases := map[string]string{
+		"read-only":       "--permission-mode plan",
+		"ask":             "--permission-mode default",
+		"workspace-write": "--permission-mode acceptEdits",
+		"danger-full":     "--permission-mode bypassPermissions",
+		// Defensive: an empty/invalid profile yields no flag (effective is always a
+		// valid enum in production, so this never fires on the live path).
+		"":         "",
+		"nonsense": "",
+	}
+	for profile, want := range cases {
+		require.Equal(t, want, permissionModeFlag(profile), profile)
+	}
 }
 
 func TestBuildUserMessage_EscapesPrompt(t *testing.T) {

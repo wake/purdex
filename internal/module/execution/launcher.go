@@ -171,10 +171,18 @@ func buildRelayCommand(code, bind string, port int, tokenFile, sandboxProfile st
 	return cmd
 }
 
-// permissionModeFlag maps a sandbox_profile onto a `claude --permission-mode`
-// flag. M0 P.6 is a passthrough stub returning "" (no partial-order clamp, no
-// mapping table); the effective-profile clamp + flag mapping lands in P.10.
-func permissionModeFlag(sandboxProfile string) string { return "" }
+// permissionModeFlag maps an EFFECTIVE sandbox_profile (already clamped at
+// admission time) onto a `claude --permission-mode` flag (P.10). The launcher
+// only ever sees the effective profile persisted on the row, so this is a pure
+// lookup. An empty/invalid profile yields no flag (defensive: effective is always
+// a valid enum on the live path, having survived Clamp at Accept time).
+func permissionModeFlag(sandboxProfile string) string {
+	p, err := ParseProfile(sandboxProfile)
+	if err != nil {
+		return ""
+	}
+	return "--permission-mode " + p.ToPermissionMode()
+}
 
 // buildUserMessage marshals the issue prompt into the stream-json user message
 // Claude Code's `--input-format stream-json` consumes. json.Marshal escapes the
