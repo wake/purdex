@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -77,6 +78,7 @@ func acceptedRowFromExec(e *execution.Execution) AcceptedRow {
 		ExecutionID:             e.ExecutionID,
 		DispatchID:              e.DispatchID,
 		RepoLocation:            e.RepoLocation,
+		RepoLocationJSON:        e.RepoLocationJSON,
 		Provider:                e.Provider,
 		AttemptNo:               e.AttemptNo,
 		EffectiveSandboxProfile: e.SandboxProfile,
@@ -113,6 +115,19 @@ func (r terminalReporter) EnqueueTerminal(exec *execution.Execution, status exec
 		return err
 	}
 	return r.sender.Enqueue(exec.ExecutionID, exec.DispatchID, seqTerminal, string(status), payload)
+}
+
+// marshalRepoLocation serialises the full E3 repo_location object for durable
+// echo (contract §2). It is the single encoder used by both the launch path
+// (module.go consumeSink) and the admission-rejection path, so every accepted
+// report echoes the identical object shape. On the (practically impossible)
+// marshal error it returns "" — the payload then falls back to {local_dir}.
+func marshalRepoLocation(loc RepoLocation) string {
+	b, err := json.Marshal(loc)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // buildPrompt composes the agent's starting prompt from the fetched issue. The
@@ -154,6 +169,7 @@ func reportAdmissionRejected(sender reportEnqueuer, execID, dispatchID string, d
 		Provider:                reportProvider,
 		AttemptNo:               1,
 		RepoLocation:            detail.RepoLocation.LocalDir,
+		RepoLocationJSON:        marshalRepoLocation(detail.RepoLocation),
 		EffectiveSandboxProfile: detail.SandboxProfile,
 	}
 	acceptedPayload, err := BuildAcceptedPayload(acceptedRow)

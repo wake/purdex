@@ -84,10 +84,16 @@ type repoAdmitter interface {
 // the raw path from Ploom (canonicalised inside admission); Prompt is the issue
 // text the agent starts from.
 type LaunchRequest struct {
-	DispatchID     string
-	RepoLocation   string
-	Prompt         string
-	SandboxProfile string
+	DispatchID   string
+	RepoLocation string
+	// RepoLocationJSON is the full Ploom S5 repo_location object as JSON (the
+	// consumer marshals cd.Detail.RepoLocation). It is persisted verbatim on the
+	// row so the accepted report echoes every contract field (project_id,
+	// is_origin, …), not just local_dir. RepoLocation above stays the raw path fed
+	// to admission canonicalisation.
+	RepoLocationJSON string
+	Prompt           string
+	SandboxProfile   string
 }
 
 // Coordinator performs the M0 launch durable cut (spec §4.3 / plan P.6): under a
@@ -155,15 +161,16 @@ func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution
 		// live under the held lock). Idempotent on dispatch_id: a re-delivery
 		// returns the existing row and skips launch.
 		exec, created, err := c.store.UpsertByDispatch(NewExecution{
-			ExecutionID:    execID,
-			DispatchID:     req.DispatchID,
-			RepoLocation:   adm.CanonicalPath,
-			Provider:       "claude",
-			SessionName:    sessionName,
-			LaunchState:    LaunchLaunching,
-			HeadAtStart:    adm.HeadAtStart,
-			DirtyAtStart:   adm.DirtyAtStart,
-			SandboxProfile: effective,
+			ExecutionID:      execID,
+			DispatchID:       req.DispatchID,
+			RepoLocation:     adm.CanonicalPath,
+			RepoLocationJSON: req.RepoLocationJSON,
+			Provider:         "claude",
+			SessionName:      sessionName,
+			LaunchState:      LaunchLaunching,
+			HeadAtStart:      adm.HeadAtStart,
+			DirtyAtStart:     adm.DirtyAtStart,
+			SandboxProfile:   effective,
 		})
 		if err != nil {
 			return fmt.Errorf("create execution row: %w", err)

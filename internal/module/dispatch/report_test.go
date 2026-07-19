@@ -132,6 +132,44 @@ func TestBuildAcceptedPayload_ShapeAndNullSessionCode(t *testing.T) {
 	if m["provider"] != "claude" || m["attempt_no"].(float64) != 1 {
 		t.Errorf("provider/attempt = %v/%v", m["provider"], m["attempt_no"])
 	}
+	// No RepoLocationJSON → fallback echoes just {local_dir}.
+	repo := m["repo_location"].(map[string]any)
+	if repo["local_dir"] != "/abs/repo" || len(repo) != 1 {
+		t.Errorf("fallback repo_location = %v", repo)
+	}
+}
+
+// TestBuildAcceptedPayload_EchoesFullRepoLocation proves the full S5
+// repo_location object (project_id/is_origin/…) is echoed verbatim when persisted
+// (m0-contract §2 / e4_report.accepted.json), not collapsed to just local_dir.
+func TestBuildAcceptedPayload_EchoesFullRepoLocation(t *testing.T) {
+	got, err := BuildAcceptedPayload(AcceptedRow{
+		ExecutionID:             "exc_9",
+		DispatchID:              "dsp_a1",
+		RepoLocation:            "/Users/wake/Workspace/wake/example",
+		RepoLocationJSON:        `{"project_id":"prj_1","local_dir":"/Users/wake/Workspace/wake/example","is_origin":true}`,
+		Provider:                "claude",
+		AttemptNo:               1,
+		EffectiveSandboxProfile: "ask",
+		HeadAtStart:             "abc123def4567890abc123def4567890abc12345",
+	})
+	if err != nil {
+		t.Fatalf("BuildAcceptedPayload: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(got, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	repo := m["repo_location"].(map[string]any)
+	if repo["project_id"] != "prj_1" {
+		t.Errorf("project_id not echoed: %v", repo)
+	}
+	if repo["local_dir"] != "/Users/wake/Workspace/wake/example" {
+		t.Errorf("local_dir = %v", repo["local_dir"])
+	}
+	if repo["is_origin"] != true {
+		t.Errorf("is_origin not echoed: %v", repo)
+	}
 }
 
 // ---- Sender behaviour with a stateful fake Ploom ------------------------------
@@ -298,6 +336,7 @@ func TestSender_DurabilityCut_ReconstructsAcceptedFromRow(t *testing.T) {
 			ExecutionID:             "exc_9",
 			DispatchID:              "dsp_a1",
 			RepoLocation:            "/abs/repo",
+			RepoLocationJSON:        `{"project_id":"prj_1","local_dir":"/abs/repo","is_origin":true}`,
 			Provider:                "claude",
 			AttemptNo:               1,
 			EffectiveSandboxProfile: "ask",
@@ -329,6 +368,14 @@ func TestSender_DurabilityCut_ReconstructsAcceptedFromRow(t *testing.T) {
 	repo, _ := acc["repo_location"].(map[string]any)
 	if repo["local_dir"] != "/abs/repo" {
 		t.Errorf("reconstructed repo_location = %v", acc["repo_location"])
+	}
+	// The reconstructed accepted echoes the FULL repo_location object (contract §2),
+	// not just local_dir — project_id/is_origin survive the durability cut.
+	if repo["project_id"] != "prj_1" {
+		t.Errorf("reconstructed repo_location missing project_id: %v", acc["repo_location"])
+	}
+	if repo["is_origin"] != true {
+		t.Errorf("reconstructed repo_location missing is_origin: %v", acc["repo_location"])
 	}
 	// The reconstructed accepted is now durably in the outbox.
 	if _, ok, _ := o.RecordBySeq("exc_9", 1); !ok {

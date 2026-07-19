@@ -37,9 +37,17 @@ const (
 // persistent execution-row column, so accepted can always be rebuilt after a
 // restart even if the in-flight accepted never reached the outbox.
 type AcceptedRow struct {
-	ExecutionID             string
-	DispatchID              string
-	RepoLocation            string // canonical local_dir (execution row stores the path)
+	ExecutionID  string
+	DispatchID   string
+	RepoLocation string // canonical local_dir (fallback when RepoLocationJSON empty)
+	// RepoLocationJSON is the full Ploom S5 repo_location object as raw JSON
+	// ({project_id, remote_url?, owner?, repo?, local_dir, is_origin}), persisted
+	// on the execution row. When present the accepted report echoes it verbatim
+	// (m0-contract §2 requires the whole object, not just local_dir); when empty
+	// the payload falls back to {local_dir: RepoLocation}. Sourced identically by
+	// the live enqueue (acceptedRowFromExec) and restart reconstruction
+	// (LoadAcceptedRow), so both paths echo byte-identical bytes.
+	RepoLocationJSON        string
 	Provider                string
 	AttemptNo               int
 	EffectiveSandboxProfile string
@@ -93,6 +101,13 @@ func BuildAcceptedPayload(row AcceptedRow) ([]byte, error) {
 		sc := row.SessionCode
 		sessionCode = &sc
 	}
+	// Echo the full repo_location object when it was persisted (contract §2), else
+	// fall back to the bare canonical path so pre-object rows still produce a
+	// well-formed echo.
+	var repoLocation any = map[string]any{"local_dir": row.RepoLocation}
+	if row.RepoLocationJSON != "" {
+		repoLocation = json.RawMessage(row.RepoLocationJSON)
+	}
 	payload := map[string]any{
 		"schema_version":            reportSchemaVersion,
 		"dispatch_id":               row.DispatchID,
@@ -101,7 +116,7 @@ func BuildAcceptedPayload(row AcceptedRow) ([]byte, error) {
 		"provider":                  provider,
 		"status":                    "accepted",
 		"seq":                       1,
-		"repo_location":             map[string]any{"local_dir": row.RepoLocation},
+		"repo_location":             repoLocation,
 		"effective_sandbox_profile": row.EffectiveSandboxProfile,
 		"head_at_start":             row.HeadAtStart,
 		"dirty_at_start":            row.DirtyAtStart,

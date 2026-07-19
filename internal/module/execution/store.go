@@ -24,22 +24,29 @@ var ErrIllegalTransition = errors.New("illegal execution status transition")
 // immutable metadata (head/dirty/sandbox/execution_id/repo_location) all live
 // here so accepted can always be rebuilt after a daemon restart.
 type Execution struct {
-	ExecutionID    string
-	DispatchID     string
-	RepoLocation   string // canonical repo path (canonicalisation happens in admission, P.5)
-	Provider       string // M0 always "claude"
-	LaunchState    LaunchState
-	SessionName    string         // non-NULL crash-recovery handle (pre-generated before spawn)
-	SessionCode    sql.NullString // nullable deeplink handle (derived after tmux create)
-	AttemptNo      int            // M0 always 1
-	Status         Status
-	SeqReported    int    // highest per-execution report seq emitted
-	HeadAtStart    string // repo HEAD at admission (diff base)
-	DirtyAtStart   bool
-	SandboxProfile string
-	OutcomeSource  sql.NullString // nullable until terminal
-	CreatedAt      int64
-	UpdatedAt      int64
+	ExecutionID  string
+	DispatchID   string
+	RepoLocation string // canonical repo path (canonicalisation happens in admission, P.5)
+	// RepoLocationJSON is the full Ploom S5 repo_location object
+	// ({project_id, remote_url?, owner?, repo?, local_dir, is_origin}) as JSON,
+	// persisted verbatim so the accepted report can echo every field the contract
+	// requires (m0-contract §2). The canonical path above is kept separately for
+	// admission/diff; this is purely the durable echo source. Empty on rows that
+	// predate the object (falls back to {local_dir: RepoLocation} in the echo).
+	RepoLocationJSON string
+	Provider         string // M0 always "claude"
+	LaunchState      LaunchState
+	SessionName      string         // non-NULL crash-recovery handle (pre-generated before spawn)
+	SessionCode      sql.NullString // nullable deeplink handle (derived after tmux create)
+	AttemptNo        int            // M0 always 1
+	Status           Status
+	SeqReported      int    // highest per-execution report seq emitted
+	HeadAtStart      string // repo HEAD at admission (diff base)
+	DirtyAtStart     bool
+	SandboxProfile   string
+	OutcomeSource    sql.NullString // nullable until terminal
+	CreatedAt        int64
+	UpdatedAt        int64
 }
 
 // NewExecution carries the immutable admission metadata used to create an
@@ -54,8 +61,12 @@ type NewExecution struct {
 	ExecutionID  string
 	DispatchID   string
 	RepoLocation string
-	Provider     string
-	SessionName  string
+	// RepoLocationJSON is the full repo_location object (JSON) echoed on the
+	// accepted report; persisted verbatim alongside the canonical RepoLocation
+	// path. Empty is allowed (echo falls back to {local_dir: RepoLocation}).
+	RepoLocationJSON string
+	Provider         string
+	SessionName      string
 	// LaunchState is the launch fence the row is created with. Empty → LaunchNone.
 	// The launch durable cut inserts the row already at LaunchLaunching (spec
 	// §4.3), so a crash between row insert and NewSession is reconciled as a
@@ -113,6 +124,7 @@ func (s *ExecutionStore) migrate() error {
 			execution_id    TEXT    PRIMARY KEY,
 			dispatch_id     TEXT    NOT NULL UNIQUE,
 			repo_location   TEXT    NOT NULL DEFAULT '',
+			repo_location_json TEXT NOT NULL DEFAULT '',
 			provider        TEXT    NOT NULL DEFAULT 'claude',
 			launch_state    TEXT    NOT NULL DEFAULT 'none',
 			session_name    TEXT    NOT NULL,
@@ -190,12 +202,12 @@ func (s *ExecutionStore) UpsertByDispatch(req NewExecution) (*Execution, bool, e
 	}
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO executions (
-			execution_id, dispatch_id, repo_location, provider, launch_state,
+			execution_id, dispatch_id, repo_location, repo_location_json, provider, launch_state,
 			session_name, session_code, attempt_no, status, seq_reported,
 			head_at_start, dirty_at_start, sandbox_profile, outcome_source,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-		execID, req.DispatchID, req.RepoLocation, provider, string(launchState),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+		execID, req.DispatchID, req.RepoLocation, req.RepoLocationJSON, provider, string(launchState),
 		req.SessionName, 1, string(StatusAccepted), 0,
 		req.HeadAtStart, boolToInt(req.DirtyAtStart), req.SandboxProfile,
 		now, now,
@@ -485,13 +497,13 @@ func loadByID(ctx context.Context, q rowQuerier, execID string) (*Execution, err
 		dirty       int64
 	)
 	err := q.QueryRowContext(ctx, `
-		SELECT execution_id, dispatch_id, repo_location, provider, launch_state,
+		SELECT execution_id, dispatch_id, repo_location, repo_location_json, provider, launch_state,
 		       session_name, session_code, attempt_no, status, seq_reported,
 		       head_at_start, dirty_at_start, sandbox_profile, outcome_source,
 		       created_at, updated_at
 		FROM executions WHERE execution_id = ?`, execID,
 	).Scan(
-		&e.ExecutionID, &e.DispatchID, &e.RepoLocation, &e.Provider, &launchState,
+		&e.ExecutionID, &e.DispatchID, &e.RepoLocation, &e.RepoLocationJSON, &e.Provider, &launchState,
 		&e.SessionName, &e.SessionCode, &e.AttemptNo, &status, &e.SeqReported,
 		&e.HeadAtStart, &dirty, &e.SandboxProfile, &e.OutcomeSource,
 		&e.CreatedAt, &e.UpdatedAt,

@@ -19,13 +19,14 @@ func openTestStore(t *testing.T) *ExecutionStore {
 
 func sampleNew(dispatchID string) NewExecution {
 	return NewExecution{
-		DispatchID:     dispatchID,
-		RepoLocation:   "/abs/repo",
-		Provider:       "claude",
-		SessionName:    "pdx-exec-" + dispatchID,
-		HeadAtStart:    "abc1234",
-		DirtyAtStart:   true,
-		SandboxProfile: "workspace-write",
+		DispatchID:       dispatchID,
+		RepoLocation:     "/abs/repo",
+		RepoLocationJSON: `{"project_id":"prj_1","local_dir":"/abs/repo","is_origin":true}`,
+		Provider:         "claude",
+		SessionName:      "pdx-exec-" + dispatchID,
+		HeadAtStart:      "abc1234",
+		DirtyAtStart:     true,
+		SandboxProfile:   "workspace-write",
 	}
 }
 
@@ -65,6 +66,8 @@ func TestUpsertByDispatch_RoundTripAllFields(t *testing.T) {
 	require.Equal(t, exec.ExecutionID, got.ExecutionID)
 	require.Equal(t, "dsp_rt", got.DispatchID)
 	require.Equal(t, "/abs/repo", got.RepoLocation)
+	require.Equal(t, `{"project_id":"prj_1","local_dir":"/abs/repo","is_origin":true}`, got.RepoLocationJSON,
+		"full repo_location object must persist verbatim for the accepted echo")
 	require.Equal(t, "claude", got.Provider)
 	require.Equal(t, LaunchNone, got.LaunchState)
 	require.Equal(t, "pdx-exec-dsp_rt", got.SessionName)

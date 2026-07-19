@@ -137,7 +137,7 @@ func TestSlice_HappyPath_AcceptedToRunning(t *testing.T) {
 			return DispatchDetail{
 				DispatchID:     id,
 				Issue:          Issue{IssueID: "iss_1", Title: "Fix the bug", Body: "steps to repro"},
-				RepoLocation:   RepoLocation{LocalDir: "/canon/repo"},
+				RepoLocation:   RepoLocation{ProjectID: "prj_1", LocalDir: "/canon/repo", IsOrigin: true},
 				SandboxProfile: "workspace-write",
 			}, nil
 		},
@@ -174,6 +174,20 @@ func TestSlice_HappyPath_AcceptedToRunning(t *testing.T) {
 	require.Equal(t, 1, recs[0].Seq)
 	require.Equal(t, "running", recs[1].Status)
 	require.Equal(t, 2, recs[1].Seq)
+
+	// End-to-end: the persisted accepted echoes the FULL repo_location object
+	// (project_id/is_origin), sourced from the row that survived the durable cut.
+	var acc struct {
+		RepoLocation struct {
+			ProjectID string `json:"project_id"`
+			LocalDir  string `json:"local_dir"`
+			IsOrigin  bool   `json:"is_origin"`
+		} `json:"repo_location"`
+	}
+	require.NoError(t, json.Unmarshal(recs[0].Payload, &acc))
+	require.Equal(t, "prj_1", acc.RepoLocation.ProjectID)
+	require.Equal(t, "/canon/repo", acc.RepoLocation.LocalDir)
+	require.True(t, acc.RepoLocation.IsOrigin)
 
 	// Draining the sender delivers accepted then running to fake Ploom.
 	require.NoError(t, f.sender.Flush(context.Background()))

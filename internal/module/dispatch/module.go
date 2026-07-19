@@ -227,10 +227,11 @@ func hostSandboxPolicy(c *core.Core) execution.Profile {
 func (m *DispatchModule) consumeSink(coord *execution.Coordinator) FetchSink {
 	return func(ctx context.Context, cd ClaimedDispatch) {
 		req := execution.LaunchRequest{
-			DispatchID:     cd.Pending.DispatchID,
-			RepoLocation:   cd.Detail.RepoLocation.LocalDir,
-			Prompt:         buildPrompt(cd.Detail.Issue),
-			SandboxProfile: cd.Detail.SandboxProfile,
+			DispatchID:       cd.Pending.DispatchID,
+			RepoLocation:     cd.Detail.RepoLocation.LocalDir,
+			RepoLocationJSON: marshalRepoLocation(cd.Detail.RepoLocation),
+			Prompt:           buildPrompt(cd.Detail.Issue),
+			SandboxProfile:   cd.Detail.SandboxProfile,
 		}
 		if _, err := coord.Accept(ctx, req); err != nil {
 			switch {

@@ -62,15 +62,16 @@ func TestLaunchReporter_EnqueueAccepted(t *testing.T) {
 	fe := &fakeEnqueuer{}
 	r := launchReporter{sender: fe}
 	exec := &execution.Execution{
-		ExecutionID:    "exc_1",
-		DispatchID:     "dsp_1",
-		RepoLocation:   "/canon/repo",
-		Provider:       "claude",
-		AttemptNo:      1,
-		HeadAtStart:    "head01",
-		DirtyAtStart:   true,
-		SandboxProfile: "workspace-write",
-		SessionCode:    sql.NullString{String: "abc123", Valid: true},
+		ExecutionID:      "exc_1",
+		DispatchID:       "dsp_1",
+		RepoLocation:     "/canon/repo",
+		RepoLocationJSON: `{"project_id":"prj_1","local_dir":"/canon/repo","is_origin":true}`,
+		Provider:         "claude",
+		AttemptNo:        1,
+		HeadAtStart:      "head01",
+		DirtyAtStart:     true,
+		SandboxProfile:   "workspace-write",
+		SessionCode:      sql.NullString{String: "abc123", Valid: true},
 	}
 	require.NoError(t, r.EnqueueAccepted(exec))
 
@@ -86,8 +87,11 @@ func TestLaunchReporter_EnqueueAccepted(t *testing.T) {
 	require.Equal(t, true, c.payload["dirty_at_start"])
 	require.Equal(t, "workspace-write", c.payload["effective_sandbox_profile"])
 	require.Equal(t, "abc123", c.payload["session_code"])
+	// Full repo_location object is echoed (contract §2), not just local_dir.
 	repo := c.payload["repo_location"].(map[string]any)
 	require.Equal(t, "/canon/repo", repo["local_dir"])
+	require.Equal(t, "prj_1", repo["project_id"])
+	require.Equal(t, true, repo["is_origin"])
 }
 
 func TestLaunchReporter_EnqueueRunning(t *testing.T) {
@@ -112,7 +116,7 @@ func TestReportAdmissionRejected_EnqueuesAcceptedThenFailed(t *testing.T) {
 	fe := &fakeEnqueuer{}
 	detail := DispatchDetail{
 		DispatchID:     "dsp_9",
-		RepoLocation:   RepoLocation{LocalDir: "/canon/busy"},
+		RepoLocation:   RepoLocation{ProjectID: "prj_1", LocalDir: "/canon/busy", IsOrigin: true},
 		SandboxProfile: "read-only",
 	}
 	cause := errors.New("repo already has a live execution: /canon/busy")
@@ -128,6 +132,11 @@ func TestReportAdmissionRejected_EnqueuesAcceptedThenFailed(t *testing.T) {
 	require.Equal(t, "exc_rej_1", accepted.execID)
 	require.Equal(t, "dsp_9", accepted.dispatchID)
 	require.Equal(t, "read-only", accepted.payload["effective_sandbox_profile"])
+	// Even the rejection path echoes the full repo_location object.
+	repo := accepted.payload["repo_location"].(map[string]any)
+	require.Equal(t, "/canon/busy", repo["local_dir"])
+	require.Equal(t, "prj_1", repo["project_id"])
+	require.Equal(t, true, repo["is_origin"])
 
 	failed := fe.calls[1]
 	require.Equal(t, 2, failed.seq)
