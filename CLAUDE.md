@@ -43,9 +43,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Dev（本分支迭代）**：daemon 以 `PDX_SPA_DIR` 指向已 build 的 SPA 目錄即可即時服務，不必重編 Go binary：
   `cd spa && pnpm run build`（產出 `spa/dist`）→ 啟動 daemon 時帶 `PDX_SPA_DIR=<repo>/spa/dist`。目錄或 `index.html` 不存在時 daemon 會啟動即失敗（fail-fast）。
-- **Production（單一 binary）**：build 前把 SPA 產出複製進 embed 目錄再編 Go：
-  `cd spa && pnpm run build && rm -rf ../internal/webui/dist && mkdir -p ../internal/webui/dist && cp -r dist/* ../internal/webui/dist/ && cd .. && go build ./cmd/pdx`
-  （`internal/webui/dist/` 的建置產物已於 `.gitignore` 忽略，僅 `index.html` 佔位入版控以確保 `go:embed` 恆可編譯。）
+- **Production（單一 binary）**：`make build-embed`（= `make webui` 把 SPA 產出複製進 embed 目錄 + `make build` 編 Go）。純 `make build`（預設 target）不動 SPA 工具鏈，只會編進舊的 embed 內容（本地跑過 `webui` 後為真實 SPA，否則是版控佔位 `index.html`）。
+  （`internal/webui/dist/` 的建置產物已於 `.gitignore` 忽略，僅 `index.html` 佔位入版控以確保 `go:embed` 恆可編譯；`make webui` 會在本地覆蓋此佔位檔，勿 commit 覆蓋後的內容。）
 - **掛 `purdex.mlab.host`**：於 repo 根 `herd proxy purdex.mlab http://127.0.0.1:7860`（或既有 valet proxy），TLS 走 `*.mlab.host` wildcard 憑證。daemon 綁可達位址（`bind` 依 proxy 而定）。
 
 ## 完整開發流程
