@@ -145,12 +145,12 @@ Terminal / Stream / JSONL、Sessions 清單 / Dashboard / New Tab、Hosts 多 ho
 - **首連 UX**：Electron 版靠自動加 local host；web 沒有。web 首次進入須有清楚的「新增/選擇 host」入口（可預填當前 origin 對應的 daemon 作為建議 endpoint，含正確 scheme，但仍以顯式 host entity 存在，不硬編、不隱式同源連線）。
 - **host 端點 scheme UI（承接 P0 資料層）**：`AddHostDialog` 手動路徑加 `scheme`（http/https）選擇；健康檢查與驗證的 base URL 改用 `deriveDaemonBase`（不再寫死 `http://${ip}:${port}`）；existing-host dedupe 改用 `hostEndpointKey`（`http` vs `https` 同一 `host:port` 視為不同 endpoint，不誤判覆寫 token）。`OverviewSection` 可編輯既有 host 的 scheme。**pairing 流程維持 http（LAN/tailnet）不變**——pairing code 解碼恆為 http，https host 走手動新增。
 - **token 維持關**：本輪不做 token 輸入流程；UI/serving 不得假設「永遠無 token」。
-- **可安裝 PWA 殼**：`manifest.json`（名稱 / 圖示 / `display: standalone`）+ 圖示資產 + **service worker**（`vite-plugin-pwa`）。
+- **可安裝 PWA 殼**：`manifest.json`（名稱 / 圖示 / `display: standalone`）+ 圖示資產 **已存在**（`spa/public/manifest.json` + `icons/` + `index.html` head）；缺的是 **service worker**。採**手刻極簡 SW**（`spa/public/sw.js`）而非 `vite-plugin-pwa`——契合「保守最小快取」、避免 workbox 版本偏移複雜度與新依賴（決策見 P2b plan）。
 - **SW 版本對齊策略（重要，避免吐舊 SPA）**，採**保守最小快取**：
-  - SW **不快取 API/WS 回應、不做離線資料**；app shell 採 network-first（線上必取新），僅在完全離線時才回退（可接受此時無法運作）。
-  - 明訂 `skipWaiting` + `clientsClaim`：新 SW 啟用即接管。
-  - client 端偵測到有新版 SW 啟用時，**觸發一次 reload**，避免已載入的舊 bundle 與新 daemon 不對齊。
-  - （可選）SPA↔daemon 版本握手：SPA 讀 `/api/info` 的 `purdex_version` 與自身 build 版本比對，不一致時提示/自動 reload——由 plan 評估是否納入本輪。
+  - SW **不快取 API/WS 回應、不做離線資料**；app shell 採 network-first（線上必取新），僅在完全離線時才回退（可接受此時無法運作）。**快取寫入僅限 `status===200` 且（導覽分支）content-type 為 HTML；排除 Range/206；`caches.match` 限命名 cache。**
+  - 明訂 `skipWaiting` + `clientsClaim`：新 SW 啟用即接管；activate 清除舊 cache。
+  - client 端偵測到有新版 SW 啟用（`controllerchange`）時，**觸發一次 reload**（首次取得控制權不 reload），避免已載入的舊 bundle 與新 daemon 不對齊。
+  - **殘餘風險（已知）**：`controllerchange` reload 只涵蓋「新 SW 成功接管」；長時間開著、從不導航、且 `sw.js` 未變的舊 tab，其已載入 runtime 仍可能續打新 daemon。此為任何無 push 的 web app 的固有特性，network-first 導覽不會使其惡化（下次導覽/reload 即取新版）。**強化選項（future，未納本輪）**：SPA↔daemon 版本握手——讀 `/api/info` 的 `purdex_version` 與自身 build 版本比對，不一致時提示/自動 reload。
 - **驗收**：桌面 Chrome 出現安裝提示、安裝後為 standalone 視窗；重新部署 SPA 後，reload 後即為新版，不被 SW 卡舊。
 
 ### P3 — Tier B fallback（通知 + 快捷鍵）

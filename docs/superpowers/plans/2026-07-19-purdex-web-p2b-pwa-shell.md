@@ -14,6 +14,7 @@
 - SW `skipWaiting()` + `clients.claim()`：新版即接管；activate 時清除舊 cache（版本感知）。
 - client 端偵測 SW 更新接管（`controllerchange`）→ **reload 一次**，避免舊 bundle 與新 daemon 不對齊；但**首次取得控制權（無前一 controller）不 reload**。
 - **僅 web 註冊**：Electron（`isElectron`）與非 http/https protocol 不註冊 SW（`app:`/`file:` 跳過）。
+- **殘餘風險（已知，不在本輪修）**：`controllerchange` reload 僅涵蓋「新 SW 成功接管」。長開、從不導航、且 `sw.js` 未變的舊 tab 之已載入 runtime 仍可能續打新 daemon——此為任何無 push 的 web app 固有特性，network-first 導覽不使其惡化（下次導覽/reload 即取新版）。強化選項（future）：`/api/info` 版本握手（spec §5.2）。
 - SW 檔由 daemon 靜態託管（P1 handler 服務 `/sw.js`，GET、dist 根）；scope `/`。
 - 測試：`cd spa && npx vitest run`；Lint：`cd spa && pnpm run lint`；Build：`cd spa && pnpm run build`。
 - 每個 task 獨立 commit。
@@ -126,15 +127,88 @@ export function registerServiceWorker(): void {
     window.location.reload()
   })
   navigator.serviceWorker.register('/sw.js').catch(() => {
-    /* registration best-effort; non-secure contexts (e.g. http dev) will reject */
+    // Best-effort: any http origin is attempted, but non-trustworthy origins
+    // (non-loopback http, e.g. http://100.64.0.2 dev) reject per Secure
+    // Contexts — swallowed intentionally.
   })
 }
 ```
 
-- [ ] **Step 4: 跑測試確認通過**
+> `http:` 回 `true` 是刻意的 best-effort：secure context（https 或 loopback）才會真的註冊成功，其餘 reject 被 catch 吞掉、無副作用。
+
+- [ ] **Step 4: 跑純函式測試確認通過**
 
 Run: `cd spa && npx vitest run src/lib/register-sw.test.ts`
 Expected: PASS（7 tests）。
+
+- [ ] **Step 4b: 補 glue 測試（mock navigator.serviceWorker + window）**
+
+在 `register-sw.test.ts` 追加，鎖住有狀態的註冊路徑（首次不 reload、更新 reload 一次、Electron/無 SW 不註冊）：
+
+```ts
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { registerServiceWorker } from './register-sw'
+
+describe('registerServiceWorker (glue)', () => {
+  let origLocation: Location
+  let origSW: PropertyDescriptor | undefined
+  let register: ReturnType<typeof vi.fn>
+  let reload: ReturnType<typeof vi.fn>
+  let listeners: Record<string, () => void>
+
+  beforeEach(() => {
+    origLocation = window.location
+    origSW = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
+    register = vi.fn().mockResolvedValue(undefined)
+    reload = vi.fn()
+    listeners = {}
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI
+    Object.defineProperty(window, 'location', {
+      value: { protocol: 'https:', reload }, writable: true, configurable: true,
+    })
+    Object.defineProperty(navigator, 'serviceWorker', {
+      value: {
+        controller: null,
+        register,
+        addEventListener: (ev: string, cb: () => void) => { listeners[ev] = cb },
+      },
+      writable: true, configurable: true,
+    })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { value: origLocation, writable: true, configurable: true })
+    if (origSW) Object.defineProperty(navigator, 'serviceWorker', origSW)
+    else delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker
+  })
+
+  it('web https 無前一 controller → 註冊，首次 controllerchange 不 reload', () => {
+    registerServiceWorker()
+    expect(register).toHaveBeenCalledWith('/sw.js')
+    listeners['controllerchange']?.()
+    expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('已有 controller（更新接管）→ controllerchange reload 一次（防迴圈）', () => {
+    ;(navigator.serviceWorker as unknown as { controller: unknown }).controller = {}
+    registerServiceWorker()
+    listeners['controllerchange']?.()
+    listeners['controllerchange']?.()
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('Electron → 不註冊', () => {
+    ;(window as unknown as { electronAPI?: unknown }).electronAPI = {}
+    registerServiceWorker()
+    expect(register).not.toHaveBeenCalled()
+  })
+})
+```
+
+Run: `cd spa && npx vitest run src/lib/register-sw.test.ts`
+Expected: PASS（10 tests）。
+
+> 註：`getPlatformCapabilities()` 以 `window.electronAPI` 判斷 `isElectron`；測試以 delete/set 控制。若 jsdom 對 `navigator.serviceWorker` 定義有衝突，用 `Object.defineProperty(..., { configurable: true })` 覆寫並於 afterEach 還原（如上）。
 
 - [ ] **Step 5: Commit**
 
@@ -195,26 +269,36 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const clone = res.clone()
-          caches.open(CACHE).then((c) => c.put(SHELL, clone)).catch(() => {})
+          // Only persist a healthy HTML shell — never cache a 500 / error page
+          // / redirect body as the offline fallback.
+          const ct = res.headers.get('content-type') || ''
+          if (res.status === 200 && ct.includes('text/html')) {
+            const clone = res.clone()
+            caches.open(CACHE).then((c) => c.put(SHELL, clone)).catch(() => {})
+          }
           return res
         })
-        .catch(() => caches.match(SHELL).then((r) => r || Response.error())),
+        .catch(() =>
+          caches.open(CACHE).then((c) => c.match(SHELL)).then((r) => r || Response.error()),
+        ),
     )
     return
   }
 
   // Static assets: network-first with opportunistic cache for offline shell.
+  // Skip Range requests and non-200 (e.g. 206 Partial Content) — only full,
+  // successful same-origin static responses are cacheable.
+  if (req.headers.has('range')) return
   event.respondWith(
     fetch(req)
       .then((res) => {
-        if (res.ok) {
+        if (res.status === 200) {
           const clone = res.clone()
           caches.open(CACHE).then((c) => c.put(req, clone)).catch(() => {})
         }
         return res
       })
-      .catch(() => caches.match(req).then((r) => r || Response.error())),
+      .catch(() => caches.open(CACHE).then((c) => c.match(req)).then((r) => r || Response.error())),
   )
 })
 ```
