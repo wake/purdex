@@ -174,6 +174,26 @@ describe('handleNotificationClick workspace switching', () => {
     expect(wsState?.activeTabId).toBe(tab.id)
   })
 
+  it('web fallback: calls window.focus() when electronAPI unavailable (open-session)', () => {
+    const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+    const focusSpy = vi.spyOn(window, 'focus').mockImplementation(() => {})
+
+    handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+
+    expect(focusSpy).toHaveBeenCalled()
+    focusSpy.mockRestore()
+  })
+
+  it('web fallback: calls window.focus() when electronAPI unavailable (open-host)', () => {
+    const focusSpy = vi.spyOn(window, 'focus').mockImplementation(() => {})
+
+    handleNotificationClick({ kind: 'open-host', hostId: HOST_ID })
+
+    expect(focusSpy).toHaveBeenCalled()
+    focusSpy.mockRestore()
+  })
+
   it('switches to Home when tab is standalone (not in any workspace)', () => {
     // Setup: tab not in any workspace, active workspace is wsA
     const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })

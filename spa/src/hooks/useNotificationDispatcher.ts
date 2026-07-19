@@ -378,8 +378,12 @@ export function handleNotificationClick(action: NotificationAction): void {
       if (handled) {
         useAgentStore.getState().markRead(hostId, sessionCode)
       }
-      if (handled && window.electronAPI?.focusMyWindow) {
-        window.electronAPI.focusMyWindow()
+      if (handled) {
+        if (window.electronAPI?.focusMyWindow) {
+          window.electronAPI.focusMyWindow()
+        } else if (typeof window !== 'undefined') {
+          window.focus()
+        }
       }
       break
     }
@@ -388,6 +392,8 @@ export function handleNotificationClick(action: NotificationAction): void {
       useHostStore.getState().setActiveHost(action.hostId)
       if (window.electronAPI?.focusMyWindow) {
         window.electronAPI.focusMyWindow()
+      } else if (typeof window !== 'undefined') {
+        window.focus()
       }
       break
     }

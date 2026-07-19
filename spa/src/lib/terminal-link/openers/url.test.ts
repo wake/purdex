@@ -21,7 +21,7 @@ describe('url opener', () => {
     const spy = vi.spyOn(window, 'open').mockImplementation(() => null)
     const o = createUrlOpener({ isElectron: false, openBrowserTab: vi.fn(), openExternal: vi.fn() })
     o.open(token, {}, new MouseEvent('click'))
-    expect(spy).toHaveBeenCalledWith('https://example.com', '_blank')
+    expect(spy).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer')
   })
 
   it('electron normal click: openBrowserTab', () => {

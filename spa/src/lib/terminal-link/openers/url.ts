@@ -22,7 +22,7 @@ export function createUrlOpener(deps: UrlOpenerDeps): LinkOpener {
         if (event.shiftKey) deps.openExternal(uri)
         else deps.openBrowserTab(uri)
       } else {
-        window.open(uri, '_blank')
+        window.open(uri, '_blank', 'noopener,noreferrer')
       }
     },
   }
