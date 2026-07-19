@@ -39,6 +39,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **改動後必須重新打包**：push 新 commit 後須在 Mini 跑 `pnpm run electron:build`，否則 `out/` 裡的 baked-in hash 是舊的，Air 端會無限顯示 "Update available"
 - **SPA 走 HMR 不受影響**：dev server 跑著時 SPA 改動即時生效，但 Electron main/preload 改動仍需打包 + dev update
 
+### Web 版靜態託管（P1）
+
+- **Dev（本分支迭代）**：daemon 以 `PDX_SPA_DIR` 指向已 build 的 SPA 目錄即可即時服務，不必重編 Go binary：
+  `cd spa && pnpm run build`（產出 `spa/dist`）→ 啟動 daemon 時帶 `PDX_SPA_DIR=<repo>/spa/dist`。目錄或 `index.html` 不存在時 daemon 會啟動即失敗（fail-fast）。
+- **Production（單一 binary）**：build 前把 SPA 產出複製進 embed 目錄再編 Go：
+  `cd spa && pnpm run build && rm -rf ../internal/webui/dist && mkdir -p ../internal/webui/dist && cp -r dist/* ../internal/webui/dist/ && cd .. && go build ./cmd/pdx`
+  （`internal/webui/dist/` 的建置產物已於 `.gitignore` 忽略，僅 `index.html` 佔位入版控以確保 `go:embed` 恆可編譯。）
+- **掛 `purdex.mlab.host`**：於 repo 根 `herd proxy purdex.mlab http://127.0.0.1:7860`（或既有 valet proxy），TLS 走 `*.mlab.host` wildcard 憑證。daemon 綁可達位址（`bind` 依 proxy 而定）。
+
 ## 完整開發流程
 
 **除非使用者授權，否則不能直推 main**，即使 hotfix 也必須走 PR + review
