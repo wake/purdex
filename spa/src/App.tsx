@@ -18,6 +18,7 @@ import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
+import { useWebShortcuts } from './hooks/useWebShortcuts'
 import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useElectronIpc } from './hooks/useElectronIpc'
@@ -72,6 +73,7 @@ export default function App() {
   useMultiHostEventWs()
   useRouteSync()
   useShortcuts()
+  useWebShortcuts()
   useNotificationDispatcher()
   useElectronIpc()
   useNewTabBootstrap()
