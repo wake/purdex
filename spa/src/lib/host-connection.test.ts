@@ -11,12 +11,31 @@ function ticketResponse(ticket = 'tk_abc') {
 describe('checkHealth', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('Phase 1 only: no token, non-pairing → auth-error', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(healthResponse('normal'))
+  it('no token + token-off daemon（ws-ticket 200）→ connected + ticket', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(healthResponse('normal'))
+      .mockResolvedValueOnce(ticketResponse('tk_off'))
+    const result = await checkHealth('http://localhost:7860')
+    expect(result.daemon).toBe('connected')
+    expect(result.ticket).toBe('tk_off')
+    expect(fetch).toHaveBeenCalledTimes(2) // 無 token 也嘗試 ws-ticket
+  })
+
+  it('no token + token-required daemon（ws-ticket 401）→ auth-error', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(healthResponse('normal'))
+      .mockResolvedValueOnce(new Response('unauthorized', { status: 401 }))
     const result = await checkHealth('http://localhost:7860')
     expect(result.daemon).toBe('auth-error')
-    expect(result.mode).toBe('normal')
-    expect(fetch).toHaveBeenCalledTimes(1) // Phase 2 skipped
+  })
+
+  it('no token 時 ws-ticket 請求不帶 Authorization header', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(healthResponse('normal'))
+      .mockResolvedValueOnce(ticketResponse('tk_off'))
+    await checkHealth('http://localhost:7860')
+    const secondCallInit = spy.mock.calls[1][1] as RequestInit
+    expect((secondCallInit.headers ?? {})).not.toHaveProperty('Authorization')
   })
 
   it('Phase 1 only: no token, pairing mode → connected', async () => {

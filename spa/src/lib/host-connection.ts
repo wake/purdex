@@ -29,20 +29,23 @@ export async function checkHealth(
     }
     const mode = (body.mode ?? 'normal') as 'pairing' | 'pending' | 'normal'
 
-    const token = getToken?.()
-    if (!token) {
-      if (mode === 'pairing') {
-        return { daemon: 'connected', tmux: 'unavailable', latency, mode }
-      }
-      return { daemon: 'auth-error', tmux: 'unavailable', latency, mode }
+    // Pairing mode short-circuits: no ticket needed regardless of token.
+    if (mode === 'pairing') {
+      return { daemon: 'connected', tmux: 'unavailable', latency, mode }
     }
 
+    // Attempt ws-ticket for BOTH tokened and token-off daemons. When the daemon
+    // has no token configured, TokenAuth passes the unauthenticated request
+    // through and issues a ticket (200). 401/503 means auth is actually
+    // required/unavailable. This lets a token-off daemon (tailnet-protected)
+    // connect a browser client that holds no token.
+    const token = getToken?.()
     const ctrl2 = new AbortController()
     const timer2 = setTimeout(() => ctrl2.abort(), PHASE2_TIMEOUT_MS)
     try {
       const ticketRes = await fetch(`${baseUrl}/api/ws-ticket`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: ctrl2.signal,
       })
       if (ticketRes.status === 401) {
