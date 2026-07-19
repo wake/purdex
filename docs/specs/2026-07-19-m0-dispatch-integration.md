@@ -76,7 +76,7 @@ issue ──> dispatch ──> execution ──> attempt ──> session
 | `GET /daemon/dispatches/{id}` | 兩段式②：完整 issue + `repo_location` + `sandbox_profile`(request) | `{dispatch_id, issue{...}, repo_location{...}, sandbox_profile}` | 限 caller daemon |
 | `POST /daemon/dispatches/{id}/report` | 回報執行狀態；Ploom 投影 + 組 deeplink | `200 {ack_seq}`（見 §3.3）；`accepted` 未先 ack 就發 lifecycle → `409 {code:"accepted_required"}` | seq 冪等 |
 
-**Error code taxonomy（M0）**：`accepted_required`（lifecycle 先於 accepted）/ `dispatch_not_found` / `not_owner`（非 caller daemon）/ `already_claimed`（他 daemon）/ `schema_incompatible`（版本不合）/ `stale_seq`（seq ≤ ack，非錯誤、response 仍回 200 帶 ack_seq）。
+**Error code taxonomy（M0）**：`accepted_required`（lifecycle 先於 accepted）/ `dispatch_not_found`（**不存在 OR 非本 daemon，fail-closed 不區分**；已移除 `not_owner`）/ `already_claimed`（claim race 他 claimer 已 claim）/ `schema_incompatible`（版本不合）/ `unknown_sandbox_profile`（422）/ `stale_seq`（seq ≤ ack，非錯誤、response 仍回 200 帶 ack_seq）。契約 SOT 見 `docs/specs/m0-contract.md` §7。
 
 ### 3.2 兩段式抓取
 

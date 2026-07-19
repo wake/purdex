@@ -46,7 +46,7 @@ Ploom 內部：L.0 S6疊五層 → L.1 tables → L.2 poll/claim/fetch ∥ L.3 r
 **Acceptance**：
 - [ ] 契約檔涵蓋 pending-list / claim(成功·同daemon冪等·他daemon409) / fetch / report(ack_seq·accepted_required) 全形狀
 - [ ] **每欄位明列（防漏）**：`schema_version`、`execution_id`、`dispatch_id`(echo)、`attempt_no`、`provider`、`status`、`seq`、`ack_seq`、`repo_location`(echo)、`effective_sandbox_profile`、`head_at_start`、`dirty_at_start`、`session_code`(nullable)、`artifacts[]{kind,pointer,meta}`
-- [ ] error taxonomy 列全（`accepted_required`/`dispatch_not_found`/`not_owner`/`already_claimed`/`schema_incompatible`/`stale_seq`/`unknown_sandbox_profile`）
+- [ ] error taxonomy 列全（`accepted_required`/`dispatch_not_found`(fail-closed 含非本 daemon)/`already_claimed`/`schema_incompatible`/`stale_seq`/`unknown_sandbox_profile`）
 - [ ] sandbox_profile enum + 偏序 + clamp + unknown/default 明列
 - [ ] **SOT 對照 spec commit `19e622b`**（非更舊版）
 **Verify**：人工對照 spec §3/§4/§8.1 逐條 checklist。
