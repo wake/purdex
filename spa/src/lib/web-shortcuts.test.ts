@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { matchWebShortcut, isEditableTarget, WEB_SHORTCUTS } from './web-shortcuts'
-import { getDefaultKeybindings } from '../../../electron/keybindings'
+import { getDefaultKeybindings } from '../../../electron/keybindings-manifest'
 
 function ev(over: Partial<KeyboardEvent>): Pick<KeyboardEvent,'key'|'metaKey'|'ctrlKey'|'altKey'|'shiftKey'> {
   return { key: '', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...over }
