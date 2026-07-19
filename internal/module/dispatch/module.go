@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/wake/purdex/internal/core"
@@ -35,7 +34,7 @@ type DispatchModule struct {
 	client     *Client
 	worker     *Worker
 	sink       FetchSink
-	outbox     *Outbox
+	outbox     *execution.Outbox
 	sender     *Sender
 	reconciler *execution.Reconciler
 
@@ -73,16 +72,18 @@ func (m *DispatchModule) Init(c *core.Core) error {
 	// sender drains queued reports to Ploom with accepted-before-lifecycle
 	// ordering, an ack cursor, and retry/backoff; the execution store is the
 	// durability-cut source for reconstructing a lost accepted from its row.
-	outbox, err := OpenOutbox(filepath.Join(c.Cfg.DataDir, "outbox.db"))
-	if err != nil {
-		return err
+	//
+	// The outbox is a view over the EXECUTION database (execution owns the
+	// report_outbox table), which is what makes "commit the state transition and
+	// enqueue its report" a single atomic transaction. Without the execution store
+	// there are no executions to report on, so the consumer simply runs
+	// report-less (launch is disabled on the same condition below).
+	if store := executionStore(c); store != nil {
+		m.outbox = store.Outbox()
+		m.sender = NewSender(m.outbox, m.client, WithExecutionReader(executionStoreReader{store}))
+	} else {
+		log.Printf("[dispatch] reporting disabled: execution store unavailable")
 	}
-	m.outbox = outbox
-	var opts []SenderOption
-	if reader := executionReader(c); reader != nil {
-		opts = append(opts, WithExecutionReader(reader))
-	}
-	m.sender = NewSender(m.outbox, m.client, opts...)
 
 	// P.7: assemble the launch durable-cut sink. A test may pre-inject m.sink;
 	// otherwise build the real consume→launch sink when the execution store and
@@ -291,18 +292,6 @@ func relayGateway(c *core.Core) execution.RelayGateway {
 	return gw
 }
 
-// executionReader adapts the registered execution store onto the report sender's
-// ExecutionReader (durability cut). Returns nil when the store is unavailable —
-// already-queued reports still replay; only reconstruction of a lost accepted is
-// skipped.
-func executionReader(c *core.Core) ExecutionReader {
-	store := executionStore(c)
-	if store == nil {
-		return nil
-	}
-	return executionStoreReader{store}
-}
-
 // executionStoreReader bridges *execution.ExecutionStore to ExecutionReader,
 // projecting the durable row onto the accepted-report immutable facts via the
 // same mapping the live enqueue path uses (acceptedRowFromExec), so a
@@ -371,8 +360,7 @@ func (m *DispatchModule) Stop(_ context.Context) error {
 		m.cancel()
 		m.wg.Wait()
 	}
-	if m.outbox != nil {
-		return m.outbox.Close()
-	}
+	// The outbox is a view over the execution module's database — that module
+	// owns its lifetime and closes it.
 	return nil
 }

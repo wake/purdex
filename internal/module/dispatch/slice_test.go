@@ -98,7 +98,7 @@ func (p *slicePoster) sorted() []postedReport {
 type sliceFixture struct {
 	worker *Worker
 	store  *execution.ExecutionStore
-	outbox *Outbox
+	outbox *execution.Outbox
 	sender *Sender
 	poster *slicePoster
 	client *fakeClient
@@ -112,9 +112,9 @@ func newSliceFixture(t *testing.T, fc *fakeClient, adm *sliceAdmitter, fl *slice
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
-	outbox, err := OpenOutbox(":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = outbox.Close() })
+	// The outbox lives in the SAME database as the execution rows, so the durable
+	// cut's transitions and their reports commit atomically.
+	outbox := store.Outbox()
 
 	poster := &slicePoster{}
 	sender := NewSender(outbox, poster, WithExecutionReader(executionStoreReader{store}))

@@ -1,18 +1,19 @@
-package dispatch
+package execution
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
-
-	_ "modernc.org/sqlite"
 )
 
-// The report outbox is a standalone durable table (codex Q2) — not folded into
-// the execution row — so the sender can scan for unacked reports, keep a
-// per-execution ack cursor, and hold multiple pending lifecycle reports per
-// execution cleanly (spec §3.3). Each report is stored with its full,
+// The report outbox is a durable table living in the SAME SQLite database as the
+// execution rows (codex Q2 + the F1 durability fix). Co-locating them is what
+// lets a state transition and the report it implies commit in ONE transaction
+// (see store_report.go): a crash or an enqueue failure can never leave a row
+// terminal/running with its report missing and unreconstructable. The sender
+// (dispatch) drives this table for scan/ack/backoff; execution owns the schema
+// and the transactional enqueue. Each report is stored with its full,
 // ready-to-POST JSON payload; replay after a daemon restart reads straight from
 // here. The accepted(seq=1) report is additionally reconstructable from the
 // execution row (the durability cut) when it never made it into the outbox.
@@ -34,45 +35,25 @@ type OutboxRecord struct {
 	UpdatedAt     int64
 }
 
-// Outbox is the SQLite-backed durable report queue + per-execution ack cursor.
+// Outbox is the durable report queue + per-execution ack cursor. It is a view
+// over the execution store's *sql.DB — never its own database — so transactional
+// composite operations can span an execution row and its report.
 type Outbox struct {
 	db  *sql.DB
 	now func() int64
 }
 
-// OpenOutbox opens (or creates) an Outbox at path and runs schema migration. Use
-// ":memory:" for tests.
-func OpenOutbox(path string) (*Outbox, error) {
-	dsn := path
-	if path != ":memory:" {
-		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(500)"
-	}
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open outbox db: %w", err)
-	}
-	if path == ":memory:" {
-		db.SetMaxOpenConns(1)
-	} else {
-		db.SetMaxOpenConns(2)
-		db.SetMaxIdleConns(2)
-	}
-	o := &Outbox{db: db, now: func() int64 { return time.Now().Unix() }}
-	if err := o.migrate(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate outbox db: %w", err)
-	}
-	return o, nil
-}
+// Outbox returns the report outbox backed by this store's database. The returned
+// value is a thin view (no extra connections, no separate lifetime): closing the
+// store closes it.
+func (s *ExecutionStore) Outbox() *Outbox { return &Outbox{db: s.db, now: s.now} }
 
-// Close closes the underlying DB connection.
-func (o *Outbox) Close() error { return o.db.Close() }
-
-// migrate creates the outbox + cursor tables. No foreign keys (avoids the #850
-// DSN-pragma footgun). UNIQUE(execution_id, seq) makes Enqueue idempotent so a
-// replayed reconstruction can never double-insert the same report.
-func (o *Outbox) migrate() error {
-	_, err := o.db.Exec(`
+// migrateOutbox creates the outbox + cursor tables inside the execution DB. No
+// foreign keys (avoids the #850 DSN-pragma footgun). UNIQUE(execution_id, seq)
+// makes Enqueue idempotent so a replayed reconstruction can never double-insert
+// the same report.
+func migrateOutbox(db *sql.DB) error {
+	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS report_outbox (
 			id              INTEGER PRIMARY KEY AUTOINCREMENT,
 			execution_id    TEXT    NOT NULL,
@@ -98,17 +79,31 @@ func (o *Outbox) migrate() error {
 	return err
 }
 
-// Enqueue durably records one report. It is idempotent on (execution_id, seq):
-// a second enqueue of the same key is a no-op and returns inserted=false, so a
-// reconstructed accepted never clobbers a still-queued one. The row's mutable
-// send bookkeeping (attempts/acked/next_attempt_at) is left to the caller-facing
-// Mark* methods.
+// Enqueue durably records one report outside any state transition. It is
+// idempotent on (execution_id, seq): a second enqueue of the same key is a no-op
+// and returns inserted=false, so a reconstructed accepted never clobbers a
+// still-queued one. Reports that accompany a state transition must NOT go
+// through here — they belong in the composite transactions (store_report.go) so
+// row and report commit together.
 func (o *Outbox) Enqueue(rec OutboxRecord) (inserted bool, err error) {
+	return enqueueReport(context.Background(), o.db, o.now(), rec)
+}
+
+// execer is satisfied by *sql.DB, *sql.Conn and *sql.Tx, so the enqueue INSERT is
+// shared verbatim between the standalone path and the in-transaction composite
+// operations.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// enqueueReport inserts one outbox row through ex (which may be a transaction).
+// The row's mutable send bookkeeping (attempts/acked/next_attempt_at) is left to
+// the caller-facing Mark* methods.
+func enqueueReport(ctx context.Context, ex execer, now int64, rec OutboxRecord) (bool, error) {
 	if rec.ExecutionID == "" || rec.DispatchID == "" || rec.Seq < 1 || len(rec.Payload) == 0 {
 		return false, fmt.Errorf("outbox enqueue: invalid record %+v", rec)
 	}
-	now := o.now()
-	res, err := o.db.Exec(`
+	res, err := ex.ExecContext(ctx, `
 		INSERT OR IGNORE INTO report_outbox (
 			execution_id, dispatch_id, seq, status, payload,
 			attempts, next_attempt_at, acked, permanent, last_error,

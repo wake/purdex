@@ -11,7 +11,22 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/wake/purdex/internal/module/execution"
 )
+
+// newTestOutbox returns an outbox backed by a throwaway in-memory execution
+// database. The outbox table lives in the execution DB (F1: state transition and
+// its report commit in one transaction), so there is no standalone open.
+func newTestOutbox(t *testing.T) *execution.Outbox {
+	t.Helper()
+	store, err := execution.OpenExecution(":memory:")
+	if err != nil {
+		t.Fatalf("OpenExecution: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store.Outbox()
+}
 
 // ---- client.Report wire tests -------------------------------------------------
 
@@ -444,7 +459,7 @@ func enqueueRunning(t *testing.T, s *Sender, execID, dispatchID string, seq int)
 	}
 }
 
-func assertAcked(t *testing.T, o *Outbox, execID string, seq int) {
+func assertAcked(t *testing.T, o *execution.Outbox, execID string, seq int) {
 	t.Helper()
 	r, ok, err := o.RecordBySeq(execID, seq)
 	if err != nil || !ok {

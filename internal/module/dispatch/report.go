@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log"
 	"time"
+
+	"github.com/wake/purdex/internal/module/execution"
 )
 
 // This file drives the durable E4 report stream (spec §3.3):
@@ -156,7 +158,7 @@ func BuildTerminalPayload(executionID string, seq int, status string, artifacts 
 // Sender drains the durable outbox to Ploom, enforcing accepted-before-lifecycle
 // ordering, the ack cursor, retry/backoff, and durability-cut reconstruction.
 type Sender struct {
-	outbox   *Outbox
+	outbox   *execution.Outbox
 	client   ReportPoster
 	reader   ExecutionReader // may be nil: reconstruction unavailable, queued rows still replay
 	now      func() int64
@@ -210,7 +212,7 @@ func WithFlushInterval(d time.Duration) SenderOption {
 }
 
 // NewSender builds a report sender over the given outbox and Ploom client.
-func NewSender(outbox *Outbox, client ReportPoster, opts ...SenderOption) *Sender {
+func NewSender(outbox *execution.Outbox, client ReportPoster, opts ...SenderOption) *Sender {
 	s := &Sender{
 		outbox:   outbox,
 		client:   client,
@@ -244,7 +246,7 @@ func defaultReportBackoff(attempts int) time.Duration {
 // call this at admission (accepted) and lifecycle transitions; it is idempotent
 // on (execution_id, seq).
 func (s *Sender) Enqueue(executionID, dispatchID string, seq int, status string, payload []byte) error {
-	_, err := s.outbox.Enqueue(OutboxRecord{
+	_, err := s.outbox.Enqueue(execution.OutboxRecord{
 		ExecutionID: executionID,
 		DispatchID:  dispatchID,
 		Seq:         seq,
@@ -385,30 +387,30 @@ func (s *Sender) ensureAccepted(ctx context.Context, execID string, force bool) 
 // reconstructAccepted rebuilds the accepted report from the durable execution
 // row and enqueues it, then returns the queued record. If no reader is wired or
 // the row is gone it returns a zero-ID record (nothing to send).
-func (s *Sender) reconstructAccepted(execID string) (OutboxRecord, error) {
+func (s *Sender) reconstructAccepted(execID string) (execution.OutboxRecord, error) {
 	if s.reader == nil {
-		return OutboxRecord{}, nil
+		return execution.OutboxRecord{}, nil
 	}
 	row, found, err := s.reader.LoadAcceptedRow(execID)
 	if err != nil {
-		return OutboxRecord{}, err
+		return execution.OutboxRecord{}, err
 	}
 	if !found {
 		s.logf("[dispatch] cannot reconstruct accepted: execution row %s gone", execID)
-		return OutboxRecord{}, nil
+		return execution.OutboxRecord{}, nil
 	}
 	payload, err := BuildAcceptedPayload(row)
 	if err != nil {
-		return OutboxRecord{}, err
+		return execution.OutboxRecord{}, err
 	}
-	if _, err := s.outbox.Enqueue(OutboxRecord{
+	if _, err := s.outbox.Enqueue(execution.OutboxRecord{
 		ExecutionID: row.ExecutionID,
 		DispatchID:  row.DispatchID,
 		Seq:         1,
 		Status:      "accepted",
 		Payload:     payload,
 	}); err != nil {
-		return OutboxRecord{}, err
+		return execution.OutboxRecord{}, err
 	}
 	rec, _, err := s.outbox.RecordBySeq(execID, 1)
 	return rec, err
@@ -427,7 +429,7 @@ const (
 // advances the ack cursor and marks the record acked when seq ≤ ack_seq. A 409
 // accepted_required is surfaced to the caller; 5xx/transport → backoff attempt;
 // 401/403/schema → permanent.
-func (s *Sender) sendOne(ctx context.Context, rec OutboxRecord) (ackSeq int, outcome sendOutcome) {
+func (s *Sender) sendOne(ctx context.Context, rec execution.OutboxRecord) (ackSeq int, outcome sendOutcome) {
 	res, err := s.client.Report(ctx, rec.DispatchID, rec.Payload)
 	if err == nil {
 		if aerr := s.outbox.AdvanceCursor(rec.ExecutionID, res.AckSeq); aerr != nil {

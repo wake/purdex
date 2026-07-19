@@ -140,7 +140,12 @@ func (s *ExecutionStore) migrate() error {
 			updated_at      INTEGER NOT NULL DEFAULT 0
 		);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// The report outbox lives in this same database so a state transition and the
+	// report it implies can commit atomically (store_report.go).
+	return migrateOutbox(s.db)
 }
 
 // UpsertByDispatch creates a new execution for req.DispatchID, or returns the

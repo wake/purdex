@@ -119,9 +119,7 @@ func TestWireTerminal_HandlerReportsCompleted(t *testing.T) {
 	require.True(t, created)
 	require.NoError(t, store.MarkLaunched(e.ExecutionID, "sc_e2e"))
 
-	outbox, err := OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { outbox.Close() })
+	outbox := store.Outbox()
 
 	m := &DispatchModule{sender: NewSender(outbox, nil)}
 	seam := &fakeSeam{results: map[string]stream.ResultEvent{"sc_e2e": {IsError: false, Subtype: "success"}}}

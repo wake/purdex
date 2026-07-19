@@ -1,4 +1,4 @@
-package dispatch
+package execution
 
 import (
 	"testing"
@@ -6,15 +6,10 @@ import (
 
 func newTestOutbox(t *testing.T) *Outbox {
 	t.Helper()
-	o, err := OpenOutbox(":memory:")
-	if err != nil {
-		t.Fatalf("OpenOutbox: %v", err)
-	}
-	t.Cleanup(func() { o.Close() })
-	return o
+	return openTestStore(t).Outbox()
 }
 
-func rec(execID string, seq int, status string) OutboxRecord {
+func outboxRec(execID string, seq int, status string) OutboxRecord {
 	return OutboxRecord{
 		ExecutionID: execID,
 		DispatchID:  "dsp_" + execID,
@@ -27,12 +22,12 @@ func rec(execID string, seq int, status string) OutboxRecord {
 func TestOutbox_EnqueueIdempotentOnExecSeq(t *testing.T) {
 	o := newTestOutbox(t)
 
-	ins, err := o.Enqueue(rec("exc_1", 1, "accepted"))
+	ins, err := o.Enqueue(outboxRec("exc_1", 1, "accepted"))
 	if err != nil || !ins {
 		t.Fatalf("first enqueue: inserted=%v err=%v", ins, err)
 	}
 	// Same (execution_id, seq) → no-op, inserted=false.
-	ins, err = o.Enqueue(rec("exc_1", 1, "accepted"))
+	ins, err = o.Enqueue(outboxRec("exc_1", 1, "accepted"))
 	if err != nil {
 		t.Fatalf("second enqueue: %v", err)
 	}
@@ -63,10 +58,10 @@ func TestOutbox_EnqueueRejectsInvalid(t *testing.T) {
 func TestOutbox_UnackedRecordsOrderedBySeq(t *testing.T) {
 	o := newTestOutbox(t)
 	// Insert out of order; UnackedRecords must return ascending seq.
-	o.Enqueue(rec("exc_1", 3, "completed"))
-	o.Enqueue(rec("exc_1", 1, "accepted"))
-	o.Enqueue(rec("exc_1", 2, "running"))
-	o.Enqueue(rec("exc_2", 1, "accepted")) // different execution — excluded
+	o.Enqueue(outboxRec("exc_1", 3, "completed"))
+	o.Enqueue(outboxRec("exc_1", 1, "accepted"))
+	o.Enqueue(outboxRec("exc_1", 2, "running"))
+	o.Enqueue(outboxRec("exc_2", 1, "accepted")) // different execution — excluded
 
 	recs, err := o.UnackedRecords("exc_1")
 	if err != nil {
@@ -84,7 +79,7 @@ func TestOutbox_UnackedRecordsOrderedBySeq(t *testing.T) {
 
 func TestOutbox_MarkAckedExcludesFromUnacked(t *testing.T) {
 	o := newTestOutbox(t)
-	o.Enqueue(rec("exc_1", 1, "accepted"))
+	o.Enqueue(outboxRec("exc_1", 1, "accepted"))
 	r, _, _ := o.RecordBySeq("exc_1", 1)
 
 	if err := o.MarkAcked(r.ID); err != nil {
@@ -98,7 +93,7 @@ func TestOutbox_MarkAckedExcludesFromUnacked(t *testing.T) {
 
 func TestOutbox_MarkAttemptBumpsAndBacksOff(t *testing.T) {
 	o := newTestOutbox(t)
-	o.Enqueue(rec("exc_1", 1, "accepted"))
+	o.Enqueue(outboxRec("exc_1", 1, "accepted"))
 	r, _, _ := o.RecordBySeq("exc_1", 1)
 
 	if err := o.MarkAttempt(r.ID, 5000, "boom"); err != nil {
@@ -121,7 +116,7 @@ func TestOutbox_MarkAttemptBumpsAndBacksOff(t *testing.T) {
 
 func TestOutbox_MarkPermanentExcludesFromDue(t *testing.T) {
 	o := newTestOutbox(t)
-	o.Enqueue(rec("exc_1", 1, "accepted"))
+	o.Enqueue(outboxRec("exc_1", 1, "accepted"))
 	r, _, _ := o.RecordBySeq("exc_1", 1)
 
 	if err := o.MarkPermanent(r.ID, "401"); err != nil {
@@ -165,9 +160,9 @@ func TestOutbox_CursorMonotonic(t *testing.T) {
 
 func TestOutbox_DueExecutionsDistinct(t *testing.T) {
 	o := newTestOutbox(t)
-	o.Enqueue(rec("exc_1", 1, "accepted"))
-	o.Enqueue(rec("exc_1", 2, "running"))
-	o.Enqueue(rec("exc_2", 1, "accepted"))
+	o.Enqueue(outboxRec("exc_1", 1, "accepted"))
+	o.Enqueue(outboxRec("exc_1", 2, "running"))
+	o.Enqueue(outboxRec("exc_2", 1, "accepted"))
 
 	due, err := o.DueExecutions(0)
 	if err != nil {
