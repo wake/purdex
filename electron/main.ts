@@ -8,6 +8,7 @@ import { registerFsIpc } from './fs-ipc'
 import { createTray } from './tray'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
+import { pickDeeplinkTarget } from './deeplink'
 
 // Register custom protocol before app is ready (Electron requirement).
 // 'app://' replaces 'file://' for bundled SPA, enabling standard CORS behavior.
@@ -74,20 +75,26 @@ function findDeeplinkArg(argv: readonly string[]): string | null {
   return argv.find((a) => a.startsWith(`${DEEPLINK_SCHEME}://`)) ?? null
 }
 
-// Send to every ready renderer; buffer if none are ready yet (cold start).
-function broadcastDeeplink(dl: ExecutionDeeplink): void {
-  let delivered = false
-  for (const win of windowManager.getAllWindows()) {
-    if (!win.isDestroyed() && readyWebContentsIds.has(win.webContents.id)) {
-      win.webContents.send(DEEPLINK_CHANNEL, dl)
-      delivered = true
-    }
+// Deliver a deeplink to a SINGLE window (the focused one if ready, else the first
+// ready one); buffer if none are ready yet (cold start). Broadcasting to every
+// renderer made each one run the resolver and open its own detail page while
+// fighting for focus — the deeplink names one execution, so exactly one window
+// should react. The cold-start buffer is still drained to a single window by the
+// spa:ready handler below.
+function deliverDeeplink(dl: ExecutionDeeplink): void {
+  const ready = windowManager
+    .getAllWindows()
+    .filter((win) => !win.isDestroyed() && readyWebContentsIds.has(win.webContents.id))
+  const target = pickDeeplinkTarget(ready, BrowserWindow.getFocusedWindow())
+  if (!target) {
+    pendingDeeplinks.push(dl)
+    return
   }
-  if (!delivered) pendingDeeplinks.push(dl)
+  target.webContents.send(DEEPLINK_CHANNEL, dl)
 }
 
 // Entry point for a deeplink once the app is ready: wake/focus a window, parse,
-// and broadcast. Malformed URLs are logged and dropped.
+// and deliver to a single landing window. Malformed URLs are logged and dropped.
 function handleDeeplink(rawUrl: string): void {
   const dl = parseDeeplink(rawUrl)
   if (!dl) {
@@ -95,7 +102,7 @@ function handleDeeplink(rawUrl: string): void {
     return
   }
   windowManager.showOrCreate()
-  broadcastDeeplink(dl)
+  deliverDeeplink(dl)
 }
 
 function registerIpcHandlers(): void {
