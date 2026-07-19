@@ -21,10 +21,16 @@ const RegistryKey = "execution.store"
 type ExecutionModule struct {
 	core  *core.Core
 	store *ExecutionStore
+	// hostID scopes artifact pointers in the read projection. Captured from core
+	// config at Init; overridable in tests.
+	hostID string
+	// diff computes the best-effort diff summary surfaced by the read path
+	// (P.12). Defaults to BuildDiffArtifact; overridable in tests.
+	diff diffFunc
 }
 
 // New returns a new ExecutionModule ready for registration.
-func New() *ExecutionModule { return &ExecutionModule{} }
+func New() *ExecutionModule { return &ExecutionModule{diff: BuildDiffArtifact} }
 
 func (m *ExecutionModule) Name() string           { return "execution" }
 func (m *ExecutionModule) Dependencies() []string { return nil }
@@ -38,14 +44,23 @@ func (m *ExecutionModule) Init(c *core.Core) error {
 	if err != nil {
 		return err
 	}
+	c.CfgMu.RLock()
+	m.hostID = c.Cfg.HostID
+	c.CfgMu.RUnlock()
 	c.Registry.Register(RegistryKey, m.store)
 	return nil
 }
 
-// RegisterRoutes reserves the /api/execution/* namespace. P.1 exposes no HTTP
-// surface yet (the store is consumed in-process by the dispatch worker in later
-// tasks); routes are added when the read path lands (P.12).
-func (m *ExecutionModule) RegisterRoutes(_ *http.ServeMux) {}
+// RegisterRoutes exposes the M0 read path (spec §9, Task P.12): a read-only
+// projection of an execution row consumed by the SPA detail page and deeplink
+// resolver. It is strictly a read — observe-only, no stdin. Auth is the global
+// TokenAuth middleware's job (this mux is wrapped by it in main).
+func (m *ExecutionModule) RegisterRoutes(mux *http.ServeMux) {
+	if m.store == nil {
+		return
+	}
+	mux.HandleFunc("GET /api/execution/{id}", m.handleGetExecution)
+}
 
 // Start logs a banner. Startup reconcile sweep lands in P.9.
 func (m *ExecutionModule) Start(_ context.Context) error {
