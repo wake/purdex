@@ -30,7 +30,41 @@ import (
 	"github.com/wake/purdex/internal/relay"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
+	"github.com/wake/purdex/internal/webui"
 )
+
+// buildHTTPHandler applies the P1 routing/middleware matrix:
+//
+//	GET /api/health         → CORS only (bypass)
+//	/api/ , /ws/ (prefix)   → CORS→IPWhitelist→PairingGuard→TokenAuth→inner
+//	everything else         → CORS→IPWhitelist→spa (static shell, pre-auth)
+//
+// All daemon routes live under /api/ or /ws/, so the static catch-all never
+// shadows an API/WS route; the SPA handler itself restricts to GET/HEAD and
+// CORS answers OPTIONS upstream.
+func buildHTTPHandler(
+	inner http.Handler,
+	spa http.Handler,
+	allow []string,
+	isPairing func() bool,
+	tokenFn func() string,
+	tickets middleware.TicketValidator, // c.Tickets (*core.TicketStore) satisfies this
+	health http.Handler,
+) http.Handler {
+	protected := func(h http.Handler) http.Handler {
+		return middleware.CORS(
+			middleware.IPWhitelist(allow)(
+				middleware.PairingGuard(isPairing)(
+					middleware.TokenAuth(tokenFn, tickets)(h))))
+	}
+
+	outer := http.NewServeMux()
+	outer.Handle("GET /api/health", middleware.CORS(health))
+	outer.Handle("/api/", protected(inner))
+	outer.Handle("/ws/", protected(inner))
+	outer.Handle("/", middleware.CORS(middleware.IPWhitelist(allow)(spa)))
+	return outer
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -190,19 +224,20 @@ func runServe(args []string) {
 	// 9. Apply middleware chain and start HTTP server
 	// Health endpoint bypasses auth (used for connection testing).
 	// It still needs CORS so cross-origin SPA requests succeed.
-	outerMux := http.NewServeMux()
-	outerMux.Handle("GET /api/health", middleware.CORS(
-		http.HandlerFunc(c.HandleHealth)))
-	outerMux.Handle("/", middleware.CORS(
-		middleware.IPWhitelist(cfg.Allow)(
-			middleware.PairingGuard(func() bool {
-				return c.Pairing.Get() == core.StatePairing
-			})(
-				middleware.TokenAuth(func() string {
-					c.CfgMu.RLock()
-					defer c.CfgMu.RUnlock()
-					return c.Cfg.Token
-				}, c.Tickets)(mux)))))
+	spaHandler, err := webui.Handler(os.Getenv("PDX_SPA_DIR"))
+	if err != nil {
+		log.Fatalf("webui handler: %v", err)
+	}
+	isPairing := func() bool { return c.Pairing.Get() == core.StatePairing }
+	tokenFn := func() string {
+		c.CfgMu.RLock()
+		defer c.CfgMu.RUnlock()
+		return c.Cfg.Token
+	}
+	outerMux := buildHTTPHandler(
+		mux, spaHandler, cfg.Allow, isPairing, tokenFn, c.Tickets,
+		http.HandlerFunc(c.HandleHealth),
+	)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
