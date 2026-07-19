@@ -12,6 +12,11 @@
     "provider": "claude",
     "status": "accepted",
     "seq": 1,
+    "repo_location": {
+      "project_id": "prj_1",
+      "local_dir": "/Users/wake/Workspace/wake/example",
+      "is_origin": true
+    },
     "effective_sandbox_profile": "ask",
     "head_at_start": "abc123def4567890abc123def4567890abc12345",
     "dirty_at_start": false,

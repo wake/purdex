@@ -1,7 +1,7 @@
 {
   "name": "sandbox_clamp",
   "endpoint": "sandbox",
-  "kind": "request",
+  "kind": "cases",
   "note": "clamp = min(request, host_policy) 依全序 read-only⊏ask⊏workspace-write⊏danger-full；只降不升。多情境。",
   "order": ["read-only", "ask", "workspace-write", "danger-full"],
   "cases": [

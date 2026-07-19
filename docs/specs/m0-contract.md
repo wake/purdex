@@ -58,8 +58,8 @@
 ### E2 `POST /daemon/dispatches/{id}/claim`
 - **成功**：`200 {schema_version, dispatch_id, status:"claimed"}`
 - **同 daemon 重複 claim（冪等）**：`200 {…, status:"claimed", execution_id?}`（若已建 execution 則帶回）
-- **他 daemon 已 claim**：`409 {error:{code:"already_claimed"}}`
-- **非本 daemon 的 dispatch**：`404 {error:{code:"not_owner"}}`（reach 不到即 404，fail-closed）
+- **他 claimer 已 claim（claim race）**：`409 {error:{code:"already_claimed"}}`
+- **不存在 OR 非本 daemon 的 dispatch**：`404 {error:{code:"dispatch_not_found"}}`——**fail-closed：「不存在」與「非本 daemon」回相同回應，不洩漏存在性**（不再區分 `not_owner`，見 codex PR-0 #3）
 
 ### E3 `GET /daemon/dispatches/{id}`（兩段式②）
 **Response 200**：
@@ -73,9 +73,10 @@
 ### E4 `POST /daemon/dispatches/{id}/report`
 Request 依 `status` 攜帶不同欄位（見 §4 ordering）：
 ```json
-// accepted (seq=1, 攜 immutable metadata)
+// accepted (seq=1, 攜 immutable metadata + repo_location echo)
 { "schema_version":1, "dispatch_id":"dsp_a1", "execution_id":"exc_9",
   "attempt_no":1, "provider":"claude", "status":"accepted", "seq":1,
+  "repo_location":{ "project_id":"prj_1","local_dir":"/abs/repo","is_origin":true },
   "effective_sandbox_profile":"ask", "head_at_start":"abc123",
   "dirty_at_start":false, "session_code":null }
 // running
@@ -117,7 +118,7 @@ Request 依 `status` 攜帶不同欄位（見 §4 ordering）：
 - **Enum（全序，由嚴到寬）**：`read-only ⊏ ask ⊏ workspace-write ⊏ danger-full`。
 - **映射（M0 claude）**：`read-only→plan` / `ask→default` / `workspace-write→acceptEdits` / `danger-full→bypassPermissions`。
 - **Clamp**：`effective = min(request, host_policy)`（取較嚴者）；**只降不升**。
-- **Unknown enum** → `400/422 {error:{code:"unknown_sandbox_profile"}}`（不 silent）。
+- **Unknown enum** → `422 {error:{code:"unknown_sandbox_profile"}}`（不 silent；status 釘死 422）。
 - **省略 request** → host policy 預設（建議 `ask`）。**host policy 未設** → daemon 最嚴預設（`ask`，least privilege）。
 - **權威**：Purdex daemon 持 host policy 為唯一權威；dispatch 只能 request。
 
@@ -128,9 +129,8 @@ Request 依 `status` 攜帶不同欄位（見 §4 ordering）：
 | code | HTTP | 意義 | 重試 |
 |------|------|------|------|
 | `accepted_required` | 409 | lifecycle 先於 accepted ack | 補送 accepted 後重試 |
-| `already_claimed` | 409 | 他 daemon 已 claim | 否（跳過） |
-| `not_owner` | 404 | 非 caller daemon 的 dispatch | 否 |
-| `dispatch_not_found` | 404 | dispatch 不存在 | 否 |
+| `already_claimed` | 409 | claim race：他 claimer 已 claim | 否（跳過） |
+| `dispatch_not_found` | 404 | **不存在 OR 非本 daemon**（fail-closed，不區分）| 否 |
 | `schema_incompatible` | 400 | schema_version 不合 | 否（需升級） |
 | `unknown_sandbox_profile` | 422 | request profile 非法 enum | 否 |
 | `stale_seq` | — | seq ≤ ack_seq | 非錯誤，回 200+ack_seq |

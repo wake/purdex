@@ -71,7 +71,7 @@ issue ──> dispatch ──> execution ──> attempt ──> session
 
 | Endpoint | 作用 | Response body | 隔離 |
 |----------|------|---------------|------|
-| `GET /daemon/dispatches?status=pending` | 回**最小清單**〔兩段式①〕，**只回屬於 caller daemon 的** | `[{dispatch_id, issue_id, schema_version}]` | daemon_id + 帳號 membership 雙層 |
+| `GET /daemon/dispatches?status=pending` | 回**最小清單**〔兩段式①〕，**只回屬於 caller daemon 的** | `{schema_version, dispatches:[{dispatch_id, issue_id}]}`（envelope 帶 schema_version，與他端點一致；契約 SOT `m0-contract.md`）| daemon_id + 帳號 membership 雙層 |
 | `POST /daemon/dispatches/{id}/claim` | 原子 `pending→claimed`（寫 `claimed_at`, `daemon_id`）| **成功**：`200 {dispatch_id, status:"claimed"}`；**同 daemon 重複 claim**：`200`（冪等，回既有；若已有 execution 則帶 `execution_id`）；**他 daemon 已 claim**：`409` | — |
 | `GET /daemon/dispatches/{id}` | 兩段式②：完整 issue + `repo_location` + `sandbox_profile`(request) | `{dispatch_id, issue{...}, repo_location{...}, sandbox_profile}` | 限 caller daemon |
 | `POST /daemon/dispatches/{id}/report` | 回報執行狀態；Ploom 投影 + 組 deeplink | `200 {ack_seq}`（見 §3.3）；`accepted` 未先 ack 就發 lifecycle → `409 {code:"accepted_required"}` | seq 冪等 |
