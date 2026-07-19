@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/probe"
@@ -26,6 +27,12 @@ type StreamModule struct {
 	ccOps    agentcc.CCOperator
 	prober   livenessProber
 	locks    *handoffLocks
+
+	// termMu guards termHandler, the single upper-layer seam that consumes the
+	// authoritative process-exit terminal signal (spec §5.3). The execution
+	// layer (P.8) registers a handler via SetTerminalHandler.
+	termMu      sync.RWMutex
+	termHandler TerminalHandler
 }
 
 // New creates a new StreamModule.

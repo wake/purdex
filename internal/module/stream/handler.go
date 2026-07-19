@@ -11,7 +11,34 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/relay"
 )
+
+// TerminalHandler receives the authoritative process-exit signal when a relay's
+// subprocess exits (spec §5.3). sessionCode identifies the execution; ev carries
+// the exit code / signal info. The upper execution layer (P.8) registers a
+// handler to consume this seam; this task only surfaces the signal.
+type TerminalHandler func(sessionCode string, ev relay.TerminalEvent)
+
+// SetTerminalHandler registers the upper-layer consumer of terminal signals.
+// It is safe to call concurrently with relay activity.
+func (m *StreamModule) SetTerminalHandler(h TerminalHandler) {
+	m.termMu.Lock()
+	m.termHandler = h
+	m.termMu.Unlock()
+}
+
+// emitTerminal routes a decoded terminal event to the registered handler, if
+// any. A missing handler is a no-op (the daemon may run without an execution
+// consumer wired up).
+func (m *StreamModule) emitTerminal(code string, ev relay.TerminalEvent) {
+	m.termMu.RLock()
+	h := m.termHandler
+	m.termMu.RUnlock()
+	if h != nil {
+		h(code, ev)
+	}
+}
 
 var bridgeUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
@@ -64,9 +91,16 @@ func (m *StreamModule) handleCliBridge(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		initCaptured := false
 		for {
-			_, msg, err := conn.ReadMessage()
+			msgType, msg, err := conn.ReadMessage()
 			if err != nil {
 				return
+			}
+			// Out-of-band terminal frame (binary): route to the execution seam
+			// and do NOT fan it out to SPA subscribers. Everything else is
+			// ordinary stream-json and flows to subscribers unchanged.
+			if ev, ok := relay.ParseTerminalEvent(msgType, msg); ok {
+				m.emitTerminal(code, ev)
+				continue
 			}
 			m.bridge.RelayToSubscribers(code, msg)
 			m.captureInitMetadata(code, msg, &initCaptured)
