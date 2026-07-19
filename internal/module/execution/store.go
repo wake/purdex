@@ -250,6 +250,75 @@ func (s *ExecutionStore) GetByID(execID string) (*Execution, bool, error) {
 	return exec, true, nil
 }
 
+// GetBySessionCode returns the execution whose derived deeplink session_code
+// matches. The terminal seam (P.8) keys on session_code because the stream
+// bridge identifies a relay by that same code (the launcher registers the relay
+// under EncodeSessionID). found is false (no error) when no row matches; NULL
+// session_codes (not yet launched) never match a non-empty lookup.
+func (s *ExecutionStore) GetBySessionCode(sessionCode string) (*Execution, bool, error) {
+	var id string
+	err := s.db.QueryRowContext(context.Background(),
+		`SELECT execution_id FROM executions WHERE session_code = ?`, sessionCode).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return s.GetByID(id)
+}
+
+// MarkTerminal commits a terminal outcome (spec §5.3): it advances status to a
+// terminal state (completed/failed) and records outcome_source in one atomic,
+// fenced UPDATE. The move is guarded by CanTransition, so a terminal row (no
+// outgoing edge) yields ErrIllegalTransition — a double-fired terminal seam can
+// neither re-report nor flip an already-decided outcome. to must be terminal.
+func (s *ExecutionStore) MarkTerminal(execID string, to Status, source OutcomeSource) error {
+	if !to.IsTerminal() {
+		return fmt.Errorf("%w: MarkTerminal target %q is not terminal", ErrIllegalTransition, to)
+	}
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	var cur string
+	err = conn.QueryRowContext(ctx,
+		`SELECT status FROM executions WHERE execution_id = ?`, execID).Scan(&cur)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !CanTransition(Status(cur), to) {
+		return fmt.Errorf("%w: %s → %s", ErrIllegalTransition, cur, to)
+	}
+	if _, err := conn.ExecContext(ctx,
+		`UPDATE executions SET status = ?, outcome_source = ?, updated_at = ? WHERE execution_id = ?`,
+		string(to), string(source), s.now(), execID,
+	); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 // UpdateStatus advances an execution to a new status, enforcing the state
 // machine (spec §5.1). Returns ErrNotFound if the id is unknown, or
 // ErrIllegalTransition if the move is not a legal edge (e.g. terminal→running).
