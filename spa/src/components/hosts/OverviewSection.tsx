@@ -135,10 +135,22 @@ export function OverviewSection({ hostId }: Props) {
           value={String(host.port)}
           onSave={(v) => updateHost(hostId, { port: parseInt(v, 10) || 7860 })}
         />
+        <Field label={t('hosts.scheme')}>
+          <select
+            aria-label={t('hosts.scheme')}
+            value={host.scheme ?? 'http'}
+            onChange={(e) => updateHost(hostId, { scheme: e.target.value as 'http' | 'https' })}
+            className="bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary"
+          >
+            <option value="http">http</option>
+            <option value="https">https</option>
+          </select>
+        </Field>
         <TokenField
           token={host.token ?? undefined}
           ip={host.ip}
           port={host.port}
+          scheme={host.scheme}
           onSave={(token) => {
             updateHost(hostId, { token: token || undefined })
             // Auto-retry: set reconnecting then trigger SM

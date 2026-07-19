@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { CaretDown, CaretRight, Eye, EyeSlash, Check, X } from '@phosphor-icons/react'
+import { deriveDaemonBase } from '../../lib/host-endpoint'
 
 /* ─── Collapsible section wrapper ─── */
 
@@ -80,10 +81,11 @@ export function EditableField({ label, value, onSave }: { label: string; value: 
 
 /* ─── Token field with validation ─── */
 
-export function TokenField({ token, ip, port, onSave, t }: {
+export function TokenField({ token, ip, port, scheme, onSave, t }: {
   token?: string
   ip: string
   port: number
+  scheme?: 'http' | 'https'
   onSave: (token: string) => void
   t: (key: string) => string
 }) {
@@ -109,7 +111,7 @@ export function TokenField({ token, ip, port, onSave, t }: {
     setValidating(true)
     setError('')
     try {
-      const base = `http://${ip}:${port}`
+      const base = deriveDaemonBase({ scheme, ip, port })
       const headers: Record<string, string> = {}
       if (draft) headers['Authorization'] = `Bearer ${draft}`
       const res = await fetch(`${base}/api/sessions`, { headers })
