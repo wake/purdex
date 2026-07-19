@@ -6,24 +6,30 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { decodePairingCode, cleanPairingInput, generatePurdexToken } from '../../lib/pairing-codec'
 import { fetchPairVerify, fetchPairSetup, fetchTokenAuth, PairingError } from '../../lib/host-api'
+import { deriveDaemonBase, hostEndpointKey } from '../../lib/host-endpoint'
 
 interface Props {
   onClose: () => void
+  initial?: { scheme?: 'http' | 'https'; ip?: string; port?: string; useToken?: boolean }
 }
 
 type Stage = 'idle' | 'pairing' | 'paired' | 'manual' | 'saving' | 'done' | 'error'
 
-export function AddHostDialog({ onClose }: Props) {
+const portOrDefault = (p: string, s: 'http' | 'https') =>
+  parseInt(p, 10) || (s === 'https' ? 443 : 7860)
+
+export function AddHostDialog({ onClose, initial }: Props) {
   const t = useI18nStore((s) => s.t)
   const addHost = useHostStore((s) => s.addHost)
 
   const [pairingCode, setPairingCode] = useState('')
-  const [ip, setIp] = useState('')
-  const [port, setPort] = useState('7860')
+  const [ip, setIp] = useState(initial?.ip ?? '')
+  const [port, setPort] = useState(initial?.port ?? '7860')
+  const [scheme, setScheme] = useState<'http' | 'https'>(initial?.scheme ?? 'http')
   const [token, setToken] = useState('')
-  const [stage, setStage] = useState<Stage>('idle')
+  const [stage, setStage] = useState<Stage>(initial ? 'manual' : 'idle')
   const [error, setError] = useState('')
-  const [useToken, setUseToken] = useState(false)
+  const [useToken, setUseToken] = useState(initial?.useToken ?? false)
   const [setupSecret, setSetupSecret] = useState('')
   const [healthMode, setHealthMode] = useState<'pairing' | 'pending' | 'normal' | null>(null)
 
@@ -33,10 +39,9 @@ export function AddHostDialog({ onClose }: Props) {
       setHealthMode(null)
       return
     }
-    const portNum = port || '7860'
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`http://${ip}:${portNum}/api/health`)
+        const res = await fetch(`${deriveDaemonBase({ scheme, ip, port: portOrDefault(port, scheme) })}/api/health`)
         const body = await res.json()
         const mode = body.mode ?? 'normal'
         setHealthMode(mode)
@@ -50,7 +55,7 @@ export function AddHostDialog({ onClose }: Props) {
     }, 300)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useToken, ip, port, stage])
+  }, [useToken, ip, port, scheme, stage])
 
   // Escape to close
   useEffect(() => {
@@ -94,43 +99,42 @@ export function AddHostDialog({ onClose }: Props) {
 
   const handleConfirm = async () => {
     const trimmedIp = ip.trim()
-    const trimmedPort = port.trim()
     const trimmedToken = token.trim()
+    const portNum = portOrDefault(port.trim(), scheme)
+    const mode: 'token' | 'pairing' | 'direct' =
+      useToken ? 'token' : stage === 'paired' ? 'pairing' : 'direct'
     setStage('saving')
     setError('')
 
-    try {
-      if (useToken) {
-        const base = `http://${trimmedIp}:${trimmedPort || '7860'}`
-        await fetchTokenAuth(base, trimmedToken)
-      } else {
-        const base = `http://${trimmedIp}:${trimmedPort || '7860'}`
-        await fetchPairSetup(base, setupSecret, trimmedToken)
-      }
-
-      // Check for existing host with same IP:port
-      const portNum = parseInt(trimmedPort, 10) || 7860
-      const existingHosts = useHostStore.getState().hosts
-      const existingId = Object.keys(existingHosts).find((id) => {
-        const h = existingHosts[id]
-        return h.ip === trimmedIp && h.port === portNum
-      })
-
+    const upsertHost = () => {
+      const draftKey = hostEndpointKey({ scheme, ip: trimmedIp, port: portNum })
+      const hosts = useHostStore.getState().hosts
+      const existingId = Object.keys(hosts).find((id) => hostEndpointKey(hosts[id]) === draftKey)
+      let hostId: string
       if (existingId) {
-        // Update existing host's token instead of creating a duplicate
-        useHostStore.getState().updateHost(existingId, { token: trimmedToken || undefined })
+        useHostStore.getState().updateHost(existingId, { scheme, token: trimmedToken || undefined })
+        hostId = existingId
       } else {
-        addHost({
-          name: trimmedIp,
-          ip: trimmedIp,
-          port: portNum,
-          token: trimmedToken || undefined,
-        })
+        hostId = addHost({ name: trimmedIp, ip: trimmedIp, port: portNum, scheme, token: trimmedToken || undefined })
+      }
+      useHostStore.getState().setActiveHost(hostId)
+    }
+
+    try {
+      if (mode === 'direct') {
+        upsertHost()
+      } else if (mode === 'token') {
+        await fetchTokenAuth(deriveDaemonBase({ scheme, ip: trimmedIp, port: portNum }), trimmedToken)
+        upsertHost()
+      } else {
+        // pairing — always http (LAN/tailnet)
+        await fetchPairSetup(deriveDaemonBase({ scheme: 'http', ip: trimmedIp, port: portNum }), setupSecret, trimmedToken)
+        upsertHost()
       }
       setStage('done')
       onClose()
     } catch (err) {
-      if (useToken) {
+      if (mode === 'token') {
         setStage('manual')
       } else {
         setStage('idle')
@@ -239,6 +243,23 @@ export function AddHostDialog({ onClose }: Props) {
             </div>
           )}
 
+          {/* Scheme selector — manual stage only (pairing confirm is always http) */}
+          {stage === 'manual' && (
+            <div>
+              <label htmlFor="host-scheme" className="text-xs text-text-secondary block mb-1">{t('hosts.scheme')}</label>
+              <select
+                id="host-scheme"
+                aria-label={t('hosts.scheme')}
+                value={scheme}
+                onChange={(e) => setScheme(e.target.value as 'http' | 'https')}
+                className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary"
+              >
+                <option value="http">http</option>
+                <option value="https">https</option>
+              </select>
+            </div>
+          )}
+
           {/* Host / Port / Token fields */}
           <div className="grid grid-cols-3 gap-2">
             <div className="col-span-2">
@@ -312,7 +333,7 @@ export function AddHostDialog({ onClose }: Props) {
           </button>
           <button
             onClick={handleConfirm}
-            disabled={confirmDisabled || !ip || !tokenValid || isSaving}
+            disabled={confirmDisabled || (useToken && !tokenValid)}
             className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
           >
             {isSaving && <ArrowsClockwise size={14} className="animate-spin" />}

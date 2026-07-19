@@ -221,4 +221,45 @@ describe('AddHostDialog', () => {
     expect(hosts[hostIds[0]].ip).toBe('10.0.0.1')
     expect(hosts[hostIds[0]].port).toBe(7860)
   })
+
+  it('manual token 路徑選 https → 存入 scheme=https', async () => {
+    vi.spyOn(hostApi, 'fetchTokenAuth').mockResolvedValue({ ok: true } as never)
+    render(<AddHostDialog onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('checkbox')) // → manual token
+    fireEvent.change(screen.getByRole('combobox', { name: /scheme/i }), { target: { value: 'https' } })
+    fireEvent.change(screen.getByPlaceholderText('100.64.0.1'), { target: { value: 'purdex.mlab.host' } })
+    fireEvent.change(screen.getByPlaceholderText('7860'), { target: { value: '443' } })
+    fireEvent.change(screen.getByPlaceholderText('purdex_...'), { target: { value: 'x'.repeat(24) } })
+    fireEvent.click(screen.getByText('Confirm'))
+    await waitFor(() => {
+      const s = useHostStore.getState()
+      const id = s.hostOrder.find((i) => s.hosts[i].ip === 'purdex.mlab.host')!
+      expect(s.hosts[id].scheme).toBe('https')
+      expect(s.getDaemonBase(id)).toBe('https://purdex.mlab.host')
+    })
+    expect(hostApi.fetchTokenAuth).toHaveBeenCalledWith('https://purdex.mlab.host', 'x'.repeat(24))
+  })
+
+  it('initial 預填 https + token-off → direct-add 建立顯式 host，不打 pair/token API', async () => {
+    const pairSetup = vi.spyOn(hostApi, 'fetchPairSetup')
+    const tokenAuth = vi.spyOn(hostApi, 'fetchTokenAuth')
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} initial={{ scheme: 'https', ip: 'purdex.mlab.host', port: '443', useToken: false }} />)
+    // 預填值就位
+    expect((screen.getByRole('combobox', { name: /scheme/i }) as HTMLSelectElement).value).toBe('https')
+    expect((screen.getByPlaceholderText('100.64.0.1') as HTMLInputElement).value).toBe('purdex.mlab.host')
+    expect((screen.getByPlaceholderText('7860') as HTMLInputElement).value).toBe('443')
+    // 直接 Confirm（無 token）
+    fireEvent.click(screen.getByText('Confirm'))
+    await waitFor(() => {
+      const s = useHostStore.getState()
+      const id = s.hostOrder.find((i) => s.hosts[i].ip === 'purdex.mlab.host')!
+      expect(s.hosts[id].scheme).toBe('https')
+      expect(s.hosts[id].token ?? null).toBeFalsy()
+      expect(s.activeHostId).toBe(id)
+    })
+    expect(pairSetup).not.toHaveBeenCalled()
+    expect(tokenAuth).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+  })
 })
