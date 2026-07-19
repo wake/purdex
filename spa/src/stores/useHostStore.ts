@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { deriveDaemonBase, deriveWsBase } from '../lib/host-endpoint'
 
 /* ─── Interfaces ─── */
 
@@ -10,6 +11,10 @@ export interface HostConfig {
   name: string
   ip: string
   port: number
+  // Connection scheme. Absent is treated as 'http' for backward compatibility
+  // with persisted hosts. 'https' is required for browser clients over TLS
+  // (e.g. purdex.mlab.host) so WS derives to wss:// and avoids mixed-content.
+  scheme?: 'http' | 'https'
   // `null` is the explicit "token cleared, re-auth required" sentinel written by
   // the sync deserialize path when a host is new or its endpoint (ip/port) changed.
   // Distinct from `undefined` (field simply absent); `null` survives JSON round-trips.
@@ -43,8 +48,8 @@ interface HostState {
   runtime: Record<string, HostRuntime>
   activeHostId: string | null
 
-  addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
-  updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
+  addHost: (opts: { id?: string; name: string; ip: string; port: number; scheme?: 'http' | 'https'; token?: string | null }) => string
+  updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'scheme' | 'token'>>) => void
   removeHost: (hostId: string) => void
   reorderHosts: (orderedIds: string[]) => void
   setActiveHost: (hostId: string) => void
@@ -142,20 +147,20 @@ export const useHostStore = create<HostState>()(
 
       getDaemonBase: (hostId) => {
         const host = get().hosts[hostId]
-        if (host) return `http://${host.ip}:${host.port}`
+        if (host) return deriveDaemonBase(host)
         const fallbackId = get().activeHostId ?? get().hostOrder[0]
         const fallback = fallbackId ? get().hosts[fallbackId] : undefined
         if (!fallback) return 'http://127.0.0.1:7860'
-        return `http://${fallback.ip}:${fallback.port}`
+        return deriveDaemonBase(fallback)
       },
 
       getWsBase: (hostId) => {
         const host = get().hosts[hostId]
-        if (host) return `ws://${host.ip}:${host.port}`
+        if (host) return deriveWsBase(host)
         const fallbackId = get().activeHostId ?? get().hostOrder[0]
         const fallback = fallbackId ? get().hosts[fallbackId] : undefined
         if (!fallback) return 'ws://127.0.0.1:7860'
-        return `ws://${fallback.ip}:${fallback.port}`
+        return deriveWsBase(fallback)
       },
 
       getAuthHeaders: (hostId) => {
