@@ -998,6 +998,72 @@ func TestOpenCodePluginTemplate_ChildSessionGating(t *testing.T) {
 	})
 }
 
+// TestOpenCodePluginTemplate_ChildSessionGatingReloadWindow covers the
+// reload / out-of-order window (spec Design decision 4). The map is only
+// populated after a child's session.created; if the plugin reloads while a
+// subagent is mid-flight (or an event arrives before that child's created)
+// the map is empty for it. session.deleted publishes full info
+// (session.ts:624) so it is gated on the event's own info.parentID — NOT
+// the map — which is reload-proof and removes the worst failure (a child
+// delete deleting the PARENT frame). session.status idle / session.error
+// genuinely lack parentID (#30043; SDK EventSessionError = {sessionID?,
+// error?}) so they stay map-based; an unseen child's idle/error still
+// emits — a recoverable, documented limitation asserted here as the
+// current behavior (not a pretend fix). SDK-fetch hardening is follow-up.
+func TestOpenCodePluginTemplate_ChildSessionGatingReloadWindow(t *testing.T) {
+	t.Run("orphan_child_deleted_gated_via_event_parentID", func(t *testing.T) {
+		s := newPluginSimState()
+		// No prior session.created — map is empty for childX. The delete
+		// event carries its own parentID, so it must still be gated.
+		if _, ok := s.simulateBusEvent("session.deleted", map[string]any{
+			"sessionID": "childX",
+			"info":      map[string]any{"id": "childX", "parentID": "parent1"},
+		}); ok {
+			t.Fatal("orphan child session.deleted (event parentID set) must be gated even with empty map")
+		}
+	})
+
+	t.Run("orphan_child_idle_and_error_still_emit_documented_limitation", func(t *testing.T) {
+		// Reload window: idle/error lack parentID, so an unseen child's
+		// idle/error still emits (map-based). This is the recoverable,
+		// documented limitation (idle derives notification_silent and
+		// self-corrects on the parent's next event). Asserted as CURRENT
+		// behavior — not a pretend fix. SDK-fetch hardening is follow-up.
+		s := newPluginSimState()
+		got, ok := s.simulateBusEvent("session.status", idleProps("childOrphan"))
+		if !ok || got.Name != "PdxStop" {
+			t.Fatalf("unseen child idle still emits PdxStop (documented limitation); ok=%v name=%q", ok, got.Name)
+		}
+		s2 := newPluginSimState()
+		got2, ok2 := s2.simulateBusEvent("session.error", errorProps("childOrphan"))
+		if !ok2 || got2.Name != "PdxStopFailure" {
+			t.Fatalf("unseen child error still emits PdxStopFailure (documented limitation); ok=%v name=%q", ok2, got2.Name)
+		}
+	})
+
+	t.Run("empty_sid_never_pollutes_map_and_parent_delete_not_swallowed", func(t *testing.T) {
+		s := newPluginSimState()
+		// Child created with parentID but no resolvable sid (no sessionID,
+		// no info.id). The start is still suppressed, but '' must never be
+		// keyed into the map — an empty key would then swallow the next
+		// empty-sid parent delete.
+		if _, ok := s.simulateBusEvent("session.created", map[string]any{
+			"info": map[string]any{"parentID": "parent1"},
+		}); ok {
+			t.Fatal("child created with empty sid must not emit PdxSessionStart")
+		}
+		if _, exists := s.subagentSessions[""]; exists {
+			t.Fatalf("empty sid must never be keyed into subagentSessions; map=%v", s.subagentSessions)
+		}
+		// A parent session.deleted with no sid and no info.parentID must
+		// still emit PdxSessionEnd — never be swallowed as a child.
+		got, ok := s.simulateBusEvent("session.deleted", map[string]any{})
+		if !ok || got.Name != "PdxSessionEnd" {
+			t.Fatalf("parent delete (empty sid, no parentID) must emit PdxSessionEnd; ok=%v name=%q", ok, got.Name)
+		}
+	})
+}
+
 // TestOpenCodePluginTemplate_RenderedTemplateContainsExpectedFilter
 // guards the Decision 3 / Decision 4 filter line that turns a
 // `session.status` Bus subscription into an idle-only Stop signal. If
