@@ -20,6 +20,7 @@ import { BrowserPane } from '../../components/BrowserPane'
 import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
+import { ExecutionDetailPage } from '../../components/ExecutionDetailPage'
 import { AppearanceSection } from '../../components/settings/AppearanceSection'
 import { TerminalSection } from '../../components/settings/TerminalSection'
 import { ElectronSection } from '../../components/settings/ElectronSection'
@@ -92,6 +93,12 @@ function BrowserPaneWrapper({ pane }: PaneRendererProps) {
 
 function MemoryMonitorPaneWrapper() {
   return <MemoryMonitorPage />
+}
+
+function ExecutionPaneWrapper({ pane }: PaneRendererProps) {
+  const content = pane.content
+  if (content.kind !== 'execution') return null
+  return <ExecutionDetailPage executionId={content.executionId} host={content.host} />
 }
 
 function PerformanceMonitorSettingsSection() {
@@ -211,6 +218,11 @@ export function registerBuiltinModules(): void {
     id: 'hosts',
     name: 'Hosts',
     panes: [{ kind: 'hosts', component: HostPage }],
+  })
+  registerModule({
+    id: 'execution',
+    name: 'Execution',
+    panes: [{ kind: 'execution', component: ExecutionPaneWrapper }],
   })
 
   // Editor module

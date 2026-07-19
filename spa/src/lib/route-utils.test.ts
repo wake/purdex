@@ -247,3 +247,28 @@ describe('parseRoute settings subsection', () => {
     expect(r).toEqual({ kind: 'settings', scope: 'global' })
   })
 })
+
+describe('parseRoute execution (P.12)', () => {
+  it('parses /execution/<id>', () => {
+    expect(parseRoute('/execution/exc_deadbeef')).toEqual({
+      kind: 'execution',
+      executionId: 'exc_deadbeef',
+    })
+  })
+
+  it('rejects a traversal / illegal id', () => {
+    expect(parseRoute('/execution/..')).toBeNull()
+    expect(parseRoute('/execution/a%2Fb')).toBeNull()
+  })
+
+  it('rejects extra path segments', () => {
+    expect(parseRoute('/execution/exc_1/extra')).toBeNull()
+    expect(parseRoute('/execution')).toBeNull()
+  })
+
+  it('round-trips through tabToUrl', () => {
+    const url = tabToUrl('abc123', { kind: 'execution', executionId: 'exc_1' })
+    expect(url).toBe('/execution/exc_1')
+    expect(parseRoute(url)).toEqual({ kind: 'execution', executionId: 'exc_1' })
+  })
+})

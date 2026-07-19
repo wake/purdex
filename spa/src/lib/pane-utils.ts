@@ -47,5 +47,10 @@ export function contentMatches(a: PaneContent, b: PaneContent): boolean {
     }
     return a.filePath === b.filePath
   }
+  // Execution detail pages are singletons per execution id, so a second deeplink
+  // to the same execution reuses its tab instead of stacking duplicates.
+  if (a.kind === 'execution' && b.kind === 'execution') {
+    return a.executionId === b.executionId
+  }
   return true
 }
