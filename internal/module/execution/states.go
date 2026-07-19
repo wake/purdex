@@ -82,4 +82,9 @@ const (
 	// OutcomeExitOnly: degraded classification from process exit only (no
 	// `result` event) — recorded for audit (spec §5.3 known limitation).
 	OutcomeExitOnly OutcomeSource = "exit_only"
+	// OutcomeRejected: the execution never started — it was refused before launch
+	// (admission rejection, unclampable sandbox profile, repo outside the allowed
+	// roots). The row exists only so the runtime SOT can account for the
+	// accepted+failed projection Ploom receives.
+	OutcomeRejected OutcomeSource = "rejected"
 )

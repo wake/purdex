@@ -81,6 +81,7 @@ type launchStore interface {
 	UpsertByDispatchWithReport(req NewExecution, build ReportBuilder) (*Execution, bool, error)
 	MarkLaunchedWithReport(execID, sessionCode string, build ReportBuilder) (*Execution, error)
 	UpdateStatusWithReport(execID string, to Status, build ReportBuilder) error
+	InsertRejectedWithReports(req NewExecution, buildAccepted, buildFailed ReportBuilder) (*Execution, bool, error)
 }
 
 // repoAdmitter is the admission seam (satisfied by *Admitter). WithRepoLock runs
@@ -233,4 +234,64 @@ func (c *Coordinator) Accept(ctx context.Context, req LaunchRequest) (*Execution
 		return nil, err
 	}
 	return result, nil
+}
+
+// StrictestProfile is the effective profile recorded when the requested profile
+// cannot be clamped at all (an unknown enum): fail closed to the narrowest value
+// rather than echo an illegal one back to Ploom. Nothing runs on a rejection, so
+// this is purely what the accepted echo claims was granted — and it must never
+// overstate it.
+const StrictestProfile = ProfileReadOnly
+
+// Reject records a dispatch that can never run as a REAL terminal execution row,
+// together with its accepted(1)+failed(2) reports, in one transaction.
+//
+// The E4 contract forbids a lifecycle report before accepted(seq=1), so a
+// rejection still has to project accepted→failed. Doing that with a synthetic id
+// and no row would split the two sides: Ploom would hold an execution_id the
+// Purdex runtime SOT cannot show, query or rebuild an accepted for. So the row is
+// real — created, immediately driven to failed (never live, so it blocks no repo
+// and no sweep looks at it), and carrying the clamped effective sandbox profile
+// the accepted echo is built from.
+//
+// It is idempotent on dispatch_id: an already-admitted dispatch (including one
+// the launch path created and failed itself) is returned unchanged with no extra
+// reports, which makes Reject safe as the blanket "tell Ploom something" fallback
+// for every Accept error.
+func (c *Coordinator) Reject(_ context.Context, req LaunchRequest, errCode string, cause error) (*Execution, error) {
+	execID := c.newID()
+	msg := ""
+	if cause != nil {
+		msg = cause.Error()
+	}
+	exec, _, err := c.store.InsertRejectedWithReports(NewExecution{
+		ExecutionID:      execID,
+		DispatchID:       req.DispatchID,
+		RepoLocation:     req.RepoLocation,
+		RepoLocationJSON: req.RepoLocationJSON,
+		Provider:         "claude",
+		SessionName:      SessionNameFor(execID),
+		LaunchState:      LaunchNone,
+		SandboxProfile:   c.effectiveProfile(req.SandboxProfile),
+	},
+		c.reporter.BuildAccepted,
+		func(row *Execution) (ReportEnvelope, error) {
+			return c.reporter.BuildFailed(row, errCode, msg)
+		})
+	if err != nil {
+		return nil, fmt.Errorf("record rejected execution for dispatch %s: %w", req.DispatchID, err)
+	}
+	return exec, nil
+}
+
+// effectiveProfile is the clamp used for a row that will never launch: the same
+// min(request, hostPolicy) as Accept, except that an unclampable (unknown)
+// request falls closed to the strictest profile instead of erroring — the caller
+// is already handling a rejection and needs a legal value to echo.
+func (c *Coordinator) effectiveProfile(request string) string {
+	p, err := Clamp(request, c.hostPolicy)
+	if err != nil {
+		return StrictestProfile.String()
+	}
+	return p.String()
 }

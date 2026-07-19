@@ -108,6 +108,13 @@ type sliceFixture struct {
 
 func newSliceFixture(t *testing.T, fc *fakeClient, adm *sliceAdmitter, fl *sliceLauncher) *sliceFixture {
 	t.Helper()
+	// Host policy = danger-full so the slice exercises the full consume→launch→report
+	// path without the sandbox clamp narrowing the requested profiles.
+	return newSliceFixtureWithPolicy(t, fc, adm, fl, execution.ProfileDangerFull)
+}
+
+func newSliceFixtureWithPolicy(t *testing.T, fc *fakeClient, adm *sliceAdmitter, fl *sliceLauncher, hostPolicy execution.Profile) *sliceFixture {
+	t.Helper()
 	store, err := execution.OpenExecution(filepath.Join(t.TempDir(), "exec.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -118,9 +125,7 @@ func newSliceFixture(t *testing.T, fc *fakeClient, adm *sliceAdmitter, fl *slice
 
 	poster := &slicePoster{}
 	sender := NewSender(outbox, poster, WithExecutionReader(executionStoreReader{store}))
-	// Host policy = danger-full so the slice exercises the full consume→launch→report
-	// path without the sandbox clamp narrowing the requested profiles.
-	coord := execution.NewCoordinator(adm, store, launchReporter{}, fl, execution.ProfileDangerFull)
+	coord := execution.NewCoordinator(adm, store, launchReporter{}, fl, hostPolicy)
 
 	m := &DispatchModule{sender: sender}
 	worker := NewWorker(fc, WithSink(m.consumeSink(coord)))
@@ -218,20 +223,90 @@ func TestSlice_AdmissionRejected_ReportsFailed(t *testing.T) {
 
 	require.NoError(t, f.worker.RunOnce(context.Background()))
 
-	// No execution row was created (single-live preserved).
-	// The rejection is projected as accepted(1)+failed(2) for a synthetic id.
+	// F3: the rejection is backed by a REAL execution row — Ploom's projection and
+	// the Purdex runtime SOT agree on the execution_id.
 	ids, err := f.outbox.DueExecutions(1 << 60)
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
-	require.Contains(t, ids[0], "exc_rej_")
+	execID := ids[0]
+	require.Regexp(t, `^exc_[0-9a-f]{16}$`, execID, "a real store-generated id, not a synthetic one")
+
+	row, ok, err := f.store.GetByID(execID)
+	require.NoError(t, err)
+	require.True(t, ok, "the rejection must be queryable in the runtime SOT")
+	require.Equal(t, execution.StatusFailed, row.Status)
+	require.Equal(t, execution.LaunchNone, row.LaunchState)
+	require.Equal(t, string(execution.OutcomeRejected), row.OutcomeSource.String)
+	require.Equal(t, "dsp_busy", row.DispatchID)
+	require.Equal(t, "/canon/repo", row.RepoLocation)
+
+	// A rejected row is terminal, so it neither blocks the repo nor shows up for
+	// the reconcile sweep.
+	live, err := f.store.ListLive()
+	require.NoError(t, err)
+	require.Empty(t, live)
 
 	require.NoError(t, f.sender.Flush(context.Background()))
 	got := f.poster.sorted()
 	require.Len(t, got, 2)
 	require.Equal(t, "accepted", got[0].status)
+	require.Equal(t, 1, got[0].seq)
 	require.Equal(t, "failed", got[1].status)
+	require.Equal(t, 2, got[1].seq)
 	require.Equal(t, "dsp_busy", got[1].dispatchID)
 	require.Equal(t, "repo_busy", got[1].errCode)
+}
+
+// F3 — the accepted echoed for a rejection carries the CLAMPED effective profile,
+// and is rebuildable from the row after a restart (durability cut §3.3), exactly
+// like a launched execution's accepted.
+func TestSlice_Rejection_EchoesClampedProfileAndRebuilds(t *testing.T) {
+	fc := &fakeClient{
+		pending: []PendingDispatch{{DispatchID: "dsp_clamp", IssueID: "iss_c"}},
+		fetchFn: func(id string) (DispatchDetail, error) {
+			return DispatchDetail{
+				DispatchID:     id,
+				Issue:          Issue{IssueID: "iss_c", Title: "Wants the world"},
+				RepoLocation:   RepoLocation{ProjectID: "prj_1", LocalDir: "/canon/repo", IsOrigin: true},
+				SandboxProfile: "danger-full",
+			}, nil
+		},
+	}
+	adm := &sliceAdmitter{admitErr: fmt.Errorf("%w: /canon/repo", execution.ErrRepoBusy)}
+	// Host policy only permits `ask` — the echo must never claim danger-full.
+	f := newSliceFixtureWithPolicy(t, fc, adm, &sliceLauncher{}, execution.ProfileAsk)
+
+	require.NoError(t, f.worker.RunOnce(context.Background()))
+
+	ids, err := f.outbox.DueExecutions(1 << 60)
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	execID := ids[0]
+
+	row, ok, err := f.store.GetByID(execID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "ask", row.SandboxProfile)
+
+	recs, err := f.outbox.UnackedRecords(execID)
+	require.NoError(t, err)
+	require.Len(t, recs, 2)
+	var acc struct {
+		EffectiveSandboxProfile string `json:"effective_sandbox_profile"`
+		ExecutionID             string `json:"execution_id"`
+	}
+	require.NoError(t, json.Unmarshal(recs[0].Payload, &acc))
+	require.Equal(t, "ask", acc.EffectiveSandboxProfile, "clamped, never the requested danger-full")
+	require.Equal(t, execID, acc.ExecutionID)
+
+	// Restart reconstruction: the accepted rebuilt from the durable row alone is
+	// byte-identical to the one queued at rejection time.
+	loaded, found, err := (executionStoreReader{f.store}).LoadAcceptedRow(execID)
+	require.NoError(t, err)
+	require.True(t, found)
+	rebuilt, err := BuildAcceptedPayload(loaded)
+	require.NoError(t, err)
+	require.JSONEq(t, string(recs[0].Payload), string(rebuilt))
 }
 
 // TestSlice_LaunchFailure_ReportsFailed: a pre-relay launch failure (the launcher
@@ -316,6 +391,73 @@ func TestSlice_UnknownSandboxProfile_ReportsFailed(t *testing.T) {
 	require.Equal(t, "accepted", got[0].status)
 	require.Equal(t, "failed", got[1].status)
 	require.Equal(t, "unknown_sandbox_profile", got[1].errCode)
+}
+
+// F3 (boundary) — an Accept failure that leaves NO row behind (a store/enqueue
+// error inside the durable cut aborts the insert transaction) used to be only
+// logged, leaving Ploom holding a claimed dispatch it never hears about again.
+// It must now also produce a backed, reportable rejection.
+func TestSlice_AcceptFailsWithoutRow_StillReported(t *testing.T) {
+	fc := &fakeClient{
+		pending: []PendingDispatch{{DispatchID: "dsp_norow", IssueID: "iss_n"}},
+		fetchFn: func(id string) (DispatchDetail, error) {
+			return DispatchDetail{
+				DispatchID:     id,
+				Issue:          Issue{IssueID: "iss_n", Title: "Never admitted"},
+				RepoLocation:   RepoLocation{LocalDir: "/canon/repo"},
+				SandboxProfile: "workspace-write",
+			}, nil
+		},
+	}
+	// An unclassified admission failure: not one of the known rejection sentinels,
+	// and no row was created.
+	adm := &sliceAdmitter{admitErr: fmt.Errorf("execution db unavailable")}
+	f := newSliceFixture(t, fc, adm, &sliceLauncher{})
+
+	require.NoError(t, f.worker.RunOnce(context.Background()))
+
+	ids, err := f.outbox.DueExecutions(1 << 60)
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	row, ok, err := f.store.GetByID(ids[0])
+	require.NoError(t, err)
+	require.True(t, ok, "the failure must still leave a queryable row")
+	require.Equal(t, execution.StatusFailed, row.Status)
+
+	require.NoError(t, f.sender.Flush(context.Background()))
+	got := f.poster.sorted()
+	require.Len(t, got, 2)
+	require.Equal(t, "accepted", got[0].status)
+	require.Equal(t, "failed", got[1].status)
+	require.Equal(t, "launch_failed", got[1].errCode)
+	require.Equal(t, "dsp_norow", got[1].dispatchID)
+}
+
+// A launch failure already creates and fails its own row, so the Reject fallback
+// must NOT add a second row or a duplicate report pair.
+func TestSlice_LaunchFailure_RejectFallbackIsNoOp(t *testing.T) {
+	fc := &fakeClient{
+		pending: []PendingDispatch{{DispatchID: "dsp_dup", IssueID: "iss_d"}},
+		fetchFn: func(id string) (DispatchDetail, error) {
+			return DispatchDetail{
+				DispatchID:     id,
+				Issue:          Issue{IssueID: "iss_d", Title: "Launch me"},
+				RepoLocation:   RepoLocation{LocalDir: "/canon/repo"},
+				SandboxProfile: "workspace-write",
+			}, nil
+		},
+	}
+	adm := &sliceAdmitter{adm: execution.Admission{CanonicalPath: "/canon/repo", HeadAtStart: "h"}}
+	f := newSliceFixture(t, fc, adm, &sliceLauncher{err: fmt.Errorf("relay never connected")})
+
+	require.NoError(t, f.worker.RunOnce(context.Background()))
+
+	ids, err := f.outbox.DueExecutions(1 << 60)
+	require.NoError(t, err)
+	require.Len(t, ids, 1, "exactly one execution for the dispatch")
+	recs, err := f.outbox.UnackedRecords(ids[0])
+	require.NoError(t, err)
+	require.Len(t, recs, 2, "accepted(1)+failed(2) only — no duplicate pair")
 }
 
 // ---- module wiring ------------------------------------------------------------

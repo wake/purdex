@@ -2,8 +2,6 @@ package dispatch
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -226,10 +224,18 @@ func hostSandboxPolicy(c *core.Core) execution.Profile {
 
 // consumeSink is the P.7 tail of the consume loop: for each claimed+fetched
 // dispatch it runs the launch durable cut (admission → row → accepted → launch →
-// running). Admission rejections (no row ever created) are reported as failed
-// here — the only actor that can tell Ploom, since reconcile (P.9) has no row to
-// find. Launch/store failures leave the Coordinator-marked-failed row for the
-// terminal outcome path (P.8) and reconcile (P.9) backstop.
+// running).
+//
+// EVERY Accept failure funnels into Coordinator.Reject, which is the single
+// answer to "the dispatch was claimed, so Ploom must hear something":
+//   - admission rejection (repo busy / bad repo_location / unknown profile) —
+//     no row was ever created, so Reject creates the terminal one that backs the
+//     accepted+failed projection;
+//   - launch failure — the Coordinator already marked its row failed and queued
+//     both reports, so Reject is an idempotent no-op on the existing dispatch_id;
+//   - store failure before any row exists (e.g. the accepted enqueue aborted the
+//     insert transaction) — Reject is the only remaining chance to tell Ploom,
+//     since ListLive-based reconcile has no row to find.
 func (m *DispatchModule) consumeSink(coord *execution.Coordinator) FetchSink {
 	return func(ctx context.Context, cd ClaimedDispatch) {
 		req := execution.LaunchRequest{
@@ -240,31 +246,13 @@ func (m *DispatchModule) consumeSink(coord *execution.Coordinator) FetchSink {
 			SandboxProfile:   cd.Detail.SandboxProfile,
 		}
 		if _, err := coord.Accept(ctx, req); err != nil {
-			switch {
-			case errors.Is(err, execution.ErrRepoBusy), errors.Is(err, execution.ErrCanonical), errors.Is(err, execution.ErrUnknownProfile):
-				log.Printf("[dispatch] admission rejected dispatch=%s: %v", req.DispatchID, err)
-				if rerr := reportAdmissionRejected(m.sender, newRejectionID(), req.DispatchID, cd.Detail, err); rerr != nil {
-					log.Printf("[dispatch] report rejection dispatch=%s: %v", req.DispatchID, rerr)
-				}
-			default:
-				// Row (if created) is already marked failed by the Coordinator, which
-				// also enqueued accepted(1)+failed(2) durably — the outbox replays both
-				// to unwedge Ploom; no reconcile pass is needed for this failure.
-				log.Printf("[dispatch] launch failed dispatch=%s: %v", req.DispatchID, err)
+			code := rejectionCode(err)
+			log.Printf("[dispatch] dispatch=%s not launched (%s): %v", req.DispatchID, code, err)
+			if _, rerr := coord.Reject(ctx, req, code, err); rerr != nil {
+				log.Printf("[dispatch] record rejection dispatch=%s: %v", req.DispatchID, rerr)
 			}
 		}
 	}
-}
-
-// newRejectionID mints a synthetic execution_id for an admission-rejection failed
-// projection. No execution row is created for a rejection (admission never
-// captured head/dirty and single-live must not admit it), so the id only keys
-// the accepted(1)+failed(2) report pair in the outbox. The exc_rej_ prefix keeps
-// it distinct from store-generated ids.
-func newRejectionID() string {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return "exc_rej_" + hex.EncodeToString(b[:])
 }
 
 // executionStore resolves the registry-published execution store, or nil when it

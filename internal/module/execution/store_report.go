@@ -70,6 +70,54 @@ func (s *ExecutionStore) UpsertByDispatchWithReport(req NewExecution, build Repo
 	return exec, created, nil
 }
 
+// InsertRejectedWithReports records a dispatch that was rejected before it could
+// launch: it inserts the execution row, queues accepted(seq=1), drives the row
+// straight to terminal failed (outcome_source=rejected) and queues failed(seq=2)
+// — all in ONE transaction.
+//
+// The atomicity is the same invariant as everywhere else in this file, at its
+// sharpest: the row lands terminal, so ListLive never sees it and no sweep can
+// ever produce its reports later. Either the row and both reports commit
+// together, or nothing does and the dispatch simply looks unhandled.
+//
+// created is false when the dispatch already had an execution (idempotent
+// re-delivery, or the launch path's own row): the existing row is returned
+// untouched and NO report is queued, so the first execution's ordered report
+// stream cannot be corrupted by a duplicate accepted(1).
+func (s *ExecutionStore) InsertRejectedWithReports(req NewExecution, buildAccepted, buildFailed ReportBuilder) (*Execution, bool, error) {
+	var (
+		exec    *Execution
+		created bool
+	)
+	err := s.inTx(func(ctx context.Context, conn *sql.Conn) error {
+		var err error
+		exec, created, err = upsertTx(ctx, conn, s.now(), req)
+		if err != nil {
+			return err
+		}
+		if !created {
+			return nil
+		}
+		// accepted is built from the row as inserted (status accepted) — the same
+		// immutable facts a restart would rebuild it from.
+		if err := emitReport(ctx, conn, s.now(), exec, buildAccepted); err != nil {
+			return err
+		}
+		source := OutcomeRejected
+		if err := transitionTx(ctx, conn, s.now(), exec.ExecutionID, StatusFailed, &source); err != nil {
+			return err
+		}
+		if exec, err = loadByID(ctx, conn, exec.ExecutionID); err != nil {
+			return err
+		}
+		return emitReport(ctx, conn, s.now(), exec, buildFailed)
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return exec, created, nil
+}
+
 // UpsertByDispatch creates a new execution for req.DispatchID, or returns the
 // existing execution unchanged if the dispatch was already admitted. created is
 // true only when a new row was inserted. The whole operation runs in a single

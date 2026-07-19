@@ -29,15 +29,6 @@ const (
 	seqTerminal = 3
 )
 
-// reportEnqueuer is the narrow slice of *Sender the consumer glue needs: durably
-// queue one already-built report payload. It is used only for reports that stand
-// alone (the admission-rejection projection, which has no execution row and so no
-// transition to pair with). Reports that accompany a state transition are queued
-// by the execution store inside that transition's transaction. Tests inject a fake.
-type reportEnqueuer interface {
-	Enqueue(executionID, dispatchID string, seq int, status string, payload []byte) error
-}
-
 // launchReporter adapts the E4 wire format onto execution.LaunchReporter, so the
 // execution Coordinator can render accepted/running/failed without importing
 // dispatch (which would cycle). These are pure builders: the execution store does
@@ -178,47 +169,9 @@ func buildPrompt(issue Issue) string {
 	}
 }
 
-// reportAdmissionRejected records a pre-launch failure (admission rejection or a
-// launch error the Coordinator surfaced before/without a running report) as a
-// terminal failed for the dispatch.
-//
-// The E4 contract forbids a lifecycle report before accepted(seq=1) is acked, so
-// a rejected dispatch cannot emit a bare failed. Instead we enqueue accepted(1)
-// then failed(2): Ploom projects queued→failed carrying the rejection reason.
-// The dispatch was already claimed (E2) before the sink ran, so it will not be
-// re-polled; a single one-shot report is sufficient. execID is a synthetic id
-// for this rejection projection — no execution row is created (single-live is
-// preserved: a failed row would not be live anyway, but here we avoid the row
-// entirely since admission never captured head/dirty).
-func reportAdmissionRejected(sender reportEnqueuer, execID, dispatchID string, detail DispatchDetail, cause error) error {
-	acceptedRow := AcceptedRow{
-		ExecutionID:             execID,
-		DispatchID:              dispatchID,
-		Provider:                reportProvider,
-		AttemptNo:               1,
-		RepoLocation:            detail.RepoLocation.LocalDir,
-		RepoLocationJSON:        marshalRepoLocation(detail.RepoLocation),
-		EffectiveSandboxProfile: detail.SandboxProfile,
-	}
-	acceptedPayload, err := BuildAcceptedPayload(acceptedRow)
-	if err != nil {
-		return err
-	}
-	if err := sender.Enqueue(execID, dispatchID, seqAccepted, "accepted", acceptedPayload); err != nil {
-		return err
-	}
-	failedPayload, err := BuildTerminalPayload(execID, seqFailed, "failed", nil, &ReportError{
-		Code:    rejectionCode(cause),
-		Message: cause.Error(),
-	})
-	if err != nil {
-		return err
-	}
-	return sender.Enqueue(execID, dispatchID, seqFailed, "failed", failedPayload)
-}
-
 // rejectionCode maps an admission/launch failure onto a stable error code for
-// the failed report. Unknown causes fall back to a generic launch_failed.
+// the failed report (m0-contract §7). Unknown causes fall back to a generic
+// launch_failed.
 func rejectionCode(err error) string {
 	switch {
 	case errors.Is(err, execution.ErrRepoBusy):

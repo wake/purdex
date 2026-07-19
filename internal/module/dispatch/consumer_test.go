@@ -10,35 +10,6 @@ import (
 	"github.com/wake/purdex/internal/module/execution"
 )
 
-// enqueueCall records one durable enqueue for assertions.
-type enqueueCall struct {
-	execID     string
-	dispatchID string
-	seq        int
-	status     string
-	payload    map[string]any
-}
-
-// fakeEnqueuer captures every Enqueue the consumer glue makes.
-type fakeEnqueuer struct {
-	calls   []enqueueCall
-	failAt  int // 1-based call index to fail on; 0 = never
-	callNum int
-}
-
-func (f *fakeEnqueuer) Enqueue(execID, dispatchID string, seq int, status string, payload []byte) error {
-	f.callNum++
-	if f.failAt != 0 && f.callNum == f.failAt {
-		return errors.New("enqueue boom")
-	}
-	var m map[string]any
-	if err := json.Unmarshal(payload, &m); err != nil {
-		return err
-	}
-	f.calls = append(f.calls, enqueueCall{execID, dispatchID, seq, status, m})
-	return nil
-}
-
 func TestBuildPrompt(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -128,49 +99,12 @@ func TestAcceptedRowFromExec_NullSessionCode(t *testing.T) {
 	require.Equal(t, "", row.SessionCode)
 }
 
-func TestReportAdmissionRejected_EnqueuesAcceptedThenFailed(t *testing.T) {
-	fe := &fakeEnqueuer{}
-	detail := DispatchDetail{
-		DispatchID:     "dsp_9",
-		RepoLocation:   RepoLocation{ProjectID: "prj_1", LocalDir: "/canon/busy", IsOrigin: true},
-		SandboxProfile: "read-only",
-	}
-	cause := errors.New("repo already has a live execution: /canon/busy")
-	wrapped := errors.Join(execution.ErrRepoBusy, cause)
-
-	require.NoError(t, reportAdmissionRejected(fe, "exc_rej_1", "dsp_9", detail, wrapped))
-
-	require.Len(t, fe.calls, 2)
-
-	accepted := fe.calls[0]
-	require.Equal(t, 1, accepted.seq)
-	require.Equal(t, "accepted", accepted.status)
-	require.Equal(t, "exc_rej_1", accepted.execID)
-	require.Equal(t, "dsp_9", accepted.dispatchID)
-	require.Equal(t, "read-only", accepted.payload["effective_sandbox_profile"])
-	// Even the rejection path echoes the full repo_location object.
-	repo := accepted.payload["repo_location"].(map[string]any)
-	require.Equal(t, "/canon/busy", repo["local_dir"])
-	require.Equal(t, "prj_1", repo["project_id"])
-	require.Equal(t, true, repo["is_origin"])
-
-	failed := fe.calls[1]
-	require.Equal(t, 2, failed.seq)
-	require.Equal(t, "failed", failed.status)
-	errObj := failed.payload["error"].(map[string]any)
-	require.Equal(t, "repo_busy", errObj["code"])
-	require.Contains(t, errObj["message"], "live execution")
-}
-
 func TestRejectionCode(t *testing.T) {
 	require.Equal(t, "repo_busy", rejectionCode(execution.ErrRepoBusy))
 	require.Equal(t, "invalid_repo_location", rejectionCode(execution.ErrCanonical))
+	require.Equal(t, "unknown_sandbox_profile", rejectionCode(execution.ErrUnknownProfile))
 	require.Equal(t, "launch_failed", rejectionCode(errors.New("relay did not connect")))
-}
-
-func TestReportAdmissionRejected_PropagatesEnqueueError(t *testing.T) {
-	fe := &fakeEnqueuer{failAt: 1} // fail on accepted enqueue
-	err := reportAdmissionRejected(fe, "exc_rej_2", "dsp_9", DispatchDetail{}, execution.ErrRepoBusy)
-	require.Error(t, err)
-	require.Empty(t, fe.calls)
+	// Wrapped causes still map (the Coordinator wraps with context).
+	require.Equal(t, "repo_busy",
+		rejectionCode(errors.Join(execution.ErrRepoBusy, errors.New("/canon/busy"))))
 }
