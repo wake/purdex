@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { deriveDaemonBase, deriveWsBase } from '../lib/host-endpoint'
+import { getPlatformCapabilities } from '../lib/platform'
 
 /* ─── Interfaces ─── */
 
@@ -63,6 +64,21 @@ interface HostState {
 const DEFAULT_ID = generateId()
 
 function createDefaultState() {
+  // Seed the local mlab default host only in the Electron desktop app, where
+  // `100.64.0.2:7860` is the canonical local daemon. A browser client must
+  // start with no hosts: on an https origin a hardcoded http host would become
+  // the active host and fail with mixed-content + 401 before the user reaches
+  // the origin-suggestion flow (HostPage). The empty state routes a fresh web
+  // user straight to that flow. Persist rehydration overrides this for any
+  // returning user with saved hosts, so this only affects first load.
+  if (!getPlatformCapabilities().isElectron) {
+    return {
+      hosts: {} as Record<string, HostConfig>,
+      hostOrder: [] as string[],
+      runtime: {} as Record<string, HostRuntime>,
+      activeHostId: null as string | null,
+    }
+  }
   const defaultHost: HostConfig = {
     id: DEFAULT_ID,
     name: 'mlab',

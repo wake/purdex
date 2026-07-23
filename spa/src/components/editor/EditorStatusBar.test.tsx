@@ -6,10 +6,10 @@ import { useHostStore } from '../../stores/useHostStore'
 describe('EditorStatusBar', () => {
   beforeEach(() => {
     useHostStore.getState().reset()
-    const hostId = useHostStore.getState().activeHostId
-    if (hostId) {
-      useHostStore.getState().updateHost(hostId, { name: 'mlab' })
-    }
+    // The default-host seed is Electron-only; seed one explicitly so the
+    // daemon-source cases have a named host regardless of platform.
+    const hostId = useHostStore.getState().addHost({ name: 'mlab', ip: '100.64.0.2', port: 7860 })
+    useHostStore.getState().setActiveHost(hostId)
   })
 
   it('shows plain Purdex text for in-app editor', () => {

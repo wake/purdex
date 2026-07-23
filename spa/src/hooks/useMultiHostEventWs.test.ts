@@ -55,8 +55,10 @@ describe('useMultiHostEventWs — scheme 變更觸發事件 WS 重連', () => {
   })
 
   it('host scheme http→https：關閉舊連線，以 wss:// 建立新連線', async () => {
-    const hostId = useHostStore.getState().hostOrder[0]
-    useHostStore.getState().updateHost(hostId, { ip: 'example.test', port: 7860 })
+    // The default-host seed is Electron-only, so the store starts empty here;
+    // seed the host this test derives the ws/wss URL from.
+    const hostId = useHostStore.getState().addHost({ name: 'mlab', ip: 'example.test', port: 7860 })
+    useHostStore.getState().setActiveHost(hostId)
 
     const { unmount } = renderHook(() => useMultiHostEventWs())
 

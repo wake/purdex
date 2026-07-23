@@ -50,6 +50,9 @@ beforeEach(() => {
     applyUpdate: mockApplyUpdate,
     forceLoadSPA: mockForceLoadSPA,
   } as typeof window.electronAPI
+  // The default-host seed is Electron-only; electronAPI is set just above, so
+  // reset() here re-seeds the mlab host each test (this suite reads hostOrder[0]).
+  useHostStore.getState().reset()
   // Default: emit a non-stale check immediately
   arrangeStream((cb) => {
     cb({ type: 'check', check: baseCheck() })

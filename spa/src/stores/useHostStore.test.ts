@@ -1,12 +1,34 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { useHostStore } from './useHostStore'
 
-describe('useHostStore', () => {
-  beforeEach(() => {
+// The default-host seed is Electron-only (spec §6 option a): a browser client
+// served over an https origin must NOT start with a hardcoded http host
+// (`mlab@100.64.0.2:7860`), which would become the active host and fail with
+// mixed-content + 401 before the user ever reaches the origin-suggestion flow.
+// `isElectron` is derived from `window.electronAPI`, so seeding is controlled
+// here by setting/deleting that global before reset().
+function asElectron() {
+  ;(window as unknown as { electronAPI?: unknown }).electronAPI = {}
+}
+function asWeb() {
+  delete (window as unknown as { electronAPI?: unknown }).electronAPI
+}
+
+describe('useHostStore default-host seeding', () => {
+  afterEach(asWeb)
+
+  it('web (no electronAPI): starts with zero hosts and no active host', () => {
+    asWeb()
     useHostStore.getState().reset()
+    const state = useHostStore.getState()
+    expect(Object.keys(state.hosts)).toHaveLength(0)
+    expect(state.hostOrder).toEqual([])
+    expect(state.activeHostId).toBeNull()
   })
 
-  it('has a default host on init', () => {
+  it('electron: seeds the mlab default host as active', () => {
+    asElectron()
+    useHostStore.getState().reset()
     const state = useHostStore.getState()
     const hostIds = Object.keys(state.hosts)
     expect(hostIds).toHaveLength(1)
@@ -20,6 +42,19 @@ describe('useHostStore', () => {
     expect(state.activeHostId).toBe(defaultId)
     expect(state.hostOrder).toEqual([defaultId])
   })
+})
+
+describe('useHostStore', () => {
+  // Mechanics tests are platform-agnostic: seed one host explicitly so they
+  // exercise store behaviour rather than the (now Electron-only) auto-seed.
+  let hostId: string
+  beforeEach(() => {
+    asWeb()
+    useHostStore.getState().reset()
+    hostId = useHostStore.getState().addHost({ name: 'mlab', ip: '100.64.0.2', port: 7860 })
+    useHostStore.getState().setActiveHost(hostId)
+  })
+  afterEach(asWeb)
 
   it('addHost creates a new host and returns its id', () => {
     const state = useHostStore.getState()
@@ -47,61 +82,50 @@ describe('useHostStore', () => {
 
   it('cannot remove the last host', () => {
     const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    state.removeHost(defaultId)
+    state.removeHost(hostId)
 
     const updated = useHostStore.getState()
-    expect(updated.hosts[defaultId]).toBeDefined()
+    expect(updated.hosts[hostId]).toBeDefined()
     expect(Object.keys(updated.hosts)).toHaveLength(1)
   })
 
   it('updateHost modifies an existing host', () => {
     const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    state.updateHost(defaultId, { name: 'renamed', ip: '192.168.1.1', port: 8080 })
+    state.updateHost(hostId, { name: 'renamed', ip: '192.168.1.1', port: 8080 })
 
     const updated = useHostStore.getState()
-    expect(updated.hosts[defaultId].name).toBe('renamed')
-    expect(updated.hosts[defaultId].ip).toBe('192.168.1.1')
-    expect(updated.hosts[defaultId].port).toBe(8080)
+    expect(updated.hosts[hostId].name).toBe('renamed')
+    expect(updated.hosts[hostId].ip).toBe('192.168.1.1')
+    expect(updated.hosts[hostId].port).toBe(8080)
   })
 
   it('setRuntime updates runtime status for a host', () => {
     const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    state.setRuntime(defaultId, { status: 'reconnecting', latency: 42 })
+    state.setRuntime(hostId, { status: 'reconnecting', latency: 42 })
 
     const updated = useHostStore.getState()
-    expect(updated.runtime[defaultId]).toEqual({ status: 'reconnecting', latency: 42 })
+    expect(updated.runtime[hostId]).toEqual({ status: 'reconnecting', latency: 42 })
   })
 
   it('getDaemonBase returns http URL from host ip and port', () => {
-    const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    const base = state.getDaemonBase(defaultId)
+    const base = useHostStore.getState().getDaemonBase(hostId)
     expect(base).toBe('http://100.64.0.2:7860')
   })
 
   it('getWsBase returns ws URL from host ip and port', () => {
-    const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    const wsBase = state.getWsBase(defaultId)
+    const wsBase = useHostStore.getState().getWsBase(hostId)
     expect(wsBase).toBe('ws://100.64.0.2:7860')
   })
 
   it('getAuthHeaders returns empty object when no token', () => {
-    const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    const headers = state.getAuthHeaders(defaultId)
+    const headers = useHostStore.getState().getAuthHeaders(hostId)
     expect(headers).toEqual({})
   })
 
   it('getAuthHeaders returns Bearer token when token is set', () => {
-    const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    state.updateHost(defaultId, { token: 'my-secret-token' })
+    useHostStore.getState().updateHost(hostId, { token: 'my-secret-token' })
 
-    const headers = useHostStore.getState().getAuthHeaders(defaultId)
+    const headers = useHostStore.getState().getAuthHeaders(hostId)
     expect(headers).toEqual({ Authorization: 'Bearer my-secret-token' })
   })
 
@@ -126,27 +150,25 @@ describe('useHostStore', () => {
 
   it('setRuntime updates daemonState and tmuxState', () => {
     const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    state.setRuntime(defaultId, {
+    state.setRuntime(hostId, {
       status: 'disconnected',
       daemonState: 'refused',
       tmuxState: 'unavailable',
     })
 
     const updated = useHostStore.getState()
-    expect(updated.runtime[defaultId].daemonState).toBe('refused')
-    expect(updated.runtime[defaultId].tmuxState).toBe('unavailable')
+    expect(updated.runtime[hostId].daemonState).toBe('refused')
+    expect(updated.runtime[hostId].tmuxState).toBe('unavailable')
   })
 
   it('setRuntime partial update preserves existing fields', () => {
     const state = useHostStore.getState()
-    const defaultId = state.activeHostId!
-    state.setRuntime(defaultId, { status: 'connected', daemonState: 'connected', tmuxState: 'ok' })
-    state.setRuntime(defaultId, { tmuxState: 'unavailable' })
+    state.setRuntime(hostId, { status: 'connected', daemonState: 'connected', tmuxState: 'ok' })
+    state.setRuntime(hostId, { tmuxState: 'unavailable' })
 
     const updated = useHostStore.getState()
-    expect(updated.runtime[defaultId].status).toBe('connected')
-    expect(updated.runtime[defaultId].daemonState).toBe('connected')
-    expect(updated.runtime[defaultId].tmuxState).toBe('unavailable')
+    expect(updated.runtime[hostId].status).toBe('connected')
+    expect(updated.runtime[hostId].daemonState).toBe('connected')
+    expect(updated.runtime[hostId].tmuxState).toBe('unavailable')
   })
 })
