@@ -51,11 +51,14 @@ describe('SessionSection', () => {
     expect(screen.getByText('No sessions available')).toBeInTheDocument()
   })
 
-  it('disables the create button when the host tmux is unavailable', () => {
+  // `tmux new-session` boots a server when none is running, so a connected host
+  // with a dead tmux must stay creatable — otherwise the last session closing
+  // locks the user out of the only control that could bring tmux back.
+  it('keeps the create button enabled when the host tmux is unavailable', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'unavailable' } } })
     render(<SessionSection onSelect={mockOnSelect} />)
-    expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeDisabled()
+    expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeEnabled()
   })
 
   it('disables the create button when the host has no runtime (offline)', () => {
@@ -360,6 +363,25 @@ describe('SessionSection', () => {
     fireEvent.click(screen.getByText('Create'))
     await waitFor(() => expect(hostApi.createSession).toHaveBeenCalledWith(HOST_ID, 'built', '~', 'terminal'))
     await waitFor(() => expect(mockOnSelect).toHaveBeenCalledWith({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'new001', mode: 'terminal', cachedName: 'built', tmuxInstance: '' }))
+  })
+
+  it('creates a session on a connected host whose tmux is down (bootstraps the server)', async () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'unavailable' } } })
+    vi.mocked(hostApi.createSession).mockResolvedValue(made())
+    render(<SessionSection onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
+    fireEvent.click(screen.getByText('Create'))
+    await waitFor(() => expect(hostApi.createSession).toHaveBeenCalledWith(HOST_ID, 'built', '~', 'terminal'))
+    await waitFor(() => expect(mockOnSelect).toHaveBeenCalled())
+  })
+
+  it('still blocks create when the host itself is disconnected', async () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+    render(<SessionSection onSelect={mockOnSelect} />)
+    expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeDisabled()
   })
 
   it('does not attach when the created session has a blank code', async () => {

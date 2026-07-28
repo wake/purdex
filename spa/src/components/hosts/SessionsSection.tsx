@@ -136,7 +136,14 @@ export function SessionsSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const sessions = useSessionStore((s) => s.sessions[hostId] ?? [])
   const runtime = useHostStore((s) => s.runtime[hostId])
-  const isOffline = !runtime || runtime.status !== 'connected' || runtime.tmuxState === 'unavailable'
+  // Two distinct gates. `isDisconnected` — the daemon is unreachable, so nothing
+  // works. `isOffline` additionally covers a reachable daemon whose tmux server
+  // is down: existing sessions can't be opened/renamed/deleted (they're gone with
+  // the server), but creating one MUST stay available, because the daemon's
+  // create path shells out to `tmux new-session`, which boots a server. Gating
+  // create on tmux would strand the user with no way to revive it.
+  const isDisconnected = !runtime || runtime.status !== 'connected'
+  const isOffline = isDisconnected || runtime.tmuxState === 'unavailable'
   const [showNew, setShowNew] = useState(false)
   const [renamingCode, setRenamingCode] = useState<string | null>(null)
   const [deletingCode, setDeletingCode] = useState<string | null>(null)
@@ -229,13 +236,16 @@ export function SessionsSection({ hostId }: Props) {
           <CommandSlot
             mountTo={QUICK_COMMAND_SLOTS.HOST_ACTIONS}
             ctx={{ hostId }}
-            // Finding 5 — same disable semantics as new-session button + Finding 3 ref guard
+            // Finding 5 — host-liveness disable + Finding 3 ref guard. Kept on the
+            // stricter `isOffline`: a host action may target an existing session,
+            // which a dead tmux cannot provide. Only the plain new-session button
+            // relaxes to `isDisconnected`.
             busy={isOffline || executing}
             executor={runHostExecutor}
           />
           <button
             onClick={() => setShowNew(true)}
-            disabled={isOffline}
+            disabled={isDisconnected}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
           >
             <Plus size={14} />

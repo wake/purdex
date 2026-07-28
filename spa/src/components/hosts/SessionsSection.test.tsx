@@ -129,6 +129,23 @@ describe('SessionsSection', () => {
     expect(btn).toBeDisabled()
   })
 
+  // A connected host with a dead tmux can still be bootstrapped: the daemon's
+  // create path shells out to `tmux new-session`, which starts a server.
+  // Per-session actions stay disabled — they need a server that already exists.
+  it('keeps "New Session" enabled but per-session actions disabled when tmux is down', () => {
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'unavailable' } },
+      activeHostId: HOST_ID,
+    })
+    render(<SessionsSection hostId={HOST_ID} />)
+    expect(screen.getByRole('button', { name: /New Session/i })).toBeEnabled()
+    expect(screen.getByText('tmux environment unreachable')).toBeInTheDocument()
+    expect(screen.getAllByTitle('Open')[0]).toBeDisabled()
+    expect(screen.getAllByTitle('Rename')[0]).toBeDisabled()
+  })
+
   it('renders agent status badge when agentStatuses has entry for session', () => {
     const ck = compositeKey(HOST_ID, 'abc')
     useAgentStore.setState({ statuses: { [ck]: 'running' } })

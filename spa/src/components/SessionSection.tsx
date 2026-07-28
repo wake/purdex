@@ -62,12 +62,16 @@ function SessionRow({ hostId, session, disabled, onSelect }: {
   )
 }
 
-/** Host-page offline semantics: the host still exists and its tmux is usable.
+/** Can this host accept a create-session request? The host must still exist and
+ *  be connected — but a dead tmux is deliberately NOT disqualifying: the daemon
+ *  creates via `tmux new-session`, which boots a server when none is running.
+ *  Gating on tmuxState here would deadlock the user out of the only control that
+ *  can revive tmux once the last session closes.
  *  Read from the live store snapshot so it reflects state at call time. */
-function isHostLive(hostId: string): boolean {
+function canCreateOnHost(hostId: string): boolean {
   const s = useHostStore.getState()
   const rt = s.runtime[hostId]
-  return !!s.hosts[hostId] && !!rt && rt.status === 'connected' && rt.tmuxState !== 'unavailable'
+  return !!s.hosts[hostId] && !!rt && rt.status === 'connected'
 }
 
 function NewTabSessionForm({ hostId, disabled, onCreated, onCancel }: {
@@ -101,7 +105,7 @@ function NewTabSessionForm({ hostId, disabled, onCreated, onCancel }: {
   const handleCreate = async () => {
     // Re-check host liveness synchronously at submit time (runtime may have gone
     // offline since the form opened) — do not fire the POST for a dead host.
-    if (creatingRef.current || !name.trim() || disabled || !isHostLive(hostId)) return
+    if (creatingRef.current || !name.trim() || disabled || !canCreateOnHost(hostId)) return
     creatingRef.current = true
     setCreating(true); setError('')
     try {
@@ -110,7 +114,7 @@ function NewTabSessionForm({ hostId, disabled, onCreated, onCancel }: {
       // Guard 1 — blank code = failed create.
       if (!created.code) { setError(t('hosts.create') + ' failed'); return }
       // Guard 2 — host still live (removed/disconnected during the await must not attach).
-      if (!isHostLive(hostId)) { setError(t('hosts.create') + ' failed'); return }
+      if (!canCreateOnHost(hostId)) { setError(t('hosts.create') + ' failed'); return }
       onCreated({ code: created.code, name: created.name, mode })
     } catch (err) {
       if (activeRef.current) setError(err instanceof Error ? err.message : 'Failed')
@@ -168,7 +172,8 @@ export function SessionSection({ onSelect }: NewTabProviderProps) {
         const hostRuntime = runtime[hostId]
         const isOffline = hostRuntime && hostRuntime.status !== 'connected'
         const isExpanded = expanded[hostId] !== false
-        const createDisabled = !hostRuntime || hostRuntime.status !== 'connected' || hostRuntime.tmuxState === 'unavailable'
+        // tmuxState is intentionally absent — see canCreateOnHost().
+        const createDisabled = !hostRuntime || hostRuntime.status !== 'connected'
 
         const statusDot = hostRuntime?.status === 'reconnecting' ? (
           <Spinner size={8} className="text-yellow-400 animate-spin" />
