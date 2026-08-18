@@ -42,7 +42,7 @@ interface RecentFilesState {
   addRecent: (entry: RecentFileEntry) => void
   /**
    * Re-point the entry at `from` and every `from/`-prefixed descendant onto
-   * `to`, mirroring `remapPanesUnder` (storage-actions.ts): same source
+   * `to`, mirroring `applyPathMutation` (storage-actions.ts): same source
    * identity, exact match or trailing-slash-bounded prefix (so a `/buffer/a`
    * rename never hits the sibling `/buffer/ab`), `name` recomputed from the new
    * basename. `openedAt` is carried over untouched — a rename is not a visit.

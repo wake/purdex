@@ -110,7 +110,7 @@ export function useEditorRenameFlow({
         : createMetadata(source, nextPath)
       useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
       // T3.2: the in-editor rename is the third path-mutating call site (the
-      // other two go through `remapPanesUnder`), and the ONLY one a remote file
+      // other two go through `applyPathMutation`), and the ONLY one a remote file
       // can take — `source` carries the daemon host, so the remap stays scoped
       // to that host's entries.
       useRecentFilesStore.getState().renamePath(source, filePath, nextPath)

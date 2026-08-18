@@ -88,7 +88,7 @@ describe('createStorageFolder — mkdirUnique delegation (T1b-3)', () => {
 })
 
 // --- T1b-4: in-place rename (file + folder) via a SINGLE backend.rename +
-// pure remapPanesUnder -------------------------------------------------------
+// pure applyPathMutation -------------------------------------------------------
 //
 // These cases exercise the REAL InAppBackend (fake-indexeddb) + the REAL tab /
 // editor stores, so we verify the full path: one backend re-key (recursive for
@@ -147,7 +147,7 @@ function seedBuffer(filePath: string, paneId: string, languageSource: 'extension
   })
 }
 
-describe('renameStorageEntry — file + folder via one backend.rename + pure remapPanesUnder (T1b-4)', () => {
+describe('renameStorageEntry — file + folder via one backend.rename + pure applyPathMutation (T1b-4)', () => {
   let real: InAppBackend
   const enc = (s: string) => new TextEncoder().encode(s)
   const dec = (b: Uint8Array) => new TextDecoder().decode(b)
@@ -388,12 +388,12 @@ describe('deleteStorageEntries — recursive folder delete + descendant-aware gu
 })
 
 // --- T1b-6a: pure recursive move (drag target = a directory) via a SINGLE
-// backend.rename + pure remapPanesUnder --------------------------------------
+// backend.rename + pure applyPathMutation --------------------------------------
 //
 // Same real-backend + real-store harness as rename: `moveStorageEntry(from,
 // targetDir)` computes `to = targetDir/basename(from)` and re-uses the exact
 // rename machinery — one recursive backend.rename (T1b-1) + the pure
-// remapPanesUnder re-point (T1b-4). The no-op guards (already-there / into self
+// applyPathMutation re-point (T1b-4). The no-op guards (already-there / into self
 // / into own descendant) and the pre-mutation collision check must fire WITHOUT
 // any backend.rename, asserted with a spy.
 
@@ -1004,7 +1004,7 @@ describe('storage-actions — recent files follow rename / move / delete (T3.2)'
     expect(useRecentFilesStore.getState().files[1]).toEqual(remote)
   })
 
-  it('T3.2-2: a folder MOVE remaps every recent descendant (same remapPanesUnder call site)', async () => {
+  it('T3.2-2: a folder MOVE remaps every recent descendant (same applyPathMutation call site)', async () => {
     await real.write('/buffer/a/b.md', enc('BB'))
     await real.write('/buffer/a/c/d.md', enc('DD'))
     await real.mkdir('/buffer/dest')

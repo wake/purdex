@@ -12,9 +12,9 @@
  * Phase 1b: new-file now goes through the unified eager `createUniqueInAppFile`
  * namer (atomic IDB reservation, #854) and accepts a `targetDir`. Folder mkdir
  * (`createStorageFolder`) and in-place rename of files AND folders
- * (`renameStorageEntry` + the pure `remapPanesUnder` re-point) have landed.
+ * (`renameStorageEntry` + the pure `applyPathMutation` re-point) have landed.
  * The recursive move data layer (`moveStorageEntry`, T1b-6a) reuses that same
- * single-rename + `remapPanesUnder` path; the drag-and-drop wiring is T1b-6b.
+ * single-rename + `applyPathMutation` path; the drag-and-drop wiring is T1b-6b.
  */
 import { getFsBackend, supportsCreateUnique, supportsMkdirUnique } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
@@ -34,41 +34,21 @@ import type { Pane, Tab } from '../../../types/tab'
 export type Translate = (key: string, params?: Record<string, string | number>) => string
 
 /**
- * remapPanesUnder — pane + buffer + recent-list re-point for a rename/move that
- * has ALREADY happened at the backend layer. It performs NO backend mutation: the
- * single `backend.rename` lives in the caller (`renameStorageEntry`, and the
- * future `moveStorageEntry`) and runs exactly once BEFORE this helper, so file
- * and folder share one code path and there is no double-rename.
+ * Every open file pane — editor + image-preview + pdf-preview — whose
+ * `content.filePath` is `from` itself OR a `from/`-prefixed descendant (the
+ * trailing slash stops `/buffer/a` from matching `/buffer/ab`, decision 6).
  *
- * It enumerates every open file pane — editor + image-preview + pdf-preview —
- * whose `content.filePath` is `from` itself OR a `from/`-prefixed descendant
- * (the trailing slash stops `/buffer/a` from matching `/buffer/ab`, decision 6),
- * then for each affected path:
- *   - re-points the tab layout via `renameEditorPanes(source, oldPath, newPath)`
- *     (which already rewrites all three file-pane kinds), and
- *   - for editor panes only, re-keys the editor-store buffer via
- *     `renameBuffer(oldKey, newKey, metadata)`. The metadata mirrors the old
- *     single-path `performBufferRename` / `EditorPane.handleRenameSubmit`:
- *     preserve a manual language override, otherwise recompute from the new
- *     path so crossing extensions refreshes the language.
+ * Keyed by path, valued by "some pane on this path is an editor" — an editor
+ * pane needs an editor-store buffer re-key on top of the layout re-point, the
+ * preview kinds do not. A single-file rename yields one entry (`from` itself); a
+ * folder rename yields every open descendant.
  *
- * A single-file rename is the one-iteration case (`from === filePath`, so
- * `newPath = to`); a folder rename iterates every open descendant.
- *
- * T3.2: it also re-points the Recent list through `renamePath`, which applies the
- * same identity + prefix rules over the persisted entries. That call is
- * UNCONDITIONAL and sits outside the open-pane loop on purpose — a recent entry
- * usually belongs to a file that is NOT open, and it used to be left dangling at
- * the old path. Living here means Storage rename AND move, file and folder, are
- * all covered by this one call site.
+ * Pure read of the tab store, so both consumers below can call it independently
+ * and still see the SAME pre-mutation pane tree — provided the layout re-point
+ * (which rewrites the very `filePath`s this keys on) runs last.
  */
-export function remapPanesUnder(source: FileSource, from: string, to: string): void {
-  useRecentFilesStore.getState().renamePath(source, from, to)
-
+function collectAffectedPanePaths(source: FileSource, from: string): Map<string, boolean> {
   const fromPrefix = from + '/'
-  // Collect each affected open path once, tracking whether any pane on that path
-  // is an editor (→ it also needs an editor-store buffer re-key, not just a
-  // layout re-point).
   const affected = new Map<string, boolean>()
   const { tabs } = useTabStore.getState()
   for (const tab of Object.values(tabs)) {
@@ -82,11 +62,25 @@ export function remapPanesUnder(source: FileSource, from: string, to: string): v
       }
     })
   }
+  return affected
+}
 
-  for (const [oldPath, hasEditor] of affected) {
-    const newPath = to + oldPath.slice(from.length)
-    useTabStore.getState().renameEditorPanes(source, oldPath, newPath)
+/** The new path an affected `oldPath` lands on when `from` becomes `to`. */
+function remappedPath(oldPath: string, from: string, to: string): string {
+  return to + oldPath.slice(from.length)
+}
+
+/**
+ * Editor-store half: re-key the buffer behind every open EDITOR pane under
+ * `from`. The metadata mirrors the old single-path `performBufferRename` /
+ * `EditorPane.handleRenameSubmit` — preserve a manual language override,
+ * otherwise recompute from the new path so crossing extensions refreshes the
+ * language.
+ */
+export function remapEditorBuffersUnder(source: FileSource, from: string, to: string): void {
+  for (const [oldPath, hasEditor] of collectAffectedPanePaths(source, from)) {
     if (!hasEditor) continue
+    const newPath = remappedPath(oldPath, from, to)
     const oldKey = bufferKey(source, oldPath)
     const newKey = bufferKey(source, newPath)
     const currentBuffer = useEditorStore.getState().buffers[oldKey]
@@ -95,6 +89,47 @@ export function remapPanesUnder(source: FileSource, from: string, to: string): v
       : createMetadata(source, newPath)
     useEditorStore.getState().renameBuffer(oldKey, newKey, nextMetadata)
   }
+}
+
+/**
+ * Tab-layout half: re-point every open file pane under `from` through
+ * `renameEditorPanes`, which already rewrites all three file-pane kinds.
+ */
+export function remapTabPanesUnder(source: FileSource, from: string, to: string): void {
+  for (const oldPath of collectAffectedPanePaths(source, from).keys()) {
+    useTabStore.getState().renameEditorPanes(source, oldPath, remappedPath(oldPath, from, to))
+  }
+}
+
+/**
+ * Recent-list half (T3.2): `renamePath` applies the same identity + prefix rules
+ * over the persisted entries. Unconditional and independent of what is open — a
+ * recent entry usually belongs to a file that is NOT open, and it used to be
+ * left dangling at the old path.
+ */
+export function remapRecentFilesUnder(source: FileSource, from: string, to: string): void {
+  useRecentFilesStore.getState().renamePath(source, from, to)
+}
+
+/**
+ * applyPathMutation — everything that has to follow a path when `from` becomes
+ * `to`, for a rename/move that has ALREADY happened at the backend layer.
+ *
+ * It performs NO backend mutation: the single `backend.rename` lives in the
+ * caller (`renameStorageEntry` / `moveStorageEntry`) and runs exactly once
+ * BEFORE this, so file and folder share one code path and there is no
+ * double-rename. Being the single orchestrator is also what makes Storage
+ * rename AND move, file and folder, all covered by one call site per entity.
+ *
+ * Ordering: the three entities live in three disjoint stores, but
+ * `remapTabPanesUnder` rewrites the pane `filePath`s that `collectAffectedPanePaths`
+ * keys on — so it must come last, or the buffer pass would find nothing to
+ * re-key.
+ */
+export function applyPathMutation(source: FileSource, from: string, to: string): void {
+  remapRecentFilesUnder(source, from, to)
+  remapEditorBuffersUnder(source, from, to)
+  remapTabPanesUnder(source, from, to)
 }
 
 /**
@@ -348,7 +383,7 @@ export type RenameOutcome =
  * `stat` pre-check aborts before any backend mutation if the destination
  * already exists (F4). The lone backend mutation is a single
  * `backend.rename` (recursive re-key of folder descendants, T1b-1), followed
- * by the pure `remapPanesUnder` re-point — so a folder rename moves every
+ * by the pure `applyPathMutation` re-point — so a folder rename moves every
  * descendant and re-points every open descendant pane in one shot.
  */
 export async function renameStorageEntry(
@@ -374,7 +409,7 @@ export async function renameStorageEntry(
   try {
     // The ONLY backend mutation for rename — exactly once, file and folder alike.
     await backend.rename(fromPath, targetPath)
-    remapPanesUnder({ type: 'inapp' }, fromPath, targetPath)
+    applyPathMutation({ type: 'inapp' }, fromPath, targetPath)
     return { ok: true }
   } catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) }
@@ -392,7 +427,7 @@ export type MoveOutcome =
  * the data layer behind drag-and-drop (T1b-6a; the DnD wiring is T1b-6b). It
  * shares the exact rename machinery: the destination is `targetDir/basename`,
  * and a successful move is one recursive `backend.rename` (folder descendants
- * re-keyed by T1b-1) followed by the pure `remapPanesUnder` re-point (T1b-4) —
+ * re-keyed by T1b-1) followed by the pure `applyPathMutation` re-point (T1b-4) —
  * so a folder move re-points every open descendant pane in one shot.
  *
  * Three branches diverge BEFORE any mutation, so `backend.rename` fires exactly
@@ -404,7 +439,7 @@ export type MoveOutcome =
  *     last guard stops a folder being moved inside itself (decision 6).
  *   - **collision** (`{kind:'exists'}`) when `stat(to)` resolves — a same-named
  *     entry already lives in the target dir; refused before mutation (F4).
- *   - otherwise the single `backend.rename(from, to)` + `remapPanesUnder`.
+ *   - otherwise the single `backend.rename(from, to)` + `applyPathMutation`.
  */
 export async function moveStorageEntry(
   from: string,
@@ -439,7 +474,7 @@ export async function moveStorageEntry(
   try {
     // The ONLY backend mutation for move — exactly once, file and folder alike.
     await backend.rename(from, to)
-    remapPanesUnder({ type: 'inapp' }, from, to)
+    applyPathMutation({ type: 'inapp' }, from, to)
     return { ok: true }
   } catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) }
