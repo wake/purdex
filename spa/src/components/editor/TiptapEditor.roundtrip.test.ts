@@ -6,9 +6,10 @@
 // against the real ProseMirror schema built from `tiptapExtensions`, which is
 // the only way to prove that table / task-list markdown actually survives parse.
 import { Editor } from '@tiptap/react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { tiptapExtensions } from './tiptapExtensions'
 import { normalizeSerializedMarkdown } from '../../lib/markdown/normalize-serialized'
+import { useEditorStore } from '../../stores/useEditorStore'
 
 function roundTrip(markdown: string): string {
   const editor = new Editor({
@@ -88,13 +89,27 @@ describe('TiptapEditor markdown round-trip (real editor)', () => {
   })
 
   // T2.4, measured against the real serializer rather than a fixture: the raw
-  // output loses CRLF, the trailing newline and gains a leading one, and
+  // output loses CRLF, the trailing newline and any leading blank lines, and
   // `normalizeSerializedMarkdown` is what makes the pair byte-identical again.
   describe('with T2.4 normalization applied', () => {
-    const shapeOf = (source: string) => ({
-      eol: source.includes('\r\n') ? 'crlf' as const : 'lf' as const,
-      trailingNewline: source.endsWith('\n'),
+    afterEach(() => {
+      useEditorStore.getState().clearAllBuffers()
     })
+
+    // The shape is not recomputed locally: it is read back off the buffer the
+    // store recorded at load time, which is the same value EditorPane hands the
+    // serializer. A drift between the two would show up here.
+    let nextKey = 0
+    const shapeOf = (source: string) => {
+      const key = `roundtrip-${nextKey++}`
+      useEditorStore.getState().openBuffer(key, source, { language: 'markdown' })
+      const buffer = useEditorStore.getState().buffers[key]
+      return {
+        eol: buffer.sourceEol,
+        trailingNewline: buffer.sourceTrailingNewline,
+        leadingBlankLines: buffer.sourceLeadingBlankLines,
+      }
+    }
 
     const normalizedRoundTrip = (source: string) =>
       normalizeSerializedMarkdown(roundTrip(source), shapeOf(source))
@@ -126,6 +141,35 @@ describe('TiptapEditor markdown round-trip (real editor)', () => {
       const source = '# Title\n\nbody'
 
       expect(normalizedRoundTrip(source)).toBe(source)
+    })
+
+    it('returns a file that opens with blank lines byte-for-byte', () => {
+      const source = '\n\n# Title\n\nbody\n'
+
+      // Measured here, not assumed: the round-trip swallows exactly ONE leading
+      // blank line and keeps the rest, so the count that comes out of the
+      // serializer says nothing about the count that went in. Only the shape
+      // recorded at load time can put the file back.
+      expect(roundTrip('\n# Title\n')).toBe('# Title')
+      expect(roundTrip(source)).not.toBe(source)
+      expect(normalizedRoundTrip(source)).toBe(source)
+    })
+
+    // The whole point of T2.4: merely opening a file in Live Mode must not mark
+    // it dirty. This walks the exact path EditorPane's onChange takes.
+    it('leaves a blank-line-first file undirty when Live Mode opens it untouched', () => {
+      const source = '\n\n# Title\n\nbody\n'
+      useEditorStore.getState().openBuffer('leading-blank', source, { language: 'markdown' })
+      const buffer = useEditorStore.getState().buffers['leading-blank']
+
+      useEditorStore.getState().updateContent('leading-blank', normalizeSerializedMarkdown(roundTrip(buffer.content), {
+        eol: buffer.sourceEol,
+        trailingNewline: buffer.sourceTrailingNewline,
+        leadingBlankLines: buffer.sourceLeadingBlankLines,
+      }))
+
+      expect(useEditorStore.getState().buffers['leading-blank'].content).toBe(source)
+      expect(useEditorStore.getState().buffers['leading-blank'].isDirty).toBe(false)
     })
   })
 })

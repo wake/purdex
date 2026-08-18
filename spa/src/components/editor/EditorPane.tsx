@@ -331,13 +331,14 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
               contentWidth={contentWidth}
               initialViewState={alignedPaneState?.tiptapViewState ?? null}
               // Spec 2.4: the serializer emits one canonical shape (LF, no
-              // trailing newline, a leading one before a table). Restoring the
-              // file's own shape HERE — before the store sees it — is what keeps
-              // a one-word edit from rewriting every line ending, and what lets
-              // `isDirty` compare like with like.
+              // trailing newline, no leading blank line — but one prepended
+              // before a table). Restoring the file's own shape HERE — before the
+              // store sees it — is what keeps a one-word edit from rewriting
+              // every line ending, and what lets `isDirty` compare like with like.
               onChange={(md) => useEditorStore.getState().updateContent(key, normalizeSerializedMarkdown(md, {
                 eol: buffer.sourceEol,
                 trailingNewline: buffer.sourceTrailingNewline,
+                leadingBlankLines: buffer.sourceLeadingBlankLines,
               }))}
               onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}
               onSave={handleSave}

@@ -16,15 +16,18 @@
 export interface SerializedSourceShape {
   eol: 'lf' | 'crlf'
   trailingNewline: boolean
+  /** Blank lines the file itself opened with — see `EditorBuffer.sourceLeadingBlankLines`. */
+  leadingBlankLines: number
 }
 
 /**
  * Pure: same input, same output, no reliance on the buffer or the editor.
  *
- * The leading newline is stripped unconditionally rather than compared against
- * the source, because Tiptap cannot represent a leading blank line in the first
- * place — the parser drops it — so one in the output is always an artifact of
- * serialization and never content the source contributed.
+ * The serializer's own leading newlines are discarded and replaced by whatever
+ * the file had, because they carry no information either way: Tiptap drops a
+ * leading blank line at parse time and prepends one in front of a leading table
+ * (measured in T2.2a). Only the recorded source shape knows the truth, so a file
+ * that opened with blank lines gets exactly those blank lines back.
  */
 export function normalizeSerializedMarkdown(serialized: string, source: SerializedSourceShape): string {
   // Work in LF space so the rules below never have to see a mixed document.
@@ -33,6 +36,7 @@ export function normalizeSerializedMarkdown(serialized: string, source: Serializ
     .replace(/^\n+/, '')
     .replace(/\n+$/, '')
 
-  const withTrailing = source.trailingNewline ? `${body}\n` : body
+  const withLeading = '\n'.repeat(source.leadingBlankLines) + body
+  const withTrailing = source.trailingNewline ? `${withLeading}\n` : withLeading
   return source.eol === 'crlf' ? withTrailing.replace(/\n/g, '\r\n') : withTrailing
 }

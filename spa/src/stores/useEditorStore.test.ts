@@ -344,4 +344,40 @@ describe('useEditorStore', () => {
       sourceTrailingNewline: true,
     })
   })
+
+  // Leading blank lines belong to the same family: Tiptap drops them at parse
+  // time, so the only place they can survive is the buffer.
+
+  it('records how many blank lines the file opened with', () => {
+    useEditorStore.getState().openBuffer('none', '# Title\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('one', '\n# Title\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('three', '\n\n\n# Title\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('crlf', '\r\n\r\n# Title\r\n', { language: 'markdown' })
+
+    expect(useEditorStore.getState().buffers['none'].sourceLeadingBlankLines).toBe(0)
+    expect(useEditorStore.getState().buffers['one'].sourceLeadingBlankLines).toBe(1)
+    expect(useEditorStore.getState().buffers['three'].sourceLeadingBlankLines).toBe(3)
+    expect(useEditorStore.getState().buffers['crlf'].sourceLeadingBlankLines).toBe(2)
+  })
+
+  // A file of nothing but newlines has no "leading" blank lines to speak of —
+  // counting them would double up against `sourceTrailingNewline`.
+  it('reports no leading blank lines for a file that is only newlines', () => {
+    useEditorStore.getState().openBuffer('blank', '\n\n\n', { language: 'markdown' })
+    expect(useEditorStore.getState().buffers['blank'].sourceLeadingBlankLines).toBe(0)
+  })
+
+  it('leaves the leading blank line count alone while the content changes', () => {
+    useEditorStore.getState().openBuffer('key1', '\n\n# Title\n', { language: 'markdown' })
+    useEditorStore.getState().updateContent('key1', '# Title changed')
+
+    expect(useEditorStore.getState().buffers['key1'].sourceLeadingBlankLines).toBe(2)
+  })
+
+  it('re-derives the leading blank line count when the file is reloaded', () => {
+    useEditorStore.getState().openBuffer('key1', '\n\n# Title\n', { language: 'markdown' })
+    useEditorStore.getState().reloadBuffer('key1', '# Title\n')
+
+    expect(useEditorStore.getState().buffers['key1'].sourceLeadingBlankLines).toBe(0)
+  })
 })

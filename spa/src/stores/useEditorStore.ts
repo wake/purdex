@@ -25,13 +25,22 @@ export interface EditorBuffer extends EditorBufferMetadata {
   // Spec 2.4 — the shape of the file AS LOADED, so Live Mode can serialize back
   // into it. Deliberately not part of `EditorBufferMetadata`: `eol` there is
   // recomputed from the current draft on every `updateContent`, which is exactly
-  // why it cannot answer "what did the file look like?". These two are written
-  // only by `openBuffer` / `reloadBuffer` and are immutable for the rest of the
+  // why it cannot answer "what did the file look like?". These are written only
+  // by `openBuffer` / `reloadBuffer` and are immutable for the rest of the
   // buffer's life; keeping them out of the metadata type is also what stops a
   // future metadata caller from merging over them.
   sourceEol: EditorEol
   sourceTrailingNewline: boolean
+  /**
+   * Blank lines at the very start of the file. Tiptap drops them at parse time
+   * and can never serialize them back, so without this record a file that opens
+   * with a blank line cannot round-trip losslessly.
+   */
+  sourceLeadingBlankLines: number
 }
+
+/** The load-time half of `EditorBuffer`, as one movable unit. */
+type SourceShape = Pick<EditorBuffer, 'sourceEol' | 'sourceTrailingNewline' | 'sourceLeadingBlankLines'>
 
 export interface TiptapViewState {
   scrollTop: number
@@ -94,14 +103,26 @@ function detectEol(content: string): EditorEol {
 }
 
 /**
+ * Blank lines before the first line with any content. A file made of nothing but
+ * newlines has none by definition: counting them there would double up against
+ * `sourceTrailingNewline`, which already accounts for that same text.
+ */
+function countLeadingBlankLines(content: string): number {
+  const leading = /^(?:\r?\n)*/.exec(content)?.[0] ?? ''
+  if (leading.length === content.length) return 0
+  return (leading.match(/\n/g) ?? []).length
+}
+
+/**
  * The immutable-after-load half of the buffer (spec 2.4). Derived from the bytes
  * as loaded, never from the metadata override — a caller may declare `eol` for
  * the status bar, but the file's own shape is not up for negotiation.
  */
-function detectSourceShape(content: string): { sourceEol: EditorEol; sourceTrailingNewline: boolean } {
+function detectSourceShape(content: string): SourceShape {
   return {
     sourceEol: detectEol(content),
     sourceTrailingNewline: content.endsWith('\n'),
+    sourceLeadingBlankLines: countLeadingBlankLines(content),
   }
 }
 

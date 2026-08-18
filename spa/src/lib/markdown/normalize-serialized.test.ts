@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeSerializedMarkdown } from './normalize-serialized'
 
-const LF = { eol: 'lf', trailingNewline: false } as const
-const LF_NL = { eol: 'lf', trailingNewline: true } as const
-const CRLF = { eol: 'crlf', trailingNewline: false } as const
-const CRLF_NL = { eol: 'crlf', trailingNewline: true } as const
+const LF = { eol: 'lf', trailingNewline: false, leadingBlankLines: 0 } as const
+const LF_NL = { eol: 'lf', trailingNewline: true, leadingBlankLines: 0 } as const
+const CRLF = { eol: 'crlf', trailingNewline: false, leadingBlankLines: 0 } as const
+const CRLF_NL = { eol: 'crlf', trailingNewline: true, leadingBlankLines: 0 } as const
 
 describe('normalizeSerializedMarkdown', () => {
   it('leaves an LF document that already matches its source untouched', () => {
@@ -39,14 +39,40 @@ describe('normalizeSerializedMarkdown', () => {
   })
 
   // Measured in T2.2a: a document that starts with a table serializes as
-  // "\n| Name | …". Tiptap cannot represent a leading blank line in the first
-  // place (the parser drops it), so a leading newline in the output is always a
-  // serializer artifact and never something the source contributed.
+  // "\n| Name | …" even though its source had no blank first line. The leading
+  // newlines the serializer emits carry no information — what the file had is
+  // recorded on the buffer instead, and restored below.
   it('strips the leading newline the table serializer prepends', () => {
     expect(normalizeSerializedMarkdown('\n| a | b |\n| --- | --- |\n| 1 | 2 |', LF))
       .toBe('| a | b |\n| --- | --- |\n| 1 | 2 |')
     expect(normalizeSerializedMarkdown('\n\n# Title', LF)).toBe('# Title')
     expect(normalizeSerializedMarkdown('\r\n| a |', CRLF)).toBe('| a |')
+  })
+
+  // Tiptap drops a leading blank line at parse time, so the serializer can never
+  // reproduce one. That is a fact about the editor, not about the file: a source
+  // that opened with blank lines still has them, and dropping them would make
+  // such a file impossible to round-trip losslessly.
+  describe('leading blank lines the source actually had', () => {
+    const lead = (count: number) => ({ eol: 'lf', trailingNewline: false, leadingBlankLines: count } as const)
+
+    it('restores a single leading blank line', () => {
+      expect(normalizeSerializedMarkdown('# Title\n\nbody', lead(1))).toBe('\n# Title\n\nbody')
+    })
+
+    it('restores exactly as many as the source had', () => {
+      expect(normalizeSerializedMarkdown('# Title', lead(3))).toBe('\n\n\n# Title')
+    })
+
+    it('never doubles up with the newlines the serializer emitted', () => {
+      expect(normalizeSerializedMarkdown('\n\n# Title', lead(1))).toBe('\n# Title')
+      expect(normalizeSerializedMarkdown('\n| a |', lead(2))).toBe('\n\n| a |')
+    })
+
+    it('re-encodes the restored blank lines for a CRLF source', () => {
+      expect(normalizeSerializedMarkdown('body', { eol: 'crlf', trailingNewline: true, leadingBlankLines: 2 }))
+        .toBe('\r\n\r\nbody\r\n')
+    })
   })
 
   it('keeps a document that is only whitespace from collapsing into a stray newline', () => {

@@ -732,6 +732,7 @@ describe('StoragePane', () => {
             encoding: 'utf8',
             sourceEol: 'lf',
             sourceTrailingNewline: false,
+            sourceLeadingBlankLines: 0,
           },
         },
         paneStates: {},
@@ -796,6 +797,7 @@ describe('StoragePane', () => {
           encoding: 'utf8',
           sourceEol: 'lf',
           sourceTrailingNewline: false,
+          sourceLeadingBlankLines: 0,
         },
       },
       paneStates: {
@@ -867,6 +869,7 @@ describe('StoragePane', () => {
           encoding: 'utf8',
           sourceEol: 'lf',
           sourceTrailingNewline: false,
+          sourceLeadingBlankLines: 0,
         },
       },
       paneStates: {
@@ -924,6 +927,7 @@ describe('StoragePane', () => {
           encoding: 'utf8',
           sourceEol: 'lf',
           sourceTrailingNewline: false,
+          sourceLeadingBlankLines: 0,
         },
       },
       paneStates: {
@@ -977,6 +981,7 @@ describe('StoragePane', () => {
           encoding: 'utf8',
           sourceEol: 'lf',
           sourceTrailingNewline: false,
+          sourceLeadingBlankLines: 0,
         },
       },
       paneStates: {
