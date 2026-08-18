@@ -126,6 +126,22 @@ describe('TiptapEditor markdown round-trip (real editor)', () => {
       expect(output).toContain('![alt](a.png)')
     })
 
+    // Evidence for the `bracketed-url` gate blocker, and specifically for its
+    // reference-style half. Serialization writes every destination inline and
+    // unbracketed, so a definition that relied on angle brackets to carry a
+    // space comes back as a URL that is no longer a link or an image to a
+    // CommonMark renderer — even though the reference token's own source text
+    // (`![alt][img]`) contains neither brackets nor a space for a source-shape
+    // rule to notice.
+    it('breaks a reference-style destination whose definition needed angle brackets', () => {
+      expect(roundTrip('![alt][img]\n\n[img]: <a b.png>')).toBe('![alt](a b.png)')
+      expect(roundTrip('[text][ref]\n\n[ref]: <a b.html>')).toBe('[text](a b.html)')
+    })
+
+    it('inlines a reference-style destination without a space losslessly', () => {
+      expect(roundTrip('![alt][img]\n\n[img]: a.png')).toBe('![alt](a.png)')
+    })
+
     it('leaves a document full of images at a fixed point', () => {
       const source = '# Doc\n\n![one](a.png)\n\nText ![two](b.png "t") text.\n\n- ![three](c.png)'
 

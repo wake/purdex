@@ -176,11 +176,18 @@ Measured with `@tiptap/extension-image@3.22.3` added to the extension array, rea
 | `[text ![a](a.png)](u)` | `[text ](u)![a](a.png)[` — **broken output** |
 | `**![alt](a.png)**`, `*…*`, `~~…~~` | the mark is dropped |
 | `![alt](<a b.png>)` | `![alt](a b.png)` — **no longer an image** to a CommonMark renderer |
+| `![alt][img]` + `[img]: <a b.png>` | `![alt](a b.png)` — **the same corruption from a reference-style source** |
+| `[text][ref]` + `[ref]: <a b.html>` | `[text](a b.html)` — **same, for links** |
 | `![alt](<a.png>)` | `![alt](a.png)` — brackets dropped, but nothing changes without a space |
+| `![alt](a%20b.png)` | identical — an encoded space is not whitespace and needs no brackets |
 
 The two failing families become blockers rather than silent rewrites:
 - **`image-in-mark`** — Tiptap models link / strong / em / del as ProseMirror *marks*, and a mark cannot wrap a node, so an image under one loses it.
-- **`bracketed-url`** — an angle-bracketed destination whose URL contains a space. Links share the defect (`[text](<a b.html>)` → `[text](a b.html)`), so the rule covers both; a bracketed URL without a space is not blocked, because unwrapping it changes nothing.
+- **`bracketed-url`** — a link or image destination that contains whitespace, i.e. one that only stays valid because it is angle-bracketed. The round trip writes every destination inline and unbracketed, so the whitespace ends up naked in the URL and the construct stops being a link or an image at all.
+
+  **The test is on the destination `marked` resolved, not on the shape of the source text** (corrected after review measured the hole). A reference-style construct keeps its destination in the definition, so `![alt][img]` + `[img]: <a b.png>` has `image.raw === '![alt][img]'` — no parentheses, no brackets, no space — and a rule matching `](<… …>)` in `raw` lets it through, while the real editor still writes `![alt](a b.png)`. Reading `href` (falling back to `src`) covers the inline and reference forms with one rule, because both serialize to the identical inline destination. Links share the defect and the rule (`[text][ref]` + `[ref]: <a b.html>` → `[text](a b.html)`).
+
+  Not blocked: a bracketed destination without whitespace (unwrapping it changes nothing), and a percent-encoded space such as `a%20b.png` (not whitespace, and valid without brackets).
 
 Task items render as real checkboxes and round-trip as `- [ ]` / `- [x]`.
 

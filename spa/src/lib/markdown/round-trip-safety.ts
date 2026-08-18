@@ -161,13 +161,24 @@ function hasFootnote(md: string): boolean {
 const MARK_TOKENS = new Set(['link', 'strong', 'em', 'del'])
 
 /**
- * An angle-bracketed destination whose URL contains a space, e.g.
- * `![alt](<a b.png>)`. The round-trip drops the brackets and writes
- * `![alt](a b.png)`, which is not an image at all to a CommonMark renderer.
- * Without a space the brackets are pure decoration and dropping them is safe,
- * which is why the space is part of the pattern.
+ * A destination that only survives because it is wrapped in angle brackets: one
+ * containing whitespace. The round-trip writes every destination inline and
+ * unbracketed, so `![alt](<a b.png>)` comes back as `![alt](a b.png)`, which is
+ * not an image at all to a CommonMark renderer (measured).
+ *
+ * The test is on the destination marked RESOLVED, not on the shape of the source
+ * text, because the same broken output has two sources. A reference-style image
+ * carries its destination in the definition — `![alt][img]` + `[img]: <a b.png>`
+ * — so the token's `raw` is just `![alt][img]`: no parentheses, no brackets, no
+ * space for a source-shape rule to see. Both forms serialize to the identical
+ * inline destination, so testing the destination covers both at once.
+ *
+ * Whitespace, not brackets, is the defect: a bracketed URL without one loses
+ * only decoration (`![alt](<a.png>)` → `![alt](a.png)`, a decision-3 style
+ * rewrite), and a percent-encoded space (`a%20b.png`) is not whitespace and
+ * stays valid.
  */
-const BRACKETED_URL_WITH_SPACE = /\]\(\s*<[^<>]*\s[^<>]*>/
+const WHITESPACE = /\s/
 
 /**
  * An HTML entity reference: numeric (`&#169;`, `&#x41;`) or named (`&copy;`).
@@ -197,6 +208,8 @@ function hasCorruptingEntity(raw: string): boolean {
 interface TokenLike {
   type?: string
   raw?: unknown
+  href?: unknown
+  src?: unknown
   tokens?: unknown
   items?: unknown
   header?: unknown
@@ -209,6 +222,18 @@ function isTokenLike(value: unknown): value is TokenLike {
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
+}
+
+/**
+ * The destination marked resolved for a link or an image, whatever the source
+ * form was: `href` is what the lexer fills in for both inline and reference
+ * styles, and `src` is accepted as well so a differently-named field never
+ * silently reads as "no destination" and passes the gate.
+ */
+function destinationOf(node: TokenLike): string {
+  if (typeof node.href === 'string') return node.href
+  if (typeof node.src === 'string') return node.src
+  return ''
 }
 
 /**
@@ -237,7 +262,7 @@ function walk(nodes: unknown[], add: (blocker: string) => void, withinMark = fal
     }
 
     if (type === 'image' && withinMark) add('image-in-mark')
-    if ((type === 'image' || type === 'link') && typeof node.raw === 'string' && BRACKETED_URL_WITH_SPACE.test(node.raw)) {
+    if ((type === 'image' || type === 'link') && WHITESPACE.test(destinationOf(node))) {
       add('bracketed-url')
     }
 

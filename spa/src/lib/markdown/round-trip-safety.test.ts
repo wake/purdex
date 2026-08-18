@@ -174,9 +174,12 @@ describe('assessMarkdownRoundTrip — front matter detection', () => {
  *   `[![Build](b.svg)](https://ci)` came back as `![Build](b.svg)` (the badge
  *   loses its link), and `[text ![a](a.png)](u)` came back as the broken
  *   `[text ](u)![a](a.png)[`.
- * - an angle-bracketed destination whose URL contains a space: the brackets are
- *   dropped, so `![alt](<a b.png>)` becomes `![alt](a b.png)`, which is not an
- *   image at all to a CommonMark renderer. Links share the defect and the rule.
+ * - a destination whose URL contains a space: the round trip writes every
+ *   destination inline and unbracketed, so `![alt](<a b.png>)` becomes
+ *   `![alt](a b.png)`, which is not an image at all to a CommonMark renderer.
+ *   Links share the defect and the rule, and so does the reference-style form —
+ *   `![alt][img]` + `[img]: <a b.png>` is inlined to the same broken output even
+ *   though its own source text contains no parentheses at all.
  */
 describe('assessMarkdownRoundTrip — image forms', () => {
   const safe: Array<[string, string]> = [
@@ -188,6 +191,11 @@ describe('assessMarkdownRoundTrip — image forms', () => {
     ['an image inside a table cell', '| a | b |\n| --- | --- |\n| ![alt](a.png) | 2 |\n'],
     // No space in the destination, so unwrapping the brackets changes nothing.
     ['a bracketed destination with no space', '![alt](<a.png>)\n'],
+    // The space is already percent-encoded, so the inlined URL stays valid.
+    ['a percent-encoded space in the destination', '![alt](a%20b.png)\n'],
+    ['a reference-style image whose definition has no space', '![alt][img]\n\n[img]: a.png\n'],
+    ['a reference-style link whose definition has no space', '[text][ref]\n\n[ref]: a.html\n'],
+    ['a reference-style image with a bracketed definition and no space', '![alt][img]\n\n[img]: <a.png>\n'],
     ['a plain link next to a plain image', '[link](https://example.com) ![alt](a.png)\n'],
     ['emphasis that contains no image', '**bold** and *em* and ~~del~~\n'],
   ]
@@ -211,9 +219,17 @@ describe('assessMarkdownRoundTrip — image forms', () => {
     expect(verdict.blockers).toContain('image-in-mark')
   })
 
+  // The detector reads the destination marked resolved, not the shape of the
+  // source text: a reference-style token's `raw` is only `![alt][img]`, so a
+  // rule written against `raw` sees no brackets and no space and lets the file
+  // into Live Mode, where it is inlined to the same broken `![alt](a b.png)`.
   const bracketed: Array<[string, string]> = [
     ['an image whose bracketed URL has a space', '![alt](<a b.png>)\n'],
     ['a link whose bracketed URL has a space', '[text](<a b.html>)\n'],
+    ['a reference-style image whose definition has a space', '![alt][img]\n\n[img]: <a b.png>\n'],
+    ['a reference-style link whose definition has a space', '[text][ref]\n\n[ref]: <a b.html>\n'],
+    ['a collapsed reference whose definition has a space', '![img][]\n\n[img]: <a b.png>\n'],
+    ['a shortcut reference whose definition has a space', '[ref]\n\n[ref]: <a b.html>\n'],
   ]
 
   it.each(bracketed)('%s is unsafe', (_label, md) => {
