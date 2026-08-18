@@ -222,3 +222,63 @@ describe('assessMarkdownRoundTrip — image forms', () => {
     expect(verdict.blockers).toContain('bracketed-url')
   })
 })
+
+/**
+ * Tiptap has no node for an HTML entity: marked leaves the reference as literal
+ * text and the serializer then escapes its ampersand, so `&#169;` comes back as
+ * `&amp;#169;` — content that RENDERED as `©` becomes the literal string
+ * `&#169;`. That is semantic corruption, not a style rewrite, so such documents
+ * open raw.
+ *
+ * The exempt set is exactly `&amp;` / `&lt;` / `&gt;`, measured to come back
+ * byte-identical because they are the escapes the serializer itself emits. That
+ * is not a convenience: the serializer turns a bare `A & B` into `A &amp; B`, so
+ * blocking `&amp;` would mean any file saved from Live Mode locks itself out of
+ * Live Mode on the next open.
+ */
+describe('assessMarkdownRoundTrip — HTML entities', () => {
+  const unsafe: Array<[string, string]> = [
+    ['a decimal numeric entity', 'Copyright &#169; 2026\n'],
+    ['a hexadecimal numeric entity', 'The letter &#x41;\n'],
+    ['a named entity', 'Copyright &copy; 2026\n'],
+    ['a non-breaking space', 'a&nbsp;b\n'],
+    ['a quote entity', '&quot;quoted&quot;\n'],
+    // Decimal for `&` itself: marked does not decode it, so it corrupts like any
+    // other numeric reference despite naming a character the serializer emits.
+    ['the decimal form of an ampersand', '&#38;\n'],
+    ['an entity in a heading', '# &copy;\n'],
+    ['an entity in a list item', '- &copy;\n'],
+    ['an entity in a blockquote', '> &copy;\n'],
+    ['an entity in a table cell', '| &copy; | b |\n| --- | --- |\n| 1 | 2 |\n'],
+    ['an entity in link text', '[&copy;](https://example.com)\n'],
+    ['an entity in image alt text', '![&copy;](a.png)\n'],
+  ]
+
+  it.each(unsafe)('%s is unsafe', (_label, md) => {
+    const verdict = assessMarkdownRoundTrip(md)
+    expect(verdict.safe).toBe(false)
+    expect(verdict.blockers).toContain('html-entity')
+  })
+
+  const safe: Array<[string, string]> = [
+    // A bare ampersand is not an entity reference. It is rewritten to `&amp;`,
+    // which renders identically — a style-level change under decision 3.
+    ['a bare ampersand between words', 'A & B\n'],
+    ['a bare ampersand inside a word', 'Q&A and R&D\n'],
+    ['an ampersand in a URL', 'See https://example.com/?a=1&b=2 for more.\n'],
+    ['a semicolon that follows no reference', 'a & b; c\n'],
+    ['the escapes the serializer itself emits', 'a &amp; b &lt; c &gt; d\n'],
+    ['escaped markup', '&lt;div class="x"&gt;\n'],
+    // Inside code the entity is literal text on both sides of the round trip,
+    // and a document explaining HTML entities is exactly the document that would
+    // be locked out of Live Mode by a naive text scan.
+    ['an entity inside a code span', 'Write `&copy;` for a copyright sign.\n'],
+    ['an entity inside a fenced code block', '```html\n&copy; &#169;\n```\n'],
+    ['an entity inside an indented code block', 'para\n\n    &copy; &#169;\n'],
+    ['an entity inside a code span in a list item', '- write `&copy;` here\n'],
+  ]
+
+  it.each(safe)('%s is safe', (_label, md) => {
+    expect(assessMarkdownRoundTrip(md)).toEqual({ safe: true, blockers: [] })
+  })
+})

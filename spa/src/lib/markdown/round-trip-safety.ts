@@ -157,6 +157,30 @@ const MARK_TOKENS = new Set(['link', 'strong', 'em', 'del'])
  */
 const BRACKETED_URL_WITH_SPACE = /\]\(\s*<[^<>]*\s[^<>]*>/
 
+/**
+ * An HTML entity reference: numeric (`&#169;`, `&#x41;`) or named (`&copy;`).
+ * A bare `&` — `A & B`, `Q&A`, a query string — deliberately does not match.
+ */
+const HTML_ENTITY = /&(?:#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g
+
+/**
+ * The only references that survive: they are the escapes the serializer emits
+ * itself, so they come back byte-identical (measured). Exempting them is what
+ * keeps the gate from eating its own output — a bare `A & B` is written back as
+ * `A &amp; B`, and blocking `&amp;` would lock every file Live Mode has ever
+ * saved out of Live Mode. Everything else is left as literal text by marked and
+ * then has its ampersand escaped, so `&#169;` becomes `&amp;#169;` and a
+ * rendered `©` turns into the visible string `&#169;`.
+ */
+const SERIALIZER_EMITTED_ENTITIES = new Set(['&amp;', '&lt;', '&gt;'])
+
+function hasCorruptingEntity(raw: string): boolean {
+  for (const match of raw.matchAll(HTML_ENTITY)) {
+    if (!SERIALIZER_EMITTED_ENTITIES.has(match[0])) return true
+  }
+  return false
+}
+
 /** Shape of the token children marked produces; deliberately structural. */
 interface TokenLike {
   type?: string
@@ -190,13 +214,23 @@ function walk(nodes: unknown[], add: (blocker: string) => void, withinMark = fal
     const type = typeof node.type === 'string' ? node.type : ''
     if (!WHITELIST.has(type)) add(type || 'unknown')
 
+    // Only a LEAF text token: `code` and `codespan` never reach here, so an
+    // entity written inside code — the one place it is literal text on both
+    // sides of the round trip — is not mistaken for a broken one. A `text` token
+    // that has children (marked wraps a list item's inline content in one)
+    // spans those code tokens in its `raw`, so it is left to its children.
+    const children = asArray(node.tokens)
+    if (type === 'text' && children.length === 0 && typeof node.raw === 'string' && hasCorruptingEntity(node.raw)) {
+      add('html-entity')
+    }
+
     if (type === 'image' && withinMark) add('image-in-mark')
     if ((type === 'image' || type === 'link') && typeof node.raw === 'string' && BRACKETED_URL_WITH_SPACE.test(node.raw)) {
       add('bracketed-url')
     }
 
     const childWithinMark = withinMark || MARK_TOKENS.has(type)
-    walk(asArray(node.tokens), add, childWithinMark)
+    walk(children, add, childWithinMark)
     walk(asArray(node.items), add, childWithinMark)
     for (const cell of asArray(node.header)) {
       if (isTokenLike(cell)) walk(asArray(cell.tokens), add, childWithinMark)

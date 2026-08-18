@@ -581,6 +581,7 @@
   "editor.live_mode.blocker.footnote": "含有註腳",
   "editor.live_mode.blocker.image-in-mark": "含有位於連結或強調樣式內的圖片",
   "editor.live_mode.blocker.bracketed-url": "含有以角括號包住且帶空白的網址",
+  "editor.live_mode.blocker.html-entity": "含有 HTML 實體字元",
   "editor.live_mode.blocker.unknown": "含有 Live Mode 無法保留的語法（{{blocker}}）",
   "editor.save.saved": "已儲存 {{name}}",
   "editor.save.unchanged": "沒有需要儲存的變更",

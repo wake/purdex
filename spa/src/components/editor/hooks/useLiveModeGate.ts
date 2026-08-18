@@ -9,7 +9,14 @@ import { useMemo } from 'react'
 import { assessMarkdownRoundTrip } from '../../../lib/markdown/round-trip-safety'
 
 /** Blocker keys the UI has its own copy for; everything else uses the fallback. */
-const NAMED_BLOCKERS = new Set(['html', 'frontmatter', 'footnote', 'image-in-mark', 'bracketed-url'])
+const NAMED_BLOCKERS = new Set([
+  'html',
+  'frontmatter',
+  'footnote',
+  'image-in-mark',
+  'bracketed-url',
+  'html-entity',
+])
 
 /**
  * `assessMarkdownRoundTrip` is default-deny: an unrecognised token contributes

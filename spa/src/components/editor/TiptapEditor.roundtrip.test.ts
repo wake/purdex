@@ -134,6 +134,32 @@ describe('TiptapEditor markdown round-trip (real editor)', () => {
     })
   })
 
+  // The evidence behind the `html-entity` gate blocker. Measured, not assumed:
+  // the round trip escapes the ampersand of a reference it cannot model, which
+  // turns rendered content into literal text.
+  describe('HTML entities', () => {
+    it('turns a rendered entity into literal text', () => {
+      expect(roundTrip('Copyright &#169; 2026')).toBe('Copyright &amp;#169; 2026')
+      expect(roundTrip('The letter &#x41;')).toBe('The letter &amp;#x41;')
+      expect(roundTrip('Copyright &copy; 2026')).toBe('Copyright &amp;copy; 2026')
+    })
+
+    it('returns the escapes it emits itself byte-for-byte', () => {
+      // This is why `&amp;` / `&lt;` / `&gt;` are exempt from the blocker rather
+      // than swept up with the rest: the serializer writes a bare `A & B` as
+      // `A &amp; B`, so blocking them would make every file Live Mode saves
+      // ineligible for Live Mode the next time it is opened.
+      expect(roundTrip('A & B')).toBe('A &amp; B')
+      expect(roundTrip('A &amp; B')).toBe('A &amp; B')
+      expect(roundTrip('a &lt; b &gt; c')).toBe('a &lt; b &gt; c')
+    })
+
+    it('leaves an entity inside code untouched', () => {
+      expect(roundTrip('Write `&copy;` here.')).toBe('Write `&copy;` here.')
+      expect(roundTrip('```html\n&copy;\n```')).toBe('```html\n&copy;\n```')
+    })
+  })
+
   it('round-trips plain prose identically (no regression from the added extensions)', () => {
     const source = '# Title\n\nSome **bold** prose with a [link](https://example.com).\n\n- one\n- two'
 
