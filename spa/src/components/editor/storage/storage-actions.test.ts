@@ -16,6 +16,7 @@ import { triggerDownload } from '../../../lib/download-file'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+import { makeEditorBuffer, makeEditorPaneState } from '../../../stores/__tests__/editor-buffer-fixture'
 import type { RecentFileEntry } from '../../../stores/useRecentFilesStore'
 import type { Tab } from '../../../types/tab'
 import type { FileSource } from '../../../types/fs'
@@ -138,30 +139,10 @@ function makePreviewTab(
 function seedBuffer(filePath: string, paneId: string, languageSource: 'extension' | 'manual' = 'extension', language = 'markdown') {
   useEditorStore.setState({
     buffers: {
-      [`inapp:${filePath}`]: {
-        content: 'X',
-        savedContent: 'X',
-        isDirty: false,
-        lastStat: null,
-        modelId: 'm1',
-        language,
-        languageSource,
-        eol: 'lf',
-        encoding: 'utf8',
-        sourceEol: 'lf',
-        sourceTrailingNewline: false,
-        sourceLeadingBlankLines: 0,
-      },
+      [`inapp:${filePath}`]: makeEditorBuffer({ language, languageSource }),
     },
     paneStates: {
-      [paneId]: {
-        bufferKey: `inapp:${filePath}`,
-        editorMode: 'raw',
-        showDiff: false,
-        cursorPosition: { line: 1, column: 1 },
-        monacoViewState: null,
-        tiptapViewState: null,
-      },
+      [paneId]: makeEditorPaneState(`inapp:${filePath}`),
     },
   })
 }
