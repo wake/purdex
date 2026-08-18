@@ -1841,6 +1841,46 @@ describe('EditorPane — save result toast (T3.3)', () => {
     expect(useEditorStore.getState().buffers[key]).toMatchObject({ isDirty: true })
   })
 
+  // The untitled branch had its own silent `return` for a missing backend, so
+  // T3.3-4b's guarantee stopped at the door of the one flow where the file does
+  // not exist yet — the user sees the popover close and assumes it was written.
+  it('T3.3-4c: an untitled save with no resolvable backend reports a failure instead of doing nothing', async () => {
+    const untitled = { name: 'notes.txt', suggestedExtension: '.txt' as const, hasBeenRenamed: true }
+    const content = {
+      kind: 'editor' as const,
+      source: { type: 'inapp' as const },
+      filePath: 'untitled:notes.txt',
+      untitled,
+    }
+    const pane: Pane = { id: 'pane-untitled-no-backend', content }
+    useEditorStore.getState().openBuffer(getBufferKey('untitled:notes.txt'), 'hello', {
+      language: 'plaintext',
+      languageSource: 'extension',
+      untitled,
+    })
+    const markSaved = vi.spyOn(useEditorStore.getState(), 'markSaved')
+    getFsBackendMock.mockReturnValue(null)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe(
+        'Save failed: No FS backend is available for this file.',
+      )
+    })
+    expect(markSaved).not.toHaveBeenCalled()
+    // Still an unsaved untitled buffer under its original key — nothing renamed,
+    // nothing marked clean.
+    expect(useEditorStore.getState().buffers[getBufferKey('untitled:notes.txt')]).toMatchObject({
+      untitled: { name: 'notes.txt' },
+      lastStat: null,
+    })
+    expect(useEditorStore.getState().buffers[getBufferKey('/buffer/notes.txt')]).toBeUndefined()
+    markSaved.mockRestore()
+  })
+
   it('T3.3-5: opening the untitled rename popover is not a save outcome — no toast', async () => {
     const pane = createUntitledPane('Untitled', '.md', 'pane-toast-untitled')
     const backend = createBackend()

@@ -312,7 +312,16 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   const saveUntitledBuffer = useCallback(async (name: string) => {
     const buf = useEditorStore.getState().buffers[key]
     const backend = getFsBackend(source)
-    if (!buf || !backend || !untitled) return
+    // No buffer / not an untitled pane are preconditions, not outcomes: there is
+    // no document to report on.
+    if (!buf || !untitled) return
+    // A missing backend IS an outcome, and the same one T3.3-4b reports on the
+    // ordinary save path. Returning silently here left the user believing the
+    // first save of a new document had landed when nothing was written at all.
+    if (!backend) {
+      showSaveToast('editor.save.failed', { reason: t('editor.load_error.no_backend') })
+      return
+    }
 
     const trimmedName = name.trim()
     if (isInvalidRename(trimmedName)) {
@@ -348,7 +357,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
     } catch (err) {
       showSaveToast('editor.save.failed', { reason: saveErrorReason(err) })
     }
-  }, [filePath, key, paneId, showSaveToast, source, untitled])
+  }, [filePath, key, paneId, showSaveToast, source, t, untitled])
 
   const handleSave = useCallback(async (anchorRect?: DOMRect) => {
     const buf = useEditorStore.getState().buffers[key]
