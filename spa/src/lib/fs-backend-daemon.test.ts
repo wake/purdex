@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { DaemonBackend } from './fs-backend-daemon'
+import { DaemonBackend, createDaemonBackendForHost } from './fs-backend-daemon'
+import { useHostStore } from '../stores/useHostStore'
 
 describe('DaemonBackend', () => {
   let backend: DaemonBackend
@@ -170,5 +171,62 @@ describe('DaemonBackend', () => {
       text: () => Promise.resolve('not found'),
     })
     await expect(backend.stat('/nope')).rejects.toMatchObject({ status: 404 })
+  })
+})
+
+describe('createDaemonBackendForHost', () => {
+  const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, order: 0 },
+      },
+      hostOrder: ['hostA'],
+      activeHostId: 'hostA',
+    })
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    useHostStore.getState().reset()
+  })
+
+  it('addresses its own host', async () => {
+    testGlobal.fetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ size: 0 }) })
+
+    await createDaemonBackendForHost('hostA').stat('/p/a.md')
+
+    expect(testGlobal.fetch.mock.calls[0][0]).toBe('http://10.0.0.1:7860/api/fs/stat')
+  })
+
+  it('rejects instead of falling back to the active host once its host is gone', async () => {
+    // `getDaemonBase` answers an unknown host with the ACTIVE host's base, so a
+    // backend bound to a removed host used to read — and write — the same path
+    // on a different machine, letting hostA vouch for hostB's paths.
+    const backend = createDaemonBackendForHost('hostB')
+
+    expect(backend.available()).toBe(false)
+    await expect(backend.stat('/p/a.md')).rejects.toThrow(/hostB/)
+    await expect(backend.read('/p/a.md')).rejects.toThrow(/hostB/)
+    await expect(backend.write('/p/a.md', new Uint8Array())).rejects.toThrow(/hostB/)
+    await expect(backend.list('/p')).rejects.toThrow(/hostB/)
+    await expect(backend.mkdir('/p/dir')).rejects.toThrow(/hostB/)
+    await expect(backend.delete('/p/a.md')).rejects.toThrow(/hostB/)
+    await expect(backend.rename('/p/a.md', '/p/b.md')).rejects.toThrow(/hostB/)
+    expect(testGlobal.fetch).not.toHaveBeenCalled()
+  })
+
+  it('rejects (never throws synchronously) so existing async call sites still catch it', () => {
+    const result = createDaemonBackendForHost('hostB').stat('/p/a.md')
+    expect(result).toBeInstanceOf(Promise)
+    return expect(result).rejects.toThrow()
+  })
+
+  it('is not classified as "file not found" — a gone host must surface as itself', async () => {
+    const error = await createDaemonBackendForHost('hostB').stat('/p/a.md').catch((e: unknown) => e)
+    expect((error as { code?: string; status?: number }).code).toBeUndefined()
+    expect((error as { code?: string; status?: number }).status).toBeUndefined()
   })
 })

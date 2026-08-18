@@ -82,25 +82,39 @@ export class DaemonBackend implements FsBackend {
  * file-open pipeline (P5) needs the opposite guarantee: once `tryOpenFile`
  * captures `ctx.hostId`, every subsequent `stat` along that flow MUST stay
  * on that host even if the user switches active host mid-flight (Deviation 2
- * + attack-critical C5). Each `getDaemon()` call still re-reads
+ * + attack-critical C5). Each `withDaemon()` call still re-reads
  * `useHostStore` so daemon-base / auth-header changes for *that* host stay
  * picked up.
+ *
+ * When the host is gone, every operation FAILS rather than being answered by
+ * some other machine. `getDaemonBase` resolves an unknown host to the active
+ * one, so without this guard a backend bound to a removed host would read — and
+ * write — the same path on a different machine, letting hostA vouch for hostB's
+ * paths. `getFsBackend`'s resolver refuses the same case, but the file-open and
+ * recent-file pipelines build their backend through this helper directly, so
+ * the guard has to live here rather than at each call site. The failure is an
+ * async rejection (never a synchronous throw) so the existing `try` / `.catch`
+ * around those awaits keeps catching it, and it carries no `code` / `status` —
+ * `isNotFoundError` must not mistake a gone host for a missing file.
  */
 export function createDaemonBackendForHost(hostId: string): FsBackend {
-  const getDaemon = (): DaemonBackend => {
+  const withDaemon = async <T>(run: (daemon: DaemonBackend) => Promise<T>): Promise<T> => {
     const state = useHostStore.getState()
-    return new DaemonBackend(state.getDaemonBase(hostId), () => state.getAuthHeaders(hostId))
+    if (!state.hosts[hostId]) {
+      throw new Error(`Host ${hostId} is no longer configured`)
+    }
+    return run(new DaemonBackend(state.getDaemonBase(hostId), () => state.getAuthHeaders(hostId)))
   }
   return {
     id: 'daemon',
     label: 'Remote Host',
     available: () => !!useHostStore.getState().hosts[hostId],
-    read: (path) => getDaemon().read(path),
-    write: (path, content) => getDaemon().write(path, content),
-    stat: (path) => getDaemon().stat(path),
-    list: (path) => getDaemon().list(path),
-    mkdir: (path, recursive) => getDaemon().mkdir(path, recursive),
-    delete: (path, recursive) => getDaemon().delete(path, recursive),
-    rename: (from, to) => getDaemon().rename(from, to),
+    read: (path) => withDaemon((daemon) => daemon.read(path)),
+    write: (path, content) => withDaemon((daemon) => daemon.write(path, content)),
+    stat: (path) => withDaemon((daemon) => daemon.stat(path)),
+    list: (path) => withDaemon((daemon) => daemon.list(path)),
+    mkdir: (path, recursive) => withDaemon((daemon) => daemon.mkdir(path, recursive)),
+    delete: (path, recursive) => withDaemon((daemon) => daemon.delete(path, recursive)),
+    rename: (from, to) => withDaemon((daemon) => daemon.rename(from, to)),
   }
 }
