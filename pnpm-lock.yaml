@@ -123,6 +123,9 @@ importers:
       idb:
         specifier: ^8.0.3
         version: 8.0.3
+      marked:
+        specifier: ^17.0.6
+        version: 17.0.6
       monaco-editor:
         specifier: ^0.55.1
         version: 0.55.1
