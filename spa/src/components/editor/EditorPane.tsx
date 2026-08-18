@@ -1,5 +1,5 @@
 // spa/src/components/editor/EditorPane.tsx
-import { lazy, Suspense, useEffect, useCallback, useState } from 'react'
+import { lazy, Suspense, useEffect, useCallback, useRef, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
@@ -182,6 +182,11 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   const [renameMode, setRenameMode] = useState<'rename' | 'save'>('rename')
   const [renameInitialValue, setRenameInitialValue] = useState<string>()
   const [renameWarning, setRenameWarning] = useState<string>()
+  // Fallback anchor for the naming popover. Whether the popover is NEEDED is a
+  // property of the buffer; WHERE it hangs is a property of the UI, and the two
+  // used to be conflated — a save that arrived without a rect (the keyboard
+  // path) was dropped entirely instead of anchoring itself to the Save button.
+  const saveButtonRef = useRef<HTMLButtonElement | null>(null)
 
   const handleCursorChange = useCallback((line: number, column: number) => {
     useEditorStore.getState().updateCursor(paneId, line, column)
@@ -375,9 +380,15 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       if (!buf.untitled.hasBeenRenamed) {
         // Opening the name popover is not a save outcome — no toast here; the
         // one that follows the user's confirmation comes from saveUntitledBuffer.
-        if (!anchorRect) return
+        //
+        // The editors (Monaco / Tiptap) call `onSave()` with no rect, so falling
+        // back to the Save button's own rect is what keeps ⌘S from being a
+        // no-op. The button is rendered by this same component whenever a buffer
+        // exists — i.e. whenever this branch is reachable — so the ref is set.
+        const anchor = anchorRect ?? saveButtonRef.current?.getBoundingClientRect()
+        if (!anchor) return
         setRenameMode('save')
-        setRenameAnchorRect(anchorRect)
+        setRenameAnchorRect(anchor)
         setRenameInitialValue(untitledSuggestedName(buf.untitled))
         setRenameWarning(undefined)
         return
@@ -528,6 +539,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         canSave={canSave}
         showDiff={showDiff}
         onSave={handleSave}
+        saveButtonRef={saveButtonRef}
         onDiff={() => useEditorStore.getState().setShowDiff(paneId, !showDiff)}
         onRenameStart={(anchorRect) => {
           setRenameMode('rename')

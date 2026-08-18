@@ -27,6 +27,14 @@ interface Props {
   canSave?: boolean
   showDiff?: boolean
   onSave: (anchorRect?: DOMRect) => void
+  /**
+   * Handle on the Save button so the owner can anchor a popover to it even when
+   * the save did NOT originate from a click. Monaco / Tiptap invoke `onSave()`
+   * with no rect (they have no button to measure), and the first save of an
+   * unnamed untitled document has to open the naming popover somewhere — this
+   * is that "somewhere", identical to what a click would have produced.
+   */
+  saveButtonRef?: React.RefObject<HTMLButtonElement | null>
   onDiff?: () => void
   onRenameStart?: (anchorRect: DOMRect) => void
   onBufferSwitch?: (newKey: string) => void
@@ -42,6 +50,7 @@ export function EditorToolbar({
   canSave,
   showDiff,
   onSave,
+  saveButtonRef,
   onDiff,
   onRenameStart,
   onBufferSwitch,
@@ -146,6 +155,7 @@ export function EditorToolbar({
             impossible to read at a glance. Enabled now carries the theme accent
             (`--color-accent`); disabled keeps the muted secondary + opacity-30. */}
         <button
+          ref={saveButtonRef}
           onClick={(event) => onSave(event.currentTarget.getBoundingClientRect())}
           disabled={!saveEnabled}
           className={`p-1 rounded hover:bg-surface-hover disabled:opacity-30 transition-colors ${saveEnabled ? 'text-accent hover:text-accent-hover' : 'text-text-secondary'}`}

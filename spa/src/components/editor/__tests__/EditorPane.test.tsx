@@ -1921,3 +1921,105 @@ describe('EditorPane — save result toast (T3.3)', () => {
     expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.md', new TextEncoder().encode(''))
   })
 })
+
+// --- Keyboard save must reach the naming popover, not die on a missing anchor
+//
+// Monaco / Tiptap call `onSave()` with no arguments (they have no toolbar
+// button to measure), and the never-named-untitled branch used to require an
+// `anchorRect` to open the naming popover - so the keyboard save inside the
+// editing surface was a dead key and only the toolbar button worked. The anchor
+// is now decoupled from the decision: the Save button's own rect is the
+// fallback.
+describe('EditorPane - keyboard save opens the naming popover for an unnamed untitled document', () => {
+  // The editors register handleSave as their save command, so invoking the
+  // captured prop IS the keyboard path. Monaco owns the raw surface and Tiptap
+  // the Live-Mode one; neither passes an anchorRect.
+  async function pressCmdS(surface: 'monaco' | 'tiptap' = 'monaco') {
+    const spy = surface === 'monaco' ? monacoPropsSpy : tiptapPropsSpy
+    const props = spy.mock.calls.at(-1)?.[0] as { onSave: () => void | Promise<void> }
+    await act(async () => {
+      await props.onSave()
+    })
+  }
+
+  async function renderUntitled(paneId: string, extension: '.txt' | '.md' = '.txt') {
+    const pane = createUntitledPane('Untitled', extension, paneId)
+    const backend = createBackend()
+    backend.write.mockResolvedValue(undefined)
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 7 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+    return backend
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useRecentFilesStore.setState({ files: [] })
+    useUndoToast.setState({ toast: null })
+  })
+
+  it('opens the naming popover from the keyboard path, which passes no anchorRect', async () => {
+    await renderUntitled('pane-cmds-untitled')
+    await pressCmdS()
+
+    expect(screen.getByDisplayValue('Untitled.txt')).toBeInTheDocument()
+  })
+
+  it('writes the file and raises the saved toast once the name is confirmed', async () => {
+    const backend = await renderUntitled('pane-cmds-untitled-confirm')
+    await pressCmdS()
+
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.txt'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Saved Untitled.txt')
+    })
+    expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.txt', new TextEncoder().encode(''))
+  })
+
+  it('covers the Live-Mode surface too — Tiptap also saves without an anchorRect', async () => {
+    await renderUntitled('pane-cmds-untitled-tiptap', '.md')
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    await pressCmdS('tiptap')
+
+    expect(screen.getByDisplayValue('Untitled.md')).toBeInTheDocument()
+  })
+
+  it('leaves the toolbar button path unchanged (regression)', async () => {
+    const backend = await renderUntitled('pane-cmds-untitled-toolbar')
+    const saveButton = screen.getByTitle('Save (⌘S)')
+    // T1.3: the button is enabled only because this untitled buffer has never
+    // been saved. The fix must not have loosened that condition.
+    expect(saveButton).not.toBeDisabled()
+
+    fireEvent.click(saveButton)
+    expect(screen.getByDisplayValue('Untitled.txt')).toBeInTheDocument()
+
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.txt'), { key: 'Enter' })
+    await waitFor(() => {
+      expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.txt', new TextEncoder().encode(''))
+    })
+  })
+
+  it('keeps Save disabled for a clean saved buffer (T1.3 semantics untouched)', async () => {
+    const pane = createPane('/notes/clean-guard.txt', 'pane-cmds-clean')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 5, mtime: 1 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/clean-guard.txt')]).toBeDefined()
+    })
+
+    expect(screen.getByTitle('Save (⌘S)')).toBeDisabled()
+  })
+})
