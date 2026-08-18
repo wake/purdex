@@ -16,6 +16,11 @@ describe('normalizeSerializedMarkdown', () => {
     expect(normalizeSerializedMarkdown('# Title\n\nbody', CRLF)).toBe('# Title\r\n\r\nbody')
   })
 
+  // One `eol` value can only produce one line ending, which is exactly why a
+  // file that MIXES them never reaches this function: `assessMarkdownRoundTrip`
+  // reports `mixed-eol` and the file opens raw, where Monaco is byte-faithful.
+  // Here the mixture can only come from the serializer, and collapsing it to the
+  // source's ending is the correct outcome.
   it('does not double up CRLF if the serializer already emitted some', () => {
     expect(normalizeSerializedMarkdown('a\r\nb\nc', CRLF)).toBe('a\r\nb\r\nc')
   })

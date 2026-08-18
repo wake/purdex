@@ -16,6 +16,7 @@ const NAMED_BLOCKERS = new Set([
   'image-in-mark',
   'bracketed-url',
   'html-entity',
+  'mixed-eol',
 ])
 
 /**

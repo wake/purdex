@@ -582,6 +582,7 @@
   "editor.live_mode.blocker.image-in-mark": "contains an image inside a link or emphasis",
   "editor.live_mode.blocker.bracketed-url": "contains a bracketed URL with a space",
   "editor.live_mode.blocker.html-entity": "contains HTML entities",
+  "editor.live_mode.blocker.mixed-eol": "mixes CRLF and LF line endings",
   "editor.live_mode.blocker.unknown": "contains markdown Live Mode cannot keep ({{blocker}})",
   "editor.save.saved": "Saved {{name}}",
   "editor.save.unchanged": "No changes to save",

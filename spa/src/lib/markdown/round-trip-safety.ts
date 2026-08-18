@@ -128,6 +128,18 @@ const FOOTNOTE_REF = /\[\^([^\]\s]+)\](?!:)/g
 function probeSource(md: string, add: (blocker: string) => void): void {
   if (hasFrontMatter(md)) add('frontmatter')
   if (hasFootnote(md)) add('footnote')
+  if (hasMixedLineEndings(md)) add('mixed-eol')
+}
+
+/**
+ * The buffer records ONE `sourceEol`, so the Live Mode path can restore only one
+ * line ending: `a\r\nb\nc\r\n` is written back as `a\r\nb\r\nc\r\n`, silently
+ * rewriting a line the user never touched. A per-line mixture cannot be
+ * reconstructed from a single value, so a mixed file opens raw instead — Monaco
+ * hands back exactly the bytes in its model.
+ */
+function hasMixedLineEndings(md: string): boolean {
+  return md.includes('\r\n') && md.replace(/\r\n/g, '').includes('\n')
 }
 
 function hasFootnote(md: string): boolean {

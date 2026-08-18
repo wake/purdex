@@ -282,3 +282,39 @@ describe('assessMarkdownRoundTrip — HTML entities', () => {
     expect(assessMarkdownRoundTrip(md)).toEqual({ safe: true, blockers: [] })
   })
 })
+
+/**
+ * `sourceEol` is one value for the whole buffer, so the Live Mode path can only
+ * restore one line ending: a file holding both comes back normalized to
+ * whichever ending the detector picked, and `a\r\nb\nc\r\n` is written out as
+ * `a\r\nb\r\nc\r\n` — a line the user never touched, changed. There is no way to
+ * reconstruct a per-line mixture from a single value, so such files open raw,
+ * where Monaco hands back exactly the bytes in its model.
+ */
+describe('assessMarkdownRoundTrip — mixed line endings', () => {
+  const unsafe: Array<[string, string]> = [
+    ['CRLF around a lone LF line', 'a\r\nb\nc\r\n'],
+    ['a CRLF document with one LF line at the end', '# Title\r\n\r\nbody\n'],
+    ['an LF document with one CRLF line', 'a\nb\r\n'],
+    ['a mixture inside a fenced code block', '```\na\r\nb\n```\n'],
+  ]
+
+  it.each(unsafe)('%s is unsafe', (_label, md) => {
+    const verdict = assessMarkdownRoundTrip(md)
+    expect(verdict.safe).toBe(false)
+    expect(verdict.blockers).toContain('mixed-eol')
+  })
+
+  const safe: Array<[string, string]> = [
+    ['a pure LF document', '# Title\n\nbody\n'],
+    ['a pure CRLF document', '# Title\r\n\r\nbody\r\n'],
+    ['a document with no line ending at all', '# Title'],
+    ['an empty document', ''],
+    ['a single LF', '\n'],
+    ['a single CRLF', '\r\n'],
+  ]
+
+  it.each(safe)('%s is safe', (_label, md) => {
+    expect(assessMarkdownRoundTrip(md)).toEqual({ safe: true, blockers: [] })
+  })
+})
