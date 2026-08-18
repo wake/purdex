@@ -18,6 +18,7 @@ import { findPane } from '../../../lib/pane-tree'
 import { openInAppFile } from '../../../lib/open-in-app-file'
 import { STORAGE_ROOT, basename, join, parentOf } from '../../../lib/storage-paths'
 import { findNode, targetDirOf } from '../../../lib/storage-tree'
+import type { TreeNode } from '../../../lib/storage-tree'
 import { RenamePopover } from '../../RenamePopover'
 import { BackupStatusSidebar } from './BackupStatusSidebar'
 import { StorageTree } from './StorageTree'
@@ -159,6 +160,52 @@ export function StoragePane({ pane }: PaneRendererProps) {
       return next
     })
   }, [])
+
+  // --- Visible batch selection (T4.3) ---
+  //
+  // The checkbox column, the header select-all and the action bar are pure UI
+  // over the SAME `selected` set the modifier-click path already wrote to — no
+  // second selection model, so the two gestures compose.
+
+  /** Every row currently rendered: top level plus the children of expanded dirs. */
+  const visiblePaths = useMemo(() => {
+    const out: string[] = []
+    const walk = (nodes: TreeNode[]) => {
+      for (const node of nodes) {
+        out.push(node.path)
+        if (node.isDir && expanded.has(node.path) && node.children) walk(node.children)
+      }
+    }
+    walk(tree)
+    return out
+  }, [tree, expanded])
+
+  const allVisibleSelected = visiblePaths.length > 0 && visiblePaths.every((p) => selected.has(p))
+  const someVisibleSelected = visiblePaths.some((p) => selected.has(p))
+
+  // A row checkbox is exactly an additive select — same reducer, same set.
+  const handleToggleRowSelect = useCallback(
+    (path: string) => handleSelect(path, true),
+    [handleSelect],
+  )
+
+  const handleToggleSelectAll = useCallback(() => {
+    setSelected((prev) => {
+      const everySelected = visiblePaths.length > 0 && visiblePaths.every((p) => prev.has(p))
+      return everySelected ? new Set<string>() : new Set(visiblePaths)
+    })
+  }, [visiblePaths])
+
+  const handleClearSelection = useCallback(() => setSelected(new Set()), [])
+
+  // `indeterminate` is a DOM property with no JSX attribute, so it is written
+  // through a callback ref that re-runs whenever the derived state changes.
+  const selectAllRef = useCallback(
+    (el: HTMLInputElement | null) => {
+      if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected
+    },
+    [someVisibleSelected, allVisibleSelected],
+  )
 
   const handleOpen = useCallback(
     async (path: string) => {
@@ -524,11 +571,64 @@ export function StoragePane({ pane }: PaneRendererProps) {
           drop targets, and a drop calls `moveStorageEntry` via `handleDragEnd`. */}
       <div className="flex-1 flex overflow-hidden">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Selection action bar (T4.3) — only while something is selected. It
+              sits OUTSIDE the scrollable region so a long tree never scrolls the
+              batch actions away. */}
+          {selected.size > 0 && (
+            <div
+              data-testid="selection-action-bar"
+              className="flex items-center gap-2 px-3 py-1.5 border-b border-border-subtle bg-surface-secondary"
+            >
+              <span data-testid="selection-count" className="text-xs text-text-primary">
+                {t('editor.buffers.selected_count', { count: selected.size })}
+              </span>
+              <div className="flex-1" />
+              <button
+                data-testid="selection-delete"
+                onClick={handleDelete}
+                disabled={toolbarBusy}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover hover:text-status-error disabled:opacity-50"
+                title={t('editor.buffers.delete')}
+              >
+                <Trash size={14} />
+                {t('editor.buffers.delete')}
+              </button>
+              <button
+                data-testid="selection-clear"
+                onClick={handleClearSelection}
+                className="px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover"
+                title={t('editor.buffers.clear_selection')}
+              >
+                {t('editor.buffers.clear_selection')}
+              </button>
+            </div>
+          )}
           <StorageRegionDropZone
             targetDir={targetDir}
             onNativeDragOver={handleNativeDragOver}
             onNativeDrop={handleNativeDrop}
           >
+            {/* Select-all header (T4.3): checked when every VISIBLE row is
+                selected, indeterminate on a partial selection. Sticky so it
+                survives scrolling the tree. */}
+            {!error && hasAny && (
+              <div
+                data-testid="storage-list-header"
+                className="sticky top-0 z-10 flex items-center gap-1.5 pl-2 pr-3 py-1 bg-surface-primary border-b border-border-subtle"
+              >
+                <input
+                  type="checkbox"
+                  data-testid="select-all-checkbox"
+                  ref={selectAllRef}
+                  checked={allVisibleSelected}
+                  onChange={handleToggleSelectAll}
+                  aria-label={t('editor.buffers.select_all')}
+                  className="shrink-0 accent-accent cursor-pointer"
+                />
+                <span className="text-xs text-text-muted">{t('editor.buffers.select_all')}</span>
+              </div>
+            )}
             {error && <div className="p-4 text-xs text-red-400">{error}</div>}
             {!error && actionWarning && (
               <div data-testid="storage-warning" className="p-4 text-xs text-amber-400">
@@ -551,9 +651,11 @@ export function StoragePane({ pane }: PaneRendererProps) {
                 onOpen={handleOpen}
                 onRename={handleRowRename}
                 onDelete={handleRowDelete}
+                onToggleSelect={handleToggleRowSelect}
               />
             )}
           </StorageRegionDropZone>
+          </div>
         </DndContext>
         <BackupStatusSidebar />
       </div>

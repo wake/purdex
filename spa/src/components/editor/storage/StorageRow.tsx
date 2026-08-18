@@ -42,6 +42,12 @@ interface StorageRowProps {
   onRename: (path: string, anchorRect: DOMRect | null) => void
   /** Delete THIS row's entry (T4.1) — independent of the current selection. */
   onDelete: (path: string) => void
+  /**
+   * Toggle THIS row in the multi-selection (T4.3). It writes to the very same
+   * `selected` set the modifier-click path uses — the checkbox is a visible
+   * affordance for an existing capability, not a second selection model.
+   */
+  onToggleSelect: (path: string) => void
 }
 
 /**
@@ -69,6 +75,10 @@ interface StorageRowProps {
  * `group-focus-within` (never `hidden`, so it stays keyboard reachable) and its
  * wrapper stops every gesture that would otherwise hit the row's own
  * select/open/drag handlers.
+ *
+ * Batch selection (T4.3): a leading checkbox bound to the SAME `selected` flag
+ * the modifier-click path drives, so checkbox and cmd/shift-click compose on one
+ * selection set rather than competing.
  */
 export function StorageRow({
   node,
@@ -80,6 +90,7 @@ export function StorageRow({
   onOpen,
   onRename,
   onDelete,
+  onToggleSelect,
 }: StorageRowProps) {
   const t = useI18nStore((s) => s.t)
   const text = isTextNode(node)
@@ -170,11 +181,11 @@ export function StorageRow({
     }
   }
 
-  // T4.1 action cluster. Every gesture that could reach the row's own handlers
-  // is stopped at the cluster wrapper (click → select, dblclick → open/toggle,
-  // keydown → Enter/Space, pointerdown → drag start), so an action button never
-  // doubles as a row hot-zone hit. The buttons themselves only carry their own
-  // onClick — the wrapper's stopPropagation runs afterwards, on the way up.
+  // Shared by the T4.1 action cluster and the T4.3 checkbox: every gesture that
+  // could reach the row's own handlers is stopped at the control (click →
+  // select, dblclick → open/toggle, keydown → Enter/Space, pointerdown → drag
+  // start), so an embedded control never doubles as a row hot-zone hit. The
+  // controls keep their own onClick/onChange — this only runs on the way up.
   const stopRowGesture = (e: React.SyntheticEvent) => e.stopPropagation()
 
   return (
@@ -201,13 +212,32 @@ export function StorageRow({
       }}
       className={
         'group w-full flex items-center gap-1.5 pr-3 py-1.5 text-left text-xs transition-colors cursor-pointer ' +
+        // `surface-selected` was never a Tailwind theme token (it resolves to
+        // nothing in the built CSS), so a selected row rendered with no
+        // highlight at all — which is half of why the multi-selection was
+        // invisible. `surface-active` is the real token.
         (selected
-          ? 'bg-surface-selected text-text-primary'
+          ? 'bg-surface-active text-text-primary'
           : 'text-text-primary hover:bg-surface-hover') +
         (dropActive ? ' ring-1 ring-inset ring-accent bg-surface-hover' : '') +
         (isDragging ? ' opacity-50' : '')
       }
     >
+      {/* Selection checkbox (T4.3). `onChange` owns the toggle; the explicit
+          click / dblclick / keydown / pointerdown stops keep the gesture from
+          also hitting the row's select / open / drag handlers. */}
+      <input
+        type="checkbox"
+        data-testid="row-checkbox"
+        checked={selected}
+        onChange={() => onToggleSelect(node.path)}
+        onClick={stopRowGesture}
+        onDoubleClick={stopRowGesture}
+        onKeyDown={stopRowGesture}
+        onPointerDown={stopRowGesture}
+        aria-label={t('editor.buffers.select_row', { name: node.name })}
+        className="shrink-0 accent-accent cursor-pointer"
+      />
       {node.isDir ? (
         <button
           type="button"

@@ -24,6 +24,7 @@ let onSelect: Mock
 let onOpen: Mock
 let onRename: Mock
 let onDelete: Mock
+let onToggleSelect: Mock
 
 beforeEach(() => {
   onToggle = vi.fn()
@@ -31,11 +32,12 @@ beforeEach(() => {
   onOpen = vi.fn()
   onRename = vi.fn()
   onDelete = vi.fn()
+  onToggleSelect = vi.fn()
 })
 
 /** The per-test callback set, read at call time (the spies are re-made each test). */
 function handlers() {
-  return { onToggle, onSelect, onOpen, onRename, onDelete }
+  return { onToggle, onSelect, onOpen, onRename, onDelete, onToggleSelect }
 }
 
 function renderFolder(expanded = false) {
@@ -218,5 +220,41 @@ describe('StorageRow per-row action cluster (T4.1)', () => {
     expect(onSelect).not.toHaveBeenCalled()
     expect(onToggle).not.toHaveBeenCalled()
     expect(onOpen).not.toHaveBeenCalled()
+  })
+})
+
+describe('StorageRow selection checkbox (T4.3)', () => {
+  it('reflects the selected flag and toggles through onToggleSelect', () => {
+    const { rerender } = render(
+      <StorageRow node={file()} depth={0} selected={false} expanded={false} {...handlers()} />,
+    )
+    const box = screen.getByTestId('row-checkbox') as HTMLInputElement
+    expect(box.checked).toBe(false)
+    fireEvent.click(box)
+    expect(onToggleSelect).toHaveBeenCalledWith('/buffer/note.md')
+
+    rerender(<StorageRow node={file()} depth={0} selected expanded={false} {...handlers()} />)
+    expect((screen.getByTestId('row-checkbox') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('REGRESSION: the checkbox gesture never reaches the row select / open handlers', () => {
+    render(<StorageRow node={file()} depth={0} selected={false} expanded={false} {...handlers()} />)
+    const box = screen.getByTestId('row-checkbox')
+    fireEvent.click(box)
+    fireEvent.doubleClick(box)
+    fireEvent.keyDown(box, { key: ' ' })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
+  it('a folder row carries a checkbox too (folders are selectable targets)', () => {
+    render(
+      <StorageRow node={folder()} depth={0} selected={false} expanded={false} {...handlers()} />,
+    )
+    fireEvent.click(screen.getByTestId('row-checkbox'))
+    expect(onToggleSelect).toHaveBeenCalledWith('/buffer/dir')
+    expect(onToggle).not.toHaveBeenCalled()
   })
 })
