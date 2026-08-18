@@ -128,11 +128,14 @@ Two complementary detectors (revised after review — token types alone cannot s
 
 **(a) Token whitelist over `marked`'s lexer** (default-deny). `marked` is already a transitive dependency via `@tiptap/markdown`; promote it to a direct dependency and lex with the same `marked.Lexer` the markdown manager uses, then walk the token tree comparing each token `type` against the whitelist.
 
-Whitelist (marked v17 token names, valid once 2.2 lands): `space`, `paragraph`, `text`, `heading`, `list`, `list_item`, `code`, `codespan`, `blockquote`, `hr`, `table`, `link`, `image`, `strong`, `em`, `del`, `br`, `escape`, `def`.
+Whitelist (marked v17 token names, valid once 2.2 lands): `space`, `paragraph`, `text`, `heading`, `list`, `list_item`, `checkbox`, `code`, `codespan`, `blockquote`, `hr`, `table`, `link`, `image`, `strong`, `em`, `del`, `br`, `escape`, `def`.
 Notes:
 - Task items are **not** a distinct marked token — they are `list_item`s carrying `task: boolean` (the `taskList` / `taskItem` names are Tiptap's internal intermediate types, synthesized by `MarkdownManager`). The whitelist must not invent them.
+- **`checkbox` must be whitelisted** (found during implementation): marked additionally unshifts a `{ type: 'checkbox', checked }` token into a task item's children — directly on `list_item.tokens` for a tight list, inside the inner `paragraph.tokens` for a loose one. Omitting it makes *every* task list unsafe, contradicting the requirement that task lists round-trip.
 - `def` (reference-style link definitions) is whitelisted, not blocked: the round-trip rewrites them to inline links, which is a style-level change under decision 3. Blocking them would push a large share of ordinary documents into raw.
 - Blockers: `html` and anything unrecognised (default-deny, so a future syntax fails closed).
+- **Traversal must cover table cells** (found during implementation): a table's inline tokens live in `header[].tokens` and `rows[][].tokens`, not in `tokens`/`items`. Walking only the latter two lets `| <b>1</b> | 2 |` pass as safe and then have its markup stripped in Live Mode — exactly what the gate exists to prevent. Follow marked's own `walkTokens` shape.
+- An unrecognised token contributes its own `type` as the blocker key, so `html` falls out naturally. Consumers rendering the reason must have a fallback for keys they don't have copy for.
 
 **(b) Pre-lex regex probes** for constructs `marked` silently degrades rather than tokenizing distinctly:
 - **Front matter** — a `---` fence in the first line closed by a later `---`/`...` line. (Do **not** infer it from an `hr` + `heading` token pair: legitimate documents contain that sequence and would be misclassified.)
@@ -173,6 +176,7 @@ A pure helper re-applies them to markdown coming out of Tiptap:
 
 - `sourceEol === 'crlf'` → convert serialized `\n` back to `\r\n`.
 - `sourceTrailingNewline` → ensure exactly one trailing newline; if false, ensure none.
+- **Leading newline** (found while measuring 2.2a): a document that starts with a table serializes with a leading `\n`. The source never had it, so strip a leading blank line that the source did not have — the trailing-newline rule alone does not cover this.
 
 Applied in the Tiptap `onChange` path (`EditorPane.tsx:495`) before `updateContent`, so `isDirty` compares like with like and an untouched round-trip of an already-canonical file produces **no** spurious diff.
 
