@@ -314,6 +314,36 @@ describe('EditorPane — untitled first save', () => {
     expect(useEditorStore.getState().buffers[TARGET_KEY]).toBeUndefined()
   })
 
+  it('reports saved even when the post-write stat fails (the bytes did land)', async () => {
+    // The write succeeds; every stat fails (host just went away / flaky link).
+    // The file IS on disk, so the save must not be reported as a failure.
+    statMock.mockRejectedValue(notFound())
+    render(<EditorPane pane={makeUntitledPane()} isActive={false} />)
+
+    await saveUntitledAs('report.md')
+
+    expect(writeMock).toHaveBeenCalledTimes(1)
+    expect(toastMessage()).toBe('editor.save.saved')
+    const saved = useEditorStore.getState().buffers[TARGET_KEY]
+    expect(saved).toBeTruthy()
+    expect(saved.isDirty).toBe(false)
+    expect(saved.untitled).toBeUndefined()
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toContain(TARGET_PATH)
+  })
+
+  it('reports failed when the write itself rejects (regression)', async () => {
+    statMock.mockRejectedValue(notFound())
+    writeMock.mockRejectedValue(new Error('disk full'))
+    render(<EditorPane pane={makeUntitledPane()} isActive={false} />)
+
+    await saveUntitledAs('report.md')
+
+    expect(toastMessage()).toBe('editor.save.failed')
+    // Nothing moved: the document is still the unsaved untitled buffer.
+    expect(useEditorStore.getState().buffers[UNTITLED_KEY]).toBeTruthy()
+    expect(useEditorStore.getState().buffers[TARGET_KEY]).toBeUndefined()
+  })
+
   it('writes normally when nothing occupies the chosen name', async () => {
     // Physical model: the target does not exist until we write it.
     statMock.mockImplementation(async () => {
@@ -328,5 +358,67 @@ describe('EditorPane — untitled first save', () => {
     expect(writeMock.mock.calls[0][0]).toBe(TARGET_PATH)
     expect(useEditorStore.getState().buffers[TARGET_KEY]).toBeTruthy()
     expect(toastMessage()).toBe('editor.save.saved')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Regular file save: the write decides the outcome. `stat` only refreshes
+// `lastStat`, so a stat failure must not claim the save failed while the bytes
+// are already on disk (and leave the buffer dirty).
+// ---------------------------------------------------------------------------
+
+const FILE_KEY = bufferKey({ type: 'inapp' }, FILE)
+
+describe('EditorPane — regular file save outcome', () => {
+  beforeEach(() => {
+    resetBackend()
+    useUndoToast.setState({ toast: null })
+    useRecentFilesStore.setState({ files: [] })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+    useEditorStore.getState().openBuffer(FILE_KEY, 'hello', { language: 'markdown' }, { mtime: 1, size: 5 })
+    useEditorStore.getState().updateContent(FILE_KEY, 'hello there')
+    seedTab(makePane())
+  })
+
+  it('reports saved and clears dirty even when the post-write stat fails', async () => {
+    statMock.mockRejectedValue(new Error('host unreachable'))
+    render(<EditorPane pane={makePane()} isActive={false} />)
+
+    await act(async () => {
+      clickSave()
+    })
+
+    expect(writeMock).toHaveBeenCalledWith(FILE, new TextEncoder().encode('hello there'))
+    expect(toastMessage()).toBe('editor.save.saved')
+    const buf = useEditorStore.getState().buffers[FILE_KEY]
+    expect(buf.isDirty).toBe(false)
+    expect(buf.savedContent).toBe('hello there')
+    // No fresh stat was available, so the previous one is kept rather than lost.
+    expect(buf.lastStat).toEqual({ mtime: 1, size: 5 })
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toContain(FILE)
+  })
+
+  it('reports failed and stays dirty when the write rejects (regression)', async () => {
+    writeMock.mockRejectedValue(new Error('read-only volume'))
+    render(<EditorPane pane={makePane()} isActive={false} />)
+
+    await act(async () => {
+      clickSave()
+    })
+
+    expect(toastMessage()).toBe('editor.save.failed')
+    expect(useEditorStore.getState().buffers[FILE_KEY].isDirty).toBe(true)
+  })
+
+  it('refreshes lastStat when the post-write stat succeeds', async () => {
+    statMock.mockResolvedValue({ mtime: 99, size: 11, isFile: true, isDirectory: false })
+    render(<EditorPane pane={makePane()} isActive={false} />)
+
+    await act(async () => {
+      clickSave()
+    })
+
+    expect(toastMessage()).toBe('editor.save.saved')
+    expect(useEditorStore.getState().buffers[FILE_KEY].lastStat).toEqual({ mtime: 99, size: 11 })
   })
 })

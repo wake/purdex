@@ -77,6 +77,31 @@ function saveErrorReason(error: unknown): string {
   return String(error)
 }
 
+/**
+ * Post-write stat, demoted to a best-effort refresh of `lastStat`.
+ *
+ * A successful `write` means the bytes are on disk — the save has happened. The
+ * follow-up `stat` only exists to refresh the external-change baseline, so a
+ * rejection there (flaky link, host just removed, permissions) must NOT be
+ * reported as a failed save: the user would be told nothing was written while
+ * the file on disk already carries their edits, and the buffer would stay dirty
+ * (or, for an untitled document, stay unnamed and out of the recent list).
+ *
+ * `undefined` is a safe value for `markSaved`, which falls back to the buffer's
+ * existing `lastStat`.
+ */
+async function readStatAfterWrite(
+  backend: { stat: (path: string) => Promise<{ mtime: number; size: number }> },
+  path: string,
+): Promise<{ mtime: number; size: number } | undefined> {
+  try {
+    const stat = await backend.stat(path)
+    return { mtime: stat.mtime, size: stat.size }
+  } catch {
+    return undefined
+  }
+}
+
 // Spec 1.2: a load failure must never degrade into an empty buffer. Extract the
 // most specific reason we can so the error surface tells the user *why* the file
 // could not be read (empty string → the generic i18n fallback).
@@ -353,27 +378,29 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       // Missing target is the expected, writable case.
     }
 
+    // The WRITE decides the outcome — see `readStatAfterWrite`.
     try {
-      const encoded = new TextEncoder().encode(buf.content)
-      await backend.write(nextPath, encoded)
-      const newStat = await backend.stat(nextPath)
-      const nextMetadata = buf.languageSource === 'manual'
-        ? { language: buf.language, languageSource: 'manual' as const, untitled: undefined }
-        : { ...createMetadata(source, nextPath), untitled: undefined }
-      useTabStore.getState().renameEditorPanes(source, filePath, nextPath)
-      useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
-      useEditorStore.getState().markSaved(nextKey, { mtime: newStat.mtime, size: newStat.size })
-      recordRecentFile({ kind: 'editor', source, filePath: nextPath })
-      useEditorStore.getState().setShowDiff(paneId, false)
-      setRenameAnchorRect(null)
-      setRenameInitialValue(undefined)
-      setRenameWarning(undefined)
-      // Confirming the name IS a save outcome (the file now exists on disk), so
-      // it reports like any other save. Only *opening* the popover is silent.
-      showSaveToast('editor.save.saved', { name: fileName(nextPath) })
+      await backend.write(nextPath, new TextEncoder().encode(buf.content))
     } catch (err) {
       showSaveToast('editor.save.failed', { reason: saveErrorReason(err) })
+      return
     }
+
+    const newStat = await readStatAfterWrite(backend, nextPath)
+    const nextMetadata = buf.languageSource === 'manual'
+      ? { language: buf.language, languageSource: 'manual' as const, untitled: undefined }
+      : { ...createMetadata(source, nextPath), untitled: undefined }
+    useTabStore.getState().renameEditorPanes(source, filePath, nextPath)
+    useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
+    useEditorStore.getState().markSaved(nextKey, newStat)
+    recordRecentFile({ kind: 'editor', source, filePath: nextPath })
+    useEditorStore.getState().setShowDiff(paneId, false)
+    setRenameAnchorRect(null)
+    setRenameInitialValue(undefined)
+    setRenameWarning(undefined)
+    // Confirming the name IS a save outcome (the file now exists on disk), so
+    // it reports like any other save. Only *opening* the popover is silent.
+    showSaveToast('editor.save.saved', { name: fileName(nextPath) })
   }, [filePath, key, paneId, showSaveToast, source, t, untitled])
 
   const handleSave = useCallback(async (anchorRect?: DOMRect) => {
@@ -416,19 +443,21 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       showSaveToast('editor.save.failed', { reason: t('editor.load_error.no_backend') })
       return
     }
+    // Only the WRITE decides success/failure (see `readStatAfterWrite`).
     try {
-      const encoded = new TextEncoder().encode(buf.content)
-      await backend.write(filePath, encoded)
-      const newStat = await backend.stat(filePath)
-      useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })
-      recordRecentFile({ kind: 'editor', source, filePath })
-      useEditorStore.getState().setShowDiff(paneId, false)
-      showSaveToast('editor.save.saved', { name: fileName(filePath) })
+      await backend.write(filePath, new TextEncoder().encode(buf.content))
     } catch (err) {
       // Replaces a console.error the user could never see; the buffer stays
       // dirty and unmarked, so the toast is the only signal they get.
       showSaveToast('editor.save.failed', { reason: saveErrorReason(err) })
+      return
     }
+
+    const newStat = await readStatAfterWrite(backend, filePath)
+    useEditorStore.getState().markSaved(key, newStat)
+    recordRecentFile({ kind: 'editor', source, filePath })
+    useEditorStore.getState().setShowDiff(paneId, false)
+    showSaveToast('editor.save.saved', { name: fileName(filePath) })
   }, [filePath, key, paneId, saveUntitledBuffer, showSaveToast, source, t])
 
   const handleRenameSubmit = useCallback(async (nextName: string) => {
