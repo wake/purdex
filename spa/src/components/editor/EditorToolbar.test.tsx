@@ -64,6 +64,33 @@ describe('EditorToolbar', () => {
     expect(screen.getByText('example.md')).toBeInTheDocument()
   })
 
+  it('surfaces the reason a markdown file was forced into raw mode (T2.3)', () => {
+    render(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/example.md"
+        isDirty={false}
+        rawReason="raw — contains raw HTML"
+        onSave={() => {}}
+      />,
+    )
+
+    expect(screen.getByTestId('editor-raw-reason')).toHaveTextContent('raw — contains raw HTML')
+  })
+
+  it('shows no raw-mode badge when there is no reason to explain (T2.3)', () => {
+    render(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/example.md"
+        isDirty={false}
+        onSave={() => {}}
+      />,
+    )
+
+    expect(screen.queryByTestId('editor-raw-reason')).toBeNull()
+  })
+
   it('keeps filename double click rename affordance for in-app buffers', () => {
     const onRenameStart = vi.fn()
 

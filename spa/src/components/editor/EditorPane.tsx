@@ -22,6 +22,7 @@ import { useRenamePopoverState } from './hooks/useRenamePopoverState'
 import { useEditorPaneLoadState } from './hooks/useEditorPaneLoadState'
 import { useEditorSaveFlow } from './hooks/useEditorSaveFlow'
 import { useEditorRenameFlow } from './hooks/useEditorRenameFlow'
+import { useLiveModeGate } from './hooks/useLiveModeGate'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 
@@ -87,6 +88,11 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   // onto the new one (attachPane rebuilds paneState to these exact defaults anyway).
   const alignedPaneState = paneState?.bufferKey === key ? paneState : undefined
   const isMarkdown = buffer?.language === 'markdown'
+  // Spec 2.3: markdown whose content cannot survive a Live Mode round trip
+  // (raw HTML, front matter, footnotes, anything the default-deny assessment
+  // does not recognise) must not open there — the loss happens at parse time,
+  // before the user touches anything.
+  const liveModeGate = useLiveModeGate(buffer?.content, isMarkdown, t)
   // Mode resolution, in order of precedence:
   //   1. stale/unaligned paneState → raw. Deriving raw while paneState hasn't
   //      rebound to THIS buffer keeps the #863 invariant: Tiptap (lazy) never
@@ -94,13 +100,21 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   //      flicker paints during a buffer switch. The wysiwyg default only kicks
   //      in once aligned.
   //   2. aligned + explicit user choice (concrete editorMode) → that choice; it
-  //      wins and survives remounts.
+  //      wins and survives remounts. This is above the safety gate on purpose
+  //      (spec 2.3): the gate governs the DEFAULT, and a user who deliberately
+  //      switches an unsafe file into Live Mode is making an informed choice.
   //   3. aligned + no choice (editorMode null) → language default: markdown opens
-  //      in Live Mode (wysiwyg), everything else raw.
+  //      in Live Mode (wysiwyg) unless the gate blocks it; everything else raw.
   const editorMode = alignedPaneState
-    ? (alignedPaneState.editorMode ?? (isMarkdown ? 'wysiwyg' : 'raw'))
+    ? (alignedPaneState.editorMode ?? (isMarkdown && !liveModeGate.forcesRaw ? 'wysiwyg' : 'raw'))
     : 'raw'
   const effectiveEditorMode = isMarkdown ? editorMode : 'raw'
+  // Explain raw ONLY when the gate is what produced it. Raw that the user chose,
+  // or that a non-markdown language implies, needs no explanation; neither does
+  // the transient stale-paneState window (no aligned state yet).
+  const rawReason = alignedPaneState && !alignedPaneState.editorMode && isMarkdown
+    ? liveModeGate.reason
+    : undefined
   const showDiff = alignedPaneState?.showDiff ?? false
   // Spec 1.3: a missing `lastStat` alone does NOT make a buffer savable. Only a
   // never-saved *untitled* buffer needs that escape hatch (it has no file behind
@@ -229,6 +243,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         isDirty={buffer.isDirty}
         canSave={canSave}
         showDiff={showDiff}
+        rawReason={rawReason}
         onSave={handleSave}
         saveButtonRef={saveButtonRef}
         onDiff={() => useEditorStore.getState().setShowDiff(paneId, !showDiff)}

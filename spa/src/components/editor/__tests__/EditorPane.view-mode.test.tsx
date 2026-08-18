@@ -224,6 +224,93 @@ describe('EditorPane', () => {
     expect(tiptapPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ contentWidth: 'full' }))
   })
 
+  // --- T2.3: the round-trip safety gate --------------------------------------
+  //
+  // Live Mode loses whatever Tiptap cannot represent, and it loses it at PARSE
+  // time: a document carrying raw HTML / front matter / footnotes is already
+  // degraded before the first keystroke, and the next save writes that back over
+  // the file. Such a document therefore must not open in Live Mode by default.
+
+  const UNSAFE_MD = '# Title\n\n<div class="callout">keep me</div>\n'
+
+  async function openMarkdown(paneId: string, filePath: string, content: string, mode?: 'raw' | 'wysiwyg') {
+    const pane = createPane(filePath, paneId)
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey(filePath), content, {
+      language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(paneId, getBufferKey(filePath))
+    if (mode) useEditorStore.getState().setEditorMode(paneId, mode)
+    renderEditorPane(pane)
+    return pane
+  }
+
+  it('opens markdown that cannot round-trip in raw mode when the user has not chosen (T2.3)', async () => {
+    await openMarkdown('pane-gate-unsafe', '/notes/unsafe.md', UNSAFE_MD)
+
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+    expect(screen.queryByTestId('tiptap-editor')).toBeNull()
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-editor-mode', 'raw')
+    // …and says why, so the user is not left wondering where Live Mode went.
+    expect(screen.getByTestId('editor-raw-reason')).toHaveTextContent(/raw/i)
+    expect(screen.getByTestId('editor-raw-reason')).toHaveTextContent(/HTML/i)
+  })
+
+  it('lets an explicit wysiwyg choice override the gate (T2.3)', async () => {
+    await openMarkdown('pane-gate-override', '/notes/unsafe-override.md', UNSAFE_MD, 'wysiwyg')
+
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    expect(screen.queryByTestId('monaco-wrapper')).toBeNull()
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-editor-mode', 'wysiwyg')
+    expect(screen.queryByTestId('editor-raw-reason')).toBeNull()
+  })
+
+  it('keeps the Live Mode default for markdown that round-trips safely (T2.3)', async () => {
+    await openMarkdown(
+      'pane-gate-safe',
+      '/notes/safe.md',
+      '# Title\n\n- [ ] todo\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n',
+    )
+
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    expect(screen.queryByTestId('monaco-wrapper')).toBeNull()
+    expect(screen.queryByTestId('editor-raw-reason')).toBeNull()
+  })
+
+  it("says nothing about the gate when raw was the user's own choice (T2.3)", async () => {
+    await openMarkdown('pane-gate-user-raw', '/notes/unsafe-user-raw.md', UNSAFE_MD, 'raw')
+
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+    expect(screen.queryByTestId('editor-raw-reason')).toBeNull()
+  })
+
+  it('never applies the gate to non-markdown buffers (T2.3)', async () => {
+    const pane = createPane('/notes/page.html', 'pane-gate-html')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/page.html'), UNSAFE_MD, {
+      language: 'html', languageSource: 'extension', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/page.html'))
+
+    renderEditorPane(pane)
+
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-editor-mode', 'raw')
+    // Raw is simply what a non-markdown file gets; there is no gate to explain.
+    expect(screen.queryByTestId('editor-raw-reason')).toBeNull()
+  })
+
+  it('renders prose for every blocker the assessment can report, never a bare key (T2.3)', async () => {
+    await openMarkdown('pane-gate-footnote', '/notes/footnote.md', 'text[^a]\n\n[^a]: note\n')
+
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+    const reason = screen.getByTestId('editor-raw-reason')
+    expect(reason.textContent).not.toMatch(/editor\.live_mode/)
+    expect(reason.textContent?.trim().length).toBeGreaterThan(0)
+  })
+
   it('does not mount TiptapEditor against stale paneState even when lazy is cached (stale→raw derivation, supersedes R3 gating)', async () => {
     const backend = createBackend()
     getFsBackendMock.mockReturnValue(backend)
