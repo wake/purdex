@@ -1,9 +1,8 @@
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import { Markdown } from '@tiptap/markdown'
 import { NodeSelection } from '@tiptap/pm/state'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { resolveRestoreSelection } from './tiptapSelection'
+import { tiptapExtensions } from './tiptapExtensions'
 import type { TiptapViewState } from '../../stores/useEditorStore'
 import type { ContentWidthOption } from '../../stores/useEditorSettingsStore'
 
@@ -51,7 +50,7 @@ export function TiptapEditor({ content, isActive, initialViewState, contentWidth
   const internalUpdateRef = useRef(false)
 
   const editor = useEditor({
-    extensions: [StarterKit, Markdown],
+    extensions: tiptapExtensions,
     content,
     contentType: 'markdown',
     onUpdate: ({ editor: ed }) => {

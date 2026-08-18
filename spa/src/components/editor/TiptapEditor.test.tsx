@@ -2,6 +2,12 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TiptapEditor } from './TiptapEditor'
 import { resolveRestoreSelection } from './tiptapSelection'
+import { tiptapExtensions } from './tiptapExtensions'
+import StarterKit from '@tiptap/starter-kit'
+import { Markdown } from '@tiptap/markdown'
+import { TableKit } from '@tiptap/extension-table'
+import { TaskList } from '@tiptap/extension-task-list'
+import { TaskItem } from '@tiptap/extension-task-item'
 
 const useEditorSpy = vi.hoisted(() => vi.fn())
 const editorClassRef = vi.hoisted(() => ({ current: '' }))
@@ -21,6 +27,18 @@ vi.mock('@tiptap/starter-kit', () => ({
 
 vi.mock('@tiptap/markdown', () => ({
   Markdown: {},
+}))
+
+vi.mock('@tiptap/extension-table', () => ({
+  TableKit: { __ext: 'table-kit' },
+}))
+
+vi.mock('@tiptap/extension-task-list', () => ({
+  TaskList: { __ext: 'task-list' },
+}))
+
+vi.mock('@tiptap/extension-task-item', () => ({
+  TaskItem: { __ext: 'task-item' },
 }))
 
 vi.mock('./tiptapSelection', () => ({
@@ -251,6 +269,18 @@ describe('TiptapEditor', () => {
     expect(focusSpy.mock.calls.length).toBe(focusCalls) // focus not re-fired
     expect(onViewStateChange).not.toHaveBeenCalled() // no phantom unmount write-back
     expect(scrollRoot.scrollTop).toBe(77) // scroll position preserved
+  })
+
+  it('registers table + task list extensions alongside StarterKit and Markdown (T2.2a)', () => {
+    render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
+
+    const config = useEditorSpy.mock.calls[0][0] as { extensions: unknown[] }
+    expect(config.extensions).toEqual(tiptapExtensions)
+    expect(config.extensions).toContain(StarterKit)
+    expect(config.extensions).toContain(Markdown)
+    expect(config.extensions).toContain(TableKit)
+    expect(config.extensions).toContain(TaskList)
+    expect(config.extensions).toContain(TaskItem)
   })
 
   it('does NOT overwrite existing viewState when unmounted before editor is ready (R1 P2)', () => {
