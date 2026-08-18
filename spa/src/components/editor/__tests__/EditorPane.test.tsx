@@ -6,6 +6,7 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useEditorSettingsStore } from '../../../stores/useEditorSettingsStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
 import type { Pane } from '../../../types/tab'
+import type { FileSource } from '../../../types/fs'
 import type { FsBackend } from '../../../lib/fs-backend'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { registerBuiltinFsBackends } from '../../../lib/register-modules/fs-backends'
@@ -1524,5 +1525,138 @@ describe('EditorPane — host-bound backend resolution', () => {
 
     const urls = fetchMock.mock.calls.map((c) => c[0] as string)
     expect(urls.every((u) => u.startsWith('http://10.0.0.1:7860'))).toBe(true)
+  })
+})
+
+// --- T3.2: the in-editor rename is the third path-mutating call site ---------
+//
+// Storage rename/move/delete are covered in storage-actions.test.ts; this is the
+// rename the user performs from the editor toolbar, which is also the ONLY remap
+// path a remote (daemon) file can take — it goes through the resolved backend, so
+// the same code covers both sources.
+describe('EditorPane — in-editor rename remaps the recent entry (T3.2)', () => {
+  function seedRecent(source: FileSource, path: string, openedAt = 5) {
+    useRecentFilesStore.setState({
+      files: [{ source, path, name: path.split('/').pop()!, kind: 'editor', openedAt }],
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useRecentFilesStore.setState({ files: [] })
+  })
+
+  it('T3.2-4: renaming a saved in-app file re-points its recent entry (path + name)', async () => {
+    const pane = createPane('/notes/old.md', 'pane-rename-recent')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('body'))
+    backend.rename.mockResolvedValue(undefined)
+    backend.stat
+      // 1) the initial load, 2) the rename-target existence probe (must reject).
+      .mockResolvedValueOnce({ isFile: true, isDirectory: false, size: 4, mtime: 1 })
+      .mockRejectedValueOnce(new Error('not found'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    seedRecent({ type: 'inapp' }, '/notes/old.md')
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/old.md')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('old.md'))
+    fireEvent.change(screen.getByDisplayValue('old.md'), { target: { value: 'new.md' } })
+    fireEvent.keyDown(screen.getByDisplayValue('new.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(backend.rename).toHaveBeenCalledWith('/notes/old.md', '/notes/new.md')
+    })
+    await waitFor(() => {
+      expect(useRecentFilesStore.getState().files).toEqual([
+        { source: { type: 'inapp' }, path: '/notes/new.md', name: 'new.md', kind: 'editor', openedAt: 5 },
+      ])
+    })
+  })
+
+  it('T3.2-4b: the same path covers a REMOTE file — the daemon entry follows its host', async () => {
+    const remoteSource: FileSource = { type: 'daemon', hostId: 'hostB' }
+    const pane: Pane = {
+      id: 'pane-remote-rename',
+      content: { kind: 'editor', source: remoteSource, filePath: '/remote/old.md' },
+    }
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('body'))
+    backend.rename.mockResolvedValue(undefined)
+    backend.stat
+      .mockResolvedValueOnce({ isFile: true, isDirectory: false, size: 4, mtime: 1 })
+      .mockRejectedValueOnce(new Error('not found'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    // Same path on another host must NOT be dragged along.
+    useRecentFilesStore.setState({
+      files: [
+        { source: remoteSource, path: '/remote/old.md', name: 'old.md', kind: 'editor', openedAt: 7 },
+        {
+          source: { type: 'daemon', hostId: 'hostA' },
+          path: '/remote/old.md',
+          name: 'old.md',
+          kind: 'editor',
+          openedAt: 6,
+        },
+      ],
+    })
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[bufferKey(remoteSource, '/remote/old.md')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('old.md'))
+    fireEvent.change(screen.getByDisplayValue('old.md'), { target: { value: 'new.md' } })
+    fireEvent.keyDown(screen.getByDisplayValue('new.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(backend.rename).toHaveBeenCalledWith('/remote/old.md', '/remote/new.md')
+    })
+    await waitFor(() => {
+      expect(
+        useRecentFilesStore.getState().files.map((f) => [
+          f.source.type === 'daemon' ? f.source.hostId : f.source.type,
+          f.path,
+        ]),
+      ).toEqual([
+        ['hostB', '/remote/new.md'],
+        ['hostA', '/remote/old.md'],
+      ])
+    })
+  })
+
+  it('T3.2-5: the untitled first save records the real path and never attempts a remap', async () => {
+    const renameSpy = vi.spyOn(useRecentFilesStore.getState(), 'renamePath')
+    const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-no-remap')
+    const backend = createBackend()
+    backend.write.mockResolvedValue(undefined)
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 456 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.md', new TextEncoder().encode(''))
+    })
+    // The unsaved buffer was never in the list, so there is nothing to re-point:
+    // the first save records the real path directly.
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual(['/buffer/Untitled.md'])
+    renameSpy.mockRestore()
   })
 })

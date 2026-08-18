@@ -18,6 +18,7 @@ import { bufferKey } from '../../lib/editor-buffer-key'
 import { STORAGE_ROOT } from '../../lib/storage-paths'
 import { createUniqueInAppFile } from '../../lib/inapp-namer'
 import { recordRecentFile } from '../../lib/recent-files/record-recent-file'
+import { useRecentFilesStore } from '../../stores/useRecentFilesStore'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 import {
@@ -428,6 +429,11 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         ? { language: currentBuffer.language, languageSource: 'manual' as const }
         : createMetadata(source, nextPath)
       useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
+      // T3.2: the in-editor rename is the third path-mutating call site (the
+      // other two go through `remapPanesUnder`), and the ONLY one a remote file
+      // can take — `source` carries the daemon host, so the remap stays scoped
+      // to that host's entries.
+      useRecentFilesStore.getState().renamePath(source, filePath, nextPath)
       setRenameAnchorRect(null)
       setRenameInitialValue(undefined)
       setRenameWarning(undefined)

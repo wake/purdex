@@ -15,7 +15,10 @@ import { closeAllIDB } from '../../../lib/storage/idb'
 import { triggerDownload } from '../../../lib/download-file'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useEditorStore } from '../../../stores/useEditorStore'
+import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+import type { RecentFileEntry } from '../../../stores/useRecentFilesStore'
 import type { Tab } from '../../../types/tab'
+import type { FileSource } from '../../../types/fs'
 
 // Configurable backend: default null so we exercise the "missing backend" guard.
 let backend: unknown = null
@@ -947,5 +950,138 @@ describe('uploadFile / uploadFiles — size cap + quota guards (T1c-4)', () => {
       { name: 'huge.bin', reason: 'too-large', kind: 'too-large', cap: SOFT_MAX_UPLOAD_BYTES },
       { name: 'boom.bin', reason: 'quota', kind: 'quota' },
     ])
+  })
+})
+
+// --- T3.2: the recent-files list follows every path mutation -----------------
+//
+// The Recent list used to keep pointing at the OLD path after a rename/move and
+// to keep listing deleted files, because no storage action ever told the store.
+// These cases pin the wiring at the action layer with NO pane open, so they
+// prove the remap is unconditional and not a side effect of the pane re-point.
+describe('storage-actions — recent files follow rename / move / delete (T3.2)', () => {
+  let real: InAppBackend
+  const enc = (s: string) => new TextEncoder().encode(s)
+  const t: (key: string, params?: Record<string, string | number>) => string = (k) => k
+  const originalConfirm = window.confirm
+
+  function recent(
+    path: string,
+    source: FileSource = { type: 'inapp' },
+    openedAt = 1,
+  ): RecentFileEntry {
+    return {
+      source,
+      path,
+      name: path.split('/').pop() ?? path,
+      kind: 'editor',
+      openedAt,
+    }
+  }
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+    useRecentFilesStore.setState({ files: [] })
+    window.confirm = () => true
+  })
+
+  afterEach(() => {
+    window.confirm = originalConfirm
+  })
+
+  it('T3.2-1: a file rename re-points its recent entry (path + name) with no pane open', async () => {
+    await real.write('/buffer/a.md', enc('hello'))
+    useRecentFilesStore.setState({ files: [recent('/buffer/a.md')] })
+
+    const res = await renameStorageEntry('/buffer/a.md', 'b.md')
+
+    expect(res).toEqual({ ok: true })
+    expect(useRecentFilesStore.getState().files).toEqual([
+      { ...recent('/buffer/a.md'), path: '/buffer/b.md', name: 'b.md' },
+    ])
+  })
+
+  it('T3.2-1b: an identically-pathed entry on another source is untouched by an in-app rename', async () => {
+    await real.write('/buffer/a.md', enc('hello'))
+    const remote = recent('/buffer/a.md', { type: 'daemon', hostId: 'hostB' }, 2)
+    useRecentFilesStore.setState({ files: [recent('/buffer/a.md'), remote] })
+
+    await renameStorageEntry('/buffer/a.md', 'b.md')
+
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual([
+      '/buffer/b.md',
+      '/buffer/a.md',
+    ])
+    expect(useRecentFilesStore.getState().files[1]).toEqual(remote)
+  })
+
+  it('T3.2-2: a folder MOVE remaps every recent descendant (same remapPanesUnder call site)', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    await real.write('/buffer/a/c/d.md', enc('DD'))
+    await real.mkdir('/buffer/dest')
+    useRecentFilesStore.setState({
+      files: [recent('/buffer/a/b.md'), recent('/buffer/a/c/d.md'), recent('/buffer/ab.md')],
+    })
+
+    const res = await moveStorageEntry('/buffer/a', '/buffer/dest')
+
+    expect(res).toEqual({ ok: true })
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual([
+      '/buffer/dest/a/b.md',
+      '/buffer/dest/a/c/d.md',
+      // Trailing-slash boundary: the sibling `ab.md` is NOT under `a`.
+      '/buffer/ab.md',
+    ])
+  })
+
+  it('T3.2-2b: a folder RENAME remaps every recent descendant', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    useRecentFilesStore.setState({ files: [recent('/buffer/a/b.md')] })
+
+    await renameStorageEntry('/buffer/a', 'z')
+
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual(['/buffer/z/b.md'])
+  })
+
+  it('T3.2-3: deleting a folder drops its recent descendants and keeps everything else', async () => {
+    await real.write('/buffer/a/b.md', enc('BB'))
+    await real.write('/buffer/a/c/d.md', enc('DD'))
+    await real.write('/buffer/keep.md', enc('K'))
+    await real.write('/buffer/ab.md', enc('AB'))
+    useRecentFilesStore.setState({
+      files: [
+        recent('/buffer/a/b.md'),
+        recent('/buffer/a/c/d.md'),
+        recent('/buffer/keep.md'),
+        recent('/buffer/ab.md'),
+      ],
+    })
+
+    const res = await deleteStorageEntries(['/buffer/a'], t)
+
+    expect(res).toEqual({ status: 'deleted' })
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual([
+      '/buffer/keep.md',
+      '/buffer/ab.md',
+    ])
+  })
+
+  it('T3.2-3b: deleting several files drops exactly those recent entries', async () => {
+    await real.write('/buffer/x.md', enc('X'))
+    await real.write('/buffer/y.md', enc('Y'))
+    await real.write('/buffer/z.md', enc('Z'))
+    useRecentFilesStore.setState({
+      files: [recent('/buffer/x.md'), recent('/buffer/y.md'), recent('/buffer/z.md')],
+    })
+
+    const res = await deleteStorageEntries(['/buffer/x.md', '/buffer/z.md'], t)
+
+    expect(res).toEqual({ status: 'deleted' })
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual(['/buffer/y.md'])
   })
 })
