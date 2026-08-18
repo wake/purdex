@@ -1154,6 +1154,142 @@ describe('EditorPane', () => {
   })
 })
 
+describe('EditorPane — load failure (T1.2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    useRecentFilesStore.setState({ files: [] })
+  })
+
+  it('renders a load error and creates no buffer when the read fails', async () => {
+    const pane = createPane('/notes/read-fail.md', 'pane-read-fail')
+    const backend = createBackend()
+    backend.read.mockRejectedValue(new Error('network unreachable'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/read-fail.md')]).toBeUndefined()
+    expect(screen.getByTestId('editor-load-error')).toHaveTextContent('network unreachable')
+    expect(screen.queryByTestId('monaco-wrapper')).not.toBeInTheDocument()
+  })
+
+  it('renders a load error and creates no buffer when the stat fails after a successful read', async () => {
+    const pane = createPane('/notes/stat-fail.md', 'pane-stat-fail')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('real remote content'))
+    backend.stat.mockRejectedValue(new Error('stat refused'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/stat-fail.md')]).toBeUndefined()
+    expect(screen.getByTestId('editor-load-error')).toHaveTextContent('stat refused')
+  })
+
+  it('retries the load and opens the buffer normally once the read succeeds', async () => {
+    const pane = createPane('/notes/retry.txt', 'pane-retry')
+    const backend = createBackend()
+    backend.read
+      .mockRejectedValueOnce(new Error('temporarily unreachable'))
+      .mockResolvedValue(new TextEncoder().encode('recovered content'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 17, mtime: 99 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId('editor-load-error-retry'))
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/retry.txt')]).toMatchObject({
+        content: 'recovered content',
+        lastStat: { mtime: 99, size: 17 },
+      })
+    })
+
+    expect(backend.read).toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+    expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+  })
+
+  it('still opens an empty buffer for an untitled pane without reading the backend', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-load')
+    const backend = createBackend()
+    backend.read.mockRejectedValue(new Error('untitled panes must not read'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toMatchObject({
+        content: '',
+      })
+    })
+
+    expect(backend.read).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+  })
+
+  it('ignores a stale load failure after the pane switched to another file', async () => {
+    const backend = createBackend()
+    let rejectFirstRead: ((error: Error) => void) | undefined
+    backend.read.mockImplementation((path: string) => {
+      if (path === '/notes/stale-fail.md') {
+        return new Promise<Uint8Array>((_resolve, reject) => {
+          rejectFirstRead = reject
+        })
+      }
+      return Promise.resolve(new TextEncoder().encode('second file'))
+    })
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 11, mtime: 5 })
+    getFsBackendMock.mockReturnValue(backend)
+
+    const firstPane = createPane('/notes/stale-fail.md', 'pane-stale')
+    const secondPane = createPane('/notes/stale-ok.txt', 'pane-stale')
+    registerTabPane(firstPane)
+
+    const { rerender } = render(<EditorPane pane={firstPane} isActive />)
+
+    await waitFor(() => {
+      expect(backend.read).toHaveBeenCalledWith('/notes/stale-fail.md')
+    })
+
+    registerTabPane(secondPane)
+    rerender(<EditorPane pane={secondPane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/stale-ok.txt')]).toBeDefined()
+    })
+
+    await act(async () => {
+      rejectFirstRead?.(new Error('too late'))
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+    expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/stale-fail.md')]).toBeUndefined()
+  })
+})
+
 const HOST_BOUND_CAPS: PlatformCapabilities = {
   isElectron: false,
   canTearOffTab: false,

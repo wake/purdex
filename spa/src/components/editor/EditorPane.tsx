@@ -68,6 +68,15 @@ function renameWarningMessage(error: unknown): string {
   return 'Rename failed'
 }
 
+// Spec 1.2: a load failure must never degrade into an empty buffer. Extract the
+// most specific reason we can so the error surface tells the user *why* the file
+// could not be read (empty string → the generic i18n fallback).
+function loadErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return ''
+}
+
 function sourceIdentity(source: FileSource): string {
   return source.type === 'daemon' ? `daemon:${source.hostId}` : source.type
 }
@@ -142,6 +151,10 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   const effectiveEditorMode = isMarkdown ? editorMode : 'raw'
   const showDiff = alignedPaneState?.showDiff ?? false
   const canSave = buffer ? (buffer.isDirty || !buffer.lastStat) : false
+  // Per-pane load failure (spec 1.2). Local state on purpose: the store never
+  // learns about a failed load because no buffer is created for it.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
   const [renameMode, setRenameMode] = useState<'rename' | 'save'>('rename')
   const [renameInitialValue, setRenameInitialValue] = useState<string>()
@@ -170,10 +183,16 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
     }
   }, [editorMode, isMarkdown, paneId])
 
-  // Load file on mount, cleanup buffer on unmount
+  // Load file on mount, cleanup buffer on unmount.
+  // `loadAttempt` is a deps-only retry trigger (see handleRetryLoad).
   useEffect(() => {
     let stale = false
+    setLoadError(null)
     if (useEditorStore.getState().buffers[key]) return // already loaded
+    // Only an untitled pane may open an empty buffer (spec 1.2): it has no file
+    // behind it yet. Everything else — including "not found" — becomes a load
+    // error, because a buffer opened over an unreadable file would silently
+    // truncate that file on the next save.
     if (isUntitled) {
       useEditorStore.getState().openBuffer(key, '', createMetadata(source, filePath, untitled))
       return
@@ -192,14 +211,18 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           useEditorStore.getState().openBuffer(key, text, metadata, { mtime: stat.mtime, size: stat.size })
         })
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (stale) return
-        // New file — open empty buffer
-        useEditorStore.getState().openBuffer(key, '', createMetadata(source, filePath, untitled))
+        setLoadError(loadErrorMessage(error))
       })
 
     return () => { stale = true }
-  }, [filePath, isUntitled, key, sourceId, source, untitled])
+  }, [filePath, isUntitled, key, sourceId, source, untitled, loadAttempt])
+
+  const handleRetryLoad = useCallback(() => {
+    setLoadError(null)
+    setLoadAttempt((attempt) => attempt + 1)
+  }, [])
 
   // Cleanup pane state only when the pane is truly gone, not just hidden by tab switching.
   useEffect(() => {
@@ -393,6 +416,30 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   }, [currentName, filePath, key, renameMode, saveUntitledBuffer, source])
 
   if (!buffer) {
+    // Spec 1.2: a failed load renders an explicit, retryable error instead of an
+    // empty editor. No buffer exists here, so there is nothing to save over the
+    // real file.
+    if (loadError !== null) {
+      return (
+        <div
+          data-testid="editor-load-error"
+          className="h-full w-full flex flex-col items-center justify-center gap-2 px-6 text-center"
+        >
+          <div className="text-xs text-red-400">{t('editor.load_error.title')}</div>
+          <div className="max-w-full text-xs break-words text-text-muted">
+            {loadError || t('editor.load_error.unknown')}
+          </div>
+          <button
+            type="button"
+            data-testid="editor-load-error-retry"
+            onClick={handleRetryLoad}
+            className="mt-1 rounded-md bg-accent px-3 py-1.5 text-xs text-text-inverse hover:bg-accent-hover"
+          >
+            {t('editor.load_error.retry')}
+          </button>
+        </div>
+      )
+    }
     return <div className="flex-1 flex items-center justify-center text-text-muted text-xs">Loading...</div>
   }
 
