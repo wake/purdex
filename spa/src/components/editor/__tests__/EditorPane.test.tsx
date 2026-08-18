@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorPane } from '../EditorPane'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -8,15 +8,27 @@ import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
 import type { Pane } from '../../../types/tab'
 import type { FsBackend } from '../../../lib/fs-backend'
 import { bufferKey } from '../../../lib/editor-buffer-key'
+import { registerBuiltinFsBackends } from '../../../lib/register-modules/fs-backends'
+import { useHostStore } from '../../../stores/useHostStore'
+import type { PlatformCapabilities } from '../../../lib/platform'
 
 const getFsBackendMock = vi.hoisted(() => vi.fn())
 const editorStatusBarMock = vi.hoisted(() => vi.fn())
 const tiptapPropsSpy = vi.hoisted(() => vi.fn())
 const monacoPropsSpy = vi.hoisted(() => vi.fn())
 
-vi.mock('../../../lib/fs-backend', () => ({
-  getFsBackend: getFsBackendMock,
+// The real module is kept reachable (`fsBackendActual`) so the host-binding
+// suite at the bottom can drive EditorPane through the REAL registry — a
+// mocked getFsBackend can never prove which host a read lands on.
+const fsBackendActual = vi.hoisted(() => ({
+  current: null as typeof import('../../../lib/fs-backend') | null,
 }))
+
+vi.mock('../../../lib/fs-backend', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/fs-backend')>()
+  fsBackendActual.current = actual
+  return { ...actual, getFsBackend: getFsBackendMock }
+})
 
 vi.mock('../MonacoWrapper', () => ({
   MonacoWrapper: (props: { isActive?: boolean; initialViewState?: unknown }) => {
@@ -1139,5 +1151,95 @@ describe('EditorPane', () => {
       isDirty: true,
       lastStat: { mtime: 123, size: 11 },
     })
+  })
+})
+
+const HOST_BOUND_CAPS: PlatformCapabilities = {
+  isElectron: false,
+  canTearOffTab: false,
+  canMergeWindow: false,
+  canBrowserPane: false,
+  canSystemTray: false,
+  canNotification: false,
+  devUpdateEnabled: false,
+  hasLocalFilesystem: false,
+}
+
+describe('EditorPane — host-bound backend resolution', () => {
+  const REMOTE_PATH = '/remote/notes.md'
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  function remotePane(hostId: string): Pane {
+    return {
+      id: 'pane-remote',
+      content: { kind: 'editor', source: { type: 'daemon', hostId }, filePath: REMOTE_PATH },
+    }
+  }
+
+  beforeEach(() => {
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useRecentFilesStore.setState({ files: [] })
+
+    // Drive the component through the REAL registry — a mocked getFsBackend
+    // could never prove which host the read actually lands on.
+    const actual = fsBackendActual.current!
+    actual.clearFsBackendRegistry()
+    getFsBackendMock.mockImplementation(actual.getFsBackend)
+
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, token: 'tokenA', order: 0 },
+        hostB: { id: 'hostB', name: 'B', ip: '10.0.0.2', port: 7861, token: 'tokenB', order: 1 },
+      },
+      hostOrder: ['hostA', 'hostB'],
+      activeHostId: 'hostA',
+      runtime: {},
+    })
+    registerBuiltinFsBackends(HOST_BOUND_CAPS)
+
+    fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/api/fs/read')) {
+        return { ok: true, arrayBuffer: async () => new TextEncoder().encode('remote body').buffer }
+      }
+      return { ok: true, json: async () => ({ size: 11, mtime: 42, isDirectory: false, isFile: true }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    getFsBackendMock.mockReset()
+    fsBackendActual.current!.clearFsBackendRegistry()
+    useHostStore.getState().reset()
+    useEditorStore.getState().clearAllBuffers()
+  })
+
+  it('reads and stats a remote file on its own host while another host is active', async () => {
+    render(<EditorPane pane={remotePane('hostB')} isActive />)
+
+    await waitFor(() => {
+      expect(
+        useEditorStore.getState().buffers[bufferKey({ type: 'daemon', hostId: 'hostB' }, REMOTE_PATH)],
+      ).toBeDefined()
+    })
+
+    const urls = fetchMock.mock.calls.map((c) => c[0] as string)
+    expect(urls).toContain('http://10.0.0.2:7861/api/fs/read')
+    expect(urls).toContain('http://10.0.0.2:7861/api/fs/stat')
+    expect(urls.every((u) => u.startsWith('http://10.0.0.2:7861'))).toBe(true)
+  })
+
+  it('still resolves the active host for a pane bound to it', async () => {
+    render(<EditorPane pane={remotePane('hostA')} isActive />)
+
+    await waitFor(() => {
+      expect(
+        useEditorStore.getState().buffers[bufferKey({ type: 'daemon', hostId: 'hostA' }, REMOTE_PATH)],
+      ).toBeDefined()
+    })
+
+    const urls = fetchMock.mock.calls.map((c) => c[0] as string)
+    expect(urls.every((u) => u.startsWith('http://10.0.0.1:7860'))).toBe(true)
   })
 })

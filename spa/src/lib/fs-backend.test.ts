@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { registerFsBackend, getFsBackend, clearFsBackendRegistry } from './fs-backend'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import {
+  registerFsBackend,
+  registerFsBackendResolver,
+  getFsBackend,
+  clearFsBackendRegistry,
+} from './fs-backend'
 import type { FsBackend } from './fs-backend'
 import type { FileSource } from '../types/fs'
 
@@ -38,5 +43,58 @@ describe('FsBackend registry', () => {
   it('returns undefined for unregistered source type', () => {
     const source: FileSource = { type: 'local' }
     expect(getFsBackend(source)).toBeUndefined()
+  })
+})
+
+describe('FsBackend resolver layer', () => {
+  beforeEach(() => clearFsBackendRegistry())
+
+  it('prefers a registered resolver over the flat registry and passes it the full source', () => {
+    const flat = createMockBackend('daemon-flat')
+    const hostBound = createMockBackend('daemon-hostB')
+    registerFsBackend('daemon', flat)
+
+    const resolver = vi.fn((_source: FileSource): FsBackend | undefined => hostBound)
+    registerFsBackendResolver('daemon', resolver)
+
+    const source: FileSource = { type: 'daemon', hostId: 'hostB' }
+    expect(getFsBackend(source)).toBe(hostBound)
+    expect(resolver).toHaveBeenCalledWith(source)
+  })
+
+  it('falls back to the flat registry when the resolver returns undefined', () => {
+    const flat = createMockBackend('daemon-flat')
+    registerFsBackend('daemon', flat)
+    registerFsBackendResolver('daemon', () => undefined)
+
+    expect(getFsBackend({ type: 'daemon', hostId: '' })).toBe(flat)
+  })
+
+  it('leaves types without a resolver on the flat registry', () => {
+    const inapp = createMockBackend('inapp')
+    const local = createMockBackend('local')
+    registerFsBackend('inapp', inapp)
+    registerFsBackend('local', local)
+    registerFsBackendResolver('daemon', () => createMockBackend('daemon-hostB'))
+
+    expect(getFsBackend({ type: 'inapp' })).toBe(inapp)
+    expect(getFsBackend({ type: 'local' })).toBe(local)
+  })
+
+  it('returns undefined when neither a resolver nor a flat backend produces a backend', () => {
+    registerFsBackendResolver('daemon', () => undefined)
+    expect(getFsBackend({ type: 'daemon', hostId: 'hostB' })).toBeUndefined()
+  })
+
+  it('clearFsBackendRegistry() also drops resolvers so they do not leak between suites', () => {
+    const hostBound = createMockBackend('daemon-hostB')
+    registerFsBackendResolver('daemon', () => hostBound)
+    expect(getFsBackend({ type: 'daemon', hostId: 'hostB' })).toBe(hostBound)
+
+    clearFsBackendRegistry()
+
+    const flat = createMockBackend('daemon-flat')
+    registerFsBackend('daemon', flat)
+    expect(getFsBackend({ type: 'daemon', hostId: 'hostB' })).toBe(flat)
   })
 })

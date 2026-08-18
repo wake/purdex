@@ -1,7 +1,7 @@
 import type { PlatformCapabilities } from '../platform'
-import { registerFsBackend, getFsBackend } from '../fs-backend'
+import { registerFsBackend, registerFsBackendResolver, getFsBackend, type FsBackend } from '../fs-backend'
 import { InAppBackend } from '../fs-backend-inapp'
-import { DaemonBackend } from '../fs-backend-daemon'
+import { DaemonBackend, createDaemonBackendForHost } from '../fs-backend-daemon'
 import { LocalBackend } from '../fs-backend-local'
 import { useHostStore } from '../../stores/useHostStore'
 
@@ -16,6 +16,29 @@ export function registerBuiltinFsBackends(caps: PlatformCapabilities): void {
   // host can change at any time and DaemonBackend is stateless. If
   // DaemonBackend gains internal state, switch to a memoized-by-hostId pattern.)
   if (!getFsBackend({ type: 'daemon', hostId: '' })) {
+    // Host-bound resolution: a daemon file belongs to `source.hostId`, so it
+    // must be read/written on THAT host even while another one is active.
+    //
+    // One instance per host, cached: `getFsBackend` is called during RENDER by
+    // the preview panes — ImagePreviewPane compares the resolved backend object
+    // to detect a session change, and PdfPreviewPane keys its read effect on it
+    // — so handing back a fresh object per call turns them into infinite
+    // re-render / re-download loops (verified: "Too many re-renders" without
+    // this cache). The instances stay correct across host edits because
+    // `createDaemonBackendForHost` re-reads `useHostStore` on every call; the
+    // cache's lifetime is this registration (a `clearFsBackendRegistry()` +
+    // re-register starts a fresh one).
+    const daemonByHost = new Map<string, FsBackend>()
+    registerFsBackendResolver('daemon', (source) => {
+      if (source.type !== 'daemon' || !source.hostId) return undefined
+      let backend = daemonByHost.get(source.hostId)
+      if (!backend) {
+        backend = createDaemonBackendForHost(source.hostId)
+        daemonByHost.set(source.hostId, backend)
+      }
+      return backend
+    })
+
     const getDaemon = (): DaemonBackend => {
       const state = useHostStore.getState()
       const hostId = state.activeHostId ?? state.hostOrder[0] ?? ''

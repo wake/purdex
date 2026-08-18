@@ -4,6 +4,20 @@ import { ImagePreviewPane } from './ImagePreviewPane'
 import type { Pane } from '../../types/tab'
 import type { FileSource } from '../../types/fs'
 import { getFsBackend } from '../../lib/fs-backend'
+import { registerBuiltinFsBackends } from '../../lib/register-modules/fs-backends'
+import { useHostStore } from '../../stores/useHostStore'
+import type { PlatformCapabilities } from '../../lib/platform'
+
+const IMAGE_FS_CAPS: PlatformCapabilities = {
+  isElectron: false,
+  canTearOffTab: false,
+  canMergeWindow: false,
+  canBrowserPane: false,
+  canSystemTray: false,
+  canNotification: false,
+  devUpdateEnabled: false,
+  hasLocalFilesystem: false,
+}
 
 const read = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
 // Stable backend instance — mirrors production getFsBackend, which returns a
@@ -12,9 +26,18 @@ const read = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]))
 // mock would falsely read every rerender as a backend change.
 const backendInstance = { read }
 
-vi.mock('../../lib/fs-backend', () => ({
-  getFsBackend: vi.fn(() => backendInstance),
+// The real module stays reachable so the host-binding test below can drive the
+// pane through the REAL registry (a stubbed getFsBackend can never prove which
+// host the read lands on).
+const fsBackendActual = vi.hoisted(() => ({
+  current: null as typeof import('../../lib/fs-backend') | null,
 }))
+
+vi.mock('../../lib/fs-backend', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/fs-backend')>()
+  fsBackendActual.current = actual
+  return { ...actual, getFsBackend: vi.fn(() => backendInstance) }
+})
 
 // Track defineProperty installs so we can restore between tests.
 let imgComplete = true
@@ -405,5 +428,54 @@ describe('ImagePreviewPane', () => {
 
     await screen.findByRole('img')
     expect(screen.queryByText('read failed')).toBeNull()
+  })
+
+  // Real-consumer coverage for host-bound resolution (T1.1). Also pins the
+  // resolver's instance stability: this pane compares the resolved backend
+  // object during render, so a fresh instance per getFsBackend() call would
+  // spin it into an infinite re-render loop.
+  it('reads a remote image from its own host, not the active one', async () => {
+    imgComplete = true
+    imgNaturalW = 100
+    imgNaturalH = 100
+    boxW = 500
+    boxH = 500
+
+    const actual = fsBackendActual.current!
+    actual.clearFsBackendRegistry()
+    vi.mocked(getFsBackend).mockImplementation(actual.getFsBackend)
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, order: 0 },
+        hostB: { id: 'hostB', name: 'B', ip: '10.0.0.2', port: 7861, order: 1 },
+      },
+      hostOrder: ['hostA', 'hostB'],
+      activeHostId: 'hostA',
+      runtime: {},
+    })
+    registerBuiltinFsBackends(IMAGE_FS_CAPS)
+
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      render(
+        <ImagePreviewPane
+          pane={makePane('/remote.png', { type: 'daemon', hostId: 'hostB' })}
+          isActive={true}
+        />,
+      )
+      await screen.findByRole('img')
+
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock.mock.calls[0][0]).toBe('http://10.0.0.2:7861/api/fs/read')
+    } finally {
+      vi.unstubAllGlobals()
+      actual.clearFsBackendRegistry()
+      useHostStore.getState().reset()
+    }
   })
 })

@@ -7,6 +7,19 @@ import { useWorkspaceStore } from '../features/workspace/store'
 import * as FsBackend from '../lib/fs-backend'
 import * as FileOpenerRegistry from '../lib/file-opener-registry'
 import * as FileOpenBootstrap from '../lib/register-modules/file-open-bootstrap'
+import { registerBuiltinFsBackends } from '../lib/register-modules/fs-backends'
+import type { PlatformCapabilities } from '../lib/platform'
+
+const FS_CAPS: PlatformCapabilities = {
+  isElectron: false,
+  canTearOffTab: false,
+  canMergeWindow: false,
+  canBrowserPane: false,
+  canSystemTray: false,
+  canNotification: false,
+  devUpdateEnabled: false,
+  hasLocalFilesystem: false,
+}
 
 const mockEntries = [
   { name: 'docs', isDir: true, size: 0 },
@@ -159,6 +172,42 @@ describe('FileTreeWorkspaceView', () => {
       { afterTabId: undefined },
     )
     expect(insertTab).toHaveBeenCalledWith('new-tab-id', TEST_WORKSPACE_ID, undefined)
+  })
+
+  it('lists through the real registry against its own host', async () => {
+    // Real-consumer coverage for host-bound resolution: no getFsBackend stub,
+    // so the daemon resolver registered by registerBuiltinFsBackends decides
+    // which daemon the list() lands on.
+    vi.mocked(FsBackend.getFsBackend).mockRestore()
+    FsBackend.clearFsBackendRegistry()
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, order: 0 },
+        hostB: { id: 'hostB', name: 'B', ip: '10.0.0.2', port: 7861, order: 1 },
+      },
+      hostOrder: ['hostA', 'hostB'],
+      activeHostId: 'hostB',
+      runtime: {},
+    })
+    registerBuiltinFsBackends(FS_CAPS)
+
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      json: async () => ({ path: '/home/user', entries: mockEntries }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      render(<FileTreeWorkspaceView isActive={true} workspaceId={TEST_WORKSPACE_ID} />)
+
+      await waitFor(() => {
+        expect(screen.getByText('README.md')).toBeTruthy()
+      })
+      expect(fetchMock.mock.calls[0][0]).toBe('http://10.0.0.2:7861/api/fs/list')
+    } finally {
+      vi.unstubAllGlobals()
+      FsBackend.clearFsBackendRegistry()
+    }
   })
 
   it('shows setup prompt when projectPath is not configured', () => {
