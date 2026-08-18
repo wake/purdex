@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.327] - 2026-08-18
+
+### Fix(spa): New Tab「Bring in an open tab」限高半窗並內部捲動
+
+分割視窗時右側 new-tab pane 的 Bring-in 區塊無高度上限（`flex-shrink-0`），開啟的 tab 一多就整段撐長，把下方 provider grid（Sessions / Files…）擠出可視範圍。
+
+改為 `max-h-[50%]` + `min-h-0` 的 flex column：標題固定、候選清單 `overflow-y-auto` 內部捲動；保留 `flex-shrink-0` 讓候選少時仍維持自然高度。附 regression test（20 個候選 tab）。
+
 ## [1.0.0-alpha.326] - 2026-07-19
 
 ### Feat(m0): Ploom↔Purdex 派工整合 — 設計基礎 + Purdex 執行消費端 (#933, #937)

@@ -1,7 +1,7 @@
 {
   "name": "spa",
   "private": true,
-  "version": "1.0.0-alpha.326",
+  "version": "1.0.0-alpha.327",
   "license": "MIT",
   "type": "module",
   "scripts": {
