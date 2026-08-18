@@ -27,6 +27,14 @@ interface Props {
   canSave?: boolean
   showDiff?: boolean
   onSave: (anchorRect?: DOMRect) => void
+  /**
+   * Handle on the Save button so the owner can anchor a popover to it even when
+   * the save did NOT originate from a click. Monaco / Tiptap invoke `onSave()`
+   * with no rect (they have no button to measure), and the first save of an
+   * unnamed untitled document has to open the naming popover somewhere — this
+   * is that "somewhere", identical to what a click would have produced.
+   */
+  saveButtonRef?: React.RefObject<HTMLButtonElement | null>
   onDiff?: () => void
   onRenameStart?: (anchorRect: DOMRect) => void
   onBufferSwitch?: (newKey: string) => void
@@ -42,6 +50,7 @@ export function EditorToolbar({
   canSave,
   showDiff,
   onSave,
+  saveButtonRef,
   onDiff,
   onRenameStart,
   onBufferSwitch,
@@ -126,22 +135,33 @@ export function EditorToolbar({
               )
             })}
         </div>
-        {saveEnabled && <span className="text-accent-base" title="Unsaved changes">●</span>}
+        {/* Spec 1.3: the dot means "there are unsaved changes", so it binds to
+            `isDirty` only. Binding it to `saveEnabled` made every never-saved
+            buffer (and, before the canSave fix, every file that failed to stat)
+            claim to be modified. */}
+        {isDirty && <span className="text-accent" title="Unsaved changes">●</span>}
       </div>
       <div className="flex items-center gap-1">
         {isDirty && onDiff && (
           <button
             onClick={onDiff}
-            className={`p-1 rounded hover:bg-surface-hover transition-colors ${showDiff ? 'text-accent-base' : 'text-text-secondary'}`}
+            /* `text-accent-base` had no Tailwind 4 token behind it (0 hits in
+               the built CSS), so the active state never actually painted. Use
+               the same `text-accent` the Save button uses. */
+            className={`p-1 rounded hover:bg-surface-hover transition-colors ${showDiff ? 'text-accent' : 'text-text-secondary'}`}
             title={showDiff ? 'Close diff' : 'Diff against saved'}
           >
             <GitDiff size={14} />
           </button>
         )}
+        {/* Spec 1.3: a 14 px floppy at two near-identical greys made "savable"
+            impossible to read at a glance. Enabled now carries the theme accent
+            (`--color-accent`); disabled keeps the muted secondary + opacity-30. */}
         <button
+          ref={saveButtonRef}
           onClick={(event) => onSave(event.currentTarget.getBoundingClientRect())}
           disabled={!saveEnabled}
-          className="p-1 rounded hover:bg-surface-hover text-text-secondary disabled:opacity-30 transition-colors"
+          className={`p-1 rounded hover:bg-surface-hover disabled:opacity-30 transition-colors ${saveEnabled ? 'text-accent hover:text-accent-hover' : 'text-text-secondary'}`}
           title="Save (⌘S)"
         >
           <FloppyDisk size={14} />

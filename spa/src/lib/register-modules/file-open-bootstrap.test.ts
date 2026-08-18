@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   __resetFileOpenBootstrap,
   resolveOpenContextCwdFromSessions,
+  tryOpenFileForFileTree,
 } from './file-open-bootstrap'
+import type { FileInfo } from '../../types/fs'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
@@ -71,6 +73,44 @@ describe('resolveOpenContextCwdFromSessions', () => {
 
   it('returns null when session-code not found on host', () => {
     expect(resolveOpenContextCwdFromSessions('h1', 'unknown')).toBe(null)
+  })
+})
+
+describe('wrong-host guard', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('a file whose host is gone never gets stat-ed on the active host', async () => {
+    // The open pipeline builds its backend with `createDaemonBackendForHost`,
+    // bypassing `getFsBackend`'s resolver guard. Without the guard inside that
+    // helper, `getDaemonBase` answers an unknown host with the ACTIVE host's
+    // base — so hostA would happily vouch for a path that belongs to hostX.
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ size: 1, mtime: 0, isFile: true, isDirectory: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const file: FileInfo = {
+      path: '/remote/a.md',
+      name: 'a.md',
+      extension: 'md',
+      size: 0,
+      isDirectory: false,
+    }
+
+    await expect(
+      tryOpenFileForFileTree(
+        file,
+        { type: 'daemon', hostId: 'hX' },
+        { hostId: 'hX', cwd: '/', sourceWorkspaceId: 'w1' },
+      ),
+    ).rejects.toThrow(/hX/)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
 

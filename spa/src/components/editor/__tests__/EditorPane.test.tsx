@@ -1,22 +1,36 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorPane } from '../EditorPane'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useEditorSettingsStore } from '../../../stores/useEditorSettingsStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+import { useUndoToast } from '../../../stores/useUndoToast'
 import type { Pane } from '../../../types/tab'
+import type { FileSource } from '../../../types/fs'
 import type { FsBackend } from '../../../lib/fs-backend'
 import { bufferKey } from '../../../lib/editor-buffer-key'
+import { registerBuiltinFsBackends } from '../../../lib/register-modules/fs-backends'
+import { useHostStore } from '../../../stores/useHostStore'
+import type { PlatformCapabilities } from '../../../lib/platform'
 
 const getFsBackendMock = vi.hoisted(() => vi.fn())
 const editorStatusBarMock = vi.hoisted(() => vi.fn())
 const tiptapPropsSpy = vi.hoisted(() => vi.fn())
 const monacoPropsSpy = vi.hoisted(() => vi.fn())
 
-vi.mock('../../../lib/fs-backend', () => ({
-  getFsBackend: getFsBackendMock,
+// The real module is kept reachable (`fsBackendActual`) so the host-binding
+// suite at the bottom can drive EditorPane through the REAL registry — a
+// mocked getFsBackend can never prove which host a read lands on.
+const fsBackendActual = vi.hoisted(() => ({
+  current: null as typeof import('../../../lib/fs-backend') | null,
 }))
+
+vi.mock('../../../lib/fs-backend', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/fs-backend')>()
+  fsBackendActual.current = actual
+  return { ...actual, getFsBackend: getFsBackendMock }
+})
 
 vi.mock('../MonacoWrapper', () => ({
   MonacoWrapper: (props: { isActive?: boolean; initialViewState?: unknown }) => {
@@ -122,6 +136,24 @@ function createBackend(): FsBackend & {
 
 function getBufferKey(filePath: string): string {
   return bufferKey({ type: 'inapp' }, filePath)
+}
+
+/**
+ * Model a first-save target that only exists once it has been written. The
+ * untitled first save probes `stat` BEFORE writing so it can refuse to clobber
+ * a file that is already there, so a fixture whose `stat` always resolves would
+ * describe a world where every new name is already taken.
+ */
+function statMissingUntilWritten(
+  backend: ReturnType<typeof createBackend>,
+  stat: { size: number; mtime: number },
+): void {
+  backend.stat.mockImplementation(async () => {
+    if (backend.write.mock.calls.length === 0) {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    }
+    return { isFile: true, isDirectory: false, ...stat }
+  })
 }
 
 function registerTabPane(pane: Pane, tabId = 'tab-1') {
@@ -670,12 +702,7 @@ describe('EditorPane', () => {
     const pane = createUntitledPane('Untitled', '.md', 'pane-save-untitled')
     const backend = createBackend()
     backend.write.mockResolvedValue(undefined)
-    backend.stat.mockResolvedValue({
-      isFile: true,
-      isDirectory: false,
-      size: 0,
-      mtime: 456,
-    })
+    statMissingUntilWritten(backend, { size: 0, mtime: 456 })
     getFsBackendMock.mockReturnValue(backend)
     registerTabPane(pane)
 
@@ -702,12 +729,7 @@ describe('EditorPane', () => {
     const pane = createUntitledPane('notes.txt', '.txt', 'pane-save-renamed')
     const backend = createBackend()
     backend.write.mockResolvedValue(undefined)
-    backend.stat.mockResolvedValue({
-      isFile: true,
-      isDirectory: false,
-      size: 5,
-      mtime: 456,
-    })
+    statMissingUntilWritten(backend, { size: 5, mtime: 456 })
     getFsBackendMock.mockReturnValue(backend)
     registerTabPane({
       ...pane,
@@ -802,7 +824,9 @@ describe('EditorPane', () => {
 
   it('keeps the buffer dirty when save fails', async () => {
     const backend = createBackend()
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // T3.3: the failure is reported through the toast now — the console.error the
+    // user could never see is gone, so the toast is what this pins.
+    useUndoToast.setState({ toast: null })
     backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
     backend.write.mockRejectedValue(new Error('disk full'))
     backend.stat.mockResolvedValue({
@@ -826,7 +850,7 @@ describe('EditorPane', () => {
     fireEvent.click(screen.getByTitle('Save (⌘S)'))
 
     await waitFor(() => {
-      expect(consoleError).toHaveBeenCalledWith('[editor] Save failed:', expect.any(Error))
+      expect(useUndoToast.getState().toast?.message).toBe('Save failed: disk full')
     })
 
     expect(useEditorStore.getState().buffers[getBufferKey('/notes/save-fail.md')]).toMatchObject({
@@ -835,8 +859,6 @@ describe('EditorPane', () => {
       isDirty: true,
       lastStat: { mtime: 123, size: 11 },
     })
-
-    consoleError.mockRestore()
   })
 
   it('cleans up the buffer on unmount', async () => {
@@ -1139,5 +1161,873 @@ describe('EditorPane', () => {
       isDirty: true,
       lastStat: { mtime: 123, size: 11 },
     })
+  })
+})
+
+describe('EditorPane — load failure (T1.2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    useRecentFilesStore.setState({ files: [] })
+  })
+
+  it('renders a load error and creates no buffer when the read fails', async () => {
+    const pane = createPane('/notes/read-fail.md', 'pane-read-fail')
+    const backend = createBackend()
+    backend.read.mockRejectedValue(new Error('network unreachable'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/read-fail.md')]).toBeUndefined()
+    expect(screen.getByTestId('editor-load-error')).toHaveTextContent('network unreachable')
+    expect(screen.queryByTestId('monaco-wrapper')).not.toBeInTheDocument()
+  })
+
+  it('renders a load error and creates no buffer when the stat fails after a successful read', async () => {
+    const pane = createPane('/notes/stat-fail.md', 'pane-stat-fail')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('real remote content'))
+    backend.stat.mockRejectedValue(new Error('stat refused'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/stat-fail.md')]).toBeUndefined()
+    expect(screen.getByTestId('editor-load-error')).toHaveTextContent('stat refused')
+  })
+
+  it('retries the load and opens the buffer normally once the read succeeds', async () => {
+    const pane = createPane('/notes/retry.txt', 'pane-retry')
+    const backend = createBackend()
+    backend.read
+      .mockRejectedValueOnce(new Error('temporarily unreachable'))
+      .mockResolvedValue(new TextEncoder().encode('recovered content'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 17, mtime: 99 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId('editor-load-error-retry'))
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/retry.txt')]).toMatchObject({
+        content: 'recovered content',
+        lastStat: { mtime: 99, size: 17 },
+      })
+    })
+
+    expect(backend.read).toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+    expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+  })
+
+  it('still opens an empty buffer for an untitled pane without reading the backend', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-load')
+    const backend = createBackend()
+    backend.read.mockRejectedValue(new Error('untitled panes must not read'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toMatchObject({
+        content: '',
+      })
+    })
+
+    expect(backend.read).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+  })
+
+  it('ignores a stale load failure after the pane switched to another file', async () => {
+    const backend = createBackend()
+    let rejectFirstRead: ((error: Error) => void) | undefined
+    backend.read.mockImplementation((path: string) => {
+      if (path === '/notes/stale-fail.md') {
+        return new Promise<Uint8Array>((_resolve, reject) => {
+          rejectFirstRead = reject
+        })
+      }
+      return Promise.resolve(new TextEncoder().encode('second file'))
+    })
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 11, mtime: 5 })
+    getFsBackendMock.mockReturnValue(backend)
+
+    const firstPane = createPane('/notes/stale-fail.md', 'pane-stale')
+    const secondPane = createPane('/notes/stale-ok.txt', 'pane-stale')
+    registerTabPane(firstPane)
+
+    const { rerender } = render(<EditorPane pane={firstPane} isActive />)
+
+    await waitFor(() => {
+      expect(backend.read).toHaveBeenCalledWith('/notes/stale-fail.md')
+    })
+
+    registerTabPane(secondPane)
+    rerender(<EditorPane pane={secondPane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/stale-ok.txt')]).toBeDefined()
+    })
+
+    await act(async () => {
+      rejectFirstRead?.(new Error('too late'))
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+    expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/stale-fail.md')]).toBeUndefined()
+  })
+})
+
+describe('EditorPane — unavailable FS backend (T1.2b)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    useRecentFilesStore.setState({ files: [] })
+  })
+
+  it('renders the load error instead of a permanent spinner when no backend resolves', async () => {
+    const pane = createPane('/notes/no-backend.md', 'pane-no-backend')
+    getFsBackendMock.mockReturnValue(undefined)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId('editor-load-error')).toHaveTextContent(
+      'No FS backend is available for this file.',
+    )
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/no-backend.md')]).toBeUndefined()
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('monaco-wrapper')).not.toBeInTheDocument()
+  })
+
+  it('retries and loads normally once a backend becomes available', async () => {
+    const pane = createPane('/notes/backend-later.txt', 'pane-backend-later')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('now reachable'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 13, mtime: 3 })
+    getFsBackendMock.mockReturnValue(undefined)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    getFsBackendMock.mockReturnValue(backend)
+    fireEvent.click(screen.getByTestId('editor-load-error-retry'))
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/backend-later.txt')]).toMatchObject({
+        content: 'now reachable',
+        lastStat: { mtime: 3, size: 13 },
+      })
+    })
+
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+    expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+  })
+
+  it('leaves the untitled path unaffected when no backend resolves', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-no-backend')
+    getFsBackendMock.mockReturnValue(undefined)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toMatchObject({
+        content: '',
+      })
+    })
+
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+  })
+})
+
+describe('EditorPane — canSave semantics and dirty affordances (T1.3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    useRecentFilesStore.setState({ files: [] })
+  })
+
+  it('keeps Save disabled and shows no dirty dot for a clean loaded buffer with no stat', () => {
+    const pane = createPane('/notes/no-stat.md', 'pane-no-stat')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    // A clean, non-untitled buffer whose stat is missing. Pre-opened so the load
+    // effect short-circuits on the existing buffer.
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/no-stat.md'), 'loaded body', {
+      language: 'markdown',
+    })
+
+    render(<EditorPane pane={pane} isActive />)
+
+    const buffer = useEditorStore.getState().buffers[getBufferKey('/notes/no-stat.md')]
+    expect(buffer.isDirty).toBe(false)
+    expect(buffer.lastStat).toBeNull()
+    // A missing stat must not masquerade as "modified".
+    expect(screen.getByTitle('Save (⌘S)')).toBeDisabled()
+    expect(screen.queryByTitle('Unsaved changes')).not.toBeInTheDocument()
+  })
+
+  it('keeps Save enabled for an untitled buffer that has never been saved', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-cansave')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    const buffer = useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]
+    expect(buffer.isDirty).toBe(false)
+    expect(buffer.lastStat).toBeNull()
+    expect(buffer.untitled).toBeDefined()
+    expect(screen.getByTitle('Save (⌘S)')).not.toBeDisabled()
+  })
+
+  it('shows the dirty dot, an enabled Save and the Diff button for a dirty buffer', async () => {
+    const pane = createPane('/notes/dirty.md', 'pane-dirty')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('saved body'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 10, mtime: 7 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/dirty.md')]).toBeDefined()
+    })
+
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey('/notes/dirty.md'), 'edited body')
+    })
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/dirty.md')].isDirty).toBe(true)
+    expect(screen.getByTitle('Unsaved changes')).toBeInTheDocument()
+    expect(screen.getByTitle('Save (⌘S)')).not.toBeDisabled()
+    expect(screen.getByTitle('Diff against saved')).toBeInTheDocument()
+  })
+})
+
+const HOST_BOUND_CAPS: PlatformCapabilities = {
+  isElectron: false,
+  canTearOffTab: false,
+  canMergeWindow: false,
+  canBrowserPane: false,
+  canSystemTray: false,
+  canNotification: false,
+  devUpdateEnabled: false,
+  hasLocalFilesystem: false,
+}
+
+describe('EditorPane — host-bound backend resolution', () => {
+  const REMOTE_PATH = '/remote/notes.md'
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  function remotePane(hostId: string): Pane {
+    return {
+      id: 'pane-remote',
+      content: { kind: 'editor', source: { type: 'daemon', hostId }, filePath: REMOTE_PATH },
+    }
+  }
+
+  beforeEach(() => {
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useRecentFilesStore.setState({ files: [] })
+
+    // Drive the component through the REAL registry — a mocked getFsBackend
+    // could never prove which host the read actually lands on.
+    const actual = fsBackendActual.current!
+    actual.clearFsBackendRegistry()
+    getFsBackendMock.mockImplementation(actual.getFsBackend)
+
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, token: 'tokenA', order: 0 },
+        hostB: { id: 'hostB', name: 'B', ip: '10.0.0.2', port: 7861, token: 'tokenB', order: 1 },
+      },
+      hostOrder: ['hostA', 'hostB'],
+      activeHostId: 'hostA',
+      runtime: {},
+    })
+    registerBuiltinFsBackends(HOST_BOUND_CAPS)
+
+    fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/api/fs/read')) {
+        return { ok: true, arrayBuffer: async () => new TextEncoder().encode('remote body').buffer }
+      }
+      return { ok: true, json: async () => ({ size: 11, mtime: 42, isDirectory: false, isFile: true }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    getFsBackendMock.mockReset()
+    fsBackendActual.current!.clearFsBackendRegistry()
+    useHostStore.getState().reset()
+    useEditorStore.getState().clearAllBuffers()
+  })
+
+  it('reads and stats a remote file on its own host while another host is active', async () => {
+    render(<EditorPane pane={remotePane('hostB')} isActive />)
+
+    await waitFor(() => {
+      expect(
+        useEditorStore.getState().buffers[bufferKey({ type: 'daemon', hostId: 'hostB' }, REMOTE_PATH)],
+      ).toBeDefined()
+    })
+
+    const urls = fetchMock.mock.calls.map((c) => c[0] as string)
+    expect(urls).toContain('http://10.0.0.2:7861/api/fs/read')
+    expect(urls).toContain('http://10.0.0.2:7861/api/fs/stat')
+    expect(urls.every((u) => u.startsWith('http://10.0.0.2:7861'))).toBe(true)
+  })
+
+  it('still resolves the active host for a pane bound to it', async () => {
+    render(<EditorPane pane={remotePane('hostA')} isActive />)
+
+    await waitFor(() => {
+      expect(
+        useEditorStore.getState().buffers[bufferKey({ type: 'daemon', hostId: 'hostA' }, REMOTE_PATH)],
+      ).toBeDefined()
+    })
+
+    const urls = fetchMock.mock.calls.map((c) => c[0] as string)
+    expect(urls.every((u) => u.startsWith('http://10.0.0.1:7860'))).toBe(true)
+  })
+
+  // The whole point of host-bound resolution is that a daemon file NEVER touches
+  // another machine. Deleting the host used to re-point the pane at the active
+  // one (via `getDaemonBase`'s fallback), so the pane would happily show — and
+  // save over — hostA's copy of the same path. It must land in the T1.2b
+  // no-backend error state instead.
+  it('falls into the no-backend error state when the pane\'s host is removed, never reads the active host', async () => {
+    const pane = remotePane('hostB')
+    const { unmount } = render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(
+        useEditorStore.getState().buffers[bufferKey({ type: 'daemon', hostId: 'hostB' }, REMOTE_PATH)],
+      ).toBeDefined()
+    })
+
+    // Host removed while the pane is open; the buffer is dropped with it and the
+    // pane re-loads from scratch (the real-world sequence is a reopen/remount).
+    unmount()
+    useEditorStore.getState().clearAllBuffers()
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, token: 'tokenA', order: 0 },
+      },
+      hostOrder: ['hostA'],
+      activeHostId: 'hostA',
+      runtime: {},
+    })
+    fetchMock.mockClear()
+
+    render(<EditorPane pane={pane} isActive />)
+
+    expect(await screen.findByTestId('editor-load-error')).toBeInTheDocument()
+    expect(
+      useEditorStore.getState().buffers[bufferKey({ type: 'daemon', hostId: 'hostB' }, REMOTE_PATH)],
+    ).toBeUndefined()
+    // The decisive assertion: not a single request went to hostA.
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// --- T3.2: the in-editor rename is the third path-mutating call site ---------
+//
+// Storage rename/move/delete are covered in storage-actions.test.ts; this is the
+// rename the user performs from the editor toolbar, which is also the ONLY remap
+// path a remote (daemon) file can take — it goes through the resolved backend, so
+// the same code covers both sources.
+describe('EditorPane — in-editor rename remaps the recent entry (T3.2)', () => {
+  function seedRecent(source: FileSource, path: string, openedAt = 5) {
+    useRecentFilesStore.setState({
+      files: [{ source, path, name: path.split('/').pop()!, kind: 'editor', openedAt }],
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useRecentFilesStore.setState({ files: [] })
+  })
+
+  it('T3.2-4: renaming a saved in-app file re-points its recent entry (path + name)', async () => {
+    const pane = createPane('/notes/old.md', 'pane-rename-recent')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('body'))
+    backend.rename.mockResolvedValue(undefined)
+    backend.stat
+      // 1) the initial load, 2) the rename-target existence probe (must reject).
+      .mockResolvedValueOnce({ isFile: true, isDirectory: false, size: 4, mtime: 1 })
+      .mockRejectedValueOnce(new Error('not found'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    seedRecent({ type: 'inapp' }, '/notes/old.md')
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/old.md')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('old.md'))
+    fireEvent.change(screen.getByDisplayValue('old.md'), { target: { value: 'new.md' } })
+    fireEvent.keyDown(screen.getByDisplayValue('new.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(backend.rename).toHaveBeenCalledWith('/notes/old.md', '/notes/new.md')
+    })
+    await waitFor(() => {
+      expect(useRecentFilesStore.getState().files).toEqual([
+        { source: { type: 'inapp' }, path: '/notes/new.md', name: 'new.md', kind: 'editor', openedAt: 5 },
+      ])
+    })
+  })
+
+  it('T3.2-4b: the same path covers a REMOTE file — the daemon entry follows its host', async () => {
+    const remoteSource: FileSource = { type: 'daemon', hostId: 'hostB' }
+    const pane: Pane = {
+      id: 'pane-remote-rename',
+      content: { kind: 'editor', source: remoteSource, filePath: '/remote/old.md' },
+    }
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('body'))
+    backend.rename.mockResolvedValue(undefined)
+    backend.stat
+      .mockResolvedValueOnce({ isFile: true, isDirectory: false, size: 4, mtime: 1 })
+      .mockRejectedValueOnce(new Error('not found'))
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    // Same path on another host must NOT be dragged along.
+    useRecentFilesStore.setState({
+      files: [
+        { source: remoteSource, path: '/remote/old.md', name: 'old.md', kind: 'editor', openedAt: 7 },
+        {
+          source: { type: 'daemon', hostId: 'hostA' },
+          path: '/remote/old.md',
+          name: 'old.md',
+          kind: 'editor',
+          openedAt: 6,
+        },
+      ],
+    })
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[bufferKey(remoteSource, '/remote/old.md')]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('old.md'))
+    fireEvent.change(screen.getByDisplayValue('old.md'), { target: { value: 'new.md' } })
+    fireEvent.keyDown(screen.getByDisplayValue('new.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(backend.rename).toHaveBeenCalledWith('/remote/old.md', '/remote/new.md')
+    })
+    await waitFor(() => {
+      expect(
+        useRecentFilesStore.getState().files.map((f) => [
+          f.source.type === 'daemon' ? f.source.hostId : f.source.type,
+          f.path,
+        ]),
+      ).toEqual([
+        ['hostB', '/remote/new.md'],
+        ['hostA', '/remote/old.md'],
+      ])
+    })
+  })
+
+  it('T3.2-5: the untitled first save records the real path and never attempts a remap', async () => {
+    const renameSpy = vi.spyOn(useRecentFilesStore.getState(), 'renamePath')
+    const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-no-remap')
+    const backend = createBackend()
+    backend.write.mockResolvedValue(undefined)
+    statMissingUntilWritten(backend, { size: 0, mtime: 456 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.md', new TextEncoder().encode(''))
+    })
+    // The unsaved buffer was never in the list, so there is nothing to re-point:
+    // the first save records the real path directly.
+    expect(renameSpy).not.toHaveBeenCalled()
+    expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual(['/buffer/Untitled.md'])
+    renameSpy.mockRestore()
+  })
+})
+
+// --- T3.3: every save attempt reports its outcome ---------------------------
+//
+// `handleSave` used to return silently when there was nothing to save and only
+// `console.error` on failure, so ⌘S was indistinguishable from a dead key. The
+// three outcomes now go through the existing bottom-centre toast
+// (`useUndoToast` / `GlobalUndoToast`) — no second toast system.
+describe('EditorPane — save result toast (T3.3)', () => {
+  // The keyboard ⌘S runs exactly this callback (MonacoWrapper registers it as the
+  // editor command), so invoking the captured prop IS the keyboard path.
+  async function pressCmdS() {
+    const props = monacoPropsSpy.mock.calls.at(-1)?.[0] as { onSave: () => void | Promise<void> }
+    await act(async () => {
+      await props.onSave()
+    })
+  }
+
+  async function renderLoaded(pane: Pane, body = 'hello') {
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode(body))
+    backend.write.mockResolvedValue(undefined)
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: body.length, mtime: 1 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    render(<EditorPane pane={pane} isActive />)
+    const filePath = pane.content.kind === 'editor' ? pane.content.filePath : ''
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey(filePath)]).toBeDefined()
+    })
+    return backend
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useRecentFilesStore.setState({ files: [] })
+    useUndoToast.setState({ toast: null })
+  })
+
+  it('T3.3-1: a dirty save writes and raises the saved toast naming the file', async () => {
+    const pane = createPane('/notes/toast.txt', 'pane-toast-saved')
+    const backend = await renderLoaded(pane)
+
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey('/notes/toast.txt'), 'changed')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Saved toast.txt')
+    })
+    expect(backend.write).toHaveBeenCalledTimes(1)
+    // A save outcome is informational — no undo/retry button.
+    expect(useUndoToast.getState().toast?.action).toBeUndefined()
+  })
+
+  it('T3.3-2: ⌘S on a clean saved buffer raises the unchanged toast and never writes', async () => {
+    const pane = createPane('/notes/clean.txt', 'pane-toast-unchanged')
+    const backend = await renderLoaded(pane)
+
+    // The toolbar button is disabled for a clean buffer (canSave semantics, T1.3),
+    // so ⌘S is the reachable trigger for this outcome — and it used to do nothing.
+    expect(screen.getByTitle('Save (⌘S)')).toBeDisabled()
+    await pressCmdS()
+
+    expect(backend.write).not.toHaveBeenCalled()
+    expect(useUndoToast.getState().toast?.message).toBe('No changes to save')
+  })
+
+  it('T3.3-3: a rejected write raises the failure toast with the reason, keeps the buffer dirty and never marks it saved', async () => {
+    const pane = createPane('/notes/fail.txt', 'pane-toast-failed')
+    const backend = await renderLoaded(pane)
+    backend.write.mockRejectedValue(new Error('disk full'))
+    const markSaved = vi.spyOn(useEditorStore.getState(), 'markSaved')
+
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey('/notes/fail.txt'), 'changed')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Save failed: disk full')
+    })
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/fail.txt')]).toMatchObject({
+      content: 'changed',
+      savedContent: 'hello',
+      isDirty: true,
+    })
+    expect(markSaved).not.toHaveBeenCalled()
+    markSaved.mockRestore()
+  })
+
+  it('T3.3-4: ⌘S and the toolbar button produce the same outcome', async () => {
+    const pane = createPane('/notes/parity.txt', 'pane-toast-parity')
+    const backend = await renderLoaded(pane)
+    const key = getBufferKey('/notes/parity.txt')
+
+    act(() => {
+      useEditorStore.getState().updateContent(key, 'via keyboard')
+    })
+    await pressCmdS()
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Saved parity.txt')
+    })
+    const fromKeyboard = useUndoToast.getState().toast
+
+    useUndoToast.setState({ toast: null })
+    act(() => {
+      useEditorStore.getState().updateContent(key, 'via button')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast).toEqual(fromKeyboard)
+    })
+    expect(backend.write).toHaveBeenCalledTimes(2)
+  })
+
+  it('T3.3-4b: a save with no resolvable backend reports a failure instead of doing nothing', async () => {
+    const pane = createPane('/notes/no-backend.txt', 'pane-toast-no-backend')
+    const key = getBufferKey('/notes/no-backend.txt')
+    // Seed the buffer so the pane renders, then take the backend away.
+    useEditorStore.getState().openBuffer(key, 'hello', { language: 'plaintext' }, { mtime: 1, size: 5 })
+    getFsBackendMock.mockReturnValue(null)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    act(() => {
+      useEditorStore.getState().updateContent(key, 'changed')
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe(
+        'Save failed: No FS backend is available for this file.',
+      )
+    })
+    expect(useEditorStore.getState().buffers[key]).toMatchObject({ isDirty: true })
+  })
+
+  // The untitled branch had its own silent `return` for a missing backend, so
+  // T3.3-4b's guarantee stopped at the door of the one flow where the file does
+  // not exist yet — the user sees the popover close and assumes it was written.
+  it('T3.3-4c: an untitled save with no resolvable backend reports a failure instead of doing nothing', async () => {
+    const untitled = { name: 'notes.txt', suggestedExtension: '.txt' as const, hasBeenRenamed: true }
+    const content = {
+      kind: 'editor' as const,
+      source: { type: 'inapp' as const },
+      filePath: 'untitled:notes.txt',
+      untitled,
+    }
+    const pane: Pane = { id: 'pane-untitled-no-backend', content }
+    useEditorStore.getState().openBuffer(getBufferKey('untitled:notes.txt'), 'hello', {
+      language: 'plaintext',
+      languageSource: 'extension',
+      untitled,
+    })
+    const markSaved = vi.spyOn(useEditorStore.getState(), 'markSaved')
+    getFsBackendMock.mockReturnValue(null)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe(
+        'Save failed: No FS backend is available for this file.',
+      )
+    })
+    expect(markSaved).not.toHaveBeenCalled()
+    // Still an unsaved untitled buffer under its original key — nothing renamed,
+    // nothing marked clean.
+    expect(useEditorStore.getState().buffers[getBufferKey('untitled:notes.txt')]).toMatchObject({
+      untitled: { name: 'notes.txt' },
+      lastStat: null,
+    })
+    expect(useEditorStore.getState().buffers[getBufferKey('/buffer/notes.txt')]).toBeUndefined()
+    markSaved.mockRestore()
+  })
+
+  it('T3.3-5: opening the untitled rename popover is not a save outcome — no toast', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-toast-untitled')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    expect(screen.getByDisplayValue('Untitled.md')).toBeInTheDocument()
+    expect(backend.write).not.toHaveBeenCalled()
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+
+  it('T3.3-5b: confirming the untitled name IS a save outcome — saved toast for the real file', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-toast-untitled-confirm')
+    const backend = createBackend()
+    backend.write.mockResolvedValue(undefined)
+    statMissingUntilWritten(backend, { size: 0, mtime: 9 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Saved Untitled.md')
+    })
+    expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.md', new TextEncoder().encode(''))
+  })
+})
+
+// --- Keyboard save must reach the naming popover, not die on a missing anchor
+//
+// Monaco / Tiptap call `onSave()` with no arguments (they have no toolbar
+// button to measure), and the never-named-untitled branch used to require an
+// `anchorRect` to open the naming popover - so the keyboard save inside the
+// editing surface was a dead key and only the toolbar button worked. The anchor
+// is now decoupled from the decision: the Save button's own rect is the
+// fallback.
+describe('EditorPane - keyboard save opens the naming popover for an unnamed untitled document', () => {
+  // The editors register handleSave as their save command, so invoking the
+  // captured prop IS the keyboard path. Monaco owns the raw surface and Tiptap
+  // the Live-Mode one; neither passes an anchorRect.
+  async function pressCmdS(surface: 'monaco' | 'tiptap' = 'monaco') {
+    const spy = surface === 'monaco' ? monacoPropsSpy : tiptapPropsSpy
+    const props = spy.mock.calls.at(-1)?.[0] as { onSave: () => void | Promise<void> }
+    await act(async () => {
+      await props.onSave()
+    })
+  }
+
+  async function renderUntitled(paneId: string, extension: '.txt' | '.md' = '.txt') {
+    const pane = createUntitledPane('Untitled', extension, paneId)
+    const backend = createBackend()
+    backend.write.mockResolvedValue(undefined)
+    statMissingUntilWritten(backend, { size: 0, mtime: 7 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+    return backend
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useRecentFilesStore.setState({ files: [] })
+    useUndoToast.setState({ toast: null })
+  })
+
+  it('opens the naming popover from the keyboard path, which passes no anchorRect', async () => {
+    await renderUntitled('pane-cmds-untitled')
+    await pressCmdS()
+
+    expect(screen.getByDisplayValue('Untitled.txt')).toBeInTheDocument()
+  })
+
+  it('writes the file and raises the saved toast once the name is confirmed', async () => {
+    const backend = await renderUntitled('pane-cmds-untitled-confirm')
+    await pressCmdS()
+
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.txt'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Saved Untitled.txt')
+    })
+    expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.txt', new TextEncoder().encode(''))
+  })
+
+  it('covers the Live-Mode surface too — Tiptap also saves without an anchorRect', async () => {
+    await renderUntitled('pane-cmds-untitled-tiptap', '.md')
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    await pressCmdS('tiptap')
+
+    expect(screen.getByDisplayValue('Untitled.md')).toBeInTheDocument()
+  })
+
+  it('leaves the toolbar button path unchanged (regression)', async () => {
+    const backend = await renderUntitled('pane-cmds-untitled-toolbar')
+    const saveButton = screen.getByTitle('Save (⌘S)')
+    // T1.3: the button is enabled only because this untitled buffer has never
+    // been saved. The fix must not have loosened that condition.
+    expect(saveButton).not.toBeDisabled()
+
+    fireEvent.click(saveButton)
+    expect(screen.getByDisplayValue('Untitled.txt')).toBeInTheDocument()
+
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.txt'), { key: 'Enter' })
+    await waitFor(() => {
+      expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.txt', new TextEncoder().encode(''))
+    })
+  })
+
+  it('keeps Save disabled for a clean saved buffer (T1.3 semantics untouched)', async () => {
+    const pane = createPane('/notes/clean-guard.txt', 'pane-cmds-clean')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('hello'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 5, mtime: 1 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/clean-guard.txt')]).toBeDefined()
+    })
+
+    expect(screen.getByTitle('Save (⌘S)')).toBeDisabled()
   })
 })

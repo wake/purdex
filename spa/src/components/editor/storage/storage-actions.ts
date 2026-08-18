@@ -25,6 +25,7 @@ import { scanPaneTree } from '../../../lib/pane-tree'
 import { isFilePaneContent } from '../../../lib/pane-utils'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
+import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
 import { createMetadata } from '../../../lib/editor-language'
 import { STORAGE_ROOT, basename, join, parentOf, isUnderRoot } from '../../../lib/storage-paths'
 import type { FileSource } from '../../../types/fs'
@@ -33,8 +34,8 @@ import type { Pane, Tab } from '../../../types/tab'
 export type Translate = (key: string, params?: Record<string, string | number>) => string
 
 /**
- * remapPanesUnder — PURE pane + buffer re-point for a rename/move that has
- * ALREADY happened at the backend layer. It performs NO backend mutation: the
+ * remapPanesUnder — pane + buffer + recent-list re-point for a rename/move that
+ * has ALREADY happened at the backend layer. It performs NO backend mutation: the
  * single `backend.rename` lives in the caller (`renameStorageEntry`, and the
  * future `moveStorageEntry`) and runs exactly once BEFORE this helper, so file
  * and folder share one code path and there is no double-rename.
@@ -53,8 +54,17 @@ export type Translate = (key: string, params?: Record<string, string | number>) 
  *
  * A single-file rename is the one-iteration case (`from === filePath`, so
  * `newPath = to`); a folder rename iterates every open descendant.
+ *
+ * T3.2: it also re-points the Recent list through `renamePath`, which applies the
+ * same identity + prefix rules over the persisted entries. That call is
+ * UNCONDITIONAL and sits outside the open-pane loop on purpose — a recent entry
+ * usually belongs to a file that is NOT open, and it used to be left dangling at
+ * the old path. Living here means Storage rename AND move, file and folder, are
+ * all covered by this one call site.
  */
 export function remapPanesUnder(source: FileSource, from: string, to: string): void {
+  useRecentFilesStore.getState().renamePath(source, from, to)
+
   const fromPrefix = from + '/'
   // Collect each affected open path once, tracking whether any pane on that path
   // is an editor (→ it also needs an editor-store buffer re-key, not just a
@@ -546,6 +556,10 @@ export async function deleteStorageEntries(
         .then((s) => s.isDirectory)
         .catch(() => false)
       await backend.delete(path, isDir)
+      // T3.2: drop the deleted path (and, for a folder, its descendants — the
+      // store applies the same prefix rule) from Recent. Placed AFTER the delete
+      // so a mid-loop failure never evicts an entry whose file is still there.
+      useRecentFilesStore.getState().removePath({ type: 'inapp' }, path)
     }
     return { status: 'deleted' }
   } catch (err) {

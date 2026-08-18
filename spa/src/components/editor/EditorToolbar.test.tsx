@@ -138,6 +138,70 @@ describe('EditorToolbar', () => {
     expect(screen.queryByRole('button', { name: /Purdex/ })).not.toBeInTheDocument()
   })
 
+  it('T1.3: renders the dirty dot from isDirty, never from canSave', () => {
+    // A never-saved untitled buffer is savable while perfectly clean; the dot
+    // must not follow that, it only means "there are unsaved changes".
+    const { rerender } = render(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/a.md"
+        isDirty={false}
+        canSave={true}
+        onSave={() => {}}
+      />,
+    )
+
+    expect(screen.queryByTitle('Unsaved changes')).not.toBeInTheDocument()
+    expect(screen.getByTitle('Save (⌘S)')).not.toBeDisabled()
+
+    rerender(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/a.md"
+        isDirty={true}
+        canSave={true}
+        onSave={() => {}}
+      />,
+    )
+
+    expect(screen.getByTitle('Unsaved changes')).toBeInTheDocument()
+  })
+
+  it('T1.3: Save is actionable exactly when there is something to save', () => {
+    // Behaviour, not class names: a reverse assertion on a utility class passes
+    // just as happily when the class is renamed out of existence.
+    const onSave = vi.fn()
+    const { rerender } = render(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/a.md"
+        isDirty={true}
+        onSave={onSave}
+      />,
+    )
+
+    const enabled = screen.getByTitle('Save (⌘S)')
+    expect(enabled).toBeVisible()
+    expect(enabled).not.toBeDisabled()
+    fireEvent.click(enabled)
+    expect(onSave).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <EditorToolbar
+        source={{ type: 'inapp' }}
+        filePath="/buffer/a.md"
+        isDirty={false}
+        onSave={onSave}
+      />,
+    )
+
+    const disabled = screen.getByTitle('Save (⌘S)')
+    expect(disabled).toBeVisible()
+    expect(disabled).toBeDisabled()
+    fireEvent.click(disabled)
+    expect(onSave).toHaveBeenCalledTimes(1)
+  })
+
   it('C3-7: onNewBuffer dirty-guard gates setPaneContent (v1.4 F7)', async () => {
     // Mirrors C3-6 for the popover's New-buffer button. The popover
     // merely invokes the caller-supplied onNewBuffer; the dirty guard
