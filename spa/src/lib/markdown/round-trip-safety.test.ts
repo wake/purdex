@@ -163,3 +163,62 @@ describe('assessMarkdownRoundTrip — front matter detection', () => {
     expect(verdict.blockers).toContain('frontmatter')
   })
 })
+
+/**
+ * An image node was added to the schema so `![alt](a.png)` stops degrading to
+ * the bare text `alt`. Two forms still do not survive, measured against the real
+ * editor, so they are blockers rather than silent rewrites:
+ *
+ * - an image under a link / strong / em / del: Tiptap models those as MARKS and
+ *   a mark cannot wrap a node, so the mark is dropped —
+ *   `[![Build](b.svg)](https://ci)` came back as `![Build](b.svg)` (the badge
+ *   loses its link), and `[text ![a](a.png)](u)` came back as the broken
+ *   `[text ](u)![a](a.png)[`.
+ * - an angle-bracketed destination whose URL contains a space: the brackets are
+ *   dropped, so `![alt](<a b.png>)` becomes `![alt](a b.png)`, which is not an
+ *   image at all to a CommonMark renderer. Links share the defect and the rule.
+ */
+describe('assessMarkdownRoundTrip — image forms', () => {
+  const safe: Array<[string, string]> = [
+    ['a bare image', '![alt](a.png)\n'],
+    ['an image with a title', '![alt](a.png "title")\n'],
+    ['an image with no alt text', '![](a.png)\n'],
+    ['an image inside a paragraph', 'See ![alt](a.png) here.\n'],
+    ['an image inside a list item', '- ![alt](a.png)\n'],
+    ['an image inside a table cell', '| a | b |\n| --- | --- |\n| ![alt](a.png) | 2 |\n'],
+    // No space in the destination, so unwrapping the brackets changes nothing.
+    ['a bracketed destination with no space', '![alt](<a.png>)\n'],
+    ['a plain link next to a plain image', '[link](https://example.com) ![alt](a.png)\n'],
+    ['emphasis that contains no image', '**bold** and *em* and ~~del~~\n'],
+  ]
+
+  it.each(safe)('%s is safe', (_label, md) => {
+    expect(assessMarkdownRoundTrip(md)).toEqual({ safe: true, blockers: [] })
+  })
+
+  const nested: Array<[string, string]> = [
+    ['a linked image', '[![Build](https://img.shields.io/b.svg)](https://ci.example.com)\n'],
+    ['a link mixing text and an image', '[text ![alt](a.png)](https://example.com)\n'],
+    ['a bold image', '**![alt](a.png)**\n'],
+    ['an emphasised image', '*![alt](a.png)*\n'],
+    ['a struck-through image', '~~![alt](a.png)~~\n'],
+    ['an image nested two marks deep', '**[![alt](a.png)](https://e.com)**\n'],
+  ]
+
+  it.each(nested)('%s is unsafe', (_label, md) => {
+    const verdict = assessMarkdownRoundTrip(md)
+    expect(verdict.safe).toBe(false)
+    expect(verdict.blockers).toContain('image-in-mark')
+  })
+
+  const bracketed: Array<[string, string]> = [
+    ['an image whose bracketed URL has a space', '![alt](<a b.png>)\n'],
+    ['a link whose bracketed URL has a space', '[text](<a b.html>)\n'],
+  ]
+
+  it.each(bracketed)('%s is unsafe', (_label, md) => {
+    const verdict = assessMarkdownRoundTrip(md)
+    expect(verdict.safe).toBe(false)
+    expect(verdict.blockers).toContain('bracketed-url')
+  })
+})

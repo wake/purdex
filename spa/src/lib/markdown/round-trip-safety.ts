@@ -140,9 +140,27 @@ function hasFootnote(md: string): boolean {
   return false
 }
 
+/**
+ * Inline constructs Tiptap models as ProseMirror MARKS. A mark cannot wrap a
+ * node, so an image inside one loses it: `[![Build](b.svg)](https://ci)` came
+ * back as `![Build](b.svg)` — the badge kept its picture and lost its link — and
+ * `[text ![a](a.png)](u)` came back as the broken `[text ](u)![a](a.png)[`.
+ */
+const MARK_TOKENS = new Set(['link', 'strong', 'em', 'del'])
+
+/**
+ * An angle-bracketed destination whose URL contains a space, e.g.
+ * `![alt](<a b.png>)`. The round-trip drops the brackets and writes
+ * `![alt](a b.png)`, which is not an image at all to a CommonMark renderer.
+ * Without a space the brackets are pure decoration and dropping them is safe,
+ * which is why the space is part of the pattern.
+ */
+const BRACKETED_URL_WITH_SPACE = /\]\(\s*<[^<>]*\s[^<>]*>/
+
 /** Shape of the token children marked produces; deliberately structural. */
 interface TokenLike {
   type?: string
+  raw?: unknown
   tokens?: unknown
   items?: unknown
   header?: unknown
@@ -162,21 +180,30 @@ function asArray(value: unknown): unknown[] {
  * `tokens` for most nodes, off `items` for lists, and off the cells in `header` /
  * `rows` for tables (a cell's `tokens` is the only place inline content inside a
  * table can be seen).
+ *
+ * `withinMark` is carried down because whether an image survives depends on
+ * where it sits, not on the image itself.
  */
-function walk(nodes: unknown[], add: (blocker: string) => void): void {
+function walk(nodes: unknown[], add: (blocker: string) => void, withinMark = false): void {
   for (const node of nodes) {
     if (!isTokenLike(node)) continue
     const type = typeof node.type === 'string' ? node.type : ''
     if (!WHITELIST.has(type)) add(type || 'unknown')
 
-    walk(asArray(node.tokens), add)
-    walk(asArray(node.items), add)
+    if (type === 'image' && withinMark) add('image-in-mark')
+    if ((type === 'image' || type === 'link') && typeof node.raw === 'string' && BRACKETED_URL_WITH_SPACE.test(node.raw)) {
+      add('bracketed-url')
+    }
+
+    const childWithinMark = withinMark || MARK_TOKENS.has(type)
+    walk(asArray(node.tokens), add, childWithinMark)
+    walk(asArray(node.items), add, childWithinMark)
     for (const cell of asArray(node.header)) {
-      if (isTokenLike(cell)) walk(asArray(cell.tokens), add)
+      if (isTokenLike(cell)) walk(asArray(cell.tokens), add, childWithinMark)
     }
     for (const row of asArray(node.rows)) {
       for (const cell of asArray(row)) {
-        if (isTokenLike(cell)) walk(asArray(cell.tokens), add)
+        if (isTokenLike(cell)) walk(asArray(cell.tokens), add, childWithinMark)
       }
     }
   }

@@ -579,6 +579,8 @@
   "editor.live_mode.blocker.html": "contains raw HTML",
   "editor.live_mode.blocker.frontmatter": "contains front matter",
   "editor.live_mode.blocker.footnote": "contains footnotes",
+  "editor.live_mode.blocker.image-in-mark": "contains an image inside a link or emphasis",
+  "editor.live_mode.blocker.bracketed-url": "contains a bracketed URL with a space",
   "editor.live_mode.blocker.unknown": "contains markdown Live Mode cannot keep ({{blocker}})",
   "editor.save.saved": "Saved {{name}}",
   "editor.save.unchanged": "No changes to save",

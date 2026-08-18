@@ -82,6 +82,58 @@ describe('TiptapEditor markdown round-trip (real editor)', () => {
     expect(roundTrip(source)).toBe(source)
   })
 
+  // Measured during the PR-B adversarial review: with no image node in the
+  // schema, `![alt](a.png)` parsed down to the bare text `alt` — the URL was
+  // gone before the first keystroke, and the whitelist called it safe. These
+  // assert the forms the image node does carry losslessly; the forms it does not
+  // (an image under a link/emphasis mark, a bracketed destination) are gate
+  // blockers instead and are covered in round-trip-safety.test.ts.
+  describe('images', () => {
+    it('keeps the URL of a bare image', () => {
+      expect(roundTrip('![alt](a.png)')).toBe('![alt](a.png)')
+    })
+
+    it('keeps the title attribute', () => {
+      expect(roundTrip('![alt](a.png "title")')).toBe('![alt](a.png "title")')
+    })
+
+    it('keeps an image that has no alt text', () => {
+      expect(roundTrip('![](a.png)')).toBe('![](a.png)')
+    })
+
+    it('keeps an image sitting inside a paragraph', () => {
+      const source = 'See ![alt](a.png) and ![other](b.png "t") here.'
+
+      expect(roundTrip(source)).toBe(source)
+    })
+
+    it('keeps images inside list items', () => {
+      const source = '- ![alt](a.png)\n- text with ![other](b.png "t") inline'
+
+      expect(roundTrip(source)).toBe(source)
+    })
+
+    it('keeps an image inside a blockquote and a heading', () => {
+      expect(roundTrip('> ![alt](a.png)')).toBe('> ![alt](a.png)')
+      expect(roundTrip('# ![alt](a.png)')).toBe('# ![alt](a.png)')
+    })
+
+    it('keeps an image inside a table cell', () => {
+      // Table output is re-padded (accepted style rewrite), so the assertion is
+      // on the cell content rather than on the whole string.
+      const output = roundTrip('| a | b |\n| --- | --- |\n| ![alt](a.png) | 2 |')
+
+      expect(output).toContain('![alt](a.png)')
+    })
+
+    it('leaves a document full of images at a fixed point', () => {
+      const source = '# Doc\n\n![one](a.png)\n\nText ![two](b.png "t") text.\n\n- ![three](c.png)'
+
+      expect(roundTrip(roundTrip(source))).toBe(roundTrip(source))
+      expect(roundTrip(source)).toBe(source)
+    })
+  })
+
   it('round-trips plain prose identically (no regression from the added extensions)', () => {
     const source = '# Title\n\nSome **bold** prose with a [link](https://example.com).\n\n- one\n- two'
 
