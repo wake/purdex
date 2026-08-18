@@ -19,6 +19,7 @@ import { STORAGE_ROOT } from '../../lib/storage-paths'
 import { createUniqueInAppFile } from '../../lib/inapp-namer'
 import { recordRecentFile } from '../../lib/recent-files/record-recent-file'
 import { useRecentFilesStore } from '../../stores/useRecentFilesStore'
+import { useUndoToast } from '../../stores/useUndoToast'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 import {
@@ -67,6 +68,13 @@ function renameWarningMessage(error: unknown): string {
     return error.message || 'Rename failed'
   }
   return 'Rename failed'
+}
+
+// Spec 3.2 (T3.3): the failure toast has to say *why* the save failed, so the
+// reason is extracted from whatever the backend rejected with.
+function saveErrorReason(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message
+  return String(error)
 }
 
 // Spec 1.2: a load failure must never degrade into an empty buffer. Extract the
@@ -294,6 +302,13 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-check on tab activation, not on source/filePath change
   }, [isActive, isUntitled, key, source])
 
+  // T3.3: one place that turns a save attempt into user-visible feedback. It
+  // reuses the existing bottom-centre toast (`useUndoToast` / `GlobalUndoToast`)
+  // rather than adding a second notification surface.
+  const showSaveToast = useCallback((messageKey: string, params?: Record<string, string>) => {
+    useUndoToast.getState().show(t(messageKey, params))
+  }, [t])
+
   const saveUntitledBuffer = useCallback(async (name: string) => {
     const buf = useEditorStore.getState().buffers[key]
     const backend = getFsBackend(source)
@@ -327,16 +342,30 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       setRenameAnchorRect(null)
       setRenameInitialValue(undefined)
       setRenameWarning(undefined)
+      // Confirming the name IS a save outcome (the file now exists on disk), so
+      // it reports like any other save. Only *opening* the popover is silent.
+      showSaveToast('editor.save.saved', { name: fileName(nextPath) })
     } catch (err) {
-      console.error('[editor] Save failed:', err)
+      showSaveToast('editor.save.failed', { reason: saveErrorReason(err) })
     }
-  }, [filePath, key, paneId, source, untitled])
+  }, [filePath, key, paneId, showSaveToast, source, untitled])
 
   const handleSave = useCallback(async (anchorRect?: DOMRect) => {
     const buf = useEditorStore.getState().buffers[key]
-    if (!buf || (!buf.isDirty && buf.lastStat)) return
+    // No buffer: the pane is showing the loading / load-error surface, so there
+    // is no document and no save attempt to report.
+    if (!buf) return
+    // T3.3: an untouched, already-saved buffer is an explicit "nothing to do"
+    // outcome. This branch used to swallow every ⌘S without a trace, which is
+    // what made the key feel dead.
+    if (!buf.isDirty && buf.lastStat) {
+      showSaveToast('editor.save.unchanged')
+      return
+    }
     if (buf.untitled) {
       if (!buf.untitled.hasBeenRenamed) {
+        // Opening the name popover is not a save outcome — no toast here; the
+        // one that follows the user's confirmation comes from saveUntitledBuffer.
         if (!anchorRect) return
         setRenameMode('save')
         setRenameAnchorRect(anchorRect)
@@ -349,7 +378,12 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
     }
 
     const backend = getFsBackend(source)
-    if (!backend) return
+    // An unresolvable backend is a failed save, not a no-op: without this the
+    // content silently stays unsaved (same silent-failure class as 1.2b).
+    if (!backend) {
+      showSaveToast('editor.save.failed', { reason: t('editor.load_error.no_backend') })
+      return
+    }
     try {
       const encoded = new TextEncoder().encode(buf.content)
       await backend.write(filePath, encoded)
@@ -357,10 +391,13 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       useEditorStore.getState().markSaved(key, { mtime: newStat.mtime, size: newStat.size })
       recordRecentFile({ kind: 'editor', source, filePath })
       useEditorStore.getState().setShowDiff(paneId, false)
+      showSaveToast('editor.save.saved', { name: fileName(filePath) })
     } catch (err) {
-      console.error('[editor] Save failed:', err)
+      // Replaces a console.error the user could never see; the buffer stays
+      // dirty and unmarked, so the toast is the only signal they get.
+      showSaveToast('editor.save.failed', { reason: saveErrorReason(err) })
     }
-  }, [filePath, key, paneId, saveUntitledBuffer, source])
+  }, [filePath, key, paneId, saveUntitledBuffer, showSaveToast, source, t])
 
   const handleRenameSubmit = useCallback(async (nextName: string) => {
     const currentBuffer = useEditorStore.getState().buffers[key]

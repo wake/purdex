@@ -5,6 +5,7 @@ import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useEditorSettingsStore } from '../../../stores/useEditorSettingsStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+import { useUndoToast } from '../../../stores/useUndoToast'
 import type { Pane } from '../../../types/tab'
 import type { FileSource } from '../../../types/fs'
 import type { FsBackend } from '../../../lib/fs-backend'
@@ -815,7 +816,9 @@ describe('EditorPane', () => {
 
   it('keeps the buffer dirty when save fails', async () => {
     const backend = createBackend()
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // T3.3: the failure is reported through the toast now — the console.error the
+    // user could never see is gone, so the toast is what this pins.
+    useUndoToast.setState({ toast: null })
     backend.read.mockResolvedValue(new TextEncoder().encode('hello world'))
     backend.write.mockRejectedValue(new Error('disk full'))
     backend.stat.mockResolvedValue({
@@ -839,7 +842,7 @@ describe('EditorPane', () => {
     fireEvent.click(screen.getByTitle('Save (⌘S)'))
 
     await waitFor(() => {
-      expect(consoleError).toHaveBeenCalledWith('[editor] Save failed:', expect.any(Error))
+      expect(useUndoToast.getState().toast?.message).toBe('Save failed: disk full')
     })
 
     expect(useEditorStore.getState().buffers[getBufferKey('/notes/save-fail.md')]).toMatchObject({
@@ -848,8 +851,6 @@ describe('EditorPane', () => {
       isDirty: true,
       lastStat: { mtime: 123, size: 11 },
     })
-
-    consoleError.mockRestore()
   })
 
   it('cleans up the buffer on unmount', async () => {
@@ -1658,5 +1659,187 @@ describe('EditorPane — in-editor rename remaps the recent entry (T3.2)', () =>
     expect(renameSpy).not.toHaveBeenCalled()
     expect(useRecentFilesStore.getState().files.map((f) => f.path)).toEqual(['/buffer/Untitled.md'])
     renameSpy.mockRestore()
+  })
+})
+
+// --- T3.3: every save attempt reports its outcome ---------------------------
+//
+// `handleSave` used to return silently when there was nothing to save and only
+// `console.error` on failure, so ⌘S was indistinguishable from a dead key. The
+// three outcomes now go through the existing bottom-centre toast
+// (`useUndoToast` / `GlobalUndoToast`) — no second toast system.
+describe('EditorPane — save result toast (T3.3)', () => {
+  // The keyboard ⌘S runs exactly this callback (MonacoWrapper registers it as the
+  // editor command), so invoking the captured prop IS the keyboard path.
+  async function pressCmdS() {
+    const props = monacoPropsSpy.mock.calls.at(-1)?.[0] as { onSave: () => void | Promise<void> }
+    await act(async () => {
+      await props.onSave()
+    })
+  }
+
+  async function renderLoaded(pane: Pane, body = 'hello') {
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode(body))
+    backend.write.mockResolvedValue(undefined)
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: body.length, mtime: 1 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    render(<EditorPane pane={pane} isActive />)
+    const filePath = pane.content.kind === 'editor' ? pane.content.filePath : ''
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey(filePath)]).toBeDefined()
+    })
+    return backend
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useRecentFilesStore.setState({ files: [] })
+    useUndoToast.setState({ toast: null })
+  })
+
+  it('T3.3-1: a dirty save writes and raises the saved toast naming the file', async () => {
+    const pane = createPane('/notes/toast.txt', 'pane-toast-saved')
+    const backend = await renderLoaded(pane)
+
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey('/notes/toast.txt'), 'changed')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Saved toast.txt')
+    })
+    expect(backend.write).toHaveBeenCalledTimes(1)
+    // A save outcome is informational — no undo/retry button.
+    expect(useUndoToast.getState().toast?.action).toBeUndefined()
+  })
+
+  it('T3.3-2: ⌘S on a clean saved buffer raises the unchanged toast and never writes', async () => {
+    const pane = createPane('/notes/clean.txt', 'pane-toast-unchanged')
+    const backend = await renderLoaded(pane)
+
+    // The toolbar button is disabled for a clean buffer (canSave semantics, T1.3),
+    // so ⌘S is the reachable trigger for this outcome — and it used to do nothing.
+    expect(screen.getByTitle('Save (⌘S)')).toBeDisabled()
+    await pressCmdS()
+
+    expect(backend.write).not.toHaveBeenCalled()
+    expect(useUndoToast.getState().toast?.message).toBe('No changes to save')
+  })
+
+  it('T3.3-3: a rejected write raises the failure toast with the reason, keeps the buffer dirty and never marks it saved', async () => {
+    const pane = createPane('/notes/fail.txt', 'pane-toast-failed')
+    const backend = await renderLoaded(pane)
+    backend.write.mockRejectedValue(new Error('disk full'))
+    const markSaved = vi.spyOn(useEditorStore.getState(), 'markSaved')
+
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey('/notes/fail.txt'), 'changed')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Save failed: disk full')
+    })
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/fail.txt')]).toMatchObject({
+      content: 'changed',
+      savedContent: 'hello',
+      isDirty: true,
+    })
+    expect(markSaved).not.toHaveBeenCalled()
+    markSaved.mockRestore()
+  })
+
+  it('T3.3-4: ⌘S and the toolbar button produce the same outcome', async () => {
+    const pane = createPane('/notes/parity.txt', 'pane-toast-parity')
+    const backend = await renderLoaded(pane)
+    const key = getBufferKey('/notes/parity.txt')
+
+    act(() => {
+      useEditorStore.getState().updateContent(key, 'via keyboard')
+    })
+    await pressCmdS()
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Saved parity.txt')
+    })
+    const fromKeyboard = useUndoToast.getState().toast
+
+    useUndoToast.setState({ toast: null })
+    act(() => {
+      useEditorStore.getState().updateContent(key, 'via button')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast).toEqual(fromKeyboard)
+    })
+    expect(backend.write).toHaveBeenCalledTimes(2)
+  })
+
+  it('T3.3-4b: a save with no resolvable backend reports a failure instead of doing nothing', async () => {
+    const pane = createPane('/notes/no-backend.txt', 'pane-toast-no-backend')
+    const key = getBufferKey('/notes/no-backend.txt')
+    // Seed the buffer so the pane renders, then take the backend away.
+    useEditorStore.getState().openBuffer(key, 'hello', { language: 'plaintext' }, { mtime: 1, size: 5 })
+    getFsBackendMock.mockReturnValue(null)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    act(() => {
+      useEditorStore.getState().updateContent(key, 'changed')
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe(
+        'Save failed: No FS backend is available for this file.',
+      )
+    })
+    expect(useEditorStore.getState().buffers[key]).toMatchObject({ isDirty: true })
+  })
+
+  it('T3.3-5: opening the untitled rename popover is not a save outcome — no toast', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-toast-untitled')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    expect(screen.getByDisplayValue('Untitled.md')).toBeInTheDocument()
+    expect(backend.write).not.toHaveBeenCalled()
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+
+  it('T3.3-5b: confirming the untitled name IS a save outcome — saved toast for the real file', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-toast-untitled-confirm')
+    const backend = createBackend()
+    backend.write.mockResolvedValue(undefined)
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 9 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+    fireEvent.keyDown(screen.getByDisplayValue('Untitled.md'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(useUndoToast.getState().toast?.message).toBe('Saved Untitled.md')
+    })
+    expect(backend.write).toHaveBeenCalledWith('/buffer/Untitled.md', new TextEncoder().encode(''))
   })
 })
