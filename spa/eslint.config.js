@@ -74,4 +74,15 @@ export default defineConfig([
       'no-restricted-imports': 'off',
     },
   },
+  // Test-only modules under __tests__/ act as shared fixtures: they export the
+  // stub components a `vi.mock` factory mounts ALONGSIDE the spies and helpers
+  // those stubs write to. That is exactly the mix react-refresh forbids in app
+  // code, and it is meaningless here — nothing under __tests__/ is ever hot
+  // reloaded.
+  {
+    files: ['**/__tests__/**/*.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

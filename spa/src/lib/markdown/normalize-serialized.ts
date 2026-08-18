@@ -1,0 +1,42 @@
+// spa/src/lib/markdown/normalize-serialized.ts
+//
+// Spec 2.4. Tiptap's markdown serializer emits one canonical shape regardless of
+// what the file looked like: LF line endings, no trailing newline, and a leading
+// newline in front of a document that starts with a table (measured in T2.2a:
+// `"\n| Name | …"`). Writing that back means a single Live Mode edit rewrites
+// every line ending in the file — a whole-file diff for a one-word change.
+//
+// This restores the shape recorded when the file was loaded
+// (`sourceEol` / `sourceTrailingNewline` on the buffer). It is applied at the
+// point the serializer produces text, before the content reaches the store, so
+// `isDirty` compares like with like. The raw (Monaco) path needs none of this:
+// Monaco hands back exactly the text in its model.
+
+/** The shape of the file as it was loaded — see `EditorBuffer.sourceEol`. */
+export interface SerializedSourceShape {
+  eol: 'lf' | 'crlf'
+  trailingNewline: boolean
+  /** Blank lines the file itself opened with — see `EditorBuffer.sourceLeadingBlankLines`. */
+  leadingBlankLines: number
+}
+
+/**
+ * Pure: same input, same output, no reliance on the buffer or the editor.
+ *
+ * The serializer's own leading newlines are discarded and replaced by whatever
+ * the file had, because they carry no information either way: Tiptap drops a
+ * leading blank line at parse time and prepends one in front of a leading table
+ * (measured in T2.2a). Only the recorded source shape knows the truth, so a file
+ * that opened with blank lines gets exactly those blank lines back.
+ */
+export function normalizeSerializedMarkdown(serialized: string, source: SerializedSourceShape): string {
+  // Work in LF space so the rules below never have to see a mixed document.
+  const body = serialized
+    .replace(/\r\n/g, '\n')
+    .replace(/^\n+/, '')
+    .replace(/\n+$/, '')
+
+  const withLeading = '\n'.repeat(source.leadingBlankLines) + body
+  const withTrailing = source.trailingNewline ? `${withLeading}\n` : withLeading
+  return source.eol === 'crlf' ? withTrailing.replace(/\n/g, '\r\n') : withTrailing
+}

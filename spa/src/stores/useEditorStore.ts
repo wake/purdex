@@ -22,7 +22,25 @@ export interface EditorBuffer extends EditorBufferMetadata {
   isDirty: boolean
   lastStat: { mtime: number; size: number } | null
   modelId: string
+  // Spec 2.4 — the shape of the file AS LOADED, so Live Mode can serialize back
+  // into it. Deliberately not part of `EditorBufferMetadata`: `eol` there is
+  // recomputed from the current draft on every `updateContent`, which is exactly
+  // why it cannot answer "what did the file look like?". These are written only
+  // by `openBuffer` / `reloadBuffer` and are immutable for the rest of the
+  // buffer's life; keeping them out of the metadata type is also what stops a
+  // future metadata caller from merging over them.
+  sourceEol: EditorEol
+  sourceTrailingNewline: boolean
+  /**
+   * Blank lines at the very start of the file. Tiptap drops them at parse time
+   * and can never serialize them back, so without this record a file that opens
+   * with a blank line cannot round-trip losslessly.
+   */
+  sourceLeadingBlankLines: number
 }
+
+/** The load-time half of `EditorBuffer`, as one movable unit. */
+type SourceShape = Pick<EditorBuffer, 'sourceEol' | 'sourceTrailingNewline' | 'sourceLeadingBlankLines'>
 
 export interface TiptapViewState {
   scrollTop: number
@@ -84,6 +102,51 @@ function detectEol(content: string): EditorEol {
   return content.includes('\r\n') ? 'crlf' : 'lf'
 }
 
+/**
+ * Blank lines before the first line with any content.
+ *
+ * A file made of nothing but newlines is the degenerate case, and it is the one
+ * that used to lose data: Tiptap serializes it to the empty string, so this
+ * count plus `sourceTrailingNewline` is the whole of what can rebuild it, and
+ * reporting 0 for every such file collapsed `\n\n` back to a single `\n`. What
+ * it must report there is one short of the newlines present, because the last of
+ * them is what `sourceTrailingNewline` already stands for.
+ */
+function countLeadingBlankLines(content: string): number {
+  const leading = /^(?:\r?\n)*/.exec(content)?.[0] ?? ''
+  const count = (leading.match(/\n/g) ?? []).length
+  if (leading.length !== content.length) return count
+  return Math.max(0, count - 1)
+}
+
+/**
+ * The immutable-after-load half of the buffer (spec 2.4). Derived from the bytes
+ * as loaded, never from the metadata override — a caller may declare `eol` for
+ * the status bar, but the file's own shape is not up for negotiation.
+ */
+function detectSourceShape(content: string): SourceShape {
+  return {
+    sourceEol: detectEol(content),
+    sourceTrailingNewline: content.endsWith('\n'),
+    sourceLeadingBlankLines: countLeadingBlankLines(content),
+  }
+}
+
+/**
+ * The load-time shape as it stands on an existing buffer, for re-asserting after
+ * a metadata merge. Only a reload may move it (`detectSourceShape`), so anything
+ * a caller happened to spread in has to be overwritten rather than tolerated:
+ * these values decide what the next save writes to disk, and keeping them out of
+ * `EditorBufferMetadata` only makes them unreachable through the type.
+ */
+function keepSourceShape(buffer: EditorBuffer): SourceShape {
+  return {
+    sourceEol: buffer.sourceEol,
+    sourceTrailingNewline: buffer.sourceTrailingNewline,
+    sourceLeadingBlankLines: buffer.sourceLeadingBlankLines,
+  }
+}
+
 function normalizeMetadata(content: string, metadata: Partial<EditorBufferMetadata> & Pick<EditorBufferMetadata, 'language'>): EditorBufferMetadata {
   return {
     language: metadata.language,
@@ -108,6 +171,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
           savedContent: content,
           isDirty: false,
           ...normalizeMetadata(content, metadata),
+          ...detectSourceShape(content),
           lastStat: stat ?? null,
           modelId: createModelId(),
         },
@@ -195,6 +259,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
         [newKey]: {
           ...buffer,
           ...metadata,
+          ...keepSourceShape(buffer),
         },
       },
       paneStates,
@@ -251,6 +316,9 @@ export const useEditorStore = create<EditorState>()((set) => ({
           savedContent: content,
           isDirty: false,
           eol: detectEol(content),
+          // A reload IS a load: the file on disk changed shape, so the shape the
+          // serializer must write back changes with it.
+          ...detectSourceShape(content),
           lastStat: stat ?? buf.lastStat,
         },
       },

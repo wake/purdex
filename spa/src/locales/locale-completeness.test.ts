@@ -22,4 +22,18 @@ describe('locale completeness', () => {
     const empty = Object.entries(zhTW).filter(([, v]) => !v.trim())
     expect(empty.map(([k]) => k), 'Empty values in zh-TW.json').toEqual([])
   })
+
+  // The Live Mode gate explains to the user why their file opened raw, so it is
+  // the one place a half-translated string is actively confusing. Capitalised
+  // terms (HTML, Live Mode) are product/UI names this file keeps in English by
+  // convention; a lowercase English word is a leftover fragment.
+  it('the Live Mode gate messages are fully translated in zh-TW', () => {
+    const gateEntries = Object.entries(zhTW as Record<string, string>)
+      .filter(([key]) => key.startsWith('editor.live_mode.'))
+    expect(gateEntries.length).toBeGreaterThan(0)
+
+    for (const [key, value] of gateEntries) {
+      expect(value.replace(/\{\{\w+\}\}/g, ''), key).not.toMatch(/\b[a-z]{2,}\b/)
+    }
+  })
 })

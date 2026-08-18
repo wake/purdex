@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useEditorStore } from './useEditorStore'
+import type { EditorBufferMetadata } from './useEditorStore'
 
 describe('useEditorStore', () => {
   beforeEach(() => {
@@ -263,5 +264,158 @@ describe('useEditorStore', () => {
     const before = useEditorStore.getState().paneStates
     useEditorStore.getState().saveTiptapViewState('nope', { scrollTop: 1, selection: null })
     expect(useEditorStore.getState().paneStates).toBe(before)
+  })
+
+  // --- T2.4: the shape of the file as loaded ---------------------------------
+  //
+  // `eol` is a live property of the current content — `normalizeMetadata`
+  // recomputes it on every updateContent/reloadBuffer — so it cannot say what
+  // the file looked like on disk. `sourceEol` / `sourceTrailingNewline` can:
+  // they are written once per load and never move while the user edits.
+
+  it('records the loaded line ending and trailing newline (T2.4)', () => {
+    useEditorStore.getState().openBuffer('crlf', 'a\r\nb\r\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('lf', 'a\nb', { language: 'markdown' })
+
+    expect(useEditorStore.getState().buffers['crlf']).toMatchObject({
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+    })
+    expect(useEditorStore.getState().buffers['lf']).toMatchObject({
+      sourceEol: 'lf',
+      sourceTrailingNewline: false,
+    })
+  })
+
+  it('leaves the source shape alone while the content changes, unlike eol (T2.4)', () => {
+    useEditorStore.getState().openBuffer('key1', 'a\r\nb\r\n', { language: 'markdown' })
+
+    // Editing away every CRLF and the trailing newline: `eol` follows the draft,
+    // the source shape does not — it still describes the file on disk.
+    useEditorStore.getState().updateContent('key1', 'a\nb')
+
+    expect(useEditorStore.getState().buffers['key1']).toMatchObject({
+      eol: 'lf',
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+    })
+  })
+
+  it('re-derives the source shape when the file is reloaded from disk (T2.4)', () => {
+    useEditorStore.getState().openBuffer('key1', 'a\r\nb\r\n', { language: 'markdown' })
+    useEditorStore.getState().reloadBuffer('key1', 'a\nb')
+
+    expect(useEditorStore.getState().buffers['key1']).toMatchObject({
+      sourceEol: 'lf',
+      sourceTrailingNewline: false,
+    })
+  })
+
+  it('carries the source shape across markSaved and renameBuffer (T2.4)', () => {
+    useEditorStore.getState().openBuffer('old', 'a\r\nb\r\n', { language: 'markdown' })
+    useEditorStore.getState().updateContent('old', 'a\r\nb\r\nc\r\n')
+    useEditorStore.getState().markSaved('old', { mtime: 5, size: 9 })
+    useEditorStore.getState().renameBuffer('old', 'new', { language: 'markdown' })
+
+    expect(useEditorStore.getState().buffers['new']).toMatchObject({
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+    })
+  })
+
+  // Preservation relies on the partial-merge shape of `renameBuffer`
+  // (`{ ...buffer, ...metadata }`) rather than on any special case, so it holds
+  // only as long as the source shape stays OUT of `EditorBufferMetadata`. This
+  // pins that: a caller passing every metadata field must not be able to reach
+  // these two.
+  it('cannot be clobbered by a metadata caller that passes everything (T2.4)', () => {
+    useEditorStore.getState().openBuffer('old', 'a\r\nb\r\n', { language: 'markdown' })
+    useEditorStore.getState().renameBuffer('old', 'new', {
+      language: 'plaintext',
+      languageSource: 'manual',
+      eol: 'lf',
+      encoding: 'utf8',
+      untitled: undefined,
+    })
+
+    expect(useEditorStore.getState().buffers['new']).toMatchObject({
+      language: 'plaintext',
+      eol: 'lf',
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+    })
+  })
+
+  // Leading blank lines belong to the same family: Tiptap drops them at parse
+  // time, so the only place they can survive is the buffer.
+
+  it('records how many blank lines the file opened with', () => {
+    useEditorStore.getState().openBuffer('none', '# Title\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('one', '\n# Title\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('three', '\n\n\n# Title\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('crlf', '\r\n\r\n# Title\r\n', { language: 'markdown' })
+
+    expect(useEditorStore.getState().buffers['none'].sourceLeadingBlankLines).toBe(0)
+    expect(useEditorStore.getState().buffers['one'].sourceLeadingBlankLines).toBe(1)
+    expect(useEditorStore.getState().buffers['three'].sourceLeadingBlankLines).toBe(3)
+    expect(useEditorStore.getState().buffers['crlf'].sourceLeadingBlankLines).toBe(2)
+  })
+
+  // A file of nothing but newlines is the degenerate case: it serializes to the
+  // empty string, so the recorded shape is the ONLY thing that can put it back.
+  // Reporting 0 for all of them (the original behaviour) collapsed `\n\n` to a
+  // single `\n` on the first Live Mode edit — a file losing lines it still had.
+  // The count is one short of the newlines present because the last one is
+  // already accounted for by `sourceTrailingNewline`.
+  it('records the line count of a file that is only newlines', () => {
+    useEditorStore.getState().openBuffer('one', '\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('two', '\n\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('three', '\n\n\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('crlf-two', '\r\n\r\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('empty', '', { language: 'markdown' })
+
+    expect(useEditorStore.getState().buffers['one'].sourceLeadingBlankLines).toBe(0)
+    expect(useEditorStore.getState().buffers['two'].sourceLeadingBlankLines).toBe(1)
+    expect(useEditorStore.getState().buffers['three'].sourceLeadingBlankLines).toBe(2)
+    expect(useEditorStore.getState().buffers['crlf-two'].sourceLeadingBlankLines).toBe(1)
+    expect(useEditorStore.getState().buffers['empty'].sourceLeadingBlankLines).toBe(0)
+  })
+
+  it('leaves the leading blank line count alone while the content changes', () => {
+    useEditorStore.getState().openBuffer('key1', '\n\n# Title\n', { language: 'markdown' })
+    useEditorStore.getState().updateContent('key1', '# Title changed')
+
+    expect(useEditorStore.getState().buffers['key1'].sourceLeadingBlankLines).toBe(2)
+  })
+
+  it('re-derives the leading blank line count when the file is reloaded', () => {
+    useEditorStore.getState().openBuffer('key1', '\n\n# Title\n', { language: 'markdown' })
+    useEditorStore.getState().reloadBuffer('key1', '# Title\n')
+
+    expect(useEditorStore.getState().buffers['key1'].sourceLeadingBlankLines).toBe(0)
+  })
+
+  // Keeping the source shape out of `EditorBufferMetadata` makes it unreachable
+  // through the TYPE, which is not the same as unreachable at runtime: a caller
+  // casting its way past the signature would silently rewrite the file's shape
+  // and, with it, what the next save writes to disk. `renameBuffer` therefore
+  // re-asserts the buffer's own values after the merge instead of trusting the
+  // spread order.
+  it('survives a metadata caller that casts the source shape keys in', () => {
+    useEditorStore.getState().openBuffer('old', '\n\na\r\nb\r\n', { language: 'markdown' })
+
+    useEditorStore.getState().renameBuffer('old', 'new', {
+      language: 'plaintext',
+      sourceEol: 'lf',
+      sourceTrailingNewline: false,
+      sourceLeadingBlankLines: 0,
+    } as unknown as Partial<EditorBufferMetadata>)
+
+    expect(useEditorStore.getState().buffers['new']).toMatchObject({
+      language: 'plaintext',
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+      sourceLeadingBlankLines: 2,
+    })
   })
 })

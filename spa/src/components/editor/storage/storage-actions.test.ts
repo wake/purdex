@@ -148,6 +148,9 @@ function seedBuffer(filePath: string, paneId: string, languageSource: 'extension
         languageSource,
         eol: 'lf',
         encoding: 'utf8',
+        sourceEol: 'lf',
+        sourceTrailingNewline: false,
+        sourceLeadingBlankLines: 0,
       },
     },
     paneStates: {

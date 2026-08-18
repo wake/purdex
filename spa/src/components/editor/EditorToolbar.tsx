@@ -26,6 +26,12 @@ interface Props {
   isDirty: boolean
   canSave?: boolean
   showDiff?: boolean
+  /**
+   * Why this markdown file is in raw mode when the user never asked for it
+   * (spec 2.3 — it carries content Live Mode would destroy). Absent whenever raw
+   * is the user's own choice or simply what the language implies.
+   */
+  rawReason?: string
   onSave: (anchorRect?: DOMRect) => void
   /**
    * Handle on the Save button so the owner can anchor a popover to it even when
@@ -49,6 +55,7 @@ export function EditorToolbar({
   isDirty,
   canSave,
   showDiff,
+  rawReason,
   onSave,
   saveButtonRef,
   onDiff,
@@ -140,6 +147,15 @@ export function EditorToolbar({
             buffer (and, before the canSave fix, every file that failed to stat)
             claim to be modified. */}
         {isDirty && <span className="text-accent" title="Unsaved changes">●</span>}
+        {rawReason && (
+          <span
+            data-testid="editor-raw-reason"
+            className="shrink-0 truncate rounded bg-surface-hover px-1.5 py-0.5 text-[10px] text-text-muted"
+            title={rawReason}
+          >
+            {rawReason}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-1">
         {isDirty && onDiff && (

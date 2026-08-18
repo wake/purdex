@@ -175,17 +175,53 @@ button:disabled {
   content: none;
 }
 
-/* Tables — cell padding / borders / zebra rows; horizontally scrollable */
+/* Tables — cell padding / borders / header emphasis / zebra rows; horizontally
+   scrollable. Editable in Live Mode (TableBubbleMenu), so the chrome also has to
+   show which cells the pending command will act on (`.selectedCell`) and where a
+   column can be resized. Colours come from theme variables only — never literals
+   — so both themes stay correct (`feedback_theme_dual_source`). */
 .tiptap-editor .tableWrapper {
   overflow-x: auto;
 }
 .tiptap-editor table {
   border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
 }
 .tiptap-editor :is(th, td) {
   border: 1px solid var(--border-default);
   padding: 0.4em 0.6em;
+  vertical-align: top;
+  position: relative;
+}
+/* Header row — heavier weight, faint fill, start-aligned (markdown tables have
+   no per-cell alignment beyond the delimiter row, which Tiptap keeps on td). */
+.tiptap-editor th {
+  background: var(--surface-secondary);
+  font-weight: 600;
+  text-align: start;
 }
 .tiptap-editor tbody tr:nth-child(odd) {
   background: color-mix(in srgb, var(--surface-secondary) 50%, transparent);
+}
+/* Cell selection (ProseMirror's own class) — the menu's commands act on exactly
+   these cells, so they must be visible while the bubble menu is open. */
+.tiptap-editor .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--accent-muted);
+}
+/* Column resize handle from TableKit */
+.tiptap-editor .column-resize-handle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: -2px;
+  width: 3px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.tiptap-editor.resize-cursor {
+  cursor: col-resize;
 }
