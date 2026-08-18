@@ -361,11 +361,24 @@ describe('useEditorStore', () => {
     expect(useEditorStore.getState().buffers['crlf'].sourceLeadingBlankLines).toBe(2)
   })
 
-  // A file of nothing but newlines has no "leading" blank lines to speak of —
-  // counting them would double up against `sourceTrailingNewline`.
-  it('reports no leading blank lines for a file that is only newlines', () => {
-    useEditorStore.getState().openBuffer('blank', '\n\n\n', { language: 'markdown' })
-    expect(useEditorStore.getState().buffers['blank'].sourceLeadingBlankLines).toBe(0)
+  // A file of nothing but newlines is the degenerate case: it serializes to the
+  // empty string, so the recorded shape is the ONLY thing that can put it back.
+  // Reporting 0 for all of them (the original behaviour) collapsed `\n\n` to a
+  // single `\n` on the first Live Mode edit — a file losing lines it still had.
+  // The count is one short of the newlines present because the last one is
+  // already accounted for by `sourceTrailingNewline`.
+  it('records the line count of a file that is only newlines', () => {
+    useEditorStore.getState().openBuffer('one', '\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('two', '\n\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('three', '\n\n\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('crlf-two', '\r\n\r\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('empty', '', { language: 'markdown' })
+
+    expect(useEditorStore.getState().buffers['one'].sourceLeadingBlankLines).toBe(0)
+    expect(useEditorStore.getState().buffers['two'].sourceLeadingBlankLines).toBe(1)
+    expect(useEditorStore.getState().buffers['three'].sourceLeadingBlankLines).toBe(2)
+    expect(useEditorStore.getState().buffers['crlf-two'].sourceLeadingBlankLines).toBe(1)
+    expect(useEditorStore.getState().buffers['empty'].sourceLeadingBlankLines).toBe(0)
   })
 
   it('leaves the leading blank line count alone while the content changes', () => {

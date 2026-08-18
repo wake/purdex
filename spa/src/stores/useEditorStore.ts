@@ -103,14 +103,20 @@ function detectEol(content: string): EditorEol {
 }
 
 /**
- * Blank lines before the first line with any content. A file made of nothing but
- * newlines has none by definition: counting them there would double up against
- * `sourceTrailingNewline`, which already accounts for that same text.
+ * Blank lines before the first line with any content.
+ *
+ * A file made of nothing but newlines is the degenerate case, and it is the one
+ * that used to lose data: Tiptap serializes it to the empty string, so this
+ * count plus `sourceTrailingNewline` is the whole of what can rebuild it, and
+ * reporting 0 for every such file collapsed `\n\n` back to a single `\n`. What
+ * it must report there is one short of the newlines present, because the last of
+ * them is what `sourceTrailingNewline` already stands for.
  */
 function countLeadingBlankLines(content: string): number {
   const leading = /^(?:\r?\n)*/.exec(content)?.[0] ?? ''
-  if (leading.length === content.length) return 0
-  return (leading.match(/\n/g) ?? []).length
+  const count = (leading.match(/\n/g) ?? []).length
+  if (leading.length !== content.length) return count
+  return Math.max(0, count - 1)
 }
 
 /**

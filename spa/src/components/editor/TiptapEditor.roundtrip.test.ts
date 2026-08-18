@@ -233,6 +233,19 @@ describe('TiptapEditor markdown round-trip (real editor)', () => {
       expect(normalizedRoundTrip(source)).toBe(source)
     })
 
+    // The degenerate end of the same problem, found by the PR-B adversarial
+    // review: a file made of nothing but newlines serializes to the empty
+    // string, so the recorded shape is all there is to rebuild it from. With the
+    // leading count reported as 0 for every such file, `\n\n` came back as a
+    // single `\n` — lines the user never touched, gone.
+    it.each([['\n'], ['\n\n'], ['\n\n\n'], ['\r\n\r\n'], ['\r\n\r\n\r\n'], ['']])(
+      'returns a file of only line endings byte-for-byte (%j)',
+      (source) => {
+        expect(roundTrip(source)).toBe('')
+        expect(normalizedRoundTrip(source)).toBe(source)
+      },
+    )
+
     // The whole point of T2.4: merely opening a file in Live Mode must not mark
     // it dirty. This walks the exact path EditorPane's onChange takes.
     it('leaves a blank-line-first file undirty when Live Mode opens it untouched', () => {
