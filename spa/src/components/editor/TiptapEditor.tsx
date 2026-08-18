@@ -3,6 +3,7 @@ import { NodeSelection } from '@tiptap/pm/state'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { resolveRestoreSelection } from './tiptapSelection'
 import { tiptapExtensions } from './tiptapExtensions'
+import { TableBubbleMenu } from './TableBubbleMenu'
 import type { TiptapViewState } from '../../stores/useEditorStore'
 import type { ContentWidthOption } from '../../stores/useEditorSettingsStore'
 
@@ -164,6 +165,9 @@ export function TiptapEditor({ content, isActive, initialViewState, contentWidth
         } [&_.tiptap-editor]:min-h-full [&_.tiptap-editor]:cursor-text`}
       >
         <EditorContent editor={editor} />
+        {/* Table maintenance affordance (T2.2b): shows itself only while the
+            selection is inside a table, so it costs nothing on ordinary prose. */}
+        <TableBubbleMenu editor={editor} />
       </div>
     </div>
   )

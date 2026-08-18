@@ -45,6 +45,14 @@ vi.mock('./tiptapSelection', () => ({
   resolveRestoreSelection: vi.fn(() => ({ __fake: 'selection' })),
 }))
 
+// The table menu owns a real ProseMirror plugin; this suite drives a mock editor,
+// so it is stubbed here and covered on its own in TableBubbleMenu.test.tsx.
+vi.mock('./TableBubbleMenu', () => ({
+  TableBubbleMenu: (props: { editor: unknown }) => (
+    <div data-testid="table-bubble-menu" data-has-editor={props.editor ? 'true' : 'false'} />
+  ),
+}))
+
 function makeMockEditor(overrides: Record<string, unknown> = {}) {
   return {
     getMarkdown: () => 'hello',
@@ -281,6 +289,12 @@ describe('TiptapEditor', () => {
     expect(config.extensions).toContain(TableKit)
     expect(config.extensions).toContain(TaskList)
     expect(config.extensions).toContain(TaskItem)
+  })
+
+  it('mounts the table editing menu against the live editor (T2.2b)', () => {
+    render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
+
+    expect(screen.getByTestId('table-bubble-menu')).toHaveAttribute('data-has-editor', 'true')
   })
 
   it('does NOT overwrite existing viewState when unmounted before editor is ready (R1 P2)', () => {
