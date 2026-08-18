@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { StorageRow } from './StorageRow'
 import type { TreeNode } from '../../../lib/storage-tree'
 import type { FsBackend } from '../../../lib/fs-backend'
@@ -22,12 +22,21 @@ function file(): TreeNode {
 let onToggle: Mock
 let onSelect: Mock
 let onOpen: Mock
+let onRename: Mock
+let onDelete: Mock
 
 beforeEach(() => {
   onToggle = vi.fn()
   onSelect = vi.fn()
   onOpen = vi.fn()
+  onRename = vi.fn()
+  onDelete = vi.fn()
 })
+
+/** The per-test callback set, read at call time (the spies are re-made each test). */
+function handlers() {
+  return { onToggle, onSelect, onOpen, onRename, onDelete }
+}
 
 function renderFolder(expanded = false) {
   render(
@@ -36,9 +45,7 @@ function renderFolder(expanded = false) {
       depth={0}
       selected={false}
       expanded={expanded}
-      onToggle={onToggle}
-      onSelect={onSelect}
-      onOpen={onOpen}
+      {...handlers()}
     />,
   )
 }
@@ -75,9 +82,7 @@ describe('StorageRow file behavior (unchanged)', () => {
         depth={0}
         selected={false}
         expanded={false}
-        onToggle={onToggle}
-        onSelect={onSelect}
-        onOpen={onOpen}
+        {...handlers()}
       />,
     )
     fireEvent.click(screen.getByTestId('buffer-row'))
@@ -92,9 +97,7 @@ describe('StorageRow file behavior (unchanged)', () => {
         depth={0}
         selected={false}
         expanded={false}
-        onToggle={onToggle}
-        onSelect={onSelect}
-        onOpen={onOpen}
+        {...handlers()}
       />,
     )
     fireEvent.click(screen.getByTestId('buffer-row'), { metaKey: true })
@@ -108,9 +111,7 @@ describe('StorageRow file behavior (unchanged)', () => {
         depth={0}
         selected={false}
         expanded={false}
-        onToggle={onToggle}
-        onSelect={onSelect}
-        onOpen={onOpen}
+        {...handlers()}
       />,
     )
     expect(screen.queryByTestId('buffer-caret')).toBeNull()
@@ -123,7 +124,7 @@ describe('StorageRow keyboard parity (codex B6)', () => {
   it('Enter on a file opens it', () => {
     render(
       <StorageRow node={file()} depth={0} selected={false} expanded={false}
-        onToggle={onToggle} onSelect={onSelect} onOpen={onOpen} />,
+        {...handlers()} />,
     )
     fireEvent.keyDown(screen.getByTestId('buffer-row'), { key: 'Enter' })
     expect(onOpen).toHaveBeenCalledWith('/buffer/note.md')
@@ -140,7 +141,7 @@ describe('StorageRow keyboard parity (codex B6)', () => {
   it('Space selects the row (non-additive without a modifier)', () => {
     render(
       <StorageRow node={file()} depth={0} selected={false} expanded={false}
-        onToggle={onToggle} onSelect={onSelect} onOpen={onOpen} />,
+        {...handlers()} />,
     )
     fireEvent.keyDown(screen.getByTestId('buffer-row'), { key: ' ' })
     expect(onSelect).toHaveBeenCalledWith('/buffer/note.md', false)
@@ -162,7 +163,7 @@ describe('StorageRow drop target dir (codex B1)', () => {
   it('a file row publishes its PARENT dir as the drop targetDir (drop = into its folder, not root)', () => {
     render(
       <StorageRow node={file()} depth={0} selected={false} expanded={false}
-        onToggle={onToggle} onSelect={onSelect} onOpen={onOpen} />,
+        {...handlers()} />,
     )
     // file is /buffer/note.md → parent /buffer.
     expect(screen.getByTestId('buffer-row').getAttribute('data-target-dir')).toBe('/buffer')
@@ -172,8 +173,50 @@ describe('StorageRow drop target dir (codex B1)', () => {
     const nested: TreeNode = { path: '/buffer/dir/sub/x.md', name: 'x.md', isDir: false, size: 2 }
     render(
       <StorageRow node={nested} depth={2} selected={false} expanded={false}
-        onToggle={onToggle} onSelect={onSelect} onOpen={onOpen} />,
+        {...handlers()} />,
     )
     expect(screen.getByTestId('buffer-row').getAttribute('data-target-dir')).toBe('/buffer/dir/sub')
+  })
+})
+
+describe('StorageRow per-row action cluster (T4.1)', () => {
+  it('a file row exposes Open / Rename / Delete, each targeting its own path', () => {
+    render(<StorageRow node={file()} depth={0} selected={false} expanded={false} {...handlers()} />)
+    const actions = screen.getByTestId('row-actions')
+    fireEvent.click(within(actions).getByTestId('row-action-open'))
+    expect(onOpen).toHaveBeenCalledWith('/buffer/note.md')
+    fireEvent.click(within(actions).getByTestId('row-action-delete'))
+    expect(onDelete).toHaveBeenCalledWith('/buffer/note.md')
+    fireEvent.click(within(actions).getByTestId('row-action-rename'))
+    // Rename hands back the button's own rect so the popover anchors to the row.
+    expect(onRename).toHaveBeenCalledWith('/buffer/note.md', expect.anything())
+  })
+
+  it('a folder row has Rename / Delete but no Open', () => {
+    render(<StorageRow node={folder()} depth={0} selected={false} expanded={false} {...handlers()} />)
+    const actions = screen.getByTestId('row-actions')
+    expect(within(actions).queryByTestId('row-action-open')).toBeNull()
+    fireEvent.click(within(actions).getByTestId('row-action-delete'))
+    expect(onDelete).toHaveBeenCalledWith('/buffer/dir')
+  })
+
+  it('the cluster is revealed by hover AND keyboard focus, and the row is a hover group', () => {
+    render(<StorageRow node={file()} depth={0} selected={false} expanded={false} {...handlers()} />)
+    const actions = screen.getByTestId('row-actions')
+    expect(actions.className).toContain('group-hover:opacity-100')
+    expect(actions.className).toContain('group-focus-within:opacity-100')
+    expect(screen.getByTestId('buffer-row').className.split(/\s+/)).toContain('group')
+  })
+
+  it('REGRESSION: an action click/dblclick/keydown never reaches the row handlers', () => {
+    render(<StorageRow node={file()} depth={0} selected={false} expanded={false} {...handlers()} />)
+    const rename = screen.getByTestId('row-action-rename')
+    fireEvent.click(rename)
+    fireEvent.doubleClick(rename)
+    fireEvent.keyDown(rename, { key: 'Enter' })
+    fireEvent.keyDown(rename, { key: ' ' })
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onToggle).not.toHaveBeenCalled()
+    expect(onOpen).not.toHaveBeenCalled()
   })
 })

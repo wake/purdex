@@ -105,7 +105,10 @@ function StorageRegionDropZone({
  *
  * Open routes through `openInAppFile` (registry-resolved kind: md→editor,
  * png→image-preview, pdf→pdf-preview; open-or-focus, no cross-tab hijack).
- * Rename/delete operate on the selected node's FULL path.
+ * Rename/delete operate on the selected node's FULL path; each row also carries
+ * its own Open/Rename/Delete cluster (T4.1) that targets that row regardless of
+ * the selection, routed through the same `renameStorageEntry` /
+ * `deleteStorageEntries` actions and the same rename popover.
  */
 export function StoragePane({ pane }: PaneRendererProps) {
   const t = useI18nStore((s) => s.t)
@@ -240,20 +243,48 @@ export function StoragePane({ pane }: PaneRendererProps) {
     [t],
   )
 
-  const handleDelete = useCallback(async () => {
-    if (selectedArray.length === 0) return
-    setBusy(true)
-    setActionError(null)
-    setActionWarning(null)
-    const res = await deleteStorageEntries(selectedArray, t)
-    setBusy(false)
-    if (res.status === 'deleted') {
-      setSelected(new Set())
-      refresh()
-    } else if (res.status === 'refused' || res.status === 'error') {
-      setActionError(res.message)
-    }
-  }, [selectedArray, t, refresh])
+  /**
+   * The one delete path (T4.1): the toolbar hands it the whole selection, a row
+   * action hands it just that row. On success the deleted paths are dropped
+   * from the selection — for the toolbar that empties it, for a row action it
+   * leaves the rest of the selection alone (deleting a hovered row must not
+   * clear an unrelated selection).
+   */
+  const deletePaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return
+      setBusy(true)
+      setActionError(null)
+      setActionWarning(null)
+      const res = await deleteStorageEntries(paths, t)
+      setBusy(false)
+      if (res.status === 'deleted') {
+        setSelected((prev) => {
+          const next = new Set(prev)
+          for (const p of paths) next.delete(p)
+          return next
+        })
+        refresh()
+      } else if (res.status === 'refused' || res.status === 'error') {
+        setActionError(res.message)
+      }
+    },
+    [t, refresh],
+  )
+
+  const handleDelete = useCallback(() => deletePaths(selectedArray), [deletePaths, selectedArray])
+
+  // --- Row-scoped actions (T4.1) ---
+
+  // Rename from a row's own button: anchor the shared popover to THAT button's
+  // rect and target THAT path, whatever happens to be selected.
+  const handleRowRename = useCallback((path: string, anchorRect: DOMRect | null) => {
+    setRenameAnchorRect(anchorRect)
+    setRenameError(null)
+    setRenameTarget(path)
+  }, [])
+
+  const handleRowDelete = useCallback((path: string) => deletePaths([path]), [deletePaths])
 
   const handleOpenSelected = useCallback(() => {
     // Only files open (codex B3): a folder is not openable, so guard here as
@@ -518,6 +549,8 @@ export function StoragePane({ pane }: PaneRendererProps) {
                 onToggle={toggle}
                 onSelect={handleSelect}
                 onOpen={handleOpen}
+                onRename={handleRowRename}
+                onDelete={handleRowDelete}
               />
             )}
           </StorageRegionDropZone>
