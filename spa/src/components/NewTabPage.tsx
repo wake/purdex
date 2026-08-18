@@ -164,14 +164,18 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
 
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
+      {/* Cap the section at half the pane so a long candidate list can never
+          push the provider grid below the fold — the overflow scrolls inside
+          the list instead. min-h-0 lets the flex child shrink; flex-shrink-0
+          keeps a SHORT list at its natural height. */}
       <section
-        className="w-full flex-shrink-0 px-6 pt-6"
+        className="w-full flex-shrink-0 flex flex-col min-h-0 max-h-[50%] px-6 pt-6"
         data-testid="newtab-bring-in"
       >
-        <h3 className="text-sm font-medium text-text-secondary mb-2 px-2">
+        <h3 className="flex-shrink-0 text-sm font-medium text-text-secondary mb-2 px-2">
           {t('page.newtab.bringInTab')}
         </h3>
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1 min-h-0 overflow-y-auto" data-testid="newtab-bring-in-list">
           {bringInCandidates.map((c) => (
             <button
               key={c.tabId}

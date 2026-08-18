@@ -502,4 +502,26 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
 
     expect(screen.queryByText(BRING_IN_TITLE)).toBeNull()
   })
+
+  it('caps the section at half the pane height and scrolls the list internally', () => {
+    // Regression: with many open tabs the section grew unbounded and pushed the
+    // provider grid (sessions / files / …) out of view in a split pane.
+    const { tab: current, paneId } = seedSplitCurrentTab('Alpha')
+    for (let i = 0; i < 20; i++) seedWorkspaceTab('Alpha', editorContent(`/proj/f${i}.md`))
+
+    render(
+      <NewTabPage
+        onSelect={() => {}}
+        currentTabId={current.id}
+        currentPaneId={paneId}
+      />,
+    )
+
+    const section = screen.getByTestId('newtab-bring-in')
+    expect(section.className).toContain('max-h-[50%]')
+    expect(section.className).toContain('min-h-0')
+    const list = screen.getByTestId('newtab-bring-in-list')
+    expect(list.className).toContain('overflow-y-auto')
+    expect(list.className).toContain('min-h-0')
+  })
 })
