@@ -138,8 +138,12 @@ Notes:
 - An unrecognised token contributes its own `type` as the blocker key, so `html` falls out naturally. Consumers rendering the reason must have a fallback for keys they don't have copy for.
 
 **(b) Pre-lex regex probes** for constructs `marked` silently degrades rather than tokenizing distinctly:
-- **Front matter** — a `---` fence in the first line closed by a later `---`/`...` line. (Do **not** infer it from an `hr` + `heading` token pair: legitimate documents contain that sequence and would be misclassified.)
+- **Front matter** — a `---` fence in the first line closed by a later `---`/`...` line, **whose body reads as a YAML mapping** (every non-blank line is a `key:` / `key: value`, an indented continuation of one, a `- item` under a key, or a `#` comment — and at least one real key is present). (Do **not** infer it from an `hr` + `heading` token pair: legitimate documents contain that sequence and would be misclassified.)
+
+  Scope narrowed during implementation, after a false positive on `---\nhello\n---`: only **mapping-style** front matter is detected. A sequence-only (`---\n- a\n- b\n---`) or comment-only fence is treated as ordinary markdown, because in a markdown file that byte sequence is overwhelmingly more likely to be "thematic break, list, thematic break" than a YAML sequence document used as front matter. Widening the probe to catch those would misclassify common documents, and the cost of a false positive is a perfectly good file being locked out of Live Mode.
 - **Footnotes** — a `[^label]` reference together with a `[^label]:` definition line.
+- **HTML entities** — `&#169;` / `&#x41;` / `&copy;` and friends. Tiptap has no node for them and re-escapes the ampersand on serialization (`&#169;` → `&amp;#169;`), turning a rendered `©` into literal text. That is semantic corruption, not a style rewrite.
+- **Mixed line endings** — a file containing both CRLF and LF lines. `sourceEol` is a single value and cannot restore a per-line mixture, so such files stay in raw rather than being silently normalized to one ending.
 
 `blockers` carries stable keys (`html`, `frontmatter`, `footnote`) for the toolbar message; the function stays pure and synchronous.
 
@@ -150,6 +154,8 @@ Add `@tiptap/extension-table` (`TableKit`, which bundles table/row/cell/header) 
 The markdown bridge requirement raised in review is **verified, not assumed** — see the Evidence section: the extensions carry their own `parseMarkdown` / `renderMarkdown` and `MarkdownManager` registers them straight from the extension array. No custom tokenizer or handler work is in scope.
 
 Minimum table editing affordance in Live Mode: a small contextual control (bubble menu on a table selection) offering add/remove row, add/remove column, delete table. Without it a table renders but cannot be maintained, which is worse than raw. Tab/Shift-Tab cell navigation comes from the extension.
+
+**Images** (added after adversarial review measured the failure): StarterKit carries no image node, so `![alt](a.png)` round-trips to the bare text `alt` — the URL is gone. Since the whitelist declares `image` safe, this was a silent-corruption hole. The schema must therefore also include an image extension; whatever an image extension cannot represent losslessly (e.g. a title attribute, if unsupported) becomes a gate blocker instead. Dropping `image` from the whitelist without adding the node was rejected: images are common enough in markdown that it would push a large share of documents out of Live Mode, defeating decision 1.
 
 Task items render as real checkboxes and round-trip as `- [ ]` / `- [x]`.
 
