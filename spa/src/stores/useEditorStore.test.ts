@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useEditorStore } from './useEditorStore'
+import type { EditorBufferMetadata } from './useEditorStore'
 
 describe('useEditorStore', () => {
   beforeEach(() => {
@@ -379,5 +380,29 @@ describe('useEditorStore', () => {
     useEditorStore.getState().reloadBuffer('key1', '# Title\n')
 
     expect(useEditorStore.getState().buffers['key1'].sourceLeadingBlankLines).toBe(0)
+  })
+
+  // Keeping the source shape out of `EditorBufferMetadata` makes it unreachable
+  // through the TYPE, which is not the same as unreachable at runtime: a caller
+  // casting its way past the signature would silently rewrite the file's shape
+  // and, with it, what the next save writes to disk. `renameBuffer` therefore
+  // re-asserts the buffer's own values after the merge instead of trusting the
+  // spread order.
+  it('survives a metadata caller that casts the source shape keys in', () => {
+    useEditorStore.getState().openBuffer('old', '\n\na\r\nb\r\n', { language: 'markdown' })
+
+    useEditorStore.getState().renameBuffer('old', 'new', {
+      language: 'plaintext',
+      sourceEol: 'lf',
+      sourceTrailingNewline: false,
+      sourceLeadingBlankLines: 0,
+    } as unknown as Partial<EditorBufferMetadata>)
+
+    expect(useEditorStore.getState().buffers['new']).toMatchObject({
+      language: 'plaintext',
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+      sourceLeadingBlankLines: 2,
+    })
   })
 })

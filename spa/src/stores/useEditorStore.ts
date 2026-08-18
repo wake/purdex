@@ -126,6 +126,21 @@ function detectSourceShape(content: string): SourceShape {
   }
 }
 
+/**
+ * The load-time shape as it stands on an existing buffer, for re-asserting after
+ * a metadata merge. Only a reload may move it (`detectSourceShape`), so anything
+ * a caller happened to spread in has to be overwritten rather than tolerated:
+ * these values decide what the next save writes to disk, and keeping them out of
+ * `EditorBufferMetadata` only makes them unreachable through the type.
+ */
+function keepSourceShape(buffer: EditorBuffer): SourceShape {
+  return {
+    sourceEol: buffer.sourceEol,
+    sourceTrailingNewline: buffer.sourceTrailingNewline,
+    sourceLeadingBlankLines: buffer.sourceLeadingBlankLines,
+  }
+}
+
 function normalizeMetadata(content: string, metadata: Partial<EditorBufferMetadata> & Pick<EditorBufferMetadata, 'language'>): EditorBufferMetadata {
   return {
     language: metadata.language,
@@ -238,6 +253,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
         [newKey]: {
           ...buffer,
           ...metadata,
+          ...keepSourceShape(buffer),
         },
       },
       paneStates,
