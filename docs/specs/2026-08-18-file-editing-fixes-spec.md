@@ -142,10 +142,15 @@ Notes:
 
   Scope narrowed during implementation, after a false positive on `---\nhello\n---`: only **mapping-style** front matter is detected. A sequence-only (`---\n- a\n- b\n---`) or comment-only fence is treated as ordinary markdown, because in a markdown file that byte sequence is overwhelmingly more likely to be "thematic break, list, thematic break" than a YAML sequence document used as front matter. Widening the probe to catch those would misclassify common documents, and the cost of a false positive is a perfectly good file being locked out of Live Mode.
 - **Footnotes** — a `[^label]` reference together with a `[^label]:` definition line.
-- **HTML entities** — `&#169;` / `&#x41;` / `&copy;` and friends. Tiptap has no node for them and re-escapes the ampersand on serialization (`&#169;` → `&amp;#169;`), turning a rendered `©` into literal text. That is semantic corruption, not a style rewrite.
-- **Mixed line endings** — a file containing both CRLF and LF lines. `sourceEol` is a single value and cannot restore a per-line mixture, so such files stay in raw rather than being silently normalized to one ending.
+- **Mixed line endings** (`mixed-eol`) — a file containing both CRLF and LF lines. `sourceEol` is a single value and cannot restore a per-line mixture: `a\r\nb\nc\r\n` was written back as `a\r\nb\r\nc\r\n`, changing a line the user never touched. Such files stay in raw, where Monaco is byte-faithful.
 
-`blockers` carries stable keys (`html`, `frontmatter`, `footnote`) for the toolbar message; the function stays pure and synchronous.
+**(c) HTML entities** (`html-entity`) — `&#169;` / `&#x41;` / `&copy;` and friends. Tiptap has no node for them: marked leaves the reference as literal text and the serializer escapes its ampersand, so `&#169;` → `&amp;#169;` and a rendered `©` becomes the visible string `&#169;`. That is semantic corruption, not a style rewrite.
+
+Two refinements found during implementation, both measured against the real editor:
+- The detector runs over the **leaf `text` tokens of the lexer**, not as a pre-lex regex over the source. An entity inside a code span or code block is literal text on both sides of the round trip (measured), and a document *explaining* HTML entities is exactly the document a source-wide scan would wrongly lock out of Live Mode.
+- `&amp;` / `&lt;` / `&gt;` are **exempt**: they come back byte-identical because they are the escapes the serializer emits itself. This is not a convenience — the serializer rewrites a bare `A & B` to `A &amp; B`, so blocking `&amp;` would mean every file Live Mode saves locks itself out of Live Mode on the next open. A bare `&` (`A & B`, `Q&A`, a query string) is not an entity reference and is not blocked; its rewrite to `&amp;` renders identically and is a style change under decision 3.
+
+`blockers` carries stable keys (`html`, `frontmatter`, `footnote`, `html-entity`, `mixed-eol`, `image-in-mark`, `bracketed-url`) for the toolbar message; the function stays pure and synchronous.
 
 ### 2.2 Schema widening
 
@@ -155,7 +160,27 @@ The markdown bridge requirement raised in review is **verified, not assumed** �
 
 Minimum table editing affordance in Live Mode: a small contextual control (bubble menu on a table selection) offering add/remove row, add/remove column, delete table. Without it a table renders but cannot be maintained, which is worse than raw. Tab/Shift-Tab cell navigation comes from the extension.
 
-**Images** (added after adversarial review measured the failure): StarterKit carries no image node, so `![alt](a.png)` round-trips to the bare text `alt` — the URL is gone. Since the whitelist declares `image` safe, this was a silent-corruption hole. The schema must therefore also include an image extension; whatever an image extension cannot represent losslessly (e.g. a title attribute, if unsupported) becomes a gate blocker instead. Dropping `image` from the whitelist without adding the node was rejected: images are common enough in markdown that it would push a large share of documents out of Live Mode, defeating decision 1.
+**Images** (added after adversarial review measured the failure): StarterKit carries no image node, so `![alt](a.png)` round-trips to the bare text `alt` — the URL is gone. Since the whitelist declares `image` safe, this was a silent-corruption hole. The schema must therefore also include an image extension; whatever an image extension cannot represent losslessly becomes a gate blocker instead. Dropping `image` from the whitelist without adding the node was rejected: images are common enough in markdown that it would push a large share of documents out of Live Mode, defeating decision 1.
+
+Measured with `@tiptap/extension-image@3.22.3` added to the extension array, real editor, `parse → getMarkdown`:
+
+| input | outcome |
+|---|---|
+| `![alt](a.png)` | identical |
+| `![alt](a.png "title")` | identical — the **title attribute survives** |
+| `![](a.png)` | identical |
+| image mid-paragraph / in a list item / in a table cell / in a blockquote / in a heading | identical |
+| `![alt](a.png 'title')` | `![alt](a.png "title")` — quote style only, accepted under decision 3 |
+| `![alt][ref]` + `[ref]: a.png` | inlined to `![alt](a.png)`, same as `def` for links — accepted |
+| `[![Build](b.svg)](https://ci)` | `![Build](b.svg)` — **the link is gone** |
+| `[text ![a](a.png)](u)` | `[text ](u)![a](a.png)[` — **broken output** |
+| `**![alt](a.png)**`, `*…*`, `~~…~~` | the mark is dropped |
+| `![alt](<a b.png>)` | `![alt](a b.png)` — **no longer an image** to a CommonMark renderer |
+| `![alt](<a.png>)` | `![alt](a.png)` — brackets dropped, but nothing changes without a space |
+
+The two failing families become blockers rather than silent rewrites:
+- **`image-in-mark`** — Tiptap models link / strong / em / del as ProseMirror *marks*, and a mark cannot wrap a node, so an image under one loses it.
+- **`bracketed-url`** — an angle-bracketed destination whose URL contains a space. Links share the defect (`[text](<a b.html>)` → `[text](a b.html)`), so the rule covers both; a bracketed URL without a space is not blocked, because unwrapping it changes nothing.
 
 Task items render as real checkboxes and round-trip as `- [ ]` / `- [x]`.
 
@@ -183,6 +208,7 @@ A pure helper re-applies them to markdown coming out of Tiptap:
 - `sourceEol === 'crlf'` → convert serialized `\n` back to `\r\n`.
 - `sourceTrailingNewline` → ensure exactly one trailing newline; if false, ensure none.
 - **Leading newline** (found while measuring 2.2a): a document that starts with a table serializes with a leading `\n`. The source never had it, so strip a leading blank line that the source did not have — the trailing-newline rule alone does not cover this.
+- **Blank-only files** (found by the adversarial review): a file made of nothing but newlines serializes to the empty string, so `sourceLeadingBlankLines` + `sourceTrailingNewline` are the whole of what can rebuild it. Reporting 0 leading blank lines for every such file — the original behaviour — collapsed `\n\n` to `\n` and `\r\n\r\n` to `\r\n`. The count there is **one short of the newlines present**, because the last one is what `sourceTrailingNewline` already stands for.
 
 Applied in the Tiptap `onChange` path (`EditorPane.tsx:495`) before `updateContent`, so `isDirty` compares like with like and an untouched round-trip of an already-canonical file produces **no** spurious diff.
 
