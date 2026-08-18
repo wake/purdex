@@ -49,6 +49,19 @@ One bump PR after all three land. Every task is TDD — the listed tests are wri
 
 **Implementation**: replace the catch's `openBuffer(key, '', …)` with `setLoadError({ message })`; render the error surface instead of the editor when `loadError && !buffer`; Retry clears the error and bumps a local attempt counter included in the effect deps. Keep the `stale` flag semantics.
 
+### T1.2b — Unavailable backend surfaces as an error, not a permanent spinner
+
+Added during implementation (surfaced by T1.2, deliberately not folded into it). The load effect's `if (!backend) return` leaves the pane on "Loading…" forever with no explanation — the same silent-failure class T1.2 fixes, reached by a different route (e.g. a `local` source outside Electron, or a daemon source whose host was removed).
+
+**Files**: `spa/src/components/editor/EditorPane.tsx`, locales.
+
+**Tests first**:
+1. `getFsBackend` returns undefined → the T1.2 error surface renders with a "no backend" reason; no buffer is created; the spinner is gone.
+2. Retry re-resolves the backend and, once available, loads normally.
+3. The untitled path is unaffected.
+
+**Implementation**: reuse T1.2's `loadError` state and error surface with a distinct i18n reason; `ImagePreviewPane` / `PdfPreviewPane` already have a "No FS backend" precedent to match in wording.
+
 ### T1.3 — `canSave` semantics, dirty dot, Save affordance
 
 **Files**: `spa/src/components/editor/EditorPane.tsx`, `spa/src/components/editor/EditorToolbar.tsx`
