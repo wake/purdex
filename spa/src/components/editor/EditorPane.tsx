@@ -18,6 +18,7 @@ import { bufferKey } from '../../lib/editor-buffer-key'
 import { STORAGE_ROOT } from '../../lib/storage-paths'
 import { createUniqueInAppFile } from '../../lib/inapp-namer'
 import { getFsBackend } from '../../lib/fs-backend'
+import { closePaneAndSweepPlaceholder } from '../../lib/placeholder-sweep'
 import { displayName, isInvalidRename, isUntitledPath } from './editor-pane-naming'
 import { useRenamePopoverState } from './hooks/useRenamePopoverState'
 import { useEditorPaneLoadState } from './hooks/useEditorPaneLoadState'
@@ -161,6 +162,11 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   }, [editorMode, isMarkdown, paneId])
 
   // Cleanup pane state only when the pane is truly gone, not just hidden by tab switching.
+  //
+  // T5.2: the detach goes through `closePaneAndSweepPlaceholder`, which closes
+  // first and only then asks whether an untouched placeholder just lost its last
+  // reference. This unmount fires for pane moves and content swaps too, so the
+  // sweep must never key off the unmount itself — see the helper's note.
   useEffect(() => {
     return () => {
       const currentPane = Object.values(useTabStore.getState().tabs)
@@ -170,9 +176,10 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         currentPane.content.filePath === filePath &&
         sourceIdentity(currentPane.content.source) === sourceId
       if (!stillSameEditor) {
-        useEditorStore.getState().closePane(paneId, key)
+        closePaneAndSweepPlaceholder(paneId, key, source, filePath)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `source` is deliberately NOT a dep: `sourceIdentity` encodes it whole (type + hostId), so `sourceId` already covers every meaningful change, while a new-but-equal source object must not re-run this cleanup (that would close the pane and destroy an unsaved buffer on a plain re-render).
   }, [filePath, key, paneId, sourceId])
 
   // Detect external file changes when tab becomes active
