@@ -126,7 +126,11 @@ export function EditorToolbar({
               )
             })}
         </div>
-        {saveEnabled && <span className="text-accent-base" title="Unsaved changes">●</span>}
+        {/* Spec 1.3: the dot means "there are unsaved changes", so it binds to
+            `isDirty` only. Binding it to `saveEnabled` made every never-saved
+            buffer (and, before the canSave fix, every file that failed to stat)
+            claim to be modified. */}
+        {isDirty && <span className="text-accent" title="Unsaved changes">●</span>}
       </div>
       <div className="flex items-center gap-1">
         {isDirty && onDiff && (
@@ -138,10 +142,13 @@ export function EditorToolbar({
             <GitDiff size={14} />
           </button>
         )}
+        {/* Spec 1.3: a 14 px floppy at two near-identical greys made "savable"
+            impossible to read at a glance. Enabled now carries the theme accent
+            (`--color-accent`); disabled keeps the muted secondary + opacity-30. */}
         <button
           onClick={(event) => onSave(event.currentTarget.getBoundingClientRect())}
           disabled={!saveEnabled}
-          className="p-1 rounded hover:bg-surface-hover text-text-secondary disabled:opacity-30 transition-colors"
+          className={`p-1 rounded hover:bg-surface-hover disabled:opacity-30 transition-colors ${saveEnabled ? 'text-accent hover:text-accent-hover' : 'text-text-secondary'}`}
           title="Save (⌘S)"
         >
           <FloppyDisk size={14} />

@@ -1290,6 +1290,80 @@ describe('EditorPane — load failure (T1.2)', () => {
   })
 })
 
+describe('EditorPane — canSave semantics and dirty affordances (T1.3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    useRecentFilesStore.setState({ files: [] })
+  })
+
+  it('keeps Save disabled and shows no dirty dot for a clean loaded buffer with no stat', () => {
+    const pane = createPane('/notes/no-stat.md', 'pane-no-stat')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    // A clean, non-untitled buffer whose stat is missing. Pre-opened so the load
+    // effect short-circuits on the existing buffer.
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/no-stat.md'), 'loaded body', {
+      language: 'markdown',
+    })
+
+    render(<EditorPane pane={pane} isActive />)
+
+    const buffer = useEditorStore.getState().buffers[getBufferKey('/notes/no-stat.md')]
+    expect(buffer.isDirty).toBe(false)
+    expect(buffer.lastStat).toBeNull()
+    // A missing stat must not masquerade as "modified".
+    expect(screen.getByTitle('Save (⌘S)')).toBeDisabled()
+    expect(screen.queryByTitle('Unsaved changes')).not.toBeInTheDocument()
+  })
+
+  it('keeps Save enabled for an untitled buffer that has never been saved', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-cansave')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toBeDefined()
+    })
+
+    const buffer = useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]
+    expect(buffer.isDirty).toBe(false)
+    expect(buffer.lastStat).toBeNull()
+    expect(buffer.untitled).toBeDefined()
+    expect(screen.getByTitle('Save (⌘S)')).not.toBeDisabled()
+  })
+
+  it('shows the dirty dot, an enabled Save and the Diff button for a dirty buffer', async () => {
+    const pane = createPane('/notes/dirty.md', 'pane-dirty')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('saved body'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 10, mtime: 7 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/dirty.md')]).toBeDefined()
+    })
+
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey('/notes/dirty.md'), 'edited body')
+    })
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/dirty.md')].isDirty).toBe(true)
+    expect(screen.getByTitle('Unsaved changes')).toBeInTheDocument()
+    expect(screen.getByTitle('Save (⌘S)')).not.toBeDisabled()
+    expect(screen.getByTitle('Diff against saved')).toBeInTheDocument()
+  })
+})
+
 const HOST_BOUND_CAPS: PlatformCapabilities = {
   isElectron: false,
   canTearOffTab: false,

@@ -150,7 +150,12 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
     : 'raw'
   const effectiveEditorMode = isMarkdown ? editorMode : 'raw'
   const showDiff = alignedPaneState?.showDiff ?? false
-  const canSave = buffer ? (buffer.isDirty || !buffer.lastStat) : false
+  // Spec 1.3: a missing `lastStat` alone does NOT make a buffer savable. Only a
+  // never-saved *untitled* buffer needs that escape hatch (it has no file behind
+  // it yet, so there is nothing to compare against). A loaded file whose stat is
+  // absent must not masquerade as modified — that was what made every remote
+  // file look dirty the moment it opened.
+  const canSave = buffer ? (buffer.isDirty || (!!buffer.untitled && !buffer.lastStat)) : false
   // Per-pane load failure (spec 1.2). Local state on purpose: the store never
   // learns about a failed load because no buffer is created for it.
   const [loadError, setLoadError] = useState<string | null>(null)
