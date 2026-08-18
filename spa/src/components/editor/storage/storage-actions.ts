@@ -28,6 +28,7 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
 import { createMetadata } from '../../../lib/editor-language'
 import { STORAGE_ROOT, basename, join, parentOf, isUnderRoot } from '../../../lib/storage-paths'
+import { isPathAffectedBy, isPathUnder, remapPathUnder } from '../../../lib/path-remap'
 import type { FileSource } from '../../../types/fs'
 import type { Pane, Tab } from '../../../types/tab'
 
@@ -48,26 +49,17 @@ export type Translate = (key: string, params?: Record<string, string | number>) 
  * (which rewrites the very `filePath`s this keys on) runs last.
  */
 function collectAffectedPanePaths(source: FileSource, from: string): Map<string, boolean> {
-  const fromPrefix = from + '/'
   const affected = new Map<string, boolean>()
   const { tabs } = useTabStore.getState()
   for (const tab of Object.values(tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       if (!isFilePaneContent(c)) return
-      if (c.source.type !== source.type) return
-      if (c.source.type === 'daemon' && source.type === 'daemon' && c.source.hostId !== source.hostId) return
-      if (c.filePath === from || c.filePath.startsWith(fromPrefix)) {
-        affected.set(c.filePath, (affected.get(c.filePath) ?? false) || c.kind === 'editor')
-      }
+      if (!isPathAffectedBy({ source: c.source, path: c.filePath }, { source, from })) return
+      affected.set(c.filePath, (affected.get(c.filePath) ?? false) || c.kind === 'editor')
     })
   }
   return affected
-}
-
-/** The new path an affected `oldPath` lands on when `from` becomes `to`. */
-function remappedPath(oldPath: string, from: string, to: string): string {
-  return to + oldPath.slice(from.length)
 }
 
 /**
@@ -80,7 +72,7 @@ function remappedPath(oldPath: string, from: string, to: string): string {
 export function remapEditorBuffersUnder(source: FileSource, from: string, to: string): void {
   for (const [oldPath, hasEditor] of collectAffectedPanePaths(source, from)) {
     if (!hasEditor) continue
-    const newPath = remappedPath(oldPath, from, to)
+    const newPath = remapPathUnder(oldPath, from, to)
     const oldKey = bufferKey(source, oldPath)
     const newKey = bufferKey(source, newPath)
     const currentBuffer = useEditorStore.getState().buffers[oldKey]
@@ -97,7 +89,7 @@ export function remapEditorBuffersUnder(source: FileSource, from: string, to: st
  */
 export function remapTabPanesUnder(source: FileSource, from: string, to: string): void {
   for (const oldPath of collectAffectedPanePaths(source, from).keys()) {
-    useTabStore.getState().renameEditorPanes(source, oldPath, remappedPath(oldPath, from, to))
+    useTabStore.getState().renameEditorPanes(source, oldPath, remapPathUnder(oldPath, from, to))
   }
 }
 
@@ -496,7 +488,7 @@ export type DeleteOutcome =
  * sequence as an exact hit.
  */
 function isAffectedByTargets(filePath: string, targets: string[]): boolean {
-  return targets.some((target) => filePath === target || filePath.startsWith(target + '/'))
+  return targets.some((target) => isPathUnder(filePath, target))
 }
 
 /**
