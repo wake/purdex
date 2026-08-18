@@ -26,6 +26,7 @@ import { isFilePaneContent } from '../../../lib/pane-utils'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+import { usePlaceholderFilesStore } from '../../../stores/usePlaceholderFilesStore'
 import { createMetadata } from '../../../lib/editor-language'
 import { STORAGE_ROOT, basename, join, parentOf, isUnderRoot } from '../../../lib/storage-paths'
 import { isPathAffectedBy, isPathUnder, remapPathUnder } from '../../../lib/path-remap'
@@ -70,7 +71,7 @@ function collectAffectedPanePaths(source: FileSource, from: string): Map<string,
  * otherwise recompute from the new path so crossing extensions refreshes the
  * language.
  */
-export function remapEditorBuffersUnder(source: FileSource, from: string, to: string): void {
+function remapEditorBuffersUnder(source: FileSource, from: string, to: string): void {
   for (const [oldPath, hasEditor] of collectAffectedPanePaths(source, from)) {
     if (!hasEditor) continue
     const newPath = remapPathUnder(oldPath, from, to)
@@ -88,7 +89,7 @@ export function remapEditorBuffersUnder(source: FileSource, from: string, to: st
  * Tab-layout half: re-point every open file pane under `from` through
  * `renameEditorPanes`, which already rewrites all three file-pane kinds.
  */
-export function remapTabPanesUnder(source: FileSource, from: string, to: string): void {
+function remapTabPanesUnder(source: FileSource, from: string, to: string): void {
   for (const oldPath of collectAffectedPanePaths(source, from).keys()) {
     useTabStore.getState().renameEditorPanes(source, oldPath, remapPathUnder(oldPath, from, to))
   }
@@ -100,8 +101,20 @@ export function remapTabPanesUnder(source: FileSource, from: string, to: string)
  * recent entry usually belongs to a file that is NOT open, and it used to be
  * left dangling at the old path.
  */
-export function remapRecentFilesUnder(source: FileSource, from: string, to: string): void {
+function remapRecentFilesUnder(source: FileSource, from: string, to: string): void {
   useRecentFilesStore.getState().renamePath(source, from, to)
+}
+
+/**
+ * Placeholder-registry half (T5.1): a rename or move is one of the events that
+ * ends a file's placeholder life PERMANENTLY — it is the user's file now. Both
+ * ends are dropped: `from` (and its descendants, the subtree rule) because the
+ * entry must not linger at a path that no longer holds that file, and `to`
+ * because the entry must not be resurrected at the destination.
+ */
+function deregisterPlaceholdersUnder(source: FileSource, from: string, to: string): void {
+  usePlaceholderFilesStore.getState().unregister(source, from)
+  usePlaceholderFilesStore.getState().unregister(source, to)
 }
 
 /**
@@ -114,13 +127,16 @@ export function remapRecentFilesUnder(source: FileSource, from: string, to: stri
  * double-rename. Being the single orchestrator is also what makes Storage
  * rename AND move, file and folder, all covered by one call site per entity.
  *
- * Ordering: the three entities live in three disjoint stores, but
- * `remapTabPanesUnder` rewrites the pane `filePath`s that `collectAffectedPanePaths`
- * keys on — so it must come last, or the buffer pass would find nothing to
- * re-key.
+ * Ordering: the entities live in disjoint stores, but `remapTabPanesUnder`
+ * rewrites the pane `filePath`s that `collectAffectedPanePaths` keys on — so it
+ * must come last, or the buffer pass would find nothing to re-key. That
+ * constraint is why the four steps are module-private and only this orchestrator
+ * is exported: an outside caller composing them in its own order would get a
+ * SILENT no-op (the buffer pass finding nothing), not an error.
  */
 export function applyPathMutation(source: FileSource, from: string, to: string): void {
   remapRecentFilesUnder(source, from, to)
+  deregisterPlaceholdersUnder(source, from, to)
   remapEditorBuffersUnder(source, from, to)
   remapTabPanesUnder(source, from, to)
 }
@@ -161,7 +177,11 @@ export function findEmptyFiles(tree: TreeNode[]): string[] {
  */
 export async function createStorageFile(targetDir: string = STORAGE_ROOT): Promise<{ error?: string }> {
   try {
-    await createUniqueInAppFile(targetDir, 'md')
+    const path = await createUniqueInAppFile(targetDir, 'md')
+    // T5.1: this is one of the three eager reservations, so record that the file
+    // is ours and untouched. Only on success — a failed reservation created no
+    // file to remember.
+    usePlaceholderFilesStore.getState().register({ type: 'inapp' }, path)
     return {}
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
@@ -614,6 +634,9 @@ export async function deleteStorageEntries(
       // store applies the same prefix rule) from Recent. Placed AFTER the delete
       // so a mid-loop failure never evicts an entry whose file is still there.
       useRecentFilesStore.getState().removePath({ type: 'inapp' }, path)
+      // T5.1: an explicit delete drops the placeholder entry with the file (same
+      // subtree rule, so a folder target sweeps the placeholders inside it).
+      usePlaceholderFilesStore.getState().unregister({ type: 'inapp' }, path)
     }
     return { status: 'deleted' }
   } catch (err) {

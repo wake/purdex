@@ -19,6 +19,7 @@ import { runRestore } from './restore-wiring'
 import { useBackupStore } from '../../stores/useBackupStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useEditorStore } from '../../stores/useEditorStore'
+import { usePlaceholderFilesStore } from '../../stores/usePlaceholderFilesStore'
 import { bufferKey } from '../editor-buffer-key'
 
 beforeEach(() => {
@@ -27,6 +28,7 @@ beforeEach(() => {
   applyReconciliation.mockResolvedValue({ failed: [] }) // best-effort default
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useEditorStore.setState({ buffers: {}, paneStates: {} })
+  usePlaceholderFilesStore.setState({ paths: [] })
 })
 
 describe('runRestore', () => {
@@ -38,6 +40,29 @@ describe('runRestore', () => {
     expect(result).toEqual({ status: 'done', restorePointId: 7, changed, restoredFiles })
     expect(applyReconciliation).toHaveBeenCalledTimes(1)
     expect(applyReconciliation.mock.calls[0][0]).toEqual(changed)
+  })
+
+  // T5.1 — restore invalidation. `replaceTree` swaps the WHOLE tree with no
+  // per-path event, so a placeholder entry minted before the restore would
+  // otherwise outlive it and mark a restored REAL file at that path as an
+  // untouched placeholder — which the T5.2 sweep would then delete.
+  it('clears the placeholder registry once a restore commits', async () => {
+    usePlaceholderFilesStore.setState({ paths: ['/buffer/Untitled.md'] })
+    restoreSnapshot.mockResolvedValue({
+      status: 'done',
+      restorePointId: 7,
+      changed: { added: [], removed: [], modified: [] },
+      restoredFiles: [],
+    })
+    await runRestore('host-A', 42)
+    expect(usePlaceholderFilesStore.getState().paths).toEqual([])
+  })
+
+  it('keeps the placeholder registry when the restore was blocked (the tree is untouched)', async () => {
+    usePlaceholderFilesStore.setState({ paths: ['/buffer/Untitled.md'] })
+    restoreSnapshot.mockResolvedValue({ status: 'blocked', conflicts: [] })
+    await runRestore('host-A', 42)
+    expect(usePlaceholderFilesStore.getState().paths).toEqual(['/buffer/Untitled.md'])
   })
 
   it('does NOT reconcile (or otherwise mutate) on a blocked result', async () => {

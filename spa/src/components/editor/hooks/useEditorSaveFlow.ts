@@ -7,6 +7,7 @@ import { useCallback, useRef } from 'react'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useUndoToast } from '../../../stores/useUndoToast'
+import { usePlaceholderFilesStore } from '../../../stores/usePlaceholderFilesStore'
 import { getFsBackend } from '../../../lib/fs-backend'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { recordRecentFile } from '../../../lib/recent-files/record-recent-file'
@@ -135,6 +136,12 @@ export function useEditorSaveFlow({
       showSaveToast('editor.save.failed', { reason: saveErrorReason(err) })
       return
     }
+    // T5.1: the write landed, so this path is the user's from here on — even if
+    // what they saved was empty. Both ends are dropped because a first save also
+    // moves the document from `filePath` to `nextPath`. No-ops off the In-App
+    // store (the registry only ever holds in-app paths).
+    usePlaceholderFilesStore.getState().unregister(source, filePath)
+    usePlaceholderFilesStore.getState().unregister(source, nextPath)
 
     const newStat = await readStatAfterWrite(backend, nextPath)
     const nextMetadata = buf.languageSource === 'manual'
@@ -197,6 +204,11 @@ export function useEditorSaveFlow({
       showSaveToast('editor.save.failed', { reason: saveErrorReason(err) })
       return
     }
+    // T5.1: any successful write ends the file's placeholder life, permanently —
+    // INCLUDING a save of empty content, which is a deliberate user act and the
+    // exact case an inferred "still empty" predicate would have mistaken for an
+    // untouched reservation.
+    usePlaceholderFilesStore.getState().unregister(source, filePath)
 
     const newStat = await readStatAfterWrite(backend, filePath)
     useEditorStore.getState().markSaved(key, newStat)

@@ -1,0 +1,127 @@
+// T5.1 — the placeholder registry seen from the editor: the two events that end
+// a file's placeholder life while it is OPEN — a save and an in-editor rename.
+//
+// Deregistration is permanent and fires on the FIRST such event. A save of EMPTY
+// content counts: the user deliberately saved that emptiness, so the file is
+// theirs even though it is still 0 B. This is exactly the case the rejected
+// `savedContent === '' && !isDirty && size === 0` predicate could not tell apart
+// from an untouched reservation.
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  createBackend,
+  createPane,
+  getBufferKey,
+  registerTabPane,
+  renderEditorPane,
+  renderLoaded,
+  resetEditorPaneStores,
+} from './editor-pane-harness'
+import { getFsBackendMock } from './editor-pane-mocks'
+import { useEditorStore } from '../../../stores/useEditorStore'
+import { usePlaceholderFilesStore } from '../../../stores/usePlaceholderFilesStore'
+
+vi.mock('../../../lib/fs-backend', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/fs-backend')>()
+  const mocks = await import('./editor-pane-mocks')
+  mocks.fsBackendActual.current = actual
+  return { ...actual, getFsBackend: mocks.getFsBackendMock }
+})
+vi.mock('../MonacoWrapper', async () => ({
+  MonacoWrapper: (await import('./editor-pane-mocks')).MonacoWrapperStub,
+}))
+vi.mock('../DiffView', async () => ({
+  DiffView: (await import('./editor-pane-mocks')).DiffViewStub,
+}))
+vi.mock('../EditorStatusBar', async () => ({
+  EditorStatusBar: (await import('./editor-pane-mocks')).EditorStatusBarStub,
+}))
+vi.mock('../TiptapEditor', async () => ({
+  TiptapEditor: (await import('./editor-pane-mocks')).TiptapEditorStub,
+}))
+
+const INAPP = { type: 'inapp' } as const
+const PLACEHOLDER = '/buffer/Untitled.md'
+
+function isRegistered(path: string): boolean {
+  return usePlaceholderFilesStore.getState().isPlaceholder(INAPP, path)
+}
+
+beforeEach(() => {
+  resetEditorPaneStores()
+  usePlaceholderFilesStore.setState({ paths: [PLACEHOLDER] })
+})
+
+describe('T5.1 — a save deregisters the placeholder', () => {
+  it('a successful save makes the file the user\'s, permanently', async () => {
+    const pane = createPane(PLACEHOLDER, 'pane-ph-save')
+    const backend = await renderLoaded(pane, '')
+
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey(PLACEHOLDER), 'typed something')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => expect(backend.write).toHaveBeenCalledTimes(1))
+    expect(isRegistered(PLACEHOLDER)).toBe(false)
+  })
+
+  it('saving EMPTY content also deregisters (the user saved that emptiness)', async () => {
+    const pane = createPane(PLACEHOLDER, 'pane-ph-save-empty')
+    const backend = await renderLoaded(pane, 'draft')
+
+    act(() => {
+      // Wipe the buffer and save it: 0 B on disk, and unmistakably the user's.
+      useEditorStore.getState().updateContent(getBufferKey(PLACEHOLDER), '')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => expect(backend.write).toHaveBeenCalledTimes(1))
+    expect(backend.write.mock.calls[0][1]).toEqual(new TextEncoder().encode(''))
+    expect(isRegistered(PLACEHOLDER)).toBe(false)
+  })
+
+  it('a FAILED save keeps the entry — nothing was written, so nothing changed hands', async () => {
+    const pane = createPane(PLACEHOLDER, 'pane-ph-save-fail')
+    const backend = await renderLoaded(pane, '')
+    backend.write.mockRejectedValue(new Error('disk on fire'))
+
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey(PLACEHOLDER), 'typed something')
+    })
+    fireEvent.click(screen.getByTitle('Save (⌘S)'))
+
+    await waitFor(() => expect(backend.write).toHaveBeenCalledTimes(1))
+    expect(isRegistered(PLACEHOLDER)).toBe(true)
+  })
+})
+
+describe('T5.1 — an in-editor rename deregisters the placeholder', () => {
+  it('leaves neither the old nor the new path registered', async () => {
+    const pane = createPane(PLACEHOLDER, 'pane-ph-rename')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode(''))
+    backend.rename.mockResolvedValue(undefined)
+    backend.stat.mockImplementation(async (path: string) => {
+      // The source exists; the rename target does not (no collision).
+      if (path === PLACEHOLDER) return { isFile: true, isDirectory: false, size: 0, mtime: 1 }
+      throw new Error('ENOENT')
+    })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    renderEditorPane(pane)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)]).toBeDefined()
+    })
+
+    fireEvent.doubleClick(screen.getByText('Untitled.md'))
+    fireEvent.change(screen.getByDisplayValue('Untitled.md'), { target: { value: 'notes.md' } })
+    fireEvent.keyDown(screen.getByDisplayValue('notes.md'), { key: 'Enter' })
+
+    await waitFor(() => expect(backend.rename).toHaveBeenCalledWith(PLACEHOLDER, '/buffer/notes.md'))
+    expect(isRegistered(PLACEHOLDER)).toBe(false)
+    expect(isRegistered('/buffer/notes.md')).toBe(false)
+    expect(usePlaceholderFilesStore.getState().paths).toEqual([])
+  })
+})

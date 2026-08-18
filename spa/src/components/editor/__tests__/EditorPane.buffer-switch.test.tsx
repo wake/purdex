@@ -18,6 +18,7 @@ import {
 } from './editor-pane-stub-mocks'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
+import { usePlaceholderFilesStore } from '../../../stores/usePlaceholderFilesStore'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 
 vi.mock('react-dom', async (importOriginal) => {
@@ -135,6 +136,26 @@ describe('EditorPane — breadcrumb quick-switch (T6)', () => {
     const filePaths = setPaneContentSpy.mock.calls.map((c) => (c[2] as { filePath: string }).filePath)
     expect(filePaths).toEqual(['/buffer/Untitled.md', '/buffer/Untitled-1.md'])
     expect(new Set(filePaths).size).toBe(2)
+  })
+
+  // T5.1 — reservation site 2/3: the breadcrumb "new buffer" mints a real empty
+  // file, so it must record it as an untouched placeholder.
+  it('T5.1: the new buffer is registered in the placeholder registry', async () => {
+    listMock.mockResolvedValue([])
+    createUniqueInAppFileMock.mockReset()
+    createUniqueInAppFileMock.mockResolvedValue('/buffer/Untitled.md')
+    vi.spyOn(useTabStore.getState(), 'setPaneContent').mockImplementation(() => {})
+    usePlaceholderFilesStore.setState({ paths: [] })
+    renderPane()
+
+    fireEvent.click(screen.getByRole('button', { name: /Purdex/ }))
+    fireEvent.click(await waitFor(() => screen.getByTestId('breadcrumb-popover-new-buffer')))
+
+    await waitFor(() =>
+      expect(
+        usePlaceholderFilesStore.getState().isPlaceholder({ type: 'inapp' }, '/buffer/Untitled.md'),
+      ).toBe(true),
+    )
   })
 
   it('opens a markdown file in Live Mode (wysiwyg) by default', async () => {

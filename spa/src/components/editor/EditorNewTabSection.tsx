@@ -3,6 +3,7 @@ import { FilePlus, FileText, Image as ImageIcon, FilePdf } from '@phosphor-icons
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useRecentFilesStore, type RecentFileKind } from '../../stores/useRecentFilesStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { usePlaceholderFilesStore } from '../../stores/usePlaceholderFilesStore'
 import { openRecentEntry } from '../../lib/recent-files/open-recent-entry'
 import { createUniqueInAppFile } from '../../lib/inapp-namer'
 import { STORAGE_ROOT } from '../../lib/storage-paths'
@@ -49,6 +50,10 @@ export function EditorNewTabSection({ onSelect }: Props) {
       console.error('[editor] failed to reserve a new file', err)
       return
     }
+    // T5.1: record the reservation as an untouched placeholder — the durable
+    // fact that this file is ours until the user first writes to, renames, or
+    // deletes it. Only on success: a failed reservation created no file.
+    usePlaceholderFilesStore.getState().register(source, filePath)
     onSelect({ kind: 'editor', source, filePath })
   }, [onSelect])
 

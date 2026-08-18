@@ -6,6 +6,7 @@ import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { usePlaceholderFilesStore } from '../../stores/usePlaceholderFilesStore'
 import { openInAppFile } from '../../lib/open-in-app-file'
 import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
@@ -285,6 +286,9 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           } catch {
             return
           }
+          // T5.1: record the reservation as an untouched placeholder (in-app
+          // only — this affordance always reserves in the In-App store).
+          usePlaceholderFilesStore.getState().register({ type: 'inapp' }, path)
           const tabId = findTabIdForPane(paneId)
           if (!tabId) return
           useTabStore.getState().setPaneContent(tabId, paneId, {
