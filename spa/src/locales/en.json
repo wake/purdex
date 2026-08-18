@@ -573,6 +573,7 @@
   "editor.buffers.confirm_delete": "Delete {{count}} buffer(s)?",
   "editor.load_error.title": "Could not open this file",
   "editor.load_error.unknown": "The file could not be read.",
+  "editor.load_error.no_backend": "No FS backend is available for this file.",
   "editor.load_error.retry": "Retry",
   "editor.buffers.confirm_switch_dirty": "Current buffer has unsaved changes. Switch anyway?",
   "editor.buffers.rename_slash_error": "Subfolders not supported",

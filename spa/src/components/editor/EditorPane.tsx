@@ -77,6 +77,15 @@ function loadErrorMessage(error: unknown): string {
   return ''
 }
 
+/**
+ * A pane-local load failure. Two shapes, because the two sources of failure carry
+ * different text: `message` is a raw reason handed to us by the backend (already
+ * a sentence, not translatable); `messageKey` is an i18n key for failures we
+ * diagnose ourselves (spec 1.2b: no FS backend resolved at all). Keeping the key
+ * unresolved until render means a locale switch retranslates the surface.
+ */
+type LoadError = { message: string; messageKey?: undefined } | { messageKey: string; message?: undefined }
+
 function sourceIdentity(source: FileSource): string {
   return source.type === 'daemon' ? `daemon:${source.hostId}` : source.type
 }
@@ -158,7 +167,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   const canSave = buffer ? (buffer.isDirty || (!!buffer.untitled && !buffer.lastStat)) : false
   // Per-pane load failure (spec 1.2). Local state on purpose: the store never
   // learns about a failed load because no buffer is created for it.
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<LoadError | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
   const [renameMode, setRenameMode] = useState<'rename' | 'save'>('rename')
@@ -203,8 +212,15 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       return
     }
 
+    // Spec 1.2b: no backend at all (a `local` source outside Electron, a daemon
+    // source whose host was removed) used to bail out silently and leave the pane
+    // spinning on "Loading…" forever. Same silent-failure class as 1.2, reached by
+    // a different route — so it surfaces through the same retryable error state.
     const backend = getFsBackend(source)
-    if (!backend) return
+    if (!backend) {
+      setLoadError({ messageKey: 'editor.load_error.no_backend' })
+      return
+    }
 
     backend.read(filePath)
       .then((data) => {
@@ -218,7 +234,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       })
       .catch((error: unknown) => {
         if (stale) return
-        setLoadError(loadErrorMessage(error))
+        setLoadError({ message: loadErrorMessage(error) })
       })
 
     return () => { stale = true }
@@ -432,7 +448,9 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         >
           <div className="text-xs text-red-400">{t('editor.load_error.title')}</div>
           <div className="max-w-full text-xs break-words text-text-muted">
-            {loadError || t('editor.load_error.unknown')}
+            {loadError.messageKey
+              ? t(loadError.messageKey)
+              : loadError.message || t('editor.load_error.unknown')}
           </div>
           <button
             type="button"

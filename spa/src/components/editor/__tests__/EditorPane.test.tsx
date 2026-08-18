@@ -1290,6 +1290,79 @@ describe('EditorPane — load failure (T1.2)', () => {
   })
 })
 
+describe('EditorPane — unavailable FS backend (T1.2b)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.getState().clearAllBuffers()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorSettingsStore.setState({ contentWidth: 'narrow' })
+    useRecentFilesStore.setState({ files: [] })
+  })
+
+  it('renders the load error instead of a permanent spinner when no backend resolves', async () => {
+    const pane = createPane('/notes/no-backend.md', 'pane-no-backend')
+    getFsBackendMock.mockReturnValue(undefined)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId('editor-load-error')).toHaveTextContent(
+      'No FS backend is available for this file.',
+    )
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/no-backend.md')]).toBeUndefined()
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('monaco-wrapper')).not.toBeInTheDocument()
+  })
+
+  it('retries and loads normally once a backend becomes available', async () => {
+    const pane = createPane('/notes/backend-later.txt', 'pane-backend-later')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode('now reachable'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 13, mtime: 3 })
+    getFsBackendMock.mockReturnValue(undefined)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-load-error')).toBeInTheDocument()
+    })
+
+    getFsBackendMock.mockReturnValue(backend)
+    fireEvent.click(screen.getByTestId('editor-load-error-retry'))
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('/notes/backend-later.txt')]).toMatchObject({
+        content: 'now reachable',
+        lastStat: { mtime: 3, size: 13 },
+      })
+    })
+
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+    expect(screen.getByTestId('monaco-wrapper')).toBeInTheDocument()
+  })
+
+  it('leaves the untitled path unaffected when no backend resolves', async () => {
+    const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-no-backend')
+    getFsBackendMock.mockReturnValue(undefined)
+    registerTabPane(pane)
+
+    render(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey('untitled:Untitled')]).toMatchObject({
+        content: '',
+      })
+    })
+
+    expect(screen.queryByTestId('editor-load-error')).not.toBeInTheDocument()
+  })
+})
+
 describe('EditorPane — canSave semantics and dirty affordances (T1.3)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
