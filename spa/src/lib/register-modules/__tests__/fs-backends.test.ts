@@ -118,3 +118,93 @@ describe('registerBuiltinFsBackends — daemon host binding', () => {
     expect(getFsBackend({ type: 'inapp' })).toBe(inapp)
   })
 })
+
+// --- Removed host must NOT fall back to another machine ---------------------
+//
+// `getDaemonBase` answers a request for an unknown host with the ACTIVE host's
+// address (a deliberate convenience for other consumers). Routed through the fs
+// registry that convenience becomes the exact failure this PR exists to stop:
+// after a host is deleted, an editor pane still bound to it would read — and
+// WRITE — the same path on a different machine. The resolver therefore refuses
+// to hand back any backend for a host the store no longer knows.
+describe('registerBuiltinFsBackends — removed host is refused, never re-pointed', () => {
+  beforeEach(() => {
+    clearFsBackendRegistry()
+    setHosts('hostA')
+    registerBuiltinFsBackends(CAPS)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    clearFsBackendRegistry()
+    useHostStore.getState().reset()
+  })
+
+  function removeHostB(): void {
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, token: 'tokenA', order: 0 },
+      },
+      hostOrder: ['hostA'],
+      activeHostId: 'hostA',
+      runtime: {},
+    })
+  }
+
+  it('resolves hostB while it still exists (regression guard for the case below)', async () => {
+    const fetchMock = stubFetch()
+    await getFsBackend({ type: 'daemon', hostId: 'hostB' })!.stat('/x')
+    expect(urlOf(fetchMock)).toBe('http://10.0.0.2:7861/api/fs/stat')
+  })
+
+  it('returns undefined once hostB is removed — no backend at all', () => {
+    getFsBackend({ type: 'daemon', hostId: 'hostB' }) // warm the per-host cache
+    removeHostB()
+    expect(getFsBackend({ type: 'daemon', hostId: 'hostB' })).toBeUndefined()
+  })
+
+  it('never hands back a backend that would write to the active host instead', async () => {
+    getFsBackend({ type: 'daemon', hostId: 'hostB' }) // warm the per-host cache
+    removeHostB()
+    const fetchMock = stubFetch()
+
+    const backend = getFsBackend({ type: 'daemon', hostId: 'hostB' })
+    // The dangerous outcome is not "undefined" per se — it is any object whose
+    // write lands on 10.0.0.1 (hostA). Prove no request is even possible.
+    expect(backend).toBeUndefined()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the active-host proxy reachable for the hostId-less probe', async () => {
+    removeHostB()
+    const fetchMock = stubFetch()
+    await getFsBackend({ type: 'daemon', hostId: '' })!.stat('/x')
+    expect(urlOf(fetchMock)).toBe('http://10.0.0.1:7860/api/fs/stat')
+  })
+
+  it('re-adding the same id yields a backend pointing at its NEW address (no stale cache hit)', async () => {
+    const before = getFsBackend({ type: 'daemon', hostId: 'hostB' })
+    expect(before).toBeDefined()
+    removeHostB()
+    // Same id, different machine — a cached instance must not survive as-is.
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, token: 'tokenA', order: 0 },
+        hostB: { id: 'hostB', name: 'B2', ip: '10.0.0.9', port: 7999, token: 'tokenB2', order: 1 },
+      },
+      hostOrder: ['hostA', 'hostB'],
+      activeHostId: 'hostA',
+      runtime: {},
+    })
+
+    const fetchMock = stubFetch()
+    const after = getFsBackend({ type: 'daemon', hostId: 'hostB' })
+    expect(after).toBeDefined()
+    await after!.read('/x')
+
+    expect(urlOf(fetchMock)).toBe('http://10.0.0.9:7999/api/fs/read')
+    expect(headersOf(fetchMock)).toMatchObject({ Authorization: 'Bearer tokenB2' })
+    // Still stable per host afterwards (the ImagePreviewPane identity contract).
+    expect(getFsBackend({ type: 'daemon', hostId: 'hostB' })).toBe(after)
+  })
+})

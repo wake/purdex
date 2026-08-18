@@ -1527,6 +1527,44 @@ describe('EditorPane — host-bound backend resolution', () => {
     const urls = fetchMock.mock.calls.map((c) => c[0] as string)
     expect(urls.every((u) => u.startsWith('http://10.0.0.1:7860'))).toBe(true)
   })
+
+  // The whole point of host-bound resolution is that a daemon file NEVER touches
+  // another machine. Deleting the host used to re-point the pane at the active
+  // one (via `getDaemonBase`'s fallback), so the pane would happily show — and
+  // save over — hostA's copy of the same path. It must land in the T1.2b
+  // no-backend error state instead.
+  it('falls into the no-backend error state when the pane\'s host is removed, never reads the active host', async () => {
+    const pane = remotePane('hostB')
+    const { unmount } = render(<EditorPane pane={pane} isActive />)
+    await waitFor(() => {
+      expect(
+        useEditorStore.getState().buffers[bufferKey({ type: 'daemon', hostId: 'hostB' }, REMOTE_PATH)],
+      ).toBeDefined()
+    })
+
+    // Host removed while the pane is open; the buffer is dropped with it and the
+    // pane re-loads from scratch (the real-world sequence is a reopen/remount).
+    unmount()
+    useEditorStore.getState().clearAllBuffers()
+    useHostStore.setState({
+      hosts: {
+        hostA: { id: 'hostA', name: 'A', ip: '10.0.0.1', port: 7860, token: 'tokenA', order: 0 },
+      },
+      hostOrder: ['hostA'],
+      activeHostId: 'hostA',
+      runtime: {},
+    })
+    fetchMock.mockClear()
+
+    render(<EditorPane pane={pane} isActive />)
+
+    expect(await screen.findByTestId('editor-load-error')).toBeInTheDocument()
+    expect(
+      useEditorStore.getState().buffers[bufferKey({ type: 'daemon', hostId: 'hostB' }, REMOTE_PATH)],
+    ).toBeUndefined()
+    // The decisive assertion: not a single request went to hostA.
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 // --- T3.2: the in-editor rename is the third path-mutating call site ---------

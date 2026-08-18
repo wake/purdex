@@ -30,7 +30,20 @@ export function registerBuiltinFsBackends(caps: PlatformCapabilities): void {
     // re-register starts a fresh one).
     const daemonByHost = new Map<string, FsBackend>()
     registerFsBackendResolver('daemon', (source) => {
+      // Decline (→ flat registry / active-host proxy) only for the hostId-less
+      // probe. A source that names a host is answered here or nowhere.
       if (source.type !== 'daemon' || !source.hostId) return undefined
+      // The host is gone: REFUSE (`null`), never decline. `getDaemonBase` treats
+      // an unknown host as "use the active one", so any backend handed back here
+      // would read — and write — the same path on a different machine, which is
+      // precisely the wrong-host write this resolver exists to prevent. `null`
+      // reaches EditorPane as "no backend" → the T1.2b error state.
+      if (!useHostStore.getState().hosts[source.hostId]) {
+        // Drop the cached instance too, so a deleted host cannot keep an entry
+        // alive in the map for the lifetime of this registration.
+        daemonByHost.delete(source.hostId)
+        return null
+      }
       let backend = daemonByHost.get(source.hostId)
       if (!backend) {
         backend = createDaemonBackendForHost(source.hostId)

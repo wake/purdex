@@ -152,10 +152,17 @@ export function supportsMkdirUnique(
  * registry below is keyed by type alone, which is why a daemon file used to be
  * read through whichever host happened to be active instead of its own
  * `source.hostId` (wrong machine's bytes; worst case a save over the wrong
- * file). A resolver may return `undefined` to decline, in which case the flat
- * registry answers as before.
+ * file).
+ *
+ * Three outcomes, and the difference between the last two is load-bearing:
+ * - an `FsBackend` — use it;
+ * - `undefined` (**decline**) — the resolver has no opinion, so the flat
+ *   registry answers as before;
+ * - `null` (**refuse**) — there is no backend for this source and there must
+ *   NOT be one. Without this outcome a refusal would decline into the flat
+ *   registry's active-host proxy, i.e. straight back to the wrong machine.
  */
-export type FsBackendResolver = (source: FileSource) => FsBackend | undefined
+export type FsBackendResolver = (source: FileSource) => FsBackend | undefined | null
 
 const backends = new Map<string, FsBackend>()
 const resolvers = new Map<string, FsBackendResolver>()
@@ -170,7 +177,15 @@ export function registerFsBackendResolver(sourceType: string, resolver: FsBacken
 }
 
 export function getFsBackend(source: FileSource): FsBackend | undefined {
-  return resolvers.get(source.type)?.(source) ?? backends.get(source.type)
+  const resolver = resolvers.get(source.type)
+  if (resolver) {
+    const resolved = resolver(source)
+    if (resolved) return resolved
+    // `null` is a refusal, not a decline — do not fall through to the flat
+    // registry (which for `daemon` is the ACTIVE-host proxy).
+    if (resolved === null) return undefined
+  }
+  return backends.get(source.type)
 }
 
 export function clearFsBackendRegistry(): void {
