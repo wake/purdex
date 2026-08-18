@@ -264,4 +264,84 @@ describe('useEditorStore', () => {
     useEditorStore.getState().saveTiptapViewState('nope', { scrollTop: 1, selection: null })
     expect(useEditorStore.getState().paneStates).toBe(before)
   })
+
+  // --- T2.4: the shape of the file as loaded ---------------------------------
+  //
+  // `eol` is a live property of the current content — `normalizeMetadata`
+  // recomputes it on every updateContent/reloadBuffer — so it cannot say what
+  // the file looked like on disk. `sourceEol` / `sourceTrailingNewline` can:
+  // they are written once per load and never move while the user edits.
+
+  it('records the loaded line ending and trailing newline (T2.4)', () => {
+    useEditorStore.getState().openBuffer('crlf', 'a\r\nb\r\n', { language: 'markdown' })
+    useEditorStore.getState().openBuffer('lf', 'a\nb', { language: 'markdown' })
+
+    expect(useEditorStore.getState().buffers['crlf']).toMatchObject({
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+    })
+    expect(useEditorStore.getState().buffers['lf']).toMatchObject({
+      sourceEol: 'lf',
+      sourceTrailingNewline: false,
+    })
+  })
+
+  it('leaves the source shape alone while the content changes, unlike eol (T2.4)', () => {
+    useEditorStore.getState().openBuffer('key1', 'a\r\nb\r\n', { language: 'markdown' })
+
+    // Editing away every CRLF and the trailing newline: `eol` follows the draft,
+    // the source shape does not — it still describes the file on disk.
+    useEditorStore.getState().updateContent('key1', 'a\nb')
+
+    expect(useEditorStore.getState().buffers['key1']).toMatchObject({
+      eol: 'lf',
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+    })
+  })
+
+  it('re-derives the source shape when the file is reloaded from disk (T2.4)', () => {
+    useEditorStore.getState().openBuffer('key1', 'a\r\nb\r\n', { language: 'markdown' })
+    useEditorStore.getState().reloadBuffer('key1', 'a\nb')
+
+    expect(useEditorStore.getState().buffers['key1']).toMatchObject({
+      sourceEol: 'lf',
+      sourceTrailingNewline: false,
+    })
+  })
+
+  it('carries the source shape across markSaved and renameBuffer (T2.4)', () => {
+    useEditorStore.getState().openBuffer('old', 'a\r\nb\r\n', { language: 'markdown' })
+    useEditorStore.getState().updateContent('old', 'a\r\nb\r\nc\r\n')
+    useEditorStore.getState().markSaved('old', { mtime: 5, size: 9 })
+    useEditorStore.getState().renameBuffer('old', 'new', { language: 'markdown' })
+
+    expect(useEditorStore.getState().buffers['new']).toMatchObject({
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+    })
+  })
+
+  // Preservation relies on the partial-merge shape of `renameBuffer`
+  // (`{ ...buffer, ...metadata }`) rather than on any special case, so it holds
+  // only as long as the source shape stays OUT of `EditorBufferMetadata`. This
+  // pins that: a caller passing every metadata field must not be able to reach
+  // these two.
+  it('cannot be clobbered by a metadata caller that passes everything (T2.4)', () => {
+    useEditorStore.getState().openBuffer('old', 'a\r\nb\r\n', { language: 'markdown' })
+    useEditorStore.getState().renameBuffer('old', 'new', {
+      language: 'plaintext',
+      languageSource: 'manual',
+      eol: 'lf',
+      encoding: 'utf8',
+      untitled: undefined,
+    })
+
+    expect(useEditorStore.getState().buffers['new']).toMatchObject({
+      language: 'plaintext',
+      eol: 'lf',
+      sourceEol: 'crlf',
+      sourceTrailingNewline: true,
+    })
+  })
 })

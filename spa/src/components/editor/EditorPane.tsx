@@ -23,6 +23,7 @@ import { useEditorPaneLoadState } from './hooks/useEditorPaneLoadState'
 import { useEditorSaveFlow } from './hooks/useEditorSaveFlow'
 import { useEditorRenameFlow } from './hooks/useEditorRenameFlow'
 import { useLiveModeGate } from './hooks/useLiveModeGate'
+import { normalizeSerializedMarkdown } from '../../lib/markdown/normalize-serialized'
 import type { FileSource } from '../../types/fs'
 import type { UntitledDocumentState } from '../../types/tab'
 
@@ -329,7 +330,15 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
               isActive={isActive}
               contentWidth={contentWidth}
               initialViewState={alignedPaneState?.tiptapViewState ?? null}
-              onChange={(md) => useEditorStore.getState().updateContent(key, md)}
+              // Spec 2.4: the serializer emits one canonical shape (LF, no
+              // trailing newline, a leading one before a table). Restoring the
+              // file's own shape HERE — before the store sees it — is what keeps
+              // a one-word edit from rewriting every line ending, and what lets
+              // `isDirty` compare like with like.
+              onChange={(md) => useEditorStore.getState().updateContent(key, normalizeSerializedMarkdown(md, {
+                eol: buffer.sourceEol,
+                trailingNewline: buffer.sourceTrailingNewline,
+              }))}
               onViewStateChange={(vs) => useEditorStore.getState().saveTiptapViewState(paneId, vs)}
               onSave={handleSave}
             />

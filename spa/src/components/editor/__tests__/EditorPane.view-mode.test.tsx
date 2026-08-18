@@ -461,4 +461,63 @@ describe('EditorPane', () => {
     expect(screen.queryByTestId('editor-raw-reason')).toBeNull()
   })
 
+  // --- T2.4: Live Mode writes back the file's own line endings ---------------
+  //
+  // Tiptap always serializes LF, without a trailing newline, and prepends one to
+  // a table-first document. Feeding that straight into the buffer rewrote every
+  // line ending of a CRLF file on the first Live Mode edit. The pane re-applies
+  // the shape recorded at load before the content reaches the store, so
+  // `isDirty` compares like with like.
+
+  /** Drive what Tiptap hands back — the serializer output, in its own shape. */
+  function serializerEmits(markdown: string) {
+    const props = tiptapPropsSpy.mock.calls.at(-1)?.[0] as { onChange: (md: string) => void }
+    act(() => props.onChange(markdown))
+  }
+
+  it('restores CRLF and the trailing newline on a Live Mode edit (T2.4)', async () => {
+    await openMarkdown('pane-eol-crlf', '/notes/crlf.md', '# Title\r\n\r\nbody\r\n', 'wysiwyg')
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    serializerEmits('# Title\n\nbody\n\nmore')
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/crlf.md')].content)
+      .toBe('# Title\r\n\r\nbody\r\n\r\nmore\r\n')
+  })
+
+  it('leaves an LF file on LF, without inventing a trailing newline (T2.4)', async () => {
+    await openMarkdown('pane-eol-lf', '/notes/lf.md', '# Title\n\nbody', 'wysiwyg')
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    serializerEmits('# Title\n\nbody\n\nmore')
+
+    expect(useEditorStore.getState().buffers[getBufferKey('/notes/lf.md')].content)
+      .toBe('# Title\n\nbody\n\nmore')
+  })
+
+  it('produces no spurious diff when a canonical file round-trips untouched (T2.4)', async () => {
+    const source = '# Title\r\n\r\nbody\r\n'
+    await openMarkdown('pane-eol-clean', '/notes/clean.md', source, 'wysiwyg')
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    // What the serializer gives back for exactly this document.
+    serializerEmits('# Title\n\nbody')
+
+    const buffer = useEditorStore.getState().buffers[getBufferKey('/notes/clean.md')]
+    expect(buffer.content).toBe(source)
+    expect(buffer.isDirty).toBe(false)
+  })
+
+  it('drops the leading newline a table-first document serializes with (T2.4)', async () => {
+    const source = '| a | b |\r\n| --- | --- |\r\n| 1 | 2 |\r\n'
+    await openMarkdown('pane-eol-table', '/notes/table.md', source, 'wysiwyg')
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    serializerEmits('\n| a | b |\n| --- | --- |\n| 1 | 2 |')
+
+    const buffer = useEditorStore.getState().buffers[getBufferKey('/notes/table.md')]
+    expect(buffer.content).toBe(source)
+    expect(buffer.isDirty).toBe(false)
+  })
+
 })

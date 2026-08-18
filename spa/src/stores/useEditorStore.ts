@@ -22,6 +22,15 @@ export interface EditorBuffer extends EditorBufferMetadata {
   isDirty: boolean
   lastStat: { mtime: number; size: number } | null
   modelId: string
+  // Spec 2.4 — the shape of the file AS LOADED, so Live Mode can serialize back
+  // into it. Deliberately not part of `EditorBufferMetadata`: `eol` there is
+  // recomputed from the current draft on every `updateContent`, which is exactly
+  // why it cannot answer "what did the file look like?". These two are written
+  // only by `openBuffer` / `reloadBuffer` and are immutable for the rest of the
+  // buffer's life; keeping them out of the metadata type is also what stops a
+  // future metadata caller from merging over them.
+  sourceEol: EditorEol
+  sourceTrailingNewline: boolean
 }
 
 export interface TiptapViewState {
@@ -84,6 +93,18 @@ function detectEol(content: string): EditorEol {
   return content.includes('\r\n') ? 'crlf' : 'lf'
 }
 
+/**
+ * The immutable-after-load half of the buffer (spec 2.4). Derived from the bytes
+ * as loaded, never from the metadata override — a caller may declare `eol` for
+ * the status bar, but the file's own shape is not up for negotiation.
+ */
+function detectSourceShape(content: string): { sourceEol: EditorEol; sourceTrailingNewline: boolean } {
+  return {
+    sourceEol: detectEol(content),
+    sourceTrailingNewline: content.endsWith('\n'),
+  }
+}
+
 function normalizeMetadata(content: string, metadata: Partial<EditorBufferMetadata> & Pick<EditorBufferMetadata, 'language'>): EditorBufferMetadata {
   return {
     language: metadata.language,
@@ -108,6 +129,7 @@ export const useEditorStore = create<EditorState>()((set) => ({
           savedContent: content,
           isDirty: false,
           ...normalizeMetadata(content, metadata),
+          ...detectSourceShape(content),
           lastStat: stat ?? null,
           modelId: createModelId(),
         },
@@ -251,6 +273,9 @@ export const useEditorStore = create<EditorState>()((set) => ({
           savedContent: content,
           isDirty: false,
           eol: detectEol(content),
+          // A reload IS a load: the file on disk changed shape, so the shape the
+          // serializer must write back changes with it.
+          ...detectSourceShape(content),
           lastStat: stat ?? buf.lastStat,
         },
       },

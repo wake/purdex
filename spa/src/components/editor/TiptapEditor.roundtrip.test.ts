@@ -8,6 +8,7 @@
 import { Editor } from '@tiptap/react'
 import { describe, expect, it } from 'vitest'
 import { tiptapExtensions } from './tiptapExtensions'
+import { normalizeSerializedMarkdown } from '../../lib/markdown/normalize-serialized'
 
 function roundTrip(markdown: string): string {
   const editor = new Editor({
@@ -84,5 +85,47 @@ describe('TiptapEditor markdown round-trip (real editor)', () => {
     const source = '# Title\n\nSome **bold** prose with a [link](https://example.com).\n\n- one\n- two'
 
     expect(roundTrip(source)).toBe(source)
+  })
+
+  // T2.4, measured against the real serializer rather than a fixture: the raw
+  // output loses CRLF, the trailing newline and gains a leading one, and
+  // `normalizeSerializedMarkdown` is what makes the pair byte-identical again.
+  describe('with T2.4 normalization applied', () => {
+    const shapeOf = (source: string) => ({
+      eol: source.includes('\r\n') ? 'crlf' as const : 'lf' as const,
+      trailingNewline: source.endsWith('\n'),
+    })
+
+    const normalizedRoundTrip = (source: string) =>
+      normalizeSerializedMarkdown(roundTrip(source), shapeOf(source))
+
+    it('returns a CRLF prose file byte-for-byte', () => {
+      const source = '# Title\r\n\r\nSome **bold** prose.\r\n\r\n- one\r\n- two\r\n'
+
+      // Without normalization the file would be rewritten to LF on the first edit.
+      expect(roundTrip(source)).not.toBe(source)
+      expect(normalizedRoundTrip(source)).toBe(source)
+    })
+
+    it('stops a table-first file from moving, once its padding is canonical', () => {
+      // Column re-padding is an accepted style-level rewrite (decision 3) and is
+      // NOT something normalization undoes — so the first pass over a loosely
+      // padded table still changes the file. What must not survive that pass is
+      // the leading newline: otherwise every edit prepends another blank line.
+      const canonical = normalizedRoundTrip('| a | b |\n| --- | --- |\n| 1 | 2 |\n')
+      expect(canonical.startsWith('\n')).toBe(false)
+      expect(canonical.endsWith('|\n')).toBe(true)
+
+      // From there the document is a fixed point: opening and serializing it
+      // again reproduces it byte for byte, so Live Mode shows no spurious diff.
+      expect(roundTrip(canonical).startsWith('\n')).toBe(true)
+      expect(normalizedRoundTrip(canonical)).toBe(canonical)
+    })
+
+    it('keeps a file that never had a trailing newline without one', () => {
+      const source = '# Title\n\nbody'
+
+      expect(normalizedRoundTrip(source)).toBe(source)
+    })
   })
 })
