@@ -33,29 +33,39 @@ export interface LiveModeGate {
 }
 
 /**
- * The verdict is memoized on the content itself: it is a pure function of the
- * text, so lexing again on every render would make typing quadratic for no gain.
- * (The buffer key is deliberately NOT a dependency — it carries no information
- * the content does not, and `react-hooks/exhaustive-deps` rejects it as an
- * unnecessary dependency.)
+ * The gate is a question about the FILE — "can what is on disk survive a Live
+ * Mode round trip?" — so it is evaluated against `savedContent`, never the live
+ * buffer. Evaluating the draft made the verdict flip mid-edit: deleting the
+ * front matter of a raw-opened file flipped it to "safe" on that keystroke,
+ * swapped Monaco for Tiptap under the user's cursor and lost the cursor and
+ * scroll position. `savedContent` only moves at load (`openBuffer`), save
+ * (`markSaved`) and external reload (`reloadBuffer`) — the exact moments where
+ * re-deciding is what the user expects. An untitled buffer starts empty, which
+ * is trivially safe, so new markdown still opens in Live Mode.
+ *
+ * The verdict is memoized on that text: it is a pure function of it, so lexing
+ * again on every render would make typing quadratic for no gain. (The buffer key
+ * is deliberately NOT a dependency — it carries no information the content does
+ * not, and `react-hooks/exhaustive-deps` rejects it as an unnecessary
+ * dependency.)
  *
  * A throwing lexer must not take the whole pane down, and it must not be read as
  * "safe" either: the failure is treated as unsafe, which opens the file raw —
  * the outcome that cannot lose data.
  */
 export function useLiveModeGate(
-  content: string | undefined,
+  savedContent: string | undefined,
   isMarkdown: boolean,
   t: (key: string, params?: Record<string, string>) => string,
 ): LiveModeGate {
   const verdict = useMemo(() => {
-    if (!isMarkdown || content === undefined) return null
+    if (!isMarkdown || savedContent === undefined) return null
     try {
-      return assessMarkdownRoundTrip(content)
+      return assessMarkdownRoundTrip(savedContent)
     } catch {
       return { safe: false, blockers: ['parse-error'] }
     }
-  }, [content, isMarkdown])
+  }, [savedContent, isMarkdown])
 
   return useMemo(() => {
     if (!verdict || verdict.safe) return { forcesRaw: false }

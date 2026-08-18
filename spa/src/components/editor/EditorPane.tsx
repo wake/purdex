@@ -91,8 +91,10 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   // Spec 2.3: markdown whose content cannot survive a Live Mode round trip
   // (raw HTML, front matter, footnotes, anything the default-deny assessment
   // does not recognise) must not open there — the loss happens at parse time,
-  // before the user touches anything.
-  const liveModeGate = useLiveModeGate(buffer?.content, isMarkdown, t)
+  // before the user touches anything. The verdict is taken on `savedContent`,
+  // i.e. on the file: a draft-based verdict flips mid-keystroke and remounts the
+  // editor under the user (T2.3b).
+  const liveModeGate = useLiveModeGate(buffer?.savedContent, isMarkdown, t)
   // Mode resolution, in order of precedence:
   //   1. stale/unaligned paneState → raw. Deriving raw while paneState hasn't
   //      rebound to THIS buffer keeps the #863 invariant: Tiptap (lazy) never

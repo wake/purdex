@@ -393,4 +393,72 @@ describe('EditorPane', () => {
     }
   })
 
+  // --- T2.3b: the gate reads the SAVED file, not the live buffer -------------
+  //
+  // Evaluating the gate against `buffer.content` made the verdict flip mid-edit:
+  // deleting the front matter of a raw-opened file flipped it to "safe" on that
+  // keystroke, remounted the pane as Live Mode and threw the cursor and scroll
+  // position away. The question the gate answers is about the FILE ("can what is
+  // on disk survive a Live Mode round trip?"), so it is evaluated against
+  // `savedContent`, which only moves at load / save / external reload.
+
+  const FRONT_MATTER_MD = '---\ntitle: note\n---\n\n# Title\n\nbody\n'
+  const SAFE_MD = '# Title\n\nbody\n'
+
+  it('keeps raw while the user deletes the blocker without saving (T2.3b)', async () => {
+    await openMarkdown('pane-gate-typing', '/notes/typing.md', FRONT_MATTER_MD)
+
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+    const mountedEditor = screen.getByTestId('monaco-wrapper')
+
+    // Typing the front matter away must NOT re-open the file in Live Mode: the
+    // editor instance would be torn down under the user's cursor.
+    act(() => useEditorStore.getState().updateContent(getBufferKey('/notes/typing.md'), SAFE_MD))
+
+    expect(screen.getByTestId('monaco-wrapper')).toBe(mountedEditor)
+    expect(screen.queryByTestId('tiptap-editor')).toBeNull()
+    expect(screen.getByTestId('editor-status-bar')).toHaveAttribute('data-editor-mode', 'raw')
+  })
+
+  it('re-evaluates once the safe content is actually saved (T2.3b)', async () => {
+    await openMarkdown('pane-gate-save', '/notes/save.md', FRONT_MATTER_MD)
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+
+    act(() => useEditorStore.getState().updateContent(getBufferKey('/notes/save.md'), SAFE_MD))
+    expect(screen.queryByTestId('tiptap-editor')).toBeNull()
+
+    // Saving moves `savedContent`, which is the gate's input — what is on disk
+    // now round-trips, so Live Mode becomes the default again.
+    act(() => useEditorStore.getState().markSaved(getBufferKey('/notes/save.md')))
+
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    expect(screen.queryByTestId('monaco-wrapper')).toBeNull()
+  })
+
+  it('falls back to raw when an external reload brings in unsafe content (T2.3b)', async () => {
+    await openMarkdown('pane-gate-reload', '/notes/reload.md', SAFE_MD)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    act(() => useEditorStore.getState().reloadBuffer(getBufferKey('/notes/reload.md'), FRONT_MATTER_MD))
+
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+    expect(screen.queryByTestId('tiptap-editor')).toBeNull()
+    expect(screen.getByTestId('editor-raw-reason')).toBeInTheDocument()
+  })
+
+  it('lets an explicit mode outrank the gate through typing, saving and reload (T2.3b)', async () => {
+    await openMarkdown('pane-gate-explicit', '/notes/explicit.md', SAFE_MD, 'wysiwyg')
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+
+    act(() => useEditorStore.getState().updateContent(getBufferKey('/notes/explicit.md'), FRONT_MATTER_MD))
+    act(() => useEditorStore.getState().markSaved(getBufferKey('/notes/explicit.md')))
+    act(() => useEditorStore.getState().reloadBuffer(getBufferKey('/notes/explicit.md'), FRONT_MATTER_MD))
+
+    // The user asked for Live Mode on a file the gate would refuse; that choice
+    // still wins, and nothing about it is presented as a gate decision.
+    expect(screen.getByTestId('tiptap-editor')).toBeInTheDocument()
+    expect(screen.queryByTestId('monaco-wrapper')).toBeNull()
+    expect(screen.queryByTestId('editor-raw-reason')).toBeNull()
+  })
+
 })

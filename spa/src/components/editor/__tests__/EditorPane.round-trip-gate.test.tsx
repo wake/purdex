@@ -75,13 +75,26 @@ describe('EditorPane round-trip gate', () => {
     expect(assessSpy.mock.calls.length).toBe(afterMount)
   })
 
-  it('re-assesses when the content actually changes', async () => {
+  it('does not re-assess while the user types (T2.3b)', async () => {
+    const pane = openMarkdownPane('pane-memo-typing', '/notes/memo-typing.md')
+    renderEditorPane(pane, true)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    const afterMount = assessSpy.mock.calls.length
+
+    // A draft is not a file. Re-assessing it would both cost a full lex per
+    // keystroke and let the verdict flip the editor out from under the cursor.
+    useEditorStore.getState().updateContent(getBufferKey('/notes/memo-typing.md'), '# hi\n\n<div>now unsafe</div>\n')
+
+    expect(assessSpy.mock.calls.length).toBe(afterMount)
+  })
+
+  it('re-assesses when the saved content actually changes', async () => {
     const pane = openMarkdownPane('pane-memo-content', '/notes/memo2.md')
     renderEditorPane(pane, true)
     await waitFor(() => screen.getByTestId('tiptap-editor'))
     const afterMount = assessSpy.mock.calls.length
 
-    useEditorStore.getState().updateContent(getBufferKey('/notes/memo2.md'), '# hi\n\n<div>now unsafe</div>\n')
+    useEditorStore.getState().reloadBuffer(getBufferKey('/notes/memo2.md'), '# hi\n\n<div>now unsafe</div>\n')
 
     await waitFor(() => {
       expect(assessSpy.mock.calls.length).toBeGreaterThan(afterMount)
