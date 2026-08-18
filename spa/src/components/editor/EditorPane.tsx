@@ -201,7 +201,13 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   const canSave = buffer ? (buffer.isDirty || (!!buffer.untitled && !buffer.lastStat)) : false
   // Per-pane load failure (spec 1.2). Local state on purpose: the store never
   // learns about a failed load because no buffer is created for it.
-  const [loadError, setLoadError] = useState<LoadError | null>(null)
+  //
+  // Tagged with the buffer key that produced it: a pane outlives a file switch,
+  // and the load effect only clears the error AFTER the commit — so an untagged
+  // error painted over the next file for a frame, offering a Retry button that
+  // would actually retry that next file.
+  const [loadError, setLoadError] = useState<{ key: string; error: LoadError } | null>(null)
+  const activeLoadError = loadError?.key === key ? loadError.error : null
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
   const [renameMode, setRenameMode] = useState<'rename' | 'save'>('rename')
@@ -257,7 +263,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
     // a different route — so it surfaces through the same retryable error state.
     const backend = getFsBackend(source)
     if (!backend) {
-      setLoadError({ messageKey: 'editor.load_error.no_backend' })
+      setLoadError({ key, error: { messageKey: 'editor.load_error.no_backend' } })
       return
     }
 
@@ -273,7 +279,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       })
       .catch((error: unknown) => {
         if (stale) return
-        setLoadError({ message: loadErrorMessage(error) })
+        setLoadError({ key, error: { message: loadErrorMessage(error) } })
       })
 
     return () => { stale = true }
@@ -506,7 +512,12 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
     }
 
     const backend = getFsBackend(source)
-    if (!backend) return
+    // Same silent-failure class as T1.2b: without a backend the rename cannot
+    // happen, and returning quietly dismissed the popover as if it had.
+    if (!backend) {
+      setRenameWarning(t('editor.load_error.no_backend'))
+      return
+    }
 
     if (!isCaseOnlyRename(filePath, nextPath)) {
       try {
@@ -538,13 +549,13 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
     } catch (error) {
       setRenameWarning(renameWarningMessage(error))
     }
-  }, [currentName, filePath, key, renameMode, saveUntitledBuffer, source])
+  }, [currentName, filePath, key, renameMode, saveUntitledBuffer, source, t])
 
   if (!buffer) {
     // Spec 1.2: a failed load renders an explicit, retryable error instead of an
     // empty editor. No buffer exists here, so there is nothing to save over the
     // real file.
-    if (loadError !== null) {
+    if (activeLoadError !== null) {
       return (
         <div
           data-testid="editor-load-error"
@@ -552,9 +563,9 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         >
           <div className="text-xs text-red-400">{t('editor.load_error.title')}</div>
           <div className="max-w-full text-xs break-words text-text-muted">
-            {loadError.messageKey
-              ? t(loadError.messageKey)
-              : loadError.message || t('editor.load_error.unknown')}
+            {activeLoadError.messageKey
+              ? t(activeLoadError.messageKey)
+              : activeLoadError.message || t('editor.load_error.unknown')}
           </div>
           <button
             type="button"

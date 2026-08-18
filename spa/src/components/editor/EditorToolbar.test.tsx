@@ -167,35 +167,39 @@ describe('EditorToolbar', () => {
     expect(screen.getByTitle('Unsaved changes')).toBeInTheDocument()
   })
 
-  it('T1.3: enabled Save carries the accent style, disabled keeps the muted style', () => {
+  it('T1.3: Save is actionable exactly when there is something to save', () => {
+    // Behaviour, not class names: a reverse assertion on a utility class passes
+    // just as happily when the class is renamed out of existence.
+    const onSave = vi.fn()
     const { rerender } = render(
       <EditorToolbar
         source={{ type: 'inapp' }}
         filePath="/buffer/a.md"
         isDirty={true}
-        onSave={() => {}}
+        onSave={onSave}
       />,
     )
 
     const enabled = screen.getByTitle('Save (⌘S)')
+    expect(enabled).toBeVisible()
     expect(enabled).not.toBeDisabled()
-    expect(enabled.className).toMatch(/text-accent/)
-    expect(enabled.className).not.toMatch(/text-text-secondary/)
+    fireEvent.click(enabled)
+    expect(onSave).toHaveBeenCalledTimes(1)
 
     rerender(
       <EditorToolbar
         source={{ type: 'inapp' }}
         filePath="/buffer/a.md"
         isDirty={false}
-        onSave={() => {}}
+        onSave={onSave}
       />,
     )
 
     const disabled = screen.getByTitle('Save (⌘S)')
+    expect(disabled).toBeVisible()
     expect(disabled).toBeDisabled()
-    expect(disabled.className).not.toMatch(/text-accent/)
-    expect(disabled.className).toMatch(/text-text-secondary/)
-    expect(disabled.className).toMatch(/disabled:opacity-30/)
+    fireEvent.click(disabled)
+    expect(onSave).toHaveBeenCalledTimes(1)
   })
 
   it('C3-7: onNewBuffer dirty-guard gates setPaneContent (v1.4 F7)', async () => {

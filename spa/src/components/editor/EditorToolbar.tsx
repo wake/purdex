@@ -145,7 +145,10 @@ export function EditorToolbar({
         {isDirty && onDiff && (
           <button
             onClick={onDiff}
-            className={`p-1 rounded hover:bg-surface-hover transition-colors ${showDiff ? 'text-accent-base' : 'text-text-secondary'}`}
+            /* `text-accent-base` had no Tailwind 4 token behind it (0 hits in
+               the built CSS), so the active state never actually painted. Use
+               the same `text-accent` the Save button uses. */
+            className={`p-1 rounded hover:bg-surface-hover transition-colors ${showDiff ? 'text-accent' : 'text-text-secondary'}`}
             title={showDiff ? 'Close diff' : 'Diff against saved'}
           >
             <GitDiff size={14} />

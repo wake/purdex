@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { Profiler, type ReactNode } from 'react'
 import { EditorPane } from './EditorPane'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -420,5 +420,83 @@ describe('EditorPane — regular file save outcome', () => {
 
     expect(toastMessage()).toBe('editor.save.saved')
     expect(useEditorStore.getState().buffers[FILE_KEY].lastStat).toEqual({ mtime: 99, size: 11 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A load failure belongs to the file that produced it. The pane survives a file
+// switch, so an unbound error paints over the NEXT file for a frame — with a
+// Retry button that actually retries that next file.
+// ---------------------------------------------------------------------------
+
+const OTHER_FILE = '/buffer/other.md'
+
+function makeOtherPane(): Pane {
+  return { id: PANE_ID, content: { kind: 'editor', source: { type: 'inapp' }, filePath: OTHER_FILE } }
+}
+
+describe('EditorPane — load error is bound to its own file', () => {
+  beforeEach(() => {
+    resetBackend()
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+    seedTab(makePane())
+  })
+
+  it('does not paint the previous file error while the next file is loading', async () => {
+    readMock.mockImplementation(async (path: string) => {
+      if (path === FILE) throw new Error('read refused')
+      // The next file never settles — the pane must show Loading, not the
+      // leftover error surface.
+      return new Promise<Uint8Array>(() => {})
+    })
+
+    // `Profiler.onRender` fires during commit, BEFORE passive effects run — it
+    // is the only way to observe what the user actually sees in the frame
+    // between the file switch and the load effect.
+    const commits: string[] = []
+    const onRender = () => commits.push(document.body.innerHTML)
+
+    const { rerender } = render(
+      <Profiler id="pane" onRender={onRender}>
+        <EditorPane pane={makePane()} isActive={false} />
+      </Profiler>,
+    )
+    await screen.findByTestId('editor-load-error')
+
+    commits.length = 0
+    rerender(
+      <Profiler id="pane" onRender={onRender}>
+        <EditorPane pane={makeOtherPane()} isActive={false} />
+      </Profiler>,
+    )
+
+    expect(commits.length).toBeGreaterThan(0)
+    expect(commits.some((html) => html.includes('editor-load-error'))).toBe(false)
+    expect(screen.queryByTestId('editor-load-error')).toBeNull()
+  })
+})
+
+describe('EditorPane — rename without a backend', () => {
+  beforeEach(() => {
+    resetBackend()
+    renamePopover.props = null
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+    useEditorStore.getState().openBuffer(FILE_KEY, 'hello', { language: 'markdown' }, { mtime: 1, size: 5 })
+    seedTab(makePane())
+  })
+
+  it('reports the missing backend instead of dismissing the rename silently', async () => {
+    backendRef.value = undefined
+    render(<EditorPane pane={makePane()} isActive={false} />)
+
+    fireEvent.doubleClick(screen.getByRole('button', { name: 'note.md' }))
+    await screen.findByTestId('rename-popover')
+    await act(async () => {
+      await renamePopover.props?.onConfirm('renamed.md')
+    })
+
+    expect(screen.getByTestId('rename-popover').textContent).toBe('editor.load_error.no_backend')
+    // The buffer keeps its identity — nothing was renamed.
+    expect(useEditorStore.getState().buffers[FILE_KEY]).toBeTruthy()
   })
 })
