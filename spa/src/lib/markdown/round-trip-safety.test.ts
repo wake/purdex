@@ -128,3 +128,38 @@ describe('assessMarkdownRoundTrip — purity', () => {
     expect(assessMarkdownRoundTrip('<div>x</div>').blockers).toEqual(['html'])
   })
 })
+
+/**
+ * Front matter has to be spotted in the source text because marked lexes it as
+ * an `hr` plus whatever the YAML happens to look like. Detection therefore has
+ * to separate a metadata block from the many ordinary documents that also open
+ * with a `---` line — a thematic break, or the underline of a setext heading.
+ * Getting that wrong locks a perfectly round-trippable file out of Live Mode.
+ */
+describe('assessMarkdownRoundTrip — front matter detection', () => {
+  const notFrontMatter: Array<[string, string]> = [
+    // The most direct false positive: a rule, a line of prose, and a setext
+    // underline. Nothing inside the fence looks like metadata.
+    ['a rule around a line of prose', '---\nhello\n---\n'],
+    ['an empty fence', '---\n---\n'],
+    ['an opening rule that is never closed', '---\n\nhello world\n\nmore prose\n'],
+    ['prose whose only colon belongs to a URL', '---\nhttps://example.com\n---\n'],
+  ]
+
+  it.each(notFrontMatter)('%s is safe', (_label, md) => {
+    expect(assessMarkdownRoundTrip(md)).toEqual({ safe: true, blockers: [] })
+  })
+
+  const isFrontMatter: Array<[string, string]> = [
+    ['a single key: value pair', '---\ntitle: x\n---\n\n# Body\n'],
+    ['nested keys and sequence items', '---\ntitle: x\ntags:\n  - a\n  - b\n---\n\n# Body\n'],
+    ['a valueless key', '---\ndraft:\n---\n\n# Body\n'],
+    ['a fence closed by ...', '---\ntitle: x\n...\n\n# Body\n'],
+  ]
+
+  it.each(isFrontMatter)('%s is unsafe', (_label, md) => {
+    const verdict = assessMarkdownRoundTrip(md)
+    expect(verdict.safe).toBe(false)
+    expect(verdict.blockers).toContain('frontmatter')
+  })
+})

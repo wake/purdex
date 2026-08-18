@@ -53,13 +53,63 @@ const WHITELIST = new Set([
   'def',
 ])
 
+/** The opening fence: `---` alone on the very first line of the document. */
+const FENCE_OPEN = /^---[ \t]*$/
+
+/** The closing fence: `---` or `...` alone on a line. */
+const FENCE_CLOSE = /^(?:---|\.\.\.)[ \t]*$/
+
 /**
- * A `---` fence on the very first line, closed by a later `---` or `...` line.
- * Intentionally not multiline-anchored: the opening fence must be the start of
- * the document, and the closing fence is kept on a line of its own by the
- * preceding newline.
+ * `key:` or `key: value` — the shape every YAML mapping entry has. The value
+ * must be separated by whitespace or absent, which is what keeps a bare URL
+ * (`https://example.com`) from reading as the key `https`.
  */
-const FRONT_MATTER = /^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/
+const YAML_KEY = /^[ \t]*(?:"[^"]*"|'[^']*'|[^\s:#][^:]*)[ \t]*:(?:[ \t].*)?$/
+
+/** `- item` / `-` — a YAML sequence entry, at any indentation. */
+const YAML_SEQUENCE_ITEM = /^[ \t]*-(?:[ \t]+\S.*)?$/
+
+/** `# …` — a YAML comment. */
+const YAML_COMMENT = /^[ \t]*#/
+
+/**
+ * A fence on line 1 is not enough to call something front matter: `---` is also
+ * a thematic break and the underline of a setext heading, so
+ *
+ *     ---
+ *     hello
+ *     ---
+ *
+ * is ordinary markdown that round-trips perfectly. What separates the two is
+ * whether the fenced block reads as metadata, so every non-blank line inside it
+ * has to look like YAML — a `key:` entry, a `- item`, a `#` comment, or a line
+ * indented under an entry already seen (nested maps and block scalars). At least
+ * one real `key:` entry must be present, which also rules out an empty fence.
+ *
+ * The bias is deliberate: a false positive costs a round-trippable file its Live
+ * Mode, and there is no signal left to recover it from.
+ */
+function hasFrontMatter(md: string): boolean {
+  const lines = md.split(/\r?\n/)
+  if (!FENCE_OPEN.test(lines[0] ?? '')) return false
+
+  let sawKey = false
+  for (const line of lines.slice(1)) {
+    if (FENCE_CLOSE.test(line)) return sawKey
+    if (line.trim() === '') continue
+    if (YAML_COMMENT.test(line) || YAML_SEQUENCE_ITEM.test(line)) continue
+    if (YAML_KEY.test(line)) {
+      sawKey = true
+      continue
+    }
+    // A continuation line only makes sense under an entry, and only indented.
+    if (sawKey && /^[ \t]/.test(line)) continue
+    return false
+  }
+
+  // An unclosed fence is just a thematic break followed by the rest of the file.
+  return false
+}
 
 /** `[^label]:` at the start of a line — a footnote definition. */
 const FOOTNOTE_DEF = /^ {0,3}\[\^([^\]\s]+)\]:/gm
@@ -76,7 +126,7 @@ const FOOTNOTE_REF = /\[\^([^\]\s]+)\](?!:)/g
  * - footnotes lex as an ordinary `link` plus a `def`.
  */
 function probeSource(md: string, add: (blocker: string) => void): void {
-  if (FRONT_MATTER.test(md)) add('frontmatter')
+  if (hasFrontMatter(md)) add('frontmatter')
   if (hasFootnote(md)) add('footnote')
 }
 
