@@ -8,10 +8,11 @@ import {
   useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { DownloadSimple, FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen, UploadSimple } from '@phosphor-icons/react'
+import { Broom, DownloadSimple, FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen, UploadSimple } from '@phosphor-icons/react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
+import { useUndoToast } from '../../../stores/useUndoToast'
 import { useWorkspaceStore } from '../../../features/workspace/store'
 import { useStorageTree } from '../../../hooks/useStorageTree'
 import { findPane } from '../../../lib/pane-tree'
@@ -27,9 +28,11 @@ import {
   createStorageFolder,
   deleteStorageEntries,
   downloadStorageFile,
+  findEmptyFiles,
   moveStorageEntry,
   renameStorageEntry,
   uploadFiles,
+  type DeleteOutcome,
 } from './storage-actions'
 import { computeMoveFromDragEnd } from './storage-dnd'
 
@@ -122,6 +125,9 @@ export function StoragePane({ pane }: PaneRendererProps) {
   // recoverable warning, not a hard failure (T1c-4).
   const [actionWarning, setActionWarning] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // The 0 B files a cleanup scan found, held while the confirmation dialog is
+  // up (`null` = no dialog). T4.2.
+  const [cleanupCandidates, setCleanupCandidates] = useState<string[] | null>(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [renameError, setRenameError] = useState<string | null>(null)
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
@@ -296,10 +302,13 @@ export function StoragePane({ pane }: PaneRendererProps) {
    * from the selection — for the toolbar that empties it, for a row action it
    * leaves the rest of the selection alone (deleting a hovered row must not
    * clear an unrelated selection).
+   *
+   * Returns the outcome so a caller that needs to report on it (the empty-file
+   * cleanup below) can, without duplicating the delete call or the banner.
    */
   const deletePaths = useCallback(
-    async (paths: string[]) => {
-      if (paths.length === 0) return
+    async (paths: string[]): Promise<DeleteOutcome | null> => {
+      if (paths.length === 0) return null
       setBusy(true)
       setActionError(null)
       setActionWarning(null)
@@ -315,11 +324,51 @@ export function StoragePane({ pane }: PaneRendererProps) {
       } else if (res.status === 'refused' || res.status === 'error') {
         setActionError(res.message)
       }
+      return res
     },
     [t, refresh],
   )
 
   const handleDelete = useCallback(() => deletePaths(selectedArray), [deletePaths, selectedArray])
+
+  // --- Manual empty-file cleanup (T4.2) ---
+  //
+  // Eager reservation (#854) writes a real 0 B file the instant "New File" is
+  // pressed, so every new tab that was never typed into leaves one behind. This
+  // is the broom: scan the ALREADY-LOADED tree (pure, no backend read), show
+  // exactly what would go, and delete the confirmed set through the same
+  // `deleteStorageEntries` everything else uses — guards included. Those guards
+  // raise their own native confirm (locked-tab refusal / dirty-buffer warning),
+  // which is deliberately NOT bypassed: a 0 B file can still be open with
+  // unsaved edits, and that warning is the only thing standing between this
+  // housekeeping sweep and losing them.
+
+  const handleCleanEmpty = useCallback(() => {
+    const candidates = findEmptyFiles(tree)
+    if (candidates.length === 0) {
+      // Nothing to do is an OUTCOME, not a silent no-op — and an empty
+      // confirmation dialog would be worse than no dialog at all.
+      useUndoToast.getState().show(t('editor.buffers.clean_empty_none'))
+      return
+    }
+    setCleanupCandidates(candidates)
+  }, [tree, t])
+
+  const handleCleanEmptyConfirm = useCallback(async () => {
+    const paths = cleanupCandidates
+    setCleanupCandidates(null)
+    if (!paths || paths.length === 0) return
+    const res = await deletePaths(paths)
+    if (res?.status === 'deleted') {
+      useUndoToast.getState().show(t('editor.buffers.clean_empty_done', { count: paths.length }))
+    } else if (res?.status === 'error') {
+      // `deleteStorageEntries` is NOT atomic — it deletes path by path with no
+      // transaction, so a mid-way failure leaves the earlier paths gone. The
+      // banner (already set by `deletePaths`) reports the failure; refreshing is
+      // what stops the tree from still listing what IS deleted.
+      refresh()
+    }
+  }, [cleanupCandidates, deletePaths, refresh, t])
 
   // --- Row-scoped actions (T4.1) ---
 
@@ -545,6 +594,16 @@ export function StoragePane({ pane }: PaneRendererProps) {
           {t('editor.buffers.delete')}
         </button>
         <button
+          data-testid="toolbar-clean-empty"
+          onClick={handleCleanEmpty}
+          disabled={toolbarBusy}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          title={t('editor.buffers.clean_empty')}
+        >
+          <Broom size={14} />
+          {t('editor.buffers.clean_empty')}
+        </button>
+        <button
           data-testid="toolbar-open"
           onClick={handleOpenSelected}
           disabled={!canOpen || toolbarBusy}
@@ -659,6 +718,50 @@ export function StoragePane({ pane }: PaneRendererProps) {
         </DndContext>
         <BackupStatusSidebar />
       </div>
+
+      {/* Empty-file cleanup confirmation (T4.2) — the full candidate list is
+          shown BEFORE anything is deleted, because this action deletes files
+          the user never explicitly selected. */}
+      {cleanupCandidates && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          data-testid="empty-cleanup-dialog"
+        >
+          <div className="flex max-h-[80vh] w-[420px] flex-col rounded-lg border border-border-default bg-surface-primary shadow-lg">
+            <div className="border-b border-border-subtle px-4 py-3">
+              <h3 className="text-sm font-medium text-text-primary">
+                {t('editor.buffers.clean_empty')}
+              </h3>
+              <p className="mt-1 text-xs text-text-muted">
+                {t('editor.buffers.clean_empty_confirm', { count: cleanupCandidates.length })}
+              </p>
+            </div>
+            <ul className="flex-1 overflow-y-auto px-4 py-3 text-xs text-text-secondary">
+              {cleanupCandidates.map((path) => (
+                <li key={path} data-testid="empty-cleanup-item" className="truncate py-0.5">
+                  {path}
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
+              <button
+                data-testid="empty-cleanup-cancel"
+                onClick={() => setCleanupCandidates(null)}
+                className="px-3 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                data-testid="empty-cleanup-confirm"
+                onClick={handleCleanEmptyConfirm}
+                className="px-3 py-1 rounded-md text-xs text-text-primary bg-surface-secondary hover:bg-surface-hover hover:text-status-error"
+              >
+                {t('editor.buffers.delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {renameTarget && (
         <RenamePopover

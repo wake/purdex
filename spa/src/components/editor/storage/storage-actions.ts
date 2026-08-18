@@ -29,6 +29,7 @@ import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
 import { createMetadata } from '../../../lib/editor-language'
 import { STORAGE_ROOT, basename, join, parentOf, isUnderRoot } from '../../../lib/storage-paths'
 import { isPathAffectedBy, isPathUnder, remapPathUnder } from '../../../lib/path-remap'
+import type { TreeNode } from '../../../lib/storage-tree'
 import type { FileSource } from '../../../types/fs'
 import type { Pane, Tab } from '../../../types/tab'
 
@@ -122,6 +123,32 @@ export function applyPathMutation(source: FileSource, from: string, to: string):
   remapRecentFilesUnder(source, from, to)
   remapEditorBuffersUnder(source, from, to)
   remapTabPanesUnder(source, from, to)
+}
+
+/**
+ * findEmptyFiles — every 0 B FILE in an already-loaded tree, full paths, in
+ * depth-first order (T4.2). The candidate set for the manual empty-file
+ * cleanup: eager reservation (#854) mints a real empty file per "New File"
+ * press, so a tab opened and never typed into leaves one behind forever.
+ *
+ * Folders are never candidates (a `TreeNode` directory also carries `size: 0`,
+ * so the `isDir` test — not the size — is what excludes them), and neither is a
+ * file with any bytes. Pure: it reads the tree the pane already has and touches
+ * no backend.
+ */
+export function findEmptyFiles(tree: TreeNode[]): string[] {
+  const out: string[] = []
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      if (node.isDir) {
+        if (node.children) walk(node.children)
+        continue
+      }
+      if (node.size === 0) out.push(node.path)
+    }
+  }
+  walk(tree)
+  return out
 }
 
 /**
