@@ -340,6 +340,18 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
       setRenameWarning('File already exists')
       return
     }
+    // An OPEN buffer is not the only way the name can be taken: the file may
+    // already sit on the backend with nothing open on it, and the write below
+    // is a blind overwrite. Probe the backend the same way `handleRenameSubmit`
+    // does — a successful stat means the path is occupied and the first save of
+    // this document must NOT clobber it.
+    try {
+      await backend.stat(nextPath)
+      setRenameWarning('File already exists')
+      return
+    } catch {
+      // Missing target is the expected, writable case.
+    }
 
     try {
       const encoded = new TextEncoder().encode(buf.content)

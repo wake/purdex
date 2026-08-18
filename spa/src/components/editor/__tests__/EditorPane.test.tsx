@@ -138,6 +138,24 @@ function getBufferKey(filePath: string): string {
   return bufferKey({ type: 'inapp' }, filePath)
 }
 
+/**
+ * Model a first-save target that only exists once it has been written. The
+ * untitled first save probes `stat` BEFORE writing so it can refuse to clobber
+ * a file that is already there, so a fixture whose `stat` always resolves would
+ * describe a world where every new name is already taken.
+ */
+function statMissingUntilWritten(
+  backend: ReturnType<typeof createBackend>,
+  stat: { size: number; mtime: number },
+): void {
+  backend.stat.mockImplementation(async () => {
+    if (backend.write.mock.calls.length === 0) {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    }
+    return { isFile: true, isDirectory: false, ...stat }
+  })
+}
+
 function registerTabPane(pane: Pane, tabId = 'tab-1') {
   useTabStore.setState({
     tabs: {
@@ -684,12 +702,7 @@ describe('EditorPane', () => {
     const pane = createUntitledPane('Untitled', '.md', 'pane-save-untitled')
     const backend = createBackend()
     backend.write.mockResolvedValue(undefined)
-    backend.stat.mockResolvedValue({
-      isFile: true,
-      isDirectory: false,
-      size: 0,
-      mtime: 456,
-    })
+    statMissingUntilWritten(backend, { size: 0, mtime: 456 })
     getFsBackendMock.mockReturnValue(backend)
     registerTabPane(pane)
 
@@ -716,12 +729,7 @@ describe('EditorPane', () => {
     const pane = createUntitledPane('notes.txt', '.txt', 'pane-save-renamed')
     const backend = createBackend()
     backend.write.mockResolvedValue(undefined)
-    backend.stat.mockResolvedValue({
-      isFile: true,
-      isDirectory: false,
-      size: 5,
-      mtime: 456,
-    })
+    statMissingUntilWritten(backend, { size: 5, mtime: 456 })
     getFsBackendMock.mockReturnValue(backend)
     registerTabPane({
       ...pane,
@@ -1677,7 +1685,7 @@ describe('EditorPane — in-editor rename remaps the recent entry (T3.2)', () =>
     const pane = createUntitledPane('Untitled', '.md', 'pane-untitled-no-remap')
     const backend = createBackend()
     backend.write.mockResolvedValue(undefined)
-    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 456 })
+    statMissingUntilWritten(backend, { size: 0, mtime: 456 })
     getFsBackendMock.mockReturnValue(backend)
     registerTabPane(pane)
 
@@ -1903,7 +1911,7 @@ describe('EditorPane — save result toast (T3.3)', () => {
     const pane = createUntitledPane('Untitled', '.md', 'pane-toast-untitled-confirm')
     const backend = createBackend()
     backend.write.mockResolvedValue(undefined)
-    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 9 })
+    statMissingUntilWritten(backend, { size: 0, mtime: 9 })
     getFsBackendMock.mockReturnValue(backend)
     registerTabPane(pane)
 
@@ -1946,7 +1954,7 @@ describe('EditorPane - keyboard save opens the naming popover for an unnamed unt
     const pane = createUntitledPane('Untitled', extension, paneId)
     const backend = createBackend()
     backend.write.mockResolvedValue(undefined)
-    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 7 })
+    statMissingUntilWritten(backend, { size: 0, mtime: 7 })
     getFsBackendMock.mockReturnValue(backend)
     registerTabPane(pane)
     render(<EditorPane pane={pane} isActive />)
