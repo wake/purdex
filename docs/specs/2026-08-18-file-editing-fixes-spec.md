@@ -203,7 +203,9 @@ removePath(source: FileSource, path: string): void              // the entry and
 
 Semantics mirror `remapPanesUnder` (`storage-actions.ts:57`): same source identity (including `hostId` for daemon), exact match or `from/` prefix, `name` recomputed from the new basename.
 
-Collision rule (made explicit after review): when the destination path already has an entry, the two are merged into one entry at the destination keeping **the newer `openedAt` of the two** — the destination genuinely was visited at that time, and a rename must not resurrect a stale entry above more recent ones. The renamed entry's own `openedAt` is otherwise carried over unchanged (a rename is not a visit). List order (recency) is re-derived from `openedAt`, so no separate reordering step is needed.
+Collision rule (made explicit after review): when the destination path already has an entry, the two are merged into one entry at the destination keeping **the newer `openedAt` of the two** — the destination genuinely was visited at that time, and a rename must not resurrect a stale entry above more recent ones. The renamed entry's own `openedAt` is otherwise carried over unchanged (a rename is not a visit). The merged entry keeps the **renamed** entry's other fields (`kind`, `source`) — after the rename it is the file living at that path.
+
+List order is the array's own order (`addRecent` prepends), not a re-derivation from `openedAt`; a merge therefore keeps the earlier — i.e. more recent — of the two slots. (Corrected during implementation: an earlier draft of this spec claimed order was derived from `openedAt`, which does not match the store.)
 
 Call sites:
 - `remapPanesUnder` (covers Storage rename **and** move, file and folder — `renameStorageEntry:344`, `moveStorageEntry:399`).
