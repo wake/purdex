@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.0.0-alpha.328] - 2026-08-19
+
+### Fix(editor/storage): in-Purdex 檔案編輯四大問題修復（#940 / #947 / #952）
+
+使用者回報 in-Purdex 檔案編輯的四個問題，調查後拆成三個 PR 依序處理。全程 spec → codex 審 → plan → codex 審 → subagent TDD → PR 兩輪 codex review 的完整流程，三個 PR 共經 **10 次 codex review**（含 3 組 3-parallel 對抗性），攔下 **13 條會靜默毀損或誤刪使用者檔案的路徑**。
+
+**PR-A #940 — 遠端檔案資料安全 + 近期檔案重映射 + 儲存提示**
+
+- 「遠端檔案開起來少內容」與「所有遠端檔案都顯示有變動」是**同一個 bug 的兩面**：daemon backend 忽略 `source.hostId`（打到 active host）＋ 讀取失敗靜默開空 buffer（`lastStat` 為 null，而 dirty 燈號綁的正是含 `!lastStat` 的 `canSave`）。
+- `getFsBackend` 加 resolver 層依 `source.hostId` 綁定；載入失敗改為錯誤態 + Retry，**不建立 buffer**，因此不可能存檔覆寫真實檔案；dirty 燈號改綁 `isDirty`。
+- 近期檔案補 `renamePath` / `removePath`，接上 rename / move / delete / 編輯器內改名（含遠端）。
+- 儲存結果 toast：已儲存 / 沒有變動需要儲存 / 儲存失敗（含原因）。
+- review 攔下：host 被移除時 `getDaemonBase` 仍 fallback 到 active host（wrong-host 防線在邊界失效）、**untitled 首次儲存輸入既有檔名會直接覆寫該檔**（既有 bug）、write 成功但 stat 失敗誤報儲存失敗。
+
+**PR-B #947 — Markdown Live Mode 無損化**
+
+Live Mode（Tiptap）的文件模型是 markdown 的有損子集，**損壞發生在 parse 當下**，編輯一個字就會把有損結果寫回。實測修復前：表格整段變空字串、front matter 變 heading、raw HTML 被剝除、task list checkbox 消失、CRLF 轉 LF、檔尾換行被吃。
+
+- 加入 TableKit / TaskList / TaskItem / Image 擴充，表格與 task list 現在能安全編輯（附表格浮動選單）。
+- 新增 round-trip 安全閘門（marked token 白名單 default-deny + front matter / footnote / HTML entity / 混合行尾的專項偵測），無法無損表達的文件改以 raw 開啟並在工具列說明原因。
+- 保留原始行尾、檔尾換行與前導空行（新增載入後不可變的 `sourceEol` / `sourceTrailingNewline` / `sourceLeadingBlankLines`）。
+- 閘門依 `savedContent` 而非即時 `content` 評估，打字不會在編輯途中抽換編輯器。
+- 對抗性 review 用真實 Tiptap 實測攔下 4 條靜默毀損：**圖片被吃成純文字**（白名單宣稱支援 image 但 schema 根本沒有 image node）、HTML entity 雙重 escape、混合行尾被洗成單一、純空行檔案行數折疊。另補 `image-in-mark`（`[![badge](x)](url)` 失去連結）與 `bracketed-url`（含空白的 destination）兩個 blocker。
+
+**PR-C #952 — Storage 操作 + placeholder 自動清理**
+
+- 每列 hover 操作（Open / Rename / Delete，作用於該列而非目前選取）、可見的批次選取（checkbox + 全選三態 + 動作列）、清除 0 B 空檔。
+- 大量 0 B `Untitled-N.txt` 的成因是 New File 的 eager reservation（一按就落地真實空檔）。新增 placeholder registry 記錄「這個路徑是我們建的、使用者還沒碰過」，在最後一個引用消失時自動清除。
+- 明確否決「靠 buffer 形狀推論」的原方案（會誤刪「本來有內容、被清空後存檔」的檔案）；刪除判斷基於 **post-`closePane`** 的剩餘引用，而非元件卸載（否則 pane 移動會誤刪）。
+- review 攔下：registry 缺跨分頁同步（A 分頁存檔後 B 分頁會刪真實檔案）、外部變更 reload 未除籍、Clean Empty 用舊快照刪除、批次刪除只顯示數量不顯示路徑。最後加上「刪除前 re-stat 確認仍是 0 B」的結構性防線。
+
+**順帶修掉的死 class**：`text-accent-base` 與 `bg-surface-selected` 在 Tailwind 4 沒有對應 token（build 產出 CSS 命中 0 次）—— 後者導致 **Storage 選取中的列一直以來沒有任何高亮**。
+
+**體質**：`EditorPane.tsx` 732 → 389 行（抽 4 個 hook）、`EditorPane.test.tsx` 2025 行與 `StoragePane.test.tsx` 1981 行拆分、`remapPanesUnder` 職責分離、抽 `lib/path-remap` 共用規則。三次純重構均驗證測試總數不變、零斷言修改。
+
+測試 3983 → **4365**（+382）。lint / build / `go test ./...` 全綠。
+
+**Follow-up**：#941 restore 後近期檔案失連 · #942 `text-accent-base` repo-wide · #943 `getWsBase` 同類 host fallback（WebSocket 可連錯機器）· #944 untitled 改名後 ⌘S 撞名靜默中止 · #945 flaky test · #946 `openRecentEntry` 收斂 · #948 footnote 偵測誤判 code fence · #949 save/rename hook 耦合 · #950 `round-trip-safety.ts` 拆分 · #951 Live Mode 支援連結包圖片（README badge）· #953 placeholder 除籍收斂 · #954 Storage 檔案過大 · #955 路徑快照 ABA
+
 ## [1.0.0-alpha.327] - 2026-08-18
 
 ### Fix(spa): New Tab「Bring in an open tab」限高半窗並內部捲動
