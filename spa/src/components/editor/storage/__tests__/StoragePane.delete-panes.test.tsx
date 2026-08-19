@@ -6,6 +6,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { StoragePane } from '../StoragePane'
 import { eventLog, mockBackend, closePaneSpy, tabStoreState } from './storage-pane-mocks'
 import {
+  confirmBatchDelete,
   makeEditorTab,
   makePane,
   makePreviewTab,
@@ -46,7 +47,7 @@ describe('StoragePane — delete vs. open panes and locked tabs', () => {
     render(<StoragePane pane={makePane()} isActive />)
     const row = await screen.findByTestId('buffer-row')
     fireEvent.click(row)
-    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await confirmBatchDelete()
     await waitFor(() => {
       expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md', false)
     })
@@ -72,7 +73,7 @@ describe('StoragePane — delete vs. open panes and locked tabs', () => {
     render(<StoragePane pane={makePane()} isActive />)
     const row = await screen.findByTestId('buffer-row')
     fireEvent.click(row)
-    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await confirmBatchDelete()
     await waitFor(() => {
       expect(screen.getByText('editor.buffers.delete_locked_refused')).toBeTruthy()
     })
@@ -94,7 +95,7 @@ describe('StoragePane — delete vs. open panes and locked tabs', () => {
     render(<StoragePane pane={makePane()} isActive />)
     const row = await screen.findByTestId('buffer-row')
     fireEvent.click(row)
-    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await confirmBatchDelete()
     await waitFor(() => {
       expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/p.png', false)
     })
@@ -120,7 +121,7 @@ describe('StoragePane — delete vs. open panes and locked tabs', () => {
     render(<StoragePane pane={makePane()} isActive />)
     const row = await screen.findByTestId('buffer-row')
     fireEvent.click(row)
-    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await confirmBatchDelete()
     await waitFor(() => {
       expect(screen.getByText('editor.buffers.delete_locked_refused')).toBeTruthy()
     })
@@ -146,7 +147,7 @@ describe('StoragePane — delete vs. open panes and locked tabs', () => {
     // Modifier click adds y.md to the multi-selection (codex B5: plain click no
     // longer accretes — additive multi-select needs cmd/ctrl/shift).
     fireEvent.click(rows[1], { ctrlKey: true }) // + y.md
-    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await confirmBatchDelete()
     await waitFor(() => {
       expect(screen.getByText('editor.buffers.delete_locked_refused')).toBeTruthy()
     })
@@ -182,7 +183,7 @@ describe('StoragePane — delete vs. open panes and locked tabs', () => {
     render(<StoragePane pane={makePane()} isActive />)
     const row = await screen.findByTestId('buffer-row')
     fireEvent.click(row)
-    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await confirmBatchDelete()
 
     await waitFor(() => {
       expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/x.md', false)

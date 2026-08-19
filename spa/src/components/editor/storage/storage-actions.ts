@@ -549,6 +549,35 @@ function isAffectedByTargets(filePath: string, targets: string[]): boolean {
   return targets.some((target) => isPathUnder(filePath, target))
 }
 
+/**
+ * The subset of `paths` that still exists, in the given order.
+ *
+ * A Storage selection is a set of path STRINGS captured when the user clicked;
+ * it does not follow the tree. By the time a batch delete is triggered some of
+ * them may be gone — deleted from another pane, another tab, another window.
+ * Confirming a delete against that stale set means the dialog names paths that
+ * cannot be deleted, and the delete loop then fails on the first missing one.
+ *
+ * This is a pre-flight `stat` per path, so the confirmation the user reads is
+ * the set that will actually be deleted. It cannot see through ABA — the IDB
+ * backend keys entries by path and exposes no file identity, so a path
+ * re-created with different content still stats as present. Listing the paths in
+ * the dialog is what covers the rest.
+ */
+export async function pruneMissingPaths(paths: string[]): Promise<string[]> {
+  const backend = getFsBackend({ type: 'inapp' })
+  if (!backend) return paths
+  const alive: string[] = []
+  for (const path of paths) {
+    const exists = await backend
+      .stat(path)
+      .then(() => true)
+      .catch(() => false)
+    if (exists) alive.push(path)
+  }
+  return alive
+}
+
 export interface DeleteStorageOptions {
   /**
    * The caller already confirmed the delete with a dialog that NAMES every path

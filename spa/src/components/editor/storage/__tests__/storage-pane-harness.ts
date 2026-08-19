@@ -7,6 +7,7 @@
 // The mock REGISTRATIONS stay in each test file (`vi.mock` is hoisted per file)
 // and the spies/stubs they reach for live in `storage-pane-mocks.tsx`.
 import { vi } from 'vitest'
+import { fireEvent, screen, within } from '@testing-library/react'
 import { openInAppFile } from '../../../../lib/open-in-app-file'
 import { triggerDownload } from '../../../../lib/download-file'
 import {
@@ -105,6 +106,25 @@ export function pathAwareList(paths: Map<string, { isDir: boolean; size: number 
     }
     return Array.from(seen.values())
   })
+}
+
+// --- batch delete ----------------------------------------------------------
+
+/**
+ * Drive a batch delete end to end: press the trigger, then answer the
+ * path-listing confirmation it opens. The selection is re-verified against the
+ * backend before that dialog appears, so the click and the confirm are separated
+ * by an await — every batch-delete assertion has to go through here rather than
+ * a bare `click(toolbar-delete)`.
+ *
+ * The generic `window.confirm` is NOT part of this path (the caller passes
+ * `preconfirmed`); the dirty-buffer confirm still is, and is answered by the
+ * suite's own `confirm` stub as before.
+ */
+export async function confirmBatchDelete(triggerTestId = 'toolbar-delete'): Promise<void> {
+  fireEvent.click(screen.getByTestId(triggerTestId))
+  const dialog = await screen.findByTestId('delete-selection-dialog')
+  fireEvent.click(within(dialog).getByTestId('delete-selection-confirm'))
 }
 
 // --- shared reset ----------------------------------------------------------

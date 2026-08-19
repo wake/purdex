@@ -23,6 +23,7 @@ import { findNode, targetDirOf } from '../../../lib/storage-tree'
 import type { TreeNode } from '../../../lib/storage-tree'
 import { RenamePopover } from '../../RenamePopover'
 import { BackupStatusSidebar } from './BackupStatusSidebar'
+import { DeleteConfirmDialog } from './DeleteConfirmDialog'
 import { StorageTree } from './StorageTree'
 import {
   createStorageFile,
@@ -31,6 +32,7 @@ import {
   downloadStorageFile,
   findEmptyFiles,
   moveStorageEntry,
+  pruneMissingPaths,
   renameStorageEntry,
   uploadFiles,
   type DeleteOutcome,
@@ -127,9 +129,13 @@ export function StoragePane({ pane }: PaneRendererProps) {
   // recoverable warning, not a hard failure (T1c-4).
   const [actionWarning, setActionWarning] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // The 0 B files a cleanup scan found, held while the confirmation dialog is
-  // up (`null` = no dialog). T4.2.
-  const [cleanupCandidates, setCleanupCandidates] = useState<string[] | null>(null)
+  // The delete waiting on its path-listing confirmation (`null` = no dialog).
+  // Both multi-entry deletes go through it: the Clean Empty sweep (T4.2) and the
+  // batch delete of the selection. `dropped` counts the paths that were pruned
+  // out because they no longer exist, so the dialog can say the list shrank.
+  const [pendingDelete, setPendingDelete] = useState<
+    { kind: 'clean-empty' | 'selection'; paths: string[]; dropped: number } | null
+  >(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [renameError, setRenameError] = useState<string | null>(null)
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
@@ -346,7 +352,50 @@ export function StoragePane({ pane }: PaneRendererProps) {
     [t, refresh],
   )
 
-  const handleDelete = useCallback(() => deletePaths(selectedArray), [deletePaths, selectedArray])
+  // --- Batch delete of the selection ---
+  //
+  // `selected` holds path STRINGS captured when the user clicked; it does not
+  // follow the tree. So before asking anything we re-verify the set against the
+  // backend and drop what is gone, then confirm with a dialog that NAMES every
+  // surviving path — a bare "Delete 3 buffer(s)?" gave the user no way to notice
+  // that the set had moved on. What is listed is what gets deleted.
+  //
+  // The residual case this does NOT close is ABA: the same path re-created
+  // holding a different file. The IDB backend keys by path and exposes no file
+  // identity, so telling that apart needs a backend API change — out of scope
+  // here, and much narrowed by listing the paths.
+  const handleDelete = useCallback(async () => {
+    if (selectedArray.length === 0) return
+    setBusy(true)
+    setActionError(null)
+    setActionWarning(null)
+    const alive = await pruneMissingPaths(selectedArray)
+    setBusy(false)
+    // Re-read the tree either way: if the selection moved on, so has the tree.
+    refresh()
+    if (alive.length < selectedArray.length) setSelected(new Set(alive))
+    if (alive.length === 0) {
+      // Nothing left to delete is an OUTCOME, not a silent no-op — an empty
+      // confirmation dialog would be worse than no dialog at all.
+      useUndoToast.getState().show(t('editor.buffers.delete_all_gone'))
+      return
+    }
+    setPendingDelete({
+      kind: 'selection',
+      paths: alive,
+      dropped: selectedArray.length - alive.length,
+    })
+  }, [selectedArray, refresh, t])
+
+  const handleSelectionDeleteConfirm = useCallback(async () => {
+    const paths = pendingDelete?.paths
+    setPendingDelete(null)
+    if (!paths || paths.length === 0) return
+    // `preconfirmed`: the dialog the user just answered named every path, so the
+    // generic confirm would be a second, weaker prompt. The locked-tab refusal
+    // and the dirty-buffer confirm still run — see `DeleteStorageOptions`.
+    await deletePaths(paths, { preconfirmed: true })
+  }, [pendingDelete, deletePaths])
 
   // --- Manual empty-file cleanup (T4.2) ---
   //
@@ -373,12 +422,12 @@ export function StoragePane({ pane }: PaneRendererProps) {
       useUndoToast.getState().show(t('editor.buffers.clean_empty_none'))
       return
     }
-    setCleanupCandidates(candidates)
+    setPendingDelete({ kind: 'clean-empty', paths: candidates, dropped: 0 })
   }, [tree, t])
 
   const handleCleanEmptyConfirm = useCallback(async () => {
-    const paths = cleanupCandidates
-    setCleanupCandidates(null)
+    const paths = pendingDelete?.paths
+    setPendingDelete(null)
     if (!paths || paths.length === 0) return
     // `preconfirmed`: the dialog the user just answered named every path, so the
     // generic confirm would be a second, weaker prompt (the locked-tab refusal
@@ -404,7 +453,7 @@ export function StoragePane({ pane }: PaneRendererProps) {
       // what stops the tree from still listing what IS deleted.
       refresh()
     }
-  }, [cleanupCandidates, deletePaths, refresh, t])
+  }, [pendingDelete, deletePaths, refresh, t])
 
   // --- Row-scoped actions (T4.1) ---
 
@@ -755,48 +804,39 @@ export function StoragePane({ pane }: PaneRendererProps) {
         <BackupStatusSidebar />
       </div>
 
-      {/* Empty-file cleanup confirmation (T4.2) — the full candidate list is
-          shown BEFORE anything is deleted, because this action deletes files
-          the user never explicitly selected. */}
-      {cleanupCandidates && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          data-testid="empty-cleanup-dialog"
-        >
-          <div className="flex max-h-[80vh] w-[420px] flex-col rounded-lg border border-border-default bg-surface-primary shadow-lg">
-            <div className="border-b border-border-subtle px-4 py-3">
-              <h3 className="text-sm font-medium text-text-primary">
-                {t('editor.buffers.clean_empty')}
-              </h3>
-              <p className="mt-1 text-xs text-text-muted">
-                {t('editor.buffers.clean_empty_confirm', { count: cleanupCandidates.length })}
-              </p>
-            </div>
-            <ul className="flex-1 overflow-y-auto px-4 py-3 text-xs text-text-secondary">
-              {cleanupCandidates.map((path) => (
-                <li key={path} data-testid="empty-cleanup-item" className="truncate py-0.5">
-                  {path}
-                </li>
-              ))}
-            </ul>
-            <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
-              <button
-                data-testid="empty-cleanup-cancel"
-                onClick={() => setCleanupCandidates(null)}
-                className="px-3 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover"
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                data-testid="empty-cleanup-confirm"
-                onClick={handleCleanEmptyConfirm}
-                className="px-3 py-1 rounded-md text-xs text-text-primary bg-surface-secondary hover:bg-surface-hover hover:text-status-error"
-              >
-                {t('editor.buffers.delete')}
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* The one delete confirmation, for both multi-entry deletes. The full
+          path list is shown BEFORE anything is deleted: Clean Empty removes
+          files the user never explicitly selected, and a batch delete acts on a
+          set of paths the tree may have moved on from. */}
+      {pendingDelete && (
+        <DeleteConfirmDialog
+          testIdPrefix={pendingDelete.kind === 'clean-empty' ? 'empty-cleanup' : 'delete-selection'}
+          title={t(
+            pendingDelete.kind === 'clean-empty'
+              ? 'editor.buffers.clean_empty'
+              : 'editor.buffers.delete',
+          )}
+          message={t(
+            pendingDelete.kind === 'clean-empty'
+              ? 'editor.buffers.clean_empty_confirm'
+              : 'editor.buffers.confirm_delete',
+            { count: pendingDelete.paths.length },
+          )}
+          note={
+            pendingDelete.dropped > 0
+              ? t('editor.buffers.delete_pruned_note', { count: pendingDelete.dropped })
+              : undefined
+          }
+          paths={pendingDelete.paths}
+          confirmLabel={t('editor.buffers.delete')}
+          cancelLabel={t('common.cancel')}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={
+            pendingDelete.kind === 'clean-empty'
+              ? handleCleanEmptyConfirm
+              : handleSelectionDeleteConfirm
+          }
+        />
       )}
 
       {renameTarget && (

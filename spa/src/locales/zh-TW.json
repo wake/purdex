@@ -580,6 +580,8 @@
   "editor.buffers.upload_too_large": "{{name}} 太大，無法上傳（上限 {{cap}} MB）。",
   "editor.buffers.upload_quota": "儲存空間已滿，無法儲存 {{name}}。",
   "editor.buffers.confirm_delete": "刪除 {{count}} 個暫存檔？",
+  "editor.buffers.delete_pruned_note": "有 {{count}} 個選取項目已不存在，已從清單移除",
+  "editor.buffers.delete_all_gone": "選取的項目都已不存在",
   "editor.load_error.title": "無法開啟此檔案",
   "editor.load_error.unknown": "檔案讀取失敗。",
   "editor.load_error.no_backend": "找不到可用的檔案系統後端。",

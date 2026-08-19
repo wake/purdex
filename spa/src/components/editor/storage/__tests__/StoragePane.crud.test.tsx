@@ -2,10 +2,11 @@
 // rename (file + folder, incl. the refusals) and delete of a leaf path.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Mock } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { StoragePane } from '../StoragePane'
 import { mockBackend, closePaneSpy, tabStoreState } from './storage-pane-mocks'
 import {
+  confirmBatchDelete,
   makeEditorTab,
   makePane,
   pathAwareList,
@@ -56,7 +57,7 @@ describe('StoragePane — create / rename / delete of a single entry', () => {
     render(<StoragePane pane={makePane()} isActive />)
     const row = await screen.findByTestId('buffer-row')
     fireEvent.click(row) // select
-    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await confirmBatchDelete()
     await waitFor(() => {
       expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/foo.md', false)
     })
@@ -140,6 +141,12 @@ describe('StoragePane — create / rename / delete of a single entry', () => {
     expect(mockBackend.rename).not.toHaveBeenCalled()
   })
 
+  // The batch delete's own confirmation is the path-listing dialog (it passes
+  // `preconfirmed`, so the generic `window.confirm` no longer fires for it).
+  // What must still fire behind that dialog is the DIRTY-specific confirm — it
+  // is the last warning before unsaved edits go. The single-target
+  // `delete_one_confirm` message lives on in the row-scoped delete, which has no
+  // dialog of its own; sub-case (b) checks it there.
   it('B2-14: delete confirms with dirty-specific (cancel) and single-specific (OK) messages (v1.4 F5+F6)', async () => {
     // Sub-case (a): DIRTY buffer → dirty-specific message → cancel → no-op.
     {
@@ -167,14 +174,18 @@ describe('StoragePane — create / rename / delete of a single entry', () => {
       const { unmount } = render(<StoragePane pane={makePane()} isActive />)
       const row = await screen.findByTestId('buffer-row')
       fireEvent.click(row)
-      fireEvent.click(screen.getByTestId('toolbar-delete'))
-      expect(confirmFalse).toHaveBeenCalledWith('editor.buffers.delete_dirty_confirm')
+      await confirmBatchDelete()
+      await waitFor(() =>
+        expect(confirmFalse).toHaveBeenCalledWith('editor.buffers.delete_dirty_confirm'),
+      )
       expect(mockBackend.delete).not.toHaveBeenCalled()
       expect(closePaneSpy).not.toHaveBeenCalled()
       unmount()
     }
 
-    // Sub-case (b): CLEAN single-target → single-specific message → OK → delete fires.
+    // Sub-case (b): CLEAN single-target row delete → single-specific message →
+    // OK → delete fires. A row action deletes one path with no dialog of its
+    // own, so it is the generic confirm's remaining home.
     {
       mockBackend.list.mockResolvedValue([
         { name: 'only.md', isDir: false, size: 10 },
@@ -188,8 +199,7 @@ describe('StoragePane — create / rename / delete of a single entry', () => {
       vi.stubGlobal('confirm', confirmTrue)
       render(<StoragePane pane={makePane()} isActive />)
       const row = await screen.findByTestId('buffer-row')
-      fireEvent.click(row)
-      fireEvent.click(screen.getByTestId('toolbar-delete'))
+      fireEvent.click(within(row).getByTestId('row-action-delete'))
       expect(confirmTrue).toHaveBeenCalledWith('editor.buffers.delete_one_confirm')
       await waitFor(() => {
         expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/only.md', false)
@@ -237,7 +247,7 @@ describe('StoragePane — create / rename / delete of a single entry', () => {
     fireEvent.doubleClick((await screen.findByText('b')).closest('[data-testid="buffer-row"]')!)
     const leafRow = (await screen.findByText('x.md')).closest('[data-testid="buffer-row"]')!
     fireEvent.click(leafRow)
-    fireEvent.click(screen.getByTestId('toolbar-delete'))
+    await confirmBatchDelete()
     await waitFor(() => {
       expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/a/b/x.md', false)
     })

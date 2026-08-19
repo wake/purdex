@@ -9,6 +9,7 @@ import { StoragePane } from '../StoragePane'
 import { openInAppFile } from '../../../../lib/open-in-app-file'
 import { mockBackend, tSpy } from './storage-pane-mocks'
 import {
+  confirmBatchDelete,
   makePane,
   pathAwareList,
   resetStoragePaneMocks,
@@ -200,9 +201,8 @@ describe('T4.3 — selection action bar', () => {
     render(<StoragePane pane={makePane()} isActive />)
     fireEvent.click(await checkboxFor('a.md'))
     fireEvent.click(await checkboxFor('c.md'))
-    fireEvent.click(
-      within(await screen.findByTestId('selection-action-bar')).getByTestId('selection-delete'),
-    )
+    await screen.findByTestId('selection-action-bar')
+    await confirmBatchDelete('selection-delete')
     await waitFor(() => {
       expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/a.md', false)
     })
@@ -284,9 +284,8 @@ describe('T4.3 — a delete prunes the selection the way it prunes the tree', ()
     fireEvent.click(within(await rowFor('dir')).getByTestId('row-action-delete'))
     await waitFor(() => expect(renderedSelectionCount()).toBe(1))
 
-    fireEvent.click(
-      within(await screen.findByTestId('selection-action-bar')).getByTestId('selection-delete'),
-    )
+    await screen.findByTestId('selection-action-bar')
+    await confirmBatchDelete('selection-delete')
 
     await waitFor(() => expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/top.md', false))
     expect(mockBackend.delete).not.toHaveBeenCalledWith('/buffer/dir/child.md', false)

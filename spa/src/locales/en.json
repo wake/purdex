@@ -580,6 +580,8 @@
   "editor.buffers.upload_too_large": "{{name}} is too large to upload (max {{cap}} MB).",
   "editor.buffers.upload_quota": "Storage is full — {{name}} could not be saved.",
   "editor.buffers.confirm_delete": "Delete {{count}} buffer(s)?",
+  "editor.buffers.delete_pruned_note": "{{count}} selected entry/entries no longer exist and were dropped",
+  "editor.buffers.delete_all_gone": "The selected entries no longer exist",
   "editor.load_error.title": "Could not open this file",
   "editor.load_error.unknown": "The file could not be read.",
   "editor.load_error.no_backend": "No FS backend is available for this file.",
