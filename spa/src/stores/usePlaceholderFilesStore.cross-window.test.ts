@@ -77,10 +77,12 @@ async function openWindow(): Promise<Win> {
   }
 }
 
-/** Let the broadcast-driven `persist.rehydrate()` settle. */
+/**
+ * Let the broadcast-driven `persist.rehydrate()` settle — and, after a sweep,
+ * the `stat` → `delete` chain that gates the delete on the file still being 0 B.
+ */
 async function flush(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let i = 0; i < 5; i++) await Promise.resolve()
 }
 
 function fakeBackend(): FsBackend & { delete: ReturnType<typeof vi.fn> } {
@@ -90,7 +92,8 @@ function fakeBackend(): FsBackend & { delete: ReturnType<typeof vi.fn> } {
     available: () => true,
     read: vi.fn(),
     write: vi.fn(),
-    stat: vi.fn(),
+    // The sweep confirms the file is still empty before deleting it.
+    stat: vi.fn(async () => ({ isFile: true, isDirectory: false, size: 0, mtime: 1 })),
     list: vi.fn(),
     mkdir: vi.fn(),
     delete: vi.fn(async () => {}),
@@ -188,6 +191,7 @@ describe('a file that changed hands in tab A is never swept by tab B', () => {
     await flush()
 
     b.closePaneAndSweepPlaceholder('pane-b', key, INAPP, PLACEHOLDER)
+    await flush()
 
     expect(backend.delete).not.toHaveBeenCalled()
     expect(b.store.getState().paths).toEqual([])
@@ -202,6 +206,7 @@ describe('a file that changed hands in tab A is never swept by tab B', () => {
     await flush()
 
     b.closePaneAndSweepPlaceholder('pane-b', key, INAPP, PLACEHOLDER)
+    await flush()
 
     expect(backend.delete).not.toHaveBeenCalled()
   })
@@ -213,6 +218,7 @@ describe('a file that changed hands in tab A is never swept by tab B', () => {
     const key = openOn(b, PLACEHOLDER, 'pane-b')
 
     b.closePaneAndSweepPlaceholder('pane-b', key, INAPP, PLACEHOLDER)
+    await flush()
 
     expect(backend.delete).toHaveBeenCalledWith(PLACEHOLDER)
   })

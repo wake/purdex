@@ -29,6 +29,19 @@ import type { FileSource } from '../types/fs'
  *    may authorize this. Non-in-app sources can never be registered, and the
  *    registry lookup below re-checks the source anyway — remote and local files
  *    are never eligible.
+ * 4. **The registry's claim is confirmed against the disk before deleting.**
+ *    Every other way an entry ends — a save, a rename, a move, a delete, an
+ *    upload, the external-change probe — is an EVENT we happen to observe, and
+ *    there is no file watcher: a placeholder written to behind our back while
+ *    its tab is never re-activated produces no event at all, and its entry
+ *    survives as a standing authorization over a file that now holds someone's
+ *    content. So the last thing before the delete is a `stat`, and only a file
+ *    that is STILL 0 bytes is removed. This is not the rejected "infer from
+ *    buffer shape" predicate, which guesses at history and cannot tell an
+ *    untouched reservation from a file the user deliberately emptied and saved;
+ *    it is a present-tense fact about the disk, required on top of the registry
+ *    entry rather than instead of it. A `stat` that fails — the file is gone, or
+ *    the backend errored — deletes nothing either: unconfirmable is not empty.
  *
  * Failure is swallowed: this is housekeeping running inside an unmount cleanup,
  * where a throw would break the teardown, and a file that survives is still
@@ -58,7 +71,17 @@ export function closePaneAndSweepPlaceholder(
   const backend = getFsBackend(source)
   if (!backend) return
   try {
-    void backend.delete(filePath).catch(() => {})
+    void backend.stat(filePath)
+      .then((stat) => {
+        // Point 4: the registry's claim is confirmed against the disk before the
+        // delete. Anything but a still-empty file — content written behind our
+        // back, or a `stat` we cannot complete — leaves the file alone. The
+        // entry was already dropped above, so a surviving file is simply
+        // ordinary from here on.
+        if (stat.size !== 0) return
+        void backend.delete(filePath).catch(() => {})
+      })
+      .catch(() => {})
   } catch {
     // best-effort housekeeping — see the note above
   }

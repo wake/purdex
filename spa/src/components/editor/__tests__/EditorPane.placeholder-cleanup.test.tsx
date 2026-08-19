@@ -90,7 +90,9 @@ describe('T5.2 — closing an untouched placeholder pane', () => {
       view.unmount()
     })
 
-    expect(backend.delete).toHaveBeenCalledWith(PLACEHOLDER)
+    // The delete is gated on a live `stat` confirming the file is still 0 B, so
+    // it lands a tick after the unmount.
+    await waitFor(() => expect(backend.delete).toHaveBeenCalledWith(PLACEHOLDER))
     expect(usePlaceholderFilesStore.getState().paths).toEqual([])
     expect(useEditorStore.getState().buffers[KEY]).toBeUndefined()
   })
@@ -200,7 +202,7 @@ describe('T5.2 — a pane move never deletes the moved placeholder', () => {
       targetView.unmount()
     })
 
-    expect(backend.delete).toHaveBeenCalledWith(PLACEHOLDER)
+    await waitFor(() => expect(backend.delete).toHaveBeenCalledWith(PLACEHOLDER))
     expect(usePlaceholderFilesStore.getState().paths).toEqual([])
   })
 })
