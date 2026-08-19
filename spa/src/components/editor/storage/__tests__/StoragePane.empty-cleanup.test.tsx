@@ -16,14 +16,17 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { StoragePane } from '../StoragePane'
 import { findEmptyFiles } from '../storage-actions'
 import { useUndoToast } from '../../../../stores/useUndoToast'
-import { mockBackend, tSpy } from './storage-pane-mocks'
+import { closePaneSpy, mockBackend, tSpy, tabStoreState } from './storage-pane-mocks'
 import {
+  makeEditorTab,
   makePane,
   pathAwareList,
   resetStoragePaneMocks,
   restoreStoragePaneGlobals,
 } from './storage-pane-harness'
+import { makeEditorBuffer, makeEditorPaneState } from '../../../../stores/__tests__/editor-buffer-fixture'
 import type { TreeNode } from '../../../../lib/storage-tree'
+import type { FileStat } from '../../../../types/fs'
 
 vi.mock('@dnd-kit/core', async () => (await import('./storage-pane-mocks')).dndKitMock())
 vi.mock('../../../../lib/fs-backend', async () => (await import('./storage-pane-mocks')).fsBackendMock())
@@ -194,5 +197,153 @@ describe('T4.2 — delete failure (NON-atomic: partial deletion is accepted)', (
     await waitFor(() => expect(mockBackend.list.mock.calls.length).toBeGreaterThan(listCallsBefore))
     // No success toast for a failed run.
     expect(tSpy).not.toHaveBeenCalledWith('editor.buffers.clean_empty_done', expect.anything())
+  })
+})
+
+// --- Re-verification before the delete (the snapshot the dialog holds) -------
+//
+// The candidate list is computed from the tree as it looked when the dialog
+// opened, and the dialog stays up for as long as the user wants. In that window
+// the user can open one of those paths in another pane (or another tab, or
+// another window) and save real content into it. The old delete path took the
+// snapshot at its word — it only stat'd for `isDirectory` — so confirming
+// deleted a file that now held the user's work.
+
+/** Make `stat` report `size` for `fullPath` and 0 B for everything else. */
+function statWithContent(fullPath: string, size: number): void {
+  mockBackend.stat.mockImplementation(
+    async (p: string): Promise<FileStat> => ({
+      size: p === fullPath ? size : 0,
+      mtime: 0,
+      isDirectory: false,
+      isFile: true,
+    }),
+  )
+}
+
+describe('T4.2 hardening — a candidate that gained content is re-checked and skipped', () => {
+  it('does NOT delete a candidate that is no longer 0 B, and still deletes the rest', async () => {
+    mixedTree()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('notes.md')
+    const dialog = await openCleanupDialog()
+
+    // While the dialog is up, the user writes into one of the listed paths.
+    statWithContent('/buffer/Untitled-1.txt', 42)
+
+    fireEvent.click(within(dialog).getByTestId('empty-cleanup-confirm'))
+
+    await waitFor(() => expect(mockBackend.delete).toHaveBeenCalledTimes(2))
+    expect(mockBackend.delete).not.toHaveBeenCalledWith('/buffer/Untitled-1.txt', expect.anything())
+    expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/Untitled.txt', false)
+    expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/dir/nested-empty.md', false)
+  })
+
+  it('reports the skip in the toast (deleted vs. skipped), not a plain success count', async () => {
+    mixedTree()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('notes.md')
+    const dialog = await openCleanupDialog()
+    statWithContent('/buffer/Untitled-1.txt', 42)
+
+    fireEvent.click(within(dialog).getByTestId('empty-cleanup-confirm'))
+
+    await waitFor(() => expect(useUndoToast.getState().toast?.message).toBeTruthy())
+    expect(tSpy).toHaveBeenCalledWith('editor.buffers.clean_empty_partial', {
+      deleted: 2,
+      skipped: 1,
+    })
+    expect(tSpy).not.toHaveBeenCalledWith('editor.buffers.clean_empty_done', expect.anything())
+  })
+
+  it('all candidates filled in → nothing deleted at all', async () => {
+    mixedTree()
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('notes.md')
+    const dialog = await openCleanupDialog()
+    mockBackend.stat.mockResolvedValue({
+      size: 7,
+      mtime: 0,
+      isDirectory: false,
+      isFile: true,
+    } as FileStat)
+
+    fireEvent.click(within(dialog).getByTestId('empty-cleanup-confirm'))
+
+    await waitFor(() => expect(useUndoToast.getState().toast?.message).toBeTruthy())
+    expect(mockBackend.delete).not.toHaveBeenCalled()
+    expect(tSpy).toHaveBeenCalledWith('editor.buffers.clean_empty_partial', {
+      deleted: 0,
+      skipped: 3,
+    })
+  })
+})
+
+describe('T4.2 hardening — exactly one confirmation, and the real guards survive', () => {
+  it('the generic window.confirm is never raised (our dialog IS the confirmation)', async () => {
+    mixedTree()
+    const confirmSpy = vi.fn(() => true)
+    vi.stubGlobal('confirm', confirmSpy)
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('notes.md')
+    const dialog = await openCleanupDialog()
+
+    fireEvent.click(within(dialog).getByTestId('empty-cleanup-confirm'))
+
+    await waitFor(() => expect(mockBackend.delete).toHaveBeenCalledTimes(3))
+    expect(confirmSpy).not.toHaveBeenCalled()
+  })
+
+  it('regression: a candidate open in a LOCKED tab still refuses the whole sweep', async () => {
+    mixedTree()
+    tabStoreState.tabs = {
+      ...tabStoreState.tabs,
+      TA: makeEditorTab('TA', 'P1', '/buffer/Untitled.txt', true),
+    }
+    tabStoreState.tabOrder = ['storageTab', 'TA']
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('notes.md')
+    const dialog = await openCleanupDialog()
+
+    fireEvent.click(within(dialog).getByTestId('empty-cleanup-confirm'))
+
+    await waitFor(() =>
+      expect(screen.getByText('editor.buffers.delete_locked_refused')).toBeTruthy(),
+    )
+    expect(mockBackend.delete).not.toHaveBeenCalled()
+    expect(closePaneSpy).not.toHaveBeenCalled()
+  })
+
+  it('regression: a DIRTY candidate still raises the dirty confirm — cancelling deletes nothing', async () => {
+    mixedTree()
+    tabStoreState.tabs = {
+      ...tabStoreState.tabs,
+      TA: makeEditorTab('TA', 'P1', '/buffer/Untitled.txt'),
+    }
+    tabStoreState.tabOrder = ['storageTab', 'TA']
+    const editorModule = await import('../../../../stores/useEditorStore')
+    editorModule.useEditorStore.setState({
+      buffers: {
+        'inapp:/buffer/Untitled.txt': makeEditorBuffer({
+          content: 'unsaved work',
+          savedContent: '',
+          isDirty: true,
+        }),
+      },
+      paneStates: { P1: makeEditorPaneState('inapp:/buffer/Untitled.txt') },
+    })
+    const confirmSpy = vi.fn((_message?: string) => false)
+    vi.stubGlobal('confirm', confirmSpy)
+
+    render(<StoragePane pane={makePane()} isActive />)
+    await screen.findByText('notes.md')
+    const dialog = await openCleanupDialog()
+
+    fireEvent.click(within(dialog).getByTestId('empty-cleanup-confirm'))
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1))
+    expect(confirmSpy.mock.calls[0][0]).toContain('delete_dirty_confirm')
+    expect(mockBackend.delete).not.toHaveBeenCalled()
+    editorModule.useEditorStore.setState({ buffers: {}, paneStates: {} })
   })
 })

@@ -34,6 +34,7 @@ import {
   renameStorageEntry,
   uploadFiles,
   type DeleteOutcome,
+  type DeleteStorageOptions,
 } from './storage-actions'
 import { computeMoveFromDragEnd } from './storage-dnd'
 
@@ -316,18 +317,22 @@ export function StoragePane({ pane }: PaneRendererProps) {
    * cleanup below) can, without duplicating the delete call or the banner.
    */
   const deletePaths = useCallback(
-    async (paths: string[]): Promise<DeleteOutcome | null> => {
+    async (paths: string[], options?: DeleteStorageOptions): Promise<DeleteOutcome | null> => {
       if (paths.length === 0) return null
       setBusy(true)
       setActionError(null)
       setActionWarning(null)
-      const res = await deleteStorageEntries(paths, t)
+      const res = await deleteStorageEntries(paths, t, options)
       setBusy(false)
       if (res.status === 'deleted') {
+        // Only what actually went is dropped from the selection: a path the
+        // `requireEmpty` re-check skipped is still on disk, still the user's, and
+        // must stay selected.
+        const gone = paths.filter((p) => !res.skipped?.includes(p))
         setSelected((prev) => {
           const next = new Set<string>()
           for (const entry of prev) {
-            if (paths.some((p) => isPathUnder(entry, p))) continue
+            if (gone.some((p) => isPathUnder(entry, p))) continue
             next.add(entry)
           }
           return next
@@ -349,11 +354,16 @@ export function StoragePane({ pane }: PaneRendererProps) {
   // pressed, so every new tab that was never typed into leaves one behind. This
   // is the broom: scan the ALREADY-LOADED tree (pure, no backend read), show
   // exactly what would go, and delete the confirmed set through the same
-  // `deleteStorageEntries` everything else uses — guards included. Those guards
-  // raise their own native confirm (locked-tab refusal / dirty-buffer warning),
-  // which is deliberately NOT bypassed: a 0 B file can still be open with
-  // unsaved edits, and that warning is the only thing standing between this
-  // housekeeping sweep and losing them.
+  // `deleteStorageEntries` everything else uses — guards included.
+  //
+  // Two things about that scan are load-bearing. It is a SNAPSHOT, and the
+  // dialog it feeds stays up for human time: `requireEmpty` re-stats every path
+  // at delete time so a candidate the user filled in meanwhile survives. And the
+  // dialog IS the confirmation, so `preconfirmed` drops the generic
+  // `window.confirm` that would otherwise ask a second, vaguer time — while the
+  // locked-tab refusal and the dirty-buffer warning still fire, because a 0 B
+  // file can be open with unsaved edits and that warning is the only thing
+  // standing between this housekeeping sweep and losing them.
 
   const handleCleanEmpty = useCallback(() => {
     const candidates = findEmptyFiles(tree)
@@ -370,9 +380,23 @@ export function StoragePane({ pane }: PaneRendererProps) {
     const paths = cleanupCandidates
     setCleanupCandidates(null)
     if (!paths || paths.length === 0) return
-    const res = await deletePaths(paths)
+    // `preconfirmed`: the dialog the user just answered named every path, so the
+    // generic confirm would be a second, weaker prompt (the locked-tab refusal
+    // and the dirty-buffer confirm still run — see `DeleteStorageOptions`).
+    // `requireEmpty`: `paths` is a snapshot taken when the dialog opened; each
+    // one is re-stat'd and skipped unless it is STILL 0 B.
+    const res = await deletePaths(paths, { preconfirmed: true, requireEmpty: true })
     if (res?.status === 'deleted') {
-      useUndoToast.getState().show(t('editor.buffers.clean_empty_done', { count: paths.length }))
+      const skipped = res.skipped?.length ?? 0
+      if (skipped > 0) {
+        // Silently deleting fewer files than the dialog listed would leave the
+        // user unable to tell a skip from a failure.
+        useUndoToast.getState().show(
+          t('editor.buffers.clean_empty_partial', { deleted: paths.length - skipped, skipped }),
+        )
+      } else {
+        useUndoToast.getState().show(t('editor.buffers.clean_empty_done', { count: paths.length }))
+      }
     } else if (res?.status === 'error') {
       // `deleteStorageEntries` is NOT atomic — it deletes path by path with no
       // transaction, so a mid-way failure leaves the earlier paths gone. The

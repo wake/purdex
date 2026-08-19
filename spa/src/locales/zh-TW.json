@@ -541,6 +541,7 @@
   "editor.buffers.clean_empty_confirm": "確定刪除這 {{count}} 個空檔（0 B）？",
   "editor.buffers.clean_empty_done": "已刪除 {{count}} 個空檔",
   "editor.buffers.clean_empty_none": "沒有可清除的空檔",
+  "editor.buffers.clean_empty_partial": "已刪除 {{deleted}} 個空檔，略過 {{skipped}} 個已有內容的檔案",
   "editor.buffers.select_all": "全選",
   "editor.buffers.select_row": "選取 {{name}}",
   "editor.buffers.selected_count": "已選 {{count}} 個",

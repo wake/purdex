@@ -527,7 +527,12 @@ export async function moveStorageEntry(
 }
 
 export type DeleteOutcome =
-  | { status: 'deleted' }
+  /**
+   * `skipped` is present only when `requireEmpty` actually dropped something —
+   * the paths that were no longer 0 B files (or had vanished) at delete time and
+   * were therefore left alone. Everything else deleted normally.
+   */
+  | { status: 'deleted'; skipped?: string[] }
   | { status: 'cancelled' }
   | { status: 'refused'; message: string }
   | { status: 'error'; message: string }
@@ -544,6 +549,29 @@ function isAffectedByTargets(filePath: string, targets: string[]): boolean {
   return targets.some((target) => isPathUnder(filePath, target))
 }
 
+export interface DeleteStorageOptions {
+  /**
+   * The caller already confirmed the delete with a dialog that NAMES every path
+   * (the Clean Empty sweep, the batch delete). Skips **only** the generic
+   * `window.confirm` below, which at that point is a second prompt carrying
+   * strictly less information than the one the user just answered.
+   *
+   * It does NOT skip the locked-tab refusal or the dirty-buffer confirm: those
+   * are not "are you sure", they are the last thing standing between a delete
+   * and someone's unsaved edits, and no caller may waive them.
+   */
+  preconfirmed?: boolean
+  /**
+   * Delete a path only if it is STILL a 0 B file. The Clean Empty candidate list
+   * is a snapshot of the tree taken when its dialog opened, and the dialog is up
+   * for human time — long enough for the user to write real content into one of
+   * the listed paths from another pane. Anything that is no longer a 0 B file
+   * (or has vanished, or turned out to be a directory) is skipped and reported
+   * back in `skipped`, never deleted on the strength of the stale snapshot.
+   */
+  requireEmpty?: boolean
+}
+
 /**
  * Delete the given **full paths** (files or folders). Preserves the v1.4/v1.5
  * guards, now folder-aware — a folder target sweeps every descendant
@@ -554,10 +582,14 @@ function isAffectedByTargets(filePath: string, targets: string[]): boolean {
  *   - G2: close every affected pane AND drop its editor-store buffer + paneState
  *     BEFORE deleting the underlying file, so a post-delete write can't
  *     resurrect a stale background buffer.
+ *
+ * See `DeleteStorageOptions` for the two opt-ins a caller with its own
+ * path-listing confirmation dialog needs.
  */
 export async function deleteStorageEntries(
   targets: string[],
   t: Translate,
+  options: DeleteStorageOptions = {},
 ): Promise<DeleteOutcome> {
   if (targets.length === 0) return { status: 'cancelled' }
   const backend = getFsBackend({ type: 'inapp' })
@@ -574,6 +606,27 @@ export async function deleteStorageEntries(
     (t) => !targets.some((o) => o !== t && t.startsWith(o + '/')),
   )
 
+  // `requireEmpty` re-reads the CURRENT size of every target and keeps only the
+  // ones that are still 0 B files. It runs here — before the pane scan — for two
+  // reasons: a path we are not going to delete must not have its pane closed,
+  // and it must not drag the whole sweep into a locked-tab refusal it has no
+  // business triggering. A stat failure counts as "cannot confirm" and therefore
+  // skips: never delete on the strength of a snapshot we could not re-verify.
+  const skipped: string[] = []
+  let deletable = normalized
+  if (options.requireEmpty) {
+    const kept: string[] = []
+    for (const path of normalized) {
+      const stat = await backend.stat(path).catch(() => null)
+      if (stat && !stat.isDirectory && stat.size === 0) kept.push(path)
+      else skipped.push(path)
+    }
+    deletable = kept
+    // Nothing survived the re-check: report the skips without touching a pane,
+    // a guard or the backend.
+    if (deletable.length === 0) return { status: 'deleted', skipped }
+  }
+
   const { tabs } = useTabStore.getState()
   const openPanes: Array<[string, Pane]> = []
   for (const [tabId, tab] of Object.entries(tabs) as Array<[string, Tab]>) {
@@ -583,7 +636,7 @@ export async function deleteStorageEntries(
       // so deleting a png/pdf open in a preview pane — or anything nested under
       // a deleted folder — fires the locked-tab refusal, closes the pane, and
       // leaves no stale tab behind.
-      if (isFilePaneContent(c) && c.source.type === 'inapp' && isAffectedByTargets(c.filePath, normalized)) {
+      if (isFilePaneContent(c) && c.source.type === 'inapp' && isAffectedByTargets(c.filePath, deletable)) {
         openPanes.push([tabId, pane])
       }
     })
@@ -604,15 +657,16 @@ export async function deleteStorageEntries(
   })
 
   if (dirtyHits.length > 0) {
+    // Never waived, `preconfirmed` or not: a caller's dialog can list paths, it
+    // cannot know that one of them holds unsaved edits.
     if (!window.confirm(t('editor.buffers.delete_dirty_confirm', { count: dirtyHits.length }))) {
       return { status: 'cancelled' }
     }
-  } else if (normalized.length === 1) {
-    if (!window.confirm(t('editor.buffers.delete_one_confirm'))) {
-      return { status: 'cancelled' }
-    }
-  } else {
-    if (!window.confirm(t('editor.buffers.confirm_delete', { count: normalized.length }))) {
+  } else if (!options.preconfirmed) {
+    const message = deletable.length === 1
+      ? t('editor.buffers.delete_one_confirm')
+      : t('editor.buffers.confirm_delete', { count: deletable.length })
+    if (!window.confirm(message)) {
       return { status: 'cancelled' }
     }
   }
@@ -626,11 +680,11 @@ export async function deleteStorageEntries(
         useEditorStore.getState().closePane(pane.id, key)
       }
     }
-    // Step 2: delete each NORMALIZED target. Folders go through the recursive
+    // Step 2: delete each surviving target. Folders go through the recursive
     // sweep (prefix-delete of every descendant); files use the plain
     // non-recursive delete. A stat failure (e.g. the entry vanished under a
     // concurrent op) is treated as a non-folder and still attempted.
-    for (const path of normalized) {
+    for (const path of deletable) {
       const isDir = await backend
         .stat(path)
         .then((s) => s.isDirectory)
@@ -644,7 +698,10 @@ export async function deleteStorageEntries(
       // subtree rule, so a folder target sweeps the placeholders inside it).
       usePlaceholderFilesStore.getState().unregister({ type: 'inapp' }, path)
     }
-    return { status: 'deleted' }
+    // `skipped` is reported only when there is something to report, so the
+    // ordinary outcome stays the bare `{ status: 'deleted' }` every other caller
+    // already matches on.
+    return skipped.length > 0 ? { status: 'deleted', skipped } : { status: 'deleted' }
   } catch (err) {
     return { status: 'error', message: err instanceof Error ? err.message : String(err) }
   }
