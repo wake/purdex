@@ -11,6 +11,12 @@ interface StorageTreeProps {
   /** Select a row; `additive` (modifier held) toggles into a multi-selection. */
   onSelect: (path: string, additive: boolean) => void
   onOpen: (path: string) => void
+  /** Rename a specific row's entry; the rect anchors the rename popover (T4.1). */
+  onRename: (path: string, anchorRect: DOMRect | null) => void
+  /** Delete a specific row's entry, independent of the selection (T4.1). */
+  onDelete: (path: string) => void
+  /** Toggle a row in the multi-selection via its checkbox (T4.3). */
+  onToggleSelect: (path: string) => void
 }
 
 /**
@@ -27,6 +33,9 @@ export function StorageTree({
   onToggle,
   onSelect,
   onOpen,
+  onRename,
+  onDelete,
+  onToggleSelect,
 }: StorageTreeProps) {
   const renderNodes = (nodes: TreeNode[], depth: number) =>
     nodes.map((node) => {
@@ -41,6 +50,9 @@ export function StorageTree({
             onToggle={onToggle}
             onSelect={onSelect}
             onOpen={onOpen}
+            onRename={onRename}
+            onDelete={onDelete}
+            onToggleSelect={onToggleSelect}
           />
           {isExpanded && node.children && node.children.length > 0
             ? renderNodes(node.children, depth + 1)

@@ -16,6 +16,7 @@ import { triggerDownload } from '../../../lib/download-file'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+import { makeEditorBuffer, makeEditorPaneState } from '../../../stores/__tests__/editor-buffer-fixture'
 import type { RecentFileEntry } from '../../../stores/useRecentFilesStore'
 import type { Tab } from '../../../types/tab'
 import type { FileSource } from '../../../types/fs'
@@ -87,7 +88,7 @@ describe('createStorageFolder — mkdirUnique delegation (T1b-3)', () => {
 })
 
 // --- T1b-4: in-place rename (file + folder) via a SINGLE backend.rename +
-// pure remapPanesUnder -------------------------------------------------------
+// pure applyPathMutation -------------------------------------------------------
 //
 // These cases exercise the REAL InAppBackend (fake-indexeddb) + the REAL tab /
 // editor stores, so we verify the full path: one backend re-key (recursive for
@@ -138,35 +139,15 @@ function makePreviewTab(
 function seedBuffer(filePath: string, paneId: string, languageSource: 'extension' | 'manual' = 'extension', language = 'markdown') {
   useEditorStore.setState({
     buffers: {
-      [`inapp:${filePath}`]: {
-        content: 'X',
-        savedContent: 'X',
-        isDirty: false,
-        lastStat: null,
-        modelId: 'm1',
-        language,
-        languageSource,
-        eol: 'lf',
-        encoding: 'utf8',
-        sourceEol: 'lf',
-        sourceTrailingNewline: false,
-        sourceLeadingBlankLines: 0,
-      },
+      [`inapp:${filePath}`]: makeEditorBuffer({ language, languageSource }),
     },
     paneStates: {
-      [paneId]: {
-        bufferKey: `inapp:${filePath}`,
-        editorMode: 'raw',
-        showDiff: false,
-        cursorPosition: { line: 1, column: 1 },
-        monacoViewState: null,
-        tiptapViewState: null,
-      },
+      [paneId]: makeEditorPaneState(`inapp:${filePath}`),
     },
   })
 }
 
-describe('renameStorageEntry — file + folder via one backend.rename + pure remapPanesUnder (T1b-4)', () => {
+describe('renameStorageEntry — file + folder via one backend.rename + pure applyPathMutation (T1b-4)', () => {
   let real: InAppBackend
   const enc = (s: string) => new TextEncoder().encode(s)
   const dec = (b: Uint8Array) => new TextDecoder().decode(b)
@@ -406,13 +387,163 @@ describe('deleteStorageEntries — recursive folder delete + descendant-aware gu
   })
 })
 
+// --- Clean Empty hardening: `requireEmpty` + `preconfirmed` -------------------
+//
+// The Clean Empty candidate list is a SNAPSHOT of the tree taken when the dialog
+// opened. While the dialog is up the user can go to another pane and write real
+// content into one of those paths, and the old delete path would have deleted it
+// anyway (it only ever stat'd for `isDirectory`). `requireEmpty` re-reads every
+// target's CURRENT size immediately before the delete and skips anything that is
+// no longer a 0 B file.
+//
+// `preconfirmed` is the other half: the caller already showed a dialog naming
+// every path, so the generic `window.confirm` here would be a second, strictly
+// less informative prompt. It skips ONLY that prompt — the locked-tab refusal
+// and the dirty-buffer confirm are the last line of defence against losing
+// unsaved edits and always run.
+
+describe('deleteStorageEntries — requireEmpty / preconfirmed (Clean Empty hardening)', () => {
+  let real: InAppBackend
+  const enc = (s: string) => new TextEncoder().encode(s)
+  const t: (key: string, params?: Record<string, string | number>) => string = (k) => k
+  const originalConfirm = window.confirm
+
+  beforeEach(async () => {
+    await closeAllIDB()
+    await deleteInappDB()
+    real = new InAppBackend()
+    backend = real
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useEditorStore.setState({ buffers: {}, paneStates: {} })
+    window.confirm = () => true
+  })
+
+  afterEach(() => {
+    window.confirm = originalConfirm
+  })
+
+  it('requireEmpty: a target that gained content since the scan is SKIPPED, the rest still go', async () => {
+    await real.write('/buffer/still-empty.md', enc(''))
+    await real.write('/buffer/also-empty.md', enc(''))
+    // The candidate the user filled in while the dialog was up.
+    await real.write('/buffer/now-has-content.md', enc('the user typed this'))
+
+    const res = await deleteStorageEntries(
+      ['/buffer/still-empty.md', '/buffer/now-has-content.md', '/buffer/also-empty.md'],
+      t,
+      { requireEmpty: true, preconfirmed: true },
+    )
+
+    // The file with content survives, byte-for-byte — asserted FIRST, because
+    // that is the loss this whole option exists to prevent.
+    expect(new TextDecoder().decode(await real.read('/buffer/now-has-content.md'))).toBe(
+      'the user typed this',
+    )
+    expect(res).toEqual({ status: 'deleted', skipped: ['/buffer/now-has-content.md'] })
+    await expect(real.stat('/buffer/still-empty.md')).rejects.toThrow()
+    await expect(real.stat('/buffer/also-empty.md')).rejects.toThrow()
+  })
+
+  it('requireEmpty: a target that vanished is skipped, not deleted blindly', async () => {
+    await real.write('/buffer/still-empty.md', enc(''))
+
+    const res = await deleteStorageEntries(
+      ['/buffer/still-empty.md', '/buffer/gone.md'],
+      t,
+      { requireEmpty: true, preconfirmed: true },
+    )
+
+    expect(res).toEqual({ status: 'deleted', skipped: ['/buffer/gone.md'] })
+  })
+
+  it('requireEmpty: every target skipped → nothing deleted, no panes touched', async () => {
+    await real.write('/buffer/full.md', enc('AA'))
+    useTabStore.setState({
+      tabs: { T1: makeEditorTab('T1', 'P1', '/buffer/full.md') },
+      tabOrder: ['T1'],
+      activeTabId: 'T1',
+      visitHistory: [],
+    })
+    seedBuffer('/buffer/full.md', 'P1')
+
+    const res = await deleteStorageEntries(['/buffer/full.md'], t, {
+      requireEmpty: true,
+      preconfirmed: true,
+    })
+
+    expect(res).toEqual({ status: 'deleted', skipped: ['/buffer/full.md'] })
+    expect(new TextDecoder().decode(await real.read('/buffer/full.md'))).toBe('AA')
+    // The pane on the skipped path stays open — we did not delete its file.
+    expect(useTabStore.getState().tabs.T1).toBeDefined()
+  })
+
+  it('preconfirmed: the generic window.confirm is not raised at all', async () => {
+    await real.write('/buffer/a.md', enc(''))
+    await real.write('/buffer/b.md', enc(''))
+    const confirmSpy = vi.fn(() => true)
+    window.confirm = confirmSpy
+
+    const res = await deleteStorageEntries(['/buffer/a.md', '/buffer/b.md'], t, {
+      requireEmpty: true,
+      preconfirmed: true,
+    })
+
+    expect(res.status).toBe('deleted')
+    expect(confirmSpy).not.toHaveBeenCalled()
+  })
+
+  it('preconfirmed still refuses when an affected pane sits in a LOCKED tab', async () => {
+    await real.write('/buffer/a.md', enc(''))
+    useTabStore.setState({
+      tabs: { T1: { ...makeEditorTab('T1', 'P1', '/buffer/a.md'), locked: true } },
+      tabOrder: ['T1'],
+      activeTabId: 'T1',
+      visitHistory: [],
+    })
+
+    const res = await deleteStorageEntries(['/buffer/a.md'], t, {
+      requireEmpty: true,
+      preconfirmed: true,
+    })
+
+    expect(res.status).toBe('refused')
+    expect((await real.stat('/buffer/a.md')).isDirectory).toBe(false)
+  })
+
+  it('preconfirmed still raises the DIRTY confirm — cancelling deletes nothing', async () => {
+    await real.write('/buffer/a.md', enc(''))
+    useTabStore.setState({
+      tabs: { T1: makeEditorTab('T1', 'P1', '/buffer/a.md') },
+      tabOrder: ['T1'],
+      activeTabId: 'T1',
+      visitHistory: [],
+    })
+    seedBuffer('/buffer/a.md', 'P1')
+    useEditorStore.setState((s) => ({
+      buffers: { ...s.buffers, 'inapp:/buffer/a.md': { ...s.buffers['inapp:/buffer/a.md'], isDirty: true } },
+    }))
+    const cancelSpy = vi.fn((_message?: string) => false)
+    window.confirm = cancelSpy
+
+    const res = await deleteStorageEntries(['/buffer/a.md'], t, {
+      requireEmpty: true,
+      preconfirmed: true,
+    })
+
+    expect(res).toEqual({ status: 'cancelled' })
+    expect(cancelSpy).toHaveBeenCalledTimes(1)
+    expect(cancelSpy.mock.calls[0][0]).toContain('delete_dirty_confirm')
+    expect((await real.stat('/buffer/a.md')).isDirectory).toBe(false)
+  })
+})
+
 // --- T1b-6a: pure recursive move (drag target = a directory) via a SINGLE
-// backend.rename + pure remapPanesUnder --------------------------------------
+// backend.rename + pure applyPathMutation --------------------------------------
 //
 // Same real-backend + real-store harness as rename: `moveStorageEntry(from,
 // targetDir)` computes `to = targetDir/basename(from)` and re-uses the exact
 // rename machinery — one recursive backend.rename (T1b-1) + the pure
-// remapPanesUnder re-point (T1b-4). The no-op guards (already-there / into self
+// applyPathMutation re-point (T1b-4). The no-op guards (already-there / into self
 // / into own descendant) and the pre-mutation collision check must fire WITHOUT
 // any backend.rename, asserted with a spy.
 
@@ -1023,7 +1154,7 @@ describe('storage-actions — recent files follow rename / move / delete (T3.2)'
     expect(useRecentFilesStore.getState().files[1]).toEqual(remote)
   })
 
-  it('T3.2-2: a folder MOVE remaps every recent descendant (same remapPanesUnder call site)', async () => {
+  it('T3.2-2: a folder MOVE remaps every recent descendant (same applyPathMutation call site)', async () => {
     await real.write('/buffer/a/b.md', enc('BB'))
     await real.write('/buffer/a/c/d.md', enc('DD'))
     await real.mkdir('/buffer/dest')

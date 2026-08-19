@@ -8,27 +8,35 @@ import {
   useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { DownloadSimple, FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen, UploadSimple } from '@phosphor-icons/react'
+import { Broom, DownloadSimple, FilePlus, FolderPlus, PencilSimple, Stack, Trash, FolderOpen, UploadSimple } from '@phosphor-icons/react'
 import type { PaneRendererProps } from '../../../lib/module-registry'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
+import { useUndoToast } from '../../../stores/useUndoToast'
 import { useWorkspaceStore } from '../../../features/workspace/store'
 import { useStorageTree } from '../../../hooks/useStorageTree'
 import { findPane } from '../../../lib/pane-tree'
 import { openInAppFile } from '../../../lib/open-in-app-file'
+import { isPathUnder } from '../../../lib/path-remap'
 import { STORAGE_ROOT, basename, join, parentOf } from '../../../lib/storage-paths'
 import { findNode, targetDirOf } from '../../../lib/storage-tree'
+import type { TreeNode } from '../../../lib/storage-tree'
 import { RenamePopover } from '../../RenamePopover'
 import { BackupStatusSidebar } from './BackupStatusSidebar'
+import { DeleteConfirmDialog } from './DeleteConfirmDialog'
 import { StorageTree } from './StorageTree'
 import {
   createStorageFile,
   createStorageFolder,
   deleteStorageEntries,
   downloadStorageFile,
+  findEmptyFiles,
   moveStorageEntry,
+  pruneMissingPaths,
   renameStorageEntry,
   uploadFiles,
+  type DeleteOutcome,
+  type DeleteStorageOptions,
 } from './storage-actions'
 import { computeMoveFromDragEnd } from './storage-dnd'
 
@@ -105,7 +113,10 @@ function StorageRegionDropZone({
  *
  * Open routes through `openInAppFile` (registry-resolved kind: md→editor,
  * png→image-preview, pdf→pdf-preview; open-or-focus, no cross-tab hijack).
- * Rename/delete operate on the selected node's FULL path.
+ * Rename/delete operate on the selected node's FULL path; each row also carries
+ * its own Open/Rename/Delete cluster (T4.1) that targets that row regardless of
+ * the selection, routed through the same `renameStorageEntry` /
+ * `deleteStorageEntries` actions and the same rename popover.
  */
 export function StoragePane({ pane }: PaneRendererProps) {
   const t = useI18nStore((s) => s.t)
@@ -118,6 +129,13 @@ export function StoragePane({ pane }: PaneRendererProps) {
   // recoverable warning, not a hard failure (T1c-4).
   const [actionWarning, setActionWarning] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // The delete waiting on its path-listing confirmation (`null` = no dialog).
+  // Both multi-entry deletes go through it: the Clean Empty sweep (T4.2) and the
+  // batch delete of the selection. `dropped` counts the paths that were pruned
+  // out because they no longer exist, so the dialog can say the list shrank.
+  const [pendingDelete, setPendingDelete] = useState<
+    { kind: 'clean-empty' | 'selection'; paths: string[]; dropped: number } | null
+  >(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [renameError, setRenameError] = useState<string | null>(null)
   const [renameAnchorRect, setRenameAnchorRect] = useState<DOMRect | null>(null)
@@ -156,6 +174,52 @@ export function StoragePane({ pane }: PaneRendererProps) {
       return next
     })
   }, [])
+
+  // --- Visible batch selection (T4.3) ---
+  //
+  // The checkbox column, the header select-all and the action bar are pure UI
+  // over the SAME `selected` set the modifier-click path already wrote to — no
+  // second selection model, so the two gestures compose.
+
+  /** Every row currently rendered: top level plus the children of expanded dirs. */
+  const visiblePaths = useMemo(() => {
+    const out: string[] = []
+    const walk = (nodes: TreeNode[]) => {
+      for (const node of nodes) {
+        out.push(node.path)
+        if (node.isDir && expanded.has(node.path) && node.children) walk(node.children)
+      }
+    }
+    walk(tree)
+    return out
+  }, [tree, expanded])
+
+  const allVisibleSelected = visiblePaths.length > 0 && visiblePaths.every((p) => selected.has(p))
+  const someVisibleSelected = visiblePaths.some((p) => selected.has(p))
+
+  // A row checkbox is exactly an additive select — same reducer, same set.
+  const handleToggleRowSelect = useCallback(
+    (path: string) => handleSelect(path, true),
+    [handleSelect],
+  )
+
+  const handleToggleSelectAll = useCallback(() => {
+    setSelected((prev) => {
+      const everySelected = visiblePaths.length > 0 && visiblePaths.every((p) => prev.has(p))
+      return everySelected ? new Set<string>() : new Set(visiblePaths)
+    })
+  }, [visiblePaths])
+
+  const handleClearSelection = useCallback(() => setSelected(new Set()), [])
+
+  // `indeterminate` is a DOM property with no JSX attribute, so it is written
+  // through a callback ref that re-runs whenever the derived state changes.
+  const selectAllRef = useCallback(
+    (el: HTMLInputElement | null) => {
+      if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected
+    },
+    [someVisibleSelected, allVisibleSelected],
+  )
 
   const handleOpen = useCallback(
     async (path: string) => {
@@ -240,20 +304,168 @@ export function StoragePane({ pane }: PaneRendererProps) {
     [t],
   )
 
+  /**
+   * The one delete path (T4.1): the toolbar hands it the whole selection, a row
+   * action hands it just that row. On success the deleted paths are dropped
+   * from the selection — for the toolbar that empties it, for a row action it
+   * leaves the rest of the selection alone (deleting a hovered row must not
+   * clear an unrelated selection).
+   *
+   * "Dropped" follows the DELETE's own reach, not string equality: removing a
+   * folder removes everything under it, so a selected descendant is gone too.
+   * Keeping it selected would leave the action bar counting a file that no
+   * longer exists and the next batch delete aiming at it. `isPathUnder` is the
+   * same subtree rule the delete scan and the placeholder registry use — the
+   * trailing slash is what keeps `/buffer/dirty.md` out of a `/buffer/dir`
+   * delete.
+   *
+   * Returns the outcome so a caller that needs to report on it (the empty-file
+   * cleanup below) can, without duplicating the delete call or the banner.
+   */
+  const deletePaths = useCallback(
+    async (paths: string[], options?: DeleteStorageOptions): Promise<DeleteOutcome | null> => {
+      if (paths.length === 0) return null
+      setBusy(true)
+      setActionError(null)
+      setActionWarning(null)
+      const res = await deleteStorageEntries(paths, t, options)
+      setBusy(false)
+      if (res.status === 'deleted') {
+        // Only what actually went is dropped from the selection: a path the
+        // `requireEmpty` re-check skipped is still on disk, still the user's, and
+        // must stay selected.
+        const gone = paths.filter((p) => !res.skipped?.includes(p))
+        setSelected((prev) => {
+          const next = new Set<string>()
+          for (const entry of prev) {
+            if (gone.some((p) => isPathUnder(entry, p))) continue
+            next.add(entry)
+          }
+          return next
+        })
+        refresh()
+      } else if (res.status === 'refused' || res.status === 'error') {
+        setActionError(res.message)
+      }
+      return res
+    },
+    [t, refresh],
+  )
+
+  // --- Batch delete of the selection ---
+  //
+  // `selected` holds path STRINGS captured when the user clicked; it does not
+  // follow the tree. So before asking anything we re-verify the set against the
+  // backend and drop what is gone, then confirm with a dialog that NAMES every
+  // surviving path — a bare "Delete 3 buffer(s)?" gave the user no way to notice
+  // that the set had moved on. What is listed is what gets deleted.
+  //
+  // The residual case this does NOT close is ABA: the same path re-created
+  // holding a different file. The IDB backend keys by path and exposes no file
+  // identity, so telling that apart needs a backend API change — out of scope
+  // here, and much narrowed by listing the paths.
   const handleDelete = useCallback(async () => {
     if (selectedArray.length === 0) return
     setBusy(true)
     setActionError(null)
     setActionWarning(null)
-    const res = await deleteStorageEntries(selectedArray, t)
+    const alive = await pruneMissingPaths(selectedArray)
     setBusy(false)
-    if (res.status === 'deleted') {
-      setSelected(new Set())
-      refresh()
-    } else if (res.status === 'refused' || res.status === 'error') {
-      setActionError(res.message)
+    // Re-read the tree either way: if the selection moved on, so has the tree.
+    refresh()
+    if (alive.length < selectedArray.length) setSelected(new Set(alive))
+    if (alive.length === 0) {
+      // Nothing left to delete is an OUTCOME, not a silent no-op — an empty
+      // confirmation dialog would be worse than no dialog at all.
+      useUndoToast.getState().show(t('editor.buffers.delete_all_gone'))
+      return
     }
-  }, [selectedArray, t, refresh])
+    setPendingDelete({
+      kind: 'selection',
+      paths: alive,
+      dropped: selectedArray.length - alive.length,
+    })
+  }, [selectedArray, refresh, t])
+
+  const handleSelectionDeleteConfirm = useCallback(async () => {
+    const paths = pendingDelete?.paths
+    setPendingDelete(null)
+    if (!paths || paths.length === 0) return
+    // `preconfirmed`: the dialog the user just answered named every path, so the
+    // generic confirm would be a second, weaker prompt. The locked-tab refusal
+    // and the dirty-buffer confirm still run — see `DeleteStorageOptions`.
+    await deletePaths(paths, { preconfirmed: true })
+  }, [pendingDelete, deletePaths])
+
+  // --- Manual empty-file cleanup (T4.2) ---
+  //
+  // Eager reservation (#854) writes a real 0 B file the instant "New File" is
+  // pressed, so every new tab that was never typed into leaves one behind. This
+  // is the broom: scan the ALREADY-LOADED tree (pure, no backend read), show
+  // exactly what would go, and delete the confirmed set through the same
+  // `deleteStorageEntries` everything else uses — guards included.
+  //
+  // Two things about that scan are load-bearing. It is a SNAPSHOT, and the
+  // dialog it feeds stays up for human time: `requireEmpty` re-stats every path
+  // at delete time so a candidate the user filled in meanwhile survives. And the
+  // dialog IS the confirmation, so `preconfirmed` drops the generic
+  // `window.confirm` that would otherwise ask a second, vaguer time — while the
+  // locked-tab refusal and the dirty-buffer warning still fire, because a 0 B
+  // file can be open with unsaved edits and that warning is the only thing
+  // standing between this housekeeping sweep and losing them.
+
+  const handleCleanEmpty = useCallback(() => {
+    const candidates = findEmptyFiles(tree)
+    if (candidates.length === 0) {
+      // Nothing to do is an OUTCOME, not a silent no-op — and an empty
+      // confirmation dialog would be worse than no dialog at all.
+      useUndoToast.getState().show(t('editor.buffers.clean_empty_none'))
+      return
+    }
+    setPendingDelete({ kind: 'clean-empty', paths: candidates, dropped: 0 })
+  }, [tree, t])
+
+  const handleCleanEmptyConfirm = useCallback(async () => {
+    const paths = pendingDelete?.paths
+    setPendingDelete(null)
+    if (!paths || paths.length === 0) return
+    // `preconfirmed`: the dialog the user just answered named every path, so the
+    // generic confirm would be a second, weaker prompt (the locked-tab refusal
+    // and the dirty-buffer confirm still run — see `DeleteStorageOptions`).
+    // `requireEmpty`: `paths` is a snapshot taken when the dialog opened; each
+    // one is re-stat'd and skipped unless it is STILL 0 B.
+    const res = await deletePaths(paths, { preconfirmed: true, requireEmpty: true })
+    if (res?.status === 'deleted') {
+      const skipped = res.skipped?.length ?? 0
+      if (skipped > 0) {
+        // Silently deleting fewer files than the dialog listed would leave the
+        // user unable to tell a skip from a failure.
+        useUndoToast.getState().show(
+          t('editor.buffers.clean_empty_partial', { deleted: paths.length - skipped, skipped }),
+        )
+      } else {
+        useUndoToast.getState().show(t('editor.buffers.clean_empty_done', { count: paths.length }))
+      }
+    } else if (res?.status === 'error') {
+      // `deleteStorageEntries` is NOT atomic — it deletes path by path with no
+      // transaction, so a mid-way failure leaves the earlier paths gone. The
+      // banner (already set by `deletePaths`) reports the failure; refreshing is
+      // what stops the tree from still listing what IS deleted.
+      refresh()
+    }
+  }, [pendingDelete, deletePaths, refresh, t])
+
+  // --- Row-scoped actions (T4.1) ---
+
+  // Rename from a row's own button: anchor the shared popover to THAT button's
+  // rect and target THAT path, whatever happens to be selected.
+  const handleRowRename = useCallback((path: string, anchorRect: DOMRect | null) => {
+    setRenameAnchorRect(anchorRect)
+    setRenameError(null)
+    setRenameTarget(path)
+  }, [])
+
+  const handleRowDelete = useCallback((path: string) => deletePaths([path]), [deletePaths])
 
   const handleOpenSelected = useCallback(() => {
     // Only files open (codex B3): a folder is not openable, so guard here as
@@ -467,6 +679,16 @@ export function StoragePane({ pane }: PaneRendererProps) {
           {t('editor.buffers.delete')}
         </button>
         <button
+          data-testid="toolbar-clean-empty"
+          onClick={handleCleanEmpty}
+          disabled={toolbarBusy}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          title={t('editor.buffers.clean_empty')}
+        >
+          <Broom size={14} />
+          {t('editor.buffers.clean_empty')}
+        </button>
+        <button
           data-testid="toolbar-open"
           onClick={handleOpenSelected}
           disabled={!canOpen || toolbarBusy}
@@ -493,11 +715,64 @@ export function StoragePane({ pane }: PaneRendererProps) {
           drop targets, and a drop calls `moveStorageEntry` via `handleDragEnd`. */}
       <div className="flex-1 flex overflow-hidden">
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Selection action bar (T4.3) — only while something is selected. It
+              sits OUTSIDE the scrollable region so a long tree never scrolls the
+              batch actions away. */}
+          {selected.size > 0 && (
+            <div
+              data-testid="selection-action-bar"
+              className="flex items-center gap-2 px-3 py-1.5 border-b border-border-subtle bg-surface-secondary"
+            >
+              <span data-testid="selection-count" className="text-xs text-text-primary">
+                {t('editor.buffers.selected_count', { count: selected.size })}
+              </span>
+              <div className="flex-1" />
+              <button
+                data-testid="selection-delete"
+                onClick={handleDelete}
+                disabled={toolbarBusy}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover hover:text-status-error disabled:opacity-50"
+                title={t('editor.buffers.delete')}
+              >
+                <Trash size={14} />
+                {t('editor.buffers.delete')}
+              </button>
+              <button
+                data-testid="selection-clear"
+                onClick={handleClearSelection}
+                className="px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-hover"
+                title={t('editor.buffers.clear_selection')}
+              >
+                {t('editor.buffers.clear_selection')}
+              </button>
+            </div>
+          )}
           <StorageRegionDropZone
             targetDir={targetDir}
             onNativeDragOver={handleNativeDragOver}
             onNativeDrop={handleNativeDrop}
           >
+            {/* Select-all header (T4.3): checked when every VISIBLE row is
+                selected, indeterminate on a partial selection. Sticky so it
+                survives scrolling the tree. */}
+            {!error && hasAny && (
+              <div
+                data-testid="storage-list-header"
+                className="sticky top-0 z-10 flex items-center gap-1.5 pl-2 pr-3 py-1 bg-surface-primary border-b border-border-subtle"
+              >
+                <input
+                  type="checkbox"
+                  data-testid="select-all-checkbox"
+                  ref={selectAllRef}
+                  checked={allVisibleSelected}
+                  onChange={handleToggleSelectAll}
+                  aria-label={t('editor.buffers.select_all')}
+                  className="shrink-0 accent-accent cursor-pointer"
+                />
+                <span className="text-xs text-text-muted">{t('editor.buffers.select_all')}</span>
+              </div>
+            )}
             {error && <div className="p-4 text-xs text-red-400">{error}</div>}
             {!error && actionWarning && (
               <div data-testid="storage-warning" className="p-4 text-xs text-amber-400">
@@ -518,12 +793,51 @@ export function StoragePane({ pane }: PaneRendererProps) {
                 onToggle={toggle}
                 onSelect={handleSelect}
                 onOpen={handleOpen}
+                onRename={handleRowRename}
+                onDelete={handleRowDelete}
+                onToggleSelect={handleToggleRowSelect}
               />
             )}
           </StorageRegionDropZone>
+          </div>
         </DndContext>
         <BackupStatusSidebar />
       </div>
+
+      {/* The one delete confirmation, for both multi-entry deletes. The full
+          path list is shown BEFORE anything is deleted: Clean Empty removes
+          files the user never explicitly selected, and a batch delete acts on a
+          set of paths the tree may have moved on from. */}
+      {pendingDelete && (
+        <DeleteConfirmDialog
+          testIdPrefix={pendingDelete.kind === 'clean-empty' ? 'empty-cleanup' : 'delete-selection'}
+          title={t(
+            pendingDelete.kind === 'clean-empty'
+              ? 'editor.buffers.clean_empty'
+              : 'editor.buffers.delete',
+          )}
+          message={t(
+            pendingDelete.kind === 'clean-empty'
+              ? 'editor.buffers.clean_empty_confirm'
+              : 'editor.buffers.confirm_delete',
+            { count: pendingDelete.paths.length },
+          )}
+          note={
+            pendingDelete.dropped > 0
+              ? t('editor.buffers.delete_pruned_note', { count: pendingDelete.dropped })
+              : undefined
+          }
+          paths={pendingDelete.paths}
+          confirmLabel={t('editor.buffers.delete')}
+          cancelLabel={t('common.cancel')}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={
+            pendingDelete.kind === 'clean-empty'
+              ? handleCleanEmptyConfirm
+              : handleSelectionDeleteConfirm
+          }
+        />
+      )}
 
       {renameTarget && (
         <RenamePopover

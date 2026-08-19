@@ -6,6 +6,7 @@ import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { usePlaceholderFilesStore } from '../../stores/usePlaceholderFilesStore'
 import { openInAppFile } from '../../lib/open-in-app-file'
 import { MonacoWrapper } from './MonacoWrapper'
 import { DiffView } from './DiffView'
@@ -17,6 +18,7 @@ import { bufferKey } from '../../lib/editor-buffer-key'
 import { STORAGE_ROOT } from '../../lib/storage-paths'
 import { createUniqueInAppFile } from '../../lib/inapp-namer'
 import { getFsBackend } from '../../lib/fs-backend'
+import { closePaneAndSweepPlaceholder } from '../../lib/placeholder-sweep'
 import { displayName, isInvalidRename, isUntitledPath } from './editor-pane-naming'
 import { useRenamePopoverState } from './hooks/useRenamePopoverState'
 import { useEditorPaneLoadState } from './hooks/useEditorPaneLoadState'
@@ -160,6 +162,11 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
   }, [editorMode, isMarkdown, paneId])
 
   // Cleanup pane state only when the pane is truly gone, not just hidden by tab switching.
+  //
+  // T5.2: the detach goes through `closePaneAndSweepPlaceholder`, which closes
+  // first and only then asks whether an untouched placeholder just lost its last
+  // reference. This unmount fires for pane moves and content swaps too, so the
+  // sweep must never key off the unmount itself — see the helper's note.
   useEffect(() => {
     return () => {
       const currentPane = Object.values(useTabStore.getState().tabs)
@@ -169,9 +176,10 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         currentPane.content.filePath === filePath &&
         sourceIdentity(currentPane.content.source) === sourceId
       if (!stillSameEditor) {
-        useEditorStore.getState().closePane(paneId, key)
+        closePaneAndSweepPlaceholder(paneId, key, source, filePath)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `source` is deliberately NOT a dep: `sourceIdentity` encodes it whole (type + hostId), so `sourceId` already covers every meaningful change, while a new-but-equal source object must not re-run this cleanup (that would close the pane and destroy an unsaved buffer on a plain re-render).
   }, [filePath, key, paneId, sourceId])
 
   // Detect external file changes when tab becomes active
@@ -190,6 +198,27 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         const currentBuf = useEditorStore.getState().buffers[key]
         if (!currentBuf?.lastStat) return
         if (stat.mtime === currentBuf.lastStat.mtime && stat.size === currentBuf.lastStat.size) return
+
+        // T5.1: past the mtime/size comparison, someone else has WRITTEN this
+        // file since we last touched it. That is the fact that ends the
+        // placeholder's life: the empty shell we minted is no longer ours alone,
+        // and with it goes our licence to delete the path unasked (T5.2).
+        //
+        // It is deliberately decided on the stat, not on the bytes. Comparing
+        // the reloaded text against `savedContent` misses the case that matters
+        // most for a 0 B reservation — an external writer leaving it empty (or
+        // writing back exactly what we saved) is still someone else touching the
+        // user's file, and the sweep's own "is it still 0 B" re-check would wave
+        // that straight through. It is also independent of our buffer's dirty
+        // state: the dirty branch below refuses to clobber the user's edits, but
+        // closing without saving would otherwise still hand the sweep an
+        // authorization over the externally written bytes.
+        //
+        // The unchanged case never gets here — the comparison above returns
+        // first — which is what keeps an untouched placeholder registered across
+        // every tab activation. `unregister` no-ops for non-in-app sources, so
+        // remote and local files are unaffected.
+        usePlaceholderFilesStore.getState().unregister(source, filePath)
 
         return backend.read(filePath).then((data) => {
           const text = new TextDecoder().decode(data)
@@ -285,6 +314,9 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
           } catch {
             return
           }
+          // T5.1: record the reservation as an untouched placeholder (in-app
+          // only — this affordance always reserves in the In-App store).
+          usePlaceholderFilesStore.getState().register({ type: 'inapp' }, path)
           const tabId = findTabIdForPane(paneId)
           if (!tabId) return
           useTabStore.getState().setPaneContent(tabId, paneId, {

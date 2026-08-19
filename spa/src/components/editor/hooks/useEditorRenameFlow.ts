@@ -8,6 +8,7 @@ import { useCallback } from 'react'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+import { usePlaceholderFilesStore } from '../../../stores/usePlaceholderFilesStore'
 import { getFsBackend } from '../../../lib/fs-backend'
 import { bufferKey } from '../../../lib/editor-buffer-key'
 import { createMetadata } from '../../../lib/editor-language'
@@ -110,10 +111,16 @@ export function useEditorRenameFlow({
         : createMetadata(source, nextPath)
       useEditorStore.getState().renameBuffer(key, nextKey, nextMetadata)
       // T3.2: the in-editor rename is the third path-mutating call site (the
-      // other two go through `remapPanesUnder`), and the ONLY one a remote file
+      // other two go through `applyPathMutation`), and the ONLY one a remote file
       // can take — `source` carries the daemon host, so the remap stays scoped
       // to that host's entries.
       useRecentFilesStore.getState().renamePath(source, filePath, nextPath)
+      // T5.1: a rename ends the placeholder life permanently — and this is the
+      // likeliest rename of one (reserve a new file from the editor, then name
+      // it). Dropping BOTH ends keeps a stale entry from lingering at the old
+      // path, where a later file of the same name would inherit it.
+      usePlaceholderFilesStore.getState().unregister(source, filePath)
+      usePlaceholderFilesStore.getState().unregister(source, nextPath)
       popover.close()
     } catch (error) {
       popover.setWarning(renameWarningMessage(error))

@@ -12,9 +12,9 @@
  * Phase 1b: new-file now goes through the unified eager `createUniqueInAppFile`
  * namer (atomic IDB reservation, #854) and accepts a `targetDir`. Folder mkdir
  * (`createStorageFolder`) and in-place rename of files AND folders
- * (`renameStorageEntry` + the pure `remapPanesUnder` re-point) have landed.
+ * (`renameStorageEntry` + the pure `applyPathMutation` re-point) have landed.
  * The recursive move data layer (`moveStorageEntry`, T1b-6a) reuses that same
- * single-rename + `remapPanesUnder` path; the drag-and-drop wiring is T1b-6b.
+ * single-rename + `applyPathMutation` path; the drag-and-drop wiring is T1b-6b.
  */
 import { getFsBackend, supportsCreateUnique, supportsMkdirUnique } from '../../../lib/fs-backend'
 import { createUniqueInAppFile } from '../../../lib/inapp-namer'
@@ -26,67 +26,55 @@ import { isFilePaneContent } from '../../../lib/pane-utils'
 import { useEditorStore } from '../../../stores/useEditorStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useRecentFilesStore } from '../../../stores/useRecentFilesStore'
+import { usePlaceholderFilesStore } from '../../../stores/usePlaceholderFilesStore'
 import { createMetadata } from '../../../lib/editor-language'
 import { STORAGE_ROOT, basename, join, parentOf, isUnderRoot } from '../../../lib/storage-paths'
+import { isPathAffectedBy, isPathUnder, remapPathUnder } from '../../../lib/path-remap'
+import type { TreeNode } from '../../../lib/storage-tree'
 import type { FileSource } from '../../../types/fs'
 import type { Pane, Tab } from '../../../types/tab'
 
 export type Translate = (key: string, params?: Record<string, string | number>) => string
 
 /**
- * remapPanesUnder — pane + buffer + recent-list re-point for a rename/move that
- * has ALREADY happened at the backend layer. It performs NO backend mutation: the
- * single `backend.rename` lives in the caller (`renameStorageEntry`, and the
- * future `moveStorageEntry`) and runs exactly once BEFORE this helper, so file
- * and folder share one code path and there is no double-rename.
+ * Every open file pane — editor + image-preview + pdf-preview — whose
+ * `content.filePath` is `from` itself OR a `from/`-prefixed descendant (the
+ * trailing slash stops `/buffer/a` from matching `/buffer/ab`, decision 6).
  *
- * It enumerates every open file pane — editor + image-preview + pdf-preview —
- * whose `content.filePath` is `from` itself OR a `from/`-prefixed descendant
- * (the trailing slash stops `/buffer/a` from matching `/buffer/ab`, decision 6),
- * then for each affected path:
- *   - re-points the tab layout via `renameEditorPanes(source, oldPath, newPath)`
- *     (which already rewrites all three file-pane kinds), and
- *   - for editor panes only, re-keys the editor-store buffer via
- *     `renameBuffer(oldKey, newKey, metadata)`. The metadata mirrors the old
- *     single-path `performBufferRename` / `EditorPane.handleRenameSubmit`:
- *     preserve a manual language override, otherwise recompute from the new
- *     path so crossing extensions refreshes the language.
+ * Keyed by path, valued by "some pane on this path is an editor" — an editor
+ * pane needs an editor-store buffer re-key on top of the layout re-point, the
+ * preview kinds do not. A single-file rename yields one entry (`from` itself); a
+ * folder rename yields every open descendant.
  *
- * A single-file rename is the one-iteration case (`from === filePath`, so
- * `newPath = to`); a folder rename iterates every open descendant.
- *
- * T3.2: it also re-points the Recent list through `renamePath`, which applies the
- * same identity + prefix rules over the persisted entries. That call is
- * UNCONDITIONAL and sits outside the open-pane loop on purpose — a recent entry
- * usually belongs to a file that is NOT open, and it used to be left dangling at
- * the old path. Living here means Storage rename AND move, file and folder, are
- * all covered by this one call site.
+ * Pure read of the tab store, so both consumers below can call it independently
+ * and still see the SAME pre-mutation pane tree — provided the layout re-point
+ * (which rewrites the very `filePath`s this keys on) runs last.
  */
-export function remapPanesUnder(source: FileSource, from: string, to: string): void {
-  useRecentFilesStore.getState().renamePath(source, from, to)
-
-  const fromPrefix = from + '/'
-  // Collect each affected open path once, tracking whether any pane on that path
-  // is an editor (→ it also needs an editor-store buffer re-key, not just a
-  // layout re-point).
+function collectAffectedPanePaths(source: FileSource, from: string): Map<string, boolean> {
   const affected = new Map<string, boolean>()
   const { tabs } = useTabStore.getState()
   for (const tab of Object.values(tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       if (!isFilePaneContent(c)) return
-      if (c.source.type !== source.type) return
-      if (c.source.type === 'daemon' && source.type === 'daemon' && c.source.hostId !== source.hostId) return
-      if (c.filePath === from || c.filePath.startsWith(fromPrefix)) {
-        affected.set(c.filePath, (affected.get(c.filePath) ?? false) || c.kind === 'editor')
-      }
+      if (!isPathAffectedBy({ source: c.source, path: c.filePath }, { source, from })) return
+      affected.set(c.filePath, (affected.get(c.filePath) ?? false) || c.kind === 'editor')
     })
   }
+  return affected
+}
 
-  for (const [oldPath, hasEditor] of affected) {
-    const newPath = to + oldPath.slice(from.length)
-    useTabStore.getState().renameEditorPanes(source, oldPath, newPath)
+/**
+ * Editor-store half: re-key the buffer behind every open EDITOR pane under
+ * `from`. The metadata mirrors the old single-path `performBufferRename` /
+ * `EditorPane.handleRenameSubmit` — preserve a manual language override,
+ * otherwise recompute from the new path so crossing extensions refreshes the
+ * language.
+ */
+function remapEditorBuffersUnder(source: FileSource, from: string, to: string): void {
+  for (const [oldPath, hasEditor] of collectAffectedPanePaths(source, from)) {
     if (!hasEditor) continue
+    const newPath = remapPathUnder(oldPath, from, to)
     const oldKey = bufferKey(source, oldPath)
     const newKey = bufferKey(source, newPath)
     const currentBuffer = useEditorStore.getState().buffers[oldKey]
@@ -95,6 +83,88 @@ export function remapPanesUnder(source: FileSource, from: string, to: string): v
       : createMetadata(source, newPath)
     useEditorStore.getState().renameBuffer(oldKey, newKey, nextMetadata)
   }
+}
+
+/**
+ * Tab-layout half: re-point every open file pane under `from` through
+ * `renameEditorPanes`, which already rewrites all three file-pane kinds.
+ */
+function remapTabPanesUnder(source: FileSource, from: string, to: string): void {
+  for (const oldPath of collectAffectedPanePaths(source, from).keys()) {
+    useTabStore.getState().renameEditorPanes(source, oldPath, remapPathUnder(oldPath, from, to))
+  }
+}
+
+/**
+ * Recent-list half (T3.2): `renamePath` applies the same identity + prefix rules
+ * over the persisted entries. Unconditional and independent of what is open — a
+ * recent entry usually belongs to a file that is NOT open, and it used to be
+ * left dangling at the old path.
+ */
+function remapRecentFilesUnder(source: FileSource, from: string, to: string): void {
+  useRecentFilesStore.getState().renamePath(source, from, to)
+}
+
+/**
+ * Placeholder-registry half (T5.1): a rename or move is one of the events that
+ * ends a file's placeholder life PERMANENTLY — it is the user's file now. Both
+ * ends are dropped: `from` (and its descendants, the subtree rule) because the
+ * entry must not linger at a path that no longer holds that file, and `to`
+ * because the entry must not be resurrected at the destination.
+ */
+function deregisterPlaceholdersUnder(source: FileSource, from: string, to: string): void {
+  usePlaceholderFilesStore.getState().unregister(source, from)
+  usePlaceholderFilesStore.getState().unregister(source, to)
+}
+
+/**
+ * applyPathMutation — everything that has to follow a path when `from` becomes
+ * `to`, for a rename/move that has ALREADY happened at the backend layer.
+ *
+ * It performs NO backend mutation: the single `backend.rename` lives in the
+ * caller (`renameStorageEntry` / `moveStorageEntry`) and runs exactly once
+ * BEFORE this, so file and folder share one code path and there is no
+ * double-rename. Being the single orchestrator is also what makes Storage
+ * rename AND move, file and folder, all covered by one call site per entity.
+ *
+ * Ordering: the entities live in disjoint stores, but `remapTabPanesUnder`
+ * rewrites the pane `filePath`s that `collectAffectedPanePaths` keys on — so it
+ * must come last, or the buffer pass would find nothing to re-key. That
+ * constraint is why the four steps are module-private and only this orchestrator
+ * is exported: an outside caller composing them in its own order would get a
+ * SILENT no-op (the buffer pass finding nothing), not an error.
+ */
+export function applyPathMutation(source: FileSource, from: string, to: string): void {
+  remapRecentFilesUnder(source, from, to)
+  deregisterPlaceholdersUnder(source, from, to)
+  remapEditorBuffersUnder(source, from, to)
+  remapTabPanesUnder(source, from, to)
+}
+
+/**
+ * findEmptyFiles — every 0 B FILE in an already-loaded tree, full paths, in
+ * depth-first order (T4.2). The candidate set for the manual empty-file
+ * cleanup: eager reservation (#854) mints a real empty file per "New File"
+ * press, so a tab opened and never typed into leaves one behind forever.
+ *
+ * Folders are never candidates (a `TreeNode` directory also carries `size: 0`,
+ * so the `isDir` test — not the size — is what excludes them), and neither is a
+ * file with any bytes. Pure: it reads the tree the pane already has and touches
+ * no backend.
+ */
+export function findEmptyFiles(tree: TreeNode[]): string[] {
+  const out: string[] = []
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      if (node.isDir) {
+        if (node.children) walk(node.children)
+        continue
+      }
+      if (node.size === 0) out.push(node.path)
+    }
+  }
+  walk(tree)
+  return out
 }
 
 /**
@@ -107,7 +177,11 @@ export function remapPanesUnder(source: FileSource, from: string, to: string): v
  */
 export async function createStorageFile(targetDir: string = STORAGE_ROOT): Promise<{ error?: string }> {
   try {
-    await createUniqueInAppFile(targetDir, 'md')
+    const path = await createUniqueInAppFile(targetDir, 'md')
+    // T5.1: this is one of the three eager reservations, so record that the file
+    // is ours and untouched. Only on success — a failed reservation created no
+    // file to remember.
+    usePlaceholderFilesStore.getState().register({ type: 'inapp' }, path)
     return {}
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
@@ -283,6 +357,12 @@ export async function uploadFile(targetDir: string, file: File): Promise<UploadR
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
     const path = await backend.createUnique(targetDir, baseName, ext, bytes)
+    // T5.1: an upload is a write of real bytes, so the destination can no longer
+    // be an untouched reservation. `createUnique` normally suffixes its way to a
+    // free name, but a placeholder deleted behind our back frees its name again
+    // and the upload may claim it — leaving a stale entry that authorizes the
+    // T5.2 sweep to delete the uploaded file on its first close.
+    usePlaceholderFilesStore.getState().unregister({ type: 'inapp' }, path)
     return { path }
   } catch (err) {
     // A full store throws a quota DOMException at write time; tag it `quota` so
@@ -348,7 +428,7 @@ export type RenameOutcome =
  * `stat` pre-check aborts before any backend mutation if the destination
  * already exists (F4). The lone backend mutation is a single
  * `backend.rename` (recursive re-key of folder descendants, T1b-1), followed
- * by the pure `remapPanesUnder` re-point — so a folder rename moves every
+ * by the pure `applyPathMutation` re-point — so a folder rename moves every
  * descendant and re-points every open descendant pane in one shot.
  */
 export async function renameStorageEntry(
@@ -374,7 +454,7 @@ export async function renameStorageEntry(
   try {
     // The ONLY backend mutation for rename — exactly once, file and folder alike.
     await backend.rename(fromPath, targetPath)
-    remapPanesUnder({ type: 'inapp' }, fromPath, targetPath)
+    applyPathMutation({ type: 'inapp' }, fromPath, targetPath)
     return { ok: true }
   } catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) }
@@ -392,7 +472,7 @@ export type MoveOutcome =
  * the data layer behind drag-and-drop (T1b-6a; the DnD wiring is T1b-6b). It
  * shares the exact rename machinery: the destination is `targetDir/basename`,
  * and a successful move is one recursive `backend.rename` (folder descendants
- * re-keyed by T1b-1) followed by the pure `remapPanesUnder` re-point (T1b-4) —
+ * re-keyed by T1b-1) followed by the pure `applyPathMutation` re-point (T1b-4) —
  * so a folder move re-points every open descendant pane in one shot.
  *
  * Three branches diverge BEFORE any mutation, so `backend.rename` fires exactly
@@ -404,7 +484,7 @@ export type MoveOutcome =
  *     last guard stops a folder being moved inside itself (decision 6).
  *   - **collision** (`{kind:'exists'}`) when `stat(to)` resolves — a same-named
  *     entry already lives in the target dir; refused before mutation (F4).
- *   - otherwise the single `backend.rename(from, to)` + `remapPanesUnder`.
+ *   - otherwise the single `backend.rename(from, to)` + `applyPathMutation`.
  */
 export async function moveStorageEntry(
   from: string,
@@ -439,7 +519,7 @@ export async function moveStorageEntry(
   try {
     // The ONLY backend mutation for move — exactly once, file and folder alike.
     await backend.rename(from, to)
-    remapPanesUnder({ type: 'inapp' }, from, to)
+    applyPathMutation({ type: 'inapp' }, from, to)
     return { ok: true }
   } catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) }
@@ -447,7 +527,12 @@ export async function moveStorageEntry(
 }
 
 export type DeleteOutcome =
-  | { status: 'deleted' }
+  /**
+   * `skipped` is present only when `requireEmpty` actually dropped something —
+   * the paths that were no longer 0 B files (or had vanished) at delete time and
+   * were therefore left alone. Everything else deleted normally.
+   */
+  | { status: 'deleted'; skipped?: string[] }
   | { status: 'cancelled' }
   | { status: 'refused'; message: string }
   | { status: 'error'; message: string }
@@ -461,7 +546,59 @@ export type DeleteOutcome =
  * sequence as an exact hit.
  */
 function isAffectedByTargets(filePath: string, targets: string[]): boolean {
-  return targets.some((target) => filePath === target || filePath.startsWith(target + '/'))
+  return targets.some((target) => isPathUnder(filePath, target))
+}
+
+/**
+ * The subset of `paths` that still exists, in the given order.
+ *
+ * A Storage selection is a set of path STRINGS captured when the user clicked;
+ * it does not follow the tree. By the time a batch delete is triggered some of
+ * them may be gone — deleted from another pane, another tab, another window.
+ * Confirming a delete against that stale set means the dialog names paths that
+ * cannot be deleted, and the delete loop then fails on the first missing one.
+ *
+ * This is a pre-flight `stat` per path, so the confirmation the user reads is
+ * the set that will actually be deleted. It cannot see through ABA — the IDB
+ * backend keys entries by path and exposes no file identity, so a path
+ * re-created with different content still stats as present. Listing the paths in
+ * the dialog is what covers the rest.
+ */
+export async function pruneMissingPaths(paths: string[]): Promise<string[]> {
+  const backend = getFsBackend({ type: 'inapp' })
+  if (!backend) return paths
+  const alive: string[] = []
+  for (const path of paths) {
+    const exists = await backend
+      .stat(path)
+      .then(() => true)
+      .catch(() => false)
+    if (exists) alive.push(path)
+  }
+  return alive
+}
+
+export interface DeleteStorageOptions {
+  /**
+   * The caller already confirmed the delete with a dialog that NAMES every path
+   * (the Clean Empty sweep, the batch delete). Skips **only** the generic
+   * `window.confirm` below, which at that point is a second prompt carrying
+   * strictly less information than the one the user just answered.
+   *
+   * It does NOT skip the locked-tab refusal or the dirty-buffer confirm: those
+   * are not "are you sure", they are the last thing standing between a delete
+   * and someone's unsaved edits, and no caller may waive them.
+   */
+  preconfirmed?: boolean
+  /**
+   * Delete a path only if it is STILL a 0 B file. The Clean Empty candidate list
+   * is a snapshot of the tree taken when its dialog opened, and the dialog is up
+   * for human time — long enough for the user to write real content into one of
+   * the listed paths from another pane. Anything that is no longer a 0 B file
+   * (or has vanished, or turned out to be a directory) is skipped and reported
+   * back in `skipped`, never deleted on the strength of the stale snapshot.
+   */
+  requireEmpty?: boolean
 }
 
 /**
@@ -474,10 +611,14 @@ function isAffectedByTargets(filePath: string, targets: string[]): boolean {
  *   - G2: close every affected pane AND drop its editor-store buffer + paneState
  *     BEFORE deleting the underlying file, so a post-delete write can't
  *     resurrect a stale background buffer.
+ *
+ * See `DeleteStorageOptions` for the two opt-ins a caller with its own
+ * path-listing confirmation dialog needs.
  */
 export async function deleteStorageEntries(
   targets: string[],
   t: Translate,
+  options: DeleteStorageOptions = {},
 ): Promise<DeleteOutcome> {
   if (targets.length === 0) return { status: 'cancelled' }
   const backend = getFsBackend({ type: 'inapp' })
@@ -494,6 +635,27 @@ export async function deleteStorageEntries(
     (t) => !targets.some((o) => o !== t && t.startsWith(o + '/')),
   )
 
+  // `requireEmpty` re-reads the CURRENT size of every target and keeps only the
+  // ones that are still 0 B files. It runs here — before the pane scan — for two
+  // reasons: a path we are not going to delete must not have its pane closed,
+  // and it must not drag the whole sweep into a locked-tab refusal it has no
+  // business triggering. A stat failure counts as "cannot confirm" and therefore
+  // skips: never delete on the strength of a snapshot we could not re-verify.
+  const skipped: string[] = []
+  let deletable = normalized
+  if (options.requireEmpty) {
+    const kept: string[] = []
+    for (const path of normalized) {
+      const stat = await backend.stat(path).catch(() => null)
+      if (stat && !stat.isDirectory && stat.size === 0) kept.push(path)
+      else skipped.push(path)
+    }
+    deletable = kept
+    // Nothing survived the re-check: report the skips without touching a pane,
+    // a guard or the backend.
+    if (deletable.length === 0) return { status: 'deleted', skipped }
+  }
+
   const { tabs } = useTabStore.getState()
   const openPanes: Array<[string, Pane]> = []
   for (const [tabId, tab] of Object.entries(tabs) as Array<[string, Tab]>) {
@@ -503,7 +665,7 @@ export async function deleteStorageEntries(
       // so deleting a png/pdf open in a preview pane — or anything nested under
       // a deleted folder — fires the locked-tab refusal, closes the pane, and
       // leaves no stale tab behind.
-      if (isFilePaneContent(c) && c.source.type === 'inapp' && isAffectedByTargets(c.filePath, normalized)) {
+      if (isFilePaneContent(c) && c.source.type === 'inapp' && isAffectedByTargets(c.filePath, deletable)) {
         openPanes.push([tabId, pane])
       }
     })
@@ -524,15 +686,16 @@ export async function deleteStorageEntries(
   })
 
   if (dirtyHits.length > 0) {
+    // Never waived, `preconfirmed` or not: a caller's dialog can list paths, it
+    // cannot know that one of them holds unsaved edits.
     if (!window.confirm(t('editor.buffers.delete_dirty_confirm', { count: dirtyHits.length }))) {
       return { status: 'cancelled' }
     }
-  } else if (normalized.length === 1) {
-    if (!window.confirm(t('editor.buffers.delete_one_confirm'))) {
-      return { status: 'cancelled' }
-    }
-  } else {
-    if (!window.confirm(t('editor.buffers.confirm_delete', { count: normalized.length }))) {
+  } else if (!options.preconfirmed) {
+    const message = deletable.length === 1
+      ? t('editor.buffers.delete_one_confirm')
+      : t('editor.buffers.confirm_delete', { count: deletable.length })
+    if (!window.confirm(message)) {
       return { status: 'cancelled' }
     }
   }
@@ -546,11 +709,11 @@ export async function deleteStorageEntries(
         useEditorStore.getState().closePane(pane.id, key)
       }
     }
-    // Step 2: delete each NORMALIZED target. Folders go through the recursive
+    // Step 2: delete each surviving target. Folders go through the recursive
     // sweep (prefix-delete of every descendant); files use the plain
     // non-recursive delete. A stat failure (e.g. the entry vanished under a
     // concurrent op) is treated as a non-folder and still attempted.
-    for (const path of normalized) {
+    for (const path of deletable) {
       const isDir = await backend
         .stat(path)
         .then((s) => s.isDirectory)
@@ -560,8 +723,14 @@ export async function deleteStorageEntries(
       // store applies the same prefix rule) from Recent. Placed AFTER the delete
       // so a mid-loop failure never evicts an entry whose file is still there.
       useRecentFilesStore.getState().removePath({ type: 'inapp' }, path)
+      // T5.1: an explicit delete drops the placeholder entry with the file (same
+      // subtree rule, so a folder target sweeps the placeholders inside it).
+      usePlaceholderFilesStore.getState().unregister({ type: 'inapp' }, path)
     }
-    return { status: 'deleted' }
+    // `skipped` is reported only when there is something to report, so the
+    // ordinary outcome stays the bare `{ status: 'deleted' }` every other caller
+    // already matches on.
+    return skipped.length > 0 ? { status: 'deleted', skipped } : { status: 'deleted' }
   } catch (err) {
     return { status: 'error', message: err instanceof Error ? err.message : String(err) }
   }

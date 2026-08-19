@@ -4,6 +4,7 @@ import { EditorNewTabSection } from './EditorNewTabSection'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useRecentFilesStore, type RecentFileEntry } from '../../stores/useRecentFilesStore'
+import { usePlaceholderFilesStore } from '../../stores/usePlaceholderFilesStore'
 import { useHostStore } from '../../stores/useHostStore'
 import * as openMod from '../../lib/recent-files/open-recent-entry'
 
@@ -18,6 +19,7 @@ describe('EditorNewTabSection (eager reserved files — T1b-2)', () => {
     vi.clearAllMocks()
     useEditorStore.getState().clearAllBuffers()
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    usePlaceholderFilesStore.setState({ paths: [] })
   })
 
   // T2-5: New Markdown reserves a REAL path (not an `untitled:` virtual path).
@@ -89,6 +91,29 @@ describe('EditorNewTabSection (eager reserved files — T1b-2)', () => {
       expect(createUniqueInAppFileMock).toHaveBeenCalled()
     })
     expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  // T5.1 — reservation site 1/3: what this button mints is a file the user has
+  // not touched yet, and the registry is the only durable record of that fact.
+  it('registers the reserved path in the placeholder registry', async () => {
+    createUniqueInAppFileMock.mockResolvedValue('/buffer/Untitled.md')
+    render(<EditorNewTabSection onSelect={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'New Markdown' }))
+
+    await waitFor(() => {
+      expect(
+        usePlaceholderFilesStore.getState().isPlaceholder({ type: 'inapp' }, '/buffer/Untitled.md'),
+      ).toBe(true)
+    })
+  })
+
+  it('registers nothing when the reservation fails', async () => {
+    createUniqueInAppFileMock.mockRejectedValue(new Error('InApp backend unavailable'))
+    render(<EditorNewTabSection onSelect={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'New Markdown' }))
+
+    await waitFor(() => expect(createUniqueInAppFileMock).toHaveBeenCalled())
+    expect(usePlaceholderFilesStore.getState().paths).toEqual([])
   })
 })
 

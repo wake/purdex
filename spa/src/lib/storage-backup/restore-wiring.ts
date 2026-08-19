@@ -12,6 +12,7 @@ import { getFsBackend } from '../fs-backend'
 import { useBackupStore } from '../../stores/useBackupStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useEditorStore } from '../../stores/useEditorStore'
+import { usePlaceholderFilesStore } from '../../stores/usePlaceholderFilesStore'
 
 /**
  * Restore the active host's In-App tree to `snapshotId`. Returns the orchestrator
@@ -45,6 +46,14 @@ export async function runRestore(hostId: string, snapshotId: number): Promise<Re
   })
 
   if (result.status === 'done') {
+    // T5.1 restore invalidation. `replaceTree` swaps the ENTIRE In-App tree in
+    // one commit, with no per-path event to hang a targeted deregistration on —
+    // so every placeholder entry minted before this point is now meaningless.
+    // Leaving them would be actively dangerous: a restored REAL file sitting at
+    // a formerly-reserved path would be treated as an untouched placeholder and
+    // swept away by the T5.2 cleanup. Clearing is the fail-safe direction (the
+    // worst case is a genuine placeholder surviving until the manual cleanup).
+    usePlaceholderFilesStore.getState().clear()
     // Best-effort, post-commit: never let a reconcile glitch surface as a restore
     // failure (the tree is already restored). Failures are logged, not thrown.
     const recon = await applyReconciliation(result.changed, result.restoredFiles, {

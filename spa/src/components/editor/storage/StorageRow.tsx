@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useDraggable, useDroppable } from '@dnd-kit/core'
-import { CaretRight, CaretDown } from '@phosphor-icons/react'
+import { CaretRight, CaretDown, FolderOpen, PencilSimple, Trash } from '@phosphor-icons/react'
 import { ICON_MAP } from '../../tab-icon-map'
 import { fileIconForPath } from '../../../lib/file-icon'
 import { getFsBackend } from '../../../lib/fs-backend'
 import { parentOf } from '../../../lib/storage-paths'
 import { isWordCountable, wordCountFor } from '../../../lib/text-metrics'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import type { TreeNode } from '../../../lib/storage-tree'
 
 /**
@@ -33,6 +34,20 @@ interface StorageRowProps {
    */
   onSelect: (path: string, additive: boolean) => void
   onOpen: (path: string) => void
+  /**
+   * Rename THIS row's entry (T4.1). The rect is the action button's own
+   * bounding box, so the shared rename popover anchors to the row the user
+   * acted on rather than to the toolbar button.
+   */
+  onRename: (path: string, anchorRect: DOMRect | null) => void
+  /** Delete THIS row's entry (T4.1) — independent of the current selection. */
+  onDelete: (path: string) => void
+  /**
+   * Toggle THIS row in the multi-selection (T4.3). It writes to the very same
+   * `selected` set the modifier-click path uses — the checkbox is a visible
+   * affordance for an existing capability, not a second selection model.
+   */
+  onToggleSelect: (path: string) => void
 }
 
 /**
@@ -54,6 +69,16 @@ interface StorageRowProps {
  * `StoragePane`) keeps a stationary click/double-click from starting a drag, so
  * select/open/toggle coexist with dragging. `StoragePane.onDragEnd` resolves the
  * active path + drop target into a `moveStorageEntry` call.
+ *
+ * Row actions (T4.1): a trailing Open/Rename/Delete cluster that acts on THIS
+ * row regardless of what is selected. It is revealed by `group-hover` /
+ * `group-focus-within` (never `hidden`, so it stays keyboard reachable) and its
+ * wrapper stops every gesture that would otherwise hit the row's own
+ * select/open/drag handlers.
+ *
+ * Batch selection (T4.3): a leading checkbox bound to the SAME `selected` flag
+ * the modifier-click path drives, so checkbox and cmd/shift-click compose on one
+ * selection set rather than competing.
  */
 export function StorageRow({
   node,
@@ -63,7 +88,11 @@ export function StorageRow({
   onToggle,
   onSelect,
   onOpen,
+  onRename,
+  onDelete,
+  onToggleSelect,
 }: StorageRowProps) {
+  const t = useI18nStore((s) => s.t)
   const text = isTextNode(node)
   const [wordCount, setWordCount] = useState<number | null>(null)
 
@@ -152,6 +181,13 @@ export function StorageRow({
     }
   }
 
+  // Shared by the T4.1 action cluster and the T4.3 checkbox: every gesture that
+  // could reach the row's own handlers is stopped at the control (click →
+  // select, dblclick → open/toggle, keydown → Enter/Space, pointerdown → drag
+  // start), so an embedded control never doubles as a row hot-zone hit. The
+  // controls keep their own onClick/onChange — this only runs on the way up.
+  const stopRowGesture = (e: React.SyntheticEvent) => e.stopPropagation()
+
   return (
     <div
       ref={setRowRef}
@@ -175,14 +211,33 @@ export function StorageRow({
         ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}),
       }}
       className={
-        'w-full flex items-center gap-1.5 pr-3 py-1.5 text-left text-xs transition-colors cursor-pointer ' +
+        'group w-full flex items-center gap-1.5 pr-3 py-1.5 text-left text-xs transition-colors cursor-pointer ' +
+        // `surface-selected` was never a Tailwind theme token (it resolves to
+        // nothing in the built CSS), so a selected row rendered with no
+        // highlight at all — which is half of why the multi-selection was
+        // invisible. `surface-active` is the real token.
         (selected
-          ? 'bg-surface-selected text-text-primary'
+          ? 'bg-surface-active text-text-primary'
           : 'text-text-primary hover:bg-surface-hover') +
         (dropActive ? ' ring-1 ring-inset ring-accent bg-surface-hover' : '') +
         (isDragging ? ' opacity-50' : '')
       }
     >
+      {/* Selection checkbox (T4.3). `onChange` owns the toggle; the explicit
+          click / dblclick / keydown / pointerdown stops keep the gesture from
+          also hitting the row's select / open / drag handlers. */}
+      <input
+        type="checkbox"
+        data-testid="row-checkbox"
+        checked={selected}
+        onChange={() => onToggleSelect(node.path)}
+        onClick={stopRowGesture}
+        onDoubleClick={stopRowGesture}
+        onKeyDown={stopRowGesture}
+        onPointerDown={stopRowGesture}
+        aria-label={t('editor.buffers.select_row', { name: node.name })}
+        className="shrink-0 accent-accent cursor-pointer"
+      />
       {node.isDir ? (
         <button
           type="button"
@@ -205,6 +260,51 @@ export function StorageRow({
           {text && wordCount !== null ? ` · ${wordCount} words` : ''}
         </span>
       )}
+      {/* Row actions (T4.1): revealed on hover AND on keyboard focus inside the
+          row (`group-focus-within`), never `hidden` — a display:none cluster
+          would drop the buttons out of the tab order and make them unreachable
+          without a pointer. */}
+      <div
+        data-testid="row-actions"
+        onClick={stopRowGesture}
+        onDoubleClick={stopRowGesture}
+        onKeyDown={stopRowGesture}
+        onPointerDown={stopRowGesture}
+        className="shrink-0 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {!node.isDir && (
+          <button
+            type="button"
+            data-testid="row-action-open"
+            onClick={() => onOpen(node.path)}
+            aria-label={t('editor.buffers.open')}
+            title={t('editor.buffers.open')}
+            className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-active"
+          >
+            <FolderOpen size={12} />
+          </button>
+        )}
+        <button
+          type="button"
+          data-testid="row-action-rename"
+          onClick={(e) => onRename(node.path, e.currentTarget.getBoundingClientRect())}
+          aria-label={t('editor.buffers.rename')}
+          title={t('editor.buffers.rename')}
+          className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-active"
+        >
+          <PencilSimple size={12} />
+        </button>
+        <button
+          type="button"
+          data-testid="row-action-delete"
+          onClick={() => onDelete(node.path)}
+          aria-label={t('editor.buffers.delete')}
+          title={t('editor.buffers.delete')}
+          className="p-1 rounded text-text-muted hover:text-status-error hover:bg-surface-active"
+        >
+          <Trash size={12} />
+        </button>
+      </div>
     </div>
   )
 }
