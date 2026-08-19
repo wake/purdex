@@ -199,23 +199,31 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
         if (!currentBuf?.lastStat) return
         if (stat.mtime === currentBuf.lastStat.mtime && stat.size === currentBuf.lastStat.size) return
 
+        // T5.1: past the mtime/size comparison, someone else has WRITTEN this
+        // file since we last touched it. That is the fact that ends the
+        // placeholder's life: the empty shell we minted is no longer ours alone,
+        // and with it goes our licence to delete the path unasked (T5.2).
+        //
+        // It is deliberately decided on the stat, not on the bytes. Comparing
+        // the reloaded text against `savedContent` misses the case that matters
+        // most for a 0 B reservation — an external writer leaving it empty (or
+        // writing back exactly what we saved) is still someone else touching the
+        // user's file, and the sweep's own "is it still 0 B" re-check would wave
+        // that straight through. It is also independent of our buffer's dirty
+        // state: the dirty branch below refuses to clobber the user's edits, but
+        // closing without saving would otherwise still hand the sweep an
+        // authorization over the externally written bytes.
+        //
+        // The unchanged case never gets here — the comparison above returns
+        // first — which is what keeps an untouched placeholder registered across
+        // every tab activation. `unregister` no-ops for non-in-app sources, so
+        // remote and local files are unaffected.
+        usePlaceholderFilesStore.getState().unregister(source, filePath)
+
         return backend.read(filePath).then((data) => {
           const text = new TextDecoder().decode(data)
           const latestBuf = useEditorStore.getState().buffers[key]
           if (!latestBuf || text === latestBuf.savedContent) return
-
-          // T5.1: we are not the only writer to a reserved file. Whatever put
-          // this content there — another program, another tab, a sync client —
-          // the empty shell we minted is gone, and with it our licence to delete
-          // the path unasked (T5.2). That fact lives on DISK, so it holds
-          // whether or not our own buffer is dirty: the dirty branch below
-          // refuses to clobber the user's edits, but closing without saving
-          // would otherwise still hand the sweep an authorization to delete the
-          // externally written bytes. Deregistering HERE — past the "content
-          // actually differs from what we saved" check, not on the bare probe —
-          // is what keeps an unchanged file registered. `unregister` no-ops for
-          // non-in-app sources, so remote and local files are unaffected.
-          usePlaceholderFilesStore.getState().unregister(source, filePath)
 
           if (!latestBuf.isDirty) {
             useEditorStore.getState().reloadBuffer(key, text, { mtime: stat.mtime, size: stat.size })

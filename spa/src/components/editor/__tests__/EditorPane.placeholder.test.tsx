@@ -49,6 +49,17 @@ function isRegistered(path: string): boolean {
   return usePlaceholderFilesStore.getState().isPlaceholder(INAPP, path)
 }
 
+/**
+ * Drain the placeholder sweep's detached `stat().then(...).then(delete)` chain.
+ * It is fired with `void` from inside an unmount cleanup, so a bare assertion
+ * right after `unmount()` would pass no matter what the sweep decided.
+ */
+async function flushSweep(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve()
+  })
+}
+
 beforeEach(() => {
   resetEditorPaneStores()
   usePlaceholderFilesStore.setState({ paths: [PLACEHOLDER] })
@@ -170,8 +181,57 @@ describe('T5.1 — an EXTERNAL write ends the placeholder too', () => {
     act(() => {
       view.unmount()
     })
+    await flushSweep()
 
     expect(backend.delete).not.toHaveBeenCalled()
+  })
+
+  // The nastiest shape of the same event: an external writer rewrote the file
+  // with content that happens to MATCH what we last saved — for a freshly minted
+  // 0 B reservation, "the same" is trivially "still empty". The bytes on disk are
+  // someone else's now, but a content comparison cannot see that, and the
+  // sweep's own 0 B re-check waves it straight through. What proves the file
+  // changed hands is the mtime/size moving, so that is what has to end the
+  // placeholder — not the text differing.
+  it('an external rewrite with IDENTICAL content deregisters too (mtime moved)', async () => {
+    const pane = createPane(PLACEHOLDER, 'pane-ph-external-same')
+    const backend = createBackend() as ReturnType<typeof createBackend> & { delete: ReturnType<typeof vi.fn> }
+    backend.read.mockResolvedValue(new TextEncoder().encode(''))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 1 })
+    backend.delete.mockResolvedValue(undefined)
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    const view = renderEditorPane(pane, false)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)]).toBeDefined()
+    })
+    expect(isRegistered(PLACEHOLDER)).toBe(true)
+
+    // Someone else wrote the file — same (empty) bytes, new mtime.
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 2 })
+
+    view.rerender(<EditorPane pane={pane} isActive />)
+    // The probe has run its course once it reaches the re-read (deregistration
+    // happens before that, on the stat).
+    await waitFor(() => expect(backend.read.mock.calls.length).toBeGreaterThan(1))
+
+    // Closing the last pane must have no authorization to delete it, even though
+    // the file is still 0 B and would sail through the sweep's stat re-check.
+    // Asserted BEFORE the registry, because this is the loss that matters.
+    act(() => {
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    })
+    act(() => {
+      view.unmount()
+    })
+    // The sweep's own stat→delete chain is two microtask hops deep and runs
+    // detached from the unmount, so assert only after draining them — otherwise
+    // "delete was not called" would be true of any teardown at all.
+    await flushSweep()
+
+    expect(backend.delete).not.toHaveBeenCalled()
+    expect(isRegistered(PLACEHOLDER)).toBe(false)
+    expect(usePlaceholderFilesStore.getState().paths).toEqual([])
   })
 
   it('an UNCHANGED file on activation still leaves the placeholder registered', async () => {
@@ -239,6 +299,7 @@ describe('T5.1 — an EXTERNAL write ends the placeholder too', () => {
     act(() => {
       view.unmount()
     })
+    await flushSweep()
 
     expect(backend.delete).not.toHaveBeenCalled()
   })
