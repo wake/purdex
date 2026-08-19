@@ -6,7 +6,20 @@
 // makes true for a file that HAD content, was deliberately emptied, and saved —
 // the user's file, indistinguishable from an untouched reservation. So we record
 // the fact at reservation time instead of guessing it later.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+const registerSpy = vi.hoisted(() => vi.fn())
+const notifySpy = vi.hoisted(() => vi.fn())
+
+vi.mock('../lib/storage/sync', () => ({
+  syncManager: {
+    register: registerSpy,
+    notify: notifySpy,
+    destroy: vi.fn(),
+  },
+  createSyncManager: vi.fn(),
+}))
+
 import { usePlaceholderFilesStore } from './usePlaceholderFilesStore'
 import { STORAGE_KEYS } from '../lib/storage'
 import type { FileSource } from '../types/fs'
@@ -84,6 +97,16 @@ describe('usePlaceholderFilesStore — deregistration is permanent', () => {
     usePlaceholderFilesStore.getState().register(INAPP, '/buffer/b.md')
     usePlaceholderFilesStore.getState().clear()
     expect(usePlaceholderFilesStore.getState().paths).toEqual([])
+  })
+})
+
+describe('usePlaceholderFilesStore — cross-tab sync', () => {
+  // The registry is an authorization to DELETE a file. A second tab that never
+  // learns the entry was dropped keeps the stale authorization and sweeps a file
+  // that has since become the user's — so registration here is not a nicety, it
+  // is what stops a save in tab A from being undone by a close in tab B.
+  it('registers itself with syncManager so another tab rehydrates on every write', () => {
+    expect(registerSpy).toHaveBeenCalledWith(STORAGE_KEYS.PLACEHOLDER_FILES, usePlaceholderFilesStore)
   })
 })
 

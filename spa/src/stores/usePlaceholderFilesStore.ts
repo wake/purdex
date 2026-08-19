@@ -34,10 +34,19 @@
  * The set is deliberately uncapped: entries are short-lived (the T5.2 sweep
  * removes each one when its last pane closes) and a path costs a few dozen
  * bytes.
+ *
+ * Cross-tab: the store registers with `syncManager` (bottom of this file) like
+ * every other persisted store. That is not cosmetic here. An entry is a standing
+ * authorization to DELETE, granted on the strength of a fact recorded in the
+ * past; a second tab that never hears the deregistration keeps authorizing the
+ * delete of a file that has since become the user's, and sweeps it the moment
+ * its last pane closes there. Persisting alone does not carry the news — the
+ * other tab already has its copy in memory — so the broadcast is what keeps the
+ * two tabs from undoing each other's saves.
  */
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { isPathUnder } from '../lib/path-remap'
 import type { FileSource } from '../types/fs'
 
@@ -83,3 +92,5 @@ export const usePlaceholderFilesStore = create<PlaceholderFilesState>()(
     },
   ),
 )
+
+syncManager.register(STORAGE_KEYS.PLACEHOLDER_FILES, usePlaceholderFilesStore)
