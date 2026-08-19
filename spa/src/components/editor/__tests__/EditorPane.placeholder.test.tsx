@@ -8,6 +8,7 @@
 // from an untouched reservation.
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { EditorPane } from '../EditorPane'
 import {
   createBackend,
   createPane,
@@ -19,6 +20,7 @@ import {
 } from './editor-pane-harness'
 import { getFsBackendMock } from './editor-pane-mocks'
 import { useEditorStore } from '../../../stores/useEditorStore'
+import { useTabStore } from '../../../stores/useTabStore'
 import { usePlaceholderFilesStore } from '../../../stores/usePlaceholderFilesStore'
 
 vi.mock('../../../lib/fs-backend', async (importOriginal) => {
@@ -123,5 +125,73 @@ describe('T5.1 — an in-editor rename deregisters the placeholder', () => {
     expect(isRegistered(PLACEHOLDER)).toBe(false)
     expect(isRegistered('/buffer/notes.md')).toBe(false)
     expect(usePlaceholderFilesStore.getState().paths).toEqual([])
+  })
+})
+
+describe('T5.1 — an EXTERNAL write ends the placeholder too', () => {
+  // The reservation is a 0 B file on a real filesystem, and we are not the only
+  // writer to it: another program, another tab's save, a sync client. Once the
+  // external content is reloaded into the editor the file is no longer an empty
+  // shell we may silently remove — but nothing on that path used to say so, and
+  // the registry entry survived as a standing delete authorization.
+  it('an external-change reload deregisters, so closing the last pane keeps the file', async () => {
+    const pane = createPane(PLACEHOLDER, 'pane-ph-external')
+    const backend = createBackend() as ReturnType<typeof createBackend> & { delete: ReturnType<typeof vi.fn> }
+    backend.read.mockResolvedValue(new TextEncoder().encode(''))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 1 })
+    backend.delete.mockResolvedValue(undefined)
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    // Inactive first: the external-change probe runs on tab ACTIVATION, so this
+    // is the state the reservation sits in while another writer gets to it.
+    const view = renderEditorPane(pane, false)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)]).toBeDefined()
+    })
+    expect(isRegistered(PLACEHOLDER)).toBe(true)
+
+    // Someone else fills the reserved file in.
+    backend.read.mockResolvedValue(new TextEncoder().encode('written by someone else'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 23, mtime: 2 })
+
+    view.rerender(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)].savedContent)
+        .toBe('written by someone else')
+    })
+    expect(isRegistered(PLACEHOLDER)).toBe(false)
+    expect(usePlaceholderFilesStore.getState().paths).toEqual([])
+
+    // …and the sweep on the last close now has no authorization to act on.
+    act(() => {
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    })
+    act(() => {
+      view.unmount()
+    })
+
+    expect(backend.delete).not.toHaveBeenCalled()
+  })
+
+  it('an UNCHANGED file on activation still leaves the placeholder registered', async () => {
+    // The control: the probe fires on every activation, so deregistering there
+    // unconditionally would end every placeholder's life on the first tab
+    // switch and quietly disable the whole sweep.
+    const pane = createPane(PLACEHOLDER, 'pane-ph-external-nochange')
+    const backend = createBackend()
+    backend.read.mockResolvedValue(new TextEncoder().encode(''))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 1 })
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    const view = renderEditorPane(pane, false)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)]).toBeDefined()
+    })
+
+    view.rerender(<EditorPane pane={pane} isActive />)
+    await waitFor(() => expect(backend.stat).toHaveBeenCalledTimes(2))
+
+    expect(isRegistered(PLACEHOLDER)).toBe(true)
   })
 })

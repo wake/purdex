@@ -206,6 +206,14 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
 
           if (!latestBuf.isDirty) {
             useEditorStore.getState().reloadBuffer(key, text, { mtime: stat.mtime, size: stat.size })
+            // T5.1: we are not the only writer to a reserved file. Whatever put
+            // this content there — another program, another tab, a sync client —
+            // the empty shell we minted is gone, and with it our licence to
+            // delete the path unasked (T5.2). Deregistering on the RELOAD, not
+            // on the probe, is what keeps an unchanged file registered.
+            // `unregister` no-ops for non-in-app sources, so remote and local
+            // files are unaffected.
+            usePlaceholderFilesStore.getState().unregister(source, filePath)
           } else {
             console.warn(`[editor] External change detected for ${filePath}, buffer is dirty`)
           }
