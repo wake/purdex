@@ -11,6 +11,7 @@ import {
   deleteStorageEntries,
   moveStorageEntry,
   renameStorageEntry,
+  uploadFile,
 } from './storage-actions'
 import { usePlaceholderFilesStore } from '../../../stores/usePlaceholderFilesStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -140,6 +141,34 @@ describe('deleteStorageEntries — an explicit delete drops the entry with the f
     usePlaceholderFilesStore.getState().register(INAPP, '/buffer/Untitled.md')
     const res = await deleteStorageEntries(['/buffer/Untitled.md'], t)
     expect(res).toEqual({ status: 'cancelled' })
+    expect(usePlaceholderFilesStore.getState().isPlaceholder(INAPP, '/buffer/Untitled.md')).toBe(true)
+  })
+})
+
+describe('uploadFile — an upload writes real bytes, which ends the placeholder life', () => {
+  it('deregisters the destination path', async () => {
+    // `createUnique` normally hands back a fresh `-N` name, so an upload landing
+    // on a registered path needs a STALE entry first: the reserved file was
+    // removed behind our back (another tab, a sync client, the OS), the name
+    // became free again, and the upload claimed it. The entry standing over that
+    // path is then authorization to delete somebody's real bytes on the first
+    // close. A write ends the placeholder's life whichever writer performed it.
+    backend = makeBackend({ createUnique: vi.fn().mockResolvedValue('/buffer/Untitled.md') })
+    usePlaceholderFilesStore.getState().register(INAPP, '/buffer/Untitled.md')
+
+    const res = await uploadFile('/buffer', new File([new Uint8Array([1, 2, 3])], 'Untitled.md'))
+
+    expect(res).toEqual({ path: '/buffer/Untitled.md' })
+    expect(usePlaceholderFilesStore.getState().isPlaceholder(INAPP, '/buffer/Untitled.md')).toBe(false)
+  })
+
+  it('a FAILED upload leaves the registry untouched (nothing was written)', async () => {
+    backend = makeBackend({ createUnique: vi.fn().mockRejectedValue(new Error('boom')) })
+    usePlaceholderFilesStore.getState().register(INAPP, '/buffer/Untitled.md')
+
+    const res = await uploadFile('/buffer', new File([new Uint8Array([1])], 'Untitled.md'))
+
+    expect('kind' in res && res.kind).toBe('error')
     expect(usePlaceholderFilesStore.getState().isPlaceholder(INAPP, '/buffer/Untitled.md')).toBe(true)
   })
 })

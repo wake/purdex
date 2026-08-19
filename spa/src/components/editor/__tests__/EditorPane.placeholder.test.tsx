@@ -194,4 +194,52 @@ describe('T5.1 — an EXTERNAL write ends the placeholder too', () => {
 
     expect(isRegistered(PLACEHOLDER)).toBe(true)
   })
+
+  // The sibling of the reload case above, and the more dangerous one: when the
+  // buffer is DIRTY we deliberately do not clobber the user's edits with the
+  // external content, so the path keeps a reservation-shaped buffer in front of
+  // it. But the fact that ends the placeholder's life happened on DISK — someone
+  // else wrote real bytes into it — and that is true regardless of what our
+  // buffer holds. Leaving the entry standing means closing without saving hands
+  // the sweep a licence to delete a file that now carries someone else's
+  // content.
+  it('an external change seen with UNSAVED edits deregisters too, so the close keeps the file', async () => {
+    const pane = createPane(PLACEHOLDER, 'pane-ph-external-dirty')
+    const backend = createBackend() as ReturnType<typeof createBackend> & { delete: ReturnType<typeof vi.fn> }
+    backend.read.mockResolvedValue(new TextEncoder().encode(''))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 0, mtime: 1 })
+    backend.delete.mockResolvedValue(undefined)
+    getFsBackendMock.mockReturnValue(backend)
+    registerTabPane(pane)
+    const view = renderEditorPane(pane, false)
+    await waitFor(() => {
+      expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)]).toBeDefined()
+    })
+
+    // The user typed into the reservation without saving…
+    act(() => {
+      useEditorStore.getState().updateContent(getBufferKey(PLACEHOLDER), 'my unsaved draft')
+    })
+    expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)].isDirty).toBe(true)
+    // …and meanwhile someone else filled the reserved file in.
+    backend.read.mockResolvedValue(new TextEncoder().encode('written by someone else'))
+    backend.stat.mockResolvedValue({ isFile: true, isDirectory: false, size: 23, mtime: 2 })
+
+    view.rerender(<EditorPane pane={pane} isActive />)
+
+    await waitFor(() => expect(isRegistered(PLACEHOLDER)).toBe(false))
+    // The dirty buffer is NOT clobbered — deregistering is the only effect.
+    expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)].content).toBe('my unsaved draft')
+    expect(useEditorStore.getState().buffers[getBufferKey(PLACEHOLDER)].savedContent).toBe('')
+
+    // Closing without saving must now leave the external content alone.
+    act(() => {
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    })
+    act(() => {
+      view.unmount()
+    })
+
+    expect(backend.delete).not.toHaveBeenCalled()
+  })
 })

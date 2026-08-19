@@ -357,6 +357,12 @@ export async function uploadFile(targetDir: string, file: File): Promise<UploadR
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
     const path = await backend.createUnique(targetDir, baseName, ext, bytes)
+    // T5.1: an upload is a write of real bytes, so the destination can no longer
+    // be an untouched reservation. `createUnique` normally suffixes its way to a
+    // free name, but a placeholder deleted behind our back frees its name again
+    // and the upload may claim it — leaving a stale entry that authorizes the
+    // T5.2 sweep to delete the uploaded file on its first close.
+    usePlaceholderFilesStore.getState().unregister({ type: 'inapp' }, path)
     return { path }
   } catch (err) {
     // A full store throws a quota DOMException at write time; tag it `quota` so
