@@ -227,3 +227,98 @@ describe('T4.3 — selection action bar', () => {
     expect(mockBackend.delete).not.toHaveBeenCalled()
   })
 })
+
+describe('T4.3 — a delete prunes the selection the way it prunes the tree', () => {
+  // Deleting a folder takes its whole subtree with it, so a selected descendant
+  // is gone too. Dropping only the exact deleted path leaves the selection
+  // holding paths that no longer exist: the action bar counts them, and the next
+  // batch delete aims at a file that is not there any more.
+  const files = () =>
+    new Map([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dir/child.md', { isDir: false, size: 5 }],
+      ['/buffer/top.md', { isDir: false, size: 5 }],
+    ])
+
+  /** The last count the action bar handed to i18n (the mocked `t` returns keys). */
+  function renderedSelectionCount(): number | undefined {
+    const counts = tSpy.mock.calls.filter((call) => call[0] === 'editor.buffers.selected_count')
+    return (counts.at(-1)?.[1] as { count: number } | undefined)?.count
+  }
+
+  async function seedTreeWithSelectedChild(): Promise<void> {
+    const tree = files()
+    mockBackend.list.mockImplementation(pathAwareList(tree))
+    mockBackend.stat.mockImplementation(async (path: string) => ({
+      size: 0,
+      mtime: 0,
+      isDirectory: tree.get(path)?.isDir === true,
+      isFile: tree.get(path)?.isDir !== true,
+    }))
+    mockBackend.delete.mockImplementation(async (path: string) => {
+      for (const p of Array.from(tree.keys())) {
+        if (p === path || p.startsWith(path + '/')) tree.delete(p)
+      }
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    fireEvent.click(within(await rowFor('dir')).getByTestId('buffer-caret'))
+    await rowFor('child.md')
+    fireEvent.click(await checkboxFor('child.md'))
+    fireEvent.click(await checkboxFor('top.md'))
+    await waitFor(() => expect(renderedSelectionCount()).toBe(2))
+  }
+
+  it('deleting a FOLDER drops the selected file inside it from the selection', async () => {
+    await seedTreeWithSelectedChild()
+
+    fireEvent.click(within(await rowFor('dir')).getByTestId('row-action-delete'))
+
+    await waitFor(() => expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/dir', true))
+    // Only `top.md` is left standing, so only `top.md` may be counted.
+    await waitFor(() => expect(renderedSelectionCount()).toBe(1))
+    expect(await isSelected('top.md')).toBe(true)
+  })
+
+  it('a follow-up batch delete never aims at the vanished descendant', async () => {
+    await seedTreeWithSelectedChild()
+    fireEvent.click(within(await rowFor('dir')).getByTestId('row-action-delete'))
+    await waitFor(() => expect(renderedSelectionCount()).toBe(1))
+
+    fireEvent.click(
+      within(await screen.findByTestId('selection-action-bar')).getByTestId('selection-delete'),
+    )
+
+    await waitFor(() => expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/top.md', false))
+    expect(mockBackend.delete).not.toHaveBeenCalledWith('/buffer/dir/child.md', false)
+  })
+
+  it('deleting a SIBLING leaves an unrelated prefix-sharing path selected', async () => {
+    // The prune is a subtree rule, not a `startsWith`: `/buffer/dirty.md` is not
+    // inside `/buffer/dir` and must survive its delete.
+    const tree = new Map([
+      ['/buffer/dir', { isDir: true, size: 0 }],
+      ['/buffer/dirty.md', { isDir: false, size: 5 }],
+    ])
+    mockBackend.list.mockImplementation(pathAwareList(tree))
+    mockBackend.stat.mockImplementation(async (path: string) => ({
+      size: 0,
+      mtime: 0,
+      isDirectory: tree.get(path)?.isDir === true,
+      isFile: tree.get(path)?.isDir !== true,
+    }))
+    mockBackend.delete.mockImplementation(async (path: string) => {
+      for (const p of Array.from(tree.keys())) {
+        if (p === path || p.startsWith(path + '/')) tree.delete(p)
+      }
+    })
+    render(<StoragePane pane={makePane()} isActive />)
+    fireEvent.click(await checkboxFor('dirty.md'))
+    await waitFor(() => expect(renderedSelectionCount()).toBe(1))
+
+    fireEvent.click(within(await rowFor('dir')).getByTestId('row-action-delete'))
+
+    await waitFor(() => expect(mockBackend.delete).toHaveBeenCalledWith('/buffer/dir', true))
+    expect(await isSelected('dirty.md')).toBe(true)
+    expect(renderedSelectionCount()).toBe(1)
+  })
+})

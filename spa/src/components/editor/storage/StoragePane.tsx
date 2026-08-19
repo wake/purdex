@@ -17,6 +17,7 @@ import { useWorkspaceStore } from '../../../features/workspace/store'
 import { useStorageTree } from '../../../hooks/useStorageTree'
 import { findPane } from '../../../lib/pane-tree'
 import { openInAppFile } from '../../../lib/open-in-app-file'
+import { isPathUnder } from '../../../lib/path-remap'
 import { STORAGE_ROOT, basename, join, parentOf } from '../../../lib/storage-paths'
 import { findNode, targetDirOf } from '../../../lib/storage-tree'
 import type { TreeNode } from '../../../lib/storage-tree'
@@ -303,6 +304,14 @@ export function StoragePane({ pane }: PaneRendererProps) {
    * leaves the rest of the selection alone (deleting a hovered row must not
    * clear an unrelated selection).
    *
+   * "Dropped" follows the DELETE's own reach, not string equality: removing a
+   * folder removes everything under it, so a selected descendant is gone too.
+   * Keeping it selected would leave the action bar counting a file that no
+   * longer exists and the next batch delete aiming at it. `isPathUnder` is the
+   * same subtree rule the delete scan and the placeholder registry use — the
+   * trailing slash is what keeps `/buffer/dirty.md` out of a `/buffer/dir`
+   * delete.
+   *
    * Returns the outcome so a caller that needs to report on it (the empty-file
    * cleanup below) can, without duplicating the delete call or the banner.
    */
@@ -316,8 +325,11 @@ export function StoragePane({ pane }: PaneRendererProps) {
       setBusy(false)
       if (res.status === 'deleted') {
         setSelected((prev) => {
-          const next = new Set(prev)
-          for (const p of paths) next.delete(p)
+          const next = new Set<string>()
+          for (const entry of prev) {
+            if (paths.some((p) => isPathUnder(entry, p))) continue
+            next.add(entry)
+          }
           return next
         })
         refresh()
