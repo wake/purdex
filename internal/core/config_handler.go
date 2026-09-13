@@ -12,12 +12,8 @@ import (
 // handleGetConfig returns the current config as JSON with sensitive fields redacted.
 func (c *Core) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
-	defer c.CfgMu.RUnlock()
-
-	// Shallow copy to redact sensitive fields; encode under lock to avoid slice race
-	cfg := *c.Cfg
-	cfg.Token = ""
-	cfg.HostID = ""
+	cfg := c.Cfg.Redacted()
+	c.CfgMu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
@@ -46,15 +42,12 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c.CfgMu.Lock()
-
 	// Validate before mutating
 	if req.Terminal != nil && req.Terminal.SizingMode != "" {
 		switch req.Terminal.SizingMode {
 		case "auto", "terminal-first", "minimal-first":
 			// valid
 		default:
-			c.CfgMu.Unlock()
 			http.Error(w, "invalid sizing_mode: must be auto, terminal-first, or minimal-first", http.StatusBadRequest)
 			return
 		}
@@ -62,67 +55,40 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	if req.UploadDir != nil {
 		if *req.UploadDir == "" || !filepath.IsAbs(*req.UploadDir) {
-			c.CfgMu.Unlock()
 			http.Error(w, "upload_dir must be a non-empty absolute path", http.StatusBadRequest)
 			return
 		}
 	}
 
-	// Snapshot before any mutation so writeConfig failure can roll back the
-	// in-memory state, keeping c.Cfg and disk consistent. Shallow copy is
-	// sufficient because every mutation below replaces fields wholesale
-	// (slice headers reassigned, never appended into). Future fields must
-	// follow the same whole-field-assignment rule or rollback will break.
-	snapshot := *c.Cfg
-
-	detectChanged := false
-
-	// Invariant: every mutation below must replace the field wholesale.
-	// Do NOT append into c.Cfg slices or write into c.Cfg maps — rollback
-	// relies on whole-field assignment to restore `snapshot` correctly.
-	if req.Stream != nil {
-		c.Cfg.Stream = *req.Stream
-	}
-	if req.Detect != nil {
-		if req.Detect.CCCommands != nil {
-			c.Cfg.Detect.CCCommands = *req.Detect.CCCommands
-			detectChanged = true
+	err := c.UpdateConfig(func(cfg *config.Config) error {
+		if req.Stream != nil {
+			cfg.Stream = *req.Stream
 		}
-		if req.Detect.PollInterval != nil && *req.Detect.PollInterval > 0 {
-			c.Cfg.Detect.PollInterval = *req.Detect.PollInterval
-			detectChanged = true
+		if req.Detect != nil {
+			if req.Detect.CCCommands != nil {
+				cfg.Detect.CCCommands = *req.Detect.CCCommands
+			}
+			if req.Detect.PollInterval != nil && *req.Detect.PollInterval > 0 {
+				cfg.Detect.PollInterval = *req.Detect.PollInterval
+			}
 		}
-	}
-
-	if req.Terminal != nil && req.Terminal.SizingMode != "" {
-		c.Cfg.Terminal.SizingMode = req.Terminal.SizingMode
-	}
-
-	if req.UploadDir != nil {
-		c.Cfg.UploadDir = *req.UploadDir
-	}
-
-	// Write back to config file
-	if c.CfgPath != "" {
-		if err := config.WriteFile(c.CfgPath, *c.Cfg); err != nil {
-			*c.Cfg = snapshot // rollback: preserve pointer identity for other goroutines
-			c.CfgMu.Unlock()
-			http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
-			return
+		if req.Terminal != nil && req.Terminal.SizingMode != "" {
+			cfg.Terminal.SizingMode = req.Terminal.SizingMode
 		}
+		if req.UploadDir != nil {
+			cfg.UploadDir = *req.UploadDir
+		}
+		return nil
+	})
+	if err != nil {
+		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	// Return updated config (redacted)
-	cfg := *c.Cfg
-	c.CfgMu.Unlock()
+	c.CfgMu.RLock()
+	cfg := c.Cfg.Redacted()
+	c.CfgMu.RUnlock()
 
-	// Notify registered callbacks about config changes (outside lock)
-	if detectChanged || req.UploadDir != nil {
-		c.NotifyConfigChange()
-	}
-
-	cfg.Token = ""
-	cfg.HostID = ""
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cfg)
 }

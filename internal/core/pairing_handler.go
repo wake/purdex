@@ -112,25 +112,16 @@ func (c *Core) handlePairSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build config copy for persistence (don't modify runtime yet)
-	c.CfgMu.RLock()
-	cfgCopy := *c.Cfg
-	c.CfgMu.RUnlock()
-	cfgCopy.Token = req.Token
-
-	// Persist FIRST — if this fails, runtime state is unchanged
-	if c.CfgPath != "" {
-		if err := config.WriteFile(c.CfgPath, cfgCopy); err != nil {
-			log.Printf("pair setup: write config: %v", err)
-			http.Error(w, "failed to persist config", http.StatusInternalServerError)
-			return
-		}
+	// Persist and commit atomically via the single serialised config
+	// writer — if the write fails, runtime state is unchanged.
+	if err := c.UpdateConfig(func(cfg *config.Config) error {
+		cfg.Token = req.Token
+		return nil
+	}); err != nil {
+		log.Printf("pair setup: write config: %v", err)
+		http.Error(w, "failed to persist config", http.StatusInternalServerError)
+		return
 	}
-
-	// Only after successful persistence, update runtime
-	c.CfgMu.Lock()
-	c.Cfg.Token = req.Token
-	c.CfgMu.Unlock()
 
 	c.Pairing.Set(StateNormal)
 	log.Println("pairing complete — token set, switching to normal mode")
