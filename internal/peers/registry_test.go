@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 // fixture76973 is the real registry-file shape captured from mlab (pid 76973).
@@ -450,7 +452,183 @@ func TestParseProcStart(t *testing.T) {
 
 func TestDefaultLiveness_Compiles(t *testing.T) {
 	live := DefaultLiveness()
-	if live.Stat == nil || live.PidAlive == nil || live.StartTime == nil {
+	if live.Stat == nil || live.PidAlive == nil || live.StartTime == nil || live.Info == nil {
 		t.Fatal("DefaultLiveness returned a Liveness with nil fields")
+	}
+}
+
+// --- D9: proxy recognition by argv --------------------------------------
+
+func TestIsProxyProcess(t *testing.T) {
+	cases := []struct {
+		name string
+		info agent.ProcessInfo
+		want bool
+	}{
+		{
+			name: "argv0 pdx with peer-proxy",
+			info: agent.ProcessInfo{Argv: []string{"/usr/local/bin/pdx", "peer-proxy"}},
+			want: true,
+		},
+		{
+			name: "renamed argv0 but ExePath pdx",
+			info: agent.ProcessInfo{ExePath: "/opt/pdx", Argv: []string{"pdx-renamed", "peer-proxy"}},
+			want: true,
+		},
+		{
+			name: "pdx alone, no peer-proxy arg",
+			info: agent.ProcessInfo{Argv: []string{"pdx"}},
+			want: false,
+		},
+		{
+			name: "node running a peer-proxy.js script",
+			info: agent.ProcessInfo{Argv: []string{"node", "peer-proxy.js"}},
+			want: false,
+		},
+		{
+			name: "empty argv",
+			info: agent.ProcessInfo{Argv: nil},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsProxyProcess(tc.info); got != tc.want {
+				t.Errorf("IsProxyProcess(%+v) = %v, want %v", tc.info, got, tc.want)
+			}
+		})
+	}
+}
+
+// infoLiveness returns a Liveness with Stat/PidAlive always-true and Info
+// set to infoFn; StartTime is left nil since, with Info set, ReadRegistry
+// must never call it.
+func infoLiveness(infoFn func(pid int) (agent.ProcessInfo, error)) Liveness {
+	return Liveness{
+		Stat:     func(path string) error { return nil },
+		PidAlive: func(pid int) bool { return true },
+		StartTime: func(pid int) (time.Time, error) {
+			panic("StartTime must not be called when Info is set")
+		},
+		Info: infoFn,
+	}
+}
+
+// TestReadRegistry_InfoClassifiesProxy pins D9: a fake Info reporting a pdx
+// peer-proxy helper's argv sets Entry.IsProxy, using the Info-supplied
+// StartTime for liveness (never falling back to the (panicking) StartTime
+// field).
+func TestReadRegistry_InfoClassifiesProxy(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "76973.json", fixture76973)
+
+	live := infoLiveness(func(pid int) (agent.ProcessInfo, error) {
+		return agent.ProcessInfo{
+			Argv:      []string{"pdx", "peer-proxy"},
+			StartTime: wantProcStart,
+		}, nil
+	})
+
+	entries, skipped, err := ReadRegistry(dir, live)
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 0 || len(entries) != 1 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 0 and 1", skipped, len(entries))
+	}
+	if !entries[0].IsProxy {
+		t.Errorf("IsProxy = false, want true")
+	}
+}
+
+// TestReadRegistry_InfoNonProxyEntry pins the non-proxy path: a fake Info
+// reporting an ordinary cc argv leaves IsProxy false.
+func TestReadRegistry_InfoNonProxyEntry(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "76973.json", fixture76973)
+
+	live := infoLiveness(func(pid int) (agent.ProcessInfo, error) {
+		return agent.ProcessInfo{
+			Argv:      []string{"node", "/usr/local/bin/claude"},
+			StartTime: wantProcStart,
+		}, nil
+	})
+
+	entries, skipped, err := ReadRegistry(dir, live)
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 0 || len(entries) != 1 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 0 and 1", skipped, len(entries))
+	}
+	if entries[0].IsProxy {
+		t.Errorf("IsProxy = true, want false")
+	}
+}
+
+// TestReadRegistry_InfoErrorFailsClosed pins the fail-closed rule (D9): an
+// entry whose Info call errors must be skipped like a dead entry, never
+// defaulting to IsProxy=false and being treated as a deliverable cc row.
+func TestReadRegistry_InfoErrorFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "76973.json", fixture76973)
+
+	live := infoLiveness(func(pid int) (agent.ProcessInfo, error) {
+		return agent.ProcessInfo{}, fmt.Errorf("permission denied reading /proc/%d", pid)
+	})
+
+	entries, skipped, err := ReadRegistry(dir, live)
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 1 || len(entries) != 0 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 1 and 0", skipped, len(entries))
+	}
+}
+
+// TestReadRegistry_InfoEmptyArgvFailsClosed pins the fail-closed rule (D9)
+// for the other unclassifiable case: Info succeeds but returns an empty
+// Argv (e.g. a race where the process already exited).
+func TestReadRegistry_InfoEmptyArgvFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "76973.json", fixture76973)
+
+	live := infoLiveness(func(pid int) (agent.ProcessInfo, error) {
+		return agent.ProcessInfo{Argv: nil, StartTime: wantProcStart}, nil
+	})
+
+	entries, skipped, err := ReadRegistry(dir, live)
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 1 || len(entries) != 0 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 1 and 0", skipped, len(entries))
+	}
+}
+
+// TestReadRegistry_NilInfoUnchanged pins backward compatibility: P1 fakes
+// that set only StartTime (Info == nil) must behave exactly as before —
+// this is already covered by every other test in this file (allTrueLiveness
+// never sets Info), but this test makes the invariant explicit: a nil Info
+// never fails an entry closed, and IsProxy defaults to false.
+func TestReadRegistry_NilInfoUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "76973.json", fixture76973)
+
+	live := allTrueLiveness(wantProcStart)
+	if live.Info != nil {
+		t.Fatal("allTrueLiveness must not set Info")
+	}
+
+	entries, skipped, err := ReadRegistry(dir, live)
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 0 || len(entries) != 1 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 0 and 1", skipped, len(entries))
+	}
+	if entries[0].IsProxy {
+		t.Errorf("IsProxy = true, want false (Info is nil)")
 	}
 }

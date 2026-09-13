@@ -5,6 +5,7 @@ package peers
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +54,7 @@ type Entry struct {
 	ProcStart  string // raw registry string, e.g. "Sun Sep 13 15:22:36 2026"
 	Version    string
 	Status     string // "idle" | "busy" | ""
+	IsProxy    bool   // set from Liveness.Info's Argv (D9); false when Info is nil
 }
 
 // TmuxSessionName returns the text before the first ':' in Tmux, or "" if
@@ -81,7 +83,8 @@ func (e Entry) TmuxPaneID() string {
 type Liveness struct {
 	Stat      func(path string) error
 	PidAlive  func(pid int) bool
-	StartTime func(pid int) (time.Time, error)
+	StartTime func(pid int) (time.Time, error)         // kept for P1 fakes; unused per-entry once Info is set
+	Info      func(pid int) (agent.ProcessInfo, error) // optional; when non-nil, replaces StartTime and also supplies Argv/ExePath for proxy classification (D9)
 }
 
 // DefaultLiveness returns the real, OS-backed Liveness.
@@ -101,7 +104,34 @@ func DefaultLiveness() Liveness {
 			}
 			return info.StartTime, nil
 		},
+		Info: agent.ReadProcessInfo,
 	}
+}
+
+// IsProxyProcess reports whether info describes a Purdex peer-proxy helper
+// process (D9): its executable (by ExePath, or falling back to argv[0] when
+// ExePath is unavailable/renamed) is named "pdx", AND its argv contains the
+// literal element "peer-proxy". Known limitation (D9): a process that
+// happens to satisfy both conditions without actually being a pdx
+// peer-proxy helper (e.g. a maliciously renamed binary) would be
+// misclassified; this is accepted as a low-value spoof to defend against.
+func IsProxyProcess(info agent.ProcessInfo) bool {
+	if len(info.Argv) == 0 {
+		return false
+	}
+
+	isPdxExe := filepath.Base(info.ExePath) == "pdx"
+	isPdxArgv0 := filepath.Base(info.Argv[0]) == "pdx"
+	if !isPdxExe && !isPdxArgv0 {
+		return false
+	}
+
+	for _, a := range info.Argv {
+		if a == "peer-proxy" {
+			return true
+		}
+	}
+	return false
 }
 
 // ProcStartLayout is Claude Code's registry format (UTC ctime).
@@ -174,7 +204,28 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 			continue
 		}
 
-		if !isLive(wire.PID, wire.Inbox, procStart, live) {
+		// D9 proxy classification. When Info is set, it replaces StartTime
+		// (one call per entry, not two) and also supplies Argv/ExePath so
+		// IsProxyProcess can classify the entry. Fail closed: a process
+		// that cannot be classified (Info errors, or returns an empty
+		// Argv — e.g. a permission-denied /proc read, or the process
+		// having already exited) must never become a deliverable cc row,
+		// so it is skipped exactly like a dead entry rather than defaulting
+		// to IsProxy=false.
+		entryLive := live
+		isProxy := false
+		if live.Info != nil {
+			info, infoErr := live.Info(wire.PID)
+			if infoErr != nil || len(info.Argv) == 0 {
+				skipped++
+				log.Printf("peers: registry: pid %d: could not classify process (argv unavailable: %v); skipping", wire.PID, infoErr)
+				continue
+			}
+			isProxy = IsProxyProcess(info)
+			entryLive.StartTime = func(int) (time.Time, error) { return info.StartTime, nil }
+		}
+
+		if !isLive(wire.PID, wire.Inbox, procStart, entryLive) {
 			skipped++
 			continue
 		}
@@ -190,6 +241,7 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 			ProcStart:  wire.ProcStart,
 			Version:    wire.Version,
 			Status:     wire.Status,
+			IsProxy:    isProxy,
 		})
 	}
 

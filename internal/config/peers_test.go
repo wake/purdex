@@ -19,7 +19,8 @@ func TestPeerHostRoundTripWriteFileAndLoad(t *testing.T) {
 		Bind:   "127.0.0.1",
 		Port:   7860,
 		Peers: config.PeersConfig{
-			Alias: "mini-lab",
+			Alias:   "mini-lab",
+			Deliver: true,
 			Hosts: []config.PeerHost{
 				{
 					Alias:        "air",
@@ -58,6 +59,9 @@ func TestPeerHostRoundTripWriteFileAndLoad(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
+	if loadedCfg.Peers.Deliver != true {
+		t.Errorf("Peers.Deliver: want true, got %v", loadedCfg.Peers.Deliver)
+	}
 	if len(loadedCfg.Peers.Hosts) != 2 {
 		t.Fatalf("expected 2 hosts, got %d", len(loadedCfg.Peers.Hosts))
 	}
@@ -166,11 +170,16 @@ func TestCloneDeepCopiesSlices(t *testing.T) {
 			AllowedRepoRoots: []string{"/repos"},
 		},
 		Peers: config.PeersConfig{
-			Hosts: []config.PeerHost{{Alias: "air", Token: "t1"}},
+			Deliver: true,
+			Hosts:   []config.PeerHost{{Alias: "air", Token: "t1"}},
 		},
 	}
 
 	clone := cfg.Clone()
+
+	if clone.Peers.Deliver != true {
+		t.Errorf("clone.Peers.Deliver = %v, want true (whole-struct value copy)", clone.Peers.Deliver)
+	}
 
 	// Mutate the clone in every dimension the brief calls out.
 	clone.Peers.Hosts = append(clone.Peers.Hosts, config.PeerHost{Alias: "iphone"})

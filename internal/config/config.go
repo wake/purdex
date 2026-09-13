@@ -60,8 +60,9 @@ type PeerHost struct {
 }
 
 type PeersConfig struct {
-	Alias string     `toml:"alias" json:"alias"`
-	Hosts []PeerHost `toml:"hosts" json:"hosts"`
+	Alias   string     `toml:"alias"   json:"alias"`
+	Hosts   []PeerHost `toml:"hosts"   json:"hosts"`
+	Deliver bool       `toml:"deliver" json:"deliver"` // default false; enables inbound /api/peers/deliver
 }
 
 // aliasPattern matches one URL path segment safe to use as a peer alias:

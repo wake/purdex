@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/peers/ccuds"
 )
 
 // fetchFunc is the fan-out seam: fetchRemote in production, a fake in tests.
@@ -73,6 +75,12 @@ type Module struct {
 	now         func() time.Time
 	client      *http.Client // default newRemoteClient(); shared across fan-out fetches
 	fetch       fetchFunc    // default fetchRemote; test seam
+
+	// warnedVersions dedupes the one-shot "Claude Code newer than verified"
+	// log line (localEnvelope) by version string: sync.Map since it is
+	// read/written from concurrent request handlers with no other lock
+	// guarding it. Zero value is ready to use.
+	warnedVersions sync.Map
 }
 
 // New constructs a peers Module with production defaults. Collaborators
@@ -131,6 +139,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/hosts", m.handleAddHost)
 	mux.HandleFunc("PUT /api/peers/hosts/{alias}", m.handlePutHost)
 	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)
+	mux.HandleFunc("GET /api/peers/settings", m.handleGetSettings)
+	mux.HandleFunc("PUT /api/peers/settings", m.handlePutSettings)
 }
 
 func (m *Module) Start(context.Context) error { return nil }
@@ -209,6 +219,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	if err != nil {
 		return writeError(err.Error())
 	}
+	m.warnNewerCCVersions(entries)
 
 	summaries := make([]ipeers.SessionSummary, 0, len(sessions))
 	owners := make(map[string]ipeers.Owner, len(sessions))
@@ -276,6 +287,25 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		OK:      true,
 		Partial: partial,
 		Peers:   peerRecords,
+	}
+}
+
+// warnNewerCCVersions logs a one-shot warning for every distinct Claude
+// Code version among entries that is newer than ccuds.VerifiedCCVersion —
+// the version every byte layout in the ccuds package was measured against,
+// so a newer one reporting is where a silent protocol change would first
+// show up. Deduped by version string in m.warnedVersions so the same
+// version logs at most once per process lifetime, however many
+// /api/peers calls (or entries sharing that version) see it.
+func (m *Module) warnNewerCCVersions(entries []ipeers.Entry) {
+	for _, e := range entries {
+		if e.Version == "" || !ccuds.NewerThanVerified(e.Version) {
+			continue
+		}
+		if _, alreadyWarned := m.warnedVersions.LoadOrStore(e.Version, struct{}{}); alreadyWarned {
+			continue
+		}
+		log.Printf("peers: Claude Code %s is newer than the last verified %s; run pdx msg selftest", e.Version, ccuds.VerifiedCCVersion)
 	}
 }
 

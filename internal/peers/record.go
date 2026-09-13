@@ -140,7 +140,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 
 	var candidates []Entry
 	for _, e := range entriesBySessionID[owner.SessionID] {
-		if !in.ProxyPIDs[e.PID] {
+		if !(e.IsProxy || in.ProxyPIDs[e.PID]) {
 			candidates = append(candidates, e)
 		}
 	}
@@ -241,7 +241,7 @@ func buildOutsideRecords(in BuildInput, sessionNames map[string]bool, consumed m
 			Agent:       agent,
 			Deliverable: true,
 		}
-		if in.ProxyPIDs[e.PID] {
+		if e.IsProxy || in.ProxyPIDs[e.PID] {
 			agent.Type = "proxy"
 			agent.Status = "proxy"
 			rec.Deliverable = false
