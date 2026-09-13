@@ -1,8 +1,11 @@
 package peers
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -300,6 +303,116 @@ func TestReadRegistry_PathIsRegularFile(t *testing.T) {
 	}
 	if entries != nil {
 		t.Errorf("entries = %v, want nil", entries)
+	}
+}
+
+// TestReadRegistry_SymlinkSkipped pins Item 3 (#reg-symlink): a "<pid>.json"
+// candidate that is a symlink must never be followed — it is skipped, even
+// when it points at an otherwise perfectly valid registry file.
+func TestReadRegistry_SymlinkSkipped(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	targetPath := filepath.Join(outside, "target.json")
+	if err := os.WriteFile(targetPath, []byte(fixture76973), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	linkPath := filepath.Join(dir, "1.json")
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	entries, skipped, err := ReadRegistry(dir, allTrueLiveness(wantProcStart))
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 1 || len(entries) != 0 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 1 and 0", skipped, len(entries))
+	}
+}
+
+// TestReadRegistry_FIFOSkipped pins Item 3: a "<pid>.json" candidate that is
+// a FIFO must be skipped WITHOUT blocking the reader — opening a FIFO with
+// no writer blocks forever on a naive os.ReadFile, so this must be caught by
+// the fstat regular-file check before any blocking read is attempted. The
+// call is wrapped in a goroutine with a timeout so a regression that blocks
+// fails the test instead of hanging the suite.
+func TestReadRegistry_FIFOSkipped(t *testing.T) {
+	dir := t.TempDir()
+	fifoPath := filepath.Join(dir, "2.json")
+	if err := syscall.Mkfifo(fifoPath, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	type result struct {
+		entries []Entry
+		skipped int
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		entries, skipped, err := ReadRegistry(dir, allTrueLiveness(wantProcStart))
+		done <- result{entries, skipped, err}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("ReadRegistry: unexpected err: %v", r.err)
+		}
+		if r.skipped != 1 || len(r.entries) != 0 {
+			t.Fatalf("skipped=%d len(entries)=%d, want 1 and 0", r.skipped, len(r.entries))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadRegistry blocked on a FIFO candidate")
+	}
+}
+
+// TestReadRegistry_OversizedFileSkipped pins Item 3: a "<pid>.json" candidate
+// larger than maxRegistryFileBytes (64 KiB) is skipped without being
+// unmarshalled.
+func TestReadRegistry_OversizedFileSkipped(t *testing.T) {
+	dir := t.TempDir()
+	big := strings.Repeat("x", 70*1024)
+	writeFixture(t, dir, "3.json", big)
+
+	entries, skipped, err := ReadRegistry(dir, allTrueLiveness(wantProcStart))
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 1 || len(entries) != 0 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 1 and 0", skipped, len(entries))
+	}
+}
+
+// TestReadRegistry_ValidOneKiBFileParses pins Item 3's non-regression case:
+// a well-formed registry file comfortably under the 64 KiB cap — here padded
+// to ~1 KiB — still parses normally.
+func TestReadRegistry_ValidOneKiBFileParses(t *testing.T) {
+	dir := t.TempDir()
+	pad := strings.Repeat("x", 850)
+	content := fmt.Sprintf(`{"pid":76973,"sessionId":"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c","cwd":"/Users/wake/Workspace/%s","procStart":"Sun Sep 13 15:22:36 2026","messagingSocketPath":"/tmp/cc-socks/76973.sock"}`, pad)
+	if len(content) < 900 || len(content) > 1200 {
+		t.Fatalf("fixture size = %d bytes, want roughly 1 KiB", len(content))
+	}
+	writeFixture(t, dir, "76973.json", content)
+
+	entries, skipped, err := ReadRegistry(dir, allTrueLiveness(wantProcStart))
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 0 || len(entries) != 1 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 0 and 1", skipped, len(entries))
+	}
+	if entries[0].PID != 76973 {
+		t.Errorf("PID = %d, want 76973", entries[0].PID)
+	}
+}
+
+// TestMaxRegistryFileBytes_Value pins the named constant Item 3 requires, so
+// a future change to the cap is a deliberate, visible edit here.
+func TestMaxRegistryFileBytes_Value(t *testing.T) {
+	if maxRegistryFileBytes != 64*1024 {
+		t.Fatalf("maxRegistryFileBytes = %d, want %d", maxRegistryFileBytes, 64*1024)
 	}
 }
 
