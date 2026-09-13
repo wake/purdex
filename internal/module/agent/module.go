@@ -213,6 +213,7 @@ func (m *Module) Init(c *core.Core) error {
 	// Expose event store and module so other modules (e.g. session rename) can update it.
 	c.Registry.Register("agent.events", m.events)
 	c.Registry.Register("agent.module", m)
+	c.Registry.Register(OwnerResolverKey, OwnerResolver(m))
 
 	if m.uploadDir == "" {
 		c.CfgMu.RLock()

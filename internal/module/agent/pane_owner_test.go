@@ -111,6 +111,7 @@ func TestResolvePaneOwners_LiveRootWithSessionID_Returned(t *testing.T) {
 		Cwd:        "/w/purdex",
 		TmuxPaneID: "%5",
 		LastSeenAt: 42,
+		Status:     string(agentpkg.StatusIdle),
 	}
 	if got != want {
 		t.Fatalf("owner = %+v, want %+v", got, want)
