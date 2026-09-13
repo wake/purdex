@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -41,6 +42,10 @@ type MonitorConfig struct {
 	TopProcessLimit   int `toml:"top_process_limit"   json:"top_process_limit"`
 }
 
+type PeersConfig struct {
+	Alias string `toml:"alias" json:"alias"`
+}
+
 // DispatchConfig holds the Ploom-dispatch (M0) daemon-side settings.
 //
 // SandboxHostPolicy is the daemon's authoritative sandbox policy: every
@@ -66,6 +71,18 @@ func (tc TerminalConfig) GetSizingMode() string {
 	return tc.SizingMode
 }
 
+// PeerAlias returns Peers.Alias, or HostID up to the first ':' when unset.
+func (c Config) PeerAlias() string {
+	if c.Peers.Alias != "" {
+		return c.Peers.Alias
+	}
+	// Fall back to HostID up to the first ':'
+	if i := strings.IndexByte(c.HostID, ':'); i > 0 {
+		return c.HostID[:i]
+	}
+	return c.HostID
+}
+
 type Config struct {
 	HostID       string         `toml:"host_id"        json:"host_id"`
 	Bind         string         `toml:"bind"           json:"bind"`
@@ -82,6 +99,7 @@ type Config struct {
 	Features     FeaturesConfig `toml:"features"       json:"features"`
 	Dev          DevConfig      `toml:"dev"            json:"dev"`
 	Dispatch     DispatchConfig `toml:"dispatch"       json:"dispatch"`
+	Peers        PeersConfig    `toml:"peers"          json:"peers"`
 }
 
 func defaults() Config {

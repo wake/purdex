@@ -22,6 +22,7 @@ type PaneOwner struct {
 	Cwd        string
 	TmuxPaneID string
 	LastSeenAt int64
+	Status     string // string(frame.Status) — the owning frame's Purdex agent status
 }
 
 // resolvePaneOwners returns the root agent frames of one pane.
@@ -153,6 +154,7 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, read proc
 			Cwd:        frame.Cwd,
 			TmuxPaneID: frame.PaneID,
 			LastSeenAt: frame.LastSeenAt,
+			Status:     string(frame.Status),
 		})
 	}
 	// One last look before the result is called an answer. The paths that

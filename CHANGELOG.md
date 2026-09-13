@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.0-alpha.334] - 2026-09-14
+
+### Feat: 跨主機 agent peer 橋接第一階段——本機 peer 盤點 `pdx peers`（#991）
+
+Claude Code 2.1.224 起 session 之間可以互傳訊息（`ListAgents` / `SendMessage`），但它的發現邏輯編在 binary 裡、沒有擴充點：同機靠 `~/.claude/sessions/<pid>.json` 加 `/tmp/cc-socks/<pid>.sock`，跨機只有 Remote Control 一條路（經 Anthropic、只列有進 RC 的 session、機器取的名字被隱藏、Codex 完全不在裡面）。新機 air-2026 進了 tailnet 之後，「我的 Purdex 主機上現在有哪些 peer」這個問題沒有答案。這是三階段（盤點 → 跨主機 fan-out → 投遞）的第一階段，spec 在 `docs/specs/2026-09-13-peer-bridge-spec.md`。
+
+**先實測再設計。** 動手前用一支 proxy 腳本對 Claude Code 的 inbox socket 做了六組實驗（spec §3），確認了幾件文件沒寫的事：frame 必須是 SDK 的 `type:"user"` NDJSON、`from` 一定要 `uds:` 前綴才會掛回信地址、wrapper 裡的 `from-mode` 是寄件方**自報**的、任何程序只要綁 socket 加寫兩個登記檔就會出現在 `ListAgents` 而且對方能原生回信（「虛擬 peer」）。這些是第三階段的基礎，也是這次 spec 被兩輪 codex review 砍掉 tmux `send-keys` 投遞通道的原因——typed input 帶使用者權限，沒有 harness 對 peer 訊息的那層限制，一條會「安靜降級」的橋等於把 peer 憑證換成使用者憑證。
+
+**join 的規則寫死在 sessionId 上，沒有 pane fallback。** daemon 本來就知道哪個 agent 擁有哪個 tmux session（Tab Rebuild 的 owner resolver），Claude Code 的登記檔也有 `sessionId`，所以一個 session 列的 agent 就是「owner 的 sessionId 對得上的那個 live 登記檔」。同一個 sessionId 有多個 live 程序（`--resume` 後舊程序還沒被清）時，只有 pane id 精確相符且唯一那筆才採用，否則整列標 `ambiguous` 而不是任選；而一個登記檔最多只能被一個 session 列採用——review 抓到 pane 在單次請求中途搬家可以讓兩列同時宣告同一個 inbox，之後 `cc:<name>` 位址就會誤判成 ambiguous。liveness 比對的是 instant 不是 wall clock：登記檔的 `procStart` 是 UTC ctime、`ps lstart` 是本地時間，`Truncate(Second).Equal` 才不會被時區騙。
+
+**owner 查不到和查失敗是兩回事。** 原本的 resolver 介面只有 `(PaneOwner, bool)`，tmux 讀取錯誤、5 秒逾時、context 取消全部塌成「沒有 owner」，一個正在跑 Claude Code 的 session 會在那一瞬間被列成純 shell、而且 `partial` 還是 false。三份 review 各自獨立點名這件事。現在介面帶 `error`，查失敗的列是 `agent:null, reason:""` 加 `partial:true`，只有「查成功但真的沒 agent」才是 `no_agent`。收斂那輪又抓到最後一個 pane 逾時會被 `panesOfSession` 吞掉的路徑，一併補上。
+
+**`/api/peers` 從第一天就不能是開的。** 既有的 `TokenAuth` 在 admin token 為空時放行所有路由、也吃一次性 ticket；peer 路由是給遠端 daemon 打的，這兩件事都不能繼承。`PeerRouteAuth` 掛在 `TokenAuth` 外層只管 `/api/peers` 前綴：非空 admin bearer、不看 ticket、空 token 一律 401；其他路由一個位元都沒動。第二階段的 per-host `inbound_token` 會加在同一個 wrapper 上，review 提醒屆時要讓通過 scoped auth 的請求繞過內層 `TokenAuth` 而不是只加分支。
+
+**攻擊方 review 修了兩個資源邊界。** 登記檔目錄是同 uid 可寫的，一個 `1.json -> /dev/zero` 的 symlink 或一支 FIFO 就能讓 daemon 無限讀或永久卡住——現在用 `O_NOFOLLOW|O_NONBLOCK` 開、fstat 確認是普通檔、64 KiB 上限。CLI 也改成先看狀態碼再讀 body，非 200 只取 4 KiB 摘要，200 的 body 超過 16 MiB 直接拒絕。
+
+**tmux 世代跨越請求就整包作廢。** 盤點分兩步（列 session、逐一問 owner），tmux 在中間重啟並重用 session id 會把新 session 的 agent 併到舊 session 的名字底下；跟既有 provenance handler 一樣前後各取一次 `TmuxInstance`，不同就回 `ok:false`。
+
+**真機驗收**：mlab 上 12 個 tmux session、9 個 Claude Code 全部 `deliverable yes`、peer name / pid / inbox / status / version 正確，1.0 秒內完成（2 秒 soft budget，`partial:false`）；`curl /api/peers` 無 bearer 401、帶 `?ticket=` 401、帶 bearer 200。
+
+**流程**：spec 兩輪 codex（2+1 Blocker、10+6 Major，全部採納，處置表在 spec §8/§9）、plan 一輪（1 Blocker、6 Major、5 Minor）、subagent TDD 八個 task 各自 review、final whole-branch review 四項修正、PR 標準加三視角 adversarial review 六項修正、收斂一項。延後追蹤：#988（已由本 PR 關閉）、#989（liveness 每個 entry 四次 `ps` fork 吃預算）、#990（雜項）。
+
+### Fix: 深色主題的 success 顏色改成看得見的文字色（#985）
+
+`--status-success` 原本是 `#2a4a3a`——一個填色、不是前景色，而所有用到它的地方都是文字。在 elevated 底色上對比 1.63，連大字的 3:1 門檻都不到，所以 #977 加的「Resolves to cld-yolo」判定字在深色主題下是字面意義的看不見。改成 `#7ec699`，三種底色上 7.95 / 9.73 / 9.10，落在 warning 旁邊。
+
+### Fix: 探測範本時跳過開頭的變數指派（#987）
+
+`OPENCODE_YOLO=true opencode -s {id}` 被回報成「login shell 找不到」。範本沒錯，是 probe 拿第一個空白分隔 token 去解析 `OPENCODE_YOLO=true`——那不是指令，永遠解析不到。POSIX simple command 前面可以接變數指派，*command word* 是指派之後的那個；#977 的 spec 就是這樣寫的，這是實作漏掉自己的契約。`NAME=` 是全部的判斷條件（值裡有 `=` 也無妨；flag 與絕對路徑不可能被誤判），全是指派的範本沒有 command word，Test 保持關閉。
+
 ## [1.0.0-alpha.333] - 2026-09-08
 
 ### Feat: 分頁自己去問「這個 pane 是誰的」，resume 指令變成可設定的範本（#977）
