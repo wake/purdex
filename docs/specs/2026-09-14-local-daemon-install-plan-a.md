@@ -17,19 +17,24 @@ The dev-mode env gate becomes `internal/devmode.Enabled()` (`!= "0"`).
 **Tech Stack:** Go 1.25 (net/http `ServeMux` method patterns,
 `http.NewResponseController`, `crypto/sha256`), `go test ./...`
 
-**Spec:** `docs/specs/2026-09-14-local-daemon-install-spec.md` (v3) — §2 is
+**Spec:** `docs/specs/2026-09-14-local-daemon-install-spec.md` (v4) — §2 is
 this plan's contract; §1 decisions are fixed.
+
+**Plan review:** codex `task-mu019hoj-gzro92` (1 Blocker, 7 Important, 3 Minor) — all applied in this revision.
 
 ## Global Constraints
 
 - **TDD, no exceptions.** Failing test first, run it, implement, run again,
-  commit. One task = one commit.
+  commit. Tasks 1–7 are one commit each; Task 8 is a verification/PR gate
+  and creates no commit.
 - **Commit messages in English**; every commit ends with:
   ```
   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01JYDubMeVHmpGkgjyRo5bFN
   ```
-- **Verification:** `go test ./...` must be green after every task; `go vet ./...` clean.
+- **Verification:** `go test -race ./...` must be green after every task; `go vet ./...` clean.
+- **`buildBinary`'s `sink` is never called concurrently** — it serialises
+  stdout/stderr lines internally (Task 6). Callers may use plain slices.
 - **Worktree:** all commands run from
   `/Users/wake/Workspace/wake/purdex/.claude/worktrees/local-daemon-install`
   (prefix every Bash call with `cd <that path> &&`; absolute paths in
@@ -57,7 +62,7 @@ this plan's contract; §1 decisions are fixed.
 | `cmd/pdx/main.go` *(modify)* | route `version`; usage line; `serve` exits when pid lock held |
 | `cmd/pdx/daemon.go` *(modify)* | `releasePidLock` never unlinks; SIGKILL branch never unlinks |
 | `cmd/pdx/daemon_test.go` *(modify)* | pid-file-permanent tests |
-| `internal/core/info_handler.go` *(modify)* + `info_handler_test.go` *(new)* | health/info read `buildinfo` |
+| `internal/core/info_handler.go` *(modify)* + `info_handler_test.go` *(modify, exists)* | health/info read `buildinfo` |
 | `internal/module/dev/build.go` *(new)* | `buildTarget`, `buildBinary` |
 | `internal/module/dev/daemon.go` *(modify)* | rebuild uses `buildBinary`; `buildinfo.Hash` |
 | `internal/module/dev/download.go` *(new)* + `download_test.go` | `handleDaemonDownload` |
@@ -76,6 +81,40 @@ this plan's contract; §1 decisions are fixed.
 
 **Interfaces:**
 - Produces: `buildinfo.Hash string`, `buildinfo.Version string` (both default `"unknown"`).
+
+- [ ] **Step 0: Failing test — the rebuild bakes version as well as hash**
+
+Append to `internal/module/dev/daemon_test.go`:
+
+```go
+func TestReadVersionFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "VERSION"), []byte("1.2.3\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := &DevModule{repoRoot: dir, versionFile: filepath.Join(dir, "VERSION")}
+	if got := m.readVersionFile(); got != "1.2.3" {
+		t.Fatalf("readVersionFile = %q, want 1.2.3", got)
+	}
+	if got := (&DevModule{}).readVersionFile(); got != "unknown" {
+		t.Fatalf("missing VERSION → %q, want unknown", got)
+	}
+}
+
+func TestRebuildLdflags_InjectBuildinfoHashAndVersion(t *testing.T) {
+	got := rebuildLdflags("abc1234", "1.2.3")
+	for _, want := range []string{
+		"-X github.com/wake/purdex/internal/buildinfo.Hash=abc1234",
+		"-X github.com/wake/purdex/internal/buildinfo.Version=1.2.3",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ldflags %q missing %q", got, want)
+		}
+	}
+}
+```
+
+Run: `go test ./internal/module/dev/ -run 'TestReadVersionFile|TestRebuildLdflags'` → FAIL (undefined).
 
 - [ ] **Step 1: Create the package**
 
@@ -114,16 +153,16 @@ LDFLAGS := -X github.com/wake/purdex/internal/buildinfo.Hash=$(HASH) -X github.c
 In `internal/module/dev/daemon.go`: delete the `BakedInHash` var and its
 comment; add `"github.com/wake/purdex/internal/buildinfo"` to the imports;
 replace every `BakedInHash` with `buildinfo.Hash` (two in
-`handleDaemonCheck`). In `handleDaemonRebuild` the ldflags string becomes:
+`handleDaemonCheck`). In `handleDaemonRebuild` the ldflags line becomes
+`ldflags := rebuildLdflags(hash, m.readVersionFile())`, and add to `daemon.go`:
 
 ```go
-ldflags := "-X github.com/wake/purdex/internal/buildinfo.Hash=" + hash +
-	" -X github.com/wake/purdex/internal/buildinfo.Version=" + m.readVersionFile()
-```
+// rebuildLdflags bakes the build identity into internal/buildinfo.
+func rebuildLdflags(hash, version string) string {
+	return "-X github.com/wake/purdex/internal/buildinfo.Hash=" + hash +
+		" -X github.com/wake/purdex/internal/buildinfo.Version=" + version
+}
 
-and add to `daemon.go`:
-
-```go
 // readVersionFile returns the trimmed VERSION file, or "unknown".
 func (m *DevModule) readVersionFile() string {
 	data, err := os.ReadFile(m.versionFile)
@@ -142,13 +181,14 @@ func (m *DevModule) readVersionFile() string {
 into an error → `"unknown"`. Fine.)
 
 In `internal/module/dev/daemon_test.go` replace `BakedInHash` with
-`buildinfo.Hash` (import the package). Run `rg -n BakedInHash` — must be
-empty.
+`buildinfo.Hash` (import the package). Run
+`rg -n BakedInHash --glob '*.go' --glob Makefile .` — must be empty (docs
+may still mention the old name; that is fine).
 
 - [ ] **Step 4: Verify**
 
-Run: `cd <worktree> && go build ./... && go test ./internal/module/dev/ ./cmd/pdx/`
-Expected: PASS. Then `make build && ./bin/pdx status` still works (binary links).
+Run: `cd <worktree> && go build ./... && go test -race ./internal/module/dev/ ./cmd/pdx/`
+Expected: PASS (including the two Step 0 tests). Then `make build` succeeds.
 
 - [ ] **Step 5: Commit**
 
@@ -207,11 +247,10 @@ func TestEnabled(t *testing.T) {
 }
 ```
 
-and in the same test file:
+and in the same test file (merge `"os"` into the file's single import block
+at the top — Go does not allow an import after a declaration):
 
 ```go
-import "os"
-
 func unsetForTest(t *testing.T) {
 	t.Helper()
 	if err := os.Unsetenv("PDX_DEV_MODE"); err != nil {
@@ -255,13 +294,16 @@ replace the same condition and change the log line to
 "isDevMode defers to devmode.Enabled(); kept as a local name so call sites
 read naturally." (import `devmode`; drop `os` if now unused).
 
-- [ ] **Step 5: Flip the existing gate tests**
+- [ ] **Step 5: Flip the existing gate tests** (do this **before** Step 4's
+wiring so the new test is seen failing)
 
 `internal/module/dev/module_test.go`: rename
 `TestRegisterRoutes_DisabledByDefault` → `TestRegisterRoutes_DisabledWithZero`
 and change its `t.Setenv("PDX_DEV_MODE", "")` to `"0"`. Add:
 
 ```go
+// Asserts registration only. Do NOT ServeHTTP here: a bare &DevModule{}
+// has a nil hashFn and the check handler would panic.
 func TestRegisterRoutes_EnabledWhenUnset(t *testing.T) {
 	t.Setenv("PDX_DEV_MODE", "")
 	if err := os.Unsetenv("PDX_DEV_MODE"); err != nil {
@@ -272,10 +314,9 @@ func TestRegisterRoutes_EnabledWhenUnset(t *testing.T) {
 	m.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dev/update/check", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-	if w.Code == http.StatusNotFound {
-		t.Fatalf("dev routes must be registered when PDX_DEV_MODE is unset (spec D6)")
+	_, pattern := mux.Handler(req)
+	if pattern != "GET /api/dev/update/check" {
+		t.Fatalf("pattern = %q; dev routes must be registered when PDX_DEV_MODE is unset (spec D6)", pattern)
 	}
 }
 ```
@@ -286,8 +327,8 @@ PDX_DEV_MODE unset" to "with PDX_DEV_MODE=0" (the test body already sets
 
 - [ ] **Step 6: Verify**
 
-Run: `go test ./internal/devmode/ ./internal/module/dev/ ./internal/module/agent/` → PASS.
-Run: `rg -n 'PDX_DEV_MODE' --glob '*.go' --glob '!*_test.go' internal cmd` → only `internal/devmode/devmode.go`.
+Run: `go test -race ./internal/devmode/ ./internal/module/dev/ ./internal/module/agent/` → PASS.
+Run: `rg -n 'Getenv\("PDX_DEV_MODE"\)' --glob '*.go' --glob '!*_test.go' internal cmd` → only `internal/devmode/devmode.go` (comments and log strings may still mention the variable).
 
 - [ ] **Step 7: Commit**
 
@@ -436,26 +477,19 @@ git commit -m "feat(cli): add pdx version [--json]"
 
 **Files:**
 - Modify: `internal/core/info_handler.go:16-29,44-56`
-- Create: `internal/core/info_handler_test.go`
+- Modify: `internal/core/info_handler_test.go` (**exists** — health/ready/info tests live there; append, never overwrite)
 
 **Interfaces:**
 - Produces: health JSON gains `"version"` and `"hash"`; `/api/info.purdex_version` is `buildinfo.Version`; `core.Version` is deleted.
 
-- [ ] **Step 1: Failing test**
+- [ ] **Step 1: Failing test** — append to the existing
+`internal/core/info_handler_test.go` (merge `"github.com/wake/purdex/internal/buildinfo"`
+into its import block; keep every existing test). `Core.Pairing` is a value
+field (`core.go:41`) and `StateNormal` is valid on it, so `&Core{}` +
+`c.Pairing.Set(StateNormal)` compiles — mirror however the existing health
+test in that file constructs its `Core`.
 
 ```go
-// internal/core/info_handler_test.go
-package core
-
-import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-
-	"github.com/wake/purdex/internal/buildinfo"
-)
-
 func TestHandleHealth_CarriesBuildIdentity(t *testing.T) {
 	oldH, oldV := buildinfo.Hash, buildinfo.Version
 	t.Cleanup(func() { buildinfo.Hash, buildinfo.Version = oldH, oldV })
@@ -479,15 +513,13 @@ func TestHandleHealth_CarriesBuildIdentity(t *testing.T) {
 }
 ```
 
-If `Core.Pairing` cannot be used on a zero `Core` (check `internal/core/core.go`
-for how `Pairing` is initialised — if it is a pointer, construct it the way
-`New`/tests in `internal/core` do), adapt the constructor line; the assertion
-on `mode` may be dropped if constructing pairing state is heavy — the point
-of the test is `hash`/`version`.
+Also extend the file's existing `/api/info` test: set `buildinfo.Version`
+to a sentinel (with the same `t.Cleanup` restore) and assert
+`purdex_version` equals it.
 
 - [ ] **Step 2: Run to fail**
 
-Run: `go test ./internal/core/ -run TestHandleHealth` → FAIL (no `hash` key).
+Run: `go test ./internal/core/ -run 'TestHandleHealth|Info'` → FAIL (no `hash` key; info still `"dev"`).
 
 - [ ] **Step 3: Implement**
 
@@ -530,6 +562,14 @@ git commit -m "feat(core): expose build version and hash on /api/health, drop co
 **Interfaces:**
 - `releasePidLock(f *os.File, pidPath string)` keeps its signature (the
   `pidPath` argument becomes unused but stays to avoid touching call sites).
+- New seam: `mustAcquirePidLock(pidPath string, pid int, fatalf func(string, ...any)) *os.File`
+  — `runServe` calls it with `log.Fatalf`; the test passes a recorder.
+
+**macOS flock expectation** (verified statically against `flock(2)`): two
+independent `open`s of the same path are two open-file descriptions, not
+dups; once the first is unlocked and closed, the second can `LOCK_EX`, and a
+third open observes that lock. The pre-existing `TestPidFileLockAndUnlock`
+("re-acquire after release") stays valid with a permanent file.
 
 - [ ] **Step 1: Failing tests**
 
@@ -585,7 +625,28 @@ func TestPidLock_OpenBeforeReleaseStaysVisible(t *testing.T) {
 }
 ```
 
-(add `"fmt"` and `"syscall"` to the test imports if missing).
+```go
+func TestMustAcquirePidLock_FatalWhenHeld(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	first, err := acquirePidLock(pidPath, 111)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releasePidLock(first, pidPath)
+
+	var got string
+	f := mustAcquirePidLock(pidPath, 222, func(format string, args ...any) { got = fmt.Sprintf(format, args...) })
+	if f != nil {
+		t.Fatal("must not return a file when the lock is held")
+	}
+	if !strings.Contains(got, "refusing to start") {
+		t.Fatalf("fatalf not invoked with the refusal message: %q", got)
+	}
+}
+```
+
+(add `"fmt"`, `"strings"` and `"syscall"` to the test imports if missing).
 
 - [ ] **Step 2: Run to fail**
 
@@ -613,21 +674,34 @@ func releasePidLock(f *os.File, _ string) {
 In `runStop`, delete the `os.Remove(pidPath)` after the SIGKILL sleep (the
 kernel drops the flock when the process dies).
 
-`cmd/pdx/main.go` pid lock block:
+Add to `cmd/pdx/daemon.go`:
 
 ```go
-	pidFile, pidErr := acquirePidLock(pidPath, os.Getpid())
-	if pidErr != nil {
-		// Two daemons on one data_dir would share the SQLite files. Refuse.
-		log.Fatalf("pid lock: %v — refusing to start a second daemon on %s", pidErr, cfg.DataDir)
+// mustAcquirePidLock is runServe's pid-lock gate. Two daemons on one
+// data_dir would share the SQLite files, so a held lock is fatal, not a
+// warning. fatalf is injected so the refusal is testable.
+func mustAcquirePidLock(pidPath string, pid int, fatalf func(string, ...any)) *os.File {
+	f, err := acquirePidLock(pidPath, pid)
+	if err != nil {
+		fatalf("pid lock: %v — refusing to start a second daemon on %s", err, filepath.Dir(pidPath))
+		return nil
 	}
+	return f
+}
+```
+
+and in `cmd/pdx/main.go` replace the pid lock block with:
+
+```go
+	pidFile := mustAcquirePidLock(pidPath, os.Getpid(), log.Fatalf)
 	defer releasePidLock(pidFile, pidPath)
 ```
 
 - [ ] **Step 4: Verify**
 
-Run: `go test ./cmd/pdx/` → PASS (including the pre-existing
-`TestPidFileLockAndUnlock`, whose "re-acquire after release" still works).
+Run: `go test -race ./cmd/pdx/` → PASS (including the pre-existing
+`TestPidFileLockAndUnlock`, whose "re-acquire after release" still works,
+and the three new tests).
 Manual sanity on the Mini is **not** done in this task — the running daemon
 is the old binary; deployment happens after merge.
 
@@ -654,8 +728,9 @@ git commit -m "fix(daemon): keep the pid file permanent and refuse to serve when
   ```
   Runs `go build -ldflags "-X …buildinfo.Hash=<hash> -X …buildinfo.Version=<version>" -o <out> ./cmd/pdx`
   in `m.repoRoot`, env = `os.Environ()` plus `GOOS`/`GOARCH`/`CGO_ENABLED=0`
-  when `t` is non-zero. Every stdout/stderr line goes to `sink`. Returns
-  the `cmd.Wait` error (wrapped with `"go build: "`).
+  when `t` is non-zero. Every stdout/stderr line goes to `sink`, **serialised
+  by an internal mutex** (stdout and stderr are read by two goroutines).
+  Returns the `cmd.Wait` error (wrapped with `"go build: "`).
 
 - [ ] **Step 1: Failing test**
 
@@ -725,6 +800,22 @@ func TestBuildBinary_CrossTargetProducesForeignArch(t *testing.T) {
 	}
 }
 
+// Both pipes are drained concurrently; the sink contract says calls are
+// serialised. Run under -race: a program that writes to stdout and stderr
+// during compilation is not available, so exercise the two-goroutine path
+// with a compile error (stderr) on a module whose build also prints via a
+// //go:generate-free vet-like warning is overkill — the race detector on
+// the append below is the assertion.
+func TestBuildBinary_SinkIsSerialised(t *testing.T) {
+	dir := writeThrowawayModule(t, "package main\nfunc main(){ undefined(); alsoUndefined() }\n")
+	m := &DevModule{repoRoot: dir}
+	var lines []string // plain slice: safe only if sink is serialised
+	_ = m.buildBinary(context.Background(), buildTarget{}, "abc", "1.2.3", filepath.Join(dir, "out"), func(l string) { lines = append(lines, l) })
+	if len(lines) == 0 {
+		t.Fatal("expected compiler output")
+	}
+}
+
 func TestBuildBinary_CompileErrorIsReported(t *testing.T) {
 	dir := writeThrowawayModule(t, "package main\nfunc main(){ undefined() }\n")
 	m := &DevModule{repoRoot: dir}
@@ -756,6 +847,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 )
 
 // buildTarget names a GOOS/GOARCH pair. The zero value means "the host".
@@ -770,9 +862,15 @@ func (t buildTarget) isHost() bool { return t.GOOS == "" && t.GOARCH == "" }
 // into internal/buildinfo. Cross builds set GOOS/GOARCH and CGO_ENABLED=0
 // (modernc sqlite is pure Go, so the host toolchain's C SDK is irrelevant).
 // It does not consult git: callers pass the identity they already captured.
+// sink is never called concurrently.
 func (m *DevModule) buildBinary(ctx context.Context, t buildTarget, hash, version, out string, sink func(line string)) error {
-	ldflags := "-X github.com/wake/purdex/internal/buildinfo.Hash=" + hash +
-		" -X github.com/wake/purdex/internal/buildinfo.Version=" + version
+	ldflags := rebuildLdflags(hash, version)
+	var sinkMu sync.Mutex
+	emit := func(line string) {
+		sinkMu.Lock()
+		defer sinkMu.Unlock()
+		sink(line)
+	}
 	cmd := exec.CommandContext(ctx, "go", "build", "-ldflags", ldflags, "-o", out, "./cmd/pdx")
 	cmd.Dir = m.repoRoot
 	// Inherit env so GOCACHE / PATH / HOME work; do not scrub.
@@ -800,7 +898,7 @@ func (m *DevModule) buildBinary(ctx context.Context, t buildTarget, hash, versio
 		sc := bufio.NewScanner(src)
 		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for sc.Scan() {
-			sink(sc.Text())
+			emit(sc.Text())
 		}
 	}
 	doneOut, doneErr := make(chan struct{}), make(chan struct{})
@@ -840,8 +938,8 @@ Keep the existing "Fix 1" comment about baking the hash; drop the now-dead
 
 - [ ] **Step 5: Verify**
 
-Run: `go test ./internal/module/dev/` → PASS, **including every pre-existing
-`TestHandleDaemonRebuild_*` unchanged**. `go vet ./internal/module/dev/` clean.
+Run: `go test -race ./internal/module/dev/` → PASS, **including every
+pre-existing `TestHandleDaemonRebuild_*` unchanged**. `go vet ./internal/module/dev/` clean.
 
 - [ ] **Step 6: Commit**
 
@@ -875,7 +973,9 @@ git commit -m "refactor(dev): extract buildBinary from the daemon rebuild handle
 package dev
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"debug/macho"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -931,60 +1031,152 @@ func TestDownload_NoGitHashIs500(t *testing.T) {
 	}
 }
 
-func TestDownload_BuildsServesAndCaches(t *testing.T) {
+// fetchOK downloads one target and returns the body + response.
+func fetchOK(t *testing.T, srv *httptest.Server, goos, goarch string) ([]byte, *http.Response) {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/api/dev/daemon/download?goos=" + goos + "&goarch=" + goarch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("%s/%s: status %d: %s", goos, goarch, resp.StatusCode, body)
+	}
+	return body, resp
+}
+
+func TestDownload_CacheMiss_BuildsEveryDarwinAndLinuxTarget(t *testing.T) {
 	dir := writeThrowawayModule(t, "package main\nfunc main(){}\n")
-	os.WriteFile(filepath.Join(dir, "VERSION"), []byte("7.7.7\n"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "VERSION"), []byte("7.7.7\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	srv := newDownloadServer(t, dir, "abc1234")
 
-	resp, err := http.Get(srv.URL + "/api/dev/daemon/download?goos=linux&goarch=amd64")
+	cases := []struct {
+		goos, goarch string
+		check        func(t *testing.T, body []byte)
+	}{
+		{"darwin", "arm64", func(t *testing.T, b []byte) { assertMachO(t, b, macho.CpuArm64) }},
+		{"darwin", "amd64", func(t *testing.T, b []byte) { assertMachO(t, b, macho.CpuAmd64) }},
+		{"linux", "amd64", func(t *testing.T, b []byte) {
+			if string(b[:4]) != "\x7fELF" || b[18] != 0x3e || b[19] != 0x00 {
+				t.Fatalf("not a linux/amd64 ELF")
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.goos+"/"+c.goarch, func(t *testing.T) {
+			body, resp := fetchOK(t, srv, c.goos, c.goarch)
+			c.check(t, body)
+			if resp.Header.Get("X-Pdx-Hash") != "abc1234" || resp.Header.Get("X-Pdx-Version") != "7.7.7" {
+				t.Fatalf("identity headers: %v", resp.Header)
+			}
+			sum := sha256.Sum256(body)
+			if resp.Header.Get("X-Pdx-Sha256") != hex.EncodeToString(sum[:]) {
+				t.Fatalf("sha256 header mismatch")
+			}
+			if resp.ContentLength != int64(len(body)) {
+				t.Fatalf("Content-Length %d, body %d", resp.ContentLength, len(body))
+			}
+			if resp.Header.Get("Content-Type") != "application/octet-stream" {
+				t.Fatalf("content-type %q", resp.Header.Get("Content-Type"))
+			}
+			artifact := filepath.Join(dir, "bin", "dist", "pdx-"+c.goos+"-"+c.goarch+"-abc1234")
+			if _, err := os.Stat(artifact); err != nil {
+				t.Fatalf("artifact missing: %v", err)
+			}
+			if _, err := os.Stat(artifact + ".tmp"); !os.IsNotExist(err) {
+				t.Fatal(".tmp left behind")
+			}
+		})
+	}
+}
+
+func assertMachO(t *testing.T, body []byte, cpu macho.Cpu) {
+	t.Helper()
+	f, err := macho.NewFile(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("not a Mach-O: %v", err)
+	}
+	if f.Cpu != cpu {
+		t.Fatalf("Mach-O cpu = %v, want %v", f.Cpu, cpu)
+	}
+}
+
+// A pre-existing artifact is served without any build: the source module
+// does not even compile, and the artifact's mtime is pinned in the past.
+func TestDownload_CacheHit_ServesWithoutBuilding(t *testing.T) {
+	dir := writeThrowawayModule(t, "package main\nfunc main(){ undefined() }\n")
+	if err := os.WriteFile(filepath.Join(dir, "VERSION"), []byte("7.7.7\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dist := filepath.Join(dir, "bin", "dist")
+	if err := os.MkdirAll(dist, 0755); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(dist, "pdx-linux-amd64-abc1234")
+	want := []byte("not really a binary but exactly these bytes")
+	if err := os.WriteFile(artifact, want, 0755); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(artifact, past, past); err != nil {
+		t.Fatal(err)
+	}
+	srv := newDownloadServer(t, dir, "abc1234")
+
+	body, resp := fetchOK(t, srv, "linux", "amd64")
+	if !bytes.Equal(body, want) {
+		t.Fatalf("served %q, want the cached bytes", body)
+	}
+	sum := sha256.Sum256(want)
+	if resp.Header.Get("X-Pdx-Sha256") != hex.EncodeToString(sum[:]) || resp.Header.Get("X-Pdx-Hash") != "abc1234" || resp.Header.Get("X-Pdx-Version") != "7.7.7" {
+		t.Fatalf("headers: %v", resp.Header)
+	}
+	if resp.ContentLength != int64(len(want)) {
+		t.Fatalf("Content-Length %d, want %d", resp.ContentLength, len(want))
+	}
+	st, err := os.Stat(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.ModTime().Equal(past) {
+		t.Fatal("cache hit rebuilt the artifact")
+	}
+}
+
+// The checksum always describes the whole artifact; a Range request gets a
+// 206 with a partial body and the same X-Pdx-Sha256. Clients verify only a
+// full 200 response (Plan B does).
+func TestDownload_RangeIsPartialButChecksumIsWhole(t *testing.T) {
+	dir := writeThrowawayModule(t, "package main\nfunc main(){ undefined() }\n")
+	dist := filepath.Join(dir, "bin", "dist")
+	if err := os.MkdirAll(dist, 0755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("0123456789")
+	if err := os.WriteFile(filepath.Join(dist, "pdx-linux-amd64-abc1234"), want, 0755); err != nil {
+		t.Fatal(err)
+	}
+	srv := newDownloadServer(t, dir, "abc1234")
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/dev/daemon/download?goos=linux&goarch=amd64", nil)
+	req.Header.Set("Range", "bytes=0-3")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusPartialContent || string(body) != "0123" {
+		t.Fatalf("status %d body %q", resp.StatusCode, body)
 	}
-	if resp.Header.Get("X-Pdx-Hash") != "abc1234" || resp.Header.Get("X-Pdx-Version") != "7.7.7" {
-		t.Fatalf("identity headers: %v", resp.Header)
-	}
-	sum := sha256.Sum256(body)
+	sum := sha256.Sum256(want)
 	if resp.Header.Get("X-Pdx-Sha256") != hex.EncodeToString(sum[:]) {
-		t.Fatalf("sha256 header mismatch")
-	}
-	if resp.ContentLength != int64(len(body)) {
-		t.Fatalf("Content-Length %d, body %d", resp.ContentLength, len(body))
-	}
-	if resp.Header.Get("Content-Type") != "application/octet-stream" {
-		t.Fatalf("content-type %q", resp.Header.Get("Content-Type"))
-	}
-	if string(body[:4]) != "\x7fELF" {
-		t.Fatalf("not an ELF (linux/amd64 requested)")
-	}
-
-	artifact := filepath.Join(dir, "bin", "dist", "pdx-linux-amd64-abc1234")
-	st, err := os.Stat(artifact)
-	if err != nil {
-		t.Fatalf("artifact missing: %v", err)
-	}
-	if _, err := os.Stat(artifact + ".tmp"); !os.IsNotExist(err) {
-		t.Fatal(".tmp left behind")
-	}
-
-	// Second request is a cache hit: served byte-for-byte, artifact untouched.
-	time.Sleep(20 * time.Millisecond)
-	resp2, err := http.Get(srv.URL + "/api/dev/daemon/download?goos=linux&goarch=amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body2, _ := io.ReadAll(resp2.Body)
-	resp2.Body.Close()
-	if string(body2) != string(body) {
-		t.Fatal("cache hit served different bytes")
-	}
-	st2, _ := os.Stat(artifact)
-	if !st2.ModTime().Equal(st.ModTime()) {
-		t.Fatal("cache hit rebuilt the artifact")
+		t.Fatal("sha256 header must describe the whole artifact")
 	}
 }
 
@@ -1124,10 +1316,14 @@ import (
 	"time"
 )
 
-// downloadBudget bounds build + transfer for one download request. The
-// server has no global WriteTimeout, so the transfer needs its own deadline
-// or a stalled reader would hold daemonRebuildMu indefinitely.
-const downloadBudget = 6 * time.Minute
+// downloadBudget bounds build + transfer for one download request, measured
+// from handler entry. The server has no global WriteTimeout, so the transfer
+// needs its own deadline or a stalled reader would hold daemonRebuildMu
+// indefinitely. The build alone gets buildBudget (spec §2.5 step 3).
+const (
+	downloadBudget = 6 * time.Minute
+	buildBudget    = 5 * time.Minute
+)
 
 var allowedTargets = map[string]map[string]bool{
 	"darwin": {"arm64": true, "amd64": true},
@@ -1139,6 +1335,7 @@ var allowedTargets = map[string]map[string]bool{
 // request runs under daemonRebuildMu so a /rebuild cannot exec the server
 // mid-transfer and two downloads cannot race in bin/dist.
 func (m *DevModule) handleDaemonDownload(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	q := r.URL.Query()
 	goos, goarch := q.Get("goos"), q.Get("goarch")
 	if !allowedTargets[goos][goarch] {
@@ -1165,7 +1362,8 @@ func (m *DevModule) handleDaemonDownload(w http.ResponseWriter, r *http.Request)
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, downloadBudget)
+	// Request budget runs from entry; the build is a child with its own cap.
+	ctx, cancel := context.WithDeadline(parent, start.Add(downloadBudget))
 	defer cancel()
 	go func() {
 		select {
@@ -1174,8 +1372,7 @@ func (m *DevModule) handleDaemonDownload(w http.ResponseWriter, r *http.Request)
 		case <-ctx.Done():
 		}
 	}()
-	deadline := time.Now().Add(downloadBudget)
-	_ = http.NewResponseController(w).SetWriteDeadline(deadline)
+	_ = http.NewResponseController(w).SetWriteDeadline(start.Add(downloadBudget))
 
 	distDir := filepath.Join(m.repoRoot, "bin", "dist")
 	if err := os.MkdirAll(distDir, 0755); err != nil {
@@ -1188,7 +1385,9 @@ func (m *DevModule) handleDaemonDownload(w http.ResponseWriter, r *http.Request)
 	if _, err := os.Stat(artifact); err != nil {
 		tmp := artifact + ".tmp"
 		ring := newRingBuffer(4 * 1024)
-		err := m.buildBinary(ctx, buildTarget{GOOS: goos, GOARCH: goarch}, hash, version, tmp, ring.WriteLine)
+		buildCtx, buildCancel := context.WithTimeout(ctx, buildBudget)
+		err := m.buildBinary(buildCtx, buildTarget{GOOS: goos, GOARCH: goarch}, hash, version, tmp, ring.WriteLine)
+		buildCancel()
 		if err != nil {
 			os.Remove(tmp)
 			writeJSONError(w, http.StatusInternalServerError, "build failed", ring.String())
@@ -1283,25 +1482,19 @@ func (r *ringBuffer) String() string { return string(r.buf) }
 
 Notes for the implementer:
 - `http.ServeContent` sets `Content-Length` from the seeker and honours
-  `Range`; that is why the sha256 pass rewinds the file.
+  `Range`; that is why the sha256 pass rewinds the file. `X-Pdx-Sha256`
+  always describes the **whole** artifact, also on a 206 — clients verify
+  full 200 responses only.
 - `SetWriteDeadline` returning `http.ErrNotSupported` (e.g. under some test
   recorders) is ignored on purpose — `httptest.NewServer` supports it.
+- `ringBuffer.WriteLine` needs no mutex: `buildBinary` serialises sink calls.
 
 - [ ] **Step 5: Verify**
 
-Run: `go test ./internal/module/dev/` → all PASS (download, build, rebuild,
-module tests). `go vet ./...` clean. `go test ./...` green.
-
-Manual smoke on the Mini **from the worktree, on a spare port** so the live
-daemon is untouched (the worktree has its own repo root and `bin/`):
-
-```bash
-cd <worktree> && make build
-PDX_DEV_MODE=1 ./bin/pdx serve --config /dev/null 2>/dev/null &   # only if serve accepts a missing config; otherwise skip this smoke — the unit tests cover it
-```
-
-If a spare-port serve is not trivially possible, skip; the tests exercise the
-real handler through `httptest`.
+Run: `go test -race ./internal/module/dev/` → all PASS (download, build,
+rebuild, module tests). `go vet ./...` clean. `go test -race ./...` green.
+No manual smoke in this task — the `httptest` suite exercises the real
+handler; the live daemon is verified after merge/deploy.
 
 - [ ] **Step 6: Commit**
 
@@ -1312,11 +1505,12 @@ git commit -m "feat(dev): GET /api/dev/daemon/download serves a cross-compiled p
 
 ---
 
-### Task 8: Final sweep
+### Task 8: Final sweep (verification gate — no commit)
 
-- [ ] Run the full suite: `go test ./... && go vet ./...` → green.
-- [ ] `rg -n 'BakedInHash|core\.Version|== "1"' --glob '*.go' internal cmd` → no dev-mode `== "1"` reads outside tests, no old symbols.
-- [ ] `make build && ./bin/pdx version --json` → shows the worktree HEAD short hash and `1.0.0-alpha.333`.
+- [ ] Run the full suite: `go test -race ./... && go vet ./...` → green.
+- [ ] `rg -n 'BakedInHash|core\.Version' --glob '*.go' --glob '!*_test.go' --glob Makefile internal cmd Makefile` → empty.
+- [ ] `rg -n 'Getenv\("PDX_DEV_MODE"\)' --glob '*.go' --glob '!*_test.go' internal cmd` → only `internal/devmode/devmode.go`.
+- [ ] `make build && ./bin/pdx version --json` → `hash` equals `git log -1 --format=%h` and `version` equals `cat VERSION`.
 - [ ] Open the PR (Plan A) with the PR description listing: the D6 semantic change (`PDX_DEV_MODE=0` now the only off switch), the pid-file-permanent change and the new `serve` refusal, the new endpoint contract (headers + error shapes) for Plan B.
 
 ## Self-review against spec §2
