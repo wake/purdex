@@ -190,13 +190,10 @@ func rebuildLdflags(hash, version string) string {
 		" -X github.com/wake/purdex/internal/buildinfo.Version=" + version
 }
 
-// readVersionFile returns the trimmed VERSION file, or "unknown".
+// readVersionFile is readVersion with "unknown" for a missing or empty file,
+// the form the build identity wants.
 func (m *DevModule) readVersionFile() string {
-	data, err := os.ReadFile(m.versionFile)
-	if err != nil {
-		return "unknown"
-	}
-	if v := strings.TrimSpace(string(data)); v != "" {
+	if v := m.readVersion(); v != "" {
 		return v
 	}
 	return "unknown"
