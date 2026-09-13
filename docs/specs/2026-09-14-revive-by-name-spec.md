@@ -289,8 +289,8 @@ nothing and does not rewrite the rebuild record.
   pass), S8 through the handler (the pane keeps its failed-op binding), S15,
   S16, S17 (real `fetchHost` resolving late with a stale list), S19, S20 (the
   rebuild's promise resolves normally).
-- `engine.test.ts` — the exported `repointPaneToSession` keeps the record and
-  drops `terminated` (pin the rename).
+- `engine.test.ts` — the exported `repointPane` keeps the record, drops `terminated` and does not touch the session store; the engine's step 4 still syncs it. (Task 2 shipped this as `repointPaneToSession`; v2.2 split it — the plan records the history.)
+
 - All existing tests green and untouched.
 
 ## 6. Phases
@@ -300,7 +300,7 @@ Small enough for one PR; ordered so each step is independently green.
 1. **Decision + gate** — `revive.ts` with `decideRevive`, `reviveAllowed`,
    unit tests.
 2. **The pass and its two triggers** — `collectCandidates`, `runRevivePass`,
-   export `repointPaneToSession`, wire the handler and the lock subscription,
+   export the writer, wire the handler and the lock subscription,
    hook tests.
 
 ## 7. Risks
