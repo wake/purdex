@@ -421,6 +421,87 @@ func TestBuild_EntryConsumedByRule4_NeverAlsoAppearsAsOutsideRow(t *testing.T) {
 	}
 }
 
+// TestBuild_TwoSessionsSameOwnerSessionID_EntryConsumedOnce pins Item 4: two
+// tmux sessions whose resolved owners both carry the SAME SessionID (a pane
+// that moved mid-request, so two session rows would otherwise independently
+// pick the one live entry as "the" single candidate) must not both select
+// it. The first session in list order wins it (deliverable, full agent
+// info); the second must fall back to the owner-only agent with
+// Deliverable=false, Reason="ambiguous" rather than also claiming the entry
+// as deliverable. The entry appears exactly once in the whole output, and
+// Resolve(records, "cc:<name>") returns the first (winning) row, never an
+// AmbiguousError, since the second row's fallback agent carries no
+// PeerName.
+func TestBuild_TwoSessionsSameOwnerSessionID_EntryConsumedOnce(t *testing.T) {
+	entry := Entry{
+		PID: 100, SessionID: "sess-x", Name: "purdex-1", NameSource: "derived",
+		Cwd: "/w", Tmux: "mt1:@1.%1", Inbox: "/tmp/1.sock",
+		ProcStart: "Sun Sep 13 15:22:36 2026", Version: "2.1.270", Status: "busy",
+	}
+	in := BuildInput{
+		Alias: "mini-lab",
+		Sessions: []SessionSummary{
+			{Code: "s1", Name: "mt1"},
+			{Code: "s2", Name: "mt2"},
+		},
+		Owners: map[string]Owner{
+			"s1": {AgentType: "cc", SessionID: "sess-x", TmuxPaneID: "%1", Status: "idle"},
+			"s2": {AgentType: "cc", SessionID: "sess-x", TmuxPaneID: "%1", Status: "idle"},
+		},
+		Entries: []Entry{entry},
+	}
+	got := Build(in)
+
+	var s1Rec, s2Rec *PeerRecord
+	for i := range got {
+		switch got[i].SessionCode {
+		case "s1":
+			s1Rec = &got[i]
+		case "s2":
+			s2Rec = &got[i]
+		}
+	}
+	if s1Rec == nil || s2Rec == nil {
+		t.Fatalf("got = %+v, want both s1 and s2 session rows", got)
+	}
+
+	if !s1Rec.Deliverable {
+		t.Errorf("s1 Deliverable = false, want true")
+	}
+	if s1Rec.Agent == nil || s1Rec.Agent.PeerName != "purdex-1" || s1Rec.Agent.PID != 100 {
+		t.Errorf("s1 Agent = %+v, want the live entry (PeerName purdex-1, PID 100)", s1Rec.Agent)
+	}
+
+	if s2Rec.Deliverable {
+		t.Errorf("s2 Deliverable = true, want false")
+	}
+	if s2Rec.Reason != "ambiguous" {
+		t.Errorf("s2 Reason = %q, want ambiguous", s2Rec.Reason)
+	}
+	wantS2Agent := AgentInfo{Type: "cc", SessionID: "sess-x", Status: "idle", Version: ""}
+	if s2Rec.Agent == nil || *s2Rec.Agent != wantS2Agent {
+		t.Errorf("s2 Agent = %+v, want owner-only fallback %+v", s2Rec.Agent, wantS2Agent)
+	}
+
+	count := 0
+	for _, r := range got {
+		if r.Agent != nil && r.Agent.PID == 100 {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("entry PID 100 appears %d times across records, want exactly 1", count)
+	}
+
+	resolved, err := Resolve(got, "cc:purdex-1")
+	if err != nil {
+		t.Fatalf("Resolve: unexpected err: %v", err)
+	}
+	if resolved.SessionCode != "s1" {
+		t.Fatalf("Resolve() = %+v, want the first (winning) session row s1", resolved)
+	}
+}
+
 // Entries that were candidates but NOT chosen by rule 4 (ambiguous case) are
 // not consumed and still get outside rows when their tmux name is unlisted.
 func TestBuild_AmbiguousCandidates_StillGetOutsideRows(t *testing.T) {

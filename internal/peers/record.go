@@ -72,7 +72,7 @@ func Build(in BuildInput) []PeerRecord {
 	consumed := make(map[Entry]bool)
 
 	for _, s := range in.Sessions {
-		rec, entry, ok := buildSessionRecord(in, s, entriesBySessionID)
+		rec, entry, ok := buildSessionRecord(in, s, entriesBySessionID, consumed)
 		records = append(records, rec)
 		if ok {
 			consumed[entry] = true
@@ -96,7 +96,17 @@ func Build(in BuildInput) []PeerRecord {
 // the unique pane-tiebreak winner), it returns that Entry with ok=true so
 // Build can exclude it from the outside-tmux rows (rule 5): a consumed
 // entry never also produces a cc: row.
-func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[string][]Entry) (rec PeerRecord, consumedEntry Entry, ok bool) {
+//
+// consumed is the set of entries already claimed by an EARLIER session row
+// (Build calls this once per session in list order, growing consumed as it
+// goes). If the entry this call would otherwise select is already in
+// consumed — two sessions whose owners resolved to the same SessionID, e.g.
+// a pane that moved mid-request — it is NOT selected here: the row falls
+// back to the owner-only agent with Deliverable=false, Reason="ambiguous",
+// exactly as when no unique candidate exists at all. This guarantees an
+// entry is consumed by at most one session row, ever, regardless of how
+// many sessions' owners happen to name it.
+func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[string][]Entry, consumed map[Entry]bool) (rec PeerRecord, consumedEntry Entry, ok bool) {
 	rec = PeerRecord{
 		Host:         in.Alias,
 		HostID:       in.HostID,
@@ -141,6 +151,11 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 		rec.Reason = "inbox_dead"
 		return rec, Entry{}, false
 	case 1:
+		if consumed[candidates[0]] {
+			rec.Agent = ownerFallbackAgent(owner)
+			rec.Reason = "ambiguous"
+			return rec, Entry{}, false
+		}
 		rec.Agent = agentInfoFromEntry(candidates[0])
 		rec.Deliverable = true
 		return rec, candidates[0], true
@@ -152,6 +167,11 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			}
 		}
 		if len(paneMatches) == 1 {
+			if consumed[paneMatches[0]] {
+				rec.Agent = ownerFallbackAgent(owner)
+				rec.Reason = "ambiguous"
+				return rec, Entry{}, false
+			}
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
 			rec.Deliverable = true
 			return rec, paneMatches[0], true
