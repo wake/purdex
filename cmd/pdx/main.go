@@ -62,6 +62,8 @@ func main() {
 		runStatuslineProxy(os.Args[2:])
 	case "peers":
 		runPeers(os.Args[2:])
+	case "peer-proxy":
+		os.Exit(runPeerProxy())
 	case "version":
 		runVersion(os.Args[2:], os.Stdout)
 	default:
