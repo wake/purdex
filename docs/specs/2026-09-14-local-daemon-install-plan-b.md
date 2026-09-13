@@ -23,7 +23,7 @@ idempotent `registerLocalHost` store helper.
 **Spec:** `docs/specs/2026-09-14-local-daemon-install-spec.md` (v4) — §3 and
 §4 are this plan's contract; §1 decisions are fixed.
 
-**Plan review:** codex `task-mu01nnur-hom7fq` (6 Blocker, 10 Important, 2 Minor) — all applied in this revision. Plan A must be merged
+**Plan review:** codex `task-mu01nnur-hom7fq` (6 Blocker, 10 Important, 2 Minor) and `task-mu0209uh-8c6m2o` (5 Important) — all applied. Approved for execution. Plan A must be merged
 (or at least its endpoint contract in Plan A Task 7 honoured) before Task 8's
 manual acceptance; unit tasks do not depend on it.
 
@@ -761,7 +761,7 @@ export interface LocalDaemonDeps {
     sha256(p: string): Promise<string>
   }
   kill0: (pid: number) => boolean
-  portOpen: (host: string, port: number) => Promise<boolean>   // TCP connect succeeds within 500 ms
+  portOpen: (host: string, port: number, timeoutMs: number) => Promise<boolean>   // TCP connect succeeds within timeoutMs
   networkInterfaces: () => Iface[]
   randomBytes: (n: number) => Buffer
   sleep: (ms: number) => Promise<void>
@@ -899,7 +899,7 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
       sha256: async (p) => { const { createHash } = await import('node:crypto'); const v = fake.files.get(p); return createHash('sha256').update(typeof v === 'string' ? Buffer.from(v) : Buffer.from(v ?? new Uint8Array())).digest('hex') },
     },
     kill0: (pid) => fake.alivePids.has(pid),
-    portOpen: async () => fake.portIsOpen,
+    portOpen: async (_h, _p, timeoutMs) => { fake.clock += Math.min(timeoutMs, 100); return fake.portIsOpen },
     networkInterfaces: () => [{ name: 'utun4', address: '100.64.0.9', family: 'IPv4', internal: false }],
     randomBytes: (n) => Buffer.alloc(n, 0xcd),
     sleep: async (ms) => { fake.clock += ms },
@@ -1343,8 +1343,10 @@ describe('install()', () => {
       d.install('http://src', 'tok', (s) => steps.push('1:' + s)),
       d.install('http://src', 'tok', (s) => steps.push('2:' + s)),
     ])
-    const firstTwo = steps.findIndex((s) => s.startsWith('2:'))
-    expect(steps.slice(0, firstTwo).every((s) => s.startsWith('1:'))).toBe(true)
+    expect(steps).toEqual([
+      '1:prepare', '1:download', '1:verify', '1:configure', '1:swap', '1:start', '1:register',
+      '2:prepare', '2:download', '2:verify', '2:stop', '2:swap', '2:start', '2:register',
+    ])
   })
 
   it('an install arriving during a withLock-wrapped app update waits for it', async () => {
@@ -1413,15 +1415,42 @@ describe('install()', () => {
     await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/no build hash/)
   })
 
-  it('stop returning while the port stays open → throws, old binary unreplaced', async () => {
+  it('empty or blank hashes on both sides are rejected, never "equal"', async () => {
+    for (const blank of ['', '   ']) {
+      const g = makeFake()
+      // A binary whose identity carries a blank hash, served with a matching blank X-Pdx-Hash.
+      const body = Buffer.from(JSON.stringify({ version: '9', hash: blank, goos: 'darwin', goarch: 'arm64' }))
+      const sha = createHash('sha256').update(body).digest('hex')
+      g.downloads.push({ status: 200, headers: { 'content-length': String(body.length), 'x-pdx-hash': blank, 'x-pdx-version': '9', 'x-pdx-sha256': sha }, body })
+      await expect(createLocalDaemon(g.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/missing integrity header|no build hash/)
+    }
+  })
+
+  it('stop returning while the port stays open → throws within 5 s wall time, old binary unreplaced', async () => {
     f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
     f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
     f.onExec = (_file, args) => { if (args[0] === 'stop') { f.alivePids.clear(); f.portIsOpen = true; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
     f.portIsOpen = true
     scriptedDownload(f, 'bbb')
+    const t0 = f.clock
     await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/old binary was not replaced/)
     expect(f.files.get(BIN)).toBe(identity('aaa'))
-    expect(f.clock).toBeLessThanOrEqual(5000)
+    // Probe time (fake: 100 ms per probe) plus sleeps must fit the 5 s settle budget.
+    expect(f.clock - t0).toBeLessThanOrEqual(5000)
+  })
+
+  it('a slow port probe cannot push the settle wait past its budget', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    f.onExec = (_file, args) => { if (args[0] === 'stop') { f.alivePids.clear(); f.portIsOpen = true; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
+    f.portIsOpen = true
+    const timeouts: number[] = []
+    f.deps.portOpen = async (_h, _p, timeoutMs) => { timeouts.push(timeoutMs); f.clock += timeoutMs; return true }
+    scriptedDownload(f, 'bbb')
+    const t0 = f.clock
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/old binary was not replaced/)
+    expect(f.clock - t0).toBeLessThanOrEqual(5000)
+    expect(Math.max(...timeouts)).toBeLessThanOrEqual(500)
   })
 
   it('pdx start failure surfaces its stderr', async () => {
@@ -1460,7 +1489,7 @@ describe('start() / restart() / ensureRunning()', () => {
   it('ensureRunning outcomes', async () => {
     expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('started')
     expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('already-running')
-    f.files.delete(BIN); f.alivePids.clear(); f.files.delete(PID); f.health = null
+    f.files.delete(BIN); f.alivePids.clear(); f.files.delete(PID); f.health = null; f.lsofListen = ''; f.portIsOpen = false
     expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('not-installed')
     f.files.set(CFG, 'data_dir = "/x"\n')
     expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('external')
@@ -1570,17 +1599,21 @@ describe('withLock', () => {
   }
 
   // ---- stop / start ------------------------------------------------------
-  // After `pdx stop` returns, wait (≤ 5 s) until the pid is gone AND the
-  // port refuses TCP connections. A plain health probe cannot tell
-  // "refused" from "500/timeout", hence the dedicated portOpen dep.
+  // After `pdx stop` returns, wait (≤ 5 s total, probes included) until the
+  // pid is gone AND the port refuses TCP connections. A plain health probe
+  // cannot tell "refused" from "500/timeout", hence the dedicated portOpen dep.
   async function stopUnlocked(cfg: DaemonConfig, pid: number): Promise<void> {
     const r = await deps.exec(binPath, ['stop'], { env: await launchEnv(), cwd: deps.home, timeoutMs: STOP_TIMEOUT_MS })
     if (r.timedOut) throw new Error('pdx stop did not finish within 35s — the old binary was not replaced (the old process may or may not still be running)')
     const deadline = deps.now() + STOP_SETTLE_MS
     for (;;) {
-      if (!deps.kill0(pid) && !(await deps.portOpen(cfg.bind, cfg.port))) return
-      if (deps.now() >= deadline) break
-      await deps.sleep(500)
+      let remaining = deadline - deps.now()
+      if (remaining <= 0) break
+      const gone = !deps.kill0(pid) && !(await deps.portOpen(cfg.bind, cfg.port, Math.min(500, remaining)))
+      if (gone) return
+      remaining = deadline - deps.now()
+      if (remaining <= 0) break
+      await deps.sleep(Math.min(500, remaining))
     }
     throw new Error('pdx stop returned but the daemon is still alive or the port is still open — the old binary was not replaced')
   }
@@ -1592,9 +1625,12 @@ describe('withLock', () => {
     const onDisk = await readIdentity(binPath)
     const h = await health(cfg.bind, cfg.port)
     if (!h) throw new Error('pdx start returned but /api/health is not answering')
-    if (!onDisk || onDisk.hash === 'unknown') throw new Error('installed binary reports no build hash; refusing to trust the start')
-    if (h.hash === 'unknown') throw new Error(`port ${cfg.port} answered health with no build hash — not the binary we started`)
-    if (h.hash !== onDisk.hash) {
+    const realHash = (v: string | undefined) => { const t = (v ?? '').trim(); return t !== '' && t !== 'unknown' ? t : null }
+    const diskHash = realHash(onDisk?.hash)
+    const liveHash = realHash(h.hash)
+    if (!diskHash) throw new Error('installed binary reports no build hash; refusing to trust the start')
+    if (!liveHash) throw new Error(`port ${cfg.port} answered health with no build hash — not the binary we started`)
+    if (liveHash !== diskHash) {
       throw new Error(`port ${cfg.port} is served by something else (health hash ${h.hash}, binary ${onDisk.hash})`)
     }
   }
@@ -1821,10 +1857,10 @@ export function nodeDeps(log: (msg: string) => void = console.log): LocalDaemonD
       sha256,
     },
     kill0: (pid) => { try { process.kill(pid, 0); return true } catch { return false } },
-    portOpen: (host, port) => new Promise((res) => {
+    portOpen: (host, port, timeoutMs) => new Promise((res) => {
       const sock = connect({ host, port })
       const done = (v: boolean) => { sock.destroy(); res(v) }
-      sock.setTimeout(500, () => done(false))
+      sock.setTimeout(timeoutMs, () => done(false))
       sock.once('connect', () => done(true))
       sock.once('error', () => done(false))
     }),
@@ -2272,7 +2308,7 @@ describe('LocalDaemonSection', () => {
 
   it('renders nothing when the bridge is absent (web build)', async () => {
     window.electronAPI = { ...window.electronAPI!, localDaemonStatus: undefined } as typeof window.electronAPI
-    const { container } = render(<LocalDaemonSection daemonBase="x" latestHash={null} />)
+    const { container } = render(<LocalDaemonSection daemonBase="x" latestHash={null} refreshKey={null} />)
     expect(container.innerHTML).toBe('')
   })
 })
