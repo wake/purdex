@@ -1,6 +1,6 @@
 # Spec — Local daemon install & update from the Purdex app
 
-**Status:** v1 — draft for codex review
+**Status:** v2 — after codex round 1 (`task-mu00ipjj-5tblb1`: 1 Blocker, 10 Important, 2 Minor; dispositions in §6)
 **Follows:** `docs/superpowers/specs/2026-04-18-statusline-and-daemon-rebuild-design.md` §7–§13 (daemon dev rebuild, local only). This spec fills the "cross-machine daemon" gap that design explicitly left open.
 
 ## 0. Summary
@@ -80,6 +80,10 @@ the *running* daemon's identity — after an update it differs from the
 on-disk binary until restart. `/api/health` is unauthenticated today and
 stays so; a version string is not a secret in a single-user tailnet.
 
+`core.Version` (`internal/core/info_handler.go:18`, still `"dev"`, feeds
+`/api/info.purdex_version`) is **removed**; `/api/info` reads
+`buildinfo.Version` so one daemon never reports two versions.
+
 ### 2.4 Dev-mode gate: `internal/devmode`
 
 ```go
@@ -92,6 +96,16 @@ Replaces the two `os.Getenv("PDX_DEV_MODE") == "1"` reads
 (`internal/module/dev/module.go`, `internal/module/agent/probe_orchestrator.go`).
 Log line in `module.go` updated to say `PDX_DEV_MODE=0` disables. The
 `config.Dev.Update` gate in `cmd/pdx/main.go` is unchanged.
+
+### 2.4b `releasePidLock` removes before it unlocks
+
+`cmd/pdx/daemon.go:166` unlocks the pid file and *then* unlinks it. A
+`serve` that starts in that gap can flock the doomed inode, after which the
+old process unlinks the file from under it and `pdx stop`/`status` report
+"not running" for a live daemon. Swap the order: `os.Remove` first, then
+`LOCK_UN` + close. The Electron flow awaits `pdx stop` before starting, so it
+does not hit this window today; the fix is cheap insurance for
+`pdx stop && pdx start` from a shell.
 
 ### 2.5 `GET /api/dev/daemon/download?goos=<os>&goarch=<arch>`
 
@@ -106,22 +120,31 @@ the `dev.update` + devmode gates and bearer auth).
 
 **Behaviour**
 
-1. Resolve `hash := git -C repoRoot log -1 --format=%h` (3 s timeout; empty on
-   failure → `500`), `version := VERSION` file (trimmed; `"unknown"` if
-   missing).
-2. Artifact path: `<repoRoot>/bin/dist/pdx-<goos>-<goarch>-<hash>`.
-3. If the artifact exists → serve it (cache hit). Else acquire the
-   **shared** `daemonRebuildMu` (`TryLock`; busy → `409 {"error":"build in progress"}`),
-   run `go build -ldflags <buildinfo Hash+Version> -o <artifact>.tmp ./cmd/pdx`
-   with `GOOS`/`GOARCH` appended to the inherited env and `CGO_ENABLED=0`,
+1. Acquire the **shared** `daemonRebuildMu` (`TryLock`; busy →
+   `409 {"error":"build in progress"}`). It is held for the whole request,
+   cache hit included, so a `/rebuild` cannot exec the server while a
+   download is being served, and two downloads never race in `bin/dist/`.
+2. Capture identity **once**: `hash := git -C repoRoot log -1 --format=%h`
+   (3 s timeout; empty on failure → `500 {"error":"git hash unavailable"}`),
+   `version := VERSION` file (trimmed; `"unknown"` if missing). The same
+   `hash` is the cache key, the ldflags value and the response header — the
+   handler never re-reads HEAD.
+3. Artifact path `<repoRoot>/bin/dist/pdx-<goos>-<goarch>-<hash>`. Exists →
+   cache hit. Else run
+   `go build -ldflags "<buildinfo.Hash=hash> <buildinfo.Version=version>" -o <artifact>.tmp ./cmd/pdx`
+   with `GOOS`/`GOARCH`/`CGO_ENABLED=0` appended to the inherited env,
    5-minute timeout tied to `m.stopCtx`, then rename `.tmp` → artifact.
-   Build failure → `500 {"error":"build failed","detail":"<last 4 KB of output>"}`;
-   the `.tmp` is removed.
-4. Serve with `Content-Type: application/octet-stream`,
-   `Content-Length`, `X-Pdx-Hash: <hash>`, `X-Pdx-Version: <version>`,
-   `Content-Disposition: attachment; filename="pdx"`.
-5. Before serving, prune other `pdx-<goos>-<goarch>-*` files for the same
-   target so `bin/dist/` holds at most one artifact per target.
+   Build failure → `500 {"error":"build failed","detail":"<last 4 KB of output>"}`
+   and the `.tmp` is removed. A dirty checkout is not detected — same as
+   `/rebuild` today; the hash names the commit, not the tree.
+4. Prune every `pdx-<goos>-<goarch>-*` in `bin/dist/` except the artifact
+   just chosen and any `*.tmp`, so the directory holds one artifact per
+   target. (Unlinking a file another request has open is safe on macOS —
+   the fd stays valid — and the mutex means there is no such request anyway.)
+5. Serve with `http.ServeContent` (so `Content-Length` is exact) and headers
+   `Content-Type: application/octet-stream`, `X-Pdx-Hash`, `X-Pdx-Version`,
+   `X-Pdx-Sha256` (hex of the artifact, computed per request — ~20 MB, a few
+   ms), `Content-Disposition: attachment; filename="pdx"`.
 
 **Why a plain GET and not SSE.** The app-update `/download` is also a plain
 GET; cross-compiling `pdx` takes ~10–40 s on the Mini, well inside a fetch
@@ -131,13 +154,21 @@ it ends by exec-ing the server; this one does not.
 **Why `CGO_ENABLED=0`.** `modernc.org/sqlite` is pure Go; disabling cgo makes
 the cross-build independent of the host's C toolchain and SDK.
 
-**Refactor.** The `go build` invocation, pipe/scanner plumbing and hash
-lookup currently inline in `handleDaemonRebuild` move into
-`buildBinary(ctx, target, out string, sink func(line string)) (hash string, err error)`
-in `internal/module/dev/build.go`. `handleDaemonRebuild` calls it with the
-host target and its SSE writer as sink; `handleDaemonDownload` calls it with
-a ring-buffer sink. Behaviour of `/rebuild` is unchanged (its tests must
-pass without modification other than the `buildinfo` rename).
+**Refactor.** The `go build` invocation and pipe/scanner plumbing inline in
+`handleDaemonRebuild` move into
+
+```go
+type buildTarget struct{ GOOS, GOARCH string } // zero value = host
+func (m *DevModule) buildBinary(ctx context.Context, t buildTarget, hash, version, out string, sink func(line string)) error
+```
+
+in `internal/module/dev/build.go`. It does **not** look up git; callers pass
+the identity they captured. `handleDaemonRebuild` keeps its existing
+best-effort hash lookup (empty hash on git failure still builds — the
+existing test at `daemon_test.go:40` has no git repo) and passes its SSE
+writer as sink; `handleDaemonDownload` requires a hash (step 2) and passes a
+4 KB ring buffer. `/rebuild` behaviour is unchanged; its tests pass with no
+edits beyond the `buildinfo` rename.
 
 ### 2.6 Tests (Phase A)
 
@@ -146,74 +177,131 @@ pass without modification other than the `buildinfo` rename).
   test-local assignment.
 - health: response contains `version`/`hash`.
 - devmode: table — unset → true, `"1"` → true, `"0"` → false, `"false"` → true.
-- download handler (`httptest`, `buildCmd` injected exactly as the existing
-  rebuild tests inject `execSelf`/`buildCmd`):
+- download handler (`httptest`; the module gets a `gitHashFn func() string`
+  field defaulting to the real `git log` so tests can pin the hash, and
+  builds run the real `go build` on a throwaway module in `t.TempDir()`
+  exactly like `TestHandleDaemonRebuild_BuildsInTempRepo` — a cross-compiled
+  empty `main` takes well under a second):
   - 400 on bad/missing `goos`/`goarch`
-  - cache hit: pre-create artifact → served, build not invoked, headers set
-  - cache miss: build invoked with `GOOS`/`GOARCH`/`CGO_ENABLED=0` in env,
-    `-o` points at `.tmp`, then served from the renamed artifact
-  - build failure → 500 with detail, no artifact left behind
+  - 500 when `gitHashFn` returns `""`
+  - cache hit: pre-create artifact → served byte-for-byte, no build ran
+    (mtime unchanged), headers `X-Pdx-Hash`/`X-Pdx-Version`/`X-Pdx-Sha256`
+    correct, `Content-Length` equals the file size
+  - cache miss: artifact appears at the hashed path, `file`-style magic
+    matches the requested arch (Mach-O `0xCFFAEDFE`, CPU type field
+    `amd64`/`arm64`), no `.tmp` left behind
+  - build failure (module with a compile error) → 500 with detail, no
+    artifact, no `.tmp`
   - 409 while `daemonRebuildMu` is held
-  - stale artifacts for the same target are pruned
+  - stale artifacts for the same target are pruned; other targets and
+    `*.tmp` untouched
+  - `PDX_DEV_MODE=0` → `RegisterRoutes` registers nothing (404)
 - rebuild handler: existing tests green after the `buildBinary` extraction.
+- Auth/CORS wiring for `/api/dev/*` and `/api/health` is the existing outer
+  mux in `cmd/pdx/main.go:195` and is not re-tested here.
 
 ## 3. Phase B — Electron + SPA
 
 ### 3.1 `electron/local-daemon.ts`
 
-Pure Node module (no Electron imports except `app.getPath('home')` fallback
-via `os.homedir()`), unit-tested with vitest like `updater.ts`.
+Pure Node module, no Electron imports. Its side effects (`fs`, `spawn`,
+`fetch`, `os.networkInterfaces`, `os.hostname`, clock) are injected through
+a `deps` object so tests need no module mocking. TOML is read with
+`smol-toml` (new devDependency, ~10 KB, pure TS); the config is written by
+us once and rewritten by the daemon (`EnsureHostID`, `config/hostid.go:35`)
+so it must be parsed, not line-scanned.
 
 **Paths**
 
 ```
-dataDir  = ~/.config/pdx
-binDir   = dataDir/bin
+dataDir  = ~/.config/pdx            (the daemon's default; a config with a custom
+binDir   = dataDir/bin               data_dir is treated as external — see status)
 binPath  = binDir/pdx
 newPath  = binDir/pdx.new
 cfgPath  = dataDir/config.toml
-pidPath  = dataDir/pdx.pid
-logPath  = dataDir/logs/pdx.log
+pidPath  = <effective data_dir>/pdx.pid
 ```
+
+**Serialisation.** Every public operation runs through one in-process
+promise queue (`withLock`). Concurrent IPC calls (two windows, or
+`ensureRunning` racing a click) wait their turn; the SPA's disabled button
+is a convenience, not the guard. `main.ts`'s `dev:apply-update` handler
+also awaits the queue being idle before it downloads, so an app update
+cannot `app.exit(0)` in the middle of stop→swap→start.
 
 **`status(): Promise<LocalDaemonStatus>`**
 
 ```ts
 interface LocalDaemonStatus {
-  managed: 'none' | 'managed' | 'external'   // see D8
+  managed: 'none' | 'managed' | 'external'
+  reason?: string                     // why 'external' (human-readable)
   binPath: string
-  installed: { version: string; hash: string; goos: string; goarch: string } | null  // from `pdx version --json`
-  running: { version: string; hash: string; url: string } | null              // from /api/health
-  config: { bind: string; port: number; hasToken: boolean } | null           // parsed from config.toml
-  target: { goos: 'darwin' | 'linux'; goarch: 'arm64' | 'amd64' }           // what install would request
+  installed: { version: string; hash: string; goos: string; goarch: string } | null
+  running: { version: string; hash: string; url: string; pid: number | null } | null
+  config: { bind: string; port: number; hasToken: boolean } | null
+  target: { goos: 'darwin' | 'linux'; goarch: 'arm64' | 'amd64' }
+  tools: { tmux: string | null }      // resolved tmux path on the launch PATH, see start
 }
 ```
 
-- `installed`: `binPath` exists → run `binPath version --json` (2 s timeout);
-  parse failure → `{version:'unknown', hash:'unknown', …}`.
-- `config`: parse `bind`/`port`/`token` lines from `config.toml` with a
-  minimal TOML-line reader (top-level `key = value` only; the file is ours).
-  Missing file → `null` and the URL falls back to `127.0.0.1:7860`.
-- `running`: `GET http://<bind>:<port>/api/health` (1.5 s timeout) → `ok`
-  → `{version, hash, url}`; `version`/`hash` default `'unknown'` when the
-  running daemon predates Phase A.
-- `managed`: `binPath` exists → `'managed'`; else `running` non-null →
-  `'external'`; else `'none'`.
-- `target`: `process.platform` → goos (`darwin`/`linux`; anything else throws),
-  `process.arch` → `arm64`/`x64 → amd64`.
+- `config`: parse `cfgPath` with `smol-toml`; apply the Go defaults
+  (`bind 127.0.0.1`, `port 7860`, `data_dir ~/.config/pdx`). Missing file →
+  `null`. A `data_dir` other than the default → `managed: 'external'`,
+  `reason: 'custom data_dir'` (we do not manage relocated installs).
+- `installed`: `binPath` exists → `binPath version --json` (2 s timeout);
+  parse failure → all fields `'unknown'`.
+- `running`: `GET http://<bind>:<port>/api/health` (1.5 s) → `ok` →
+  `{version, hash, url, pid}` where `pid` is the integer in `pidPath` if it
+  parses, else `null`. Health without `hash` (pre-Phase-A daemon) → `'unknown'`.
+- **Ownership** (D8, tightened): when `running` is non-null, resolve the
+  pid's executable with `ps -o comm= -p <pid>` and compare (realpath) with
+  `binPath`. Match → `'managed'`. Mismatch, or no pid, or `ps` fails →
+  `'external'` with a reason (`'running daemon is <path>'` /
+  `'pid unknown'`). When nothing is running: `binPath` exists → `'managed'`,
+  else `'none'`. A managed binary on disk beside a running repo daemon is
+  therefore `external`, and Install/Update/Start are refused.
+- `target`: `process.platform` → `darwin`/`linux` (else throw);
+  `process.arch` → `arm64` / `x64 → amd64`.
+- `tools.tmux`: `which tmux` under the **launch PATH** (below); `null` when
+  absent.
 
-**`install(daemonUrl, token, onProgress): Promise<InstallResult>`**
+**Launch PATH.** An app opened from Finder inherits
+`/usr/bin:/bin:/usr/sbin:/sbin`; the daemon execs `tmux` from PATH
+(`internal/tmux/executor.go`) and `pdx start` inherits the app's env
+(`daemon.go:246`), so a Finder-launched daemon would pass health and then
+fail every tmux call. `launchEnv()` therefore builds the env once per
+process: `process.env` with `PATH` replaced by the output of
+`$SHELL -ilc 'printf %s "$PATH"'` (5 s timeout; on failure, `process.env.PATH`
+prefixed with `/opt/homebrew/bin:/usr/local/bin:~/.local/bin`), plus
+`PDX_DEV_MODE=1`. Used for `pdx start`, `pdx stop`, `pdx version` and the
+`which tmux` probe. `status().tools.tmux === null` is shown as a warning in
+the UI and blocks nothing (the user may install tmux afterwards).
 
-Refuses immediately when `status().managed === 'external'`.
+**`install(daemonUrl, token, onProgress): Promise<LocalDaemonResult>`**
+
+```ts
+interface LocalDaemonResult {
+  url: string; token: string; hash: string; version: string; hostname: string
+  bindNote?: string
+}
+```
+
+Refuses (throws) when `status().managed === 'external'`. Steps, each
+reported through `onProgress(step)`:
 
 1. `download` — `GET <daemonUrl>/api/dev/daemon/download?goos=&goarch=` with
-   bearer; non-200 → throw with the body's `error`/`detail`. Stream to
-   `newPath` (mkdir -p `binDir`), `chmod 0755`. Capture `X-Pdx-Hash`.
-2. `verify` — run `newPath version --json`; must parse and report the same
-   `goos`/`goarch` as `target`, else delete `newPath` and throw
-   (`"downloaded binary does not run: <stderr>"`). This catches a wrong-arch
-   or truncated download before anything is stopped.
-3. `configure` — only when `cfgPath` does not exist: write
+   bearer, 6-minute overall timeout (the source may need to cross-compile).
+   Non-200 → throw with the body's `error`/`detail`. Stream to `newPath`
+   (any stale `pdx.new` is overwritten), **await the write stream's
+   `finish`/close**, then compare: bytes written === `Content-Length`, and
+   SHA-256 of the file === `X-Pdx-Sha256`. Mismatch → delete `newPath`,
+   throw. `chmod 0755`.
+2. `verify` — `newPath version --json` (2 s). Must parse, and its
+   `goos`/`goarch` must equal `target` and its `hash` must equal
+   `X-Pdx-Hash`. Else delete `newPath` and throw (`"downloaded binary does
+   not run: <stderr>"` / `"identity mismatch"`). Nothing has been stopped yet.
+3. `configure` — only when `cfgPath` does not exist: write to
+   `cfgPath + '.tmp'` with mode `0600` and rename into place:
 
    ```toml
    bind = "<tailscale ip | 127.0.0.1>"
@@ -224,40 +312,52 @@ Refuses immediately when `status().managed === 'external'`.
    update = false
    ```
 
-   Tailscale IP = first non-internal IPv4 in `os.networkInterfaces()` inside
-   `100.64.0.0/10`. `host_id` is left unset so the daemon mints its own
-   (existing behaviour; see `feedback_hostid_not_local`).
-4. `stop` — if `running`: spawn `binPath stop`, wait ≤ 10 s. If `binPath`
-   does not exist yet but a pid file does (should not happen for a managed
-   install; defensive), run `newPath stop`.
+   Tailscale IP: the IPv4 addresses of non-internal interfaces that fall in
+   `100.64.0.0/10`; on macOS additionally require the interface name to
+   start with `utun`. Exactly one candidate → use it. Zero or more than one
+   → `127.0.0.1`, and the result carries `bindNote` explaining why (the
+   user can edit the config and restart). `host_id` is left for the daemon
+   to mint (`EnsureHostID`).
+4. `stop` — only when `running` is non-null (ownership already verified):
+   spawn `binPath stop` under `launchEnv()`, await exit with a **35 s**
+   budget (`pdx stop` itself waits 30 s then SIGKILLs, `daemon.go:305`),
+   then poll `/api/health` until it refuses connections (≤ 5 s more). Any
+   timeout → throw before touching `binPath`; the old daemon keeps running.
 5. `swap` — `rename(newPath, binPath)`.
-6. `start` — spawn `binPath start` with env `{...process.env, PDX_DEV_MODE: '1'}`,
-   `cwd: os.homedir()`, and **await its exit** (≤ 70 s). `pdx start` is a
-   short-lived launcher: it forks the real daemon into its own process group
-   (`Setpgid`, `cmd/pdx/daemon.go:250`) with stdio on the log file, waits
-   for `/api/health` (60 s window), then exits 0 — or exits 1 with the last
-   20 log lines on stderr, which we surface verbatim. Because the daemon is
-   not in the app's process group, it survives the app quitting; no
-   `detached`/`unref` dance is needed.
-7. Return `{ url: 'http://<bind>:<port>', token, hash, version }` — `token`
-   read back from `config.toml` (so re-installs return the existing one).
+6. `start` — `startDaemon()` below.
+7. `register` — read `token`, `bind`, `port` back from the (possibly
+   daemon-rewritten) config; return `LocalDaemonResult` with
+   `hostname = os.hostname()`.
 
-`onProgress(step)` is called with the step names above; the IPC layer
-forwards them on `dev:local-daemon-progress` exactly like
-`dev:update-progress`.
+Failure before `swap` leaves the previous binary running and untouched.
+Failure in `start` after `swap` is reported with `pdx start`'s stderr (it
+prints the last 20 log lines); the new binary is already in place and the
+UI offers **Start**.
 
-Failure at any step leaves the previous binary in place except after
-`swap`; a failed `start` after swap is reported with the log tail and the
-UI offers *Start* again (the binary is already the new one).
+**`startDaemon()`** (private) — spawn `binPath start` with `launchEnv()`,
+`cwd: os.homedir()`, and await its exit (≤ 70 s). `pdx start` is a short-lived
+launcher: it forks the real daemon into its own process group (`Setpgid`,
+`daemon.go:250`) with stdio on the log file, waits for `/api/health` (60 s
+window), then exits 0 — or exits 1 with the last 20 log lines on stderr,
+which we surface verbatim. Because the daemon is not in the app's process
+group it survives the app quitting; no `detached`/`unref` is needed. After
+exit 0, `GET /api/health` once more and require `hash` to equal the
+on-disk binary's hash (`pdx version --json`); a mismatch (another service on
+the port answered 200) throws `"port <n> is served by something else"`.
 
-**`start(): Promise<void>`** — step 6 alone (for the UI's *Start* button
-and for `ensureRunning`). Throws with `pdx start`'s stderr on failure.
+**`start(): Promise<LocalDaemonResult>`** — for the UI's *Start* button and
+for `ensureRunning`. Refuses when `managed !== 'managed'`; runs
+`startDaemon()` then step 7, so a recovered daemon returns the same
+registration payload as a fresh install.
 
-**`ensureRunning(): Promise<'started' | 'already-running' | 'not-installed' | 'failed'>`**
+**`ensureRunning(): Promise<'started' | 'already-running' | 'not-installed' | 'external' | 'failed'>`**
 
-`status()` → `managed === 'managed' && !running` → `start()`. Called once
-from `app.whenReady()` after IPC registration; result logged, never thrown.
-Not called when `PDX_DEV_MODE === '0'`.
+`status()` → `managed === 'managed' && !running` → `start()`, retried up to
+3× with 5 s spacing (a saved Tailscale bind can be a few seconds late after
+a reboot; `pdx start` fails fast on `EADDRNOTAVAIL`). Called once from
+`app.whenReady()` after IPC registration; result logged, never thrown. Not
+called when `PDX_DEV_MODE === '0'`. It never touches `pdx.new`; a download
+interrupted by a force-quit is simply overwritten by the next install.
 
 ### 3.2 IPC and preload
 
@@ -266,8 +366,10 @@ In `electron/main.ts`, inside the existing dev-gated block:
 ```
 dev:local-daemon-status   → status()
 dev:local-daemon-install  (daemonUrl, token?) → install(...), progress on 'dev:local-daemon-progress'
-dev:local-daemon-start    → start()
+dev:local-daemon-start    → start()  (returns LocalDaemonResult)
 ```
+
+`dev:apply-update` gains `await localDaemon.idle()` before its download.
 
 `preload.ts` adds, inside the same conditional spread:
 
@@ -319,31 +421,51 @@ States and controls:
 | `external` | "A daemon is running at <url> but is not managed by this app" | none |
 
 During install the block shows the progress step and disables buttons.
-On success it calls `useHostStore.addHost({ name: os hostname from result, ip, port, token })`
-**only if no host already has that `ip:port`**; the result includes
-`hostname` (`os.hostname()`) for the name. Errors render inline; the *Start*
-button is offered after a post-swap start failure.
+Both `install` and `start` resolve to a `LocalDaemonResult`; on either
+success the block runs one idempotent `registerLocalHost(result)`:
+
+- a host with the same `ip:port` exists → `updateHost(id, { token })` only
+  if that host's token is empty/`null` (never overwrite a live token);
+- otherwise `addHost({ name: result.hostname, ip, port, token })`.
+
+So a first install whose `start` failed still registers the host when the
+user presses *Start*. Errors render inline; the *Start* button is offered
+after a post-swap start failure. `tools.tmux === null` renders a warning
+line ("tmux not found on the daemon's PATH — install it with Homebrew");
+`bindNote` from a fresh install renders as an info line.
 
 `status()` is refreshed on mount, after every install/start, and when the
 parent's `daemonCheck` changes.
 
 ### 3.5 Tests (Phase B)
 
-- `local-daemon.test.ts` (vitest, `fs`/`child_process`/`net` mocked as in
-  `updater.test.ts`/`signing.test.ts`):
-  - `status`: none / managed-stopped / managed-running / external matrix;
-    version parse failure → `'unknown'`; arch mapping `x64 → amd64`.
-  - `install`: refuses on external; writes config only when absent; config
-    content (bind = tailscale IP when present, else loopback; token format;
-    `[dev] update = false`); `verify` failure removes `pdx.new` and does not
-    stop the running daemon; stop → swap → start order; start env carries
-    `PDX_DEV_MODE=1`; returns existing token on re-install.
-  - `ensureRunning`: four outcomes.
+- `local-daemon.test.ts` (vitest; `createLocalDaemon(deps)` with an
+  in-memory fs, scripted `spawn`, scripted `fetch`, fixed interfaces/hostname):
+  - `status`: none / managed-stopped / managed-running / external (repo
+    daemon at another path, pid unknown, custom `data_dir`) matrix; version
+    parse failure → `'unknown'`; arch mapping `x64 → amd64`; `tools.tmux`
+    null vs path.
+  - `launchEnv`: uses the login-shell PATH; falls back to the prefixed PATH
+    on failure; always sets `PDX_DEV_MODE=1`.
+  - `install`: refuses on external; short body vs `Content-Length` → throw,
+    `pdx.new` removed, no stop; SHA-256 mismatch → same; `verify` arch or
+    hash mismatch → same; writes config only when absent, mode 0600, via
+    tmp+rename; bind selection (one `utun` in 100.64/10 → it; none → loopback;
+    two → loopback + `bindNote`); stop → swap → start order; `pdx stop`
+    timeout → throw with old binary intact; start env carries the launch
+    PATH and `PDX_DEV_MODE=1`; post-start health hash mismatch → throw;
+    returns the token read back from the config on re-install.
+  - `start`: refuses unless managed; returns a `LocalDaemonResult`.
+  - `ensureRunning`: five outcomes; retries 3× on failure; never touches
+    `pdx.new`.
+  - `withLock`: two concurrent `install` calls run sequentially; `idle()`
+    resolves only after the queue drains.
 - Dev-mode gate: `PDX_DEV_MODE` unset → IPC registered; `'0'` → not.
-- `LocalDaemonSection.test.tsx`: the four `managed` rows render the right
-  copy/buttons; Update button visibility vs `latestHash`; `addHost` called
-  once with the result and not when a host with the same `ip:port` exists;
-  install error renders and re-enables.
+- `LocalDaemonSection.test.tsx`: the `managed` rows render the right
+  copy/buttons (including `reason` and the tmux warning); Update button
+  visibility vs `latestHash`; `registerLocalHost` adds a host once, updates
+  only an empty token, never overwrites a live one; the same registration
+  runs after *Start*; install error renders and re-enables.
 
 ## 4. Operational notes
 
@@ -352,10 +474,20 @@ parent's `daemonCheck` changes.
   same situation as the Mini's `make build` output. If Apple changes this,
   the `verify` step fails loudly with the OS error and the fix is a single
   `xattr -d` in step 1.
+- **Prerequisites on the target machine.** `tmux` (Homebrew) and whichever
+  agent CLIs the user wants (`claude`, `codex`, …) must be installed and on
+  the login-shell PATH; the app does not install them. The *Local daemon*
+  block warns when `tmux` is missing.
 - **Fresh machine bootstrap.** Install `Purdex.app` (built on the Mini) →
   open → add the Mini as a host (existing pairing flow) → Settings →
   Development → *Local daemon* → **Install**. The new daemon appears in the
   host list automatically.
+- **Manual acceptance on the arm64 Air** (listed in the PR-B description):
+  Install from `none`; the new host appears and can create a tmux session
+  and attach; quit the app → daemon still answers `/api/health`; relaunch →
+  `ensureRunning` reports `already-running`; `pdx stop` from a shell →
+  relaunch app → daemon started; push a commit on the Mini → *Update
+  available* → Update → running hash changes, tmux sessions survive.
 - **Mini after this ships.** Its own app shows the repo daemon as
   `external` (D8). Mini deploy is unchanged: `make build` → `pdx stop` →
   `pdx start` (the env var is no longer needed, D6).
@@ -372,3 +504,21 @@ parent's `daemonCheck` changes.
   source-host picker) — the source is the Mini by construction.
 - Code-signing the downloaded binary.
 - Removing the `PDX_DEV_MODE` gate entirely.
+
+## 6. Review dispositions — codex round 1 (`task-mu00ipjj-5tblb1`)
+
+| # | Sev | Disposition | Where |
+|---|---|---|---|
+| 1 | Blocker | **Accepted.** Ownership = running pid's executable equals `binPath`; anything else is `external` and refused. | §3.1 status |
+| 2 | Important | **Accepted.** `stop` budget 35 s + health-refused poll; timeout aborts before swap. `releasePidLock` order fixed in Phase A. | §3.1 stop, §2.4b |
+| 3 | Important | **Accepted.** Await the `pdx start` launcher (no detach), surface stderr, post-start health hash must equal on-disk hash; app-quit survival in manual acceptance. | §3.1 startDaemon, §4 |
+| 4 | Important | **Accepted.** One promise queue in `local-daemon.ts`; `dev:apply-update` awaits `idle()`; `pdx.new` is never started, only overwritten. | §3.1 Serialisation, §3.2 |
+| 5 | Important | **Accepted.** `smol-toml` parser + Go defaults; custom `data_dir` → external; config written 0600 via tmp+rename, never overwritten. | §3.1 config/configure |
+| 6 | Important | **Accepted.** `launchEnv()` from the login shell's PATH; `tools.tmux` probe + UI warning; prerequisites and tmux-session check in §4. | §3.1 Launch PATH, §3.4, §4 |
+| 7 | Important | **Accepted in part.** Mutex now covers cache hits and prune, so rebuild cannot exec mid-download and prune cannot race. Not accepted: "rebuild must wait for downloads" beyond that — the mutex already provides it. | §2.5 steps 1, 4 |
+| 8 | Important | **Accepted.** Identity captured once per request; `buildBinary` takes hash/version as inputs. Dirty-checkout detection explicitly out of scope, matching `/rebuild`. | §2.5 steps 2–3 |
+| 9 | Important | **Accepted.** `Content-Length` and `X-Pdx-Sha256` verified after stream close; `verify` checks hash against `X-Pdx-Hash`; 6-minute download budget. | §2.5 step 5, §3.1 download/verify |
+| 10 | Minor | **Accepted.** `core.Version` removed; `/api/info` reads `buildinfo.Version`. | §2.3 |
+| 11 | Important | **Accepted.** Test section rewritten around a real temp-module build + `gitHashFn` pin; rebuild keeps best-effort hash. Middleware wiring is existing behaviour and stays untested here (stated). | §2.5 refactor, §2.6 |
+| 12 | Important | **Accepted.** `start()` returns `LocalDaemonResult`; `registerLocalHost` is idempotent and fills an empty token. | §3.1 start, §3.4 |
+| 13 | Minor | **Accepted.** `utun` + 100.64/10, exactly-one rule with `bindNote` fallback; `ensureRunning` retries 3× for late interfaces. | §3.1 configure, ensureRunning |
