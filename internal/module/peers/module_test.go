@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -864,16 +865,29 @@ func TestHandlePeers_ScopeAll_NoOutboundToken(t *testing.T) {
 
 // TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory pins Item 4: the
 // per-host remote fetches must start before (and run concurrently with)
-// the local inventory build, not after it. With a 100ms-slow remote and a
-// 100ms-slow local owner resolver, a scope=all request that ran them
-// sequentially would take >= 200ms; overlapped, it should land well under
-// that. The bounds are generous (90ms/250ms) to avoid flakiness while
-// still failing clearly on a sequential (~200ms+) implementation.
+// the local inventory build, not after it. Rather than bounding wall-clock
+// elapsed time (flaky on a shared, possibly loaded machine, and worse
+// still under -race), this records the instant each slow path actually
+// began — remoteStart inside the httptest handler, localStart inside the
+// fake owner resolver, both before their own 100ms sleep — and asserts
+// the two started within 50ms of each other. A sequential implementation
+// (local fully built, then remote fetches launched) would start them
+// ~100ms apart; overlapped, they start together. A loose <1s bound on
+// total elapsed time is kept only as a sanity check that the request
+// actually completed and didn't hang.
 func TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory(t *testing.T) {
 	dir := t.TempDir()
 	const slowness = 100 * time.Millisecond
 
+	var mu sync.Mutex
+	var localStart, remoteStart time.Time
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if remoteStart.IsZero() {
+			remoteStart = time.Now()
+		}
+		mu.Unlock()
 		time.Sleep(slowness)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ipeers.Envelope{HostID: "host-a:1", OK: true, Peers: []ipeers.PeerRecord{}})
@@ -881,7 +895,17 @@ func TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory(t *testing.T) {
 	defer srv.Close()
 
 	sessions := &fakeSessions{sessions: []session.SessionInfo{{Code: "s1", Name: "s1"}}}
-	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}, delay: slowness}
+	owners := &fakeOwners{
+		owners: map[string]agent.PaneOwner{},
+		delay:  slowness,
+		onResolveStart: func() {
+			mu.Lock()
+			if localStart.IsZero() {
+				localStart = time.Now()
+			}
+			mu.Unlock()
+		},
+	}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 
 	hosts := []config.PeerHost{{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "host-a:1"}}
@@ -903,11 +927,22 @@ func TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory(t *testing.T) {
 	if len(got.Hosts) != 2 || !got.Hosts[1].OK {
 		t.Fatalf("hosts = %+v, want 2 rows with host-a ok", got.Hosts)
 	}
-	if elapsed >= 180*time.Millisecond {
-		t.Errorf("elapsed = %v, want < 180ms (remote fetch and local inventory should overlap, not run sequentially — sequential would be >= 200ms)", elapsed)
+
+	mu.Lock()
+	ls, rs := localStart, remoteStart
+	mu.Unlock()
+	if ls.IsZero() || rs.IsZero() {
+		t.Fatalf("localStart=%v remoteStart=%v, want both recorded", ls, rs)
 	}
-	if elapsed <= 90*time.Millisecond {
-		t.Errorf("elapsed = %v, want > 90ms (sanity check: the slow paths should actually have run)", elapsed)
+	diff := ls.Sub(rs)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff >= 50*time.Millisecond {
+		t.Errorf("|localStart - remoteStart| = %v, want < 50ms (the local inventory and the remote fetch should start together, not sequentially)", diff)
+	}
+	if elapsed >= time.Second {
+		t.Errorf("elapsed = %v, want < 1s (sanity check: the request should complete promptly)", elapsed)
 	}
 }
 
