@@ -1,7 +1,7 @@
 // spa/src/lib/rebuild/revive.test.ts — decideRevive, reviveAllowed and the
 // pass that applies them (spec §3.1 / §3.2).
 import { describe, it, expect, beforeEach } from 'vitest'
-import { decideRevive, reviveAllowed, runRevivePass } from './revive'
+import { decideRevive, reviveAllowed, runRevivePass, noteReconciledSessions } from './revive'
 import type { ReviveCandidate } from './revive'
 import type { Session } from '../host-api'
 import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
@@ -158,11 +158,11 @@ const dead: RebuildBinding = { hostId: 'h1', sessionCode: 'old111', tmuxInstance
 const live = session({ code: 'new1', name: 'dev', tmux_instance: '222:2000' })
 
 /** One leaf tab holding a `tmux-restarted` pane (shape copied from engine.test.ts `seedPane`). */
-function seedPane(tabId: string, paneId: string, record: Partial<PaneRebuildRecord> | null = {}) {
+function seedPane(tabId: string, paneId: string, record: Partial<PaneRebuildRecord> | null = {}, hostId = 'h1') {
   const tab: Tab = {
     id: tabId, pinned: false, locked: false, createdAt: 0,
     layout: { type: 'leaf', pane: { id: paneId, content: {
-      kind: 'tmux-session', hostId: 'h1', sessionCode: 'old111', mode: 'terminal',
+      kind: 'tmux-session', hostId, sessionCode: 'old111', mode: 'terminal',
       cachedName: 'dev', tmuxInstance: '111:1000', terminated: 'tmux-restarted',
       rebuild: record === null ? undefined : {
         sessionName: 'dev', tmuxInstance: '111:1000', cwd: '/w', capturedAt: 1,
@@ -193,9 +193,28 @@ describe('runRevivePass', () => {
       hostOrder: ['h1'], activeHostId: 'h1',
       runtime: { h1: { status: 'connected', attachReady: true } },
     })
+    // The handler writes both; the pass reads only the snapshot.
     useSessionStore.setState({ sessions: { h1: [live] }, activeHostId: null, activeCode: null })
+    noteReconciledSessions('h1', [live])
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
     useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
+  })
+
+  it('reads the reconciled snapshot, not the session store', () => {
+    seedPane('t1', 'p1')
+    // A late `fetchHost` response: the store now names a stale session `dev`.
+    useSessionStore.setState({ sessions: { h1: [session({ code: 'stale', name: 'dev', tmux_instance: '333:3000' })] } })
+    noteReconciledSessions('h1', [live])
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject(revivedContent)
+  })
+
+  it('does nothing when the store has the match but no payload was ever reconciled for the host', () => {
+    useHostStore.getState().setRuntime('h2', { status: 'connected', attachReady: true })
+    useSessionStore.setState({ sessions: { h2: [live] } })
+    seedPane('t1', 'p1', {}, 'h2')
+    runRevivePass('h2')
+    expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
   })
 
   it('S1: revives a tmux-restarted pane onto the live session of the same name', () => {

@@ -26,6 +26,13 @@ vi.mock('../lib/rebuild/provenance-probe', () => ({
   probeSessionProvenance: vi.fn(),
   resetProvenanceProbes: vi.fn(),
 }))
+// Only `listSessions` is faked: S17 needs the REAL `fetchHost` — the one that
+// overwrites the session store whenever its HTTP response lands.
+const { listSessions } = vi.hoisted(() => ({ listSessions: vi.fn<() => Promise<Session[]>>() }))
+vi.mock('../lib/host-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/host-api')>()),
+  listSessions: (...args: unknown[]) => (listSessions as (...a: unknown[]) => Promise<Session[]>)(...args),
+}))
 
 const { useMultiHostEventWs } = await import('./useMultiHostEventWs')
 
@@ -142,7 +149,7 @@ beforeEach(() => {
     runtime: {},
     activeHostId: HOST,
   })
-  // The real session store: the pass reads what `replaceHost` wrote.
+  // The real session store, `fetchHost` stubbed out; S17 restores the real one.
   useSessionStore.setState({ sessions: {}, fetchHost: vi.fn(async () => {}) } as never)
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
@@ -355,6 +362,39 @@ describe('useMultiHostEventWs revive — the lock-release trigger', () => {
     expect(op.binding.sessionCode).toBe('old111')
     expect(paneContent('t2', 'p2')).toMatchObject(revived)
     expect(paneContent('t2', 'p2').terminated).toBeUndefined()
+    view.unmount()
+  })
+
+  it('S17: the release pass reads the reconciled payload, not a session store a late fetchHost overwrote', async () => {
+    const view = await mount()
+    seedPane('t1', 'p1')
+    const grant = useRebuildStore.getState().acquireOperationLock('legacy:restore')
+
+    // The connection opens: the hook starts a `fetchHost`, whose response is
+    // still in flight when the WS payload below lands.
+    const late = deferred<Session[]>()
+    listSessions.mockReturnValueOnce(late.promise)
+    useSessionStore.setState({ fetchHost: useSessionStore.getInitialState().fetchHost })
+    act(() => { sockets[0].onopen?.() })
+    expect(listSessions).toHaveBeenCalledTimes(1)
+
+    emit([NEW1])
+    expect(useSessionStore.getState().sessions[HOST]?.map((s) => s.code)).toEqual(['new1'])
+    expect(paneContent('t1', 'p1')).toMatchObject(dead)
+
+    // The stale HTTP list lands: `dev` is now `old` in the store.
+    const STALE = session({ code: 'old', name: 'dev', tmux_instance: '333:3000' })
+    await act(async () => { late.resolve([STALE]) })
+    expect(useSessionStore.getState().sessions[HOST]?.map((s) => s.code)).toEqual(['old'])
+    expect(paneContent('t1', 'p1')).toMatchObject(dead)
+
+    const seen: string[] = []
+    const unsubscribe = useTabStore.subscribe(() => { seen.push(paneContent('t1', 'p1').sessionCode) })
+    act(() => { useRebuildStore.getState().releaseOperationLock(grant) })
+    unsubscribe()
+
+    expect(paneContent('t1', 'p1')).toMatchObject(revived)
+    expect(seen).not.toContain('old')
     view.unmount()
   })
 

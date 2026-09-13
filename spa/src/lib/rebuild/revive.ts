@@ -28,15 +28,30 @@
 // payload, and the release of the operation lock — a rebuild in flight owns
 // the outcome for every pane it may re-point, and the pass may not act on any
 // of them until it is done.
+//
+// That evidence is a per-host snapshot the handler hands over, NOT
+// `useSessionStore.sessions`: `fetchHost` overwrites the store unconditionally
+// whenever an HTTP list response lands, and the hook's `onOpen` starts one on
+// every connection, so between a payload and the lock release the store can
+// come to hold a list OLDER than the payload the gate was opened for. Nothing
+// but the handler writes the snapshot, and the attach gate still ties it to
+// the current connection — the gate reopens only on that connection's own
+// payload, which is also when the snapshot is overwritten.
 import { bindingEquals } from './binding'
 import { canAttachTerminal } from './attach-gate'
 import { repointPaneToSession } from './engine'
 import { scanPaneTree } from '../pane-tree'
 import { useHostStore } from '../../stores/useHostStore'
 import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
-import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import type { Session } from '../host-api'
+
+const reconciledSessions = new Map<string, Session[]>()
+
+/** The `sessions` handler's payload for `hostId`, exactly as it was reconciled. */
+export function noteReconciledSessions(hostId: string, sessions: Session[]): void {
+  reconciledSessions.set(hostId, sessions)
+}
 
 /** A terminated pane eligible for revive-by-name — the caller has already
  * filtered for `kind === 'tmux-session'`, `mode === 'terminal'`, and
@@ -119,9 +134,9 @@ export function collectCandidates(hostId: string): ReviveCandidate[] {
 
 /**
  * Revive every eligible pane on `hostId` against the host's last reconciled
- * session list (spec §3.2). Synchronous: nothing runs between the candidate
- * scan and the write, so the binding a decision was made from is the binding
- * the write lands on.
+ * payload (spec §3.2). Synchronous: nothing runs between the candidate scan
+ * and the write, so the binding a decision was made from is the binding the
+ * write lands on.
  *
  * The attach gate ties the evidence to the CURRENT connection — it reopens
  * only after that connection's own payload has been reconciled, so a pass can
@@ -132,7 +147,7 @@ export function collectCandidates(hostId: string): ReviveCandidate[] {
 export function runRevivePass(hostId: string): void {
   if (!canAttachTerminal(hostId)) return
   if (useRebuildStore.getState().lockedBy !== null) return
-  const sessions = useSessionStore.getState().sessions[hostId] ?? []
+  const sessions = reconciledSessions.get(hostId) ?? []
   for (const d of decideRevive(hostId, sessions, collectCandidates(hostId))) {
     if (!reviveAllowed(d.paneId, d.binding, useRebuildStore.getState().operations)) continue
     repointPaneToSession(d.tabId, d.paneId, d.session)

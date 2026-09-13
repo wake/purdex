@@ -14,7 +14,7 @@ import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { scanPaneTree } from '../lib/pane-tree'
 import { reconcileSessionsPayload, type ReconcilePane } from '../lib/rebuild/reconcile'
 import { closeAttachGate, openAttachGate } from '../lib/rebuild/attach-gate'
-import { runRevivePass, runRevivePassAll } from '../lib/rebuild/revive'
+import { noteReconciledSessions, runRevivePass, runRevivePassAll } from '../lib/rebuild/revive'
 import { probeMissingCwds } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import { hostWsUrl, fetchWsTicket, fetchHistory, type Session } from '../lib/host-api'
@@ -165,6 +165,7 @@ export function useMultiHostEventWs() {
               const outcome = reconcileSessionsPayload({ hostId, sessions: data, panes })
 
               useSessionStore.getState().replaceHost(hostId, data)
+              noteReconciledSessions(hostId, data)
 
               // Adoption first — a pane that takes the live generation here is
               // no longer matched by a sibling's tmux-restarted decision.
