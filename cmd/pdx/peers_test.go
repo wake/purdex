@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/wake/purdex/internal/config"
@@ -264,13 +266,13 @@ func TestRunPeersCmd_InvalidJSON(t *testing.T) {
 
 func TestRunPeersCmd_UnknownFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runPeersCmd([]string{"--all"}, &stdout, &stderr)
+	code := runPeersCmd([]string{"--bogus"}, &stdout, &stderr)
 
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "pdx peers: unknown flag") || !strings.Contains(stderr.String(), "--all") {
-		t.Errorf("stderr = %q, want it to mention unknown flag --all", stderr.String())
+	if !strings.Contains(stderr.String(), "pdx peers: unknown flag") || !strings.Contains(stderr.String(), "--bogus") {
+		t.Errorf("stderr = %q, want it to mention unknown flag --bogus", stderr.String())
 	}
 	if stdout.String() != "" {
 		t.Errorf("stdout = %q, want empty", stdout.String())
@@ -371,6 +373,494 @@ func TestRunPeersCmd_UnreachableServer(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "pdx peers:") {
 		t.Errorf("stderr = %q, want it to start with pdx peers:", stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+// --- formatPeersAllTable golden fixture -----------------------------------
+
+func peersAllTableFixture() peers.AllEnvelope {
+	return peers.AllEnvelope{
+		Hosts: []peers.HostResult{
+			{
+				Alias:  "local",
+				HostID: "mini:abc123",
+				OK:     true,
+				Peers: []peers.PeerRecord{
+					{
+						Address:     "local/sess1",
+						Agent:       &peers.AgentInfo{Type: "cc", PeerName: "wake-cc", Status: "working"},
+						Deliverable: true,
+						Cwd:         "/home/wake/project",
+					},
+				},
+			},
+			{
+				Alias:  "air",
+				HostID: "air:def456",
+				OK:     true,
+				Peers: []peers.PeerRecord{
+					{
+						Address:     "air/sess2",
+						Agent:       &peers.AgentInfo{Type: "codex", Status: "idle"},
+						Deliverable: false,
+						Reason:      "not_cc",
+						Cwd:         "/home/wake/codex",
+					},
+				},
+			},
+			{
+				Alias: "down",
+				OK:    false,
+				Error: "connection refused",
+				Peers: []peers.PeerRecord{},
+			},
+		},
+	}
+}
+
+const wantPeersAllTable = "HOST   ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
+	"local  local/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
+	"air    air/sess2    codex  -        idle     not_cc       /home/wake/codex\n" +
+	"down  (unreachable: connection refused)\n"
+
+func TestFormatPeersAllTable(t *testing.T) {
+	got := formatPeersAllTable(peersAllTableFixture())
+	if got != wantPeersAllTable {
+		t.Errorf("formatPeersAllTable mismatch\ngot:\n%s\nwant:\n%s", got, wantPeersAllTable)
+	}
+}
+
+// --- runPeersCmd --all against an httptest server -------------------------
+
+const testPeersAllBody = `{"hosts":[` +
+	`{"alias":"local","host_id":"mini:abc","ok":true,"partial":false,"peers":[` +
+	`{"address":"local/sess1","agent":{"type":"cc","peer_name":"wake-cc","status":"working"},"deliverable":true,"cwd":"/home/wake/p1"}` +
+	`]},` +
+	`{"alias":"air","host_id":"air:def","ok":true,"partial":false,"peers":[` +
+	`{"address":"air/sess2","agent":{"type":"codex","status":"idle"},"deliverable":false,"reason":"not_cc","cwd":"/home/wake/p2"}` +
+	`]},` +
+	`{"alias":"down","host_id":"","ok":false,"error":"connection refused","partial":false,"peers":[]}` +
+	`]}`
+
+func TestRunPeersCmd_AllTableSuccess(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(testPeersAllBody))
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--config", cfgPath, "--all"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotPath != "/api/peers" {
+		t.Errorf("request path = %q, want /api/peers", gotPath)
+	}
+	if gotQuery != "scope=all" {
+		t.Errorf("request query = %q, want scope=all", gotQuery)
+	}
+	if !strings.Contains(stdout.String(), "HOST") {
+		t.Errorf("stdout missing HOST column header: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "down  (unreachable: connection refused)") {
+		t.Errorf("stdout missing unreachable-host line: %q", stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunPeersCmd_AllJSONPassthrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(testPeersAllBody))
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--all", "--json", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if stdout.String() != testPeersAllBody {
+		t.Errorf("stdout = %q, want verbatim body %q", stdout.String(), testPeersAllBody)
+	}
+}
+
+func TestRunPeersCmd_AllLocalNotOK(t *testing.T) {
+	body := `{"hosts":[{"alias":"local","host_id":"","ok":false,"error":"tmux unreachable","partial":false,"peers":[]}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--config", cfgPath, "--all"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stdout.String() != "" {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "pdx peers:") || !strings.Contains(stderr.String(), "tmux unreachable") {
+		t.Errorf("stderr = %q, want it to mention pdx peers: and tmux unreachable", stderr.String())
+	}
+}
+
+func TestRunPeersCmd_AllLocalOK_ExitZeroDespiteRemoteFailure(t *testing.T) {
+	// Pins the brief's "Exit 0 when the local row is ok (remote failures
+	// are rows, not errors)" rule using testPeersAllBody's "down" host.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(testPeersAllBody))
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--config", cfgPath, "--all"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (a remote host failure must not fail the command)", code)
+	}
+}
+
+// --- formatHostsTable golden fixture ---------------------------------------
+
+func hostsTableFixture() []cliHostRow {
+	return []cliHostRow{
+		{Alias: "air", URL: "https://air.mlab.host", HostID: "air:def456", Verified: true, HasToken: true, HasInboundToken: true, AllowBypass: false},
+		{Alias: "phone", URL: "https://phone.mlab.host", HostID: "", Verified: false, HasToken: false, HasInboundToken: true, AllowBypass: true},
+	}
+}
+
+const wantHostsTable = "ALIAS  URL                      HOST_ID     VERIFIED  TOKEN  INBOUND  ALLOW_BYPASS\n" +
+	"air    https://air.mlab.host    air:def456  yes       yes    yes      no\n" +
+	"phone  https://phone.mlab.host              no        no     yes      yes\n"
+
+func TestFormatHostsTable(t *testing.T) {
+	got := formatHostsTable(hostsTableFixture())
+	if got != wantHostsTable {
+		t.Errorf("formatHostsTable mismatch\ngot:\n%s\nwant:\n%s", got, wantHostsTable)
+	}
+}
+
+// --- runPeersCmd host list/add/set-token/remove against an httptest server -
+
+func TestRunPeersCmd_HostList(t *testing.T) {
+	var gotMethod, gotPath, gotAuth string
+	body := `{"hosts":[{"alias":"air","url":"https://air.mlab.host","host_id":"air:def456","verified":true,"has_token":true,"has_inbound_token":true,"allow_bypass":false}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "list", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method = %q, want GET", gotMethod)
+	}
+	if gotPath != "/api/peers/hosts" {
+		t.Errorf("path = %q, want /api/peers/hosts", gotPath)
+	}
+	if gotAuth != "Bearer admin-tok" {
+		t.Errorf("Authorization = %q, want Bearer admin-tok", gotAuth)
+	}
+	if !strings.Contains(stdout.String(), "ALIAS") || !strings.Contains(stdout.String(), "air") {
+		t.Errorf("stdout = %q, want a table containing ALIAS and air", stdout.String())
+	}
+}
+
+func TestRunPeersCmd_HostAdd(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody cliAddHostRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(cliAddHostResponse{
+			Alias: "air", URL: "https://air.mlab.host", HostID: "air:def456",
+			InboundToken: "pdxp_inbound123", Verified: true,
+		})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "add", "air", "https://air.mlab.host", "--token", "pdxp_out123", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/api/peers/hosts" {
+		t.Errorf("path = %q, want /api/peers/hosts", gotPath)
+	}
+	wantBody := cliAddHostRequest{Alias: "air", URL: "https://air.mlab.host", Token: "pdxp_out123"}
+	if gotBody != wantBody {
+		t.Errorf("request body = %+v, want %+v", gotBody, wantBody)
+	}
+	wantStdout := "added air (https://air.mlab.host)  verified: yes\n" +
+		"inbound token for air to use when adding this host:\n" +
+		"  pdxp_inbound123\n"
+	if stdout.String() != wantStdout {
+		t.Errorf("stdout = %q, want %q", stdout.String(), wantStdout)
+	}
+}
+
+func TestRunPeersCmd_HostAdd_FlagBeforePositionals(t *testing.T) {
+	// Pins "flags may appear anywhere after peers": --token here precedes
+	// the alias/url positionals it applies to.
+	var gotBody cliAddHostRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(cliAddHostResponse{Alias: "air", URL: "https://air.mlab.host", Verified: false})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "add", "--token", "pdxp_out123", "air", "https://air.mlab.host", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	wantBody := cliAddHostRequest{Alias: "air", URL: "https://air.mlab.host", Token: "pdxp_out123"}
+	if gotBody != wantBody {
+		t.Errorf("request body = %+v, want %+v", gotBody, wantBody)
+	}
+}
+
+func TestRunPeersCmd_HostAdd_ErrorPassthrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "alias already exists"})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "add", "air", "https://air.mlab.host", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stdout.String() != "" {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "alias already exists") {
+		t.Errorf("stderr = %q, want it to mention alias already exists", stderr.String())
+	}
+}
+
+func TestRunPeersCmd_HostSetToken_DottedAlias(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody cliPutHostRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(cliHostRow{
+			Alias: "air.2026", URL: "https://air.mlab.host", HostID: "air:def456",
+			Verified: true, HasToken: true, HasInboundToken: true, AllowBypass: true,
+		})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "set-token", "air.2026", "pdxp_new123", "--allow-bypass=true", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/api/peers/hosts/air.2026" {
+		t.Errorf("path = %q, want /api/peers/hosts/air.2026", gotPath)
+	}
+	wantBypass := true
+	if gotBody.Token != "pdxp_new123" || gotBody.AllowBypass == nil || *gotBody.AllowBypass != wantBypass {
+		t.Errorf("request body = %+v, want token=pdxp_new123 allow_bypass=true", gotBody)
+	}
+	if !strings.Contains(stdout.String(), "air.2026") {
+		t.Errorf("stdout = %q, want it to mention air.2026", stdout.String())
+	}
+}
+
+func TestRunPeersCmd_HostSetToken_NoAllowBypass(t *testing.T) {
+	var gotBody map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(cliHostRow{Alias: "air", Verified: true, HasToken: true})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "set-token", "air", "pdxp_new123", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if _, present := gotBody["allow_bypass"]; present {
+		t.Errorf("request body included allow_bypass when it was not passed: %v", gotBody)
+	}
+}
+
+func TestRunPeersCmd_HostRemove(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "remove", "air.2026", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/api/peers/hosts/air.2026" {
+		t.Errorf("path = %q, want /api/peers/hosts/air.2026", gotPath)
+	}
+	if !strings.Contains(stdout.String(), "air.2026") {
+		t.Errorf("stdout = %q, want it to mention air.2026", stdout.String())
+	}
+}
+
+func TestRunPeersCmd_HostRemove_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unknown alias"})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "remove", "ghost", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown alias") {
+		t.Errorf("stderr = %q, want it to mention unknown alias", stderr.String())
+	}
+}
+
+// --- grammar rejections: exit 2, zero requests, before any config load ----
+
+func TestRunPeersCmd_GrammarRejections(t *testing.T) {
+	var reqCount int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&reqCount, 1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"host missing verb", []string{"host"}},
+		{"host unknown verb", []string{"host", "bogus"}},
+		{"host add missing url", []string{"host", "add", "air"}},
+		{"host add extra positional", []string{"host", "add", "air", "https://x", "extra"}},
+		{"host list extra positional", []string{"host", "list", "extra"}},
+		{"host remove missing alias", []string{"host", "remove"}},
+		{"host remove extra positional", []string{"host", "remove", "air", "extra"}},
+		{"--all with host", []string{"--all", "host", "list"}},
+		{"--json with host", []string{"host", "list", "--json"}},
+		{"--token with set-token", []string{"host", "set-token", "air", "tok", "--token", "x"}},
+		{"--allow-bypass with add", []string{"host", "add", "air", "https://x", "--allow-bypass=true"}},
+		{"--token with remove", []string{"host", "remove", "air", "--token", "x"}},
+		{"--token with list", []string{"host", "list", "--token", "x"}},
+		{"--allow-bypass with remove", []string{"host", "remove", "air", "--allow-bypass=true"}},
+		{"--token at top level", []string{"--token", "x"}},
+		{"--allow-bypass at top level", []string{"--allow-bypass=true"}},
+		{"unexpected top-level positional", []string{"foo"}},
+		{"host add alias with slash", []string{"host", "add", "a/b", "https://x"}},
+		{"host set-token alias with slash", []string{"host", "set-token", "a/b", "tok"}},
+		{"host remove alias with slash", []string{"host", "remove", "a/b"}},
+		{"invalid allow-bypass value", []string{"host", "set-token", "air", "tok", "--allow-bypass=maybe"}},
+		{"unknown flag at top level", []string{"--bogus"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := atomic.LoadInt64(&reqCount)
+			args := append(append([]string{}, tc.args...), "--config", cfgPath)
+			var stdout, stderr bytes.Buffer
+			code := runPeersCmd(args, &stdout, &stderr)
+
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2; stderr=%q", code, stderr.String())
+			}
+			if stderr.String() == "" {
+				t.Errorf("stderr is empty, want a usage/error message")
+			}
+			if stdout.String() != "" {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			after := atomic.LoadInt64(&reqCount)
+			if after != before {
+				t.Errorf("server saw %d request(s), want 0", after-before)
+			}
+		})
+	}
+}
+
+// TestRunPeersCmd_ConfigFlagMissingValue is separate from the table above:
+// appending the harness's own "--config <path>" after a bare trailing
+// "--config" would just supply the missing value, defeating the case. Bare
+// "--config" is instead the command's only argument.
+func TestRunPeersCmd_ConfigFlagMissingValue(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--config"}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2; stderr=%q", code, stderr.String())
+	}
+	if stderr.String() == "" {
+		t.Errorf("stderr is empty, want a usage/error message")
 	}
 	if stdout.String() != "" {
 		t.Errorf("stdout = %q, want empty", stdout.String())
