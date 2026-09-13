@@ -31,20 +31,24 @@ func Resolve(records []PeerRecord, session string) (PeerRecord, error) {
 		return PeerRecord{}, ErrNotFound
 	}
 
-	if peerName, ok := strings.CutPrefix(session, "cc:"); ok {
-		return resolveTier(records, session, func(r PeerRecord) bool {
-			return r.Agent != nil && r.Agent.PeerName == peerName && r.Agent.Type != "proxy"
-		})
-	}
-
 	if rec, err := resolveTier(records, session, func(r PeerRecord) bool {
 		return r.SessionName == session
 	}); !errors.Is(err, ErrNotFound) {
 		return rec, err
 	}
 
-	return resolveTier(records, session, func(r PeerRecord) bool {
+	if rec, err := resolveTier(records, session, func(r PeerRecord) bool {
 		return r.SessionCode == session
+	}); !errors.Is(err, ErrNotFound) {
+		return rec, err
+	}
+
+	peerName, ok := strings.CutPrefix(session, "cc:")
+	if !ok {
+		return PeerRecord{}, ErrNotFound
+	}
+	return resolveTier(records, session, func(r PeerRecord) bool {
+		return r.Agent != nil && r.Agent.PeerName == peerName && r.Agent.Type != "proxy"
 	})
 }
 

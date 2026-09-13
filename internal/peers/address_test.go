@@ -103,6 +103,47 @@ func TestResolve_AmbiguousAtNameTierNeverFallsToCodeTier(t *testing.T) {
 	}
 }
 
+func TestResolve_NameTierBeatsCCTier(t *testing.T) {
+	// A record's SessionName is literally "cc:foo"; another record's
+	// Agent.PeerName is "foo". The name tier must win over the cc: tier.
+	nameRecord := PeerRecord{SessionName: "cc:foo", SessionCode: "n1"}
+	records := []PeerRecord{
+		nameRecord,
+		ccRecord("other", "o1", "foo"),
+	}
+	got, err := Resolve(records, "cc:foo")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.SessionCode != "n1" {
+		t.Fatalf("got %+v, want the name-tier match (SessionCode=n1)", got)
+	}
+}
+
+func TestResolve_NameTierAmbiguousNeverFallsToCCTier(t *testing.T) {
+	// Two records share SessionName "cc:foo"; a third has Agent.PeerName
+	// "foo". Ambiguity at the name tier must win; the cc: tier (and that
+	// third record) must never be consulted.
+	records := []PeerRecord{
+		{SessionName: "cc:foo", SessionCode: "n1"},
+		{SessionName: "cc:foo", SessionCode: "n2"},
+		ccRecord("other", "o1", "foo"),
+	}
+	_, err := Resolve(records, "cc:foo")
+	var ambErr *AmbiguousError
+	if !errors.As(err, &ambErr) {
+		t.Fatalf("err = %v, want *AmbiguousError", err)
+	}
+	if len(ambErr.Candidates) != 2 {
+		t.Fatalf("len(Candidates) = %d, want 2 (the two name-tier matches only)", len(ambErr.Candidates))
+	}
+	for _, c := range ambErr.Candidates {
+		if c.SessionName != "cc:foo" {
+			t.Fatalf("candidate %+v is not a name-tier match", c)
+		}
+	}
+}
+
 func TestResolve_CCTier_SkipsProxyRows(t *testing.T) {
 	records := []PeerRecord{
 		{
