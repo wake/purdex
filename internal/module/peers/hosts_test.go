@@ -467,6 +467,84 @@ func TestHandleAddHost_InvalidURL(t *testing.T) {
 	}
 }
 
+// TestHandleAddHost_URLNormalization_TrailingSlashStripped pins Item 1:
+// a trailing slash on the submitted URL must not survive into the stored
+// (and echoed) URL, so baseURL+"/api/peers" in fetchRemote never produces
+// a double slash. The remote server itself doubles as the proof: it fails
+// the test if it ever sees a path other than exactly "/api/peers".
+func TestHandleAddHost_URLNormalization_TrailingSlashStripped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/peers" {
+			t.Errorf("remote request path = %q, want /api/peers", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"host_id":"air:1","ok":true,"partial":false,"peers":[]}`))
+	}))
+	defer srv.Close()
+
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	m := newHostsTestModule(c, nil) // production fetchRemote against the real server
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"alias": "air", "url": srv.URL + "/", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		URL      string `json:"url"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !got.Verified || got.URL != srv.URL {
+		t.Errorf("response = %+v, want verified=true url=%s (no trailing slash)", got, srv.URL)
+	}
+
+	reloaded := loadCfg(t, cfgPath)
+	idx := reloaded.Peers.FindPeerHostByAlias("air")
+	if idx == -1 {
+		t.Fatalf("alias not persisted")
+	}
+	if reloaded.Peers.Hosts[idx].URL != srv.URL {
+		t.Errorf("persisted url = %q, want %q (no trailing slash)", reloaded.Peers.Hosts[idx].URL, srv.URL)
+	}
+}
+
+// TestHandleAddHost_URLValidation_RejectsUnsafeComponents pins Item 1's
+// rejection of components with no meaning for a peer host URL: a query
+// string, a fragment, and embedded userinfo. Each must 400 with an
+// "invalid url" message and persist nothing.
+func TestHandleAddHost_URLValidation_RejectsUnsafeComponents(t *testing.T) {
+	cases := []string{
+		"https://a.example?x=1",
+		"https://a.example#f",
+		"https://u:p@a.example",
+	}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+			m := newHostsTestModule(c, failIfCalledFetch(t))
+
+			rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+				"alias": "air", "url": raw,
+			}, adminPrincipal())
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("url=%q status = %d, want 400; body=%s", raw, rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "invalid url") {
+				t.Errorf("url=%q body = %s, want mention of invalid url", raw, rr.Body.String())
+			}
+			reloaded := loadCfg(t, cfgPath)
+			if reloaded.Peers.FindPeerHostByAlias("air") != -1 {
+				t.Fatalf("url=%q alias should not be persisted", raw)
+			}
+		})
+	}
+}
+
 // TestHandleAddHost_Concurrent_SameAlias gates two parallel POSTs of the
 // same alias behind a barrier inside the fake verify so both requests pass
 // their pre-checks before either commits: exactly one succeeds (201) and

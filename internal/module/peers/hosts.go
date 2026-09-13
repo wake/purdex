@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
@@ -110,17 +111,37 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// validAbsoluteURL reports whether raw parses as an absolute http(s) URL
-// with a host.
-func validAbsoluteURL(raw string) bool {
+// normalizeHostURL parses raw as an absolute http(s) URL suitable for
+// storing as a peer host's URL, and returns the normalized form: any
+// trailing "/" stripped, so a stored URL concatenated with "/api/peers" in
+// fetchRemote never produces a double slash (a URL submitted with or
+// without a trailing slash both persist identically). Userinfo, a query
+// string, and a fragment are rejected outright — none has any meaning for
+// a peer host URL, and accepting them risks smuggling unexpected behavior
+// into a value that gets stored and later dialed. On any rejection the
+// returned error's message is fit to report to the caller as the body of
+// a 400, prefixed "invalid url: ".
+func normalizeHostURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() {
-		return false
+	if err != nil {
+		return "", fmt.Errorf("invalid url: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return false
+		return "", fmt.Errorf("invalid url: scheme must be http or https")
 	}
-	return u.Host != ""
+	if u.Host == "" {
+		return "", fmt.Errorf("invalid url: missing host")
+	}
+	if u.User != nil {
+		return "", fmt.Errorf("invalid url: must not contain userinfo")
+	}
+	if u.RawQuery != "" {
+		return "", fmt.Errorf("invalid url: must not contain a query string")
+	}
+	if u.Fragment != "" {
+		return "", fmt.Errorf("invalid url: must not contain a fragment")
+	}
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 // tokenEqualsAdmin reports whether token (a caller-supplied outbound
@@ -223,8 +244,9 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !validAbsoluteURL(req.URL) {
-		writeJSONError(w, http.StatusBadRequest, "url must be an absolute http(s) URL")
+	normalizedURL, err := normalizeHostURL(req.URL)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if tokenEqualsAdmin(req.Token, adminToken) {
@@ -245,7 +267,7 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 	var learnedHostID string
 	verified := false
 	if req.Token != "" {
-		env, errMsg := m.verifyHost(r.Context(), req.URL, req.Token)
+		env, errMsg := m.verifyHost(r.Context(), normalizedURL, req.Token)
 		if errMsg != "" {
 			writeJSONError(w, http.StatusBadGateway, errMsg)
 			return
@@ -256,7 +278,7 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 
 	newHost := config.PeerHost{
 		Alias:        req.Alias,
-		URL:          req.URL,
+		URL:          normalizedURL,
 		HostID:       learnedHostID,
 		Token:        req.Token,
 		InboundToken: inboundToken,
@@ -280,7 +302,7 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(addHostResponse{
 		Alias:        req.Alias,
-		URL:          req.URL,
+		URL:          normalizedURL,
 		HostID:       learnedHostID,
 		InboundToken: inboundToken,
 		Verified:     verified,
