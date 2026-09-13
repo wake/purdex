@@ -462,9 +462,15 @@ func TestDeliver_HappyPath(t *testing.T) {
 // TestDeliver_HelperSurvivesRequestContext pins B1: the helper is owned
 // by the manager, not the request. After the response the request context
 // is cancelled; a frame written into the helper's socket must still reach
-// onFrame.
+// onFrame — and, through it, the reply path (reply.go), which forwards it
+// to the origin host.
 func TestDeliver_HelperSurvivesRequestContext(t *testing.T) {
 	e := newDeliverEnv(t, envOpts{})
+	forwarded := make(chan ipeers.DeliverRequest, 1)
+	e.m.post = func(_ context.Context, _ *http.Client, _, _ string, req ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error) {
+		forwarded <- req
+		return ipeers.DeliverResponse{MsgID: req.MsgID, Result: ipeers.ResultDelivered, EffectiveMode: ipeers.ModePrompting}, nil, nil
+	}
 	ctx, cancel := context.WithCancel(e.hostCtx())
 	rr := e.post(ctx, e.request())
 	cancel()
@@ -487,8 +493,13 @@ func TestDeliver_HelperSurvivesRequestContext(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("onFrame did not fire within 5 s after the request context was cancelled")
 	}
-	if !strings.Contains(strings.Join(e.f.logs.all(), "\n"), "reply") {
-		t.Errorf("handleReplyFrame stub logged nothing: %v", e.f.logs.all())
+	select {
+	case req := <-forwarded:
+		if req.Text != "pong" || req.To.AgentSessionID != senderSessionID {
+			t.Errorf("forwarded reply = %+v, want text pong to the origin %s", req, senderSessionID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reply was not forwarded to the origin within 5 s")
 	}
 }
 

@@ -2,9 +2,12 @@
 // local inventory of this host's tmux sessions joined with the agent module's
 // owner resolution and the Claude Code session registry; the peer-host
 // management and settings routes; POST /api/peers/send, the outbound half
-// of cross-host messaging (send.go); and POST /api/peers/deliver, the
+// of cross-host messaging (send.go); POST /api/peers/deliver, the
 // inbound half (deliver.go), backed by the per-origin helper manager
-// (helpers.go) and the peer_messages audit store.
+// (helpers.go) and the peer_messages audit store; the reply path that
+// forwards a target's native reply back through the return route, and
+// GET /api/peers/log over the audit store (reply.go). Start/Stop live in
+// lifecycle.go.
 package peers
 
 import (
@@ -59,13 +62,6 @@ type AuditStore interface {
 // the same directory Claude Code itself uses, so the reply address a
 // frame carries is one the harness can dial.
 const helperSockDir = "/tmp/cc-socks"
-
-// helperReapInterval is how often idle helpers are reaped (HelperIdleReap
-// is the idle threshold itself).
-const helperReapInterval = time.Minute
-
-// replyWorkerCap bounds the reply workers (Task 9) in flight at once.
-const replyWorkerCap = 8
 
 // remoteFetchTimeout bounds each individual host fetch in a scope=all
 // fan-out, independent of the shared http.Client's own timeout.
@@ -277,62 +273,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/peers/settings", m.handlePutSettings)
 	mux.HandleFunc("POST /api/peers/send", m.handleSend)
 	mux.HandleFunc("POST /api/peers/deliver", m.handleDeliver)
-}
-
-// Start sweeps proxies.json from a previous run (spec §4.5) — a sweep
-// that cannot rewrite the ownership file is fatal, since the daemon must
-// never run without one — and then starts the idle-reap ticker under
-// stopCtx.
-func (m *Module) Start(context.Context) error {
-	if err := m.helpers.Sweep(); err != nil {
-		return err
-	}
-	m.reapWG.Add(1)
-	go m.reapLoop()
-	return nil
-}
-
-// reapLoop releases idle helpers every helperReapInterval until Stop.
-// ReapIdle runs synchronously on this goroutine, so once Stop has joined
-// reapWG no Release from here can still begin.
-func (m *Module) reapLoop() {
-	defer m.reapWG.Done()
-	ticker := time.NewTicker(helperReapInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-m.stopCtx.Done():
-			return
-		case <-ticker.C:
-			m.helpers.ReapIdle()
-		}
-	}
-}
-
-// Stop tears down in a fixed order (R2-B1, R3-M2): cancel stopCtx (new
-// deliveries answer 503 not_ready, in-flight socket writes abort, the
-// reply semaphore wait gives up) → join the reap ticker (no further
-// Release can start from it) → helpers.Stop (closes admission, joins
-// every startup, pump and in-flight Release: after it no onFrame runs, so
-// no reply worker can be added) → join the reply workers that were
-// already running. Idempotent.
-func (m *Module) Stop(context.Context) error {
-	m.stopCancel()
-	m.reapWG.Wait()
-	if m.helpers != nil {
-		m.helpers.Stop()
-	}
-	m.workers.Wait()
-	return nil
-}
-
-// handleReplyFrame receives every frame a helper's Claude Code peer wrote
-// into the helper's socket: a native reply to a delivered message. Runs on
-// the helper's pump goroutine, so it must never block — a pump parked in
-// here would stall helpers.Stop. Until the reply path lands (Task 9) the
-// frame is logged and dropped.
-func (m *Module) handleReplyFrame(h *helper, line string) {
-	m.logf("peers: helper %d (%s): reply frame dropped, reply path not wired (%d bytes)", h.pid, h.name, len(line))
+	mux.HandleFunc("GET /api/peers/log", m.handlePeersLog)
 }
 
 // handlePeers serves GET /api/peers. scope unset/"local" returns this
