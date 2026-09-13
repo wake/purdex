@@ -14,6 +14,18 @@ import (
 	"github.com/wake/purdex/internal/peers"
 )
 
+// maxPeersErrorBodyBytes bounds how much of a non-200 response body is read
+// for the error detail printed to stderr — the body could be arbitrarily
+// large (a proxy's HTML error page, say), and only a short prefix is useful
+// in an error message.
+const maxPeersErrorBodyBytes = 4 * 1024
+
+// maxPeersOKBodyBytes bounds how much of a 200 response body is read before
+// it is rejected as too large. GET /api/peers' body is a small JSON object
+// in normal operation; 16 MiB is generous headroom while still bounding one
+// misbehaving or compromised daemon's cost to a fixed amount of memory.
+const maxPeersOKBodyBytes = 16 * 1024 * 1024
+
 // peersResponse mirrors GET /api/peers' JSON body. It is cmd/pdx's own copy
 // (this package must not import internal/module/peers), sharing only the
 // PeerRecord row type with the daemon's public wire format.
@@ -62,18 +74,27 @@ func runPeersCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// The status code decides how much of the body is worth reading before
+	// anything else happens: an error response's body could be arbitrarily
+	// large (a proxy's HTML error page, a misbehaving server), so only a
+	// bounded prefix is read for the error detail, never the whole thing.
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxPeersErrorBodyBytes))
+		detail := strings.TrimSpace(string(errBody))
+		if detail == "" {
+			detail = "<no body>"
+		}
+		fmt.Fprintf(stderr, "pdx peers: HTTP %d: %s\n", resp.StatusCode, detail)
+		return 1
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPeersOKBodyBytes+1))
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx peers: %v\n", err)
 		return 1
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		detail := strings.TrimSpace(string(body))
-		if detail == "" {
-			detail = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		}
-		fmt.Fprintf(stderr, "pdx peers: %s\n", detail)
+	if len(body) > maxPeersOKBodyBytes {
+		fmt.Fprintln(stderr, "pdx peers: response too large")
 		return 1
 	}
 

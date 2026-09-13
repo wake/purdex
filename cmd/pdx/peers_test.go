@@ -299,6 +299,64 @@ func TestRunPeersCmd_JSONAndConfigStillWork(t *testing.T) {
 	}
 }
 
+// TestRunPeersCmd_LargeErrorBody_BoundedStderr pins Item 6: a non-200
+// response with a huge body must not be read in full before being printed —
+// only up to 4 KiB of it is used for the error detail, so stderr stays
+// small regardless of how much the server sent.
+func TestRunPeersCmd_LargeErrorBody_BoundedStderr(t *testing.T) {
+	bigBody := strings.Repeat("e", 1024*1024) // 1 MiB
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(bigBody))
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--config", cfgPath}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stderr.Len() >= 5*1024 {
+		t.Errorf("stderr length = %d, want under 5 KiB", stderr.Len())
+	}
+	if !strings.Contains(stderr.String(), "pdx peers:") || !strings.Contains(stderr.String(), "HTTP 500") {
+		t.Errorf("stderr = %q, want it to mention pdx peers: and HTTP 500", stderr.String())
+	}
+}
+
+// TestRunPeersCmd_OversizedOKBody_RejectedBounded pins Item 6: a 200 response
+// whose body exceeds 16 MiB must not be read into memory in full — the CLI
+// caps the read and reports the body as too large rather than hanging onto
+// (or trying to json.Unmarshal) an unbounded payload.
+func TestRunPeersCmd_OversizedOKBody_RejectedBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		chunk := bytes.Repeat([]byte("x"), 1024*1024) // 1 MiB per write
+		for i := 0; i < 17; i++ {                      // 17 MiB total, streamed
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--config", cfgPath}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "pdx peers: response too large") {
+		t.Errorf("stderr = %q, want it to mention response too large", stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+}
+
 func TestRunPeersCmd_UnreachableServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	addr := srv.Listener.Addr().String()
