@@ -93,6 +93,10 @@ func (m *Module) Init(c *core.Core) error {
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/peers", m.handlePeers)
+	mux.HandleFunc("GET /api/peers/hosts", m.handleListHosts)
+	mux.HandleFunc("POST /api/peers/hosts", m.handleAddHost)
+	mux.HandleFunc("PUT /api/peers/hosts/{alias}", m.handlePutHost)
+	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)
 }
 
 func (m *Module) Start(context.Context) error { return nil }
