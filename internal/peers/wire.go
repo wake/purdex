@@ -100,6 +100,7 @@ const (
 // Error codes: the "error" field of every 4xx/5xx JSON body on /send,
 // /deliver and /log.
 const (
+	ErrForbidden         = "forbidden" // the principal may not use this route (admin-only routes)
 	ErrBadRequest        = "bad_request"
 	ErrTextTooLarge      = "text_too_large"
 	ErrBadMode           = "bad_mode"

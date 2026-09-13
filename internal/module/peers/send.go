@@ -33,10 +33,6 @@ const maxSendBodyBytes = 1 << 20
 // body is attacker-controlled (any configured peer host).
 const maxDeliverRespBytes = 64 << 10
 
-// errForbidden is the "error" code of a /send refused for a non-admin
-// principal — the same word the scope=all fan-out and the auth layer use.
-const errForbidden = "forbidden"
-
 // newDeliverClient returns the *http.Client used for every outbound
 // /deliver call: InterDaemonTimeout end to end, and redirects are never
 // followed, so the bearer it carries cannot be replayed to another host.
@@ -101,29 +97,6 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 	return out, nil, nil
 }
 
-// writeSendError writes ae as the JSON body with status.
-func writeSendError(w http.ResponseWriter, status int, ae ipeers.APIError) {
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(ae)
-}
-
-// sendSnapshot is the one config read a send makes, under RLock.
-type sendSnapshot struct {
-	localHostID string
-	localAlias  string
-	hosts       []config.PeerHost
-}
-
-func (m *Module) snapshotForSend() sendSnapshot {
-	m.core.CfgMu.RLock()
-	defer m.core.CfgMu.RUnlock()
-	return sendSnapshot{
-		localHostID: m.core.Cfg.HostID,
-		localAlias:  m.core.Cfg.PeerAlias(),
-		hosts:       append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...),
-	}
-}
-
 // findOrigin picks the inventory row the caller presented as its own: a
 // deliverable cc agent whose inbox is exactly inbox. Proxy rows (this
 // daemon's own helpers, or another daemon's recognised via IsProxy) have
@@ -169,16 +142,16 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	// principal here; enforced again in depth).
 	principal, ok := middleware.PrincipalFrom(r.Context())
 	if !ok || principal.Kind != middleware.PrincipalAdmin {
-		writeSendError(w, http.StatusForbidden, ipeers.APIError{Error: errForbidden, Detail: "send is admin-only"})
+		writeWireError(w, http.StatusForbidden, ipeers.APIError{Error: ipeers.ErrForbidden, Detail: "send is admin-only"})
 		return
 	}
 	if m.stopCtx.Err() != nil {
-		writeSendError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "daemon is stopping"})
+		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "daemon is stopping"})
 		return
 	}
 	refuseUnaudited := func(status int, code, detail string) {
 		m.logf("peers: send refused (%s): %s", code, detail)
-		writeSendError(w, status, ipeers.APIError{Error: code, Detail: detail})
+		writeWireError(w, status, ipeers.APIError{Error: code, Detail: detail})
 	}
 
 	// 2. Decode and validate.
@@ -207,8 +180,8 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. The host entry (D1: the local host is never a target).
-	snap := m.snapshotForSend()
-	if ipeers.HostMatches(host, snap.localAlias, snap.localHostID) {
+	snap := m.configSnapshot()
+	if ipeers.HostMatches(host, snap.alias, snap.hostID) {
 		refuseUnaudited(http.StatusBadRequest, ipeers.ErrLocalTarget, "same-host sessions reach each other natively; the bridge only delivers to other hosts")
 		return
 	}
@@ -230,7 +203,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. The origin: the caller's own session, attributed by its inbox.
-	local := m.localEnvelope(r.Context(), snap.localHostID, snap.localAlias)
+	local := m.localEnvelope(r.Context(), snap.hostID, snap.alias)
 	if !local.OK {
 		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "local inventory unavailable: "+local.Error)
 		return
@@ -240,13 +213,13 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is not a live, deliverable Claude Code session on this host")
 		return
 	}
-	from := wireFromRecord(snap.localHostID, origin, mode)
+	from := wireFromRecord(snap.hostID, origin, mode)
 
 	// 5. The remote snapshot, with the entry's token, at the entry's URL.
 	// Whatever the rows claim about their host, they are normalised to
 	// the entry (P2 #5); the envelope must name the entry's host_id.
 	remoteRefused := func(text string) {
-		writeSendError(w, http.StatusBadGateway, ipeers.APIError{
+		writeWireError(w, http.StatusBadGateway, ipeers.APIError{
 			Error:  ipeers.ErrRemoteError,
 			Detail: "fetching the peer inventory failed",
 			Remote: &ipeers.RemoteError{Status: 0, Error: text},
@@ -256,8 +229,11 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	env, err := m.fetch(fetchCtx, m.client, entry.URL, entry.Token)
 	cancelFetch()
 	if err != nil {
-		m.logf("peers: send to %q: fetch inventory: %v", entry.Alias, err)
-		remoteRefused(boundRemoteText(err.Error()))
+		// The error may carry the remote's own text (an HTTP status line
+		// is fine; a body-derived decode error is not): bounded everywhere.
+		text := boundRemoteText(err.Error())
+		m.logf("peers: send to %q: fetch inventory: %s", entry.Alias, text)
+		remoteRefused(text)
 		return
 	}
 	if env.HostID != entry.HostID {
@@ -283,14 +259,15 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 				candidates = append(candidates, c.Address)
 			}
 			m.logf("peers: send refused (%s): %q on %q has %d candidates", ipeers.ErrAmbiguous, session, entry.Alias, len(candidates))
-			writeSendError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrAmbiguous, Detail: err.Error(), Candidates: candidates})
+			writeWireError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrAmbiguous, Detail: err.Error(), Candidates: candidates})
 		default:
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, fmt.Sprintf("no session %q on %q", session, entry.Alias))
 		}
 		return
 	}
 	if !target.Deliverable || target.Agent == nil || target.Agent.Type != "cc" {
-		reason := target.Reason
+		// Reason is the remote's text: bounded before it is echoed or logged.
+		reason := boundRemoteText(target.Reason)
 		if reason == "" {
 			reason = "not a deliverable Claude Code session"
 		}
@@ -303,10 +280,24 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		toAddress = entry.Alias + "/" + session
 	}
 
-	// 7. The audit row: a fresh msg_id per attempt (a reused id would be
-	// refused as a duplicate by the receiver), recorded before anything
-	// leaves this host.
-	msgID := m.newMsgID()
+	// 7. The outbound request, validated here against the same wire
+	// contract the receiver enforces, so a tuple the remote reported in a
+	// shape the receiver would refuse (or an origin label over the limit)
+	// is a local 400 with nothing recorded and no msg_id sent. The
+	// validation error may quote remote text (a proc_start that does not
+	// parse), so it is bounded. Then the audit row: a fresh msg_id per
+	// attempt (a reused id would be refused as a duplicate by the
+	// receiver), recorded before anything leaves this host.
+	dreq := ipeers.DeliverRequest{MsgID: m.newMsgID(), From: from, To: to, Text: req.Text}
+	if err := dreq.Validate(); err != nil {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ValidationCode(err), "outbound request invalid: "+boundRemoteText(err.Error()))
+		return
+	}
+	msgID := dreq.MsgID
+	if m.stopCtx.Err() != nil {
+		refuseUnaudited(http.StatusServiceUnavailable, ipeers.ErrNotReady, "daemon is stopping")
+		return
+	}
 	if m.audit == nil {
 		refuseUnaudited(http.StatusServiceUnavailable, ipeers.ErrAuditUnavailable, "audit store is not available")
 		return
@@ -315,7 +306,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		MsgID:         msgID,
 		Direction:     store.DirOut,
 		TS:            m.now(),
-		FromHostID:    snap.localHostID,
+		FromHostID:    snap.hostID,
 		FromSessionID: from.AgentSessionID,
 		ToHostID:      entry.HostID,
 		ToSessionID:   to.AgentSessionID,
@@ -324,7 +315,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		m.logf("peers: send %s to %q: audit insert: %v", msgID, entry.Alias, err)
-		writeSendError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrAuditUnavailable, Detail: "audit insert failed"})
+		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrAuditUnavailable, Detail: "audit insert failed"})
 		return
 	}
 
@@ -333,26 +324,22 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	// already made into an unrecorded one.
 	postCtx, cancelPost := context.WithTimeout(m.stopCtx, ipeers.InterDaemonTimeout)
 	defer cancelPost()
-	resp, remote, err := m.post(postCtx, m.deliverClient, entry.URL, entry.Token, ipeers.DeliverRequest{
-		MsgID: msgID,
-		From:  from,
-		To:    to,
-		Text:  req.Text,
-	})
+	resp, remote, err := m.post(postCtx, m.deliverClient, entry.URL, entry.Token, dreq)
 	switch {
 	case err != nil:
-		m.setResult(id, "", "", err.Error())
-		m.logf("peers: send %s to %q: deliver call failed: %v", msgID, entry.Alias, err)
-		writeSendError(w, http.StatusBadGateway, ipeers.APIError{
+		text := boundRemoteText(err.Error())
+		m.setResult(id, "", "", text)
+		m.logf("peers: send %s to %q: deliver call failed: %s", msgID, entry.Alias, text)
+		writeWireError(w, http.StatusBadGateway, ipeers.APIError{
 			Error:  ipeers.ErrRemoteError,
 			Detail: "the deliver call to the peer failed",
-			Remote: &ipeers.RemoteError{Status: 0, Error: boundRemoteText(err.Error())},
+			Remote: &ipeers.RemoteError{Status: 0, Error: text},
 		})
 		return
 	case remote != nil:
 		m.setResult(id, "", remote.Error, remote.Detail)
 		m.logf("peers: send %s to %q refused by peer: %d %s: %s", msgID, entry.Alias, remote.Status, remote.Error, remote.Detail)
-		writeSendError(w, http.StatusBadGateway, ipeers.APIError{
+		writeWireError(w, http.StatusBadGateway, ipeers.APIError{
 			Error:  ipeers.ErrRemoteError,
 			Detail: "the peer refused the delivery",
 			Remote: remote,

@@ -103,6 +103,32 @@ func boundRemoteText(s string) string {
 	return s[:cut] + "…"
 }
 
+// writeWireError writes e as the JSON body of a 4xx/5xx answer on the
+// messaging routes (/send, /deliver): every such body is an ipeers.APIError.
+func writeWireError(w http.ResponseWriter, status int, e ipeers.APIError) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(e)
+}
+
+// configSnapshot is the one config read a request makes, under RLock: the
+// local identity and a clone of the peer hosts, so a concurrent config
+// mutation cannot be observed mid-request.
+type configSnapshot struct {
+	hostID string
+	alias  string
+	hosts  []config.PeerHost
+}
+
+func (m *Module) configSnapshot() configSnapshot {
+	m.core.CfgMu.RLock()
+	defer m.core.CfgMu.RUnlock()
+	return configSnapshot{
+		hostID: m.core.Cfg.HostID,
+		alias:  m.core.Cfg.PeerAlias(),
+		hosts:  append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...),
+	}
+}
+
 // Module implements core.Module for GET /api/peers.
 type Module struct {
 	core        *core.Core
@@ -324,7 +350,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 		principal, ok := middleware.PrincipalFrom(r.Context())
 		if !ok || principal.Kind != middleware.PrincipalAdmin {
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+			json.NewEncoder(w).Encode(map[string]string{"error": ipeers.ErrForbidden})
 			return
 		}
 	default:
@@ -334,22 +360,17 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// One config snapshot up front, used by every path below (local-only or
-	// scope=all), so a concurrent config mutation cannot be observed
-	// mid-request — in particular, so the local HostResult{Alias, HostID}
+	// scope=all) — in particular, so the local HostResult{Alias, HostID}
 	// row can never disagree with the host/host_id embedded in its own
 	// Peers records.
-	m.core.CfgMu.RLock()
-	hostID := m.core.Cfg.HostID
-	alias := m.core.Cfg.PeerAlias()
-	hosts := append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...)
-	m.core.CfgMu.RUnlock()
+	snap := m.configSnapshot()
 
 	if scope != "all" {
-		json.NewEncoder(w).Encode(m.localEnvelope(r.Context(), hostID, alias))
+		json.NewEncoder(w).Encode(m.localEnvelope(r.Context(), snap.hostID, snap.alias))
 		return
 	}
 
-	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), hostID, alias, hosts))
+	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), snap.hostID, snap.alias, snap.hosts))
 }
 
 // localEnvelope builds this host's own inventory from a caller-supplied

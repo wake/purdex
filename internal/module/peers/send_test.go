@@ -218,12 +218,11 @@ type sendEnv struct {
 	posts   []postCall
 
 	// What the fakes answer; set before the request.
-	env       ipeers.Envelope
-	fetchErr  error
-	postResp  ipeers.DeliverResponse
-	postRem   *ipeers.RemoteError
-	postErr   error
-	postDelay time.Duration
+	env      ipeers.Envelope
+	fetchErr error
+	postResp ipeers.DeliverResponse
+	postRem  *ipeers.RemoteError
+	postErr  error
 }
 
 // remoteRow is one deliverable cc row as the remote host "air" reports it
@@ -278,7 +277,7 @@ func newSendEnv(t *testing.T, o envOpts) *sendEnv {
 	s.m.post = func(ctx context.Context, client *http.Client, baseURL, bearer string, req ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error) {
 		s.mu.Lock()
 		s.posts = append(s.posts, postCall{baseURL, bearer, req})
-		resp, rem, err, delay := s.postResp, s.postRem, s.postErr, s.postDelay
+		resp, rem, err := s.postResp, s.postRem, s.postErr
 		s.mu.Unlock()
 		if client != s.m.deliverClient {
 			t.Errorf("post used client %p, want the module's deliverClient %p", client, s.m.deliverClient)
@@ -293,13 +292,6 @@ func newSendEnv(t *testing.T, o envOpts) *sendEnv {
 		}
 		if baseURL != remoteEntryURL {
 			t.Errorf("post baseURL = %q, want the entry's URL %q", baseURL, remoteEntryURL)
-		}
-		if delay > 0 {
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return ipeers.DeliverResponse{}, nil, ctx.Err()
-			}
 		}
 		if resp.MsgID == "" {
 			resp.MsgID = req.MsgID
@@ -665,8 +657,8 @@ func TestSend_ErrorSteps(t *testing.T) {
 	}
 	hostCtx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalHost, Alias: remoteAlias, HostID: remoteHostID})
 	cases := []tc{
-		{name: "host principal", ctx: hostCtx, status: http.StatusForbidden, code: "forbidden"},
-		{name: "no principal", ctx: context.Background(), status: http.StatusForbidden, code: "forbidden"},
+		{name: "host principal", ctx: hostCtx, status: http.StatusForbidden, code: ipeers.ErrForbidden},
+		{name: "no principal", ctx: context.Background(), status: http.StatusForbidden, code: ipeers.ErrForbidden},
 		{name: "invalid JSON", body: []byte("{"), status: http.StatusBadRequest, code: ipeers.ErrBadRequest},
 		{name: "empty text", mutate: func(r *ipeers.SendRequest) { r.Text = "" }, status: http.StatusBadRequest, code: ipeers.ErrBadRequest},
 		{name: "text too large", mutate: func(r *ipeers.SendRequest) { r.Text = strings.Repeat("a", ipeers.MaxTextBytes+1) }, status: http.StatusBadRequest, code: ipeers.ErrTextTooLarge},
@@ -721,6 +713,23 @@ func TestSend_ErrorSteps(t *testing.T) {
 				s.env = remoteEnvelope(row)
 			},
 			status: http.StatusConflict, code: ipeers.ErrNotDeliverable, fetched: true, detail: "inbox_dead",
+		},
+		{
+			name: "outbound request invalid: remote proc_start unparsable",
+			prepare: func(s *sendEnv) {
+				row := remoteRow(remoteSession, "fooc")
+				row.Agent.ProcStart = "not a date"
+				s.env = remoteEnvelope(row)
+			},
+			status: http.StatusBadRequest, code: ipeers.ErrBadRequest, fetched: true, detail: "to.proc_start",
+		},
+		{
+			name: "outbound request invalid: origin session name over the label limit",
+			opts: envOpts{
+				sessions: []session.SessionInfo{{Code: "origc", Name: strings.Repeat("n", ipeers.MaxLabelBytes+44), TmuxInstance: "inst1"}},
+				owners:   map[string]agent.PaneOwner{"origc": {AgentType: "cc", SessionID: targetSessionID, TmuxPaneID: "%10"}},
+			},
+			status: http.StatusBadRequest, code: ipeers.ErrBadRequest, fetched: true, detail: "from.session_name",
 		},
 		{
 			name:    "audit insert failure",
@@ -781,13 +790,78 @@ func TestSend_ErrorSteps(t *testing.T) {
 	}
 }
 
-// TestSend_RemoteTextBounded: a remote's error text is bounded before it
-// is echoed in this daemon's own response.
+// TestSend_RemoteTextBounded: every piece of remote text that reaches this
+// daemon's own response body or log (a fetch error, a row's reason, a
+// validation error quoting a remote field) is bounded first.
 func TestSend_RemoteTextBounded(t *testing.T) {
+	const limit = maxRemoteTextBytes + len("…")
+	long := strings.Repeat("x", 5000)
+	cases := []struct {
+		name    string
+		prepare func(s *sendEnv)
+		status  int
+		code    string
+		text    func(ae ipeers.APIError) string
+	}{
+		{
+			name:    "fetch error",
+			prepare: func(s *sendEnv) { s.fetchErr = errors.New(long) },
+			status:  http.StatusBadGateway, code: ipeers.ErrRemoteError,
+			text: func(ae ipeers.APIError) string { return ae.Remote.Error },
+		},
+		{
+			name: "not_deliverable reason",
+			prepare: func(s *sendEnv) {
+				row := remoteRow(remoteSession, "fooc")
+				row.Deliverable, row.Reason = false, long
+				s.env = remoteEnvelope(row)
+			},
+			status: http.StatusConflict, code: ipeers.ErrNotDeliverable,
+			text: func(ae ipeers.APIError) string { return ae.Detail },
+		},
+		{
+			name: "validation error quoting proc_start",
+			prepare: func(s *sendEnv) {
+				row := remoteRow(remoteSession, "fooc")
+				row.Agent.ProcStart = long
+				s.env = remoteEnvelope(row)
+			},
+			status: http.StatusBadRequest, code: ipeers.ErrBadRequest,
+			text: func(ae ipeers.APIError) string { return ae.Detail },
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSendEnv(t, envOpts{})
+			s.set(c.prepare)
+			ae := assertRefused(t, s.send(adminCtx(), s.sendReq()), c.status, c.code)
+			if got := c.text(ae); len(got) > limit+len("outbound request invalid: ") {
+				t.Errorf("text length = %d, want bounded to ~%d", len(got), limit)
+			}
+			for _, line := range s.f.logs.all() {
+				if len(line) > 2*limit+200 {
+					t.Errorf("log line length = %d carries unbounded remote text", len(line))
+				}
+			}
+			if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
+				t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+			}
+		})
+	}
+}
+
+// TestSend_NotReadyBeforeAudit: a daemon that starts stopping after the
+// remote resolve answers not_ready without an audit row or a post.
+func TestSend_NotReadyBeforeAudit(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
-	s.set(func(s *sendEnv) { s.fetchErr = errors.New(strings.Repeat("x", 5000)) })
-	ae := assertRefused(t, s.send(adminCtx(), s.sendReq()), http.StatusBadGateway, ipeers.ErrRemoteError)
-	if ae.Remote == nil || len(ae.Remote.Error) > maxRemoteTextBytes+len("…") {
-		t.Errorf("remote error length = %d, want ≤ %d", len(ae.Remote.Error), maxRemoteTextBytes+len("…"))
+	inner := s.m.fetch
+	s.m.fetch = func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error) {
+		env, err := inner(ctx, client, baseURL, bearer)
+		s.m.stopCancel()
+		return env, err
+	}
+	assertRefused(t, s.send(adminCtx(), s.sendReq()), http.StatusServiceUnavailable, ipeers.ErrNotReady)
+	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
+		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
 	}
 }

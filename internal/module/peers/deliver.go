@@ -29,12 +29,6 @@ const maxDeliverBodyBytes = 1 << 20
 // answered.
 const resultClientGone = "client_gone"
 
-// writeDeliverError writes an ipeers.APIError body with status.
-func writeDeliverError(w http.ResponseWriter, status int, code, detail string) {
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(ipeers.APIError{Error: code, Detail: detail})
-}
-
 // clampMode is the receiver's mode policy: a declared bypass is honoured
 // only for a sender whose host entry has AllowBypass; everything else
 // (prompting, or "" meaning prompting) is prompting.
@@ -115,7 +109,7 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if m.stopCtx.Err() != nil {
-		writeDeliverError(w, http.StatusServiceUnavailable, ipeers.ErrNotReady, "daemon is stopping")
+		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "daemon is stopping"})
 		return
 	}
 
@@ -123,7 +117,7 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	principal, ok := middleware.PrincipalFrom(r.Context())
 	refuseUnaudited := func(status int, code, detail string) {
 		m.logf("peers: deliver refused (%s) for host %q: %s", code, principal.Alias, detail)
-		writeDeliverError(w, status, code, detail)
+		writeWireError(w, status, ipeers.APIError{Error: code, Detail: detail})
 	}
 	switch {
 	case ok && principal.Kind == middleware.PrincipalAdmin:
@@ -197,7 +191,7 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		m.logf("peers: deliver %s from %q: audit insert: %v", req.MsgID, principal.Alias, err)
-		writeDeliverError(w, http.StatusServiceUnavailable, ipeers.ErrAuditUnavailable, "audit insert failed")
+		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrAuditUnavailable, Detail: "audit insert failed"})
 		return
 	}
 	// refuseWith records auditDetail (local, may name paths and internal
@@ -206,7 +200,7 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	refuseWith := func(status int, code, wireDetail, auditDetail string) {
 		m.setResult(id, "", code, auditDetail)
 		m.logf("peers: deliver %s from %q refused (%s): %s", req.MsgID, principal.Alias, code, auditDetail)
-		writeDeliverError(w, status, code, wireDetail)
+		writeWireError(w, status, ipeers.APIError{Error: code, Detail: wireDetail})
 	}
 	refuse := func(status int, code, detail string) { refuseWith(status, code, detail, detail) }
 

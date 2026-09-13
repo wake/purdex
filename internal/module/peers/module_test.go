@@ -201,7 +201,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 		writeFrame:       ccuds.WriteFrame,
 		sockWriteTimeout: opts.sockWriteTimeout,
 		newMsgID:         uuid.NewString,
-		deliverClient:    newRemoteClient(),
+		deliverClient:    newDeliverClient(),
 		post: func(context.Context, *http.Client, string, string, ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error) {
 			f.postCalls.Add(1)
 			t.Errorf("post seam called; a test that sends must override m.post")
