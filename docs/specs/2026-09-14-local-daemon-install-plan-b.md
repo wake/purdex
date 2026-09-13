@@ -21,14 +21,17 @@ idempotent `registerLocalHost` store helper.
 (`cd spa && npx vitest run`), `smol-toml`.
 
 **Spec:** `docs/specs/2026-09-14-local-daemon-install-spec.md` (v4) — §3 and
-§4 are this plan's contract; §1 decisions are fixed. Plan A must be merged
+§4 are this plan's contract; §1 decisions are fixed.
+
+**Plan review:** codex `task-mu01nnur-hom7fq` (6 Blocker, 10 Important, 2 Minor) — all applied in this revision. Plan A must be merged
 (or at least its endpoint contract in Plan A Task 7 honoured) before Task 8's
 manual acceptance; unit tasks do not depend on it.
 
 ## Global Constraints
 
 - **TDD, no exceptions.** Failing test first, run it, implement, run again,
-  commit. One task = one commit.
+  commit. Tasks 1–9 are one commit each; Task 10 is a verification gate and
+  creates no commit.
 - **Commit messages in English**; every commit ends with:
   ```
   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
@@ -46,16 +49,21 @@ manual acceptance; unit tasks do not depend on it.
   pnpm exec electron-vite build             # main/preload bundle compiles (from repo root)
   ```
 - **pnpm, never npm.** New dependency `smol-toml` goes into the **root**
-  `package.json` `dependencies` (next to `tar`, which is the precedent —
-  electron-vite bundles main-process deps): `pnpm add smol-toml@^1.3.0 -w`
-  (if `-w` is rejected because there is no workspace root flag needed, use
-  `pnpm add smol-toml@^1.3.0` from the repo root).
+  `package.json` **`devDependencies`**: `pnpm add -Dw smol-toml@^1.3.0`.
+  electron-vite 5 externalises `dependencies` by default and bundles
+  `devDependencies` into `out/main`; the dev-update flow ships only `out/`,
+  so a runtime dep must be bundled. After Task 4:
+  `pnpm exec electron-vite build && ! rg -n "smol-toml" out/main/index.js`
+  must show no external import (the parser code is inlined).
 - **Dev-mode semantics (spec D6):** in Electron, `PDX_DEV_MODE` is enabled
   unless it equals `'0'`. `main.ts` sets the default at startup; every gate
   reads `!== '0'`.
 - **No NUL bytes in any `execFile` argv** (Node rejects them).
 - **i18n:** every user-visible string in BOTH `spa/src/locales/en.json`
   and `spa/src/locales/zh-TW.json`, flat keys under `settings.dev.local.*`.
+  Placeholders use the store's `{{name}}` form and `t(key, { name })`
+  (`makeT` interpolates double braces only; a missing key falls back to en,
+  then to the key itself).
 - **Never widen `useHostStore` semantics.** `registerLocalHost` is a helper
   built on the existing `addHost`/`updateHost`; it does not change them.
 - **electron vitest include** currently is `['*.test.ts']` (root only).
@@ -90,6 +98,7 @@ manual acceptance; unit tasks do not depend on it.
 
 **Files:**
 - Modify: `electron/main.ts` (top of file + `:216`), `electron/preload.ts:135`, `electron/updater.ts:34`
+- Modify: `electron/signing.test.ts:43-57, 63-69` (two static tests assert `=== '1'`; flip them)
 - Create: `electron/devmode.test.ts`
 
 - [ ] **Step 1: Failing static test** (pattern: `electron/signing.test.ts`)
@@ -122,9 +131,19 @@ describe('PDX_DEV_MODE is on by default (spec D6)', () => {
 })
 ```
 
-- [ ] **Step 2: Run to fail**
+- [ ] **Step 2: Flip the two existing static tests in `electron/signing.test.ts`**
 
-Run: `cd electron && pnpm test -- devmode` → FAIL.
+`'preload gates dev update API behind strict PDX_DEV_MODE === "1"'` →
+title `'preload gates dev update API on PDX_DEV_MODE !== "0"'`; replace both
+regexes `/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/` with
+`/process\.env\.PDX_DEV_MODE\s*!==\s*['"]0['"]/` and rewrite the comment
+to "Dev features are on by default; only PDX_DEV_MODE=0 disables (spec
+2026-09-14 D6). Must match main.ts and the daemon's devmode.Enabled()."
+`'main.ts gates dev:* IPC handler registration behind strict PDX_DEV_MODE === "1"'` →
+same title/regex change. Leave the Go-side test alone (Plan A owns it).
+
+Run: `cd electron && pnpm test` → the devmode tests and the two flipped
+signing tests FAIL (source still says `=== '1'`).
 
 - [ ] **Step 3: Implement**
 
@@ -151,7 +170,7 @@ if (process.env.PDX_DEV_MODE === undefined) process.env.PDX_DEV_MODE = '1'
 - [ ] **Step 5: Commit**
 
 ```bash
-git add electron/main.ts electron/preload.ts electron/updater.ts electron/devmode.test.ts
+git add electron/main.ts electron/preload.ts electron/updater.ts electron/devmode.test.ts electron/signing.test.ts
 git commit -m "feat(electron): dev features on by default, PDX_DEV_MODE=0 disables"
 ```
 
@@ -553,7 +572,9 @@ export function generateToken(random: (n: number) => Buffer): string           /
 
 - [ ] **Step 1: Add the dependency**
 
-Run: `cd <worktree> && pnpm add smol-toml@^1.3.0` (root). Confirm it lands in root `package.json` `dependencies`.
+Run: `cd <worktree> && pnpm add -Dw smol-toml@^1.3.0`. Confirm it lands in
+root `package.json` **`devDependencies`** (bundled by electron-vite; see
+Global Constraints).
 
 - [ ] **Step 2: Failing tests**
 
@@ -684,6 +705,8 @@ export function generateToken(random: (n: number) => Buffer): string {
 ```
 
 - [ ] **Step 5: Verify** `cd electron && pnpm test -- config` → PASS.
+`pnpm exec electron-vite build` (repo root) succeeds — the bundling check
+itself runs in Task 7 once `index.ts` is imported by `main.ts`.
 
 - [ ] **Step 6: Commit**
 
@@ -731,16 +754,18 @@ export interface LocalDaemonDeps {
     writeFile(p: string, data: string, mode: number): Promise<void>
     rename(a: string, b: string): Promise<void>
     unlink(p: string): Promise<void>
-    mkdir(p: string): Promise<void>               // recursive
+    mkdir(p: string): Promise<void>               // recursive; the fake records the path
     chmod(p: string, mode: number): Promise<void>
     realpath(p: string): Promise<string>
     openWrite(p: string): Promise<WriteHandle>
     sha256(p: string): Promise<string>
   }
   kill0: (pid: number) => boolean
+  portOpen: (host: string, port: number) => Promise<boolean>   // TCP connect succeeds within 500 ms
   networkInterfaces: () => Iface[]
   randomBytes: (n: number) => Buffer
   sleep: (ms: number) => Promise<void>
+  now: () => number
   log: (msg: string) => void
 }
 export interface LocalDaemon {
@@ -751,10 +776,12 @@ export interface LocalDaemon {
   ensureRunning(): Promise<'started' | 'already-running' | 'not-installed' | 'external' | 'failed'>
   withLock<T>(fn: () => Promise<T>): Promise<T>
 }
-export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon
+// index.ts exports: export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon
 ```
 
-- [ ] **Step 1: Write `types.ts`** exactly as above (plus `import type { ExecFn } from './launch-env'` and `import type { Iface } from './config'`).
+- [ ] **Step 1: Write `types.ts`** with the interfaces above **only** (no
+`createLocalDaemon` declaration — the factory lives in `index.ts`), plus
+`import type { ExecFn } from './launch-env'` and `import type { Iface } from './config'`.
 
 - [ ] **Step 2: Failing tests — a fake deps harness + status matrix**
 
@@ -770,30 +797,39 @@ const HOME = '/Users/t'
 const BIN = `${HOME}/.config/pdx/bin/pdx`
 const CFG = `${HOME}/.config/pdx/config.toml`
 const PID = `${HOME}/.config/pdx/pdx.pid`
-const S = 'PDX_PATH_00000000000000000000000000000000'
+// Matches deps.randomBytes below (0xcd × 16 → 'cd' × 16).
+const S = 'PDX_PATH_' + 'cd'.repeat(16)
 
 interface Fake {
   deps: LocalDaemonDeps
   files: Map<string, string | Uint8Array>
+  modes: Map<string, number>
+  dirs: string[]
   execLog: Array<{ file: string; args: string[]; env?: NodeJS.ProcessEnv }>
   health: null | { ok: boolean; hash?: string; version?: string }
   lsofTxt: Record<number, string>      // pid → lsof -d txt output
   lsofListen: string                   // lsof -iTCP output
   alivePids: Set<number>
+  portIsOpen: boolean
   onExec: (file: string, args: string[]) => ExecResult | undefined
   downloads: Array<{ status: number; headers: Record<string, string>; body: Uint8Array }>
+  clock: number
 }
 
 function makeFake(overrides: Partial<Fake> = {}): Fake {
   const fake: Fake = {
     files: new Map(),
+    modes: new Map(),
+    dirs: [],
     execLog: [],
     health: null,
     lsofTxt: {},
     lsofListen: '',
     alivePids: new Set(),
+    portIsOpen: false,
     onExec: () => undefined,
     downloads: [],
+    clock: 0,
     deps: undefined as unknown as LocalDaemonDeps,
     ...overrides,
   }
@@ -827,35 +863,47 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
         const body = text(file)  // fake binaries are JSON identity strings
         return { code: 0, stdout: body + '\n', stderr: '', timedOut: false }
       }
-      if (args[0] === 'start') { fake.health = { ok: true, hash: JSON.parse(text(file)).hash, version: '9' }; fake.alivePids.add(4242); fake.files.set(PID, '4242'); fake.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`; return { code: 0, stdout: 'started', stderr: '', timedOut: false } }
-      if (args[0] === 'stop') { fake.health = null; fake.alivePids.clear(); fake.lsofListen = ''; return { code: 0, stdout: 'stopped', stderr: '', timedOut: false } }
+      if (args[0] === 'start') {
+        // A real `pdx start` returns only after /api/health answers, with the
+        // daemon holding the pid file and listening on bind:port.
+        const bindLine = (() => { const c = fake.files.get(CFG); const m = typeof c === 'string' ? /bind = "([^"]+)"/.exec(c) : null; return m ? m[1] : '127.0.0.1' })()
+        fake.health = { ok: true, hash: JSON.parse(text(file)).hash, version: '9' }
+        fake.alivePids.add(4242); fake.files.set(PID, '4242'); fake.portIsOpen = true
+        fake.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+        fake.lsofListen = `p4242${NUL}\nf8${NUL}n${bindLine}:7860${NUL}\n`
+        return { code: 0, stdout: 'started', stderr: '', timedOut: false }
+      }
+      if (args[0] === 'stop') { fake.health = null; fake.alivePids.clear(); fake.lsofListen = ''; fake.portIsOpen = false; return { code: 0, stdout: 'stopped', stderr: '', timedOut: false } }
       return { code: 0, stdout: '', stderr: '', timedOut: false }
     },
     fetch: async (url) => {
-      const next = fake.downloads.shift()
       if (url.endsWith('/api/health')) {
         if (!fake.health) throw new Error('ECONNREFUSED')
         return new Response(JSON.stringify(fake.health), { status: 200 })
       }
+      // Only the download route consumes the scripted queue.
+      const next = fake.downloads.shift()
       if (!next) throw new Error('no scripted download for ' + url)
       return new Response(next.body, { status: next.status, headers: next.headers })
     },
     fs: {
       exists: async (p) => fake.files.has(p),
       readFile: async (p) => text(p),
-      writeFile: async (p, d) => { fake.files.set(p, d) },
-      rename: async (a, b) => { const v = fake.files.get(a); if (v === undefined) throw new Error('ENOENT'); fake.files.set(b, v); fake.files.delete(a) },
+      writeFile: async (p, d, mode) => { fake.files.set(p, d); fake.modes.set(p, mode) },
+      rename: async (a, b) => { const v = fake.files.get(a); if (v === undefined) throw new Error('ENOENT'); fake.files.set(b, v); fake.files.delete(a); const m = fake.modes.get(a); if (m !== undefined) { fake.modes.set(b, m); fake.modes.delete(a) } },
       unlink: async (p) => { fake.files.delete(p) },
-      mkdir: async () => {},
-      chmod: async () => {},
-      realpath: async (p) => p,
+      mkdir: async (p) => { fake.dirs.push(p) },
+      chmod: async (p, mode) => { fake.modes.set(p, mode) },
+      realpath: async (p) => (p === `${HOME}/link-to-pdx` ? BIN : p),
       openWrite: async (p): Promise<WriteHandle> => { const chunks: Uint8Array[] = []; return { write: async (c) => { chunks.push(c) }, close: async () => { fake.files.set(p, Buffer.concat(chunks)) } } },
       sha256: async (p) => { const { createHash } = await import('node:crypto'); const v = fake.files.get(p); return createHash('sha256').update(typeof v === 'string' ? Buffer.from(v) : Buffer.from(v ?? new Uint8Array())).digest('hex') },
     },
     kill0: (pid) => fake.alivePids.has(pid),
+    portOpen: async () => fake.portIsOpen,
     networkInterfaces: () => [{ name: 'utun4', address: '100.64.0.9', family: 'IPv4', internal: false }],
     randomBytes: (n) => Buffer.alloc(n, 0xcd),
-    sleep: async () => {},
+    sleep: async (ms) => { fake.clock += ms },
+    now: () => fake.clock,
     log: () => {},
   }
   return fake
@@ -921,6 +969,30 @@ describe('status()', () => {
     expect(st.running?.hash).toBe('unknown')
   })
 
+  it('external when health answers but nothing is found listening (no binary either)', async () => {
+    f.files.set(CFG, 'bind = "100.64.0.9"\n')
+    f.health = { ok: true, hash: 'zzz' }
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.managed).toBe('external')
+    expect(st.reason).toBe('health answered but no listener found')
+  })
+
+  it('ownership compares realpaths (symlinked txt entry still ours)', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${HOME}/link-to-pdx${NUL}\n`
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.alive).toEqual({ pid: 4242 })
+  })
+
+  it('foreign listener whose txt entries are all dylibs is reported by pid, not by a dylib path', async () => {
+    f.files.set(CFG, 'bind = "100.64.0.2"\n')
+    f.lsofListen = `p7520${NUL}\nf8${NUL}n100.64.0.2:7860${NUL}\n`
+    f.lsofTxt[7520] = `p7520${NUL}\nftxt${NUL}n/usr/lib/dyld${NUL}\n`
+    f.health = { ok: true }
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.reason).toBe('port is served by pid 7520')
+  })
+
   it('external with custom data_dir', async () => {
     f.files.set(CFG, 'data_dir = "/Volumes/X/pdx"\n')
     const st = await createLocalDaemon(f.deps).status()
@@ -964,6 +1036,8 @@ import { parseDaemonConfig, pickBindAddress, renderInitialConfig, generateToken,
 
 const LSOF = '/usr/sbin/lsof'
 const LSOF_TIMEOUT_MS = 5000
+const OWNERSHIP_BUDGET_MS = 10_000
+const STOP_SETTLE_MS = 5000
 const HEALTH_TIMEOUT_MS = 1500
 const VERSION_TIMEOUT_MS = 2000
 const STOP_TIMEOUT_MS = 35_000
@@ -1041,8 +1115,11 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     }
   }
 
-  async function lsof(args: string[]): Promise<string> {
-    const r = await deps.exec(LSOF, args, { timeoutMs: LSOF_TIMEOUT_MS })
+  // Every lsof in one ownership pass shares a 10 s budget (5 s per call).
+  async function lsof(args: string[], deadline: number): Promise<string> {
+    const remaining = deadline - deps.now()
+    if (remaining <= 0) throw new OwnershipTimeout()
+    const r = await deps.exec(LSOF, args, { timeoutMs: Math.min(LSOF_TIMEOUT_MS, remaining) })
     if (r.timedOut) throw new OwnershipTimeout()
     return r.stdout // lsof exits 1 when nothing matched; empty output is fine
   }
@@ -1063,21 +1140,26 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
 
   // Spec §3.1 "Ownership / liveness": resolveOwner.
   async function resolveOwner(cfg: DaemonConfig, binExists: boolean): Promise<Ownership> {
+    const deadline = deps.now() + OWNERSHIP_BUDGET_MS
     const candidatePid = await readCandidatePid(join(cfg.dataDir, 'pdx.pid'))
     let candidateIsOurs = false
     if (candidatePid !== null && deps.kill0(candidatePid)) {
-      const procs = parseLsofF0(await lsof(['-nP', '-a', '-p', String(candidatePid), '-d', 'txt', '-F0pfn']))
+      const procs = parseLsofF0(await lsof(['-nP', '-a', '-p', String(candidatePid), '-d', 'txt', '-F0pfn'], deadline))
       for (const p of txtPaths(procs, candidatePid)) {
         if (await sameBinary(p)) { candidateIsOurs = true; break }
       }
     }
-    const listenProcs = parseLsofF0(await lsof(['-nP', '-a', `-iTCP:${cfg.port}`, '-sTCP:LISTEN', '-F0pfn']))
+    const listenProcs = parseLsofF0(await lsof(['-nP', '-a', `-iTCP:${cfg.port}`, '-sTCP:LISTEN', '-F0pfn'], deadline))
     const listenerPids = listenersOn(listenProcs, cfg.bind, cfg.port)
     const listenerBinaries: Record<number, string | undefined> = {}
     for (const pid of listenerPids) {
       if (candidateIsOurs && pid === candidatePid) continue
-      const procs = parseLsofF0(await lsof(['-nP', '-a', '-p', String(pid), '-d', 'txt', '-F0pfn']))
-      listenerBinaries[pid] = txtPaths(procs, pid)[0]
+      const procs = parseLsofF0(await lsof(['-nP', '-a', '-p', String(pid), '-d', 'txt', '-F0pfn'], deadline))
+      // Only name a foreign binary when a txt entry is clearly a pdx
+      // executable; the first txt entry can be a dylib, and a wrong path
+      // in the reason is worse than the pid alone.
+      const pdxLike = txtPaths(procs, pid).find((p) => p.split('/').pop() === 'pdx')
+      listenerBinaries[pid] = pdxLike ? await deps.fs.realpath(pdxLike).catch(() => pdxLike) : undefined
     }
     return decideOwnership({ candidatePid, candidateIsOurs, listenerPids, listenerBinaries, binExists })
   }
@@ -1107,7 +1189,9 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
       throw e
     }
     if (own.managed === 'external') return { ...base, managed: 'external', reason: own.reason, alive: own.alive }
-    if (running && own.alive === null && own.managed !== 'none') {
+    if (running && own.alive === null) {
+      // Something answered /api/health on our endpoint yet lsof found no
+      // listener we could attribute — never treat that as installable.
       return { ...base, managed: 'external', reason: 'health answered but no listener found', alive: null }
     }
     return { ...base, managed: own.managed, alive: own.alive }
@@ -1129,8 +1213,8 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
 
 (Keep the unused imports — `renderInitialConfig`, `generateToken`,
 `pickBindAddress`, `LocalDaemonResult` and the timeout constants — they are
-used in Task 6; if `pnpm exec electron-vite build` fails on unused imports,
-prefix them with `void` in a temporary line that Task 6 removes.)
+used in Task 6. `index.ts` is not imported by `main.ts` until Task 7, so the
+bundle is unaffected; vitest does not fail on unused imports.)
 
 - [ ] **Step 5: Verify** `cd electron && pnpm test -- index` → the `status()` describe passes.
 
@@ -1153,19 +1237,18 @@ git commit -m "feat(electron): local daemon status with lsof-based ownership"
 - [ ] **Step 1: Failing tests** (append to `index.test.ts`; uses the same `makeFake`/`identity`)
 
 ```ts
-function scriptedDownload(f: Fake, hash: string, opts: { status?: number; truncate?: boolean; badSha?: boolean; wrongArch?: boolean } = {}) {
-  const body = Buffer.from(opts.wrongArch ? JSON.stringify({ version: '9', hash, goos: 'darwin', goarch: 'amd64' }) : identity(hash))
-  const { createHash } = require('node:crypto') as typeof import('node:crypto')
+import { createHash } from 'node:crypto'
+
+function scriptedDownload(f: Fake, hash: string, opts: { status?: number; truncate?: boolean; badSha?: boolean; wrongArch?: boolean; bodyHash?: string; dropHeaders?: boolean } = {}) {
+  const bodyHash = opts.bodyHash ?? hash
+  const body = Buffer.from(opts.wrongArch ? JSON.stringify({ version: '9', hash: bodyHash, goos: 'darwin', goarch: 'amd64' }) : identity(bodyHash))
   const sha = createHash('sha256').update(body).digest('hex')
-  f.downloads.push({
-    status: opts.status ?? 200,
-    headers: {
-      'content-length': String(body.length + (opts.truncate ? 5 : 0)),
-      'x-pdx-hash': hash, 'x-pdx-version': '9',
-      'x-pdx-sha256': opts.badSha ? 'deadbeef' : sha,
-    },
-    body,
-  })
+  const headers: Record<string, string> = opts.dropHeaders ? {} : {
+    'content-length': String(body.length + (opts.truncate ? 5 : 0)),
+    'x-pdx-hash': hash, 'x-pdx-version': '9',
+    'x-pdx-sha256': opts.badSha ? 'deadbeef' : sha,
+  }
+  f.downloads.push({ status: opts.status ?? 200, headers, body })
 }
 
 describe('install()', () => {
@@ -1177,7 +1260,10 @@ describe('install()', () => {
     const steps: string[] = []
     const res = await createLocalDaemon(f.deps).install('http://100.64.0.2:7860', 'tok', (s) => steps.push(s))
     expect(steps).toEqual(['prepare', 'download', 'verify', 'configure', 'swap', 'start', 'register'])
+    expect(f.dirs).toContain(`${HOME}/.config/pdx/bin`)
     expect(f.files.get(CFG)).toBe('bind = "100.64.0.9"\nport = 7860\ntoken = "purdex_' + 'cd'.repeat(20) + '"\n\n[dev]\nupdate = false\n')
+    expect(f.modes.get(CFG)).toBe(0o600)
+    expect(f.modes.get(BIN)).toBe(0o755)
     expect(f.files.has(BIN)).toBe(true)
     expect(f.files.has(`${BIN}.new`)).toBe(false)
     expect(res).toEqual({ url: 'http://100.64.0.9:7860', token: 'purdex_' + 'cd'.repeat(20), hash: 'bbb', version: '9', hostname: 'air-2026' })
@@ -1225,6 +1311,57 @@ describe('install()', () => {
     expect(f.files.has(`${BIN}.new`)).toBe(false)
   })
 
+  it('verify: binary hash ≠ X-Pdx-Hash → throws and cleans up', async () => {
+    scriptedDownload(f, 'bbb', { bodyHash: 'ccc' })
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/identity mismatch/)
+    expect(f.files.has(`${BIN}.new`)).toBe(false)
+  })
+
+  it('missing integrity headers → throws before writing anything durable', async () => {
+    scriptedDownload(f, 'bbb', { dropHeaders: true })
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/missing.*header/i)
+    expect(f.files.has(`${BIN}.new`)).toBe(false)
+  })
+
+  it('ownership changing between status and stop aborts before stop', async () => {
+    f.files.set(BIN, identity('aaa'))
+    f.files.set(CFG, 'bind = "100.64.0.9"\n')
+    scriptedDownload(f, 'bbb')
+    // After the download, a foreign daemon appears on our endpoint.
+    const origFetch = f.deps.fetch
+    f.deps.fetch = async (url, init) => { const r = await origFetch(url, init); if (!url.endsWith('/api/health')) { f.lsofListen = `p9${NUL}\nf8${NUL}n100.64.0.9:7860${NUL}\n` }; return r }
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/refusing to stop/)
+    expect(f.execLog.some((e) => e.args[0] === 'stop')).toBe(false)
+    expect(f.files.get(BIN)).toBe(identity('aaa'))
+  })
+
+  it('two concurrent installs run one after the other', async () => {
+    scriptedDownload(f, 'bbb'); scriptedDownload(f, 'bbb')
+    const d = createLocalDaemon(f.deps)
+    const steps: string[] = []
+    await Promise.all([
+      d.install('http://src', 'tok', (s) => steps.push('1:' + s)),
+      d.install('http://src', 'tok', (s) => steps.push('2:' + s)),
+    ])
+    const firstTwo = steps.findIndex((s) => s.startsWith('2:'))
+    expect(steps.slice(0, firstTwo).every((s) => s.startsWith('1:'))).toBe(true)
+  })
+
+  it('an install arriving during a withLock-wrapped app update waits for it', async () => {
+    scriptedDownload(f, 'bbb')
+    const d = createLocalDaemon(f.deps)
+    const order: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const upd = d.withLock(async () => { order.push('update-start'); await gate; order.push('update-end') })
+    const inst = d.install('http://src', 'tok', (s) => { if (s === 'prepare') order.push('install-start') })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(order).toEqual(['update-start'])
+    release()
+    await Promise.all([upd, inst])
+    expect(order).toEqual(['update-start', 'update-end', 'install-start'])
+  })
+
   it('non-200 surfaces the daemon error body', async () => {
     f.downloads.push({ status: 500, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ error: 'build failed', detail: 'boom' })) })
     await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/build failed.*boom/s)
@@ -1268,6 +1405,23 @@ describe('install()', () => {
     scriptedDownload(f, 'bbb')
     f.onExec = (_file, args) => { if (args[0] === 'start') { f.health = { ok: true, hash: 'zzz' }; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
     await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/served by something else/)
+  })
+
+  it('post-start health without a hash is a failure, not a pass', async () => {
+    scriptedDownload(f, 'bbb')
+    f.onExec = (_file, args) => { if (args[0] === 'start') { f.health = { ok: true }; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/no build hash/)
+  })
+
+  it('stop returning while the port stays open → throws, old binary unreplaced', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    f.onExec = (_file, args) => { if (args[0] === 'stop') { f.alivePids.clear(); f.portIsOpen = true; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
+    f.portIsOpen = true
+    scriptedDownload(f, 'bbb')
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/old binary was not replaced/)
+    expect(f.files.get(BIN)).toBe(identity('aaa'))
+    expect(f.clock).toBeLessThanOrEqual(5000)
   })
 
   it('pdx start failure surfaces its stderr', async () => {
@@ -1319,6 +1473,11 @@ describe('start() / restart() / ensureRunning()', () => {
     expect(n).toBe(3)
   })
 
+  it('ensureRunning never rejects — a broken config reads as failed', async () => {
+    f.files.set(CFG, 'bind = ')
+    await expect(createLocalDaemon(f.deps).ensureRunning()).resolves.toBe('failed')
+  })
+
   it('never touches pdx.new', async () => {
     f.files.set(`${BIN}.new`, 'partial')
     await createLocalDaemon(f.deps).ensureRunning()
@@ -1364,6 +1523,9 @@ describe('withLock', () => {
       const expectSha = resp.headers.get('x-pdx-sha256') ?? ''
       const hash = resp.headers.get('x-pdx-hash') ?? ''
       const version = resp.headers.get('x-pdx-version') ?? 'unknown'
+      if (!Number.isFinite(expectLen) || expectLen <= 0 || !/^[0-9a-f]{64}$/.test(expectSha) || hash === '') {
+        throw new Error('download failed: missing integrity header (Content-Length, X-Pdx-Sha256, X-Pdx-Hash are required)')
+      }
       const out = await deps.fs.openWrite(newPath)
       let written = 0
       try {
@@ -1378,11 +1540,11 @@ describe('withLock', () => {
       } finally {
         await out.close()
       }
-      if (Number.isFinite(expectLen) && expectLen > 0 && written !== expectLen) {
+      if (written !== expectLen) {
         await deps.fs.unlink(newPath)
         throw new Error(`download failed: content-length ${expectLen}, received ${written}`)
       }
-      if (expectSha && (await deps.fs.sha256(newPath)) !== expectSha) {
+      if ((await deps.fs.sha256(newPath)) !== expectSha) {
         await deps.fs.unlink(newPath)
         throw new Error('download failed: sha256 mismatch')
       }
@@ -1401,21 +1563,26 @@ describe('withLock', () => {
     }
     let id: { goos?: string; goarch?: string; hash?: string } = {}
     try { id = JSON.parse(r.stdout.trim()) } catch { /* handled below */ }
-    if (id.goos !== tgt.goos || id.goarch !== tgt.goarch || (expectedHash && id.hash !== expectedHash)) {
+    if (id.goos !== tgt.goos || id.goarch !== tgt.goarch || id.hash !== expectedHash) {
       await deps.fs.unlink(newPath)
       throw new Error(`identity mismatch: got ${id.goos}/${id.goarch} ${id.hash}, want ${tgt.goos}/${tgt.goarch} ${expectedHash}`)
     }
   }
 
   // ---- stop / start ------------------------------------------------------
+  // After `pdx stop` returns, wait (≤ 5 s) until the pid is gone AND the
+  // port refuses TCP connections. A plain health probe cannot tell
+  // "refused" from "500/timeout", hence the dedicated portOpen dep.
   async function stopUnlocked(cfg: DaemonConfig, pid: number): Promise<void> {
     const r = await deps.exec(binPath, ['stop'], { env: await launchEnv(), cwd: deps.home, timeoutMs: STOP_TIMEOUT_MS })
-    if (r.timedOut) throw new Error('pdx stop did not finish within 35s; old daemon left untouched')
-    for (let i = 0; i < 10; i++) {
-      if (!deps.kill0(pid) && (await health(cfg.bind, cfg.port)) === null) return
+    if (r.timedOut) throw new Error('pdx stop did not finish within 35s — the old binary was not replaced (the old process may or may not still be running)')
+    const deadline = deps.now() + STOP_SETTLE_MS
+    for (;;) {
+      if (!deps.kill0(pid) && !(await deps.portOpen(cfg.bind, cfg.port))) return
+      if (deps.now() >= deadline) break
       await deps.sleep(500)
     }
-    throw new Error('pdx stop returned but the daemon is still alive; old daemon left untouched')
+    throw new Error('pdx stop returned but the daemon is still alive or the port is still open — the old binary was not replaced')
   }
 
   async function startDaemon(cfg: DaemonConfig): Promise<void> {
@@ -1425,7 +1592,9 @@ describe('withLock', () => {
     const onDisk = await readIdentity(binPath)
     const h = await health(cfg.bind, cfg.port)
     if (!h) throw new Error('pdx start returned but /api/health is not answering')
-    if (onDisk && onDisk.hash !== 'unknown' && h.hash !== 'unknown' && h.hash !== onDisk.hash) {
+    if (!onDisk || onDisk.hash === 'unknown') throw new Error('installed binary reports no build hash; refusing to trust the start')
+    if (h.hash === 'unknown') throw new Error(`port ${cfg.port} answered health with no build hash — not the binary we started`)
+    if (h.hash !== onDisk.hash) {
       throw new Error(`port ${cfg.port} is served by something else (health hash ${h.hash}, binary ${onDisk.hash})`)
     }
   }
@@ -1495,22 +1664,29 @@ describe('withLock', () => {
     return register()
   }
 
+  // Never rejects (spec §3.1): every failure, including a broken config,
+  // is logged and reported as 'failed'.
   async function ensureRunningUnlocked(): Promise<'started' | 'already-running' | 'not-installed' | 'external' | 'failed'> {
-    const st = await statusUnlocked()
-    if (st.managed === 'none') return 'not-installed'
-    if (st.managed === 'external') return 'external'
-    if (st.alive) return 'already-running'
-    const cfg = (await readConfig()) ?? parseDaemonConfig('', deps.home)
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await startDaemon(cfg)
-        return 'started'
-      } catch (e) {
-        deps.log(`[local-daemon] start attempt ${attempt} failed: ${e instanceof Error ? e.message : String(e)}`)
-        if (attempt < 3) await deps.sleep(5000)
+    try {
+      const st = await statusUnlocked()
+      if (st.managed === 'none') return 'not-installed'
+      if (st.managed === 'external') return 'external'
+      if (st.alive) return 'already-running'
+      const cfg = (await readConfig()) ?? parseDaemonConfig('', deps.home)
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await startDaemon(cfg)
+          return 'started'
+        } catch (e) {
+          deps.log(`[local-daemon] start attempt ${attempt} failed: ${e instanceof Error ? e.message : String(e)}`)
+          if (attempt < 3) await deps.sleep(5000)
+        }
       }
+      return 'failed'
+    } catch (e) {
+      deps.log(`[local-daemon] ensureRunning: ${e instanceof Error ? e.message : String(e)}`)
+      return 'failed'
     }
-    return 'failed'
   }
 
   return {
@@ -1551,9 +1727,16 @@ describe('local daemon wiring', () => {
       expect(main).toContain(`ipcMain.handle('${ch}'`)
     }
     expect(main).toContain('localDaemon.ensureRunning()')
-    expect(main).toContain('localDaemon.withLock(')
-    // applyUpdate must run inside the lock
-    expect(main.indexOf('localDaemon.withLock(')).toBeLessThan(main.indexOf('await applyUpdate('))
+    // applyUpdate must run inside the lock — the exact wrapping form.
+    expect(main).toContain('await localDaemon.withLock(() => applyUpdate(')
+    // Handlers and ensureRunning sit inside the dev gate.
+    const gate = main.indexOf("if (process.env.PDX_DEV_MODE !== '0') {")
+    expect(gate).toBeGreaterThan(-1)
+    for (const ch of ['dev:local-daemon-status', 'dev:local-daemon-install', 'dev:local-daemon-start', 'dev:local-daemon-restart']) {
+      expect(main.indexOf(`ipcMain.handle('${ch}'`)).toBeGreaterThan(gate)
+    }
+    const ready = main.indexOf('localDaemon.ensureRunning()')
+    expect(main.lastIndexOf("process.env.PDX_DEV_MODE !== '0'", ready)).toBeGreaterThan(-1)
   })
   it('preload exposes the bridges', () => {
     const preload = src('preload.ts')
@@ -1576,6 +1759,7 @@ import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { access, chmod, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
+import { connect } from 'node:net'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import type { ExecFn } from './launch-env'
 import type { LocalDaemonDeps, WriteHandle } from './types'
@@ -1637,9 +1821,17 @@ export function nodeDeps(log: (msg: string) => void = console.log): LocalDaemonD
       sha256,
     },
     kill0: (pid) => { try { process.kill(pid, 0); return true } catch { return false } },
+    portOpen: (host, port) => new Promise((res) => {
+      const sock = connect({ host, port })
+      const done = (v: boolean) => { sock.destroy(); res(v) }
+      sock.setTimeout(500, () => done(false))
+      sock.once('connect', () => done(true))
+      sock.once('error', () => done(false))
+    }),
     networkInterfaces: () => Object.entries(networkInterfaces()).flatMap(([name, list]) => (list ?? []).map((i) => ({ name, address: i.address, family: String(i.family), internal: i.internal }))),
     randomBytes: (n) => randomBytes(n),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    now: () => Date.now(),
     log,
   }
 }
@@ -1763,7 +1955,7 @@ and inside `electronAPI` after `streamCheck`:
     onLocalDaemonProgress?: (callback: (step: string) => void) => () => void
 ```
 
-- [ ] **Step 7: Verify** `cd electron && pnpm test` → PASS; `pnpm exec electron-vite build` (repo root) → compiles; `cd spa && pnpm run lint` clean.
+- [ ] **Step 7: Verify** `cd electron && pnpm test` → PASS; `pnpm exec electron-vite build` (repo root) → compiles **and** `rg -n "smol-toml" out/main/index.js` prints nothing (the parser is inlined, not required at runtime); `cd spa && pnpm run lint` clean.
 
 - [ ] **Step 8: Commit**
 
@@ -1778,7 +1970,7 @@ git commit -m "feat(electron): local daemon IPC, preload bridge and ensureRunnin
 
 **Files:**
 - Modify: `spa/src/stores/useHostStore.ts` (interface + implementation)
-- Create or extend: `spa/src/stores/__tests__/useHostStore.registerLocalHost.test.ts` (check for an existing `useHostStore` test folder first: `ls spa/src/stores/__tests__ spa/src/stores/*.test.ts`; put the new file beside the existing host store tests)
+- Create: `spa/src/stores/useHostStore.registerLocalHost.test.ts` (store tests live flat in `spa/src/stores/`, e.g. `useAgentStore.test.ts`; import with `./useHostStore`)
 
 **Interfaces (produced):**
 
@@ -1795,7 +1987,11 @@ token is empty/`null`/`undefined`, return its id; otherwise
 
 ```ts
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useHostStore } from '../useHostStore'
+import { useHostStore } from './useHostStore'
+
+// reset() keeps the default 'mlab' host (100.64.0.2), so assertions filter
+// by the endpoint under test instead of counting all hosts.
+const at = (ip: string, port: number) => Object.values(useHostStore.getState().hosts).filter((h) => h.ip === ip && h.port === port)
 
 describe('registerLocalHost', () => {
   beforeEach(() => { useHostStore.getState().reset() })
@@ -1805,6 +2001,7 @@ describe('registerLocalHost', () => {
     const h = useHostStore.getState().hosts[id]
     expect(h).toMatchObject({ name: 'air-2026', ip: '100.64.0.9', port: 7860, token: 'purdex_a' })
     expect(useHostStore.getState().hostOrder).toContain(id)
+    expect(at('100.64.0.9', 7860)).toHaveLength(1)
   })
 
   it('is idempotent on the same ip:port and fills only an empty token', () => {
@@ -1814,7 +2011,12 @@ describe('registerLocalHost', () => {
     expect(id).toBe(existing)
     expect(useHostStore.getState().hosts[existing].token).toBe('purdex_b')
     expect(useHostStore.getState().hosts[existing].name).toBe('x')
-    expect(Object.keys(useHostStore.getState().hosts)).toHaveLength(1)
+    expect(at('100.64.0.9', 7860)).toHaveLength(1)
+  })
+
+  it('an explicit :80 is normalised away by URL and must still register as 80', () => {
+    const id = useHostStore.getState().registerLocalHost({ url: 'http://100.64.0.9:80', token: 'purdex_c', hostname: 'air-2026' })
+    expect(useHostStore.getState().hosts[id].port).toBe(80)
   })
 
   it('never overwrites a live token', () => {
@@ -1826,9 +2028,8 @@ describe('registerLocalHost', () => {
 })
 ```
 
-If `reset()` leaves a default host that already occupies `hostOrder`, the
-`hostOrder` assertion still holds (`toContain`). If `reset` does not exist,
-look at how other host-store tests reset state and mirror it.
+`reset()` exists (`useHostStore.ts`, restores `createDefaultState()` with the
+default `mlab` host); do not change its semantics.
 
 - [ ] **Step 2: Run to fail** `cd spa && npx vitest run src/stores` → FAIL.
 
@@ -1843,7 +2044,8 @@ and after `updateHost`:
       registerLocalHost: ({ url, token, hostname }) => {
         const u = new URL(url)
         const ip = u.hostname
-        const port = Number(u.port || 7860)
+        // URL drops a default port (":80" / ":443") — restore it by scheme.
+        const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80)
         const existing = Object.values(get().hosts).find((h) => h.ip === ip && h.port === port)
         if (existing) {
           if (!existing.token) get().updateHost(existing.id, { token })
@@ -1858,7 +2060,7 @@ and after `updateHost`:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/stores/useHostStore.ts spa/src/stores/__tests__/useHostStore.registerLocalHost.test.ts
+git add spa/src/stores/useHostStore.ts spa/src/stores/useHostStore.registerLocalHost.test.ts
 git commit -m "feat(spa): idempotent registerLocalHost store action"
 ```
 
@@ -1872,9 +2074,15 @@ git commit -m "feat(spa): idempotent registerLocalHost store action"
 
 **Interfaces:**
 - Consumes: `window.electronAPI.localDaemon*` (Task 7), `useHostStore.registerLocalHost` (Task 8).
-- Props: `{ daemonBase: string; token?: string; latestHash: string | null }`.
+- Props: `{ daemonBase: string; token?: string; latestHash: string | null; refreshKey: unknown }` —
+  `refreshKey` is the parent's `daemonCheck` object; a new reference (even
+  with the same hash) re-runs `status()` (spec §3.4 "when the parent's
+  `daemonCheck` changes").
 
-- [ ] **Step 1: i18n keys** — add to `en.json` (and the zh-TW equivalents):
+Order: Step 1 (failing tests) → Step 2 (run) → Step 3 (i18n keys) → Step 4
+(component) → Step 5 (mount) — the locale strings are part of GREEN.
+
+- [ ] **Step 3 (do after Step 2): i18n keys** — add to `en.json` (and the zh-TW equivalents):
 
 ```json
 "settings.dev.local.heading": "Local daemon",
@@ -1883,10 +2091,10 @@ git commit -m "feat(spa): idempotent registerLocalHost store action"
 "settings.dev.local.installed": "Installed",
 "settings.dev.local.running": "Running",
 "settings.dev.local.stopped": "Stopped",
-"settings.dev.local.alive_unhealthy": "Daemon process {pid} is alive but not answering",
-"settings.dev.local.external": "A daemon is running at {url} but is not managed by this app",
-"settings.dev.local.external_reason": "Reason: {reason}",
-"settings.dev.local.restart_pending": "On-disk {hash} is not running yet",
+"settings.dev.local.alive_unhealthy": "Daemon process {{pid}} is alive but not answering",
+"settings.dev.local.external": "A daemon is running at {{url}} but is not managed by this app",
+"settings.dev.local.external_reason": "Reason: {{reason}}",
+"settings.dev.local.restart_pending": "On-disk {{hash}} is not running yet",
 "settings.dev.local.up_to_date": "Up to date",
 "settings.dev.local.update_available": "Update available",
 "settings.dev.local.tmux_missing": "tmux not found on the daemon's PATH — install it with Homebrew",
@@ -1903,16 +2111,15 @@ git commit -m "feat(spa): idempotent registerLocalHost store action"
 "settings.dev.local.step.swap": "Installing…",
 "settings.dev.local.step.start": "Starting daemon…",
 "settings.dev.local.step.register": "Registering host…",
-"settings.dev.local.registered": "Host registered: {name}"
+"settings.dev.local.registered": "Host registered: {{name}}"
 ```
 
-zh-TW: 「本機 Daemon」「此機器尚未安裝 daemon」「目標」「已安裝」「執行中」「已停止」「Daemon 行程 {pid} 存活但沒有回應」「{url} 有 daemon 在執行，但不是由本 App 管理」「原因：{reason}」「磁碟上的 {hash} 尚未執行」「已是最新」「有可用更新」「daemon 的 PATH 找不到 tmux — 請用 Homebrew 安裝」「安裝」「更新」「啟動」「重新啟動」「重新整理」「準備中…」「下載 binary…」「驗證中…」「寫入設定…」「停止 daemon…」「安裝中…」「啟動 daemon…」「登錄主機…」「已登錄主機：{name}」.
+zh-TW: 「本機 Daemon」「此機器尚未安裝 daemon」「目標」「已安裝」「執行中」「已停止」「Daemon 行程 {{pid}} 存活但沒有回應」「{{url}} 有 daemon 在執行，但不是由本 App 管理」「原因：{{reason}}」「磁碟上的 {{hash}} 尚未執行」「已是最新」「有可用更新」「daemon 的 PATH 找不到 tmux — 請用 Homebrew 安裝」「安裝」「更新」「啟動」「重新啟動」「重新整理」「準備中…」「下載 binary…」「驗證中…」「寫入設定…」「停止 daemon…」「安裝中…」「啟動 daemon…」「登錄主機…」「已登錄主機：{{name}}」.
 
-Check how the existing `t()` handles `{pid}`-style placeholders
-(`spa/src/stores/useI18nStore.ts` `makeT`); if it does not interpolate, pass
-the value by string concatenation instead and keep the keys placeholder-free.
+`makeT` interpolates `{{name}}` from `t(key, { name })`
+(`useI18nStore.ts:49`); never use `.replace()` on translated strings.
 
-- [ ] **Step 2: Failing tests**
+- [ ] **Step 1: Failing tests**
 
 ```tsx
 // spa/src/components/settings/LocalDaemonSection.test.tsx
@@ -1948,8 +2155,8 @@ beforeEach(() => {
   } as typeof window.electronAPI
 })
 
-const renderIt = (latestHash: string | null = 'bbb') =>
-  act(async () => { render(<LocalDaemonSection daemonBase="http://100.64.0.2:7860" token="tok" latestHash={latestHash} />) })
+const renderIt = (latestHash: string | null = 'bbb', refreshKey: unknown = { latest_hash: latestHash }) =>
+  act(async () => { render(<LocalDaemonSection daemonBase="http://100.64.0.2:7860" token="tok" latestHash={latestHash} refreshKey={refreshKey} />) })
 
 describe('LocalDaemonSection', () => {
   it('none → Install button and target', async () => {
@@ -1978,6 +2185,22 @@ describe('LocalDaemonSection', () => {
     mockStatus.mockResolvedValue(status({ managed: 'managed', alive: { pid: 1 }, installed: { version: '9', hash: 'bbb', goos: 'darwin', goarch: 'arm64' }, running: { version: '9', hash: 'aaa', url: 'http://100.64.0.9:7860' } }))
     await renderIt('bbb')
     expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
+  })
+
+  it('Update wins over Restart when both would apply', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'managed', alive: { pid: 1 }, installed: { version: '9', hash: 'bbb', goos: 'darwin', goarch: 'arm64' }, running: { version: '9', hash: 'aaa', url: 'http://100.64.0.9:7860' } }))
+    await renderIt('ccc')
+    expect(screen.getByRole('button', { name: 'Update' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull()
+  })
+
+  it('re-queries status when refreshKey changes even with the same hash', async () => {
+    mockStatus.mockResolvedValue(status())
+    const view = render(<LocalDaemonSection daemonBase="x" latestHash="bbb" refreshKey={{ latest_hash: 'bbb' }} />)
+    await waitFor(() => expect(mockStatus).toHaveBeenCalledTimes(1))
+    await act(async () => { view.rerender(<LocalDaemonSection daemonBase="x" latestHash="bbb" refreshKey={{ latest_hash: 'bbb' }} />) })
+    await waitFor(() => expect(mockStatus).toHaveBeenCalledTimes(2))
   })
 
   it('alive but unhealthy → Restart with pid', async () => {
@@ -1987,12 +2210,18 @@ describe('LocalDaemonSection', () => {
     expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
   })
 
-  it('external → reason, no buttons', async () => {
+  it('external → full URL in the message, reason, no buttons', async () => {
     mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'running daemon is /repo/bin/pdx', running: { version: 'unknown', hash: 'unknown', url: 'http://100.64.0.2:7860' } }))
     await renderIt()
-    expect(screen.getByText(/not managed by this app/)).toBeTruthy()
+    expect(screen.getByText('A daemon is running at http://100.64.0.2:7860 but is not managed by this app')).toBeTruthy()
     expect(screen.getByText(/\/repo\/bin\/pdx/)).toBeTruthy()
     for (const n of ['Install', 'Update', 'Start', 'Restart']) expect(screen.queryByRole('button', { name: n })).toBeNull()
+  })
+
+  it('external without running info falls back to the config endpoint', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'custom data_dir', config: { bind: '100.64.0.9', port: 7860, hasToken: true } }))
+    await renderIt()
+    expect(screen.getByText('A daemon is running at http://100.64.0.9:7860 but is not managed by this app')).toBeTruthy()
   })
 
   it('tmux missing → warning', async () => {
@@ -2030,6 +2259,17 @@ describe('LocalDaemonSection', () => {
     expect((screen.getByRole('button', { name: 'Install' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('a post-swap start failure leaves the error and offers Start on the refreshed status', async () => {
+    mockStatus
+      .mockResolvedValueOnce(status())
+      .mockResolvedValue(status({ managed: 'managed', installed: { version: '9', hash: 'bbb', goos: 'darwin', goarch: 'arm64' } }))
+    mockInstall.mockRejectedValue('pdx start failed: bind: address not available')
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Install' })) })
+    expect(await screen.findByText(/address not available/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy()
+  })
+
   it('renders nothing when the bridge is absent (web build)', async () => {
     window.electronAPI = { ...window.electronAPI!, localDaemonStatus: undefined } as typeof window.electronAPI
     const { container } = render(<LocalDaemonSection daemonBase="x" latestHash={null} />)
@@ -2038,9 +2278,9 @@ describe('LocalDaemonSection', () => {
 })
 ```
 
-- [ ] **Step 3: Run to fail** `cd spa && npx vitest run LocalDaemonSection` → FAIL.
+- [ ] **Step 2: Run to fail** `cd spa && npx vitest run LocalDaemonSection` → FAIL.
 
-- [ ] **Step 4: Implement the component**
+- [ ] **Step 4: Implement the component** (after Step 3's i18n keys)
 
 ```tsx
 // spa/src/components/settings/LocalDaemonSection.tsx
@@ -2052,6 +2292,8 @@ interface Props {
   daemonBase: string
   token?: string
   latestHash: string | null
+  /** The parent's latest daemonCheck object; a new reference re-queries status. */
+  refreshKey: unknown
 }
 
 type Busy = null | 'install' | 'start' | 'restart'
@@ -2061,7 +2303,7 @@ const btnPrimary = 'px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse h
 
 // Settings → Development → "Local daemon": install / update / start /
 // restart the daemon on the machine the app runs on (spec 2026-09-14 §3.4).
-export function LocalDaemonSection({ daemonBase, token, latestHash }: Props) {
+export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }: Props) {
   const t = useI18nStore((s) => s.t)
   const registerLocalHost = useHostStore((s) => s.registerLocalHost)
   const api = window.electronAPI
@@ -2080,7 +2322,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash }: Props) {
     }
   }, [api])
 
-  useEffect(() => { void refresh() }, [refresh, latestHash])
+  useEffect(() => { void refresh() }, [refresh, refreshKey])
   useEffect(() => api?.onLocalDaemonProgress?.((s) => setStep(s)), [api])
 
   const run = useCallback(async (kind: Exclude<Busy, null>, op: () => Promise<ElectronLocalDaemonResult> | undefined) => {
@@ -2089,7 +2331,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash }: Props) {
       const res = await op()
       if (res) {
         registerLocalHost({ url: res.url, token: res.token, hostname: res.hostname })
-        setNotice([t('settings.dev.local.registered').replace('{name}', res.hostname), res.bindNote].filter(Boolean).join(' — '))
+        setNotice([t('settings.dev.local.registered', { name: res.hostname }), res.bindNote].filter(Boolean).join(' — '))
       }
     } catch (err) {
       setError(String(err))
@@ -2106,7 +2348,10 @@ export function LocalDaemonSection({ daemonBase, token, latestHash }: Props) {
   const alive = status?.alive ?? null
   const updateAvailable = !!installed && !!latestHash && installed.hash !== latestHash
   const restartPending = !!installed && !!running && running.hash !== installed.hash
+  // Spec §3.4: Update, else Restart — never both.
+  const showRestart = !!alive && !updateAvailable && (!running || restartPending)
   const disabled = busy !== null
+  const externalUrl = running?.url ?? (status?.config ? `http://${status.config.bind}:${status.config.port}` : '')
 
   return (
     <div className="pt-6 border-t border-border-default">
@@ -2121,8 +2366,8 @@ export function LocalDaemonSection({ daemonBase, token, latestHash }: Props) {
           {status.managed === 'none' && <div>{t('settings.dev.local.none')}</div>}
           {status.managed === 'external' && (
             <div className="text-status-warning">
-              {t('settings.dev.local.external').replace('{url}', running?.url ?? status.config ? `http://${status.config?.bind}:${status.config?.port}` : '')}
-              {status.reason && <div>{t('settings.dev.local.external_reason').replace('{reason}', status.reason)}</div>}
+              {t('settings.dev.local.external', { url: externalUrl })}
+              {status.reason && <div>{t('settings.dev.local.external_reason', { reason: status.reason })}</div>}
             </div>
           )}
           {status.managed === 'managed' && installed && (
@@ -2135,8 +2380,8 @@ export function LocalDaemonSection({ daemonBase, token, latestHash }: Props) {
                 <span>{running ? t('settings.dev.local.running') : t('settings.dev.local.stopped')}</span>
                 <span className="font-mono">{running ? `${running.version} (${running.hash}) ${running.url}` : '-'}</span>
               </div>
-              {alive && !running && <div className="text-status-warning">{t('settings.dev.local.alive_unhealthy').replace('{pid}', String(alive.pid))}</div>}
-              {restartPending && <div className="text-status-warning">{t('settings.dev.local.restart_pending').replace('{hash}', installed.hash)}</div>}
+              {alive && !running && <div className="text-status-warning">{t('settings.dev.local.alive_unhealthy', { pid: alive.pid })}</div>}
+              {restartPending && <div className="text-status-warning">{t('settings.dev.local.restart_pending', { hash: installed.hash })}</div>}
               {updateAvailable
                 ? <div className="text-status-warning">{t('settings.dev.local.update_available')}</div>
                 : (running && !restartPending && <div>{t('settings.dev.local.up_to_date')}</div>)}
@@ -2160,7 +2405,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash }: Props) {
             {!alive && (
               <button onClick={() => void run('start', () => api.localDaemonStart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.start')}</button>
             )}
-            {alive && (restartPending || !running) && (
+            {showRestart && (
               <button onClick={() => void run('restart', () => api.localDaemonRestart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.restart')}</button>
             )}
             {updateAvailable && (
@@ -2180,7 +2425,7 @@ closing `</div>` of the Daemon block (before the component's final
 `</div>`), add:
 
 ```tsx
-      <LocalDaemonSection daemonBase={daemonBase} token={token} latestHash={daemonCheck?.latest_hash ?? null} />
+      <LocalDaemonSection daemonBase={daemonBase} token={token} latestHash={daemonCheck?.latest_hash ?? null} refreshKey={daemonCheck} />
 ```
 
 - [ ] **Step 6: Verify**
@@ -2199,11 +2444,11 @@ git commit -m "feat(spa): Local daemon block in Settings → Development"
 
 ---
 
-### Task 10: Final sweep and manual acceptance list
+### Task 10: Final sweep and manual acceptance list (verification gate — no commit)
 
-- [ ] `cd electron && pnpm test` · `cd spa && npx vitest run` · `cd spa && pnpm run lint && pnpm run build` · `pnpm exec electron-vite build` — all green.
-- [ ] `rg -n "PDX_DEV_MODE === '1'" electron spa/src` → empty.
-- [ ] `rg -n "\\\\0" electron/local-daemon` → no NUL literals in argv construction (the parser's `'\0'` split in `lsof.ts` is the only allowed occurrence).
+- [ ] `cd electron && pnpm test` · `cd spa && npx vitest run` · `cd spa && pnpm run lint && pnpm run build` · `pnpm exec electron-vite build` — all green; `rg -n "smol-toml" out/main/index.js` → empty.
+- [ ] `rg -n "PDX_DEV_MODE === '1'" electron spa/src --glob '!*.test.ts' --glob '!*.test.tsx'` → empty.
+- [ ] `rg -n "\\\\0" electron/local-daemon --glob '!*.test.ts'` → only the `split('\0')` in `lsof.ts`; nothing in argv construction.
 - [ ] PR-B description lists the manual acceptance from spec §4 (to be run on the arm64 Air after Plan A is deployed on the Mini): Install from `none` → host appears → tmux session attaches; quit app → `/api/health` still answers; relaunch → `ensureRunning: already-running`; `pdx stop` in a shell → relaunch → started; push a commit on the Mini → *Update available* → Update → running hash changes, tmux sessions survive; on the Mini itself the block shows `external`.
 
 ## Self-review against spec §3–§4

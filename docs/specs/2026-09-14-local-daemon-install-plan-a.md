@@ -20,7 +20,7 @@ The dev-mode env gate becomes `internal/devmode.Enabled()` (`!= "0"`).
 **Spec:** `docs/specs/2026-09-14-local-daemon-install-spec.md` (v4) — §2 is
 this plan's contract; §1 decisions are fixed.
 
-**Plan review:** codex `task-mu019hoj-gzro92` (1 Blocker, 7 Important, 3 Minor) — all applied in this revision.
+**Plan review:** codex `task-mu019hoj-gzro92` (1 Blocker, 7 Important, 3 Minor) and `task-mu01nno9-3d1201` (1 Important, 2 Minor) — all applied. Approved for execution.
 
 ## Global Constraints
 
@@ -45,9 +45,12 @@ this plan's contract; §1 decisions are fixed.
 - **Dev-mode semantics (spec D6):** `PDX_DEV_MODE` unset or any value other
   than `"0"` ⇒ enabled. Existing tests that assert "unset ⇒ disabled" are
   updated to assert `"0"` ⇒ disabled; that is the intended change.
-- **`go build` in tests** runs against a throwaway module in `t.TempDir()`
-  (see `TestHandleDaemonRebuild_BuildsInTempRepo`) — never against the real
-  repo, never with the real `git`.
+- **`go build` in tests** compiles only a throwaway module in `t.TempDir()`
+  (see `TestHandleDaemonRebuild_BuildsInTempRepo`) — never the real repo.
+  New download tests pin the hash through `gitHeadFn` and run no git; the
+  pre-existing rebuild/check tests keep their real `git` calls. One test
+  (Task 6's sink-serialisation test) substitutes a fake `go` on PATH; every
+  other build test uses the real toolchain.
 
 ---
 
@@ -204,7 +207,7 @@ git commit -m "refactor(build): move baked-in hash to internal/buildinfo and inj
 **Files:**
 - Create: `internal/devmode/devmode.go`, `internal/devmode/devmode_test.go`
 - Modify: `internal/module/dev/module.go:166,177`, `internal/module/agent/probe_orchestrator.go:59`
-- Modify tests: `internal/module/dev/module_test.go:177-190`, `internal/module/dev/daemon_test.go` (the `t.Setenv("PDX_DEV_MODE","1")` lines may stay), `internal/module/agent/handler_devlog_test.go:118-127` (comment only)
+- Modify tests: `internal/module/dev/module_test.go:177-190`, `internal/module/dev/daemon_test.go` (the `t.Setenv("PDX_DEV_MODE","1")` lines may stay), `internal/module/agent/handler_devlog_test.go:118-127` (comment only), `electron/signing.test.ts` (the one Go-side static assertion)
 
 **Interfaces:**
 - Produces: `devmode.Enabled() bool`.
@@ -325,6 +328,15 @@ func TestRegisterRoutes_EnabledWhenUnset(t *testing.T) {
 PDX_DEV_MODE unset" to "with PDX_DEV_MODE=0" (the test body already sets
 `"0"`).
 
+`electron/signing.test.ts` has a static test `'daemon still gates /api/dev/update routes behind PDX_DEV_MODE=1'`
+that asserts `module.go` contains `os.Getenv("PDX_DEV_MODE") != "1"`. It
+would fail after this task. Change that test's assertion to
+`expect(mod).toMatch(/devmode\.Enabled\(\)/)` and its title to
+`'daemon gates /api/dev/update routes behind devmode.Enabled()'`; keep the
+two route assertions. (The preload/main `=== '1'` assertions in the same
+file are Plan B's to change — leave them.) Verify with
+`cd electron && pnpm test -- signing`.
+
 - [ ] **Step 6: Verify**
 
 Run: `go test -race ./internal/devmode/ ./internal/module/dev/ ./internal/module/agent/` → PASS.
@@ -333,7 +345,7 @@ Run: `rg -n 'Getenv\("PDX_DEV_MODE"\)' --glob '*.go' --glob '!*_test.go' interna
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/devmode internal/module/dev/module.go internal/module/dev/module_test.go internal/module/agent/probe_orchestrator.go internal/module/agent/handler_devlog_test.go
+git add internal/devmode internal/module/dev/module.go internal/module/dev/module_test.go internal/module/agent/probe_orchestrator.go internal/module/agent/handler_devlog_test.go electron/signing.test.ts
 git commit -m "feat(devmode): dev features on by default, PDX_DEV_MODE=0 disables"
 ```
 
@@ -650,7 +662,7 @@ func TestMustAcquirePidLock_FatalWhenHeld(t *testing.T) {
 
 - [ ] **Step 2: Run to fail**
 
-Run: `go test ./cmd/pdx/ -run 'TestReleasePidLock_KeepsFile|TestPidLock_OpenBeforeReleaseStaysVisible'` → both FAIL (file removed / second locker invisible).
+Run: `go test ./cmd/pdx/ -run 'TestReleasePidLock_KeepsFile|TestPidLock_OpenBeforeReleaseStaysVisible|TestMustAcquirePidLock_FatalWhenHeld'` → FAIL: the package does not compile yet (`mustAcquirePidLock` undefined). After Step 3 defines it, the first two tests exercise the real behaviour change; before Step 3 they cannot run.
 
 - [ ] **Step 3: Implement**
 
@@ -800,19 +812,33 @@ func TestBuildBinary_CrossTargetProducesForeignArch(t *testing.T) {
 	}
 }
 
-// Both pipes are drained concurrently; the sink contract says calls are
-// serialised. Run under -race: a program that writes to stdout and stderr
-// during compilation is not available, so exercise the two-goroutine path
-// with a compile error (stderr) on a module whose build also prints via a
-// //go:generate-free vet-like warning is overkill — the race detector on
-// the append below is the assertion.
+// Both pipes are drained by two goroutines; the sink contract says calls
+// are serialised. A real compile only ever writes stderr, so this test puts
+// a fake `go` on PATH that streams to stdout AND stderr concurrently and
+// appends to an unlocked slice from the sink. Under -race, removing the
+// mutex in buildBinary must make this test fail.
 func TestBuildBinary_SinkIsSerialised(t *testing.T) {
-	dir := writeThrowawayModule(t, "package main\nfunc main(){ undefined(); alsoUndefined() }\n")
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "fakebin")
+	if err := os.MkdirAll(fakeBin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n" +
+		"( i=0; while [ $i -lt 300 ]; do echo out$i; i=$((i+1)); done ) &\n" +
+		"( i=0; while [ $i -lt 300 ]; do echo err$i 1>&2; i=$((i+1)); done ) &\n" +
+		"wait\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "go"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	m := &DevModule{repoRoot: dir}
 	var lines []string // plain slice: safe only if sink is serialised
-	_ = m.buildBinary(context.Background(), buildTarget{}, "abc", "1.2.3", filepath.Join(dir, "out"), func(l string) { lines = append(lines, l) })
-	if len(lines) == 0 {
-		t.Fatal("expected compiler output")
+	if err := m.buildBinary(context.Background(), buildTarget{}, "abc", "1.2.3", filepath.Join(dir, "out"), func(l string) { lines = append(lines, l) }); err != nil {
+		t.Fatalf("fake go: %v", err)
+	}
+	if len(lines) != 600 {
+		t.Fatalf("got %d lines, want 600", len(lines))
 	}
 }
 
