@@ -1,9 +1,14 @@
-// spa/src/lib/rebuild/revive.test.ts — decideRevive and reviveAllowed (spec §3.1 / §3.2).
-import { describe, it, expect } from 'vitest'
-import { decideRevive, reviveAllowed } from './revive'
+// spa/src/lib/rebuild/revive.test.ts — decideRevive, reviveAllowed and the
+// pass that applies them (spec §3.1 / §3.2).
+import { describe, it, expect, beforeEach } from 'vitest'
+import { decideRevive, reviveAllowed, runRevivePass } from './revive'
 import type { ReviveCandidate } from './revive'
 import type { Session } from '../host-api'
-import type { RebuildBinding, RebuildOperation } from '../../stores/useRebuildStore'
+import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { useTabStore } from '../../stores/useTabStore'
+import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../../types/tab'
 
 /** A full `Session`, so the dep-injected fakes stay type-checked (copied from engine.test.ts:18). */
 function session(over: Partial<Session>): Session {
@@ -142,5 +147,114 @@ describe('reviveAllowed', () => {
     ['operation done without a createdSession', { p1: op({ binding, status: 'done' }) }, true],
   ])('%s -> %s', (_label, operations, expected) => {
     expect(reviveAllowed('p1', binding, operations as Record<string, RebuildOperation>)).toBe(expected)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// runRevivePass — the pass over the stores (spec §3.2)
+// ---------------------------------------------------------------------------
+
+const dead: RebuildBinding = { hostId: 'h1', sessionCode: 'old111', tmuxInstance: '111:1000' }
+const live = session({ code: 'new1', name: 'dev', tmux_instance: '222:2000' })
+
+/** One leaf tab holding a `tmux-restarted` pane (shape copied from engine.test.ts `seedPane`). */
+function seedPane(tabId: string, paneId: string, record: Partial<PaneRebuildRecord> | null = {}) {
+  const tab: Tab = {
+    id: tabId, pinned: false, locked: false, createdAt: 0,
+    layout: { type: 'leaf', pane: { id: paneId, content: {
+      kind: 'tmux-session', hostId: 'h1', sessionCode: 'old111', mode: 'terminal',
+      cachedName: 'dev', tmuxInstance: '111:1000', terminated: 'tmux-restarted',
+      rebuild: record === null ? undefined : {
+        sessionName: 'dev', tmuxInstance: '111:1000', cwd: '/w', capturedAt: 1,
+        agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 },
+        ...record,
+      },
+    } } },
+  }
+  const prev = useTabStore.getState()
+  useTabStore.setState({ tabs: { ...prev.tabs, [tabId]: tab }, tabOrder: [...prev.tabOrder, tabId], activeTabId: tabId })
+}
+
+function paneContent(tabId: string, paneId: string): TmuxSessionContent {
+  const layout = useTabStore.getState().tabs[tabId].layout
+  if (layout.type !== 'leaf' || layout.pane.id !== paneId) throw new Error('fixture is a leaf')
+  const c = layout.pane.content
+  if (c.kind !== 'tmux-session') throw new Error('fixture is a tmux pane')
+  return c
+}
+
+const deadContent = { sessionCode: 'old111', tmuxInstance: '111:1000', terminated: 'tmux-restarted' }
+const revivedContent = { sessionCode: 'new1', tmuxInstance: '222:2000', cachedName: 'dev' }
+
+describe('runRevivePass', () => {
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'h1', ip: '127.0.0.1', port: 7860, token: null, order: 0 } },
+      hostOrder: ['h1'], activeHostId: 'h1',
+      runtime: { h1: { status: 'connected', attachReady: true } },
+    })
+    useSessionStore.setState({ sessions: { h1: [live] }, activeHostId: null, activeCode: null })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
+  })
+
+  it('S1: revives a tmux-restarted pane onto the live session of the same name', () => {
+    seedPane('t1', 'p1')
+    runRevivePass('h1')
+    const c = paneContent('t1', 'p1')
+    expect(c).toMatchObject(revivedContent)
+    expect(c.terminated).toBeUndefined()
+    expect(c.rebuild).toMatchObject({
+      sessionName: 'dev', tmuxInstance: '222:2000', cwd: '/w',
+      agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 },
+    })
+  })
+
+  it('S16: does nothing while the host attach gate is closed', () => {
+    seedPane('t1', 'p1')
+    useHostStore.getState().setRuntime('h1', { attachReady: false })
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+  })
+
+  it('S7: does nothing while any operation holds the lock, even for a pane with no op', () => {
+    seedPane('t1', 'p1')
+    useRebuildStore.setState({ lockedBy: 'rebuild:p9' })
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+  })
+
+  it('S8: leaves a pane whose done operation created a session (its panel shows the report)', () => {
+    seedPane('t1', 'p1')
+    useRebuildStore.setState({ operations: { p1: op({ paneId: 'p1', binding: dead, createdSession: live }) } })
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+  })
+
+  it('S9: revives a pane whose done operation created nothing', () => {
+    seedPane('t1', 'p1')
+    useRebuildStore.setState({ operations: { p1: op({ paneId: 'p1', binding: dead }) } })
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject(revivedContent)
+  })
+
+  it('S15: a second pass over the same evidence rewrites nothing', () => {
+    seedPane('t1', 'p1')
+    runRevivePass('h1')
+    const c = paneContent('t1', 'p1')
+    expect(c).toMatchObject(revivedContent)
+    const record = c.rebuild
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toBe(c)
+    expect(paneContent('t1', 'p1').rebuild).toBe(record)
+  })
+
+  it('revives a pane that carries no rebuild record, and leaves it without one', () => {
+    seedPane('t1', 'p1', null)
+    runRevivePass('h1')
+    const c = paneContent('t1', 'p1')
+    expect(c).toMatchObject(revivedContent)
+    expect(c.terminated).toBeUndefined()
+    expect(c.rebuild).toBeUndefined()
   })
 })

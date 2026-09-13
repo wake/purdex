@@ -5,6 +5,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
+import { useRebuildStore } from '../stores/useRebuildStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
 import { dispatchAgentWsEvent, isAgentWsEvent } from '../lib/agent-ws'
 import { dispatchBackupWsEvent } from '../lib/storage-backup/backup-ws-dispatch'
@@ -13,6 +14,7 @@ import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { scanPaneTree } from '../lib/pane-tree'
 import { reconcileSessionsPayload, type ReconcilePane } from '../lib/rebuild/reconcile'
 import { closeAttachGate, openAttachGate } from '../lib/rebuild/attach-gate'
+import { runRevivePass, runRevivePassAll } from '../lib/rebuild/revive'
 import { probeMissingCwds } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import { hostWsUrl, fetchWsTicket, fetchHistory, type Session } from '../lib/host-api'
@@ -195,6 +197,10 @@ export function useMultiHostEventWs() {
               // is no evidence, so this stays inside the try.
               openAttachGate(hostId)
 
+              // Revived panes are probed on their final binding, like
+              // everything else after reconciliation.
+              runRevivePass(hostId)
+
               // First of the two cwd-probe triggers (spec §4.4). Runs after
               // reconciliation so a pane about to be marked dead, or one that
               // just adopted this generation, is judged on its final binding.
@@ -326,4 +332,11 @@ export function useMultiHostEventWs() {
       entries.clear()
     }
   }, [])
+
+  // The second revive trigger: a rebuild in flight holds the operation lock
+  // and the pass skips everything under it, so the lock's release is what
+  // turns "skipped" into "revived" — with the same evidence and gates.
+  useEffect(() => useRebuildStore.subscribe((s, prev) => {
+    if (prev.lockedBy !== null && s.lockedBy === null) runRevivePassAll()
+  }), [])
 }

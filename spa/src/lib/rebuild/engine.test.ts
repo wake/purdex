@@ -1,6 +1,6 @@
 // spa/src/lib/rebuild/engine.test.ts — the rebuild operation (spec §4.8).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { rebuildPane, retryResume, attachAnyway } from './engine'
+import { rebuildPane, retryResume, attachAnyway, repointPaneToSession } from './engine'
 import type { RebuildDeps } from './engine'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -925,5 +925,31 @@ describe('re-point — the pinned host', () => {
     const report = await attachAnyway('p1', { sendKeys: vi.fn() })
     expect(report.repointed).toBe(false)
     expect(paneContent('t1', 'p1')).toMatchObject({ sessionCode: 'old111' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The re-point writer on its own. Exported so the revive pass (revive.ts) can
+// write a pane exactly the way the engine's step 4 does — one writer, so the
+// two re-point paths cannot drift.
+// ---------------------------------------------------------------------------
+describe('repointPaneToSession', () => {
+  beforeEach(() => {
+    useRebuildStore.setState({ operations: {}, lockedBy: null })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    seedHost('h1')
+    seedPane('h1', 't1', 'p1', { cwd: '/w', agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 } })
+  })
+
+  it('writes the session onto the pane, drops terminated, restamps the record and syncs the store', () => {
+    repointPaneToSession('t1', 'p1', session({ code: 'new1', name: 'dev', tmux_instance: '222:2000' }))
+    const c = paneContent('t1', 'p1')
+    expect(c).toMatchObject({ kind: 'tmux-session', sessionCode: 'new1', cachedName: 'dev', tmuxInstance: '222:2000' })
+    expect('terminated' in c ? c.terminated : undefined).toBeUndefined()
+    expect(readRecord('t1', 'p1')).toMatchObject({
+      sessionName: 'dev', tmuxInstance: '222:2000', cwd: '/w', capturedAt: 1,
+      agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 },
+    })
+    expect(useSessionStore.getState().sessions['h1']?.map((s) => s.code)).toEqual(['new1'])
   })
 })

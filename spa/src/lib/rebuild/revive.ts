@@ -1,5 +1,6 @@
-// spa/src/lib/rebuild/revive.ts — pure decision for reviving a pane by tmux
-// session name, and the per-pane gate that guards it (spec §3.1 / §3.2).
+// spa/src/lib/rebuild/revive.ts — reviving a pane by tmux session name: the
+// pure decision, the per-pane gate, and the pass that applies them
+// (spec §3.1 / §3.2).
 //
 // A pane terminated `tmux-restarted` lost its binding, not its identity: tmux
 // session names are unique per server, so a live session that reappears under
@@ -21,10 +22,21 @@
 // a `createdSession` — the engine deliberately left that pane un-re-pointed,
 // and its panel is showing the report.
 //
-// Both functions are pure: no store access, no side effects.
+// `decideRevive` and `reviveAllowed` are pure: no store access, no side
+// effects. `runRevivePass` is the one place they meet the stores, and it has
+// two triggers with the same evidence: the host's reconciled `sessions`
+// payload, and the release of the operation lock — a rebuild in flight owns
+// the outcome for every pane it may re-point, and the pass may not act on any
+// of them until it is done.
 import { bindingEquals } from './binding'
+import { canAttachTerminal } from './attach-gate'
+import { repointPaneToSession } from './engine'
+import { scanPaneTree } from '../pane-tree'
+import { useHostStore } from '../../stores/useHostStore'
+import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { useTabStore } from '../../stores/useTabStore'
 import type { Session } from '../host-api'
-import type { RebuildBinding, RebuildOperation } from '../../stores/useRebuildStore'
 
 /** A terminated pane eligible for revive-by-name — the caller has already
  * filtered for `kind === 'tmux-session'`, `mode === 'terminal'`, and
@@ -86,4 +98,48 @@ export function reviveAllowed(paneId: string, binding: RebuildBinding, operation
   if (op.status === 'running') return false // unreachable under the lock guard; kept so the rule stands alone
   if (op.createdSession) return false
   return true
+}
+
+/** Every `tmux-restarted` terminal pane on `hostId`, as the pass sees it now. */
+export function collectCandidates(hostId: string): ReviveCandidate[] {
+  const candidates: ReviveCandidate[] = []
+  for (const tab of Object.values(useTabStore.getState().tabs)) {
+    scanPaneTree(tab.layout, (pane) => {
+      const c = pane.content
+      if (c.kind !== 'tmux-session' || c.hostId !== hostId) return
+      if (c.mode !== 'terminal' || c.terminated !== 'tmux-restarted') return
+      candidates.push({
+        hostId, tabId: tab.id, paneId: pane.id,
+        sessionCode: c.sessionCode, tmuxInstance: c.tmuxInstance, cachedName: c.cachedName,
+      })
+    })
+  }
+  return candidates
+}
+
+/**
+ * Revive every eligible pane on `hostId` against the host's last reconciled
+ * session list (spec §3.2). Synchronous: nothing runs between the candidate
+ * scan and the write, so the binding a decision was made from is the binding
+ * the write lands on.
+ *
+ * The attach gate ties the evidence to the CURRENT connection — it reopens
+ * only after that connection's own payload has been reconciled, so a pass can
+ * never act on a list left over from a dropped one. The lock guard is global:
+ * a batch records an operation entry only for each group's source pane, so
+ * the lock is the one thing every pane a rebuild will re-point is under.
+ */
+export function runRevivePass(hostId: string): void {
+  if (!canAttachTerminal(hostId)) return
+  if (useRebuildStore.getState().lockedBy !== null) return
+  const sessions = useSessionStore.getState().sessions[hostId] ?? []
+  for (const d of decideRevive(hostId, sessions, collectCandidates(hostId))) {
+    if (!reviveAllowed(d.paneId, d.binding, useRebuildStore.getState().operations)) continue
+    repointPaneToSession(d.tabId, d.paneId, d.session)
+  }
+}
+
+/** The lock-release trigger: the lock is global, so every host gets a pass. */
+export function runRevivePassAll(): void {
+  for (const hostId of useHostStore.getState().hostOrder) runRevivePass(hostId)
 }

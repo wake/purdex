@@ -234,8 +234,12 @@ function syncSessionStore(hostId: string, session: Session, dead: { code: string
  * field documents the generation the record describes, and after a rebuild
  * that is the new one — leaving the dead generation there would make the
  * record describe a session that no longer exists.
+ *
+ * Exported for the revive pass (`revive.ts`), which puts a `tmux-restarted`
+ * pane back onto a live session of the same name: one writer for both paths,
+ * so what "re-pointed" means cannot drift between them.
  */
-function defaultRepoint(tabId: string, paneId: string, session: Session): void {
+export function repointPaneToSession(tabId: string, paneId: string, session: Session): void {
   const content = readTerminalPane(tabId, paneId)
   if (!content) return
   const tmuxInstance = session.tmux_instance ?? ''
@@ -282,7 +286,7 @@ export function repointMember(
   paneId: string,
   binding: RebuildBinding,
   created: Session,
-  repoint: NonNullable<RebuildDeps['repoint']> = defaultRepoint,
+  repoint: NonNullable<RebuildDeps['repoint']> = repointPaneToSession,
   assertHostUnchanged?: () => void,
 ): MemberRepointResult {
   if (assertHostUnchanged) {
@@ -511,7 +515,7 @@ async function runRebuild(
     ?? ((_hostId: string, name: string, dir: string, mode: string) => pinned.createSession(name, dir, mode))
   const sendKeys = deps.sendKeys
     ?? ((_hostId: string, code: string, command: string, expected: string) => pinned.sendKeys(code, command, expected))
-  const repoint = deps.repoint ?? defaultRepoint
+  const repoint = deps.repoint ?? repointPaneToSession
 
   let created: Session | undefined
   if (plan.createSession) {
@@ -709,7 +713,7 @@ async function runResumeTail(paneId: string, withResume: boolean, deps: RebuildD
     report,
     sendKeys: deps.sendKeys
       ?? ((_hostId: string, code: string, command: string, expected: string) => pinned.sendKeys(code, command, expected)),
-    repoint: deps.repoint ?? defaultRepoint,
+    repoint: deps.repoint ?? repointPaneToSession,
   }
   await runResumeStep(ctx, withResume)
   runRepointStep(ctx)
