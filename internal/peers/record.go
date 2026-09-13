@@ -69,9 +69,14 @@ func Build(in BuildInput) []PeerRecord {
 	}
 
 	records := make([]PeerRecord, 0, len(in.Sessions)+len(in.Entries))
+	consumed := make(map[Entry]bool)
 
 	for _, s := range in.Sessions {
-		records = append(records, buildSessionRecord(in, s, entriesBySessionID))
+		rec, entry, ok := buildSessionRecord(in, s, entriesBySessionID)
+		records = append(records, rec)
+		if ok {
+			consumed[entry] = true
+		}
 	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].SessionName != records[j].SessionName {
@@ -80,15 +85,19 @@ func Build(in BuildInput) []PeerRecord {
 		return records[i].SessionCode < records[j].SessionCode
 	})
 
-	outside := buildOutsideRecords(in, sessionNames)
+	outside := buildOutsideRecords(in, sessionNames, consumed)
 	records = append(records, outside...)
 
 	return records
 }
 
-// buildSessionRecord implements rules 2-4 for one tmux session.
-func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[string][]Entry) PeerRecord {
-	rec := PeerRecord{
+// buildSessionRecord implements rules 2-4 for one tmux session. When rule 4
+// resolves the session to exactly one live entry (the single candidate, or
+// the unique pane-tiebreak winner), it returns that Entry with ok=true so
+// Build can exclude it from the outside-tmux rows (rule 5): a consumed
+// entry never also produces a cc: row.
+func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[string][]Entry) (rec PeerRecord, consumedEntry Entry, ok bool) {
+	rec = PeerRecord{
 		Host:         in.Alias,
 		HostID:       in.HostID,
 		Address:      in.Alias + "/" + s.Name,
@@ -99,13 +108,13 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	}
 
 	if in.Unresolved[s.Code] {
-		return rec // Agent nil, Reason "", Deliverable false
+		return rec, Entry{}, false // Agent nil, Reason "", Deliverable false
 	}
 
 	owner, hasOwner := in.Owners[s.Code]
 	if !hasOwner {
 		rec.Reason = "no_agent"
-		return rec
+		return rec, Entry{}, false
 	}
 
 	if owner.AgentType != "cc" {
@@ -116,7 +125,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			Version:   "",
 		}
 		rec.Reason = "not_cc"
-		return rec
+		return rec, Entry{}, false
 	}
 
 	var candidates []Entry
@@ -130,9 +139,11 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	case 0:
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "inbox_dead"
+		return rec, Entry{}, false
 	case 1:
 		rec.Agent = agentInfoFromEntry(candidates[0])
 		rec.Deliverable = true
+		return rec, candidates[0], true
 	default:
 		var paneMatches []Entry
 		for _, c := range candidates {
@@ -143,13 +154,12 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 		if len(paneMatches) == 1 {
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
 			rec.Deliverable = true
-		} else {
-			rec.Agent = ownerFallbackAgent(owner)
-			rec.Reason = "ambiguous"
+			return rec, paneMatches[0], true
 		}
+		rec.Agent = ownerFallbackAgent(owner)
+		rec.Reason = "ambiguous"
+		return rec, Entry{}, false
 	}
-
-	return rec
 }
 
 // ownerFallbackAgent builds the reduced AgentInfo used when a cc owner's
@@ -188,12 +198,17 @@ type outsideCandidate struct {
 }
 
 // buildOutsideRecords implements rule 5: every live entry whose tmux
-// session name is not a listed session gets its own row, regardless of
-// whether rule 4 also used it.
-func buildOutsideRecords(in BuildInput, sessionNames map[string]bool) []PeerRecord {
+// session name is not a listed session gets its own row, UNLESS rule 4
+// already consumed it (as the single candidate, or the unique pane-tiebreak
+// winner, for some session) — a consumed entry never also produces a cc:
+// row, so each entry appears exactly once across the whole output.
+func buildOutsideRecords(in BuildInput, sessionNames map[string]bool, consumed map[Entry]bool) []PeerRecord {
 	var candidates []outsideCandidate
 	for _, e := range in.Entries {
 		if sessionNames[e.TmuxSessionName()] {
+			continue
+		}
+		if consumed[e] {
 			continue
 		}
 

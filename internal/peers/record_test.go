@@ -388,8 +388,9 @@ func TestBuild_OutsideTmuxRows_SortedByPeerNameThenPID(t *testing.T) {
 	}
 }
 
-// Entry with Tmux:"" that rule 4 used => also appears as a cc: row.
-func TestBuild_EntryUsedByRule4_AlsoAppearsAsOutsideRow(t *testing.T) {
+// Entry with Tmux:"" that rule 4 consumed (the single candidate) never also
+// produces a cc: row: the entry appears exactly once, as the session row.
+func TestBuild_EntryConsumedByRule4_NeverAlsoAppearsAsOutsideRow(t *testing.T) {
 	entry := Entry{PID: 5, SessionID: "sess-x", Name: "purdex-5", Tmux: ""}
 	in := BuildInput{
 		Alias:    "mini-lab",
@@ -400,22 +401,59 @@ func TestBuild_EntryUsedByRule4_AlsoAppearsAsOutsideRow(t *testing.T) {
 		Entries: []Entry{entry},
 	}
 	got := Build(in)
-	if len(got) != 2 {
-		t.Fatalf("len = %d, want 2", len(got))
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (session row only, no duplicate cc: row)", len(got))
 	}
-	var sessionRow, outsideRow *PeerRecord
+	sessionRow := got[0]
+	if sessionRow.SessionCode != "s1" || !sessionRow.Deliverable || sessionRow.Agent == nil || sessionRow.Agent.PID != 5 {
+		t.Fatalf("sessionRow = %+v, want deliverable session row via entry PID 5", sessionRow)
+	}
+
+	// (c) Resolve(records, "cc:purdex-5") returns the session row itself
+	// (no AmbiguousError), since the entry it was built from is not
+	// duplicated into a separate outside row.
+	resolved, err := Resolve(got, "cc:purdex-5")
+	if err != nil {
+		t.Fatalf("Resolve: unexpected err: %v", err)
+	}
+	if resolved.SessionCode != "s1" {
+		t.Fatalf("Resolve() = %+v, want the session row (SessionCode=s1)", resolved)
+	}
+}
+
+// Entries that were candidates but NOT chosen by rule 4 (ambiguous case) are
+// not consumed and still get outside rows when their tmux name is unlisted.
+func TestBuild_AmbiguousCandidates_StillGetOutsideRows(t *testing.T) {
+	e1 := Entry{PID: 10, SessionID: "sess-x", Name: "one", Tmux: "elsewhere:@1.%10"}
+	e2 := Entry{PID: 11, SessionID: "sess-x", Name: "two", Tmux: "elsewhere:@1.%10"}
+	in := BuildInput{
+		Alias:    "mini-lab",
+		Sessions: []SessionSummary{{Code: "s1", Name: "mt1"}},
+		Owners: map[string]Owner{
+			"s1": {AgentType: "cc", SessionID: "sess-x", TmuxPaneID: "%10", Status: "idle"},
+		},
+		Entries: []Entry{e1, e2},
+	}
+	got := Build(in)
+	// session row (ambiguous) + two outside rows (neither entry consumed).
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3 (session row + 2 outside rows)", len(got))
+	}
+	var sessionRow *PeerRecord
+	var outsideAddrs []string
 	for i := range got {
 		if got[i].SessionCode == "s1" {
 			sessionRow = &got[i]
 		} else {
-			outsideRow = &got[i]
+			outsideAddrs = append(outsideAddrs, got[i].Address)
 		}
 	}
-	if sessionRow == nil || !sessionRow.Deliverable || sessionRow.Agent.PID != 5 {
-		t.Fatalf("sessionRow = %+v, want deliverable via entry PID 5", sessionRow)
+	if sessionRow == nil || sessionRow.Reason != "ambiguous" {
+		t.Fatalf("sessionRow = %+v, want reason ambiguous", sessionRow)
 	}
-	if outsideRow == nil || outsideRow.Address != "mini-lab/cc:purdex-5" {
-		t.Fatalf("outsideRow = %+v, want address mini-lab/cc:purdex-5", outsideRow)
+	wantAddrs := map[string]bool{"mini-lab/cc:one": true, "mini-lab/cc:two": true}
+	if len(outsideAddrs) != 2 || !wantAddrs[outsideAddrs[0]] || !wantAddrs[outsideAddrs[1]] {
+		t.Fatalf("outsideAddrs = %v, want both mini-lab/cc:one and mini-lab/cc:two", outsideAddrs)
 	}
 }
 
