@@ -143,3 +143,77 @@ func TestGetSizingModeExplicit(t *testing.T) {
 		t.Errorf("expected 'terminal-first', got %q", tc.GetSizingMode())
 	}
 }
+
+func TestPeerAliasUnsetWithColonInHostID(t *testing.T) {
+	cfg := config.Config{HostID: "mini-lab:278cbm"}
+	got := cfg.PeerAlias()
+	want := "mini-lab"
+	if got != want {
+		t.Errorf("PeerAlias: want %q, got %q", want, got)
+	}
+}
+
+func TestPeerAliasSetAlias(t *testing.T) {
+	cfg := config.Config{
+		HostID: "mini-lab:278cbm",
+		Peers: config.PeersConfig{Alias: "my-peer"},
+	}
+	got := cfg.PeerAlias()
+	want := "my-peer"
+	if got != want {
+		t.Errorf("PeerAlias: want %q, got %q", want, got)
+	}
+}
+
+func TestPeerAliasHostIDWithoutColon(t *testing.T) {
+	cfg := config.Config{HostID: "standalone"}
+	got := cfg.PeerAlias()
+	want := "standalone"
+	if got != want {
+		t.Errorf("PeerAlias: want %q, got %q", want, got)
+	}
+}
+
+func TestPeerAliasEmptyHostID(t *testing.T) {
+	cfg := config.Config{HostID: ""}
+	got := cfg.PeerAlias()
+	want := ""
+	if got != want {
+		t.Errorf("PeerAlias: want %q, got %q", want, got)
+	}
+}
+
+func TestPeerAliasRoundTripWriteFileAndLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	// Write a config with peers.alias
+	originalCfg := config.Config{
+		HostID: "mini-lab:278cbm",
+		Bind:   "127.0.0.1",
+		Port:   7860,
+		Peers: config.PeersConfig{
+			Alias: "test-peer",
+		},
+	}
+	if err := config.WriteFile(path, originalCfg); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Load it back
+	loadedCfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Verify all fields round-tripped correctly
+	if loadedCfg.HostID != originalCfg.HostID {
+		t.Errorf("HostID: want %q, got %q", originalCfg.HostID, loadedCfg.HostID)
+	}
+	if loadedCfg.Peers.Alias != originalCfg.Peers.Alias {
+		t.Errorf("Peers.Alias: want %q, got %q", originalCfg.Peers.Alias, loadedCfg.Peers.Alias)
+	}
+	if loadedCfg.PeerAlias() != "test-peer" {
+		t.Errorf("PeerAlias after load: want %q, got %q", "test-peer", loadedCfg.PeerAlias())
+	}
+}
