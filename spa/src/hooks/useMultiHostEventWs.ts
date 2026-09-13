@@ -198,8 +198,7 @@ export function useMultiHostEventWs() {
               // is no evidence, so this stays inside the try.
               openAttachGate(hostId)
 
-              // Revived panes are probed on their final binding, like
-              // everything else after reconciliation.
+              // Before the probes, so a revived pane is probed on its final binding.
               runRevivePass(hostId)
 
               // First of the two cwd-probe triggers (spec §4.4). Runs after

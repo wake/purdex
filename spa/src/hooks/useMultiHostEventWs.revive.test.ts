@@ -129,11 +129,18 @@ const lockedBy = () => useRebuildStore.getState().lockedBy
 const dead = { sessionCode: 'old111', tmuxInstance: '111:1000', terminated: 'tmux-restarted' }
 const revived = { sessionCode: 'new1', tmuxInstance: '222:2000', cachedName: 'dev' }
 
-/** Mount the hook and wait for the host's socket. */
-async function mount() {
+/** Mount the hook and wait for every host's socket. */
+async function mount(hostCount = 1) {
   const view = renderHook(() => useMultiHostEventWs())
-  await waitFor(() => expect(sockets).toHaveLength(1))
+  await waitFor(() => expect(sockets).toHaveLength(hostCount))
   return view
+}
+
+/** The socket the hook opened for `ip` — connection order across hosts is not promised. */
+function socketFor(ip: string): FakeSocket {
+  const socket = sockets.find((s) => s.url.includes(`//${ip}:`))
+  if (!socket) throw new Error(`no socket for ${ip}`)
+  return socket
 }
 
 function emit(sessions: Session[], socket: FakeSocket = sockets[0]) {
@@ -435,6 +442,30 @@ describe('useMultiHostEventWs revive — the lock-release trigger', () => {
 
     expect(paneContent('t1', 'p1')).toMatchObject(revived)
     expect(seen).not.toContain('old')
+    view.unmount()
+  })
+
+  it('S19: the release pass covers every host', async () => {
+    const H2 = 'h2'
+    useHostStore.setState((state) => ({
+      hosts: { ...state.hosts, [H2]: { id: H2, name: 'Host 2', ip: '5.6.7.8', port: 7860, order: 1 } },
+      hostOrder: [HOST, H2],
+    }))
+    const view = await mount(2)
+    seedPane('t1', 'p1')
+    seedPane('t2', 'p2', { hostId: H2 })
+    const grant = useRebuildStore.getState().acquireOperationLock('legacy:restore')
+
+    emit([NEW1], socketFor('1.2.3.4'))
+    emit([NEW1], socketFor('5.6.7.8'))
+    expect(useHostStore.getState().runtime[H2]?.attachReady).toBe(true)
+    expect(paneContent('t1', 'p1')).toMatchObject(dead)
+    expect(paneContent('t2', 'p2')).toMatchObject(dead)
+
+    act(() => { useRebuildStore.getState().releaseOperationLock(grant) })
+
+    expect(paneContent('t1', 'p1')).toMatchObject({ ...revived, hostId: HOST })
+    expect(paneContent('t2', 'p2')).toMatchObject({ ...revived, hostId: H2 })
     view.unmount()
   })
 
