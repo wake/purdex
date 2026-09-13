@@ -1,6 +1,6 @@
 # Revive by Name — Implementation Plan
 
-**Status:** v2 (aligned to spec v2; pending codex plan review)
+**Status:** v3 — revised after codex plan review `task-mu07mlre-w7q0zt` (1 Blocker, 3 Important, 3 Minor; all folded in, dispositions at the end)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -63,8 +63,11 @@ logic or `batch.ts` changes.
 
 **Interfaces produced** (exactly as spec §3.1 / §3.2):
 ```ts
-export interface ReviveCandidate { hostId; tabId; paneId; sessionCode; tmuxInstance; cachedName }
-export interface ReviveDecision { tabId; paneId; binding: RebuildBinding; session: Session }
+export interface ReviveCandidate {
+  hostId: string; tabId: string; paneId: string
+  sessionCode: string; tmuxInstance: string; cachedName: string
+}
+export interface ReviveDecision { tabId: string; paneId: string; binding: RebuildBinding; session: Session }
 export function decideRevive(hostId: string, sessions: Session[], candidates: ReviveCandidate[]): ReviveDecision[]
 export function reviveAllowed(paneId: string, binding: RebuildBinding, operations: Record<string, RebuildOperation>): boolean
 ```
@@ -75,8 +78,10 @@ from `lib/host-api.ts`.
 **`decideRevive` rule.** Build `Map<name, Session>` from `sessions` once,
 first entry wins on a duplicate name. For each candidate with
 `candidate.hostId === hostId`: look up `cachedName`; require the session's
-`tmux_instance` to be a non-empty string; if `session.mode` is a string it
-must be `'terminal'`; emit `{ tabId, paneId, binding: { hostId, sessionCode, tmuxInstance }, session }`.
+`tmux_instance` to be a non-empty string; reject when
+`session.mode !== undefined && session.mode !== 'terminal'` (a `null` mode on
+the wire is *present and wrong* — the handler does `JSON.parse` with no schema,
+so an unexpected shape must fail closed); emit `{ tabId, paneId, binding: { hostId, sessionCode, tmuxInstance }, session }`.
 No generation comparison against the candidate's own instance (spec §3.1,
 review finding 5). Pure: no store access.
 
@@ -88,12 +93,13 @@ review finding 5). Pure: no store access.
   - S1c: live `dev` @ `111:1000` (same as candidate) → revives.
   - S4: live instance `''` → `[]`; instance key absent → `[]`.
   - S5: only `dev-2` live → `[]`.
-  - S6: live `mode: 'stream'` → `[]`; `mode` absent → revives.
+  - S6: live `mode: 'stream'` → `[]`; `mode` absent → revives; `mode: null` (cast at the boundary: `{ ...session({...}), mode: null } as unknown as Session`) → `[]`.
   - S13: candidate on `h2`, call for `h1` → `[]`.
   - S14: two candidates named `dev` → two decisions, same session.
   - empty candidates → `[]`; empty sessions → `[]`.
   - name beats code: live `[{code:'old', name:'other', tmux_instance:'222:2000'}, {code:'new1', name:'dev', tmux_instance:'222:2000'}]`, candidate `sessionCode:'old', cachedName:'dev'` → decision session is `new1`.
-  `describe('reviveAllowed')` — `it.each` over: no op → true; op binding ≠ → true; running (same binding) → false; done + `createdSession` → false; done, no `createdSession` → true. Build ops with a small factory: `{ paneId, tabId:'t', hostId:'h1', plan:{createSession:true,applyCwd:true,runResume:true}, binding, resumeCommand:'', status, report:{hostId:'h1', steps:{create:{status:'skipped'},resume:{status:'skipped'},repoint:{status:'skipped'}}, repointed:false}, startedAt:0, ...over }`.
+  `describe('reviveAllowed')` — `it.each` over: no op → true; op binding ≠ → true; running (same binding) → false; done + `createdSession` → false; done, no `createdSession` → true. Build ops with a small typed factory `op(over: Partial<RebuildOperation>): RebuildOperation` returning `{ paneId:'p1', tabId:'t', hostId:'h1', plan:{createSession:true,applyCwd:true,runResume:true}, binding, resumeCommand:'', status:'done', report:{hostId:'h1', steps:{create:{status:'skipped'},resume:{status:'skipped'},repoint:{status:'skipped'}}, repointed:false}, startedAt:0, ...over }`.
+  **Session fixtures:** copy the typed `session(over: Partial<Session>): Session` factory from `engine.test.ts:18` (it fills `cwd`, `mode`, `cc_session_id`, `cc_model`, `has_relay` — the project is strict TypeScript). The only place `as unknown as Session` is allowed is the explicit wire-shape cases (`mode` absent / `null`); never to hide a missing field in an ordinary fixture.
 - [ ] **Step 2: Run** `pnpm --prefix spa exec vitest run src/lib/rebuild/revive.test.ts` — red (module missing).
 - [ ] **Step 3: Implement** the two functions and the types. Do **not** add `collectCandidates` / `runRevivePass` yet.
 - [ ] **Step 4: Run** the file — green. Then the full `vitest run`.
@@ -124,8 +130,9 @@ export function runRevivePassAll(): void                                // every
 `useTabStore.getState().tabs`; keep panes with `content.kind === 'tmux-session'
 && content.hostId === hostId && content.mode === 'terminal' && content.terminated === 'tmux-restarted'`.
 
-**`runRevivePass`** exactly as spec §3.2: `isAttachReady(hostId)` from
-`attach-gate.ts` first, then `useRebuildStore.getState().lockedBy !== null`
+**`runRevivePass`** exactly as spec §3.2. The gate query is the existing
+`canAttachTerminal(hostId)` (`attach-gate.ts:16`) — spec §3.2 calls it that
+too; do **not** add or rename a gate function. Check it first, then `useRebuildStore.getState().lockedBy !== null`
 → return, then decide over `useSessionStore.getState().sessions[hostId] ?? []`,
 gate each, write with `repointPaneToSession`.
 
@@ -150,11 +157,11 @@ useEffect(() => useRebuildStore.subscribe((s, prev) => {
   leaf tab whose pane is `tmux-restarted`, `useRebuildStore.setState({ operations: {}, lockedBy: null })`;
   `beforeEach` resets all four). Reuse the fixture shapes from `engine.test.ts` (`seedPane`, `paneContent`).
   - S1: pane revived — `sessionCode`, `tmuxInstance`, `terminated === undefined`, `cachedName`, `rebuild.sessionName`, `rebuild.tmuxInstance` restamped, `rebuild.agent` and `rebuild.cwd` kept.
-  - S16: `attachReady: false` → untouched.
+  - S16: `attachReady: false` (session store seeded with the matching session, lock free) → untouched.
   - S7: `lockedBy: 'rebuild:p9'` → untouched (even though the pane has no op).
   - S8: op `done` + `createdSession` on the pane's binding, lock free → untouched.
   - S9: op `done`, no `createdSession`, lock free → revived.
-  - S15: run twice → second run changes nothing (compare the tab store object identity before/after the second call: `toBe`).
+  - S15: first call → assert revived; capture `paneContent(...)` and its `.rebuild` references; second call → both references unchanged (`toBe`).
   - a pane with no `rebuild` record → revived, `rebuild` stays `undefined`.
 
   `engine.test.ts`, `describe('repointPaneToSession')`: seeded `tmux-restarted`
@@ -173,12 +180,18 @@ useEffect(() => useRebuildStore.subscribe((s, prev) => {
   event (check the exact envelope shape `connectHostEvents` parses in
   `lib/host-events.ts` and copy it).
   - S1: pane `tmux-restarted` @ `111:1000`, payload `dev` @ `222:2000` → revived.
-  - S1b: pane **live** @ `111:1000` (no `terminated`), same payload → revived in the same event (assert `terminated` undefined and `tmuxInstance === '222:2000'`).
+  - S1b (code reuse — the `$0` case): seed the pane **live**, no `terminated`, as `{ sessionCode:'old111', cachedName:'dev', tmuxInstance:'111:1000' }`; emit `[{ code:'old111', name:'dev', tmux_instance:'222:2000', mode:'terminal', ... }]`. The reconciler marks it `tmux-restarted` only because the code is present under a new generation (`reconcile.ts:88-101`; a missing code would be `session-closed` and never eligible). After the **same** event: `terminated` undefined, `tmuxInstance === '222:2000'`, `sessionCode === 'old111'`.
   - S2 / S3: `session-closed` / `host-removed` → untouched.
   - S6: `mode: 'stream'` pane → untouched.
-  - S7 + S11: two tabs X, Y on the same dead session; `useRebuildStore.setState({ lockedBy: 'rebuild:X' })`; emit payload → both untouched; then `useRebuildStore.setState({ lockedBy: null })` → Y revived; X (give it a `done` op with `createdSession` on its binding) untouched.
-  - S15: emit the same payload twice → same result, no throw.
-  - S16: close the socket (`onclose`) so the gate closes, then release the lock → untouched; reconnect + payload → revived.
+  - S4 as a sequence: payload with `tmux_instance: ''` → untouched; a second payload with `'222:2000'` → revived.
+  - S8 through the handler: op `done` + `createdSession` on the pane's dead binding (seed via `beginOperation` + `finishOperation`), lock free; emit matching payload → untouched.
+  - S9 through the release trigger: `const grant = useRebuildStore.getState().acquireOperationLock('rebuild:pX')`; emit matching payload → untouched; `beginOperation` + `finishOperation(pX, { report })` with **no** `createdSession`; `releaseOperationLock(grant)` → revived **without** emitting another payload.
+  - S7 + S11 with the real engine: tabs X, Y both `tmux-restarted` on `old111`@`111:1000`, name `dev`, records with an agent. Start `const run = rebuildPane('h1', 'tX', 'pX', plan, { createSession: async () => session({ code:'new1', name:'dev', tmux_instance:'222:2000' }), sendKeys: () => resume.promise })` where `resume = deferred()` (copy `deferred` from `engine.test.ts`). `await waitFor(() => expect(useRebuildStore.getState().lockedBy).not.toBeNull())`. Emit the payload `[new1]` (this is the daemon's create broadcast) → X and Y both still terminated. `resume.resolve(); await run` → X re-pointed **by the engine** (`report.repointed === true`, `sessionCode === 'new1'`); the lock release fires the subscription → Y revived onto `new1` with its record restamped. Also assert the pass did not touch X: X's `rebuild` reference is the one the engine wrote (capture it right after `await run`, run one more matching payload, `toBe`).
+  - S12 with the real batch, two `it`s, each one group of source `p1` + member `p2` on `old111` (use the `content()`/`seedPane` fixture from `batch.test.ts`):
+    (a) success — `runBatchRebuild({ createSession: ..., sendKeys: () => resume.promise })`; while pending emit the `[new1]` payload → both untouched; resolve → both on `new1`, `p2` via `repointMember` (`members[0].repointed === true`).
+    (b) resume failed — `sendKeys: async () => { throw new Error('boom') }`; `await runBatchRebuild(...)` → `p1` still terminated with an op `done` + `createdSession` (report on screen), `p2` still terminated **during** the batch; the batch's own lock release then fires the pass → `p2` revived onto `new1`, `p1` untouched. Assert `p1`'s op entry still describes its dead binding (`usePaneOperation` semantics: `operations.p1.binding.sessionCode === 'old111'`).
+  - S15: emit payload → assert revived; capture the pane content and `rebuild` references; emit the identical payload again → references unchanged (`toBe`). Value equality is not enough — the handler swallows exceptions, so "no throw" proves nothing.
+  - S16 with the preconditions that make the guard observable: `acquireOperationLock`; emit matching payload → session store holds `new1`, `attachReady` true, pane still terminated; `sockets[0].onclose?.()` → `attachReady` false; `releaseOperationLock` → pane **still** terminated (this is the assertion the guard exists for); `await waitFor(() => expect(sockets).toHaveLength(2))`, `sockets[1].onopen?.()` → still terminated; `sockets[1].emit(payload)` → revived.
 - [ ] **Step 2: Run the three files — red.**
 - [ ] **Step 3: Implement** the rename, the pass, the wiring, the subscription.
 - [ ] **Step 4: Run the three files green; then full `vitest run`, `lint`, `build`.**
@@ -191,6 +204,14 @@ useEffect(() => useRebuildStore.subscribe((s, prev) => {
 On the two-client setup: kill the tmux server on mlab, Rebuild one tab on
 client A, watch the same tab on client B come back on its own.
 
-## Review items carried in
+## Review items carried in (codex plan review `task-mu07mlre-w7q0zt`)
 
-(filled after codex plan review)
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | Blocker | `isAttachReady` does not exist; the gate query is `canAttachTerminal` | Fixed — Task 2 + spec §3.2 snippet |
+| 2 | Important | S1b fixture needs the old code present under a new generation, else it is `session-closed` | Fixed — S1b rewritten with `old111` |
+| 3 | Important | S11 replaced by a failure case; S8/S9/S12/S4 sequences missing | Fixed — S4, S8, S9, S11 (real engine, deferred resume), S12 (real batch, success + resume-failed) added |
+| 4 | Important | S16 lacked the preconditions that make the gate observable | Fixed — full sequence written out |
+| 5 | Minor | S15 value equality / "no throw" proves nothing | Fixed — reference identity via `toBe` after an asserted first revive |
+| 6 | Minor | `mode` guard looser than spec (`null` slipped through) | Fixed — `mode !== undefined && mode !== 'terminal'`, `null` test added; spec §3.1 wording aligned |
+| 7 | Minor | Interface members untyped; session literals missing required fields | Fixed — typed interfaces, typed `session()` factory mandated |

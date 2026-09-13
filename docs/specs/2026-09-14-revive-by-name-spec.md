@@ -95,7 +95,8 @@ Rule, for each candidate on `hostId`:
   (R1 finding 5): `snapshot/restore.ts:132` marks a pane `tmux-restarted` when
   its session lookup merely failed, so a same-generation live session is a
   legitimate recovery target, not a contradiction;
-- if `mode` is present on the payload it must be `'terminal'`;
+- if the payload carries a `mode` key at all (`mode !== undefined`, so `null`
+  counts as present) it must be `'terminal'`;
 - otherwise emit `{ tabId, paneId, binding, session }`.
 
 The caller supplies exactly the eligible panes: `kind === 'tmux-session'`,
@@ -108,7 +109,7 @@ One function, two triggers, always reading the same evidence:
 
 ```ts
 export function runRevivePass(hostId: string): void {
-  if (!isAttachReady(hostId)) return                        // no payload from this connection yet
+  if (!canAttachTerminal(hostId)) return                    // no payload from this connection yet (attach-gate.ts:16)
   if (useRebuildStore.getState().lockedBy !== null) return  // a rebuild owns the outcome
   const sessions = useSessionStore.getState().sessions[hostId] ?? []
   for (const d of decideRevive(hostId, sessions, collectCandidates(hostId))) {
