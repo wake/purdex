@@ -51,6 +51,27 @@ interface ElectronStreamCheckEvent {
   check?: ElectronRemoteVersionInfo
 }
 
+interface ElectronLocalDaemonStatus {
+  managed: 'none' | 'managed' | 'external'
+  reason?: string
+  binPath: string
+  installed: { version: string; hash: string; goos: string; goarch: string } | null
+  alive: { pid: number } | null
+  running: { version: string; hash: string; url: string } | null
+  config: { bind: string; port: number; hasToken: boolean } | null
+  target: { goos: 'darwin' | 'linux'; goarch: 'arm64' | 'amd64' }
+  tools: { tmux: string | null }
+}
+
+interface ElectronLocalDaemonResult {
+  url: string
+  token: string
+  hash: string
+  version: string
+  hostname: string
+  bindNote?: string
+}
+
 interface Window {
   electronAPI?: {
     tearOffTab: (tabJson: string) => Promise<void>
@@ -123,5 +144,12 @@ interface Window {
       token: string | undefined,
       onEvent: (ev: ElectronStreamCheckEvent) => void,
     ) => () => void
+
+    // Local daemon (Electron only; absent in the web build)
+    localDaemonStatus?: () => Promise<ElectronLocalDaemonStatus>
+    localDaemonInstall?: (daemonUrl: string, token?: string) => Promise<ElectronLocalDaemonResult>
+    localDaemonStart?: () => Promise<ElectronLocalDaemonResult>
+    localDaemonRestart?: () => Promise<ElectronLocalDaemonResult>
+    onLocalDaemonProgress?: (callback: (step: string) => void) => () => void
   }
 }

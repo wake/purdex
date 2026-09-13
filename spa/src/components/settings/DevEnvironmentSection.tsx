@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { DevBuildLogPanel } from './DevBuildLogPanel'
+import { LocalDaemonSection } from './LocalDaemonSection'
 
 type UpdateStatus = 'idle' | 'checking' | 'building' | 'up_to_date' | 'update_available' | 'error'
 
@@ -421,6 +422,8 @@ export function DevEnvironmentSection() {
           </button>
         </div>
       </div>
+
+      <LocalDaemonSection daemonBase={daemonBase} token={token} latestHash={daemonCheck?.latest_hash ?? null} refreshKey={daemonCheck} />
     </div>
   )
 }

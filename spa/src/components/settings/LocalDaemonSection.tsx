@@ -1,0 +1,133 @@
+import { useCallback, useEffect, useState } from 'react'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { useHostStore } from '../../stores/useHostStore'
+
+interface Props {
+  daemonBase: string
+  token?: string
+  latestHash: string | null
+  /** The parent's latest daemonCheck object; a new reference re-queries status. */
+  refreshKey: unknown
+}
+
+type Busy = null | 'install' | 'start' | 'restart'
+
+const btnSecondary = 'px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default'
+const btnPrimary = 'px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse hover:bg-accent-hover disabled:opacity-50 cursor-pointer disabled:cursor-default'
+
+// Settings → Development → "Local daemon": install / update / start /
+// restart the daemon on the machine the app runs on (spec 2026-09-14 §3.4).
+export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }: Props) {
+  const t = useI18nStore((s) => s.t)
+  const registerLocalHost = useHostStore((s) => s.registerLocalHost)
+  const api = window.electronAPI
+  const [status, setStatus] = useState<ElectronLocalDaemonStatus | null>(null)
+  const [busy, setBusy] = useState<Busy>(null)
+  const [step, setStep] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    if (!api?.localDaemonStatus) return
+    try {
+      setStatus(await api.localDaemonStatus())
+    } catch (err) {
+      setError(String(err))
+    }
+  }, [api])
+
+  useEffect(() => { void refresh() }, [refresh, refreshKey])
+  useEffect(() => api?.onLocalDaemonProgress?.((s) => setStep(s)), [api])
+
+  const run = useCallback(async (kind: Exclude<Busy, null>, op: () => Promise<ElectronLocalDaemonResult> | undefined) => {
+    setBusy(kind); setError(null); setNotice(null); setStep(null)
+    try {
+      const res = await op()
+      if (res) {
+        registerLocalHost({ url: res.url, token: res.token, hostname: res.hostname })
+        setNotice([t('settings.dev.local.registered', { name: res.hostname }), res.bindNote].filter(Boolean).join(' — '))
+      }
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setBusy(null); setStep(null)
+      void refresh()
+    }
+  }, [refresh, registerLocalHost, t])
+
+  if (!api?.localDaemonStatus) return null
+
+  const installed = status?.installed ?? null
+  const running = status?.running ?? null
+  const alive = status?.alive ?? null
+  const updateAvailable = !!installed && !!latestHash && installed.hash !== latestHash
+  const restartPending = !!installed && !!running && running.hash !== installed.hash
+  // Spec §3.4: Update, else Restart — never both.
+  const showRestart = !!alive && !updateAvailable && (!running || restartPending)
+  const disabled = busy !== null
+  const externalUrl = running?.url ?? (status?.config ? `http://${status.config.bind}:${status.config.port}` : '')
+
+  return (
+    <div className="pt-6 border-t border-border-default">
+      <h3 className="text-sm font-semibold text-text-primary mb-3">{t('settings.dev.local.heading')}</h3>
+
+      {status && (
+        <div className="space-y-1 mb-3 text-xs text-text-secondary">
+          <div className="flex items-center justify-between">
+            <span>{t('settings.dev.local.target')}</span>
+            <span className="font-mono text-text-primary">{status.target.goos}/{status.target.goarch}</span>
+          </div>
+          {status.managed === 'none' && <div>{t('settings.dev.local.none')}</div>}
+          {status.managed === 'external' && (
+            <div className="text-status-warning">
+              {t('settings.dev.local.external', { url: externalUrl })}
+              {status.reason && <div>{t('settings.dev.local.external_reason', { reason: status.reason })}</div>}
+            </div>
+          )}
+          {status.managed === 'managed' && installed && (
+            <>
+              <div className="flex items-center justify-between">
+                <span>{t('settings.dev.local.installed')}</span>
+                <span className="font-mono text-text-primary">{installed.version} ({installed.hash})</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>{running ? t('settings.dev.local.running') : t('settings.dev.local.stopped')}</span>
+                <span className="font-mono">{running ? `${running.version} (${running.hash}) ${running.url}` : '-'}</span>
+              </div>
+              {alive && !running && <div className="text-status-warning">{t('settings.dev.local.alive_unhealthy', { pid: alive.pid })}</div>}
+              {restartPending && <div className="text-status-warning">{t('settings.dev.local.restart_pending', { hash: installed.hash })}</div>}
+              {updateAvailable
+                ? <div className="text-status-warning">{t('settings.dev.local.update_available')}</div>
+                : (running && !restartPending && <div>{t('settings.dev.local.up_to_date')}</div>)}
+            </>
+          )}
+          {status.tools.tmux === null && <div className="text-status-warning">{t('settings.dev.local.tmux_missing')}</div>}
+        </div>
+      )}
+
+      {error && <div className="text-xs text-status-error mb-3 whitespace-pre-wrap">{error}</div>}
+      {notice && <div className="text-xs text-text-secondary mb-3">{notice}</div>}
+      {busy && <div className="text-xs text-accent font-mono mb-3">{step ? t(`settings.dev.local.step.${step}`) : '…'}</div>}
+
+      <div className="flex gap-2">
+        <button onClick={() => void refresh()} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.refresh')}</button>
+        {status?.managed === 'none' && (
+          <button onClick={() => void run('install', () => api.localDaemonInstall?.(daemonBase, token))} disabled={disabled} className={btnPrimary}>{t('settings.dev.local.btn.install')}</button>
+        )}
+        {status?.managed === 'managed' && (
+          <>
+            {!alive && (
+              <button onClick={() => void run('start', () => api.localDaemonStart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.start')}</button>
+            )}
+            {showRestart && (
+              <button onClick={() => void run('restart', () => api.localDaemonRestart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.restart')}</button>
+            )}
+            {updateAvailable && (
+              <button onClick={() => void run('install', () => api.localDaemonInstall?.(daemonBase, token))} disabled={disabled} className={btnPrimary}>{t('settings.dev.local.btn.update')}</button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
