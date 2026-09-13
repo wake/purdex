@@ -132,8 +132,16 @@ func TestSpawn_HappyPath(t *testing.T) {
 		t.Errorf("Spawns = %d, want 1", f.Spawns())
 	}
 
-	writeToSock(t, h.Sock(), `{"type":"user","msg_id":"1"}`)
-	writeToSock(t, h.Sock(), `{"type":"user","msg_id":"2"}`)
+	// Both lines on ONE connection: the peer reads each accepted connection
+	// on its own goroutine, so only same-connection order is a contract.
+	c, err := net.Dial("unix", h.Sock())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if _, err := c.Write([]byte(`{"type":"user","msg_id":"1"}` + "\n" + `{"type":"user","msg_id":"2"}` + "\n")); err != nil {
+		t.Fatalf("write frames: %v", err)
+	}
+	c.Close()
 	if got := recvFrame(t, h, 2*time.Second); got != `{"type":"user","msg_id":"1"}` {
 		t.Errorf("frame 1 = %q", got)
 	}
