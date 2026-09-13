@@ -175,6 +175,17 @@ func TestResolve_CCTier_AmbiguousWhenTwoRecordsShareName(t *testing.T) {
 	}
 }
 
+func TestResolve_CCPrefixEmptyPeerName_NotFound(t *testing.T) {
+	records := []PeerRecord{
+		{SessionName: "alpha", SessionCode: "a1"},
+		{SessionName: "beta", SessionCode: "b1", Agent: &AgentInfo{Type: "cc", PeerName: ""}},
+	}
+	_, err := Resolve(records, "cc:")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 // --- Resolve: not found ----------------------------------------------------
 
 func TestResolve_UnknownSessionReturnsErrNotFound(t *testing.T) {

@@ -44,7 +44,7 @@ func Resolve(records []PeerRecord, session string) (PeerRecord, error) {
 	}
 
 	peerName, ok := strings.CutPrefix(session, "cc:")
-	if !ok {
+	if !ok || peerName == "" {
 		return PeerRecord{}, ErrNotFound
 	}
 	return resolveTier(records, session, func(r PeerRecord) bool {
