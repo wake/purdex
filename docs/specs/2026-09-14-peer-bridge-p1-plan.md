@@ -2,17 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+Plan v2 (after codex plan review `task-mu00ormj-62khmb`: 1 Blocker, 6 Majors,
+5 Minors — all applied).
+
 **Goal:** `pdx peers` and `GET /api/peers` list every agent session on the
 local host as a peer record (spec §4.2) with a resolvable address (spec §4.1),
 joining Purdex's tmux + agent-owner knowledge with Claude Code's own session
-registry. Read-only; nothing is written to `~/.claude`.
+registry. Read-only; nothing is written to `~/.claude`. The `/api/peers`
+prefix is locked down (spec §4.6) **before** any route exists under it.
 
 **Architecture:** A new leaf package `internal/peers` holds everything pure:
 registry parsing + liveness, the join that produces `PeerRecord`s, and
 address resolution. A new daemon module `internal/module/peers` wires it to
 the session provider and to an owner-resolver service the agent module
-starts exporting, and serves the endpoint under a 2 s budget. The CLI is a
-thin client of the endpoint.
+starts exporting, and serves the endpoint under a 2 s soft budget. The CLI
+is a thin client of the endpoint.
 
 **Tech Stack:** Go 1.26 (net/http, `encoding/json`, `os/exec` via
 `internal/agent.ReadProcessInfo`) · no SPA changes.
@@ -32,17 +36,24 @@ thin client of the endpoint.
 - **Verification:** `go build ./... && go vet ./... && go test ./...` from the
   worktree root. All three must pass before every commit.
 - **Worktree path:** every command runs from
-  `/Users/wake/Workspace/wake/purdex/.claude/worktrees/worktree-peer-bridge`;
-  every Edit/Write uses that absolute prefix.
+  `/Users/wake/Workspace/wake/purdex/.claude/worktrees/worktree-peer-bridge`
+  (prefix every Bash call with `cd <that path> &&`); every Edit/Write uses
+  that absolute prefix.
 - **Never touch `~/.claude/sessions` in tests.** The registry directory is a
   parameter everywhere; tests use `t.TempDir()`.
 - **No `ps` forks in unit tests.** Liveness and start-time lookups are
   injected function fields with defaults; tests substitute fakes.
 - **Existing tests are not edited.** If a task cannot pass without changing an
   existing test, stop and report.
-- **Go test packages:** new packages use internal tests (`package peers`,
-  `package peers` under `internal/module/peers`). `internal/module/agent`
-  tests are internal (`package agent`).
+- **Package boundaries:** `internal/peers` imports only stdlib and
+  `internal/agent` (for `ReadProcessInfo`); it must never import
+  `internal/module/*`. `internal/module/peers` may import
+  `internal/module/session` and `internal/module/agent` (verified acyclic:
+  `module/peers → module/agent → module/session`).
+- **Go test packages:** new packages use internal tests (`package peers` in
+  both `internal/peers` and `internal/module/peers`; `package middleware`;
+  `package main` in `cmd/pdx`). `internal/module/agent` tests are internal
+  (`package agent`).
 
 ---
 
@@ -52,12 +63,13 @@ thin client of the endpoint.
 |---|---|
 | `internal/peers/registry.go` *(new)* | Parse `~/.claude/sessions/<pid>.json`, liveness (`Entry`, `ReadRegistry`) |
 | `internal/peers/record.go` *(new)* | `PeerRecord`, `AgentInfo`, `Build(...)` — the pure join |
-| `internal/peers/address.go` *(new)* | `Resolve(records, addr)` — spec §4.1 human-address resolution |
+| `internal/peers/address.go` *(new)* | `Resolve`, `SplitAddress`, `HostMatches` — spec §4.1 |
+| `internal/module/agent/pane_owner.go` *(modify)* | `PaneOwner.Status` |
 | `internal/module/agent/owner_resolver.go` *(new)* | `OwnerResolver` interface + registration under `agent.owner-resolver` |
+| `internal/config/config.go` *(modify)* | `PeersConfig{Alias}` + `(Config).PeerAlias()` (note: `WriteFile` lives in `internal/config/hostid.go:73`) |
+| `internal/middleware/peer_route_auth.go` *(new)* | `PeerRouteAuth` — `/api/peers` never open, no tickets |
 | `internal/module/peers/module.go` *(new)* | Module wiring, `GET /api/peers`, soft budget + envelope |
-| `internal/middleware/peer_route_auth.go` *(new)* | `PeerRouteAuth` — /api/peers never open, no tickets |
-| `internal/config/config.go` *(modify)* | `PeersConfig{Alias}` + `(Config).PeerAlias()` |
-| `cmd/pdx/main.go` *(modify)* | register module; `peers` subcommand |
+| `cmd/pdx/main.go` *(modify)* | guard wiring; register module; `peers` subcommand |
 | `cmd/pdx/peers.go` *(new)* | `pdx peers [--json]` client + table formatter |
 
 ---
@@ -68,11 +80,29 @@ thin client of the endpoint.
 
 **Files:** create `internal/peers/registry.go`, `internal/peers/registry_test.go`.
 
-**Interfaces (produce):**
+**Wire struct (private) — exactly these JSON tags; unknown fields ignored:**
+```go
+type registryFile struct {
+    PID        int    `json:"pid"`
+    SessionID  string `json:"sessionId"`
+    Cwd        string `json:"cwd"`
+    ProcStart  string `json:"procStart"`
+    Version    string `json:"version"`
+    Tmux       string `json:"tmux"`
+    Inbox      string `json:"messagingSocketPath"`
+    Name       string `json:"name"`
+    NameSource string `json:"nameSource"`
+    Status     string `json:"status"`
+}
+```
+Required (non-zero) for an entry to be accepted: `pid`, `sessionId`,
+`procStart`, `messagingSocketPath`. Everything else may be empty. A field of
+the wrong JSON type is a decode error ⇒ skipped.
+
+**Public API:**
 ```go
 package peers
 
-// Entry is one live Claude Code session as its own registry describes it.
 type Entry struct {
     PID        int
     SessionID  string
@@ -85,44 +115,60 @@ type Entry struct {
     Version    string
     Status     string // "idle" | "busy" | ""
 }
-
-// TmuxSessionName returns the "<session>" part of Tmux, or "".
-func (e Entry) TmuxSessionName() string
-// TmuxPaneID returns the "%<pane>" part of Tmux, or "".
-func (e Entry) TmuxPaneID() string
+func (e Entry) TmuxSessionName() string // text before the first ':'; "" if no ':'
+func (e Entry) TmuxPaneID() string      // "%…" after the last '.'; "" if absent
 
 type Liveness struct {
-    Stat      func(path string) error            // default os.Stat wrapper
-    PidAlive  func(pid int) bool                 // default syscall.Kill(pid, 0) == nil
-    StartTime func(pid int) (time.Time, error)   // default agent.ReadProcessInfo(pid).StartTime
+    Stat      func(path string) error
+    PidAlive  func(pid int) bool
+    StartTime func(pid int) (time.Time, error)
 }
+// DefaultLiveness: os.Stat; syscall.Kill(pid, 0) == nil; agent.ReadProcessInfo(pid).StartTime.
 func DefaultLiveness() Liveness
 
+// ProcStartLayout is Claude Code's registry format (UTC ctime).
+const ProcStartLayout = "Mon Jan _2 15:04:05 2006"
+// ParseProcStart parses a registry procStart string as UTC.
+func ParseProcStart(s string) (time.Time, error)
+
 // ReadRegistry parses every "<pid>.json" in dir and returns the live ones.
-// Unreadable / malformed / dead entries are skipped and counted in skipped.
+// skipped counts every file considered and rejected (name mismatch, decode
+// error, missing required field, bad procStart, dead). err is non-nil only
+// when dir cannot be listed.
 func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err error)
 ```
 
-**Rules:**
-- File name must match `^(\d+)\.json$`; the `pid` field must equal the name.
-- Live iff `Stat(Inbox) == nil` && `PidAlive(pid)` && `StartTime(pid)`
-  equals `ProcStart` parsed with layout `"Mon Jan _2 15:04:05 2006"` in UTC
-  (`time.ParseInLocation(..., time.UTC)`), compared with `Equal` after
-  truncating both to seconds. A `StartTime` error ⇒ not live.
-- `err` is non-nil only when `dir` cannot be listed.
+**Liveness rule:** live iff `Stat(Inbox)==nil` && `PidAlive(pid)` &&
+`StartTime(pid)` returns no error && `StartTime(pid).Truncate(time.Second)
+.Equal(ParseProcStart(ProcStart).Truncate(time.Second))`. `Equal` compares
+instants, so a `time.Local` value from `ps` and the UTC registry string
+match when they denote the same moment.
+
+**Fixture** (embed verbatim in the test as `const fixture76973`; this is the
+real shape from mlab):
+```json
+{"pid":76973,"sessionId":"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c","cwd":"/Users/wake/Workspace/wake/purdex","startedAt":1789314156000,"procStart":"Sun Sep 13 15:22:36 2026","version":"2.1.270","peerProtocol":1,"peerFeatures":["notify_idle","reply_across_default_dirs","artifact_yield"],"kind":"interactive","entrypoint":"cli","pidDomain":"darwin","tmux":"mt1:@10.%10","messagingSocketPath":"/tmp/cc-socks/76973.sock","name":"purdex-47","nameSource":"derived","nameSince":1789314156000,"updatedAt":1789314156100,"status":"busy","statusUpdatedAt":1789314156100}
+```
 
 **Tests (write first):**
-- parses a fixture identical to the spec §3.1 shape (copy the real field set:
-  `pid, sessionId, cwd, startedAt, procStart, version, peerProtocol,
-  peerFeatures, kind, entrypoint, pidDomain, tmux, messagingSocketPath, name,
-  nameSource, nameSince, updatedAt, status, statusUpdatedAt`) → one Entry with
-  every field mapped, `TmuxSessionName()=="mt1"`, `TmuxPaneID()=="%10"`.
-- dead pid ⇒ skipped; missing socket ⇒ skipped; start-time mismatch by 1 s ⇒
-  skipped; equal ⇒ live.
-- `procStart` with local-vs-UTC difference: the fixture `"Sun Sep 13 15:22:36
-  2026"` matches a fake `StartTime` returning `2026-09-13T15:22:36Z`.
-- malformed JSON, pid mismatch, `.key` files and `.json.tmp` ⇒ skipped, no
-  error; missing dir ⇒ `err != nil`.
+- fixture in `76973.json`, fake liveness all-true with
+  `StartTime → 2026-09-13T15:22:36Z` ⇒ one Entry: PID 76973, SessionID,
+  Cwd, Tmux `mt1:@10.%10`, Inbox, ProcStart raw string, Version `2.1.270`,
+  Name `purdex-47`, NameSource `derived`, Status `busy`;
+  `TmuxSessionName()=="mt1"`, `TmuxPaneID()=="%10"`.
+- same instant, different zone: `StartTime` returning
+  `time.Date(2026,9,13,23,22,36,0, time.FixedZone("CST", 8*3600))` ⇒ live.
+- 1 s off ⇒ skipped=1; `PidAlive=false` ⇒ skipped; `Stat` error ⇒ skipped;
+  `StartTime` error ⇒ skipped.
+- missing `sessionId` ⇒ skipped; `pid` as string (`"pid":"76973"`) ⇒
+  skipped; `procStart: "yesterday"` ⇒ skipped; file named `76973.json`
+  containing `"pid":76974` ⇒ skipped; unreadable file (mode 000, skip on
+  root) ⇒ skipped; malformed JSON ⇒ skipped.
+- `.key`, `.json.tmp.abc`, `notes.txt` in dir ⇒ ignored, **not** counted in
+  skipped (they never matched the name pattern).
+- missing dir ⇒ `err != nil`, entries nil.
+- `Entry{Tmux:""}` ⇒ both accessors `""`; `Tmux:"a:b"` (no pane) ⇒
+  session `a`, pane `""`.
 
 - [ ] tests written and failing
 - [ ] implementation, all green
@@ -132,75 +178,89 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 
 **Files:** create `internal/peers/record.go`, `internal/peers/record_test.go`.
 
-**Interfaces (consume):** `Entry` (Task 1). **Produce:**
+**Produce:**
 ```go
-type SessionSummary struct { // what the module extracts from session.SessionInfo
-    Code, Name, Cwd, TmuxInstance string
-}
-type Owner struct {          // what the module extracts from agent.PaneOwner
+type SessionSummary struct { Code, Name, Cwd, TmuxInstance string }
+type Owner struct {
     AgentType, SessionID, Cwd, TmuxPaneID string
     LastSeenAt int64
-    Status string            // "" in P1 (Purdex agent status is not surfaced yet)
+    Status     string // Purdex agent status of the owning frame (Task 4)
 }
 type AgentInfo struct {
-    Type      string `json:"type"`       // cc | codex | opencode | proxy
+    Type      string `json:"type"`                 // cc | codex | opencode | proxy
     SessionID string `json:"session_id,omitempty"`
     PeerName  string `json:"peer_name,omitempty"`
     PID       int    `json:"pid,omitempty"`
     ProcStart string `json:"proc_start,omitempty"`
     Inbox     string `json:"inbox,omitempty"`
     Status    string `json:"status,omitempty"`
-    Version   string `json:"version,omitempty"`
+    Version   string `json:"version"`              // ALWAYS present; "" when unknown (spec §4.2)
 }
 type PeerRecord struct {
     Host         string     `json:"host"`
     HostID       string     `json:"host_id"`
     Address      string     `json:"address"`
-    SessionCode  string     `json:"session_code"`
-    SessionName  string     `json:"session_name"`
-    TmuxInstance string     `json:"tmux_instance"`
+    SessionCode  string     `json:"session_code"`   // always present
+    SessionName  string     `json:"session_name"`   // always present
+    TmuxInstance string     `json:"tmux_instance"`  // always present
     Cwd          string     `json:"cwd,omitempty"`
-    Agent        *AgentInfo `json:"agent"`
+    Agent        *AgentInfo `json:"agent"`          // always present, null when none
     Deliverable  bool       `json:"deliverable"`
-    Reason       string     `json:"reason"`   // "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
+    Reason       string     `json:"reason"`         // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
 }
 type BuildInput struct {
     HostID, Alias string
     Sessions      []SessionSummary
-    Owners        map[string]Owner   // by session code; absent ⇒ not resolved
-    Unresolved    map[string]bool    // codes whose owner lookup hit the deadline
+    Owners        map[string]Owner // by session code; absent ⇒ no owner
+    Unresolved    map[string]bool  // codes whose owner lookup did not run
     Entries       []Entry
-    ProxyPIDs     map[int]bool       // empty in P1; kept so P3 needs no signature change
+    ProxyPIDs     map[int]bool     // empty in P1; kept so P3 needs no signature change
 }
 func Build(in BuildInput) []PeerRecord
 ```
 
 **Rules (spec §4.2):**
-1. One record per session, sorted by `SessionName`. `Address =
-   Alias + "/" + SessionName`.
-2. Owner absent and code in `Unresolved` ⇒ `Agent: nil, Reason: ""` (the
-   envelope's `partial` flag says why). Owner absent otherwise ⇒ `Agent: nil,
-   Reason: "no_agent"`.
-3. Owner type `codex` / `opencode` ⇒ `Agent{Type, SessionID, Status}`,
-   `Deliverable=false, Reason="not_cc"`.
+1. One record per session, sorted by `SessionName` (ties by `Code`).
+   `Address = Alias + "/" + SessionName`; `Host = Alias`.
+2. Code in `Unresolved` ⇒ `Agent: nil, Reason: ""`. Owner absent and not
+   unresolved ⇒ `Agent: nil, Reason: "no_agent"`.
+3. Owner type not `cc` ⇒ `Agent{Type: owner.AgentType, SessionID, Status:
+   owner.Status, Version: ""}`, `Deliverable=false, Reason="not_cc"`.
 4. Owner type `cc`: candidates = live entries with `SessionID ==
-   owner.SessionID`. 0 ⇒ `Agent{Type:"cc", SessionID}` only,
-   `Reason="inbox_dead"`. 1 ⇒ full `AgentInfo`, `Deliverable=true`. >1 ⇒
-   the entry whose `TmuxPaneID()` equals `owner.TmuxPaneID` is used **iff
-   it is the only such entry**; otherwise `Reason="ambiguous"`, `Agent`
-   filled from the owner only (spec §4.2, R2 #9).
-5. Entries not consumed by rule 4 and whose `TmuxSessionName()` is not any
-   listed session ⇒ extra records: `SessionCode=""`, `SessionName=""`,
-   `Address = Alias + "/cc:" + Name`, `Cwd=entry.Cwd`, full `AgentInfo`,
-   `Deliverable=true`. Sorted after the tmux rows by `PeerName`.
-6. Any entry whose PID is in `ProxyPIDs` ⇒ `Agent.Type="proxy"`,
-   `Deliverable=false, Reason="proxy"`, never produces a `cc:` row.
-7. `AgentInfo.Status` for cc comes from the entry; for others from the owner.
+   owner.SessionID` **and** `PID ∉ ProxyPIDs`. 0 ⇒ `Agent{Type:"cc",
+   SessionID, Status: owner.Status}`, `Reason="inbox_dead"`. 1 ⇒ full
+   `AgentInfo` from the entry (Status from the entry), `Deliverable=true`.
+   >1 ⇒ those whose `TmuxPaneID()==owner.TmuxPaneID`; exactly one ⇒ use it;
+   zero or several ⇒ `Reason="ambiguous"`, `Agent{Type:"cc", SessionID,
+   Status: owner.Status}`.
+5. **Outside-tmux rows:** every live entry whose `TmuxSessionName()` is not
+   the `Name` of any session in `Sessions` gets a record — regardless of
+   whether rule 4 also used it: `SessionCode=""`, `SessionName=""`,
+   `TmuxInstance=""`, `Address = Alias + "/cc:" + Name`, `Cwd=entry.Cwd`,
+   full `AgentInfo`, `Deliverable=true`. Entries in `ProxyPIDs` get the same
+   row with `Agent.Type="proxy"`, `Deliverable=false, Reason="proxy"`.
+   Sorted after the tmux rows by `PeerName` (ties by PID).
+6. An entry never produces a `cc:` row by matching a pane without a
+   `sessionId` match, and a session never gets an agent from an entry whose
+   `SessionID` differs from its owner's (no pane fallback).
 
-**Tests:** one table per rule above, plus a golden test that reproduces the
-mlab state in the spec (`mt1` cc live; `aigora3` shell only; an outside-tmux
-cc entry; a resumed session with two entries where the pane tiebreak picks
-one; a two-entry case with no pane match ⇒ ambiguous).
+**Tests:** one case per rule, plus:
+- resumed session: two live entries, same `SessionID`, panes `%10` and
+  `%11`, owner pane `%10` ⇒ `%10` chosen, deliverable.
+- two live entries same `SessionID`, **both** pane `%10` ⇒ `ambiguous`.
+- no pane match ⇒ `ambiguous`.
+- entry with matching pane but different `SessionID` ⇒ `inbox_dead` for the
+  session (rule 6), and that entry gets its own `cc:` row only if its
+  `TmuxSessionName()` is not a listed session.
+- entry with `Tmux:""` that rule 4 used ⇒ also appears as a `cc:` row.
+- JSON assertions (`json.Marshal` then key inspection): a `not_cc` row has
+  `"version":""` present; a shell row has `"agent":null`, `"reason":"no_agent"`;
+  an unresolved row has `"agent":null`, `"reason":""`; every record has
+  `session_code`, `session_name`, `tmux_instance`, `reason` keys.
+- golden reproduction of the spec's mlab state (`mt1` cc live; `aigora3`
+  shell; one outside-tmux cc entry; one codex session with `Status:"busy"`).
+- `Build` with no sessions and no entries ⇒ `[]PeerRecord{}` (non-nil,
+  empty — marshals to `[]`).
 
 - [ ] tests written and failing
 - [ ] implementation, all green
@@ -213,26 +273,33 @@ one; a two-entry case with no pane match ⇒ ambiguous).
 **Produce:**
 ```go
 var ErrNotFound = errors.New("peer not found")
-type AmbiguousError struct{ Candidates []PeerRecord }
+type AmbiguousError struct{ Session string; Candidates []PeerRecord }
 func (e *AmbiguousError) Error() string
 
-// Resolve implements spec §4.1 for ONE host's records. host is the part
-// before "/", already matched by the caller; session is the part after.
+// Resolve implements spec §4.1 for ONE host's records; host has already
+// been matched by the caller. Tiers, in order: tmux session name; session
+// code; "cc:<peer_name>". The first tier with ≥1 match decides: exactly one
+// ⇒ that record; several ⇒ *AmbiguousError (never falls through to a lower
+// tier). No tier matches ⇒ ErrNotFound. Empty session ⇒ ErrNotFound.
 func Resolve(records []PeerRecord, session string) (PeerRecord, error)
-// SplitAddress returns host, session for "<host>/<session>"; ok=false when
-// there is no "/" or either side is empty.
+// SplitAddress: "<host>/<session>" → host, session, ok; ok=false when there
+// is no '/', either side is empty, or session contains another '/'.
 func SplitAddress(addr string) (host, session string, ok bool)
-// HostMatches reports whether want equals alias or hostID, case-insensitively.
+// HostMatches: want equals alias or hostID, case-insensitively (strings.EqualFold).
 func HostMatches(want, alias, hostID string) bool
 ```
+Matching of session name / code / peer name is exact and case-sensitive.
+`cc:` matches any record whose `Agent != nil && Agent.PeerName == name &&
+Agent.Type != "proxy"` — including cc sessions inside tmux.
 
-**Rules:** match order tmux name → code → `cc:<peer_name>`; a name that
-matches more than one record at the same tier ⇒ `AmbiguousError` with all
-candidates; a `cc:` form never matches proxy rows; matching is exact and
-case-sensitive for session/code/peer name.
-
-**Tests:** each tier, ambiguity at each tier, `cc:` skipping proxy rows,
-`SplitAddress` edge cases, `HostMatches` case-insensitivity.
+**Tests:** each tier resolves; name tier beats code tier when one record's
+name equals another record's code; two records with the same name ⇒
+`AmbiguousError` with both, and a third record whose *code* equals that
+name is **not** consulted; `cc:` resolves a tmux-hosted cc session; `cc:`
+skips proxy rows; `cc:` on a name two records share ⇒ ambiguous; unknown ⇒
+`ErrNotFound`; `""` ⇒ `ErrNotFound`; `SplitAddress` cases (`a/b` ok,
+`a/`, `/b`, `ab`, `a/b/c` not ok); `HostMatches("Mini-Lab","mini-lab",
+"mini-lab:278cbm")` and `("MINI-LAB:278CBM", …)` true, `("mini", …)` false.
 
 - [ ] tests written and failing
 - [ ] implementation, all green
@@ -240,174 +307,245 @@ case-sensitive for session/code/peer name.
 
 # Phase B — Daemon wiring
 
-### Task 4: Agent module exports an owner resolver
+### Task 4: `PaneOwner.Status` and the owner-resolver service
 
-**Files:** create `internal/module/agent/owner_resolver.go`,
-`internal/module/agent/owner_resolver_test.go`; modify
-`internal/module/agent/module.go` (`Init`, next to the
-`c.Registry.Register("agent.module", m)` line, ~215).
+**Files:** modify `internal/module/agent/pane_owner.go` (struct at line 18;
+construction at line 149) and `internal/module/agent/module.go` (`Init`,
+immediately after `c.Registry.Register("agent.module", m)` at ~line 215);
+create `internal/module/agent/owner_resolver.go`,
+`internal/module/agent/owner_resolver_test.go`.
 
 **Produce:**
 ```go
-// OwnerResolverKey is the service registry key the peers module looks up.
-const OwnerResolverKey = "agent.owner-resolver"
+// pane_owner.go: add to PaneOwner
+Status string // string(frame.Status) — the owning frame's Purdex agent status
 
+// owner_resolver.go
+const OwnerResolverKey = "agent.owner-resolver"
 type OwnerResolver interface {
     ResolveSessionOwner(ctx context.Context, code string) (PaneOwner, bool)
 }
+func (m *Module) ResolveSessionOwner(ctx context.Context, code string) (PaneOwner, bool) {
+    return m.resolveSessionOwner(ctx, code)
+}
 ```
-`(*Module).ResolveSessionOwner` is a one-line exported wrapper around the
-existing `resolveSessionOwner` (`provenance_handler.go:93`); the module
-registers `OwnerResolver(m)` under `OwnerResolverKey` in `Init`.
+`Init` registers `c.Registry.Register(OwnerResolverKey, OwnerResolver(m))`
+right after `"agent.module"`. It sits **after** the session-provider check,
+so with no session provider it is not registered (same as the other
+services) — the peers module hard-asserts it instead.
 
-**Tests:** after `Init` on a module built the way the existing
-`provenance_handler_test.go` builds one, `c.Registry.Get(OwnerResolverKey)`
-returns a value asserting to `OwnerResolver`, and calling it on an unknown
-code returns `found=false` (delegation, no behaviour change).
+**Tests (`package agent`, reuse existing helpers — read
+`handler_test.go:67` `newTestModule` and `provenance_handler_test.go:27`
+`newProvenanceQueryModule`, `codeOf`, `attachPane` before writing):**
+- service registration: build `c := core.New(core.CoreDeps{Config: &cfg,
+  Tmux: fake, Registry: core.NewServiceRegistry()})` (mirror an existing
+  test that constructs a Core in this package; if none does, construct
+  exactly as `cmd/pdx/main.go` does minus the stores), register a
+  `fakeFastSessionProvider` under `session.RegistryKey`, call `m.Init(c)`,
+  assert `c.Registry.Get(OwnerResolverKey)` yields an `OwnerResolver`.
+- delegation, unknown code ⇒ `found=false`.
+- delegation, known owner: replicate the smallest existing
+  `provenance_handler_test.go` success case (a pane attached to a session
+  with a verified root frame) through `ResolveSessionOwner` and assert
+  `found=true`, `AgentType`, `SessionID`, and `Status` equal to the frame's
+  status string.
 
 - [ ] tests written and failing
 - [ ] implementation, all green
-- [ ] commit `feat(agent): expose session owner resolver as a service`
+- [ ] commit `feat(agent): expose session owner resolver with frame status`
 
 ### Task 5: `peers.alias` config
 
-**Files:** modify `internal/config/config.go` (+ its test file).
+**Files:** modify `internal/config/config.go` (+ `config_test.go`).
 
 **Produce:**
 ```go
 type PeersConfig struct {
     Alias string `toml:"alias" json:"alias"`
 }
-// on Config:  Peers PeersConfig `toml:"peers" json:"peers"`
+// Config gains: Peers PeersConfig `toml:"peers" json:"peers"`
 // PeerAlias returns Peers.Alias, or HostID up to the first ':' when unset.
 func (c Config) PeerAlias() string
 ```
-**Tests:** unset ⇒ `"mini-lab"` from `"mini-lab:278cbm"`; set ⇒ as set;
-host id without `:` ⇒ whole id; round-trips through `WriteFile`/`Load`.
+**Tests:** unset + `HostID "mini-lab:278cbm"` ⇒ `"mini-lab"`; set ⇒ as set;
+host id without `:` ⇒ whole id; empty host id ⇒ `""`; round-trips through
+`WriteFile` (`internal/config/hostid.go:73`) then `Load`.
 
 - [ ] tests written and failing
 - [ ] implementation, all green
 - [ ] commit `feat(config): peers.alias with host_id-derived default`
 
-### Task 6: `peers` module and `GET /api/peers`
+### Task 6: `PeerRouteAuth` — `/api/peers` never open (before any route exists)
+
+**Files:** create `internal/middleware/peer_route_auth.go`,
+`internal/middleware/peer_route_auth_test.go`; modify `cmd/pdx/main.go`
+(middleware chain, ~lines 195-205).
+
+**Spec:** §4.6. On `/api/peers` and every sub-path: a non-empty admin token
+must be presented as a Bearer header (constant-time compare, prefix
+case-insensitive, as `TokenAuth`), `?ticket=` is never accepted and the
+ticket validator is never consulted, and an **empty** configured admin token
+yields 401. Other paths pass to `next` unchanged.
+
+**Produce:**
+```go
+// PeerRouteAuth guards prefix (and prefix + "/…") — see spec §4.6.
+func PeerRouteAuth(prefix string, tokenFn func() string) func(http.Handler) http.Handler
+```
+Prefix match: `path == prefix || strings.HasPrefix(path, prefix+"/")`.
+
+**Wiring in main.go:**
+```go
+middleware.PairingGuard(...)(
+    middleware.PeerRouteAuth("/api/peers", tokenFn)(
+        middleware.TokenAuth(tokenFn, c.Tickets)(mux)))
+```
+where `tokenFn` is the existing closure hoisted into a variable. IPWhitelist,
+PairingGuard, CORS and the `/api/health` exception are untouched.
+
+**Tests:**
+- unit: correct bearer ⇒ next called; wrong / missing ⇒ 401; `?ticket=x` ⇒
+  401 and next not called; empty admin token ⇒ 401; `/api/peers/hosts` ⇒
+  guarded; `/api/peersx`, `/api/sessions` ⇒ next called without checks.
+- **composition** (the exact chain from main.go, with a ticket validator
+  fake that records calls and would return true): `GET /api/peers?ticket=ok`
+  ⇒ 401 and the validator was **not** called; `GET
+  /api/sessions?ticket=ok` ⇒ 200 (TokenAuth path unchanged); empty admin
+  token: `/api/sessions` ⇒ 200, `/api/peers` ⇒ 401.
+
+- [ ] tests written and failing
+- [ ] implementation, all green (`go build ./...` proves the wiring)
+- [ ] commit `feat(middleware): lock /api/peers behind a non-empty admin bearer`
+
+### Task 7: `peers` module and `GET /api/peers`
 
 **Files:** create `internal/module/peers/module.go`,
-`internal/module/peers/module_test.go`; modify `cmd/pdx/main.go`
-(`registerServeModules`: `c.AddModule(peersmod.New())` after `agent`).
+`internal/module/peers/fakes_test.go`, `internal/module/peers/module_test.go`;
+modify `cmd/pdx/main.go` (`registerServeModules`: `c.AddModule(peersmod.New())`
+after the agent module).
 
 **Module contract:**
-- `Name()="peers"`, `Dependencies()=[]string{"session","agent"}`.
-- `Init`: `c.Registry.Get(session.RegistryKey)` → `session.SessionProvider`;
-  `c.Registry.Get(agent.OwnerResolverKey)` → `agent.OwnerResolver`. Either
-  missing ⇒ `Init` returns an error (hard assert, as
-  `session/handler.go:415` does). Stores `c` for config access
-  (`c.CfgMu.RLock` on every request: `HostID`, `PeerAlias()`).
-- Fields with defaults, overridable in tests: `registryDir` (default
-  `filepath.Join(home, ".claude", "sessions")`), `liveness`
-  (`peers.DefaultLiveness()`), `budget` (2 s), `now`.
-- `RegisterRoutes`: `GET /api/peers`.
+```go
+type Module struct {
+    core        *core.Core
+    sessions    session.SessionProvider
+    owners      agent.OwnerResolver
+    registryDir string                 // default filepath.Join(home, ".claude", "sessions")
+    liveness    peers.Liveness         // default peers.DefaultLiveness()
+    budget      time.Duration          // default 2 * time.Second
+    now         func() time.Time       // default time.Now
+}
+func New() *Module
+func (m *Module) Name() string            { return "peers" }
+func (m *Module) Dependencies() []string  { return []string{"session", "agent"} }
+func (m *Module) Init(c *core.Core) error // hard-asserts both services; error text names the missing key
+func (m *Module) RegisterRoutes(mux *http.ServeMux) // "GET /api/peers"
+func (m *Module) Start(context.Context) error { return nil }
+func (m *Module) Stop(context.Context) error  { return nil }
+```
 
-**Handler:**
+**Response envelope:**
 ```go
 type response struct {
     HostID  string             `json:"host_id"`
     OK      bool               `json:"ok"`
     Error   string             `json:"error,omitempty"`
     Partial bool               `json:"partial"`
-    Peers   []peers.PeerRecord `json:"peers"`
+    Peers   []peers.PeerRecord `json:"peers"` // never null: []peers.PeerRecord{} when empty
 }
 ```
-1. `ListSessions()` error ⇒ `ok:false, error, peers:[]`, HTTP 200.
-2. `ReadRegistry` error ⇒ same.
-3. **Soft budget** (spec §4.2, R2 #8): `deadline := now().Add(budget)`; for
-   each session in list order, if `now().After(deadline)` put the code in
-   `Unresolved` and skip, else call `ResolveSessionOwner(r.Context(), code)`
-   and let it finish (the existing resolver cannot interrupt a process read;
-   its own 5 s `provenanceTimeout` still bounds it). `partial =
-   len(Unresolved) > 0`. No cross-session memo in P1.
-4. `peers.Build(...)`, encode.
-5. `?scope=all` in P1 ⇒ HTTP 400 `{"error":"scope=all not supported yet"}`
-   so P2 can claim it without a silent behaviour change.
 
-**Tests (httptest, fakes for provider and resolver, temp registry dir):**
-- happy path: two sessions, one cc owner with a live entry ⇒ deliverable
-  record; one shell ⇒ `no_agent`; envelope `ok:true, partial:false`.
-- resolver that blocks until ctx is done, budget 50 ms ⇒ `partial:true`,
-  the blocked session has `agent:null`, the others resolved.
-- provider error ⇒ `ok:false`.
+**Handler steps:**
+1. `deadline := m.now().Add(m.budget)` — first statement.
+2. `?scope=all` ⇒ HTTP 400 `{"error":"scope=all not supported yet"}`.
+3. Read `HostID`, `PeerAlias()` under `c.CfgMu.RLock`.
+4. `ListSessions()` error ⇒ HTTP 200 `{ok:false, error, partial:false, peers:[]}`.
+5. `ReadRegistry(registryDir, liveness)` error ⇒ same shape.
+6. For each session in list order: if `!m.now().Before(deadline)` ⇒ add to
+   `Unresolved`; else `owner, ok := m.owners.ResolveSessionOwner(r.Context(),
+   code)`; `ok` ⇒ `Owners[code] = Owner{…, Status: owner.Status}`.
+   `partial = len(Unresolved) > 0`.
+7. `peers.Build(...)`; encode `{ok:true}`.
+
+**`fakes_test.go`:** a `fakeSessions` implementing the full
+`session.SessionProvider` (`ListSessions`, `GetSession`, `UpdateMeta`,
+`HandleTerminalWS`, `TmuxInstance` — read `internal/module/session/provider.go`
+for the exact signatures) returning canned `SessionInfo`s or an error; a
+`fakeOwners` with a `map[string]agent.PaneOwner` and a call log; a
+`fakeClock` with a settable sequence of times.
+
+**Tests:**
+- happy path: sessions `mt1` (cc owner, live entry in temp registry) and
+  `aigora3` (no owner) ⇒ `ok:true, partial:false`; `mt1` deliverable with
+  `peer_name`; `aigora3` `reason:"no_agent"`.
+- soft budget: clock returns `t0` at handler start, then `t0+3s` on the
+  next call ⇒ first session resolved (resolver called once), second
+  `Unresolved` (resolver **not** called), `partial:true`; the second
+  record has `agent:null, reason:""`.
+- budget consumed before any session: clock `t0, t0+3s` where the second
+  read happens at the first session ⇒ all unresolved, `partial:true`.
+- boundary: second read exactly `t0+2s` ⇒ treated as expired.
+- provider error ⇒ `ok:false`, `peers:[]` (assert the JSON has `"peers":[]`
+  not `null`).
+- registry dir missing ⇒ `ok:false`.
 - `scope=all` ⇒ 400.
-- `Init` without the resolver service ⇒ error.
-- budget test: a fake `now` that jumps past the deadline after the first
-  resolver call ⇒ second session `Unresolved`, `partial:true`, first session
-  resolved.
+- `Init` with an empty registry ⇒ error mentioning `session.provider`; with
+  only sessions ⇒ error mentioning `agent.owner-resolver`.
 
 - [ ] tests written and failing
 - [ ] implementation, all green (`go build ./...` proves main.go wiring)
 - [ ] commit `feat(peers): GET /api/peers local inventory endpoint`
 
-### Task 6b: `PeerRouteAuth` — peer routes never open
-
-**Files:** create `internal/middleware/peer_route_auth.go`,
-`internal/middleware/peer_route_auth_test.go`; modify `cmd/pdx/main.go`
-(the middleware chain at ~195-205).
-
-**Spec:** §4.6 (R2 #2). On `/api/peers` and everything under it: a non-empty
-admin token is required as a Bearer header, `?ticket=` is never accepted, and
-an **empty** configured admin token yields 401 (unlike `TokenAuth`, which
-opens every route when the token is empty). Every other path passes through
-untouched to the existing chain.
-
-**Produce:**
-```go
-// PeerRouteAuth guards the /api/peers prefix. It never opens the routes when
-// the admin token is unset and never accepts one-time tickets. Requests
-// outside the prefix are passed to next unchanged (TokenAuth still runs).
-func PeerRouteAuth(prefix string, tokenFn func() string) func(http.Handler) http.Handler
-```
-Wiring: `PeerRouteAuth("/api/peers", tokenFn)(TokenAuth(tokenFn, c.Tickets)(mux))`
-— placed *inside* `PairingGuard`, *outside* `TokenAuth`, so IPWhitelist,
-PairingGuard and the `/api/health` exception are unchanged. A request that
-passes `PeerRouteAuth` also passes `TokenAuth` (same bearer), so the double
-check costs nothing and keeps `TokenAuth` untouched.
-
-**Tests:**
-- `/api/peers` with correct bearer ⇒ next called; wrong bearer ⇒ 401; no
-  header ⇒ 401; `?ticket=x` with a validator that would accept it ⇒ 401;
-  empty admin token ⇒ 401.
-- `/api/peersx` and `/api/sessions` ⇒ passed to next regardless (prefix
-  match is on path segments: `/api/peers` and `/api/peers/…`, not
-  `/api/peersx`).
-- Constant-time comparison (`crypto/subtle`), Bearer prefix
-  case-insensitive, same as `TokenAuth`.
-
-- [ ] tests written and failing
-- [ ] implementation, all green
-- [ ] commit `feat(middleware): lock /api/peers behind a non-empty admin bearer`
-
 # Phase C — CLI
 
-### Task 7: `pdx peers [--json]`
+### Task 8: `pdx peers [--json]`
 
 **Files:** create `cmd/pdx/peers.go`, `cmd/pdx/peers_test.go`; modify
 `cmd/pdx/main.go` (switch + usage line).
 
-**Behaviour:**
-- `parseConfigPath(args)` for `--config`; URL
-  `http://<Bind>:<Port>/api/peers`; header `Authorization: Bearer <Token>`;
-  10 s client timeout. Non-200 or transport error ⇒ message on stderr,
-  exit 1.
-- `--json` ⇒ raw body to stdout.
-- Default ⇒ table: `ADDRESS  AGENT  NAME  STATUS  DELIVERABLE  CWD`, one row
-  per record; `AGENT` is `agent.type` or `-`; `NAME` is `peer_name` or `-`;
-  `DELIVERABLE` is `yes` or the `reason`. A trailing line `(partial: N
-  sessions not resolved within budget)` when `partial`. `ok:false` ⇒ the
-  error on stderr, exit 1.
-- Column widths computed from content (`text/tabwriter`).
+**Types and seams (own copies — `cmd/pdx` must not import
+`internal/module/peers`):**
+```go
+type peersResponse struct {
+    HostID  string             `json:"host_id"`
+    OK      bool               `json:"ok"`
+    Error   string             `json:"error"`
+    Partial bool               `json:"partial"`
+    Peers   []peers.PeerRecord `json:"peers"`
+}
+// runPeersCmd does all the work and returns the exit code; runPeers (the
+// switch target) is `os.Exit(runPeersCmd(args, os.Stdout, os.Stderr))`.
+func runPeersCmd(args []string, stdout, stderr io.Writer) int
+func formatPeersTable(resp peersResponse) string
+```
+Config: parse `--config <path>` from args; `cfg, err := config.Load(path)`;
+error ⇒ stderr, exit 1 (do not use `parseConfigPath`, it calls
+`log.Fatalf`). URL `http://<Bind>:<Port>/api/peers`; header `Authorization:
+Bearer <Token>`; `http.Client{Timeout: 10 * time.Second}`.
 
-**Tests:** `formatPeersTable(response) string` golden test on a three-record
-fixture; `runPeers` against an `httptest.Server` for 200/JSON, 200/table,
-401 (exit code captured through an injectable `exit` func like
-`hook.go`'s pattern), and `--json` passthrough.
+**Behaviour and exit codes:**
+| Situation | stdout | stderr | exit |
+|---|---|---|---|
+| transport error / non-200 | – | `pdx peers: <detail>` | 1 |
+| body not JSON | – | `pdx peers: invalid response` | 1 |
+| `--json` | raw body verbatim | – | `0` if `ok`, else `1` |
+| table, `ok:true` | table (+ partial line) | – | 0 |
+| table, `ok:false` | – | `pdx peers: <error>` | 1 |
+
+Table columns: `ADDRESS  AGENT  NAME  STATUS  DELIVERABLE  CWD` via
+`text/tabwriter`; `AGENT` = `agent.type` or `-`; `NAME` = `peer_name` or
+`-`; `STATUS` = `agent.status` or `-`; `DELIVERABLE` = `yes` or `reason`
+(or `-` when `reason==""` and `agent==nil`, i.e. unresolved). Partial line:
+`(partial: N sessions not resolved within budget)` where N counts records
+with `Agent == nil && Reason == ""`.
+
+**Tests:** golden `formatPeersTable` on a fixture with a deliverable cc row,
+a `not_cc` codex row, a shell row and an unresolved row (N=1, shell not
+counted); `runPeersCmd` against an `httptest.Server` with a temp config
+file pointing at it — assert the request path and `Authorization` header —
+for: 200 table exit 0; `--json` passthrough exit 0; 200 `ok:false` table ⇒
+exit 1 with error on stderr; `--json` with `ok:false` ⇒ body printed, exit
+1; 401 ⇒ exit 1; invalid JSON ⇒ exit 1; unreachable server ⇒ exit 1.
 
 - [ ] tests written and failing
 - [ ] implementation, all green
@@ -415,19 +553,23 @@ fixture; `runPeers` against an `httptest.Server` for 200/JSON, 200/table,
 
 # Phase D — Acceptance (main session, not a subagent)
 
-### Task 8: Live check on mlab
+### Task 9: Live check on mlab with an isolated daemon
 
-- [ ] `go build -o bin/pdx ./cmd/pdx` in the worktree; run
-  `./bin/pdx peers --config ~/.config/pdx/config.toml` against the **running
-  main daemon** — expect HTTP 404 (old daemon has no route); this confirms
-  the CLI error path. Then start a second daemon from the worktree binary
-  on a scratch port (`pdx serve --config <tmp config with port 7861, same
-  data_dir read-only use>`) only if the running daemon cannot be restarted;
-  otherwise restart the main daemon per `reference_pdx_daemon_runtime` and
-  run `pdx peers`.
-- [ ] Confirm: every tmux session listed; this session's row shows `cc`,
-  `purdex-47`, `deliverable yes`; `aigora3`-style shell rows show `no_agent`;
-  `curl -s -o /dev/null -w '%{http_code}' http://100.64.0.2:7860/api/peers`
-  (no bearer) and the same with `?ticket=anything` both print `401`;
-  `--json` validates against §4.2.
-- [ ] Record the output in the PR description.
+Never point a second daemon at the production `data_dir`.
+
+- [ ] `go build -o bin/pdx ./cmd/pdx` in the worktree.
+- [ ] Write `/tmp/pdx-p1/config.toml`:
+  `host_id="p1-test:abc123"`, `bind="127.0.0.1"`, `port=7861`,
+  `token="p1test"`, `data_dir="/tmp/pdx-p1/data"`,
+  `upload_dir="/tmp/pdx-p1/upload"`. Start `./bin/pdx serve --config
+  /tmp/pdx-p1/config.toml` in a tmux window `pdx-p1`.
+- [ ] `./bin/pdx peers --config /tmp/pdx-p1/config.toml` — every tmux
+  session listed; this session's row shows `cc`, `purdex-47`,
+  `deliverable yes`; shell rows `no_agent`; `--json` output validates
+  against spec §4.2 keys.
+- [ ] `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7861/api/peers`
+  ⇒ `401`; same with `?ticket=anything` ⇒ `401`; with `-H 'Authorization:
+  Bearer p1test'` ⇒ `200`.
+- [ ] Stop the daemon (`Ctrl-C` in the window, then `tmux kill-window -t
+  pdx-p1`), `rm -rf /tmp/pdx-p1`.
+- [ ] Paste the table and the three curl codes into the PR description.
