@@ -243,6 +243,7 @@ func buildOutsideRecords(in BuildInput, sessionNames map[string]bool, consumed m
 		}
 		if in.ProxyPIDs[e.PID] {
 			agent.Type = "proxy"
+			agent.Status = "proxy"
 			rec.Deliverable = false
 			rec.Reason = "proxy"
 		}

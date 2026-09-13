@@ -362,6 +362,9 @@ func TestBuild_OutsideTmuxRow_Proxy(t *testing.T) {
 	if r.Agent == nil || r.Agent.Type != "proxy" {
 		t.Fatalf("Agent.Type = %v, want proxy", r.Agent)
 	}
+	if r.Agent.Status != "proxy" {
+		t.Errorf("Agent.Status = %q, want proxy (spec §4.2)", r.Agent.Status)
+	}
 	if r.Deliverable {
 		t.Errorf("Deliverable = true, want false")
 	}
