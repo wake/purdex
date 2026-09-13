@@ -26,6 +26,7 @@ import (
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	"github.com/wake/purdex/internal/module/logs"
 	"github.com/wake/purdex/internal/module/monitor"
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/module/stream"
 	syncmod "github.com/wake/purdex/internal/module/sync"
@@ -247,6 +248,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		return err
 	}
 	c.AddModule(agentMod)
+	c.AddModule(peersmod.New())
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	c.AddModule(syncmod.New())
