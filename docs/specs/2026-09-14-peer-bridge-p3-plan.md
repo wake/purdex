@@ -131,7 +131,6 @@ drifted.
 | `internal/config/config.go` *(modify)* | `PeersConfig.Deliver bool` |
 | `internal/module/peers/policy.go` *(modify)* | host may `POST /api/peers/deliver` |
 | `internal/module/peers/settings.go` *(new)* | `GET`/`PUT /api/peers/settings` |
-| `internal/module/peers/rows.go` *(new)* | `normalizeRemoteRows` |
 | `internal/module/peers/limits.go` *(new)* | `dedupSet`, `pairLimiter` |
 | `internal/module/peers/helpers.go` *(new)* | `helperManager` state machine, `proxies.json`, reap, sweep |
 | `internal/module/peers/deliver.go` *(new)* | `POST /api/peers/deliver` |
@@ -555,8 +554,8 @@ both succeed with distinct ids; Tail(0) ⇒ empty non-nil slice; existing
 **Files:** modify `internal/config/config.go` (+ test),
 `internal/peers/registry.go`, `record.go` (+ tests),
 `internal/module/peers/policy.go` (+ test), `module.go`; create
-`internal/module/peers/settings.go`, `settings_test.go`, `rows.go`,
-`rows_test.go`, `limits.go`, `limits_test.go`.
+`internal/module/peers/settings.go`, `settings_test.go`,
+`limits.go`, `limits_test.go`.
 
 **Produce:**
 - `PeersConfig.Deliver bool \`toml:"deliver" json:"deliver"\`` (default
@@ -590,21 +589,16 @@ both succeed with distinct ids; Tail(0) ⇒ empty non-nil slice; existing
   `PUT /api/peers/settings {deliver?: bool}` ⇒ `Core.UpdateConfig`, 200
   with the same body. Both admin-only (policy refuses hosts; handler also
   checks `PrincipalFrom` ⇒ 403 in depth).
-- `rows.go`:
-  ```go
-  // normalizeRemoteRows rewrites every row's identity from the config
-  // entry, never from what the remote reported (P2 final review #5):
-  // Host = alias; HostID = hostID (the verified one, or the envelope's
-  // when the entry is still unverified — the caller passes whichever it
-  // accepted); Address is REBUILT: alias + "/" + SessionName when
-  // SessionName != "", else alias + "/cc:" + Agent.PeerName for a
-  // deliverable outside-tmux row; the candidate is kept only if
-  // SplitAddress accepts it, otherwise Address = "" (not addressable —
-  // proxy rows, rows with empty names, and peer names containing "/"
-  // all land here; R2-m2). The remote Address is discarded.
-  func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeers.PeerRecord
-  ```
-  `fetchHostResult` applies it to every successful row.
+- **`normalizeRemoteRows` is P2's** (`internal/module/peers/module.go`,
+  `normalizeRemoteRows(rows, alias, hostID) []ipeers.PeerRecord`, already
+  applied by `fetchHostResult`; P2 also ships `validHostID`). P3 does
+  **not** write a second copy (no `rows.go`). After the P2 merge, check
+  whether P2's Address rule already guarantees that every non-empty
+  `Address` passes `SplitAddress`; if a remote row can still produce an
+  unparsable address (a peer name containing `/`, empty names, proxy
+  rows — R2-m2), tighten P2's function **in place**: keep the rebuilt
+  candidate only if `SplitAddress` accepts it, else `Address = ""`, and
+  extend P2's existing table test rather than adding a parallel one.
 - `module.go`: `localEnvelope` gains a one-shot version warning — after
   `ReadRegistry`, for every distinct `Version` with
   `ccuds.NewerThanVerified`, log once per process (`sync.Map`): `peers:
@@ -632,10 +626,9 @@ tests untouched and green (their fakes set `StartTime`, not `Info`);
 policy table (`POST /api/peers/deliver` true, `GET /api/peers/deliver`
 false, `POST /api/peers/send` false, `POST /api/peers/settings` false);
 settings GET/PUT persist to a temp `CfgPath`, host principal ⇒ 403;
-`normalizeRemoteRows` table: a remote row claiming another host's
-`host_id`/alias/`x/y/z` address is rewritten, outside-tmux row ⇒
-`alias/cc:<name>`, a proxy row whose PeerName is `a/foo` ⇒ Address `""`,
-empty names ⇒ `""`, **every non-empty Address passes `SplitAddress`**; `fetchHostResult` rows are normalised (extend the P2
+`normalizeRemoteRows` (P2's, extended only if needed): a proxy row whose
+PeerName is `a/foo` ⇒ Address `""`, empty names ⇒ `""`, **every non-empty
+Address passes `SplitAddress`** (added to P2's table test); `fetchHostResult` rows are normalised (extend the P2
 scope=all test with one assertion); version warning fires once for
 `2.1.271` across two inventory calls and never for `2.1.270`; dedup and
 limiter with a fake clock (30 allowed, 31st refused, after 60 s allowed,
