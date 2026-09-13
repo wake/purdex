@@ -6,7 +6,6 @@ package peers
 // size; every method here is a helperManager method.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -78,8 +77,18 @@ func (m *helperManager) waitGone(r proxyRecord) (alive bool, id pidIdentity) {
 // and retains whatever it could not resolve. A retained record whose
 // process is alive or unclassifiable occupies its origin and a cap slot
 // (R3-M4). The rewritten file is the durable ownership record the
-// daemon must not run without (R2-M4): a write failure fails Sweep.
+// daemon must not run without (R2-M4): a write failure fails Sweep. A
+// second call after a successful one is a no-op: from then on
+// proxies.json names the daemon's OWN live helpers, which must never be
+// signalled.
 func (m *helperManager) Sweep() error {
+	m.mu.Lock()
+	swept := m.swept
+	m.mu.Unlock()
+	if swept {
+		return nil
+	}
+
 	records := m.readProxies()
 	var unresolved []unresolvedRecord
 	for _, r := range records {
@@ -96,24 +105,6 @@ func (m *helperManager) Sweep() error {
 	}
 	m.swept = true
 	return nil
-}
-
-// readProxies loads proxiesPath: missing ⇒ none; unparsable ⇒ logged and
-// treated as none (nothing in it can prove ownership of anything).
-func (m *helperManager) readProxies() []proxyRecord {
-	data, err := os.ReadFile(m.proxiesPath)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			m.log("peers: read %s: %v (treating as empty)", m.proxiesPath, err)
-		}
-		return nil
-	}
-	var records []proxyRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		m.log("peers: %s is unparsable: %v (treating as empty; nothing in it can be proven ours)", m.proxiesPath, err)
-		return nil
-	}
-	return records
 }
 
 // sweepRecord resolves one record; keep is true when it must be retained.

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -440,15 +439,18 @@ func TestHelperManager_AcquireConcurrentSameKeySpawnsOnce(t *testing.T) {
 		err error
 	}
 	results := make(chan res, 2)
+	first := make(chan struct{}) // closed when the first Acquire returns
+	var firstOnce sync.Once
 	for i := 0; i < 2; i++ {
 		go func() {
 			h, err := tm.m.Acquire(context.Background(), originA, "air/a")
+			firstOnce.Do(func() { close(first) })
 			results <- res{h, err}
 		}()
 	}
 	eventually(t, time.Second, func() bool { return tm.fake.Spawns() == 1 }, "one spawn")
-	// Both are parked on the same starting instance.
-	time.Sleep(30 * time.Millisecond)
+	// Both are parked on the same starting instance while the Barrier holds.
+	stillBlocked(t, first, 30*time.Millisecond, "Acquire while the Barrier holds")
 	if n := tm.fake.Spawns(); n != 1 {
 		t.Fatalf("spawns = %d, want 1", n)
 	}
@@ -1040,9 +1042,13 @@ func TestHelperManager_StopWaitsForBarrierStartup(t *testing.T) {
 	waitClosed(t, stopped, 5*time.Second, "Stop")
 	select {
 	case err := <-acq:
-		// The creator either saw the ready instance (then Stop released it)
-		// or nothing at all; it must not hang.
-		_ = err
+		// The creator wakes on h.ready and re-enters the loop, where the
+		// closed check comes first: admission was shut before the helper
+		// became ready, so it is refused rather than handed a helper that
+		// Stop is about to release.
+		if !errors.Is(err, ErrNotReady) {
+			t.Fatalf("creator's Acquire: err = %v, want ErrNotReady", err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("creator's Acquire hung")
 	}
@@ -1427,6 +1433,31 @@ func TestSweep_UnparsableFileTreatedAsEmpty(t *testing.T) {
 	acquireOK(t, tm, originA)
 }
 
+func TestSweep_SecondCallIsNoOp(t *testing.T) {
+	tm := newTestManager(t)
+	tm.sweepOK(t)
+	h := acquireOK(t, tm, originA)
+	// The daemon's own helper is now in proxies.json and "alive" as far
+	// as a re-entrant sweep could tell.
+	tm.os.set(func() { tm.os.alive[h.pid] = true })
+
+	if err := tm.m.Sweep(); err != nil {
+		t.Fatalf("second Sweep: %v", err)
+	}
+	if sent := tm.os.sent(); len(sent) != 0 {
+		t.Fatalf("second Sweep signalled our own helper: %v", sent)
+	}
+	if tm.stateOf(h) != helperReady || tm.fake.Stops() != 0 {
+		t.Fatalf("second Sweep disturbed the live helper")
+	}
+	if !allExist(append([]string{h.sock}, h.files...)...) {
+		t.Fatalf("second Sweep unlinked the live helper's files")
+	}
+	if recs := readProxies(t, tm.proxiesPath); len(recs) != 1 || recs[0].PID != h.pid {
+		t.Fatalf("proxies.json = %+v", recs)
+	}
+}
+
 func TestSweep_UnwritablePathErrors(t *testing.T) {
 	tm := newTestManager(t)
 	tm.m.proxiesPath = filepath.Join(tm.registryDir, "missing", "proxies.json")
@@ -1520,36 +1551,6 @@ func TestSweep_DeadLeftoverUnlinkErrorOccupiesNothing(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Production seams
 // ---------------------------------------------------------------------------
-
-func TestDefaultDialRefused(t *testing.T) {
-	sockDir, _ := proxyhelpertest.TempDirs(t)
-	if err := os.MkdirAll(sockDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	missing := filepath.Join(sockDir, "missing.sock")
-	if !defaultDialRefused(missing) {
-		t.Errorf("missing path: want refused")
-	}
-	stale := filepath.Join(sockDir, "stale.sock")
-	ln, err := net.Listen("unix", stale)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln.(*net.UnixListener).SetUnlinkOnClose(false)
-	ln.Close()
-	if !defaultDialRefused(stale) {
-		t.Errorf("stale path: want refused")
-	}
-	live := filepath.Join(sockDir, "live.sock")
-	ln2, err := net.Listen("unix", live)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln2.Close()
-	if defaultDialRefused(live) {
-		t.Errorf("live listener: want not refused")
-	}
-}
 
 func TestDefaultPidAlive(t *testing.T) {
 	if !defaultPidAlive(os.Getpid()) {

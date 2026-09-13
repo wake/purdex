@@ -374,15 +374,17 @@ func removeLeftovers(cfg Config, pid int) {
 		}
 	}
 	sock := filepath.Join(sockDir, strconv.Itoa(pid)+".sock")
-	if dialRefused(sock) {
+	if DialRefused(sock) {
 		os.Remove(sock)
 	}
 }
 
-// dialRefused reports whether connecting to sock fails because nobody
-// listens (ECONNREFUSED) or the path is gone (ENOENT). A live listener or
-// any other failure is not a licence to unlink.
-func dialRefused(sock string) bool {
+// DialRefused reports whether connecting to the Unix socket at sock fails
+// because nobody listens (ECONNREFUSED) or the path is gone (ENOENT) —
+// the only two outcomes that license unlinking a dead helper's socket. A
+// live listener or any other failure returns false. Shared with the
+// daemon's helper manager as its default dialRefused seam.
+func DialRefused(sock string) bool {
 	c, err := net.DialTimeout("unix", sock, dialProbeTimeout)
 	if err == nil {
 		c.Close()

@@ -562,3 +562,33 @@ func (s *safeBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+func TestDialRefused(t *testing.T) {
+	_, socks := tempDirs(t)
+	if err := os.MkdirAll(socks, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(socks, "missing.sock")
+	if !proxyhelper.DialRefused(missing) {
+		t.Errorf("missing path: want refused")
+	}
+	stale := filepath.Join(socks, "stale.sock")
+	ln, err := net.Listen("unix", stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.Close()
+	if !proxyhelper.DialRefused(stale) {
+		t.Errorf("stale path (nobody listening): want refused")
+	}
+	live := filepath.Join(socks, "live.sock")
+	ln2, err := net.Listen("unix", live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln2.Close()
+	if proxyhelper.DialRefused(live) {
+		t.Errorf("live listener: want not refused")
+	}
+}

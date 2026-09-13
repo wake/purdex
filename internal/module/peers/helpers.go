@@ -2,15 +2,11 @@ package peers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log"
-	"net"
 	"os"
-	"path/filepath"
-	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -40,8 +36,6 @@ const (
 	// sweepPoll is how often Sweep re-checks a signalled pid while it
 	// waits (≤ termGrace) for it to go away.
 	sweepPoll = 10 * time.Millisecond
-	// dialProbeTimeout bounds defaultDialRefused's connect.
-	dialProbeTimeout = 500 * time.Millisecond
 )
 
 var (
@@ -105,16 +99,6 @@ type helper struct {
 	lastUsed  time.Time
 
 	stopOnce sync.Once
-}
-
-// proxyRecord is one entry of proxies.json (spec §4.5): enough to prove,
-// after a restart, which process and which files were ours.
-type proxyRecord struct {
-	PID       int              `json:"pid"`
-	ProcStart string           `json:"proc_start"`
-	Sock      string           `json:"sock"`
-	Files     []string         `json:"files"`
-	Origin    ipeers.OriginKey `json:"origin"`
 }
 
 // unresolvedRecord is a proxyRecord whose cleanup could not be completed.
@@ -220,7 +204,7 @@ func newHelperManager(cfg helperManagerConfig) *helperManager {
 		m.pidAlive = defaultPidAlive
 	}
 	if m.dialRefused == nil {
-		m.dialRefused = defaultDialRefused
+		m.dialRefused = proxyhelper.DialRefused
 	}
 	if m.signal == nil {
 		m.signal = defaultSignal
@@ -245,18 +229,6 @@ func newHelperManager(cfg helperManagerConfig) *helperManager {
 func defaultPidAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
-// defaultDialRefused reports whether connecting to sock fails because
-// nobody listens (ECONNREFUSED) or the path is gone (ENOENT). A live
-// listener or any other failure is not a licence to unlink.
-func defaultDialRefused(sock string) bool {
-	c, err := net.DialTimeout("unix", sock, dialProbeTimeout)
-	if err == nil {
-		c.Close()
-		return false
-	}
-	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOENT)
 }
 
 // defaultSignal delivers sig to pid.
@@ -554,13 +526,14 @@ func (m *helperManager) ProxyPIDs() map[int]bool {
 	return out
 }
 
-// FindBySock returns the instance whose helper listens on sock (ready or
-// stopping).
+// FindBySock returns the instance whose helper listens on sock: ready or
+// stopping, never one still starting (its sock is filled before the
+// ownership write, and a failed write rolls the instance back).
 func (m *helperManager) FindBySock(sock string) (*helper, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, h := range m.helpers {
-		if h.pid != 0 && h.sock == sock {
+		if h.state != helperStarting && h.pid != 0 && h.sock == sock {
 			return h, true
 		}
 	}
@@ -625,67 +598,4 @@ func (m *helperManager) Stop() {
 
 	m.wg.Wait()
 	m.procCancel()
-}
-
-// recordOf is h's proxies.json entry. Caller holds mu (or owns h).
-func recordOf(h *helper) proxyRecord {
-	return proxyRecord{
-		PID:       h.pid,
-		ProcStart: h.procStart,
-		Sock:      h.sock,
-		Files:     append([]string(nil), h.files...),
-		Origin:    h.key,
-	}
-}
-
-// writeProxiesLocked writes the record of every instance with a pid plus
-// every unresolved record to proxiesPath atomically: temp file in the
-// same directory, fsync, rename. Caller holds mu.
-func (m *helperManager) writeProxiesLocked() error {
-	records := make([]proxyRecord, 0, len(m.helpers)+len(m.unresolved))
-	for _, h := range m.helpers {
-		if h.pid != 0 {
-			records = append(records, recordOf(h))
-		}
-	}
-	for _, u := range m.unresolved {
-		records = append(records, u.proxyRecord)
-	}
-	sort.SliceStable(records, func(i, j int) bool { return records[i].PID < records[j].PID })
-	return writeProxiesFile(m.proxiesPath, records)
-}
-
-// writeProxiesFile is the atomic write behind writeProxiesLocked.
-func writeProxiesFile(path string, records []proxyRecord) error {
-	data, err := json.Marshal(records)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := func(err error) error {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return cleanup(err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return cleanup(err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	return nil
 }
