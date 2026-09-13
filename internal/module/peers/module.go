@@ -150,7 +150,16 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		owner, ok := m.owners.ResolveSessionOwner(r.Context(), s.Code)
+		owner, ok, err := m.owners.ResolveSessionOwner(r.Context(), s.Code)
+		if err != nil {
+			// The lookup itself failed (tmux read error, resolver timeout,
+			// cancelled context) — this is not "no agent". Reporting it as
+			// no_agent would tell the SPA a live session has none, so it is
+			// reported the same way as a session whose owner lookup never
+			// ran: agent:null, reason:"", partial:true (Item 1, #988).
+			unresolved[s.Code] = true
+			continue
+		}
 		if ok {
 			owners[s.Code] = ipeers.Owner{
 				AgentType:  owner.AgentType,

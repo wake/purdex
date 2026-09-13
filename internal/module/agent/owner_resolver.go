@@ -10,13 +10,19 @@ const OwnerResolverKey = "agent.owner-resolver"
 // unexported internals. It is registered under OwnerResolverKey in Init,
 // after the session-provider check — so with no session provider it is not
 // registered, same as the other services Init exposes.
+//
+// The error return tells "the lookup failed" (a tmux read error, a resolver
+// timeout, a cancelled context) apart from "no owner" (found=false, err=nil):
+// a caller that folded both into found=false would report a session that
+// merely couldn't be checked the same way it reports one that genuinely has
+// no agent (Item 1, #988).
 type OwnerResolver interface {
-	ResolveSessionOwner(ctx context.Context, code string) (PaneOwner, bool)
+	ResolveSessionOwner(ctx context.Context, code string) (PaneOwner, bool, error)
 }
 
-// ResolveSessionOwner is the exported form of resolveSessionOwner, for
+// ResolveSessionOwner is the exported form of resolveSessionOwnerErr, for
 // callers reached through the OwnerResolver service registry entry rather
 // than direct access to *Module.
-func (m *Module) ResolveSessionOwner(ctx context.Context, code string) (PaneOwner, bool) {
-	return m.resolveSessionOwner(ctx, code)
+func (m *Module) ResolveSessionOwner(ctx context.Context, code string) (PaneOwner, bool, error) {
+	return m.resolveSessionOwnerErr(ctx, code)
 }

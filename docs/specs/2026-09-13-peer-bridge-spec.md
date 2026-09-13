@@ -241,7 +241,11 @@ cannot interrupt a read in flight) is started for sessions in list order,
 and no new resolution starts once the budget is spent. Sessions not started
 are reported with `agent: null` and `partial: true`. A single slow resolution
 can therefore push a response past 2 s; P2's per-host timeout is 3 s and
-treats a late response as that host's error row, not as data loss.
+treats a late response as that host's error row, not as data loss. A session
+whose owner resolution failed (a tmux read error, a resolver timeout, or a
+cancelled context) is reported the same way as one not started — `agent:
+null`, `partial: true` — never as `no_agent`, since that would claim the
+session has no agent rather than that its lookup could not be completed.
 
 **Proxy rows.** Virtual peers (§4.5) are Claude Code registry entries too.
 The daemon recognises its own helpers by pid from `proxies.json` (§4.5),

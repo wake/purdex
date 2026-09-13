@@ -47,7 +47,10 @@ func TestModuleInit_RegistersOwnerResolver(t *testing.T) {
 func TestModule_ResolveSessionOwner_UnknownCode_FoundFalse(t *testing.T) {
 	m, _, _ := newProvenanceQueryModule(t)
 
-	owner, found := m.ResolveSessionOwner(context.Background(), "nonexistent-code")
+	owner, found, err := m.ResolveSessionOwner(context.Background(), "nonexistent-code")
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
 	if found {
 		t.Fatalf("found = true, want false (owner = %+v)", owner)
 	}
@@ -66,7 +69,10 @@ func TestModule_ResolveSessionOwner_KnownOwner_DelegatesFields(t *testing.T) {
 	withProcessTree(t, map[int]int{100: 200, 200: 1})
 	withLivePids(t, map[int]string{100: "t100"})
 
-	owner, found := m.ResolveSessionOwner(context.Background(), codeOf(t, "$0"))
+	owner, found, err := m.ResolveSessionOwner(context.Background(), codeOf(t, "$0"))
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
 	if !found {
 		t.Fatalf("found = false, want true")
 	}
@@ -78,5 +84,51 @@ func TestModule_ResolveSessionOwner_KnownOwner_DelegatesFields(t *testing.T) {
 	}
 	if owner.Status != string(agentpkg.StatusIdle) {
 		t.Errorf("Status = %q, want %q", owner.Status, string(agentpkg.StatusIdle))
+	}
+}
+
+// TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr pins that a
+// panesOfSession failure — here, the request deadline already expired before
+// the walk could look at a single frame — is reported through the returned
+// error, not silently folded into found:false. The peers module (Item 1,
+// #988) needs to tell "owner resolution failed" apart from "no owner" so a
+// session with a live agent is never reported to the SPA as no_agent.
+func TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	orig := provenanceTimeout
+	provenanceTimeout = -1 // expired before the first frame is looked at
+	t.Cleanup(func() { provenanceTimeout = orig })
+
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "200")
+	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w/purdex")
+	withProcessTree(t, map[int]int{100: 200, 200: 1})
+	withLivePids(t, map[int]string{100: "t100"})
+
+	owner, found, err := m.ResolveSessionOwner(context.Background(), codeOf(t, "$0"))
+	if err == nil {
+		t.Fatalf("err = nil, want non-nil (owner = %+v, found = %v)", owner, found)
+	}
+	if found {
+		t.Fatalf("found = true, want false when the resolver failed")
+	}
+}
+
+// TestModule_ResolveSessionOwner_NoRootFrame_FoundFalseErrNil pins the other
+// half of the contract: a session with panes but genuinely no root agent
+// frame (never a resolver error) still answers found:false, err:nil, exactly
+// as before this change.
+func TestModule_ResolveSessionOwner_NoRootFrame_FoundFalseErrNil(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "200")
+	// No seeded identity frame: the pane has no root agent frame at all.
+
+	owner, found, err := m.ResolveSessionOwner(context.Background(), codeOf(t, "$0"))
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if found {
+		t.Fatalf("found = true, want false (owner = %+v)", owner)
 	}
 }

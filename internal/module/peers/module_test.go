@@ -158,6 +158,54 @@ func TestHandlePeers_HappyPath(t *testing.T) {
 	}
 }
 
+// TestHandlePeers_ResolverError_ReportedAsUnresolved pins Item 1 (#988): a
+// session whose owner lookup fails (tmux read error, resolver timeout,
+// cancelled context) must be reported the same way as one whose lookup never
+// ran — agent:null, reason:"" — not as no_agent, and it must still mark the
+// whole response partial:true even though the budget was never exceeded.
+func TestHandlePeers_ResolverError_ReportedAsUnresolved(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "s1", Name: "s1", Cwd: "/a"},
+	}}
+	owners := &fakeOwners{
+		owners: map[string]agent.PaneOwner{},
+		errs:   map[string]error{"s1": errFakeProvider},
+	}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	rr := doGetPeers(t, m, "/api/peers")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var got response
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if !got.OK {
+		t.Fatalf("ok = false, want true; error=%q", got.Error)
+	}
+	if !got.Partial {
+		t.Errorf("partial = false, want true")
+	}
+	if len(got.Peers) != 1 {
+		t.Fatalf("peers = %+v, want 1", got.Peers)
+	}
+	rec := got.Peers[0]
+	if rec.Agent != nil {
+		t.Errorf("Agent = %+v, want nil", rec.Agent)
+	}
+	if rec.Reason != "" {
+		t.Errorf("Reason = %q, want empty", rec.Reason)
+	}
+	if rec.Deliverable {
+		t.Errorf("Deliverable = true, want false")
+	}
+}
+
 func TestHandlePeers_SoftBudget(t *testing.T) {
 	dir := t.TempDir()
 	t0 := time.Unix(1000, 0)

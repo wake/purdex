@@ -466,9 +466,12 @@ type response struct {
 4. `ListSessions()` error ⇒ HTTP 200 `{ok:false, error, partial:false, peers:[]}`.
 5. `ReadRegistry(registryDir, liveness)` error ⇒ same shape.
 6. For each session in list order: if `!m.now().Before(deadline)` ⇒ add to
-   `Unresolved`; else `owner, ok := m.owners.ResolveSessionOwner(r.Context(),
-   code)`; `ok` ⇒ `Owners[code] = Owner{…, Status: owner.Status}`.
-   `partial = len(Unresolved) > 0`.
+   `Unresolved`; else `owner, ok, err := m.owners.ResolveSessionOwner(r.Context(),
+   code)`; `err != nil` ⇒ add to `Unresolved` too (a session whose owner
+   resolution failed — tmux read error, resolver timeout, cancelled context —
+   is reported the same way as one not started: `agent: null`, `partial:
+   true`, never `no_agent`); `ok` ⇒ `Owners[code] = Owner{…, Status:
+   owner.Status}`. `partial = len(Unresolved) > 0`.
 7. `peers.Build(...)`; encode `{ok:true}`.
 
 **`fakes_test.go`:** a `fakeSessions` implementing the full

@@ -48,16 +48,23 @@ func (f *fakeSessions) TmuxInstance() string { return "" }
 // fakeOwners is a test double implementing agent.OwnerResolver, backed by a
 // map keyed by session code. calls records every code passed to
 // ResolveSessionOwner, in order, so tests can assert the resolver was (or
-// was not) invoked for a given session.
+// was not) invoked for a given session. errs, when set for a code, makes
+// ResolveSessionOwner report that code's lookup as failed (found=false,
+// err=non-nil) instead of consulting owners — so tests can drive Item 1's
+// "resolver failure" path without an owner entry masking it.
 type fakeOwners struct {
 	owners map[string]agent.PaneOwner
+	errs   map[string]error
 	calls  []string
 }
 
-func (f *fakeOwners) ResolveSessionOwner(ctx context.Context, code string) (agent.PaneOwner, bool) {
+func (f *fakeOwners) ResolveSessionOwner(ctx context.Context, code string) (agent.PaneOwner, bool, error) {
 	f.calls = append(f.calls, code)
+	if err, ok := f.errs[code]; ok {
+		return agent.PaneOwner{}, false, err
+	}
 	owner, ok := f.owners[code]
-	return owner, ok
+	return owner, ok, nil
 }
 
 // fakeClock is a settable sequence of times. Each call to Now returns the
