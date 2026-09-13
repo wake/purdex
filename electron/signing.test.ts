@@ -40,17 +40,16 @@ describe('Electron macOS signing configuration (static)', () => {
     expect(literals).toEqual(['downloading', 'extracting', 'applying'])
   })
 
-  it('preload gates dev update API behind strict PDX_DEV_MODE === "1"', () => {
+  it('preload gates dev update API on PDX_DEV_MODE !== "0"', () => {
     const preload = readFileSync(resolve(root, 'electron/preload.ts'), 'utf8')
-    // Strict equality — accepts only PDX_DEV_MODE='1', not any truthy
-    // string ('0', 'false', 'no' would all pass a truthy ternary).
-    // Must match daemon-side gate in internal/module/dev/module.go.
-    expect(preload).toMatch(/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/)
+    // Dev features are on by default; only PDX_DEV_MODE=0 disables (spec
+    // 2026-09-14 D6). Must match main.ts and the daemon's devmode.Enabled().
+    expect(preload).toMatch(/process\.env\.PDX_DEV_MODE\s*!==\s*['"]0['"]/)
     expect(preload).toMatch(/applyUpdate:/)
     expect(preload).toMatch(/checkUpdate:/)
     expect(preload).toMatch(/onUpdateProgress:/)
-    // The strict gate must precede applyUpdate in source order
-    const gateIdx = preload.search(/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/)
+    // The gate must precede applyUpdate in source order
+    const gateIdx = preload.search(/process\.env\.PDX_DEV_MODE\s*!==\s*['"]0['"]/)
     const applyIdx = preload.indexOf('applyUpdate:')
     expect(gateIdx).toBeGreaterThan(-1)
     expect(applyIdx).toBeGreaterThan(gateIdx)
@@ -63,14 +62,14 @@ describe('Electron macOS signing configuration (static)', () => {
     expect(mod).toMatch(/\/api\/dev\/update\/download/)
   })
 
-  it('main.ts gates dev:* IPC handler registration behind strict PDX_DEV_MODE === "1"', () => {
+  it('main.ts gates dev:* IPC handler registration on PDX_DEV_MODE !== "0"', () => {
     const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
-    // Strict equality — completes the boundary alongside preload.ts and
-    // module.go, removing the spec §7 R7 residual surface.
-    expect(main).toMatch(/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/)
+    // Dev features are on by default; only PDX_DEV_MODE=0 disables (spec
+    // 2026-09-14 D6). Must match main.ts and the daemon's devmode.Enabled().
+    expect(main).toMatch(/process\.env\.PDX_DEV_MODE\s*!==\s*['"]0['"]/)
     expect(main).toMatch(/ipcMain\.handle\(['"]dev:apply-update['"]/)
-    // The strict gate must precede every dev:* handler registration.
-    const gateIdx = main.search(/process\.env\.PDX_DEV_MODE\s*===\s*['"]1['"]/)
+    // The gate must precede every dev:* handler registration.
+    const gateIdx = main.search(/process\.env\.PDX_DEV_MODE\s*!==\s*['"]0['"]/)
     const applyIdx = main.indexOf(`ipcMain.handle('dev:apply-update'`)
     const checkIdx = main.indexOf(`ipcMain.handle('dev:check-update'`)
     const streamIdx = main.indexOf(`ipcMain.handle('dev:stream-check'`)

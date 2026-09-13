@@ -10,6 +10,11 @@ import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 import { pickDeeplinkTarget } from './deeplink'
 
+// Dev features (dev update, local daemon management) are on by default —
+// Purdex is single-user. Only an explicit PDX_DEV_MODE=0 turns them off
+// (spec 2026-09-14 D6). Set here so preload and updater see the same value.
+if (process.env.PDX_DEV_MODE === undefined) process.env.PDX_DEV_MODE = '1'
+
 // Register custom protocol before app is ready (Electron requirement).
 // 'app://' replaces 'file://' for bundled SPA, enabling standard CORS behavior.
 protocol.registerSchemesAsPrivileged([{
@@ -211,9 +216,8 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // Dev Update — gated by PDX_DEV_MODE === '1', matching the daemon
-  // (internal/module/dev/module.go) and preload (electron/preload.ts).
-  if (process.env.PDX_DEV_MODE === '1') {
+  // Dev Update — on unless PDX_DEV_MODE === '0' (spec D6), matching the daemon's devmode.Enabled() and preload.
+  if (process.env.PDX_DEV_MODE !== '0') {
     ipcMain.handle('dev:app-info', () => getAppInfo())
     ipcMain.handle('dev:check-update', (_event, daemonUrl: string, token?: string) => checkUpdate(daemonUrl, token))
 
