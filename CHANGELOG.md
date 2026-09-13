@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.337] - 2026-09-14
+
+### Feat: Peer Bridge 第二階段——host registry、每主機獨立憑證、跨主機 `pdx peers --all`（#998）
+
+alpha.334 讓一台主機能盤點自己的 agent peer；這一段讓 daemon 知道其他主機、能以自己的憑證去問對方，並把結果併成一張表。air-2026 進 tailnet 後的用法就是：`pdx peers host add air https://…`、把印出來的 token 拿到 air 那邊 `host add mini-lab … --token …`、回來 `set-token`，之後 `pdx peers --all`。
+
+**憑證是每個 inbound host 一把，沒有共用的。** spec 第一版寫的是接收端一把 `accept_token` 給所有遠端；codex 第二輪 review 指出持有那把 token 的任何人都能自稱另一台 `allow_bypass=true` 的主機。改成每個 `[[peers.hosts]]` 各有 `inbound_token`（本機鑄、只在 `host add` 的回應出現一次）與 `token`（對方鑄、我們出示），比對到哪一把就是哪一台，payload 裡的 `from.host_id` 只是查表 key。配對因此是兩步：兩邊各 `host add`，帶 token 的那一步會去打對方的 `/api/peers` 學回 `host_id`；兩邊都 verified 才算通。
+
+**`/api/peers` 前綴走自己的一條 middleware 鏈。** 既有的 `TokenAuth` 在 admin token 為空時放行所有路由、也吃一次性 ticket，這兩件事對遠端 daemon 打進來的路由都不能成立；而在它外層再包一層判斷也沒用，因為內層照樣會拒掉 inbound token（防守方 review 抓到的）。所以 `cmd/pdx/http_chain.go` 把 `/api/peers` 與 `/api/peers/` 掛成獨立的 chain，結尾是 `PeerAuth`：admin bearer → admin principal，某台 host 的 inbound_token → host principal（帶 alias 與已驗證的 host_id 進 context），其他 401；host principal 只能打本機範圍的 `GET /api/peers`，其餘 403。一般 chain 對其他路由一個位元都沒動，包含 WebSocket 的 ticket。
+
+**設定寫入收斂成一個入口。** `Core.UpdateConfig`：鎖內深拷貝 → mutate → 寫檔 → 提交（保留指標身分）→ 解鎖後才通知。原本 token 與 pairing 兩個 handler 是解鎖後才寫檔、又共用同一個 `.tmp`，兩個請求交錯會把舊 registry 寫回磁碟——現在全部走同一條序列化邊界。順手修掉 `Clone` 把明確清空的陣列變成 nil、重啟後偷偷回預設值的問題。配對的網路驗證在鎖外跑（3 秒），提交時在鎖內重查 alias 唯一、entry 還在、URL 與 inbound_token 沒被刪除重建換掉、host_id 為空或相同、不是自己——任何一項不對就 409，什麼都不落盤。
+
+**遠端回來的東西一律當不可信。** 不跟 redirect（bearer 只會到你填的那台）、3 秒、16 MiB；錯誤文字截 200 bytes 加 `peer:` 前綴；學到的 `host_id` 要 ≤128 個可列印字元才存；每台的列重編碼後超過 1 MiB 就整台換成失敗列，不讓一台把總表撐爆到 CLI 讀不下；遠端列的 `Host`/`HostID`/`Address` 一律覆寫成本機 config 的 alias 與已驗證的 host_id，重建後不合法的地址設空；CLI 印表前跳脫所有控制字元（ANSI/OSC 注入），`--json` 維持原樣。
+
+**真機驗收**：mlab 上兩個隔離 daemon 雙向配對成功，`--all` 兩邊各 26 列；九格授權矩陣（inbound token 只能 `GET /api/peers`，`scope=all`、hosts 路由 403，`/api/config` 401；無 bearer / ticket 401；admin 200）；`/api/config` 回應兩個 token 都是空字串而磁碟上兩把都在；對方停掉後顯示 `b  (unreachable: …)` 且 exit 0。
+
+**流程**：plan 一輪 codex（1 Blocker 7 Major 3 Minor）、7 個 task 各自 review（兩個安全 task 用 opus；Task 5 一輪修正、Task 7 一條文法裁定）、final review 9 項修正、PR 標準 + 三視角 adversarial 5 項修正、收斂兩輪 2 項修正後無發現。延後 #996。P3（虛擬 peer 投遞）已由另一個 session 接手。
+
+### Feat: tmux 重啟後的 pane 依 session 名稱自動重新掛回（#1002）
+
+同一個 daemon 開兩個 Purdex client：tmux server 重啟後在 A 按 Rebuild 重建了 session，B 上同一個分頁卻永遠停在「tmux restarted」面板——它的 pane 還綁著死掉的 `(code, tmux_instance)`，而已終止的 pane 不會再被對帳。現在 `tmux-restarted` 的 pane 只要同一 host 上有一個活的 session 名字跟它最後看到的一樣，就自己重新 attach：`decideRevive`（純函式：名字精確相符、live `tmux_instance` 非空、`mode` 存在但非 terminal 就拒）、`reviveAllowed`（對 rebuild operation store 的逐 pane 閘門）、`runRevivePass`（rebuild 鎖持有中整批跳過；host 的 attach gate 要開）。兩個觸發點：`sessions` 事件對帳＋開閘之後、probe 之前跑一次（同一個 payload 標死的 pane 在同一事件內就復活，離線重連的情境）；rebuild 鎖釋放時對每個 host 再跑一次。只處理 `tmux-restarted`，不碰 `session-closed`。純 SPA，daemon 無變更。
+
 ## [1.0.0-alpha.336] - 2026-09-14
 
 ### Feat: App 在自己所在的機器上安裝／啟動／更新 pdx daemon——Electron + SPA 側（#997）
