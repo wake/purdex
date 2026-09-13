@@ -150,9 +150,9 @@ func TestPairLimiter_IndependentPairsIndependent(t *testing.T) {
 	}
 }
 
-// TestPairLimiter_MapBoundedAfterPruning pins that Allow prunes a key's own
-// expired timestamps on access, so a long-lived key's slice does not grow
-// past the limit across many windows.
+// TestPairLimiter_MapBoundedAfterPruning pins that Allow prunes every key's
+// expired timestamps on each call (not just the touched key's), so a
+// long-lived key's slice does not grow past the limit across many windows.
 func TestPairLimiter_MapBoundedAfterPruning(t *testing.T) {
 	clock := &manualClock{t: time.Unix(0, 0)}
 	l := newPairLimiter(30, 60*time.Second, clock.Now)

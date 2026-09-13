@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -145,6 +146,24 @@ func ParseProcStart(s string) (time.Time, error) {
 // registryFilenamePattern matches "<pid>.json" registry filenames.
 var registryFilenamePattern = regexp.MustCompile(`^([0-9]+)\.json$`)
 
+// warnedUnclassifiablePids dedupes the "could not classify process" log
+// line (in ReadRegistry, below) to at most once per pid for the lifetime of
+// the process. ReadRegistry is otherwise a pure, stateless function of its
+// (dir, live) arguments — this package-level map is the one deliberate
+// exception, so a persistently unclassifiable process (e.g. a
+// permission-denied /proc read that never resolves) does not log a fresh
+// line on every /api/peers poll.
+var warnedUnclassifiablePids sync.Map
+
+// warnUnclassifiableOnce logs pid's Info failure the first time it is seen
+// and is a silent no-op on every subsequent call for the same pid.
+func warnUnclassifiableOnce(pid int, err error) {
+	if _, already := warnedUnclassifiablePids.LoadOrStore(pid, struct{}{}); already {
+		return
+	}
+	log.Printf("peers: registry: pid %d: could not classify process (argv unavailable: %v); skipping", pid, err)
+}
+
 // ReadRegistry parses every "<pid>.json" in dir and returns the live ones.
 // skipped counts every file considered and rejected (name mismatch, decode
 // error, missing required field, bad procStart, dead). A dir that does not
@@ -204,21 +223,34 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 			continue
 		}
 
+		// Cheap liveness pre-check, before the (potentially expensive — up
+		// to four `ps` forks on darwin) Info call below: a dead pid, or one
+		// whose inbox socket is already gone, must never trigger Info. Dead
+		// entries are the common case (every <pid>.json left behind by an
+		// exited Claude Code session survives until the next cleanup), and
+		// must stay a zero-fork, silent skip exactly as before D9.
+		if live.Stat(wire.Inbox) != nil || !live.PidAlive(wire.PID) {
+			skipped++
+			continue
+		}
+
 		// D9 proxy classification. When Info is set, it replaces StartTime
 		// (one call per entry, not two) and also supplies Argv/ExePath so
 		// IsProxyProcess can classify the entry. Fail closed: a process
 		// that cannot be classified (Info errors, or returns an empty
-		// Argv — e.g. a permission-denied /proc read, or the process
-		// having already exited) must never become a deliverable cc row,
-		// so it is skipped exactly like a dead entry rather than defaulting
-		// to IsProxy=false.
+		// Argv — e.g. a permission-denied /proc read, or a race where the
+		// process exited between the PidAlive check above and here) must
+		// never become a deliverable cc row, so it is skipped exactly like
+		// a dead entry rather than defaulting to IsProxy=false — but only
+		// warns once per pid (warnUnclassifiableOnce), so a persistently
+		// unclassifiable process does not spam the log on every poll.
 		entryLive := live
 		isProxy := false
 		if live.Info != nil {
 			info, infoErr := live.Info(wire.PID)
 			if infoErr != nil || len(info.Argv) == 0 {
 				skipped++
-				log.Printf("peers: registry: pid %d: could not classify process (argv unavailable: %v); skipping", wire.PID, infoErr)
+				warnUnclassifiableOnce(wire.PID, infoErr)
 				continue
 			}
 			isProxy = IsProxyProcess(info)

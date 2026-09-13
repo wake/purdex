@@ -1,7 +1,9 @@
 package peers
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -630,5 +632,107 @@ func TestReadRegistry_NilInfoUnchanged(t *testing.T) {
 	}
 	if entries[0].IsProxy {
 		t.Errorf("IsProxy = true, want false (Info is nil)")
+	}
+}
+
+// captureRegistryLog redirects the standard logger's output to an in-memory
+// buffer for the duration of the test, restoring it via t.Cleanup. Every
+// test that uses it calls ReadRegistry synchronously from a single
+// goroutine, so a plain (unguarded) bytes.Buffer is safe under -race.
+func captureRegistryLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := log.Writer()
+	log.SetOutput(buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return buf
+}
+
+// TestReadRegistry_DeadPid_InfoNeverCalled pins the review fix: a dead pid
+// (PidAlive false) must be skipped by the cheap Stat/PidAlive pre-check
+// BEFORE Info is ever invoked — Info is agent.ReadProcessInfo in
+// production, up to four `ps` forks on darwin, and every stale <pid>.json
+// left behind by an exited Claude Code session must stay a zero-fork,
+// silent skip exactly as it was before D9's Info integration.
+func TestReadRegistry_DeadPid_InfoNeverCalled(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "76973.json", fixture76973)
+
+	infoCalls := 0
+	live := Liveness{
+		Stat:     func(path string) error { return nil },
+		PidAlive: func(pid int) bool { return false }, // dead
+		StartTime: func(pid int) (time.Time, error) {
+			t.Fatal("StartTime must not be called for a dead pid")
+			return time.Time{}, nil
+		},
+		Info: func(pid int) (agent.ProcessInfo, error) {
+			infoCalls++
+			return agent.ProcessInfo{}, fmt.Errorf("Info must not be called for a dead pid")
+		},
+	}
+
+	buf := captureRegistryLog(t)
+
+	entries, skipped, err := ReadRegistry(dir, live)
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err: %v", err)
+	}
+	if skipped != 1 || len(entries) != 0 {
+		t.Fatalf("skipped=%d len(entries)=%d, want 1 and 0", skipped, len(entries))
+	}
+	if infoCalls != 0 {
+		t.Errorf("Info called %d times, want 0 (dead pid must skip before Info)", infoCalls)
+	}
+	if logs := buf.String(); logs != "" {
+		t.Errorf("log output = %q, want empty (dead pid must not log anything)", logs)
+	}
+}
+
+// TestReadRegistry_UnclassifiablePid_WarnsOnlyOnceAcrossCalls pins the
+// review fix: an alive pid whose Info call succeeds but returns an empty
+// Argv is skipped on every call (fail closed), but the "could not classify
+// process" log line for that pid fires at most once, even across multiple
+// separate ReadRegistry calls (e.g. repeated /api/peers polls) — not once
+// per call, which would spam the log for a persistently unclassifiable
+// process.
+func TestReadRegistry_UnclassifiablePid_WarnsOnlyOnceAcrossCalls(t *testing.T) {
+	const pid = 650001 // unique to this test: warnedUnclassifiablePids is
+	// a package-level, pid-keyed dedup, so a pid shared with another test
+	// that also exercises the unclassifiable path could observe stale
+	// "already warned" state depending on test order.
+	warnedUnclassifiablePids.Delete(pid) // defensive: idempotent across -count>1 reruns
+
+	dir := t.TempDir()
+	content := fmt.Sprintf(`{"pid":%d,"sessionId":"sess-%d","procStart":"Sun Sep 13 15:22:36 2026","messagingSocketPath":"/tmp/%d.sock"}`, pid, pid, pid)
+	writeFixture(t, dir, fmt.Sprintf("%d.json", pid), content)
+
+	live := Liveness{
+		Stat:     func(path string) error { return nil },
+		PidAlive: func(p int) bool { return true },
+		StartTime: func(p int) (time.Time, error) {
+			t.Fatal("StartTime must not be called when Info is set")
+			return time.Time{}, nil
+		},
+		Info: func(p int) (agent.ProcessInfo, error) {
+			return agent.ProcessInfo{}, nil // empty Argv: unclassifiable
+		},
+	}
+
+	buf := captureRegistryLog(t)
+
+	for i := 0; i < 2; i++ {
+		entries, skipped, err := ReadRegistry(dir, live)
+		if err != nil {
+			t.Fatalf("ReadRegistry call %d: unexpected err: %v", i+1, err)
+		}
+		if skipped != 1 || len(entries) != 0 {
+			t.Fatalf("call %d: skipped=%d len(entries)=%d, want 1 and 0", i+1, skipped, len(entries))
+		}
+	}
+
+	got := strings.Count(buf.String(), fmt.Sprintf("pid %d", pid))
+	if got != 1 {
+		t.Errorf("log occurrences for pid %d across 2 calls = %d, want 1 (warn once); log=%q", pid, got, buf.String())
 	}
 }
