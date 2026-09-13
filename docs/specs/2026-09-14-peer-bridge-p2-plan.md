@@ -2,7 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Plan v1.
+Plan v2 (after codex plan review `task-mu04hrgt-453err`: 1 Blocker, 7 Majors,
+3 Minors — all applied).
 
 **Goal:** A daemon knows its peer hosts. `pdx peers --all` lists every agent
 session across every configured host in one table, per-host failures inline.
@@ -53,8 +54,16 @@ P1 plan (`2026-09-14-peer-bridge-p1-plan.md`) describes the code this builds on.
   through `config.Redacted`. No `log.Printf` prints a `Config`, a `PeerHost`,
   or a token.
 - **Package boundaries:** `internal/peers` stays a leaf (stdlib +
-  `internal/agent`). `internal/middleware` may import `internal/config`.
-  `cmd/pdx` never imports `internal/module/peers`.
+  `internal/agent`). `internal/middleware` may import `internal/config` but
+  never `internal/module/*` (a middleware test importing the peers module
+  would form a test import cycle, because the module imports middleware for
+  `PrincipalFrom`). `cmd/pdx/main.go` already imports `internal/module/peers`
+  to register it; `cmd/pdx/peers.go` (the CLI) must not.
+- **Config snapshots, never shared slices.** Every reader that leaves
+  `CfgMu` (auth, fan-out, handlers) works on `Config.Clone()` / a cloned
+  `Hosts` slice taken under the read lock. Every writer goes through
+  `Core.UpdateConfig`. Run `go test -race ./internal/core/ ./internal/module/peers/
+  ./internal/middleware/` once per task in Phases B–C.
 - **Token format:** `pdxp_` + 32 lowercase hex chars from `crypto/rand`
   (16 bytes). Constant-time comparison everywhere (`crypto/subtle`).
 - **Aliases** are compared case-insensitively (`strings.EqualFold`), may not
@@ -112,17 +121,27 @@ func (p PeersConfig) FindPeerHostByAlias(alias string) int
 // InboundToken in constant time and returns the matching host (copy) and
 // true; an empty bearer never matches.
 func (p PeersConfig) MatchInboundToken(bearer string) (PeerHost, bool)
-// ValidateAlias: non-empty, no '/', not EqualFold(localAlias).
+// ValidateAlias: matches ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$, is not "." or
+// "..", and is not EqualFold(localAlias). (One URL path segment, no escaping
+// needed; ServeMux never canonicalises it.)
 func ValidateAlias(alias, localAlias string) error
+// Clone deep-copies every slice (Allow, AllowedPaths, Stream.Presets,
+// Detect.CCCommands, Peers.Hosts) so a mutation of the copy never touches
+// the receiver's backing arrays.
+func (c Config) Clone() Config
 ```
 `Hosts` must serialize as `[[peers.hosts]]` tables in TOML (check the TOML
 library used by `config.Load`/`WriteFile` — `github.com/BurntSushi/toml` or
 `pelletier/go-toml`; read `go.mod`).
 
 **Tests:** round-trip `WriteFile`→`Load` with two hosts preserving every
-field incl. `allow_bypass`; `Redacted` blanks all four secret fields and
-leaves the original intact (mutate the copy's Hosts, assert original
-unchanged); `NewPeerToken` shape (regex `^pdxp_[0-9a-f]{32}$`) and two
+field incl. `allow_bypass` (the file must contain `[[peers.hosts]]`);
+`Redacted` blanks all four secret fields and leaves the original intact
+(mutate the copy's Hosts, assert original unchanged); `Clone` then append to
+the copy's `Peers.Hosts` and edit `Detect.CCCommands[0]` ⇒ original
+unchanged; `ValidateAlias` accepts `air`, `air.2026`, `air-2_x`, rejects
+`""`, `"."`, `".."`, `"a/b"`, `"a b"`, `"?x"`, `"#"`, `"%41"`, 65 chars, and
+the local alias in any case; `NewPeerToken` shape (regex `^pdxp_[0-9a-f]{32}$`) and two
 calls differ; `MatchInboundToken` hits the right host among three, misses on
 empty bearer, misses when the host's InboundToken is empty; `ValidateAlias`
 cases; `FindPeerHostByAlias("AIR")` finds `air`.
@@ -139,26 +158,47 @@ extend `internal/core/config_handler_test.go` (new assertions only) and add
 
 **Produce:**
 ```go
-// UpdateConfig runs mutate under CfgMu, persists to CfgPath (when set),
-// rolls back the in-memory config if the write fails, and calls
-// NotifyConfigChange on success. It returns mutate's error unchanged
-// without persisting.
+// UpdateConfig is the single serialised writer of the runtime config:
+//   1. CfgMu.Lock(); next := c.Cfg.Clone()
+//   2. err := mutate(&next); if err != nil → Unlock, return err (nothing changed)
+//   3. if CfgPath != "" { if err := config.WriteFile(CfgPath, next); err != nil → Unlock, return err (c.Cfg untouched) }
+//   4. *c.Cfg = next   // commit: pointer identity preserved for other holders
+//   5. CfgMu.Unlock(); c.NotifyConfigChange()   // AFTER unlock: agent callbacks take RLock
 func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error
 ```
-`handleGetConfig` and `handlePutConfig` encode `c.Cfg.Redacted()` (taken
-under the read lock) instead of blanking `Token`/`HostID` inline. The
-rollback pattern in `handlePutConfig` (`snapshot := *c.Cfg` … `*c.Cfg =
-snapshot`) is what `UpdateConfig` generalises; refactor `handlePutConfig` to
-use `UpdateConfig` only if the existing tests stay green unedited — else
-leave it and just switch its response to `Redacted()`.
+The mutation runs on a deep copy, so a mutate that edits or deletes a
+`Peers.Hosts` element can never touch the live backing array, and neither a
+mutate error nor a write error changes runtime state.
+
+**Existing writers move onto it** (read all three first; `config.WriteFile`
+is in `internal/config/hostid.go` and calls `os.MkdirAll` — a missing parent
+dir does not make it fail):
+- `handleGetConfig` / `handlePutConfig` (`config_handler.go`): responses
+  encode `Redacted()` of the current config (GET: under RLock; PUT: the
+  committed config). `handlePutConfig`'s body becomes one `UpdateConfig`
+  call carrying its validation + field assignments; status codes and
+  messages unchanged so its tests stay green unedited.
+- `handleTokenAuth` (`token_handler.go:29`) and `handlePairSetup`
+  (`pairing_handler.go:122`) currently `WriteFile` a copy **after**
+  releasing the lock — a window in which a hosts mutation can be overwritten
+  on disk, and both share `WriteFile`'s fixed `<path>.tmp`. Route their
+  writes through `UpdateConfig`, dropping their own `WriteFile` +
+  `NotifyConfigChange` calls so nothing is written twice. Their existing
+  tests must stay green unedited; if one cannot, stop and report.
 
 **Tests:** GET and PUT config with a configured peer host ⇒ response JSON
 has `peers.hosts[0].token == ""` and `inbound_token == ""` while `alias`,
 `url`, `host_id`, `allow_bypass` survive; `UpdateConfig` persists (read the
-file back with `config.Load`), rolls back on write failure (CfgPath in a
-non-existent directory ⇒ error, in-memory config unchanged), and returns a
-mutate error without writing; a callback registered with `OnConfigChange`
-fires once on success and not on failure.
+file back with `config.Load`); write failure — `CfgPath` whose parent is a
+**regular file** (the pattern `config_handler_test.go` already uses) ⇒
+error and in-memory config byte-identical to before; mutate error ⇒ no file
+write (mtime/contents unchanged) and no change; mutate that edits
+`Peers.Hosts[0].Token` and one that deletes `Hosts[1]` ⇒ live config only
+changes after commit, and a slice captured before the call is untouched;
+mutate returning error after editing the copy ⇒ live config unchanged; an
+`OnConfigChange` callback that takes `CfgMu.RLock` and re-reads the config
+runs exactly once on success (no deadlock — run with `-race`), zero times
+on failure; token and pairing handlers still pass their existing tests.
 
 - [ ] tests written and failing
 - [ ] implementation, all green
@@ -198,7 +238,10 @@ type AllEnvelope struct {
 }
 ```
 JSON of `Envelope` must be byte-identical to P1's `response` (golden test:
-marshal a fixture and compare to the literal P1 shape).
+marshal a fixture and compare to the literal P1 shape). Files whose tests
+mention the old type names and must be updated: `internal/module/peers/module_test.go`
+(`response` → `ipeers.Envelope`), `cmd/pdx/peers_test.go` (`peersResponse` →
+`peers.Envelope`); assertions unchanged.
 
 - [ ] tests written and failing
 - [ ] implementation, all green (P1 module + CLI tests still pass)
@@ -237,24 +280,55 @@ func PrincipalFrom(ctx context.Context) (Principal, bool)
 func PeerAuth(adminToken func() string, peers func() config.PeersConfig,
               hostAllowed func(r *http.Request) bool) func(http.Handler) http.Handler
 ```
-**P2 host policy** (a package-level `func HostRoutePolicy(r) bool` in
-`internal/module/peers`, passed in from main.go): host principals may call
-`GET /api/peers` with no `scope` query parameter (or `scope=local`); every
-other method/path/`scope=all` is refused with 403.
+Also export `func WithPrincipal(ctx context.Context, p Principal) context.Context`
+so handler tests in other packages can build a request context without
+running the middleware.
 
-**main.go chain:**
+**P2 host policy** — create `internal/module/peers/policy.go`:
 ```go
-peerChain := middleware.CORS(middleware.IPWhitelist(cfg.Allow)(
-    middleware.PairingGuard(isPairing)(
-        middleware.PeerAuth(tokenFn, peersFn, peersmod.HostRoutePolicy)(mux))))
-outerMux.Handle("/api/peers", peerChain)
-outerMux.Handle("/api/peers/", peerChain)
-outerMux.Handle("/", generalChain) // exactly today's chain minus PeerRouteAuth
+// HostRoutePolicy says which requests a host principal may make in P2:
+// GET /api/peers (exact path) with no scope or scope=local. Everything else
+// (hosts routes, scope=all, any other method) is admin-only.
+func HostRoutePolicy(r *http.Request) bool
 ```
-`peersFn` reads `c.Cfg.Peers` under `CfgMu.RLock` (a copy).
+with `policy_test.go` covering each row. `main.go` passes it to `PeerAuth`.
 
-**Tests (unit on `PeerAuth`, then a composition test that builds `outerMux`
-exactly as main.go does with fakes):**
+**main.go refactor for testability:** extract the chain construction into
+`cmd/pdx/http_chain.go`:
+```go
+// newOuterHandler builds the daemon's outer http.Handler: /api/health
+// (CORS only), the /api/peers prefix chain (PeerAuth, no TokenAuth) and the
+// general chain (today's, minus PeerRouteAuth) for everything else.
+func newOuterHandler(c *core.Core, mux http.Handler, allow []string) http.Handler
+```
+```go
+tokenFn := func() string { RLock; return c.Cfg.Token }
+peersFn := func() config.PeersConfig { RLock; p := c.Cfg.Peers; p.Hosts = append([]config.PeerHost(nil), p.Hosts...); return p }
+isPairing := func() bool { return c.Pairing.Get() == core.StatePairing }
+peerChain := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
+    middleware.PeerAuth(tokenFn, peersFn, peersmod.HostRoutePolicy)(mux))))
+general   := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
+    middleware.TokenAuth(tokenFn, c.Tickets)(mux))))
+outer := http.NewServeMux()
+outer.Handle("GET /api/health", middleware.CORS(http.HandlerFunc(c.HandleHealth)))
+outer.Handle("/api/peers", peerChain)
+outer.Handle("/api/peers/", peerChain)
+outer.Handle("/", general)
+```
+`runServe` calls `newOuterHandler`; nothing else in `runServe` changes. Go's
+ServeMux prefers the more specific pattern, so `/api/peers` and
+`/api/peers/…` never reach `general`, and `/api/peersx` never reaches
+`peerChain` (both muxes use the same escaped-path matching, so there is no
+cross-chain path). CORS preflight (`OPTIONS`) reaches `CORS` first in both
+chains, as today.
+
+**Tests — unit on `PeerAuth` in `internal/middleware/peer_auth_test.go`
+(`package middleware_test`, policy stubbed with a func literal), and the
+composition test in `cmd/pdx/http_chain_test.go` (`package main`) calling
+`newOuterHandler` with a `core.Core` built the way `owner_resolver_test.go`
+builds one (fake tmux, `core.NewServiceRegistry()`), a ticket-validator fake
+on `c.Tickets` if the field type allows, else a stub `TicketValidator`
+passed through a test seam:**
 - admin bearer ⇒ next called, principal admin; empty admin token + admin
   bearer ⇒ 401; host bearer ⇒ principal host with alias/host_id; host bearer
   on a disallowed request ⇒ 403 and next NOT called; wrong bearer ⇒ 401;
@@ -283,15 +357,29 @@ modify `internal/module/peers/module.go`, `module_test.go`, `fakes_test.go`.
 **Produce (client):**
 ```go
 // fetchRemote GETs <baseURL>/api/peers with the bearer, 3 s total timeout,
-// 16 MiB body cap, and decodes an Envelope. Non-200 ⇒ error "HTTP <code>".
+// 16 MiB body cap, and decodes an Envelope. Any non-200 status — including
+// every 3xx, because the client never follows redirects — is an error
+// "HTTP <code>". A decode failure is an error. The bearer is sent only to
+// baseURL's host.
 func fetchRemote(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error)
+// newRemoteClient returns &http.Client{Timeout: 3s, CheckRedirect: func(...) error { return http.ErrUseLastResponse }}.
+func newRemoteClient() *http.Client
 ```
-The module gets a `client *http.Client` field (default `&http.Client{Timeout:
-3 * time.Second}`) and a `fetch func(...)` seam defaulting to `fetchRemote`.
+The module gets a `client *http.Client` field (default `newRemoteClient()`)
+and a `fetch func(ctx, client, baseURL, bearer) (Envelope, error)` seam
+defaulting to `fetchRemote`; `New()` initialises both, and every test helper
+that builds a `Module` literal directly must set them (update the P1 helper
+in `module_test.go` accordingly).
 
 **Handler (`GET /api/peers`):**
 - Read `PrincipalFrom(r.Context())`. `scope=all` with a non-admin principal
-  ⇒ 403 (defence in depth; the policy already refuses).
+  ⇒ 403 (defence in depth; the policy already refuses). Tests build the
+  context with `middleware.WithPrincipal`.
+- Take one config snapshot under `CfgMu.RLock` at the top: local `HostID`,
+  `PeerAlias()`, and a cloned `Peers.Hosts`; every later step uses the
+  snapshot (a concurrent hosts mutation must not be observed mid-request).
+- Replace P1's `TestHandlePeers_ScopeAllRejected` (400) with the new
+  admin/host cases; keep every other P1 test.
 - `scope=all`: run the local inventory (existing code, refactored into
   `m.localEnvelope(r.Context()) ipeers.Envelope`) and, in parallel goroutines,
   `fetch` every host whose `Token != ""`, each with its own 3 s context.
@@ -330,21 +418,38 @@ order; goroutines write into a pre-sized slice by index.
 | `PUT /api/peers/hosts/{alias}` | `{token?, allow_bypass?}` | unknown alias 404; if `token` given verify then store `Token` + learned `HostID`; `allow_bypass` when present; 200 with the list row shape |
 | `DELETE /api/peers/hosts/{alias}` | – | 404 / 204 |
 
-**Verify** = `fetch(ctx 3 s, url, token)`; must return `ok` HTTP 200 with a
-non-empty `host_id`; if the entry already has a non-empty `HostID` that
-differs ⇒ 409 `host_id mismatch`. `host_id` equal to the local `HostID` ⇒
-400 `cannot pair a host with itself`.
+**Verify** = `fetch(ctx 3 s, url, token)` **outside any lock**; the
+predicate is `err == nil && env.OK && env.HostID != ""`. Then commit inside
+`UpdateConfig`, re-checking under the lock: alias still unique / entry still
+present (else 409 `alias changed concurrently` / 404), the entry's `HostID`
+is empty or equal to the learned one (else 409 `host_id mismatch`), and the
+learned `host_id` is not the local `HostID` (400 `cannot pair a host with
+itself`). Any failure leaves `Token`, `HostID`, `AllowBypass` and the file
+untouched. `PathValue("alias")` is matched case-insensitively via
+`FindPeerHostByAlias`.
 
-**Tests (httptest module with a `core.Core` whose `CfgPath` is a temp file):**
+**Tests (httptest module with a `core.Core` whose `CfgPath` is a temp file;
+remote fixture is a full envelope `{"host_id":"air:1","ok":true,"partial":false,"peers":[]}`):**
 add without token ⇒ 201, `inbound_token` matches the regex, file on disk
-contains the host with empty `host_id`; add with token against an httptest
-"remote" returning `{host_id:"air:1"}` ⇒ 201 `verified:true` and `host_id`
-persisted; add with bad token (remote 401) ⇒ 502 and nothing persisted;
-duplicate alias (case-insensitive) ⇒ 409; alias with `/` or equal to local
-alias ⇒ 400; PUT token verifies and stores; PUT allow_bypass only; PUT on
+contains the host with empty `host_id`; add with token against the fixture
+⇒ 201 `verified:true` and `host_id` persisted; add with bad token (remote
+401) ⇒ 502 and nothing persisted; remote returns `ok:false` or empty
+`host_id` ⇒ 502; remote `host_id` equal to local ⇒ 400; PUT token when the
+entry already has a different `host_id` ⇒ 409 and the old token kept;
+duplicate alias (case-insensitive) ⇒ 409; invalid alias (`a/b`, `..`, local
+alias) ⇒ 400; PUT token verifies and stores; PUT allow_bypass only; PUT on
 unknown ⇒ 404; DELETE ⇒ 204 then GET list lacks it; list never contains
-`token`/`inbound_token` keys (JSON key assertion); host principal on any
-hosts route ⇒ 403 (through `HostRoutePolicy`).
+`token`/`inbound_token` keys (JSON key assertion); **concurrency**: two
+parallel POSTs with the same alias gated by a barrier inside the fake
+verify ⇒ exactly one 201 and one 409, file has one entry; PUT verify in
+flight while a DELETE removes the entry ⇒ PUT 404, nothing re-created;
+**two real modules pairing both ways** through two httptest servers (each
+module's `fetch` is the real `fetchRemote`) ⇒ both entries verified, and a
+`scope=all` on each shows the other; **capability of an inbound-token
+holder**: with the composition chain from Task 4, the token can `GET
+/api/peers` (200) but not `scope=all` (403), any hosts route (403), or
+`GET /api/config` (401 — general chain, admin token non-empty); alias
+containing `.` (`air.2026`) survives add → set-token → remove.
 
 - [ ] tests written and failing
 - [ ] implementation, all green
@@ -372,12 +477,25 @@ hosts route ⇒ 403 (through `HostRoutePolicy`).
   on stdout; exit 1 on 4xx/5xx with the server's `error` on stderr.
 - `pdx peers host set-token <alias> <token> [--allow-bypass=true|false]` → PUT.
 - `pdx peers host remove <alias>` → DELETE.
-- Unknown subcommand / missing args ⇒ usage to stderr, exit 2. All flags
-  parsed by the existing hand parser extended, unknown flags still exit 2.
+- **Grammar** (hand parser, replaces P1's): `pdx peers [--json] [--all]
+  [--config <path>]` and `pdx peers host <add|set-token|remove|list> [args…]
+  [--config <path>] [--token <t>] [--allow-bypass=true|false]`. Flags may
+  appear anywhere after `peers`; `host` must be the first positional and
+  its verb the second; arity is strict (`add` = 2 positionals, `set-token`
+  = 2, `remove` = 1, `list` = 0) — extra or missing positionals, a flag
+  missing its value, an unknown flag, a flag valid only for another form
+  (`--all` with `host`, `--token` without `host add|set-token`) ⇒ usage
+  line on stderr, exit 2, before any config load or request. Alias is
+  placed in the URL path as-is (validated server-side; the client also
+  refuses aliases containing `/`).
+- Replace P1's `TestRunPeersCmd_UnknownFlag` (it used `--all`) with
+  `--bogus`; keep its assertions.
 
 **Tests:** table golden for `--all` with a healthy remote and an unreachable
-one; each `host` subcommand against `httptest` asserting method, path and
-body; error passthrough; usage exit 2.
+one; each `host` subcommand against `httptest` asserting method, path
+(`/api/peers/hosts/air.2026` for a dotted alias) and body; error
+passthrough; every grammar rejection above ⇒ exit 2 with no request made
+(assert the test server saw zero requests).
 
 - [ ] tests written and failing
 - [ ] implementation, all green
@@ -387,10 +505,10 @@ body; error passthrough; usage exit 2.
 
 ### Task 8: Two isolated daemons paired both ways on mlab
 
-- [ ] Build `bin/pdx`; write `/tmp/pdx-p2/a/config.toml` (`host_id="p2-a:aaaaaa"`, `bind=127.0.0.1`, `port=7861`, `token="atoken"`, `data_dir=/tmp/pdx-p2/a/data`, `[peers] alias="a"`) and `/tmp/pdx-p2/b/config.toml` (`p2-b:bbbbbb`, 7862, `token=""` — empty admin token on purpose, alias `b`). Copy the production `agent_events.db` snapshot into `a/data` only (as in P1 acceptance). Start both in tmux windows `pdx-p2a`, `pdx-p2b`.
-- [ ] Pairing: `pdx peers host add b http://127.0.0.1:7862 --config a.toml` → T1; `pdx peers host add a http://127.0.0.1:7861 --token T1 --config b.toml` → T2 + `verified: yes` (b's admin token is empty, so this proves the daemon API works with… note: b's CLI uses b's admin token which is empty ⇒ b's own `/api/peers/hosts` refuses the CLI with 401. Expected per §4.6. Set b's token to `btoken` instead, restart b, redo.) Then `pdx peers host set-token b T2 --config a.toml` → `verified: yes`.
-- [ ] `pdx peers --all --config a.toml` shows `a` rows (cc sessions) and `b` rows (all `no_agent`, empty registry snapshot); `--config b.toml` shows both the other way.
-- [ ] Wrong inbound token: `curl -H 'Authorization: Bearer nope' http://127.0.0.1:7862/api/peers` ⇒ 401; T1 against 7861 ⇒ 200; T1 against `7861/api/peers?scope=all` ⇒ 403; T1 against `7861/api/peers/hosts` ⇒ 403.
-- [ ] `curl http://127.0.0.1:7861/api/config -H 'Authorization: Bearer atoken' | jq .peers` shows hosts with empty `token`/`inbound_token`.
-- [ ] Stop b; `pdx peers --all --config a.toml` shows `b  (unreachable: …)` and exit 0.
+- [ ] Build `bin/pdx`; write `/tmp/pdx-p2/a/config.toml` (`host_id="p2-a:aaaaaa"`, `bind="127.0.0.1"`, `port=7861`, `token="atoken"`, `data_dir="/tmp/pdx-p2/a/data"`, `upload_dir="/tmp/pdx-p2/a/upload"`, `[peers] alias="a"`) and `/tmp/pdx-p2/b/config.toml` (`p2-b:bbbbbb`, 7862, `token="btoken"`, its own dirs, alias `b`). Both admin tokens are non-empty on purpose: a normal start with an empty token mints one (`initPairing`), so the empty-token matrix is only provable in the Task 4 composition test. Both daemons read the same `~/.claude/sessions`, so `b` will list every tmux session with live cc entries but no owner frames ⇒ `no_agent` rows (its `data_dir` has no agent frames); copy the production `agent_events.db` snapshot into `a/data` only (as in P1 acceptance). Start both in tmux windows `pdx-p2a`, `pdx-p2b`.
+- [ ] Pairing: `pdx peers host add b http://127.0.0.1:7862 --config /tmp/pdx-p2/a/config.toml` → prints T1; `pdx peers host add a http://127.0.0.1:7861 --token T1 --config /tmp/pdx-p2/b/config.toml` → prints T2, `verified: yes`; `pdx peers host set-token b T2 --config /tmp/pdx-p2/a/config.toml` → `verified: yes`; `host list` on both shows the other as verified.
+- [ ] `pdx peers --all --config /tmp/pdx-p2/a/config.toml` shows `a` rows (cc sessions deliverable) and `b` rows (same sessions, `no_agent`); `--config /tmp/pdx-p2/b/config.toml` the other way round.
+- [ ] Wrong inbound token: `curl -H 'Authorization: Bearer nope' http://127.0.0.1:7862/api/peers` ⇒ 401; T1 against `7861/api/peers` ⇒ 200; T1 against `7861/api/peers?scope=all` ⇒ 403; T1 against `7861/api/peers/hosts` ⇒ 403; T1 against `7861/api/config` ⇒ 401.
+- [ ] `curl http://127.0.0.1:7861/api/config -H 'Authorization: Bearer atoken' | jq .peers` shows the host with empty `token`/`inbound_token`; `cat /tmp/pdx-p2/a/config.toml` shows a `[[peers.hosts]]` table with both tokens present.
+- [ ] Stop b; `pdx peers --all --config /tmp/pdx-p2/a/config.toml` shows `b  (unreachable: …)` and exit 0.
 - [ ] Tear down both daemons, `rm -rf /tmp/pdx-p2`; paste the tables and curl codes into the PR.
