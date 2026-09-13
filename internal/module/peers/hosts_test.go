@@ -153,6 +153,34 @@ func failIfCalledFetch(t *testing.T) fetchFunc {
 	}
 }
 
+// TestValidHostID pins Item 5's acceptance rule for a peer-reported
+// host_id: non-empty, at most 128 bytes, and every rune printable and not
+// a space — so a control character (e.g. an ANSI escape), a length far
+// beyond any legitimate host_id, or an empty value is never accepted.
+func TestValidHostID(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"typical", "mlab:abc123", true},
+		{"exactly 128 bytes", strings.Repeat("a", 128), true},
+		{"129 bytes", strings.Repeat("a", 129), false},
+		{"ansi escape", "\x1b[31mred\x1b[0m", false},
+		{"contains a space", "has space", false},
+		{"contains a tab", "has\ttab", false},
+		{"contains a newline", "has\nnewline", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validHostID(tc.id); got != tc.want {
+				t.Errorf("validHostID(%q) = %v, want %v", tc.id, got, tc.want)
+			}
+		})
+	}
+}
+
 // ---- GET /api/peers/hosts ----
 
 func TestHandleListHosts_NonAdminForbidden(t *testing.T) {
@@ -409,6 +437,50 @@ func TestHandleAddHost_RemoteErrorBounded_502(t *testing.T) {
 func TestHandleAddHost_RemoteEmptyHostID_502(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
 	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "", OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"alias": "air", "url": "https://a.example", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air") != -1 {
+		t.Fatalf("alias should not be persisted")
+	}
+}
+
+// TestHandleAddHost_RemoteInvalidHostIDTooLong_502NothingPersisted pins
+// Item 5: a remote reporting a host_id over 128 bytes must be rejected as
+// invalid (502), not truncated and stored.
+func TestHandleAddHost_RemoteInvalidHostIDTooLong_502NothingPersisted(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	longHostID := strings.Repeat("y", 300)
+	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: longHostID, OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"alias": "air", "url": "https://a.example", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid host_id") {
+		t.Errorf("body = %s, want mention of invalid host_id", rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air") != -1 {
+		t.Fatalf("alias should not be persisted")
+	}
+}
+
+// TestHandleAddHost_RemoteInvalidHostIDAnsiEscape_502NothingPersisted pins
+// Item 5: a remote reporting a host_id containing a control character
+// (e.g. an ANSI escape) must be rejected as invalid, not stored verbatim.
+func TestHandleAddHost_RemoteInvalidHostIDAnsiEscape_502NothingPersisted(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "\x1b[31mair:1\x1b[0m", OK: true}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a.example", "token": "tok",
@@ -776,6 +848,33 @@ func TestHandlePutHost_HostIDMismatch_409OldTokenKept(t *testing.T) {
 
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	idx := reloaded.Peers.FindPeerHostByAlias("air")
+	if idx == -1 {
+		t.Fatalf("host disappeared")
+	}
+	if reloaded.Peers.Hosts[idx].Token != "old-tok" || reloaded.Peers.Hosts[idx].HostID != "air:X" {
+		t.Errorf("persisted host = %+v, want token/host_id unchanged", reloaded.Peers.Hosts[idx])
+	}
+}
+
+// TestHandlePutHost_RemoteInvalidHostID_502OldValuesKept pins Item 5: a
+// PUT verify against a remote reporting an invalid host_id (too long) is
+// rejected outright (502) before ever reaching UpdateConfig, leaving the
+// entry's existing token/host_id untouched.
+func TestHandlePutHost_RemoteInvalidHostID_502OldValuesKept(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:X", Token: "old-tok", InboundToken: "inbound-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	longHostID := strings.Repeat("z", 300)
+	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: longHostID, OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
+		"token": "new-tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
 	}
 	reloaded := loadCfg(t, cfgPath)
 	idx := reloaded.Peers.FindPeerHostByAlias("air")

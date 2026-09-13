@@ -767,12 +767,14 @@ func TestHandlePeers_ScopeAll_HostIDMismatchBounded(t *testing.T) {
 	}
 }
 
-// TestHandlePeers_ScopeAll_UnpairedLearnedHostIDBounded pins the follow-up
-// fix to fetchHostResult's success path: when the configured host entry
-// has no HostID yet (unpaired), resultHostID falls back to the remote's
-// own reported env.HostID — attacker-controlled, and unbounded before the
-// fix. A 300-byte remote host_id must be truncated in the row.
-func TestHandlePeers_ScopeAll_UnpairedLearnedHostIDBounded(t *testing.T) {
+// TestHandlePeers_ScopeAll_UnpairedInvalidLearnedHostID_FailureRow pins
+// Item 5: when the configured host entry has no HostID yet (unpaired),
+// fetchHostResult falls back to the remote's own reported env.HostID —
+// attacker-controlled — and must validate it with validHostID before
+// trusting it, rather than merely bounding/truncating an otherwise-invalid
+// value into an ok=true row. A 300-byte remote host_id fails validHostID
+// (over the 128-byte limit), so the row must be a bounded failure instead.
+func TestHandlePeers_ScopeAll_UnpairedInvalidLearnedHostID_FailureRow(t *testing.T) {
 	dir := t.TempDir()
 	longHostID := strings.Repeat("q", 300)
 
@@ -792,7 +794,8 @@ func TestHandlePeers_ScopeAll_UnpairedLearnedHostIDBounded(t *testing.T) {
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 
 	// HostID left empty: this host is unpaired/unverified, so
-	// fetchHostResult must fall back to the remote's own reported value.
+	// fetchHostResult must fall back to (and validate) the remote's own
+	// reported value.
 	hosts := []config.PeerHost{
 		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: ""},
 	}
@@ -813,17 +816,14 @@ func TestHandlePeers_ScopeAll_UnpairedLearnedHostIDBounded(t *testing.T) {
 		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
 	}
 	row := got.Hosts[1]
-	if !row.OK {
-		t.Errorf("row = %+v, want ok=true", row)
+	if row.OK {
+		t.Errorf("row = %+v, want ok=false (invalid learned host_id)", row)
 	}
-	if row.HostID == longHostID {
-		t.Errorf("row.HostID contains the full 300-byte remote host_id unbounded: %q", row.HostID)
+	if row.Error != "peer returned an invalid host_id" {
+		t.Errorf("row.Error = %q, want %q", row.Error, "peer returned an invalid host_id")
 	}
-	if !strings.HasSuffix(row.HostID, "…") {
-		t.Errorf("row.HostID = %q, want to end with an ellipsis", row.HostID)
-	}
-	if len(row.HostID) > 210 {
-		t.Errorf("row.HostID length = %d bytes, want bounded; host_id=%q", len(row.HostID), row.HostID)
+	if row.Peers == nil || len(row.Peers) != 0 {
+		t.Errorf("row.Peers = %+v, want empty non-nil slice", row.Peers)
 	}
 }
 

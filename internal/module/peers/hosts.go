@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"unicode"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
@@ -171,11 +172,30 @@ func mintInboundToken(adminToken string) (string, error) {
 	return "", fmt.Errorf("mint inbound token: repeated collision with admin token")
 }
 
+// validHostID reports whether s is safe to persist or trust as a peer's
+// self-reported host_id: non-empty, at most 128 bytes, and every rune
+// printable and not a space. A peer's host_id is attacker-controlled — it
+// flows into config (POST/PUT persist it), into fan-out rows, and
+// otherwise unbounded into this host's own error messages — so a control
+// character (e.g. an ANSI escape), whitespace, or an oversized value must
+// never be accepted, let alone stored or trusted.
+func validHostID(s string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsPrint(r) || unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // verifyHost calls the fetch seam against url with the given outbound
 // token, applying the verify predicate: err == nil && env.OK &&
-// env.HostID != "". On success errMsg is ""; otherwise errMsg names why
-// (transport error, peer reported not-ok, or an empty host_id), fit to
-// report to the caller as the body of a 502.
+// validHostID(env.HostID). On success errMsg is ""; otherwise errMsg names
+// why (transport error, peer reported not-ok, or an invalid host_id), fit
+// to report to the caller as the body of a 502.
 func (m *Module) verifyHost(ctx context.Context, targetURL, token string) (env ipeers.Envelope, errMsg string) {
 	vctx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
 	defer cancel()
@@ -190,8 +210,8 @@ func (m *Module) verifyHost(ctx context.Context, targetURL, token string) (env i
 		}
 		return env, "peer reported ok=false"
 	}
-	if env.HostID == "" {
-		return env, "peer returned empty host_id"
+	if !validHostID(env.HostID) {
+		return env, "peer returned an invalid host_id"
 	}
 	return env, ""
 }

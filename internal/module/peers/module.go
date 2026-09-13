@@ -390,11 +390,21 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 
 	// h.HostID is our own configured (trusted) value; env.HostID, used only
 	// as a fallback for an unpaired host, is the remote's own report and
-	// just as attacker-controlled as its Error text, so it is bounded the
-	// same way.
+	// just as attacker-controlled as its Error text — so it is trusted
+	// only when it passes the same validHostID check POST/PUT require
+	// before ever persisting a host_id, exactly as verifyHost does.
 	resultHostID := h.HostID
 	if resultHostID == "" {
-		resultHostID = boundRemoteText(env.HostID)
+		if !validHostID(env.HostID) {
+			return ipeers.HostResult{
+				Alias:  h.Alias,
+				HostID: h.HostID,
+				OK:     false,
+				Error:  "peer returned an invalid host_id",
+				Peers:  []ipeers.PeerRecord{},
+			}
+		}
+		resultHostID = env.HostID
 	}
 
 	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID)
