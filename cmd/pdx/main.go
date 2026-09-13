@@ -192,6 +192,11 @@ func runServe(args []string) {
 	// 9. Apply middleware chain and start HTTP server
 	// Health endpoint bypasses auth (used for connection testing).
 	// It still needs CORS so cross-origin SPA requests succeed.
+	tokenFn := func() string {
+		c.CfgMu.RLock()
+		defer c.CfgMu.RUnlock()
+		return c.Cfg.Token
+	}
 	outerMux := http.NewServeMux()
 	outerMux.Handle("GET /api/health", middleware.CORS(
 		http.HandlerFunc(c.HandleHealth)))
@@ -200,11 +205,8 @@ func runServe(args []string) {
 			middleware.PairingGuard(func() bool {
 				return c.Pairing.Get() == core.StatePairing
 			})(
-				middleware.TokenAuth(func() string {
-					c.CfgMu.RLock()
-					defer c.CfgMu.RUnlock()
-					return c.Cfg.Token
-				}, c.Tickets)(mux)))))
+				middleware.PeerRouteAuth("/api/peers", tokenFn)(
+					middleware.TokenAuth(tokenFn, c.Tickets)(mux))))))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
