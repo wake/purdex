@@ -17,7 +17,6 @@ import (
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
-	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/agent"
 	backupmod "github.com/wake/purdex/internal/module/backup"
 	"github.com/wake/purdex/internal/module/dev"
@@ -195,21 +194,9 @@ func runServe(args []string) {
 	// 9. Apply middleware chain and start HTTP server
 	// Health endpoint bypasses auth (used for connection testing).
 	// It still needs CORS so cross-origin SPA requests succeed.
-	tokenFn := func() string {
-		c.CfgMu.RLock()
-		defer c.CfgMu.RUnlock()
-		return c.Cfg.Token
-	}
-	outerMux := http.NewServeMux()
-	outerMux.Handle("GET /api/health", middleware.CORS(
-		http.HandlerFunc(c.HandleHealth)))
-	outerMux.Handle("/", middleware.CORS(
-		middleware.IPWhitelist(cfg.Allow)(
-			middleware.PairingGuard(func() bool {
-				return c.Pairing.Get() == core.StatePairing
-			})(
-				middleware.PeerRouteAuth("/api/peers", tokenFn)(
-					middleware.TokenAuth(tokenFn, c.Tickets)(mux))))))
+	// /api/peers gets its own chain (PeerAuth, no TokenAuth) so a
+	// configured peer host's inbound token can authenticate.
+	outerMux := newOuterHandler(c, mux, cfg.Allow)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
