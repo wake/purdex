@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/buildinfo"
 )
 
 func TestHandleDaemonCheck_ReturnsHashes(t *testing.T) {
@@ -200,10 +202,10 @@ func TestHandleDaemonRebuild_RenameFailureEmitsError(t *testing.T) {
 }
 
 func TestHandleDaemonCheck_AvailableFlag(t *testing.T) {
-	old := BakedInHash
-	defer func() { BakedInHash = old }()
+	old := buildinfo.Hash
+	defer func() { buildinfo.Hash = old }()
 
-	BakedInHash = "definitely-not-a-real-hash-0000"
+	buildinfo.Hash = "definitely-not-a-real-hash-0000"
 	t.Setenv("PDX_DEV_MODE", "1")
 	m := New(".")
 	mux := http.NewServeMux()
@@ -222,6 +224,32 @@ func TestHandleDaemonCheck_AvailableFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !body.Available {
-		t.Errorf("expected Available=true when BakedInHash differs, got %+v", body)
+		t.Errorf("expected Available=true when buildinfo.Hash differs, got %+v", body)
+	}
+}
+
+func TestReadVersionFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "VERSION"), []byte("1.2.3\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := &DevModule{repoRoot: dir, versionFile: filepath.Join(dir, "VERSION")}
+	if got := m.readVersionFile(); got != "1.2.3" {
+		t.Fatalf("readVersionFile = %q, want 1.2.3", got)
+	}
+	if got := (&DevModule{}).readVersionFile(); got != "unknown" {
+		t.Fatalf("missing VERSION → %q, want unknown", got)
+	}
+}
+
+func TestRebuildLdflags_InjectBuildinfoHashAndVersion(t *testing.T) {
+	got := rebuildLdflags("abc1234", "1.2.3")
+	for _, want := range []string{
+		"-X github.com/wake/purdex/internal/buildinfo.Hash=abc1234",
+		"-X github.com/wake/purdex/internal/buildinfo.Version=1.2.3",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ldflags %q missing %q", got, want)
+		}
 	}
 }

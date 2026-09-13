@@ -13,12 +13,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-// BakedInHash is the short git commit hash injected at build time via
-// -ldflags "-X github.com/wake/purdex/internal/module/dev.BakedInHash=<sha>".
-// Defaults to "unknown" for dev-mode `go run` without the flag.
-var BakedInHash = "unknown"
+	"github.com/wake/purdex/internal/buildinfo"
+)
 
 // daemonRebuildMu serializes concurrent rebuild requests. Used by Task 4.
 var daemonRebuildMu sync.Mutex
@@ -91,15 +88,15 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	newPath := filepath.Join(binDir, "pdx.new")
 
 	// Fix 1: Inject the current git hash via -ldflags so the rebuilt binary
-	// reports the correct BakedInHash through /api/dev/daemon/check. Without
-	// this, the new binary would start with BakedInHash="unknown" and the UI
+	// reports the correct buildinfo.Hash through /api/dev/daemon/check. Without
+	// this, the new binary would start with buildinfo.Hash="unknown" and the UI
 	// would permanently show "update available" after every rebuild.
 	// Bound the git query with a short timeout to avoid blocking the mutex.
 	hashCtx, hashCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer hashCancel()
 	hashOut, _ := exec.CommandContext(hashCtx, "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
 	hash := strings.TrimSpace(string(hashOut))
-	ldflags := "-X github.com/wake/purdex/internal/module/dev.BakedInHash=" + hash
+	ldflags := rebuildLdflags(hash, m.readVersionFile())
 	cmd := exec.CommandContext(ctx, "go", "build", "-ldflags", ldflags, "-o", newPath, "./cmd/pdx")
 	cmd.Dir = m.repoRoot
 	// Inherit env so GOCACHE / PATH / HOME work; do not scrub.
@@ -179,10 +176,28 @@ func (m *DevModule) handleDaemonCheck(w http.ResponseWriter, _ *http.Request) {
 		latest = strings.TrimSpace(string(out))
 	}
 	resp := daemonCheckResponse{
-		CurrentHash: BakedInHash,
+		CurrentHash: buildinfo.Hash,
 		LatestHash:  latest,
-		Available:   latest != "" && latest != BakedInHash,
+		Available:   latest != "" && latest != buildinfo.Hash,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// rebuildLdflags bakes the build identity into internal/buildinfo.
+func rebuildLdflags(hash, version string) string {
+	return "-X github.com/wake/purdex/internal/buildinfo.Hash=" + hash +
+		" -X github.com/wake/purdex/internal/buildinfo.Version=" + version
+}
+
+// readVersionFile returns the trimmed VERSION file, or "unknown".
+func (m *DevModule) readVersionFile() string {
+	data, err := os.ReadFile(m.versionFile)
+	if err != nil {
+		return "unknown"
+	}
+	if v := strings.TrimSpace(string(data)); v != "" {
+		return v
+	}
+	return "unknown"
 }
