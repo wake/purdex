@@ -5,11 +5,20 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
 // MaxTextBytes is the maximum size, in bytes, of a delivered message body.
 const MaxTextBytes = 64 * 1024
+
+// MaxLabelBytes bounds the sender-controlled labels that end up in a
+// frame's from-name and in a helper's name: WireFrom.SessionName and
+// WireFrom.PeerName.
+const MaxLabelBytes = 256
+
+// MaxHopChainBytes bounds the loop-detection token a relay carries through.
+const MaxHopChainBytes = 1024
 
 // Wire limits (spec §4): the receiving daemon's in-memory windows and the
 // two socket/HTTP timeouts. Named here, next to MaxTextBytes, so every
@@ -40,7 +49,30 @@ var (
 	ErrTextOversized = errors.New("text too large")
 	// ErrModeInvalid: the mode is not "", prompting or bypass (bad_mode).
 	ErrModeInvalid = errors.New("mode invalid")
+	// ErrFieldInvalid: a label (session_name, peer_name, hop_chain) is too
+	// long, not valid UTF-8, or carries control characters (bad_request).
+	ErrFieldInvalid = errors.New("field invalid")
 )
+
+// validateLabel checks a sender-controlled string: at most max bytes,
+// valid UTF-8 and (when printable) free of control characters. "" is
+// always fine — every label is optional.
+func validateLabel(name, s string, max int, printable bool) error {
+	if len(s) > max {
+		return fmt.Errorf("%w: %s exceeds %d bytes", ErrFieldInvalid, name, max)
+	}
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("%w: %s is not valid UTF-8", ErrFieldInvalid, name)
+	}
+	if printable {
+		for _, r := range s {
+			if unicode.IsControl(r) {
+				return fmt.Errorf("%w: %s contains a control character", ErrFieldInvalid, name)
+			}
+		}
+	}
+	return nil
+}
 
 // ValidationCode maps a Validate error to its wire error code:
 // ErrTextOversized ⇒ ErrTextTooLarge, ErrModeInvalid ⇒ ErrBadMode, any
@@ -249,7 +281,10 @@ func ValidateMode(s string) (string, error) {
 // Validate checks a DeliverRequest against the wire contract: MsgID must be
 // a UUID; the From and To tuples must each be complete (non-empty
 // HostID/AgentSessionID, PID > 0, ProcStart parses via ParseProcStart);
-// From.DeclaredMode must be a valid mode; and Text must pass ValidateText.
+// From.DeclaredMode must be a valid mode; From.SessionName and
+// From.PeerName are at most MaxLabelBytes of printable UTF-8 and HopChain
+// at most MaxHopChainBytes of UTF-8 (validateLabel); and Text must pass
+// ValidateText.
 func (r DeliverRequest) Validate() error {
 	if !IsUUID(r.MsgID) {
 		return fmt.Errorf("msg_id is not a valid UUID: %q", r.MsgID)
@@ -279,6 +314,16 @@ func (r DeliverRequest) Validate() error {
 	}
 
 	if _, err := ValidateMode(r.From.DeclaredMode); err != nil {
+		return err
+	}
+
+	if err := validateLabel("from.session_name", r.From.SessionName, MaxLabelBytes, true); err != nil {
+		return err
+	}
+	if err := validateLabel("from.peer_name", r.From.PeerName, MaxLabelBytes, true); err != nil {
+		return err
+	}
+	if err := validateLabel("hop_chain", r.HopChain, MaxHopChainBytes, false); err != nil {
 		return err
 	}
 

@@ -200,18 +200,25 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 		writeDeliverError(w, http.StatusServiceUnavailable, ipeers.ErrAuditUnavailable, "audit insert failed")
 		return
 	}
-	refuse := func(status int, code, detail string) {
-		m.setResult(id, "", code, detail)
-		m.logf("peers: deliver %s from %q refused (%s): %s", req.MsgID, principal.Alias, code, detail)
-		writeDeliverError(w, status, code, detail)
+	// refuseWith records auditDetail (local, may name paths and internal
+	// errors) and answers the peer with wireDetail; refuse uses one text
+	// for both.
+	refuseWith := func(status int, code, wireDetail, auditDetail string) {
+		m.setResult(id, "", code, auditDetail)
+		m.logf("peers: deliver %s from %q refused (%s): %s", req.MsgID, principal.Alias, code, auditDetail)
+		writeDeliverError(w, status, code, wireDetail)
 	}
+	refuse := func(status int, code, detail string) { refuseWith(status, code, detail, detail) }
 
 	// 7. Re-verify the target against this daemon's own inventory: the
 	// sender's view may be stale, and a session that restarted, whose inbox
-	// died, or that is a proxy row is not this target.
+	// died, or that is a proxy row is not this target. An inventory that
+	// could not be built at all is answered with a fixed detail — its
+	// error text is local (tmux, registry paths) and stays in the audit
+	// row and the log.
 	env := m.localEnvelope(r.Context(), snap.localHostID, snap.localAlias)
 	if !env.OK {
-		refuse(http.StatusConflict, ipeers.ErrTargetGone, "inventory unavailable: "+env.Error)
+		refuseWith(http.StatusConflict, ipeers.ErrTargetGone, "inventory unavailable", "inventory unavailable: "+env.Error)
 		return
 	}
 	target, detail := findTarget(env.Peers, req.To)
@@ -235,12 +242,20 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	defer stopAfter()
 	h, err := m.helpers.Acquire(waitCtx, req.From.Key(), principal.Alias+"/"+req.From.SessionName)
 	if err != nil {
+		// The manager's typed errors are classified first, by sentinel:
+		// a spawn failure wraps its cause, and that cause must never be
+		// mistaken for the caller leaving. Only then is "the caller is
+		// gone" decided — by the request's own context, not by the shape
+		// of the error — and anything else is a spawn failure with its
+		// text in the audit row.
 		switch {
-		case m.stopCtx.Err() != nil || errors.Is(err, ErrNotReady):
-			refuse(http.StatusServiceUnavailable, ipeers.ErrNotReady, "helper manager is not ready")
+		case errors.Is(err, ErrProxySpawnFailed):
+			refuse(http.StatusBadGateway, ipeers.ErrProxySpawnFailed, err.Error())
 		case errors.Is(err, ErrProxyLimit):
 			refuse(http.StatusServiceUnavailable, ipeers.ErrProxyLimit, "helper cap reached")
-		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, ErrNotReady) || m.stopCtx.Err() != nil:
+			refuse(http.StatusServiceUnavailable, ipeers.ErrNotReady, "helper manager is not ready")
+		case r.Context().Err() != nil:
 			// The caller is gone; nothing to answer. The helper keeps
 			// starting under the manager for the retry.
 			m.setResult(id, "", resultClientGone, "")

@@ -641,6 +641,71 @@ func TestDeliver_TargetGoneDetailNamesFieldOnly(t *testing.T) {
 	}
 }
 
+// TestDeliver_ClientGoneWhileHelperStarts pins step 9's caller-gone
+// branch: the request context is cancelled while the sender's helper is
+// still starting (Barrier variant). The handler returns without writing
+// anything — on an httptest.ResponseRecorder that is the recorder's
+// default 200 with an empty body (net/http would send the same to a
+// client that is, by definition, no longer there) — the audit row says
+// client_gone, and the helper keeps starting under the manager: once the
+// barrier opens, Acquire for the same origin succeeds.
+func TestDeliver_ClientGoneWhileHelperStarts(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{fixture: fixtureOpts{variant: proxyhelpertest.Barrier}})
+	ctx, cancel := context.WithCancel(e.hostCtx())
+	defer cancel()
+
+	req := e.request()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- e.post(ctx, req) }()
+
+	// The fake's spawn counter moves inside the manager's startup
+	// goroutine, which Acquire launched: from here on the handler is (or
+	// is about to be) parked on the helper's ready channel.
+	eventually(t, 5*time.Second, func() bool { return e.f.fake.Spawns() == 1 }, "helper spawn did not start")
+	cancel()
+
+	var rr *httptest.ResponseRecorder
+	select {
+	case rr = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not return within 5 s of the request context being cancelled")
+	}
+	if rr.Code != http.StatusOK || rr.Body.Len() != 0 {
+		t.Errorf("recorder = %d %q, want the untouched recorder default (200, empty body)", rr.Code, rr.Body.String())
+	}
+	if row := e.onlyRow(); row.Result != resultClientGone || row.Error != "" {
+		t.Errorf("row result/error = %q/%q, want client_gone/\"\"", row.Result, row.Error)
+	}
+	e.assertNoLine()
+
+	e.f.fake.Release()
+	acquireCtx, acquireCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer acquireCancel()
+	h, err := e.m.helpers.Acquire(acquireCtx, req.From.Key(), "air/foo")
+	if err != nil {
+		t.Fatalf("Acquire after the barrier opened: %v", err)
+	}
+	if h.sock == "" || e.f.fake.Spawns() != 1 {
+		t.Errorf("helper = %+v spawns = %d, want the same single instance ready", h, e.f.fake.Spawns())
+	}
+}
+
+// TestDeliver_InventoryUnavailableDetailFixed pins that a local inventory
+// failure reaches the peer as a fixed detail; the local error text is
+// kept in the audit row only.
+func TestDeliver_InventoryUnavailableDetailFixed(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{})
+	e.m.sessions = &fakeSessions{err: errFakeProvider}
+	ae := assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusConflict, ipeers.ErrTargetGone)
+	if ae.Detail != "inventory unavailable" {
+		t.Errorf("detail = %q, want the fixed %q", ae.Detail, "inventory unavailable")
+	}
+	row := e.onlyRow()
+	if row.Result != ipeers.ErrTargetGone || !strings.Contains(row.Error, errFakeProvider.Error()) {
+		t.Errorf("row result/error = %q/%q, want target_gone with the local error text", row.Result, row.Error)
+	}
+}
+
 func TestDeliver_RateLimited31st(t *testing.T) {
 	e := newDeliverEnv(t, envOpts{})
 	for i := 0; i < ipeers.PairRateLimit; i++ {

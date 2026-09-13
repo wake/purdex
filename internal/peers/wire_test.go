@@ -612,3 +612,54 @@ func TestDeliverRequest_Validate_Sentinels(t *testing.T) {
 		t.Errorf("ValidationCode(nil) = %q, want \"\"", got)
 	}
 }
+
+// TestDeliverRequest_Validate_LabelBounds pins the caps on the
+// sender-controlled labels that end up in a frame or a helper name:
+// session_name and peer_name ≤ MaxLabelBytes and free of control
+// characters, hop_chain ≤ MaxHopChainBytes, all valid UTF-8 — each a
+// bad_request via ErrFieldInvalid.
+func TestDeliverRequest_Validate_LabelBounds(t *testing.T) {
+	bad := []struct {
+		name   string
+		mutate func(r *DeliverRequest)
+	}{
+		{"session_name too long", func(r *DeliverRequest) { r.From.SessionName = strings.Repeat("s", MaxLabelBytes+1) }},
+		{"session_name control char", func(r *DeliverRequest) { r.From.SessionName = "foo\nbar" }},
+		{"session_name invalid utf8", func(r *DeliverRequest) { r.From.SessionName = "a\xffb" }},
+		{"peer_name too long", func(r *DeliverRequest) { r.From.PeerName = strings.Repeat("p", MaxLabelBytes+1) }},
+		{"peer_name control char", func(r *DeliverRequest) { r.From.PeerName = "x\x1by" }},
+		{"hop_chain too long", func(r *DeliverRequest) { r.HopChain = strings.Repeat("h", MaxHopChainBytes+1) }},
+		{"hop_chain invalid utf8", func(r *DeliverRequest) { r.HopChain = "h\xff" }},
+	}
+	for _, c := range bad {
+		t.Run(c.name, func(t *testing.T) {
+			r := validDeliverRequest()
+			c.mutate(&r)
+			err := r.Validate()
+			if !errors.Is(err, ErrFieldInvalid) {
+				t.Fatalf("Validate() = %v, want ErrFieldInvalid", err)
+			}
+			if got := ValidationCode(err); got != ErrBadRequest {
+				t.Errorf("ValidationCode = %q, want bad_request", got)
+			}
+		})
+	}
+	good := []struct {
+		name   string
+		mutate func(r *DeliverRequest)
+	}{
+		{"session_name at limit", func(r *DeliverRequest) { r.From.SessionName = strings.Repeat("s", MaxLabelBytes) }},
+		{"session_name unicode", func(r *DeliverRequest) { r.From.SessionName = "工作區 ✓" }},
+		{"empty labels", func(r *DeliverRequest) { r.From.SessionName, r.From.PeerName, r.HopChain = "", "", "" }},
+		{"hop_chain at limit", func(r *DeliverRequest) { r.HopChain = strings.Repeat("h", MaxHopChainBytes) }},
+	}
+	for _, c := range good {
+		t.Run(c.name, func(t *testing.T) {
+			r := validDeliverRequest()
+			c.mutate(&r)
+			if err := r.Validate(); err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}

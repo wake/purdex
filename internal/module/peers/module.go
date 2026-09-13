@@ -157,17 +157,15 @@ func New(audit AuditStore) *Module {
 		registryDir = filepath.Join(home, ".claude", "sessions")
 	}
 	stopCtx, stopCancel := context.WithCancel(context.Background())
-	return &Module{
+	m := &Module{
 		registryDir:      registryDir,
 		liveness:         ipeers.DefaultLiveness(),
 		budget:           2 * time.Second,
-		now:              time.Now,
+		now:              time.Now, // the one clock seam; every other clock reader below takes m.now
 		client:           newRemoteClient(),
 		fetch:            fetchRemote,
 		logf:             log.Printf,
 		audit:            audit,
-		dedup:            newDedupSet(ipeers.DedupWindow, time.Now),
-		pairs:            newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, time.Now),
 		writeFrame:       ccuds.WriteFrame,
 		sockWriteTimeout: ipeers.SocketWriteTimeout,
 		newMsgID:         uuid.NewString,
@@ -175,6 +173,9 @@ func New(audit AuditStore) *Module {
 		stopCancel:       stopCancel,
 		replySem:         make(chan struct{}, replyWorkerCap),
 	}
+	m.dedup = newDedupSet(ipeers.DedupWindow, m.now)
+	m.pairs = newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, m.now)
+	return m
 }
 
 func (m *Module) Name() string           { return "peers" }
