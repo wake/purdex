@@ -107,11 +107,16 @@ var registryFilenamePattern = regexp.MustCompile(`^([0-9]+)\.json$`)
 
 // ReadRegistry parses every "<pid>.json" in dir and returns the live ones.
 // skipped counts every file considered and rejected (name mismatch, decode
-// error, missing required field, bad procStart, dead). err is non-nil only
-// when dir cannot be listed.
+// error, missing required field, bad procStart, dead). A dir that does not
+// exist is treated as an empty registry (nil entries, 0 skipped, nil err) —
+// there being no Claude Code registry yet is not an error condition. err is
+// non-nil for any other listing failure (e.g. dir is a regular file).
 func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err error) {
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0, nil
+		}
 		return nil, 0, err
 	}
 

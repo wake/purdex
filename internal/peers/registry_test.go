@@ -276,13 +276,31 @@ func TestReadRegistry_NonMatchingFilesIgnored(t *testing.T) {
 
 func TestReadRegistry_MissingDir(t *testing.T) {
 	entries, skipped, err := ReadRegistry(filepath.Join(t.TempDir(), "does-not-exist"), allTrueLiveness(wantProcStart))
+	if err != nil {
+		t.Fatalf("ReadRegistry: unexpected err for missing dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("entries = %v, want empty", entries)
+	}
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0", skipped)
+	}
+}
+
+func TestReadRegistry_PathIsRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	entries, _, err := ReadRegistry(path, allTrueLiveness(wantProcStart))
 	if err == nil {
-		t.Fatal("ReadRegistry: expected err for missing dir, got nil")
+		t.Fatal("ReadRegistry: expected err when path is a regular file, got nil")
 	}
 	if entries != nil {
 		t.Errorf("entries = %v, want nil", entries)
 	}
-	_ = skipped
 }
 
 func TestEntry_TmuxAccessors(t *testing.T) {

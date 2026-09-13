@@ -303,6 +303,10 @@ func TestHandlePeers_ProviderError(t *testing.T) {
 	}
 }
 
+// A missing Claude Code registry dir is not an error: it is treated as an
+// empty registry, so the handler still returns ok:true with every session
+// resolved as best it can without any live registry entries (no_agent /
+// not_cc, per whatever the fixture's owners yield).
 func TestHandlePeers_RegistryDirMissing(t *testing.T) {
 	missingDir := filepath.Join(t.TempDir(), "does-not-exist")
 	sessions := &fakeSessions{sessions: []session.SessionInfo{{Code: "s1", Name: "s1"}}}
@@ -310,6 +314,44 @@ func TestHandlePeers_RegistryDirMissing(t *testing.T) {
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
 	m := newTestModule(c, sessions, owners, missingDir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	rr := doGetPeers(t, m, "/api/peers")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var got response
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if !got.OK {
+		t.Fatalf("ok = false, want true; error=%q", got.Error)
+	}
+	if len(got.Peers) != 1 {
+		t.Fatalf("peers = %+v, want 1", got.Peers)
+	}
+	// s1 has no owner in this fixture's owners map, so it resolves to a
+	// plain no_agent shell row — no live registry entries exist either way.
+	if got.Peers[0].Reason != "no_agent" {
+		t.Errorf("peers[0].Reason = %q, want no_agent", got.Peers[0].Reason)
+	}
+	if got.Peers[0].Deliverable {
+		t.Errorf("peers[0].Deliverable = true, want false")
+	}
+}
+
+// registryDir pointing at a regular file is a genuine listing error, unlike
+// a missing dir, and still produces ok:false.
+func TestHandlePeers_RegistryDirIsRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	sessions := &fakeSessions{sessions: []session.SessionInfo{{Code: "s1", Name: "s1"}}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(c, sessions, owners, filePath, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	if rr.Code != http.StatusOK {
