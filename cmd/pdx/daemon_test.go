@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -46,6 +48,73 @@ func TestPidFileLockAndUnlock(t *testing.T) {
 		t.Fatalf("re-acquire after release: %v", err)
 	}
 	releasePidLock(f2, pidPath)
+}
+
+func TestReleasePidLock_KeepsFile(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	f, err := acquirePidLock(pidPath, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePidLock(f, pidPath)
+	if _, err := os.Stat(pidPath); err != nil {
+		t.Fatalf("pid file must survive release (spec §2.4b): %v", err)
+	}
+	if running, _ := isDaemonRunning(pidPath); running {
+		t.Fatal("released pid file must read as not running")
+	}
+}
+
+// A second starter that opened the pid file before the first released it
+// must still be visible to isDaemonRunning afterwards. With unlink-on-release
+// the second locker held an invisible inode; with a permanent file it holds
+// the same inode everyone opens.
+func TestPidLock_OpenBeforeReleaseStaysVisible(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	first, err := acquirePidLock(pidPath, 111)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Second party opens (but cannot yet lock) while first holds it.
+	second, err := os.OpenFile(pidPath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	releasePidLock(first, pidPath)
+	if err := syscall.Flock(int(second.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("second flock after release: %v", err)
+	}
+	second.Truncate(0)
+	second.Seek(0, 0)
+	fmt.Fprintf(second, "%d", 222)
+	second.Sync()
+
+	running, pid := isDaemonRunning(pidPath)
+	if !running || pid != 222 {
+		t.Fatalf("isDaemonRunning = (%v, %d), want (true, 222)", running, pid)
+	}
+}
+
+func TestMustAcquirePidLock_FatalWhenHeld(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	first, err := acquirePidLock(pidPath, 111)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releasePidLock(first, pidPath)
+
+	var got string
+	f := mustAcquirePidLock(pidPath, 222, func(format string, args ...any) { got = fmt.Sprintf(format, args...) })
+	if f != nil {
+		t.Fatal("must not return a file when the lock is held")
+	}
+	if !strings.Contains(got, "refusing to start") {
+		t.Fatalf("fatalf not invoked with the refusal message: %q", got)
+	}
 }
 
 func TestIsDaemonRunning(t *testing.T) {

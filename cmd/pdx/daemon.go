@@ -163,12 +163,29 @@ func acquirePidLock(pidPath string, pid int) (*os.File, error) {
 	return f, nil
 }
 
-func releasePidLock(f *os.File, pidPath string) {
+// releasePidLock drops the flock and closes the file. The pid file itself is
+// permanent: unlinking it (in any order relative to the unlock) lets a
+// concurrently starting serve flock an inode that is no longer reachable by
+// path, after which `pdx status`/`stop` report "not running" for a live
+// daemon. isDaemonRunning decides by lock state, not existence, so an
+// unlocked leftover reads as stopped.
+func releasePidLock(f *os.File, _ string) {
 	if f != nil {
 		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}
-	os.Remove(pidPath)
+}
+
+// mustAcquirePidLock is runServe's pid-lock gate. Two daemons on one
+// data_dir would share the SQLite files, so a held lock is fatal, not a
+// warning. fatalf is injected so the refusal is testable.
+func mustAcquirePidLock(pidPath string, pid int, fatalf func(string, ...any)) *os.File {
+	f, err := acquirePidLock(pidPath, pid)
+	if err != nil {
+		fatalf("pid lock: %v — refusing to start a second daemon on %s", err, filepath.Dir(pidPath))
+		return nil
+	}
+	return f
 }
 
 func isDaemonRunning(pidPath string) (bool, int) {
@@ -314,7 +331,8 @@ func runStop(args []string) {
 	fmt.Fprintf(os.Stderr, "pdx: daemon did not stop within 30s, sending SIGKILL\n")
 	proc.Signal(syscall.SIGKILL)
 	time.Sleep(1 * time.Second)
-	os.Remove(pidPath)
+	// The pid file is permanent (see releasePidLock); the kernel drops the
+	// flock when the killed process exits, so no unlink is needed here.
 }
 
 func runStatus(args []string) {
