@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/config"
@@ -111,6 +113,62 @@ func TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr(t *testing.T)
 	}
 	if found {
 		t.Fatalf("found = true, want false when the resolver failed")
+	}
+}
+
+// blockingEnumerationExecutor blocks the panesOfSession enumeration's very
+// first PaneSessionID call until its context is cancelled, then returns
+// ctx.Err() — simulating a request whose deadline expires WHILE the
+// enumeration is in flight for the session's only pane, rather than before
+// the walk starts (that case is TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr,
+// which never reaches PaneSessionID at all). panesOfSession used to fold that
+// returned error into "continue", finishing enumeration with an empty pane
+// list and err:nil, which read as "session has no root agent" rather than "the
+// walk timed out".
+type blockingEnumerationExecutor struct {
+	*tmux.FakeExecutor
+}
+
+func (e *blockingEnumerationExecutor) PaneSessionID(ctx context.Context, target string) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(2 * time.Second):
+		// The context never reached the call: fail loudly rather than let the
+		// test pass on a timeout that looks like cancellation.
+		return "", errors.New("PaneSessionID was never cancelled")
+	}
+}
+
+// TestModule_ResolveSessionOwner_EnumerationTimesOut_ReturnsErr pins the fix
+// for the swallow above: a context that expires DURING panesOfSession's
+// enumeration of the session's only pane must surface as err != nil,
+// found:false — never as the "no owner" outcome a genuinely rootless session
+// produces (TestModule_ResolveSessionOwner_NoRootFrame_FoundFalseErrNil).
+func TestModule_ResolveSessionOwner_EnumerationTimesOut_ReturnsErr(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	exec := &blockingEnumerationExecutor{FakeExecutor: fake}
+	m.tmux = exec
+	orig := provenanceTimeout
+	provenanceTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { provenanceTimeout = orig })
+
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "200")
+	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w/purdex")
+
+	start := time.Now()
+	owner, found, err := m.ResolveSessionOwner(context.Background(), codeOf(t, "$0"))
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("the request took %v: the deadline never reached the enumeration call", elapsed)
+	}
+	if err == nil {
+		t.Fatalf("err = nil, want non-nil (owner = %+v, found = %v)", owner, found)
+	}
+	if found {
+		t.Fatalf("found = true, want false when the enumeration timed out")
 	}
 }
 

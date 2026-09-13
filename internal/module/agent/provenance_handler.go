@@ -174,6 +174,20 @@ func (m *Module) resolveSessionOwnerErr(ctx context.Context, code string) (PaneO
 			}
 		}
 	}
+	// The loop above can finish — with panes exhausted, or never having had
+	// any to look at — in the same instant the deadline does: panesOfSession
+	// can swallow a mid-enumeration PaneSessionID failure into an empty pane
+	// list (see its own comment), and a pane whose owners came back empty
+	// skips the ctx.Err() check above entirely. Either way this would answer
+	// "no owner" (found=false, err=nil) for a request that in fact never
+	// finished the walk. So the deadline is read once more here, after the
+	// loop, the same as it is read inside it: an expired ctx overrides
+	// whatever the loop concluded, success included, because a "found" from a
+	// walk that ran out of time is exactly as untrustworthy as a "not found"
+	// from one.
+	if err := ctx.Err(); err != nil {
+		return PaneOwner{}, false, err
+	}
 	return best, found, nil
 }
 
@@ -249,6 +263,17 @@ func (m *Module) panesOfSession(ctx context.Context, code string) ([]string, err
 		seen[frame.PaneID] = true
 		tmuxID, err := m.tmux.PaneSessionID(ctx, frame.PaneID)
 		if err != nil {
+			// A lookup failure is ordinarily just this pane's exclusion (the
+			// UnresolvablePaneSessionID_PaneExcluded case), but a failure
+			// caused by the request's own deadline expiring mid-call is not
+			// "this pane has no session" — it is "the enumeration did not
+			// finish". Folding it into the same continue would return
+			// whatever panes were found so far, err:nil, and the caller
+			// would read that as a complete, if short, membership list
+			// rather than the incomplete walk it actually is.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			continue
 		}
 		paneCode, err := session.EncodeSessionID(tmuxID)
