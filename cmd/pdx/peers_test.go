@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -87,6 +88,78 @@ func TestFormatPeersTable_NoPartialLine(t *testing.T) {
 	got := formatPeersTable(resp)
 	if strings.Contains(got, "partial:") {
 		t.Errorf("formatPeersTable printed a partial line when nothing was unresolved:\n%s", got)
+	}
+}
+
+// --- sanitizeCell -----------------------------------------------------
+
+func TestSanitizeCell(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain ASCII passes through", "wake-cc", "wake-cc"},
+		{"non-ASCII printable passes through", "wake-中文", "wake-中文"},
+		{"ESC sequence escaped", "x\x1b[31my", `x\x1b[31my`},
+		{"tab and newline escaped", "a\tb\nc", `a\tb\nc`},
+		{"DEL escaped", "a\x7fb", `a\x7fb`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeCell(tc.in)
+			if got != tc.want {
+				t.Errorf("sanitizeCell(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x7f) {
+				t.Errorf("sanitizeCell(%q) = %q, want no raw control bytes", tc.in, got)
+			}
+		})
+	}
+}
+
+func TestFormatPeersTable_EscapesControlCharacters(t *testing.T) {
+	resp := peers.Envelope{
+		OK: true,
+		Peers: []peers.PeerRecord{
+			{
+				Address: "alias/sess1",
+				Agent: &peers.AgentInfo{
+					Type:     "cc",
+					PeerName: "x\x1b[31my",
+					Status:   "working",
+				},
+				Deliverable: true,
+				Cwd:         "/home/wake/project",
+			},
+		},
+	}
+	got := formatPeersTable(resp)
+	if !strings.Contains(got, `x\x1b[31my`) {
+		t.Errorf("formatPeersTable = %q, want literal escaped %q", got, `x\x1b[31my`)
+	}
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("formatPeersTable = %q, want no raw ESC byte", got)
+	}
+}
+
+func TestFormatPeersAllTable_EscapesUnreachableError(t *testing.T) {
+	resp := peers.AllEnvelope{
+		Hosts: []peers.HostResult{
+			{
+				Alias: "down",
+				OK:    false,
+				Error: "\x1b]52;c;YXR0YWNrCg==\x07",
+				Peers: []peers.PeerRecord{},
+			},
+		},
+	}
+	got := formatPeersAllTable(resp)
+	if !strings.Contains(got, `(unreachable: \x1b]52;c;YXR0YWNrCg==\a)`) {
+		t.Errorf("formatPeersAllTable = %q, want escaped unreachable line", got)
+	}
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x07) {
+		t.Errorf("formatPeersAllTable = %q, want no raw ESC/BEL bytes", got)
 	}
 }
 
@@ -177,6 +250,99 @@ func TestRunPeersCmd_JSONPassthrough(t *testing.T) {
 	}
 	if stderr.String() != "" {
 		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+// controlCharPeerName is a peer_name carrying an ESC-CSI sequence — a
+// stand-in for a malicious peer trying to inject an escape sequence into
+// the operator's terminal via the CLI.
+var controlCharPeerName = "x" + string(rune(0x1b)) + "[31my"
+
+// peersControlCharBody JSON-marshals a peers.Envelope containing
+// controlCharPeerName, so the wire body carries it in the properly
+// \u-escaped JSON form (as encoding/json always produces for control
+// characters), never as a literal control byte.
+func peersControlCharBody(t *testing.T) []byte {
+	t.Helper()
+	body, err := json.Marshal(peers.Envelope{
+		HostID: "mini:abc123",
+		OK:     true,
+		Peers: []peers.PeerRecord{
+			{
+				Address: "alias/sess1",
+				Agent: &peers.AgentInfo{
+					Type:     "cc",
+					PeerName: controlCharPeerName,
+					Status:   "working",
+				},
+				Deliverable: true,
+				Cwd:         "/home/wake/project",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return body
+}
+
+// TestRunPeersCmd_JSONPassthrough_RawControlCharacters pins --json as an
+// exact, unsanitized passthrough of the daemon's response bytes: valid
+// JSON necessarily carries controlCharPeerName's ESC byte pre-escaped as
+// "\u001b" (encoding/json's own control-character escaping — a raw ESC
+// byte cannot legally appear unescaped in a JSON string, and our own
+// client-side json.Unmarshal would reject it if it did), so this checks
+// that escaped form survives byte-for-byte rather than being run through
+// sanitizeCell's "\x1b" table-rendering form.
+func TestRunPeersCmd_JSONPassthrough_RawControlCharacters(t *testing.T) {
+	body := peersControlCharBody(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--config", cfgPath, "--json"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if stdout.String() != string(body) {
+		t.Errorf("stdout = %q, want verbatim body %q (--json must not sanitize)", stdout.String(), string(body))
+	}
+	// The daemon's own JSON escaping ("\u001b") must survive untouched.
+	jsonEscapedESC := fmt.Sprintf(`\u%04x`, 0x1b)
+	if !strings.Contains(stdout.String(), jsonEscapedESC) {
+		t.Errorf("stdout = %q, want the daemon's own %q escape present unmodified", stdout.String(), jsonEscapedESC)
+	}
+	// sanitizeCell's own escaping form must NOT have been applied to --json.
+	if strings.Contains(stdout.String(), sanitizeCell(controlCharPeerName)) {
+		t.Errorf("stdout = %q, want no sanitizeCell-style escaping in --json output", stdout.String())
+	}
+}
+
+func TestRunPeersCmd_TableRendering_EscapesControlCharacters(t *testing.T) {
+	body := peersControlCharBody(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `x\x1b[31my`) {
+		t.Errorf("stdout = %q, want literal escaped %q", stdout.String(), `x\x1b[31my`)
+	}
+	if strings.ContainsRune(stdout.String(), 0x1b) {
+		t.Errorf("stdout = %q, want no raw ESC byte in table output", stdout.String())
 	}
 }
 
@@ -336,7 +502,7 @@ func TestRunPeersCmd_OversizedOKBody_RejectedBounded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		chunk := bytes.Repeat([]byte("x"), 1024*1024) // 1 MiB per write
-		for i := 0; i < 17; i++ {                      // 17 MiB total, streamed
+		for i := 0; i < 17; i++ {                     // 17 MiB total, streamed
 			if _, err := w.Write(chunk); err != nil {
 				return
 			}

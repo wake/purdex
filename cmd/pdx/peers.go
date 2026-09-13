@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/peers"
@@ -33,6 +35,33 @@ const maxPeersOKBodyBytes = 16 * 1024 * 1024
 // body exceeds the bound for its status class (maxPeersOKBodyBytes for a
 // 2xx, maxPeersErrorBodyBytes otherwise).
 var errPeersResponseTooLarge = errors.New("response too large")
+
+// sanitizeCell renders s safely for the operator's terminal, escaping every
+// rune that is not printable (unicode.IsPrint) or is DEL (\x7f) into its Go
+// escape form (e.g. "\x1b", "\n", "\t") — the same form strconv.QuoteRune
+// would put inside single quotes, without the quotes themselves. Every
+// other rune, including non-ASCII printable text, passes through
+// unchanged.
+//
+// This is applied at the CLI's output boundary to every table cell and
+// every stderr message that echoes text which ultimately came from a peer
+// (a remote daemon's response body, forwarded through the local daemon):
+// without it, a peer could inject ANSI/OSC escape sequences into the
+// operator's terminal via a crafted peer name, status, cwd, or error
+// string. --json passthrough is deliberately exempt — it is machine
+// output, read by tools rather than rendered by a terminal.
+func sanitizeCell(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsPrint(r) && r != 0x7f {
+			b.WriteRune(r)
+			continue
+		}
+		q := strconv.QuoteRune(r)
+		b.WriteString(q[1 : len(q)-1]) // strip the surrounding single quotes
+	}
+	return b.String()
+}
 
 // peersUsage is the generic grammar-rejection message: printed to stderr
 // (exit 2) for every malformed invocation except an unrecognized flag,
@@ -247,7 +276,7 @@ func runPeersQueryCmd(inv peersInvocation, stdout, stderr io.Writer) int {
 		if detail == "" {
 			detail = "<no body>"
 		}
-		fmt.Fprintf(stderr, "pdx peers: HTTP %d: %s\n", resp.StatusCode, detail)
+		fmt.Fprintf(stderr, "pdx peers: HTTP %d: %s\n", resp.StatusCode, sanitizeCell(detail))
 		return 1
 	}
 
@@ -285,7 +314,7 @@ func renderPeersLocal(body []byte, jsonOutput bool, stdout, stderr io.Writer) in
 	}
 
 	if !peersResp.OK {
-		fmt.Fprintf(stderr, "pdx peers: %s\n", peersResp.Error)
+		fmt.Fprintf(stderr, "pdx peers: %s\n", sanitizeCell(peersResp.Error))
 		return 1
 	}
 
@@ -319,7 +348,7 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 		if len(allResp.Hosts) > 0 {
 			errMsg = allResp.Hosts[0].Error
 		}
-		fmt.Fprintf(stderr, "pdx peers: %s\n", errMsg)
+		fmt.Fprintf(stderr, "pdx peers: %s\n", sanitizeCell(errMsg))
 		return 1
 	}
 
@@ -341,12 +370,12 @@ func formatPeersTable(resp peers.Envelope) string {
 			unresolved++
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			rec.Address,
-			agentField(rec),
-			nameField(rec),
-			statusField(rec),
-			deliverableField(rec),
-			rec.Cwd,
+			sanitizeCell(rec.Address),
+			sanitizeCell(agentField(rec)),
+			sanitizeCell(nameField(rec)),
+			sanitizeCell(statusField(rec)),
+			sanitizeCell(deliverableField(rec)),
+			sanitizeCell(rec.Cwd),
 		)
 	}
 	w.Flush()
@@ -373,13 +402,13 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 		}
 		for _, rec := range h.Peers {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				h.Alias,
-				rec.Address,
-				agentField(rec),
-				nameField(rec),
-				statusField(rec),
-				deliverableField(rec),
-				rec.Cwd,
+				sanitizeCell(h.Alias),
+				sanitizeCell(rec.Address),
+				sanitizeCell(agentField(rec)),
+				sanitizeCell(nameField(rec)),
+				sanitizeCell(statusField(rec)),
+				sanitizeCell(deliverableField(rec)),
+				sanitizeCell(rec.Cwd),
 			)
 		}
 	}
@@ -387,7 +416,7 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 
 	for _, h := range resp.Hosts {
 		if !h.OK {
-			fmt.Fprintf(&buf, "%s  (unreachable: %s)\n", h.Alias, h.Error)
+			fmt.Fprintf(&buf, "%s  (unreachable: %s)\n", sanitizeCell(h.Alias), sanitizeCell(h.Error))
 		}
 	}
 
@@ -600,9 +629,9 @@ func formatHostsTable(hosts []cliHostRow) string {
 	fmt.Fprintln(w, "ALIAS\tURL\tHOST_ID\tVERIFIED\tTOKEN\tINBOUND\tALLOW_BYPASS")
 	for _, h := range hosts {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			h.Alias,
-			h.URL,
-			h.HostID,
+			sanitizeCell(h.Alias),
+			sanitizeCell(h.URL),
+			sanitizeCell(h.HostID),
 			yesNo(h.Verified),
 			yesNo(h.HasToken),
 			yesNo(h.HasInboundToken),
@@ -683,7 +712,7 @@ func reportPeersTransportErr(err error, stderr io.Writer) int {
 // reportPeersAPIError prints a non-2xx hosts-route response's server
 // `error` field (or a fallback) to stderr and returns exit code 1.
 func reportPeersAPIError(result peersHTTPResult, stderr io.Writer) int {
-	fmt.Fprintf(stderr, "pdx peers: %s\n", extractPeersErrorMessage(result.body))
+	fmt.Fprintf(stderr, "pdx peers: %s\n", sanitizeCell(extractPeersErrorMessage(result.body)))
 	return 1
 }
 
