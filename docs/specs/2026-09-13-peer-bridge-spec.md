@@ -1,15 +1,17 @@
 # Spec — Cross-host agent peer bridge ("Peer Bridge")
 
-Status: draft v2 (revised after codex spec review R1 `task-mtzzzf2x-kd6vvt` —
-2 Blockers, 10 Majors, all accepted; see §8 for the disposition table)
+Status: draft v3 (R1 `task-mtzzzf2x-kd6vvt`: 2 Blockers, 10 Majors; R2
+`task-mu00ba1c-7564mi`: 1 Blocker, 6 Majors, 4 Minors — all accepted; §8/§9
+hold both disposition tables)
 Date: 2026-09-14
 Branch: `worktree-peer-bridge`
 
-> **v2 narrows delivery to Claude Code only and closes the trust boundaries R1
-> opened.** The tmux `send-keys` lane is out of this spec entirely (§2
-> non-goals, §8 #2–3). Authorization moves from a module-local guard to the
-> daemon's single auth entry (§4.6). Every identity the wire carries is either
-> verified by the daemon that asserts it or explicitly marked unverifiable.
+> **v2 narrowed delivery to Claude Code only and moved authorization to the
+> daemon's single auth entry. v3 fixes what v2 left open:** credentials are
+> per inbound host, never shared (§4.3); the peer routes are locked down in
+> P1 rather than P2 (§4.6, §5); helpers are keyed by the full process
+> generation (§4.5); remote name resolution has an actual protocol step
+> (§4.4); loop protection claims only what a daemon can enforce (§4.4).
 
 ## 1. Problem
 
@@ -220,20 +222,24 @@ among the session's panes, generation-checked) decides the row's `agent`. The
 peers module consumes it through a small interface the agent module
 registers in the service registry (`agent.owner-resolver`), not by HTTP. The
 Claude Code registry is joined **only** by `sessionId`; there is no
-pane-based fallback. When more than one live registry entry has that
-`sessionId` (a resumed session whose old pid has not been swept), the entry
-whose `tmux` pane belongs to the row's session wins; otherwise the row is
-`deliverable: false, reason: ambiguous`.
+pane-based fallback. When more than one **live** entry has that `sessionId`,
+the entry whose `tmux` pane id equals the owner's `TmuxPaneID` is used if it
+is the only such entry; otherwise the row is `deliverable: false, reason:
+ambiguous`. (A resumed session's dead predecessor never reaches this step:
+liveness has already dropped it.)
 
 **Liveness.** A registry entry is live iff its `messagingSocketPath` exists,
 `kill(pid, 0)` succeeds, and the process's start time matches `procStart`.
 Stale entries are skipped, never deleted. Entries whose `.json` is unreadable
 or fails schema are skipped.
 
-**Deadline.** One inventory call has a 2 s budget; owner resolution is the
-slow part (four `ps` forks per distinct pid, memoised per call). Sessions not
-resolved within the budget are reported with `agent: null` and `partial:
-true`. This keeps the local call inside P2's per-host fan-out timeout.
+**Deadline.** One inventory call has a 2 s **soft** budget: owner resolution
+(the slow part — several `ps` forks per distinct pid; the existing resolver
+cannot interrupt a read in flight) is started for sessions in list order,
+and no new resolution starts once the budget is spent. Sessions not started
+are reported with `agent: null` and `partial: true`. A single slow resolution
+can therefore push a response past 2 s; P2's per-host timeout is 3 s and
+treats a late response as that host's error row, not as data loss.
 
 **Proxy rows.** Virtual peers (§4.5) are Claude Code registry entries too.
 The daemon recognises its own helpers by pid from `proxies.json` (§4.5),
@@ -245,67 +251,89 @@ and excludes them from `cc:<peer_name>` resolution.
 ```toml
 [peers]
 alias = "mini-lab"            # optional; default host_id up to ':'
-accept_token = "pdxp_…"       # what THIS host expects from every remote daemon
-                              # (unset ⇒ no remote daemon can call /api/peers*)
 
 [[peers.hosts]]
-host_id = "air-2026:9k2x1p"   # learned at `host add`, used as wire identity
-alias   = "air"
-url     = "http://100.64.0.4:7860"
-token   = "pdxp_…"            # that host's accept_token
-allow_bypass = false          # §4.4 mode clamp
+alias         = "air"
+url           = "http://100.64.0.4:7860"
+host_id       = "air-2026:9k2x1p"   # learned when `token` is first verified; "" until then
+token         = "pdxp_…"            # OUTBOUND: what we present to air (= air's inbound_token for us)
+inbound_token = "pdxp_…"            # INBOUND: what air must present to us; minted here, unique per host
+allow_bypass  = false               # §4.4 mode clamp
 ```
 
-- **Fan-out.** `GET /api/peers?scope=all` (admin only) calls every configured
-  host's `GET /api/peers` in parallel, 3 s per host, and returns
-  `{ hosts: [{host_id, alias, ok, error?, partial?, peers}] }` with the local
-  host first. A host's failure is a row, not an error.
-- **Config changes go through the daemon.** `POST /api/peers/hosts` (admin)
-  fetches the remote's `GET /api/info` with the supplied token to learn its
-  `host_id`, checks the alias is unique, appends the entry under `CfgMu`,
-  persists with `config.WriteFile`, and calls `NotifyConfigChange`. `DELETE
-  /api/peers/hosts/{host_id}` mirrors it. `POST /api/peers/token` mints and
-  persists `accept_token`. The CLI (`pdx peers host add|remove|list`, `pdx
-  peers token`) only calls these; it never edits the file. The daemon reads
-  `[peers]` from its in-memory config on every request, so changes apply
-  without restart.
-- **Redaction.** `GET /api/config` and the daemon log redact
-  `peers.accept_token` and every `peers.hosts[].token`, alongside the
-  existing `Token` / `HostID` redaction in `config_handler.go`.
-- **Bidirectional is the caller's job.** A ↔ B replies require A configured
-  on B *and* B on A. A delivery whose return route is missing is still
-  delivered, but marked one-way (§4.4) and audited as `no_return_route`.
+There is **no shared credential**. Each configured host has its own
+`inbound_token`; when a remote call arrives, the bearer is compared
+(constant-time) against every entry's `inbound_token`, and the entry that
+matches *is* the authenticated host. The payload's `from.host_id` must equal
+that entry's `host_id`, which must already be known (see pairing below); a
+mismatch or an empty `host_id` refuses the call with `host_unverified`.
+
+- **Pairing is two `host add`s.** On B: `POST /api/peers/hosts {alias, url}`
+  mints `inbound_token`, appends the entry (`host_id: ""`), persists, and
+  returns the token for the operator to carry to A. On A: `POST
+  /api/peers/hosts {alias, url, token: <B's inbound_token for A>}` does the
+  same for A's side and, because a `token` was supplied, immediately calls
+  B's `GET /api/peers` with it; the envelope's `host_id` is stored as the
+  entry's `host_id`. B's entry for A stays `host_id: ""` until B is given
+  A's `inbound_token` via `PUT /api/peers/hosts/{alias} {token}`, which
+  performs the same verification. Only when both entries carry a `host_id`
+  can messages flow both ways; `pdx peers host list` shows the state of
+  each side. `DELETE /api/peers/hosts/{alias}` removes an entry.
+- **Fan-out.** `GET /api/peers?scope=all` (admin only) calls every host that
+  has a `token` in parallel, 3 s per host, and returns `{ hosts: [{alias,
+  host_id, ok, error?, partial?, peers}] }`, local host first. A host's
+  failure is a row, not an error.
+- **All writes go through the daemon** (`POST`/`PUT`/`DELETE
+  /api/peers/hosts…`, admin only): mutate under `CfgMu`, persist with
+  `config.WriteFile`, `NotifyConfigChange`; the CLI never edits the file, and
+  the daemon reads `[peers]` from memory on every request.
+- **Redaction.** A single helper redacts `peers.hosts[].token` and
+  `inbound_token` (deep-copying the slice first) and is used by **every**
+  config response — `GET /api/config` and the `PUT` handler's echo
+  (`config_handler.go:115`) — and by the daemon log.
+- **Bidirectional is the caller's job.** A delivery whose return route is
+  missing (B has no verified entry for A) is still delivered, marked one-way
+  (§4.4) and audited as `no_return_route`.
 
 ### 4.4 Delivery (P3, Claude Code targets only)
 
 ```
 pdx msg send air/foo "text"          (inside a cc session on host A)
-   │ resolves origin from its own environment (§ origin)
-   │ POST /api/peers/send  {to, text, origin, mode?}          admin token, local only
+   │ reads CLAUDE_CODE_MESSAGING_SOCKET (§ origin)
+   │ POST /api/peers/send  {to, text, origin_inbox, mode?}        admin token
    ▼
-A daemon: verify origin (§ origin) → resolve `to` … (§4.1)
-   │ POST /api/peers/deliver  {msg_id, hop, from:{host_id, agent_session_id, pid, proc_start, peer_name, declared_mode}, to:{agent_session_id, pid, proc_start}, text}
-   │        bearer: B's accept_token
+A daemon: verify origin → GET B /api/peers (bearer: A's outbound token for B)
+   │       → peers.Resolve(snapshot, "foo") → target tuple (§4.1)
+   │ POST /api/peers/deliver  {msg_id, hop_chain?, from:{host_id, agent_session_id, pid, proc_start, peer_name, declared_mode}, to:{agent_session_id, pid, proc_start}, text}
+   │        bearer: A's outbound token for B
    ▼
-B daemon: authenticate → clamp mode → audit → virtual peer for `from` → write frame to target inbox
+B daemon: authenticate (§4.3) → re-verify `to` tuple against live inventory → clamp mode → audit → helper for `from` → write frame
 ```
+
+**Remote resolution.** Names are resolved by the *sender* over a fresh
+inventory snapshot fetched from the target host (the same `peers.Resolve`
+P1 ships), and only the resulting tuple travels. The receiver re-verifies
+the tuple against its own live inventory at delivery time and refuses with
+`target_gone` when the pid/proc_start no longer match. No remote "resolve"
+endpoint exists.
 
 **Origin.** `pdx msg send` never accepts a `--from`. It reads
 `CLAUDE_CODE_MESSAGING_SOCKET` from its own environment — Claude Code exports
 each session's own socket to Bash commands and hooks — and sends that path
-as `origin.inbox`. The daemon accepts the call only if that path is a live
-inventory row (§4.2 liveness) and fills the wire identity from the row; a
-missing or unknown path is rejected with `origin_unknown`. Running the
-command outside a Claude Code session is therefore an error, not a
-degraded send. (A one-way, reply-less lane for scripts is a possible later
-addition; it is not needed for the goal.)
+as `origin_inbox`. The daemon accepts the call only if that path is a live,
+non-proxy inventory row (§4.2) and fills the wire identity from the row; a
+missing or unknown path is rejected with `origin_unknown`. This is
+**endpoint attribution for a trusted local admin caller**, not proof of
+which process ran the command: any same-UID process can read the registry
+and present another session's socket path, and that is outside the boundary
+this spec draws (§3.4 already limits what such a message can do). Running
+the command with the variable unset or pointing at nothing live is an
+error, not a degraded send.
 
-**Authentication of `/deliver`.** The bearer must equal B's `accept_token`,
-and `from.host_id` must match a configured `[[peers.hosts]]` entry on B.
-That entry is the source of truth for the caller's identity and its
-`allow_bypass`; the payload's `from.host_id` is a lookup key, never trusted
-on its own. The empty-token bypass in the existing `TokenAuth` never applies
-to `/api/peers*` (§4.6).
+**Authentication of `/deliver`** is §4.3: the matching `inbound_token`
+names the host; `from.host_id` must equal that entry's verified `host_id`;
+`allow_bypass` is read from the same entry. The empty-token bypass in the
+existing `TokenAuth` never applies to `/api/peers*` (§4.6).
 
 **Mode.** B computes `effective_mode`:
 
@@ -321,7 +349,10 @@ The wrapper's `from-mode` is `effective_mode`. Audit records both. On A,
 approval hold by default and lets the user opt a trusted host in.
 
 **Virtual peer selection.** B keeps, per origin wire identity
-`(host_id, agent_session_id)`, at most one helper (§4.5). The frame written
+`(host_id, agent_session_id, pid, proc_start)`, at most one helper (§4.5). A
+resumed origin (same `agent_session_id`, new pid) gets a new helper; the old
+one is reaped when its origin is found gone, so a late reply to the old
+process can never reach the new one. The frame written
 to the target's inbox has `from: "uds:<helper sock>"` and a wrapper with
 `from-name = "<A alias>/<origin session name or cc:peer_name>"`,
 `from-mode = effective_mode`, and any `hop-chain` attribute carried in from
@@ -338,13 +369,15 @@ as `to`. If A is not configured on B, the reply is refused with
 target session. A, on receipt, spawns its own helper for the replier and
 delivers into the origin session exactly as above. The chain is symmetric.
 
-**Message identity and limits.**
+**Message identity, limits and loops.**
 
 | Rule | Value |
 |---|---|
 | `msg_id` | UUID minted by A for a send, by B for a reply; carried end-to-end and into the inbox frame |
-| Dedup | a daemon drops a `/deliver` whose `msg_id` it has seen in the last 10 min (in-memory) |
-| Hop limit | `hop` starts at 1; a daemon refuses `hop > 4` |
+| Dedup | a daemon drops a `/deliver` whose `msg_id` it has seen in the last 10 min (in-memory); this catches retransmits, not conversations |
+| Single hop | a daemon delivers only into its own sessions and only from a session on the authenticated host; it never forwards a `/deliver` to a third host. There is no `hop` counter because there is nothing to count |
+| `hop_chain` | when the frame that reached a helper carries a `hop-chain` attribute, its value is sent as `hop_chain` and written back verbatim into the outgoing wrapper; it is Claude Code's loop marker and the bridge only carries it |
+| Pair rate limit | a daemon refuses more than 30 deliveries per minute for one `(from tuple, to tuple)` pair with `rate_limited`, audited. Beyond that, conversation loops are bounded only by Claude Code's own per-sender throttles and repeat suppression — the bridge makes no stronger claim |
 | Text size | UTF-8 `text` ≤ 64 KiB; refused at `/send` and `/deliver` |
 | HTTP | 10 s per inter-daemon call, no retry |
 | Socket write | 5 s; success means the full frame was written and the connection closed cleanly |
@@ -352,7 +385,7 @@ delivers into the origin session exactly as above. The chain is symmetric.
 
 **Audit.** Table `peer_messages` in `meta.db`: `msg_id, ts, direction
 (out|in|reply), from_host_id, from_session_id, to_host_id, to_session_id,
-declared_mode, effective_mode, hop, bytes, result, error`. The row is
+declared_mode, effective_mode, bytes, result, error`. The row is
 written **before** the socket write; if the write fails the row is updated
 with the error. If the audit insert itself fails, the delivery is refused
 (`audit_unavailable`). `pdx msg log [--tail N]` reads it.
@@ -365,17 +398,18 @@ HTTP connection.
 
 | Concern | Rule |
 |---|---|
-| Spawn | on first `/deliver` for an origin; a per-origin mutex prevents concurrent spawns for the same key |
-| Ready | helper writes `{"ready":true,"pid":N,"sock":"…"}` on stdout after binding; the daemon waits ≤ 3 s, else kills it and refuses the delivery (`proxy_spawn_failed`) |
-| Registry writes | helper creates `<own pid>.json` / `<own pid>.<sha>.key` with `O_EXCL` under `~/.claude/sessions/`, key mode 0600, refuses to follow or replace an existing path; socket path is always `/tmp/cc-socks/<own pid>.sock` |
+| Key | the full origin tuple `(host_id, agent_session_id, pid, proc_start)` — helper map, `proxies.json.origin` and the bound reply target all use it |
+| Spawn | on first `/deliver` for a key; a per-key mutex prevents concurrent spawns; a helper that is still starting counts toward the cap |
+| Ready | helper writes `{"ready":true,"pid":N,"sock":"…","files":[…]}` on stdout only after the socket is bound **and both registry files exist**; the daemon waits ≤ 3 s, else SIGKILLs it, waits for exit, removes only the files that helper reported creating, and refuses the delivery (`proxy_spawn_failed`) |
+| Registry writes | helper creates `<own pid>.json` / `<own pid>.<sha>.key` with `O_EXCL` under `~/.claude/sessions/`, key mode 0600, never follows or replaces an existing path; if the second file fails, it removes the first and exits non-zero; socket path is always `/tmp/cc-socks/<own pid>.sock` |
 | Registry content | `name = "<alias>/<session>"`, `nameSource: "user"`, `kind: "interactive"`, `peerFeatures` copied from the newest live cc entry (so a future feature flag is not silently missing); a `purdex: {host_id, agent_session_id}` object is **not** written — unknown fields are not proven safe with the harness's parser |
-| Ownership record | daemon writes `proxies.json` in `DataDir`: `[{pid, proc_start, sock, origin:{host_id, agent_session_id}}]`, updated on every spawn/exit |
+| Ownership record | daemon writes `proxies.json` in `DataDir`: `[{pid, proc_start, sock, files:[…], origin:{host_id, agent_session_id, pid, proc_start}}]`; updates are serialised under one mutex and written atomically (temp file + rename) on every spawn/exit |
 | Inbound | helper forwards every inbound line verbatim on stdout as `{"frame": <line>}`; parsing and routing are the daemon's |
 | Cap | at most 32 helpers per daemon (constant); beyond it `/deliver` is refused with `proxy_limit` |
 | Idle reap | no traffic in either direction for 30 min (constant) ⇒ SIGTERM |
 | Origin gone | when the daemon learns the origin session is gone (`target_gone` on a reply), the helper is reaped |
 | Parent death | helper exits when stdin reaches EOF (daemon crash or restart) and removes its files |
-| Startup sweep | daemon reads `proxies.json`, kills any listed pid whose start time matches, removes their sockets and registry files, rewrites the file empty |
+| Startup sweep | daemon reads `proxies.json`; for each record whose pid is alive **and** whose current start time equals the recorded `proc_start`, it sends SIGTERM, waits ≤ 2 s, SIGKILLs, and waits for exit; only then unlinks the recorded `sock` and `files`. A record whose pid is dead or reused (start time differs) has its files unlinked only if they still name that pid; the file is then rewritten empty |
 | Signals | SIGTERM/SIGINT ⇒ remove socket + both registry files, exit 0 |
 
 ### 4.6 Authorization matrix
@@ -384,19 +418,23 @@ Implemented at the daemon's single auth entry (`cmd/pdx/main.go`), replacing
 the plain `TokenAuth` wrap for `/api/peers*` with a scoped check. Every other
 route keeps its current behaviour.
 
-| Route | admin token | `accept_token` (remote daemon) | ticket |
+| Route | admin token | a configured host's `inbound_token` | ticket |
 |---|---|---|---|
 | `GET /api/peers` (local scope) | ✓ | ✓ | – |
 | `GET /api/peers?scope=all` | ✓ | ✗ | – |
 | `POST /api/peers/send` | ✓ | ✗ | – |
-| `POST /api/peers/deliver` | ✗ | ✓ (and `from.host_id` must be a configured host) | – |
+| `POST /api/peers/deliver` | ✗ | ✓ (and `from.host_id` must equal the matched entry's verified `host_id`) | – |
 | `POST /api/peers/hosts`, `DELETE …/{host_id}`, `POST /api/peers/token` | ✓ | ✗ | – |
 | `GET /api/peers/log` | ✓ | ✗ | – |
 
-An unset `accept_token` means the `accept_token` column is ✗ everywhere. An
-unset admin token, which today disables auth for every route, still leaves
-the `accept_token` column as specified: peer routes are never open.
-`IPWhitelist` and `PairingGuard` stay in front as today.
+No configured hosts means the `inbound_token` column is ✗ everywhere. An
+unset admin token, which today disables auth for every route, does **not**
+open the peer routes: on `/api/peers*` an empty admin token means the admin
+column is ✗, and one-time tickets (`?ticket=`) are never accepted. This
+lockdown lands in **P1** as a `PeerRouteAuth` wrapper placed in front of
+`TokenAuth` for the `/api/peers` prefix; P2 adds the `inbound_token` column
+to the same wrapper. `IPWhitelist` and `PairingGuard` stay in front as
+today; every other route keeps the existing `TokenAuth` unchanged.
 
 `/deliver` is admin-✗ on purpose: the admin token is for the user's own
 clients, and a delivery must always be attributable to a configured host.
@@ -407,8 +445,7 @@ Local sends go through `/send`, which verifies the origin session.
 | Key | Phase | Default | Meaning |
 |---|---|---|---|
 | `peers.alias` | P1 | `host_id` up to `:` | display / address name |
-| `peers.accept_token` | P2 | unset (remote calls refused) | credential remote daemons present |
-| `peers.hosts[]` | P2 | empty | remote daemons, with `allow_bypass` |
+| `peers.hosts[]` | P2 | empty | remote daemons: `alias`, `url`, `host_id`, `token`, `inbound_token`, `allow_bypass` |
 | `peers.deliver` | P3 | `false` | accept `/api/peers/deliver` at all |
 
 Helper cap (32) and idle reap (30 min) are constants; they become settings
@@ -438,52 +475,60 @@ Each phase is one PR, independently reviewable and shippable.
   `PeerRecord`, address resolution (§4.1) as a pure function over records.
 - Agent module registers an `agent.owner-resolver` service exposing
   `ResolveSessionOwner(ctx, code)`.
-- New `peers` module: `GET /api/peers` (local scope only, admin token via the
-  existing chain — the scoped auth entry lands in P2), 2 s deadline,
+- `PeerRouteAuth` in `internal/middleware`, wired in `cmd/pdx/main.go` in
+  front of `TokenAuth` for the `/api/peers` prefix: non-empty admin bearer
+  required, tickets refused, empty admin token ⇒ 401 (§4.6).
+- New `peers` module: `GET /api/peers` (local scope only), 2 s soft budget,
   `partial` / `ok` envelope.
 - `pdx peers [--json]` CLI, table sorted by session name.
 - Config: `peers.alias` only.
 
 Acceptance: on mlab, `pdx peers` lists every tmux session; cc sessions show
 peer name, pid, inbox, `deliverable: true`; shell-only sessions show
-`agent: null`; a cc session outside tmux appears as `cc:<name>`.
+`agent: null`; a cc session outside tmux appears as `cc:<name>`;
+`curl /api/peers` without a bearer, or with `?ticket=`, is 401.
 
 ### P2 — Host registry, scoped auth, fan-out
 
-- `peers.accept_token`, `peers.hosts[]`, the §4.6 auth entry.
-- `POST /api/peers/hosts`, `DELETE`, `POST /api/peers/token`, config
-  persistence and redaction.
+- `peers.hosts[]` with per-host `inbound_token`; the `inbound_token` column
+  of §4.6 added to `PeerRouteAuth`.
+- `POST`/`PUT`/`DELETE /api/peers/hosts…` with the two-step pairing of §4.3,
+  config persistence, shared redaction for GET and PUT config responses.
 - `GET /api/peers?scope=all` with parallel fan-out and per-host rows.
-- `pdx peers --all`, `pdx peers host add|remove|list`, `pdx peers token`.
+- `pdx peers --all`, `pdx peers host add|set-token|remove|list`.
 
-Acceptance: with air-2026 configured, `pdx peers --all` on either host shows
-both hosts; stopping one daemon yields an error row; a request to
-`/api/peers` with the wrong token is refused even when the admin token is
-unset.
+Acceptance: with air-2026 paired both ways, `pdx peers --all` on either host
+shows both hosts and `host list` shows both entries verified; stopping one
+daemon yields an error row; a request to `/api/peers` with a wrong
+`inbound_token` is 401 even when the admin token is unset.
 
 ### P3 — Delivery (cc-uds only)
 
 - `pdx peer-proxy` helper and lifecycle (§4.5), `proxies.json`, startup sweep.
-- `POST /api/peers/send`, `POST /api/peers/deliver`, origin verification,
-  mode clamp, dedup, limits, audit table, `pdx msg send|log|selftest`.
+- `POST /api/peers/send` (remote snapshot + `Resolve`), `POST
+  /api/peers/deliver` (tuple re-verification), origin attribution, mode
+  clamp, dedup, pair rate limit, limits, audit table, `pdx msg
+  send|log|selftest`.
 
 Acceptance: from a cc session on mlab, `pdx msg send air/<s> "ping"` reaches
 the cc session on air as a peer message from `mini-lab/<s>`; that Claude's
 native reply arrives back in the mlab session; `pdx msg log` shows the send,
 the reply and their `msg_id`s; `pdx msg selftest` passes on both hosts;
-`pdx msg send` from a plain shell is refused with `origin_unknown`.
+`pdx msg send` with `CLAUDE_CODE_MESSAGING_SOCKET` unset or stale is refused
+with `origin_unknown`.
 
 ## 6. Risks
 
 | Risk | Mitigation |
 |---|---|
 | Claude Code changes the registry/frame format | §4.8 selftest gate; harness-facing code isolated in `internal/peers/ccuds` |
-| `accept_token` leak | grants only inventory + delivery from a host that is *also* configured on the receiver; `peers.deliver` opt-in; audit; messages land at peer trust (§3.4) |
-| Remote host lies about `declared_mode` | clamped to `prompting` unless the receiver's own config allows that host |
-| Remote host lies about `from.host_id` | ignored: identity comes from which configured entry's token matched |
-| Helper pids accumulate or outlive the daemon | cap, idle reap, EOF-on-stdin exit, startup sweep from `proxies.json` |
-| Reply re-binds to a different session with the same name | wire identity is `(session_id, pid, proc_start)`; `target_gone` instead of re-resolution |
-| Message loops A→B→A | hop limit 4, `msg_id` dedup, Claude Code's own per-sender rate limit and repeat suppression, `hop-chain` carried through |
+| One host's `inbound_token` leaks | it identifies exactly that host; the holder can list and deliver *as that host* only, with that host's `allow_bypass`; `peers.deliver` opt-in; audit; messages land at peer trust (§3.4) |
+| Remote host lies about `declared_mode` | clamped to `prompting` unless the receiver's own entry for that host allows it |
+| Remote host lies about `from.host_id` | must equal the `host_id` verified for the matched credential, else `host_unverified` |
+| Same-UID process forges `origin_inbox` on `/send` | out of scope by design (§4.4 origin); the forged message is still peer-trust and audited |
+| Helper pids accumulate or outlive the daemon | cap (starting helpers included), idle reap, EOF-on-stdin exit, ownership-checked startup sweep |
+| Reply re-binds to a different session or process generation | wire identity and helper key are the full tuple; `target_gone` instead of re-resolution |
+| Message loops A→B→A | pair rate limit, `msg_id` dedup for retransmits, `hop_chain` carried through; conversational loops beyond that rely on Claude Code's own throttles (documented) |
 | Inventory slow on hosts with many sessions | 2 s budget with `partial`, memoised process reads |
 
 ## 7. Decisions recorded
@@ -515,3 +560,19 @@ the reply and their `msg_id`s; `pdx msg selftest` passes on both hosts;
 | 12 | Major | no end-to-end message id, dedup, limits | `msg_id`, 10 min dedup, hop ≤ 4, 64 KiB, timeouts, audit-before-write, fail closed |
 | 13 | Minor | version source, local `ok`, proxy enum, selftest teardown | §4.2 `version`/`ok`/`partial`; `proxy` type; §4.8 timeout + teardown |
 | 14 | Minor | P3 too wide; drop knobs | P3 = cc-uds only; cap/reap are constants; §7 records fan-out decision |
+
+## 9. Review disposition (R2 `task-mu00ba1c-7564mi`)
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | Blocker | shared `accept_token` lets any peer impersonate an `allow_bypass` host | per-host `inbound_token`; matched credential names the host; `host_unverified` (§4.3, §4.4) |
+| 2 | Major | P1 left peer routes on the empty-token / ticket-accepting `TokenAuth` | `PeerRouteAuth` lands in P1 (§4.6, §5) |
+| 3 | Major | `host add` could not call `/api/info` with a peer credential | `host_id` learned from the `/api/peers` envelope (§4.3) |
+| 4 | Major | helper keyed by `(host_id, session_id)` loses process generation | full tuple everywhere (§4.4, §4.5) |
+| 5 | Major | cleanup ownership: partial registry writes, ready timeout, pid reuse in sweep | §4.5 rows Ready / Registry writes / Startup sweep / Ownership record |
+| 6 | Major | `hop` / `msg_id` did not bound conversational loops; `hop_chain` not on the wire | single-hop rule, `hop_chain` field, pair rate limit, claim narrowed (§4.4) |
+| 7 | Major | no protocol step for remote name resolution | sender resolves over a fetched snapshot; receiver re-verifies tuple (§4.4) |
+| 8 | Minor | 2 s budget not enforceable with the existing resolver | soft budget, no cross-session memo claim, P2 timeout semantics (§4.2) |
+| 9 | Minor | pane tiebreak not unique | exact `TmuxPaneID` match, unique or `ambiguous` (§4.2) |
+| 10 | Minor | origin verification overstated | reworded as endpoint attribution; same-UID forgery out of scope (§4.4, §6) |
+| 11 | Minor | PUT config echo not redacted | shared deep-copying redaction helper for every config response (§4.3) |
