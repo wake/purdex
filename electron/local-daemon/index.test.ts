@@ -220,6 +220,14 @@ describe('status()', () => {
     expect(st.reason).toBe('ownership check timed out')
   })
 
+  it('external when lsof fails to spawn (code null, not timed out) — never treated as "no processes"', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.onExec = (file) => (file === '/usr/sbin/lsof' ? { code: null, stdout: '', stderr: '', timedOut: false } : undefined)
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.managed).toBe('external')
+    expect(st.reason).toMatch(/lsof did not run/)
+  })
+
   it('maps x64 → amd64 and unknown identity on parse failure', async () => {
     f.deps.arch = 'x64'
     f.files.set(BIN, 'garbage')
@@ -323,6 +331,43 @@ describe('install()', () => {
     await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/refusing to stop/)
     expect(f.execLog.some((e) => e.args[0] === 'stop')).toBe(false)
     expect(f.files.get(BIN)).toBe(identity('aaa'))
+  })
+
+  it('pre-stop ownership re-check timing out rejects with a readable message; binary and pdx.new untouched', async () => {
+    f.files.set(BIN, identity('aaa'))
+    f.files.set(CFG, 'bind = "100.64.0.9"\n')
+    f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    f.lsofListen = `p4242${NUL}\nf8${NUL}n100.64.0.9:7860${NUL}\n`
+    f.health = { ok: true, hash: 'aaa', version: '9' }
+    scriptedDownload(f, 'bbb')
+    // Once the download has happened, the pre-stop lsof re-check times out.
+    let downloadDone = false
+    const origFetch = f.deps.fetch
+    f.deps.fetch = async (url, init) => { const r = await origFetch(url, init); if (!url.endsWith('/api/health')) downloadDone = true; return r }
+    f.onExec = (file) => (file === '/usr/sbin/lsof' && downloadDone ? { code: null, stdout: '', stderr: '', timedOut: true } : undefined)
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/ownership check timed out/)
+    expect(f.execLog.some((e) => e.args[0] === 'stop')).toBe(false)
+    expect(f.files.get(BIN)).toBe(identity('aaa'))
+    const newFile = f.files.get(`${BIN}.new`)
+    expect(typeof newFile === 'string' ? newFile : Buffer.from(newFile ?? new Uint8Array()).toString('utf8')).toBe(identity('bbb'))
+  })
+
+  it('a body stream error mid-download cleans up pdx.new and rejects', async () => {
+    const hash = 'bbb'
+    const body = Buffer.from(identity(hash))
+    const sha = createHash('sha256').update(body).digest('hex')
+    const headers = { 'content-length': String(body.length), 'x-pdx-hash': hash, 'x-pdx-version': '9', 'x-pdx-sha256': sha }
+    f.deps.fetch = async (url) => {
+      if (url.endsWith('/api/health')) throw new Error('ECONNREFUSED')
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(body.subarray(0, 2)) },
+        pull() { throw new Error('network error mid-read') },
+      })
+      return new Response(stream, { status: 200, headers })
+    }
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/mid-read/)
+    expect(f.files.has(`${BIN}.new`)).toBe(false)
   })
 
   it('two concurrent installs run one after the other', async () => {

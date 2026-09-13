@@ -3,7 +3,7 @@
 // never imports node:fs / child_process directly and stays unit-testable.
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { access, chmod, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import { connect } from 'node:net'
 import { homedir, hostname, networkInterfaces } from 'node:os'
@@ -37,12 +37,11 @@ async function openWrite(p: string): Promise<WriteHandle> {
   await new Promise<void>((res, rej) => { ws.once('open', () => res()); ws.once('error', rej) })
   return {
     write: (chunk) => new Promise((res, rej) => { ws.write(chunk, (e) => (e ? rej(e) : res())) }),
-    close: () => new Promise((res, rej) => { ws.once('error', rej); ws.end(() => res()) }),
+    close: () => new Promise((res, rej) => { ws.once('close', () => res()); ws.once('error', rej); ws.end() }),
   }
 }
 
 async function sha256(p: string): Promise<string> {
-  const { createReadStream } = await import('node:fs')
   return new Promise((res, rej) => {
     const h = createHash('sha256')
     createReadStream(p).on('data', (d) => h.update(d)).on('end', () => res(h.digest('hex'))).on('error', rej)

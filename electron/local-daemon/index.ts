@@ -18,7 +18,12 @@ const STOP_TIMEOUT_MS = 35_000
 const START_TIMEOUT_MS = 70_000
 const DOWNLOAD_TIMEOUT_MS = 6 * 60_000
 
-class OwnershipTimeout extends Error {}
+// Thrown when an ownership-determining lsof call could not be trusted —
+// either it timed out or it never ran at all (spawn failure). The caller
+// must never fall back to "no processes" in either case (spec §3.1).
+class OwnershipUnavailable extends Error {
+  constructor(msg?: string) { super(msg ?? 'ownership check timed out') }
+}
 
 export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   const dataDir = DEFAULT_DATA_DIR(deps.home)
@@ -92,9 +97,12 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   // Every lsof in one ownership pass shares a 10 s budget (5 s per call).
   async function lsof(args: string[], deadline: number): Promise<string> {
     const remaining = deadline - deps.now()
-    if (remaining <= 0) throw new OwnershipTimeout()
+    if (remaining <= 0) throw new OwnershipUnavailable()
     const r = await deps.exec(LSOF, args, { timeoutMs: Math.min(LSOF_TIMEOUT_MS, remaining) })
-    if (r.timedOut) throw new OwnershipTimeout()
+    if (r.timedOut) throw new OwnershipUnavailable()
+    // A spawn failure (ENOENT, etc.) reports code: null without timing out;
+    // that is not the same as lsof legitimately exiting 1 with no matches.
+    if (r.code === null) throw new OwnershipUnavailable('ownership check failed: lsof did not run')
     return r.stdout // lsof exits 1 when nothing matched; empty output is fine
   }
 
@@ -159,7 +167,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     try {
       own = await resolveOwner(cfg, binExists)
     } catch (e) {
-      if (e instanceof OwnershipTimeout) return { ...base, managed: 'external', reason: 'ownership check timed out', alive: null }
+      if (e instanceof OwnershipUnavailable) return { ...base, managed: 'external', reason: e.message, alive: null }
       throw e
     }
     if (own.managed === 'external') return { ...base, managed: 'external', reason: own.reason, alive: own.alive }
@@ -197,27 +205,32 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
       const out = await deps.fs.openWrite(newPath)
       let written = 0
       try {
-        if (!resp.body) throw new Error('download failed: empty body')
-        const reader = resp.body.getReader()
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          await out.write(value)
-          written += value.byteLength
+        try {
+          if (!resp.body) throw new Error('download failed: empty body')
+          const reader = resp.body.getReader()
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            await out.write(value)
+            written += value.byteLength
+          }
+        } finally {
+          await out.close()
         }
-      } finally {
-        await out.close()
+        if (written !== expectLen) {
+          throw new Error(`download failed: content-length ${expectLen}, received ${written}`)
+        }
+        if ((await deps.fs.sha256(newPath)) !== expectSha) {
+          throw new Error('download failed: sha256 mismatch')
+        }
+        await deps.fs.chmod(newPath, 0o755)
+        return { hash, version }
+      } catch (e) {
+        // Any failure past this point (stream error/abort, length or hash
+        // mismatch) must never leave a partial/wrong pdx.new behind.
+        await deps.fs.unlink(newPath).catch(() => {})
+        throw e
       }
-      if (written !== expectLen) {
-        await deps.fs.unlink(newPath)
-        throw new Error(`download failed: content-length ${expectLen}, received ${written}`)
-      }
-      if ((await deps.fs.sha256(newPath)) !== expectSha) {
-        await deps.fs.unlink(newPath)
-        throw new Error('download failed: sha256 mismatch')
-      }
-      await deps.fs.chmod(newPath, 0o755)
-      return { hash, version }
     } finally {
       clearTimeout(timer)
     }
