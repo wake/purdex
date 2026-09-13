@@ -1,6 +1,6 @@
 # Revive by Name — Implementation Plan
 
-**Status:** v1 (draft, pending codex plan review)
+**Status:** v2 (aligned to spec v2; pending codex plan review)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,15 +8,18 @@
 live session on the same host carries the name the pane last saw. Two clients
 on one daemon: one presses Rebuild, the other's tab comes back without a click.
 
-**Architecture:** One new decision (`revive`) in the pure reconcile function,
-applied in the `sessions` handler through a gate that reads the rebuild
-operation store, using the engine's existing re-point writer. Plus one
-idempotency short-circuit in `repointMember` so "Rebuild all" reports a member
-already revived by name as a success.
+**Architecture:** A new module `spa/src/lib/rebuild/revive.ts` holds one pure
+decision (`decideRevive`), one pure gate (`reviveAllowed`) and one pass
+(`runRevivePass`) that scans the tab store for `tmux-restarted` terminal panes
+**after** reconciliation, matches them by name against the session store, and
+re-points them through the engine's existing writer. The pass is skipped
+wholesale while the rebuild operation lock is held, and is re-run for every
+host when that lock is released. Nothing in `reconcile.ts`, `engine.ts`'s
+logic or `batch.ts` changes.
 
 **Tech Stack:** React 19 / Zustand 5 / Vitest · pnpm. SPA only.
 
-**Spec:** `docs/specs/2026-09-14-revive-by-name-spec.md`
+**Spec:** `docs/specs/2026-09-14-revive-by-name-spec.md` (v2)
 
 ## Global Constraints
 
@@ -38,143 +41,148 @@ already revived by name as a success.
 - **Existing tests stay green untouched.** If a pre-existing test needs editing
   to pass, stop and report — do not edit it.
 - **No new i18n strings, no UI.** A revived pane simply stops being terminated.
-- **`revivable` is optional** on `ReconcileInput` so no existing caller changes.
+- **`reconcile.ts` is not modified.** The decision lives in `revive.ts`.
 
 ## File Structure
 
 | File | Change |
 |---|---|
-| `spa/src/lib/rebuild/reconcile.ts` | `RevivablePane`, `ReviveDecision`, `revive` output, the name rule |
-| `spa/src/hooks/useMultiHostEventWs.generation.test.ts` | new `describe('reconcileSessionsPayload — revive')` block |
-| `spa/src/lib/rebuild/revive.ts` (new) | `reviveAllowed(paneId, binding, operations)` |
-| `spa/src/lib/rebuild/revive.test.ts` (new) | gate table cases |
-| `spa/src/lib/rebuild/engine.ts` | export `defaultRepoint` as `repointPaneToSession`; `repointMember` short-circuit |
-| `spa/src/lib/rebuild/engine.test.ts` | `repointMember` idempotency cases |
-| `spa/src/lib/rebuild/batch.test.ts` | S12 |
-| `spa/src/hooks/useMultiHostEventWs.ts` | collect revivable panes, apply `revive` through the gate |
+| `spa/src/lib/rebuild/revive.ts` (new) | `ReviveCandidate`, `ReviveDecision`, `decideRevive`, `reviveAllowed`, `collectCandidates`, `runRevivePass`, `runRevivePassAll` |
+| `spa/src/lib/rebuild/revive.test.ts` (new) | unit tests for the two pure functions and the pass |
+| `spa/src/lib/rebuild/engine.ts` | rename `defaultRepoint` → exported `repointPaneToSession` (no logic change) |
+| `spa/src/lib/rebuild/engine.test.ts` | pin the export |
+| `spa/src/hooks/useMultiHostEventWs.ts` | call `runRevivePass(hostId)` in the `sessions` handler; subscribe to the lock release |
 | `spa/src/hooks/useMultiHostEventWs.revive.test.ts` (new) | end-to-end through `FakeSocket` |
 
 ---
 
-### Task 1: The `revive` decision
-
-**Files:**
-- Modify: `spa/src/lib/rebuild/reconcile.ts`
-- Modify: `spa/src/hooks/useMultiHostEventWs.generation.test.ts`
-
-**Interfaces produced** (exactly as spec §3.1):
-```ts
-export interface RevivablePane { hostId; tabId; paneId; sessionCode; tmuxInstance; cachedName }
-export interface ReviveDecision { tabId; paneId; binding: { hostId; sessionCode; tmuxInstance }; session: ReconcileSession }
-// ReconcileInput.revivable?: RevivablePane[]
-// ReconcileOutcome.revive: ReviveDecision[]
-```
-
-**Rule.** For each revivable pane whose `hostId` matches: find the session with
-`name === cachedName`. Emit only if that session's `tmux_instance` is non-empty
-**and** differs from `pane.tmuxInstance`, and its `mode` is absent or
-`'terminal'`. Build the live sessions into a `Map<name, session>` once; if two
-payload entries share a name (cannot happen on one tmux server, but the
-function must not depend on it) keep the **first** and treat the case as
-undefined behaviour — do not add a tie-break rule, the spec has none.
-
-The loop over `revivable` is separate from the loop over `panes` and touches
-neither `terminate` nor `adoptInstance`.
-
-- [ ] **Step 1: Write the failing tests** in the generation test file, new
-  `describe('reconcileSessionsPayload — revive')`:
-  - S1: revivable `dev` @ `111:1000`; live `{code:'abc123', name:'dev', tmux_instance:'222:2000'}` → one decision carrying `tabId`, `paneId`, `binding {h1, oldcode, 111:1000}`, the full session object.
-  - S4: live instance `''` → `revive: []`.
-  - live instance equal to the pane's → `revive: []`.
-  - S5: live named `dev-2` only → `revive: []`.
-  - S6: live `mode: 'stream'` → `revive: []`; `mode` absent → revives.
-  - S13: revivable on `h2`, payload for `h1` → `revive: []`.
-  - S14: two revivable panes both named `dev` → two decisions, same session.
-  - no `revivable` key → `revive: []` and existing outputs unchanged (assert `terminate`/`adoptInstance` on an input that also has live panes equal the values they have today).
-  - a revivable pane whose code is also in the live list under a new generation (the `$0` reuse case) → still decided by **name**, not by code; assert the decision's session is the one named `dev` even when a different live session carries the pane's old code.
-- [ ] **Step 2: Run** `pnpm --prefix spa exec vitest run src/hooks/useMultiHostEventWs.generation.test.ts` — red.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the same file — green. Then the full `vitest run`.
-- [ ] **Step 5: Commit** — `feat(rebuild): decide revive-by-name for tmux-restarted panes`
-
----
-
-### Task 2: The gate, the exported re-point, and the wiring
+### Task 1: `decideRevive` and `reviveAllowed`
 
 **Files:**
 - Create: `spa/src/lib/rebuild/revive.ts`, `spa/src/lib/rebuild/revive.test.ts`
-- Modify: `spa/src/lib/rebuild/engine.ts` (export only — rename `defaultRepoint` → `repointPaneToSession`, keep the default-parameter use in `repointMember`)
+
+**Interfaces produced** (exactly as spec §3.1 / §3.2):
+```ts
+export interface ReviveCandidate { hostId; tabId; paneId; sessionCode; tmuxInstance; cachedName }
+export interface ReviveDecision { tabId; paneId; binding: RebuildBinding; session: Session }
+export function decideRevive(hostId: string, sessions: Session[], candidates: ReviveCandidate[]): ReviveDecision[]
+export function reviveAllowed(paneId: string, binding: RebuildBinding, operations: Record<string, RebuildOperation>): boolean
+```
+`RebuildBinding` / `RebuildOperation` come from `stores/useRebuildStore.ts`;
+`bindingEquals` from `lib/rebuild/binding.ts` (exact, not legacy); `Session`
+from `lib/host-api.ts`.
+
+**`decideRevive` rule.** Build `Map<name, Session>` from `sessions` once,
+first entry wins on a duplicate name. For each candidate with
+`candidate.hostId === hostId`: look up `cachedName`; require the session's
+`tmux_instance` to be a non-empty string; if `session.mode` is a string it
+must be `'terminal'`; emit `{ tabId, paneId, binding: { hostId, sessionCode, tmuxInstance }, session }`.
+No generation comparison against the candidate's own instance (spec §3.1,
+review finding 5). Pure: no store access.
+
+**`reviveAllowed` rule.** Exactly the five lines in spec §3.2.
+
+- [ ] **Step 1: Write the failing tests** in `revive.test.ts`.
+  `describe('decideRevive')`:
+  - S1: candidate `dev` @ `111:1000`, live `{code:'abc123', name:'dev', tmux_instance:'222:2000'}` → one decision with `tabId`, `paneId`, `binding {h1, old, 111:1000}`, the identical session object (`toBe`).
+  - S1c: live `dev` @ `111:1000` (same as candidate) → revives.
+  - S4: live instance `''` → `[]`; instance key absent → `[]`.
+  - S5: only `dev-2` live → `[]`.
+  - S6: live `mode: 'stream'` → `[]`; `mode` absent → revives.
+  - S13: candidate on `h2`, call for `h1` → `[]`.
+  - S14: two candidates named `dev` → two decisions, same session.
+  - empty candidates → `[]`; empty sessions → `[]`.
+  - name beats code: live `[{code:'old', name:'other', tmux_instance:'222:2000'}, {code:'new1', name:'dev', tmux_instance:'222:2000'}]`, candidate `sessionCode:'old', cachedName:'dev'` → decision session is `new1`.
+  `describe('reviveAllowed')` — `it.each` over: no op → true; op binding ≠ → true; running (same binding) → false; done + `createdSession` → false; done, no `createdSession` → true. Build ops with a small factory: `{ paneId, tabId:'t', hostId:'h1', plan:{createSession:true,applyCwd:true,runResume:true}, binding, resumeCommand:'', status, report:{hostId:'h1', steps:{create:{status:'skipped'},resume:{status:'skipped'},repoint:{status:'skipped'}}, repointed:false}, startedAt:0, ...over }`.
+- [ ] **Step 2: Run** `pnpm --prefix spa exec vitest run src/lib/rebuild/revive.test.ts` — red (module missing).
+- [ ] **Step 3: Implement** the two functions and the types. Do **not** add `collectCandidates` / `runRevivePass` yet.
+- [ ] **Step 4: Run** the file — green. Then the full `vitest run`.
+- [ ] **Step 5: Commit** — `feat(rebuild): decide revive-by-name and its per-pane gate`
+
+---
+
+### Task 2: The pass, the exported writer, and the two triggers
+
+**Files:**
+- Modify: `spa/src/lib/rebuild/revive.ts`, `spa/src/lib/rebuild/revive.test.ts`
+- Modify: `spa/src/lib/rebuild/engine.ts`, `spa/src/lib/rebuild/engine.test.ts`
 - Modify: `spa/src/hooks/useMultiHostEventWs.ts`
 - Create: `spa/src/hooks/useMultiHostEventWs.revive.test.ts`
 
 **Interfaces produced:**
 ```ts
-// revive.ts — pure over the store slice so the table test needs no React.
-export function reviveAllowed(
-  paneId: string,
-  binding: RebuildBinding,
-  operations: Record<string, RebuildOperation>,
-): boolean
-```
-Rule (spec §3.2): no op → true; op binding ≠ pane binding → true; running → false;
-done with `createdSession` → false; done without → true. Use `bindingEquals`
-from `binding.ts` (exact, not legacy).
+// engine.ts — rename only. `repointMember`'s default parameter keeps using it.
+export function repointPaneToSession(tabId: string, paneId: string, session: Session): void
 
-**Wiring** in the `sessions` handler of `useMultiHostEventWs.ts`. While
-collecting `panes` (the existing `scanPaneTree` at ~line 157), also collect
-`revivable`: `kind === 'tmux-session' && hostId === hostId && terminated === 'tmux-restarted' && mode === 'terminal'`. Pass it to `reconcileSessionsPayload`.
-Apply after the terminate loop and before `openAttachGate(hostId)`:
+// revive.ts
+export function collectCandidates(hostId: string): ReviveCandidate[]   // reads useTabStore
+export function runRevivePass(hostId: string): void                     // spec §3.2, verbatim
+export function runRevivePassAll(): void                                // every id in useHostStore.hostOrder
+```
+
+**`collectCandidates`**: `scanPaneTree` over every tab in
+`useTabStore.getState().tabs`; keep panes with `content.kind === 'tmux-session'
+&& content.hostId === hostId && content.mode === 'terminal' && content.terminated === 'tmux-restarted'`.
+
+**`runRevivePass`** exactly as spec §3.2: `isAttachReady(hostId)` from
+`attach-gate.ts` first, then `useRebuildStore.getState().lockedBy !== null`
+→ return, then decide over `useSessionStore.getState().sessions[hostId] ?? []`,
+gate each, write with `repointPaneToSession`.
+
+**Trigger 1** — in the `sessions` handler of `useMultiHostEventWs.ts`, insert
+`runRevivePass(hostId)` immediately **after** `openAttachGate(hostId)` and
+**before** `probeMissingCwds(hostId)`. One comment line: revived panes are
+probed on their final binding, like everything else after reconciliation.
+
+**Trigger 2** — a third `useEffect(() => ..., [])` in the hook:
 ```ts
-for (const d of outcome.revive) {
-  if (!reviveAllowed(d.paneId, d.binding, useRebuildStore.getState().operations)) continue
-  repointPaneToSession(d.tabId, d.paneId, d.session as Session)
-}
+useEffect(() => useRebuildStore.subscribe((s, prev) => {
+  if (prev.lockedBy !== null && s.lockedBy === null) runRevivePassAll()
+}), [])
 ```
-`d.session` is a `ReconcileSession` (partial); `repointPaneToSession` reads
-`code`, `name`, `tmux_instance` and passes the object into the session store.
-The handler's `data` is already `Session[]`, so the objects in the decision
-ARE full sessions — cast at the call site with a one-line comment, do not widen
-`ReconcileSession`.
+(Zustand's `subscribe` returns the unsubscribe, which is the effect cleanup.)
 
 - [ ] **Step 1: Write the failing tests.**
-  `revive.test.ts` — one `it.each` table: S7 (running), S8 (done + createdSession), S9 (done, no createdSession), S10 (op binding differs), no op. Seed `operations` literals directly; the `RebuildOperation` type needs `paneId, tabId, hostId, plan, binding, resumeCommand, status, report, startedAt` — build a small factory.
-  `useMultiHostEventWs.revive.test.ts` — copy the `FakeSocket` + `beforeEach` harness from `gate.test.ts`, but give `useSessionStore` its real `replaceHost` (the handler's `replaceHost` runs before revive; the fake in gate.test is a `vi.fn()` and that is fine too — revive reads the payload, not the store). Seed one tab via `useTabStore.setState` with a `tmux-restarted` terminal pane `cachedName: 'dev'`, `sessionCode: 'old', tmuxInstance: '111:1000'`, with a rebuild record. Emit `{type:'sessions', value: JSON.stringify([{code:'new1', name:'dev', tmux_instance:'222:2000', mode:'terminal', ...}])}`. Assert on the tab store:
-  - S1: `sessionCode === 'new1'`, `tmuxInstance === '222:2000'`, `terminated` undefined, `rebuild.sessionName === 'dev'`, `rebuild.tmuxInstance === '222:2000'`, `rebuild.agent` preserved.
-  - S2: same but `terminated: 'session-closed'` → untouched.
-  - S3: `'host-removed'` → untouched.
-  - S7: seed `useRebuildStore` with a running op on the pane's binding → untouched.
-  - a second payload after S1 (same list) → nothing changes, no error (the pane is now live and reconciles normally).
-  Look at `useMultiHostEventWs.cwd-probe.test.ts` for how the existing tests keep the probes quiet (mock `../lib/rebuild/cwd-probe` and `../lib/rebuild/provenance-probe` if they fire fetches).
-- [ ] **Step 2: Run both new files — red** (the import of `revive.ts` fails; the hook test fails on `sessionCode`).
-- [ ] **Step 3: Implement** `revive.ts`, the export rename in `engine.ts`, the wiring.
-- [ ] **Step 4: Run both files green, then full `vitest run`, `lint`, `build`.**
-- [ ] **Step 5: Commit** — `feat(rebuild): revive tmux-restarted panes by session name on every sessions payload`
 
----
+  `revive.test.ts`, `describe('runRevivePass')` — seed stores directly
+  (`useHostStore.setState` with `runtime: { h1: { status:'connected', attachReady: true } }`,
+  `useSessionStore.setState({ sessions: { h1: [...] } })`, `useTabStore.setState` with a
+  leaf tab whose pane is `tmux-restarted`, `useRebuildStore.setState({ operations: {}, lockedBy: null })`;
+  `beforeEach` resets all four). Reuse the fixture shapes from `engine.test.ts` (`seedPane`, `paneContent`).
+  - S1: pane revived — `sessionCode`, `tmuxInstance`, `terminated === undefined`, `cachedName`, `rebuild.sessionName`, `rebuild.tmuxInstance` restamped, `rebuild.agent` and `rebuild.cwd` kept.
+  - S16: `attachReady: false` → untouched.
+  - S7: `lockedBy: 'rebuild:p9'` → untouched (even though the pane has no op).
+  - S8: op `done` + `createdSession` on the pane's binding, lock free → untouched.
+  - S9: op `done`, no `createdSession`, lock free → revived.
+  - S15: run twice → second run changes nothing (compare the tab store object identity before/after the second call: `toBe`).
+  - a pane with no `rebuild` record → revived, `rebuild` stays `undefined`.
 
-### Task 3: `repointMember` is idempotent
+  `engine.test.ts`, `describe('repointPaneToSession')`: seeded `tmux-restarted`
+  pane with a record → after the call `terminated` is gone, code/name/instance
+  are the session's, `rebuild.sessionName`/`tmuxInstance` restamped, other
+  record fields kept, and `useSessionStore.sessions.h1` contains the session.
 
-**Files:**
-- Modify: `spa/src/lib/rebuild/engine.ts` (`repointMember`)
-- Modify: `spa/src/lib/rebuild/engine.test.ts`, `spa/src/lib/rebuild/batch.test.ts`
-
-**Rule** (spec §3.3): before the `bindingUnchanged` check, read the pane; if it
-is a terminal tmux pane with `sessionCode === created.code &&
-tmuxInstance === (created.tmux_instance ?? '')`, return `{ repointed: true }`
-without calling `repoint`. `assertHostUnchanged` still runs first — a pinned
-host that changed is still the truer reason.
-
-- [ ] **Step 1: Write the failing tests.**
-  `engine.test.ts`, new `describe('repointMember — idempotent')`:
-  - pane already bound to `created` (code + instance) → `{ repointed: true }` and the injected `repoint` spy is **not** called.
-  - pane bound to `created.code` but a different instance → `{ repointed: false, reason: 'the pane binding changed' }`.
-  - pane bound elsewhere → unchanged reason.
-  - `assertHostUnchanged` throws while the pane is already on `created` → the host reason wins.
-  `batch.test.ts`, in `runBatchRebuild`: S12 — two panes on the same dead session; `createSession` fake re-points `p2` onto the created session **by name** (use `useTabStore.getState().setPaneContent` with the created code/instance and no `terminated`, i.e. what the WS handler will do) before returning; assert the member result for `p2` is `repointed: true` and both panes end on `new1`.
-- [ ] **Step 2: Run — red.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Full `vitest run`, `lint`, `build` — green.**
-- [ ] **Step 5: Commit** — `fix(rebuild): a batch member already on the created session counts as re-pointed`
+  `useMultiHostEventWs.revive.test.ts` — copy the `FakeSocket` harness from
+  `gate.test.ts`; mock `../lib/host-connection` (`checkHealth`),
+  `../lib/rebuild/cwd-probe` and `../lib/rebuild/provenance-probe` (both to
+  `vi.fn()`s) so no fetch fires. **Use the real `useSessionStore`**: in
+  `beforeEach`, `useSessionStore.setState({ sessions: {}, fetchHost: vi.fn(async () => {}) } as never)`
+  — the pass reads `sessions` from the store, so `replaceHost` must be real.
+  Drive one host to `connected` the way `gate.test.ts` does (`act` + `waitFor` on
+  `sockets[0]`, `onopen`), then `emit` a `{type:'sessions', session:'', value: JSON.stringify([...])}`
+  event (check the exact envelope shape `connectHostEvents` parses in
+  `lib/host-events.ts` and copy it).
+  - S1: pane `tmux-restarted` @ `111:1000`, payload `dev` @ `222:2000` → revived.
+  - S1b: pane **live** @ `111:1000` (no `terminated`), same payload → revived in the same event (assert `terminated` undefined and `tmuxInstance === '222:2000'`).
+  - S2 / S3: `session-closed` / `host-removed` → untouched.
+  - S6: `mode: 'stream'` pane → untouched.
+  - S7 + S11: two tabs X, Y on the same dead session; `useRebuildStore.setState({ lockedBy: 'rebuild:X' })`; emit payload → both untouched; then `useRebuildStore.setState({ lockedBy: null })` → Y revived; X (give it a `done` op with `createdSession` on its binding) untouched.
+  - S15: emit the same payload twice → same result, no throw.
+  - S16: close the socket (`onclose`) so the gate closes, then release the lock → untouched; reconnect + payload → revived.
+- [ ] **Step 2: Run the three files — red.**
+- [ ] **Step 3: Implement** the rename, the pass, the wiring, the subscription.
+- [ ] **Step 4: Run the three files green; then full `vitest run`, `lint`, `build`.**
+- [ ] **Step 5: Commit** — `feat(rebuild): revive tmux-restarted panes by session name`
 
 ---
 
