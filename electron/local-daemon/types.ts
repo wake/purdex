@@ -41,7 +41,11 @@ export interface LocalDaemonDeps {
     sha256(p: string): Promise<string>
   }
   kill0: (pid: number) => boolean
-  portOpen: (host: string, port: number, timeoutMs: number) => Promise<boolean> // TCP connect succeeds within timeoutMs
+  // One TCP connect attempt to host:port. 'open' = connect succeeded;
+  // 'refused' = ECONNREFUSED (nothing listens — the only answer that proves
+  // the port is free); 'unknown' = timed out or any other socket error
+  // (EHOSTUNREACH, ENETDOWN, …) — the caller must not treat it as free.
+  probePort: (host: string, port: number, timeoutMs: number) => Promise<'open' | 'refused' | 'unknown'>
   networkInterfaces: () => Iface[]
   randomBytes: (n: number) => Buffer
   sleep: (ms: number) => Promise<void>

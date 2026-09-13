@@ -3,7 +3,7 @@
 // never imports node:fs / child_process directly and stays unit-testable.
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream, type WriteStream } from 'node:fs'
 import { access, chmod, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import { connect } from 'node:net'
 import { homedir, hostname, networkInterfaces } from 'node:os'
@@ -32,13 +32,34 @@ async function exists(p: string): Promise<boolean> {
   try { await access(p); return true } catch { return false }
 }
 
-async function openWrite(p: string): Promise<WriteHandle> {
+// Track the stream's terminal state from the moment it is wrapped: after a
+// failed write the stream has usually already emitted 'error' and 'close',
+// so a `close()` that only registers listeners at call time would wait
+// forever (index.ts awaits it in a `finally` on the daemon's promise queue).
+export function wrapWriteStream(ws: WriteStream): WriteHandle {
+  let failed: Error | null = null
+  let closed = false
+  ws.on('error', (e) => { failed ??= e })
+  ws.once('close', () => { closed = true })
+  return {
+    write: (chunk) => new Promise((res, rej) => {
+      if (failed) return rej(failed)
+      ws.write(chunk, (e) => (e ? rej(failed ?? e) : res()))
+    }),
+    close: () => new Promise((res, rej) => {
+      if (failed) return rej(failed)
+      if (closed) return res()
+      ws.once('close', () => (failed ? rej(failed) : res()))
+      ws.once('error', rej)
+      ws.end()
+    }),
+  }
+}
+
+export async function openWrite(p: string): Promise<WriteHandle> {
   const ws = createWriteStream(p, { mode: 0o755 })
   await new Promise<void>((res, rej) => { ws.once('open', () => res()); ws.once('error', rej) })
-  return {
-    write: (chunk) => new Promise((res, rej) => { ws.write(chunk, (e) => (e ? rej(e) : res())) }),
-    close: () => new Promise((res, rej) => { ws.once('close', () => res()); ws.once('error', rej); ws.end() }),
-  }
+  return wrapWriteStream(ws)
 }
 
 async function sha256(p: string): Promise<string> {
@@ -68,12 +89,12 @@ export function nodeDeps(log: (msg: string) => void = console.log): LocalDaemonD
       sha256,
     },
     kill0: (pid) => { try { process.kill(pid, 0); return true } catch { return false } },
-    portOpen: (host, port, timeoutMs) => new Promise((res) => {
+    probePort: (host, port, timeoutMs) => new Promise((res) => {
       const sock = connect({ host, port })
-      const done = (v: boolean) => { sock.destroy(); res(v) }
-      sock.setTimeout(timeoutMs, () => done(false))
-      sock.once('connect', () => done(true))
-      sock.once('error', () => done(false))
+      const done = (v: 'open' | 'refused' | 'unknown') => { sock.destroy(); res(v) }
+      sock.setTimeout(timeoutMs, () => done('unknown'))
+      sock.once('connect', () => done('open'))
+      sock.once('error', (e: NodeJS.ErrnoException) => done(e.code === 'ECONNREFUSED' ? 'refused' : 'unknown'))
     }),
     networkInterfaces: () => Object.entries(networkInterfaces()).flatMap(([name, list]) => (list ?? []).map((i) => ({ name, address: i.address, family: String(i.family), internal: i.internal }))),
     randomBytes: (n) => randomBytes(n),

@@ -108,6 +108,8 @@ export async function streamCheck(
 
 export type UpdateProgressFn = (step: string) => void
 
+const UPDATE_DOWNLOAD_TIMEOUT_MS = 10 * 60_000
+
 export async function applyUpdate(
   daemonUrl: string,
   onProgress?: UpdateProgressFn,
@@ -116,7 +118,12 @@ export async function applyUpdate(
   const progress = onProgress ?? (() => {})
 
   progress('downloading')
-  const resp = await fetch(`${daemonUrl}/api/dev/update/download`, { headers: authHeaders(token) })
+  // applyUpdate runs inside localDaemon.withLock: a source that never sends
+  // headers or stalls mid-body must not hold the daemon lock forever. One
+  // budget covers headers + body; on abort fetch/pipeline reject and the
+  // caller's cleanup path runs.
+  const signal = AbortSignal.timeout(UPDATE_DOWNLOAD_TIMEOUT_MS)
+  const resp = await fetch(`${daemonUrl}/api/dev/update/download`, { headers: authHeaders(token), signal })
   if (!resp.ok) throw new Error(`download failed: ${resp.status}`)
 
   const tmpDir = join(app.getPath('temp'), 'purdex-update')
@@ -126,7 +133,7 @@ export async function applyUpdate(
   // Save tar.gz to temp file
   const tarPath = join(tmpDir, 'out.tar.gz')
   const fileStream = createWriteStream(tarPath)
-  await pipeline(resp.body as any, fileStream)
+  await pipeline(resp.body as any, fileStream, { signal })
 
   progress('extracting')
   // Extract to temp dir

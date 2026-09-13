@@ -22,7 +22,7 @@ interface Fake {
   lsofTxt: Record<number, string>      // pid → lsof -d txt output
   lsofListen: string                   // lsof -iTCP output
   alivePids: Set<number>
-  portIsOpen: boolean
+  portProbe: 'open' | 'refused' | 'unknown' // scripted probePort result
   onExec: (file: string, args: string[]) => ExecResult | undefined
   downloads: Array<{ status: number; headers: Record<string, string>; body: Uint8Array }>
   clock: number
@@ -38,7 +38,7 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
     lsofTxt: {},
     lsofListen: '',
     alivePids: new Set(),
-    portIsOpen: false,
+    portProbe: 'refused',
     onExec: () => undefined,
     downloads: [],
     clock: 0,
@@ -63,7 +63,7 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
       if (custom) return custom
       if (file === '/bin/zsh') return { code: 0, stdout: `${S}/opt/homebrew/bin:/usr/bin${S}\n`, stderr: '', timedOut: false }
       if (file === '/usr/bin/which') return { code: 0, stdout: '/opt/homebrew/bin/tmux\n', stderr: '', timedOut: false }
-      if (file === '/usr/sbin/lsof') {
+      if (file === '/usr/sbin/lsof' || file === '/usr/bin/lsof') {
         if (args.includes('-d')) {
           const pid = Number(args[args.indexOf('-p') + 1])
           return { code: 0, stdout: fake.lsofTxt[pid] ?? '', stderr: '', timedOut: false }
@@ -80,12 +80,12 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
         // daemon holding the pid file and listening on bind:port.
         const bindLine = (() => { const c = fake.files.get(CFG); const m = typeof c === 'string' ? /bind = "([^"]+)"/.exec(c) : null; return m ? m[1] : '127.0.0.1' })()
         fake.health = { ok: true, hash: JSON.parse(text(file)).hash, version: '9' }
-        fake.alivePids.add(4242); fake.files.set(PID, '4242'); fake.portIsOpen = true
+        fake.alivePids.add(4242); fake.files.set(PID, '4242'); fake.portProbe = 'open'
         fake.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
         fake.lsofListen = `p4242${NUL}\nf8${NUL}n${bindLine}:7860${NUL}\n`
         return { code: 0, stdout: 'started', stderr: '', timedOut: false }
       }
-      if (args[0] === 'stop') { fake.health = null; fake.alivePids.clear(); fake.lsofListen = ''; fake.portIsOpen = false; return { code: 0, stdout: 'stopped', stderr: '', timedOut: false } }
+      if (args[0] === 'stop') { fake.health = null; fake.alivePids.clear(); fake.lsofListen = ''; fake.portProbe = 'refused'; return { code: 0, stdout: 'stopped', stderr: '', timedOut: false } }
       return { code: 0, stdout: '', stderr: '', timedOut: false }
     },
     fetch: async (url) => {
@@ -96,14 +96,18 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
       // Only the download route consumes the scripted queue.
       const next = fake.downloads.shift()
       if (!next) throw new Error('no scripted download for ' + url)
-      return new Response(Buffer.from(next.body), { status: next.status, headers: next.headers })
+      // A null-body status (204/205/304) cannot carry a body in the fetch spec.
+      const body = [204, 205, 304].includes(next.status) ? null : Buffer.from(next.body)
+      return new Response(body, { status: next.status, headers: next.headers })
     },
     fs: {
       exists: async (p) => fake.files.has(p),
       readFile: async (p) => text(p),
-      writeFile: async (p, d, mode) => { fake.files.set(p, d); fake.modes.set(p, mode) },
+      // Like fs.writeFile: `mode` applies only when the file is created; an
+      // existing file keeps whatever mode it already had.
+      writeFile: async (p, d, mode) => { if (!fake.files.has(p)) fake.modes.set(p, mode); fake.files.set(p, d) },
       rename: async (a, b) => { const v = fake.files.get(a); if (v === undefined) throw new Error('ENOENT'); fake.files.set(b, v); fake.files.delete(a); const m = fake.modes.get(a); if (m !== undefined) { fake.modes.set(b, m); fake.modes.delete(a) } },
-      unlink: async (p) => { fake.files.delete(p) },
+      unlink: async (p) => { if (!fake.files.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); fake.files.delete(p); fake.modes.delete(p) },
       mkdir: async (p) => { fake.dirs.push(p) },
       chmod: async (p, mode) => { fake.modes.set(p, mode) },
       realpath: async (p) => (p === `${HOME}/link-to-pdx` ? BIN : p),
@@ -111,7 +115,7 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
       sha256: async (p) => { const v = fake.files.get(p); return createHash('sha256').update(typeof v === 'string' ? Buffer.from(v) : Buffer.from(v ?? new Uint8Array())).digest('hex') },
     },
     kill0: (pid) => fake.alivePids.has(pid),
-    portOpen: async (_h, _p, timeoutMs) => { fake.clock += Math.min(timeoutMs, 100); return fake.portIsOpen },
+    probePort: async (_h, _p, timeoutMs) => { fake.clock += Math.min(timeoutMs, 100); return fake.portProbe },
     networkInterfaces: () => [{ name: 'utun4', address: '100.64.0.9', family: 'IPv4', internal: false }],
     randomBytes: (n) => Buffer.alloc(n, 0xcd),
     sleep: async (ms) => { fake.clock += ms },
@@ -234,6 +238,56 @@ describe('status()', () => {
     const st = await createLocalDaemon(f.deps).status()
     expect(st.target.goarch).toBe('amd64')
     expect(st.installed).toEqual({ version: 'unknown', hash: 'unknown', goos: 'unknown', goarch: 'unknown' })
+  })
+
+  it('`version --json` printing a JSON null reads as unknown identity, not a crash', async () => {
+    f.files.set(BIN, 'null')
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.installed).toEqual({ version: 'unknown', hash: 'unknown', goos: 'unknown', goarch: 'unknown' })
+    expect(st.managed).toBe('managed')
+  })
+
+  it('uses /usr/bin/lsof on linux (lsof is not under /usr/sbin there)', async () => {
+    f.deps.platform = 'linux'
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.target.goos).toBe('linux')
+    const lsofCalls = f.execLog.filter((e) => e.file.endsWith('/lsof'))
+    expect(lsofCalls.length).toBeGreaterThan(0)
+    expect(lsofCalls.every((e) => e.file === '/usr/bin/lsof')).toBe(true)
+    expect(st.alive).toEqual({ pid: 4242 })
+  })
+
+  it('lsof exiting 1 with empty output means "no processes" (managed, nothing alive)', async () => {
+    f.files.set(BIN, identity('aaa'))
+    f.onExec = (file) => (file === '/usr/sbin/lsof' ? { code: 1, stdout: '', stderr: '', timedOut: false } : undefined)
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.managed).toBe('managed')
+    expect(st.alive).toBeNull()
+  })
+
+  it('lsof exiting with any other code is a probe failure → external, never "no processes"', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.onExec = (file) => (file === '/usr/sbin/lsof' ? { code: 2, stdout: '', stderr: 'lsof: unsupported option', timedOut: false } : undefined)
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.managed).toBe('external')
+    expect(st.reason).toMatch(/lsof exited 2/)
+  })
+
+  it('a pid file that is not purely digits yields no candidate', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '123junk'); f.alivePids.add(123)
+    f.lsofTxt[123] = `p123${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.alive).toBeNull()
+    expect(f.execLog.some((e) => e.file.endsWith('/lsof') && e.args.includes('-p'))).toBe(false)
+  })
+
+  it('a pid file with surrounding whitespace still parses', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, ' 4242\n'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.alive).toEqual({ pid: 4242 })
   })
 })
 
@@ -464,8 +518,8 @@ describe('install()', () => {
   it('stop returning while the port stays open → throws within 5 s wall time, old binary unreplaced', async () => {
     f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
     f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
-    f.onExec = (_file, args) => { if (args[0] === 'stop') { f.alivePids.clear(); f.portIsOpen = true; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
-    f.portIsOpen = true
+    f.onExec = (_file, args) => { if (args[0] === 'stop') { f.alivePids.clear(); f.portProbe = 'open'; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
+    f.portProbe = 'open'
     scriptedDownload(f, 'bbb')
     const t0 = f.clock
     await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/old binary was not replaced/)
@@ -477,15 +531,81 @@ describe('install()', () => {
   it('a slow port probe cannot push the settle wait past its budget', async () => {
     f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
     f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
-    f.onExec = (_file, args) => { if (args[0] === 'stop') { f.alivePids.clear(); f.portIsOpen = true; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
-    f.portIsOpen = true
+    f.onExec = (_file, args) => { if (args[0] === 'stop') { f.alivePids.clear(); f.portProbe = 'open'; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
+    f.portProbe = 'open'
     const timeouts: number[] = []
-    f.deps.portOpen = async (_h, _p, timeoutMs) => { timeouts.push(timeoutMs); f.clock += timeoutMs; return true }
+    f.deps.probePort = async (_h, _p, timeoutMs) => { timeouts.push(timeoutMs); f.clock += timeoutMs; return 'open' }
     scriptedDownload(f, 'bbb')
     const t0 = f.clock
     await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/old binary was not replaced/)
     expect(f.clock - t0).toBeLessThanOrEqual(5000)
     expect(Math.max(...timeouts)).toBeLessThanOrEqual(500)
+  })
+
+  it('settle: probe answering "unknown" forever → rejects within the 5 s budget, old binary unreplaced', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    f.onExec = (_file, args) => { if (args[0] === 'stop') { f.alivePids.clear(); f.portProbe = 'unknown'; return { code: 0, stdout: '', stderr: '', timedOut: false } } return undefined }
+    scriptedDownload(f, 'bbb')
+    const t0 = f.clock
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/old binary was not replaced/)
+    expect(f.files.get(BIN)).toBe(identity('aaa'))
+    expect(f.clock - t0).toBeLessThanOrEqual(5000)
+  })
+
+  it('settle: probe "unknown" twice then "refused" → proceeds to swap', async () => {
+    f.files.set(BIN, identity('aaa')); f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    const script: Array<'open' | 'refused' | 'unknown'> = ['unknown', 'unknown', 'refused']
+    const seen: string[] = []
+    f.deps.probePort = async (_h, _p, timeoutMs) => { f.clock += Math.min(timeoutMs, 100); const r = script.shift() ?? 'refused'; seen.push(r); return r }
+    scriptedDownload(f, 'bbb')
+    const steps: string[] = []
+    await createLocalDaemon(f.deps).install('http://src', 'tok', (s) => steps.push(s))
+    expect(seen).toEqual(['unknown', 'unknown', 'refused'])
+    expect(steps).toEqual(['prepare', 'download', 'verify', 'configure', 'stop', 'swap', 'start', 'register'])
+    expect(Buffer.from(f.files.get(BIN) as Uint8Array).toString('utf8')).toBe(identity('bbb'))
+    expect(f.files.has(`${BIN}.new`)).toBe(false)
+  })
+
+  it('pre-stop lsof exiting 2 rejects; stop never runs and the binary is not swapped', async () => {
+    f.files.set(BIN, identity('aaa'))
+    f.files.set(CFG, 'bind = "100.64.0.9"\n')
+    f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    f.lsofListen = `p4242${NUL}\nf8${NUL}n100.64.0.9:7860${NUL}\n`
+    f.health = { ok: true, hash: 'aaa', version: '9' }
+    scriptedDownload(f, 'bbb')
+    let downloadDone = false
+    const origFetch = f.deps.fetch
+    f.deps.fetch = async (url, init) => { const r = await origFetch(url, init); if (!url.endsWith('/api/health')) downloadDone = true; return r }
+    f.onExec = (file) => (file === '/usr/sbin/lsof' && downloadDone ? { code: 2, stdout: '', stderr: '', timedOut: false } : undefined)
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/lsof exited 2/)
+    expect(f.execLog.some((e) => e.args[0] === 'stop')).toBe(false)
+    expect(f.files.get(BIN)).toBe(identity('aaa'))
+  })
+
+  it('a leftover world-readable config.toml.tmp does not leak the token: config ends up 0600', async () => {
+    f.files.set(`${CFG}.tmp`, 'stale'); f.modes.set(`${CFG}.tmp`, 0o644)
+    scriptedDownload(f, 'bbb')
+    await createLocalDaemon(f.deps).install('http://src', 'tok', () => {})
+    expect(f.modes.get(CFG)).toBe(0o600)
+    expect(f.files.get(CFG)).toMatch(/^bind = /)
+    expect(f.files.has(`${CFG}.tmp`)).toBe(false)
+  })
+
+  it('verify: `version --json` printing null → "does not run", pdx.new removed', async () => {
+    scriptedDownload(f, 'bbb')
+    f.onExec = (file, args) => (file === `${BIN}.new` && args[0] === 'version' ? { code: 0, stdout: 'null\n', stderr: '', timedOut: false } : undefined)
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/does not run|identity/)
+    expect(f.files.has(`${BIN}.new`)).toBe(false)
+    expect(f.files.has(BIN)).toBe(false)
+  })
+
+  it('a 2xx other than 200 (e.g. 204) is not a download', async () => {
+    scriptedDownload(f, 'bbb', { status: 204 })
+    await expect(createLocalDaemon(f.deps).install('http://src', 'tok', () => {})).rejects.toThrow(/unexpected status 204/)
+    expect(f.files.has(`${BIN}.new`)).toBe(false)
   })
 
   it('pdx start failure surfaces its stderr', async () => {
@@ -524,7 +644,7 @@ describe('start() / restart() / ensureRunning()', () => {
   it('ensureRunning outcomes', async () => {
     expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('started')
     expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('already-running')
-    f.files.delete(BIN); f.alivePids.clear(); f.files.delete(PID); f.health = null; f.lsofListen = ''; f.portIsOpen = false
+    f.files.delete(BIN); f.alivePids.clear(); f.files.delete(PID); f.health = null; f.lsofListen = ''; f.portProbe = 'refused'
     expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('not-installed')
     f.files.set(CFG, 'data_dir = "/x"\n')
     expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('external')

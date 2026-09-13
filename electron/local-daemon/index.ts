@@ -8,7 +8,9 @@ import { parseLsofF0, txtPaths, listenersOn, decideOwnership, type Ownership } f
 import { buildLaunchEnv } from './launch-env'
 import { parseDaemonConfig, pickBindAddress, renderInitialConfig, generateToken, DEFAULT_DATA_DIR, type DaemonConfig } from './config'
 
-const LSOF = '/usr/sbin/lsof'
+// lsof lives in /usr/sbin on macOS and /usr/bin on Linux (`target()` accepts
+// both). A wrong path would spawn-fail → OwnershipUnavailable on every call.
+const LSOF_BY_PLATFORM: Partial<Record<NodeJS.Platform, string>> = { darwin: '/usr/sbin/lsof', linux: '/usr/bin/lsof' }
 const LSOF_TIMEOUT_MS = 5000
 const OWNERSHIP_BUDGET_MS = 10_000
 const STOP_SETTLE_MS = 5000
@@ -31,6 +33,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   const binPath = join(binDir, 'pdx')
   const newPath = join(binDir, 'pdx.new')
   const cfgPath = join(dataDir, 'config.toml')
+  const lsofPath = LSOF_BY_PLATFORM[deps.platform] ?? '/usr/sbin/lsof'
 
   // ---- queue -------------------------------------------------------------
   let tail: Promise<unknown> = Promise.resolve()
@@ -63,12 +66,24 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     return parseDaemonConfig(await deps.fs.readFile(cfgPath), deps.home)
   }
 
+  // `version --json` output as an object, or null when it is not a JSON object
+  // (parse error, `null`, a number, an array).
+  function parseIdentityJson(stdout: string): Record<string, unknown> | null {
+    try {
+      const j: unknown = JSON.parse(stdout.trim())
+      return j !== null && typeof j === 'object' && !Array.isArray(j) ? (j as Record<string, unknown>) : null
+    } catch {
+      return null
+    }
+  }
+
   async function readIdentity(bin: string): Promise<LocalDaemonStatus['installed']> {
     const unknown = { version: 'unknown', hash: 'unknown', goos: 'unknown', goarch: 'unknown' }
     try {
       const r = await deps.exec(bin, ['version', '--json'], { env: await launchEnv(), timeoutMs: VERSION_TIMEOUT_MS })
       if (r.code !== 0) return unknown
-      const j = JSON.parse(r.stdout.trim()) as Record<string, unknown>
+      const j = parseIdentityJson(r.stdout)
+      if (!j) return unknown
       const s = (k: string) => (typeof j[k] === 'string' ? (j[k] as string) : 'unknown')
       return { version: s('version'), hash: s('hash'), goos: s('goos'), goarch: s('goarch') }
     } catch {
@@ -98,18 +113,24 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   async function lsof(args: string[], deadline: number): Promise<string> {
     const remaining = deadline - deps.now()
     if (remaining <= 0) throw new OwnershipUnavailable()
-    const r = await deps.exec(LSOF, args, { timeoutMs: Math.min(LSOF_TIMEOUT_MS, remaining) })
+    const r = await deps.exec(lsofPath, args, { timeoutMs: Math.min(LSOF_TIMEOUT_MS, remaining) })
     if (r.timedOut) throw new OwnershipUnavailable()
     // A spawn failure (ENOENT, etc.) reports code: null without timing out;
     // that is not the same as lsof legitimately exiting 1 with no matches.
     if (r.code === null) throw new OwnershipUnavailable('ownership check failed: lsof did not run')
-    return r.stdout // lsof exits 1 when nothing matched; empty output is fine
+    // lsof exits 0 with matches and 1 with none; anything else (bad option,
+    // permission problem, …) is a probe failure whose empty stdout must not
+    // be read as "no processes".
+    if (r.code !== 0 && r.code !== 1) throw new OwnershipUnavailable(`ownership check failed: lsof exited ${r.code}`)
+    return r.stdout
   }
 
   async function readCandidatePid(pidPath: string): Promise<number | null> {
     if (!(await deps.fs.exists(pidPath))) return null
-    const n = Number.parseInt((await deps.fs.readFile(pidPath)).trim(), 10)
-    return Number.isFinite(n) && n > 0 ? n : null
+    const raw = (await deps.fs.readFile(pidPath)).trim()
+    if (!/^\d+$/.test(raw)) return null // '123junk' is not a pid, not even partially
+    const n = Number(raw)
+    return Number.isSafeInteger(n) && n > 0 ? n : null
   }
 
   async function sameBinary(path: string): Promise<boolean> {
@@ -195,6 +216,8 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
         } catch { /* non-JSON body */ }
         throw new Error(msg)
       }
+      // Only a full 200 carries the binary; 204/206 etc. are 2xx yet not a download.
+      if (resp.status !== 200) throw new Error(`download failed: unexpected status ${resp.status}`)
       const expectLen = Number(resp.headers.get('content-length'))
       const expectSha = resp.headers.get('x-pdx-sha256') ?? ''
       const hash = resp.headers.get('x-pdx-hash') ?? ''
@@ -242,8 +265,11 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
       await deps.fs.unlink(newPath)
       throw new Error(`downloaded binary does not run: ${r.stderr.trim() || `exit ${r.code}`}`)
     }
-    let id: { goos?: string; goarch?: string; hash?: string } = {}
-    try { id = JSON.parse(r.stdout.trim()) } catch { /* handled below */ }
+    const id = parseIdentityJson(r.stdout)
+    if (!id) {
+      await deps.fs.unlink(newPath)
+      throw new Error(`downloaded binary does not run: \`version --json\` printed no identity object: ${r.stdout.trim().slice(0, 80) || '(empty)'}`)
+    }
     if (id.goos !== tgt.goos || id.goarch !== tgt.goarch || id.hash !== expectedHash) {
       await deps.fs.unlink(newPath)
       throw new Error(`identity mismatch: got ${id.goos}/${id.goarch} ${id.hash}, want ${tgt.goos}/${tgt.goarch} ${expectedHash}`)
@@ -252,8 +278,10 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
 
   // ---- stop / start ------------------------------------------------------
   // After `pdx stop` returns, wait (≤ 5 s total, probes included) until the
-  // pid is gone AND the port refuses TCP connections. A plain health probe
-  // cannot tell "refused" from "500/timeout", hence the dedicated portOpen dep.
+  // pid is gone AND the port is *known* to refuse TCP connections. A plain
+  // health probe cannot tell "refused" from "500/timeout", hence the
+  // dedicated probePort dep; its 'unknown' (timeout / other socket error)
+  // keeps us polling exactly like 'open' does — only 'refused' proves free.
   async function stopUnlocked(cfg: DaemonConfig, pid: number): Promise<void> {
     const r = await deps.exec(binPath, ['stop'], { env: await launchEnv(), cwd: deps.home, timeoutMs: STOP_TIMEOUT_MS })
     if (r.timedOut) throw new Error('pdx stop did not finish within 35s — the old binary was not replaced (the old process may or may not still be running)')
@@ -261,7 +289,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     for (;;) {
       let remaining = deadline - deps.now()
       if (remaining <= 0) break
-      const gone = !deps.kill0(pid) && !(await deps.portOpen(cfg.bind, cfg.port, Math.min(500, remaining)))
+      const gone = !deps.kill0(pid) && (await deps.probePort(cfg.bind, cfg.port, Math.min(500, remaining))) === 'refused'
       if (gone) return
       remaining = deadline - deps.now()
       if (remaining <= 0) break
@@ -313,6 +341,10 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
       const pick = pickBindAddress(deps.networkInterfaces(), deps.platform)
       bindNote = pick.note
       const tmp = cfgPath + '.tmp'
+      // writeFile applies `mode` only when it creates the file; a leftover
+      // .tmp from an interrupted run would keep its old (possibly 0644) mode
+      // and carry the token world-readable through the rename.
+      await deps.fs.unlink(tmp).catch(() => {})
       await deps.fs.writeFile(tmp, renderInitialConfig(pick.bind, generateToken(deps.randomBytes)), 0o600)
       await deps.fs.rename(tmp, cfgPath)
     }
