@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Plan v3 (after codex plan reviews R1 `task-mu07l94z-oszksd`: 1 Blocker, 13
+Plan v4 (after codex plan reviews R1 `task-mu07l94z-oszksd`: 1 Blocker, 13
 Majors, 3 Minors; R2 `task-mu088bhz-yban9j`: 1 Blocker, 9 Majors, 2 Minors
-— all applied; §Review disposition at the end).
+; R3 `task-mu08nbjm-y6gbyy`: 4 Majors — all applied; §Review disposition at the end).
 
 **Goal:** From a Claude Code session on host A, `pdx msg send <host>/<session>
 "text"` lands in a Claude Code session on host B as a native peer message
@@ -696,19 +696,22 @@ var ( ErrProxyLimit = errors.New("proxy_limit"); ErrProxySpawnFailed = errors.Ne
 // ever executes Spawn on its own stack (R2-M2).
 //   loop:
 //     lock; if !swept || closed ⇒ unlock; return ErrNotReady
+//     if unresolvedOccupies(key) ⇒ unlock; return ErrNotReady          (R3-M4: a previous run's helper for this origin may still be alive)
 //     h := helpers[key]
-//     h == nil: if len(helpers) >= HelperCap ⇒ unlock; ErrProxyLimit
+//     h == nil: if len(helpers) + unresolvedAlive() >= HelperCap ⇒ unlock; ErrProxyLimit   (R3-M4)
 //               h = &helper{key, name, gen: ++nextGen, state: starting, ready, exited}; helpers[key] = h; wg.Add(1); go m.startup(h)
 //     state := h.state; if state == ready { touch lastUsed }; unlock
 //     switch state:
 //       ready    ⇒ return h
-//       starting ⇒ select { <-h.ready; <-waitCtx.Done() ⇒ return waitCtx.Err() }; continue
+//       starting ⇒ select { <-h.ready; <-waitCtx.Done() ⇒ return waitCtx.Err() }
+//                  lock; err := h.err; unlock; if err != nil ⇒ return err   (R3-M1: a failed startup is reported to EVERY waiter; nobody retries — the caller decides)
+//                  continue   (it became ready, or was replaced/stopped meanwhile: re-inspect)
 //       stopping/exited ⇒ select { <-h.exited; <-waitCtx.Done() ⇒ return waitCtx.Err() }; continue
 //   Every wake re-inspects under the lock: the instance may be ready,
-//   gone (failed ⇒ spawn anew), replaced (wait on the new one) or
-//   stopping (wait on exited). A fresh instance is spawned only after the
-//   old one has left the map — never two processes for one key, never
-//   more processes than the cap.
+//   failed (⇒ its error), replaced (wait on the new one) or stopping
+//   (wait on exited). A fresh instance is spawned only after the old one
+//   has left the map and only by a NEW Acquire call — never two processes
+//   for one key, never more processes than the cap, never a spawn loop.
 func (m *helperManager) Acquire(waitCtx context.Context, key ipeers.OriginKey, name string) (*helper, error)
 // startup(h) (manager goroutine, wg-tracked):
 //   cfg := Config{Name, RegistryDir, SockDir, Version, PeerFeatures: peerFeatures(), Cwd: registryDir, SessionID: uuid}
@@ -739,23 +742,33 @@ func (m *helperManager) FindBySock(sock string) (*helper, bool)
 // Sweep (§4.5), called once from Start BEFORE the HTTP server accepts:
 //   read proxiesPath; missing ⇒ []; unparsable ⇒ log, treat as [] (nothing can prove ownership of anything)
 //   for each record r:
-//     same := func() bool { ps, err := procStart(r.PID); return err == nil && ps == r.ProcStart }   // an error means "cannot prove it is ours" ⇒ NEVER signal (R2-M3)
-//     if pidAlive(r.PID) && same():
-//       SIGTERM; wait ≤ termGrace until !pidAlive || !same()
-//       if pidAlive && same() (re-checked immediately before sending) ⇒ SIGKILL; wait ≤ termGrace until !pidAlive || !same()
-//       if pidAlive && same() ⇒ log, unresolved = append(unresolved, r), continue (files untouched)
-//     files: for each recorded path: unlink only if ccuds.RegistryProcStart(path) == r.ProcStart; a mismatch is logged and left; an unlink error other than ENOENT ⇒ unresolved
-//     sock: unlink only if dialRefused(r.Sock) (a live listener is someone else's); unlink error other than ENOENT ⇒ unresolved
+//     identity := func() (same, different, unknown) { ps, err := procStart(r.PID); err ⇒ unknown; ps == r.ProcStart ⇒ same; else different }   (R2-M3, R3-M3: three states, never folded)
+//     alive := pidAlive(r.PID)
+//     if alive && identity() == unknown ⇒ log, unresolved = append(unresolved, {r, occupies: true}), continue   (touch nothing: a live pid we cannot classify may still be our helper)
+//     if alive && identity() == same:
+//       SIGTERM; wait ≤ termGrace until !pidAlive || identity() != same
+//       if pidAlive && identity() == same (re-checked immediately before sending) ⇒ SIGKILL; wait ≤ termGrace until !pidAlive || identity() != same
+//       if pidAlive && identity() != different ⇒ log, unresolved = append(unresolved, {r, occupies: true}), continue (files untouched; "unknown" during the wait counts as not proven gone)
+//     files: for each recorded path: unlink only if ccuds.RegistryProcStart(path) == r.ProcStart; a mismatch is logged and left; an unlink error other than ENOENT ⇒ unresolved{occupies: false}
+//     sock: unlink only if dialRefused(r.Sock) (a live listener is someone else's); unlink error other than ENOENT ⇒ unresolved{occupies: false}
 //   write unresolved (possibly []) atomically; write error ⇒ return it (Start fails — R2-M4: never run without a durable ownership record)
 //   swept = true
+// unresolved entries carry an in-memory `occupies bool` (R3-M4): true when
+// the recorded process is alive or unclassifiable, i.e. a helper for that
+// origin may still exist. unresolvedAlive() counts them toward HelperCap
+// and unresolvedOccupies(key) blocks Acquire for that origin; a record
+// whose process is proven dead (only files were left) occupies nothing.
+// The flag is recomputed by a later Sweep, never at runtime.
 func (m *helperManager) Sweep() error
-// Stop (R2-B1) — admission is closed FIRST, then everything is joined:
-//   lock; closed = true; starting := instances in state starting; unlock
-//   for each starting: <-h.ready (a startup is short: readyTimeout + procStart + one file write; a failed one closes ready too)
-//   lock; ready := instances in state ready; unlock
-//   Release each in parallel (each bounded by ~2×termGrace)
+// Stop (R2-B1, R3-M2) — admission is closed FIRST, then EVERY instance is joined:
+//   lock; closed = true; snapshot := every instance in the map (starting, ready, stopping); unlock
+//   for each in snapshot:
+//     starting ⇒ <-h.ready, then re-inspect (it is now ready ⇒ Release; failed ⇒ nothing)
+//     ready    ⇒ Release(h, "shutdown")   (in parallel, each bounded by ~2×termGrace)
+//     stopping ⇒ <-h.exited              (a Release already in flight — from ReapIdle or a target_gone — finishes its unlink + proxies.json write before Stop may return)
 //   wg.Wait()          // every startup and pump goroutine has returned; onFrame can no longer be called
 //   procCancel()       // backstop only
+// The module joins its reap-ticker goroutine (which calls ReapIdle → Release synchronously) BEFORE calling helpers.Stop, so no Release can start after the snapshot.
 func (m *helperManager) Stop()
 func (m *helperManager) writeProxiesLocked() error   // records of every instance with a pid + unresolved → temp file in the same dir + fsync + rename
 ```
@@ -767,7 +780,9 @@ two concurrent Acquire for one key with a Barrier ⇒ one spawn, both get
 the same helper; Acquire after ready returns the same instance; cap: 32
 helpers ⇒ 33rd `ErrProxyLimit`, a starting helper counts, a **stopping**
 helper counts; Broken with `readyTimeout` 100 ms ⇒ `ErrProxySpawnFailed`,
-map empty, no socket, every waiter woken; Refusing ⇒ same; `procStart`
+map empty, no socket, **every one of three concurrent waiters receives
+that same error and exactly one spawn happened — no automatic retry**
+(R3-M1); Refusing ⇒ same; `procStart`
 failure after ready ⇒ helper stopped, files removed, `ErrProxySpawnFailed`;
 `writeProxies` failure ⇒ same rollback; `proxies.json` after two spawns:
 raw keys `pid/proc_start/sock/files/origin{host_id,…}`, no `.tmp` left;
@@ -785,15 +800,22 @@ removed and `proxies.json` rewritten; an unlink failure during Release
 Sweep ⇒ `ErrNotReady`; Acquire after Stop ⇒ `ErrNotReady`**; **Stop while
 a Barrier startup is in flight**: Stop waits for it, releases it, and
 after Stop returns no fake process is alive and `wg` is drained
-(goroutine count delta 0); Sweep: (a) live record ⇒ SIGTERM observed,
-files unlinked; (b) **pid reused after SIGTERM** (fake: after TERM the pid
-stays alive but `procStart` changes) ⇒ no SIGKILL sent, matching files
-unlinked, the new process's files kept; (c) `procStart` returns an error
-⇒ no signal at all; (d) a live record that ignores both signals ⇒ files
-kept, record retained in the rewritten file, Sweep returns nil; (e) dead
-pid with matching files ⇒ unlinked; (f) reused pid with a live listener at
-the sock and rewritten files ⇒ files and sock kept; (g) missing file ⇒
-`[]` written; (h) unwritable proxiesPath ⇒ error.
+(goroutine count delta 0); **Stop while a Release is held inside the
+fake's `HoldStop` barrier** ⇒ Stop does not return until the barrier is
+released and that helper's files are gone and `proxies.json` rewritten
+(R3-M2); Sweep: (a) live record ⇒ SIGTERM observed, files unlinked; (b)
+**pid reused after SIGTERM** (fake: after TERM the pid stays alive but
+`procStart` changes) ⇒ no SIGKILL sent, matching files unlinked, the new
+process's files kept; (c) **live pid whose `procStart` returns an error**
+⇒ no signal, registry files and sock untouched, record retained with
+`occupies` (R3-M3); (d) a live record that ignores both signals ⇒ files
+kept, record retained, Sweep returns nil; (e) dead pid with matching files
+⇒ unlinked; (f) reused pid with a live listener at the sock and rewritten
+files ⇒ files and sock kept; (g) missing file ⇒ `[]` written; (h)
+unwritable proxiesPath ⇒ error; **(i) after (c) or (d): Acquire for that
+record's origin ⇒ `ErrNotReady`, and the cap is `HelperCap - 1` for other
+origins; a dead-pid leftover from (e)-with-unlink-error occupies nothing**
+(R3-M4).
 
 - [ ] tests written and failing
 - [ ] implementation, all green (`-race`)
@@ -829,9 +851,11 @@ logWriter)`, `liveEntries` = a closure over `ReadRegistry`) and wires
 `Start`: `helpers.Sweep()` (error ⇒ `Start` returns it), then the 1-minute
 reap ticker goroutine under `stopCtx`. **`Stop` order (R2-B1):**
 `stopCancel()` (handlers observe it and answer 503 `not_ready`; the reply
-semaphore wait aborts) → `helpers.Stop()` (closes admission, joins every
-startup and pump — after it returns no `onFrame` can run, so no new reply
-worker can be added) → `workers.Wait()` (the reply workers that were
+semaphore wait aborts) → join the reap-ticker goroutine (its own
+WaitGroup; it calls `ReapIdle` synchronously, so after the join no
+Release can begin — R3-M2) → `helpers.Stop()` (closes admission, joins
+every startup, pump and in-flight Release — after it returns no `onFrame`
+can run, so no new reply worker can be added) → `workers.Wait()` (the reply workers that were
 already running; each is under `stopCtx`, so a `post` in flight aborts
 within its client timeout). `localEnvelope` passes `helpers.ProxyPIDs()`.
 
@@ -1340,3 +1364,13 @@ with a non-cancelled ctx).
 | R2-M9 | Major | shared fake not importable; selftest lacks I/O seams | `proxyhelpertest` real package with cancellable variants and counters; `selftestPeer` interface; glob/remove/dialRefused/registryProcStart seams; isolated temp dirs allowed (Task 3, 12) |
 | R2-m1 | Minor | proxy recognition defeated by renamed binary / spaced paths | `IsProxyProcess` also uses `ExePath`; remaining cases recorded as a known limitation in D9 |
 | R2-m2 | Minor | rebuilt Address could fail `SplitAddress` | Address kept only if `SplitAddress` accepts it, else `""` (Task 5) |
+
+## Review disposition (codex plan review R3 `task-mu08nbjm-y6gbyy`)
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| R3-M1 | Major | Acquire retried spawning forever after a failed startup | a waiter woken by `ready` reads `h.err` under the lock and returns it; a new process is spawned only by a new Acquire call; three-waiters-one-failure test (Task 6) |
+| R3-M2 | Major | Stop ignored instances already in `stopping` and the reap goroutine | Stop snapshots every instance and waits on `exited` for stopping ones; the module joins the reap ticker before `helpers.Stop`; HoldStop test (Task 6, 7) |
+| R3-M3 | Major | Sweep folded a `procStart` error into "not ours" and could unlink a live helper's files | tri-state identity (same/different/unknown); a live pid with unknown identity is retained untouched with `occupies`; test (c) (Task 6) |
+| R3-M4 | Major | alive unresolved helpers did not count toward the cap or block their origin | `unresolved{occupies}`; `unresolvedAlive()` counted in the cap check; `unresolvedOccupies(key)` ⇒ `ErrNotReady` for that origin; test (i) (Task 6) |
+| R2-m2 (re-check) | – | reviewer could not find P2's `normalizeRemoteRows` in the P2 worktree | it lands in P2's current review wave (confirmed by the P2 session, incl. the `SplitAddress` rule and its table test); the pre-implementation `git merge origin/main` step re-verifies its presence |
