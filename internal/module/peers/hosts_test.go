@@ -759,6 +759,67 @@ func TestHandlePutHost_ConcurrentDelete_404NothingRecreated(t *testing.T) {
 	}
 }
 
+// TestHandlePutHost_ConcurrentURLChange_409 gates a PUT's verify behind a
+// barrier, then while it is in flight deletes and re-adds the alias
+// pointing at a different URL, then releases the verify: the verify ran
+// against the OLD url, so committing its learned token/host_id against the
+// entry now sitting at a NEW url would be wrong. The commit-under-lock
+// re-check must see the url changed and refuse, leaving the re-added
+// entry's own token/host_id untouched.
+func TestHandlePutHost_ConcurrentURLChange_409(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fetch := func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error) {
+		entered <- struct{}{}
+		<-release
+		return ipeers.Envelope{HostID: "air:1", OK: true, Peers: []ipeers.PeerRecord{}}, nil
+	}
+	m := newHostsTestModule(c, fetch)
+
+	var putResult *httptest.ResponseRecorder
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		putResult = doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
+			"token": "new-tok",
+		}, adminPrincipal())
+	}()
+
+	<-entered
+
+	delResult := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air", nil, adminPrincipal())
+	if delResult.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204; body=%s", delResult.Code, delResult.Body.String())
+	}
+	addResult := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"alias": "air", "url": "https://different.example",
+	}, adminPrincipal())
+	if addResult.Code != http.StatusCreated {
+		t.Fatalf("re-add status = %d, want 201; body=%s", addResult.Code, addResult.Body.String())
+	}
+
+	close(release)
+	wg.Wait()
+
+	if putResult.Code != http.StatusConflict {
+		t.Fatalf("PUT status = %d, want 409; body=%s", putResult.Code, putResult.Body.String())
+	}
+
+	reloaded := loadCfg(t, cfgPath)
+	idx := reloaded.Peers.FindPeerHostByAlias("air")
+	if idx == -1 {
+		t.Fatalf("host missing after concurrent url change")
+	}
+	h := reloaded.Peers.Hosts[idx]
+	if h.URL != "https://different.example" || h.Token != "" || h.HostID != "" {
+		t.Errorf("persisted host = %+v, want the re-added url with empty token/host_id", h)
+	}
+}
+
 // ---- DELETE /api/peers/hosts/{alias} ----
 
 func TestHandleDeleteHost_204ThenGoneFromList(t *testing.T) {

@@ -366,6 +366,9 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		}
 		h := &cfg.Peers.Hosts[i]
 		if verifying {
+			if h.URL != existingURL {
+				return &apiError{http.StatusConflict, "url changed concurrently"}
+			}
 			if h.HostID != "" && h.HostID != learnedHostID {
 				return &apiError{http.StatusConflict, "host_id mismatch"}
 			}
