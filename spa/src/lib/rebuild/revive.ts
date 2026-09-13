@@ -8,8 +8,10 @@
 // carries. `decideRevive` looks for exactly that — by name, never by code,
 // since a code is a reversible encoding of `$N` and the restarted server can
 // mint the same code for an unrelated session. It requires the live session's
-// `tmux_instance` to be non-empty ("no evidence, no action", spec §4.6) but
-// does NOT compare it against the candidate's own generation: a same-generation
+// `tmux_instance` to be a non-empty string ("no evidence, no action", spec
+// §4.6) — not merely truthy, since the payload is `JSON.parse`d with no schema
+// and a number or object there is not a generation a pane may be bound to —
+// but does NOT compare it against the candidate's own generation: a same-generation
 // live session is a legitimate recovery target, not a contradiction (a pane
 // can be marked `tmux-restarted` merely because its lookup failed once). A
 // `mode` key that is present but not `'terminal'` is rejected — and `null`
@@ -90,7 +92,7 @@ export function decideRevive(hostId: string, sessions: Session[], candidates: Re
 
     const session = byName.get(candidate.cachedName)
     if (!session) continue
-    if (!session.tmux_instance) continue
+    if (typeof session.tmux_instance !== 'string' || session.tmux_instance.length === 0) continue
     if (session.mode !== undefined && session.mode !== 'terminal') continue
 
     decisions.push({

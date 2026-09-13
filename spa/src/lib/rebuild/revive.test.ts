@@ -75,6 +75,16 @@ describe('decideRevive', () => {
     expect(decideRevive('h1', [live], [cand])).toEqual([])
   })
 
+  it.each([
+    ['a number', 123],
+    ['a boolean', true],
+    ['an object', {}],
+  ])('S21: rejects when the live instance is %s on the wire', (_label, tmux_instance) => {
+    const cand = candidate()
+    const live = { ...session({ code: 'abc123', name: 'dev' }), tmux_instance } as unknown as Session
+    expect(decideRevive('h1', [live], [cand])).toEqual([])
+  })
+
   it('S5: rejects when only a differently-named session is live', () => {
     const cand = candidate()
     const live = session({ code: 'abc123', name: 'dev-2', tmux_instance: '222:2000' })
