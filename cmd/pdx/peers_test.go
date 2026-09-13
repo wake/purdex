@@ -262,6 +262,43 @@ func TestRunPeersCmd_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestRunPeersCmd_UnknownFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--all"}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "pdx peers: unknown flag") || !strings.Contains(stderr.String(), "--all") {
+		t.Errorf("stderr = %q, want it to mention unknown flag --all", stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestRunPeersCmd_JSONAndConfigStillWork(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(testPeersBody))
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"--json", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if stdout.String() != testPeersBody {
+		t.Errorf("stdout = %q, want verbatim body %q", stdout.String(), testPeersBody)
+	}
+	if stderr.String() != "" {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestRunPeersCmd_UnreachableServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	addr := srv.Listener.Addr().String()

@@ -34,7 +34,11 @@ func runPeers(args []string) {
 // the work and returns the process exit code, so tests can drive it without
 // os.Exit.
 func runPeersCmd(args []string, stdout, stderr io.Writer) int {
-	cfgPath, jsonOutput := parsePeersArgs(args)
+	cfgPath, jsonOutput, unknownFlag, ok := parsePeersArgs(args)
+	if !ok {
+		fmt.Fprintf(stderr, "pdx peers: unknown flag %s\n", unknownFlag)
+		return 2
+	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -99,7 +103,12 @@ func runPeersCmd(args []string, stdout, stderr io.Writer) int {
 // parsePeersArgs extracts --config <path> and --json from args. It does not
 // use the package's parseConfigPath (that helper calls log.Fatalf on a bad
 // config, which would bypass runPeersCmd's exit-code contract).
-func parsePeersArgs(args []string) (cfgPath string, jsonOutput bool) {
+//
+// Any argument starting with "-" that is not --config/-config (with a
+// following value) or --json is rejected: ok is false and unknownFlag names
+// the offending argument, so the caller can print an error and exit 2
+// before loading config or making any request.
+func parsePeersArgs(args []string) (cfgPath string, jsonOutput bool, unknownFlag string, ok bool) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--config", "-config":
@@ -109,9 +118,13 @@ func parsePeersArgs(args []string) (cfgPath string, jsonOutput bool) {
 			}
 		case "--json":
 			jsonOutput = true
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return "", false, args[i], false
+			}
 		}
 	}
-	return cfgPath, jsonOutput
+	return cfgPath, jsonOutput, "", true
 }
 
 // formatPeersTable renders resp.Peers as a text/tabwriter table with columns
