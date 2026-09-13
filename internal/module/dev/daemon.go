@@ -143,8 +143,18 @@ func (m *DevModule) handleDaemonCheck(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// rebuildLdflags bakes the build identity into internal/buildinfo.
+// rebuildLdflags bakes the build identity into internal/buildinfo. An empty
+// hash or version is substituted with "unknown" so a baked-in "" can never
+// make /api/dev/daemon/check report Available forever (buildinfo.Hash=""
+// never equals the freshly queried git hash, which is truthy whenever it is
+// non-empty).
 func rebuildLdflags(hash, version string) string {
+	if hash == "" {
+		hash = "unknown"
+	}
+	if version == "" {
+		version = "unknown"
+	}
 	return "-X github.com/wake/purdex/internal/buildinfo.Hash=" + hash +
 		" -X github.com/wake/purdex/internal/buildinfo.Version=" + version
 }

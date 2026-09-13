@@ -169,6 +169,10 @@ func acquirePidLock(pidPath string, pid int) (*os.File, error) {
 // path, after which `pdx status`/`stop` report "not running" for a live
 // daemon. isDaemonRunning decides by lock state, not existence, so an
 // unlocked leftover reads as stopped.
+//
+// The second parameter is kept for call-site stability: the pid file is
+// permanent now (see above), so there is nothing left to unlink, but
+// changing the signature would churn every caller for no behavioral gain.
 func releasePidLock(f *os.File, _ string) {
 	if f != nil {
 		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)

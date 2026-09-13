@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,7 +72,12 @@ func (m *DevModule) handleDaemonDownload(w http.ResponseWriter, r *http.Request)
 		case <-ctx.Done():
 		}
 	}()
-	_ = http.NewResponseController(w).SetWriteDeadline(start.Add(downloadBudget))
+	// The transfer bound rests entirely on this call succeeding: a future
+	// ResponseWriter wrapper without an Unwrap method would silently drop
+	// support for SetWriteDeadline and remove the bound with no other signal.
+	if err := http.NewResponseController(w).SetWriteDeadline(start.Add(downloadBudget)); err != nil {
+		log.Printf("[dev] download: SetWriteDeadline unsupported (%v) — transfer is unbounded", err)
+	}
 
 	distDir := filepath.Join(m.repoRoot, "bin", "dist")
 	if err := os.MkdirAll(distDir, 0755); err != nil {
@@ -112,7 +118,11 @@ func (m *DevModule) handleDaemonDownload(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusInternalServerError, "hash artifact", err.Error())
 		return
 	}
-	st, _ := f.Stat()
+	st, err := f.Stat()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "stat artifact", err.Error())
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="pdx"`)
 	w.Header().Set("X-Pdx-Hash", hash)

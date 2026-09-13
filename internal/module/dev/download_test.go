@@ -95,6 +95,11 @@ func TestDownload_CacheMiss_BuildsEveryDarwinAndLinuxTarget(t *testing.T) {
 				t.Fatalf("not a linux/amd64 ELF")
 			}
 		}},
+		{"linux", "arm64", func(t *testing.T, b []byte) {
+			if string(b[:4]) != "\x7fELF" || b[18] != 0xb7 || b[19] != 0x00 {
+				t.Fatalf("not a linux/arm64 ELF")
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.goos+"/"+c.goarch, func(t *testing.T) {

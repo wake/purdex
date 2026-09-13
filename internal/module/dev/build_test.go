@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // writeThrowawayModule creates a module that builds at ./cmd/pdx and
@@ -89,6 +91,69 @@ func TestBuildBinary_SinkIsSerialised(t *testing.T) {
 	}
 	if len(lines) != 600 {
 		t.Fatalf("got %d lines, want 600", len(lines))
+	}
+}
+
+// On ctx cancel, exec.CommandContext's default Cancel kills only the direct
+// `go` child; a `compile`/`link` grandchild that inherited the stdout/stderr
+// pipes keeps them open until it exits on its own, so the scanner goroutines
+// in buildBinary (and therefore daemonRebuildMu) would block until then.
+// This fakes that shape: `go` backgrounds a long-lived `sleep 60` that
+// inherits stdout, then exits (via `wait`, itself killed by cancellation);
+// the orphaned sleep keeps the pipe's write end open.
+//
+// Cancellation is triggered only after the fake script has confirmed (via a
+// "started" line through the sink) that the orphan is already forked, rather
+// than after a fixed sleep: a fixed ~200ms delay was observed to race with
+// process/script startup on a loaded machine (first exec in a fresh test
+// binary can itself take >100ms), letting the cancellation land before the
+// orphan existed and producing a false pass for the wrong reason.
+func TestBuildBinary_CancelDoesNotHangOnOrphanedChild(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "fakebin")
+	if err := os.MkdirAll(fakeBin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n" +
+		"sleep 60 &\n" +
+		"echo started\n" +
+		"wait\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "go"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	m := &DevModule{repoRoot: dir}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	started := make(chan struct{})
+	var once sync.Once
+	sink := func(line string) {
+		if line == "started" {
+			once.Do(func() { close(started) })
+		}
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- m.buildBinary(ctx, buildTarget{}, "abc", "1.2.3", filepath.Join(dir, "out"), sink)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fake go never reported the orphaned child as started")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected an error from a canceled build with an orphaned child")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("buildBinary did not return within 15s of cancellation — orphaned child held the pipe open (WaitDelay missing?)")
 	}
 }
 

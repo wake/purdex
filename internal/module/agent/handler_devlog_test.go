@@ -117,8 +117,8 @@ func TestHandler_DevModeLog_HookTrigger(t *testing.T) {
 
 // TestHandler_NoDevModeLog_Production verifies that with PDX_DEV_MODE=0, no
 // W4 dev log labels surface. This covers all six P2 tasks at once and is
-// exercised under PDX_DEV_MODE=0 to pin the gate's strict equality
-// semantics.
+// exercised under PDX_DEV_MODE=0 to pin the gate's current rule: dev
+// features are enabled unless PDX_DEV_MODE is explicitly set to "0".
 func TestHandler_NoDevModeLog_Production(t *testing.T) {
 	t.Setenv("PDX_DEV_MODE", "0")
 	// Defensive double-check: even if some test framework leaks the env var,
