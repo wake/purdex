@@ -3,14 +3,18 @@ package peers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
@@ -18,6 +22,9 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/peers/ccuds"
+	"github.com/wake/purdex/internal/peers/proxyhelper/proxyhelpertest"
+	"github.com/wake/purdex/internal/store"
 )
 
 // fixture76973 is the same real registry-file shape used by
@@ -69,22 +76,215 @@ func newTestCoreWithHosts(t *testing.T, hostID, alias string, hosts []config.Pee
 }
 
 // newTestModule builds a *Module with the given collaborators wired
-// directly (bypassing Init), for handler-level tests. client/fetch default
-// to production values (newRemoteClient/fetchRemote); use
-// newTestModuleWithFetch to inject a fake fetch for scope=all tests.
-func newTestModule(c *core.Core, sessions session.SessionProvider, owners agent.OwnerResolver, registryDir string, liveness ipeers.Liveness, clock *fakeClock, budget time.Duration) *Module {
-	return &Module{
+// directly (bypassing Init), for handler-level tests. Every other seam
+// (helper manager over a fake starter, in-memory audit, limiters on the
+// test clock, real frame writer, a post seam that fails the test if
+// called) takes the fixture default — see newTestModuleWith for the
+// knobs. client/fetch default to production values
+// (newRemoteClient/fetchRemote); scope=all tests override m.fetch.
+func newTestModule(t *testing.T, c *core.Core, sessions session.SessionProvider, owners agent.OwnerResolver, registryDir string, liveness ipeers.Liveness, clock *fakeClock, budget time.Duration) *Module {
+	t.Helper()
+	return newTestModuleWith(t, fixtureOpts{
 		core:        c,
 		sessions:    sessions,
 		owners:      owners,
 		registryDir: registryDir,
 		liveness:    liveness,
+		clock:       clock,
 		budget:      budget,
-		now:         clock.Now,
-		client:      newRemoteClient(),
-		fetch:       fetchRemote,
-	}
+	}).m
 }
+
+// fixtureOpts are newTestModuleWith's knobs. The zero value of every field
+// not listed as required takes the fixture default.
+type fixtureOpts struct {
+	core     *core.Core              // required
+	sessions session.SessionProvider // required
+	owners   agent.OwnerResolver     // required
+	// registryDir is the module's registry dir, passed through verbatim
+	// ("" stays "" — some P1 tests rely on the read error). The helper
+	// manager registers its helpers there too when it is non-empty, so a
+	// helper's own registry entry is visible to localEnvelope; when it is
+	// empty the manager uses the fixture's own short registry dir.
+	registryDir string
+	liveness    ipeers.Liveness
+	clock       *fakeClock // nil ⇒ a clock stuck at Unix(0, 0)
+	budget      time.Duration
+	// variant selects the fake helper's behaviour (Normal by default).
+	variant proxyhelpertest.Variant
+	// readyTimeout bounds a helper spawn (2 s by default; a Broken variant
+	// test shortens it so the spawn fails fast).
+	readyTimeout time.Duration
+	// sockWriteTimeout is the inbox write budget (2 s by default).
+	sockWriteTimeout time.Duration
+	// noSweep leaves the helper manager unswept (Acquire ⇒ ErrNotReady).
+	noSweep bool
+}
+
+// moduleFixture is a Module plus every fake it was wired from.
+type moduleFixture struct {
+	m           *Module
+	root        string // short /tmp dir: socket paths must stay short
+	sockDir     string
+	registryDir string // the manager's registry dir
+	proxiesPath string
+	fake        *proxyhelpertest.Fake
+	audit       *fakeAudit
+	logs        *logSink
+	frames      chan frameEvent // every onFrame call the manager makes
+	clock       *fakeClock
+	postCalls   atomic.Int32
+}
+
+// newTestModuleWith builds a Module over fakes for every seam and returns
+// it with the fakes. The helper manager is swept (unless opts.noSweep) so
+// Acquire works; Module.Stop runs at cleanup, bounded.
+func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
+	t.Helper()
+	sockDir, regDir := proxyhelpertest.TempDirs(t)
+	f := &moduleFixture{
+		root:        filepath.Dir(regDir),
+		sockDir:     sockDir,
+		registryDir: regDir,
+		proxiesPath: filepath.Join(filepath.Dir(regDir), "proxies.json"),
+		fake:        proxyhelpertest.New(proxyhelpertest.Options{Variant: opts.variant}),
+		logs:        &logSink{},
+		frames:      make(chan frameEvent, 64),
+		clock:       opts.clock,
+	}
+	if f.clock == nil {
+		f.clock = &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	}
+	if opts.registryDir != "" {
+		f.registryDir = opts.registryDir
+	}
+	if opts.readyTimeout <= 0 {
+		opts.readyTimeout = 2 * time.Second
+	}
+	if opts.sockWriteTimeout <= 0 {
+		opts.sockWriteTimeout = 2 * time.Second
+	}
+
+	meta, err := store.OpenMeta(":memory:")
+	if err != nil {
+		t.Fatalf("open meta store: %v", err)
+	}
+	t.Cleanup(func() { meta.Close() })
+	f.audit = &fakeAudit{real: meta.PeerMessages()}
+
+	// fakeClock is not goroutine-safe and the helper manager reads the
+	// clock from its own goroutines: one mutex-guarded accessor feeds
+	// every seam, so the P1 tests' "one entry per Now call" sequence
+	// semantics are preserved and the race detector stays quiet.
+	var clockMu sync.Mutex
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return f.clock.Now()
+	}
+
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	m := &Module{
+		core:             opts.core,
+		sessions:         opts.sessions,
+		owners:           opts.owners,
+		registryDir:      opts.registryDir,
+		liveness:         opts.liveness,
+		budget:           opts.budget,
+		now:              now,
+		client:           newRemoteClient(),
+		fetch:            fetchRemote,
+		logf:             f.logs.logf,
+		audit:            f.audit,
+		dedup:            newDedupSet(ipeers.DedupWindow, now),
+		pairs:            newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, now),
+		writeFrame:       ccuds.WriteFrame,
+		sockWriteTimeout: opts.sockWriteTimeout,
+		newMsgID:         uuid.NewString,
+		deliverClient:    newRemoteClient(),
+		post: func(context.Context, *http.Client, string, string, ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error) {
+			f.postCalls.Add(1)
+			t.Errorf("post seam called; Task 7 never posts")
+			return ipeers.DeliverResponse{}, nil, errors.New("post seam called")
+		},
+		stopCtx:    stopCtx,
+		stopCancel: stopCancel,
+		replySem:   make(chan struct{}, 8),
+	}
+	f.m = m
+	m.helpers = newHelperManager(helperManagerConfig{
+		Start:        f.fake.Starter(),
+		ProxiesPath:  f.proxiesPath,
+		RegistryDir:  f.registryDir,
+		SockDir:      sockDir,
+		Version:      ccuds.VerifiedCCVersion,
+		Now:          now,
+		ProcStart:    proxyhelpertest.ProcStart,
+		PidAlive:     func(int) bool { return false },
+		DialRefused:  func(string) bool { return true },
+		Signal:       func(int, os.Signal) error { return nil },
+		LiveEntries:  func() []ipeers.Entry { return nil },
+		ReadyTimeout: opts.readyTimeout,
+		TermGrace:    100 * time.Millisecond,
+		OnFrame: func(h *helper, line string) {
+			m.handleReplyFrame(h, line)
+			f.frames <- frameEvent{h, line}
+		},
+		Log: f.logs.logf,
+	})
+	if !opts.noSweep {
+		if err := m.helpers.Sweep(); err != nil {
+			t.Fatalf("Sweep: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		done := make(chan struct{})
+		go func() { m.Stop(context.Background()); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Errorf("cleanup: Module.Stop did not return within 10 s")
+		}
+	})
+	return f
+}
+
+// fakeAudit is the real in-memory PeerMessageStore with injectable
+// failures for Insert and SetResult.
+type fakeAudit struct {
+	mu           sync.Mutex
+	real         *store.PeerMessageStore
+	insertErr    error
+	setResultErr error
+}
+
+func (a *fakeAudit) fail(insert, setResult error) {
+	a.mu.Lock()
+	a.insertErr, a.setResultErr = insert, setResult
+	a.mu.Unlock()
+}
+
+func (a *fakeAudit) Insert(p store.PeerMessage) (int64, error) {
+	a.mu.Lock()
+	err := a.insertErr
+	a.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	return a.real.Insert(p)
+}
+
+func (a *fakeAudit) SetResult(id int64, effectiveMode, result, errText string) error {
+	a.mu.Lock()
+	err := a.setResultErr
+	a.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return a.real.SetResult(id, effectiveMode, result, errText)
+}
+
+func (a *fakeAudit) Tail(n int) ([]store.PeerMessage, error) { return a.real.Tail(n) }
 
 func doGetPeers(t *testing.T, m *Module, target string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -125,7 +325,7 @@ func TestHandlePeers_HappyPath(t *testing.T) {
 	}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	if rr.Code != http.StatusOK {
@@ -196,7 +396,7 @@ func TestHandlePeers_ResolverError_ReportedAsUnresolved(t *testing.T) {
 	}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	if rr.Code != http.StatusOK {
@@ -246,7 +446,7 @@ func TestHandlePeers_TmuxRestartedDuringInventory(t *testing.T) {
 	}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	if rr.Code != http.StatusOK {
@@ -284,7 +484,7 @@ func TestHandlePeers_TmuxInstanceUnknown_ProceedsNormally(t *testing.T) {
 	}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	if rr.Code != http.StatusOK {
@@ -316,7 +516,7 @@ func TestHandlePeers_SoftBudget(t *testing.T) {
 	// call3: s2's expiry check -> t0+3s (>= deadline -> expired)
 	clock := &fakeClock{times: []time.Time{t0, t0.Add(1 * time.Second), t0.Add(3 * time.Second)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	var got ipeers.Envelope
@@ -368,7 +568,7 @@ func TestHandlePeers_BudgetConsumedBeforeAnySession(t *testing.T) {
 	// call3: s2 check -> repeats t0+3s (expired) since sequence is exhausted
 	clock := &fakeClock{times: []time.Time{t0, t0.Add(3 * time.Second)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	var got ipeers.Envelope
@@ -398,7 +598,7 @@ func TestHandlePeers_BoundaryExactlyExpired(t *testing.T) {
 	// true when equal)
 	clock := &fakeClock{times: []time.Time{t0, t0.Add(2 * time.Second)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	var got ipeers.Envelope
@@ -419,7 +619,7 @@ func TestHandlePeers_ProviderError(t *testing.T) {
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	if rr.Code != http.StatusOK {
@@ -454,7 +654,7 @@ func TestHandlePeers_RegistryDirMissing(t *testing.T) {
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, missingDir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, missingDir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	if rr.Code != http.StatusOK {
@@ -492,7 +692,7 @@ func TestHandlePeers_RegistryDirIsRegularFile(t *testing.T) {
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, filePath, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, filePath, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
 	if rr.Code != http.StatusOK {
@@ -519,7 +719,7 @@ func TestHandlePeers_ScopeAllUnknownPrincipal_Forbidden(t *testing.T) {
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers?scope=all")
 	if rr.Code != http.StatusForbidden {
@@ -536,7 +736,7 @@ func TestHandlePeers_ScopeAllHostPrincipal_Forbidden(t *testing.T) {
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{
 		Kind: middleware.PrincipalHost, Alias: "peer-a", HostID: "peer-a:1",
@@ -555,7 +755,7 @@ func TestHandlePeers_ScopeAll_UnknownScopeRejected(t *testing.T) {
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=bogus", ctx)
@@ -605,7 +805,7 @@ func TestHandlePeers_ScopeAll_FanOut(t *testing.T) {
 		{Alias: "host-b", URL: closedURL, Token: "tok-b", HostID: "host-b:222"},
 	}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
@@ -680,7 +880,7 @@ func TestHandlePeers_ScopeAll_HostIDMismatch(t *testing.T) {
 		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "expected:111"},
 	}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
@@ -734,7 +934,7 @@ func TestHandlePeers_ScopeAll_HostIDMismatchBounded(t *testing.T) {
 		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "expected:111"},
 	}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
@@ -800,7 +1000,7 @@ func TestHandlePeers_ScopeAll_UnpairedInvalidLearnedHostID_FailureRow(t *testing
 		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: ""},
 	}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
@@ -855,7 +1055,7 @@ func TestHandlePeers_ScopeAll_RemoteErrorBounded(t *testing.T) {
 		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "host-a:111"},
 	}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
@@ -899,7 +1099,7 @@ func TestHandlePeers_ScopeAll_NoOutboundToken(t *testing.T) {
 		{Alias: "host-a", URL: "http://127.0.0.1:1", Token: "", HostID: "host-a:111"},
 	}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
@@ -1048,7 +1248,7 @@ func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 		{Alias: "air", URL: srv.URL, Token: "tok-a", HostID: "air:111"},
 	}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
@@ -1128,7 +1328,7 @@ func TestHandlePeers_ScopeAll_OversizedHostRowCapped(t *testing.T) {
 		{Alias: "small", URL: healthy.URL, Token: "tok-small", HostID: "small:222"},
 	}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
@@ -1217,7 +1417,7 @@ func TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory(t *testing.T) {
 
 	hosts := []config.PeerHost{{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "host-a:1"}}
 	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
 	start := time.Now()
@@ -1269,7 +1469,7 @@ func TestLocalEnvelope_UsesCallerSnapshot_NotLiveConfig(t *testing.T) {
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "live-host-id", "y") // live config: alias "y"
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	env := m.localEnvelope(context.Background(), "snapshot-host-id", "x")
 
@@ -1297,7 +1497,7 @@ func TestInit_MissingSessionProvider(t *testing.T) {
 		Config:   &config.Config{},
 		Registry: core.NewServiceRegistry(),
 	})
-	m := New()
+	m := New(nil)
 	err := m.Init(c)
 	if err == nil {
 		t.Fatalf("Init: want error, got nil")
@@ -1314,7 +1514,7 @@ func TestInit_MissingOwnerResolver(t *testing.T) {
 	})
 	c.Registry.Register(session.RegistryKey, &fakeSessions{})
 
-	m := New()
+	m := New(nil)
 	err := m.Init(c)
 	if err == nil {
 		t.Fatalf("Init: want error, got nil")

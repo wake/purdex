@@ -16,7 +16,7 @@ import (
 func TestHandleGetSettings_ReturnsDeliverAndAlias(t *testing.T) {
 	c, _ := newHostsTestCore(t, "mini-lab:abc123", "mini-lab", "admin-tok", nil)
 	c.Cfg.Peers.Deliver = true
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodGet, "/api/peers/settings", nil, adminPrincipal())
 	if rr.Code != http.StatusOK {
@@ -37,7 +37,7 @@ func TestHandleGetSettings_ReturnsDeliverAndAlias(t *testing.T) {
 
 func TestHandleGetSettings_HostPrincipal_Forbidden(t *testing.T) {
 	c, _ := newHostsTestCore(t, "mini-lab:abc123", "mini-lab", "admin-tok", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodGet, "/api/peers/settings", nil, hostPrincipal("air"))
 	if rr.Code != http.StatusForbidden {
@@ -47,7 +47,7 @@ func TestHandleGetSettings_HostPrincipal_Forbidden(t *testing.T) {
 
 func TestHandleGetSettings_NoPrincipal_Forbidden(t *testing.T) {
 	c, _ := newHostsTestCore(t, "mini-lab:abc123", "mini-lab", "admin-tok", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodGet, "/api/peers/settings", nil, nil)
 	if rr.Code != http.StatusForbidden {
@@ -57,7 +57,7 @@ func TestHandleGetSettings_NoPrincipal_Forbidden(t *testing.T) {
 
 func TestHandlePutSettings_PersistsToCfgPath(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "mini-lab:abc123", "mini-lab", "admin-tok", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	deliver := true
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", putSettingsRequest{Deliver: &deliver}, adminPrincipal())
@@ -100,7 +100,7 @@ func TestHandlePutSettings_OmittedDeliver_LeavesValueUnchanged(t *testing.T) {
 	if err := config.WriteFile(cfgPath, *c.Cfg); err != nil {
 		t.Fatalf("seed cfgPath: %v", err)
 	}
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", putSettingsRequest{}, adminPrincipal())
 	if rr.Code != http.StatusOK {
@@ -118,7 +118,7 @@ func TestHandlePutSettings_OmittedDeliver_LeavesValueUnchanged(t *testing.T) {
 
 func TestHandlePutSettings_HostPrincipal_Forbidden(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "mini-lab:abc123", "mini-lab", "admin-tok", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	deliver := true
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", putSettingsRequest{Deliver: &deliver}, hostPrincipal("air"))
@@ -134,7 +134,7 @@ func TestHandlePutSettings_HostPrincipal_Forbidden(t *testing.T) {
 
 func TestHandlePutSettings_NoPrincipal_Forbidden(t *testing.T) {
 	c, _ := newHostsTestCore(t, "mini-lab:abc123", "mini-lab", "admin-tok", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	deliver := true
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", putSettingsRequest{Deliver: &deliver}, nil)
@@ -145,7 +145,7 @@ func TestHandlePutSettings_NoPrincipal_Forbidden(t *testing.T) {
 
 func TestHandlePutSettings_InvalidJSON_BadRequest(t *testing.T) {
 	c, _ := newHostsTestCore(t, "mini-lab:abc123", "mini-lab", "admin-tok", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)

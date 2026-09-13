@@ -4,11 +4,59 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 	"unicode/utf8"
 )
 
 // MaxTextBytes is the maximum size, in bytes, of a delivered message body.
 const MaxTextBytes = 64 * 1024
+
+// Wire limits (spec §4): the receiving daemon's in-memory windows and the
+// two socket/HTTP timeouts. Named here, next to MaxTextBytes, so every
+// constant from the spec lives in one place.
+const (
+	// DedupWindow is how long a msg_id is refused as a duplicate after
+	// first being delivered (in memory only — never the audit table, D10).
+	DedupWindow = 10 * time.Minute
+	// PairRateLimit is the most deliveries one (sender, receiver) process
+	// pair may make within PairRateWindow.
+	PairRateLimit = 30
+	// PairRateWindow is the sliding window PairRateLimit applies over.
+	PairRateWindow = time.Minute
+	// InterDaemonTimeout bounds one daemon-to-daemon HTTP call (/deliver).
+	InterDaemonTimeout = 10 * time.Second
+	// SocketWriteTimeout bounds one frame write into a Claude Code inbox
+	// socket, including the wait for the peer's EOF.
+	SocketWriteTimeout = 5 * time.Second
+)
+
+// Validation sentinels: Validate (via ValidateText / ValidateMode) wraps
+// one of these so a handler can map the failure to its wire error code
+// with errors.Is — see ValidationCode — instead of matching error text.
+var (
+	// ErrTextInvalid: the text is empty or not valid UTF-8 (bad_request).
+	ErrTextInvalid = errors.New("text invalid")
+	// ErrTextOversized: the text exceeds MaxTextBytes (text_too_large).
+	ErrTextOversized = errors.New("text too large")
+	// ErrModeInvalid: the mode is not "", prompting or bypass (bad_mode).
+	ErrModeInvalid = errors.New("mode invalid")
+)
+
+// ValidationCode maps a Validate error to its wire error code:
+// ErrTextOversized ⇒ ErrTextTooLarge, ErrModeInvalid ⇒ ErrBadMode, any
+// other non-nil error ⇒ ErrBadRequest, nil ⇒ "".
+func ValidationCode(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrTextOversized):
+		return ErrTextTooLarge
+	case errors.Is(err, ErrModeInvalid):
+		return ErrBadMode
+	default:
+		return ErrBadRequest
+	}
+}
 
 // Agent modes: how the receiving Claude Code session should treat a
 // delivered message.
@@ -174,13 +222,13 @@ func IsUUID(s string) bool {
 // UTF-8, and at most MaxTextBytes bytes.
 func ValidateText(s string) error {
 	if s == "" {
-		return errors.New("text is empty")
+		return fmt.Errorf("%w: text is empty", ErrTextInvalid)
 	}
 	if len(s) > MaxTextBytes {
-		return fmt.Errorf("text exceeds %d bytes", MaxTextBytes)
+		return fmt.Errorf("%w: text exceeds %d bytes", ErrTextOversized, MaxTextBytes)
 	}
 	if !utf8.ValidString(s) {
-		return errors.New("text is not valid UTF-8")
+		return fmt.Errorf("%w: text is not valid UTF-8", ErrTextInvalid)
 	}
 	return nil
 }
@@ -194,7 +242,7 @@ func ValidateMode(s string) (string, error) {
 	case ModePrompting, ModeBypass:
 		return s, nil
 	default:
-		return "", fmt.Errorf("bad mode %q", s)
+		return "", fmt.Errorf("%w: bad mode %q", ErrModeInvalid, s)
 	}
 }
 

@@ -66,7 +66,7 @@ func TestLocalEnvelope_VersionWarning_FiresOnceAcrossTwoCalls(t *testing.T) {
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0), time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	buf := captureLog(t)
 
@@ -95,7 +95,7 @@ func TestLocalEnvelope_VersionWarning_NeverFiresForVerifiedVersion(t *testing.T)
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
 	c := newTestCore(t, "mlab:abc123", "mlab")
-	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	buf := captureLog(t)
 

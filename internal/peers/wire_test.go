@@ -2,6 +2,7 @@ package peers
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -563,5 +564,51 @@ func TestDeliverRequest_Validate_TextTooLarge(t *testing.T) {
 	r.Text = strings.Repeat("a", MaxTextBytes+1)
 	if err := r.Validate(); err == nil {
 		t.Fatal("Validate(): expected error for text over MaxTextBytes, got nil")
+	}
+}
+
+// --- Validate sentinels / ValidationCode ------------------------------------
+
+// TestDeliverRequest_Validate_Sentinels pins that Validate wraps a
+// distinguishable sentinel for every rule that maps to its own error code
+// (text_too_large, bad_mode) and to the generic bad_request otherwise, so a
+// handler can pick the wire code with errors.Is instead of string matching.
+func TestDeliverRequest_Validate_Sentinels(t *testing.T) {
+	cases := []struct {
+		name     string
+		mutate   func(r *DeliverRequest)
+		sentinel error
+		code     string
+	}{
+		{"oversized text", func(r *DeliverRequest) { r.Text = strings.Repeat("a", MaxTextBytes+1) }, ErrTextOversized, ErrTextTooLarge},
+		{"empty text", func(r *DeliverRequest) { r.Text = "" }, ErrTextInvalid, ErrBadRequest},
+		{"invalid utf8", func(r *DeliverRequest) { r.Text = "a\xffb" }, ErrTextInvalid, ErrBadRequest},
+		{"bad mode", func(r *DeliverRequest) { r.From.DeclaredMode = "bogus" }, ErrModeInvalid, ErrBadMode},
+		{"bad msg_id", func(r *DeliverRequest) { r.MsgID = "nope" }, nil, ErrBadRequest},
+		{"bad from pid", func(r *DeliverRequest) { r.From.PID = 0 }, nil, ErrBadRequest},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := validDeliverRequest()
+			c.mutate(&r)
+			err := r.Validate()
+			if err == nil {
+				t.Fatal("Validate(): expected error, got nil")
+			}
+			if c.sentinel != nil && !errors.Is(err, c.sentinel) {
+				t.Errorf("errors.Is(%v, %v) = false", err, c.sentinel)
+			}
+			for _, other := range []error{ErrTextOversized, ErrTextInvalid, ErrModeInvalid} {
+				if other != c.sentinel && errors.Is(err, other) {
+					t.Errorf("errors.Is(%v, %v) = true, want false", err, other)
+				}
+			}
+			if got := ValidationCode(err); got != c.code {
+				t.Errorf("ValidationCode(%v) = %q, want %q", err, got, c.code)
+			}
+		})
+	}
+	if got := ValidationCode(nil); got != "" {
+		t.Errorf("ValidationCode(nil) = %q, want \"\"", got)
 	}
 }
