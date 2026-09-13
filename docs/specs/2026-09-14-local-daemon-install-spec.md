@@ -231,10 +231,14 @@ Refuses immediately when `status().managed === 'external'`.
    does not exist yet but a pid file does (should not happen for a managed
    install; defensive), run `newPath stop`.
 5. `swap` — `rename(newPath, binPath)`.
-6. `start` — spawn `binPath start` detached, `stdio: 'ignore'`, env
-   `{...process.env, PDX_DEV_MODE: '1'}`, `cwd: os.homedir()`. `pdx start`
-   itself waits for `/api/health` (60 s window) and exits non-zero with the
-   last 20 log lines on failure; we surface its stderr.
+6. `start` — spawn `binPath start` with env `{...process.env, PDX_DEV_MODE: '1'}`,
+   `cwd: os.homedir()`, and **await its exit** (≤ 70 s). `pdx start` is a
+   short-lived launcher: it forks the real daemon into its own process group
+   (`Setpgid`, `cmd/pdx/daemon.go:250`) with stdio on the log file, waits
+   for `/api/health` (60 s window), then exits 0 — or exits 1 with the last
+   20 log lines on stderr, which we surface verbatim. Because the daemon is
+   not in the app's process group, it survives the app quitting; no
+   `detached`/`unref` dance is needed.
 7. Return `{ url: 'http://<bind>:<port>', token, hash, version }` — `token`
    read back from `config.toml` (so re-installs return the existing one).
 
