@@ -745,6 +745,45 @@ func TestHandlePeers_ScopeAll_NoOutboundToken(t *testing.T) {
 	}
 }
 
+// TestLocalEnvelope_UsesCallerSnapshot_NotLiveConfig pins the fix for the
+// review finding: localEnvelope must build every PeerRecord from the
+// hostID/alias the caller passes in, never by re-reading m.core.Cfg under
+// its own CfgMu.RLock. The module's live config says alias "y"; calling
+// localEnvelope directly with alias "x" must produce records whose Host is
+// "x", not "y" — proving localEnvelope does not touch CfgMu at all (a
+// concurrent config mutation between the handler's snapshot and this call
+// would otherwise be observable as a live-config value leaking in).
+func TestLocalEnvelope_UsesCallerSnapshot_NotLiveConfig(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "s1", Name: "s1", Cwd: "/a"},
+	}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "live-host-id", "y") // live config: alias "y"
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	env := m.localEnvelope(context.Background(), "snapshot-host-id", "x")
+
+	if !env.OK {
+		t.Fatalf("ok = false, want true; error=%q", env.Error)
+	}
+	if env.HostID != "snapshot-host-id" {
+		t.Errorf("env.HostID = %q, want the passed-in snapshot value %q", env.HostID, "snapshot-host-id")
+	}
+	if len(env.Peers) == 0 {
+		t.Fatalf("peers empty, want at least one record")
+	}
+	for _, rec := range env.Peers {
+		if rec.Host != "x" {
+			t.Errorf("record.Host = %q, want snapshot alias %q (live config alias %q must not leak in)", rec.Host, "x", "y")
+		}
+		if rec.HostID != "snapshot-host-id" {
+			t.Errorf("record.HostID = %q, want snapshot host_id %q", rec.HostID, "snapshot-host-id")
+		}
+	}
+}
+
 func TestInit_MissingSessionProvider(t *testing.T) {
 	c := core.New(core.CoreDeps{
 		Config:   &config.Config{},

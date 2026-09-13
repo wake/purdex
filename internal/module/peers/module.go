@@ -108,8 +108,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 	switch scope {
 	case "", "local":
-		json.NewEncoder(w).Encode(m.localEnvelope(r.Context()))
-		return
+		// fine, snapshot below covers this path too.
 	case "all":
 		principal, ok := middleware.PrincipalFrom(r.Context())
 		if !ok || principal.Kind != middleware.PrincipalAdmin {
@@ -123,28 +122,33 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// scope=all: one config snapshot up front so a concurrent hosts mutation
-	// cannot be observed mid-request — every host fetched below, and the
-	// local row's alias/host_id, come from this snapshot alone.
+	// One config snapshot up front, used by every path below (local-only or
+	// scope=all), so a concurrent config mutation cannot be observed
+	// mid-request — in particular, so the local HostResult{Alias, HostID}
+	// row can never disagree with the host/host_id embedded in its own
+	// Peers records.
 	m.core.CfgMu.RLock()
 	hostID := m.core.Cfg.HostID
 	alias := m.core.Cfg.PeerAlias()
 	hosts := append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...)
 	m.core.CfgMu.RUnlock()
 
+	if scope != "all" {
+		json.NewEncoder(w).Encode(m.localEnvelope(r.Context(), hostID, alias))
+		return
+	}
+
 	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), hostID, alias, hosts))
 }
 
-// localEnvelope builds this host's own inventory: the response body for
-// scope unset/"local", and the local row's peers/ok/partial/error for
-// scope=all.
-func (m *Module) localEnvelope(ctx context.Context) ipeers.Envelope {
+// localEnvelope builds this host's own inventory from a caller-supplied
+// hostID/alias: the response body for scope unset/"local", and the local
+// row's peers/ok/partial/error for scope=all. It never touches CfgMu itself
+// — the caller (handlePeers) takes the one config snapshot for the whole
+// request, so the local row's labels and the host/host_id embedded in its
+// own Peers records are always built from the same values.
+func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers.Envelope {
 	deadline := m.now().Add(m.budget)
-
-	m.core.CfgMu.RLock()
-	hostID := m.core.Cfg.HostID
-	alias := m.core.Cfg.PeerAlias()
-	m.core.CfgMu.RUnlock()
 
 	writeError := func(errMsg string) ipeers.Envelope {
 		return ipeers.Envelope{
@@ -245,7 +249,7 @@ func (m *Module) localEnvelope(ctx context.Context) ipeers.Envelope {
 func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []config.PeerHost) ipeers.AllEnvelope {
 	results := make([]ipeers.HostResult, len(hosts)+1)
 
-	local := m.localEnvelope(ctx)
+	local := m.localEnvelope(ctx, hostID, alias)
 	results[0] = ipeers.HostResult{
 		Alias:   alias,
 		HostID:  hostID,
