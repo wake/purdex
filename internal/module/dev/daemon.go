@@ -1,11 +1,9 @@
 package dev
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -96,49 +94,10 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	defer hashCancel()
 	hashOut, _ := exec.CommandContext(hashCtx, "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
 	hash := strings.TrimSpace(string(hashOut))
-	ldflags := rebuildLdflags(hash, m.readVersionFile())
-	cmd := exec.CommandContext(ctx, "go", "build", "-ldflags", ldflags, "-o", newPath, "./cmd/pdx")
-	cmd.Dir = m.repoRoot
-	// Inherit env so GOCACHE / PATH / HOME work; do not scrub.
-	cmd.Env = os.Environ()
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
-		return
-	}
-	// Fix 2: close stdout pipe on StderrPipe failure to avoid FD leak.
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		stdout.Close()
-		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
-		return
-	}
-
-	// Fix 2: close both pipes when cmd.Start fails.
-	if err := cmd.Start(); err != nil {
-		stdout.Close()
-		stderr.Close()
-		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
-		return
-	}
-
-	streamLines := func(src io.Reader, done chan<- struct{}) {
-		defer close(done)
-		scanner := bufio.NewScanner(src)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			writeEvent(daemonRebuildEvent{Type: "log", Line: scanner.Text()})
-		}
-	}
-	doneOut := make(chan struct{})
-	doneErr := make(chan struct{})
-	go streamLines(stdout, doneOut)
-	go streamLines(stderr, doneErr)
-	<-doneOut
-	<-doneErr
-
-	if err := cmd.Wait(); err != nil {
+	if err := m.buildBinary(ctx, buildTarget{}, hash, m.readVersionFile(), newPath, func(line string) {
+		writeEvent(daemonRebuildEvent{Type: "log", Line: line})
+	}); err != nil {
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
 		return
 	}
