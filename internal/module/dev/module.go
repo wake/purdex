@@ -38,6 +38,9 @@ type DevModule struct {
 	// replacing the test process. Nil means skip exec (test-safe default).
 	// Set to syscall.Exec by Init for production use.
 	execSelf func(argv0 string, argv []string, envv []string) error
+	// gitHeadFn returns the short hash of HEAD, or "" when unavailable.
+	// Injected by tests; defaulted to m.gitHead in Init.
+	gitHeadFn func() string
 }
 
 func New(repoRoot string) *DevModule {
@@ -56,6 +59,9 @@ func (m *DevModule) Init(c *core.Core) error {
 	m.stopCtx, m.stopCancel = context.WithCancel(context.Background())
 	if m.hashFn == nil {
 		m.hashFn = m.gitHash
+	}
+	if m.gitHeadFn == nil {
+		m.gitHeadFn = m.gitHead
 	}
 	if m.runStep == nil {
 		m.runStep = streamCmd
@@ -172,6 +178,7 @@ func (m *DevModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dev/update/download", m.handleDownload)
 	mux.HandleFunc("GET /api/dev/daemon/check", m.handleDaemonCheck)
 	mux.HandleFunc("POST /api/dev/daemon/rebuild", m.handleDaemonRebuild)
+	mux.HandleFunc("GET /api/dev/daemon/download", m.handleDaemonDownload)
 }
 
 func (m *DevModule) Start(_ context.Context) error {
@@ -197,6 +204,18 @@ func (m *DevModule) gitHash(paths ...string) string {
 	out, err := cmd.Output()
 	if err != nil {
 		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitHead returns the short hash of HEAD, or "" if git is unavailable.
+// Bounded so a wedged git cannot hold the download mutex.
+func (m *DevModule) gitHead() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
+	if err != nil {
+		return ""
 	}
 	return strings.TrimSpace(string(out))
 }
