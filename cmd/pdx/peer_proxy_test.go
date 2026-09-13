@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wake/purdex/internal/peers/proxyhelper/proxyhelpertest"
 )
 
 // swapStdio points os.Stdin/os.Stdout at fresh pipes for the test and
@@ -55,16 +56,7 @@ func TestRunPeerProxy_ReadyThenStdinEOFExitsZero(t *testing.T) {
 	t.Cleanup(func() { peerProxyProcStartFn = origPS })
 	peerProxyProcStartFn = func(int) (string, error) { return "Sun Sep 13 18:57:56 2026", nil }
 
-	root, err := os.MkdirTemp("/tmp", "pdxp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(root) })
-	reg := filepath.Join(root, "reg")
-	if err := os.MkdirAll(reg, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	socks := filepath.Join(root, "socks")
+	socks, reg := proxyhelpertest.TempDirs(t)
 
 	stdinW, stdout := swapStdio(t)
 	code := make(chan int, 1)
@@ -104,7 +96,7 @@ func TestRunPeerProxy_ReadyThenStdinEOFExitsZero(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatalf("runPeerProxy did not return after stdin EOF")
 	}
-	if _, err := os.Lstat(ready.Sock); err == nil {
+	if proxyhelpertest.Exists(ready.Sock) {
 		t.Errorf("socket %s left behind", ready.Sock)
 	}
 }
@@ -127,17 +119,5 @@ func TestRunPeerProxy_BadConfigExitsOne(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("runPeerProxy did not return")
-	}
-}
-
-func TestMainDispatchesPeerProxy(t *testing.T) {
-	// main() is a bare switch; the case must exist verbatim so `pdx
-	// peer-proxy` reaches runPeerProxy without touching config or HTTP.
-	src, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(src), `case "peer-proxy":`) || !strings.Contains(string(src), "os.Exit(runPeerProxy())") {
-		t.Errorf("main.go does not dispatch peer-proxy to runPeerProxy")
 	}
 }

@@ -91,6 +91,17 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer, o Options) erro
 	out := &stdoutWriter{w: stdout}
 	in := bufio.NewReaderSize(stdin, 16*1024)
 
+	// Subscribe before anything is created so SIGTERM ⇒ cleanup holds for
+	// the helper's whole life; a signal that lands during startup is
+	// buffered and acted on as soon as the loop starts.
+	sigs := o.Signals
+	if sigs == nil {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
+		defer signal.Stop(ch)
+		sigs = ch
+	}
+
 	cfg, err := readConfig(in)
 	if err != nil {
 		out.writeLine(readyLine{Ready: false, Error: err.Error()})
@@ -118,14 +129,6 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer, o Options) erro
 	// Socket bound and both registry files on disk: only now say ready.
 	if err := out.writeLine(readyLine{Ready: true, PID: o.PID, Sock: peer.SockPath(), Files: peer.Files()}); err != nil {
 		return peer.Close()
-	}
-
-	sigs := o.Signals
-	if sigs == nil {
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
-		defer signal.Stop(ch)
-		sigs = ch
 	}
 
 	// Nothing but EOF ever follows the config line on stdin (D8).

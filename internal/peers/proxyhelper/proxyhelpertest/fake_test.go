@@ -16,18 +16,11 @@ import (
 	"github.com/wake/purdex/internal/peers/proxyhelper"
 )
 
+// tempDirs is TempDirs in (registry, socks) order.
 func tempDirs(t *testing.T) (reg, socks string) {
 	t.Helper()
-	root, err := os.MkdirTemp("/tmp", "pdxp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(root) })
-	reg = filepath.Join(root, "reg")
-	if err := os.MkdirAll(reg, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return reg, filepath.Join(root, "socks")
+	socks, reg = TempDirs(t)
+	return reg, socks
 }
 
 func configLine(t *testing.T, reg, socks string) []byte {
@@ -113,7 +106,9 @@ func TestEveryVariantExitsOnSignal(t *testing.T) {
 			// Nobody reads stdout: a real SIGKILL still ends the process.
 			time.Sleep(50 * time.Millisecond)
 			p.Signal(syscall.SIGKILL)
-			waitWithin(t, p, time.Second)
+			if err := waitWithin(t, p, time.Second); !errors.Is(err, ErrKilled) {
+				t.Errorf("Wait after SIGKILL = %v, want ErrKilled", err)
+			}
 			if f.Signals() != 1 {
 				t.Errorf("Signals = %d, want 1", f.Signals())
 			}
@@ -159,11 +154,11 @@ func TestBrokenRegisteredLeavesFilesAndDeadSocketBehind(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		keys, _ := filepath.Glob(filepath.Join(reg, strconv.Itoa(pid)+".*.key"))
-		if fileExists(jsonPath) && len(keys) == 1 && fileExists(sock) {
+		if Exists(jsonPath) && len(keys) == 1 && Exists(sock) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("registration not observed: json %v keys %v sock %v", fileExists(jsonPath), keys, fileExists(sock))
+			t.Fatalf("registration not observed: json %v keys %v sock %v", Exists(jsonPath), keys, Exists(sock))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -177,8 +172,8 @@ func TestBrokenRegisteredLeavesFilesAndDeadSocketBehind(t *testing.T) {
 	cancel()
 	waitWithin(t, p, time.Second)
 	// Killed before ready: everything stays on disk, the socket is dead.
-	if !fileExists(jsonPath) || !fileExists(sock) {
-		t.Errorf("a killed helper must leave its files: json %v sock %v", fileExists(jsonPath), fileExists(sock))
+	if !Exists(jsonPath) || !Exists(sock) {
+		t.Errorf("a killed helper must leave its files: json %v sock %v", Exists(jsonPath), Exists(sock))
 	}
 	if _, err := net.DialTimeout("unix", sock, 500*time.Millisecond); !errors.Is(err, syscall.ECONNREFUSED) {
 		t.Errorf("dial dead socket = %v, want ECONNREFUSED", err)
@@ -201,11 +196,6 @@ func TestProcStartIsValidLstart(t *testing.T) {
 	if _, err := peers.ParseProcStart(a); err != nil {
 		t.Errorf("ProcStart %q does not parse: %v", a, err)
 	}
-}
-
-func fileExists(path string) bool {
-	_, err := os.Lstat(path)
-	return err == nil
 }
 
 func registryProcStart(t *testing.T, path string) string {

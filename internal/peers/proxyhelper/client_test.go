@@ -1,9 +1,11 @@
 package proxyhelper_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -21,20 +23,6 @@ import (
 
 const sessionA = "aaaaaaaa-1111-4111-8111-111111111111"
 
-func tempDirs(t *testing.T) (reg, socks string) {
-	t.Helper()
-	root, err := os.MkdirTemp("/tmp", "pdxp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(root) })
-	reg = filepath.Join(root, "reg")
-	if err := os.MkdirAll(reg, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return reg, filepath.Join(root, "socks")
-}
-
 func testConfig(reg, socks string) proxyhelper.Config {
 	return proxyhelper.Config{
 		Name:        "air/foo",
@@ -46,22 +34,18 @@ func testConfig(reg, socks string) proxyhelper.Config {
 	}
 }
 
-func exists(path string) bool {
-	_, err := os.Lstat(path)
-	return err == nil
+// tempDirs is proxyhelpertest.TempDirs in this file's (registry, socks)
+// argument order.
+func tempDirs(t *testing.T) (reg, socks string) {
+	t.Helper()
+	socks, reg = proxyhelpertest.TempDirs(t)
+	return reg, socks
 }
 
-func writeToSock(t *testing.T, sock string, line string) {
-	t.Helper()
-	c, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatalf("dial %s: %v", sock, err)
-	}
-	defer c.Close()
-	if _, err := c.Write([]byte(line + "\n")); err != nil {
-		t.Fatalf("write to %s: %v", sock, err)
-	}
-}
+var (
+	exists      = proxyhelpertest.Exists
+	writeToSock = proxyhelpertest.WriteToSock
+)
 
 func recvFrame(t *testing.T, h proxyhelper.Handle, within time.Duration) string {
 	t.Helper()
@@ -505,6 +489,52 @@ func TestExecStarter_StalledProcessIsKilled(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("Spawn took %v; the stalled process must be SIGKILLed, not waited for", elapsed)
+	}
+}
+
+func TestHandle_OverlongStdoutLineSurfacesErrTooLong(t *testing.T) {
+	// After the ready line the process emits a 5 MiB line with no newline:
+	// the pump cannot frame it, closes Frames and reports why.
+	exe := writeScript(t, `
+read line
+echo '{"ready":true,"pid":'$$',"sock":"/tmp/none.sock","files":[]}'
+exec head -c 5242880 /dev/zero
+`)
+	var stderr safeBuffer
+	var logged safeBuffer
+	origLogf := proxyhelper.Logf
+	proxyhelper.Logf = func(format string, args ...any) { fmt.Fprintf(&logged, format+"\n", args...) }
+	t.Cleanup(func() { proxyhelper.Logf = origLogf })
+
+	h, err := proxyhelper.Spawn(context.Background(), proxyhelper.ExecStarter(exe, &stderr), proxyhelper.Config{Name: "x", SessionID: sessionA, RegistryDir: t.TempDir(), SockDir: t.TempDir()}, 5*time.Second)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	assertFramesClosed(t, h, 5*time.Second)
+	if !errors.Is(h.Err(), bufio.ErrTooLong) {
+		t.Errorf("Err() = %v, want bufio.ErrTooLong", h.Err())
+	}
+	if !strings.Contains(logged.String(), "stdout pump ended") || !strings.Contains(logged.String(), "too long") {
+		t.Errorf("Logf did not receive the pump error: %q", logged.String())
+	}
+	// The process is stuck writing into a pipe nobody drains: Stop must
+	// still return after grace + SIGKILL.
+	_ = stopWithin(t, h, 200*time.Millisecond, 3*time.Second)
+}
+
+func TestHandle_ErrIsNilAfterCleanStop(t *testing.T) {
+	reg, socks := tempDirs(t)
+	f := proxyhelpertest.New(proxyhelpertest.Options{})
+	h, err := proxyhelper.Spawn(context.Background(), f.Starter(), testConfig(reg, socks), 2*time.Second)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if err := stopWithin(t, h, time.Second, 2*time.Second); err != nil {
+		t.Errorf("Stop: %v", err)
+	}
+	assertFramesClosed(t, h, time.Second)
+	if h.Err() != nil {
+		t.Errorf("Err() after a clean Stop = %v, want nil", h.Err())
 	}
 }
 

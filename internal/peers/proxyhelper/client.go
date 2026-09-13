@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +42,11 @@ const (
 // ErrNotReady is returned (wrapped) by Spawn when the helper did not
 // answer ready:true in time.
 var ErrNotReady = errors.New("helper did not become ready")
+
+// Logf receives the client's diagnostics (a malformed stdout line, a pump
+// that ended on an error). It defaults to the standard logger; the daemon
+// or a test may replace it.
+var Logf = log.Printf
 
 // Proc is a started helper process as the client sees it.
 type Proc interface {
@@ -161,6 +167,10 @@ type Handle interface {
 	// after the helper's stdout reaches EOF or after Stop joined the pump
 	// — never before the pump goroutine has exited.
 	Frames() <-chan string
+	// Err is the pump's terminal error once Frames is closed: nil after a
+	// clean EOF or a Stop, otherwise why reading stdout stopped early (an
+	// over-long line is bufio.ErrTooLong). Nil while the pump runs.
+	Err() error
 	// Stop (R2-M5): close stdin (the helper's EOF signal); wait ≤ grace
 	// for exit; SIGKILL; Wait; close the stdout pipe's read end (unblocks
 	// a pump stuck in Read); close the pump's done channel (unblocks a
@@ -181,8 +191,12 @@ type handle struct {
 	done     chan struct{} // closed by Stop: releases a pump blocked in a Frames send
 	pumpDone chan struct{} // closed by the pump when it exits (after closing frames)
 
+	stopping atomic.Bool // set first thing in Stop: a read error after this is self-inflicted
 	stopOnce sync.Once
 	stopErr  error
+
+	errMu   sync.Mutex
+	pumpErr error
 }
 
 func (h *handle) PID() int                 { return h.pid }
@@ -191,8 +205,15 @@ func (h *handle) Files() []string          { return append([]string(nil), h.file
 func (h *handle) Frames() <-chan string    { return h.frames }
 func (h *handle) Signal(s os.Signal) error { return h.proc.Signal(s) }
 
+func (h *handle) Err() error {
+	h.errMu.Lock()
+	defer h.errMu.Unlock()
+	return h.pumpErr
+}
+
 func (h *handle) Stop(grace time.Duration) error {
 	h.stopOnce.Do(func() {
+		h.stopping.Store(true)
 		h.proc.Stdin().Close()
 		exited := make(chan error, 1)
 		go func() { exited <- h.proc.Wait() }()
@@ -213,6 +234,7 @@ func (h *handle) Stop(grace time.Duration) error {
 
 // pump copies stdout lines into Frames until stdout ends (EOF, read error,
 // or the read end closed by Stop) or done closes; on exit it closes Frames.
+// A scanner error that Stop did not cause is recorded for Err and logged.
 func (h *handle) pump(sc *bufio.Scanner) {
 	defer close(h.pumpDone)
 	defer close(h.frames)
@@ -221,7 +243,7 @@ func (h *handle) pump(sc *bufio.Scanner) {
 			Frame *string `json:"frame"`
 		}
 		if err := json.Unmarshal(sc.Bytes(), &fl); err != nil || fl.Frame == nil {
-			log.Printf("proxyhelper: pid %d: skipping malformed stdout line %q", h.pid, truncate(sc.Text(), 200))
+			Logf("proxyhelper: pid %d: skipping malformed stdout line %q", h.pid, truncate(sc.Text(), 200))
 			continue
 		}
 		select {
@@ -229,6 +251,12 @@ func (h *handle) pump(sc *bufio.Scanner) {
 		case <-h.done:
 			return
 		}
+	}
+	if err := sc.Err(); err != nil && !h.stopping.Load() {
+		h.errMu.Lock()
+		h.pumpErr = err
+		h.errMu.Unlock()
+		Logf("proxyhelper: pid %d: stdout pump ended: %v", h.pid, err)
 	}
 }
 

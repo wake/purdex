@@ -114,7 +114,11 @@ func (f *Fake) HoldStop(ch <-chan struct{}) {
 }
 
 // ExitOnItsOwn makes every live fake process die as if it had crashed:
-// its stdout reaches EOF on the client side and it becomes Wait-able.
+// its stdout reaches EOF on the client side, it becomes Wait-able and
+// Wait reports ErrKilled. Unlike a real crash, a Normal fake still runs
+// the helper's own cleanup (its ctx is cancelled), so its registry files
+// and socket are removed; a test that needs a dead helper's leftovers on
+// disk uses the BrokenRegistered variant.
 func (f *Fake) ExitOnItsOwn() {
 	f.mu.Lock()
 	procs := append([]*Proc(nil), f.procs...)
@@ -174,9 +178,14 @@ type Proc struct {
 	stdoutR *io.PipeReader // the client's end
 	stdoutW *io.PipeWriter // the process's end
 
-	done chan struct{} // closed when the process goroutine has exited
-	err  error
+	done   chan struct{} // closed when the process goroutine has exited
+	err    error
+	killed atomic.Bool
 }
+
+// ErrKilled is what Wait returns for a process that was signalled or
+// made to ExitOnItsOwn, mirroring exec's "signal: killed".
+var ErrKilled = errors.New("signal: killed")
 
 func (p *Proc) PID() int              { return p.pid }
 func (p *Proc) Stdin() io.WriteCloser { return p.stdinW }
@@ -184,7 +193,9 @@ func (p *Proc) Stdout() io.Reader     { return p.stdoutR }
 
 // Signal delivers a fatal signal: the process's context is cancelled and,
 // as with a real SIGKILL, its ends of both pipes are closed so a body
-// blocked in a stdout write (nobody reading) still dies.
+// blocked in a stdout write (nobody reading) still dies; Wait then
+// reports ErrKilled. A Normal fake still runs the helper's cleanup on
+// the way out (see ExitOnItsOwn); BrokenRegistered leaves files behind.
 func (p *Proc) Signal(os.Signal) error {
 	p.f.mu.Lock()
 	p.f.signals++
@@ -194,13 +205,15 @@ func (p *Proc) Signal(os.Signal) error {
 }
 
 func (p *Proc) kill() {
+	p.killed.Store(true)
 	p.cancel()
 	p.stdoutW.Close()
 	p.stdinR.Close()
 }
 
-// Wait joins the process goroutine and returns its exit error (nil for a
-// clean exit). It honours HoldStop.
+// Wait joins the process goroutine and returns its exit error: ErrKilled
+// after Signal/ExitOnItsOwn, the variant's own exit error otherwise (nil
+// for a clean exit). It honours HoldStop.
 func (p *Proc) Wait() error {
 	p.f.mu.Lock()
 	p.f.stops++
@@ -209,6 +222,9 @@ func (p *Proc) Wait() error {
 	<-p.done
 	if hold != nil {
 		<-hold
+	}
+	if p.killed.Load() {
+		return ErrKilled
 	}
 	return p.err
 }
@@ -245,7 +261,7 @@ func (p *Proc) run() {
 		select {
 		case <-p.f.barrier:
 		case <-p.ctx.Done():
-			p.err = errors.New("signal: killed")
+			p.err = ErrKilled
 			return
 		case <-stdinEOF:
 			return
@@ -281,7 +297,7 @@ func (p *Proc) readConfig() (line []byte, stdinEOF <-chan struct{}) {
 func (p *Proc) stall(stdinEOF <-chan struct{}) error {
 	select {
 	case <-p.ctx.Done():
-		return errors.New("signal: killed")
+		return ErrKilled
 	case <-stdinEOF:
 		return nil
 	}
