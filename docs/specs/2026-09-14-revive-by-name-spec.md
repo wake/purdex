@@ -90,10 +90,15 @@ Rule, for each candidate on `hostId`:
 - find the live session whose `name === cachedName`. tmux names are unique
   per server and one host is one server, so there is at most one; if a payload
   ever carried two, the first wins and nothing else is promised;
-- that session's `tmux_instance` must be a **non-empty string** — `typeof
-  === 'string' && length > 0`, not truthiness: the payload is `JSON.parse`d
-  with no schema, and a number / boolean / object there is not a generation
-  the pane may be re-bound to (R2 defender finding 2). Empty is unknown, and
+- that session's `code` and `tmux_instance` must both be **non-empty
+  strings** — `typeof === 'string' && length > 0`, not truthiness: the payload
+  is `JSON.parse`d with no schema, and a number / boolean / object / `null`
+  there is not a binding the pane may be re-pointed to (R2 defender finding 2,
+  R3 `review-mu099xxk-09etpv`). A `null` code would clear `terminated` and
+  leave the pane bound to `/ws/terminal/null`, and the next honest payload
+  would then mark it `session-closed` — out of this feature's reach for good.
+  `name` needs no check: it only ever matched a string the pane already held.
+  Empty is unknown, and
   the whole feature stands on the Tab Rebuild rule "no evidence, no action"
   (spec §4.6). It need **not** differ from the pane's own generation
   (R1 finding 5): `snapshot/restore.ts:132` marks a pane `tmux-restarted` when
@@ -272,13 +277,14 @@ nothing and does not rewrite the rebuild record.
 | S17 | lock held; WS payload `dev`→`new1` reconciled; then a **late HTTP** `fetchHost` response overwrites the session store with `dev`→`old`; lock released | pane revived onto `new1` (the snapshot), never `old` |
 | S18 | S1c shape, and the pane's old code is still live under another name at the same generation | pane revived onto `dev`; the session list still contains the old code |
 | S19 | two hosts h1/h2 each with a revivable pane; lock held while both payloads land; lock released | both revived |
-| S20 | the tab store's persist throws on the first pane's write during a release pass | that pane stays terminated; the second pane still revives; the rebuild that released the lock still resolves with its own report |
+| S20 | the tab store's write for the first pane throws during a release pass | whatever that write left behind is left behind (a real persist failure throws *after* the in-memory `set`, so the pane may well be revived in memory); the second pane still revives; the rebuild that released the lock still resolves with its own report — the guarantee is isolation, not rollback |
 | S21 | live `tmux_instance` is a number / boolean / object on the wire | untouched |
+| S22 | live `code` is `null` / absent / `''` / a number on the wire, name matches | untouched, still `tmux-restarted`; a later payload with a string code revives it |
 
 ## 5. Testing
 
 - `revive.test.ts` — `decideRevive`: S1, S1c, S4, S5, S6 (payload mode), S13,
-  S14, S21, empty candidates, name match wins over a code match (the `$0` reuse
+  S14, S21, S22, empty candidates, name match wins over a code match (the `$0` reuse
   case: a different live session carries the pane's old code). `reviveAllowed`:
   S8, S9, S10, no op, running. `runRevivePass`: S18 (session list keeps the
   old code), S20 (per-pane isolation), the snapshot is what is read (a session
@@ -346,4 +352,11 @@ Small enough for one PR; ordered so each step is independently green.
 | C | medium (health 1) | Shared writer's `syncSessionStore` evicts a still-live old code on a same-generation revive | **Fixed** — writer split: `repointPane` for revive, `defaultRepoint` = `repointPane` + sync for the engine (§3.2); S18 |
 | D | medium (defender 2) | `tmux_instance` checked by truthiness; number/boolean/object accepted | **Fixed** — non-empty string (§3.1); S21 |
 | E | note (defender) | No multi-host release test | **Fixed** — S19 |
+
+### PR #1002 R3 (attacker `review-mu099xxk-09etpv`) — R2 A–D confirmed closed
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| G | medium | `code` copied from the wire unchecked; `null` clears `terminated` and binds the pane to nothing | **Fixed** — non-empty string required (§3.1); S22 |
+| — | note | S20 "stays terminated" overstated real persist behaviour | **Fixed** — S20 reworded: isolation, not rollback |
 
