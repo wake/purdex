@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.335] - 2026-09-14
+
+### Feat: daemon 端跨機安裝基礎——交叉編譯下載端點、建置身分、dev mode 預設開啟（#993）
+
+新機 air-2026 要跑 Purdex，但不打算放 repo、也不裝 Go toolchain，所以「daemon 怎麼更新」這個問題沒有答案：既有的 `/api/dev/daemon/rebuild` 是同機 `git log` + `go build` + exec self，離開有 checkout 的 Mini 就不成立。決定是**讓 App 在自己所在的機器上安裝／更新 daemon**——App 本來就持有每台 host 的 token，不需要新增 daemon 之間的信任關係。這是兩段的第一段（Go 側），Electron/SPA 側在下一個 PR；spec 在 `docs/specs/2026-09-14-local-daemon-install-spec.md`，§1 的九個決定是固定的。
+
+**`GET /api/dev/daemon/download?goos=&goarch=`。** Mini daemon 依請求交叉編譯（`CGO_ENABLED=0`，modernc sqlite 是純 Go 所以不依賴 host 的 C toolchain），快取在 `bin/dist/pdx-<goos>-<goarch>-<hash>`，同 target 只留一份。整個請求——包含 cache hit 的傳輸——都持有 `daemonRebuildMu`，這樣 `/rebuild` 的 `syscall.Exec` 不會在傳輸中途把 server 換掉；忙碌回 409。身分只取一次：同一個 `hash` 同時是快取鍵、ldflags 值和 `X-Pdx-Hash` header，handler 從不重讀 HEAD。回應帶 `X-Pdx-Sha256`（整個 artifact 的雜湊，即使是 206 也一樣）與精確的 `Content-Length`，客戶端只驗完整的 200 回應。時限從進入 handler 起算 6 分鐘（context 加 `SetWriteDeadline`，因為 server 沒有全域 `WriteTimeout`，慢讀取者否則能無限占鎖），建置本身另有 5 分鐘子 context。
+
+**取消建置要殺整個 process group。** 攻擊方 review 抓到 `CommandContext` 只殺 `go`，`compile`/`link` 子行程會繼續吃 CPU，而且它們繼承的 pipe 會讓 handler（和 mutex）卡到它們結束。修法是 `Setpgid` + `cmd.Cancel` 對 `-pgid` 送 SIGKILL，保留 `WaitDelay` 當 pipe 保險——順帶把 `buildBinary` 從 `StdoutPipe` 改成 `io.Writer`，因為 `WaitDelay` 只會強制關閉 Go 自己建立的 pipe（對照 go1.26 `os/exec` 原始碼確認）。新的 `lineWriter` 有 1 MiB 的單行上限，不會被無換行輸出撐爆。
+
+**建置身分搬到 `internal/buildinfo`。** `dev.BakedInHash` 和 `core.Version`（一直是 `"dev"`）合併成一個 leaf package 的 `Hash`/`Version`，Makefile 兩個都注入；`/api/health` 現在帶 `version` 與 `hash`（執行中 daemon 的身分），`/api/info.purdex_version` 不再是 `"dev"`。新增 `pdx version [--json]` 讓 App 不啟動 daemon 也能讀磁碟上 binary 的身分。
+
+**dev mode 預設開啟。** Purdex 只有一個使用者，每次帶 `PDX_DEV_MODE=1` 啟動只是摩擦。`internal/devmode.Enabled()` 取代兩處 `== "1"` 的讀取：unset 或任何非 `"0"` 的值都是開；config 的 `dev.update` 仍是第一層閘。⚠️ 部署注意：這會讓 `internal/module/agent` 裡 23 個原本只在 dev 模式輸出的 log 點（`[hook]`、`[derive]`、`[probe]`…）在每台既有部署上打開，`~/.config/pdx/logs/pdx.log` 沒有 rotation；要回到原本音量就在 launcher 設 `PDX_DEV_MODE=0`。
+
+**pid file 改為永久。** `releasePidLock` 原本 unlock 後 unlink，任何順序都留一個窗口讓正在啟動的 `serve` 鎖到一個路徑上已經不存在的 inode，之後 `pdx status`/`stop` 會對活著的 daemon 說「沒在跑」。現在只 unlock + close（`stop` 的 SIGKILL 分支也不再刪檔），`isDaemonRunning` 本來就靠 flock 狀態判斷所以行為不變。同時 `serve` 遇到鎖被持有時**直接退出**而不是印警告繼續——兩個 daemon 共用一個 `data_dir` 等於共用 SQLite 檔案，從來就不安全。防守方 review 再抓到探測本身用 `LOCK_EX` 會撞到啟動中的 `serve`，改成 `LOCK_SH` 探測加 5×50 ms 的有界重試。
+
+**流程**：spec 三輪 codex（1+1+0 Blocker、10+6+5 Important，處置表在 spec §6–§8）、plan 兩輪（1 Blocker、7+1 Important）、subagent TDD 七個 task 各自 review、final whole-branch review 一波七項修正、PR 標準 review 乾淨加三視角 adversarial 五項修正。延後追蹤：#994（三份 `git log -1` 集中、`lineWriter` 尾行、註解理由）。既有的 `TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown` 只在 `-race` 下失敗，與本 PR 無關。
+
 ## [1.0.0-alpha.334] - 2026-09-14
 
 ### Feat: 跨主機 agent peer 橋接第一階段——本機 peer 盤點 `pdx peers`（#991）
