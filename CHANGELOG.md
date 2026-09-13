@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.336] - 2026-09-14
+
+### Feat: App 在自己所在的機器上安裝／啟動／更新 pdx daemon——Electron + SPA 側（#997）
+
+alpha.335 給了 daemon 交叉編譯下載端點與建置身分，這是第二段：Electron 主程序拿到那個 binary、放到 `~/.config/pdx/bin/pdx`、寫初始設定、啟動、驗證，然後 SPA 把新 daemon 自動登記成一台 host。目標機器是沒有 repo、沒有 Go toolchain 的 air-2026；Mini 上的 App 看到的是 repo 那顆 daemon，會被判成 `external`，不提供任何破壞性操作（spec D8）。spec 在 `docs/specs/2026-09-14-local-daemon-install-spec.md` §3–§4，plan 在 `…-plan-b.md`。
+
+**所有 I/O 都經 `deps` 注入，邏輯是純的。** `electron/local-daemon/index.ts` 的 `createLocalDaemon(deps)` 只認識 `deps.exec / fs / fetch / probePort / kill0 / networkInterfaces / now / sleep`，`node-deps.ts` 才是真的 Node 實作。這讓 132 個 vitest 能用一個 in-memory fs 加一個會寫 pid、開 listener、翻 health 的假 `pdx start/stop` 把整條安裝序列跑完——step 順序、config 位元組與 0600、launch env、exec 順序、安裝到一半 ownership 被外人搶走、settle 預算、lsof 逾時與根本沒跑、與 App 更新在同一把鎖上交錯——而不是斷言 mock 有沒有被呼叫。
+
+**ownership 是 lsof 的事，pid 檔只是候選。** pid 檔現在是永久的（alpha.335），重開機後那個數字可以落到任何程序上，所以 `status()` 從不相信它：`process.kill(pid, 0)` 活著之後還要 `lsof -p <pid> -d txt -F0` 讓 `txt` 的 realpath 等於 `realpath(binPath)` 才算「我方 alive」；再用 `lsof -iTCP:<port> -sTCP:LISTEN` 找出誰在我們的 endpoint 上聽，任何不是 alive.pid 的 listener 都是 `external`。每次 lsof 5 秒、逾時／spawn 失敗／exit code 不是 0 或 1 一律 `external` 而不是「沒有 process」——codex 三路 review 有兩路獨立抓到後兩種原本會被當成空結果放行。lsof 路徑依平台選（macOS `/usr/sbin`、Linux `/usr/bin`）。停機前**再查一次** ownership，幾分鐘前的 status 從不拿來做破壞性決定。
+
+**安裝序列把「還沒停舊 daemon」的失敗和「已經停了」分開。** prepare → download（bearer、6 分鐘、串流到 `pdx.new`、等 stream `close` 後比 `Content-Length` 和 `X-Pdx-Sha256`、只收 200）→ verify（`pdx.new version --json`，goos/goarch/hash 要對得上 header，JSON 不是物件也算不能跑）→ configure（只在沒有 config 時寫，先刪殘留的 `.tmp` 再以 0600 寫、rename；bind 取唯一的 Tailscale `100.64/10` + `utun` 介面，不唯一就 `127.0.0.1` 並帶 `bindNote`）→ stop（只在 alive 時；`pdx stop` 35 秒，然後等到 `kill(pid,0)` 失敗**且** port 明確 `ECONNREFUSED`，最多再 5 秒）→ swap → start（`pdx start` 70 秒，之後 `/api/health` 的 hash 必須等於磁碟 binary 的 hash，不然是「port 被別的東西佔了」）→ register。verify 之前的任何失敗都不動舊 daemon、舊 binary；`pdx.new` 在每條失敗路徑都會被清掉。防守方 review 抓到 `probePort` 原本把 timeout 和任何 socket error 都當成「已拒絕」，Tailscale 介面暫時不通就能提早 swap——現在是 `open | refused | unknown` 三態，`unknown` 繼續等到預算用完然後拒絕。
+
+**`pdx` 從 Finder 啟動時要有 PATH。** Finder 給的 PATH 沒有 Homebrew 的 `tmux`，daemon 會健康但每個 tmux 呼叫都失敗。`launch-env.ts` 用 `$SHELL -ilc` 印一段夾在隨機 sentinel 之間的 `$PATH`（`-ilc` 才拿得到 `.zshrc` 裡的 nvm 與 `~/.local/bin`），失敗退到 `-lc`，再退到 `process.env.PATH` 前綴 Homebrew 路徑；argv 裡沒有 NUL。`status().tools.tmux` 為 null 時 UI 只警告不阻擋。
+
+**一把鎖管所有事。** `status / install / start / restart / ensureRunning` 全走同一條 promise queue，`main.ts` 也把既有的 `applyUpdate`（App 自我更新）整段包進 `localDaemon.withLock`，所以 App 更新和 daemon 操作互斥到結束而不只是開頭。兩個因此浮出的死鎖都在 review 中修掉：`openWrite().close()` 在寫入已經失敗後永遠 pending（stream 的 `error/close` 早就發過、listener 掛太晚，用真實 fs 重現後改成建立時就追蹤狀態），以及 `applyUpdate` 的下載沒有逾時、來源停在 headers 之後就能永久持鎖（加 10 分鐘 `AbortSignal.timeout` 給 fetch 與 pipeline）。`ensureRunning` 在 App ready 時跑一次：managed 且沒 alive 就 `start()`，3 次、間隔 5 秒，永不 reject。
+
+**Electron dev mode 預設開啟（D6）。** 與 Go 側同步，`PDX_DEV_MODE` 只有等於 `'0'` 才關；`main.ts` 啟動時設預設值，所有閘門讀 `!== '0'`。`smol-toml` 放 root `devDependencies` 讓 electron-vite 把它內聯進 `out/main`（dev update 只送 `out/`），驗證方式是 bundle 裡沒有對它的 `import/require`。
+
+**SPA。** `useHostStore.registerLocalHost` 是建在 `addHost/updateHost` 上的冪等 helper：同 ip:port 已存在就回它的 id、只在 token 為空時補；`LocalDaemonSection` 掛在 Settings → Development 的 Daemon 區塊下，Install / Start / Update（磁碟 hash ≠ 最新 hash）**否則** Restart（磁碟 hash ≠ 執行中 hash），external 顯示原因、無破壞性按鈕；web 版 render null。en / zh-TW 各 27 個 `settings.dev.local.*` key。
+
+**流程**：subagent TDD 九個 task 各自 review（一個 Important 是 controller 給 reviewer 的 constraint 寫過頭，裁定 plan 為準）、final whole-branch review 兩個 Important 一波修正、codex R1 一個 P2 加三視角 adversarial（攻擊 P1+2 P2、防守 P1+P2、體質 P2）七項修正加 scoped re-review 乾淨。延後追蹤：#999（`pdx stop` 靠 pid 檔 flock 決定對象、不綁定我們驗證過的 pid——視窗極窄且修法偏離 spec，先記錄）、#1000（spec-drift 清單：`ensureRunning` 重試不重驗 ownership、unhealthy 時 Update vs Restart、reason 字串未 i18n、UI 狀態）、#1001（體質：切 `download.ts`、測試分檔、adapter 測試、命名）。**尚未在 air-2026 實機驗收**（spec §4 七條列在 PR 描述），Electron 需重新打包後由 Air 走 dev update 拉取。
+
 ## [1.0.0-alpha.335] - 2026-09-14
 
 ### Feat: daemon 端跨機安裝基礎——交叉編譯下載端點、建置身分、dev mode 預設開啟（#993）
