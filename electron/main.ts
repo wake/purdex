@@ -9,6 +9,13 @@ import { createTray } from './tray'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 import { pickDeeplinkTarget } from './deeplink'
+import { createLocalDaemon } from './local-daemon/index'
+import { nodeDeps } from './local-daemon/node-deps'
+
+// Dev features (dev update, local daemon management) are on by default —
+// Purdex is single-user. Only an explicit PDX_DEV_MODE=0 turns them off
+// (spec 2026-09-14 D6). Set here so preload and updater see the same value.
+if (process.env.PDX_DEV_MODE === undefined) process.env.PDX_DEV_MODE = '1'
 
 // Register custom protocol before app is ready (Electron requirement).
 // 'app://' replaces 'file://' for bundled SPA, enabling standard CORS behavior.
@@ -20,6 +27,7 @@ protocol.registerSchemesAsPrivileged([{
 const windowManager = new WindowManager()
 const browserViewManager = new BrowserViewManager()
 const miniWindowManager = new MiniWindowManager(browserViewManager)
+const localDaemon = createLocalDaemon(nodeDeps((m) => console.log(m)))
 windowManager.setOnWindowClosed((win) => {
   browserViewManager.cleanupForWindow(win)
   try {
@@ -211,9 +219,8 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // Dev Update — gated by PDX_DEV_MODE === '1', matching the daemon
-  // (internal/module/dev/module.go) and preload (electron/preload.ts).
-  if (process.env.PDX_DEV_MODE === '1') {
+  // Dev Update — on unless PDX_DEV_MODE === '0' (spec D6), matching the daemon's devmode.Enabled() and preload.
+  if (process.env.PDX_DEV_MODE !== '0') {
     ipcMain.handle('dev:app-info', () => getAppInfo())
     ipcMain.handle('dev:check-update', (_event, daemonUrl: string, token?: string) => checkUpdate(daemonUrl, token))
 
@@ -249,17 +256,39 @@ function registerIpcHandlers(): void {
       updateInProgress = true
       const win = BrowserWindow.fromWebContents(event.sender)
       try {
-        return await applyUpdate(daemonUrl, (step) => {
+        // Whole update under the local-daemon lock so it cannot app.exit(0)
+        // in the middle of a daemon stop → swap → start (spec §3.1).
+        return await localDaemon.withLock(() => applyUpdate(daemonUrl, (step) => {
           if (win && !win.isDestroyed()) {
             win.webContents.send('dev:update-progress', step)
           }
-        }, token)
+        }, token))
       } catch (err) {
         updateInProgress = false
         // Error objects lose their message across contextBridge serialization.
         // Re-throw as a plain string so the renderer gets a useful message.
         throw String(err instanceof Error ? err.message : err)
       }
+    })
+
+    // Local daemon (spec 2026-09-14 §3.2)
+    const asString = (err: unknown) => String(err instanceof Error ? err.message : err)
+    ipcMain.handle('dev:local-daemon-status', async () => {
+      try { return await localDaemon.status() } catch (err) { throw asString(err) }
+    })
+    ipcMain.handle('dev:local-daemon-install', async (event, daemonUrl: string, token?: string) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      try {
+        return await localDaemon.install(daemonUrl, token, (step) => {
+          if (win && !win.isDestroyed()) win.webContents.send('dev:local-daemon-progress', step)
+        })
+      } catch (err) { throw asString(err) }
+    })
+    ipcMain.handle('dev:local-daemon-start', async () => {
+      try { return await localDaemon.start() } catch (err) { throw asString(err) }
+    })
+    ipcMain.handle('dev:local-daemon-restart', async () => {
+      try { return await localDaemon.restart() } catch (err) { throw asString(err) }
     })
   }
 }
@@ -321,6 +350,10 @@ if (!gotInstanceLock) {
     })
 
     registerIpcHandlers()
+    // Spec D5: the app is the launcher on machines without booter/launchd.
+    if (process.env.PDX_DEV_MODE !== '0') {
+      void localDaemon.ensureRunning().then((r) => console.log(`[local-daemon] ensureRunning: ${r}`))
+    }
     createTray(windowManager)
 
     const keybindings = getDefaultKeybindings()

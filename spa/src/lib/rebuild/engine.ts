@@ -227,15 +227,22 @@ function syncSessionStore(hostId: string, session: Session, dead: { code: string
 }
 
 /**
- * Step 4. Re-point the pane onto the created session and clear `terminated`.
+ * The pane write: re-point the pane onto `session` and clear `terminated`.
  * The caller has already verified the binding, so this only writes.
  *
  * `rebuild.tmuxInstance` is re-stamped alongside `rebuild.sessionName`: the
  * field documents the generation the record describes, and after a rebuild
  * that is the new one — leaving the dead generation there would make the
  * record describe a session that no longer exists.
+ *
+ * Exported for the revive pass (`revive.ts`), which puts a `tmux-restarted`
+ * pane back onto a live session of the same name and needs the write WITHOUT
+ * the session-store sync below: a revive may land on the pane's own
+ * generation, and there the old code can still be a live session under
+ * another name — the sync would evict it. The revive's evidence is the
+ * reconciled payload, which already replaced the store.
  */
-function defaultRepoint(tabId: string, paneId: string, session: Session): void {
+export function repointPane(tabId: string, paneId: string, session: Session): void {
   const content = readTerminalPane(tabId, paneId)
   if (!content) return
   const tmuxInstance = session.tmux_instance ?? ''
@@ -256,6 +263,16 @@ function defaultRepoint(tabId: string, paneId: string, session: Session): void {
       : undefined,
   }
   useTabStore.getState().setPaneContent(tabId, paneId, next)
+}
+
+/**
+ * Step 4: the pane write, then the session-store sync keyed on the binding
+ * the pane held BEFORE the write — the dead one the sync must evict.
+ */
+function defaultRepoint(tabId: string, paneId: string, session: Session): void {
+  const content = readTerminalPane(tabId, paneId)
+  if (!content) return
+  repointPane(tabId, paneId, session)
   syncSessionStore(content.hostId, session, { code: content.sessionCode, tmuxInstance: content.tmuxInstance })
 }
 

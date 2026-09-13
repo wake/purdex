@@ -21,17 +21,13 @@ func (c *Core) handleTokenAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist token (already validated by TokenAuth middleware)
-	c.CfgMu.RLock()
-	cfgCopy := *c.Cfg
-	c.CfgMu.RUnlock()
-
-	if c.CfgPath != "" {
-		if err := config.WriteFile(c.CfgPath, cfgCopy); err != nil {
-			log.Printf("token auth: write config: %v", err)
-			http.Error(w, "failed to persist config", http.StatusInternalServerError)
-			return
-		}
+	// Persist token (already validated by TokenAuth middleware) via the
+	// single serialised config writer; nothing to mutate, this call just
+	// commits the current config to disk.
+	if err := c.UpdateConfig(func(cfg *config.Config) error { return nil }); err != nil {
+		log.Printf("token auth: write config: %v", err)
+		http.Error(w, "failed to persist config", http.StatusInternalServerError)
+		return
 	}
 
 	c.Pairing.Set(StateNormal)

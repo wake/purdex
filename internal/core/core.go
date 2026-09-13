@@ -114,6 +114,39 @@ func (c *Core) StopModules(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// UpdateConfig is the single serialised writer of the runtime config:
+//  1. CfgMu.Lock(); next := c.Cfg.Clone()
+//  2. err := mutate(&next); if err != nil -> Unlock, return err (nothing changed)
+//  3. if CfgPath != "" { if err := config.WriteFile(CfgPath, next); err != nil -> Unlock, return err (c.Cfg untouched) }
+//  4. *c.Cfg = next // commit: pointer identity preserved for other holders
+//  5. CfgMu.Unlock(); c.NotifyConfigChange() // AFTER unlock: agent callbacks take RLock
+//
+// mutate runs on a deep copy, so editing or deleting a Peers.Hosts element
+// (or any other slice) can never touch the live backing array, and neither
+// a mutate error nor a write error changes runtime state.
+func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
+	c.CfgMu.Lock()
+	next := c.Cfg.Clone()
+
+	if err := mutate(&next); err != nil {
+		c.CfgMu.Unlock()
+		return err
+	}
+
+	if c.CfgPath != "" {
+		if err := config.WriteFile(c.CfgPath, next); err != nil {
+			c.CfgMu.Unlock()
+			return err
+		}
+	}
+
+	*c.Cfg = next
+	c.CfgMu.Unlock()
+
+	c.NotifyConfigChange()
+	return nil
+}
+
 // OnConfigChange registers a callback invoked after config is updated via PUT.
 func (c *Core) OnConfigChange(fn func()) {
 	c.configChangeMu.Lock()

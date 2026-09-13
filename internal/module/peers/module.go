@@ -10,13 +10,57 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
 )
+
+// fetchFunc is the fan-out seam: fetchRemote in production, a fake in tests.
+type fetchFunc func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error)
+
+// remoteFetchTimeout bounds each individual host fetch in a scope=all
+// fan-out, independent of the shared http.Client's own timeout.
+const remoteFetchTimeout = 3 * time.Second
+
+// maxRemoteTextBytes bounds how much of a remote peer's attacker-controlled
+// text (an error message, or a mismatched host_id) is allowed to appear in
+// this host's own error responses and rows, via boundRemoteText.
+const maxRemoteTextBytes = 200
+
+// maxRemoteRowsBytes bounds the JSON-encoded size of one remote host's
+// Peers list in a scope=all fan-out row. Every row is attacker-controlled
+// (any configured peer host), and the aggregate scope=all response has no
+// bound of its own beyond the CLI's overall 16 MiB response cap — without
+// a per-host cap, a single misbehaving or malicious peer returning a huge
+// inventory (e.g. one record with a multi-MB cwd) could push the whole
+// response past that cap and take down every other host's rows with it.
+const maxRemoteRowsBytes = 1 << 20 // 1 MiB
+
+// boundRemoteText truncates s to at most maxRemoteTextBytes bytes, cutting
+// on a rune boundary so the result is always valid UTF-8, and appends "…"
+// when truncation actually removed something. Used to bound remote peer
+// text (an env.Error or a mismatched host_id) before it is embedded in an
+// error message returned to a caller or persisted/logged locally — a
+// misbehaving or malicious peer should not be able to inflate or pollute
+// this host's own responses via an unbounded string.
+func boundRemoteText(s string) string {
+	if len(s) <= maxRemoteTextBytes {
+		return s
+	}
+	cut := maxRemoteTextBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
 
 // Module implements core.Module for GET /api/peers.
 type Module struct {
@@ -27,6 +71,8 @@ type Module struct {
 	liveness    ipeers.Liveness // default ipeers.DefaultLiveness()
 	budget      time.Duration   // default 2 * time.Second
 	now         func() time.Time
+	client      *http.Client // default newRemoteClient(); shared across fan-out fetches
+	fetch       fetchFunc    // default fetchRemote; test seam
 }
 
 // New constructs a peers Module with production defaults. Collaborators
@@ -41,6 +87,8 @@ func New() *Module {
 		liveness:    ipeers.DefaultLiveness(),
 		budget:      2 * time.Second,
 		now:         time.Now,
+		client:      newRemoteClient(),
+		fetch:       fetchRemote,
 	}
 }
 
@@ -79,60 +127,87 @@ func (m *Module) Init(c *core.Core) error {
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/peers", m.handlePeers)
+	mux.HandleFunc("GET /api/peers/hosts", m.handleListHosts)
+	mux.HandleFunc("POST /api/peers/hosts", m.handleAddHost)
+	mux.HandleFunc("PUT /api/peers/hosts/{alias}", m.handlePutHost)
+	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)
 }
 
 func (m *Module) Start(context.Context) error { return nil }
 func (m *Module) Stop(context.Context) error  { return nil }
 
-// response is the GET /api/peers envelope.
-type response struct {
-	HostID  string              `json:"host_id"`
-	OK      bool                `json:"ok"`
-	Error   string              `json:"error,omitempty"`
-	Partial bool                `json:"partial"`
-	Peers   []ipeers.PeerRecord `json:"peers"` // never null: []ipeers.PeerRecord{} when empty
-}
-
-// handlePeers serves GET /api/peers: this host's local inventory only
-// (scope=all, cross-host fan-out, is not yet supported).
+// handlePeers serves GET /api/peers. scope unset/"local" returns this
+// host's local inventory only; scope=all fans out to every configured peer
+// host in parallel (admin principal only — see policy.go's
+// HostRoutePolicy, enforced again here in depth); any other scope is 400.
 func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
-	deadline := m.now().Add(m.budget)
-
 	w.Header().Set("Content-Type", "application/json")
 
-	if r.URL.Query().Get("scope") == "all" {
+	scope := r.URL.Query().Get("scope")
+	switch scope {
+	case "", "local":
+		// fine, snapshot below covers this path too.
+	case "all":
+		principal, ok := middleware.PrincipalFrom(r.Context())
+		if !ok || principal.Kind != middleware.PrincipalAdmin {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+			return
+		}
+	default:
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "scope=all not supported yet"})
+		json.NewEncoder(w).Encode(map[string]string{"error": "unknown scope"})
 		return
 	}
 
+	// One config snapshot up front, used by every path below (local-only or
+	// scope=all), so a concurrent config mutation cannot be observed
+	// mid-request — in particular, so the local HostResult{Alias, HostID}
+	// row can never disagree with the host/host_id embedded in its own
+	// Peers records.
 	m.core.CfgMu.RLock()
 	hostID := m.core.Cfg.HostID
 	alias := m.core.Cfg.PeerAlias()
+	hosts := append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...)
 	m.core.CfgMu.RUnlock()
 
-	writeError := func(errMsg string) {
-		json.NewEncoder(w).Encode(response{
+	if scope != "all" {
+		json.NewEncoder(w).Encode(m.localEnvelope(r.Context(), hostID, alias))
+		return
+	}
+
+	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), hostID, alias, hosts))
+}
+
+// localEnvelope builds this host's own inventory from a caller-supplied
+// hostID/alias: the response body for scope unset/"local", and the local
+// row's peers/ok/partial/error for scope=all. It never touches CfgMu itself
+// — the caller (handlePeers) takes the one config snapshot for the whole
+// request, so the local row's labels and the host/host_id embedded in its
+// own Peers records are always built from the same values.
+func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers.Envelope {
+	deadline := m.now().Add(m.budget)
+
+	writeError := func(errMsg string) ipeers.Envelope {
+		return ipeers.Envelope{
 			HostID:  hostID,
 			OK:      false,
 			Error:   errMsg,
 			Partial: false,
 			Peers:   []ipeers.PeerRecord{},
-		})
+		}
 	}
 
 	instance := m.sessions.TmuxInstance()
 
 	sessions, err := m.sessions.ListSessions()
 	if err != nil {
-		writeError(err.Error())
-		return
+		return writeError(err.Error())
 	}
 
 	entries, _, err := ipeers.ReadRegistry(m.registryDir, m.liveness)
 	if err != nil {
-		writeError(err.Error())
-		return
+		return writeError(err.Error())
 	}
 
 	summaries := make([]ipeers.SessionSummary, 0, len(sessions))
@@ -152,7 +227,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		owner, ok, err := m.owners.ResolveSessionOwner(r.Context(), s.Code)
+		owner, ok, err := m.owners.ResolveSessionOwner(ctx, s.Code)
 		if err != nil {
 			// The lookup itself failed (tmux read error, resolver timeout,
 			// cancelled context) — this is not "no agent". Reporting it as
@@ -181,8 +256,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	// answer. Either sample being "" (unknown) means the check cannot fire,
 	// and the response proceeds as if nothing had changed.
 	if after := m.sessions.TmuxInstance(); instance != "" && after != "" && after != instance {
-		writeError("tmux server restarted during inventory")
-		return
+		return writeError("tmux server restarted during inventory")
 	}
 
 	partial := len(unresolved) > 0
@@ -197,10 +271,174 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 		ProxyPIDs:  map[int]bool{},
 	})
 
-	json.NewEncoder(w).Encode(response{
+	return ipeers.Envelope{
 		HostID:  hostID,
 		OK:      true,
 		Partial: partial,
 		Peers:   peerRecords,
-	})
+	}
+}
+
+// allEnvelope builds a scope=all response: the local row first (from
+// localEnvelope, labeled with the snapshot's alias/host_id), then every
+// configured host in order, fetched in parallel — each write lands by index
+// into a pre-sized slice so the result order matches config order
+// regardless of which goroutine finishes first.
+func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []config.PeerHost) ipeers.AllEnvelope {
+	results := make([]ipeers.HostResult, len(hosts)+1)
+
+	// Start every remote fetch first so it overlaps with the (potentially
+	// slow, owner-resolution-bound) local inventory build below, rather
+	// than paying for the two sequentially.
+	var wg sync.WaitGroup
+	for i, h := range hosts {
+		i, h := i, h
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i+1] = m.fetchHostResult(ctx, h)
+		}()
+	}
+
+	local := m.localEnvelope(ctx, hostID, alias)
+	results[0] = ipeers.HostResult{
+		Alias:   alias,
+		HostID:  hostID,
+		OK:      local.OK,
+		Error:   local.Error,
+		Partial: local.Partial,
+		Peers:   local.Peers,
+	}
+
+	wg.Wait()
+
+	return ipeers.AllEnvelope{Hosts: results}
+}
+
+// normalizeRemoteRows rewrites every row of a remote host's fan-out
+// response into this host's local view: Host becomes alias (how WE have
+// the peer configured, never the remote's own self-reported value), and
+// HostID becomes hostID (the caller's already-verified/bounded value for
+// this host). Address is rebuilt as "<alias>/<session>", where <session>
+// is everything after the remote's own first "/" (a "cc:" address's colon
+// survives intact); a remote address with no "/" at all (malformed) keeps
+// the whole original address as the session part instead. If the rebuilt
+// address still doesn't parse as a valid "<host>/<session>" pair
+// (ipeers.SplitAddress) — e.g. an empty session part, or a session part
+// that itself contains another "/" — Address is blanked rather than left
+// as an unusable value; Host and HostID stay set. Exported at the package
+// level (not a method) so P3 can reuse it as-is.
+func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeers.PeerRecord {
+	out := make([]ipeers.PeerRecord, len(rows))
+	for i, rec := range rows {
+		rec.Host = alias
+		rec.HostID = hostID
+
+		session := rec.Address
+		if idx := strings.IndexByte(rec.Address, '/'); idx >= 0 {
+			session = rec.Address[idx+1:]
+		}
+		rec.Address = alias + "/" + session
+
+		if _, _, ok := ipeers.SplitAddress(rec.Address); !ok {
+			rec.Address = ""
+		}
+
+		out[i] = rec
+	}
+	return out
+}
+
+// fetchHostResult fetches one configured peer host's inventory for a
+// scope=all fan-out, translating every failure mode (no outbound token,
+// transport/decode error, host_id mismatch) into a failed HostResult rather
+// than propagating an error.
+func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.HostResult {
+	if h.Token == "" {
+		return ipeers.HostResult{
+			Alias:  h.Alias,
+			HostID: h.HostID,
+			OK:     false,
+			Error:  "no outbound token",
+			Peers:  []ipeers.PeerRecord{},
+		}
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
+	defer cancel()
+
+	env, err := m.fetch(fetchCtx, m.client, h.URL, h.Token)
+	if err != nil {
+		return ipeers.HostResult{
+			Alias:  h.Alias,
+			HostID: h.HostID,
+			OK:     false,
+			Error:  err.Error(),
+			Peers:  []ipeers.PeerRecord{},
+		}
+	}
+
+	if h.HostID != "" && env.HostID != h.HostID {
+		return ipeers.HostResult{
+			Alias:  h.Alias,
+			HostID: h.HostID,
+			OK:     false,
+			Error:  fmt.Sprintf("host_id mismatch: got %s", boundRemoteText(env.HostID)),
+			Peers:  []ipeers.PeerRecord{},
+		}
+	}
+
+	// h.HostID is our own configured (trusted) value; env.HostID, used only
+	// as a fallback for an unpaired host, is the remote's own report and
+	// just as attacker-controlled as its Error text — so it is trusted
+	// only when it passes the same validHostID check POST/PUT require
+	// before ever persisting a host_id, exactly as verifyHost does.
+	resultHostID := h.HostID
+	if resultHostID == "" {
+		if !validHostID(env.HostID) {
+			return ipeers.HostResult{
+				Alias:  h.Alias,
+				HostID: h.HostID,
+				OK:     false,
+				Error:  "peer returned an invalid host_id",
+				Peers:  []ipeers.PeerRecord{},
+			}
+		}
+		resultHostID = env.HostID
+	}
+
+	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID)
+
+	// A single misbehaving/malicious peer host must not be able to inflate
+	// the whole scope=all aggregate past the CLI's own 16 MiB response
+	// cap. Re-encode just this host's rows and, if they alone already
+	// exceed maxRemoteRowsBytes, drop them and report a bounded failure
+	// row instead — every OTHER host's row (and the local one) stays
+	// intact regardless of what this one host returned.
+	if encoded, err := json.Marshal(peers); err == nil && len(encoded) > maxRemoteRowsBytes {
+		return ipeers.HostResult{
+			Alias:  h.Alias,
+			HostID: resultHostID,
+			OK:     false,
+			Error:  fmt.Sprintf("peer inventory too large (%d bytes)", len(encoded)),
+			Peers:  []ipeers.PeerRecord{},
+		}
+	}
+
+	// env.Error is the remote peer's own reported error text — bound and
+	// prefix it the same way verifyHost does for the add/put 502 body, so
+	// an attacker-controlled remote cannot inflate or pollute this row.
+	rowErr := env.Error
+	if rowErr != "" {
+		rowErr = "peer: " + boundRemoteText(rowErr)
+	}
+
+	return ipeers.HostResult{
+		Alias:   h.Alias,
+		HostID:  resultHostID,
+		OK:      env.OK,
+		Error:   rowErr,
+		Partial: env.Partial,
+		Peers:   peers,
+	}
 }

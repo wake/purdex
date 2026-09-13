@@ -36,6 +36,23 @@ func newTestCore() *Core {
 	return c
 }
 
+// TestGetConfigRendersExplicitEmptyCCCommandsAsEmptyArray pins Item 1 at
+// the GET /api/config boundary: a config with an explicit empty
+// detect.cc_commands must render as JSON "[]", not "null" — Redacted goes
+// through Clone, and a Clone that collapses a non-nil empty slice to nil
+// would flip the wire shape from an explicit empty list to "not set".
+func TestGetConfigRendersExplicitEmptyCCCommandsAsEmptyArray(t *testing.T) {
+	c := newTestCore()
+	c.Cfg.Detect.CCCommands = []string{}
+
+	req := httptest.NewRequest("GET", "/api/config", nil)
+	rec := httptest.NewRecorder()
+	c.handleGetConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"cc_commands":[]`, "body = %s", rec.Body.String())
+}
+
 func TestGetConfigReturnsRedactedToken(t *testing.T) {
 	c := newTestCore()
 
@@ -58,6 +75,63 @@ func TestGetConfigReturnsRedactedToken(t *testing.T) {
 	assert.Equal(t, "127.0.0.1", got.Bind)
 	assert.Equal(t, 7860, got.Port)
 	assert.Equal(t, "auto", got.Terminal.SizingMode)
+}
+
+func TestGetConfigRedactsPeerHostSecrets(t *testing.T) {
+	c := newTestCore()
+	c.Cfg.Peers = config.PeersConfig{
+		Alias: "local",
+		Hosts: []config.PeerHost{
+			{Alias: "peer-a", URL: "https://a.example", HostID: "a:111", Token: "outbound-a", InboundToken: "inbound-a", AllowBypass: true},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/config", nil)
+	rec := httptest.NewRecorder()
+	c.handleGetConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var got config.Config
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+
+	require.Len(t, got.Peers.Hosts, 1)
+	h := got.Peers.Hosts[0]
+	assert.Empty(t, h.Token, "peer token should be redacted in GET response")
+	assert.Empty(t, h.InboundToken, "peer inbound_token should be redacted in GET response")
+	assert.Equal(t, "peer-a", h.Alias)
+	assert.Equal(t, "https://a.example", h.URL)
+	assert.Equal(t, "a:111", h.HostID)
+	assert.True(t, h.AllowBypass)
+}
+
+func TestPutConfigRedactsPeerHostSecretsInResponse(t *testing.T) {
+	c := newTestCore()
+	c.Cfg.Peers = config.PeersConfig{
+		Alias: "local",
+		Hosts: []config.PeerHost{
+			{Alias: "peer-a", URL: "https://a.example", HostID: "a:111", Token: "outbound-a", InboundToken: "inbound-a", AllowBypass: true},
+		},
+	}
+
+	body := `{"terminal":{"sizing_mode":"terminal-first"}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var got config.Config
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+
+	require.Len(t, got.Peers.Hosts, 1)
+	h := got.Peers.Hosts[0]
+	assert.Empty(t, h.Token, "peer token should be redacted in PUT response")
+	assert.Empty(t, h.InboundToken, "peer inbound_token should be redacted in PUT response")
+	assert.Equal(t, "peer-a", h.Alias)
+	assert.Equal(t, "https://a.example", h.URL)
+	assert.Equal(t, "a:111", h.HostID)
+	assert.True(t, h.AllowBypass)
 }
 
 func TestPutConfigUpdatesStreamAndPersists(t *testing.T) {

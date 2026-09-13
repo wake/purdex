@@ -72,9 +72,24 @@ type fakeOwners struct {
 	owners map[string]agent.PaneOwner
 	errs   map[string]error
 	calls  []string
+	// delay, when non-zero, is slept at the start of every
+	// ResolveSessionOwner call — for Item 4's overlap test, simulating a
+	// slow local resolver alongside a slow remote fetch.
+	delay time.Duration
+	// onResolveStart, when set, is invoked at the very start of every
+	// ResolveSessionOwner call, before the delay sleep — so a test can
+	// record exactly when the (possibly slow) local resolution began,
+	// to assert ordering against a concurrent remote fetch's own start.
+	onResolveStart func()
 }
 
 func (f *fakeOwners) ResolveSessionOwner(ctx context.Context, code string) (agent.PaneOwner, bool, error) {
+	if f.onResolveStart != nil {
+		f.onResolveStart()
+	}
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	f.calls = append(f.calls, code)
 	if err, ok := f.errs[code]; ok {
 		return agent.PaneOwner{}, false, err

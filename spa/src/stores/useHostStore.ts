@@ -51,6 +51,7 @@ interface HostState {
 
   addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
   updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
+  registerLocalHost: (result: { url: string; token: string; hostname: string }) => string
   removeHost: (hostId: string) => void
   reorderHosts: (orderedIds: string[]) => void
   setActiveHost: (hostId: string) => void
@@ -107,6 +108,22 @@ export const useHostStore = create<HostState>()(
             hosts: { ...state.hosts, [hostId]: { ...host, ...updates } },
           }
         }),
+
+      // Idempotent registration used by the local-daemon installer
+      // (spec 2026-09-14 §3.4): one host per endpoint, and a token is only
+      // filled in when the existing one is empty — never overwritten.
+      registerLocalHost: ({ url, token, hostname }) => {
+        const u = new URL(url)
+        const ip = u.hostname
+        // URL drops a default port (":80" / ":443") — restore it by scheme.
+        const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80)
+        const existing = Object.values(get().hosts).find((h) => h.ip === ip && h.port === port)
+        if (existing) {
+          if (!existing.token) get().updateHost(existing.id, { token })
+          return existing.id
+        }
+        return get().addHost({ name: hostname, ip, port, token })
+      },
 
       removeHost: (hostId) =>
         set((state) => {
