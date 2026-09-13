@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/wake/purdex/internal/peers"
 )
 
 // RegistryEntry is what a virtual peer publishes about itself in Claude
@@ -34,10 +35,6 @@ type RegistryEntry struct {
 // DefaultPeerFeatures is the list observed on 2.1.270 (spec §3.1 / spike),
 // used only when no live Claude Code entry is available to copy from.
 var DefaultPeerFeatures = []string{"notify_idle", "reply_across_default_dirs", "artifact_yield"}
-
-// maxRegistryFileBytes caps every registry read in this package, mirroring
-// peers.ReadRegistry; real entries are well under 1 KiB.
-const maxRegistryFileBytes = 64 * 1024
 
 // registryJSON is the on-disk <pid>.json layout of a 2.1.270 entry, in the
 // order the harness writes it (minus tmux, which a virtual peer lacks).
@@ -82,8 +79,10 @@ func RegistryFiles(dir string, pid int, peerToken string) (jsonPath, keyPath str
 // O_CREATE|O_EXCL|O_WRONLY|O_NOFOLLOW (json 0644, key 0600), mirroring a
 // real Claude Code entry. A nil PeerFeatures becomes DefaultPeerFeatures
 // and an empty PidDomain becomes runtime.GOOS. If the key cannot be
-// written the json is removed again. created lists the paths that exist
-// on return, in the order [json, key].
+// written the json is removed again; should that rollback itself fail, the
+// returned error joins both and created names the json that is still on
+// disk. Otherwise created lists the paths that exist on return, in the
+// order [json, key].
 func WriteRegistry(dir string, e RegistryEntry, peerToken string) (created []string, err error) {
 	now := time.Now().UnixMilli()
 	features := e.PeerFeatures
@@ -121,7 +120,9 @@ func WriteRegistry(dir string, e RegistryEntry, peerToken string) (created []str
 		return nil, err
 	}
 	if err := writeExclusive(keyPath, key, 0o600); err != nil {
-		os.Remove(jsonPath)
+		if rmErr := os.Remove(jsonPath); rmErr != nil {
+			return []string{jsonPath}, errors.Join(err, rmErr)
+		}
 		return nil, err
 	}
 	return []string{jsonPath, keyPath}, nil
@@ -174,11 +175,12 @@ func RemoveRegistry(paths []string) error {
 	return first
 }
 
-// ReadPeerFeatures returns the peerFeatures list of <dir>/<pid>.json. ok
-// is false when the file is missing, not a regular file, over the size
-// cap, unparsable, or has no (or a null) peerFeatures field.
+// ReadPeerFeatures returns the peerFeatures list of <dir>/<pid>.json, read
+// under peers.ReadRegistryCandidate's contract (O_NOFOLLOW, regular file,
+// 64 KiB cap). ok is false when the file cannot be read that way, is
+// unparsable, or has no (or a null) peerFeatures field.
 func ReadPeerFeatures(dir string, pid int) (features []string, ok bool) {
-	data, ok := readCapped(filepath.Join(dir, strconv.Itoa(pid)+".json"))
+	data, ok := peers.ReadRegistryCandidate(filepath.Join(dir, strconv.Itoa(pid)+".json"))
 	if !ok {
 		return nil, false
 	}
@@ -196,7 +198,7 @@ func ReadPeerFeatures(dir string, pid int) (features []string, ok bool) {
 // level), or "" when the file cannot be read or parsed. The daemon's sweep
 // uses it to prove a file belongs to the process it is about to unlink.
 func RegistryProcStart(path string) string {
-	data, ok := readCapped(path)
+	data, ok := peers.ReadRegistryCandidate(path)
 	if !ok {
 		return ""
 	}
@@ -207,25 +209,4 @@ func RegistryProcStart(path string) string {
 		return ""
 	}
 	return wire.ProcStart
-}
-
-// readCapped reads a registry file defensively: never through a symlink
-// (O_NOFOLLOW), never from a non-regular file (a FIFO would block —
-// O_NONBLOCK plus the fstat check reject it first), and never more than
-// maxRegistryFileBytes regardless of what the file claims.
-func readCapped(path string) ([]byte, bool) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, false
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxRegistryFileBytes {
-		return nil, false
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxRegistryFileBytes+1))
-	if err != nil || len(data) > maxRegistryFileBytes {
-		return nil, false
-	}
-	return data, true
 }

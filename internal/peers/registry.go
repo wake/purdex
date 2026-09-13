@@ -147,7 +147,7 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 			continue
 		}
 
-		data, ok := readRegistryCandidate(filepath.Join(dir, name))
+		data, ok := ReadRegistryCandidate(filepath.Join(dir, name))
 		if !ok {
 			skipped++
 			continue
@@ -196,7 +196,8 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 	return entries, skipped, nil
 }
 
-// readRegistryCandidate reads one "<pid>.json" candidate defensively: it
+// ReadRegistryCandidate reads one registry file (a "<pid>.json" or key
+// file) defensively — the shared contract for every registry read: it
 // never follows a symlink (O_NOFOLLOW — a candidate that IS a symlink is
 // rejected outright, not resolved), never blocks on a non-regular file (a
 // FIFO, in particular, blocks forever on a plain read with no writer — the
@@ -205,7 +206,7 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 // claims its size is (the read-side cap, not just the fstat size, is what
 // actually bounds memory use against a TOCTOU race or a growing file). ok is
 // false for any of these cases; the caller counts it as skipped.
-func readRegistryCandidate(path string) (data []byte, ok bool) {
+func ReadRegistryCandidate(path string) (data []byte, ok bool) {
 	// O_NONBLOCK matters only for a FIFO: without it, opening one for
 	// reading blocks until a writer opens the other end — before the fstat
 	// check below ever runs. With it, the open returns immediately (POSIX

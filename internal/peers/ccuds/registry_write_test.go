@@ -104,8 +104,10 @@ func TestWriteRegistry_MirrorsRealFieldSetAndKeyMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jsonInfo.Mode().Perm() != 0o644 {
-		t.Errorf("json mode = %o, want 644", jsonInfo.Mode().Perm())
+	// Owner read/write and no group/other write; the exact bits beyond that
+	// depend on the process umask.
+	if m := jsonInfo.Mode().Perm(); m&0o600 != 0o600 || m&0o022 != 0 {
+		t.Errorf("json mode = %o, want owner rw and no group/other write", m)
 	}
 
 	// Key file: 0600, exactly {peerToken, procStart, pidDomain}.
@@ -203,6 +205,37 @@ func TestWriteRegistry_RollsBackJSONWhenKeyOccupied(t *testing.T) {
 	raw, _ := os.ReadFile(keyPath)
 	if string(raw) != `{"peerToken":"other"}` {
 		t.Fatalf("foreign key was touched: %s", raw)
+	}
+}
+
+// TestWriteRegistry_RollbackFailureJoinsErrors: the key write fails (path
+// occupied) and the json rollback fails too (directory made append-only,
+// so files can be created but not unlinked). Both errors must surface and
+// created must name the json that is still on disk.
+func TestWriteRegistry_RollbackFailureJoinsErrors(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the append-only restriction; rollback cannot be made to fail")
+	}
+	dir := t.TempDir()
+	e := sampleEntry(dir)
+	jsonPath, keyPath := RegistryFiles(dir, e.PID, testToken)
+	if err := os.WriteFile(keyPath, []byte(`{"peerToken":"other"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	forbidUnlink(t, dir) // skips on platforms where a non-root user cannot do this
+
+	created, err := WriteRegistry(dir, e, testToken)
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("err = %v, want to wrap ErrExist from the key write", err)
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("err = %v, want to also wrap the rollback's ErrPermission", err)
+	}
+	if !reflect.DeepEqual(created, []string{jsonPath}) {
+		t.Fatalf("created = %v, want [%s] (the json the rollback could not remove)", created, jsonPath)
+	}
+	if _, statErr := os.Lstat(jsonPath); statErr != nil {
+		t.Fatalf("json should still be on disk: %v", statErr)
 	}
 }
 
