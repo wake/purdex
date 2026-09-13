@@ -1050,6 +1050,15 @@ func TestCapability_InboundTokenHolder(t *testing.T) {
 	if rr := doRequestBearer(t, chain, http.MethodGet, "/api/peers/hosts", "inbound-secret"); rr.Code != http.StatusForbidden {
 		t.Errorf("GET /api/peers/hosts = %d, want 403", rr.Code)
 	}
+	if rr := doRequestBearer(t, chain, http.MethodPost, "/api/peers/hosts", "inbound-secret"); rr.Code != http.StatusForbidden {
+		t.Errorf("POST /api/peers/hosts = %d, want 403", rr.Code)
+	}
+	if rr := doRequestBearer(t, chain, http.MethodPut, "/api/peers/hosts/x", "inbound-secret"); rr.Code != http.StatusForbidden {
+		t.Errorf("PUT /api/peers/hosts/x = %d, want 403", rr.Code)
+	}
+	if rr := doRequestBearer(t, chain, http.MethodDelete, "/api/peers/hosts/x", "inbound-secret"); rr.Code != http.StatusForbidden {
+		t.Errorf("DELETE /api/peers/hosts/x = %d, want 403", rr.Code)
+	}
 	if rr := doRequestBearer(t, chain, http.MethodGet, "/api/config", "inbound-secret"); rr.Code != http.StatusUnauthorized {
 		t.Errorf("GET /api/config = %d, want 401", rr.Code)
 	}
