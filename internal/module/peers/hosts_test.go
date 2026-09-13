@@ -701,6 +701,58 @@ func TestHandlePutHost_AllowBypassOnly(t *testing.T) {
 	}
 }
 
+// TestHandlePutHost_ResponseReflectsCommittedValue pins Item 6: the PUT
+// response must be built from the entry as THIS request's own commit left
+// it, not from a later re-read of the live config. A config-change
+// callback fires synchronously inside UpdateConfig (after commit, before
+// UpdateConfig returns to the handler) and races a second, unrelated
+// update in that flips allow_bypass back to false — proving the response
+// still reports true, the value this PUT itself set.
+func TestHandlePutHost_ResponseReflectsCommittedValue(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
+	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(c, failIfCalledFetch(t))
+
+	// A plain bool guard, not sync.Once: NotifyConfigChange re-invokes this
+	// same callback for the nested UpdateConfig call below (same
+	// goroutine), and sync.Once.Do is not reentrant — it would deadlock on
+	// its own internal mutex.
+	var fired bool
+	c.OnConfigChange(func() {
+		if fired {
+			return
+		}
+		fired = true
+		if err := c.UpdateConfig(func(cfg *config.Config) error {
+			i := cfg.Peers.FindPeerHostByAlias("air")
+			if i == -1 {
+				return nil
+			}
+			cfg.Peers.Hosts[i].AllowBypass = false
+			return nil
+		}); err != nil {
+			t.Errorf("concurrent update: %v", err)
+		}
+	})
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
+		"allow_bypass": true,
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		AllowBypass bool `json:"allow_bypass"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !got.AllowBypass {
+		t.Errorf("response allow_bypass = %v, want true (the value THIS request committed, not a value a concurrent update wrote afterwards)", got.AllowBypass)
+	}
+}
+
 func TestHandlePutHost_UnknownAlias_404(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", nil)
 	m := newHostsTestModule(c, failIfCalledFetch(t))

@@ -359,6 +359,7 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		learnedHostID = env.HostID
 	}
 
+	var row hostRow
 	err := m.core.UpdateConfig(func(cfg *config.Config) error {
 		i := cfg.Peers.FindPeerHostByAlias(alias)
 		if i == -1 {
@@ -381,6 +382,11 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		if req.AllowBypass != nil {
 			h.AllowBypass = *req.AllowBypass
 		}
+		// Captured here, inside the mutate closure, so the response
+		// always reflects exactly what THIS request committed — never a
+		// value a concurrent request wrote in between commit and a
+		// separate post-commit read.
+		row = toHostRow(*h)
 		return nil
 	})
 	if err != nil {
@@ -388,13 +394,6 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m.core.CfgMu.RLock()
-	i := m.core.Cfg.Peers.FindPeerHostByAlias(alias)
-	var row hostRow
-	if i != -1 {
-		row = toHostRow(m.core.Cfg.Peers.Hosts[i])
-	}
-	m.core.CfgMu.RUnlock()
 	_ = json.NewEncoder(w).Encode(row)
 }
 
