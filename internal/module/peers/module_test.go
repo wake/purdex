@@ -1,6 +1,7 @@
 package peers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -48,9 +50,16 @@ func allLiveLiveness(startTime time.Time) ipeers.Liveness {
 // the peers handler reads (HostID, Peers.Alias) under CfgMu.
 func newTestCore(t *testing.T, hostID, alias string) *core.Core {
 	t.Helper()
+	return newTestCoreWithHosts(t, hostID, alias, nil)
+}
+
+// newTestCoreWithHosts is newTestCore plus configured peer hosts, for
+// scope=all fan-out tests.
+func newTestCoreWithHosts(t *testing.T, hostID, alias string, hosts []config.PeerHost) *core.Core {
+	t.Helper()
 	cfg := &config.Config{
 		HostID: hostID,
-		Peers:  config.PeersConfig{Alias: alias},
+		Peers:  config.PeersConfig{Alias: alias, Hosts: hosts},
 	}
 	return core.New(core.CoreDeps{
 		Config:   cfg,
@@ -59,7 +68,9 @@ func newTestCore(t *testing.T, hostID, alias string) *core.Core {
 }
 
 // newTestModule builds a *Module with the given collaborators wired
-// directly (bypassing Init), for handler-level tests.
+// directly (bypassing Init), for handler-level tests. client/fetch default
+// to production values (newRemoteClient/fetchRemote); use
+// newTestModuleWithFetch to inject a fake fetch for scope=all tests.
 func newTestModule(c *core.Core, sessions session.SessionProvider, owners agent.OwnerResolver, registryDir string, liveness ipeers.Liveness, clock *fakeClock, budget time.Duration) *Module {
 	return &Module{
 		core:        c,
@@ -69,14 +80,24 @@ func newTestModule(c *core.Core, sessions session.SessionProvider, owners agent.
 		liveness:    liveness,
 		budget:      budget,
 		now:         clock.Now,
+		client:      newRemoteClient(),
+		fetch:       fetchRemote,
 	}
 }
 
 func doGetPeers(t *testing.T, m *Module, target string) *httptest.ResponseRecorder {
 	t.Helper()
+	return doGetPeersWithContext(t, m, target, context.Background())
+}
+
+// doGetPeersWithContext is doGetPeers but lets the caller supply the request
+// context, so scope=all tests can inject a principal via
+// middleware.WithPrincipal.
+func doGetPeersWithContext(t *testing.T, m *Module, target string, ctx context.Context) *httptest.ResponseRecorder {
+	t.Helper()
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
-	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req := httptest.NewRequest(http.MethodGet, target, nil).WithContext(ctx)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	return rr
@@ -488,7 +509,10 @@ func TestHandlePeers_RegistryDirIsRegularFile(t *testing.T) {
 	}
 }
 
-func TestHandlePeers_ScopeAllRejected(t *testing.T) {
+// TestHandlePeers_ScopeAllUnknownPrincipal_Forbidden pins the "no principal
+// at all" case (e.g. PeerAuth not mounted, or a bug upstream): scope=all
+// must still refuse rather than silently defaulting to a wide-open fan-out.
+func TestHandlePeers_ScopeAllUnknownPrincipal_Forbidden(t *testing.T) {
 	dir := t.TempDir()
 	sessions := &fakeSessions{sessions: nil}
 	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
@@ -497,11 +521,227 @@ func TestHandlePeers_ScopeAllRejected(t *testing.T) {
 	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers?scope=all")
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestHandlePeers_ScopeAllHostPrincipal_Forbidden pins the defence-in-depth
+// 403 for a host principal: HostRoutePolicy already refuses scope=all
+// upstream in PeerAuth, but the handler must not trust that alone.
+func TestHandlePeers_ScopeAllHostPrincipal_Forbidden(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{
+		Kind: middleware.PrincipalHost, Alias: "peer-a", HostID: "peer-a:1",
+	})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestHandlePeers_ScopeAll_UnknownScope_BadRequest pins the "any other
+// scope" 400, unrelated to admin/host distinctions.
+func TestHandlePeers_ScopeAll_UnknownScopeRejected(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=bogus", ctx)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "scope=all not supported yet") {
-		t.Errorf("body = %s, want message about scope=all", rr.Body.String())
+}
+
+// TestHandlePeers_ScopeAll_FanOut is the main fan-out case: an admin
+// principal, two configured hosts (one healthy, one closed/unreachable),
+// exercised against a real *http.Client (client/fetch left at their
+// production defaults from newTestModule) via httptest servers. It pins
+// three rows in config order — local, then host-a (healthy), then host-b
+// (closed) — with local's peers coming from the usual fake session/owner
+// wiring.
+func TestHandlePeers_ScopeAll_FanOut(t *testing.T) {
+	dir := t.TempDir()
+
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer tok-a" {
+			t.Errorf("host-a request Authorization = %q, want Bearer tok-a", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID:  "host-a:111",
+			OK:      true,
+			Partial: false,
+			Peers: []ipeers.PeerRecord{
+				{SessionCode: "remote-1"},
+			},
+		})
+	}))
+	defer healthy.Close()
+
+	closedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := closedSrv.URL
+	closedSrv.Close() // connection refused for any request against closedURL
+
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "local-1", Name: "local-1"},
+	}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "host-a", URL: healthy.URL, Token: "tok-a", HostID: "host-a:111"},
+		{Alias: "host-b", URL: closedURL, Token: "tok-b", HostID: "host-b:222"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 3 {
+		t.Fatalf("hosts = %+v, want 3 rows", got.Hosts)
+	}
+
+	local := got.Hosts[0]
+	if local.Alias != "mlab" || local.HostID != "mlab:abc123" {
+		t.Errorf("local row = %+v, want alias=mlab host_id=mlab:abc123", local)
+	}
+	if !local.OK || len(local.Peers) != 1 || local.Peers[0].SessionCode != "local-1" {
+		t.Errorf("local row = %+v, want ok=true with local-1", local)
+	}
+
+	hostA := got.Hosts[1]
+	if hostA.Alias != "host-a" || hostA.HostID != "host-a:111" {
+		t.Errorf("host-a row = %+v, want alias=host-a host_id=host-a:111", hostA)
+	}
+	if !hostA.OK {
+		t.Errorf("host-a row = %+v, want ok=true", hostA)
+	}
+	if len(hostA.Peers) != 1 || hostA.Peers[0].SessionCode != "remote-1" {
+		t.Errorf("host-a peers = %+v, want [remote-1]", hostA.Peers)
+	}
+
+	hostB := got.Hosts[2]
+	if hostB.Alias != "host-b" || hostB.HostID != "host-b:222" {
+		t.Errorf("host-b row = %+v, want alias=host-b host_id=host-b:222", hostB)
+	}
+	if hostB.OK {
+		t.Errorf("host-b row = %+v, want ok=false (closed server)", hostB)
+	}
+	if hostB.Error == "" {
+		t.Errorf("host-b row error = %q, want non-empty", hostB.Error)
+	}
+	if hostB.Peers == nil || len(hostB.Peers) != 0 {
+		t.Errorf("host-b peers = %+v, want empty non-nil slice", hostB.Peers)
+	}
+}
+
+// TestHandlePeers_ScopeAll_HostIDMismatch pins the host_id verification: a
+// remote whose reported host_id differs from the configured (non-empty)
+// HostID is reported as a failed row, not silently trusted.
+func TestHandlePeers_ScopeAll_HostIDMismatch(t *testing.T) {
+	dir := t.TempDir()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID:  "actually-different:999",
+			OK:      true,
+			Partial: false,
+			Peers:   []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "expected:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	row := got.Hosts[1]
+	if row.OK {
+		t.Errorf("row = %+v, want ok=false", row)
+	}
+	wantErr := "host_id mismatch: got actually-different:999"
+	if row.Error != wantErr {
+		t.Errorf("row.Error = %q, want %q", row.Error, wantErr)
+	}
+	if row.HostID != "expected:111" {
+		t.Errorf("row.HostID = %q, want configured value %q", row.HostID, "expected:111")
+	}
+}
+
+// TestHandlePeers_ScopeAll_NoOutboundToken pins the no-token row: a
+// configured host without an outbound Token is listed as a failed row
+// without ever being dialed.
+func TestHandlePeers_ScopeAll_NoOutboundToken(t *testing.T) {
+	dir := t.TempDir()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "host-a", URL: "http://127.0.0.1:1", Token: "", HostID: "host-a:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	row := got.Hosts[1]
+	if row.OK {
+		t.Errorf("row = %+v, want ok=false", row)
+	}
+	if row.Error != "no outbound token" {
+		t.Errorf("row.Error = %q, want %q", row.Error, "no outbound token")
 	}
 }
 

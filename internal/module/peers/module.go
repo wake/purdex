@@ -10,13 +10,23 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
 )
+
+// fetchFunc is the fan-out seam: fetchRemote in production, a fake in tests.
+type fetchFunc func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error)
+
+// remoteFetchTimeout bounds each individual host fetch in a scope=all
+// fan-out, independent of the shared http.Client's own timeout.
+const remoteFetchTimeout = 3 * time.Second
 
 // Module implements core.Module for GET /api/peers.
 type Module struct {
@@ -27,6 +37,8 @@ type Module struct {
 	liveness    ipeers.Liveness // default ipeers.DefaultLiveness()
 	budget      time.Duration   // default 2 * time.Second
 	now         func() time.Time
+	client      *http.Client // default newRemoteClient(); shared across fan-out fetches
+	fetch       fetchFunc    // default fetchRemote; test seam
 }
 
 // New constructs a peers Module with production defaults. Collaborators
@@ -41,6 +53,8 @@ func New() *Module {
 		liveness:    ipeers.DefaultLiveness(),
 		budget:      2 * time.Second,
 		now:         time.Now,
+		client:      newRemoteClient(),
+		fetch:       fetchRemote,
 	}
 }
 
@@ -84,46 +98,74 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 func (m *Module) Start(context.Context) error { return nil }
 func (m *Module) Stop(context.Context) error  { return nil }
 
-// handlePeers serves GET /api/peers: this host's local inventory only
-// (scope=all, cross-host fan-out, is not yet supported).
+// handlePeers serves GET /api/peers. scope unset/"local" returns this
+// host's local inventory only; scope=all fans out to every configured peer
+// host in parallel (admin principal only — see policy.go's
+// HostRoutePolicy, enforced again here in depth); any other scope is 400.
 func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
-	deadline := m.now().Add(m.budget)
-
 	w.Header().Set("Content-Type", "application/json")
 
-	if r.URL.Query().Get("scope") == "all" {
+	scope := r.URL.Query().Get("scope")
+	switch scope {
+	case "", "local":
+		json.NewEncoder(w).Encode(m.localEnvelope(r.Context()))
+		return
+	case "all":
+		principal, ok := middleware.PrincipalFrom(r.Context())
+		if !ok || principal.Kind != middleware.PrincipalAdmin {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+			return
+		}
+	default:
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "scope=all not supported yet"})
+		json.NewEncoder(w).Encode(map[string]string{"error": "unknown scope"})
 		return
 	}
+
+	// scope=all: one config snapshot up front so a concurrent hosts mutation
+	// cannot be observed mid-request — every host fetched below, and the
+	// local row's alias/host_id, come from this snapshot alone.
+	m.core.CfgMu.RLock()
+	hostID := m.core.Cfg.HostID
+	alias := m.core.Cfg.PeerAlias()
+	hosts := append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...)
+	m.core.CfgMu.RUnlock()
+
+	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), hostID, alias, hosts))
+}
+
+// localEnvelope builds this host's own inventory: the response body for
+// scope unset/"local", and the local row's peers/ok/partial/error for
+// scope=all.
+func (m *Module) localEnvelope(ctx context.Context) ipeers.Envelope {
+	deadline := m.now().Add(m.budget)
 
 	m.core.CfgMu.RLock()
 	hostID := m.core.Cfg.HostID
 	alias := m.core.Cfg.PeerAlias()
 	m.core.CfgMu.RUnlock()
 
-	writeError := func(errMsg string) {
-		json.NewEncoder(w).Encode(ipeers.Envelope{
+	writeError := func(errMsg string) ipeers.Envelope {
+		return ipeers.Envelope{
 			HostID:  hostID,
 			OK:      false,
 			Error:   errMsg,
 			Partial: false,
 			Peers:   []ipeers.PeerRecord{},
-		})
+		}
 	}
 
 	instance := m.sessions.TmuxInstance()
 
 	sessions, err := m.sessions.ListSessions()
 	if err != nil {
-		writeError(err.Error())
-		return
+		return writeError(err.Error())
 	}
 
 	entries, _, err := ipeers.ReadRegistry(m.registryDir, m.liveness)
 	if err != nil {
-		writeError(err.Error())
-		return
+		return writeError(err.Error())
 	}
 
 	summaries := make([]ipeers.SessionSummary, 0, len(sessions))
@@ -143,7 +185,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		owner, ok, err := m.owners.ResolveSessionOwner(r.Context(), s.Code)
+		owner, ok, err := m.owners.ResolveSessionOwner(ctx, s.Code)
 		if err != nil {
 			// The lookup itself failed (tmux read error, resolver timeout,
 			// cancelled context) — this is not "no agent". Reporting it as
@@ -172,8 +214,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	// answer. Either sample being "" (unknown) means the check cannot fire,
 	// and the response proceeds as if nothing had changed.
 	if after := m.sessions.TmuxInstance(); instance != "" && after != "" && after != instance {
-		writeError("tmux server restarted during inventory")
-		return
+		return writeError("tmux server restarted during inventory")
 	}
 
 	partial := len(unresolved) > 0
@@ -188,10 +229,101 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 		ProxyPIDs:  map[int]bool{},
 	})
 
-	json.NewEncoder(w).Encode(ipeers.Envelope{
+	return ipeers.Envelope{
 		HostID:  hostID,
 		OK:      true,
 		Partial: partial,
 		Peers:   peerRecords,
-	})
+	}
+}
+
+// allEnvelope builds a scope=all response: the local row first (from
+// localEnvelope, labeled with the snapshot's alias/host_id), then every
+// configured host in order, fetched in parallel — each write lands by index
+// into a pre-sized slice so the result order matches config order
+// regardless of which goroutine finishes first.
+func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []config.PeerHost) ipeers.AllEnvelope {
+	results := make([]ipeers.HostResult, len(hosts)+1)
+
+	local := m.localEnvelope(ctx)
+	results[0] = ipeers.HostResult{
+		Alias:   alias,
+		HostID:  hostID,
+		OK:      local.OK,
+		Error:   local.Error,
+		Partial: local.Partial,
+		Peers:   local.Peers,
+	}
+
+	var wg sync.WaitGroup
+	for i, h := range hosts {
+		i, h := i, h
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i+1] = m.fetchHostResult(ctx, h)
+		}()
+	}
+	wg.Wait()
+
+	return ipeers.AllEnvelope{Hosts: results}
+}
+
+// fetchHostResult fetches one configured peer host's inventory for a
+// scope=all fan-out, translating every failure mode (no outbound token,
+// transport/decode error, host_id mismatch) into a failed HostResult rather
+// than propagating an error.
+func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.HostResult {
+	if h.Token == "" {
+		return ipeers.HostResult{
+			Alias:  h.Alias,
+			HostID: h.HostID,
+			OK:     false,
+			Error:  "no outbound token",
+			Peers:  []ipeers.PeerRecord{},
+		}
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
+	defer cancel()
+
+	env, err := m.fetch(fetchCtx, m.client, h.URL, h.Token)
+	if err != nil {
+		return ipeers.HostResult{
+			Alias:  h.Alias,
+			HostID: h.HostID,
+			OK:     false,
+			Error:  err.Error(),
+			Peers:  []ipeers.PeerRecord{},
+		}
+	}
+
+	if h.HostID != "" && env.HostID != h.HostID {
+		return ipeers.HostResult{
+			Alias:  h.Alias,
+			HostID: h.HostID,
+			OK:     false,
+			Error:  fmt.Sprintf("host_id mismatch: got %s", env.HostID),
+			Peers:  []ipeers.PeerRecord{},
+		}
+	}
+
+	resultHostID := h.HostID
+	if resultHostID == "" {
+		resultHostID = env.HostID
+	}
+
+	peers := env.Peers
+	if peers == nil {
+		peers = []ipeers.PeerRecord{}
+	}
+
+	return ipeers.HostResult{
+		Alias:   h.Alias,
+		HostID:  resultHostID,
+		OK:      env.OK,
+		Error:   env.Error,
+		Partial: env.Partial,
+		Peers:   peers,
+	}
 }
