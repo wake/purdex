@@ -26,17 +26,6 @@ const maxPeersErrorBodyBytes = 4 * 1024
 // misbehaving or compromised daemon's cost to a fixed amount of memory.
 const maxPeersOKBodyBytes = 16 * 1024 * 1024
 
-// peersResponse mirrors GET /api/peers' JSON body. It is cmd/pdx's own copy
-// (this package must not import internal/module/peers), sharing only the
-// PeerRecord row type with the daemon's public wire format.
-type peersResponse struct {
-	HostID  string             `json:"host_id"`
-	OK      bool               `json:"ok"`
-	Error   string             `json:"error"`
-	Partial bool               `json:"partial"`
-	Peers   []peers.PeerRecord `json:"peers"`
-}
-
 // runPeers is the `pdx peers` switch target.
 func runPeers(args []string) {
 	os.Exit(runPeersCmd(args, os.Stdout, os.Stderr))
@@ -98,7 +87,7 @@ func runPeersCmd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	var peersResp peersResponse
+	var peersResp peers.Envelope
 	if err := json.Unmarshal(body, &peersResp); err != nil {
 		fmt.Fprintf(stderr, "pdx peers: invalid response\n")
 		return 1
@@ -151,7 +140,7 @@ func parsePeersArgs(args []string) (cfgPath string, jsonOutput bool, unknownFlag
 // formatPeersTable renders resp.Peers as a text/tabwriter table with columns
 // ADDRESS AGENT NAME STATUS DELIVERABLE CWD, followed by a partial-resolution
 // summary line when any record's owner lookup did not run.
-func formatPeersTable(resp peersResponse) string {
+func formatPeersTable(resp peers.Envelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")

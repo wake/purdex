@@ -17,8 +17,8 @@ import (
 
 // --- formatPeersTable golden fixture -------------------------------------
 
-func peersTableFixture() peersResponse {
-	return peersResponse{
+func peersTableFixture() peers.Envelope {
+	return peers.Envelope{
 		HostID:  "mini:abc123",
 		OK:      true,
 		Partial: true,
@@ -76,7 +76,7 @@ func TestFormatPeersTable(t *testing.T) {
 }
 
 func TestFormatPeersTable_NoPartialLine(t *testing.T) {
-	resp := peersResponse{
+	resp := peers.Envelope{
 		OK: true,
 		Peers: []peers.PeerRecord{
 			{Address: "alias/sess1", Deliverable: false, Reason: "no_agent"},

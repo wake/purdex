@@ -84,15 +84,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 func (m *Module) Start(context.Context) error { return nil }
 func (m *Module) Stop(context.Context) error  { return nil }
 
-// response is the GET /api/peers envelope.
-type response struct {
-	HostID  string              `json:"host_id"`
-	OK      bool                `json:"ok"`
-	Error   string              `json:"error,omitempty"`
-	Partial bool                `json:"partial"`
-	Peers   []ipeers.PeerRecord `json:"peers"` // never null: []ipeers.PeerRecord{} when empty
-}
-
 // handlePeers serves GET /api/peers: this host's local inventory only
 // (scope=all, cross-host fan-out, is not yet supported).
 func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +103,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	m.core.CfgMu.RUnlock()
 
 	writeError := func(errMsg string) {
-		json.NewEncoder(w).Encode(response{
+		json.NewEncoder(w).Encode(ipeers.Envelope{
 			HostID:  hostID,
 			OK:      false,
 			Error:   errMsg,
@@ -197,7 +188,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 		ProxyPIDs:  map[int]bool{},
 	})
 
-	json.NewEncoder(w).Encode(response{
+	json.NewEncoder(w).Encode(ipeers.Envelope{
 		HostID:  hostID,
 		OK:      true,
 		Partial: partial,

@@ -110,7 +110,7 @@ func TestHandlePeers_HappyPath(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -181,7 +181,7 @@ func TestHandlePeers_ResolverError_ReportedAsUnresolved(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
 
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -230,7 +230,7 @@ func TestHandlePeers_TmuxRestartedDuringInventory(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -268,7 +268,7 @@ func TestHandlePeers_TmuxInstanceUnknown_ProceedsNormally(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -297,7 +297,7 @@ func TestHandlePeers_SoftBudget(t *testing.T) {
 	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -349,7 +349,7 @@ func TestHandlePeers_BudgetConsumedBeforeAnySession(t *testing.T) {
 	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -379,7 +379,7 @@ func TestHandlePeers_BoundaryExactlyExpired(t *testing.T) {
 	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
 	rr := doGetPeers(t, m, "/api/peers")
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -407,7 +407,7 @@ func TestHandlePeers_ProviderError(t *testing.T) {
 		t.Fatalf("body does not contain literal \"peers\":[]; body=%s", rr.Body.String())
 	}
 
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -438,7 +438,7 @@ func TestHandlePeers_RegistryDirMissing(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -476,7 +476,7 @@ func TestHandlePeers_RegistryDirIsRegularFile(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	var got response
+	var got ipeers.Envelope
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
