@@ -2,8 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Plan v2 (after codex plan review `task-mu07l94z-oszksd`: 1 Blocker, 13
-Majors, 3 Minors — all applied; §Review disposition at the end).
+Plan v3 (after codex plan reviews R1 `task-mu07l94z-oszksd`: 1 Blocker, 13
+Majors, 3 Minors; R2 `task-mu088bhz-yban9j`: 1 Blocker, 9 Majors, 2 Minors
+— all applied; §Review disposition at the end).
 
 **Goal:** From a Claude Code session on host A, `pdx msg send <host>/<session>
 "text"` lands in a Claude Code session on host B as a native peer message
@@ -103,7 +104,8 @@ drifted.
 | D6 | `peers.deliver` toggle | `PUT /api/peers/settings {deliver}` (admin) via `Core.UpdateConfig`, `GET /api/peers/settings`; CLI `pdx msg deliver on|off|status`. `PUT /api/config` keeps its field whitelist untouched. |
 | D7 | Helper `procStart` | Read with `TZ=UTC ps -p <pid> -o lstart=` (one fork per spawn), byte-identical to what the harness computes — not reformatted from `ReadProcessInfo`, whose sub-second truncation is unverified. `pidDomain` = `runtime.GOOS` (only `darwin` verified). |
 | D8 | Helper config channel | The daemon writes **one JSON line** on the helper's stdin before anything else; the helper answers with the ready line. Nothing else ever travels daemon→helper; stdin EOF is the shutdown signal (§4.5). |
-| D9 | Recognising **another** daemon's helpers (review M10) | A helper is recognised by its **process**, not by a registry marker: the liveness probe already reads `ProcessInfo` per pid, and an entry whose `Argv` is `pdx … peer-proxy` is a proxy row on every daemon that reads that registry, not only on the one that spawned it. `ProxyPIDs` (own helpers) stays as a fast path. Production remains one daemon per user registry; the two-daemon topology of Task 10 / Phase F is thereby safe too. |
+| D9 | Recognising **another** daemon's helpers (review M10) | A helper is recognised by its **process**, not by a registry marker: the liveness probe already reads `ProcessInfo` per pid, and an entry whose executable basename (`ExePath` or `Argv[0]`) is `pdx` and whose argv contains `peer-proxy` is a proxy row on every daemon that reads that registry. An entry whose process cannot be classified (no argv) is dropped, fail-closed. `ProxyPIDs` (own helpers) stays as a fast path. **Known limitation (R2-m1):** a `pdx` binary renamed to something else, or installed under a path containing spaces on macOS (where `Argv` comes from `ps` output split on whitespace), defeats the cross-daemon recognition; the spawning daemon still recognises its own helpers via `ProxyPIDs`. Production remains one daemon per user registry, where `ProxyPIDs` alone is sufficient. |
+| D12 | `one_way` reachability (R2-M7) | `one_way := entry.Token == ""` on an entry whose `HostID` is verified. Under P2's pairing this state is not reachable from the CLI (a `host_id` is only learned by verifying with a token), so spec §4.3's "delivered but one-way" case is in practice subsumed by the authentication refusal; the flag is kept for hand-edited configs and is covered by unit tests only. **Spec follow-up:** note in §4.3 that "no verified entry for A" is refused at auth, and one-way means "verified inbound, missing outbound". |
 | D10 | Audit row identity | `peer_messages` has its own `id INTEGER PRIMARY KEY`; `(msg_id, direction)` is indexed, not unique. The result update targets the row id `Insert` returned. |
 | D11 | Reply `msg_id` | Minted by B (spec §4.4) with `newMsgID()`; the native frame's `msg_id` is recorded in the audit `native_msg_id` column for tracing only. |
 
@@ -401,6 +403,7 @@ signals: SIGTERM/SIGINT ⇒ same cleanup, exit 0
 ```go
 type Config struct {   // the stdin line
     Name, RegistryDir, SockDir, Version, Cwd string
+    SessionID    string   // registry sessionId; chosen by the spawner so it can prove ownership of <pid>.json after a failed start
     PeerFeatures []string
 }
 type Options struct {
@@ -438,33 +441,45 @@ type Handle interface {
     PID() int
     Sock() string
     Files() []string
-    Frames() <-chan string    // closed when the helper's stdout reaches EOF
-    // Stop closes stdin (the helper's EOF signal), waits up to grace for
-    // exit, SIGKILLs and waits again; returns the exit error. Idempotent.
+    Frames() <-chan string    // closed by the pump after stdout EOF or Stop
+    // Stop (R2-M5): close stdin (the helper's EOF signal); wait ≤ grace
+    // for exit; SIGKILL; Wait; close the stdout pipe's read end (unblocks
+    // a pump stuck in Read); close the pump's done channel (unblocks a
+    // pump stuck in a Frames send); join the pump; close Frames. Returns
+    // the exit error. Idempotent and safe to call concurrently.
     Stop(grace time.Duration) error
     Signal(os.Signal) error
 }
 var ErrNotReady = errors.New("helper did not become ready")
 // Spawn: start(ctx); write cfg as one JSON line; read the first stdout
 // line with a readyTimeout deadline (a timer, not the ctx). ready:true ⇒
-// start the pump goroutine (stdout lines → Frames; malformed lines logged
-// and skipped) and return the Handle. ready:false / timeout / decode
-// error ⇒ SIGKILL, Wait, and — only when a ready:true line WAS parsed but
-// something after it failed — RemoveRegistry(files); return wrapped
-// ErrNotReady. Never leaves a process behind.
+// start the pump goroutine (stdout lines → Frames with a select on done;
+// malformed lines logged and skipped) and return the Handle.
+// ready:false / timeout / decode error ⇒ SIGKILL, Wait, then remove what
+// the dead helper may have left (R2-M8): <registry_dir>/<pid>.json if its
+// sessionId equals cfg.SessionID, every <registry_dir>/<pid>.*.key whose
+// procStart equals that json's procStart, and <sock_dir>/<pid>.sock if
+// dialing it is refused. Return wrapped ErrNotReady. Never leaves a
+// process, and never a file it can prove is its own, behind.
 func Spawn(ctx context.Context, start Starter, cfg Config, readyTimeout time.Duration) (Handle, error)
 ```
 `cmd/pdx/peer_proxy.go`: `case "peer-proxy": os.Exit(runPeerProxy())` with
 `Options{PID: os.Getpid()}` and the default `ps` ProcStart; ignores every
 argument, never reads config.toml, never opens HTTP.
 
-**In-process fake (`proxyhelper/fake_test.go`, exported through an
-`internal`-style `proxyhelpertest` package so the module tests reuse it):**
+**In-process fake — package `internal/peers/proxyhelper/proxyhelpertest`
+(a normal, importable package with non-`_test` files, used by
+`proxyhelper`, `internal/module/peers` and `cmd/pdx` tests; R2-M9):**
 `FakeStarter(opts)` returns a `Starter` whose `Proc` runs `Run` in a
 goroutine over `io.Pipe`s with `Options{PID: <counter from 900000>,
 ProcStart: fake}`; `Signal` cancels its ctx; `Wait` joins the goroutine.
 Variants: `Broken` (never writes ready), `Refusing` (ready:false),
-`Barrier` (blocks before ready until released — for concurrency tests).
+`Barrier` (blocks before ready until `Release()` is called). **Every
+variant exits and becomes `Wait`-able when its ctx is cancelled or its
+stdin is closed**, so a failing test never hangs on `Wait`. The fake also
+records counters (`Spawns`, `Stops`, `Signals`) and can be told to
+`HoldStop(ch)` (block inside Stop until `ch` closes — for stopping-state
+tests) and `ExitOnItsOwn()` (close stdout to simulate a helper crash).
 
 **Tests:** ready line has pid/sock/files and both files exist the instant
 the ready line is observed; a frame written to `sock` is echoed as
@@ -475,11 +490,17 @@ socket + files are gone; signal ⇒ same; **stdout closed by the reader
 `ready:false`. `Spawn`: happy path Handle with frames pumped; Broken ⇒
 `ErrNotReady` within readyTimeout+100 ms and `Wait` observed (no goroutine
 leak — `goleak`-style check via `runtime.NumGoroutine` delta ≤ 0 after
-1 s); Refusing ⇒ `ErrNotReady`; `Stop` returns after the helper exits and
-is idempotent; **a cancelled caller context passed only to the ready wait
-does not kill a ready helper** (Spawn takes the process ctx explicitly —
-test that `Handle` survives cancelling a separate ctx used by the caller);
-`cmd/pdx` dispatches `peer-proxy` (test the dispatch, not `main`).
+1 s); Refusing ⇒ `ErrNotReady`; **Broken variant that DID write registry
+files before stalling ⇒ after `ErrNotReady` the json (sessionId match),
+key and socket are gone, while a foreign `<pid>.json` with another
+sessionId is untouched** (R2-M8); `Stop` returns after the helper exits
+and is idempotent; **a Handle whose Frames nobody reads, with the helper
+flooding 10 000 frames, still Stops within grace+1 s and the pump
+goroutine is gone** (R2-M5); **a cancelled caller context passed only to
+the ready wait does not kill a ready helper** (Spawn takes the process
+ctx explicitly — test that `Handle` survives cancelling a separate ctx
+used by the caller); `cmd/pdx` dispatches `peer-proxy` (test the
+dispatch, not `main`).
 
 - [ ] tests written and failing
 - [ ] implementation, all green (`-race`)
@@ -510,13 +531,16 @@ func (m *MetaStore) PeerMessages() *PeerMessageStore
 // Insert writes the row and returns its id. A repeated (msg_id, direction)
 // is allowed (D10): dedup is the caller's in-memory window, never the DB.
 func (s *PeerMessageStore) Insert(p PeerMessage) (id int64, err error)
-func (s *PeerMessageStore) SetResult(id int64, result, errText string) error
+// SetResult updates result and error; effectiveMode is written too when
+// non-empty (the sender learns it only from the remote's answer).
+func (s *PeerMessageStore) SetResult(id int64, effectiveMode, result, errText string) error
 // Tail returns the newest n rows, oldest first.
 func (s *PeerMessageStore) Tail(n int) ([]PeerMessage, error)
 ```
 **Tests:** `OpenMeta(":memory:")` creates the table and both indexes
 (query `sqlite_master`); Insert/SetResult/Tail round-trip incl. ts ms
-precision and ordering; two Inserts with the same `(msg_id, direction)`
+precision and ordering; SetResult with empty effectiveMode keeps the
+inserted one, with a value overwrites it; two Inserts with the same `(msg_id, direction)`
 both succeed with distinct ids; Tail(0) ⇒ empty non-nil slice; existing
 `meta_test.go` untouched and green.
 
@@ -545,13 +569,19 @@ both succeed with distinct ids; Tail(0) ⇒ empty non-nil slice; existing
       StartTime func(pid int) (time.Time, error)          // kept for P1 fakes
       Info      func(pid int) (agent.ProcessInfo, error)  // optional; when non-nil it replaces StartTime and also supplies Argv
   }
-  // IsProxyArgv: filepath.Base(argv[0]) == "pdx" && argv contains "peer-proxy".
-  func IsProxyArgv(argv []string) bool
+  // IsProxyProcess: (filepath.Base(info.ExePath) == "pdx" || filepath.Base(info.Argv[0]) == "pdx")
+  //   && info.Argv contains "peer-proxy". See D9 for the known limitations.
+  func IsProxyProcess(info agent.ProcessInfo) bool
   // Entry gains: IsProxy bool   (comparable — Entry stays usable as a map key)
   ```
   `DefaultLiveness` sets `Info` to `agent.ReadProcessInfo` (one call per
   entry, as today) and `StartTime` derived from it. `ReadRegistry` sets
-  `IsProxy` from `Info`'s `Argv` when `Info != nil`. `Build` treats
+  `IsProxy` from `Info`'s `Argv` when `Info != nil`. **Fail closed:** when
+  `Info` is set and returns an empty `Argv` (or errors), the entry is
+  **skipped like a dead one** (counted in `skipped`, logged once per pid)
+  — an entry whose process cannot be classified must never become a
+  deliverable cc row, otherwise a daemon could deliver into another
+  daemon's helper socket and loop. `Build` treats
   `e.IsProxy || in.ProxyPIDs[e.PID]` identically everywhere `ProxyPIDs`
   is consulted today (`record.go` candidates filter and outside rows).
 - `HostRoutePolicy`: additionally true for `POST` with `r.URL.Path ==
@@ -566,9 +596,12 @@ both succeed with distinct ids; Tail(0) ⇒ empty non-nil slice; existing
   // entry, never from what the remote reported (P2 final review #5):
   // Host = alias; HostID = hostID (the verified one, or the envelope's
   // when the entry is still unverified — the caller passes whichever it
-  // accepted); Address = alias + "/" + SessionName when SessionName != "",
-  // else alias + "/cc:" + Agent.PeerName when Agent != nil && PeerName != "",
-  // else alias + "/" + SessionCode. The remote Address is discarded.
+  // accepted); Address is REBUILT: alias + "/" + SessionName when
+  // SessionName != "", else alias + "/cc:" + Agent.PeerName for a
+  // deliverable outside-tmux row; the candidate is kept only if
+  // SplitAddress accepts it, otherwise Address = "" (not addressable —
+  // proxy rows, rows with empty names, and peer names containing "/"
+  // all land here; R2-m2). The remote Address is discarded.
   func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeers.PeerRecord
   ```
   `fetchHostResult` applies it to every successful row.
@@ -587,10 +620,12 @@ both succeed with distinct ids; Tail(0) ⇒ empty non-nil slice; existing
   func (l *pairLimiter) Allow(k pairKey) bool // sliding window; empty pairs pruned
   ```
 
-**Tests:** config round-trip `deliver = true`; `IsProxyArgv` table
-(`/usr/local/bin/pdx peer-proxy` true, `pdx` alone false, `node
-peer-proxy.js` false); `ReadRegistry` with a fake `Info` returning
-`Argv{"pdx","peer-proxy"}` ⇒ `IsProxy`; `Build` with an `IsProxy` entry
+**Tests:** config round-trip `deliver = true`; `IsProxyProcess` table
+(`Argv{/usr/local/bin/pdx, peer-proxy}` true, `ExePath /opt/pdx` +
+`Argv{pdx-renamed, peer-proxy}` true via ExePath, `pdx` alone false,
+`node peer-proxy.js` false, empty Argv false); `ReadRegistry` with a fake `Info` returning
+`Argv{"pdx","peer-proxy"}` ⇒ `IsProxy`; fake `Info` returning empty
+`Argv` or an error ⇒ entry skipped (fail closed), `skipped` incremented; `Build` with an `IsProxy` entry
 (not in `ProxyPIDs`) ⇒ `proxy` row, `deliverable:false`, excluded from
 session candidates, excluded by `Resolve("cc:<name>")`; P1 registry/record
 tests untouched and green (their fakes set `StartTime`, not `Info`);
@@ -599,8 +634,8 @@ false, `POST /api/peers/send` false, `POST /api/peers/settings` false);
 settings GET/PUT persist to a temp `CfgPath`, host principal ⇒ 403;
 `normalizeRemoteRows` table: a remote row claiming another host's
 `host_id`/alias/`x/y/z` address is rewritten, outside-tmux row ⇒
-`alias/cc:<name>`, empty everything ⇒ `alias/<code>`, output always passes
-`SplitAddress`; `fetchHostResult` rows are normalised (extend the P2
+`alias/cc:<name>`, a proxy row whose PeerName is `a/foo` ⇒ Address `""`,
+empty names ⇒ `""`, **every non-empty Address passes `SplitAddress`**; `fetchHostResult` rows are normalised (extend the P2
 scope=all test with one assertion); version warning fires once for
 `2.1.271` across two inventory calls and never for `2.1.270`; dedup and
 limiter with a fake clock (30 allowed, 31st refused, after 60 s allowed,
@@ -626,13 +661,14 @@ const ( helperStarting helperState = iota; helperReady; helperStopping; helperEx
 type helper struct {
     key       ipeers.OriginKey
     name      string
-    gen       uint64            // manager-wide monotonic; identifies THIS instance
-    state     helperState       // guarded by manager mu
-    ready     chan struct{}     // closed when state leaves helperStarting (ready or failed)
-    err       error             // set when starting failed
+    gen       uint64             // manager-wide monotonic; identifies THIS instance
+    state     helperState        // guarded by manager mu
+    ready     chan struct{}      // closed when state leaves helperStarting (ready or failed)
+    exited    chan struct{}      // closed when the instance has left the map (exited or failed)
+    err       error              // set when starting failed
     handle    proxyhelper.Handle // nil until ready
     pid       int; procStart string; sock string; files []string
-    lastUsed  time.Time         // guarded by mu
+    lastUsed  time.Time          // guarded by mu
     stopOnce  sync.Once
 }
 type proxyRecord struct {
@@ -641,104 +677,138 @@ type proxyRecord struct {
 }
 type helperManager struct {
     mu          sync.Mutex
-    helpers     map[ipeers.OriginKey]*helper
+    helpers     map[ipeers.OriginKey]*helper   // every instance from starting until exited — the cap counts ALL of them
     nextGen     uint64
-    procCtx     context.Context     // lifetime of every helper process; cancelled by Stop
+    closed      bool                           // set by Stop: no new admissions
+    wg          sync.WaitGroup                 // every startup goroutine and every pump goroutine
+    procCtx     context.Context                // lifetime of every helper process; cancelled last, as a backstop
     procCancel  context.CancelFunc
     start       proxyhelper.Starter
     now         func() time.Time
     procStart   func(pid int) (string, error)
     pidAlive    func(pid int) bool
-    liveEntries func() []ipeers.Entry    // for peerFeatures (newest live non-proxy cc entry)
+    dialRefused func(sock string) bool         // true when connect fails with ECONNREFUSED/ENOENT
+    liveEntries func() []ipeers.Entry
     proxiesPath string
     registryDir, sockDir, version string
     readyTimeout, termGrace time.Duration
     onFrame     func(h *helper, line string)
     log         func(format string, args ...any)
-    swept       bool                     // set by Sweep; Acquire refuses until true
+    swept       bool
+    unresolved  []proxyRecord                  // records whose cleanup could not be completed; retained in proxies.json
 }
 func newHelperManager(/* fields */) *helperManager
 
-var ( ErrProxyLimit = errors.New("proxy_limit"); ErrProxySpawnFailed = errors.New("proxy_spawn_failed"); ErrNotSwept = errors.New("not_ready") )
+var ( ErrProxyLimit = errors.New("proxy_limit"); ErrProxySpawnFailed = errors.New("proxy_spawn_failed"); ErrNotReady = errors.New("not_ready") )
 
-// Acquire returns the ready helper for key, spawning one when absent.
-// waitCtx bounds only THIS caller's wait; the process runs under procCtx.
-//   lock; !swept ⇒ ErrNotSwept
-//   h present:
-//     helperReady    ⇒ touch lastUsed; unlock; return h
-//     helperStarting ⇒ unlock; wait on h.ready or waitCtx; re-lock; if h.err != nil ⇒ return h.err; else return h (state must be ready — a helper cannot go starting→stopping)
-//     stopping/exited ⇒ treated as absent for spawning purposes ONLY after it has left the map (Release removes it under mu before it returns); so: unlock, wait on h.exited (a second channel closed by Release), retry the whole Acquire (bounded by waitCtx)
-//   h absent: len(helpers) >= HelperCap ⇒ ErrProxyLimit; insert &helper{starting, gen: nextGen++}; unlock
-//   cfg := proxyhelper.Config{Name: name, RegistryDir, SockDir, Version, PeerFeatures: peerFeatures(), Cwd: registryDir}
-//   handle, err := proxyhelper.Spawn(procCtx, start, cfg, readyTimeout)
-//   err ⇒ lock; h.err = wrapped ErrProxySpawnFailed; delete(helpers, key); close(h.ready); close(h.exited); unlock; return
-//   ps, err := procStart(handle.PID()); err ⇒ handle.Stop(termGrace); RemoveRegistry(handle.Files()); same failure path
-//   lock; fill pid/procStart/sock/files/handle; if err := writeProxiesLocked(); err != nil ⇒ unlock; handle.Stop; RemoveRegistry; failure path (ownership must be durable before ready — M3)
-//   h.state = ready; lastUsed = now(); close(h.ready); unlock
-//   go pump(h): for line := range handle.Frames() { touch(h); onFrame(h, line) }; then release(h, "exited")
+// Acquire returns the ready helper for key. waitCtx bounds only THIS
+// caller's wait; every process runs under procCtx and every startup runs
+// in a manager-owned goroutine, so NO caller — the creator included —
+// ever executes Spawn on its own stack (R2-M2).
+//   loop:
+//     lock; if !swept || closed ⇒ unlock; return ErrNotReady
+//     h := helpers[key]
+//     h == nil: if len(helpers) >= HelperCap ⇒ unlock; ErrProxyLimit
+//               h = &helper{key, name, gen: ++nextGen, state: starting, ready, exited}; helpers[key] = h; wg.Add(1); go m.startup(h)
+//     state := h.state; if state == ready { touch lastUsed }; unlock
+//     switch state:
+//       ready    ⇒ return h
+//       starting ⇒ select { <-h.ready; <-waitCtx.Done() ⇒ return waitCtx.Err() }; continue
+//       stopping/exited ⇒ select { <-h.exited; <-waitCtx.Done() ⇒ return waitCtx.Err() }; continue
+//   Every wake re-inspects under the lock: the instance may be ready,
+//   gone (failed ⇒ spawn anew), replaced (wait on the new one) or
+//   stopping (wait on exited). A fresh instance is spawned only after the
+//   old one has left the map — never two processes for one key, never
+//   more processes than the cap.
 func (m *helperManager) Acquire(waitCtx context.Context, key ipeers.OriginKey, name string) (*helper, error)
-// peerFeatures: newest live non-proxy cc entry by ParseProcStart (ties by
-// pid desc) ⇒ ccuds.ReadPeerFeatures(registryDir, pid); none/unreadable ⇒
-// ccuds.DefaultPeerFeatures.
-func (m *helperManager) peerFeatures() []string
+// startup(h) (manager goroutine, wg-tracked):
+//   cfg := Config{Name, RegistryDir, SockDir, Version, PeerFeatures: peerFeatures(), Cwd: registryDir, SessionID: uuid}
+//   fail := func(err) { lock; h.err = wrap(ErrProxySpawnFailed, err); if helpers[key] == h { delete }; unlock; close(h.ready); close(h.exited); wg.Done() }
+//   handle, err := proxyhelper.Spawn(procCtx, start, cfg, readyTimeout); err ⇒ fail(err)   (Spawn guarantees no process and no files remain)
+//   ps, err := procStart(handle.PID()); err ⇒ handle.Stop(termGrace); RemoveRegistry(handle.Files()); fail(err)
+//   lock; fill pid/procStart/sock/files/handle; err := writeProxiesLocked(); err ⇒ unlock; handle.Stop; RemoveRegistry; fail(err)   (ownership durable BEFORE ready — M3)
+//   h.state = ready; lastUsed = now(); unlock; close(h.ready)
+//   wg.Add(1); go pump(h); wg.Done()
+// pump(h): for line := range handle.Frames() { touch(h); onFrame(h, line) }; release(h, "exited"); wg.Done()
+//   Frames closes when the helper's stdout reaches EOF or after Handle.Stop joined the Handle's own pump (R2-M5), so this loop always ends.
+func (m *helperManager) peerFeatures() []string   // newest live non-proxy cc entry by ParseProcStart (ties pid desc) ⇒ ReadPeerFeatures; else DefaultPeerFeatures
 func (m *helperManager) Touch(key ipeers.OriginKey)
-// Release is instance-bound: it takes the *helper, not the key.
-//   lock; if helpers[h.key] != h || h.state != ready ⇒ unlock; return   (stale callback or already stopping — M2)
-//   h.state = stopping; delete(helpers, h.key); writeProxiesLocked(); unlock
-//   h.stopOnce.Do: handle.Stop(termGrace) (closes stdin ⇒ helper removes its files; grace; SIGKILL); RemoveRegistry(h.files) (idempotent, after Wait); unlink h.sock (ENOENT ok); lock; h.state = exited; close(h.exited); unlock
+// Release is instance-bound and keeps the instance in the map until the
+// process is gone (R2-M1, R2-M4):
+//   lock; if helpers[h.key] != h || h.state != ready ⇒ unlock; return   (stale callback, or already stopping)
+//   h.state = stopping; unlock          // still in the map: Acquire waits on h.exited; the cap still counts it; ProxyPIDs still lists it
+//   h.stopOnce.Do:
+//     handle.Stop(termGrace)             // closes stdin (helper removes its own files), grace, SIGKILL, Wait, joins the Handle's pump
+//     cleanupOK := RemoveRegistry(h.files) == nil && unlink(h.sock) ∈ {nil, ENOENT}
+//     lock; delete(helpers, h.key); if !cleanupOK { unresolved = append(unresolved, record(h)) }   (the file keeps naming leftovers until a Sweep resolves them)
+//     h.state = exited; err := writeProxiesLocked(); unlock; err ⇒ log   (a STALE record is harmless — Sweep proves ownership before touching anything; a MISSING record is the dangerous case, which is why records are written before ready)
+//     close(h.exited)
 func (m *helperManager) Release(h *helper, reason string)
 func (m *helperManager) ReapIdle()                       // Release every ready helper with lastUsed older than HelperIdleReap
-func (m *helperManager) ProxyPIDs() map[int]bool          // pids of starting+ready helpers
+func (m *helperManager) ProxyPIDs() map[int]bool          // pids of every instance in the map that has a pid (ready, stopping)
 func (m *helperManager) FindBySock(sock string) (*helper, bool)
-// Sweep (§4.5 Startup sweep), called once from Start BEFORE the HTTP server accepts:
-//   read proxiesPath; missing ⇒ []; unparsable ⇒ log, treat as [] (files of unknown helpers are left alone — nothing to prove ownership)
-//   for each record:
-//     alive := pidAlive(pid) && procStart(pid) == record.ProcStart
-//     alive ⇒ signal SIGTERM; wait ≤ termGrace for !pidAlive; SIGKILL; wait ≤ termGrace again; still alive ⇒ log and SKIP its files (never delete under a live process we could not stop)
-//     files: unlink each recorded path ONLY if ccuds.RegistryProcStart(path) == record.ProcStart (a reused pid's new files have a different procStart — M4); other files are logged and left
-//     sock: unlink ONLY if connecting to it fails with ECONNREFUSED or ENOENT (a live listener is someone else's — M4)
-//   write "[]" atomically; error ⇒ return it (Start fails: an unwritable DataDir must not run a daemon that cannot record ownership — M3)
+// Sweep (§4.5), called once from Start BEFORE the HTTP server accepts:
+//   read proxiesPath; missing ⇒ []; unparsable ⇒ log, treat as [] (nothing can prove ownership of anything)
+//   for each record r:
+//     same := func() bool { ps, err := procStart(r.PID); return err == nil && ps == r.ProcStart }   // an error means "cannot prove it is ours" ⇒ NEVER signal (R2-M3)
+//     if pidAlive(r.PID) && same():
+//       SIGTERM; wait ≤ termGrace until !pidAlive || !same()
+//       if pidAlive && same() (re-checked immediately before sending) ⇒ SIGKILL; wait ≤ termGrace until !pidAlive || !same()
+//       if pidAlive && same() ⇒ log, unresolved = append(unresolved, r), continue (files untouched)
+//     files: for each recorded path: unlink only if ccuds.RegistryProcStart(path) == r.ProcStart; a mismatch is logged and left; an unlink error other than ENOENT ⇒ unresolved
+//     sock: unlink only if dialRefused(r.Sock) (a live listener is someone else's); unlink error other than ENOENT ⇒ unresolved
+//   write unresolved (possibly []) atomically; write error ⇒ return it (Start fails — R2-M4: never run without a durable ownership record)
 //   swept = true
 func (m *helperManager) Sweep() error
-// Stop: procCancel is NOT used for graceful stop — Release every ready
-// helper (parallel, each bounded by termGrace), wait for all pumps to
-// finish (WaitGroup), then procCancel() as the backstop.
+// Stop (R2-B1) — admission is closed FIRST, then everything is joined:
+//   lock; closed = true; starting := instances in state starting; unlock
+//   for each starting: <-h.ready (a startup is short: readyTimeout + procStart + one file write; a failed one closes ready too)
+//   lock; ready := instances in state ready; unlock
+//   Release each in parallel (each bounded by ~2×termGrace)
+//   wg.Wait()          // every startup and pump goroutine has returned; onFrame can no longer be called
+//   procCancel()       // backstop only
 func (m *helperManager) Stop()
-func (m *helperManager) writeProxiesLocked() error   // temp file in the same dir + fsync + rename
+func (m *helperManager) writeProxiesLocked() error   // records of every instance with a pid + unresolved → temp file in the same dir + fsync + rename
 ```
+Production `start`: `proxyhelper.ExecStarter(os.Executable(), logWriter)`.
 
-**Tests (FakeStarter from Task 3, short dirs, fake clock, fake
-`procStart`/`pidAlive` maps):** two concurrent Acquire for one key with a
-Barrier starter ⇒ one spawn, both callers get the same helper; Acquire
-after ready returns the same instance; cap: 32 helpers ⇒ 33rd
-`ErrProxyLimit`, a starting helper counts; Broken starter with
-`readyTimeout` 100 ms ⇒ `ErrProxySpawnFailed`, map empty, no socket, every
-waiter woken; Refusing ⇒ same; `procStart` failure after ready ⇒ helper
-stopped, files removed, `ErrProxySpawnFailed`; `writeProxies` failure
-(proxiesPath in a read-only dir) ⇒ same rollback; `proxies.json` after two
-spawns: raw JSON keys `pid/proc_start/sock/files/origin{host_id,…}`, no
-`.tmp` left; **Release is instance-bound**: capture `h1`, Release it,
-Acquire again ⇒ `h2` with a new gen; a late `Release(h1)` is a no-op and
-`h2` survives; concurrent `Release(h1)` ×3 ⇒ handle.Stop called once,
-record removed once (assert via the fake's counters); Acquire while `h1`
-is stopping waits for `exited` and spawns fresh; ReapIdle with the clock
-advanced 31 min releases only the idle one; pump delivers frames to
-`onFrame` and touches lastUsed; a helper whose stdout closes on its own
-(fake exits) is removed from the map and `proxies.json`; **an Acquire
-whose waitCtx is cancelled mid-start leaves the helper starting and a
-later Acquire gets it ready** (B1); **`Acquire` before `Sweep` ⇒
-`ErrNotSwept`**; Sweep: (a) live record (pidAlive true, procStart equal)
-⇒ SIGTERM observed, then files unlinked; (b) live record that ignores
-SIGTERM and SIGKILL (fake stays alive) ⇒ files kept, logged; (c) dead pid
-with files whose `procStart` equals the record ⇒ unlinked; (d) reused pid
-— files rewritten by the test with a different procStart and a live
-listener at the sock ⇒ files and sock kept; (e) missing file ⇒ nil, `[]`
-written; (f) unwritable proxiesPath ⇒ error; Stop releases all and every
-pump goroutine has exited (goroutine count check).
+**Tests (FakeStarter/Barrier/Broken/Refusing from `proxyhelpertest`, short
+dirs, fake clock, fake `procStart`/`pidAlive`/`dialRefused` maps):**
+two concurrent Acquire for one key with a Barrier ⇒ one spawn, both get
+the same helper; Acquire after ready returns the same instance; cap: 32
+helpers ⇒ 33rd `ErrProxyLimit`, a starting helper counts, a **stopping**
+helper counts; Broken with `readyTimeout` 100 ms ⇒ `ErrProxySpawnFailed`,
+map empty, no socket, every waiter woken; Refusing ⇒ same; `procStart`
+failure after ready ⇒ helper stopped, files removed, `ErrProxySpawnFailed`;
+`writeProxies` failure ⇒ same rollback; `proxies.json` after two spawns:
+raw keys `pid/proc_start/sock/files/origin{host_id,…}`, no `.tmp` left;
+**the creator's waitCtx cancelled while the Barrier holds the startup ⇒
+Acquire returns the ctx error, the startup still completes, a later
+Acquire gets the ready helper** (R2-M2); **Release is instance-bound**:
+Release `h1`; an Acquire issued during stopping blocks until `h1.exited`
+(Barrier inside the fake's Stop) and then spawns `h2` with a new gen — at
+no point are two fake processes alive for the key; a late `Release(h1)`
+is a no-op; concurrent `Release(h1)` ×3 ⇒ Stop called once; ReapIdle with
+the clock advanced 31 min releases only the idle one; pump delivers
+frames and touches lastUsed; a helper whose stdout closes on its own is
+removed and `proxies.json` rewritten; an unlink failure during Release
+(read-only sock dir) keeps a record in `proxies.json`; **Acquire before
+Sweep ⇒ `ErrNotReady`; Acquire after Stop ⇒ `ErrNotReady`**; **Stop while
+a Barrier startup is in flight**: Stop waits for it, releases it, and
+after Stop returns no fake process is alive and `wg` is drained
+(goroutine count delta 0); Sweep: (a) live record ⇒ SIGTERM observed,
+files unlinked; (b) **pid reused after SIGTERM** (fake: after TERM the pid
+stays alive but `procStart` changes) ⇒ no SIGKILL sent, matching files
+unlinked, the new process's files kept; (c) `procStart` returns an error
+⇒ no signal at all; (d) a live record that ignores both signals ⇒ files
+kept, record retained in the rewritten file, Sweep returns nil; (e) dead
+pid with matching files ⇒ unlinked; (f) reused pid with a live listener at
+the sock and rewritten files ⇒ files and sock kept; (g) missing file ⇒
+`[]` written; (h) unwritable proxiesPath ⇒ error.
 
 - [ ] tests written and failing
 - [ ] implementation, all green (`-race`)
-- [ ] commit `feat(peers): helper manager — instance-bound lifecycle, durable ownership, sweep`
+- [ ] commit `feat(peers): helper manager — instance-bound lifecycle, durable ownership, closed admission, sweep`
 
 # Phase D — Daemon endpoints
 
@@ -753,7 +823,7 @@ modify `module.go` (constructor, seams, routes, `ProxyPIDs`, Start/Stop),
 ```go
 type AuditStore interface {
     Insert(store.PeerMessage) (int64, error)
-    SetResult(id int64, result, errText string) error
+    SetResult(id int64, effectiveMode, result, errText string) error
     Tail(n int) ([]store.PeerMessage, error)
 }
 func New(audit AuditStore) *Module   // audit nil ⇒ every send/deliver is audit_unavailable
@@ -768,9 +838,13 @@ registry dir, `/tmp/cc-socks`, `proxyhelper.ExecStarter(os.Executable(),
 logWriter)`, `liveEntries` = a closure over `ReadRegistry`) and wires
 `onFrame` to `m.handleReplyFrame` (Task 9; until then a logging stub).
 `Start`: `helpers.Sweep()` (error ⇒ `Start` returns it), then the 1-minute
-reap ticker goroutine under `stopCtx`. `Stop`: `stopCancel()`, `workers.Wait()`
-(reply workers), `helpers.Stop()`. `localEnvelope` passes
-`helpers.ProxyPIDs()`.
+reap ticker goroutine under `stopCtx`. **`Stop` order (R2-B1):**
+`stopCancel()` (handlers observe it and answer 503 `not_ready`; the reply
+semaphore wait aborts) → `helpers.Stop()` (closes admission, joins every
+startup and pump — after it returns no `onFrame` can run, so no new reply
+worker can be added) → `workers.Wait()` (the reply workers that were
+already running; each is under `stopCtx`, so a `post` in flight aborts
+within its client timeout). `localEnvelope` passes `helpers.ProxyPIDs()`.
 
 **Fixture update (M13):** `module_test.go`'s `&Module{…}` literal becomes a
 `newTestModule(t, opts)` helper that sets every seam: `helpers` built with
@@ -792,36 +866,46 @@ fake that fails loudly if called. Existing P1/P2 assertions unchanged.
 3. Decode body (1 MiB `MaxBytesReader`), `req.Validate()` ⇒ 400 with the
    specific code; `req.From.HostID != Principal.HostID` ⇒ 403
    `host_unverified`.
-4. `dedup.Seen(msg_id)` ⇒ 409 `duplicate` (no new audit row).
-5. **Audit first (M8):** `id, err := audit.Insert(PeerMessage{MsgID, DirIn,
-   TS, From…, To…, DeclaredMode, EffectiveMode: "", Bytes})`; err ⇒ 503
-   `audit_unavailable`. Every later refusal calls `SetResult(id, <code>,
-   detail)`.
-6. Target: `localEnvelope` ⇒ the record with `Agent != nil && Agent.Type ==
+4. `dedup.Seen(msg_id)` ⇒ 409 `duplicate`.
+5. `effective := clamp(req.From.DeclaredMode, entry.AllowBypass)` (pure;
+   needs only the entry); `oneWay := entry.Token == ""` (D12).
+6. **Audit (M8, R2-M6):** `id, err := audit.Insert(PeerMessage{MsgID, DirIn,
+   TS, From…, To…, DeclaredMode, EffectiveMode: effective, Bytes})`; err ⇒
+   503 `audit_unavailable`. From here on **every** refusal calls
+   `SetResult(id, "", <code>, detail)`; a `SetResult` failure is logged at
+   error level with the row id and does not change the response (the
+   delivery outcome is already decided).
+   **Audit coverage contract:** refusals in steps 1–4 are *not* audited
+   by design — they are either unauthenticated/unattributable
+   (`admin_not_allowed`, `host_unverified` before the host is bound), a
+   configuration state (`deliver_disabled`), malformed input that has no
+   trustworthy tuple to record (`bad_request`, `text_too_large`,
+   `bad_mode`), or a retransmit whose first attempt already has a row
+   (`duplicate`); each is logged at warn level with the principal alias.
+   Everything after the insert — `target_gone`, `rate_limited`,
+   `not_ready`, `proxy_limit`, `proxy_spawn_failed`, `socket_write_failed`,
+   `delivery_uncertain`, `delivered` (with or without `no_return_route`)
+   — is audited. Tests assert both halves.
+7. Target: `localEnvelope` ⇒ the record with `Agent != nil && Agent.Type ==
    "cc" && Agent.SessionID == to.AgentSessionID && Agent.PID == to.PID &&
    Agent.ProcStart == to.ProcStart && Deliverable` — else 409
    `target_gone` (detail names which field mismatched, never another
    session's data).
-7. `effective := clamp(req.From.DeclaredMode, entry.AllowBypass)`;
-   `SetResult` is deferred — the row's `effective_mode` is written by a
-   dedicated `SetModes(id, declared, effective)` call here (add it to the
-   store interface in this task; a one-line UPDATE).
 8. `pairs.Allow(pairKey{From: req.From.Key(), To: req.To.Key(localHostID)})`
    false ⇒ 429 `rate_limited`.
-9. `oneWay := entry.Token == ""` (§4.3: delivered anyway, marked, audited
-   with error `no_return_route` on a `delivered` result).
-10. `helpers.Acquire(r.Context(), req.From.Key(), Principal.Alias + "/" +
-    req.From.SessionName)`: `ErrNotSwept` ⇒ 503 `not_ready`;
-    `ErrProxyLimit` ⇒ 503 `proxy_limit`; `ErrProxySpawnFailed` ⇒ 502
-    `proxy_spawn_failed`; waitCtx cancelled ⇒ 499-style early return with
-    `SetResult("", "client_gone")` — the helper keeps starting (B1).
-11. `ccuds.BuildFrame(msg_id, h.sock, Wrapper{From: "uds:"+h.sock,
+9. `helpers.Acquire(r.Context(), req.From.Key(), Principal.Alias + "/" +
+   req.From.SessionName)`: `ErrNotReady` (before sweep or after stop) ⇒
+   503 `not_ready`; `ErrProxyLimit` ⇒ 503 `proxy_limit`;
+   `ErrProxySpawnFailed` ⇒ 502 `proxy_spawn_failed`; waitCtx cancelled ⇒
+   `SetResult(id, "", "client_gone", "")` and return without a body — the
+   helper keeps starting under the manager (B1).
+10. `ccuds.BuildFrame(msg_id, h.sock, Wrapper{From: "uds:"+h.sock,
     FromName: h.name, FromMode: effective, HopChain: req.HopChain, Text})`;
     `writeFrame(stopCtx-derived ctx, target.Agent.Inbox, line,
-    sockWriteTimeout)`: nil ⇒ `SetResult(delivered, oneWay ?
+    sockWriteTimeout)`: nil ⇒ `SetResult(id, "", delivered, oneWay ?
     "no_return_route" : "")`, `helpers.Touch`, 200 `{msg_id, delivered,
     effective_mode, one_way}`; `ErrPostWriteTimeout` ⇒ `delivery_uncertain`
-    (200); other ⇒ `SetResult("", err)`, 502 `socket_write_failed`.
+    (200); other ⇒ `SetResult(id, "", "", err)`, 502 `socket_write_failed`.
 
 **Tests (httptest module via `newTestModule`, `WithPrincipal` contexts,
 fake sessions/owners/liveness, a real Unix listener as the target inbox in
@@ -846,11 +930,15 @@ audit Insert failure ⇒ 503 and nothing on the socket; `proxy_limit` /
 results; listener that reads but never closes (`sockWriteTimeout` 100 ms)
 ⇒ 200 `delivery_uncertain`; listener absent ⇒ 502 with audit error;
 `ProxyPIDs` makes the helper's own registry entry a `proxy` row in `GET
-/api/peers`.
+/api/peers`; **audit coverage**: a table over every refusal code
+asserting "row present with this result" or "no row, warn logged";
+`SetResult` failing (fake) after a successful write ⇒ 200 delivered and
+an error log line; a `/deliver` arriving after `Stop` began ⇒ 503
+`not_ready`.
 
 - [ ] tests written and failing
 - [ ] implementation, all green (`-race`)
-- [ ] commit `feat(peers): POST /api/peers/deliver — bind identity, audit first, clamp, helper, socket write`
+- [ ] commit `feat(peers): POST /api/peers/deliver — bind identity, audit, clamp, helper, socket write`
 
 ### Task 8: `POST /api/peers/send` and the outbound client
 
@@ -893,10 +981,10 @@ func newDeliverClient() *http.Client   // Timeout InterDaemonTimeout, no redirec
    `audit_unavailable`.
 8. `post(ctx 10 s under stopCtx, deliverClient, h.URL, h.Token,
    DeliverRequest{MsgID, From, To: {session, pid, proc_start}, Text})`:
-   transport error ⇒ `SetResult("", err)`, 502 `remote_error`; RemoteError ⇒
-   `SetResult(remote.Error, remote.Detail)`, 502 with `Remote`; success ⇒
-   `SetModes`, `SetResult(resp.Result, resp.OneWay ? "no_return_route" :
-   "")`, 200 `SendResponse{…, OneWay}`.
+   transport error ⇒ `SetResult(id, "", "", err)`, 502 `remote_error`;
+   RemoteError ⇒ `SetResult(id, "", remote.Error, remote.Detail)`, 502 with
+   `Remote`; success ⇒ `SetResult(id, resp.EffectiveMode, resp.Result,
+   resp.OneWay ? "no_return_route" : "")`, 200 `SendResponse{…, OneWay}`.
 
 **Tests:** `postDeliver` against httptest: 200 decode; 409 APIError ⇒
 RemoteError with code/detail; 500 HTML ⇒ `http_500`; 65 KiB body ⇒ error;
@@ -923,10 +1011,13 @@ entry's `Token` and nothing else.
 `module.go` (route; `onFrame` wiring).
 
 **`handleReplyFrame(h *helper, line string)`** runs on the helper's pump
-goroutine. It acquires `replySem` **synchronously** (back-pressure onto
-that helper's stdout pipe is acceptable; it blocks only that helper), then
-`workers.Add(1)` and processes in a goroutine under `stopCtx`; `Stop`
-waits for `workers`. Steps:
+goroutine. It acquires `replySem` with `select { case replySem <- struct{}{}:
+case <-stopCtx.Done(): return }` (back-pressure onto that helper's stdout
+pipe is acceptable; it blocks only that helper, and never past `Stop` —
+R2-B1), then `workers.Add(1)` and processes in a goroutine under
+`stopCtx`, releasing the slot in a defer. Because `helpers.Stop()` joins
+every pump before `workers.Wait()` runs (Task 7 Stop order), `Add` can
+never race `Wait`. Steps:
 1. `ccuds.ParseFrame(line)`; error or `Type != "user"` ⇒ log and drop.
 2. `FromSocket(frame.From)` false ⇒ audit `reply` row result
    `replier_unknown` (from_session_id ""), drop.
@@ -943,9 +1034,9 @@ waits for `workers`. Steps:
    NativeMsgID: frame.MsgID, from replier, to h.key)`; error ⇒ log, drop.
 8. `post(ctx 10 s, deliverClient, entry.URL, entry.Token, DeliverRequest{
    MsgID, HopChain: hop, From: replier tuple, To: WireTo(h.key), Text})`:
-   success ⇒ `SetModes`, `SetResult`, `helpers.Touch(h.key)`; RemoteError
-   `target_gone` ⇒ `SetResult`, `helpers.Release(h, "origin gone")`;
-   other ⇒ `SetResult` only.
+   success ⇒ `SetResult(id, resp.EffectiveMode, resp.Result, …)`,
+   `helpers.Touch(h.key)`; RemoteError `target_gone` ⇒ `SetResult`,
+   `helpers.Release(h, "origin gone")`; other ⇒ `SetResult` only.
 
 **`GET /api/peers/log?tail=N`** (admin; hosts refused by policy and in
 depth): default 50, max 1000, 400 on a non-integer; `{"messages":[…]}`
@@ -1063,64 +1154,101 @@ posts the expected body incl. `origin_inbox` and prints the success line
 `cmd/pdx/msg.go` (verb).
 
 **Dependencies struct (`selftestDeps`, every field injectable, production
-values in `newSelftestDeps()`):** `tmux func(ctx, args ...string) ([]byte,
-error)`, `registryDir`, `sockDir`, `readRegistry func(dir) ([]ipeers.Entry,
-error)` (real: `ReadRegistry` with `DefaultLiveness`), `spawn func(ctx,
-proxyhelper.Config) (proxyhelper.Handle, error)` (real:
-`proxyhelper.Spawn(ctx, ExecStarter(os.Executable(), stderr), cfg, 3 s)`),
-`writeFrame`, `pidAlive`, `procStart func(pid) (string, error)`, `signal
-func(pid int, sig os.Signal) error`, `readPeerFeatures`, `sleep func(ctx,
-d)` (real: timer/ctx select), `now`.
+values in `newSelftestDeps()`; tests use an isolated short temp dir for
+`registryDir`/`sockDir` and fakes for everything that touches processes —
+R2-M9):**
+```go
+type selftestPeer interface { PID() int; Sock() string; Files() []string; Frames() <-chan string; Stop(time.Duration) error }  // satisfied by proxyhelper.Handle
+type selftestDeps struct {
+    tmux          func(ctx context.Context, args ...string) ([]byte, error)
+    registryDir, sockDir string
+    readRegistry  func(dir string) ([]ipeers.Entry, error)          // real: ReadRegistry(dir, DefaultLiveness())
+    spawn         func(ctx context.Context, cfg proxyhelper.Config) (selftestPeer, error) // real: proxyhelper.Spawn(ctx, ExecStarter(os.Executable(), stderr), cfg, 3 s)
+    writeFrame    func(ctx context.Context, sock string, line []byte, timeout time.Duration) error
+    pidAlive      func(pid int) bool
+    procStart     func(pid int) (string, error)
+    signal        func(pid int, sig os.Signal) error
+    readPeerFeatures func(dir string, pid int) ([]string, bool)
+    glob          func(pattern string) ([]string, error)
+    registryProcStart func(path string) string
+    remove        func(path string) error
+    dialRefused   func(sock string) bool
+    sleep         func(ctx context.Context, d time.Duration) error  // real: timer/ctx select
+    now           func() time.Time
+}
+```
 
 **Body (`runMsgSelftest(ctx, deps, timeout, stdout, stderr) int`):**
-1. `name := "pdx-selftest-" + 6 hex`. `tmux new-session -d -s <name> --
-   claude -p --verbose --input-format stream-json --output-format
-   stream-json --name <name> --settings {"crossSessionInbound":"accept"}`
-   (argv passed as separate arguments to tmux — tmux joins them; no shell
-   quoting). Cleanup is registered before this call and runs on every
-   exit path incl. `signal.NotifyContext` cancellation.
-2. Poll ≤ 15 s (250 ms `sleep`): `readRegistry` for the non-proxy entry
-   whose `TmuxSessionName() == name`; record its **pid, procStart, Inbox
-   and registry files** (`RegistryFiles` derived from the json path +
-   glob `<pid>.*.key`). None ⇒ `FAIL: session did not register (Claude
-   Code ≥ 2.1.224 with peer messaging required)`, exit 1.
-3. `features := readPeerFeatures(registryDir, target.PID)` or
-   `DefaultPeerFeatures`; `h := spawn(ctx, Config{Name: "pdx-selftest-probe",
-   RegistryDir, SockDir, Version: VerifiedCCVersion, PeerFeatures:
-   features})` — a **real `pdx peer-proxy` subprocess** (D4/M11); failure ⇒
-   `FAIL: helper did not start: …`, exit 1.
-4. `nonce := 8 hex`; `writeFrame(target.Inbox, BuildFrame(uuid, h.Sock(),
+1. `name := "pdx-selftest-" + 6 hex`. Register cleanup (step 7) with
+   `defer` — it runs on every exit path, including `ctx` cancellation via
+   `signal.NotifyContext` — and give it its **own** context
+   (`context.WithTimeout(context.Background(), 30 s)`), never the possibly
+   cancelled run ctx (R2-M8).
+2. `tmux new-session -d -s <name> -- claude -p --verbose --input-format
+   stream-json --output-format stream-json --name <name> --settings
+   {"crossSessionInbound":"accept"}` (argv passed as separate tmux
+   arguments; no shell quoting). **Immediately** capture the target's
+   process identity (R2-M8): `tmux list-panes -t <name> -F '#{pane_pid}'`
+   ⇒ `targetPID`, `targetProcStart := procStart(targetPID)`. A failure
+   here ⇒ `FAIL: cannot identify the throwaway session's process`, exit 1
+   (cleanup still kills the session by name).
+3. Poll ≤ 15 s (250 ms `sleep`): `readRegistry` for the non-proxy entry
+   with `TmuxSessionName() == name` **and `PID == targetPID`** (the pane
+   pid is the claude process, since tmux exec's the command directly);
+   record its `Inbox` and registry files (`<registryDir>/<pid>.json` +
+   `glob("<pid>.*.key")`). None in time ⇒ `FAIL: session did not register
+   (Claude Code ≥ 2.1.224 with peer messaging required)`, exit 1.
+4. `features := readPeerFeatures(registryDir, targetPID)` or
+   `DefaultPeerFeatures`; `h, err := spawn(ctx, Config{Name:
+   "pdx-selftest-probe", RegistryDir, SockDir, Version: VerifiedCCVersion,
+   SessionID: uuid, PeerFeatures: features})` — a real `pdx peer-proxy`
+   subprocess (D4/M11); `Spawn` guarantees its own cleanup on failure
+   (Task 3), so a failure here ⇒ `FAIL: helper did not start: …`, exit 1,
+   nothing of the probe left.
+5. `nonce := 8 hex`; `writeFrame(target.Inbox, BuildFrame(uuid, h.Sock(),
    Wrapper{From: "uds:"+h.Sock(), FromName: "pdx-selftest-probe", FromMode:
    prompting, Text: "PDX_SELFTEST " + nonce + ": reply with exactly: PONG "
    + nonce}), 5 s)`; error ⇒ `FAIL: write to <inbox>: …`.
-5. Wait ≤ `timeout` (default 60 s) on `h.Frames()` for a frame with `Type
+6. Wait ≤ `timeout` (default 60 s) on `h.Frames()` for a frame with `Type
    == "user"`, `FromSocket(From) == target.Inbox` and content containing
    `nonce` ⇒ `PASS: reply from <name> via helper pid <p> in <elapsed>`,
    exit 0; timeout ⇒ `FAIL: no reply within <timeout>`, exit 1; a frame
    from the target without the nonce ⇒ `note:` and keep waiting;
-   `Frames()` closed (helper died) ⇒ `FAIL: helper exited`.
-6. **Cleanup (M12), always, in this order, each step reported on stdout
-   and a failure turning the exit code to 1 with `cleanup incomplete`:**
-   `h.Stop(2 s)`; `tmux kill-session -t <name>`; wait ≤ 5 s for
-   `!pidAlive(target.PID) || procStart(target.PID) != target.ProcStart`,
-   else SIGTERM, wait 2 s, SIGKILL, wait 2 s; then, for each of the
-   target's registry files still present whose `RegistryProcStart` equals
-   `target.ProcStart`, unlink it, and unlink `target.Inbox` if connecting
-   is refused; finally verify the probe's files (`h.Files()`) and socket
-   are gone (remove if not). Print `cleanup: ok` or `cleanup incomplete:
-   <what remains>`.
+   `Frames()` closed (helper died) ⇒ `FAIL: helper exited`; run ctx
+   cancelled ⇒ `FAIL: interrupted`.
+7. **Cleanup (M12/R2-M8), always, under the cleanup ctx, every step
+   reported on stdout; any failure turns the exit code to 1 and the last
+   line to `cleanup incomplete: <what remains>`:**
+   a. if `h != nil`: `h.Stop(2 s)`; then verify `h.Files()` and `h.Sock()`
+      are gone (`remove` any leftover; the sock only if `dialRefused`).
+   b. `tmux kill-session -t <name>` (ENOENT-style "no such session" is fine).
+   c. if `targetPID != 0`: wait ≤ 5 s for `!pidAlive(targetPID) ||
+      procStart(targetPID) != targetProcStart`; else SIGTERM (re-checking
+      procStart first), wait 2 s, SIGKILL (re-checking again), wait 2 s;
+      still the same process ⇒ record `target pid <p> still alive`.
+   d. target files: `<registryDir>/<targetPID>.json` and each
+      `glob(<targetPID>.*.key)` still present whose `registryProcStart ==
+      targetProcStart` ⇒ `remove`; `<sockDir>/<targetPID>.sock` ⇒ `remove`
+      if `dialRefused`. Files whose procStart differs are left and listed
+      as `foreign file kept: <path>`.
+   e. print `cleanup: ok` or `cleanup incomplete: …`.
 
-**Tests (all deps faked; no tmux/claude/real dirs):** `new-session` and
-`kill-session` argv golden; entry appears on the 3rd poll ⇒ proceeds;
-never appears ⇒ FAIL and kill-session still called; the frame written to
-the target inbox parses with the nonce and `from` = the fake handle's
-sock; reply with the nonce ⇒ PASS; frame from another socket ignored;
-`Frames` closed ⇒ FAIL helper exited; timeout ⇒ FAIL and cleanup called;
-spawn failure ⇒ FAIL, kill-session called; **cleanup: target pid stays
-alive after kill-session ⇒ SIGTERM then SIGKILL observed; leftover target
-registry files with matching procStart are removed and non-matching ones
-kept; a leftover probe socket is removed; a cleanup step failing ⇒ exit 1
-with `cleanup incomplete`**; ctx cancelled mid-wait ⇒ cleanup runs.
+**Tests (all deps faked; isolated temp dirs only; no tmux/claude):**
+`new-session`, `list-panes` and `kill-session` argv golden; `list-panes`
+failure ⇒ FAIL and kill-session still called; entry appears on the 3rd
+poll ⇒ proceeds; entry with the right name but another pid ⇒ ignored;
+never appears ⇒ FAIL, kill-session called, **target pid alive after kill ⇒
+SIGTERM then SIGKILL observed** (identity captured before registration —
+R2-M8); the frame written to the target inbox parses with the nonce and
+`from` = the fake peer's sock; reply with the nonce ⇒ PASS; frame from
+another socket ignored; `Frames` closed ⇒ FAIL helper exited; timeout ⇒
+FAIL and cleanup called; spawn failure ⇒ FAIL, kill-session called, no
+probe cleanup attempted (`h == nil`); **cleanup**: leftover target registry
+files with matching procStart removed and non-matching kept (listed as
+foreign); leftover probe socket removed; a `remove` error ⇒ exit 1 with
+`cleanup incomplete`; **run ctx cancelled mid-wait ⇒ cleanup runs to
+completion under its own ctx** (assert the fake tmux saw `kill-session`
+with a non-cancelled ctx).
 
 - [ ] tests written and failing
 - [ ] implementation, all green
@@ -1153,8 +1281,9 @@ with `cleanup incomplete`**; ctx cancelled mid-wait ⇒ cleanup runs.
       `pdx msg deliver off` on b ⇒ `b: deliver_disabled`; 31 sends in a loop
       ⇒ 31st `b: rate_limited`; `curl -X POST …7862/api/peers/deliver -H
       'Authorization: Bearer btoken'` ⇒ 403 `admin_not_allowed`; remove b's
-      entry for a (`host remove`) then send from a ⇒ `one-way` in the
-      output and `no_return_route` in a's log.
+      entry for a (`host remove`) then send from a ⇒ `b: host_unverified`
+      (auth refusal — the one-way state is unreachable from the CLI, D12;
+      `one_way` is unit-tested only).
 - [ ] Restart b with a helper alive: log shows the sweep terminating the
       old pid, `proxies.json` is `[]`, no stale `<pid>.json`; a helper whose
       pid was reused by an unrelated process (simulate by editing the
@@ -1196,3 +1325,20 @@ with `cleanup incomplete`**; ctx cancelled mid-wait ⇒ cleanup runs.
 | m1 | Minor | `normalizeRemoteRows` inputs / unparsable Address | `(rows, alias, hostID)`; Address rebuilt from session name / `cc:` / code (Task 5) |
 | m2 | Minor | `proxies.json.origin` keys | JSON tags on `OriginKey`, raw-key test (Task 1, 6) |
 | m3 | Minor | CLI env-unset error lacks `origin_unknown` | `pdx msg: origin_unknown: …` (Task 11) |
+
+## Review disposition (codex plan review R2 `task-mu088bhz-yban9j`)
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| R2-B1 | Blocker | Stop does not close admission; pumps can `workers.Add` after `Wait` | manager `closed` flag, startups tracked in `wg`, Stop = close admission → wait startups → release ready → `wg.Wait` → `procCancel`; module Stop = `stopCancel` → `helpers.Stop` → `workers.Wait`; reply semaphore selects on `stopCtx`; Stop-vs-Barrier-startup test (Task 6, 7, 9) |
+| R2-M1 | Major | Release deleted the map entry at stopping; waiter returned a possibly stopped helper | instance stays in the map until exited; `exited` channel on the struct; every wake re-inspects state under the lock; Acquire during stopping waits then spawns (Task 6) |
+| R2-M2 | Major | creator ran Spawn on its own stack, uncancellable | startup runs in a manager goroutine; every caller waits on `ready`/`waitCtx`; test for creator cancellation (Task 6) |
+| R2-M3 | Major | sweep TERM→KILL could hit a reused pid | `same()` re-checked before every signal and in every wait condition; procStart error ⇒ never signal; pid-reuse-after-TERM test (Task 6) |
+| R2-M4 | Major | unresolved sweep records and failed Release cleanups dropped from `proxies.json` | `unresolved` list retained across writes; Release keeps a record on cleanup failure; only the final write failure fails Start (Task 6) |
+| R2-M5 | Major | client pump / Handle.Stop join contract missing | `Handle.Stop` closes stdin, kills, closes the stdout read end, closes done, joins the pump, closes Frames; flood-then-Stop test (Task 3) |
+| R2-M6 | Major | audit coverage overstated; SetModes failure undefined | explicit audited / not-audited contract with tests; effective mode computed before Insert (no SetModes); `SetResult` carries the mode for the sender; SetResult failure logged (Task 4, 7, 8, 9) |
+| R2-M7 | Major | one-way acceptance unreachable under P2 auth | D12: one-way = verified inbound, missing outbound; CLI-unreachable, unit-tested; Task 13 case rewritten; spec §4.3 follow-up noted |
+| R2-M8 | Major | selftest early failures / cancellation could leave processes or files | target pid+procStart captured right after `new-session`; cleanup under its own ctx; Spawn cleans its own pre-ready leftovers by sessionId/procStart (Task 3, 12) |
+| R2-M9 | Major | shared fake not importable; selftest lacks I/O seams | `proxyhelpertest` real package with cancellable variants and counters; `selftestPeer` interface; glob/remove/dialRefused/registryProcStart seams; isolated temp dirs allowed (Task 3, 12) |
+| R2-m1 | Minor | proxy recognition defeated by renamed binary / spaced paths | `IsProxyProcess` also uses `ExePath`; remaining cases recorded as a known limitation in D9 |
+| R2-m2 | Minor | rebuilt Address could fail `SplitAddress` | Address kept only if `SplitAddress` accepts it, else `""` (Task 5) |
