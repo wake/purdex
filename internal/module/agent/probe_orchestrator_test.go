@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"expvar"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -689,7 +690,8 @@ func TestMetrics_GraceWindowSuppressedIncrements(t *testing.T) {
 	}
 }
 
-// OB4 — PDX_DEV_MODE=1 emits [probe] log lines; unset suppresses them.
+// OB4 — devmode.Enabled() (on unless PDX_DEV_MODE=0) emits [probe] log
+// lines; PDX_DEV_MODE=0 suppresses them (spec D6).
 func TestDevMode_LogsGatedByEnv(t *testing.T) {
 	t.Run("env_set_emits_log", func(t *testing.T) {
 		t.Setenv("PDX_DEV_MODE", "1")
@@ -706,8 +708,26 @@ func TestDevMode_LogsGatedByEnv(t *testing.T) {
 			t.Fatalf("expected [probe] log when PDX_DEV_MODE=1, got %q", buf.String())
 		}
 	})
-	t.Run("env_unset_silent", func(t *testing.T) {
+	t.Run("env_unset_emits_log", func(t *testing.T) {
 		t.Setenv("PDX_DEV_MODE", "")
+		if err := os.Unsetenv("PDX_DEV_MODE"); err != nil {
+			t.Fatal(err)
+		}
+		m, _, _ := orchTestModule(t)
+
+		var buf bytes.Buffer
+		origOut := log.Writer()
+		log.SetOutput(&buf)
+		t.Cleanup(func() { log.SetOutput(origOut) })
+
+		m.probeOrch.recordHookAt("work")
+
+		if !strings.Contains(buf.String(), "[probe]") {
+			t.Fatalf("expected [probe] log when PDX_DEV_MODE is unset (spec D6), got %q", buf.String())
+		}
+	})
+	t.Run("env_zero_silent", func(t *testing.T) {
+		t.Setenv("PDX_DEV_MODE", "0")
 		m, _, _ := orchTestModule(t)
 
 		var buf bytes.Buffer
@@ -718,7 +738,7 @@ func TestDevMode_LogsGatedByEnv(t *testing.T) {
 		m.probeOrch.recordHookAt("work")
 
 		if strings.Contains(buf.String(), "[probe]") {
-			t.Fatalf("expected no [probe] log when PDX_DEV_MODE unset, got %q", buf.String())
+			t.Fatalf("expected no [probe] log when PDX_DEV_MODE=0, got %q", buf.String())
 		}
 	})
 }
