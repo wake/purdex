@@ -313,9 +313,12 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 // verifies (outside any lock) and stores an outbound token plus the
 // learned host_id, and an optional AllowBypass sets that flag — either,
 // both, or (a no-op) neither may be present. The commit re-checks under
-// the lock that the entry is still present, its HostID is still empty or
-// equal to the newly learned one, and the learned host_id isn't the local
-// one.
+// the lock that the entry is still present, is still the SAME entry the
+// verify ran against (URL and InboundToken both match the pre-lock
+// snapshot — InboundToken is unique per entry and minted fresh at POST, so
+// this also catches a delete+re-create at the same alias/url as a
+// different entry), its HostID is still empty or equal to the newly
+// learned one, and the learned host_id isn't the local one.
 func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if !requireAdmin(w, r) {
@@ -325,9 +328,10 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 
 	m.core.CfgMu.RLock()
 	idx := m.core.Cfg.Peers.FindPeerHostByAlias(alias)
-	var existingURL string
+	var existingURL, existingInboundToken string
 	if idx != -1 {
 		existingURL = m.core.Cfg.Peers.Hosts[idx].URL
+		existingInboundToken = m.core.Cfg.Peers.Hosts[idx].InboundToken
 	}
 	adminToken := m.core.Cfg.Token
 	m.core.CfgMu.RUnlock()
@@ -367,8 +371,13 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		}
 		h := &cfg.Peers.Hosts[i]
 		if verifying {
-			if h.URL != existingURL {
-				return &apiError{http.StatusConflict, "url changed concurrently"}
+			// InboundToken is unique per entry and minted fresh at POST, so
+			// comparing it (alongside URL) catches an entry that was
+			// deleted and re-created — even at the SAME url — while this
+			// verify was in flight: it is a different entry wearing the
+			// same alias, and the verify's result must not land on it.
+			if h.URL != existingURL || h.InboundToken != existingInboundToken {
+				return &apiError{http.StatusConflict, "entry changed concurrently"}
 			}
 			if h.HostID != "" && h.HostID != learnedHostID {
 				return &apiError{http.StatusConflict, "host_id mismatch"}
