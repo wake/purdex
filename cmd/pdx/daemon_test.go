@@ -117,6 +117,71 @@ func TestMustAcquirePidLock_FatalWhenHeld(t *testing.T) {
 	}
 }
 
+// isDaemonRunning is only a probe: it must take a shared lock, so two
+// concurrent probers (`pdx status` racing `pdx stop`, say) never read each
+// other as the daemon. A held LOCK_SH from another fd must therefore not
+// make the probe report "running".
+func TestIsDaemonRunning_ProberDoesNotBlockProber(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	if err := os.WriteFile(pidPath, []byte("4242"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	other, err := os.OpenFile(pidPath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := syscall.Flock(int(other.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		t.Fatalf("shared lock from the other prober: %v", err)
+	}
+
+	running, _ := isDaemonRunning(pidPath)
+	if running {
+		t.Fatal("a concurrent prober's shared lock must not read as a running daemon")
+	}
+}
+
+// A prober holds its shared lock for microseconds; `pdx serve` must ride
+// through that instead of dying with "already running". A real daemon's
+// exclusive lock is held forever, so the retries do not weaken the
+// double-daemon refusal (see TestMustAcquirePidLock_FatalWhenHeld).
+func TestMustAcquirePidLock_RetriesPastTransientHolder(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	if err := os.WriteFile(pidPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prober, err := os.OpenFile(pidPath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prober.Close()
+	if err := syscall.Flock(int(prober.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		syscall.Flock(int(prober.Fd()), syscall.LOCK_UN)
+		close(released)
+	}()
+
+	var fatal string
+	f := mustAcquirePidLock(pidPath, 222, func(format string, args ...any) { fatal = fmt.Sprintf(format, args...) })
+	<-released
+	if fatal != "" {
+		t.Fatalf("fatalf invoked for a transient shared lock: %q", fatal)
+	}
+	if f == nil {
+		t.Fatal("expected a held lock once the prober let go")
+	}
+	defer releasePidLock(f, pidPath)
+	if running, pid := isDaemonRunning(pidPath); !running || pid != 222 {
+		t.Fatalf("isDaemonRunning = (%v, %d), want (true, 222)", running, pid)
+	}
+}
+
 func TestIsDaemonRunning(t *testing.T) {
 	dir := t.TempDir()
 	pidPath := filepath.Join(dir, "pdx.pid")

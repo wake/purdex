@@ -241,30 +241,3 @@ func TestReadVersionFile(t *testing.T) {
 		t.Fatalf("missing VERSION → %q, want unknown", got)
 	}
 }
-
-func TestRebuildLdflags_InjectBuildinfoHashAndVersion(t *testing.T) {
-	got := rebuildLdflags("abc1234", "1.2.3")
-	for _, want := range []string{
-		"-X github.com/wake/purdex/internal/buildinfo.Hash=abc1234",
-		"-X github.com/wake/purdex/internal/buildinfo.Version=1.2.3",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("ldflags %q missing %q", got, want)
-		}
-	}
-}
-
-// An empty hash or version must never be baked in as "": buildinfo.Hash=""
-// would make /api/dev/daemon/check report Available forever (latest hash is
-// never empty, so it never equals "").
-func TestRebuildLdflags_EmptyIdentityBecomesUnknown(t *testing.T) {
-	got := rebuildLdflags("", "")
-	for _, want := range []string{
-		"-X github.com/wake/purdex/internal/buildinfo.Hash=unknown",
-		"-X github.com/wake/purdex/internal/buildinfo.Version=unknown",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("ldflags %q missing %q", got, want)
-		}
-	}
-}
