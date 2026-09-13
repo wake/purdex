@@ -38,7 +38,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers\n")
 		os.Exit(1)
 	}
 
@@ -61,6 +61,8 @@ func main() {
 		runStatus(os.Args[2:])
 	case "statusline-proxy":
 		runStatuslineProxy(os.Args[2:])
+	case "peers":
+		runPeers(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
