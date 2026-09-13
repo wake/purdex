@@ -35,6 +35,15 @@ const remoteFetchTimeout = 3 * time.Second
 // this host's own error responses and rows, via boundRemoteText.
 const maxRemoteTextBytes = 200
 
+// maxRemoteRowsBytes bounds the JSON-encoded size of one remote host's
+// Peers list in a scope=all fan-out row. Every row is attacker-controlled
+// (any configured peer host), and the aggregate scope=all response has no
+// bound of its own beyond the CLI's overall 16 MiB response cap — without
+// a per-host cap, a single misbehaving or malicious peer returning a huge
+// inventory (e.g. one record with a multi-MB cwd) could push the whole
+// response past that cap and take down every other host's rows with it.
+const maxRemoteRowsBytes = 1 << 20 // 1 MiB
+
 // boundRemoteText truncates s to at most maxRemoteTextBytes bytes, cutting
 // on a rune boundary so the result is always valid UTF-8, and appends "…"
 // when truncation actually removed something. Used to bound remote peer
@@ -389,6 +398,22 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	}
 
 	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID)
+
+	// A single misbehaving/malicious peer host must not be able to inflate
+	// the whole scope=all aggregate past the CLI's own 16 MiB response
+	// cap. Re-encode just this host's rows and, if they alone already
+	// exceed maxRemoteRowsBytes, drop them and report a bounded failure
+	// row instead — every OTHER host's row (and the local one) stays
+	// intact regardless of what this one host returned.
+	if encoded, err := json.Marshal(peers); err == nil && len(encoded) > maxRemoteRowsBytes {
+		return ipeers.HostResult{
+			Alias:  h.Alias,
+			HostID: resultHostID,
+			OK:     false,
+			Error:  fmt.Sprintf("peer inventory too large (%d bytes)", len(encoded)),
+			Peers:  []ipeers.PeerRecord{},
+		}
+	}
 
 	// env.Error is the remote peer's own reported error text — bound and
 	// prefix it the same way verifyHost does for the add/put 502 body, so

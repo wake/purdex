@@ -1078,6 +1078,98 @@ func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 	}
 }
 
+// TestHandlePeers_ScopeAll_OversizedHostRowCapped pins the per-host
+// aggregated size cap in fan-out: a single misbehaving/malicious remote
+// host returning a huge inventory (here, one record with a 3 MiB cwd) must
+// not be allowed to inflate the whole scope=all response — its row is
+// replaced with a bounded failure row, while the local row and every other
+// healthy host's row are left intact, and the total response stays well
+// under the CLI's overall response cap.
+func TestHandlePeers_ScopeAll_OversizedHostRowCapped(t *testing.T) {
+	dir := t.TempDir()
+
+	hugeCwd := strings.Repeat("<", 3*1024*1024)
+	oversized := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// SetEscapeHTML(false): the stock encoder HTML-escapes every "<" to
+		// "<" (a 6x blowup), which would push this 3 MiB payload past
+		// fetchRemote's own 16 MiB wire cap before it ever reaches the
+		// per-host row cap this test targets.
+		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
+		enc.Encode(ipeers.Envelope{
+			HostID: "big:111",
+			OK:     true,
+			Peers: []ipeers.PeerRecord{
+				{Address: "big/mt1", SessionCode: "big-1", Cwd: hugeCwd},
+			},
+		})
+	}))
+	defer oversized.Close()
+
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID: "small:222",
+			OK:     true,
+			Peers: []ipeers.PeerRecord{
+				{Address: "small/mt1", SessionCode: "small-1"},
+			},
+		})
+	}))
+	defer healthy.Close()
+
+	sessions := &fakeSessions{sessions: []session.SessionInfo{{Code: "local-1", Name: "local-1"}}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "big", URL: oversized.URL, Token: "tok-big", HostID: "big:111"},
+		{Alias: "small", URL: healthy.URL, Token: "tok-small", HostID: "small:222"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	if got := rr.Body.Len(); got > 2*1024*1024 {
+		t.Fatalf("response body = %d bytes, want < 2 MiB", got)
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Hosts) != 3 {
+		t.Fatalf("hosts = %+v, want 3 rows", got.Hosts)
+	}
+
+	local := got.Hosts[0]
+	if local.Alias != "mlab" || !local.OK || len(local.Peers) != 1 || local.Peers[0].SessionCode != "local-1" {
+		t.Errorf("local row = %+v, want intact with local-1", local)
+	}
+
+	bigRow := got.Hosts[1]
+	if bigRow.OK {
+		t.Errorf("big row = %+v, want ok=false (oversized)", bigRow)
+	}
+	if bigRow.Peers == nil || len(bigRow.Peers) != 0 {
+		t.Errorf("big row peers = %+v, want empty non-nil slice", bigRow.Peers)
+	}
+	if !strings.Contains(bigRow.Error, "too large") {
+		t.Errorf("big row error = %q, want mention of \"too large\"", bigRow.Error)
+	}
+
+	smallRow := got.Hosts[2]
+	if smallRow.Alias != "small" || !smallRow.OK || len(smallRow.Peers) != 1 || smallRow.Peers[0].SessionCode != "small-1" {
+		t.Errorf("small row = %+v, want intact with small-1", smallRow)
+	}
+}
+
 // TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory pins Item 4: the
 // per-host remote fetches must start before (and run concurrently with)
 // the local inventory build, not after it. Rather than bounding wall-clock
