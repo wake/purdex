@@ -121,6 +121,8 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	instance := m.sessions.TmuxInstance()
+
 	sessions, err := m.sessions.ListSessions()
 	if err != nil {
 		writeError(err.Error())
@@ -170,6 +172,17 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 				Status:     owner.Status,
 			}
 		}
+	}
+
+	// Mirrors handleSessionProvenance (internal/module/agent): the tmux
+	// generation is sampled on both sides of the (slow) owner-resolution
+	// work. A tmux server that restarted mid-inventory would otherwise let
+	// session/owner data straddle two different tmux generations into one
+	// answer. Either sample being "" (unknown) means the check cannot fire,
+	// and the response proceeds as if nothing had changed.
+	if after := m.sessions.TmuxInstance(); instance != "" && after != "" && after != instance {
+		writeError("tmux server restarted during inventory")
+		return
 	}
 
 	partial := len(unresolved) > 0

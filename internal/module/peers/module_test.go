@@ -206,6 +206,77 @@ func TestHandlePeers_ResolverError_ReportedAsUnresolved(t *testing.T) {
 	}
 }
 
+// TestHandlePeers_TmuxRestartedDuringInventory pins Item 2: mirroring
+// handleSessionProvenance, the tmux server generation is sampled before
+// ListSessions() and again after the owner loop. When both samples are
+// non-empty and differ, the tmux server restarted mid-inventory and the
+// whole response is refused (ok:false, partial:false, peers:[]) rather than
+// risking session/owner data from two different tmux generations stitched
+// into one answer.
+func TestHandlePeers_TmuxRestartedDuringInventory(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{
+		sessions:  []session.SessionInfo{{Code: "s1", Name: "s1"}},
+		instances: []string{"6901:1", "6901:2"},
+	}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{
+		"s1": {AgentType: "cc", SessionID: "sess-1"},
+	}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	rr := doGetPeers(t, m, "/api/peers")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var got response
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if got.OK {
+		t.Errorf("ok = true, want false")
+	}
+	if got.Error != "tmux server restarted during inventory" {
+		t.Errorf("error = %q, want %q", got.Error, "tmux server restarted during inventory")
+	}
+	if got.Partial {
+		t.Errorf("partial = true, want false")
+	}
+	if len(got.Peers) != 0 {
+		t.Errorf("peers = %+v, want empty", got.Peers)
+	}
+}
+
+// TestHandlePeers_TmuxInstanceUnknown_ProceedsNormally is the companion case:
+// when either sample is "" (unknown), the mismatch check cannot fire — the
+// handler proceeds exactly as before this change.
+func TestHandlePeers_TmuxInstanceUnknown_ProceedsNormally(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{
+		sessions:  []session.SessionInfo{{Code: "s1", Name: "s1"}},
+		instances: []string{"", "x"},
+	}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{
+		"s1": {AgentType: "cc", SessionID: "sess-1"},
+	}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	rr := doGetPeers(t, m, "/api/peers")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var got response
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if !got.OK {
+		t.Fatalf("ok = false, want true; error=%q", got.Error)
+	}
+}
+
 func TestHandlePeers_SoftBudget(t *testing.T) {
 	dir := t.TempDir()
 	t0 := time.Unix(1000, 0)

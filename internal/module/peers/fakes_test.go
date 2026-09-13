@@ -20,6 +20,12 @@ var errFakeProvider = errors.New("fake session provider failure")
 type fakeSessions struct {
 	sessions []session.SessionInfo
 	err      error
+	// instances, when non-nil, is a sequence consumed one entry per
+	// TmuxInstance() call so tests can drive a "sampled before / sampled
+	// after" generation mismatch; once exhausted it keeps returning the
+	// final entry. When nil, TmuxInstance() returns "" (unknown), as before.
+	instances    []string
+	instanceCall int
 }
 
 func (f *fakeSessions) ListSessions() ([]session.SessionInfo, error) {
@@ -43,7 +49,17 @@ func (f *fakeSessions) UpdateMeta(code string, update session.MetaUpdate) error 
 
 func (f *fakeSessions) HandleTerminalWS(w http.ResponseWriter, r *http.Request, code string) {}
 
-func (f *fakeSessions) TmuxInstance() string { return "" }
+func (f *fakeSessions) TmuxInstance() string {
+	if f.instances == nil {
+		return ""
+	}
+	if f.instanceCall >= len(f.instances) {
+		return f.instances[len(f.instances)-1]
+	}
+	v := f.instances[f.instanceCall]
+	f.instanceCall++
+	return v
+}
 
 // fakeOwners is a test double implementing agent.OwnerResolver, backed by a
 // map keyed by session code. calls records every code passed to
