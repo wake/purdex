@@ -1,6 +1,6 @@
 # Spec — Local daemon install & update from the Purdex app
 
-**Status:** v3 — after codex round 2 (`task-mu00stga-h47932`: 1 Blocker, 6 Important, 1 Minor; dispositions in §6)
+**Status:** v4 — after codex round 3 (`task-mu00ztq3-alws01`: 0 Blocker, 5 Important; dispositions in §8). Approved for plan: rounds converged to precision items only.
 **Follows:** `docs/superpowers/specs/2026-04-18-statusline-and-daemon-rebuild-design.md` §7–§13 (daemon dev rebuild, local only). This spec fills the "cross-machine daemon" gap that design explicitly left open.
 
 ## 0. Summary
@@ -257,7 +257,8 @@ interface LocalDaemonStatus {
   reason?: string                     // why 'external' (human-readable)
   binPath: string
   installed: { version: string; hash: string; goos: string; goarch: string } | null
-  running: { version: string; hash: string; url: string; pid: number | null } | null
+  alive: { pid: number } | null       // a process that IS our managed binary (see Ownership)
+  running: { version: string; hash: string; url: string } | null
   config: { bind: string; port: number; hasToken: boolean } | null
   target: { goos: 'darwin' | 'linux'; goarch: 'arm64' | 'amd64' }
   tools: { tmux: string | null }      // resolved tmux path on the launch PATH, see start
@@ -270,30 +271,49 @@ interface LocalDaemonStatus {
   `reason: 'custom data_dir'` (we do not manage relocated installs).
 - `installed`: `binPath` exists → `binPath version --json` (2 s timeout);
   parse failure → all fields `'unknown'`.
-- **Liveness** (separate from health): `pid` = integer in `pidPath`;
-  `process.kill(pid, 0)` succeeds → `alive`. A daemon can be alive and
-  unhealthy (health timeout during a slow migration, or wedged); it must
-  still be stopped before a swap — `running === null` never means "nothing
-  to stop".
 - `running`: `GET http://<bind>:<port>/api/health` (1.5 s) → `ok` →
-  `{version, hash, url, pid}`; `pid` is the pid above or `null`. Health
-  without `hash` (pre-Phase-A daemon) → `'unknown'`, which does **not**
-  block Update.
-- **Ownership** (D8, tightened): whenever `alive` or `running`, verify with
-  `lsof` (full paths, unlike `ps -o comm=` which reports `argv[0]`):
-  1. `/usr/sbin/lsof -nP -a -p <pid> -d txt -F0pfn` — parse the NUL-separated
-     `f`/`n` fields and require that **some** `txt` entry's realpath equals
-     realpath(`binPath`);
-  2. `/usr/sbin/lsof -nP -a -p <pid> -iTCP:<port> -sTCP:LISTEN -F0pn` —
-     require at least one entry, proving that pid is the one answering
-     `/api/health` on our port (the pid file's owner and the listener can
-     diverge; `serve` used to continue after a failed lock, §2.4b).
-  Both pass → `'managed'`. Either fails, `lsof` errors, or no pid →
-  `'external'` with a reason (`'running daemon is <path>'`,
-  `'pid <n> does not own port <port>'`, `'pid unknown'`). Nothing alive:
-  `binPath` exists → `'managed'`, else `'none'`. Ownership is re-evaluated
-  **immediately before `stop`** inside `install`/`restart`; a status from
-  minutes earlier is never trusted for a destructive step.
+  `{version, hash, url}`. Health without `hash` (pre-Phase-A daemon) →
+  `'unknown'`, which does **not** block Update.
+- **Candidate pid**: the integer in `pidPath`, or `null`. The pid file is
+  permanent (§2.4b) and Node cannot read flock state, so the number is only
+  a *candidate* — a rebooted machine can hand it to an unrelated process.
+- **Ownership / liveness** — one `lsof`-based procedure, `resolveOwner()`:
+  1. **Executable of the candidate**: if a candidate pid exists and
+     `process.kill(pid, 0)` succeeds, run
+     `/usr/sbin/lsof -nP -a -p <pid> -d txt -F0pfn`. Parse strictly: the
+     output is *sets* separated by `\n`, each set a sequence of
+     NUL-terminated `<letter><value>` fields; group by `p`, then by `f`.
+     The pid is **ours** iff some `f` set with value `txt` has an `n` whose
+     `realpath` equals `realpath(binPath)`. Never fall back to string
+     comparison of unresolved paths.
+     - ours → `alive = { pid }`.
+     - not ours (or `kill` failed) → the pid is stale; `alive = null`.
+  2. **Owner of the endpoint**: run
+     `/usr/sbin/lsof -nP -a -iTCP:<port> -sTCP:LISTEN -F0pfn` (all
+     processes). Parse the same way; a listener **matches our endpoint**
+     when its `n` is `<bind>:<port>` or `*:<port>`. Collect the `p` of every
+     matching listener.
+  3. **Decision**:
+     - a matching listener whose pid ≠ `alive.pid` (including when
+       `alive === null`) → `managed: 'external'`,
+       `reason: 'port <port> is served by pid <p>'` (or `'running daemon is
+       <path>'` when its `txt` resolves to a different binary).
+     - `alive` and (no matching listener, or the listener is `alive.pid`) →
+       `'managed'`. A managed process that holds the pid file but has not
+       started listening yet (migration in progress) is therefore
+       **managed-unhealthy**, and **Restart** is offered rather than a
+       refusal.
+     - `alive === null`, no matching listener: `binPath` exists → `'managed'`
+       (stopped; a stale pid is ignored), else `'none'`.
+  4. **Timeouts**: each `lsof` gets 5 s (10 s total); on timeout the child
+     is killed, partial output discarded, and the result is
+     `managed: 'external'`, `reason: 'ownership check timed out'`. `-d txt`
+     narrows the output, not the scan cost, so the bound is mandatory.
+  Ownership is re-evaluated **immediately before `stop`** inside
+  `install`/`restart`; a status from minutes earlier is never trusted for a
+  destructive step. `running !== null` with `alive === null` and no
+  matching listener cannot happen (something answered health on the port);
+  treat it as `'external'`, `reason: 'health answered but no listener found'`.
 - `target`: `process.platform` → `darwin`/`linux` (else throw);
   `process.arch` → `arm64` / `x64 → amd64`.
 - `tools.tmux`: `which tmux` under the **launch PATH** (below); `null` when
@@ -308,12 +328,17 @@ fail every tmux call. `launchEnv()` builds the env once per process:
 `PDX_DEV_MODE=1`. Resolution order, each with stdin closed and a 5 s
 timeout, taking the first that yields a non-empty PATH:
 
-1. `execFile($SHELL || '/bin/zsh', ['-ilc', 'printf "\0PDX_PATH\0%s\0" "$PATH"'])`
-   — interactive **is** required: the measured `-lc` PATH on the Mini
-   lacks `~/.local/bin` (where `claude` lives) and nvm, which live in
-   `.zshrc`; `-ilc` took 0.44 s. Only the bytes between the two
-   `\0PDX_PATH\0` … `\0` markers are used, so banners, prompts or plugin
-   output cannot leak into PATH.
+1. `execFile($SHELL || '/bin/zsh', ['-ilc', script])` where the shell
+   script is `printf '\n%s%s%s\n' '<S>' "$PATH" '<S>'` and `<S>` is a
+   per-call sentinel `PDX_PATH_<32 hex from crypto.randomBytes(16)>`
+   interpolated into the script text. No NUL bytes anywhere in argv (Node
+   rejects them); only the two sentinel occurrences delimit the value, so
+   banners, prompts or plugin output on either side cannot leak into PATH,
+   and a sentinel collision is impossible in practice. Interactive **is**
+   required: the measured `-lc` PATH on the Mini lacks `~/.local/bin`
+   (where `claude` lives) and nvm, which live in `.zshrc`; `-ilc` took
+   0.44 s. A result is valid only if both sentinels are found and the text
+   between them is non-empty.
 2. The same with `-lc` (login files only).
 3. `process.env.PATH` prefixed with
    `/opt/homebrew/bin:/usr/local/bin:` + `join(os.homedir(), '.local/bin')`
@@ -366,11 +391,11 @@ reported through `onProgress(step)`:
    → `127.0.0.1`, and the result carries `bindNote` explaining why (the
    user can edit the config and restart). `host_id` is left for the daemon
    to mint (`EnsureHostID`).
-4. `stop` — when the managed daemon is **alive** (pid lock held), healthy
-   or not. Re-run the ownership check first; not `managed` → throw. Then
-   spawn `binPath stop` under `launchEnv()`, await exit with a **35 s**
-   budget (`pdx stop` itself waits 30 s then SIGKILLs, `daemon.go:305`),
-   then poll until `process.kill(pid, 0)` fails **and** the port refuses
+4. `stop` — when `alive !== null` (our binary is running, healthy or not).
+   Re-run `resolveOwner()` first; not `managed` → throw. Then spawn
+   `binPath stop` under `launchEnv()`, await exit with a **35 s** budget
+   (`pdx stop` itself waits 30 s then SIGKILLs, `daemon.go:305`), then poll
+   until `process.kill(alive.pid, 0)` fails **and** the port refuses
    connections (≤ 5 s more). Any timeout → throw before touching `binPath`.
 5. `swap` — `rename(newPath, binPath)`.
 6. `start` — `startDaemon()` below.
@@ -399,7 +424,7 @@ on-disk binary's hash (`pdx version --json`); a mismatch (another service on
 the port answered 200) throws `"port <n> is served by something else"`.
 
 **`start(): Promise<LocalDaemonResult>`** — for the UI's *Start* button and
-for `ensureRunning`. Refuses when `managed !== 'managed'` or when alive;
+for `ensureRunning`. Refuses when `managed !== 'managed'` or when `alive`;
 runs `startDaemon()` then step 7, so a recovered daemon returns the same
 registration payload as a fresh install.
 
@@ -409,8 +434,8 @@ running process is older (a crashed earlier update, or a manual copy).
 
 **`ensureRunning(): Promise<'started' | 'already-running' | 'not-installed' | 'external' | 'failed'>`**
 
-`status()` → `managed === 'managed' && !running` → `start()`, retried up to
-3× with 5 s spacing (a saved Tailscale bind can be a few seconds late after
+`status()` → `managed === 'managed' && alive === null` → `start()`,
+retried up to 3× with 5 s spacing (a saved Tailscale bind can be a few seconds late after
 a reboot; `pdx start` fails fast on `EADDRNOTAVAIL`). Called once from
 `app.whenReady()` after IPC registration; result logged, never thrown. Not
 called when `PDX_DEV_MODE === '0'`. It never touches `pdx.new`; a download
@@ -475,9 +500,9 @@ States and controls:
 | `managed` | Shows | Button |
 |---|---|---|
 | `none` | "No daemon installed on this machine" + target arch | **Install** |
-| `managed`, not running | installed version/hash | **Start** (`start()`) · **Update** when `installed.hash !== latestHash` |
+| `managed`, `alive === null` | installed version/hash | **Start** (`start()`) · **Update** when `installed.hash !== latestHash` |
 | `managed`, running | running version/hash, URL | **Update** when `installed.hash !== latestHash`; else **Restart** when `running.hash !== installed.hash` ("on-disk <hash> not yet running"); else "Up to date" |
-| `managed`, alive but unhealthy | "daemon process <pid> is alive but not answering" | **Restart** |
+| `managed`, `alive` but `running === null` | "daemon process <pid> is alive but not answering" | **Restart** |
 | `external` | "A daemon is running at <url> but is not managed by this app" | none |
 
 During install the block shows the progress step and disables buttons.
@@ -515,12 +540,20 @@ parent's `daemonCheck` changes.
     timeout → throw with old binary intact; start env carries the launch
     PATH and `PDX_DEV_MODE=1`; post-start health hash mismatch → throw;
     returns the token read back from the config on re-install.
-  - ownership: `lsof` txt match + listener match → managed; txt mismatch,
-    no listener, `lsof` failure, or pid missing → external with reason;
-    ownership re-checked immediately before `stop` (a status that changed
+  - `resolveOwner` (with canned `lsof -F0` output, including multi-set
+    output with `\n` between sets and a `txt` entry that is a dylib before
+    the executable): ours+listener-ours → managed/alive; ours+no-listener →
+    managed/alive (unhealthy → Restart); stale pid (txt ≠ binPath, no
+    listener) → managed/stopped; listener owned by another pid → external
+    with the pid in the reason; `lsof` timeout → external
+    `'ownership check timed out'` and the child killed; realpath is used
+    (symlinked `binPath`).
+  - ownership re-checked immediately before `stop` (a status that changed
     in between aborts the install).
   - liveness vs health: alive + health timeout → `stop` still runs before
-    `swap`; not alive + `binPath` present → `start` allowed.
+    `swap`; `alive === null` + `binPath` present → `start` allowed.
+  - `launchEnv`: argv contains no NUL; the PATH is extracted between the
+    sentinels even with banner text before and after.
   - `install` on a filesystem with no `~/.config/pdx` at all succeeds.
   - `start`: refuses unless managed and not alive; returns a `LocalDaemonResult`.
   - `restart`: stop → start → register, no download.
@@ -604,3 +637,13 @@ parent's `daemonCheck` changes.
 | 6 | Important | **Accepted.** Full-request lock kept (agrees with codex); 6-minute build+transfer deadline via `SetWriteDeadline`; disconnect cancels build; 409 = busy, not queued. | §2.5 step 6 |
 | 7 | Important | **Accepted.** Step 0 `mkdir -p binDir`; test with an empty home. | §3.1 install |
 | 8 | Minor | **Accepted.** Failure contract split at "stop began"; UI re-queries and offers Start. | §3.1 Failure contract |
+
+## 8. Review dispositions — codex round 3 (`task-mu00ztq3-alws01`)
+
+| # | Sev | Disposition | Where |
+|---|---|---|---|
+| 1 | Important | **Accepted.** The pid-file number is a candidate only; `alive` requires the `lsof txt` match. A reused pid reads as managed-stopped, not external. | §3.1 Ownership steps 1, 3 |
+| 2 | Important | **Accepted.** `alive` added to `LocalDaemonStatus`; a listener is no longer required for `managed` — only a *foreign* listener on our endpoint makes it external; `ensureRunning`/`start` key off `alive`. | §3.1 status, ensureRunning, §3.4 |
+| 3 | Important | **Accepted.** Exact `-F0pfn` set/field parsing spelled out; listener `n` must be `<bind>:<port>` or `*:<port>`; realpath only. | §3.1 Ownership steps 1–2 |
+| 4 | Important | **Accepted.** 5 s per `lsof`, 10 s total, kill on timeout, result external with a timeout reason. | §3.1 Ownership step 4 |
+| 5 | Important | **Accepted with a simpler design.** Dropped NUL entirely: a per-call random sentinel with newline framing; argv never contains NUL. | §3.1 Launch PATH |
