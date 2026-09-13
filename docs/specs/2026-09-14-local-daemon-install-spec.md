@@ -1,6 +1,6 @@
 # Spec — Local daemon install & update from the Purdex app
 
-**Status:** v2 — after codex round 1 (`task-mu00ipjj-5tblb1`: 1 Blocker, 10 Important, 2 Minor; dispositions in §6)
+**Status:** v3 — after codex round 2 (`task-mu00stga-h47932`: 1 Blocker, 6 Important, 1 Minor; dispositions in §6)
 **Follows:** `docs/superpowers/specs/2026-04-18-statusline-and-daemon-rebuild-design.md` §7–§13 (daemon dev rebuild, local only). This spec fills the "cross-machine daemon" gap that design explicitly left open.
 
 ## 0. Summary
@@ -97,15 +97,23 @@ Replaces the two `os.Getenv("PDX_DEV_MODE") == "1"` reads
 Log line in `module.go` updated to say `PDX_DEV_MODE=0` disables. The
 `config.Dev.Update` gate in `cmd/pdx/main.go` is unchanged.
 
-### 2.4b `releasePidLock` removes before it unlocks
+### 2.4b The pid file is never unlinked; `serve` exits when the lock is held
 
-`cmd/pdx/daemon.go:166` unlocks the pid file and *then* unlinks it. A
-`serve` that starts in that gap can flock the doomed inode, after which the
-old process unlinks the file from under it and `pdx stop`/`status` report
-"not running" for a live daemon. Swap the order: `os.Remove` first, then
-`LOCK_UN` + close. The Electron flow awaits `pdx stop` before starting, so it
-does not hit this window today; the fix is cheap insurance for
-`pdx stop && pdx start` from a shell.
+`releasePidLock` (`cmd/pdx/daemon.go:166`) unlocks and then unlinks the pid
+file, and `runStop`'s SIGKILL branch unlinks it too (`:317`). Any ordering of
+unlink and unlock leaves a window in which a starting `serve` can open the
+old inode, flock it after the unlink, and then hold a lock on a file nobody
+can see — `pdx status`/`stop` report "not running" for a live daemon.
+
+Fix: **the pid file is permanent.** `releasePidLock` only `LOCK_UN`s and
+closes; the SIGKILL branch does not remove the file. `isDaemonRunning`
+already decides by *lock state*, not existence (`:181–191`), so an unlocked
+leftover file reads as stopped — no behaviour change for `start`/`stop`/
+`status`. Additionally `serve` **exits** (`log.Fatalf`) when
+`acquirePidLock` fails instead of logging and continuing
+(`cmd/pdx/main.go:116`): two daemons sharing one `data_dir` would also share
+the SQLite files, so continuing was never safe. Test: open → release → flock
+interleaving keeps the second locker visible to `isDaemonRunning`.
 
 ### 2.5 `GET /api/dev/daemon/download?goos=<os>&goarch=<arch>`
 
@@ -145,6 +153,14 @@ the `dev.update` + devmode gates and bearer auth).
    `Content-Type: application/octet-stream`, `X-Pdx-Hash`, `X-Pdx-Version`,
    `X-Pdx-Sha256` (hex of the artifact, computed per request — ~20 MB, a few
    ms), `Content-Disposition: attachment; filename="pdx"`.
+6. **Deadline.** The whole request — build plus transfer — has a 6-minute
+   budget: the build context (step 3) and a
+   `http.NewResponseController(w).SetWriteDeadline(start + 6 min)` on the
+   response, since the server has no global `WriteTimeout`
+   (`cmd/pdx/main.go:210`). Client disconnect cancels the build. The mutex
+   is released when the handler returns, whether by completion, error or
+   deadline, so a slow reader cannot hold it indefinitely. A 409 means
+   "busy" (build *or* transfer); the caller retries later, it is not queued.
 
 **Why a plain GET and not SSE.** The app-update `/download` is also a plain
 GET; cross-compiling `pdx` takes ~10–40 s on the Mini, well inside a fetch
@@ -222,12 +238,16 @@ cfgPath  = dataDir/config.toml
 pidPath  = <effective data_dir>/pdx.pid
 ```
 
-**Serialisation.** Every public operation runs through one in-process
-promise queue (`withLock`). Concurrent IPC calls (two windows, or
-`ensureRunning` racing a click) wait their turn; the SPA's disabled button
-is a convenience, not the guard. `main.ts`'s `dev:apply-update` handler
-also awaits the queue being idle before it downloads, so an app update
-cannot `app.exit(0)` in the middle of stop→swap→start.
+**Serialisation.** Every public operation (`status`, `install`, `start`,
+`restart`, `ensureRunning`) runs through one in-process promise queue
+(`withLock`). Concurrent IPC calls (two windows, or `ensureRunning` racing
+a click) wait their turn; the SPA's disabled button is a convenience, not
+the guard. Public methods enqueue exactly once and call private,
+non-enqueuing helpers (`statusUnlocked`, `startDaemon`, …) — no
+self-deadlock. `main.ts` runs the **entire** `applyUpdate` (download →
+extract → `app.exit(0)`) inside the same queue via an exported
+`localDaemon.withLock(fn)`, so an app update and a daemon operation are
+mutually exclusive for their whole duration, not just at their start.
 
 **`status(): Promise<LocalDaemonStatus>`**
 
@@ -250,16 +270,30 @@ interface LocalDaemonStatus {
   `reason: 'custom data_dir'` (we do not manage relocated installs).
 - `installed`: `binPath` exists → `binPath version --json` (2 s timeout);
   parse failure → all fields `'unknown'`.
+- **Liveness** (separate from health): `pid` = integer in `pidPath`;
+  `process.kill(pid, 0)` succeeds → `alive`. A daemon can be alive and
+  unhealthy (health timeout during a slow migration, or wedged); it must
+  still be stopped before a swap — `running === null` never means "nothing
+  to stop".
 - `running`: `GET http://<bind>:<port>/api/health` (1.5 s) → `ok` →
-  `{version, hash, url, pid}` where `pid` is the integer in `pidPath` if it
-  parses, else `null`. Health without `hash` (pre-Phase-A daemon) → `'unknown'`.
-- **Ownership** (D8, tightened): when `running` is non-null, resolve the
-  pid's executable with `ps -o comm= -p <pid>` and compare (realpath) with
-  `binPath`. Match → `'managed'`. Mismatch, or no pid, or `ps` fails →
-  `'external'` with a reason (`'running daemon is <path>'` /
-  `'pid unknown'`). When nothing is running: `binPath` exists → `'managed'`,
-  else `'none'`. A managed binary on disk beside a running repo daemon is
-  therefore `external`, and Install/Update/Start are refused.
+  `{version, hash, url, pid}`; `pid` is the pid above or `null`. Health
+  without `hash` (pre-Phase-A daemon) → `'unknown'`, which does **not**
+  block Update.
+- **Ownership** (D8, tightened): whenever `alive` or `running`, verify with
+  `lsof` (full paths, unlike `ps -o comm=` which reports `argv[0]`):
+  1. `/usr/sbin/lsof -nP -a -p <pid> -d txt -F0pfn` — parse the NUL-separated
+     `f`/`n` fields and require that **some** `txt` entry's realpath equals
+     realpath(`binPath`);
+  2. `/usr/sbin/lsof -nP -a -p <pid> -iTCP:<port> -sTCP:LISTEN -F0pn` —
+     require at least one entry, proving that pid is the one answering
+     `/api/health` on our port (the pid file's owner and the listener can
+     diverge; `serve` used to continue after a failed lock, §2.4b).
+  Both pass → `'managed'`. Either fails, `lsof` errors, or no pid →
+  `'external'` with a reason (`'running daemon is <path>'`,
+  `'pid <n> does not own port <port>'`, `'pid unknown'`). Nothing alive:
+  `binPath` exists → `'managed'`, else `'none'`. Ownership is re-evaluated
+  **immediately before `stop`** inside `install`/`restart`; a status from
+  minutes earlier is never trusted for a destructive step.
 - `target`: `process.platform` → `darwin`/`linux` (else throw);
   `process.arch` → `arm64` / `x64 → amd64`.
 - `tools.tmux`: `which tmux` under the **launch PATH** (below); `null` when
@@ -267,15 +301,27 @@ interface LocalDaemonStatus {
 
 **Launch PATH.** An app opened from Finder inherits
 `/usr/bin:/bin:/usr/sbin:/sbin`; the daemon execs `tmux` from PATH
-(`internal/tmux/executor.go`) and `pdx start` inherits the app's env
+(`internal/tmux/executor.go:114`) and `pdx start` inherits the app's env
 (`daemon.go:246`), so a Finder-launched daemon would pass health and then
-fail every tmux call. `launchEnv()` therefore builds the env once per
-process: `process.env` with `PATH` replaced by the output of
-`$SHELL -ilc 'printf %s "$PATH"'` (5 s timeout; on failure, `process.env.PATH`
-prefixed with `/opt/homebrew/bin:/usr/local/bin:~/.local/bin`), plus
-`PDX_DEV_MODE=1`. Used for `pdx start`, `pdx stop`, `pdx version` and the
-`which tmux` probe. `status().tools.tmux === null` is shown as a warning in
-the UI and blocks nothing (the user may install tmux afterwards).
+fail every tmux call. `launchEnv()` builds the env once per process:
+`process.env` with `PATH` replaced by the user's shell PATH, plus
+`PDX_DEV_MODE=1`. Resolution order, each with stdin closed and a 5 s
+timeout, taking the first that yields a non-empty PATH:
+
+1. `execFile($SHELL || '/bin/zsh', ['-ilc', 'printf "\0PDX_PATH\0%s\0" "$PATH"'])`
+   — interactive **is** required: the measured `-lc` PATH on the Mini
+   lacks `~/.local/bin` (where `claude` lives) and nvm, which live in
+   `.zshrc`; `-ilc` took 0.44 s. Only the bytes between the two
+   `\0PDX_PATH\0` … `\0` markers are used, so banners, prompts or plugin
+   output cannot leak into PATH.
+2. The same with `-lc` (login files only).
+3. `process.env.PATH` prefixed with
+   `/opt/homebrew/bin:/usr/local/bin:` + `join(os.homedir(), '.local/bin')`
+   (never a literal `~`).
+
+Used for `pdx start`, `pdx stop`, `pdx version` and the `which tmux` probe.
+`status().tools.tmux === null` is shown as a warning in the UI and blocks
+nothing (the user may install tmux afterwards).
 
 **`install(daemonUrl, token, onProgress): Promise<LocalDaemonResult>`**
 
@@ -289,6 +335,8 @@ interface LocalDaemonResult {
 Refuses (throws) when `status().managed === 'external'`. Steps, each
 reported through `onProgress(step)`:
 
+0. `prepare` — `mkdir -p binDir` (a fresh machine has no `~/.config/pdx`;
+   the daemon only creates it on its own first start, `daemon.go:220`).
 1. `download` — `GET <daemonUrl>/api/dev/daemon/download?goos=&goarch=` with
    bearer, 6-minute overall timeout (the source may need to cross-compile).
    Non-200 → throw with the body's `error`/`detail`. Stream to `newPath`
@@ -318,21 +366,26 @@ reported through `onProgress(step)`:
    → `127.0.0.1`, and the result carries `bindNote` explaining why (the
    user can edit the config and restart). `host_id` is left for the daemon
    to mint (`EnsureHostID`).
-4. `stop` — only when `running` is non-null (ownership already verified):
+4. `stop` — when the managed daemon is **alive** (pid lock held), healthy
+   or not. Re-run the ownership check first; not `managed` → throw. Then
    spawn `binPath stop` under `launchEnv()`, await exit with a **35 s**
    budget (`pdx stop` itself waits 30 s then SIGKILLs, `daemon.go:305`),
-   then poll `/api/health` until it refuses connections (≤ 5 s more). Any
-   timeout → throw before touching `binPath`; the old daemon keeps running.
+   then poll until `process.kill(pid, 0)` fails **and** the port refuses
+   connections (≤ 5 s more). Any timeout → throw before touching `binPath`.
 5. `swap` — `rename(newPath, binPath)`.
 6. `start` — `startDaemon()` below.
 7. `register` — read `token`, `bind`, `port` back from the (possibly
    daemon-rewritten) config; return `LocalDaemonResult` with
    `hostname = os.hostname()`.
 
-Failure before `swap` leaves the previous binary running and untouched.
+**Failure contract.** Failure before `stop` begins leaves the previous
+daemon running and its binary untouched. Failure after `stop` has sent its
+signal but before `swap` guarantees only that the old *binary* is
+unreplaced — the old *process* may already be gone; the UI re-queries
+`status()` and offers **Start** if the result is `managed` and not alive.
 Failure in `start` after `swap` is reported with `pdx start`'s stderr (it
-prints the last 20 log lines); the new binary is already in place and the
-UI offers **Start**.
+prints the last 20 log lines); the new binary is in place and the UI
+offers **Start**.
 
 **`startDaemon()`** (private) — spawn `binPath start` with `launchEnv()`,
 `cwd: os.homedir()`, and await its exit (≤ 70 s). `pdx start` is a short-lived
@@ -346,9 +399,13 @@ on-disk binary's hash (`pdx version --json`); a mismatch (another service on
 the port answered 200) throws `"port <n> is served by something else"`.
 
 **`start(): Promise<LocalDaemonResult>`** — for the UI's *Start* button and
-for `ensureRunning`. Refuses when `managed !== 'managed'`; runs
-`startDaemon()` then step 7, so a recovered daemon returns the same
+for `ensureRunning`. Refuses when `managed !== 'managed'` or when alive;
+runs `startDaemon()` then step 7, so a recovered daemon returns the same
 registration payload as a fresh install.
+
+**`restart(): Promise<LocalDaemonResult>`** — steps 4 → 6 → 7 without a
+download. For the case where the on-disk binary is already current but the
+running process is older (a crashed earlier update, or a manual copy).
 
 **`ensureRunning(): Promise<'started' | 'already-running' | 'not-installed' | 'external' | 'failed'>`**
 
@@ -366,10 +423,11 @@ In `electron/main.ts`, inside the existing dev-gated block:
 ```
 dev:local-daemon-status   → status()
 dev:local-daemon-install  (daemonUrl, token?) → install(...), progress on 'dev:local-daemon-progress'
-dev:local-daemon-start    → start()  (returns LocalDaemonResult)
+dev:local-daemon-start    → start()    (returns LocalDaemonResult)
+dev:local-daemon-restart  → restart()  (returns LocalDaemonResult)
 ```
 
-`dev:apply-update` gains `await localDaemon.idle()` before its download.
+`dev:apply-update` wraps its whole body in `localDaemon.withLock(...)`.
 
 `preload.ts` adds, inside the same conditional spread:
 
@@ -377,11 +435,12 @@ dev:local-daemon-start    → start()  (returns LocalDaemonResult)
 localDaemonStatus: () => ipcRenderer.invoke('dev:local-daemon-status'),
 localDaemonInstall: (daemonUrl, token) => ipcRenderer.invoke('dev:local-daemon-install', daemonUrl, token),
 localDaemonStart: () => ipcRenderer.invoke('dev:local-daemon-start'),
+localDaemonRestart: () => ipcRenderer.invoke('dev:local-daemon-restart'),
 onLocalDaemonProgress: (cb) => { …same shape as onUpdateProgress… },
 ```
 
 `spa/src/types/electron.d.ts` gains `ElectronLocalDaemonStatus` /
-`ElectronLocalDaemonInstallResult` and the four methods (all optional, like
+`ElectronLocalDaemonResult` and the five methods (all optional, like
 the other dev methods).
 
 ### 3.3 Dev mode default (Electron)
@@ -417,7 +476,8 @@ States and controls:
 |---|---|---|
 | `none` | "No daemon installed on this machine" + target arch | **Install** |
 | `managed`, not running | installed version/hash | **Start** (`start()`) · **Update** when `installed.hash !== latestHash` |
-| `managed`, running | running version/hash, URL; "on-disk <hash> — restart pending" when on-disk ≠ running | **Update** when `installed.hash !== latestHash`, else "Up to date" |
+| `managed`, running | running version/hash, URL | **Update** when `installed.hash !== latestHash`; else **Restart** when `running.hash !== installed.hash` ("on-disk <hash> not yet running"); else "Up to date" |
+| `managed`, alive but unhealthy | "daemon process <pid> is alive but not answering" | **Restart** |
 | `external` | "A daemon is running at <url> but is not managed by this app" | none |
 
 During install the block shows the progress step and disables buttons.
@@ -455,11 +515,20 @@ parent's `daemonCheck` changes.
     timeout → throw with old binary intact; start env carries the launch
     PATH and `PDX_DEV_MODE=1`; post-start health hash mismatch → throw;
     returns the token read back from the config on re-install.
-  - `start`: refuses unless managed; returns a `LocalDaemonResult`.
+  - ownership: `lsof` txt match + listener match → managed; txt mismatch,
+    no listener, `lsof` failure, or pid missing → external with reason;
+    ownership re-checked immediately before `stop` (a status that changed
+    in between aborts the install).
+  - liveness vs health: alive + health timeout → `stop` still runs before
+    `swap`; not alive + `binPath` present → `start` allowed.
+  - `install` on a filesystem with no `~/.config/pdx` at all succeeds.
+  - `start`: refuses unless managed and not alive; returns a `LocalDaemonResult`.
+  - `restart`: stop → start → register, no download.
   - `ensureRunning`: five outcomes; retries 3× on failure; never touches
     `pdx.new`.
-  - `withLock`: two concurrent `install` calls run sequentially; `idle()`
-    resolves only after the queue drains.
+  - `withLock`: two concurrent `install` calls run sequentially; an
+    `install` arriving during a `withLock`-wrapped app update waits for it;
+    public methods do not deadlock when they call each other's helpers.
 - Dev-mode gate: `PDX_DEV_MODE` unset → IPC registered; `'0'` → not.
 - `LocalDaemonSection.test.tsx`: the `managed` rows render the right
   copy/buttons (including `reason` and the tmux warning); Update button
@@ -522,3 +591,16 @@ parent's `daemonCheck` changes.
 | 11 | Important | **Accepted.** Test section rewritten around a real temp-module build + `gitHashFn` pin; rebuild keeps best-effort hash. Middleware wiring is existing behaviour and stays untested here (stated). | §2.5 refactor, §2.6 |
 | 12 | Important | **Accepted.** `start()` returns `LocalDaemonResult`; `registerLocalHost` is idempotent and fills an empty token. | §3.1 start, §3.4 |
 | 13 | Minor | **Accepted.** `utun` + 100.64/10, exactly-one rule with `bindNote` fallback; `ensureRunning` retries 3× for late interfaces. | §3.1 configure, ensureRunning |
+
+## 7. Review dispositions — codex round 2 (`task-mu00stga-h47932`)
+
+| # | Sev | Disposition | Where |
+|---|---|---|---|
+| 1 | Blocker | **Accepted.** `lsof -d txt` path match + `lsof -iTCP:<port> -sTCP:LISTEN` listener match; re-checked right before `stop`. (`ps -o comm=` matched on the Mini only because `pdx start` execs with an absolute `argv[0]`.) | §3.1 Ownership, stop |
+| 2 | Important | **Accepted.** Liveness (`kill -0` on the pid-file pid) is separate from health; alive-but-unhealthy is stopped before swap; new `restart()` + **Restart** button for `running.hash ≠ installed.hash` and for alive-unhealthy; unknown hash never blocks Update. | §3.1, §3.2, §3.4 |
+| 3 | Important | **Accepted.** Pid file is permanent (unlock + close only, SIGKILL branch too); `serve` exits when the lock is held. | §2.4b |
+| 4 | Important | **Accepted.** `applyUpdate` runs entirely inside `localDaemon.withLock`; public methods enqueue once and call non-enqueuing helpers. | §3.1 Serialisation, §3.2 |
+| 5 | Important | **Accepted with one change.** NUL-sentinel parsing, stdin closed, 5 s timeout, `join(homedir, '.local/bin')`. Kept `-i` as the first attempt (measured: `-lc` on the Mini lacks `~/.local/bin` and nvm, which are set in `.zshrc`); `-lc` is the second attempt, static prefix third. | §3.1 Launch PATH |
+| 6 | Important | **Accepted.** Full-request lock kept (agrees with codex); 6-minute build+transfer deadline via `SetWriteDeadline`; disconnect cancels build; 409 = busy, not queued. | §2.5 step 6 |
+| 7 | Important | **Accepted.** Step 0 `mkdir -p binDir`; test with an empty home. | §3.1 install |
+| 8 | Minor | **Accepted.** Failure contract split at "stop began"; UI re-queries and offers Start. | §3.1 Failure contract |
