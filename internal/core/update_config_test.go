@@ -114,6 +114,40 @@ func TestUpdateConfigMutateErrorNoWrite(t *testing.T) {
 	c.CfgMu.RUnlock()
 }
 
+// TestUpdateConfigPreservesExplicitEmptySlice pins Item 1 end-to-end: a
+// config file that explicitly has detect.cc_commands = [] must keep it
+// empty (not silently regain the ["claude"] default) after an UpdateConfig
+// that mutates something unrelated, since UpdateConfig clones the live
+// config before handing it to mutate, and a Clone that collapses a
+// non-nil empty slice to nil would make it vanish from the re-written TOML
+// (omitted keys are re-defaulted by the next Load).
+func TestUpdateConfigPreservesExplicitEmptySlice(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.WriteFile(cfgPath, config.Config{
+		HostID: "test:abc123",
+		Detect: config.DetectConfig{CCCommands: []string{}},
+	}))
+
+	loaded, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Detect.CCCommands, "sanity: file round-trip must start non-nil")
+	require.Empty(t, loaded.Detect.CCCommands)
+
+	c := New(CoreDeps{Config: &loaded})
+	c.CfgPath = cfgPath
+
+	err = c.UpdateConfig(func(cfg *config.Config) error {
+		cfg.Peers.Hosts = append(cfg.Peers.Hosts, config.PeerHost{Alias: "air", URL: "https://a.example"})
+		return nil
+	})
+	require.NoError(t, err)
+
+	reloaded, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	assert.NotNil(t, reloaded.Detect.CCCommands, "cc_commands must still be present (non-nil) in the re-written file")
+	assert.Empty(t, reloaded.Detect.CCCommands, "cc_commands must stay empty, not regain the [\"claude\"] default")
+}
+
 // TestUpdateConfigDeepCopyIsolatesSlices covers both a Peers.Hosts element
 // edit and a Peers.Hosts deletion in the same mutate: the live config must
 // only change after commit, and a slice header captured before the call

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -178,20 +179,25 @@ func (c Config) Redacted() Config {
 }
 
 // Clone returns a deep copy of c: every slice field is copied into a fresh
-// backing array so mutating the copy never touches c's.
+// backing array so mutating the copy never touches c's. slices.Clone
+// preserves nil vs non-nil-empty (unlike append(nil, src...), which always
+// collapses a non-nil empty slice to nil) — a config that explicitly has an
+// empty list (e.g. detect.cc_commands = []) must stay that way across a
+// Clone, or it would silently re-encode without the key and re-apply
+// defaults on the next Load.
 func (c Config) Clone() Config {
 	out := c
 
-	out.Allow = append([]string(nil), c.Allow...)
-	out.AllowedPaths = append([]string(nil), c.AllowedPaths...)
+	out.Allow = slices.Clone(c.Allow)
+	out.AllowedPaths = slices.Clone(c.AllowedPaths)
 
-	out.Stream.Presets = append([]Preset(nil), c.Stream.Presets...)
+	out.Stream.Presets = slices.Clone(c.Stream.Presets)
 
-	out.Detect.CCCommands = append([]string(nil), c.Detect.CCCommands...)
+	out.Detect.CCCommands = slices.Clone(c.Detect.CCCommands)
 
-	out.Dispatch.AllowedRepoRoots = append([]string(nil), c.Dispatch.AllowedRepoRoots...)
+	out.Dispatch.AllowedRepoRoots = slices.Clone(c.Dispatch.AllowedRepoRoots)
 
-	out.Peers.Hosts = append([]PeerHost(nil), c.Peers.Hosts...)
+	out.Peers.Hosts = slices.Clone(c.Peers.Hosts)
 
 	return out
 }

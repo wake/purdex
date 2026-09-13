@@ -200,6 +200,45 @@ func TestCloneDeepCopiesSlices(t *testing.T) {
 	}
 }
 
+// TestCloneEmptySliceStaysEmptyNilStaysNil pins Item 1: Clone must not
+// collapse a non-nil empty slice to nil (append(nil, src...) does exactly
+// that), since a config that explicitly has an empty list (e.g.
+// detect.cc_commands = []) must survive a Clone as still non-nil, or it
+// re-encodes without the key and silently re-applies defaults on the next
+// Load. A field left at its nil zero value must stay nil.
+func TestCloneEmptySliceStaysEmptyNilStaysNil(t *testing.T) {
+	cfg := config.Config{
+		Detect: config.DetectConfig{
+			CCCommands: []string{},
+		},
+	}
+
+	clone := cfg.Clone()
+
+	if clone.Detect.CCCommands == nil {
+		t.Errorf("Detect.CCCommands = nil, want non-nil empty slice")
+	}
+	if len(clone.Detect.CCCommands) != 0 {
+		t.Errorf("Detect.CCCommands = %v, want empty", clone.Detect.CCCommands)
+	}
+
+	if clone.Allow != nil {
+		t.Errorf("Allow = %v, want nil (source was nil)", clone.Allow)
+	}
+	if clone.AllowedPaths != nil {
+		t.Errorf("AllowedPaths = %v, want nil (source was nil)", clone.AllowedPaths)
+	}
+	if clone.Stream.Presets != nil {
+		t.Errorf("Stream.Presets = %v, want nil (source was nil)", clone.Stream.Presets)
+	}
+	if clone.Dispatch.AllowedRepoRoots != nil {
+		t.Errorf("Dispatch.AllowedRepoRoots = %v, want nil (source was nil)", clone.Dispatch.AllowedRepoRoots)
+	}
+	if clone.Peers.Hosts != nil {
+		t.Errorf("Peers.Hosts = %v, want nil (source was nil)", clone.Peers.Hosts)
+	}
+}
+
 func TestValidateAlias(t *testing.T) {
 	const localAlias = "mini-lab"
 

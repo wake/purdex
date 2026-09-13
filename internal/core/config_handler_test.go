@@ -36,6 +36,23 @@ func newTestCore() *Core {
 	return c
 }
 
+// TestGetConfigRendersExplicitEmptyCCCommandsAsEmptyArray pins Item 1 at
+// the GET /api/config boundary: a config with an explicit empty
+// detect.cc_commands must render as JSON "[]", not "null" — Redacted goes
+// through Clone, and a Clone that collapses a non-nil empty slice to nil
+// would flip the wire shape from an explicit empty list to "not set".
+func TestGetConfigRendersExplicitEmptyCCCommandsAsEmptyArray(t *testing.T) {
+	c := newTestCore()
+	c.Cfg.Detect.CCCommands = []string{}
+
+	req := httptest.NewRequest("GET", "/api/config", nil)
+	rec := httptest.NewRecorder()
+	c.handleGetConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"cc_commands":[]`, "body = %s", rec.Body.String())
+}
+
 func TestGetConfigReturnsRedactedToken(t *testing.T) {
 	c := newTestCore()
 
