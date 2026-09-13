@@ -277,6 +277,19 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []config.PeerHost) ipeers.AllEnvelope {
 	results := make([]ipeers.HostResult, len(hosts)+1)
 
+	// Start every remote fetch first so it overlaps with the (potentially
+	// slow, owner-resolution-bound) local inventory build below, rather
+	// than paying for the two sequentially.
+	var wg sync.WaitGroup
+	for i, h := range hosts {
+		i, h := i, h
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i+1] = m.fetchHostResult(ctx, h)
+		}()
+	}
+
 	local := m.localEnvelope(ctx, hostID, alias)
 	results[0] = ipeers.HostResult{
 		Alias:   alias,
@@ -287,15 +300,6 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 		Peers:   local.Peers,
 	}
 
-	var wg sync.WaitGroup
-	for i, h := range hosts {
-		i, h := i, h
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i+1] = m.fetchHostResult(ctx, h)
-		}()
-	}
 	wg.Wait()
 
 	return ipeers.AllEnvelope{Hosts: results}

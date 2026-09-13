@@ -862,6 +862,55 @@ func TestHandlePeers_ScopeAll_NoOutboundToken(t *testing.T) {
 	}
 }
 
+// TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory pins Item 4: the
+// per-host remote fetches must start before (and run concurrently with)
+// the local inventory build, not after it. With a 100ms-slow remote and a
+// 100ms-slow local owner resolver, a scope=all request that ran them
+// sequentially would take >= 200ms; overlapped, it should land well under
+// that. The bounds are generous (90ms/250ms) to avoid flakiness while
+// still failing clearly on a sequential (~200ms+) implementation.
+func TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory(t *testing.T) {
+	dir := t.TempDir()
+	const slowness = 100 * time.Millisecond
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(slowness)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{HostID: "host-a:1", OK: true, Peers: []ipeers.PeerRecord{}})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: []session.SessionInfo{{Code: "s1", Name: "s1"}}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}, delay: slowness}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "host-a:1"}}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	start := time.Now()
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	elapsed := time.Since(start)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 || !got.Hosts[1].OK {
+		t.Fatalf("hosts = %+v, want 2 rows with host-a ok", got.Hosts)
+	}
+	if elapsed >= 180*time.Millisecond {
+		t.Errorf("elapsed = %v, want < 180ms (remote fetch and local inventory should overlap, not run sequentially — sequential would be >= 200ms)", elapsed)
+	}
+	if elapsed <= 90*time.Millisecond {
+		t.Errorf("elapsed = %v, want > 90ms (sanity check: the slow paths should actually have run)", elapsed)
+	}
+}
+
 // TestLocalEnvelope_UsesCallerSnapshot_NotLiveConfig pins the fix for the
 // review finding: localEnvelope must build every PeerRecord from the
 // hostID/alias the caller passes in, never by re-reading m.core.Cfg under
