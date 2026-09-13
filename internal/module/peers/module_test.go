@@ -923,6 +923,161 @@ func TestHandlePeers_ScopeAll_NoOutboundToken(t *testing.T) {
 	}
 }
 
+// TestNormalizeRemoteRows pins Item 2: every row of a remote host's
+// fan-out response must be rewritten into this host's local view — Host
+// becomes the configured alias, HostID becomes the caller-supplied
+// (verified/bounded) value, and Address is rebuilt as "<alias>/<session>"
+// where <session> is everything after the remote's own first "/" (a "cc:"
+// address's colon survives intact). A remote address with no "/" at all
+// (malformed) keeps the whole original as the session part. A rebuilt
+// address that still doesn't parse as a valid "<host>/<session>" pair
+// (ipeers.SplitAddress) — an empty session part, or a session part that
+// itself contains another "/" — is blanked rather than left unusable;
+// Host and HostID stay set.
+func TestNormalizeRemoteRows(t *testing.T) {
+	cases := []struct {
+		name     string
+		address  string
+		alias    string
+		hostID   string
+		wantAddr string
+	}{
+		{
+			name:     "tmux session address rewritten under the local alias",
+			address:  "laptop/mt1",
+			alias:    "air",
+			hostID:   "air:111",
+			wantAddr: "air/mt1",
+		},
+		{
+			name:     "cc: address keeps its colon form intact",
+			address:  "laptop/cc:name",
+			alias:    "air",
+			hostID:   "air:111",
+			wantAddr: "air/cc:name",
+		},
+		{
+			name:     "remote alias equal to the local alias still maps to h.Alias",
+			address:  "mlab/mt1",
+			alias:    "mlab",
+			hostID:   "mlab-remote:1",
+			wantAddr: "mlab/mt1",
+		},
+		{
+			name:     "malformed address without a slash keeps the original as the session part",
+			address:  "malformed",
+			alias:    "air",
+			hostID:   "air:111",
+			wantAddr: "air/malformed",
+		},
+		{
+			name:     "rebuilt address whose session part contains another slash is blanked",
+			address:  "other/cc:a/foo",
+			alias:    "b",
+			hostID:   "b:1",
+			wantAddr: "",
+		},
+		{
+			name:     "rebuilt address with an empty session part is blanked",
+			address:  "other/",
+			alias:    "b",
+			hostID:   "b:1",
+			wantAddr: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeRemoteRows([]ipeers.PeerRecord{{Address: tc.address}}, tc.alias, tc.hostID)
+			if len(got) != 1 {
+				t.Fatalf("len = %d, want 1", len(got))
+			}
+			if got[0].Host != tc.alias {
+				t.Errorf("Host = %q, want %q", got[0].Host, tc.alias)
+			}
+			if got[0].HostID != tc.hostID {
+				t.Errorf("HostID = %q, want %q", got[0].HostID, tc.hostID)
+			}
+			if got[0].Address != tc.wantAddr {
+				t.Errorf("Address = %q, want %q", got[0].Address, tc.wantAddr)
+			}
+		})
+	}
+}
+
+// TestNormalizeRemoteRows_NilRowsReturnsNonNilEmpty guards the fan-out
+// row-shape invariant fetchHostResult relies on: a "peers" list is always
+// a non-nil (possibly empty) slice, never null on the wire.
+func TestNormalizeRemoteRows_NilRowsReturnsNonNilEmpty(t *testing.T) {
+	got := normalizeRemoteRows(nil, "air", "air:1")
+	if got == nil {
+		t.Errorf("got nil, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("len = %d, want 0", len(got))
+	}
+}
+
+// TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias is the
+// integration proof that fetchHostResult actually wires normalizeRemoteRows
+// in: a remote reporting its own alias ("laptop") and host_id must have
+// its rows rewritten under how THIS host has the peer configured ("air"
+// with the verified host_id), not the remote's self-reported values.
+func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
+	dir := t.TempDir()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID:  "air:111",
+			OK:      true,
+			Partial: false,
+			Peers: []ipeers.PeerRecord{
+				{Host: "laptop", HostID: "air:111", Address: "laptop/mt1", SessionCode: "remote-1"},
+				{Host: "laptop", HostID: "air:111", Address: "laptop/cc:foo", SessionCode: "remote-2"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: srv.URL, Token: "tok-a", HostID: "air:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	row := got.Hosts[1]
+	if !row.OK || len(row.Peers) != 2 {
+		t.Fatalf("row = %+v, want ok=true with 2 peers", row)
+	}
+	if row.Peers[0].Host != "air" || row.Peers[0].Address != "air/mt1" {
+		t.Errorf("peers[0] = %+v, want Host=air Address=air/mt1", row.Peers[0])
+	}
+	if row.Peers[1].Host != "air" || row.Peers[1].Address != "air/cc:foo" {
+		t.Errorf("peers[1] = %+v, want Host=air Address=air/cc:foo", row.Peers[1])
+	}
+	if row.Peers[0].HostID != "air:111" || row.Peers[1].HostID != "air:111" {
+		t.Errorf("peers = %+v, want HostID=air:111 on every row", row.Peers)
+	}
+}
+
 // TestAllEnvelope_OverlapsRemoteFetchWithLocalInventory pins Item 4: the
 // per-host remote fetches must start before (and run concurrently with)
 // the local inventory build, not after it. Rather than bounding wall-clock

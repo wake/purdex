@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -305,6 +306,40 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 	return ipeers.AllEnvelope{Hosts: results}
 }
 
+// normalizeRemoteRows rewrites every row of a remote host's fan-out
+// response into this host's local view: Host becomes alias (how WE have
+// the peer configured, never the remote's own self-reported value), and
+// HostID becomes hostID (the caller's already-verified/bounded value for
+// this host). Address is rebuilt as "<alias>/<session>", where <session>
+// is everything after the remote's own first "/" (a "cc:" address's colon
+// survives intact); a remote address with no "/" at all (malformed) keeps
+// the whole original address as the session part instead. If the rebuilt
+// address still doesn't parse as a valid "<host>/<session>" pair
+// (ipeers.SplitAddress) — e.g. an empty session part, or a session part
+// that itself contains another "/" — Address is blanked rather than left
+// as an unusable value; Host and HostID stay set. Exported at the package
+// level (not a method) so P3 can reuse it as-is.
+func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeers.PeerRecord {
+	out := make([]ipeers.PeerRecord, len(rows))
+	for i, rec := range rows {
+		rec.Host = alias
+		rec.HostID = hostID
+
+		session := rec.Address
+		if idx := strings.IndexByte(rec.Address, '/'); idx >= 0 {
+			session = rec.Address[idx+1:]
+		}
+		rec.Address = alias + "/" + session
+
+		if _, _, ok := ipeers.SplitAddress(rec.Address); !ok {
+			rec.Address = ""
+		}
+
+		out[i] = rec
+	}
+	return out
+}
+
 // fetchHostResult fetches one configured peer host's inventory for a
 // scope=all fan-out, translating every failure mode (no outbound token,
 // transport/decode error, host_id mismatch) into a failed HostResult rather
@@ -353,10 +388,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		resultHostID = boundRemoteText(env.HostID)
 	}
 
-	peers := env.Peers
-	if peers == nil {
-		peers = []ipeers.PeerRecord{}
-	}
+	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID)
 
 	// env.Error is the remote peer's own reported error text — bound and
 	// prefix it the same way verifyHost does for the add/put 502 body, so
