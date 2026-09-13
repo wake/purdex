@@ -26,6 +26,7 @@ import (
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	"github.com/wake/purdex/internal/module/logs"
 	"github.com/wake/purdex/internal/module/monitor"
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/module/stream"
 	syncmod "github.com/wake/purdex/internal/module/sync"
@@ -37,7 +38,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers\n")
 		os.Exit(1)
 	}
 
@@ -60,6 +61,8 @@ func main() {
 		runStatus(os.Args[2:])
 	case "statusline-proxy":
 		runStatuslineProxy(os.Args[2:])
+	case "peers":
+		runPeers(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -192,6 +195,11 @@ func runServe(args []string) {
 	// 9. Apply middleware chain and start HTTP server
 	// Health endpoint bypasses auth (used for connection testing).
 	// It still needs CORS so cross-origin SPA requests succeed.
+	tokenFn := func() string {
+		c.CfgMu.RLock()
+		defer c.CfgMu.RUnlock()
+		return c.Cfg.Token
+	}
 	outerMux := http.NewServeMux()
 	outerMux.Handle("GET /api/health", middleware.CORS(
 		http.HandlerFunc(c.HandleHealth)))
@@ -200,11 +208,8 @@ func runServe(args []string) {
 			middleware.PairingGuard(func() bool {
 				return c.Pairing.Get() == core.StatePairing
 			})(
-				middleware.TokenAuth(func() string {
-					c.CfgMu.RLock()
-					defer c.CfgMu.RUnlock()
-					return c.Cfg.Token
-				}, c.Tickets)(mux)))))
+				middleware.PeerRouteAuth("/api/peers", tokenFn)(
+					middleware.TokenAuth(tokenFn, c.Tickets)(mux))))))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := &http.Server{
@@ -245,6 +250,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		return err
 	}
 	c.AddModule(agentMod)
+	c.AddModule(peersmod.New())
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	c.AddModule(syncmod.New())
