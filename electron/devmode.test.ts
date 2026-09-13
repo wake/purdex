@@ -22,3 +22,29 @@ describe('PDX_DEV_MODE is on by default (spec D6)', () => {
     expect(src('updater.ts')).toContain("devUpdateEnabled: process.env.PDX_DEV_MODE !== '0'")
   })
 })
+
+describe('local daemon wiring', () => {
+  it('main registers the four IPC handlers inside the dev gate and calls ensureRunning on ready', () => {
+    const main = src('main.ts')
+    for (const ch of ['dev:local-daemon-status', 'dev:local-daemon-install', 'dev:local-daemon-start', 'dev:local-daemon-restart']) {
+      expect(main).toContain(`ipcMain.handle('${ch}'`)
+    }
+    expect(main).toContain('localDaemon.ensureRunning()')
+    // applyUpdate must run inside the lock — the exact wrapping form.
+    expect(main).toContain('await localDaemon.withLock(() => applyUpdate(')
+    // Handlers and ensureRunning sit inside the dev gate.
+    const gate = main.indexOf("if (process.env.PDX_DEV_MODE !== '0') {")
+    expect(gate).toBeGreaterThan(-1)
+    for (const ch of ['dev:local-daemon-status', 'dev:local-daemon-install', 'dev:local-daemon-start', 'dev:local-daemon-restart']) {
+      expect(main.indexOf(`ipcMain.handle('${ch}'`)).toBeGreaterThan(gate)
+    }
+    const ready = main.indexOf('localDaemon.ensureRunning()')
+    expect(main.lastIndexOf("process.env.PDX_DEV_MODE !== '0'", ready)).toBeGreaterThan(-1)
+  })
+  it('preload exposes the bridges', () => {
+    const preload = src('preload.ts')
+    for (const name of ['localDaemonStatus', 'localDaemonInstall', 'localDaemonStart', 'localDaemonRestart', 'onLocalDaemonProgress']) {
+      expect(preload).toContain(name)
+    }
+  })
+})
