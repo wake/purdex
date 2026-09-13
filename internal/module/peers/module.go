@@ -344,9 +344,13 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		}
 	}
 
+	// h.HostID is our own configured (trusted) value; env.HostID, used only
+	// as a fallback for an unpaired host, is the remote's own report and
+	// just as attacker-controlled as its Error text, so it is bounded the
+	// same way.
 	resultHostID := h.HostID
 	if resultHostID == "" {
-		resultHostID = env.HostID
+		resultHostID = boundRemoteText(env.HostID)
 	}
 
 	peers := env.Peers

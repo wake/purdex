@@ -767,6 +767,66 @@ func TestHandlePeers_ScopeAll_HostIDMismatchBounded(t *testing.T) {
 	}
 }
 
+// TestHandlePeers_ScopeAll_UnpairedLearnedHostIDBounded pins the follow-up
+// fix to fetchHostResult's success path: when the configured host entry
+// has no HostID yet (unpaired), resultHostID falls back to the remote's
+// own reported env.HostID — attacker-controlled, and unbounded before the
+// fix. A 300-byte remote host_id must be truncated in the row.
+func TestHandlePeers_ScopeAll_UnpairedLearnedHostIDBounded(t *testing.T) {
+	dir := t.TempDir()
+	longHostID := strings.Repeat("q", 300)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID:  longHostID,
+			OK:      true,
+			Partial: false,
+			Peers:   []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	// HostID left empty: this host is unpaired/unverified, so
+	// fetchHostResult must fall back to the remote's own reported value.
+	hosts := []config.PeerHost{
+		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: ""},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	row := got.Hosts[1]
+	if !row.OK {
+		t.Errorf("row = %+v, want ok=true", row)
+	}
+	if row.HostID == longHostID {
+		t.Errorf("row.HostID contains the full 300-byte remote host_id unbounded: %q", row.HostID)
+	}
+	if !strings.HasSuffix(row.HostID, "…") {
+		t.Errorf("row.HostID = %q, want to end with an ellipsis", row.HostID)
+	}
+	if len(row.HostID) > 210 {
+		t.Errorf("row.HostID length = %d bytes, want bounded; host_id=%q", len(row.HostID), row.HostID)
+	}
+}
+
 // TestHandlePeers_ScopeAll_RemoteErrorBounded pins Item 3's bounding of a
 // remote peer's own reported Error text as it flows into a scope=all row:
 // prefixed "peer: " and truncated, mirroring the 502 body verifyHost
