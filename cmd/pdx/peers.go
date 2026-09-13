@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -557,7 +558,7 @@ func runPeersHostSetToken(cfg config.Config, base string, inv peersInvocation, s
 		return 1
 	}
 
-	result, err := doPeersRequest(http.MethodPut, base+"/"+alias, reqBody, cfg.Token)
+	result, err := doPeersRequest(http.MethodPut, base+"/"+url.PathEscape(alias), reqBody, cfg.Token)
 	if err != nil {
 		return reportPeersTransportErr(err, stderr)
 	}
@@ -578,7 +579,7 @@ func runPeersHostSetToken(cfg config.Config, base string, inv peersInvocation, s
 func runPeersHostRemove(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
 	alias := inv.positionals[0]
 
-	result, err := doPeersRequest(http.MethodDelete, base+"/"+alias, nil, cfg.Token)
+	result, err := doPeersRequest(http.MethodDelete, base+"/"+url.PathEscape(alias), nil, cfg.Token)
 	if err != nil {
 		return reportPeersTransportErr(err, stderr)
 	}

@@ -784,6 +784,75 @@ func TestRunPeersCmd_HostRemove_NotFound(t *testing.T) {
 	}
 }
 
+// TestRunPeersCmd_HostSetToken_EscapesAlias pins Item 5: an alias
+// containing characters with special meaning in a URL path (here "?",
+// which would otherwise start a query string) must be percent-escaped
+// when building the PUT target, not concatenated raw.
+func TestRunPeersCmd_HostSetToken_EscapesAlias(t *testing.T) {
+	var gotEscapedPath, gotDecodedPath, gotRawQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		gotDecodedPath = r.URL.Path
+		gotRawQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(cliHostRow{Alias: "a?x", Verified: true, HasToken: true})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "set-token", "a?x", "pdxp_new123", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotEscapedPath != "/api/peers/hosts/a%3Fx" {
+		t.Errorf("escaped path on the wire = %q, want /api/peers/hosts/a%%3Fx", gotEscapedPath)
+	}
+	if gotRawQuery != "" {
+		t.Errorf("raw query = %q, want empty (the ? must be escaped, not start a query string)", gotRawQuery)
+	}
+	if gotDecodedPath != "/api/peers/hosts/a?x" {
+		t.Errorf("decoded path = %q, want /api/peers/hosts/a?x (the alias, round-tripped)", gotDecodedPath)
+	}
+}
+
+// TestRunPeersCmd_HostRemove_EscapesAlias is TestRunPeersCmd_HostSetToken_EscapesAlias
+// for DELETE, and also pins that an ordinary dotted alias still round-trips
+// unescaped (PathEscape leaves "." untouched).
+func TestRunPeersCmd_HostRemove_EscapesAlias(t *testing.T) {
+	var gotEscapedPath, gotRawQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		gotRawQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "remove", "a?x", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotEscapedPath != "/api/peers/hosts/a%3Fx" {
+		t.Errorf("escaped path on the wire = %q, want /api/peers/hosts/a%%3Fx", gotEscapedPath)
+	}
+	if gotRawQuery != "" {
+		t.Errorf("raw query = %q, want empty (the ? must be escaped, not start a query string)", gotRawQuery)
+	}
+
+	// air.2026 should round-trip unescaped (PathEscape leaves "." alone).
+	code = runPeersCmd([]string{"host", "remove", "air.2026", "--config", cfgPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotEscapedPath != "/api/peers/hosts/air.2026" {
+		t.Errorf("escaped path = %q, want /api/peers/hosts/air.2026", gotEscapedPath)
+	}
+}
+
 // --- grammar rejections: exit 2, zero requests, before any config load ----
 
 func TestRunPeersCmd_GrammarRejections(t *testing.T) {
