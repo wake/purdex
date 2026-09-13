@@ -268,6 +268,26 @@ describe('runRevivePass', () => {
     expect(paneContent('t1', 'p1').rebuild).toBe(record)
   })
 
+  it('S20: a write that throws leaves that pane terminated and the rest of the pass runs', () => {
+    seedPane('t1', 'p1')
+    seedPane('t2', 'p2')
+    // `repointPane` reads `getState()` on every call, so the replacement has
+    // to live in the store; the persisted store's own throw is a quota error.
+    const original = useTabStore.getState().setPaneContent
+    let thrown = false
+    useTabStore.setState({ setPaneContent: (...args) => {
+      if (!thrown) { thrown = true; throw new Error('QuotaExceededError') }
+      original(...args)
+    } })
+    try {
+      runRevivePass('h1')
+    } finally {
+      useTabStore.setState({ setPaneContent: original })
+    }
+    expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+    expect(paneContent('t2', 'p2')).toMatchObject(revivedContent)
+  })
+
   it('revives a pane that carries no rebuild record, and leaves it without one', () => {
     seedPane('t1', 'p1', null)
     runRevivePass('h1')

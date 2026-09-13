@@ -143,6 +143,12 @@ export function collectCandidates(hostId: string): ReviveCandidate[] {
  * never act on a list left over from a dropped one. The lock guard is global:
  * a batch records an operation entry only for each group's source pane, so
  * the lock is the one thing every pane a rebuild will re-point is under.
+ *
+ * Each write is isolated. On the release trigger this runs synchronously
+ * inside `releaseOperationLock`'s `set`, i.e. inside the `finally` of the
+ * rebuild that is releasing: a throw from the persisted tab store (quota on
+ * `localStorage.setItem`) would become THAT rebuild's rejection and stop the
+ * remaining panes. A failed revive just leaves its pane for the next trigger.
  */
 export function runRevivePass(hostId: string): void {
   if (!canAttachTerminal(hostId)) return
@@ -150,11 +156,19 @@ export function runRevivePass(hostId: string): void {
   const sessions = reconciledSessions.get(hostId) ?? []
   for (const d of decideRevive(hostId, sessions, collectCandidates(hostId))) {
     if (!reviveAllowed(d.paneId, d.binding, useRebuildStore.getState().operations)) continue
-    repointPaneToSession(d.tabId, d.paneId, d.session)
+    try {
+      repointPaneToSession(d.tabId, d.paneId, d.session)
+    } catch { /* ignore */ }
   }
 }
 
-/** The lock-release trigger: the lock is global, so every host gets a pass. */
+/** The lock-release trigger: the lock is global, so every host gets a pass —
+ * and one host's failure may not cost the others theirs, for the same reason
+ * a pane's may not. */
 export function runRevivePassAll(): void {
-  for (const hostId of useHostStore.getState().hostOrder) runRevivePass(hostId)
+  for (const hostId of useHostStore.getState().hostOrder) {
+    try {
+      runRevivePass(hostId)
+    } catch { /* ignore */ }
+  }
 }

@@ -305,6 +305,46 @@ describe('useMultiHostEventWs revive — the lock-release trigger', () => {
     view.unmount()
   })
 
+  it('S20: a pane whose write throws on release stays dead; the rebuild still resolves and the next pane revives', async () => {
+    const view = await mount()
+    seedPane('tX', 'pX')
+    seedPane('tY', 'pY')
+    seedPane('tZ', 'pZ')
+    const resume = deferred()
+    const sendKeys = vi.fn(() => resume.promise)
+    const run = rebuildPane(HOST, 'tX', 'pX', plan, {
+      createSession: async () => session({ code: 'new1', name: 'dev', tmux_instance: '222:2000' }),
+      sendKeys,
+    })
+    await waitFor(() => expect(sendKeys).toHaveBeenCalledTimes(1))
+    emit([NEW1])
+
+    // Only Y's write fails — the engine's own write of X, before the release,
+    // must go through, so the throw is what the persisted store would do on a
+    // quota error, scoped to the release pass's first pane.
+    const original = useTabStore.getState().setPaneContent
+    let thrown = false
+    useTabStore.setState({ setPaneContent: (tabId, paneId, next) => {
+      if (paneId === 'pY' && !thrown) { thrown = true; throw new Error('QuotaExceededError') }
+      original(tabId, paneId, next)
+    } })
+
+    let report!: RebuildReport
+    try {
+      await act(async () => { resume.resolve(); report = await run })
+    } finally {
+      useTabStore.setState({ setPaneContent: original })
+    }
+
+    expect(thrown).toBe(true)
+    expect(report.repointed).toBe(true)
+    expect(lockedBy()).toBeNull()
+    expect(paneContent('tX', 'pX')).toMatchObject(revived)
+    expect(paneContent('tY', 'pY')).toMatchObject(dead)
+    expect(paneContent('tZ', 'pZ')).toMatchObject(revived)
+    view.unmount()
+  })
+
   it('S12(a): a batch re-points its members itself; nothing revives while it runs', async () => {
     const view = await mount()
     seedPane('t1', 'p1')
