@@ -484,7 +484,7 @@ containing `.` (`air.2026`) survives add → set-token → remove.
   its verb the second; arity is strict (`add` = 2 positionals, `set-token`
   = 2, `remove` = 1, `list` = 0) — extra or missing positionals, a flag
   missing its value, an unknown flag, a flag valid only for another form
-  (`--all` with `host`, `--token` without `host add|set-token`) ⇒ usage
+  (`--all` with `host`, `--token` anywhere but `host add` — `set-token` takes its token positionally) ⇒ usage
   line on stderr, exit 2, before any config load or request. Alias is
   placed in the URL path as-is (validated server-side; the client also
   refuses aliases containing `/`).
