@@ -591,14 +591,12 @@ both succeed with distinct ids; Tail(0) ⇒ empty non-nil slice; existing
   checks `PrincipalFrom` ⇒ 403 in depth).
 - **`normalizeRemoteRows` is P2's** (`internal/module/peers/module.go`,
   `normalizeRemoteRows(rows, alias, hostID) []ipeers.PeerRecord`, already
-  applied by `fetchHostResult`; P2 also ships `validHostID`). P3 does
-  **not** write a second copy (no `rows.go`). After the P2 merge, check
-  whether P2's Address rule already guarantees that every non-empty
-  `Address` passes `SplitAddress`; if a remote row can still produce an
-  unparsable address (a peer name containing `/`, empty names, proxy
-  rows — R2-m2), tighten P2's function **in place**: keep the rebuilt
-  candidate only if `SplitAddress` accepts it, else `Address = ""`, and
-  extend P2's existing table test rather than adding a parallel one.
+  applied by `fetchHostResult`; P2 also ships `validHostID`, and its
+  Address rule already sets `Address = ""` whenever the rebuilt candidate
+  fails `SplitAddress`, with `b/cc:a/foo` and `b/` in its table test —
+  R2-m2 is covered there). P3 does **not** write a second copy (no
+  `rows.go`) and does not touch the function; `/send` (Task 8) calls it
+  before `Resolve`.
 - `module.go`: `localEnvelope` gains a one-shot version warning — after
   `ReadRegistry`, for every distinct `Version` with
   `ccuds.NewerThanVerified`, log once per process (`sync.Map`): `peers:
@@ -626,9 +624,7 @@ tests untouched and green (their fakes set `StartTime`, not `Info`);
 policy table (`POST /api/peers/deliver` true, `GET /api/peers/deliver`
 false, `POST /api/peers/send` false, `POST /api/peers/settings` false);
 settings GET/PUT persist to a temp `CfgPath`, host principal ⇒ 403;
-`normalizeRemoteRows` (P2's, extended only if needed): a proxy row whose
-PeerName is `a/foo` ⇒ Address `""`, empty names ⇒ `""`, **every non-empty
-Address passes `SplitAddress`** (added to P2's table test); `fetchHostResult` rows are normalised (extend the P2
+`normalizeRemoteRows` is P2's and already tested there; `fetchHostResult` rows are normalised (extend the P2
 scope=all test with one assertion); version warning fires once for
 `2.1.271` across two inventory calls and never for `2.1.270`; dedup and
 limiter with a fake clock (30 allowed, 31st refused, after 60 s allowed,
@@ -1286,6 +1282,15 @@ with a non-cancelled ctx).
       `pdx peer-proxy` process left (`pgrep -f peer-proxy`).
 - [ ] Tear down (`pdx stop` both, `rm -rf /tmp/pdx-p3`); paste transcripts
       into the PR.
+
+### Spec follow-up (in the P3 PR, before Task 14)
+
+- [ ] Bump `docs/specs/2026-09-13-peer-bridge-spec.md` to v3.2: in §4.3
+      ("Bidirectional is the caller's job") and §4.4 (authentication of
+      `/deliver`) state that a delivery from a host with **no verified
+      entry** is refused at authentication (`host_unverified`), and that
+      "one-way" means "verified inbound identity, no outbound `token`",
+      which pairing never produces on its own (D12).
 
 ### Task 14: mlab ↔ air-2026 (after deploy)
 
