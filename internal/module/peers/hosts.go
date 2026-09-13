@@ -136,7 +136,7 @@ func normalizeHostURL(raw string) (string, error) {
 	if u.User != nil {
 		return "", fmt.Errorf("invalid url: must not contain userinfo")
 	}
-	if u.RawQuery != "" {
+	if u.RawQuery != "" || u.ForceQuery {
 		return "", fmt.Errorf("invalid url: must not contain a query string")
 	}
 	if u.Fragment != "" {

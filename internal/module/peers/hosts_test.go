@@ -630,6 +630,7 @@ func TestHandleAddHost_URLValidation_RejectsUnsafeComponents(t *testing.T) {
 		"https://a.example?x=1",
 		"https://a.example#f",
 		"https://u:p@a.example",
+		"http://h:7860?", // ForceQuery: RawQuery == "" but a trailing "?" is present
 	}
 	for _, raw := range cases {
 		t.Run(raw, func(t *testing.T) {
