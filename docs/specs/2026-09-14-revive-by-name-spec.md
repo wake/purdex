@@ -1,7 +1,8 @@
 # Spec — Revive terminated panes by tmux session name ("Revive by Name")
 
-Status: draft v2 (revised after codex spec review R1 `task-mu07biok-y3ko46` —
-2 Blocker, 5 Should-fix, 1 Nit; dispositions in §8)
+Status: v2.2 (v2 after codex spec review R1 `task-mu07biok-y3ko46`; v2.2 after
+PR #1002 R2 reviews `review-mu08m766-qiy77j` / `review-mu08ofts-n32v2t` /
+`review-mu08ojex-85uiy7` — evidence source and writer split changed, §8)
 Date: 2026-09-14
 Branch: `worktree-revive-by-name`
 Scope: SPA only. No daemon change.
@@ -89,7 +90,10 @@ Rule, for each candidate on `hostId`:
 - find the live session whose `name === cachedName`. tmux names are unique
   per server and one host is one server, so there is at most one; if a payload
   ever carried two, the first wins and nothing else is promised;
-- that session's `tmux_instance` must be **non-empty**. Empty is unknown, and
+- that session's `tmux_instance` must be a **non-empty string** — `typeof
+  === 'string' && length > 0`, not truthiness: the payload is `JSON.parse`d
+  with no schema, and a number / boolean / object there is not a generation
+  the pane may be re-bound to (R2 defender finding 2). Empty is unknown, and
   the whole feature stands on the Tab Rebuild rule "no evidence, no action"
   (spec §4.6). It need **not** differ from the pane's own generation
   (R1 finding 5): `snapshot/restore.ts:132` marks a pane `tmux-restarted` when
@@ -108,25 +112,38 @@ pure function never sees a reason.
 One function, two triggers, always reading the same evidence:
 
 ```ts
+export function noteReconciledSessions(hostId: string, sessions: Session[]): void  // handler → snapshot
 export function runRevivePass(hostId: string): void {
   if (!canAttachTerminal(hostId)) return                    // no payload from this connection yet (attach-gate.ts:16)
   if (useRebuildStore.getState().lockedBy !== null) return  // a rebuild owns the outcome
-  const sessions = useSessionStore.getState().sessions[hostId] ?? []
+  const sessions = reconciledSessions.get(hostId) ?? []     // the snapshot, never the session store
   for (const d of decideRevive(hostId, sessions, collectCandidates(hostId))) {
     if (!reviveAllowed(d.paneId, d.binding, useRebuildStore.getState().operations)) continue
-    repointPaneToSession(d.tabId, d.paneId, d.session)
+    try { repointPane(d.tabId, d.paneId, d.session) } catch { /* one pane's persist failure must not stop the others, nor surface elsewhere — see Trigger 2 */ }
   }
 }
 ```
 
-**Evidence.** `useSessionStore.sessions[hostId]` is the last `sessions`
-payload this host delivered (`replaceHost`, called in the handler before the
-pass) plus whatever the engine's `syncSessionStore` merged from a create
-response — every entry in it came from the daemon. The `attachReady` guard
-(`attach-gate.ts:18`) is what ties it to the *current* connection: the gate
-closes on every (re)connect and reopens only after that connection's own
-payload has been reconciled, so a pass can never act on a list left over from
-a dropped connection.
+**Evidence — the reconciled snapshot, not the session store** (R2 attacker
+finding 1 / defender finding 1, v2.2). `useSessionStore.sessions[hostId]` is
+NOT reconciled evidence: `fetchHost` (`useSessionStore.ts:23-27`) overwrites
+it unconditionally whenever an HTTP list response lands, and the hook's
+`onOpen` starts such a fetch on every connection. A response that left the
+daemon *before* a later WS payload can land *after* it — during a held lock
+— and the release pass would then act on a list older than the one the gate
+was opened for. So the handler hands the pass its own evidence: right after
+`replaceHost`, it calls `noteReconciledSessions(hostId, data)` and the pass
+reads only that per-host snapshot. Nothing else writes it. The `attachReady`
+guard still ties it to the *current* connection: the gate closes on every
+(re)connect and reopens only after that connection's own payload has been
+reconciled — which is also the moment the snapshot is overwritten — so a
+pass can never act on a snapshot left over from a dropped connection.
+
+A session the engine created is in the snapshot only once the daemon has
+broadcast it (`watcher.go` does, on every change); if that broadcast lands
+before the lock is released it is the release pass that acts, otherwise
+Trigger 1 does on the broadcast itself. Either way the evidence is a daemon
+payload, never a create response.
 
 **The lock guard** (R1 finding 2). Any rebuild in flight — a single pane or
 "Rebuild all" — holds the operation lock (`useRebuildStore.lockedBy`). While it
@@ -180,16 +197,34 @@ it is set up once and torn down with it. This is what turns "skipped under the
 lock" into "revived as soon as the lock is gone", with the same evidence and
 the same gates.
 
-**The writer.** `repointPaneToSession` is `engine.ts`'s existing
-`defaultRepoint`, exported under that name. It writes the new
-`(code, name, tmuxInstance)`, drops `terminated`, restamps
-`rebuild.sessionName` / `rebuild.tmuxInstance`, keeps the rest of the record,
-re-reads the pane and returns if it is no longer a terminal tmux pane, and
-merges the session into the session store (generation-scoped eviction of the
-dead code). In the revive path that merge changes no data — the session is
-already in the list it was read from — but it does publish a store update;
-that is accepted rather than special-cased so the two re-point paths cannot
-drift (R1 finding 8).
+The listener runs **synchronously inside `releaseOperationLock`'s `set`**,
+i.e. inside the `finally` of the rebuild that is releasing. A throw there
+(the persisted tab store's `localStorage.setItem` can throw on quota) would
+turn a finished rebuild's promise into a rejection and stop the remaining
+panes and hosts (R2 attacker finding 2). So: every pane write is isolated
+(`try/catch` per pane in the pass) and `runRevivePassAll` isolates each
+host. A failed revive leaves that pane terminated for the next trigger;
+it never changes the outcome of the operation that released the lock.
+
+**The writer — split in two** (R2 health finding 1, v2.2). `engine.ts`'s
+`defaultRepoint` did two things: write the pane, then `syncSessionStore`,
+which **evicts** the dead code from the session list when its generation
+matches the dead binding. That eviction is right for a rebuild (the dead
+session is gone) and wrong for a revive: §3.1 allows a same-generation
+revive, and in that case the pane's old code can still be a live session
+under another name — evicting it would make a real session vanish from the
+picker until the next broadcast. So:
+
+- `repointPane(tabId, paneId, session)` (exported from `engine.ts`) — the
+  pane write only: new `(code, name, tmuxInstance)`, `terminated` dropped,
+  `rebuild.sessionName` / `rebuild.tmuxInstance` restamped, the rest of the
+  record kept; re-reads the pane and returns if it is no longer a terminal
+  tmux pane. **This is what the revive pass calls.**
+- `defaultRepoint` = `repointPane` + `syncSessionStore`, unchanged in
+  behaviour, still the engine's step 4 and `repointMember`'s default.
+
+The revive path touches the session store not at all: its evidence is the
+snapshot, and the store was already replaced from the same payload.
 
 ### 3.3 Idempotency
 
@@ -234,18 +269,26 @@ nothing and does not rewrite the rebuild record.
 | S14 | two panes terminated with the same `cachedName` | both revived onto the same session |
 | S15 | same payload replayed after S1 | nothing changes |
 | S16 | host's attach gate closed (reconnecting) when the lock is released | no pass for that host; its next payload runs Trigger 1 |
+| S17 | lock held; WS payload `dev`→`new1` reconciled; then a **late HTTP** `fetchHost` response overwrites the session store with `dev`→`old`; lock released | pane revived onto `new1` (the snapshot), never `old` |
+| S18 | S1c shape, and the pane's old code is still live under another name at the same generation | pane revived onto `dev`; the session list still contains the old code |
+| S19 | two hosts h1/h2 each with a revivable pane; lock held while both payloads land; lock released | both revived |
+| S20 | the tab store's persist throws on the first pane's write during a release pass | that pane stays terminated; the second pane still revives; the rebuild that released the lock still resolves with its own report |
+| S21 | live `tmux_instance` is a number / boolean / object on the wire | untouched |
 
 ## 5. Testing
 
 - `revive.test.ts` — `decideRevive`: S1, S1c, S4, S5, S6 (payload mode), S13,
-  S14, empty candidates, name match wins over a code match (the `$0` reuse
+  S14, S21, empty candidates, name match wins over a code match (the `$0` reuse
   case: a different live session carries the pane's old code). `reviveAllowed`:
-  S8, S9, S10, no op, running.
+  S8, S9, S10, no op, running. `runRevivePass`: S18 (session list keeps the
+  old code), S20 (per-pane isolation), the snapshot is what is read (a session
+  store seeded with a different list is ignored).
 - `useMultiHostEventWs.revive.test.ts` — through `FakeSocket`, asserting on
   the tab store: S1, S1b, S2, S3, S6 (caller filter), S7 + S11 (lock held
   during the payload, then released → Y revives, X's binding untouched by the
   pass), S8 through the handler (the pane keeps its failed-op binding), S15,
-  S16.
+  S16, S17 (real `fetchHost` resolving late with a stale list), S19, S20 (the
+  rebuild's promise resolves normally).
 - `engine.test.ts` — the exported `repointPaneToSession` keeps the record and
   drops `terminated` (pin the rename).
 - All existing tests green and untouched.
@@ -279,7 +322,9 @@ Small enough for one PR; ordered so each step is independently green.
   did not come back and show a shell. That is the same outcome pB would have
   for those panes, and nothing is hidden — the report is still on screen.
 
-## 8. Review dispositions (codex spec review R1 `task-mu07biok-y3ko46`)
+## 8. Review dispositions
+
+### Spec review R1 (`task-mu07biok-y3ko46`)
 
 | # | Severity | Finding | Disposition |
 |---|---|---|---|
@@ -291,3 +336,14 @@ Small enough for one PR; ordered so each step is independently green.
 | 6 | Should-fix | Unsaved `EditableValue` draft lost on revive | **Accepted risk**, §7; follow-up issue |
 | 7 | Should-fix | Scenario/test coverage gaps | **Fixed** — §4/§5 extended (S1b, S1c, S6 both halves, S7+S11 sequence, S8 via handler, S15, S16) |
 | 8 | Nit | `syncSessionStore` is not a no-op; `updateSessionCache` claim | **Fixed** — §3.2 / §3.4 reworded |
+
+### PR #1002 R2 (attacker `review-mu08m766-qiy77j`, defender `review-mu08ofts-n32v2t`, health `review-mu08ojex-85uiy7`)
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| A | high (attacker 1, defender 1) | Release pass read `useSessionStore`, which a late `fetchHost` response overwrites unconditionally | **Fixed** — evidence is the handler's reconciled-payload snapshot (§3.2); S17 |
+| B | medium (attacker 2) | Trigger 2 runs inside the releasing rebuild's `finally`; a persist throw becomes that rebuild's rejection | **Fixed** — per-pane and per-host isolation (§3.2); S20 |
+| C | medium (health 1) | Shared writer's `syncSessionStore` evicts a still-live old code on a same-generation revive | **Fixed** — writer split: `repointPane` for revive, `defaultRepoint` = `repointPane` + sync for the engine (§3.2); S18 |
+| D | medium (defender 2) | `tmux_instance` checked by truthiness; number/boolean/object accepted | **Fixed** — non-empty string (§3.1); S21 |
+| E | note (defender) | No multi-host release test | **Fixed** — S19 |
+
