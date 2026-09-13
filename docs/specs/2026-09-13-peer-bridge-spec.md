@@ -184,8 +184,10 @@ a name to whatever now carries it.
 ### 4.2 Peer record
 
 `GET /api/peers` returns one record per tmux session, plus one per live
-Claude Code registry entry whose `tmux` field does not point into any listed
-session:
+Claude Code registry entry that no tmux session's row consumed (its
+`sessionId` matched no session's owner) and whose `tmux` field does not
+point into any listed session. An entry is represented exactly once, so a
+`cc:<peer_name>` address (§4.1) never has two candidates from one entry:
 
 ```jsonc
 {

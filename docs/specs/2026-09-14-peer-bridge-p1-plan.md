@@ -166,7 +166,9 @@ real shape from mlab):
   root) ⇒ skipped; malformed JSON ⇒ skipped.
 - `.key`, `.json.tmp.abc`, `notes.txt` in dir ⇒ ignored, **not** counted in
   skipped (they never matched the name pattern).
-- missing dir ⇒ `err != nil`, entries nil.
+- missing dir (`os.IsNotExist`) ⇒ no error, zero entries, skipped 0 (a host
+  that has never run Claude Code still lists its tmux sessions — final
+  review ruling); any other listing error ⇒ `err != nil`.
 - `Entry{Tmux:""}` ⇒ both accessors `""`; `Tmux:"a:b"` (no pane) ⇒
   session `a`, pane `""`.
 
@@ -233,9 +235,11 @@ func Build(in BuildInput) []PeerRecord
    >1 ⇒ those whose `TmuxPaneID()==owner.TmuxPaneID`; exactly one ⇒ use it;
    zero or several ⇒ `Reason="ambiguous"`, `Agent{Type:"cc", SessionID,
    Status: owner.Status}`.
-5. **Outside-tmux rows:** every live entry whose `TmuxSessionName()` is not
-   the `Name` of any session in `Sessions` gets a record — regardless of
-   whether rule 4 also used it: `SessionCode=""`, `SessionName=""`,
+5. **Outside-tmux rows:** every live entry that rule 4 did **not** consume
+   (not the single/tiebreak-winning candidate of any session) and whose
+   `TmuxSessionName()` is not the `Name` of any session in `Sessions` gets a
+   record — an entry appears exactly once (final review ruling; spec §4.2
+   v3.1): `SessionCode=""`, `SessionName=""`,
    `TmuxInstance=""`, `Address = Alias + "/cc:" + Name`, `Cwd=entry.Cwd`,
    full `AgentInfo`, `Deliverable=true`. Entries in `ProxyPIDs` get the same
    row with `Agent.Type="proxy"`, `Deliverable=false, Reason="proxy"`.
@@ -487,7 +491,7 @@ for the exact signatures) returning canned `SessionInfo`s or an error; a
 - boundary: second read exactly `t0+2s` ⇒ treated as expired.
 - provider error ⇒ `ok:false`, `peers:[]` (assert the JSON has `"peers":[]`
   not `null`).
-- registry dir missing ⇒ `ok:false`.
+- registry dir missing ⇒ `ok:true`, every session `no_agent` / `not_cc` (empty registry; final review ruling); registry dir present but unreadable (a regular file at that path) ⇒ `ok:false`.
 - `scope=all` ⇒ 400.
 - `Init` with an empty registry ⇒ error mentioning `session.provider`; with
   only sessions ⇒ error mentioning `agent.owner-resolver`.
