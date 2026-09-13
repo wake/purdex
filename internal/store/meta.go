@@ -77,7 +77,40 @@ func migrateMetaDB(db *sql.DB) error {
 			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// peer_messages: audit trail of every cross-host message delivery
+	// attempt (Peer Bridge P3). ts is unix milliseconds.
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS peer_messages (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			msg_id          TEXT NOT NULL,
+			native_msg_id   TEXT NOT NULL DEFAULT '',
+			direction       TEXT NOT NULL,
+			ts              INTEGER NOT NULL,
+			from_host_id    TEXT,
+			from_session_id TEXT,
+			to_host_id      TEXT,
+			to_session_id   TEXT,
+			declared_mode   TEXT,
+			effective_mode  TEXT,
+			bytes           INTEGER,
+			result          TEXT,
+			error           TEXT
+		)
+	`)
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS peer_messages_ts ON peer_messages(ts)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS peer_messages_msg ON peer_messages(msg_id, direction)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Close closes the underlying DB connection.
