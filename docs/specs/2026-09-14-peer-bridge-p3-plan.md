@@ -35,10 +35,12 @@ InboundToken, AllowBypass}` + `MatchInboundToken` / `FindPeerHostByAlias`,
 `peers.Envelope` / `Resolve` / `SplitAddress` / `HostMatches`, and the
 module's `fetch` seam (`fetchFunc(ctx, client, baseURL, bearer)
 (Envelope, error)`, `fetchRemote`, `newRemoteClient()` — 3 s, no redirects,
-16 MiB cap — `remoteFetchTimeout`). **Implementation starts only after P2
-is merged**: first `git merge origin/main` into this worktree, re-read the
-P2 files named above, and adjust any signature this plan quotes that
-drifted.
+16 MiB cap — `remoteFetchTimeout`). **P2 merged as alpha.337 (PR #998,
+bump #1004) and `origin/main` is merged into this worktree (`123479f`);
+every symbol quoted here was re-verified against it.** P2 also ships
+`validHostID`, `boundRemoteText` (bound remote text before it enters an
+error), `maxRemoteRowsBytes`, `normalizeHostURL` and `sanitizeCell`; P3
+reuses them and never duplicates them.
 
 ## Global Constraints
 
@@ -1149,6 +1151,9 @@ pdx msg selftest [--timeout <dur>] [--config <path>]        (Task 12)
   local `15:04:05`).
 - `deliver on|off` ⇒ PUT `/api/peers/settings {deliver}`, print `deliver:
   on|off`; `status` ⇒ GET, same output.
+- **Every table cell and every error string that came from a daemon or a
+  remote passes through P2's `sanitizeCell`** (`cmd/pdx/peers.go`) before
+  it reaches stdout/stderr; `--json` is passed through untouched.
 
 **Tests:** grammar table (exit 2, zero requests); `send` without the env
 var ⇒ exit 1, stderr contains `origin_unknown`, zero requests; `send`
