@@ -56,9 +56,9 @@ describe('Electron macOS signing configuration (static)', () => {
     expect(applyIdx).toBeGreaterThan(gateIdx)
   })
 
-  it('daemon still gates /api/dev/update routes behind PDX_DEV_MODE=1', () => {
+  it('daemon gates /api/dev/update routes behind devmode.Enabled()', () => {
     const mod = readFileSync(resolve(root, 'internal/module/dev/module.go'), 'utf8')
-    expect(mod).toMatch(/os\.Getenv\("PDX_DEV_MODE"\)\s*!=\s*"1"/)
+    expect(mod).toMatch(/devmode\.Enabled\(\)/)
     expect(mod).toMatch(/\/api\/dev\/update\/check/)
     expect(mod).toMatch(/\/api\/dev\/update\/download/)
   })

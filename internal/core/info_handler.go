@@ -10,12 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/config"
 )
-
-// Version is the purdex daemon version, set via ldflags at build time.
-// Defaults to "dev" for local development builds.
-var Version = "dev"
 
 // HandleHealth returns {"ok": true, "mode": "pairing"|"pending"|"normal"} for connectivity checks.
 // Exported because main.go registers it on the outer mux to bypass auth middleware,
@@ -23,8 +20,10 @@ var Version = "dev"
 func (c *Core) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"ok":   true,
-		"mode": c.Pairing.Get().String(),
+		"ok":      true,
+		"mode":    c.Pairing.Get().String(),
+		"version": buildinfo.Version,
+		"hash":    buildinfo.Hash,
 	})
 }
 
@@ -45,12 +44,12 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RUnlock()
 
 	info := map[string]string{
-		"host_id":       hostID,
-		"tmux_instance": config.GetTmuxInstance(),
-		"purdex_version": Version,
-		"tmux_version":  getTmuxVersion(),
-		"os":            runtime.GOOS,
-		"arch":          runtime.GOARCH,
+		"host_id":        hostID,
+		"tmux_instance":  config.GetTmuxInstance(),
+		"purdex_version": buildinfo.Version,
+		"tmux_version":   getTmuxVersion(),
+		"os":             runtime.GOOS,
+		"arch":           runtime.GOARCH,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)

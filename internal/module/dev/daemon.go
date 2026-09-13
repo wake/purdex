@@ -1,11 +1,9 @@
 package dev
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,12 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-// BakedInHash is the short git commit hash injected at build time via
-// -ldflags "-X github.com/wake/purdex/internal/module/dev.BakedInHash=<sha>".
-// Defaults to "unknown" for dev-mode `go run` without the flag.
-var BakedInHash = "unknown"
+	"github.com/wake/purdex/internal/buildinfo"
+)
 
 // daemonRebuildMu serializes concurrent rebuild requests. Used by Task 4.
 var daemonRebuildMu sync.Mutex
@@ -91,57 +86,18 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	newPath := filepath.Join(binDir, "pdx.new")
 
 	// Fix 1: Inject the current git hash via -ldflags so the rebuilt binary
-	// reports the correct BakedInHash through /api/dev/daemon/check. Without
-	// this, the new binary would start with BakedInHash="unknown" and the UI
+	// reports the correct buildinfo.Hash through /api/dev/daemon/check. Without
+	// this, the new binary would start with buildinfo.Hash="unknown" and the UI
 	// would permanently show "update available" after every rebuild.
 	// Bound the git query with a short timeout to avoid blocking the mutex.
 	hashCtx, hashCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer hashCancel()
 	hashOut, _ := exec.CommandContext(hashCtx, "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
 	hash := strings.TrimSpace(string(hashOut))
-	ldflags := "-X github.com/wake/purdex/internal/module/dev.BakedInHash=" + hash
-	cmd := exec.CommandContext(ctx, "go", "build", "-ldflags", ldflags, "-o", newPath, "./cmd/pdx")
-	cmd.Dir = m.repoRoot
-	// Inherit env so GOCACHE / PATH / HOME work; do not scrub.
-	cmd.Env = os.Environ()
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
-		return
-	}
-	// Fix 2: close stdout pipe on StderrPipe failure to avoid FD leak.
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		stdout.Close()
-		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
-		return
-	}
-
-	// Fix 2: close both pipes when cmd.Start fails.
-	if err := cmd.Start(); err != nil {
-		stdout.Close()
-		stderr.Close()
-		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
-		return
-	}
-
-	streamLines := func(src io.Reader, done chan<- struct{}) {
-		defer close(done)
-		scanner := bufio.NewScanner(src)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			writeEvent(daemonRebuildEvent{Type: "log", Line: scanner.Text()})
-		}
-	}
-	doneOut := make(chan struct{})
-	doneErr := make(chan struct{})
-	go streamLines(stdout, doneOut)
-	go streamLines(stderr, doneErr)
-	<-doneOut
-	<-doneErr
-
-	if err := cmd.Wait(); err != nil {
+	if err := m.buildBinary(ctx, buildTarget{}, hash, m.readVersionFile(), newPath, func(line string) {
+		writeEvent(daemonRebuildEvent{Type: "log", Line: line})
+	}); err != nil {
 		writeEvent(daemonRebuildEvent{Type: "error", Message: err.Error()})
 		return
 	}
@@ -179,10 +135,19 @@ func (m *DevModule) handleDaemonCheck(w http.ResponseWriter, _ *http.Request) {
 		latest = strings.TrimSpace(string(out))
 	}
 	resp := daemonCheckResponse{
-		CurrentHash: BakedInHash,
+		CurrentHash: buildinfo.Hash,
 		LatestHash:  latest,
-		Available:   latest != "" && latest != BakedInHash,
+		Available:   latest != "" && latest != buildinfo.Hash,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// readVersionFile is readVersion with "unknown" for a missing or empty file,
+// the form the build identity wants.
+func (m *DevModule) readVersionFile() string {
+	if v := m.readVersion(); v != "" {
+		return v
+	}
+	return "unknown"
 }

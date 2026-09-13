@@ -38,7 +38,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers, version\n")
 		os.Exit(1)
 	}
 
@@ -63,6 +63,8 @@ func main() {
 		runStatuslineProxy(os.Args[2:])
 	case "peers":
 		runPeers(os.Args[2:])
+	case "version":
+		runVersion(os.Args[2:], os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -114,14 +116,12 @@ func runServe(args []string) {
 		log.Printf("host_id: %s", hostID)
 	}
 
-	// Acquire PID file lock (for pdx start/stop/status)
+	// Acquire PID file lock (for pdx start/stop/status). A held lock means
+	// another daemon already owns this data_dir, so refuse to start rather
+	// than run two daemons against the same SQLite files.
 	pidPath := filepath.Join(cfg.DataDir, "pdx.pid")
-	pidFile, pidErr := acquirePidLock(pidPath, os.Getpid())
-	if pidErr != nil {
-		log.Printf("pid lock: %v (another instance may be running)", pidErr)
-	} else {
-		defer releasePidLock(pidFile, pidPath)
-	}
+	pidFile := mustAcquirePidLock(pidPath, os.Getpid(), log.Fatalf)
+	defer releasePidLock(pidFile, pidPath)
 
 	// Register token for crash log redaction
 	if cfg.Token != "" {

@@ -174,8 +174,8 @@ func TestDefaultBuild_WrapsStepErrorWithLabel(t *testing.T) {
 	}
 }
 
-func TestRegisterRoutes_DisabledByDefault(t *testing.T) {
-	t.Setenv("PDX_DEV_MODE", "")
+func TestRegisterRoutes_DisabledWithZero(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "0")
 	m := &DevModule{}
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
@@ -186,6 +186,24 @@ func TestRegisterRoutes_DisabledByDefault(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status: want 404, got %d", w.Code)
+	}
+}
+
+// Asserts registration only. Do NOT ServeHTTP here: a bare &DevModule{}
+// has a nil hashFn and the check handler would panic.
+func TestRegisterRoutes_EnabledWhenUnset(t *testing.T) {
+	t.Setenv("PDX_DEV_MODE", "")
+	if err := os.Unsetenv("PDX_DEV_MODE"); err != nil {
+		t.Fatal(err)
+	}
+	m := &DevModule{}
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dev/update/check", nil)
+	_, pattern := mux.Handler(req)
+	if pattern != "GET /api/dev/update/check" {
+		t.Fatalf("pattern = %q; dev routes must be registered when PDX_DEV_MODE is unset (spec D6)", pattern)
 	}
 }
 

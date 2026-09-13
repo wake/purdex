@@ -2,12 +2,12 @@ package agent
 
 import (
 	"log"
-	"os"
 	"sync"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/agent/probe"
+	"github.com/wake/purdex/internal/devmode"
 )
 
 // proberWatcher is the minimal screen-watcher contract the orchestrator
@@ -49,14 +49,9 @@ var recordHookAtHook func(session string)
 // atomic stale-callback re-check (codex finding #4 regression).
 var interruptBeforeFinalLockFn func(session string)
 
-// isDevMode reports whether the daemon is running with PDX_DEV_MODE=1. Probe
-// log gating uses this so production logs stay quiet. We read the env on
-// every call so flipping the var at runtime (e.g. in tests via t.Setenv)
-// flips the gate.
-//
-// Defined locally to avoid importing the dev module (would create a circular
-// dependency) — the env-var read is the cheapest possible check anyway.
-func isDevMode() bool { return os.Getenv("PDX_DEV_MODE") == "1" }
+// isDevMode defers to devmode.Enabled(); kept as a local name so call sites
+// read naturally.
+func isDevMode() bool { return devmode.Enabled() }
 
 // probeOrchestrator owns the per-session probe-watcher lifecycle and
 // translates raw probe.ScreenChangeEvent ticks into agent status broadcasts.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -46,6 +48,138 @@ func TestPidFileLockAndUnlock(t *testing.T) {
 		t.Fatalf("re-acquire after release: %v", err)
 	}
 	releasePidLock(f2, pidPath)
+}
+
+func TestReleasePidLock_KeepsFile(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	f, err := acquirePidLock(pidPath, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePidLock(f, pidPath)
+	if _, err := os.Stat(pidPath); err != nil {
+		t.Fatalf("pid file must survive release (spec §2.4b): %v", err)
+	}
+	if running, _ := isDaemonRunning(pidPath); running {
+		t.Fatal("released pid file must read as not running")
+	}
+}
+
+// A second starter that opened the pid file before the first released it
+// must still be visible to isDaemonRunning afterwards. With unlink-on-release
+// the second locker held an invisible inode; with a permanent file it holds
+// the same inode everyone opens.
+func TestPidLock_OpenBeforeReleaseStaysVisible(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	first, err := acquirePidLock(pidPath, 111)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Second party opens (but cannot yet lock) while first holds it.
+	second, err := os.OpenFile(pidPath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	releasePidLock(first, pidPath)
+	if err := syscall.Flock(int(second.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("second flock after release: %v", err)
+	}
+	second.Truncate(0)
+	second.Seek(0, 0)
+	fmt.Fprintf(second, "%d", 222)
+	second.Sync()
+
+	running, pid := isDaemonRunning(pidPath)
+	if !running || pid != 222 {
+		t.Fatalf("isDaemonRunning = (%v, %d), want (true, 222)", running, pid)
+	}
+}
+
+func TestMustAcquirePidLock_FatalWhenHeld(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	first, err := acquirePidLock(pidPath, 111)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releasePidLock(first, pidPath)
+
+	var got string
+	f := mustAcquirePidLock(pidPath, 222, func(format string, args ...any) { got = fmt.Sprintf(format, args...) })
+	if f != nil {
+		t.Fatal("must not return a file when the lock is held")
+	}
+	if !strings.Contains(got, "refusing to start") {
+		t.Fatalf("fatalf not invoked with the refusal message: %q", got)
+	}
+}
+
+// isDaemonRunning is only a probe: it must take a shared lock, so two
+// concurrent probers (`pdx status` racing `pdx stop`, say) never read each
+// other as the daemon. A held LOCK_SH from another fd must therefore not
+// make the probe report "running".
+func TestIsDaemonRunning_ProberDoesNotBlockProber(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	if err := os.WriteFile(pidPath, []byte("4242"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	other, err := os.OpenFile(pidPath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := syscall.Flock(int(other.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		t.Fatalf("shared lock from the other prober: %v", err)
+	}
+
+	running, _ := isDaemonRunning(pidPath)
+	if running {
+		t.Fatal("a concurrent prober's shared lock must not read as a running daemon")
+	}
+}
+
+// A prober holds its shared lock for microseconds; `pdx serve` must ride
+// through that instead of dying with "already running". A real daemon's
+// exclusive lock is held forever, so the retries do not weaken the
+// double-daemon refusal (see TestMustAcquirePidLock_FatalWhenHeld).
+func TestMustAcquirePidLock_RetriesPastTransientHolder(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "pdx.pid")
+	if err := os.WriteFile(pidPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prober, err := os.OpenFile(pidPath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prober.Close()
+	if err := syscall.Flock(int(prober.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		syscall.Flock(int(prober.Fd()), syscall.LOCK_UN)
+		close(released)
+	}()
+
+	var fatal string
+	f := mustAcquirePidLock(pidPath, 222, func(format string, args ...any) { fatal = fmt.Sprintf(format, args...) })
+	<-released
+	if fatal != "" {
+		t.Fatalf("fatalf invoked for a transient shared lock: %q", fatal)
+	}
+	if f == nil {
+		t.Fatal("expected a held lock once the prober let go")
+	}
+	defer releasePidLock(f, pidPath)
+	if running, pid := isDaemonRunning(pidPath); !running || pid != 222 {
+		t.Fatalf("isDaemonRunning = (%v, %d), want (true, 222)", running, pid)
+	}
 }
 
 func TestIsDaemonRunning(t *testing.T) {
