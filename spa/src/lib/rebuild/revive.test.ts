@@ -85,6 +85,18 @@ describe('decideRevive', () => {
     expect(decideRevive('h1', [live], [cand])).toEqual([])
   })
 
+  it.each([
+    ['null', { code: null }],
+    ['absent', {}],
+    ['empty', { code: '' }],
+    ['a number', { code: 123 }],
+  ])('S22: rejects when the live code is %s on the wire', (_label, code) => {
+    const cand = candidate()
+    const { code: _code, ...rest } = session({ name: 'dev', tmux_instance: '222:2000' })
+    const live = { ...rest, ...code } as unknown as Session
+    expect(decideRevive('h1', [live], [cand])).toEqual([])
+  })
+
   it('S5: rejects when only a differently-named session is live', () => {
     const cand = candidate()
     const live = session({ code: 'abc123', name: 'dev-2', tmux_instance: '222:2000' })
@@ -276,6 +288,18 @@ describe('runRevivePass', () => {
     runRevivePass('h1')
     expect(paneContent('t1', 'p1')).toBe(c)
     expect(paneContent('t1', 'p1').rebuild).toBe(record)
+  })
+
+  it('S22: a null code is no binding; the next payload with a real code revives', () => {
+    seedPane('t1', 'p1')
+    const nullCode = { ...session({ name: 'dev', tmux_instance: '222:2000' }), code: null } as unknown as Session
+    noteReconciledSessions('h1', [nullCode])
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+
+    noteReconciledSessions('h1', [live])
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject(revivedContent)
   })
 
   it('S18: a same-generation revive keeps the pane\'s old code in the session list', () => {
