@@ -227,7 +227,7 @@ function syncSessionStore(hostId: string, session: Session, dead: { code: string
 }
 
 /**
- * Step 4. Re-point the pane onto the created session and clear `terminated`.
+ * The pane write: re-point the pane onto `session` and clear `terminated`.
  * The caller has already verified the binding, so this only writes.
  *
  * `rebuild.tmuxInstance` is re-stamped alongside `rebuild.sessionName`: the
@@ -236,10 +236,13 @@ function syncSessionStore(hostId: string, session: Session, dead: { code: string
  * record describe a session that no longer exists.
  *
  * Exported for the revive pass (`revive.ts`), which puts a `tmux-restarted`
- * pane back onto a live session of the same name: one writer for both paths,
- * so what "re-pointed" means cannot drift between them.
+ * pane back onto a live session of the same name and needs the write WITHOUT
+ * the session-store sync below: a revive may land on the pane's own
+ * generation, and there the old code can still be a live session under
+ * another name — the sync would evict it. The revive's evidence is the
+ * reconciled payload, which already replaced the store.
  */
-export function repointPaneToSession(tabId: string, paneId: string, session: Session): void {
+export function repointPane(tabId: string, paneId: string, session: Session): void {
   const content = readTerminalPane(tabId, paneId)
   if (!content) return
   const tmuxInstance = session.tmux_instance ?? ''
@@ -260,6 +263,16 @@ export function repointPaneToSession(tabId: string, paneId: string, session: Ses
       : undefined,
   }
   useTabStore.getState().setPaneContent(tabId, paneId, next)
+}
+
+/**
+ * Step 4: the pane write, then the session-store sync keyed on the binding
+ * the pane held BEFORE the write — the dead one the sync must evict.
+ */
+function defaultRepoint(tabId: string, paneId: string, session: Session): void {
+  const content = readTerminalPane(tabId, paneId)
+  if (!content) return
+  repointPane(tabId, paneId, session)
   syncSessionStore(content.hostId, session, { code: content.sessionCode, tmuxInstance: content.tmuxInstance })
 }
 
@@ -286,7 +299,7 @@ export function repointMember(
   paneId: string,
   binding: RebuildBinding,
   created: Session,
-  repoint: NonNullable<RebuildDeps['repoint']> = repointPaneToSession,
+  repoint: NonNullable<RebuildDeps['repoint']> = defaultRepoint,
   assertHostUnchanged?: () => void,
 ): MemberRepointResult {
   if (assertHostUnchanged) {
@@ -515,7 +528,7 @@ async function runRebuild(
     ?? ((_hostId: string, name: string, dir: string, mode: string) => pinned.createSession(name, dir, mode))
   const sendKeys = deps.sendKeys
     ?? ((_hostId: string, code: string, command: string, expected: string) => pinned.sendKeys(code, command, expected))
-  const repoint = deps.repoint ?? repointPaneToSession
+  const repoint = deps.repoint ?? defaultRepoint
 
   let created: Session | undefined
   if (plan.createSession) {
@@ -713,7 +726,7 @@ async function runResumeTail(paneId: string, withResume: boolean, deps: RebuildD
     report,
     sendKeys: deps.sendKeys
       ?? ((_hostId: string, code: string, command: string, expected: string) => pinned.sendKeys(code, command, expected)),
-    repoint: deps.repoint ?? repointPaneToSession,
+    repoint: deps.repoint ?? defaultRepoint,
   }
   await runResumeStep(ctx, withResume)
   runRepointStep(ctx)

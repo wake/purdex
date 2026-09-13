@@ -39,7 +39,7 @@
 // payload, which is also when the snapshot is overwritten.
 import { bindingEquals } from './binding'
 import { canAttachTerminal } from './attach-gate'
-import { repointPaneToSession } from './engine'
+import { repointPane } from './engine'
 import { scanPaneTree } from '../pane-tree'
 import { useHostStore } from '../../stores/useHostStore'
 import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
@@ -157,7 +157,7 @@ export function runRevivePass(hostId: string): void {
   for (const d of decideRevive(hostId, sessions, collectCandidates(hostId))) {
     if (!reviveAllowed(d.paneId, d.binding, useRebuildStore.getState().operations)) continue
     try {
-      repointPaneToSession(d.tabId, d.paneId, d.session)
+      repointPane(d.tabId, d.paneId, d.session)
     } catch { /* ignore */ }
   }
 }

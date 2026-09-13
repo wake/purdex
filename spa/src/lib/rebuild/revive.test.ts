@@ -268,6 +268,21 @@ describe('runRevivePass', () => {
     expect(paneContent('t1', 'p1').rebuild).toBe(record)
   })
 
+  it('S18: a same-generation revive keeps the pane\'s old code in the session list', () => {
+    // `old111` is now somebody else's live session at the very generation the
+    // pane died on; the engine's sync would evict it, the revive must not.
+    const sameGen = [
+      session({ code: 'old111', name: 'other', tmux_instance: '111:1000' }),
+      session({ code: 'new1', name: 'dev', tmux_instance: '111:1000' }),
+    ]
+    useSessionStore.setState({ sessions: { h1: sameGen } })
+    noteReconciledSessions('h1', sameGen)
+    seedPane('t1', 'p1')
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject({ sessionCode: 'new1', tmuxInstance: '111:1000', cachedName: 'dev' })
+    expect(useSessionStore.getState().sessions.h1.map((s) => s.code)).toEqual(['old111', 'new1'])
+  })
+
   it('S20: a write that throws leaves that pane terminated and the rest of the pass runs', () => {
     seedPane('t1', 'p1')
     seedPane('t2', 'p2')

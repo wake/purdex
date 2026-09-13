@@ -1,6 +1,6 @@
 // spa/src/lib/rebuild/engine.test.ts — the rebuild operation (spec §4.8).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { rebuildPane, retryResume, attachAnyway, repointPaneToSession } from './engine'
+import { rebuildPane, retryResume, attachAnyway, repointPane } from './engine'
 import type { RebuildDeps } from './engine'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -929,20 +929,28 @@ describe('re-point — the pinned host', () => {
 })
 
 // ---------------------------------------------------------------------------
-// The re-point writer on its own. Exported so the revive pass (revive.ts) can
-// write a pane exactly the way the engine's step 4 does — one writer, so the
-// two re-point paths cannot drift.
+// The pane write on its own. Exported for the revive pass (revive.ts), which
+// must NOT run the engine's session-store sync: on a same-generation revive
+// the pane's old code can still be a live session under another name, and
+// the sync would evict it. The engine's step 4 (`defaultRepoint`) is this
+// write plus the sync — covered above by 're-points the pane onto the new
+// session and clears terminated' and the three eviction tests that follow it.
 // ---------------------------------------------------------------------------
-describe('repointPaneToSession', () => {
+describe('repointPane', () => {
   beforeEach(() => {
     useRebuildStore.setState({ operations: {}, lockedBy: null })
-    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    // The dead code at its own generation — exactly what the sync would evict.
+    useSessionStore.setState({
+      sessions: { h1: [session({ code: 'old111', name: 'dev', tmux_instance: '111:1000' })] },
+      activeHostId: null, activeCode: null,
+    })
     seedHost('h1')
     seedPane('h1', 't1', 'p1', { cwd: '/w', agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 } })
   })
 
-  it('writes the session onto the pane, drops terminated, restamps the record and syncs the store', () => {
-    repointPaneToSession('t1', 'p1', session({ code: 'new1', name: 'dev', tmux_instance: '222:2000' }))
+  it('writes the session onto the pane, drops terminated, restamps the record and leaves the session store alone', () => {
+    const before = useSessionStore.getState().sessions
+    repointPane('t1', 'p1', session({ code: 'new1', name: 'dev', tmux_instance: '222:2000' }))
     const c = paneContent('t1', 'p1')
     expect(c).toMatchObject({ kind: 'tmux-session', sessionCode: 'new1', cachedName: 'dev', tmuxInstance: '222:2000' })
     expect('terminated' in c ? c.terminated : undefined).toBeUndefined()
@@ -950,6 +958,7 @@ describe('repointPaneToSession', () => {
       sessionName: 'dev', tmuxInstance: '222:2000', cwd: '/w', capturedAt: 1,
       agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 },
     })
-    expect(useSessionStore.getState().sessions['h1']?.map((s) => s.code)).toEqual(['new1'])
+    expect(useSessionStore.getState().sessions).toBe(before)
+    expect(useSessionStore.getState().sessions['h1']?.map((s) => s.code)).toEqual(['old111'])
   })
 })
