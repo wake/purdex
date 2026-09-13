@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
@@ -27,6 +28,29 @@ type fetchFunc func(ctx context.Context, client *http.Client, baseURL, bearer st
 // remoteFetchTimeout bounds each individual host fetch in a scope=all
 // fan-out, independent of the shared http.Client's own timeout.
 const remoteFetchTimeout = 3 * time.Second
+
+// maxRemoteTextBytes bounds how much of a remote peer's attacker-controlled
+// text (an error message, or a mismatched host_id) is allowed to appear in
+// this host's own error responses and rows, via boundRemoteText.
+const maxRemoteTextBytes = 200
+
+// boundRemoteText truncates s to at most maxRemoteTextBytes bytes, cutting
+// on a rune boundary so the result is always valid UTF-8, and appends "…"
+// when truncation actually removed something. Used to bound remote peer
+// text (an env.Error or a mismatched host_id) before it is embedded in an
+// error message returned to a caller or persisted/logged locally — a
+// misbehaving or malicious peer should not be able to inflate or pollute
+// this host's own responses via an unbounded string.
+func boundRemoteText(s string) string {
+	if len(s) <= maxRemoteTextBytes {
+		return s
+	}
+	cut := maxRemoteTextBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
 
 // Module implements core.Module for GET /api/peers.
 type Module struct {
@@ -311,7 +335,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 			Alias:  h.Alias,
 			HostID: h.HostID,
 			OK:     false,
-			Error:  fmt.Sprintf("host_id mismatch: got %s", env.HostID),
+			Error:  fmt.Sprintf("host_id mismatch: got %s", boundRemoteText(env.HostID)),
 			Peers:  []ipeers.PeerRecord{},
 		}
 	}
@@ -326,11 +350,19 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		peers = []ipeers.PeerRecord{}
 	}
 
+	// env.Error is the remote peer's own reported error text — bound and
+	// prefix it the same way verifyHost does for the add/put 502 body, so
+	// an attacker-controlled remote cannot inflate or pollute this row.
+	rowErr := env.Error
+	if rowErr != "" {
+		rowErr = "peer: " + boundRemoteText(rowErr)
+	}
+
 	return ipeers.HostResult{
 		Alias:   h.Alias,
 		HostID:  resultHostID,
 		OK:      env.OK,
-		Error:   env.Error,
+		Error:   rowErr,
 		Partial: env.Partial,
 		Peers:   peers,
 	}

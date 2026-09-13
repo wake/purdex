@@ -707,6 +707,123 @@ func TestHandlePeers_ScopeAll_HostIDMismatch(t *testing.T) {
 	}
 }
 
+// TestHandlePeers_ScopeAll_HostIDMismatchBounded pins Item 3's bounding of
+// the remote-supplied host_id embedded in the "host_id mismatch: got <x>"
+// row error: a 300-byte remote host_id must not appear in full.
+func TestHandlePeers_ScopeAll_HostIDMismatchBounded(t *testing.T) {
+	dir := t.TempDir()
+	longHostID := strings.Repeat("y", 300)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID:  longHostID,
+			OK:      true,
+			Partial: false,
+			Peers:   []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "expected:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	row := got.Hosts[1]
+	if row.OK {
+		t.Errorf("row = %+v, want ok=false", row)
+	}
+	if !strings.HasPrefix(row.Error, "host_id mismatch: got ") {
+		t.Errorf("row.Error = %q, want prefix %q", row.Error, "host_id mismatch: got ")
+	}
+	if strings.Contains(row.Error, longHostID) {
+		t.Errorf("row.Error contains the full 300-byte remote host_id unbounded: %q", row.Error)
+	}
+	if !strings.HasSuffix(row.Error, "…") {
+		t.Errorf("row.Error = %q, want to end with an ellipsis", row.Error)
+	}
+	if len(row.Error) > 230 {
+		t.Errorf("row.Error length = %d bytes, want bounded; error=%q", len(row.Error), row.Error)
+	}
+}
+
+// TestHandlePeers_ScopeAll_RemoteErrorBounded pins Item 3's bounding of a
+// remote peer's own reported Error text as it flows into a scope=all row:
+// prefixed "peer: " and truncated, mirroring the 502 body verifyHost
+// produces for the add/put paths.
+func TestHandlePeers_ScopeAll_RemoteErrorBounded(t *testing.T) {
+	dir := t.TempDir()
+	longErr := strings.Repeat("z", 300)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID:  "host-a:111",
+			OK:      false,
+			Error:   longErr,
+			Partial: false,
+			Peers:   []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "host-a:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	row := got.Hosts[1]
+	if row.OK {
+		t.Errorf("row = %+v, want ok=false", row)
+	}
+	if !strings.HasPrefix(row.Error, "peer: ") {
+		t.Errorf("row.Error = %q, want prefix %q", row.Error, "peer: ")
+	}
+	if !strings.HasSuffix(row.Error, "…") {
+		t.Errorf("row.Error = %q, want to end with an ellipsis", row.Error)
+	}
+	if len(row.Error) > 210 {
+		t.Errorf("row.Error length = %d bytes, want <= 210; error=%q", len(row.Error), row.Error)
+	}
+}
+
 // TestHandlePeers_ScopeAll_NoOutboundToken pins the no-token row: a
 // configured host without an outbound Token is listed as a failed row
 // without ever being dialed.

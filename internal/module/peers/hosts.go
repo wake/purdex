@@ -186,7 +186,7 @@ func (m *Module) verifyHost(ctx context.Context, targetURL, token string) (env i
 	}
 	if !env.OK {
 		if env.Error != "" {
-			return env, env.Error
+			return env, "peer: " + boundRemoteText(env.Error)
 		}
 		return env, "peer reported ok=false"
 	}

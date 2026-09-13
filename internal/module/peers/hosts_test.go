@@ -370,6 +370,42 @@ func TestHandleAddHost_RemoteNotOK_502(t *testing.T) {
 	}
 }
 
+// TestHandleAddHost_RemoteErrorBounded_502 pins Item 3: a remote peer's
+// (attacker-controlled) error text must be bounded and prefixed before it
+// reaches this host's own 502 body, rather than passed through verbatim.
+func TestHandleAddHost_RemoteErrorBounded_502(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	longErr := strings.Repeat("x", 300)
+	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: false, Error: longErr}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"alias": "air", "url": "https://a.example", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.HasPrefix(got.Error, "peer: ") {
+		t.Errorf("error = %q, want prefix %q", got.Error, "peer: ")
+	}
+	if !strings.HasSuffix(got.Error, "…") {
+		t.Errorf("error = %q, want to end with an ellipsis", got.Error)
+	}
+	if len(got.Error) > 210 {
+		t.Errorf("error length = %d bytes, want <= 210; error=%q", len(got.Error), got.Error)
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air") != -1 {
+		t.Fatalf("alias should not be persisted")
+	}
+}
+
 func TestHandleAddHost_RemoteEmptyHostID_502(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
 	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "", OK: true}, nil))
