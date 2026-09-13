@@ -1,9 +1,10 @@
 // Package peers implements the "peers" daemon module: GET /api/peers, a
 // local inventory of this host's tmux sessions joined with the agent module's
 // owner resolution and the Claude Code session registry; the peer-host
-// management and settings routes; and POST /api/peers/deliver, the inbound
-// half of cross-host messaging (deliver.go), backed by the per-origin
-// helper manager (helpers.go) and the peer_messages audit store.
+// management and settings routes; POST /api/peers/send, the outbound half
+// of cross-host messaging (send.go); and POST /api/peers/deliver, the
+// inbound half (deliver.go), backed by the per-origin helper manager
+// (helpers.go) and the peer_messages audit store.
 package peers
 
 import (
@@ -36,9 +37,8 @@ import (
 type fetchFunc func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error)
 
 // postDeliverFunc is the outbound seam: one POST /api/peers/deliver to a
-// remote daemon. Declared here with a nil default; the send path (Task 8)
-// supplies the production implementation and the reply path (Task 9)
-// calls it.
+// remote daemon. postDeliver (send.go) in production, a fake in tests; the
+// send path and the reply path (Task 9) both call it.
 type postDeliverFunc func(ctx context.Context, client *http.Client, baseURL, bearer string, req ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error)
 
 // writeFrameFunc is the inbox-socket seam: ccuds.WriteFrame in production.
@@ -125,9 +125,9 @@ type Module struct {
 	sockWriteTimeout time.Duration  // default ipeers.SocketWriteTimeout
 	newMsgID         func() string  // default uuid v4 (crypto/rand); the reply path mints ids with it
 
-	// Outbound delivery (Task 8 / Task 9): nil until the send path lands.
-	deliverClient *http.Client
-	post          postDeliverFunc
+	// Outbound delivery (send.go; the reply path reuses both).
+	deliverClient *http.Client    // default newDeliverClient() (Init); one InterDaemonTimeout per call
+	post          postDeliverFunc // default postDeliver; test seam
 
 	// Lifecycle. stopCtx is cancelled first in Stop: handlers answer 503
 	// not_ready, in-flight socket writes abort, and the reply semaphore
@@ -169,6 +169,7 @@ func New(audit AuditStore) *Module {
 		writeFrame:       ccuds.WriteFrame,
 		sockWriteTimeout: ipeers.SocketWriteTimeout,
 		newMsgID:         uuid.NewString,
+		post:             postDeliver,
 		stopCtx:          stopCtx,
 		stopCancel:       stopCancel,
 		replySem:         make(chan struct{}, replyWorkerCap),
@@ -208,6 +209,8 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.owners = owners
 
+	m.deliverClient = newDeliverClient()
+
 	// The helper manager: one `pdx peer-proxy` per remote sender, spawned
 	// from this daemon's own executable (resolved here, not in New — tests
 	// never spawn the real binary), owned durably in <data_dir>/proxies.json.
@@ -246,6 +249,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)
 	mux.HandleFunc("GET /api/peers/settings", m.handleGetSettings)
 	mux.HandleFunc("PUT /api/peers/settings", m.handlePutSettings)
+	mux.HandleFunc("POST /api/peers/send", m.handleSend)
 	mux.HandleFunc("POST /api/peers/deliver", m.handleDeliver)
 }
 

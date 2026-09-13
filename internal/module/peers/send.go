@@ -1,0 +1,377 @@
+package peers
+
+// POST /api/peers/send (spec §4.4): the sending daemon's endpoint. A local
+// admin caller (pdx msg send inside a Claude Code session) names a peer
+// address and its own inbox socket; this daemon attributes the origin to a
+// live, non-proxy row of its own inventory, fetches the target host's
+// inventory with that host's outbound token, resolves the session name to
+// one deliverable tuple, records the attempt, and forwards a
+// DeliverRequest to the remote daemon. Only the resolved tuple travels;
+// the receiver re-verifies it (deliver.go).
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+
+	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/middleware"
+	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/store"
+)
+
+// maxSendBodyBytes bounds the /send request body: MaxTextBytes of text
+// plus the envelope, with generous headroom for JSON escaping.
+const maxSendBodyBytes = 1 << 20
+
+// maxDeliverRespBytes caps a remote daemon's /deliver answer: a
+// DeliverResponse or an APIError is a few hundred bytes at most, and the
+// body is attacker-controlled (any configured peer host).
+const maxDeliverRespBytes = 64 << 10
+
+// errForbidden is the "error" code of a /send refused for a non-admin
+// principal — the same word the scope=all fan-out and the auth layer use.
+const errForbidden = "forbidden"
+
+// newDeliverClient returns the *http.Client used for every outbound
+// /deliver call: InterDaemonTimeout end to end, and redirects are never
+// followed, so the bearer it carries cannot be replayed to another host.
+func newDeliverClient() *http.Client {
+	return &http.Client{
+		Timeout: ipeers.InterDaemonTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// postDeliver POSTs req as JSON to <baseURL>/api/peers/deliver with
+// "Authorization: Bearer <bearer>" and reads at most maxDeliverRespBytes of
+// the answer. 200 ⇒ (resp, nil, nil). Any other status (every 3xx
+// included, since redirects are never followed) ⇒ (zero, &RemoteError{
+// Status, Error, Detail}, nil), the code and detail taken from an APIError
+// body when one decodes and bounded (boundRemoteText) since they are the
+// remote's text, else Error "http_<code>". A transport failure (including
+// the client timeout), an oversized body or an undecodable 200 body ⇒
+// (zero, nil, err).
+func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer string, req ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("encode request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/peers/deliver", bytes.NewReader(body))
+	if err != nil {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("build request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+bearer)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return ipeers.DeliverResponse{}, nil, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDeliverRespBytes+1))
+	if err != nil {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("read response body: %w", err)
+	}
+	if len(raw) > maxDeliverRespBytes {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("response body exceeds %d bytes", maxDeliverRespBytes)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		remote := &ipeers.RemoteError{Status: resp.StatusCode, Error: fmt.Sprintf("http_%d", resp.StatusCode)}
+		var ae ipeers.APIError
+		if json.Unmarshal(raw, &ae) == nil && ae.Error != "" {
+			remote.Error = boundRemoteText(ae.Error)
+			remote.Detail = boundRemoteText(ae.Detail)
+		}
+		return ipeers.DeliverResponse{}, remote, nil
+	}
+
+	var out ipeers.DeliverResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: %w", err)
+	}
+	return out, nil, nil
+}
+
+// writeSendError writes ae as the JSON body with status.
+func writeSendError(w http.ResponseWriter, status int, ae ipeers.APIError) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(ae)
+}
+
+// sendSnapshot is the one config read a send makes, under RLock.
+type sendSnapshot struct {
+	localHostID string
+	localAlias  string
+	hosts       []config.PeerHost
+}
+
+func (m *Module) snapshotForSend() sendSnapshot {
+	m.core.CfgMu.RLock()
+	defer m.core.CfgMu.RUnlock()
+	return sendSnapshot{
+		localHostID: m.core.Cfg.HostID,
+		localAlias:  m.core.Cfg.PeerAlias(),
+		hosts:       append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...),
+	}
+}
+
+// findOrigin picks the inventory row the caller presented as its own: a
+// deliverable cc agent whose inbox is exactly inbox. Proxy rows (this
+// daemon's own helpers, or another daemon's recognised via IsProxy) have
+// Agent.Type "proxy" and are never deliverable, so they never qualify.
+func findOrigin(records []ipeers.PeerRecord, inbox string) (ipeers.PeerRecord, bool) {
+	for _, rec := range records {
+		a := rec.Agent
+		if a != nil && a.Type == "cc" && a.Inbox == inbox && rec.Deliverable {
+			return rec, true
+		}
+	}
+	return ipeers.PeerRecord{}, false
+}
+
+// wireFromRecord builds the sender's wire identity from its origin row:
+// the tmux session name when the session is inside tmux, "cc:<peer_name>"
+// otherwise (spec §4.4 from-name).
+func wireFromRecord(hostID string, rec ipeers.PeerRecord, declaredMode string) ipeers.WireFrom {
+	sessionName := rec.SessionName
+	if sessionName == "" {
+		sessionName = "cc:" + rec.Agent.PeerName
+	}
+	return ipeers.WireFrom{
+		HostID:         hostID,
+		AgentSessionID: rec.Agent.SessionID,
+		PID:            rec.Agent.PID,
+		ProcStart:      rec.Agent.ProcStart,
+		PeerName:       rec.Agent.PeerName,
+		SessionName:    sessionName,
+		DeclaredMode:   declaredMode,
+	}
+}
+
+// handleSend serves POST /api/peers/send. The step order is the contract
+// (Task 8): everything before the audit insert (steps 1–6) is a caller
+// error, configuration state, or a resolution failure and is logged rather
+// than audited; the insert (step 7) precedes the outbound call (step 8),
+// whose every outcome is recorded.
+func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// 1. Admin only (the auth layer's HostRoutePolicy already refuses a host
+	// principal here; enforced again in depth).
+	principal, ok := middleware.PrincipalFrom(r.Context())
+	if !ok || principal.Kind != middleware.PrincipalAdmin {
+		writeSendError(w, http.StatusForbidden, ipeers.APIError{Error: errForbidden, Detail: "send is admin-only"})
+		return
+	}
+	if m.stopCtx.Err() != nil {
+		writeSendError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "daemon is stopping"})
+		return
+	}
+	refuseUnaudited := func(status int, code, detail string) {
+		m.logf("peers: send refused (%s): %s", code, detail)
+		writeSendError(w, status, ipeers.APIError{Error: code, Detail: detail})
+	}
+
+	// 2. Decode and validate.
+	var req ipeers.SendRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSendBodyBytes)).Decode(&req); err != nil {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ErrBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if err := ipeers.ValidateText(req.Text); err != nil {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ValidationCode(err), err.Error())
+		return
+	}
+	mode, err := ipeers.ValidateMode(req.Mode)
+	if err != nil {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ErrBadMode, err.Error())
+		return
+	}
+	host, session, ok := ipeers.SplitAddress(req.To)
+	if !ok {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ErrBadAddress, "to must be <host>/<session>")
+		return
+	}
+	if req.OriginInbox == "" {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is empty (CLAUDE_CODE_MESSAGING_SOCKET unset?)")
+		return
+	}
+
+	// 3. The host entry (D1: the local host is never a target).
+	snap := m.snapshotForSend()
+	if ipeers.HostMatches(host, snap.localAlias, snap.localHostID) {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ErrLocalTarget, "same-host sessions reach each other natively; the bridge only delivers to other hosts")
+		return
+	}
+	var entry config.PeerHost
+	found := false
+	for _, h := range snap.hosts {
+		if ipeers.HostMatches(host, h.Alias, h.HostID) {
+			entry, found = h, true
+			break
+		}
+	}
+	if !found {
+		refuseUnaudited(http.StatusNotFound, ipeers.ErrHostUnknown, fmt.Sprintf("no peer host %q", host))
+		return
+	}
+	if entry.Token == "" || entry.HostID == "" {
+		refuseUnaudited(http.StatusConflict, ipeers.ErrHostUnverified, fmt.Sprintf("host %q has no verified outbound route; run pdx peers host set-token", entry.Alias))
+		return
+	}
+
+	// 4. The origin: the caller's own session, attributed by its inbox.
+	local := m.localEnvelope(r.Context(), snap.localHostID, snap.localAlias)
+	if !local.OK {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "local inventory unavailable: "+local.Error)
+		return
+	}
+	origin, ok := findOrigin(local.Peers, req.OriginInbox)
+	if !ok {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is not a live, deliverable Claude Code session on this host")
+		return
+	}
+	from := wireFromRecord(snap.localHostID, origin, mode)
+
+	// 5. The remote snapshot, with the entry's token, at the entry's URL.
+	// Whatever the rows claim about their host, they are normalised to
+	// the entry (P2 #5); the envelope must name the entry's host_id.
+	remoteRefused := func(text string) {
+		writeSendError(w, http.StatusBadGateway, ipeers.APIError{
+			Error:  ipeers.ErrRemoteError,
+			Detail: "fetching the peer inventory failed",
+			Remote: &ipeers.RemoteError{Status: 0, Error: text},
+		})
+	}
+	fetchCtx, cancelFetch := context.WithTimeout(r.Context(), remoteFetchTimeout)
+	env, err := m.fetch(fetchCtx, m.client, entry.URL, entry.Token)
+	cancelFetch()
+	if err != nil {
+		m.logf("peers: send to %q: fetch inventory: %v", entry.Alias, err)
+		remoteRefused(boundRemoteText(err.Error()))
+		return
+	}
+	if env.HostID != entry.HostID {
+		m.logf("peers: send to %q: host_id mismatch: got %s", entry.Alias, boundRemoteText(env.HostID))
+		remoteRefused("host_id mismatch: got " + boundRemoteText(env.HostID))
+		return
+	}
+	if !env.OK {
+		m.logf("peers: send to %q: peer inventory not ok: %s", entry.Alias, boundRemoteText(env.Error))
+		remoteRefused("peer: " + boundRemoteText(env.Error))
+		return
+	}
+	rows := normalizeRemoteRows(env.Peers, entry.Alias, entry.HostID)
+
+	// 6. Resolve the session part over the remote's rows (spec §4.1).
+	target, err := ipeers.Resolve(rows, session)
+	if err != nil {
+		var amb *ipeers.AmbiguousError
+		switch {
+		case errors.As(err, &amb):
+			candidates := make([]string, 0, len(amb.Candidates))
+			for _, c := range amb.Candidates {
+				candidates = append(candidates, c.Address)
+			}
+			m.logf("peers: send refused (%s): %q on %q has %d candidates", ipeers.ErrAmbiguous, session, entry.Alias, len(candidates))
+			writeSendError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrAmbiguous, Detail: err.Error(), Candidates: candidates})
+		default:
+			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, fmt.Sprintf("no session %q on %q", session, entry.Alias))
+		}
+		return
+	}
+	if !target.Deliverable || target.Agent == nil || target.Agent.Type != "cc" {
+		reason := target.Reason
+		if reason == "" {
+			reason = "not a deliverable Claude Code session"
+		}
+		refuseUnaudited(http.StatusConflict, ipeers.ErrNotDeliverable, reason)
+		return
+	}
+	to := ipeers.WireTo{AgentSessionID: target.Agent.SessionID, PID: target.Agent.PID, ProcStart: target.Agent.ProcStart}
+	toAddress := target.Address
+	if toAddress == "" { // normalizeRemoteRows blanks an address that does not parse
+		toAddress = entry.Alias + "/" + session
+	}
+
+	// 7. The audit row: a fresh msg_id per attempt (a reused id would be
+	// refused as a duplicate by the receiver), recorded before anything
+	// leaves this host.
+	msgID := m.newMsgID()
+	if m.audit == nil {
+		refuseUnaudited(http.StatusServiceUnavailable, ipeers.ErrAuditUnavailable, "audit store is not available")
+		return
+	}
+	id, err := m.audit.Insert(store.PeerMessage{
+		MsgID:         msgID,
+		Direction:     store.DirOut,
+		TS:            m.now(),
+		FromHostID:    snap.localHostID,
+		FromSessionID: from.AgentSessionID,
+		ToHostID:      entry.HostID,
+		ToSessionID:   to.AgentSessionID,
+		DeclaredMode:  mode,
+		Bytes:         len(req.Text),
+	})
+	if err != nil {
+		m.logf("peers: send %s to %q: audit insert: %v", msgID, entry.Alias, err)
+		writeSendError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrAuditUnavailable, Detail: "audit insert failed"})
+		return
+	}
+
+	// 8. The outbound call, under stopCtx rather than the request context:
+	// a caller that leaves mid-call must not turn a delivery the receiver
+	// already made into an unrecorded one.
+	postCtx, cancelPost := context.WithTimeout(m.stopCtx, ipeers.InterDaemonTimeout)
+	defer cancelPost()
+	resp, remote, err := m.post(postCtx, m.deliverClient, entry.URL, entry.Token, ipeers.DeliverRequest{
+		MsgID: msgID,
+		From:  from,
+		To:    to,
+		Text:  req.Text,
+	})
+	switch {
+	case err != nil:
+		m.setResult(id, "", "", err.Error())
+		m.logf("peers: send %s to %q: deliver call failed: %v", msgID, entry.Alias, err)
+		writeSendError(w, http.StatusBadGateway, ipeers.APIError{
+			Error:  ipeers.ErrRemoteError,
+			Detail: "the deliver call to the peer failed",
+			Remote: &ipeers.RemoteError{Status: 0, Error: boundRemoteText(err.Error())},
+		})
+		return
+	case remote != nil:
+		m.setResult(id, "", remote.Error, remote.Detail)
+		m.logf("peers: send %s to %q refused by peer: %d %s: %s", msgID, entry.Alias, remote.Status, remote.Error, remote.Detail)
+		writeSendError(w, http.StatusBadGateway, ipeers.APIError{
+			Error:  ipeers.ErrRemoteError,
+			Detail: "the peer refused the delivery",
+			Remote: remote,
+		})
+		return
+	}
+
+	errText := ""
+	if resp.OneWay {
+		errText = ipeers.ErrNoReturnRoute
+	}
+	m.setResult(id, resp.EffectiveMode, resp.Result, errText)
+	_ = json.NewEncoder(w).Encode(ipeers.SendResponse{
+		MsgID:         msgID,
+		ToHostID:      entry.HostID,
+		ToAddress:     toAddress,
+		To:            to,
+		Result:        resp.Result,
+		EffectiveMode: resp.EffectiveMode,
+		OneWay:        resp.OneWay,
+	})
+}

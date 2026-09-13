@@ -78,8 +78,8 @@ func newTestCoreWithHosts(t *testing.T, hostID, alias string, hosts []config.Pee
 // newTestModule builds a *Module with the given collaborators wired
 // directly (bypassing Init), for handler-level tests. Every other seam
 // (helper manager over a fake starter, in-memory audit, limiters on the
-// test clock, real frame writer, a post seam that fails the test if
-// called) takes the fixture default — see newTestModuleWith for the
+// test clock, real frame writer, a post seam that fails the test unless
+// the test overrides m.post) takes the fixture default — see newTestModuleWith for the
 // knobs. client/fetch default to production values
 // (newRemoteClient/fetchRemote); scope=all tests override m.fetch.
 func newTestModule(t *testing.T, c *core.Core, sessions session.SessionProvider, owners agent.OwnerResolver, registryDir string, liveness ipeers.Liveness, clock *fakeClock, budget time.Duration) *Module {
@@ -204,7 +204,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 		deliverClient:    newRemoteClient(),
 		post: func(context.Context, *http.Client, string, string, ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error) {
 			f.postCalls.Add(1)
-			t.Errorf("post seam called; Task 7 never posts")
+			t.Errorf("post seam called; a test that sends must override m.post")
 			return ipeers.DeliverResponse{}, nil, errors.New("post seam called")
 		},
 		stopCtx:    stopCtx,
