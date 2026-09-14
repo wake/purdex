@@ -51,7 +51,7 @@ func parseTmuxPaneListOutput(out string) ([]TmuxPane, error) {
 
 		parts := strings.Split(line, "\t")
 		if len(parts) != 4 {
-			return nil, fmt.Errorf("malformed tmux pane line %d: expected 4 fields, got %d", lineNo, len(parts))
+			return nil, fmt.Errorf("malformed tmux pane line %d: expected 4 fields, got %d (is a UTF-8 locale exported?)", lineNo, len(parts))
 		}
 
 		panePID, err := strconv.Atoi(parts[3])

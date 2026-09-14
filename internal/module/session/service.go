@@ -48,7 +48,8 @@ func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
 	for _, s := range sessions {
 		code, err := EncodeSessionID(s.ID)
 		if err != nil {
-			continue // skip sessions with invalid IDs
+			log.Printf("session: skipping tmux session with invalid id %q: %v", s.ID, err)
+			continue
 		}
 		info := SessionInfo{
 			Code:         code,

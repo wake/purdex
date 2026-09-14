@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -126,22 +127,44 @@ func (r *RealExecutor) ListSessions() ([]TmuxSession, error) {
 		}
 		return nil, fmt.Errorf("tmux list-sessions: %w", err)
 	}
+	return parseListSessionsOutput(string(out)), nil
+}
+
+// parseListSessionsOutput parses the TAB-separated
+// "#{session_id}\t#{session_name}\t#{session_path}" lines from list-sessions.
+//
+// A line with fewer than 3 fields is malformed and skipped — never filled
+// with empty Name/Cwd — so a bad line cannot take down the sessions API nor
+// hand a bogus ID to orphan cleanup. The usual cause is a non-UTF-8 client
+// locale, under which tmux sanitises the TAB separators to "_". Malformed
+// lines are reported once per call (this runs on every watcher tick).
+func parseListSessionsOutput(out string) []TmuxSession {
 	var sessions []TmuxSession
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	malformed := 0
+	firstBad := ""
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
+		// SplitN(…, 3) on purpose: session_id and session_name can never
+		// contain a TAB (tmux's session_check_name vis-encodes it), but
+		// session_path is a raw filesystem path and may — so the third
+		// field must absorb the rest of the line. Do not "fix" this into
+		// Split + len != 3.
 		parts := strings.SplitN(line, "\t", 3)
-		s := TmuxSession{ID: parts[0]}
-		if len(parts) > 1 {
-			s.Name = parts[1]
+		if len(parts) < 3 {
+			if malformed == 0 {
+				firstBad = line
+			}
+			malformed++
+			continue
 		}
-		if len(parts) > 2 {
-			s.Cwd = parts[2]
-		}
-		sessions = append(sessions, s)
+		sessions = append(sessions, TmuxSession{ID: parts[0], Name: parts[1], Cwd: parts[2]})
 	}
-	return sessions, nil
+	if malformed > 0 {
+		log.Printf("tmux list-sessions: %d malformed line(s), e.g. %q (expected 3 tab-separated fields; is a UTF-8 locale exported?)", malformed, firstBad)
+	}
+	return sessions
 }
 
 func (r *RealExecutor) ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error) {
