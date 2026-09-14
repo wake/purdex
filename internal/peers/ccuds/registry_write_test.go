@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -326,6 +327,52 @@ func TestReadPeerFeatures(t *testing.T) {
 	}
 	if _, ok := ReadPeerFeatures(dir, 11); ok {
 		t.Fatal("symlink: ok = true")
+	}
+}
+
+func TestRewriteRegistryName(t *testing.T) {
+	dir := t.TempDir()
+	created, err := WriteRegistry(dir, RegistryEntry{PID: 4242, SessionID: "s", Name: "a/old", ProcStart: "Sun Sep 13 18:57:56 2026", Inbox: "/tmp/x.sock", Version: "2.1.270"}, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inject an unknown field with an integer above 2^53 so a float64
+	// round-trip would be caught, then rewrite.
+	before, _ := os.ReadFile(created[0])
+	before = []byte(strings.Replace(string(before), `"pid":4242,`, `"pid":4242,"bigUnknown":9007199254740993,`, 1))
+	if err := os.WriteFile(created[0], before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RewriteRegistryName(dir, 4242, "a/new:x", 1700000000000); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(created[0])
+	var b, a map[string]json.RawMessage
+	json.Unmarshal(before, &b)
+	json.Unmarshal(after, &a)
+	if string(a["name"]) != `"a/new:x"` || string(a["nameSince"]) != `1700000000000` {
+		t.Errorf("after = %s", after)
+	}
+	for k, v := range b {
+		if k == "name" || k == "nameSince" {
+			continue
+		}
+		if string(a[k]) != string(v) {
+			t.Errorf("field %s changed byte-wise: %s → %s", k, v, a[k])
+		}
+	}
+	if string(a["bigUnknown"]) != "9007199254740993" {
+		t.Errorf("large integer damaged: %s", a["bigUnknown"])
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 { // json + key, no temp left
+		t.Errorf("dir has %d entries", len(entries))
+	}
+	// Missing file: error, nothing created.
+	if err := RewriteRegistryName(dir, 9999, "n", 1); err == nil {
+		t.Error("expected error for a missing file")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Errorf("temp file leaked")
 	}
 }
 
