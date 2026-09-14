@@ -168,8 +168,10 @@ func marshalCompact(v any) ([]byte, error) {
 // large integer is never round-tripped through float64). The new content
 // is written to <dir>/.<pid>.json.tmp (0644, O_EXCL — the leading dot
 // keeps it out of ReadRegistryDiag's "^([0-9]+)\.json$" candidate
-// pattern), fsynced, then renamed over <pid>.json. Any failure removes the
-// temp file and returns the error; the original file is left untouched.
+// pattern), fsynced, then renamed over <pid>.json. Any failure — an
+// unreadable or unparsable file, or one whose top-level value is not a
+// JSON object ("null" included) — removes the temp file and returns the
+// error; the original file is left untouched.
 func RewriteRegistryName(dir string, pid int, name string, nameSince int64) error {
 	jsonPath := filepath.Join(dir, strconv.Itoa(pid)+".json")
 	data, ok := peers.ReadRegistryCandidate(jsonPath)
@@ -180,6 +182,11 @@ func RewriteRegistryName(dir string, pid int, name string, nameSince int64) erro
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return fmt.Errorf("ccuds: parse %s: %w", jsonPath, err)
+	}
+	if fields == nil {
+		// A top-level JSON "null" decodes without error into a nil map;
+		// assigning into it would panic.
+		return fmt.Errorf("ccuds: %s is not a JSON object", jsonPath)
 	}
 
 	nameJSON, err := marshalCompact(name)

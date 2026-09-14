@@ -439,3 +439,33 @@ func TestRegistryProcStart(t *testing.T) {
 		t.Errorf("no field: %q", got)
 	}
 }
+
+// TestRewriteRegistryName_NotAnObject: a registry file whose top-level
+// value is not a JSON object ("null" decodes into a nil map, and writing
+// into it would panic) is rejected with an error; the original bytes are
+// untouched and no temp file is left.
+func TestRewriteRegistryName_NotAnObject(t *testing.T) {
+	for _, body := range []string{"null", "[1]", `"str"`} {
+		t.Run(body, func(t *testing.T) {
+			dir := t.TempDir()
+			jsonPath := filepath.Join(dir, "4242.json")
+			if err := os.WriteFile(jsonPath, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := RewriteRegistryName(dir, 4242, "a/new:x", 1700000000000)
+			if err == nil {
+				t.Fatal("expected an error for a non-object registry file")
+			}
+			if body == "null" && !strings.Contains(err.Error(), "not a JSON object") {
+				t.Errorf("error = %v, want it to say the file is not a JSON object", err)
+			}
+			after, _ := os.ReadFile(jsonPath)
+			if string(after) != body {
+				t.Errorf("original file changed: %q", after)
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+				t.Errorf("dir has %d entries, want the original only (no temp)", len(entries))
+			}
+		})
+	}
+}
