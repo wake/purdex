@@ -26,10 +26,10 @@ Files: `spa/src/lib/terminal-link/matchers/file-path.ts`,
    string fragments so the classes cannot drift:
 
    ```ts
-   const W = '\\p{L}\\p{N}_'          // "word" char (was \w)
+   const W = '\\p{L}\\p{M}\\p{N}_'    // "word" char (was \w); \p{M} = combining marks (NFD)
    const SEG = `[${W}.-]`             // directory segment char
    const STEM = `[${W}-]`             // file stem char
-   const INNER_EXT = `[\\p{L}\\p{N}]+(?:[-+][\\p{L}\\p{N}]+)*`
+   const INNER_EXT = `[\\p{L}\\p{M}\\p{N}]+(?:[-+][\\p{L}\\p{M}\\p{N}]+)*`
    const FINAL_EXT = `[A-Za-z0-9]+(?:[-+][A-Za-z0-9]+)*`
    const EXT = `(?:\\.${INNER_EXT})*\\.${FINAL_EXT}`
    const SUFFIX = `(?::(\\d+)(?::(\\d+))?)?`
@@ -55,7 +55,8 @@ Files: `spa/src/lib/terminal-link/matchers/file-path.ts`,
   scope).
 - Do not touch `url.ts`.
 - Do not add a trailing-boundary assertion; the ASCII final extension is
-  the boundary by construction.
+  a bias, not a guarantee (spec §3.1) — pin `docs/a.pdf然後.txt` and
+  `docs/a.pdf然後/x.txt` as whole matches rather than "fixing" them.
 
 ## Task 2 — `url.ts`: boundary hardening (spec §3.2)
 
@@ -70,25 +71,32 @@ Files: `spa/src/lib/terminal-link/matchers/url.ts`,
    - `https://a.com，https://b.com` → two links.
    - one range assertion on a cut case: `'參考https://e.com/x這頁'` →
      `startCol 2`, `endCol 2 + 'https://e.com/x'.length`.
+   - non-BMP prefix range: `'😀https://e.com/臺灣'` → `startCol 2`, `endCol 18`.
+   - stop set: `https://e.com/［說明］` → `https://e.com/`;
+     `https://e.com/wiki/アラン・チューリング` → whole.
+   - balance: `https://e.com/a_(b)).` → `…a_(b)`; `https://[::1]` whole;
+     `https://e.com/a[1]]` → `…a[1]`; `'https://e.com/a' + ')'.repeat(300)` →
+     `https://e.com/a`.
+   - guard: `https://).` → `[]`.
    - existing six tests stay.
    Run `npx vitest run src/lib/terminal-link/matchers/url.test.ts`; confirm
    red on the new cases only.
 2. **Implement (green).** In `url.ts`:
    - `STOP_CHARS` string constant = `\s"'<>\`` + the full-width set from spec
      §3.2 step 1 (write the literal characters; list code points in the
-     comment). `URL_RE = new RegExp(\`https?:\\/\\/[^${STOP_CHARS}]+\`, 'gu')`.
+     comment; **no `・`**, **with `［］｡｢｣､`**).
+     `URL_RE = new RegExp(\`https?:\\/\\/[^${STOP_CHARS}]+\`, 'gu')`.
    - `cutNonAscii(text)`: iterate code points (`for (const ch of text)`),
-     track `prev` and `prevPrev`; a code point > 0x7F is kept iff
-     `prev > 0x7F` || `prev ∈ '/?#=&'` || (`prev === '.'` && `prevPrev > 0x7F`);
-     otherwise return the prefix accumulated so far. Scheme `https://`
-     is ASCII so no special-casing.
-   - `stripTail(text)`: loop — last char in `.,;:!?>}` → drop; `)` → drop
-     only if `count(')') > count('(')`; `]` likewise vs `[`; else break.
-   - `provide` = for each match: `cutNonAscii` → `stripTail` → push with
-     `endCol = startCol + text.length`. Skip a candidate whose text is
-     reduced to just the scheme? Not needed: the regex requires ≥1 char
-     after `//` and the cut can only remove non-ASCII, so at least the
-     scheme + one ASCII char survive; strip cannot remove `/`.
+     track `prev`; a code point > 0x7F is **cut** (return the prefix
+     accumulated so far) iff `prev` is an ASCII letter or digit
+     (`/[A-Za-z0-9]/`); otherwise keep and continue. No authority
+     special-casing.
+   - `stripTail(text)`: count `(`, `)`, `[`, `]` once; walk `end` backwards:
+     `.,;:!?>}` → `end--`; `)` while `closeParen > openParen` → `closeParen--`,
+     `end--`; `]` likewise; else break. Return `text.slice(0, end)`. Linear.
+   - `provide` = for each match: `cutNonAscii` → `stripTail` → **skip if
+     nothing remains after `://`** (scheme-only guard) → push with
+     `endCol = startCol + text.length` (UTF-16 offsets).
    - Update the header comment: remove the "known limitation" about
      unbalanced parens (now handled); state option C and its accepted
      sacrifice.
@@ -102,6 +110,19 @@ Files: `spa/src/lib/terminal-link/matchers/url.ts`,
 - Do not export the helpers unless a test needs them; `provide` coverage is
   sufficient.
 - No change to `openers/url.ts`.
+
+## Fix wave after codex R1 (`task-mu1ease5-55nt5s`)
+
+Both tasks were implemented against spec v1 before the review landed. The
+v2 deltas are folded into the step text above; the fix wave is:
+
+- Task 1: add `\p{M}` to `W` and `INNER_EXT`; add NFD tests
+  (`docs/か\u3099.txt`, `docs/cafe\u0301.txt`, BARE lookbehind on a mark);
+  pin `docs/a.pdf然後.txt` / `docs/a.pdf然後/x.txt` as whole matches.
+  Commit: `fix(spa): file-path links accept combining marks; pin glued-suffix limits`.
+- Task 2: replace the cut rule (alnum-only trigger), update the stop set,
+  make `stripTail` linear, add the scheme-only guard; add every new §4 test.
+  Commit: `fix(spa): url links — alnum-only CJK cut, stop-set fixes, linear strip, scheme guard`.
 
 ## Task 3 — integration (main session)
 
