@@ -110,6 +110,13 @@ describe('dev host', () => {
     expect(selectDevHostId(useHostStore.getState())).toBeNull()
   })
 
+  it('devHostId is part of the persisted slice', () => {
+    const s = useHostStore.getState()
+    s.setDevHost(s.hostOrder[0])
+    const partialize = useHostStore.persist.getOptions().partialize!
+    expect(partialize(useHostStore.getState())).toMatchObject({ devHostId: s.hostOrder[0] })
+  })
+
   it('selectDevHostId follows the same id after an endpoint change', () => {
     const s = useHostStore.getState()
     const dev = s.hostOrder[0]
@@ -256,6 +263,10 @@ and in the `none` status test (the first `status()` test, the one asserting `st.
     expect(st.hostname).toBe('air-2026')
     expect(st.config).toBeNull()
 ```
+and in `external with custom data_dir` (line ~212 — an early-return branch) add:
+```ts
+    expect(st.hostname).toBe('air-2026')
+```
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -287,8 +298,11 @@ Expected: FAIL — `hasToken: true` ≠ `token: 'purdex_x'`, `hostname` undefine
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `npx vitest run electron/local-daemon/index.test.ts && cd spa && npx tsc --noEmit -p tsconfig.app.json 2>&1 | head`
-Expected: electron tests PASS. `tsc` will now complain that `LocalDaemonSection.test.tsx`'s `status()` fixture lacks `hostname` — fix the fixture in that file now (add `hostname: 'air-2026',` after `config: null,`) so the tree type-checks; the UI change itself is Task 5.
+Run: `npx vitest run electron/local-daemon/index.test.ts && cd spa && npx tsc --noEmit -p tsconfig.app.json`
+Expected: electron tests PASS. `tsc` will complain about `LocalDaemonSection.test.tsx` — fix both spots in that file now so the tree type-checks (the UI change itself is Task 5):
+- the `status()` fixture: add `hostname: 'air-2026',` after `config: null,`
+- line ~97 (`external without running info…`): `config: { bind: '100.64.0.9', port: 7860, hasToken: true }` → `config: { bind: '100.64.0.9', port: 7860, token: 'purdex_t' }`
+Re-run `npx tsc --noEmit -p tsconfig.app.json` (no pipe — the exit code must be 0).
 
 - [ ] **Step 5: Commit**
 
@@ -302,13 +316,13 @@ git commit -m "feat(electron): local-daemon status exposes config token and host
 ### Task 3: Development page — host picker and no-fallback gating
 
 **Files:**
-- Modify: `spa/src/components/settings/DevEnvironmentSection.tsx`
+- Modify: `spa/src/components/settings/DevEnvironmentSection.tsx`, `spa/src/components/settings/LocalDaemonSection.tsx` (prop + Install/Update gating only)
 - Modify: `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json`
-- Test: `spa/src/components/settings/DevEnvironmentSection.test.tsx`
+- Test: `spa/src/components/settings/DevEnvironmentSection.test.tsx`, `spa/src/components/settings/LocalDaemonSection.test.tsx`
 
 **Interfaces:**
 - Consumes: `selectDevHostId`, `setDevHost`, `devHostId` (Task 1).
-- Produces: `daemonBase: string | null` passed to `<LocalDaemonSection>` (Task 5 changes that prop type; until then pass `daemonBase ?? ''` — see Step 3).
+- Produces: `daemonBase: string | null` passed to `<LocalDaemonSection>`, whose prop type changes to `string | null` in this task (with its Install/Update gating), so no-fallback holds from this commit on.
 
 i18n keys (add to both locale files):
 
@@ -326,6 +340,11 @@ In `DevEnvironmentSection.test.tsx`, the existing tests assume the first host is
   useHostStore.getState().setDevHost(useHostStore.getState().hostOrder[0])
 ```
 (Do the same inside the `DevEnvironmentSection - Daemon block` describe's `beforeEach` — or rely on the outer one; the outer `beforeEach` already runs for that describe, so nothing extra is needed there.)
+
+Change the existing test `renders section title` to target the heading only (the new picker label also matches `/Development/`):
+```ts
+    expect(screen.getByRole('heading', { name: /Development Environment|開發環境/ })).toBeTruthy()
+```
 
 Change the existing test `restarts the stream when daemonBase changes` to use the dev host id: replace `const hostId = useHostStore.getState().hostOrder[0]` with `const hostId = selectDevHostId(useHostStore.getState())!` (import `selectDevHostId`).
 
@@ -370,10 +389,32 @@ describe('DevEnvironmentSection - dev host picker', () => {
 ```
 Button names are the exact `en.json` values: app block `Check for Updates`, daemon block `Check Update` / `Rebuild & Restart`.
 
+In `LocalDaemonSection.test.tsx`: change `renderIt` to accept a base and add the gating test:
+```ts
+const renderIt = (latestHash: string | null = 'bbb', refreshKey: unknown = { latest_hash: latestHash }, daemonBase: string | null = 'http://100.64.0.2:7860') =>
+  act(async () => { render(<LocalDaemonSection daemonBase={daemonBase} token="tok" latestHash={latestHash} refreshKey={refreshKey} />) })
+```
+```ts
+describe('LocalDaemonSection - no dev host', () => {
+  it('Install disabled (none) and Update disabled (managed, stale); Start still enabled', async () => {
+    mockStatus.mockResolvedValue(status())
+    await renderIt('bbb', { latest_hash: 'bbb' }, null)
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
+    cleanup()
+    mockStatus.mockResolvedValue(status({ managed: 'managed', installed: { version: '9', hash: 'aaa', goos: 'darwin', goarch: 'arm64' } }))
+    await renderIt('bbb', { latest_hash: 'bbb' }, null)
+    expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Start' })).not.toBeDisabled()
+    expect(mockInstall).not.toHaveBeenCalled()
+  })
+})
+```
+(`cleanup` comes from `@testing-library/react`; add it to that import.)
+
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `cd spa && npx vitest run src/components/settings/DevEnvironmentSection.test.tsx`
-Expected: new tests FAIL (`Unable to find a label with the text of: Development host`); existing ones still pass.
+Run: `cd spa && npx vitest run src/components/settings/DevEnvironmentSection.test.tsx src/components/settings/LocalDaemonSection.test.tsx`
+Expected: new tests FAIL (`Unable to find a label with the text of: Development host`; Install not disabled); existing ones still pass.
 
 - [ ] **Step 3: Implement** in `DevEnvironmentSection.tsx`
 
@@ -435,17 +476,23 @@ Render — insert as the first child of the `space-y-3` block (above the SPA-sou
 
 Button `disabled` props — add `!daemonBase ||` to: app *Check* (`disabled={!appInfo || !daemonBase || status === 'checking' || status === 'building'}`), app *Update* (`disabled={updating || !daemonBase}`), daemon *Check* and daemon *Rebuild* (`disabled={!daemonBase || daemonPhase === …}`).
 
-`<LocalDaemonSection daemonBase={daemonBase ?? ''} …>` for now (Task 5 changes the prop to `string | null` and removes the `?? ''`).
+`<LocalDaemonSection daemonBase={daemonBase} …>` — and in `LocalDaemonSection.tsx`: prop `daemonBase: string | null`; the Install and Update buttons both become
+```tsx
+onClick={() => void run('install', () => daemonBase ? api.localDaemonInstall?.(daemonBase, token) : undefined)}
+disabled={disabled || daemonBase === null}
+title={daemonBase === null ? t('settings.dev.host.required') : undefined}
+```
+Start / Restart / Refresh are untouched.
 
 - [ ] **Step 4: Run to verify they pass**
 
-Run: `cd spa && npx vitest run src/components/settings/DevEnvironmentSection.test.tsx src/locales && pnpm run lint`
+Run: `cd spa && npx vitest run src/components/settings src/locales && pnpm run lint`
 Expected: PASS, lint clean.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/components/settings/DevEnvironmentSection.tsx spa/src/components/settings/DevEnvironmentSection.test.tsx spa/src/locales/en.json spa/src/locales/zh-TW.json
+git add spa/src/components/settings/DevEnvironmentSection.tsx spa/src/components/settings/DevEnvironmentSection.test.tsx spa/src/components/settings/LocalDaemonSection.tsx spa/src/components/settings/LocalDaemonSection.test.tsx spa/src/locales/en.json spa/src/locales/zh-TW.json
 git commit -m "feat(spa): Development page targets an explicitly chosen dev host, no fallback"
 ```
 
@@ -474,17 +521,57 @@ describe('DevEnvironmentSection - source change discipline', () => {
     return { promise, resolve }
   }
 
-  it('A → unset: clears A\'s daemon check and discards A\'s late response', async () => {
+  const checkJson = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  it('A → unset: A\'s painted daemon check is cleared', async () => {
+    globalThis.fetch = vi.fn(async (url: string | URL) =>
+      String(url).endsWith('/api/dev/daemon/check') ? checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true }) : new Response('{}', { status: 200 })) as typeof globalThis.fetch
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByText('aaa')).toBeTruthy()) // A's result is on screen first
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    expect(screen.queryByText('aaa')).toBeNull()
+    expect(screen.queryByText('Current hash')).toBeNull()
+  })
+
+  it('A → unset: A\'s late daemon-check response is discarded', async () => {
     const d = deferred<Response>()
     globalThis.fetch = vi.fn(async (url: string | URL) =>
       String(url).endsWith('/api/dev/daemon/check') ? d.promise : new Response('{}', { status: 200 })) as typeof globalThis.fetch
     await act(async () => { render(<DevEnvironmentSection />) })
     await act(async () => { useHostStore.getState().setDevHost(null) })
-    await act(async () => {
-      d.resolve(new Response(JSON.stringify({ current_hash: 'aaa', latest_hash: 'bbb', available: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    })
+    await act(async () => { d.resolve(checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true })) })
     expect(screen.queryByText('aaa')).toBeNull()
     expect(screen.queryByText('Current hash')).toBeNull()
+  })
+
+  it('A → unset: A\'s late rebuild 409 does not paint an error', async () => {
+    const d = deferred<Response>()
+    globalThis.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
+      if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    }) as typeof globalThis.fetch
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    await act(async () => { d.resolve(new Response('', { status: 409 })) })
+    expect(screen.queryByText('Rebuild already in progress')).toBeNull()
+  })
+
+  it('picker is disabled while a daemon rebuild is in flight', async () => {
+    const d = deferred<Response>()
+    globalThis.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
+      if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    }) as typeof globalThis.fetch
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    expect(screen.getByLabelText('Development host')).toBeDisabled()
   })
 
   it('A → B: a late "done" from A\'s stream does not paint B\'s view', async () => {
@@ -580,7 +667,7 @@ Add refs next to `streamCloseRef`:
   }, [daemonBase, daemonAuthHeaders])
 ```
 
-`rebuildDaemon` — `const gen = sourceGenRef.current` right after the `if (!daemonBase) return`; in the reader loop, first statement after `const { done, value } = await reader.read()`:
+`rebuildDaemon` — `const gen = sourceGenRef.current` right after the `if (!daemonBase) return`; **immediately after `const res = await fetch(…)` and before the `409` / `!res.ok` branches** add `if (gen !== sourceGenRef.current) return` (a late 409/500 from the old host must not paint an error); in the reader loop, first statement after `const { done, value } = await reader.read()`:
 ```ts
         if (gen !== sourceGenRef.current) { void reader.cancel().catch(() => {}); return }
 ```
@@ -643,12 +730,12 @@ git commit -m "fix(spa): dev page resets and fences stale responses on dev-host 
 ### Task 5: Local daemon block — URL, token, add-to-hosts, gated Install/Update
 
 **Files:**
-- Modify: `spa/src/components/settings/LocalDaemonSection.tsx`, `spa/src/components/settings/DevEnvironmentSection.tsx:429` (prop), `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json`
+- Modify: `spa/src/components/settings/LocalDaemonSection.tsx`, `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json`
 - Test: `spa/src/components/settings/LocalDaemonSection.test.tsx`
 
 **Interfaces:**
 - Consumes: `findHostByEndpoint`, `registerLocalHost` (Task 1); `status.config.token`, `status.hostname` (Task 2).
-- Produces: prop `daemonBase: string | null`.
+- Consumes: prop `daemonBase: string | null` and the Install/Update gating (already done in Task 3).
 
 i18n keys (both files):
 
@@ -667,11 +754,6 @@ i18n keys (both files):
 
 - [ ] **Step 1: Write the failing tests** — in `LocalDaemonSection.test.tsx`:
 
-Change `renderIt` to accept a base:
-```ts
-const renderIt = (latestHash: string | null = 'bbb', refreshKey: unknown = { latest_hash: latestHash }, daemonBase: string | null = 'http://100.64.0.2:7860') =>
-  act(async () => { render(<LocalDaemonSection daemonBase={daemonBase} token="tok" latestHash={latestHash} refreshKey={refreshKey} />) })
-```
 Add to `beforeEach`:
 ```ts
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true })
@@ -726,25 +808,13 @@ describe('LocalDaemonSection - config rows', () => {
     await renderIt()
     expect(screen.getByRole('button', { name: 'Add to hosts' })).toBeTruthy()
   })
-
-  it('no dev host → Install disabled (none) and Update disabled (managed, stale)', async () => {
-    mockStatus.mockResolvedValue(status())
-    await renderIt('bbb', { latest_hash: 'bbb' }, null)
-    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
-    cleanup()
-    mockStatus.mockResolvedValue(status({ managed: 'managed', installed: { version: '9', hash: 'aaa', goos: 'darwin', goarch: 'arm64' } }))
-    await renderIt('bbb', { latest_hash: 'bbb' }, null)
-    expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Start' })).not.toBeDisabled()
-  })
 })
 ```
-(`cleanup` is exported by `@testing-library/react`; add it to the import.)
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd spa && npx vitest run src/components/settings/LocalDaemonSection.test.tsx`
-Expected: new tests FAIL (`Unable to find … 'Show token'`), old tests pass (or type error on `daemonBase` null — that is the prop change, expected).
+Expected: new tests FAIL (`Unable to find … 'Show token'`), old tests pass.
 
 - [ ] **Step 3: Implement** in `LocalDaemonSection.tsx`
 
@@ -753,8 +823,6 @@ Imports:
 import { Copy, Eye, EyeSlash } from '@phosphor-icons/react'
 import { findHostByEndpoint, useHostStore } from '../../stores/useHostStore'
 ```
-Props: `daemonBase: string | null`.
-
 State / derived, after the existing `useState` lines:
 ```ts
   const hosts = useHostStore((s) => s.hosts)
@@ -820,15 +888,6 @@ Render — inside the `{status && (<div className="space-y-1 …">…)}` block, 
 ```
 Note `disabled` is declared below the `if (!api?.localDaemonStatus) return null` line today; keep hook calls above that early return and only *use* `disabled` in JSX (as the file already does).
 
-Install / Update buttons — both become:
-```tsx
-onClick={() => void run('install', () => daemonBase ? api.localDaemonInstall?.(daemonBase, token) : undefined)}
-disabled={disabled || daemonBase === null}
-title={daemonBase === null ? t('settings.dev.host.required') : undefined}
-```
-
-`DevEnvironmentSection.tsx`: change `daemonBase={daemonBase ?? ''}` back to `daemonBase={daemonBase}`.
-
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `cd spa && npx vitest run src/components/settings src/locales src/stores && pnpm run lint && pnpm run build`
@@ -837,7 +896,7 @@ Expected: all PASS, lint clean, build OK.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add spa/src/components/settings/LocalDaemonSection.tsx spa/src/components/settings/LocalDaemonSection.test.tsx spa/src/components/settings/DevEnvironmentSection.tsx spa/src/locales/en.json spa/src/locales/zh-TW.json
+git add spa/src/components/settings/LocalDaemonSection.tsx spa/src/components/settings/LocalDaemonSection.test.tsx spa/src/locales/en.json spa/src/locales/zh-TW.json
 git commit -m "feat(spa): local daemon block shows URL/token and can add its endpoint to hosts"
 ```
 
@@ -865,6 +924,17 @@ No commit for this task.
 | §2.3 i18n | 3 |
 | §3.1 electron token + required hostname | 2 |
 | §3.2 renderer type | 2 |
-| §3.3 URL/token/reveal/copy, endpoint membership via shared helper, Add to hosts, Install/Update gating | 5 |
+| §3.3 URL/token/reveal/copy, endpoint membership via shared helper, Add to hosts | 5 |
+| §3.3 Install/Update gating on `daemonBase === null` (prop nullable) | 3 |
 | §3.4 i18n | 5 |
 | §4 tests | 1–5 |
+
+## Codex plan review — dispositions (`task-mu0xfbsm-ogzb93`)
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| 1 | Important | Rebuild's 409 / `!res.ok` branches bypass the generation check. | Adopted → Task 4 Step 3 (check right after `await fetch`), + deferred-409 test. |
+| 2 | Important | Task 2 leaves `hasToken: true` at `LocalDaemonSection.test.tsx:97`; `\| head` hides tsc's exit code. | Adopted → Task 2 Step 4. |
+| 3 | Important | New "Development host" label breaks `getByText(/Development/)` in the title test. | Adopted → Task 3 Step 1 (`getByRole('heading')`). |
+| 4 | Minor | `daemonBase ?? ''` in Task 3 hands an empty source to Install. | Adopted → nullable prop + Install/Update gating + test moved from Task 5 to Task 3. |
+| 5 | Minor | Missing tests: persistence slice, external-branch hostname, rebuilding picker lock; A→unset must show A first. | Adopted → Tasks 1 / 2 / 4. |
