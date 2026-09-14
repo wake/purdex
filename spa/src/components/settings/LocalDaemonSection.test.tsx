@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-library/react'
 import { LocalDaemonSection } from './LocalDaemonSection'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -31,8 +31,8 @@ beforeEach(() => {
   } as typeof window.electronAPI
 })
 
-const renderIt = (latestHash: string | null = 'bbb', refreshKey: unknown = { latest_hash: latestHash }) =>
-  act(async () => { render(<LocalDaemonSection daemonBase="http://100.64.0.2:7860" token="tok" latestHash={latestHash} refreshKey={refreshKey} />) })
+const renderIt = (latestHash: string | null = 'bbb', refreshKey: unknown = { latest_hash: latestHash }, daemonBase: string | null = 'http://100.64.0.2:7860') =>
+  act(async () => { render(<LocalDaemonSection daemonBase={daemonBase} token="tok" latestHash={latestHash} refreshKey={refreshKey} />) })
 
 describe('LocalDaemonSection', () => {
   it('none → Install button and target', async () => {
@@ -150,5 +150,19 @@ describe('LocalDaemonSection', () => {
     window.electronAPI = { ...window.electronAPI!, localDaemonStatus: undefined } as typeof window.electronAPI
     const { container } = render(<LocalDaemonSection daemonBase="x" latestHash={null} refreshKey={null} />)
     expect(container.innerHTML).toBe('')
+  })
+})
+
+describe('LocalDaemonSection - no dev host', () => {
+  it('Install disabled (none) and Update disabled (managed, stale); Start still enabled', async () => {
+    mockStatus.mockResolvedValue(status())
+    await renderIt('bbb', { latest_hash: 'bbb' }, null)
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
+    cleanup()
+    mockStatus.mockResolvedValue(status({ managed: 'managed', installed: { version: '9', hash: 'aaa', goos: 'darwin', goarch: 'arm64' } }))
+    await renderIt('bbb', { latest_hash: 'bbb' }, null)
+    expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Start' })).not.toBeDisabled()
+    expect(mockInstall).not.toHaveBeenCalled()
   })
 })

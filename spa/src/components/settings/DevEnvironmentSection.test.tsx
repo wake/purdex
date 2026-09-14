@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { DevEnvironmentSection } from './DevEnvironmentSection'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, selectDevHostId } from '../../stores/useHostStore'
 
 const mockGetAppInfo = vi.fn().mockResolvedValue({
   version: '1.0.0-alpha.21',
@@ -50,6 +50,8 @@ beforeEach(() => {
     applyUpdate: mockApplyUpdate,
     forceLoadSPA: mockForceLoadSPA,
   } as typeof window.electronAPI
+  useHostStore.getState().reset()
+  useHostStore.getState().setDevHost(useHostStore.getState().hostOrder[0])
   // Default: emit a non-stale check immediately
   arrangeStream((cb) => {
     cb({ type: 'check', check: baseCheck() })
@@ -64,7 +66,7 @@ afterEach(() => {
 describe('DevEnvironmentSection', () => {
   it('renders section title', async () => {
     await act(async () => { render(<DevEnvironmentSection />) })
-    expect(screen.getByText(/Development|開發環境/)).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Development Environment|開發環境/ })).toBeTruthy()
   })
 
   it('calls getAppInfo on mount and opens stream', async () => {
@@ -143,7 +145,7 @@ describe('DevEnvironmentSection', () => {
     // the next mockImplementation call.
     const firstClose = lastStreamClose
 
-    const hostId = useHostStore.getState().hostOrder[0]
+    const hostId = selectDevHostId(useHostStore.getState())!
     await act(async () => {
       useHostStore.getState().updateHost(hostId, { port: 9999 })
     })
@@ -273,5 +275,42 @@ describe('DevEnvironmentSection - Daemon block', () => {
       const abc = screen.queryAllByText('abc1234')
       expect(abc.length).toBeGreaterThan(0)
     })
+  })
+})
+
+describe('DevEnvironmentSection - dev host picker', () => {
+  it('renders the picker with every host and the current selection', async () => {
+    const extra = useHostStore.getState().addHost({ name: 'air', ip: '100.64.0.4', port: 7860 })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    const select = screen.getByLabelText('Development host') as HTMLSelectElement
+    expect(select.value).toBe(useHostStore.getState().hostOrder[0])
+    expect(screen.getByRole('option', { name: 'air (100.64.0.4:7860)' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: '— not set —' })).toBeTruthy()
+    fireEvent.change(select, { target: { value: extra } })
+    expect(useHostStore.getState().devHostId).toBe(extra)
+  })
+
+  it('with no dev host: shows the notice, makes no requests, disables the buttons', async () => {
+    useHostStore.getState().setDevHost(null)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockGetAppInfo).toHaveBeenCalled())
+    expect(screen.getByText(/Pick a development host first/)).toBeTruthy()
+    expect(mockStreamCheck).not.toHaveBeenCalled()
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Check Update' })).toBeDisabled()          // daemon block
+    expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Check for Updates' })).toBeDisabled()      // app block
+    fetchSpy.mockRestore()
+  })
+
+  it('picking a host starts the check against that host', async () => {
+    useHostStore.getState().setDevHost(null)
+    const extra = useHostStore.getState().addHost({ name: 'air', ip: '100.64.0.4', port: 7860, token: 'tok-air' })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockGetAppInfo).toHaveBeenCalled())
+    expect(mockStreamCheck).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.change(screen.getByLabelText('Development host'), { target: { value: extra } }) })
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledWith('http://100.64.0.4:7860', 'tok-air', expect.any(Function)))
   })
 })

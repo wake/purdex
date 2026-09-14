@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, selectDevHostId } from '../../stores/useHostStore'
 import { DevBuildLogPanel } from './DevBuildLogPanel'
 import { LocalDaemonSection } from './LocalDaemonSection'
 
@@ -31,9 +31,19 @@ type RemoteInfo = ElectronRemoteVersionInfo
 
 export function DevEnvironmentSection() {
   const t = useI18nStore((s) => s.t)
-  const firstHostId = useHostStore((s) => s.hostOrder[0] ?? '')
-  const daemonBase = useHostStore((s) => s.getDaemonBase(firstHostId))
-  const token = useHostStore((s) => firstHostId ? (s.hosts[firstHostId]?.token ?? undefined) : undefined)
+  const devHostId = useHostStore(selectDevHostId)
+  const hosts = useHostStore((s) => s.hosts)
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const setDevHost = useHostStore((s) => s.setDevHost)
+  // null = no dev host chosen: no dev requests at all, no fallback (spec D2).
+  const daemonBase: string | null = useHostStore((s) => {
+    const id = selectDevHostId(s)
+    return id ? s.getDaemonBase(id) : null
+  })
+  const token = useHostStore((s) => {
+    const id = selectDevHostId(s)
+    return id ? (s.hosts[id]?.token ?? undefined) : undefined
+  })
 
   const spaSource: 'dev' | 'bundled' = window.location.protocol === 'app:' ? 'bundled' : 'dev'
 
@@ -176,6 +186,7 @@ export function DevEnvironmentSection() {
   }, [])
 
   const checkUpdate = useCallback(() => {
+    if (!daemonBase) return
     closeStream()
     setStatus('checking')
     setUpdateError(null)
@@ -228,7 +239,7 @@ export function DevEnvironmentSection() {
   }, [])
 
   useEffect(() => {
-    if (!appInfo) return
+    if (!appInfo || !daemonBase) return
     checkUpdateRef.current()
   }, [appInfo, daemonBase, token])
 
@@ -240,6 +251,7 @@ export function DevEnvironmentSection() {
   }, [])
 
   const handleUpdate = () => {
+    if (!daemonBase) return
     setUpdating(true)
     setUpdateStep(null)
     setUpdateError(null)
@@ -277,6 +289,26 @@ export function DevEnvironmentSection() {
       </div>
 
       <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <label htmlFor="dev-host-picker" className="text-sm text-text-primary">{t('settings.dev.host.label')}</label>
+          <select
+            id="dev-host-picker"
+            value={devHostId ?? ''}
+            onChange={(e) => setDevHost(e.target.value || null)}
+            className="text-xs rounded bg-surface-input border border-border-default text-text-primary px-2 py-1 disabled:opacity-50"
+          >
+            <option value="">{t('settings.dev.host.none')}</option>
+            {hostOrder.map((id) => {
+              const h = hosts[id]
+              return h ? <option key={id} value={id}>{`${h.name} (${h.ip}:${h.port})`}</option> : null
+            })}
+          </select>
+        </div>
+        {devHostId === null && (
+          <div className="text-xs text-status-warning border border-status-warning/40 bg-status-warning/10 rounded p-2">
+            {t('settings.dev.host.required')}
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.spa_source')}</span>
           <div className="flex items-center gap-2">
@@ -348,7 +380,7 @@ export function DevEnvironmentSection() {
       <div className="flex gap-2">
         <button
           onClick={checkUpdate}
-          disabled={!appInfo || status === 'checking' || status === 'building'}
+          disabled={!appInfo || !daemonBase || status === 'checking' || status === 'building'}
           className="px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
         >
           {t('settings.dev.btn.check')}
@@ -356,7 +388,7 @@ export function DevEnvironmentSection() {
         {(hasElectronUpdate || hasSPAUpdate) && (
           <button
             onClick={handleUpdate}
-            disabled={updating}
+            disabled={updating || !daemonBase}
             className="px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse hover:bg-accent-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
           >
             {updating ? t('settings.dev.btn.updating') : t('settings.dev.btn.update_app')}
@@ -408,14 +440,14 @@ export function DevEnvironmentSection() {
         <div className="flex gap-2">
           <button
             onClick={() => void checkDaemon()}
-            disabled={daemonPhase === 'checking' || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
+            disabled={!daemonBase || daemonPhase === 'checking' || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
             className="px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
           >
             {t('settings.dev.daemon.check')}
           </button>
           <button
             onClick={() => void rebuildDaemon()}
-            disabled={daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
+            disabled={!daemonBase || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
             className="px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse hover:bg-accent-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
           >
             {t('settings.dev.daemon.rebuild')}

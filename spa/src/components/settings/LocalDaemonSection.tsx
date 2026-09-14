@@ -3,7 +3,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
 
 interface Props {
-  daemonBase: string
+  daemonBase: string | null
   token?: string
   latestHash: string | null
   /** The parent's latest daemonCheck object; a new reference re-queries status. */
@@ -112,7 +112,12 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
       <div className="flex gap-2">
         <button onClick={() => void refresh()} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.refresh')}</button>
         {status?.managed === 'none' && (
-          <button onClick={() => void run('install', () => api.localDaemonInstall?.(daemonBase, token))} disabled={disabled} className={btnPrimary}>{t('settings.dev.local.btn.install')}</button>
+          <button
+            onClick={() => void run('install', () => daemonBase ? api.localDaemonInstall?.(daemonBase, token) : undefined)}
+            disabled={disabled || daemonBase === null}
+            title={daemonBase === null ? t('settings.dev.host.required') : undefined}
+            className={btnPrimary}
+          >{t('settings.dev.local.btn.install')}</button>
         )}
         {status?.managed === 'managed' && (
           <>
@@ -123,7 +128,12 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               <button onClick={() => void run('restart', () => api.localDaemonRestart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.restart')}</button>
             )}
             {updateAvailable && (
-              <button onClick={() => void run('install', () => api.localDaemonInstall?.(daemonBase, token))} disabled={disabled} className={btnPrimary}>{t('settings.dev.local.btn.update')}</button>
+              <button
+                onClick={() => void run('install', () => daemonBase ? api.localDaemonInstall?.(daemonBase, token) : undefined)}
+                disabled={disabled || daemonBase === null}
+                title={daemonBase === null ? t('settings.dev.host.required') : undefined}
+                className={btnPrimary}
+              >{t('settings.dev.local.btn.update')}</button>
             )}
           </>
         )}
