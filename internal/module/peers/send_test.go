@@ -735,6 +735,48 @@ func TestSend_TmuxFormResolves(t *testing.T) {
 	}
 }
 
+// TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady pins X1 at the
+// module level: the remote reports one alive-but-undecodable registry file
+// and a single live row carrying the addressed label. That file may be a
+// second process of the same conversation, so the send is 503 not_ready
+// (Partial:true) with nothing posted — not a delivery to the one process
+// that happened to be readable.
+func TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	row := remoteRow("", "")
+	row.Label, row.LabelSource = "dup-label", "default"
+	s.set(func(s *sendEnv) {
+		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row},
+			UnknownRegistryFiles: []string{"/reg/778.json"}}
+	})
+	req := s.sendReq()
+	req.To = remoteAlias + "/dup-label"
+
+	rr := s.send(adminCtx(), req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rr.Code, rr.Body.String())
+	}
+	var ae ipeers.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &ae); err != nil {
+		t.Fatalf("decode body: %v; body=%s", err, rr.Body.String())
+	}
+	if ae.Error != ipeers.ErrNotReady || !ae.Partial {
+		t.Errorf("body = %+v, want not_ready with partial:true", ae)
+	}
+	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
+		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+
+	// The same row with the registry complete (Partial for another
+	// reason) is a plain single hit and delivers.
+	s.set(func(s *sendEnv) {
+		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row}}
+	})
+	if resp := s.sendOK(req); resp.Result != ipeers.ResultDelivered {
+		t.Errorf("registry complete: result = %q, want delivered", resp.Result)
+	}
+}
+
 // TestSend_PartialInventoryNotReady pins the v2 delta on step 6: when the
 // remote's envelope is partial, a label-tier miss is 503 not_ready with
 // Partial:true in the body rather than falling back to the bare tmux-name

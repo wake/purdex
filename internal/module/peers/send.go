@@ -282,8 +282,15 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	rows := normalizeRemoteRows(env.Peers, entry.Alias, entry.HostID)
 
 	// 6. Resolve the session part over the remote's rows (Peer Address v2
-	// spec §3.2).
-	target, err := ipeers.Resolve(rows, session, env.Partial)
+	// spec §3.2). The snapshot flags are the remote envelope's own: Partial
+	// as reported, and RegistryIncomplete whenever it named an
+	// alive-but-undecodable registry file — the one Partial cause that can
+	// hide a whole live process, under which even a single label hit is
+	// not_ready (spec §3.2, X1).
+	target, err := ipeers.Resolve(rows, session, ipeers.ResolveSnapshot{
+		Partial:            env.Partial,
+		RegistryIncomplete: len(env.UnknownRegistryFiles) > 0,
+	})
 	if err != nil {
 		var amb *ipeers.AmbiguousError
 		switch {
