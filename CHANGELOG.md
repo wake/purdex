@@ -1,8 +1,8 @@
 # Changelog
 
-## [1.0.0-alpha.340] - 2026-09-14
+## [1.0.0-alpha.341] - 2026-09-14
 
-### Feat: Development 頁面改為明確指定「開發主機」；Local daemon 區塊直接秀 URL / token，可一鍵加入 host（#1018）
+### Feat: Development 頁面改為明確指定「開發主機」；Local daemon 區塊直接秀 URL / token，可一鍵加入 host（#1018；原 bump #1020 與並發的 #1017 撞號，改為 alpha.341）
 
 **起因**是 air-2026 的情境：App 先裝、daemon 後裝，Development 頁面卻一律拿 `hostOrder[0]` 當更新來源——第二台機器上那台可能就是自己那顆沒 repo 的本機 daemon，永遠查不到更新；而本機 daemon 的 token 只存在 `~/.config/pdx/config.toml`，要加 host 得自己去翻。
 
