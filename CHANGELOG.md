@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.340] - 2026-09-14
+
+### Fix: App 啟動的 daemon 看不到任何 tmux session——沒有 UTF-8 locale 時 tmux 會把 TAB 分隔符換成 `_`（#1014）
+
+air-2026 上由 Finder 啟動的 Purdex.app 帶起 daemon 後，`GET /api/sessions` 永遠回 `[]`、`POST` 回 500 `session created but not found`、`session_meta` 一直 0 rows、log 一行錯誤都沒有——但 tmux 每一步都成功，手動跑 `list-sessions` 也正常。根因不是 tmux 版本（3.6a / 3.7c 都一樣）也不是 PATH：**App 的 launchd 環境沒有 `LANG`/`LC_ALL`/`LC_CTYPE`**，tmux 依 *client* 的 locale 清洗 `-F` 輸出，沒有 UTF-8 codeset 時每個不可列印字元（含 daemon 拿來切欄位的 TAB）都換成 `_`，整行變成一個欄位 `$0_probe1_/Users/wake` → `EncodeSessionID` 失敗 → 靜默 `continue`。更糟的是這串壞 ID 被丟給 `CleanOrphans`，把既有 meta 全清掉。mlab 沒事純粹因為 daemon 是從有 `LANG` 的 login shell 起的；daemon 起的 tmux server 連帶每個 pane 的 shell、agent、`capture-pane`、terminal relay 也都沒 locale。
+
+修法放在 daemon 自己身上，不靠啟動器：新 `internal/locale.EnsureUTF8()` 在 `pdx serve` 解析完 flag、任何 tmux exec 之前跑——`LC_ALL` > `LC_CTYPE` > `LANG` 取第一個非空值（與 tmux.c 判 `CLIENT_UTF8` 的字串比對一致），什麼都沒設就 `LANG=en_US.UTF-8`（只設 `LANG`，pane 的 rc 檔仍可覆蓋），已是 UTF-8 就不動，使用者明確設了非 UTF-8 只警告不覆蓋。tmux server 從 daemon 繼承，pane / agent 一併修好。解析端也補防禦：`list-sessions` 少於 3 欄的行直接跳過不再填空字串（空 list 讓 `CleanOrphans` no-op），每次呼叫記一則含 locale 提示的 log；session 的 invalid-id skip 與 monitor 的 pane 解析錯誤也都會說話。
+
+隔離 smoke（自己的 `--config` data dir + 自己的 tmux socket）：舊 binary 500/`[]`，新 binary 201/正常列出、log `exported LANG=en_US.UTF-8`、`tmux show-environment -g LANG` 正確。⚠️ air-2026 App 真機驗收待做。follow-up：#1015（Warned 情境的 log throttle）、#1016（`launch-env.ts` 轉發使用者自己的 LANG）。
+
 ## [1.0.0-alpha.339] - 2026-09-14
 
 ### Fix: Hosts → Sessions 頁面在未連線主機上整頁崩潰（#1012）
