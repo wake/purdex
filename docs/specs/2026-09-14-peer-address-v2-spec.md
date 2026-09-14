@@ -397,7 +397,8 @@ them may be set on one envelope.
 
 The receiver validates `address` syntactically only — `head` matches the
 user-label rule or the default-label form, `rest` matches the suffix wire
-grammar (§3.1) or is empty — refusing with `400 bad_address` otherwise,
+grammar (§3.1) or is absent (a trailing `:` with an empty suffix is
+invalid) — refusing with `400 bad_address` otherwise,
 and treats it as display data attributed to an authenticated host.
 `address_rev` is compared only among requests for the **same origin
 key**, so it is never compared across hosts or clocks. The wrapper's

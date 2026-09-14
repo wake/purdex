@@ -376,6 +376,39 @@ func TestRewriteRegistryName(t *testing.T) {
 	}
 }
 
+// TestRewriteRegistryName_StaleTempFile proves a leftover
+// ".<pid>.json.tmp" from a crash between create and rename (O_EXCL would
+// otherwise make it fail forever with EEXIST) is cleared before the
+// rewrite proceeds.
+func TestRewriteRegistryName_StaleTempFile(t *testing.T) {
+	dir := t.TempDir()
+	created, err := WriteRegistry(dir, RegistryEntry{PID: 4242, SessionID: "s", Name: "a/old", ProcStart: "Sun Sep 13 18:57:56 2026", Inbox: "/tmp/x.sock", Version: "2.1.270"}, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := filepath.Join(dir, ".4242.json.tmp")
+	if err := os.WriteFile(tmpPath, []byte("stale leftover"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RewriteRegistryName(dir, 4242, "a/new:x", 1700000000000); err != nil {
+		t.Fatalf("RewriteRegistryName after stale temp: %v", err)
+	}
+	after, _ := os.ReadFile(created[0])
+	var a map[string]json.RawMessage
+	if err := json.Unmarshal(after, &a); err != nil {
+		t.Fatal(err)
+	}
+	if string(a["name"]) != `"a/new:x"` {
+		t.Errorf("after = %s", after)
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("temp file left behind: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 { // json + key, no temp left
+		t.Errorf("dir has %d entries", len(entries))
+	}
+}
+
 func TestRegistryProcStart(t *testing.T) {
 	dir := t.TempDir()
 	e := sampleEntry(dir)

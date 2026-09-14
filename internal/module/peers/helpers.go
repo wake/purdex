@@ -350,7 +350,7 @@ func (m *helperManager) startup(h *helper) {
 	}
 
 	cfg := proxyhelper.Config{
-		Name:         h.name,
+		Name:         m.Name(h),
 		RegistryDir:  m.registryDir,
 		SockDir:      m.sockDir,
 		Version:      m.version,
@@ -555,7 +555,7 @@ func (m *helperManager) release(h *helper, reason string, still func() bool) {
 		// Closes stdin (the helper removes its own files), grace, SIGKILL,
 		// Wait, joins the Handle's pump.
 		if err := h.handle.Stop(m.termGrace); err != nil {
-			m.log("peers: helper %d (%s): stopped (%s): %v", h.pid, h.name, reason, err)
+			m.log("peers: helper %d (%s): stopped (%s): %v", h.pid, m.Name(h), reason, err)
 		}
 		// The process is gone; what it left behind is unlinked only while
 		// it is provably its own (R2-C): the window between its exit and

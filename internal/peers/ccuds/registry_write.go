@@ -195,6 +195,12 @@ func RewriteRegistryName(dir string, pid int, name string, nameSince int64) erro
 	}
 
 	tmpPath := filepath.Join(dir, "."+strconv.Itoa(pid)+".json.tmp")
+	// A leftover temp file from a crash between create and rename would
+	// otherwise make every future rewrite for this pid fail with EEXIST
+	// forever; clear it first (ignoring "already gone").
+	if err := os.Remove(tmpPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return err
