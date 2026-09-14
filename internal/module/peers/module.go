@@ -431,13 +431,17 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	// way: a nil store or a read failure never blocks the inventory build
 	// (every row still gets its default label), but a failed read is
 	// reported the same way a failed owner lookup is — this response may
-	// be showing stale/default labels it cannot vouch for.
+	// be showing stale/default labels it cannot vouch for — and signalled
+	// on its own as labels_unavailable, so a consumer (pdx peers, the
+	// SPA) names the cause instead of inferring it from the absence of
+	// the other two partial causes.
 	labels, labelsErr := m.labelSnapshot()
 	if labelsErr != nil {
 		m.logf("peers: inventory: label store unavailable, reporting default labels: %v", labelsErr)
 	}
+	labelsUnavailable := labelsErr != nil
 
-	partial := len(unresolved) > 0 || len(unknown) > 0 || labelsErr != nil
+	partial := len(unresolved) > 0 || len(unknown) > 0 || labelsUnavailable
 
 	// This daemon's own helpers are hidden as proxy rows by pid (their
 	// registry entries are otherwise indistinguishable from a Claude Code
@@ -465,6 +469,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Peers:                peerRecords,
 		DaemonVersion:        buildinfo.Version,
 		UnknownRegistryFiles: unknown,
+		LabelsUnavailable:    labelsUnavailable,
 	}
 }
 
@@ -538,6 +543,7 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 		Peers:                local.Peers,
 		DaemonVersion:        local.DaemonVersion,
 		UnknownRegistryFiles: local.UnknownRegistryFiles,
+		LabelsUnavailable:    local.LabelsUnavailable,
 	}
 
 	wg.Wait()
@@ -682,6 +688,12 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		bounded[i] = boundRemoteText(u)
 	}
 
+	// env.DaemonVersion is the remote's own reported text, exactly as
+	// attacker-controlled as env.Error and the unknown-registry-files list
+	// above, so it is bounded the same way before this row is ever printed
+	// or re-encoded. env.LabelsUnavailable is a bool and needs no bounding:
+	// it is the remote's own claim about its label store, copied through
+	// for the per-host cause line.
 	return ipeers.HostResult{
 		Alias:                h.Alias,
 		HostID:               resultHostID,
@@ -689,11 +701,8 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		Error:                rowErr,
 		Partial:              env.Partial,
 		Peers:                peers,
-		// env.DaemonVersion is the remote's own reported text, exactly as
-		// attacker-controlled as env.Error and the unknown-registry-files
-		// list above, so it is bounded the same way before this row is
-		// ever printed or re-encoded.
 		DaemonVersion:        boundRemoteText(env.DaemonVersion),
 		UnknownRegistryFiles: bounded,
+		LabelsUnavailable:    env.LabelsUnavailable,
 	}
 }

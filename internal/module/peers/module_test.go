@@ -1641,7 +1641,9 @@ func TestLocalEnvelope_UnknownRegistryFileMarksPartial(t *testing.T) {
 // TestLocalEnvelope_LabelStoreFailureIsPartial pins that a label store
 // Snapshot failure marks the response partial (every row falls back to its
 // default label, spec-consistent since the store's actual content is now
-// unknown) and logs once, without touching UnknownRegistryFiles.
+// unknown), signals it explicitly as labels_unavailable (X4 — the CLI
+// renders the cause from this flag, never by inference from the other
+// partial causes) and logs once, without touching UnknownRegistryFiles.
 func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 	f := newLabelJoinFixture(t)
 	f.m.labels = failingLabels{}
@@ -1651,6 +1653,12 @@ func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 	if !env.Partial {
 		t.Fatal("partial = false, want true on label store failure")
 	}
+	if !env.LabelsUnavailable {
+		t.Error("labels_unavailable = false, want true on label store failure")
+	}
+	if len(env.UnknownRegistryFiles) != 0 {
+		t.Errorf("unknown_registry_files = %v, want none", env.UnknownRegistryFiles)
+	}
 	for _, r := range env.Peers {
 		if r.Agent != nil && r.Agent.Type == "cc" && r.LabelSource != ipeers.LabelSourceDefault {
 			t.Errorf("row %s label_source = %q, want default", r.Address, r.LabelSource)
@@ -1658,6 +1666,77 @@ func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 	}
 	if !f.logs.contains("label store") {
 		t.Error("expected one log line about the label store")
+	}
+}
+
+// TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy pins the negative:
+// a healthy (or absent) label store never sets labels_unavailable, even
+// when the response is partial for another reason.
+func TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy(t *testing.T) {
+	f := newLabelJoinFixture(t)
+	writeRegistryFixture(t, f.registryDir, "4242.json", "{") // partial for the registry's sake
+
+	env := f.m.localEnvelope(context.Background(), "h:1", "a")
+
+	if !env.Partial || len(env.UnknownRegistryFiles) != 1 {
+		t.Fatalf("partial=%v unknown=%v, want partial with one unknown file", env.Partial, env.UnknownRegistryFiles)
+	}
+	if env.LabelsUnavailable {
+		t.Error("labels_unavailable = true, want false: the label store read succeeded")
+	}
+}
+
+// TestLocalEnvelope_LabelStoreFailureAndUnknownFile_BothSignalled pins
+// that the two partial causes are independent signals: an unreadable
+// registry file AND a failing label store are both reported, each in its
+// own field, on one partial envelope.
+func TestLocalEnvelope_LabelStoreFailureAndUnknownFile_BothSignalled(t *testing.T) {
+	f := newLabelJoinFixture(t)
+	f.m.labels = failingLabels{}
+	writeRegistryFixture(t, f.registryDir, "4242.json", "{")
+
+	env := f.m.localEnvelope(context.Background(), "h:1", "a")
+
+	if !env.Partial {
+		t.Fatal("partial = false, want true")
+	}
+	if !env.LabelsUnavailable {
+		t.Error("labels_unavailable = false, want true")
+	}
+	if len(env.UnknownRegistryFiles) != 1 || !strings.HasSuffix(env.UnknownRegistryFiles[0], "4242.json") {
+		t.Errorf("unknown_registry_files = %v, want the one unknown file", env.UnknownRegistryFiles)
+	}
+}
+
+// TestAllEnvelope_LabelsUnavailableCopiedThrough pins that scope=all
+// carries labels_unavailable on both kinds of row: the local row copies
+// localEnvelope's flag, and a remote host's row copies the flag the remote
+// envelope reported (fetchHostResult), next to its unknown files.
+func TestAllEnvelope_LabelsUnavailableCopiedThrough(t *testing.T) {
+	f := newLabelJoinFixture(t)
+	f.m.labels = failingLabels{}
+	f.m.fetch = func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error) {
+		return ipeers.Envelope{
+			HostID: "air:111", OK: true, Partial: true, Peers: []ipeers.PeerRecord{},
+			UnknownRegistryFiles: []string{"/reg/9.json"}, LabelsUnavailable: true,
+		}, nil
+	}
+	hosts := []config.PeerHost{{Alias: "air", URL: "http://air.invalid", Token: "tok", HostID: "air:111"}}
+
+	all := f.m.allEnvelope(context.Background(), "h:1", "a", hosts)
+
+	if len(all.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", all.Hosts)
+	}
+	local, remote := all.Hosts[0], all.Hosts[1]
+	if !local.OK || !local.Partial || !local.LabelsUnavailable {
+		t.Errorf("local row = ok %v partial %v labels_unavailable %v, want true/true/true", local.OK, local.Partial, local.LabelsUnavailable)
+	}
+	if !remote.OK || !remote.Partial || !remote.LabelsUnavailable {
+		t.Errorf("remote row = ok %v partial %v labels_unavailable %v, want true/true/true", remote.OK, remote.Partial, remote.LabelsUnavailable)
+	}
+	if len(remote.UnknownRegistryFiles) != 1 || remote.UnknownRegistryFiles[0] != "/reg/9.json" {
+		t.Errorf("remote unknown_registry_files = %v, want the reported file alongside labels_unavailable", remote.UnknownRegistryFiles)
 	}
 }
 
