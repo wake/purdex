@@ -219,11 +219,19 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. The origin: the caller's own session, attributed by its inbox. A
-	// PARTIAL inventory (spec §4.2) with no row for the inbox says nothing
-	// about the caller — its tmux session may be the one whose owner
-	// lookup did not complete — so that is 503 not_ready (retryable),
-	// never origin_unknown, which the CLI reports as a verdict.
+	// 4. The origin: the caller's own session, attributed by its inbox.
+	// Peer Address v2 gives every live, non-proxy registry entry its own
+	// entry row (spec §3.4) whether or not its tmux session is listed, so
+	// a live origin always has SOME row naming its inbox even when its
+	// tmux session's owner lookup failed or never ran — the old "no row
+	// while partial" premise no longer holds, and a bare label-store
+	// failure (spec §3.3's Partial trigger that hides no rows at all) is
+	// certainly not this caller's trouble. Only an alive-but-undecodable
+	// registry file (Diagnosis.BlockingUnknown) can hide the very row a
+	// candidate search would otherwise find — the file that failed to
+	// decode could be the origin's own — so that is the one case answered
+	// 503 not_ready (retryable), never origin_unknown, which the CLI
+	// reports as a verdict.
 	local := m.localEnvelope(r.Context(), snap.hostID, snap.alias)
 	if !local.OK {
 		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "local inventory unavailable: "+local.Error)
@@ -231,8 +239,8 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	origin, ok, candidate := findOrigin(local.Peers, req.OriginInbox)
 	if !ok {
-		if !candidate && local.Partial {
-			refuseUnaudited(http.StatusServiceUnavailable, ipeers.ErrNotReady, "local inventory partial: the origin session's owner lookup did not complete; retry")
+		if !candidate && len(local.UnknownRegistryFiles) > 0 {
+			refuseUnaudited(http.StatusServiceUnavailable, ipeers.ErrNotReady, "local inventory has an unresolved registry file; retry")
 			return
 		}
 		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is not a live, deliverable Claude Code session on this host")

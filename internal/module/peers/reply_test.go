@@ -443,6 +443,106 @@ func TestReply_UnknownRegistryFileIsNotReady(t *testing.T) {
 	}
 }
 
+// TestClassifyReplyDrop pins classifyReplyDrop directly: the exact
+// decision `forwardReply` makes from (env, replier, detail) once
+// findReplier reports no full match. It is a unit test of that pure
+// function rather than an end-to-end reply_test.go fixture because the
+// fixture the case below needs — findReplier resolving a REAL row for the
+// reply socket (Agent != nil) that is non-proxy and not a full match — is
+// not constructible through the real localEnvelope/Build pipeline: per
+// internal/peers/record.go, Agent.Inbox is populated ONLY on a row that is
+// either fully deliverable cc (agentInfoFromEntry, always paired with
+// Deliverable=true) or a proxy row (EntryRecord flips Type to "proxy" in
+// the same step it sets Deliverable=false) — there is no live-entry code
+// path that produces a real Inbox alongside Type != "cc" or
+// Deliverable == false. TestReply_UnknownRegistryFileIsNotReady above
+// covers the OTHER (reachable, replier.Agent == nil) half of the same
+// term end-to-end; this test covers the half that guards a shape the
+// join cannot currently produce, so it cannot be a lie: it asserts sample
+// non-proxy detail!="" cases (not-cc and not-deliverable) whichever
+// caller passes, need not be reachable.
+func TestClassifyReplyDrop(t *testing.T) {
+	unknownFile := []string{"/reg/4242.json"}
+	ccNotDeliverable := ipeers.PeerRecord{Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "sid-1"}, Deliverable: false}
+	notCC := ipeers.PeerRecord{Agent: &ipeers.AgentInfo{Type: "codex", SessionID: "sid-1"}}
+	proxyRow := ipeers.PeerRecord{Agent: &ipeers.AgentInfo{Type: "proxy", SessionID: "sid-1"}}
+	notFound := ipeers.PeerRecord{}
+
+	cases := []struct {
+		name       string
+		env        ipeers.Envelope
+		replier    ipeers.PeerRecord
+		detail     string
+		wantCode   string
+		wantDetail string
+	}{
+		{
+			name:       "found row, not cc, unrelated unknown file ⇒ not_ready, never replier_unknown",
+			env:        ipeers.Envelope{Partial: true, UnknownRegistryFiles: unknownFile},
+			replier:    notCC,
+			detail:     "reply address is not a Claude Code session",
+			wantCode:   ipeers.ErrNotReady,
+			wantDetail: detailInventoryPartial,
+		},
+		{
+			name:       "found row, cc but not deliverable, unrelated unknown file ⇒ not_ready, never replier_unknown",
+			env:        ipeers.Envelope{Partial: true, UnknownRegistryFiles: unknownFile},
+			replier:    ccNotDeliverable,
+			detail:     "replier is not deliverable",
+			wantCode:   ipeers.ErrNotReady,
+			wantDetail: detailInventoryPartial,
+		},
+		{
+			name:       "found row, not cc, NO unknown files and not partial ⇒ replier_unknown unchanged",
+			env:        ipeers.Envelope{Partial: false},
+			replier:    notCC,
+			detail:     "reply address is not a Claude Code session",
+			wantCode:   ipeers.ErrReplierUnknown,
+			wantDetail: "reply address is not a Claude Code session",
+		},
+		{
+			name:       "proxy row: unknown files elsewhere never downgrade a positive proxy verdict",
+			env:        ipeers.Envelope{Partial: true, UnknownRegistryFiles: unknownFile},
+			replier:    proxyRow,
+			detail:     "reply address is a peer-proxy helper",
+			wantCode:   ipeers.ErrProxyToProxy,
+			wantDetail: "reply address is a peer-proxy helper",
+		},
+		{
+			name:       "no row, unknown file present ⇒ not_ready",
+			env:        ipeers.Envelope{Partial: true, UnknownRegistryFiles: unknownFile},
+			replier:    notFound,
+			detail:     "no live Claude Code session listens on the reply address",
+			wantCode:   ipeers.ErrNotReady,
+			wantDetail: detailInventoryPartial,
+		},
+		{
+			name:       "no row, label-store-only partial (no unknown files) ⇒ not_ready unchanged",
+			env:        ipeers.Envelope{Partial: true},
+			replier:    notFound,
+			detail:     "no live Claude Code session listens on the reply address",
+			wantCode:   ipeers.ErrNotReady,
+			wantDetail: detailInventoryPartial,
+		},
+		{
+			name:       "no row, not partial at all ⇒ replier_unknown",
+			env:        ipeers.Envelope{Partial: false},
+			replier:    notFound,
+			detail:     "no live Claude Code session listens on the reply address",
+			wantCode:   ipeers.ErrReplierUnknown,
+			wantDetail: "no live Claude Code session listens on the reply address",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code, detail := classifyReplyDrop(c.env, c.replier, c.detail)
+			if code != c.wantCode || detail != c.wantDetail {
+				t.Errorf("classifyReplyDrop() = %q/%q, want %q/%q", code, detail, c.wantCode, c.wantDetail)
+			}
+		})
+	}
+}
+
 func TestReply_TextValidation(t *testing.T) {
 	t.Run("too large", func(t *testing.T) {
 		r := newReplyEnv(t, envOpts{})

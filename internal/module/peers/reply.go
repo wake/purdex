@@ -113,25 +113,7 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 	}
 	replier, detail := findReplier(env.Peers, sock)
 	if detail != "" {
-		// A PARTIAL inventory (spec §4.2) with no row for the reply
-		// address says nothing about the replier — its tmux session may
-		// be the one whose owner lookup did not complete: not_ready, never
-		// replier_unknown (a verdict). An alive-but-undecodable registry
-		// file (Diagnosis.BlockingUnknown) is the same problem in a
-		// stronger form and overrides even a row findReplier DID resolve
-		// for this sock (found, but not cc or not deliverable): the file
-		// that failed to decode could be the one that would have
-		// superseded it, so its presence is not_ready too, never
-		// replier_unknown — a positively-identified proxy row (a helper,
-		// D9) is unaffected, since that verdict comes from a row that
-		// decoded fine. The helper is kept either way.
-		code := ipeers.ErrReplierUnknown
-		switch {
-		case replier.Agent != nil && replier.Agent.Type == "proxy":
-			code = ipeers.ErrProxyToProxy
-		case len(env.UnknownRegistryFiles) > 0 || (replier.Agent == nil && env.Partial):
-			code, detail = ipeers.ErrNotReady, detailInventoryPartial
-		}
+		code, detail := classifyReplyDrop(env, replier, detail)
 		drop(code, detail)
 		return
 	}
@@ -219,6 +201,35 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 		m.setResult(id, resp.EffectiveMode, resp.Result, errText)
 		m.helpers.Touch(h.key)
 	}
+}
+
+// classifyReplyDrop turns findReplier's (replier, detail) — called only
+// when detail is non-empty, i.e. no full match — into the code and
+// (possibly overridden) detail forwardReply drops the frame with. A
+// positively-identified proxy row (Build decoded it fine; it just isn't a
+// session) is a verdict regardless of anything else: proxy_to_proxy. Every
+// other case — no row found at all, or (defensively; Build's current join
+// never actually produces this shape with a real inbox, since Inbox is
+// only ever populated on a fully-deliverable cc row or a proxy row — see
+// internal/peers/record.go — but the check costs nothing and guards
+// against that changing) a row found that is not cc or not deliverable —
+// is superseded by an alive-but-undecodable registry file
+// (Diagnosis.BlockingUnknown; that file could be the one that would have
+// decoded into the actual replier) or a partial inventory with no row at
+// all (the replier's own tmux session's owner lookup may be the one that
+// did not complete): not_ready, never replier_unknown, which the caller
+// reads as a verdict. A label-store-only partial (no unknown files) does
+// not, by itself, hide any row, so it changes nothing here. The helper is
+// kept either way (the caller drops the frame, never reaps).
+func classifyReplyDrop(env ipeers.Envelope, replier ipeers.PeerRecord, detail string) (code, outDetail string) {
+	code, outDetail = ipeers.ErrReplierUnknown, detail
+	switch {
+	case replier.Agent != nil && replier.Agent.Type == "proxy":
+		code = ipeers.ErrProxyToProxy
+	case len(env.UnknownRegistryFiles) > 0 || (replier.Agent == nil && env.Partial):
+		code, outDetail = ipeers.ErrNotReady, detailInventoryPartial
+	}
+	return code, outDetail
 }
 
 // findReplier picks the inventory row whose agent inbox is exactly sock.

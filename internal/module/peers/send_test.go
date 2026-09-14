@@ -786,6 +786,30 @@ func TestSend_ErrorSteps(t *testing.T) {
 			status: http.StatusBadRequest, code: ipeers.ErrOriginUnknown,
 		},
 		{
+			// Task 5 review finding 2: a bare label-store Snapshot
+			// failure marks local.Partial true but hides no rows at
+			// all (Peer Address v2's entry rows mean a live origin
+			// always has one — TestSend_OriginResolvesViaEntryRowDespitePartialInventory).
+			// A dead origin_inbox with no matching row must stay a
+			// non-retryable 400 origin_unknown even while the label
+			// store is down, never 503 not_ready.
+			name:    "origin unknown path: label-store failure alone stays origin_unknown",
+			prepare: func(s *sendEnv) { s.m.labels = failingLabels{} },
+			mutate:  func(r *ipeers.SendRequest) { r.OriginInbox = "/nonexistent/x.sock" },
+			status:  http.StatusBadRequest, code: ipeers.ErrOriginUnknown,
+		},
+		{
+			// The other half of the same fix: an alive-but-undecodable
+			// registry file at an UNRELATED pid — the origin_inbox
+			// still names no row — turns the same "no row" case into a
+			// retryable 503 not_ready, since that file could be the
+			// one that would have decoded into the origin's own row.
+			name:    "origin unknown path: unrelated unknown registry file is not_ready",
+			prepare: func(s *sendEnv) { writeRegistryFixture(s.t, s.regDir, "4242.json", "{") },
+			mutate:  func(r *ipeers.SendRequest) { r.OriginInbox = "/nonexistent/x.sock" },
+			status:  http.StatusServiceUnavailable, code: ipeers.ErrNotReady,
+		},
+		{
 			name:    "fetch error",
 			prepare: func(s *sendEnv) { s.fetchErr = errors.New("HTTP 401") },
 			status:  http.StatusBadGateway, code: ipeers.ErrRemoteError, fetched: true, remote: "HTTP 401",
