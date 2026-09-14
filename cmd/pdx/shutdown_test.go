@@ -445,6 +445,64 @@ func TestServeAndWait_SecondSignalDuringBlockingStopModulesExitsImmediately(t *t
 	}
 }
 
+// TestServeAndWait_SignalDuringServeTriggeredSequenceDoesNotExitEarly is
+// the regression test for the fix: when the sequence was triggered by
+// Serve returning (no signal yet), the watcher goroutine must not be
+// armed. A signal arriving while StopModules is still blocked is thus the
+// FIRST signal, not a second impatient one, and must not call exit — the
+// sequence must instead complete normally once StopModules unblocks. The
+// signal is sent only after StopModules has been observed to start, via
+// the started gate, so the test is deterministic.
+func TestServeAndWait_SignalDuringServeTriggeredSequenceDoesNotExitEarly(t *testing.T) {
+	h := newHarness()
+	bindLost := errors.New("bind lost")
+	h.srv.serveErr = bindLost // Serve fails first — no signal yet.
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h.target.stopHook = func(context.Context) {
+		close(started)
+		<-release
+	}
+
+	done := h.runAsync(testBudget)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopModules never started")
+	}
+
+	h.sig <- syscall.SIGTERM // first signal, arriving mid-sequence
+
+	// Give the (would-be) watcher a chance to misfire before releasing
+	// StopModules, so a regression would be caught here rather than
+	// masked by the release below.
+	time.Sleep(50 * time.Millisecond)
+	if exits := h.exited(); len(exits) != 0 {
+		t.Fatalf("exit was called %v before StopModules unblocked; sequence was triggered by Serve, not a signal", exits)
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, bindLost) {
+			t.Fatalf("serveAndWait returned %v, want %v", err, bindLost)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveAndWait did not return after StopModules unblocked")
+	}
+
+	if exits := h.exited(); len(exits) != 0 {
+		t.Fatalf("exit calls = %v, want none", exits)
+	}
+	want := []string{"cancel", "StopModules", "Shutdown", "CloseModules"}
+	if got := h.rec.names(); !equalSteps(got, want) {
+		t.Fatalf("steps = %v, want %v", got, want)
+	}
+}
+
 func equalInts(got, want []int) bool {
 	if len(got) != len(want) {
 		return false

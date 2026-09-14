@@ -1,5 +1,6 @@
 # Makefile
 .PHONY: build test lint clean check-goenv test-goenv
+.DEFAULT_GOAL := build
 
 BIN := bin/pdx
 HASH := $(shell git log -1 --format=%h 2>/dev/null)

@@ -50,7 +50,10 @@ type server interface {
 // A second value on sig while the sequence below is still running (e.g. a
 // slow or blocking StopModules) exits immediately via exit(130) rather than
 // waiting out the rest of the shutdown budget — a second Ctrl-C should not
-// need to wait for a stuck module.
+// need to wait for a stuck module. That watcher is armed only when a signal
+// is what triggered the sequence: if Serve returned first (no signal yet),
+// a signal arriving during the sequence is the FIRST signal, not a second
+// impatient one, and must not short-circuit CloseModules.
 func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	cancel context.CancelFunc, target shutdownTarget, budget time.Duration,
 	logf func(string, ...any), exit func(int)) error {
@@ -62,17 +65,20 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	// this select is the only place it is entered.
 	var err error
 	serveReturned := false
+	signalTriggered := false
 	select {
 	case s := <-sig:
+		signalTriggered = true
 		logf("received %v, shutting down...", s)
 	case err = <-serveErr:
 		serveReturned = true
 		// A signal may already be sitting in sig (buffered, not yet
 		// delivered to this select) even though Serve is what won the
 		// race. That is still the FIRST signal, not a second one — drain
-		// it before arming the watcher below so it isn't misread as a
-		// second Ctrl-C and triggers an immediate exit(130) that skips
-		// CloseModules.
+		// it so it isn't misread as a second Ctrl-C and triggers an
+		// immediate exit(130) that skips CloseModules. Since this path
+		// did not trigger via signal, the watcher below stays unarmed
+		// regardless.
 		select {
 		case <-sig:
 		default:
@@ -81,14 +87,16 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 
 	done := make(chan struct{})
 	defer close(done)
-	go func() {
-		select {
-		case <-sig:
-			logf("received second signal, exiting immediately")
-			exit(130)
-		case <-done:
-		}
-	}()
+	if signalTriggered {
+		go func() {
+			select {
+			case <-sig:
+				logf("received second signal, exiting immediately")
+				exit(130)
+			case <-done:
+			}
+		}()
+	}
 
 	cancel() // stop module background goroutines (pollers, watchers)
 	ctx, ctxCancel := context.WithTimeout(context.Background(), budget)
