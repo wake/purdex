@@ -29,6 +29,7 @@ beforeEach(() => {
     localDaemonRestart: mockRestart,
     onLocalDaemonProgress: (cb: (s: string) => void) => { progressCb = cb; return () => { progressCb = null } },
   } as typeof window.electronAPI
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true })
 })
 
 const renderIt = (latestHash: string | null = 'bbb', refreshKey: unknown = { latest_hash: latestHash }, daemonBase: string | null = 'http://100.64.0.2:7860') =>
@@ -164,5 +165,55 @@ describe('LocalDaemonSection - no dev host', () => {
     expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Start' })).not.toBeDisabled()
     expect(mockInstall).not.toHaveBeenCalled()
+  })
+})
+
+describe('LocalDaemonSection - config rows', () => {
+  const cfg = { bind: '100.64.0.9', port: 7860, token: 'purdex_secret' }
+
+  it('shows URL and a masked token; reveal and copy work', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    expect(screen.getByText('http://100.64.0.9:7860')).toBeTruthy()
+    expect(screen.queryByText('purdex_secret')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show token' }))
+    expect(screen.getByText('purdex_secret')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide token' }))
+    expect(screen.queryByText('purdex_secret')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('purdex_secret')
+    expect(screen.getByText('Copied')).toBeTruthy()
+  })
+
+  it('token missing → notice, Add to hosts disabled', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'managed', config: { ...cfg, token: null } }))
+    await renderIt()
+    expect(screen.getByText('No token in config.toml')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add to hosts' })).toBeDisabled()
+  })
+
+  it('endpoint not in host list → Add to hosts registers it with the config token and hostname', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add to hosts' })) })
+    const added = Object.values(useHostStore.getState().hosts).find((h) => h.ip === '100.64.0.9' && h.port === 7860)
+    expect(added).toMatchObject({ name: 'air-2026', token: 'purdex_secret' })
+    expect(screen.getByText('Registered as air-2026')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add to hosts' })).toBeNull()
+  })
+
+  it('endpoint already in host list → shows the host name, no button', async () => {
+    useHostStore.getState().addHost({ name: 'my-air', ip: '100.64.0.9', port: 7860, token: 't' })
+    mockStatus.mockResolvedValue(status({ managed: 'managed', config: cfg }))
+    await renderIt()
+    expect(screen.getByText('Registered as my-air')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add to hosts' })).toBeNull()
+  })
+
+  it('loopback bind is a different endpoint from the Tailscale host entry', async () => {
+    useHostStore.getState().addHost({ name: 'my-air', ip: '100.64.0.9', port: 7860, token: 't' })
+    mockStatus.mockResolvedValue(status({ managed: 'managed', config: { ...cfg, bind: '127.0.0.1' } }))
+    await renderIt()
+    expect(screen.getByRole('button', { name: 'Add to hosts' })).toBeTruthy()
   })
 })

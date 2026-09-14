@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Copy, Eye, EyeSlash } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { findHostByEndpoint, useHostStore } from '../../stores/useHostStore'
 
 interface Props {
   daemonBase: string | null
@@ -26,11 +27,32 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const [step, setStep] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const hosts = useHostStore((s) => s.hosts)
+  const [revealed, setRevealed] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const cfg = status?.config ?? null
+  const cfgUrl = cfg ? `http://${cfg.bind}:${cfg.port}` : null
+  // Spec §3.3: exact-endpoint membership only, via the same helper registerLocalHost uses.
+  const registeredAs = cfg ? findHostByEndpoint(hosts, cfg.bind, cfg.port) : undefined
+
+  const copyToken = useCallback(async () => {
+    if (!cfg?.token) return
+    await navigator.clipboard.writeText(cfg.token)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }, [cfg])
+
+  const addToHosts = useCallback(() => {
+    if (!status || !cfg?.token || !cfgUrl) return
+    registerLocalHost({ url: cfgUrl, token: cfg.token, hostname: status.hostname })
+    setNotice(t('settings.dev.local.registered', { name: status.hostname }))
+  }, [status, cfg, cfgUrl, registerLocalHost, t])
 
   const refresh = useCallback(async () => {
     if (!api?.localDaemonStatus) return
     try {
       setStatus(await api.localDaemonStatus())
+      setRevealed(false)
     } catch (err) {
       setError(String(err))
     }
@@ -99,6 +121,41 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               {updateAvailable
                 ? <div className="text-status-warning">{t('settings.dev.local.update_available')}</div>
                 : (running && !restartPending && <div>{t('settings.dev.local.up_to_date')}</div>)}
+            </>
+          )}
+          {cfg && (
+            <>
+              <div className="flex items-center justify-between">
+                <span>{t('settings.dev.local.url')}</span>
+                <span className="font-mono text-text-primary">{cfgUrl}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>{t('settings.dev.local.token')}</span>
+                {cfg.token === null ? (
+                  <span className="text-status-warning">{t('settings.dev.local.token_missing')}</span>
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <span className="font-mono text-text-primary">{revealed ? cfg.token : '••••••••••••'}</span>
+                    <button type="button" onClick={() => setRevealed((v) => !v)} aria-label={revealed ? t('settings.dev.local.btn.hide') : t('settings.dev.local.btn.reveal')} className="p-0.5 rounded hover:bg-surface-hover cursor-pointer">
+                      {revealed ? <EyeSlash size={14} /> : <Eye size={14} />}
+                    </button>
+                    <button type="button" onClick={() => void copyToken()} aria-label={t('settings.dev.local.btn.copy')} className="p-0.5 rounded hover:bg-surface-hover cursor-pointer">
+                      <Copy size={14} />
+                    </button>
+                    {copied && <span>{t('settings.dev.local.copied')}</span>}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <span>{t('settings.dev.local.host_list')}</span>
+                {registeredAs ? (
+                  <span className="text-text-primary">{t('settings.dev.local.in_hosts', { name: registeredAs.name })}</span>
+                ) : (
+                  <button type="button" onClick={addToHosts} disabled={disabled || cfg.token === null} className={btnSecondary}>
+                    {t('settings.dev.local.btn.add_host')}
+                  </button>
+                )}
+              </div>
             </>
           )}
           {status.tools.tmux === null && <div className="text-status-warning">{t('settings.dev.local.tmux_missing')}</div>}
