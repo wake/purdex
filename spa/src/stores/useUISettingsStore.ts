@@ -92,7 +92,7 @@ export const useUISettingsStore = create<UISettings>()(
       setLinkDetectAbsolute: (v) => set({ linkDetectAbsolute: v }),
       linkDetectTilde: true,
       setLinkDetectTilde: (v) => set({ linkDetectTilde: v }),
-      linkDetectRelativeSlash: false,
+      linkDetectRelativeSlash: true,
       setLinkDetectRelativeSlash: (v) => set({ linkDetectRelativeSlash: v }),
       linkDetectBareFilename: false,
       setLinkDetectBareFilename: (v) => set({ linkDetectBareFilename: v }),

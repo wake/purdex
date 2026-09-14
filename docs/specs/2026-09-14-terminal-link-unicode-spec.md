@@ -119,9 +119,9 @@ Known limitations (documented in a code comment):
 - Prose glued *before* a relative path with no separator (`已更新docs/a.pdf`)
   becomes part of the first segment. Identical to ASCII (`seedocs/a.pdf`);
   there is no boundary to find.
-- Pre-existing, out of scope: `BARE_RE`'s lookbehind does not include `-`,
-  so `/a/b/foo.pre-edit.md` also yields a shadowed `BARE` match `edit.md`
-  (ABS registered first wins on hover). Unchanged by this spec.
+- Fixed in a follow-up to this spec: `BARE_RE`'s lookbehind now also
+  includes `-`, so `/a/b/foo.pre-edit.md` no longer yields a shadowed
+  `BARE` match `edit.md` (nor `docs/計畫-核定.pdf` a `核定.pdf` one).
 - A CJK sentence that ends in a file-like token is linked as a whole by
   `BARE_RE` (`請見附件.pdf` → one link). Same ambiguity as ASCII
   (`seeattachment.pdf`); click resolves through the existing
@@ -284,8 +284,8 @@ inside a link land on the right cells.
   BARE lookbehind blocks on a mark — isolated via ABS input
   `/a/か\u3099x.txt` run through `BARE_RE` → no link (the `x.txt` start is
   preceded by U+3099).
-- Pre-existing BARE shadow pinned as-is: `/a/b/foo.pre-edit.md` through
-  `BARE_RE` → `edit.md` (documents the known quirk; not a target).
+- BARE shadow (fixed in a follow-up): `/a/b/foo.pre-edit.md` through
+  `BARE_RE` → no link.
 - No-extension grep line: `docs/報告.最終版:12:內容` → no REL link.
 - Accepted whole-match limitations pinned: `docs/a.pdf然後.txt`,
   `docs/a.pdf然後/x.txt` → whole string.

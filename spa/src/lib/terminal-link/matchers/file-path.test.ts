@@ -527,15 +527,43 @@ describe('unicode paths', () => {
       expect(make().provide('/a/\u304b\u3099x.txt')).toHaveLength(0)
     })
 
-    // Pre-existing quirk pinned as-is, NOT desired behaviour (see the
-    // limitations comment in file-path.ts): the lookbehind does not include
-    // `-`, so a hyphenated inner extension yields a shadowed BARE match that
-    // the earlier-registered ABS link wins over on hover.
-    it('pins known quirk: /a/b/foo.pre-edit.md yields a shadowed BARE match edit.md', () => {
-      const r = make().provide('/a/b/foo.pre-edit.md')
+    // The lookbehind also blocks on `-`, so a hyphenated inner extension no
+    // longer yields a shadowed BARE match starting right after the hyphen.
+    it('does NOT start a BARE match after a hyphen: /a/b/foo.pre-edit.md → no link', () => {
+      expect(make().provide('/a/b/foo.pre-edit.md')).toEqual([])
+    })
+
+    it('does NOT split 核定.pdf out of docs/115潛優修正計畫-核定.pdf', () => {
+      expect(make().provide('docs/115潛優修正計畫-核定.pdf')).toEqual([])
+    })
+
+    it('does NOT split bar.md out of docs/foo-bar.md', () => {
+      expect(make().provide('docs/foo-bar.md')).toEqual([])
+    })
+
+    it('still matches a hyphen inside a bare stem: foo-bar.md', () => {
+      const r = make().provide('foo-bar.md')
       expect(r).toHaveLength(1)
-      expect(r[0].text).toBe('edit.md')
-      expect(r[0].meta).toEqual({ path: 'edit.md' })
+      expect(r[0].text).toBe('foo-bar.md')
+      expect(r[0].meta).toEqual({ path: 'foo-bar.md' })
+    })
+
+    it('still matches a hyphenated bare stem with line suffix: see foo-bar.md:12', () => {
+      const r = make().provide('see foo-bar.md:12')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('foo-bar.md:12')
+      expect(r[0].meta).toEqual({ path: 'foo-bar.md', line: 12 })
+    })
+
+    // Pinned, unchanged by the `-` lookbehind: a flag-like token `-foo.md`
+    // (hyphen preceded by a space, as in a CLI flag) is still linked as a
+    // whole, because the match *starts at* the hyphen (STEM allows `-`) and
+    // the lookbehind only inspects the character before the match.
+    it('pins: flag-like token x -foo.md still links as -foo.md', () => {
+      const r = make().provide('x -foo.md')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('-foo.md')
+      expect(r[0].meta).toEqual({ path: '-foo.md' })
     })
 
     // Full-width digits (spec §3.1): the version filter only looks at the
