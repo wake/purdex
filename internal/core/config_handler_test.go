@@ -368,6 +368,107 @@ func TestPutConfigRejectsRelativeUploadDir(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "upload_dir must be a non-empty absolute path")
 }
 
+func TestPutConfigRejectsNexObject(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"nex":{"enabled":true}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "nex is not editable via API in this version; edit config.toml and restart")
+}
+
+func TestPutConfigRejectsNexNull(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"nex":null}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "nex is not editable via API in this version; edit config.toml and restart")
+}
+
+// TestPutConfigWithFullNexSectionPersistsNexByteIdentical pins I15: a PUT
+// that does not touch nex must leave the persisted [nex] TOML block
+// byte-identical, since nex is not editable via this API at all.
+func TestPutConfigWithFullNexSectionPersistsNexByteIdentical(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.toml")
+
+	cfg := config.Config{
+		HostID: "test:abc123",
+		Bind:   "127.0.0.1",
+		Port:   7860,
+		Nex: config.NexConfig{
+			Enabled:      true,
+			RepoRoots:    []string{"/repo1", "/repo2"},
+			ServiceRoots: []string{"/svc1"},
+			ClaudeBin:    "/usr/local/bin/claude",
+			CswapBin:     "/usr/local/bin/cswap",
+			PathPrepend:  []string{"/opt/homebrew/bin"},
+			Sandbox:      config.NexSandboxConfig{MaxProfile: "handoff", DefaultProfile: "trusted"},
+			Timeouts:     config.NexTimeoutsConfig{LeaseTTL: "5m", Interrupt: "10s", Turn: "30m"},
+		},
+	}
+	require.NoError(t, config.WriteFile(cfgPath, cfg))
+
+	before, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	beforeNex := extractNexSection(t, string(before))
+
+	c := New(CoreDeps{Config: &cfg})
+	c.CfgPath = cfgPath
+
+	body := `{"upload_dir":"/tmp/custom-uploads"}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	after, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	afterNex := extractNexSection(t, string(after))
+
+	assert.Equal(t, beforeNex, afterNex, "the [nex] block must be byte-identical after an unrelated PUT")
+}
+
+// extractNexSection returns the "[nex]" TOML block (that header plus any
+// "[nex.*]" sub-tables such as "[nex.sandbox]"/"[nex.timeouts]") from a
+// config file's contents, stopping at the next section header that is not
+// under the nex namespace, or EOF.
+func extractNexSection(t *testing.T, content string) string {
+	t.Helper()
+	lines := strings.Split(content, "\n")
+	start := -1
+	end := len(lines)
+	inNex := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		isHeader := strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[")
+		if !isHeader {
+			continue
+		}
+		if trimmed == "[nex]" || strings.HasPrefix(trimmed, "[nex.") {
+			if start == -1 {
+				start = i
+			}
+			inNex = true
+			continue
+		}
+		if inNex {
+			end = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, start, "content missing [nex] section:\n%s", content)
+	return strings.Join(lines[start:end], "\n")
+}
+
 // TestPutConfigRollsBackOnWriteFailure verifies that when writeConfig fails,
 // in-memory state is restored so memory and disk stay consistent.
 func TestPutConfigRollsBackOnWriteFailure(t *testing.T) {
