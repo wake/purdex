@@ -888,7 +888,10 @@ func TestRunMsgName_NotReadyRendersSkipped(t *testing.T) {
 	cfgPath := writeTestConfig(t, srv.URL, "t")
 
 	var out, errb bytes.Buffer
-	runMsgCmd([]string{"name", "x1", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	code := runMsgCmd([]string{"name", "x1", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
 	if errb.String() != "pdx msg: not_ready: registry has unreadable files\n  /r/4242.json\n" {
 		t.Errorf("stderr %q", errb.String())
 	}

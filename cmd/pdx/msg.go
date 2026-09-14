@@ -633,6 +633,51 @@ func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
 	}
 }
 
+// doSelfRequest issues one request on the /api/peers/self* routes and
+// handles everything `name` and `whoami` share after that: config.Load and
+// the base URL, doPeersRequest and its transport-error reporting, the
+// --json passthrough, decoding a non-200 into ipeers.APIError and
+// rendering it, and decoding a 200 into rec. done is true whenever the
+// caller should return exit immediately without printing anything more
+// (a --json passthrough, an error of any kind); done is false only on a
+// decoded 200, when rec is populated and the caller still owes its own
+// success-line output (`named:`/`released:` for `name`, nothing for
+// `whoami`) before printing the shared renderSelfRecord block.
+func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, stderr io.Writer) (rec ipeers.PeerRecord, exit int, done bool) {
+	cfg, err := config.Load(inv.cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
+		return ipeers.PeerRecord{}, 1, true
+	}
+
+	base := fmt.Sprintf("http://%s:%d", cfg.Bind, cfg.Port)
+	result, err := doPeersRequest(method, base+path, body, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return ipeers.PeerRecord{}, reportMsgTransportErr(err, stderr), true
+	}
+
+	if inv.jsonOutput {
+		return ipeers.PeerRecord{}, writeMsgJSONPassthrough(result, stdout), true
+	}
+
+	if result.status != http.StatusOK {
+		ae, ok := decodeMsgAPIError(result.body)
+		if !ok {
+			fmt.Fprintln(stderr, "pdx msg: invalid response")
+			return ipeers.PeerRecord{}, 1, true
+		}
+		renderMsgAPIError(ae, "", "", stderr)
+		return ipeers.PeerRecord{}, 1, true
+	}
+
+	if err := json.Unmarshal(result.body, &rec); err != nil {
+		fmt.Fprintln(stderr, "pdx msg: invalid response")
+		return ipeers.PeerRecord{}, 1, true
+	}
+
+	return rec, 0, false
+}
+
 // runMsgName implements `pdx msg name <label> | --release [--json]
 // [--config <path>]`: PUT /api/peers/self/label to claim inv.label, or
 // DELETE /api/peers/self/label (inv.release) to release the caller's
@@ -643,14 +688,9 @@ func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		return 1
 	}
 
-	cfg, err := config.Load(inv.cfgPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
-		return 1
-	}
-
 	var method string
 	var reqBody []byte
+	var err error
 	if inv.release {
 		method = http.MethodDelete
 		reqBody, err = json.Marshal(ipeers.SelfRequest{OriginInbox: originInbox})
@@ -663,30 +703,9 @@ func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		return 1
 	}
 
-	base := fmt.Sprintf("http://%s:%d", cfg.Bind, cfg.Port)
-	result, err := doPeersRequest(method, base+"/api/peers/self/label", reqBody, cfg.Token, peersRequestTimeout)
-	if err != nil {
-		return reportMsgTransportErr(err, stderr)
-	}
-
-	if inv.jsonOutput {
-		return writeMsgJSONPassthrough(result, stdout)
-	}
-
-	if result.status != http.StatusOK {
-		ae, ok := decodeMsgAPIError(result.body)
-		if !ok {
-			fmt.Fprintln(stderr, "pdx msg: invalid response")
-			return 1
-		}
-		renderMsgAPIError(ae, "", "", stderr)
-		return 1
-	}
-
-	var rec ipeers.PeerRecord
-	if err := json.Unmarshal(result.body, &rec); err != nil {
-		fmt.Fprintln(stderr, "pdx msg: invalid response")
-		return 1
+	rec, exit, done := doSelfRequest(method, "/api/peers/self/label", reqBody, inv, stdout, stderr)
+	if done {
+		return exit
 	}
 
 	if inv.release {
@@ -706,42 +725,15 @@ func runMsgWhoami(inv msgInvocation, getenv func(string) string, stdout, stderr 
 		return 1
 	}
 
-	cfg, err := config.Load(inv.cfgPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
-		return 1
-	}
-
 	reqBody, err := json.Marshal(ipeers.SelfRequest{OriginInbox: originInbox})
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
 		return 1
 	}
 
-	base := fmt.Sprintf("http://%s:%d", cfg.Bind, cfg.Port)
-	result, err := doPeersRequest(http.MethodPost, base+"/api/peers/self", reqBody, cfg.Token, peersRequestTimeout)
-	if err != nil {
-		return reportMsgTransportErr(err, stderr)
-	}
-
-	if inv.jsonOutput {
-		return writeMsgJSONPassthrough(result, stdout)
-	}
-
-	if result.status != http.StatusOK {
-		ae, ok := decodeMsgAPIError(result.body)
-		if !ok {
-			fmt.Fprintln(stderr, "pdx msg: invalid response")
-			return 1
-		}
-		renderMsgAPIError(ae, "", "", stderr)
-		return 1
-	}
-
-	var rec ipeers.PeerRecord
-	if err := json.Unmarshal(result.body, &rec); err != nil {
-		fmt.Fprintln(stderr, "pdx msg: invalid response")
-		return 1
+	rec, exit, done := doSelfRequest(http.MethodPost, "/api/peers/self", reqBody, inv, stdout, stderr)
+	if done {
+		return exit
 	}
 
 	renderSelfRecord(rec, stdout)
