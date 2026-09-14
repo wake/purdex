@@ -19,6 +19,10 @@ interface Props {
   hostId: string
 }
 
+// Shared fallback so the selector returns a stable reference when the host has
+// no sessions entry yet — a fresh `[]` per call makes useSyncExternalStore loop.
+const EMPTY_SESSIONS: Session[] = []
+
 /* ─── New Session Dialog ─── */
 
 function NewSessionDialog({ hostId, onClose }: { hostId: string; onClose: () => void }) {
@@ -134,7 +138,7 @@ function InlineRename({ hostId, session, onDone }: { hostId: string; session: Se
 
 export function SessionsSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
-  const sessions = useSessionStore((s) => s.sessions[hostId] ?? [])
+  const sessions = useSessionStore((s) => s.sessions[hostId] ?? EMPTY_SESSIONS)
   const runtime = useHostStore((s) => s.runtime[hostId])
   const isOffline = !runtime || runtime.status !== 'connected' || runtime.tmuxState === 'unavailable'
   const [showNew, setShowNew] = useState(false)
