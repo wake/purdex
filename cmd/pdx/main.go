@@ -25,6 +25,7 @@ import (
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	"github.com/wake/purdex/internal/module/logs"
 	"github.com/wake/purdex/internal/module/monitor"
+	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/module/stream"
@@ -262,6 +263,16 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(dispatch.New())
 	c.AddModule(monitor.New())
 	c.AddModule(codexbroker.New())
+
+	c.CfgMu.RLock()
+	nexEnabled := c.Cfg.Nex.Enabled
+	c.CfgMu.RUnlock()
+	if nexEnabled {
+		c.AddModule(nex.New())
+	} else {
+		log.Printf("nex: disabled")
+	}
+
 	return nil
 }
 

@@ -158,3 +158,19 @@ func TestCloseModulesNone(t *testing.T) {
 	// No modules implement Closer, so no calls are made; tracker.calls remains nil
 	assert.Nil(t, tracker.calls)
 }
+
+func TestMountedTrueAfterAddModule(t *testing.T) {
+	tracker := &orderTracker{}
+	c := New(CoreDeps{})
+	c.AddModule(&fakeModule{name: "nex", tracker: tracker})
+
+	assert.True(t, c.Mounted("nex"))
+}
+
+func TestMountedFalseWhenNotAdded(t *testing.T) {
+	tracker := &orderTracker{}
+	c := New(CoreDeps{})
+	c.AddModule(&fakeModule{name: "session", tracker: tracker})
+
+	assert.False(t, c.Mounted("nex"))
+}

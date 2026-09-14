@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -136,4 +137,76 @@ func TestInfoEndpoint(t *testing.T) {
 	assert.Contains(t, body, "tmux_version")
 	assert.NotEmpty(t, body["os"])
 	assert.NotEmpty(t, body["arch"])
+}
+
+// stubModule is a minimal core.Module used to simulate the nex module
+// being mounted, without pulling in the real internal/module/nex package
+// (which would create an import cycle: nex depends on core).
+type stubModule struct{ name string }
+
+func (m *stubModule) Name() string                  { return m.name }
+func (m *stubModule) Dependencies() []string        { return nil }
+func (m *stubModule) Init(*Core) error              { return nil }
+func (m *stubModule) RegisterRoutes(*http.ServeMux) {}
+func (m *stubModule) Start(context.Context) error   { return nil }
+func (m *stubModule) Stop(context.Context) error    { return nil }
+
+func TestInfoEndpoint_NexConfiguredAndMounted(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
+	c.AddModule(&stubModule{name: "nex"})
+
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/info", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+
+	nex, ok := body["nex"].(map[string]any)
+	require.True(t, ok, "nex field should be an object, got %v (%T)", body["nex"], body["nex"])
+	assert.Equal(t, true, nex["configured"])
+	assert.Equal(t, true, nex["mounted"])
+}
+
+func TestInfoEndpoint_NexConfiguredButNotMounted(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
+	// No modules added: registerServeModules would have failed to mount it,
+	// or startup hasn't reached that point yet.
+
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/info", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+
+	nex, ok := body["nex"].(map[string]any)
+	require.True(t, ok, "nex field should be an object, got %v (%T)", body["nex"], body["nex"])
+	assert.Equal(t, true, nex["configured"])
+	assert.Equal(t, false, nex["mounted"])
+}
+
+func TestInfoEndpoint_NexNotConfiguredAndNotMounted(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: false}}})
+
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/info", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+
+	nex, ok := body["nex"].(map[string]any)
+	require.True(t, ok, "nex field should be an object, got %v (%T)", body["nex"], body["nex"])
+	assert.Equal(t, false, nex["configured"])
+	assert.Equal(t, false, nex["mounted"])
 }

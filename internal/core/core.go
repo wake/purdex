@@ -79,6 +79,17 @@ func (c *Core) AddModule(m Module) {
 	c.modules = append(c.modules, m)
 }
 
+// Mounted reports whether a module with the given Name() was added via
+// AddModule, regardless of Init/Start order.
+func (c *Core) Mounted(name string) bool {
+	for _, m := range c.modules {
+		if m.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
 // InitModules sorts modules by dependency order, then calls Init on each.
 func (c *Core) InitModules() error {
 	sorted, err := topoSort(c.modules)
