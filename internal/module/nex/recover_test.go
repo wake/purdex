@@ -86,6 +86,45 @@ func TestRecoverer_PanicBeforeWrite_Returns500AndLogsThenServerStillWorks(t *tes
 	}
 }
 
+func TestRecoverer_LogfPanics_StillReturns500AndServerKeepsServing(t *testing.T) {
+	logf := func(format string, args ...any) {
+		panic("logf itself blew up")
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/panic", func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	})
+	mux.HandleFunc("/healthy", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(recoverer(logf, mux))
+	var serverErrLog syncBuf
+	srv.Config.ErrorLog = log.New(&serverErrLog, "", 0)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/panic", "text/plain", nil)
+	if err != nil {
+		t.Fatalf("POST /panic: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d (a panicking logf must not prevent the 500)", resp.StatusCode, http.StatusInternalServerError)
+	}
+
+	// The server must keep serving other requests even after logf panicked.
+	resp2, err := http.Get(srv.URL + "/healthy")
+	if err != nil {
+		t.Fatalf("GET /healthy after logf panic: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("status after recovery = %d, want %d", resp2.StatusCode, http.StatusOK)
+	}
+}
+
 func TestRecoverer_FlushThenPanic_ClientSeesFlushedLineThenEOF(t *testing.T) {
 	var logBuf syncBuf
 	logf := func(format string, args ...any) {
