@@ -107,14 +107,18 @@ func TestValidateUserLabel(t *testing.T) {
 	}
 }
 
-// Golden vectors: computed once by hand from the definition (FNV-1a 64,
-// mod 36^6, base36, 6 chars, zero-padded) and frozen here. Any change to
-// the derivation is a wire change and must update these on purpose.
+// Golden vectors: FIXED outputs computed once from the definition (FNV-1a
+// 64 over the UTF-8 bytes, mod 36^6, base36 0-9a-z, 6 digits, left-padded
+// with '0') with an independent implementation, and frozen here. Any
+// change to the derivation is a wire change and must update these on
+// purpose. "pad-39" is a vector whose value is < 36^5, so its rendering
+// starts with '0' — that is the padding path.
 func TestDefaultLabel_Golden(t *testing.T) {
 	cases := map[string]string{
-		"":                                     "_" + encGolden(""),
-		"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c": "_" + encGolden("fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c"),
-		"96c7a06c-4006-4a12-b163-de7fc00e1af0": "_" + encGolden("96c7a06c-4006-4a12-b163-de7fc00e1af0"),
+		"":                                     "_j4ux45",
+		"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c": "_you08b",
+		"96c7a06c-4006-4a12-b163-de7fc00e1af0": "_v0h7yo",
+		"pad-39":                               "_0hkg69",
 	}
 	for in, want := range cases {
 		got := DefaultLabel(in)
@@ -124,39 +128,9 @@ func TestDefaultLabel_Golden(t *testing.T) {
 		if len(got) != 7 || got[0] != '_' || !IsDefaultLabel(got) {
 			t.Errorf("DefaultLabel(%q) = %q: not 7 chars / not default form", in, got)
 		}
-		if got != DefaultLabel(in) {
-			t.Errorf("DefaultLabel(%q) not deterministic", in)
-		}
 	}
-}
-
-// encGolden is the reference implementation written independently of
-// label.go, so the test does not simply restate the code under test.
-func encGolden(s string) string {
-	const prime, offset = 1099511628211, 14695981039346656037
-	var h uint64 = offset
-	for i := 0; i < len(s); i++ {
-		h ^= uint64(s[i])
-		h *= prime
-	}
-	n := h % (36 * 36 * 36 * 36 * 36 * 36)
-	const digits = "0123456789abcdefghijklmnopqrstuvwxyz"
-	out := make([]byte, 6)
-	for i := 5; i >= 0; i-- {
-		out[i] = digits[n%36]
-		n /= 36
-	}
-	return string(out)
-}
-
-func TestDefaultLabel_PaddingCase(t *testing.T) {
-	// Find (by search) an input whose value mod 36^6 is < 36^5 so the
-	// padding path is exercised; assert the length is still 7.
-	for i := 0; i < 100000; i++ {
-		s := "pad-" + strings.Repeat("x", i%7) + string(rune('a'+i%26))
-		if got := DefaultLabel(s); len(got) != 7 {
-			t.Fatalf("DefaultLabel(%q) = %q, len %d", s, got, len(got))
-		}
+	if DefaultLabel("pad-39")[1] != '0' {
+		t.Error("padding vector does not start with '0' — padding path not exercised")
 	}
 }
 
@@ -364,20 +338,20 @@ git commit -m "feat(peers): label primitives — user label rule, default label,
 func TestReadRegistryDiag_Classes(t *testing.T) {
 	dir := t.TempDir()
 	// live
-	writeRegistry(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
+	writeFixture(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
 	// confirmed dead: pid not alive
-	writeRegistry(t, dir, "200.json", validRegistryJSON(200, "/tmp/200.sock"))
+	writeFixture(t, dir, "200.json", validRegistryJSON(200, "/tmp/200.sock"))
 	// confirmed dead: socket ENOENT
-	writeRegistry(t, dir, "300.json", validRegistryJSON(300, "/tmp/missing.sock"))
+	writeFixture(t, dir, "300.json", validRegistryJSON(300, "/tmp/missing.sock"))
 	// unknown: undecodable, pid (from filename) alive
-	writeRegistry(t, dir, "400.json", "{")
+	writeFixture(t, dir, "400.json", "{")
 	// unknown: undecodable, pid dead ⇒ not blocking
-	writeRegistry(t, dir, "500.json", "{")
+	writeFixture(t, dir, "500.json", "{")
 	// unknown: pid mismatch (file says 601, name says 600), 600 alive
-	writeRegistry(t, dir, "600.json", validRegistryJSON(601, "/tmp/600.sock"))
+	writeFixture(t, dir, "600.json", validRegistryJSON(601, "/tmp/600.sock"))
 	// not a candidate
-	writeRegistry(t, dir, ".700.json.tmp", "{")
-	writeRegistry(t, dir, "800.deadbeef.key", "{}")
+	writeFixture(t, dir, ".700.json.tmp", "{")
+	writeFixture(t, dir, "800.deadbeef.key", "{}")
 
 	live := allTrueLiveness(wantProcStart)
 	live.PidAlive = func(pid int) bool { return pid != 200 && pid != 500 }
@@ -416,7 +390,7 @@ func TestReadRegistryDiag_Classes(t *testing.T) {
 
 func TestReadRegistryDiag_StatNonENOENTIsUnknown(t *testing.T) {
 	dir := t.TempDir()
-	writeRegistry(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
+	writeFixture(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
 	live := allTrueLiveness(wantProcStart)
 	live.Stat = func(string) error { return errors.New("EACCES") }
 	_, diag, _ := ReadRegistryDiag(dir, live)
@@ -427,7 +401,7 @@ func TestReadRegistryDiag_StatNonENOENTIsUnknown(t *testing.T) {
 
 func TestReadRegistryDiag_StartMismatchIsDead_StartErrorIsUnknown(t *testing.T) {
 	dir := t.TempDir()
-	writeRegistry(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
+	writeFixture(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
 	off := allTrueLiveness(wantProcStart.Add(time.Minute))
 	_, diag, _ := ReadRegistryDiag(dir, off)
 	if diag.Dead != 1 || len(diag.Unknown) != 0 {
@@ -442,15 +416,35 @@ func TestReadRegistryDiag_StartMismatchIsDead_StartErrorIsUnknown(t *testing.T) 
 	}
 }
 
-func TestDefaultLiveness_PidAliveEPERM(t *testing.T) {
-	// pid 1 exists and is not ours: kill(1,0) ⇒ EPERM ⇒ alive.
-	if !DefaultLiveness().PidAlive(1) {
-		t.Fatal("pid 1 reported dead; EPERM must count as alive")
+func TestDefaultLiveness_PidAlive_Probe(t *testing.T) {
+	// killProbe is the package-level seam DefaultLiveness uses (injected
+	// here so the test is deterministic on any host and fails before the
+	// change: the old code returned err == nil only).
+	orig := killProbe
+	t.Cleanup(func() { killProbe = orig })
+	cases := map[error]bool{nil: true, syscall.EPERM: true, syscall.ESRCH: false}
+	for probeErr, want := range cases {
+		killProbe = func(int, syscall.Signal) error { return probeErr }
+		if got := DefaultLiveness().PidAlive(4242); got != want {
+			t.Errorf("probe %v ⇒ alive %v, want %v", probeErr, got, want)
+		}
+	}
+}
+
+func TestReadRegistryDiag_PidOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "99999999999999999999.json", "{}") // overflows int
+	writeFixture(t, dir, "4294967296.json", "{}")           // > MaxRegistryPID
+	_, diag, _ := ReadRegistryDiag(dir, allTrueLiveness(wantProcStart))
+	if len(diag.Unknown) != 2 || diag.Unknown[0].Alive || diag.Unknown[1].Alive {
+		t.Fatalf("diag = %+v, want two non-alive unknowns", diag)
 	}
 }
 ```
 
-(If `validRegistryJSON` does not exist under that name, use whatever helper `registry_test.go` already has to build a well-formed file with a given pid/inbox and `wantProcStart`; add a small helper if none fits.)
+`MaxRegistryPID = 1<<31 - 1` is a new exported constant in `registry.go`; a filename pid above it (or that fails `Atoi`) is *unknown, not alive* — never probed.
+
+(`writeFixture` is the file helper `registry_test.go` already has. `validRegistryJSON(pid, inbox)` does not exist yet: add it to `registry_test.go` as a small helper that renders a well-formed registry JSON with that pid, `sessionId: "sid-<pid>"`, `procStart` = `wantProcStart` in `ProcStartLayout`, and `messagingSocketPath: inbox`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -523,8 +517,8 @@ func ReadRegistryDiag(dir string, live Liveness) (entries []Entry, diag Diagnosi
 		}
 		path := filepath.Join(dir, name)
 		expectedPID, atoiErr := strconv.Atoi(m[1])
-		if atoiErr != nil || expectedPID <= 0 {
-			diag.unknown(path, 0, false, "pid out of range")
+		if atoiErr != nil || expectedPID <= 0 || expectedPID > MaxRegistryPID {
+			diag.unknown(path, 0, false, "pid out of range") // never probed: not alive
 			continue
 		}
 		unknown := func(reason string) { diag.unknown(path, expectedPID, live.PidAlive(expectedPID), reason) }
@@ -591,12 +585,19 @@ func ReadRegistryDiag(dir string, live Liveness) (entries []Entry, diag Diagnosi
 }
 ```
 
-Also change `DefaultLiveness().PidAlive` to:
+Also change `DefaultLiveness().PidAlive` to go through an injectable probe:
 
 ```go
+// MaxRegistryPID bounds a filename pid before it is probed (spec §3.3).
+const MaxRegistryPID = 1<<31 - 1
+
+// killProbe is kill(2); a package-level seam so the EPERM rule is testable.
+var killProbe = syscall.Kill
+
+// in DefaultLiveness:
 PidAlive: func(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
+	err := killProbe(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM) // EPERM: exists, not ours
 },
 ```
 
@@ -899,7 +900,9 @@ git commit -m "feat(store): peer_labels + peer_label_seq — claim/release with 
   Labels map[string]LabelInfo // by sessionId; absent ⇒ default label, rev 0
   ```
 - Address rules (spec §3.4): cc rows ⇒ `<alias>/<label>:<suffix>`; session rows without a cc agent ⇒ `<alias>/tmux:<session_name>`; proxy rows ⇒ `<alias>/cc:<registry name>` (unchanged, unresolvable by design).
+- **Suffix source (plan delta to spec §3.1/§3.4, recorded in the PR):** the suffix is always derived from the **entry's own registry `tmux` field** — `Suffix(e.TmuxSessionName(), e.Name)` — for session rows and entry rows alike, so a self record built from an entry (Task 7) renders the same address the listing shows. A session row whose agent is only the owner fallback (no entry) uses `Suffix(s.Name, "")`.
 - Entry rows: **every** live non-proxy entry not consumed by a session row gets a row of `RowKind: "entry"` — whether or not its tmux session is listed (this replaces rule 5's `sessionNames` exclusion). Sorted by peer name then pid, after the session rows.
+- Also produces `func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo) PeerRecord` — the one function that builds an entry row; `Build` calls it and Task 7 calls it for self/holder responses.
 
 - [ ] **Step 1: Write the failing tests** (add to `record_test.go`)
 
@@ -961,6 +964,25 @@ func TestBuild_EntryRow_NonOwnerEntryInsideListedSession(t *testing.T) {
 	}
 	if recs[1].RowKind != "entry" || recs[1].Agent.PID != 11 || recs[1].SessionName != "" || !recs[1].Deliverable {
 		t.Errorf("entry row = %+v", recs[1])
+	}
+	// The suffix comes from the entry's own tmux field, so an entry row
+	// inside tmux reads like its session row would.
+	if recs[1].Suffix != "mt0-n9" || recs[1].Address != "a/"+DefaultLabel("sid-9")+":mt0-n9" {
+		t.Errorf("entry row suffix/address = %q %q", recs[1].Suffix, recs[1].Address)
+	}
+}
+
+func TestEntryRecord_MatchesBuild(t *testing.T) {
+	e := Entry{PID: 11, SessionID: "sid-9", Name: "n9", Tmux: "mt0:@1.%2", Inbox: "/s/11", Cwd: "/w"}
+	info := LabelInfo{Label: "purdex-tester", Rev: 3}
+	one := EntryRecord("a", "h:1", e, false, info)
+	all := Build(BuildInput{HostID: "h:1", Alias: "a", Entries: []Entry{e}, Labels: map[string]LabelInfo{"sid-9": info}})
+	if len(all) != 1 || !reflect.DeepEqual(all[0], one) {
+		t.Errorf("EntryRecord ≠ Build row:\n%+v\n%+v", one, all)
+	}
+	p := EntryRecord("a", "h:1", e, true, info)
+	if p.Agent.Type != "proxy" || p.Deliverable || p.Reason != "proxy" || p.Address != "a/cc:n9" || p.Label != "" {
+		t.Errorf("proxy entry record = %+v", p)
 	}
 }
 
@@ -1030,8 +1052,7 @@ type LabelInfo struct {
 
 // applyLabel fills Label/LabelSource/LabelRev/Suffix/Address for a row
 // whose agent is a cc conversation sid (session rows and entry rows).
-func applyLabel(rec *PeerRecord, in BuildInput, sid, tmuxName, ccName string) {
-	info := in.Labels[sid]
+func applyLabel(rec *PeerRecord, alias string, info LabelInfo, sid, tmuxName, ccName string) {
 	if info.Label != "" {
 		rec.Label, rec.LabelSource = info.Label, LabelSourceUser
 	} else {
@@ -1039,18 +1060,52 @@ func applyLabel(rec *PeerRecord, in BuildInput, sid, tmuxName, ccName string) {
 	}
 	rec.LabelRev = info.Rev
 	rec.Suffix = Suffix(tmuxName, ccName)
-	rec.Address = in.Alias + "/" + rec.Label + ":" + rec.Suffix
+	rec.Address = alias + "/" + rec.Label + ":" + rec.Suffix
 }
 ```
 
-In `buildSessionRecord`: initial `Address: in.Alias + "/tmux:" + s.Name`, `RowKind: "session"`. In every branch that sets a cc agent (`ownerFallbackAgent` for inbox_dead/ambiguous, and the deliverable branches) call `applyLabel(&rec, in, owner.SessionID, s.Name, ccName)` where `ccName` is the chosen entry's `Name` or `""` for the fallback (so the fallback row's suffix is `san(mt0)-_`). `not_cc` / `no_agent` / unresolved rows keep the `tmux:` address and empty label fields.
+In `buildSessionRecord`: initial `Address: in.Alias + "/tmux:" + s.Name`, `RowKind: "session"`. In every branch that sets a cc agent call `applyLabel`: for the deliverable branches `applyLabel(&rec, in, owner.SessionID, entry.TmuxSessionName(), entry.Name)` with the chosen entry; for the `ownerFallbackAgent` branches (inbox_dead/ambiguous, no entry) `applyLabel(&rec, in, owner.SessionID, s.Name, "")` (suffix `san(mt0)-_`). `not_cc` / `no_agent` / unresolved rows keep the `tmux:` address and empty label fields.
 
-Replace `buildOutsideRecords` with `buildEntryRecords`: drop the `sessionNames` skip; for each non-consumed entry: `RowKind: "entry"`, proxy ⇒ `Address: alias + "/cc:" + e.Name` and the existing proxy fields; else `applyLabel(&rec, in, e.SessionID, "", e.Name)` — note the suffix for an entry row is `san(ccName)` only, even when the entry is inside tmux (spec §3.4 "shaped like an outside row"). Keep the sort. Remove the now-unused `sessionNames` map from `Build`.
+Replace `buildOutsideRecords` with `buildEntryRecords`: drop the `sessionNames` skip; for each non-consumed entry append `EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Labels[e.SessionID])`. Keep the sort. Remove the now-unused `sessionNames` map from `Build`.
 
-- [ ] **Step 4: Run tests**
+```go
+// EntryRecord is the row of one live registry entry that no session row
+// consumed (Peer Address v2 spec §3.4). Task 7 also uses it to answer
+// whoami/claim/release straight from the validated entry and label row,
+// so the address it renders must be identical to the listing's.
+func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo) PeerRecord {
+	agent := agentInfoFromEntry(e)
+	rec := PeerRecord{
+		Host: alias, HostID: hostID, RowKind: "entry",
+		Cwd: e.Cwd, Agent: agent, Deliverable: true,
+	}
+	if proxy {
+		agent.Type, agent.Status = "proxy", "proxy"
+		rec.Address = alias + "/cc:" + e.Name
+		rec.Deliverable, rec.Reason = false, "proxy"
+		return rec
+	}
+	applyLabel(&rec, alias, info, e.SessionID, e.TmuxSessionName(), e.Name)
+	return rec
+}
+```
+
+(`applyLabel` therefore takes `(rec *PeerRecord, alias string, info LabelInfo, sid, tmuxName, ccName string)`; `buildSessionRecord` passes `in.Alias, in.Labels[owner.SessionID]`.)
+
+- [ ] **Step 4: Run the peers package, then migrate the module tests this change breaks**
 
 Run: `go test -race -count=1 ./internal/peers/...`
-Expected: PASS after the expectation updates listed in Step 1.
+Expected: PASS after the expectation updates listed in Step 1. Also in `record_test.go`: line ~48 expects the shell session's address `alias/<name>` — now `alias/tmux:<name>`; line ~553 (`TestBuild_TwoSessionsSameOwnerSessionID_EntryConsumedOnce`) resolves `"cc:purdex-1"` — that form is retired in Task 6; change the assertion to find the winning session row directly (`RowKind == "session" && Deliverable && Agent.PID == 100`, no `Resolve` call), and note the ambiguous second session row now carries the same default label as the winner.
+
+Then run `go test -race -count=1 ./internal/module/peers/...` and migrate the tests whose premise was "a live entry has no row while its owner lookup is unresolved" — with entry rows the entry IS found, which is the intended v2 behaviour:
+- `send_test.go` ~764, case `"origin in a partial inventory is not_ready"`: the origin now resolves through its entry row; change the expectation to the send proceeding to the remote fetch (mirror the table's happy-path case). The not_ready guard returns as a new case in Task 5 (unknown registry file).
+- `deliver_test.go` `TestDeliver_PartialInventoryIsNotReady`: subtests "owner lookup fails ⇒ not_ready" and the one after it now deliver (`200 delivered`); keep the subtest where the tuple is genuinely missing from a complete inventory (`target_gone`).
+- `reply_test.go` `TestReply_PartialInventoryIsNotReady`: the replier resolves through its entry row ⇒ the reply is forwarded.
+- `e2e_test.go` `TestE2E_PartialOriginInventoryKeepsHelper`: same premise; re-express it with an unknown registry file (an undecodable `<alive pid>.json` in `regDir`) so the inventory is partial for the v2 reason and the helper is kept.
+- Any `"/cc:"` address expectation in `internal/module/peers/*_test.go` and `cmd/pdx/*_test.go` for a non-proxy row becomes `alias/<DefaultLabel(sid)>:<Suffix(tmux, name)>`.
+
+Run: `go test -race -count=1 ./internal/peers/... ./internal/module/peers/... ./cmd/pdx/...`
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -1145,9 +1200,39 @@ func (failingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
 func (failingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
 	return store.PeerLabel{}, false, errors.New("boom")
 }
+
+// writeFailingLabels reads fine but cannot write (Task 7 uses it for the
+// claim/release write-failure rows of the matrix).
+type writeFailingLabels struct{ real *store.PeerLabelStore }
+
+func (w writeFailingLabels) Snapshot() ([]store.PeerLabel, error) { return w.real.Snapshot() }
+func (writeFailingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+	return store.PeerLabel{}, errors.New("disk full")
+}
+func (writeFailingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+	return store.PeerLabel{}, false, errors.New("disk full")
+}
+
+// Registry unknowns must never become a verdict on a tuple: a target
+// whose own registry file is unreadable, while its conversation still has
+// a fallback row (owner resolution names it), is not target_gone.
+func TestDeliver_UnknownRegistryFileIsNotReady(t *testing.T) {
+	e := newDeliverEnv(t, inTmux) // the env deliver_test.go already uses: one tmux session owned by cc targetSID
+	writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
+	// Now corrupt the target's OWN file: its pid is alive (fake liveness) ⇒ an alive unknown.
+	writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", "{")
+	status, body := e.deliver(e.validRequest()) // the env's helper for a well-formed request to targetPID
+	e.assertAPIError(status, body, 503, ipeers.ErrNotReady)
+	// The audit row says not_ready / "inventory partial", exactly like the owner-unresolved case.
+}
+
+func TestReply_UnknownRegistryFileIsNotReady(t *testing.T) {
+	// Same shape on the reply path (model on TestReply_PartialInventoryIsNotReady):
+	// the replier's own file is garbage ⇒ audited not_ready, helper kept.
+}
 ```
 
-(Adapt the fixture setup to the file's existing conventions — read `module_test.go` first; the fake liveness must report pid 4242 alive for the second test, so pick a liveness fake whose `PidAlive` is all-true, which `allLiveLiveness` already is.)
+(Adapt the fixture setup to the file's existing conventions — read `module_test.go`, `deliver_test.go` (`newDeliverEnv`, `envOpts`, `inTmux`) and `reply_test.go` (`newReplyEnv`) first; the fake liveness must report pid 4242 alive for the second test, so pick a liveness fake whose `PidAlive` is all-true, which `allLiveLiveness` already is.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1219,13 +1304,14 @@ func (m *Module) labelSnapshot() (map[string]ipeers.LabelInfo, error) {
 ```
 
 - `writeError` envelopes and every `HostResult` literal get `UnknownRegistryFiles: []string{}`; `allEnvelope` local row and `fetchHostResult` success row copy `DaemonVersion` and `UnknownRegistryFiles` from the env (bound the remote list: keep at most 32 paths, each through `boundRemoteText`).
-- `cmd/pdx/main.go`: `var labels peersmod.LabelStore; if meta != nil { labels = meta.PeerLabels() }; c.AddModule(peersmod.New(audit, labels))`.
-- Fixture: `moduleFixture` gains `labels *store.PeerLabelStore` set from the same in-memory meta (`meta.PeerLabels()`), passed to `New`. Add `logSink.contains(substr string) bool` if it does not exist.
+- `cmd/pdx/main.go:263`: `var labels peersmod.LabelStore; if meta != nil { labels = meta.PeerLabels() }; c.AddModule(peersmod.New(audit, labels))`.
+- Fixture: `newTestModuleWith` builds the `Module` with a **struct literal** (`module_test.go:187`), not `New` — add `labels: f.labels` to that literal, where `moduleFixture` gains `labels *store.PeerLabelStore` = `meta.PeerLabels()` from the same in-memory meta the audit fake uses. The two `New(nil)` calls at `module_test.go:1501` and `:1518` become `New(nil, nil)`. Add `logSink.contains(substr string) bool` if it does not exist.
+- `deliver.go` step 7 and `reply.go` step 3: an inventory with `len(env.UnknownRegistryFiles) > 0` is treated as partial **even when a candidate row exists** — `findTarget` returning a detail ⇒ `503 not_ready` (`detailInventoryPartial`), never `target_gone` (which would reap the sender's helper); `findReplier` likewise ⇒ audited `not_ready`, helper kept. A label-store failure alone (partial without unknown files) does not change these paths — it hides no entries. Concretely, in `deliver.go`: `if !candidate && env.Partial || len(env.UnknownRegistryFiles) > 0 { refuse(503, not_ready, detailInventoryPartial) }`; mirror in `reply.go`. Update both step comments.
 
 - [ ] **Step 4: Run tests**
 
 Run: `go test -race -count=1 ./internal/module/peers/... ./cmd/pdx/... && go vet ./...`
-Expected: PASS. Existing module tests that asserted an outside row's address `alias/cc:<name>` must be updated to `alias/<DefaultLabel(sid)>:<san(name)>` (grep `"/cc:"` in `internal/module/peers/*_test.go` and `cmd/pdx/*_test.go`).
+Expected: PASS (the `/cc:` address migrations were done in Task 4).
 
 - [ ] **Step 5: Commit**
 
@@ -1254,7 +1340,7 @@ git commit -m "feat(peers): inventory joins labels, registry unknowns mark parti
 - [ ] **Step 1: Write the failing tests** — replace the tier tests in `address_test.go`:
 
 ```go
-func labelRecord(label, source, sessionName, pid int) PeerRecord {
+func labelRecord(label, source, sessionName string, pid int) PeerRecord {
 	return PeerRecord{SessionName: sessionName, Label: label, LabelSource: source,
 		Agent: &AgentInfo{Type: "cc", PID: pid}, Deliverable: true}
 }
@@ -1390,7 +1476,9 @@ func Resolve(records []PeerRecord, session string, partial bool) (PeerRecord, er
 		case errors.As(err, &amb):
 			… unchanged …
 		case errors.Is(err, ipeers.ErrResolveNotReady):
-			refuseUnaudited(http.StatusServiceUnavailable, ipeers.ErrNotReady, fmt.Sprintf("peer inventory on %q is partial; retry, or address the tmux session as tmux:<name>", entry.Alias))
+			detail := fmt.Sprintf("peer inventory on %q is partial; retry, or address the tmux session as tmux:<name>", entry.Alias)
+			m.logf("peers: send refused (%s): %s", ipeers.ErrNotReady, detail)
+			writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: detail, Partial: true}) // refuseUnaudited cannot set Partial
 		case errors.Is(err, ipeers.ErrLegacyCC):
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, err.Error())
 		default:
@@ -1400,7 +1488,7 @@ func Resolve(records []PeerRecord, session string, partial bool) (PeerRecord, er
 	}
 ```
 
-Also update `msgUsage` in `cmd/pdx/msg.go` to `<host>/<label>[:<suffix>] | <host>/tmux:<name>` (text only; the `name`/`whoami` verbs come in Task 8). Add a send test: a fake fetch returning `Partial: true` with no matching label ⇒ `503 not_ready`; and `To: "b/cc:foo"` ⇒ `404 peer_not_found` with the legacy hint in `detail`.
+`ipeers.APIError` gains `Partial bool `json:"partial,omitempty"`` in this task (Task 7 adds the other fields). Also update `msgUsage` in `cmd/pdx/msg.go` to `<host>/<label>[:<suffix>] | <host>/tmux:<name>` (text only; the `name`/`whoami` verbs come in Task 8). Add send tests (in `send_test.go`, same table/fixture as the existing resolution cases): a fake fetch returning `Partial: true` with no matching label ⇒ `503`, body `{"error":"not_ready","partial":true,…}` (decode the JSON and assert `Partial`); `To: "b/cc:foo"` ⇒ `404 peer_not_found` with the legacy hint in `detail`; `To: "b/tmux:foo"` ⇒ resolves the tmux row.
 
 - [ ] **Step 4: Run tests**
 
@@ -1419,7 +1507,7 @@ git commit -m "feat(peers): Resolve v2 — label tier, tmux: form, partial ⇒ n
 ### Task 7: Self routes — whoami, claim, release
 
 **Files:**
-- Modify: `internal/module/peers/labels.go` (handlers + logic), `internal/module/peers/module.go` (`RegisterRoutes`), `internal/peers/wire.go` (`APIError` fields, request/response types, error codes)
+- Modify: `internal/module/peers/labels.go` (handlers + logic), `internal/module/peers/module.go` (`RegisterRoutes`), `internal/peers/wire.go` (`APIError` fields, request types, error codes)
 - Test: `internal/module/peers/labels_test.go`, `internal/module/peers/policy_test.go` (add the denial cases)
 
 **Interfaces:**
@@ -1428,34 +1516,57 @@ git commit -m "feat(peers): Resolve v2 — label tier, tmux: form, partial ⇒ n
   const (
       ErrCodeLabelInvalid  = "label_invalid"
       ErrCodeLabelReserved = "label_reserved"
-      ErrLabelTaken      = "label_taken"
-      ErrStoreUnavailable = "store_unavailable"
+      ErrLabelTaken        = "label_taken"
+      ErrStoreUnavailable  = "store_unavailable"
   )
   type SelfRequest struct { OriginInbox string `json:"origin_inbox"` }
   type ClaimLabelRequest struct { OriginInbox string `json:"origin_inbox"`; Label string `json:"label"` }
-  // APIError gains:
+  // APIError gains (Partial was added in Task 6):
   Holder     *PeerRecord `json:"holder,omitempty"`      // label_taken
   LiveLabels []string    `json:"live_labels,omitempty"` // label_taken
   Skipped    []string    `json:"skipped,omitempty"`     // not_ready (claim)
-  Partial    bool        `json:"partial,omitempty"`     // not_ready (send)
   ```
   Routes: `POST /api/peers/self`, `PUT /api/peers/self/label`, `DELETE /api/peers/self/label`. All three: admin only (`requireAdmin`), answer a `PeerRecord` on 200.
-- Consumes: `ReadRegistryDiag`, `LabelStore`, `localEnvelope`, `ValidateUserLabel`.
+- Produces (in `labels.go`): `func (m *Module) proxyPIDs() map[int]bool`, `func findOriginEntry(entries []ipeers.Entry, proxyPIDs map[int]bool, inbox string) (ipeers.Entry, bool)`.
+- Consumes: `ReadRegistryDiag`, `LabelStore`, `ipeers.EntryRecord` (Task 4), `ValidateUserLabel`.
+- **Response construction rule:** every 200 body and the `label_taken` holder are built with `ipeers.EntryRecord(alias, hostID, entry, false, info)` from the **validated entry and the label row the handler already holds** — never by re-reading the inventory (`localEnvelope`), which could degrade to default labels or fail after a successful commit. `whoami`/`claim`/`release` therefore always answer an `entry`-shaped record whose address is identical to the listing's (Task 4's suffix rule).
+- **Lock rule:** `labelMu` is held from the registry diagnosis through the store write and the construction of the response value; it is released before JSON encoding. Nothing mutable is re-read after unlock.
 
 - [ ] **Step 1: Write the failing tests** — `labels_test.go`, using the fixture from Task 5 and real HTTP through `f.m.RegisterRoutes` + `middleware.WithPrincipal(admin)` as the existing handler tests do (read `send_test.go` for the pattern):
 
 ```go
-// Scenario fixture: registry has live entries pid 10 (sid-1, tmux mt0
-// owner, inbox /…/10.sock) and pid 20 (sid-2, Desktop, inbox /…/20.sock).
+// Scenario fixture: registry has live entries pid 10 (sid-1, tmux
+// "mt0:@1.%1", registry name "n10", inbox /…/10.sock) and pid 20 (sid-2,
+// no tmux — the Desktop stand-in — registry name "n20", inbox /…/20.sock).
+// newLabelFixture returns *labelFixture with: m *Module, labels
+// *store.PeerLabelStore, registryDir string, live *labelLiveness
+// (markDead/revive, all pids alive by default, modelled on e2eLiveness),
+// and helpers:
+//   self(req ipeers.SelfRequest) (int, []byte)
+//   claim(inbox, label string) (int, []byte)
+//   release(inbox string) (int, []byte)
+//   inbox(pid int) string
+//   assertAPIError(status int, body []byte, wantStatus int, wantCode string) ipeers.APIError
+// decodeRecord(t, status, body) fails the test unless status == 200 and
+// body decodes as ipeers.PeerRecord.
 
 func TestSelf_Whoami(t *testing.T) {
 	f := newLabelFixture(t)
 	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	rec := decodeRecord(t, status, body)
-	if rec.Label != ipeers.DefaultLabel("sid-2") || rec.LabelSource != "default" || rec.RowKind != "entry" {
-		t.Errorf("record = %+v", rec)
+	want := "a/" + ipeers.DefaultLabel("sid-2") + ":n20"
+	if rec.Address != want || rec.LabelSource != "default" || rec.RowKind != "entry" || rec.Agent.PID != 20 {
+		t.Errorf("record = %+v, want address %s", rec, want)
+	}
+	// A session inside tmux renders the same address the listing shows.
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(10)})
+	rec = decodeRecord(t, status, body)
+	if rec.Suffix != "mt0-n10" {
+		t.Errorf("tmux session suffix = %q", rec.Suffix)
 	}
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: "/nope.sock"})
+	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
+	status, body = f.self(ipeers.SelfRequest{})
 	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
 }
 
@@ -1476,7 +1587,7 @@ func TestClaim_Matrix(t *testing.T) {
 		status, body := f.claim(f.inbox(20), c.label)
 		if c.wantStatus == 200 {
 			rec := decodeRecord(t, status, body)
-			if rec.Label != c.label || rec.LabelSource != "user" || rec.LabelRev != 1 {
+			if rec.Label != c.label || rec.LabelSource != "user" || rec.LabelRev != 1 || rec.Address != "a/purdex-tester:n20" {
 				t.Errorf("%q: %+v", c.label, rec)
 			}
 			continue
@@ -1484,31 +1595,40 @@ func TestClaim_Matrix(t *testing.T) {
 		f.assertAPIError(status, body, c.wantStatus, c.wantCode)
 	}
 	// Same label again: 200, rev unchanged.
-	rec := decodeRecord(t, f.claim(f.inbox(20), "purdex-tester"))
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	rec := decodeRecord(t, status, body)
 	if rec.LabelRev != 1 {
 		t.Errorf("re-claim bumped rev to %d", rec.LabelRev)
 	}
-	// Another live session: taken, with holder + live_labels.
-	status, body := f.claim(f.inbox(10), "purdex-tester")
+	// Another live session: taken, with holder + live_labels (the caller's
+	// own live label is listed too — spec §3.3 says every held label).
+	status, body = f.claim(f.inbox(10), "purdex-dev")
+	decodeRecord(t, status, body)
+	status, body = f.claim(f.inbox(10), "purdex-tester")
 	ae := f.assertAPIError(status, body, 409, ipeers.ErrLabelTaken)
-	if ae.Holder == nil || ae.Holder.Agent.PID != 20 || !reflect.DeepEqual(ae.LiveLabels, []string{"purdex-tester"}) {
-		t.Errorf("taken body = %+v", ae)
+	if ae.Holder == nil || ae.Holder.Agent.PID != 20 || ae.Holder.Address != "a/purdex-tester:n20" {
+		t.Errorf("taken holder = %+v", ae.Holder)
 	}
-	// Holder dies ⇒ claim succeeds, old row evicted.
+	if !reflect.DeepEqual(ae.LiveLabels, []string{"purdex-dev", "purdex-tester"}) {
+		t.Errorf("live_labels = %v", ae.LiveLabels)
+	}
+	// Holder dies ⇒ claim succeeds, old row evicted, caller's previous label replaced.
 	f.live.markDead(20)
-	rec = decodeRecord(t, f.claim(f.inbox(10), "purdex-tester"))
-	if rec.Agent.PID != 10 || rec.LabelRev != 2 {
+	status, body = f.claim(f.inbox(10), "purdex-tester")
+	rec = decodeRecord(t, status, body)
+	if rec.Agent.PID != 10 || rec.Label != "purdex-tester" || rec.LabelRev != 3 {
 		t.Errorf("take-over: %+v", rec)
 	}
 	rows, _ := f.labels.Snapshot()
-	if len(rows) != 1 || rows[0].SessionID != "sid-1" {
+	if len(rows) != 1 || rows[0].SessionID != "sid-1" || rows[0].Label != "purdex-tester" {
 		t.Errorf("rows after take-over = %+v", rows)
 	}
 	// The dead one comes back (resume): whoami shows the default label.
 	f.live.revive(20)
-	rec = decodeRecord(t, f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)}))
-	if rec.LabelSource != "default" {
-		t.Errorf("resumed holder = %+v, want default label", rec)
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	rec = decodeRecord(t, status, body)
+	if rec.LabelSource != "default" || rec.LabelRev != 0 {
+		t.Errorf("resumed holder = %+v, want default label, rev 0", rec)
 	}
 }
 
@@ -1521,29 +1641,64 @@ func TestClaim_NotReadyOnUnknownLiveFile(t *testing.T) {
 		t.Errorf("skipped = %v", ae.Skipped)
 	}
 	f.live.markDead(4242) // now the unknown file belongs to a dead pid: ignored
-	decodeRecord(t, f.claim(f.inbox(20), "purdex-tester"))
+	status, body = f.claim(f.inbox(20), "purdex-tester")
+	decodeRecord(t, status, body)
+	// Release has no completeness requirement.
+	writeRegistryFixture(t, f.registryDir, "4243.json", "{")
+	status, body = f.release(f.inbox(20))
+	decodeRecord(t, status, body)
 }
 
-func TestClaim_StoreUnavailable(t *testing.T) {
+func TestClaim_OriginMustBeLiveNonProxy(t *testing.T) {
 	f := newLabelFixture(t)
-	f.m.labels = failingLabels{}
+	f.live.markDead(20)
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
+	// A helper (proxy) entry cannot name itself: register one via the
+	// fixture's helper manager (Acquire) and present its inbox.
+	h := f.spawnHelper(t) // fixture helper: Acquire a fake helper, return its *helper
+	status, body = f.claim(h.sock, "purdex-tester")
+	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
+}
+
+func TestClaim_StoreFailures(t *testing.T) {
+	f := newLabelFixture(t)
+	f.m.labels = failingLabels{} // read fails
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
+
+	f.m.labels = writeFailingLabels{real: f.labels} // read ok, write fails
+	status, body = f.claim(f.inbox(20), "purdex-tester")
+	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
+	status, body = f.release(f.inbox(20))
+	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
+	if rows, _ := f.labels.Snapshot(); len(rows) != 0 {
+		t.Errorf("rows written despite failure: %+v", rows)
+	}
+	// whoami only reads: still fine.
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	decodeRecord(t, status, body)
 }
 
 func TestRelease(t *testing.T) {
 	f := newLabelFixture(t)
-	decodeRecord(t, f.claim(f.inbox(20), "purdex-tester"))
-	rec := decodeRecord(t, f.release(f.inbox(20)))
-	if rec.LabelSource != "default" || rec.LabelRev != 2 {
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	decodeRecord(t, status, body)
+	status, body = f.release(f.inbox(20))
+	rec := decodeRecord(t, status, body)
+	if rec.LabelSource != "default" || rec.LabelRev != 2 || rec.Label != ipeers.DefaultLabel("sid-2") {
 		t.Errorf("released = %+v", rec)
 	}
-	// Release with no row: 200, default, rev 0.
-	rec = decodeRecord(t, f.release(f.inbox(10)))
+	// Release with no row: 200, default, rev 0, nothing written.
+	status, body = f.release(f.inbox(10))
+	rec = decodeRecord(t, status, body)
 	if rec.LabelRev != 0 {
 		t.Errorf("no-row release = %+v", rec)
+	}
+	if rows, _ := f.labels.Snapshot(); len(rows) != 1 {
+		t.Errorf("rows = %+v, want only sid-2's released row", rows)
 	}
 }
 
@@ -1574,17 +1729,23 @@ func TestSelfRoutes_DenyHostPrincipal(t *testing.T) {
 			t.Errorf("%s %s allowed for a host principal", c.method, c.path)
 		}
 	}
+	// And the handlers themselves refuse a host principal in depth.
+	f := newLabelFixture(t)
+	status, _ := f.doAs(middleware.Principal{Kind: middleware.PrincipalHost, Alias: "x", HostID: "x:1"}, "POST", "/api/peers/self", ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	if status != 403 {
+		t.Errorf("host principal got %d", status)
+	}
 }
 ```
 
-Write `newLabelFixture` in `labels_test.go`: builds `newTestModuleWith` with the two-entry registry, a liveness fake with `markDead`/`revive` (model it on `e2eLiveness` in `e2e_test.go`), and helpers `self`/`claim`/`release`/`inbox`/`assertAPIError`/`decodeRecord`.
+Write `newLabelFixture` in `labels_test.go`: builds `newTestModuleWith` with the two-entry registry (`writeRegistryFixture` + the registry JSON helper `deliver_test.go` uses, one with `"tmux":"mt0:@1.%1"` and one without), a liveness fake `labelLiveness` with `markDead`/`revive` (all pids alive by default; model it on `e2eLiveness` in `e2e_test.go`), fake sessions `[{Code:"c1", Name:"mt0"}]` with owner `sid-1`, and the helpers listed in the comment above (`doAs` builds the request with `middleware.WithPrincipal`; `self`/`claim`/`release` call it with the admin principal). `spawnHelper` calls `f.m.helpers.Acquire(ctx, someOriginKey, "x/y")` on the fixture's fake helper and returns the `*helper`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `go test -race -count=1 ./internal/module/peers/ -run 'TestSelf|TestClaim|TestRelease'`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement** in `labels.go`:
+- [ ] **Step 3: Implement** in `labels.go`. One internal function per verb returns `(rec ipeers.PeerRecord, apiErr *ipeers.APIError, status int)`; the three handlers only decode, call it, and encode after the lock is gone.
 
 ```go
 // findOriginEntry attributes inbox to a live, non-proxy registry entry
@@ -1598,155 +1759,193 @@ func findOriginEntry(entries []ipeers.Entry, proxyPIDs map[int]bool, inbox strin
 	return ipeers.Entry{}, false
 }
 
-// selfRecord is the inventory row of the entry that owns inbox; §3.4
-// guarantees one exists for every live entry.
-func (m *Module) selfRecord(ctx context.Context, snap configSnapshot, inbox string) (ipeers.PeerRecord, bool) {
-	env := m.localEnvelope(ctx, snap.hostID, snap.alias)
-	for _, r := range env.Peers {
-		if r.Agent != nil && r.Agent.Inbox == inbox && r.Agent.Type == "cc" {
-			return r, true
-		}
+// proxyPIDs is the helper manager's pid set, or empty without a manager.
+func (m *Module) proxyPIDs() map[int]bool {
+	if m.helpers == nil {
+		return map[int]bool{}
 	}
-	return ipeers.PeerRecord{}, false
+	return m.helpers.ProxyPIDs()
 }
 
-func (m *Module) handleSelf(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if !requireAdmin(w, r) {
-		return
+// labelRows indexes a store snapshot by session id.
+func labelRows(rows []store.PeerLabel) map[string]store.PeerLabel {
+	out := make(map[string]store.PeerLabel, len(rows))
+	for _, r := range rows {
+		out[r.SessionID] = r
 	}
-	var req ipeers.SelfRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.OriginInbox == "" {
-		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrOriginUnknown, Detail: "origin_inbox is empty (CLAUDE_CODE_MESSAGING_SOCKET unset?)"})
-		return
+	return out
+}
+
+func infoOf(row store.PeerLabel, ok bool) ipeers.LabelInfo {
+	if !ok {
+		return ipeers.LabelInfo{}
+	}
+	return ipeers.LabelInfo{Label: row.Label, Rev: row.Rev}
+}
+
+type selfResult struct {
+	rec    ipeers.PeerRecord
+	err    *ipeers.APIError
+	status int
+}
+
+func fail(status int, code, detail string) selfResult {
+	return selfResult{status: status, err: &ipeers.APIError{Error: code, Detail: detail}}
+}
+
+// origin reads the registry and attributes inbox. Shared by all three verbs.
+func (m *Module) origin(inbox string) (entries []ipeers.Entry, diag ipeers.Diagnosis, proxies map[int]bool, e ipeers.Entry, res selfResult, ok bool) {
+	if inbox == "" {
+		return nil, ipeers.Diagnosis{}, nil, ipeers.Entry{}, fail(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is empty (CLAUDE_CODE_MESSAGING_SOCKET unset?)"), false
 	}
 	if m.labels == nil {
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrStoreUnavailable, Detail: "label store is not available"})
-		return
+		return nil, ipeers.Diagnosis{}, nil, ipeers.Entry{}, fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store is not available"), false
 	}
-	if _, err := m.labels.Snapshot(); err != nil { // whoami must not print a default label as if it were the truth
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrStoreUnavailable, Detail: "label store read failed"})
-		return
-	}
-	entries, _, err := ipeers.ReadRegistryDiag(m.registryDir, m.liveness)
+	entries, diag, err := ipeers.ReadRegistryDiag(m.registryDir, m.liveness)
 	if err != nil {
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "registry read failed"})
-		return
+		return nil, diag, nil, ipeers.Entry{}, fail(http.StatusServiceUnavailable, ipeers.ErrNotReady, "registry read failed: "+err.Error()), false
 	}
-	if _, ok := findOriginEntry(entries, m.proxyPIDs(), req.OriginInbox); !ok {
-		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrOriginUnknown, Detail: "origin_inbox is not a live Claude Code session on this host"})
-		return
+	proxies = m.proxyPIDs()
+	e, found := findOriginEntry(entries, proxies, inbox)
+	if !found {
+		return nil, diag, nil, ipeers.Entry{}, fail(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is not a live Claude Code session on this host"), false
+	}
+	return entries, diag, proxies, e, selfResult{}, true
+}
+
+func (m *Module) whoami(inbox string) selfResult {
+	m.labelMu.Lock()
+	defer m.labelMu.Unlock()
+	_, _, _, e, res, ok := m.origin(inbox)
+	if !ok {
+		return res
+	}
+	rows, err := m.labels.Snapshot()
+	if err != nil { // never print a default label as if it were the truth
+		return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store read failed")
 	}
 	snap := m.configSnapshot()
-	rec, ok := m.selfRecord(r.Context(), snap, req.OriginInbox)
-	if !ok {
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "inventory has no row for the origin yet; retry"})
-		return
-	}
-	_ = json.NewEncoder(w).Encode(rec)
+	row, has := labelRows(rows)[e.SessionID]
+	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, infoOf(row, has))}
 }
-```
 
-`handleClaimLabel` (PUT) implements the §3.3 matrix under `m.labelMu`:
-
-```go
-func (m *Module) handleClaimLabel(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if !requireAdmin(w, r) {
-		return
-	}
-	var req ipeers.ClaimLabelRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.OriginInbox == "" {
-		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrOriginUnknown, Detail: "origin_inbox is empty"})
-		return
-	}
-	if err := ipeers.ValidateUserLabel(req.Label); err != nil {
+func (m *Module) claim(inbox, label string) selfResult {
+	if err := ipeers.ValidateUserLabel(label); err != nil {
 		code := ipeers.ErrCodeLabelInvalid
 		if errors.Is(err, ipeers.ErrLabelReserved) {
 			code = ipeers.ErrCodeLabelReserved
 		}
-		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: code, Detail: err.Error()})
-		return
+		return fail(http.StatusBadRequest, code, err.Error())
 	}
-	if m.labels == nil {
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrStoreUnavailable, Detail: "label store is not available"})
-		return
-	}
-
 	m.labelMu.Lock()
 	defer m.labelMu.Unlock()
-
-	entries, diag, err := ipeers.ReadRegistryDiag(m.registryDir, m.liveness)
-	if err != nil {
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "registry read failed: " + err.Error()})
-		return
-	}
-	proxyPIDs := m.proxyPIDs()
-	origin, ok := findOriginEntry(entries, proxyPIDs, req.OriginInbox)
+	entries, diag, proxies, e, res, ok := m.origin(inbox)
 	if !ok {
-		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrOriginUnknown, Detail: "origin_inbox is not a live Claude Code session on this host"})
-		return
+		return res
 	}
 	if blocking := diag.BlockingUnknown(); len(blocking) > 0 {
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "registry has unreadable files for live processes; a label cannot be proven free", Skipped: blocking})
-		return
+		r := fail(http.StatusServiceUnavailable, ipeers.ErrNotReady, "registry has unreadable files for live processes; a label cannot be proven free")
+		r.err.Skipped = blocking
+		return r
 	}
 	rows, err := m.labels.Snapshot()
 	if err != nil {
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrStoreUnavailable, Detail: "label store read failed"})
-		return
+		return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store read failed")
 	}
-	liveSIDs := map[string]bool{}
-	for _, e := range entries {
-		if !e.IsProxy && !proxyPIDs[e.PID] {
-			liveSIDs[e.SessionID] = true
+	liveEntry := map[string]ipeers.Entry{} // sid ⇒ one live entry (first seen)
+	for _, le := range entries {
+		if !le.IsProxy && !proxies[le.PID] {
+			if _, seen := liveEntry[le.SessionID]; !seen {
+				liveEntry[le.SessionID] = le
+			}
 		}
 	}
 	var liveLabels []string
 	var holder *store.PeerLabel
 	for i := range rows {
 		row := &rows[i]
-		if row.Label == "" || !liveSIDs[row.SessionID] {
+		if row.Label == "" {
+			continue
+		}
+		if _, live := liveEntry[row.SessionID]; !live {
 			continue
 		}
 		liveLabels = append(liveLabels, row.Label)
-		if row.Label == req.Label {
+		if row.Label == label {
 			holder = row
 		}
 	}
 	sort.Strings(liveLabels)
 	snap := m.configSnapshot()
-	if holder != nil && holder.SessionID != origin.SessionID {
-		var holderRec *ipeers.PeerRecord
-		if env := m.localEnvelope(r.Context(), snap.hostID, snap.alias); env.OK {
-			for _, rec := range env.Peers {
-				if rec.Agent != nil && rec.Agent.SessionID == holder.SessionID && rec.Deliverable {
-					rec := rec
-					holderRec = &rec
-					break
-				}
-			}
-		}
-		writeWireError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrLabelTaken, Detail: fmt.Sprintf("%q is held by a live session", req.Label), Holder: holderRec, LiveLabels: liveLabels})
-		return
+	if holder != nil && holder.SessionID != e.SessionID {
+		he := liveEntry[holder.SessionID]
+		hrec := ipeers.EntryRecord(snap.alias, snap.hostID, he, false, ipeers.LabelInfo{Label: holder.Label, Rev: holder.Rev})
+		r := fail(http.StatusConflict, ipeers.ErrLabelTaken, fmt.Sprintf("%q is held by a live session", label))
+		r.err.Holder, r.err.LiveLabels = &hrec, liveLabels
+		return r
 	}
-	if holder == nil || holder.SessionID != origin.SessionID {
-		if _, err := m.labels.Claim(origin.SessionID, req.Label, m.now()); err != nil {
-			m.logf("peers: claim %q for %s: %v", req.Label, origin.SessionID, err)
-			writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrStoreUnavailable, Detail: "label store write failed"})
-			return
+	var row store.PeerLabel
+	if holder != nil { // already ours: no write, rev unchanged
+		row = *holder
+	} else {
+		row, err = m.labels.Claim(e.SessionID, label, m.now())
+		if err != nil {
+			m.logf("peers: claim %q for %s: %v", label, e.SessionID, err)
+			return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store write failed")
 		}
 	}
-	rec, ok := m.selfRecord(r.Context(), snap, req.OriginInbox)
+	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, ipeers.LabelInfo{Label: row.Label, Rev: row.Rev})}
+}
+
+func (m *Module) release(inbox string) selfResult {
+	m.labelMu.Lock()
+	defer m.labelMu.Unlock()
+	_, _, _, e, res, ok := m.origin(inbox)
 	if !ok {
-		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "claimed, but the inventory has no row for the origin yet; retry whoami"})
+		return res
+	}
+	row, had, err := m.labels.Release(e.SessionID, m.now())
+	if err != nil {
+		m.logf("peers: release for %s: %v", e.SessionID, err)
+		return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store write failed")
+	}
+	info := ipeers.LabelInfo{}
+	if had {
+		info.Rev = row.Rev
+	}
+	snap := m.configSnapshot()
+	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, info)}
+}
+
+// handlers: decode → call → encode (outside labelMu).
+func (m *Module) handleSelf(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !requireAdmin(w, r) {
 		return
 	}
-	_ = json.NewEncoder(w).Encode(rec)
+	var req ipeers.SelfRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrBadRequest, Detail: "invalid JSON body"})
+		return
+	}
+	writeSelfResult(w, m.whoami(req.OriginInbox))
+}
+
+func (m *Module) handleClaimLabel(w http.ResponseWriter, r *http.Request) { /* same shape with ClaimLabelRequest ⇒ m.claim */ }
+func (m *Module) handleReleaseLabel(w http.ResponseWriter, r *http.Request) { /* SelfRequest ⇒ m.release */ }
+
+func writeSelfResult(w http.ResponseWriter, res selfResult) {
+	if res.err != nil {
+		writeWireError(w, res.status, *res.err)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(res.rec)
 }
 ```
 
-`handleReleaseLabel` (DELETE): admin, decode `SelfRequest`, `labelMu`, registry read for origin attribution (no completeness requirement), `m.labels.Release(origin.SessionID, m.now())` (error ⇒ `store_unavailable`), then `selfRecord`. `proxyPIDs()` is a small helper returning `m.helpers.ProxyPIDs()` or an empty map when `m.helpers == nil`. Register the three routes in `RegisterRoutes`. `HostRoutePolicy` needs no change (only `GET /api/peers` and `POST /deliver` pass) — the test proves it.
+Register the three routes in `RegisterRoutes`. `HostRoutePolicy` needs no change (only `GET /api/peers` and `POST /deliver` pass) — the test proves it, and `requireAdmin` refuses in depth.
+
+Note the claim path never calls `localEnvelope`: no tmux or owner resolution runs under `labelMu`, so the lock is held for one registry scan plus one SQLite transaction.
 
 - [ ] **Step 4: Run tests**
 
@@ -1843,9 +2042,58 @@ func TestRunMsgName_TakenRendersLiveLabels(t *testing.T) {
 	}
 }
 
-func TestRunMsgName_Release_UsesDelete(t *testing.T) { /* DELETE /api/peers/self/label, body SelfRequest, prints "released; address: <addr>" */ }
-func TestRunMsgName_NoSocketEnv(t *testing.T) { /* exit 1, "pdx msg: origin_unknown: CLAUDE_CODE_MESSAGING_SOCKET is unset …" */ }
+func TestRunMsgName_Release_UsesDelete(t *testing.T) {
+	srv := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		var req ipeers.SelfRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if r.Method != "DELETE" || r.URL.Path != "/api/peers/self/label" || req.OriginInbox != "/tmp/x.sock" {
+			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
+		}
+		json.NewEncoder(w).Encode(ipeers.PeerRecord{Address: "air/_k3x9qz:purdex-3f", Label: "_k3x9qz", LabelSource: "default", LabelRev: 2, Host: "air", HostID: "air:1"})
+	})
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"name", "--release", "--config", srv.cfgPath}, envWith("CLAUDE_CODE_MESSAGING_SOCKET", "/tmp/x.sock"), &out, &errb)
+	if code != 0 || !strings.HasPrefix(out.String(), "released: air/_k3x9qz:purdex-3f\n") {
+		t.Fatalf("exit %d out %q err %q", code, out.String(), errb.String())
+	}
+}
+
+func TestRunMsgName_NoSocketEnv(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"name", "x1"}, envWith("CLAUDE_CODE_MESSAGING_SOCKET", ""), &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), "pdx msg: origin_unknown: CLAUDE_CODE_MESSAGING_SOCKET is unset") {
+		t.Fatalf("exit %d err %q", code, errb.String())
+	}
+	code = runMsgCmd([]string{"whoami"}, envWith("CLAUDE_CODE_MESSAGING_SOCKET", ""), &out, &errb)
+	if code != 1 {
+		t.Fatalf("whoami exit %d", code)
+	}
+}
+
+func TestRunMsgWhoami_JSONPassthrough(t *testing.T) {
+	raw := `{"address":"air/x1:y","label":"x1"}` + "\n"
+	srv := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, raw) })
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"whoami", "--json", "--config", srv.cfgPath}, envWith("CLAUDE_CODE_MESSAGING_SOCKET", "/tmp/x.sock"), &out, &errb)
+	if code != 0 || out.String() != raw {
+		t.Fatalf("exit %d out %q", code, out.String())
+	}
+}
+
+func TestRunMsgName_NotReadyRendersSkipped(t *testing.T) {
+	srv := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+		json.NewEncoder(w).Encode(ipeers.APIError{Error: "not_ready", Detail: "registry has unreadable files", Skipped: []string{"/r/4242.json"}})
+	})
+	var out, errb bytes.Buffer
+	runMsgCmd([]string{"name", "x1", "--config", srv.cfgPath}, envWith("CLAUDE_CODE_MESSAGING_SOCKET", "/tmp/x.sock"), &out, &errb)
+	if errb.String() != "pdx msg: not_ready: registry has unreadable files\n  /r/4242.json\n" {
+		t.Errorf("stderr %q", errb.String())
+	}
+}
 ```
+
+`fakeDaemon(t, handler)` and `envWith(k, v)` are small helpers to add to `msg_test.go` if the file has no equivalent: `fakeDaemon` starts an `httptest.Server` with the handler and writes a `config.toml` (`bind`/`port` from the server URL, `token = "t"`) into `t.TempDir()`, returning `struct{ cfgPath string }`; `envWith` returns `func(string) string`. If `msg_test.go` already fakes the daemon differently (read it first), use that and drop these two.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1868,7 +2116,7 @@ func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
 }
 ```
 
-`name` prints `named: <address>` then the record block; `--release` prints `released: <address>`; `whoami` prints the block only.
+`name` prints `named: <address>` then the record block; `--release` prints `released: <address>` then the block; `whoami` prints the block only. Wire the two verbs into `runMsgCmd`'s `switch inv.verb` (`case "name": return runMsgName(...)`, `case "whoami": return runMsgWhoami(...)`) — the switch's default is unreachable only because the parser accepts exactly the verbs it lists.
 
 - [ ] **Step 4: Run tests**
 
@@ -1924,7 +2172,7 @@ func TestFormatPeersTable_LabelColumnAndEntryIndent(t *testing.T) {
 }
 ```
 
-Extend the `--all` table test the same way: a trailer line per host `<alias>  daemon <version>` (and the existing `(unreachable: …)` lines stay).
+Extend the `--all` table test the same way: a trailer line per host `<alias>  daemon <version>` (and the existing `(unreachable: …)` lines stay). **Plan delta to spec §3.6** (record in the P4a PR): the daemon version is printed as a trailer line, not a per-host header, because both tables are one `tabwriter` block and a header row per host would break column alignment.
 
 - [ ] **Step 2: Run to verify failure** — `go test -race -count=1 ./cmd/pdx/ -run TestFormatPeers`
 
@@ -1972,20 +2220,34 @@ func TestE2E_Labels(t *testing.T) {
 	a.assertAPIError(st, raw, 404, ipeers.ErrPeerNotFound, "cc: form")
 	// 4. Native reply from target through B's helper reaches origin (unchanged path; from-name is still v1 here).
 	…
-	// 5. R2-1: the holder of label "foo" is unreadable while another tmux session is named foo.
-	//    Make B's inventory partial by dropping an undecodable file for a live pid,
-	//    then a bare "b/foo" is 503 not_ready and "b/tmux:foo" still delivers.
-	writeRegistryFixture(t, regDir, "31337.json", "{") // live.liveness() reports every pid alive unless markDead
+	// 5. R2-1 (spec §3.3): a Desktop session on B holds the LABEL "foo" while
+	//    B also has a tmux session named foo. While everything is readable the
+	//    label shadows the tmux name; when the holder's own registry file
+	//    becomes unreadable, a bare "b/foo" must be 503 not_ready — never a
+	//    tier-2 delivery to the tmux session — and "b/tmux:foo" still delivers.
+	holderSock := filepath.Join(root, "holder.sock")
+	holder := startFakeInbox(t, holderSock)
+	const holderPID, holderSID = 31337, "holder-sid"
+	writeRegistryFixture(t, regDir, strconv.Itoa(holderPID)+".json", e2eRegistryJSON(holderPID, holderSID, "holder-1", "", holderSock)) // no tmux: entry row on B
+	st, raw = b.do("PUT", "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: holderSock, Label: "foo"})
+	if st != 200 {
+		t.Fatalf("holder claim: %d %s", st, raw)
+	}
+	a.sendOK(ipeers.SendRequest{To: "b/foo", Text: "to-label", OriginInbox: originSock})
+	holder.recv("step 5a: label shadows tmux name")
+	target.none("step 5a")
+	writeRegistryFixture(t, regDir, strconv.Itoa(holderPID)+".json", "{") // holder unreadable, pid still alive per fake liveness
 	st, raw = a.send(ipeers.SendRequest{To: "b/foo", Text: "x", OriginInbox: originSock})
 	a.assertAPIError(st, raw, 503, ipeers.ErrNotReady, "partial bare name")
+	target.none("step 5b: no tier-2 delivery while the label holder is unknown")
 	a.sendOK(ipeers.SendRequest{To: "b/tmux:foo", Text: "x", OriginInbox: originSock})
-	target.recv("step 5")
+	target.recv("step 5c")
 }
 ```
 
-Check `e2eLiveness.liveness()` — if it derives `PidAlive` from `dead` only, an unknown file for pid 31337 is "alive" as required; otherwise mark it alive explicitly.
+Check `e2eLiveness.liveness()` — if it derives `PidAlive` from `dead` only, the unknown file for pid 31337 is "alive" as required; otherwise mark it alive explicitly. `e2eRegistryJSON` with an empty `tmux` argument must produce an entry outside tmux (check its template; add an `omitempty`-style branch if it always writes the field).
 
-- [ ] **Step 2: Run** — expect FAIL on the label send until the whole P4a stack is in place (it should already pass if Tasks 1–9 are correct; if it fails, the failure is a real integration bug — fix it in the task that owns it).
+- [ ] **Step 2: Run** — this is an integration test over Tasks 1–9: if it passes immediately, that is the expected outcome (do not manufacture a red run); if it fails, the failure is a real integration bug — fix it in the task that owns it and note the fix in that task's commit.
 
 - [ ] **Step 3: CLAUDE.md** — add under "開發環境" a section:
 
@@ -2018,6 +2280,7 @@ Implements docs/specs/2026-09-14-peer-address-v2-spec.md §4 P4a.
 - Resolve v2: label tier, tmux: form, partial ⇒ not_ready, cc: retired
 - /api/peers/self, /self/label (PUT/DELETE); pdx msg name / whoami; pdx peers columns
 - CLAUDE.md "Peer addresses"
+Spec deltas (§3.4/§3.6): PeerRecord carries label_rev; the suffix is derived from the entry's own tmux field for session and entry rows alike; pdx peers prints daemon versions as a trailer line.
 Deployment: both hosts. from-name / helper names stay v1 until P4b.
 
 https://claude.ai/code/session_01QDPyP9TxbfJnePDocfwQJZ
@@ -2033,8 +2296,8 @@ Then the CLAUDE.md review process (codex standard + 3 adversarial), fixes, merge
 ### Task 11: Wire — `from.address` / `from.address_rev`
 
 **Files:**
-- Modify: `internal/peers/wire.go`
-- Test: `internal/peers/wire_test.go`
+- Modify: `internal/peers/wire.go`, `internal/peers/record.go` (`WireAddress`)
+- Test: `internal/peers/wire_test.go`, `internal/peers/record_test.go` (`WireAddress` on a labelled row ⇒ `label:suffix`, on a no-agent row ⇒ `""`)
 
 **Interfaces:**
 - Produces:
@@ -2121,7 +2384,7 @@ In `ValidationCode`: `case errors.Is(err, ErrAddressInvalid): return ErrBadAddre
 - Test: `internal/peers/ccuds/registry_write_test.go`
 
 **Interfaces:**
-- Produces: `func RewriteRegistryName(dir string, pid int, name string, nameSince int64) error` — reads `<dir>/<pid>.json` via `peers.ReadRegistryCandidate`, decodes into `map[string]any` (preserving unknown fields and order-insensitively), sets `name` and `nameSince`, writes `<dir>/.<pid>.json.tmp` (0644, `O_EXCL`), fsync, `os.Rename` over `<pid>.json`. Any failure removes the temp file and returns the error; the original file is untouched.
+- Produces: `func RewriteRegistryName(dir string, pid int, name string, nameSince int64) error` — reads `<dir>/<pid>.json` via `peers.ReadRegistryCandidate`, decodes into `map[string]json.RawMessage` (every other field's bytes pass through untouched — `map[string]any` would round-trip large integers through `float64`), replaces only `name` and `nameSince`, writes `<dir>/.<pid>.json.tmp` (0644, `O_EXCL`), fsync, `os.Rename` over `<pid>.json`. Any failure removes the temp file and returns the error; the original file is untouched.
 
 - [ ] **Step 1: Failing test**
 
@@ -2132,24 +2395,33 @@ func TestRewriteRegistryName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Inject an unknown field with an integer above 2^53 so a float64
+	// round-trip would be caught, then rewrite.
 	before, _ := os.ReadFile(created[0])
+	before = []byte(strings.Replace(string(before), `"pid":4242,`, `"pid":4242,"bigUnknown":9007199254740993,`, 1))
+	if err := os.WriteFile(created[0], before, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := RewriteRegistryName(dir, 4242, "a/new:x", 1700000000000); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.ReadFile(created[0])
-	var b, a map[string]any
+	var b, a map[string]json.RawMessage
 	json.Unmarshal(before, &b)
 	json.Unmarshal(after, &a)
-	if a["name"] != "a/new:x" || a["nameSince"] != float64(1700000000000) {
-		t.Errorf("after = %v", a)
+	if string(a["name"]) != `"a/new:x"` || string(a["nameSince"]) != `1700000000000` {
+		t.Errorf("after = %s", after)
 	}
 	for k, v := range b {
 		if k == "name" || k == "nameSince" {
 			continue
 		}
-		if !reflect.DeepEqual(a[k], v) {
-			t.Errorf("field %s changed: %v → %v", k, v, a[k])
+		if string(a[k]) != string(v) {
+			t.Errorf("field %s changed byte-wise: %s → %s", k, v, a[k])
 		}
+	}
+	if string(a["bigUnknown"]) != "9007199254740993" {
+		t.Errorf("large integer damaged: %s", a["bigUnknown"])
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 2 { // json + key, no temp left
 		t.Errorf("dir has %d entries", len(entries))
@@ -2179,50 +2451,96 @@ func TestRewriteRegistryName(t *testing.T) {
 **Interfaces:**
 - Produces (helpers.go):
   ```go
-  // helper gains: appliedRev int64
+  // helper gains:
+  //   appliedRev int64 — the address_rev of the request whose address the
+  //                      instance currently carries; -1 (revUnapplied) when
+  //                      the instance was spawned by a v1 request and no v2
+  //                      address has been applied yet.
+  const revUnapplied int64 = -1
+
+  // Acquire gains the admitting request's revision: rev is stored on the
+  // instance at creation, under the same lock that admits it, so a spawn
+  // whose waiter cancelled still carries the revision that named it.
+  // A v1 request passes revUnapplied.
+  func (m *helperManager) Acquire(waitCtx context.Context, key ipeers.OriginKey, name string, rev int64) (*helper, error)
+
   // ApplyAddress renames instance h to name when rev is newer than the
-  // instance's applied revision; returns the name to use for THIS
-  // request's wrapper. Runs under m.mu (the flip to stopping and the
-  // rename cannot interleave); the file rewrite happens under the lock too.
+  // instance's applied revision (or when nothing v2 was ever applied);
+  // returns the name to use for THIS request's wrapper. Runs entirely
+  // under m.mu — the flip to stopping (Release) and the rename cannot
+  // interleave, so a rename can never recreate a file cleanup unlinked —
+  // and the file rewrite happens under the lock too (one small file; the
+  // trade-off is recorded here: other origins' Acquire/Release/ProxyPIDs
+  // wait for the rewrite).
   func (m *helperManager) ApplyAddress(h *helper, name string, rev int64) string
   // Name returns h.name under the lock.
   func (m *helperManager) Name(h *helper) string
   ```
-  Rules (spec §3.5): not `ready` or replaced ⇒ return current name, no change; `rev <= h.appliedRev` ⇒ current name; else set `appliedRev = rev` (even when the name is equal); if the name differs, `ccuds.RewriteRegistryName(m.registryDir, h.pid, name, m.now().UnixMilli())` — on error log, restore `appliedRev`, return the old name; on success `h.name = name`.
+  Rules (spec §3.5, plus the plan-review amendments recorded in the P4b PR):
+  1. `m.helpers[h.key] != h || h.state != helperReady` ⇒ return `h.name`, no change.
+  2. `h.appliedRev != revUnapplied && rev <= h.appliedRev` ⇒ return `h.name`.
+  3. `prev := h.appliedRev; h.appliedRev = rev` (advance **even when the name is equal** — the A→B→A guard).
+  4. If `name != h.name`: `ccuds.RewriteRegistryName(m.registryDir, h.pid, name, m.now().UnixMilli())`; on error `m.log(...rename...)`, `h.appliedRev = prev`, return `h.name`; on success `h.name = name`.
+  5. Return `h.name`.
 - `send.go`: `wireFromRecord` fills `Address: rec.WireAddress(), AddressRev: rec.LabelRev`.
-- `deliver.go`: helper spawn name = `principal.Alias + "/" + req.From.Address` when `Address != ""`, else the v1 form; after `Acquire`: `name := m.helpers.Name(h)`; if `req.From.Address != ""` then `name = m.helpers.ApplyAddress(h, principal.Alias+"/"+req.From.Address, req.From.AddressRev)`; use `name` for `FromName`. Never read `h.name` directly in `deliver.go`/`reply.go` (logs use `m.helpers.Name(h)`).
-- `reply.go`: `wireFromRecord(snap.hostID, replier, declared)` already gets the address through Task 11's field fill.
+- `deliver.go` step 9/10:
+  ```go
+  spawnName, rev := principal.Alias+"/"+req.From.SessionName, revUnapplied // v1 sender
+  if req.From.Address != "" {
+      spawnName, rev = principal.Alias+"/"+req.From.Address, req.From.AddressRev
+  }
+  h, err := m.helpers.Acquire(waitCtx, req.From.Key(), spawnName, rev)
+  …
+  name := m.helpers.Name(h)
+  if req.From.Address != "" {
+      name = m.helpers.ApplyAddress(h, spawnName, rev)
+  }
+  // BuildFrame(... FromName: name ...)
+  ```
+  Never read `h.name` directly in `deliver.go`/`reply.go`; log lines use `m.helpers.Name(h)`.
+- `reply.go`: `wireFromRecord(snap.hostID, replier, declared)` already carries the address (Task 11 field fill) — nothing else to do there beyond the `Name(h)` log change.
 
-- [ ] **Step 1: Failing tests** (helpers_test.go, using the fake helper fixture that writes real registry files — check `proxyhelpertest` `Variant` Normal does; the manager's `registryDir` is the fixture's):
+- [ ] **Step 1: Failing tests** (`helpers_test.go`, using the fake helper fixture that writes real registry files — check `proxyhelpertest` `Variant` Normal does; the manager's `registryDir` is the fixture's). Update every existing `Acquire(ctx, key, name)` call in the module's tests to pass `revUnapplied`.
 
 ```go
+var applyKey = ipeers.OriginKey{HostID: "a:1", AgentSessionID: "sid-apply", PID: 1, ProcStart: e2eCCProcStart}
+
+func registryName(t *testing.T, dir string, pid int) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(pid)+".json"))
+	if err != nil {
+		return "<missing>"
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(data, &m)
+	var name string
+	json.Unmarshal(m["name"], &name)
+	return name
+}
+
 func TestApplyAddress_RenameInPlaceAndMonotonic(t *testing.T) {
-	f := newTestModuleWith(t, fixtureOpts{ /* defaults */ })
-	key := ipeers.OriginKey{HostID: "a:1", AgentSessionID: "sid", PID: 1, ProcStart: e2eCCProcStart}
-	h, err := f.m.helpers.Acquire(context.Background(), key, "a/purdex-x:s1")
+	f := newTestModuleWith(t, fixtureOpts{})
+	h, err := f.m.helpers.Acquire(context.Background(), applyKey, "a/purdex-x:s1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sock, pid := h.sock, h.pid
-	readName := func() string {
-		data, _ := os.ReadFile(filepath.Join(f.registryDir, strconv.Itoa(pid)+".json"))
-		var m map[string]any
-		json.Unmarshal(data, &m)
-		return m["name"].(string)
+	if h.appliedRev != 10 {
+		t.Fatalf("appliedRev after spawn = %d, want 10 (stored at admission)", h.appliedRev)
 	}
-	// Spawn name at rev 10.
+	// Same rev again: no-op.
 	if got := f.m.helpers.ApplyAddress(h, "a/purdex-x:s1", 10); got != "a/purdex-x:s1" {
 		t.Errorf("got %q", got)
 	}
 	// Newer rev, new name: rewritten in place, same socket and pid.
-	if got := f.m.helpers.ApplyAddress(h, "a/purdex-y:s1", 20); got != "a/purdex-y:s1" || readName() != "a/purdex-y:s1" {
-		t.Errorf("rename: got %q file %q", got, readName())
+	if got := f.m.helpers.ApplyAddress(h, "a/purdex-y:s1", 20); got != "a/purdex-y:s1" || registryName(t, f.registryDir, pid) != "a/purdex-y:s1" {
+		t.Errorf("rename: got %q file %q", got, registryName(t, f.registryDir, pid))
 	}
 	if h.sock != sock || h.pid != pid {
 		t.Error("instance changed")
 	}
 	// Older rev: ignored.
-	if got := f.m.helpers.ApplyAddress(h, "a/purdex-z:s1", 15); got != "a/purdex-y:s1" || readName() != "a/purdex-y:s1" {
+	if got := f.m.helpers.ApplyAddress(h, "a/purdex-z:s1", 15); got != "a/purdex-y:s1" {
 		t.Errorf("older rev applied: %q", got)
 	}
 	// A→B→A: (A,30) same name advances rev; late (B,25) must not win.
@@ -2230,22 +2548,57 @@ func TestApplyAddress_RenameInPlaceAndMonotonic(t *testing.T) {
 	if got := f.m.helpers.ApplyAddress(h, "a/purdex-b:s1", 25); got != "a/purdex-y:s1" {
 		t.Errorf("A→B→A hole: %q", got)
 	}
-	// Stopping: skipped.
+	// Released ⇒ skipped, and the file cleanup is not undone.
 	f.m.helpers.Release(h, "test")
 	if got := f.m.helpers.ApplyAddress(h, "a/purdex-q:s1", 99); got != "a/purdex-y:s1" {
 		t.Errorf("rename on a released instance: %q", got)
+	}
+	if registryName(t, f.registryDir, pid) != "<missing>" {
+		t.Error("rename after release recreated the registry file")
+	}
+}
+
+func TestApplyAddress_LegacySpawnTakesFirstV2AddressEvenAtRevZero(t *testing.T) {
+	f := newTestModuleWith(t, fixtureOpts{})
+	h, _ := f.m.helpers.Acquire(context.Background(), applyKey, "a/mt1", revUnapplied)
+	// A v2 sender whose session has never had a label row (rev 0) must still
+	// be able to name the helper once.
+	if got := f.m.helpers.ApplyAddress(h, "a/_k3x9qz:mt1-n", 0); got != "a/_k3x9qz:mt1-n" {
+		t.Errorf("first v2 address at rev 0 not applied: %q", got)
+	}
+	// From then on the monotonic rule holds: rev 0 again is ignored.
+	if got := f.m.helpers.ApplyAddress(h, "a/other:x", 0); got != "a/_k3x9qz:mt1-n" {
+		t.Errorf("second rev-0 request applied: %q", got)
+	}
+}
+
+func TestApplyAddress_SpawnKeepsRevWhenWaiterCancels(t *testing.T) {
+	// The waiter that admitted the spawn (rev 10, name X) leaves before the
+	// helper is ready; a later request at rev 5 must not rename it.
+	f := newTestModuleWith(t, fixtureOpts{variant: proxyhelpertest.Slow /* or whatever variant delays ready; read proxyhelpertest/fake.go */})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := f.m.helpers.Acquire(ctx, applyKey, "a/x:s", 10); err == nil {
+		t.Fatal("expected the cancelled waiter to fail")
+	}
+	h, err := f.m.helpers.Acquire(context.Background(), applyKey, "a/y:s", 5) // joins the in-flight spawn
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.m.helpers.ApplyAddress(h, "a/y:s", 5); got != "a/x:s" {
+		t.Errorf("rev 5 renamed a rev-10 instance: %q", got)
 	}
 }
 
 func TestApplyAddress_RewriteFailureRollsBack(t *testing.T) {
 	f := newTestModuleWith(t, fixtureOpts{})
-	h, _ := f.m.helpers.Acquire(context.Background(), someKey, "a/x:s")
+	h, _ := f.m.helpers.Acquire(context.Background(), applyKey, "a/x:s", 1)
 	os.Remove(filepath.Join(f.registryDir, strconv.Itoa(h.pid)+".json")) // make the rewrite fail
 	if got := f.m.helpers.ApplyAddress(h, "a/y:s", 5); got != "a/x:s" {
 		t.Errorf("got %q", got)
 	}
-	if h.appliedRev != 0 {
-		t.Errorf("appliedRev = %d after a failed rewrite", h.appliedRev)
+	if h.appliedRev != 1 {
+		t.Errorf("appliedRev = %d after a failed rewrite, want 1", h.appliedRev)
 	}
 	if !f.logs.contains("rename") {
 		t.Error("no log line for the failed rewrite")
@@ -2253,9 +2606,13 @@ func TestApplyAddress_RewriteFailureRollsBack(t *testing.T) {
 }
 ```
 
-deliver_test.go: (a) a `/deliver` with `From.Address: "purdex-tester:x", AddressRev: 3` produces a wrapper `from-name="a/purdex-tester:x"` and a helper file named so; a second with `AddressRev: 4, Address: "purdex-tester-2:x"` renames; a third with `AddressRev: 2` does not; (b) a request without `Address` (v1) names the helper `a/<session_name>` and a later one with `Address` renames it; (c) `Address: "cc:foo"` ⇒ `400 bad_address`.
+`deliver_test.go` (read `newDeliverEnv`/`envOpts` first; each case sends a real `/deliver` and reads the frame from the env's fake inbox):
+- (a) `From.Address: "purdex-tester:x", AddressRev: 3` ⇒ wrapper `from-name="a/purdex-tester:x"`, helper registry file named so; a second request with `AddressRev: 4, Address: "purdex-tester-2:x"` renames (same socket path in the wrapper's `from`); a third with `AddressRev: 2` **and a fresh msg_id** does not rename (dedup must not be what stops it) and is still `200 delivered` with the frame received.
+- (b) a request without `Address` (v1) names the helper `a/<session_name>`; a later one with `Address: "_k3x9qz:mt1-n", AddressRev: 0` renames it (legacy ⇒ first v2 address).
+- (c) `Address: "cc:foo"` ⇒ `400 bad_address`, unaudited.
+- (d) rewrite failure during delivery: remove the helper's registry file between two requests; the second request is `200 delivered`, the frame arrives, the wrapper carries the **old** name, the log has the rename failure, and the instance's `appliedRev` is unchanged.
 
-- [ ] **Step 2: Run** — FAIL. **Step 3: Implement** per the interface block. **Step 4: Run** the module package ⇒ PASS (update e2e step assertions for `from-name` to the v2 form: `a/<label>:<suffix>` of the origin — `TestE2E_TwoDaemons` currently expects `"a/mt1"`; it becomes `"a/"+DefaultLabel(e2eOriginSID)+":mt1-"+e2eOriginName`).
+- [ ] **Step 2: Run** — FAIL. **Step 3: Implement** per the interface block. **Step 4: Run** the module package ⇒ PASS (update e2e step assertions for `from-name` to the v2 form: `a/<label>:<suffix>` of the origin — `TestE2E_TwoDaemons` currently expects `"a/mt1"`; it becomes `"a/"+ipeers.DefaultLabel(e2eOriginSID)+":mt1-"+e2eOriginName`).
 
 - [ ] **Step 5: Commit** — `git commit -m "feat(peers): helper names follow the address (in-place rewrite, rev-gated); from-name v2"`
 
@@ -2263,7 +2620,7 @@ deliver_test.go: (a) a `/deliver` with `From.Address: "purdex-tester:x", Address
 
 ### Task 14: P4b e2e, spec pointers, PR
 
-- [ ] **Step 1**: Extend `TestE2E_Labels`: after the target claims `purdex-tester`, A's send arrives with `from-name = "a/<A origin address>"`; the target's native reply reaches A and A's helper for the replier is named `b/purdex-tester:foo-<name>`; the target re-claims `purdex-tester-2` and replies again ⇒ the **same** helper on A (same socket path) is now named `b/purdex-tester-2:…` and its registry file says so; a replay of an old `/deliver` body with the earlier `address_rev` does not rename it back.
+- [ ] **Step 1**: Extend `TestE2E_Labels`: after the target claims `purdex-tester`, A's send arrives with `from-name = "a/<A origin address>"`; the target's native reply reaches A and A's helper for the replier is named `b/purdex-tester:foo-<name>`; the target re-claims `purdex-tester-2` and replies again ⇒ the **same** helper on A (same socket path) is now named `b/purdex-tester-2:…` and its registry file says so. Then the stale-revision guard, with dedup ruled out: POST to A's `/deliver` directly (bearer = B's outbound token for A) a request carrying the **old** `from.address` (`purdex-tester:…`) and the **old** `address_rev`, but a **fresh** `msg_id` ⇒ `200 delivered`, the origin inbox receives the frame, and the helper's name and registry file still say `purdex-tester-2`. Also the reverse-direction limit (spec §3.5 Freshness): after A's origin claims a label, B's helper for A keeps its old name until A sends again — assert it is unchanged after B's reply, then changed after A's next send.
 - [ ] **Step 2**: In `docs/specs/2026-09-13-peer-bridge-spec.md` add under §4.1, §4.2, §4.4, §4.5, §4.8 one line each: `> Amended by 2026-09-14-peer-address-v2-spec.md (labels; see its §3.x).`
 - [ ] **Step 3**: `go test -race -count=1 ./... && go vet ./... && make build` ⇒ PASS.
 - [ ] **Step 4**: Commit `test(peers): P4b e2e — from-name v2 and helper rename; docs: spec pointers`, push, `gh pr create` titled "Peer Address v2 (P4b): from.address on the wire, helper renames" with the same footer. Then review rounds, merge, bump, deploy both hosts, and run spec §5 acceptance (P4b column).
@@ -2275,3 +2632,27 @@ deliver_test.go: (a) a `/deliver` with `From.Address: "purdex-tester:x", Address
 - **Spec coverage**: §3.1 → T1; §3.2 → T6; §3.3 (diagnosis, store, occupancy, claim matrix, release, inventory read of labels) → T2/T3/T5/T7; §3.4 (entry rows, fields, daemon_version) → T4/T5; §3.5 → T11/T12/T13; §3.6 (routes, errors, CLI, `pdx peers`) → T7/T8/T9; §3.7 → T10; §3.9 → no code (docs in PR body); §4 tests list → spread across tasks; the R2-1 named test → T10 step 5. `LabelRev` on `PeerRecord` is a plan-level addition the spec's §3.5 needs (`address_rev` must come from the record); note it in the P4a PR description as a §3.4 field addition.
 - **Placeholders**: the `newLabelFixture`, `fakeDaemon`, `envWith`, `validRegistryJSON` helpers are named but their bodies are "model on the existing helper X" — acceptable because each names the file and pattern to copy; implementers must read those files first.
 - **Type consistency**: `ReadRegistryDiag` returns `(entries, Diagnosis, error)` everywhere; `Resolve(records, session, partial)` everywhere; `LabelStore` methods match `store.PeerLabelStore`; `ApplyAddress(h, name, rev) string` in T13 tests and interface; error string constants `ErrLabelTaken` etc. live in `wire.go` while the sentinel errors `ErrLabelInvalid`/`ErrLabelReserved` live in `label.go` — the wire string constants are therefore named `ErrCodeLabelInvalid` / `ErrCodeLabelReserved` (plus `ErrLabelTaken`, `ErrStoreUnavailable`) so they never collide with the sentinels; T7/T8 already use those names.
+
+## Plan review disposition (codex `task-mu1dulow-tnozhu`, plan v1 → v2)
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| 1 | Blocker | T6/T7 test code did not compile (`labelRecord` params, `decodeRecord(t, f.claim(...))`) | fixed — signatures and two-step calls |
+| 2 | Major | fixture builds `&Module{}`, `New(nil)` callers unlisted | fixed — T5 lists `module_test.go:187/1501/1518`, `main.go:263` |
+| 3 | Major | entry rows change existing partial-inventory tests; migration unassigned | fixed — T4 lists every test to migrate; `not_ready` guards re-expressed in T5 with unknown registry files |
+| 4 | Major | registry unknown could still yield `target_gone` / `replier_unknown` | fixed — T5: unknown files ⇒ `not_ready` even with a candidate; tests added |
+| 5 | Major | self responses rebuilt from a second inventory read | fixed — T7 builds every response with `EntryRecord` from the validated entry + label row; suffix derived from the entry's tmux field (T4) so listing and whoami agree |
+| 6 | Major | `/send` `not_ready` lacked `partial: true` | fixed — T6 writes the body directly; `APIError.Partial` moved to T6 |
+| 7 | Major | spawn revision not stored atomically | fixed — `Acquire(…, name, rev)` stores `appliedRev` at admission (T13) |
+| 8 | Major | legacy helper vs v2 default label rev 0 | fixed — `revUnapplied` (-1): first v2 address always applies (T13); spec §3.5 amended |
+| 9 | Major | race / failure delivery tests missing | fixed — T13: release-then-apply asserts no file recreation; deliver_test (d) asserts frame delivered on rewrite failure; all under `m.mu` so ordering tests are the race tests |
+| 10 | Major | replay test defeated by dedup | fixed — T13 (a) and T14 use a fresh `msg_id` with the old `address_rev` |
+| 11 | Minor | `labelMu` held across inventory build | fixed — T7 never calls `localEnvelope` under the lock; encode after unlock |
+| 12 | Minor | R2-1 scenario not actually built | fixed — T10 step 5 claims `foo` on a Desktop holder first, asserts shadowing, then the unknown |
+| 13 | Minor | EPERM test not deterministic | fixed — `killProbe` seam; `MaxRegistryPID` |
+| 14 | Minor | golden vectors not frozen | fixed — four fixed vectors incl. a `_0…` padding case |
+| 15 | Minor | spec ambiguity: which unknowns mark inventory partial | fixed — spec §3.3 amended to "unknown files whose pid is alive" everywhere; T5 uses `BlockingUnknown()` |
+| 16 | Minor | `map[string]any` damages large integers | fixed — `map[string]json.RawMessage` (T12) |
+| 17 | Minor | output strings / version placement inconsistent | fixed — `released: <address>`; trailer recorded as a spec §3.6 delta |
+| 18 | Minor | T11 Files, T13 `someKey`, T8 empty tests | fixed |
+| O | — | omissions: write-failure fakes, `--json`, `not_ready.skipped` rendering, dispatcher wiring, PID range, per-task migration responsibility, integration tests not forced red | all added (T5 `writeFailingLabels`, T7 store-failure test, T8 tests, T2 `MaxRegistryPID`, T4 migration list, T10/T14 wording) |

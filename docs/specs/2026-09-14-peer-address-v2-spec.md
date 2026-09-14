@@ -1,6 +1,6 @@
 # Spec — Peer address v2: session labels ("Peer Address v2")
 
-Status: draft v3 (R1 `task-mu1ags4q-o5eeev`: 2 Blockers, 12 Majors, 3 Minors,
+Status: draft v3.1 (plan review `task-mu1dulow-tnozhu` amendments: §3.1 suffix source, §3.3 alive-unknowns only, §3.4 label_rev, §3.5 unapplied revision, §3.6 version trailer; R1 `task-mu1ags4q-o5eeev`: 2 Blockers, 12 Majors, 3 Minors,
 5 omissions; R2 `task-mu1ayutr-i477ud`: 1 Blocker, 8 Majors, 3 Minors — all
 accepted; §8/§9 hold both disposition tables)
 Date: 2026-09-14
@@ -137,8 +137,14 @@ the same conversation has the same default before and after a resume.
 **Suffix.** Display only. The owning daemon computes it on every
 inventory read and never stores it:
 
+- the tmux session name is read from the entry's own registry `tmux` field
+  (the text before its first `:`), for session rows and entry rows alike,
+  so a record built from the entry alone (§3.6 self responses) renders the
+  same address the listing shows
 - inside tmux: `san(tmux session name) + "-" + san(registry name)`
-- outside tmux, or for an entry row (§3.4): `san(registry name)`
+- outside tmux: `san(registry name)`
+- a session row whose agent is only the owner fallback (no entry):
+  `san(tmux session name) + "-_"`
 - `san` keeps `[A-Za-z0-9_.-]`, replaces every other byte with `_`, and
   truncates to 32 characters; an empty input becomes `_`.
 
@@ -222,7 +228,9 @@ call and once per claim, never cached across calls.
 
 **Inventory `partial`** (amends PB §4.2): `partial: true` when owner
 resolution did not run for some session (today's rule) **or** the registry
-diagnosis contains at least one **unknown** file. The envelope gains
+diagnosis contains at least one **unknown** file **whose pid is alive**
+(`kill(pid,0)` ⇒ success or `EPERM`). An unknown file for a dead pid cannot
+hide a live session and is ignored here exactly as it is for claims. The envelope gains
 `unknown_registry_files: []string` (empty when none) so an operator can see
 why. §3.2 turns `partial` into `not_ready` for bare-name resolution; this
 is what stops a bare `mt0` from falling to tier 2 while the Desktop session
@@ -348,7 +356,10 @@ Rules:
   case and for `inbox_dead` is not.
 - Entry rows: `row_kind: "entry"`, `session_code`/`session_name`/
   `tmux_instance` empty, `cwd` from the entry, `agent` from the entry,
-  `deliverable` by PB §4.2's inbox rule, suffix `san(registry name)`.
+  `deliverable` by PB §4.2's inbox rule, suffix per §3.1 (from the entry's
+  own `tmux` field). Every cc row also carries `label_rev` — the row's
+  `rev` (§3.3), `0` when the conversation has no row — which is what
+  `address_rev` (§3.5) is filled from.
 - Proxy rows keep their helper's registry name as `address`, `label: ""`,
   and are excluded from tier 1.
 
@@ -409,8 +420,13 @@ still the first-line config only.
 
 **Legacy requests.** A `/deliver` without `address` (a v1 sender) names a
 freshly spawned helper `<alias>/<session_name or cc:peer_name>` as v1 did,
-and applies no rename to an existing one. A later request from the same
-origin that does carry `address` renames as above.
+and applies no rename to an existing one. Such a helper has **no applied
+revision**: the first later request from the same origin that does carry
+`address` renames it whatever its `address_rev` is (a never-named
+conversation legitimately sends `0`), and from then on the monotonic rule
+applies. The revision of the request that spawned a helper is recorded at
+admission, so a spawn whose waiter left before the helper was ready still
+carries the revision that named it.
 
 **Freshness.** A helper on host B representing origin A is renamed only by
 a `/deliver` **from A** for that key. A reply from B's session to A
@@ -487,8 +503,9 @@ session:  fa5d4c07-… pid 76973
 
 `pdx peers` / `pdx peers --all` show the new `address` column, mark
 `label_source: default` rows with `*`, show `row_kind: entry` rows
-indented under their host, and print each host's `daemon_version` in the
-host header.
+indented under their host, and print each host's `daemon_version` as a
+trailer line after the table (`<alias>  daemon <version>`; both tables are
+one aligned block, so a per-host header row is not used).
 
 `pdx msg selftest` is **unchanged**. It is the harness-upgrade gate (P3
 D4: the process acts as its own virtual peer and never calls the daemon),
