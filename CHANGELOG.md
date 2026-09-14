@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.346] - 2026-09-15
+
+### Feat: Nexen 執行引擎以 opt-in 的 `nex` module 嵌入 pdx daemon（P-A，#1035）
+
+**起因**：指揮官模式（一個互動式 CC 控多個 `claude -p` worker）、手機接管桌機 session、Aigora 事件升級，三個場景都需要每台 host 上有一個 headless agent 執行引擎。Nexen（`lab.protype.tw/wake/nexen` v0.9.0：`claude -p` stream-json runner，自帶 SQLite event store、SSE、lease）就是那個引擎，但使用者不想再維護第二套跨機部署——所以把它當 Go library 編進 `pdx`，讓既有的 local daemon install／dev update 一併帶上，後續 P-B（SPA execution pane）、P-C（啟動 UI + handoff）、Aigora、Swift 手機端全部吃 `/api/nex/v1/*` 這一份契約。同時定案 Purdex 自己的 Stream 模式／`pdx relay`／bridge／M0 execution+dispatch 之後在 P-D 全拆。
+
+**`[nex]` config**（預設 `enabled = false`，未 opt-in 的 host 零影響）：`repo_roots`／`service_roots`（admission allowlist，至少一個）、`claude_bin`、`cswap_bin`、`path_prepend`（launchd/Finder 起的 daemon 沒有 shell PATH，Init 時把 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 依序前置到 process PATH，冪等、`[]` 停用——全域影響已在 spec §4.6 承認）、`[nex.sandbox] max_profile/default_profile`、`[nex.timeouts]`。pdx 側驗證指名 key，Nexen 自己的 `Validate()` 在 `Assemble` 前跑；`HOME` 缺席時已停用的 section 不會擋住 daemon 啟動（R2 抓到的回歸）。`PUT /api/config` 拒絕 `nex` key（Settings UI 是 P-C）；`/api/info` 多 `nex: {configured, mounted}`。
+
+**掛載與 auth**：`internal/module/nex` 以 `StripPrefix(/api/nex)` + `PublicPrefix` 掛 Nexen handler（回應裡的 `lease.*.path`／`stream_url` 帶前綴），外層仍是 daemon 的 `CORS → IPWhitelist → PairingGuard → TokenAuth` chain；Nexen 的 Authenticator 回 principal `pdx:<host_id>`，可選 header `X-Pdx-Client` 加尾段 `pdx:<host_id>/<client>`（同 token 的兩個 client 否則會靜默互相 re-mint control lease——P-B 的 SPA 每個分頁送自己的 id，CLI 不送）。11 列 auth 矩陣釘住「未授權永遠到不了 handler」。Go 側只走 HTTP，`go/parser` 測試守住 import 邊界（只准 `nexen`、`api`、`config`、`sandbox`）。request-scoped recoverer 不包 writer（`Flusher`／`Hijacker` 原樣、`ErrAbortHandler` 透傳、logf 自己 panic 也保證 500 + stdlib log）。
+
+**關機**：新 `core.Closer` + `CloseModules`、`core.ShutdownBudget`，`cmd/pdx/shutdown.go` 的 `serveAndWait` 把序列收成一條：`cancel → StopModules(ctx) → srv.Shutdown(ctx)[逾時 → Close] → CloseModules`，同一個 ctx、恰好一次、main 等到最後一步；第二次 Ctrl-C 立即 exit 130（Serve 先返回的路徑：第一個 signal 只提示、第二個才退出；預先殘留的 signal 先 drain 掉不誤判）。**pdx 重啟會中斷執行中的 turn**——Nexen reconcile 收斂成 `idle`，`send` 續談（實測 `--resume` 保留中斷前脈絡）。CORS 加 `Last-Event-ID`：SSE 一律 fetch + Bearer + `Last-Event-ID` header，不走 ticket。
+
+**`pdx nex …`**：包 Nexen client（`delegate / ls / show / watch / events / attach / send / interrupt / archive / terminate / host`），addr/token 優先序 flag > `PDX_NEX_ADDR`/`PDX_NEX_TOKEN` > config；`--addr` 指外部時不回退本機 token；mount 404 才報「not enabled」（含 probe URL）。
+
+**建置**：`go 1.26`、`lab.protype.tw/wake/nexen v0.0.0-20260914203205-1e5d09014b65`（Gitea private：機器層級 `go env -w GOPRIVATE=lab.protype.tw` + git `insteadOf` 轉 ssh:9079，`make check-goenv` 預檢、README 有寫；`.DEFAULT_GOAL := build`）、`modernc.org/sqlite` 1.46 → 1.54（MVS）。
+
+**驗收**（spec §6，在隔離 daemon :7899 上，production :7860 未動）：冷快取裸 env 建置 ✅、start log／info／capabilities／401 ✅、真 claude delegate → result ✅、SIGTERM 中斷 → `idle` → `send` 續談 ✅、`kill -9` → `turn_orphaned` `process_killed:true` ✅、本 session 平行派兩 worker + interrupt ✅、execution → tmux `claude --resume` ✅、preflight + `Last-Event-ID` 續傳 ✅。**未閉合**：tmux → execution 需要 Nexen delegate 加 `resume_session_id`（v0.9.0 沒有，之前「delegate 已有 session_id 欄位」是誤讀；#1032 / nexen #65，P-C 前置）；3b 超時路徑未強迫；a26 真機（#1034）；`backup`/`sync`/`execution` 在 `Stop()` 關 store 的既有問題由新 seam 修（#1033）。**merge ≠ deploy**：mlab daemon 尚未換這版 binary。
+
+**流程**：Nexen 側 N1 先 library 化（nexen v0.9.0，PR #59）→ P-A spec 一輪 codex（13 條全處置）→ plan 一輪 codex（12 條全處置）→ 12 task subagent TDD（每 task 獨立 review，5 個 fix round）→ final whole-branch review（opus）→ fix wave + 補丁 → PR codex R1（1 P2：Makefile 預設目標）→ **codex R2 三視角因 ChatGPT 配額用盡（至 9/19）改由 Claude 三視角代跑**（攻 3 Major／防 0／體質 0，全修）→ scoped re-review 全過。spec 定稿 v2.1。
+
 ## [1.0.0-alpha.345] - 2026-09-15
 
 ### Feat: Peer Address v2（P4b）——label 地址上線到 wire，遠端 helper 名稱原地跟著改（#1028）
