@@ -689,7 +689,11 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		Error:                rowErr,
 		Partial:              env.Partial,
 		Peers:                peers,
-		DaemonVersion:        env.DaemonVersion,
+		// env.DaemonVersion is the remote's own reported text, exactly as
+		// attacker-controlled as env.Error and the unknown-registry-files
+		// list above, so it is bounded the same way before this row is
+		// ever printed or re-encoded.
+		DaemonVersion:        boundRemoteText(env.DaemonVersion),
 		UnknownRegistryFiles: bounded,
 	}
 }

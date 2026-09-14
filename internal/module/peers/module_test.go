@@ -1283,6 +1283,55 @@ func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 	}
 }
 
+// TestHandlePeers_ScopeAll_RemoteDaemonVersionBounded (F3) pins that
+// fetchHostResult bounds a remote host's self-reported daemon_version the
+// same way it already bounds env.Error and env.UnknownRegistryFiles: that
+// field is exactly as attacker-controlled as the other two, and until this
+// fix it passed through unbounded.
+func TestHandlePeers_ScopeAll_RemoteDaemonVersionBounded(t *testing.T) {
+	dir := t.TempDir()
+
+	hugeVersion := strings.Repeat("v", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID: "air:111", OK: true, DaemonVersion: hugeVersion, Peers: []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: srv.URL, Token: "tok-a", HostID: "air:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	row := got.Hosts[1]
+	if len(row.DaemonVersion) >= len(hugeVersion) {
+		t.Errorf("daemon_version len = %d, want bounded well below the remote's %d-byte report", len(row.DaemonVersion), len(hugeVersion))
+	}
+	if !strings.HasSuffix(row.DaemonVersion, "…") {
+		t.Errorf("daemon_version = %q, want the truncation marker", row.DaemonVersion)
+	}
+}
+
 // TestHandlePeers_ScopeAll_OversizedHostRowCapped pins the per-host
 // aggregated size cap in fan-out: a single misbehaving/malicious remote
 // host returning a huge inventory (here, one record with a 3 MiB cwd) must
