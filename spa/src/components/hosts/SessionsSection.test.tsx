@@ -98,6 +98,22 @@ describe('SessionsSection', () => {
     expect(screen.getByText('No sessions on this host')).toBeInTheDocument()
   })
 
+  // Host never delivered a sessions payload (no token / unreachable):
+  // `s.sessions[hostId]` is undefined. The selector must return a stable
+  // reference or useSyncExternalStore loops until React throws
+  // "Maximum update depth exceeded".
+  it('does not loop when the host has no sessions entry at all (unloaded host)', () => {
+    useSessionStore.setState({ sessions: {} })
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
+      hostOrder: [HOST_ID],
+      runtime: {},
+      activeHostId: HOST_ID,
+    })
+    expect(() => render(<SessionsSection hostId={HOST_ID} />)).not.toThrow()
+    expect(screen.getByText('No sessions on this host')).toBeInTheDocument()
+  })
+
   it('renders session table with name, mode, cwd columns', () => {
     render(<SessionsSection hostId={HOST_ID} />)
     // Column headers
