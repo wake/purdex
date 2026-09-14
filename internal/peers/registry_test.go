@@ -2,10 +2,13 @@ package peers
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -34,6 +37,122 @@ func allTrueLiveness(startTime time.Time) Liveness {
 		Stat:      func(path string) error { return nil },
 		PidAlive:  func(pid int) bool { return true },
 		StartTime: func(pid int) (time.Time, error) { return startTime, nil },
+	}
+}
+
+// validRegistryJSON renders a well-formed registry file for pid, using
+// wantProcStart (in ProcStartLayout) as procStart and inbox as
+// messagingSocketPath.
+func validRegistryJSON(pid int, inbox string) string {
+	return fmt.Sprintf(
+		`{"pid":%d,"sessionId":"sid-%d","cwd":"/tmp","procStart":%q,"messagingSocketPath":%q,"name":"n","version":"v"}`,
+		pid, pid, wantProcStart.Format(ProcStartLayout), inbox,
+	)
+}
+
+func TestReadRegistryDiag_Classes(t *testing.T) {
+	dir := t.TempDir()
+	// live
+	writeFixture(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
+	// confirmed dead: pid not alive
+	writeFixture(t, dir, "200.json", validRegistryJSON(200, "/tmp/200.sock"))
+	// confirmed dead: socket ENOENT
+	writeFixture(t, dir, "300.json", validRegistryJSON(300, "/tmp/missing.sock"))
+	// unknown: undecodable, pid (from filename) alive
+	writeFixture(t, dir, "400.json", "{")
+	// unknown: undecodable, pid dead ⇒ not blocking
+	writeFixture(t, dir, "500.json", "{")
+	// unknown: pid mismatch (file says 601, name says 600), 600 alive
+	writeFixture(t, dir, "600.json", validRegistryJSON(601, "/tmp/600.sock"))
+	// not a candidate
+	writeFixture(t, dir, ".700.json.tmp", "{")
+	writeFixture(t, dir, "800.deadbeef.key", "{}")
+
+	live := allTrueLiveness(wantProcStart)
+	live.PidAlive = func(pid int) bool { return pid != 200 && pid != 500 }
+	live.Stat = func(p string) error {
+		if p == "/tmp/missing.sock" {
+			return os.ErrNotExist
+		}
+		return nil
+	}
+
+	entries, diag, err := ReadRegistryDiag(dir, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].PID != 100 {
+		t.Fatalf("entries = %+v, want only pid 100", entries)
+	}
+	if diag.Dead != 2 {
+		t.Errorf("Dead = %d, want 2", diag.Dead)
+	}
+	if len(diag.Unknown) != 3 {
+		t.Fatalf("Unknown = %+v, want 3", diag.Unknown)
+	}
+	blocking := diag.BlockingUnknown()
+	want := []string{filepath.Join(dir, "400.json"), filepath.Join(dir, "600.json")}
+	sort.Strings(blocking)
+	if !reflect.DeepEqual(blocking, want) {
+		t.Errorf("BlockingUnknown = %v, want %v", blocking, want)
+	}
+	// The wrapper keeps the old contract: skipped = dead + unknown.
+	_, skipped, _ := ReadRegistry(dir, live)
+	if skipped != 5 {
+		t.Errorf("ReadRegistry skipped = %d, want 5", skipped)
+	}
+}
+
+func TestReadRegistryDiag_StatNonENOENTIsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
+	live := allTrueLiveness(wantProcStart)
+	live.Stat = func(string) error { return errors.New("EACCES") }
+	_, diag, _ := ReadRegistryDiag(dir, live)
+	if diag.Dead != 0 || len(diag.Unknown) != 1 || !diag.Unknown[0].Alive {
+		t.Fatalf("diag = %+v, want one alive unknown", diag)
+	}
+}
+
+func TestReadRegistryDiag_StartMismatchIsDead_StartErrorIsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "100.json", validRegistryJSON(100, "/tmp/100.sock"))
+	off := allTrueLiveness(wantProcStart.Add(time.Minute))
+	_, diag, _ := ReadRegistryDiag(dir, off)
+	if diag.Dead != 1 || len(diag.Unknown) != 0 {
+		t.Fatalf("mismatch: diag = %+v, want Dead=1", diag)
+	}
+	bad := allTrueLiveness(wantProcStart)
+	bad.Info = nil
+	bad.StartTime = func(int) (time.Time, error) { return time.Time{}, errors.New("ps failed") }
+	_, diag, _ = ReadRegistryDiag(dir, bad)
+	if diag.Dead != 0 || len(diag.Unknown) != 1 {
+		t.Fatalf("start error: diag = %+v, want one unknown", diag)
+	}
+}
+
+func TestDefaultLiveness_PidAlive_Probe(t *testing.T) {
+	// killProbe is the package-level seam DefaultLiveness uses (injected
+	// here so the test is deterministic on any host and fails before the
+	// change: the old code returned err == nil only).
+	orig := killProbe
+	t.Cleanup(func() { killProbe = orig })
+	cases := map[error]bool{nil: true, syscall.EPERM: true, syscall.ESRCH: false}
+	for probeErr, want := range cases {
+		killProbe = func(int, syscall.Signal) error { return probeErr }
+		if got := DefaultLiveness().PidAlive(4242); got != want {
+			t.Errorf("probe %v ⇒ alive %v, want %v", probeErr, got, want)
+		}
+	}
+}
+
+func TestReadRegistryDiag_PidOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "99999999999999999999.json", "{}") // overflows int
+	writeFixture(t, dir, "4294967296.json", "{}")           // > MaxRegistryPID
+	_, diag, _ := ReadRegistryDiag(dir, allTrueLiveness(wantProcStart))
+	if len(diag.Unknown) != 2 || diag.Unknown[0].Alive || diag.Unknown[1].Alive {
+		t.Fatalf("diag = %+v, want two non-alive unknowns", diag)
 	}
 }
 

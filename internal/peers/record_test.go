@@ -2,6 +2,9 @@ package peers
 
 import (
 	"encoding/json"
+	"errors"
+	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -43,9 +46,10 @@ func TestBuild_SortedBySessionNameThenCode(t *testing.T) {
 			t.Errorf("record[%d].SessionCode = %q, want %q", i, got[i].SessionCode, code)
 		}
 	}
-	// Address / Host construction (rule 1).
-	if got[2].Address != "mini-lab/zeta" {
-		t.Errorf("Address = %q, want mini-lab/zeta", got[2].Address)
+	// Address / Host construction (rule 1): a session row with no cc agent
+	// uses the tmux: form (spec §3.4).
+	if got[2].Address != "mini-lab/tmux:zeta" {
+		t.Errorf("Address = %q, want mini-lab/tmux:zeta", got[2].Address)
 	}
 	if got[2].Host != "mini-lab" {
 		t.Errorf("Host = %q, want mini-lab", got[2].Host)
@@ -294,8 +298,8 @@ func TestBuild_CC_TwoCandidates_NoPaneMatch_Ambiguous(t *testing.T) {
 }
 
 // Entry with matching pane but different SessionID => inbox_dead for the
-// session (rule 6, no pane fallback), and that entry gets its own cc: row
-// only if its TmuxSessionName() is not a listed session.
+// session (rule 6, no pane fallback), and that entry gets its own entry
+// row only if its TmuxSessionName() is not a listed session.
 func TestBuild_CC_PaneMatchWrongSessionID_InboxDeadAndOutsideRow(t *testing.T) {
 	entry := Entry{PID: 99, SessionID: "other-sess", Name: "stray", Tmux: "elsewhere:@1.%10"}
 	in := BuildInput{
@@ -324,8 +328,12 @@ func TestBuild_CC_PaneMatchWrongSessionID_InboxDeadAndOutsideRow(t *testing.T) {
 	if outsideRow == nil {
 		t.Fatalf("outsideRow missing")
 	}
-	if outsideRow.Address != "mini-lab/cc:stray" {
-		t.Errorf("outsideRow.Address = %q, want mini-lab/cc:stray", outsideRow.Address)
+	// v2: the entry's own tmux session ("elsewhere") is not a listed
+	// session either way, but the row is now an entry row (RowKind) with
+	// a label+suffix address, not the retired "cc:<name>" form.
+	wantAddr := "mini-lab/" + DefaultLabel("other-sess") + ":elsewhere-stray"
+	if outsideRow.RowKind != "entry" || outsideRow.Address != wantAddr {
+		t.Errorf("outsideRow rowkind/address = %q/%q, want entry/%q", outsideRow.RowKind, outsideRow.Address, wantAddr)
 	}
 	if !outsideRow.Deliverable || outsideRow.Reason != "" {
 		t.Errorf("outsideRow deliverable/reason = %v/%q, want true/empty", outsideRow.Deliverable, outsideRow.Reason)
@@ -353,8 +361,9 @@ func TestBuild_OutsideTmuxRow(t *testing.T) {
 	if r.SessionCode != "" || r.SessionName != "" || r.TmuxInstance != "" {
 		t.Errorf("outside row session fields not empty: %+v", r)
 	}
-	if r.Address != "mini-lab/cc:outside-1" {
-		t.Errorf("Address = %q, want mini-lab/cc:outside-1", r.Address)
+	wantAddr := "mini-lab/" + DefaultLabel("sess-y") + ":outside-1"
+	if r.Address != wantAddr {
+		t.Errorf("Address = %q, want %q", r.Address, wantAddr)
 	}
 	if r.Cwd != "/out" {
 		t.Errorf("Cwd = %q, want /out", r.Cwd)
@@ -446,7 +455,7 @@ func TestBuild_OutsideTmuxRows_SortedByPeerNameThenPID(t *testing.T) {
 }
 
 // Entry with Tmux:"" that rule 4 consumed (the single candidate) never also
-// produces a cc: row: the entry appears exactly once, as the session row.
+// produces an entry row: the entry appears exactly once, as the session row.
 func TestBuild_EntryConsumedByRule4_NeverAlsoAppearsAsOutsideRow(t *testing.T) {
 	entry := Entry{PID: 5, SessionID: "sess-x", Name: "purdex-5", Tmux: ""}
 	in := BuildInput{
@@ -459,23 +468,17 @@ func TestBuild_EntryConsumedByRule4_NeverAlsoAppearsAsOutsideRow(t *testing.T) {
 	}
 	got := Build(in)
 	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1 (session row only, no duplicate cc: row)", len(got))
+		t.Fatalf("len = %d, want 1 (session row only, no duplicate entry row)", len(got))
 	}
 	sessionRow := got[0]
 	if sessionRow.SessionCode != "s1" || !sessionRow.Deliverable || sessionRow.Agent == nil || sessionRow.Agent.PID != 5 {
 		t.Fatalf("sessionRow = %+v, want deliverable session row via entry PID 5", sessionRow)
 	}
 
-	// (c) Resolve(records, "cc:purdex-5") returns the session row itself
-	// (no AmbiguousError), since the entry it was built from is not
-	// duplicated into a separate outside row.
-	resolved, err := Resolve(got, "cc:purdex-5")
-	if err != nil {
-		t.Fatalf("Resolve: unexpected err: %v", err)
-	}
-	if resolved.SessionCode != "s1" {
-		t.Fatalf("Resolve() = %+v, want the session row (SessionCode=s1)", resolved)
-	}
+	// (c) The entry it was built from is not duplicated into a separate
+	// outside row: len(got) == 1 above already proves it (Resolve's
+	// "cc:<name>" tier is retired in Task 6, so there is no lookup left
+	// to re-demonstrate it through).
 }
 
 // TestBuild_TwoSessionsSameOwnerSessionID_EntryConsumedOnce pins Item 4: two
@@ -486,9 +489,8 @@ func TestBuild_EntryConsumedByRule4_NeverAlsoAppearsAsOutsideRow(t *testing.T) {
 // info); the second must fall back to the owner-only agent with
 // Deliverable=false, Reason="ambiguous" rather than also claiming the entry
 // as deliverable. The entry appears exactly once in the whole output, and
-// Resolve(records, "cc:<name>") returns the first (winning) row, never an
-// AmbiguousError, since the second row's fallback agent carries no
-// PeerName.
+// the winning row is the first (session s1) — found directly by RowKind
+// and PID here, since Resolve's "cc:<name>" tier is retired in Task 6.
 func TestBuild_TwoSessionsSameOwnerSessionID_EntryConsumedOnce(t *testing.T) {
 	entry := Entry{
 		PID: 100, SessionID: "sess-x", Name: "purdex-1", NameSource: "derived",
@@ -550,12 +552,14 @@ func TestBuild_TwoSessionsSameOwnerSessionID_EntryConsumedOnce(t *testing.T) {
 		t.Errorf("entry PID 100 appears %d times across records, want exactly 1", count)
 	}
 
-	resolved, err := Resolve(got, "cc:purdex-1")
-	if err != nil {
-		t.Fatalf("Resolve: unexpected err: %v", err)
+	if s1Rec.RowKind != "session" || !s1Rec.Deliverable || s1Rec.Agent == nil || s1Rec.Agent.PID != 100 {
+		t.Fatalf("s1 = %+v, want the winning deliverable session row (PID 100)", s1Rec)
 	}
-	if resolved.SessionCode != "s1" {
-		t.Fatalf("Resolve() = %+v, want the first (winning) session row s1", resolved)
+	// Both rows carry the same default label (Item 4's ambiguity is now
+	// visible in the label too): Resolve (Task 6) reports the pair
+	// ambiguous by label+suffix, not by this row's SessionCode.
+	if s1Rec.Label != DefaultLabel("sess-x") || s2Rec.Label != DefaultLabel("sess-x") {
+		t.Errorf("labels = %q/%q, want both %q", s1Rec.Label, s2Rec.Label, DefaultLabel("sess-x"))
 	}
 }
 
@@ -589,9 +593,13 @@ func TestBuild_AmbiguousCandidates_StillGetOutsideRows(t *testing.T) {
 	if sessionRow == nil || sessionRow.Reason != "ambiguous" {
 		t.Fatalf("sessionRow = %+v, want reason ambiguous", sessionRow)
 	}
-	wantAddrs := map[string]bool{"mini-lab/cc:one": true, "mini-lab/cc:two": true}
+	label := DefaultLabel("sess-x")
+	wantAddrs := map[string]bool{
+		"mini-lab/" + label + ":elsewhere-one": true,
+		"mini-lab/" + label + ":elsewhere-two": true,
+	}
 	if len(outsideAddrs) != 2 || !wantAddrs[outsideAddrs[0]] || !wantAddrs[outsideAddrs[1]] {
-		t.Fatalf("outsideAddrs = %v, want both mini-lab/cc:one and mini-lab/cc:two", outsideAddrs)
+		t.Fatalf("outsideAddrs = %v, want both entry-row addresses in %v", outsideAddrs, wantAddrs)
 	}
 }
 
@@ -683,7 +691,7 @@ func TestBuild_JSON_EveryRecordHasCoreKeys(t *testing.T) {
 	got := Build(in)
 	for _, rec := range got {
 		m := mustMarshalMap(t, rec)
-		for _, key := range []string{"session_code", "session_name", "tmux_instance", "reason"} {
+		for _, key := range []string{"session_code", "session_name", "tmux_instance", "reason", "row_kind", "label", "label_source", "label_rev", "suffix"} {
 			if _, present := m[key]; !present {
 				t.Errorf("record %+v missing key %q", rec, key)
 			}
@@ -744,7 +752,7 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 		byAddress[r.Address] = r
 	}
 
-	mt1 := byAddress["mini-lab/mt1"]
+	mt1 := byAddress["mini-lab/"+DefaultLabel(mt1Entry.SessionID)+":mt1-purdex-47"]
 	if !mt1.Deliverable || mt1.Reason != "" || mt1.Agent == nil {
 		t.Fatalf("mt1 = %+v, want deliverable cc row", mt1)
 	}
@@ -755,12 +763,12 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 		t.Errorf("mt1.TmuxInstance = %q", mt1.TmuxInstance)
 	}
 
-	aigora3 := byAddress["mini-lab/aigora3"]
+	aigora3 := byAddress["mini-lab/tmux:aigora3"]
 	if aigora3.Agent != nil || aigora3.Reason != "no_agent" || aigora3.Deliverable {
 		t.Errorf("aigora3 = %+v, want no_agent shell row", aigora3)
 	}
 
-	codexy := byAddress["mini-lab/codexy"]
+	codexy := byAddress["mini-lab/tmux:codexy"]
 	if codexy.Agent == nil || codexy.Agent.Type != "codex" || codexy.Agent.Status != "busy" {
 		t.Errorf("codexy = %+v, want codex agent status busy", codexy)
 	}
@@ -768,11 +776,155 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 		t.Errorf("codexy deliverable/reason = %v/%q, want false/not_cc", codexy.Deliverable, codexy.Reason)
 	}
 
-	outside := byAddress["mini-lab/cc:scratch-1"]
+	outside := byAddress["mini-lab/"+DefaultLabel(outsideEntry.SessionID)+":scratch-1"]
 	if outside.Agent == nil || !outside.Deliverable || outside.Reason != "" {
 		t.Errorf("outside = %+v, want deliverable outside-tmux row", outside)
 	}
 	if outside.SessionCode != "" || outside.SessionName != "" || outside.TmuxInstance != "" {
 		t.Errorf("outside session fields not empty: %+v", outside)
 	}
+}
+
+// --- Labels, suffix, entry rows (Peer Address v2, Task 4) -----------------
+
+// TestBuild_LabelsAndAddresses pins the address rules of spec §3.4: a cc
+// row (session or entry) reads "<alias>/<label>:<suffix>" with the suffix
+// derived from the row's own registry tmux field; a session row with no cc
+// agent reads "<alias>/tmux:<name>"; a user label (with its Rev) wins over
+// the default label.
+func TestBuild_LabelsAndAddresses(t *testing.T) {
+	in := BuildInput{
+		HostID: "h:1", Alias: "mini-lab",
+		Sessions: []SessionSummary{{Code: "c1", Name: "mt0", Cwd: "/w"}, {Code: "c2", Name: "shell"}},
+		Owners: map[string]Owner{
+			"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%1"},
+		},
+		Entries: []Entry{
+			{PID: 10, SessionID: "sid-1", Name: "purdex-49", Tmux: "mt0:@1.%1", Inbox: "/s/10"},
+			{PID: 20, SessionID: "sid-2", Name: "purdex-3f", Tmux: "", Inbox: "/s/20"}, // Desktop
+		},
+		Labels: map[string]LabelInfo{"sid-1": {Label: "purdex-dev", Rev: 7}},
+	}
+	recs := Build(in)
+	byAddr := map[string]PeerRecord{}
+	for _, r := range recs {
+		byAddr[r.Address] = r
+	}
+	dev, ok := byAddr["mini-lab/purdex-dev:mt0-purdex-49"]
+	if !ok {
+		t.Fatalf("no dev row; addresses: %v", keys(byAddr))
+	}
+	if dev.RowKind != "session" || dev.Label != "purdex-dev" || dev.LabelSource != LabelSourceUser || dev.LabelRev != 7 || dev.Suffix != "mt0-purdex-49" {
+		t.Errorf("dev row = %+v", dev)
+	}
+	want := "mini-lab/" + DefaultLabel("sid-2") + ":purdex-3f"
+	desk, ok := byAddr[want]
+	if !ok {
+		t.Fatalf("no desktop row %q; addresses: %v", want, keys(byAddr))
+	}
+	if desk.RowKind != "entry" || desk.LabelSource != LabelSourceDefault || desk.LabelRev != 0 || !desk.Deliverable {
+		t.Errorf("desktop row = %+v", desk)
+	}
+	shell, ok := byAddr["mini-lab/tmux:shell"]
+	if !ok || shell.Label != "" || shell.Suffix != "" || shell.LabelSource != "" {
+		t.Errorf("shell row = %+v (ok=%v)", shell, ok)
+	}
+}
+
+// TestBuild_EntryRow_NonOwnerEntryInsideListedSession pins the v2 delta
+// over rule 5: two live processes of DIFFERENT conversations in one tmux
+// session — the owner is consumed by the session row; the other gets an
+// entry row even though its tmux field names a listed session.
+func TestBuild_EntryRow_NonOwnerEntryInsideListedSession(t *testing.T) {
+	in := BuildInput{
+		Alias:    "a",
+		Sessions: []SessionSummary{{Code: "c1", Name: "mt0"}},
+		Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%1"}},
+		Entries: []Entry{
+			{PID: 10, SessionID: "sid-1", Name: "n1", Tmux: "mt0:@1.%1", Inbox: "/s/10"},
+			{PID: 11, SessionID: "sid-9", Name: "n9", Tmux: "mt0:@1.%2", Inbox: "/s/11"},
+		},
+	}
+	recs := Build(in)
+	if len(recs) != 2 {
+		t.Fatalf("got %d rows, want 2: %+v", len(recs), recs)
+	}
+	if recs[1].RowKind != "entry" || recs[1].Agent.PID != 11 || recs[1].SessionName != "" || !recs[1].Deliverable {
+		t.Errorf("entry row = %+v", recs[1])
+	}
+	// The suffix comes from the entry's own tmux field, so an entry row
+	// inside tmux reads like its session row would.
+	if recs[1].Suffix != "mt0-n9" || recs[1].Address != "a/"+DefaultLabel("sid-9")+":mt0-n9" {
+		t.Errorf("entry row suffix/address = %q %q", recs[1].Suffix, recs[1].Address)
+	}
+}
+
+// TestEntryRecord_MatchesBuild pins that EntryRecord is the exact function
+// Build uses for an entry row — Task 7 relies on this for whoami/claim/
+// release to render the identical address the listing shows.
+func TestEntryRecord_MatchesBuild(t *testing.T) {
+	e := Entry{PID: 11, SessionID: "sid-9", Name: "n9", Tmux: "mt0:@1.%2", Inbox: "/s/11", Cwd: "/w"}
+	info := LabelInfo{Label: "purdex-tester", Rev: 3}
+	one := EntryRecord("a", "h:1", e, false, info)
+	all := Build(BuildInput{HostID: "h:1", Alias: "a", Entries: []Entry{e}, Labels: map[string]LabelInfo{"sid-9": info}})
+	if len(all) != 1 || !reflect.DeepEqual(all[0], one) {
+		t.Errorf("EntryRecord ≠ Build row:\n%+v\n%+v", one, all)
+	}
+	p := EntryRecord("a", "h:1", e, true, info)
+	if p.Agent.Type != "proxy" || p.Deliverable || p.Reason != "proxy" || p.Address != "a/cc:n9" || p.Label != "" {
+		t.Errorf("proxy entry record = %+v", p)
+	}
+}
+
+// TestBuild_SameConversationTwoProcesses_TwoRowsSameLabel pins that same
+// sessionId twice, no pane tiebreak, yields three rows sharing one label:
+// the ambiguous session row (fallback agent) AND both entries get entry
+// rows; Resolve (Task 6) reports them ambiguous with exactly the two
+// ENTRY rows as candidates — the owner-fallback session row carries no
+// live entry (PID 0) and is inert at tier 1 (spec §3.3, X2).
+func TestBuild_SameConversationTwoProcesses_TwoRowsSameLabel(t *testing.T) {
+	in := BuildInput{
+		Alias:    "a",
+		Sessions: []SessionSummary{{Code: "c1", Name: "mt0"}},
+		Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%9"}},
+		Entries: []Entry{
+			{PID: 10, SessionID: "sid-1", Name: "n1", Tmux: "mt0:@1.%1", Inbox: "/s/10"},
+			{PID: 11, SessionID: "sid-1", Name: "n1", Tmux: "mt0:@1.%2", Inbox: "/s/11"},
+		},
+	}
+	recs := Build(in)
+	if len(recs) != 3 {
+		t.Fatalf("got %d rows, want 3", len(recs))
+	}
+	for _, r := range recs {
+		if r.Label != DefaultLabel("sid-1") {
+			t.Errorf("row %s label = %q", r.Address, r.Label)
+		}
+	}
+	if recs[0].Reason != "ambiguous" || recs[0].Deliverable {
+		t.Errorf("session row = %+v", recs[0])
+	}
+
+	_, err := Resolve(recs, DefaultLabel("sid-1"), ResolveSnapshot{})
+	var amb *AmbiguousError
+	if !errors.As(err, &amb) {
+		t.Fatalf("Resolve = %v, want AmbiguousError", err)
+	}
+	if len(amb.Candidates) != 2 {
+		t.Fatalf("candidates = %d, want exactly the 2 entry rows: %+v", len(amb.Candidates), amb.Candidates)
+	}
+	for _, c := range amb.Candidates {
+		if c.RowKind != "entry" || c.Agent == nil || c.Agent.PID == 0 {
+			t.Errorf("candidate %+v is not a live entry row", c)
+		}
+	}
+}
+
+func keys(m map[string]PeerRecord) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

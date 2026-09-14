@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
@@ -138,6 +139,16 @@ type Module struct {
 	fetch       fetchFunc                        // default fetchRemote; test seam
 	logf        func(format string, args ...any) // default log.Printf; test seam
 
+	// labels is the peer_labels store (Task 3/7): Snapshot joins into every
+	// inventory build (localEnvelope, unguarded — a plain read with no
+	// ordering requirement of its own); the self routes (labels.go —
+	// whoami, claim, release) read and write it under labelMu, held across
+	// the whole verb (origin/registry read through the store call and the
+	// response construction), even whoami's own Snapshot-only read, so a
+	// concurrent claim/release can never interleave with it.
+	labels  LabelStore
+	labelMu sync.Mutex
+
 	// Inbound delivery (deliver.go) and its collaborators.
 	audit            AuditStore     // nil ⇒ audit_unavailable on every deliver
 	helpers          *helperManager // built in Init (production) or by the test fixture
@@ -170,11 +181,13 @@ type Module struct {
 }
 
 // New constructs a peers Module with production defaults over audit (the
-// meta store's PeerMessages; nil disables delivery with audit_unavailable).
-// Collaborators (sessions, owners) and the helper manager are wired in
-// Init: the manager needs the config's data dir and the daemon's own
-// executable path, neither of which belongs in a constructor.
-func New(audit AuditStore) *Module {
+// meta store's PeerMessages; nil disables delivery with audit_unavailable)
+// and labels (the meta store's PeerLabels; nil means every conversation has
+// its default label and claims fail with store_unavailable). Collaborators
+// (sessions, owners) and the helper manager are wired in Init: the manager
+// needs the config's data dir and the daemon's own executable path, neither
+// of which belongs in a constructor.
+func New(audit AuditStore, labels LabelStore) *Module {
 	registryDir := filepath.Join(".claude", "sessions")
 	if home, err := os.UserHomeDir(); err == nil {
 		registryDir = filepath.Join(home, ".claude", "sessions")
@@ -189,6 +202,7 @@ func New(audit AuditStore) *Module {
 		fetch:            fetchRemote,
 		logf:             log.Printf,
 		audit:            audit,
+		labels:           labels,
 		writeFrame:       ccuds.WriteFrame,
 		sockWriteTimeout: ipeers.SocketWriteTimeout,
 		newMsgID:         uuid.NewString,
@@ -276,6 +290,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/send", m.handleSend)
 	mux.HandleFunc("POST /api/peers/deliver", m.handleDeliver)
 	mux.HandleFunc("GET /api/peers/log", m.handlePeersLog)
+	mux.HandleFunc("POST /api/peers/self", m.handleSelf)
+	mux.HandleFunc("PUT /api/peers/self/label", m.handleClaimLabel)
+	mux.HandleFunc("DELETE /api/peers/self/label", m.handleReleaseLabel)
 }
 
 // handlePeers serves GET /api/peers. scope unset/"local" returns this
@@ -327,11 +344,13 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 
 	writeError := func(errMsg string) ipeers.Envelope {
 		return ipeers.Envelope{
-			HostID:  hostID,
-			OK:      false,
-			Error:   errMsg,
-			Partial: false,
-			Peers:   []ipeers.PeerRecord{},
+			HostID:               hostID,
+			OK:                   false,
+			Error:                errMsg,
+			Partial:              false,
+			Peers:                []ipeers.PeerRecord{},
+			DaemonVersion:        buildinfo.Version,
+			UnknownRegistryFiles: []string{},
 		}
 	}
 
@@ -342,7 +361,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		return writeError(err.Error())
 	}
 
-	entries, _, err := ipeers.ReadRegistry(m.registryDir, m.liveness)
+	entries, diag, err := ipeers.ReadRegistryDiag(m.registryDir, m.liveness)
 	if err != nil {
 		return writeError(err.Error())
 	}
@@ -397,7 +416,32 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		return writeError("tmux server restarted during inventory")
 	}
 
-	partial := len(unresolved) > 0
+	// Registry diagnosis (spec §3.3): an alive-but-undecodable file could
+	// still be a live session whose registry entry just failed to parse —
+	// it blocks nothing it isn't already blocking (label claims, Task 7),
+	// but it means this inventory cannot swear to a NEGATIVE about any
+	// tuple, so it marks the whole response partial the same way an
+	// unresolved owner lookup does.
+	unknown := diag.BlockingUnknown()
+	if unknown == nil {
+		unknown = []string{}
+	}
+
+	// The label snapshot (Task 3's peer_labels table) is joined the same
+	// way: a nil store or a read failure never blocks the inventory build
+	// (every row still gets its default label), but a failed read is
+	// reported the same way a failed owner lookup is — this response may
+	// be showing stale/default labels it cannot vouch for — and signalled
+	// on its own as labels_unavailable, so a consumer (pdx peers, the
+	// SPA) names the cause instead of inferring it from the absence of
+	// the other two partial causes.
+	labels, labelsErr := m.labelSnapshot()
+	if labelsErr != nil {
+		m.logf("peers: inventory: label store unavailable, reporting default labels: %v", labelsErr)
+	}
+	labelsUnavailable := labelsErr != nil
+
+	partial := len(unresolved) > 0 || len(unknown) > 0 || labelsUnavailable
 
 	// This daemon's own helpers are hidden as proxy rows by pid (their
 	// registry entries are otherwise indistinguishable from a Claude Code
@@ -415,14 +459,38 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Unresolved: unresolved,
 		Entries:    entries,
 		ProxyPIDs:  proxyPIDs,
+		Labels:     labels,
 	})
 
 	return ipeers.Envelope{
-		HostID:  hostID,
-		OK:      true,
-		Partial: partial,
-		Peers:   peerRecords,
+		HostID:               hostID,
+		OK:                   true,
+		Partial:              partial,
+		Peers:                peerRecords,
+		DaemonVersion:        buildinfo.Version,
+		UnknownRegistryFiles: unknown,
+		LabelsUnavailable:    labelsUnavailable,
 	}
+}
+
+// labelSnapshot reads the label table into Build's map. A nil store is an
+// empty map and no error (Peer Address v2 has never been configured with a
+// label store, which is not this inventory's trouble); a read error is
+// returned so the caller can mark the response partial — the rows it
+// renders below fall back to their default label, same as an absent row.
+func (m *Module) labelSnapshot() (map[string]ipeers.LabelInfo, error) {
+	out := map[string]ipeers.LabelInfo{}
+	if m.labels == nil {
+		return out, nil
+	}
+	rows, err := m.labels.Snapshot()
+	if err != nil {
+		return out, err
+	}
+	for _, r := range rows {
+		out[r.SessionID] = ipeers.LabelInfo{Label: r.Label, Rev: r.Rev}
+	}
+	return out, nil
 }
 
 // warnNewerCCVersions logs a one-shot warning for every distinct Claude
@@ -467,12 +535,15 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 
 	local := m.localEnvelope(ctx, hostID, alias)
 	results[0] = ipeers.HostResult{
-		Alias:   alias,
-		HostID:  hostID,
-		OK:      local.OK,
-		Error:   local.Error,
-		Partial: local.Partial,
-		Peers:   local.Peers,
+		Alias:                alias,
+		HostID:               hostID,
+		OK:                   local.OK,
+		Error:                local.Error,
+		Partial:              local.Partial,
+		Peers:                local.Peers,
+		DaemonVersion:        local.DaemonVersion,
+		UnknownRegistryFiles: local.UnknownRegistryFiles,
+		LabelsUnavailable:    local.LabelsUnavailable,
 	}
 
 	wg.Wait()
@@ -521,11 +592,12 @@ func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeer
 func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.HostResult {
 	if h.Token == "" {
 		return ipeers.HostResult{
-			Alias:  h.Alias,
-			HostID: h.HostID,
-			OK:     false,
-			Error:  "no outbound token",
-			Peers:  []ipeers.PeerRecord{},
+			Alias:                h.Alias,
+			HostID:               h.HostID,
+			OK:                   false,
+			Error:                "no outbound token",
+			Peers:                []ipeers.PeerRecord{},
+			UnknownRegistryFiles: []string{},
 		}
 	}
 
@@ -535,21 +607,23 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	env, err := m.fetch(fetchCtx, m.client, h.URL, h.Token)
 	if err != nil {
 		return ipeers.HostResult{
-			Alias:  h.Alias,
-			HostID: h.HostID,
-			OK:     false,
-			Error:  err.Error(),
-			Peers:  []ipeers.PeerRecord{},
+			Alias:                h.Alias,
+			HostID:               h.HostID,
+			OK:                   false,
+			Error:                err.Error(),
+			Peers:                []ipeers.PeerRecord{},
+			UnknownRegistryFiles: []string{},
 		}
 	}
 
 	if h.HostID != "" && env.HostID != h.HostID {
 		return ipeers.HostResult{
-			Alias:  h.Alias,
-			HostID: h.HostID,
-			OK:     false,
-			Error:  fmt.Sprintf("host_id mismatch: got %s", boundRemoteText(env.HostID)),
-			Peers:  []ipeers.PeerRecord{},
+			Alias:                h.Alias,
+			HostID:               h.HostID,
+			OK:                   false,
+			Error:                fmt.Sprintf("host_id mismatch: got %s", boundRemoteText(env.HostID)),
+			Peers:                []ipeers.PeerRecord{},
+			UnknownRegistryFiles: []string{},
 		}
 	}
 
@@ -562,11 +636,12 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	if resultHostID == "" {
 		if !validHostID(env.HostID) {
 			return ipeers.HostResult{
-				Alias:  h.Alias,
-				HostID: h.HostID,
-				OK:     false,
-				Error:  "peer returned an invalid host_id",
-				Peers:  []ipeers.PeerRecord{},
+				Alias:                h.Alias,
+				HostID:               h.HostID,
+				OK:                   false,
+				Error:                "peer returned an invalid host_id",
+				Peers:                []ipeers.PeerRecord{},
+				UnknownRegistryFiles: []string{},
 			}
 		}
 		resultHostID = env.HostID
@@ -582,11 +657,12 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	// intact regardless of what this one host returned.
 	if encoded, err := json.Marshal(peers); err == nil && len(encoded) > maxRemoteRowsBytes {
 		return ipeers.HostResult{
-			Alias:  h.Alias,
-			HostID: resultHostID,
-			OK:     false,
-			Error:  fmt.Sprintf("peer inventory too large (%d bytes)", len(encoded)),
-			Peers:  []ipeers.PeerRecord{},
+			Alias:                h.Alias,
+			HostID:               resultHostID,
+			OK:                   false,
+			Error:                fmt.Sprintf("peer inventory too large (%d bytes)", len(encoded)),
+			Peers:                []ipeers.PeerRecord{},
+			UnknownRegistryFiles: []string{},
 		}
 	}
 
@@ -598,12 +674,35 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		rowErr = "peer: " + boundRemoteText(rowErr)
 	}
 
+	// unknown is the remote's own reported list of alive-but-undecodable
+	// registry files (attacker-controlled, like Error): bounded to at most
+	// 32 entries, each individually truncated the same way env.Error is,
+	// so a misbehaving peer cannot inflate this row with an unbounded list
+	// of long paths.
+	unknown := env.UnknownRegistryFiles
+	if len(unknown) > 32 {
+		unknown = unknown[:32]
+	}
+	bounded := make([]string, len(unknown))
+	for i, u := range unknown {
+		bounded[i] = boundRemoteText(u)
+	}
+
+	// env.DaemonVersion is the remote's own reported text, exactly as
+	// attacker-controlled as env.Error and the unknown-registry-files list
+	// above, so it is bounded the same way before this row is ever printed
+	// or re-encoded. env.LabelsUnavailable is a bool and needs no bounding:
+	// it is the remote's own claim about its label store, copied through
+	// for the per-host cause line.
 	return ipeers.HostResult{
-		Alias:   h.Alias,
-		HostID:  resultHostID,
-		OK:      env.OK,
-		Error:   rowErr,
-		Partial: env.Partial,
-		Peers:   peers,
+		Alias:                h.Alias,
+		HostID:               resultHostID,
+		OK:                   env.OK,
+		Error:                rowErr,
+		Partial:              env.Partial,
+		Peers:                peers,
+		DaemonVersion:        boundRemoteText(env.DaemonVersion),
+		UnknownRegistryFiles: bounded,
+		LabelsUnavailable:    env.LabelsUnavailable,
 	}
 }

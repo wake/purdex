@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/config"
-	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/peers/ccuds"
@@ -403,33 +402,149 @@ func TestReply_UnknownSockIsReplierUnknown(t *testing.T) {
 }
 
 // TestReply_PartialInventoryIsNotReady pins spec §4.2's partial semantics
-// on the replier lookup (R2-A): a reply address that no row carries while
-// the inventory is partial (the replier's tmux session's owner lookup
-// failed ⇒ agent:null) is audited not_ready with the fixed error
-// "inventory partial" — never replier_unknown, which claims no session
-// listens there — and the origin's helper is kept, ready for the retry.
+// on the replier lookup (R2-A). Peer Address v2 gives every live,
+// non-proxy registry entry its own entry row (spec §3.4) whether or not
+// its tmux session is listed, so the replier — whose tmux session's owner
+// lookup failed — is still found and resolved through its own entry row:
+// the old "no row while the inventory is partial" premise no longer holds,
+// so the reply is forwarded rather than dropped not_ready.
 func TestReply_PartialInventoryIsNotReady(t *testing.T) {
 	r := newReplyEnv(t, envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}})
 	writeRegistryFixture(t, r.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(r.targetSock, "foo:@1.%1"))
 	r.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
 
 	r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
-	row := r.assertDropped(ipeers.ErrNotReady, "")
-	if row.Error != "inventory partial" {
-		t.Errorf("row error = %q, want %q", row.Error, "inventory partial")
-	}
-	if _, ok := r.m.helpers.FindBySock(r.h.sock); !ok || r.helperMapLen() != 1 || r.f.fake.Stops() != 0 {
-		t.Errorf("helper kept = %v (map %d, stops %d), want the origin's helper kept", ok, r.helperMapLen(), r.f.fake.Stops())
-	}
-
-	// Once the lookup completes the same frame is forwarded.
-	r.m.owners = &fakeOwners{owners: map[string]agent.PaneOwner{"s1": {AgentType: "cc", SessionID: targetSessionID, TmuxPaneID: "%1"}}}
-	r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
 	r.awaitPost()
 	r.join()
-	rows := r.rows()
-	if len(rows) != 2 || rows[1].Result != ipeers.ResultDelivered || rows[1].FromSessionID != targetSessionID {
-		t.Errorf("rows = %+v, want a second, delivered reply row from the replier", rows)
+	row := r.onlyReplyRow()
+	if row.Result != ipeers.ResultDelivered || row.FromSessionID != targetSessionID {
+		t.Errorf("row = %+v, want delivered from the replier's entry row (session %q)", row, targetSessionID)
+	}
+}
+
+// TestReply_UnknownRegistryFileIsNotReady is TestReply_PartialInventoryIsNotReady's
+// mirror on the not-found side: the replier's own registry file is
+// undecodable rather than merely unresolved, so findReplier finds no row
+// at all for the reply address. The frame is dropped not_ready (never
+// replier_unknown, which the caller would read as "stop retrying this
+// helper"), and the helper is kept for a retry once the registry is sane
+// again.
+func TestReply_UnknownRegistryFileIsNotReady(t *testing.T) {
+	r := newReplyEnv(t, envOpts{})
+	writeRegistryFixture(t, r.regDir, strconv.Itoa(targetPID)+".json", "{")
+
+	r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
+	row := r.assertDropped(ipeers.ErrNotReady, "")
+	if row.Error != detailInventoryPartial {
+		t.Errorf("row error = %q, want %q", row.Error, detailInventoryPartial)
+	}
+	if n := r.helperMapLen(); n == 0 {
+		t.Errorf("helper map len = %d, want the helper kept (not reaped)", n)
+	}
+}
+
+// TestClassifyReplyDrop pins classifyReplyDrop directly: the exact
+// decision `forwardReply` makes from (env, replier, detail) once
+// findReplier reports no full match. It is a unit test of that pure
+// function rather than an end-to-end reply_test.go fixture because the
+// fixture the case below needs — findReplier resolving a REAL row for the
+// reply socket (Agent != nil) that is non-proxy and not a full match — is
+// not constructible through the real localEnvelope/Build pipeline: per
+// internal/peers/record.go, Agent.Inbox is populated ONLY on a row that is
+// either fully deliverable cc (agentInfoFromEntry, always paired with
+// Deliverable=true) or a proxy row (EntryRecord flips Type to "proxy" in
+// the same step it sets Deliverable=false) — there is no live-entry code
+// path that produces a real Inbox alongside Type != "cc" or
+// Deliverable == false. TestReply_UnknownRegistryFileIsNotReady above
+// covers the OTHER (reachable, replier.Agent == nil) half of the same
+// term end-to-end; this test covers the half that guards a shape the
+// join cannot currently produce, so it cannot be a lie: it asserts sample
+// non-proxy detail!="" cases (not-cc and not-deliverable) whichever
+// caller passes, need not be reachable.
+func TestClassifyReplyDrop(t *testing.T) {
+	unknownFile := []string{"/reg/4242.json"}
+	ccNotDeliverable := ipeers.PeerRecord{Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "sid-1"}, Deliverable: false}
+	notCC := ipeers.PeerRecord{Agent: &ipeers.AgentInfo{Type: "codex", SessionID: "sid-1"}}
+	proxyRow := ipeers.PeerRecord{Agent: &ipeers.AgentInfo{Type: "proxy", SessionID: "sid-1"}}
+	notFound := ipeers.PeerRecord{}
+
+	cases := []struct {
+		name       string
+		env        ipeers.Envelope
+		replier    ipeers.PeerRecord
+		detail     string
+		wantCode   string
+		wantDetail string
+	}{
+		{
+			name:       "found row, not cc, unrelated unknown file ⇒ not_ready, never replier_unknown",
+			env:        ipeers.Envelope{Partial: true, UnknownRegistryFiles: unknownFile},
+			replier:    notCC,
+			detail:     "reply address is not a Claude Code session",
+			wantCode:   ipeers.ErrNotReady,
+			wantDetail: detailInventoryPartial,
+		},
+		{
+			name:       "found row, cc but not deliverable, unrelated unknown file ⇒ not_ready, never replier_unknown",
+			env:        ipeers.Envelope{Partial: true, UnknownRegistryFiles: unknownFile},
+			replier:    ccNotDeliverable,
+			detail:     "replier is not deliverable",
+			wantCode:   ipeers.ErrNotReady,
+			wantDetail: detailInventoryPartial,
+		},
+		{
+			name:       "found row, not cc, NO unknown files and not partial ⇒ replier_unknown unchanged",
+			env:        ipeers.Envelope{Partial: false},
+			replier:    notCC,
+			detail:     "reply address is not a Claude Code session",
+			wantCode:   ipeers.ErrReplierUnknown,
+			wantDetail: "reply address is not a Claude Code session",
+		},
+		{
+			name:       "proxy row: unknown files elsewhere never downgrade a positive proxy verdict",
+			env:        ipeers.Envelope{Partial: true, UnknownRegistryFiles: unknownFile},
+			replier:    proxyRow,
+			detail:     "reply address is a peer-proxy helper",
+			wantCode:   ipeers.ErrProxyToProxy,
+			wantDetail: "reply address is a peer-proxy helper",
+		},
+		{
+			name:       "no row, unknown file present ⇒ not_ready",
+			env:        ipeers.Envelope{Partial: true, UnknownRegistryFiles: unknownFile},
+			replier:    notFound,
+			detail:     "no live Claude Code session listens on the reply address",
+			wantCode:   ipeers.ErrNotReady,
+			wantDetail: detailInventoryPartial,
+		},
+		{
+			// Peer Address v2: every live, non-proxy registry entry has
+			// its own entry row (spec §3.4), so a merely partial
+			// inventory with no unknown files — an owner lookup or
+			// label-store failure — cannot hide a live replier. Only an
+			// unknown registry file can, and this case has none.
+			name:       "no row, label-store-only partial (no unknown files) ⇒ replier_unknown",
+			env:        ipeers.Envelope{Partial: true},
+			replier:    notFound,
+			detail:     "no live Claude Code session listens on the reply address",
+			wantCode:   ipeers.ErrReplierUnknown,
+			wantDetail: "no live Claude Code session listens on the reply address",
+		},
+		{
+			name:       "no row, not partial at all ⇒ replier_unknown",
+			env:        ipeers.Envelope{Partial: false},
+			replier:    notFound,
+			detail:     "no live Claude Code session listens on the reply address",
+			wantCode:   ipeers.ErrReplierUnknown,
+			wantDetail: "no live Claude Code session listens on the reply address",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code, detail := classifyReplyDrop(c.env, c.replier, c.detail)
+			if code != c.wantCode || detail != c.wantDetail {
+				t.Errorf("classifyReplyDrop() = %q/%q, want %q/%q", code, detail, c.wantCode, c.wantDetail)
+			}
+		})
 	}
 }
 

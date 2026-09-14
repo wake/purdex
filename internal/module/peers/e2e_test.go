@@ -472,7 +472,15 @@ func TestE2E_PartialOriginInventoryKeepsHelper(t *testing.T) {
 	targetSock := filepath.Join(root, "target.sock")
 	origin := startFakeInbox(t, originSock)
 	target := startFakeInbox(t, targetSock)
-	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", e2eRegistryJSON(e2eOriginPID, e2eOriginSID, e2eOriginName, "mt1:@1.%1", originSock))
+	// v2: every live, non-proxy registry entry gets its own entry row
+	// (spec §3.4) whether or not its tmux session is listed — so a
+	// decodable origin entry would resolve locally on A through its OWN
+	// entry row even while mt1's owner lookup fails, defeating this test's
+	// premise. The origin's registry file is undecodable instead (an
+	// "unknown" candidate, Task 2's ReadRegistryDiag): no Entry exists for
+	// it at all, so A's inventory genuinely carries no row for the origin
+	// — partial for the reason the still-failing mt1 owner lookup gives.
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", "not json")
 	writeRegistryFixture(t, regDir, strconv.Itoa(e2eTargetPID)+".json", e2eRegistryJSON(e2eTargetPID, e2eTargetSID, e2eTargetName, "foo:@2.%2", targetSock))
 	live := &e2eLiveness{}
 
@@ -600,6 +608,9 @@ func TestE2E_TwoDaemons(t *testing.T) {
 		PeerName: e2eOriginName, SessionName: "mt1", DeclaredMode: ipeers.ModePrompting,
 	}
 	targetTo := ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart}
+	// v2: the resolved row's address is now "<alias>/<label>:<suffix>"
+	// (spec §3.4), not the retired "<alias>/<tmux name>" form.
+	targetAddr := "b/" + ipeers.DefaultLabel(e2eTargetSID) + ":foo-" + e2eTargetName
 
 	// The baseline for step 9 includes every long-lived goroutine of the
 	// environment (servers, listeners, database/sql's opener); anything
@@ -614,8 +625,8 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if sent.Result != ipeers.ResultDelivered || sent.EffectiveMode != ipeers.ModePrompting {
 		t.Errorf("step 1: result/effective_mode = %q/%q, want delivered/prompting", sent.Result, sent.EffectiveMode)
 	}
-	if sent.ToHostID != e2eHostB || sent.ToAddress != "b/foo" || sent.To != targetTo {
-		t.Errorf("step 1: response to = %s %s %+v, want %s b/foo %+v", sent.ToHostID, sent.ToAddress, sent.To, e2eHostB, targetTo)
+	if sent.ToHostID != e2eHostB || sent.ToAddress != targetAddr || sent.To != targetTo {
+		t.Errorf("step 1: response to = %s %s %+v, want %s %s %+v", sent.ToHostID, sent.ToAddress, sent.To, e2eHostB, targetAddr, targetTo)
 	}
 	if !ipeers.IsUUID(sent.MsgID) {
 		t.Errorf("step 1: msg_id = %q, want a UUID", sent.MsgID)
@@ -851,4 +862,215 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	b.srv.Close()
 	target.close()
 	assertNoGoroutineGrowth(t, before)
+}
+
+// TestE2E_Labels drives the Peer Address v2 label primitives (Tasks 1-9)
+// across the same two-daemon bridge as TestE2E_TwoDaemons: claiming a
+// label on B, sending to it by label, the "tmux:" bypass form, the retired
+// "cc:" form, and the R2-1 shadow-vs-partial scenario (spec §3.3): a
+// label held by a Desktop session shadows a same-named tmux session while
+// everything is readable, but once the holder's own registry file becomes
+// unreadable a bare name must refuse not_ready rather than fall through to
+// the tmux session — "tmux:<name>" still bypasses the label tier entirely
+// and keeps delivering.
+func TestE2E_Labels(t *testing.T) {
+	// Setup identical to TestE2E_TwoDaemons: A's tmux session mt1 is the
+	// origin, B's tmux session foo is the target.
+	sockDir, regDir := proxyhelpertest.TempDirs(t)
+	root := filepath.Dir(regDir)
+	originSock := filepath.Join(root, "origin.sock")
+	targetSock := filepath.Join(root, "target.sock")
+	origin := startFakeInbox(t, originSock)
+	target := startFakeInbox(t, targetSock)
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", e2eRegistryJSON(e2eOriginPID, e2eOriginSID, e2eOriginName, "mt1:@1.%1", originSock))
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eTargetPID)+".json", e2eRegistryJSON(e2eTargetPID, e2eTargetSID, e2eTargetName, "foo:@2.%2", targetSock))
+	live := &e2eLiveness{}
+
+	a := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostA, alias: "a", admin: e2eAdminA,
+		peer:     config.PeerHost{Alias: "b", HostID: e2eHostB, Token: e2eTokenAtoB, InboundToken: e2eTokenBtoA},
+		sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"mt1code": {AgentType: "cc", SessionID: e2eOriginSID, TmuxPaneID: "%1"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	b := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostB, alias: "b", admin: e2eAdminB,
+		peer:     config.PeerHost{Alias: "a", HostID: e2eHostA, Token: e2eTokenBtoA, InboundToken: e2eTokenAtoB},
+		sessions: []session.SessionInfo{{Code: "foocode", Name: "foo", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"foocode": {AgentType: "cc", SessionID: e2eTargetSID, TmuxPaneID: "%2"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	a.setPeer(func(h *config.PeerHost) { h.URL = b.srv.URL })
+	b.setPeer(func(h *config.PeerHost) { h.URL = a.srv.URL })
+
+	targetTo := ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart}
+
+	// ---- 1. B's target claims "purdex-tester" through B's own /self/label. ----
+	status, body := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester"})
+	if status != http.StatusOK {
+		t.Fatalf("step 1: claim = %d %s", status, body)
+	}
+
+	// ---- 2. A sends by label; delivered to target.sock; to_address is the
+	// v2 address. ----
+	sent := a.sendOK(ipeers.SendRequest{To: "b/purdex-tester", Text: "ping", OriginInbox: originSock})
+	wantAddr := "b/purdex-tester:foo-" + e2eTargetName
+	if sent.ToAddress != wantAddr || sent.To != targetTo {
+		t.Errorf("step 2: to = %s %+v, want %s %+v", sent.ToAddress, sent.To, wantAddr, targetTo)
+	}
+	target.recv("step 2")
+
+	// ---- 3. tmux: form and bare tmux name still deliver; cc: does not. ----
+	a.sendOK(ipeers.SendRequest{To: "b/tmux:foo", Text: "x", OriginInbox: originSock})
+	target.recv("step 3a")
+	a.sendOK(ipeers.SendRequest{To: "b/foo", Text: "x", OriginInbox: originSock})
+	target.recv("step 3b")
+	st, raw := a.send(ipeers.SendRequest{To: "b/cc:" + e2eTargetName, Text: "x", OriginInbox: originSock})
+	a.assertAPIError(st, raw, http.StatusNotFound, ipeers.ErrPeerNotFound, "cc: form")
+
+	// ---- 4. Native reply from the target through B's helper reaching the
+	// origin is the unchanged v1 reply path (from-name is still v1 in
+	// P4a), already driven end to end by TestE2E_TwoDaemons; not repeated
+	// here. ----
+
+	// ---- 5. R2-1 (spec §3.3): a Desktop session on B holds the LABEL
+	// "foo" while B also has a tmux session named foo. While everything is
+	// readable the label shadows the tmux name; when the holder's own
+	// registry file becomes unreadable, a bare "b/foo" must be 503
+	// not_ready — never a tier-2 delivery to the tmux session — and
+	// "b/tmux:foo" still delivers. ----
+	holderSock := filepath.Join(root, "holder.sock")
+	holder := startFakeInbox(t, holderSock)
+	const holderPID, holderSID = 31337, "holder-sid"
+	writeRegistryFixture(t, regDir, strconv.Itoa(holderPID)+".json", e2eRegistryJSON(holderPID, holderSID, "holder-1", "", holderSock)) // no tmux: entry row on B
+	st, raw = b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: holderSock, Label: "foo"})
+	if st != http.StatusOK {
+		t.Fatalf("step 5: holder claim = %d %s", st, raw)
+	}
+	a.sendOK(ipeers.SendRequest{To: "b/foo", Text: "to-label", OriginInbox: originSock})
+	holder.recv("step 5a: label shadows tmux name")
+	target.none("step 5a")
+
+	writeRegistryFixture(t, regDir, strconv.Itoa(holderPID)+".json", "{") // holder unreadable, pid still alive per fake liveness
+	st, raw = a.send(ipeers.SendRequest{To: "b/foo", Text: "x", OriginInbox: originSock})
+	a.assertAPIError(st, raw, http.StatusServiceUnavailable, ipeers.ErrNotReady, "partial bare name")
+	target.none("step 5b: no tier-2 delivery while the label holder is unknown")
+
+	a.sendOK(ipeers.SendRequest{To: "b/tmux:foo", Text: "x", OriginInbox: originSock})
+	target.recv("step 5c")
+
+	origin.close()
+	target.close()
+	holder.close()
+	a.stop()
+	b.stop()
+}
+
+// TestE2E_LabelAmbiguityUnderUnknownFile drives X1 (spec §3.2, "tier 1
+// exactly one match, registry incomplete") across the two-daemon bridge:
+// ONE conversation with TWO live processes outside tmux on B — two
+// registry entries sharing a sessionId, each with its own fake inbox. By
+// their default label the pair is 409 ambiguous. When one process's
+// registry file becomes unreadable while its pid is still alive, the
+// remaining single row must NOT be delivered to — the hidden file may be
+// the other process of that very conversation — so the send is 503
+// not_ready and NEITHER inbox receives a frame. "b/tmux:foo" bypasses the
+// label tier and still delivers to B's tmux target.
+func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
+	sockDir, regDir := proxyhelpertest.TempDirs(t)
+	root := filepath.Dir(regDir)
+	originSock := filepath.Join(root, "origin.sock")
+	targetSock := filepath.Join(root, "target.sock")
+	origin := startFakeInbox(t, originSock)
+	target := startFakeInbox(t, targetSock)
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", e2eRegistryJSON(e2eOriginPID, e2eOriginSID, e2eOriginName, "mt1:@1.%1", originSock))
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eTargetPID)+".json", e2eRegistryJSON(e2eTargetPID, e2eTargetSID, e2eTargetName, "foo:@2.%2", targetSock))
+	live := &e2eLiveness{}
+
+	a := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostA, alias: "a", admin: e2eAdminA,
+		peer:     config.PeerHost{Alias: "b", HostID: e2eHostB, Token: e2eTokenAtoB, InboundToken: e2eTokenBtoA},
+		sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"mt1code": {AgentType: "cc", SessionID: e2eOriginSID, TmuxPaneID: "%1"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	b := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostB, alias: "b", admin: e2eAdminB,
+		peer:     config.PeerHost{Alias: "a", HostID: e2eHostA, Token: e2eTokenBtoA, InboundToken: e2eTokenAtoB},
+		sessions: []session.SessionInfo{{Code: "foocode", Name: "foo", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"foocode": {AgentType: "cc", SessionID: e2eTargetSID, TmuxPaneID: "%2"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	a.setPeer(func(h *config.PeerHost) { h.URL = b.srv.URL })
+	b.setPeer(func(h *config.PeerHost) { h.URL = a.srv.URL })
+
+	// ---- 1. Two live processes of ONE conversation outside tmux on B. ----
+	const twinSID = "cccccccc-3333-4333-8333-333333333333"
+	const twin1PID, twin2PID = 41001, 41002
+	twin1Sock := filepath.Join(root, "twin1.sock")
+	twin2Sock := filepath.Join(root, "twin2.sock")
+	twin1 := startFakeInbox(t, twin1Sock)
+	twin2 := startFakeInbox(t, twin2Sock)
+	writeRegistryFixture(t, regDir, strconv.Itoa(twin1PID)+".json", e2eRegistryJSON(twin1PID, twinSID, "twin-1", "", twin1Sock))
+	writeRegistryFixture(t, regDir, strconv.Itoa(twin2PID)+".json", e2eRegistryJSON(twin2PID, twinSID, "twin-2", "", twin2Sock))
+	label := ipeers.DefaultLabel(twinSID)
+
+	// Both are entry rows on B carrying the same default label.
+	env := b.peers()
+	if env.Partial || len(env.UnknownRegistryFiles) != 0 {
+		t.Fatalf("step 1: B's inventory partial=%v unknown=%v, want complete", env.Partial, env.UnknownRegistryFiles)
+	}
+	for _, sock := range []string{twin1Sock, twin2Sock} {
+		if rec := b.peerByInbox(env, sock); rec.Label != label || rec.RowKind != "entry" {
+			t.Fatalf("step 1: row for %s = %+v, want entry row with label %q", filepath.Base(sock), rec, label)
+		}
+	}
+
+	// ---- 2. By label: ambiguous, both candidates, nothing delivered. ----
+	st, raw := a.send(ipeers.SendRequest{To: "b/" + label, Text: "x", OriginInbox: originSock})
+	ae := a.assertAPIError(st, raw, http.StatusConflict, ipeers.ErrAmbiguous, "two processes, one label")
+	if len(ae.Candidates) != 2 {
+		t.Errorf("step 2: candidates = %v, want 2", ae.Candidates)
+	}
+	twin1.none("step 2")
+	twin2.none("step 2")
+
+	// ---- 3. twin2's registry file becomes unreadable, its pid still alive:
+	// only twin1's row remains, and it must NOT be delivered to. ----
+	writeRegistryFixture(t, regDir, strconv.Itoa(twin2PID)+".json", "{")
+	env = b.peers()
+	if !env.Partial || len(env.UnknownRegistryFiles) != 1 {
+		t.Fatalf("step 3: B's inventory partial=%v unknown=%v, want partial with one unknown file", env.Partial, env.UnknownRegistryFiles)
+	}
+	if rec := b.peerByInbox(env, twin1Sock); rec.Label != label || !rec.Deliverable {
+		t.Fatalf("step 3: twin1 row = %+v, want the single deliverable label hit", rec)
+	}
+	st, raw = a.send(ipeers.SendRequest{To: "b/" + label, Text: "x", OriginInbox: originSock})
+	ae = a.assertAPIError(st, raw, http.StatusServiceUnavailable, ipeers.ErrNotReady, "single hit under an unknown file")
+	if !ae.Partial {
+		t.Errorf("step 3: body = %+v, want partial:true", ae)
+	}
+	// The explicit tmux form still bypasses the label tier and delivers;
+	// its positive signal proves the send path has finished, so the
+	// twins' "no frame" checks below are not racing anything.
+	a.sendOK(ipeers.SendRequest{To: "b/tmux:foo", Text: "x", OriginInbox: originSock})
+	target.recv("step 3: tmux: form")
+	twin1.none("step 3: the one readable process must not be picked")
+	twin2.none("step 3")
+
+	// ---- 4. Once the file is readable again the pair is ambiguous again
+	// (never silently delivered), and by ITS OWN sessionId-free form there
+	// is still no way to name one process outside tmux. ----
+	writeRegistryFixture(t, regDir, strconv.Itoa(twin2PID)+".json", e2eRegistryJSON(twin2PID, twinSID, "twin-2", "", twin2Sock))
+	st, raw = a.send(ipeers.SendRequest{To: "b/" + label, Text: "x", OriginInbox: originSock})
+	a.assertAPIError(st, raw, http.StatusConflict, ipeers.ErrAmbiguous, "two processes readable again")
+	twin1.none("step 4")
+	twin2.none("step 4")
+
+	origin.close()
+	target.close()
+	twin1.close()
+	twin2.close()
+	a.stop()
+	b.stop()
 }

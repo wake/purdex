@@ -544,6 +544,36 @@ func TestSend_TmuxOriginUsesSessionName(t *testing.T) {
 	}
 }
 
+// TestSend_OriginResolvesViaEntryRowDespitePartialInventory pins the v2
+// delta over spec §4.2's partial semantics on the origin lookup (R2-A):
+// with Peer Address v2's entry rows (spec §3.4), the origin's tmux
+// session's owner lookup failing no longer means the inventory has no row
+// for its inbox — the origin's own live registry entry still gets an entry
+// row and is found through it, so the send proceeds to the remote fetch
+// exactly as the (origin outside tmux) happy path does, rather than
+// answering 503 not_ready before any fetch.
+func TestSend_OriginResolvesViaEntryRowDespitePartialInventory(t *testing.T) {
+	s := newSendEnv(t, envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}})
+	writeRegistryFixture(s.t, s.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(s.targetSock, "foo:@1.%1"))
+	s.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
+
+	resp := s.sendOK(s.sendReq())
+	if resp.Result != ipeers.ResultDelivered {
+		t.Errorf("result = %q, want delivered", resp.Result)
+	}
+	if fetches := s.fetchCalls(); len(fetches) != 1 {
+		t.Errorf("fetches = %+v, want exactly 1 (the origin resolved, unblocking the remote fetch)", fetches)
+	}
+	post := s.onlyPost()
+	// The origin resolved through its ENTRY row (RowKind "entry"), which
+	// never carries a SessionName — so wireFromRecord falls back to
+	// "cc:<peer_name>" exactly as for any other outside-tmux origin, even
+	// though the entry's own tmux field names a listed session.
+	if post.req.From.AgentSessionID != targetSessionID || post.req.From.SessionName != "cc:"+targetPeerName {
+		t.Errorf("post from = %+v, want the origin's entry row (session %q, name cc:%s)", post.req.From, targetSessionID, targetPeerName)
+	}
+}
+
 // TestSend_EachSendMintsItsOwnMsgID: a retry must never reuse a msg_id
 // (the receiver's dedup would burn it).
 func TestSend_EachSendMintsItsOwnMsgID(t *testing.T) {
@@ -653,20 +683,182 @@ func TestSend_Ambiguous(t *testing.T) {
 	a := remoteRow("", "")
 	b := remoteRow("", "")
 	b.Agent.PID, b.Agent.SessionID = 778, "99999999-8888-4777-8666-666666666666"
+	a.Label, b.Label = "dup-label", "dup-label"
 	// The remote claims another alias in its addresses: candidates must
 	// come back normalised to the entry's alias.
-	a.Address, b.Address = "zzz/cc:"+remoteSession, "zzz/cc:"+remoteSession
+	a.Address, b.Address = "zzz/dup-label", "zzz/dup-label"
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(a, b) })
 	req := s.sendReq()
-	req.To = remoteAlias + "/cc:" + remoteSession
+	req.To = remoteAlias + "/dup-label"
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrAmbiguous)
-	want := []string{remoteAlias + "/cc:" + remoteSession, remoteAlias + "/cc:" + remoteSession}
+	want := []string{remoteAlias + "/dup-label", remoteAlias + "/dup-label"}
 	if len(ae.Candidates) != 2 || ae.Candidates[0] != want[0] || ae.Candidates[1] != want[1] {
 		t.Errorf("candidates = %v, want %v", ae.Candidates, want)
 	}
 	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
 		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+}
+
+// TestSend_LegacyCCAddress pins that the retired v1 "cc:<name>" address
+// form is always peer_not_found with the legacy hint, never resolved
+// against a label or a tmux session name — and never consults env.Partial.
+func TestSend_LegacyCCAddress(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	req := s.sendReq()
+	req.To = remoteAlias + "/cc:foo"
+
+	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+	if !strings.Contains(ae.Detail, "pdx peers --all") {
+		t.Errorf("detail = %q, want it to contain the legacy hint", ae.Detail)
+	}
+	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
+		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+}
+
+// TestSend_TmuxFormResolves pins the explicit "tmux:<name>" address form:
+// it matches PeerRecord.SessionName directly, bypassing the label tier.
+func TestSend_TmuxFormResolves(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	req := s.sendReq()
+	req.To = remoteAlias + "/tmux:" + remoteSession
+
+	resp := s.sendOK(req)
+	if resp.Result != ipeers.ResultDelivered {
+		t.Errorf("result = %q, want delivered", resp.Result)
+	}
+	post := s.onlyPost()
+	if post.req.To.AgentSessionID != remoteSessionID {
+		t.Errorf("post to = %+v, want the tmux row's tuple", post.req.To)
+	}
+}
+
+// TestSend_DeadHolderLabelFallsToTmuxSession pins X2 at the module level
+// (spec §3.3: a row whose holder is not live is inert). The remote's rows
+// come out of the real ipeers.Build: tmux session "stale" is owned by a cc
+// conversation that has NO live registry entry but still holds the user
+// label "foo" (an inbox_dead owner-fallback row, PID 0), and tmux session
+// "foo" carries the live target. "air/foo" must not stop at the dead
+// holder with 409 not_deliverable: tier 1 ignores it, tier 2 delivers to
+// the tmux session.
+func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	const deadSID = "dddddddd-4444-4444-8444-444444444444"
+	rows := ipeers.Build(ipeers.BuildInput{
+		HostID: remoteHostID, Alias: remoteAlias,
+		Sessions: []ipeers.SessionSummary{{Code: "stalec", Name: "stale", Cwd: "/w"}, {Code: "fooc", Name: "foo", Cwd: "/w"}},
+		Owners: map[string]ipeers.Owner{
+			"stalec": {AgentType: "cc", SessionID: deadSID, TmuxPaneID: "%1"},
+			"fooc":   {AgentType: "cc", SessionID: remoteSessionID, TmuxPaneID: "%2"},
+		},
+		Entries: []ipeers.Entry{{
+			PID: remotePID, SessionID: remoteSessionID, Name: remoteSession, Cwd: "/w",
+			Tmux: "foo:@1.%2", Inbox: "/tmp/cc-socks/777.sock", ProcStart: remoteProcStart, Version: "2.1.270", Status: "idle",
+		}},
+		Labels: map[string]ipeers.LabelInfo{deadSID: {Label: "foo", Rev: 3}},
+	})
+	// Sanity: the fixture really is the X2 shape — a dead holder of "foo"
+	// and a deliverable tmux session named "foo" with another label.
+	var sawDead, sawLive bool
+	for _, r := range rows {
+		switch {
+		case r.SessionName == "stale":
+			sawDead = r.Reason == "inbox_dead" && r.Label == "foo" && r.Agent != nil && r.Agent.PID == 0
+		case r.SessionName == "foo":
+			sawLive = r.Deliverable && r.Label != "foo"
+		}
+	}
+	if !sawDead || !sawLive {
+		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of \"foo\" and a deliverable tmux session foo", rows)
+	}
+	s.set(func(s *sendEnv) { s.env = remoteEnvelope(rows...) })
+	req := s.sendReq() // To: air/foo
+
+	resp := s.sendOK(req)
+	if resp.Result != ipeers.ResultDelivered {
+		t.Errorf("result = %q, want delivered", resp.Result)
+	}
+	if resp.ToAddress != remoteAlias+"/tmux:foo" && !strings.HasPrefix(resp.ToAddress, remoteAlias+"/"+ipeers.DefaultLabel(remoteSessionID)+":") {
+		t.Errorf("to_address = %q, want the tmux session foo's own address", resp.ToAddress)
+	}
+	post := s.onlyPost()
+	if post.req.To.AgentSessionID != remoteSessionID || post.req.To.PID != remotePID {
+		t.Errorf("post to = %+v, want the tmux session foo's live tuple", post.req.To)
+	}
+}
+
+// TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady pins X1 at the
+// module level: the remote reports one alive-but-undecodable registry file
+// and a single live row carrying the addressed label. That file may be a
+// second process of the same conversation, so the send is 503 not_ready
+// (Partial:true) with nothing posted — not a delivery to the one process
+// that happened to be readable.
+func TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	row := remoteRow("", "")
+	row.Label, row.LabelSource = "dup-label", "default"
+	s.set(func(s *sendEnv) {
+		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row},
+			UnknownRegistryFiles: []string{"/reg/778.json"}}
+	})
+	req := s.sendReq()
+	req.To = remoteAlias + "/dup-label"
+
+	rr := s.send(adminCtx(), req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rr.Code, rr.Body.String())
+	}
+	var ae ipeers.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &ae); err != nil {
+		t.Fatalf("decode body: %v; body=%s", err, rr.Body.String())
+	}
+	if ae.Error != ipeers.ErrNotReady || !ae.Partial {
+		t.Errorf("body = %+v, want not_ready with partial:true", ae)
+	}
+	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
+		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+
+	// The same row with the registry complete (Partial for another
+	// reason) is a plain single hit and delivers.
+	s.set(func(s *sendEnv) {
+		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row}}
+	})
+	if resp := s.sendOK(req); resp.Result != ipeers.ResultDelivered {
+		t.Errorf("registry complete: result = %q, want delivered", resp.Result)
+	}
+}
+
+// TestSend_PartialInventoryNotReady pins the v2 delta on step 6: when the
+// remote's envelope is partial, a label-tier miss is 503 not_ready with
+// Partial:true in the body rather than falling back to the bare tmux-name
+// tier — even though that tier would otherwise have matched.
+func TestSend_PartialInventoryNotReady(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	s.set(func(s *sendEnv) {
+		row := remoteRow(remoteSession, "fooc") // carries no Label
+		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row}}
+	})
+	req := s.sendReq() // To: remoteAlias + "/" + remoteSession — would match tier 2 if reached
+
+	rr := s.send(adminCtx(), req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rr.Code, rr.Body.String())
+	}
+	var ae ipeers.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &ae); err != nil {
+		t.Fatalf("decode body: %v; body=%s", err, rr.Body.String())
+	}
+	if ae.Error != ipeers.ErrNotReady {
+		t.Errorf("error = %q, want %q", ae.Error, ipeers.ErrNotReady)
+	}
+	if !ae.Partial {
+		t.Errorf("partial = %v, want true", ae.Partial)
+	}
+	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
+		t.Errorf("post/rows = %d/%d, want none (refused before the audit insert)", len(s.postCalls()), len(s.rows()))
 	}
 }
 
@@ -756,18 +948,28 @@ func TestSend_ErrorSteps(t *testing.T) {
 			status: http.StatusBadRequest, code: ipeers.ErrOriginUnknown,
 		},
 		{
-			// R2-A: the origin's tmux session's owner lookup failed ⇒ the
-			// inventory is partial and has no row for the inbox. That is
-			// not "origin unknown" (a verdict the CLI reports as the
-			// caller not being a live session): 503 not_ready, retryable,
-			// before any fetch and before the audit insert.
-			name: "origin in a partial inventory is not_ready",
-			opts: envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}},
-			prepare: func(s *sendEnv) {
-				writeRegistryFixture(s.t, s.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(s.targetSock, "foo:@1.%1"))
-				s.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
-			},
-			status: http.StatusServiceUnavailable, code: ipeers.ErrNotReady, detail: "inventory partial",
+			// Task 5 review finding 2: a bare label-store Snapshot
+			// failure marks local.Partial true but hides no rows at
+			// all (Peer Address v2's entry rows mean a live origin
+			// always has one — TestSend_OriginResolvesViaEntryRowDespitePartialInventory).
+			// A dead origin_inbox with no matching row must stay a
+			// non-retryable 400 origin_unknown even while the label
+			// store is down, never 503 not_ready.
+			name:    "origin unknown path: label-store failure alone stays origin_unknown",
+			prepare: func(s *sendEnv) { s.m.labels = failingLabels{} },
+			mutate:  func(r *ipeers.SendRequest) { r.OriginInbox = "/nonexistent/x.sock" },
+			status:  http.StatusBadRequest, code: ipeers.ErrOriginUnknown,
+		},
+		{
+			// The other half of the same fix: an alive-but-undecodable
+			// registry file at an UNRELATED pid — the origin_inbox
+			// still names no row — turns the same "no row" case into a
+			// retryable 503 not_ready, since that file could be the
+			// one that would have decoded into the origin's own row.
+			name:    "origin unknown path: unrelated unknown registry file is not_ready",
+			prepare: func(s *sendEnv) { writeRegistryFixture(s.t, s.regDir, "4242.json", "{") },
+			mutate:  func(r *ipeers.SendRequest) { r.OriginInbox = "/nonexistent/x.sock" },
+			status:  http.StatusServiceUnavailable, code: ipeers.ErrNotReady,
 		},
 		{
 			name:    "fetch error",

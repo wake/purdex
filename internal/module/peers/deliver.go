@@ -42,18 +42,19 @@ func clampMode(declared string, allowBypass bool) string {
 // findTarget picks the inventory row the sender named: a cc agent whose
 // (session id, pid, proc_start) tuple matches to exactly, and that is
 // deliverable. detail (when no row matches) names the field that failed
-// on the closest candidate — never another row's data. candidate reports
-// whether any cc row carried to's session id at all: false means the
-// inventory says nothing about that session, which — in a partial
-// inventory — is not a verdict (handleDeliver step 7).
-func findTarget(records []ipeers.PeerRecord, to ipeers.WireTo) (rec ipeers.PeerRecord, detail string, candidate bool) {
+// on the closest candidate — never another row's data. Since every live,
+// non-proxy registry entry has its own entry row (spec §3.4), a target
+// that findTarget cannot fully match is a real verdict on its own — the
+// only thing that can still hide a live target is an alive-but-undecodable
+// registry file, which handleDeliver checks separately via
+// env.UnknownRegistryFiles.
+func findTarget(records []ipeers.PeerRecord, to ipeers.WireTo) (rec ipeers.PeerRecord, detail string) {
 	detail = "no live cc session with that agent_session_id"
 	for _, rec := range records {
 		a := rec.Agent
 		if a == nil || a.Type != "cc" || a.SessionID != to.AgentSessionID {
 			continue
 		}
-		candidate = true
 		switch {
 		case a.PID != to.PID:
 			detail = "pid does not match the live session"
@@ -65,10 +66,10 @@ func findTarget(records []ipeers.PeerRecord, to ipeers.WireTo) (rec ipeers.PeerR
 				detail += ": " + rec.Reason
 			}
 		default:
-			return rec, "", true
+			return rec, ""
 		}
 	}
-	return ipeers.PeerRecord{}, detail, candidate
+	return ipeers.PeerRecord{}, detail
 }
 
 // detailInventoryPartial is the fixed wire detail (and audit error) of a
@@ -233,19 +234,26 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	// daemon's own trouble, answered 503 not_ready (never target_gone,
 	// which the origin takes as a verdict and reaps the sender's helper on)
 	// with a fixed detail — the error text is local (tmux, registry paths)
-	// and stays in the audit row and the log. A PARTIAL inventory (spec
-	// §4.2: an owner lookup timed out, failed, or never started) that has
-	// no row for the tuple's session says just as little — the target may
-	// be the very session whose lookup did not complete — and is not_ready
-	// too; only a row that carries the session id is a verdict on it.
+	// and stays in the audit row and the log. Peer Address v2 gives every
+	// live, non-proxy registry entry its own entry row (spec §3.4)
+	// regardless of tmux owner resolution, so a merely PARTIAL inventory
+	// (an owner lookup timed out, failed, or never started, or the label
+	// store read failed) no longer hides a live target: only an
+	// alive-but-undecodable registry file (env.UnknownRegistryFiles,
+	// Diagnosis's "unknown" class) can, because that file could be exactly
+	// the entry that would have superseded whatever mismatched row
+	// findTarget did resolve (a restart racing the registry write). Its
+	// mere presence is not_ready, never a verdict, overriding even a
+	// genuine candidate row; anything else findTarget reports is a real
+	// verdict, target_gone.
 	env := m.localEnvelope(r.Context(), snap.localHostID, snap.localAlias)
 	if !env.OK {
 		refuseWith(http.StatusServiceUnavailable, ipeers.ErrNotReady, "inventory unavailable", "inventory unavailable: "+env.Error)
 		return
 	}
-	target, detail, candidate := findTarget(env.Peers, req.To)
+	target, detail := findTarget(env.Peers, req.To)
 	if detail != "" {
-		if !candidate && env.Partial {
+		if len(env.UnknownRegistryFiles) > 0 {
 			refuse(http.StatusServiceUnavailable, ipeers.ErrNotReady, detailInventoryPartial)
 			return
 		}

@@ -257,10 +257,12 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// *PeerMessageStore inside the interface: peers treats nil as
 	// "audit unavailable" and refuses every delivery.
 	var audit peersmod.AuditStore
+	var labels peersmod.LabelStore
 	if meta != nil {
 		audit = meta.PeerMessages()
+		labels = meta.PeerLabels()
 	}
-	c.AddModule(peersmod.New(audit))
+	c.AddModule(peersmod.New(audit, labels))
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	c.AddModule(syncmod.New())

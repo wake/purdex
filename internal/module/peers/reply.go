@@ -113,17 +113,7 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 	}
 	replier, detail := findReplier(env.Peers, sock)
 	if detail != "" {
-		// A PARTIAL inventory (spec §4.2) with no row for the reply
-		// address says nothing about the replier — its tmux session may
-		// be the one whose owner lookup did not complete: not_ready, never
-		// replier_unknown (a verdict). The helper is kept either way.
-		code := ipeers.ErrReplierUnknown
-		switch {
-		case replier.Agent != nil && replier.Agent.Type == "proxy":
-			code = ipeers.ErrProxyToProxy
-		case replier.Agent == nil && env.Partial:
-			code, detail = ipeers.ErrNotReady, detailInventoryPartial
-		}
+		code, detail := classifyReplyDrop(env, replier, detail)
 		drop(code, detail)
 		return
 	}
@@ -211,6 +201,36 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 		m.setResult(id, resp.EffectiveMode, resp.Result, errText)
 		m.helpers.Touch(h.key)
 	}
+}
+
+// classifyReplyDrop turns findReplier's (replier, detail) — called only
+// when detail is non-empty, i.e. no full match — into the code and
+// (possibly overridden) detail forwardReply drops the frame with. A
+// positively-identified proxy row (Build decoded it fine; it just isn't a
+// session) is a verdict regardless of anything else: proxy_to_proxy. Every
+// other case — no row found at all, or (defensively; Build's current join
+// never actually produces this shape with a real inbox, since Inbox is
+// only ever populated on a fully-deliverable cc row or a proxy row — see
+// internal/peers/record.go — but the check costs nothing and guards
+// against that changing) a row found that is not cc or not deliverable —
+// is a real verdict UNLESS an alive-but-undecodable registry file
+// (env.UnknownRegistryFiles; that file could be the one that would have
+// decoded into the actual replier) overrides it: not_ready, never
+// replier_unknown, which the caller reads as a verdict. Peer Address v2
+// gives every live, non-proxy registry entry its own entry row (spec
+// §3.4), so a merely partial inventory with no unknown files — an owner
+// lookup or label-store failure — no longer hides a live replier and
+// changes nothing here. The helper is kept either way (the caller drops
+// the frame, never reaps).
+func classifyReplyDrop(env ipeers.Envelope, replier ipeers.PeerRecord, detail string) (code, outDetail string) {
+	code, outDetail = ipeers.ErrReplierUnknown, detail
+	switch {
+	case replier.Agent != nil && replier.Agent.Type == "proxy":
+		code = ipeers.ErrProxyToProxy
+	case len(env.UnknownRegistryFiles) > 0:
+		code, outDetail = ipeers.ErrNotReady, detailInventoryPartial
+	}
+	return code, outDetail
 }
 
 // findReplier picks the inventory row whose agent inbox is exactly sock.

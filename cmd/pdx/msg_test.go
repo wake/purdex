@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -747,5 +748,216 @@ func TestRunMsgSelftest_InvalidTimeoutIsGrammarError(t *testing.T) {
 	}
 	if atomic.LoadInt64(&reqCount) != 0 {
 		t.Errorf("server saw %d request(s), want 0", reqCount)
+	}
+}
+
+// --- name / whoami: the grammar --------------------------------------------
+
+func TestParseMsgInvocation_NameAndWhoami(t *testing.T) {
+	cases := []struct {
+		args    []string
+		ok      bool
+		verb    string
+		label   string
+		release bool
+	}{
+		{[]string{"name", "purdex-tester"}, true, "name", "purdex-tester", false},
+		{[]string{"name", "--release"}, true, "name", "", true},
+		{[]string{"name"}, false, "", "", false},
+		{[]string{"name", "a", "b"}, false, "", "", false},
+		{[]string{"name", "a", "--release"}, false, "", "", false},
+		{[]string{"whoami"}, true, "whoami", "", false},
+		{[]string{"whoami", "x"}, false, "", "", false},
+		{[]string{"whoami", "--release"}, false, "", "", false},
+		{[]string{"send", "--release", "a/b", "t"}, false, "", "", false},
+		{[]string{"log", "--release"}, false, "", "", false},
+		{[]string{"deliver", "on", "--release"}, false, "", "", false},
+		{[]string{"selftest", "--release"}, false, "", "", false},
+		{[]string{"name", "x", "--mode", "bypass"}, false, "", "", false},
+		{[]string{"name", "x", "--tail", "5"}, false, "", "", false},
+		{[]string{"name", "x", "--timeout", "5s"}, false, "", "", false},
+	}
+	for _, c := range cases {
+		inv, _, ok := parseMsgInvocation(c.args)
+		if ok != c.ok || (ok && (inv.verb != c.verb || inv.label != c.label || inv.release != c.release)) {
+			t.Errorf("%v ⇒ ok=%v inv=%+v, want ok=%v verb=%q label=%q release=%v", c.args, ok, inv, c.ok, c.verb, c.label, c.release)
+		}
+	}
+}
+
+// --- whoami: POST /api/peers/self -------------------------------------------
+
+func TestRunMsgWhoami_Text(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/peers/self" {
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(ipeers.PeerRecord{
+			Host: "air", HostID: "air:9k2m4q", Address: "air/purdex-tester:purdex-3f",
+			Label: "purdex-tester", LabelSource: "user", LabelRev: 7,
+			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "fa5d4c07-0000", PID: 76973},
+		})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"whoami", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	want := "address:  air/purdex-tester:purdex-3f\nlabel:    purdex-tester (user, rev 7)\nhost:     air (air:9k2m4q)\nsession:  fa5d4c07-0000 pid 76973\n"
+	if out.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want)
+	}
+}
+
+func TestRunMsgWhoami_JSONPassthrough(t *testing.T) {
+	raw := `{"address":"air/x1:y","label":"x1"}` + "\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, raw)
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"whoami", "--json", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 0 || out.String() != raw {
+		t.Fatalf("exit %d out %q", code, out.String())
+	}
+}
+
+// --- name: PUT/DELETE /api/peers/self/label ---------------------------------
+
+func TestRunMsgName_ClaimUsesPut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ipeers.ClaimLabelRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/label" || req.Label != "purdex-tester" || req.OriginInbox != "/tmp/x.sock" {
+			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
+		}
+		json.NewEncoder(w).Encode(ipeers.PeerRecord{
+			Address: "air/purdex-tester:purdex-3f", Label: "purdex-tester", LabelSource: "user", LabelRev: 1,
+			Host: "air", HostID: "air:1",
+		})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"name", "purdex-tester", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	want := "named: air/purdex-tester:purdex-3f\naddress:  air/purdex-tester:purdex-3f\nlabel:    purdex-tester (user, rev 1)\nhost:     air (air:1)\n"
+	if out.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want)
+	}
+}
+
+func TestRunMsgName_TakenRendersLiveLabels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ipeers.ClaimLabelRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/label" || req.Label != "purdex-tester" {
+			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
+		}
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(ipeers.APIError{Error: ipeers.ErrLabelTaken, Detail: `"purdex-tester" is held by a live session`, LiveLabels: []string{"purdex-dev", "purdex-tester"}})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"name", "purdex-tester", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	want := "pdx msg: label_taken: \"purdex-tester\" is held by a live session\n  purdex-dev\n  purdex-tester\n"
+	if errb.String() != want {
+		t.Errorf("stderr:\n%s\nwant:\n%s", errb.String(), want)
+	}
+}
+
+func TestRunMsgName_NotReadyRendersSkipped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "registry has unreadable files", Skipped: []string{"/r/4242.json"}})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"name", "x1", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if errb.String() != "pdx msg: not_ready: registry has unreadable files\n  /r/4242.json\n" {
+		t.Errorf("stderr %q", errb.String())
+	}
+}
+
+func TestRunMsgName_Release_UsesDelete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ipeers.SelfRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/peers/self/label" || req.OriginInbox != "/tmp/x.sock" {
+			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
+		}
+		json.NewEncoder(w).Encode(ipeers.PeerRecord{Address: "air/_k3x9qz:purdex-3f", Label: "_k3x9qz", LabelSource: "default", LabelRev: 2, Host: "air", HostID: "air:1"})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"name", "--release", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 0 || !strings.HasPrefix(out.String(), "released: air/_k3x9qz:purdex-3f\n") {
+		t.Fatalf("exit %d out %q err %q", code, out.String(), errb.String())
+	}
+}
+
+func TestRunMsgName_JSONPassthrough(t *testing.T) {
+	raw := `{"address":"air/x1:y","label":"x1"}` + "\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, raw)
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"name", "x1", "--json", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 0 || out.String() != raw {
+		t.Fatalf("exit %d out %q", code, out.String())
+	}
+}
+
+func TestRunMsgName_NoSocketEnv(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"name", "x1"}, fakeGetenv(nil), &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), "pdx msg: origin_unknown: CLAUDE_CODE_MESSAGING_SOCKET is unset") {
+		t.Fatalf("exit %d err %q", code, errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	code = runMsgCmd([]string{"whoami"}, fakeGetenv(nil), &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), "pdx msg: origin_unknown: CLAUDE_CODE_MESSAGING_SOCKET is unset") {
+		t.Fatalf("whoami exit %d err %q", code, errb.String())
+	}
+}
+
+// pins the Task 6 deferred Minor: the unknown-flag message must speak the
+// v2 grammar (<host>/<label>[:<suffix>] | <host>/tmux:<name>), not the old
+// <host>/<session>.
+func TestRunMsgCmd_UnknownFlagMessage_V2Grammar(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"send", "air/x", "- first item"}, fakeGetenv(nil), &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit %d", code)
+	}
+	if strings.Contains(errb.String(), "<host>/<session>") {
+		t.Errorf("stderr still uses the old grammar: %q", errb.String())
+	}
+	if !strings.Contains(errb.String(), "<host>/<label>[:<suffix>]") || !strings.Contains(errb.String(), "<host>/tmux:<name>") {
+		t.Errorf("stderr = %q, want the v2 grammar", errb.String())
 	}
 }

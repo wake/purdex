@@ -64,17 +64,48 @@ func peersTableFixture() peers.Envelope {
 	}
 }
 
-const wantPeersTable = "ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"alias/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
-	"alias/sess2  codex  -        idle     not_cc       /home/wake/codex\n" +
-	"alias/sess3  -      -        -        no_agent     /home/wake/shell\n" +
-	"alias/sess4  -      -        -        -            \n" +
-	"(partial: 1 sessions not resolved within budget)\n"
+const wantPeersTable = "ADDRESS      LABEL  AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
+	"alias/sess1  -      cc     wake-cc  working  yes          /home/wake/project\n" +
+	"alias/sess2  -      codex  -        idle     not_cc       /home/wake/codex\n" +
+	"alias/sess3  -      -      -        -        no_agent     /home/wake/shell\n" +
+	"alias/sess4  -      -      -        -        -            \n" +
+	"(partial: 1 sessions not resolved within budget)\n" +
+	"daemon (unknown)\n"
 
 func TestFormatPeersTable(t *testing.T) {
 	got := formatPeersTable(peersTableFixture())
 	if got != wantPeersTable {
 		t.Errorf("formatPeersTable mismatch\ngot:\n%s\nwant:\n%s", got, wantPeersTable)
+	}
+}
+
+// TestFormatPeersTable_LabelColumnAndEntryIndent pins the Peer Address v2
+// rendering rules (task-9 brief): a LABEL column right after ADDRESS,
+// entry rows' ADDRESS cell indented by two spaces, "-" for an empty label,
+// "<label>*" when LabelSource is "default", and a "daemon <version>"
+// trailer line.
+func TestFormatPeersTable_LabelColumnAndEntryIndent(t *testing.T) {
+	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.342", Peers: []peers.PeerRecord{
+		{Address: "a/purdex-dev:mt0-x", RowKind: "session", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/_k3x9qz:y", RowKind: "entry", Label: "_k3x9qz", LabelSource: "default", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/tmux:shell", RowKind: "session", Reason: "no_agent"},
+	}}
+	got := formatPeersTable(env)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "ADDRESS") || !strings.Contains(lines[0], "LABEL") {
+		t.Errorf("header: %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "a/purdex-dev:mt0-x") || !strings.Contains(lines[1], "purdex-dev ") {
+		t.Errorf("session row: %q", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "  a/_k3x9qz:y") || !strings.Contains(lines[2], "_k3x9qz*") {
+		t.Errorf("entry row (indented, default marked): %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "-") { // empty label renders "-"
+		t.Errorf("shell row: %q", lines[3])
+	}
+	if !strings.Contains(got, "daemon 1.0.0-alpha.342") {
+		t.Errorf("version trailer missing:\n%s", got)
 	}
 }
 
@@ -88,6 +119,87 @@ func TestFormatPeersTable_NoPartialLine(t *testing.T) {
 	got := formatPeersTable(resp)
 	if strings.Contains(got, "partial:") {
 		t.Errorf("formatPeersTable printed a partial line when nothing was unresolved:\n%s", got)
+	}
+}
+
+// TestFormatPeersTable_UnknownRegistryFilesLine pins the F2 partial-cause
+// line for an alive-but-undecodable registry file: it is named, one line,
+// every path sanitized, and appears even though nothing was unresolved
+// within budget (no "sessions not resolved" line at all here).
+func TestFormatPeersTable_UnknownRegistryFilesLine(t *testing.T) {
+	resp := peers.Envelope{
+		OK:                   true,
+		Partial:              true,
+		UnknownRegistryFiles: []string{"/reg/1.json", "/reg/2\x1b[31m.json"},
+		Peers: []peers.PeerRecord{
+			{Address: "alias/sess1", Deliverable: false, Reason: "no_agent"},
+		},
+	}
+	got := formatPeersTable(resp)
+	if !strings.Contains(got, `(partial: unknown registry files: /reg/1.json, /reg/2\x1b[31m.json)`) {
+		t.Errorf("formatPeersTable = %q, want the unknown-registry-files line", got)
+	}
+	if strings.Contains(got, "sessions not resolved") {
+		t.Errorf("formatPeersTable = %q, want no unresolved-session line", got)
+	}
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("formatPeersTable = %q, want no raw ESC byte", got)
+	}
+}
+
+// TestFormatPeersTable_LabelStoreUnavailableLine pins the partial-cause
+// line for a label store read failure (spec §3.3): it is rendered from the
+// envelope's explicit labels_unavailable flag (X4), never inferred from
+// the absence of the other causes.
+func TestFormatPeersTable_LabelStoreUnavailableLine(t *testing.T) {
+	resp := peers.Envelope{
+		OK:                true,
+		Partial:           true,
+		LabelsUnavailable: true,
+		Peers: []peers.PeerRecord{
+			{Address: "alias/sess1", Deliverable: true, Agent: &peers.AgentInfo{Type: "cc"}},
+		},
+	}
+	got := formatPeersTable(resp)
+	if !strings.Contains(got, "(partial: label store unavailable)\n") {
+		t.Errorf("formatPeersTable = %q, want the label-store-unavailable line", got)
+	}
+	if strings.Contains(got, "sessions not resolved") || strings.Contains(got, "unknown registry files") {
+		t.Errorf("formatPeersTable = %q, want only the label-store line", got)
+	}
+
+	// Without the flag, nothing infers it — even though the envelope is
+	// Partial with no other visible cause.
+	resp.LabelsUnavailable = false
+	if got := formatPeersTable(resp); strings.Contains(got, "label store") {
+		t.Errorf("formatPeersTable = %q, want no label-store line without labels_unavailable", got)
+	}
+}
+
+// TestFormatPeersTable_AllPartialCauseLines pins that the three partial
+// causes are independent lines, each printed whenever its own signal is
+// set, in the order count / unknown files / label store — none is
+// suppressed by another (X3).
+func TestFormatPeersTable_AllPartialCauseLines(t *testing.T) {
+	resp := peers.Envelope{
+		OK:                   true,
+		Partial:              true,
+		DaemonVersion:        "1.0.0",
+		UnknownRegistryFiles: []string{"/reg/1.json", "/reg/2.json"},
+		LabelsUnavailable:    true,
+		Peers: []peers.PeerRecord{
+			{Address: "alias/sess1", Deliverable: false, Reason: "no_agent"},
+			{Address: "alias/sess2"}, // unresolved
+			{Address: "alias/sess3"}, // unresolved
+		},
+	}
+	got := formatPeersTable(resp)
+	want := "(partial: 2 sessions not resolved within budget)\n" +
+		"(partial: unknown registry files: /reg/1.json, /reg/2.json)\n" +
+		"(partial: label store unavailable)\n" +
+		"daemon 1.0.0\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("formatPeersTable = %q, want it to end with %q", got, want)
 	}
 }
 
@@ -587,15 +699,144 @@ func peersAllTableFixture() peers.AllEnvelope {
 	}
 }
 
-const wantPeersAllTable = "HOST   ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"local  local/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
-	"air    air/sess2    codex  -        idle     not_cc       /home/wake/codex\n" +
-	"down  (unreachable: connection refused)\n"
+const wantPeersAllTable = "HOST   ADDRESS      LABEL  AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
+	"local  local/sess1  -      cc     wake-cc  working  yes          /home/wake/project\n" +
+	"air    air/sess2    -      codex  -        idle     not_cc       /home/wake/codex\n" +
+	"down  (unreachable: connection refused)\n" +
+	"local  daemon (unknown)\n" +
+	"air  daemon (unknown)\n"
 
 func TestFormatPeersAllTable(t *testing.T) {
 	got := formatPeersAllTable(peersAllTableFixture())
 	if got != wantPeersAllTable {
 		t.Errorf("formatPeersAllTable mismatch\ngot:\n%s\nwant:\n%s", got, wantPeersAllTable)
+	}
+}
+
+// TestFormatPeersAllTable_LabelColumnEntryIndentAndVersionTrailers extends
+// TestFormatPeersTable_LabelColumnAndEntryIndent's rules to the --all
+// table: a LABEL column, entry-row indent, and one "<alias>  daemon
+// <version>" trailer line per OK host (the existing "(unreachable: …)"
+// lines for failed hosts stay).
+func TestFormatPeersAllTable_LabelColumnEntryIndentAndVersionTrailers(t *testing.T) {
+	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
+		{
+			Alias: "local", OK: true, DaemonVersion: "1.0.0-alpha.342",
+			Peers: []peers.PeerRecord{
+				{Address: "local/purdex-dev:mt0-x", RowKind: "session", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/_k3x9qz:y", RowKind: "entry", Label: "_k3x9qz", LabelSource: "default", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+			},
+		},
+		{Alias: "air", OK: true, DaemonVersion: "1.0.0-alpha.340", Peers: []peers.PeerRecord{}},
+		{Alias: "down", OK: false, Error: "connection refused", Peers: []peers.PeerRecord{}},
+	}}
+	got := formatPeersAllTable(resp)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "HOST") || !strings.Contains(lines[0], "LABEL") {
+		t.Errorf("header: %q", lines[0])
+	}
+	if !strings.Contains(lines[2], "  local/_k3x9qz:y") || !strings.Contains(lines[2], "_k3x9qz*") {
+		t.Errorf("entry row (indented, default marked) not where expected: %q", lines[2])
+	}
+	if !strings.Contains(got, "down  (unreachable: connection refused)") {
+		t.Errorf("unreachable line missing:\n%s", got)
+	}
+	if !strings.Contains(got, "local  daemon 1.0.0-alpha.342") {
+		t.Errorf("local daemon version trailer missing:\n%s", got)
+	}
+	if !strings.Contains(got, "air  daemon 1.0.0-alpha.340") {
+		t.Errorf("air daemon version trailer missing:\n%s", got)
+	}
+	if strings.Contains(got, "down  daemon") {
+		t.Errorf("unreachable host must not get a daemon version trailer:\n%s", got)
+	}
+}
+
+// TestFormatPeersAllTable_PartialCauseLines pins the per-host
+// partial-cause lines: an alias-prefixed unknown-registry-files line for
+// the host that has one, and an alias-prefixed label-store-unavailable
+// line for the host whose envelope says labels_unavailable — each placed
+// ahead of that host's own daemon trailer.
+func TestFormatPeersAllTable_PartialCauseLines(t *testing.T) {
+	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
+		{
+			Alias: "local", OK: true, DaemonVersion: "1.0.0",
+			Partial:              true,
+			UnknownRegistryFiles: []string{"/reg/9999.json"},
+			Peers:                []peers.PeerRecord{{Address: "local/sess1", Deliverable: false, Reason: "no_agent"}},
+		},
+		{
+			Alias: "air", OK: true, DaemonVersion: "1.0.1",
+			Partial:           true,
+			LabelsUnavailable: true,
+			Peers:             []peers.PeerRecord{{Address: "air/sess1", Deliverable: true, Agent: &peers.AgentInfo{Type: "cc"}}},
+		},
+		{Alias: "down", OK: false, Error: "connection refused", Peers: []peers.PeerRecord{}},
+	}}
+	got := formatPeersAllTable(resp)
+	if !strings.Contains(got, "local  (partial: unknown registry files: /reg/9999.json)\n") {
+		t.Errorf("formatPeersAllTable = %q, want local's unknown-registry-files line", got)
+	}
+	if !strings.Contains(got, "air  (partial: label store unavailable)\n") {
+		t.Errorf("formatPeersAllTable = %q, want air's label-store-unavailable line", got)
+	}
+	if strings.Contains(got, "down  (partial:") {
+		t.Errorf("formatPeersAllTable = %q, want no partial line for the unreachable host", got)
+	}
+	wantOrder := "local  (partial: unknown registry files: /reg/9999.json)\nlocal  daemon 1.0.0\n"
+	if !strings.Contains(got, wantOrder) {
+		t.Errorf("formatPeersAllTable = %q, want the partial-cause line directly ahead of that host's daemon trailer", got)
+	}
+}
+
+// TestFormatPeersAllTable_OwnerOnlyPartialPrintsCount pins X3: a host in
+// --all that is partial ONLY because some owner lookups did not run used
+// to print nothing at all. It must print the alias-prefixed unresolved
+// count, exactly as the single-host table does.
+func TestFormatPeersAllTable_OwnerOnlyPartialPrintsCount(t *testing.T) {
+	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
+		{
+			Alias: "air", OK: true, DaemonVersion: "1.0.1", Partial: true,
+			Peers: []peers.PeerRecord{
+				{Address: "air/sess1", Deliverable: false, Reason: "no_agent"},
+				{Address: "air/sess2"}, // unresolved: no agent, no reason
+			},
+		},
+	}}
+	got := formatPeersAllTable(resp)
+	want := "air  (partial: 1 sessions not resolved within budget)\nair  daemon 1.0.1\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("formatPeersAllTable = %q, want it to end with %q", got, want)
+	}
+	if strings.Contains(got, "label store") || strings.Contains(got, "unknown registry") {
+		t.Errorf("formatPeersAllTable = %q, want only the count line", got)
+	}
+}
+
+// TestFormatPeersAllTable_AllPartialCauseLines pins that --all prints
+// every applicable cause line per host, alias-prefixed, in the order
+// count / unknown files / label store, ahead of that host's trailer —
+// the same renderer the single-host table uses.
+func TestFormatPeersAllTable_AllPartialCauseLines(t *testing.T) {
+	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
+		{
+			Alias: "local", OK: true, DaemonVersion: "1.0.0", Partial: true,
+			UnknownRegistryFiles: []string{"/reg/1.json"},
+			LabelsUnavailable:    true,
+			Peers: []peers.PeerRecord{
+				{Address: "local/sess1"}, // unresolved
+			},
+		},
+		{Alias: "air", OK: true, DaemonVersion: "1.0.1", Peers: []peers.PeerRecord{}},
+	}}
+	got := formatPeersAllTable(resp)
+	want := "local  (partial: 1 sessions not resolved within budget)\n" +
+		"local  (partial: unknown registry files: /reg/1.json)\n" +
+		"local  (partial: label store unavailable)\n" +
+		"local  daemon 1.0.0\n" +
+		"air  daemon 1.0.1\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("formatPeersAllTable = %q, want it to end with %q", got, want)
 	}
 }
 
