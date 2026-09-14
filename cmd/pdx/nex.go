@@ -19,11 +19,15 @@ import (
 const nexProbeTimeout = 10 * time.Second
 
 // nexUsage is printed (to stderr) for a malformed `pdx nex` invocation —
-// an unrecognized or incomplete --addr/--token/--config flag. Once flag
-// parsing succeeds, every remaining argument (including a bare "delegate"
-// with no further flags, or none at all) is client.Run's grammar to
-// enforce, not this command's.
+// an unrecognized or incomplete --addr/--token/--config flag. --addr,
+// --token and --config must come BEFORE the subcommand: the stdlib flag
+// package stops parsing at the first non-flag argument, so a flag placed
+// after the subcommand is handed to client.Run instead, which reports its
+// own (unrelated-looking) usage error. Once flag parsing succeeds, every
+// remaining argument (including a bare "delegate" with no further flags,
+// or none at all) is client.Run's grammar to enforce, not this command's.
 const nexUsage = "usage: pdx nex [--addr <url>] [--token <t>] [--config <path>] <subcommand> [args...]\n" +
+	"       (--addr/--token/--config must come before the subcommand)\n" +
 	"       subcommands: delegate, ls, show, watch, events, attach, send, interrupt, archive, terminate, host"
 
 // runNexMain is the `pdx nex` switch target: it wires runNex to the real

@@ -317,7 +317,10 @@ func TestStartLogsServingLine(t *testing.T) {
 		"claude_bin=" + cfg.Nex.ClaudeBin,
 		"profiles=",
 		"trusted",
-		"path=" + launchdPath,
+		// PathPrepend is empty in baseConfig, so the applied prefix is
+		// empty too — distinct from the earlier "PATH policy" log line,
+		// which still carries the full PATH.
+		"path_prepend=)",
 	} {
 		if !strings.Contains(serving, want) {
 			t.Errorf("serving line %q missing %q", serving, want)

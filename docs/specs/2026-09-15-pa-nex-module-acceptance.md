@@ -64,7 +64,8 @@ A's events contain `WORKER-A-DONE`; `attach --control` + `interrupt` on B → `s
   (a previous turn of the *same* execution). The spec's step 5 (and the earlier memory note "delegate 已有
   `session_id` 欄位") were wrong: `session_id` exists only on the *summary*. This is a Nexen contract
   addition (`delegate.resume_session_id` or similar, subject to the same-cwd rule) and a **P-C prerequisite**;
-  tracked as a follow-up issue. The `handoff` profile itself is selectable (`sandbox_profiles` lists it).
+  tracked as purdex #1032 / nexen #65 (https://lab.protype.tw/wake/nexen/issues/65). The `handoff` profile
+  itself is selectable (`sandbox_profiles` lists it).
 
 ## Step 6 — a26
 
@@ -78,6 +79,8 @@ with `Last-Event-ID: 1` → first frames `id: 2 / execution.running`, `id: 3 / s
 
 ## Observations for follow-up
 
-1. Nexen needs a "delegate resuming an existing claude session" input before P-C's tmux → execution handoff (above).
-2. The start log prints the full `PATH` twice (policy line + serving line); with a long user PATH that is ~2 KB per line. Trim to the prepended prefix.
+1. Nexen needs a "delegate resuming an existing claude session" input before P-C's tmux → execution handoff (above). purdex #1032 / nexen #65.
+2. ~~The start log prints the full `PATH` twice (policy line + serving line); with a long user PATH that is ~2 KB per line. Trim to the prepended prefix.~~ Fixed in the final-review fix wave: the serving line now prints only the applied `path_prepend` prefix.
 3. `pdx nex` prints Nexen's own delegate usage on a bad flag (`-session-id`), which is correct but the wrapper's `pdx nex:` prefix line repeats the error — cosmetic.
+4. Store close in `Stop()` for backup/sync/execution modules → #1033.
+5. a26 / dev-update / 3b acceptance → #1034.

@@ -46,9 +46,14 @@ type server interface {
 // ctx and Shutdown falls through to Close immediately.
 //
 // Returns Serve's error unless it is http.ErrServerClosed.
+//
+// A second value on sig while the sequence below is still running (e.g. a
+// slow or blocking StopModules) exits immediately via exit(130) rather than
+// waiting out the rest of the shutdown budget — a second Ctrl-C should not
+// need to wait for a stuck module.
 func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	cancel context.CancelFunc, target shutdownTarget, budget time.Duration,
-	logf func(string, ...any)) error {
+	logf func(string, ...any), exit func(int)) error {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
@@ -63,6 +68,17 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	case err = <-serveErr:
 		serveReturned = true
 	}
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-sig:
+			logf("received second signal, exiting immediately")
+			exit(130)
+		case <-done:
+		}
+	}()
 
 	cancel() // stop module background goroutines (pollers, watchers)
 	ctx, ctxCancel := context.WithTimeout(context.Background(), budget)

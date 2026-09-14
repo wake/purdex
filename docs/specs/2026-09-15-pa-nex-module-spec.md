@@ -218,6 +218,11 @@ module. `/api/nex/*` is a 404 like any unknown route (after the outer auth
 chain), `pdx nex` reports "not enabled" (§4.7), nothing is opened under
 `DataDir`, no PATH change is made.
 
+`Validate` still runs on the section even when `enabled = false`, so a
+malformed profile name in a disabled section fails daemon start —
+fail-fast by design; only the runtime effects (PATH, DataDir, mount) are
+skipped.
+
 `config.Clone()` clones `Nex.RepoRoots`, `Nex.ServiceRoots`,
 `Nex.PathPrepend` (the aliasing rule every other slice follows).
 `PUT /api/config` **does not accept** a `nex` key in P-A (400
@@ -379,6 +384,11 @@ still be unwinding;
 `sys.Close` right after is the same order the standalone daemon uses
 (N1 rule 3) and is accepted as-is — a handler that loses the store under it
 fails that one request during a forced shutdown.
+
+`nex.Stop` runs second in reverse registration order (after `dev`) and may
+consume the whole shared budget; every other module's `Stop` ignores its
+ctx today, so there is no starvation in practice — a future ctx-aware
+`Stop` elsewhere must be placed with this in mind.
 
 **What a pdx restart does to executions** — three cases, tested separately
 (§6 steps 3a–3c), because the outcomes differ:
@@ -587,3 +597,4 @@ Manual, on mlab, before merge (recorded in the PR):
 | 11 | should | Config persistence contract; `Clone`; `/api/info` staleness; failure cases | ✅ §4.2 (`PUT` rejects `nex`, `Clone` slices), §4.8 `configured`/`mounted`, I12, I15 |
 | 12 | should | Empty `HostID` → `pdx:`; I11 over-broad; handoff test needs same cwd / process gone | ✅ §4.2 HostID rule; I11 narrowed to operation events + lease; §6 step 5 |
 | 13 | nit | `repo_roots` comment misleading; `max_profile` placement | ✅ §4.2 paste-able TOML with corrected comments |
+| 14 | — | final review (whole-branch) | ✅ fix wave: I7 assertion, dead chan, comment, error prefix, second-signal exit, log trim, CLI usage; issues #1032 #1033 #1034 |

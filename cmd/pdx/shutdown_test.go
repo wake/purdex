@@ -144,6 +144,9 @@ type harness struct {
 	sig    chan os.Signal
 	logs   []string
 	logMu  sync.Mutex
+
+	exitMu    sync.Mutex
+	exitCalls []int // records exit() calls instead of ever calling real os.Exit
 }
 
 func newHarness() *harness {
@@ -170,9 +173,23 @@ func (h *harness) logged() []string {
 	return append([]string(nil), h.logs...)
 }
 
+// exit is the harness's injected exit func: it records the code instead of
+// ever calling the real os.Exit, which would kill the test binary.
+func (h *harness) exit(code int) {
+	h.exitMu.Lock()
+	defer h.exitMu.Unlock()
+	h.exitCalls = append(h.exitCalls, code)
+}
+
+func (h *harness) exited() []int {
+	h.exitMu.Lock()
+	defer h.exitMu.Unlock()
+	return append([]int(nil), h.exitCalls...)
+}
+
 // run calls serveAndWait with the harness fakes and the given budget.
 func (h *harness) run(budget time.Duration) error {
-	return serveAndWait(h.srv, nil, h.sig, h.cancel, h.target, budget, h.logf)
+	return serveAndWait(h.srv, nil, h.sig, h.cancel, h.target, budget, h.logf, h.exit)
 }
 
 // runAsync calls run on a goroutine and returns a channel that yields
@@ -365,16 +382,83 @@ func TestServeAndWait_WaitsForCloseModules(t *testing.T) {
 	}
 }
 
+// TestServeAndWait_SecondSignalDuringBlockingStopModulesExitsImmediately is
+// item 5's test: a second signal arriving while the shutdown sequence is
+// stuck behind a blocking StopModules must not wait out the rest of the
+// budget — it calls the injected exit(130) right away. exit is a harness
+// fake, so this never calls the real os.Exit.
+func TestServeAndWait_SecondSignalDuringBlockingStopModulesExitsImmediately(t *testing.T) {
+	h := newHarness()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h.target.stopHook = func(context.Context) {
+		close(started)
+		<-release
+	}
+	h.sig <- syscall.SIGTERM
+
+	done := h.runAsync(testBudget)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopModules never started")
+	}
+
+	h.sig <- syscall.SIGTERM // second signal while StopModules is still blocked
+
+	waitFor := time.After(2 * time.Second)
+	for len(h.exited()) == 0 {
+		select {
+		case <-waitFor:
+			t.Fatal("exit was not called after the second signal")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if exits := h.exited(); !equalInts(exits, []int{130}) {
+		t.Fatalf("exit calls = %v, want [130]", exits)
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serveAndWait returned %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveAndWait did not return after StopModules unblocked")
+	}
+}
+
+func equalInts(got, want []int) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // recordingHTTPServer wraps a real *http.Server so the I7 test can
 // timestamp Shutdown/Close alongside the fake target's CloseModules.
 type recordingHTTPServer struct {
 	*http.Server
 	rec *recorder
+
+	// shutdownErr is set by Shutdown and read only after serveAndWait has
+	// returned (the CloseModules step that precedes that return happens
+	// strictly after Shutdown returns, so this plain field is race-free).
+	shutdownErr error
 }
 
 func (s *recordingHTTPServer) Shutdown(ctx context.Context) error {
 	s.rec.add("Shutdown", ctx)
 	err := s.Server.Shutdown(ctx)
+	s.shutdownErr = err
 	s.rec.add("Shutdown.returned", nil)
 	return err
 }
@@ -413,17 +497,11 @@ func TestServeAndWait_RealServerStreamingHandlerTimesOutThenCloses(t *testing.T)
 	srv := &recordingHTTPServer{Server: &http.Server{Handler: handler}, rec: rec}
 	target := &fakeTarget{rec: rec}
 	sig := make(chan os.Signal, 1)
-	cancelCalled := make(chan struct{}, 1)
-	cancel := func() {
-		rec.add("cancel", nil)
-		select {
-		case cancelCalled <- struct{}{}:
-		default:
-		}
-	}
+	cancel := func() { rec.add("cancel", nil) }
 
 	done := make(chan error, 1)
-	go func() { done <- serveAndWait(srv, ln, sig, cancel, target, budget, t.Logf) }()
+	noExit := func(int) {}
+	go func() { done <- serveAndWait(srv, ln, sig, cancel, target, budget, t.Logf, noExit) }()
 
 	// Open a streaming request and wait until the handler has flushed
 	// headers — from then on the connection is "active" for Shutdown.
@@ -470,10 +548,11 @@ func TestServeAndWait_RealServerStreamingHandlerTimesOutThenCloses(t *testing.T)
 	if !closeMods.at.After(closeRet.at) && !closeMods.at.Equal(closeRet.at) {
 		t.Fatalf("CloseModules (%v) ran before Close returned (%v)", closeMods.at, closeRet.at)
 	}
-	sd, _ := rec.find("Shutdown")
-	sdRet, _ := rec.find("Shutdown.returned")
-	if elapsed := sdRet.at.Sub(sd.at); elapsed < budget {
-		t.Fatalf("Shutdown returned after %v, before the %v budget — it did not time out", elapsed, budget)
+	// Clock-independent stand-in for "Shutdown timed out": assert the error
+	// it returned rather than comparing elapsed time against budget (which
+	// carries a theoretical microsecond flake window).
+	if !errors.Is(srv.shutdownErr, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown(ctx) returned %v, want context.DeadlineExceeded", srv.shutdownErr)
 	}
 }
 

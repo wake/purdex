@@ -29,7 +29,8 @@ const RoutePrefix = "/api/nex"
 // defaults (e.g. LeaseTTL, InterruptTimeout, ShutdownTimeout when their
 // pdx-side string was "") — see I13. A Validate failure (for example a
 // negative duration, which pdx's own layer-1 validation does not reject)
-// is wrapped with the "nex: config:" prefix.
+// is wrapped with the "nex:" prefix — Nexen's own error already starts
+// with "config:", so the result reads "nex: config: ..." without doubling.
 //
 // hostID both names the Nexen config's HostID and is the sole identity
 // every request through this module authenticates as ("pdx:<hostID>"):
@@ -71,7 +72,9 @@ func buildOptions(hostID, dataDir string, n pdxconfig.NexConfig, shutdownBudget 
 	}
 
 	if err := cfg.Validate(); err != nil {
-		return nexen.Options{}, fmt.Errorf("nex: config: %w", err)
+		// Nexen's own Validate error already starts with "config:", so
+		// wrapping with "nex:" (not "nex: config:") avoids doubling it.
+		return nexen.Options{}, fmt.Errorf("nex: %w", err)
 	}
 
 	auth := api.AuthenticatorFunc(func(*http.Request) (string, error) {

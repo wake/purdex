@@ -143,7 +143,9 @@ func TestBuildOptionsEmptyHostIDErrors(t *testing.T) {
 // TestBuildOptionsValidateErrorIsWrapped is spec I13's counterpart: a
 // negative duration is shape-valid to pdx's own NexConfig.Validate (it
 // only checks the string parses), but Nexen's Config.Validate rejects it.
-// buildOptions must surface that with the "nex: config:" prefix.
+// buildOptions must surface that with a single "nex: config:" prefix —
+// Nexen's own error already starts with "config:", so wrapping with just
+// "nex:" must not double it into "nex: config: config:".
 func TestBuildOptionsValidateErrorIsWrapped(t *testing.T) {
 	n := pdxconfig.NexConfig{
 		RepoRoots: []string{"/repo/a"},
@@ -156,8 +158,11 @@ func TestBuildOptionsValidateErrorIsWrapped(t *testing.T) {
 	if err == nil {
 		t.Fatal("buildOptions() error = nil, want non-nil")
 	}
-	if !strings.HasPrefix(err.Error(), "nex: config:") {
-		t.Errorf("buildOptions() error = %q, want prefix %q", err.Error(), "nex: config:")
+	if !strings.HasPrefix(err.Error(), "nex: config: ") {
+		t.Errorf("buildOptions() error = %q, want prefix %q", err.Error(), "nex: config: ")
+	}
+	if strings.Contains(err.Error(), "config: config:") {
+		t.Errorf("buildOptions() error = %q, prefix doubled to \"config: config:\"", err.Error())
 	}
 	if !strings.Contains(err.Error(), "lease_ttl") {
 		t.Errorf("buildOptions() error = %q, want it to mention lease_ttl", err.Error())

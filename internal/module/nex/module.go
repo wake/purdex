@@ -46,10 +46,11 @@ func realAssemble(ctx context.Context, opts nexen.Options) (engine, error) {
 // Module embeds the Nexen execution engine as a pdx daemon module and
 // mounts its HTTP API under RoutePrefix.
 type Module struct {
-	core *core.Core
-	sys  engine
-	opts nexen.Options
-	path string // final process PATH after applyPathPolicy, for the Start log line
+	core       *core.Core
+	sys        engine
+	opts       nexen.Options
+	path       string // final process PATH after applyPathPolicy, logged once at Init
+	pathPrefix string // applied path_prepend entries only, joined by the list separator; for the Start log line
 
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
@@ -96,6 +97,7 @@ func (m *Module) Init(c *core.Core) error {
 
 	final, changed := applyPathPolicy(n.PathPrepend, m.isDir)
 	m.path = final
+	m.pathPrefix = strings.Join(existingPrefix(n.PathPrepend, m.isDir), string(os.PathListSeparator))
 	if changed {
 		m.logf("nex: PATH policy applied (path_prepend=%q): PATH=%s", n.PathPrepend, final)
 	} else {
@@ -135,8 +137,8 @@ func (m *Module) Start(context.Context) error {
 	if claudeBin == "" {
 		claudeBin = "claude (via PATH)"
 	}
-	m.logf("nex: serving %s (host_id=%s, data_dir=%s, claude_bin=%s, profiles=%s, path=%s)",
-		RoutePrefix, cfg.HostID, cfg.DataDir, claudeBin, profilesText(cfg.Sandbox.MaxProfile, cfg.Sandbox.DefaultProfile), m.path)
+	m.logf("nex: serving %s (host_id=%s, data_dir=%s, claude_bin=%s, profiles=%s, path_prepend=%s)",
+		RoutePrefix, cfg.HostID, cfg.DataDir, claudeBin, profilesText(cfg.Sandbox.MaxProfile, cfg.Sandbox.DefaultProfile), m.pathPrefix)
 	return nil
 }
 

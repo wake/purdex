@@ -24,17 +24,10 @@ import (
 func composePath(current string, entries []string, isDir func(string) bool) string {
 	sep := string(os.PathListSeparator)
 
-	prefix := make([]string, 0, len(entries))
-	inPrefix := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		if inPrefix[e] {
-			continue
-		}
-		if !isDir(e) {
-			continue
-		}
+	prefix := existingPrefix(entries, isDir)
+	inPrefix := make(map[string]bool, len(prefix))
+	for _, e := range prefix {
 		inPrefix[e] = true
-		prefix = append(prefix, e)
 	}
 
 	var rest []string
@@ -48,6 +41,27 @@ func composePath(current string, entries []string, isDir func(string) bool) stri
 	}
 
 	return strings.Join(append(prefix, rest...), sep)
+}
+
+// existingPrefix filters entries down to the ones that exist as
+// directories, deduplicated in first-occurrence order — the same
+// computation composePath uses to build PATH's prefix. Exposed separately
+// so callers (Module.Init's Start-log line) can report just the applied
+// prefix without reconstructing the full PATH.
+func existingPrefix(entries []string, isDir func(string) bool) []string {
+	prefix := make([]string, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if seen[e] {
+			continue
+		}
+		if !isDir(e) {
+			continue
+		}
+		seen[e] = true
+		prefix = append(prefix, e)
+	}
+	return prefix
 }
 
 // applyPathPolicy reads the process PATH, applies composePath, and writes

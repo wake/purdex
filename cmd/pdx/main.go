@@ -233,8 +233,9 @@ func runServe(args []string) {
 	// 10. Serve until a signal or a Serve failure, then run the full
 	// shutdown sequence (cancel → StopModules → Shutdown/Close →
 	// CloseModules) and only return once it has finished, so the deferred
-	// store closes and PID-lock release below run against closed modules.
-	if err := serveAndWait(srv, listener, sigCh, cancel, c, core.ShutdownBudget, log.Printf); err != nil {
+	// store close and PID-lock release registered above run against closed
+	// modules.
+	if err := serveAndWait(srv, listener, sigCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit); err != nil {
 		log.Printf("server error: %v", err)
 	}
 }
