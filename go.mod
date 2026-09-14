@@ -8,15 +8,14 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-shellwords v1.0.13
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
+	lab.protype.tw/wake/nexen v0.0.0-20260914203205-1e5d09014b65
 	modernc.org/sqlite v1.54.0
 )
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	golang.org/x/tools v0.47.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	lab.protype.tw/wake/nexen v0.0.0-20260914203205-1e5d09014b65 // indirect
 )
 
 require (
