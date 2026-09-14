@@ -257,9 +257,9 @@ type SendResponse struct {
 }
 
 // SelfRequest is the body of POST /api/peers/self and DELETE
-// /api/peers/self/label: the caller's own inbox, resolved against the
-// live registry the same way /send resolves an origin (Peer Address v2
-// spec §3.6).
+// /api/peers/self/label: the caller's own inbox, attributed to a live,
+// non-proxy registry entry (entry attribution, Peer Address v2 spec
+// §3.6 — not /send's deliverable-row origin rule).
 type SelfRequest struct {
 	OriginInbox string `json:"origin_inbox"`
 }
@@ -271,8 +271,8 @@ type ClaimLabelRequest struct {
 	Label       string `json:"label"`
 }
 
-// APIError is the body of every 4xx/5xx JSON response on /send, /deliver
-// and /log.
+// APIError is the body of every 4xx/5xx JSON response on /send, /deliver,
+// /log and the three self routes (/api/peers/self, /api/peers/self/label).
 type APIError struct {
 	Error      string       `json:"error"`
 	Detail     string       `json:"detail,omitempty"`

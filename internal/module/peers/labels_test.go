@@ -18,18 +18,40 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/peers/proxyhelper/proxyhelpertest"
 )
+
+// labelHelperPIDFloor is the first pid proxyhelpertest hands out to a
+// spawned fake helper (mirrors e2eFakeHelperPID in e2e_test.go): every pid
+// at or above it is a fake helper process, whose registry entry (a real
+// helper spawn writes its own <pid>.json — proxyhelper.Run, not the test's
+// doing) carries proxyhelpertest.ProcStart(pid), not targetProcStart.
+const labelHelperPIDFloor = 900000
 
 // labelLiveness is the Liveness the self-route fixture shares across its
 // two fake registry entries: every pid is alive (Stat always succeeds,
-// procStart always matches) unless markDead has been called for it,
-// modelled on e2eLiveness (e2e_test.go).
+// procStart always matches its own entry) unless markDead has been called
+// for it, modelled on e2eLiveness (e2e_test.go). StartTime must answer
+// each pid's OWN procStart — not one fixed value — or a spawned helper's
+// entry (whose file carries proxyhelpertest.ProcStart(pid), a different
+// string per pid) is classified confirmed-dead by the mismatch and never
+// reaches findOriginEntry at all, making the proxy exclusion untested.
 type labelLiveness struct {
 	dead sync.Map // pid → struct{}
 }
 
 func (l *labelLiveness) markDead(pid int) { l.dead.Store(pid, struct{}{}) }
 func (l *labelLiveness) revive(pid int)   { l.dead.Delete(pid) }
+
+func (l *labelLiveness) startOf(pid int) time.Time {
+	if pid >= labelHelperPIDFloor {
+		s, _ := proxyhelpertest.ProcStart(pid)
+		ts, _ := ipeers.ParseProcStart(s)
+		return ts
+	}
+	ts, _ := ipeers.ParseProcStart(targetProcStart)
+	return ts
+}
 
 func (l *labelLiveness) liveness() ipeers.Liveness {
 	return ipeers.Liveness{
@@ -39,8 +61,7 @@ func (l *labelLiveness) liveness() ipeers.Liveness {
 			return !dead
 		},
 		StartTime: func(pid int) (time.Time, error) {
-			ts, _ := ipeers.ParseProcStart(targetProcStart)
-			return ts, nil
+			return l.startOf(pid), nil
 		},
 	}
 }
@@ -279,9 +300,15 @@ func TestClaim_OriginMustBeLiveNonProxy(t *testing.T) {
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
 	// A helper (proxy) entry cannot name itself: register one via the
-	// fixture's helper manager (Acquire) and present its inbox.
+	// fixture's helper manager (Acquire) and present its inbox. The
+	// helper's own registry entry is genuinely LIVE here (labelLiveness
+	// answers its own procStart) — the refusal below must come from
+	// findOriginEntry's !proxyPIDs[e.PID] exclusion, not from the entry
+	// having been dropped as dead.
 	h := f.spawnHelper(t)
 	status, body = f.claim(h.sock, "purdex-tester")
+	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: h.sock})
 	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
 }
 

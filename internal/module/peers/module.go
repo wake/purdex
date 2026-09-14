@@ -140,9 +140,12 @@ type Module struct {
 	logf        func(format string, args ...any) // default log.Printf; test seam
 
 	// labels is the peer_labels store (Task 3/7): Snapshot joins into every
-	// inventory build (localEnvelope); claim/release handlers land in Task
-	// 7. labelMu guards those forthcoming write operations — Snapshot
-	// itself is a plain DB read and needs no lock.
+	// inventory build (localEnvelope, unguarded — a plain read with no
+	// ordering requirement of its own); the self routes (labels.go —
+	// whoami, claim, release) read and write it under labelMu, held across
+	// the whole verb (origin/registry read through the store call and the
+	// response construction), even whoami's own Snapshot-only read, so a
+	// concurrent claim/release can never interleave with it.
 	labels  LabelStore
 	labelMu sync.Mutex
 
