@@ -323,3 +323,135 @@ describe('createFilePathMatcher — tilde', () => {
     expect(r[0].meta).toEqual({ path: '~/d/bar.min-2.js' })
   })
 })
+
+describe('unicode paths', () => {
+  describe('relativeSlash', () => {
+    const make = (isEnabled = true) =>
+      createFilePathMatcher({ id: 'test-rel', regex: REL_RE, isEnabled: () => isEnabled })
+
+    it('matches a CJK relative path in full', () => {
+      const path = 'docs/data/申請流程/潛優/115潛優修正計畫-核定.pdf'
+      const r = make().provide(`see ${path} here`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(path)
+      expect(r[0].meta).toEqual({ path })
+    })
+
+    it('captures :line suffix after a CJK relative path', () => {
+      const path = 'docs/data/申請流程/潛優/115潛優修正計畫-核定.pdf'
+      const r = make().provide(`${path}:12`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(`${path}:12`)
+      expect(r[0].meta).toEqual({ path, line: 12 })
+    })
+
+    it('stops at the ASCII extension when CJK prose is glued after it', () => {
+      const r = make().provide('已更新 docs/a.pdf並重新')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf' })
+    })
+
+    it('stops at full-width comma: docs/a.pdf，然後', () => {
+      const r = make().provide('docs/a.pdf，然後')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf' })
+    })
+
+    it('stops at full-width stop: docs/a.pdf。', () => {
+      const r = make().provide('docs/a.pdf。')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf' })
+    })
+
+    it('matches a dotted CJK stem whole: docs/報告.最終版.pdf', () => {
+      const r = make().provide('see docs/報告.最終版.pdf ok')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/報告.最終版.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/報告.最終版.pdf' })
+    })
+
+    it('matches docs/報告.pdf after a space', () => {
+      const r = make().provide('已更新 docs/報告.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/報告.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/報告.pdf' })
+    })
+
+    // Deliberate: prose glued before a relative path with no separator has no
+    // boundary to find, exactly like ASCII `seedocs/a.pdf` links whole today.
+    it('glued CJK prefix becomes part of the first segment (mirrors ASCII)', () => {
+      const r = make().provide('已更新docs/a.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('已更新docs/a.pdf')
+      expect(r[0].meta).toEqual({ path: '已更新docs/a.pdf' })
+    })
+
+    it('ASCII twin of glued prefix still links whole: seedocs/a.pdf', () => {
+      const r = make().provide('seedocs/a.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('seedocs/a.pdf')
+    })
+  })
+
+  describe('absolute', () => {
+    const make = (isEnabled = true) =>
+      createFilePathMatcher({ id: 'test-abs', regex: ABS_RE, isEnabled: () => isEnabled })
+
+    it('matches /Users/wake/文件/報告.pdf', () => {
+      const r = make().provide('open /Users/wake/文件/報告.pdf now')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('/Users/wake/文件/報告.pdf')
+      expect(r[0].meta).toEqual({ path: '/Users/wake/文件/報告.pdf' })
+    })
+
+    it('still rejects /path/1.2.3 (version rejection re-check)', () => {
+      expect(make().provide('see /path/1.2.3 dir')).toHaveLength(0)
+    })
+  })
+
+  describe('tilde', () => {
+    const make = (isEnabled = true) =>
+      createFilePathMatcher({ id: 'test-tilde', regex: TILDE_RE, isEnabled: () => isEnabled })
+
+    it('matches ~/文件/報告.pdf', () => {
+      const r = make().provide('open ~/文件/報告.pdf now')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('~/文件/報告.pdf')
+      expect(r[0].meta).toEqual({ path: '~/文件/報告.pdf' })
+    })
+  })
+
+  describe('bare', () => {
+    const make = (isEnabled = true) =>
+      createFilePathMatcher({ id: 'test-bare', regex: BARE_RE, isEnabled: () => isEnabled })
+
+    it('matches 報告.pdf', () => {
+      const r = make().provide('see 報告.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('報告.pdf')
+      expect(r[0].meta).toEqual({ path: '報告.pdf' })
+    })
+
+    it('lookbehind blocks on a CJK letter: 已產生報告.pdf links as one token', () => {
+      const r = make().provide('已產生報告.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('已產生報告.pdf')
+      expect(r[0].meta).toEqual({ path: '已產生報告.pdf' })
+    })
+
+    it('does NOT split 報告.pdf out of a REL path: 已更新 docs/報告.pdf', () => {
+      expect(make().provide('已更新 docs/報告.pdf')).toHaveLength(0)
+    })
+
+    it('still rejects IP address 192.168.1.1 (version rejection re-check)', () => {
+      expect(make().provide('ping 192.168.1.1 x')).toHaveLength(0)
+    })
+
+    it('still rejects 1.0.0+exp.sha (version rejection re-check)', () => {
+      expect(make().provide('build 1.0.0+exp.sha done')).toHaveLength(0)
+    })
+  })
+})
