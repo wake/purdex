@@ -365,11 +365,8 @@ func formatPeersTable(resp peers.Envelope) string {
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ADDRESS\tLABEL\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
 
-	unresolved := 0
+	unresolved := countUnresolved(resp.Peers)
 	for _, rec := range resp.Peers {
-		if rec.Agent == nil && rec.Reason == "" {
-			unresolved++
-		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			addressField(rec),
 			sanitizeCell(labelField(rec)),
@@ -385,17 +382,72 @@ func formatPeersTable(resp peers.Envelope) string {
 	if unresolved > 0 {
 		fmt.Fprintf(&buf, "(partial: %d sessions not resolved within budget)\n", unresolved)
 	}
-	fmt.Fprintf(&buf, "daemon %s\n", sanitizeCell(resp.DaemonVersion))
+	writePartialCauseLine(&buf, "", resp.Partial, unresolved > 0, resp.UnknownRegistryFiles)
+	fmt.Fprintf(&buf, "daemon %s\n", daemonVersionField(resp.DaemonVersion))
 
 	return buf.String()
+}
+
+// countUnresolved counts the rows whose owner lookup neither produced an
+// agent nor a reason — the "sessions not resolved within budget" figure
+// shown in the partial trailer.
+func countUnresolved(recs []peers.PeerRecord) int {
+	n := 0
+	for _, rec := range recs {
+		if rec.Agent == nil && rec.Reason == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// daemonVersionField renders a host's daemon_version trailer value:
+// "(unknown)" when the field is blank (the daemon predates this field, or
+// the row is a local fetch failure that never reached a daemon), sanitized
+// verbatim otherwise.
+func daemonVersionField(v string) string {
+	if v == "" {
+		return "(unknown)"
+	}
+	return sanitizeCell(v)
+}
+
+// writePartialCauseLine prints why an envelope is Partial beyond an
+// already-reported count of sessions unresolved within budget (spec
+// §3.3): an alive-but-undecodable registry file — named, one line, every
+// path through sanitizeCell — always gets its own line when present,
+// whether or not unresolved sessions also explain part of the partial
+// flag; when neither an unresolved-session count nor an unknown file
+// explains it at all, the remaining cause is a label store read failure
+// (spec §3.3 "Inventory read of labels"). prefix is "" for the
+// single-host table and "<alias>  " for --all, matching the
+// unreachable/daemon trailer lines. Nothing is printed when the envelope
+// is not partial.
+func writePartialCauseLine(buf *strings.Builder, prefix string, partial, hadUnresolved bool, unknownFiles []string) {
+	if !partial {
+		return
+	}
+	if len(unknownFiles) > 0 {
+		names := make([]string, len(unknownFiles))
+		for i, f := range unknownFiles {
+			names[i] = sanitizeCell(f)
+		}
+		fmt.Fprintf(buf, "%s(partial: unknown registry files: %s)\n", prefix, strings.Join(names, ", "))
+		return
+	}
+	if !hadUnresolved {
+		fmt.Fprintf(buf, "%s(partial: label store unavailable)\n", prefix)
+	}
 }
 
 // formatPeersAllTable renders a scope=all response as a text/tabwriter
 // table with a leading HOST column (the row's host alias) and a LABEL
 // column after ADDRESS, one row per peer record across every host whose
 // fetch succeeded, followed by one line per host whose fetch failed:
-// "<alias>  (unreachable: <error>)", followed by one trailer line per host
-// whose fetch succeeded: "<alias>  daemon <version>".
+// "<alias>  (unreachable: <error>)", followed by, for every host whose
+// fetch succeeded, an optional "<alias>  (partial: …)" cause line (spec
+// §3.3, writePartialCauseLine) and a "<alias>  daemon <version>" trailer
+// line.
 func formatPeersAllTable(resp peers.AllEnvelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
@@ -426,9 +478,12 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 		}
 	}
 	for _, h := range resp.Hosts {
-		if h.OK {
-			fmt.Fprintf(&buf, "%s  daemon %s\n", sanitizeCell(h.Alias), sanitizeCell(h.DaemonVersion))
+		if !h.OK {
+			continue
 		}
+		alias := sanitizeCell(h.Alias)
+		writePartialCauseLine(&buf, alias+"  ", h.Partial, countUnresolved(h.Peers) > 0, h.UnknownRegistryFiles)
+		fmt.Fprintf(&buf, "%s  daemon %s\n", alias, daemonVersionField(h.DaemonVersion))
 	}
 
 	return buf.String()
@@ -437,11 +492,13 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 // addressField renders rec.Address through sanitizeCell first, then — only
 // for an entry row (RowKind == "entry", a live tmux/cc process outside any
 // registered session) — prefixes it with two spaces, visually nesting it
-// under the session rows above it. Sanitizing before prefixing means a
-// stray leading space a peer put in its own address is escaped like any
-// other control content rather than being mistaken for our indentation.
+// under the session rows above it. sanitizeCell passes plain spaces
+// through unchanged (it only escapes non-printable runes), so any leading
+// space in the address itself is trimmed first: otherwise it would be
+// indistinguishable from our own indentation, or make a non-entry row
+// with a stray leading space look indented when it is not.
 func addressField(rec peers.PeerRecord) string {
-	addr := sanitizeCell(rec.Address)
+	addr := strings.TrimLeft(sanitizeCell(rec.Address), " ")
 	if rec.RowKind == "entry" {
 		addr = "  " + addr
 	}
