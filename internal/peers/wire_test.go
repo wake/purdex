@@ -802,3 +802,84 @@ func TestValidate_QuotedRemoteTextBounded(t *testing.T) {
 		t.Errorf("Validate() = %v, want the cut on a rune boundary", err)
 	}
 }
+
+// --- ValidateWireAddress / from.address / from.address_rev ----------------
+
+// TestValidateWireAddress pins the wire grammar of from.address (spec
+// §3.5): "" (a v1 sender) is always fine; otherwise the head must be a
+// user label or a default label and, when a ':' is present, the suffix
+// must match the wire grammar exactly — including an explicitly empty
+// suffix ("purdex-tester:"), which is invalid.
+func TestValidateWireAddress(t *testing.T) {
+	ok := []string{"", "purdex-tester", "purdex-tester:purdex-3f", "_k3x9qz:mt0-purdex-49", "a1:" + strings.Repeat("x", 65)}
+	for _, s := range ok {
+		if err := ValidateWireAddress(s); err != nil {
+			t.Errorf("%q: %v", s, err)
+		}
+	}
+	bad := []string{"cc:foo", "tmux:mt0", "Purdex:x", "purdex-tester:", "purdex-tester:a b", "a1:" + strings.Repeat("x", 66), "_k3:x", "purdex/x:y"}
+	for _, s := range bad {
+		err := ValidateWireAddress(s)
+		if !errors.Is(err, ErrAddressInvalid) || ValidationCode(err) != ErrBadAddress {
+			t.Errorf("%q: %v (code %s)", s, err, ValidationCode(err))
+		}
+	}
+}
+
+// TestDeliverRequest_Validate_Address pins that Validate rejects a
+// syntactically bad from.address with ErrBadAddress and a negative
+// from.address_rev outright.
+func TestDeliverRequest_Validate_Address(t *testing.T) {
+	req := validDeliverRequest()
+	req.From.Address = "cc:foo"
+	if err := req.Validate(); ValidationCode(err) != ErrBadAddress {
+		t.Errorf("got %v", err)
+	}
+	req.From.Address, req.From.AddressRev = "purdex-tester:x", -1
+	if err := req.Validate(); err == nil {
+		t.Error("negative address_rev accepted")
+	}
+}
+
+// TestDeliverRequest_Validate_Address_EmptyOK pins that from.address == ""
+// (a v1 sender) and from.address_rev == 0 (its zero value) never trip
+// Validate.
+func TestDeliverRequest_Validate_Address_EmptyOK(t *testing.T) {
+	req := validDeliverRequest()
+	if err := req.Validate(); err != nil {
+		t.Fatalf("Validate(): unexpected error for empty from.address: %v", err)
+	}
+}
+
+// TestWireFrom_JSON_AddressOmittedWhenEmpty pins that from.address and
+// from.address_rev are omitted from the wire when unset (v1 senders never
+// grow these fields).
+func TestWireFrom_JSON_AddressOmittedWhenEmpty(t *testing.T) {
+	got, err := json.Marshal(WireFrom{HostID: "h1"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(got), "address") {
+		t.Fatalf("Marshal(WireFrom) with empty Address/AddressRev should omit both fields, got %s", got)
+	}
+}
+
+// TestWireFrom_JSON_AddressPresent pins the wire shape of a populated
+// from.address / from.address_rev.
+func TestWireFrom_JSON_AddressPresent(t *testing.T) {
+	f := WireFrom{HostID: "h1", Address: "purdex-tester:purdex-3f", AddressRev: 2}
+	got, err := json.Marshal(f)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(got), `"address":"purdex-tester:purdex-3f"`) || !strings.Contains(string(got), `"address_rev":2`) {
+		t.Fatalf("Marshal(WireFrom) = %s, want address and address_rev present", got)
+	}
+	var back WireFrom
+	if err := json.Unmarshal(got, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if back != f {
+		t.Fatalf("round-trip mismatch: got %+v, want %+v", back, f)
+	}
+}

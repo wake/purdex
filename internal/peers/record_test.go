@@ -928,3 +928,19 @@ func keys(m map[string]PeerRecord) []string {
 	sort.Strings(out)
 	return out
 }
+
+// --- PeerRecord.WireAddress() -------------------------------------------
+
+// TestPeerRecord_WireAddress pins WireAddress's shape: Label + ":" +
+// Suffix for a row that carries a cc agent, "" for a row with none (Label
+// == "" is the no-agent signal — spec §3.4).
+func TestPeerRecord_WireAddress(t *testing.T) {
+	labelled := PeerRecord{Label: "purdex-tester", Suffix: "purdex-3f"}
+	if got := labelled.WireAddress(); got != "purdex-tester:purdex-3f" {
+		t.Errorf("WireAddress() = %q, want purdex-tester:purdex-3f", got)
+	}
+	noAgent := PeerRecord{Label: "", Suffix: ""}
+	if got := noAgent.WireAddress(); got != "" {
+		t.Errorf("WireAddress() = %q, want \"\"", got)
+	}
+}
