@@ -4,7 +4,9 @@ package peers
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -82,11 +84,19 @@ func (e Entry) TmuxPaneID() string {
 // registry entry refers to a still-running process. Tests substitute fakes
 // so no test needs to fork ps.
 type Liveness struct {
+	// Stat probes the entry's inbox socket. Per spec §3.3: fs.ErrNotExist
+	// (ENOENT) is "confirmed dead" — the socket is gone; any other error
+	// (permission denied, a transient stat failure, …) is "unknown", not
+	// "dead" — it does not prove the session is gone.
 	Stat      func(path string) error
 	PidAlive  func(pid int) bool
 	StartTime func(pid int) (time.Time, error)         // kept for P1 fakes; unused per-entry once Info is set
 	Info      func(pid int) (agent.ProcessInfo, error) // optional; when non-nil, replaces StartTime and also supplies Argv/ExePath for proxy classification (D9)
 }
+
+// killProbe is kill(2) — a package-level seam so DefaultLiveness's EPERM
+// rule is testable without a real process to probe.
+var killProbe = syscall.Kill
 
 // DefaultLiveness returns the real, OS-backed Liveness.
 func DefaultLiveness() Liveness {
@@ -96,7 +106,12 @@ func DefaultLiveness() Liveness {
 			return err
 		},
 		PidAlive: func(pid int) bool {
-			return syscall.Kill(pid, 0) == nil
+			// EPERM means the pid exists but is owned by another user
+			// (kill(2) checked permission before checking that the
+			// signal — here 0 — would be delivered): the process is
+			// alive, just not ours to signal (spec §3.3).
+			err := killProbe(pid, 0)
+			return err == nil || errors.Is(err, syscall.EPERM)
 		},
 		StartTime: func(pid int) (time.Time, error) {
 			info, err := agent.ReadProcessInfo(pid)
@@ -146,6 +161,12 @@ func ParseProcStart(s string) (time.Time, error) {
 // registryFilenamePattern matches "<pid>.json" registry filenames.
 var registryFilenamePattern = regexp.MustCompile(`^([0-9]+)\.json$`)
 
+// MaxRegistryPID bounds a filename pid before it is ever probed (spec
+// §3.3): a filename digit string that overflows int, or decodes to a pid
+// above this, cannot name a real process, so it is classified unknown with
+// Alive unconditionally false — never passed to PidAlive.
+const MaxRegistryPID = 1<<31 - 1
+
 // warnedUnclassifiablePids dedupes the "could not classify process" log
 // line (in ReadRegistry, below) to at most once per pid for the lifetime of
 // the process. ReadRegistry is otherwise a pure, stateless function of its
@@ -164,19 +185,83 @@ func warnUnclassifiableOnce(pid int, err error) {
 	log.Printf("peers: registry: pid %d: could not classify process (argv unavailable: %v); skipping", pid, err)
 }
 
+// UnknownFile is a registry candidate the daemon rejected but could not
+// prove dead (spec §3.3 "unknown"). Alive is kill(pid,0) on the FILENAME
+// pid — the file's own claimed pid (if any) is not trusted for this, since
+// an unknown file is by definition one whose contents could not be
+// verified against that filename.
+type UnknownFile struct {
+	Path   string
+	PID    int
+	Alive  bool
+	Reason string
+}
+
+// Diagnosis classifies every registry candidate that ReadRegistryDiag did
+// not accept as a live entry (spec §3.3).
+type Diagnosis struct {
+	Dead    int           // confirmed dead: proven not to be a live session
+	Unknown []UnknownFile // could not be classified either way; an Alive one blocks label claims and marks the inventory partial
+}
+
+// BlockingUnknown returns the paths of Unknown files whose (filename) pid
+// is alive — the ones later tasks must treat as "might still be a live
+// session" and refuse to claim over.
+func (d Diagnosis) BlockingUnknown() []string {
+	var out []string
+	for _, u := range d.Unknown {
+		if u.Alive {
+			out = append(out, u.Path)
+		}
+	}
+	return out
+}
+
+// unknown records one Unknown classification for path/pid with reason,
+// deciding Alive from the filename pid (see UnknownFile).
+func (d *Diagnosis) unknown(path string, pid int, alive bool, reason string) {
+	d.Unknown = append(d.Unknown, UnknownFile{Path: path, PID: pid, Alive: alive, Reason: reason})
+}
+
 // ReadRegistry parses every "<pid>.json" in dir and returns the live ones.
-// skipped counts every file considered and rejected (name mismatch, decode
-// error, missing required field, bad procStart, dead). A dir that does not
-// exist is treated as an empty registry (nil entries, 0 skipped, nil err) —
-// there being no Claude Code registry yet is not an error condition. err is
-// non-nil for any other listing failure (e.g. dir is a regular file).
+// skipped counts every file considered and rejected — it is
+// diag.Dead+len(diag.Unknown) from ReadRegistryDiag, collapsed to a single
+// count for callers that do not need the confirmed-dead/unknown split. A
+// dir that does not exist is treated as an empty registry (nil entries, 0
+// skipped, nil err) — there being no Claude Code registry yet is not an
+// error condition. err is non-nil for any other listing failure (e.g. dir
+// is a regular file).
 func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err error) {
+	entries, diag, err := ReadRegistryDiag(dir, live)
+	return entries, diag.Dead + len(diag.Unknown), err
+}
+
+// ReadRegistryDiag parses every "<pid>.json" in dir, returning the live
+// entries and a Diagnosis of everything else (spec §3.3 "Registry
+// diagnosis"). A rejected candidate is classified:
+//
+//   - confirmed dead: the inbox socket is gone (Stat ⇒ ENOENT); the pid is
+//     not alive; or a start time was successfully read and differs from
+//     procStart. All three positively prove the registry entry no longer
+//     names a live session.
+//   - unknown: everything else that is not live — the file is unreadable
+//     or undecodable, fails schema, its pid does not match the filename,
+//     its procStart does not parse, Stat failed with something other than
+//     ENOENT, the process could not be classified (D9 fail-closed), or its
+//     start time could not be read. None of these prove the session is
+//     gone, so Alive is decided on the FILENAME pid (see UnknownFile) and,
+//     when true, the file blocks label claims (BlockingUnknown).
+//
+// A dir that does not exist is treated as an empty registry (nil entries,
+// zero-value Diagnosis, nil err). err is non-nil for any other listing
+// failure (e.g. dir is a regular file).
+func ReadRegistryDiag(dir string, live Liveness) (entries []Entry, diag Diagnosis, err error) {
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, 0, nil
+			return nil, Diagnosis{}, nil
 		}
-		return nil, 0, err
+		return nil, Diagnosis{}, err
 	}
 
 	for _, de := range dirEntries {
@@ -188,38 +273,48 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 		if m == nil {
 			continue // never matched the name pattern; not counted
 		}
+		path := filepath.Join(dir, name)
+
 		expectedPID, atoiErr := strconv.Atoi(m[1])
-		if atoiErr != nil {
-			// Overflow guard: the regexp only matches digits, but an
-			// implausibly long digit string would overflow int.
-			skipped++
+		if atoiErr != nil || expectedPID <= 0 || expectedPID > MaxRegistryPID {
+			// Overflow guard / range guard: the regexp only matches
+			// digits, but an implausibly long or large digit string
+			// cannot name a real pid — never probed, so Alive is
+			// unconditionally false (spec §3.3).
+			diag.unknown(path, 0, false, "pid out of range")
 			continue
 		}
+		// unknown is the common-case recorder for the rest of this
+		// iteration: Alive is always decided on expectedPID (the
+		// FILENAME pid), never on any pid read from the file's contents.
+		unknown := func(reason string) {
+			diag.unknown(path, expectedPID, live.PidAlive(expectedPID), reason)
+		}
 
-		data, ok := ReadRegistryCandidate(filepath.Join(dir, name))
+		data, ok := ReadRegistryCandidate(path)
 		if !ok {
-			skipped++
+			unknown("unreadable")
 			continue
 		}
 
 		var wire registryFile
 		if err := json.Unmarshal(data, &wire); err != nil {
-			skipped++
+			unknown("undecodable")
 			continue
 		}
 
 		if wire.PID == 0 || wire.SessionID == "" || wire.ProcStart == "" || wire.Inbox == "" {
-			skipped++
+			unknown("missing required field")
 			continue
 		}
 		if wire.PID != expectedPID {
-			skipped++
+			unknown("pid does not match filename")
 			continue
 		}
 
 		procStart, err := ParseProcStart(wire.ProcStart)
 		if err != nil {
-			skipped++
+			unknown("procStart unparsable")
 			continue
 		}
 
@@ -228,9 +323,18 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 		// whose inbox socket is already gone, must never trigger Info. Dead
 		// entries are the common case (every <pid>.json left behind by an
 		// exited Claude Code session survives until the next cleanup), and
-		// must stay a zero-fork, silent skip exactly as before D9.
-		if live.Stat(wire.Inbox) != nil || !live.PidAlive(wire.PID) {
-			skipped++
+		// must stay a zero-fork, silent skip exactly as before D9. A
+		// non-ENOENT stat error, though, proves nothing — unknown, not dead.
+		if statErr := live.Stat(wire.Inbox); statErr != nil {
+			if errors.Is(statErr, fs.ErrNotExist) {
+				diag.Dead++
+			} else {
+				unknown("inbox stat: " + statErr.Error())
+			}
+			continue
+		}
+		if !live.PidAlive(wire.PID) {
+			diag.Dead++
 			continue
 		}
 
@@ -240,25 +344,36 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 		// that cannot be classified (Info errors, or returns an empty
 		// Argv — e.g. a permission-denied /proc read, or a race where the
 		// process exited between the PidAlive check above and here) must
-		// never become a deliverable cc row, so it is skipped exactly like
-		// a dead entry rather than defaulting to IsProxy=false — but only
-		// warns once per pid (warnUnclassifiableOnce), so a persistently
-		// unclassifiable process does not spam the log on every poll.
+		// never become a deliverable cc row, so it is unknown (not proven
+		// dead — the pid IS alive, just unclassifiable) exactly like
+		// before, but only warns once per pid (warnUnclassifiableOnce), so
+		// a persistently unclassifiable process does not spam the log on
+		// every poll.
 		entryLive := live
 		isProxy := false
 		if live.Info != nil {
 			info, infoErr := live.Info(wire.PID)
 			if infoErr != nil || len(info.Argv) == 0 {
-				skipped++
 				warnUnclassifiableOnce(wire.PID, infoErr)
+				unknown("unclassifiable process")
 				continue
 			}
 			isProxy = IsProxyProcess(info)
 			entryLive.StartTime = func(int) (time.Time, error) { return info.StartTime, nil }
 		}
 
-		if !isLive(wire.PID, wire.Inbox, procStart, entryLive) {
-			skipped++
+		// isLive's rule, inlined (spec §3.3): a start time that fails to
+		// read is unknown (the pid is alive; nothing proves it dead); a
+		// start time that reads but disagrees with procStart is confirmed
+		// dead (this IS proof — the running process is not the one this
+		// registry entry describes).
+		startTime, err := entryLive.StartTime(wire.PID)
+		if err != nil {
+			unknown("start time unreadable")
+			continue
+		}
+		if !startTime.Truncate(time.Second).Equal(procStart.Truncate(time.Second)) {
+			diag.Dead++
 			continue
 		}
 
@@ -277,7 +392,7 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 		})
 	}
 
-	return entries, skipped, nil
+	return entries, diag, nil
 }
 
 // ReadRegistryCandidate reads one registry file (a "<pid>.json" or key
@@ -324,19 +439,7 @@ func ReadRegistryCandidate(path string) (data []byte, ok bool) {
 	return data, true
 }
 
-// isLive applies the liveness rule: live iff Stat(inbox)==nil &&
-// PidAlive(pid) && StartTime(pid) returns no error && the two instants are
-// equal (to the second).
-func isLive(pid int, inbox string, procStart time.Time, live Liveness) bool {
-	if live.Stat(inbox) != nil {
-		return false
-	}
-	if !live.PidAlive(pid) {
-		return false
-	}
-	startTime, err := live.StartTime(pid)
-	if err != nil {
-		return false
-	}
-	return startTime.Truncate(time.Second).Equal(procStart.Truncate(time.Second))
-}
+// isLive's rule (live iff Stat(inbox)==nil && PidAlive(pid) &&
+// StartTime(pid) returns no error && the two instants are equal to the
+// second) is now inlined in ReadRegistryDiag, split across the dead/unknown
+// classes each check maps to (spec §3.3).
