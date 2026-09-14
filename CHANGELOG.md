@@ -2,6 +2,18 @@
 
 ## [1.0.0-alpha.340] - 2026-09-14
 
+### Feat: Development 頁面改為明確指定「開發主機」；Local daemon 區塊直接秀 URL / token，可一鍵加入 host（#1018）
+
+**起因**是 air-2026 的情境：App 先裝、daemon 後裝，Development 頁面卻一律拿 `hostOrder[0]` 當更新來源——第二台機器上那台可能就是自己那顆沒 repo 的本機 daemon，永遠查不到更新；而本機 daemon 的 token 只存在 `~/.config/pdx/config.toml`，要加 host 得自己去翻。
+
+**開發主機**：頁面頂端多一個 host 下拉，選擇持久化為 `devHostId`（裝置本地，不進 hosts 同步 payload）。**沒有 fallback**：沒選就整頁不發任何 dev 請求，Check / Update / Rebuild / Install 全部停用並提示。來源一變（換 host 或 token 改了）先關掉舊 stream、清掉舊 host 的更新狀態與 daemon check/rebuild log，再對新來源查；每個在途回應（fetch、SSE reader、rebuild 後 3 秒的重查 timer、`streamCheck` callback）都綁一個世代號，世代不符就丟，舊 host 的晚到結果不會畫到新 host 的畫面上。App 更新或 daemon rebuild 進行中鎖住下拉。
+
+**Local daemon**：Electron `localDaemonStatus` 現在帶 config 的 token 與 hostname。區塊多三列：URL、token（固定遮罩＋顯示／複製；`http://` dev-server origin 下 `navigator.clipboard` 是 undefined——final review 實測到的——所以複製有 `execCommand` fallback，失敗顯示獨立的行內錯誤不污染區塊錯誤）、host 清單狀態——這個 `bind:port` 不在清單就給「加入 Host」，走既有 `registerLocalHost`。比對用新的共用 `findHostByEndpoint`（嚴格 ip+port，loopback 與 Tailscale IP 是兩個 endpoint，不做 hostname/token 猜測合併），UI 與註冊不可能不一致。
+
+**流程**：spec 一輪 codex（6 項全採納）→ plan 一輪 codex（5 項全採納）→ 5 task subagent TDD 各一輪 review（Task 5 修一輪 clipboard 錯誤處理）→ final whole-branch review（1 Important：insecure origin 剪貼簿）→ codex R1 無發現、R2 三視角。R2 抓到 spec §2.2 的真缺口：來源若由**非 picker 路徑**（Hosts 頁改 token、跨視窗 rehydrate、sync full-replace）在 rebuild/update 進行中改掉，操作狀態會被 reset 抹掉——半套修法會鎖死或串狀態，正解是 operation-scoped state，併同 `DevEnvironmentSection.tsx`（502 行）抽 hook 的完整方案一起記在 #1019，spec §7 記錄已知缺口。測試 4913 全綠；Development 測試檔改為全域 stub fetch，不再真的打 100.64.0.2。
+
+## [1.0.0-alpha.340] - 2026-09-14
+
 ### Fix: App 啟動的 daemon 看不到任何 tmux session——沒有 UTF-8 locale 時 tmux 會把 TAB 分隔符換成 `_`（#1014）
 
 air-2026 上由 Finder 啟動的 Purdex.app 帶起 daemon 後，`GET /api/sessions` 永遠回 `[]`、`POST` 回 500 `session created but not found`、`session_meta` 一直 0 rows、log 一行錯誤都沒有——但 tmux 每一步都成功，手動跑 `list-sessions` 也正常。根因不是 tmux 版本（3.6a / 3.7c 都一樣）也不是 PATH：**App 的 launchd 環境沒有 `LANG`/`LC_ALL`/`LC_CTYPE`**，tmux 依 *client* 的 locale 清洗 `-F` 輸出，沒有 UTF-8 codeset 時每個不可列印字元（含 daemon 拿來切欄位的 TAB）都換成 `_`，整行變成一個欄位 `$0_probe1_/Users/wake` → `EncodeSessionID` 失敗 → 靜默 `continue`。更糟的是這串壞 ID 被丟給 `CleanOrphans`，把既有 meta 全清掉。mlab 沒事純粹因為 daemon 是從有 `LANG` 的 login shell 起的；daemon 起的 tmux server 連帶每個 pane 的 shell、agent、`capture-pane`、terminal relay 也都沒 locale。
