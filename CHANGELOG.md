@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.345] - 2026-09-15
+
+### Feat: Peer Address v2（P4b）——label 地址上線到 wire，遠端 helper 名稱原地跟著改（#1028）
+
+alpha.344 讓 session 能用 `pdx msg name` 取名，但跨主機的 `from-name` 與對方 `ListAgents` 看到的 helper 名稱還是 v1 形式（tmux 名或 `cc:<name>`）。這版把地址送上線：`/api/peers/deliver` 的 `from` 多 `address`（`<label>:<suffix>`）與 `address_rev`（sender label store 的 host-wide 版本號），接收端只做語法驗證（head 是 user label 或 `_` 短碼、suffix 符合 `^[A-Za-z0-9_.-]{1,65}$`，否則 `400 bad_address` 不入 audit），當作已驗證主機的顯示資料；wrapper 的 `from-name` 變成 `<alias>/<label>:<suffix>`。
+
+**helper 原地改名**：代表遠端 session 的 helper 由 daemon 直接改寫它自己的 `~/.claude/sessions/<pid>.json`（`map[string]json.RawMessage` 逐欄位 byte-identical 只換 `name`/`nameSince`，`.<pid>.json.tmp` + fsync + rename，殘留 temp 預清、`null` 檔拒絕），不 respawn、不加 stdin 命令（P3 D8 不破）；socket/pid/proxies.json 全不動，飛行中的 frame 不會丟。改名以 `address_rev` 門控：spawn 時就把 rev 記在 instance 上（waiter 取消也留得住）、只有嚴格更新的 rev 才改、名字沒變也推進 rev（擋 A→B→A 亂序重放）、改寫失敗 rollback 並照常投遞；v1 請求 spawn 的 helper 沒有 applied rev，升級後第一個 v2 位址不論 rev 都套用。freshness 是單向的：只有該 origin 的下一次 `/deliver` 會更新對方主機上代表它的 helper；suffix-only 變化（tmux 或 CC 改名但沒 claim/release）不推進 rev 所以遠端不更新，label store 重建導致 rev 倒退時要等超過遠端 applied rev 或 helper 重建——這兩個限制寫進 spec §3.5。
+
+**鎖**：codex 攻擊方指出改寫的 fsync 若在 manager 全域鎖內，一個 peer 交替送合法位址就能讓所有 origin 與 `Stop` 一起卡在慢磁碟上；改成每-instance `renameMu` 兩段式（鎖序 renameMu → m.mu，phase 1 在 m.mu 下驗證 instance/state/rev、phase 2 在 m.mu 下提交，I/O 在鎖外；`Release` 清檔前先等飛行中的改寫完成），re-review 逐鎖列表證明無反向取鎖、無死鎖。
+
+**流程**：4 task subagent TDD（全部一次過 review）→ final whole-branch review（Ready for PR，3 個便宜 minor 順手修）→ codex R1 無發現、R2 三視角 1 high（全域鎖 fsync）+ 2 medium（`null` registry panic、spec 未寫 freshness 限制）→ 全修，spec 定稿 v3.3（§11 記處置）。e2e `TestE2E_HelperRename` 五步：v2 from-name、native reply 讓 A 的 helper 命名為 `b/purdex-tester:…`、re-claim 後**同一 instance**改名、fresh `msg_id` 的舊 rev 重放不會退回、反向 freshness。`internal/agent/probe` 兩個時間敏感測試在 `-race -count>1` 下會 flake（本 PR 未動，另開 issue）。兩台一起升；混版無害（alpha.344 receiver 忽略 `address`，alpha.344 sender 拿到 legacy 名、升級後第一個 v2 請求改名）。
+
 ## [1.0.0-alpha.344] - 2026-09-15
 
 ### Feat: Peer Address v2（P4a）——session 用 `pdx msg name` 給自己取名，label 成為跨主機地址的主段（#1026）
