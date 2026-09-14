@@ -275,9 +275,9 @@ func TestRunMsgSend_ErrorRendering(t *testing.T) {
 			wantStderr: "pdx msg: origin_unknown: origin_inbox is not a live, deliverable Claude Code session on this host\n",
 		},
 		{
-			name:   "host_unknown (default rendering, no detail)",
-			status: http.StatusNotFound,
-			body:   ipeers.APIError{Error: ipeers.ErrHostUnknown, Detail: `no peer host "air"`},
+			name:       "host_unknown (default rendering, no detail)",
+			status:     http.StatusNotFound,
+			body:       ipeers.APIError{Error: ipeers.ErrHostUnknown, Detail: `no peer host "air"`},
 			wantStderr: "pdx msg: host_unknown: no peer host \"air\"\n",
 		},
 	}
@@ -396,28 +396,28 @@ func msgLogFixture() []msgLogEntry {
 	return []msgLogEntry{
 		{
 			MsgID: "abcdef12-3456-7890-abcd-ef1234567890", Direction: "out",
-			TS:            "2026-09-14T03:04:05.000Z",
-			FromHostID:    "mini", FromSessionID: "sessA1234567",
-			ToHostID:      "air", ToSessionID: "sessB7654321",
-			DeclaredMode:  "prompting", EffectiveMode: "prompting",
+			TS:         "2026-09-14T03:04:05.000Z",
+			FromHostID: "mini", FromSessionID: "sessA1234567",
+			ToHostID: "air", ToSessionID: "sessB7654321",
+			DeclaredMode: "prompting", EffectiveMode: "prompting",
 			Bytes:  42,
 			Result: "delivered",
 		},
 		{
 			MsgID: "22222222-3333-4444-5555-666666666666", Direction: "in",
-			TS:            "2026-09-14T13:00:00.500Z",
-			FromHostID:    "air", FromSessionID: "xsess0001",
-			ToHostID:      "mini", ToSessionID: "ysess0002",
-			DeclaredMode:  "bypass", EffectiveMode: "prompting",
+			TS:         "2026-09-14T13:00:00.500Z",
+			FromHostID: "air", FromSessionID: "xsess0001",
+			ToHostID: "mini", ToSessionID: "ysess0002",
+			DeclaredMode: "bypass", EffectiveMode: "prompting",
 			Bytes:  7,
 			Result: "delivered",
 		},
 		{
 			MsgID: "deadbeef-3456-7890-abcd-ef1234567890", Direction: "reply",
-			TS:            "2026-09-14T23:59:59.999Z",
-			FromHostID:    "mini", FromSessionID: "z",
-			ToHostID:      "air", ToSessionID: "",
-			DeclaredMode:  "bypass", EffectiveMode: "bypass",
+			TS:         "2026-09-14T23:59:59.999Z",
+			FromHostID: "mini", FromSessionID: "z",
+			ToHostID: "air", ToSessionID: "",
+			DeclaredMode: "bypass", EffectiveMode: "bypass",
 			Bytes:  100,
 			Result: "delivery_uncertain",
 			Error:  "no_return_route",
@@ -674,9 +674,13 @@ func TestRunMsgDeliver_ErrorRendering(t *testing.T) {
 	}
 }
 
-// --- selftest: reserved, not implemented ------------------------------------
+// --- selftest: the verb wrapper ----------------------------------------------
+//
+// The body itself is covered in msg_selftest_test.go with every seam faked;
+// here only the grammar-to-body wrapper is exercised, and only on the paths
+// that never reach tmux.
 
-func TestRunMsgSelftest_NotImplemented(t *testing.T) {
+func TestRunMsgSelftest_InvalidTimeoutIsGrammarError(t *testing.T) {
 	var reqCount int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&reqCount, 1)
@@ -685,27 +689,21 @@ func TestRunMsgSelftest_NotImplemented(t *testing.T) {
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "sekret")
 
-	var stdout, stderr bytes.Buffer
-	code := runMsgCmd([]string{"selftest", "--config", cfgPath}, fakeGetenv(nil), &stdout, &stderr)
-
-	if code != 2 {
-		t.Errorf("exit code = %d, want 2; stderr=%q", code, stderr.String())
-	}
-	want := "pdx msg: selftest is not implemented yet\n"
-	if stderr.String() != want {
-		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	for _, raw := range []string{"abc", "0", "-5s"} {
+		var stdout, stderr bytes.Buffer
+		code := runMsgCmd([]string{"selftest", "--timeout", raw, "--config", cfgPath}, fakeGetenv(nil), &stdout, &stderr)
+		if code != 2 {
+			t.Errorf("--timeout %q: exit code = %d, want 2; stderr=%q", raw, code, stderr.String())
+		}
+		want := "pdx msg: invalid --timeout " + raw + "\n"
+		if stderr.String() != want {
+			t.Errorf("--timeout %q: stderr = %q, want %q", raw, stderr.String(), want)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("--timeout %q: stdout = %q, want empty", raw, stdout.String())
+		}
 	}
 	if atomic.LoadInt64(&reqCount) != 0 {
 		t.Errorf("server saw %d request(s), want 0", reqCount)
-	}
-}
-
-func TestRunMsgSelftest_ParsesTimeoutFlag(t *testing.T) {
-	// Grammar-only: --timeout is accepted (Task 12 will use it), but the
-	// verb still reports not-implemented in this task.
-	var stdout, stderr bytes.Buffer
-	code := runMsgCmd([]string{"selftest", "--timeout", "30s"}, fakeGetenv(nil), &stdout, &stderr)
-	if code != 2 {
-		t.Errorf("exit code = %d, want 2; stderr=%q", code, stderr.String())
 	}
 }

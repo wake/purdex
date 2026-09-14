@@ -31,8 +31,7 @@ const msgDefaultLogTail = 50
 // msgUsage is the generic grammar-rejection message for `pdx msg`:
 // printed to stderr (exit 2) for every malformed invocation except an
 // unrecognized flag, which gets its own more specific message (see
-// runMsgCmd). `selftest` is Task 12's verb; its grammar is accepted here
-// so callers can rely on it, but runMsgSelftest is a stub in this task.
+// runMsgCmd). `selftest`'s body lives in msg_selftest.go.
 const msgUsage = "usage: pdx msg send <host>/<session> <text> [--mode prompting|bypass] [--json] [--config <path>]\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +
@@ -67,7 +66,7 @@ func runMsgCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 	case "deliver":
 		return runMsgDeliver(inv, stdout, stderr)
 	case "selftest":
-		return runMsgSelftest(inv, stdout, stderr)
+		return runMsgSelftestCmd(inv, stdout, stderr)
 	default:
 		// Unreachable: parseMsgInvocation only accepts known verbs.
 		fmt.Fprintln(stderr, msgUsage)
@@ -93,7 +92,7 @@ type msgInvocation struct {
 	// deliver
 	deliverArg string // on | off | status
 
-	// selftest (Task 12's grammar, reserved here)
+	// selftest: raw --timeout, parsed by selftestTimeout
 	timeout string
 }
 
@@ -206,8 +205,7 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 		}
 
 	case "selftest":
-		// Task 12's verb: grammar reserved here, --json is deliberately
-		// not part of this form.
+		// --json is deliberately not part of this form.
 		if hasMode || hasTail || inv.jsonOutput {
 			return msgInvocation{}, "", false
 		}
@@ -220,14 +218,6 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 	}
 
 	return inv, "", true
-}
-
-// runMsgSelftest is Task 12's seam. The grammar above already accepts
-// `pdx msg selftest [--timeout <dur>] [--config <path>]`; the verb itself
-// is implemented in Task 12.
-func runMsgSelftest(inv msgInvocation, stdout, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "pdx msg: selftest is not implemented yet")
-	return 2
 }
 
 // --- send: POST /api/peers/send --------------------------------------------
