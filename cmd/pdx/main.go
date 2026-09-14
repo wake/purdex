@@ -100,7 +100,7 @@ func runServe(args []string) {
 	case locale.Set:
 		log.Printf("locale: no UTF-8 locale in environment, exported LANG=%s", r.Value)
 	case locale.Warned:
-		log.Printf("locale: WARNING LC_ALL/LC_CTYPE/LANG=%q is not UTF-8; tmux output parsing will break", r.Value)
+		log.Printf("locale: WARNING %s=%q is not UTF-8; tmux output parsing will break", r.Source, r.Value)
 	}
 
 	// 1. Load config

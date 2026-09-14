@@ -146,6 +146,11 @@ func parseListSessionsOutput(out string) []TmuxSession {
 		if line == "" {
 			continue
 		}
+		// SplitN(…, 3) on purpose: session_id and session_name can never
+		// contain a TAB (tmux's session_check_name vis-encodes it), but
+		// session_path is a raw filesystem path and may — so the third
+		// field must absorb the rest of the line. Do not "fix" this into
+		// Split + len != 3.
 		parts := strings.SplitN(line, "\t", 3)
 		if len(parts) < 3 {
 			if malformed == 0 {

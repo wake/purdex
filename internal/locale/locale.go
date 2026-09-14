@@ -42,10 +42,13 @@ func (a Action) String() string {
 	}
 }
 
-// Result reports the action taken and the locale value in effect afterwards.
+// Result reports the action taken, the locale value in effect afterwards,
+// and which variable carries it (LC_ALL / LC_CTYPE / LANG) so a log line
+// can tell the user exactly what to change.
 type Result struct {
 	Action Action
 	Value  string
+	Source string
 }
 
 // EnsureUTF8 makes sure the process exports a UTF-8 character locale.
@@ -56,10 +59,10 @@ type Result struct {
 // tmux.c ("UTF-8" / "UTF8", case-insensitive) — it never consults
 // nl_langinfo, so the locale need not be installed.
 func EnsureUTF8() Result {
-	effective := ""
+	effective, source := "", ""
 	for _, k := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
 		if v := os.Getenv(k); v != "" {
-			effective = v
+			effective, source = v, k
 			break
 		}
 	}
@@ -67,11 +70,11 @@ func EnsureUTF8() Result {
 	switch {
 	case effective == "":
 		os.Setenv("LANG", DefaultLocale)
-		return Result{Action: Set, Value: DefaultLocale}
+		return Result{Action: Set, Value: DefaultLocale, Source: "LANG"}
 	case isUTF8(effective):
-		return Result{Action: Kept, Value: effective}
+		return Result{Action: Kept, Value: effective, Source: source}
 	default:
-		return Result{Action: Warned, Value: effective}
+		return Result{Action: Warned, Value: effective, Source: source}
 	}
 }
 

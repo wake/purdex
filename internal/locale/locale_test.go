@@ -25,10 +25,12 @@ func TestEnsureUTF8(t *testing.T) {
 	cases := []struct {
 		name       string
 		lcAll      string
+		lcAllEmpty bool // set LC_ALL to "" explicitly instead of unsetting it
 		lcCtype    string
 		lang       string
 		wantAction Action
 		wantValue  string
+		wantSource string
 		// env after the call
 		wantLCAll   string
 		wantLCCtype string
@@ -36,45 +38,54 @@ func TestEnsureUTF8(t *testing.T) {
 	}{
 		{
 			name:       "nothing set",
-			wantAction: Set, wantValue: DefaultLocale,
+			wantAction: Set, wantValue: DefaultLocale, wantSource: "LANG",
 			wantLang: DefaultLocale,
 		},
 		{
 			name:       "LANG utf8",
 			lang:       "en_US.UTF-8",
-			wantAction: Kept, wantValue: "en_US.UTF-8",
+			wantAction: Kept, wantValue: "en_US.UTF-8", wantSource: "LANG",
+			wantLang: "en_US.UTF-8",
+		},
+		{
+			// An explicitly empty LC_ALL is "unset" for both POSIX and
+			// tmux.c; the next variable must be consulted.
+			name:       "LC_ALL explicitly empty falls through to LANG",
+			lcAllEmpty: true,
+			lang:       "en_US.UTF-8",
+			wantAction: Kept, wantValue: "en_US.UTF-8", wantSource: "LANG",
 			wantLang: "en_US.UTF-8",
 		},
 		{
 			name:       "LANG lowercase utf8",
 			lang:       "zh_TW.utf8",
-			wantAction: Kept, wantValue: "zh_TW.utf8",
+			wantAction: Kept, wantValue: "zh_TW.utf8", wantSource: "LANG",
 			wantLang: "zh_TW.utf8",
 		},
 		{
 			name:       "LC_CTYPE macOS form",
 			lcCtype:    "UTF-8",
-			wantAction: Kept, wantValue: "UTF-8",
+			wantAction: Kept, wantValue: "UTF-8", wantSource: "LC_CTYPE",
 			wantLCCtype: "UTF-8",
 		},
 		{
 			name:       "LC_ALL wins over LANG=C",
 			lcAll:      "en_US.UTF-8",
 			lang:       "C",
-			wantAction: Kept, wantValue: "en_US.UTF-8",
+			wantAction: Kept, wantValue: "en_US.UTF-8", wantSource: "LC_ALL",
 			wantLCAll: "en_US.UTF-8", wantLang: "C",
 		},
 		{
 			name:       "LC_ALL=C explicit",
 			lcAll:      "C",
 			lang:       "en_US.UTF-8",
-			wantAction: Warned, wantValue: "C",
+			wantAction: Warned, wantValue: "C", wantSource: "LC_ALL",
 			wantLCAll: "C", wantLang: "en_US.UTF-8",
 		},
 		{
 			name:       "LANG=C only",
 			lang:       "C",
-			wantAction: Warned, wantValue: "C",
+			wantAction: Warned, wantValue: "C", wantSource: "LANG",
 			wantLang: "C",
 		},
 	}
@@ -82,8 +93,15 @@ func TestEnsureUTF8(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			setLocaleEnv(t, tc.lcAll, tc.lcCtype, tc.lang)
+			if tc.lcAllEmpty {
+				t.Setenv("LC_ALL", "")
+			}
 
 			got := EnsureUTF8()
+
+			if got.Source != tc.wantSource {
+				t.Errorf("Source = %q, want %q", got.Source, tc.wantSource)
+			}
 
 			if got.Action != tc.wantAction {
 				t.Errorf("Action = %v, want %v", got.Action, tc.wantAction)
