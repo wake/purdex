@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.339] - 2026-09-14
+
+### Fix: Hosts → Sessions 頁面在未連線主機上整頁崩潰（#1012）
+
+`SessionsSection` 的 selector 寫 `s.sessions[hostId] ?? []`：主機從沒送過 sessions payload（沒 token、連不上）時 `?? []` 每次都回新陣列，Zustand 5 / React 19 的 `useSyncExternalStore` 判定 snapshot 不穩定 → 無限 re-render → `Maximum update depth exceeded` → 整頁被 ErrorBoundary 接住。air-2026 加了 mlab 但還沒填 token，一開 Sessions 就炸；Mini 上主機都在線所以從沒踩到。改成模組層級共用一個空陣列。全 repo 掃過只有這一處這種 hook selector 寫法。
+
 ## [1.0.0-alpha.338] - 2026-09-14
 
 ### Feat: Peer Bridge 第三階段——跨主機把訊息投進 Claude Code session，原生回覆回得來（#1006）
