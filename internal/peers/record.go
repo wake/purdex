@@ -105,7 +105,7 @@ func Build(in BuildInput) []PeerRecord {
 // resolves the session to exactly one live entry (the single candidate, or
 // the unique pane-tiebreak winner), it returns that Entry with ok=true so
 // Build can exclude it from the outside-tmux rows (rule 5): a consumed
-// entry never also produces a cc: row.
+// entry never also produces an entry row.
 //
 // consumed is the set of entries already claimed by an EARLIER session row
 // (Build calls this once per session in list order, growing consumed as it

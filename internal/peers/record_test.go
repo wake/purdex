@@ -297,8 +297,8 @@ func TestBuild_CC_TwoCandidates_NoPaneMatch_Ambiguous(t *testing.T) {
 }
 
 // Entry with matching pane but different SessionID => inbox_dead for the
-// session (rule 6, no pane fallback), and that entry gets its own cc: row
-// only if its TmuxSessionName() is not a listed session.
+// session (rule 6, no pane fallback), and that entry gets its own entry
+// row only if its TmuxSessionName() is not a listed session.
 func TestBuild_CC_PaneMatchWrongSessionID_InboxDeadAndOutsideRow(t *testing.T) {
 	entry := Entry{PID: 99, SessionID: "other-sess", Name: "stray", Tmux: "elsewhere:@1.%10"}
 	in := BuildInput{
@@ -454,7 +454,7 @@ func TestBuild_OutsideTmuxRows_SortedByPeerNameThenPID(t *testing.T) {
 }
 
 // Entry with Tmux:"" that rule 4 consumed (the single candidate) never also
-// produces a cc: row: the entry appears exactly once, as the session row.
+// produces an entry row: the entry appears exactly once, as the session row.
 func TestBuild_EntryConsumedByRule4_NeverAlsoAppearsAsOutsideRow(t *testing.T) {
 	entry := Entry{PID: 5, SessionID: "sess-x", Name: "purdex-5", Tmux: ""}
 	in := BuildInput{
@@ -467,7 +467,7 @@ func TestBuild_EntryConsumedByRule4_NeverAlsoAppearsAsOutsideRow(t *testing.T) {
 	}
 	got := Build(in)
 	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1 (session row only, no duplicate cc: row)", len(got))
+		t.Fatalf("len = %d, want 1 (session row only, no duplicate entry row)", len(got))
 	}
 	sessionRow := got[0]
 	if sessionRow.SessionCode != "s1" || !sessionRow.Deliverable || sessionRow.Agent == nil || sessionRow.Agent.PID != 5 {
