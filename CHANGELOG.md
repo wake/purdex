@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.342] - 2026-09-14
+
+### Fix: 終端機連結——CJK 檔案路徑能點了；URL 不再被全形標點、黏著的中文與成對括號帶歪（#1022）
+
+**檔案路徑**：`docs/data/申請流程/潛優/115潛優修正計畫-核定.pdf` 之前完全不會變成連結——四支 regex（`ABS`/`TILDE`/`REL`/`BARE`）的目錄段與檔名主幹都用 `\w`，沒有 `u` flag 時就是 `[A-Za-z0-9_]`，任何 CJK 段都讓比對失敗；管線其他部分（`col-map` 的寬字元欄位換算、opener）本來就吃得下 Unicode，只卡在這一關。現在四支 regex 從共用片段組出、加 `u` flag，段名與主幹接受 `\p{L}\p{M}\p{N}_`（`\p{M}` 是因為 macOS `ls` 常吐 NFD 分解形，`が` 是 `か`+U+3099；比對到的字串原樣交給 opener，不做正規化）。副檔名鏈拆成「中間段 Unicode、**最後一段維持 ASCII**」：黏在檔名後的中文敘述（`已更新 docs/a.pdf並重新`）會自然停在 `pdf`，而 `docs/報告.最終版.pdf` 仍整段連結。這是偏向不是保證——`docs/a.pdf然後/x.txt` 這種後面又接路徑的會整段吃掉，已用測試釘住當作接受的限制。
+
+**URL**：`URL_RE` 原本只認空白和幾個 ASCII 引號當邊界，所以 `https://e.com/a，然後回報`、`…/a。`、`（見 …/a）` 全都把標點與後面的字吃進去；`Foo_(bar)` 結尾的成對括號則被誤剝（程式碼註解早就承認）。改成三步：(1) 掃描到全形標點集就停——`・` 刻意不在集合裡，日文標題常見；(2) **非 ASCII 截斷**：非 ASCII 字元只有在「前一字是 ASCII 字母／數字、且它自己不是拉丁字母或組合記號」時才切——`參考https://e.com/x這頁` 切在 `x`，`/臺灣`、`=測試`、`ISO_標準`、`www.例子.com`、`bücher.example`、`café/menu` 都完整保留；接受的犧牲是 `?q=abc中文` 這種字母直接接中文的真 URL，與 `/?然後回報` 這種分隔符後直接接敘述的誤保留；截斷後從截斷點重掃，同一行後面的 URL 不會跟著消失；(3) 尾端剝除改成先數括號再線性回走，只剝不成對的 `)`/`]`，加 scheme-only 守衛。`range` 一律是 UTF-16 offset，非 BMP 前綴（`😀`）算兩格，交給 `col-map` 換成 cell。
+
+**流程**：spec + plan 一輪 codex（rework：9 項全採納——IDN 混合 label、`・`、`\p{M}`、線性 strip、scheme 守衛等）→ 兩 task subagent TDD → PR codex R1 無發現、R2 三視角（攻擊 approve：12 萬組 ASCII 對 main 全同、300 字元壓力無災難回溯；體質 ship；防守抓到 2 個 P2：重音拉丁字母被切、截斷後後續 URL 消失）→ 修正後收斂 review 無發現。terminal-link 測試 158 → 228，全套 5017 綠。純 SPA 改動，dev server HMR 即生效。
+
 ## [1.0.0-alpha.341] - 2026-09-14
 
 ### Feat: Development 頁面改為明確指定「開發主機」；Local daemon 區塊直接秀 URL / token，可一鍵加入 host（#1018；原 bump #1020 與並發的 #1017 撞號，改為 alpha.341）
