@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-library/react'
 import { DevEnvironmentSection } from './DevEnvironmentSection'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, selectDevHostId } from '../../stores/useHostStore'
 
 const mockGetAppInfo = vi.fn().mockResolvedValue({
   version: '1.0.0-alpha.21',
@@ -40,9 +40,32 @@ function arrangeStream(emitInline?: (cb: (ev: ElectronStreamCheckEvent) => void)
   })
 }
 
+// Every test in this file runs against this single stubbed `fetch` — nothing
+// here may hit the network. The default implementation answers
+// /api/dev/daemon/check with a fixed, non-stale payload; any other URL that
+// reaches it (i.e. a test that didn't override the implementation for a
+// request it actually needs) is recorded and fails the test in afterEach.
+let unexpectedRequests: string[] = []
+function defaultFetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
+  const href = String(url)
+  if (href.endsWith('/api/dev/daemon/check')) {
+    return Promise.resolve(new Response(JSON.stringify({ current_hash: 'abc1234', latest_hash: 'abc1234', available: false }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+  }
+  unexpectedRequests.push(`${init?.method ?? 'GET'} ${href}`)
+  return Promise.resolve(new Response('{}', { status: 200 }))
+}
+const fetchMock = vi.fn(defaultFetchImpl)
+
 beforeEach(() => {
   vi.clearAllMocks()
   lastStreamCallback = null
+  unexpectedRequests = []
+  fetchMock.mockReset()
+  fetchMock.mockImplementation(defaultFetchImpl)
+  vi.stubGlobal('fetch', fetchMock)
   window.electronAPI = {
     ...window.electronAPI!,
     getAppInfo: mockGetAppInfo,
@@ -50,6 +73,8 @@ beforeEach(() => {
     applyUpdate: mockApplyUpdate,
     forceLoadSPA: mockForceLoadSPA,
   } as typeof window.electronAPI
+  useHostStore.getState().reset()
+  useHostStore.getState().setDevHost(useHostStore.getState().hostOrder[0])
   // Default: emit a non-stale check immediately
   arrangeStream((cb) => {
     cb({ type: 'check', check: baseCheck() })
@@ -58,13 +83,16 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  cleanup()
+  expect(unexpectedRequests).toEqual([])
+  vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 
 describe('DevEnvironmentSection', () => {
   it('renders section title', async () => {
     await act(async () => { render(<DevEnvironmentSection />) })
-    expect(screen.getByText(/Development|開發環境/)).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Development Environment|開發環境/ })).toBeTruthy()
   })
 
   it('calls getAppInfo on mount and opens stream', async () => {
@@ -143,7 +171,7 @@ describe('DevEnvironmentSection', () => {
     // the next mockImplementation call.
     const firstClose = lastStreamClose
 
-    const hostId = useHostStore.getState().hostOrder[0]
+    const hostId = selectDevHostId(useHostStore.getState())!
     await act(async () => {
       useHostStore.getState().updateHost(hostId, { port: 9999 })
     })
@@ -236,24 +264,6 @@ describe('DevEnvironmentSection', () => {
 })
 
 describe('DevEnvironmentSection - Daemon block', () => {
-  const originalFetch = globalThis.fetch
-
-  beforeEach(() => {
-    globalThis.fetch = vi.fn(async (url: string | URL) => {
-      const href = String(url)
-      if (href.endsWith('/api/dev/daemon/check')) {
-        return new Response(JSON.stringify({ current_hash: 'abc1234', latest_hash: 'abc1234', available: false }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-      // Fallback: minimal 200 with empty body
-      return new Response('{}', { status: 200 })
-    }) as typeof globalThis.fetch
-  })
-
-  afterEach(() => { globalThis.fetch = originalFetch })
-
   it('renders Daemon heading', async () => {
     await act(async () => { render(<DevEnvironmentSection />) })
     await waitFor(() => {
@@ -273,5 +283,175 @@ describe('DevEnvironmentSection - Daemon block', () => {
       const abc = screen.queryAllByText('abc1234')
       expect(abc.length).toBeGreaterThan(0)
     })
+  })
+})
+
+describe('DevEnvironmentSection - dev host picker', () => {
+  it('renders the picker with every host and the current selection', async () => {
+    const extra = useHostStore.getState().addHost({ name: 'air', ip: '100.64.0.4', port: 7860 })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    const select = screen.getByLabelText('Development host') as HTMLSelectElement
+    expect(select.value).toBe(useHostStore.getState().hostOrder[0])
+    expect(screen.getByRole('option', { name: 'air (100.64.0.4:7860)' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: '— not set —' })).toBeTruthy()
+    fireEvent.change(select, { target: { value: extra } })
+    expect(useHostStore.getState().devHostId).toBe(extra)
+  })
+
+  it('with no dev host: shows the notice, makes no requests, disables the buttons', async () => {
+    useHostStore.getState().setDevHost(null)
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockGetAppInfo).toHaveBeenCalled())
+    expect(screen.getByText(/Pick a development host first/)).toBeTruthy()
+    expect(mockStreamCheck).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/dev/daemon/check'))).toBe(false)
+    expect(screen.getByRole('button', { name: 'Check Update' })).toBeDisabled()          // daemon block
+    expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Check for Updates' })).toBeDisabled()      // app block
+  })
+
+  it('picking a host starts the check against that host', async () => {
+    useHostStore.getState().setDevHost(null)
+    const extra = useHostStore.getState().addHost({ name: 'air', ip: '100.64.0.4', port: 7860, token: 'tok-air' })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockGetAppInfo).toHaveBeenCalled())
+    expect(mockStreamCheck).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.change(screen.getByLabelText('Development host'), { target: { value: extra } }) })
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledWith('http://100.64.0.4:7860', 'tok-air', expect.any(Function)))
+  })
+})
+
+describe('DevEnvironmentSection - source change discipline', () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void
+    const promise = new Promise<T>((r) => { resolve = r })
+    return { promise, resolve }
+  }
+
+  const checkJson = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  it('A → unset: A\'s painted daemon check is cleared', async () => {
+    fetchMock.mockImplementation(async (url: string | URL) =>
+      String(url).endsWith('/api/dev/daemon/check') ? checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true }) : new Response('{}', { status: 200 }))
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByText('aaa')).toBeTruthy()) // A's result is on screen first
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    expect(screen.queryByText('aaa')).toBeNull()
+    expect(screen.queryByText('Current hash')).toBeNull()
+  })
+
+  it('A → unset: A\'s late daemon-check response is discarded', async () => {
+    const d = deferred<Response>()
+    fetchMock.mockImplementation(async (url: string | URL) =>
+      String(url).endsWith('/api/dev/daemon/check') ? d.promise : new Response('{}', { status: 200 }))
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    await act(async () => { d.resolve(checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true })) })
+    expect(screen.queryByText('aaa')).toBeNull()
+    expect(screen.queryByText('Current hash')).toBeNull()
+  })
+
+  it('A → unset: A\'s late rebuild 409 does not paint an error', async () => {
+    const d = deferred<Response>()
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
+      if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    await act(async () => { d.resolve(new Response('', { status: 409 })) })
+    expect(screen.queryByText('Rebuild already in progress')).toBeNull()
+  })
+
+  it('picker is disabled while a daemon rebuild is in flight', async () => {
+    const d = deferred<Response>()
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
+      if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    expect(screen.getByLabelText('Development host')).toBeDisabled()
+  })
+
+  it('A → B: a late "done" from A\'s stream does not paint B\'s view', async () => {
+    arrangeStream() // hold A's stream open
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledTimes(1))
+    const cbA = lastStreamCallback!
+    const closeA = lastStreamClose
+    const b = useHostStore.getState().addHost({ name: 'b', ip: '10.0.0.2', port: 7860 })
+    arrangeStream() // B's stream, also held open
+    await act(async () => { useHostStore.getState().setDevHost(b) })
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledTimes(2))
+    expect(closeA).toHaveBeenCalled()
+    await act(async () => { cbA({ type: 'done', check: baseCheck({ spaHash: 'zzz9999' }) }) })
+    expect(screen.queryByText(/zzz9999/)).toBeNull()
+    expect(screen.queryByText(/Update available/)).toBeNull()
+  })
+
+  it('post-rebuild 3 s re-check is cancelled by a source change', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') {
+        return new Response('data: {"type":"success","new_hash":"n1"}\n\n', { status: 200 })
+      }
+      if (href.endsWith('/api/dev/daemon/check')) {
+        return new Response(JSON.stringify({ current_hash: 'a', latest_hash: 'a', available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response('{}', { status: 200 })
+    })
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/dev/daemon/check'))).toBe(true))
+    const checksBefore = () => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/api/dev/daemon/check')).length
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    await waitFor(() => expect(screen.getByText(/Build complete/)).toBeTruthy())
+    const n = checksBefore()
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(3500) })
+    expect(checksBefore()).toBe(n)
+  })
+
+  it('unmount mid-rebuild cancels the stream body and skips the scheduled re-check', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const d = deferred<Response>()
+    const neverEndingStream = new ReadableStream<Uint8Array>({ start() {} })
+    const cancelSpy = vi.spyOn(neverEndingStream, 'cancel')
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
+      if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    })
+    const view = render(<DevEnvironmentSection />)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/dev/daemon/check'))).toBe(true))
+    const checksBefore = () => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/api/dev/daemon/check')).length
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    const n = checksBefore()
+    view.unmount()
+    await act(async () => { d.resolve(new Response(neverEndingStream, { status: 200 })) })
+    expect(cancelSpy).toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(3500) })
+    expect(checksBefore()).toBe(n)
+  })
+
+  it('picker is disabled while an app update is running', async () => {
+    arrangeStream((cb) => {
+      cb({ type: 'check', check: baseCheck({ electronHash: 'newhash' }) })
+      cb({ type: 'done', check: baseCheck({ electronHash: 'newhash' }) })
+    })
+    mockApplyUpdate.mockReturnValue(new Promise(() => {}))
+    await act(async () => { render(<DevEnvironmentSection />) })
+    const update = await screen.findByRole('button', { name: 'Update App' })
+    await act(async () => { fireEvent.click(update) })
+    expect(screen.getByLabelText('Development host')).toBeDisabled()
   })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useHostStore } from './useHostStore'
+import { useHostStore, selectDevHostId, findHostByEndpoint } from './useHostStore'
 
 describe('useHostStore', () => {
   beforeEach(() => {
@@ -148,5 +148,90 @@ describe('useHostStore', () => {
     expect(updated.runtime[defaultId].status).toBe('connected')
     expect(updated.runtime[defaultId].daemonState).toBe('connected')
     expect(updated.runtime[defaultId].tmuxState).toBe('unavailable')
+  })
+})
+
+describe('dev host', () => {
+  beforeEach(() => { useHostStore.getState().reset() })
+
+  it('defaults to null and selectDevHostId reads null', () => {
+    expect(useHostStore.getState().devHostId).toBeNull()
+    expect(selectDevHostId(useHostStore.getState())).toBeNull()
+  })
+
+  it('setDevHost accepts a known id', () => {
+    const id = useHostStore.getState().hostOrder[0]
+    useHostStore.getState().setDevHost(id)
+    expect(selectDevHostId(useHostStore.getState())).toBe(id)
+  })
+
+  it('setDevHost ignores an unknown id', () => {
+    useHostStore.getState().setDevHost('nope')
+    expect(useHostStore.getState().devHostId).toBeNull()
+  })
+
+  it('setDevHost(null) clears', () => {
+    const id = useHostStore.getState().hostOrder[0]
+    useHostStore.getState().setDevHost(id)
+    useHostStore.getState().setDevHost(null)
+    expect(useHostStore.getState().devHostId).toBeNull()
+  })
+
+  it('removeHost clears devHostId when it removes the dev host', () => {
+    const s = useHostStore.getState()
+    const extra = s.addHost({ name: 'b', ip: '10.0.0.2', port: 7860 })
+    s.setDevHost(extra)
+    s.removeHost(extra)
+    expect(useHostStore.getState().devHostId).toBeNull()
+  })
+
+  it('removeHost of another host keeps devHostId', () => {
+    const s = useHostStore.getState()
+    const dev = s.hostOrder[0]
+    const extra = s.addHost({ name: 'b', ip: '10.0.0.2', port: 7860 })
+    s.setDevHost(dev)
+    s.removeHost(extra)
+    expect(useHostStore.getState().devHostId).toBe(dev)
+  })
+
+  it('selectDevHostId returns null once the id is gone from hosts (stale persisted id)', () => {
+    const s = useHostStore.getState()
+    const dev = s.hostOrder[0]
+    s.setDevHost(dev)
+    useHostStore.setState({ hosts: { other: { id: 'other', name: 'o', ip: '10.0.0.9', port: 1, order: 0 } }, hostOrder: ['other'] })
+    expect(useHostStore.getState().devHostId).toBe(dev) // raw field untouched
+    expect(selectDevHostId(useHostStore.getState())).toBeNull()
+  })
+
+  it('devHostId is part of the persisted slice', () => {
+    const s = useHostStore.getState()
+    s.setDevHost(s.hostOrder[0])
+    const partialize = useHostStore.persist.getOptions().partialize!
+    expect(partialize(useHostStore.getState())).toMatchObject({ devHostId: s.hostOrder[0] })
+  })
+
+  it('selectDevHostId follows the same id after an endpoint change', () => {
+    const s = useHostStore.getState()
+    const dev = s.hostOrder[0]
+    s.setDevHost(dev)
+    s.updateHost(dev, { ip: '10.9.9.9', port: 4242 })
+    const id = selectDevHostId(useHostStore.getState())
+    expect(id).toBe(dev)
+    expect(useHostStore.getState().getDaemonBase(id!)).toBe('http://10.9.9.9:4242')
+  })
+})
+
+describe('findHostByEndpoint', () => {
+  const hosts = {
+    a: { id: 'a', name: 'ts', ip: '100.64.0.4', port: 7860, order: 0 },
+    b: { id: 'b', name: 'lo', ip: '127.0.0.1', port: 7860, order: 1 },
+  }
+  it('matches exact ip and port', () => {
+    expect(findHostByEndpoint(hosts, '100.64.0.4', 7860)?.id).toBe('a')
+    expect(findHostByEndpoint(hosts, '100.64.0.4', 7861)).toBeUndefined()
+  })
+  it('treats loopback and Tailscale IP as distinct endpoints', () => {
+    expect(findHostByEndpoint(hosts, '127.0.0.1', 7860)?.id).toBe('b')
+    expect(findHostByEndpoint({ a: hosts.a }, '127.0.0.1', 7860)).toBeUndefined()
   })
 })

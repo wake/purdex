@@ -1,11 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-library/react'
 import { LocalDaemonSection } from './LocalDaemonSection'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 const status = (o: Partial<ElectronLocalDaemonStatus> = {}): ElectronLocalDaemonStatus => ({
   managed: 'none', binPath: '/Users/t/.config/pdx/bin/pdx', installed: null, alive: null, running: null, config: null,
+  hostname: 'air-2026',
   target: { goos: 'darwin', goarch: 'arm64' }, tools: { tmux: '/opt/homebrew/bin/tmux' }, ...o,
 })
 const result: ElectronLocalDaemonResult = { url: 'http://100.64.0.9:7860', token: 'purdex_t', hash: 'bbb', version: '9', hostname: 'air-2026' }
@@ -28,10 +29,11 @@ beforeEach(() => {
     localDaemonRestart: mockRestart,
     onLocalDaemonProgress: (cb: (s: string) => void) => { progressCb = cb; return () => { progressCb = null } },
   } as typeof window.electronAPI
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true })
 })
 
-const renderIt = (latestHash: string | null = 'bbb', refreshKey: unknown = { latest_hash: latestHash }) =>
-  act(async () => { render(<LocalDaemonSection daemonBase="http://100.64.0.2:7860" token="tok" latestHash={latestHash} refreshKey={refreshKey} />) })
+const renderIt = (latestHash: string | null = 'bbb', refreshKey: unknown = { latest_hash: latestHash }, daemonBase: string | null = 'http://100.64.0.2:7860') =>
+  act(async () => { render(<LocalDaemonSection daemonBase={daemonBase} token="tok" latestHash={latestHash} refreshKey={refreshKey} />) })
 
 describe('LocalDaemonSection', () => {
   it('none → Install button and target', async () => {
@@ -94,7 +96,7 @@ describe('LocalDaemonSection', () => {
   })
 
   it('external without running info falls back to the config endpoint', async () => {
-    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'custom data_dir', config: { bind: '100.64.0.9', port: 7860, hasToken: true } }))
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'custom data_dir', config: { bind: '100.64.0.9', port: 7860, token: 'purdex_t' } }))
     await renderIt()
     expect(screen.getByText('A daemon is running at http://100.64.0.9:7860 but is not managed by this app')).toBeTruthy()
   })
@@ -149,5 +151,116 @@ describe('LocalDaemonSection', () => {
     window.electronAPI = { ...window.electronAPI!, localDaemonStatus: undefined } as typeof window.electronAPI
     const { container } = render(<LocalDaemonSection daemonBase="x" latestHash={null} refreshKey={null} />)
     expect(container.innerHTML).toBe('')
+  })
+})
+
+describe('LocalDaemonSection - no dev host', () => {
+  it('Install disabled (none) and Update disabled (managed, stale); Start still enabled', async () => {
+    mockStatus.mockResolvedValue(status())
+    await renderIt('bbb', { latest_hash: 'bbb' }, null)
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
+    cleanup()
+    mockStatus.mockResolvedValue(status({ managed: 'managed', installed: { version: '9', hash: 'aaa', goos: 'darwin', goarch: 'arm64' } }))
+    await renderIt('bbb', { latest_hash: 'bbb' }, null)
+    expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Start' })).not.toBeDisabled()
+    expect(mockInstall).not.toHaveBeenCalled()
+  })
+})
+
+describe('LocalDaemonSection - config rows', () => {
+  const cfg = { bind: '100.64.0.9', port: 7860, token: 'purdex_secret' }
+  const originalExecCommand = document.execCommand
+
+  afterEach(() => { document.execCommand = originalExecCommand })
+
+  it('shows URL and a masked token; reveal and copy work', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    expect(screen.getByText('http://100.64.0.9:7860')).toBeTruthy()
+    expect(screen.queryByText('purdex_secret')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show token' }))
+    expect(screen.getByText('purdex_secret')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide token' }))
+    expect(screen.queryByText('purdex_secret')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('purdex_secret')
+    expect(screen.getByText('Copied')).toBeTruthy()
+  })
+
+  it('token missing → notice, Add to hosts disabled', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'managed', config: { ...cfg, token: null } }))
+    await renderIt()
+    expect(screen.getByText('No token in config.toml')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add to hosts' })).toBeDisabled()
+  })
+
+  it('endpoint not in host list → Add to hosts registers it with the config token and hostname', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add to hosts' })) })
+    const added = Object.values(useHostStore.getState().hosts).find((h) => h.ip === '100.64.0.9' && h.port === 7860)
+    expect(added).toMatchObject({ name: 'air-2026', token: 'purdex_secret' })
+    expect(screen.getByText('Registered as air-2026')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add to hosts' })).toBeNull()
+  })
+
+  it('endpoint already in host list → shows the host name, no button', async () => {
+    useHostStore.getState().addHost({ name: 'my-air', ip: '100.64.0.9', port: 7860, token: 't' })
+    mockStatus.mockResolvedValue(status({ managed: 'managed', config: cfg }))
+    await renderIt()
+    expect(screen.getByText('Registered as my-air')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add to hosts' })).toBeNull()
+  })
+
+  it('loopback bind is a different endpoint from the Tailscale host entry', async () => {
+    useHostStore.getState().addHost({ name: 'my-air', ip: '100.64.0.9', port: 7860, token: 't' })
+    mockStatus.mockResolvedValue(status({ managed: 'managed', config: { ...cfg, bind: '127.0.0.1' } }))
+    await renderIt()
+    expect(screen.getByRole('button', { name: 'Add to hosts' })).toBeTruthy()
+  })
+
+  it('copy failure surfaces the error and does not show Copied', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true })
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copy failed — select the token and copy it manually')).toBeTruthy()
+    expect(screen.queryByText('Copied')).toBeNull()
+  })
+
+  it('copy retried after a failure shows Copied and clears the failure text', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('denied')).mockResolvedValueOnce(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copy failed — select the token and copy it manually')).toBeTruthy()
+    expect(screen.queryByText('Copied')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copied')).toBeTruthy()
+    expect(screen.queryByText('Copy failed — select the token and copy it manually')).toBeNull()
+  })
+
+  it('copy failing after a prior success clears Copied and shows the failure text', async () => {
+    const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('denied'))
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copied')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copy failed — select the token and copy it manually')).toBeTruthy()
+    expect(screen.queryByText('Copied')).toBeNull()
+  })
+
+  it('insecure origin (no navigator.clipboard) falls back to execCommand and still shows Copied', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    document.execCommand = vi.fn(() => true)
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(document.execCommand).toHaveBeenCalledWith('copy')
+    expect(screen.getByText('Copied')).toBeTruthy()
   })
 })

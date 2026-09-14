@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, selectDevHostId } from '../../stores/useHostStore'
 import { DevBuildLogPanel } from './DevBuildLogPanel'
 import { LocalDaemonSection } from './LocalDaemonSection'
 
@@ -31,9 +31,19 @@ type RemoteInfo = ElectronRemoteVersionInfo
 
 export function DevEnvironmentSection() {
   const t = useI18nStore((s) => s.t)
-  const firstHostId = useHostStore((s) => s.hostOrder[0] ?? '')
-  const daemonBase = useHostStore((s) => s.getDaemonBase(firstHostId))
-  const token = useHostStore((s) => firstHostId ? (s.hosts[firstHostId]?.token ?? undefined) : undefined)
+  const devHostId = useHostStore(selectDevHostId)
+  const hosts = useHostStore((s) => s.hosts)
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const setDevHost = useHostStore((s) => s.setDevHost)
+  // null = no dev host chosen: no dev requests at all, no fallback (spec D2).
+  const daemonBase: string | null = useHostStore((s) => {
+    const id = selectDevHostId(s)
+    return id ? s.getDaemonBase(id) : null
+  })
+  const token = useHostStore((s) => {
+    const id = selectDevHostId(s)
+    return id ? (s.hosts[id]?.token ?? undefined) : undefined
+  })
 
   const spaSource: 'dev' | 'bundled' = window.location.protocol === 'app:' ? 'bundled' : 'dev'
 
@@ -48,6 +58,11 @@ export function DevEnvironmentSection() {
   const [streaming, setStreaming] = useState(false)
 
   const streamCloseRef = useRef<(() => void) | null>(null)
+  // Spec §2.2: every dev request belongs to a "source generation". A source
+  // change (host / token) bumps it; anything that started under an older
+  // generation drops its result instead of painting the new host's view.
+  const sourceGenRef = useRef(0)
+  const daemonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Daemon rebuild state
   const [daemonCheck, setDaemonCheck] = useState<DaemonCheck | null>(null)
@@ -63,15 +78,18 @@ export function DevEnvironmentSection() {
 
   const checkDaemon = useCallback(async () => {
     if (!daemonBase) return
+    const gen = sourceGenRef.current
     setDaemonPhase('checking')
     setDaemonError(null)
     try {
       const res = await fetch(`${daemonBase}/api/dev/daemon/check`, { headers: daemonAuthHeaders() })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = (await res.json()) as DaemonCheck
+      if (gen !== sourceGenRef.current) return
       setDaemonCheck(data)
       setDaemonPhase('idle')
     } catch (err) {
+      if (gen !== sourceGenRef.current) return
       setDaemonError(err instanceof Error ? err.message : String(err))
       setDaemonPhase('error')
     }
@@ -79,6 +97,7 @@ export function DevEnvironmentSection() {
 
   const rebuildDaemon = useCallback(async () => {
     if (!daemonBase) return
+    const gen = sourceGenRef.current
     setDaemonPhase('rebuilding')
     setDaemonLog([])
     setDaemonError(null)
@@ -90,6 +109,7 @@ export function DevEnvironmentSection() {
         method: 'POST',
         headers: daemonAuthHeaders(),
       })
+      if (gen !== sourceGenRef.current) { void res.body?.cancel().catch(() => {}); return }
       if (res.status === 409) {
         setDaemonError('Rebuild already in progress')
         setDaemonPhase('error')
@@ -106,6 +126,7 @@ export function DevEnvironmentSection() {
       let buffer = ''
       while (true) {
         const { done, value } = await reader.read()
+        if (gen !== sourceGenRef.current) { void reader.cancel().catch(() => {}); return }
         if (done) break
         buffer += decoder.decode(value, { stream: true })
         const chunks = buffer.split('\n\n')
@@ -142,24 +163,44 @@ export function DevEnvironmentSection() {
       // Stream ended. If we saw 'restarting', the daemon is exec'ing itself; WS will disconnect.
       // After a brief delay, re-check to confirm new hash.
       if (!encounteredError) {
-        setTimeout(() => { void checkDaemon() }, 3000)
+        daemonTimerRef.current = setTimeout(() => {
+          daemonTimerRef.current = null
+          if (gen === sourceGenRef.current) void checkDaemon()
+        }, 3000)
       }
     } catch (err) {
+      if (gen !== sourceGenRef.current) return
       setDaemonError(err instanceof Error ? err.message : String(err))
       setDaemonPhase('error')
     }
   }, [daemonBase, daemonAuthHeaders, checkDaemon, t])
-
-  // Load daemon status on mount / host change
-  useEffect(() => {
-    void checkDaemon()
-  }, [checkDaemon])
 
   const closeStream = useCallback(() => {
     streamCloseRef.current?.()
     streamCloseRef.current = null
     setStreaming(false)
   }, [])
+
+  // Source change: wipe everything the previous host produced before the
+  // check effects below fire (spec §2.2 steps 1–3).
+  useEffect(() => {
+    sourceGenRef.current += 1
+    if (daemonTimerRef.current) { clearTimeout(daemonTimerRef.current); daemonTimerRef.current = null }
+    closeStream()
+    setRemoteInfo(null)
+    setStatus('idle')
+    setUpdateError(null)
+    setBuildEvents([])
+    setDaemonCheck(null)
+    setDaemonLog([])
+    setDaemonError(null)
+    setDaemonPhase('idle')
+  }, [daemonBase, token, closeStream])
+
+  // Load daemon status on mount / host change
+  useEffect(() => {
+    void checkDaemon()
+  }, [checkDaemon])
 
   const resolveFinalStatus = useCallback((check: RemoteInfo) => {
     if (check.buildError) {
@@ -176,6 +217,8 @@ export function DevEnvironmentSection() {
   }, [])
 
   const checkUpdate = useCallback(() => {
+    if (!daemonBase) return
+    const gen = sourceGenRef.current
     closeStream()
     setStatus('checking')
     setUpdateError(null)
@@ -183,6 +226,7 @@ export function DevEnvironmentSection() {
     setStreaming(true)
 
     const close = window.electronAPI!.streamCheck(daemonBase, token, (ev) => {
+      if (gen !== sourceGenRef.current) return
       switch (ev.type) {
         case 'check':
           if (!ev.check) return
@@ -228,11 +272,15 @@ export function DevEnvironmentSection() {
   }, [])
 
   useEffect(() => {
-    if (!appInfo) return
+    if (!appInfo || !daemonBase) return
     checkUpdateRef.current()
   }, [appInfo, daemonBase, token])
 
   useEffect(() => () => closeStream(), [closeStream])
+  useEffect(() => () => {
+    if (daemonTimerRef.current) clearTimeout(daemonTimerRef.current)
+    sourceGenRef.current += 1
+  }, [])
 
   useEffect(() => {
     if (!window.electronAPI?.onUpdateProgress) return
@@ -240,6 +288,7 @@ export function DevEnvironmentSection() {
   }, [])
 
   const handleUpdate = () => {
+    if (!daemonBase) return
     setUpdating(true)
     setUpdateStep(null)
     setUpdateError(null)
@@ -259,6 +308,9 @@ export function DevEnvironmentSection() {
   const hasElectronUpdate = remoteInfo && appInfo && remoteInfo.electronHash !== appInfo.electronHash
   const hasSPAUpdate = remoteInfo && appInfo && remoteInfo.spaHash !== appInfo.spaHash
   const showLogPanel = buildEvents.length > 0 || status === 'building'
+  // Spec §2.2 step 4: an app update / daemon rebuild cannot be cancelled, so
+  // the source must not change mid-way.
+  const sourceLocked = updating || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'
 
   const statusText: Record<UpdateStatus, string> = {
     idle: '',
@@ -277,6 +329,27 @@ export function DevEnvironmentSection() {
       </div>
 
       <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <label htmlFor="dev-host-picker" className="text-sm text-text-primary">{t('settings.dev.host.label')}</label>
+          <select
+            id="dev-host-picker"
+            value={devHostId ?? ''}
+            onChange={(e) => setDevHost(e.target.value || null)}
+            disabled={sourceLocked}
+            className="text-xs rounded bg-surface-input border border-border-default text-text-primary px-2 py-1 disabled:opacity-50"
+          >
+            <option value="">{t('settings.dev.host.none')}</option>
+            {hostOrder.map((id) => {
+              const h = hosts[id]
+              return h ? <option key={id} value={id}>{`${h.name} (${h.ip}:${h.port})`}</option> : null
+            })}
+          </select>
+        </div>
+        {devHostId === null && (
+          <div className="text-xs text-status-warning border border-status-warning/40 bg-status-warning/10 rounded p-2">
+            {t('settings.dev.host.required')}
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.spa_source')}</span>
           <div className="flex items-center gap-2">
@@ -348,7 +421,7 @@ export function DevEnvironmentSection() {
       <div className="flex gap-2">
         <button
           onClick={checkUpdate}
-          disabled={!appInfo || status === 'checking' || status === 'building'}
+          disabled={!appInfo || !daemonBase || status === 'checking' || status === 'building'}
           className="px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
         >
           {t('settings.dev.btn.check')}
@@ -356,7 +429,7 @@ export function DevEnvironmentSection() {
         {(hasElectronUpdate || hasSPAUpdate) && (
           <button
             onClick={handleUpdate}
-            disabled={updating}
+            disabled={updating || !daemonBase}
             className="px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse hover:bg-accent-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
           >
             {updating ? t('settings.dev.btn.updating') : t('settings.dev.btn.update_app')}
@@ -408,14 +481,14 @@ export function DevEnvironmentSection() {
         <div className="flex gap-2">
           <button
             onClick={() => void checkDaemon()}
-            disabled={daemonPhase === 'checking' || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
+            disabled={!daemonBase || daemonPhase === 'checking' || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
             className="px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
           >
             {t('settings.dev.daemon.check')}
           </button>
           <button
             onClick={() => void rebuildDaemon()}
-            disabled={daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
+            disabled={!daemonBase || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'}
             className="px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse hover:bg-accent-hover disabled:opacity-50 cursor-pointer disabled:cursor-default"
           >
             {t('settings.dev.daemon.rebuild')}

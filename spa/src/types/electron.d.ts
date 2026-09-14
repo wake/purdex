@@ -58,7 +58,8 @@ interface ElectronLocalDaemonStatus {
   installed: { version: string; hash: string; goos: string; goarch: string } | null
   alive: { pid: number } | null
   running: { version: string; hash: string; url: string } | null
-  config: { bind: string; port: number; hasToken: boolean } | null
+  config: { bind: string; port: number; token: string | null } | null
+  hostname: string
   target: { goos: 'darwin' | 'linux'; goarch: 'arm64' | 'amd64' }
   tools: { tmux: string | null }
 }

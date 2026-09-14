@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Copy, Eye, EyeSlash } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { findHostByEndpoint, useHostStore } from '../../stores/useHostStore'
+import { copyText } from '../../lib/copy-text'
 
 interface Props {
-  daemonBase: string
+  daemonBase: string | null
   token?: string
   latestHash: string | null
   /** The parent's latest daemonCheck object; a new reference re-queries status. */
@@ -26,11 +28,45 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const [step, setStep] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const hosts = useHostStore((s) => s.hosts)
+  const [revealed, setRevealed] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState<string | null>(null)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cfg = status?.config ?? null
+  const cfgUrl = cfg ? `http://${cfg.bind}:${cfg.port}` : null
+  // Spec §3.3: exact-endpoint membership only, via the same helper registerLocalHost uses.
+  const registeredAs = cfg ? findHostByEndpoint(hosts, cfg.bind, cfg.port) : undefined
+
+  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
+
+  const copyToken = useCallback(async () => {
+    if (!cfg?.token) return
+    setCopied(false)
+    setCopyError(null)
+    try {
+      await copyText(cfg.token)
+    } catch {
+      setCopyError(t('settings.dev.local.copy_failed'))
+      return
+    }
+    setCopied(true)
+    if (copiedTimer.current) clearTimeout(copiedTimer.current)
+    copiedTimer.current = setTimeout(() => { setCopied(false); copiedTimer.current = null }, 1500)
+  }, [cfg, t])
+
+  const addToHosts = useCallback(() => {
+    if (!status || !cfg?.token || !cfgUrl) return
+    registerLocalHost({ url: cfgUrl, token: cfg.token, hostname: status.hostname })
+  }, [status, cfg, cfgUrl, registerLocalHost])
 
   const refresh = useCallback(async () => {
     if (!api?.localDaemonStatus) return
     try {
       setStatus(await api.localDaemonStatus())
+      setRevealed(false)
+      setCopied(false)
+      setCopyError(null)
     } catch (err) {
       setError(String(err))
     }
@@ -101,6 +137,42 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
                 : (running && !restartPending && <div>{t('settings.dev.local.up_to_date')}</div>)}
             </>
           )}
+          {cfg && (
+            <>
+              <div className="flex items-center justify-between">
+                <span>{t('settings.dev.local.url')}</span>
+                <span className="font-mono text-text-primary">{cfgUrl}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>{t('settings.dev.local.token')}</span>
+                {cfg.token === null ? (
+                  <span className="text-status-warning">{t('settings.dev.local.token_missing')}</span>
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <span className="font-mono text-text-primary">{revealed ? cfg.token : '••••••••••••'}</span>
+                    <button type="button" onClick={() => setRevealed((v) => !v)} aria-label={revealed ? t('settings.dev.local.btn.hide') : t('settings.dev.local.btn.reveal')} className="p-0.5 rounded hover:bg-surface-hover cursor-pointer">
+                      {revealed ? <EyeSlash size={14} /> : <Eye size={14} />}
+                    </button>
+                    <button type="button" onClick={() => void copyToken()} aria-label={t('settings.dev.local.btn.copy')} className="p-0.5 rounded hover:bg-surface-hover cursor-pointer">
+                      <Copy size={14} />
+                    </button>
+                    {copied && <span>{t('settings.dev.local.copied')}</span>}
+                    {copyError && <span className="text-status-error">{copyError}</span>}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <span>{t('settings.dev.local.host_list')}</span>
+                {registeredAs ? (
+                  <span className="text-text-primary">{t('settings.dev.local.in_hosts', { name: registeredAs.name })}</span>
+                ) : (
+                  <button type="button" onClick={addToHosts} disabled={disabled || cfg.token === null} className={btnSecondary}>
+                    {t('settings.dev.local.btn.add_host')}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
           {status.tools.tmux === null && <div className="text-status-warning">{t('settings.dev.local.tmux_missing')}</div>}
         </div>
       )}
@@ -112,7 +184,12 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
       <div className="flex gap-2">
         <button onClick={() => void refresh()} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.refresh')}</button>
         {status?.managed === 'none' && (
-          <button onClick={() => void run('install', () => api.localDaemonInstall?.(daemonBase, token))} disabled={disabled} className={btnPrimary}>{t('settings.dev.local.btn.install')}</button>
+          <button
+            onClick={() => void run('install', () => daemonBase ? api.localDaemonInstall?.(daemonBase, token) : undefined)}
+            disabled={disabled || daemonBase === null}
+            title={daemonBase === null ? t('settings.dev.host.required') : undefined}
+            className={btnPrimary}
+          >{t('settings.dev.local.btn.install')}</button>
         )}
         {status?.managed === 'managed' && (
           <>
@@ -123,7 +200,12 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               <button onClick={() => void run('restart', () => api.localDaemonRestart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.restart')}</button>
             )}
             {updateAvailable && (
-              <button onClick={() => void run('install', () => api.localDaemonInstall?.(daemonBase, token))} disabled={disabled} className={btnPrimary}>{t('settings.dev.local.btn.update')}</button>
+              <button
+                onClick={() => void run('install', () => daemonBase ? api.localDaemonInstall?.(daemonBase, token) : undefined)}
+                disabled={disabled || daemonBase === null}
+                title={daemonBase === null ? t('settings.dev.host.required') : undefined}
+                className={btnPrimary}
+              >{t('settings.dev.local.btn.update')}</button>
             )}
           </>
         )}
