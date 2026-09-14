@@ -1,4 +1,4 @@
-package config
+package config_test
 
 import (
 	"os"
@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/wake/purdex/internal/config"
 )
 
 func TestNexConfigDefaultsOnAbsentSection(t *testing.T) {
@@ -14,19 +16,19 @@ func TestNexConfigDefaultsOnAbsentSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(path)
+	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	want := DefaultNexConfig()
+	want := config.DefaultNexConfig()
 	if !reflect.DeepEqual(cfg.Nex, want) {
 		t.Errorf("Nex = %+v, want %+v", cfg.Nex, want)
 	}
 }
 
 func TestNexConfigDisabledWithNoRootsIsValid(t *testing.T) {
-	n := DefaultNexConfig()
+	n := config.DefaultNexConfig()
 	if n.Enabled {
 		t.Fatalf("default Enabled should be false")
 	}
@@ -36,7 +38,7 @@ func TestNexConfigDisabledWithNoRootsIsValid(t *testing.T) {
 }
 
 func TestNexConfigEnabledWithNoRootsIsInvalid(t *testing.T) {
-	n := DefaultNexConfig()
+	n := config.DefaultNexConfig()
 	n.Enabled = true
 
 	err := n.Validate("/home/u")
@@ -53,13 +55,13 @@ func TestNexConfigEnabledWithNoRootsIsInvalid(t *testing.T) {
 }
 
 func TestNexConfigSandboxMaxProfileValidation(t *testing.T) {
-	n := DefaultNexConfig()
+	n := config.DefaultNexConfig()
 	n.Sandbox.MaxProfile = "handoff"
 	if err := n.Validate("/home/u"); err != nil {
 		t.Errorf("max_profile=handoff should be valid, got %v", err)
 	}
 
-	n2 := DefaultNexConfig()
+	n2 := config.DefaultNexConfig()
 	n2.Sandbox.MaxProfile = "yolo"
 	err := n2.Validate("/home/u")
 	if err == nil {
@@ -73,7 +75,7 @@ func TestNexConfigSandboxMaxProfileValidation(t *testing.T) {
 func TestNexConfigClaudeBinExpansionAndValidation(t *testing.T) {
 	home := "/home/u"
 
-	n := DefaultNexConfig()
+	n := config.DefaultNexConfig()
 	n.ClaudeBin = "~/bin/claude"
 	expanded := n.Expanded(home)
 	want := filepath.Join(home, "bin", "claude")
@@ -81,7 +83,7 @@ func TestNexConfigClaudeBinExpansionAndValidation(t *testing.T) {
 		t.Errorf("Expanded().ClaudeBin = %q, want %q", expanded.ClaudeBin, want)
 	}
 
-	n2 := DefaultNexConfig()
+	n2 := config.DefaultNexConfig()
 	n2.ClaudeBin = "bin/claude"
 	err := n2.Validate(home)
 	if err == nil {
@@ -93,7 +95,7 @@ func TestNexConfigClaudeBinExpansionAndValidation(t *testing.T) {
 }
 
 func TestNexConfigPathPrependValidation(t *testing.T) {
-	n := DefaultNexConfig()
+	n := config.DefaultNexConfig()
 	n.PathPrepend = []string{"~/.local/bin", "rel"}
 
 	err := n.Validate("/home/u")
@@ -106,7 +108,7 @@ func TestNexConfigPathPrependValidation(t *testing.T) {
 }
 
 func TestNexConfigRepoRootsValidation(t *testing.T) {
-	n := DefaultNexConfig()
+	n := config.DefaultNexConfig()
 	n.RepoRoots = []string{"rel/x"}
 
 	err := n.Validate("/home/u")
@@ -119,7 +121,7 @@ func TestNexConfigRepoRootsValidation(t *testing.T) {
 }
 
 func TestNexConfigTimeoutsValidation(t *testing.T) {
-	n := DefaultNexConfig()
+	n := config.DefaultNexConfig()
 	n.Timeouts.LeaseTTL = "12x"
 
 	err := n.Validate("/home/u")
@@ -135,23 +137,26 @@ func TestNexConfigTomlRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	cfg := defaults()
-	cfg.Nex = NexConfig{
+	cfg, err := config.Load(filepath.Join(dir, "nonexistent.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Nex = config.NexConfig{
 		Enabled:      true,
 		RepoRoots:    []string{"/repo1", "/repo2"},
 		ServiceRoots: []string{"/svc1"},
 		ClaudeBin:    "/usr/local/bin/claude",
 		CswapBin:     "/usr/local/bin/cswap",
 		PathPrepend:  []string{"/opt/homebrew/bin"},
-		Sandbox:      NexSandboxConfig{MaxProfile: "handoff", DefaultProfile: "trusted"},
-		Timeouts:     NexTimeoutsConfig{LeaseTTL: "5m", Interrupt: "10s", Turn: "30m"},
+		Sandbox:      config.NexSandboxConfig{MaxProfile: "handoff", DefaultProfile: "trusted"},
+		Timeouts:     config.NexTimeoutsConfig{LeaseTTL: "5m", Interrupt: "10s", Turn: "30m"},
 	}
 
-	if err := WriteFile(path, cfg); err != nil {
+	if err := config.WriteFile(path, cfg); err != nil {
 		t.Fatal(err)
 	}
 
-	loaded, err := Load(path)
+	loaded, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +167,11 @@ func TestNexConfigTomlRoundTrip(t *testing.T) {
 }
 
 func TestNexConfigCloneIndependence(t *testing.T) {
-	cfg := defaults()
+	dir := t.TempDir()
+	cfg, err := config.Load(filepath.Join(dir, "nonexistent.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.Nex.RepoRoots = []string{"/repo1"}
 	cfg.Nex.ServiceRoots = []string{"/svc1"}
 	cfg.Nex.PathPrepend = []string{"/opt/homebrew/bin"}
