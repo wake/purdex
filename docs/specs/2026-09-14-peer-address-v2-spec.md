@@ -1,6 +1,6 @@
 # Spec — Peer address v2: session labels ("Peer Address v2")
 
-Status: draft v3.1 (plan review `task-mu1dulow-tnozhu` amendments: §3.1 suffix source, §3.3 alive-unknowns only, §3.4 label_rev, §3.5 unapplied revision, §3.6 version trailer; R1 `task-mu1ags4q-o5eeev`: 2 Blockers, 12 Majors, 3 Minors,
+Status: draft v3.2 (PR #1026 codex R2 fix wave: §3.2 tier 1 over live-entry rows only + single-hit-under-incomplete-registry ⇒ `not_ready`, §3.4 `labels_unavailable`, §3.6 three partial-cause lines; §10 holds the disposition. v3.1: plan review `task-mu1dulow-tnozhu` amendments: §3.1 suffix source, §3.3 alive-unknowns only, §3.4 label_rev, §3.5 unapplied revision, §3.6 version trailer; R1 `task-mu1ags4q-o5eeev`: 2 Blockers, 12 Majors, 3 Minors,
 5 omissions; R2 `task-mu1ayutr-i477ud`: 1 Blocker, 8 Majors, 3 Minors — all
 accepted; §8/§9 hold both disposition tables)
 Date: 2026-09-14
@@ -166,20 +166,31 @@ mini-lab/tmux:mt4                    operator fallback, no label involved
 
 ### 3.2 Resolution (replaces PB §4.1 `<session>` tiers)
 
-`peers.Resolve(records, session, partial)` keeps its shape (one host's
+`peers.Resolve(records, session, snapshot)` keeps its shape (one host's
 records, first tier with ≥1 match decides, several matches ⇒
 `AmbiguousError`, none ⇒ `ErrNotFound`) with a new signature and tiers.
-`session` is split at its first `:` into `head` and `rest`; `partial` is
-the target envelope's `partial` flag (the sender already holds the whole
-envelope — `send.go:254`).
+`session` is split at its first `:` into `head` and `rest`; `snapshot` is
+a `ResolveSnapshot{Partial, RegistryIncomplete}` built from the target
+envelope (the sender already holds the whole envelope — `send.go`):
+`Partial` is its `partial` flag, `RegistryIncomplete` is
+`len(unknown_registry_files) > 0` (§3.3) — the one partial cause that can
+hide a whole live *process*, not merely a label.
 
 | Case | Matches when | Notes |
 |---|---|---|
-| `head == "cc"` | — | `ErrNotFound` before any tier, regardless of `partial`; the message points to `pdx peers --all` |
-| `head == "tmux"` | `rest` equals a record's `session_name` | explicit fallback; labels never considered; `rest` empty ⇒ `ErrNotFound`; PB §4.2's owner/pane tiebreak decides which process the session row carries |
-| tier 1: label | `head` equals a record's `label` | over **all** rows — session rows and entry rows (§3.4); proxy rows and rows with `label == ""` excluded; `rest` ignored; more than one match ⇒ `AmbiguousError` with the candidates |
-| tier 2: tmux name | `head` equals a record's `session_name` and `rest == ""` | reached only when tier 1 has no match **and** `partial == false` |
-| tier 1 miss, `partial == true` | — | `ErrNotReady` — the snapshot may be missing a label (§3.3 evidence, PB §4.2 deadline, or a label-store read failure); the caller retries or uses `tmux:` |
+| `head == "cc"` | — | `ErrNotFound` before any tier, regardless of the snapshot; the message points to `pdx peers --all` |
+| `head == "tmux"` | `rest` equals a record's `session_name` | explicit fallback; labels and the snapshot never considered; `rest` empty ⇒ `ErrNotFound`; PB §4.2's owner/pane tiebreak decides which process the session row carries |
+| tier 1: label | `head` equals a record's `label` **and the row carries a live entry** | over session rows and entry rows alike (§3.4), but only rows whose `agent` is a real registry entry (`type: cc`, `pid != 0`). Proxy rows, rows with `label == ""` and owner-fallback rows (`inbox_dead` / `ambiguous`: `ownerFallbackAgent`, `pid: 0`, no entry behind them) are excluded — this is how §3.3's "a row whose holder is not live is inert" reaches resolution. `rest` ignored; more than one match ⇒ `AmbiguousError` with the candidates, regardless of the snapshot |
+| tier 1 exactly one match, `RegistryIncomplete == true` | — | `ErrNotReady` — an alive-but-undecodable registry file may be a *second* live process of that very conversation, which would have made the label ambiguous; one process is never picked on incomplete evidence. The caller retries or uses `tmux:` |
+| tier 2: tmux name | `head` equals a record's `session_name` and `rest == ""` | reached only when tier 1 has no match **and** `Partial == false` |
+| tier 1 miss, `Partial == true` | — | `ErrNotReady` — the snapshot may be missing a label (§3.3 evidence, PB §4.2 deadline, or a label-store read failure); the caller retries or uses `tmux:` |
+
+Consequence of the live-entry rule: a conversation whose registry entry
+is gone (its session row is `inbox_dead`) no longer shadows a same-named
+tmux session — `<host>/foo` falls to tier 2 and reaches tmux session
+`foo` on a complete inventory — and the two-process case has exactly the
+two entry rows as `ambiguous` candidates (the `ambiguous` session row
+does not count a third time).
 
 `handleSend` maps `ErrNotReady` ⇒ `503 not_ready` (§3.6) next to its
 existing `ambiguous` / `peer_not_found` cases.
@@ -306,7 +317,9 @@ otherwise no-op. `200` with the updated record. `origin_unknown` and
 
 **Inventory read of labels.** `GET /api/peers` reads the whole table once
 per call. If that read fails, every row is reported with its default label
-and `label_source: "default"`, the envelope is `partial: true`, and the
+and `label_source: "default"`, the envelope is `partial: true` **and**
+`labels_unavailable: true` (§3.4 — its own signal, so a consumer never
+has to infer this cause from the absence of the other two), and the
 failure is logged once per call.
 
 **Garbage.** Released rows and rows for sessions that never come back
@@ -366,7 +379,12 @@ Rules:
 `BuildInput` gains `Labels map[string]string` (sessionId ⇒ user label) and
 `Build` stays a pure join: a `sessionId` absent from the map gets its
 default label. The envelope gains `daemon_version` (this daemon's build
-version) and `HostResult` carries it through for `pdx peers --all`.
+version) and `labels_unavailable` (`true` when the label-store read of
+§3.3 failed for this response; always present), and `HostResult` carries
+both through for `pdx peers --all`. `partial` therefore has three
+independent signals — unresolved rows (`agent: null`, `reason: ""`),
+`unknown_registry_files`, `labels_unavailable` — and any combination of
+them may be set on one envelope.
 
 ### 3.5 Wire and helper naming (amends PB §4.4, §4.5)
 
@@ -506,6 +524,21 @@ session:  fa5d4c07-… pid 76973
 indented under their host, and print each host's `daemon_version` as a
 trailer line after the table (`<alias>  daemon <version>`; both tables are
 one aligned block, so a per-host header row is not used).
+
+Ahead of each host's `daemon` trailer, both tables print that host's
+partial-cause lines through one shared renderer — one line per cause,
+each printed whenever its own signal is set (never inferred from the
+others' absence, never suppressed by another), alias-prefixed in `--all`,
+in this order:
+
+```
+(partial: N sessions not resolved within budget)   N = rows with agent:null and reason:"" (> 0)
+(partial: unknown registry files: a, b)            unknown_registry_files non-empty; paths sanitized
+(partial: label store unavailable)                 labels_unavailable
+```
+
+Nothing is printed for a host with none of the three signals; an
+unreachable host gets its `(unreachable: …)` line and no cause lines.
 
 `pdx msg selftest` is **unchanged**. It is the harness-upgrade gate (P3
 D4: the process acts as its own virtual peer and never calls the daemon),
@@ -774,3 +807,15 @@ output where named.
 | R2-10 | Minor | `cc:` vs partial branch | accepted — short-circuit before tiers (§3.2) |
 | R2-11 | Minor | no daemon version in `--all` | accepted — `daemon_version` in the envelope, P4a (§3.4, §3.9) |
 | R2-12 | Minor | acceptance timing | accepted — P4a subset with v1 expectations; references fixed (§5) |
+
+## 10. Review disposition (PR #1026 codex R2)
+
+Post-PR code review of the P4a implementation; every finding accepted and
+landed on the PR branch, one commit each.
+
+| # | Sev | Finding | Disposition (v3.2) |
+|---|---|---|---|
+| X1 | High | a single tier-1 hit bypassed the multi-process ambiguity guard when the registry was incomplete: two live processes of one conversation are `ambiguous`, but with one file unreadable (alive pid ⇒ `partial`) only one row remained and `Resolve` returned it before consulting `partial` — the message went to an arbitrary process | `Resolve` takes `ResolveSnapshot{Partial, RegistryIncomplete}`; tier 1 exactly one match under `RegistryIncomplete` ⇒ `ErrNotReady` (§3.2 table row); `tmux:` and `cc:` unchanged. Tests: `address_test.go`, `send_test.go`, two-daemon `TestE2E_LabelAmbiguityUnderUnknownFile` (409 ambiguous → corrupt one file → 503 not_ready, neither inbox receives; `tmux:foo` still delivers) |
+| X2 | Medium | a dead conversation's label still resolved: an `inbox_dead` owner-fallback session row carried the persisted user label, won tier 1 and refused `not_deliverable` instead of falling to the same-named tmux session — contradicting §3.3 "inert" | tier 1 considers only rows carrying a live entry (`agent.type == cc && pid != 0`; owner-fallback rows have `pid: 0`) — §3.2 table + consequence paragraph. Two-process `ambiguous` now lists exactly the two entry rows. Tests: `address_test.go`, `record_test.go`, `send_test.go` (`TestSend_DeadHolderLabelFallsToTmuxSession`, rows from the real `Build`) |
+| X3 | Medium | `pdx peers --all` printed nothing for an owner-only partial (`hadUnresolved=true` fed into a renderer that then printed nothing; the count line was never printed in `--all`) | one shared per-host renderer (`writeHostDiagnostics`) for both tables: count / unknown files / label store, each on its own line whenever its signal is set (§3.6). Tests: `cmd/pdx/peers_test.go` owner-only `--all`, all-three-lines in both tables |
+| X4 | Medium | the label-store failure had no signal of its own; the CLI inferred it from the absence of the other two causes, which breaks as soon as two causes coincide | `labels_unavailable` on `Envelope` and `HostResult` (§3.3 "Inventory read of labels", §3.4); set by `localEnvelope`, copied by the `--all` local row and `fetchHostResult`; the CLI renders the line from the flag only. Tests: `envelope_test.go`, `module_test.go` (local, combined with an unknown file, `--all` local + remote row) |
