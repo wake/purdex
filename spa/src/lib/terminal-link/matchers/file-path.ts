@@ -1,16 +1,47 @@
 import type { LinkMatcher } from '../types'
 
-// 絕對路徑：必須以 `/` 開頭 + 末段 name.ext（支援多重副檔名如 .d.ts / .min.js，副檔名段允許內含連字號如 pre-edit 與 `+` build metadata 如 0.0.0+075a408）
-export const ABS_RE = /(?<![\w/:~.])(\/(?:[\w.-]+\/)*[\w-]+(?:\.[A-Za-z0-9]+(?:[-+][A-Za-z0-9]+)*)+)(?::(\d+)(?::(\d+))?)?/g
+// 四支 regex 共用的字元類別片段（Unicode，需 `u` flag）。集中定義避免四支各自漂移。
+//
+// 目錄段與檔名主幹接受任何 Unicode 字母/數字（`\p{L}\p{N}`），讓 CJK 路徑如
+// `docs/申請流程/115潛優修正計畫-核定.pdf` 能整段連結。凡是字母出現的地方都同時
+// 收 `\p{M}`（combining marks）：macOS `ls` 常輸出 NFD（`が` = `か` + U+3099、
+// `é` = `e` + U+0301）；匹配結果不做正規化，原樣交給 opener。副檔名鏈拆成兩種角色：
+//   - inner（中間的副檔名段）：Unicode，讓 `docs/報告.最終版.pdf` 整段連結
+//   - final（最後一段）：**維持 ASCII**，讓黏在檔名後的 CJK 敘述
+//     （`已更新 docs/a.pdf並重新`）自然停在 `pdf`。這是 bias，不是 guarantee：
+//     黏上的敘述後面若再接副檔名或 `/`，regex 會合法吃掉整段（見下方 limitations）。
+//   引擎會在兩種角色間回溯：`docs/a.pdf然後，` → inner `.pdf然後` 後面接不到
+//   final → 回溯 → final `.pdf` → 連結為 `docs/a.pdf`。
+//
+// Known limitations（刻意接受，勿「修」）：
+//   - 敘述直接黏在相對路徑前而無分隔（`已更新docs/a.pdf`）會被吃進第一段，
+//     與 ASCII 的 `seedocs/a.pdf` 完全相同——沒有邊界可找。
+//   - 既有、範圍外：BARE_RE 的 lookbehind 不含 `-`，所以 `/a/b/foo.pre-edit.md`
+//     也會產生一個被遮蔽的 BARE 匹配 `edit.md`（ABS 先註冊，hover 時勝出）。
+//   - 以檔名樣式結尾的 CJK 句子會被 BARE_RE 整句連結（`請見附件.pdf` → 一個連結），
+//     與 ASCII 的 `seeattachment.pdf` 同樣歧義；點擊後走既有 stat → not-found popup。
+//   - 黏在 ASCII 副檔名後的敘述若再接副檔名或 `/`，整段連結
+//     （`docs/a.pdf然後.txt`、`docs/a.pdf然後/x.txt`）。罕見，接受，測試已 pin。
+const W = '\\p{L}\\p{M}\\p{N}_' // "word" char（原 \w）；\p{M} = combining marks（NFD）
+const SEG = `[${W}.-]` // 目錄段字元
+const STEM = `[${W}-]` // 檔名主幹字元
+const INNER_EXT = `[\\p{L}\\p{M}\\p{N}]+(?:[-+][\\p{L}\\p{M}\\p{N}]+)*`
+const FINAL_EXT = `[A-Za-z0-9]+(?:[-+][A-Za-z0-9]+)*`
+const EXT = `(?:\\.${INNER_EXT})*\\.${FINAL_EXT}`
+const SUFFIX = `(?::(\\d+)(?::(\\d+))?)?`
 
-// Tilde 路徑：以 ~/ 開頭 + 末段 name.ext（支援 dotdir 與多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
-export const TILDE_RE = /(?<![\w/:~])(~\/(?:[\w.-]+\/)*[\w-]+(?:\.[A-Za-z0-9]+(?:[-+][A-Za-z0-9]+)*)+)(?::(\d+)(?::(\d+))?)?/g
+// 絕對路徑：必須以 `/` 開頭 + 末段 name.ext（Unicode 段名；支援多重副檔名如 .d.ts / .min.js，副檔名段允許內含連字號如 pre-edit 與 `+` build metadata 如 0.0.0+075a408）
+// capture groups：1 = path, 2 = line, 3 = col（runRegex 依賴此配置）
+export const ABS_RE = new RegExp(`(?<![${W}/:~.])(\\/(?:${SEG}+\\/)*${STEM}+${EXT})${SUFFIX}`, 'gu')
 
-// 相對路徑（含至少一個 `/`）：不能以 `/` 開頭，至少一個中間段 + 末段（支援多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
-export const REL_RE = /(?<![\w/:])((?:[\w.-]+\/)+[\w-]+(?:\.[A-Za-z0-9]+(?:[-+][A-Za-z0-9]+)*)+)(?::(\d+)(?::(\d+))?)?/g
+// Tilde 路徑：以 ~/ 開頭 + 末段 name.ext（Unicode 段名；支援 dotdir 與多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
+export const TILDE_RE = new RegExp(`(?<![${W}/:~])(~\\/(?:${SEG}+\\/)*${STEM}+${EXT})${SUFFIX}`, 'gu')
 
-// 純檔名：無 `/`；lookbehind 阻擋 word/`/`/`:`/`.` 避免匹配路徑片段或 URL 內段、或次級副檔名（支援多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
-export const BARE_RE = /(?<![\w/:.])([\w-]+(?:\.[A-Za-z0-9]+(?:[-+][A-Za-z0-9]+)*)+)(?::(\d+)(?::(\d+))?)?/g
+// 相對路徑（含至少一個 `/`）：不能以 `/` 開頭，至少一個中間段 + 末段（Unicode 段名；支援多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
+export const REL_RE = new RegExp(`(?<![${W}/:])((?:${SEG}+\\/)+${STEM}+${EXT})${SUFFIX}`, 'gu')
+
+// 純檔名：無 `/`；lookbehind 阻擋 Unicode word/`/`/`:`/`.` 避免匹配路徑片段或 URL 內段、或次級副檔名（支援多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
+export const BARE_RE = new RegExp(`(?<![${W}/:.])(${STEM}+${EXT})${SUFFIX}`, 'gu')
 
 export interface FilePathMatcherConfig {
   id: string

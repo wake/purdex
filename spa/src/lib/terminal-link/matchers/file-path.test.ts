@@ -323,3 +323,232 @@ describe('createFilePathMatcher — tilde', () => {
     expect(r[0].meta).toEqual({ path: '~/d/bar.min-2.js' })
   })
 })
+
+describe('unicode paths', () => {
+  describe('relativeSlash', () => {
+    const make = (isEnabled = true) =>
+      createFilePathMatcher({ id: 'test-rel', regex: REL_RE, isEnabled: () => isEnabled })
+
+    it('matches a CJK relative path in full', () => {
+      const path = 'docs/data/申請流程/潛優/115潛優修正計畫-核定.pdf'
+      const r = make().provide(`see ${path} here`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(path)
+      expect(r[0].meta).toEqual({ path })
+    })
+
+    it('captures :line suffix after a CJK relative path', () => {
+      const path = 'docs/data/申請流程/潛優/115潛優修正計畫-核定.pdf'
+      const r = make().provide(`${path}:12`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(`${path}:12`)
+      expect(r[0].meta).toEqual({ path, line: 12 })
+    })
+
+    it('stops at the ASCII extension when CJK prose is glued after it', () => {
+      const r = make().provide('已更新 docs/a.pdf並重新')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf' })
+    })
+
+    it('stops at full-width comma: docs/a.pdf，然後', () => {
+      const r = make().provide('docs/a.pdf，然後')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf' })
+    })
+
+    it('stops at full-width stop: docs/a.pdf。', () => {
+      const r = make().provide('docs/a.pdf。')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf' })
+    })
+
+    it('matches a dotted CJK stem whole: docs/報告.最終版.pdf', () => {
+      const r = make().provide('see docs/報告.最終版.pdf ok')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/報告.最終版.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/報告.最終版.pdf' })
+    })
+
+    it('matches docs/報告.pdf after a space', () => {
+      const r = make().provide('已更新 docs/報告.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/報告.pdf')
+      expect(r[0].meta).toEqual({ path: 'docs/報告.pdf' })
+    })
+
+    // Deliberate: prose glued before a relative path with no separator has no
+    // boundary to find, exactly like ASCII `seedocs/a.pdf` links whole today.
+    it('glued CJK prefix becomes part of the first segment (mirrors ASCII)', () => {
+      const r = make().provide('已更新docs/a.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('已更新docs/a.pdf')
+      expect(r[0].meta).toEqual({ path: '已更新docs/a.pdf' })
+    })
+
+    it('ASCII twin of glued prefix still links whole: seedocs/a.pdf', () => {
+      const r = make().provide('seedocs/a.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('seedocs/a.pdf')
+    })
+
+    // NFD (macOS `ls` style): base letter + combining mark. The matched path
+    // must be the input string verbatim — no normalisation.
+    it('matches NFD CJK stem whole: docs/か\\u3099.txt (no normalisation)', () => {
+      const path = 'docs/が.txt'
+      const r = make().provide(`see ${path} ok`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(path)
+      expect(r[0].meta?.path).toBe('docs/が.txt')
+    })
+
+    it('matches NFD Latin stem whole: docs/cafe\\u0301.txt (no normalisation)', () => {
+      const path = 'docs/café.txt'
+      const r = make().provide(`see ${path} ok`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(path)
+      expect(r[0].meta?.path).toBe('docs/café.txt')
+    })
+
+    // ASCII final extension is a bias, not a guarantee (spec §3.1): when glued
+    // prose is itself followed by another extension or a `/`, the regex
+    // legitimately consumes the whole thing.
+    it('pins accepted limitation: docs/a.pdf然後.txt links whole', () => {
+      const r = make().provide('docs/a.pdf然後.txt')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf然後.txt')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf然後.txt' })
+    })
+
+    it('pins accepted limitation: docs/a.pdf然後/x.txt links whole', () => {
+      const r = make().provide('docs/a.pdf然後/x.txt')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf然後/x.txt')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf然後/x.txt' })
+    })
+
+    // Inner extension segments accept combining marks too (NFD `が` as an
+    // inner part), not only the stem.
+    it('matches NFD combining mark inside an inner extension: docs/a.か\\u3099.txt', () => {
+      const path = 'docs/a.\u304b\u3099.txt'
+      const r = make().provide(`see ${path} ok`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(path)
+      expect(r[0].meta?.path).toBe(path)
+    })
+
+    // Known limitation (spec §3.1): the matchers require an ASCII final
+    // extension, so `grep -n` style lines whose file name has none get no
+    // link — identical to the ASCII no-extension policy today.
+    it('no-extension grep line gets no link: docs/報告.最終版:12:內容', () => {
+      expect(make().provide('docs/報告.最終版:12:內容')).toHaveLength(0)
+    })
+
+    it('ASCII twin of no-extension grep line gets no link: docs/report:12:x', () => {
+      expect(make().provide('docs/report:12:x')).toHaveLength(0)
+    })
+  })
+
+  describe('absolute', () => {
+    const make = (isEnabled = true) =>
+      createFilePathMatcher({ id: 'test-abs', regex: ABS_RE, isEnabled: () => isEnabled })
+
+    it('matches /Users/wake/文件/報告.pdf', () => {
+      const r = make().provide('open /Users/wake/文件/報告.pdf now')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('/Users/wake/文件/報告.pdf')
+      expect(r[0].meta).toEqual({ path: '/Users/wake/文件/報告.pdf' })
+    })
+
+    it('still rejects /path/1.2.3 (version rejection re-check)', () => {
+      expect(make().provide('see /path/1.2.3 dir')).toHaveLength(0)
+    })
+  })
+
+  describe('tilde', () => {
+    const make = (isEnabled = true) =>
+      createFilePathMatcher({ id: 'test-tilde', regex: TILDE_RE, isEnabled: () => isEnabled })
+
+    it('matches ~/文件/報告.pdf', () => {
+      const r = make().provide('open ~/文件/報告.pdf now')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('~/文件/報告.pdf')
+      expect(r[0].meta).toEqual({ path: '~/文件/報告.pdf' })
+    })
+  })
+
+  describe('bare', () => {
+    const make = (isEnabled = true) =>
+      createFilePathMatcher({ id: 'test-bare', regex: BARE_RE, isEnabled: () => isEnabled })
+
+    it('matches 報告.pdf', () => {
+      const r = make().provide('see 報告.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('報告.pdf')
+      expect(r[0].meta).toEqual({ path: '報告.pdf' })
+    })
+
+    it('lookbehind blocks on a CJK letter: 已產生報告.pdf links as one token', () => {
+      const r = make().provide('已產生報告.pdf')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('已產生報告.pdf')
+      expect(r[0].meta).toEqual({ path: '已產生報告.pdf' })
+    })
+
+    it('does NOT split 報告.pdf out of a REL path: 已更新 docs/報告.pdf', () => {
+      expect(make().provide('已更新 docs/報告.pdf')).toHaveLength(0)
+    })
+
+    it('still rejects IP address 192.168.1.1 (version rejection re-check)', () => {
+      expect(make().provide('ping 192.168.1.1 x')).toHaveLength(0)
+    })
+
+    it('still rejects 1.0.0+exp.sha (version rejection re-check)', () => {
+      expect(make().provide('build 1.0.0+exp.sha done')).toHaveLength(0)
+    })
+
+    // NFD: the lookbehind must treat a combining mark as a word char so no
+    // second link starts at `x.txt` right after the mark.
+    it('lookbehind blocks on a combining mark: か\\u3099x.txt is one token', () => {
+      const input = 'がx.txt'
+      const r = make().provide(input)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(input)
+      expect(r[0].meta?.path).toBe('がx.txt')
+    })
+
+    // Isolated form of the mark lookbehind: with a leading `/` the whole token
+    // is not a BARE candidate, so the only possible start is `x.txt` right
+    // after U+3099 — and the lookbehind must block it.
+    it('lookbehind blocks on a combining mark in isolation: /a/か\\u3099x.txt → no link', () => {
+      expect(make().provide('/a/\u304b\u3099x.txt')).toHaveLength(0)
+    })
+
+    // Pre-existing quirk pinned as-is, NOT desired behaviour (see the
+    // limitations comment in file-path.ts): the lookbehind does not include
+    // `-`, so a hyphenated inner extension yields a shadowed BARE match that
+    // the earlier-registered ABS link wins over on hover.
+    it('pins known quirk: /a/b/foo.pre-edit.md yields a shadowed BARE match edit.md', () => {
+      const r = make().provide('/a/b/foo.pre-edit.md')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('edit.md')
+      expect(r[0].meta).toEqual({ path: 'edit.md' })
+    })
+
+    // Full-width digits (spec §3.1): the version filter only looks at the
+    // extension parts and `\d` stays ASCII under the `u` flag.
+    it('rejects １２３.1.2 (ASCII-digit extensions are version-like)', () => {
+      expect(make().provide('１２３.1.2')).toHaveLength(0)
+    })
+
+    it('keeps １２３.１２.3 (full-width inner extension is not \\d+)', () => {
+      const r = make().provide('１２３.１２.3')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('１２３.１２.3')
+      expect(r[0].meta).toEqual({ path: '１２３.１２.3' })
+    })
+  })
+})
