@@ -25,6 +25,7 @@ type configUpdateRequest struct {
 	Detect    *detectUpdateRequest   `json:"detect,omitempty"`
 	Terminal  *config.TerminalConfig `json:"terminal,omitempty"`
 	UploadDir *string                `json:"upload_dir,omitempty"`
+	Nex       json.RawMessage        `json:"nex"`
 }
 
 // detectUpdateRequest allows partial updates to detect config.
@@ -43,6 +44,11 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate before mutating
+	if len(req.Nex) > 0 {
+		http.Error(w, "nex is not editable via API in this version; edit config.toml and restart", http.StatusBadRequest)
+		return
+	}
+
 	if req.Terminal != nil && req.Terminal.SizingMode != "" {
 		switch req.Terminal.SizingMode {
 		case "auto", "terminal-first", "minimal-first":

@@ -41,15 +41,20 @@ func (c *Core) handleReady(w http.ResponseWriter, r *http.Request) {
 func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
 	hostID := c.Cfg.HostID
+	nexEnabled := c.Cfg.Nex.Enabled
 	c.CfgMu.RUnlock()
 
-	info := map[string]string{
+	info := map[string]any{
 		"host_id":        hostID,
 		"tmux_instance":  config.GetTmuxInstance(),
 		"purdex_version": buildinfo.Version,
 		"tmux_version":   getTmuxVersion(),
 		"os":             runtime.GOOS,
 		"arch":           runtime.GOARCH,
+		"nex": map[string]bool{
+			"configured": nexEnabled,
+			"mounted":    c.Mounted("nex"),
+		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)

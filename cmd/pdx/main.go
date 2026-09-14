@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"syscall"
-	"time"
 
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
@@ -26,6 +25,7 @@ import (
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	"github.com/wake/purdex/internal/module/logs"
 	"github.com/wake/purdex/internal/module/monitor"
+	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/module/stream"
@@ -38,7 +38,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers, msg, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers, msg, nex, version\n")
 		os.Exit(1)
 	}
 
@@ -65,6 +65,8 @@ func main() {
 		runPeers(os.Args[2:])
 	case "msg":
 		runMsg(os.Args[2:])
+	case "nex":
+		runNexMain(os.Args[2:])
 	case "peer-proxy":
 		os.Exit(runPeerProxy())
 	case "version":
@@ -223,24 +225,17 @@ func runServe(args []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		<-sigCh
-		fmt.Println("\nshutting down...")
-		cancel() // stop status poller + modules
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		if err := c.StopModules(shutdownCtx); err != nil {
-			log.Printf("stop modules: %v", err)
-		}
-		srv.Shutdown(shutdownCtx)
-	}()
-
 	log.Printf("pdx daemon listening on %s", addr)
 	listener, err := listenWithReuseAddr(addr)
 	if err != nil {
 		log.Fatalf("bind %s: %v", addr, err)
 	}
-	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+	// 10. Serve until a signal or a Serve failure, then run the full
+	// shutdown sequence (cancel → StopModules → Shutdown/Close →
+	// CloseModules) and only return once it has finished, so the deferred
+	// store close and PID-lock release registered above run against closed
+	// modules.
+	if err := serveAndWait(srv, listener, sigCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit); err != nil {
 		log.Printf("server error: %v", err)
 	}
 }
@@ -271,6 +266,16 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(dispatch.New())
 	c.AddModule(monitor.New())
 	c.AddModule(codexbroker.New())
+
+	c.CfgMu.RLock()
+	nexEnabled := c.Cfg.Nex.Enabled
+	c.CfgMu.RUnlock()
+	if nexEnabled {
+		c.AddModule(nex.New())
+	} else {
+		log.Printf("nex: disabled")
+	}
+
 	return nil
 }
 

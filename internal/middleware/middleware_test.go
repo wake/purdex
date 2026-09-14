@@ -173,3 +173,29 @@ func TestCORSHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestCORSAllowsLastEventID(t *testing.T) {
+	h := middleware.CORS(ok)
+	req := httptest.NewRequest("OPTIONS", "/x", nil)
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Access-Control-Request-Headers", "last-event-id, authorization")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 204 {
+		t.Errorf("want 204 for OPTIONS, got %d", rec.Code)
+	}
+	allowHeaders := rec.Header().Get("Access-Control-Allow-Headers")
+	if !strings.Contains(allowHeaders, "Last-Event-ID") {
+		t.Errorf("want Last-Event-ID in Access-Control-Allow-Headers, got %s", allowHeaders)
+	}
+}
+
+func TestCORSPassesThroughGET(t *testing.T) {
+	h := middleware.CORS(ok)
+	req := httptest.NewRequest("GET", "/x", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Errorf("want 200 for GET to pass through, got %d", rec.Code)
+	}
+}

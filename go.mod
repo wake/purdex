@@ -1,6 +1,6 @@
 module github.com/wake/purdex
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -8,13 +8,13 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-shellwords v1.0.13
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
-	modernc.org/sqlite v1.46.2
+	lab.protype.tw/wake/nexen v0.0.0-20260914203205-1e5d09014b65
+	modernc.org/sqlite v1.54.0
 )
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	golang.org/x/tools v0.43.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -25,8 +25,8 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/sys v0.42.0
-	modernc.org/libc v1.70.0 // indirect
+	golang.org/x/sys v0.46.0
+	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )

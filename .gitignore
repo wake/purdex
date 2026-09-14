@@ -9,3 +9,5 @@ spa/dist/
 out/
 dist/
 .impeccable/
+go.work
+go.work.sum

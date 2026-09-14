@@ -200,6 +200,10 @@ func (c Config) Clone() Config {
 
 	out.Peers.Hosts = slices.Clone(c.Peers.Hosts)
 
+	out.Nex.RepoRoots = slices.Clone(c.Nex.RepoRoots)
+	out.Nex.ServiceRoots = slices.Clone(c.Nex.ServiceRoots)
+	out.Nex.PathPrepend = slices.Clone(c.Nex.PathPrepend)
+
 	return out
 }
 
@@ -220,6 +224,7 @@ type Config struct {
 	Dev          DevConfig      `toml:"dev"            json:"dev"`
 	Dispatch     DispatchConfig `toml:"dispatch"       json:"dispatch"`
 	Peers        PeersConfig    `toml:"peers"          json:"peers"`
+	Nex          NexConfig      `toml:"nex"            json:"nex"`
 }
 
 func defaults() Config {
@@ -243,6 +248,7 @@ func defaults() Config {
 			RefreshIntervalMS: 5000,
 			TopProcessLimit:   10,
 		},
+		Nex: DefaultNexConfig(),
 	}
 }
 
@@ -265,6 +271,18 @@ func Load(path string) (Config, error) {
 
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config: %w", err)
+	}
+
+	// A failed UserHomeDir (no HOME in the environment) is deliberately
+	// passed on as home == "": NexConfig.Validate then skips "~" entries
+	// for a disabled section and reports "HOME is not set" for an enabled
+	// one, so a host that never opted into nex still loads. The error is
+	// returned unwrapped — it already names the key ("nex.<key>: …") and
+	// callers add their own prefix (`config:` in main.go/daemon.go; the CLI
+	// subcommands print `pdx <cmd>: …`).
+	home, _ := os.UserHomeDir()
+	if err := cfg.Nex.Validate(home); err != nil {
+		return cfg, err
 	}
 
 	return cfg, nil

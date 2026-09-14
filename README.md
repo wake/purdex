@@ -32,6 +32,25 @@ pnpm electron:build   # 從 root；產出 dist/mac/ + dist/mac-arm64/
 
 環境與跨機開發流程見 [`CLAUDE.md`](./CLAUDE.md)。
 
+## 建置
+
+Daemon（Go）需要存取 private module `lab.protype.tw/wake/nexen`。建置前，
+這台機器需完成兩項**一次性**設定：
+
+```sh
+go env -w GOPRIVATE=lab.protype.tw
+git config --global url."ssh://git@lab.protype.tw:9079/".insteadOf "https://lab.protype.tw/"
+```
+
+`make build`（或單獨 `make check-goenv`）會先驗證這兩項，缺一就印出對應指令
+並以非零狀態結束，不會進入 `go build`。
+
+冷快取驗證（確認上述設定不依賴呼叫端的 shell 環境變數也能運作；spec §6 step 0）：
+
+```sh
+GOWORK=off GOMODCACHE=$(mktemp -d) go build ./cmd/pdx
+```
+
 ## 文件
 
 - [`PRODUCT.md`](./PRODUCT.md) — 產品定位
