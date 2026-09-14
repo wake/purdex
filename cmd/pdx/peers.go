@@ -533,7 +533,7 @@ func runPeersHostCmd(inv peersInvocation, stdout, stderr io.Writer) int {
 }
 
 func runPeersHostList(cfg config.Config, base string, stdout, stderr io.Writer) int {
-	result, err := doPeersRequest(http.MethodGet, base, nil, cfg.Token)
+	result, err := doPeersRequest(http.MethodGet, base, nil, cfg.Token, peersRequestTimeout)
 	if err != nil {
 		return reportPeersTransportErr(err, stderr)
 	}
@@ -559,7 +559,7 @@ func runPeersHostAdd(cfg config.Config, base string, inv peersInvocation, stdout
 		return 1
 	}
 
-	result, err := doPeersRequest(http.MethodPost, base, reqBody, cfg.Token)
+	result, err := doPeersRequest(http.MethodPost, base, reqBody, cfg.Token, peersRequestTimeout)
 	if err != nil {
 		return reportPeersTransportErr(err, stderr)
 	}
@@ -587,7 +587,7 @@ func runPeersHostSetToken(cfg config.Config, base string, inv peersInvocation, s
 		return 1
 	}
 
-	result, err := doPeersRequest(http.MethodPut, base+"/"+url.PathEscape(alias), reqBody, cfg.Token)
+	result, err := doPeersRequest(http.MethodPut, base+"/"+url.PathEscape(alias), reqBody, cfg.Token, peersRequestTimeout)
 	if err != nil {
 		return reportPeersTransportErr(err, stderr)
 	}
@@ -608,7 +608,7 @@ func runPeersHostSetToken(cfg config.Config, base string, inv peersInvocation, s
 func runPeersHostRemove(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
 	alias := inv.positionals[0]
 
-	result, err := doPeersRequest(http.MethodDelete, base+"/"+url.PathEscape(alias), nil, cfg.Token)
+	result, err := doPeersRequest(http.MethodDelete, base+"/"+url.PathEscape(alias), nil, cfg.Token, peersRequestTimeout)
 	if err != nil {
 		return reportPeersTransportErr(err, stderr)
 	}
@@ -656,13 +656,21 @@ type peersHTTPResult struct {
 	body   []byte
 }
 
-// doPeersRequest issues one hosts-route HTTP request (method/url/payload,
-// payload nil for a bodyless request) with the admin bearer token, and
-// reads the response body bounded by status class: maxPeersOKBodyBytes for
-// a 2xx, maxPeersErrorBodyBytes otherwise (mirroring runPeersQueryCmd's
-// bounded reads for GET /api/peers) — a body exceeding its bound yields
-// errPeersResponseTooLarge rather than being read in full.
-func doPeersRequest(method, url string, payload []byte, token string) (peersHTTPResult, error) {
+// peersRequestTimeout is doPeersRequest's client timeout for every
+// hosts-route call and for `pdx msg log`/`pdx msg deliver` (cmd/pdx/msg.go)
+// — a single local round trip to this daemon. `pdx msg send` uses its own,
+// longer msgSendTimeout instead, since the daemon's handler makes its own
+// outbound call to a peer host before answering.
+const peersRequestTimeout = 10 * time.Second
+
+// doPeersRequest issues one HTTP request (method/url/payload, payload nil
+// for a bodyless request) with the admin bearer token and the given
+// client timeout, and reads the response body bounded by status class:
+// maxPeersOKBodyBytes for a 2xx, maxPeersErrorBodyBytes otherwise
+// (mirroring runPeersQueryCmd's bounded reads for GET /api/peers) — a body
+// exceeding its bound yields errPeersResponseTooLarge rather than being
+// read in full.
+func doPeersRequest(method, url string, payload []byte, token string, timeout time.Duration) (peersHTTPResult, error) {
 	var bodyReader io.Reader
 	if payload != nil {
 		bodyReader = bytes.NewReader(payload)
@@ -676,7 +684,7 @@ func doPeersRequest(method, url string, payload []byte, token string) (peersHTTP
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return peersHTTPResult{}, err
