@@ -129,8 +129,11 @@ func findOrigin(records []ipeers.PeerRecord, inbox string) (rec ipeers.PeerRecor
 }
 
 // wireFromRecord builds the sender's wire identity from its origin row:
-// the tmux session name when the session is inside tmux, "cc:<peer_name>"
-// otherwise (spec §4.4 from-name).
+// the v1 fields (the tmux session name when the session is inside tmux,
+// "cc:<peer_name>" otherwise — spec §4.4 from-name, still sent for a v1
+// receiver) plus the Peer Address v2 address, "<label>:<suffix>" of the
+// row at the label row's revision (spec §3.5), which a v2 receiver names
+// the sender's helper after.
 func wireFromRecord(hostID string, rec ipeers.PeerRecord, declaredMode string) ipeers.WireFrom {
 	sessionName := rec.SessionName
 	if sessionName == "" {
@@ -144,6 +147,8 @@ func wireFromRecord(hostID string, rec ipeers.PeerRecord, declaredMode string) i
 		PeerName:       rec.Agent.PeerName,
 		SessionName:    sessionName,
 		DeclaredMode:   declaredMode,
+		Address:        rec.WireAddress(),
+		AddressRev:     rec.LabelRev,
 	}
 }
 

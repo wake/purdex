@@ -162,6 +162,77 @@ func marshalCompact(v any) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
+// RewriteRegistryName updates only the "name" and "nameSince" fields of
+// <dir>/<pid>.json in place. Every other field's bytes pass through
+// byte-identical (decoded as json.RawMessage, not map[string]any, so a
+// large integer is never round-tripped through float64). The new content
+// is written to <dir>/.<pid>.json.tmp (0644, O_EXCL — the leading dot
+// keeps it out of ReadRegistryDiag's "^([0-9]+)\.json$" candidate
+// pattern), fsynced, then renamed over <pid>.json. Any failure — an
+// unreadable or unparsable file, or one whose top-level value is not a
+// JSON object ("null" included) — removes the temp file and returns the
+// error; the original file is left untouched.
+func RewriteRegistryName(dir string, pid int, name string, nameSince int64) error {
+	jsonPath := filepath.Join(dir, strconv.Itoa(pid)+".json")
+	data, ok := peers.ReadRegistryCandidate(jsonPath)
+	if !ok {
+		return fmt.Errorf("ccuds: cannot read registry file %s", jsonPath)
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("ccuds: parse %s: %w", jsonPath, err)
+	}
+	if fields == nil {
+		// A top-level JSON "null" decodes without error into a nil map;
+		// assigning into it would panic.
+		return fmt.Errorf("ccuds: %s is not a JSON object", jsonPath)
+	}
+
+	nameJSON, err := marshalCompact(name)
+	if err != nil {
+		return err
+	}
+	fields["name"] = nameJSON
+	fields["nameSince"] = json.RawMessage(strconv.FormatInt(nameSince, 10))
+
+	out, err := marshalCompact(fields)
+	if err != nil {
+		return err
+	}
+
+	tmpPath := filepath.Join(dir, "."+strconv.Itoa(pid)+".json.tmp")
+	// A leftover temp file from a crash between create and rename would
+	// otherwise make every future rewrite for this pid fail with EEXIST
+	// forever; clear it first (ignoring "already gone").
+	if err := os.Remove(tmpPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(out); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, jsonPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 // RemoveRegistry unlinks every path. A path that is already gone is not
 // an error; the first other error is returned after every path has been
 // attempted.

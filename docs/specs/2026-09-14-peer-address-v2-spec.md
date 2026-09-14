@@ -1,6 +1,6 @@
 # Spec — Peer address v2: session labels ("Peer Address v2")
 
-Status: draft v3.2 (PR #1026 codex R2 fix wave: §3.2 tier 1 over live-entry rows only + single-hit-under-incomplete-registry ⇒ `not_ready`, §3.4 `labels_unavailable`, §3.6 three partial-cause lines; §10 holds the disposition. v3.1: plan review `task-mu1dulow-tnozhu` amendments: §3.1 suffix source, §3.3 alive-unknowns only, §3.4 label_rev, §3.5 unapplied revision, §3.6 version trailer; R1 `task-mu1ags4q-o5eeev`: 2 Blockers, 12 Majors, 3 Minors,
+Status: draft v3.3 (PR #1028 codex R2 fix wave: §3.5 helper renames run off the global helper-manager lock under a per-instance rename lock, `Release` waits for one in flight; §3.5 Freshness states the two accepted limits (suffix-only changes do not advance `rev`; a reset label store restarts `rev`); §3.3 `rev` guarantee scoped to one label store; §3.9 store reset is fleet-visible; §11 holds the disposition. v3.2: PR #1026 codex R2 fix wave: §3.2 tier 1 over live-entry rows only + single-hit-under-incomplete-registry ⇒ `not_ready`, §3.4 `labels_unavailable`, §3.6 three partial-cause lines; §10 holds the disposition. v3.1: plan review `task-mu1dulow-tnozhu` amendments: §3.1 suffix source, §3.3 alive-unknowns only, §3.4 label_rev, §3.5 unapplied revision, §3.6 version trailer; R1 `task-mu1ags4q-o5eeev`: 2 Blockers, 12 Majors, 3 Minors,
 5 omissions; R2 `task-mu1ayutr-i477ud`: 1 Blocker, 8 Majors, 3 Minors — all
 accepted; §8/§9 hold both disposition tables)
 Date: 2026-09-14
@@ -270,7 +270,11 @@ CREATE TABLE IF NOT EXISTS peer_label_seq (
 `rev` is drawn from `peer_label_seq` inside the same transaction as the
 row change (`UPDATE … SET rev = rev + 1 RETURNING rev`), so it is strictly
 increasing across claims and releases on this host, survives daemon
-restarts, and never involves a clock. One user label per conversation, one
+restarts, and never involves a clock. That guarantee holds **for the
+lifetime of one label store**: a `meta.db` that is deleted or replaced
+starts `peer_label_seq` over, and remote helpers that applied a higher
+`rev` from the old store ignore the new store's addresses until it
+overtakes them (§3.5 Freshness, §3.9). One user label per conversation, one
 conversation per user label, by `UNIQUE(label)` (NULLs do not collide).
 Default labels are never stored.
 
@@ -397,7 +401,8 @@ them may be set on one envelope.
 
 The receiver validates `address` syntactically only — `head` matches the
 user-label rule or the default-label form, `rest` matches the suffix wire
-grammar (§3.1) or is empty — refusing with `400 bad_address` otherwise,
+grammar (§3.1) or is absent (a trailing `:` with an empty suffix is
+invalid) — refusing with `400 bad_address` otherwise,
 and treats it as display data attributed to an authenticated host.
 `address_rev` is compared only among requests for the **same origin
 key**, so it is never compared across hosts or clocks. The wrapper's
@@ -408,30 +413,54 @@ keyed by the origin tuple; its registry `name` is `"<alias>/<address>"` at
 spawn, and the helper record remembers `applied_rev` (the `address_rev` of
 the request that spawned or last renamed it). A rename is an operation on
 one helper **instance** (the record `Acquire` returned, identified by pid
-and start time), executed under the helper manager's lock for that
-record:
+and start time). It runs in two phases under a **per-instance rename
+lock** (`renameMu`) that serialises the renames of that one instance;
+the helper manager's global lock is taken only briefly inside each
+phase and **never** across the file I/O, so a slow disk stalls this
+origin's renames and nothing else (lock order: rename lock → manager
+lock, never the reverse):
 
-1. If the record is not `ready` (starting, stopping, released), skip —
+1. *Phase 1 (manager lock)*: if the record is not the current instance
+   for its key, or is not `ready` (starting, stopping, released), skip —
    the frame is still delivered.
-2. If `req.address_rev <= applied_rev`, skip. Otherwise set
-   `applied_rev = req.address_rev` **even when the name is unchanged**
-   (this is what defeats the A→B→A ordering hole, R2-5).
-3. If the name differs: write `<dir>/.<pid>.json.tmp` (a name
-   `ReadRegistry` classifies as *not a candidate*), containing the
-   existing file with only `name` and `nameSince` (receiver's wall clock,
-   ms) replaced; `rename(2)` it over `<pid>.json`. On any failure: unlink
-   the temp file, log, roll `applied_rev` back to its previous value, and
-   still deliver the frame — naming is display.
-4. Update the record's `name`.
+2. *Phase 1 (manager lock)*: if `req.address_rev <= applied_rev`, skip.
+   Otherwise set `applied_rev = req.address_rev` **even when the name is
+   unchanged** (this is what defeats the A→B→A ordering hole, R2-5) and
+   snapshot the pid and the current name; drop the manager lock.
+3. *No manager lock*: if the name differs, write `<dir>/.<pid>.json.tmp`
+   (a name `ReadRegistry` classifies as *not a candidate*), containing
+   the existing file with only `name` and `nameSince` (receiver's wall
+   clock, ms) replaced, fsync, `rename(2)` it over `<pid>.json`. A file
+   that cannot be read, parsed, or whose top-level value is not a JSON
+   object is a failure.
+4. *Phase 2 (manager lock)*: on any failure: unlink the temp file, log,
+   roll `applied_rev` back to its previous value (only if no later
+   request advanced it meanwhile), and still deliver the frame — naming
+   is display. On success, re-verify the record is still the current,
+   ready instance and only then update its `name`; a record that was
+   released during step 3 keeps its last name (its rewritten file is
+   handled by `Release`, next paragraph).
 
-The wrapper written for that request uses the name snapshot taken under
-the same lock; nothing reads `h.name` unlocked (R2-6). The socket, pid,
-key, `files` list and `proxies.json` are untouched: nothing in flight is
-lost, `Release`/cleanup still unlink by path, and the startup sweep still
-judges ownership by `procStart`. A request whose rename lost the race to
-`Release` (state `stopping`) simply skips at step 1. Claude Code's
-`ListAgents` reads the registry directory on each call, so the new name is
-visible on the next listing (verified in §5 P4b step 4).
+**`Release` waits for a rename in flight.** After the helper process is
+stopped and **before** the leftover files are unlinked, `Release` takes
+and drops the instance's rename lock (holding no manager lock). A
+rename whose `rename(2)` lands after the helper's own cleanup recreates
+`<pid>.json`; because `Release` waits for it, the recreated file is
+unlinked by the same ownership rule as any other leftover (`procStart`
+matches ⇒ ours) instead of surviving as an orphan. A rename that starts
+after that point finds the record `stopping` and skips at step 1.
+
+The wrapper written for that request uses the name `ApplyAddress`
+returned, taken under the manager lock; nothing reads `h.name` unlocked
+(R2-6). The socket, pid, key, `files` list and `proxies.json` are
+untouched: nothing in flight is lost, `Release`/cleanup still unlink by
+path, and the startup sweep still judges ownership by `procStart`. Two
+requests for one origin racing through a rename end with the higher
+revision's name on the record and on disk whichever enters first, and a
+request that lost the race to `Release` (state `stopping`) simply skips
+at step 1. Claude Code's `ListAgents` reads the registry directory on
+each call, so the new name is visible on the next listing (verified in
+§5 P4b step 4).
 
 The helper process is not told. P3 D8 stands: the daemon→helper channel is
 still the first-line config only.
@@ -456,6 +485,26 @@ remote hosts. After a release the origin's address is its default label
 with the row's new `rev`, so the next `/deliver` does rename the helper
 to the `_…` form. `pdx peers --all` is always current because it reads the
 owning host's inventory; helper names are a convenience for `ListAgents`.
+
+Two further limits are accepted, both consequences of `rev` being a
+label-store sequence and not a hash of the address:
+
+1. **A suffix-only change does not advance `rev`.** The suffix (§3.1) comes
+   from tmux or the registry, not from the label store, so renaming a tmux
+   session or a registry entry without a claim or release leaves the
+   origin's `rev` where it was. A remote helper that already applied that
+   `rev` keeps the old suffix in its name until the origin's next claim or
+   release (which does advance `rev`) or until the helper is reaped and
+   respawned by a later request (a fresh instance takes the name of the
+   request that spawns it). The address on the wire and in `pdx peers
+   --all` is current throughout; only the `ListAgents` display lags.
+2. **A reset label store restarts `rev`.** If a sender's `meta.db` is
+   deleted or replaced, its `peer_label_seq` starts over and its addresses
+   arrive with revisions the remote helpers have already passed; those
+   helpers ignore them (monotonic rule) until the new sequence exceeds the
+   applied value, or until the helper is reaped or respawned. Delivery is
+   unaffected — naming is display — and the operator's remedy on the
+   remote host is to let the helper idle out or restart the daemon (§3.9).
 
 ### 3.6 CLI and API
 
@@ -578,6 +627,17 @@ state.
 Skew is visible in `pdx peers --all`'s host header (`daemon_version`,
 §3.4). PB §4.8's version warning is about the Claude Code version and does
 not detect daemon skew.
+
+**Operational note — resetting a label store is a fleet-visible event.**
+`rev` (§3.3) is host-local but is consumed by every peer host's helper
+manager (§3.5). Deleting or replacing a host's `meta.db` restarts its
+sequence: the host's own labels are gone (every conversation is back to
+its default label) **and** every remote helper representing one of its
+conversations ignores the host's addresses until the new sequence
+overtakes the applied revision or the helper is reaped/respawned (§3.5
+Freshness, limit 2). Treat a store reset like a daemon downgrade: do it
+deliberately, and expect stale `ListAgents` names on the other hosts for
+up to `HelperIdleReap` (30 min) unless their daemons are restarted.
 
 ## 4. Phases
 
@@ -819,3 +879,15 @@ landed on the PR branch, one commit each.
 | X2 | Medium | a dead conversation's label still resolved: an `inbox_dead` owner-fallback session row carried the persisted user label, won tier 1 and refused `not_deliverable` instead of falling to the same-named tmux session — contradicting §3.3 "inert" | tier 1 considers only rows carrying a live entry (`agent.type == cc && pid != 0`; owner-fallback rows have `pid: 0`) — §3.2 table + consequence paragraph. Two-process `ambiguous` now lists exactly the two entry rows. Tests: `address_test.go`, `record_test.go`, `send_test.go` (`TestSend_DeadHolderLabelFallsToTmuxSession`, rows from the real `Build`) |
 | X3 | Medium | `pdx peers --all` printed nothing for an owner-only partial (`hadUnresolved=true` fed into a renderer that then printed nothing; the count line was never printed in `--all`) | one shared per-host renderer (`writeHostDiagnostics`) for both tables: count / unknown files / label store, each on its own line whenever its signal is set (§3.6). Tests: `cmd/pdx/peers_test.go` owner-only `--all`, all-three-lines in both tables |
 | X4 | Medium | the label-store failure had no signal of its own; the CLI inferred it from the absence of the other two causes, which breaks as soon as two causes coincide | `labels_unavailable` on `Envelope` and `HostResult` (§3.3 "Inventory read of labels", §3.4); set by `localEnvelope`, copied by the `--all` local row and `fetchHostResult`; the CLI renders the line from the flag only. Tests: `envelope_test.go`, `module_test.go` (local, combined with an unknown file, `--all` local + remote row) |
+
+## 11. Review disposition (PR #1028 codex R2)
+
+Post-PR code review of the P4b implementation (helper name follows the
+address); every finding accepted and landed on the PR branch, one commit
+each.
+
+| # | Sev | Finding | Disposition (v3.3) |
+|---|---|---|---|
+| Y1 | High | `ApplyAddress` ran the registry rewrite (read, temp, fsync, `rename(2)`) under the helper manager's global lock. A verified peer alternating two valid addresses with increasing `address_rev` and fresh `msg_id`s makes every delivery rewrite, so a slow or stuck disk on the receiver stalled every origin's `Acquire`/`Release`/`Name`/`ProxyPIDs`/`ReapIdle` and daemon `Stop` behind one origin's fsync | §3.5 rewritten: two phases under a per-instance rename lock (`helper.renameMu`, lock order rename lock → manager lock, never the reverse); the manager lock is held only for the state/revision check and for the post-write re-verification, never across I/O. `Release` takes and drops the rename lock after the process is stopped and before `unlinkOwned`, so a rewrite whose rename lands after the helper's own cleanup is unlinked as ours rather than orphaned; a rewrite starting later sees `stopping` and skips. The rewrite is a seam (`helperManagerConfig.RewriteName`). Tests (`helpers_test.go`): `TestApplyAddress_RewriteDoesNotBlockOtherOrigins` (parked rewrite; another origin's `Acquire`, `ProxyPIDs`, `Name`, `Touch`/`ReapIdle` all return within the bound), `TestApplyAddress_ReleaseWaitsForInFlightRewrite` (Release parks on the rename lock with the instance still `stopping`/in the map; the recreated file is gone afterwards; a later rename touches nothing), `TestApplyAddress_ConcurrentRevsConverge` (revs 20/30 in either order ⇒ name(30), `applied_rev` 30, one rewrite when 30 enters first). Both mutants — barrier removed, rewrite under the manager lock — fail those tests; rules 1–5 tests unchanged and green |
+| Y2 | Medium | `RewriteRegistryName` panicked on a registry file whose top-level value is JSON `null`: `json.Unmarshal` into `map[string]json.RawMessage` returns no error and leaves the map nil, and the following assignment panicked the daemon (a same-UID process can write such a file) | after decoding, a nil map ⇒ `ccuds: <path> is not a JSON object`; the original file is untouched and no temp file is created (§3.5 step 3). At the manager level the error takes the existing rollback path and the frame is still delivered. Test: `TestRewriteRegistryName_NotAnObject` (`null`, `[1]`, `"str"`) |
+| Y3 | Low | the spec did not state two consequences of `rev` being a label-store sequence: a suffix-only change (tmux/registry rename without a claim or release) does not advance `rev`, so remote helpers keep the old suffix; and a reset label store restarts `rev`, so remote helpers ignore the host's addresses until the sequence overtakes their applied value | §3.5 Freshness lists both as accepted limits with the recovery path (next claim/release, or helper reap/respawn); §3.3 scopes the `rev` guarantee to "the lifetime of one label store"; §3.9 adds the operational note that a store reset is a fleet-visible event (treat like a daemon downgrade; stale `ListAgents` names on other hosts for up to `HelperIdleReap` unless restarted). No code change |

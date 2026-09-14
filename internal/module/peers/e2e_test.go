@@ -611,6 +611,11 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	// v2: the resolved row's address is now "<alias>/<label>:<suffix>"
 	// (spec §3.4), not the retired "<alias>/<tmux name>" form.
 	targetAddr := "b/" + ipeers.DefaultLabel(e2eTargetSID) + ":foo-" + e2eTargetName
+	// v2 from-name (spec §3.5): each side names the other's helper after
+	// the sender's "<alias>/<label>:<suffix>" address; neither session has
+	// claimed a label, so both carry their default label.
+	originName := "a/" + ipeers.DefaultLabel(e2eOriginSID) + ":mt1-" + e2eOriginName
+	targetName := targetAddr
 
 	// The baseline for step 9 includes every long-lived goroutine of the
 	// environment (servers, listeners, database/sql's opener); anything
@@ -645,10 +650,10 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if !ok {
 		t.Fatalf("step 1: reply address %q is not one of B's helpers", bHelperSock)
 	}
-	if bHelper.name != "a/mt1" {
-		t.Errorf("step 1: B's helper name = %q, want a/mt1", bHelper.name)
+	if got := b.m.helpers.Name(bHelper); got != originName {
+		t.Errorf("step 1: B's helper name = %q, want %s", got, originName)
 	}
-	assertWrapper(t, "step 1", w, bHelperSock, "a/mt1", ipeers.ModePrompting, "", "ping")
+	assertWrapper(t, "step 1", w, bHelperSock, originName, ipeers.ModePrompting, "", "ping")
 
 	// nativeReply is what the target Claude writes into B's helper socket:
 	// a native reply wrapped by its own harness (D3), naming target.sock.
@@ -678,11 +683,11 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if !ok {
 		t.Fatalf("step 3: reply address %q is not one of A's helpers", aHelperSock)
 	}
-	if aHelper.name != "b/foo" {
-		t.Errorf("step 3: A's helper name = %q, want b/foo", aHelper.name)
+	if got := a.m.helpers.Name(aHelper); got != targetName {
+		t.Errorf("step 3: A's helper name = %q, want %s", got, targetName)
 	}
 	// A's entry for B has AllowBypass false: the declared bypass is clamped.
-	assertWrapper(t, "step 3", w, aHelperSock, "b/foo", ipeers.ModePrompting, "abc", "pong")
+	assertWrapper(t, "step 3", w, aHelperSock, targetName, ipeers.ModePrompting, "abc", "pong")
 
 	// ---- 4. Audit on both sides. ----
 	aRows := a.awaitLog("out delivered + in delivered", func(rows []ipeers.LogEntry) bool {
@@ -736,7 +741,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if sock != aHelperSock {
 		t.Errorf("step 5: reply address = %q, want the same A helper %q", sock, aHelperSock)
 	}
-	assertWrapper(t, "step 5", w, aHelperSock, "b/foo", ipeers.ModeBypass, "abc", "pong2")
+	assertWrapper(t, "step 5", w, aHelperSock, targetName, ipeers.ModeBypass, "abc", "pong2")
 	reply2ID := fr.MsgID
 	b.awaitLog("reply 2 delivered as bypass", func(rows []ipeers.LogEntry) bool {
 		r, ok := findLogRow(rows, store.DirReply, ipeers.ResultDelivered, native2)
@@ -929,9 +934,8 @@ func TestE2E_Labels(t *testing.T) {
 	a.assertAPIError(st, raw, http.StatusNotFound, ipeers.ErrPeerNotFound, "cc: form")
 
 	// ---- 4. Native reply from the target through B's helper reaching the
-	// origin is the unchanged v1 reply path (from-name is still v1 in
-	// P4a), already driven end to end by TestE2E_TwoDaemons; not repeated
-	// here. ----
+	// origin is the same reply path TestE2E_TwoDaemons drives end to end
+	// (v2 from-name included, spec §3.5); not repeated here. ----
 
 	// ---- 5. R2-1 (spec §3.3): a Desktop session on B holds the LABEL
 	// "foo" while B also has a tmux session named foo. While everything is
@@ -1071,6 +1075,232 @@ func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 	target.close()
 	twin1.close()
 	twin2.close()
+	a.stop()
+	b.stop()
+}
+
+// helperRegistryName reads the "name" field of a helper's own registry
+// entry — the ground truth ApplyAddress/RewriteRegistryName write to,
+// independent of the in-memory helperManager state Name() reports.
+func helperRegistryName(t *testing.T, regDir string, pid int) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(regDir, strconv.Itoa(pid)+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	return wire.Name
+}
+
+// TestE2E_HelperRename drives Task 14's five checks across the same
+// two-daemon bridge as TestE2E_Labels: the v2 from-name a fresh helper is
+// spawned with, the in-place rename a native reply drives when the target
+// claims a NEW label (same socket, same pid — Task 13's ApplyAddress), the
+// stale-revision guard (spec §3.5 Freshness) proven with a fresh msg_id so
+// dedup cannot be the reason an old address is refused, and the mirrored
+// reverse-direction limit: B's helper for A only renames when A itself
+// sends with the new address, never merely because A claimed a label or
+// because a reply happened to pass through.
+func TestE2E_HelperRename(t *testing.T) {
+	sockDir, regDir := proxyhelpertest.TempDirs(t)
+	root := filepath.Dir(regDir)
+	originSock := filepath.Join(root, "origin.sock")
+	targetSock := filepath.Join(root, "target.sock")
+	origin := startFakeInbox(t, originSock)
+	target := startFakeInbox(t, targetSock)
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", e2eRegistryJSON(e2eOriginPID, e2eOriginSID, e2eOriginName, "mt1:@1.%1", originSock))
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eTargetPID)+".json", e2eRegistryJSON(e2eTargetPID, e2eTargetSID, e2eTargetName, "foo:@2.%2", targetSock))
+	live := &e2eLiveness{}
+
+	a := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostA, alias: "a", admin: e2eAdminA,
+		peer:     config.PeerHost{Alias: "b", HostID: e2eHostB, Token: e2eTokenAtoB, InboundToken: e2eTokenBtoA},
+		sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"mt1code": {AgentType: "cc", SessionID: e2eOriginSID, TmuxPaneID: "%1"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	b := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostB, alias: "b", admin: e2eAdminB,
+		peer:     config.PeerHost{Alias: "a", HostID: e2eHostA, Token: e2eTokenBtoA, InboundToken: e2eTokenAtoB},
+		sessions: []session.SessionInfo{{Code: "foocode", Name: "foo", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"foocode": {AgentType: "cc", SessionID: e2eTargetSID, TmuxPaneID: "%2"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	a.setPeer(func(h *config.PeerHost) { h.URL = b.srv.URL })
+	b.setPeer(func(h *config.PeerHost) { h.URL = a.srv.URL })
+
+	// A's origin never claims a label until step 5: its wire address is
+	// the default-label form the whole time (spec §3.5).
+	originAddr := "a/" + ipeers.DefaultLabel(e2eOriginSID) + ":mt1-" + e2eOriginName
+
+	// ---- 1. B's target claims "purdex-tester"; A sends by label; the
+	// frame the target receives names A's helper after A's own address. ----
+	claimStatus, claimBody := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester"})
+	if claimStatus != http.StatusOK {
+		t.Fatalf("step 1: claim purdex-tester = %d %s", claimStatus, claimBody)
+	}
+	var claimRec ipeers.PeerRecord
+	if err := json.Unmarshal(claimBody, &claimRec); err != nil {
+		t.Fatalf("step 1: decode claim response: %v; body=%s", err, claimBody)
+	}
+	oldRev := claimRec.LabelRev // the "purdex-tester" claim's revision — the stale one step 4 replays
+
+	sent := a.sendOK(ipeers.SendRequest{To: "b/purdex-tester", Text: "ping", OriginInbox: originSock})
+	wantAddr1 := "b/purdex-tester:foo-" + e2eTargetName
+	if sent.ToAddress != wantAddr1 {
+		t.Errorf("step 1: to_address = %q, want %q", sent.ToAddress, wantAddr1)
+	}
+	line := target.recv("step 1")
+	_, w, bHelperSock := deliveredFrame(t, line)
+	target.none("step 1")
+	if w.FromName != originAddr {
+		t.Errorf("step 1: frame from-name = %q, want %q", w.FromName, originAddr)
+	}
+	bHelper, ok := b.m.helpers.FindBySock(bHelperSock)
+	if !ok {
+		t.Fatalf("step 1: reply address %q is not one of B's helpers", bHelperSock)
+	}
+	if got := b.m.helpers.Name(bHelper); got != originAddr {
+		t.Errorf("step 1: B's helper name = %q, want %q", got, originAddr)
+	}
+
+	// nativeReply is what the target writes into bHelperSock: a native
+	// reply naming target.sock, the way TestE2E_TwoDaemons drives it.
+	nativeReply := func(msgID, text string) string {
+		from := "uds:" + targetSock
+		return frameLine(t, msgID, "user", from, ccuds.Wrapper{
+			From: from, FromName: "foo", FromMode: ipeers.ModePrompting, Text: text,
+		}.Format())
+	}
+
+	// ---- 2. The target replies natively; the reply reaches A's origin
+	// inbox, and A's helper for the replier is named after the target's
+	// CURRENT address ("purdex-tester"). ----
+	native1 := uuid.NewString()
+	proxyhelpertest.WriteToSock(t, bHelperSock, nativeReply(native1, "pong"))
+	line = origin.recv("step 2")
+	_, _, aHelperSock := deliveredFrame(t, line)
+	origin.none("step 2")
+	aHelper, ok := a.m.helpers.FindBySock(aHelperSock)
+	if !ok {
+		t.Fatalf("step 2: reply address %q is not one of A's helpers", aHelperSock)
+	}
+	aHelperPID := aHelper.pid
+	if got := a.m.helpers.Name(aHelper); got != wantAddr1 {
+		t.Errorf("step 2: A's helper name = %q, want %q", got, wantAddr1)
+	}
+	if got := helperRegistryName(t, regDir, aHelperPID); got != wantAddr1 {
+		t.Errorf("step 2: A's helper registry file name = %q, want %q", got, wantAddr1)
+	}
+
+	// ---- 3. The target re-claims "purdex-tester-2" and replies again:
+	// the SAME helper instance on A (same socket, same pid) is renamed. ----
+	st, body := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester-2"})
+	if st != http.StatusOK {
+		t.Fatalf("step 3: claim purdex-tester-2 = %d %s", st, body)
+	}
+	native2 := uuid.NewString()
+	proxyhelpertest.WriteToSock(t, bHelperSock, nativeReply(native2, "pong2"))
+	line = origin.recv("step 3")
+	_, _, sock3 := deliveredFrame(t, line)
+	origin.none("step 3")
+	if sock3 != aHelperSock {
+		t.Errorf("step 3: reply address = %q, want the SAME A helper %q", sock3, aHelperSock)
+	}
+	aHelper2, ok := a.m.helpers.FindBySock(aHelperSock)
+	if !ok {
+		t.Fatalf("step 3: reply address %q is no longer one of A's helpers", aHelperSock)
+	}
+	if aHelper2.pid != aHelperPID {
+		t.Errorf("step 3: A's helper pid = %d, want the SAME pid %d (in-place rename, not a respawn)", aHelper2.pid, aHelperPID)
+	}
+	wantAddr2 := "b/purdex-tester-2:foo-" + e2eTargetName
+	if got := a.m.helpers.Name(aHelper2); got != wantAddr2 {
+		t.Errorf("step 3: A's helper name = %q, want %q", got, wantAddr2)
+	}
+	if got := helperRegistryName(t, regDir, aHelperPID); got != wantAddr2 {
+		t.Errorf("step 3: A's helper registry file name = %q, want %q", got, wantAddr2)
+	}
+
+	// ---- 4. Stale-revision guard (spec §3.5 Freshness), dedup ruled out:
+	// POST straight to A's /deliver as B, naming the OLD address
+	// ("purdex-tester") at the OLD revision but a FRESH msg_id ⇒ 200
+	// delivered (the message itself is unaffected), yet the helper's name
+	// and registry file still say "purdex-tester-2" — a stale rename never
+	// applies even though nothing here is a duplicate. ----
+	stale := ipeers.DeliverRequest{
+		MsgID: uuid.NewString(),
+		From: ipeers.WireFrom{
+			HostID: e2eHostB, AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart,
+			PeerName: e2eTargetName, SessionName: "foo", DeclaredMode: ipeers.ModePrompting,
+			Address: "purdex-tester:foo-" + e2eTargetName, AddressRev: oldRev,
+		},
+		To:   ipeers.WireTo{AgentSessionID: e2eOriginSID, PID: e2eOriginPID, ProcStart: e2eCCProcStart},
+		Text: "stale replay",
+	}
+	if err := stale.Validate(); err != nil {
+		t.Fatalf("step 4: stale request does not validate: %v", err)
+	}
+	status, raw := a.do(http.MethodPost, "/api/peers/deliver", e2eTokenBtoA, stale)
+	if status != http.StatusOK {
+		t.Fatalf("step 4: A /deliver = %d; body=%s", status, raw)
+	}
+	var delResp ipeers.DeliverResponse
+	if err := json.Unmarshal(raw, &delResp); err != nil {
+		t.Fatalf("step 4: decode /deliver response: %v; body=%s", err, raw)
+	}
+	if delResp.Result != ipeers.ResultDelivered {
+		t.Errorf("step 4: result = %q, want %q", delResp.Result, ipeers.ResultDelivered)
+	}
+	origin.recv("step 4")
+	origin.none("step 4")
+	aHelper3, ok := a.m.helpers.FindBySock(aHelperSock)
+	if !ok || aHelper3.pid != aHelperPID {
+		t.Fatalf("step 4: A's helper for the replier changed instance: %+v ok=%v, want pid %d", aHelper3, ok, aHelperPID)
+	}
+	if got := a.m.helpers.Name(aHelper3); got != wantAddr2 {
+		t.Errorf("step 4: A's helper name = %q after the stale replay, want unchanged %q", got, wantAddr2)
+	}
+	if got := helperRegistryName(t, regDir, aHelperPID); got != wantAddr2 {
+		t.Errorf("step 4: A's helper registry file name = %q after the stale replay, want unchanged %q", got, wantAddr2)
+	}
+
+	// ---- 5. Reverse-direction limit (spec §3.5 Freshness): A's origin
+	// claims a new label; B's helper for A keeps ITS old name — unchanged
+	// even after another reply passes through it — until A itself sends
+	// again with the new address. ----
+	st, body = a.do(http.MethodPut, "/api/peers/self/label", a.admin, ipeers.ClaimLabelRequest{OriginInbox: originSock, Label: "purdex-dev"})
+	if st != http.StatusOK {
+		t.Fatalf("step 5: claim purdex-dev = %d %s", st, body)
+	}
+	native3 := uuid.NewString()
+	proxyhelpertest.WriteToSock(t, bHelperSock, nativeReply(native3, "pong3"))
+	origin.recv("step 5a")
+	origin.none("step 5a")
+	if got := b.m.helpers.Name(bHelper); got != originAddr {
+		t.Errorf("step 5a: B's helper name = %q after a mere reply, want unchanged %q", got, originAddr)
+	}
+	if got := helperRegistryName(t, regDir, bHelper.pid); got != originAddr {
+		t.Errorf("step 5a: B's helper registry file name = %q after a mere reply, want unchanged %q", got, originAddr)
+	}
+
+	newOriginAddr := "a/purdex-dev:mt1-" + e2eOriginName
+	a.sendOK(ipeers.SendRequest{To: "b/purdex-tester-2", Text: "again", OriginInbox: originSock})
+	target.recv("step 5b")
+	if got := b.m.helpers.Name(bHelper); got != newOriginAddr {
+		t.Errorf("step 5b: B's helper name = %q after A's next send, want %q", got, newOriginAddr)
+	}
+	if got := helperRegistryName(t, regDir, bHelper.pid); got != newOriginAddr {
+		t.Errorf("step 5b: B's helper registry file name = %q after A's next send, want %q", got, newOriginAddr)
+	}
+
+	origin.close()
+	target.close()
 	a.stop()
 	b.stop()
 }

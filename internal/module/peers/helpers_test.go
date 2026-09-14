@@ -280,7 +280,7 @@ func acquireOK(t *testing.T, tm *testManager, key ipeers.OriginKey) *helper {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	h, err := tm.m.Acquire(ctx, key, "air/"+key.AgentSessionID[len(key.AgentSessionID)-4:])
+	h, err := tm.m.Acquire(ctx, key, "air/"+key.AgentSessionID[len(key.AgentSessionID)-4:], revUnapplied)
 	if err != nil {
 		t.Fatalf("Acquire(%v): %v", key, err)
 	}
@@ -456,7 +456,7 @@ func TestHelperManager_AcquireConcurrentSameKeySpawnsOnce(t *testing.T) {
 	var firstOnce sync.Once
 	for i := 0; i < 2; i++ {
 		go func() {
-			h, err := tm.m.Acquire(context.Background(), originA, "air/a")
+			h, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 			firstOnce.Do(func() { close(first) })
 			results <- res{h, err}
 		}()
@@ -531,7 +531,7 @@ func TestHelperManager_CapRefuses33rd(t *testing.T) {
 	if tm.mapLen() != HelperCap {
 		t.Fatalf("map len = %d", tm.mapLen())
 	}
-	_, err := tm.m.Acquire(context.Background(), originN(HelperCap+1), "air/x")
+	_, err := tm.m.Acquire(context.Background(), originN(HelperCap+1), "air/x", revUnapplied)
 	if !errors.Is(err, ErrProxyLimit) {
 		t.Fatalf("err = %v, want ErrProxyLimit", err)
 	}
@@ -546,10 +546,10 @@ func TestHelperManager_CapCountsStartingHelper(t *testing.T) {
 	barrier := tm.swap(proxyhelpertest.Barrier)
 	defer barrier.Release()
 
-	go tm.m.Acquire(context.Background(), originN(HelperCap), "air/starting")
+	go tm.m.Acquire(context.Background(), originN(HelperCap), "air/starting", revUnapplied)
 	eventually(t, time.Second, func() bool { return barrier.Spawns() == 1 }, "starting spawn")
 
-	_, err := tm.m.Acquire(context.Background(), originN(HelperCap+1), "air/x")
+	_, err := tm.m.Acquire(context.Background(), originN(HelperCap+1), "air/x", revUnapplied)
 	if !errors.Is(err, ErrProxyLimit) {
 		t.Fatalf("err = %v, want ErrProxyLimit while one helper is starting", err)
 	}
@@ -567,7 +567,7 @@ func TestHelperManager_CapCountsStoppingHelper(t *testing.T) {
 	go func() { tm.m.Release(hs[0], "test"); close(released) }()
 	eventually(t, time.Second, func() bool { return tm.stateOf(hs[0]) == helperStopping }, "stopping")
 
-	_, err := tm.m.Acquire(context.Background(), originN(HelperCap+1), "air/x")
+	_, err := tm.m.Acquire(context.Background(), originN(HelperCap+1), "air/x", revUnapplied)
 	if !errors.Is(err, ErrProxyLimit) {
 		t.Fatalf("err = %v, want ErrProxyLimit while one helper is stopping", err)
 	}
@@ -584,7 +584,7 @@ func TestHelperManager_BrokenSpawnFailsEveryWaiterOnce(t *testing.T) {
 	errs := make(chan error, 3)
 	for i := 0; i < 3; i++ {
 		go func() {
-			_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+			_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 			errs <- err
 		}()
 	}
@@ -619,7 +619,7 @@ func TestHelperManager_BrokenSpawnFailsEveryWaiterOnce(t *testing.T) {
 func TestHelperManager_RefusingSpawnFails(t *testing.T) {
 	tm := newTestManager(t, withVariant(proxyhelpertest.Refusing))
 	tm.sweepOK(t)
-	_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+	_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 	if !errors.Is(err, ErrProxySpawnFailed) {
 		t.Fatalf("err = %v, want ErrProxySpawnFailed", err)
 	}
@@ -627,7 +627,7 @@ func TestHelperManager_RefusingSpawnFails(t *testing.T) {
 		t.Fatalf("spawns=%d map=%d", tm.fake.Spawns(), tm.mapLen())
 	}
 	// The caller decides to retry: a fresh Acquire spawns again.
-	_, err = tm.m.Acquire(context.Background(), originA, "air/a")
+	_, err = tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 	if !errors.Is(err, ErrProxySpawnFailed) || tm.fake.Spawns() != 2 {
 		t.Fatalf("retry: err=%v spawns=%d", err, tm.fake.Spawns())
 	}
@@ -639,7 +639,7 @@ func TestHelperManager_ProcStartFailureRollsBack(t *testing.T) {
 	pid := proxyhelpertest.PeekPID()
 	tm.os.set(func() { tm.os.psErr[pid] = errors.New("ps: boom") })
 
-	_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+	_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 	if !errors.Is(err, ErrProxySpawnFailed) {
 		t.Fatalf("err = %v, want ErrProxySpawnFailed", err)
 	}
@@ -672,7 +672,7 @@ func TestHelperManager_WriteProxiesFailureRollsBack(t *testing.T) {
 	tm.m.mu.Unlock()
 	pid := proxyhelpertest.PeekPID()
 
-	_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+	_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 	if !errors.Is(err, ErrProxySpawnFailed) {
 		t.Fatalf("err = %v, want ErrProxySpawnFailed", err)
 	}
@@ -732,7 +732,7 @@ func TestHelperManager_RollbackRemovesLeftoverSocket(t *testing.T) {
 				tm.os.refused[sock] = c.refused
 			})
 
-			_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+			_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 			if !errors.Is(err, ErrProxySpawnFailed) {
 				t.Fatalf("err = %v, want ErrProxySpawnFailed", err)
 			}
@@ -821,7 +821,7 @@ func TestHelperManager_CreatorWaitCtxCancelledStartupCompletes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := tm.m.Acquire(ctx, originA, "air/a")
+		_, err := tm.m.Acquire(ctx, originA, "air/a", revUnapplied)
 		done <- err
 	}()
 	eventually(t, time.Second, func() bool { return tm.fake.Spawns() == 1 }, "spawn")
@@ -873,7 +873,7 @@ func TestHelperManager_ReleaseInstanceBound(t *testing.T) {
 	)
 	acqDone := make(chan struct{})
 	go func() {
-		h2, acqErr = tm.m.Acquire(context.Background(), originA, "air/a")
+		h2, acqErr = tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 		close(acqDone)
 	}()
 	stillBlocked(t, acqDone, 50*time.Millisecond, "Acquire during stopping")
@@ -1161,7 +1161,7 @@ func TestHelperManager_RollbackUnlinksOnlyOwned(t *testing.T) {
 				return leftoverProc{Proc: p, path: jsonPath, content: `{"pid":` + strconv.Itoa(p.PID()) + `,"procStart":"` + c.procStart(p.PID()) + `"}`}, nil
 			}
 
-			_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+			_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 			if !errors.Is(err, ErrProxySpawnFailed) {
 				t.Fatalf("err = %v, want ErrProxySpawnFailed", err)
 			}
@@ -1288,7 +1288,7 @@ func TestHelperManager_ReleaseUnlinkFailureKeepsRecord(t *testing.T) {
 
 func TestHelperManager_AcquireBeforeSweepNotReady(t *testing.T) {
 	tm := newTestManager(t)
-	_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+	_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 	if !errors.Is(err, ErrNotReady) {
 		t.Fatalf("err = %v, want ErrNotReady", err)
 	}
@@ -1305,7 +1305,7 @@ func TestHelperManager_AcquireAfterStopNotReady(t *testing.T) {
 	if tm.stateOf(h) != helperExited || tm.fake.Stops() != 1 {
 		t.Fatalf("Stop did not release the helper")
 	}
-	_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+	_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 	if !errors.Is(err, ErrNotReady) {
 		t.Fatalf("err = %v, want ErrNotReady", err)
 	}
@@ -1322,7 +1322,7 @@ func TestHelperManager_StopWaitsForBarrierStartup(t *testing.T) {
 
 	acq := make(chan error, 1)
 	go func() {
-		_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+		_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 		acq <- err
 	}()
 	eventually(t, time.Second, func() bool { return tm.fake.Spawns() == 1 }, "spawn")
@@ -1757,7 +1757,7 @@ func TestSweep_UnwritablePathErrors(t *testing.T) {
 	if err := tm.m.Sweep(); err == nil {
 		t.Fatalf("Sweep succeeded with an unwritable path")
 	}
-	_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+	_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 	if !errors.Is(err, ErrNotReady) {
 		t.Fatalf("Acquire after failed Sweep: %v, want ErrNotReady", err)
 	}
@@ -1774,7 +1774,7 @@ func TestSweep_UnresolvedOccupiesBlocksOriginAndCap(t *testing.T) {
 	})
 	tm.sweepOK(t)
 
-	_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+	_, err := tm.m.Acquire(context.Background(), originA, "air/a", revUnapplied)
 	if !errors.Is(err, ErrNotReady) {
 		t.Fatalf("Acquire for the occupied origin: %v, want ErrNotReady", err)
 	}
@@ -1783,7 +1783,7 @@ func TestSweep_UnresolvedOccupiesBlocksOriginAndCap(t *testing.T) {
 	}
 	// Other origins: HelperCap-1 fit, the next is refused.
 	fillHelpers(t, tm, 2, 2+HelperCap-1)
-	_, err = tm.m.Acquire(context.Background(), originN(HelperCap+5), "air/x")
+	_, err = tm.m.Acquire(context.Background(), originN(HelperCap+5), "air/x", revUnapplied)
 	if !errors.Is(err, ErrProxyLimit) {
 		t.Fatalf("err = %v, want ErrProxyLimit at HelperCap-1 + 1 occupying record", err)
 	}
@@ -1835,7 +1835,7 @@ func TestSweep_DeadLeftoverUnlinkErrorOccupiesNothing(t *testing.T) {
 	if tm.mapLen() != HelperCap {
 		t.Fatalf("map len = %d", tm.mapLen())
 	}
-	_, err := tm.m.Acquire(context.Background(), originN(HelperCap+1), "air/x")
+	_, err := tm.m.Acquire(context.Background(), originN(HelperCap+1), "air/x", revUnapplied)
 	if !errors.Is(err, ErrProxyLimit) {
 		t.Fatalf("err = %v", err)
 	}
@@ -1856,7 +1856,7 @@ func TestDefaultPidAlive(t *testing.T) {
 
 func TestNewHelperManagerDefaults(t *testing.T) {
 	m := newHelperManager(helperManagerConfig{ProxiesPath: "/nope/proxies.json"})
-	if m.now == nil || m.procStart == nil || m.pidAlive == nil || m.dialRefused == nil || m.signal == nil || m.log == nil || m.liveEntries == nil {
+	if m.now == nil || m.procStart == nil || m.pidAlive == nil || m.dialRefused == nil || m.signal == nil || m.log == nil || m.liveEntries == nil || m.rewriteName == nil {
 		t.Fatalf("nil seam after defaults: %+v", m)
 	}
 	if m.readyTimeout != HelperReadyTimeout || m.termGrace != HelperTermGrace {
@@ -1870,5 +1870,462 @@ func TestNewHelperManagerDefaults(t *testing.T) {
 	case <-m.procCtx.Done():
 	default:
 		t.Fatalf("procCtx not cancelled by Stop")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ApplyAddress: the helper's name follows the sender's address in place
+// (Peer Address v2 spec §3.5), gated by the monotonic address_rev.
+// ---------------------------------------------------------------------------
+
+var applyKey = originN(50)
+
+// registryName reads the "name" field of <dir>/<pid>.json; "<missing>"
+// when the file is gone.
+func registryName(t *testing.T, dir string, pid int) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(pid)+".json"))
+	if err != nil {
+		return "<missing>"
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("registry file %d.json: %v", pid, err)
+	}
+	var name string
+	if err := json.Unmarshal(m["name"], &name); err != nil {
+		t.Fatalf("registry file %d.json name: %v", pid, err)
+	}
+	return name
+}
+
+// appliedRevOf reads h.appliedRev under the manager lock.
+func (tm *testManager) appliedRevOf(h *helper) int64 {
+	tm.m.mu.Lock()
+	defer tm.m.mu.Unlock()
+	return h.appliedRev
+}
+
+func TestApplyAddress_RenameInPlaceAndMonotonic(t *testing.T) {
+	tm := newTestManager(t)
+	tm.sweepOK(t)
+	h, err := tm.m.Acquire(context.Background(), applyKey, "a/purdex-x:s1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sock, pid := h.sock, h.pid
+	if got := tm.appliedRevOf(h); got != 10 {
+		t.Fatalf("appliedRev after spawn = %d, want 10 (stored at admission)", got)
+	}
+	if got := registryName(t, tm.registryDir, pid); got != "a/purdex-x:s1" {
+		t.Fatalf("spawned registry name = %q, want a/purdex-x:s1", got)
+	}
+	if got := tm.m.Name(h); got != "a/purdex-x:s1" {
+		t.Errorf("Name = %q, want a/purdex-x:s1", got)
+	}
+
+	// Same rev again: no-op.
+	if got := tm.m.ApplyAddress(h, "a/purdex-x:s1", 10); got != "a/purdex-x:s1" {
+		t.Errorf("same rev: got %q", got)
+	}
+	// Newer rev, new name: rewritten in place, same socket and pid.
+	if got := tm.m.ApplyAddress(h, "a/purdex-y:s1", 20); got != "a/purdex-y:s1" || registryName(t, tm.registryDir, pid) != "a/purdex-y:s1" {
+		t.Errorf("rename: got %q file %q", got, registryName(t, tm.registryDir, pid))
+	}
+	if got := tm.m.Name(h); got != "a/purdex-y:s1" {
+		t.Errorf("Name after rename = %q, want a/purdex-y:s1", got)
+	}
+	if h.sock != sock || h.pid != pid {
+		t.Error("instance changed")
+	}
+	if got := tm.appliedRevOf(h); got != 20 {
+		t.Errorf("appliedRev after rename = %d, want 20", got)
+	}
+	// Older rev: ignored.
+	if got := tm.m.ApplyAddress(h, "a/purdex-z:s1", 15); got != "a/purdex-y:s1" {
+		t.Errorf("older rev applied: %q", got)
+	}
+	if got := registryName(t, tm.registryDir, pid); got != "a/purdex-y:s1" {
+		t.Errorf("older rev rewrote the file: %q", got)
+	}
+	// A→B→A: (A,30) same name advances rev; late (B,25) must not win.
+	if got := tm.m.ApplyAddress(h, "a/purdex-y:s1", 30); got != "a/purdex-y:s1" {
+		t.Errorf("same name at rev 30: %q", got)
+	}
+	if got := tm.appliedRevOf(h); got != 30 {
+		t.Errorf("appliedRev after same-name apply = %d, want 30 (advances even when the name is equal)", got)
+	}
+	if got := tm.m.ApplyAddress(h, "a/purdex-b:s1", 25); got != "a/purdex-y:s1" {
+		t.Errorf("A→B→A hole: %q", got)
+	}
+	// Released ⇒ skipped, and the file cleanup is not undone.
+	tm.m.Release(h, "test")
+	if got := tm.m.ApplyAddress(h, "a/purdex-q:s1", 99); got != "a/purdex-y:s1" {
+		t.Errorf("rename on a released instance: %q", got)
+	}
+	if got := registryName(t, tm.registryDir, pid); got != "<missing>" {
+		t.Errorf("rename after release recreated the registry file: %q", got)
+	}
+	if got := tm.appliedRevOf(h); got != 30 {
+		t.Errorf("appliedRev advanced on a released instance: %d", got)
+	}
+}
+
+func TestApplyAddress_LegacySpawnTakesFirstV2AddressEvenAtRevZero(t *testing.T) {
+	tm := newTestManager(t)
+	tm.sweepOK(t)
+	h, err := tm.m.Acquire(context.Background(), applyKey, "a/mt1", revUnapplied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tm.appliedRevOf(h); got != revUnapplied {
+		t.Fatalf("appliedRev of a v1 spawn = %d, want revUnapplied", got)
+	}
+	// A v2 sender whose session has never had a label row (rev 0) must
+	// still be able to name the helper once.
+	if got := tm.m.ApplyAddress(h, "a/_k3x9qz:mt1-n", 0); got != "a/_k3x9qz:mt1-n" {
+		t.Errorf("first v2 address at rev 0 not applied: %q", got)
+	}
+	if got := registryName(t, tm.registryDir, h.pid); got != "a/_k3x9qz:mt1-n" {
+		t.Errorf("registry name = %q, want a/_k3x9qz:mt1-n", got)
+	}
+	// From then on the monotonic rule holds: rev 0 again is ignored.
+	if got := tm.m.ApplyAddress(h, "a/other:x", 0); got != "a/_k3x9qz:mt1-n" {
+		t.Errorf("second rev-0 request applied: %q", got)
+	}
+}
+
+func TestApplyAddress_SpawnKeepsRevWhenWaiterCancels(t *testing.T) {
+	// The waiter that admitted the spawn (rev 10, name X) leaves before
+	// the helper is ready; a later request at rev 5 that joined the same
+	// spawn must not rename it: the revision is stored at admission.
+	tm := newTestManager(t, withVariant(proxyhelpertest.Barrier))
+	tm.sweepOK(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := tm.m.Acquire(ctx, applyKey, "a/x:s", 10); err == nil {
+		t.Fatal("expected the cancelled waiter to fail")
+	}
+	if n := tm.mapLen(); n != 1 {
+		t.Fatalf("instances = %d, want the admitted spawn still starting", n)
+	}
+	go tm.fake.Release()
+	h, err := tm.m.Acquire(context.Background(), applyKey, "a/y:s", 5) // joins the in-flight spawn
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tm.m.Name(h); got != "a/x:s" {
+		t.Errorf("spawned name = %q, want the admitting request's a/x:s", got)
+	}
+	if got := tm.appliedRevOf(h); got != 10 {
+		t.Errorf("appliedRev = %d, want the admitting request's 10", got)
+	}
+	if got := tm.m.ApplyAddress(h, "a/y:s", 5); got != "a/x:s" {
+		t.Errorf("rev 5 renamed a rev-10 instance: %q", got)
+	}
+	if got := registryName(t, tm.registryDir, h.pid); got != "a/x:s" {
+		t.Errorf("registry name = %q, want a/x:s", got)
+	}
+}
+
+func TestApplyAddress_RewriteFailureRollsBack(t *testing.T) {
+	tm := newTestManager(t)
+	tm.sweepOK(t)
+	h, err := tm.m.Acquire(context.Background(), applyKey, "a/x:s", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(tm.registryDir, strconv.Itoa(h.pid)+".json")); err != nil { // make the rewrite fail
+		t.Fatal(err)
+	}
+	if got := tm.m.ApplyAddress(h, "a/y:s", 5); got != "a/x:s" {
+		t.Errorf("got %q", got)
+	}
+	if got := tm.m.Name(h); got != "a/x:s" {
+		t.Errorf("Name after a failed rewrite = %q, want a/x:s", got)
+	}
+	if got := tm.appliedRevOf(h); got != 1 {
+		t.Errorf("appliedRev = %d after a failed rewrite, want 1", got)
+	}
+	if !tm.logs.contains("rename") {
+		t.Errorf("no log line for the failed rewrite; logs=%q", tm.logs.all())
+	}
+	// The instance is untouched: once the file is back, the same newer
+	// request renames it (the rolled-back revision did not burn rev 5).
+	if _, err := ccuds.WriteRegistry(tm.registryDir, ccuds.RegistryEntry{
+		PID: h.pid, SessionID: "restored", Name: "a/x:s", Cwd: tm.registryDir,
+		ProcStart: h.procStart, Version: "2.1.270", Inbox: h.sock,
+	}, "restored-token"); err != nil {
+		t.Fatal(err)
+	}
+	if got := tm.m.ApplyAddress(h, "a/y:s", 5); got != "a/y:s" {
+		t.Errorf("rename after the file came back: %q", got)
+	}
+	if got := registryName(t, tm.registryDir, h.pid); got != "a/y:s" {
+		t.Errorf("registry name = %q, want a/y:s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ApplyAddress: the registry rewrite runs outside the manager lock (PR
+// #1028 R2 Y1). The rewrite seam (m.rewriteName) lets a test park one
+// rename mid-I/O and watch what the rest of the manager does meanwhile.
+// ---------------------------------------------------------------------------
+
+// gatedRewrite is a rewriteName seam whose FIRST call parks on gate after
+// signalling entered (carrying the requested name); every call, once
+// through the gate, runs after (the real rewrite by default). calls
+// counts entries.
+type gatedRewrite struct {
+	entered chan string
+	gate    chan struct{}
+	after   func(dir string, pid int, name string, since int64) error
+	first   atomic.Bool
+	calls   atomic.Int32
+}
+
+func newGatedRewrite() *gatedRewrite {
+	return &gatedRewrite{entered: make(chan string, 1), gate: make(chan struct{}), after: ccuds.RewriteRegistryName}
+}
+
+func (g *gatedRewrite) fn(dir string, pid int, name string, since int64) error {
+	g.calls.Add(1)
+	if g.first.CompareAndSwap(false, true) {
+		g.entered <- name
+		<-g.gate
+	}
+	return g.after(dir, pid, name, since)
+}
+
+// awaitEntered returns the name the parked rewrite was asked for.
+func (g *gatedRewrite) awaitEntered(t *testing.T) string {
+	t.Helper()
+	select {
+	case name := <-g.entered:
+		return name
+	case <-time.After(3 * time.Second):
+		t.Fatalf("the rewrite was not entered within 3 s")
+		return ""
+	}
+}
+
+// promptly runs fn on its own goroutine and fails unless it returns within d.
+func promptly(t *testing.T, d time.Duration, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { fn(); close(done) }()
+	waitClosed(t, done, d, what)
+}
+
+func TestApplyAddress_RewriteDoesNotBlockOtherOrigins(t *testing.T) {
+	tm := newTestManager(t)
+	g := newGatedRewrite()
+	tm.m.rewriteName = g.fn
+	tm.sweepOK(t)
+	hA, err := tm.m.Acquire(context.Background(), applyKey, "a/x:s", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan string, 1)
+	resultDone := make(chan struct{})
+	go func() { result <- tm.m.ApplyAddress(hA, "a/y:s", 5); close(resultDone) }()
+	if got := g.awaitEntered(t); got != "a/y:s" {
+		t.Fatalf("rewrite entered with %q, want a/y:s", got)
+	}
+
+	// While A's rewrite is stuck on "disk", every other manager operation
+	// — another origin's spawn included — must go through.
+	const bound = 2 * time.Second
+	other := originN(51)
+	promptly(t, bound, "Acquire of another origin during a stuck rewrite", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), bound)
+		defer cancel()
+		if _, err := tm.m.Acquire(ctx, other, "a/other:s", 1); err != nil {
+			t.Errorf("Acquire(other): %v", err)
+		}
+	})
+	promptly(t, bound, "ProxyPIDs during a stuck rewrite", func() {
+		if pids := tm.m.ProxyPIDs(); len(pids) != 2 {
+			t.Errorf("ProxyPIDs = %v, want 2 entries", pids)
+		}
+	})
+	promptly(t, bound, "Name during a stuck rewrite", func() {
+		if got := tm.m.Name(hA); got != "a/x:s" {
+			t.Errorf("Name mid-rewrite = %q, want the current a/x:s", got)
+		}
+	})
+	promptly(t, bound, "Touch/ReapIdle during a stuck rewrite", func() {
+		tm.m.Touch(applyKey)
+		tm.m.ReapIdle()
+	})
+	stillBlocked(t, resultDone, 100*time.Millisecond, "ApplyAddress with the rewrite parked")
+
+	close(g.gate)
+	select {
+	case got := <-result:
+		if got != "a/y:s" {
+			t.Errorf("ApplyAddress = %q, want a/y:s", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ApplyAddress did not return after the rewrite was released")
+	}
+	if got := registryName(t, tm.registryDir, hA.pid); got != "a/y:s" {
+		t.Errorf("registry name = %q, want a/y:s", got)
+	}
+	if got := tm.m.Name(hA); got != "a/y:s" {
+		t.Errorf("Name = %q, want a/y:s", got)
+	}
+	if got := tm.appliedRevOf(hA); got != 5 {
+		t.Errorf("appliedRev = %d, want 5", got)
+	}
+}
+
+// TestApplyAddress_ReleaseWaitsForInFlightRewrite: a rename whose
+// rename(2) lands after the helper's own cleanup would recreate
+// <pid>.json. Release therefore waits for an in-flight rewrite
+// (h.renameMu) after Stop and before unlinkOwned, so the recreated file
+// is unlinked as ours — never left behind as an orphan.
+func TestApplyAddress_ReleaseWaitsForInFlightRewrite(t *testing.T) {
+	tm := newTestManager(t)
+	g := newGatedRewrite()
+	tm.m.rewriteName = g.fn
+	tm.sweepOK(t)
+	h, err := tm.m.Acquire(context.Background(), applyKey, "a/x:s", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonPath := filepath.Join(tm.registryDir, strconv.Itoa(h.pid)+".json")
+	// Once through the gate the rewrite "lands": the helper's cleanup has
+	// removed the file by then, so the rename recreates it with our
+	// identity (what os.Rename of the temp over a vanished path does).
+	g.after = func(dir string, pid int, name string, since int64) error {
+		return os.WriteFile(jsonPath, []byte(`{"pid":`+strconv.Itoa(pid)+`,"procStart":"`+h.procStart+`","name":"`+name+`"}`), 0o644)
+	}
+
+	result := make(chan string, 1)
+	go func() { result <- tm.m.ApplyAddress(h, "a/y:s", 5) }()
+	g.awaitEntered(t)
+	if !proxyhelpertest.Exists(jsonPath) {
+		t.Fatal("registry file missing while the instance is ready")
+	}
+
+	released := make(chan struct{})
+	go func() { tm.m.Release(h, "test"); close(released) }()
+	// Stop ran (the helper removed its own files); Release is now parked
+	// on the rename lock: the instance is still stopping, still in the
+	// map, and the exit has not been announced.
+	eventually(t, 3*time.Second, func() bool { return noneExist(h.files...) }, "helper removed its own files")
+	stillBlocked(t, released, 200*time.Millisecond, "Release with a rewrite in flight")
+	if st := tm.stateOf(h); st != helperStopping || tm.mapLen() != 1 {
+		t.Errorf("state=%v map=%d while the in-flight rewrite is parked, want stopping/1", st, tm.mapLen())
+	}
+	select {
+	case <-h.exited:
+		t.Error("exited closed before the in-flight rewrite finished")
+	default:
+	}
+
+	close(g.gate)
+	select {
+	case got := <-result:
+		if got != "a/x:s" {
+			t.Errorf("ApplyAddress on an instance that stopped mid-rewrite = %q, want the current a/x:s", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ApplyAddress did not return")
+	}
+	waitClosed(t, released, 3*time.Second, "Release")
+	if proxyhelpertest.Exists(jsonPath) {
+		t.Errorf("registry file recreated by the in-flight rewrite was left behind")
+	}
+	if hasTmp(t, tm.registryDir) {
+		t.Errorf("temp file left behind")
+	}
+	if got := tm.m.Name(h); got != "a/x:s" {
+		t.Errorf("Name after release = %q, want a/x:s", got)
+	}
+	if tm.unresolvedLen() != 0 || tm.mapLen() != 0 {
+		t.Errorf("unresolved=%d map=%d after release", tm.unresolvedLen(), tm.mapLen())
+	}
+	if recs := readProxies(t, tm.proxiesPath); len(recs) != 0 {
+		t.Errorf("proxies.json = %+v, want empty", recs)
+	}
+	// A rename that starts after the release skips at the state check and
+	// touches no file.
+	if got := tm.m.ApplyAddress(h, "a/z:s", 9); got != "a/x:s" {
+		t.Errorf("rename after release = %q", got)
+	}
+	if proxyhelpertest.Exists(jsonPath) || g.calls.Load() != 1 {
+		t.Errorf("rename after release touched the disk (calls=%d, exists=%v)", g.calls.Load(), proxyhelpertest.Exists(jsonPath))
+	}
+}
+
+// TestApplyAddress_ConcurrentRevsConverge: two requests for one instance
+// (rev 20 and rev 30) racing through ApplyAddress end with the rev-30
+// name on the instance and on disk, whichever enters first.
+func TestApplyAddress_ConcurrentRevsConverge(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		first      int64 // the rev whose rewrite is parked first
+		second     int64
+		wantWrites int32 // 30-then-20: the late 20 never rewrites
+	}{
+		{"20 then 30", 20, 30, 2},
+		{"30 then 20", 30, 20, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tm := newTestManager(t)
+			g := newGatedRewrite()
+			tm.m.rewriteName = g.fn
+			tm.sweepOK(t)
+			h, err := tm.m.Acquire(context.Background(), applyKey, "a/x:s", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nameOf := func(rev int64) string { return fmt.Sprintf("a/r%d:s", rev) }
+
+			var wg sync.WaitGroup
+			var rmu sync.Mutex
+			results := make(map[int64]string)
+			apply := func(rev int64) {
+				defer wg.Done()
+				got := tm.m.ApplyAddress(h, nameOf(rev), rev)
+				rmu.Lock()
+				results[rev] = got
+				rmu.Unlock()
+			}
+			wg.Add(1)
+			go apply(c.first)
+			if got := g.awaitEntered(t); got != nameOf(c.first) {
+				t.Fatalf("first rewrite entered with %q", got)
+			}
+			wg.Add(1)
+			go apply(c.second) // serialised behind the parked one on h.renameMu
+			time.Sleep(50 * time.Millisecond)
+			close(g.gate)
+			done := make(chan struct{})
+			go func() { wg.Wait(); close(done) }()
+			waitClosed(t, done, 3*time.Second, "both ApplyAddress calls")
+
+			if got := tm.m.Name(h); got != nameOf(30) {
+				t.Errorf("Name = %q, want %s", got, nameOf(30))
+			}
+			if got := registryName(t, tm.registryDir, h.pid); got != nameOf(30) {
+				t.Errorf("registry name = %q, want %s", got, nameOf(30))
+			}
+			if got := tm.appliedRevOf(h); got != 30 {
+				t.Errorf("appliedRev = %d, want 30", got)
+			}
+			if results[30] != nameOf(30) {
+				t.Errorf("rev-30 request got %q", results[30])
+			}
+			if results[20] != nameOf(c.first) { // 20-first: its own name; 30-first: the newer name
+				t.Errorf("rev-20 request got %q, want %s", results[20], nameOf(c.first))
+			}
+			if n := g.calls.Load(); n != c.wantWrites {
+				t.Errorf("rewrites = %d, want %d", n, c.wantWrites)
+			}
+		})
 	}
 }

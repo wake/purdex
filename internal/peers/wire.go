@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -77,6 +78,9 @@ var (
 	// ErrFieldInvalid: a label (session_name, peer_name, hop_chain) is too
 	// long, not valid UTF-8, or carries control characters (bad_request).
 	ErrFieldInvalid = errors.New("field invalid")
+	// ErrAddressInvalid: from.address does not match the wire grammar
+	// (bad_address) — see ValidateWireAddress.
+	ErrAddressInvalid = errors.New("address invalid")
 )
 
 // validateLabel checks a sender-controlled string: at most max bytes,
@@ -140,6 +144,8 @@ func ValidationCode(err error) string {
 		return ErrTextTooLarge
 	case errors.Is(err, ErrModeInvalid):
 		return ErrBadMode
+	case errors.Is(err, ErrAddressInvalid):
+		return ErrBadAddress
 	default:
 		return ErrBadRequest
 	}
@@ -204,9 +210,11 @@ type WireFrom struct {
 	AgentSessionID string `json:"agent_session_id"`
 	PID            int    `json:"pid"`
 	ProcStart      string `json:"proc_start"`
-	PeerName       string `json:"peer_name"`     // registry name; may be ""
-	SessionName    string `json:"session_name"`  // tmux session name, or "cc:<peer_name>" outside tmux
-	DeclaredMode   string `json:"declared_mode"` // prompting | bypass
+	PeerName       string `json:"peer_name"`             // registry name; may be ""
+	SessionName    string `json:"session_name"`          // tmux session name, or "cc:<peer_name>" outside tmux
+	DeclaredMode   string `json:"declared_mode"`         // prompting | bypass
+	Address        string `json:"address,omitempty"`     // "<label>:<suffix>" (Peer Address v2 spec §3.5); "" from a v1 sender
+	AddressRev     int64  `json:"address_rev,omitempty"` // the label row's revision when Address is set
 }
 
 // WireTo identifies the receiving Claude Code process: the
@@ -397,6 +405,29 @@ func ValidateMode(s string) (string, error) {
 	}
 }
 
+// ValidateWireAddress checks from.address (Peer Address v2 spec §3.5): ""
+// is a v1 sender and always passes; otherwise the head (up to the first
+// ':') must be a user label or a default label, and — when a ':' is
+// present at all — the rest must match the suffix wire grammar
+// (suffixWirePattern), including an explicitly empty suffix
+// ("purdex-tester:"), which is rejected. Reserved heads ("cc", "tmux")
+// never pass, via ValidateUserLabel.
+func ValidateWireAddress(s string) error {
+	if s == "" {
+		return nil
+	}
+	head, rest := SplitSession(s)
+	if !IsDefaultLabel(head) {
+		if err := ValidateUserLabel(head); err != nil {
+			return fmt.Errorf("%w: head: %w", ErrAddressInvalid, err)
+		}
+	}
+	if strings.Contains(s, ":") && !ValidSuffix(rest) {
+		return fmt.Errorf("%w: suffix must match %s", ErrAddressInvalid, suffixWirePattern)
+	}
+	return nil
+}
+
 // Validate checks a DeliverRequest against the wire contract: MsgID must be
 // a UUID; the From and To tuples must each be complete (non-empty HostID,
 // AgentSessionID non-empty and at most MaxLabelBytes of printable UTF-8,
@@ -404,9 +435,10 @@ func ValidateMode(s string) (string, error) {
 // ParseProcStart); From.DeclaredMode must be a valid mode;
 // From.SessionName and From.PeerName are at most MaxLabelBytes and
 // HopChain at most MaxHopChainBytes of printable UTF-8 (validateLabel);
-// and Text must pass ValidateText. An error that quotes a sender-supplied
-// value (msg_id, declared_mode, proc_start) carries at most MaxQuotedBytes
-// of it.
+// From.Address must pass ValidateWireAddress and From.AddressRev must be
+// >= 0; and Text must pass ValidateText. An error that quotes a
+// sender-supplied value (msg_id, declared_mode, proc_start) carries at
+// most MaxQuotedBytes of it.
 func (r DeliverRequest) Validate() error {
 	if !IsUUID(r.MsgID) {
 		return fmt.Errorf("msg_id is not a valid UUID: %s", quoteBounded(r.MsgID))
@@ -453,6 +485,13 @@ func (r DeliverRequest) Validate() error {
 	}
 	if err := validateLabel("hop_chain", r.HopChain, MaxHopChainBytes, true); err != nil {
 		return err
+	}
+
+	if err := ValidateWireAddress(r.From.Address); err != nil {
+		return err
+	}
+	if r.From.AddressRev < 0 {
+		return errors.New("from.address_rev must be >= 0")
 	}
 
 	if err := ValidateText(r.Text); err != nil {

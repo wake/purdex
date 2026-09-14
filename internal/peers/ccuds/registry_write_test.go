@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -329,6 +330,85 @@ func TestReadPeerFeatures(t *testing.T) {
 	}
 }
 
+func TestRewriteRegistryName(t *testing.T) {
+	dir := t.TempDir()
+	created, err := WriteRegistry(dir, RegistryEntry{PID: 4242, SessionID: "s", Name: "a/old", ProcStart: "Sun Sep 13 18:57:56 2026", Inbox: "/tmp/x.sock", Version: "2.1.270"}, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inject an unknown field with an integer above 2^53 so a float64
+	// round-trip would be caught, then rewrite.
+	before, _ := os.ReadFile(created[0])
+	before = []byte(strings.Replace(string(before), `"pid":4242,`, `"pid":4242,"bigUnknown":9007199254740993,`, 1))
+	if err := os.WriteFile(created[0], before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RewriteRegistryName(dir, 4242, "a/new:x", 1700000000000); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(created[0])
+	var b, a map[string]json.RawMessage
+	json.Unmarshal(before, &b)
+	json.Unmarshal(after, &a)
+	if string(a["name"]) != `"a/new:x"` || string(a["nameSince"]) != `1700000000000` {
+		t.Errorf("after = %s", after)
+	}
+	for k, v := range b {
+		if k == "name" || k == "nameSince" {
+			continue
+		}
+		if string(a[k]) != string(v) {
+			t.Errorf("field %s changed byte-wise: %s → %s", k, v, a[k])
+		}
+	}
+	if string(a["bigUnknown"]) != "9007199254740993" {
+		t.Errorf("large integer damaged: %s", a["bigUnknown"])
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 { // json + key, no temp left
+		t.Errorf("dir has %d entries", len(entries))
+	}
+	// Missing file: error, nothing created.
+	if err := RewriteRegistryName(dir, 9999, "n", 1); err == nil {
+		t.Error("expected error for a missing file")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Errorf("temp file leaked")
+	}
+}
+
+// TestRewriteRegistryName_StaleTempFile proves a leftover
+// ".<pid>.json.tmp" from a crash between create and rename (O_EXCL would
+// otherwise make it fail forever with EEXIST) is cleared before the
+// rewrite proceeds.
+func TestRewriteRegistryName_StaleTempFile(t *testing.T) {
+	dir := t.TempDir()
+	created, err := WriteRegistry(dir, RegistryEntry{PID: 4242, SessionID: "s", Name: "a/old", ProcStart: "Sun Sep 13 18:57:56 2026", Inbox: "/tmp/x.sock", Version: "2.1.270"}, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpPath := filepath.Join(dir, ".4242.json.tmp")
+	if err := os.WriteFile(tmpPath, []byte("stale leftover"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RewriteRegistryName(dir, 4242, "a/new:x", 1700000000000); err != nil {
+		t.Fatalf("RewriteRegistryName after stale temp: %v", err)
+	}
+	after, _ := os.ReadFile(created[0])
+	var a map[string]json.RawMessage
+	if err := json.Unmarshal(after, &a); err != nil {
+		t.Fatal(err)
+	}
+	if string(a["name"]) != `"a/new:x"` {
+		t.Errorf("after = %s", after)
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("temp file left behind: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 { // json + key, no temp left
+		t.Errorf("dir has %d entries", len(entries))
+	}
+}
+
 func TestRegistryProcStart(t *testing.T) {
 	dir := t.TempDir()
 	e := sampleEntry(dir)
@@ -357,5 +437,35 @@ func TestRegistryProcStart(t *testing.T) {
 	}
 	if got := RegistryProcStart(noField); got != "" {
 		t.Errorf("no field: %q", got)
+	}
+}
+
+// TestRewriteRegistryName_NotAnObject: a registry file whose top-level
+// value is not a JSON object ("null" decodes into a nil map, and writing
+// into it would panic) is rejected with an error; the original bytes are
+// untouched and no temp file is left.
+func TestRewriteRegistryName_NotAnObject(t *testing.T) {
+	for _, body := range []string{"null", "[1]", `"str"`} {
+		t.Run(body, func(t *testing.T) {
+			dir := t.TempDir()
+			jsonPath := filepath.Join(dir, "4242.json")
+			if err := os.WriteFile(jsonPath, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := RewriteRegistryName(dir, 4242, "a/new:x", 1700000000000)
+			if err == nil {
+				t.Fatal("expected an error for a non-object registry file")
+			}
+			if body == "null" && !strings.Contains(err.Error(), "not a JSON object") {
+				t.Errorf("error = %v, want it to say the file is not a JSON object", err)
+			}
+			after, _ := os.ReadFile(jsonPath)
+			if string(after) != body {
+				t.Errorf("original file changed: %q", after)
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+				t.Errorf("dir has %d entries, want the original only (no temp)", len(entries))
+			}
+		})
 	}
 }

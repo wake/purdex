@@ -49,6 +49,15 @@ type PeerRecord struct {
 	Reason       string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
 }
 
+// WireAddress renders r's from.address (Peer Address v2 spec §3.5):
+// Label + ":" + Suffix, or "" when the row has no cc agent (Label == "").
+func (r PeerRecord) WireAddress() string {
+	if r.Label == "" {
+		return ""
+	}
+	return r.Label + ":" + r.Suffix
+}
+
 // LabelInfo is what the label store (Task 3) knows about one conversation:
 // the user label ("" ⇒ the default label applies) and the label row's
 // revision.
