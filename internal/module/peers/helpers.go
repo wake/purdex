@@ -109,6 +109,12 @@ type helper struct {
 	lastUsed  time.Time
 
 	stopOnce sync.Once
+
+	// renameMu serialises the registry rewrites of THIS instance
+	// (ApplyAddress) and lets Release wait for one in flight before it
+	// unlinks the files. Lock order: renameMu → helperManager.mu; it is
+	// never acquired while mu is held.
+	renameMu sync.Mutex
 }
 
 // unresolvedRecord is a proxyRecord whose cleanup could not be completed.
@@ -137,6 +143,9 @@ type helperManagerConfig struct {
 	DialRefused func(sock string) bool
 	Signal      func(pid int, sig os.Signal) error
 	LiveEntries func() []ipeers.Entry
+	// RewriteName rewrites the name of <RegistryDir>/<pid>.json in place
+	// (ccuds.RewriteRegistryName by default); a test seam.
+	RewriteName func(dir string, pid int, name string, nameSince int64) error
 
 	ReadyTimeout time.Duration
 	TermGrace    time.Duration
@@ -166,6 +175,7 @@ type helperManager struct {
 	dialRefused func(sock string) bool // true when connect fails with ECONNREFUSED/ENOENT
 	signal      func(pid int, sig os.Signal) error
 	liveEntries func() []ipeers.Entry
+	rewriteName func(dir string, pid int, name string, nameSince int64) error
 
 	proxiesPath  string
 	registryDir  string
@@ -195,6 +205,7 @@ func newHelperManager(cfg helperManagerConfig) *helperManager {
 		dialRefused:  cfg.DialRefused,
 		signal:       cfg.Signal,
 		liveEntries:  cfg.LiveEntries,
+		rewriteName:  cfg.RewriteName,
 		proxiesPath:  cfg.ProxiesPath,
 		registryDir:  cfg.RegistryDir,
 		sockDir:      cfg.SockDir,
@@ -221,6 +232,9 @@ func newHelperManager(cfg helperManagerConfig) *helperManager {
 	}
 	if m.liveEntries == nil {
 		m.liveEntries = func() []ipeers.Entry { return nil }
+	}
+	if m.rewriteName == nil {
+		m.rewriteName = ccuds.RewriteRegistryName
 	}
 	if m.readyTimeout <= 0 {
 		m.readyTimeout = HelperReadyTimeout
@@ -468,32 +482,59 @@ func (m *helperManager) Name(h *helper) string {
 //  4. A differing name is written to the registry file first; on failure
 //     the revision is rolled back (the request did not apply), the
 //     failure is logged, and the current name is returned.
+//  5. A rename that is in flight when the instance is released completes
+//     before Release unlinks the files (see Release), so it can never
+//     leave behind a file the cleanup already removed.
 //
-// Everything — the state check, the revision compare and the file
-// rewrite — runs under m.mu. That is deliberate: the flip to stopping
-// (Release) and the rename cannot interleave, so a rename can never
-// recreate a file the cleanup just unlinked, and two requests for one
-// origin cannot rewrite the file out of order. The recorded trade-off is
-// that Acquire/Release/Touch/ProxyPIDs/FindBySock of EVERY origin wait
-// for the rewrite — one small file, read, rewritten to a temp, fsynced
-// and renamed — for the rare request that actually renames.
+// The rewrite — read, temp, fsync, rename — is NOT done under m.mu: a
+// slow disk must stall only this origin's renames, never every origin's
+// Acquire/Release/Touch/ProxyPIDs/FindBySock or Stop. The scheme is two
+// phases under the instance's own renameMu (lock order: renameMu →
+// m.mu, never the reverse):
+//
+//   - Phase 1 (under m.mu): rules 1–2 are checked and appliedRev is
+//     advanced to rev (rule 3); the pid and current name are snapshotted.
+//   - The file is rewritten with no manager lock held. renameMu keeps
+//     two renames of one instance from rewriting the file out of order.
+//   - Phase 2 (under m.mu): on failure appliedRev is rolled back (only if
+//     nobody advanced it further meanwhile); on success h.name becomes
+//     name only if the instance is still the current, ready one — an
+//     instance released mid-rewrite keeps its last name, and its rewritten
+//     file is unlinked by that Release, which waits on renameMu first.
 func (m *helperManager) ApplyAddress(h *helper, name string, rev int64) string {
+	h.renameMu.Lock()
+	defer h.renameMu.Unlock()
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.helpers[h.key] != h || h.state != helperReady {
+		defer m.mu.Unlock()
 		return h.name
 	}
 	if h.appliedRev != revUnapplied && rev <= h.appliedRev {
+		defer m.mu.Unlock()
 		return h.name
 	}
 	prev := h.appliedRev
 	h.appliedRev = rev
-	if name != h.name {
-		if err := ccuds.RewriteRegistryName(m.registryDir, h.pid, name, m.now().UnixMilli()); err != nil {
-			m.log("peers: helper %d (%s): rename to %q (rev %d) failed, keeping the current name: %v", h.pid, h.name, name, rev, err)
+	cur, pid := h.name, h.pid
+	m.mu.Unlock()
+
+	if name == cur {
+		return cur
+	}
+
+	err := m.rewriteName(m.registryDir, pid, name, m.now().UnixMilli())
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil {
+		m.log("peers: helper %d (%s): rename to %q (rev %d) failed, keeping the current name: %v", pid, cur, name, rev, err)
+		if h.appliedRev == rev {
 			h.appliedRev = prev
-			return h.name
 		}
+		return cur
+	}
+	if m.helpers[h.key] == h && h.state == helperReady {
 		h.name = name
 	}
 	return h.name
@@ -557,6 +598,14 @@ func (m *helperManager) release(h *helper, reason string, still func() bool) {
 		if err := h.handle.Stop(m.termGrace); err != nil {
 			m.log("peers: helper %d (%s): stopped (%s): %v", h.pid, m.Name(h), reason, err)
 		}
+		// A rename in flight (ApplyAddress, outside m.mu) may still land
+		// its rename(2) after the helper's own cleanup and recreate the
+		// registry file: wait for it, so the unlink below sees the final
+		// state. A rename starting after this point finds the instance
+		// stopping and touches nothing. m.mu is not held here (lock order
+		// renameMu → mu).
+		h.renameMu.Lock()
+		h.renameMu.Unlock() //nolint:staticcheck // empty critical section on purpose: a barrier, not a region
 		// The process is gone; what it left behind is unlinked only while
 		// it is provably its own (R2-C): the window between its exit and
 		// here is one a same-UID process, or a reused pid, can fill.
