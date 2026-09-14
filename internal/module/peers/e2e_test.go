@@ -472,7 +472,15 @@ func TestE2E_PartialOriginInventoryKeepsHelper(t *testing.T) {
 	targetSock := filepath.Join(root, "target.sock")
 	origin := startFakeInbox(t, originSock)
 	target := startFakeInbox(t, targetSock)
-	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", e2eRegistryJSON(e2eOriginPID, e2eOriginSID, e2eOriginName, "mt1:@1.%1", originSock))
+	// v2: every live, non-proxy registry entry gets its own entry row
+	// (spec §3.4) whether or not its tmux session is listed — so a
+	// decodable origin entry would resolve locally on A through its OWN
+	// entry row even while mt1's owner lookup fails, defeating this test's
+	// premise. The origin's registry file is undecodable instead (an
+	// "unknown" candidate, Task 2's ReadRegistryDiag): no Entry exists for
+	// it at all, so A's inventory genuinely carries no row for the origin
+	// — partial for the reason the still-failing mt1 owner lookup gives.
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", "not json")
 	writeRegistryFixture(t, regDir, strconv.Itoa(e2eTargetPID)+".json", e2eRegistryJSON(e2eTargetPID, e2eTargetSID, e2eTargetName, "foo:@2.%2", targetSock))
 	live := &e2eLiveness{}
 
@@ -600,6 +608,9 @@ func TestE2E_TwoDaemons(t *testing.T) {
 		PeerName: e2eOriginName, SessionName: "mt1", DeclaredMode: ipeers.ModePrompting,
 	}
 	targetTo := ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart}
+	// v2: the resolved row's address is now "<alias>/<label>:<suffix>"
+	// (spec §3.4), not the retired "<alias>/<tmux name>" form.
+	targetAddr := "b/" + ipeers.DefaultLabel(e2eTargetSID) + ":foo-" + e2eTargetName
 
 	// The baseline for step 9 includes every long-lived goroutine of the
 	// environment (servers, listeners, database/sql's opener); anything
@@ -614,8 +625,8 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if sent.Result != ipeers.ResultDelivered || sent.EffectiveMode != ipeers.ModePrompting {
 		t.Errorf("step 1: result/effective_mode = %q/%q, want delivered/prompting", sent.Result, sent.EffectiveMode)
 	}
-	if sent.ToHostID != e2eHostB || sent.ToAddress != "b/foo" || sent.To != targetTo {
-		t.Errorf("step 1: response to = %s %s %+v, want %s b/foo %+v", sent.ToHostID, sent.ToAddress, sent.To, e2eHostB, targetTo)
+	if sent.ToHostID != e2eHostB || sent.ToAddress != targetAddr || sent.To != targetTo {
+		t.Errorf("step 1: response to = %s %s %+v, want %s %s %+v", sent.ToHostID, sent.ToAddress, sent.To, e2eHostB, targetAddr, targetTo)
 	}
 	if !ipeers.IsUUID(sent.MsgID) {
 		t.Errorf("step 1: msg_id = %q, want a UUID", sent.MsgID)

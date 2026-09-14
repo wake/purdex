@@ -730,44 +730,33 @@ func TestDeliver_InventoryUnavailableDetailFixed(t *testing.T) {
 }
 
 // TestDeliver_PartialInventoryIsNotReady pins spec §4.2's partial
-// semantics on the receiver (R2-A): a target that is not in the inventory
-// while the inventory is partial (its tmux session's owner lookup timed
-// out or failed ⇒ agent:null, reason:"") is not a verdict on the target.
-// The answer is 503 not_ready with the fixed detail "inventory partial"
-// (audited as not_ready), never 409 target_gone — which the origin takes
-// as a verdict and reaps the sender's helper on. A tuple that is
+// semantics on the receiver (R2-A). Two of its original subtests (below)
+// now deliver rather than answer not_ready: Peer Address v2 gives every
+// live, non-proxy registry entry its own entry row (spec §3.4) whether or
+// not its tmux session is listed, so a target whose tmux session's owner
+// lookup failed/never ran is still found and resolved through its own
+// entry — the old "no row for an unresolved session's tmux name" premise
+// no longer holds. The not_ready guard returns as a new case (an
+// undecodable/unknown registry file) in a later task. A tuple that is
 // genuinely missing from a complete inventory is still target_gone.
 func TestDeliver_PartialInventoryIsNotReady(t *testing.T) {
 	inTmux := envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}}
-	t.Run("owner lookup fails ⇒ not_ready", func(t *testing.T) {
+	t.Run("owner lookup fails ⇒ delivered via the target's entry row", func(t *testing.T) {
 		e := newDeliverEnv(t, inTmux)
 		writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
 		e.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
 
-		ae := assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusServiceUnavailable, ipeers.ErrNotReady)
-		if ae.Detail != "inventory partial" {
-			t.Errorf("detail = %q, want the fixed %q", ae.Detail, "inventory partial")
-		}
-		e.assertNoLine()
-		row := e.onlyRow()
-		if row.Result != ipeers.ErrNotReady || row.Error != "inventory partial" {
-			t.Errorf("row result/error = %q/%q, want not_ready/\"inventory partial\"", row.Result, row.Error)
-		}
-		if e.f.fake.Spawns() != 0 {
-			t.Errorf("helper spawns = %d, want 0", e.f.fake.Spawns())
-		}
+		e.deliverOK(e.request())
+		e.recvLine()
 	})
-	t.Run("owner lookup exceeds the budget ⇒ not_ready", func(t *testing.T) {
+	t.Run("owner lookup exceeds the budget ⇒ delivered via the target's entry row", func(t *testing.T) {
 		e := newDeliverEnv(t, inTmux)
 		writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
 		e.m.owners = &fakeOwners{owners: map[string]agent.PaneOwner{"s1": {AgentType: "cc", SessionID: targetSessionID, TmuxPaneID: "%1"}}}
 		e.m.budget = 0 // the deadline is spent before the first resolution starts
 
-		assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusServiceUnavailable, ipeers.ErrNotReady)
-		e.assertNoLine()
-		if row := e.onlyRow(); row.Result != ipeers.ErrNotReady {
-			t.Errorf("row result = %q, want not_ready", row.Result)
-		}
+		e.deliverOK(e.request())
+		e.recvLine()
 	})
 	t.Run("owner resolves ⇒ delivered", func(t *testing.T) {
 		// The same tuple, once its session's owner lookup completes, is
@@ -1107,22 +1096,19 @@ func TestDeliver_AuditCoverage(t *testing.T) {
 			},
 		},
 		{
-			name: "not_ready/inventory partial",
+			// v2: the target's tmux session's owner lookup still fails,
+			// but the target's own registry entry now gets an entry row
+			// (spec §3.4) regardless — so it resolves and delivers rather
+			// than answering not_ready (mirrored, RED/GREEN, by
+			// TestDeliver_PartialInventoryIsNotReady's first subtest).
+			name: "delivered/target resolves via its entry row despite the session owner lookup failing",
 			opts: envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}},
 			ctx:  hostCtx, body: plain,
 			prepare: func(t *testing.T, e *deliverEnv) {
 				writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
 				e.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
 			},
-			status: http.StatusServiceUnavailable, code: ipeers.ErrNotReady, audited: true,
-			after: func(t *testing.T, e *deliverEnv, ae ipeers.APIError) {
-				if ae.Detail != "inventory partial" {
-					t.Errorf("detail = %q, want the fixed %q", ae.Detail, "inventory partial")
-				}
-				if row := e.onlyRow(); row.Error != "inventory partial" {
-					t.Errorf("row error = %q, want %q", row.Error, "inventory partial")
-				}
-			},
+			status: http.StatusOK, code: ipeers.ResultDelivered, audited: true,
 		},
 		{
 			name: "not_ready/before sweep", opts: envOpts{fixture: fixtureOpts{noSweep: true}}, ctx: hostCtx, body: plain,

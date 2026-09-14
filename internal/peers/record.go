@@ -28,12 +28,18 @@ type AgentInfo struct {
 }
 
 // PeerRecord is one row of GET /api/peers: one per tmux session, plus one
-// per live Claude Code registry entry whose tmux field does not point into
-// any listed session.
+// per live Claude Code registry entry that no session row consumed —
+// whether or not that entry's tmux field points into a listed session
+// (Peer Address v2 spec §3.4; RowKind tells the two apart).
 type PeerRecord struct {
 	Host         string     `json:"host"`
 	HostID       string     `json:"host_id"`
 	Address      string     `json:"address"`
+	RowKind      string     `json:"row_kind"`     // session | entry
+	Label        string     `json:"label"`        // "" when the row has no cc agent
+	LabelSource  string     `json:"label_source"` // user | default | ""
+	LabelRev     int64      `json:"label_rev"`
+	Suffix       string     `json:"suffix"`        // "" when the row has no cc agent
 	SessionCode  string     `json:"session_code"`  // always present
 	SessionName  string     `json:"session_name"`  // always present
 	TmuxInstance string     `json:"tmux_instance"` // always present
@@ -41,6 +47,14 @@ type PeerRecord struct {
 	Agent        *AgentInfo `json:"agent"` // always present, null when none
 	Deliverable  bool       `json:"deliverable"`
 	Reason       string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
+}
+
+// LabelInfo is what the label store (Task 3) knows about one conversation:
+// the user label ("" ⇒ the default label applies) and the label row's
+// revision.
+type LabelInfo struct {
+	Label string
+	Rev   int64
 }
 
 // BuildInput is everything the pure join needs: the tmux inventory, the
@@ -52,7 +66,8 @@ type BuildInput struct {
 	Owners        map[string]Owner // by session code; absent ⇒ no owner
 	Unresolved    map[string]bool  // codes whose owner lookup did not run
 	Entries       []Entry
-	ProxyPIDs     map[int]bool // empty in P1; kept so P3 needs no signature change
+	ProxyPIDs     map[int]bool         // empty in P1; kept so P3 needs no signature change
+	Labels        map[string]LabelInfo // by sessionId; absent ⇒ default label, rev 0
 }
 
 // Build joins sessions, owners and registry entries into PeerRecords. It is
@@ -61,11 +76,6 @@ func Build(in BuildInput) []PeerRecord {
 	entriesBySessionID := make(map[string][]Entry, len(in.Entries))
 	for _, e := range in.Entries {
 		entriesBySessionID[e.SessionID] = append(entriesBySessionID[e.SessionID], e)
-	}
-
-	sessionNames := make(map[string]bool, len(in.Sessions))
-	for _, s := range in.Sessions {
-		sessionNames[s.Name] = true
 	}
 
 	records := make([]PeerRecord, 0, len(in.Sessions)+len(in.Entries))
@@ -85,8 +95,8 @@ func Build(in BuildInput) []PeerRecord {
 		return records[i].SessionCode < records[j].SessionCode
 	})
 
-	outside := buildOutsideRecords(in, sessionNames, consumed)
-	records = append(records, outside...)
+	entryRecords := buildEntryRecords(in, consumed)
+	records = append(records, entryRecords...)
 
 	return records
 }
@@ -110,7 +120,8 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	rec = PeerRecord{
 		Host:         in.Alias,
 		HostID:       in.HostID,
-		Address:      in.Alias + "/" + s.Name,
+		Address:      in.Alias + "/tmux:" + s.Name,
+		RowKind:      "session",
 		SessionCode:  s.Code,
 		SessionName:  s.Name,
 		TmuxInstance: s.TmuxInstance,
@@ -138,6 +149,12 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 		return rec, Entry{}, false
 	}
 
+	// From here the owner IS a cc conversation, so every remaining branch
+	// sets a cc Agent (full entry info, or the owner-only fallback) and
+	// calls applyLabel to render Label/Suffix/Address (spec §3.4): the
+	// fallback branches (inbox_dead / ambiguous, no entry chosen) derive
+	// the suffix from the SESSION's own tmux name, never a candidate's,
+	// since no entry was chosen for the row.
 	var candidates []Entry
 	for _, e := range entriesBySessionID[owner.SessionID] {
 		if !(e.IsProxy || in.ProxyPIDs[e.PID]) {
@@ -149,15 +166,18 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	case 0:
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "inbox_dead"
+		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], owner.SessionID, s.Name, "")
 		return rec, Entry{}, false
 	case 1:
 		if consumed[candidates[0]] {
 			rec.Agent = ownerFallbackAgent(owner)
 			rec.Reason = "ambiguous"
+			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], owner.SessionID, s.Name, "")
 			return rec, Entry{}, false
 		}
 		rec.Agent = agentInfoFromEntry(candidates[0])
 		rec.Deliverable = true
+		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], owner.SessionID, candidates[0].TmuxSessionName(), candidates[0].Name)
 		return rec, candidates[0], true
 	default:
 		var paneMatches []Entry
@@ -170,16 +190,38 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			if consumed[paneMatches[0]] {
 				rec.Agent = ownerFallbackAgent(owner)
 				rec.Reason = "ambiguous"
+				applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], owner.SessionID, s.Name, "")
 				return rec, Entry{}, false
 			}
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
 			rec.Deliverable = true
+			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], owner.SessionID, paneMatches[0].TmuxSessionName(), paneMatches[0].Name)
 			return rec, paneMatches[0], true
 		}
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "ambiguous"
+		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], owner.SessionID, s.Name, "")
 		return rec, Entry{}, false
 	}
+}
+
+// applyLabel fills Label/LabelSource/LabelRev/Suffix/Address for a row
+// whose agent is a cc conversation sid (session rows and entry rows
+// alike): info.Label ("" ⇒ default) decides Label/LabelSource, info.Rev
+// is carried straight through, and Suffix/Address are rendered from
+// tmuxName/ccName (spec §3.1/§3.4) — the plan-recorded delta that the
+// suffix always comes from the row's OWN registry tmux field (or, for the
+// owner-fallback session row with no entry, the session's own name), never
+// from Resolve's session argument.
+func applyLabel(rec *PeerRecord, alias string, info LabelInfo, sid, tmuxName, ccName string) {
+	if info.Label != "" {
+		rec.Label, rec.LabelSource = info.Label, LabelSourceUser
+	} else {
+		rec.Label, rec.LabelSource = DefaultLabel(sid), LabelSourceDefault
+	}
+	rec.LabelRev = info.Rev
+	rec.Suffix = Suffix(tmuxName, ccName)
+	rec.Address = alias + "/" + rec.Label + ":" + rec.Suffix
 }
 
 // ownerFallbackAgent builds the reduced AgentInfo used when a cc owner's
@@ -208,47 +250,55 @@ func agentInfoFromEntry(e Entry) *AgentInfo {
 	}
 }
 
-// outsideCandidate pairs a built outside-tmux record with the sort keys
-// (rule 5: sorted by PeerName, ties by PID) that live on the source entry
-// rather than the record itself.
-type outsideCandidate struct {
+// EntryRecord is the row of one live registry entry that no session row
+// consumed (Peer Address v2 spec §3.4). Task 7 also uses it to answer
+// whoami/claim/release straight from the validated entry and label row, so
+// the address it renders must be identical to the listing's: a proxy entry
+// keeps the unresolvable "alias/cc:<name>" form (unchanged from rule 5); a
+// live cc entry gets the same label+suffix address applyLabel gives a
+// session row, derived from the entry's own tmux field.
+func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo) PeerRecord {
+	agent := agentInfoFromEntry(e)
+	rec := PeerRecord{
+		Host: alias, HostID: hostID, RowKind: "entry",
+		Cwd: e.Cwd, Agent: agent, Deliverable: true,
+	}
+	if proxy {
+		agent.Type = "proxy"
+		agent.Status = "proxy"
+		rec.Address = alias + "/cc:" + e.Name
+		rec.Deliverable = false
+		rec.Reason = "proxy"
+		return rec
+	}
+	applyLabel(&rec, alias, info, e.SessionID, e.TmuxSessionName(), e.Name)
+	return rec
+}
+
+// entryCandidate pairs a built entry record with the sort keys (sorted by
+// PeerName, ties by PID) that live on the source entry rather than the
+// record itself.
+type entryCandidate struct {
 	rec      PeerRecord
 	peerName string
 	pid      int
 }
 
-// buildOutsideRecords implements rule 5: every live entry whose tmux
-// session name is not a listed session gets its own row, UNLESS rule 4
-// already consumed it (as the single candidate, or the unique pane-tiebreak
-// winner, for some session) — a consumed entry never also produces a cc:
-// row, so each entry appears exactly once across the whole output.
-func buildOutsideRecords(in BuildInput, sessionNames map[string]bool, consumed map[Entry]bool) []PeerRecord {
-	var candidates []outsideCandidate
+// buildEntryRecords implements the entry-row rule (Peer Address v2 spec
+// §3.4, plan delta over rule 5): EVERY live entry no session row already
+// consumed (as the single candidate, or the unique pane-tiebreak winner,
+// for some session) gets its own row — whether or not its tmux field
+// points into a listed session; a proxy entry's row is EntryRecord's
+// unresolvable "cc:<name>" form. A consumed entry never also produces an
+// entry row, so each entry appears exactly once across the whole output.
+func buildEntryRecords(in BuildInput, consumed map[Entry]bool) []PeerRecord {
+	var candidates []entryCandidate
 	for _, e := range in.Entries {
-		if sessionNames[e.TmuxSessionName()] {
-			continue
-		}
 		if consumed[e] {
 			continue
 		}
-
-		agent := agentInfoFromEntry(e)
-		rec := PeerRecord{
-			Host:        in.Alias,
-			HostID:      in.HostID,
-			Address:     in.Alias + "/cc:" + e.Name,
-			Cwd:         e.Cwd,
-			Agent:       agent,
-			Deliverable: true,
-		}
-		if e.IsProxy || in.ProxyPIDs[e.PID] {
-			agent.Type = "proxy"
-			agent.Status = "proxy"
-			rec.Deliverable = false
-			rec.Reason = "proxy"
-		}
-
-		candidates = append(candidates, outsideCandidate{rec: rec, peerName: e.Name, pid: e.PID})
+		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Labels[e.SessionID])
+		candidates = append(candidates, entryCandidate{rec: rec, peerName: e.Name, pid: e.PID})
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool {

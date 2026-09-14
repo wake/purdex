@@ -544,6 +544,36 @@ func TestSend_TmuxOriginUsesSessionName(t *testing.T) {
 	}
 }
 
+// TestSend_OriginResolvesViaEntryRowDespitePartialInventory pins the v2
+// delta over spec §4.2's partial semantics on the origin lookup (R2-A):
+// with Peer Address v2's entry rows (spec §3.4), the origin's tmux
+// session's owner lookup failing no longer means the inventory has no row
+// for its inbox — the origin's own live registry entry still gets an entry
+// row and is found through it, so the send proceeds to the remote fetch
+// exactly as the (origin outside tmux) happy path does, rather than
+// answering 503 not_ready before any fetch.
+func TestSend_OriginResolvesViaEntryRowDespitePartialInventory(t *testing.T) {
+	s := newSendEnv(t, envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}})
+	writeRegistryFixture(s.t, s.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(s.targetSock, "foo:@1.%1"))
+	s.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
+
+	resp := s.sendOK(s.sendReq())
+	if resp.Result != ipeers.ResultDelivered {
+		t.Errorf("result = %q, want delivered", resp.Result)
+	}
+	if fetches := s.fetchCalls(); len(fetches) != 1 {
+		t.Errorf("fetches = %+v, want exactly 1 (the origin resolved, unblocking the remote fetch)", fetches)
+	}
+	post := s.onlyPost()
+	// The origin resolved through its ENTRY row (RowKind "entry"), which
+	// never carries a SessionName — so wireFromRecord falls back to
+	// "cc:<peer_name>" exactly as for any other outside-tmux origin, even
+	// though the entry's own tmux field names a listed session.
+	if post.req.From.AgentSessionID != targetSessionID || post.req.From.SessionName != "cc:"+targetPeerName {
+		t.Errorf("post from = %+v, want the origin's entry row (session %q, name cc:%s)", post.req.From, targetSessionID, targetPeerName)
+	}
+}
+
 // TestSend_EachSendMintsItsOwnMsgID: a retry must never reuse a msg_id
 // (the receiver's dedup would burn it).
 func TestSend_EachSendMintsItsOwnMsgID(t *testing.T) {
@@ -754,20 +784,6 @@ func TestSend_ErrorSteps(t *testing.T) {
 		{
 			name: "origin not deliverable (registry entry missing)", opts: envOpts{noRegistry: true},
 			status: http.StatusBadRequest, code: ipeers.ErrOriginUnknown,
-		},
-		{
-			// R2-A: the origin's tmux session's owner lookup failed ⇒ the
-			// inventory is partial and has no row for the inbox. That is
-			// not "origin unknown" (a verdict the CLI reports as the
-			// caller not being a live session): 503 not_ready, retryable,
-			// before any fetch and before the audit insert.
-			name: "origin in a partial inventory is not_ready",
-			opts: envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}},
-			prepare: func(s *sendEnv) {
-				writeRegistryFixture(s.t, s.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(s.targetSock, "foo:@1.%1"))
-				s.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
-			},
-			status: http.StatusServiceUnavailable, code: ipeers.ErrNotReady, detail: "inventory partial",
 		},
 		{
 			name:    "fetch error",
