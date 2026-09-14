@@ -81,24 +81,41 @@ func (s *PeerLabelStore) Claim(sessionID, label string, now time.Time) (PeerLabe
 
 // Release clears sessionID's label (row kept, rev bumped). ok is false
 // when no row existed; nothing is written then.
+//
+// The transaction's FIRST statement is the no-op-or-not write below
+// (UPDATE ... SET label = NULL WHERE session_id = ?), not a read: SQLite
+// takes the write lock the instant that statement runs, rather than only
+// after a preceding SELECT decides one is needed. A read-then-write here
+// would open a window between the SELECT and the UPDATE in which another
+// transaction could begin its own write and force this one to abort with
+// BUSY_SNAPSHOT once it finally tries to upgrade to a write lock — leading
+// with the write closes that window entirely. RowsAffected reports
+// whether a row actually existed, so the "no row" case still short-
+// circuits (via rollback) without a second round-trip.
 func (s *PeerLabelStore) Release(sessionID string, now time.Time) (PeerLabel, bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return PeerLabel{}, false, err
 	}
 	defer tx.Rollback()
-	var exists int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM peer_labels WHERE session_id = ?`, sessionID).Scan(&exists); err != nil {
+	res, err := tx.Exec(`UPDATE peer_labels SET label = NULL WHERE session_id = ?`, sessionID)
+	if err != nil {
 		return PeerLabel{}, false, err
 	}
-	if exists == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return PeerLabel{}, false, err
+	}
+	if n == 0 {
+		// No row for this session: the rollback above discards this
+		// statement's no-op write; nothing changes.
 		return PeerLabel{}, false, nil
 	}
 	rev, err := nextRev(tx)
 	if err != nil {
 		return PeerLabel{}, false, err
 	}
-	if _, err := tx.Exec(`UPDATE peer_labels SET label = NULL, rev = ?, set_at = ? WHERE session_id = ?`, rev, now.UnixMilli(), sessionID); err != nil {
+	if _, err := tx.Exec(`UPDATE peer_labels SET rev = ?, set_at = ? WHERE session_id = ?`, rev, now.UnixMilli(), sessionID); err != nil {
 		return PeerLabel{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
