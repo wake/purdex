@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.343] - 2026-09-15
+
+### Fix: 純檔名連結不再從連字號後面起頭；相對路徑偵測改為預設開啟（#1024）
+
+alpha.342 上線後真機驗證抓到的兩件事。第一，`docs/…/115潛優修正計畫-核定.pdf` 在只開「純檔名」偵測時，可點的是 `核定.pdf`——`BARE_RE` 的主幹字元類含 `-` 但 lookbehind 沒擋 `-`，候選可以從連字號後面起頭；ASCII 同樣中招（`docs/foo-bar.md` → `bar.md`），點下去只會是 not-found。這是 #1022 spec 裡註記為既有、範圍外的 quirk，現在補上：lookbehind 改 `(?<![\p{L}\p{M}\p{N}_/:.-])`，ABS / TILDE / REL 不動；`foo-bar.md` 本身仍可連（連字號在主幹內），空白後的 `-foo.md` 這種像 flag 的 token 仍會連——那要動主幹規則，另案。第二，使用者實際踩到的根因其實是**「相對路徑（含 `/`）」偵測預設是關的**（四個開關只有絕對路徑與 `~/` 預設開），而 agent 輸出最常見的就是相對路徑；改為預設開。alpha 不做 migration：已持久化的設定保留使用者原值，只有新安裝拿到新預設。預設值測試改對 `getInitialState()` 斷言，先前的寫法在 `beforeEach` 種值後改期望也不會紅。codex 標準 review 無發現、adversarial approve（720 組裸檔名對 main 比對、persist merge 實測 false 保留／缺鍵取 true）。測試 5022。
+
 ## [1.0.0-alpha.342] - 2026-09-14
 
 ### Fix: 終端機連結——CJK 檔案路徑能點了；URL 不再被全形標點、黏著的中文與成對括號帶歪（#1022）
