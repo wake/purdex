@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.344] - 2026-09-15
+
+### Feat: Peer Address v2（P4a）——session 用 `pdx msg name` 給自己取名，label 成為跨主機地址的主段（#1026）
+
+**起因**：Peer Bridge 的人類地址 `<host>/<session>` 只有 tmux 名／tmux code／`cc:<registry name>` 三種來源，沒有一種是使用者當下能掌控的——mlab 的 tmux 都叫 `mt0`…`mt7`，code 是 tmux `$N` 的可逆編碼（server 重啟後 `$0` 會鑄出同一個 code），而要跑 computer use 的 Claude Desktop session 根本不在 tmux 裡，只剩 `air/cc:purdex-3f` 這種 `<cwd>-<2 碼>` 的名字，三個同 cwd 的 Desktop session 完全分不出誰是「測試員」。
+
+**地址 v2**：`<host>/<label>[:<suffix>]`。**只有 label 是地址**；`:<suffix>` 由 daemon 從 entry 自己的 registry `tmux` 欄位與 CC 名算出（`mt0-purdex-49`、Desktop 則 `purdex-3f`），純供辨識，輸入時剝掉忽略。label 規則 `^[a-z0-9][a-z0-9-]{1,31}$`，`cc`、`tmux` 保留；未命名時是 `_` + sessionId 的 FNV-1a 取 base36 六碼（`_k3x9qz`，`_` 在使用者字集之外所以永遠撞不到、一眼看得出沒取名，resume 前後一致）。`<host>/tmux:<name>` 是不經 label 的明確 fallback；裸 tmux 名只在目標 inventory 完整時當第二層；`cc:<name>` 退役（`404 peer_not_found` 附 `pdx peers --all` 提示）。
+
+**占用規則**：label 綁 CC `sessionId` 存在 host-local 的 `peer_labels`（`CREATE TABLE IF NOT EXISTS`，無 migration），配 host-wide 嚴格遞增的 `rev`（claim 與 release 都在同一交易內 bump，跨 daemon 重啟）。**持有＝持有者在 registry 裡有 live entry**：活的不被頂替（`409 label_taken` 回 `holder` 與該主機所有活的 `live_labels`，agent 一次就能挑個沒撞的）、死的自動空出、crash 後重開的 session 說一句 `pdx msg name purdex-tester` 就接回；舊持有者 resume 回來退回預設短碼。registry 檔讀不到／解不開、而檔名 pid 還活著的，歸類 **unknown**（`kill(pid,0)` 回 `EPERM` 也算活）：這種檔存在時該主機 inventory 標 `partial` 並列在 `unknown_registry_files`，claim 一律 `503 not_ready`（附 `skipped`），裸名解析也拒絕——寧可拒絕也不猜。
+
+**Inventory**：每個活的非 proxy registry entry 恰好一列（新增 `row_kind: entry`，取代原本「tmux 內非 owner 的 entry 被吞掉」），列上多 `label` / `label_source` / `label_rev` / `suffix`；envelope 多 `daemon_version`、`unknown_registry_files`、`labels_unavailable`（三個 partial 來源各自獨立可見）。同一 conversation 有兩個 live process 時兩列同 label → 解析 `ambiguous`，誠實暴露而不是暗中挑一個；`tmux:` 仍走 pane tiebreak。
+
+**API 與 CLI**：`POST /api/peers/self`、`PUT|DELETE /api/peers/self/label`（admin-only；origin 用 live entry 的 inbox 歸屬，helper socket 進不來；回應由已驗證的 entry + label row 直接組出，不再讀第二次 inventory；`labelMu` 只包 registry 讀＋DB 寫，encode 在鎖外）。`pdx msg name <label>` / `--release` / `pdx msg whoami`；`pdx peers` 多 `LABEL` 欄（`*`＝預設）、entry 列縮排、每主機 `daemon <version>` trailer 與三種 partial 原因行。CLAUDE.md 新增「Peer addresses」段給 agent 照做。`from-name` 與 helper 名稱維持 v1 形式，等 P4b。
+
+**流程**：spec 兩輪 codex（R1 2 Blocker/12 Major、R2 1 Blocker/8 Major，全採納，v1→v3）→ plan 一輪 codex（1 Blocker/9 Major，全採納）→ 10 task subagent TDD（3 個 task 各修一輪：reply 守衛沒被測試 pin 住、proxy-origin 測試空轉、CLI 請求流程重複）→ final whole-branch review（3 Important：deliver/reply 的 partial 規則沒跟 send 對齊、`pdx peers` 看不到 unknown-file partial、遠端 `daemon_version` 未截斷）→ PR codex R1 無發現、R2 三視角抓到 1 high（registry 不完整時 label 單一命中繞過同 conversation 的 ambiguous 保護——現在有 alive-unknown 檔時單一命中也 `not_ready`）、3 medium（死亡 conversation 的 label 擋住同名 tmux fallback、`--all` 只有 owner-unresolved 時完全不顯示 partial、label-store 故障無法獨立傳達）→ 全修，spec 定稿 v3.2（§10 記處置）。兩台（mlab + air-2026）須一起升，不是混版協定；spec §5 的 P4a 驗收子集部署後跑。
+
 ## [1.0.0-alpha.343] - 2026-09-15
 
 ### Fix: 純檔名連結不再從連字號後面起頭；相對路徑偵測改為預設開啟（#1024）
