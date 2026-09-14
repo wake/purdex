@@ -1,7 +1,7 @@
 # Spec — Terminal link matchers: Unicode paths + URL boundary hardening
 
-Status: v2 (after codex spec/plan review R1 `task-mu1ease5-55nt5s` — 9 findings, all
-adopted; see §6)
+Status: v3 (v2 after codex spec/plan review `task-mu1ease5-55nt5s`; v3 after PR #1022
+R2 defender `review-mu1f0dzs-f8gq93` — see §6)
 Date: 2026-09-14
 Branch: `worktree-terminal-link-unicode`
 Scope: SPA only (`spa/src/lib/terminal-link/matchers/`). No daemon, no Electron.
@@ -100,9 +100,11 @@ Interactions checked:
 - `extensionsVersionLike` / `allExtensionsVersionLike` split on `.` and test
   each part with `/^\d+(?:-[A-Za-z0-9]+)?$/`. A Unicode inner part contains
   letters → not version-like → the path is kept. `\p{N}` also covers
-  full-width digits (`１２３`), which `\d` does not; a stem of full-width
-  digits is therefore not rejected as a version — acceptable, they are not
-  version noise in practice.
+  full-width digits (`１２３`), which `\d` does not. The version filter
+  looks only at the *extension* parts, so `１２３.1.2` is still rejected
+  (extensions `1`, `2` are ASCII digits) while `１２３.１２.3` is kept
+  (`１２` is not `\d+`). Acceptable — full-width digits are not version
+  noise in practice.
 - `BARE_RE`'s lookbehind now blocks on any Unicode letter/digit, so
   `115潛優修正計畫-核定.pdf` inside a `REL_RE` match is not double-matched by
   `BARE_RE` (preceded by `/`), and `報告.pdf` inside `已產生報告.pdf` is not
@@ -127,6 +129,9 @@ Known limitations (documented in a code comment):
 - Prose glued after the extension and then followed by another extension or
   path segment cannot be separated (`docs/a.pdf然後.txt`,
   `docs/a.pdf然後/x.txt` link whole). Rare; accepted and pinned.
+- `grep -n` style output whose file name has no ASCII extension gets no
+  link (`docs/報告.最終版:12:內容`), exactly as `docs/report:12` gets none
+  today — the matchers require an extension. Unchanged policy; pinned.
 
 ### 3.2 URL matcher
 
@@ -158,10 +163,27 @@ Processing per candidate, in order:
 
 2. **Non-ASCII cut (option C)** — walk the scanned text by code point. A
    non-ASCII code point (> 0x7F) is cut, together with everything after it,
-   iff the character immediately before it is an **ASCII letter or digit**.
+   iff **both**:
+   - the character immediately before it is an ASCII letter or digit, and
+   - the code point is **not** `\p{Script=Latin}` and **not** `\p{M}`.
+
    After anything else — another non-ASCII character, or any ASCII
    punctuation such as `/ ? # = & . _ - ~ % + : @` — it is URL content.
    First cut wins.
+
+   The Latin/mark exemption exists because accented Latin letters continue
+   an ASCII word (`bücher`, `café`, NFD `cafe` + U+0301) and are common in
+   real hostnames and paths; cutting there changes the destination the
+   opener navigates to. Scripts that do not mix with ASCII inside one word
+   (Han, kana, Hangul, emoji, Cyrillic, …) keep the cut.
+
+   **Rescan after a cut**: the greedy scan may have swallowed a later URL
+   (`參考https://a.com/x或https://b.com/y`). When a candidate is cut, the
+   next regex search resumes at the cut position (UTF-16 offset
+   `m.index + cut.length`), so every subsequent `https?://` on the line is
+   still found. Strip does not trigger a rescan (stripped characters are
+   punctuation and cannot start a scheme). A cut always leaves at least the
+   ASCII scheme, so the search position strictly advances.
 
    Rationale: prose glued to a URL essentially always follows the last
    alphanumeric of the URL (`/x這頁`, `.com這頁`, `?q=abc然後`). Real
@@ -179,7 +201,11 @@ Processing per candidate, in order:
    | `https://e.com/wiki/ISO_標準` | whole | after `_` → content |
    | `https://e.com/release-🎉` | whole | after `-` → content |
    | `https://e.com/wiki/アラン・チューリング` | whole | `・` is content (not a stop char) |
+   | `請見 https://bücher.example/catalog` | whole | `ü` is Latin → exempt |
+   | `https://example.com/café/menu` (NFC and NFD) | whole | Latin / mark → exempt |
+   | `參考https://a.com/x或https://b.com/y` | `https://a.com/x`, `https://b.com/y` | cut, then rescan finds the second |
    | `參考https://e.com/x這頁` | `https://e.com/x` | after `x` → cut |
+   | `https://e.com/abcдом` | `https://e.com/abc` | Cyrillic after ASCII → cut (accepted) |
    | `詳見https://e.com這頁` | `https://e.com` | after `m` → cut |
    | `https://e.com/x🎉` | `https://e.com/x` | emoji after ASCII letter → cut |
    | `https://e.com/?q=abc中文` | `https://e.com/?q=abc` | **accepted sacrifice** — mixed alnum→CJK inside a real URL is indistinguishable from glued prose |
@@ -255,7 +281,12 @@ inside a link land on the right cells.
   `1.0.0+exp.sha` → none.
 - Combining marks (NFD): `docs/か\u3099.txt` and `docs/cafe\u0301.txt` →
   whole, `meta.path` byte-identical to the input (no normalisation);
-  BARE lookbehind blocks on a mark (`か\u3099x.txt` is one token).
+  BARE lookbehind blocks on a mark — isolated via ABS input
+  `/a/か\u3099x.txt` run through `BARE_RE` → no link (the `x.txt` start is
+  preceded by U+3099).
+- Pre-existing BARE shadow pinned as-is: `/a/b/foo.pre-edit.md` through
+  `BARE_RE` → `edit.md` (documents the known quirk; not a target).
+- No-extension grep line: `docs/報告.最終版:12:內容` → no REL link.
 - Accepted whole-match limitations pinned: `docs/a.pdf然後.txt`,
   `docs/a.pdf然後/x.txt` → whole string.
 - Every existing case stays green (the file already has ~40).
@@ -270,7 +301,12 @@ the scheme-only guard), plus the five §1.2 rows, plus:
 - range assertion for a CJK-cut case: `參考https://e.com/x這頁` →
   `startCol 2`, `endCol 2 + 'https://e.com/x'.length`;
 - range assertion with a non-BMP prefix: `😀https://e.com/臺灣` →
-  `startCol 2`, `endCol 18` (UTF-16 offsets, not code points).
+  `startCol 2`, `endCol 18` (UTF-16 offsets, not code points);
+- parametrised stop-set test: for **every** character `c` in the step-1 set,
+  `https://e.com/a${c}b` → exactly `https://e.com/a`;
+- Latin exemption rows and the rescan rows from the step-2 table, with
+  range assertions on the rescan case (`startCol` of the second link is
+  18).
 
 ### Regression
 
@@ -297,3 +333,21 @@ daemon/Electron rebuild required. Bump to next alpha after merge.
 | 7 | Minor | per-iteration `count()` in the strip loop is quadratic on a long `)` tail | count once, decrement, slice once (§3.2 step 3) |
 | 8 | Minor | tests missed "strip to balance then stop", non-BMP offsets, `[::1]`, `a[1]]` | all added to §4 |
 | 9 | Nit | "cannot be scheme-only" argument was wrong (`https://).`) | scheme-only guard added |
+
+### R2 — PR #1022 codex reviews
+
+- Standard `review-mu1exgof-hi68g0`: no findings.
+- Attacker `review-mu1ey65u-u66dm4`: approve — 123k ASCII regex comparisons
+  against main identical; ~300-char stress lines no catastrophic
+  backtracking; mid-URL astral offsets, bracket handling, scheme guard OK.
+- File health `review-mu1f2nnr-ad5uoy`: ship.
+- Defender `review-mu1f0dzs-f8gq93`: needs-attention.
+
+| # | sev | finding | resolution |
+|---|---|---|---|
+| 1 | P2 | alnum-only cut breaks accented Latin and IDN hosts (`bücher.example` → `https://b`, `café/menu` → `caf`) — opener navigates to the wrong destination | Latin/`\p{M}` exemption added to the cut rule (§3.2 step 2) |
+| 2 | P2 | after a cut, later URLs on the same line are lost (`…/x或https://b.com/y` → one link) | rescan from the cut offset (§3.2 step 2) |
+| 3 | P3 | alignment pins missing: BARE shadow `edit.md`, stop-set characters individually, mark lookbehind not isolated | tests added (§4) |
+| 4 | P3 | §3.1 full-width digit sentence attributed the decision to the stem; it is the extension | reworded |
+| 5 | P3 | ASCII-final bias cost on grep-style lines (`docs/報告.最終版:12`) not stated | limitation added and pinned; matches existing no-extension policy |
+| 6 | nit | url.ts comment "ASCII 標點永遠剝" should name `TAIL_PUNCT` | comment fixed |
