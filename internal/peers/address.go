@@ -64,8 +64,13 @@ func (e *AmbiguousError) Error() string {
 //     entirely; matches PeerRecord.SessionName == name. "tmux:" with an
 //     empty name is ErrNotFound.
 //   - "<label>[:<suffix>]": tier 1, the label, matched over every row
-//     (proxy rows and rows with Label == "" excluded; a typed suffix is
-//     ignored — it is display-only).
+//     that carries a LIVE cc entry — session rows and entry rows alike,
+//     but only those whose Agent is a real registry entry (Type "cc",
+//     PID != 0). Proxy rows, rows with Label == "" and owner-fallback
+//     rows (inbox_dead / ambiguous: Agent.PID == 0, no entry behind them)
+//     are excluded — spec §3.3 makes a row whose holder is not live
+//     inert, neither resolving nor blocking, and that is how the rule
+//     reaches resolution. A typed suffix is ignored (display-only).
 //     Several matches => *AmbiguousError regardless of the snapshot.
 //     Exactly one match and snap.RegistryIncomplete => ErrResolveNotReady
 //     (an unreadable registry file may hide a second process of that
@@ -92,9 +97,10 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		}
 		return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == rest })
 	}
-	// Tier 1: label, over every row; the typed suffix is ignored.
+	// Tier 1: label, over every row backed by a live entry; the typed
+	// suffix is ignored.
 	rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-		return r.Label != "" && r.Label == head && (r.Agent == nil || r.Agent.Type != "proxy")
+		return r.Label != "" && r.Label == head && hasLiveEntry(r)
 	})
 	if err == nil && snap.RegistryIncomplete {
 		// One hit, but a registry file for an alive pid could not be
@@ -114,6 +120,16 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		return PeerRecord{}, ErrNotFound
 	}
 	return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == head })
+}
+
+// hasLiveEntry reports whether r's agent is a real, live Claude Code
+// registry entry: Type "cc" with a pid. Build's owner-fallback rows
+// (ownerFallbackAgent, used for inbox_dead / ambiguous session rows) have
+// Type "cc" but PID 0 — the conversation is known only from owner
+// resolution, no live entry stands behind the row — and proxy rows have
+// another Type; neither may decide the label tier.
+func hasLiveEntry(r PeerRecord) bool {
+	return r.Agent != nil && r.Agent.Type == "cc" && r.Agent.PID != 0
 }
 
 // resolveTier finds all records matching predicate and applies the

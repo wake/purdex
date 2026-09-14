@@ -12,6 +12,19 @@ func labelRecord(label, source, sessionName string, pid int) PeerRecord {
 		Agent: &AgentInfo{Type: "cc", PID: pid}, Deliverable: true}
 }
 
+// inboxDeadRow is the owner-fallback session row Build emits when a cc
+// owner's conversation has no live registry entry (ownerFallbackAgent: PID
+// 0, no inbox). It still carries the persisted label (spec §3.4) but its
+// holder is not live, so per spec §3.3 it is inert — it must neither
+// resolve nor block.
+func inboxDeadRow(label, sessionName string) PeerRecord {
+	return PeerRecord{
+		RowKind: "session", SessionName: sessionName, Label: label, LabelSource: "user",
+		Agent:  &AgentInfo{Type: "cc", SessionID: "dead-sid"},
+		Reason: "inbox_dead",
+	}
+}
+
 // --- Resolve: tiers --------------------------------------------------------
 
 func TestResolve_LabelTier(t *testing.T) {
@@ -130,6 +143,38 @@ func TestResolve_TmuxForm_IgnoresSnapshotFlags(t *testing.T) {
 	got, err := Resolve(recs, "tmux:mt4", ResolveSnapshot{Partial: true, RegistryIncomplete: true})
 	if err != nil || got.Agent.PID != 2 {
 		t.Fatalf("got %+v %v, want the tmux row (pid 2)", got, err)
+	}
+}
+
+// --- Resolve: inert rows (X2) ----------------------------------------------
+
+// TestResolve_DeadHolderLabelDoesNotResolve pins X2: an inbox_dead fallback
+// row labelled "foo" plus a plain tmux session named "foo" — tier 1 has no
+// match (the fallback row carries no live entry), and with a complete
+// inventory tier 2 lands on the tmux row.
+func TestResolve_DeadHolderLabelDoesNotResolve(t *testing.T) {
+	recs := []PeerRecord{inboxDeadRow("foo", "dead-session"), {SessionName: "foo"}}
+	got, err := Resolve(recs, "foo", ResolveSnapshot{})
+	if err != nil || got.SessionName != "foo" || got.Agent != nil {
+		t.Fatalf("got %+v %v, want the tmux row via tier 2", got, err)
+	}
+	// The same dead row next to a LIVE entry row of another conversation
+	// with the same label: only the live one counts, so it is a plain
+	// single hit, not ambiguous.
+	recs = []PeerRecord{inboxDeadRow("foo", "dead-session"), labelRecord("foo", "user", "", 7)}
+	got, err = Resolve(recs, "foo", ResolveSnapshot{})
+	if err != nil || got.Agent == nil || got.Agent.PID != 7 {
+		t.Fatalf("got %+v %v, want the live entry row (pid 7)", got, err)
+	}
+}
+
+// TestResolve_DeadHolderLabel_PartialStillNotReady pins that removing the
+// dead row from tier 1 does not weaken the partial rule: a tier-1 miss on
+// a partial inventory is still ErrResolveNotReady.
+func TestResolve_DeadHolderLabel_PartialStillNotReady(t *testing.T) {
+	recs := []PeerRecord{inboxDeadRow("foo", "dead-session"), {SessionName: "foo"}}
+	if _, err := Resolve(recs, "foo", ResolveSnapshot{Partial: true}); !errors.Is(err, ErrResolveNotReady) {
+		t.Fatalf("got %v, want ErrResolveNotReady", err)
 	}
 }
 

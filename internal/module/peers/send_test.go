@@ -735,6 +735,60 @@ func TestSend_TmuxFormResolves(t *testing.T) {
 	}
 }
 
+// TestSend_DeadHolderLabelFallsToTmuxSession pins X2 at the module level
+// (spec §3.3: a row whose holder is not live is inert). The remote's rows
+// come out of the real ipeers.Build: tmux session "stale" is owned by a cc
+// conversation that has NO live registry entry but still holds the user
+// label "foo" (an inbox_dead owner-fallback row, PID 0), and tmux session
+// "foo" carries the live target. "air/foo" must not stop at the dead
+// holder with 409 not_deliverable: tier 1 ignores it, tier 2 delivers to
+// the tmux session.
+func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	const deadSID = "dddddddd-4444-4444-8444-444444444444"
+	rows := ipeers.Build(ipeers.BuildInput{
+		HostID: remoteHostID, Alias: remoteAlias,
+		Sessions: []ipeers.SessionSummary{{Code: "stalec", Name: "stale", Cwd: "/w"}, {Code: "fooc", Name: "foo", Cwd: "/w"}},
+		Owners: map[string]ipeers.Owner{
+			"stalec": {AgentType: "cc", SessionID: deadSID, TmuxPaneID: "%1"},
+			"fooc":   {AgentType: "cc", SessionID: remoteSessionID, TmuxPaneID: "%2"},
+		},
+		Entries: []ipeers.Entry{{
+			PID: remotePID, SessionID: remoteSessionID, Name: remoteSession, Cwd: "/w",
+			Tmux: "foo:@1.%2", Inbox: "/tmp/cc-socks/777.sock", ProcStart: remoteProcStart, Version: "2.1.270", Status: "idle",
+		}},
+		Labels: map[string]ipeers.LabelInfo{deadSID: {Label: "foo", Rev: 3}},
+	})
+	// Sanity: the fixture really is the X2 shape — a dead holder of "foo"
+	// and a deliverable tmux session named "foo" with another label.
+	var sawDead, sawLive bool
+	for _, r := range rows {
+		switch {
+		case r.SessionName == "stale":
+			sawDead = r.Reason == "inbox_dead" && r.Label == "foo" && r.Agent != nil && r.Agent.PID == 0
+		case r.SessionName == "foo":
+			sawLive = r.Deliverable && r.Label != "foo"
+		}
+	}
+	if !sawDead || !sawLive {
+		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of \"foo\" and a deliverable tmux session foo", rows)
+	}
+	s.set(func(s *sendEnv) { s.env = remoteEnvelope(rows...) })
+	req := s.sendReq() // To: air/foo
+
+	resp := s.sendOK(req)
+	if resp.Result != ipeers.ResultDelivered {
+		t.Errorf("result = %q, want delivered", resp.Result)
+	}
+	if resp.ToAddress != remoteAlias+"/tmux:foo" && !strings.HasPrefix(resp.ToAddress, remoteAlias+"/"+ipeers.DefaultLabel(remoteSessionID)+":") {
+		t.Errorf("to_address = %q, want the tmux session foo's own address", resp.ToAddress)
+	}
+	post := s.onlyPost()
+	if post.req.To.AgentSessionID != remoteSessionID || post.req.To.PID != remotePID {
+		t.Errorf("post to = %+v, want the tmux session foo's live tuple", post.req.To)
+	}
+}
+
 // TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady pins X1 at the
 // module level: the remote reports one alive-but-undecodable registry file
 // and a single live row carrying the addressed label. That file may be a

@@ -2,6 +2,7 @@ package peers
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sort"
 	"testing"
@@ -878,7 +879,9 @@ func TestEntryRecord_MatchesBuild(t *testing.T) {
 // TestBuild_SameConversationTwoProcesses_TwoRowsSameLabel pins that same
 // sessionId twice, no pane tiebreak, yields three rows sharing one label:
 // the ambiguous session row (fallback agent) AND both entries get entry
-// rows; Resolve (Task 6) reports them ambiguous.
+// rows; Resolve (Task 6) reports them ambiguous with exactly the two
+// ENTRY rows as candidates — the owner-fallback session row carries no
+// live entry (PID 0) and is inert at tier 1 (spec §3.3, X2).
 func TestBuild_SameConversationTwoProcesses_TwoRowsSameLabel(t *testing.T) {
 	in := BuildInput{
 		Alias:    "a",
@@ -900,6 +903,20 @@ func TestBuild_SameConversationTwoProcesses_TwoRowsSameLabel(t *testing.T) {
 	}
 	if recs[0].Reason != "ambiguous" || recs[0].Deliverable {
 		t.Errorf("session row = %+v", recs[0])
+	}
+
+	_, err := Resolve(recs, DefaultLabel("sid-1"), ResolveSnapshot{})
+	var amb *AmbiguousError
+	if !errors.As(err, &amb) {
+		t.Fatalf("Resolve = %v, want AmbiguousError", err)
+	}
+	if len(amb.Candidates) != 2 {
+		t.Fatalf("candidates = %d, want exactly the 2 entry rows: %+v", len(amb.Candidates), amb.Candidates)
+	}
+	for _, c := range amb.Candidates {
+		if c.RowKind != "entry" || c.Agent == nil || c.Agent.PID == 0 {
+			t.Errorf("candidate %+v is not a live entry row", c)
+		}
 	}
 }
 
