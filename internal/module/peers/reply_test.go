@@ -422,6 +422,27 @@ func TestReply_PartialInventoryIsNotReady(t *testing.T) {
 	}
 }
 
+// TestReply_UnknownRegistryFileIsNotReady is TestReply_PartialInventoryIsNotReady's
+// mirror on the not-found side: the replier's own registry file is
+// undecodable rather than merely unresolved, so findReplier finds no row
+// at all for the reply address. The frame is dropped not_ready (never
+// replier_unknown, which the caller would read as "stop retrying this
+// helper"), and the helper is kept for a retry once the registry is sane
+// again.
+func TestReply_UnknownRegistryFileIsNotReady(t *testing.T) {
+	r := newReplyEnv(t, envOpts{})
+	writeRegistryFixture(t, r.regDir, strconv.Itoa(targetPID)+".json", "{")
+
+	r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
+	row := r.assertDropped(ipeers.ErrNotReady, "")
+	if row.Error != detailInventoryPartial {
+		t.Errorf("row error = %q, want %q", row.Error, detailInventoryPartial)
+	}
+	if n := r.helperMapLen(); n == 0 {
+		t.Errorf("helper map len = %d, want the helper kept (not reaped)", n)
+	}
+}
+
 func TestReply_TextValidation(t *testing.T) {
 	t.Run("too large", func(t *testing.T) {
 		r := newReplyEnv(t, envOpts{})

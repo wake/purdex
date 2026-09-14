@@ -790,6 +790,35 @@ func TestDeliver_PartialInventoryIsNotReady(t *testing.T) {
 	})
 }
 
+// TestDeliver_UnknownRegistryFileIsNotReady pins that an alive-but-
+// undecodable registry file makes ANY negative verdict on the target
+// untrustworthy, even one findTarget reaches by way of a genuine
+// candidate row (the target's own session id, just with a mismatched
+// field): the target's own registry file is corrupted after its tmux
+// session already resolved the owner, so findTarget finds a candidate row
+// (the owner-fallback session record) whose pid does not match — normally
+// target_gone, but the unknown file must force not_ready instead, so the
+// origin never reaps the sender's helper over what may just be a registry
+// write race.
+func TestDeliver_UnknownRegistryFileIsNotReady(t *testing.T) {
+	inTmux := envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}}
+	e := newDeliverEnv(t, inTmux)
+	writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
+	e.m.owners = &fakeOwners{owners: map[string]agent.PaneOwner{"s1": {AgentType: "cc", SessionID: targetSessionID, TmuxPaneID: "%1"}}}
+
+	// Corrupt the target's own registry file: its pid is alive (the fake
+	// liveness treats every pid as alive) ⇒ an alive unknown.
+	writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", "{")
+
+	ae := assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusServiceUnavailable, ipeers.ErrNotReady)
+	if ae.Detail != detailInventoryPartial {
+		t.Errorf("detail = %q, want %q", ae.Detail, detailInventoryPartial)
+	}
+	if row := e.onlyRow(); row.Result != ipeers.ErrNotReady {
+		t.Errorf("row result = %q, want not_ready", row.Result)
+	}
+}
+
 func TestDeliver_RateLimited31st(t *testing.T) {
 	e := newDeliverEnv(t, envOpts{})
 	for i := 0; i < ipeers.PairRateLimit; i++ {

@@ -237,7 +237,15 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	// §4.2: an owner lookup timed out, failed, or never started) that has
 	// no row for the tuple's session says just as little — the target may
 	// be the very session whose lookup did not complete — and is not_ready
-	// too; only a row that carries the session id is a verdict on it.
+	// too; only a row that carries the session id is a verdict on it. An
+	// alive-but-undecodable registry file (Diagnosis.BlockingUnknown) is a
+	// stronger version of the same problem and overrides even a genuine
+	// candidate row: the file that failed to decode could be exactly the
+	// one that would have superseded whatever mismatched row findTarget
+	// did resolve (a restart racing the registry write), so its mere
+	// presence is not_ready too, never a verdict — a label-store failure
+	// alone (partial with no unknown files) hides no entries and does not
+	// change this.
 	env := m.localEnvelope(r.Context(), snap.localHostID, snap.localAlias)
 	if !env.OK {
 		refuseWith(http.StatusServiceUnavailable, ipeers.ErrNotReady, "inventory unavailable", "inventory unavailable: "+env.Error)
@@ -245,7 +253,7 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	}
 	target, detail, candidate := findTarget(env.Peers, req.To)
 	if detail != "" {
-		if !candidate && env.Partial {
+		if len(env.UnknownRegistryFiles) > 0 || (!candidate && env.Partial) {
 			refuse(http.StatusServiceUnavailable, ipeers.ErrNotReady, detailInventoryPartial)
 			return
 		}

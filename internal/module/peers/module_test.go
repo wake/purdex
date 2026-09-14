@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
@@ -130,6 +131,7 @@ type moduleFixture struct {
 	proxiesPath string
 	fake        *proxyhelpertest.Fake
 	audit       *fakeAudit
+	labels      *store.PeerLabelStore
 	logs        *logSink
 	frames      chan frameEvent // every onFrame call the manager makes
 	clock       *fakeClock
@@ -171,6 +173,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 	}
 	t.Cleanup(func() { meta.Close() })
 	f.audit = &fakeAudit{real: meta.PeerMessages()}
+	f.labels = meta.PeerLabels()
 
 	// fakeClock is not goroutine-safe and the helper manager reads the
 	// clock from its own goroutines: one mutex-guarded accessor feeds
@@ -196,6 +199,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 		fetch:            fetchRemote,
 		logf:             f.logs.logf,
 		audit:            f.audit,
+		labels:           f.labels,
 		dedup:            newDedupSet(ipeers.DedupWindow, now),
 		pairs:            newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, now),
 		hostLimit:        newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, now),
@@ -1493,12 +1497,151 @@ func TestLocalEnvelope_UsesCallerSnapshot_NotLiveConfig(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Label snapshot join, registry diagnosis, daemon_version (Task 5).
+// ---------------------------------------------------------------------------
+
+// newLabelJoinFixture builds a moduleFixture with one tmux session "mt0"
+// (code "mt0code") owned by a cc conversation "sid-1" with a live registry
+// entry at pid 10 — the common inventory every test below starts from. The
+// fixture's registry dir (f.registryDir) is a plain t.TempDir(), so a test
+// can drop extra files into it before calling localEnvelope.
+func newLabelJoinFixture(t *testing.T) *moduleFixture {
+	t.Helper()
+	dir := t.TempDir()
+	writeRegistryFixture(t, dir, "10.json", `{"pid":10,"sessionId":"sid-1","cwd":"/w","procStart":"`+targetProcStart+`","version":"2.1.270","tmux":"mt0:@1.%1","messagingSocketPath":"/tmp/x/10.sock","name":"purdex-x","status":"idle"}`)
+
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "mt0code", Name: "mt0", Cwd: "/w", TmuxInstance: "inst1"},
+	}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{
+		"mt0code": {AgentType: "cc", SessionID: "sid-1", Cwd: "/w", TmuxPaneID: "%1"},
+	}}
+	return newTestModuleWith(t, fixtureOpts{
+		core:        newTestCore(t, "h:1", "a"),
+		sessions:    sessions,
+		owners:      owners,
+		registryDir: dir,
+		liveness:    allLiveLiveness(fixture76973ProcStart),
+		budget:      2 * time.Second,
+	})
+}
+
+// TestLocalEnvelope_LabelsJoinedAndVersion pins localEnvelope's join of the
+// label snapshot (Task 3's peer_labels table) into the built rows, and that
+// every response carries this daemon's own build version and a never-null
+// (here empty) unknown_registry_files list.
+func TestLocalEnvelope_LabelsJoinedAndVersion(t *testing.T) {
+	f := newLabelJoinFixture(t)
+	if _, err := f.labels.Claim("sid-1", "purdex-dev", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	env := f.m.localEnvelope(context.Background(), "h:1", "a")
+
+	if env.DaemonVersion != buildinfo.Version {
+		t.Errorf("daemon_version = %q, want %q", env.DaemonVersion, buildinfo.Version)
+	}
+	if env.UnknownRegistryFiles == nil || len(env.UnknownRegistryFiles) != 0 {
+		t.Errorf("unknown_registry_files = %#v, want empty non-nil", env.UnknownRegistryFiles)
+	}
+
+	var rec *ipeers.PeerRecord
+	for i := range env.Peers {
+		if env.Peers[i].SessionCode == "mt0code" {
+			rec = &env.Peers[i]
+		}
+	}
+	if rec == nil {
+		t.Fatalf("mt0 record not found in peers: %+v", env.Peers)
+	}
+	if rec.Label != "purdex-dev" || rec.LabelSource != ipeers.LabelSourceUser || rec.LabelRev != 1 {
+		t.Errorf("row = %+v, want label purdex-dev/user/rev 1", rec)
+	}
+}
+
+// TestLocalEnvelope_UnknownRegistryFileMarksPartial is Task 4's suggested
+// narrow test: an alive-but-undecodable registry file, at a pid distinct
+// from the resolved session's own live entry, marks the whole response
+// partial and is named in unknown_registry_files — even though the owner
+// lookup for the one listed session succeeded outright.
+func TestLocalEnvelope_UnknownRegistryFileMarksPartial(t *testing.T) {
+	f := newLabelJoinFixture(t)
+	writeRegistryFixture(t, f.registryDir, "4242.json", "{")
+
+	env := f.m.localEnvelope(context.Background(), "h:1", "a")
+
+	if !env.Partial {
+		t.Fatal("partial = false, want true")
+	}
+	if len(env.UnknownRegistryFiles) != 1 || !strings.HasSuffix(env.UnknownRegistryFiles[0], "4242.json") {
+		t.Errorf("unknown_registry_files = %v", env.UnknownRegistryFiles)
+	}
+
+	var rec *ipeers.PeerRecord
+	for i := range env.Peers {
+		if env.Peers[i].SessionCode == "mt0code" {
+			rec = &env.Peers[i]
+		}
+	}
+	if rec == nil || !rec.Deliverable {
+		t.Errorf("mt0 record = %+v, want the owner lookup to have resolved and delivered despite the unrelated unknown file", rec)
+	}
+}
+
+// TestLocalEnvelope_LabelStoreFailureIsPartial pins that a label store
+// Snapshot failure marks the response partial (every row falls back to its
+// default label, spec-consistent since the store's actual content is now
+// unknown) and logs once, without touching UnknownRegistryFiles.
+func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
+	f := newLabelJoinFixture(t)
+	f.m.labels = failingLabels{}
+
+	env := f.m.localEnvelope(context.Background(), "h:1", "a")
+
+	if !env.Partial {
+		t.Fatal("partial = false, want true on label store failure")
+	}
+	for _, r := range env.Peers {
+		if r.Agent != nil && r.Agent.Type == "cc" && r.LabelSource != ipeers.LabelSourceDefault {
+			t.Errorf("row %s label_source = %q, want default", r.Address, r.LabelSource)
+		}
+	}
+	if !f.logs.contains("label store") {
+		t.Error("expected one log line about the label store")
+	}
+}
+
+// failingLabels is a LabelStore whose every method fails: it stands in for
+// a label store that is configured but unreachable (a locked/corrupt DB).
+type failingLabels struct{}
+
+func (failingLabels) Snapshot() ([]store.PeerLabel, error) { return nil, errors.New("boom") }
+func (failingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+	return store.PeerLabel{}, errors.New("boom")
+}
+func (failingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+	return store.PeerLabel{}, false, errors.New("boom")
+}
+
+// writeFailingLabels reads fine but cannot write (Task 7 uses it for the
+// claim/release write-failure rows of the matrix).
+type writeFailingLabels struct{ real *store.PeerLabelStore }
+
+func (w writeFailingLabels) Snapshot() ([]store.PeerLabel, error) { return w.real.Snapshot() }
+func (writeFailingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+	return store.PeerLabel{}, errors.New("disk full")
+}
+func (writeFailingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+	return store.PeerLabel{}, false, errors.New("disk full")
+}
+
 func TestInit_MissingSessionProvider(t *testing.T) {
 	c := core.New(core.CoreDeps{
 		Config:   &config.Config{},
 		Registry: core.NewServiceRegistry(),
 	})
-	m := New(nil)
+	m := New(nil, nil)
 	err := m.Init(c)
 	if err == nil {
 		t.Fatalf("Init: want error, got nil")
@@ -1515,7 +1658,7 @@ func TestInit_MissingOwnerResolver(t *testing.T) {
 	})
 	c.Registry.Register(session.RegistryKey, &fakeSessions{})
 
-	m := New(nil)
+	m := New(nil, nil)
 	err := m.Init(c)
 	if err == nil {
 		t.Fatalf("Init: want error, got nil")

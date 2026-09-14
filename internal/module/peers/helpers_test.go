@@ -149,6 +149,18 @@ func (l *logSink) all() []string {
 	return append([]string(nil), l.lines...)
 }
 
+// contains reports whether any logged line contains substr.
+func (l *logSink) contains(substr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, line := range l.lines {
+		if strings.Contains(line, substr) {
+			return true
+		}
+	}
+	return false
+}
+
 // switchStarter lets one manager spawn from different Fakes over its
 // life (a cap test needs 31 Normal helpers and then one Barrier).
 type switchStarter struct {

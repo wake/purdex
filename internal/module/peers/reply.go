@@ -116,12 +116,20 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 		// A PARTIAL inventory (spec §4.2) with no row for the reply
 		// address says nothing about the replier — its tmux session may
 		// be the one whose owner lookup did not complete: not_ready, never
-		// replier_unknown (a verdict). The helper is kept either way.
+		// replier_unknown (a verdict). An alive-but-undecodable registry
+		// file (Diagnosis.BlockingUnknown) is the same problem in a
+		// stronger form and overrides even a row findReplier DID resolve
+		// for this sock (found, but not cc or not deliverable): the file
+		// that failed to decode could be the one that would have
+		// superseded it, so its presence is not_ready too, never
+		// replier_unknown — a positively-identified proxy row (a helper,
+		// D9) is unaffected, since that verdict comes from a row that
+		// decoded fine. The helper is kept either way.
 		code := ipeers.ErrReplierUnknown
 		switch {
 		case replier.Agent != nil && replier.Agent.Type == "proxy":
 			code = ipeers.ErrProxyToProxy
-		case replier.Agent == nil && env.Partial:
+		case len(env.UnknownRegistryFiles) > 0 || (replier.Agent == nil && env.Partial):
 			code, detail = ipeers.ErrNotReady, detailInventoryPartial
 		}
 		drop(code, detail)
