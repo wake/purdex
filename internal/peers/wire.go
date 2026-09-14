@@ -181,6 +181,12 @@ const (
 	ErrReplierUnknown    = "replier_unknown"
 	ErrProxyToProxy      = "proxy_to_proxy"
 	ErrNoReturnRoute     = "no_return_route"
+
+	// Peer Address v2 self routes (Task 7): whoami, claim, release.
+	ErrCodeLabelInvalid  = "label_invalid"
+	ErrCodeLabelReserved = "label_reserved"
+	ErrLabelTaken        = "label_taken"
+	ErrStoreUnavailable  = "store_unavailable"
 )
 
 // Results: DeliverResponse.Result / SendResponse.Result / the audit result
@@ -250,14 +256,32 @@ type SendResponse struct {
 	OneWay        bool   `json:"one_way"`
 }
 
+// SelfRequest is the body of POST /api/peers/self and DELETE
+// /api/peers/self/label: the caller's own inbox, resolved against the
+// live registry the same way /send resolves an origin (Peer Address v2
+// spec §3.6).
+type SelfRequest struct {
+	OriginInbox string `json:"origin_inbox"`
+}
+
+// ClaimLabelRequest is the body of PUT /api/peers/self/label: the
+// caller's own inbox plus the user label it wants to claim.
+type ClaimLabelRequest struct {
+	OriginInbox string `json:"origin_inbox"`
+	Label       string `json:"label"`
+}
+
 // APIError is the body of every 4xx/5xx JSON response on /send, /deliver
 // and /log.
 type APIError struct {
 	Error      string       `json:"error"`
 	Detail     string       `json:"detail,omitempty"`
-	Candidates []string     `json:"candidates,omitempty"` // ambiguous: addresses
-	Remote     *RemoteError `json:"remote,omitempty"`     // remote_error: the other daemon's answer
-	Partial    bool         `json:"partial,omitempty"`    // not_ready from Resolve: the inventory that produced it was partial
+	Candidates []string     `json:"candidates,omitempty"`  // ambiguous: addresses
+	Remote     *RemoteError `json:"remote,omitempty"`      // remote_error: the other daemon's answer
+	Partial    bool         `json:"partial,omitempty"`     // not_ready from Resolve: the inventory that produced it was partial
+	Holder     *PeerRecord  `json:"holder,omitempty"`      // label_taken: the live session currently holding the label
+	LiveLabels []string     `json:"live_labels,omitempty"` // label_taken: every label held by a live session (sorted), including the caller's own
+	Skipped    []string     `json:"skipped,omitempty"`     // not_ready from claim: registry files that blocked the completeness proof
 }
 
 // RemoteError carries another daemon's answer when a local request fails

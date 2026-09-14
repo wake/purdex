@@ -1,0 +1,362 @@
+// internal/module/peers/labels_test.go
+package peers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/wake/purdex/internal/middleware"
+	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/module/session"
+	ipeers "github.com/wake/purdex/internal/peers"
+)
+
+// labelLiveness is the Liveness the self-route fixture shares across its
+// two fake registry entries: every pid is alive (Stat always succeeds,
+// procStart always matches) unless markDead has been called for it,
+// modelled on e2eLiveness (e2e_test.go).
+type labelLiveness struct {
+	dead sync.Map // pid → struct{}
+}
+
+func (l *labelLiveness) markDead(pid int) { l.dead.Store(pid, struct{}{}) }
+func (l *labelLiveness) revive(pid int)   { l.dead.Delete(pid) }
+
+func (l *labelLiveness) liveness() ipeers.Liveness {
+	return ipeers.Liveness{
+		Stat: func(path string) error { return nil },
+		PidAlive: func(pid int) bool {
+			_, dead := l.dead.Load(pid)
+			return !dead
+		},
+		StartTime: func(pid int) (time.Time, error) {
+			ts, _ := ipeers.ParseProcStart(targetProcStart)
+			return ts, nil
+		},
+	}
+}
+
+// labelFixture is the self-route test fixture: a moduleFixture whose
+// registry holds two live entries — pid 10, inside tmux session "mt0"
+// (registry name "n10", session id "sid-1"), and pid 20 with no tmux, the
+// Desktop stand-in (registry name "n20", session id "sid-2").
+type labelFixture struct {
+	*moduleFixture
+	t       *testing.T
+	live    *labelLiveness
+	inboxes map[int]string
+}
+
+func newLabelFixture(t *testing.T) *labelFixture {
+	t.Helper()
+	dir := t.TempDir()
+	inbox10 := dir + "/10.sock"
+	inbox20 := dir + "/20.sock"
+	writeRegistryFixture(t, dir, "10.json", `{"pid":10,"sessionId":"sid-1","cwd":"/w","procStart":"`+targetProcStart+`","version":"2.1.270","tmux":"mt0:@1.%1","messagingSocketPath":"`+inbox10+`","name":"n10","status":"idle"}`)
+	writeRegistryFixture(t, dir, "20.json", `{"pid":20,"sessionId":"sid-2","cwd":"/w","procStart":"`+targetProcStart+`","version":"2.1.270","messagingSocketPath":"`+inbox20+`","name":"n20","status":"idle"}`)
+
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "c1", Name: "mt0", Cwd: "/w", TmuxInstance: "inst1"},
+	}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{
+		"c1": {AgentType: "cc", SessionID: "sid-1", Cwd: "/w", TmuxPaneID: "%1"},
+	}}
+
+	live := &labelLiveness{}
+	mf := newTestModuleWith(t, fixtureOpts{
+		core:        newTestCore(t, "h:1", "a"),
+		sessions:    sessions,
+		owners:      owners,
+		registryDir: dir,
+		liveness:    live.liveness(),
+		budget:      2 * time.Second,
+	})
+
+	return &labelFixture{
+		moduleFixture: mf,
+		t:             t,
+		live:          live,
+		inboxes:       map[int]string{10: inbox10, 20: inbox20},
+	}
+}
+
+func (f *labelFixture) inbox(pid int) string { return f.inboxes[pid] }
+
+// doAs serves one request under mux with principal p, decoding a
+// non-nil body as JSON.
+func (f *labelFixture) doAs(p middleware.Principal, method, path string, body any) (int, []byte) {
+	f.t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		f.t.Fatalf("marshal request body: %v", err)
+	}
+	mux := http.NewServeMux()
+	f.m.RegisterRoutes(mux)
+	ctx := middleware.WithPrincipal(context.Background(), p)
+	req := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(ctx)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	return rr.Code, rr.Body.Bytes()
+}
+
+func (f *labelFixture) self(req ipeers.SelfRequest) (int, []byte) {
+	f.t.Helper()
+	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodPost, "/api/peers/self", req)
+}
+
+func (f *labelFixture) claim(inbox, label string) (int, []byte) {
+	f.t.Helper()
+	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodPut, "/api/peers/self/label", ipeers.ClaimLabelRequest{OriginInbox: inbox, Label: label})
+}
+
+func (f *labelFixture) release(inbox string) (int, []byte) {
+	f.t.Helper()
+	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodDelete, "/api/peers/self/label", ipeers.SelfRequest{OriginInbox: inbox})
+}
+
+// assertAPIError requires status == wantStatus and decodes body as an
+// ipeers.APIError with Error == wantCode, returning it for further checks.
+func (f *labelFixture) assertAPIError(status int, body []byte, wantStatus int, wantCode string) ipeers.APIError {
+	f.t.Helper()
+	if status != wantStatus {
+		f.t.Fatalf("status = %d, want %d; body=%s", status, wantStatus, body)
+	}
+	var ae ipeers.APIError
+	if err := json.Unmarshal(body, &ae); err != nil {
+		f.t.Fatalf("decode APIError: %v; body=%s", err, body)
+	}
+	if ae.Error != wantCode {
+		f.t.Fatalf("error = %q, want %q; body=%s", ae.Error, wantCode, body)
+	}
+	return ae
+}
+
+// spawnHelper acquires a fake `pdx peer-proxy` helper from the fixture's
+// helper manager, so its pid shows up in m.proxyPIDs() — used to prove a
+// proxy cannot name itself as a self-route origin.
+func (f *labelFixture) spawnHelper(t *testing.T) *helper {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	key := ipeers.OriginKey{
+		HostID:         "peer:1",
+		AgentSessionID: "00000000-0000-4000-8000-000000000099",
+		PID:            99999,
+		ProcStart:      "Mon Sep 14 10:00:00 2026",
+	}
+	h, err := f.m.helpers.Acquire(ctx, key, "x/y")
+	if err != nil {
+		t.Fatalf("spawnHelper: Acquire: %v", err)
+	}
+	return h
+}
+
+// decodeRecord fails the test unless status == 200 and body decodes as an
+// ipeers.PeerRecord.
+func decodeRecord(t *testing.T, status int, body []byte) ipeers.PeerRecord {
+	t.Helper()
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var rec ipeers.PeerRecord
+	if err := json.Unmarshal(body, &rec); err != nil {
+		t.Fatalf("decode PeerRecord: %v; body=%s", err, body)
+	}
+	return rec
+}
+
+func TestSelf_Whoami(t *testing.T) {
+	f := newLabelFixture(t)
+	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	rec := decodeRecord(t, status, body)
+	want := "a/" + ipeers.DefaultLabel("sid-2") + ":n20"
+	if rec.Address != want || rec.LabelSource != "default" || rec.RowKind != "entry" || rec.Agent.PID != 20 {
+		t.Errorf("record = %+v, want address %s", rec, want)
+	}
+	// A session inside tmux renders the same address the listing shows.
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(10)})
+	rec = decodeRecord(t, status, body)
+	if rec.Suffix != "mt0-n10" {
+		t.Errorf("tmux session suffix = %q", rec.Suffix)
+	}
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: "/nope.sock"})
+	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
+	status, body = f.self(ipeers.SelfRequest{})
+	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
+}
+
+func TestClaim_Matrix(t *testing.T) {
+	f := newLabelFixture(t)
+	cases := []struct {
+		label      string
+		wantStatus int
+		wantCode   string
+	}{
+		{"Bad Label", 400, ipeers.ErrCodeLabelInvalid},
+		{"cc", 400, ipeers.ErrCodeLabelReserved},
+		{"tmux", 400, ipeers.ErrCodeLabelReserved},
+		{"_abc123", 400, ipeers.ErrCodeLabelInvalid},
+		{"purdex-tester", 200, ""},
+	}
+	for _, c := range cases {
+		status, body := f.claim(f.inbox(20), c.label)
+		if c.wantStatus == 200 {
+			rec := decodeRecord(t, status, body)
+			if rec.Label != c.label || rec.LabelSource != "user" || rec.LabelRev != 1 || rec.Address != "a/purdex-tester:n20" {
+				t.Errorf("%q: %+v", c.label, rec)
+			}
+			continue
+		}
+		f.assertAPIError(status, body, c.wantStatus, c.wantCode)
+	}
+	// Same label again: 200, rev unchanged.
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	rec := decodeRecord(t, status, body)
+	if rec.LabelRev != 1 {
+		t.Errorf("re-claim bumped rev to %d", rec.LabelRev)
+	}
+	// Another live session: taken, with holder + live_labels (the caller's
+	// own live label is listed too — spec §3.3 says every held label).
+	status, body = f.claim(f.inbox(10), "purdex-dev")
+	decodeRecord(t, status, body)
+	status, body = f.claim(f.inbox(10), "purdex-tester")
+	ae := f.assertAPIError(status, body, 409, ipeers.ErrLabelTaken)
+	if ae.Holder == nil || ae.Holder.Agent.PID != 20 || ae.Holder.Address != "a/purdex-tester:n20" {
+		t.Errorf("taken holder = %+v", ae.Holder)
+	}
+	if !reflect.DeepEqual(ae.LiveLabels, []string{"purdex-dev", "purdex-tester"}) {
+		t.Errorf("live_labels = %v", ae.LiveLabels)
+	}
+	// Holder dies ⇒ claim succeeds, old row evicted, caller's previous label replaced.
+	f.live.markDead(20)
+	status, body = f.claim(f.inbox(10), "purdex-tester")
+	rec = decodeRecord(t, status, body)
+	if rec.Agent.PID != 10 || rec.Label != "purdex-tester" || rec.LabelRev != 3 {
+		t.Errorf("take-over: %+v", rec)
+	}
+	rows, _ := f.labels.Snapshot()
+	if len(rows) != 1 || rows[0].SessionID != "sid-1" || rows[0].Label != "purdex-tester" {
+		t.Errorf("rows after take-over = %+v", rows)
+	}
+	// The dead one comes back (resume): whoami shows the default label.
+	f.live.revive(20)
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	rec = decodeRecord(t, status, body)
+	if rec.LabelSource != "default" || rec.LabelRev != 0 {
+		t.Errorf("resumed holder = %+v, want default label, rev 0", rec)
+	}
+}
+
+func TestClaim_NotReadyOnUnknownLiveFile(t *testing.T) {
+	f := newLabelFixture(t)
+	writeRegistryFixture(t, f.registryDir, "4242.json", "{") // pid 4242 alive per fake
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	ae := f.assertAPIError(status, body, 503, ipeers.ErrNotReady)
+	if len(ae.Skipped) != 1 || !strings.HasSuffix(ae.Skipped[0], "4242.json") {
+		t.Errorf("skipped = %v", ae.Skipped)
+	}
+	f.live.markDead(4242) // now the unknown file belongs to a dead pid: ignored
+	status, body = f.claim(f.inbox(20), "purdex-tester")
+	decodeRecord(t, status, body)
+	// Release has no completeness requirement.
+	writeRegistryFixture(t, f.registryDir, "4243.json", "{")
+	status, body = f.release(f.inbox(20))
+	decodeRecord(t, status, body)
+}
+
+func TestClaim_OriginMustBeLiveNonProxy(t *testing.T) {
+	f := newLabelFixture(t)
+	f.live.markDead(20)
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
+	// A helper (proxy) entry cannot name itself: register one via the
+	// fixture's helper manager (Acquire) and present its inbox.
+	h := f.spawnHelper(t)
+	status, body = f.claim(h.sock, "purdex-tester")
+	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
+}
+
+func TestClaim_StoreFailures(t *testing.T) {
+	f := newLabelFixture(t)
+	f.m.labels = failingLabels{} // read fails
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
+
+	f.m.labels = writeFailingLabels{real: f.labels} // read ok, write fails
+	status, body = f.claim(f.inbox(20), "purdex-tester")
+	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
+	status, body = f.release(f.inbox(20))
+	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
+	if rows, _ := f.labels.Snapshot(); len(rows) != 0 {
+		t.Errorf("rows written despite failure: %+v", rows)
+	}
+	// whoami only reads: still fine.
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	decodeRecord(t, status, body)
+}
+
+func TestRelease(t *testing.T) {
+	f := newLabelFixture(t)
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	decodeRecord(t, status, body)
+	status, body = f.release(f.inbox(20))
+	rec := decodeRecord(t, status, body)
+	if rec.LabelSource != "default" || rec.LabelRev != 2 || rec.Label != ipeers.DefaultLabel("sid-2") {
+		t.Errorf("released = %+v", rec)
+	}
+	// Release with no row: 200, default, rev 0, nothing written.
+	status, body = f.release(f.inbox(10))
+	rec = decodeRecord(t, status, body)
+	if rec.LabelRev != 0 {
+		t.Errorf("no-row release = %+v", rec)
+	}
+	if rows, _ := f.labels.Snapshot(); len(rows) != 1 {
+		t.Errorf("rows = %+v, want only sid-2's released row", rows)
+	}
+}
+
+func TestClaim_ConcurrentSameLabel_OneWins(t *testing.T) {
+	f := newLabelFixture(t)
+	var wg sync.WaitGroup
+	results := make([]int, 2)
+	for i, pid := range []int{10, 20} {
+		wg.Add(1)
+		go func(i, pid int) {
+			defer wg.Done()
+			results[i], _ = f.claim(f.inbox(pid), "purdex-tester")
+		}(i, pid)
+	}
+	wg.Wait()
+	sort.Ints(results)
+	if results[0] != 200 || results[1] != 409 {
+		t.Fatalf("statuses = %v, want [200 409]", results)
+	}
+}
+
+func TestSelfRoutes_DenyHostPrincipal(t *testing.T) {
+	for _, c := range []struct{ method, path string }{
+		{"POST", "/api/peers/self"}, {"PUT", "/api/peers/self/label"}, {"DELETE", "/api/peers/self/label"},
+	} {
+		r := httptest.NewRequest(c.method, c.path, nil)
+		if HostRoutePolicy(r) {
+			t.Errorf("%s %s allowed for a host principal", c.method, c.path)
+		}
+	}
+	// And the handlers themselves refuse a host principal in depth.
+	f := newLabelFixture(t)
+	status, _ := f.doAs(middleware.Principal{Kind: middleware.PrincipalHost, Alias: "x", HostID: "x:1"}, "POST", "/api/peers/self", ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	if status != 403 {
+		t.Errorf("host principal got %d", status)
+	}
+}

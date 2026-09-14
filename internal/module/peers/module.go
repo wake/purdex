@@ -287,6 +287,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/send", m.handleSend)
 	mux.HandleFunc("POST /api/peers/deliver", m.handleDeliver)
 	mux.HandleFunc("GET /api/peers/log", m.handlePeersLog)
+	mux.HandleFunc("POST /api/peers/self", m.handleSelf)
+	mux.HandleFunc("PUT /api/peers/self/label", m.handleClaimLabel)
+	mux.HandleFunc("DELETE /api/peers/self/label", m.handleReleaseLabel)
 }
 
 // handlePeers serves GET /api/peers. scope unset/"local" returns this
