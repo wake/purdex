@@ -281,8 +281,9 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	rows := normalizeRemoteRows(env.Peers, entry.Alias, entry.HostID)
 
-	// 6. Resolve the session part over the remote's rows (spec §4.1).
-	target, err := ipeers.Resolve(rows, session)
+	// 6. Resolve the session part over the remote's rows (Peer Address v2
+	// spec §3.2).
+	target, err := ipeers.Resolve(rows, session, env.Partial)
 	if err != nil {
 		var amb *ipeers.AmbiguousError
 		switch {
@@ -293,6 +294,12 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			}
 			m.logf("peers: send refused (%s): %q on %q has %d candidates", ipeers.ErrAmbiguous, session, entry.Alias, len(candidates))
 			writeWireError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrAmbiguous, Detail: err.Error(), Candidates: candidates})
+		case errors.Is(err, ipeers.ErrResolveNotReady):
+			detail := fmt.Sprintf("peer inventory on %q is partial; retry, or address the tmux session as tmux:<name>", entry.Alias)
+			m.logf("peers: send refused (%s): %s", ipeers.ErrNotReady, detail)
+			writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: detail, Partial: true}) // refuseUnaudited cannot set Partial
+		case errors.Is(err, ipeers.ErrLegacyCC):
+			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, err.Error())
 		default:
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, fmt.Sprintf("no session %q on %q", session, entry.Alias))
 		}

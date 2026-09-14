@@ -683,20 +683,86 @@ func TestSend_Ambiguous(t *testing.T) {
 	a := remoteRow("", "")
 	b := remoteRow("", "")
 	b.Agent.PID, b.Agent.SessionID = 778, "99999999-8888-4777-8666-666666666666"
+	a.Label, b.Label = "dup-label", "dup-label"
 	// The remote claims another alias in its addresses: candidates must
 	// come back normalised to the entry's alias.
-	a.Address, b.Address = "zzz/cc:"+remoteSession, "zzz/cc:"+remoteSession
+	a.Address, b.Address = "zzz/dup-label", "zzz/dup-label"
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(a, b) })
 	req := s.sendReq()
-	req.To = remoteAlias + "/cc:" + remoteSession
+	req.To = remoteAlias + "/dup-label"
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrAmbiguous)
-	want := []string{remoteAlias + "/cc:" + remoteSession, remoteAlias + "/cc:" + remoteSession}
+	want := []string{remoteAlias + "/dup-label", remoteAlias + "/dup-label"}
 	if len(ae.Candidates) != 2 || ae.Candidates[0] != want[0] || ae.Candidates[1] != want[1] {
 		t.Errorf("candidates = %v, want %v", ae.Candidates, want)
 	}
 	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
 		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+}
+
+// TestSend_LegacyCCAddress pins that the retired v1 "cc:<name>" address
+// form is always peer_not_found with the legacy hint, never resolved
+// against a label or a tmux session name — and never consults env.Partial.
+func TestSend_LegacyCCAddress(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	req := s.sendReq()
+	req.To = remoteAlias + "/cc:foo"
+
+	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+	if !strings.Contains(ae.Detail, "pdx peers --all") {
+		t.Errorf("detail = %q, want it to contain the legacy hint", ae.Detail)
+	}
+	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
+		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+}
+
+// TestSend_TmuxFormResolves pins the explicit "tmux:<name>" address form:
+// it matches PeerRecord.SessionName directly, bypassing the label tier.
+func TestSend_TmuxFormResolves(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	req := s.sendReq()
+	req.To = remoteAlias + "/tmux:" + remoteSession
+
+	resp := s.sendOK(req)
+	if resp.Result != ipeers.ResultDelivered {
+		t.Errorf("result = %q, want delivered", resp.Result)
+	}
+	post := s.onlyPost()
+	if post.req.To.AgentSessionID != remoteSessionID {
+		t.Errorf("post to = %+v, want the tmux row's tuple", post.req.To)
+	}
+}
+
+// TestSend_PartialInventoryNotReady pins the v2 delta on step 6: when the
+// remote's envelope is partial, a label-tier miss is 503 not_ready with
+// Partial:true in the body rather than falling back to the bare tmux-name
+// tier — even though that tier would otherwise have matched.
+func TestSend_PartialInventoryNotReady(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	s.set(func(s *sendEnv) {
+		row := remoteRow(remoteSession, "fooc") // carries no Label
+		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row}}
+	})
+	req := s.sendReq() // To: remoteAlias + "/" + remoteSession — would match tier 2 if reached
+
+	rr := s.send(adminCtx(), req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rr.Code, rr.Body.String())
+	}
+	var ae ipeers.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &ae); err != nil {
+		t.Fatalf("decode body: %v; body=%s", err, rr.Body.String())
+	}
+	if ae.Error != ipeers.ErrNotReady {
+		t.Errorf("error = %q, want %q", ae.Error, ipeers.ErrNotReady)
+	}
+	if !ae.Partial {
+		t.Errorf("partial = %v, want true", ae.Partial)
+	}
+	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
+		t.Errorf("post/rows = %d/%d, want none (refused before the audit insert)", len(s.postCalls()), len(s.rows()))
 	}
 }
 

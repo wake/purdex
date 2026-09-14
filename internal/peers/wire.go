@@ -257,6 +257,7 @@ type APIError struct {
 	Detail     string       `json:"detail,omitempty"`
 	Candidates []string     `json:"candidates,omitempty"` // ambiguous: addresses
 	Remote     *RemoteError `json:"remote,omitempty"`     // remote_error: the other daemon's answer
+	Partial    bool         `json:"partial,omitempty"`    // not_ready from Resolve: the inventory that produced it was partial
 }
 
 // RemoteError carries another daemon's answer when a local request fails

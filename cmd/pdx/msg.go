@@ -33,7 +33,7 @@ const msgDefaultLogTail = 50
 // printed to stderr (exit 2) for every malformed invocation except an
 // unrecognized flag, which gets its own more specific message (see
 // runMsgCmd). `selftest`'s body lives in msg_selftest.go.
-const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<session> <text>\n" +
+const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<label>[:<suffix>] | <host>/tmux:<name> <text>\n" +
 	"           (-- ends the options: use it before text that starts with -)\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +

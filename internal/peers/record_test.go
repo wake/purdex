@@ -474,16 +474,10 @@ func TestBuild_EntryConsumedByRule4_NeverAlsoAppearsAsOutsideRow(t *testing.T) {
 		t.Fatalf("sessionRow = %+v, want deliverable session row via entry PID 5", sessionRow)
 	}
 
-	// (c) Resolve(records, "cc:purdex-5") returns the session row itself
-	// (no AmbiguousError), since the entry it was built from is not
-	// duplicated into a separate outside row.
-	resolved, err := Resolve(got, "cc:purdex-5")
-	if err != nil {
-		t.Fatalf("Resolve: unexpected err: %v", err)
-	}
-	if resolved.SessionCode != "s1" {
-		t.Fatalf("Resolve() = %+v, want the session row (SessionCode=s1)", resolved)
-	}
+	// (c) The entry it was built from is not duplicated into a separate
+	// outside row: len(got) == 1 above already proves it (Resolve's
+	// "cc:<name>" tier is retired in Task 6, so there is no lookup left
+	// to re-demonstrate it through).
 }
 
 // TestBuild_TwoSessionsSameOwnerSessionID_EntryConsumedOnce pins Item 4: two

@@ -7,182 +7,81 @@ import (
 
 // --- helpers -------------------------------------------------------------
 
-func ccRecord(name, code, peerName string) PeerRecord {
-	return PeerRecord{
-		SessionName: name,
-		SessionCode: code,
-		Agent:       &AgentInfo{Type: "cc", PeerName: peerName},
-	}
+func labelRecord(label, source, sessionName string, pid int) PeerRecord {
+	return PeerRecord{SessionName: sessionName, Label: label, LabelSource: source,
+		Agent: &AgentInfo{Type: "cc", PID: pid}, Deliverable: true}
 }
 
-// --- Resolve: each tier resolves -----------------------------------------
+// --- Resolve: tiers --------------------------------------------------------
 
-func TestResolve_NameTier(t *testing.T) {
-	records := []PeerRecord{
-		{SessionName: "alpha", SessionCode: "a1"},
-		{SessionName: "beta", SessionCode: "b1"},
-	}
-	got, err := Resolve(records, "beta")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got.SessionName != "beta" {
-		t.Fatalf("got %+v, want beta", got)
-	}
-}
-
-func TestResolve_CodeTier(t *testing.T) {
-	records := []PeerRecord{
-		{SessionName: "alpha", SessionCode: "a1"},
-		{SessionName: "beta", SessionCode: "b1"},
-	}
-	got, err := Resolve(records, "b1")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got.SessionCode != "b1" {
-		t.Fatalf("got %+v, want code b1", got)
-	}
-}
-
-func TestResolve_CCTier_TmuxHostedSession(t *testing.T) {
-	records := []PeerRecord{
-		{SessionName: "alpha", SessionCode: "a1"},
-		ccRecord("beta", "b1", "worker-1"),
-	}
-	got, err := Resolve(records, "cc:worker-1")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got.SessionName != "beta" {
-		t.Fatalf("got %+v, want beta (tmux-hosted cc session)", got)
-	}
-}
-
-// --- Resolve: tier precedence and ambiguity -------------------------------
-
-func TestResolve_NameTierBeatsCodeTier(t *testing.T) {
-	// One record's Name equals another record's Code: "shared".
-	records := []PeerRecord{
-		{SessionName: "shared", SessionCode: "x1"},
-		{SessionName: "other", SessionCode: "shared"},
-	}
-	got, err := Resolve(records, "shared")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got.SessionName != "shared" || got.SessionCode != "x1" {
-		t.Fatalf("got %+v, want the name-tier match (SessionName=shared, SessionCode=x1)", got)
-	}
-}
-
-func TestResolve_AmbiguousAtNameTierNeverFallsToCodeTier(t *testing.T) {
-	// Two records share Name "dup"; a third record's Code equals "dup" too,
-	// but since the name tier already has >=1 match, the code tier (and
-	// that third record) must never be consulted.
-	records := []PeerRecord{
-		{SessionName: "dup", SessionCode: "c1"},
-		{SessionName: "dup", SessionCode: "c2"},
-		{SessionName: "third", SessionCode: "dup"},
-	}
-	_, err := Resolve(records, "dup")
-	var ambErr *AmbiguousError
-	if !errors.As(err, &ambErr) {
-		t.Fatalf("err = %v, want *AmbiguousError", err)
-	}
-	if ambErr.Session != "dup" {
-		t.Fatalf("ambErr.Session = %q, want dup", ambErr.Session)
-	}
-	if len(ambErr.Candidates) != 2 {
-		t.Fatalf("len(Candidates) = %d, want 2 (the two name-tier matches only)", len(ambErr.Candidates))
-	}
-	for _, c := range ambErr.Candidates {
-		if c.SessionName != "dup" {
-			t.Fatalf("candidate %+v is not a name-tier match", c)
+func TestResolve_LabelTier(t *testing.T) {
+	recs := []PeerRecord{labelRecord("purdex-dev", "user", "mt0", 1), labelRecord("_abc123", "default", "", 2)}
+	for _, in := range []string{"purdex-dev", "purdex-dev:whatever-suffix", "_abc123", "_abc123:x"} {
+		got, err := Resolve(recs, in, false)
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if (in[0] == '_' && got.Agent.PID != 2) || (in[0] != '_' && got.Agent.PID != 1) {
+			t.Errorf("%q resolved to pid %d", in, got.Agent.PID)
 		}
 	}
 }
 
-func TestResolve_NameTierBeatsCCTier(t *testing.T) {
-	// A record's SessionName is literally "cc:foo"; another record's
-	// Agent.PeerName is "foo". The name tier must win over the cc: tier.
-	nameRecord := PeerRecord{SessionName: "cc:foo", SessionCode: "n1"}
-	records := []PeerRecord{
-		nameRecord,
-		ccRecord("other", "o1", "foo"),
+func TestResolve_LabelShadowsTmuxName_TmuxFormBypasses(t *testing.T) {
+	recs := []PeerRecord{labelRecord("mt4", "user", "mt0", 1), labelRecord("_zzzzzz", "default", "mt4", 2)}
+	got, _ := Resolve(recs, "mt4", false)
+	if got.Agent.PID != 1 {
+		t.Errorf("bare mt4 resolved to pid %d, want the label holder 1", got.Agent.PID)
 	}
-	got, err := Resolve(records, "cc:foo")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
+	got, _ = Resolve(recs, "tmux:mt4", false)
+	if got.Agent.PID != 2 {
+		t.Errorf("tmux:mt4 resolved to pid %d, want 2", got.Agent.PID)
 	}
-	if got.SessionCode != "n1" {
-		t.Fatalf("got %+v, want the name-tier match (SessionCode=n1)", got)
+	if _, err := Resolve(recs, "tmux:", false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("tmux: empty ⇒ %v", err)
 	}
 }
 
-func TestResolve_NameTierAmbiguousNeverFallsToCCTier(t *testing.T) {
-	// Two records share SessionName "cc:foo"; a third has Agent.PeerName
-	// "foo". Ambiguity at the name tier must win; the cc: tier (and that
-	// third record) must never be consulted.
-	records := []PeerRecord{
-		{SessionName: "cc:foo", SessionCode: "n1"},
-		{SessionName: "cc:foo", SessionCode: "n2"},
-		ccRecord("other", "o1", "foo"),
+func TestResolve_TmuxFallback_OnlyWhenComplete(t *testing.T) {
+	recs := []PeerRecord{{SessionName: "shell"}} // no cc agent, no label
+	if got, err := Resolve(recs, "shell", false); err != nil || got.SessionName != "shell" {
+		t.Fatalf("complete: %+v %v", got, err)
 	}
-	_, err := Resolve(records, "cc:foo")
-	var ambErr *AmbiguousError
-	if !errors.As(err, &ambErr) {
-		t.Fatalf("err = %v, want *AmbiguousError", err)
+	if _, err := Resolve(recs, "shell", true); !errors.Is(err, ErrResolveNotReady) {
+		t.Fatalf("partial: got %v, want ErrResolveNotReady", err)
 	}
-	if len(ambErr.Candidates) != 2 {
-		t.Fatalf("len(Candidates) = %d, want 2 (the two name-tier matches only)", len(ambErr.Candidates))
+	if _, err := Resolve(recs, "shell:x", false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("suffix on a tmux fallback: got %v, want ErrNotFound", err)
 	}
-	for _, c := range ambErr.Candidates {
-		if c.SessionName != "cc:foo" {
-			t.Fatalf("candidate %+v is not a name-tier match", c)
+}
+
+func TestResolve_CCShortCircuit(t *testing.T) {
+	recs := []PeerRecord{labelRecord("cc", "user", "", 1)} // cannot exist, but the resolver must not care
+	for _, partial := range []bool{false, true} {
+		_, err := Resolve(recs, "cc:foo", partial)
+		if !errors.Is(err, ErrNotFound) || !errors.Is(err, ErrLegacyCC) {
+			t.Errorf("partial=%v: %v", partial, err)
 		}
 	}
 }
 
-func TestResolve_CCTier_SkipsProxyRows(t *testing.T) {
-	records := []PeerRecord{
-		{
-			Agent: &AgentInfo{Type: "proxy", PeerName: "helper"},
-		},
-		ccRecord("realsession", "r1", "helper"),
-	}
-	got, err := Resolve(records, "cc:helper")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got.SessionName != "realsession" {
-		t.Fatalf("got %+v, want realsession (proxy row skipped)", got)
+func TestResolve_Ambiguous_SameLabel(t *testing.T) {
+	recs := []PeerRecord{labelRecord("_abc123", "default", "mt0", 1), labelRecord("_abc123", "default", "", 2)}
+	_, err := Resolve(recs, "_abc123", false)
+	var amb *AmbiguousError
+	if !errors.As(err, &amb) || len(amb.Candidates) != 2 {
+		t.Fatalf("got %v", err)
 	}
 }
 
-func TestResolve_CCTier_AmbiguousWhenTwoRecordsShareName(t *testing.T) {
-	records := []PeerRecord{
-		ccRecord("one", "o1", "dup-peer"),
-		ccRecord("two", "t1", "dup-peer"),
+func TestResolve_ProxyAndUnlabelledExcluded(t *testing.T) {
+	recs := []PeerRecord{
+		{Label: "x1", Agent: &AgentInfo{Type: "proxy"}},
+		{SessionName: "x1"}, // no label; tier 2 would match
 	}
-	_, err := Resolve(records, "cc:dup-peer")
-	var ambErr *AmbiguousError
-	if !errors.As(err, &ambErr) {
-		t.Fatalf("err = %v, want *AmbiguousError", err)
-	}
-	if len(ambErr.Candidates) != 2 {
-		t.Fatalf("len(Candidates) = %d, want 2", len(ambErr.Candidates))
-	}
-}
-
-func TestResolve_CCPrefixEmptyPeerName_NotFound(t *testing.T) {
-	records := []PeerRecord{
-		{SessionName: "alpha", SessionCode: "a1"},
-		{SessionName: "beta", SessionCode: "b1", Agent: &AgentInfo{Type: "cc", PeerName: ""}},
-	}
-	_, err := Resolve(records, "cc:")
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
+	got, err := Resolve(recs, "x1", false)
+	if err != nil || got.Agent != nil {
+		t.Fatalf("got %+v %v, want the tmux row via tier 2", got, err)
 	}
 }
 
@@ -192,7 +91,7 @@ func TestResolve_UnknownSessionReturnsErrNotFound(t *testing.T) {
 	records := []PeerRecord{
 		{SessionName: "alpha", SessionCode: "a1"},
 	}
-	_, err := Resolve(records, "nonexistent")
+	_, err := Resolve(records, "nonexistent", false)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -202,7 +101,7 @@ func TestResolve_EmptySessionReturnsErrNotFound(t *testing.T) {
 	records := []PeerRecord{
 		{SessionName: "alpha", SessionCode: "a1"},
 	}
-	_, err := Resolve(records, "")
+	_, err := Resolve(records, "", false)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
