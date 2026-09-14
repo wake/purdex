@@ -314,3 +314,119 @@ describe('DevEnvironmentSection - dev host picker', () => {
     await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledWith('http://100.64.0.4:7860', 'tok-air', expect.any(Function)))
   })
 })
+
+describe('DevEnvironmentSection - source change discipline', () => {
+  const originalFetch = globalThis.fetch
+  afterEach(() => { globalThis.fetch = originalFetch; vi.useRealTimers() })
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void
+    const promise = new Promise<T>((r) => { resolve = r })
+    return { promise, resolve }
+  }
+
+  const checkJson = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  it('A → unset: A\'s painted daemon check is cleared', async () => {
+    globalThis.fetch = vi.fn(async (url: string | URL) =>
+      String(url).endsWith('/api/dev/daemon/check') ? checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true }) : new Response('{}', { status: 200 })) as typeof globalThis.fetch
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByText('aaa')).toBeTruthy()) // A's result is on screen first
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    expect(screen.queryByText('aaa')).toBeNull()
+    expect(screen.queryByText('Current hash')).toBeNull()
+  })
+
+  it('A → unset: A\'s late daemon-check response is discarded', async () => {
+    const d = deferred<Response>()
+    globalThis.fetch = vi.fn(async (url: string | URL) =>
+      String(url).endsWith('/api/dev/daemon/check') ? d.promise : new Response('{}', { status: 200 })) as typeof globalThis.fetch
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    await act(async () => { d.resolve(checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true })) })
+    expect(screen.queryByText('aaa')).toBeNull()
+    expect(screen.queryByText('Current hash')).toBeNull()
+  })
+
+  it('A → unset: A\'s late rebuild 409 does not paint an error', async () => {
+    const d = deferred<Response>()
+    globalThis.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
+      if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    }) as typeof globalThis.fetch
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    await act(async () => { d.resolve(new Response('', { status: 409 })) })
+    expect(screen.queryByText('Rebuild already in progress')).toBeNull()
+  })
+
+  it('picker is disabled while a daemon rebuild is in flight', async () => {
+    const d = deferred<Response>()
+    globalThis.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
+      if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    }) as typeof globalThis.fetch
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    expect(screen.getByLabelText('Development host')).toBeDisabled()
+  })
+
+  it('A → B: a late "done" from A\'s stream does not paint B\'s view', async () => {
+    arrangeStream() // hold A's stream open
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledTimes(1))
+    const cbA = lastStreamCallback!
+    const closeA = lastStreamClose
+    const b = useHostStore.getState().addHost({ name: 'b', ip: '10.0.0.2', port: 7860 })
+    arrangeStream() // B's stream, also held open
+    await act(async () => { useHostStore.getState().setDevHost(b) })
+    await waitFor(() => expect(mockStreamCheck).toHaveBeenCalledTimes(2))
+    expect(closeA).toHaveBeenCalled()
+    await act(async () => { cbA({ type: 'done', check: baseCheck({ spaHash: 'zzz9999' }) }) })
+    expect(screen.queryByText(/zzz9999/)).toBeNull()
+    expect(screen.queryByText(/Update available/)).toBeNull()
+  })
+
+  it('post-rebuild 3 s re-check is cancelled by a source change', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') {
+        return new Response('data: {"type":"success","new_hash":"n1"}\n\n', { status: 200 })
+      }
+      if (href.endsWith('/api/dev/daemon/check')) {
+        return new Response(JSON.stringify({ current_hash: 'a', latest_hash: 'a', available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response('{}', { status: 200 })
+    })
+    globalThis.fetch = fetchMock as typeof globalThis.fetch
+    await act(async () => { render(<DevEnvironmentSection />) })
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/dev/daemon/check'))).toBe(true))
+    const checksBefore = () => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/api/dev/daemon/check')).length
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    await waitFor(() => expect(screen.getByText(/Build complete/)).toBeTruthy())
+    const n = checksBefore()
+    await act(async () => { useHostStore.getState().setDevHost(null) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(3500) })
+    expect(checksBefore()).toBe(n)
+  })
+
+  it('picker is disabled while an app update is running', async () => {
+    arrangeStream((cb) => {
+      cb({ type: 'check', check: baseCheck({ electronHash: 'newhash' }) })
+      cb({ type: 'done', check: baseCheck({ electronHash: 'newhash' }) })
+    })
+    mockApplyUpdate.mockReturnValue(new Promise(() => {}))
+    await act(async () => { render(<DevEnvironmentSection />) })
+    const update = await screen.findByRole('button', { name: 'Update App' })
+    await act(async () => { fireEvent.click(update) })
+    expect(screen.getByLabelText('Development host')).toBeDisabled()
+  })
+})

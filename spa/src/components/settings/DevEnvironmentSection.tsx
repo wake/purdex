@@ -58,6 +58,11 @@ export function DevEnvironmentSection() {
   const [streaming, setStreaming] = useState(false)
 
   const streamCloseRef = useRef<(() => void) | null>(null)
+  // Spec §2.2: every dev request belongs to a "source generation". A source
+  // change (host / token) bumps it; anything that started under an older
+  // generation drops its result instead of painting the new host's view.
+  const sourceGenRef = useRef(0)
+  const daemonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Daemon rebuild state
   const [daemonCheck, setDaemonCheck] = useState<DaemonCheck | null>(null)
@@ -73,15 +78,18 @@ export function DevEnvironmentSection() {
 
   const checkDaemon = useCallback(async () => {
     if (!daemonBase) return
+    const gen = sourceGenRef.current
     setDaemonPhase('checking')
     setDaemonError(null)
     try {
       const res = await fetch(`${daemonBase}/api/dev/daemon/check`, { headers: daemonAuthHeaders() })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = (await res.json()) as DaemonCheck
+      if (gen !== sourceGenRef.current) return
       setDaemonCheck(data)
       setDaemonPhase('idle')
     } catch (err) {
+      if (gen !== sourceGenRef.current) return
       setDaemonError(err instanceof Error ? err.message : String(err))
       setDaemonPhase('error')
     }
@@ -89,6 +97,7 @@ export function DevEnvironmentSection() {
 
   const rebuildDaemon = useCallback(async () => {
     if (!daemonBase) return
+    const gen = sourceGenRef.current
     setDaemonPhase('rebuilding')
     setDaemonLog([])
     setDaemonError(null)
@@ -100,6 +109,7 @@ export function DevEnvironmentSection() {
         method: 'POST',
         headers: daemonAuthHeaders(),
       })
+      if (gen !== sourceGenRef.current) return
       if (res.status === 409) {
         setDaemonError('Rebuild already in progress')
         setDaemonPhase('error')
@@ -116,6 +126,7 @@ export function DevEnvironmentSection() {
       let buffer = ''
       while (true) {
         const { done, value } = await reader.read()
+        if (gen !== sourceGenRef.current) { void reader.cancel().catch(() => {}); return }
         if (done) break
         buffer += decoder.decode(value, { stream: true })
         const chunks = buffer.split('\n\n')
@@ -152,24 +163,44 @@ export function DevEnvironmentSection() {
       // Stream ended. If we saw 'restarting', the daemon is exec'ing itself; WS will disconnect.
       // After a brief delay, re-check to confirm new hash.
       if (!encounteredError) {
-        setTimeout(() => { void checkDaemon() }, 3000)
+        daemonTimerRef.current = setTimeout(() => {
+          daemonTimerRef.current = null
+          if (gen === sourceGenRef.current) void checkDaemon()
+        }, 3000)
       }
     } catch (err) {
+      if (gen !== sourceGenRef.current) return
       setDaemonError(err instanceof Error ? err.message : String(err))
       setDaemonPhase('error')
     }
   }, [daemonBase, daemonAuthHeaders, checkDaemon, t])
-
-  // Load daemon status on mount / host change
-  useEffect(() => {
-    void checkDaemon()
-  }, [checkDaemon])
 
   const closeStream = useCallback(() => {
     streamCloseRef.current?.()
     streamCloseRef.current = null
     setStreaming(false)
   }, [])
+
+  // Source change: wipe everything the previous host produced before the
+  // check effects below fire (spec §2.2 steps 1–3).
+  useEffect(() => {
+    sourceGenRef.current += 1
+    if (daemonTimerRef.current) { clearTimeout(daemonTimerRef.current); daemonTimerRef.current = null }
+    closeStream()
+    setRemoteInfo(null)
+    setStatus('idle')
+    setUpdateError(null)
+    setBuildEvents([])
+    setDaemonCheck(null)
+    setDaemonLog([])
+    setDaemonError(null)
+    setDaemonPhase('idle')
+  }, [daemonBase, token, closeStream])
+
+  // Load daemon status on mount / host change
+  useEffect(() => {
+    void checkDaemon()
+  }, [checkDaemon])
 
   const resolveFinalStatus = useCallback((check: RemoteInfo) => {
     if (check.buildError) {
@@ -187,6 +218,7 @@ export function DevEnvironmentSection() {
 
   const checkUpdate = useCallback(() => {
     if (!daemonBase) return
+    const gen = sourceGenRef.current
     closeStream()
     setStatus('checking')
     setUpdateError(null)
@@ -194,6 +226,7 @@ export function DevEnvironmentSection() {
     setStreaming(true)
 
     const close = window.electronAPI!.streamCheck(daemonBase, token, (ev) => {
+      if (gen !== sourceGenRef.current) return
       switch (ev.type) {
         case 'check':
           if (!ev.check) return
@@ -244,6 +277,7 @@ export function DevEnvironmentSection() {
   }, [appInfo, daemonBase, token])
 
   useEffect(() => () => closeStream(), [closeStream])
+  useEffect(() => () => { if (daemonTimerRef.current) clearTimeout(daemonTimerRef.current) }, [])
 
   useEffect(() => {
     if (!window.electronAPI?.onUpdateProgress) return
@@ -271,6 +305,9 @@ export function DevEnvironmentSection() {
   const hasElectronUpdate = remoteInfo && appInfo && remoteInfo.electronHash !== appInfo.electronHash
   const hasSPAUpdate = remoteInfo && appInfo && remoteInfo.spaHash !== appInfo.spaHash
   const showLogPanel = buildEvents.length > 0 || status === 'building'
+  // Spec §2.2 step 4: an app update / daemon rebuild cannot be cancelled, so
+  // the source must not change mid-way.
+  const sourceLocked = updating || daemonPhase === 'rebuilding' || daemonPhase === 'restarting'
 
   const statusText: Record<UpdateStatus, string> = {
     idle: '',
@@ -295,6 +332,7 @@ export function DevEnvironmentSection() {
             id="dev-host-picker"
             value={devHostId ?? ''}
             onChange={(e) => setDevHost(e.target.value || null)}
+            disabled={sourceLocked}
             className="text-xs rounded bg-surface-input border border-border-default text-text-primary px-2 py-1 disabled:opacity-50"
           >
             <option value="">{t('settings.dev.host.none')}</option>
