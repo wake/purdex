@@ -51,6 +51,7 @@ func TestTmuxPaneListerReturnsErrorForMalformedLine(t *testing.T) {
 	assert.Nil(t, panes)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "malformed tmux pane line 1")
+	assert.Contains(t, err.Error(), "is a UTF-8 locale exported?")
 }
 
 func TestTmuxPaneListerReturnsErrorForInvalidPanePID(t *testing.T) {
