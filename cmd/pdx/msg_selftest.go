@@ -93,12 +93,14 @@ type selftestDeps struct {
 }
 
 // newSelftestDeps returns the production seams. stderr receives the
-// helper's forwarded stderr lines.
-func newSelftestDeps(stderr io.Writer) selftestDeps {
-	registryDir := filepath.Join(".claude", "sessions")
-	if home, err := os.UserHomeDir(); err == nil {
-		registryDir = filepath.Join(home, ".claude", "sessions")
+// helper's forwarded stderr lines. An unresolvable home directory is an
+// error (the registry lives under it) — never a cwd-relative guess.
+func newSelftestDeps(stderr io.Writer) (selftestDeps, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return selftestDeps{}, fmt.Errorf("cannot resolve home directory: %w", err)
 	}
+	registryDir := filepath.Join(home, ".claude", "sessions")
 	cwd, _ := os.Getwd()
 	return selftestDeps{
 		tmux: func(ctx context.Context, args ...string) ([]byte, error) {
@@ -142,7 +144,7 @@ func newSelftestDeps(stderr io.Writer) selftestDeps {
 			}
 		},
 		now: time.Now,
-	}
+	}, nil
 }
 
 // selftestTimeout parses --timeout: "" ⇒ selftestDefaultTimeout; anything
@@ -168,17 +170,23 @@ func runMsgSelftestCmd(inv msgInvocation, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
 		return 2
 	}
+	deps, err := newSelftestDeps(stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
+		return 1
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runMsgSelftest(ctx, newSelftestDeps(stderr), timeout, stdout, stderr)
+	return runMsgSelftest(ctx, deps, timeout, stdout, stderr)
 }
 
 // selftestState is what cleanup needs to know about what the run created.
 type selftestState struct {
 	name            string
-	sessionStarted  bool   // tmux new-session succeeded ⇒ kill-session
+	sessionStarted  bool   // tmux new-session was attempted ⇒ kill-session
 	targetPID       int    // 0 ⇒ identity unknown, nothing pid-level to do
 	targetProcStart string // proves targetPID is still the same process
+	targetInbox     string // the registered inbox; "" ⇒ never registered
 	h               selftestPeer
 }
 
@@ -205,7 +213,11 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 
 	// Step 2: the throwaway session, and its process identity — captured
 	// immediately so cleanup can reach the process even if it never
-	// registers (R2-M8).
+	// registers (R2-M8). sessionStarted is set BEFORE the call: a cancel
+	// or failure that lands after tmux created the session must still be
+	// followed by kill-session (a session that never existed is tolerated
+	// there by selftestTmuxNoSession).
+	st.sessionStarted = true
 	if _, err := deps.tmux(ctx, "new-session", "-d", "-s", st.name, "--",
 		"claude", "-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
@@ -214,7 +226,6 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		fmt.Fprintf(stdout, "FAIL: tmux new-session: %v\n", err)
 		return 1
 	}
-	st.sessionStarted = true
 
 	pid, procStart, err := selftestIdentify(ctx, deps, st.name)
 	if err != nil {
@@ -234,6 +245,7 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		fmt.Fprintln(stdout, "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)")
 		return 1
 	}
+	st.targetInbox = target.Inbox
 
 	// Step 4: a real helper, impersonating one peer with the target's own
 	// feature list.
@@ -363,6 +375,13 @@ func selftestAwaitReply(ctx context.Context, deps selftestDeps, h selftestPeer, 
 		select {
 		case raw, ok := <-h.Frames():
 			if !ok {
+				// The run ctx also owns the helper process (ExecStarter
+				// uses CommandContext): a Ctrl-C closes Frames too, and
+				// must read as an interrupt, never as a helper crash.
+				if ctx.Err() != nil {
+					fmt.Fprintln(stdout, "FAIL: interrupted")
+					return 1
+				}
 				fmt.Fprintln(stdout, "FAIL: helper exited")
 				return 1
 			}
@@ -383,7 +402,7 @@ func selftestAwaitReply(ctx context.Context, deps selftestDeps, h selftestPeer, 
 			fmt.Fprintf(stdout, "PASS: reply from %s via helper pid %d in %v\n", name, h.PID(), elapsed)
 			return 0
 		case <-timedOut:
-			fmt.Fprintf(stdout, "FAIL: no reply within %v\n", timeout)
+			fmt.Fprintf(stdout, "FAIL: no reply within %s\n", selftestFormatTimeout(timeout))
 			return 1
 		case <-ctx.Done():
 			fmt.Fprintln(stdout, "FAIL: interrupted")
@@ -481,7 +500,13 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 			}
 			fmt.Fprintf(stdout, "removed target file: %s\n", p)
 		}
-		selftestRemoveSock(deps, filepath.Join(deps.sockDir, pid+".sock"), "target", problem, stdout)
+		// The registered inbox is authoritative; the constructed path is
+		// only a fallback for a session that never registered.
+		sock := st.targetInbox
+		if sock == "" {
+			sock = filepath.Join(deps.sockDir, pid+".sock")
+		}
+		selftestRemoveSock(deps, sock, "target", problem, stdout)
 	}
 
 	// e. verdict.
@@ -549,6 +574,16 @@ func selftestTmuxErr(err error) string {
 		}
 	}
 	return err.Error()
+}
+
+// selftestFormatTimeout renders a whole-second timeout as "<n>s" (the
+// default reads "60s", not "1m0s"); a sub-second remainder falls back to
+// time.Duration's own format.
+func selftestFormatTimeout(d time.Duration) string {
+	if d%time.Second == 0 {
+		return strconv.FormatInt(int64(d/time.Second), 10) + "s"
+	}
+	return d.String()
 }
 
 // selftestHex returns n random bytes as 2n hex characters.

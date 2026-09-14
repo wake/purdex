@@ -426,11 +426,55 @@ func TestSelftest_NewSessionFailure(t *testing.T) {
 	if !strings.Contains(out, "FAIL: tmux new-session: exec: tmux: not found\n") {
 		t.Errorf("stdout:\n%s", out)
 	}
-	if got := f.calls("kill-session"); len(got) != 0 {
-		t.Errorf("kill-session called for a session that never started: %v", got)
+	// new-session may have created the session before failing (or being
+	// cancelled): kill-session is always attempted.
+	if got := f.calls("kill-session"); len(got) != 1 {
+		t.Errorf("kill-session calls = %d, want 1", len(got))
+	}
+	if got := f.calls("list-panes"); len(got) != 0 {
+		t.Errorf("list-panes called after new-session failed")
 	}
 	if f.spawned {
 		t.Errorf("helper spawned after new-session failed")
+	}
+	if f.lastLine(out) != "cleanup: ok" {
+		t.Errorf("last line = %q", f.lastLine(out))
+	}
+}
+
+// TestSelftest_NewSessionCancelledInFlight: the run ctx is cancelled while
+// tmux is creating the session — the client reports an error although the
+// session exists. Cleanup must still kill it by name, under its own ctx.
+func TestSelftest_NewSessionCancelledInFlight(t *testing.T) {
+	f := newStFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sessionExists := false
+	f.newSession = func() ([]byte, error) {
+		sessionExists = true // tmux got there first
+		cancel()
+		return nil, context.Canceled
+	}
+	f.killSession = func() ([]byte, error) {
+		if !sessionExists {
+			return nil, &exec.ExitError{Stderr: []byte("can't find session\n")}
+		}
+		sessionExists = false
+		return nil, nil
+	}
+	code, out, _ := f.run(ctx, 5*time.Second)
+	if code != 1 || !strings.Contains(out, "FAIL: tmux new-session: context canceled\n") {
+		t.Errorf("exit = %d, stdout:\n%s", code, out)
+	}
+	kills := f.calls("kill-session")
+	if len(kills) != 1 {
+		t.Fatalf("kill-session calls = %d, want 1", len(kills))
+	}
+	if kills[0].ctxErr != nil {
+		t.Errorf("kill-session ran under the cancelled run ctx: %v", kills[0].ctxErr)
+	}
+	if sessionExists {
+		t.Errorf("the session tmux created was left behind")
 	}
 	if f.lastLine(out) != "cleanup: ok" {
 		t.Errorf("last line = %q", f.lastLine(out))
@@ -816,14 +860,38 @@ func TestSelftest_FramesClosed_HelperExited(t *testing.T) {
 	}
 }
 
+// TestSelftest_FramesClosedAfterInterrupt: the run ctx also owns the real
+// helper process, so a Ctrl-C closes Frames — that must read as
+// `interrupted`, never as `helper exited`.
+func TestSelftest_FramesClosedAfterInterrupt(t *testing.T) {
+	// Both ctx.Done() and the closed Frames are ready at once; whichever
+	// case select picks, the verdict must be `interrupted` — repeated so
+	// both arms are exercised.
+	for i := 0; i < 20; i++ {
+		f := newStFixture(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		f.onWrite = func() {
+			cancel()
+			close(f.peer.frames)
+		}
+		code, out, _ := f.run(ctx, 5*time.Second)
+		cancel()
+		if code != 1 || !strings.Contains(out, "FAIL: interrupted\n") || strings.Contains(out, "helper exited") {
+			t.Fatalf("run %d: exit = %d, stdout:\n%s", i, code, out)
+		}
+	}
+}
+
 func TestSelftest_Timeout(t *testing.T) {
 	f := newStFixture(t)
 	f.clock.expireLong = true
-	code, out, _ := f.run(context.Background(), 7*time.Second)
+	// 90 s: time.Duration's own format would say "1m30s"; the golden is
+	// whole seconds so the default reads "60s".
+	code, out, _ := f.run(context.Background(), 90*time.Second)
 	if code != 1 {
 		t.Errorf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(out, "FAIL: no reply within 7s\n") {
+	if !strings.Contains(out, "FAIL: no reply within 90s\n") {
 		t.Errorf("stdout:\n%s", out)
 	}
 	if f.peer.Stops() != 1 {
@@ -958,6 +1026,66 @@ func TestSelftest_Cleanup_LiveSocketKept(t *testing.T) {
 	f.run(context.Background(), 5*time.Second)
 	if !proxyhelpertest.Exists(f.inbox) {
 		t.Errorf("a socket somebody listens on was unlinked")
+	}
+}
+
+// TestSelftest_Cleanup_RegisteredInboxIsAuthoritative: the registry's
+// messagingSocketPath — not a path constructed from sockDir — is what
+// cleanup probes and unlinks once the session registered.
+func TestSelftest_Cleanup_RegisteredInboxIsAuthoritative(t *testing.T) {
+	f := newStFixture(t)
+	f.clock.expireLong = true
+	otherDir := filepath.Join(filepath.Dir(f.sockDir), "elsewhere")
+	if err := os.MkdirAll(otherDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.inbox = filepath.Join(otherDir, "4242.sock") // targetEntry() reads f.inbox
+	if err := os.WriteFile(f.inbox, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	constructed := filepath.Join(f.sockDir, "4242.sock")
+	if err := os.MkdirAll(f.sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(constructed, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var probed []string
+	f.dialRefused = func(sock string) bool { probed = append(probed, sock); return true }
+
+	_, out, _ := f.run(context.Background(), 5*time.Second)
+	if proxyhelpertest.Exists(f.inbox) {
+		t.Errorf("registered inbox %s not removed", f.inbox)
+	}
+	if !proxyhelpertest.Exists(constructed) {
+		t.Errorf("constructed %s removed although the registry said otherwise", constructed)
+	}
+	for _, p := range probed {
+		if p == constructed {
+			t.Errorf("constructed path probed: %v", probed)
+		}
+	}
+	if f.lastLine(out) != "cleanup: ok" {
+		t.Errorf("last line = %q", f.lastLine(out))
+	}
+}
+
+func TestSelftest_Cleanup_UnregisteredFallsBackToSockDir(t *testing.T) {
+	f := newStFixture(t)
+	f.entries = func(int) []ipeers.Entry { return nil }
+	constructed := filepath.Join(f.sockDir, "4242.sock")
+	if err := os.MkdirAll(f.sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(constructed, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := f.run(context.Background(), 5*time.Second)
+	if proxyhelpertest.Exists(constructed) {
+		t.Errorf("%s left behind for a session that never registered", constructed)
+	}
+	if f.lastLine(out) != "cleanup: ok" {
+		t.Errorf("last line = %q", f.lastLine(out))
 	}
 }
 
@@ -1119,9 +1247,27 @@ func TestSelftestTimeout(t *testing.T) {
 	}
 }
 
+func TestSelftestFormatTimeout(t *testing.T) {
+	cases := map[time.Duration]string{
+		60 * time.Second:        "60s",
+		90 * time.Second:        "90s",
+		7 * time.Second:         "7s",
+		1500 * time.Millisecond: "1.5s",
+		500 * time.Millisecond:  "500ms",
+	}
+	for d, want := range cases {
+		if got := selftestFormatTimeout(d); got != want {
+			t.Errorf("selftestFormatTimeout(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
 func TestSelftest_ProductionDepsAreWired(t *testing.T) {
 	var stderr bytes.Buffer
-	d := newSelftestDeps(&stderr)
+	d, err := newSelftestDeps(&stderr)
+	if err != nil {
+		t.Fatalf("newSelftestDeps: %v", err)
+	}
 	if d.tmux == nil || d.readRegistry == nil || d.spawn == nil || d.writeFrame == nil ||
 		d.pidAlive == nil || d.procStart == nil || d.signal == nil || d.readPeerFeatures == nil ||
 		d.glob == nil || d.registryProcStart == nil || d.remove == nil || d.dialRefused == nil ||
