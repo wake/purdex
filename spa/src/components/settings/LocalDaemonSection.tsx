@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copy, Eye, EyeSlash } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { findHostByEndpoint, useHostStore } from '../../stores/useHostStore'
@@ -30,16 +30,25 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const hosts = useHostStore((s) => s.hosts)
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cfg = status?.config ?? null
   const cfgUrl = cfg ? `http://${cfg.bind}:${cfg.port}` : null
   // Spec §3.3: exact-endpoint membership only, via the same helper registerLocalHost uses.
   const registeredAs = cfg ? findHostByEndpoint(hosts, cfg.bind, cfg.port) : undefined
 
+  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
+
   const copyToken = useCallback(async () => {
     if (!cfg?.token) return
-    await navigator.clipboard.writeText(cfg.token)
+    try {
+      await navigator.clipboard.writeText(cfg.token)
+    } catch (err) {
+      setError(String(err))
+      return
+    }
     setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    if (copiedTimer.current) clearTimeout(copiedTimer.current)
+    copiedTimer.current = setTimeout(() => { setCopied(false); copiedTimer.current = null }, 1500)
   }, [cfg])
 
   const addToHosts = useCallback(() => {

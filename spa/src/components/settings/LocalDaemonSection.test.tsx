@@ -216,4 +216,13 @@ describe('LocalDaemonSection - config rows', () => {
     await renderIt()
     expect(screen.getByRole('button', { name: 'Add to hosts' })).toBeTruthy()
   })
+
+  it('copy failure surfaces the error and does not show Copied', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true })
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText(/denied/)).toBeTruthy()
+    expect(screen.queryByText('Copied')).toBeNull()
+  })
 })
