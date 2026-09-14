@@ -213,20 +213,21 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 // only ever populated on a fully-deliverable cc row or a proxy row — see
 // internal/peers/record.go — but the check costs nothing and guards
 // against that changing) a row found that is not cc or not deliverable —
-// is superseded by an alive-but-undecodable registry file
-// (Diagnosis.BlockingUnknown; that file could be the one that would have
-// decoded into the actual replier) or a partial inventory with no row at
-// all (the replier's own tmux session's owner lookup may be the one that
-// did not complete): not_ready, never replier_unknown, which the caller
-// reads as a verdict. A label-store-only partial (no unknown files) does
-// not, by itself, hide any row, so it changes nothing here. The helper is
-// kept either way (the caller drops the frame, never reaps).
+// is a real verdict UNLESS an alive-but-undecodable registry file
+// (env.UnknownRegistryFiles; that file could be the one that would have
+// decoded into the actual replier) overrides it: not_ready, never
+// replier_unknown, which the caller reads as a verdict. Peer Address v2
+// gives every live, non-proxy registry entry its own entry row (spec
+// §3.4), so a merely partial inventory with no unknown files — an owner
+// lookup or label-store failure — no longer hides a live replier and
+// changes nothing here. The helper is kept either way (the caller drops
+// the frame, never reaps).
 func classifyReplyDrop(env ipeers.Envelope, replier ipeers.PeerRecord, detail string) (code, outDetail string) {
 	code, outDetail = ipeers.ErrReplierUnknown, detail
 	switch {
 	case replier.Agent != nil && replier.Agent.Type == "proxy":
 		code = ipeers.ErrProxyToProxy
-	case len(env.UnknownRegistryFiles) > 0 || (replier.Agent == nil && env.Partial):
+	case len(env.UnknownRegistryFiles) > 0:
 		code, outDetail = ipeers.ErrNotReady, detailInventoryPartial
 	}
 	return code, outDetail

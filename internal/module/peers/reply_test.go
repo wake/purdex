@@ -517,12 +517,17 @@ func TestClassifyReplyDrop(t *testing.T) {
 			wantDetail: detailInventoryPartial,
 		},
 		{
-			name:       "no row, label-store-only partial (no unknown files) ⇒ not_ready unchanged",
+			// Peer Address v2: every live, non-proxy registry entry has
+			// its own entry row (spec §3.4), so a merely partial
+			// inventory with no unknown files — an owner lookup or
+			// label-store failure — cannot hide a live replier. Only an
+			// unknown registry file can, and this case has none.
+			name:       "no row, label-store-only partial (no unknown files) ⇒ replier_unknown",
 			env:        ipeers.Envelope{Partial: true},
 			replier:    notFound,
 			detail:     "no live Claude Code session listens on the reply address",
-			wantCode:   ipeers.ErrNotReady,
-			wantDetail: detailInventoryPartial,
+			wantCode:   ipeers.ErrReplierUnknown,
+			wantDetail: "no live Claude Code session listens on the reply address",
 		},
 		{
 			name:       "no row, not partial at all ⇒ replier_unknown",
