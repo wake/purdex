@@ -518,6 +518,7 @@
   "settings.dev.local.host_list": "Host 清單",
   "settings.dev.local.in_hosts": "已登記為 {{name}}",
   "settings.dev.local.copied": "已複製",
+  "settings.dev.local.copy_failed": "複製失敗——請自行選取 token 複製",
   "settings.dev.local.btn.add_host": "加入 Host",
   "settings.dev.local.btn.reveal": "顯示 token",
   "settings.dev.local.btn.hide": "隱藏 token",

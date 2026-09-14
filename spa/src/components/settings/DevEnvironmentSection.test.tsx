@@ -418,6 +418,30 @@ describe('DevEnvironmentSection - source change discipline', () => {
     expect(checksBefore()).toBe(n)
   })
 
+  it('unmount mid-rebuild cancels the stream body and skips the scheduled re-check', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const d = deferred<Response>()
+    const neverEndingStream = new ReadableStream<Uint8Array>({ start() {} })
+    const cancelSpy = vi.spyOn(neverEndingStream, 'cancel')
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url)
+      if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
+      if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
+      return new Response('{}', { status: 200 })
+    })
+    globalThis.fetch = fetchMock as typeof globalThis.fetch
+    const view = render(<DevEnvironmentSection />)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/dev/daemon/check'))).toBe(true))
+    const checksBefore = () => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/api/dev/daemon/check')).length
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
+    const n = checksBefore()
+    view.unmount()
+    await act(async () => { d.resolve(new Response(neverEndingStream, { status: 200 })) })
+    expect(cancelSpy).toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(3500) })
+    expect(checksBefore()).toBe(n)
+  })
+
   it('picker is disabled while an app update is running', async () => {
     arrangeStream((cb) => {
       cb({ type: 'check', check: baseCheck({ electronHash: 'newhash' }) })

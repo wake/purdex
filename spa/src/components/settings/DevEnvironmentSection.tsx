@@ -109,7 +109,7 @@ export function DevEnvironmentSection() {
         method: 'POST',
         headers: daemonAuthHeaders(),
       })
-      if (gen !== sourceGenRef.current) return
+      if (gen !== sourceGenRef.current) { void res.body?.cancel().catch(() => {}); return }
       if (res.status === 409) {
         setDaemonError('Rebuild already in progress')
         setDaemonPhase('error')
@@ -277,7 +277,10 @@ export function DevEnvironmentSection() {
   }, [appInfo, daemonBase, token])
 
   useEffect(() => () => closeStream(), [closeStream])
-  useEffect(() => () => { if (daemonTimerRef.current) clearTimeout(daemonTimerRef.current) }, [])
+  useEffect(() => () => {
+    if (daemonTimerRef.current) clearTimeout(daemonTimerRef.current)
+    sourceGenRef.current += 1
+  }, [])
 
   useEffect(() => {
     if (!window.electronAPI?.onUpdateProgress) return

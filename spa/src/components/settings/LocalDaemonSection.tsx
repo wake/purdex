@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copy, Eye, EyeSlash } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { findHostByEndpoint, useHostStore } from '../../stores/useHostStore'
+import { copyText } from '../../lib/copy-text'
 
 interface Props {
   daemonBase: string | null
@@ -41,21 +42,20 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const copyToken = useCallback(async () => {
     if (!cfg?.token) return
     try {
-      await navigator.clipboard.writeText(cfg.token)
-    } catch (err) {
-      setError(String(err))
+      await copyText(cfg.token)
+    } catch {
+      setError(t('settings.dev.local.copy_failed'))
       return
     }
     setCopied(true)
     if (copiedTimer.current) clearTimeout(copiedTimer.current)
     copiedTimer.current = setTimeout(() => { setCopied(false); copiedTimer.current = null }, 1500)
-  }, [cfg])
+  }, [cfg, t])
 
   const addToHosts = useCallback(() => {
     if (!status || !cfg?.token || !cfgUrl) return
     registerLocalHost({ url: cfgUrl, token: cfg.token, hostname: status.hostname })
-    setNotice(t('settings.dev.local.registered', { name: status.hostname }))
-  }, [status, cfg, cfgUrl, registerLocalHost, t])
+  }, [status, cfg, cfgUrl, registerLocalHost])
 
   const refresh = useCallback(async () => {
     if (!api?.localDaemonStatus) return

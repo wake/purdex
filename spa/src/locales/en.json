@@ -518,6 +518,7 @@
   "settings.dev.local.host_list": "Host list",
   "settings.dev.local.in_hosts": "Registered as {{name}}",
   "settings.dev.local.copied": "Copied",
+  "settings.dev.local.copy_failed": "Copy failed — select the token and copy it manually",
   "settings.dev.local.btn.add_host": "Add to hosts",
   "settings.dev.local.btn.reveal": "Show token",
   "settings.dev.local.btn.hide": "Hide token",

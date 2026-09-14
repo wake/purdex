@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-library/react'
 import { LocalDaemonSection } from './LocalDaemonSection'
 import { useHostStore } from '../../stores/useHostStore'
@@ -170,6 +170,9 @@ describe('LocalDaemonSection - no dev host', () => {
 
 describe('LocalDaemonSection - config rows', () => {
   const cfg = { bind: '100.64.0.9', port: 7860, token: 'purdex_secret' }
+  const originalExecCommand = document.execCommand
+
+  afterEach(() => { document.execCommand = originalExecCommand })
 
   it('shows URL and a masked token; reveal and copy work', async () => {
     mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
@@ -222,7 +225,17 @@ describe('LocalDaemonSection - config rows', () => {
     mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
     await renderIt()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
-    expect(screen.getByText(/denied/)).toBeTruthy()
+    expect(screen.getByText('Copy failed — select the token and copy it manually')).toBeTruthy()
     expect(screen.queryByText('Copied')).toBeNull()
+  })
+
+  it('insecure origin (no navigator.clipboard) falls back to execCommand and still shows Copied', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    document.execCommand = vi.fn(() => true)
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(document.execCommand).toHaveBeenCalledWith('copy')
+    expect(screen.getByText('Copied')).toBeTruthy()
   })
 })

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { copyText } from '../../lib/copy-text'
 
 interface Props {
   events: ElectronStreamCheckEvent[]
@@ -30,7 +31,7 @@ export function DevBuildLogPanel({ events, streaming }: Props) {
 
   const handleCopy = () => {
     if (!text) return
-    navigator.clipboard?.writeText(text).catch(() => {})
+    copyText(text).catch(() => {})
   }
 
   return (
