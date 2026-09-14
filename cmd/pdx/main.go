@@ -17,6 +17,7 @@ import (
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/locale"
 	"github.com/wake/purdex/internal/module/agent"
 	backupmod "github.com/wake/purdex/internal/module/backup"
 	"github.com/wake/purdex/internal/module/dev"
@@ -90,6 +91,17 @@ func runServe(args []string) {
 	portOverride := fs.Int("port", 0, "override port")
 	quick := fs.Bool("quick", false, "quick setup mode with pairing code")
 	fs.Parse(args)
+
+	// 0. Locale — tmux sanitises TAB out of -F output under a non-UTF-8
+	// client locale, which breaks every tab-separated parser below, and
+	// the tmux server we may spawn inherits this env. Must precede any
+	// tmux exec (GetTmuxInstance, hook install).
+	switch r := locale.EnsureUTF8(); r.Action {
+	case locale.Set:
+		log.Printf("locale: no UTF-8 locale in environment, exported LANG=%s", r.Value)
+	case locale.Warned:
+		log.Printf("locale: WARNING LC_ALL/LC_CTYPE/LANG=%q is not UTF-8; tmux output parsing will break", r.Value)
+	}
 
 	// 1. Load config
 	cfg, err := config.Load(*cfgPath)
