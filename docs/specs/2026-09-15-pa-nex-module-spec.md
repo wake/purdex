@@ -1,6 +1,7 @@
 # Spec — P-A: embed Nexen as the `nex` module of the pdx daemon
 
-Status: v1 (draft, before codex spec review)
+Status: v2 (v1 → v2 after codex spec review `task-mu1mhggb-c9tm86`; 5 must-fix,
+7 should-fix, 1 nit — all dispositioned in §10)
 Date: 2026-09-15
 Branch: `worktree-pa-nex-module`
 Scope: daemon (Go) + `pdx` CLI. **No SPA change, no removal of existing
@@ -34,18 +35,21 @@ later phase (SPA pane, launch UI, Aigora, Swift) talks to one contract at
 
 1. A `pdx` binary built from this branch serves Nexen's full v1 HTTP API
    under `/api/nex/` on the daemon's existing listener, authenticated by the
-   daemon's existing token/ticket chain.
+   daemon's existing token chain.
 2. `nex --addr http://<host>:7860/api/nex --token <pdx token> …` and the new
    `pdx nex …` wrapper both work unchanged against it.
-3. Executions survive a pdx restart the way they survive a `nex daemon`
-   restart: orphaned turns are reconciled to `idle` and can be continued.
-4. Nexen is opt-in per host (`[nex] enabled`) and a failure inside it cannot
-   take the type-1 daemon down.
+3. Persisted execution state survives a pdx restart the way it survives a
+   `nex daemon` restart (§4.5 states exactly what is and is not preserved).
+4. Nexen is opt-in per host (`[nex] enabled`). Once enabled, an
+   initialization failure is a daemon start failure — same rule as every
+   other module — and a **request-time** panic inside Nexen is contained to
+   that request. No stronger isolation is claimed.
 
 ### Non-goals (explicitly later phases)
 
 - Any SPA change (P-B / P-C). This phase is verified with `pdx nex` and
-  `curl` only.
+  `curl` only. **But** P-A fixes the transport P-B will use (§4.3), because
+  the choice affects CORS and auth here.
 - Removing `stream`, `relay`, `bridge`, `execution`, `dispatch`, `history`
   (P-D). They keep running side by side; the M0 `execution` module keeps its
   route `GET /api/execution/{id}` — no route collides with `/api/nex/`.
@@ -59,37 +63,57 @@ later phase (SPA pane, launch UI, Aigora, Swift) talks to one contract at
   does not expose it in P-A: its tokens come from `<ID>_CLAUDE_CODE_OAUTH_TOKEN`
   environment variables which a launchd/Finder-started daemon does not have.
   Single ambient account only; the field is left zero.
-- Hot reload of `[nex]`. `PUT /api/config` may persist the section but the
-  module reads it once at Init; a change needs a daemon restart (logged).
+- Editing `[nex]` through `PUT /api/config` (§4.2 says what P-A does with
+  it). The Settings UI for it is P-C.
+- Hot reload of `[nex]`: the module reads it once at Init; a change needs a
+  daemon restart.
 - A sidecar process model to keep turns alive across pdx restarts.
 - Mirroring Nexen events onto Purdex's host-event WebSocket. Consumers use
   Nexen's own SSE (`/api/nex/v1/events`).
+- A per-child environment seam in Nexen (§4.6 explains the process-wide
+  workaround and why it is the interim answer).
 
 ## 3. What N1 delivers that this phase consumes
 
 | N1 symbol | Used for |
 |---|---|
-| `nexen.Assemble(ctx, Options{Config, Auth, PublicPrefix, ClaudeBin}) (*System, error)` | the whole wiring |
+| `nexen.Assemble(ctx, Options{Config, Auth, PublicPrefix, ClaudeBin}) (*System, error)` | the whole wiring; **`Options.Config` must already be validated** (N1 §4.4.2) |
 | `(*System).Handler` (auth-wrapped mux, no webui) / `.Shutdown(ctx)` / `.Close()` | mount + lifecycle |
-| `config.Config` + `(*Config).Validate()` | built from `[nex]`, never from a TOML file |
+| `config.Config` + `(*Config).Validate()` | built from `[nex]`, validated by pdx **before** Assemble, never loaded from a TOML file |
 | `api.AuthenticatorFunc` | pdx principal |
 | `api.Deps.PublicPrefix` semantics | rendered paths carry `/api/nex`; routing does not |
-| `sandbox.ValidName` / `sandbox.Policy` | validating `[nex].sandbox` at pdx config load |
+| `sandbox.ValidName` | validating `[nex.sandbox]` names at pdx config load |
 | `cmd/nex/client.Run(out, args, baseURL, token)` | the `pdx nex` wrapper |
 
-Version pin: `go.mod` requires `lab.protype.tw/wake/nexen` at a
-pseudo-version of the N1 merge commit. No `replace` in `go.mod`; a
-gitignored `go.work` pointing at a local checkout is the dev-loop mechanism.
-Building needs `GOPRIVATE=lab.protype.tw` and
-`git config --global url."ssh://git@lab.protype.tw:9079/".insteadOf "https://lab.protype.tw/"`
-(Gitea serves the go-import meta unauthenticated but the https clone of a
-private repo returns 401 — verified in N1 §4.3). Both are documented in
-`README.md` and set inside `Makefile` (`GOPRIVATE` only; the git rewrite is a
-one-time per-machine step, and builds only ever run on mlab).
+### 3.1 Module resolution and build
 
-`go.mod` also moves to `go 1.26.0` (Nexen's floor; toolchain 1.26.0 is
-installed) and `modernc.org/sqlite` resolves to Nexen's 1.54.0 by MVS. The
-existing pdx store tests are the regression net for that bump.
+`go.mod` requires `lab.protype.tw/wake/nexen` at a pseudo-version of the N1
+merge commit and moves to `go 1.26.0` (Nexen's floor; toolchain 1.26.0 is
+installed). `modernc.org/sqlite` resolves to Nexen's 1.54.0 by MVS; the
+existing pdx store tests (`internal/store/*_test.go`, incl. `pragma_test.go`)
+are the regression net.
+
+No `replace` in `go.mod`. A gitignored `go.work` pointing at a local Nexen
+checkout is the dev-loop mechanism (`go.work` and `go.work.sum` are added to
+`.gitignore`).
+
+The repo is private on Gitea: the go-import meta is served unauthenticated
+but the https clone returns 401 (N1 §4.3). Two **machine-level, one-time**
+settings on every machine that builds pdx (today only mlab) make every
+`go build` work regardless of who launched the process:
+
+```sh
+go env -w GOPRIVATE=lab.protype.tw          # persisted in $(go env GOENV), no shell env needed
+git config --global url."ssh://git@lab.protype.tw:9079/".insteadOf "https://lab.protype.tw/"
+```
+
+`go env -w` rather than `Makefile`/shell exports because the daemon's own
+dev-update build (`internal/module/dev/build.go`) runs `go build` with the
+daemon's inherited environment, which for a Finder/launchd-started daemon
+has no shell profile. Both settings are documented in `README.md` (build
+section) with the acceptance command from §6 step 0; `Makefile` gains a
+`check-goenv` target that fails fast with the two commands printed if either
+is missing, and `build` depends on it.
 
 ## 4. Design
 
@@ -106,21 +130,28 @@ func (m *Module) Name() string           { return "nex" }
 func (m *Module) Dependencies() []string { return nil }
 ```
 
-- `Init(c)`: translate `c.Cfg.Nex` → `nexen.Options` (§4.2), apply the PATH
-  policy (§4.6), call `nexen.Assemble`. Assemble opens `<DataDir>/nex/nex.db`,
-  runs the startup reconcile pair (orphaned turns → `orphaned`, execution
-  → `idle`; live orphan processes SIGKILLed — exactly the standalone daemon's
-  behaviour, and the reason executions survive restarts), and returns the
-  handler. An `Assemble` error fails `Init`, which fails daemon start —
-  same as any other module. **Except**: the module is only added to Core
-  when `[nex] enabled = true` (§4.2), so a host that never opted in cannot be
-  broken by it.
+- `Init(c)`: in order — (1) apply the PATH policy (§4.6); (2) translate
+  `c.Cfg.Nex` → `config.Config` (§4.2), expanding `~` in roots and
+  `claude_bin`; (3) `cfg.Validate()`; (4) `nexen.Assemble(ctx, opts)`. Steps
+  3 and 4 each turn an error into `Init`'s error, so daemon start fails with
+  the message naming the offending `[nex]` key or Nexen's own reason. The
+  `ctx` handed to Assemble is `context.Background()` — Assemble's own work
+  (open store, startup reconcile) must not be cancelled by the daemon's
+  module ctx, which `main.go` cancels first thing on shutdown; cancellation
+  of live turns is `Shutdown`'s job, not the ctx's.
+  Assemble's startup reconcile marks turns without a live process
+  `orphaned` and their executions `idle`, and SIGKILLs any process it finds
+  still running for such a turn — exactly the standalone daemon's behaviour.
+- The module is only **added** to Core when `[nex] enabled = true` (§4.2), so
+  a host that never opted in has no `[nex]` code path at all.
 - `RegisterRoutes(mux)`: one line of routing (§4.4).
-- `Start(ctx)`: log `nex: serving /api/nex (host_id=…, data_dir=…, claude_bin=…, profiles=…)`.
+- `Start(ctx)`: log
+  `nex: serving /api/nex (host_id=…, data_dir=…, claude_bin=…, profiles=…, path=…)`.
   Nothing else — Assemble already started everything.
-- `Stop(ctx)`: `m.sys.Shutdown(ctx)` (drain + bounded-interrupt live turns).
-  Its error is logged and **not** returned (N1 §4.4.2 rule 2: never stop the
-  remaining shutdown steps).
+- `Stop(ctx)`: `return m.sys.Shutdown(ctx)`. Returning the error is correct:
+  `Core.StopModules` collects and continues (`core.go:107`), and the message
+  ("not every turn's ending was confirmed inside the budget") belongs in the
+  log with the module name.
 - `Close() error`: `m.sys.Close()`. New optional interface, see §4.5.
 
 Nothing in the module reaches into `System.Service` / `.Store` / `.Bus`.
@@ -130,59 +161,74 @@ import test on the package.
 
 ### 4.2 Config — `[nex]`
 
+Complete, paste-able section with defaults:
+
 ```toml
 [nex]
-enabled       = false            # default false in P-A; P-B flips to true
-repo_roots    = ["~/Workspace"]  # → config.RepoRoots   (developer directories, read-only for the daemon)
-service_roots = []               # → config.ServiceRoots (service-layer directories, e.g. Aigora rooms later)
-claude_bin    = ""               # → Options.ClaudeBin; "" = LookPath at Assemble (after §4.6)
-cswap_bin     = ""               # → config.CswapBin; "" = Nexen default
-path_prepend  = ["~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]  # §4.6
+enabled       = false            # P-A default; the module is not even registered when false
+# Admission roots (Nexen fail-closed allowlist). NOT a filesystem sandbox: a
+# trusted agent can still edit files under them. "repo" roots are the user's
+# checkouts the daemon never writes git history into; "service" roots are
+# directories the service layer owns (e.g. Aigora rooms later).
+repo_roots    = ["~/Workspace"]
+service_roots = []
+claude_bin    = ""               # "" = LookPath("claude") inside Assemble, after path_prepend
+cswap_bin     = ""               # "" = Nexen default
+# Prepended (in this order, deduplicated, existing dirs only) to the daemon
+# PROCESS PATH at nex Init. [] disables. See §4.6 for why this is process-wide.
+path_prepend  = ["~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
 
 [nex.sandbox]
-max_profile     = "trusted"      # → sandbox.Policy.MaxProfile
-default_profile = "trusted"      # → sandbox.Policy.DefaultProfile
+max_profile     = "trusted"      # ValidName; "handoff" must be set here explicitly to be usable
+default_profile = "trusted"
 
-[nex.timeouts]                   # all optional; zero = Nexen default
-lease_ttl        = "120s"
-interrupt        = "0s"
-turn             = "0s"
+[nex.timeouts]                   # optional; "0s" = Nexen default
+lease_ttl = "120s"
+interrupt = "0s"
+turn      = "0s"
 ```
 
-Mapping, applied in `Init`:
+Mapping applied in `Init`:
 
 | pdx | Nexen `config.Config` |
 |---|---|
-| `Cfg.HostID` | `HostID` (→ `nex.host` label, `capabilities.host_id`) |
+| `Cfg.HostID` | `HostID` (→ `nex.host` label, `capabilities.host_id`). **Empty is an Init error when nex is enabled** (`EnsureHostID` tolerates a persist failure and leaves it empty; a principal `pdx:` with nothing after the colon is not acceptable audit data, and letting Nexen's Validate substitute the hostname would make the two ids disagree). |
 | `Cfg.DataDir + "/nex"` | `DataDir` (`nex.db`, `credentials/`) |
-| `Cfg.Nex.RepoRoots` / `.ServiceRoots` | `RepoRoots` / `ServiceRoots` (with `~` expanded by pdx — Nexen's Validate does not expand roots) |
+| `Cfg.Nex.RepoRoots` / `.ServiceRoots` | `RepoRoots` / `ServiceRoots`, `~` expanded and made absolute by pdx |
 | `Cfg.Nex.Sandbox` | `Sandbox` |
 | `Cfg.Nex.Timeouts` | `LeaseTTL` / `InterruptTimeout` / `TurnTimeout` |
-| **10 s** (pdx's shutdown budget in `main.go`) | `ShutdownTimeout` — kept equal to pdx's so the "one budget" rule holds (§4.5) |
+| `shutdownBudget` (10 s, §4.5) | `ShutdownTimeout` |
 | — | `Addr`, `Principals`, `ClaudeAccounts`: left zero |
 
-Validation happens twice, deliberately: pdx's `config.Load` checks the
-things only pdx knows (`enabled` requires at least one root; `max_profile`
-and `default_profile` pass `sandbox.ValidName`; `claude_bin`, if set, is an
-absolute path), so a typo is reported at daemon start with the `[nex]` key
-name; then `nexen.Config.Validate()` runs inside Assemble with Nexen's own
-rules (roots fail-closed, profile clamp, durations). pdx never re-implements
-the second set.
+Validation, two layers with distinct jobs:
 
-`enabled = false` (or the section absent) means `main.go` does not add the
-module at all: `/api/nex/*` is a 404 like any unknown route, `pdx nex`
-reports `nex: not enabled on this host` from the same 404, and nothing is
-opened under `DataDir`.
+1. pdx `config.Load` — only what pdx knows and Nexen cannot say better:
+   `enabled` requires ≥ 1 root; `max_profile`/`default_profile` pass
+   `sandbox.ValidName`; `claude_bin`, if set, is absolute after `~`
+   expansion; `path_prepend` entries are absolute after expansion;
+   durations parse. Errors name the `[nex]` key.
+2. `config.Config.Validate()` — Nexen's rules (defaults, roots fail-closed,
+   profile clamp, durations, `DataDir` non-empty), run by pdx in `Init`
+   **before** `Assemble` (N1 §4.4.2 requires a validated Config). pdx does
+   not re-implement any of these.
 
-### 4.3 Authentication and principal
+`enabled = false` (or the section absent): `main.go` does not add the
+module. `/api/nex/*` is a 404 like any unknown route (after the outer auth
+chain), `pdx nex` reports "not enabled" (§4.7), nothing is opened under
+`DataDir`, no PATH change is made.
+
+`config.Clone()` clones `Nex.RepoRoots`, `Nex.ServiceRoots`,
+`Nex.PathPrepend` (the aliasing rule every other slice follows).
+`PUT /api/config` **does not accept** a `nex` key in P-A (400
+`unsupported_field`, consistent with how the handler treats other
+non-editable fields); a round trip through `UpdateConfig` preserves the
+persisted section byte-for-byte because `WriteFile` writes the whole struct.
+Editing is by hand until P-C.
+
+### 4.3 Authentication, principal, and the SSE transport decision
 
 The nex handler is mounted **inside** the daemon's general chain
 (`CORS → IPWhitelist → PairingGuard → TokenAuth`, `cmd/pdx/http_chain.go`).
-By the time a request reaches Nexen it has already passed pdx auth: bearer
-token, or a one-time ticket in `?ticket=` (the mechanism the SPA uses for
-WebSockets, and what it will use for `EventSource` in P-B, since browsers
-cannot set headers on SSE).
-
 Nexen still requires an `Authenticator` and refuses to run without one
 (N1 §4.2: nil → 401). pdx supplies:
 
@@ -192,19 +238,47 @@ api.AuthenticatorFunc(func(*http.Request) (string, error) {
 })
 ```
 
-- The principal id is the audit field on `execution.delegated`,
-  `message_accepted`, lease owner. `pdx:<host_id>` says "someone holding this
-  host's daemon credential". pdx does not have per-user identity; inventing
-  one here would be fiction.
+- The principal id is the audit field on the operation events
+  (`execution.delegated`, `message_accepted`, lease owner). `pdx:<host_id>`
+  says "someone holding this host's daemon credential". pdx has no per-user
+  identity; inventing one here would be fiction. The colon is fine (N1 does
+  not parse principal ids).
 - The Authenticator never checks the token itself. That is correct **only
-  while the handler is unreachable except through the general chain** — an
-  invariant (§5 I2) with a test that mounts the real outer handler and shows
-  `/api/nex/v1/capabilities` is 401 without a token and 200 with one.
+  while the handler is unreachable except through the general chain**. §5
+  I2 states that invariant as "an unauthenticated request never reaches the
+  Nexen handler" and tests it with a probe handler substituted for
+  `sys.Handler` in the real `newOuterHandler`, across methods (GET, POST,
+  SSE GET), credentials (none, wrong bearer, valid bearer, valid ticket,
+  reused ticket, peer inbound token), pairing state, IP-whitelist rejection,
+  and un-normalized paths (`/api/nex/../foo`, `//api/nex/v1/…`). The
+  `OPTIONS` preflight is answered by CORS before auth — that is existing
+  behaviour for every route and is asserted, not changed.
 - When `Cfg.Token == ""` (IP-whitelist-only daemon) TokenAuth passes every
   request through; Nexen then also passes, with the same principal. That is
   today's trust model for every other route and is not widened here.
-- `/api/peers` (PeerAuth chain) does not route to `/api/nex/` and must not:
-  peer credentials are `/api/peers`-scoped (I2 covers this).
+- `/api/peers` (PeerAuth chain) routes to the shared mux only for
+  `/api/peers…` paths; a peer token presented to `/api/nex/…` goes through
+  the general chain and gets 401 from TokenAuth. I2 asserts the Nexen probe
+  is not reached; the exact status is whatever the chain says (401), not
+  contractually 404.
+
+**SSE transport (binding on P-B, Swift, Aigora).** Nexen's SSE reads the
+resume cursor from the `Last-Event-ID` **header** only, and pdx's one-time
+tickets are consumed on first use. A native `EventSource` cannot set
+headers and reconnects on its own with the *old* URL — the second connect
+would present a spent ticket and get 401, and a hand-built new `EventSource`
+cannot carry `Last-Event-ID`. Therefore:
+
+- Browser clients (P-B) consume `/api/nex/v1/events` with **`fetch` +
+  `ReadableStream`**, sending `Authorization: Bearer <host token>` (which
+  the SPA already holds per host and uses for every REST call) and
+  `Last-Event-ID: <cursor>` on every (re)connect. No ticket is involved.
+  Swift (`URLSession`) and Aigora (server-side) set headers natively.
+- pdx CORS gains `Last-Event-ID` in `Access-Control-Allow-Headers`
+  (`internal/middleware/middleware.go:88`). Without it the browser's
+  preflight for the fetch fails. This is the one P-A change made *for* P-B.
+- Tickets keep working for `/api/nex/…` incidentally (TokenAuth accepts
+  them); nothing in this series relies on that.
 
 ### 4.4 Mount and prefix
 
@@ -218,67 +292,137 @@ origin-relative absolute paths including the prefix, per N1 §4.1's contract
 note. Routing and Nexen's draining check see `/v1/...` because `StripPrefix`
 rewrites `r.URL.Path` (verified in N1).
 
-`recoverer` is pdx's: Nexen's handlers do not swallow panics (N1 §7 note 5).
-It logs the stack with the request path and returns 500; it must not touch a
-response that has already started (SSE) — for a streaming handler a panic
-after the headers are written ends the response, which the client sees as a
-dropped SSE connection and reconnects with `Last-Event-ID`. The recoverer
-wraps only the nex subtree; no other pdx route gains it in this phase.
+`recoverer` is new and pdx-owned (there is no reusable one in the repo):
 
-### 4.5 Lifecycle and shutdown order
+```go
+func recoverer(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        defer func() {
+            if p := recover(); p != nil {
+                log.Printf("nex: panic serving %s %s: %v\n%s", r.Method, r.URL.Path, p, debug.Stack())
+                w.WriteHeader(http.StatusInternalServerError) // no-op (logged by net/http) if headers already sent
+            }
+        }()
+        next.ServeHTTP(w, r)
+    })
+}
+```
 
-Today `main.go` does: cancel ctx → `c.StopModules(shutdownCtx)` →
-`srv.Shutdown(shutdownCtx)`. Nexen's contract (N1 §4.4.2) needs
-`sys.Shutdown` **before** the server drains and `sys.Close` **after** it —
-closing the store while an SSE handler is still running would be a
-use-after-close.
+It passes the **original** `ResponseWriter` through — no wrapper — so
+`http.Flusher` (SSE) and `http.Hijacker` are preserved by construction.
+For a streaming response that panics after headers were written, the
+request simply ends; the client sees a dropped SSE connection and reconnects
+with `Last-Event-ID`. `http.ErrAbortHandler` is re-panicked as net/http
+expects. The recoverer wraps only the nex subtree; no other pdx route gains
+it in this phase. It does not and cannot catch panics in Nexen's background
+goroutines (adapter read loops, reconcile) — those are Nexen's
+responsibility, as they are in the standalone daemon.
 
-Change (in `core` + `main.go`, additive):
+### 4.5 Lifecycle and shutdown
+
+Today `main.go` runs the shutdown sequence in the signal goroutine
+(cancel ctx → `StopModules(shutdownCtx)` → `srv.Shutdown(shutdownCtx)`)
+while the main goroutine returns as soon as `srv.Serve` returns — so any
+step placed after `srv.Shutdown` can be cut off by process exit, and the
+`defer`red closes in `main` (e.g. the meta store) race it.
+
+Nexen's contract (N1 §4.4.2) needs `sys.Shutdown` **before** the server
+drains and `sys.Close` **after** it: closing the store while an SSE handler
+is still running would be a use-after-close.
+
+Changes (additive):
 
 ```go
 // core
-type Closer interface{ Close() error }   // optional; modules that own resources
-                                          // the HTTP layer may still be using
-func (c *Core) CloseModules() error       // reverse topological order, errors joined
+type Closer interface{ Close() error }   // optional; modules owning resources the
+                                          // HTTP layer may still be using during drain
+func (c *Core) CloseModules() error       // reverse registration order; errors joined;
+                                          // modules without Closer are skipped
 ```
 
-`main.go` sequence becomes: cancel ctx → `StopModules(shutdownCtx)` →
-`srv.Shutdown(shutdownCtx)`; on timeout `srv.Close()` → `CloseModules()`.
-Same `shutdownCtx` (10 s) for all steps, matching Nexen's
-`ShutdownTimeout` (§4.2) so a slow interrupt cannot eat the server's drain
-budget and then also be granted a second timer.
+`main.go`:
 
-Consequence to state plainly: **a pdx restart interrupts every live turn on
-that host.** pdx restarts far more often than a standalone `nex daemon`
-(every rebuild / dev update). Nexen makes this an interruption, not a loss —
-the next Init's reconcile marks the turn `orphaned`, the execution returns
-to `idle`, and `send` continues the conversation via `--resume`. The
-`execution.turn_orphaned` event records `process_killed`. This is accepted
-for P-A and listed as the trigger for a future sidecar model if it hurts in
-practice.
+```go
+shutdownDone := make(chan struct{})
+go func() {                      // signal goroutine
+    <-sigCh
+    cancel()
+    ctx, c := context.WithTimeout(context.Background(), shutdownBudget) // 10 s
+    defer c()
+    if err := core.StopModules(ctx); err != nil { log.Printf("stop modules: %v", err) }
+    if err := srv.Shutdown(ctx); err != nil {    // deadline hit → force
+        log.Printf("http shutdown: %v; forcing close", err)
+        srv.Close()
+    }
+    if err := core.CloseModules(); err != nil { log.Printf("close modules: %v", err) }
+    close(shutdownDone)
+}()
+… srv.Serve(listener) …
+<-shutdownDone                   // main waits for the whole sequence
+```
+
+What the 10 s budget does and does not bound — stated so nobody reads it as
+a hard cap: it is **one deadline shared** by `StopModules` and
+`srv.Shutdown` (N1 rule 1); Nexen's `ShutdownTimeout` is set to the same
+value so its bounded interrupt cannot outlive it. It does **not** bound
+`Stop` implementations that ignore their ctx (the `agent` module's `Wait()`
+is one) nor `CloseModules`, which has no ctx by design (closing a store is
+not cancellable). After `srv.Close()` net/http has closed listeners and
+connections but in-flight handler goroutines may still be unwinding;
+`sys.Close` right after is the same order the standalone daemon uses
+(N1 rule 3) and is accepted as-is — a handler that loses the store under it
+fails that one request during a forced shutdown.
+
+**What a pdx restart does to executions** — three cases, tested separately
+(§6 steps 3a–3c), because the outcomes differ:
+
+| Case | Live turn's outcome | Execution afterwards | Recorded |
+|---|---|---|---|
+| Graceful (`SIGTERM`, interrupt confirmed within budget) | ended by Nexen's interrupt ladder | `idle`, resumable | `execution.interrupted` (source: daemon shutdown) |
+| Graceful but unconfirmed (budget exceeded) | process killed by the ladder's SIGKILL or left running | reconciled at next Init: `orphaned` → `idle` | `execution.turn_orphaned` with `process_killed` as observed |
+| Crash / `kill -9` of pdx | process orphaned; killed at next Init if still alive | `orphaned` → `idle` | `execution.turn_orphaned` |
+
+Preserved in every case: every event already appended to `nex.db`, the
+execution row, and the claude session transcript up to the last message
+claude wrote. **Not** preserved: the tail of the in-progress turn (partial
+assistant output that was only on the transient stream), tool actions that
+were mid-flight, uncommitted edits the agent had made and would have
+continued — those are exactly what an interactive session loses when its
+terminal is killed. pdx restarts far more often than a standalone `nex
+daemon` (every rebuild / dev update); this is accepted for P-A and is the
+trigger for a sidecar process model if it hurts in practice.
 
 ### 4.6 Process environment for agent children
 
 Nexen copies the daemon's own `PATH`/`HOME`/`SHELL`/`TMPDIR`/`LANG` to every
-`claude -p` child (`account.BaseEnvKeys`) and nothing else. Two pdx-specific
-consequences:
+`claude -p` child (`account.BaseEnvKeys`) and nothing else. A daemon started
+by launchd or Finder has `PATH=/usr/bin:/bin:/usr/sbin:/sbin`; Nexen finds
+`claude` via `Options.ClaudeBin`, but the child's own `git`, `node`, `gh`,
+`pnpm` would not resolve, and `claude_bin` alone does not fix that.
 
-1. **PATH.** A daemon started by launchd or Finder has `PATH=/usr/bin:/bin:
-   /usr/sbin:/sbin`. Nexen finds `claude` via `Options.ClaudeBin` regardless,
-   but the child's own `git`, `node`, `gh`, `pnpm` would not resolve. Policy:
-   at `Init`, before Assemble, prepend each existing directory in
-   `[nex].path_prepend` (default `~/.local/bin`, `/opt/homebrew/bin`,
-   `/usr/local/bin`) to the **process** `PATH` if not already present, and
-   log the result once. Process-wide because Nexen has no per-child env seam
-   (N1 §5.5 — adding one is a contract change deferred). Same pattern as the
-   existing LANG fix (`internal/locale`, `main.go:101`), and harmless for
-   everything else pdx spawns.
-2. **LANG** is already exported by `main.go` when missing (the tmux `-F`
-   incident). Nexen inherits it; nothing to add.
-3. `claude_bin` empty → `exec.LookPath("claude")` runs inside Assemble
-   **after** step 1, so the default works for a Finder-launched daemon on a
-   standard Homebrew/npm install. A host with claude somewhere unusual sets
-   the path explicitly.
+Policy: at nex `Init` (before Assemble, before anything else the module
+does), compute `prefix = dedupe(expand(path_prepend))`, keep only entries
+that are absolute and exist as directories, and set the **process** `PATH`
+to `prefix ++ (existing PATH minus the prefix entries)`. So the configured
+order is exactly the resulting front of `PATH`, running Init twice is a
+no-op, and `path_prepend = []` disables the policy. The result is logged
+once.
+
+This is process-wide on purpose and **not** harmless in the abstract: after
+it, every executable pdx resolves by name (`git`, `tmux`, `go` in the dev
+module, …) resolves through the prepended dirs first. It is accepted
+because (a) it only applies on hosts that opted into nex, (b) the default
+dirs are the ones every interactive shell on these machines already puts
+first, so the daemon ends up resolving the *same* binaries the user does
+rather than different ones, and (c) Nexen has no per-child env seam
+(N1 §5.5) and adding one is a contract change that belongs to a later
+Nexen round — when it lands, `path_prepend` becomes a per-child setting and
+the process-wide behaviour is removed. Same precedent as the LANG fix
+(`internal/locale`, `main.go:101`), which is also process-wide.
+
+`claude_bin` empty → `exec.LookPath("claude")` inside Assemble runs after
+the PATH policy, so the default works for a Finder-launched daemon on a
+standard Homebrew/npm install. A host with claude elsewhere sets it.
 
 ### 4.7 CLI — `pdx nex <subcommand> …`
 
@@ -286,26 +430,36 @@ Thin wrapper over `client.Run`:
 
 - base URL = `http://<Cfg.Bind>:<Cfg.Port>/api/nex` from the local
   `config.toml` (exactly how `pdx msg` finds its daemon), token = `Cfg.Token`.
-- Overrides: `--addr` / `--token`, and `PDX_NEX_ADDR` / `PDX_NEX_TOKEN`
-  (checked before config, so a commander session can point a worker CLI at
-  another host by hand until cross-host lands).
+- Overrides, checked before config: `--addr` / `--token` flags, then
+  `PDX_NEX_ADDR` / `PDX_NEX_TOKEN` — so a commander session can point a
+  worker CLI at another host by hand until cross-host lands.
 - Everything after the flags is passed to `client.Run` verbatim, so
   `pdx nex delegate --cwd … --brief …`, `pdx nex ls`, `pdx nex watch <id>`,
   `pdx nex attach --control <id>`, `pdx nex send …`, `pdx nex interrupt …`
   are the same words as the `nex` CLI. `pdx nex` with no args prints
   `client.Run`'s own usage error.
-- 404 from `/api/nex/…` is mapped to `nex: not enabled on this host
-  (set [nex] enabled = true)`; every other error is `client.Run`'s.
+- "Not enabled" detection does **not** parse `client.Run`'s error strings
+  (they are unstructured, and Nexen's own 404s such as
+  `execution_not_found` must surface as themselves). When `client.Run`
+  returns an error, the wrapper probes `GET <base>/v1/capabilities` once;
+  a 404 there means the mount does not exist and the wrapper prints
+  `nex: not enabled on this host (set [nex] enabled = true)`; anything
+  else re-prints `client.Run`'s error unchanged. The probe only runs on the
+  error path, so a normal invocation costs one request.
 
 Rationale: a26 has `pdx` but not `nex`; the commander scenario needs the
 verbs on every host with zero flags.
 
 ### 4.8 Observability
 
-- Start log line (§4.1) and a `nex: disabled` line when the section is
-  absent, so "why is /api/nex 404" is answerable from `pdx.log`.
-- `GET /api/info` gains `"nex": {"enabled": bool}`. Nothing more — the
-  authoritative feature list is `GET /api/nex/v1/capabilities`.
+- Start log line (§4.1) when enabled; `nex: disabled` at daemon start when
+  not, so "why is /api/nex 404" is answerable from `pdx.log`.
+- `GET /api/info` gains `"nex": {"configured": bool, "mounted": bool}` —
+  `configured` mirrors the persisted `[nex] enabled`, `mounted` is whether
+  the module actually registered in this process. They differ exactly when
+  the file was edited after start (restart required), which is the
+  question a client will ask. The authoritative feature list remains
+  `GET /api/nex/v1/capabilities`.
 - Nexen's own logging goes through the standard `log` package into
   `pdx.log` with its existing prefixes; no adapter.
 
@@ -313,64 +467,93 @@ verbs on every host with zero flags.
 
 | # | Invariant |
 |---|---|
-| I1 | With `[nex] enabled = false` or absent: no module registered, `/api/nex/v1/capabilities` → 404, `DataDir/nex` not created. |
-| I2 | Through the real outer handler: `/api/nex/v1/capabilities` is 401 without credentials, 200 with the bearer token, 200 with a valid one-time ticket; via the `/api/peers` chain it is not reachable (404). |
+| I1 | With `[nex] enabled = false` or absent: no module registered, no PATH change, `DataDir/nex` not created, and — **after** passing the outer auth chain — `/api/nex/v1/capabilities` is 404. |
+| I2 | An unauthenticated request never reaches the Nexen handler. Probe handler in the real `newOuterHandler`: no credential, wrong bearer, spent ticket, peer inbound token, pairing-mode, non-whitelisted IP, `/api/nex/../x`, `//api/nex/v1/x` → probe not reached, status is the chain's. Valid bearer and valid fresh ticket → reached. GET, POST, and an SSE GET each. |
 | I3 | Responses render the prefix: `capabilities.lease.renew.path` starts with `/api/nex/v1/`; `attach` returns `stream_url` starting with `/api/nex/v1/events?`. |
-| I4 | `{id}` path values resolve under the prefix (`GET /api/nex/v1/executions/<id>` for an unknown id returns Nexen's `execution_not_found` 404, not pdx's generic 404). |
-| I5 | Draining: after `Stop`, `POST /api/nex/v1/executions` → 503 `draining` while a `GET` of a list still answers (N1's rule, observed through the mount). |
+| I4 | `{id}` path values resolve under the prefix: `GET /api/nex/v1/executions/<unknown>` returns Nexen's `execution_not_found` 404 body, not pdx's generic 404. |
+| I5 | Draining through the mount: after `Stop`, `POST /api/nex/v1/executions` → 503 `draining` while `GET /api/nex/v1/executions` still answers. |
 | I6 | `internal/module/nex` imports `lab.protype.tw/wake/nexen`, `…/api`, `…/config`, `…/sandbox` only — never `execution`, `store`, `bus`, `adapter`. (Import-list test.) |
-| I7 | Shutdown order: `Stop` calls `System.Shutdown`; `Close` calls `System.Close`; `Core.CloseModules` runs after `StopModules` and is called by `main` after the server has stopped. Fake `System` records the order. |
-| I8 | A panic in a nex handler yields 500 on that request and the daemon keeps serving the next request; the panic and path are logged. |
-| I9 | `Init` with a launchd-style `PATH` ends with the configured prepend dirs first (only those that exist), idempotent on a second call. |
-| I10 | `pdx nex` resolves addr/token from config; `--addr`/env override it; a 404 from the mount prints the "not enabled" message and exits non-zero. |
-| I11 | Principal on every recorded event is `pdx:<host_id>` (read back from `GET /api/nex/v1/executions/<id>/events` after a delegate in an httptest daemon with a fake claude binary). |
+| I7 | Shutdown sequence, end to end with a fake `System` and a real `httptest` server holding one open SSE request: `StopModules` → `srv.Shutdown` (times out because of the open stream) → `srv.Close` → `CloseModules`, in that order; `main`'s goroutine does not return before `CloseModules` completed; a `Stop` that returns an error does not skip later steps; a `Stop` that ignores ctx and exceeds the budget still lets the sequence complete after it returns. |
+| I8 | A panic in a nex handler yields 500 on that request and the daemon serves the next request; a panic after an SSE response started ends that response without affecting others; `Flush` works through the recoverer; `http.ErrAbortHandler` propagates. |
+| I9 | `Init` with a launchd-style `PATH` and `path_prepend` of three dirs (one non-existent) results in `PATH` = the two existing dirs in configured order, then the original entries; a second `Init` leaves it unchanged; `path_prepend = []` leaves `PATH` untouched. |
+| I10 | `pdx nex`: addr/token from config; `--addr`/env override it; against a server with no mount, an error is reported as "not enabled"; against a mount where `client.Run` fails with `execution_not_found`, that message is printed unchanged (probe returned 200). |
+| I11 | Every **operation** event (`execution.delegated`, `execution.message_accepted`) and the lease owner carry `pdx:<host_id>`, read back from `GET /api/nex/v1/executions/<id>/events` after a delegate in an httptest daemon with a fake claude fixture. |
+| I12 | `Init` fails (daemon does not start) for: empty `HostID`, `DataDir/nex` not creatable/writable, `claude_bin` set but missing or not executable, `claude_bin` empty and no `claude` on the (post-policy) PATH, invalid duration, root that is not a directory. Each error names the cause. |
+| I13 | `Init` calls `Config.Validate()` before `Assemble`, and a Config with a field left at zero arrives at Assemble with Nexen's default applied (fake Assemble captures `Options`). |
+| I14 | CORS preflight for `/api/nex/v1/events` with `Access-Control-Request-Headers: last-event-id, authorization` is allowed; an SSE request through the mount with `Last-Event-ID: <seq>` resumes from `seq+1` (fake `System` handler echoes the header it received). |
+| I15 | `PUT /api/config` with a `nex` key → 400; a round trip of `UpdateConfig` with a mutation elsewhere leaves the persisted `[nex]` section identical; `Clone()` does not alias the three slices. |
 
 ## 6. Acceptance
 
-Automated (`go test ./...`, no real claude): I1–I11 above, using `httptest`
-around `newOuterHandler` plus a fake `claude` script fixture the way Nexen's
-own adapter tests do (`testdata`).
+Automated (`go test ./...`, no real claude): I1–I15, using `httptest`
+around `newOuterHandler`, a fake `System`/`Assemble` where the invariant is
+about pdx wiring, and Nexen's own fake-claude fixture pattern where the
+invariant is about the mounted engine (I3, I4, I5, I11).
 
 Manual, on mlab, before merge (recorded in the PR):
 
+0. **Build chain**: over non-interactive ssh (`ssh mlab 'cd … && GOWORK=off GOMODCACHE=$(mktemp -d) go build ./cmd/pdx'`)
+   the module downloads and both `pnpm run electron:build` architectures
+   build; then the daemon's own dev update rebuild (`/api/dev/update/…`)
+   succeeds from a Finder-launched pdx. Proves `go env -w` + `insteadOf`
+   are sufficient without shell env.
 1. `[nex] enabled = true`, `repo_roots = ["~/Workspace/wake"]`,
-   `max_profile = "handoff"`; restart daemon; `pdx nex host` shows quota.
+   `[nex.sandbox] max_profile = "handoff"`; restart daemon; `pdx nex host`
+   shows quota; `pdx.log` has the start line with the resolved PATH.
 2. `pdx nex delegate --cwd ~/Workspace/wake/purdex --brief "say hi and exit"`
    → `pdx nex watch <id>` streams to `result`.
-3. Restart pdx mid-turn (a long brief) → log shows the orphan reconcile →
-   `pdx nex show <id>` is `idle` → `pdx nex send <id> "continue"` works.
+3. Restart semantics, one long-running brief each:
+   3a. `pdx daemon restart` (SIGTERM) → log shows the interrupt confirmed →
+   `show` is `idle` → `send "continue"` resumes the conversation.
+   3b. same with a brief whose turn is inside a long tool call → either
+   the ladder's SIGKILL or the next Init's reconcile — `show` is `idle`,
+   the log says which path, `events` has the matching event.
+   3c. `kill -9` the daemon → next start logs the reconcile with
+   `process_killed=true` → `send` resumes.
 4. From this Claude Code session: `pdx nex delegate` two workers in parallel,
    `pdx nex ls` shows both, `pdx nex interrupt` one of them — the commander
    loop end to end without an SPA.
-5. Handoff round trip with the CLI only: `pdx nex delegate --sandbox-profile
-   handoff --session-id <sid of a tmux claude>` after `/exit`; then
-   `interrupt`; then `claude --resume <sid>` in tmux shows the delegated
-   turn. (P-C automates this; P-A proves the engine side.)
+5. Handoff round trip with the CLI only, same cwd throughout: in tmux,
+   `claude` in `~/Workspace/wake/purdex`, note the session id, `/exit`,
+   confirm the process is gone; `pdx nex delegate --sandbox-profile handoff
+   --session-id <sid> --cwd ~/Workspace/wake/purdex --brief "…"`; `watch` to
+   `result`; `pdx nex interrupt` / confirm no live turn; then in tmux
+   `claude --resume <sid>` in the same directory shows the delegated turn.
+   `pdx hook` invocations inside the handoff turn are visible in the event
+   stream (hook frames) and are no-ops (no tmux) — expected, not a bug.
 6. a26: install the new binary via the App's local daemon update, repeat
-   step 2 there. Confirms the PATH policy on a Finder-launched daemon.
+   steps 1–2 there. Confirms the PATH policy and `claude` lookup on a
+   Finder-launched daemon.
+7. `curl -X OPTIONS` preflight with `Last-Event-ID` and a `curl -N` SSE
+   through `/api/nex/v1/events?execution_id=…` with a `Last-Event-ID`
+   header resume from the middle of a finished execution.
 
 ## 7. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Private-module build friction (`GOPRIVATE`, ssh rewrite) breaks `electron:build` on a fresh machine | Documented in README; `Makefile` sets `GOPRIVATE`; builds only run on mlab today |
-| sqlite 1.46 → 1.54 changes behaviour in pdx's own stores | pdx store tests + `PRAGMA` tests already in repo (`internal/store/pragma_test.go`) |
-| Orphan reconcile at every pdx restart kills a worker mid-edit | Stated in §4.5; `execution.turn_orphaned` is observable; sidecar model is the escape hatch |
-| PATH policy changes env for unrelated pdx children | Prepend only, only existing dirs, logged once; identical dirs a user shell would have |
+| Private-module build friction on a machine without the two one-time settings | `make check-goenv` fails fast with the exact commands; README documents them; §6 step 0 proves the chain from a cold cache |
+| sqlite 1.46 → 1.54 changes behaviour in pdx's own stores | pdx store tests + `PRAGMA` tests already in repo |
+| Frequent pdx restarts interrupt workers | §4.5 table states exactly what is lost; `execution.turn_orphaned` / `interrupted` are observable; sidecar model is the escape hatch |
+| Process-wide PATH prepend changes which `git`/`tmux`/`go` pdx runs | Defaults match the user's shell; opt-in with nex; fixed, logged order; removed once Nexen grows a per-child env seam |
 | Principal `pdx:<host_id>` is coarse | Documented; per-user identity is not something pdx has anywhere else |
-| N1 lands with a different `Options` shape | This spec names N1 §4.4.2 symbols exactly; any drift is caught at compile time, not at runtime |
+| N1 lands with a different `Options` shape | This spec names N1 §4.4.2 symbols exactly; drift is a compile error |
+| A Nexen background-goroutine panic takes the daemon down | Not covered by the recoverer (stated in §4.4); same exposure as the standalone daemon; Nexen's own tests are the guard |
 
-## 8. Open questions for review
+## 8. Resolved questions (v1 §8, closed by the review)
 
-1. `enabled` default `false` in P-A, `true` in P-B — or `true` now, since the
-   route is inert without a client? (Leaning false: blast radius until the
-   handler has run in anger on both hosts.)
-2. `Closer` optional interface vs. reordering `StopModules` after
-   `srv.Shutdown` for every module. (Leaning `Closer`: other modules' `Stop`
-   assume the server is still up for in-flight WS teardown.)
-3. Is process-wide `PATH` prepend acceptable, or should pdx refuse to start
-   nex with a bare launchd `PATH` and make the user configure `claude_bin`
-   plus nothing else? (Leaning prepend: the child needs `git` too.)
+1. `enabled` stays `false` in P-A. P-B may flip the *documentation* default,
+   but a host without roots/policy configured is never auto-enabled — Load
+   rejects `enabled = true` with no roots.
+2. `Closer` optional interface, existing `Stop` order kept, **plus** the main
+   goroutine waits for the whole sequence (§4.5). The v1 argument "other
+   modules' Stop assume the server is up" was not the reason (stream's
+   `Stop` is a no-op); the reason is that `Stop` semantics are "stop doing
+   work" and `Close` is "release what handlers may still hold", and only
+   the latter must follow the server.
+3. Process-wide PATH prepend, opt-in with nex, fixed order, global effect
+   acknowledged (§4.6). `claude_bin` alone is not an alternative because the
+   child needs `git` too.
 
 ## 9. Related
 
@@ -378,3 +561,22 @@ Manual, on mlab, before merge (recorded in the PR):
 - `docs/specs/2026-09-13-peer-bridge-spec.md` §4 — why peer credentials do not reach `/api/nex`
 - `docs/specs/2026-07-19-m0-dispatch-integration.md` — the M0 modules P-D will remove
 - `internal/locale` — precedent for fixing a launchd environment at start
+- `internal/module/dev/build.go` — the in-daemon `go build` that §3.1 must keep working
+
+## 10. Codex spec review disposition (`task-mu1mhggb-c9tm86`, one round)
+
+| # | Level | Finding | Disposition |
+|---|---|---|---|
+| 1 | must | Validate placed inside Assemble contradicts N1 §4.4.2 | ✅ §4.1/§4.2: pdx runs `Validate()` before `Assemble`; I13 |
+| 2 | must | `CloseModules` after `srv.Shutdown` in the signal goroutine can be cut off by process exit | ✅ §4.5: `shutdownDone` channel, main waits; I7 covers timeout, force close, error paths |
+| 3 | must | One-time ticket + native `EventSource` reconnect cannot carry `Last-Event-ID` | ✅ §4.3: transport fixed as fetch-SSE with bearer + `Last-Event-ID` header; CORS allow-header added; I14, §6 step 7 |
+| 4 | must | Mapping every 404 to "not enabled" swallows `execution_not_found` | ✅ §4.7: capabilities probe on the error path only; I10 |
+| 5 | must | `Makefile` env does not reach the daemon's own `go build` (`dev/build.go`) | ✅ §3.1: machine-level `go env -w GOPRIVATE` + git `insteadOf`; `make check-goenv`; §6 step 0 |
+| 6 | should | I2 too narrow; peer path status not necessarily 404; OPTIONS bypass | ✅ I2 rewritten around "probe not reached"; status left to the chain; OPTIONS asserted as existing |
+| 7 | should | Restart recovery over-promised; graceful vs orphan conflated | ✅ §4.5 three-case table with what is/isn't preserved; §6 3a–3c |
+| 8 | should | 10 s is a shared deadline, not a hard cap; `Server.Close` ≠ handlers exited; Stop may return error | ✅ §4.5 scope paragraph; Assemble ctx = Background; `Stop` returns the error |
+| 9 | should | PATH prepend called harmless; order/dedupe unspecified | ✅ §4.6 rewritten: exact algorithm, `[]` disables, global effect acknowledged; I9 |
+| 10 | should | Goal 4 over-claims isolation; no reusable recoverer; Flusher | ✅ Goal 4 reworded; §4.4 recoverer spec (no writer wrap, `ErrAbortHandler`); I8 |
+| 11 | should | Config persistence contract; `Clone`; `/api/info` staleness; failure cases | ✅ §4.2 (`PUT` rejects `nex`, `Clone` slices), §4.8 `configured`/`mounted`, I12, I15 |
+| 12 | should | Empty `HostID` → `pdx:`; I11 over-broad; handoff test needs same cwd / process gone | ✅ §4.2 HostID rule; I11 narrowed to operation events + lease; §6 step 5 |
+| 13 | nit | `repo_roots` comment misleading; `max_profile` placement | ✅ §4.2 paste-able TOML with corrected comments |
