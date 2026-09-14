@@ -357,20 +357,22 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 }
 
 // formatPeersTable renders resp.Peers as a text/tabwriter table with columns
-// ADDRESS AGENT NAME STATUS DELIVERABLE CWD, followed by a partial-resolution
-// summary line when any record's owner lookup did not run.
+// ADDRESS LABEL AGENT NAME STATUS DELIVERABLE CWD, followed by a
+// partial-resolution summary line when any record's owner lookup did not
+// run, and a trailer line naming this daemon's version.
 func formatPeersTable(resp peers.Envelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
+	fmt.Fprintln(w, "ADDRESS\tLABEL\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
 
 	unresolved := 0
 	for _, rec := range resp.Peers {
 		if rec.Agent == nil && rec.Reason == "" {
 			unresolved++
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			sanitizeCell(rec.Address),
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			addressField(rec),
+			sanitizeCell(labelField(rec)),
 			sanitizeCell(agentField(rec)),
 			sanitizeCell(nameField(rec)),
 			sanitizeCell(statusField(rec)),
@@ -383,27 +385,31 @@ func formatPeersTable(resp peers.Envelope) string {
 	if unresolved > 0 {
 		fmt.Fprintf(&buf, "(partial: %d sessions not resolved within budget)\n", unresolved)
 	}
+	fmt.Fprintf(&buf, "daemon %s\n", sanitizeCell(resp.DaemonVersion))
 
 	return buf.String()
 }
 
 // formatPeersAllTable renders a scope=all response as a text/tabwriter
-// table with a leading HOST column (the row's host alias), one row per
-// peer record across every host whose fetch succeeded, followed by one
-// line per host whose fetch failed: "<alias>  (unreachable: <error>)".
+// table with a leading HOST column (the row's host alias) and a LABEL
+// column after ADDRESS, one row per peer record across every host whose
+// fetch succeeded, followed by one line per host whose fetch failed:
+// "<alias>  (unreachable: <error>)", followed by one trailer line per host
+// whose fetch succeeded: "<alias>  daemon <version>".
 func formatPeersAllTable(resp peers.AllEnvelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "HOST\tADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
+	fmt.Fprintln(w, "HOST\tADDRESS\tLABEL\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
 
 	for _, h := range resp.Hosts {
 		if !h.OK {
 			continue
 		}
 		for _, rec := range h.Peers {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				sanitizeCell(h.Alias),
-				sanitizeCell(rec.Address),
+				addressField(rec),
+				sanitizeCell(labelField(rec)),
 				sanitizeCell(agentField(rec)),
 				sanitizeCell(nameField(rec)),
 				sanitizeCell(statusField(rec)),
@@ -419,8 +425,41 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 			fmt.Fprintf(&buf, "%s  (unreachable: %s)\n", sanitizeCell(h.Alias), sanitizeCell(h.Error))
 		}
 	}
+	for _, h := range resp.Hosts {
+		if h.OK {
+			fmt.Fprintf(&buf, "%s  daemon %s\n", sanitizeCell(h.Alias), sanitizeCell(h.DaemonVersion))
+		}
+	}
 
 	return buf.String()
+}
+
+// addressField renders rec.Address through sanitizeCell first, then — only
+// for an entry row (RowKind == "entry", a live tmux/cc process outside any
+// registered session) — prefixes it with two spaces, visually nesting it
+// under the session rows above it. Sanitizing before prefixing means a
+// stray leading space a peer put in its own address is escaped like any
+// other control content rather than being mistaken for our indentation.
+func addressField(rec peers.PeerRecord) string {
+	addr := sanitizeCell(rec.Address)
+	if rec.RowKind == "entry" {
+		addr = "  " + addr
+	}
+	return addr
+}
+
+// labelField renders rec.Label: "-" when the row has no label (a proxy row
+// or one whose cc agent could not be attributed), "<label>*" when the
+// label is the auto-derived default (LabelSource == peers.LabelSourceDefault),
+// or the label verbatim when the operator set it explicitly.
+func labelField(rec peers.PeerRecord) string {
+	if rec.Label == "" {
+		return "-"
+	}
+	if rec.LabelSource == peers.LabelSourceDefault {
+		return rec.Label + "*"
+	}
+	return rec.Label
 }
 
 func agentField(rec peers.PeerRecord) string {

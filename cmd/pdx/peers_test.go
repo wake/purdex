@@ -64,17 +64,48 @@ func peersTableFixture() peers.Envelope {
 	}
 }
 
-const wantPeersTable = "ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"alias/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
-	"alias/sess2  codex  -        idle     not_cc       /home/wake/codex\n" +
-	"alias/sess3  -      -        -        no_agent     /home/wake/shell\n" +
-	"alias/sess4  -      -        -        -            \n" +
-	"(partial: 1 sessions not resolved within budget)\n"
+const wantPeersTable = "ADDRESS      LABEL  AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
+	"alias/sess1  -      cc     wake-cc  working  yes          /home/wake/project\n" +
+	"alias/sess2  -      codex  -        idle     not_cc       /home/wake/codex\n" +
+	"alias/sess3  -      -      -        -        no_agent     /home/wake/shell\n" +
+	"alias/sess4  -      -      -        -        -            \n" +
+	"(partial: 1 sessions not resolved within budget)\n" +
+	"daemon \n"
 
 func TestFormatPeersTable(t *testing.T) {
 	got := formatPeersTable(peersTableFixture())
 	if got != wantPeersTable {
 		t.Errorf("formatPeersTable mismatch\ngot:\n%s\nwant:\n%s", got, wantPeersTable)
+	}
+}
+
+// TestFormatPeersTable_LabelColumnAndEntryIndent pins the Peer Address v2
+// rendering rules (task-9 brief): a LABEL column right after ADDRESS,
+// entry rows' ADDRESS cell indented by two spaces, "-" for an empty label,
+// "<label>*" when LabelSource is "default", and a "daemon <version>"
+// trailer line.
+func TestFormatPeersTable_LabelColumnAndEntryIndent(t *testing.T) {
+	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.342", Peers: []peers.PeerRecord{
+		{Address: "a/purdex-dev:mt0-x", RowKind: "session", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/_k3x9qz:y", RowKind: "entry", Label: "_k3x9qz", LabelSource: "default", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/tmux:shell", RowKind: "session", Reason: "no_agent"},
+	}}
+	got := formatPeersTable(env)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "ADDRESS") || !strings.Contains(lines[0], "LABEL") {
+		t.Errorf("header: %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "a/purdex-dev:mt0-x") || !strings.Contains(lines[1], "purdex-dev ") {
+		t.Errorf("session row: %q", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "  a/_k3x9qz:y") || !strings.Contains(lines[2], "_k3x9qz*") {
+		t.Errorf("entry row (indented, default marked): %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "-") { // empty label renders "-"
+		t.Errorf("shell row: %q", lines[3])
+	}
+	if !strings.Contains(got, "daemon 1.0.0-alpha.342") {
+		t.Errorf("version trailer missing:\n%s", got)
 	}
 }
 
@@ -587,15 +618,56 @@ func peersAllTableFixture() peers.AllEnvelope {
 	}
 }
 
-const wantPeersAllTable = "HOST   ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"local  local/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
-	"air    air/sess2    codex  -        idle     not_cc       /home/wake/codex\n" +
-	"down  (unreachable: connection refused)\n"
+const wantPeersAllTable = "HOST   ADDRESS      LABEL  AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
+	"local  local/sess1  -      cc     wake-cc  working  yes          /home/wake/project\n" +
+	"air    air/sess2    -      codex  -        idle     not_cc       /home/wake/codex\n" +
+	"down  (unreachable: connection refused)\n" +
+	"local  daemon \n" +
+	"air  daemon \n"
 
 func TestFormatPeersAllTable(t *testing.T) {
 	got := formatPeersAllTable(peersAllTableFixture())
 	if got != wantPeersAllTable {
 		t.Errorf("formatPeersAllTable mismatch\ngot:\n%s\nwant:\n%s", got, wantPeersAllTable)
+	}
+}
+
+// TestFormatPeersAllTable_LabelColumnEntryIndentAndVersionTrailers extends
+// TestFormatPeersTable_LabelColumnAndEntryIndent's rules to the --all
+// table: a LABEL column, entry-row indent, and one "<alias>  daemon
+// <version>" trailer line per OK host (the existing "(unreachable: …)"
+// lines for failed hosts stay).
+func TestFormatPeersAllTable_LabelColumnEntryIndentAndVersionTrailers(t *testing.T) {
+	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
+		{
+			Alias: "local", OK: true, DaemonVersion: "1.0.0-alpha.342",
+			Peers: []peers.PeerRecord{
+				{Address: "local/purdex-dev:mt0-x", RowKind: "session", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/_k3x9qz:y", RowKind: "entry", Label: "_k3x9qz", LabelSource: "default", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+			},
+		},
+		{Alias: "air", OK: true, DaemonVersion: "1.0.0-alpha.340", Peers: []peers.PeerRecord{}},
+		{Alias: "down", OK: false, Error: "connection refused", Peers: []peers.PeerRecord{}},
+	}}
+	got := formatPeersAllTable(resp)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "HOST") || !strings.Contains(lines[0], "LABEL") {
+		t.Errorf("header: %q", lines[0])
+	}
+	if !strings.Contains(lines[2], "  local/_k3x9qz:y") || !strings.Contains(lines[2], "_k3x9qz*") {
+		t.Errorf("entry row (indented, default marked) not where expected: %q", lines[2])
+	}
+	if !strings.Contains(got, "down  (unreachable: connection refused)") {
+		t.Errorf("unreachable line missing:\n%s", got)
+	}
+	if !strings.Contains(got, "local  daemon 1.0.0-alpha.342") {
+		t.Errorf("local daemon version trailer missing:\n%s", got)
+	}
+	if !strings.Contains(got, "air  daemon 1.0.0-alpha.340") {
+		t.Errorf("air daemon version trailer missing:\n%s", got)
+	}
+	if strings.Contains(got, "down  daemon") {
+		t.Errorf("unreachable host must not get a daemon version trailer:\n%s", got)
 	}
 }
 
