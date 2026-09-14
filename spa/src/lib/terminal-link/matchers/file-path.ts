@@ -3,10 +3,13 @@ import type { LinkMatcher } from '../types'
 // 四支 regex 共用的字元類別片段（Unicode，需 `u` flag）。集中定義避免四支各自漂移。
 //
 // 目錄段與檔名主幹接受任何 Unicode 字母/數字（`\p{L}\p{N}`），讓 CJK 路徑如
-// `docs/申請流程/115潛優修正計畫-核定.pdf` 能整段連結。副檔名鏈拆成兩種角色：
+// `docs/申請流程/115潛優修正計畫-核定.pdf` 能整段連結。凡是字母出現的地方都同時
+// 收 `\p{M}`（combining marks）：macOS `ls` 常輸出 NFD（`が` = `か` + U+3099、
+// `é` = `e` + U+0301）；匹配結果不做正規化，原樣交給 opener。副檔名鏈拆成兩種角色：
 //   - inner（中間的副檔名段）：Unicode，讓 `docs/報告.最終版.pdf` 整段連結
 //   - final（最後一段）：**維持 ASCII**，讓黏在檔名後的 CJK 敘述
-//     （`已更新 docs/a.pdf並重新`）自然停在 `pdf`，不需另加尾端邊界斷言。
+//     （`已更新 docs/a.pdf並重新`）自然停在 `pdf`。這是 bias，不是 guarantee：
+//     黏上的敘述後面若再接副檔名或 `/`，regex 會合法吃掉整段（見下方 limitations）。
 //   引擎會在兩種角色間回溯：`docs/a.pdf然後，` → inner `.pdf然後` 後面接不到
 //   final → 回溯 → final `.pdf` → 連結為 `docs/a.pdf`。
 //
@@ -17,12 +20,12 @@ import type { LinkMatcher } from '../types'
 //     也會產生一個被遮蔽的 BARE 匹配 `edit.md`（ABS 先註冊，hover 時勝出）。
 //   - 以檔名樣式結尾的 CJK 句子會被 BARE_RE 整句連結（`請見附件.pdf` → 一個連結），
 //     與 ASCII 的 `seeattachment.pdf` 同樣歧義；點擊後走既有 stat → not-found popup。
-//   - CJK 主幹後黏敘述且無標點、無 ASCII 副檔名時無法切分
-//     （`docs/a.pdf然後.txt` 整段連結）。罕見，接受。
-const W = '\\p{L}\\p{N}_' // "word" char（原 \w）
+//   - 黏在 ASCII 副檔名後的敘述若再接副檔名或 `/`，整段連結
+//     （`docs/a.pdf然後.txt`、`docs/a.pdf然後/x.txt`）。罕見，接受，測試已 pin。
+const W = '\\p{L}\\p{M}\\p{N}_' // "word" char（原 \w）；\p{M} = combining marks（NFD）
 const SEG = `[${W}.-]` // 目錄段字元
 const STEM = `[${W}-]` // 檔名主幹字元
-const INNER_EXT = `[\\p{L}\\p{N}]+(?:[-+][\\p{L}\\p{N}]+)*`
+const INNER_EXT = `[\\p{L}\\p{M}\\p{N}]+(?:[-+][\\p{L}\\p{M}\\p{N}]+)*`
 const FINAL_EXT = `[A-Za-z0-9]+(?:[-+][A-Za-z0-9]+)*`
 const EXT = `(?:\\.${INNER_EXT})*\\.${FINAL_EXT}`
 const SUFFIX = `(?::(\\d+)(?::(\\d+))?)?`

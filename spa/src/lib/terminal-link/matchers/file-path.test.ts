@@ -394,6 +394,41 @@ describe('unicode paths', () => {
       expect(r).toHaveLength(1)
       expect(r[0].text).toBe('seedocs/a.pdf')
     })
+
+    // NFD (macOS `ls` style): base letter + combining mark. The matched path
+    // must be the input string verbatim — no normalisation.
+    it('matches NFD CJK stem whole: docs/か\\u3099.txt (no normalisation)', () => {
+      const path = 'docs/が.txt'
+      const r = make().provide(`see ${path} ok`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(path)
+      expect(r[0].meta?.path).toBe('docs/が.txt')
+    })
+
+    it('matches NFD Latin stem whole: docs/cafe\\u0301.txt (no normalisation)', () => {
+      const path = 'docs/café.txt'
+      const r = make().provide(`see ${path} ok`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(path)
+      expect(r[0].meta?.path).toBe('docs/café.txt')
+    })
+
+    // ASCII final extension is a bias, not a guarantee (spec §3.1): when glued
+    // prose is itself followed by another extension or a `/`, the regex
+    // legitimately consumes the whole thing.
+    it('pins accepted limitation: docs/a.pdf然後.txt links whole', () => {
+      const r = make().provide('docs/a.pdf然後.txt')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf然後.txt')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf然後.txt' })
+    })
+
+    it('pins accepted limitation: docs/a.pdf然後/x.txt links whole', () => {
+      const r = make().provide('docs/a.pdf然後/x.txt')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('docs/a.pdf然後/x.txt')
+      expect(r[0].meta).toEqual({ path: 'docs/a.pdf然後/x.txt' })
+    })
   })
 
   describe('absolute', () => {
@@ -452,6 +487,16 @@ describe('unicode paths', () => {
 
     it('still rejects 1.0.0+exp.sha (version rejection re-check)', () => {
       expect(make().provide('build 1.0.0+exp.sha done')).toHaveLength(0)
+    })
+
+    // NFD: the lookbehind must treat a combining mark as a word char so no
+    // second link starts at `x.txt` right after the mark.
+    it('lookbehind blocks on a combining mark: か\\u3099x.txt is one token', () => {
+      const input = 'がx.txt'
+      const r = make().provide(input)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(input)
+      expect(r[0].meta?.path).toBe('がx.txt')
     })
   })
 })
