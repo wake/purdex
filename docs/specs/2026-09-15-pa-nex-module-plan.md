@@ -404,6 +404,7 @@ func buildOptions(hostID, dataDir string, n pdxconfig.NexConfig, shutdownBudget 
 ```
 
 **Tests (write first):**
+- `api.ValidatePublicPrefix(RoutePrefix) == nil` (pins the constant).
 - full mapping asserted field by field on the returned `Options.Config`:
   `HostID`, `DataDir == filepath.Join(dataDir,"nex")`, roots, sandbox
   policy, parsed timeouts, `ShutdownTimeout == budget`; `PublicPrefix ==

@@ -204,7 +204,8 @@ Validation, two layers with distinct jobs:
 
 1. pdx `config.Load` — only what pdx knows and Nexen cannot say better:
    `enabled` requires ≥ 1 root; `max_profile`/`default_profile` pass
-   `sandbox.ValidName`; `claude_bin`, if set, is absolute after `~`
+   `sandbox.ValidName` (N1 no longer exports the profile table; `sandbox.Lookup`
+   is the read accessor if a value is ever needed); `claude_bin`, if set, is absolute after `~`
    expansion; `path_prepend` entries are absolute after expansion;
    durations parse. Errors name the `[nex]` key.
 2. `config.Config.Validate()` — Nexen's rules (defaults, roots fail-closed,
@@ -286,7 +287,9 @@ cannot carry `Last-Event-ID`. Therefore:
 mux.Handle("/api/nex/", http.StripPrefix("/api/nex", recoverer(m.sys.Handler)))
 ```
 
-with `Options.PublicPrefix = "/api/nex"` so the paths Nexen renders into
+with `Options.PublicPrefix = "/api/nex"` (a constant that also passes
+N1's `api.ValidatePublicPrefix`, asserted once in a test so a future edit
+cannot introduce `//`, `?`, `#` or percent-escapes) so the paths Nexen renders into
 responses (`capabilities.lease.*.path`, attach `stream_url`) are
 origin-relative absolute paths including the prefix, per N1 §4.1's contract
 note. Routing and Nexen's draining check see `/v1/...` because `StripPrefix`
@@ -367,8 +370,12 @@ a hard cap: it is **one deadline shared** by `StopModules` and
 value so its bounded interrupt cannot outlive it. It does **not** bound
 `Stop` implementations that ignore their ctx (the `agent` module's `Wait()`
 is one) nor `CloseModules`, which has no ctx by design (closing a store is
-not cancellable). After `srv.Close()` net/http has closed listeners and
-connections but in-flight handler goroutines may still be unwinding;
+not cancellable). N1 (PR #59, C4) made `System.Shutdown` retryable — draining and the bus
+close happen once, the live-turn interrupt can be called again with a fresh
+ctx — but P-A does **not** retry: the budget is shared and already spent by
+then; a second wait would only delay `Close`. After `srv.Close()` net/http
+has closed listeners and connections but in-flight handler goroutines may
+still be unwinding;
 `sys.Close` right after is the same order the standalone daemon uses
 (N1 rule 3) and is accepted as-is — a handler that loses the store under it
 fails that one request during a forced shutdown.
