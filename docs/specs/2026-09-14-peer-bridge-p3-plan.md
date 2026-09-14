@@ -1202,20 +1202,31 @@ type selftestDeps struct {
    `signal.NotifyContext` — and give it its **own** context
    (`context.WithTimeout(context.Background(), 30 s)`), never the possibly
    cancelled run ctx (R2-M8).
-2. `tmux new-session -d -s <name> -- claude -p --verbose --input-format
-   stream-json --output-format stream-json --name <name> --settings
+2. `tmux new-session -d -s <name> -- sh -c 'sleep 2147483647 | exec claude
+   "$@"' pdx-selftest -p --verbose --input-format stream-json
+   --output-format stream-json --name <name> --settings
    {"crossSessionInbound":"accept"}` (argv passed as separate tmux
-   arguments; no shell quoting). **Immediately** capture the target's
-   process identity (R2-M8): `tmux list-panes -t <name> -F '#{pane_pid}'`
-   ⇒ `targetPID`, `targetProcStart := procStart(targetPID)`. A failure
-   here ⇒ `FAIL: cannot identify the throwaway session's process`, exit 1
-   (cleanup still kills the session by name).
+   arguments; the claude arguments are positional to `sh -c`, so nothing is
+   re-quoted and the settings JSON stays one element). **Live finding
+   (mlab, 2.1.270):** `claude -p --input-format stream-json` exits at once
+   when its stdin is a tty (`Input must be provided either through stdin or
+   as a prompt argument when using --print`), and a prompt argument makes it
+   single-shot; only a pipe on stdin keeps the session alive — hence the
+   wrapper. Consequently `#{pane_pid}` is the **wrapper shell**, not claude.
+   **Immediately** capture the pane's identity (R2-M8): `tmux list-panes -t
+   <name> -F '#{pane_pid}'` ⇒ `panePID`, `paneProcStart :=
+   procStart(panePID)`. A failure here ⇒ `FAIL: cannot identify the
+   throwaway session's process`, exit 1 (cleanup still kills the session by
+   name).
 3. Poll ≤ 15 s (250 ms `sleep`): `readRegistry` for the non-proxy entry
-   with `TmuxSessionName() == name` **and `PID == targetPID`** (the pane
-   pid is the claude process, since tmux exec's the command directly);
-   record its `Inbox` and registry files (`<registryDir>/<pid>.json` +
-   `glob("<pid>.*.key")`). None in time ⇒ `FAIL: session did not register
-   (Claude Code ≥ 2.1.224 with peer messaging required)`, exit 1.
+   with `TmuxSessionName() == name` (the name is random per run, so it
+   identifies the entry on its own). Its `PID` is the claude process:
+   `targetPID := entry.PID`, `targetProcStart := procStart(targetPID)` (an
+   error there ⇒ `FAIL: cannot identify the throwaway session's process`);
+   record its `Inbox` (`targetInbox`) and registry files
+   (`<registryDir>/<pid>.json` + `glob("<pid>.*.key")`). None in time ⇒
+   `FAIL: session did not register (Claude Code ≥ 2.1.224 with peer
+   messaging required)`, exit 1.
 4. `features := readPeerFeatures(registryDir, targetPID)` or
    `DefaultPeerFeatures`; `h, err := spawn(ctx, Config{Name:
    "pdx-selftest-probe", RegistryDir, SockDir, Version: VerifiedCCVersion,
@@ -1240,10 +1251,13 @@ type selftestDeps struct {
    a. if `h != nil`: `h.Stop(2 s)`; then verify `h.Files()` and `h.Sock()`
       are gone (`remove` any leftover; the sock only if `dialRefused`).
    b. `tmux kill-session -t <name>` (ENOENT-style "no such session" is fine).
-   c. if `targetPID != 0`: wait ≤ 5 s for `!pidAlive(targetPID) ||
-      procStart(targetPID) != targetProcStart`; else SIGTERM (re-checking
-      procStart first), wait 2 s, SIGKILL (re-checking again), wait 2 s;
-      still the same process ⇒ record `target pid <p> still alive`.
+   c. for the claude process (if identified: `targetPID`/`targetProcStart`)
+      and THEN for the pane's wrapper shell (`panePID`/`paneProcStart`),
+      the same sequence: wait ≤ 5 s for `!pidAlive(pid) || procStart(pid)
+      != procStart`; else SIGTERM (re-checking procStart first), wait 2 s,
+      SIGKILL (re-checking again), wait 2 s; still the same process ⇒
+      record `target pid <p> still alive` / `pane pid <p> still alive`. If
+      claude was never identified, only the pane pid is escalated.
    d. target files: `<registryDir>/<targetPID>.json` and each
       `glob(<targetPID>.*.key)` still present whose `registryProcStart ==
       targetProcStart` ⇒ `remove`; `<sockDir>/<targetPID>.sock` ⇒ `remove`
@@ -1254,10 +1268,12 @@ type selftestDeps struct {
 **Tests (all deps faked; isolated temp dirs only; no tmux/claude):**
 `new-session`, `list-panes` and `kill-session` argv golden; `list-panes`
 failure ⇒ FAIL and kill-session still called; entry appears on the 3rd
-poll ⇒ proceeds; entry with the right name but another pid ⇒ ignored;
-never appears ⇒ FAIL, kill-session called, **target pid alive after kill ⇒
-SIGTERM then SIGKILL observed** (identity captured before registration —
-R2-M8); the frame written to the target inbox parses with the nonce and
+poll ⇒ proceeds; the claude pid is taken from the registry entry (pane pid
+≠ entry pid); entries with another name or `IsProxy` ⇒ ignored; never
+appears ⇒ FAIL, kill-session called, **pane pid alive after kill ⇒ SIGTERM
+then SIGKILL on the pane pid only** (identity captured before registration
+— R2-M8); both pids alive after a registered run ⇒ claude escalated first,
+then the pane; the frame written to the target inbox parses with the nonce and
 `from` = the fake peer's sock; reply with the nonce ⇒ PASS; frame from
 another socket ignored; `Frames` closed ⇒ FAIL helper exited; timeout ⇒
 FAIL and cleanup called; spawn failure ⇒ FAIL, kill-session called, no

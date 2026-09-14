@@ -181,10 +181,17 @@ func runMsgSelftestCmd(inv msgInvocation, stdout, stderr io.Writer) int {
 }
 
 // selftestState is what cleanup needs to know about what the run created.
+//
+// Two processes matter: the tmux pane pid is the `sh -c` wrapper that
+// pipes into claude (captured right after new-session, so cleanup can
+// always reach it), and the claude process itself, whose pid is only
+// known once it registers (the registry entry's PID).
 type selftestState struct {
 	name            string
 	sessionStarted  bool   // tmux new-session was attempted ⇒ kill-session
-	targetPID       int    // 0 ⇒ identity unknown, nothing pid-level to do
+	panePID         int    // the wrapper shell; 0 ⇒ unknown
+	paneProcStart   string // proves panePID is still the same process
+	targetPID       int    // the claude process; 0 ⇒ never identified
 	targetProcStart string // proves targetPID is still the same process
 	targetInbox     string // the registered inbox; "" ⇒ never registered
 	h               selftestPeer
@@ -211,15 +218,18 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		}
 	}()
 
-	// Step 2: the throwaway session, and its process identity — captured
-	// immediately so cleanup can reach the process even if it never
-	// registers (R2-M8). sessionStarted is set BEFORE the call: a cancel
-	// or failure that lands after tmux created the session must still be
-	// followed by kill-session (a session that never existed is tolerated
-	// there by selftestTmuxNoSession).
+	// Step 2: the throwaway session. `claude -p --input-format stream-json`
+	// exits at once when its stdin is a tty, so it runs behind a pipe
+	// inside an `sh -c` wrapper; the claude arguments are positional to
+	// sh (no re-quoting — the settings JSON stays one argv element).
+	// sessionStarted is set BEFORE the call: a cancel or failure that
+	// lands after tmux created the session must still be followed by
+	// kill-session (a session that never existed is tolerated there by
+	// selftestTmuxNoSession).
 	st.sessionStarted = true
 	if _, err := deps.tmux(ctx, "new-session", "-d", "-s", st.name, "--",
-		"claude", "-p", "--verbose",
+		"sh", "-c", `sleep 2147483647 | exec claude "$@"`, "pdx-selftest",
+		"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--name", st.name,
 		"--settings", `{"crossSessionInbound":"accept"}`); err != nil {
@@ -227,16 +237,20 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		return 1
 	}
 
-	pid, procStart, err := selftestIdentify(ctx, deps, st.name)
+	// The pane pid is the wrapper shell — captured immediately so cleanup
+	// can reach the session's process tree even if claude never registers
+	// (R2-M8).
+	panePID, paneProcStart, err := selftestIdentifyPane(ctx, deps, st.name)
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
 		fmt.Fprintln(stdout, "FAIL: cannot identify the throwaway session's process")
 		return 1
 	}
-	st.targetPID, st.targetProcStart = pid, procStart
+	st.panePID, st.paneProcStart = panePID, paneProcStart
 
-	// Step 3: wait for the registry entry that is provably this process.
-	target, status := selftestAwaitRegistration(ctx, deps, st.name, pid)
+	// Step 3: wait for the registry entry of this tmux session; its PID is
+	// the claude process, whose identity is captured the moment it is seen.
+	target, status := selftestAwaitRegistration(ctx, deps, st.name)
 	switch status {
 	case selftestInterrupted:
 		fmt.Fprintln(stdout, "FAIL: interrupted")
@@ -245,7 +259,14 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		fmt.Fprintln(stdout, "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)")
 		return 1
 	}
-	st.targetInbox = target.Inbox
+	targetProcStart, err := deps.procStart(target.PID)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: registered pid %d: %v\n", target.PID, err)
+		fmt.Fprintln(stdout, "FAIL: cannot identify the throwaway session's process")
+		return 1
+	}
+	pid := target.PID
+	st.targetPID, st.targetProcStart, st.targetInbox = pid, targetProcStart, target.Inbox
 
 	// Step 4: a real helper, impersonating one peer with the target's own
 	// feature list.
@@ -303,9 +324,9 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	return selftestAwaitReply(ctx, deps, h, target.Inbox, nonce, timeout, st.name, start, stdout)
 }
 
-// selftestIdentify returns the throwaway session's pane pid and its
-// procStart string.
-func selftestIdentify(ctx context.Context, deps selftestDeps, name string) (int, string, error) {
+// selftestIdentifyPane returns the throwaway session's pane pid (the
+// `sh -c` wrapper, not claude) and its procStart string.
+func selftestIdentifyPane(ctx context.Context, deps selftestDeps, name string) (int, string, error) {
 	out, err := deps.tmux(ctx, "list-panes", "-t", name, "-F", "#{pane_pid}")
 	if err != nil {
 		return 0, "", fmt.Errorf("tmux list-panes: %w", err)
@@ -331,16 +352,16 @@ const (
 )
 
 // selftestAwaitRegistration polls the registry for ≤ selftestRegisterWait
-// for the non-proxy entry whose tmux session is name AND whose pid is
-// pid (the pane pid is the claude process: tmux execs the command
-// directly).
-func selftestAwaitRegistration(ctx context.Context, deps selftestDeps, name string, pid int) (ipeers.Entry, selftestRegStatus) {
+// for the non-proxy entry whose tmux session is name. The session name
+// is random per run, so it identifies the entry on its own; the entry's
+// PID is the claude process (the pane pid is only its wrapper shell).
+func selftestAwaitRegistration(ctx context.Context, deps selftestDeps, name string) (ipeers.Entry, selftestRegStatus) {
 	deadline := deps.now().Add(selftestRegisterWait)
 	for {
 		entries, err := deps.readRegistry(deps.registryDir)
 		if err == nil {
 			for _, e := range entries {
-				if !e.IsProxy && e.PID == pid && e.TmuxSessionName() == name {
+				if !e.IsProxy && e.TmuxSessionName() == name {
 					return e, selftestRegistered
 				}
 			}
@@ -447,38 +468,19 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 		}
 	}
 
-	// c. the target process, by identity.
+	// c. the processes, by identity: the claude process first (when it was
+	// identified), then the pane's wrapper shell.
 	if st.targetPID != 0 {
-		same := func() bool {
-			if !deps.pidAlive(st.targetPID) {
-				return false
-			}
-			ps, err := deps.procStart(st.targetPID)
-			return err == nil && ps == st.targetProcStart
-		}
-		alive := !selftestWaitGone(ctx, deps, same, selftestExitWait)
-		if alive {
-			// Re-check identity right before each signal: the pid may
-			// have been reused between the last poll and the kill.
-			for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
-				if !same() {
-					alive = false
-					break
-				}
-				if err := deps.signal(st.targetPID, sig); err != nil {
-					fmt.Fprintf(stdout, "target pid %d: %v: %v\n", st.targetPID, sig, err)
-				}
-				if selftestWaitGone(ctx, deps, same, selftestSignalWait) {
-					alive = false
-					break
-				}
-			}
-		}
-		if alive {
-			problem("target pid %d still alive", st.targetPID)
-		}
+		selftestReap(ctx, deps, "target", st.targetPID, st.targetProcStart, problem, stdout)
+	}
+	if st.panePID != 0 {
+		selftestReap(ctx, deps, "pane", st.panePID, st.paneProcStart, problem, stdout)
+	}
 
-		// d. the target's files — only those that carry its procStart.
+	// d. the claude process's files — only those that carry its procStart.
+	// Without a registry entry its pid is unknown and nothing on disk can
+	// be proven ours.
+	if st.targetPID != 0 {
 		pid := strconv.Itoa(st.targetPID)
 		var candidates []string
 		for _, pattern := range []string{pid + ".json", pid + ".*.key"} {
@@ -516,6 +518,37 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 	}
 	fmt.Fprintf(stdout, "cleanup incomplete: %s\n", strings.Join(remaining, "; "))
 	return false
+}
+
+// selftestReap waits ≤ selftestExitWait for the process (pid, procStart)
+// to be gone — dead, or the pid held by another process — then escalates
+// SIGTERM, wait, SIGKILL, wait, re-checking identity right before each
+// signal so a reused pid is never signalled. Still the same process at
+// the end ⇒ `<label> pid <p> still alive` is recorded as a problem.
+func selftestReap(ctx context.Context, deps selftestDeps, label string, pid int, procStart string,
+	problem func(string, ...any), stdout io.Writer) {
+	same := func() bool {
+		if !deps.pidAlive(pid) {
+			return false
+		}
+		ps, err := deps.procStart(pid)
+		return err == nil && ps == procStart
+	}
+	if selftestWaitGone(ctx, deps, same, selftestExitWait) {
+		return
+	}
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
+		if !same() {
+			return
+		}
+		if err := deps.signal(pid, sig); err != nil {
+			fmt.Fprintf(stdout, "%s pid %d: %v: %v\n", label, pid, sig, err)
+		}
+		if selftestWaitGone(ctx, deps, same, selftestSignalWait) {
+			return
+		}
+	}
+	problem("%s pid %d still alive", label, pid)
 }
 
 // selftestRemoveSock unlinks sock only when nobody listens on it; a live
