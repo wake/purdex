@@ -2,6 +2,7 @@
 package nex
 
 import (
+	"log"
 	"net/http"
 	"runtime/debug"
 )
@@ -23,7 +24,10 @@ import (
 // The WriteHeader(500) attempt does not depend on logf: it runs first and
 // unconditionally, and logf is then invoked behind its own recover guard.
 // This way a misbehaving logf (one that itself panics) can neither skip
-// the 500 response nor escape recoverer and crash the process.
+// the 500 response nor escape recoverer and crash the process. If logf
+// does panic, the original panic is not lost: it is written through the
+// stdlib logger instead (method, path, value, stack), together with logf's
+// own panic value.
 //
 // http.ErrAbortHandler is re-panicked rather than recovered: net/http
 // treats it specially (it aborts the handler without logging a stack
@@ -39,9 +43,15 @@ func recoverer(logf func(string, ...any), next http.Handler) http.Handler {
 				panic(rec)
 			}
 			w.WriteHeader(http.StatusInternalServerError)
+			stack := debug.Stack()
 			func() {
-				defer func() { recover() }()
-				logf("nex: panic recovered: method=%s path=%s value=%v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
+				defer func() {
+					if lp := recover(); lp != nil {
+						log.Printf("nex: panic recovered (logf itself panicked: %v): method=%s path=%s value=%v\n%s",
+							lp, r.Method, r.URL.Path, rec, stack)
+					}
+				}()
+				logf("nex: panic recovered: method=%s path=%s value=%v\n%s", r.Method, r.URL.Path, rec, stack)
 			}()
 		}()
 		next.ServeHTTP(w, r)

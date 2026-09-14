@@ -134,18 +134,95 @@ func TestBuildOptionsEmptyHostIDErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("buildOptions() error = nil, want non-nil")
 	}
-	const want = "nex: host_id is empty; cannot derive principal"
+	// No "nex:" prefix here: Module.Init wraps as "nex: init: %w", and a
+	// prefix on both sides would read "nex: init: nex: host_id …".
+	const want = "host_id is empty; cannot derive principal"
 	if err.Error() != want {
 		t.Errorf("buildOptions() error = %q, want %q", err.Error(), want)
+	}
+}
+
+// TestBuildOptionsWhitespaceHostIDErrors: a host_id that is only
+// whitespace is as empty as "" for principal purposes, and a host_id with
+// surrounding whitespace is trimmed before it becomes the principal and
+// Nexen's HostID.
+func TestBuildOptionsWhitespaceHostIDErrors(t *testing.T) {
+	n := pdxconfig.NexConfig{RepoRoots: []string{"/repo/a"}}
+
+	_, err := buildOptions("  ", "/data", n, 5*time.Second)
+	if err == nil {
+		t.Fatal("buildOptions(\"  \") error = nil, want non-nil")
+	}
+	const want = "host_id is empty; cannot derive principal"
+	if err.Error() != want {
+		t.Errorf("buildOptions() error = %q, want %q", err.Error(), want)
+	}
+
+	opts, err := buildOptions(" h1 ", "/data", n, 5*time.Second)
+	if err != nil {
+		t.Fatalf("buildOptions(\" h1 \") error = %v, want nil", err)
+	}
+	if opts.Config.HostID != "h1" {
+		t.Errorf("Config.HostID = %q, want trimmed %q", opts.Config.HostID, "h1")
+	}
+	req := httptest.NewRequest("GET", "/api/nex/v1/capabilities", nil)
+	principal, err := opts.Auth.Authenticate(req)
+	if err != nil || principal != "pdx:h1" {
+		t.Errorf("Authenticate() = %q, %v; want %q, nil", principal, err, "pdx:h1")
+	}
+}
+
+// TestBuildOptionsPrincipalClientID is spec §4.3's X-Pdx-Client rule:
+// an optional request header naming the client is appended to the
+// principal so two clients sharing the host token do not present as the
+// same writer (and silently re-mint each other's control lease). Absent
+// or malformed values are ignored, not rejected.
+func TestBuildOptionsPrincipalClientID(t *testing.T) {
+	n := pdxconfig.NexConfig{RepoRoots: []string{"/repo/a"}}
+	opts, err := buildOptions("h", "/data", n, 5*time.Second)
+	if err != nil {
+		t.Fatalf("buildOptions() error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		header string
+		set    bool
+		want   string
+	}{
+		{name: "absent", want: "pdx:h"},
+		{name: "valid", header: "tab-1", set: true, want: "pdx:h/tab-1"},
+		{name: "valid with dot and underscore", header: "spa_1.2", set: true, want: "pdx:h/spa_1.2"},
+		{name: "invalid characters", header: "bad value!", set: true, want: "pdx:h"},
+		{name: "empty value", header: "", set: true, want: "pdx:h"},
+		{name: "64 chars", header: strings.Repeat("a", 64), set: true, want: "pdx:h/" + strings.Repeat("a", 64)},
+		{name: "65 chars", header: strings.Repeat("a", 65), set: true, want: "pdx:h"},
+		{name: "slash", header: "a/b", set: true, want: "pdx:h"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/nex/v1/capabilities", nil)
+			if tt.set {
+				req.Header.Set("X-Pdx-Client", tt.header)
+			}
+			got, err := opts.Auth.Authenticate(req)
+			if err != nil {
+				t.Fatalf("Authenticate() error = %v, want nil", err)
+			}
+			if got != tt.want {
+				t.Errorf("Authenticate() principal = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
 // TestBuildOptionsValidateErrorIsWrapped is spec I13's counterpart: a
 // negative duration is shape-valid to pdx's own NexConfig.Validate (it
 // only checks the string parses), but Nexen's Config.Validate rejects it.
-// buildOptions must surface that with a single "nex: config:" prefix —
-// Nexen's own error already starts with "config:", so wrapping with just
-// "nex:" must not double it into "nex: config: config:".
+// buildOptions must surface that with a single "config:" prefix (Nexen's
+// own) and no "nex:" of its own — Module.Init adds "nex: init:" — so the
+// final message reads "nex: init: config: …" rather than
+// "nex: init: nex: config: config: …".
 func TestBuildOptionsValidateErrorIsWrapped(t *testing.T) {
 	n := pdxconfig.NexConfig{
 		RepoRoots: []string{"/repo/a"},
@@ -158,8 +235,11 @@ func TestBuildOptionsValidateErrorIsWrapped(t *testing.T) {
 	if err == nil {
 		t.Fatal("buildOptions() error = nil, want non-nil")
 	}
-	if !strings.HasPrefix(err.Error(), "nex: config: ") {
-		t.Errorf("buildOptions() error = %q, want prefix %q", err.Error(), "nex: config: ")
+	if !strings.HasPrefix(err.Error(), "config: ") {
+		t.Errorf("buildOptions() error = %q, want prefix %q", err.Error(), "config: ")
+	}
+	if strings.HasPrefix(err.Error(), "nex:") {
+		t.Errorf("buildOptions() error = %q, must not carry its own \"nex:\" prefix (Init adds it)", err.Error())
 	}
 	if strings.Contains(err.Error(), "config: config:") {
 		t.Errorf("buildOptions() error = %q, prefix doubled to \"config: config:\"", err.Error())

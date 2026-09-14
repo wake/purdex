@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"lab.protype.tw/wake/nexen"
@@ -94,14 +95,19 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	n := c.Cfg.Nex.Expanded(home)
 
-	final, changed := applyPathPolicy(n.PathPrepend, m.isDir)
+	// Log the applied prefix and the original PATH's element count, not
+	// the full PATH: on a developer machine that is kilobytes per line.
+	pathElements := len(filepath.SplitList(os.Getenv("PATH")))
+	_, changed := applyPathPolicy(n.PathPrepend, m.isDir)
 	m.pathPrefix = strings.Join(existingPrefix(n.PathPrepend, m.isDir), string(os.PathListSeparator))
 	if changed {
-		m.logf("nex: PATH policy applied (path_prepend=%q): PATH=%s", n.PathPrepend, final)
+		m.logf("nex: PATH policy applied (path_prepend=%q): prefix=%s path_elements=%d", n.PathPrepend, m.pathPrefix, pathElements)
 	} else {
-		m.logf("nex: PATH policy left PATH unchanged (path_prepend=%q): PATH=%s", n.PathPrepend, final)
+		m.logf("nex: PATH policy left PATH unchanged (path_prepend=%q): prefix=%s path_elements=%d", n.PathPrepend, m.pathPrefix, pathElements)
 	}
 
+	// buildOptions errors carry no "nex:" prefix of their own (a Nexen
+	// Validate error starts with "config:"), so this wrap is the only one.
 	opts, err := buildOptions(c.Cfg.HostID, c.Cfg.DataDir, n, core.ShutdownBudget)
 	if err != nil {
 		return fmt.Errorf("nex: init: %w", err)
@@ -141,11 +147,13 @@ func (m *Module) Start(context.Context) error {
 }
 
 // profilesText renders the sandbox policy as "max=<max>,default=<default>"
-// with empty names spelled out as "(nexen default)".
+// with an empty name spelled out as what Nexen actually applies — its
+// fail-closed default, "readonly" — so the log does not hide that an
+// unset profile is the most restrictive one.
 func profilesText(maxProfile, defaultProfile string) string {
 	name := func(s string) string {
 		if strings.TrimSpace(s) == "" {
-			return "(nexen default)"
+			return "readonly (nexen fail-closed default)"
 		}
 		return s
 	}

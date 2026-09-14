@@ -41,17 +41,17 @@ type CoreDeps struct {
 
 // Core holds shared infrastructure and manages module lifecycle.
 type Core struct {
-	Cfg      *config.Config
-	CfgMu   sync.RWMutex // protects Cfg
-	CfgPath  string       // path to config.toml for persistence
-	Tmux     tmux.Executor
-	Registry *ServiceRegistry
-	Events   *EventsBroadcaster
-	Tickets      *TicketStore
-	Pairing      PairingState
-	SetupSecrets *SetupSecretStore
-	PairingSecret string  // hex(3 bytes), used for /api/pair/verify
-	failedVerify  int32   // atomic counter for brute-force protection
+	Cfg            *config.Config
+	CfgMu          sync.RWMutex // protects Cfg
+	CfgPath        string       // path to config.toml for persistence
+	Tmux           tmux.Executor
+	Registry       *ServiceRegistry
+	Events         *EventsBroadcaster
+	Tickets        *TicketStore
+	Pairing        PairingState
+	SetupSecrets   *SetupSecretStore
+	PairingSecret  string      // hex(3 bytes), used for /api/pair/verify
+	failedVerify   int32       // atomic counter for brute-force protection
 	TmuxAliveFunc  func() bool // injected by session module; returns cached tmux reachability
 	modules        []Module
 	configChangeMu sync.Mutex // protects onConfigChange
@@ -65,9 +65,9 @@ func New(deps CoreDeps) *Core {
 		reg = NewServiceRegistry()
 	}
 	return &Core{
-		Cfg:      deps.Config,
-		Tmux:     deps.Tmux,
-		Registry: reg,
+		Cfg:          deps.Config,
+		Tmux:         deps.Tmux,
+		Registry:     reg,
 		Events:       NewEventsBroadcaster(),
 		Tickets:      NewTicketStore(),
 		SetupSecrets: NewSetupSecretStore(5 * time.Minute),

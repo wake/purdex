@@ -48,9 +48,136 @@ func TestNexConfigEnabledWithNoRootsIsInvalid(t *testing.T) {
 	if !strings.Contains(err.Error(), "nex.repo_roots") {
 		t.Errorf("error %q does not mention nex.repo_roots", err.Error())
 	}
-	want := "nex.repo_roots: at least one root required when nex.enabled"
+	want := "nex.repo_roots / nex.service_roots: at least one root required when nex.enabled"
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+// TestNexConfigEnabledWithServiceRootsOnlyIsValid: the roots rule is "at
+// least one of repo_roots / service_roots", not "repo_roots non-empty".
+func TestNexConfigEnabledWithServiceRootsOnlyIsValid(t *testing.T) {
+	n := config.DefaultNexConfig()
+	n.Enabled = true
+	n.ServiceRoots = []string{"/svc"}
+	if err := n.Validate("/home/u"); err != nil {
+		t.Errorf("enabled with service_roots only should be valid, got %v", err)
+	}
+}
+
+// TestNexConfigValidateNoHomeDisabledSkipsTildeEntries: with home == ""
+// (os.UserHomeDir failed) and the section not enabled, the DEFAULT
+// "~/.local/bin" must not be rejected as non-absolute — otherwise every
+// pdx subcommand fails on a host that never opted into nex. Non-"~"
+// relative entries are still rejected.
+func TestNexConfigValidateNoHomeDisabledSkipsTildeEntries(t *testing.T) {
+	n := config.DefaultNexConfig()
+	if err := n.Validate(""); err != nil {
+		t.Errorf("disabled default section with home=\"\" should validate, got %v", err)
+	}
+
+	n2 := config.DefaultNexConfig()
+	n2.ClaudeBin = "~/bin/claude"
+	n2.RepoRoots = []string{"~", "~/x"}
+	n2.ServiceRoots = []string{"~/svc"}
+	n2.CswapBin = "~/bin/cswap"
+	if err := n2.Validate(""); err != nil {
+		t.Errorf("disabled section with only ~ entries and home=\"\" should validate, got %v", err)
+	}
+
+	n3 := config.DefaultNexConfig()
+	n3.PathPrepend = []string{"~/.local/bin", "rel"}
+	err := n3.Validate("")
+	if err == nil {
+		t.Fatal("expected error for relative non-~ entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "nex.path_prepend[1]") || !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("error = %q, want it to name nex.path_prepend[1] as non-absolute", err.Error())
+	}
+}
+
+// TestNexConfigValidateNoHomeEnabledRejectsTildeEntries: enabled + a "~"
+// entry + no home is a hard error that names HOME, not a misleading
+// "must be an absolute path".
+func TestNexConfigValidateNoHomeEnabledRejectsTildeEntries(t *testing.T) {
+	n := config.DefaultNexConfig()
+	n.Enabled = true
+	n.RepoRoots = []string{"/repo"}
+	err := n.Validate("")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	want := `nex.path_prepend[0]: HOME is not set, cannot expand "~/.local/bin"`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+
+	n2 := config.DefaultNexConfig()
+	n2.Enabled = true
+	n2.PathPrepend = nil
+	n2.RepoRoots = []string{"~/Workspace"}
+	err = n2.Validate("")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	want = `nex.repo_roots[0]: HOME is not set, cannot expand "~/Workspace"`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+// TestLoadWithoutHome is C1 end to end: Load with HOME unset succeeds for
+// a config with no [nex] section (the default path_prepend contains
+// "~/.local/bin") and fails, naming HOME, only when [nex] is enabled.
+func TestLoadWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := os.UserHomeDir(); err == nil {
+		t.Skip("os.UserHomeDir() still resolves with HOME unset on this platform")
+	}
+
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "plain.toml")
+	if err := os.WriteFile(plain, []byte("bind = \"127.0.0.1\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(plain); err != nil {
+		t.Errorf("Load without HOME and without [nex]: got %v, want nil", err)
+	}
+
+	enabled := filepath.Join(dir, "enabled.toml")
+	if err := os.WriteFile(enabled, []byte("[nex]\nenabled = true\nrepo_roots = [\"/repo\"]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.Load(enabled)
+	if err == nil {
+		t.Fatal("Load without HOME with [nex] enabled: got nil error, want HOME error")
+	}
+	if !strings.Contains(err.Error(), "HOME is not set") {
+		t.Errorf("error = %q, want it to name HOME", err.Error())
+	}
+	if !strings.Contains(err.Error(), "nex.path_prepend[0]") {
+		t.Errorf("error = %q, want it to name nex.path_prepend[0]", err.Error())
+	}
+	if strings.Count(err.Error(), "config:") > 1 {
+		t.Errorf("error = %q, \"config:\" prefix doubled", err.Error())
+	}
+}
+
+// TestLoadValidateErrorIsNotDoublePrefixed: Load's Validate error is
+// returned so that main's `log.Fatalf("config: %v", err)` prints
+// "config: nex.<key>: …" exactly once.
+func TestLoadValidateErrorIsNotDoublePrefixed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[nex]\nsandbox = { max_profile = \"yolo\" }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.HasPrefix(err.Error(), "nex.sandbox.max_profile:") {
+		t.Errorf("error = %q, want prefix %q", err.Error(), "nex.sandbox.max_profile:")
 	}
 }
 

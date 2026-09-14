@@ -201,6 +201,122 @@ func TestRunNex_TokenEnvBeatsConfig(t *testing.T) {
 	}
 }
 
+// --- addr without token: the config token never leaves for a non-local addr
+
+func TestRunNex_AddrWithoutToken_RefusesConfigToken(t *testing.T) {
+	var reqCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&reqCount, 1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"items":[],"next_cursor":""}`))
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  map[string]string
+	}{
+		{name: "addr flag", args: []string{"--addr", srv.URL + "/api/nex", "ls"}},
+		{name: "addr env", args: []string{"ls"}, env: map[string]string{"PDX_NEX_ADDR": srv.URL + "/api/nex"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lookupCalled := false
+			lookup := func(string) (config.Config, error) {
+				lookupCalled = true
+				return config.Config{Bind: "127.0.0.1", Port: 1, Token: "cfg-tok"}, nil
+			}
+			probe, calls := countingProbe()
+
+			var stdout, stderr bytes.Buffer
+			code := runNex(tc.args, &stdout, &stderr, fakeGetenv(tc.env), lookup, probe)
+
+			if code != 2 {
+				t.Fatalf("code = %d, want 2; stderr=%q", code, stderr.String())
+			}
+			const want = "pdx nex: --addr given without --token / PDX_NEX_TOKEN (the local config token is not sent to a non-local address)"
+			if !strings.Contains(stderr.String(), want) {
+				t.Errorf("stderr = %q, want %q", stderr.String(), want)
+			}
+			if lookupCalled {
+				t.Errorf("lookupConfig was called; the config token must not be consulted for an explicit --addr")
+			}
+			if n := atomic.LoadInt32(&reqCount); n != 0 {
+				t.Errorf("server saw %d request(s), want 0", n)
+			}
+			if atomic.LoadInt32(calls) != 0 {
+				t.Errorf("probe called %d times, want 0", atomic.LoadInt32(calls))
+			}
+		})
+	}
+}
+
+// --- config base URL: wildcard binds resolve to a connectable loopback --
+
+func TestNexBaseURLFromConfig(t *testing.T) {
+	for _, tc := range []struct {
+		bind string
+		want string
+	}{
+		{"127.0.0.1", "http://127.0.0.1:7860/api/nex"},
+		{"100.64.0.2", "http://100.64.0.2:7860/api/nex"},
+		{"", "http://127.0.0.1:7860/api/nex"},
+		{"0.0.0.0", "http://127.0.0.1:7860/api/nex"},
+		{"::", "http://[::1]:7860/api/nex"},
+		{"[::]", "http://[::1]:7860/api/nex"},
+		{"::1", "http://[::1]:7860/api/nex"},
+		{"fd00::2", "http://[fd00::2]:7860/api/nex"},
+	} {
+		if got := nexBaseURL(config.Config{Bind: tc.bind, Port: 7860}); got != tc.want {
+			t.Errorf("nexBaseURL(Bind=%q) = %q, want %q", tc.bind, got, tc.want)
+		}
+	}
+}
+
+func TestRunNex_ConfigWildcardBindReachesLoopback(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(lsOKHandler(&gotPath, &gotAuth))
+	defer srv.Close()
+
+	cfg, _ := nexBaseFromServer(t, srv, "cfg-tok")
+	cfg.Bind = "0.0.0.0" // httptest listens on 127.0.0.1; 0.0.0.0 is not dialable
+	probe, calls := countingProbe()
+
+	var stdout, stderr bytes.Buffer
+	code := runNex([]string{"ls"}, &stdout, &stderr, fakeGetenv(nil), nexTestConfig(cfg), probe)
+
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotAuth != "Bearer cfg-tok" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer cfg-tok")
+	}
+	if atomic.LoadInt32(calls) != 0 {
+		t.Errorf("probe called %d times, want 0 (success path)", atomic.LoadInt32(calls))
+	}
+}
+
+// --- usage text steers to PDX_NEX_TOKEN over --token ----------------------
+
+func TestNexUsageRecommendsEnvToken(t *testing.T) {
+	if !strings.Contains(nexUsage, "PDX_NEX_TOKEN") {
+		t.Errorf("nexUsage does not mention PDX_NEX_TOKEN:\n%s", nexUsage)
+	}
+	var stdout, stderr bytes.Buffer
+	code := runNex([]string{"--bogus"}, &stdout, &stderr, fakeGetenv(nil),
+		func(string) (config.Config, error) {
+			t.Fatal("lookupConfig must not run on a usage error")
+			return config.Config{}, nil
+		},
+		func(string, string) (int, error) { t.Fatal("probe must not run on a usage error"); return 0, nil })
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "PDX_NEX_TOKEN") {
+		t.Errorf("usage on stderr does not recommend PDX_NEX_TOKEN:\n%s", stderr.String())
+	}
+}
+
 // --- args pass-through: delegate --cwd/--brief reach the server verbatim
 
 func TestRunNex_DelegateArgsPassThrough(t *testing.T) {
@@ -264,8 +380,10 @@ func TestRunNex_ServerAllNotFound_PrintsNotEnabled(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code = %d, want 1; stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "nex: not enabled on this host (set [nex] enabled = true)") {
-		t.Errorf("stderr = %q, want the not-enabled message", stderr.String())
+	_, base := nexBaseFromServer(t, srv, "tok")
+	want := "nex: not enabled on this host (GET " + base + "/v1/capabilities → 404; set [nex] enabled = true, or check --addr)"
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want the not-enabled message %q", stderr.String(), want)
 	}
 	if atomic.LoadInt32(calls) != 1 {
 		t.Errorf("probe called %d times, want 1", atomic.LoadInt32(calls))

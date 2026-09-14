@@ -273,9 +273,15 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}
 
+	// A failed UserHomeDir (no HOME in the environment) is deliberately
+	// passed on as home == "": NexConfig.Validate then skips "~" entries
+	// for a disabled section and reports "HOME is not set" for an enabled
+	// one, so a host that never opted into nex still loads. The error is
+	// returned unwrapped — it already names the key ("nex.<key>: …") and
+	// every caller adds its own "config:" prefix (main.go, daemon.go).
 	home, _ := os.UserHomeDir()
 	if err := cfg.Nex.Validate(home); err != nil {
-		return cfg, fmt.Errorf("config: %w", err)
+		return cfg, err
 	}
 
 	return cfg, nil

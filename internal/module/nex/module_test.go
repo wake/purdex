@@ -318,13 +318,66 @@ func TestStartLogsServingLine(t *testing.T) {
 		"profiles=",
 		"trusted",
 		// PathPrepend is empty in baseConfig, so the applied prefix is
-		// empty too — distinct from the earlier "PATH policy" log line,
-		// which still carries the full PATH.
+		// empty too.
 		"path_prepend=)",
 	} {
 		if !strings.Contains(serving, want) {
 			t.Errorf("serving line %q missing %q", serving, want)
 		}
+	}
+}
+
+// TestInitPathPolicyLogPrintsPrefixAndCountNotFullPath: the "PATH policy"
+// line names the applied prefix and how many elements the original PATH
+// had, never the full PATH (which on a developer machine is kilobytes).
+func TestInitPathPolicyLogPrintsPrefixAndCountNotFullPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const secret = "/opt/very-long-and-distinctive-path-element"
+	t.Setenv("PATH", launchdPath+string(os.PathListSeparator)+secret)
+	existing := t.TempDir()
+
+	cfg := baseConfig(t)
+	cfg.Nex.PathPrepend = []string{existing}
+
+	rec := &fakeAssembleRecord{}
+	m := New()
+	m.assemble = newFakeAssemble(rec, noopEngine(), nil)
+	var lines []string
+	m.logf = func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	if err := m.Init(newTestCore(&cfg)); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	var policy string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "nex: PATH policy applied") {
+			policy = l
+		}
+	}
+	if policy == "" {
+		t.Fatalf("no \"nex: PATH policy applied\" line; got %q", lines)
+	}
+	if !strings.Contains(policy, "prefix="+existing) {
+		t.Errorf("policy line %q missing prefix=%s", policy, existing)
+	}
+	if !strings.Contains(policy, "path_elements=5") {
+		t.Errorf("policy line %q missing path_elements=5 (original PATH element count)", policy)
+	}
+	if strings.Contains(policy, secret) {
+		t.Errorf("policy line %q leaks the full PATH", policy)
+	}
+}
+
+func TestProfilesTextSpellsOutEmptyAsReadonlyDefault(t *testing.T) {
+	got := profilesText("", "")
+	want := "max=readonly (nexen fail-closed default),default=readonly (nexen fail-closed default)"
+	if got != want {
+		t.Errorf("profilesText(\"\", \"\") = %q, want %q", got, want)
+	}
+	if got := profilesText("trusted", " "); got != "max=trusted,default=readonly (nexen fail-closed default)" {
+		t.Errorf("profilesText(\"trusted\", \" \") = %q", got)
 	}
 }
 
@@ -447,7 +500,24 @@ func TestInitRealAssembleFailures(t *testing.T) {
 			mutate: func(t *testing.T, cfg *pdxconfig.Config) {
 				cfg.HostID = ""
 			},
-			wantSubs: []string{"nex: init:", "host_id is empty"},
+			wantSubs: []string{"nex: init: host_id is empty"},
+		},
+		{
+			name: "data_dir nex exists but is not writable",
+			mutate: func(t *testing.T, cfg *pdxconfig.Config) {
+				if os.Geteuid() == 0 {
+					t.Skip("running as root: directory modes are not enforced")
+				}
+				dir := filepath.Join(cfg.DataDir, "nex")
+				if err := os.Mkdir(dir, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(dir, 0o700) })
+			},
+			// sqlite reports the unwritable directory as "unable to open
+			// database file", not EACCES — the store prefix is what makes
+			// the message actionable.
+			wantSubs: []string{"nex: init: assembling engine:", "opening store", "unable to open database file"},
 		},
 	}
 
@@ -469,6 +539,9 @@ func TestInitRealAssembleFailures(t *testing.T) {
 				if !strings.Contains(err.Error(), sub) {
 					t.Errorf("Init() error = %q, want it to contain %q", err.Error(), sub)
 				}
+			}
+			if strings.Contains(err.Error(), "nex: init: nex:") {
+				t.Errorf("Init() error = %q, \"nex:\" prefix doubled", err.Error())
 			}
 		})
 	}

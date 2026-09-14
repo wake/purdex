@@ -125,6 +125,49 @@ func TestRecoverer_LogfPanics_StillReturns500AndServerKeepsServing(t *testing.T)
 	}
 }
 
+// TestRecoverer_LogfPanics_FallsBackToStdlibLog: when logf itself panics,
+// the original request panic must not be lost — recoverer writes it (with
+// method, path and stack) through the stdlib logger, along with logf's own
+// panic value, so the log still says what crashed.
+func TestRecoverer_LogfPanics_FallsBackToStdlibLog(t *testing.T) {
+	logf := func(format string, args ...any) {
+		panic("logf itself blew up")
+	}
+
+	var stdlog syncBuf
+	prevOut := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&stdlog)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+
+	h := recoverer(logf, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("original request panic")
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/boom", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	got := stdlog.String()
+	for _, want := range []string{
+		"nex: panic recovered",
+		"original request panic",
+		"POST",
+		"/v1/boom",
+		"logf itself blew up",
+		"recover_test.go", // the stack trace of the original panic
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdlib log output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRecoverer_FlushThenPanic_ClientSeesFlushedLineThenEOF(t *testing.T) {
 	var logBuf syncBuf
 	logf := func(format string, args ...any) {

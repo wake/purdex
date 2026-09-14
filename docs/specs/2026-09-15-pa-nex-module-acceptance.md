@@ -84,3 +84,6 @@ with `Last-Event-ID: 1` → first frames `id: 2 / execution.running`, `id: 3 / s
 3. `pdx nex` prints Nexen's own delegate usage on a bad flag (`-session-id`), which is correct but the wrapper's `pdx nex:` prefix line repeats the error — cosmetic.
 4. Store close in `Stop()` for backup/sync/execution modules → #1033.
 5. a26 / dev-update / 3b acceptance → #1034.
+6. `nex` stop position vs the shared shutdown budget: the topological sort puts `nex` 7th of 13 (8th of 14 with `dev`), so `dispatch`, `peers`, `stream`, `monitor`, `fs` and `agent` stop before it and eat into the 10 s the interrupt ladder sees (spec §4.5). Sub-second today; needs a design pass (explicit ordering, or a per-module budget) before any `Stop` elsewhere becomes ctx-aware or slow.
+7. `PUT /api/config` writes the whole in-memory config back, so a hand edit of `[nex]` without a restart is overwritten by the next PUT from any client (spec §4.8). Documented limitation until the Settings UI (P-C) owns the section.
+8. Codex R2 review of PR #1035 could not run (codex out of quota until 2026-09-19); the R2 batch (spec §10 row 16) was a Claude-only attack / defend / hygiene pass. Re-run the codex two-round review when quota returns and fold its findings into a follow-up.

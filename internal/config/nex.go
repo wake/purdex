@@ -62,9 +62,18 @@ func DefaultNexConfig() NexConfig {
 // Every error names the offending key. It does not touch the filesystem —
 // paths are checked for shape (absolute after "~" expansion), not
 // existence.
+//
+// home == "" means the caller could not resolve the user's home directory
+// (os.UserHomeDir failed — a launchd/Finder-started process without HOME).
+// A "~" entry then cannot be expanded: when the section is not Enabled the
+// shape check for that entry is skipped (the default path_prepend contains
+// "~/.local/bin", and a host that never opted into nex must not fail every
+// pdx subcommand over it); when Enabled it is an error naming HOME rather
+// than a misleading "must be an absolute path". Entries that are relative
+// without a leading "~" are rejected either way.
 func (n *NexConfig) Validate(home string) error {
-	if n.Enabled && len(n.RepoRoots) == 0 {
-		return fmt.Errorf("nex.repo_roots: at least one root required when nex.enabled")
+	if n.Enabled && len(n.RepoRoots)+len(n.ServiceRoots) == 0 {
+		return fmt.Errorf("nex.repo_roots / nex.service_roots: at least one root required when nex.enabled")
 	}
 
 	if n.Sandbox.MaxProfile != "" && !sandbox.ValidName(n.Sandbox.MaxProfile) {
@@ -74,25 +83,29 @@ func (n *NexConfig) Validate(home string) error {
 		return fmt.Errorf("nex.sandbox.default_profile: unknown profile %q", n.Sandbox.DefaultProfile)
 	}
 
-	if n.ClaudeBin != "" && !filepath.IsAbs(expandTildeHome(n.ClaudeBin, home)) {
-		return fmt.Errorf("nex.claude_bin: must be an absolute path (got %q)", n.ClaudeBin)
+	if n.ClaudeBin != "" {
+		if err := n.checkAbs("nex.claude_bin", n.ClaudeBin, home); err != nil {
+			return err
+		}
 	}
-	if n.CswapBin != "" && !filepath.IsAbs(expandTildeHome(n.CswapBin, home)) {
-		return fmt.Errorf("nex.cswap_bin: must be an absolute path (got %q)", n.CswapBin)
+	if n.CswapBin != "" {
+		if err := n.checkAbs("nex.cswap_bin", n.CswapBin, home); err != nil {
+			return err
+		}
 	}
 	for i, p := range n.PathPrepend {
-		if !filepath.IsAbs(expandTildeHome(p, home)) {
-			return fmt.Errorf("nex.path_prepend[%d]: must be an absolute path (got %q)", i, p)
+		if err := n.checkAbs(fmt.Sprintf("nex.path_prepend[%d]", i), p, home); err != nil {
+			return err
 		}
 	}
 	for i, r := range n.RepoRoots {
-		if !filepath.IsAbs(expandTildeHome(r, home)) {
-			return fmt.Errorf("nex.repo_roots[%d]: must be an absolute path (got %q)", i, r)
+		if err := n.checkAbs(fmt.Sprintf("nex.repo_roots[%d]", i), r, home); err != nil {
+			return err
 		}
 	}
 	for i, r := range n.ServiceRoots {
-		if !filepath.IsAbs(expandTildeHome(r, home)) {
-			return fmt.Errorf("nex.service_roots[%d]: must be an absolute path (got %q)", i, r)
+		if err := n.checkAbs(fmt.Sprintf("nex.service_roots[%d]", i), r, home); err != nil {
+			return err
 		}
 	}
 
@@ -113,6 +126,27 @@ func (n *NexConfig) Validate(home string) error {
 	}
 
 	return nil
+}
+
+// checkAbs is Validate's per-entry shape check: p must be absolute after
+// "~" expansion against home. See Validate for the home == "" rule.
+func (n *NexConfig) checkAbs(key, p, home string) error {
+	if home == "" && hasTilde(p) {
+		if !n.Enabled {
+			return nil
+		}
+		return fmt.Errorf("%s: HOME is not set, cannot expand %q", key, p)
+	}
+	if !filepath.IsAbs(expandTildeHome(p, home)) {
+		return fmt.Errorf("%s: must be an absolute path (got %q)", key, p)
+	}
+	return nil
+}
+
+// hasTilde reports whether p is "~" or begins with "~/" — the two shapes
+// expandTildeHome expands.
+func hasTilde(p string) bool {
+	return p == "~" || strings.HasPrefix(p, "~/")
 }
 
 // Expanded returns a copy of n with "~" expanded to home and every path

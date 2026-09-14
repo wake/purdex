@@ -445,14 +445,13 @@ func TestServeAndWait_SecondSignalDuringBlockingStopModulesExitsImmediately(t *t
 	}
 }
 
-// TestServeAndWait_SignalDuringServeTriggeredSequenceDoesNotExitEarly is
-// the regression test for the fix: when the sequence was triggered by
-// Serve returning (no signal yet), the watcher goroutine must not be
-// armed. A signal arriving while StopModules is still blocked is thus the
-// FIRST signal, not a second impatient one, and must not call exit — the
-// sequence must instead complete normally once StopModules unblocks. The
-// signal is sent only after StopModules has been observed to start, via
-// the started gate, so the test is deterministic.
+// TestServeAndWait_SignalDuringServeTriggeredSequenceDoesNotExitEarly:
+// when the sequence was triggered by Serve returning (no signal yet), a
+// signal arriving while StopModules is still blocked is the FIRST signal,
+// not a second impatient one. It must not call exit — it is logged with a
+// "send again" hint and the sequence completes normally once StopModules
+// unblocks. The signal is sent only after StopModules has been observed
+// to start, via the started gate, so the test is deterministic.
 func TestServeAndWait_SignalDuringServeTriggeredSequenceDoesNotExitEarly(t *testing.T) {
 	h := newHarness()
 	bindLost := errors.New("bind lost")
@@ -500,6 +499,87 @@ func TestServeAndWait_SignalDuringServeTriggeredSequenceDoesNotExitEarly(t *test
 	want := []string{"cancel", "StopModules", "Shutdown", "CloseModules"}
 	if got := h.rec.names(); !equalSteps(got, want) {
 		t.Fatalf("steps = %v, want %v", got, want)
+	}
+	hinted := false
+	for _, l := range h.logged() {
+		if strings.Contains(l, "during shutdown") && strings.Contains(l, "send again to exit immediately") {
+			hinted = true
+		}
+	}
+	if !hinted {
+		t.Fatalf("first signal during a Serve-triggered shutdown was not logged with the send-again hint; logs = %q", h.logged())
+	}
+}
+
+// TestServeAndWait_TwoSignalsDuringServeTriggeredSequenceExitImmediately:
+// the Serve-first path must still honour a forced exit. The first signal
+// during the sequence only logs (above); the SECOND calls exit(130)
+// without waiting for the stuck StopModules.
+func TestServeAndWait_TwoSignalsDuringServeTriggeredSequenceExitImmediately(t *testing.T) {
+	h := newHarness()
+	bindLost := errors.New("bind lost")
+	h.srv.serveErr = bindLost // Serve fails first — no signal yet.
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h.target.stopHook = func(context.Context) {
+		close(started)
+		<-release
+	}
+
+	done := h.runAsync(testBudget)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopModules never started")
+	}
+
+	h.sig <- syscall.SIGINT // first signal during the sequence: log only
+	waitHint := time.After(2 * time.Second)
+	for {
+		hinted := false
+		for _, l := range h.logged() {
+			if strings.Contains(l, "send again to exit immediately") {
+				hinted = true
+			}
+		}
+		if hinted {
+			break
+		}
+		select {
+		case <-waitHint:
+			t.Fatalf("first signal was not logged with the send-again hint; logs = %q", h.logged())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if exits := h.exited(); len(exits) != 0 {
+		t.Fatalf("exit called %v after the FIRST signal", exits)
+	}
+
+	h.sig <- syscall.SIGINT // second signal: exit now
+
+	waitFor := time.After(2 * time.Second)
+	for len(h.exited()) == 0 {
+		select {
+		case <-waitFor:
+			t.Fatal("exit was not called after the second signal")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if exits := h.exited(); !equalInts(exits, []int{130}) {
+		t.Fatalf("exit calls = %v, want [130]", exits)
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, bindLost) {
+			t.Fatalf("serveAndWait returned %v, want %v", err, bindLost)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveAndWait did not return after StopModules unblocked")
 	}
 }
 

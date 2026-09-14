@@ -47,13 +47,15 @@ type server interface {
 //
 // Returns Serve's error unless it is http.ErrServerClosed.
 //
-// A second value on sig while the sequence below is still running (e.g. a
-// slow or blocking StopModules) exits immediately via exit(130) rather than
-// waiting out the rest of the shutdown budget — a second Ctrl-C should not
-// need to wait for a stuck module. That watcher is armed only when a signal
-// is what triggered the sequence: if Serve returned first (no signal yet),
-// a signal arriving during the sequence is the FIRST signal, not a second
-// impatient one, and must not short-circuit CloseModules.
+// A forced exit is always available while the sequence below is still
+// running (e.g. a slow or blocking StopModules): a SECOND signal exits
+// immediately via exit(130) rather than waiting out the rest of the
+// shutdown budget — a second Ctrl-C should not need to wait for a stuck
+// module. Which signal counts as the second depends on what triggered the
+// sequence: when a signal did, the next one is the second; when Serve
+// returned first (no signal yet), a signal arriving during the sequence is
+// the FIRST one — it is logged with a "send again" hint and must not
+// short-circuit CloseModules — and only the one after it forces the exit.
 func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	cancel context.CancelFunc, target shutdownTarget, budget time.Duration,
 	logf func(string, ...any), exit func(int)) error {
@@ -75,10 +77,9 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		// A signal may already be sitting in sig (buffered, not yet
 		// delivered to this select) even though Serve is what won the
 		// race. That is still the FIRST signal, not a second one — drain
-		// it so it isn't misread as a second Ctrl-C and triggers an
-		// immediate exit(130) that skips CloseModules. Since this path
-		// did not trigger via signal, the watcher below stays unarmed
-		// regardless.
+		// it so the watcher below does not count it towards the forced
+		// exit (it would otherwise be one Ctrl-C away from skipping
+		// CloseModules for what was really a single keypress).
 		select {
 		case <-sig:
 		default:
@@ -87,16 +88,24 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 
 	done := make(chan struct{})
 	defer close(done)
-	if signalTriggered {
-		go func() {
+	go func() {
+		if !signalTriggered {
+			// Serve-first: the next signal is the first one the user
+			// sent; acknowledge it and keep going.
 			select {
-			case <-sig:
-				logf("received second signal, exiting immediately")
-				exit(130)
+			case s := <-sig:
+				logf("received %v during shutdown; send again to exit immediately", s)
 			case <-done:
+				return
 			}
-		}()
-	}
+		}
+		select {
+		case <-sig:
+			logf("received second signal, exiting immediately")
+			exit(130)
+		case <-done:
+		}
+	}()
 
 	cancel() // stop module background goroutines (pollers, watchers)
 	ctx, ctxCancel := context.WithTimeout(context.Background(), budget)
