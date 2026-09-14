@@ -20,7 +20,7 @@ type fakeModule struct {
 	initErr error
 }
 
-func (m *fakeModule) Name() string         { return m.name }
+func (m *fakeModule) Name() string           { return m.name }
 func (m *fakeModule) Dependencies() []string { return nil }
 func (m *fakeModule) Init(c *Core) error {
 	m.tracker.calls = append(m.tracker.calls, m.name+".Init")

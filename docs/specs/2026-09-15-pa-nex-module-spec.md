@@ -511,7 +511,8 @@ Thin wrapper over `client.Run`:
   `~/.config/pdx/config.toml`), token = `Cfg.Token`. A wildcard bind is a
   listen address, not a dialable one, so `""`/`0.0.0.0` become
   `127.0.0.1` and `::`/`[::]` become `[::1]` (IPv6 literals bracketed via
-  `net.JoinHostPort`) — the same rewrite the statusline proxy applies.
+  `net.JoinHostPort`) — like the statusline proxy, except `::` maps to `::1`
+  (the proxy maps it to `127.0.0.1`).
 - Overrides, checked before config: `--addr` / `--token` flags, then
   `PDX_NEX_ADDR` / `PDX_NEX_TOKEN` — so a commander session can point a
   worker CLI at another host by hand until cross-host lands. Flags must

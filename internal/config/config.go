@@ -278,7 +278,8 @@ func Load(path string) (Config, error) {
 	// for a disabled section and reports "HOME is not set" for an enabled
 	// one, so a host that never opted into nex still loads. The error is
 	// returned unwrapped — it already names the key ("nex.<key>: …") and
-	// every caller adds its own "config:" prefix (main.go, daemon.go).
+	// callers add their own prefix (`config:` in main.go/daemon.go; the CLI
+	// subcommands print `pdx <cmd>: …`).
 	home, _ := os.UserHomeDir()
 	if err := cfg.Nex.Validate(home); err != nil {
 		return cfg, err
