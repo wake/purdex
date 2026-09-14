@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/module/agent"
@@ -26,9 +27,13 @@ type fakeSessions struct {
 	// final entry. When nil, TmuxInstance() returns "" (unknown), as before.
 	instances    []string
 	instanceCall int
+	// listCalls counts ListSessions calls — the first thing localEnvelope
+	// does — so a test can assert an inventory was (not) built.
+	listCalls atomic.Int32
 }
 
 func (f *fakeSessions) ListSessions() ([]session.SessionInfo, error) {
+	f.listCalls.Add(1)
 	if f.err != nil {
 		return nil, f.err
 	}

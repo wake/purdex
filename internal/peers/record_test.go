@@ -157,6 +157,31 @@ func TestBuild_CC_ZeroCandidates_InboxDead(t *testing.T) {
 	}
 }
 
+// TestBuild_CC_IsProxyEntry_ExcludedFromCandidates pins D9: an entry
+// classified as a proxy via Entry.IsProxy (not via the legacy ProxyPIDs
+// map) must be excluded from session candidates exactly like a ProxyPIDs
+// entry — e.IsProxy || in.ProxyPIDs[e.PID] in the candidates filter.
+func TestBuild_CC_IsProxyEntry_ExcludedFromCandidates(t *testing.T) {
+	entry := Entry{PID: 100, SessionID: "sess-x", Name: "helper", IsProxy: true}
+	in := BuildInput{
+		Alias:    "mini-lab",
+		Sessions: []SessionSummary{{Code: "s1", Name: "mt1"}},
+		Owners: map[string]Owner{
+			"s1": {AgentType: "cc", SessionID: "sess-x", Status: "idle"},
+		},
+		Entries:   []Entry{entry},
+		ProxyPIDs: map[int]bool{}, // deliberately NOT set here — IsProxy alone must suffice
+	}
+	got := Build(in)
+	r := got[0]
+	if r.Deliverable {
+		t.Errorf("Deliverable = true, want false (IsProxy entry excluded from candidates)")
+	}
+	if r.Reason != "inbox_dead" {
+		t.Errorf("Reason = %q, want inbox_dead (zero non-proxy candidates)", r.Reason)
+	}
+}
+
 func TestBuild_CC_OneCandidate_Deliverable(t *testing.T) {
 	entry := Entry{
 		PID: 100, SessionID: "sess-x", Name: "purdex-1", NameSource: "derived",
@@ -364,6 +389,35 @@ func TestBuild_OutsideTmuxRow_Proxy(t *testing.T) {
 	}
 	if r.Agent.Status != "proxy" {
 		t.Errorf("Agent.Status = %q, want proxy (spec §4.2)", r.Agent.Status)
+	}
+	if r.Deliverable {
+		t.Errorf("Deliverable = true, want false")
+	}
+	if r.Reason != "proxy" {
+		t.Errorf("Reason = %q, want proxy", r.Reason)
+	}
+}
+
+// TestBuild_OutsideTmuxRow_IsProxy pins D9: an entry classified as a proxy
+// via Entry.IsProxy (not the legacy ProxyPIDs map) produces the same
+// non-deliverable "proxy" outside row as a ProxyPIDs entry, and is excluded
+// from session candidates via the same check.
+func TestBuild_OutsideTmuxRow_IsProxy(t *testing.T) {
+	entry := Entry{PID: 300, SessionID: "sess-z", Name: "helper-1", Tmux: "", IsProxy: true}
+	in := BuildInput{
+		Alias:   "mini-lab",
+		Entries: []Entry{entry},
+	}
+	got := Build(in)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	r := got[0]
+	if r.Agent == nil || r.Agent.Type != "proxy" {
+		t.Fatalf("Agent.Type = %v, want proxy", r.Agent)
+	}
+	if r.Agent.Status != "proxy" {
+		t.Errorf("Agent.Status = %q, want proxy", r.Agent.Status)
 	}
 	if r.Deliverable {
 		t.Errorf("Deliverable = true, want false")

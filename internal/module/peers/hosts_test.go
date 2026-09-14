@@ -51,8 +51,9 @@ func newHostsTestCore(t *testing.T, hostID, alias, adminToken string, hosts []co
 // newHostsTestModule builds a *Module sufficient to exercise the hosts
 // routes: sessions/owners are empty fakes (unused by hosts.go), and fetch
 // defaults to production fetchRemote/newRemoteClient unless overridden.
-func newHostsTestModule(c *core.Core, fetch fetchFunc) *Module {
-	m := newTestModule(c, &fakeSessions{}, &fakeOwners{}, "", ipeers.DefaultLiveness(), &fakeClock{times: []time.Time{time.Now()}}, 2*time.Second)
+func newHostsTestModule(t *testing.T, c *core.Core, fetch fetchFunc) *Module {
+	t.Helper()
+	m := newTestModule(t, c, &fakeSessions{}, &fakeOwners{}, "", ipeers.DefaultLiveness(), &fakeClock{times: []time.Time{time.Now()}}, 2*time.Second)
 	if fetch != nil {
 		m.fetch = fetch
 	}
@@ -185,7 +186,7 @@ func TestValidHostID(t *testing.T) {
 
 func TestHandleListHosts_NonAdminForbidden(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodGet, "/api/peers/hosts", nil, hostPrincipal("peer-a"))
 	if rr.Code != http.StatusForbidden {
@@ -195,7 +196,7 @@ func TestHandleListHosts_NonAdminForbidden(t *testing.T) {
 
 func TestHandleListHosts_NoPrincipalForbidden(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodGet, "/api/peers/hosts", nil, nil)
 	if rr.Code != http.StatusForbidden {
@@ -205,7 +206,7 @@ func TestHandleListHosts_NoPrincipalForbidden(t *testing.T) {
 
 func TestHandleListHosts_Empty(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodGet, "/api/peers/hosts", nil, adminPrincipal())
 	if rr.Code != http.StatusOK {
@@ -228,7 +229,7 @@ func TestHandleListHosts_RowShapeAndNeverLeaksTokens(t *testing.T) {
 		{Alias: "peer-b", URL: "https://b.example", HostID: "", Token: "", InboundToken: "inbound-b"},
 	}
 	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodGet, "/api/peers/hosts", nil, adminPrincipal())
 	if rr.Code != http.StatusOK {
@@ -270,7 +271,7 @@ func TestHandleListHosts_RowShapeAndNeverLeaksTokens(t *testing.T) {
 
 func TestHandleAddHost_NoToken_UnverifiedAndPersisted(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "peer-a",
@@ -322,7 +323,7 @@ func TestHandleAddHost_WithToken_VerifiedAndHostIDPersisted(t *testing.T) {
 	defer srv.Close()
 
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, nil) // production fetchRemote against the real server
+	m := newHostsTestModule(t, c, nil) // production fetchRemote against the real server
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air",
@@ -364,7 +365,7 @@ func TestHandleAddHost_BadToken_502NothingPersisted(t *testing.T) {
 	defer srv.Close()
 
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air",
@@ -383,7 +384,7 @@ func TestHandleAddHost_BadToken_502NothingPersisted(t *testing.T) {
 
 func TestHandleAddHost_RemoteNotOK_502(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: false, Error: "boom"}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: false, Error: "boom"}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a.example", "token": "tok",
@@ -404,7 +405,7 @@ func TestHandleAddHost_RemoteNotOK_502(t *testing.T) {
 func TestHandleAddHost_RemoteErrorBounded_502(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
 	longErr := strings.Repeat("x", 300)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: false, Error: longErr}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: false, Error: longErr}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a.example", "token": "tok",
@@ -436,7 +437,7 @@ func TestHandleAddHost_RemoteErrorBounded_502(t *testing.T) {
 
 func TestHandleAddHost_RemoteEmptyHostID_502(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "", OK: true}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "", OK: true}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a.example", "token": "tok",
@@ -457,7 +458,7 @@ func TestHandleAddHost_RemoteEmptyHostID_502(t *testing.T) {
 func TestHandleAddHost_RemoteInvalidHostIDTooLong_502NothingPersisted(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
 	longHostID := strings.Repeat("y", 300)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: longHostID, OK: true}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: longHostID, OK: true}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a.example", "token": "tok",
@@ -480,7 +481,7 @@ func TestHandleAddHost_RemoteInvalidHostIDTooLong_502NothingPersisted(t *testing
 // (e.g. an ANSI escape) must be rejected as invalid, not stored verbatim.
 func TestHandleAddHost_RemoteInvalidHostIDAnsiEscape_502NothingPersisted(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "\x1b[31mair:1\x1b[0m", OK: true}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "\x1b[31mair:1\x1b[0m", OK: true}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a.example", "token": "tok",
@@ -497,7 +498,7 @@ func TestHandleAddHost_RemoteInvalidHostIDAnsiEscape_502NothingPersisted(t *test
 
 func TestHandleAddHost_RemoteHostIDEqualsLocal_400(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "local:1", OK: true}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "local:1", OK: true}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a.example", "token": "tok",
@@ -514,7 +515,7 @@ func TestHandleAddHost_RemoteHostIDEqualsLocal_400(t *testing.T) {
 
 func TestHandleAddHost_TokenEqualsAdminToken_400(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "admin-secret", nil)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a.example", "token": "admin-secret",
@@ -535,7 +536,7 @@ func TestHandleAddHost_TokenEqualsAdminToken_400(t *testing.T) {
 func TestHandleAddHost_DuplicateAliasCaseInsensitive_409(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "Air", URL: "https://a.example", InboundToken: "inbound-a"}}
 	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "https://a2.example",
@@ -551,7 +552,7 @@ func TestHandleAddHost_InvalidAlias(t *testing.T) {
 	for _, alias := range cases {
 		t.Run(alias, func(t *testing.T) {
 			c, _ := newHostsTestCore(t, "local:1", "local", "", nil)
-			m := newHostsTestModule(c, failIfCalledFetch(t))
+			m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 			rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 				"alias": alias, "url": "https://a.example",
@@ -565,7 +566,7 @@ func TestHandleAddHost_InvalidAlias(t *testing.T) {
 
 func TestHandleAddHost_InvalidURL(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": "not-a-url",
@@ -591,7 +592,7 @@ func TestHandleAddHost_URLNormalization_TrailingSlashStripped(t *testing.T) {
 	defer srv.Close()
 
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, nil) // production fetchRemote against the real server
+	m := newHostsTestModule(t, c, nil) // production fetchRemote against the real server
 
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air", "url": srv.URL + "/", "token": "tok",
@@ -635,7 +636,7 @@ func TestHandleAddHost_URLValidation_RejectsUnsafeComponents(t *testing.T) {
 	for _, raw := range cases {
 		t.Run(raw, func(t *testing.T) {
 			c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-			m := newHostsTestModule(c, failIfCalledFetch(t))
+			m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 			rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 				"alias": "air", "url": raw,
@@ -669,7 +670,7 @@ func TestHandleAddHost_Concurrent_SameAlias(t *testing.T) {
 		<-release
 		return ipeers.Envelope{HostID: "remote:1", OK: true, Peers: []ipeers.PeerRecord{}}, nil
 	}
-	m := newHostsTestModule(c, fetch)
+	m := newHostsTestModule(t, c, fetch)
 
 	results := make([]*httptest.ResponseRecorder, 2)
 	var wg sync.WaitGroup
@@ -712,7 +713,7 @@ func TestHandleAddHost_Concurrent_SameAlias(t *testing.T) {
 func TestHandlePutHost_TokenVerifiesAndStores(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: true}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: true}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
 		"token": "new-tok",
@@ -747,7 +748,7 @@ func TestHandlePutHost_TokenVerifiesAndStores(t *testing.T) {
 func TestHandlePutHost_AllowBypassOnly(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
 		"allow_bypass": true,
@@ -784,7 +785,7 @@ func TestHandlePutHost_AllowBypassOnly(t *testing.T) {
 func TestHandlePutHost_ResponseReflectsCommittedValue(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
 	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	// A plain bool guard, not sync.Once: NotifyConfigChange re-invokes this
 	// same callback for the nested UpdateConfig call below (same
@@ -828,7 +829,7 @@ func TestHandlePutHost_ResponseReflectsCommittedValue(t *testing.T) {
 
 func TestHandlePutHost_UnknownAlias_404(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/ghost", map[string]any{
 		"allow_bypass": true,
@@ -841,7 +842,7 @@ func TestHandlePutHost_UnknownAlias_404(t *testing.T) {
 func TestHandlePutHost_HostIDMismatch_409OldTokenKept(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:X", Token: "old-tok", InboundToken: "inbound-a"}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:Y", OK: true}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:Y", OK: true}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
 		"token": "new-tok",
@@ -868,7 +869,7 @@ func TestHandlePutHost_RemoteInvalidHostID_502OldValuesKept(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:X", Token: "old-tok", InboundToken: "inbound-a"}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
 	longHostID := strings.Repeat("z", 300)
-	m := newHostsTestModule(c, fixedEnvelopeFetch(ipeers.Envelope{HostID: longHostID, OK: true}, nil))
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: longHostID, OK: true}, nil))
 
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
 		"token": "new-tok",
@@ -890,7 +891,7 @@ func TestHandlePutHost_RemoteInvalidHostID_502OldValuesKept(t *testing.T) {
 func TestHandlePutHost_TokenEqualsAdminToken_400(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
 	c, _ := newHostsTestCore(t, "local:1", "local", "admin-secret", hosts)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
 		"token": "admin-secret",
@@ -915,7 +916,7 @@ func TestHandlePutHost_ConcurrentDelete_404NothingRecreated(t *testing.T) {
 		<-release
 		return ipeers.Envelope{HostID: "air:1", OK: true, Peers: []ipeers.PeerRecord{}}, nil
 	}
-	m := newHostsTestModule(c, fetch)
+	m := newHostsTestModule(t, c, fetch)
 
 	var putResult *httptest.ResponseRecorder
 	var wg sync.WaitGroup
@@ -965,7 +966,7 @@ func TestHandlePutHost_ConcurrentURLChange_409(t *testing.T) {
 		<-release
 		return ipeers.Envelope{HostID: "air:1", OK: true, Peers: []ipeers.PeerRecord{}}, nil
 	}
-	m := newHostsTestModule(c, fetch)
+	m := newHostsTestModule(t, c, fetch)
 
 	var putResult *httptest.ResponseRecorder
 	var wg sync.WaitGroup
@@ -1027,7 +1028,7 @@ func TestHandlePutHost_ConcurrentRecreateSameURL_409NothingRecreated(t *testing.
 		<-release
 		return ipeers.Envelope{HostID: "air:1", OK: true, Peers: []ipeers.PeerRecord{}}, nil
 	}
-	m := newHostsTestModule(c, fetch)
+	m := newHostsTestModule(t, c, fetch)
 
 	var putResult *httptest.ResponseRecorder
 	var wg sync.WaitGroup
@@ -1077,7 +1078,7 @@ func TestHandlePutHost_ConcurrentRecreateSameURL_409NothingRecreated(t *testing.
 func TestHandleDeleteHost_204ThenGoneFromList(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air", nil, adminPrincipal())
 	if rr.Code != http.StatusNoContent {
@@ -1097,7 +1098,7 @@ func TestHandleDeleteHost_204ThenGoneFromList(t *testing.T) {
 
 func TestHandleDeleteHost_UnknownAlias_404(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, failIfCalledFetch(t))
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
 	rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/ghost", nil, adminPrincipal())
 	if rr.Code != http.StatusNotFound {
@@ -1117,7 +1118,7 @@ func TestAliasWithDot_SurvivesAddSetTokenRemove(t *testing.T) {
 	defer srv.Close()
 
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 
 	addRR := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
 		"alias": "air.2026", "url": srv.URL,
@@ -1197,7 +1198,7 @@ func doRequestBearer(t *testing.T, h http.Handler, method, target, bearer string
 func TestCapability_InboundTokenHolder(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "peer-a", InboundToken: "inbound-secret", HostID: "peer-a:1"}}
 	c, _ := newHostsTestCore(t, "local:1", "local", "admin-secret", hosts)
-	m := newHostsTestModule(c, nil)
+	m := newHostsTestModule(t, c, nil)
 	m.registryDir = t.TempDir()
 	m.liveness = allLiveLiveness(time.Now())
 
@@ -1236,7 +1237,7 @@ func TestCapability_InboundTokenHolder(t *testing.T) {
 // each shows the other.
 func TestPairing_TwoRealModulesBothWays(t *testing.T) {
 	coreA, _ := newHostsTestCore(t, "hostA:1", "a", "", nil)
-	moduleA := newHostsTestModule(coreA, nil)
+	moduleA := newHostsTestModule(t, coreA, nil)
 	moduleA.registryDir = t.TempDir()
 	moduleA.liveness = allLiveLiveness(time.Now())
 	muxA := http.NewServeMux()
@@ -1245,7 +1246,7 @@ func TestPairing_TwoRealModulesBothWays(t *testing.T) {
 	defer serverA.Close()
 
 	coreB, _ := newHostsTestCore(t, "hostB:1", "b", "", nil)
-	moduleB := newHostsTestModule(coreB, nil)
+	moduleB := newHostsTestModule(t, coreB, nil)
 	moduleB.registryDir = t.TempDir()
 	moduleB.liveness = allLiveLiveness(time.Now())
 	muxB := http.NewServeMux()

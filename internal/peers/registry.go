@@ -5,11 +5,13 @@ package peers
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -53,6 +55,7 @@ type Entry struct {
 	ProcStart  string // raw registry string, e.g. "Sun Sep 13 15:22:36 2026"
 	Version    string
 	Status     string // "idle" | "busy" | ""
+	IsProxy    bool   // set from Liveness.Info's Argv (D9); false when Info is nil
 }
 
 // TmuxSessionName returns the text before the first ':' in Tmux, or "" if
@@ -81,7 +84,8 @@ func (e Entry) TmuxPaneID() string {
 type Liveness struct {
 	Stat      func(path string) error
 	PidAlive  func(pid int) bool
-	StartTime func(pid int) (time.Time, error)
+	StartTime func(pid int) (time.Time, error)         // kept for P1 fakes; unused per-entry once Info is set
+	Info      func(pid int) (agent.ProcessInfo, error) // optional; when non-nil, replaces StartTime and also supplies Argv/ExePath for proxy classification (D9)
 }
 
 // DefaultLiveness returns the real, OS-backed Liveness.
@@ -101,7 +105,34 @@ func DefaultLiveness() Liveness {
 			}
 			return info.StartTime, nil
 		},
+		Info: agent.ReadProcessInfo,
 	}
+}
+
+// IsProxyProcess reports whether info describes a Purdex peer-proxy helper
+// process (D9): its executable (by ExePath, or falling back to argv[0] when
+// ExePath is unavailable/renamed) is named "pdx", AND its argv contains the
+// literal element "peer-proxy". Known limitation (D9): a process that
+// happens to satisfy both conditions without actually being a pdx
+// peer-proxy helper (e.g. a maliciously renamed binary) would be
+// misclassified; this is accepted as a low-value spoof to defend against.
+func IsProxyProcess(info agent.ProcessInfo) bool {
+	if len(info.Argv) == 0 {
+		return false
+	}
+
+	isPdxExe := filepath.Base(info.ExePath) == "pdx"
+	isPdxArgv0 := filepath.Base(info.Argv[0]) == "pdx"
+	if !isPdxExe && !isPdxArgv0 {
+		return false
+	}
+
+	for _, a := range info.Argv {
+		if a == "peer-proxy" {
+			return true
+		}
+	}
+	return false
 }
 
 // ProcStartLayout is Claude Code's registry format (UTC ctime).
@@ -114,6 +145,24 @@ func ParseProcStart(s string) (time.Time, error) {
 
 // registryFilenamePattern matches "<pid>.json" registry filenames.
 var registryFilenamePattern = regexp.MustCompile(`^([0-9]+)\.json$`)
+
+// warnedUnclassifiablePids dedupes the "could not classify process" log
+// line (in ReadRegistry, below) to at most once per pid for the lifetime of
+// the process. ReadRegistry is otherwise a pure, stateless function of its
+// (dir, live) arguments — this package-level map is the one deliberate
+// exception, so a persistently unclassifiable process (e.g. a
+// permission-denied /proc read that never resolves) does not log a fresh
+// line on every /api/peers poll.
+var warnedUnclassifiablePids sync.Map
+
+// warnUnclassifiableOnce logs pid's Info failure the first time it is seen
+// and is a silent no-op on every subsequent call for the same pid.
+func warnUnclassifiableOnce(pid int, err error) {
+	if _, already := warnedUnclassifiablePids.LoadOrStore(pid, struct{}{}); already {
+		return
+	}
+	log.Printf("peers: registry: pid %d: could not classify process (argv unavailable: %v); skipping", pid, err)
+}
 
 // ReadRegistry parses every "<pid>.json" in dir and returns the live ones.
 // skipped counts every file considered and rejected (name mismatch, decode
@@ -147,7 +196,7 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 			continue
 		}
 
-		data, ok := readRegistryCandidate(filepath.Join(dir, name))
+		data, ok := ReadRegistryCandidate(filepath.Join(dir, name))
 		if !ok {
 			skipped++
 			continue
@@ -174,7 +223,41 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 			continue
 		}
 
-		if !isLive(wire.PID, wire.Inbox, procStart, live) {
+		// Cheap liveness pre-check, before the (potentially expensive — up
+		// to four `ps` forks on darwin) Info call below: a dead pid, or one
+		// whose inbox socket is already gone, must never trigger Info. Dead
+		// entries are the common case (every <pid>.json left behind by an
+		// exited Claude Code session survives until the next cleanup), and
+		// must stay a zero-fork, silent skip exactly as before D9.
+		if live.Stat(wire.Inbox) != nil || !live.PidAlive(wire.PID) {
+			skipped++
+			continue
+		}
+
+		// D9 proxy classification. When Info is set, it replaces StartTime
+		// (one call per entry, not two) and also supplies Argv/ExePath so
+		// IsProxyProcess can classify the entry. Fail closed: a process
+		// that cannot be classified (Info errors, or returns an empty
+		// Argv — e.g. a permission-denied /proc read, or a race where the
+		// process exited between the PidAlive check above and here) must
+		// never become a deliverable cc row, so it is skipped exactly like
+		// a dead entry rather than defaulting to IsProxy=false — but only
+		// warns once per pid (warnUnclassifiableOnce), so a persistently
+		// unclassifiable process does not spam the log on every poll.
+		entryLive := live
+		isProxy := false
+		if live.Info != nil {
+			info, infoErr := live.Info(wire.PID)
+			if infoErr != nil || len(info.Argv) == 0 {
+				skipped++
+				warnUnclassifiableOnce(wire.PID, infoErr)
+				continue
+			}
+			isProxy = IsProxyProcess(info)
+			entryLive.StartTime = func(int) (time.Time, error) { return info.StartTime, nil }
+		}
+
+		if !isLive(wire.PID, wire.Inbox, procStart, entryLive) {
 			skipped++
 			continue
 		}
@@ -190,13 +273,15 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 			ProcStart:  wire.ProcStart,
 			Version:    wire.Version,
 			Status:     wire.Status,
+			IsProxy:    isProxy,
 		})
 	}
 
 	return entries, skipped, nil
 }
 
-// readRegistryCandidate reads one "<pid>.json" candidate defensively: it
+// ReadRegistryCandidate reads one registry file (a "<pid>.json" or key
+// file) defensively — the shared contract for every registry read: it
 // never follows a symlink (O_NOFOLLOW — a candidate that IS a symlink is
 // rejected outright, not resolved), never blocks on a non-regular file (a
 // FIFO, in particular, blocks forever on a plain read with no writer — the
@@ -205,7 +290,7 @@ func ReadRegistry(dir string, live Liveness) (entries []Entry, skipped int, err 
 // claims its size is (the read-side cap, not just the fstat size, is what
 // actually bounds memory use against a TOCTOU race or a growing file). ok is
 // false for any of these cases; the caller counts it as skipped.
-func readRegistryCandidate(path string) (data []byte, ok bool) {
+func ReadRegistryCandidate(path string) (data []byte, ok bool) {
 	// O_NONBLOCK matters only for a FIFO: without it, opening one for
 	// reading blocks until a writer opens the other end — before the fstat
 	// check below ever runs. With it, the open returns immediately (POSIX

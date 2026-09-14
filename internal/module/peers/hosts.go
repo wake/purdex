@@ -106,7 +106,7 @@ func writeAPIError(w http.ResponseWriter, err error) {
 func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	p, ok := middleware.PrincipalFrom(r.Context())
 	if !ok || p.Kind != middleware.PrincipalAdmin {
-		writeJSONError(w, http.StatusForbidden, "forbidden")
+		writeJSONError(w, http.StatusForbidden, ipeers.ErrForbidden)
 		return false
 	}
 	return true

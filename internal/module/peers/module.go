@@ -1,12 +1,20 @@
 // Package peers implements the "peers" daemon module: GET /api/peers, a
 // local inventory of this host's tmux sessions joined with the agent module's
-// owner resolution and the Claude Code session registry.
+// owner resolution and the Claude Code session registry; the peer-host
+// management and settings routes; POST /api/peers/send, the outbound half
+// of cross-host messaging (send.go); POST /api/peers/deliver, the
+// inbound half (deliver.go), backed by the per-origin helper manager
+// (helpers.go) and the peer_messages audit store; the reply path that
+// forwards a target's native reply back through the return route, and
+// GET /api/peers/log over the audit store (reply.go). Start/Stop live in
+// lifecycle.go.
 package peers
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,16 +23,45 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/peers/ccuds"
+	"github.com/wake/purdex/internal/peers/proxyhelper"
+	"github.com/wake/purdex/internal/store"
 )
 
 // fetchFunc is the fan-out seam: fetchRemote in production, a fake in tests.
 type fetchFunc func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error)
+
+// postDeliverFunc is the outbound seam: one POST /api/peers/deliver to a
+// remote daemon. postDeliver (send.go) in production, a fake in tests; the
+// send path and the reply path (Task 9) both call it.
+type postDeliverFunc func(ctx context.Context, client *http.Client, baseURL, bearer string, req ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error)
+
+// writeFrameFunc is the inbox-socket seam: ccuds.WriteFrame in production.
+type writeFrameFunc func(ctx context.Context, sock string, line []byte, timeout time.Duration) error
+
+// AuditStore is the peer_messages audit trail the module writes:
+// *store.PeerMessageStore in production, a fake in tests. A nil AuditStore
+// makes every send/deliver fail with audit_unavailable — the audit row is
+// written BEFORE anything reaches a socket and a delivery that cannot be
+// recorded is not made.
+type AuditStore interface {
+	Insert(store.PeerMessage) (int64, error)
+	SetResult(id int64, effectiveMode, result, errText string) error
+	Tail(n int) ([]store.PeerMessage, error)
+}
+
+// helperSockDir is where `pdx peer-proxy` helpers bind their sockets:
+// the same directory Claude Code itself uses, so the reply address a
+// frame carries is one the harness can dial.
+const helperSockDir = "/tmp/cc-socks"
 
 // remoteFetchTimeout bounds each individual host fetch in a scope=all
 // fan-out, independent of the shared http.Client's own timeout.
@@ -62,6 +99,32 @@ func boundRemoteText(s string) string {
 	return s[:cut] + "…"
 }
 
+// writeWireError writes e as the JSON body of a 4xx/5xx answer on the
+// messaging routes (/send, /deliver): every such body is an ipeers.APIError.
+func writeWireError(w http.ResponseWriter, status int, e ipeers.APIError) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(e)
+}
+
+// configSnapshot is the one config read a request makes, under RLock: the
+// local identity and a clone of the peer hosts, so a concurrent config
+// mutation cannot be observed mid-request.
+type configSnapshot struct {
+	hostID string
+	alias  string
+	hosts  []config.PeerHost
+}
+
+func (m *Module) configSnapshot() configSnapshot {
+	m.core.CfgMu.RLock()
+	defer m.core.CfgMu.RUnlock()
+	return configSnapshot{
+		hostID: m.core.Cfg.HostID,
+		alias:  m.core.Cfg.PeerAlias(),
+		hosts:  append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...),
+	}
+}
+
 // Module implements core.Module for GET /api/peers.
 type Module struct {
 	core        *core.Core
@@ -71,25 +134,73 @@ type Module struct {
 	liveness    ipeers.Liveness // default ipeers.DefaultLiveness()
 	budget      time.Duration   // default 2 * time.Second
 	now         func() time.Time
-	client      *http.Client // default newRemoteClient(); shared across fan-out fetches
-	fetch       fetchFunc    // default fetchRemote; test seam
+	client      *http.Client                     // default newRemoteClient(); shared across fan-out fetches
+	fetch       fetchFunc                        // default fetchRemote; test seam
+	logf        func(format string, args ...any) // default log.Printf; test seam
+
+	// Inbound delivery (deliver.go) and its collaborators.
+	audit            AuditStore     // nil ⇒ audit_unavailable on every deliver
+	helpers          *helperManager // built in Init (production) or by the test fixture
+	dedup            *dedupSet      // msg_id window, ipeers.DedupWindow
+	pairs            *pairLimiter   // per (sender, receiver) process pair, ipeers.PairRateLimit
+	hostLimit        *hostLimiter   // per authenticated host, ipeers.HostRateLimit; before decode/dedup/audit/inventory
+	writeFrame       writeFrameFunc // default ccuds.WriteFrame
+	sockWriteTimeout time.Duration  // default ipeers.SocketWriteTimeout
+	newMsgID         func() string  // default uuid v4 (crypto/rand); the reply path mints ids with it
+
+	// Outbound delivery (send.go; the reply path reuses both).
+	deliverClient *http.Client    // default newDeliverClient() (Init); one InterDaemonTimeout per call
+	post          postDeliverFunc // default postDeliver; test seam
+
+	// Lifecycle. stopCtx is cancelled first in Stop: handlers answer 503
+	// not_ready, in-flight socket writes abort, and the reply semaphore
+	// wait gives up. reapWG joins the idle-reap ticker goroutine; workers
+	// joins the reply workers (Task 9); replySem bounds them.
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+	reapWG     sync.WaitGroup
+	workers    sync.WaitGroup
+	replySem   chan struct{}
+
+	// warnedVersions dedupes the one-shot "Claude Code newer than verified"
+	// log line (localEnvelope) by version string: sync.Map since it is
+	// read/written from concurrent request handlers with no other lock
+	// guarding it. Zero value is ready to use.
+	warnedVersions sync.Map
 }
 
-// New constructs a peers Module with production defaults. Collaborators
-// (sessions, owners) are wired in Init from the service registry.
-func New() *Module {
+// New constructs a peers Module with production defaults over audit (the
+// meta store's PeerMessages; nil disables delivery with audit_unavailable).
+// Collaborators (sessions, owners) and the helper manager are wired in
+// Init: the manager needs the config's data dir and the daemon's own
+// executable path, neither of which belongs in a constructor.
+func New(audit AuditStore) *Module {
 	registryDir := filepath.Join(".claude", "sessions")
 	if home, err := os.UserHomeDir(); err == nil {
 		registryDir = filepath.Join(home, ".claude", "sessions")
 	}
-	return &Module{
-		registryDir: registryDir,
-		liveness:    ipeers.DefaultLiveness(),
-		budget:      2 * time.Second,
-		now:         time.Now,
-		client:      newRemoteClient(),
-		fetch:       fetchRemote,
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	m := &Module{
+		registryDir:      registryDir,
+		liveness:         ipeers.DefaultLiveness(),
+		budget:           2 * time.Second,
+		now:              time.Now, // the one clock seam; every other clock reader below takes m.now
+		client:           newRemoteClient(),
+		fetch:            fetchRemote,
+		logf:             log.Printf,
+		audit:            audit,
+		writeFrame:       ccuds.WriteFrame,
+		sockWriteTimeout: ipeers.SocketWriteTimeout,
+		newMsgID:         uuid.NewString,
+		post:             postDeliver,
+		stopCtx:          stopCtx,
+		stopCancel:       stopCancel,
+		replySem:         make(chan struct{}, replyWorkerCap),
 	}
+	m.dedup = newDedupSet(ipeers.DedupWindow, m.now)
+	m.pairs = newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, m.now)
+	m.hostLimit = newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, m.now)
+	return m
 }
 
 func (m *Module) Name() string           { return "peers" }
@@ -122,6 +233,35 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.owners = owners
 
+	m.deliverClient = newDeliverClient()
+
+	// The helper manager: one `pdx peer-proxy` per remote sender, spawned
+	// from this daemon's own executable (resolved here, not in New — tests
+	// never spawn the real binary), owned durably in <data_dir>/proxies.json.
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("peers: resolve own executable for peer-proxy helpers: %w", err)
+	}
+	m.helpers = newHelperManager(helperManagerConfig{
+		Start:       proxyhelper.ExecStarter(exe, log.Writer()),
+		ProxiesPath: filepath.Join(c.Cfg.DataDir, "proxies.json"),
+		RegistryDir: m.registryDir,
+		SockDir:     helperSockDir,
+		Version:     ccuds.VerifiedCCVersion,
+		Now:         m.now,
+		ProcStart:   ccuds.DefaultProcStart,
+		LiveEntries: func() []ipeers.Entry {
+			entries, _, err := ipeers.ReadRegistry(m.registryDir, m.liveness)
+			if err != nil {
+				m.logf("peers: read registry for helper peer features: %v", err)
+				return nil
+			}
+			return entries
+		},
+		OnFrame: m.handleReplyFrame,
+		Log:     m.logf,
+	})
+
 	return nil
 }
 
@@ -131,10 +271,12 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/hosts", m.handleAddHost)
 	mux.HandleFunc("PUT /api/peers/hosts/{alias}", m.handlePutHost)
 	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)
+	mux.HandleFunc("GET /api/peers/settings", m.handleGetSettings)
+	mux.HandleFunc("PUT /api/peers/settings", m.handlePutSettings)
+	mux.HandleFunc("POST /api/peers/send", m.handleSend)
+	mux.HandleFunc("POST /api/peers/deliver", m.handleDeliver)
+	mux.HandleFunc("GET /api/peers/log", m.handlePeersLog)
 }
-
-func (m *Module) Start(context.Context) error { return nil }
-func (m *Module) Stop(context.Context) error  { return nil }
 
 // handlePeers serves GET /api/peers. scope unset/"local" returns this
 // host's local inventory only; scope=all fans out to every configured peer
@@ -151,7 +293,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 		principal, ok := middleware.PrincipalFrom(r.Context())
 		if !ok || principal.Kind != middleware.PrincipalAdmin {
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+			json.NewEncoder(w).Encode(map[string]string{"error": ipeers.ErrForbidden})
 			return
 		}
 	default:
@@ -161,22 +303,17 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// One config snapshot up front, used by every path below (local-only or
-	// scope=all), so a concurrent config mutation cannot be observed
-	// mid-request — in particular, so the local HostResult{Alias, HostID}
+	// scope=all) — in particular, so the local HostResult{Alias, HostID}
 	// row can never disagree with the host/host_id embedded in its own
 	// Peers records.
-	m.core.CfgMu.RLock()
-	hostID := m.core.Cfg.HostID
-	alias := m.core.Cfg.PeerAlias()
-	hosts := append([]config.PeerHost(nil), m.core.Cfg.Peers.Hosts...)
-	m.core.CfgMu.RUnlock()
+	snap := m.configSnapshot()
 
 	if scope != "all" {
-		json.NewEncoder(w).Encode(m.localEnvelope(r.Context(), hostID, alias))
+		json.NewEncoder(w).Encode(m.localEnvelope(r.Context(), snap.hostID, snap.alias))
 		return
 	}
 
-	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), hostID, alias, hosts))
+	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), snap.hostID, snap.alias, snap.hosts))
 }
 
 // localEnvelope builds this host's own inventory from a caller-supplied
@@ -209,6 +346,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	if err != nil {
 		return writeError(err.Error())
 	}
+	m.warnNewerCCVersions(entries)
 
 	summaries := make([]ipeers.SessionSummary, 0, len(sessions))
 	owners := make(map[string]ipeers.Owner, len(sessions))
@@ -261,6 +399,14 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 
 	partial := len(unresolved) > 0
 
+	// This daemon's own helpers are hidden as proxy rows by pid (their
+	// registry entries are otherwise indistinguishable from a Claude Code
+	// session); another daemon's helpers are recognised by argv (D9).
+	proxyPIDs := map[int]bool{}
+	if m.helpers != nil {
+		proxyPIDs = m.helpers.ProxyPIDs()
+	}
+
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:     hostID,
 		Alias:      alias,
@@ -268,7 +414,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Owners:     owners,
 		Unresolved: unresolved,
 		Entries:    entries,
-		ProxyPIDs:  map[int]bool{},
+		ProxyPIDs:  proxyPIDs,
 	})
 
 	return ipeers.Envelope{
@@ -276,6 +422,25 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		OK:      true,
 		Partial: partial,
 		Peers:   peerRecords,
+	}
+}
+
+// warnNewerCCVersions logs a one-shot warning for every distinct Claude
+// Code version among entries that is newer than ccuds.VerifiedCCVersion —
+// the version every byte layout in the ccuds package was measured against,
+// so a newer one reporting is where a silent protocol change would first
+// show up. Deduped by version string in m.warnedVersions so the same
+// version logs at most once per process lifetime, however many
+// /api/peers calls (or entries sharing that version) see it.
+func (m *Module) warnNewerCCVersions(entries []ipeers.Entry) {
+	for _, e := range entries {
+		if e.Version == "" || !ccuds.NewerThanVerified(e.Version) {
+			continue
+		}
+		if _, alreadyWarned := m.warnedVersions.LoadOrStore(e.Version, struct{}{}); alreadyWarned {
+			continue
+		}
+		m.logf("peers: Claude Code %s is newer than the last verified %s; run pdx msg selftest", e.Version, ccuds.VerifiedCCVersion)
 	}
 }
 

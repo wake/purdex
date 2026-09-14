@@ -37,7 +37,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers, msg, version\n")
 		os.Exit(1)
 	}
 
@@ -62,6 +62,10 @@ func main() {
 		runStatuslineProxy(os.Args[2:])
 	case "peers":
 		runPeers(os.Args[2:])
+	case "msg":
+		runMsg(os.Args[2:])
+	case "peer-proxy":
+		os.Exit(runPeerProxy())
 	case "version":
 		runVersion(os.Args[2:], os.Stdout)
 	default:
@@ -237,7 +241,14 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		return err
 	}
 	c.AddModule(agentMod)
-	c.AddModule(peersmod.New())
+	// A nil meta store (tests) must stay a nil AuditStore, not a typed-nil
+	// *PeerMessageStore inside the interface: peers treats nil as
+	// "audit unavailable" and refuses every delivery.
+	var audit peersmod.AuditStore
+	if meta != nil {
+		audit = meta.PeerMessages()
+	}
+	c.AddModule(peersmod.New(audit))
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	c.AddModule(syncmod.New())
