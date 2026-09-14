@@ -19,10 +19,12 @@ Nexen's `Service`/`Store`/`Bus` — HTTP only (spec I6).
 **Tech Stack:** Go 1.26 · `lab.protype.tw/wake/nexen` (N1) · net/http ·
 no SPA changes.
 
-**Prerequisite:** N1 merged in `wake/nexen` and its merge commit known. Until
-then a gitignored `go.work` points at the local N1 worktree
-(`/Users/wake/Workspace/wake/nexen/.claude/worktrees/n1-library-seams`) and
-`go.mod` carries a placeholder pseudo-version that Task 12 replaces.
+**Prerequisite (met 2026-09-15):** N1 merged in `wake/nexen` — PR #59 merge
+commit `64f3202`, bump v0.9.0 merged, `origin/main = 1e5d090`. `go.mod` pins
+`lab.protype.tw/wake/nexen v0.0.0-20260914203205-1e5d09014b65` (verified
+resolvable from a scratch module with the machine-level settings of spec
+§3.1, which are already applied on mlab). No `go.work` is needed; the
+`.gitignore` entries are still added for future dev loops.
 
 ## Global Constraints
 
@@ -132,13 +134,12 @@ cmd/pdx/http_chain_test.go                   T11      (append) I2 probe matrix +
 **Files:** `go.mod`, `go.sum`, `.gitignore`, `Makefile`,
 `scripts/check-goenv.sh`, `scripts/check-goenv_test.sh`, `README.md`.
 
-- `go.mod`: `go 1.26.0`; add `require lab.protype.tw/wake/nexen v0.0.0-<placeholder pseudo of the N1 worktree HEAD>`
-  by hand. **Do not run `go mod tidy` in this task** — nothing imports the
-  module yet and tidy would drop the require. Run `go mod download` (via
-  `go.work`) and `go build ./...`. Tidy happens in T7a, the first import.
+- `go.mod`: `go 1.26.0`; `go get lab.protype.tw/wake/nexen@1e5d090`
+  (yields `v0.0.0-20260914203205-1e5d09014b65`, marked `// indirect` until
+  T7a imports it — that is fine). **Do not run `go mod tidy` in this task**
+  (nothing imports the module yet; tidy would drop the require). `go build ./...`.
   Confirm `go list -m modernc.org/sqlite` reports ≥ 1.54.0.
-- `.gitignore`: add `go.work` and `go.work.sum`. Create the local `go.work`
-  (`go work init . /Users/wake/Workspace/wake/nexen/.claude/worktrees/n1-library-seams`) — **not committed**.
+- `.gitignore`: add `go.work` and `go.work.sum` (no `go.work` is created now).
 - `scripts/check-goenv.sh` (sh, no bash-isms):
   ```sh
   #!/bin/sh
@@ -612,10 +613,8 @@ IP rejection via `RemoteAddr = "10.9.8.7:1"`.
 
 **Files:** `go.mod` / `go.sum` (final pseudo-version), PR description.
 
-- After N1 merges: `go get lab.protype.tw/wake/nexen@<merge-sha>`, remove
-  the N1 entry from the local `go.work`, `go mod tidy`, then the full
-  `GOWORK=off go build ./... && go vet ./... && go test ./...` (proves
-  `go.mod` alone is sufficient).
+- Confirm `go.mod` still pins `v0.0.0-20260914203205-1e5d09014b65` after
+  T7a's tidy; run the full `GOWORK=off go build ./... && go vet ./... && go test ./...`.
 - Step 0: cold-cache build over non-interactive ssh
   (`GOWORK=off GOMODCACHE=$(mktemp -d) go build ./cmd/pdx`), then
   `pnpm run electron:build`, then a dev-update rebuild through the running
@@ -624,7 +623,7 @@ IP rejection via `RemoteAddr = "10.9.8.7:1"`.
   `max_profile = "handoff"`), command + `pdx.log` / `pdx nex events`
   excerpt each, pasted into the PR.
 
-- [ ] go.mod pinned to the N1 merge commit; `GOWORK=off` build/vet/test green
+- [ ] go.mod pin confirmed (1e5d090); `GOWORK=off` build/vet/test green
 - [ ] step 0 (cold cache, electron:build, dev-update rebuild)
 - [ ] step 1 host/quota + start log
 - [ ] step 2 delegate + watch to result
@@ -635,7 +634,7 @@ IP rejection via `RemoteAddr = "10.9.8.7:1"`.
 - [ ] step 5 handoff round trip, same cwd, old process confirmed gone
 - [ ] step 6 a26 via App local daemon update: steps 1–2 there
 - [ ] step 7 preflight + `Last-Event-ID` resume with curl
-- [ ] commit `build: pin nexen to N1 merge <sha>`
+- [ ] commit (only if go.mod/go.sum changed) `build: confirm nexen pin at v0.9.0 (1e5d090)`
 
 ---
 
