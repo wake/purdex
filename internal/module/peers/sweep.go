@@ -13,57 +13,30 @@ import (
 	"syscall"
 	"time"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/peers/ccuds"
 )
 
-// pidIdentity is Sweep's three-state answer to "is the recorded pid still
-// the process we started?" (R2-M3, R3-M3). The states are never folded:
-// unknown means we must not touch anything.
-type pidIdentity int
-
-const (
-	identityUnknown pidIdentity = iota
-	identitySame
-	identityDifferent
-)
-
-func (i pidIdentity) String() string {
-	switch i {
-	case identitySame:
-		return "same"
-	case identityDifferent:
-		return "different"
-	}
-	return "unknown"
-}
-
-func (m *helperManager) identity(r proxyRecord) pidIdentity {
-	ps, err := m.procStart(r.PID)
-	if err != nil {
-		return identityUnknown
-	}
-	if ps == r.ProcStart {
-		return identitySame
-	}
-	return identityDifferent
+// identity classifies r's pid: the shared tri-state (ipeers.ClassifyProc,
+// R2-M3, R3-M3) — same / different / unknown, never folded: unknown means
+// we must not touch anything. alive is false for a dead pid (whose start
+// time is never asked for).
+func (m *helperManager) identity(r proxyRecord) (alive bool, id ipeers.ProcIdentity) {
+	return ipeers.ClassifyProc(r.PID, r.ProcStart, m.pidAlive, m.procStart)
 }
 
 // waitGone waits at most termGrace until r's pid is dead or no longer
 // carries our identity. It reports the final (alive, identity) pair.
-func (m *helperManager) waitGone(r proxyRecord) (alive bool, id pidIdentity) {
+func (m *helperManager) waitGone(r proxyRecord) (alive bool, id ipeers.ProcIdentity) {
 	deadline := time.NewTimer(m.termGrace)
 	defer deadline.Stop()
 	for {
-		alive = m.pidAlive(r.PID)
-		if !alive {
-			return false, identityUnknown
-		}
-		if id = m.identity(r); id != identitySame {
-			return true, id
+		if alive, id = m.identity(r); !alive || id != ipeers.ProcSame {
+			return alive, id
 		}
 		select {
 		case <-deadline.C:
-			return true, identitySame
+			return true, ipeers.ProcSame
 		case <-time.After(sweepPoll):
 		}
 	}
@@ -109,73 +82,80 @@ func (m *helperManager) Sweep() error {
 
 // sweepRecord resolves one record; keep is true when it must be retained.
 func (m *helperManager) sweepRecord(r proxyRecord) (u unresolvedRecord, keep bool) {
-	alive := m.pidAlive(r.PID)
-	if alive {
-		switch m.identity(r) {
-		case identityUnknown:
+	if alive, id := m.identity(r); alive {
+		switch id {
+		case ipeers.ProcUnknown:
 			// A live pid we cannot classify may still be our helper.
 			m.log("peers: sweep: pid %d is alive but its start time is unknown; leaving %s and its files alone", r.PID, r.Sock)
 			return unresolvedRecord{proxyRecord: r, occupies: true}, true
-		case identitySame:
+		case ipeers.ProcSame:
 			if err := m.signal(r.PID, syscall.SIGTERM); err != nil {
 				m.log("peers: sweep: SIGTERM pid %d: %v", r.PID, err)
 			}
 			alive2, id := m.waitGone(r)
-			if alive2 && id == identitySame {
+			if alive2 && id == ipeers.ProcSame {
 				// Re-checked immediately before sending: the pid may have
 				// been reused during the grace.
-				if alive2 = m.pidAlive(r.PID); alive2 {
-					id = m.identity(r)
-				}
-				if alive2 && id == identitySame {
+				alive2, id = m.identity(r)
+				if alive2 && id == ipeers.ProcSame {
 					if err := m.signal(r.PID, syscall.SIGKILL); err != nil {
 						m.log("peers: sweep: SIGKILL pid %d: %v", r.PID, err)
 					}
 					alive2, id = m.waitGone(r)
 				}
 			}
-			if alive2 && id != identityDifferent {
+			if alive2 && id != ipeers.ProcDifferent {
 				// Still alive as ours, or unknown during the wait: not
 				// proven gone, files untouched.
 				m.log("peers: sweep: pid %d survived SIGTERM/SIGKILL (identity %s); record retained", r.PID, id)
 				return unresolvedRecord{proxyRecord: r, occupies: true}, true
 			}
-		case identityDifferent:
+		case ipeers.ProcDifferent:
 			// The pid was reused by someone else: nothing to signal.
 		}
 	}
 
 	// The process is dead or is no longer ours. Unlink only what still
 	// carries our identity.
-	cleanupOK := true
+	if !m.unlinkOwned("sweep", r) {
+		return unresolvedRecord{proxyRecord: r, occupies: false}, true
+	}
+	return unresolvedRecord{}, false
+}
+
+// unlinkOwned removes what a dead helper left behind, under the one
+// ownership rule Sweep, Release and the startup rollback share (R2-C): a
+// registry file is unlinked only while it still carries r.ProcStart (an
+// empty recorded proc_start proves nothing — it would "match" any
+// unreadable file — so such a record never unlinks a file), the socket
+// only while nobody listens on it. A mismatch or a live listener is
+// logged (prefixed who) and left alone; only an unlink that FAILS makes
+// the cleanup incomplete (false).
+func (m *helperManager) unlinkOwned(who string, r proxyRecord) (cleanupOK bool) {
+	cleanupOK = true
 	for _, path := range r.Files {
 		got := ccuds.RegistryProcStart(path)
 		if got == "" && !fileExists(path) {
 			continue
 		}
-		// An empty recorded proc_start proves nothing: it would "match"
-		// any unreadable file, so such a record never unlinks anything.
 		if r.ProcStart == "" || got != r.ProcStart {
-			m.log("peers: sweep: %s carries procStart %q, not ours (%q); left alone", path, got, r.ProcStart)
+			m.log("peers: %s: %s carries procStart %q, not ours (%q); left alone", who, path, got, r.ProcStart)
 			continue
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			m.log("peers: sweep: unlink %s: %v", path, err)
+			m.log("peers: %s: unlink %s: %v", who, path, err)
 			cleanupOK = false
 		}
 	}
 	if r.Sock != "" {
 		if !m.dialRefused(r.Sock) {
-			m.log("peers: sweep: %s has a live listener; left alone", r.Sock)
+			m.log("peers: %s: %s has a live listener; left alone", who, r.Sock)
 		} else if err := os.Remove(r.Sock); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			m.log("peers: sweep: unlink %s: %v", r.Sock, err)
+			m.log("peers: %s: unlink %s: %v", who, r.Sock, err)
 			cleanupOK = false
 		}
 	}
-	if !cleanupOK {
-		return unresolvedRecord{proxyRecord: r, occupies: false}, true
-	}
-	return unresolvedRecord{}, false
+	return cleanupOK
 }
 
 func fileExists(path string) bool {

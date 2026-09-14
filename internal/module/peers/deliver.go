@@ -42,14 +42,18 @@ func clampMode(declared string, allowBypass bool) string {
 // findTarget picks the inventory row the sender named: a cc agent whose
 // (session id, pid, proc_start) tuple matches to exactly, and that is
 // deliverable. detail (when no row matches) names the field that failed
-// on the closest candidate — never another row's data.
-func findTarget(records []ipeers.PeerRecord, to ipeers.WireTo) (ipeers.PeerRecord, string) {
-	detail := "no live cc session with that agent_session_id"
+// on the closest candidate — never another row's data. candidate reports
+// whether any cc row carried to's session id at all: false means the
+// inventory says nothing about that session, which — in a partial
+// inventory — is not a verdict (handleDeliver step 7).
+func findTarget(records []ipeers.PeerRecord, to ipeers.WireTo) (rec ipeers.PeerRecord, detail string, candidate bool) {
+	detail = "no live cc session with that agent_session_id"
 	for _, rec := range records {
 		a := rec.Agent
 		if a == nil || a.Type != "cc" || a.SessionID != to.AgentSessionID {
 			continue
 		}
+		candidate = true
 		switch {
 		case a.PID != to.PID:
 			detail = "pid does not match the live session"
@@ -61,11 +65,16 @@ func findTarget(records []ipeers.PeerRecord, to ipeers.WireTo) (ipeers.PeerRecor
 				detail += ": " + rec.Reason
 			}
 		default:
-			return rec, ""
+			return rec, "", true
 		}
 	}
-	return ipeers.PeerRecord{}, detail
+	return ipeers.PeerRecord{}, detail, candidate
 }
+
+// detailInventoryPartial is the fixed wire detail (and audit error) of a
+// 503 not_ready answered because the inventory is partial (spec §4.2):
+// the target's session may be one whose owner lookup did not complete.
+const detailInventoryPartial = "inventory partial"
 
 // deliverSnapshot is the one config read a delivery makes, under RLock.
 type deliverSnapshot struct {
@@ -101,9 +110,11 @@ func (m *Module) setResult(id int64, effectiveMode, result, errText string) {
 }
 
 // handleDeliver serves POST /api/peers/deliver. The step order is the
-// contract (spec §4.3): refusals before the audit insert (steps 1–4) are
-// unattributable, configuration state, malformed, or a retransmit whose
-// first attempt already has a row, and are logged rather than audited;
+// contract (spec §4.3): refusals before the audit insert (steps 1–4:
+// principal, entry binding and deliver flag, per-host admission, decode
+// and validation, dedup) are unattributable, configuration state, a host
+// over its admission limit, malformed, or a retransmit whose first
+// attempt already has a row, and are logged rather than audited;
 // everything from the insert on is audited.
 func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -143,6 +154,17 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	}
 	if !snap.deliver {
 		refuseUnaudited(http.StatusForbidden, ipeers.ErrDeliverDisabled, "inbound delivery is disabled on this host")
+		return
+	}
+
+	// 2b. Per-host admission (ipeers.HostRateLimit), keyed by the
+	// authenticated host id and checked BEFORE the body is decoded: from
+	// here on every step costs something a peer could otherwise drive at
+	// HTTP rate — dedup scans, audit inserts, the inventory build (tmux,
+	// registry, ps) and, with rotating from tuples, helper spawns up to
+	// the cap. Unaudited: one warn line, nothing of the request in it.
+	if !m.hostLimit.Allow(principal.HostID) {
+		refuseUnaudited(http.StatusTooManyRequests, ipeers.ErrRateLimited, "host rate limit exceeded")
 		return
 	}
 
@@ -211,14 +233,22 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	// daemon's own trouble, answered 503 not_ready (never target_gone,
 	// which the origin takes as a verdict and reaps the sender's helper on)
 	// with a fixed detail — the error text is local (tmux, registry paths)
-	// and stays in the audit row and the log.
+	// and stays in the audit row and the log. A PARTIAL inventory (spec
+	// §4.2: an owner lookup timed out, failed, or never started) that has
+	// no row for the tuple's session says just as little — the target may
+	// be the very session whose lookup did not complete — and is not_ready
+	// too; only a row that carries the session id is a verdict on it.
 	env := m.localEnvelope(r.Context(), snap.localHostID, snap.localAlias)
 	if !env.OK {
 		refuseWith(http.StatusServiceUnavailable, ipeers.ErrNotReady, "inventory unavailable", "inventory unavailable: "+env.Error)
 		return
 	}
-	target, detail := findTarget(env.Peers, req.To)
+	target, detail, candidate := findTarget(env.Peers, req.To)
 	if detail != "" {
+		if !candidate && env.Partial {
+			refuse(http.StatusServiceUnavailable, ipeers.ErrNotReady, detailInventoryPartial)
+			return
+		}
 		refuse(http.StatusConflict, ipeers.ErrTargetGone, detail)
 		return
 	}

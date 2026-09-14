@@ -11,12 +11,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/peers/ccuds"
 	"github.com/wake/purdex/internal/store"
@@ -397,6 +400,37 @@ func TestReply_UnknownSockIsReplierUnknown(t *testing.T) {
 		r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
 		r.assertDropped(ipeers.ErrReplierUnknown, "")
 	})
+}
+
+// TestReply_PartialInventoryIsNotReady pins spec §4.2's partial semantics
+// on the replier lookup (R2-A): a reply address that no row carries while
+// the inventory is partial (the replier's tmux session's owner lookup
+// failed ⇒ agent:null) is audited not_ready with the fixed error
+// "inventory partial" — never replier_unknown, which claims no session
+// listens there — and the origin's helper is kept, ready for the retry.
+func TestReply_PartialInventoryIsNotReady(t *testing.T) {
+	r := newReplyEnv(t, envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}})
+	writeRegistryFixture(t, r.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(r.targetSock, "foo:@1.%1"))
+	r.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
+
+	r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
+	row := r.assertDropped(ipeers.ErrNotReady, "")
+	if row.Error != "inventory partial" {
+		t.Errorf("row error = %q, want %q", row.Error, "inventory partial")
+	}
+	if _, ok := r.m.helpers.FindBySock(r.h.sock); !ok || r.helperMapLen() != 1 || r.f.fake.Stops() != 0 {
+		t.Errorf("helper kept = %v (map %d, stops %d), want the origin's helper kept", ok, r.helperMapLen(), r.f.fake.Stops())
+	}
+
+	// Once the lookup completes the same frame is forwarded.
+	r.m.owners = &fakeOwners{owners: map[string]agent.PaneOwner{"s1": {AgentType: "cc", SessionID: targetSessionID, TmuxPaneID: "%1"}}}
+	r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
+	r.awaitPost()
+	r.join()
+	rows := r.rows()
+	if len(rows) != 2 || rows[1].Result != ipeers.ResultDelivered || rows[1].FromSessionID != targetSessionID {
+		t.Errorf("rows = %+v, want a second, delivered reply row from the replier", rows)
+	}
 }
 
 func TestReply_TextValidation(t *testing.T) {

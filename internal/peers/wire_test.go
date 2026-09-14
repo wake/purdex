@@ -667,6 +667,101 @@ func TestDeliverRequest_Validate_LabelBounds(t *testing.T) {
 	}
 }
 
+// TestDeliverRequest_Validate_IdentityBounds pins the caps on the two
+// identity fields a sender controls that end up in audit rows, helper
+// keys and proxies.json (R2-D): from/to.agent_session_id ≤ MaxLabelBytes
+// of printable UTF-8 (a bad_request via ErrFieldInvalid, like the labels;
+// empty stays its own "is empty" error), and from/to.proc_start ≤
+// MaxProcStartBytes before it is even parsed.
+func TestDeliverRequest_Validate_IdentityBounds(t *testing.T) {
+	bad := []struct {
+		name   string
+		mutate func(r *DeliverRequest)
+		want   string // substring of the error
+	}{
+		{"from.agent_session_id too long", func(r *DeliverRequest) { r.From.AgentSessionID = strings.Repeat("s", MaxLabelBytes+1) }, "from.agent_session_id exceeds"},
+		{"from.agent_session_id control char", func(r *DeliverRequest) { r.From.AgentSessionID = "s\n1" }, "from.agent_session_id contains a control character"},
+		{"from.agent_session_id invalid utf8", func(r *DeliverRequest) { r.From.AgentSessionID = "s\xff" }, "from.agent_session_id is not valid UTF-8"},
+		{"to.agent_session_id too long", func(r *DeliverRequest) { r.To.AgentSessionID = strings.Repeat("s", MaxLabelBytes+1) }, "to.agent_session_id exceeds"},
+		{"to.agent_session_id NUL", func(r *DeliverRequest) { r.To.AgentSessionID = "s\x001" }, "to.agent_session_id contains a control character"},
+		{"from.proc_start too long", func(r *DeliverRequest) { r.From.ProcStart = strings.Repeat("Sun Sep 13 15:22:36 2026", 3) }, "from.proc_start exceeds"},
+		{"to.proc_start too long", func(r *DeliverRequest) { r.To.ProcStart = strings.Repeat("x", MaxProcStartBytes+1) }, "to.proc_start exceeds"},
+	}
+	for _, c := range bad {
+		t.Run(c.name, func(t *testing.T) {
+			r := validDeliverRequest()
+			c.mutate(&r)
+			err := r.Validate()
+			if !errors.Is(err, ErrFieldInvalid) {
+				t.Fatalf("Validate() = %v, want ErrFieldInvalid", err)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("Validate() = %q, want it to contain %q", err, c.want)
+			}
+			if got := ValidationCode(err); got != ErrBadRequest {
+				t.Errorf("ValidationCode = %q, want bad_request", got)
+			}
+		})
+	}
+	good := []struct {
+		name   string
+		mutate func(r *DeliverRequest)
+	}{
+		{"agent_session_id at limit", func(r *DeliverRequest) { r.From.AgentSessionID = strings.Repeat("s", MaxLabelBytes) }},
+		{"agent_session_id unicode", func(r *DeliverRequest) { r.To.AgentSessionID = "工作區-1" }},
+		{"proc_start well under the cap", func(r *DeliverRequest) { r.From.ProcStart = "Sun Sep 13 15:22:36 2026" }},
+	}
+	for _, c := range good {
+		t.Run(c.name, func(t *testing.T) {
+			r := validDeliverRequest()
+			c.mutate(&r)
+			if err := r.Validate(); err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+	// Empty stays its own error, not a label error.
+	r := validDeliverRequest()
+	r.From.AgentSessionID = ""
+	if err := r.Validate(); err == nil || errors.Is(err, ErrFieldInvalid) || !strings.Contains(err.Error(), "is empty") {
+		t.Errorf("empty from.agent_session_id: Validate() = %v, want the plain \"is empty\" error", err)
+	}
+	if MaxProcStartBytes != 64 {
+		t.Errorf("MaxProcStartBytes = %d, want 64", MaxProcStartBytes)
+	}
+}
+
+// TestValidate_ProcStartParseErrorBounded pins that a proc_start that
+// does not parse is quoted bounded (quoteBounded), never through
+// time.ParseError's own %q of the raw input: the receiver echoes the
+// detail to the peer and into its audit row.
+func TestValidate_ProcStartParseErrorBounded(t *testing.T) {
+	r := validDeliverRequest()
+	r.To.ProcStart = strings.Repeat("z", MaxProcStartBytes) // at the cap, so it reaches the parser
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "to.proc_start does not parse: ") {
+		t.Errorf("error = %q, want the to.proc_start parse prefix", msg)
+	}
+	if strings.Contains(msg, "parsing time") || strings.Contains(msg, ProcStartLayout) {
+		t.Errorf("error %q leaks time.ParseError's own text", msg)
+	}
+	if !strings.Contains(msg, quoteBounded(r.To.ProcStart)) {
+		t.Errorf("error %q lacks the bounded quote %s", msg, quoteBounded(r.To.ProcStart))
+	}
+	if got := ValidationCode(err); got != ErrBadRequest {
+		t.Errorf("ValidationCode = %q, want bad_request", got)
+	}
+	r = validDeliverRequest()
+	r.From.ProcStart = "not-a-timestamp"
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), `from.proc_start does not parse: "not-a-timestamp"`) {
+		t.Errorf("from: Validate() = %v, want the short value quoted whole", err)
+	}
+}
+
 // TestValidate_QuotedRemoteTextBounded pins that the two Validate errors
 // which quote a sender-supplied value (msg_id, declared_mode) never carry
 // it whole: a receiver echoes these details to the peer and into its

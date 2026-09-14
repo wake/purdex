@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -452,6 +453,114 @@ func assertWrapper(t *testing.T, what string, w ccuds.Wrapper, helperSock, fromN
 	if w.Text != text {
 		t.Errorf("%s: wrapper text = %q, want %q", what, w.Text, text)
 	}
+}
+
+// TestE2E_PartialOriginInventoryKeepsHelper (R2-A) drives the reply path
+// between two real daemons while the ORIGIN daemon's inventory is
+// partial: A's owner lookup for its tmux session mt1 fails, so A's own
+// inventory has no row for the origin tuple even though the session (its
+// registry entry and inbox) is alive. B delivers a message for A's origin
+// through a direct /deliver (as A's daemon would), the target replies
+// natively into B's helper, and B forwards the reply to A. A must answer
+// 503 not_ready ("inventory partial"), never 409 target_gone: B audits the
+// reply row not_ready and KEEPS its helper for a/mt1 — releasing it would
+// cut the still-alive origin's reply route on a transient lookup failure.
+func TestE2E_PartialOriginInventoryKeepsHelper(t *testing.T) {
+	sockDir, regDir := proxyhelpertest.TempDirs(t)
+	root := filepath.Dir(regDir)
+	originSock := filepath.Join(root, "origin.sock")
+	targetSock := filepath.Join(root, "target.sock")
+	origin := startFakeInbox(t, originSock)
+	target := startFakeInbox(t, targetSock)
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", e2eRegistryJSON(e2eOriginPID, e2eOriginSID, e2eOriginName, "mt1:@1.%1", originSock))
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eTargetPID)+".json", e2eRegistryJSON(e2eTargetPID, e2eTargetSID, e2eTargetName, "foo:@2.%2", targetSock))
+	live := &e2eLiveness{}
+
+	a := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostA, alias: "a", admin: e2eAdminA,
+		peer:     config.PeerHost{Alias: "b", HostID: e2eHostB, Token: e2eTokenAtoB, InboundToken: e2eTokenBtoA},
+		sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	// A's owner lookup for mt1 fails from the start: agent:null, partial.
+	a.m.owners = &fakeOwners{errs: map[string]error{"mt1code": errors.New("resolver timeout")}}
+	b := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostB, alias: "b", admin: e2eAdminB,
+		peer:     config.PeerHost{Alias: "a", HostID: e2eHostA, Token: e2eTokenBtoA, InboundToken: e2eTokenAtoB},
+		sessions: []session.SessionInfo{{Code: "foocode", Name: "foo", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"foocode": {AgentType: "cc", SessionID: e2eTargetSID, TmuxPaneID: "%2"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	a.setPeer(func(h *config.PeerHost) { h.URL = b.srv.URL })
+	b.setPeer(func(h *config.PeerHost) { h.URL = a.srv.URL })
+
+	if env := a.peers(); !env.Partial {
+		t.Fatalf("A's inventory partial = false, want true: %+v", env.Peers)
+	}
+
+	// 1. B delivers for A's origin (the request A's daemon would send).
+	originFrom := ipeers.WireFrom{
+		HostID: e2eHostA, AgentSessionID: e2eOriginSID, PID: e2eOriginPID, ProcStart: e2eCCProcStart,
+		PeerName: e2eOriginName, SessionName: "mt1", DeclaredMode: ipeers.ModePrompting,
+	}
+	ping := ipeers.DeliverRequest{
+		MsgID: uuid.NewString(), From: originFrom,
+		To:   ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart},
+		Text: "ping",
+	}
+	status, raw := b.do(http.MethodPost, "/api/peers/deliver", e2eTokenAtoB, ping)
+	if status != http.StatusOK {
+		t.Fatalf("step 1: B /deliver = %d; body=%s", status, raw)
+	}
+	_, _, bHelperSock := deliveredFrame(t, target.recv("step 1"))
+	if _, ok := b.m.helpers.FindBySock(bHelperSock); !ok {
+		t.Fatalf("step 1: reply address %q is not one of B's helpers", bHelperSock)
+	}
+
+	// 2. The target replies natively; B forwards to A, whose inventory is
+	// partial: not_ready, not target_gone.
+	native := uuid.NewString()
+	proxyhelpertest.WriteToSock(t, bHelperSock, frameLine(t, native, "user", "uds:"+targetSock, ccuds.Wrapper{
+		From: "uds:" + targetSock, FromName: "foo", FromMode: ipeers.ModePrompting, Text: "pong",
+	}.Format()))
+	bRows := b.awaitLog("reply not_ready", func(rows []ipeers.LogEntry) bool {
+		_, ok := findLogRow(rows, store.DirReply, ipeers.ErrNotReady, native)
+		return ok
+	})
+	rep, _ := findLogRow(bRows, store.DirReply, ipeers.ErrNotReady, native)
+	if rep.Error != "inventory partial" || rep.FromSessionID != e2eTargetSID || rep.ToSessionID != e2eOriginSID {
+		t.Errorf("step 2: B reply row = %+v, want not_ready/\"inventory partial\" from the target to the origin", rep)
+	}
+	if _, gone := findLogRow(bRows, store.DirReply, ipeers.ErrTargetGone, ""); gone {
+		t.Errorf("step 2: B audited a target_gone reply: %+v", bRows)
+	}
+	a.awaitLog("in not_ready for the unresolved origin", func(rows []ipeers.LogEntry) bool {
+		r, ok := findLogRow(rows, store.DirIn, ipeers.ErrNotReady, "")
+		return ok && r.MsgID == rep.MsgID && r.Error == "inventory partial"
+	})
+	origin.none("step 2")
+
+	// 3. B's helper for a/mt1 survives: same instance, socket on disk.
+	time.Sleep(50 * time.Millisecond) // a wrong Release would be in flight by now
+	h, still := b.m.helpers.FindBySock(bHelperSock)
+	if !still {
+		t.Fatalf("step 3: B's helper for a/mt1 released on not_ready")
+	}
+	b.m.helpers.mu.Lock()
+	state := h.state
+	b.m.helpers.mu.Unlock()
+	if state != helperReady {
+		t.Errorf("step 3: B's helper state = %v, want ready", state)
+	}
+	if !proxyhelpertest.Exists(bHelperSock) {
+		t.Errorf("step 3: B's helper socket %s gone", bHelperSock)
+	}
+	if b.f.fake.Stops() != 0 {
+		t.Errorf("step 3: B helper stops = %d, want 0", b.f.fake.Stops())
+	}
+
+	a.stop()
+	b.stop()
 }
 
 // TestE2E_TwoDaemons drives the whole bridge between two real daemons on

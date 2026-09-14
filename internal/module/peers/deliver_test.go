@@ -154,6 +154,13 @@ func targetRegistryJSON(inbox string) string {
 	return `{"pid":` + strconv.Itoa(targetPID) + `,"sessionId":"` + targetSessionID + `","cwd":"/w","procStart":"` + targetProcStart + `","version":"2.1.270","messagingSocketPath":"` + inbox + `","name":"` + targetPeerName + `","status":"idle"}`
 }
 
+// targetRegistryJSONInTmux is targetRegistryJSON with a tmux field naming
+// a pane inside a listed session (e.g. "foo:@1.%1"): the target is then
+// that session's row, reached only through its owner resolution.
+func targetRegistryJSONInTmux(inbox, tmux string) string {
+	return `{"pid":` + strconv.Itoa(targetPID) + `,"sessionId":"` + targetSessionID + `","cwd":"/w","procStart":"` + targetProcStart + `","version":"2.1.270","tmux":"` + tmux + `","messagingSocketPath":"` + inbox + `","name":"` + targetPeerName + `","status":"idle"}`
+}
+
 // deliverLiveness treats every registry entry whose inbox exists on disk
 // as live: the fake helpers' entries carry proxyhelpertest.ProcStart(pid)
 // and everything else fixture76973ProcStart. proxyInfo, when non-nil,
@@ -722,6 +729,78 @@ func TestDeliver_InventoryUnavailableDetailFixed(t *testing.T) {
 	}
 }
 
+// TestDeliver_PartialInventoryIsNotReady pins spec §4.2's partial
+// semantics on the receiver (R2-A): a target that is not in the inventory
+// while the inventory is partial (its tmux session's owner lookup timed
+// out or failed ⇒ agent:null, reason:"") is not a verdict on the target.
+// The answer is 503 not_ready with the fixed detail "inventory partial"
+// (audited as not_ready), never 409 target_gone — which the origin takes
+// as a verdict and reaps the sender's helper on. A tuple that is
+// genuinely missing from a complete inventory is still target_gone.
+func TestDeliver_PartialInventoryIsNotReady(t *testing.T) {
+	inTmux := envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}}
+	t.Run("owner lookup fails ⇒ not_ready", func(t *testing.T) {
+		e := newDeliverEnv(t, inTmux)
+		writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
+		e.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
+
+		ae := assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusServiceUnavailable, ipeers.ErrNotReady)
+		if ae.Detail != "inventory partial" {
+			t.Errorf("detail = %q, want the fixed %q", ae.Detail, "inventory partial")
+		}
+		e.assertNoLine()
+		row := e.onlyRow()
+		if row.Result != ipeers.ErrNotReady || row.Error != "inventory partial" {
+			t.Errorf("row result/error = %q/%q, want not_ready/\"inventory partial\"", row.Result, row.Error)
+		}
+		if e.f.fake.Spawns() != 0 {
+			t.Errorf("helper spawns = %d, want 0", e.f.fake.Spawns())
+		}
+	})
+	t.Run("owner lookup exceeds the budget ⇒ not_ready", func(t *testing.T) {
+		e := newDeliverEnv(t, inTmux)
+		writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
+		e.m.owners = &fakeOwners{owners: map[string]agent.PaneOwner{"s1": {AgentType: "cc", SessionID: targetSessionID, TmuxPaneID: "%1"}}}
+		e.m.budget = 0 // the deadline is spent before the first resolution starts
+
+		assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusServiceUnavailable, ipeers.ErrNotReady)
+		e.assertNoLine()
+		if row := e.onlyRow(); row.Result != ipeers.ErrNotReady {
+			t.Errorf("row result = %q, want not_ready", row.Result)
+		}
+	})
+	t.Run("owner resolves ⇒ delivered", func(t *testing.T) {
+		// The same tuple, once its session's owner lookup completes, is
+		// the target: the partial answer above was about the inventory,
+		// not the session.
+		e := newDeliverEnv(t, inTmux)
+		writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
+		e.m.owners = &fakeOwners{owners: map[string]agent.PaneOwner{"s1": {AgentType: "cc", SessionID: targetSessionID, TmuxPaneID: "%1"}}}
+		e.deliverOK(e.request())
+		e.recvLine()
+	})
+	t.Run("missing from a complete inventory ⇒ target_gone", func(t *testing.T) {
+		e := newDeliverEnv(t, envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}, owners: map[string]agent.PaneOwner{}})
+		ae := assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusConflict, ipeers.ErrTargetGone)
+		if !strings.Contains(ae.Detail, "no live cc session") {
+			t.Errorf("detail = %q, want the no-session detail", ae.Detail)
+		}
+		if row := e.onlyRow(); row.Result != ipeers.ErrTargetGone {
+			t.Errorf("row result = %q, want target_gone", row.Result)
+		}
+	})
+	t.Run("partial but a candidate with another pid ⇒ target_gone", func(t *testing.T) {
+		// The tuple's session id IS in the inventory (an outside-tmux row)
+		// with a different pid: that is a verdict on the session, whatever
+		// else is unresolved.
+		e := newDeliverEnv(t, envOpts{sessions: []session.SessionInfo{{Code: "s1", Name: "other"}}})
+		e.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
+		req := e.request()
+		req.To.PID = targetPID + 1
+		assertRefused(t, e.post(e.hostCtx(), req), http.StatusConflict, ipeers.ErrTargetGone)
+	})
+}
+
 func TestDeliver_RateLimited31st(t *testing.T) {
 	e := newDeliverEnv(t, envOpts{})
 	for i := 0; i < ipeers.PairRateLimit; i++ {
@@ -737,6 +816,97 @@ func TestDeliver_RateLimited31st(t *testing.T) {
 	}
 	if e.f.fake.Spawns() != 1 {
 		t.Errorf("helper spawns = %d, want 1 (one origin)", e.f.fake.Spawns())
+	}
+}
+
+// TestDeliver_HostRateLimited121st pins the per-host admission limit
+// (R2-E): the 121st /deliver from one authenticated host within a minute
+// is refused 429 rate_limited right after the entry binding — before the
+// body is decoded, before dedup, before the audit insert and before any
+// inventory is built — unaudited, with one warn line; another host is
+// unaffected.
+func TestDeliver_HostRateLimited121st(t *testing.T) {
+	const (
+		seaHostID = "sea:0011"
+		seaAlias  = "sea"
+	)
+	e := newDeliverEnv(t, envOpts{hosts: []config.PeerHost{
+		airHost("outbound-air", false),
+		{Alias: seaAlias, URL: "http://sea.invalid:7860", HostID: seaHostID, Token: "outbound-sea", InboundToken: "inbound-sea"},
+	}})
+	sessions := e.m.sessions.(*fakeSessions)
+	for i := 0; i < ipeers.HostRateLimit; i++ {
+		if !e.m.hostLimit.Allow(remoteHostID) {
+			t.Fatalf("host admission #%d refused, want the first %d allowed", i+1, ipeers.HostRateLimit)
+		}
+	}
+	listed := sessions.listCalls.Load()
+
+	// Even a body that would otherwise be a 400 is refused 429: the
+	// admission check precedes the decode.
+	ae := assertRefused(t, e.post(e.hostCtx(), []byte("{nope")), http.StatusTooManyRequests, ipeers.ErrRateLimited)
+	if ae.Detail != "host rate limit exceeded" {
+		t.Errorf("detail = %q, want the fixed %q", ae.Detail, "host rate limit exceeded")
+	}
+	req := e.request()
+	assertRefused(t, e.post(e.hostCtx(), req), http.StatusTooManyRequests, ipeers.ErrRateLimited)
+	e.assertNoLine()
+	if n := sessions.listCalls.Load(); n != listed {
+		t.Errorf("inventory built %d times for refused requests, want 0", n-listed)
+	}
+	if n := len(e.rows()); n != 0 {
+		t.Errorf("audit rows = %d, want 0 (unaudited)", n)
+	}
+	if e.m.dedup.Seen(req.MsgID) {
+		t.Errorf("msg_id recorded by dedup before admission")
+	}
+	if e.f.fake.Spawns() != 0 {
+		t.Errorf("helper spawns = %d, want 0", e.f.fake.Spawns())
+	}
+	var warned int
+	for _, l := range e.f.logs.all() {
+		if strings.Contains(l, ipeers.ErrRateLimited) && strings.Contains(l, "host rate limit exceeded") && strings.Contains(l, remoteAlias) {
+			warned++
+		}
+	}
+	if warned != 2 {
+		t.Errorf("warn lines = %d, want one per refusal: %v", warned, e.f.logs.all())
+	}
+
+	// The other host's admission is its own: it delivers.
+	seaCtx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalHost, Alias: seaAlias, HostID: seaHostID})
+	seaReq := e.request()
+	seaReq.From.HostID = seaHostID
+	rr := e.post(seaCtx, seaReq)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("sea: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	e.recvLine()
+	if rows := e.rows(); len(rows) != 1 || rows[0].FromHostID != seaHostID || rows[0].Result != ipeers.ResultDelivered {
+		t.Errorf("rows = %+v, want one delivered row from %s", rows, seaHostID)
+	}
+}
+
+// TestHostLimiter_WindowSlides pins the host limiter on the shared clock
+// seam: HostRateLimit admissions, the next refused, admitted again once
+// the window has slid past the first.
+func TestHostLimiter_WindowSlides(t *testing.T) {
+	clock := &manualClock{t: time.Unix(0, 0)}
+	l := newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, clock.Now)
+	for i := 0; i < ipeers.HostRateLimit; i++ {
+		if !l.Allow("air:1") {
+			t.Fatalf("Allow #%d = false", i+1)
+		}
+	}
+	if l.Allow("air:1") {
+		t.Errorf("Allow #%d = true, want refused", ipeers.HostRateLimit+1)
+	}
+	if !l.Allow("sea:1") {
+		t.Errorf("another host refused")
+	}
+	clock.Advance(ipeers.HostRateWindow)
+	if !l.Allow("air:1") {
+		t.Errorf("Allow after the window = false, want admitted")
 	}
 }
 
@@ -866,6 +1036,15 @@ func TestDeliver_AuditCoverage(t *testing.T) {
 			status: http.StatusForbidden, code: ipeers.ErrDeliverDisabled,
 		},
 		{
+			name: "rate_limited/host admission", ctx: hostCtx, body: plain,
+			prepare: func(t *testing.T, e *deliverEnv) {
+				for i := 0; i < ipeers.HostRateLimit; i++ {
+					e.m.hostLimit.Allow(remoteHostID)
+				}
+			},
+			status: http.StatusTooManyRequests, code: ipeers.ErrRateLimited,
+		},
+		{
 			name: "bad_request/invalid json", ctx: hostCtx, body: func(*deliverEnv) any { return []byte("{nope") },
 			status: http.StatusBadRequest, code: ipeers.ErrBadRequest,
 		},
@@ -924,6 +1103,24 @@ func TestDeliver_AuditCoverage(t *testing.T) {
 			after: func(t *testing.T, e *deliverEnv, ae ipeers.APIError) {
 				if ae.Detail != "inventory unavailable" {
 					t.Errorf("detail = %q, want the fixed %q", ae.Detail, "inventory unavailable")
+				}
+			},
+		},
+		{
+			name: "not_ready/inventory partial",
+			opts: envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}},
+			ctx:  hostCtx, body: plain,
+			prepare: func(t *testing.T, e *deliverEnv) {
+				writeRegistryFixture(t, e.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(e.targetSock, "foo:@1.%1"))
+				e.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
+			},
+			status: http.StatusServiceUnavailable, code: ipeers.ErrNotReady, audited: true,
+			after: func(t *testing.T, e *deliverEnv, ae ipeers.APIError) {
+				if ae.Detail != "inventory partial" {
+					t.Errorf("detail = %q, want the fixed %q", ae.Detail, "inventory partial")
+				}
+				if row := e.onlyRow(); row.Error != "inventory partial" {
+					t.Errorf("row error = %q, want %q", row.Error, "inventory partial")
 				}
 			},
 		},

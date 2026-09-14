@@ -113,9 +113,16 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 	}
 	replier, detail := findReplier(env.Peers, sock)
 	if detail != "" {
+		// A PARTIAL inventory (spec §4.2) with no row for the reply
+		// address says nothing about the replier — its tmux session may
+		// be the one whose owner lookup did not complete: not_ready, never
+		// replier_unknown (a verdict). The helper is kept either way.
 		code := ipeers.ErrReplierUnknown
-		if replier.Agent != nil && replier.Agent.Type == "proxy" {
+		switch {
+		case replier.Agent != nil && replier.Agent.Type == "proxy":
 			code = ipeers.ErrProxyToProxy
+		case replier.Agent == nil && env.Partial:
+			code, detail = ipeers.ErrNotReady, detailInventoryPartial
 		}
 		drop(code, detail)
 		return

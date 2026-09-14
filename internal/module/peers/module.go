@@ -143,6 +143,7 @@ type Module struct {
 	helpers          *helperManager // built in Init (production) or by the test fixture
 	dedup            *dedupSet      // msg_id window, ipeers.DedupWindow
 	pairs            *pairLimiter   // per (sender, receiver) process pair, ipeers.PairRateLimit
+	hostLimit        *hostLimiter   // per authenticated host, ipeers.HostRateLimit; before decode/dedup/audit/inventory
 	writeFrame       writeFrameFunc // default ccuds.WriteFrame
 	sockWriteTimeout time.Duration  // default ipeers.SocketWriteTimeout
 	newMsgID         func() string  // default uuid v4 (crypto/rand); the reply path mints ids with it
@@ -198,6 +199,7 @@ func New(audit AuditStore) *Module {
 	}
 	m.dedup = newDedupSet(ipeers.DedupWindow, m.now)
 	m.pairs = newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, m.now)
+	m.hostLimit = newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, m.now)
 	return m
 }
 

@@ -53,37 +53,56 @@ type pairKey struct {
 	From, To ipeers.OriginKey
 }
 
-// pairLimiter enforces a sliding-window rate limit per pairKey: at most
-// limit calls to Allow may return true for one key within any window-length
-// span of time.
-type pairLimiter struct {
+// windowLimiter enforces a sliding-window rate limit per key: at most
+// limit calls to Allow may return true for one key within any
+// window-length span of time. Two instantiations serve /deliver: the
+// pairLimiter (per sender/receiver process pair, ipeers.PairRateLimit,
+// audited) and the hostLimiter (per authenticated host, ipeers.HostRateLimit,
+// checked before decode/dedup/audit/inventory so a paired host cannot
+// drive those at HTTP rate with fresh ids and rotating tuples).
+type windowLimiter[K comparable] struct {
 	mu     sync.Mutex
-	counts map[pairKey][]time.Time
+	counts map[K][]time.Time
 	limit  int
 	window time.Duration
 	now    func() time.Time
 }
 
-// newPairLimiter returns a pairLimiter allowing at most limit requests per
-// key within window, using now for the current time (a fake clock in
-// tests).
-func newPairLimiter(limit int, window time.Duration, now func() time.Time) *pairLimiter {
-	return &pairLimiter{
-		counts: make(map[pairKey][]time.Time),
+type (
+	pairLimiter = windowLimiter[pairKey]
+	hostLimiter = windowLimiter[string] // keyed by the principal's host id
+)
+
+func newWindowLimiter[K comparable](limit int, window time.Duration, now func() time.Time) *windowLimiter[K] {
+	return &windowLimiter[K]{
+		counts: make(map[K][]time.Time),
 		limit:  limit,
 		window: window,
 		now:    now,
 	}
 }
 
+// newPairLimiter returns a pairLimiter allowing at most limit requests per
+// key within window, using now for the current time (a fake clock in
+// tests).
+func newPairLimiter(limit int, window time.Duration, now func() time.Time) *pairLimiter {
+	return newWindowLimiter[pairKey](limit, window, now)
+}
+
+// newHostLimiter returns a hostLimiter allowing at most limit requests per
+// host id within window, on the same clock seam.
+func newHostLimiter(limit int, window time.Duration, now func() time.Time) *hostLimiter {
+	return newWindowLimiter[string](limit, window, now)
+}
+
 // Allow reports whether one more request for k is allowed under the sliding
 // window rate limit, recording it if so. Every key's timestamps older than
 // window are pruned first (not just k's), and a key left with none is
 // removed entirely rather than lingering as an empty slice — so a
-// pairLimiter serving many distinct, mostly-idle pairs stays bounded by the
-// number of pairs actually active within the last window, not by every
-// pair ever seen.
-func (l *pairLimiter) Allow(k pairKey) bool {
+// limiter serving many distinct, mostly-idle keys stays bounded by the
+// number of keys actually active within the last window, not by every
+// key ever seen.
+func (l *windowLimiter[K]) Allow(k K) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

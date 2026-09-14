@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"sync"
@@ -25,7 +24,7 @@ const (
 	// every unresolved record whose process may still be alive.
 	HelperCap = 32
 	// HelperIdleReap releases a helper that has seen no traffic in either
-	// direction for this long.
+	// direction for this long or longer.
 	HelperIdleReap = 30 * time.Minute
 	// HelperReadyTimeout bounds the wait for a helper's ready line.
 	HelperReadyTimeout = 3 * time.Second
@@ -349,24 +348,21 @@ func (m *helperManager) startup(h *helper) {
 
 	// rollback undoes a spawn that succeeded but could not be made
 	// durable: stop the helper, then remove what a helper that died
-	// without its own cleanup leaves behind — the registry files and the
-	// socket path (only when nobody listens on it any more, like Release).
-	rollback := func(err error) {
+	// without its own cleanup leaves behind — under the same ownership
+	// rules as Release and Sweep (unlinkOwned): a registry file only while
+	// it carries ps (an unknown ps unlinks no file), the socket only while
+	// nobody listens on it.
+	rollback := func(ps string, err error) {
 		handle.Stop(m.termGrace)
-		if rmErr := ccuds.RemoveRegistry(handle.Files()); rmErr != nil {
-			m.log("peers: helper %d: remove registry files after failed startup: %v", handle.PID(), rmErr)
-		}
-		if sock := handle.Sock(); m.dialRefused(sock) {
-			if rmErr := os.Remove(sock); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-				m.log("peers: helper %d: unlink %s after failed startup: %v", handle.PID(), sock, rmErr)
-			}
-		}
+		m.unlinkOwned(fmt.Sprintf("helper %d startup", handle.PID()), proxyRecord{
+			PID: handle.PID(), ProcStart: ps, Sock: handle.Sock(), Files: handle.Files(),
+		})
 		fail(err)
 	}
 
 	ps, err := m.procStart(handle.PID())
 	if err != nil {
-		rollback(fmt.Errorf("proc start of pid %d: %w", handle.PID(), err))
+		rollback("", fmt.Errorf("proc start of pid %d: %w", handle.PID(), err))
 		return
 	}
 
@@ -381,7 +377,7 @@ func (m *helperManager) startup(h *helper) {
 	// next write would orphan a process nobody could prove is ours.
 	if err := m.writeProxiesLocked(); err != nil {
 		m.mu.Unlock()
-		rollback(fmt.Errorf("write %s: %w", m.proxiesPath, err))
+		rollback(ps, fmt.Errorf("write %s: %w", m.proxiesPath, err))
 		return
 	}
 	h.state = helperReady
@@ -462,8 +458,16 @@ func (m *helperManager) peerFeatures() []string {
 // lists it. A stale callback (h already replaced) or a second Release of
 // an instance already stopping is a no-op.
 func (m *helperManager) Release(h *helper, reason string) {
+	m.release(h, reason, nil)
+}
+
+// release is Release with an optional extra precondition, evaluated under
+// the lock together with the instance/state check, right before the flip
+// to stopping — so a decision taken on a snapshot (ReapIdle's idle set)
+// is re-validated against the current state (R2-B). Caller holds nothing.
+func (m *helperManager) release(h *helper, reason string, still func() bool) {
 	m.mu.Lock()
-	if m.helpers[h.key] != h || h.state != helperReady {
+	if m.helpers[h.key] != h || h.state != helperReady || (still != nil && !still()) {
 		m.mu.Unlock()
 		return
 	}
@@ -476,15 +480,10 @@ func (m *helperManager) Release(h *helper, reason string) {
 		if err := h.handle.Stop(m.termGrace); err != nil {
 			m.log("peers: helper %d (%s): stopped (%s): %v", h.pid, h.name, reason, err)
 		}
-		cleanupOK := true
-		if err := ccuds.RemoveRegistry(h.files); err != nil {
-			m.log("peers: helper %d: remove registry files: %v", h.pid, err)
-			cleanupOK = false
-		}
-		if err := os.Remove(h.sock); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			m.log("peers: helper %d: unlink %s: %v", h.pid, h.sock, err)
-			cleanupOK = false
-		}
+		// The process is gone; what it left behind is unlinked only while
+		// it is provably its own (R2-C): the window between its exit and
+		// here is one a same-UID process, or a reused pid, can fill.
+		cleanupOK := m.unlinkOwned(fmt.Sprintf("helper %d", h.pid), recordOf(h))
 
 		m.mu.Lock()
 		delete(m.helpers, h.key)
@@ -505,19 +504,24 @@ func (m *helperManager) Release(h *helper, reason string) {
 	})
 }
 
-// ReapIdle releases every ready helper idle for longer than HelperIdleReap.
+// ReapIdle releases every ready helper idle for HelperIdleReap or longer.
+// The candidates are collected under the lock, but each Release runs
+// unlocked and waits its grace, during which Acquire/Touch may refresh a
+// later candidate's lastUsed: idleness is therefore re-checked under the
+// lock right before each candidate flips to stopping, and a helper
+// touched meanwhile is skipped (R2-B).
 func (m *helperManager) ReapIdle() {
-	now := m.now()
+	idleFor := func(h *helper) bool { return m.now().Sub(h.lastUsed) >= HelperIdleReap } // caller holds mu
 	m.mu.Lock()
 	var idle []*helper
 	for _, h := range m.helpers {
-		if h.state == helperReady && now.Sub(h.lastUsed) > HelperIdleReap {
+		if h.state == helperReady && idleFor(h) {
 			idle = append(idle, h)
 		}
 	}
 	m.mu.Unlock()
 	for _, h := range idle {
-		m.Release(h, "idle")
+		m.release(h, "idle", func() bool { return idleFor(h) })
 	}
 }
 

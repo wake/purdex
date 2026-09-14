@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -753,6 +754,20 @@ func TestSend_ErrorSteps(t *testing.T) {
 		{
 			name: "origin not deliverable (registry entry missing)", opts: envOpts{noRegistry: true},
 			status: http.StatusBadRequest, code: ipeers.ErrOriginUnknown,
+		},
+		{
+			// R2-A: the origin's tmux session's owner lookup failed ⇒ the
+			// inventory is partial and has no row for the inbox. That is
+			// not "origin unknown" (a verdict the CLI reports as the
+			// caller not being a live session): 503 not_ready, retryable,
+			// before any fetch and before the audit insert.
+			name: "origin in a partial inventory is not_ready",
+			opts: envOpts{noRegistry: true, sessions: []session.SessionInfo{{Code: "s1", Name: "foo"}}},
+			prepare: func(s *sendEnv) {
+				writeRegistryFixture(s.t, s.regDir, strconv.Itoa(targetPID)+".json", targetRegistryJSONInTmux(s.targetSock, "foo:@1.%1"))
+				s.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
+			},
+			status: http.StatusServiceUnavailable, code: ipeers.ErrNotReady, detail: "inventory partial",
 		},
 		{
 			name:    "fetch error",

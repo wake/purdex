@@ -444,7 +444,9 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 		remaining = append(remaining, msg)
 	}
 
-	// a. the helper and its files.
+	// a. the helper and its files. Its socket still accepting after Stop
+	// means the helper (or a successor holding its path) is still there:
+	// a cleanup failure, not a note (R2-F) — the path is left alone.
 	if st.h != nil {
 		if err := st.h.Stop(selftestHelperStopGrace); err != nil {
 			fmt.Fprintf(stdout, "helper pid %d stopped: %v\n", st.h.PID(), err)
@@ -458,7 +460,11 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 				problem("helper file not removed: %s: %v", p, err)
 			}
 		}
-		selftestRemoveSock(deps, st.h.Sock(), "helper", problem, stdout)
+		if sock := st.h.Sock(); !deps.dialRefused(sock) {
+			problem("probe socket %s still listening", sock)
+		} else {
+			selftestRemoveSock(deps, sock, "helper", problem, stdout)
+		}
 	}
 
 	// b. the tmux session, by name.
@@ -470,7 +476,7 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 
 	// c. the processes, by identity: the claude process first (when it was
 	// identified), then the pane's wrapper shell.
-	targetID := selftestIdentityDifferent // no target ⇒ nothing to keep for
+	targetID := ipeers.ProcDifferent // no target ⇒ nothing to keep for
 	if st.targetPID != 0 {
 		targetID = selftestReap(ctx, deps, "target", st.targetPID, st.targetProcStart, problem, stdout)
 	}
@@ -482,7 +488,7 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 	// Without a registry entry its pid is unknown and nothing on disk can
 	// be proven ours. A live pid whose identity could not be read (c) is
 	// left with its files: it may still be the running claude.
-	if st.targetPID != 0 && targetID != selftestIdentityUnknown {
+	if st.targetPID != 0 && targetID != ipeers.ProcUnknown {
 		pid := strconv.Itoa(st.targetPID)
 		var candidates []string
 		for _, pattern := range []string{pid + ".json", pid + ".*.key"} {
@@ -522,32 +528,13 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 	return false
 }
 
-// selftestIdentity is the answer to "is pid still the process we started?"
-// — the same tri-state as the daemon's sweep (sweep.go pidIdentity), never
-// folded: unknown means the process must not be signalled and its files
-// must not be touched.
-type selftestIdentity int
-
-const (
-	selftestIdentityUnknown   selftestIdentity = iota // alive, but its start time could not be read
-	selftestIdentitySame                              // alive and carrying procStart
-	selftestIdentityDifferent                         // dead, or the pid held by another process
-)
-
-// selftestIdentify classifies pid against procStart.
-func selftestIdentify(deps selftestDeps, pid int, procStart string) selftestIdentity {
-	if !deps.pidAlive(pid) {
-		return selftestIdentityDifferent
-	}
-	ps, err := deps.procStart(pid)
-	switch {
-	case err != nil:
-		return selftestIdentityUnknown
-	case ps == procStart:
-		return selftestIdentitySame
-	default:
-		return selftestIdentityDifferent
-	}
+// selftestIdentify classifies pid against procStart: the same shared
+// tri-state as the daemon's sweep (ipeers.ClassifyProc), never folded —
+// unknown means the process must not be signalled and its files must not
+// be touched; a dead pid is different.
+func selftestIdentify(deps selftestDeps, pid int, procStart string) ipeers.ProcIdentity {
+	_, id := ipeers.ClassifyProc(pid, procStart, deps.pidAlive, deps.procStart)
+	return id
 }
 
 // selftestReap waits ≤ selftestExitWait for the process (pid, procStart)
@@ -559,18 +546,18 @@ func selftestIdentify(deps selftestDeps, pid int, procStart string) selftestIden
 // so the caller keeps its files. Still the same process at the end ⇒
 // `<label> pid <p> still alive` is recorded. Returns the final identity.
 func selftestReap(ctx context.Context, deps selftestDeps, label string, pid int, procStart string,
-	problem func(string, ...any), stdout io.Writer) selftestIdentity {
-	ident := func() selftestIdentity { return selftestIdentify(deps, pid, procStart) }
-	unknown := func() selftestIdentity {
+	problem func(string, ...any), stdout io.Writer) ipeers.ProcIdentity {
+	ident := func() ipeers.ProcIdentity { return selftestIdentify(deps, pid, procStart) }
+	unknown := func() ipeers.ProcIdentity {
 		problem("%s pid %d: identity unknown, left running", label, pid)
-		return selftestIdentityUnknown
+		return ipeers.ProcUnknown
 	}
 	id := selftestWaitGone(ctx, deps, ident, selftestExitWait)
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
 		switch id {
-		case selftestIdentityDifferent:
+		case ipeers.ProcDifferent:
 			return id
-		case selftestIdentityUnknown:
+		case ipeers.ProcUnknown:
 			return unknown()
 		}
 		if err := deps.signal(pid, sig); err != nil {
@@ -579,13 +566,13 @@ func selftestReap(ctx context.Context, deps selftestDeps, label string, pid int,
 		id = selftestWaitGone(ctx, deps, ident, selftestSignalWait)
 	}
 	switch id {
-	case selftestIdentityDifferent:
+	case ipeers.ProcDifferent:
 		return id
-	case selftestIdentityUnknown:
+	case ipeers.ProcUnknown:
 		return unknown()
 	}
 	problem("%s pid %d still alive", label, pid)
-	return selftestIdentitySame
+	return ipeers.ProcSame
 }
 
 // selftestRemoveSock unlinks sock only when nobody listens on it; a live
@@ -608,11 +595,11 @@ func selftestRemoveSock(deps selftestDeps, sock, owner string, problem func(stri
 // returns different as soon as the process is gone (or another process
 // holds the pid); otherwise the identity observed last (same, or unknown
 // for a transient read failure that did not clear before the deadline).
-func selftestWaitGone(ctx context.Context, deps selftestDeps, ident func() selftestIdentity, d time.Duration) selftestIdentity {
+func selftestWaitGone(ctx context.Context, deps selftestDeps, ident func() ipeers.ProcIdentity, d time.Duration) ipeers.ProcIdentity {
 	deadline := deps.now().Add(d)
 	for {
 		id := ident()
-		if id == selftestIdentityDifferent {
+		if id == ipeers.ProcDifferent {
 			return id
 		}
 		if !deps.now().Before(deadline) {

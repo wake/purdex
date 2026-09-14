@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -958,6 +959,222 @@ func TestHelperManager_ReapIdleReleasesOnlyIdle(t *testing.T) {
 	if !tm.lastUsedOf(busy).Equal(tm.clock.Now()) {
 		t.Fatalf("Acquire did not touch lastUsed")
 	}
+}
+
+// TestHelperManager_ReapIdleRechecksUnderLock (R2-B): ReapIdle's idle
+// snapshot is stale by the time it reaches its later candidates — an
+// earlier candidate's Stop waits its grace meanwhile, and Acquire/Touch
+// may have refreshed lastUsed. The release must re-check idleness under
+// the lock right before flipping to stopping: a helper touched between
+// the snapshot and its turn survives; the untouched one is released.
+func TestHelperManager_ReapIdleRechecksUnderLock(t *testing.T) {
+	tm := newTestManager(t)
+	tm.sweepOK(t)
+	hold := make(chan struct{})
+	tm.fake.HoldStop(hold)
+	h1 := acquireOK(t, tm, originN(1))
+	h2 := acquireOK(t, tm, originN(2))
+	tm.clock.Advance(HelperIdleReap + time.Minute) // both well past the reap threshold
+
+	reaped := make(chan struct{})
+	go func() { tm.m.ReapIdle(); close(reaped) }()
+
+	// Whichever candidate the reaper took first is parked in Stop (Wait is
+	// held); the other is still ready and gets traffic before its turn.
+	var first, other *helper
+	eventually(t, time.Second, func() bool {
+		switch {
+		case tm.stateOf(h1) == helperStopping:
+			first, other = h1, h2
+		case tm.stateOf(h2) == helperStopping:
+			first, other = h2, h1
+		default:
+			return false
+		}
+		return true
+	}, "one candidate stopping")
+	if got := acquireOK(t, tm, other.key); got != other {
+		t.Fatalf("Acquire(other) returned a different instance")
+	}
+	if !tm.lastUsedOf(other).Equal(tm.clock.Now()) {
+		t.Fatalf("Acquire did not refresh lastUsed")
+	}
+	close(hold)
+	waitClosed(t, reaped, 3*time.Second, "ReapIdle")
+
+	if tm.stateOf(first) != helperExited {
+		t.Errorf("first candidate state = %v, want exited", tm.stateOf(first))
+	}
+	if tm.stateOf(other) != helperReady {
+		t.Errorf("touched candidate state = %v, want ready (stale snapshot released it)", tm.stateOf(other))
+	}
+	if tm.fake.Stops() != 1 {
+		t.Errorf("stops = %d, want 1", tm.fake.Stops())
+	}
+	if got := acquireOK(t, tm, other.key); got != other {
+		t.Errorf("touched helper replaced")
+	}
+	// Untouched, it goes on the next pass — idle for exactly HelperIdleReap
+	// is idle enough (>=).
+	tm.clock.Advance(HelperIdleReap)
+	tm.m.ReapIdle()
+	if tm.stateOf(other) != helperExited || tm.fake.Stops() != 2 {
+		t.Errorf("state/stops after the next pass = %v/%d, want exited/2", tm.stateOf(other), tm.fake.Stops())
+	}
+}
+
+// TestHelperManager_ReleaseUnlinksOnlyOwned (R2-C): between the helper's
+// exit and Release's cleanup a same-UID process (or a reused pid) may
+// recreate the registry file or bind the socket path. Release mirrors
+// Sweep: a registry file is unlinked only while it still carries the
+// helper's procStart, the socket only while nobody listens on it; a
+// mismatch is logged and left, and is not a cleanup failure.
+func TestHelperManager_ReleaseUnlinksOnlyOwned(t *testing.T) {
+	const foreign = "Mon Jan  1 00:00:00 2001"
+	t.Run("recreated registry file with another procStart survives", func(t *testing.T) {
+		tm := newTestManager(t)
+		tm.sweepOK(t)
+		hold := make(chan struct{})
+		tm.fake.HoldStop(hold)
+		h := acquireOK(t, tm, originA)
+		jsonPath := filepath.Join(tm.registryDir, strconv.Itoa(h.pid)+".json")
+
+		released := make(chan struct{})
+		go func() { tm.m.Release(h, "test"); close(released) }()
+		// The helper's own cleanup (on stdin close) removes its files;
+		// Stop is then parked on the held Wait. Someone else recreates
+		// the path with their identity.
+		eventually(t, time.Second, func() bool { return noneExist(h.files...) }, "helper removed its own files")
+		if err := os.WriteFile(jsonPath, []byte(`{"pid":`+strconv.Itoa(h.pid)+`,"procStart":"`+foreign+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		close(hold)
+		waitClosed(t, released, 3*time.Second, "Release")
+
+		if !proxyhelpertest.Exists(jsonPath) {
+			t.Errorf("a registry file carrying another procStart was unlinked")
+		}
+		if got := ccuds.RegistryProcStart(jsonPath); got != foreign {
+			t.Errorf("registry file procStart = %q, want the foreign %q untouched", got, foreign)
+		}
+		if tm.unresolvedLen() != 0 {
+			t.Errorf("unresolved = %d, want 0 (a foreign file is not a cleanup failure)", tm.unresolvedLen())
+		}
+		if recs := readProxies(t, tm.proxiesPath); len(recs) != 0 {
+			t.Errorf("proxies.json = %+v, want empty", recs)
+		}
+		if !strings.Contains(strings.Join(tm.logs.all(), "\n"), "not ours") {
+			t.Errorf("no log line about the foreign file: %v", tm.logs.all())
+		}
+	})
+	t.Run("recreated registry file with our procStart is unlinked", func(t *testing.T) {
+		tm := newTestManager(t)
+		tm.sweepOK(t)
+		hold := make(chan struct{})
+		tm.fake.HoldStop(hold)
+		h := acquireOK(t, tm, originA)
+		jsonPath := filepath.Join(tm.registryDir, strconv.Itoa(h.pid)+".json")
+
+		released := make(chan struct{})
+		go func() { tm.m.Release(h, "test"); close(released) }()
+		eventually(t, time.Second, func() bool { return noneExist(h.files...) }, "helper removed its own files")
+		if err := os.WriteFile(jsonPath, []byte(`{"pid":`+strconv.Itoa(h.pid)+`,"procStart":"`+h.procStart+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		close(hold)
+		waitClosed(t, released, 3*time.Second, "Release")
+		if proxyhelpertest.Exists(jsonPath) {
+			t.Errorf("a leftover carrying our procStart was not unlinked")
+		}
+	})
+	t.Run("live foreign listener at the sock path survives", func(t *testing.T) {
+		tm := newTestManager(t)
+		tm.sweepOK(t)
+		hold := make(chan struct{})
+		tm.fake.HoldStop(hold)
+		h := acquireOK(t, tm, originA)
+
+		released := make(chan struct{})
+		go func() { tm.m.Release(h, "test"); close(released) }()
+		eventually(t, time.Second, func() bool { return noneExist(h.sock) }, "helper closed its own socket")
+		ln, err := net.Listen("unix", h.sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		tm.os.set(func() { tm.os.refused[h.sock] = false })
+		close(hold)
+		waitClosed(t, released, 3*time.Second, "Release")
+
+		if !proxyhelpertest.Exists(h.sock) {
+			t.Errorf("a socket somebody listens on was unlinked")
+		}
+		if tm.unresolvedLen() != 0 {
+			t.Errorf("unresolved = %d, want 0 (a live listener is not a cleanup failure)", tm.unresolvedLen())
+		}
+		if !strings.Contains(strings.Join(tm.logs.all(), "\n"), "live listener") {
+			t.Errorf("no log line about the live listener: %v", tm.logs.all())
+		}
+	})
+}
+
+// TestHelperManager_RollbackUnlinksOnlyOwned (R2-C): the startup rollback
+// after a failed proxies.json write (the helper's procStart is known)
+// applies the same ownership rules as Release to what the dead helper
+// left behind.
+func TestHelperManager_RollbackUnlinksOnlyOwned(t *testing.T) {
+	const foreign = "Mon Jan  1 00:00:00 2001"
+	for _, c := range []struct {
+		name      string
+		procStart func(pid int) string // what the leftover json carries
+		wantKept  bool
+	}{
+		{"leftover with our procStart unlinked", func(pid int) string { s, _ := proxyhelpertest.ProcStart(pid); return s }, false},
+		{"leftover with another procStart kept", func(int) string { return foreign }, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tm := newTestManager(t)
+			tm.sweepOK(t)
+			tm.m.mu.Lock()
+			tm.m.proxiesPath = filepath.Join(tm.registryDir, "no-such-dir", "proxies.json")
+			tm.m.mu.Unlock()
+			pid := proxyhelpertest.PeekPID()
+			jsonPath := filepath.Join(tm.registryDir, strconv.Itoa(pid)+".json")
+			inner := tm.m.start
+			tm.m.start = func(ctx context.Context) (proxyhelper.Proc, error) {
+				p, err := inner(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return leftoverProc{Proc: p, path: jsonPath, content: `{"pid":` + strconv.Itoa(p.PID()) + `,"procStart":"` + c.procStart(p.PID()) + `"}`}, nil
+			}
+
+			_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+			if !errors.Is(err, ErrProxySpawnFailed) {
+				t.Fatalf("err = %v, want ErrProxySpawnFailed", err)
+			}
+			if got := proxyhelpertest.Exists(jsonPath); got != c.wantKept {
+				t.Errorf("leftover %s exists = %v, want %v", jsonPath, got, c.wantKept)
+			}
+			if tm.mapLen() != 0 {
+				t.Fatalf("map not empty")
+			}
+		})
+	}
+}
+
+// leftoverProc wraps a fake helper process so that, once it has exited
+// (Wait returned), a file reappears at path with content — a registry
+// file a dead helper (or someone else, at its pid) left behind.
+type leftoverProc struct {
+	proxyhelper.Proc
+	path, content string
+}
+
+func (p leftoverProc) Wait() error {
+	err := p.Proc.Wait()
+	_ = os.WriteFile(p.path, []byte(p.content), 0o600)
+	return err
 }
 
 func TestHelperManager_PumpDeliversFramesAndTouches(t *testing.T) {

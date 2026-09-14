@@ -1204,6 +1204,45 @@ func TestSelftest_Cleanup_LiveSocketKept(t *testing.T) {
 	}
 }
 
+// TestSelftest_Cleanup_ProbeSocketStillListeningIsIncomplete (R2-F): the
+// probe helper's socket still accepting after Stop means the helper (or
+// a successor holding its path) is still there — that is a cleanup
+// failure, never a note: `probe socket <path> still listening`, cleanup
+// incomplete, exit 1 even after a PASS. The path is left alone.
+func TestSelftest_Cleanup_ProbeSocketStillListeningIsIncomplete(t *testing.T) {
+	f := newStFixture(t)
+	f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
+	f.dialRefused = func(sock string) bool { return sock != f.peer.sock }
+	if err := os.MkdirAll(f.sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.peer.sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, _ := f.run(context.Background(), 5*time.Second)
+	if !strings.Contains(out, "PASS: reply from ") {
+		t.Errorf("stdout:\n%s", out)
+	}
+	if code != 1 {
+		t.Errorf("exit = %d, want 1 (cleanup incomplete overrides PASS)", code)
+	}
+	if f.peer.Stops() != 1 {
+		t.Errorf("helper stops = %d, want 1", f.peer.Stops())
+	}
+	if !proxyhelpertest.Exists(f.peer.sock) {
+		t.Errorf("a probe socket somebody listens on was unlinked")
+	}
+	want := "probe socket " + f.peer.sock + " still listening"
+	if !strings.Contains(out, want+"\n") {
+		t.Errorf("stdout lacks %q:\n%s", want, out)
+	}
+	last := f.lastLine(out)
+	if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, want) {
+		t.Errorf("last line = %q, want cleanup incomplete naming the probe socket", last)
+	}
+}
+
 // TestSelftest_Cleanup_RegisteredInboxIsAuthoritative: the registry's
 // messagingSocketPath — not a path constructed from sockDir — is what
 // cleanup probes and unlinks once the session registered.

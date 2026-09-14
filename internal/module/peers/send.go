@@ -111,14 +111,21 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 // deliverable cc agent whose inbox is exactly inbox. Proxy rows (this
 // daemon's own helpers, or another daemon's recognised via IsProxy) have
 // Agent.Type "proxy" and are never deliverable, so they never qualify.
-func findOrigin(records []ipeers.PeerRecord, inbox string) (ipeers.PeerRecord, bool) {
+// candidate reports whether any row carried that inbox at all: false
+// means the inventory says nothing about it, which — in a partial
+// inventory — is not a verdict (handleSend step 4).
+func findOrigin(records []ipeers.PeerRecord, inbox string) (rec ipeers.PeerRecord, ok, candidate bool) {
 	for _, rec := range records {
 		a := rec.Agent
-		if a != nil && a.Type == "cc" && a.Inbox == inbox && rec.Deliverable {
-			return rec, true
+		if a == nil || a.Inbox != inbox {
+			continue
+		}
+		candidate = true
+		if a.Type == "cc" && rec.Deliverable {
+			return rec, true, true
 		}
 	}
-	return ipeers.PeerRecord{}, false
+	return ipeers.PeerRecord{}, false, candidate
 }
 
 // wireFromRecord builds the sender's wire identity from its origin row:
@@ -212,14 +219,22 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. The origin: the caller's own session, attributed by its inbox.
+	// 4. The origin: the caller's own session, attributed by its inbox. A
+	// PARTIAL inventory (spec §4.2) with no row for the inbox says nothing
+	// about the caller — its tmux session may be the one whose owner
+	// lookup did not complete — so that is 503 not_ready (retryable),
+	// never origin_unknown, which the CLI reports as a verdict.
 	local := m.localEnvelope(r.Context(), snap.hostID, snap.alias)
 	if !local.OK {
 		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "local inventory unavailable: "+local.Error)
 		return
 	}
-	origin, ok := findOrigin(local.Peers, req.OriginInbox)
+	origin, ok, candidate := findOrigin(local.Peers, req.OriginInbox)
 	if !ok {
+		if !candidate && local.Partial {
+			refuseUnaudited(http.StatusServiceUnavailable, ipeers.ErrNotReady, "local inventory partial: the origin session's owner lookup did not complete; retry")
+			return
+		}
 		refuseUnaudited(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is not a live, deliverable Claude Code session on this host")
 		return
 	}

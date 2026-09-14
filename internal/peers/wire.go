@@ -13,9 +13,17 @@ import (
 const MaxTextBytes = 64 * 1024
 
 // MaxLabelBytes bounds the sender-controlled labels that end up in a
-// frame's from-name and in a helper's name: WireFrom.SessionName and
-// WireFrom.PeerName.
+// frame's from-name and in a helper's name — WireFrom.SessionName and
+// WireFrom.PeerName — and the two identity fields that end up in audit
+// rows, helper keys and proxies.json: WireFrom.AgentSessionID and
+// WireTo.AgentSessionID (a real one is a 36-byte UUID).
 const MaxLabelBytes = 256
+
+// MaxProcStartBytes bounds a proc_start before it is parsed: the layout
+// (ProcStartLayout) is 24 bytes; anything past this cap is refused
+// without reaching the parser, and a parse failure quotes at most
+// MaxQuotedBytes of it.
+const MaxProcStartBytes = 64
 
 // MaxHopChainBytes bounds the loop-detection token a relay carries
 // through; like the labels it is written back into a frame's wrapper
@@ -39,6 +47,16 @@ const (
 	PairRateLimit = 30
 	// PairRateWindow is the sliding window PairRateLimit applies over.
 	PairRateWindow = time.Minute
+	// HostRateLimit is the most /deliver requests one authenticated peer
+	// host may make within HostRateWindow, whatever they carry: the
+	// admission check runs before the body is decoded, so a paired host
+	// cannot drive inventory builds, audit inserts or dedup scans at HTTP
+	// rate with fresh msg_ids and rotating from tuples (which would also
+	// sidestep the pair limiter and fill the helper cap). A refusal is
+	// unaudited. Sized for PairRateLimit conversations of a few sessions.
+	HostRateLimit = 120
+	// HostRateWindow is the sliding window HostRateLimit applies over.
+	HostRateWindow = time.Minute
 	// InterDaemonTimeout bounds one daemon-to-daemon HTTP call (/deliver).
 	InterDaemonTimeout = 10 * time.Second
 	// SocketWriteTimeout bounds one frame write into a Claude Code inbox
@@ -77,6 +95,20 @@ func validateLabel(name, s string, max int, printable bool) error {
 				return fmt.Errorf("%w: %s contains a control character", ErrFieldInvalid, name)
 			}
 		}
+	}
+	return nil
+}
+
+// validateProcStart checks a sender-supplied proc_start: at most
+// MaxProcStartBytes (ErrFieldInvalid, before any parsing), then it must
+// parse via ParseProcStart — the failure quotes the value bounded, never
+// time.ParseError's own rendering of the raw input.
+func validateProcStart(name, s string) error {
+	if len(s) > MaxProcStartBytes {
+		return fmt.Errorf("%w: %s exceeds %d bytes", ErrFieldInvalid, name, MaxProcStartBytes)
+	}
+	if _, err := ParseProcStart(s); err != nil {
+		return fmt.Errorf("%s does not parse: %s", name, quoteBounded(s))
 	}
 	return nil
 }
@@ -341,13 +373,15 @@ func ValidateMode(s string) (string, error) {
 }
 
 // Validate checks a DeliverRequest against the wire contract: MsgID must be
-// a UUID; the From and To tuples must each be complete (non-empty
-// HostID/AgentSessionID, PID > 0, ProcStart parses via ParseProcStart);
-// From.DeclaredMode must be a valid mode; From.SessionName and
-// From.PeerName are at most MaxLabelBytes and HopChain at most
-// MaxHopChainBytes of printable UTF-8 (validateLabel); and Text must pass
-// ValidateText. An error that quotes a sender-supplied value (msg_id,
-// declared_mode) carries at most MaxQuotedBytes of it.
+// a UUID; the From and To tuples must each be complete (non-empty HostID,
+// AgentSessionID non-empty and at most MaxLabelBytes of printable UTF-8,
+// PID > 0, ProcStart at most MaxProcStartBytes and parsing via
+// ParseProcStart); From.DeclaredMode must be a valid mode;
+// From.SessionName and From.PeerName are at most MaxLabelBytes and
+// HopChain at most MaxHopChainBytes of printable UTF-8 (validateLabel);
+// and Text must pass ValidateText. An error that quotes a sender-supplied
+// value (msg_id, declared_mode, proc_start) carries at most MaxQuotedBytes
+// of it.
 func (r DeliverRequest) Validate() error {
 	if !IsUUID(r.MsgID) {
 		return fmt.Errorf("msg_id is not a valid UUID: %s", quoteBounded(r.MsgID))
@@ -359,21 +393,27 @@ func (r DeliverRequest) Validate() error {
 	if r.From.AgentSessionID == "" {
 		return errors.New("from.agent_session_id is empty")
 	}
+	if err := validateLabel("from.agent_session_id", r.From.AgentSessionID, MaxLabelBytes, true); err != nil {
+		return err
+	}
 	if r.From.PID <= 0 {
 		return fmt.Errorf("from.pid must be > 0, got %d", r.From.PID)
 	}
-	if _, err := ParseProcStart(r.From.ProcStart); err != nil {
-		return fmt.Errorf("from.proc_start: %w", err)
+	if err := validateProcStart("from.proc_start", r.From.ProcStart); err != nil {
+		return err
 	}
 
 	if r.To.AgentSessionID == "" {
 		return errors.New("to.agent_session_id is empty")
 	}
+	if err := validateLabel("to.agent_session_id", r.To.AgentSessionID, MaxLabelBytes, true); err != nil {
+		return err
+	}
 	if r.To.PID <= 0 {
 		return fmt.Errorf("to.pid must be > 0, got %d", r.To.PID)
 	}
-	if _, err := ParseProcStart(r.To.ProcStart); err != nil {
-		return fmt.Errorf("to.proc_start: %w", err)
+	if err := validateProcStart("to.proc_start", r.To.ProcStart); err != nil {
+		return err
 	}
 
 	if _, err := ValidateMode(r.From.DeclaredMode); err != nil {

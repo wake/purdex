@@ -198,6 +198,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 		audit:            f.audit,
 		dedup:            newDedupSet(ipeers.DedupWindow, now),
 		pairs:            newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, now),
+		hostLimit:        newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, now),
 		writeFrame:       ccuds.WriteFrame,
 		sockWriteTimeout: opts.sockWriteTimeout,
 		newMsgID:         uuid.NewString,
