@@ -22,6 +22,16 @@ type Module interface {
 	Stop(ctx context.Context) error
 }
 
+// Closer is the optional interface a module can implement to clean up resources
+// during shutdown. Modules without Closer are skipped.
+type Closer interface {
+	Close() error
+}
+
+// ShutdownBudget is the single deadline shared by StopModules and the HTTP
+// server's Shutdown during daemon shutdown (spec §4.5).
+const ShutdownBudget = 10 * time.Second
+
 // CoreDeps holds the shared infrastructure injected into Core.
 type CoreDeps struct {
 	Config   *config.Config
@@ -109,6 +119,22 @@ func (c *Core) StopModules(ctx context.Context) error {
 	for i := len(c.modules) - 1; i >= 0; i-- {
 		if err := c.modules[i].Stop(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("module %s stop: %w", c.modules[i].Name(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// CloseModules calls Close on every module implementing Closer, in reverse
+// registration order, joining errors; modules without Closer are skipped.
+func (c *Core) CloseModules() error {
+	var errs []error
+	for i := len(c.modules) - 1; i >= 0; i-- {
+		closer, ok := c.modules[i].(Closer)
+		if !ok {
+			continue
+		}
+		if err := closer.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("module %s close: %w", c.modules[i].Name(), err))
 		}
 	}
 	return errors.Join(errs...)
