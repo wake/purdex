@@ -192,3 +192,65 @@ describe('scheme-only guard', () => {
     expect(texts('https://).')).toEqual([])
   })
 })
+
+describe('stop set, one character at a time (step 1)', () => {
+  // Literal copy of the full-width / CJK stop set in url.ts (minus \s"'<>`),
+  // so a dropped character from the constant fails one named row here.
+  const FULL_WIDTH_STOPS = [...'，。、；：！？（）［］「」『』【】《》〈〉〔〕｛｝“”‘’…｡｢｣､']
+
+  it.each(
+    FULL_WIDTH_STOPS.map((c) => [c, `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`]),
+  )('stops at %s (%s)', (c) => {
+    expect(texts(`https://e.com/a${c}b`)).toEqual(['https://e.com/a'])
+  })
+})
+
+describe('Latin / combining-mark exemption from the cut (step 2)', () => {
+  it('keeps an accented Latin IDN host (bücher.example)', () => {
+    expect(texts('請見 https://bücher.example/catalog')).toEqual(['https://bücher.example/catalog'])
+  })
+
+  it('keeps an NFC accented path segment with the right range', () => {
+    const line = 'README.md:12: https://example.com/café/menu'
+    const out = urlMatcher.provide(line)
+    expect(out).toHaveLength(1)
+    expect(out[0].text).toBe('https://example.com/café/menu')
+    expect(out[0].range).toEqual({ startCol: 14, endCol: 14 + 'https://example.com/café/menu'.length })
+  })
+
+  it('keeps an NFD accented path segment (combining mark after ASCII letter)', () => {
+    const url = 'https://example.com/café/menu'
+    const out = urlMatcher.provide(`${url} x`)
+    expect(out).toHaveLength(1)
+    expect(out[0].text).toBe(url)
+  })
+
+  it('still cuts Cyrillic glued after ASCII (accepted)', () => {
+    expect(texts('https://e.com/abcдом')).toEqual(['https://e.com/abc'])
+  })
+})
+
+describe('rescan after a cut (step 2)', () => {
+  it('finds a second URL swallowed by the greedy scan', () => {
+    const out = urlMatcher.provide('參考https://a.com/x或https://b.com/y')
+    expect(out.map((t) => t.text)).toEqual(['https://a.com/x', 'https://b.com/y'])
+    expect(out[0].range).toEqual({ startCol: 2, endCol: 17 })
+    expect(out[1].range).toEqual({ startCol: 18, endCol: 33 })
+  })
+
+  it('finds every URL in a three-URL chain', () => {
+    expect(texts('參考https://a.com/x或https://b.com/y再看https://c.com/z')).toEqual([
+      'https://a.com/x',
+      'https://b.com/y',
+      'https://c.com/z',
+    ])
+  })
+
+  it('returns identical results when provide is called twice on the same line', () => {
+    const line = '參考https://a.com/x或https://b.com/y'
+    const first = urlMatcher.provide(line)
+    const second = urlMatcher.provide(line)
+    expect(second).toEqual(first)
+    expect(second).toHaveLength(2)
+  })
+})
