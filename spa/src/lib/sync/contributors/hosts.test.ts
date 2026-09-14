@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createHostsContributor } from './hosts'
-import { useHostStore } from '../../../stores/useHostStore'
+import { useHostStore, selectDevHostId } from '../../../stores/useHostStore'
 import type { FullPayload } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -133,6 +133,29 @@ describe('createHostsContributor', () => {
     expect(state.hosts['h-1'].name).toBe('remote-host')
     expect(state.hostOrder).toEqual(['h-1'])
     expect(state.activeHostId).toBe('h-1')
+  })
+
+  it('full-replace that drops the chosen dev host makes selectDevHostId read null', () => {
+    const state = useHostStore.getState()
+    const dev = state.hostOrder[0]
+    state.setDevHost(dev)
+    const incoming: FullPayload = {
+      version: 1,
+      data: {
+        hosts: { 'h-1': { id: 'h-1', name: 'remote-host', ip: '10.0.0.1', port: 8080, order: 0 } },
+        hostOrder: ['h-1'],
+        activeHostId: 'h-1',
+      },
+    }
+    contributor.deserialize(incoming, { type: 'full-replace' })
+    expect(selectDevHostId(useHostStore.getState())).toBeNull()
+  })
+
+  it('serialize does not carry devHostId', () => {
+    const state = useHostStore.getState()
+    state.setDevHost(state.hostOrder[0])
+    const payload = contributor.serialize() as FullPayload
+    expect('devHostId' in payload.data).toBe(false)
   })
 
   // -------------------------------------------------------------------------

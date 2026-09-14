@@ -48,6 +48,8 @@ interface HostState {
   hostOrder: string[]
   runtime: Record<string, HostRuntime>
   activeHostId: string | null
+  /** Host the Development page targets. Device-local, not synced (spec D3). */
+  devHostId: string | null
 
   addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
   updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
@@ -55,6 +57,7 @@ interface HostState {
   removeHost: (hostId: string) => void
   reorderHosts: (orderedIds: string[]) => void
   setActiveHost: (hostId: string) => void
+  setDevHost: (hostId: string | null) => void
   setRuntime: (hostId: string, runtime: Partial<HostRuntime>) => void
   getDaemonBase: (hostId: string) => string
   getWsBase: (hostId: string) => string
@@ -77,7 +80,22 @@ function createDefaultState() {
     hostOrder: [DEFAULT_ID],
     runtime: {} as Record<string, HostRuntime>,
     activeHostId: DEFAULT_ID as string | null,
+    devHostId: null as string | null,
   }
+}
+
+/** Exact-endpoint lookup shared by registerLocalHost and the Local daemon UI
+ *  (spec §3.3). Strict ip+port equality — 127.0.0.1 and a Tailscale IP are
+ *  two endpoints, never merged. */
+export function findHostByEndpoint(hosts: Record<string, HostConfig>, ip: string, port: number): HostConfig | undefined {
+  return Object.values(hosts).find((h) => h.ip === ip && h.port === port)
+}
+
+/** Dev host as the Development page must see it: null unless the persisted
+ *  id still resolves to a host (deleted locally or dropped by a sync
+ *  full-replace → unset, user re-picks). Pure so hooks can pass it directly. */
+export function selectDevHostId(state: Pick<HostState, 'devHostId' | 'hosts'>): string | null {
+  return state.devHostId !== null && state.hosts[state.devHostId] ? state.devHostId : null
 }
 
 export const useHostStore = create<HostState>()(
@@ -117,7 +135,7 @@ export const useHostStore = create<HostState>()(
         const ip = u.hostname
         // URL drops a default port (":80" / ":443") — restore it by scheme.
         const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80)
-        const existing = Object.values(get().hosts).find((h) => h.ip === ip && h.port === port)
+        const existing = findHostByEndpoint(get().hosts, ip, port)
         if (existing) {
           if (!existing.token) get().updateHost(existing.id, { token })
           return existing.id
@@ -140,6 +158,7 @@ export const useHostStore = create<HostState>()(
             hostOrder: newOrder,
             runtime: restRuntime,
             activeHostId,
+            devHostId: state.devHostId === hostId ? null : state.devHostId,
           }
         }),
 
@@ -154,6 +173,9 @@ export const useHostStore = create<HostState>()(
 
       setActiveHost: (hostId) =>
         set((state) => (state.hosts[hostId] ? { activeHostId: hostId } : state)),
+
+      setDevHost: (hostId) =>
+        set((state) => (hostId === null || state.hosts[hostId] ? { devHostId: hostId } : state)),
 
       setRuntime: (hostId, runtime) =>
         set((state) => ({
@@ -197,6 +219,7 @@ export const useHostStore = create<HostState>()(
         hosts: state.hosts,
         hostOrder: state.hostOrder,
         activeHostId: state.activeHostId,
+        devHostId: state.devHostId,
       }),
     },
   ),
