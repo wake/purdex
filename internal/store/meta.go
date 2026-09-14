@@ -110,6 +110,33 @@ func migrateMetaDB(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS peer_messages_msg ON peer_messages(msg_id, direction)`); err != nil {
 		return err
 	}
+
+	// peer_labels: Peer Address v2 (spec §3.3). One user label per
+	// conversation (sessionId), one conversation per label; label is NULL
+	// after a release so the row keeps carrying rev. peer_label_seq is
+	// the host-wide strictly increasing revision.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS peer_labels (
+			session_id TEXT PRIMARY KEY,
+			label      TEXT UNIQUE,
+			rev        INTEGER NOT NULL,
+			set_at     INTEGER NOT NULL
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS peer_label_seq (
+			id  INTEGER PRIMARY KEY CHECK (id = 1),
+			rev INTEGER NOT NULL
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO peer_label_seq (id, rev) VALUES (1, 0)`); err != nil {
+		return err
+	}
+
 	return nil
 }
 
