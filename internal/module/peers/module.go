@@ -438,7 +438,7 @@ func (m *Module) warnNewerCCVersions(entries []ipeers.Entry) {
 		if _, alreadyWarned := m.warnedVersions.LoadOrStore(e.Version, struct{}{}); alreadyWarned {
 			continue
 		}
-		log.Printf("peers: Claude Code %s is newer than the last verified %s; run pdx msg selftest", e.Version, ccuds.VerifiedCCVersion)
+		m.logf("peers: Claude Code %s is newer than the last verified %s; run pdx msg selftest", e.Version, ccuds.VerifiedCCVersion)
 	}
 }
 

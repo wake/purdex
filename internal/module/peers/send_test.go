@@ -173,6 +173,77 @@ func TestPostDeliver_Timeout(t *testing.T) {
 	}
 }
 
+// TestPostDeliver_UnexpectedOKBodyIsError pins that a 200 whose body is
+// not a DeliverResponse this daemon would accept — a result outside
+// {delivered, delivery_uncertain}, or an effective_mode that is empty or
+// not a mode — is a transport-class error (bounded text), never a
+// response: the remote's fields must not reach an audit row or a caller.
+func TestPostDeliver_UnexpectedOKBodyIsError(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"result x", `{"msg_id":"m","result":"x","effective_mode":"prompting"}`},
+		{"result huge", `{"msg_id":"m","result":"` + strings.Repeat("r", 4096) + `","effective_mode":"prompting"}`},
+		{"effective_mode root", `{"msg_id":"m","result":"delivered","effective_mode":"root"}`},
+		{"effective_mode empty", `{"msg_id":"m","result":"delivered"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(c.body))
+			}))
+			defer srv.Close()
+
+			resp, remote, err := postDeliver(context.Background(), newDeliverClient(), srv.URL, "tok", sampleDeliverRequest())
+			if err == nil || remote != nil {
+				t.Fatalf("postDeliver = resp %+v remote %+v err %v, want a transport-class error", resp, remote, err)
+			}
+			if resp != (ipeers.DeliverResponse{}) {
+				t.Errorf("resp = %+v, want zero", resp)
+			}
+			if !strings.HasPrefix(err.Error(), "decode response: ") {
+				t.Errorf("err = %v, want a decode error", err)
+			}
+			if len(err.Error()) > 2*maxRemoteTextBytes {
+				t.Errorf("err is %d bytes, want bounded", len(err.Error()))
+			}
+		})
+	}
+}
+
+// TestSend_UnexpectedDeliverBodyNotEchoed drives the real postDeliver
+// through /send against a peer answering 200 with an unbounded, unknown
+// result: the caller gets remote_error (status 0), no SendResponse; the
+// audit row records no result/mode and a bounded error.
+func TestSend_UnexpectedDeliverBodyNotEchoed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"msg_id":"m","result":"` + strings.Repeat("r", 4096) + `","effective_mode":"root"}`))
+	}))
+	defer srv.Close()
+	host := airHost(remoteToken, false)
+	host.URL = srv.URL
+	s := newSendEnv(t, envOpts{hosts: []config.PeerHost{host}})
+	s.m.post = postDeliver
+
+	ae := assertRefused(t, s.send(adminCtx(), s.sendReq()), http.StatusBadGateway, ipeers.ErrRemoteError)
+	if ae.Remote == nil || ae.Remote.Status != 0 || !strings.HasPrefix(ae.Remote.Error, "decode response: ") {
+		t.Errorf("remote = %+v, want status 0 with the decode error", ae.Remote)
+	}
+	if ae.Remote != nil && len(ae.Remote.Error) > maxRemoteTextBytes+len("…") {
+		t.Errorf("remote error is %d bytes, want bounded", len(ae.Remote.Error))
+	}
+	row := s.onlyRow()
+	if row.Result != "" || row.EffectiveMode != "" {
+		t.Errorf("row result/mode = %q/%q, want both empty (the remote's fields must not be echoed)", row.Result, row.EffectiveMode)
+	}
+	if !strings.HasPrefix(row.Error, "decode response: ") || len(row.Error) > maxRemoteTextBytes+len("…") {
+		t.Errorf("row error = %q (%d bytes), want the bounded decode error", row.Error, len(row.Error))
+	}
+}
+
 func TestNewDeliverClient(t *testing.T) {
 	c := newDeliverClient()
 	if c.Timeout != ipeers.InterDaemonTimeout {

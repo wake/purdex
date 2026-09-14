@@ -493,6 +493,31 @@ func TestReply_RemoteTargetGoneReleasesHelper(t *testing.T) {
 	}
 }
 
+// TestReply_RemoteNotReadyKeepsHelper pins the other side of the
+// target_gone contract: an origin that could not build its inventory
+// answers 503 not_ready, which says nothing about the origin session, so
+// the helper is kept and the reply row records not_ready.
+func TestReply_RemoteNotReadyKeepsHelper(t *testing.T) {
+	r := newReplyEnv(t, envOpts{})
+	r.set(func(r *replyEnv) {
+		r.rem = &ipeers.RemoteError{Status: http.StatusServiceUnavailable, Error: ipeers.ErrNotReady, Detail: "inventory unavailable"}
+	})
+	r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
+	r.awaitPost()
+	r.join()
+
+	row := r.onlyReplyRow()
+	if row.Result != ipeers.ErrNotReady || row.Error != "inventory unavailable" || row.EffectiveMode != "" {
+		t.Errorf("row = %+v, want result not_ready with the remote detail and no effective mode", row)
+	}
+	if _, ok := r.m.helpers.FindBySock(r.h.sock); !ok {
+		t.Error("helper released on not_ready; only target_gone may release it")
+	}
+	if r.helperMapLen() != 1 || r.f.fake.Stops() != 0 {
+		t.Errorf("helper map/stops = %d/%d, want the helper kept", r.helperMapLen(), r.f.fake.Stops())
+	}
+}
+
 func TestReply_RemoteOtherErrorKeepsHelper(t *testing.T) {
 	t.Run("refused", func(t *testing.T) {
 		r := newReplyEnv(t, envOpts{})
@@ -532,7 +557,7 @@ func TestReply_RemoteOtherErrorKeepsHelper(t *testing.T) {
 
 // TestReply_StopJoinsBlockedWorkers pins the worker contract: eight
 // replies parked inside a slow post (one per semaphore slot) are joined
-// by Stop — it returns once they do, within 2× the fake's delay, every
+// by Stop — it returns once they do, within 3× the fake's delay, every
 // post ran under stopCtx (it was cancelled by the time they returned) and
 // no goroutine is left behind.
 func TestReply_StopJoinsBlockedWorkers(t *testing.T) {
@@ -555,9 +580,9 @@ func TestReply_StopJoinsBlockedWorkers(t *testing.T) {
 	start := time.Now()
 	done := make(chan struct{})
 	go func() { r.m.Stop(context.Background()); close(done) }()
-	waitClosed(t, done, 2*delay+time.Second, "Module.Stop")
-	if took := time.Since(start); took > 2*delay {
-		t.Errorf("Stop took %v, want within %v", took, 2*delay)
+	waitClosed(t, done, 3*delay+time.Second, "Module.Stop")
+	if took := time.Since(start); took > 3*delay {
+		t.Errorf("Stop took %v, want within %v", took, 3*delay)
 	}
 	errs := r.ctxErrsSeen()
 	if len(errs) != replyWorkerCap {

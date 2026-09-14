@@ -25,7 +25,8 @@ const msgSendTimeout = 15 * time.Second
 
 // msgDefaultLogTail is `pdx msg log`'s default --tail, mirroring
 // internal/module/peers.defaultLogTail (cmd/pdx must not import that
-// package — see the mirrored logEntry/logResponse note below).
+// daemon package; the wire types themselves are shared via
+// internal/peers).
 const msgDefaultLogTail = 50
 
 // msgUsage is the generic grammar-rejection message for `pdx msg`:
@@ -357,35 +358,10 @@ func writeMsgJSONPassthrough(result peersHTTPResult, stdout io.Writer) int {
 
 // --- log: GET /api/peers/log ------------------------------------------------
 //
-// cmd/pdx must not import internal/module/peers (that would pull a daemon
-// package into the CLI binary), so GET /api/peers/log's response shape is
-// mirrored here as small local structs instead of a shared type. Keep
-// field names/tags in sync with internal/module/peers/reply.go's
-// logEntry/logResponse if that file's wire format changes.
-
-// msgLogEntry mirrors internal/module/peers.logEntry: one row of GET
-// /api/peers/log.
-type msgLogEntry struct {
-	ID            int64  `json:"id"`
-	MsgID         string `json:"msg_id"`
-	NativeMsgID   string `json:"native_msg_id"`
-	Direction     string `json:"direction"`
-	TS            string `json:"ts"`
-	FromHostID    string `json:"from_host_id"`
-	FromSessionID string `json:"from_session_id"`
-	ToHostID      string `json:"to_host_id"`
-	ToSessionID   string `json:"to_session_id"`
-	DeclaredMode  string `json:"declared_mode"`
-	EffectiveMode string `json:"effective_mode"`
-	Bytes         int    `json:"bytes"`
-	Result        string `json:"result"`
-	Error         string `json:"error"`
-}
-
-// msgLogResponse mirrors GET /api/peers/log's body.
-type msgLogResponse struct {
-	Messages []msgLogEntry `json:"messages"`
-}
+// The response shape is ipeers.LogResponse / ipeers.LogEntry, shared with
+// the daemon module (cmd/pdx must not import internal/module/peers, which
+// would pull a daemon package into the CLI binary; internal/peers is a
+// leaf).
 
 // runMsgLog implements `pdx msg log [--tail N] [--json] [--config
 // <path>]`.
@@ -416,7 +392,7 @@ func runMsgLog(inv msgInvocation, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	var lr msgLogResponse
+	var lr ipeers.LogResponse
 	if err := json.Unmarshal(result.body, &lr); err != nil {
 		fmt.Fprintln(stderr, "pdx msg: invalid response")
 		return 1
@@ -432,7 +408,7 @@ func runMsgLog(inv msgInvocation, stdout, stderr io.Writer) int {
 // "15:04:05"; MSG_ID/session IDs in FROM/TO are truncated to their first 8
 // characters; MODE is "decl→eff" using each mode's first letter
 // (p→p/b→p/b→b).
-func formatMsgLogTable(entries []msgLogEntry, loc *time.Location) string {
+func formatMsgLogTable(entries []ipeers.LogEntry, loc *time.Location) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "TIME\tDIR\tMSG_ID\tFROM\tTO\tMODE\tBYTES\tRESULT\tERROR")
@@ -495,19 +471,9 @@ func msgModeLetter(mode string) string {
 }
 
 // --- deliver: GET/PUT /api/peers/settings -----------------------------------
-
-// msgSettingsResponse mirrors internal/module/peers.settingsResponse: the
-// body of both GET and PUT /api/peers/settings.
-type msgSettingsResponse struct {
-	Deliver bool   `json:"deliver"`
-	Alias   string `json:"alias"`
-}
-
-// msgPutSettingsRequest mirrors internal/module/peers.putSettingsRequest:
-// PUT /api/peers/settings' body.
-type msgPutSettingsRequest struct {
-	Deliver *bool `json:"deliver"`
-}
+//
+// The bodies are ipeers.SettingsResponse (GET and PUT) and
+// ipeers.PutSettingsRequest (PUT), shared with the daemon module.
 
 // runMsgDeliver implements `pdx msg deliver <on|off|status> [--json]
 // [--config <path>]`.
@@ -525,7 +491,7 @@ func runMsgDeliver(inv msgInvocation, stdout, stderr io.Writer) int {
 		result, err = doPeersRequest(http.MethodGet, reqURL, nil, cfg.Token, peersRequestTimeout)
 	} else {
 		want := inv.deliverArg == "on"
-		payload, merr := json.Marshal(msgPutSettingsRequest{Deliver: &want})
+		payload, merr := json.Marshal(ipeers.PutSettingsRequest{Deliver: &want})
 		if merr != nil {
 			fmt.Fprintf(stderr, "pdx msg: %v\n", merr)
 			return 1
@@ -550,7 +516,7 @@ func runMsgDeliver(inv msgInvocation, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	var sr msgSettingsResponse
+	var sr ipeers.SettingsResponse
 	if err := json.Unmarshal(result.body, &sr); err != nil {
 		fmt.Fprintln(stderr, "pdx msg: invalid response")
 		return 1

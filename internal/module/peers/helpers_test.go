@@ -674,6 +674,70 @@ func TestHelperManager_WriteProxiesFailureRollsBack(t *testing.T) {
 	}
 }
 
+// leftoverSockProc wraps a fake helper process so that, once it has
+// exited (Wait returned), its socket path reappears on disk — what a
+// helper that died without running its own cleanup leaves behind.
+type leftoverSockProc struct {
+	proxyhelper.Proc
+	sock string
+}
+
+func (p leftoverSockProc) Wait() error {
+	err := p.Proc.Wait()
+	_ = os.WriteFile(p.sock, nil, 0o600)
+	return err
+}
+
+// TestHelperManager_RollbackRemovesLeftoverSocket pins that the startup
+// rollback (after a failed procStart / proxies.json write) removes the
+// helper's socket path as well as its registry files — but only when
+// nobody listens on it any more, exactly like Release.
+func TestHelperManager_RollbackRemovesLeftoverSocket(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		refused bool // dialRefused answer for the leftover path
+		wantIn  bool // the path is expected to survive
+	}{
+		{"dead socket removed", true, false},
+		{"live socket kept", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tm := newTestManager(t)
+			tm.sweepOK(t)
+			pid := proxyhelpertest.PeekPID()
+			sock := filepath.Join(tm.sockDir, strconv.Itoa(pid)+".sock")
+			inner := tm.m.start
+			tm.m.start = func(ctx context.Context) (proxyhelper.Proc, error) {
+				p, err := inner(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return leftoverSockProc{Proc: p, sock: filepath.Join(tm.sockDir, strconv.Itoa(p.PID())+".sock")}, nil
+			}
+			tm.os.set(func() {
+				tm.os.psErr[pid] = errors.New("ps: boom")
+				tm.os.refused[sock] = c.refused
+			})
+
+			_, err := tm.m.Acquire(context.Background(), originA, "air/a")
+			if !errors.Is(err, ErrProxySpawnFailed) {
+				t.Fatalf("err = %v, want ErrProxySpawnFailed", err)
+			}
+			if tm.fake.Stops() != 1 {
+				t.Fatalf("stops = %d, want 1", tm.fake.Stops())
+			}
+			jsonPath := filepath.Join(tm.registryDir, strconv.Itoa(pid)+".json")
+			eventually(t, time.Second, func() bool { return noneExist(jsonPath) }, "registry file removed")
+			if got := proxyhelpertest.Exists(sock); got != c.wantIn {
+				t.Errorf("socket %s exists = %v, want %v", sock, got, c.wantIn)
+			}
+			if tm.mapLen() != 0 {
+				t.Fatalf("map not empty")
+			}
+		})
+	}
+}
+
 func TestHelperManager_ProxiesJSONShapeAfterTwoSpawns(t *testing.T) {
 	tm := newTestManager(t)
 	tm.sweepOK(t)

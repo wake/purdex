@@ -207,12 +207,14 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	// 7. Re-verify the target against this daemon's own inventory: the
 	// sender's view may be stale, and a session that restarted, whose inbox
 	// died, or that is a proxy row is not this target. An inventory that
-	// could not be built at all is answered with a fixed detail — its
-	// error text is local (tmux, registry paths) and stays in the audit
-	// row and the log.
+	// could not be built at all says nothing about the target: it is this
+	// daemon's own trouble, answered 503 not_ready (never target_gone,
+	// which the origin takes as a verdict and reaps the sender's helper on)
+	// with a fixed detail — the error text is local (tmux, registry paths)
+	// and stays in the audit row and the log.
 	env := m.localEnvelope(r.Context(), snap.localHostID, snap.localAlias)
 	if !env.OK {
-		refuseWith(http.StatusConflict, ipeers.ErrTargetGone, "inventory unavailable", "inventory unavailable: "+env.Error)
+		refuseWith(http.StatusServiceUnavailable, ipeers.ErrNotReady, "inventory unavailable", "inventory unavailable: "+env.Error)
 		return
 	}
 	target, detail := findTarget(env.Peers, req.To)
@@ -240,11 +242,14 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 		// a spawn failure wraps its cause, and that cause must never be
 		// mistaken for the caller leaving. Only then is "the caller is
 		// gone" decided — by the request's own context, not by the shape
-		// of the error — and anything else is a spawn failure with its
-		// text in the audit row.
+		// of the error — and anything else is a spawn failure. A spawn
+		// error names local paths (the registry dir, proxies.json): the
+		// peer gets a fixed detail, the audit row and the log keep the
+		// cause.
+		const spawnDetail = "helper could not be started"
 		switch {
 		case errors.Is(err, ErrProxySpawnFailed):
-			refuse(http.StatusBadGateway, ipeers.ErrProxySpawnFailed, err.Error())
+			refuseWith(http.StatusBadGateway, ipeers.ErrProxySpawnFailed, spawnDetail, err.Error())
 		case errors.Is(err, ErrProxyLimit):
 			refuse(http.StatusServiceUnavailable, ipeers.ErrProxyLimit, "helper cap reached")
 		case errors.Is(err, ErrNotReady) || m.stopCtx.Err() != nil:
@@ -255,7 +260,7 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 			m.setResult(id, "", resultClientGone, "")
 			m.logf("peers: deliver %s from %q: caller gone while waiting for its helper", req.MsgID, principal.Alias)
 		default:
-			refuse(http.StatusBadGateway, ipeers.ErrProxySpawnFailed, err.Error())
+			refuseWith(http.StatusBadGateway, ipeers.ErrProxySpawnFailed, spawnDetail, err.Error())
 		}
 		return
 	}

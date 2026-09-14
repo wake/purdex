@@ -17,8 +17,15 @@ const MaxTextBytes = 64 * 1024
 // WireFrom.PeerName.
 const MaxLabelBytes = 256
 
-// MaxHopChainBytes bounds the loop-detection token a relay carries through.
+// MaxHopChainBytes bounds the loop-detection token a relay carries
+// through; like the labels it is written back into a frame's wrapper
+// attribute, so it is printable UTF-8 too.
 const MaxHopChainBytes = 1024
+
+// MaxQuotedBytes bounds a sender-supplied value quoted inside a Validate
+// error (msg_id, declared_mode): the receiver echoes that text to the
+// peer and into its audit row, so the value is cut here, at the source.
+const MaxQuotedBytes = 64
 
 // Wire limits (spec §4): the receiving daemon's in-memory windows and the
 // two socket/HTTP timeouts. Named here, next to MaxTextBytes, so every
@@ -72,6 +79,22 @@ func validateLabel(name, s string, max int, printable bool) error {
 		}
 	}
 	return nil
+}
+
+// quoteBounded renders s for an error message as %q would, but never more
+// than MaxQuotedBytes of it: a longer value is cut on a rune boundary and
+// marked with "…" inside the quotes. Validate's callers echo these errors
+// to the peer and into audit rows, so a sender-supplied value must not
+// travel whole.
+func quoteBounded(s string) string {
+	if len(s) <= MaxQuotedBytes {
+		return fmt.Sprintf("%q", s)
+	}
+	cut := MaxQuotedBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%q", s[:cut]+"…")
 }
 
 // ValidationCode maps a Validate error to its wire error code:
@@ -212,6 +235,44 @@ type RemoteError struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// LogEntry is one row of GET /api/peers/log: every peer_messages column,
+// snake_case, TS as RFC 3339 with milliseconds in UTC (the daemon formats
+// it; the CLI parses it). The wire shape is defined here — shared by the
+// daemon module and cmd/pdx — not on store.PeerMessage.
+type LogEntry struct {
+	ID            int64  `json:"id"`
+	MsgID         string `json:"msg_id"`
+	NativeMsgID   string `json:"native_msg_id"`
+	Direction     string `json:"direction"`
+	TS            string `json:"ts"`
+	FromHostID    string `json:"from_host_id"`
+	FromSessionID string `json:"from_session_id"`
+	ToHostID      string `json:"to_host_id"`
+	ToSessionID   string `json:"to_session_id"`
+	DeclaredMode  string `json:"declared_mode"`
+	EffectiveMode string `json:"effective_mode"`
+	Bytes         int    `json:"bytes"`
+	Result        string `json:"result"`
+	Error         string `json:"error"`
+}
+
+// LogResponse is the body of GET /api/peers/log.
+type LogResponse struct {
+	Messages []LogEntry `json:"messages"`
+}
+
+// SettingsResponse is the body of both GET and PUT /api/peers/settings.
+type SettingsResponse struct {
+	Deliver bool   `json:"deliver"`
+	Alias   string `json:"alias"`
+}
+
+// PutSettingsRequest is PUT /api/peers/settings' body. Deliver is a
+// pointer: absent (nil) means "leave unchanged", present sets the value.
+type PutSettingsRequest struct {
+	Deliver *bool `json:"deliver"`
+}
+
 // OriginKey is the helper key, the proxies.json origin and the audit
 // identity of a sender. JSON tags match spec §4.5 exactly.
 type OriginKey struct {
@@ -275,7 +336,7 @@ func ValidateMode(s string) (string, error) {
 	case ModePrompting, ModeBypass:
 		return s, nil
 	default:
-		return "", fmt.Errorf("%w: bad mode %q", ErrModeInvalid, s)
+		return "", fmt.Errorf("%w: bad mode %s", ErrModeInvalid, quoteBounded(s))
 	}
 }
 
@@ -283,12 +344,13 @@ func ValidateMode(s string) (string, error) {
 // a UUID; the From and To tuples must each be complete (non-empty
 // HostID/AgentSessionID, PID > 0, ProcStart parses via ParseProcStart);
 // From.DeclaredMode must be a valid mode; From.SessionName and
-// From.PeerName are at most MaxLabelBytes of printable UTF-8 and HopChain
-// at most MaxHopChainBytes of UTF-8 (validateLabel); and Text must pass
-// ValidateText.
+// From.PeerName are at most MaxLabelBytes and HopChain at most
+// MaxHopChainBytes of printable UTF-8 (validateLabel); and Text must pass
+// ValidateText. An error that quotes a sender-supplied value (msg_id,
+// declared_mode) carries at most MaxQuotedBytes of it.
 func (r DeliverRequest) Validate() error {
 	if !IsUUID(r.MsgID) {
-		return fmt.Errorf("msg_id is not a valid UUID: %q", r.MsgID)
+		return fmt.Errorf("msg_id is not a valid UUID: %s", quoteBounded(r.MsgID))
 	}
 
 	if r.From.HostID == "" {
@@ -324,7 +386,7 @@ func (r DeliverRequest) Validate() error {
 	if err := validateLabel("from.peer_name", r.From.PeerName, MaxLabelBytes, true); err != nil {
 		return err
 	}
-	if err := validateLabel("hop_chain", r.HopChain, MaxHopChainBytes, false); err != nil {
+	if err := validateLabel("hop_chain", r.HopChain, MaxHopChainBytes, true); err != nil {
 		return err
 	}
 

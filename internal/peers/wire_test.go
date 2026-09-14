@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // --- golden JSON: WireFrom / WireTo ---------------------------------------
@@ -615,9 +616,9 @@ func TestDeliverRequest_Validate_Sentinels(t *testing.T) {
 
 // TestDeliverRequest_Validate_LabelBounds pins the caps on the
 // sender-controlled labels that end up in a frame or a helper name:
-// session_name and peer_name ≤ MaxLabelBytes and free of control
-// characters, hop_chain ≤ MaxHopChainBytes, all valid UTF-8 — each a
-// bad_request via ErrFieldInvalid.
+// session_name and peer_name ≤ MaxLabelBytes, hop_chain ≤
+// MaxHopChainBytes, all valid UTF-8 and free of control characters —
+// each a bad_request via ErrFieldInvalid.
 func TestDeliverRequest_Validate_LabelBounds(t *testing.T) {
 	bad := []struct {
 		name   string
@@ -630,6 +631,8 @@ func TestDeliverRequest_Validate_LabelBounds(t *testing.T) {
 		{"peer_name control char", func(r *DeliverRequest) { r.From.PeerName = "x\x1by" }},
 		{"hop_chain too long", func(r *DeliverRequest) { r.HopChain = strings.Repeat("h", MaxHopChainBytes+1) }},
 		{"hop_chain invalid utf8", func(r *DeliverRequest) { r.HopChain = "h\xff" }},
+		{"hop_chain control char", func(r *DeliverRequest) { r.HopChain = "h1\nh2" }},
+		{"hop_chain NUL", func(r *DeliverRequest) { r.HopChain = "h1\x00h2" }},
 	}
 	for _, c := range bad {
 		t.Run(c.name, func(t *testing.T) {
@@ -661,5 +664,46 @@ func TestDeliverRequest_Validate_LabelBounds(t *testing.T) {
 				t.Fatalf("Validate() = %v, want nil", err)
 			}
 		})
+	}
+}
+
+// TestValidate_QuotedRemoteTextBounded pins that the two Validate errors
+// which quote a sender-supplied value (msg_id, declared_mode) never carry
+// it whole: a receiver echoes these details to the peer and into its
+// audit row, so the quoted value is cut to MaxQuotedBytes with a marker.
+func TestValidate_QuotedRemoteTextBounded(t *testing.T) {
+	huge := strings.Repeat("z", 10*1024)
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"msg_id", func() error { r := validDeliverRequest(); r.MsgID = huge; return r.Validate() }()},
+		{"declared_mode", func() error { r := validDeliverRequest(); r.From.DeclaredMode = huge; return r.Validate() }()},
+		{"ValidateMode", func() error { _, err := ValidateMode(huge); return err }()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.err == nil {
+				t.Fatal("expected an error")
+			}
+			msg := c.err.Error()
+			if len(msg) > MaxQuotedBytes+64 {
+				t.Errorf("error is %d bytes (%q…), want the quoted value cut to %d", len(msg), msg[:80], MaxQuotedBytes)
+			}
+			if !strings.Contains(msg, "…") {
+				t.Errorf("error %q lacks the truncation marker", msg)
+			}
+		})
+	}
+	// A short value is quoted whole, no marker.
+	if _, err := ValidateMode("bogus"); err == nil || !strings.Contains(err.Error(), `"bogus"`) || strings.Contains(err.Error(), "…") {
+		t.Errorf("ValidateMode(bogus) = %v, want the value quoted whole", err)
+	}
+	// The cut lands on a rune boundary: no split rune, which %q would
+	// otherwise render as a \x escape.
+	r := validDeliverRequest()
+	r.MsgID = strings.Repeat("工", MaxQuotedBytes)
+	if err := r.Validate(); err == nil || strings.Contains(err.Error(), `\x`) || !utf8.ValidString(err.Error()) {
+		t.Errorf("Validate() = %v, want the cut on a rune boundary", err)
 	}
 }

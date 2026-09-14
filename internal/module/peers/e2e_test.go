@@ -341,13 +341,13 @@ func (d *e2eDaemon) peerByInbox(env ipeers.Envelope, sock string) ipeers.PeerRec
 }
 
 // log is GET /api/peers/log as the admin: every audit row, oldest first.
-func (d *e2eDaemon) log() []logEntry {
+func (d *e2eDaemon) log() []ipeers.LogEntry {
 	d.t.Helper()
 	status, raw := d.do(http.MethodGet, "/api/peers/log?tail=100", d.admin, nil)
 	if status != http.StatusOK {
 		d.t.Fatalf("%s: GET /api/peers/log = %d; body=%s", d.alias, status, raw)
 	}
-	var out logResponse
+	var out ipeers.LogResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		d.t.Fatalf("%s: decode /api/peers/log: %v; body=%s", d.alias, err, raw)
 	}
@@ -355,7 +355,7 @@ func (d *e2eDaemon) log() []logEntry {
 }
 
 // awaitLog polls the audit log (bounded) until cond holds and returns it.
-func (d *e2eDaemon) awaitLog(what string, cond func(rows []logEntry) bool) []logEntry {
+func (d *e2eDaemon) awaitLog(what string, cond func(rows []ipeers.LogEntry) bool) []ipeers.LogEntry {
 	d.t.Helper()
 	deadline := time.Now().Add(e2ePollWait)
 	for {
@@ -389,7 +389,7 @@ func (d *e2eDaemon) stop() {
 }
 
 // findLogRow returns the first row matching every non-empty selector.
-func findLogRow(rows []logEntry, direction, result, nativeMsgID string) (logEntry, bool) {
+func findLogRow(rows []ipeers.LogEntry, direction, result, nativeMsgID string) (ipeers.LogEntry, bool) {
 	for _, r := range rows {
 		if direction != "" && r.Direction != direction {
 			continue
@@ -402,10 +402,10 @@ func findLogRow(rows []logEntry, direction, result, nativeMsgID string) (logEntr
 		}
 		return r, true
 	}
-	return logEntry{}, false
+	return ipeers.LogEntry{}, false
 }
 
-func countLogRows(rows []logEntry, direction string) int {
+func countLogRows(rows []ipeers.LogEntry, direction string) int {
 	n := 0
 	for _, r := range rows {
 		if r.Direction == direction {
@@ -565,7 +565,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	assertWrapper(t, "step 3", w, aHelperSock, "b/foo", ipeers.ModePrompting, "abc", "pong")
 
 	// ---- 4. Audit on both sides. ----
-	aRows := a.awaitLog("out delivered + in delivered", func(rows []logEntry) bool {
+	aRows := a.awaitLog("out delivered + in delivered", func(rows []ipeers.LogEntry) bool {
 		_, out := findLogRow(rows, store.DirOut, ipeers.ResultDelivered, "")
 		_, in := findLogRow(rows, store.DirIn, ipeers.ResultDelivered, "")
 		return out && in
@@ -585,7 +585,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 		aIn.DeclaredMode != ipeers.ModeBypass || aIn.EffectiveMode != ipeers.ModePrompting || aIn.Error != "" {
 		t.Errorf("step 4: A in row = %+v", aIn)
 	}
-	bRows := b.awaitLog("in delivered + reply delivered", func(rows []logEntry) bool {
+	bRows := b.awaitLog("in delivered + reply delivered", func(rows []ipeers.LogEntry) bool {
 		_, in := findLogRow(rows, store.DirIn, ipeers.ResultDelivered, "")
 		_, rep := findLogRow(rows, store.DirReply, ipeers.ResultDelivered, native1)
 		return in && rep
@@ -618,11 +618,11 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	}
 	assertWrapper(t, "step 5", w, aHelperSock, "b/foo", ipeers.ModeBypass, "abc", "pong2")
 	reply2ID := fr.MsgID
-	b.awaitLog("reply 2 delivered as bypass", func(rows []logEntry) bool {
+	b.awaitLog("reply 2 delivered as bypass", func(rows []ipeers.LogEntry) bool {
 		r, ok := findLogRow(rows, store.DirReply, ipeers.ResultDelivered, native2)
 		return ok && r.MsgID == reply2ID && r.EffectiveMode == ipeers.ModeBypass
 	})
-	a.awaitLog("in 2 delivered as bypass", func(rows []logEntry) bool {
+	a.awaitLog("in 2 delivered as bypass", func(rows []ipeers.LogEntry) bool {
 		for _, r := range rows {
 			if r.MsgID == reply2ID && r.Direction == store.DirIn {
 				return r.Result == ipeers.ResultDelivered && r.EffectiveMode == ipeers.ModeBypass
@@ -655,7 +655,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	}
 	status, raw = b.do(http.MethodPost, "/api/peers/deliver", e2eTokenAtoB, toHelper)
 	b.assertAPIError(status, raw, http.StatusConflict, ipeers.ErrTargetGone, "step 6c: deliver to a helper")
-	b.awaitLog("in target_gone for the helper target", func(rows []logEntry) bool {
+	b.awaitLog("in target_gone for the helper target", func(rows []ipeers.LogEntry) bool {
 		r, ok := findLogRow(rows, store.DirIn, ipeers.ErrTargetGone, "")
 		return ok && r.MsgID == toHelper.MsgID
 	})
@@ -666,7 +666,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	proxyhelpertest.WriteToSock(t, bHelperSock, frameLine(t, native3, "user", "uds:"+aHelperSock, ccuds.Wrapper{
 		From: "uds:" + aHelperSock, FromName: "b/foo", FromMode: ipeers.ModePrompting, Text: "loop",
 	}.Format()))
-	bRows = b.awaitLog("reply proxy_to_proxy", func(rows []logEntry) bool {
+	bRows = b.awaitLog("reply proxy_to_proxy", func(rows []ipeers.LogEntry) bool {
 		_, ok := findLogRow(rows, store.DirReply, ipeers.ErrProxyToProxy, native3)
 		return ok
 	})
@@ -688,7 +688,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	live.markDead(e2eOriginPID)
 	native4 := uuid.NewString()
 	proxyhelpertest.WriteToSock(t, bHelperSock, nativeReply(native4, ipeers.ModeBypass, "pong4"))
-	bRows = b.awaitLog("reply target_gone", func(rows []logEntry) bool {
+	bRows = b.awaitLog("reply target_gone", func(rows []ipeers.LogEntry) bool {
 		_, ok := findLogRow(rows, store.DirReply, ipeers.ErrTargetGone, native4)
 		return ok
 	})
@@ -696,7 +696,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if gone.FromSessionID != e2eTargetSID || gone.ToHostID != e2eHostA || gone.ToSessionID != e2eOriginSID {
 		t.Errorf("step 7: B target_gone row = %+v", gone)
 	}
-	a.awaitLog("in target_gone for the dead origin", func(rows []logEntry) bool {
+	a.awaitLog("in target_gone for the dead origin", func(rows []ipeers.LogEntry) bool {
 		r, ok := findLogRow(rows, store.DirIn, ipeers.ErrTargetGone, "")
 		return ok && r.MsgID == gone.MsgID
 	})

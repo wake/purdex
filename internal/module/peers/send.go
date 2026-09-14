@@ -53,7 +53,11 @@ func newDeliverClient() *http.Client {
 // body when one decodes and bounded (boundRemoteText) since they are the
 // remote's text, else Error "http_<code>". A transport failure (including
 // the client timeout), an oversized body or an undecodable 200 body ⇒
-// (zero, nil, err).
+// (zero, nil, err). A 200 body decodes only when it is a DeliverResponse
+// this daemon would itself produce: Result ∈ {delivered,
+// delivery_uncertain} and EffectiveMode a non-empty valid mode — those
+// two fields go into an audit row and a SendResponse verbatim, so
+// anything else is a decode error (bounded text), never a response.
 func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer string, req ipeers.DeliverRequest) (ipeers.DeliverResponse, *ipeers.RemoteError, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -93,6 +97,12 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 	var out ipeers.DeliverResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: %w", err)
+	}
+	if out.Result != ipeers.ResultDelivered && out.Result != ipeers.ResultDeliveryUncertain {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: unexpected result %q", boundRemoteText(out.Result))
+	}
+	if _, err := ipeers.ValidateMode(out.EffectiveMode); err != nil || out.EffectiveMode == "" {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: unexpected effective_mode %q", boundRemoteText(out.EffectiveMode))
 	}
 	return out, nil, nil
 }
@@ -347,6 +357,8 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// resp.Result / resp.EffectiveMode are the receiver's text, admitted by
+	// postDeliver only as values this daemon itself would produce.
 	errText := ""
 	if resp.OneWay {
 		errText = ipeers.ErrNoReturnRoute

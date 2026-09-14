@@ -347,10 +347,19 @@ func (m *helperManager) startup(h *helper) {
 		return
 	}
 
+	// rollback undoes a spawn that succeeded but could not be made
+	// durable: stop the helper, then remove what a helper that died
+	// without its own cleanup leaves behind — the registry files and the
+	// socket path (only when nobody listens on it any more, like Release).
 	rollback := func(err error) {
 		handle.Stop(m.termGrace)
 		if rmErr := ccuds.RemoveRegistry(handle.Files()); rmErr != nil {
 			m.log("peers: helper %d: remove registry files after failed startup: %v", handle.PID(), rmErr)
+		}
+		if sock := handle.Sock(); m.dialRefused(sock) {
+			if rmErr := os.Remove(sock); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+				m.log("peers: helper %d: unlink %s after failed startup: %v", handle.PID(), sock, rmErr)
+			}
 		}
 		fail(err)
 	}

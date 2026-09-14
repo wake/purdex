@@ -11,6 +11,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
 func TestHandleGetSettings_ReturnsDeliverAndAlias(t *testing.T) {
@@ -23,7 +24,7 @@ func TestHandleGetSettings_ReturnsDeliverAndAlias(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 
-	var got settingsResponse
+	var got ipeers.SettingsResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -60,12 +61,12 @@ func TestHandlePutSettings_PersistsToCfgPath(t *testing.T) {
 	m := newHostsTestModule(t, c, nil)
 
 	deliver := true
-	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", putSettingsRequest{Deliver: &deliver}, adminPrincipal())
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", ipeers.PutSettingsRequest{Deliver: &deliver}, adminPrincipal())
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 
-	var got settingsResponse
+	var got ipeers.SettingsResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -102,12 +103,12 @@ func TestHandlePutSettings_OmittedDeliver_LeavesValueUnchanged(t *testing.T) {
 	}
 	m := newHostsTestModule(t, c, nil)
 
-	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", putSettingsRequest{}, adminPrincipal())
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", ipeers.PutSettingsRequest{}, adminPrincipal())
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 
-	var got settingsResponse
+	var got ipeers.SettingsResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
@@ -121,7 +122,7 @@ func TestHandlePutSettings_HostPrincipal_Forbidden(t *testing.T) {
 	m := newHostsTestModule(t, c, nil)
 
 	deliver := true
-	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", putSettingsRequest{Deliver: &deliver}, hostPrincipal("air"))
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", ipeers.PutSettingsRequest{Deliver: &deliver}, hostPrincipal("air"))
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rr.Code, rr.Body.String())
 	}
@@ -137,7 +138,7 @@ func TestHandlePutSettings_NoPrincipal_Forbidden(t *testing.T) {
 	m := newHostsTestModule(t, c, nil)
 
 	deliver := true
-	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", putSettingsRequest{Deliver: &deliver}, nil)
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/settings", ipeers.PutSettingsRequest{Deliver: &deliver}, nil)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rr.Code, rr.Body.String())
 	}
@@ -155,5 +156,30 @@ func TestHandlePutSettings_InvalidJSON_BadRequest(t *testing.T) {
 	mux.ServeHTTP(rr, req.WithContext(ctx))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestHandlePutSettings_BodyBounded pins that the PUT body is capped like
+// the other handlers' (1 MiB): an oversized body is a 400 and changes
+// nothing.
+func TestHandlePutSettings_BodyBounded(t *testing.T) {
+	c, _ := newHostsTestCore(t, "mini-lab:abc123", "mini-lab", "admin-tok", nil)
+	m := newHostsTestModule(t, c, nil)
+
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	body := `{"deliver":true,"pad":"` + strings.Repeat("x", maxSettingsBodyBytes) + `"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/peers/settings", strings.NewReader(body))
+	req = req.WithContext(middleware.WithPrincipal(context.Background(), *adminPrincipal()))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	c.CfgMu.RLock()
+	deliver := c.Cfg.Peers.Deliver
+	c.CfgMu.RUnlock()
+	if deliver {
+		t.Error("Deliver flipped to true by an oversized body")
 	}
 }

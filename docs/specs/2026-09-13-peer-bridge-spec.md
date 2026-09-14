@@ -1,8 +1,10 @@
 # Spec — Cross-host agent peer bridge ("Peer Bridge")
 
-Status: draft v3 (R1 `task-mtzzzf2x-kd6vvt`: 2 Blockers, 10 Majors; R2
+Status: draft v3.2 (R1 `task-mtzzzf2x-kd6vvt`: 2 Blockers, 10 Majors; R2
 `task-mu00ba1c-7564mi`: 1 Blocker, 6 Majors, 4 Minors — all accepted; §8/§9
-hold both disposition tables)
+hold both disposition tables). v3.2: §4.3/§4.4 note that a delivery from a
+host with no verified entry is refused at authentication, so "one-way" means
+verified inbound identity without an outbound `token` (P3 plan D12).
 Date: 2026-09-14
 Branch: `worktree-peer-bridge`
 
@@ -298,8 +300,14 @@ mismatch or an empty `host_id` refuses the call with `host_unverified`.
   config response — `GET /api/config` and the `PUT` handler's echo
   (`config_handler.go:115`) — and by the daemon log.
 - **Bidirectional is the caller's job.** A delivery whose return route is
-  missing (B has no verified entry for A) is still delivered, marked one-way
-  (§4.4) and audited as `no_return_route`.
+  missing is still delivered, marked one-way (§4.4) and audited as
+  `no_return_route`. Note that "missing" is narrower than it looks: a
+  delivery from a host B has *no verified entry* for is refused at
+  authentication (`host_unverified`, above) — it never reaches the one-way
+  case. One-way means B's entry for A has a verified `host_id` (inbound
+  identity) but no outbound `token`, a state pairing never produces on its
+  own (both `host add`s verify with a token); it exists for hand-edited
+  configs (P3 plan D12).
 
 ### 4.4 Delivery (P3, Claude Code targets only)
 
@@ -339,7 +347,10 @@ error, not a degraded send.
 **Authentication of `/deliver`** is §4.3: the matching `inbound_token`
 names the host; `from.host_id` must equal that entry's verified `host_id`;
 `allow_bypass` is read from the same entry. The empty-token bypass in the
-existing `TokenAuth` never applies to `/api/peers*` (§4.6).
+existing `TokenAuth` never applies to `/api/peers*` (§4.6). A host with no
+verified entry is therefore refused here (`host_unverified`), before any
+one-way consideration: `one_way` is computed only for an authenticated
+sender, from the same entry, as "no outbound `token`" (§4.3, D12).
 
 **Mode.** B computes `effective_mode`:
 

@@ -392,8 +392,8 @@ func TestRunMsgSend_SanitizesControlCharacters(t *testing.T) {
 
 // --- log: golden table --------------------------------------------------
 
-func msgLogFixture() []msgLogEntry {
-	return []msgLogEntry{
+func msgLogFixture() []ipeers.LogEntry {
+	return []ipeers.LogEntry{
 		{
 			MsgID: "abcdef12-3456-7890-abcd-ef1234567890", Direction: "out",
 			TS:         "2026-09-14T03:04:05.000Z",
@@ -442,7 +442,7 @@ func TestFormatMsgLogTable(t *testing.T) {
 }
 
 func TestFormatMsgLogTable_SanitizesControlCharacters(t *testing.T) {
-	entries := []msgLogEntry{
+	entries := []ipeers.LogEntry{
 		{MsgID: "id", Direction: "out", TS: "2026-09-14T00:00:00.000Z",
 			FromHostID: "mini", FromSessionID: "s", ToHostID: "air", ToSessionID: "s",
 			DeclaredMode: "prompting", EffectiveMode: "prompting",
@@ -467,7 +467,7 @@ func TestRunMsgLog_DefaultTail(t *testing.T) {
 		gotQuery = r.URL.RawQuery
 		gotAuth = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(msgLogResponse{})
+		json.NewEncoder(w).Encode(ipeers.LogResponse{})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "sekret")
@@ -497,7 +497,7 @@ func TestRunMsgLog_CustomTail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.RawQuery
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(msgLogResponse{})
+		json.NewEncoder(w).Encode(ipeers.LogResponse{})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "sekret")
@@ -554,12 +554,12 @@ func TestRunMsgLog_ErrorRendering(t *testing.T) {
 
 func TestRunMsgDeliver_On(t *testing.T) {
 	var gotMethod string
-	var gotBody msgPutSettingsRequest
+	var gotBody ipeers.PutSettingsRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(msgSettingsResponse{Deliver: true, Alias: "mini"})
+		json.NewEncoder(w).Encode(ipeers.SettingsResponse{Deliver: true, Alias: "mini"})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "sekret")
@@ -582,11 +582,11 @@ func TestRunMsgDeliver_On(t *testing.T) {
 }
 
 func TestRunMsgDeliver_Off(t *testing.T) {
-	var gotBody msgPutSettingsRequest
+	var gotBody ipeers.PutSettingsRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(msgSettingsResponse{Deliver: false, Alias: "mini"})
+		json.NewEncoder(w).Encode(ipeers.SettingsResponse{Deliver: false, Alias: "mini"})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "sekret")
@@ -614,7 +614,7 @@ func TestRunMsgDeliver_Status(t *testing.T) {
 		n, _ := r.Body.Read(buf)
 		gotBodyBytes = n
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(msgSettingsResponse{Deliver: true, Alias: "mini"})
+		json.NewEncoder(w).Encode(ipeers.SettingsResponse{Deliver: true, Alias: "mini"})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "sekret")

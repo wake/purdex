@@ -195,6 +195,8 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 			m.helpers.Release(h, "origin gone")
 		}
 	default:
+		// resp.Result / resp.EffectiveMode are the origin's text, admitted
+		// by postDeliver only as values this daemon itself would produce.
 		errText := ""
 		if resp.OneWay {
 			errText = ipeers.ErrNoReturnRoute
@@ -243,36 +245,14 @@ func returnRoute(hosts []config.PeerHost, hostID string) (config.PeerHost, bool)
 	return config.PeerHost{}, false
 }
 
-// logEntry is one row of GET /api/peers/log: every peer_messages column,
-// snake_case, ts as RFC 3339 with milliseconds in UTC. The wire shape is
-// defined here, not on store.PeerMessage.
-type logEntry struct {
-	ID            int64  `json:"id"`
-	MsgID         string `json:"msg_id"`
-	NativeMsgID   string `json:"native_msg_id"`
-	Direction     string `json:"direction"`
-	TS            string `json:"ts"`
-	FromHostID    string `json:"from_host_id"`
-	FromSessionID string `json:"from_session_id"`
-	ToHostID      string `json:"to_host_id"`
-	ToSessionID   string `json:"to_session_id"`
-	DeclaredMode  string `json:"declared_mode"`
-	EffectiveMode string `json:"effective_mode"`
-	Bytes         int    `json:"bytes"`
-	Result        string `json:"result"`
-	Error         string `json:"error"`
-}
-
-// logResponse is the body of GET /api/peers/log.
-type logResponse struct {
-	Messages []logEntry `json:"messages"`
-}
-
-// logTimeLayout is RFC 3339 with milliseconds.
+// logTimeLayout is RFC 3339 with milliseconds: how ipeers.LogEntry.TS is
+// rendered.
 const logTimeLayout = "2006-01-02T15:04:05.000Z07:00"
 
-func toLogEntry(p store.PeerMessage) logEntry {
-	return logEntry{
+// toLogEntry renders one audit row as its GET /api/peers/log wire shape
+// (ipeers.LogEntry, shared with the CLI).
+func toLogEntry(p store.PeerMessage) ipeers.LogEntry {
+	return ipeers.LogEntry{
 		ID:            p.ID,
 		MsgID:         p.MsgID,
 		NativeMsgID:   p.NativeMsgID,
@@ -333,7 +313,7 @@ func (m *Module) handlePeersLog(w http.ResponseWriter, r *http.Request) {
 		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrAuditUnavailable, Detail: "audit read failed"})
 		return
 	}
-	out := logResponse{Messages: make([]logEntry, 0, len(rows))}
+	out := ipeers.LogResponse{Messages: make([]ipeers.LogEntry, 0, len(rows))}
 	for _, p := range rows {
 		out.Messages = append(out.Messages, toLogEntry(p))
 	}

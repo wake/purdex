@@ -702,18 +702,23 @@ func TestDeliver_ClientGoneWhileHelperStarts(t *testing.T) {
 }
 
 // TestDeliver_InventoryUnavailableDetailFixed pins that a local inventory
-// failure reaches the peer as a fixed detail; the local error text is
-// kept in the audit row only.
+// failure is this daemon's own trouble, not a verdict on the target: it
+// answers 503 not_ready with a fixed detail (never target_gone, which
+// would make the origin reap the sender's helper), and the local error
+// text is kept in the audit row only.
 func TestDeliver_InventoryUnavailableDetailFixed(t *testing.T) {
 	e := newDeliverEnv(t, envOpts{})
 	e.m.sessions = &fakeSessions{err: errFakeProvider}
-	ae := assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusConflict, ipeers.ErrTargetGone)
+	ae := assertRefused(t, e.post(e.hostCtx(), e.request()), http.StatusServiceUnavailable, ipeers.ErrNotReady)
 	if ae.Detail != "inventory unavailable" {
 		t.Errorf("detail = %q, want the fixed %q", ae.Detail, "inventory unavailable")
 	}
 	row := e.onlyRow()
-	if row.Result != ipeers.ErrTargetGone || !strings.Contains(row.Error, errFakeProvider.Error()) {
-		t.Errorf("row result/error = %q/%q, want target_gone with the local error text", row.Result, row.Error)
+	if row.Result != ipeers.ErrNotReady || !strings.Contains(row.Error, errFakeProvider.Error()) {
+		t.Errorf("row result/error = %q/%q, want not_ready with the local error text", row.Result, row.Error)
+	}
+	if strings.Contains(ae.Detail, errFakeProvider.Error()) {
+		t.Errorf("detail %q leaks the local error text", ae.Detail)
 	}
 }
 
@@ -913,6 +918,16 @@ func TestDeliver_AuditCoverage(t *testing.T) {
 			status: http.StatusTooManyRequests, code: ipeers.ErrRateLimited, audited: true,
 		},
 		{
+			name: "not_ready/inventory unavailable", ctx: hostCtx, body: plain,
+			prepare: func(t *testing.T, e *deliverEnv) { e.m.sessions = &fakeSessions{err: errFakeProvider} },
+			status:  http.StatusServiceUnavailable, code: ipeers.ErrNotReady, audited: true,
+			after: func(t *testing.T, e *deliverEnv, ae ipeers.APIError) {
+				if ae.Detail != "inventory unavailable" {
+					t.Errorf("detail = %q, want the fixed %q", ae.Detail, "inventory unavailable")
+				}
+			},
+		},
+		{
 			name: "not_ready/before sweep", opts: envOpts{fixture: fixtureOpts{noSweep: true}}, ctx: hostCtx, body: plain,
 			status: http.StatusServiceUnavailable, code: ipeers.ErrNotReady, audited: true,
 		},
@@ -924,6 +939,17 @@ func TestDeliver_AuditCoverage(t *testing.T) {
 		{
 			name: "proxy_spawn_failed", opts: envOpts{fixture: fixtureOpts{variant: proxyhelpertest.Broken, readyTimeout: 100 * time.Millisecond}},
 			ctx: hostCtx, body: plain, status: http.StatusBadGateway, code: ipeers.ErrProxySpawnFailed, audited: true,
+			after: func(t *testing.T, e *deliverEnv, ae ipeers.APIError) {
+				// The spawn error names local paths (registry dir,
+				// proxies.json): the peer gets a fixed detail, the audit
+				// row keeps the cause.
+				if ae.Detail != "helper could not be started" {
+					t.Errorf("detail = %q, want the fixed %q", ae.Detail, "helper could not be started")
+				}
+				if row := e.onlyRow(); !strings.Contains(row.Error, "did not become ready") {
+					t.Errorf("row error = %q, want the spawn cause", row.Error)
+				}
+			},
 		},
 		{
 			name: "socket_write_failed/listener absent", opts: envOpts{listener: listenAbsent},

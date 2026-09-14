@@ -6,20 +6,17 @@ import (
 	"net/http"
 
 	"github.com/wake/purdex/internal/config"
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
-// settingsResponse is the body of both GET and PUT /api/peers/settings.
-type settingsResponse struct {
-	Deliver bool   `json:"deliver"`
-	Alias   string `json:"alias"`
-}
+// maxSettingsBodyBytes bounds the PUT /api/peers/settings body, like
+// /send and /deliver bound theirs.
+const maxSettingsBodyBytes = 1 << 20
 
-// putSettingsRequest is PUT /api/peers/settings' body. Deliver is a
-// pointer: absent (nil) means "leave unchanged", present sets the value —
-// mirroring putHostRequest.AllowBypass's convention in hosts.go.
-type putSettingsRequest struct {
-	Deliver *bool `json:"deliver"`
-}
+// The wire shapes — ipeers.SettingsResponse (GET and PUT) and
+// ipeers.PutSettingsRequest (PUT; Deliver nil means "leave unchanged",
+// mirroring putHostRequest.AllowBypass's convention in hosts.go) — live
+// in internal/peers, shared with cmd/pdx.
 
 // handleGetSettings serves GET /api/peers/settings: this host's current
 // deliver toggle and its own alias. Admin-only (policy.go's HostRoutePolicy
@@ -32,7 +29,7 @@ func (m *Module) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.core.CfgMu.RLock()
-	resp := settingsResponse{
+	resp := ipeers.SettingsResponse{
 		Deliver: m.core.Cfg.Peers.Deliver,
 		Alias:   m.core.Cfg.PeerAlias(),
 	}
@@ -51,18 +48,18 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req putSettingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req ipeers.PutSettingsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSettingsBodyBytes)).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
-	var resp settingsResponse
+	var resp ipeers.SettingsResponse
 	err := m.core.UpdateConfig(func(cfg *config.Config) error {
 		if req.Deliver != nil {
 			cfg.Peers.Deliver = *req.Deliver
 		}
-		resp = settingsResponse{
+		resp = ipeers.SettingsResponse{
 			Deliver: cfg.Peers.Deliver,
 			Alias:   cfg.PeerAlias(),
 		}
