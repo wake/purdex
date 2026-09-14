@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.338] - 2026-09-14
+
+### Feat: Peer Bridge 第三階段——跨主機把訊息投進 Claude Code session，原生回覆回得來（#1006）
+
+前兩段讓 daemon 看得到自己與別台的 agent peer；這一段讓它送得到。在 host A 的 Claude Code session 裡跑 `pdx msg send air/<session> "…"`，訊息會以**原生 peer 訊息**出現在 host B 那個 session 裡（`<cross-session-message from="uds:…" from-name="mini-lab/<session>">`），對方 Claude 用自己的 `SendMessage` 回，回覆再回到 A 的 session——雙方都不知道中間有 Purdex。只送 Claude Code（Codex/OpenCode 列 `deliverable:false`），不做 typed-input。
+
+**每個遠端 origin 一個 `pdx peer-proxy` 小程序當虛擬 peer。** 接收端 daemon 為每個 `(host_id, agent_session_id, pid, proc_start)` 起一個 helper：綁 `/tmp/cc-socks/<pid>.sock`、以 `O_EXCL` 寫兩個 registry 檔冒充一個 Claude Code session，訊息以 helper 的 `uds:` 位址寫進目標 inbox，對方的原生回覆就打回 helper，helper 用 stdout 原樣交給 daemon 轉回去。helper 只有 stdin/stdout、拿不到任何 token、env 只剩 `PATH`/`HOME`；ownership 在 ready 之前先原子寫進 `proxies.json`，daemon 啟動先 sweep：活著且 procStart 相符才送 SIGTERM→SIGKILL，每次送信號前重查身分，檔案只在 procStart 相符時才刪、socket 只在 connect 被拒時才刪，證明不了的留著並保留記錄；cap 32（starting/stopping/未解決記錄都算）、idle 30 分鐘回收（回收前在鎖內重查）、對端回 `target_gone` 才回收。
+
+**投遞每一步都綁在已驗證身分上。** `/deliver` 只收 host 憑證（admin 403）；比對到的 config entry 要同時 alias 與 host_id 都對、`from.host_id` 等於它；`allow_bypass` 與回程 token 都只從那條 entry 讀；`from-mode` 跨主機一律夾成 prompting，接收端 per-host `allow_bypass=true` 才放行 bypass；`msg_id` 10 分鐘去重、每對 30/分鐘、每 host 120/分鐘（在 dedup/audit/inventory 之前）；audit 列先寫再投遞、寫不進就拒收；目標 tuple 在投遞當下重驗，inventory 只有部分結果時回 `not_ready` 而不是 `target_gone`（否則對端會誤回收 helper）。任何遠端自報字串進本機 log/audit/回應前都截斷或用固定文字；wire 上的 label、session id、hop_chain 都有長度與可列印限制；`/deliver` 的 200 回應也要驗過 result/mode 才吃。另一台 daemon 的 helper 在共用 registry 上會被辨識成 `proxy` 列（看程序 argv，看不到就跳過），永遠不可投遞、不可當 origin、不可當 replier。
+
+**`pdx msg selftest` 是升版守門。** 開一個 throwaway `claude -p` session（stdin 掛 pipe——tty stdin 會直接退出，pane_pid 因此是 wrapper，claude pid 從 registry 取）、真的起一個 `pdx peer-proxy`、送 nonce、等原生回覆，最後一定拆：先 helper、再 tmux session、再對 claude pid 與 pane pid 各自身分重查後升級信號、registry 檔只在 procStart 相符時刪；任何一步不確定就 `cleanup incomplete` 非零退出。Claude Code 升版後跑一次；inventory 也會對比 2.1.270 新的版本各警告一次。
+
+**真機驗收（mlab 兩個隔離 daemon + 真 Claude Code session）**：本 session → `b/mt-target` delivered；對方 Claude 原生回覆回到本 session 的 inbox；兩端 audit 各兩列（out/in、in/reply）；`--mode bypass` 在 `allow_bypass` 開前後分別記成 `b→p`、`b→b`；helper 隨 daemon 一起死並自清、重啟 sweep 把 `proxies.json` 清成 `[]`；env 未設/本機目標/admin 打 `/deliver`/deliver off/取消配對全部按預期拒絕；`pdx msg selftest` PASS 11 秒、cleanup ok、無殘留。
+
+**流程**：plan 三輪 codex（1B/13M/3m → 1B/9M/2m → 4M）；12 個 task subagent TDD、各一輪 review 修正；final review 11 項修正；PR codex 標準 3 項 + 三視角 adversarial 7 項全修；收斂 review 無新發現。延後項開 issue 追蹤。
+
 ## [1.0.0-alpha.337] - 2026-09-14
 
 ### Feat: Peer Bridge 第二階段——host registry、每主機獨立憑證、跨主機 `pdx peers --all`（#998）
