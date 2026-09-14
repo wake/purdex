@@ -429,6 +429,27 @@ describe('unicode paths', () => {
       expect(r[0].text).toBe('docs/a.pdf然後/x.txt')
       expect(r[0].meta).toEqual({ path: 'docs/a.pdf然後/x.txt' })
     })
+
+    // Inner extension segments accept combining marks too (NFD `が` as an
+    // inner part), not only the stem.
+    it('matches NFD combining mark inside an inner extension: docs/a.か\\u3099.txt', () => {
+      const path = 'docs/a.\u304b\u3099.txt'
+      const r = make().provide(`see ${path} ok`)
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe(path)
+      expect(r[0].meta?.path).toBe(path)
+    })
+
+    // Known limitation (spec §3.1): the matchers require an ASCII final
+    // extension, so `grep -n` style lines whose file name has none get no
+    // link — identical to the ASCII no-extension policy today.
+    it('no-extension grep line gets no link: docs/報告.最終版:12:內容', () => {
+      expect(make().provide('docs/報告.最終版:12:內容')).toHaveLength(0)
+    })
+
+    it('ASCII twin of no-extension grep line gets no link: docs/report:12:x', () => {
+      expect(make().provide('docs/report:12:x')).toHaveLength(0)
+    })
   })
 
   describe('absolute', () => {
@@ -497,6 +518,37 @@ describe('unicode paths', () => {
       expect(r).toHaveLength(1)
       expect(r[0].text).toBe(input)
       expect(r[0].meta?.path).toBe('がx.txt')
+    })
+
+    // Isolated form of the mark lookbehind: with a leading `/` the whole token
+    // is not a BARE candidate, so the only possible start is `x.txt` right
+    // after U+3099 — and the lookbehind must block it.
+    it('lookbehind blocks on a combining mark in isolation: /a/か\\u3099x.txt → no link', () => {
+      expect(make().provide('/a/\u304b\u3099x.txt')).toHaveLength(0)
+    })
+
+    // Pre-existing quirk pinned as-is, NOT desired behaviour (see the
+    // limitations comment in file-path.ts): the lookbehind does not include
+    // `-`, so a hyphenated inner extension yields a shadowed BARE match that
+    // the earlier-registered ABS link wins over on hover.
+    it('pins known quirk: /a/b/foo.pre-edit.md yields a shadowed BARE match edit.md', () => {
+      const r = make().provide('/a/b/foo.pre-edit.md')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('edit.md')
+      expect(r[0].meta).toEqual({ path: 'edit.md' })
+    })
+
+    // Full-width digits (spec §3.1): the version filter only looks at the
+    // extension parts and `\d` stays ASCII under the `u` flag.
+    it('rejects １２３.1.2 (ASCII-digit extensions are version-like)', () => {
+      expect(make().provide('１２３.1.2')).toHaveLength(0)
+    })
+
+    it('keeps １２３.１２.3 (full-width inner extension is not \\d+)', () => {
+      const r = make().provide('１２３.１２.3')
+      expect(r).toHaveLength(1)
+      expect(r[0].text).toBe('１２３.１２.3')
+      expect(r[0].meta).toEqual({ path: '１２３.１２.3' })
     })
   })
 })
