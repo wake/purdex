@@ -19,6 +19,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Lint**: `cd spa && pnpm run lint`
 - **Build**: `cd spa && pnpm run build`
 
+## Peer addresses（跨主機 agent 訊息）
+
+- 地址格式：`<host>/<label>[:<suffix>]`。**只有 `<label>` 是地址**；`:<suffix>` 是 daemon 產生的識別資訊（tmux 名-CC 名），打不打都一樣。
+- label 規則：小寫英數與 `-`，2–32 字，`^[a-z0-9][a-z0-9-]{1,31}$`；`cc`、`tmux` 保留。命名慣例 `<專案>-<角色>[-<序號>]`（`purdex-tester`、`purdex-tester-2`）。
+- `_xxxxxx` 開頭＝尚未命名（由 sessionId 導出的預設值）。
+- 指令：`pdx msg name <label>`（命名自己）、`pdx msg name --release`、`pdx msg whoami`（看自己的地址）、`pdx msg send <host>/<label> "<text>"`；`pdx peers --all` 看所有主機的 session。
+- `<host>/tmux:<tmux session 名>` 是不經 label 的 fallback。`cc:<name>` 形式已移除。
+- 被要求「成為 X」時：先 `pdx msg name X`，再 `pdx msg whoami` 回報地址；`label_taken` 時從回應的 live_labels 挑一個沒撞的。
+
 ## 技術棧
 
 - **Daemon**: Go / net/http / gorilla/websocket / creack/pty / modernc.org/sqlite
