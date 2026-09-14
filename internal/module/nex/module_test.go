@@ -397,18 +397,18 @@ func TestInitRealAssembleFailures(t *testing.T) {
 			mutate: func(t *testing.T, cfg *pdxconfig.Config) {
 				cfg.Nex.ClaudeBin = filepath.Join(t.TempDir(), "no-such-claude")
 			},
-			wantSubs: []string{"nex: init:", "locating claude binary", "no-such-claude"},
+			wantSubs: []string{"nex: init:", "locating claude binary", "no-such-claude", "no such file"},
 		},
 		{
 			name: "claude_bin exists but is not executable",
 			mutate: func(t *testing.T, cfg *pdxconfig.Config) {
-				p := filepath.Join(t.TempDir(), "claude")
+				p := filepath.Join(t.TempDir(), "claude-noexec")
 				if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
 				cfg.Nex.ClaudeBin = p
 			},
-			wantSubs: []string{"nex: init:", "locating claude binary"},
+			wantSubs: []string{"nex: init:", "locating claude binary", "claude-noexec", "permission denied"},
 		},
 		{
 			name: "claude_bin empty and PATH has no claude",
@@ -417,7 +417,7 @@ func TestInitRealAssembleFailures(t *testing.T) {
 				cfg.Nex.ClaudeBin = ""
 				cfg.Nex.PathPrepend = []string{}
 			},
-			wantSubs: []string{"nex: init:", "locating claude binary", `"claude"`},
+			wantSubs: []string{"nex: init:", "locating claude binary", `"claude"`, "executable file not found in $PATH"},
 		},
 		{
 			name: "repo root is a regular file",
