@@ -37,7 +37,9 @@ const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--conf
 	"           (-- ends the options: use it before text that starts with -)\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +
-	"       pdx msg selftest [--timeout <dur>] [--config <path>]"
+	"       pdx msg selftest [--timeout <dur>] [--config <path>]\n" +
+	"       pdx msg name <label> | --release [--json] [--config <path>]\n" +
+	"       pdx msg whoami [--json] [--config <path>]"
 
 // runMsg is the `pdx msg` switch target.
 func runMsg(args []string) {
@@ -53,7 +55,7 @@ func runMsgCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 	inv, unknownFlag, ok := parseMsgInvocation(args)
 	if !ok {
 		if unknownFlag != "" {
-			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <host>/<session> <text>)\n", unknownFlag)
+			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <host>/<label>[:<suffix>] | <host>/tmux:<name> <text>)\n", unknownFlag)
 		} else {
 			fmt.Fprintln(stderr, msgUsage)
 		}
@@ -69,6 +71,10 @@ func runMsgCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 		return runMsgDeliver(inv, stdout, stderr)
 	case "selftest":
 		return runMsgSelftestCmd(inv, stdout, stderr)
+	case "name":
+		return runMsgName(inv, getenv, stdout, stderr)
+	case "whoami":
+		return runMsgWhoami(inv, getenv, stdout, stderr)
 	default:
 		// Unreachable: parseMsgInvocation only accepts known verbs.
 		fmt.Fprintln(stderr, msgUsage)
@@ -81,7 +87,7 @@ func runMsgCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 type msgInvocation struct {
 	cfgPath    string
 	jsonOutput bool
-	verb       string // send | log | deliver | selftest
+	verb       string // send | log | deliver | selftest | name | whoami
 
 	// send
 	to   string
@@ -96,6 +102,10 @@ type msgInvocation struct {
 
 	// selftest: raw --timeout, parsed by selftestTimeout
 	timeout string
+
+	// name
+	label   string // the label to claim; "" when release is true
+	release bool   // --release: DELETE the label instead of claiming one
 }
 
 // parseMsgInvocation parses pdx msg's full grammar in one pass: flags may
@@ -113,7 +123,7 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 	inv.tail = msgDefaultLogTail
 
 	var positionals []string
-	var hasMode, hasTail, hasTimeout bool
+	var hasMode, hasTail, hasTimeout, hasRelease bool
 	var modeRaw, tailRaw string
 
 	for i := 0; i < len(args); i++ {
@@ -130,6 +140,8 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 			inv.cfgPath = args[i]
 		case a == "--json":
 			inv.jsonOutput = true
+		case a == "--release":
+			hasRelease = true
 		case a == "--mode":
 			if i+1 >= len(args) {
 				return msgInvocation{}, "", false
@@ -166,7 +178,7 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 
 	switch inv.verb {
 	case "send":
-		if hasTail || hasTimeout {
+		if hasTail || hasTimeout || hasRelease {
 			return msgInvocation{}, "", false
 		}
 		if len(rest) != 2 {
@@ -183,7 +195,7 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 		}
 
 	case "log":
-		if hasMode || hasTimeout {
+		if hasMode || hasTimeout || hasRelease {
 			return msgInvocation{}, "", false
 		}
 		if len(rest) != 0 {
@@ -198,7 +210,7 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 		}
 
 	case "deliver":
-		if hasMode || hasTail || hasTimeout {
+		if hasMode || hasTail || hasTimeout || hasRelease {
 			return msgInvocation{}, "", false
 		}
 		if len(rest) != 1 {
@@ -213,7 +225,31 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 
 	case "selftest":
 		// --json is deliberately not part of this form.
-		if hasMode || hasTail || inv.jsonOutput {
+		if hasMode || hasTail || inv.jsonOutput || hasRelease {
+			return msgInvocation{}, "", false
+		}
+		if len(rest) != 0 {
+			return msgInvocation{}, "", false
+		}
+
+	case "name":
+		if hasMode || hasTail || hasTimeout {
+			return msgInvocation{}, "", false
+		}
+		inv.release = hasRelease
+		if hasRelease {
+			if len(rest) != 0 {
+				return msgInvocation{}, "", false
+			}
+		} else {
+			if len(rest) != 1 {
+				return msgInvocation{}, "", false
+			}
+			inv.label = rest[0]
+		}
+
+	case "whoami":
+		if hasMode || hasTail || hasTimeout || hasRelease {
 			return msgInvocation{}, "", false
 		}
 		if len(rest) != 0 {
@@ -306,11 +342,13 @@ func decodeMsgAPIError(body []byte) (ipeers.APIError, bool) {
 	return ae, true
 }
 
-// renderMsgAPIError prints one send/log/deliver API error to stderr,
-// sanitized: the generic form is "pdx msg: <error>[: <detail>]";
+// renderMsgAPIError prints one send/log/deliver/name/whoami API error to
+// stderr, sanitized: the generic form is "pdx msg: <error>[: <detail>]";
 // remote_error additionally names the host part the caller typed and the
 // remote's own error/detail; ambiguous prints the session part the caller
-// typed followed by one indented candidate address per line.
+// typed followed by one indented candidate address per line; label_taken
+// and not_ready (from `pdx msg name`) print the generic line followed by
+// one indented live_labels/skipped entry per line, respectively.
 func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Writer) {
 	switch ae.Error {
 	case ipeers.ErrRemoteError:
@@ -329,13 +367,32 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(c))
 		}
 
-	default:
-		line := fmt.Sprintf("pdx msg: %s", sanitizeCell(ae.Error))
-		if ae.Detail != "" {
-			line += ": " + sanitizeCell(ae.Detail)
+	case ipeers.ErrLabelTaken:
+		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
+		for _, l := range ae.LiveLabels {
+			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(l))
 		}
-		fmt.Fprintln(stderr, line)
+
+	case ipeers.ErrNotReady:
+		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
+		for _, s := range ae.Skipped {
+			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(s))
+		}
+
+	default:
+		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
 	}
+}
+
+// msgGenericAPIErrorLine renders the shared "pdx msg: <error>[: <detail>]"
+// line used by the default case and by the label_taken/not_ready cases
+// (which append their own indented detail lines after it).
+func msgGenericAPIErrorLine(ae ipeers.APIError) string {
+	line := fmt.Sprintf("pdx msg: %s", sanitizeCell(ae.Error))
+	if ae.Detail != "" {
+		line += ": " + sanitizeCell(ae.Detail)
+	}
+	return line
 }
 
 // reportMsgTransportErr prints a transport-level failure (connection
@@ -537,4 +594,156 @@ func msgOnOff(b bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+// --- name: PUT/DELETE /api/peers/self/label ---------------------------------
+// --- whoami: POST /api/peers/self --------------------------------------------
+//
+// Both verbs attribute the caller to a live registry entry via
+// CLAUDE_CODE_MESSAGING_SOCKET (Peer Address v2 §3.6 entry attribution,
+// not /send's deliverable-row origin rule), exactly like `send`. The
+// response shape is ipeers.PeerRecord, shared with the daemon module
+// (cmd/pdx must not import internal/module/peers).
+
+// msgOriginInbox reads CLAUDE_CODE_MESSAGING_SOCKET, reporting
+// origin_unknown to stderr and returning ok=false when it is unset —
+// shared by `name` and `whoami`, mirroring runMsgSend's own check.
+func msgOriginInbox(getenv func(string) string, stderr io.Writer) (inbox string, ok bool) {
+	inbox = getenv("CLAUDE_CODE_MESSAGING_SOCKET")
+	if inbox == "" {
+		renderMsgAPIError(ipeers.APIError{
+			Error:  ipeers.ErrOriginUnknown,
+			Detail: "CLAUDE_CODE_MESSAGING_SOCKET is unset — run inside a Claude Code session",
+		}, "", "", stderr)
+		return "", false
+	}
+	return inbox, true
+}
+
+// renderSelfRecord prints one ipeers.PeerRecord as the block shared by
+// `name` and `whoami`'s text output: address, label (with source and
+// revision), host (with host ID), and — when the caller has a live agent —
+// session ID and PID.
+func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
+	fmt.Fprintf(stdout, "address:  %s\n", sanitizeCell(rec.Address))
+	fmt.Fprintf(stdout, "label:    %s (%s, rev %d)\n", sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
+	fmt.Fprintf(stdout, "host:     %s (%s)\n", sanitizeCell(rec.Host), sanitizeCell(rec.HostID))
+	if rec.Agent != nil {
+		fmt.Fprintf(stdout, "session:  %s pid %d\n", sanitizeCell(rec.Agent.SessionID), rec.Agent.PID)
+	}
+}
+
+// runMsgName implements `pdx msg name <label> | --release [--json]
+// [--config <path>]`: PUT /api/peers/self/label to claim inv.label, or
+// DELETE /api/peers/self/label (inv.release) to release the caller's
+// current user label back to its default.
+func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int {
+	originInbox, ok := msgOriginInbox(getenv, stderr)
+	if !ok {
+		return 1
+	}
+
+	cfg, err := config.Load(inv.cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
+		return 1
+	}
+
+	var method string
+	var reqBody []byte
+	if inv.release {
+		method = http.MethodDelete
+		reqBody, err = json.Marshal(ipeers.SelfRequest{OriginInbox: originInbox})
+	} else {
+		method = http.MethodPut
+		reqBody, err = json.Marshal(ipeers.ClaimLabelRequest{OriginInbox: originInbox, Label: inv.label})
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
+		return 1
+	}
+
+	base := fmt.Sprintf("http://%s:%d", cfg.Bind, cfg.Port)
+	result, err := doPeersRequest(method, base+"/api/peers/self/label", reqBody, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return reportMsgTransportErr(err, stderr)
+	}
+
+	if inv.jsonOutput {
+		return writeMsgJSONPassthrough(result, stdout)
+	}
+
+	if result.status != http.StatusOK {
+		ae, ok := decodeMsgAPIError(result.body)
+		if !ok {
+			fmt.Fprintln(stderr, "pdx msg: invalid response")
+			return 1
+		}
+		renderMsgAPIError(ae, "", "", stderr)
+		return 1
+	}
+
+	var rec ipeers.PeerRecord
+	if err := json.Unmarshal(result.body, &rec); err != nil {
+		fmt.Fprintln(stderr, "pdx msg: invalid response")
+		return 1
+	}
+
+	if inv.release {
+		fmt.Fprintf(stdout, "released: %s\n", sanitizeCell(rec.Address))
+	} else {
+		fmt.Fprintf(stdout, "named: %s\n", sanitizeCell(rec.Address))
+	}
+	renderSelfRecord(rec, stdout)
+	return 0
+}
+
+// runMsgWhoami implements `pdx msg whoami [--json] [--config <path>]`: POST
+// /api/peers/self to resolve the caller's own peer record.
+func runMsgWhoami(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int {
+	originInbox, ok := msgOriginInbox(getenv, stderr)
+	if !ok {
+		return 1
+	}
+
+	cfg, err := config.Load(inv.cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
+		return 1
+	}
+
+	reqBody, err := json.Marshal(ipeers.SelfRequest{OriginInbox: originInbox})
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
+		return 1
+	}
+
+	base := fmt.Sprintf("http://%s:%d", cfg.Bind, cfg.Port)
+	result, err := doPeersRequest(http.MethodPost, base+"/api/peers/self", reqBody, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return reportMsgTransportErr(err, stderr)
+	}
+
+	if inv.jsonOutput {
+		return writeMsgJSONPassthrough(result, stdout)
+	}
+
+	if result.status != http.StatusOK {
+		ae, ok := decodeMsgAPIError(result.body)
+		if !ok {
+			fmt.Fprintln(stderr, "pdx msg: invalid response")
+			return 1
+		}
+		renderMsgAPIError(ae, "", "", stderr)
+		return 1
+	}
+
+	var rec ipeers.PeerRecord
+	if err := json.Unmarshal(result.body, &rec); err != nil {
+		fmt.Fprintln(stderr, "pdx msg: invalid response")
+		return 1
+	}
+
+	renderSelfRecord(rec, stdout)
+	return 0
 }
