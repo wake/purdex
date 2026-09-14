@@ -16,8 +16,6 @@ import type { LinkMatcher } from '../types'
 // Known limitations（刻意接受，勿「修」）：
 //   - 敘述直接黏在相對路徑前而無分隔（`已更新docs/a.pdf`）會被吃進第一段，
 //     與 ASCII 的 `seedocs/a.pdf` 完全相同——沒有邊界可找。
-//   - 既有、範圍外：BARE_RE 的 lookbehind 不含 `-`，所以 `/a/b/foo.pre-edit.md`
-//     也會產生一個被遮蔽的 BARE 匹配 `edit.md`（ABS 先註冊，hover 時勝出）。
 //   - 以檔名樣式結尾的 CJK 句子會被 BARE_RE 整句連結（`請見附件.pdf` → 一個連結），
 //     與 ASCII 的 `seeattachment.pdf` 同樣歧義；點擊後走既有 stat → not-found popup。
 //   - 黏在 ASCII 副檔名後的敘述若再接副檔名或 `/`，整段連結
@@ -40,8 +38,8 @@ export const TILDE_RE = new RegExp(`(?<![${W}/:~])(~\\/(?:${SEG}+\\/)*${STEM}+${
 // 相對路徑（含至少一個 `/`）：不能以 `/` 開頭，至少一個中間段 + 末段（Unicode 段名；支援多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
 export const REL_RE = new RegExp(`(?<![${W}/:])((?:${SEG}+\\/)+${STEM}+${EXT})${SUFFIX}`, 'gu')
 
-// 純檔名：無 `/`；lookbehind 阻擋 Unicode word/`/`/`:`/`.` 避免匹配路徑片段或 URL 內段、或次級副檔名（支援多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
-export const BARE_RE = new RegExp(`(?<![${W}/:.])(${STEM}+${EXT})${SUFFIX}`, 'gu')
+// 純檔名：無 `/`；lookbehind 阻擋 Unicode word/`/`/`:`/`.`/`-` 避免匹配路徑片段、URL 內段、次級副檔名、或連字號後的尾段（`foo.pre-edit.md` 的 `edit.md`、`計畫-核定.pdf` 的 `核定.pdf`）（支援多重副檔名，副檔名段允許內含連字號與 `+` build metadata）
+export const BARE_RE = new RegExp(`(?<![${W}/:.-])(${STEM}+${EXT})${SUFFIX}`, 'gu')
 
 export interface FilePathMatcherConfig {
   id: string
