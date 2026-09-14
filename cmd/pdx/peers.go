@@ -357,15 +357,14 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 }
 
 // formatPeersTable renders resp.Peers as a text/tabwriter table with columns
-// ADDRESS LABEL AGENT NAME STATUS DELIVERABLE CWD, followed by a
-// partial-resolution summary line when any record's owner lookup did not
-// run, and a trailer line naming this daemon's version.
+// ADDRESS LABEL AGENT NAME STATUS DELIVERABLE CWD, followed by the
+// host's partial-cause lines (writeHostDiagnostics) and a trailer line
+// naming this daemon's version.
 func formatPeersTable(resp peers.Envelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ADDRESS\tLABEL\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
 
-	unresolved := countUnresolved(resp.Peers)
 	for _, rec := range resp.Peers {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			addressField(rec),
@@ -379,10 +378,7 @@ func formatPeersTable(resp peers.Envelope) string {
 	}
 	w.Flush()
 
-	if unresolved > 0 {
-		fmt.Fprintf(&buf, "(partial: %d sessions not resolved within budget)\n", unresolved)
-	}
-	writePartialCauseLine(&buf, "", resp.Partial, unresolved > 0, resp.UnknownRegistryFiles)
+	writeHostDiagnostics(&buf, "", resp.Peers, resp.UnknownRegistryFiles, resp.LabelsUnavailable)
 	fmt.Fprintf(&buf, "daemon %s\n", daemonVersionField(resp.DaemonVersion))
 
 	return buf.String()
@@ -412,20 +408,23 @@ func daemonVersionField(v string) string {
 	return sanitizeCell(v)
 }
 
-// writePartialCauseLine prints why an envelope is Partial beyond an
-// already-reported count of sessions unresolved within budget (spec
-// §3.3): an alive-but-undecodable registry file — named, one line, every
-// path through sanitizeCell — always gets its own line when present,
-// whether or not unresolved sessions also explain part of the partial
-// flag; when neither an unresolved-session count nor an unknown file
-// explains it at all, the remaining cause is a label store read failure
-// (spec §3.3 "Inventory read of labels"). prefix is "" for the
-// single-host table and "<alias>  " for --all, matching the
-// unreachable/daemon trailer lines. Nothing is printed when the envelope
-// is not partial.
-func writePartialCauseLine(buf *strings.Builder, prefix string, partial, hadUnresolved bool, unknownFiles []string) {
-	if !partial {
-		return
+// writeHostDiagnostics prints one host's partial-cause lines (spec §3.3,
+// §3.6), the same renderer for the single-host table and for every host
+// of --all. Each of the three causes has its own explicit signal in the
+// envelope and its own line, printed whenever that signal is set — never
+// inferred from the others' absence, never suppressed by another — in
+// this order:
+//
+//	(partial: N sessions not resolved within budget)   N = countUnresolved(peers) > 0
+//	(partial: unknown registry files: a, b)            unknownFiles non-empty; each path through sanitizeCell
+//	(partial: label store unavailable)                 labelsUnavailable
+//
+// prefix is "" for the single-host table and "<alias>  " for --all,
+// matching the unreachable/daemon trailer lines. Nothing is printed when
+// no signal is set.
+func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.PeerRecord, unknownFiles []string, labelsUnavailable bool) {
+	if unresolved := countUnresolved(peerRows); unresolved > 0 {
+		fmt.Fprintf(buf, "%s(partial: %d sessions not resolved within budget)\n", prefix, unresolved)
 	}
 	if len(unknownFiles) > 0 {
 		names := make([]string, len(unknownFiles))
@@ -433,9 +432,8 @@ func writePartialCauseLine(buf *strings.Builder, prefix string, partial, hadUnre
 			names[i] = sanitizeCell(f)
 		}
 		fmt.Fprintf(buf, "%s(partial: unknown registry files: %s)\n", prefix, strings.Join(names, ", "))
-		return
 	}
-	if !hadUnresolved {
+	if labelsUnavailable {
 		fmt.Fprintf(buf, "%s(partial: label store unavailable)\n", prefix)
 	}
 }
@@ -445,9 +443,9 @@ func writePartialCauseLine(buf *strings.Builder, prefix string, partial, hadUnre
 // column after ADDRESS, one row per peer record across every host whose
 // fetch succeeded, followed by one line per host whose fetch failed:
 // "<alias>  (unreachable: <error>)", followed by, for every host whose
-// fetch succeeded, an optional "<alias>  (partial: …)" cause line (spec
-// §3.3, writePartialCauseLine) and a "<alias>  daemon <version>" trailer
-// line.
+// fetch succeeded, that host's "<alias>  (partial: …)" cause lines (spec
+// §3.3, writeHostDiagnostics — the same lines the single-host table
+// prints) and a "<alias>  daemon <version>" trailer line.
 func formatPeersAllTable(resp peers.AllEnvelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
@@ -482,7 +480,7 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 			continue
 		}
 		alias := sanitizeCell(h.Alias)
-		writePartialCauseLine(&buf, alias+"  ", h.Partial, countUnresolved(h.Peers) > 0, h.UnknownRegistryFiles)
+		writeHostDiagnostics(&buf, alias+"  ", h.Peers, h.UnknownRegistryFiles, h.LabelsUnavailable)
 		fmt.Fprintf(&buf, "%s  daemon %s\n", alias, daemonVersionField(h.DaemonVersion))
 	}
 
