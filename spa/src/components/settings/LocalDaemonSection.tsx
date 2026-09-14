@@ -31,6 +31,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const hosts = useHostStore((s) => s.hosts)
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState<string | null>(null)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cfg = status?.config ?? null
   const cfgUrl = cfg ? `http://${cfg.bind}:${cfg.port}` : null
@@ -41,10 +42,12 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
 
   const copyToken = useCallback(async () => {
     if (!cfg?.token) return
+    setCopied(false)
+    setCopyError(null)
     try {
       await copyText(cfg.token)
     } catch {
-      setError(t('settings.dev.local.copy_failed'))
+      setCopyError(t('settings.dev.local.copy_failed'))
       return
     }
     setCopied(true)
@@ -62,6 +65,8 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
     try {
       setStatus(await api.localDaemonStatus())
       setRevealed(false)
+      setCopied(false)
+      setCopyError(null)
     } catch (err) {
       setError(String(err))
     }
@@ -152,6 +157,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
                       <Copy size={14} />
                     </button>
                     {copied && <span>{t('settings.dev.local.copied')}</span>}
+                    {copyError && <span className="text-status-error">{copyError}</span>}
                   </span>
                 )}
               </div>

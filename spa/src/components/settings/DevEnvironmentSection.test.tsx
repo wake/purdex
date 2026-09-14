@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-library/react'
 import { DevEnvironmentSection } from './DevEnvironmentSection'
 import { useHostStore, selectDevHostId } from '../../stores/useHostStore'
 
@@ -40,9 +40,32 @@ function arrangeStream(emitInline?: (cb: (ev: ElectronStreamCheckEvent) => void)
   })
 }
 
+// Every test in this file runs against this single stubbed `fetch` — nothing
+// here may hit the network. The default implementation answers
+// /api/dev/daemon/check with a fixed, non-stale payload; any other URL that
+// reaches it (i.e. a test that didn't override the implementation for a
+// request it actually needs) is recorded and fails the test in afterEach.
+let unexpectedRequests: string[] = []
+function defaultFetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
+  const href = String(url)
+  if (href.endsWith('/api/dev/daemon/check')) {
+    return Promise.resolve(new Response(JSON.stringify({ current_hash: 'abc1234', latest_hash: 'abc1234', available: false }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+  }
+  unexpectedRequests.push(`${init?.method ?? 'GET'} ${href}`)
+  return Promise.resolve(new Response('{}', { status: 200 }))
+}
+const fetchMock = vi.fn(defaultFetchImpl)
+
 beforeEach(() => {
   vi.clearAllMocks()
   lastStreamCallback = null
+  unexpectedRequests = []
+  fetchMock.mockReset()
+  fetchMock.mockImplementation(defaultFetchImpl)
+  vi.stubGlobal('fetch', fetchMock)
   window.electronAPI = {
     ...window.electronAPI!,
     getAppInfo: mockGetAppInfo,
@@ -60,6 +83,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  cleanup()
+  expect(unexpectedRequests).toEqual([])
+  vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 
@@ -238,24 +264,6 @@ describe('DevEnvironmentSection', () => {
 })
 
 describe('DevEnvironmentSection - Daemon block', () => {
-  const originalFetch = globalThis.fetch
-
-  beforeEach(() => {
-    globalThis.fetch = vi.fn(async (url: string | URL) => {
-      const href = String(url)
-      if (href.endsWith('/api/dev/daemon/check')) {
-        return new Response(JSON.stringify({ current_hash: 'abc1234', latest_hash: 'abc1234', available: false }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-      // Fallback: minimal 200 with empty body
-      return new Response('{}', { status: 200 })
-    }) as typeof globalThis.fetch
-  })
-
-  afterEach(() => { globalThis.fetch = originalFetch })
-
   it('renders Daemon heading', async () => {
     await act(async () => { render(<DevEnvironmentSection />) })
     await waitFor(() => {
@@ -292,16 +300,14 @@ describe('DevEnvironmentSection - dev host picker', () => {
 
   it('with no dev host: shows the notice, makes no requests, disables the buttons', async () => {
     useHostStore.getState().setDevHost(null)
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
     await act(async () => { render(<DevEnvironmentSection />) })
     await waitFor(() => expect(mockGetAppInfo).toHaveBeenCalled())
     expect(screen.getByText(/Pick a development host first/)).toBeTruthy()
     expect(mockStreamCheck).not.toHaveBeenCalled()
-    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/dev/daemon/check'))).toBe(false)
     expect(screen.getByRole('button', { name: 'Check Update' })).toBeDisabled()          // daemon block
     expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Check for Updates' })).toBeDisabled()      // app block
-    fetchSpy.mockRestore()
   })
 
   it('picking a host starts the check against that host', async () => {
@@ -316,9 +322,6 @@ describe('DevEnvironmentSection - dev host picker', () => {
 })
 
 describe('DevEnvironmentSection - source change discipline', () => {
-  const originalFetch = globalThis.fetch
-  afterEach(() => { globalThis.fetch = originalFetch; vi.useRealTimers() })
-
   function deferred<T>() {
     let resolve!: (v: T) => void
     const promise = new Promise<T>((r) => { resolve = r })
@@ -328,8 +331,8 @@ describe('DevEnvironmentSection - source change discipline', () => {
   const checkJson = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
   it('A → unset: A\'s painted daemon check is cleared', async () => {
-    globalThis.fetch = vi.fn(async (url: string | URL) =>
-      String(url).endsWith('/api/dev/daemon/check') ? checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true }) : new Response('{}', { status: 200 })) as typeof globalThis.fetch
+    fetchMock.mockImplementation(async (url: string | URL) =>
+      String(url).endsWith('/api/dev/daemon/check') ? checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true }) : new Response('{}', { status: 200 }))
     await act(async () => { render(<DevEnvironmentSection />) })
     await waitFor(() => expect(screen.getByText('aaa')).toBeTruthy()) // A's result is on screen first
     await act(async () => { useHostStore.getState().setDevHost(null) })
@@ -339,8 +342,8 @@ describe('DevEnvironmentSection - source change discipline', () => {
 
   it('A → unset: A\'s late daemon-check response is discarded', async () => {
     const d = deferred<Response>()
-    globalThis.fetch = vi.fn(async (url: string | URL) =>
-      String(url).endsWith('/api/dev/daemon/check') ? d.promise : new Response('{}', { status: 200 })) as typeof globalThis.fetch
+    fetchMock.mockImplementation(async (url: string | URL) =>
+      String(url).endsWith('/api/dev/daemon/check') ? d.promise : new Response('{}', { status: 200 }))
     await act(async () => { render(<DevEnvironmentSection />) })
     await act(async () => { useHostStore.getState().setDevHost(null) })
     await act(async () => { d.resolve(checkJson({ current_hash: 'aaa', latest_hash: 'bbb', available: true })) })
@@ -350,12 +353,12 @@ describe('DevEnvironmentSection - source change discipline', () => {
 
   it('A → unset: A\'s late rebuild 409 does not paint an error', async () => {
     const d = deferred<Response>()
-    globalThis.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const href = String(url)
       if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
       if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
       return new Response('{}', { status: 200 })
-    }) as typeof globalThis.fetch
+    })
     await act(async () => { render(<DevEnvironmentSection />) })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
@@ -366,12 +369,12 @@ describe('DevEnvironmentSection - source change discipline', () => {
 
   it('picker is disabled while a daemon rebuild is in flight', async () => {
     const d = deferred<Response>()
-    globalThis.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const href = String(url)
       if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
       if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
       return new Response('{}', { status: 200 })
-    }) as typeof globalThis.fetch
+    })
     await act(async () => { render(<DevEnvironmentSection />) })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild & Restart' })).not.toBeDisabled())
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild & Restart' })) })
@@ -396,7 +399,7 @@ describe('DevEnvironmentSection - source change discipline', () => {
 
   it('post-rebuild 3 s re-check is cancelled by a source change', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
-    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const href = String(url)
       if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') {
         return new Response('data: {"type":"success","new_hash":"n1"}\n\n', { status: 200 })
@@ -406,7 +409,6 @@ describe('DevEnvironmentSection - source change discipline', () => {
       }
       return new Response('{}', { status: 200 })
     })
-    globalThis.fetch = fetchMock as typeof globalThis.fetch
     await act(async () => { render(<DevEnvironmentSection />) })
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/dev/daemon/check'))).toBe(true))
     const checksBefore = () => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/api/dev/daemon/check')).length
@@ -423,13 +425,12 @@ describe('DevEnvironmentSection - source change discipline', () => {
     const d = deferred<Response>()
     const neverEndingStream = new ReadableStream<Uint8Array>({ start() {} })
     const cancelSpy = vi.spyOn(neverEndingStream, 'cancel')
-    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const href = String(url)
       if (href.endsWith('/api/dev/daemon/rebuild') && init?.method === 'POST') return d.promise
       if (href.endsWith('/api/dev/daemon/check')) return checkJson({ current_hash: 'a', latest_hash: 'a', available: false })
       return new Response('{}', { status: 200 })
     })
-    globalThis.fetch = fetchMock as typeof globalThis.fetch
     const view = render(<DevEnvironmentSection />)
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/dev/daemon/check'))).toBe(true))
     const checksBefore = () => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/api/dev/daemon/check')).length

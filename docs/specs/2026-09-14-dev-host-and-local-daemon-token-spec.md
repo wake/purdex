@@ -125,3 +125,7 @@ Rendering, whenever `status.config` is non-null (managed **or** external, runnin
 | 4 | Minor | `bind:port` equality is "same endpoint", not "same daemon"; loopback vs Tailscale IP. | Adopted → §3.3 shared `findHostByEndpoint`, strict match, wording "registered as". |
 | 5 | Minor | Prefer a pure `selectDevHostId(state)` over a store getter. | Adopted → §2.1. |
 | 6 | Minor | `hostname` must be required (registerLocalHost needs `string`); share the endpoint helper; assert real store changes in tests. | Adopted → §3.1, §3.3, §4. |
+
+## 7. Known gap (codex R2, tracked in follow-up)
+
+§2.2 step 4 locks only the picker. A source change that arrives through another path — Hosts-page token edit, storage rehydrate from another window, or a sync full-replace — still runs the reset while a rebuild or app update is in flight: the in-flight operation's phase/busy state is wiped and its later results are discarded. Intended contract for the follow-up: every mutation pins `{daemonBase, token}` at start, keeps its own busy state and attribution until it ends, blocks a second start, and renders its result separately from the current source's query state; the SSE reader is owned by a hook with an AbortController so a source change or unmount cancels immediately.

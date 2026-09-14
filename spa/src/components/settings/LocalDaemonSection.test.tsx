@@ -229,6 +229,31 @@ describe('LocalDaemonSection - config rows', () => {
     expect(screen.queryByText('Copied')).toBeNull()
   })
 
+  it('copy retried after a failure shows Copied and clears the failure text', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('denied')).mockResolvedValueOnce(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copy failed — select the token and copy it manually')).toBeTruthy()
+    expect(screen.queryByText('Copied')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copied')).toBeTruthy()
+    expect(screen.queryByText('Copy failed — select the token and copy it manually')).toBeNull()
+  })
+
+  it('copy failing after a prior success clears Copied and shows the failure text', async () => {
+    const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('denied'))
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'x', config: cfg }))
+    await renderIt()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copied')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy token' })) })
+    expect(screen.getByText('Copy failed — select the token and copy it manually')).toBeTruthy()
+    expect(screen.queryByText('Copied')).toBeNull()
+  })
+
   it('insecure origin (no navigator.clipboard) falls back to execCommand and still shows Copied', async () => {
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
     document.execCommand = vi.fn(() => true)
