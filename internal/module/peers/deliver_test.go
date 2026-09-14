@@ -607,6 +607,187 @@ func TestDeliver_DuplicateRefusedOnceDelivered(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Peer Address v2 (spec §3.5): the helper's name follows from.address in
+// place, gated by address_rev; a v1 sender (no address) keeps the v1 name.
+// ---------------------------------------------------------------------------
+
+// wrapperOf parses a delivered frame line into its wrapper and the reply
+// socket it names.
+func wrapperOf(t *testing.T, line string) (ccuds.Wrapper, string) {
+	t.Helper()
+	fr, err := ccuds.ParseFrame([]byte(line))
+	if err != nil {
+		t.Fatalf("ParseFrame: %v", err)
+	}
+	sock, ok := ccuds.FromSocket(fr.From)
+	if !ok {
+		t.Fatalf("frame from = %q, want uds:<sock>", fr.From)
+	}
+	w, ok := ccuds.Parse(fr.Message.Content)
+	if !ok {
+		t.Fatalf("content is not a cross-session-message wrapper: %q", fr.Message.Content)
+	}
+	return w, sock
+}
+
+// helperOf returns the manager's instance behind a delivered frame's
+// reply socket.
+func (e *deliverEnv) helperOf(sock string) *helper {
+	e.t.Helper()
+	h, ok := e.m.helpers.FindBySock(sock)
+	if !ok {
+		e.t.Fatalf("reply socket %q is not one of the manager's helpers", sock)
+	}
+	return h
+}
+
+// deliverWithAddress posts req as the verified host with the v2 address
+// fields set and returns the delivered wrapper and reply socket.
+func (e *deliverEnv) deliverWithAddress(address string, rev int64) (ccuds.Wrapper, string) {
+	e.t.Helper()
+	req := e.request() // a fresh msg_id every time: dedup never applies
+	req.From.Address, req.From.AddressRev = address, rev
+	resp := e.deliverOK(req)
+	if resp.Result != ipeers.ResultDelivered {
+		e.t.Fatalf("result = %q, want delivered", resp.Result)
+	}
+	w, sock := wrapperOf(e.t, e.recvLine())
+	e.assertNoLine()
+	return w, sock
+}
+
+func TestDeliver_AddressNamesHelperAndRenamesMonotonically(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{})
+
+	// (a) rev 3: the helper is spawned under the v2 name.
+	w, sock := e.deliverWithAddress("purdex-tester:x", 3)
+	h := e.helperOf(sock)
+	if w.FromName != remoteAlias+"/purdex-tester:x" {
+		t.Errorf("wrapper from-name = %q, want air/purdex-tester:x", w.FromName)
+	}
+	if got := registryName(t, e.regDir, h.pid); got != remoteAlias+"/purdex-tester:x" {
+		t.Errorf("registry name = %q, want air/purdex-tester:x", got)
+	}
+
+	// rev 4, new label: renamed in place — same socket, same pid.
+	w2, sock2 := e.deliverWithAddress("purdex-tester-2:x", 4)
+	if sock2 != sock {
+		t.Errorf("reply socket changed on rename: %q → %q", sock, sock2)
+	}
+	if w2.FromName != remoteAlias+"/purdex-tester-2:x" {
+		t.Errorf("wrapper from-name after rename = %q, want air/purdex-tester-2:x", w2.FromName)
+	}
+	if got := registryName(t, e.regDir, h.pid); got != remoteAlias+"/purdex-tester-2:x" {
+		t.Errorf("registry name after rename = %q, want air/purdex-tester-2:x", got)
+	}
+	if e.f.fake.Spawns() != 1 {
+		t.Errorf("helper spawns = %d, want 1 (rename is in place)", e.f.fake.Spawns())
+	}
+
+	// rev 2 with a fresh msg_id: older than what the instance carries, so
+	// the name stays — the request itself is still delivered.
+	w3, sock3 := e.deliverWithAddress("purdex-tester-3:x", 2)
+	if sock3 != sock {
+		t.Errorf("reply socket changed on a stale rev: %q → %q", sock, sock3)
+	}
+	if w3.FromName != remoteAlias+"/purdex-tester-2:x" {
+		t.Errorf("wrapper from-name on a stale rev = %q, want the current air/purdex-tester-2:x", w3.FromName)
+	}
+	if got := registryName(t, e.regDir, h.pid); got != remoteAlias+"/purdex-tester-2:x" {
+		t.Errorf("registry name on a stale rev = %q, want air/purdex-tester-2:x", got)
+	}
+	if n := len(e.rows()); n != 3 {
+		t.Errorf("audit rows = %d, want 3 (every request delivered)", n)
+	}
+}
+
+func TestDeliver_LegacySpawnTakesFirstV2Address(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{})
+
+	// (b) a v1 request names the helper "<alias>/<session_name>".
+	e.deliverOK(e.request())
+	w, sock := wrapperOf(t, e.recvLine())
+	e.assertNoLine()
+	h := e.helperOf(sock)
+	if w.FromName != remoteAlias+"/"+senderSession {
+		t.Errorf("v1 wrapper from-name = %q, want %s/%s", w.FromName, remoteAlias, senderSession)
+	}
+	if got := registryName(t, e.regDir, h.pid); got != remoteAlias+"/"+senderSession {
+		t.Errorf("v1 registry name = %q, want %s/%s", got, remoteAlias, senderSession)
+	}
+
+	// The first v2 address renames it even at rev 0 (no label row yet).
+	w2, sock2 := e.deliverWithAddress("_k3x9qz:mt1-n", 0)
+	if sock2 != sock {
+		t.Errorf("reply socket changed on rename: %q → %q", sock, sock2)
+	}
+	if w2.FromName != remoteAlias+"/_k3x9qz:mt1-n" {
+		t.Errorf("wrapper from-name = %q, want air/_k3x9qz:mt1-n", w2.FromName)
+	}
+	if got := registryName(t, e.regDir, h.pid); got != remoteAlias+"/_k3x9qz:mt1-n" {
+		t.Errorf("registry name = %q, want air/_k3x9qz:mt1-n", got)
+	}
+}
+
+func TestDeliver_BadAddressRefusedUnaudited(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{})
+	req := e.request()
+	req.From.Address, req.From.AddressRev = "cc:foo", 1 // (c) a reserved head
+	rr := e.post(e.hostCtx(), req)
+	assertRefused(t, rr, http.StatusBadRequest, ipeers.ErrBadAddress)
+	e.assertNoLine()
+	if n := len(e.rows()); n != 0 {
+		t.Errorf("audit rows = %d, want 0 (validation refusals are unaudited)", n)
+	}
+	if e.f.fake.Spawns() != 0 {
+		t.Errorf("helper spawns = %d, want 0", e.f.fake.Spawns())
+	}
+}
+
+func TestDeliver_RenameFailureKeepsOldNameAndDelivers(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{})
+
+	w, sock := e.deliverWithAddress("purdex-tester:x", 3)
+	h := e.helperOf(sock)
+	if w.FromName != remoteAlias+"/purdex-tester:x" {
+		t.Fatalf("wrapper from-name = %q, want air/purdex-tester:x", w.FromName)
+	}
+
+	// (d) the helper's registry file disappears; the next request's
+	// rename cannot be written, and the delivery must not fail for it.
+	if err := os.Remove(filepath.Join(e.regDir, strconv.Itoa(h.pid)+".json")); err != nil {
+		t.Fatal(err)
+	}
+	w2, sock2 := e.deliverWithAddress("purdex-tester-2:x", 4)
+	if sock2 != sock {
+		t.Errorf("reply socket changed: %q → %q", sock, sock2)
+	}
+	if w2.FromName != remoteAlias+"/purdex-tester:x" {
+		t.Errorf("wrapper from-name after a failed rename = %q, want the OLD air/purdex-tester:x", w2.FromName)
+	}
+	if got := e.m.helpers.Name(h); got != remoteAlias+"/purdex-tester:x" {
+		t.Errorf("helper name after a failed rename = %q, want air/purdex-tester:x", got)
+	}
+	e.m.helpers.mu.Lock()
+	rev := h.appliedRev
+	e.m.helpers.mu.Unlock()
+	if rev != 3 {
+		t.Errorf("appliedRev after a failed rename = %d, want 3 (unchanged)", rev)
+	}
+	if !e.f.logs.contains("rename") {
+		t.Errorf("no rename failure in the log: %v", e.f.logs.all())
+	}
+	if n := len(e.rows()); n != 2 {
+		t.Errorf("audit rows = %d, want 2", n)
+	}
+	for _, row := range e.rows() {
+		if row.Result != ipeers.ResultDelivered {
+			t.Errorf("row %s result = %q, want delivered", row.MsgID, row.Result)
+		}
+	}
+}
+
 func TestDeliver_TargetProxyRows(t *testing.T) {
 	t.Run("own helper", func(t *testing.T) {
 		e := newDeliverEnv(t, envOpts{})
@@ -699,7 +880,7 @@ func TestDeliver_ClientGoneWhileHelperStarts(t *testing.T) {
 	e.f.fake.Release()
 	acquireCtx, acquireCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer acquireCancel()
-	h, err := e.m.helpers.Acquire(acquireCtx, req.From.Key(), "air/foo")
+	h, err := e.m.helpers.Acquire(acquireCtx, req.From.Key(), "air/foo", revUnapplied)
 	if err != nil {
 		t.Fatalf("Acquire after the barrier opened: %v", err)
 	}

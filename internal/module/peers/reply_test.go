@@ -89,7 +89,7 @@ func (r *replyEnv) acquireOriginHelper() *helper {
 	r.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	h, err := r.m.helpers.Acquire(ctx, r.request().From.Key(), remoteAlias+"/"+senderSession)
+	h, err := r.m.helpers.Acquire(ctx, r.request().From.Key(), remoteAlias+"/"+senderSession, revUnapplied)
 	if err != nil {
 		r.t.Fatalf("Acquire origin helper: %v", err)
 	}
@@ -236,6 +236,7 @@ func TestReply_HappyPath(t *testing.T) {
 	wantFrom := ipeers.WireFrom{
 		HostID: localHostID, AgentSessionID: targetSessionID, PID: targetPID, ProcStart: targetProcStart,
 		PeerName: targetPeerName, SessionName: "cc:" + targetPeerName, DeclaredMode: ipeers.ModeBypass,
+		Address: ipeers.DefaultLabel(targetSessionID) + ":" + targetPeerName, AddressRev: 0, // v2 (spec §3.5): the replier row's label:suffix
 	}
 	if req.From != wantFrom {
 		t.Errorf("from = %+v, want the replier tuple %+v", req.From, wantFrom)

@@ -174,7 +174,7 @@ func (f *labelFixture) spawnHelper(t *testing.T) *helper {
 		PID:            99999,
 		ProcStart:      "Mon Sep 14 10:00:00 2026",
 	}
-	h, err := f.m.helpers.Acquire(ctx, key, "x/y")
+	h, err := f.m.helpers.Acquire(ctx, key, "x/y", revUnapplied)
 	if err != nil {
 		t.Fatalf("spawnHelper: Acquire: %v", err)
 	}

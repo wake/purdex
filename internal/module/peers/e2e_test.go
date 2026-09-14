@@ -611,6 +611,11 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	// v2: the resolved row's address is now "<alias>/<label>:<suffix>"
 	// (spec §3.4), not the retired "<alias>/<tmux name>" form.
 	targetAddr := "b/" + ipeers.DefaultLabel(e2eTargetSID) + ":foo-" + e2eTargetName
+	// v2 from-name (spec §3.5): each side names the other's helper after
+	// the sender's "<alias>/<label>:<suffix>" address; neither session has
+	// claimed a label, so both carry their default label.
+	originName := "a/" + ipeers.DefaultLabel(e2eOriginSID) + ":mt1-" + e2eOriginName
+	targetName := targetAddr
 
 	// The baseline for step 9 includes every long-lived goroutine of the
 	// environment (servers, listeners, database/sql's opener); anything
@@ -645,10 +650,10 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if !ok {
 		t.Fatalf("step 1: reply address %q is not one of B's helpers", bHelperSock)
 	}
-	if bHelper.name != "a/mt1" {
-		t.Errorf("step 1: B's helper name = %q, want a/mt1", bHelper.name)
+	if got := b.m.helpers.Name(bHelper); got != originName {
+		t.Errorf("step 1: B's helper name = %q, want %s", got, originName)
 	}
-	assertWrapper(t, "step 1", w, bHelperSock, "a/mt1", ipeers.ModePrompting, "", "ping")
+	assertWrapper(t, "step 1", w, bHelperSock, originName, ipeers.ModePrompting, "", "ping")
 
 	// nativeReply is what the target Claude writes into B's helper socket:
 	// a native reply wrapped by its own harness (D3), naming target.sock.
@@ -678,11 +683,11 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if !ok {
 		t.Fatalf("step 3: reply address %q is not one of A's helpers", aHelperSock)
 	}
-	if aHelper.name != "b/foo" {
-		t.Errorf("step 3: A's helper name = %q, want b/foo", aHelper.name)
+	if got := a.m.helpers.Name(aHelper); got != targetName {
+		t.Errorf("step 3: A's helper name = %q, want %s", got, targetName)
 	}
 	// A's entry for B has AllowBypass false: the declared bypass is clamped.
-	assertWrapper(t, "step 3", w, aHelperSock, "b/foo", ipeers.ModePrompting, "abc", "pong")
+	assertWrapper(t, "step 3", w, aHelperSock, targetName, ipeers.ModePrompting, "abc", "pong")
 
 	// ---- 4. Audit on both sides. ----
 	aRows := a.awaitLog("out delivered + in delivered", func(rows []ipeers.LogEntry) bool {
@@ -736,7 +741,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if sock != aHelperSock {
 		t.Errorf("step 5: reply address = %q, want the same A helper %q", sock, aHelperSock)
 	}
-	assertWrapper(t, "step 5", w, aHelperSock, "b/foo", ipeers.ModeBypass, "abc", "pong2")
+	assertWrapper(t, "step 5", w, aHelperSock, targetName, ipeers.ModeBypass, "abc", "pong2")
 	reply2ID := fr.MsgID
 	b.awaitLog("reply 2 delivered as bypass", func(rows []ipeers.LogEntry) bool {
 		r, ok := findLogRow(rows, store.DirReply, ipeers.ResultDelivered, native2)
@@ -929,9 +934,8 @@ func TestE2E_Labels(t *testing.T) {
 	a.assertAPIError(st, raw, http.StatusNotFound, ipeers.ErrPeerNotFound, "cc: form")
 
 	// ---- 4. Native reply from the target through B's helper reaching the
-	// origin is the unchanged v1 reply path (from-name is still v1 in
-	// P4a), already driven end to end by TestE2E_TwoDaemons; not repeated
-	// here. ----
+	// origin is the same reply path TestE2E_TwoDaemons drives end to end
+	// (v2 from-name included, spec §3.5); not repeated here. ----
 
 	// ---- 5. R2-1 (spec §3.3): a Desktop session on B holds the LABEL
 	// "foo" while B also has a tmux session named foo. While everything is

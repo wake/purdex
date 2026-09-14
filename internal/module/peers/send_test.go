@@ -472,7 +472,11 @@ func TestSend_HappyPath(t *testing.T) {
 		ProcStart:      targetProcStart,
 		PeerName:       targetPeerName,
 		SessionName:    "cc:" + targetPeerName, // outside tmux ⇒ cc:<peer_name>
-		DeclaredMode:   ipeers.ModeBypass,
+		// v2 (spec §3.5): the origin row's "<label>:<suffix>" at its label
+		// row's revision (no label row ⇒ the default label, rev 0).
+		Address:      ipeers.DefaultLabel(targetSessionID) + ":" + targetPeerName,
+		AddressRev:   0,
+		DeclaredMode: ipeers.ModeBypass,
 	}
 	if post.req.From != wantFrom {
 		t.Errorf("post from = %+v, want the origin row %+v", post.req.From, wantFrom)

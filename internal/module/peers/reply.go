@@ -39,7 +39,7 @@ func (m *Module) handleReplyFrame(h *helper, line string) {
 	select {
 	case m.replySem <- struct{}{}:
 	case <-m.stopCtx.Done():
-		m.logf("peers: helper %d (%s): reply frame dropped, daemon is stopping", h.pid, h.name)
+		m.logf("peers: helper %d (%s): reply frame dropped, daemon is stopping", h.pid, m.helpers.Name(h))
 		return
 	}
 	m.workers.Add(1)
@@ -60,11 +60,11 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 	// 1. Parse; only user frames are replies.
 	frame, err := ccuds.ParseFrame([]byte(strings.TrimSpace(line)))
 	if err != nil {
-		m.logf("peers: helper %d (%s): reply frame dropped: %v", h.pid, h.name, err)
+		m.logf("peers: helper %d (%s): reply frame dropped: %v", h.pid, m.helpers.Name(h), err)
 		return
 	}
 	if frame.Type != "user" {
-		m.logf("peers: helper %d (%s): reply frame dropped: type %q is not user", h.pid, h.name, frame.Type)
+		m.logf("peers: helper %d (%s): reply frame dropped: type %q is not user", h.pid, m.helpers.Name(h), frame.Type)
 		return
 	}
 
@@ -83,12 +83,12 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 		row.TS = m.now()
 		row.Result = code
 		row.Error = detail
-		m.logf("peers: reply via helper %d (%s) dropped (%s): %s", h.pid, h.name, code, detail)
+		m.logf("peers: reply via helper %d (%s) dropped (%s): %s", h.pid, m.helpers.Name(h), code, detail)
 		if m.audit == nil {
 			return
 		}
 		if _, err := m.audit.Insert(row); err != nil {
-			m.logf("peers: reply via helper %d (%s): audit insert: %v", h.pid, h.name, err)
+			m.logf("peers: reply via helper %d (%s): audit insert: %v", h.pid, m.helpers.Name(h), err)
 		}
 	}
 
@@ -163,14 +163,14 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 		return
 	}
 	if m.audit == nil {
-		m.logf("peers: reply %s via helper %d (%s) dropped: audit store is not available", dreq.MsgID, h.pid, h.name)
+		m.logf("peers: reply %s via helper %d (%s) dropped: audit store is not available", dreq.MsgID, h.pid, m.helpers.Name(h))
 		return
 	}
 	row.MsgID = dreq.MsgID
 	row.TS = m.now()
 	id, err := m.audit.Insert(row)
 	if err != nil {
-		m.logf("peers: reply %s via helper %d (%s): audit insert: %v", dreq.MsgID, h.pid, h.name, err)
+		m.logf("peers: reply %s via helper %d (%s): audit insert: %v", dreq.MsgID, h.pid, m.helpers.Name(h), err)
 		return
 	}
 

@@ -269,12 +269,20 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 
 	// 9. The sender's helper: its socket is the reply address the frame
 	// carries. The wait is bounded by the request (and by Stop); the helper
-	// itself is owned by the manager and outlives both (B1).
+	// itself is owned by the manager and outlives both (B1). Its name is
+	// the sender's address under the peer's alias (spec §3.5): a v2 sender
+	// names "<alias>/<label>:<suffix>" at its address_rev; a v1 sender
+	// (no from.address) names "<alias>/<session_name>" with no revision,
+	// so the first v2 request for the same origin renames the instance.
+	spawnName, rev := principal.Alias+"/"+req.From.SessionName, revUnapplied // v1 sender
+	if req.From.Address != "" {
+		spawnName, rev = principal.Alias+"/"+req.From.Address, req.From.AddressRev
+	}
 	waitCtx, cancelWait := context.WithCancel(r.Context())
 	defer cancelWait()
 	stopAfter := context.AfterFunc(m.stopCtx, cancelWait)
 	defer stopAfter()
-	h, err := m.helpers.Acquire(waitCtx, req.From.Key(), principal.Alias+"/"+req.From.SessionName)
+	h, err := m.helpers.Acquire(waitCtx, req.From.Key(), spawnName, rev)
 	if err != nil {
 		// The manager's typed errors are classified first, by sentinel:
 		// a spawn failure wraps its cause, and that cause must never be
@@ -303,11 +311,23 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 10. The frame, written under stopCtx (never the request context: a
+	// 10. The wrapper's from-name: for a v2 sender the helper follows the
+	// address in place when this request's revision is newer than what the
+	// instance carries (an existing instance named by an earlier request,
+	// or a v1 spawn); an older revision, or a failed rewrite, keeps the
+	// current name — and the delivery goes through either way. The name
+	// is never read off the instance directly: ApplyAddress/Name hold
+	// the manager lock.
+	name := m.helpers.Name(h)
+	if req.From.Address != "" {
+		name = m.helpers.ApplyAddress(h, spawnName, rev)
+	}
+
+	// The frame, written under stopCtx (never the request context: a
 	// caller that disconnects mid-write must not leave a half frame).
 	line, err := ccuds.BuildFrame(req.MsgID, h.sock, ccuds.Wrapper{
 		From:     "uds:" + h.sock,
-		FromName: h.name,
+		FromName: name,
 		FromMode: effective,
 		HopChain: req.HopChain,
 		Text:     req.Text,
