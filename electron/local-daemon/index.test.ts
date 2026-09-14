@@ -138,6 +138,8 @@ describe('status()', () => {
     expect(st.alive).toBeNull()
     expect(st.target).toEqual({ goos: 'darwin', goarch: 'arm64' })
     expect(st.tools.tmux).toBe('/opt/homebrew/bin/tmux')
+    expect(st.hostname).toBe('air-2026')
+    expect(st.config).toBeNull()
   })
 
   it('managed + stopped when the binary exists and nothing listens; stale pid is ignored', async () => {
@@ -150,7 +152,8 @@ describe('status()', () => {
     expect(st.managed).toBe('managed')
     expect(st.alive).toBeNull()
     expect(st.installed).toEqual({ version: '9', hash: 'aaa', goos: 'darwin', goarch: 'arm64' })
-    expect(st.config).toEqual({ bind: '100.64.0.9', port: 7860, hasToken: true })
+    expect(st.config).toEqual({ bind: '100.64.0.9', port: 7860, token: 'purdex_x' })
+    expect(st.hostname).toBe('air-2026')
   })
 
   it('managed + alive + running when our pid owns the listener', async () => {
@@ -214,6 +217,7 @@ describe('status()', () => {
     const st = await createLocalDaemon(f.deps).status()
     expect(st.managed).toBe('external')
     expect(st.reason).toBe('custom data_dir')
+    expect(st.hostname).toBe('air-2026')
   })
 
   it('external when lsof times out', async () => {

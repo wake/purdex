@@ -6,6 +6,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 
 const status = (o: Partial<ElectronLocalDaemonStatus> = {}): ElectronLocalDaemonStatus => ({
   managed: 'none', binPath: '/Users/t/.config/pdx/bin/pdx', installed: null, alive: null, running: null, config: null,
+  hostname: 'air-2026',
   target: { goos: 'darwin', goarch: 'arm64' }, tools: { tmux: '/opt/homebrew/bin/tmux' }, ...o,
 })
 const result: ElectronLocalDaemonResult = { url: 'http://100.64.0.9:7860', token: 'purdex_t', hash: 'bbb', version: '9', hostname: 'air-2026' }
@@ -94,7 +95,7 @@ describe('LocalDaemonSection', () => {
   })
 
   it('external without running info falls back to the config endpoint', async () => {
-    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'custom data_dir', config: { bind: '100.64.0.9', port: 7860, hasToken: true } }))
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'custom data_dir', config: { bind: '100.64.0.9', port: 7860, token: 'purdex_t' } }))
     await renderIt()
     expect(screen.getByText('A daemon is running at http://100.64.0.9:7860 but is not managed by this app')).toBeTruthy()
   })

@@ -178,8 +178,8 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     const installed = binExists ? await readIdentity(binPath) : null
     const running = await health(cfg.bind, cfg.port)
     const base = {
-      binPath, installed, running, target: tgt, tools: { tmux },
-      config: cfgFile ? { bind: cfgFile.bind, port: cfgFile.port, hasToken: !!cfgFile.token } : null,
+      binPath, installed, running, target: tgt, tools: { tmux }, hostname: deps.hostname(),
+      config: cfgFile ? { bind: cfgFile.bind, port: cfgFile.port, token: cfgFile.token } : null,
     }
     if (cfgFile && cfgFile.dataDir !== dataDir) {
       return { ...base, managed: 'external', reason: 'custom data_dir', alive: null }
