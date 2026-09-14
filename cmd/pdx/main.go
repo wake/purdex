@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"syscall"
-	"time"
 
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
@@ -223,24 +222,16 @@ func runServe(args []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		<-sigCh
-		fmt.Println("\nshutting down...")
-		cancel() // stop status poller + modules
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		if err := c.StopModules(shutdownCtx); err != nil {
-			log.Printf("stop modules: %v", err)
-		}
-		srv.Shutdown(shutdownCtx)
-	}()
-
 	log.Printf("pdx daemon listening on %s", addr)
 	listener, err := listenWithReuseAddr(addr)
 	if err != nil {
 		log.Fatalf("bind %s: %v", addr, err)
 	}
-	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+	// 10. Serve until a signal or a Serve failure, then run the full
+	// shutdown sequence (cancel → StopModules → Shutdown/Close →
+	// CloseModules) and only return once it has finished, so the deferred
+	// store closes and PID-lock release below run against closed modules.
+	if err := serveAndWait(srv, listener, sigCh, cancel, c, core.ShutdownBudget, log.Printf); err != nil {
 		log.Printf("server error: %v", err)
 	}
 }
