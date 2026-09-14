@@ -150,6 +150,8 @@ and is the premise every other decision here rests on.
 
 ### 4.1 Identity and addresses
 
+> Amended by 2026-09-14-peer-address-v2-spec.md (labels; see its §3.2).
+
 Two layers, kept apart:
 
 **Wire identity** (what daemons and audit rows carry, never abbreviated):
@@ -184,6 +186,8 @@ a name to whatever now carries it.
   wire.
 
 ### 4.2 Peer record
+
+> Amended by 2026-09-14-peer-address-v2-spec.md (labels; see its §3.4).
 
 `GET /api/peers` returns one record per tmux session, plus one per live
 Claude Code registry entry that no tmux session's row consumed (its
@@ -311,6 +315,8 @@ mismatch or an empty `host_id` refuses the call with `host_unverified`.
 
 ### 4.4 Delivery (P3, Claude Code targets only)
 
+> Amended by 2026-09-14-peer-address-v2-spec.md (labels; see its §3.5).
+
 ```
 pdx msg send air/foo "text"          (inside a cc session on host A)
    │ reads CLAUDE_CODE_MESSAGING_SOCKET (§ origin)
@@ -409,6 +415,8 @@ with the error. If the audit insert itself fails, the delivery is refused
 
 ### 4.5 Virtual peer helper lifecycle
 
+> Amended by 2026-09-14-peer-address-v2-spec.md (labels; see its §3.5).
+
 `pdx peer-proxy` is a subcommand of the same binary, spawned by the daemon
 with **stdin/stdout as its only channel**. It receives no token and opens no
 HTTP connection.
@@ -469,6 +477,8 @@ Helper cap (32) and idle reap (30 min) are constants; they become settings
 only if a need appears.
 
 ### 4.8 Compatibility contract
+
+> Amended by 2026-09-14-peer-address-v2-spec.md (labels; see its §3.9).
 
 Everything in §3.2–§3.3 except the socket path, the auth line and the
 `type:"user"` frame is undocumented Claude Code behaviour. Therefore:
