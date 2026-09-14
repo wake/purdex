@@ -49,7 +49,6 @@ type Module struct {
 	core       *core.Core
 	sys        engine
 	opts       nexen.Options
-	path       string // final process PATH after applyPathPolicy, logged once at Init
 	pathPrefix string // applied path_prepend entries only, joined by the list separator; for the Start log line
 
 	assemble assembleFn        // default realAssemble; test seam
@@ -96,7 +95,6 @@ func (m *Module) Init(c *core.Core) error {
 	n := c.Cfg.Nex.Expanded(home)
 
 	final, changed := applyPathPolicy(n.PathPrepend, m.isDir)
-	m.path = final
 	m.pathPrefix = strings.Join(existingPrefix(n.PathPrepend, m.isDir), string(os.PathListSeparator))
 	if changed {
 		m.logf("nex: PATH policy applied (path_prepend=%q): PATH=%s", n.PathPrepend, final)

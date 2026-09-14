@@ -247,6 +247,17 @@ func TestServeAndWait_ServeFailsFirstStillRunsSequence(t *testing.T) {
 	}
 }
 
+// TestServeAndWait_SignalAndServeErrorRaceRunsSequenceOnce also guards
+// against a stale first signal being misread as a second one: sig already
+// has a buffered value when serveAndWait starts, so when the serveErr
+// branch wins the initial select instead, that value must be drained
+// before the second-signal watcher is armed — otherwise the watcher would
+// immediately "see" it and call exit(130), a hard exit that skips
+// CloseModules, for what is really still the first signal. Regardless of
+// which branch of the race actually wins (Go's select makes no promise
+// here), exit must never be called: asserting exited() == nil is
+// deterministic in outcome even though the branch taken isn't — see the
+// fix-wave report for why forcing a specific branch isn't attempted.
 func TestServeAndWait_SignalAndServeErrorRaceRunsSequenceOnce(t *testing.T) {
 	h := newHarness()
 	h.srv.serveErr = errors.New("bind lost")
@@ -262,6 +273,9 @@ func TestServeAndWait_SignalAndServeErrorRaceRunsSequenceOnce(t *testing.T) {
 	}
 	if n := h.rec.count("CloseModules"); n != 1 {
 		t.Fatalf("CloseModules called %d times, want exactly 1", n)
+	}
+	if exits := h.exited(); len(exits) != 0 {
+		t.Fatalf("exit calls = %v, want none — a stale first signal must not be misread as a second one", exits)
 	}
 }
 

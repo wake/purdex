@@ -67,6 +67,16 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		logf("received %v, shutting down...", s)
 	case err = <-serveErr:
 		serveReturned = true
+		// A signal may already be sitting in sig (buffered, not yet
+		// delivered to this select) even though Serve is what won the
+		// race. That is still the FIRST signal, not a second one — drain
+		// it before arming the watcher below so it isn't misread as a
+		// second Ctrl-C and triggers an immediate exit(130) that skips
+		// CloseModules.
+		select {
+		case <-sig:
+		default:
+		}
 	}
 
 	done := make(chan struct{})
