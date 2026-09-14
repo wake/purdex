@@ -470,8 +470,9 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 
 	// c. the processes, by identity: the claude process first (when it was
 	// identified), then the pane's wrapper shell.
+	targetID := selftestIdentityDifferent // no target ⇒ nothing to keep for
 	if st.targetPID != 0 {
-		selftestReap(ctx, deps, "target", st.targetPID, st.targetProcStart, problem, stdout)
+		targetID = selftestReap(ctx, deps, "target", st.targetPID, st.targetProcStart, problem, stdout)
 	}
 	if st.panePID != 0 {
 		selftestReap(ctx, deps, "pane", st.panePID, st.paneProcStart, problem, stdout)
@@ -479,8 +480,9 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 
 	// d. the claude process's files — only those that carry its procStart.
 	// Without a registry entry its pid is unknown and nothing on disk can
-	// be proven ours.
-	if st.targetPID != 0 {
+	// be proven ours. A live pid whose identity could not be read (c) is
+	// left with its files: it may still be the running claude.
+	if st.targetPID != 0 && targetID != selftestIdentityUnknown {
 		pid := strconv.Itoa(st.targetPID)
 		var candidates []string
 		for _, pattern := range []string{pid + ".json", pid + ".*.key"} {
@@ -520,35 +522,70 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 	return false
 }
 
+// selftestIdentity is the answer to "is pid still the process we started?"
+// — the same tri-state as the daemon's sweep (sweep.go pidIdentity), never
+// folded: unknown means the process must not be signalled and its files
+// must not be touched.
+type selftestIdentity int
+
+const (
+	selftestIdentityUnknown   selftestIdentity = iota // alive, but its start time could not be read
+	selftestIdentitySame                              // alive and carrying procStart
+	selftestIdentityDifferent                         // dead, or the pid held by another process
+)
+
+// selftestIdentify classifies pid against procStart.
+func selftestIdentify(deps selftestDeps, pid int, procStart string) selftestIdentity {
+	if !deps.pidAlive(pid) {
+		return selftestIdentityDifferent
+	}
+	ps, err := deps.procStart(pid)
+	switch {
+	case err != nil:
+		return selftestIdentityUnknown
+	case ps == procStart:
+		return selftestIdentitySame
+	default:
+		return selftestIdentityDifferent
+	}
+}
+
 // selftestReap waits ≤ selftestExitWait for the process (pid, procStart)
 // to be gone — dead, or the pid held by another process — then escalates
 // SIGTERM, wait, SIGKILL, wait, re-checking identity right before each
-// signal so a reused pid is never signalled. Still the same process at
-// the end ⇒ `<label> pid <p> still alive` is recorded as a problem.
+// signal so a reused pid is never signalled. A live pid whose identity
+// cannot be read is never signalled either: `<label> pid <p>: identity
+// unknown, left running` is recorded as a problem and unknown returned,
+// so the caller keeps its files. Still the same process at the end ⇒
+// `<label> pid <p> still alive` is recorded. Returns the final identity.
 func selftestReap(ctx context.Context, deps selftestDeps, label string, pid int, procStart string,
-	problem func(string, ...any), stdout io.Writer) {
-	same := func() bool {
-		if !deps.pidAlive(pid) {
-			return false
-		}
-		ps, err := deps.procStart(pid)
-		return err == nil && ps == procStart
+	problem func(string, ...any), stdout io.Writer) selftestIdentity {
+	ident := func() selftestIdentity { return selftestIdentify(deps, pid, procStart) }
+	unknown := func() selftestIdentity {
+		problem("%s pid %d: identity unknown, left running", label, pid)
+		return selftestIdentityUnknown
 	}
-	if selftestWaitGone(ctx, deps, same, selftestExitWait) {
-		return
-	}
+	id := selftestWaitGone(ctx, deps, ident, selftestExitWait)
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
-		if !same() {
-			return
+		switch id {
+		case selftestIdentityDifferent:
+			return id
+		case selftestIdentityUnknown:
+			return unknown()
 		}
 		if err := deps.signal(pid, sig); err != nil {
 			fmt.Fprintf(stdout, "%s pid %d: %v: %v\n", label, pid, sig, err)
 		}
-		if selftestWaitGone(ctx, deps, same, selftestSignalWait) {
-			return
-		}
+		id = selftestWaitGone(ctx, deps, ident, selftestSignalWait)
+	}
+	switch id {
+	case selftestIdentityDifferent:
+		return id
+	case selftestIdentityUnknown:
+		return unknown()
 	}
 	problem("%s pid %d still alive", label, pid)
+	return selftestIdentitySame
 }
 
 // selftestRemoveSock unlinks sock only when nobody listens on it; a live
@@ -567,19 +604,22 @@ func selftestRemoveSock(deps selftestDeps, sock, owner string, problem func(stri
 	}
 }
 
-// selftestWaitGone polls same() at selftestPollInterval for ≤ d; true as
-// soon as the process is gone (or another process holds the pid).
-func selftestWaitGone(ctx context.Context, deps selftestDeps, same func() bool, d time.Duration) bool {
+// selftestWaitGone polls ident() at selftestPollInterval for ≤ d and
+// returns different as soon as the process is gone (or another process
+// holds the pid); otherwise the identity observed last (same, or unknown
+// for a transient read failure that did not clear before the deadline).
+func selftestWaitGone(ctx context.Context, deps selftestDeps, ident func() selftestIdentity, d time.Duration) selftestIdentity {
 	deadline := deps.now().Add(d)
 	for {
-		if !same() {
-			return true
+		id := ident()
+		if id == selftestIdentityDifferent {
+			return id
 		}
 		if !deps.now().Before(deadline) {
-			return false
+			return id
 		}
 		if deps.sleep(ctx, selftestPollInterval) != nil {
-			return !same()
+			return ident()
 		}
 	}
 }

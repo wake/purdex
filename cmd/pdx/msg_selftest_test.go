@@ -753,6 +753,87 @@ func TestSelftest_PIDReusedIsNotSignalled(t *testing.T) {
 	}
 }
 
+// TestSelftest_IdentityUnknownWhileAlive_LeftRunning pins the tri-state
+// identity (as sweep.go's): a live pid whose start time cannot be read is
+// neither ours nor another's — it is not signalled, its registry files
+// and socket are kept, and cleanup reports it and is incomplete.
+func TestSelftest_IdentityUnknownWhileAlive_LeftRunning(t *testing.T) {
+	f := newStFixture(t)
+	f.clock.expireLong = true // registered, no reply ⇒ FAIL, then cleanup
+	f.alive[stTargetPID] = true
+	ownJSON := filepath.Join(f.registryDir, "4242.json")
+	writeRegistryFile(t, ownJSON, stTargetProcStart)
+	if err := os.MkdirAll(f.sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.inbox, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// After kill-session (identity already captured) ps stops answering
+	// for the target while it is still alive.
+	f.killSession = func() ([]byte, error) {
+		f.mu.Lock()
+		delete(f.starts, stTargetPID)
+		f.mu.Unlock()
+		return nil, nil
+	}
+
+	code, out, _ := f.run(context.Background(), 5*time.Second)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	f.mu.Lock()
+	signals := append([]sigCall(nil), f.signals...)
+	f.mu.Unlock()
+	if len(signals) != 0 {
+		t.Errorf("a pid of unknown identity was signalled: %v", signals)
+	}
+	if !proxyhelpertest.Exists(ownJSON) || !proxyhelpertest.Exists(f.inbox) {
+		t.Errorf("files of a process of unknown identity were removed: json %v sock %v", proxyhelpertest.Exists(ownJSON), proxyhelpertest.Exists(f.inbox))
+	}
+	if !strings.Contains(out, "target pid 4242: identity unknown, left running\n") {
+		t.Errorf("stdout lacks the identity-unknown line:\n%s", out)
+	}
+	last := f.lastLine(out)
+	if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, "target pid 4242: identity unknown, left running") {
+		t.Errorf("last line = %q, want cleanup incomplete naming the target", last)
+	}
+}
+
+// TestSelftest_ProcStartErrorWhileDead_IsGone pins the other half: a pid
+// that is not alive is gone whatever ps says, as before.
+func TestSelftest_ProcStartErrorWhileDead_IsGone(t *testing.T) {
+	f := newStFixture(t)
+	f.clock.expireLong = true
+	f.alive[stTargetPID] = true
+	ownJSON := filepath.Join(f.registryDir, "4242.json")
+	writeRegistryFile(t, ownJSON, stTargetProcStart)
+	f.killSession = func() ([]byte, error) {
+		f.mu.Lock()
+		f.alive[stTargetPID] = false
+		delete(f.starts, stTargetPID)
+		f.mu.Unlock()
+		return nil, nil
+	}
+
+	code, out, _ := f.run(context.Background(), 5*time.Second)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1 (the selftest itself failed)", code)
+	}
+	f.mu.Lock()
+	signals := append([]sigCall(nil), f.signals...)
+	f.mu.Unlock()
+	if len(signals) != 0 {
+		t.Errorf("a dead pid was signalled: %v", signals)
+	}
+	if proxyhelpertest.Exists(ownJSON) {
+		t.Errorf("own registry file of the dead process left behind")
+	}
+	if f.lastLine(out) != "cleanup: ok" {
+		t.Errorf("last line = %q", f.lastLine(out))
+	}
+}
+
 func equalSigs(a, b []sigCall) bool {
 	if len(a) != len(b) {
 		return false

@@ -46,6 +46,8 @@ func TestRunMsgCmd_GrammarRejections(t *testing.T) {
 		{"send with --tail", []string{"send", "alias/sess", "hello", "--tail", "5"}},
 		{"send with --timeout", []string{"send", "alias/sess", "hello", "--timeout", "5s"}},
 		{"send unknown flag", []string{"send", "alias/sess", "hello", "--bogus"}},
+		{"send text starting with dash without --", []string{"send", "alias/sess", "- first item"}},
+		{"send flag after -- is positional", []string{"send", "--", "alias/sess", "hello", "--json"}},
 		{"log extra positional", []string{"log", "extra"}},
 		{"log with --mode", []string{"log", "--mode", "prompting"}},
 		{"log with --timeout", []string{"log", "--timeout", "5s"}},
@@ -200,6 +202,46 @@ func TestRunMsgSend_Success(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunMsgSend_DoubleDash pins the option terminator: everything after
+// "--" is positional, so text that starts with a dash (or that looks like
+// one of pdx msg's own flags) can be sent; flags before "--" still apply.
+func TestRunMsgSend_DoubleDash(t *testing.T) {
+	for _, text := range []string{"--json", "- first item", "--mode bypass"} {
+		t.Run(text, func(t *testing.T) {
+			var gotReq ipeers.SendRequest
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewDecoder(r.Body).Decode(&gotReq)
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(ipeers.SendResponse{
+					MsgID: "id", ToAddress: "air/x", Result: ipeers.ResultDelivered, EffectiveMode: ipeers.ModePrompting,
+				})
+			}))
+			defer srv.Close()
+			cfgPath := writeTestConfig(t, srv.URL, "sekret")
+
+			var stdout, stderr bytes.Buffer
+			code := runMsgCmd([]string{"send", "--config", cfgPath, "--", "air/x", text},
+				fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/cc.sock"}), &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+			}
+			if gotReq.To != "air/x" || gotReq.Text != text || gotReq.Mode != "" {
+				t.Errorf("posted request = %+v, want to air/x text %q, no mode", gotReq, text)
+			}
+		})
+	}
+	t.Run("dash text without -- is an unknown flag", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := runMsgCmd([]string{"send", "air/x", "- first item"}, fakeGetenv(nil), &stdout, &stderr)
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2; stderr=%q", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "unknown flag - first item") || !strings.Contains(stderr.String(), "[--]") {
+			t.Errorf("stderr = %q, want the unknown flag named and the usage mentioning --", stderr.String())
+		}
+	})
 }
 
 func TestRunMsgSend_ModeFlag(t *testing.T) {

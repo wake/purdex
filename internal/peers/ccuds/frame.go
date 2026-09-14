@@ -142,17 +142,42 @@ var (
 	ErrPostWriteTimeout = errors.New("timed out after write")
 )
 
-// WriteFrame dials sockPath, writes line under an absolute deadline of
-// now+timeout, half-closes the write side and waits for the peer's EOF.
-// It returns nil when everything completed; a wrapped ErrWriteIncomplete
-// when the write failed or timed out; a wrapped ErrPostWriteTimeout when
-// the full line was written but the EOF wait hit the deadline. Dial errors
-// are returned as-is. Cancelling ctx aborts the write or the wait and
-// returns ctx.Err() (wrapped).
+// dialUnix is WriteFrame's connect step: net.Dialer.DialContext in
+// production, a stalled fake in tests (a receiver that stopped accepting
+// with a full backlog cannot be staged deterministically).
+var dialUnix = func(ctx context.Context, d *net.Dialer, sockPath string) (net.Conn, error) {
+	return d.DialContext(ctx, "unix", sockPath)
+}
+
+// WriteFrame dials sockPath, writes line, half-closes the write side and
+// waits for the peer's EOF — all under ONE absolute deadline of
+// now+timeout, computed before the dial: a receiver that stopped
+// accepting (full backlog) cannot hold the connect open past it, and the
+// same instant bounds the write and the EOF wait. It returns nil when
+// everything completed; a wrapped ErrWriteIncomplete when the dial timed
+// out or the write failed or timed out (nothing, or not everything, was
+// written); a wrapped ErrPostWriteTimeout when the full line was written
+// but the EOF wait hit the deadline. Other dial errors (no listener,
+// refused) are returned as-is. Cancelling ctx aborts the dial, the write
+// or the wait and returns ctx.Err() (wrapped).
 func WriteFrame(ctx context.Context, sockPath string, line []byte, timeout time.Duration) error {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", sockPath)
+	deadline := time.Now().Add(timeout)
+	ctxErr := func(op string, err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("frame: %s: %w", op, cerr)
+		}
+		return nil
+	}
+
+	conn, err := dialUnix(ctx, &net.Dialer{Deadline: deadline}, sockPath)
 	if err != nil {
+		if cerr := ctxErr("dial", err); cerr != nil {
+			return cerr
+		}
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return fmt.Errorf("%w: dial: %v", ErrWriteIncomplete, err)
+		}
 		return err
 	}
 	defer conn.Close()
@@ -161,20 +186,14 @@ func WriteFrame(ctx context.Context, sockPath string, line []byte, timeout time.
 		return fmt.Errorf("frame: unexpected conn type %T", conn)
 	}
 
-	if err := uc.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if err := uc.SetDeadline(deadline); err != nil {
 		return fmt.Errorf("%w: set deadline: %v", ErrWriteIncomplete, err)
 	}
 	// A cancelled ctx moves the deadline into the past, which wakes any
-	// blocked Write/Read with a timeout error; ctxErr below turns that
-	// into ctx.Err().
+	// blocked Write/Read with a timeout error; ctxErr turns that into
+	// ctx.Err().
 	stop := context.AfterFunc(ctx, func() { uc.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
-	ctxErr := func(op string, err error) error {
-		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("frame: %s: %w", op, cerr)
-		}
-		return nil
-	}
 
 	n, err := uc.Write(line)
 	if err != nil || n != len(line) {

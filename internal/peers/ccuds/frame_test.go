@@ -250,6 +250,60 @@ func TestWriteFrame_NoListener_DialError(t *testing.T) {
 	}
 }
 
+// TestWriteFrame_DialStalls_WriteIncomplete pins that the deadline covers
+// the dial, not only what follows it: a connect that never completes (a
+// receiver that stopped accepting with a full backlog) returns a wrapped
+// ErrWriteIncomplete within the timeout — nothing was written — and the
+// dialer is handed the same absolute deadline the connection gets.
+func TestWriteFrame_DialStalls_WriteIncomplete(t *testing.T) {
+	prev := dialUnix
+	t.Cleanup(func() { dialUnix = prev })
+	var seen time.Time
+	dialUnix = func(ctx context.Context, d *net.Dialer, sockPath string) (net.Conn, error) {
+		seen = d.Deadline
+		// A stalled connect: the only thing that ends it is the dialer's
+		// own deadline (or the caller's ctx), exactly like net.Dialer.
+		dctx, cancel := context.WithDeadline(ctx, d.Deadline)
+		defer cancel()
+		<-dctx.Done()
+		if ctx.Err() != nil {
+			return nil, &net.OpError{Op: "dial", Net: "unix", Err: ctx.Err()}
+		}
+		return nil, &net.OpError{Op: "dial", Net: "unix", Err: os.ErrDeadlineExceeded}
+	}
+
+	const timeout = 300 * time.Millisecond
+	start := time.Now()
+	err := WriteFrame(context.Background(), "/tmp/pdxp-stalled.sock", []byte("{}\n"), timeout)
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrWriteIncomplete) {
+		t.Fatalf("err = %v, want ErrWriteIncomplete", err)
+	}
+	if elapsed > timeout+100*time.Millisecond {
+		t.Fatalf("returned after %v, want within %v", elapsed, timeout+100*time.Millisecond)
+	}
+	if seen.IsZero() || seen.Before(start.Add(timeout-50*time.Millisecond)) || seen.After(start.Add(timeout+50*time.Millisecond)) {
+		t.Errorf("dialer deadline = %v, want about start+%v (%v)", seen, timeout, start.Add(timeout))
+	}
+}
+
+// TestWriteFrame_ContextCancelDuringDial pins that a cancelled ctx during
+// the dial surfaces as ctx.Err(), not as a write error.
+func TestWriteFrame_ContextCancelDuringDial(t *testing.T) {
+	prev := dialUnix
+	t.Cleanup(func() { dialUnix = prev })
+	dialUnix = func(ctx context.Context, d *net.Dialer, sockPath string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, &net.OpError{Op: "dial", Net: "unix", Err: ctx.Err()}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	err := WriteFrame(ctx, "/tmp/pdxp-stalled.sock", []byte("{}\n"), 10*time.Second)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrWriteIncomplete) {
+		t.Fatalf("err = %v, want context.Canceled and not ErrWriteIncomplete", err)
+	}
+}
+
 func TestWriteFrame_ContextCancelDuringEOFWait(t *testing.T) {
 	ln, path := listenAt(t)
 	acceptOne(t, ln, func(c net.Conn) {

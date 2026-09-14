@@ -33,7 +33,8 @@ const msgDefaultLogTail = 50
 // printed to stderr (exit 2) for every malformed invocation except an
 // unrecognized flag, which gets its own more specific message (see
 // runMsgCmd). `selftest`'s body lives in msg_selftest.go.
-const msgUsage = "usage: pdx msg send <host>/<session> <text> [--mode prompting|bypass] [--json] [--config <path>]\n" +
+const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<session> <text>\n" +
+	"           (-- ends the options: use it before text that starts with -)\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +
 	"       pdx msg selftest [--timeout <dur>] [--config <path>]"
@@ -52,7 +53,7 @@ func runMsgCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 	inv, unknownFlag, ok := parseMsgInvocation(args)
 	if !ok {
 		if unknownFlag != "" {
-			fmt.Fprintf(stderr, "pdx msg: unknown flag %s\n", unknownFlag)
+			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <host>/<session> <text>)\n", unknownFlag)
 		} else {
 			fmt.Fprintln(stderr, msgUsage)
 		}
@@ -99,7 +100,9 @@ type msgInvocation struct {
 
 // parseMsgInvocation parses pdx msg's full grammar in one pass: flags may
 // appear anywhere in args, positionals are collected in order, and the
-// first positional selects the verb. ok is false for any malformed input:
+// first positional selects the verb. A bare "--" ends option parsing:
+// everything after it is positional, so text that starts with "-" (or
+// that spells one of these flags) can be sent. ok is false for any malformed input:
 // no verb, an unknown verb, a flag missing its value, a flag not valid for
 // the selected verb, wrong positional arity, an invalid --mode/--tail
 // value, or an unrecognized deliver argument. unknownFlag is set (and ok
@@ -116,6 +119,9 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--":
+			positionals = append(positionals, args[i+1:]...)
+			i = len(args)
 		case a == "--config" || a == "-config":
 			if i+1 >= len(args) {
 				return msgInvocation{}, "", false
