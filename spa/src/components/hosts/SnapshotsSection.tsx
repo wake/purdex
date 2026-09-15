@@ -108,8 +108,17 @@ export function SnapshotsSection({ hostId }: { hostId: string }) {
   })
 
   const handleRebuildOne = (pane: BatchCandidate) => void run(`rebuild:${pane.paneId}`, 'rebuild.batch_running', async (): Promise<Status> => {
+    // What this row was planned from. Loading the host's config is a network
+    // wait the pane can move under, so — exactly as the batch path does — the
+    // baseline travels into the engine, which checks it in the same
+    // synchronous step as the create.
+    const expectedBinding = { hostId: pane.hostId, sessionCode: pane.sessionCode, tmuxInstance: pane.tmuxInstance }
     await useHostConfigStore.getState().ensureLoaded(pane.hostId)
-    const report = await rebuildPane(pane.hostId, pane.tabId, pane.paneId, planForRecord(pane.record, resumeLookupFor(pane.hostId)))
+    const report = await rebuildPane(
+      pane.hostId, pane.tabId, pane.paneId,
+      planForRecord(pane.record, resumeLookupFor(pane.hostId)),
+      { expectedBinding },
+    )
     if (report.steps.create.status === 'failed') {
       return { tone: 'error', message: report.steps.create.error ?? t('settings.snapshot.toast.restoreError') }
     }

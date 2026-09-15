@@ -254,6 +254,32 @@ describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
     expect(mockedRebuildPane.mock.calls[0].slice(0, 3)).toEqual(['h1', 't2', 'p2'])
   })
 
+  // The single rebuild plans, then waits for the host's config — exactly the
+  // window the batch path guards against by handing the engine the binding it
+  // planned from. Without it the engine has nothing to compare the pane
+  // against and would rebuild whatever the pane holds when the wait ends.
+  it('carries the binding it planned from across the host-config wait', async () => {
+    seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { tmuxInstance: '' }))
+    let release!: () => void
+    const ensureLoaded = vi.fn(() => new Promise<void>((resolve) => { release = resolve }))
+    useHostConfigStore.setState({ ensureLoaded })
+
+    render(<SnapshotsSection hostId="h1" />)
+    fireEvent.click(screen.getByTestId('record-attention-rebuild-p2'))
+    await waitFor(() => expect(ensureLoaded).toHaveBeenCalledWith('h1'))
+
+    // The pane is re-pointed onto another session while the load is in flight.
+    act(() => {
+      seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { tmuxInstance: '', sessionCode: 'new999' }))
+    })
+    await act(async () => { release() })
+
+    await waitFor(() => expect(mockedRebuildPane).toHaveBeenCalledTimes(1))
+    expect(mockedRebuildPane.mock.calls[0][4]).toMatchObject({
+      expectedBinding: { hostId: 'h1', sessionCode: 'old111', tmuxInstance: '' },
+    })
+  })
+
   it('labels the legacy snapshot actions shell-only', () => {
     mockedReadSnapshot.mockReturnValue(snapWithData())
     render(<SnapshotsSection hostId="h1" />)
