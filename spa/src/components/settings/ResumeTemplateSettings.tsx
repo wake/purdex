@@ -1,9 +1,6 @@
 // spa/src/components/settings/ResumeTemplateSettings.tsx — the per-agent
-// resume command templates and their save-time check (spec §4.5).
-//
-// A separate file rendered inside the Snapshot section: separate so it does not
-// deepen issue #975, shared so the templates sit next to the records they
-// govern.
+// resume command templates of ONE host and their save-time check (spec §4.5;
+// per host since host-launcher spec §4.2).
 //
 // Five things live here and nowhere else:
 //
@@ -12,37 +9,40 @@
 //     `cld-yolo --resume {id}` would be looked up verbatim and answer
 //     `not_found`. Splitting off the first whitespace-separated token — with
 //     `{id}` never substituted — is this component's job (spec §4.4).
-//  2. **Nothing here can block a save.** The template is written to the store
-//     the moment the row commits; every verdict, including "could not check",
-//     is advice arriving afterwards.
-//  3. **The host picker defaults to the active host.**
+//  2. **Nothing here can block a save.** The template is saved to the host the
+//     moment the row commits; every verdict, including "could not check", is
+//     advice arriving afterwards.
+//  3. **Per host.** Templates are this host's daemon copy (host-launcher spec
+//     §4.2); the Test runs against the same host.
 //  4. **A 404 is `unverifiable`.** An older daemon has no such endpoint, and
 //     that is not the user's problem to debug (spec §8) — as is a network
 //     failure, which says nothing about the command either.
-//  5. **The limits are on screen** (spec §9): the templates are global while
-//     the test is per-host, and the test approximates the pane's shell rather
-//     than reproducing it.
+//  5. **The limits are on screen**: the test approximates the pane's shell
+//     rather than reproducing it.
 //
 // A verdict is keyed by `(hostId, commandWord)` and shown only while both still
-// match, so a verdict from another machine — or about a word the user has since
-// edited — can never sit beside the command being judged now. A response that
-// lands after either changed is discarded rather than rendered.
+// match, so a verdict about a word the user has since edited can never sit
+// beside the command being judged now. A response that lands after either
+// changed is discarded rather than rendered.
 //
-// That pair is not enough on its own, because it can come back: switching host
-// and switching back, or editing a word and retyping it, restores the exact
-// pair an abandoned request was sent under. So each request also carries a
-// REVISION, and anything that abandons a request — an edit, a revert, a host
-// change, Reset all, or simply pressing Test again — drops the row's revision.
-// A response is taken only when its revision is still the row's current one AND
-// the pair still holds; otherwise two requests racing on one row could settle
-// out of order and leave the older answer on screen.
+// That pair is not enough on its own, because it can come back: editing a word
+// and retyping it restores the exact pair an abandoned request was sent under.
+// So each request also carries a REVISION, and anything that abandons a
+// request — an edit, a revert, Reset all, or simply pressing Test again —
+// drops the row's revision. A response is taken only when its revision is
+// still the row's current one AND the pair still holds; otherwise two requests
+// racing on one row could settle out of order and leave the older answer on
+// screen.
 import { useRef, useState } from 'react'
-import { ArrowCounterClockwise, CheckCircle, CircleNotch, Question, Warning, XCircle } from '@phosphor-icons/react'
+import { ArrowCounterClockwise, Warning } from '@phosphor-icons/react'
 import { AGENT_NAMES } from '../../lib/agent-metadata'
 import { resolveShellCommand, type ShellResolveVerdict } from '../../lib/host-api'
-import { useHostStore } from '../../stores/useHostStore'
+import { commandWordOf } from '../../lib/command-word'
+import { HostConfigConflictError } from '../../lib/host-config-api'
+import { useResumeTemplateLookup, type ResumeTemplatePair } from '../../lib/resume-templates'
+import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useResumeTemplateLookup, useResumeTemplateStore } from '../../stores/useResumeTemplateStore'
+import { ShellVerdict } from './ShellVerdict'
 
 type Field = 'exact' | 'fallback'
 
@@ -52,19 +52,6 @@ const FIELDS: readonly Field[] = ['exact', 'fallback']
 const FIELD_LABEL: Record<Field, string> = {
   exact: 'resume_template.field.exact',
   fallback: 'resume_template.field.fallback',
-}
-
-/**
- * Every `reason` the daemon can return (spec §4.4). An unknown one is a newer
- * daemon than this build; it still renders as "did not resolve" rather than as
- * a raw token.
- */
-const REASON_LABEL: Record<string, string> = {
-  not_found: 'resume_template.verdict.not_found',
-  shell_metacharacters: 'resume_template.verdict.shell_metacharacters',
-  too_long: 'resume_template.verdict.too_long',
-  timeout: 'resume_template.verdict.timeout',
-  shell_failed: 'resume_template.verdict.shell_failed',
 }
 
 /** A verdict, plus the two things it is only true of. */
@@ -79,53 +66,22 @@ function rowKey(agentType: string, field: Field): string {
   return `${agentType}:${field}`
 }
 
-/**
- * The first whitespace-separated token, `{id}` untouched. This is the only
- * thing that is ever sent to a shell.
- */
-/**
- * A POSIX simple command may be preceded by variable assignments —
- * `OPENCODE_YOLO=true opencode -s <id>` is one command, not two — and the shell
- * grammar's "command word" is what follows them. Probing the first token
- * instead would ask the daemon to resolve `OPENCODE_YOLO=true`, which is not a
- * command and never resolves, so a working template would report itself broken.
- *
- * `NAME=` is the whole test: the value may contain anything, `=` included. A
- * flag or a path can never match, because neither starts with an identifier
- * followed by `=`.
- *
- * Returns '' for a template that is nothing but assignments, which leaves the
- * Test button disabled rather than probing something meaningless.
- */
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+/** An agent nobody has a shape for: the user may still teach the host one. */
+const BLANK: ResumeTemplatePair = { exact: '', fallback: '' }
 
-function commandWordOf(template: string): string {
-  for (const token of template.trim().split(/\s+/)) {
-    if (token && !ASSIGNMENT.test(token)) return token
-  }
-  return ''
-}
-
-export function ResumeTemplateSettings({ busy = false }: { busy?: boolean }) {
+export function ResumeTemplateSettings({ hostId, busy = false }: { hostId: string; busy?: boolean }) {
   const t = useI18nStore((s) => s.t)
-  const hosts = useHostStore((s) => s.hosts)
-  const hostOrder = useHostStore((s) => s.hostOrder)
-  const activeHostId = useHostStore((s) => s.activeHostId)
-
-  const lookup = useResumeTemplateLookup()
-  const setTemplate = useResumeTemplateStore((s) => s.setTemplate)
-  const resetAgent = useResumeTemplateStore((s) => s.resetAgent)
-
-  // Contract 3: the picker opens on the host the user is working with.
-  const [pickedHostId, setPickedHostId] = useState<string>(() => activeHostId ?? hostOrder[0] ?? '')
-  // A host can be removed while this is open; fall back rather than probing a
-  // host that no longer exists.
-  const hostId = hosts[pickedHostId] ? pickedHostId : hostOrder[0] ?? ''
+  const lookup = useResumeTemplateLookup(hostId)
+  const ready = useHostConfigStore((s) => s.byHost[hostId]?.status === 'ready')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  // Editing is only meaningful against a loaded copy: its revision is what the
+  // PUT is compared against.
+  const locked = busy || !ready
 
   // Uncommitted edits, and only those: a row is entered here by an edit and
   // leaves on the commit or the revert that ends it. Absent means "whatever the
-  // store answers", so a reset — or an edit from another window — repaints
-  // without any effect syncing state.
+  // host answers", so a reset — or a reload after another client's save —
+  // repaints without any effect syncing state.
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [results, setResults] = useState<Record<string, RowResult>>({})
 
@@ -138,7 +94,7 @@ export function ResumeTemplateSettings({ busy = false }: { busy?: boolean }) {
   /** Abandon whatever request `key` has out; its answer is no longer wanted. */
   const abandonRequest = (key: string) => { delete liveRequest.current[key] }
 
-  /** Abandon every row's request — what a host change and Reset all both do. */
+  /** Abandon every row's request — what Reset all does. */
   const abandonAllRequests = () => { liveRequest.current = {} }
 
   const liveValue = (agentType: string, field: Field): string => {
@@ -161,7 +117,7 @@ export function ResumeTemplateSettings({ busy = false }: { busy?: boolean }) {
   const dropResult = (key: string) =>
     setResults(({ [key]: _dropped, ...rest }) => rest)
 
-  /** Hand the row back to the store, whether it was committed or discarded. */
+  /** Hand the row back to the host copy, whether it was committed or discarded. */
   const dropDraft = (key: string) =>
     setDrafts(({ [key]: _dropped, ...rest }) => rest)
 
@@ -174,14 +130,28 @@ export function ResumeTemplateSettings({ busy = false }: { busy?: boolean }) {
     abandonRequest(key)
   }
 
+  const persist = async (next: Record<string, ResumeTemplatePair>) => {
+    setSaveError(null)
+    try {
+      await useHostConfigStore.getState().saveResumeTemplates(hostId, next)
+    } catch (err) {
+      setSaveError(err instanceof HostConfigConflictError
+        ? t('host_config.conflict')
+        : t('host_config.save_failed', { reason: err instanceof Error ? err.message : String(err) }))
+    }
+  }
+
   const handleCommit = (agentType: string, field: Field, value: string) => {
-    setTemplate(agentType, field, value)
-    // The store now holds this value, so the draft has nothing left to
-    // protect — and a draft that outlives its commit PINS the row: a template
-    // changed in another window, or reset from anywhere, would repaint every
-    // panel except the one being edited here, and Test would go on judging the
-    // stale word. A draft is uncommitted state only.
+    const current = useHostConfigStore.getState().byHost[hostId]?.resumeTemplates ?? {}
+    // The edit lands on top of whatever currently answers for this agent, so
+    // editing one field never silently blanks the other.
+    const base = lookup(agentType) ?? BLANK
+    // The save carries this value, so the draft has nothing left to protect —
+    // and a draft that outlives its commit PINS the row: a reload or a
+    // conflict would repaint every panel except the one being edited here, and
+    // Test would go on judging the stale word. A draft is uncommitted state only.
     dropDraft(rowKey(agentType, field))
+    void persist({ ...current, [agentType]: { ...base, [field]: value } })
   }
 
   const handleRevert = (agentType: string, field: Field) => {
@@ -191,20 +161,11 @@ export function ResumeTemplateSettings({ busy = false }: { busy?: boolean }) {
     abandonRequest(key)
   }
 
-  const handleHostChange = (nextHostId: string) => {
-    setPickedHostId(nextHostId)
-    // Contract: a verdict from another machine must never sit beside a command
-    // being judged for this one — and switching back must not let the answer
-    // to a request sent before the round trip count as an answer about now.
-    setResults({})
-    abandonAllRequests()
-  }
-
   const handleResetAll = () => {
-    for (const agentType of Object.keys(useResumeTemplateStore.getState().agents)) resetAgent(agentType)
     setDrafts({})
     setResults({})
     abandonAllRequests()
+    void persist({})
   }
 
   /**
@@ -269,25 +230,13 @@ export function ResumeTemplateSettings({ busy = false }: { busy?: boolean }) {
     <div data-testid="resume-templates" className="mt-6">
       <h3 className="text-sm text-text-primary">{t('resume_template.title')}</h3>
       <p data-testid="resume-template-limits" className="mt-1 text-xs text-text-secondary">
-        {t('resume_template.limit_global')}
+        {t('resume_template.limit_host')}
         {' '}
         {t('resume_template.limit_probe')}
       </p>
-
-      <label className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
-        <span>{t('resume_template.test_against')}</span>
-        <select
-          data-testid="resume-template-host"
-          value={hostId}
-          disabled={busy}
-          onChange={(e) => handleHostChange(e.target.value)}
-          className="rounded border border-border-default bg-bg-input px-2 py-1 text-text-primary disabled:opacity-50"
-        >
-          {hostOrder.filter((id) => hosts[id]).map((id) => (
-            <option key={id} value={id}>{hosts[id].name}</option>
-          ))}
-        </select>
-      </label>
+      {saveError ? (
+        <p data-testid="resume-template-save-error" className="mt-2 text-xs text-status-warning">{saveError}</p>
+      ) : null}
 
       <div className="mt-3 flex flex-col gap-3">
         {Object.keys(AGENT_NAMES).map((agentType) => (
@@ -302,7 +251,7 @@ export function ResumeTemplateSettings({ busy = false }: { busy?: boolean }) {
                   agentType={agentType}
                   field={field}
                   value={value}
-                  busy={busy}
+                  busy={locked}
                   pending={result?.verdict === 'pending'}
                   result={result}
                   t={t}
@@ -321,7 +270,7 @@ export function ResumeTemplateSettings({ busy = false }: { busy?: boolean }) {
         type="button"
         data-testid="resume-template-reset"
         onClick={handleResetAll}
-        disabled={busy}
+        disabled={locked}
         className="mt-3 flex items-center gap-1.5 rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:border-border-active hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
       >
         <ArrowCounterClockwise size={14} />
@@ -416,7 +365,7 @@ function TemplateRow({
       >
         {t('resume_template.test')}
       </button>
-      {result ? <Verdict agentType={agentType} field={field} result={result} t={t} /> : null}
+      {result ? <ShellVerdict testId={`resume-template-verdict-${agentType}-${field}`} verdict={result.verdict} t={t} /> : null}
       {warning ? (
         <span
           data-testid={`resume-template-warning-${agentType}-${field}`}
@@ -440,56 +389,4 @@ function warningFor(field: Field, value: string): string | undefined {
   if (field === 'exact' && !value.includes('{id}')) return 'resume_template.warning.exact_missing_id'
   if (field === 'fallback' && value.includes('{id}')) return 'resume_template.warning.fallback_has_id'
   return undefined
-}
-
-function Verdict({
-  agentType,
-  field,
-  result,
-  t,
-}: {
-  agentType: string
-  field: Field
-  result: RowResult
-  t: (key: string, params?: Record<string, string | number>) => string
-}) {
-  const testId = `resume-template-verdict-${agentType}-${field}`
-  const cls = 'flex items-center gap-1'
-
-  if (result.verdict === 'pending') {
-    return (
-      <span data-testid={testId} data-status="pending" className={`${cls} text-text-secondary`}>
-        <CircleNotch size={14} className="animate-spin" />
-        {t('resume_template.verdict.pending')}
-      </span>
-    )
-  }
-  if (result.verdict.status === 'resolved') {
-    return (
-      <span data-testid={testId} data-status="resolved" className={`${cls} text-status-success`}>
-        <CheckCircle size={14} />
-        {t('resume_template.verdict.resolved', { detail: result.verdict.detail })}
-      </span>
-    )
-  }
-  if (result.verdict.status === 'unverifiable') {
-    return (
-      <span data-testid={testId} data-status="unverifiable" className={`${cls} text-text-secondary`}>
-        <Question size={14} />
-        {t('resume_template.verdict.unverifiable')}
-      </span>
-    )
-  }
-  const reason = result.verdict.reason
-  return (
-    <span
-      data-testid={testId}
-      data-status="unresolved"
-      data-reason={reason}
-      className={`${cls} text-status-warning`}
-    >
-      <XCircle size={14} />
-      {t(REASON_LABEL[reason] ?? 'resume_template.verdict.unresolved')}
-    </span>
-  )
 }

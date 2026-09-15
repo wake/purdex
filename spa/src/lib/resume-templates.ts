@@ -1,6 +1,6 @@
 // spa/src/lib/resume-templates.ts — per-agent resume command templates (spec
 // §4.2 of the host-launcher design). Defaults and lookup semantics are carried
-// over verbatim from the retired `useResumeTemplateStore`; the overrides now
+// over verbatim from the retired global (persisted) template store; the overrides now
 // live on each host's daemon (`useHostConfigStore`), so every lookup is built
 // FOR a host.
 import { useMemo } from 'react'
