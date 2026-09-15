@@ -7,14 +7,14 @@ function escapeRegExp(s: string): string {
 
 /**
  * N = 1 + the number of live sessions named exactly `slug` or `slug-<digits>`;
- * if that name is taken, N increments until free. `bump` is added to the
- * starting N — the launch helper passes the retry count after a 409, when the
- * daemon knew a session the cached list did not.
+ * if that name is taken, N increments until free. After a 409 the launch helper
+ * calls again with the refused name appended to `liveNames`, so the answer
+ * strictly advances instead of recomputing the name the daemon just refused.
  */
-export function nextProjectSessionName(slug: string, liveNames: readonly string[], bump = 0): string {
+export function nextProjectSessionName(slug: string, liveNames: readonly string[]): string {
   const own = new RegExp(`^${escapeRegExp(slug)}(-\\d+)?$`)
   const taken = new Set(liveNames)
-  let n = 1 + liveNames.filter((name) => own.test(name)).length + bump
+  let n = 1 + liveNames.filter((name) => own.test(name)).length
   while (taken.has(`${slug}-${n}`)) n++
   return `${slug}-${n}`
 }

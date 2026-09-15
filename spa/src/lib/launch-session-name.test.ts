@@ -14,15 +14,17 @@ describe('nextProjectSessionName', () => {
     expect(nextProjectSessionName(slug as string, live as string[])).toBe(want)
   })
 
-  it('bump advances past a name the daemon just refused', () => {
-    expect(nextProjectSessionName('purdex', [], 1)).toBe('purdex-2')
-    expect(nextProjectSessionName('purdex', ['purdex-3'], 2)).toBe('purdex-4')
+  it('a refused name appended to the live list advances the answer', () => {
+    // How the launch helper retries after a 409: the name the daemon refused
+    // joins the taken set, so the next answer is never the same one again.
+    expect(nextProjectSessionName('purdex', ['purdex-1'])).toBe('purdex-2')
+    expect(nextProjectSessionName('purdex', ['purdex-1', 'purdex-2'])).toBe('purdex-3')
   })
 
   it('treats regex metacharacters in a slug literally', () => {
     // Slugs are [a-z0-9-] by validation; this guards the helper anyway.
     // Unescaped, `a.b` would also match `axb-2` and answer `a.b-3`.
-    expect(nextProjectSessionName('a.b', ['a.b-1', 'axb-2'], 0)).toBe('a.b-2')
-    expect(nextProjectSessionName('a-b', ['a-b-1', 'axb-2'], 0)).toBe('a-b-2')
+    expect(nextProjectSessionName('a.b', ['a.b-1', 'axb-2'])).toBe('a.b-2')
+    expect(nextProjectSessionName('a-b', ['a-b-1', 'axb-2'])).toBe('a-b-2')
   })
 })

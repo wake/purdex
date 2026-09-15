@@ -76,19 +76,25 @@ export async function launchSession(hostId: string, req: LaunchRequest, deps: La
   // generated name may lose a race with a session the cached list missed, so
   // it gets the initial attempt plus MAX_GENERATED_NAME_RETRIES more names.
   const attempts = typed ? 1 : 1 + MAX_GENERATED_NAME_RETRIES
+  // Names this launch already had refused with a 409: the daemon knows them
+  // even though the cached list does not, so the generator must count them as
+  // taken or every retry would recompute the same losing name.
+  const refused: string[] = []
   // `project` is set whenever `typed` is empty (checked above); the fallback
   // slug is unreachable and only keeps the name generation total.
-  const nameFor = (attempt: number): string => typed || nextProjectSessionName(project?.slug ?? '', liveNames, attempt)
+  const nextName = (): string => typed || nextProjectSessionName(project?.slug ?? '', [...liveNames, ...refused])
 
   let session: Session | undefined
   let lastError: unknown
   for (let attempt = 0; attempt < attempts; attempt++) {
+    const name = nextName()
     try {
-      session = await pinned.createSession(nameFor(attempt), cwd, 'terminal')
+      session = await pinned.createSession(name, cwd, 'terminal')
       break
     } catch (err) {
       lastError = err
       if (!isDuplicateName(err)) break
+      refused.push(name)
     }
   }
   if (!session) return { status: 'failed', reason: 'create_failed', error: message(lastError) }

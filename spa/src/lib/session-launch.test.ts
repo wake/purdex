@@ -89,6 +89,21 @@ describe('launchSession', () => {
     expect(capped).toMatchObject({ status: 'failed', reason: 'create_failed', error: '409 Conflict' })
   })
 
+  it('a refused name is remembered, so each retry advances past names the cache never knew', async () => {
+    const f = fakePin()
+    // The daemon knows `purdex-4` and `purdex-5`; the cached list knows neither,
+    // so a retry that only recounts the cache would offer `purdex-4` forever.
+    f.createSession.mockImplementation(async (name) => {
+      if (name === 'purdex-4' || name === 'purdex-5') throw new HostApiError(409, 'Conflict')
+      return session({ name })
+    })
+    const out = await launchSession(H, { name: '', project: PROJECT }, {
+      pin: f.pin, liveNames: () => ['purdex-1', 'purdex-3'],
+    })
+    expect(f.createSession.mock.calls.map(([n]) => n)).toEqual(['purdex-4', 'purdex-5', 'purdex-6'])
+    expect(out).toMatchObject({ status: 'created', session: { name: 'purdex-6' } })
+  })
+
   it('409 on a typed name is not retried; 400/500 are never retried', async () => {
     const f = fakePin()
     f.createSession.mockRejectedValue(new HostApiError(409, 'Conflict'))
