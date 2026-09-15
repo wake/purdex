@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { launchSession, MAX_GENERATED_NAME_RETRIES, type LaunchDeps } from './session-launch'
+import { launchSession, MAX_GENERATED_NAME_RETRIES, SEND_UNSUPPORTED, type LaunchDeps } from './session-launch'
 import { HostApiError, type Session } from './host-api'
 import { GenerationConflictError } from './rebuild/transport'
 import { useHostStore } from '../stores/useHostStore'
@@ -115,15 +115,23 @@ describe('launchSession', () => {
     expect(out.status === 'created' && out.sendError).toMatch(/tmux generation/)
   })
 
-  it('a session with no tmux_instance (old daemon) cannot be sent to: sendError, not a throw', async () => {
+  it('a session with no tmux_instance (old daemon) is never sent to: the unsupported marker, no send at all', async () => {
+    for (const generation of [undefined, '']) {
+      const f = fakePin()
+      f.createSession.mockResolvedValue(session({ tmux_instance: generation }))
+      const out = await launchSession(H, { name: 'dev', project: PROJECT, command: COMMAND }, { pin: f.pin })
+      // The transport rejects a send with no generation to assert; that raw
+      // internal error must never reach the user.
+      expect(f.sendKeys).not.toHaveBeenCalled()
+      expect(out).toEqual({ status: 'created', session: session({ tmux_instance: generation }), sendError: SEND_UNSUPPORTED })
+    }
+  })
+
+  it('a real send failure stays distinguishable from the unsupported marker', async () => {
     const f = fakePin()
-    f.createSession.mockResolvedValue(session({ tmux_instance: undefined }))
-    f.sendKeys.mockImplementation(async (_code, _cmd, expected) => {
-      if (!expected) throw new Error('refusing to send keys to abc without a tmux generation to assert')
-    })
+    f.sendKeys.mockRejectedValue(new GenerationConflictError('abc', '111:1000'))
     const out = await launchSession(H, { name: 'dev', project: PROJECT, command: COMMAND }, { pin: f.pin })
-    expect(f.sendKeys).toHaveBeenCalledWith('abc', 'claude', '')
-    expect(out).toMatchObject({ status: 'created', sendError: expect.stringMatching(/tmux generation/) })
+    expect(out.status === 'created' && out.sendError).not.toBe(SEND_UNSUPPORTED)
   })
 
   it('an unknown host fails before any request (real pinHost)', async () => {

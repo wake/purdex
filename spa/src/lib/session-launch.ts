@@ -19,6 +19,14 @@ import type { HostCommand, HostProject } from './host-config-api'
  */
 export const MAX_GENERATED_NAME_RETRIES = 5
 
+/**
+ * `sendError` marker for "the command was never sent": the daemon created the
+ * session without a tmux generation (pre-generation daemon), and the guarded
+ * send has nothing to assert against. A stable value, not a message — the UI
+ * localizes it instead of showing the transport's internal wording.
+ */
+export const SEND_UNSUPPORTED = 'unsupported_daemon'
+
 export interface LaunchRequest {
   /** What the user typed; trimmed here. Empty means "generate from the project". */
   name: string
@@ -27,6 +35,7 @@ export interface LaunchRequest {
 }
 
 export type LaunchOutcome =
+  /** `sendError` is `SEND_UNSUPPORTED`, or a real send failure's message. */
   | { status: 'created'; session: Session; sendError?: string }
   | { status: 'failed'; reason: 'invalid_name' | 'create_failed' | 'host'; error: string }
 
@@ -86,8 +95,12 @@ export async function launchSession(hostId: string, req: LaunchRequest, deps: La
   if (!session.code) return { status: 'failed', reason: 'create_failed', error: 'empty session code' }
 
   if (!req.command) return { status: 'created', session }
+  // No generation means no guarded send: the transport would reject it and the
+  // user would read its internal wording. Report the session as created and say
+  // why the command did not run.
+  if (!session.tmux_instance) return { status: 'created', session, sendError: SEND_UNSUPPORTED }
   try {
-    await pinned.sendKeys(session.code, req.command.command, session.tmux_instance ?? '')
+    await pinned.sendKeys(session.code, req.command.command, session.tmux_instance)
     return { status: 'created', session }
   } catch (err) {
     return { status: 'created', session, sendError: message(err) }

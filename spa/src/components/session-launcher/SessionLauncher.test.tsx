@@ -11,6 +11,7 @@ vi.mock('wouter', async (importOriginal) => ({
 }))
 
 import { SessionLauncher } from './SessionLauncher'
+import { SEND_UNSUPPORTED } from '../../lib/session-launch'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useSessionStore } from '../../stores/useSessionStore'
@@ -123,6 +124,16 @@ describe('SessionLauncher', () => {
     fireEvent.click(screen.getByTestId('launcher-command-p1-c1'))
     await waitFor(() => expect(onLaunched).toHaveBeenCalledWith(made))
     expect(useUndoToast.getState().toast?.message).toContain('command failed to send')
+  })
+
+  it('old daemon: the command was never sent — its own localized toast, no raw internal error', async () => {
+    launch.mockResolvedValue({ status: 'created', session: made, sendError: SEND_UNSUPPORTED })
+    renderLauncher()
+    fireEvent.click(screen.getByTestId('launcher-command-p1-c1'))
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledWith(made))
+    const message = useUndoToast.getState().toast?.message ?? ''
+    expect(message).toContain('too old to run the command')
+    expect(message).not.toContain(SEND_UNSUPPORTED)
   })
 
   it('busy disables every item and a second click does not launch twice', async () => {

@@ -1210,6 +1210,7 @@
   "launcher.name_placeholder": "Session 名稱 — 留空則用 <slug>-N",
   "launcher.name_required": "請輸入 session 名稱，或從下方選擇專案。",
   "launcher.send_failed": "Session 已建立，但指令送出失敗：{{reason}}",
+  "launcher.send_unsupported": "Session 已建立，但此主機的 daemon 版本過舊，無法執行指令。",
   "launcher.empty": "此主機尚未設定專案。",
   "launcher.empty_link": "到 主機 › 專案 新增",
   "launcher.unsupported": "此主機的 daemon 版本過舊，不支援專案——按 Enter 可建立一般 session。",

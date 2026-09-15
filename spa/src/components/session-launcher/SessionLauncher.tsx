@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'wouter'
 import { FolderSimple } from '@phosphor-icons/react'
-import { launchSession, type LaunchRequest } from '../../lib/session-launch'
+import { launchSession, SEND_UNSUPPORTED, type LaunchRequest } from '../../lib/session-launch'
 import { isHostLive } from '../../lib/host-live'
 import { isValidSessionName } from '../../lib/session-name'
 import { encodeHostRouteId } from '../../lib/host-routes'
@@ -80,7 +80,9 @@ export function SessionLauncher({ hostId, disabled, onLaunched, onCancel, launch
         return
       }
       if (outcome.sendError) {
-        useUndoToast.getState().show(t('launcher.send_failed', { reason: outcome.sendError }))
+        useUndoToast.getState().show(outcome.sendError === SEND_UNSUPPORTED
+          ? t('launcher.send_unsupported')
+          : t('launcher.send_failed', { reason: outcome.sendError }))
       }
       onLaunched(outcome.session)
     } finally {
