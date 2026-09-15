@@ -1,6 +1,6 @@
 # Spec — P-B: execution pane on the Nexen SSE transport + Host "Nex" page
 
-- Status: draft v1 (2026-09-15)
+- Status: v2 (2026-09-15) — codex spec review `task-mu2816bw-hgxxq2` applied, see §10
 - Predecessor: `2026-09-15-pa-nex-module-spec.md` (P-A, shipped alpha.346/347).
   §4.3 of that spec is **binding** here: fetch + `Authorization: Bearer` +
   `Last-Event-ID` header, `X-Pdx-Client` per-client principal suffix, no
@@ -30,7 +30,9 @@ only says `{configured, mounted}`, and a bad `[nex]` block or a failed
   resume) + `useExecutionStore` keyed by `(hostId, executionId)`.
 - G2 `{kind:'execution'}` pane renders a Nexen execution with the existing
   message renderer (`MessageBubble`/`ToolCallBlock`/`ThinkingBlock`/
-  `ToolResultBlock`) and `StreamInput`; send and interrupt work through a
+  `ToolResultBlock`) and `StreamInput` (gains `showAttach?: boolean`,
+  default `true`; Execution passes `false` — there is no file channel on
+  Nexen `send`); send and interrupt work through a
   control lease that the pane acquires lazily and releases when it goes away.
 - G3 Host page gains a **Nex** sub-page: edit `[nex]` (persisted, restart to
   apply) and monitor the engine (mount state, effective config, account/quota,
@@ -127,16 +129,16 @@ Typed wrappers (names, not exhaustive signatures):
 |---|---|---|
 | `fetchNexCapabilities(hostId)` | `GET /v1/capabilities` | `NexCapabilities` (only the fields we read are typed: `phase,host_id,verbs,providers,sandbox_profiles,sandbox_default_profile,sandbox_max_profile,roots,lease{ttl_seconds,renew,release},transient_events,send{max_text_bytes}`; the rest `[key: string]: unknown`) |
 | `fetchNexHost(hostId)` | `GET /v1/host` | `{active_account, quota: null \| {…}}` |
-| `listExecutions(hostId, {state?, includeArchived?, cursor?, limit?})` | `GET /v1/executions` | `{items: ExecutionSummary[], next_cursor}` |
+| `listExecutions(hostId, {state?, includeArchived?, cursor?, limit?})` | `GET /v1/executions` | `{items: ExecutionSummary[], next_cursor: string}` (opaque; `""` = last page) |
 | `getExecution(hostId, id)` | `GET /v1/executions/{id}` | `ExecutionSummary` (with `lease`, `turn_count`, `live_turn_id`) |
-| `fetchExecutionEvents(hostId, id, {after, limit})` | `GET /v1/executions/{id}/events` | `{items: NexEvent[], next_cursor}` |
-| `attachObserve(hostId, id)` | `POST …/attach {mode:'observe'}` | `{stream_url, cursor, state}` |
+| `fetchExecutionEvents(hostId, id, {after, limit})` | `GET /v1/executions/{id}/events` | `{items: NexEvent[], next_cursor: number}` (seq to pass as `after`; `0` = last page) |
+| `attachObserve(hostId, id)` | `POST …/attach {mode:'observe'}` | `{stream_url, cursor: number, state}` (`cursor` = the execution's latest durable seq at attach time) |
 | `attachControl(hostId, id)` | `POST …/attach {mode:'control'}` | `{lease_id, expires_at}` |
 | `renewLease(hostId, id, leaseId)` | `POST …/attach/renew` | `{lease_id, expires_at}` |
 | `releaseLease(hostId, id, leaseId)` | `DELETE …/attach` | void |
 | `sendMessage(hostId, id, leaseId, text)` | `POST …/messages` | `{turn_id, delivery}` |
 | `interruptExecution(hostId, id, leaseId)` | `POST …/interrupt` | `{turn_id, state, reason?}` |
-| `archiveExecution(hostId, id, undo?)` / `terminateExecution(hostId, id, leaseId?)` | `POST …/archive` / `…/terminate` | void |
+| `archiveExecution(hostId, id, undo?)` / `terminateExecution(hostId, id, leaseId)` | `POST …/archive` / `…/terminate` | void (`terminate` requires a control lease — `api/interact.go:323`) |
 
 Errors: every non-2xx is thrown as `NexApiError {status, code, message,
 turn_id?}` parsed from the structured body `{error, code}`; a body that does
@@ -162,7 +164,9 @@ export function openNexSse(opts: NexSseOptions): { close(): void }
 ```
 
 - Transport is `fetch` with `Accept: text/event-stream`, the host's auth
-  headers (`getAuthHeaders`), `X-Pdx-Client`, and `Last-Event-ID` when a
+  headers (`useHostStore.getState().getAuthHeaders(hostId)` — the same source
+  `hostFetch` uses; `host-api.ts` gains an exported `hostAuthHeaders(hostId)`
+  helper so both paths share one line), `X-Pdx-Client`, and `Last-Event-ID` when a
   cursor is known; body read through `ReadableStream` + `TextDecoder`
   (`stream: true`). An `AbortController` backs `close()`.
 - Parser follows the SSE spec subset Nexen emits: `id:`, `event:`, `data:`
@@ -196,6 +200,9 @@ export interface ExecutionState {
   lease: { leaseId: string; expiresAt: number } | null      // lease *this tab* holds
   leaseError: { code: string; heldBy?: string } | null
   pendingSend: boolean                 // send in flight (input disabled)
+  pendingLocal: { text: string; delivery: 'delivered' | 'queued' | null } | null
+                                       // optimistic user bubble, rendered after `messages`
+  sendError: { code: string; message: string; turnId?: string } | null
   lastTurn: { turnId: string; delivery: 'delivered' | 'queued' } | null
 }
 export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionState
@@ -213,20 +220,29 @@ Rules:
   `transient_events`) → `messages.push(payload as StreamMessage)`. Provider
   kinds are an open set; unknown non-lifecycle kinds are still pushed (the
   renderer ignores what it cannot draw).
-- `execution.message_accepted` → push a synthetic `user` message built from
-  `payload.text` **only if** the last message is not already an identical
-  synthetic one (the pane appends an optimistic bubble on send; the durable
-  event confirms it). On the site-wide stream `text` is stripped — the
-  reducer never sees that stream (site-wide is P-B.3's list refresh only).
+- `execution.delegated` → push a synthetic `user` message built from
+  `payload.brief` (the first thing the human said; provider `user` events
+  only carry tool results). `execution.message_accepted` → push a synthetic
+  `user` message from `payload.text` **and clear `pendingLocal`** (the durable
+  event is the confirmation of the optimistic bubble; no heuristic dedupe).
+  On the site-wide stream `brief`/`text` are stripped — the reducer never
+  sees that stream (site-wide is P-B.3's list refresh only).
 - `execution.*` lifecycle → patch `summary.state` / `last_turn_reason` /
   `terminal_reason` / `observers` from the payload where present; do **not**
   invent fields the payload lacks.
-- `lease.acquired` / `lease.released` → patch `summary.lease`; if the
-  released/acquired principal is not ours and we hold a lease locally, keep
-  ours (server is authoritative; the next renew tells us if we lost it).
+- `lease.acquired` / `lease.released` → patch `summary.lease` **only**.
+  They never touch `ExecutionState.lease` (the lease *this tab* holds): the
+  only sources of a local `lease_id` are the `attach(control)` and `renew`
+  responses, and the only things that clear it are `release()`, a renew
+  answering `lease_expired`/`lease_mismatch`, host removal, or unmount. The
+  contract is explicit that lease authority is the summary/attach/renew
+  response, not the event stream (`capability-matrix.md` §3, `lease.renewed`
+  note). (I11)
 - Frames with `id: null` (`stream_event`, `stream_snapshot`, `lease.renewed`)
   → **dropped** in P-B (P-B2 adds a partial buffer).
 - `result` → also flips `pendingSend` false.
+- `applyDurableEvent` never clears `sendError`; the pane clears it on the
+  next send attempt.
 
 `spa/src/stores/useExecutionStore.ts` (zustand + `subscribeWithSelector`),
 keyed by `compositeKey(hostId, executionId)` (split with `lastIndexOf(':')`
@@ -237,12 +253,13 @@ per [[reference_session_code_cross_host_collision]] — execution ids are
 executions: Record<string, ExecutionState>
 setSummary / applyEvents(hostId, id, events: NexEvent[]) / setHistoryLoaded
 setSse(hostId, id, status, err?) / setLease / setLeaseError / setPendingSend / setLastTurn
-appendLocalUser(hostId, id, text)          // optimistic bubble
+setPendingLocal(hostId, id, local | null) / setSendError(hostId, id, err | null)
 clearExecution(hostId, id) / clearHost(hostId)
 ```
 
-`clearHost` is called from the same host-lifecycle hook that clears
-`useStreamStore` today (`host-lifecycle.ts`). The store holds **no**
+`clearHost` is called from the same host-lifecycle cascade that clears
+`useStreamStore` today (`host-lifecycle.ts`; see 4.3.4 for the full host
+removal behaviour). The store holds **no**
 connections; subscriptions live in hooks (4.3.2) so HMR and StrictMode
 double-mount cannot leak sockets through the store.
 
@@ -252,12 +269,19 @@ double-mount cannot leak sockets through the store.
 
 `ConversationView.tsx` is split, behaviour-preserving for Stream mode:
 
-- `ConversationMessages.tsx` — props `{ messages: StreamMessage[]; keyPrefix: string; showThinking: boolean; children?: ReactNode }`. Owns the scroll
-  container, auto-scroll-on-append, the empty-state text, and the
-  `assistant`/`user` block mapping (thinking / text / tool_use /
-  tool_result / interrupted / slash-command bubbles) exactly as today.
-  `children` renders after the list (Stream mode passes its pending control
-  prompts).
+- `ConversationMessages.tsx` — props
+  `{ messages: StreamMessage[]; keyPrefix: string; showThinking: boolean; scrollKey?: number; children?: ReactNode }`.
+  Owns the scroll container, the auto-scroll effect (deps: `messages` and
+  `scrollKey` — Stream passes `pendingControlRequests.length`, Execution
+  passes `pendingLocal ? 1 : 0`, preserving today's "scroll when a prompt
+  appears" behaviour), the i18n empty-state text (reads `useI18nStore`
+  itself, as today), the `ThinkingIndicator`, and the `assistant`/`user`
+  block mapping (thinking / text / tool_use / tool_result / interrupted /
+  slash-command bubbles) exactly as today. `children` renders inside the
+  scroll container after the list and before the thinking indicator's
+  slot — Stream mode passes its pending control prompts, Execution mode
+  passes the optimistic bubble. `useAgentStore` reads stay in
+  `ConversationView` (handoff branch only).
 - `ConversationView.tsx` keeps the Stream-specific parts (store reads,
   relay/handoff banners, permission handlers, file attach) and renders
   `<ConversationMessages …>{prompts}</ConversationMessages>` + `StreamInput`.
@@ -307,7 +331,11 @@ double-mount cannot leak sockets through the store.
 #### 4.3.3 `ExecutionView`
 
 Replaces `ExecutionDetailPage` (deleted along with `execution-api.ts` and
-their tests; `resolveExecutionHostId` moves to `lib/nex/`). Layout:
+their tests; `resolveExecutionHostId` moves to `lib/nex/`).
+`deeplinkResolver.ts` loses its `fetchExecution` dependency and its "focus
+the execution's tmux session tab" branch (M0 semantics — a Nexen execution
+has no tmux session): it resolves the host and calls `openDetail` only, with
+the resolved host id. Layout:
 
 ```
 ┌ header ────────────────────────────────────────────────────────────┐
@@ -326,27 +354,63 @@ their tests; `resolveExecutionHostId` moves to `lib/nex/`). Layout:
   raw principal. `leaseError.code === 'lease_held'` renders an inline notice
   "Held by <principal> — try again when released" and keeps the input
   enabled (retry is a send).
-- **Send**: `ensureLease()` → `appendLocalUser` → `setPendingSend(true)` →
-  `sendMessage`. `delivery: 'queued'` shows a small "queued" tag on the
-  bubble until the next `execution.message_accepted`/`assistant` arrives.
-  Errors: `NexApiError.code` mapped to an i18n line under the input
-  (`execution_archived`, `execution_terminal`, `invalid_text`,
-  `turn_failed_to_launch` …); unknown codes show the server message.
+- **Send**: `setSendError(null)` → `ensureLease()` → `setPendingLocal({text,
+  delivery: null})` → `setPendingSend(true)` → `sendMessage`. On 2xx:
+  `setPendingLocal({text, delivery})` (a "queued" tag shows while
+  `delivery === 'queued'`); the bubble is replaced by the durable
+  `execution.message_accepted` when it arrives (4.2.4). **On any throw**
+  (`ensureLease` or `sendMessage`): `setPendingLocal(null)` (the text goes
+  back into the input so nothing is lost), `setPendingSend(false)`,
+  `setSendError({code, message, turnId})`. Nexen writes
+  `execution.message_accepted` only after every check passed
+  (`execution/service.go:662–733`), so a failed send never produces a
+  durable event and the optimistic bubble must be withdrawn client-side.
+  `sendError.code` is mapped to an i18n line under the input
+  (`lease_held`, `execution_archived`, `execution_terminal`, `invalid_text`,
+  `turn_failed_to_launch`, `turn_stalled` …); unknown codes show the server
+  message. `pendingSend` is additionally cleared by `result` (normal turn
+  end) and by `execution.terminal`/`execution.error` (abnormal end), so no
+  path leaves the input disabled.
 - **Interrupt**: `ensureLease()` → `interruptExecution`; `no_live_turn` is
   a no-op; `interrupt_unconfirmed` (504) shows a warning, state stays as the
   server says.
 - **Terminate** asks for confirmation with a two-click button ("Terminate"
   → "Confirm terminate", reverting after 4 s) — there is no shared confirm
-  dialog outside the editor storage feature — and does not require a lease unless
-  the server says `lease_required` (then `ensureLease` and retry once).
+  dialog outside the editor storage feature — then `ensureLease()` →
+  `terminateExecution` (the verb requires a control lease). `lease_held`
+  shows the same notice as send.
 - Input disabled while `pendingSend`, or when `summary.state ∈ {rejected,
   failed, terminated}` or `archived`, with the reason as placeholder text.
 - `system` init messages update a small model badge (as Stream does).
-- Pane `content.host` hint resolution: `resolveExecutionHostId(host)`
-  unchanged (known host or first host). Additionally the pane content gains
-  nothing new — `{kind:'execution', executionId, host?}` stays.
+- **Pane identity is `(hostId, executionId)`.** `PaneContent` stays
+  `{kind:'execution', executionId, host?}` for persisted-tab compatibility,
+  but every opener in P-B (route, deeplink, Nex table) resolves the host
+  first and stores it, and `contentMatches` (`pane-utils.ts`) compares
+  `resolveExecutionHostId(a.host) === resolveExecutionHostId(b.host) &&
+  a.executionId === b.executionId`. Nexen ids are per-daemon, so the same
+  id on two hosts is two executions and must be two panes (I10).
 
-#### 4.3.4 What is *not* touched
+#### 4.3.4 Host removal and other teardown
+
+`host-lifecycle.ts`'s removal cascade is extended (same shape as the
+tmux-session handling):
+
+- `closeTabs` mode: tabs containing an `execution` pane whose resolved host
+  is the removed one are closed (snapshotted for undo like tmux tabs).
+  Closing unmounts `ExecutionView`, whose hooks close the SSE and release a
+  held lease (best-effort — the host's auth may already be gone).
+- keep-tabs mode: the panes stay; `useExecutionSubscription` also subscribes
+  to `useHostStore.hosts[hostId]` and, when it disappears, closes the SSE,
+  stops the renew timer, drops the local lease without a release call, and
+  the pane renders "Host removed" (no retry loop).
+- In both modes the cascade then calls `useExecutionStore.clearHost(hostId)`
+  **after** the tab closes have run, so no hook observes a half-cleared
+  store; undo restores tabs, whose hooks re-subscribe from scratch.
+- Tab close / pane content change / executionId change: hook cleanup =
+  `close()` SSE + `release()` once if a lease is held (I6).
+- `beforeunload`: `release()` via `fetch(…, {keepalive: true})`, best-effort.
+
+#### 4.3.5 What is *not* touched
 
 `useRelayWsManager`, `useMultiHostEventWs` relay events, `stream-ws.ts`,
 `useStreamStore`, `SessionPaneContent` stream branch, handoff buttons. P-D
@@ -356,16 +420,28 @@ removes them; P-B only extracts the shared renderer.
 
 #### 4.4.1 Daemon: soft-fail Init (`internal/module/nex/module.go`)
 
-- `Init` no longer returns the assemble/config/data-dir error. It stores it
-  in `m.initErr`, logs `nex: init failed (module stays unmounted): …`, and
-  returns nil. `RegisterRoutes` then mounts a handler that answers every
-  `/api/nex/…` request with `503 {"error": "<initErr>", "code": "nex_unavailable"}`
-  (same structured error shape as Nexen so clients need one parser).
-  `Start`/`Stop`/`Close` are no-ops in that state.
-- Config **validation** errors (`NexConfig.Validate`) are still fatal at
-  config load (unchanged) — they are caught at `PUT` time (4.4.2), so the
-  only way to hit them is hand-editing `config.toml`, and a daemon that
-  refuses a config it cannot parse is the existing rule for every section.
+- `Init` no longer returns the assemble/data-dir/PATH-policy error. It
+  stores it in `m.initErr`, logs `nex: init failed (engine unavailable): …`,
+  and returns nil, leaving `m.sys == nil`. `RegisterRoutes` checks
+  `m.initErr` **before** touching `m.sys`: when set it mounts a fallback
+  handler answering every `/api/nex/…` request with
+  `503 {"error": "<initErr>", "code": "nex_unavailable"}` (same structured
+  error shape as Nexen so clients need one parser; the existing `recover`
+  wrapper is not involved, so a nil `sys.handler` can never turn into a
+  500). `Start`/`Stop`/`Close` return nil immediately when `m.sys == nil`.
+  Test: force `assembleFn` to fail → daemon `/api/health` 200,
+  `/api/nex/v1/capabilities` 503 `nex_unavailable`, `/api/info.nex.ready`
+  false (I8).
+- Division of labour, stated so nobody expects more of either half:
+  `NexConfig.Validate` (config load and `PUT`) catches **static shape**
+  errors only — enabled without roots, non-absolute paths, unknown profile
+  names, unparsable durations. Everything the environment decides — a
+  `claude_bin` that is missing or not executable, a root that is a file, an
+  unwritable `data_dir`, an assembler error — passes `Validate` and is
+  absorbed by soft-fail `Init` (existing tests in `module_test.go` around
+  line 503 enumerate those cases). `Validate` errors remain fatal at config
+  load, unchanged, because they can only come from hand-editing
+  `config.toml` and every other section already behaves that way.
 - `Core.Mounted("nex")` keeps meaning "added". A new `Module.Ready() bool`
   is not introduced; instead the nex module exposes `Status()` (4.4.2).
 
@@ -391,9 +467,11 @@ removes them; P-B only extracts the shared renderer.
 `effective` is produced by the nex module (`Status()`), read by
 `info_handler.go` through a small `core`-level interface
 (`type StatusReporter interface{ Status() map[string]any }`) so `core` does
-not import `module/nex`. Values are the **expanded** ones (`~` resolved,
-`claude_bin` after lazy `LookPath` if it has already run, else the configured
-string or `""`).
+not import `module/nex`. Values are the **expanded** ones (`~` resolved) exactly as
+passed to `nexen.Options` at `Init` — `claude_bin` is the configured string
+(or `""` when Nexen resolves it lazily from PATH); the module does not
+report the lazily resolved path because it never learns it. When `Enabled`
+is false at boot, `effective` is `null` and `mounted` is false.
 
 `PUT /api/config` accepts `"nex": NexConfig` (full object, not partial —
 the form always submits the whole section it displayed):
@@ -405,6 +483,11 @@ the form always submits the whole section it displayed):
   response is the redacted config, as today.
 - `GET /api/config` already returns `nex` (`Config.Nex` has a `json:"nex"`
   tag and `Redacted()` deep-clones its slices — verified).
+
+SPA types: `ConfigData` gains `nex?: NexConfig` (mirrors `internal/config/nex.go`
+field-for-field; optional so older daemons stay consumable) and `fetchInfo`'s
+result gains `nex: NexInfo` (`{configured, mounted, ready, init_error, effective: NexEffective | null}`),
+both in `host-api.ts`.
 
 The SPA computes `restartRequired = !deepEqual(config.nex, normalized(info.nex.effective))`
 only for the fields present in both (roots, bins, profiles, timeouts, path
@@ -493,7 +576,23 @@ enforces parity).
   returns it while `/api/info.nex.effective` is unchanged.
 - I10 `NexExecutionsTable` opens `{kind:'execution', executionId, host}` in
   the current tab and focuses an existing pane for the same
-  `(host, executionId)` instead of opening a second one.
+  `(host, executionId)` instead of opening a second one; the same
+  `executionId` on a different host opens a second pane (`contentMatches`
+  test with two hosts).
+- I11 `ExecutionState.lease` is set only from `attach(control)`/`renew`
+  responses; feeding `lease.acquired`/`lease.released` events for any
+  principal (ours included) through `applyDurableEvent` changes
+  `summary.lease` and nothing else. After an SSE `reconnecting → open`
+  transition the hook refetches the summary once.
+- I12 A failed send (`lease_held`, `invalid_text`, `execution_archived`,
+  network error) leaves `pendingSend === false`, `pendingLocal === null`,
+  `sendError.code` set, and the composed text back in the input; a
+  successful send followed by `execution.message_accepted` leaves exactly
+  one user bubble with that text.
+- I13 Removing a host with `closeTabs` closes its execution tabs and issues
+  at most one release per held lease; removing it without `closeTabs`
+  leaves the panes in the "Host removed" state with no timers or sockets
+  alive (fake timers + fetch spy).
 
 ## 6. Acceptance (live, mlab)
 
@@ -556,3 +655,21 @@ hot apply, no restart button in P-B, transient frames dropped until P-B2.
   (`consumer-guide.md` §0.5/§4/§9, `capability-matrix.md` §0/§3/§3.5/錯誤碼).
 - Follow-ups to open at ship time: hot-apply `[nex]`; daemon restart
   endpoint + button; history tail window; #1033 (Stop closes store).
+
+## 10. Codex spec review disposition (`task-mu2816bw-hgxxq2`, one round, gpt-5.5)
+
+| # | Finding | Disposition |
+|---|---|---|
+| P2-1 | Execution pane singleton compares `executionId` only (`pane-utils.ts:50`) → violates I10 | Fixed: 4.3.3 "Pane identity", I10 extended with the two-host test |
+| P2-2 | Send failure leaves `pendingSend` stuck / optimistic bubble orphaned; Nexen emits `message_accepted` only after all checks | Fixed: `pendingLocal` + `sendError` in state, full catch path in 4.3.3, I12 |
+| P2-3 | Soft-fail Init needs a nil-handler guard or recoverer returns 500 | Fixed: 4.4.1 fallback handler mounted before `m.sys` is touched, Start/Stop/Close guards, I8 |
+| P2-4 | `Validate` does not catch environment errors; spec implied it was sufficient | Fixed: 4.4.1 "Division of labour" |
+| P2-5 | Host removal cascade lacked execution store / SSE / lease behaviour | Fixed: new 4.3.4, `clearHost` ordering, I13 |
+| P2-6 | Lease events must not be local lease authority | Fixed: 4.2.4 lease rule rewritten, I11 |
+| P3-1 | `ConversationMessages` coupling (i18n empty state, auto-scroll deps, prompts as children) | Fixed: 4.3.1 props/children boundary spelled out |
+| P3-2 | `StreamInput` always renders the attach button | Fixed: `showAttach` prop (G2) |
+| P3-3 | History vs list cursor types | Fixed: 4.2.2 table |
+| P3-4 | `getAuthHeaders` is on `useHostStore`, not exported from `host-api` | Fixed: 4.2.3 + `hostAuthHeaders` helper |
+| P3-5 | TS `ConfigData`/info types lack `nex`; `effective.claude_bin` over-promised | Fixed: 4.4.2 |
+| P3-6 | `terminate` requires a lease; "retry on 409" wastes a round trip | Fixed: 4.3.3 Terminate calls `ensureLease` first |
+| — | (self) `deeplinkResolver` imports the M0 `execution-api` | Fixed: 4.3.3 |
