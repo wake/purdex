@@ -193,8 +193,8 @@ describe('NexHostSection', () => {
     expect(configCallCount()).toBe(configCallsBefore)
   })
 
-  // Ruling K, item (a): a failed Refresh must not collapse the whole
-  // section — only fix round 1's initial-load failure does that.
+  // A failed Refresh must not collapse the whole section — only an
+  // initial-load failure does that.
   it('a failed Refresh keeps the cards and shows an inline error; a later successful Refresh clears it', async () => {
     render(<NexHostSection hostId={HOST_ID} />)
     await screen.findByText('Engine')
@@ -216,7 +216,7 @@ describe('NexHostSection', () => {
     expect(screen.getByText('Engine')).toBeInTheDocument()
   })
 
-  // Ruling K, item (b): the initial-load failure gate gets a way back.
+  // The initial-load failure gate gets a way back.
   it('Retry after an initial /api/config failure reloads and renders the cards', async () => {
     mockFetchInfo.mockImplementation(() => Promise.resolve(infoResponse(readyInfo)))
     mockHostFetch.mockImplementation((_hostId, path) => {
@@ -271,18 +271,17 @@ describe('NexHostSection', () => {
     expect(screen.getByText(/^saved/i)).toBeInTheDocument()
   })
 
-  // Controller ruling I, exercised end-to-end with a real reconnect: offline
+  // Exercised end-to-end with a real reconnect: offline
   // always hides the cards — even ones that had already loaded — and going
   // back online reloads both endpoints and re-renders them. The status
   // card fetching Nexen host/capabilities data a second time is *not*
   // caused by `key={generation}` forcing a remount of an already-mounted
   // component (there is no such component here to remount) — it's simply a
   // fresh `<NexEngineStatus>` mounting for the first time since step 3 tore
-  // down the whole card subtree (ruling I's offline branch renders a
+  // down the whole card subtree (the offline branch renders a
   // completely different element, not the cards with different props).
-  // Verified in fix round 1 by temporarily removing `key={generation}`:
-  // this test still passed unchanged, proving the key does no work on this
-  // path (see task-7-report.md fix round 1, item 2).
+  // Removing `key={generation}` leaves this test passing: the key does no
+  // work on this path.
   it('renders the form when /api/config carries null nex lists and no sandbox (older or unset config)', async () => {
     mockHostFetch.mockImplementation((_hostId, path) => {
       if (path !== '/api/config') return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
@@ -326,7 +325,7 @@ describe('NexHostSection', () => {
     const configCallsAfterFirstConnect = configCallCount()
 
     // 3) Disconnect again — even though data is already loaded, the cards
-    // must disappear (ruling I: no stale cards while offline).
+    // must disappear (no stale cards while offline).
     setRuntimeStatus('disconnected')
     await waitFor(() => expect(screen.getByText('Failed to load')).toBeInTheDocument())
     expect(screen.queryByText('Engine')).not.toBeInTheDocument()

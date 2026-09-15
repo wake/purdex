@@ -218,9 +218,9 @@ func profilesText(maxProfile, defaultProfile string) string {
 // Stop drains the engine within ctx's budget (core.ShutdownBudget, shared
 // with the HTTP server's Shutdown).
 //
-// Stop and Close are no-ops when Init never assembled an engine (the
-// daemon log.Fatals on an Init error, but a partially built Module must
-// not panic if a caller still walks the lifecycle).
+// Stop and Close are no-ops when Init never assembled an engine (only a
+// Validate error from Init is fatal to the daemon; an engine-assembly error
+// soft-fails, spec §4.4.1, and the lifecycle still walks this Module).
 func (m *Module) Stop(ctx context.Context) error {
 	if m.sys.shutdown == nil {
 		return nil

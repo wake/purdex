@@ -14,10 +14,18 @@ export interface NexEngineStatusProps {
 
 type BadgeState = 'disabled' | 'not_running' | 'unavailable' | 'ready'
 
+// A daemon older than P-B.3 reports only `configured`/`mounted` in
+// `/api/info.nex` (spec §4.4.2); a mounted module there is serving.
+function isReady(info: NexInfo | null): boolean {
+  if (!info) return false
+  if (info.ready === undefined) return info.mounted
+  return info.ready
+}
+
 function badgeState(info: NexInfo | null): BadgeState {
   if (!info || !info.configured) return 'disabled'
   if (!info.mounted) return 'not_running'
-  if (!info.ready) return 'unavailable'
+  if (!isReady(info)) return 'unavailable'
   return 'ready'
 }
 
@@ -49,7 +57,7 @@ export default function NexEngineStatus({ hostId, info, onRefresh }: NexEngineSt
   const [host, setHost] = useState<NexHostInfo | null>(null)
   const [caps, setCaps] = useState<NexCapabilities | null>(null)
 
-  const ready = info?.ready ?? false
+  const ready = isReady(info)
 
   useEffect(() => {
     // Not ready: nothing to fetch. Stale host/caps state from a previous

@@ -105,6 +105,14 @@ describe('NexExecutionsTable', () => {
     expect(sseClose).toHaveBeenCalledTimes(1)
   })
 
+  it('manual Refresh does nothing while disabled', async () => {
+    render(<NexExecutionsTable hostId="h" enabled={false} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.listExecutions).not.toHaveBeenCalled()
+  })
+
   it('terminate needs confirmation, then takes a lease, terminates and releases', async () => {
     render(<NexExecutionsTable hostId="h" enabled />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
@@ -128,7 +136,7 @@ describe('NexExecutionsTable', () => {
     expect(api.releaseLease).not.toHaveBeenCalled()
   })
 
-  it('swallows a releaseLease rejection (ruling C: best-effort) — no action error, list still refetched', async () => {
+  it('swallows a releaseLease rejection (best-effort, spec §4.3.3) — no action error, list still refetched', async () => {
     vi.mocked(api.releaseLease).mockRejectedValueOnce(new Error('already gone'))
     render(<NexExecutionsTable hostId="h" enabled />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
@@ -220,9 +228,9 @@ describe('NexExecutionsTable', () => {
     expect(screen.queryByText('aaaaaaaaaaaa')).not.toBeInTheDocument()
   })
 
-  // Ruling B (confirmed live on mlab): list rows carry no `lease` field.
+  // List rows carry no `lease` field (confirmed live on mlab).
   // Render "—" instead of a lease holder when it is absent.
-  it('renders — for a row with no lease (ruling B: list rows may omit lease)', async () => {
+  it('renders — for a row with no lease (list rows may omit lease)', async () => {
     vi.mocked(api.listExecutions).mockResolvedValue({
       items: [row({ id: 'exc_ffffffffffffffff', lease: undefined })],
       next_cursor: '',

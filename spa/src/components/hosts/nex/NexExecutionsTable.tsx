@@ -18,7 +18,7 @@ export interface NexExecutionsTableProps {
   enabled: boolean
 }
 
-/** Trailing debounce applied to an SSE-triggered refetch (brief §Task 6). */
+/** Trailing debounce applied to an SSE-triggered refetch (spec §4.4.3). */
 export const LIST_REFRESH_DEBOUNCE_MS = 500
 
 interface ActionError {
@@ -63,7 +63,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
 
   // Cursor for Last-Event-ID: only frames carrying a non-null `id` (durable
   // events) may advance it — transient snapshot/stream frames never do
-  // (spa-context.md: sse.go:74 always points at the last durable seq).
+  // (spec §4.2.3: the site stream's `id:` is the last durable seq).
   const lastIdRef = useRef<number | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Guards a stale response (previous host, or superseded by a newer
@@ -191,7 +191,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
     setActionError(null)
     setPendingId(row.id)
     try {
-      // Ruling C: attachControl -> terminateExecution -> releaseLease
+      // attachControl -> terminateExecution -> releaseLease (spec §4.3.3)
       // (best-effort). A terminated execution may already have dropped its
       // lease, so releaseLease's own rejection is swallowed below and must
       // never surface as an action error; a failure of the first two steps
@@ -246,7 +246,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
           </label>
           <button
             type="button"
-            onClick={() => refetch(hostId, includeArchived)}
+            onClick={() => { if (enabled) refetch(hostId, includeArchived) }}
             className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent cursor-pointer"
           >
             <ArrowsClockwise size={12} />

@@ -317,3 +317,19 @@ func TestInfoEndpoint_NexRestartRequired(t *testing.T) {
 		assert.Equal(t, true, getInfoNex(t, c)["restart_required"])
 	})
 }
+
+func TestInfoEndpoint_ReporterCannotOverrideCoreNexFields(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
+	c.AddModule(&statusStubModule{
+		stubModule: stubModule{name: "nex"},
+		status: map[string]any{
+			"configured": false, "mounted": false, "restart_required": true,
+			"ready": true,
+		},
+	})
+	nex := getInfoNex(t, c)
+	assert.Equal(t, true, nex["configured"])
+	assert.Equal(t, true, nex["mounted"])
+	assert.Equal(t, false, nex["restart_required"])
+	assert.Equal(t, true, nex["ready"], "reporter-owned keys still come through")
+}

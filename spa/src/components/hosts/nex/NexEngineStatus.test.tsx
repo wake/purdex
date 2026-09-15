@@ -29,6 +29,13 @@ describe('NexEngineStatus', () => {
     expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/not running/i)
   })
 
+  it('treats an older daemon (no ready field) that is mounted as Ready', async () => {
+    const legacy = { configured: true, mounted: true, init_error: '', effective: null } as unknown as NexInfo
+    render(<NexEngineStatus hostId="h" info={legacy} onRefresh={() => {}} />)
+    expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/ready/i)
+    await waitFor(() => expect(api.fetchNexHost).toHaveBeenCalled())
+  })
+
   it('shows Unavailable with the init error and skips Nexen calls', () => {
     render(<NexEngineStatus hostId="h" info={{ configured: true, mounted: true, ready: false, init_error: 'nex: init: assembling engine: boom', effective: null }} onRefresh={() => {}} />)
     expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/unavailable/i)

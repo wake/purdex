@@ -66,7 +66,7 @@ export default function NexExecutionRow({
   onArchiveToggle,
 }: NexExecutionRowProps) {
   const t = useI18nStore((s) => s.t)
-  // Ruling B: list rows may omit `lease` entirely — render the holder only
+  // List rows may omit `lease` entirely — render the holder only
   // when present, "—" otherwise. `(you)` decorates a lease this tab holds.
   const isMine = row.lease != null && row.lease.principal_id.endsWith(`/${getNexClientId()}`)
 

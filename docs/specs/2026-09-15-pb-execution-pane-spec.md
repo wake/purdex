@@ -514,7 +514,7 @@ The SPA shows the restart notice while `info.nex.restart_required` is true.
 
 #### 4.4.3 SPA: `NexHostSection`
 
-Registered as a built-in host sub-page `{ localId: 'nex', labelKey: 'hosts.nex', order: 6 }`.
+Registered as a built-in host sub-page `{ localId: 'nex', labelKey: 'hosts.nex.label', order: 6 }`.
 Three stacked cards; each card is its own component with its own tests:
 
 1. **`NexEngineStatus`** — from `/api/info.nex` + `GET /v1/host` +

@@ -375,6 +375,7 @@ func TestPutConfigNexValidAndPersists(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgPath, []byte("bind = \"127.0.0.1\"\n"), 0644))
 	c := newTestCore()
 	c.CfgPath = cfgPath
+	c.AddModule(&statusStubModule{stubModule: stubModule{name: "nex"}, status: map[string]any{"effective": map[string]any{"repo_roots": []any{"/boot"}}}})
 	root := t.TempDir()
 	body := fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q],"sandbox":{"max_profile":"handoff","default_profile":"standard"},"timeouts":{"lease_ttl":"90s"}}}`, root)
 	rec := httptest.NewRecorder()
@@ -392,6 +393,16 @@ func TestPutConfigNexValidAndPersists(t *testing.T) {
 	var got config.Config
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
 	assert.True(t, got.Nex.Enabled)
+
+	// I9: the next GET returns the new nex, while the running module's
+	// effective config (a status stub here) is not touched by the PUT.
+	getRec := httptest.NewRecorder()
+	c.handleGetConfig(getRec, httptest.NewRequest("GET", "/api/config", nil))
+	var gotGet config.Config
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&gotGet))
+	assert.Equal(t, []string{root}, gotGet.Nex.RepoRoots)
+	assert.Equal(t, "handoff", gotGet.Nex.Sandbox.MaxProfile)
+	assert.Equal(t, map[string]any{"repo_roots": []any{"/boot"}}, getInfoNex(t, c)["effective"])
 }
 
 func TestPutConfigNexInvalidReturns400AndLeavesFileUntouched(t *testing.T) {

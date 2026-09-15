@@ -47,8 +47,6 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 	mounted := c.Mounted("nex")
 	nex := map[string]any{
-		"configured": nexEnabled,
-		"mounted":    mounted,
 		"ready":      mounted,
 		"init_error": "",
 		"effective":  nil,
@@ -58,6 +56,10 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 			nex[k] = v
 		}
 	}
+	// Core-computed fields are set after the reporter's keys so a module
+	// can never override them.
+	nex["configured"] = nexEnabled
+	nex["mounted"] = mounted
 	nex["restart_required"] = restartRequired
 
 	info := map[string]any{

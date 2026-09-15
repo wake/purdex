@@ -1,10 +1,8 @@
 // spa/src/components/hosts/nex/NexHostSection.tsx — Host → "Nex" sub-page
-// (P-B.3 Task 7). Fetches `/api/info` (→ info.nex) and `/api/config`
+// (spec §4.4.3). Fetches `/api/info` (→ info.nex) and `/api/config`
 // (→ config.nex) and composes the three Nex cards built in Tasks 4-6:
-// NexEngineStatus, NexConfigForm, NexExecutionsTable.
-//
-// See spa-context.md "Host reconnect refetch" for the disconnected→
-// connected refetch contract this section must honor.
+// NexEngineStatus, NexConfigForm, NexExecutionsTable. Reloads on a host
+// disconnected→connected transition (spec §4.4.3 "refetch on host reconnect").
 import { useEffect, useState } from 'react'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -22,11 +20,11 @@ interface Props {
 // `config` starts `undefined` — indistinguishable from "the daemon genuinely
 // has no [nex] section" — so until `/api/config` has actually resolved, the
 // form must not render at all: rendering it against `emptyNexConfig()` and
-// letting the user Save would PUT an empty section over the host's real one
-// (fix round 1, item 1). `loading` also covers the badge: before /api/info
-// resolves, `info` is `null`, which `NexEngineStatus` would otherwise read
+// letting the user Save would PUT an empty section over the host's real one.
+// `loading` also covers the badge: before /api/info resolves, `info` is
+// `null`, which `NexEngineStatus` would otherwise read
 // as "Disabled" rather than "not loaded yet". This is only the *initial*
-// (or Retry-restarted) load's status — a failed manual Refresh (ruling K)
+// (or Retry-restarted) load's status — a failed manual Refresh
 // is tracked separately via `refreshError` below and must NOT flip this
 // back to `'failed'`, or a transient network blip on Refresh would tear
 // down cards that are already showing good data.
@@ -88,21 +86,14 @@ export function NexHostSection({ hostId }: Props) {
   // A failed manual Refresh (the status card's own button, wired to
   // `handleRefresh` below) — deliberately independent of `infoStatus` so it
   // never re-triggers the failed-load gate and tears down cards that are
-  // already showing good data (ruling K). Shown as an inline error line
+  // already showing good data. Shown as an inline error line
   // above the cards; cleared by the next successful Refresh, and also by a
   // full reload (hostId/generation change) since that supersedes it.
   const [refreshError, setRefreshError] = useState(false)
   // Bumped on a disconnected→connected transition (see the reconnect
-  // detector below) and by the Retry button (ruling K) in the failed-load
-  // gate. Both are "restart the load" triggers, so they share one counter.
-  // Also passed as <NexEngineStatus key={generation}>: in every path that
-  // can bump it, the previous render had already unmounted the whole card
-  // subtree — either the offline branch (ruling I) or this component's own
-  // failed/loading gates below — so `NexEngineStatus` is mounting fresh
-  // regardless of the key; the key is currently redundant insurance, kept
-  // in case a future change ever bumps `generation` without an intervening
-  // unmount (verified in fix round 1 by removing it and re-running the
-  // reconnect test, which passed unchanged).
+  // detector below) and by the Retry button in the failed-load gate. Both
+  // are "restart the load" triggers, so they share one counter.
+  // Also keys <NexEngineStatus>: redundant today (every bump already remounts it).
   const [generation, setGeneration] = useState(0)
 
   // Host reconnect detector, using React's documented "adjusting state
@@ -164,7 +155,7 @@ export function NexHostSection({ hostId }: Props) {
 
   // Initial (or Retry-restarted) load failure: no cards have ever
   // successfully rendered for this generation, so there is nothing to
-  // preserve — show the failure with a way back (ruling K).
+  // preserve — show the failure with a way back.
   if (infoStatus === 'failed' || configStatus === 'failed') {
     return (
       <div className="max-w-2xl">
@@ -193,12 +184,11 @@ export function NexHostSection({ hostId }: Props) {
   // when its own Refresh button is clicked (it bumps an internal `tick`);
   // this handler only refreshes the daemon-side /api/info.nex data feeding
   // the badge/effective-config state, so the two refreshes don't duplicate
-  // the same request. A failure here must NOT touch `infoStatus` (ruling
-  // K) — doing so would flip the gate above and tear down all three cards
+  // the same request. A failure here must NOT touch `infoStatus` — doing so would flip the gate above and tear down all three cards
   // over a transient Refresh blip. It only sets `refreshError`, shown as an
   // inline line above the still-rendered cards; a subsequent successful
   // refresh (or any full reload) clears it. Deliberately no unmount/stale-
-  // hostId guard here — deferred, see task-7-report.md.
+  // hostId guard here.
   const handleRefresh = () => {
     fetchInfo(hostId)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`/api/info: ${r.status}`))))
