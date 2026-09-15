@@ -54,6 +54,15 @@ export function isLifecycleKind(kind: string): boolean {
  * Durable SSE frame → NexEvent. Returns null for transient frames (no id)
  * and for data that is not JSON. Accepts both the full eventView shape and
  * a bare payload (then seq comes from the id line and kind from event:).
+ *
+ * The SSE `id:` line is always authoritative for seq — never the wrapper's
+ * own `seq` field. A wrapper is only trusted (its kind/payload/execution_id/
+ * created_at adopted) when its `seq` agrees with `id:` or is absent; a
+ * disagreeing `seq` is a sign the "wrapper" is untrusted/malformed data, not
+ * a real eventView, so the whole object is instead treated as a bare
+ * payload. Trusting the wrapper's seq unconditionally would let a single
+ * bad frame set lastSeq far ahead and silently drop every real event up to
+ * it as a duplicate.
  */
 export function frameToEvent(frame: NexSseFrame): NexEvent | null {
   if (frame.id == null) return null
@@ -66,9 +75,10 @@ export function frameToEvent(frame: NexSseFrame): NexEvent | null {
   if (!parsed || typeof parsed !== 'object') return null
   const obj = parsed as Record<string, unknown>
   const idSeq = Number(frame.id)
-  if (typeof obj.kind === 'string' && obj.payload && typeof obj.payload === 'object') {
+  const wrapperSeqOk = obj.seq === undefined || obj.seq === idSeq
+  if (wrapperSeqOk && typeof obj.kind === 'string' && obj.payload && typeof obj.payload === 'object') {
     return {
-      seq: typeof obj.seq === 'number' ? obj.seq : idSeq,
+      seq: idSeq,
       execution_id: typeof obj.execution_id === 'string' ? obj.execution_id : '',
       kind: obj.kind,
       payload: obj.payload as Record<string, unknown>,

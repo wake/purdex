@@ -147,6 +147,14 @@ describe('frameToEvent / isLifecycleKind', () => {
     expect(frameToEvent({ id: '8', event: 'assistant', data: '{"seq":8,"execution_id":"exc_1","kind":"assistant","payload":{"type":"assistant"},"created_at":9}' }))
       .toEqual({ seq: 8, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 9 })
   })
+  it('the id: line is authoritative: a wrapper whose seq disagrees with id: is treated as a bare payload, not trusted', () => {
+    // A frame `id: 12` carrying `data: {"seq":9999,...}` must not resurrect
+    // as seq 9999 — every real event up to 9999 would then be dropped as a
+    // duplicate. seq always comes from the id: line; the wrapper's own seq
+    // is only a corroborating signal, never a source of truth.
+    expect(frameToEvent({ id: '12', event: 'assistant', data: '{"seq":9999,"kind":"assistant","payload":{"type":"assistant"}}' }))
+      .toEqual({ seq: 12, execution_id: '', kind: 'assistant', payload: { seq: 9999, kind: 'assistant', payload: { type: 'assistant' } }, created_at: 0 })
+  })
   it('treats a bare payload that merely has a "kind" key (no payload object) as the bare-payload path', () => {
     expect(frameToEvent({ id: '11', event: 'assistant', data: '{"kind":"something","type":"assistant"}' }))
       .toEqual({ seq: 11, execution_id: '', kind: 'assistant', payload: { kind: 'something', type: 'assistant' }, created_at: 0 })
