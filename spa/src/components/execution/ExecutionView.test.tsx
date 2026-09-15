@@ -199,4 +199,12 @@ describe('ExecutionView', () => {
     render(<ExecutionView hostId={H} executionId={E} isActive />)
     expect(screen.getByTestId('execution-loading')).toBeInTheDocument()
   })
+
+  it('shows the retrying error text under the loading line while a retry chain is failing (I1)', () => {
+    useExecutionStore.getState().setHistoryLoaded(H, E, false)
+    useExecutionStore.getState().setSse(H, E, 'closed', 'Failed to fetch')
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByTestId('execution-loading')).toBeInTheDocument()
+    expect(screen.getByTestId('execution-loading-error')).toHaveTextContent(/Failed to fetch/)
+  })
 })

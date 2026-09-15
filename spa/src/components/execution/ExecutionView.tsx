@@ -105,7 +105,14 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
       <ExecutionHeader summary={st.summary} costUsd={costUsd} sse={st.sse} isMine={isMine}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal} />
       {!st.historyLoaded ? (
-        <div data-testid="execution-loading" className="flex-1 flex items-center justify-center text-sm text-text-muted">{t('execution.loading')}</div>
+        <div data-testid="execution-loading" className="flex-1 flex flex-col items-center justify-center gap-1 text-sm text-text-muted">
+          <span>{t('execution.loading')}</span>
+          {st.sse === 'closed' && st.sseError && (
+            <span data-testid="execution-loading-error" className="text-xs text-status-error">
+              {t('execution.loading_error', { message: st.sseError })}
+            </span>
+          )}
+        </div>
       ) : (
         <ConversationMessages messages={st.messages} keyPrefix={executionId} showThinking={st.pendingSend && st.pendingLocal?.delivery !== 'queued'}
           showEmptyHint={st.messages.length === 0 && !st.pendingLocal} emptyText={t('execution.empty')} scrollKey={st.pendingLocal ? 1 : 0}>

@@ -749,6 +749,7 @@
 
   "execution.title": "執行體",
   "execution.loading": "載入執行體…",
+  "execution.loading_error": "載入失敗：{{message}}，重試中",
   "execution.not_found": "這台主機上找不到此執行體。",
   "execution.host_removed": "主機已移除。",
   "execution.nex_unavailable": "這台主機的 Nex 無法使用：{{error}}",

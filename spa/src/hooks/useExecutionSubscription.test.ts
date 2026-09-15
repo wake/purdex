@@ -346,6 +346,32 @@ describe('useExecutionSubscription', () => {
     expect(closes['exc_new']).toBeDefined()
   })
 
+  it('retries the whole chain with backoff after a non-terminal error, and completes once it succeeds (I1)', async () => {
+    vi.mocked(api.getExecution).mockReset().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(summary())
+    const { result } = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.getExecution).toHaveBeenCalledTimes(1)
+    expect(result.current.problem).toBeNull()
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('closed')
+    expect(useExecutionStore.getState().executions[KEY].sseError).toMatch(/Failed to fetch/)
+
+    // First backoff delay (2s) elapses — the chain retries from the top.
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(api.getExecution).toHaveBeenCalledTimes(2)
+    expect(useExecutionStore.getState().executions[KEY].historyLoaded).toBe(true)
+    expect(result.current.problem).toBeNull()
+  })
+
+  it('unmount cancels a pending retry timer so getExecution is not called again', async () => {
+    vi.mocked(api.getExecution).mockReset().mockRejectedValue(new TypeError('Failed to fetch'))
+    const { unmount } = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.getExecution).toHaveBeenCalledTimes(1)
+    unmount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    expect(api.getExecution).toHaveBeenCalledTimes(1)
+  })
+
   it('a terminal SSE close (with error) releases the slot so a later activation can reopen', async () => {
     const { rerender } = renderHook(({ active }) => useExecutionSubscription(H, E, active), { initialProps: { active: true } })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })

@@ -141,8 +141,10 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     })
 
     let unsubEvict: (() => void) | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let retryAttempt = 0
 
-    ;(async () => {
+    const connect = async () => {
       store().setSse(hostId, executionId, 'connecting')
       try {
         const asOf = store().executions[key]?.lastSeq ?? 0
@@ -217,27 +219,41 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
         openStreamRef.current = openStream
         if (subscriptionSlots.isLive(hostId, key) || subscriptionSlots.claimIfFree(hostId, key)) openStream()
         else { setPaused(true); store().setSse(hostId, executionId, 'paused') }
+        retryAttempt = 0
       } catch (e) {
         if (cancelled) return
         if (e instanceof NexApiError && e.code === 'execution_not_found') teardown('not_found', e.message)
         else if (e instanceof NexApiError && e.code === 'nex_unavailable') teardown('nex_unavailable', e.message)
         else if (e instanceof NexApiError && e.code === 'http_404') teardown('nex_disabled', e.message)
         else {
-          // Unexpected error before the stream ever opened (a claimed slot
-          // would otherwise leak forever on a subscription that can never
-          // succeed on its own).
+          // Unexpected, non-terminal error before the stream ever opened (a
+          // claimed slot would otherwise leak forever on a subscription
+          // that never retries). I1: the common trigger is app start with
+          // restored tabs before the host connection is up — retry the
+          // whole chain with backoff (2s -> 4 -> 8 -> capped at 30s)
+          // instead of getting stuck at "Loading execution..." forever.
+          // `problem` is left null so the view keeps showing the loading
+          // state (with sseError surfaced) rather than a terminal one.
           sseRef.current = null
           subscriptionSlots.release(hostId, key)
           store().setSse(hostId, executionId, 'closed', e instanceof Error ? e.message : String(e))
+          retryAttempt += 1
+          const delay = Math.min(2000 * 2 ** (retryAttempt - 1), 30000)
+          retryTimer = setTimeout(() => {
+            retryTimer = null
+            if (!cancelled) void connect()
+          }, delay)
         }
       }
-    })()
+    }
+    void connect()
 
     return () => {
       cancelled = true
       unsubStale()
       unsubHost()
       unsubEvict?.()
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
       openStreamRef.current = null
       subscriptionSlots.release(hostId, key)
       teardown()

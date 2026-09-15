@@ -749,6 +749,7 @@
 
   "execution.title": "Execution",
   "execution.loading": "Loading execution…",
+  "execution.loading_error": "Could not load: {{message}} — retrying",
   "execution.not_found": "Execution not found on this host.",
   "execution.host_removed": "Host removed.",
   "execution.nex_unavailable": "Nex is unavailable on this host: {{error}}",
