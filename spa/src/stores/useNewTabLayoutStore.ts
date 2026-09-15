@@ -33,6 +33,8 @@ interface State {
   placeModuleInShortest: (p: ProfileKey, providerId: string) => void
   removeModule: (p: ProfileKey, providerId: string) => void
   ensureDefaults: (providers: ProviderInfo[]) => void
+  /** Remove ids from every profile and from knownIds (e.g. a removed host's block). */
+  pruneIds: (ids: string[]) => void
   reset: () => void
 }
 
@@ -234,6 +236,25 @@ export const useNewTabLayoutStore = create<State>()(
           }
 
           return { profiles, knownIds }
+        }),
+
+      pruneIds: (ids) =>
+        set((state) => {
+          const drop = new Set(ids)
+          const present =
+            state.knownIds.some((id) => drop.has(id)) ||
+            (['3col', '2col', '1col'] as const).some((k) =>
+              state.profiles[k].columns.some((col) => col.some((id) => drop.has(id))),
+            )
+          if (!present) return state
+          const profiles = { ...state.profiles }
+          for (const key of ['3col', '2col', '1col'] as const) {
+            profiles[key] = {
+              enabled: state.profiles[key].enabled,
+              columns: state.profiles[key].columns.map((col) => col.filter((id) => !drop.has(id))),
+            }
+          }
+          return { profiles, knownIds: state.knownIds.filter((id) => !drop.has(id)) }
         }),
 
       reset: () => set({ ...initialState() }),

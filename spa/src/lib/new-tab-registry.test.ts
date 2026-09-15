@@ -4,6 +4,9 @@ import {
   getNewTabProviders,
   clearNewTabRegistry,
   unregisterNewTabProvidersByModule,
+  registerNewTabProviderSource,
+  subscribeNewTabProviders,
+  getStaleNewTabProviderIds,
   type NewTabProviderProps,
 } from './new-tab-registry'
 
@@ -111,5 +114,63 @@ describe('new-tab-registry', () => {
     registerNewTabProvider({ id: 'a', label: 'a', icon: 'A', order: 0, component: Stub, moduleId: 'editor' })
     unregisterNewTabProvidersByModule('does-not-exist')
     expect(getNewTabProviders()).toHaveLength(1)
+  })
+})
+
+describe('new-tab-registry — dynamic provider sources', () => {
+  function makeSource(initial: string[]) {
+    let ids = initial
+    const listeners = new Set<() => void>()
+    return {
+      source: {
+        id: 'dyn',
+        getProviders: () => ids.map((id) => ({ id: `dyn:${id}`, label: 'Dyn', icon: 'List', order: 1, component: Stub })),
+        subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } },
+        ownsId: (id: string) => id === 'dyn' || id.startsWith('dyn:'),
+      },
+      set(next: string[]) { ids = next; listeners.forEach((l) => l()) },
+      listenerCount: () => listeners.size,
+    }
+  }
+
+  it('merges source providers with static ones, sorted by order', () => {
+    registerNewTabProvider({ id: 'first', label: 'F', icon: 'F', order: 0, component: Stub })
+    registerNewTabProvider({ id: 'last', label: 'L', icon: 'L', order: 5, component: Stub })
+    registerNewTabProviderSource(makeSource(['a', 'b']).source)
+    expect(getNewTabProviders().map((p) => p.id)).toEqual(['first', 'dyn:a', 'dyn:b', 'last'])
+  })
+
+  it('reflects the source’s current providers on every call', () => {
+    const s = makeSource(['a'])
+    registerNewTabProviderSource(s.source)
+    s.set(['a', 'c'])
+    expect(getNewTabProviders().map((p) => p.id)).toEqual(['dyn:a', 'dyn:c'])
+  })
+
+  it('subscribeNewTabProviders fires when a source changes and unsubscribes cleanly', () => {
+    const s = makeSource(['a'])
+    registerNewTabProviderSource(s.source)
+    let calls = 0
+    const unsub = subscribeNewTabProviders(() => { calls++ })
+    s.set(['b'])
+    expect(calls).toBe(1)
+    unsub()
+    s.set(['c'])
+    expect(calls).toBe(1)
+    expect(s.listenerCount()).toBe(0)
+  })
+
+  it('getStaleNewTabProviderIds returns source-owned ids that no longer resolve', () => {
+    registerNewTabProvider({ id: 'static', label: 'S', icon: 'S', order: 0, component: Stub })
+    registerNewTabProviderSource(makeSource(['a']).source)
+    expect(getStaleNewTabProviderIds(['static', 'dyn', 'dyn:a', 'dyn:gone', 'unowned'])).toEqual(['dyn', 'dyn:gone'])
+  })
+
+  it('re-registering a source with the same id replaces it; clear removes sources', () => {
+    registerNewTabProviderSource(makeSource(['a']).source)
+    registerNewTabProviderSource(makeSource(['z']).source)
+    expect(getNewTabProviders().map((p) => p.id)).toEqual(['dyn:z'])
+    clearNewTabRegistry()
+    expect(getNewTabProviders()).toHaveLength(0)
   })
 })

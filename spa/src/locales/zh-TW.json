@@ -466,7 +466,7 @@
   "session.reconnecting": "重新連線中...",
   "session.settings": "設定",
   "session.search": "搜尋 Session...",
-  "session.provider_label": "Sessions",
+  "session.provider_label_host": "Sessions · {{host}}",
   "session.picker.already_open": "已開啟",
   "session.picker.no_match": "找不到符合的 Session",
 

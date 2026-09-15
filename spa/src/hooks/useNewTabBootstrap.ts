@@ -1,11 +1,29 @@
 // spa/src/hooks/useNewTabBootstrap.ts
 import { useEffect } from 'react'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
-import { getNewTabProviders } from '../lib/new-tab-registry'
+import {
+  getNewTabProviders,
+  getStaleNewTabProviderIds,
+  subscribeNewTabProviders,
+} from '../lib/new-tab-registry'
 
+/**
+ * Reconcile the persisted New Tab layout with the provider registry: prune ids
+ * a dynamic source no longer produces (removed host, legacy `sessions`), then
+ * place newcomers. Re-runs whenever a dynamic source changes (hosts added /
+ * removed), so per-host blocks follow the host list live.
+ */
 export function useNewTabBootstrap(): void {
   useEffect(() => {
-    const runDefaults = () => {
+    const run = () => {
+      const { knownIds, profiles, pruneIds } = useNewTabLayoutStore.getState()
+      const referenced = new Set<string>(knownIds)
+      for (const key of ['3col', '2col', '1col'] as const) {
+        for (const col of profiles[key].columns) col.forEach((id) => referenced.add(id))
+      }
+      const stale = getStaleNewTabProviderIds([...referenced])
+      if (stale.length > 0) pruneIds(stale)
+
       const providers = getNewTabProviders().map((p) => ({
         id: p.id,
         order: p.order,
@@ -14,10 +32,19 @@ export function useNewTabBootstrap(): void {
       useNewTabLayoutStore.getState().ensureDefaults(providers)
     }
 
-    if (useNewTabLayoutStore.persist.hasHydrated()) {
-      runDefaults()
-      return
+    let unsubProviders: (() => void) | undefined
+    const start = () => {
+      run()
+      unsubProviders = subscribeNewTabProviders(run)
     }
-    return useNewTabLayoutStore.persist.onFinishHydration(runDefaults)
+
+    let unsubHydration: (() => void) | undefined
+    if (useNewTabLayoutStore.persist.hasHydrated()) start()
+    else unsubHydration = useNewTabLayoutStore.persist.onFinishHydration(start)
+
+    return () => {
+      unsubHydration?.()
+      unsubProviders?.()
+    }
   }, [])
 }

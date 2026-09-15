@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
-import { getNewTabProviders } from '../lib/new-tab-registry'
+import { useNewTabProviders } from '../hooks/useNewTabProviders'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
@@ -50,15 +50,26 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
   // Editor in the Switchboard while the actual openers / terminal-link
   // bindings still wait for the next bootstrap. Going fully-immediate is
   // tracked in issue #678.
-  const providers = useMemo(() => {
+  //
+  // The provider LIST itself is live (per-host session blocks follow the host
+  // store), so the module decision is memoised per moduleId on first sight —
+  // a host change re-reads providers without flipping module visibility.
+  const [isModuleVisible] = useState(() => {
+    const isEnabled = useModuleEnabledStore.getState().isEnabled
+    const decided = new Map<string, boolean>()
+    return (moduleId: string): boolean => {
+      if (!decided.has(moduleId)) decided.set(moduleId, isEnabled(moduleId))
+      return decided.get(moduleId)!
+    }
+  })
+  const allProviders = useNewTabProviders()
+  const providers = useMemo(
     // A2-4 / A2-5: providers carrying a `moduleId` are hidden when the owning
     // module is disabled. Legacy providers with no `moduleId` are always
     // visible (back-compat, spec §4.9.3).
-    const isEnabled = useModuleEnabledStore.getState().isEnabled
-    return getNewTabProviders().filter((p) => !p.moduleId || isEnabled(p.moduleId))
-    // Empty deps: providers / module enable state are deliberately captured
-    // at render-creation time only. Subsequent toggles wait for re-bootstrap.
-  }, [])
+    () => allProviders.filter((p) => !p.moduleId || isModuleVisible(p.moduleId)),
+    [allProviders, isModuleVisible],
+  )
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
 
   // "Bring in an open tab" — enumerate every OTHER open tab (across all
@@ -144,7 +155,7 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
             return (
               <section key={id} className="w-full">
                 <h3 className="text-sm font-medium text-text-secondary mb-2 px-2">
-                  {t(p.label)}
+                  {t(p.label, p.labelParams)}
                   {p.disabled && p.disabledReason && (
                     <span className="text-text-muted text-xs ml-2">— {t(p.disabledReason)}</span>
                   )}

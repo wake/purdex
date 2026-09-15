@@ -6,7 +6,9 @@ export interface NewTabProviderProps {
 
 export interface NewTabProvider {
   id: string
-  label: string
+  label: string // i18n key
+  /** Optional interpolation params for `label` (e.g. `{ host: 'mlab' }`). */
+  labelParams?: Record<string, string>
   icon: string
   order: number
   component: React.ComponentType<NewTabProviderProps>
@@ -20,10 +22,28 @@ export interface NewTabProvider {
   moduleId?: string
 }
 
+/**
+ * A dynamic set of providers derived from live state (e.g. one sessions block
+ * per host). `getProviders()` is read on every `getNewTabProviders()` call;
+ * `subscribe` notifies when that set may have changed. `ownsId` lets the
+ * layout bootstrap prune ids this source used to produce but no longer does
+ * (removed host, legacy id) — ids nobody owns are never pruned.
+ */
+export interface NewTabProviderSource {
+  id: string
+  getProviders: () => NewTabProvider[]
+  subscribe: (listener: () => void) => () => void
+  ownsId: (providerId: string) => boolean
+}
+
 const providers = new Map<string, NewTabProvider>()
+const sources = new Map<string, NewTabProviderSource>()
 
 function snapshot(): NewTabProvider[] {
-  return [...providers.values()].sort((a, b) => a.order - b.order)
+  const all = [...providers.values()]
+  for (const source of sources.values()) all.push(...source.getProviders())
+  // Array.prototype.sort is stable, so equal orders keep source order.
+  return all.sort((a, b) => a.order - b.order)
 }
 
 export function registerNewTabProvider(provider: NewTabProvider): void {
@@ -31,6 +51,11 @@ export function registerNewTabProvider(provider: NewTabProvider): void {
   // previous entry rather than duplicating it. HMR / bootstrap can call this
   // repeatedly without leaking stale providers.
   providers.set(provider.id, provider)
+}
+
+/** Register a dynamic provider source. Same-id re-registration replaces. */
+export function registerNewTabProviderSource(source: NewTabProviderSource): void {
+  sources.set(source.id, source)
 }
 
 /**
@@ -48,6 +73,20 @@ export function getNewTabProviders(): NewTabProvider[] {
   return snapshot()
 }
 
+/** Subscribe to changes of any registered source. Returns an unsubscribe. */
+export function subscribeNewTabProviders(listener: () => void): () => void {
+  const unsubs = [...sources.values()].map((s) => s.subscribe(listener))
+  return () => unsubs.forEach((u) => u())
+}
+
+/** Ids owned by a registered source that its current providers no longer include. */
+export function getStaleNewTabProviderIds(ids: string[]): string[] {
+  const live = new Set(snapshot().map((p) => p.id))
+  const owned = (id: string) => [...sources.values()].some((s) => s.ownsId(id))
+  return ids.filter((id) => !live.has(id) && owned(id))
+}
+
 export function clearNewTabRegistry(): void {
   providers.clear()
+  sources.clear()
 }

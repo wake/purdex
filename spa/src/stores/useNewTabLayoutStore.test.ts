@@ -216,6 +216,36 @@ describe('useNewTabLayoutStore', () => {
     })
   })
 
+  describe('pruneIds', () => {
+    it('removes ids from every profile and from knownIds', () => {
+      const s = useNewTabLayoutStore.getState()
+      s.ensureDefaults([{ id: 'a', order: 0 }, { id: 'b', order: 1 }, { id: 'c', order: 2 }])
+      s.setEnabled('3col', true)
+      useNewTabLayoutStore.getState().pruneIds(['b', 'missing'])
+      const next = useNewTabLayoutStore.getState()
+      expect(next.knownIds).toEqual(['a', 'c'])
+      for (const key of ['3col', '2col', '1col'] as const) {
+        expect(next.profiles[key].columns.flat()).not.toContain('b')
+        expect(next.profiles[key].columns.flat()).toEqual(expect.arrayContaining(['a', 'c']))
+      }
+      expect(next.profiles['3col'].enabled).toBe(true)
+    })
+
+    it('is a no-op (same state object) when no id is present', () => {
+      useNewTabLayoutStore.getState().ensureDefaults([{ id: 'a', order: 0 }])
+      const before = useNewTabLayoutStore.getState().profiles
+      useNewTabLayoutStore.getState().pruneIds(['zzz'])
+      expect(useNewTabLayoutStore.getState().profiles).toBe(before)
+    })
+
+    it('lets a pruned id be re-added by a later ensureDefaults', () => {
+      useNewTabLayoutStore.getState().ensureDefaults([{ id: 'a', order: 0 }])
+      useNewTabLayoutStore.getState().pruneIds(['a'])
+      useNewTabLayoutStore.getState().ensureDefaults([{ id: 'a', order: 0 }])
+      expect(useNewTabLayoutStore.getState().profiles['1col'].columns[0]).toEqual(['a'])
+    })
+  })
+
   describe('reset', () => {
     it('restores initial state', () => {
       useNewTabLayoutStore.getState().setEnabled('3col', true)

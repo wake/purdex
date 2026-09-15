@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { FolderOpen } from '@phosphor-icons/react'
 import { getModules, registerModule } from '../module-registry'
-import { registerNewTabProvider } from '../new-tab-registry'
+import { registerNewTabProvider, registerNewTabProviderSource } from '../new-tab-registry'
 import { registerSettingsSection } from '../settings-section-registry'
 import {
   dispatchSettingsContributions,
@@ -15,7 +15,7 @@ import { NewTabPage } from '../../components/NewTabPage'
 import { DashboardPage } from '../../components/DashboardPage'
 import { HistoryPage } from '../../components/HistoryPage'
 import { SettingsPage } from '../../components/SettingsPage'
-import { SessionSection } from '../../components/SessionSection'
+import { createHostSessionProviderSource } from '../session-new-tab-providers'
 import { BrowserPane } from '../../components/BrowserPane'
 import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
@@ -369,13 +369,8 @@ export function registerBuiltinModules(): void {
   })
 
   // New-tab providers
-  registerNewTabProvider({
-    id: 'sessions',
-    label: 'session.provider_label',
-    icon: 'List',
-    order: 0,
-    component: SessionSection,
-  })
+  // One sessions block per host (`sessions:<hostId>`), derived live from the host store.
+  registerNewTabProviderSource(createHostSessionProviderSource())
 
   registerEditorNewTabProviders()
 
