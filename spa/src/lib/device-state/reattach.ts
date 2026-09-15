@@ -53,26 +53,49 @@ function compatible(meta: SessionMeta, s: Session): boolean {
   return s.mode === undefined || s.mode === 'terminal'
 }
 
+/** Upper bound for one host's session listing; a hung host must not hold the
+ *  operation lock (`withOperationLock`) around a restore forever. */
+export const REATTACH_LIST_TIMEOUT_MS = 10_000
+
+/** Resolves to the host's sessions, or `null` when the listing throws or does
+ *  not settle within `timeoutMs`. The timer is always cleared on settle. */
+async function listWithTimeout(hostId: string, timeoutMs: number): Promise<Session[] | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs)
+  })
+  try {
+    return await Promise.race([listSessions(hostId).catch(() => null), timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function reattachByName(
   sessionMeta: WorkspaceSnapshot['sessionMeta'],
+  opts?: { timeoutMs?: number },
 ): Promise<{ remap: Remap; report: EnsureReport }> {
+  const timeoutMs = opts?.timeoutMs ?? REATTACH_LIST_TIMEOUT_MS
   const remap: Remap = {}
   const report: EnsureReport = { reattached: 0, rebuilt: 0, failed: 0 }
 
-  for (const [hostId, perHost] of Object.entries(sessionMeta)) {
+  const hosts = Object.entries(sessionMeta)
+  // Hosts are listed concurrently so the total wait is bounded by the slowest
+  // single host, not the sum; each host fails in isolation.
+  const listings = await Promise.all(hosts.map(([hostId]) => listWithTimeout(hostId, timeoutMs)))
+
+  hosts.forEach(([hostId, perHost], i) => {
+    const live = listings[i]
     const perHostRemap: Record<string, RemapEntry> = {}
     remap[hostId] = perHostRemap
 
-    let live: Session[] | null
-    try {
-      live = await listSessions(hostId)
-    } catch {
-      live = null
-    }
-
     for (const [oldCode, meta] of Object.entries(perHost)) {
-      const match = live?.find((s) => s.name === meta.name && usable(s) && compatible(meta, s))
-      if (match) {
+      // Several saved codes may share a name and all map to the one live
+      // session of that name (tmux names are unique per server). More than one
+      // usable live candidate means malformed daemon data: refuse to guess.
+      const matches = live?.filter((s) => s.name === meta.name && usable(s) && compatible(meta, s)) ?? []
+      if (matches.length === 1) {
+        const match = matches[0]
         perHostRemap[oldCode] = { status: 'reattached', newCode: match.code, session: match }
         report.reattached++
       } else {
@@ -80,7 +103,7 @@ export async function reattachByName(
         report.failed++
       }
     }
-  }
+  })
 
   return { remap, report }
 }

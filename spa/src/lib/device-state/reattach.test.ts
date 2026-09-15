@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSession, listSessions } from '../host-api'
 import type { Session } from '../host-api'
 import type { PaneContent, PaneLayout, Tab } from '../../types/tab'
 import type { SessionMeta, WorkspaceSnapshot } from '../snapshot/types'
 import { scanPaneTree } from '../pane-tree'
-import { markMissingHosts, reattachByName } from './reattach'
+import { REATTACH_LIST_TIMEOUT_MS, markMissingHosts, reattachByName } from './reattach'
 
 vi.mock('../host-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../host-api')>()),
@@ -193,5 +193,93 @@ describe('reattachByName', () => {
     })
     expect(report).toEqual({ reattached: 2, rebuilt: 0, failed: 1 })
     expect(createSession).not.toHaveBeenCalled()
+  })
+  describe('host listing timeout', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('exports a 10s default timeout', () => {
+      expect(REATTACH_LIST_TIMEOUT_MS).toBe(10_000)
+    })
+
+    it('a host that never answers fails all its entries after timeoutMs; other hosts still reattach', async () => {
+      vi.mocked(listSessions).mockImplementation((hostId) => {
+        if (hostId === 'hung') return new Promise<Session[]>(() => {})
+        return Promise.resolve([session({ code: 'x', name: 'a' })])
+      })
+      let settled = false
+      const p = reattachByName({
+        hung: { h1: meta('hung', 'h1', { name: 'a' }), h2: meta('hung', 'h2', { name: 'b' }) },
+        up: { u1: meta('up', 'u1', { name: 'a' }) },
+      }, { timeoutMs: 500 }).then((r) => { settled = true; return r })
+      await vi.advanceTimersByTimeAsync(499)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      const { remap, report } = await p
+      expect(remap.hung).toEqual({ h1: { status: 'failed' }, h2: { status: 'failed' } })
+      expect(remap.up.u1.status).toBe('reattached')
+      expect(report).toEqual({ reattached: 1, rebuilt: 0, failed: 2 })
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('uses the default timeout when none is given', async () => {
+      vi.mocked(listSessions).mockImplementation(() => new Promise<Session[]>(() => {}))
+      let settled = false
+      const p = reattachByName({ h: { c: meta('h', 'c') } }).then((r) => { settled = true; return r })
+      await vi.advanceTimersByTimeAsync(REATTACH_LIST_TIMEOUT_MS - 1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect((await p).report.failed).toBe(1)
+    })
+
+    it('clears the timer when listing resolves normally', async () => {
+      vi.mocked(listSessions).mockResolvedValue([session({ code: 'n', name: 'work' })])
+      const { report } = await reattachByName({
+        h1: { a: meta('h1', 'a', { name: 'work' }) },
+        h2: { b: meta('h2', 'b', { name: 'work' }) },
+      }, { timeoutMs: 500 })
+      expect(report.reattached).toBe(2)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('clears the timer when listing throws', async () => {
+      vi.mocked(listSessions).mockRejectedValue(new Error('offline'))
+      const { report } = await reattachByName({ h: { a: meta('h', 'a') } }, { timeoutMs: 500 })
+      expect(report.failed).toBe(1)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
+  describe('same-name ambiguity', () => {
+    it('fails when two usable, compatible live sessions share the name', async () => {
+      vi.mocked(listSessions).mockResolvedValue([
+        session({ code: 'n1', name: 'work' }),
+        session({ code: 'n2', name: 'work' }),
+      ])
+      const { remap, report } = await reattachByName({ h: { old: meta('h', 'old', { name: 'work' }) } })
+      expect(remap.h.old).toEqual({ status: 'failed' })
+      expect(report).toEqual({ reattached: 0, rebuilt: 0, failed: 1 })
+    })
+
+    it('reattaches to the only usable one when a same-name duplicate is unusable', async () => {
+      const good = session({ code: 'n2', name: 'work' })
+      vi.mocked(listSessions).mockResolvedValue([
+        session({ code: 'n1', name: 'work', tmux_instance: '' }),
+        good,
+      ])
+      const { remap } = await reattachByName({ h: { old: meta('h', 'old', { name: 'work' }) } })
+      expect(remap.h.old).toEqual({ status: 'reattached', newCode: 'n2', session: good })
+    })
+
+    it('maps several saved codes with the same name to the one live session (accepted behaviour)', async () => {
+      const live = session({ code: 'n', name: 'work' })
+      vi.mocked(listSessions).mockResolvedValue([live])
+      const { remap, report } = await reattachByName({
+        h: { a: meta('h', 'a', { name: 'work' }), b: meta('h', 'b', { name: 'work' }) },
+      })
+      expect(remap.h.a).toEqual({ status: 'reattached', newCode: 'n', session: live })
+      expect(remap.h.b).toEqual({ status: 'reattached', newCode: 'n', session: live })
+      expect(report.reattached).toBe(2)
+    })
   })
 })
