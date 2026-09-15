@@ -1,5 +1,5 @@
 // spa/src/components/settings/device-state/DeviceStateRow.tsx — one computer's
-// saved state (spec §4.1): summary, lazy tab tree, Replace / Delete confirms.
+// saved state (spec §4.1): summary, lazy tab tree, Replace / Merge / Delete confirms.
 import { useRef, useState } from 'react'
 import { CaretDown, CaretRight } from '@phosphor-icons/react'
 import { getDeviceState } from '../../../lib/device-state/api'
@@ -24,7 +24,7 @@ function formatRelativeTime(t: T, ms: number): string {
 const BTN =
   'shrink-0 rounded-md border border-border-default px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary hover:border-border-active disabled:opacity-50 disabled:cursor-not-allowed'
 
-type Confirm = 'replace' | 'delete' | null
+type Confirm = 'replace' | 'merge' | 'delete' | null
 type Loaded = { kind: 'idle' } | { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'loaded'; record: DeviceStateRecord }
 
 export interface DeviceStateRowProps {
@@ -35,12 +35,32 @@ export interface DeviceStateRowProps {
   busy: boolean
   /** The global operation lock is held by someone other than Replace. */
   replaceLocked: boolean
+  /** The global operation lock is held by someone other than Merge. */
+  mergeLocked: boolean
   /** Receives a loader that fetches the full record fresh (never the expand cache). */
   onReplace: (load: () => Promise<DeviceStateRecord>) => void
+  /** Same loader contract as `onReplace`. */
+  onMerge: (load: () => Promise<DeviceStateRecord>) => void
   onDelete: (clientId: string) => void
 }
 
-export function DeviceStateRow({ hostId, summary, isOwn, busy, replaceLocked, onReplace, onDelete }: DeviceStateRowProps) {
+const CONFIRM_TEXT = {
+  replace: 'settings.device_state.action.replace_confirm',
+  merge: 'settings.device_state.action.merge_confirm',
+  delete: 'settings.device_state.action.delete_confirm',
+} as const
+
+export function DeviceStateRow({
+  hostId,
+  summary,
+  isOwn,
+  busy,
+  replaceLocked,
+  mergeLocked,
+  onReplace,
+  onMerge,
+  onDelete,
+}: DeviceStateRowProps) {
   const t = useI18nStore((s) => s.t)
   const [expanded, setExpanded] = useState(false)
   const [confirm, setConfirm] = useState<Confirm>(null)
@@ -73,14 +93,16 @@ export function DeviceStateRow({ hostId, summary, isOwn, busy, replaceLocked, on
     if (next && loaded.kind !== 'loaded') load().catch(() => {})
   }
 
-  // Replace must never apply the expand cache: a newer upload may have landed
-  // since, so each confirmed Replace fetches the record afresh.
+  // Replace / Merge must never apply the expand cache: a newer upload may have
+  // landed since, so each confirmed restore fetches the record afresh.
   const loadFresh = (): Promise<DeviceStateRecord> => getDeviceState(hostId, id)
+  const locked = { replace: replaceLocked, merge: mergeLocked, delete: false }
 
   const confirmAction = () => {
     const action = confirm
     setConfirm(null)
     if (action === 'replace') onReplace(loadFresh)
+    else if (action === 'merge') onMerge(loadFresh)
     else if (action === 'delete') onDelete(id)
   }
 
@@ -122,6 +144,15 @@ export function DeviceStateRow({ hostId, summary, isOwn, busy, replaceLocked, on
           </button>
           <button
             type="button"
+            data-testid={`device-state-merge-${id}`}
+            onClick={() => setConfirm('merge')}
+            disabled={busy || mergeLocked}
+            className={BTN}
+          >
+            {t('settings.device_state.action.merge')}
+          </button>
+          <button
+            type="button"
             data-testid={`device-state-delete-${id}`}
             onClick={() => setConfirm('delete')}
             disabled={busy || isOwn}
@@ -150,14 +181,12 @@ export function DeviceStateRow({ hostId, summary, isOwn, busy, replaceLocked, on
           role="group"
           className="mt-2 flex flex-wrap items-center gap-2 text-status-warning"
         >
-          <span>
-            {t(confirm === 'replace' ? 'settings.device_state.action.replace_confirm' : 'settings.device_state.action.delete_confirm')}
-          </span>
+          <span>{t(CONFIRM_TEXT[confirm])}</span>
           <button
             type="button"
             data-testid={`device-state-confirm-${id}`}
             onClick={confirmAction}
-            disabled={busy || (confirm === 'replace' && replaceLocked)}
+            disabled={busy || locked[confirm]}
             className={BTN}
           >
             {t('settings.device_state.action.confirm')}
