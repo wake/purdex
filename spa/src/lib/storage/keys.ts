@@ -21,7 +21,6 @@ export const STORAGE_KEYS = {
   MODULE_CONFIG: 'purdex-module-config',
   MODULE_ENABLED: 'purdex-module-enabled',
   EDITOR_SETTINGS: 'purdex-editor-settings',
-  QUICK_COMMANDS: 'purdex-quick-commands',
   SYNC_STATE: 'purdex-sync-state',
   PATH_CACHE_V1: 'purdex-path-cache-v1',
   RECENT_FILES: 'purdex-recent-files',

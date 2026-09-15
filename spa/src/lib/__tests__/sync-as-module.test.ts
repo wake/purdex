@@ -85,10 +85,12 @@ describe('Sync modularize (spec §4.3)', () => {
     ).toBeUndefined()
   })
 
-  it('2.3.g: registerSyncContributors() still wires all 7 contributors at boot', () => {
+  it('2.3.g: registerSyncContributors() still wires all 6 contributors at boot', () => {
     // resetAndRegisterBuiltinModules() calls registerBuiltinModules(), which
     // calls registerSyncContributors() before any registerModule(...) calls.
-    expect(syncEngine.getContributors().length).toBe(7)
+    // 6, not 7: the quick-commands contributor went away with the
+    // quick-command system (spec §4.4).
+    expect(syncEngine.getContributors().length).toBe(6)
   })
 
 })

@@ -9,7 +9,6 @@ import {
   getAllViews,
   getModulesWithWorkspaceConfig,
   getModulesWithGlobalConfig,
-  getModulesWithCommands,
   clearModuleRegistry,
   resolvePaneRenderer,
 } from './module-registry'
@@ -300,28 +299,9 @@ describe('module-registry fileOpeners and disabledComponent fields', () => {
   })
 })
 
-describe('module-registry commands', () => {
-  it('getModulesWithCommands returns modules that have commands', () => {
-    registerModule({ id: 'no-cmds', name: 'No Commands' })
-    registerModule({
-      id: 'has-cmds',
-      name: 'Has Commands',
-      commands: [{ id: 'test', name: 'Test', command: 'echo test' }],
-    })
-    const result = getModulesWithCommands()
-    expect(result).toHaveLength(1)
-    expect(result[0].id).toBe('has-cmds')
-  })
-
-  it('supports function commands', () => {
-    registerModule({
-      id: 'dynamic',
-      name: 'Dynamic',
-      commands: [{ id: 'dyn', name: 'Dynamic', command: (ctx) => `cd ${ctx.moduleConfig?.path ?? '~'}` }],
-    })
-    const result = getModulesWithCommands()
-    expect(result).toHaveLength(1)
-    const cmd = result[0].commands![0]
-    expect(typeof cmd.command).toBe('function')
+describe('module-registry — no command contributions', () => {
+  it('ModuleDefinition no longer exposes a commands API', async () => {
+    const mod = await import('./module-registry')
+    expect('getModulesWithCommands' in mod).toBe(false)
   })
 })

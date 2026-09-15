@@ -41,7 +41,6 @@ import { getPlatformCapabilities } from './lib/platform'
 import type { Tab } from './types/tab'
 import { GlobalUndoToast } from './components/GlobalUndoToast'
 import { ensureSessionPristine } from './lib/sync/register-sync'
-import { inferWorkspaceHostId } from './lib/infer-workspace-host-id'
 
 // Prefetch default icon weight so WorkspaceIcon renders instantly
 prefetchWeight('bold').catch(() => {})
@@ -329,24 +328,15 @@ export default function App() {
             onEditRebuildField={handleEditRebuildField}
           />
         )}
-        {wsContextMenu && (() => {
-          const ws = workspaces.find((w) => w.id === wsContextMenu.wsId)
-          if (!ws) return null
-          // Spec v4 §3.2.1 — workspace hostId via majority vote, never silently
-          // fall back to useHostStore.activeHostId.
-          const hostId = inferWorkspaceHostId(ws, tabs)
-          return (
-            <WorkspaceContextMenu
-              position={wsContextMenu.position}
-              workspaceId={wsContextMenu.wsId}
-              hostId={hostId}
-              onSettings={() => openWsSettings(wsContextMenu.wsId)}
-              onTearOff={window.electronAPI ? () => handleWsTearOff(wsContextMenu.wsId) : undefined}
-              onMergeTo={window.electronAPI ? (targetWindowId) => handleWsMergeTo(wsContextMenu.wsId, targetWindowId) : undefined}
-              onClose={handleCloseWsContextMenu}
-            />
-          )
-        })()}
+        {wsContextMenu && workspaces.some((w) => w.id === wsContextMenu.wsId) && (
+          <WorkspaceContextMenu
+            position={wsContextMenu.position}
+            onSettings={() => openWsSettings(wsContextMenu.wsId)}
+            onTearOff={window.electronAPI ? () => handleWsTearOff(wsContextMenu.wsId) : undefined}
+            onMergeTo={window.electronAPI ? (targetWindowId) => handleWsMergeTo(wsContextMenu.wsId, targetWindowId) : undefined}
+            onClose={handleCloseWsContextMenu}
+          />
+        )}
         {migrateDialog && (
           <MigrateTabsDialog
             tabCount={tabOrder.length}
