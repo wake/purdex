@@ -7,9 +7,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { useTabStore } from '../../../stores/useTabStore'
+import { openExecutionDetailTab } from '../../../lib/deeplink/deeplinkResolver'
 import { archiveExecution, attachControl, listExecutions, releaseLease, terminateExecution } from '../../../lib/nex/nex-api'
-import { openNexSse } from '../../../lib/nex/nex-sse'
+import { openNexSse, type NexSseStatus } from '../../../lib/nex/nex-sse'
 import { NexApiError, type ExecutionSummary } from '../../../lib/nex/types'
 import NexExecutionRow from './NexExecutionRow'
 
@@ -48,8 +48,18 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   const includeArchivedRef = useRef(includeArchived)
   includeArchivedRef.current = includeArchived
 
+  // React 19 StrictMode dev-double-invokes every effect (mount -> cleanup ->
+  // mount) to surface missing cleanup. A cleanup-only effect body (no setup
+  // statement) leaves this permanently false after that synthetic cycle, so
+  // every subsequent `refetch`/action `finally` guard silently no-ops and no
+  // row ever renders under the dev server's <StrictMode> (spa/src/main.tsx).
+  // Setting it back to true in the setup half fixes that for both the real
+  // mount and StrictMode's extra one.
   const mountedRef = useRef(true)
-  useEffect(() => () => { mountedRef.current = false }, [])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   // Cursor for Last-Event-ID: only frames carrying a non-null `id` (durable
   // events) may advance it — transient snapshot/stream frames never do
@@ -61,27 +71,40 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   // latest one in flight.
   const requestTokenRef = useRef(0)
 
-  // Reset the cursor only for an actual host change — a durable seq from one
-  // host's log means nothing on another. Declared (and thus runs) before the
-  // data+SSE effect below so a hostId change clears the cursor in the same
-  // commit, before that effect reads it to open the new connection. An
-  // `enabled` toggle alone (same host) must NOT reset it — that would defeat
-  // the point of keeping a cursor: a pause/resume would replay the whole
-  // site's durable history from seq 0 instead of picking up where it left off.
+  // Host-scoped state reset. Runs before the data+SSE effect below (source
+  // order = commit order for effects sharing a dependency change) so a host
+  // switch clears the cursor AND any rows/errors left over from the previous
+  // host before the new host's fetch is even issued — otherwise a stale row
+  // survives on screen (and its Open would target the wrong host, I10) until
+  // the new fetch resolves, or forever if it fails. An `enabled` toggle alone
+  // (same host) must NOT reset any of this — that would both replay the
+  // site's full durable history on the SSE reconnect and throw away rows the
+  // user was just looking at for no reason.
   useEffect(() => {
     lastIdRef.current = null
+    setItems([])
+    setLoadError(null)
+    setActionError(null)
+    setConfirmTerminateId(null)
+    setPendingId(null)
   }, [hostId])
 
   const refetch = useCallback((forHostId: string, includeArchivedValue: boolean) => {
     const token = ++requestTokenRef.current
     listExecutions(forHostId, { includeArchived: includeArchivedValue, limit: 100 })
       .then((page) => {
-        if (!mountedRef.current || token !== requestTokenRef.current) return
+        // The host check (not just the token) matters: an action's own
+        // post-success refetch is issued with the hostId it captured when
+        // the action *started*, which can be stale by the time its awaits
+        // resolve (see handleTerminateConfirm/handleArchiveToggle). Guarding
+        // on the token alone would still let that stale call win if it
+        // happens to be the most recently *issued* one.
+        if (!mountedRef.current || token !== requestTokenRef.current || forHostId !== hostIdRef.current) return
         setItems(page.items)
         setLoadError(null)
       })
       .catch((err: unknown) => {
-        if (!mountedRef.current || token !== requestTokenRef.current) return
+        if (!mountedRef.current || token !== requestTokenRef.current || forHostId !== hostIdRef.current) return
         setLoadError(errorCode(err))
       })
   }, [])
@@ -94,6 +117,22 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
     if (!enabled) return
     refetch(hostId, includeArchivedRef.current)
 
+    const scheduleRefetch = () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      debounceRef.current = setTimeout(() => {
+        debounceRef.current = null
+        refetch(hostId, includeArchivedRef.current)
+      }, LIST_REFRESH_DEBOUNCE_MS)
+    }
+
+    // Tracks the previous status so a reconnect (reconnecting -> open) can
+    // trigger its own refetch — events during the outage gap have no
+    // guarantee of replay unless a durable id was already seen (and even
+    // then, only IDs after it replay; a gap before the first-ever durable id
+    // replays nothing). Reset per connection so a fresh effect run (host
+    // change) doesn't carry over a stale status from the previous one.
+    let prevStatus: NexSseStatus | null = null
+
     const handle = openNexSse({
       hostId,
       url: '/api/nex/v1/events',
@@ -102,13 +141,14 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
         if (frame.id != null) {
           lastIdRef.current = Math.max(lastIdRef.current ?? 0, Number(frame.id))
         }
-        if (debounceRef.current) clearTimeout(debounceRef.current)
-        debounceRef.current = setTimeout(() => {
-          debounceRef.current = null
-          refetch(hostId, includeArchivedRef.current)
-        }, LIST_REFRESH_DEBOUNCE_MS)
+        scheduleRefetch()
       },
-      onStatus: () => {},
+      onStatus: (status) => {
+        if (status === 'open' && prevStatus === 'reconnecting') {
+          scheduleRefetch()
+        }
+        prevStatus = status
+      },
     })
 
     return () => {
@@ -120,27 +160,33 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
     }
   }, [hostId, enabled, refetch])
 
-  // Refetch on an include-archived toggle only — skips the very first run
-  // (the effect above already did the initial fetch) and reads the latest
-  // hostId/enabled from refs so it never fires for a host/enabled change it
-  // does not own.
-  const skipFirstArchivedEffect = useRef(true)
+  // Refetch on an include-archived toggle only. Compares against the
+  // previous *value* (not a "have I run yet" flag) so StrictMode's
+  // mount -> cleanup -> mount dev cycle — which re-runs this effect once
+  // more with the same includeArchived value — is naturally a no-op instead
+  // of misfiring an extra refetch (a boolean "first run" flag would already
+  // be flipped by the synthetic first pass and wrongly treat the real pass
+  // as "not first"). Reads hostId/enabled from refs so it never re-fires for
+  // a host/enabled change it does not own — that's the effect above's job.
+  const prevIncludeArchivedRef = useRef(includeArchived)
   useEffect(() => {
-    if (skipFirstArchivedEffect.current) {
-      skipFirstArchivedEffect.current = false
-      return
-    }
+    if (prevIncludeArchivedRef.current === includeArchived) return
+    prevIncludeArchivedRef.current = includeArchived
     if (!enabled) return
     refetch(hostIdRef.current, includeArchived)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- hostId/enabled read via ref on purpose (see comment above)
   }, [includeArchived, refetch])
 
   const handleOpen = (row: ExecutionSummary) => {
-    const tabId = useTabStore.getState().openSingletonTab({ kind: 'execution', executionId: row.id, host: hostId })
-    useTabStore.getState().setActiveTab(tabId)
+    // Spec §4.4.3: go through the same helper the deeplink resolver uses
+    // (spa/src/lib/deeplink/deeplinkResolver.ts) rather than re-implementing
+    // openSingletonTab here — it already activates the tab, so no separate
+    // setActiveTab call is needed.
+    openExecutionDetailTab(row.id, hostId)
   }
 
   const handleTerminateConfirm = useCallback(async (row: ExecutionSummary) => {
+    const startHostId = hostId
     setConfirmTerminateId(null)
     setActionError(null)
     setPendingId(row.id)
@@ -150,26 +196,36 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
       // lease, so releaseLease's own rejection is swallowed below and must
       // never surface as an action error; a failure of the first two steps
       // (e.g. attachControl's `lease_held`) does surface, via the outer catch.
-      const lease = await attachControl(hostId, row.id)
-      await terminateExecution(hostId, row.id, lease.lease_id)
-      await releaseLease(hostId, row.id, lease.lease_id).catch(() => {})
-      refetch(hostId, includeArchivedRef.current)
+      const lease = await attachControl(startHostId, row.id)
+      await terminateExecution(startHostId, row.id, lease.lease_id)
+      await releaseLease(startHostId, row.id, lease.lease_id).catch(() => {})
+      // The host may have changed while the awaits above were in flight —
+      // that host's own effect already issued its own initial fetch, so a
+      // refetch for the host this action started on would just be a stale
+      // response racing to overwrite the current host's rows (guarded again,
+      // defense in depth, inside refetch() itself).
+      if (hostIdRef.current === startHostId) refetch(startHostId, includeArchivedRef.current)
     } catch (err) {
-      setActionError({ action: t('hosts.nex.executions.terminate'), code: errorCode(err) })
+      if (mountedRef.current && hostIdRef.current === startHostId) {
+        setActionError({ action: t('hosts.nex.executions.terminate'), code: errorCode(err) })
+      }
     } finally {
       if (mountedRef.current) setPendingId(null)
     }
   }, [hostId, refetch, t])
 
   const handleArchiveToggle = useCallback(async (row: ExecutionSummary) => {
+    const startHostId = hostId
     setActionError(null)
     setPendingId(row.id)
     try {
-      await archiveExecution(hostId, row.id, row.archived)
-      refetch(hostId, includeArchivedRef.current)
+      await archiveExecution(startHostId, row.id, row.archived)
+      if (hostIdRef.current === startHostId) refetch(startHostId, includeArchivedRef.current)
     } catch (err) {
-      const label = row.archived ? t('hosts.nex.executions.unarchive') : t('hosts.nex.executions.archive')
-      setActionError({ action: label, code: errorCode(err) })
+      if (mountedRef.current && hostIdRef.current === startHostId) {
+        const label = row.archived ? t('hosts.nex.executions.unarchive') : t('hosts.nex.executions.archive')
+        setActionError({ action: label, code: errorCode(err) })
+      }
     } finally {
       if (mountedRef.current) setPendingId(null)
     }
