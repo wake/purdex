@@ -44,6 +44,15 @@ export function hostFetch(hostId: string, path: string, init?: RequestInit): Pro
   return fetch(`${base}${path}`, { ...init, headers })
 }
 
+/**
+ * The auth headers `hostFetch` attaches, exported for transports that cannot
+ * go through `hostFetch` (the nex SSE reader builds its own fetch so it can
+ * stream the body). One source of truth for "how do we authenticate to host X".
+ */
+export function hostAuthHeaders(hostId: string): Record<string, string> {
+  return useHostStore.getState().getAuthHeaders(hostId)
+}
+
 export function hostWsUrl(hostId: string, path: string): string {
   const base = useHostStore.getState().getWsBase(hostId)
   return `${base}${path}`
