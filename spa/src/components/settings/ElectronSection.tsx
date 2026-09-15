@@ -13,10 +13,16 @@ export function ElectronSection() {
   // a switch that cannot do anything.
   const trayApi = window.electronAPI?.tray
   const [showTray, setShowTray] = useState<boolean | null>(null)
+  // Rapid clicks fire one IPC each; responses can come back out of order, so
+  // only the newest request may write state. Older ones — resolved or
+  // rejected — are dropped instead of overwriting the latest intent. 0 means
+  // the user has not toggled yet.
+  const latestToggleId = useRef(0)
   useEffect(() => {
     let cancelled = false
+    // The initial read is stale too if the user toggled before it resolved.
     trayApi?.getVisible()
-      .then((v) => { if (!cancelled) setShowTray(v) })
+      .then((v) => { if (!cancelled && latestToggleId.current === 0) setShowTray(v) })
       .catch(() => { /* IPC unavailable — keep the default */ })
     // The main process broadcasts to every window after applying a change,
     // so a toggle in another window's Settings page shows up here too.
@@ -26,10 +32,6 @@ export function ElectronSection() {
     return () => { cancelled = true; unsubscribe?.() }
   }, [trayApi])
 
-  // Rapid clicks fire one IPC each; responses can come back out of order, so
-  // only the newest request may write state. Older ones — resolved or
-  // rejected — are dropped instead of overwriting the latest intent.
-  const latestToggleId = useRef(0)
   const toggleTray = async (v: boolean) => {
     if (!trayApi) return
     const id = ++latestToggleId.current

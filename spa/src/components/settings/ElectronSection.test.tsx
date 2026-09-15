@@ -32,6 +32,17 @@ const renderIt = () => act(async () => { render(<ElectronSection />) })
 const getSwitch = () => screen.getByRole('switch', { name: 'Show in menu bar' })
 
 describe('ElectronSection — tray toggle', () => {
+  it('ignores the initial getVisible result when the user toggled before it resolved', async () => {
+    let resolveInitial!: (v: boolean) => void
+    mockGetVisible.mockReturnValue(new Promise<boolean>((r) => { resolveInitial = r }))
+    mockSetVisible.mockResolvedValue(false)
+    await renderIt()
+    fireEvent.click(getSwitch())   // defaults to on → user turns it off
+    await waitFor(() => expect(mockSetVisible).toHaveBeenCalledWith(false))
+    await act(async () => { resolveInitial(true) })
+    expect(getSwitch().getAttribute('aria-checked')).toBe('false')
+  })
+
   it('reads the current tray visibility on mount and reflects it', async () => {
     mockGetVisible.mockResolvedValue(false)
     await renderIt()
