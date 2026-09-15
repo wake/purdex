@@ -91,7 +91,6 @@ through the snapshot shape guard (§5.1) and throws on malformed data.
 deviceName: string | null            // persisted; null = use default
 defaultDeviceName: string            // not persisted; resolved once at startup
 status: { kind: 'idle' | 'no-target' | 'offline' | 'uploading' | 'ok' | 'error'; at?: number; hostId?: string; message?: string }
-lastUploadedHash: Record<string, string>   // hostId → hash; not persisted
 setDeviceName(name: string | null)   // trims; '' → null; > 64 runes truncated
 ```
 
@@ -188,8 +187,10 @@ The local snapshot actions keep writing `-prev` as today.
 
 ### 5.1 Shared shape guard
 
-`isWellFormedSnapshot` in `lib/snapshot/storage.ts` becomes exported (currently private) and is
-used by `getDeviceState` and both restore paths.
+`lib/snapshot/storage.ts` exports `isWellFormedSnapshotV1` (plain object + `version === 1` + the
+existing private `isWellFormedSnapshot`), used by `getDeviceState` and both restore paths. The
+per-host upload bookkeeping (last hash, last device name) lives inside the uploader, not the store
+(§3.6).
 
 ### 5.2 Identity keys (`lib/device-state/identity.ts`, pure)
 
