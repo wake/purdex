@@ -102,6 +102,12 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
         if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId) {
           hasHostPane = true
         }
+        // Execution panes (Nexen, spec §4.3.4) use the stored `host` hint
+        // only — no resolve/fallback — so an unset host never matches and
+        // stays open under whatever host resolveExecutionHostId picks later.
+        if (pane.content.kind === 'execution' && pane.content.host === hostId) {
+          hasHostPane = true
+        }
       })
       if (hasHostPane) {
         snapshot.closedTabs.push(tab)

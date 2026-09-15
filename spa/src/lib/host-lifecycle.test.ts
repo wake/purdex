@@ -80,6 +80,29 @@ describe('host delete cascade', () => {
     }
   })
 
+  it('closeTabs=true also closes execution-pane tabs owned by this host (spec §4.3.4), leaving other hosts alone', () => {
+    const execA = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+    const execB = createTab({ kind: 'execution', executionId: 'exc_2', host: HOST_B })
+    useTabStore.getState().addTab(execA)
+    useTabStore.getState().addTab(execB)
+
+    deleteHostCascade(HOST_A, true)
+
+    expect(useTabStore.getState().tabs[execA.id]).toBeUndefined()
+    expect(useTabStore.getState().tabs[execB.id]).toBeDefined()
+  })
+
+  it('closeTabs=false leaves execution-pane tabs alone', () => {
+    const exec = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+    useTabStore.getState().addTab(exec)
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(useTabStore.getState().tabs[exec.id]).toBeDefined()
+    const content = getPrimaryPane(useTabStore.getState().tabs[exec.id].layout).content
+    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+  })
+
   it('cascade cleans AgentStore entries', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
