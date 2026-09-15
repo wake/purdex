@@ -28,6 +28,17 @@ export function normalizeHostColor(v: string): string | null {
   return isValidHostColor(withHash) ? withHash.toLowerCase() : null
 }
 
+/**
+ * Drops a present-but-invalid `color` key from an untrusted host config (sync
+ * payload, persisted state). Returns the same object when color is absent or valid.
+ */
+export function sanitizeHostConfigColor(host: HostConfig): HostConfig {
+  if (!('color' in host) || isValidHostColor(host.color)) return host
+  const { color, ...rest } = host
+  void color // intentionally dropped
+  return rest
+}
+
 /** hostId of the first tmux-session pane in pre-order, or null. */
 export function getTabHostId(tab: Tab): string | null {
   return collectTmuxSessionHostIds(tab.layout)[0] ?? null

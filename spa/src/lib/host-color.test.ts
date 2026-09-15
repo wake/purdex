@@ -5,6 +5,7 @@ import {
   normalizeHostColor,
   getTabHostId,
   resolveTabHostColor,
+  sanitizeHostConfigColor,
 } from './host-color'
 import type { PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
@@ -131,5 +132,29 @@ describe('resolveTabHostColor', () => {
   it.each(['red', 'url(x)', '#abc', '', 42])('returns null for invalid stored color %j', (bad) => {
     const hosts = { h1: host('h1', bad) }
     expect(resolveTabHostColor(tab(tmuxLeaf('h1')), hosts)).toBeNull()
+  })
+})
+
+describe('sanitizeHostConfigColor', () => {
+  const base: HostConfig = { id: 'h1', name: 'H', ip: '1.2.3.4', port: 7860, order: 0 }
+
+  it.each(['url(x)', '#abc', 'red', '', {}, 42, null])('removes invalid color %j', (bad) => {
+    const out = sanitizeHostConfigColor({ ...base, token: 'T', color: bad as never })
+    expect('color' in out).toBe(false)
+    expect(out).toEqual({ ...base, token: 'T' })
+  })
+
+  it('returns the same object when color is valid', () => {
+    const h = { ...base, color: '#3b82f6' }
+    expect(sanitizeHostConfigColor(h)).toBe(h)
+  })
+
+  it('returns the same object when color key is absent', () => {
+    expect(sanitizeHostConfigColor(base)).toBe(base)
+  })
+
+  it('removes an explicit undefined color key', () => {
+    const out = sanitizeHostConfigColor({ ...base, color: undefined })
+    expect('color' in out).toBe(false)
   })
 })

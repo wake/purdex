@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { isValidHostColor } from '../lib/host-color'
+import { isValidHostColor, sanitizeHostConfigColor } from '../lib/host-color'
 
 /* ─── Interfaces ─── */
 
@@ -236,6 +236,15 @@ export const useHostStore = create<HostState>()(
       name: STORAGE_KEYS.HOSTS,
       storage: purdexStorage,
       version: 1,
+      // Default shallow merge, plus dropping invalid host colors from persisted
+      // (possibly corrupted / cross-tab) state before it reaches the store.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<HostState>
+        if (!p.hosts || typeof p.hosts !== 'object') return { ...current, ...p }
+        const hosts: Record<string, HostConfig> = {}
+        for (const [id, host] of Object.entries(p.hosts)) hosts[id] = sanitizeHostConfigColor(host)
+        return { ...current, ...p, hosts }
+      },
       partialize: (state) => ({
         hosts: state.hosts,
         hostOrder: state.hostOrder,

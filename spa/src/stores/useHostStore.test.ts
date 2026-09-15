@@ -261,6 +261,34 @@ describe('dev host', () => {
   })
 })
 
+describe('persist rehydrate (host color sanitize)', () => {
+  it('drops invalid stored colors and keeps valid ones', async () => {
+    const hosts = {
+      bad: { id: 'bad', name: 'bad', ip: '10.0.0.1', port: 7860, order: 0, color: 'url(x)' },
+      obj: { id: 'obj', name: 'obj', ip: '10.0.0.2', port: 7860, order: 1, color: {} },
+      good: { id: 'good', name: 'good', ip: '10.0.0.3', port: 7860, order: 2, color: '#3b82f6', token: 'T' },
+    }
+    localStorage.setItem(
+      'purdex-hosts',
+      JSON.stringify({ state: { hosts, hostOrder: ['bad', 'obj', 'good'], activeHostId: 'good', devHostId: null }, version: 1 }),
+    )
+    try {
+      await useHostStore.persist.rehydrate()
+      const s = useHostStore.getState()
+      expect('color' in s.hosts.bad).toBe(false)
+      expect('color' in s.hosts.obj).toBe(false)
+      expect(s.hosts.good.color).toBe('#3b82f6')
+      expect(s.hosts.good.token).toBe('T')
+      expect(s.hostOrder).toEqual(['bad', 'obj', 'good'])
+      expect(s.activeHostId).toBe('good')
+      expect(typeof s.setHostColor).toBe('function')
+    } finally {
+      localStorage.removeItem('purdex-hosts')
+      useHostStore.getState().reset()
+    }
+  })
+})
+
 describe('findHostByEndpoint', () => {
   const hosts = {
     a: { id: 'a', name: 'ts', ip: '100.64.0.4', port: 7860, order: 0 },
