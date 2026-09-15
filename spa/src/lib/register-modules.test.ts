@@ -69,7 +69,7 @@ describe('registerBuiltinModules', () => {
     expect(getPaneRenderer('hosts')).toBeDefined()
   })
 
-  // P-B.3 Task 7: dispatch-settings-contributions.test.ts's #586 `defs()`
+  // dispatch-settings-contributions.test.ts's #586 `defs()`
   // helper builds its own FakeHostSection fixtures rather than exercising
   // the real `setHostBuiltinSections([...])` call in register-modules/
   // index.tsx, so the real registration (localId/order/component wiring for

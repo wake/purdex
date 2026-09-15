@@ -15,9 +15,8 @@ vi.mock('../../../lib/nex/nex-api', () => ({
   fetchNexCapabilities: vi.fn(),
 }))
 
-// NexExecutionsTable (Task 6) is being fixed concurrently on its own files;
-// stub it here so this suite only exercises NexHostSection's own
-// orchestration (fetch/refresh/reconnect) and does not race that work.
+// NexExecutionsTable has its own suite; stub it here so this one only
+// exercises NexHostSection's orchestration (fetch/refresh/reconnect).
 vi.mock('./NexExecutionsTable', () => ({
   default: (props: { hostId: string; enabled: boolean }) => (
     <div data-testid="executions-stub" data-host={props.hostId} data-enabled={String(props.enabled)} />
@@ -190,6 +189,77 @@ describe('NexHostSection', () => {
     expect(screen.getByTestId('executions-stub')).toHaveAttribute('data-enabled', 'true')
   })
 
+  describe('responses that belong to a previous host', () => {
+    const HOST_B = 'host-b'
+
+    function deferredInfo() {
+      let resolve!: (r: Response) => void
+      const promise = new Promise<Response>((r) => { resolve = r })
+      return { promise, resolve }
+    }
+
+    beforeEach(() => {
+      useHostStore.setState({
+        hosts: {
+          [HOST_ID]: { id: HOST_ID, name: 'TestHost', ip: '1.2.3.4', port: 7860, order: 0 },
+          [HOST_B]: { id: HOST_B, name: 'HostB', ip: '1.2.3.5', port: 7860, order: 1 },
+        },
+        hostOrder: [HOST_ID, HOST_B],
+        runtime: { [HOST_ID]: { status: 'connected' }, [HOST_B]: { status: 'connected' } },
+      })
+    })
+
+    const staleInfo: NexInfo = { ...readyInfo, ready: false, init_error: 'stale host A', restart_required: true }
+
+    it('a Refresh for host A that resolves after switching to host B is ignored', async () => {
+      const { rerender } = render(<NexHostSection hostId={HOST_ID} />)
+      await screen.findByDisplayValue('/a')
+
+      const pending = deferredInfo()
+      mockFetchInfo.mockImplementationOnce(() => pending.promise)
+      fireEvent.click(screen.getByText('Refresh'))
+      await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledTimes(2))
+
+      rerender(<NexHostSection hostId={HOST_B} />)
+      await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledWith(HOST_B))
+      await screen.findByText('Engine')
+
+      await act(async () => {
+        pending.resolve(infoResponse(staleInfo))
+        await pending.promise
+      })
+
+      expect(screen.queryByTestId('nex-restart-required')).not.toBeInTheDocument()
+      expect(screen.queryByText('stale host A')).not.toBeInTheDocument()
+      expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/ready/i)
+      expect(screen.getByTestId('executions-stub')).toHaveAttribute('data-host', HOST_B)
+      expect(screen.getByTestId('executions-stub')).toHaveAttribute('data-enabled', 'true')
+    })
+
+    it('the /api/info refetch after a save on host A that resolves after switching to host B is ignored', async () => {
+      const { rerender } = render(<NexHostSection hostId={HOST_ID} />)
+      await screen.findByDisplayValue('/a')
+
+      const pending = deferredInfo()
+      mockFetchInfo.mockImplementationOnce(() => pending.promise)
+      fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+      await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledTimes(2))
+
+      rerender(<NexHostSection hostId={HOST_B} />)
+      await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledWith(HOST_B))
+      await screen.findByText('Engine')
+
+      await act(async () => {
+        pending.resolve(infoResponse(staleInfo))
+        await pending.promise
+      })
+
+      expect(screen.queryByTestId('nex-restart-required')).not.toBeInTheDocument()
+      expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/ready/i)
+      expect(screen.getByTestId('executions-stub')).toHaveAttribute('data-enabled', 'true')
+    })
+  })
+
   it('Refresh on the status card refetches /api/info but not /api/config again', async () => {
     render(<NexHostSection hostId={HOST_ID} />)
     await screen.findByText('Engine')
@@ -280,17 +350,6 @@ describe('NexHostSection', () => {
     expect(screen.getByText(/^saved/i)).toBeInTheDocument()
   })
 
-  // Exercised end-to-end with a real reconnect: offline
-  // always hides the cards — even ones that had already loaded — and going
-  // back online reloads both endpoints and re-renders them. The status
-  // card fetching Nexen host/capabilities data a second time is *not*
-  // caused by `key={generation}` forcing a remount of an already-mounted
-  // component (there is no such component here to remount) — it's simply a
-  // fresh `<NexEngineStatus>` mounting for the first time since step 3 tore
-  // down the whole card subtree (the offline branch renders a
-  // completely different element, not the cards with different props).
-  // Removing `key={generation}` leaves this test passing: the key does no
-  // work on this path.
   it('renders the form when /api/config carries null nex lists and no sandbox (older or unset config)', async () => {
     mockHostFetch.mockImplementation((_hostId, path) => {
       if (path !== '/api/config') return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
@@ -312,6 +371,13 @@ describe('NexHostSection', () => {
     expect((screen.getByLabelText(/enabled/i) as HTMLInputElement).checked).toBe(false)
   })
 
+  // Exercised end-to-end with a real reconnect: offline always hides the
+  // cards — even ones that had already loaded — and going back online
+  // reloads both endpoints and re-renders them. The status card fetching
+  // Nexen host/capabilities data a second time is a fresh
+  // `<NexEngineStatus>` mounting for the first time since step 3 tore down
+  // the whole card subtree (the offline branch renders a completely
+  // different element, not the cards with different props).
   it('offline hides previously-loaded cards; reconnecting reloads /api/info + /api/config and refetches the status card', async () => {
     // 1) Start offline with nothing ever loaded.
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
