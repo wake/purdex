@@ -77,21 +77,30 @@ func (m *Module) Name() string { return "nex" }
 func (m *Module) Dependencies() []string { return nil }
 
 // Init prepares and assembles the engine, in this order:
-//  1. expand the [nex] config against the user's home, so `~/...` entries
-//     in path_prepend are real paths before they are checked;
+//  1. re-validate and expand the [nex] config against the user's home, so
+//     `~/...` entries in path_prepend are real paths before they are
+//     checked;
 //  2. apply the PATH prepend policy to the process environment (the
 //     engine's `claude -p` children inherit it);
 //  3. map the config onto nexen.Options (buildOptions);
 //  4. create <DataDir>/nex;
 //  5. assemble the engine.
 //
+// The HOME rule mirrors config.Load's (spec §4.2): a missing $HOME
+// (os.UserHomeDir fails — a launchd/Finder-started daemon) is not an error
+// by itself. Validate(home) with home == "" rejects only a `~` entry that
+// would need expanding, naming HOME and the key; an enabled host whose
+// roots/claude_bin/cswap_bin are absolute and whose path_prepend is []
+// initialises without HOME. Validate is cheap and re-run here so Init is
+// self-contained rather than trusting that the config went through Load.
+//
 // Every failure is wrapped with the "nex: init:" prefix.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("nex: init: resolving home directory: %w", err)
+	home, _ := os.UserHomeDir() // "" when unset; Validate decides whether that matters
+	if err := c.Cfg.Nex.Validate(home); err != nil {
+		return fmt.Errorf("nex: init: %w", err)
 	}
 	n := c.Cfg.Nex.Expanded(home)
 

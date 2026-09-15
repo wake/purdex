@@ -302,9 +302,12 @@ api.AuthenticatorFunc(func(r *http.Request) (string, error) {
   I2 states that invariant as "an unauthenticated request never reaches the
   Nexen handler" and tests it with a probe handler substituted for
   `sys.Handler` in the real `newOuterHandler`, across methods (GET, POST,
-  SSE GET), credentials (none, wrong bearer, valid bearer, valid ticket,
-  reused ticket, peer inbound token), pairing state, IP-whitelist rejection,
-  and un-normalized paths (`/api/nex/../foo`, `//api/nex/v1/…`). The
+  SSE GET), credentials (none, wrong bearer, valid bearer, fresh ticket on
+  a plain request or a POST with upgrade headers — not reached since the
+  codex R2 follow-up —, fresh ticket on a GET WebSocket handshake, reused
+  ticket, peer inbound token),
+  pairing state, IP-whitelist rejection, and un-normalized paths
+  (`/api/nex/../foo`, `//api/nex/v1/…`). The
   `OPTIONS` preflight is answered by CORS before auth — that is existing
   behaviour for every route and is asserted, not changed.
 - When `Cfg.Token == ""` (IP-whitelist-only daemon) TokenAuth passes every
@@ -329,10 +332,21 @@ cannot carry `Last-Event-ID`. Therefore:
   `Last-Event-ID: <cursor>` on every (re)connect. No ticket is involved.
   Swift (`URLSession`) and Aigora (server-side) set headers natively.
 - pdx CORS gains `Last-Event-ID` in `Access-Control-Allow-Headers`
-  (`internal/middleware/middleware.go:88`). Without it the browser's
+  (`internal/middleware/middleware.go`). Without it the browser's
   preflight for the fetch fails. This is the one P-A change made *for* P-B.
-- Tickets keep working for `/api/nex/…` incidentally (TokenAuth accepts
-  them); nothing in this series relies on that.
+  `X-Pdx-Client` (the per-client principal suffix above) is CORS-allowed
+  too (codex R2 follow-up), so a browser can send it on the same fetch.
+- Tickets authenticate WebSocket handshakes only: GET with
+  `Connection: Upgrade`, `Upgrade: websocket` and `Sec-WebSocket-Version`
+  (since the codex R2 follow-up; `TokenAuth` consults `?ticket=` only on
+  that shape — a WebSocket handshake is a GET, anything else with upgrade
+  headers is a REST call wearing a costume). On any other request shape a
+  ticket is neither consulted nor consumed. Every `/api/nex/…` request
+  therefore needs the bearer. (Before this a one-time WS ticket could
+  drive Nexen mutation REST under `/api/nex/`.) A GET handshake carrying a
+  fresh ticket still passes the chain on a nex path — the chain cannot
+  know Nexen has no WS routes; the handler answers 404 there. I2 pins
+  both.
 
 ### 4.4 Mount and prefix
 
@@ -526,10 +540,19 @@ Thin wrapper over `client.Run`:
   config load, no request. Prefer `PDX_NEX_TOKEN` over `--token` — argv is
   visible to other local users (`ps`), the environment is not; the usage
   text says so.
+- **`--addr` shape (codex R2 follow-up).** `--addr` / `PDX_NEX_ADDR` must
+  be `http(s)://host[:port][/path]`: scheme `http` or `https`, non-empty
+  host, no query, no fragment. The path is cleaned and a trailing slash
+  stripped (`/api/nex/` → `/api/nex`; `/` → empty, so requests hit
+  `/v1/…` at the root). Anything else:
+  `pdx nex: --addr must be http(s)://host[:port][/path] without query or fragment (got "<value>")`,
+  exit 2, no config load, no request. The probe URL and the not-enabled
+  message use the normalized base. The config-derived base is built
+  canonical and is not normalized.
 - Exit codes: 0 success; 1 any error from `client.Run`, config load or the
   not-enabled path; **2** for flag/usage errors (unknown or incomplete
-  `--addr`/`--token`/`--config`, `--addr` without a token) — nothing is
-  loaded or requested on exit 2.
+  `--addr`/`--token`/`--config`, a malformed `--addr`, `--addr` without a
+  token) — nothing is loaded or requested on exit 2.
 - Everything after the flags is passed to `client.Run` verbatim, so
   `pdx nex delegate --cwd … --brief …`, `pdx nex ls`, `pdx nex watch <id>`,
   `pdx nex attach --control <id>`, `pdx nex send …`, `pdx nex interrupt …`
@@ -575,7 +598,7 @@ verbs on every host with zero flags.
 | # | Invariant |
 |---|---|
 | I1 | With `[nex] enabled = false` or absent: no module registered, no PATH change, `DataDir/nex` not created, and — **after** passing the outer auth chain — `/api/nex/v1/capabilities` is 404. |
-| I2 | An unauthenticated request never reaches the Nexen handler. Probe handler in the real `newOuterHandler`: no credential, wrong bearer, spent ticket, peer inbound token, pairing-mode, non-whitelisted IP, `/api/nex/../x`, `//api/nex/v1/x` → probe not reached, status is the chain's. Valid bearer and valid fresh ticket → reached. GET, POST, and an SSE GET each. |
+| I2 | An unauthenticated request never reaches the Nexen handler. Probe handler in the real `newOuterHandler`: no credential, wrong bearer, fresh ticket on a plain GET / POST / SSE GET or a POST with upgrade headers (handshake-only tickets, codex R2 follow-up), spent ticket, peer inbound token, pairing-mode, non-whitelisted IP, `/api/nex/../x`, `//api/nex/v1/x` → probe not reached, status is the chain's. Valid bearer (GET, POST, SSE GET) and a fresh ticket on a GET WebSocket handshake → reached. |
 | I3 | Responses render the prefix: `capabilities.lease.renew.path` starts with `/api/nex/v1/`; `attach` returns `stream_url` starting with `/api/nex/v1/events?`. |
 | I4 | `{id}` path values resolve under the prefix: `GET /api/nex/v1/executions/<unknown>` returns Nexen's `execution_not_found` 404 body, not pdx's generic 404. |
 | I5 | Draining through the mount: after `Stop`, `POST /api/nex/v1/executions` → 503 `draining` while `GET /api/nex/v1/executions` still answers. |

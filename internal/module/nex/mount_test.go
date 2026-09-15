@@ -13,6 +13,8 @@ package nex
 //   - I5:       after Stop, mutations are 503 "draining" while reads stay 200.
 //   - I11:      every request authenticates as "pdx:<host_id>" — the lease
 //               owner and the principal_id on delegated/message_accepted.
+//               (Principal attribution only; the second turn's --resume
+//               path is the live acceptance's job, see the test's note.)
 //   - I14:      Last-Event-ID resume through the mount yields the next
 //               durable event first (engine half; pdx adds no buffering).
 
@@ -361,11 +363,23 @@ func TestMountI5DrainingAfterStop(t *testing.T) {
 	}
 }
 
-// TestMountI11PrincipalIsPdxHost: with no auth header at all, the engine
-// attributes everything to "pdx:<host_id>" — the lease owner after
-// attach(control), and principal_id on both execution.delegated and
-// execution.message_accepted.
-func TestMountI11PrincipalIsPdxHost(t *testing.T) {
+// TestMountI11PrincipalOnOperationEventsAndLease: with no auth header at
+// all, the engine attributes everything to "pdx:<host_id>" — the lease
+// owner after attach(control), and principal_id on execution.delegated,
+// execution.message_accepted and lease.acquired. That attribution is ALL
+// this test proves.
+//
+// Honesty note (codex R2): the second turn below runs `claude --resume`,
+// which the engine only launches if the session transcript exists. The
+// real claude writes that file as a side effect of turn 1; the fake does
+// not, so this test writes a stand-in ("{}\n") at the path the engine
+// published. The stand-in makes message_accepted observable; it does NOT
+// exercise the --resume prerequisites (a real transcript, written by the
+// real claude, that the resumed process can actually load). Those are
+// covered by the live acceptance — docs/specs/2026-09-15-pa-nex-module-
+// acceptance.md step 3a (restart, attach --control, send, answer from the
+// pre-restart context) — not by this fixture.
+func TestMountI11PrincipalOnOperationEventsAndLease(t *testing.T) {
 	f := newMountFixture(t)
 	want := "pdx:" + f.hostID
 
@@ -406,7 +420,9 @@ func TestMountI11PrincipalIsPdxHost(t *testing.T) {
 	// if the session transcript exists (execution.ErrSessionExpired
 	// otherwise). The real claude writes that file as a side effect of
 	// turn 1; the fake does not, so stand in for it here at the exact path
-	// the engine computed and published on the summary.
+	// the engine computed and published on the summary. This only unlocks
+	// the send; see the honesty note on the test for what it does not
+	// prove.
 	var transcript string
 	if err := json.Unmarshal(f.summary(t, id)["transcript_path"], &transcript); err != nil || transcript == "" {
 		t.Fatalf("summary.transcript_path unavailable after turn 1 (err %v)", err)

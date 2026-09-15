@@ -259,6 +259,67 @@ func TestInitHandsBuildOptionsToAssembleAndCreatesDataDir(t *testing.T) {
 	}
 }
 
+// TestInitWithoutHomeAllAbsolutePathsSucceeds: Init mirrors config.Load's
+// HOME rule (codex R2 follow-up). A launchd/Finder-started daemon may have
+// no $HOME (os.UserHomeDir then fails on darwin: "$HOME is not defined");
+// an enabled [nex] whose roots/claude_bin/cswap_bin are absolute and whose
+// path_prepend is [] has nothing to expand, so Init must still assemble.
+func TestInitWithoutHomeAllAbsolutePathsSucceeds(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("PATH", launchdPath)
+	if _, err := os.UserHomeDir(); err == nil {
+		t.Skip("os.UserHomeDir succeeds with HOME empty on this platform; the HOME-less path is not reachable here")
+	}
+
+	cfg := baseConfig(t) // absolute repo root / claude_bin / cswap_bin, path_prepend = []
+	rec := &fakeAssembleRecord{}
+	m := New()
+	m.assemble = newFakeAssemble(rec, noopEngine(), nil)
+	m.logf = discardLogf
+	if err := m.Init(newTestCore(&cfg)); err != nil {
+		t.Fatalf("Init() error = %v, want nil without HOME when nothing needs expanding", err)
+	}
+	if rec.calls != 1 {
+		t.Fatalf("assemble called %d times, want 1", rec.calls)
+	}
+	if got := rec.opts.Config.RepoRoots; !reflect.DeepEqual(got, cfg.Nex.RepoRoots) {
+		t.Errorf("Options.Config.RepoRoots = %v, want %v unchanged", got, cfg.Nex.RepoRoots)
+	}
+}
+
+// TestInitWithoutHomeTildeEntryNamesHOME: with no $HOME, a `~` entry in an
+// enabled [nex] cannot be expanded; Init fails with the same HOME-naming
+// error config.Load would give, not a misleading "must be an absolute
+// path" or a bare "resolving home directory".
+func TestInitWithoutHomeTildeEntryNamesHOME(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("PATH", launchdPath)
+	if _, err := os.UserHomeDir(); err == nil {
+		t.Skip("os.UserHomeDir succeeds with HOME empty on this platform; the HOME-less path is not reachable here")
+	}
+
+	cfg := baseConfig(t)
+	cfg.Nex.PathPrepend = []string{"~/.local/bin"}
+	rec := &fakeAssembleRecord{}
+	m := New()
+	m.assemble = newFakeAssemble(rec, noopEngine(), nil)
+	m.logf = discardLogf
+
+	err := m.Init(newTestCore(&cfg))
+	if err == nil {
+		t.Fatal("Init() error = nil, want an error naming HOME")
+	}
+	if !strings.HasPrefix(err.Error(), "nex: init:") {
+		t.Errorf("Init() error = %q, want prefix %q", err.Error(), "nex: init:")
+	}
+	if !strings.Contains(err.Error(), "HOME") || !strings.Contains(err.Error(), "nex.path_prepend[0]") {
+		t.Errorf("Init() error = %q, want it to name HOME and nex.path_prepend[0]", err.Error())
+	}
+	if rec.calls != 0 {
+		t.Errorf("assemble called %d times, want 0", rec.calls)
+	}
+}
+
 // TestInitWrapsAssembleError: an assemble failure surfaces with the
 // "nex: init:" prefix and the cause unwrappable.
 func TestInitWrapsAssembleError(t *testing.T) {
