@@ -9,7 +9,7 @@ import { useHostStore } from '../../../stores/useHostStore'
 import { hostFetch } from '../../../lib/host-api'
 import type { NexConfig, NexInfo, ConfigData } from '../../../lib/host-api'
 import { Field } from '../form-fields'
-import { emptyNexConfig, restartRequired, SANDBOX_PROFILES } from './nex-config-diff'
+import { emptyNexConfig, normalizeNexConfig, restartRequired, SANDBOX_PROFILES } from './nex-config-diff'
 import NexListEditor from './NexListEditor'
 
 export interface NexConfigFormProps {
@@ -124,7 +124,7 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
       })
       if (res.ok) {
         const data = await res.json()
-        const nextNex: NexConfig = data.nex ?? body
+        const nextNex: NexConfig = data.nex ? normalizeNexConfig(data.nex) : body
         // Always advance the persisted-value tracker and notify the caller
         // — but only replace the draft (and clear dirty) if nothing changed
         // it while this request was in flight.

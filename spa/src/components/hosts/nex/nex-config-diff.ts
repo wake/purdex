@@ -28,3 +28,26 @@ export function emptyNexConfig(): NexConfig {
 export function restartRequired(_saved: NexConfig | undefined, info: NexInfo | null): boolean {
   return info?.restart_required === true
 }
+
+/**
+ * Coerces a `nex` section read from the daemon into a complete NexConfig:
+ * null/missing lists become [] and a missing `sandbox`/`timeouts` object (or
+ * key) falls back to emptyNexConfig()'s defaults. Older daemons and configs
+ * without a [nex] section can emit `null` lists (spec §4.4.2).
+ */
+export function normalizeNexConfig(raw: Partial<NexConfig> | null | undefined): NexConfig {
+  const base = emptyNexConfig()
+  const r = raw ?? {}
+  return {
+    ...base,
+    ...r,
+    repo_roots: r.repo_roots ?? [],
+    service_roots: r.service_roots ?? [],
+    path_prepend: r.path_prepend ?? [],
+    claude_bin: r.claude_bin ?? '',
+    cswap_bin: r.cswap_bin ?? '',
+    enabled: r.enabled ?? false,
+    sandbox: { ...base.sandbox, ...(r.sandbox ?? {}) },
+    timeouts: { ...base.timeouts, ...(r.timeouts ?? {}) },
+  }
+}

@@ -13,6 +13,7 @@ import type { ConfigData, NexConfig, NexInfo } from '../../../lib/host-api'
 import NexEngineStatus from './NexEngineStatus'
 import NexConfigForm from './NexConfigForm'
 import NexExecutionsTable from './NexExecutionsTable'
+import { normalizeNexConfig } from './nex-config-diff'
 
 interface Props {
   hostId: string
@@ -67,7 +68,7 @@ function loadNexData(
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`/api/config: ${r.status}`))))
     .then((data: ConfigData) => {
       if (isCancelled()) return
-      setConfig(data.nex)
+      setConfig(data.nex ? normalizeNexConfig(data.nex) : undefined)
       setConfigStatus('loaded')
     })
     .catch(() => {
@@ -214,7 +215,7 @@ export function NexHostSection({ hostId }: Props) {
   // refetch /api/info the same way Refresh does — without the loading gate,
   // so the cards (and the form's "Saved") stay on screen.
   const handleConfigSaved = (cfg: ConfigData) => {
-    setConfig(cfg.nex)
+    setConfig(cfg.nex ? normalizeNexConfig(cfg.nex) : undefined)
     handleRefresh()
   }
 
