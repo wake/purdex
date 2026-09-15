@@ -15,7 +15,13 @@ export interface ExecutionState {
   historyLoaded: boolean
   /** A lifecycle event arrived; the summary is authoritative, so the hook refetches. */
   summaryStale: boolean
-  sse: 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
+  /**
+   * 'paused' (spec v2.1 §4.3.2 step 4) is the store-only state P-B.2's
+   * subscription-slot cap sets when this execution's SSE is deliberately
+   * not connected (another pane holds the slot) — never emitted by
+   * NexSseStatus, which openNexSse alone owns.
+   */
+  sse: 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'paused'
   sseError: string | null
   /** The lease THIS tab holds — written only from attach(control)/renew responses (I11). */
   lease: { leaseId: string; expiresAt: number } | null

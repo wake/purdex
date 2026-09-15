@@ -118,6 +118,11 @@ describe('useExecutionStore', () => {
     expect(useExecutionStore.getState().executions['h:exc_1'].sseError).toBeNull()
   })
 
+  it('setSse accepts "paused" (spec v2.1 §4.3.2 step 4 — P-B.2 subscription-slot cap)', () => {
+    useExecutionStore.getState().setSse('h', 'exc_1', 'paused')
+    expect(useExecutionStore.getState().executions['h:exc_1'].sse).toBe('paused')
+  })
+
   it('clearExecution removes one entry; clearHost removes only that host', () => {
     const s = useExecutionStore.getState()
     s.applyEvents('h1', 'exc_1', [ev(1, 'assistant', { type: 'assistant' })])
