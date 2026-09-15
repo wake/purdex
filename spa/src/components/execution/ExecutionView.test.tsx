@@ -52,6 +52,30 @@ describe('ExecutionView', () => {
     expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(true)
   })
 
+  it('does not resurrect pendingLocal once message_accepted already consumed it while the POST is still in flight (C1/I12)', async () => {
+    let resolveSend!: (v: { turn_id: string; delivery: 'delivered' | 'queued' }) => void
+    vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise((resolve) => { resolveSend = resolve }))
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'hello' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(useExecutionStore.getState().executions[KEY].pendingLocal?.text).toBe('hello'))
+
+    // The durable event beats the POST response back (execution/service.go:794-807).
+    act(() => {
+      useExecutionStore.getState().applyEvents(H, E, [
+        { seq: 1, execution_id: E, kind: 'execution.message_accepted', payload: { text: 'hello', turn_id: 't1' }, created_at: 0 },
+      ])
+    })
+    expect(useExecutionStore.getState().executions[KEY].pendingLocal).toBeNull()
+
+    await act(async () => { resolveSend({ turn_id: 't1', delivery: 'delivered' }); await Promise.resolve() })
+
+    expect(useExecutionStore.getState().executions[KEY].pendingLocal).toBeNull()
+    expect(screen.getAllByText('hello')).toHaveLength(1)
+    expect(useExecutionStore.getState().executions[KEY].lastTurn).toEqual({ turnId: 't1', delivery: 'delivered' })
+  })
+
   it('send failure withdraws the bubble, re-enables input, restores text, shows the error (I12)', async () => {
     vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
     render(<ExecutionView hostId={H} executionId={E} isActive />)

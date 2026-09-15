@@ -57,7 +57,14 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
       store().setPendingLocal(hostId, executionId, { text, delivery: null })
       store().setPendingSend(hostId, executionId, true)
       const r = await sendMessage(hostId, executionId, leaseId, text)
-      store().setPendingLocal(hostId, executionId, { text, delivery: r.delivery })
+      // execution.message_accepted (execution/service.go:794-807) can land
+      // before this resolves and already clear pendingLocal + push the
+      // durable bubble; writing it back unconditionally here would
+      // resurrect a second bubble (C1/I12). Only write if the event hasn't
+      // already consumed it.
+      if (store().executions[key]?.pendingLocal) {
+        store().setPendingLocal(hostId, executionId, { text, delivery: r.delivery })
+      }
       store().setLastTurn(hostId, executionId, { turnId: r.turn_id, delivery: r.delivery })
     } catch (e) {
       store().setPendingLocal(hostId, executionId, null)
@@ -65,7 +72,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
       setDraft(text)
       fail(e)
     }
-  }, [hostId, executionId, ensureLease, touch, fail])
+  }, [hostId, executionId, key, ensureLease, touch, fail])
 
   const handleInterrupt = useCallback(async () => {
     touch()
