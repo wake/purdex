@@ -862,7 +862,7 @@ export interface SlotRegistry {
 export const subscriptionSlots: SlotRegistry
 ```
 
-`ExecutionState.sse` gains the value `'paused'` (add it to the union in `spa/src/lib/nex/event-reducer.ts` — a one-word change, no reducer logic).
+`ExecutionState.sse` already includes `'paused'` (added on the P-B.1 branch during the PR #1045 review round).
 
 - [ ] **Step 1: Failing tests**
 
@@ -1764,59 +1764,9 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 
 ---
 
-### Task 6: Host removal closes execution tabs (`closeTabs` mode)
+### Task 6: Host removal closes execution tabs (`closeTabs` mode) — DONE in P-B.1
 
-**Files:**
-- Modify: `spa/src/lib/host-lifecycle.ts` (the `closeTabs` scan ~line 96-110)
-- Test: `spa/src/lib/host-lifecycle.test.ts`
-
-**Interfaces:** none new. In `closeTabs` mode a tab is closed when any pane is a `tmux-session` of that host **or** an `execution` pane whose `resolveExecutionHostId(content.host) === hostId`. Keep-tabs mode leaves execution panes alone (the hook renders "Host removed", Task 4).
-
-- [ ] **Step 1: Failing test** (append to the cascade `describe`; `createTab` is already imported):
-
-```ts
-  it('closeTabs=true also closes execution tabs of the removed host, not other hosts (I13)', () => {
-    const exA = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
-    const exB = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_B })
-    useTabStore.getState().addTab(exA)
-    useTabStore.getState().addTab(exB)
-    deleteHostCascade(HOST_A, true)
-    expect(useTabStore.getState().tabs[exA.id]).toBeUndefined()
-    expect(useTabStore.getState().tabs[exB.id]).toBeDefined()
-  })
-
-  it('closeTabs=false leaves execution tabs in place', () => {
-    const exA = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
-    useTabStore.getState().addTab(exA)
-    deleteHostCascade(HOST_A, false)
-    expect(useTabStore.getState().tabs[exA.id]).toBeDefined()
-  })
-```
-
-- [ ] **Step 2: Run to fail** — `npx vitest run src/lib/host-lifecycle.test.ts`.
-
-- [ ] **Step 3: Implement** — in the `closeTabs` scan:
-
-```ts
-        if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId) {
-          hasHostPane = true
-        }
-        // Execution panes belong to the host that runs the execution (P-B);
-        // an absent host hint resolves like everywhere else.
-        if (pane.content.kind === 'execution' && resolveExecutionHostId(pane.content.host) === hostId) {
-          hasHostPane = true
-        }
-```
-
-with `import { resolveExecutionHostId } from './nex/resolve-host'`. Note the undo path already restores `snapshot.closedTabs` wholesale, so nothing else changes.
-
-- [ ] **Step 4: Run to pass** — `npx vitest run src/lib/host-lifecycle.test.ts`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git add spa/src/lib/host-lifecycle.ts spa/src/lib/host-lifecycle.test.ts && git commit --only spa/src/lib/host-lifecycle.ts spa/src/lib/host-lifecycle.test.ts -m "feat(spa): host removal closes that host's execution tabs"
-```
+Landed on the P-B.1 branch during the PR #1045 review round (`host-lifecycle.ts` closeTabs scan + two tests). Nothing to do here; the P-B.2 final verification just confirms `host-lifecycle.test.ts` still passes.
 
 ---
 
