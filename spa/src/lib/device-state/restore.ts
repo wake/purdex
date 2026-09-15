@@ -33,6 +33,49 @@ export interface DeviceStateRestoreReport extends RestoreReport {
 /** On `RestoreError`, the merge counts are all zero (nothing was merged). */
 export interface DeviceStateMergeReport extends DeviceStateRestoreReport, MergeReport {}
 
+export const PREV_CAPTURE_ATTEMPTS = 3
+
+interface WorldRefs {
+  tabs: unknown
+  tabOrder: unknown
+  activeTabId: unknown
+  workspaces: unknown
+  activeWorkspaceId: unknown
+}
+
+function worldRefs(): WorldRefs {
+  const { tabs, tabOrder, activeTabId } = useTabStore.getState()
+  const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
+  return { tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId }
+}
+
+function sameWorld(a: WorldRefs, b: WorldRefs): boolean {
+  return (
+    a.tabs === b.tabs &&
+    a.tabOrder === b.tabOrder &&
+    a.activeTabId === b.activeTabId &&
+    a.workspaces === b.workspaces &&
+    a.activeWorkspaceId === b.activeWorkspaceId
+  )
+}
+
+/**
+ * Write `-prev` and make sure it still describes the live world once the build
+ * (which awaits the network) settles. `buildSnapshot` reads the stores
+ * synchronously at its start, so the refs taken immediately before the call are
+ * the ones the backup was built from. If the user changed tabs/workspaces during
+ * the await, rebuild — otherwise Undo would drop state that existed before the
+ * mutation. Gives up after PREV_CAPTURE_ATTEMPTS builds.
+ */
+async function writeStablePrev(now: number, build: RestoreDeps['buildSnapshotFn']): Promise<void> {
+  for (let attempt = 0; attempt < PREV_CAPTURE_ATTEMPTS; attempt++) {
+    const capturedFrom = worldRefs()
+    await writeDeviceStatePrev(now, build)
+    if (sameWorld(capturedFrom, worldRefs())) return
+  }
+  throw new Error('workspace changed during restore; try again')
+}
+
 interface RestoreDeps {
   now?: number
   buildSnapshotFn?: typeof buildSnapshot
@@ -75,7 +118,9 @@ async function runDeviceStateRestore<Extra extends object>(
       let extra: Extra
       try {
         // Back up the current world (structure-only, §4.4) before any store mutation.
-        await writeDeviceStatePrev(now, deps?.buildSnapshotFn)
+        await writeStablePrev(now, deps?.buildSnapshotFn)
+        // No await from here to replaceTabSnapshot: the world `-prev` was built
+        // from is exactly the world buildNext reads and the mutation replaces.
         const built = buildNext(rewritten, now)
         extra = built.extra
         replaceTabSnapshot(built.next)

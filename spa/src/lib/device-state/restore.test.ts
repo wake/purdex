@@ -123,6 +123,31 @@ const storeView = () => ({
 
 const seededPrev = (): WorkspaceSnapshot => ({ ...localWorld(), capturedAt: 777 })
 
+/**
+ * A buildSnapshot stand-in that, like the real one, reads the stores
+ * synchronously at its start and then awaits; `onRead(n)` runs after the read
+ * on the n-th call, simulating the user editing the world during the await.
+ */
+const storeBuild = (onRead?: (call: number) => void) => {
+  let call = 0
+  return vi.fn(async (now: number): Promise<WorkspaceSnapshot> => {
+    const { tabs, tabOrder, activeTabId } = useTabStore.getState()
+    const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
+    onRead?.(++call)
+    await Promise.resolve()
+    return { version: 1, capturedAt: now, tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId, sessionMeta: {} }
+  })
+}
+
+const openTab = (id: string): Tab => {
+  const tab = tmuxTab(id, 'h1', `code-${id}`, id)
+  useTabStore.setState({
+    tabs: { ...useTabStore.getState().tabs, [id]: tab },
+    tabOrder: [...useTabStore.getState().tabOrder, id],
+  })
+  return tab
+}
+
 describe('restoreDeviceStateReplace', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -276,6 +301,54 @@ describe('restoreDeviceStateReplace', () => {
 
     expect(storeView()).toEqual(before)
     expect(readPrevSnapshot()).toEqual(seededPrev())
+  })
+
+  it('stable world → the backup is built exactly once', async () => {
+    vi.mocked(listSessions).mockResolvedValue([])
+    const build = storeBuild()
+
+    await restoreDeviceStateReplace(incoming(), { now: 5, buildSnapshotFn: build })
+
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(readPrevSnapshot()?.tabOrder).toEqual(['L1'])
+  })
+
+  it('tab opened while the backup is being built → -prev is rebuilt and contains it', async () => {
+    vi.mocked(listSessions).mockResolvedValue([])
+    const build = storeBuild((call) => { if (call === 1) openTab('LATE') })
+
+    await restoreDeviceStateReplace(incoming(), { now: 5, buildSnapshotFn: build })
+
+    expect(build).toHaveBeenCalledTimes(2)
+    const prev = readPrevSnapshot()
+    expect(prev?.tabOrder).toEqual(['L1', 'LATE'])
+    expect(prev?.tabs.LATE).toBeDefined()
+    expect(useTabStore.getState().tabOrder).toEqual(['A', 'B', 'C'])
+  })
+
+  it('world keeps changing during every backup build → RestoreError after 3 builds; nothing applied', async () => {
+    vi.mocked(listSessions).mockResolvedValue([])
+    const build = storeBuild((call) => { openTab(`U${call}`) })
+    const tabSet = vi.spyOn(useTabStore, 'setState')
+
+    let caught: unknown
+    try {
+      await restoreDeviceStateReplace(incoming(), { now: 5, buildSnapshotFn: build })
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(RestoreError)
+    expect(((caught as RestoreError).cause as Error).message).toBe('workspace changed during restore; try again')
+    expect((caught as RestoreError).report).toEqual({
+      reattached: 0, rebuilt: 0, failed: 2, hostRemoved: 1, rebuiltButUnattached: [],
+    })
+    expect(build).toHaveBeenCalledTimes(3)
+    expect(tabSet).toHaveBeenCalledTimes(3) // only the user's own edits; no replaceTabSnapshot
+    expect(useTabStore.getState().tabOrder).toEqual(['L1', 'U1', 'U2', 'U3'])
+    expect(useWorkspaceStore.getState().workspaces).toEqual(localWorld().workspaces)
+    expect(useSessionStore.getState().sessions).toEqual({})
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 })
 
@@ -463,6 +536,31 @@ describe('restoreDeviceStateMerge', () => {
     expect(tabs.LATE).toEqual(late)
     expect(tabOrder.slice(0, 2)).toEqual(['L1', 'LATE'])
     expect(report.addedTabs).toBe(3)
+  })
+
+  it('tab opened while the backup is being built → -prev rebuilt with it, and the merge keeps it', async () => {
+    vi.mocked(listSessions).mockResolvedValue([])
+    let late: Tab | undefined
+    const build = storeBuild((call) => { if (call === 1) late = openTab('LATE') })
+
+    await restoreDeviceStateMerge(mergeIncoming(), deps({ buildSnapshotFn: build }))
+
+    expect(build).toHaveBeenCalledTimes(2)
+    const prev = readPrevSnapshot()
+    expect(prev?.tabOrder).toEqual(['L1', 'LATE'])
+    expect(prev?.tabs.LATE).toEqual(late)
+    const { tabs, tabOrder } = useTabStore.getState()
+    expect(tabs.LATE).toEqual(late)
+    expect(tabOrder.slice(0, 2)).toEqual(['L1', 'LATE'])
+  })
+
+  it('stable world → the backup is built exactly once', async () => {
+    vi.mocked(listSessions).mockResolvedValue([])
+    const build = storeBuild()
+
+    await restoreDeviceStateMerge(mergeIncoming(), deps({ buildSnapshotFn: build }))
+
+    expect(build).toHaveBeenCalledTimes(1)
   })
 
   it('writes structure-only -prev of the current world before stores change', async () => {
