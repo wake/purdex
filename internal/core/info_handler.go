@@ -41,8 +41,28 @@ func (c *Core) handleReady(w http.ResponseWriter, r *http.Request) {
 func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
 	hostID := c.Cfg.HostID
-	nexEnabled := c.Cfg.Nex.Enabled
+	// configured is the boot value (spec §4.4.2): a saved-but-unapplied
+	// change is reported through restart_required, not here.
+	nexEnabled := c.bootNex.Enabled
+	restartRequired := !c.Cfg.Nex.Equal(c.bootNex)
 	c.CfgMu.RUnlock()
+
+	mounted := c.Mounted("nex")
+	nex := map[string]any{
+		"ready":      mounted,
+		"init_error": "",
+		"effective":  nil,
+	}
+	if st, ok := c.ModuleStatus("nex"); ok {
+		for k, v := range st {
+			nex[k] = v
+		}
+	}
+	// Core-computed fields are set after the reporter's keys so a module
+	// can never override them.
+	nex["configured"] = nexEnabled
+	nex["mounted"] = mounted
+	nex["restart_required"] = restartRequired
 
 	info := map[string]any{
 		"host_id":        hostID,
@@ -51,10 +71,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"tmux_version":   getTmuxVersion(),
 		"os":             runtime.GOOS,
 		"arch":           runtime.GOARCH,
-		"nex": map[string]bool{
-			"configured": nexEnabled,
-			"mounted":    c.Mounted("nex"),
-		},
+		"nex":            nex,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)

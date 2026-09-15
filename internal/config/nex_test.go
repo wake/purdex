@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -316,5 +317,31 @@ func TestNexConfigCloneIndependence(t *testing.T) {
 	}
 	if cfg.Nex.PathPrepend[0] != "/opt/homebrew/bin" {
 		t.Errorf("PathPrepend leaked into original: %v", cfg.Nex.PathPrepend)
+	}
+}
+
+// TestNexConfigRedactedJSONListsNeverNull pins that GET /api/config never
+// carries `null` for a nex list: a TOML that omits repo_roots/service_roots
+// decodes nil, and the SPA list editors call .map on them.
+func TestNexConfigRedactedJSONListsNeverNull(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("bind = \"127.0.0.1\"\n\n[nex]\nenabled = false\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Nex.PathPrepend = nil // as a JSON PUT with "path_prepend": null leaves it
+
+	data, err := json.Marshal(cfg.Redacted())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, key := range []string{"repo_roots", "service_roots", "path_prepend"} {
+		if !strings.Contains(s, `"`+key+`":[]`) {
+			t.Errorf("Redacted JSON %s is not [] in %s", key, s)
+		}
 	}
 }

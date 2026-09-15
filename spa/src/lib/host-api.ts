@@ -22,6 +22,53 @@ export interface Session {
   tmux_instance?: string
 }
 
+export interface NexSandboxConfig {
+  max_profile: string
+  default_profile: string
+}
+
+export interface NexTimeoutsConfig {
+  lease_ttl: string
+  interrupt: string
+  turn: string
+}
+
+export interface NexConfig {
+  enabled: boolean
+  repo_roots: string[]
+  service_roots: string[]
+  claude_bin: string
+  cswap_bin: string
+  path_prepend: string[]
+  sandbox: NexSandboxConfig
+  timeouts: NexTimeoutsConfig
+}
+
+export interface NexEffective {
+  data_dir: string
+  claude_bin: string
+  cswap_bin: string
+  max_profile: string
+  default_profile: string
+  repo_roots: string[]
+  service_roots: string[]
+  path_prefix: string
+  lease_ttl: string
+  interrupt: string
+  turn: string
+}
+
+export interface NexInfo {
+  configured: boolean
+  mounted: boolean
+  ready: boolean
+  init_error: string
+  effective: NexEffective | null
+  // Daemon-computed (spec §4.4.2): the live [nex] section differs from the
+  // one the daemon booted with. Optional so older daemons stay consumable.
+  restart_required?: boolean
+}
+
 export interface ConfigData {
   bind: string
   port: number
@@ -29,6 +76,7 @@ export interface ConfigData {
   terminal?: { sizing_mode: string }
   stream: { presets: Array<{ name: string; command: string }> }
   detect: { cc_commands: string[]; poll_interval: number }
+  nex?: NexConfig
 }
 
 /* ─── Core helpers ─── */

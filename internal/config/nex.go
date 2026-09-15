@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -196,4 +197,19 @@ func expandTildeAll(list []string, home string) []string {
 		out[i] = expandTildeClean(p, home)
 	}
 	return out
+}
+
+// Equal reports whether n and o describe the same [nex] section. Lists are
+// compared element-wise with nil and empty treated as equal, because the
+// same section decodes to nil from a TOML that omits a key and to [] from a
+// JSON PUT — raw reflect.DeepEqual would call those different.
+func (n NexConfig) Equal(o NexConfig) bool {
+	return n.Enabled == o.Enabled &&
+		slices.Equal(n.RepoRoots, o.RepoRoots) &&
+		slices.Equal(n.ServiceRoots, o.ServiceRoots) &&
+		slices.Equal(n.PathPrepend, o.PathPrepend) &&
+		n.ClaudeBin == o.ClaudeBin &&
+		n.CswapBin == o.CswapBin &&
+		n.Sandbox == o.Sandbox &&
+		n.Timeouts == o.Timeouts
 }

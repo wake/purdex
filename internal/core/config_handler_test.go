@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -368,28 +369,67 @@ func TestPutConfigRejectsRelativeUploadDir(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "upload_dir must be a non-empty absolute path")
 }
 
-func TestPutConfigRejectsNexObject(t *testing.T) {
+func TestPutConfigNexValidAndPersists(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("bind = \"127.0.0.1\"\n"), 0644))
 	c := newTestCore()
-
-	body := `{"nex":{"enabled":true}}`
-	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	c.CfgPath = cfgPath
+	c.AddModule(&statusStubModule{stubModule: stubModule{name: "nex"}, status: map[string]any{"effective": map[string]any{"repo_roots": []any{"/boot"}}}})
+	root := t.TempDir()
+	body := fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q],"sandbox":{"max_profile":"handoff","default_profile":"standard"},"timeouts":{"lease_ttl":"90s"}}}`, root)
 	rec := httptest.NewRecorder()
-	c.handlePutConfig(rec, req)
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	c.CfgMu.RLock()
+	assert.True(t, c.Cfg.Nex.Enabled)
+	assert.Equal(t, []string{root}, c.Cfg.Nex.RepoRoots)
+	assert.Equal(t, "handoff", c.Cfg.Nex.Sandbox.MaxProfile)
+	assert.Equal(t, "90s", c.Cfg.Nex.Timeouts.LeaseTTL)
+	c.CfgMu.RUnlock()
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "max_profile = \"handoff\"")
+	var got config.Config
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.True(t, got.Nex.Enabled)
 
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Contains(t, rec.Body.String(), "nex is not editable via API in this version; edit config.toml and restart")
+	// I9: the next GET returns the new nex, while the running module's
+	// effective config (a status stub here) is not touched by the PUT.
+	getRec := httptest.NewRecorder()
+	c.handleGetConfig(getRec, httptest.NewRequest("GET", "/api/config", nil))
+	var gotGet config.Config
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&gotGet))
+	assert.Equal(t, []string{root}, gotGet.Nex.RepoRoots)
+	assert.Equal(t, "handoff", gotGet.Nex.Sandbox.MaxProfile)
+	assert.Equal(t, map[string]any{"repo_roots": []any{"/boot"}}, getInfoNex(t, c)["effective"])
 }
 
-func TestPutConfigRejectsNexNull(t *testing.T) {
+func TestPutConfigNexInvalidReturns400AndLeavesFileUntouched(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.toml")
+	original := "bind = \"127.0.0.1\"\n\n[nex]\nenabled = false\n"
+	require.NoError(t, os.WriteFile(cfgPath, []byte(original), 0644))
 	c := newTestCore()
-
-	body := `{"nex":null}`
-	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-	c.handlePutConfig(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Contains(t, rec.Body.String(), "nex is not editable via API in this version; edit config.toml and restart")
+	c.CfgPath = cfgPath
+	cases := []struct{ name, body, want string }{
+		{"enabled without roots", `{"nex":{"enabled":true}}`, "at least one root required"},
+		{"relative claude_bin", `{"nex":{"enabled":false,"claude_bin":"bin/claude"}}`, "nex.claude_bin"},
+		{"bad duration", `{"nex":{"enabled":false,"timeouts":{"turn":"soon"}}}`, "nex.timeouts.turn"},
+		{"unknown profile", `{"nex":{"enabled":false,"sandbox":{"max_profile":"yolo"}}}`, "nex.sandbox.max_profile"},
+		{"null", `{"nex":null}`, "nex must be an object"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(tc.body)))
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Contains(t, rec.Body.String(), tc.want)
+			data, err := os.ReadFile(cfgPath)
+			require.NoError(t, err)
+			assert.Equal(t, original, string(data), "invalid nex must not touch config.toml")
+		})
+	}
 }
 
 // TestPutConfigWithFullNexSectionPersistsNexByteIdentical pins I15: a PUT
