@@ -96,6 +96,15 @@ describe('nex-api', () => {
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
   })
 
+  it('releaseLease forwards a RequestInit (keepalive for beforeunload)', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await releaseLease(hostId, 'exc_1', 'ls_1', { keepalive: true })
+    const [, init] = testGlobal.fetch.mock.calls.at(-1)!
+    expect(init.keepalive).toBe(true)
+    expect(init.method).toBe('DELETE')
+    expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
+  })
+
   it('archiveExecution posts the target archived flag (api/interact.go:81)', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ archived: true }))
     await archiveExecution(hostId, 'exc_1')

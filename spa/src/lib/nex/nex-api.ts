@@ -46,8 +46,8 @@ async function okVoid(res: Response): Promise<void> {
   if (!res.ok) throw await nexErrorFromResponse(res)
 }
 
-function postJson(hostId: string, path: string, body: unknown, method = 'POST'): Promise<Response> {
-  return nexFetch(hostId, path, { method, body: JSON.stringify(body) })
+function postJson(hostId: string, path: string, body: unknown, method = 'POST', init?: RequestInit): Promise<Response> {
+  return nexFetch(hostId, path, { ...init, method, body: JSON.stringify(body) })
 }
 
 function execPath(executionId: string, suffix = ''): string {
@@ -105,8 +105,8 @@ export function renewLease(hostId: string, executionId: string, leaseId: string)
   return postJson(hostId, execPath(executionId, '/attach/renew'), { lease_id: leaseId }).then((r) => okJson<AttachControlResponse>(r))
 }
 
-export function releaseLease(hostId: string, executionId: string, leaseId: string): Promise<void> {
-  return postJson(hostId, execPath(executionId, '/attach'), { lease_id: leaseId }, 'DELETE').then(okVoid)
+export function releaseLease(hostId: string, executionId: string, leaseId: string, init?: RequestInit): Promise<void> {
+  return postJson(hostId, execPath(executionId, '/attach'), { lease_id: leaseId }, 'DELETE', init).then(okVoid)
 }
 
 export function sendMessage(hostId: string, executionId: string, leaseId: string, text: string): Promise<SendResponse> {
