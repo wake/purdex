@@ -5,6 +5,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useStreamStore } from '../stores/useStreamStore'
+import { useExecutionStore } from '../stores/useExecutionStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceSettingsStore } from '../stores/useWorkspaceSettingsStore'
@@ -44,6 +45,7 @@ function resetAllStores() {
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
+  useExecutionStore.setState({ executions: {} })
   useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   useHostSettingsStore.setState({ hosts: {} })
   useWorkspaceStore.getState().reset()
@@ -78,6 +80,29 @@ describe('host delete cascade', () => {
     }
   })
 
+  it('closeTabs=true also closes execution-pane tabs owned by this host (spec §4.3.4), leaving other hosts alone', () => {
+    const execA = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+    const execB = createTab({ kind: 'execution', executionId: 'exc_2', host: HOST_B })
+    useTabStore.getState().addTab(execA)
+    useTabStore.getState().addTab(execB)
+
+    deleteHostCascade(HOST_A, true)
+
+    expect(useTabStore.getState().tabs[execA.id]).toBeUndefined()
+    expect(useTabStore.getState().tabs[execB.id]).toBeDefined()
+  })
+
+  it('closeTabs=false leaves execution-pane tabs alone', () => {
+    const exec = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+    useTabStore.getState().addTab(exec)
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(useTabStore.getState().tabs[exec.id]).toBeDefined()
+    const content = getPrimaryPane(useTabStore.getState().tabs[exec.id].layout).content
+    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+  })
+
   it('cascade cleans AgentStore entries', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
@@ -101,6 +126,19 @@ describe('host delete cascade', () => {
     deleteHostCascade(HOST_A, true)
 
     expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeUndefined()
+  })
+
+  it('clears useExecutionStore entries for the removed host only', () => {
+    useExecutionStore.getState().applyEvents(HOST_A, 'exc_1', [
+      { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
+    ])
+    useExecutionStore.getState().applyEvents(HOST_B, 'exc_1', [
+      { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
+    ])
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
   })
 
   it('cascade cleans SessionStore entries', () => {

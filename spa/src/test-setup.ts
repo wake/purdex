@@ -21,18 +21,21 @@ globalThis.ResizeObserver = class ResizeObserver {
   disconnect() {}
 }
 
-// jsdom 不提供 matchMedia
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  configurable: true,
-  value: (query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    addListener: () => {},
-    removeListener: () => {},
-    dispatchEvent: () => false,
-  }),
-})
+// jsdom 不提供 matchMedia — skip under `@vitest-environment node` (no window;
+// used by tests that need a real ReadableStream/TextEncoder for SSE parsing).
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    configurable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  })
+}
