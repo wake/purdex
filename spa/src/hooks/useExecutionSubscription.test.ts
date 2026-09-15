@@ -4,7 +4,7 @@ import { renderHook, act } from '@testing-library/react'
 import { useExecutionSubscription, HISTORY_PAGE_LIMIT, SUMMARY_REFETCH_DEBOUNCE_MS } from './useExecutionSubscription'
 import { useExecutionStore } from '../stores/useExecutionStore'
 import { useHostStore } from '../stores/useHostStore'
-import { NexApiError } from '../lib/nex/types'
+import { NexApiError, type ExecutionSummary } from '../lib/nex/types'
 import * as api from '../lib/nex/nex-api'
 import * as sse from '../lib/nex/nex-sse'
 import type { NexSseOptions } from '../lib/nex/nex-sse'
@@ -14,11 +14,15 @@ vi.mock('../lib/nex/nex-api', () => ({ getExecution: vi.fn(), attachObserve: vi.
 vi.mock('../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
 
 const H = 'host-a', E = 'exc_1', KEY = 'host-a:exc_1'
-const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 2, observers: 0, archived: false, ...extra })
+const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 2, observers: 0, archived: false, ...extra }) as ExecutionSummary
 const ev = (seq: number, kind = 'assistant') => ({ seq, execution_id: E, kind, payload: { type: kind }, created_at: 0 })
+// A close mock always has this shape — typed once so every `{ close }`
+// literal returned from an openNexSse mock structurally satisfies
+// NexSseHandle without each call site needing its own annotation.
+type CloseMock = ReturnType<typeof vi.fn<() => void>>
 
 let sseOpts: NexSseOptions | null
-let sseClose: ReturnType<typeof vi.fn>
+let sseClose: CloseMock
 
 describe('useExecutionSubscription', () => {
   beforeEach(() => {
@@ -27,9 +31,9 @@ describe('useExecutionSubscription', () => {
     useExecutionStore.setState({ executions: {} })
     useHostStore.setState({ hosts: { [H]: { id: H, name: 'A', ip: '1', port: 1 } } as never, hostOrder: [H], activeHostId: H, runtime: {} })
     sseOpts = null
-    sseClose = vi.fn()
+    sseClose = vi.fn<() => void>()
     vi.mocked(sse.openNexSse).mockReset().mockImplementation((o) => { sseOpts = o; return { close: sseClose } })
-    vi.mocked(api.getExecution).mockReset().mockResolvedValue(summary() as never)
+    vi.mocked(api.getExecution).mockReset().mockResolvedValue(summary())
     vi.mocked(api.attachObserve).mockReset().mockResolvedValue({ mode: 'observe', stream_url: '/api/nex/v1/events?execution_id=exc_1', cursor: 2, state: 'idle' })
     vi.mocked(api.fetchExecutionEvents).mockReset()
       .mockResolvedValueOnce({ items: [ev(1), ev(2)], next_cursor: 0 })
@@ -115,6 +119,13 @@ describe('useExecutionSubscription', () => {
     expect(b.result.current.problem).toBe('nex_disabled')
   })
 
+  it('keeps the server message on the store as sseError instead of the bare problem code (spec §4.5)', async () => {
+    vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(503, 'nex_unavailable', 'nex: init: assembling engine: boom'))
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(useExecutionStore.getState().executions[KEY].sseError).toContain('boom')
+  })
+
   it('warns once per connection on a malformed durable frame and does not advance the cursor', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     renderHook(() => useExecutionSubscription(H, E, true))
@@ -149,10 +160,10 @@ describe('useExecutionSubscription', () => {
   })
 
   it('pauses the least-recently-active subscription beyond MAX_LIVE_SUBSCRIPTIONS_PER_HOST and resumes it on activation', async () => {
-    const closes: Record<string, ReturnType<typeof vi.fn>> = {}
+    const closes: Record<string, CloseMock> = {}
     vi.mocked(sse.openNexSse).mockImplementation((o) => {
       const id = new URL(o.url, 'http://x').searchParams.get('execution_id')!
-      closes[id] = closes[id] ?? vi.fn()
+      closes[id] = closes[id] ?? vi.fn<() => void>()
       return { close: closes[id] }
     })
     vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
@@ -195,10 +206,10 @@ describe('useExecutionSubscription', () => {
   // --- fix round 1 -----------------------------------------------------
 
   it('an inactive-at-mount pane claims a free slot and goes live (spec §4.3.2 step 4); once slots are full it stays paused until activation evicts the LRU', async () => {
-    const closes: Record<string, ReturnType<typeof vi.fn>> = {}
+    const closes: Record<string, CloseMock> = {}
     vi.mocked(sse.openNexSse).mockImplementation((o) => {
       const id = new URL(o.url, 'http://x').searchParams.get('execution_id')!
-      closes[id] = closes[id] ?? vi.fn()
+      closes[id] = closes[id] ?? vi.fn<() => void>()
       return { close: closes[id] }
     })
     vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
@@ -240,8 +251,8 @@ describe('useExecutionSubscription', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     vi.mocked(api.getExecution).mockClear()
 
-    let resolveFirst!: (v: unknown) => void
-    vi.mocked(api.getExecution).mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+    let resolveFirst!: (v: ExecutionSummary) => void
+    vi.mocked(api.getExecution).mockImplementationOnce(() => new Promise<ExecutionSummary>((resolve) => { resolveFirst = resolve }))
 
     act(() => { sseOpts!.onFrame({ id: '10', event: 'execution.running', data: '{}' }) })
     await act(async () => { await vi.advanceTimersByTimeAsync(SUMMARY_REFETCH_DEBOUNCE_MS + 1) })
@@ -252,7 +263,7 @@ describe('useExecutionSubscription', () => {
     expect(useExecutionStore.getState().executions[KEY].lastSeq).toBe(11)
 
     // Primed before the first resolves, for the retry this fix must trigger.
-    vi.mocked(api.getExecution).mockResolvedValueOnce(summary({ state: 'running', event_count: 99 }) as never)
+    vi.mocked(api.getExecution).mockResolvedValueOnce(summary({ state: 'running', event_count: 99 }))
 
     await act(async () => { resolveFirst(summary({ state: 'running' })); await vi.advanceTimersByTimeAsync(0) })
     // The stale first response (fetched as-of seq 10) must not clobber the local 'idle' patch from seq 11.
@@ -286,10 +297,10 @@ describe('useExecutionSubscription', () => {
   it('resets paused to false when executionId changes, so a fresh key with a free slot goes live rather than staying stuck paused', async () => {
     vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
     vi.mocked(api.fetchExecutionEvents).mockResolvedValue({ items: [], next_cursor: 0 })
-    const closes: Record<string, ReturnType<typeof vi.fn>> = {}
+    const closes: Record<string, CloseMock> = {}
     vi.mocked(sse.openNexSse).mockImplementation((o) => {
       const id = new URL(o.url, 'http://x').searchParams.get('execution_id')!
-      closes[id] = closes[id] ?? vi.fn()
+      closes[id] = closes[id] ?? vi.fn<() => void>()
       return { close: closes[id] }
     })
 

@@ -112,13 +112,17 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     // release: whether the slot claimed by the activation effect should be
     // given back. True once this subscription reaches a terminal problem —
     // a dead subscription must not keep occupying one of the 4 live slots.
-    const teardown = (reason?: SubscriptionProblem) => {
+    // `detail` is the server's own message (spec §4.5 wants it surfaced,
+    // e.g. "nex: init: assembling engine: …") — falls back to the problem
+    // code itself only when the caller has nothing better (a plain reason
+    // like 'host_removed' has no server text to carry).
+    const teardown = (reason?: SubscriptionProblem, detail?: string) => {
       sseRef.current?.close()
       sseRef.current = null
       if (refetchTimer) { clearTimeout(refetchTimer); refetchTimer = null }
       if (reason) {
         setProblem(reason)
-        store().setSse(hostId, executionId, 'closed', reason)
+        store().setSse(hostId, executionId, 'closed', detail ?? reason)
         subscriptionSlots.release(hostId, key)
       }
     }
@@ -210,9 +214,9 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
         else { setPaused(true); store().setSse(hostId, executionId, 'paused') }
       } catch (e) {
         if (cancelled) return
-        if (e instanceof NexApiError && e.code === 'execution_not_found') teardown('not_found')
-        else if (e instanceof NexApiError && e.code === 'nex_unavailable') teardown('nex_unavailable')
-        else if (e instanceof NexApiError && e.code === 'http_404') teardown('nex_disabled')
+        if (e instanceof NexApiError && e.code === 'execution_not_found') teardown('not_found', e.message)
+        else if (e instanceof NexApiError && e.code === 'nex_unavailable') teardown('nex_unavailable', e.message)
+        else if (e instanceof NexApiError && e.code === 'http_404') teardown('nex_disabled', e.message)
         else {
           // Unexpected error before the stream ever opened (a claimed slot
           // would otherwise leak forever on a subscription that can never
