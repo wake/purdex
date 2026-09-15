@@ -18,6 +18,11 @@ export const LEASE_MIN_REMAINING_MS = 5000
 export interface ExecutionLeaseApi {
   ensureLease(): Promise<string>
   release(): Promise<void>
+  /** Drops the local lease without any network call (I3): the server
+   * already invalidated it (lease_expired / lease_mismatch / lease_required
+   * from a send/interrupt/terminate), so a release() DELETE would be
+   * pointless — just stop the timer and clear the store. */
+  forget(): void
   touch(): void
 }
 
@@ -136,6 +141,11 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
     try { await releaseLease(hostId, executionId, cur.leaseId) } catch { /* best-effort */ }
   }, [hostId, executionId, key, stopTimer])
 
+  const forget = useCallback(() => {
+    stopTimer()
+    writeLease(null)
+  }, [stopTimer, writeLease])
+
   const touch = useCallback(() => { lastActivity.current = Date.now() }, [])
 
   // Host removal (keep-tabs mode, spec §4.3.4): the daemon is gone, so drop
@@ -168,5 +178,5 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
     }
   }, [hostId, executionId, key, release])
 
-  return { ensureLease, release, touch }
+  return { ensureLease, release, forget, touch }
 }

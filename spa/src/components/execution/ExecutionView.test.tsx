@@ -13,13 +13,13 @@ vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
 
 const H = 'h', E = 'exc_1', KEY = 'h:exc_1'
-const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn()
+const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn(), forget = vi.fn()
 const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 2, archived: false, effective_profile: 'standard', turn_count: 3, ...extra })
 
 beforeEach(() => {
   useExecutionStore.setState({ executions: {} })
-  ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset()
-  vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease, release, touch })
+  ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset(); forget.mockReset()
+  vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease, release, forget, touch })
   vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: null, paused: false })
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({ turn_id: 't1', delivery: 'delivered' })
   vi.mocked(api.interruptExecution).mockReset().mockResolvedValue({ turn_id: 't1', state: 'idle' })
@@ -118,6 +118,17 @@ describe('ExecutionView', () => {
     // lease_held is fully handled by the notice above — no redundant
     // "Send failed" banner.
     expect(screen.queryByTestId('send-error')).toBeNull()
+  })
+
+  it('lease_expired | lease_mismatch | lease_required from send drop the local lease via forget() (I3)', async () => {
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(409, 'lease_mismatch', 'stale'))
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'hello' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(screen.getByTestId('send-error')).toBeInTheDocument())
+    expect(forget).toHaveBeenCalledTimes(1)
+    expect(useExecutionStore.getState().executions[KEY].sendError?.code).toBe('lease_mismatch')
   })
 
   it('interrupt acquires the lease and posts; no_live_turn is silent', async () => {

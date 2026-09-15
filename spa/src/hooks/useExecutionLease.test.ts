@@ -76,6 +76,26 @@ describe('useExecutionLease', () => {
     expect(lease()).toBeNull()
   })
 
+  it('forget() clears the lease without a network call and the next ensureLease attaches anew (I3)', async () => {
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    await act(async () => { await result.current.ensureLease() })
+    expect(lease()).not.toBeNull()
+
+    act(() => { result.current.forget() })
+    expect(lease()).toBeNull()
+    expect(api.releaseLease).not.toHaveBeenCalled()
+
+    // No more renew ticks after forget (the timer stopped).
+    act(() => { result.current.touch() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(api.renewLease).not.toHaveBeenCalled()
+
+    vi.mocked(api.attachControl).mockResolvedValueOnce({ mode: 'control', lease_id: 'ls_2', expires_at: Date.now() + 30_000 })
+    let id = ''
+    await act(async () => { id = await result.current.ensureLease() })
+    expect(id).toBe('ls_2')
+  })
+
   it('a renew that resolves after release() cannot write the lease back', async () => {
     const { result } = renderHook(() => useExecutionLease(H, E))
     await act(async () => { await result.current.ensureLease() })

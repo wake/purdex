@@ -26,7 +26,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   const key = executionKey(hostId, executionId)
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
-  const { ensureLease, touch } = useExecutionLease(hostId, executionId)
+  const { ensureLease, touch, forget } = useExecutionLease(hostId, executionId)
   const [draft, setDraft] = useState<string | null>(null) // restored text after a failed send
 
   const isMine = useCallback((p: string | undefined) => !!p && p.endsWith(`/${getNexClientId()}`), [])
@@ -42,11 +42,15 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
       // before rethrowing) — a second "Send failed" banner would be
       // redundant and there is no execution.error.lease_held copy for it.
       if (e.code === 'no_live_turn' || e.code === 'lease_abandoned' || e.code === 'lease_held') return
+      // I3: the server already invalidated this lease — drop it locally too
+      // (no release() DELETE, it's pointless) so the next send/interrupt/
+      // terminate re-acquires instead of retrying against a dead lease id.
+      if (e.code === 'lease_expired' || e.code === 'lease_mismatch' || e.code === 'lease_required') forget()
       store().setSendError(hostId, executionId, { code: e.code, message: e.message, turnId: e.turnId })
     } else {
       store().setSendError(hostId, executionId, { code: 'network', message: e instanceof Error ? e.message : String(e) })
     }
-  }, [hostId, executionId])
+  }, [hostId, executionId, forget])
 
   const handleSend = useCallback(async (text: string) => {
     store().setSendError(hostId, executionId, null)
