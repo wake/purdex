@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.356] - 2026-09-16
+
+### Feat: 各電腦狀態備份 P3 — 合併還原（#1062）
+
+「各電腦狀態備份」每一列新增「合併」：把某台電腦狀態中本機沒有的 workspace 與分頁加進來，既有的 workspace、分頁與目前選取都不變動；同樣只還原結構、不建立 tmux session。至此各電腦狀態備份三個 phase 全部完成。
+
+- **分頁身分判定（`identity.ts`）**：tmux 分頁＝host＋session 名；editor／圖片／PDF＝來源＋路徑（未命名 editor 永不相同）；browser＝URL；execution＝host＋id；settings 依 workspace 名稱（去前後空白，指向不存在的 workspace 視為 global）；key 以 JSON 編碼，網址或路徑含 `:`、`|` 不會誤撞。
+- **合併（`mergeDeviceState`）**：同名 workspace 保留原設定、補上缺的分頁；本機沒有的 workspace 整個新增（新 id）；本機任何地方已存在的分頁跳過；只有「新分頁」的分頁不帶入；複製分頁一律產生不與本機衝突的新 tab／pane／split id，tmux pane 保留 rebuild 紀錄；settings 分頁的 workspace 參照改指到對應的本機 workspace。
+- **合併還原（`restoreDeviceStateMerge`）**：與完整取代共用同一條流程（操作鎖 → 形狀驗證 → 標記缺少的 host → 依名稱接回 → 只含結構的 `-prev` → 原子寫入＋rollback → 同步 session store）；合併以接回完成當下的本機狀態為基底，等待網路期間新開的分頁不會遺失。
+- **Undo 備份一致性**：`-prev` 先在記憶體組好、確認 tab／workspace store 在擷取期間沒有變動才寫入（最多重拍 3 次，仍變動則放棄這次還原並保留原本的備份），Undo 不會丟掉還原前已存在的分頁；「復原」同樣不會重建 session。
+- **UI**：每列「合併」按鈕（確認後一律抓最新紀錄）、與「完整取代」「刪除」共用同一個 action hook、單一執行與全域鎖，結果顯示新增 workspace／分頁與已存在數量。
+- **Review**：P3 plan 經 codex 審並修訂（rebuild 紀錄保留、fresh id 避撞、dangling settings→global）；T1 自查出 key 分隔字元誤撞並改 JSON 編碼；PR R1 1×P2（Undo 備份與實際套用的世界不同步）；R2 攻擊＋防守同指 1 項（重拍失敗時已覆寫原本的 Undo 備份）已修；「分割方向不同但 pane 相同被視為同一分頁」依 D5 定案不改；檔案體質 approve。
+- 測試 vitest 443→445 files、5586→5655 tests；Go 未動。
+
 ## [1.0.0-alpha.355] - 2026-09-16
 
 ### Feat: 各電腦狀態備份 P2 — 電腦清單＋完整取代（#1060）
