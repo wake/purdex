@@ -1,4 +1,5 @@
-import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, type HostColorMarkStyle, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM, HOST_COLOR_LINE_WIDTH_MIN, HOST_COLOR_LINE_WIDTH_MAX, clampHostColorLineWidth } from '../../stores/useUISettingsStore'
+import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
+import { HostColorMarkSetting } from './HostColorMarkSetting'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
@@ -73,47 +74,6 @@ export function TerminalSection() {
     { value: 'both', label: t('settings.terminal.tab_name_tooltip.both') },
   ]
 
-  const HOST_COLOR_MARK_OPTIONS: { value: HostColorMarkStyle; label: string }[] = [
-    { value: 'gradient', label: t('settings.terminal.host_color_mark.style.gradient') },
-    { value: 'left-line', label: t('settings.terminal.host_color_mark.style.left_line') },
-    { value: 'bottom-line', label: t('settings.terminal.host_color_mark.style.bottom_line') },
-    { value: 'none', label: t('settings.terminal.host_color_mark.style.none') },
-  ]
-
-  const renderHostColorMarkItem = (
-    surface: 'sidebar' | 'tabbar',
-    label: string,
-    description: string,
-    style: HostColorMarkStyle,
-    setStyle: (style: HostColorMarkStyle) => void,
-    width: number,
-    setWidth: (px: number) => void,
-  ) => (
-    <SettingItem label={label} description={description}>
-      <div className="flex items-center gap-2">
-        <div data-testid={`host-color-${surface}-style`}>
-          <SegmentControl options={HOST_COLOR_MARK_OPTIONS} value={style} onChange={setStyle} />
-        </div>
-        {(style === 'left-line' || style === 'bottom-line') && (
-          <>
-            <input
-              type="number"
-              data-testid={`host-color-${surface}-width`}
-              aria-label={`${label}: ${t('settings.terminal.host_color_mark.width_aria')}`}
-              min={HOST_COLOR_LINE_WIDTH_MIN}
-              max={HOST_COLOR_LINE_WIDTH_MAX}
-              step={1}
-              value={width}
-              onChange={(e) => setWidth(clampHostColorLineWidth(Number(e.target.value)))}
-              className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
-            />
-            <span className="text-xs text-text-muted">{t('settings.terminal.host_color_mark.px')}</span>
-          </>
-        )}
-      </div>
-    </SettingItem>
-  )
-
   // Atomic: renderer + version + optional keepAlive clamp in one setState()
   const handleRenderer = (r: TerminalRenderer) => {
     useUISettingsStore.setState((s) => ({
@@ -176,8 +136,24 @@ export function TerminalSection() {
         <SegmentControl options={TAB_INDICATOR_OPTIONS} value={tabIndicatorStyle} onChange={setTabIndicatorStyle} />
       </SettingItem>
 
-      {renderHostColorMarkItem('sidebar', t('settings.terminal.host_color_mark.sidebar.label'), t('settings.terminal.host_color_mark.sidebar.desc'), hostColorSidebarStyle, setHostColorSidebarStyle, hostColorSidebarWidth, setHostColorSidebarWidth)}
-      {renderHostColorMarkItem('tabbar', t('settings.terminal.host_color_mark.tab_bar.label'), t('settings.terminal.host_color_mark.tab_bar.desc'), hostColorTabBarStyle, setHostColorTabBarStyle, hostColorTabBarWidth, setHostColorTabBarWidth)}
+      <HostColorMarkSetting
+        label={t('settings.terminal.host_color_mark.sidebar.label')}
+        description={t('settings.terminal.host_color_mark.sidebar.desc')}
+        style={hostColorSidebarStyle}
+        width={hostColorSidebarWidth}
+        onStyleChange={setHostColorSidebarStyle}
+        onWidthChange={setHostColorSidebarWidth}
+        testIdPrefix="host-color-sidebar"
+      />
+      <HostColorMarkSetting
+        label={t('settings.terminal.host_color_mark.tab_bar.label')}
+        description={t('settings.terminal.host_color_mark.tab_bar.desc')}
+        style={hostColorTabBarStyle}
+        width={hostColorTabBarWidth}
+        onStyleChange={setHostColorTabBarStyle}
+        onWidthChange={setHostColorTabBarWidth}
+        testIdPrefix="host-color-tabbar"
+      />
 
       <SettingItem label={t('settings.terminal.dynamic_tab_name.label')} description={t('settings.terminal.dynamic_tab_name.desc')}>
         <ToggleSwitch label={t('settings.terminal.dynamic_tab_name.label')} checked={dynamicTabName} onChange={setDynamicTabName} />

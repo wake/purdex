@@ -204,50 +204,20 @@ describe('TerminalSection', () => {
       expect(tabbar.compareDocumentPosition(dynamic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
 
+    // Focused behaviour (width visibility, clamping) lives in HostColorMarkSetting.test.tsx;
+    // here we only verify each row is wired to the right store fields.
     for (const surface of SURFACES) {
-      it(`${surface.name}: selecting each style updates the store`, () => {
-        useUISettingsStore.setState({ [surface.styleKey]: 'none' })
+      it(`${surface.name}: writes style and width to its own store fields`, () => {
+        const otherStyleKey = surface.name === 'sidebar' ? 'hostColorTabBarStyle' : 'hostColorSidebarStyle'
+        const otherWidthKey = surface.name === 'sidebar' ? 'hostColorTabBarWidth' : 'hostColorSidebarWidth'
+        useUISettingsStore.setState({ [surface.styleKey]: 'none', [otherStyleKey]: 'none' })
         render(<TerminalSection />)
-        for (const [i, style] of STYLE_ORDER.entries()) {
-          if (style === 'none') continue
-          fireEvent.click(styleButtons(surface.name)[i])
-          expect(useUISettingsStore.getState()[surface.styleKey]).toBe(style)
-        }
-        fireEvent.click(styleButtons(surface.name)[3])
-        expect(useUISettingsStore.getState()[surface.styleKey]).toBe('none')
-      })
-
-      it(`${surface.name}: width input only shown for line styles`, () => {
-        const other = surface.name === 'sidebar' ? 'tabbar' : 'sidebar'
-        const otherKey = surface.name === 'sidebar' ? 'hostColorTabBarStyle' : 'hostColorSidebarStyle'
-        useUISettingsStore.setState({ [otherKey]: 'none' })
-        for (const style of STYLE_ORDER) {
-          useUISettingsStore.setState({ [surface.styleKey]: style })
-          const { unmount } = render(<TerminalSection />)
-          const input = screen.queryByTestId(`host-color-${surface.name}-width`)
-          if (style === 'left-line' || style === 'bottom-line') {
-            expect(input).not.toBeNull()
-            expect(input?.getAttribute('type')).toBe('number')
-            expect(input?.getAttribute('aria-label')).toBeTruthy()
-          } else {
-            expect(input).toBeNull()
-          }
-          // other surface stays independent
-          expect(screen.queryByTestId(`host-color-${other}-width`)).toBeNull()
-          unmount()
-        }
-      })
-
-      it(`${surface.name}: width input clamps to 1-6`, () => {
-        useUISettingsStore.setState({ [surface.styleKey]: 'left-line' })
-        render(<TerminalSection />)
-        const input = screen.getByTestId(`host-color-${surface.name}-width`)
-        fireEvent.change(input, { target: { value: '9' } })
-        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(6)
-        fireEvent.change(input, { target: { value: '0' } })
-        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(1)
-        fireEvent.change(input, { target: { value: '4' } })
-        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(4)
+        fireEvent.click(styleButtons(surface.name)[STYLE_ORDER.indexOf('left-line')])
+        expect(useUISettingsStore.getState()[surface.styleKey]).toBe('left-line')
+        expect(useUISettingsStore.getState()[otherStyleKey]).toBe('none')
+        fireEvent.change(screen.getByTestId(`host-color-${surface.name}-width`), { target: { value: '5' } })
+        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(5)
+        expect(useUISettingsStore.getState()[otherWidthKey]).toBe(2)
       })
     }
   })
