@@ -1,4 +1,5 @@
 import type { PaneContent } from '../types/tab'
+import { resolveExecutionHostId } from './nex/resolve-host'
 
 /**
  * Pane kinds that hold an open file from a `FileSource` + `filePath`: the
@@ -47,10 +48,11 @@ export function contentMatches(a: PaneContent, b: PaneContent): boolean {
     }
     return a.filePath === b.filePath
   }
-  // Execution detail pages are singletons per execution id, so a second deeplink
-  // to the same execution reuses its tab instead of stacking duplicates.
+  // Execution panes are singletons per (host, execution id): Nexen ids are
+  // per-daemon, so the same id on two hosts is two executions (spec §4.3.3).
   if (a.kind === 'execution' && b.kind === 'execution') {
     return a.executionId === b.executionId
+      && resolveExecutionHostId(a.host) === resolveExecutionHostId(b.host)
   }
   return true
 }

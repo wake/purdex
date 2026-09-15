@@ -3,7 +3,6 @@
 // through hostFetch (Bearer from the host store) plus the per-tab
 // X-Pdx-Client header; tickets are never involved on this path.
 import { hostFetch } from '../host-api'
-import { useHostStore } from '../../stores/useHostStore'
 import { getNexClientId } from './client-id'
 import {
   nexErrorFromResponse,
@@ -127,13 +126,8 @@ export function terminateExecution(hostId: string, executionId: string, leaseId:
   return postJson(hostId, execPath(executionId, '/terminate'), { lease_id: leaseId }).then(okVoid)
 }
 
-/**
- * Resolve an optional `host` hint (pane content / deeplink) onto a known SPA
- * hostId; falls back to the first host so an execution always has a daemon
- * to talk to. (Moved from the M0 execution-api.ts, which P-B.2 deletes.)
- */
-export function resolveExecutionHostId(host?: string): string {
-  const { hostOrder } = useHostStore.getState()
-  if (host && hostOrder.includes(host)) return host
-  return hostOrder[0] ?? ''
-}
+// Resolve an optional `host` hint (pane content / deeplink) onto a known SPA
+// hostId; falls back to the first host so an execution always has a daemon
+// to talk to. (Moved to resolve-host.ts, which P-B.2 keeps free of fetch
+// imports so pane-utils / route code can use it without pulling in nex-api.)
+export { resolveExecutionHostId } from './resolve-host'

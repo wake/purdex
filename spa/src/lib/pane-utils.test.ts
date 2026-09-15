@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { contentMatches } from './pane-utils'
 import type { PaneContent } from '../types/tab'
+import { useHostStore } from '../stores/useHostStore'
 
 describe('contentMatches', () => {
   it('returns false when kinds differ', () => {
@@ -171,5 +172,15 @@ describe('contentMatches', () => {
     const a: PaneContent = { kind: 'pdf-preview', source: { type: 'daemon', hostId: 'h1' }, filePath: '/doc.pdf' }
     const b: PaneContent = { kind: 'pdf-preview', source: { type: 'daemon', hostId: 'h2' }, filePath: '/doc.pdf' }
     expect(contentMatches(a, b)).toBe(false)
+  })
+
+  // execution
+  it('execution panes match on (host, executionId), same id on another host is a different pane', () => {
+    useHostStore.setState({ hosts: { a: { id: 'a', name: 'A', ip: '1', port: 1 }, b: { id: 'b', name: 'B', ip: '2', port: 1 } } as never, hostOrder: ['a', 'b'], activeHostId: 'a', runtime: {} })
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a' }, { kind: 'execution', executionId: 'exc_1', host: 'b' })).toBe(false)
+    // an absent/unknown host resolves to the first host
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'zzz' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(true)
   })
 })
