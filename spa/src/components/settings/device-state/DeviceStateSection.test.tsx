@@ -178,6 +178,24 @@ describe('DeviceStateSection — list', () => {
     expect(screen.getByTestId(`device-state-delete-${OTHER}`)).not.toBeDisabled()
   })
 
+  it('resolves the own client id via getClientId when the sync store has none yet', async () => {
+    withTarget()
+    useSyncStore.setState({ clientId: null })
+    let generated: string | null = null
+    mockedList.mockImplementation(async () => {
+      generated = useSyncStore.getState().clientId
+      return [summary(OTHER), summary(generated ?? 'missing')]
+    })
+    render(<DeviceStateSection />)
+    await waitFor(() => expect(mockedList).toHaveBeenCalled())
+    expect(generated).toBeTruthy()
+    const own = generated as unknown as string
+    await screen.findByTestId(`device-state-row-${own}`)
+    expect(screen.getByTestId(`device-state-own-badge-${own}`)).toBeInTheDocument()
+    expect(screen.getByTestId(`device-state-delete-${own}`)).toBeDisabled()
+    expect(screen.queryByTestId(`device-state-own-badge-${OTHER}`)).toBeNull()
+  })
+
   it('renders the empty state', async () => {
     withTarget()
     mockedList.mockResolvedValue([])
@@ -303,6 +321,36 @@ describe('DeviceStateSection — replace', () => {
     expect(line).toHaveAttribute('data-host-removed', '3')
     expect(line.textContent).not.toContain('{{')
     expect(onRestored).toHaveBeenCalledTimes(1)
+  })
+
+  it('after the list refreshes with a newer upload, Replace restores the newer payload', async () => {
+    const payloadA: WorkspaceSnapshot = { ...PAYLOAD, workspaces: [{ id: 'wA', name: 'Old', tabs: [], activeTabId: null }] }
+    const payloadB: WorkspaceSnapshot = { ...PAYLOAD, workspaces: [{ id: 'wB', name: 'New', tabs: [], activeTabId: null }] }
+    const oldSummary = summary(OTHER, { updatedAt: 1_000 })
+    const newSummary = summary(OTHER, { updatedAt: 2_000 })
+    withTarget()
+    mockedList.mockResolvedValueOnce([oldSummary]).mockResolvedValue([newSummary])
+    mockedGet.mockResolvedValueOnce({ ...oldSummary, payload: payloadA }).mockResolvedValue({ ...newSummary, payload: payloadB })
+    mockedReplace.mockResolvedValue(REPORT)
+    render(<DeviceStateSection />)
+    await screen.findByTestId(`device-state-row-${OTHER}`)
+
+    fireEvent.click(screen.getByTestId(`device-state-expand-${OTHER}`))
+    await screen.findByTestId('device-state-ws-wA')
+
+    fireEvent.click(screen.getByTestId('device-state-list-refresh'))
+    await waitFor(() => expect(mockedList).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByTestId('device-state-ws-wA')).toBeNull())
+
+    // The expanded tree for the new version is fetched again.
+    fireEvent.click(screen.getByTestId(`device-state-expand-${OTHER}`))
+    await screen.findByTestId('device-state-ws-wB')
+    expect(mockedGet).toHaveBeenCalledTimes(2)
+
+    confirmReplace()
+    await waitFor(() => expect(mockedReplace).toHaveBeenCalledTimes(1))
+    expect(mockedReplace).toHaveBeenCalledWith(payloadB)
+    expect(mockedGet).toHaveBeenCalledTimes(3)
   })
 
   it('cancel does not restore', async () => {

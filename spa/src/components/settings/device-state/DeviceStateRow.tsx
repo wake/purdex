@@ -35,7 +35,7 @@ export interface DeviceStateRowProps {
   busy: boolean
   /** The global operation lock is held by someone other than Replace. */
   replaceLocked: boolean
-  /** Receives a loader that returns the full record (fetched once, then cached). */
+  /** Receives a loader that fetches the full record fresh (never the expand cache). */
   onReplace: (load: () => Promise<DeviceStateRecord>) => void
   onDelete: (clientId: string) => void
 }
@@ -45,8 +45,8 @@ export function DeviceStateRow({ hostId, summary, isOwn, busy, replaceLocked, on
   const [expanded, setExpanded] = useState(false)
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [loaded, setLoaded] = useState<Loaded>({ kind: 'idle' })
-  // The one in-flight/settled fetch, shared by expand and Replace so the record
-  // is requested at most once per row.
+  // The expand tree's in-flight/settled fetch. Valid for this summary version
+  // only — the section keys rows by updatedAt, so a newer upload remounts.
   const fetchRef = useRef<Promise<DeviceStateRecord> | null>(null)
   const id = summary.clientId
 
@@ -73,10 +73,14 @@ export function DeviceStateRow({ hostId, summary, isOwn, busy, replaceLocked, on
     if (next && loaded.kind !== 'loaded') load().catch(() => {})
   }
 
+  // Replace must never apply the expand cache: a newer upload may have landed
+  // since, so each confirmed Replace fetches the record afresh.
+  const loadFresh = (): Promise<DeviceStateRecord> => getDeviceState(hostId, id)
+
   const confirmAction = () => {
     const action = confirm
     setConfirm(null)
-    if (action === 'replace') onReplace(load)
+    if (action === 'replace') onReplace(loadFresh)
     else if (action === 'delete') onDelete(id)
   }
 

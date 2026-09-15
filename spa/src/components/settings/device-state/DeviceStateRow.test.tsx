@@ -152,7 +152,7 @@ describe('DeviceStateRow', () => {
     expect(screen.queryByTestId(`device-state-replace-confirm-${id}`)).toBeNull()
   })
 
-  it('Replace Confirm hands a loader that fetches the record once and reuses it', async () => {
+  it('Replace Confirm hands a loader that fetches the record', async () => {
     mockedGet.mockResolvedValue(RECORD)
     const { onReplace } = renderRow()
     fireEvent.click(screen.getByTestId(`device-state-replace-${id}`))
@@ -164,9 +164,30 @@ describe('DeviceStateRow', () => {
       rec = await load()
     })
     expect(rec).toBe(RECORD)
+    expect(mockedGet).toHaveBeenCalledWith('h1', id)
+  })
+
+  it('Replace never reuses the expand cache: a confirmed Replace fetches a fresh record', async () => {
+    const newer: DeviceStateRecord = {
+      ...RECORD,
+      updatedAt: RECORD.updatedAt + 1000,
+      payload: { ...PAYLOAD, workspaces: [{ id: 'wB', name: 'Newer', tabs: [], activeTabId: null }] },
+    }
+    mockedGet.mockResolvedValueOnce(RECORD).mockResolvedValueOnce(newer)
+    const { onReplace } = renderRow()
     fireEvent.click(screen.getByTestId(`device-state-expand-${id}`))
-    expect(screen.getByTestId('device-state-ws-w1')).toBeInTheDocument()
+    await screen.findByTestId('device-state-ws-w1')
     expect(mockedGet).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId(`device-state-replace-${id}`))
+    fireEvent.click(screen.getByTestId(`device-state-confirm-${id}`))
+    const load = vi.mocked(onReplace).mock.calls[0][0]
+    let rec: DeviceStateRecord | undefined
+    await act(async () => {
+      rec = await load()
+    })
+    expect(mockedGet).toHaveBeenCalledTimes(2)
+    expect(rec).toBe(newer)
   })
 
   it('Delete asks for confirmation; Confirm calls onDelete, Cancel does not', () => {

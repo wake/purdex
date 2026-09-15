@@ -81,7 +81,9 @@ export function DeviceStateSection({ onRestored }: { onRestored?: () => void } =
   const status = useDeviceStateStore((s) => s.status)
   const targetId = useHostStore(selectDevHostId)
   const targetName = useHostStore((s) => (targetId ? s.hosts[targetId]?.name : undefined))
-  const ownClientId = useSyncStore((s) => s.clientId)
+  // getClientId() creates and persists an id on a fresh profile, so the own
+  // row is recognised (badge, Delete disabled) even before sync ever ran.
+  const [ownClientId] = useState(() => useSyncStore.getState().getClientId())
   const lockedBy = useRebuildStore((s) => s.lockedBy)
   const { view, reload } = useDeviceStateList(targetId)
 
@@ -216,7 +218,8 @@ export function DeviceStateSection({ onRestored }: { onRestored?: () => void } =
             <ul className="flex flex-col">
               {view.rows.map((row) => (
                 <DeviceStateRow
-                  key={`${targetId}:${row.clientId}`}
+                  // updatedAt in the key: a newer upload remounts the row, dropping its cached record.
+                  key={`${targetId}:${row.clientId}:${row.updatedAt}`}
                   hostId={targetId}
                   summary={row}
                   isOwn={row.clientId === ownClientId}
