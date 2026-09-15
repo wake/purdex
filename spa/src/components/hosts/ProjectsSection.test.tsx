@@ -4,7 +4,7 @@ import { ProjectsSection } from './ProjectsSection'
 import { useHostStore } from '../../stores/useHostStore'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import * as api from '../../lib/host-config-api'
-import { HostConfigApiError, HostConfigConflictError, type HostProject } from '../../lib/host-config-api'
+import { HostConfigApiError, type HostProject } from '../../lib/host-config-api'
 import { MAX_CONFIG_ITEMS } from '../../lib/host-config-validate'
 
 vi.mock('../../lib/host-config-api', async (importOriginal) => ({
@@ -119,14 +119,8 @@ describe('ProjectsSection', () => {
     await waitFor(() => expect(saveProjects).toHaveBeenCalledWith(H, [P1]))
   })
 
-  it('a conflict shows the reloaded notice', async () => {
-    saveProjects.mockRejectedValue(new HostConfigConflictError({ items: [P1], revision: 9 }))
-    render(<ProjectsSection hostId={H} />)
-    fireEvent.click(screen.getByTestId('project-delete-p2'))
-    fireEvent.click(screen.getByTestId('project-delete-confirm-p2'))
-    expect(await screen.findByTestId('projects-save-error')).toHaveTextContent('Changed elsewhere')
-  })
-
+  // How a failure is WORDED is the shared hook's (useHostConfigCollection); what
+  // this owns is where it is rendered.
   it('a daemon 400 on a row action shows the body text in the list', async () => {
     saveProjects.mockRejectedValue(new HostConfigApiError(400, 'duplicate slug'))
     render(<ProjectsSection hostId={H} />)

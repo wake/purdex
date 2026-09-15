@@ -16,7 +16,7 @@ import { CommandsSection } from './CommandsSection'
 import { useHostStore } from '../../stores/useHostStore'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { resolveShellCommand } from '../../lib/host-api'
-import { HostConfigApiError, HostConfigConflictError, type HostCommand } from '../../lib/host-config-api'
+import { HostConfigApiError, type HostCommand } from '../../lib/host-config-api'
 import { MAX_CONFIG_ITEMS } from '../../lib/host-config-validate'
 
 const H = 'h1'
@@ -95,16 +95,13 @@ describe('CommandsSection', () => {
     expect(screen.queryByTestId('commands-save-error')).not.toBeInTheDocument()
   })
 
-  it('a daemon 400 on a row action shows the body text in the list; a conflict shows the reload notice', async () => {
+  // How a failure is WORDED is the shared hook's (useHostConfigCollection); what
+  // this owns is where it is rendered.
+  it('a daemon 400 on a row action shows the body text in the list', async () => {
     saveCommands.mockRejectedValueOnce(new HostConfigApiError(400, 'duplicate id'))
     render(<CommandsSection hostId={H} />)
     fireEvent.click(screen.getByTestId('command-down-c1'))
     expect(await screen.findByTestId('commands-save-error')).toHaveTextContent('duplicate id')
-    saveCommands.mockRejectedValueOnce(new HostConfigConflictError({ items: [C1], revision: 9 }))
-    await waitFor(() => expect(screen.getByTestId('command-delete-c2')).toBeEnabled())
-    fireEvent.click(screen.getByTestId('command-delete-c2'))
-    fireEvent.click(screen.getByTestId('command-delete-confirm-c2'))
-    await waitFor(() => expect(screen.getByTestId('commands-save-error')).toHaveTextContent('Changed elsewhere'))
   })
 
   it('adding is disabled at the item limit', () => {

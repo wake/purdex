@@ -21,8 +21,12 @@ const saveProjects = vi.fn()
 /** Resolve the PUT that is waiting, oldest first. */
 const settlers: Array<() => void> = []
 
-function seed(projects: HostProject[]) {
-  useHostConfigStore.setState({ byHost: { [H]: { ...emptyHostConfigEntry('ready'), projects } }, saveProjects })
+function seed(projects: HostProject[], status: 'ready' | 'unsupported' = 'ready') {
+  useHostConfigStore.setState({
+    byHost: { [H]: { ...emptyHostConfigEntry(status), projects } },
+    load: vi.fn(async () => {}),
+    saveProjects,
+  })
 }
 
 /** A save that only lands when the test says so, writing to the store like the real one. */
@@ -101,6 +105,66 @@ describe('useHostConfigCollection', () => {
     expect(ok).toBe(false)
     expect(result.current.saveError?.text).toContain(String(MAX_CONFIG_ITEMS))
     expect(saveProjects).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the dialog open until the host takes the item, and closes it when it does', async () => {
+    const { result } = renderHook(() => useHostConfigCollection<HostProject>(H, 'projects'))
+    saveProjects.mockRejectedValueOnce(new Error('daemon said no'))
+
+    act(() => { result.current.openEditor({ ...P1, name: 'Edited' }) })
+    expect(result.current.isNew).toBe(false)
+    await act(async () => { result.current.submit({ ...P1, name: 'Edited' }) })
+    // The save failed, so the dialog stays open with the error inside it.
+    expect(result.current.editing).not.toBeNull()
+    expect(result.current.saveError).toMatchObject({ target: 'dialog' })
+
+    await act(async () => { result.current.submit({ ...P1, name: 'Edited' }) })
+    expect(result.current.editing).toBeNull()
+    expect(items()).toEqual([{ ...P1, name: 'Edited' }, P2, P3])
+  })
+
+  it('a new item reads as new, and the dialog clears only its own error on the way out', async () => {
+    const { result } = renderHook(() => useHostConfigCollection<HostProject>(H, 'projects'))
+    saveProjects.mockRejectedValueOnce(new Error('dialog save failed'))
+
+    act(() => { result.current.openEditor({ id: 'p9', name: '', slug: '', path: '' }) })
+    expect(result.current.isNew).toBe(true)
+    await act(async () => { result.current.submit({ id: 'p9', name: 'New', slug: 'new', path: '/n' }) })
+    expect(result.current.saveError).toMatchObject({ target: 'dialog' })
+    act(() => { result.current.closeEditor() })
+    expect(result.current.editing).toBeNull()
+    expect(result.current.saveError).toBeNull()
+
+    // A list failure is not the dialog's to clear.
+    saveProjects.mockRejectedValueOnce(new Error('row action failed'))
+    await act(async () => { await result.current.remove('p2') })
+    act(() => { result.current.closeEditor() })
+    expect(result.current.saveError).toMatchObject({ target: 'list' })
+  })
+
+  it('a delete asks first and only the confirmation writes', async () => {
+    const { result } = renderHook(() => useHostConfigCollection<HostProject>(H, 'projects'))
+    act(() => { result.current.askDelete('p2') })
+    expect(result.current.deleting).toBe('p2')
+    act(() => { result.current.cancelDelete() })
+    expect(result.current.deleting).toBeNull()
+    expect(saveProjects).not.toHaveBeenCalled()
+
+    act(() => { result.current.askDelete('p2') })
+    await act(async () => { result.current.confirmDelete('p2') })
+    expect(result.current.deleting).toBeNull()
+    expect(items()).toEqual([P1, P3])
+  })
+
+  it('an offline or too-old host is not editable and says why', () => {
+    seed([P1], 'unsupported')
+    const { result, rerender } = renderHook(() => useHostConfigCollection<HostProject>(H, 'projects'))
+    expect(result.current.editable).toBe(false)
+    expect(result.current.notice).toMatchObject({ key: 'host_config.unsupported' })
+
+    act(() => { useHostStore.setState({ runtime: { [H]: { status: 'disconnected' } } }) })
+    rerender()
+    expect(result.current.notice).toMatchObject({ key: 'host_config.offline' })
   })
 
   it('reports a failure against the surface the action came from', async () => {

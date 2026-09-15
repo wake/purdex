@@ -1,5 +1,8 @@
-// spa/src/components/hosts/useHostConfigCollection.ts — the save path shared by
-// the two daemon-backed collection editors (Projects and Commands).
+// spa/src/components/hosts/useHostConfigCollection.ts — everything the two
+// daemon-backed collection editors (Projects and Commands) do the same way:
+// the gate, the item limit, the edit dialog's open/close/commit, the
+// delete confirmation, and the save path below. The sections keep what is
+// genuinely theirs — their fields and validation, their dialog, their rows.
 //
 // Two rules live here, and they are the reason this is not written twice:
 //
@@ -24,6 +27,7 @@ import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-q
 import { MAX_CONFIG_ITEMS } from '../../lib/host-config-validate'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useHostConfigGate, type GateNotice } from './HostConfigNotice'
 
 /** Where a save failure is shown: inside the open dialog, or above the list. */
 export type ErrorTarget = 'dialog' | 'list'
@@ -50,11 +54,32 @@ function writeItems(hostId: string, kind: CollectionKind, items: CollectionItem[
 }
 
 export interface HostConfigCollectionOps<T extends WithId> {
+  /** This host's copy of the collection — the list to render. */
+  items: T[]
+  /** Editing is allowed: the host is online and its config loaded. */
+  editable: boolean
+  /** Why editing is not allowed, for `HostConfigNotice`. */
+  notice: GateNotice | null
+  /** The collection is full: no row may be added. */
+  atLimit: boolean
   /** A save is in flight — for the dialog and the Add button, never for row actions. */
   pending: boolean
   saveError: SaveError | null
-  /** Clear the error shown on one surface (opening or closing the dialog). */
-  clearSaveError: (target?: ErrorTarget) => void
+
+  /** The item the edit dialog is open on, and whether it is not in the list yet. */
+  editing: T | null
+  isNew: boolean
+  openEditor: (item: T) => void
+  closeEditor: () => void
+  /** Save the dialog's item; the dialog closes only once the host took it. */
+  submit: (item: T) => void
+
+  /** The row whose delete is awaiting confirmation. */
+  deleting: string | null
+  askDelete: (id: string) => void
+  cancelDelete: () => void
+  confirmDelete: (id: string) => void
+
   /** Swap the row with `id` with its neighbour. Resolves true when the save landed. */
   move: (id: string, delta: -1 | 1) => Promise<boolean>
   remove: (id: string) => Promise<boolean>
@@ -67,8 +92,14 @@ export function useHostConfigCollection<T extends WithId>(
   kind: CollectionKind,
 ): HostConfigCollectionOps<T> {
   const t = useI18nStore((s) => s.t)
+  const { entry, editable, notice } = useHostConfigGate(hostId)
+  // The caller names the item type that goes with `kind`; the store holds the
+  // union, and this is the one place the two are tied together.
+  const items = entry[kind] as unknown as T[]
   const [pending, setPending] = useState(false)
   const [saveError, setSaveError] = useState<SaveError | null>(null)
+  const [editing, setEditing] = useState<T | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
   // Synchronous depth: React state lags a second action fired in the same tick.
   const depth = useRef(0)
 
@@ -131,5 +162,44 @@ export function useHostConfigCollection<T extends WithId>(
       : [...current, item as unknown as CollectionItem]
   }, target), [enqueue])
 
-  return { pending, saveError, clearSaveError, move, remove, upsert }
+  const openEditor = useCallback((item: T) => {
+    clearSaveError()
+    setEditing(item)
+  }, [clearSaveError])
+
+  const closeEditor = useCallback(() => {
+    setEditing(null)
+    // The list keeps its own failure; only the dialog's goes with the dialog.
+    clearSaveError('dialog')
+  }, [clearSaveError])
+
+  const submit = useCallback((item: T) => {
+    void upsert(item).then((saved) => { if (saved) setEditing(null) })
+  }, [upsert])
+
+  const confirmDelete = useCallback((id: string) => {
+    setDeleting(null)
+    void remove(id)
+  }, [remove])
+
+  return {
+    items,
+    editable,
+    notice,
+    atLimit: items.length >= MAX_CONFIG_ITEMS,
+    pending,
+    saveError,
+    editing,
+    isNew: !!editing && !items.some((i) => i.id === editing.id),
+    openEditor,
+    closeEditor,
+    submit,
+    deleting,
+    askDelete: setDeleting,
+    cancelDelete: useCallback(() => setDeleting(null), []),
+    confirmDelete,
+    move,
+    remove,
+    upsert,
+  }
 }

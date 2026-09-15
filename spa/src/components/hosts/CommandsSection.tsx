@@ -7,37 +7,23 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { ResumeTemplateSettings } from '../settings/ResumeTemplateSettings'
 import { CommandEditDialog } from './CommandEditDialog'
 import { CommandIconView } from './CommandIconView'
-import { HostConfigNotice, useHostConfigGate } from './HostConfigNotice'
+import { HostConfigNotice } from './HostConfigNotice'
 import { useHostConfigCollection } from './useHostConfigCollection'
 
 type Tab = 'normal' | 'resume'
 
 export function CommandsSection({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
-  const { entry, editable, notice } = useHostConfigGate(hostId)
-  const commands = entry.commands
   const [tab, setTab] = useState<Tab>('normal')
-  const [editing, setEditing] = useState<{ command: HostCommand; isNew: boolean } | null>(null)
-  const [deleting, setDeleting] = useState<string | null>(null)
-  // Row actions are queued and planned from the latest list, so they stay live
-  // while a save is in flight; only the dialog is held shut behind its own save.
-  const { pending, saveError, clearSaveError, move, remove, upsert } = useHostConfigCollection<HostCommand>(hostId, 'commands')
+  // Everything this section shares with Projects — the gate, the limit, the
+  // dialog's lifecycle, the delete confirmation and the queued, id-addressed
+  // saves. What is left here is what a COMMAND is: its fields, its icon, its rows.
+  const {
+    items: commands, editable, notice, atLimit, pending, saveError,
+    editing, isNew, openEditor, closeEditor, submit,
+    deleting, askDelete, cancelDelete, confirmDelete, move,
+  } = useHostConfigCollection<HostCommand>(hostId, 'commands')
   const locked = !editable
-  const atLimit = commands.length >= MAX_CONFIG_ITEMS
-
-  const handleSave = async (command: HostCommand) => {
-    if (await upsert(command)) setEditing(null)
-  }
-
-  const openEditor = (command: HostCommand, isNew: boolean) => {
-    clearSaveError()
-    setEditing({ command, isNew })
-  }
-
-  const closeEditor = () => {
-    setEditing(null)
-    clearSaveError('dialog')
-  }
 
   const tabBtn = (id: Tab, key: string) => (
     <button type="button" data-testid={`commands-tab-${id}`} aria-pressed={tab === id} onClick={() => setTab(id)}
@@ -53,7 +39,7 @@ export function CommandsSection({ hostId }: { hostId: string }) {
         <h2 className="text-lg font-semibold">{t('hosts.commands')}</h2>
         {tab === 'normal' && (
           <button type="button" data-testid="command-add" disabled={locked || pending || atLimit}
-            onClick={() => openEditor({ id: newConfigId(), name: '', command: '', icon: DEFAULT_COMMAND_ICON }, true)}
+            onClick={() => openEditor({ id: newConfigId(), name: '', command: '', icon: DEFAULT_COMMAND_ICON })}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50">
             <Plus size={14} />{t('commands.add')}
           </button>
@@ -77,9 +63,9 @@ export function CommandsSection({ hostId }: { hostId: string }) {
             <p data-testid="commands-save-error" className="mb-3 text-xs text-status-warning whitespace-pre-wrap">{saveError.text}</p>
           )}
           {editing && (
-            <CommandEditDialog key={editing.command.id} hostId={hostId} initial={editing.command} isNew={editing.isNew}
+            <CommandEditDialog key={editing.id} hostId={hostId} initial={editing} isNew={isNew}
               busy={locked || pending} error={saveError?.target === 'dialog' ? saveError.text : null}
-              onSave={(c) => { void handleSave(c) }} onCancel={closeEditor} />
+              onSave={submit} onCancel={closeEditor} />
           )}
           {commands.length === 0 ? (
             <p className="text-sm text-text-muted">{t('commands.empty')}</p>
@@ -98,17 +84,17 @@ export function CommandsSection({ hostId }: { hostId: string }) {
                       disabled={locked || index === commands.length - 1} onClick={() => void move(command.id, 1)}
                       className={iconBtn}><ArrowDown size={14} /></button>
                     <button type="button" data-testid={`command-edit-${command.id}`} title={t('common.edit')}
-                      disabled={locked} onClick={() => openEditor(command, false)} className={iconBtn}><PencilSimple size={14} /></button>
+                      disabled={locked} onClick={() => openEditor(command)} className={iconBtn}><PencilSimple size={14} /></button>
                     {deleting === command.id ? (
                       <span className="flex items-center gap-1">
                         <button type="button" data-testid={`command-delete-confirm-${command.id}`} disabled={locked}
-                          onClick={() => { setDeleting(null); void remove(command.id) }}
+                          onClick={() => confirmDelete(command.id)}
                           className="p-1 text-red-400 cursor-pointer disabled:opacity-40"><Check size={14} /></button>
-                        <button type="button" onClick={() => setDeleting(null)} className="p-1 text-text-muted cursor-pointer"><X size={14} /></button>
+                        <button type="button" onClick={cancelDelete} className="p-1 text-text-muted cursor-pointer"><X size={14} /></button>
                       </span>
                     ) : (
                       <button type="button" data-testid={`command-delete-${command.id}`} title={t('common.delete')}
-                        disabled={locked} onClick={() => setDeleting(command.id)}
+                        disabled={locked} onClick={() => askDelete(command.id)}
                         className={`${iconBtn} hover:text-red-400`}><Trash size={14} /></button>
                     )}
                   </div>

@@ -1,9 +1,8 @@
-import { useState } from 'react'
 import { ArrowDown, ArrowUp, Check, PencilSimple, Plus, Trash, X } from '@phosphor-icons/react'
 import { type HostProject } from '../../lib/host-config-api'
 import { MAX_CONFIG_ITEMS, newConfigId } from '../../lib/host-config-validate'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { HostConfigNotice, useHostConfigGate } from './HostConfigNotice'
+import { HostConfigNotice } from './HostConfigNotice'
 import { PathStatusIcon, ProjectEditDialog } from './ProjectEditDialog'
 import { useHostConfigCollection } from './useHostConfigCollection'
 import { usePathCheck } from './usePathCheck'
@@ -15,29 +14,15 @@ function RowPathStatus({ hostId, project }: { hostId: string; project: HostProje
 
 export function ProjectsSection({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
-  const { entry, editable, notice } = useHostConfigGate(hostId)
-  const projects = entry.projects
-  const [editing, setEditing] = useState<HostProject | null>(null)
-  const [deleting, setDeleting] = useState<string | null>(null)
-  // Row actions are queued and planned from the latest list, so they stay live
-  // while a save is in flight; only the dialog is held shut behind its own save.
-  const { pending, saveError, clearSaveError, move, remove, upsert } = useHostConfigCollection<HostProject>(hostId, 'projects')
+  // Everything this section shares with Commands — the gate, the limit, the
+  // dialog's lifecycle, the delete confirmation and the queued, id-addressed
+  // saves. What is left here is what a PROJECT is: its fields and its rows.
+  const {
+    items: projects, editable, notice, atLimit, pending, saveError,
+    editing, openEditor, closeEditor, submit,
+    deleting, askDelete, cancelDelete, confirmDelete, move,
+  } = useHostConfigCollection<HostProject>(hostId, 'projects')
   const locked = !editable
-  const atLimit = projects.length >= MAX_CONFIG_ITEMS
-
-  const handleSave = async (project: HostProject) => {
-    if (await upsert(project)) setEditing(null)
-  }
-
-  const openEditor = (project: HostProject) => {
-    clearSaveError()
-    setEditing(project)
-  }
-
-  const closeEditor = () => {
-    setEditing(null)
-    clearSaveError('dialog')
-  }
 
   const iconBtn = 'p-1 rounded hover:bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
 
@@ -63,7 +48,7 @@ export function ProjectsSection({ hostId }: { hostId: string }) {
       {editing && (
         <ProjectEditDialog key={editing.id} hostId={hostId} initial={editing} others={projects}
           busy={locked || pending} error={saveError?.target === 'dialog' ? saveError.text : null}
-          onSave={(p) => { void handleSave(p) }} onCancel={closeEditor} />
+          onSave={submit} onCancel={closeEditor} />
       )}
 
       {projects.length === 0 ? (
@@ -103,13 +88,13 @@ export function ProjectsSection({ hostId }: { hostId: string }) {
                       {deleting === project.id ? (
                         <span className="flex items-center gap-1">
                           <button type="button" data-testid={`project-delete-confirm-${project.id}`} disabled={locked}
-                            onClick={() => { setDeleting(null); void remove(project.id) }}
+                            onClick={() => confirmDelete(project.id)}
                             className="p-1 text-red-400 cursor-pointer disabled:opacity-40"><Check size={14} /></button>
-                          <button type="button" onClick={() => setDeleting(null)} className="p-1 text-text-muted cursor-pointer"><X size={14} /></button>
+                          <button type="button" onClick={cancelDelete} className="p-1 text-text-muted cursor-pointer"><X size={14} /></button>
                         </span>
                       ) : (
                         <button type="button" data-testid={`project-delete-${project.id}`} title={t('common.delete')}
-                          disabled={locked} onClick={() => setDeleting(project.id)}
+                          disabled={locked} onClick={() => askDelete(project.id)}
                           className={`${iconBtn} hover:text-red-400`}><Trash size={14} /></button>
                       )}
                     </div>
