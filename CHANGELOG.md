@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.347] - 2026-09-15
+
+### Fix: nex module codex R2 follow-up——WS ticket 只認真握手、`--addr` 正規化、關機 signal 語意、HOME-less Init、`X-Pdx-Client` CORS（#1038）
+
+alpha.346 merge 後 ChatGPT 配額回來，對 main 補跑 codex R2 三視角（gpt-5.5；從這版起 codex 一律 `--model gpt-5.5`，gpt-6-astra 太燒）。六條全修，外加 codex R1 抓到第一版修法的殘餘。
+
+- **WS ticket 用途 scope**（攻擊方 + R1）：`TokenAuth` 原本對任何 method/path 都收 `?ticket=`，P-A 把 `/api/nex/` 掛在同一條 chain 後，一張 30 秒一次性的 WS 票券就能 `delegate`/`send`/`interrupt`。第一版只加 `IsWebSocketUpgrade` 判斷，R1 指出 curl 帶兩個 upgrade header 送 POST 仍會過；定案 `isWebSocketHandshake`：**GET + `Connection: Upgrade` + `Upgrade: websocket` + `Sec-WebSocket-Version`**（RFC 6455 握手形狀），其他一律 401 且不消耗票券。daemon 四個 WS 端點都由 gorilla `Upgrader` 服務、SPA 只在 `new WebSocket()` 用 ticket，零影響。auth 矩陣改：plain ticket → 401、POST+握手 header → 401、GET 握手 → 到達。
+- **`pdx nex --addr` 正規化**（攻擊方）：`url.Parse`，要求 http/https + host，拒 query/fragment/userinfo（exit 2），`path.Clean` 去尾斜線——之前 `/api/nex/` 會拼成 `//v1/…`、`?x=y` 會把路徑吞進 query。
+- **Serve-first 關機路徑的 drain 拿掉**（體質）：alpha.346 那個「先 drain 殘留 signal」會把 Serve 返回到 select 之間到達的**真正第一個** Ctrl-C 吃掉，要按第三次才退出。現在 Serve-first 路徑任何第一個 signal 都提示、第二個才 exit 130；signal 觸發的路徑不變。
+- **`Init` 不再無條件要 `HOME`**（體質）：config 層已容許「全絕對路徑 + `path_prepend = []`」在 HOME-less 下通過，但 `Init` 一開始就 `UserHomeDir()` 失敗回錯，opt-in 的 host 起不來。改成與 `Load` 同規則：只有真的含 `~` 才報 HOME。
+- **CORS 加 `X-Pdx-Client`**（防守方）：P-A 定案 SPA 每個 client 送這個 header 拿 per-client principal，但 allow-headers 漏了，瀏覽器 preflight 會擋。
+- I11 測試改名，明寫手補 transcript 只證明 principal，續談契約由 acceptance 3a 覆蓋。
+
+Review：Claude（opus）六項全過；codex R1 gpt-5.5 一條 P2（上述殘餘）已修。
+
 ## [1.0.0-alpha.346] - 2026-09-15
 
 ### Feat: Nexen 執行引擎以 opt-in 的 `nex` module 嵌入 pdx daemon（P-A，#1035）
