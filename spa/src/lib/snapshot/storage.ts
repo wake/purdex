@@ -27,6 +27,11 @@ function isWellFormedSnapshot(x: unknown): x is WorkspaceSnapshot {
   return true
 }
 
+/** Shape guard plus `version === 1` — for snapshots arriving from outside localStorage (e.g. device state API). */
+export function isWellFormedSnapshotV1(x: unknown): x is WorkspaceSnapshot {
+  return isPlainObject(x) && x.version === 1 && isWellFormedSnapshot(x)
+}
+
 function readSnapshotFromKey(key: string): WorkspaceSnapshot | null {
   const raw = browserStorage.getItem(key) as string | null
   if (raw == null) return null
