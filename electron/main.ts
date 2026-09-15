@@ -5,7 +5,9 @@ import { BrowserViewManager } from './browser-view-manager'
 import { MiniWindowManager } from './mini-browser-window'
 import { registerBrowserViewIpc } from './browser-view-ipc'
 import { registerFsIpc } from './fs-ipc'
-import { createTray } from './tray'
+import { createTray, isTrayVisible } from './tray'
+import { registerTrayIpc } from './tray-ipc'
+import { loadAppPrefs } from './app-prefs'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 import { pickDeeplinkTarget } from './deeplink'
@@ -349,12 +351,15 @@ if (!gotInstanceLock) {
       return net.fetch('file://' + resolved)
     })
 
+    const prefsPath = join(app.getPath('userData'), 'app-prefs.json')
+    const prefs = loadAppPrefs(prefsPath)
     registerIpcHandlers()
+    registerTrayIpc({ prefsPath, windowManager })
     // Spec D5: the app is the launcher on machines without booter/launchd.
     if (process.env.PDX_DEV_MODE !== '0') {
       void localDaemon.ensureRunning().then((r) => console.log(`[local-daemon] ensureRunning: ${r}`))
     }
-    createTray(windowManager)
+    if (prefs.showTray) createTray(windowManager)
 
     const keybindings = getDefaultKeybindings()
     const menuTemplate = buildMenuTemplate(
@@ -387,9 +392,13 @@ if (!gotInstanceLock) {
     for (const url of buffered) handleDeeplink(url)
   })
 
-  // macOS: close window ≠ quit app
   app.on('window-all-closed', () => {
-    // no-op on macOS — tray keeps running
+    // macOS: close window ≠ quit app — the Dock icon stays and `activate`
+    // brings the window back, with or without the tray.
+    if (process.platform === 'darwin') return
+    // Elsewhere the tray is the only way back to a window, so quit when the
+    // user has turned it off; otherwise keep running in the tray.
+    if (!isTrayVisible()) app.quit()
   })
 
   app.on('before-quit', () => {

@@ -131,6 +131,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     rename: (from: string, to: string) => ipcRenderer.invoke('fs:rename', from, to),
   },
 
+  // Menu bar tray (main-process preference, persisted in app-prefs.json)
+  tray: {
+    getVisible: () => ipcRenderer.invoke('tray:get-visible'),
+    setVisible: (visible: boolean) => ipcRenderer.invoke('tray:set-visible', visible),
+    onVisibilityChanged: (callback: (visible: boolean) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, visible: boolean) => callback(visible)
+      ipcRenderer.on('tray:visibility-changed', handler)
+      return () => ipcRenderer.removeListener('tray:visibility-changed', handler)
+    },
+  },
+
   // Dev Update (exposed unless PDX_DEV_MODE=0)
   ...(process.env.PDX_DEV_MODE !== '0' ? {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),
