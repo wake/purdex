@@ -747,7 +747,6 @@
   "stream.interrupted": "Request interrupted by user",
   "stream.ask_user.placeholder": "Type your answer…",
 
-  "execution.title": "Execution",
   "execution.loading": "Loading execution…",
   "execution.loading_error": "Could not load: {{message}} — retrying",
   "execution.not_found": "Execution not found on this host.",

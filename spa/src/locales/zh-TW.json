@@ -747,7 +747,6 @@
   "stream.interrupted": "請求已被使用者中斷",
   "stream.ask_user.placeholder": "輸入你的回答…",
 
-  "execution.title": "執行體",
   "execution.loading": "載入執行體…",
   "execution.loading_error": "載入失敗：{{message}}，重試中",
   "execution.not_found": "這台主機上找不到此執行體。",
