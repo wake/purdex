@@ -52,13 +52,24 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
         stopTimer()
         return
       }
+      // Nexen mints a new lease id on every attach. Capture the id this tick
+      // is renewing so a stale continuation (this call hung past a
+      // subsequent re-attach) can be detected once it settles.
+      const id = cur.leaseId
       try {
-        const r = await renewLease(hostId, executionId, cur.leaseId)
-        if (!releasing.current) writeLease({ leaseId: r.lease_id, expiresAt: r.expires_at })
+        const r = await renewLease(hostId, executionId, id)
+        const stillCurrent = useExecutionStore.getState().executions[key]?.lease?.leaseId === id
+        if (!releasing.current && stillCurrent) writeLease({ leaseId: r.lease_id, expiresAt: r.expires_at })
       } catch (e) {
         if (e instanceof NexApiError && (e.code === 'lease_expired' || e.code === 'lease_mismatch')) {
-          writeLease(null)
-          stopTimer()
+          // A stale expired/mismatch for an id nobody holds any more must
+          // not wipe out — or stop the timer for — whatever lease is
+          // current now (e.g. a fresh re-attach that raced this renew).
+          const stillCurrent = useExecutionStore.getState().executions[key]?.lease?.leaseId === id
+          if (stillCurrent) {
+            writeLease(null)
+            stopTimer()
+          }
         }
         // anything else: keep trying at the same cadence
       }
@@ -66,13 +77,30 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
   }, [hostId, executionId, key, writeLease, stopTimer])
 
   const ensureLease = useCallback((): Promise<string> => {
+    // The host may be gone even though `disposed` is still false (that flag
+    // also covers plain unmount) — check the store directly so a removed
+    // host can never be attached to (getDaemonBase silently falls back to
+    // the active host for an unknown hostId, which would hit the wrong
+    // daemon).
+    if (!useHostStore.getState().hosts[hostId]) {
+      return Promise.reject(new NexApiError(0, 'host_removed', 'host removed'))
+    }
     const cur = useExecutionStore.getState().executions[key]?.lease
-    if (cur && cur.expiresAt - Date.now() > LEASE_MIN_REMAINING_MS) return Promise.resolve(cur.leaseId)
+    if (cur && cur.expiresAt - Date.now() > LEASE_MIN_REMAINING_MS) {
+      // The idle policy may have stopped the heartbeat while this lease was
+      // still valid; reusing it here must re-arm the timer, not just hand
+      // back the id.
+      if (!timer.current) {
+        lastActivity.current = Date.now()
+        startTimer()
+      }
+      return Promise.resolve(cur.leaseId)
+    }
     if (inflight.current) return inflight.current
     releasing.current = false
     const p = (async () => {
-      ttlMs.current = (await getLeaseTtlSeconds(hostId)) * 1000
       try {
+        ttlMs.current = (await getLeaseTtlSeconds(hostId)) * 1000
         const r = await attachControl(hostId, executionId)
         if (disposed.current || releasing.current) {
           // Acquired for nobody: give it straight back rather than leave a

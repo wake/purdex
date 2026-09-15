@@ -101,6 +101,89 @@ describe('useExecutionLease', () => {
     expect(api.releaseLease).not.toHaveBeenCalled()
   })
 
+  it('ignores a stale renew success for an id a newer attach already replaced (identity guard)', async () => {
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    await act(async () => { await result.current.ensureLease() }) // attaches ls_1
+    let resolveRenew!: (v: { mode: 'control'; lease_id: string; expires_at: number }) => void
+    vi.mocked(api.renewLease).mockImplementationOnce(() => new Promise((r) => { resolveRenew = r }))
+    act(() => { result.current.touch() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) }) // renew(ls_1) now in flight, hung
+
+    // Force a fresh attach without going through release(): make the current
+    // lease look like it's about to expire.
+    act(() => { useExecutionStore.getState().setLease(H, E, { leaseId: 'ls_1', expiresAt: Date.now() + 1000 }) })
+    vi.mocked(api.attachControl).mockResolvedValueOnce({ mode: 'control', lease_id: 'ls_2', expires_at: Date.now() + 30_000 })
+    let id2 = ''
+    await act(async () => { id2 = await result.current.ensureLease() })
+    expect(id2).toBe('ls_2')
+    expect(lease()?.leaseId).toBe('ls_2')
+
+    // The stale renew(ls_1) resolves late — must not overwrite ls_2.
+    await act(async () => { resolveRenew({ mode: 'control', lease_id: 'ls_1', expires_at: Date.now() + 30_000 }) })
+    expect(lease()?.leaseId).toBe('ls_2')
+  })
+
+  it('ignores a stale lease_mismatch/lease_expired for an id a newer attach already replaced, and keeps renewing the current lease (identity guard)', async () => {
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    await act(async () => { await result.current.ensureLease() }) // attaches ls_1
+    let rejectRenew!: (e: unknown) => void
+    vi.mocked(api.renewLease).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRenew = reject }))
+    act(() => { result.current.touch() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) }) // renew(ls_1) now in flight, hung
+
+    act(() => { useExecutionStore.getState().setLease(H, E, { leaseId: 'ls_1', expiresAt: Date.now() + 1000 }) })
+    vi.mocked(api.attachControl).mockResolvedValueOnce({ mode: 'control', lease_id: 'ls_2', expires_at: Date.now() + 30_000 })
+    await act(async () => { await result.current.ensureLease() })
+    expect(lease()?.leaseId).toBe('ls_2')
+
+    // The stale renew(ls_1) rejects with lease_mismatch late — must not wipe
+    // ls_2 or stop its timer.
+    await act(async () => { rejectRenew(new NexApiError(409, 'lease_mismatch', 'stale')) })
+    expect(lease()?.leaseId).toBe('ls_2')
+
+    // The default renewLease mock always echoes 'ls_1' regardless of the id
+    // it was called with (fine for the ls_1-only tests above); make this
+    // one honor the id it's given so we can tell a real ls_2 renewal apart
+    // from an accidental overwrite.
+    vi.mocked(api.renewLease).mockImplementation(async (_h, _e, leaseId) => ({ mode: 'control', lease_id: leaseId, expires_at: Date.now() + 30_000 }))
+    const callsBefore = vi.mocked(api.renewLease).mock.calls.length
+    act(() => { result.current.touch() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(vi.mocked(api.renewLease).mock.calls.length).toBeGreaterThan(callsBefore)
+    expect(vi.mocked(api.renewLease)).toHaveBeenCalledWith(H, E, 'ls_2')
+    expect(lease()?.leaseId).toBe('ls_2')
+  })
+
+  it('restarts the heartbeat when the fast path reuses a lease after the idle timer stopped (I3 re-arm)', async () => {
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    await act(async () => { await result.current.ensureLease() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * LEASE_IDLE_MULTIPLIER + 10_000) }) // idle timeout stops the timer
+    const attachCallsBefore = vi.mocked(api.attachControl).mock.calls.length
+    act(() => { result.current.touch() })
+    let id = ''
+    await act(async () => { id = await result.current.ensureLease() })
+    expect(id).toBe('ls_1')
+    expect(vi.mocked(api.attachControl).mock.calls.length).toBe(attachCallsBefore) // fast path: no new attach
+
+    const renewCallsBefore = vi.mocked(api.renewLease).mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(vi.mocked(api.renewLease).mock.calls.length).toBeGreaterThan(renewCallsBefore)
+  })
+
+  it('fires a keepalive release on beforeunload without waiting for unmount', async () => {
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    await act(async () => { await result.current.ensureLease() })
+    act(() => { window.dispatchEvent(new Event('beforeunload')) })
+    expect(api.releaseLease).toHaveBeenCalledWith(H, E, 'ls_1', { keepalive: true })
+  })
+
+  it('rejects ensureLease immediately when the host has been removed, without attaching (host_removed)', async () => {
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
+    await expect(result.current.ensureLease()).rejects.toMatchObject({ code: 'host_removed' })
+    expect(api.attachControl).not.toHaveBeenCalled()
+  })
+
   it('releases exactly once on unmount when held, never when not (I6)', async () => {
     const a = renderHook(() => useExecutionLease(H, E))
     a.unmount()
