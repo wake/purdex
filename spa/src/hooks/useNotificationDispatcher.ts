@@ -281,29 +281,19 @@ export function useNotificationDispatcher(): void {
   useEffect(() => {
     if (!window.electronAPI?.onNotificationClicked) return
     return window.electronAPI.onNotificationClicked((payload) => {
-      // If the payload carries an explicit action, use it directly
-      if (payload.action) {
-        if (payload.action.kind === 'open-host') {
-          handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
-        } else {
-          handleNotificationClick({
-            kind: 'open-session',
-            hostId: payload.action.hostId,
-            sessionCode: payload.action.sessionCode ?? payload.sessionCode,
-          })
-        }
-        return
+      // Electron main always forwards `action` (carrying hostId). A payload
+      // without it has no host to route to, so it is ignored rather than
+      // guessed — session codes are not unique across hosts.
+      if (!payload.action) return
+      if (payload.action.kind === 'open-host') {
+        handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
+      } else {
+        handleNotificationClick({
+          kind: 'open-session',
+          hostId: payload.action.hostId,
+          sessionCode: payload.action.sessionCode ?? payload.sessionCode,
+        })
       }
-      // Backwards compat: no action field (so no hostId) — fall back to
-      // open-session. Walk hosts in order and take the first one that has an
-      // open tab for this session code; otherwise default to the first host.
-      const tabs = useTabStore.getState().tabs
-      const { hostOrder } = useHostStore.getState()
-      const matchedHostId = hostOrder.find(
-        (candidate) => findTabBySessionCode(tabs, candidate, payload.sessionCode) !== undefined,
-      )
-      const hostId = matchedHostId ?? hostOrder[0] ?? ''
-      handleNotificationClick({ kind: 'open-session', hostId, sessionCode: payload.sessionCode })
     })
   }, [])
 

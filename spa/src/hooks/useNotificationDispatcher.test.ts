@@ -9,6 +9,7 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { createTab } from '../types/tab'
+import { useHostStore } from '../stores/useHostStore'
 
 const defaultSettings: NotificationSettings = {
   enabled: true, events: {}, notifyWithoutTab: false, reopenTabOnClick: false,
@@ -177,6 +178,57 @@ describe('useNotificationDispatcher composite key split', () => {
     const payload = showNotification.mock.calls[0][0]
     expect(payload.sessionCode).toBe(SESSION_CODE)
     expect(payload.action).toEqual({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+    unmount()
+  })
+})
+
+describe('useNotificationDispatcher electron click listener', () => {
+  const SESSION_CODE = 'ses001'
+  let clickHandler: ((payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }) => void) | null
+
+  beforeEach(() => {
+    clickHandler = null
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+    useNotificationSettingsStore.setState({ agents: {} })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    useHostStore.setState({ hostOrder: ['host-a'] })
+    Object.defineProperty(window, 'electronAPI', {
+      value: {
+        onNotificationClicked: (cb: typeof clickHandler) => { clickHandler = cb; return () => { clickHandler = null } },
+      },
+      writable: true,
+      configurable: true,
+    })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  })
+
+  it('ignores a click payload without action (legacy host-guessing path removed)', () => {
+    const tab = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.setState({ activeTabId: null })
+
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    expect(clickHandler).not.toBeNull()
+    clickHandler!({ sessionCode: SESSION_CODE })
+
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    unmount()
+  })
+
+  it('activates the tab named by payload.action', () => {
+    const tab = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.setState({ activeTabId: null })
+
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    clickHandler!({ sessionCode: SESSION_CODE, action: { kind: 'open-session', hostId: 'host-a', sessionCode: SESSION_CODE } })
+
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
     unmount()
   })
 })
