@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -6,8 +6,9 @@ import { useSessionWatch } from '../hooks/useSessionWatch'
 import { useSessionAgentIndicator } from '../hooks/useSessionAgentIndicator'
 import { TabIcon } from './TabIcon'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
-import { createSession } from '../lib/host-api'
+import { isHostLive } from '../lib/host-live'
 import type { Session } from '../lib/host-api'
+import { SessionLauncher } from './session-launcher/SessionLauncher'
 import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
 
 function SessionRow({ hostId, session, disabled, onSelect }: {
@@ -59,92 +60,6 @@ function SessionRow({ hostId, session, disabled, onSelect }: {
         <span className="text-xs text-text-secondary truncate min-w-0 flex-1">{session.pane_title}</span>
       )}
     </button>
-  )
-}
-
-/** Host-page offline semantics: the host still exists and its tmux is usable.
- *  Read from the live store snapshot so it reflects state at call time. */
-function isHostLive(hostId: string): boolean {
-  const s = useHostStore.getState()
-  const rt = s.runtime[hostId]
-  return !!s.hosts[hostId] && !!rt && rt.status === 'connected' && rt.tmuxState !== 'unavailable'
-}
-
-function NewTabSessionForm({ hostId, disabled, onCreated, onCancel }: {
-  hostId: string
-  disabled: boolean
-  onCreated: (content: { code: string; name: string; mode: string; tmuxInstance: string }) => void
-  onCancel: () => void
-}) {
-  const t = useI18nStore((s) => s.t)
-  const [name, setName] = useState('')
-  const [cwd, setCwd] = useState('~')
-  const [mode, setMode] = useState('terminal')
-  const [creating, setCreating] = useState(false)
-  const [error, setError] = useState('')
-  const creatingRef = useRef(false) // synchronous double-submit guard (fires before `creating` state commits)
-  // Liveness guard for the async create: flipped false on unmount (cancel,
-  // collapse, host removed, tab switch) so a resolved/rejected request can't
-  // setState on a dead component or attach a session the user already dismissed.
-  const activeRef = useRef(true)
-  // Set true on every setup (not just via the ref initialiser) so React 19
-  // StrictMode's dev setup→cleanup→setup double-invoke leaves a still-mounted
-  // form active — otherwise the first cleanup pins it false and no create ever
-  // attaches. Real unmount runs the cleanup last, leaving it false.
-  useEffect(() => {
-    activeRef.current = true
-    return () => { activeRef.current = false }
-  }, [])
-
-  const disabledSubmit = creating || !name.trim() || disabled
-
-  const handleCreate = async () => {
-    // Re-check host liveness synchronously at submit time (runtime may have gone
-    // offline since the form opened) — do not fire the POST for a dead host.
-    if (creatingRef.current || !name.trim() || disabled || !isHostLive(hostId)) return
-    creatingRef.current = true
-    setCreating(true); setError('')
-    try {
-      const created = await createSession(hostId, name.trim(), cwd, mode)
-      if (!activeRef.current) return // form was cancelled/unmounted during the request
-      // Guard 1 — blank code = failed create.
-      if (!created.code) { setError(t('hosts.create') + ' failed'); return }
-      // Guard 2 — host still live (removed/disconnected during the await must not attach).
-      if (!isHostLive(hostId)) { setError(t('hosts.create') + ' failed'); return }
-      // The generation comes from the create response itself — never from
-      // ambient host state (spec §4.5). Older daemons omit it; '' = unknown,
-      // and the next sessions payload adopts the real value.
-      onCreated({ code: created.code, name: created.name, mode, tmuxInstance: created.tmux_instance ?? '' })
-    } catch (err) {
-      if (activeRef.current) setError(err instanceof Error ? err.message : 'Failed')
-    } finally {
-      creatingRef.current = false
-      if (activeRef.current) setCreating(false)
-    }
-  }
-
-  return (
-    <div className="mx-3 my-1 p-2 bg-surface-secondary border border-border-default rounded-md">
-      <input placeholder={t('hosts.session_name')} value={name} autoFocus
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') handleCreate() }}
-        className="w-full bg-surface-primary border border-border-default rounded px-2 py-1 text-sm text-text-primary mb-1" />
-      <input placeholder={t('hosts.session_cwd')} value={cwd}
-        onChange={(e) => setCwd(e.target.value)}
-        className="w-full bg-surface-primary border border-border-default rounded px-2 py-1 text-sm text-text-muted mb-1" />
-      <select value={mode} onChange={(e) => setMode(e.target.value)}
-        className="bg-surface-primary border border-border-default rounded px-2 py-1 text-sm text-text-primary">
-        <option value="terminal">terminal</option>
-        <option value="stream">stream</option>
-      </select>
-      {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
-      <div className="flex gap-2 mt-2">
-        <button onClick={handleCreate} disabled={disabledSubmit}
-          className="px-2 py-1 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50">{t('hosts.create')}</button>
-        <button onClick={onCancel}
-          className="px-2 py-1 rounded text-xs bg-surface-tertiary text-text-secondary cursor-pointer">{t('common.cancel')}</button>
-      </div>
-    </div>
   )
 }
 
@@ -201,7 +116,7 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           onClick={() => {
             const opening = !creating
             setCreating(opening)
-            // Opening on a collapsed host must reveal the form (which is
+            // Opening on a collapsed host must reveal the launcher (which is
             // gated behind isExpanded) - expand so the "+" isn't a no-op.
             if (opening) setExpanded(true)
           }}
@@ -215,15 +130,29 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
         )}
       </div>
       {isExpanded && creating && (
-        <NewTabSessionForm
-          hostId={hostId}
-          disabled={createDisabled}
-          onCancel={() => setCreating(false)}
-          onCreated={({ code, name, mode, tmuxInstance }) => {
-            setCreating(false)
-            onSelect({ kind: 'tmux-session', hostId, sessionCode: code, mode: mode as 'terminal' | 'stream', cachedName: name, tmuxInstance })
-          }}
-        />
+        <div className="mx-3 my-1">
+          <SessionLauncher
+            hostId={hostId}
+            disabled={createDisabled}
+            onCancel={() => setCreating(false)}
+            onLaunched={(session) => {
+              setCreating(false)
+              // The host may have dropped or been removed while the launch was
+              // in flight; attaching then would bind the pane to a dead host.
+              if (!isHostLive(hostId)) return
+              onSelect({
+                kind: 'tmux-session',
+                hostId,
+                sessionCode: session.code,
+                mode: 'terminal',
+                cachedName: session.name,
+                // Generation from the create response itself (spec §4.5 of tab
+                // rebuild); '' on old daemons, adopted from the next payload.
+                tmuxInstance: session.tmux_instance ?? '',
+              })
+            }}
+          />
+        </div>
       )}
       {isExpanded && sessions.map((session) => (
         <SessionRow

@@ -906,8 +906,6 @@
   "hosts.load_failed": "Failed to load",
   "hosts.new_session": "New Session",
   "hosts.session_name": "Session Name",
-  "hosts.session_cwd": "Working Directory",
-  "hosts.create": "Create",
   "hosts.no_sessions": "No sessions on this host",
   "hosts.mode": "Mode",
   "hosts.agent": "Agent",

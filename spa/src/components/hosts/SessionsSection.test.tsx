@@ -1,6 +1,6 @@
 // spa/src/components/hosts/SessionsSection.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { SessionsSection } from './SessionsSection'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -39,6 +39,18 @@ vi.mock('../../lib/host-api', () => ({
   renameSession: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+// The launcher has its own suite; this one only checks that the section mounts
+// it for this host, keeps its `disabled` verdict live, and closes on callback.
+const launcherProps = vi.hoisted(() => ({
+  current: null as null | { hostId: string; disabled: boolean; onLaunched: (s: unknown) => void; onCancel: () => void },
+}))
+vi.mock('../session-launcher/SessionLauncher', () => ({
+  SessionLauncher: (props: { hostId: string; disabled: boolean; onLaunched: (s: unknown) => void; onCancel: () => void }) => {
+    launcherProps.current = props
+    return <div data-testid={`launcher-stub-${props.hostId}`} data-disabled={String(props.disabled)} />
+  },
+}))
+
 const HOST_ID = 'test-host'
 const SESSIONS = [
   { code: 'abc', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
@@ -57,6 +69,7 @@ beforeEach(() => {
     activeHostId: HOST_ID,
   })
   useAgentStore.setState({ statuses: {} })
+  launcherProps.current = null
 })
 
 describe('SessionsSection', () => {
@@ -156,5 +169,38 @@ describe('SessionsSection', () => {
     render(<SessionsSection hostId={HOST_ID} />)
     expect(screen.queryByRole('toolbar')).toBeNull()
     expect(screen.getByText('New Session')).toBeInTheDocument()
+  })
+
+  it('New Session opens the launcher for this host; launching closes it without opening a tab', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByText('New Session'))
+    expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toBeInTheDocument()
+    act(() => launcherProps.current!.onLaunched({ ...SESSIONS[0], code: 'new1' }))
+    expect(screen.queryByTestId(`launcher-stub-${HOST_ID}`)).toBeNull()
+    expect(mockOpenSingletonTab).not.toHaveBeenCalled() // same as the old dialog: create only
+  })
+
+  it('New Session toggles the launcher closed on a second click', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByText('New Session'))
+    fireEvent.click(screen.getByText('New Session'))
+    expect(screen.queryByTestId(`launcher-stub-${HOST_ID}`)).toBeNull()
+  })
+
+  it('cancel closes the launcher', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByText('New Session'))
+    act(() => launcherProps.current!.onCancel())
+    expect(screen.queryByTestId(`launcher-stub-${HOST_ID}`)).toBeNull()
+  })
+
+  // Equivalent of the New Tab regression: the host may drop while the launcher
+  // sits open, and the launcher must go dead with it.
+  it('disables the launcher when the host goes offline after it opens', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByText('New Session'))
+    expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toHaveAttribute('data-disabled', 'false')
+    act(() => { useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } }) })
+    expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toHaveAttribute('data-disabled', 'true')
   })
 })
