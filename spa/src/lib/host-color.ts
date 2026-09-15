@@ -37,6 +37,6 @@ export function getTabHostId(tab: Tab): string | null {
 export function resolveTabHostColor(tab: Tab, hosts: Record<string, HostConfig>): string | null {
   const hostId = getTabHostId(tab)
   if (!hostId) return null
-  const color = (hosts[hostId] as { color?: unknown } | undefined)?.color
+  const color = hosts[hostId]?.color
   return isValidHostColor(color) ? color : null
 }
