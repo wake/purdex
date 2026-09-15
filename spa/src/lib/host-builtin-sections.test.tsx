@@ -3,7 +3,7 @@
  *
  * Covers two layers:
  *
- * 1. The PR-4 §3.3 baseline — `registerBuiltinModules()` registers the six
+ * 1. The PR-4 §3.3 baseline — `registerBuiltinModules()` registers the ten
  *    expected host-scoped contributions with the correct moduleId / order
  *    / wrap semantics / scope guard.
  *
@@ -61,7 +61,7 @@ import {
 import { dispatchSettingsContributions } from './dispatch-settings-contributions'
 import type { HostRuntime } from '../stores/useHostStore'
 
-// Import the six section components so we can verify identity (extra test).
+// Import the ten section components so we can verify identity (extra test).
 import { OverviewSection } from '../components/hosts/OverviewSection'
 import { SessionsSection } from '../components/hosts/SessionsSection'
 import { HooksSection } from '../components/hosts/HooksSection'
@@ -70,6 +70,8 @@ import { UploadSection } from '../components/hosts/UploadSection'
 import { LogsSection } from '../components/hosts/LogsSection'
 import { NexHostSection } from '../components/hosts/nex/NexHostSection'
 import { ProjectsSection } from '../components/hosts/ProjectsSection'
+import { CommandsSection } from '../components/hosts/CommandsSection'
+import { SnapshotsSection } from '../components/hosts/SnapshotsSection'
 
 function clearAll() {
   clearModuleRegistry()
@@ -92,18 +94,21 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     clearAll()
   })
 
-  it('registers 8 built-in host-scoped contributions with moduleId _builtin.host', () => {
+  it('registers 10 built-in host-scoped contributions with moduleId _builtin.host', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
     const builtinContribs = hostContribs.filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
-    expect(builtinContribs).toHaveLength(8)
+    expect(builtinContribs).toHaveLength(10)
   })
 
-  it('orders built-in contributions as: overview, sessions, hooks, agents, uploads, logs, nex, projects', () => {
+  it('orders built-in contributions as: overview, sessions, hooks, agents, uploads, logs, nex, projects, commands, snapshots', () => {
     registerBuiltinModules()
     const builtinContribs = listContributions('host').filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
     const localIds = builtinContribs.map((c) => c.localId)
-    expect(localIds).toEqual(['overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex', 'projects'])
+    expect(localIds).toEqual([
+      'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex',
+      'projects', 'commands', 'snapshots',
+    ])
   })
 
   it('renders OverviewSection with forwarded hostId for host ctx', () => {
@@ -119,7 +124,7 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     expect(node.textContent).toBe('overview-for-hA')
   })
 
-  it('wraps all eight sections to their original components', () => {
+  it('wraps all ten sections to their original components', () => {
     registerBuiltinModules()
     const hostContribs = listContributions('host')
 
@@ -132,6 +137,8 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
       { localId: 'logs', component: LogsSection },
       { localId: 'nex', component: NexHostSection },
       { localId: 'projects', component: ProjectsSection },
+      { localId: 'commands', component: CommandsSection },
+      { localId: 'snapshots', component: SnapshotsSection },
     ]
 
     for (const { localId, component } of expected) {
@@ -177,8 +184,8 @@ describe('§3.3 — registerBuiltinModules: built-in host sub-page contributions
     clearAll()
     registerBuiltinModules()
     const second = listContributions('host').filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID).length
-    expect(first).toBe(8)
-    expect(second).toBe(8)
+    expect(first).toBe(10)
+    expect(second).toBe(10)
   })
 })
 
