@@ -16,6 +16,7 @@
 - Routes: `GET /api/hostconfig`, `PUT /api/hostconfig/projects`, `PUT /api/hostconfig/commands`, `PUT /api/hostconfig/resume-templates`, `POST /api/hostconfig/check-path`.
 - Errors: plain text via `http.Error` (400 validation, 413 body > 1 MB, 409 revision conflict returns JSON `{items, revision}`, 500 `internal error`).
 - Validation limits (verbatim from spec §3.3): id `^[A-Za-z0-9_-]{1,64}$` unique; project name trimmed 1–64 runes; slug `^[a-z0-9][a-z0-9-]{0,31}$` unique; path trimmed 1–1024 bytes, starts with `/` or is `~` or starts with `~/`, no NUL; command name trimmed 1–64 runes; command 1–4096 bytes no NUL; icon kind `agent` (value ∈ cc-bot, cc-star, openai, codex, opencode) or `phosphor` (value `^[A-Z][A-Za-z0-9]{0,63}$`); max 200 items per list; resume agentType `^[a-z0-9][a-z0-9_-]{0,31}$`, max 32 entries, exact/fallback 0–4096 bytes no NUL.
+- Security note: `check-path` is an authenticated existence oracle for any path the daemon user can stat (symlinks followed). Accepted: the daemon's `/api/*` auth already grants file read (`/api/fs/*`) and shell (`send-keys`), which are strictly stronger.
 - Every Bash command in a subagent must be prefixed with `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/host-launcher && `.
 - Commits end with `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
 
@@ -120,7 +121,54 @@ func TestStoreKeysAreIndependent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), e.Revision)
 }
+
+// Two writers from the same baseRevision against a real WAL file with a
+// multi-connection pool: exactly one wins, the other gets a clean conflict
+// carrying the winner's state — never an error.
+func TestStorePutConcurrentSameBaseOneWins(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "hc.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { s.Close() })
+
+	// The first reader stalls between read and write. With a deferred tx the
+	// second writer would read revision 0 in that window; with BEGIN IMMEDIATE
+	// it waits on the lock and then reads the committed revision 1.
+	var once sync.Once
+	s.afterRead = func() {
+		once.Do(func() { time.Sleep(50 * time.Millisecond) })
+	}
+
+	type result struct {
+		entry Entry
+		ok    bool
+		err   error
+	}
+	results := make(chan result, 2)
+	for _, v := range []string{`["a"]`, `["b"]`} {
+		go func(v string) {
+			e, ok, err := s.Put(KeyProjects, json.RawMessage(v), 0)
+			results <- result{e, ok, err}
+		}(v)
+	}
+
+	var wins, conflicts int
+	for i := 0; i < 2; i++ {
+		r := <-results
+		require.NoError(t, r.err)
+		if r.ok {
+			wins++
+			assert.Equal(t, int64(1), r.entry.Revision)
+		} else {
+			conflicts++
+			assert.Equal(t, int64(1), r.entry.Revision)
+		}
+	}
+	assert.Equal(t, 1, wins)
+	assert.Equal(t, 1, conflicts)
+}
 ```
+
+Add `"path/filepath"`, `"sync"`, `"time"` to this test file's imports.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -135,6 +183,7 @@ Expected: FAIL (package does not compile: `OpenStore` undefined)
 package hostconfig
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -159,15 +208,17 @@ type Entry struct {
 
 // Store is the SQLite-backed persistence layer for host config.
 type Store struct {
-	db  *sql.DB
-	now func() int64 // ms; injectable for tests
+	db        *sql.DB
+	now       func() int64 // ms; injectable for tests
+	afterRead func()       // test seam; nil in production
 }
 
 // OpenStore opens (or creates) a Store at path. Use ":memory:" for tests.
 func OpenStore(path string) (*Store, error) {
 	dsn := path
 	if path != ":memory:" {
-		dsn = path + "?_pragma=journal_mode(wal)"
+		// busy_timeout: a concurrent writer waits on BEGIN IMMEDIATE instead of failing.
+		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)"
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -194,13 +245,13 @@ func OpenStore(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 type querier interface {
-	QueryRow(query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func getEntry(q querier, key string) (Entry, error) {
+func getEntry(ctx context.Context, q querier, key string) (Entry, error) {
 	var e Entry
 	var value string
-	err := q.QueryRow(`SELECT value, revision, updated_at FROM host_config WHERE key = ?`, key).
+	err := q.QueryRowContext(ctx, `SELECT value, revision, updated_at FROM host_config WHERE key = ?`, key).
 		Scan(&value, &e.Revision, &e.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Entry{}, nil
@@ -213,34 +264,54 @@ func getEntry(q querier, key string) (Entry, error) {
 }
 
 // Get returns the stored entry for key (Revision 0 when never written).
-func (s *Store) Get(key string) (Entry, error) { return getEntry(s.db, key) }
+func (s *Store) Get(key string) (Entry, error) { return getEntry(context.Background(), s.db, key) }
 
-// Put writes value when baseRevision equals the stored revision, in one
-// transaction. On mismatch it returns the current entry and ok=false.
+// Put writes value when baseRevision equals the stored revision. The read and
+// the write run inside one BEGIN IMMEDIATE transaction on a dedicated conn:
+// database/sql's Begin is a deferred tx, so two concurrent PUTs could both read
+// the same revision and the loser would hit SQLITE_BUSY_SNAPSHOT (500) instead
+// of a clean 409. IMMEDIATE takes the write lock first; the second writer waits
+// (busy_timeout) and then reads the committed revision. Same pattern as
+// internal/module/backup/store.go AppendSnapshot.
 func (s *Store) Put(key string, value json.RawMessage, baseRevision int64) (Entry, bool, error) {
-	tx, err := s.db.Begin()
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
+		return Entry{}, false, fmt.Errorf("host config conn: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return Entry{}, false, fmt.Errorf("begin host config tx: %w", err)
 	}
-	defer tx.Rollback()
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
 
-	cur, err := getEntry(tx, key)
+	cur, err := getEntry(ctx, conn, key)
 	if err != nil {
 		return Entry{}, false, err
+	}
+	if s.afterRead != nil {
+		s.afterRead() // test seam: widen the read→write window deterministically
 	}
 	if cur.Revision != baseRevision {
 		return cur, false, nil
 	}
 	next := Entry{Value: value, Revision: cur.Revision + 1, UpdatedAt: s.now()}
-	if _, err := tx.Exec(`
+	if _, err := conn.ExecContext(ctx, `
 		INSERT INTO host_config (key, value, revision, updated_at) VALUES (?, ?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, revision = excluded.revision, updated_at = excluded.updated_at`,
 		key, string(value), next.Revision, next.UpdatedAt); err != nil {
 		return Entry{}, false, fmt.Errorf("put host config %s: %w", key, err)
 	}
-	if err := tx.Commit(); err != nil {
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return Entry{}, false, fmt.Errorf("commit host config %s: %w", key, err)
 	}
+	committed = true
 	return next, true, nil
 }
 ```
@@ -323,7 +394,7 @@ func TestNormalizeProjectsRejects(t *testing.T) {
 		"relative path": `[{"id":"a","name":"n","slug":"s1","path":"foo/bar"}]`,
 		"tilde user":    `[{"id":"a","name":"n","slug":"s1","path":"~bob/x"}]`,
 		"empty path":    `[{"id":"a","name":"n","slug":"s1","path":" "}]`,
-		"nul path":      `[{"id":"a","name":"n","slug":"s1","path":"/a b"}]`,
+		"nul path":      `[{"id":"a","name":"n","slug":"s1","path":"/a\u0000b"}]`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -357,7 +428,7 @@ func TestNormalizeCommandsRejects(t *testing.T) {
 	cases := map[string]string{
 		"empty command":   `[{"id":"a","name":"n","command":"","icon":{"kind":"agent","value":"codex"}}]`,
 		"long command":    `[{"id":"a","name":"n","command":"` + strings.Repeat("x", 4097) + `","icon":{"kind":"agent","value":"codex"}}]`,
-		"nul command":     `[{"id":"a","name":"n","command":"a ","icon":{"kind":"agent","value":"codex"}}]`,
+		"nul command":     `[{"id":"a","name":"n","command":"a\u0000","icon":{"kind":"agent","value":"codex"}}]`,
 		"bad kind":        `[{"id":"a","name":"n","command":"x","icon":{"kind":"emoji","value":"x"}}]`,
 		"bad agent":       `[{"id":"a","name":"n","command":"x","icon":{"kind":"agent","value":"gemini"}}]`,
 		"bad phosphor":    `[{"id":"a","name":"n","command":"x","icon":{"kind":"phosphor","value":"terminal"}}]`,
@@ -386,7 +457,7 @@ func TestNormalizeResumeTemplates(t *testing.T) {
 		"null":      `null`,
 		"bad agent": `{"CC":{"exact":"","fallback":""}}`,
 		"too long":  `{"cc":{"exact":"` + strings.Repeat("x", 4097) + `","fallback":""}}`,
-		"nul":       `{"cc":{"exact":"a ","fallback":""}}`,
+		"nul":       `{"cc":{"exact":"a\u0000","fallback":""}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := normalizeResumeTemplates(json.RawMessage(raw))
@@ -809,7 +880,8 @@ func newTestModule(t *testing.T) *Module {
 	s, err := OpenStore(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { s.Close() })
-	return &Module{store: s, home: func() (string, error) { return t.TempDir(), nil }}
+	home := t.TempDir() // stable for the whole test so ~/x resolves consistently
+	return &Module{store: s, home: func() (string, error) { return home, nil }}
 }
 
 func serve(m *Module, method, path, body string) *httptest.ResponseRecorder {
@@ -909,19 +981,49 @@ func TestHandlerPutBodyTooLarge(t *testing.T) {
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rr.Code)
 }
 
+func TestHandlerPutAtCapNotTooLarge(t *testing.T) {
+	m := newTestModule(t)
+	prefix, suffix := `{"items":[],"baseRevision":0,"pad":"`, `"}`
+	body := prefix + strings.Repeat("x", bodyCap-len(prefix)-len(suffix)) + suffix
+	require.Len(t, body, bodyCap)
+	rr := serve(m, http.MethodPut, "/api/hostconfig/projects", body)
+	assert.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+}
+
 func TestHandlerCheckPath(t *testing.T) {
 	m := newTestModule(t)
-	rr := serve(m, http.MethodPost, "/api/hostconfig/check-path", `{"path":"~"}`)
-	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-	assert.Contains(t, rr.Body.String(), `"status":"dir"`)
+	home, err := m.home()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "file.txt"), []byte("x"), 0o600))
 
-	rr = serve(m, http.MethodPost, "/api/hostconfig/check-path", `{"path":"relative"}`)
+	cases := []struct {
+		path, want string
+	}{
+		{"~", `{"status":"dir","resolved":"` + home + `"}`},
+		{"~/file.txt", `{"status":"not_dir","resolved":"` + filepath.Join(home, "file.txt") + `"}`},
+		{"~/missing", `{"status":"missing","resolved":"` + filepath.Join(home, "missing") + `"}`},
+		{home, `{"status":"dir","resolved":"` + home + `"}`},
+		{filepath.Join(home, "file.txt"), `{"status":"not_dir","resolved":"` + filepath.Join(home, "file.txt") + `"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]string{"path": c.path})
+			rr := serve(m, http.MethodPost, "/api/hostconfig/check-path", string(body))
+			require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+			assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+			assert.JSONEq(t, c.want, rr.Body.String())
+		})
+	}
+
+	rr := serve(m, http.MethodPost, "/api/hostconfig/check-path", `{"path":"relative"}`)
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 
 	rr = serve(m, http.MethodPost, "/api/hostconfig/check-path", `nope`)
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 ```
+
+Add `"encoding/json"`, `"os"`, `"path/filepath"` to `handler_test.go` imports. (macOS `t.TempDir()` lives under `/var/folders/...`, which is itself a symlink to `/private/var/...`; `checkPath` does not resolve symlinks in `Resolved`, so the expected strings use the unresolved `home` — keep it that way.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
