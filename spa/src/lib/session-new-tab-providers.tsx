@@ -48,10 +48,18 @@ export function createHostSessionProviderSource(): NewTabProviderSource {
           component: componentFor(hostId),
         }))
     },
-    subscribe: (listener) =>
-      useHostStore.subscribe((state, prev) => {
+    subscribe: (listener) => {
+      const unsubState = useHostStore.subscribe((state, prev) => {
         if (state.hosts !== prev.hosts || state.hostOrder !== prev.hostOrder) listener()
-      }),
+      })
+      // persist sets state BEFORE flipping hasHydrated, so the state change
+      // above is seen while still unready — re-notify once hydration is done.
+      const unsubHydration = useHostStore.persist.onFinishHydration(() => listener())
+      return () => { unsubState(); unsubHydration() }
+    },
     ownsId: (id) => id === LEGACY_ID || id.startsWith(PREFIX),
+    // Until the persisted host list is loaded, hostOrder is a transient
+    // default — never prune or place per-host blocks from it.
+    isReady: () => useHostStore.persist.hasHydrated(),
   }
 }

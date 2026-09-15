@@ -7,6 +7,7 @@ import {
   registerNewTabProviderSource,
   subscribeNewTabProviders,
   getStaleNewTabProviderIds,
+  getReadyNewTabProviders,
   type NewTabProviderProps,
 } from './new-tab-registry'
 
@@ -164,6 +165,17 @@ describe('new-tab-registry — dynamic provider sources', () => {
     registerNewTabProvider({ id: 'static', label: 'S', icon: 'S', order: 0, component: Stub })
     registerNewTabProviderSource(makeSource(['a']).source)
     expect(getStaleNewTabProviderIds(['static', 'dyn', 'dyn:a', 'dyn:gone', 'unowned'])).toEqual(['dyn', 'dyn:gone'])
+  })
+
+  it('an unready source neither reports stale ids nor contributes ready providers', () => {
+    registerNewTabProvider({ id: 'static', label: 'S', icon: 'S', order: 0, component: Stub })
+    let ready = false
+    registerNewTabProviderSource({ ...makeSource(['a']).source, isReady: () => ready })
+    expect(getStaleNewTabProviderIds(['dyn:gone'])).toEqual([])
+    expect(getReadyNewTabProviders().map((p) => p.id)).toEqual(['static'])
+    ready = true
+    expect(getStaleNewTabProviderIds(['dyn:gone'])).toEqual(['dyn:gone'])
+    expect(getReadyNewTabProviders().map((p) => p.id)).toEqual(['static', 'dyn:a'])
   })
 
   it('re-registering a source with the same id replaces it; clear removes sources', () => {

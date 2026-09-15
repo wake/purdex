@@ -47,6 +47,30 @@ describe('createHostSessionProviderSource', () => {
     expect(src.ownsId('editor')).toBe(false)
   })
 
+  it('is ready only once the host store has hydrated, and notifies on hydration finish', () => {
+    let finish: (() => void) | undefined
+    const hydrated = vi.spyOn(useHostStore.persist, 'hasHydrated').mockReturnValue(false)
+    const onFinish = vi.spyOn(useHostStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useHostStore.getState())
+      return () => { finish = undefined }
+    })
+    try {
+      const src = createHostSessionProviderSource()
+      expect(src.isReady?.()).toBe(false)
+      const listener = vi.fn()
+      const unsub = src.subscribe(listener)
+      hydrated.mockReturnValue(true)
+      finish?.()
+      expect(src.isReady?.()).toBe(true)
+      expect(listener).toHaveBeenCalledTimes(1)
+      unsub()
+      expect(finish).toBeUndefined()
+    } finally {
+      hydrated.mockRestore()
+      onFinish.mockRestore()
+    }
+  })
+
   it('notifies subscribers when hosts or hostOrder change, not on runtime churn', () => {
     const src = createHostSessionProviderSource()
     const listener = vi.fn()

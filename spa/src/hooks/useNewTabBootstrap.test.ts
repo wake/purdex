@@ -57,6 +57,41 @@ describe('useNewTabBootstrap — per-host session blocks', () => {
     expect(useNewTabLayoutStore.getState().profiles['1col'].columns).toEqual([['browser']])
   })
 
+  it('does not prune or place host blocks until the host store has hydrated', () => {
+    let finish: (() => void) | undefined
+    const hydrated = vi.spyOn(useHostStore.persist, 'hasHydrated').mockReturnValue(false)
+    const onFinish = vi.spyOn(useHostStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useHostStore.getState())
+      return () => { finish = undefined }
+    })
+    try {
+      // Pre-hydration host store holds only a transient default host.
+      useHostStore.setState({ hosts: { tmp: host('tmp', 'default', 0) }, hostOrder: ['tmp'] })
+      useNewTabLayoutStore.setState({
+        profiles: {
+          '3col': { enabled: false, columns: [[], [], []] },
+          '2col': { enabled: false, columns: [[], []] },
+          '1col': { enabled: true, columns: [['sessions:persisted', 'browser']] },
+        },
+        knownIds: ['sessions:persisted', 'browser'],
+      })
+      renderHook(() => useNewTabBootstrap())
+      expect(all1col()).toEqual(['sessions:persisted', 'browser'])
+      expect(useNewTabLayoutStore.getState().knownIds).not.toContain('sessions:tmp')
+
+      // Hydration lands the real host list (setState fires before hasHydrated flips).
+      act(() => { useHostStore.setState({ hosts: { persisted: host('persisted', 'mlab', 0) }, hostOrder: ['persisted'] }) })
+      expect(all1col()).toEqual(['sessions:persisted', 'browser'])
+      hydrated.mockReturnValue(true)
+      act(() => { finish?.() })
+      expect(all1col()).toEqual(['sessions:persisted', 'browser'])
+      expect(useNewTabLayoutStore.getState().knownIds).toEqual(['sessions:persisted', 'browser'])
+    } finally {
+      hydrated.mockRestore()
+      onFinish.mockRestore()
+    }
+  })
+
   it('keeps a user-removed host block removed across unrelated host updates', () => {
     renderHook(() => useNewTabBootstrap())
     act(() => { useNewTabLayoutStore.getState().removeModule('1col', 'sessions:h1') })

@@ -34,14 +34,26 @@ export interface NewTabProviderSource {
   getProviders: () => NewTabProvider[]
   subscribe: (listener: () => void) => () => void
   ownsId: (providerId: string) => boolean
+  /**
+   * Whether `getProviders()` reflects real (hydrated) state. While false, the
+   * layout bootstrap neither places this source's providers nor prunes ids it
+   * owns — a pre-hydration host list must not erase persisted placements.
+   * Omitted = always ready.
+   */
+  isReady?: () => boolean
 }
 
 const providers = new Map<string, NewTabProvider>()
 const sources = new Map<string, NewTabProviderSource>()
 
-function snapshot(): NewTabProvider[] {
+const isSourceReady = (s: NewTabProviderSource) => s.isReady?.() ?? true
+
+function snapshot(readyOnly = false): NewTabProvider[] {
   const all = [...providers.values()]
-  for (const source of sources.values()) all.push(...source.getProviders())
+  for (const source of sources.values()) {
+    if (readyOnly && !isSourceReady(source)) continue
+    all.push(...source.getProviders())
+  }
   // Array.prototype.sort is stable, so equal orders keep source order.
   return all.sort((a, b) => a.order - b.order)
 }
@@ -73,17 +85,29 @@ export function getNewTabProviders(): NewTabProvider[] {
   return snapshot()
 }
 
+/** Static providers plus those of sources whose state is ready (hydrated). */
+export function getReadyNewTabProviders(): NewTabProvider[] {
+  return snapshot(true)
+}
+
 /** Subscribe to changes of any registered source. Returns an unsubscribe. */
 export function subscribeNewTabProviders(listener: () => void): () => void {
   const unsubs = [...sources.values()].map((s) => s.subscribe(listener))
   return () => unsubs.forEach((u) => u())
 }
 
-/** Ids owned by a registered source that its current providers no longer include. */
+/**
+ * Ids owned by a registered source that its current providers no longer
+ * include. An id owned by any not-yet-ready source is never reported stale.
+ */
 export function getStaleNewTabProviderIds(ids: string[]): string[] {
   const live = new Set(snapshot().map((p) => p.id))
-  const owned = (id: string) => [...sources.values()].some((s) => s.ownsId(id))
-  return ids.filter((id) => !live.has(id) && owned(id))
+  const all = [...sources.values()]
+  return ids.filter((id) => {
+    if (live.has(id)) return false
+    const owners = all.filter((s) => s.ownsId(id))
+    return owners.length > 0 && owners.every(isSourceReady)
+  })
 }
 
 export function clearNewTabRegistry(): void {

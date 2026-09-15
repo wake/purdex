@@ -2,7 +2,7 @@
 import { useEffect } from 'react'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import {
-  getNewTabProviders,
+  getReadyNewTabProviders,
   getStaleNewTabProviderIds,
   subscribeNewTabProviders,
 } from '../lib/new-tab-registry'
@@ -24,7 +24,9 @@ export function useNewTabBootstrap(): void {
       const stale = getStaleNewTabProviderIds([...referenced])
       if (stale.length > 0) pruneIds(stale)
 
-      const providers = getNewTabProviders().map((p) => ({
+      // Unready sources (e.g. hosts not yet hydrated) are skipped so a transient
+      // host list is never placed; they reconcile when their source notifies.
+      const providers = getReadyNewTabProviders().map((p) => ({
         id: p.id,
         order: p.order,
         disabled: p.disabled,
