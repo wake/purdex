@@ -73,7 +73,7 @@ Validation (all → `400` with a short message, never partial write):
 - `tabs`, `tabOrder`, `activeTabId` from `useTabStore`; `workspaces`, `activeWorkspaceId` from
   `useWorkspaceStore`.
 - `sessionMeta[hostId][sessionCode]` for every tmux-session pane: `name = cachedName`, `mode`,
-  `cwd = pane.rebuild?.cwd` when present, `restorable: false` (structure-only by D4),
+  `cwd = pane.content.rebuild?.cwd` when present, `restorable: false` (structure-only by D4),
   no `captureError`.
 
 `structuralKey(payload): string` — stable JSON (sorted keys) of the payload **without
