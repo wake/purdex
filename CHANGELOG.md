@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.360] - 2026-09-16
+
+### Feat: Session Launcher — 專案／指令格狀啟動器取代舊的 cwd 輸入（B3，#1070）
+
+New Tab 每台 host 的 `+` 與 Host › Sessions 的「New Session」改為開啟同一個啟動器：上方是 session 名稱欄位，下方是該 host 所有專案的格狀清單，每個專案後面接著所有 normal 指令的圖示。
+
+- **兩種啟動方式**：點擊指令圖示會以該專案路徑為 cwd 建立 tmux session，接著送出該指令；點擊專案名稱則只啟動該 cwd。在名稱欄位打字後按 Enter 維持舊有預設（`~`、terminal 模式）。
+- **名稱產生**：專案啟動時名稱留白會使用 `{slug}-{N}`；遇到 409 會自動換名重試（1 次嘗試 + 最多 5 次重試，只對產生的名稱重試，被拒絕的名稱不會再次提出）。
+- **建立與送出走同一條 pinned host transport**，並帶 tmux 世代守衛；舊 daemon 若沒有回傳世代就跳過送出並明確說明；送出失敗時保留已建立的 session，並以 toast 回報。
+- **格狀版面**：以 container query 確保永遠不會少於兩欄，完整鍵盤操作，Escape 取消；沒有專案與舊 daemon 的狀態都在畫面上就地說明。
+- **Host 離線守衛保留在啟動器內**，包含 session 已建立之後的情況（啟動器會留著並顯示錯誤，不會靜默關閉）。
+- **移除舊的 cwd 輸入與 terminal／stream 下拉選單**：cwd 現在一律來自專案，stream 模式之後會以 Nexen 模式回歸。
+- ⚠️ 純 SPA 變更，HMR 即可生效；需搭配 alpha.358 的 daemon。
+
 ## [1.0.0-alpha.359] - 2026-09-16
 
 ### Feat: Host 設定頁 — 專案／指令／快照三頁、每台 host 的 resume 範本，並移除 Quick Command（B2，#1068）
