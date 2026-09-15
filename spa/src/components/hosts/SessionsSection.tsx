@@ -9,6 +9,7 @@ import { useAgentStore } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
 import { connectionErrorMessage } from '../../lib/host-utils'
+import { SessionLauncher } from '../session-launcher/SessionLauncher'
 import type { Session } from '../../lib/host-api'
 
 interface Props {
@@ -18,86 +19,6 @@ interface Props {
 // Shared fallback so the selector returns a stable reference when the host has
 // no sessions entry yet — a fresh `[]` per call makes useSyncExternalStore loop.
 const EMPTY_SESSIONS: Session[] = []
-
-/* ─── New Session Dialog ─── */
-
-function NewSessionDialog({ hostId, onClose }: { hostId: string; onClose: () => void }) {
-  const t = useI18nStore((s) => s.t)
-  const [name, setName] = useState('')
-  const [cwd, setCwd] = useState('~')
-  const [mode, setMode] = useState('terminal')
-  const [creating, setCreating] = useState(false)
-  const [error, setError] = useState('')
-
-  const handleCreate = async () => {
-    if (!name.trim()) return
-    setCreating(true)
-    setError('')
-    try {
-      const res = await hostFetch(hostId, '/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), cwd, mode }),
-      })
-      if (!res.ok) {
-        const body = await res.text().catch(() => '')
-        setError(body || `HTTP ${res.status}`)
-        return
-      }
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed')
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  return (
-    <div className="p-4 bg-surface-secondary border border-border-default rounded-lg mb-4">
-      <h3 className="text-sm font-semibold mb-3">{t('hosts.new_session')}</h3>
-      <div className="space-y-2">
-        <input
-          placeholder={t('hosts.session_name')}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="w-full bg-surface-primary border border-border-default rounded px-2 py-1.5 text-sm text-text-primary"
-          autoFocus
-          onKeyDown={(e) => { if (e.key === 'Enter') handleCreate() }}
-        />
-        <input
-          placeholder={t('hosts.session_cwd')}
-          value={cwd}
-          onChange={(e) => setCwd(e.target.value)}
-          className="w-full bg-surface-primary border border-border-default rounded px-2 py-1.5 text-sm text-text-muted"
-        />
-        <select
-          value={mode}
-          onChange={(e) => setMode(e.target.value)}
-          className="bg-surface-primary border border-border-default rounded px-2 py-1.5 text-sm text-text-primary"
-        >
-          <option value="terminal">terminal</option>
-          <option value="stream">stream</option>
-        </select>
-      </div>
-      {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
-      <div className="flex gap-2 mt-3">
-        <button
-          onClick={handleCreate}
-          disabled={creating || !name.trim()}
-          className="px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
-        >
-          {t('hosts.create')}
-        </button>
-        <button
-          onClick={onClose}
-          className="px-3 py-1.5 rounded text-xs bg-surface-tertiary text-text-secondary cursor-pointer"
-        >
-          {t('common.cancel')}
-        </button>
-      </div>
-    </div>
-  )
-}
 
 /* ─── Inline Rename ─── */
 
@@ -169,7 +90,7 @@ export function SessionsSection({ hostId }: Props) {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">{t('hosts.sessions')}</h2>
         <button
-          onClick={() => setShowNew(true)}
+          onClick={() => setShowNew((v) => !v)}
           disabled={isOffline}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50"
         >
@@ -178,7 +99,18 @@ export function SessionsSection({ hostId }: Props) {
         </button>
       </div>
 
-      {showNew && <NewSessionDialog hostId={hostId} onClose={() => setShowNew(false)} />}
+      {/* Host page semantics: creating only. The new session lands in the table
+          below through the next sessions payload; no tab is opened. */}
+      {showNew && (
+        <div className="mb-4">
+          <SessionLauncher
+            hostId={hostId}
+            disabled={isOffline}
+            onLaunched={() => setShowNew(false)}
+            onCancel={() => setShowNew(false)}
+          />
+        </div>
+      )}
 
       {(() => {
         const errorMsg = isOffline ? connectionErrorMessage(runtime, t) : null

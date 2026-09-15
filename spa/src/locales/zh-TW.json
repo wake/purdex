@@ -906,8 +906,6 @@
   "hosts.load_failed": "載入失敗",
   "hosts.new_session": "新增 Session",
   "hosts.session_name": "Session 名稱",
-  "hosts.session_cwd": "工作目錄",
-  "hosts.create": "建立",
   "hosts.no_sessions": "此主機上沒有 Session",
   "hosts.mode": "模式",
   "hosts.agent": "Agent",
@@ -1207,5 +1205,15 @@
   "command_icon.all": "全部圖示",
   "command_icon.search": "搜尋圖示",
   "command_icon.no_results": "沒有符合的圖示",
-  "command_icon.more": "再顯示 {{n}} 個"
+  "command_icon.more": "再顯示 {{n}} 個",
+
+  "launcher.name_placeholder": "Session 名稱 — 留空則用 <slug>-N",
+  "launcher.name_required": "請輸入 session 名稱，或從下方選擇專案。",
+  "launcher.send_failed": "Session 已建立，但指令送出失敗：{{reason}}",
+  "launcher.send_unsupported": "Session 已建立，但此主機的 daemon 版本過舊，無法執行指令。",
+  "launcher.empty": "此主機尚未設定專案。",
+  "launcher.empty_link": "到 主機 › 專案 新增",
+  "launcher.unsupported": "此主機的 daemon 版本過舊，不支援專案——按 Enter 可建立一般 session。",
+  "launcher.offline": "主機已離線——未建立任何 session。",
+  "launcher.created_offline": "Session 已建立，但主機在開啟前離線了。"
 }
