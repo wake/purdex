@@ -10,9 +10,10 @@ interface Props {
   disabled?: boolean
   placeholder?: string
   focused?: boolean
+  showAttach?: boolean
 }
 
-export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder, focused = false }: Props) {
+export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder, focused = false, showAttach = true }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('stream.input.placeholder')
   const [value, setValue] = useState('')
@@ -65,14 +66,16 @@ export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disable
         className="w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"
       />
       <div className="flex items-center px-2 pb-1.5">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={onAttach}
-          className="w-7 h-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
-        >
-          <Plus size={16} />
-        </button>
+        {showAttach && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onAttach}
+            className="w-7 h-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
+          >
+            <Plus size={16} />
+          </button>
+        )}
         <div className="flex-1" />
         {onHandoffToTerm && (
           <button
