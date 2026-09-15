@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.353] - 2026-09-16
+
+### Feat: Nexen 整併 P-B.3 — Host「Nex」子頁 + daemon 對壞掉的 `[nex]` 軟失敗（#1054）
+
+P-B.2（alpha.351）讓 execution pane 吃 Nexen；這輪補上每台 host 的 Nex 管理頁，並讓 daemon 在 `[nex]` 環境性錯誤時不再整個起不來。
+
+- **Daemon soft-fail（I8）**：nex `Init` 對 buildOptions / data_dir / assemble 失敗改記錄 `initErr` 並回 nil，daemon 照常起；所有 `/api/nex/…` 回 `503 {"code":"nex_unavailable","error":…}`，`Start/Stop/Close` 為 no-op；失敗時把 `path_prepend` 對行程 PATH 的修改還原。`NexConfig.Validate` 的靜態格式錯誤仍在 config load 時致命。`pdx nex` 對 503 印出原始錯誤而非「not enabled」。
+- **`/api/info.nex`**：`{configured, mounted, ready, init_error, effective, restart_required}`；`configured` 是開機時的值；`effective` 是實際傳給 Nexen 的展開後設定；`restart_required` 由 daemon 比對開機時的 `[nex]` 與目前設定（nil 與空 list 視為相同），UI 不必自己重做 `~` 展開與 PATH 存在性過濾。`core.StatusReporter` 介面讓 core 不 import nex module。
+- **`PUT /api/config` 接受 `nex`（I9）**：整段物件、`Validate` 靜態驗證（400 帶欄位名）、寫入 `config.toml`，**不熱套用**；`{"nex": null}` → 400。root / PATH list 正規化成 `[]`，沒有 `[nex]` 的 host 不會送出 `null`。
+- **SPA Host → Nex 子頁**（order 6）三張卡：
+  - 引擎狀態：Disabled / 未執行 / Unavailable（附 init error）/ Ready；phase · host_id、帳號、5h/7d 額度（`null` 顯示「未知」不顯示 0）、roots、profiles、lease TTL、目前生效設定；host 重連後重抓。
+  - 設定表單：完整 `[nex]` 欄位（list 編輯、profile 下拉、duration）；400 錯誤對應到欄位；存檔後依 `restart_required` 顯示「需重啟 daemon」；儲存途中繼續編輯不會被覆蓋。
+  - 執行體表格：列表 + 全站 SSE 當刷新訊號（500 ms debounce、斷線以 `Last-Event-ID` 續傳不重播全站歷史）、Open（host-scoped，I10）、Terminate（確認 + lease best-effort release）、Archive/Unarchive、顯示已歸檔。
+- **Review**：subagent TDD 逐 task review（Task 4–7 各有修正輪，含 StrictMode 下表格永遠不顯示列、切 host 後舊列可被 Open、表單在 config 未載入時可把真實 `[nex]` 蓋成空值、Refresh 失敗無法恢復）；final whole-branch review（opus）2 Critical（`~` 路徑讓「需重啟」永遠亮、`[nex]` 缺 list → JSON null → 頁面崩）＋一波修（`restart_required` 改由 daemon 算）；codex R1 1×P2、R2 三視角（soft-fail 後 PATH 未還原、Refresh／存檔回應跨 host、狀態卡殘留前一台資料、`configured` 應讀開機值、抽 `useNexHostData`）全修；R3 1×P2（存檔途中再編輯卻顯示「已儲存」）已修。
+- 測試：Go 全綠（nex module soft-fail／Status／PATH 還原、core info/config handler、boot snapshot、pdx nex 503 probe）；vitest 422→427 files、5214→5276 tests；延後 #1051（gofmt 既有 28 檔）。
+
 ## [1.0.0-alpha.352] - 2026-09-15
 
 ### Feat: 多主機 Host 顏色標示（#1052）

@@ -30,7 +30,7 @@ import {
   getContribution,
 } from './settings-contribution-registry'
 import { isModuleOwnedContribution } from './settings-contribution-types'
-import { clearHostBuiltinSources } from './host-builtin-sections'
+import { clearHostBuiltinSources, HOST_BUILTIN_MODULE_ID } from './host-builtin-sections'
 import enLocale from '../locales/en.json'
 import zhLocale from '../locales/zh-TW.json'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
@@ -67,6 +67,26 @@ describe('registerBuiltinModules', () => {
     expect(getPaneRenderer('new-tab')).toBeDefined()
     expect(getPaneRenderer('browser')).toBeDefined()
     expect(getPaneRenderer('hosts')).toBeDefined()
+  })
+
+  // dispatch-settings-contributions.test.ts's #586 `defs()`
+  // helper builds its own FakeHostSection fixtures rather than exercising
+  // the real `setHostBuiltinSections([...])` call in register-modules/
+  // index.tsx, so the real registration (localId/order/component wiring for
+  // the 'nex' sub-page) is asserted here instead.
+  it('registers the built-in host sub-pages including nex at order 6', () => {
+    registerBuiltinModules()
+
+    const hostContributions = listContributions('host')
+    const builtins = hostContributions.filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
+    expect(builtins.map((c) => c.localId)).toEqual([
+      'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex',
+    ])
+
+    const nex = builtins.find((c) => c.localId === 'nex')
+    expect(nex?.order).toBe(6)
+    expect(nex?.labelKey).toBe('hosts.nex.label')
+    expect(nex?.component).toBeDefined()
   })
 
   it('registers memory-monitor kind with Performance Monitor display label', () => {

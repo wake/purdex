@@ -3,6 +3,9 @@ import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { isValidHostColor, sanitizeHostConfigColor } from '../lib/host-color'
+// host-api.ts imports useHostStore at runtime, so this must stay a type-only
+// import to avoid a require cycle.
+import type { NexInfo } from '../lib/host-api'
 
 /* ─── Interfaces ─── */
 
@@ -46,6 +49,7 @@ export interface HostInfo {
   tmux_version: string
   os: string
   arch: string
+  nex?: NexInfo
 }
 
 /* ─── Store ─── */

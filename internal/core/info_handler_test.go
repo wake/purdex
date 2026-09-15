@@ -3,8 +3,10 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -190,6 +192,9 @@ func TestInfoEndpoint_NexConfiguredButNotMounted(t *testing.T) {
 	require.True(t, ok, "nex field should be an object, got %v (%T)", body["nex"], body["nex"])
 	assert.Equal(t, true, nex["configured"])
 	assert.Equal(t, false, nex["mounted"])
+	assert.Equal(t, false, nex["ready"])
+	assert.Equal(t, "", nex["init_error"])
+	assert.Nil(t, nex["effective"])
 }
 
 func TestInfoEndpoint_NexNotConfiguredAndNotMounted(t *testing.T) {
@@ -209,4 +214,145 @@ func TestInfoEndpoint_NexNotConfiguredAndNotMounted(t *testing.T) {
 	require.True(t, ok, "nex field should be an object, got %v (%T)", body["nex"], body["nex"])
 	assert.Equal(t, false, nex["configured"])
 	assert.Equal(t, false, nex["mounted"])
+}
+
+// statusStubModule extends stubModule with the StatusReporter interface, so
+// tests can simulate the nex module publishing runtime facts through
+// GET /api/info without importing internal/module/nex (import cycle).
+type statusStubModule struct {
+	stubModule
+	status map[string]any
+}
+
+func (m *statusStubModule) Status() map[string]any { return m.status }
+
+func TestInfoEndpoint_NexStatusFields(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
+	c.AddModule(&statusStubModule{
+		stubModule: stubModule{name: "nex"},
+		status: map[string]any{
+			"ready": false, "init_error": "nex: init: assembling engine: boom",
+			"effective": nil,
+		},
+	})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/info", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	nex := body["nex"].(map[string]any)
+	assert.Equal(t, true, nex["configured"])
+	assert.Equal(t, true, nex["mounted"])
+	assert.Equal(t, false, nex["ready"])
+	assert.Equal(t, "nex: init: assembling engine: boom", nex["init_error"])
+	assert.Nil(t, nex["effective"])
+}
+
+func TestInfoEndpoint_NexMountedWithoutStatusReporter(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
+	c.AddModule(&stubModule{name: "nex"})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/info", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	nex := body["nex"].(map[string]any)
+	assert.Equal(t, true, nex["ready"])
+	assert.Equal(t, "", nex["init_error"])
+	assert.Nil(t, nex["effective"])
+}
+
+// getInfoNex issues GET /api/info against c and returns its nex object.
+func getInfoNex(t *testing.T, c *Core) map[string]any {
+	t.Helper()
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/info", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	nex, ok := body["nex"].(map[string]any)
+	require.True(t, ok, "nex field should be an object, got %v", body["nex"])
+	return nex
+}
+
+// putConfig issues PUT /api/config with body against c and requires 200.
+func putConfig(t *testing.T, c *Core, body string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
+func TestInfoEndpoint_NexRestartRequired(t *testing.T) {
+	root := t.TempDir()
+	bootNex := func() config.NexConfig {
+		// nil lists, as a TOML without those keys decodes.
+		return config.NexConfig{Enabled: true, RepoRoots: []string{root}}
+	}
+
+	t.Run("unchanged config reports false", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: bootNex()}})
+		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
+	})
+
+	t.Run("PUT changing path_prepend reports true", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: bootNex()}})
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q],"path_prepend":["/opt/homebrew/bin"]}}`, root))
+		assert.Equal(t, true, getInfoNex(t, c)["restart_required"])
+	})
+
+	t.Run("PUT with identical content using [] where boot had nil reports false", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: bootNex()}})
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q],"service_roots":[],"path_prepend":[]}}`, root))
+		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
+	})
+
+	t.Run("disabled at boot then PUT enabling reports true", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: false}}})
+		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q]}}`, root))
+		assert.Equal(t, true, getInfoNex(t, c)["restart_required"])
+	})
+}
+
+// TestInfoEndpoint_NexConfiguredIsBootValue: `configured` is whether nex
+// was enabled when the daemon booted (spec §4.4.2); a saved-but-unapplied
+// change only shows up as restart_required.
+func TestInfoEndpoint_NexConfiguredIsBootValue(t *testing.T) {
+	root := t.TempDir()
+
+	t.Run("enabled at boot then PUT disabling stays configured", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true, RepoRoots: []string{root}}}})
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":false,"repo_roots":[%q]}}`, root))
+		nex := getInfoNex(t, c)
+		assert.Equal(t, true, nex["configured"])
+		assert.Equal(t, true, nex["restart_required"])
+	})
+
+	t.Run("disabled at boot then PUT enabling stays unconfigured", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: false}}})
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q]}}`, root))
+		nex := getInfoNex(t, c)
+		assert.Equal(t, false, nex["configured"])
+		assert.Equal(t, true, nex["restart_required"])
+	})
+}
+
+func TestInfoEndpoint_ReporterCannotOverrideCoreNexFields(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
+	c.AddModule(&statusStubModule{
+		stubModule: stubModule{name: "nex"},
+		status: map[string]any{
+			"configured": false, "mounted": false, "restart_required": true,
+			"ready": true,
+		},
+	})
+	nex := getInfoNex(t, c)
+	assert.Equal(t, true, nex["configured"])
+	assert.Equal(t, true, nex["mounted"])
+	assert.Equal(t, false, nex["restart_required"])
+	assert.Equal(t, true, nex["ready"], "reporter-owned keys still come through")
 }

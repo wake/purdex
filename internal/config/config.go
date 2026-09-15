@@ -168,8 +168,17 @@ func (c Config) PeerAlias() string {
 
 // Redacted returns a deep copy of c with Token, HostID, and every
 // Peers.Hosts[i].Token / .InboundToken blanked. c itself is never mutated.
+//
+// It is the JSON view of the config (GET/PUT /api/config), so nex lists that
+// are nil — a TOML without the key, or a default — are emitted as [] rather
+// than null. This is done here, not in Load, because the TOML encoder omits
+// a nil slice but writes an empty one: normalising at Load would add
+// `repo_roots = []` lines to every config.toml written back.
 func (c Config) Redacted() Config {
 	out := c.Clone()
+	out.Nex.RepoRoots = nonNil(out.Nex.RepoRoots)
+	out.Nex.ServiceRoots = nonNil(out.Nex.ServiceRoots)
+	out.Nex.PathPrepend = nonNil(out.Nex.PathPrepend)
 	out.Token = ""
 	out.HostID = ""
 	for i := range out.Peers.Hosts {
@@ -286,4 +295,12 @@ func Load(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// nonNil returns s, or an empty non-nil slice when s is nil.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
