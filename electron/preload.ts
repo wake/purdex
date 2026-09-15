@@ -135,6 +135,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   tray: {
     getVisible: () => ipcRenderer.invoke('tray:get-visible'),
     setVisible: (visible: boolean) => ipcRenderer.invoke('tray:set-visible', visible),
+    onVisibilityChanged: (callback: (visible: boolean) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, visible: boolean) => callback(visible)
+      ipcRenderer.on('tray:visibility-changed', handler)
+      return () => ipcRenderer.removeListener('tray:visibility-changed', handler)
+    },
   },
 
   // Dev Update (exposed unless PDX_DEV_MODE=0)

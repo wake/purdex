@@ -139,6 +139,8 @@ interface Window {
     tray: {
       getVisible: () => Promise<boolean>
       setVisible: (visible: boolean) => Promise<boolean>
+      /** Fired for every window whenever the main process applies a change. Returns unsubscribe. */
+      onVisibilityChanged?: (callback: (visible: boolean) => void) => () => void
     }
 
     // Dev Update

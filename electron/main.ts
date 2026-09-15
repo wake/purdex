@@ -5,8 +5,9 @@ import { BrowserViewManager } from './browser-view-manager'
 import { MiniWindowManager } from './mini-browser-window'
 import { registerBrowserViewIpc } from './browser-view-ipc'
 import { registerFsIpc } from './fs-ipc'
-import { createTray, isTrayVisible, setTrayVisible } from './tray'
-import { loadAppPrefs, saveAppPrefs } from './app-prefs'
+import { createTray, isTrayVisible } from './tray'
+import { registerTrayIpc } from './tray-ipc'
+import { loadAppPrefs } from './app-prefs'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 import { pickDeeplinkTarget } from './deeplink'
@@ -114,7 +115,7 @@ function handleDeeplink(rawUrl: string): void {
   deliverDeeplink(dl)
 }
 
-function registerIpcHandlers(prefsPath: string): void {
+function registerIpcHandlers(): void {
   // Window Management
   ipcMain.handle('window:tear-off', (_event, tabJson: string) => {
     windowManager.handleTearOff(tabJson)
@@ -142,16 +143,6 @@ function registerIpcHandlers(prefsPath: string): void {
   // Memory Monitor
   ipcMain.handle('metrics:get', () => {
     return browserViewManager.getMetrics()
-  })
-
-  // Menu bar tray — main process owns the preference (app-prefs.json) since
-  // it has to decide before any renderer exists whether to create the tray.
-  ipcMain.handle('tray:get-visible', () => isTrayVisible())
-  ipcMain.handle('tray:set-visible', (_event, visible: boolean) => {
-    const v = visible === true
-    setTrayVisible(v, windowManager)
-    saveAppPrefs(prefsPath, { ...loadAppPrefs(prefsPath), showTray: v })
-    return v
   })
 
   // Notifications — prevent GC from collecting Notification objects before
@@ -362,7 +353,8 @@ if (!gotInstanceLock) {
 
     const prefsPath = join(app.getPath('userData'), 'app-prefs.json')
     const prefs = loadAppPrefs(prefsPath)
-    registerIpcHandlers(prefsPath)
+    registerIpcHandlers()
+    registerTrayIpc({ prefsPath, windowManager })
     // Spec D5: the app is the launcher on machines without booter/launchd.
     if (process.env.PDX_DEV_MODE !== '0') {
       void localDaemon.ensureRunning().then((r) => console.log(`[local-daemon] ensureRunning: ${r}`))

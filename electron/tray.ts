@@ -47,8 +47,3 @@ export function destroyTray(): void {
 export function isTrayVisible(): boolean {
   return tray !== null
 }
-
-export function setTrayVisible(visible: boolean, windowManager: WindowManager): void {
-  if (visible) createTray(windowManager)
-  else destroyTray()
-}
