@@ -20,7 +20,8 @@ import { BrowserPane } from '../../components/BrowserPane'
 import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
-import { ExecutionDetailPage } from '../../components/ExecutionDetailPage'
+import ExecutionView from '../../components/execution/ExecutionView'
+import { resolveExecutionHostId } from '../nex/resolve-host'
 import { AppearanceSection } from '../../components/settings/AppearanceSection'
 import { TerminalSection } from '../../components/settings/TerminalSection'
 import { ElectronSection } from '../../components/settings/ElectronSection'
@@ -95,10 +96,14 @@ function MemoryMonitorPaneWrapper() {
   return <MemoryMonitorPage />
 }
 
-function ExecutionPaneWrapper({ pane }: PaneRendererProps) {
+function ExecutionPaneWrapper({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
   if (content.kind !== 'execution') return null
-  return <ExecutionDetailPage executionId={content.executionId} host={content.host} />
+  // Fallback only when there is no hint at all (legacy route / deeplink); a
+  // stored host that no longer exists must surface as "Host removed", never
+  // as another daemon (spec §4.3.2 step 5).
+  const hostId = content.host ?? resolveExecutionHostId(undefined)
+  return <ExecutionView key={`${hostId}:${content.executionId}`} hostId={hostId} executionId={content.executionId} isActive={isActive} />
 }
 
 function PerformanceMonitorSettingsSection() {

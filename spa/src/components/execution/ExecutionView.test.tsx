@@ -1,0 +1,137 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import ExecutionView from './ExecutionView'
+import { useExecutionStore } from '../../stores/useExecutionStore'
+import { NexApiError } from '../../lib/nex/types'
+import * as api from '../../lib/nex/nex-api'
+import * as lease from '../../hooks/useExecutionLease'
+import * as sub from '../../hooks/useExecutionSubscription'
+
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn() }))
+vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
+vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
+vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
+
+const H = 'h', E = 'exc_1', KEY = 'h:exc_1'
+const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn()
+const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 2, archived: false, effective_profile: 'standard', turn_count: 3, ...extra })
+
+beforeEach(() => {
+  useExecutionStore.setState({ executions: {} })
+  ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset()
+  vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease, release, touch })
+  vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: null, paused: false })
+  vi.mocked(api.sendMessage).mockReset().mockResolvedValue({ turn_id: 't1', delivery: 'delivered' })
+  vi.mocked(api.interruptExecution).mockReset().mockResolvedValue({ turn_id: 't1', state: 'idle' })
+  vi.mocked(api.terminateExecution).mockReset().mockResolvedValue(undefined)
+  useExecutionStore.getState().setSummary(H, E, summary() as never)
+  useExecutionStore.getState().setHistoryLoaded(H, E, true)
+})
+
+describe('ExecutionView', () => {
+  it('renders header facts from the summary', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-me000000', expires_at: 1 } }) as never)
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByTestId('execution-state')).toHaveTextContent('idle')
+    expect(screen.getByText(/standard/)).toBeInTheDocument()
+    expect(screen.getByText(/repo/)).toBeInTheDocument()
+    expect(screen.getByText(/\(you\)/)).toBeInTheDocument()
+  })
+
+  it('send: optimistic bubble, lease acquired, message posted, queued tag shown', async () => {
+    vi.mocked(api.sendMessage).mockResolvedValueOnce({ turn_id: 't1', delivery: 'queued' })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'hello' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'hello'))
+    expect(ensureLease).toHaveBeenCalledTimes(1)
+    expect(touch).toHaveBeenCalled()
+    expect(screen.getByText('hello')).toBeInTheDocument()
+    expect(screen.getByText(/queued/i)).toBeInTheDocument()
+    expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(true)
+  })
+
+  it('send failure withdraws the bubble, re-enables input, restores text, shows the error (I12)', async () => {
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'hello' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(screen.getByTestId('send-error')).toBeInTheDocument())
+    const st = useExecutionStore.getState().executions[KEY]
+    expect(st.pendingSend).toBe(false)
+    expect(st.pendingLocal).toBeNull()
+    expect(st.sendError?.code).toBe('invalid_text')
+    // The restore mechanism is a `key={draft}` remount (see StreamInput /
+    // ExecutionView), which replaces the textarea DOM node; re-query rather
+    // than reuse the stale `box` reference captured before the remount.
+    const restored = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(restored.value).toBe('hello')
+    expect(restored.disabled).toBe(false)
+  })
+
+  it('lease_held shows the holder notice and keeps the input enabled', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-other', expires_at: 1 } }) as never)
+    // The real hook writes leaseError before rethrowing; the mock must too.
+    ensureLease.mockImplementationOnce(async () => {
+      useExecutionStore.getState().setLeaseError(H, E, { code: 'lease_held', heldBy: 'pdx:mlab/t-other' })
+      throw new NexApiError(409, 'lease_held', 'held')
+    })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'x' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    // The header's own lease line also renders the holder's principal, so
+    // /t-other/ matches two elements; scope to the dedicated notice.
+    await waitFor(() => expect(screen.getByTestId('lease-held')).toHaveTextContent(/t-other/))
+    expect(box.disabled).toBe(false)
+    expect(api.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('interrupt acquires the lease and posts; no_live_turn is silent', async () => {
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    fireEvent.click(screen.getByRole('button', { name: /interrupt/i }))
+    await waitFor(() => expect(api.interruptExecution).toHaveBeenCalledWith(H, E, 'ls_1'))
+    vi.mocked(api.interruptExecution).mockRejectedValueOnce(new NexApiError(409, 'no_live_turn', 'nothing'))
+    fireEvent.click(screen.getByRole('button', { name: /interrupt/i }))
+    await act(async () => {})
+    expect(screen.queryByTestId('send-error')).not.toBeInTheDocument()
+  })
+
+  it('terminate needs two clicks, then acquires the lease and posts', async () => {
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    fireEvent.click(screen.getByRole('button', { name: /^terminate$/i }))
+    expect(api.terminateExecution).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /confirm terminate/i }))
+    await waitFor(() => expect(api.terminateExecution).toHaveBeenCalledWith(H, E, 'ls_1'))
+  })
+
+  it('disables input with a reason when archived or ended', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
+    const { rerender } = render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/archived/i))
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
+    rerender(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/ended/i))
+  })
+
+  it('renders the problem states instead of the conversation', () => {
+    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'not_found', paused: false })
+    const { rerender } = render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByText(/not found/i)).toBeInTheDocument()
+    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'host_removed', paused: false })
+    rerender(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByText(/host removed/i)).toBeInTheDocument()
+    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'nex_disabled', paused: false })
+    rerender(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByText(/not enabled/i)).toBeInTheDocument()
+  })
+
+  it('shows the loading state until history is loaded', () => {
+    useExecutionStore.getState().setHistoryLoaded(H, E, false)
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByTestId('execution-loading')).toBeInTheDocument()
+  })
+})

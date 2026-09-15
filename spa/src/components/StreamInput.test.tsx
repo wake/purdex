@@ -96,4 +96,9 @@ describe('StreamInput', () => {
     rerender(<StreamInput onSend={() => {}} showAttach={false} />)
     expect(container.querySelector('button svg')).toBeNull()
   })
+
+  it('seeds the textarea value from initialValue', () => {
+    render(<StreamInput onSend={vi.fn()} initialValue="restored text" />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('restored text')
+  })
 })

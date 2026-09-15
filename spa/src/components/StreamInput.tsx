@@ -11,12 +11,14 @@ interface Props {
   placeholder?: string
   focused?: boolean
   showAttach?: boolean
+  /** Seeds the textarea (e.g. restoring text after a failed send). */
+  initialValue?: string
 }
 
-export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder, focused = false, showAttach = true }: Props) {
+export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder, focused = false, showAttach = true, initialValue }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('stream.input.placeholder')
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(initialValue ?? '')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {

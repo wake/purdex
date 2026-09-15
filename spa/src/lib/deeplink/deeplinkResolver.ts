@@ -6,40 +6,12 @@
 // Observe-only invariant: this never opens a live interactive session view or
 // attaches a stdin write path. The detail page it opens is strictly read-only.
 import { useTabStore } from '../../stores/useTabStore'
-import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
-import { findTabBySessionCode } from '../pane-tree'
 import { resolveExecutionHostId } from '../nex/resolve-host'
 
 /** The deeplink payload broadcast by the electron main process (P.11 contract). */
 export interface DeeplinkPayload {
   executionId: string
   host?: string
-}
-
-/**
- * Observe-only focus of an ALREADY-OPEN session tab. Returns true when a tab
- * matching hostId + sessionCode existed and was activated. Never creates a tab
- * and never wires stdin — it only activates a view the user already opened, so
- * the observe-only guarantee holds.
- *
- * Kept for ExecutionDetailPage's "focus open session" affordance; no longer
- * called from the deeplink resolution path itself (a Nexen execution has no
- * tmux session to focus).
- */
-export function focusExistingSessionTab(hostId: string, sessionCode: string): boolean {
-  const tabs = useTabStore.getState().tabs
-  const tabId = findTabBySessionCode(tabs, hostId, sessionCode)
-  if (!tabId) return false
-  useTabStore.getState().setActiveTab(tabId)
-  const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
-  if (ws) {
-    useWorkspaceStore.getState().setActiveWorkspace(ws.id)
-    useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
-  } else {
-    useWorkspaceStore.getState().setActiveWorkspace(null)
-  }
-  window.electronAPI?.focusMyWindow?.()
-  return true
 }
 
 /**

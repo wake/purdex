@@ -1,0 +1,70 @@
+// spa/src/components/execution/ExecutionHeader.tsx — the facts strip above
+// an execution conversation (spec §4.3.3): state, provider/profile, cwd,
+// observers, lease holder, turns, cost, SSE status, and the two lease-backed
+// actions. Pure presentation; ExecutionView owns the network.
+import { useEffect, useState } from 'react'
+import { Prohibit, Power } from '@phosphor-icons/react'
+import { useI18nStore } from '../../stores/useI18nStore'
+import type { ExecutionSummary } from '../../lib/nex/types'
+import type { ExecutionState } from '../../lib/nex/event-reducer'
+
+export interface ExecutionHeaderProps {
+  summary: ExecutionSummary | null
+  costUsd: number
+  sse: ExecutionState['sse']
+  isMine: (principal: string | undefined) => boolean
+  onInterrupt: () => void
+  onTerminate: () => void
+  busy: boolean
+}
+
+const STATE_DOT: Record<string, string> = {
+  running: 'bg-status-success', idle: 'bg-text-muted', queued: 'bg-status-warning',
+  failed: 'bg-status-error', rejected: 'bg-status-error', terminated: 'bg-status-error',
+}
+
+export const TERMINATE_CONFIRM_MS = 4000
+
+export default function ExecutionHeader({ summary, costUsd, sse, isMine, onInterrupt, onTerminate, busy }: ExecutionHeaderProps) {
+  const t = useI18nStore((s) => s.t)
+  const [confirming, setConfirming] = useState(false)
+  useEffect(() => {
+    if (!confirming) return
+    const id = setTimeout(() => setConfirming(false), TERMINATE_CONFIRM_MS)
+    return () => clearTimeout(id)
+  }, [confirming])
+
+  const state = summary?.state ?? '…'
+  const cwdBase = summary?.cwd ? summary.cwd.split('/').filter(Boolean).pop() ?? summary.cwd : ''
+  const lease = summary?.lease
+  const leaseText = lease ? `${lease.principal_id}${isMine(lease.principal_id) ? ` ${t('execution.lease_you')}` : ''}` : t('execution.lease_none')
+
+  return (
+    <div className="flex flex-col gap-1 px-4 py-2 border-b border-border-default text-xs text-text-muted">
+      <div className="flex items-center gap-2">
+        <span className={`w-2 h-2 rounded-full ${STATE_DOT[state] ?? 'bg-text-muted'}`} />
+        <span data-testid="execution-state" className="text-text-primary font-medium">{state}</span>
+        {summary && <span>{summary.provider} · {summary.effective_profile ?? summary.requested_profile ?? '—'}</span>}
+        {cwdBase && <span title={summary?.cwd} className="font-mono">{cwdBase}</span>}
+        <div className="flex-1" />
+        <span data-testid="execution-sse">{t(`execution.sse.${sse === 'idle' ? 'connecting' : sse}`)}</span>
+      </div>
+      <div className="flex items-center gap-3">
+        <span>{summary?.observers ?? 0} {t('execution.observers')}</span>
+        <span data-testid="execution-lease">{leaseText}</span>
+        {summary?.turn_count != null && <span>{summary.turn_count} {t('execution.turns')}</span>}
+        <span>${costUsd.toFixed(2)}</span>
+        <div className="flex-1" />
+        <button type="button" disabled={busy} onClick={onInterrupt}
+          className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-surface-hover disabled:opacity-40">
+          <Prohibit size={12} /> {t('execution.interrupt')}
+        </button>
+        <button type="button" disabled={busy}
+          onClick={() => { if (confirming) { setConfirming(false); onTerminate() } else setConfirming(true) }}
+          className={`flex items-center gap-1 px-2 py-0.5 rounded hover:bg-surface-hover disabled:opacity-40 ${confirming ? 'text-status-error' : ''}`}>
+          <Power size={12} /> {confirming ? t('execution.terminate_confirm') : t('execution.terminate')}
+        </button>
+      </div>
+    </div>
+  )
+}
