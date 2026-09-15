@@ -8,13 +8,13 @@ import { useWorkspaceStore } from '../../features/workspace/store'
 import { generateId } from '../id'
 import { buildSnapshot } from '../snapshot/capture'
 import { remapLayoutSessions, replaceTabSnapshot, syncSessionStore } from '../snapshot/restore'
-import { isWellFormedSnapshotV1 } from '../snapshot/storage'
+import { isWellFormedSnapshotV1, writePrevSnapshot } from '../snapshot/storage'
 import { RestoreError } from '../snapshot/types'
 import type { RestoreReport, WorkspaceSnapshot } from '../snapshot/types'
 import type { Tab } from '../../types/tab'
 import { mergeDeviceState } from './merge'
 import type { MergeReport, TabWorld } from './merge'
-import { writeDeviceStatePrev } from './prev'
+import { buildDeviceStatePrev } from './prev'
 import { markMissingHosts, reattachByName } from './reattach'
 
 export const DEVICE_STATE_LOCK_OWNER = {
@@ -60,18 +60,25 @@ function sameWorld(a: WorldRefs, b: WorldRefs): boolean {
 }
 
 /**
- * Write `-prev` and make sure it still describes the live world once the build
- * (which awaits the network) settles. `buildSnapshot` reads the stores
- * synchronously at its start, so the refs taken immediately before the call are
- * the ones the backup was built from. If the user changed tabs/workspaces during
- * the await, rebuild — otherwise Undo would drop state that existed before the
- * mutation. Gives up after PREV_CAPTURE_ATTEMPTS builds.
+ * Build the `-prev` backup in memory and make sure it still describes the live
+ * world once the build (which awaits the network) settles. `buildSnapshot`
+ * reads the stores synchronously at its start, so the refs taken immediately
+ * before the call are the ones the backup was built from. If the user changed
+ * tabs/workspaces during the await, rebuild — otherwise Undo would drop state
+ * that existed before the mutation. Gives up after PREV_CAPTURE_ATTEMPTS builds.
+ *
+ * Nothing is persisted here: the caller writes the returned backup right before
+ * mutating the stores, so a refused restore leaves the existing `-prev` intact
+ * (spec §6).
  */
-async function writeStablePrev(now: number, build: RestoreDeps['buildSnapshotFn']): Promise<void> {
+async function captureStablePrev(
+  now: number,
+  build: RestoreDeps['buildSnapshotFn'],
+): Promise<WorkspaceSnapshot> {
   for (let attempt = 0; attempt < PREV_CAPTURE_ATTEMPTS; attempt++) {
     const capturedFrom = worldRefs()
-    await writeDeviceStatePrev(now, build)
-    if (sameWorld(capturedFrom, worldRefs())) return
+    const candidate = await buildDeviceStatePrev(now, build)
+    if (sameWorld(capturedFrom, worldRefs())) return candidate
   }
   throw new Error('workspace changed during restore; try again')
 }
@@ -117,10 +124,11 @@ async function runDeviceStateRestore<Extra extends object>(
 
       let extra: Extra
       try {
-        // Back up the current world (structure-only, §4.4) before any store mutation.
-        await writeStablePrev(now, deps?.buildSnapshotFn)
+        // Capture a stable backup of the current world (structure-only, §4.4).
+        const prev = await captureStablePrev(now, deps?.buildSnapshotFn)
         // No await from here to replaceTabSnapshot: the world `-prev` was built
         // from is exactly the world buildNext reads and the mutation replaces.
+        writePrevSnapshot(prev)
         const built = buildNext(rewritten, now)
         extra = built.extra
         replaceTabSnapshot(built.next)

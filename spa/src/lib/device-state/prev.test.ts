@@ -3,12 +3,13 @@ import { createSession, listSessions } from '../host-api'
 import type { PaneContent, Tab } from '../../types/tab'
 import type { WorkspaceSnapshot } from '../snapshot/types'
 import { readPrevSnapshot } from '../snapshot/storage'
+import { browserStorage } from '../storage/browser-backend'
 import { undoLastRestore } from '../snapshot/restore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostStore } from '../../stores/useHostStore'
-import { writeDeviceStatePrev } from './prev'
+import { buildDeviceStatePrev, writeDeviceStatePrev } from './prev'
 
 vi.mock('../host-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../host-api')>()),
@@ -58,6 +59,36 @@ const resetStores = (): void => {
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
 }
+
+describe('buildDeviceStatePrev', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('returns the build output with every sessionMeta entry restorable:false and never touches storage', async () => {
+    const built = world()
+    const pristine = structuredClone(built)
+    const build = vi.fn(async () => built)
+    const setItem = vi.spyOn(browserStorage, 'setItem')
+
+    const prev = await buildDeviceStatePrev(42, build)
+
+    expect(build).toHaveBeenCalledWith(42)
+    const expected = structuredClone(pristine)
+    for (const perHost of Object.values(expected.sessionMeta)) {
+      for (const m of Object.values(perHost)) m.restorable = false
+    }
+    expect(prev).toEqual(expected)
+    expect(built).toEqual(pristine)
+    expect(setItem).not.toHaveBeenCalled()
+    expect(readPrevSnapshot()).toBeNull()
+  })
+})
 
 describe('writeDeviceStatePrev', () => {
   beforeEach(() => {

@@ -4,7 +4,8 @@ import type { Session } from '../host-api'
 import type { PaneContent, Tab } from '../../types/tab'
 import type { WorkspaceSnapshot } from '../snapshot/types'
 import { RestoreError } from '../snapshot/types'
-import { readPrevSnapshot, writePrevSnapshot } from '../snapshot/storage'
+import { SNAPSHOT_PREV_KEY, readPrevSnapshot, writePrevSnapshot } from '../snapshot/storage'
+import { browserStorage } from '../storage/browser-backend'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useSessionStore } from '../../stores/useSessionStore'
@@ -137,6 +138,12 @@ const storeBuild = (onRead?: (call: number) => void) => {
     await Promise.resolve()
     return { version: 1, capturedAt: now, tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId, sessionMeta: {} }
   })
+}
+
+/** Spy on storage writes; returns a getter for how many hit the `-prev` key. */
+const countPrevWrites = (): (() => number) => {
+  const spy = vi.spyOn(browserStorage, 'setItem')
+  return () => spy.mock.calls.filter(([key]) => key === SNAPSHOT_PREV_KEY).length
 }
 
 const openTab = (id: string): Tab => {
@@ -306,20 +313,24 @@ describe('restoreDeviceStateReplace', () => {
   it('stable world → the backup is built exactly once', async () => {
     vi.mocked(listSessions).mockResolvedValue([])
     const build = storeBuild()
+    const prevWrites = countPrevWrites()
 
     await restoreDeviceStateReplace(incoming(), { now: 5, buildSnapshotFn: build })
 
     expect(build).toHaveBeenCalledTimes(1)
+    expect(prevWrites()).toBe(1)
     expect(readPrevSnapshot()?.tabOrder).toEqual(['L1'])
   })
 
   it('tab opened while the backup is being built → -prev is rebuilt and contains it', async () => {
     vi.mocked(listSessions).mockResolvedValue([])
     const build = storeBuild((call) => { if (call === 1) openTab('LATE') })
+    const prevWrites = countPrevWrites()
 
     await restoreDeviceStateReplace(incoming(), { now: 5, buildSnapshotFn: build })
 
     expect(build).toHaveBeenCalledTimes(2)
+    expect(prevWrites()).toBe(1) // the unstable first capture is never persisted
     const prev = readPrevSnapshot()
     expect(prev?.tabOrder).toEqual(['L1', 'LATE'])
     expect(prev?.tabs.LATE).toBeDefined()
@@ -330,6 +341,7 @@ describe('restoreDeviceStateReplace', () => {
     vi.mocked(listSessions).mockResolvedValue([])
     const build = storeBuild((call) => { openTab(`U${call}`) })
     const tabSet = vi.spyOn(useTabStore, 'setState')
+    const prevWrites = countPrevWrites()
 
     let caught: unknown
     try {
@@ -346,6 +358,9 @@ describe('restoreDeviceStateReplace', () => {
     expect(build).toHaveBeenCalledTimes(3)
     expect(tabSet).toHaveBeenCalledTimes(3) // only the user's own edits; no replaceTabSnapshot
     expect(useTabStore.getState().tabOrder).toEqual(['L1', 'U1', 'U2', 'U3'])
+    // A refused restore must not overwrite the user's existing undo backup.
+    expect(prevWrites()).toBe(0)
+    expect(readPrevSnapshot()).toEqual(seededPrev())
     expect(useWorkspaceStore.getState().workspaces).toEqual(localWorld().workspaces)
     expect(useSessionStore.getState().sessions).toEqual({})
     expect(useRebuildStore.getState().lockedBy).toBeNull()
@@ -542,10 +557,12 @@ describe('restoreDeviceStateMerge', () => {
     vi.mocked(listSessions).mockResolvedValue([])
     let late: Tab | undefined
     const build = storeBuild((call) => { if (call === 1) late = openTab('LATE') })
+    const prevWrites = countPrevWrites()
 
     await restoreDeviceStateMerge(mergeIncoming(), deps({ buildSnapshotFn: build }))
 
     expect(build).toHaveBeenCalledTimes(2)
+    expect(prevWrites()).toBe(1)
     const prev = readPrevSnapshot()
     expect(prev?.tabOrder).toEqual(['L1', 'LATE'])
     expect(prev?.tabs.LATE).toEqual(late)
@@ -557,10 +574,34 @@ describe('restoreDeviceStateMerge', () => {
   it('stable world → the backup is built exactly once', async () => {
     vi.mocked(listSessions).mockResolvedValue([])
     const build = storeBuild()
+    const prevWrites = countPrevWrites()
 
     await restoreDeviceStateMerge(mergeIncoming(), deps({ buildSnapshotFn: build }))
 
     expect(build).toHaveBeenCalledTimes(1)
+    expect(prevWrites()).toBe(1)
+  })
+
+  it('world keeps changing during every backup build → RestoreError after 3 builds; existing -prev untouched', async () => {
+    vi.mocked(listSessions).mockResolvedValue([])
+    const build = storeBuild((call) => { openTab(`U${call}`) })
+    const prevWrites = countPrevWrites()
+
+    let caught: unknown
+    try {
+      await restoreDeviceStateMerge(mergeIncoming(), deps({ buildSnapshotFn: build }))
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(RestoreError)
+    expect(((caught as RestoreError).cause as Error).message).toBe('workspace changed during restore; try again')
+    expect(build).toHaveBeenCalledTimes(3)
+    expect(prevWrites()).toBe(0)
+    expect(readPrevSnapshot()).toEqual(seededPrev())
+    expect(useTabStore.getState().tabOrder).toEqual(['L1', 'U1', 'U2', 'U3'])
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wsW'])
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
   it('writes structure-only -prev of the current world before stores change', async () => {
