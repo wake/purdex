@@ -20,9 +20,17 @@ export interface NexSseBackoff {
   jitter: number
   /** A connection open at least this long resets the backoff. */
   stableMs: number
+  /**
+   * No bytes (frames or `: keepalive` comments) received for this long on an
+   * `open` connection → treated as a dead half-open socket (laptop sleep,
+   * Tailscale path change never surfaces as a network error) and force a
+   * reconnect. The Nexen server writes `: keepalive` every 15 s; default
+   * gives it three misses of headroom.
+   */
+  idleMs: number
 }
 
-const DEFAULT_BACKOFF: NexSseBackoff = { initialMs: 1000, maxMs: 30000, jitter: 0.2, stableMs: 10000 }
+const DEFAULT_BACKOFF: NexSseBackoff = { initialMs: 1000, maxMs: 30000, jitter: 0.2, stableMs: 10000, idleMs: 45000 }
 
 export interface NexSseOptions {
   hostId: string
@@ -58,6 +66,11 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
   let controller: AbortController | null = null
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+
+  const clearIdleTimer = () => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null }
+  }
 
   const status = (s: NexSseStatus, err?: Error) => {
     if (closed && s !== 'closed') return
@@ -109,10 +122,25 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
     const decoder = new TextDecoder()
     reader = res.body.getReader()
     let loopErr: Error | undefined
+    let idleTimedOut = false
+    // Resets on every chunk received (comment-only keepalives included — we
+    // reset on bytes, not on parsed frames); expiry means the socket went
+    // half-open (no error, no more data) and we force a reconnect.
+    const resetIdleTimer = () => {
+      clearIdleTimer()
+      idleTimer = setTimeout(() => {
+        idleTimer = null
+        idleTimedOut = true
+        controller?.abort()
+        void reader?.cancel().catch(() => {})
+      }, backoff.idleMs)
+    }
+    resetIdleTimer()
     try {
       for (;;) {
         const { value, done } = await reader.read()
         if (done) break
+        resetIdleTimer()
         for (const frame of parser.push(decoder.decode(value, { stream: true }))) {
           if (closed) return
           opts.onFrame(frame)
@@ -126,9 +154,13 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
       // under the same X-Pdx-Client once scheduleReconnect() opens a new one.
       loopErr = e instanceof Error ? e : new Error(String(e))
     } finally {
+      clearIdleTimer()
       reader = null
     }
     if (closed) return
+    // An idle-timeout cancel() resolves the pending read() with `done: true`
+    // rather than rejecting it, so surface the error here for the caller.
+    if (idleTimedOut && !loopErr) loopErr = new Error('nex sse: idle timeout')
     if (loopErr) {
       controller?.abort() // no-op if the body already errored/aborted itself
       console.warn('nex sse: stream error, reconnecting', loopErr)
@@ -144,6 +176,7 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
       if (closed) return
       closed = true
       if (timer) { clearTimeout(timer); timer = null }
+      clearIdleTimer()
       controller?.abort()
       // abort() alone does not wake a read() that is already pending on a
       // locked reader (and test streams may not observe the signal at all);

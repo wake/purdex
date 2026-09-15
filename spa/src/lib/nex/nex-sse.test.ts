@@ -35,6 +35,14 @@ function sseResponse(chunks: string[], opts?: { hang?: boolean }): Response {
   return new Response(streamOf(chunks, opts), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
 }
 
+/** A stream whose chunks/close are driven by the test, to simulate spaced-out keepalives. */
+function controllableStream(): { stream: ReadableStream<Uint8Array>; push: (s: string) => void; end: () => void } {
+  const enc = new TextEncoder()
+  let ctrlRef!: ReadableStreamDefaultController<Uint8Array>
+  const stream = new ReadableStream<Uint8Array>({ start(ctrl) { ctrlRef = ctrl } })
+  return { stream, push: (s: string) => ctrlRef.enqueue(enc.encode(s)), end: () => ctrlRef.close() }
+}
+
 describe('nex-sse', () => {
   let hostId: string
   beforeEach(() => {
@@ -154,6 +162,82 @@ describe('nex-sse', () => {
     expect(err).toBeInstanceOf(Error)
     await vi.advanceTimersByTimeAsync(1000)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('aborts and reconnects after idleMs of silence (a half-open connection past the keepalive interval)', async () => {
+    // The first chunk arrives, then nothing — a half-open TCP connection
+    // after laptop sleep / path change: reader.read() would otherwise wait
+    // forever and the pane would sit at 'open' indefinitely.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(sseResponse(['id: 1\nevent: user\ndata: {}\n\n'], { hang: true }))
+      .mockResolvedValueOnce(sseResponse([], { hang: true }))
+    const statuses: Array<[string, Error | undefined]> = []
+    openNexSse({
+      hostId, url: '/api/nex/v1/events', getLastEventId: () => null,
+      onFrame: () => {},
+      onStatus: (s, err) => statuses.push([s, err]),
+      fetchImpl, backoff: { initialMs: 1000, jitter: 0, idleMs: 5000 },
+    })
+    await vi.advanceTimersByTimeAsync(0) // connect, open, read the one chunk
+    expect(fetchImpl.mock.calls[0][1].signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(4999)
+    expect(fetchImpl.mock.calls[0][1].signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchImpl.mock.calls[0][1].signal.aborted).toBe(true)
+    const reconnecting = statuses.filter(([s]) => s === 'reconnecting')
+    expect(reconnecting).toHaveLength(1)
+    const [, err] = reconnecting[0]
+    expect(err).toBeInstanceOf(Error)
+    expect(err?.message).toMatch(/idle/)
+    await vi.advanceTimersByTimeAsync(1000) // reconnect backoff
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('resets the idle timer on every chunk, so periodic keepalives keep the connection open', async () => {
+    const { stream, push } = controllableStream()
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(stream, { status: 200 }))
+    const onStatus = vi.fn()
+    const h = openNexSse({
+      hostId, url: '/api/nex/v1/events', getLastEventId: () => null, onFrame: () => {}, onStatus,
+      fetchImpl, backoff: { jitter: 0, idleMs: 5000 },
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    for (let i = 0; i < 3; i++) {
+      push(': keepalive\n\n')
+      await vi.advanceTimersByTimeAsync(4000) // idleMs - 1000, repeated past idleMs total
+    }
+    expect(fetchImpl.mock.calls[0][1].signal.aborted).toBe(false)
+    expect(onStatus.mock.calls.some((c) => c[0] === 'reconnecting')).toBe(false)
+    h.close()
+  })
+
+  it('resets backoff to initialMs after a connection stayed open past stableMs, even under idle keepalives', async () => {
+    const { stream, push, end } = controllableStream()
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(sseResponse([]))                       // ends immediately -> attempt 0->1
+      .mockResolvedValueOnce(new Response(stream, { status: 200 })) // long stable connection
+      .mockResolvedValueOnce(sseResponse([], { hang: true }))
+    const statuses: string[] = []
+    openNexSse({
+      hostId, url: '/api/nex/v1/events', getLastEventId: () => null,
+      onFrame: () => {}, onStatus: (s) => statuses.push(s), fetchImpl,
+      backoff: { initialMs: 1000, maxMs: 30000, jitter: 0, stableMs: 10000, idleMs: 60000 },
+    })
+    await vi.advanceTimersByTimeAsync(0)    // fetch #1 ends -> reconnect scheduled at 1000ms (attempt was 0)
+    await vi.advanceTimersByTimeAsync(1000) // fetch #2 connects and opens
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    for (let i = 0; i < 3; i++) {
+      push(': keepalive\n\n')
+      await vi.advanceTimersByTimeAsync(4000) // 12s total, past stableMs (10s)
+    }
+    end()
+    await vi.advanceTimersByTimeAsync(0) // stream ends -> attempt reset to 0 (stayed open >= stableMs)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(fetchImpl).toHaveBeenCalledTimes(2) // if attempt had NOT reset, next backoff would be 2000ms
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
+    expect(statuses.at(-1)).toBe('open')
   })
 
   it('close() while the reader is blocked cancels it, emits closed once and never reconnects', async () => {
