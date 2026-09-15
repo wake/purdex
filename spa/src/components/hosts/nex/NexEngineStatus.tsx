@@ -107,7 +107,7 @@ export default function NexEngineStatus({ hostId, info, onRefresh }: NexEngineSt
       {state === 'ready' && (
         <div>
           <Field label={t('hosts.nex.status.phase')}>
-            <span className="text-sm text-text-primary">{caps?.phase ?? '—'}</span>
+            <span className="text-sm text-text-primary">{caps ? `${caps.phase} · ${caps.host_id}` : '—'}</span>
           </Field>
           <Field label={t('hosts.nex.status.account')}>
             <span className="text-sm text-text-primary">{host?.active_account || '—'}</span>
@@ -125,7 +125,7 @@ export default function NexEngineStatus({ hostId, info, onRefresh }: NexEngineSt
           </Field>
           <Field label={t('hosts.nex.status.profiles')}>
             <span className="text-sm text-text-primary">
-              {caps ? `${caps.sandbox_default_profile} / ${caps.sandbox_max_profile}` : '—'}
+              {info?.effective ? `${info.effective.default_profile} / ${info.effective.max_profile}` : '—'}
             </span>
           </Field>
           <Field label={t('hosts.nex.status.lease_ttl')}>
