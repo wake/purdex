@@ -1,4 +1,5 @@
 import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
+import { HostColorMarkSetting } from './HostColorMarkSetting'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
@@ -31,6 +32,14 @@ export function TerminalSection() {
   const setDynamicTabName = useUISettingsStore((s) => s.setDynamicTabName)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
   const setTabNameTooltipMode = useUISettingsStore((s) => s.setTabNameTooltipMode)
+  const hostColorSidebarStyle = useUISettingsStore((s) => s.hostColorSidebarStyle)
+  const setHostColorSidebarStyle = useUISettingsStore((s) => s.setHostColorSidebarStyle)
+  const hostColorSidebarWidth = useUISettingsStore((s) => s.hostColorSidebarWidth)
+  const setHostColorSidebarWidth = useUISettingsStore((s) => s.setHostColorSidebarWidth)
+  const hostColorTabBarStyle = useUISettingsStore((s) => s.hostColorTabBarStyle)
+  const setHostColorTabBarStyle = useUISettingsStore((s) => s.setHostColorTabBarStyle)
+  const hostColorTabBarWidth = useUISettingsStore((s) => s.hostColorTabBarWidth)
+  const setHostColorTabBarWidth = useUISettingsStore((s) => s.setHostColorTabBarWidth)
   const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
   const setShowAgentTitleInStatusBar = useUISettingsStore((s) => s.setShowAgentTitleInStatusBar)
 
@@ -126,6 +135,25 @@ export function TerminalSection() {
       <SettingItem label={t('settings.terminal.tab_indicator.label')} description={t('settings.terminal.tab_indicator.desc')}>
         <SegmentControl options={TAB_INDICATOR_OPTIONS} value={tabIndicatorStyle} onChange={setTabIndicatorStyle} />
       </SettingItem>
+
+      <HostColorMarkSetting
+        label={t('settings.terminal.host_color_mark.sidebar.label')}
+        description={t('settings.terminal.host_color_mark.sidebar.desc')}
+        style={hostColorSidebarStyle}
+        width={hostColorSidebarWidth}
+        onStyleChange={setHostColorSidebarStyle}
+        onWidthChange={setHostColorSidebarWidth}
+        testIdPrefix="host-color-sidebar"
+      />
+      <HostColorMarkSetting
+        label={t('settings.terminal.host_color_mark.tab_bar.label')}
+        description={t('settings.terminal.host_color_mark.tab_bar.desc')}
+        style={hostColorTabBarStyle}
+        width={hostColorTabBarWidth}
+        onStyleChange={setHostColorTabBarStyle}
+        onWidthChange={setHostColorTabBarWidth}
+        testIdPrefix="host-color-tabbar"
+      />
 
       <SettingItem label={t('settings.terminal.dynamic_tab_name.label')} description={t('settings.terminal.dynamic_tab_name.desc')}>
         <ToggleSwitch label={t('settings.terminal.dynamic_tab_name.label')} checked={dynamicTabName} onChange={setDynamicTabName} />

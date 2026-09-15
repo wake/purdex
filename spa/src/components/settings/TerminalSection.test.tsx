@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TerminalSection } from './TerminalSection'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 
@@ -172,4 +172,53 @@ describe('TerminalSection', () => {
     expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(true)
   })
 
+  describe('host color mark settings', () => {
+    // Option order in each SegmentControl: gradient, left-line, bottom-line, none
+    const STYLE_ORDER = ['gradient', 'left-line', 'bottom-line', 'none'] as const
+    const SURFACES = [
+      { name: 'sidebar', styleKey: 'hostColorSidebarStyle', widthKey: 'hostColorSidebarWidth' },
+      { name: 'tabbar', styleKey: 'hostColorTabBarStyle', widthKey: 'hostColorTabBarWidth' },
+    ] as const
+
+    beforeEach(() => {
+      useUISettingsStore.setState({
+        hostColorSidebarStyle: 'gradient',
+        hostColorSidebarWidth: 2,
+        hostColorTabBarStyle: 'bottom-line',
+        hostColorTabBarWidth: 2,
+      })
+    })
+
+    function styleButtons(surface: string) {
+      return within(screen.getByTestId(`host-color-${surface}-style`)).getAllByRole('button')
+    }
+
+    it('renders both setting rows after the tab indicator row', () => {
+      render(<TerminalSection />)
+      const sidebar = screen.getByTestId('host-color-sidebar-style')
+      const tabbar = screen.getByTestId('host-color-tabbar-style')
+      expect(styleButtons('sidebar')).toHaveLength(4)
+      expect(styleButtons('tabbar')).toHaveLength(4)
+      expect(sidebar.compareDocumentPosition(tabbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      const dynamic = screen.getByLabelText('Dynamic tab name')
+      expect(tabbar.compareDocumentPosition(dynamic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    // Focused behaviour (width visibility, clamping) lives in HostColorMarkSetting.test.tsx;
+    // here we only verify each row is wired to the right store fields.
+    for (const surface of SURFACES) {
+      it(`${surface.name}: writes style and width to its own store fields`, () => {
+        const otherStyleKey = surface.name === 'sidebar' ? 'hostColorTabBarStyle' : 'hostColorSidebarStyle'
+        const otherWidthKey = surface.name === 'sidebar' ? 'hostColorTabBarWidth' : 'hostColorSidebarWidth'
+        useUISettingsStore.setState({ [surface.styleKey]: 'none', [otherStyleKey]: 'none' })
+        render(<TerminalSection />)
+        fireEvent.click(styleButtons(surface.name)[STYLE_ORDER.indexOf('left-line')])
+        expect(useUISettingsStore.getState()[surface.styleKey]).toBe('left-line')
+        expect(useUISettingsStore.getState()[otherStyleKey]).toBe('none')
+        fireEvent.change(screen.getByTestId(`host-color-${surface.name}-width`), { target: { value: '5' } })
+        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(5)
+        expect(useUISettingsStore.getState()[otherWidthKey]).toBe(2)
+      })
+    }
+  })
 })
