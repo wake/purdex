@@ -83,4 +83,32 @@ describe('NexEngineStatus', () => {
     expect(onRefresh).toHaveBeenCalled()
     await waitFor(() => expect(api.fetchNexHost).toHaveBeenCalledTimes(2))
   })
+
+  it('drops the previous host\'s account and phase when the next host\'s fetch fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { rerender } = render(<NexEngineStatus hostId="a" info={ready} onRefresh={() => {}} />)
+    await waitFor(() => expect(screen.getByText('wake@example.com')).toBeInTheDocument())
+    expect(screen.getByText('P1a · mlab')).toBeInTheDocument()
+
+    vi.mocked(api.fetchNexCapabilities).mockRejectedValueOnce(new Error('host b down'))
+    rerender(<NexEngineStatus hostId="b" info={ready} onRefresh={() => {}} />)
+
+    await waitFor(() => expect(api.fetchNexCapabilities).toHaveBeenCalledWith('b'))
+    await waitFor(() => expect(screen.queryByText('wake@example.com')).not.toBeInTheDocument())
+    expect(screen.queryByText('P1a · mlab')).not.toBeInTheDocument()
+    warn.mockRestore()
+  })
+
+  it('ignores a stale response for the previous host that resolves after the switch', async () => {
+    let resolveA!: (h: Awaited<ReturnType<typeof api.fetchNexHost>>) => void
+    vi.mocked(api.fetchNexHost).mockImplementationOnce(() => new Promise((r) => { resolveA = r }))
+    const { rerender } = render(<NexEngineStatus hostId="a" info={ready} onRefresh={() => {}} />)
+    vi.mocked(api.fetchNexHost).mockResolvedValueOnce({ active_account: 'b@example.com', quota: null })
+    rerender(<NexEngineStatus hostId="b" info={ready} onRefresh={() => {}} />)
+    await waitFor(() => expect(screen.getByText('b@example.com')).toBeInTheDocument())
+    resolveA({ active_account: 'stale-a@example.com', quota: null })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByText('stale-a@example.com')).not.toBeInTheDocument()
+    expect(screen.getByText('b@example.com')).toBeInTheDocument()
+  })
 })

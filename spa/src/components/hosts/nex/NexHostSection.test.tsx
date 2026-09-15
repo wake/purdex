@@ -181,6 +181,15 @@ describe('NexHostSection', () => {
     expect(screen.queryByText('Configuration')).not.toBeInTheDocument()
   })
 
+  it('enables the executions table for an older daemon whose info has no ready field', async () => {
+    const legacy = { configured: true, mounted: true, init_error: '', effective: null } as unknown as NexInfo
+    mockFetchInfo.mockImplementation(() => Promise.resolve(infoResponse(legacy)))
+    render(<NexHostSection hostId={HOST_ID} />)
+    await screen.findByText('Engine')
+    expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/ready/i)
+    expect(screen.getByTestId('executions-stub')).toHaveAttribute('data-enabled', 'true')
+  })
+
   it('Refresh on the status card refetches /api/info but not /api/config again', async () => {
     render(<NexHostSection hostId={HOST_ID} />)
     await screen.findByText('Engine')

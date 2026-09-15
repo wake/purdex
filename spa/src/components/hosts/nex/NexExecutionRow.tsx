@@ -1,5 +1,5 @@
 // spa/src/components/hosts/nex/NexExecutionRow.tsx — one row of the Nex
-// executions table (Task 6). Split out of NexExecutionsTable.tsx so the
+// executions table (spec §4.4.3). Split out of NexExecutionsTable.tsx so the
 // table shell (fetching, SSE refresh, include-archived) stays small even as
 // this file grows more per-cell formatting.
 import { useI18nStore } from '../../../stores/useI18nStore'

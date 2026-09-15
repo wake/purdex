@@ -1,4 +1,4 @@
-// spa/src/components/hosts/nex/NexExecutionsTable.tsx — P-B.3 Task 6: the
+// spa/src/components/hosts/nex/NexExecutionsTable.tsx — the
 // third card of the Host → Nex sub-page. Lists executions for `hostId` and
 // keeps the list fresh via the site-wide Nex SSE stream, which is a refresh
 // signal only (nexen/api/sse.go:118,195) — frame contents are never applied,

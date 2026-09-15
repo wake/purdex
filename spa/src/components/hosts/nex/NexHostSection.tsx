@@ -12,6 +12,7 @@ import NexEngineStatus from './NexEngineStatus'
 import NexConfigForm from './NexConfigForm'
 import NexExecutionsTable from './NexExecutionsTable'
 import { normalizeNexConfig } from './nex-config-diff'
+import { isNexReady } from './nex-ready'
 
 interface Props {
   hostId: string
@@ -216,7 +217,7 @@ export function NexHostSection({ hostId }: Props) {
       )}
       <NexEngineStatus key={generation} hostId={hostId} info={info} onRefresh={handleRefresh} />
       <NexConfigForm hostId={hostId} config={config} info={info} onSaved={handleConfigSaved} />
-      <NexExecutionsTable hostId={hostId} enabled={info?.ready ?? false} />
+      <NexExecutionsTable hostId={hostId} enabled={isNexReady(info)} />
     </div>
   )
 }

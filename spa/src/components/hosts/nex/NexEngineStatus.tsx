@@ -5,6 +5,7 @@ import { fetchNexCapabilities, fetchNexHost } from '../../../lib/nex/nex-api'
 import type { NexCapabilities, NexHostInfo } from '../../../lib/nex/types'
 import type { NexInfo } from '../../../lib/host-api'
 import { Field } from '../form-fields'
+import { isNexReady } from './nex-ready'
 
 export interface NexEngineStatusProps {
   hostId: string
@@ -14,18 +15,10 @@ export interface NexEngineStatusProps {
 
 type BadgeState = 'disabled' | 'not_running' | 'unavailable' | 'ready'
 
-// A daemon older than P-B.3 reports only `configured`/`mounted` in
-// `/api/info.nex` (spec §4.4.2); a mounted module there is serving.
-function isReady(info: NexInfo | null): boolean {
-  if (!info) return false
-  if (info.ready === undefined) return info.mounted
-  return info.ready
-}
-
 function badgeState(info: NexInfo | null): BadgeState {
   if (!info || !info.configured) return 'disabled'
   if (!info.mounted) return 'not_running'
-  if (!isReady(info)) return 'unavailable'
+  if (!isNexReady(info)) return 'unavailable'
   return 'ready'
 }
 
@@ -57,12 +50,21 @@ export default function NexEngineStatus({ hostId, info, onRefresh }: NexEngineSt
   const [host, setHost] = useState<NexHostInfo | null>(null)
   const [caps, setCaps] = useState<NexCapabilities | null>(null)
 
-  const ready = isReady(info)
+  const ready = isNexReady(info)
+
+  // Clear the previous fetch's host/caps the moment a new one starts (host
+  // switch, ready flip, Refresh) — using the render-time adjust-state idiom
+  // so the effect below only fetches — so another host's account or phase
+  // is never shown while this host's request is pending or after it fails.
+  const fetchKey = `${hostId}:${ready}:${tick}`
+  const [prevFetchKey, setPrevFetchKey] = useState(fetchKey)
+  if (fetchKey !== prevFetchKey) {
+    setPrevFetchKey(fetchKey)
+    setHost(null)
+    setCaps(null)
+  }
 
   useEffect(() => {
-    // Not ready: nothing to fetch. Stale host/caps state from a previous
-    // `ready` window is harmless — the card only renders it in the 'ready'
-    // branch below, and a later ready transition refetches and overwrites it.
     if (!ready) return
     let cancelled = false
     Promise.all([fetchNexHost(hostId), fetchNexCapabilities(hostId)])
@@ -75,6 +77,8 @@ export default function NexEngineStatus({ hostId, info, onRefresh }: NexEngineSt
         // Nexen can be down (network, 503) even when `info.ready` said it
         // was up moments ago — the card degrades to empty rows, never throws.
         if (cancelled) return
+        setHost(null)
+        setCaps(null)
         console.warn('NexEngineStatus: failed to load Nexen host/capabilities', err)
       })
     return () => {

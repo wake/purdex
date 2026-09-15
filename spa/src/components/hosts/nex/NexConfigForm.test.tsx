@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import NexConfigForm from './NexConfigForm'
 import { emptyNexConfig } from './nex-config-diff'
 import * as hostApi from '../../../lib/host-api'
@@ -106,5 +106,50 @@ describe('NexConfigForm', () => {
     const [, , secondInit] = vi.mocked(hostApi.hostFetch).mock.calls[1]
     const secondBody = JSON.parse(secondInit!.body as string)
     expect(secondBody.nex.claude_bin).toBe('/new/claude')
+  })
+})
+
+describe('NexConfigForm save across a host change', () => {
+  function deferredResponse() {
+    let resolve!: (r: Response) => void
+    const promise = new Promise<Response>((r) => { resolve = r })
+    return { promise, resolve }
+  }
+
+  it('ignores a PUT response for host A once the form shows host B', async () => {
+    const pending = deferredResponse()
+    vi.mocked(hostApi.hostFetch).mockReturnValueOnce(pending.promise)
+    const onSaved = vi.fn()
+    const { rerender } = render(<NexConfigForm hostId="a" config={saved} info={info} onSaved={onSaved} />)
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalledTimes(1))
+
+    const hostB = { ...emptyNexConfig(), enabled: false, repo_roots: ['/b'], sandbox: { max_profile: 'trusted', default_profile: 'trusted' } }
+    rerender(<NexConfigForm hostId="b" config={hostB} info={info} onSaved={onSaved} />)
+
+    await act(async () => {
+      pending.resolve(new Response(JSON.stringify({ nex: { ...saved, sandbox: { max_profile: 'handoff', default_profile: 'readonly' } } }), { status: 200 }))
+      await pending.promise
+    })
+
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(screen.queryByText(/^saved/i)).not.toBeInTheDocument()
+    expect(screen.getByDisplayValue('/b')).toBeInTheDocument()
+    expect((screen.getByLabelText(/default profile/i) as HTMLSelectElement).value).toBe('trusted')
+  })
+
+  it('ignores a PUT response after unmount', async () => {
+    const pending = deferredResponse()
+    vi.mocked(hostApi.hostFetch).mockReturnValueOnce(pending.promise)
+    const onSaved = vi.fn()
+    const { unmount } = render(<NexConfigForm hostId="a" config={saved} info={info} onSaved={onSaved} />)
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalledTimes(1))
+    unmount()
+    await act(async () => {
+      pending.resolve(new Response(JSON.stringify({ nex: saved }), { status: 200 }))
+      await pending.promise
+    })
+    expect(onSaved).not.toHaveBeenCalled()
   })
 })

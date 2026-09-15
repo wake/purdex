@@ -79,26 +79,36 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
   const hostName = useHostStore((s) => s.hosts[hostId]?.name ?? hostId)
 
   const [draft, setDraft] = useState<NexConfig>(config ?? emptyNexConfig())
-  // The last known persisted value. Starts as the config prop and is only
-  // ever advanced by a successful save; a re-sync from a changed prop is skipped while the
-  // user has unsaved edits (dirtyRef), same pattern as
-  // EditorHomePathHostSection.
-  const [committed, setCommitted] = useState<NexConfig | undefined>(config)
   const [saving, setSaving] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [fieldError, setFieldError] = useState<FieldError | null>(null)
+  // A re-sync from a changed `config` prop is skipped while the user has
+  // unsaved edits, same pattern as EditorHomePathHostSection.
   const dirtyRef = useRef(false)
   // Bumped by every update() call. handleSave snapshots this when a save
   // starts; if it has moved by the time the response comes back, the user
   // edited a field while the PUT was in flight and that newer draft must
-  // win — the response only updates `committed` (the last persisted value)
-  // and dirty stays true so the next save resubmits it.
+  // win — dirty stays true so the next save resubmits it.
   const editCounterRef = useRef(0)
+  // The host the form currently edits, and whether it is still mounted: a
+  // PUT response that comes back after either changed belongs to a form
+  // that no longer exists and must not touch this one's draft or notify
+  // the parent.
+  const hostIdRef = useRef(hostId)
+  const mountedRef = useRef(false)
+  useEffect(() => {
+    hostIdRef.current = hostId
+  }, [hostId])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   useEffect(() => {
     if (dirtyRef.current) return
     setDraft(config ?? emptyNexConfig())
-    setCommitted(config)
   }, [config])
 
   const update = (patch: Partial<NexConfig>) => {
@@ -116,6 +126,8 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
     setFieldError(null)
     const body = trimForSubmit(draft)
     const startCounter = editCounterRef.current
+    const startHostId = hostId
+    const stale = () => !mountedRef.current || hostIdRef.current !== startHostId
     try {
       const res = await hostFetch(hostId, '/api/config', {
         method: 'PUT',
@@ -124,11 +136,10 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
       })
       if (res.ok) {
         const data = await res.json()
+        if (stale()) return
         const nextNex: NexConfig = data.nex ? normalizeNexConfig(data.nex) : body
-        // Always advance the persisted-value tracker and notify the caller
-        // — but only replace the draft (and clear dirty) if nothing changed
-        // it while this request was in flight.
-        setCommitted(nextNex)
+        // Always notify the caller — but only replace the draft (and clear
+        // dirty) if nothing changed it while this request was in flight.
         if (editCounterRef.current === startCounter) {
           dirtyRef.current = false
           setDraft(nextNex)
@@ -137,16 +148,18 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
         onSaved(data)
       } else {
         const text = await res.text()
+        if (stale()) return
         setFieldError(parseConfigError(text))
       }
     } catch (err) {
+      if (stale()) return
       setFieldError({ field: null, message: err instanceof Error ? err.message : String(err) })
     } finally {
-      setSaving(false)
+      if (!stale()) setSaving(false)
     }
   }
 
-  const needsRestart = restartRequired(committed, info)
+  const needsRestart = restartRequired(config, info)
 
   return (
     <div className="max-w-2xl">
