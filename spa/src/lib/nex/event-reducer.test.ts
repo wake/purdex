@@ -81,6 +81,14 @@ describe('applyDurableEvent', () => {
     expect(s.lease).toEqual({ leaseId: 'ls_me', expiresAt: 99 })
   })
 
+  it('lease.released with no summary yet does not throw and leaves the local lease untouched', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(1, 'lease.released', { principal_id: 'p' }))
+    expect(s.summary).toBeNull()
+    expect(s.summaryStale).toBe(true)
+    expect(s.lastSeq).toBe(1)
+    expect(s.lease).toBeNull()
+  })
+
   it('result, execution.terminal and execution.error clear pendingSend; sendError is left alone', () => {
     const base: ExecutionState = { ...defaultExecutionState(), pendingSend: true, sendError: { code: 'x', message: 'y' } }
     expect(applyDurableEvent(base, ev(1, 'result', { type: 'result', total_cost_usd: 0.1 })).pendingSend).toBe(false)
@@ -109,6 +117,10 @@ describe('frameToEvent / isLifecycleKind', () => {
   it('also accepts a full eventView wrapper (history item shape) for forward compatibility', () => {
     expect(frameToEvent({ id: '8', event: 'assistant', data: '{"seq":8,"execution_id":"exc_1","kind":"assistant","payload":{"type":"assistant"},"created_at":9}' }))
       .toEqual({ seq: 8, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 9 })
+  })
+  it('treats a bare payload that merely has a "kind" key (no payload object) as the bare-payload path', () => {
+    expect(frameToEvent({ id: '11', event: 'assistant', data: '{"kind":"something","type":"assistant"}' }))
+      .toEqual({ seq: 11, execution_id: '', kind: 'assistant', payload: { kind: 'something', type: 'assistant' }, created_at: 0 })
   })
   it('classifies kinds', () => {
     expect(isLifecycleKind('execution.running')).toBe(true)

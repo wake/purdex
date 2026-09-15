@@ -98,7 +98,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
 
   if (!isLifecycleKind(ev.kind)) {
     next = { ...next, messages: [...next.messages, p as StreamMessage] }
-    if (ev.kind === 'result') next.pendingSend = false
+    if (ev.kind === 'result') next = { ...next, pendingSend: false }
     return next
   }
 
