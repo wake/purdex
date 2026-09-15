@@ -18,9 +18,22 @@ interface Props {
   hostId: string
 }
 
-// Fetches both `/api/info` and `/api/config` for `hostId` and hands the
-// `nex` slice of each to the given setters. `isCancelled` is checked right
-// before each write so a response for a torn-down effect (unmount, hostId
+// `config` starts `undefined` — indistinguishable from "the daemon genuinely
+// has no [nex] section" — so until `/api/config` has actually resolved, the
+// form must not render at all: rendering it against `emptyNexConfig()` and
+// letting the user Save would PUT an empty section over the host's real one
+// (fix round 1, item 1). `loading` also covers the badge: before /api/info
+// resolves, `info` is `null`, which `NexEngineStatus` would otherwise read
+// as "Disabled" rather than "not loaded yet".
+type LoadStatus = 'loading' | 'loaded' | 'failed'
+
+// Fetches both `/api/info` and `/api/config` for `hostId`, hands the `nex`
+// slice of each to the given setters, and records per-request success/
+// failure via the status setters — a non-OK response is treated the same as
+// a network rejection (both used to be silently swallowed as "no data",
+// which is what let a failed /api/config load fall through to rendering the
+// form against an empty draft). `isCancelled` is checked right before each
+// write so a response for a torn-down effect (unmount, hostId/generation
 // change, or a StrictMode dev double-invoke) never lands — this is a plain
 // closed-over `let cancelled = false` per effect run, never a persistent
 // "mounted" ref (a ref set to false in a cleanup with no matching `= true`
@@ -31,22 +44,32 @@ function loadNexData(
   isCancelled: () => boolean,
   setInfo: (info: NexInfo | null) => void,
   setConfig: (config: NexConfig | undefined) => void,
+  setInfoStatus: (status: LoadStatus) => void,
+  setConfigStatus: (status: LoadStatus) => void,
 ) {
   fetchInfo(hostId)
-    .then((r) => (r.ok ? r.json() : null))
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`/api/info: ${r.status}`))))
     .then((data) => {
-      if (isCancelled() || !data) return
+      if (isCancelled()) return
       setInfo(data.nex ?? null)
+      setInfoStatus('loaded')
     })
-    .catch(() => {})
+    .catch(() => {
+      if (isCancelled()) return
+      setInfoStatus('failed')
+    })
 
   hostFetch(hostId, '/api/config')
-    .then((r) => (r.ok ? r.json() : null))
-    .then((data: ConfigData | null) => {
-      if (isCancelled() || !data) return
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`/api/config: ${r.status}`))))
+    .then((data: ConfigData) => {
+      if (isCancelled()) return
       setConfig(data.nex)
+      setConfigStatus('loaded')
     })
-    .catch(() => {})
+    .catch(() => {
+      if (isCancelled()) return
+      setConfigStatus('failed')
+    })
 }
 
 export function NexHostSection({ hostId }: Props) {
@@ -55,11 +78,18 @@ export function NexHostSection({ hostId }: Props) {
 
   const [info, setInfo] = useState<NexInfo | null>(null)
   const [config, setConfig] = useState<NexConfig | undefined>(undefined)
+  const [infoStatus, setInfoStatus] = useState<LoadStatus>('loading')
+  const [configStatus, setConfigStatus] = useState<LoadStatus>('loading')
   // Bumped only on a disconnected→connected transition (see below). Doubles
-  // as the fetch effect's retrigger and as <NexEngineStatus key={generation}>
-  // so the card remounts and re-requests /v1/host + /v1/capabilities even
-  // when `info.ready` itself did not change value across the reconnect
-  // (ruling G).
+  // as the fetch effect's retrigger (which also resets both statuses back to
+  // 'loading', clearing any earlier 'failed') and as
+  // <NexEngineStatus key={generation}> so the card remounts and re-requests
+  // /v1/host + /v1/capabilities even when `info.ready` itself did not change
+  // value across the reconnect (ruling G). The generation bump and the
+  // refetch below happen in the same transition, so the card remounts once
+  // — still showing the *previous* `info` for that one render — and then
+  // re-fetches its own Nexen data once `info` is refreshed; this is the
+  // intended sequencing, not a race.
   const [generation, setGeneration] = useState(0)
 
   // Host reconnect detector, using React's documented "adjusting state
@@ -79,21 +109,56 @@ export function NexHostSection({ hostId }: Props) {
     }
   }
 
+  // Reset both statuses to 'loading' the moment `hostId` or `generation`
+  // changes — same render-time-adjustment idiom as the reconnect detector
+  // above (and for the same reason: doing this inside the fetch effect's
+  // body, even before the async calls, is a synchronous setState-in-effect
+  // that `react-hooks/set-state-in-effect` flags). The effect below is then
+  // left to do only the actual fetch, calling back into state exclusively
+  // from its `.then`/`.catch` callbacks, which the rule accepts.
+  const fetchKey = `${hostId}:${generation}`
+  const [prevFetchKey, setPrevFetchKey] = useState(fetchKey)
+  if (fetchKey !== prevFetchKey) {
+    setPrevFetchKey(fetchKey)
+    setInfoStatus('loading')
+    setConfigStatus('loading')
+  }
+
   // Initial load, reload on `hostId` change (switching hosts), and reload
   // again whenever `generation` is bumped above by a reconnect.
   useEffect(() => {
     let cancelled = false
-    loadNexData(hostId, () => cancelled, setInfo, setConfig)
+    loadNexData(hostId, () => cancelled, setInfo, setConfig, setInfoStatus, setConfigStatus)
     return () => {
       cancelled = true
     }
   }, [hostId, generation])
 
+  // Offline always wins, even when both endpoints loaded successfully
+  // earlier: a disconnected host can't take a config Save or an execution
+  // action, so stale cards would be actively misleading (controller ruling
+  // I). The reconnect path above reloads and re-renders them.
   const isOffline = !runtime || runtime.status !== 'connected'
-  if (isOffline && info === null) {
+  if (isOffline) {
     return (
       <div className="max-w-2xl">
         <p className="text-xs text-text-muted">{t('hosts.load_failed')}</p>
+      </div>
+    )
+  }
+
+  if (infoStatus === 'failed' || configStatus === 'failed') {
+    return (
+      <div className="max-w-2xl">
+        <p className="text-xs text-text-muted">{t('hosts.load_failed')}</p>
+      </div>
+    )
+  }
+
+  if (infoStatus !== 'loaded' || configStatus !== 'loaded') {
+    return (
+      <div className="max-w-2xl">
+        <p className="text-xs text-text-muted">{t('hosts.loading')}</p>
       </div>
     )
   }
@@ -102,14 +167,19 @@ export function NexHostSection({ hostId }: Props) {
   // when its own Refresh button is clicked (it bumps an internal `tick`);
   // this handler only refreshes the daemon-side /api/info.nex data feeding
   // the badge/effective-config state, so the two refreshes don't duplicate
-  // the same request.
+  // the same request. A successful refresh clears a previous 'failed'
+  // status; a failed one sets it (deliberately no unmount/stale-hostId
+  // guard here — deferred, see task-7-report.md).
   const handleRefresh = () => {
     fetchInfo(hostId)
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`/api/info: ${r.status}`))))
       .then((data) => {
-        if (data) setInfo(data.nex ?? null)
+        setInfo(data.nex ?? null)
+        setInfoStatus('loaded')
       })
-      .catch(() => {})
+      .catch(() => {
+        setInfoStatus('failed')
+      })
   }
 
   const handleConfigSaved = (cfg: ConfigData) => {

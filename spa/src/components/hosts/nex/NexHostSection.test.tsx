@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { NexHostSection } from './NexHostSection'
 import { useHostStore } from '../../../stores/useHostStore'
 import type { ConfigData, NexConfig, NexInfo } from '../../../lib/host-api'
@@ -84,6 +84,23 @@ function mockSuccess() {
   })
 }
 
+function configCallCount() {
+  return mockHostFetch.mock.calls.filter((c) => c[1] === '/api/config').length
+}
+
+// Two `useHostStore.setState` calls fired back-to-back with no yield between
+// them (as a bare `disconnected` then `connected` write would be) can land
+// in the same React batch, so the component only ever observes the final
+// value and never renders the intermediate transition — silently defeating
+// the reconnect detector. `act()` forces a synchronous flush after each
+// write so every transition is actually rendered, matching how a real
+// WebSocket status change (one event at a time) drives this in production.
+function setRuntimeStatus(status: 'connected' | 'disconnected' | 'reconnecting' | 'auth-error') {
+  act(() => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status } } })
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   useHostStore.setState({
@@ -106,7 +123,7 @@ afterEach(() => {
 })
 
 describe('NexHostSection', () => {
-  it('renders all three cards and fetches info + config once each on mount', async () => {
+  it('renders all three cards and fetches info + config once each once both have loaded', async () => {
     render(<NexHostSection hostId={HOST_ID} />)
 
     expect(await screen.findByText('Engine')).toBeInTheDocument()
@@ -116,32 +133,64 @@ describe('NexHostSection', () => {
 
     expect(mockFetchInfo).toHaveBeenCalledTimes(1)
     expect(mockFetchInfo).toHaveBeenCalledWith(HOST_ID)
-    expect(mockHostFetch.mock.calls.filter((c) => c[1] === '/api/config')).toHaveLength(1)
+    expect(configCallCount()).toBe(1)
   })
 
-  it('shows the offline message instead of the three cards when there is no data yet', async () => {
-    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
-    mockFetchInfo.mockRejectedValue(new Error('offline'))
-    mockHostFetch.mockRejectedValue(new Error('offline'))
+  it('shows a loading line before /api/info and /api/config resolve, with no misleading badge', () => {
+    // Both requests hang — never resolve during this test.
+    mockFetchInfo.mockImplementation(() => new Promise(() => {}))
+    mockHostFetch.mockImplementation(() => new Promise(() => {}))
 
     render(<NexHostSection hostId={HOST_ID} />)
 
-    await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledTimes(1))
-    expect(screen.getByText('Failed to load')).toBeInTheDocument()
+    expect(screen.getByText('Loading...')).toBeInTheDocument()
+    expect(screen.queryByTestId('nex-status-badge')).not.toBeInTheDocument()
+    expect(screen.queryByText(/disabled/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('Configuration')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('executions-stub')).not.toBeInTheDocument()
+  })
+
+  it('shows hosts.load_failed (never the form) when /api/config rejects even though /api/info resolves', async () => {
+    mockFetchInfo.mockImplementation(() => Promise.resolve(infoResponse(readyInfo)))
+    mockHostFetch.mockImplementation((_hostId, path) => {
+      if (path === '/api/config') return Promise.reject(new Error('config unreachable'))
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
+    })
+
+    render(<NexHostSection hostId={HOST_ID} />)
+
+    await waitFor(() => expect(screen.getByText('Failed to load')).toBeInTheDocument())
+    // No form (and therefore no way to trigger a destructive PUT) and no
+    // other cards either — a failed config load hides all three.
+    expect(screen.queryByText('Configuration')).not.toBeInTheDocument()
     expect(screen.queryByText('Engine')).not.toBeInTheDocument()
     expect(screen.queryByTestId('executions-stub')).not.toBeInTheDocument()
+    expect(mockHostFetch.mock.calls.some((c) => (c[2] as RequestInit | undefined)?.method === 'PUT')).toBe(false)
+  })
+
+  it('a non-OK /api/config response is also treated as a load failure (not silently swallowed)', async () => {
+    mockFetchInfo.mockImplementation(() => Promise.resolve(infoResponse(readyInfo)))
+    mockHostFetch.mockImplementation((_hostId, path) => {
+      if (path === '/api/config') return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) } as Response)
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
+    })
+
+    render(<NexHostSection hostId={HOST_ID} />)
+
+    await waitFor(() => expect(screen.getByText('Failed to load')).toBeInTheDocument())
+    expect(screen.queryByText('Configuration')).not.toBeInTheDocument()
   })
 
   it('Refresh on the status card refetches /api/info but not /api/config again', async () => {
     render(<NexHostSection hostId={HOST_ID} />)
     await screen.findByText('Engine')
     await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledTimes(1))
-    const configCallsBefore = mockHostFetch.mock.calls.filter((c) => c[1] === '/api/config').length
+    const configCallsBefore = configCallCount()
 
     fireEvent.click(screen.getByText('Refresh'))
 
     await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledTimes(2))
-    expect(mockHostFetch.mock.calls.filter((c) => c[1] === '/api/config').length).toBe(configCallsBefore)
+    expect(configCallCount()).toBe(configCallsBefore)
   })
 
   it('saving through the config form persists and updates the restart-required notice', async () => {
@@ -165,29 +214,70 @@ describe('NexHostSection', () => {
     await waitFor(() => expect(screen.getByTestId('nex-restart-required')).toBeInTheDocument())
   })
 
-  it('on a disconnected→connected transition, refetches info/config and remounts the status card', async () => {
+  // Controller ruling I + fix-round-1 item 2, exercised together: offline
+  // always hides the cards — even ones that had already loaded — and a
+  // reconnect reloads both endpoints and remounts the status card (proving
+  // ruling G: the card refetches its own Nexen host/capabilities data a
+  // second time, not just re-rendering with the same badge state).
+  it('offline hides previously-loaded cards; reconnecting reloads /api/info + /api/config and refetches the status card', async () => {
+    // 1) Start offline with nothing ever loaded.
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
-    mockFetchInfo.mockRejectedValueOnce(new Error('offline'))
+    mockFetchInfo.mockRejectedValue(new Error('offline'))
     mockHostFetch.mockRejectedValue(new Error('offline'))
 
     render(<NexHostSection hostId={HOST_ID} />)
-    await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledTimes(1))
     expect(screen.getByText('Failed to load')).toBeInTheDocument()
     expect(nexApi.fetchNexHost).not.toHaveBeenCalled()
 
+    // 2) Reconnect — first successful load. The status card sees `ready`
+    // for the first time and fetches Nexen host/capabilities once.
     mockSuccess()
-    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected' } } })
+    setRuntimeStatus('connected')
 
-    await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledTimes(2))
-    // One failed attempt from the initial (disconnected) mount, one
-    // successful attempt from the reconnect refetch.
-    expect(mockHostFetch.mock.calls.filter((c) => c[1] === '/api/config')).toHaveLength(2)
     await screen.findByText('Engine')
     await screen.findByDisplayValue('/a')
-    // The card only fetches Nexen host/capabilities once it sees `ready`
-    // data — the remount via key={generation} is what makes it fetch again
-    // rather than reusing the badge state from the failed initial mount.
     await waitFor(() => expect(nexApi.fetchNexHost).toHaveBeenCalledTimes(1))
+    const infoCallsAfterFirstConnect = mockFetchInfo.mock.calls.length
+    const configCallsAfterFirstConnect = configCallCount()
+
+    // 3) Disconnect again — even though data is already loaded, the cards
+    // must disappear (ruling I: no stale cards while offline).
+    setRuntimeStatus('disconnected')
+    await waitFor(() => expect(screen.getByText('Failed to load')).toBeInTheDocument())
+    expect(screen.queryByText('Engine')).not.toBeInTheDocument()
+    // Going offline alone must not itself trigger a new fetch attempt.
+    expect(mockFetchInfo.mock.calls.length).toBe(infoCallsAfterFirstConnect)
+    expect(configCallCount()).toBe(configCallsAfterFirstConnect)
+
+    // 4) Reconnect a second time — proves ruling G end-to-end: /api/info and
+    // /api/config are refetched, and NexEngineStatus (remounted via
+    // key={generation}) fetches Nexen host/capabilities a *second* time
+    // rather than reusing its already-fetched state from step 2.
+    setRuntimeStatus('connected')
+
+    await waitFor(() => expect(mockFetchInfo.mock.calls.length).toBe(infoCallsAfterFirstConnect + 1))
+    await waitFor(() => expect(configCallCount()).toBe(configCallsAfterFirstConnect + 1))
+    await screen.findByText('Engine')
+    await waitFor(() => expect(nexApi.fetchNexHost).toHaveBeenCalledTimes(2))
+  })
+
+  it('under StrictMode, a reconnect triggers exactly one extra /api/info + /api/config fetch pair', async () => {
+    render(
+      <StrictMode>
+        <NexHostSection hostId={HOST_ID} />
+      </StrictMode>,
+    )
+    await screen.findByText('Engine')
+    await screen.findByDisplayValue('/a')
+
+    const infoCallsBefore = mockFetchInfo.mock.calls.length
+    const configCallsBefore = configCallCount()
+
+    setRuntimeStatus('disconnected')
+    setRuntimeStatus('connected')
+
+    await waitFor(() => expect(mockFetchInfo.mock.calls.length).toBe(infoCallsBefore + 1))
+    await waitFor(() => expect(configCallCount()).toBe(configCallsBefore + 1))
   })
 
   it('loads data correctly under StrictMode (mount→cleanup→mount safe)', async () => {
