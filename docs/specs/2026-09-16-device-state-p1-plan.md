@@ -36,7 +36,9 @@ func (s *Store) List() ([]Record, error)             // no Payload; updated_at D
 func (s *Store) Get(clientID string) (Record, bool, error)
 func (s *Store) Delete(clientID string) error         // idempotent
 ```
-Equal `capturedAt` overwrites (same-window retry). Tests: spec §7 Go store bullets, `:memory:`.
+Equal `capturedAt` overwrites (same-window retry). `OpenStore` must pin in-memory DBs like `OpenSyncStore`
+(internal/module/sync/store.go:45-47): `if path == ":memory:" { db.SetMaxOpenConns(1) }` — otherwise each pooled
+connection sees a separate empty DB. Tests: spec §7 Go store bullets, `:memory:`.
 
 Commit: `feat(daemon): device state store`
 
@@ -87,9 +89,11 @@ Commit: `feat(spa): device state API client`
 ## T5 — SPA identity + status store
 
 Files: `spa/src/stores/useDeviceStateStore.ts` (+test), `spa/src/lib/device-state/device-name.ts` (+test),
-`spa/src/lib/storage` STORAGE_KEYS (add `DEVICE_STATE: 'purdex-device-state'` following existing naming).
+`spa/src/lib/storage/keys.ts` (add `DEVICE_STATE: 'purdex-device-state'` following existing naming; it is re-exported
+via `spa/src/lib/storage/index.ts`, no change needed there).
 
-- Store per spec §3.5; persist only `deviceName` (partialize); `syncManager.register` like other stores.
+- Store per spec §3.5 **minus `lastUploadedHash`** (that lives inside the uploader, see T6); persist only
+  `deviceName` (partialize); `syncManager.register` like other stores.
 - `device-name.ts`: `parseUserAgentName(ua: string): string`, `resolveDefaultDeviceName(): Promise<string>`
   (Electron `localDaemonStatus` with a 1500 ms timeout → hostname; any error/empty → UA name).
 - `effectiveDeviceName(state)` selector exported.
@@ -101,13 +105,29 @@ Commit: `feat(spa): device identity store`
 ## T6 — Uploader (`spa/src/lib/device-state/uploader.ts` + test, `spa/src/main.tsx`)
 
 ```ts
-export interface UploaderDeps { debounceMs?: number; now?: () => number; appVersion?: string }
+export interface UploaderDeps { debounceMs?: number; now?: () => number; getAppVersion?: () => Promise<string> }
 export function startDeviceStateUploader(deps?: UploaderDeps): () => void
+export async function resolveAppVersion(): Promise<string>   // (await window.electronAPI?.getAppInfo?.())?.version ?? ''; any throw → ''
 ```
-Behaviour exactly spec §3.6. `appVersion` default from the SPA's existing version constant (find the one
-Settings/About uses; fall back to `''`). Also calls `resolveDefaultDeviceName()` once and stores it via
-`useDeviceStateStore.setState({ defaultDeviceName })`. `main.tsx`: call right after `startBackupAutoTrigger()`.
-Tests (fake timers): the full spec §7 uploader list.
+Behaviour exactly spec §3.6, with these specifics:
+
+- **Structural change detection** (the stores use plain `persist`, no `subscribeWithSelector`): each
+  `store.subscribe((next, prev) => …)` computes a projection and schedules the debounce only when it changed by
+  reference:
+  - tab store → `tabs`, `tabOrder`, `activeTabId` (a `visitHistory`-only update keeps all three references → ignored)
+  - workspace store → `workspaces`, `activeWorkspaceId`
+  - host store → `selectDevHostId(state)` and `state.runtime[target]?.status` (target from the same state)
+  - device store → `effectiveDeviceName(state)`
+- **Skip rule**: uploader-local (not persisted, not in the store) `lastUploadedHash: Record<hostId, string>` and
+  `lastUploadedDeviceName: Record<hostId, string>`, both written **only after a successful PUT**. Skip the request
+  iff `hash === lastUploadedHash[target] && effectiveName === lastUploadedDeviceName[target]`. (Remove
+  `lastUploadedHash` from `useDeviceStateStore`; T5 must not add it.)
+- `appVersion` = `await (deps.getAppVersion ?? resolveAppVersion)()` once per tick. Tests cover Electron
+  (`getAppInfo` mock) and web (`''`).
+- Also calls `resolveDefaultDeviceName()` once and stores it via `useDeviceStateStore.setState({ defaultDeviceName })`.
+- `main.tsx`: call right after `startBackupAutoTrigger()`.
+
+Tests (fake timers): the full spec §7 uploader list, plus rename-only change forces an upload with an identical hash.
 
 Commit: `feat(spa): device state uploader`
 
@@ -130,10 +150,10 @@ Per spec §3.7. Keys (follow existing interpolation syntax in the locale files):
 | `settings.device_state.target_none` | Not set — choose a host in Settings > Development | 未設定——請到 設定 > Development 選擇 host |
 | `settings.device_state.status.idle` | Waiting for changes | 等待變更 |
 | `settings.device_state.status.uploading` | Saving… | 儲存中… |
-| `settings.device_state.status.ok` | Saved {time} | 已儲存（{time}） |
+| `settings.device_state.status.ok` | Saved {{time}} | 已儲存（{{time}}） |
 | `settings.device_state.status.offline` | Host offline — will save when it reconnects | Host 離線，連線後自動儲存 |
 | `settings.device_state.status.no_target` | No storage host | 未設定存放 host |
-| `settings.device_state.status.error` | Save failed: {message} | 儲存失敗：{message} |
+| `settings.device_state.status.error` | Save failed: {{message}} | 儲存失敗：{{message}} |
 
 Tests: renders name (default vs custom), rename commit via Enter/blur (IME-safe), reset, target none vs host name,
 each status kind.
