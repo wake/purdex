@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.348] - 2026-09-15
+
+### Fix: 打包版 menu bar tray 圖示消失＋新增「顯示於選單列」開關（#1037）
+
+**起因**：使用者問「purdex 現在的 electron 會產生系統列？」——會，而且從第一版就無條件建 `Tray`，但打包後的 `.app` 其實只在 menu bar 佔了一個**看不見的空格**：`tray.ts` 寫死 `../../spa/public/icons/icon-192.png`，只有從源碼跑才存在（electron-builder 只打 `out/**`），`nativeImage.createFromPath` 拿到不存在路徑回空圖。就算路徑對，`icon-192.png` 是不透明圓角方塊，套 `setTemplateImage(true)` 後也只會是一顆實心色塊。
+
+- **專用 template 圖示**：從 app icon 萃取紫色玻璃形，產生 16px + 32px `@2x` 的黑色＋alpha `trayTemplate.png`，放 `spa/public/icons/` 讓 Vite 帶進 `out/renderer/icons/`——打包與 dev-update（兩者都只搬 `out/`）都能拿到。`resolveTrayIconPath` 純函式先找 `out/renderer/icons/`、再退回源碼樹；找不到就 warn 並**不建 tray**，不再生空圖。
+- **「顯示於選單列」開關**（Settings → 桌面應用程式）：偏好 SOT 放 main process 的 `userData/app-prefs.json`（`showTray` 預設 true），因為 `whenReady` 時就得決定建不建，不能等 renderer；SPA 只走 IPC `tray:get-visible` / `tray:set-visible` 讀寫，不另存 zustand。macOS 關掉 tray 後關視窗仍由 Dock + `activate` 叫回；非 macOS 若 tray 關閉則最後一個視窗關閉即退出（否則沒有路回到視窗）。
+- **Codex 三輪 review 收斂**（gpt-5.5；R1 一條 P3、R2 三視角四條 medium/high、R3 一條 P2，全修）：
+  - `set-visible` 改為 `applyTrayVisibility` 交易語意（`electron/tray-visibility.ts`，deps 注入、純函式可測）：**先寫 prefs 再動 tray**，寫檔 throw 時 runtime 不變、IPC reject 讓 UI 回滾；`createTray` 因圖示缺失回 null 時回寫 `showTray:false` 並回傳實際狀態，不再出現 prefs／UI／runtime 三方分裂。IPC 抽成 `electron/tray-ipc.ts`（`fs-ipc.ts` 的 register 模式），`main.ts` 不再長胖。
+  - 成功套用後對所有 `BrowserWindow` 廣播 `tray:visibility-changed`，多視窗的 Settings 頁同步；ElectronSection 用遞增 request id 丟棄連點時過期的 resolve／reject，初始 `getVisible()` 若在使用者已切換後才回來也不覆寫。
+  - dev server 把新 SPA 熱載進舊 shell（preload 尚無 `electronAPI.tray`）時，該列 disabled 而非一顆按了會靜默回滾的開關。
+- 測試：electron +25（app-prefs 14、tray-icon 3、tray-visibility 8），SPA ElectronSection 12。
+
+⚠️ 需在 Mini 重跑 `pnpm run electron:build` 讓 `out/` 帶上新 main/preload，Air 再 dev update；bump 後已重打。
+
 ## [1.0.0-alpha.347] - 2026-09-15
 
 ### Fix: nex module codex R2 follow-up——WS ticket 只認真握手、`--addr` 正規化、關機 signal 語意、HOME-less Init、`X-Pdx-Client` CORS（#1038）
