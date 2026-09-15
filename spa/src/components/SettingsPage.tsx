@@ -136,7 +136,7 @@ function GlobalSettingsPage() {
       // R4 P2: when self-healing an alias whose canonical target is
       // unselectable AFTER mount (history nav / in-app location change
       // to /settings/link-detect while the page is already on
-      // quick-commands), use firstSelectable instead of activeSection.
+      // a module section), use firstSelectable instead of activeSection.
       // The initial-state branch already does this for fresh mounts;
       // mirror the rule here so bookmark behavior never depends on
       // prior in-session navigation state.

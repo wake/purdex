@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import { useTabStore } from '../stores/useTabStore'
-import { useResumeTemplateStore } from '../stores/useResumeTemplateStore'
+import { emptyHostConfigEntry, useHostConfigStore } from '../stores/useHostConfigStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -138,7 +138,7 @@ beforeEach(() => {
   useHostStore.setState({ runtime: {} })
   useAgentStore.setState({ unread: {}, statuses: {}, subagents: {} })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
-  useResumeTemplateStore.setState({ agents: {} })
+  useHostConfigStore.setState({ byHost: {} })
 })
 
 afterEach(() => cleanup())
@@ -280,7 +280,7 @@ describe('per-pane detail blocks', () => {
     const tab = seedSplitTab([terminal()])
     render(<RenamePopover {...props} tab={tab} onEditRebuildField={vi.fn()} />)
     expect(screen.getByText('claude --resume S1')).toBeInTheDocument()
-    act(() => { useResumeTemplateStore.getState().setTemplate('cc', 'exact', 'cld-yolo --resume {id}') })
+    act(() => { useHostConfigStore.setState({ byHost: { h1: { ...emptyHostConfigEntry('ready'), resumeTemplates: { cc: { exact: 'cld-yolo --resume {id}', fallback: '' } } } } }) })
     expect(screen.getByText('cld-yolo --resume S1')).toBeInTheDocument()
   })
 

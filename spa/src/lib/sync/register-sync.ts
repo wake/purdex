@@ -3,7 +3,6 @@ import { createPreferencesContributor } from './contributors/preferences'
 import { createWorkspacesContributor } from './contributors/workspaces'
 import { createHostsContributor } from './contributors/hosts'
 import { createLayoutContributor } from './contributors/layout'
-import { createQuickCommandsContributor } from './contributors/quick-commands'
 import { createI18nContributor } from './contributors/i18n'
 import { createNotificationSettingsContributor } from './contributors/notification-settings'
 import { setAllContributorIds } from './use-sync-store'
@@ -15,7 +14,6 @@ export function registerSyncContributors(): void {
   syncEngine.register(createWorkspacesContributor())
   syncEngine.register(createHostsContributor())
   syncEngine.register(createLayoutContributor())
-  syncEngine.register(createQuickCommandsContributor())
   syncEngine.register(createI18nContributor())
   syncEngine.register(createNotificationSettingsContributor())
 

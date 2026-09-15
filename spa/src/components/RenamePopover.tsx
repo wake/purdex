@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
-import { useResumeTemplateLookup } from '../stores/useResumeTemplateStore'
+import { useResumeTemplateLookup } from '../lib/resume-templates'
 import { isValidSessionName } from '../lib/session-name'
 import { resolveResumeCommand } from '../lib/rebuild/composer'
 import { EditableValue, type RebuildEditableField } from './RebuildActionSet'
@@ -73,7 +73,7 @@ function PaneDetailBlock({
   const t = useI18nStore((s) => s.t)
   // Subscribed: the row shows the resolved command, so editing a template
   // repaints it here too (spec §4.2).
-  const templates = useResumeTemplateLookup()
+  const templates = useResumeTemplateLookup(target.hostId)
   const live = !target.terminated
   const currentName = live
     ? (target.cachedName || target.sessionCode)

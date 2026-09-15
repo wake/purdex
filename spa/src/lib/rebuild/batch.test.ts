@@ -3,9 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   BATCH_LOCK_OWNER,
   groupForBatch,
+  planBatch,
+  planGroups,
   recordsDisagree,
   runBatchRebuild,
 } from './batch'
+import { defaultResumeLookup } from '../resume-templates'
+import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import type { BatchCandidate } from './eligibility'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -15,6 +19,7 @@ import { rebuildPane } from './engine'
 import { restoreAll } from '../snapshot/restore'
 import type { WorkspaceSnapshot } from '../snapshot/types'
 import type { Session } from '../host-api'
+import type { ResumeTemplateOverrides } from '../host-config-api'
 import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../../types/tab'
 
 // ---------------------------------------------------------------------------
@@ -29,6 +34,20 @@ const pane = (paneId: string, over: Partial<BatchCandidate> = {}): BatchCandidat
   },
   ...over,
 })
+
+const realLoad = useHostConfigStore.getState().load
+const realEnsureLoaded = useHostConfigStore.getState().ensureLoaded
+
+/** Host config loaded (no overrides) for every host the fixtures use, so the
+ *  planner's ensureLoaded never reaches the network. */
+beforeEach(() => {
+  useHostConfigStore.setState({
+    byHost: { h1: emptyHostConfigEntry('ready'), h2: emptyHostConfigEntry('ready') },
+    load: realLoad,
+    ensureLoaded: realEnsureLoaded,
+  })
+})
+const planned = (groups: Parameters<typeof planGroups>[0]) => planGroups(groups, () => defaultResumeLookup)
 
 describe('groupForBatch', () => {
   it('merges two panes on the same dead session into one group', () => {
@@ -65,7 +84,7 @@ describe('groupForBatch', () => {
 
   it('skips the exact resume for unverified records', () => {
     const { groups } = groupForBatch([pane('p1', { record: { ...pane('p1').record, unverified: true } })])
-    expect(groups[0].plan.runResume).toBe(false)
+    expect(planned(groups)[0].plan.runResume).toBe(false)
   })
 
   it('an agent nobody has a template for turns the resume off, not the pane', () => {
@@ -76,7 +95,7 @@ describe('groupForBatch', () => {
     ])
     expect(excluded).toEqual([])
     expect(groups).toHaveLength(1)
-    expect(groups[0].plan).toEqual({ createSession: true, applyCwd: true, runResume: false })
+    expect(planned(groups)[0].plan).toEqual({ createSession: true, applyCwd: true, runResume: false })
   })
 
   it('an override keeps the resume on for an agent with no template', () => {
@@ -87,7 +106,7 @@ describe('groupForBatch', () => {
         resumeCommandOverride: 'aider --restore S1',
       } }),
     ])
-    expect(groups[0].plan.runResume).toBe(true)
+    expect(planned(groups)[0].plan.runResume).toBe(true)
   })
 
   it('a record with an override that disagrees is a conflict', () => {
@@ -99,8 +118,28 @@ describe('groupForBatch', () => {
 
   it('skips the cwd for a record that never captured one', () => {
     const { groups } = groupForBatch([pane('p1', { record: { ...pane('p1').record, cwd: undefined } })])
-    expect(groups[0].plan.applyCwd).toBe(false)
-    expect(groups[0].plan.createSession).toBe(true)
+    expect(planned(groups)[0].plan.applyCwd).toBe(false)
+    expect(planned(groups)[0].plan.createSession).toBe(true)
+  })
+
+  it('groups carry no plan until planned (pass 1 is pure grouping)', () => {
+    const { groups } = groupForBatch([pane('p1')])
+    expect('plan' in groups[0]).toBe(false)
+  })
+})
+
+describe('planBatch — per-host templates', () => {
+  it('loads every involved host once, in parallel, then plans each group with ITS host\'s lookup', async () => {
+    useHostConfigStore.setState({ byHost: {} })
+    const ensure = vi.fn(async (hostId: string) => {
+      // h1 blanks the cc template (resume off); h2 keeps the default (resume on).
+      const resumeTemplates: ResumeTemplateOverrides = hostId === 'h1' ? { cc: { exact: '', fallback: '' } } : {}
+      useHostConfigStore.setState((s) => ({ byHost: { ...s.byHost, [hostId]: { ...emptyHostConfigEntry('ready'), resumeTemplates } } }))
+    })
+    const { groups } = groupForBatch([pane('p1'), pane('p2', { hostId: 'h2' }), pane('p3', { hostId: 'h2', sessionCode: 'other' })])
+    const plannedGroups = await planBatch(groups, ensure)
+    expect(ensure.mock.calls.map(([h]) => h).sort()).toEqual(['h1', 'h2'])
+    expect(plannedGroups.map((g) => [g.hostId, g.plan.runResume])).toEqual([['h1', false], ['h2', true], ['h2', true]])
   })
 })
 
@@ -461,6 +500,68 @@ describe('runBatchRebuild', () => {
 
     releaseSecond.resolve()
     expect((await second).status).toBe('blocked')
+  })
+
+  function addHostH2() {
+    useHostStore.setState((s) => ({
+      hosts: { ...s.hosts, h2: { id: 'h2', name: 'h2', ip: '127.0.0.2', port: 7860, token: null, order: 1 } },
+      hostOrder: ['h1', 'h2'],
+      runtime: { ...s.runtime, h2: { status: 'connected', attachReady: true } },
+    }))
+  }
+
+  it('sends each host\'s own resume template for the same agent type', async () => {
+    useHostConfigStore.setState({ byHost: {
+      h1: { ...emptyHostConfigEntry('ready'), resumeTemplates: { cc: { exact: 'one --resume {id}', fallback: 'one -c' } } },
+      h2: { ...emptyHostConfigEntry('ready'), resumeTemplates: { cc: { exact: 'two --resume {id}', fallback: 'two -c' } } },
+    } })
+    addHostH2()
+    seedPane('h1', 't1', 'p1')
+    seedPane('h2', 't2', 'p2')
+    const sendKeys = vi.fn()
+    await runBatchRebuild({
+      createSession: vi.fn(async (hostId: string) => session({ code: `new-${hostId}`, name: 'dev', tmux_instance: '222:2000' })),
+      sendKeys,
+    })
+    expect(sendKeys).toHaveBeenCalledWith('h1', 'new-h1', 'one --resume S1', '222:2000')
+    expect(sendKeys).toHaveBeenCalledWith('h2', 'new-h2', 'two --resume S1', '222:2000')
+  })
+
+  it('loads an unloaded host\'s config once per host, then sends that host\'s override', async () => {
+    // Amendment A4: the store starts EMPTY for both hosts. The load is mocked
+    // to populate a different cc override per host; the real ensureLoaded
+    // decides whether to call it.
+    useHostConfigStore.setState({ byHost: {} })
+    const load = vi.fn(async (hostId: string) => {
+      useHostConfigStore.setState((s) => ({ byHost: { ...s.byHost, [hostId]: {
+        ...emptyHostConfigEntry('ready'),
+        resumeTemplates: { cc: { exact: `${hostId}-cld --resume {id}`, fallback: `${hostId}-cld -c` } },
+      } } }))
+    })
+    const ensureLoaded = vi.spyOn(useHostConfigStore.getState(), 'ensureLoaded')
+    useHostConfigStore.setState({ load })
+    addHostH2()
+    seedPane('h1', 't1', 'p1')
+    seedPane('h2', 't2', 'p2')
+    const sendKeys = vi.fn()
+    await runBatchRebuild({
+      createSession: vi.fn(async (hostId: string) => session({ code: `new-${hostId}`, name: 'dev', tmux_instance: '222:2000' })),
+      sendKeys,
+    })
+    expect(load.mock.calls.map(([h]) => h).sort()).toEqual(['h1', 'h2'])
+    expect(new Set(ensureLoaded.mock.calls.map(([h]) => h))).toEqual(new Set(['h1', 'h2']))
+    expect(sendKeys).toHaveBeenCalledWith('h1', 'new-h1', 'h1-cld --resume S1', '222:2000')
+    expect(sendKeys).toHaveBeenCalledWith('h2', 'new-h2', 'h2-cld --resume S1', '222:2000')
+  })
+
+  it('options.hostId restricts the batch to that host', async () => {
+    addHostH2()
+    seedPane('h1', 't1', 'p1')
+    seedPane('h2', 't2', 'p2')
+    const create = vi.fn(async (hostId: string) => session({ code: `new-${hostId}`, name: 'dev', tmux_instance: '222:2000' }))
+    const report = await runBatchRebuild({ createSession: create, sendKeys: vi.fn() }, { hostId: 'h1' })
+    expect(create.mock.calls.map(([h]) => h)).toEqual(['h1'])
+    expect(report.groups.map((g) => g.hostId)).toEqual(['h1'])
   })
 
   it('reports an empty run without taking the lock hostage', async () => {

@@ -29,7 +29,6 @@ import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentS
 import { TmuxAgentMonitorSection } from '../../components/settings/TmuxAgentMonitorSection'
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
 import { SyncSection } from '../../components/settings/SyncSection'
-import { SnapshotSettingsSection } from '../../components/settings/SnapshotSettingsSection'
 import { FileTreeWorkspaceView } from '../../components/FileTreeView'
 import { FileTreeSessionView } from '../../components/FileTreeSessionView'
 import { useTabStore } from '../../stores/useTabStore'
@@ -55,6 +54,9 @@ import { AgentsSection } from '../../components/hosts/AgentsSection'
 import { UploadSection } from '../../components/hosts/UploadSection'
 import { LogsSection } from '../../components/hosts/LogsSection'
 import { NexHostSection } from '../../components/hosts/nex/NexHostSection'
+import { ProjectsSection } from '../../components/hosts/ProjectsSection'
+import { CommandsSection } from '../../components/hosts/CommandsSection'
+import { SnapshotsSection } from '../../components/hosts/SnapshotsSection'
 import { editorModuleDefinition, registerEditorNewTabProviders } from './editor-module'
 import { registerBuiltinFsBackends } from './fs-backends'
 import {
@@ -64,7 +66,6 @@ import {
 } from './file-open-bootstrap'
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
-import { QuickCommandsSettingsSection } from '../../components/settings/QuickCommandsSettingsSection'
 import { FilesWorkspaceSettingsSection } from '../../components/settings/FilesWorkspaceSettingsSection'
 import { PlaceholderSettingsSection } from '../../components/settings/PlaceholderSettingsSection'
 import { SETTINGS_ORDER } from '../settings-order'
@@ -234,29 +235,6 @@ export function registerBuiltinModules(): void {
   // Editor module
   registerModule(editorModuleDefinition)
 
-  // Quick Commands v2 — Phase 1b adds the settings contribution alongside the
-  // workspace-context-menu entry point landed in this PR. Settings UI is the
-  // sole place to author commands + bindings; the workspace right-click menu
-  // surfaces them in the live UI (spec §6 — Settings out + at least one
-  // visible mount surface ship together).
-  registerModule({
-    id: 'quick-commands',
-    name: 'Quick Commands',
-    disableable: true,
-    descriptionKey: 'modules.quick_commands.description',
-    settings: [
-      {
-        localId: 'quick-commands',
-        scope: 'purdex',
-        order: SETTINGS_ORDER.MODULE_QUICK_COMMANDS,
-        // Sidebar short label switched to settings.section.commands
-        // (spec §4.5); module.name + inner page still say "Quick Commands".
-        labelKey: 'settings.section.commands',
-        component: QuickCommandsSettingsSection,
-      },
-    ],
-  })
-
   // Sync — promoted from a built-in section to a structural module
   // (spec §4.3, PR-2). Intentionally NOT marked `disableable`: turning
   // Sync off requires engine + contributor wiring that is a future spec
@@ -411,14 +389,6 @@ export function registerBuiltinModules(): void {
     })
   }
 
-  // Workspace Snapshot — capture / restore the tab + session layout (Phase 3).
-  registerSettingsSection({
-    id: 'snapshot',
-    label: 'settings.section.snapshot',
-    order: SETTINGS_ORDER.SNAPSHOT,
-    component: SnapshotSettingsSection,
-  })
-
   registerBuiltinTerminalLinks({
     urlOpener: {
       isElectron: caps.isElectron,
@@ -462,6 +432,9 @@ export function registerBuiltinModules(): void {
     { localId: 'uploads',   labelKey: 'hosts.uploads',   order: 4, component: UploadSection },
     { localId: 'logs',      labelKey: 'hosts.logs',      order: 5, component: LogsSection },
     { localId: 'nex',       labelKey: 'hosts.nex.label', order: 6, component: NexHostSection },
+    { localId: 'projects',  labelKey: 'hosts.projects',  order: 7, component: ProjectsSection },
+    { localId: 'commands',  labelKey: 'hosts.commands',  order: 8, component: CommandsSection },
+    { localId: 'snapshots', labelKey: 'hosts.snapshots', order: 9, component: SnapshotsSection },
   ])
 
   // Reconcile module-declared file openers with the file-opener registry.

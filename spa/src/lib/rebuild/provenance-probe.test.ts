@@ -11,11 +11,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { createTab, type TmuxSessionContent } from '../../types/tab'
 import { fetchSessionProvenance, type SessionProvenance } from '../host-api'
 import { resolveResumeCommand } from './composer'
-import { useResumeTemplateStore, type ResumeTemplateLookup } from '../../stores/useResumeTemplateStore'
-
-/** The shipped templates: the store answers from `DEFAULT_RESUME_TEMPLATES`. */
-const defaultTemplates: ResumeTemplateLookup = (agentType) =>
-  useResumeTemplateStore.getState().getTemplates(agentType)
+import { defaultResumeLookup as defaultTemplates } from '../resume-templates'
 
 vi.mock('../host-api', () => ({ fetchSessionProvenance: vi.fn() }))
 

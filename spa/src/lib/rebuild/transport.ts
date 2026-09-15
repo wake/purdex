@@ -5,9 +5,9 @@
 // `useHostStore.getDaemonBase`, which silently falls back to the ACTIVE host
 // when `hostId` is unknown (`useHostStore.ts:149-156`). A host removed while a
 // rebuild is in flight would therefore create the session — and fire the resume
-// command — on a different machine. `createSession` (`host-api.ts`) and
-// `executeCommand` (`execute-command.ts`) both go through `hostFetch`, so the
-// engine cannot reuse either: it needs the requests themselves, pinned.
+// command — on a different machine. `createSession` (`host-api.ts`) goes
+// through `hostFetch`, so the engine cannot reuse it: it needs the requests
+// themselves, pinned.
 import { useHostStore } from '../../stores/useHostStore'
 import { HostApiError } from '../host-api'
 import type { Session } from '../host-api'
@@ -39,10 +39,9 @@ export interface PinnedTransport {
    * when it does not hold — the only authoritative check there is, because
    * only the daemon knows the generation at the moment it acts.
    *
-   * Required and non-empty on THIS transport, which exists only to carry a
-   * rebuild. "No expectation" is a legitimate request — Quick Commands has no
-   * generation to state — but it is not one a rebuild may make, so it is not
-   * representable here: an empty value throws rather than sending.
+   * Required and non-empty on THIS transport: a rebuild or launch always
+   * states the generation it expects, so "no expectation" is not representable
+   * here — an empty value throws rather than sending.
    */
   sendKeys(sessionCode: string, command: string, expectedTmuxInstance: string): Promise<void>
 }

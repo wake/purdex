@@ -1,0 +1,73 @@
+// Dialog-level field validation for host config (spec §3.3, amendment A3):
+// fast feedback before a round trip. The daemon stays the final authority —
+// a 400 from it is surfaced verbatim by the caller. Deliberately not mirrored:
+// the id pattern (ids come from newConfigId) and resume-template byte limits.
+import { generateId } from './id'
+import { AGENT_ICON_VALUES } from './command-icons'
+import type { CommandIcon, HostCommand, HostProject } from './host-config-api'
+
+/** Values are i18n keys. */
+export type FieldErrors<K extends string> = Partial<Record<K, string>>
+
+export const MAX_CONFIG_ITEMS = 200
+
+const SLUG = /^[a-z0-9][a-z0-9-]{0,31}$/
+const PHOSPHOR_NAME = /^[A-Z][A-Za-z0-9]{0,63}$/
+const encoder = new TextEncoder()
+const runes = (s: string) => Array.from(s).length
+const bytes = (s: string) => encoder.encode(s).length
+
+export function suggestSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+    .replace(/-+$/, '')
+}
+
+function validName(name: string): boolean {
+  const n = runes(name.trim())
+  return n >= 1 && n <= 64
+}
+
+export function validateProject(draft: HostProject, others: readonly HostProject[]): FieldErrors<'name' | 'slug' | 'path'> {
+  const errors: FieldErrors<'name' | 'slug' | 'path'> = {}
+  if (!validName(draft.name)) errors.name = 'projects.invalid.name'
+  if (!SLUG.test(draft.slug)) errors.slug = 'projects.invalid.slug'
+  else if (others.some((o) => o.id !== draft.id && o.slug === draft.slug)) errors.slug = 'projects.invalid.slug_taken'
+  const path = draft.path.trim()
+  const shapeOk = path.startsWith('/') || path === '~' || path.startsWith('~/')
+  if (!shapeOk || bytes(path) > 1024 || path.includes('\u0000')) errors.path = 'projects.invalid.path'
+  return errors
+}
+
+function validIcon(icon: CommandIcon | undefined): boolean {
+  if (!icon || typeof icon.value !== 'string') return false
+  if (icon.kind === 'agent') return (AGENT_ICON_VALUES as readonly string[]).includes(icon.value)
+  if (icon.kind === 'phosphor') return PHOSPHOR_NAME.test(icon.value)
+  return false
+}
+
+export function validateCommand(draft: HostCommand): FieldErrors<'name' | 'command' | 'icon'> {
+  const errors: FieldErrors<'name' | 'command' | 'icon'> = {}
+  if (!validName(draft.name)) errors.name = 'commands.invalid.name'
+  const size = bytes(draft.command)
+  if (size < 1 || size > 4096 || draft.command.includes('\u0000')) errors.command = 'commands.invalid.command'
+  if (!validIcon(draft.icon)) errors.icon = 'commands.invalid.icon'
+  return errors
+}
+
+/** Swap `index` with its neighbour; out-of-range moves return an unchanged copy. */
+export function moveItem<T>(list: readonly T[], index: number, delta: -1 | 1): T[] {
+  const target = index + delta
+  const next = list.slice()
+  if (index < 0 || index >= list.length || target < 0 || target >= list.length) return next
+  ;[next[index], next[target]] = [next[target], next[index]]
+  return next
+}
+
+/** Satisfies the daemon id rule `^[A-Za-z0-9_-]{1,64}$`. */
+export function newConfigId(): string {
+  return generateId()
+}

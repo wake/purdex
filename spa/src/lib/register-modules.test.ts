@@ -80,13 +80,18 @@ describe('registerBuiltinModules', () => {
     const hostContributions = listContributions('host')
     const builtins = hostContributions.filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
     expect(builtins.map((c) => c.localId)).toEqual([
-      'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex',
+      'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex', 'projects', 'commands', 'snapshots',
     ])
 
     const nex = builtins.find((c) => c.localId === 'nex')
     expect(nex?.order).toBe(6)
     expect(nex?.labelKey).toBe('hosts.nex.label')
     expect(nex?.component).toBeDefined()
+
+    const projects = builtins.find((c) => c.localId === 'projects')
+    expect(projects?.order).toBe(7)
+    expect(projects?.labelKey).toBe('hosts.projects')
+    expect(projects?.component).toBeDefined()
   })
 
   it('registers memory-monitor kind with Performance Monitor display label', () => {
@@ -151,20 +156,24 @@ describe('registerBuiltinModules', () => {
     expect(monitor?.order).toBe(21)
   })
 
-  it('registers the Snapshot settings section (id=snapshot, order=22)', () => {
+  it('no longer registers a global Snapshot settings section', () => {
     registerBuiltinModules()
-    const snapshot = getSettingsSections().find((s) => s.id === 'snapshot')
-    expect(snapshot).toBeDefined()
-    expect(snapshot?.label).toBe('settings.section.snapshot')
-    expect(snapshot?.order).toBe(SETTINGS_ORDER.SNAPSHOT)
-    expect(snapshot?.order).toBe(22)
+    expect(getSettingsSections().find((s) => s.id === 'snapshot')).toBeUndefined()
   })
 
-  it('both locales carry the settings.section.snapshot label', () => {
+  it('registers host sub-pages projects / commands / snapshots after nex (7/8/9)', () => {
+    registerBuiltinModules()
+    const host = listContributions('host')
+      .filter((c) => ['nex', 'projects', 'commands', 'snapshots'].includes(c.localId))
+      .sort((a, b) => a.order - b.order)
+    expect(host.map((c) => [c.localId, c.order])).toEqual([['nex', 6], ['projects', 7], ['commands', 8], ['snapshots', 9]])
+  })
+
+  it('both locales carry the hosts.snapshots label', () => {
     const en = enLocale as Record<string, string>
     const zh = zhLocale as Record<string, string>
-    expect(en['settings.section.snapshot']).toBe('Snapshot')
-    expect(zh['settings.section.snapshot']).toBe('快照')
+    expect(en['hosts.snapshots']).toBe('Snapshots')
+    expect(zh['hosts.snapshots']).toBe('快照')
   })
 
   it('registers interface section with order=2', () => {
@@ -827,17 +836,15 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
     expect(purdex?.labelKey).toBe('settings.section.monitor')
   })
 
-  it('T7: quick-commands purdex labelKey switched to settings.section.commands', () => {
+  it('no quick-commands module or purdex Commands section is registered', () => {
     registerBuiltinModules()
-    const m = getModule('quick-commands')
-    const purdex = m?.settings?.find((s) => s.scope === 'purdex')
-    expect(purdex?.labelKey).toBe('settings.section.commands')
+    expect(getModule('quick-commands')).toBeUndefined()
+    expect(listContributions('purdex').map((c) => c.localId)).not.toContain('quick-commands')
   })
 
   it('T9 / F6: locale JSON has new short-label keys + placeholder string in en + zh-TW', () => {
     const required = [
       'settings.section.browser',
-      'settings.section.commands',
       'settings.section.files',
       'settings.section.monitor',
       'settings.module.no_purdex_settings',

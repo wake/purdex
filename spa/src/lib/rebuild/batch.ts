@@ -21,18 +21,23 @@ import { rebuildPane, repointMember, type RebuildDeps, type RebuildPlan, type Re
 import { batchCandidates, collectRecordRows, type BatchCandidate, type PaneRef } from './eligibility'
 import { pinHost } from './transport'
 import { resolveResumeCommand } from './composer'
-import { liveResumeTemplates, type ResumeTemplateLookup } from '../../stores/useResumeTemplateStore'
+import { resumeLookupFor, type ResumeTemplateLookup } from '../resume-templates'
+import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import type { PaneRebuildRecord } from '../../types/tab'
 
 /** The batch's lock owner. One name for the whole run, per rule 3 above. */
 export const BATCH_LOCK_OWNER = 'rebuild:batch'
 
-export interface BatchGroup extends PaneRef {
+/** Pass 1 of planning: a group, without the plan that needs its host's templates. */
+export interface BatchGroupDraft extends PaneRef {
   /** Every pane re-pointed to this group's result, in collection order. */
   paneIds: string[]
   /** Whose record won the conflict resolution — the pane the engine runs on. */
   sourcePaneId: string
   record: PaneRebuildRecord
+}
+
+export interface BatchGroup extends BatchGroupDraft {
   plan: RebuildPlan
 }
 
@@ -73,7 +78,7 @@ export interface BatchReport {
  */
 export function planForRecord(
   record: PaneRebuildRecord,
-  templates: ResumeTemplateLookup = liveResumeTemplates,
+  templates: ResumeTemplateLookup,
 ): RebuildPlan {
   return {
     createSession: true,
@@ -101,8 +106,8 @@ export function recordsDisagree(a: PaneRebuildRecord, b: PaneRebuildRecord): boo
  * Conflicting hand-edits inside a group resolve to the latest `capturedAt`;
  * ties keep the first pane seen, so the result is stable across renders.
  */
-export function groupForBatch(panes: BatchCandidate[]): { groups: BatchGroup[]; excluded: BatchCandidate[] } {
-  const byKey = new Map<string, BatchGroup>()
+export function groupForBatch(panes: BatchCandidate[]): { groups: BatchGroupDraft[]; excluded: BatchCandidate[] } {
+  const byKey = new Map<string, BatchGroupDraft>()
   const excluded: BatchCandidate[] = []
 
   for (const pane of panes) {
@@ -122,7 +127,6 @@ export function groupForBatch(panes: BatchCandidate[]): { groups: BatchGroup[]; 
         paneIds: [pane.paneId],
         sourcePaneId: pane.paneId,
         record: pane.record,
-        plan: planForRecord(pane.record),
       })
       continue
     }
@@ -132,11 +136,32 @@ export function groupForBatch(panes: BatchCandidate[]): { groups: BatchGroup[]; 
       group.tabId = pane.tabId
       group.sourcePaneId = pane.paneId
       group.record = pane.record
-      group.plan = planForRecord(pane.record)
     }
   }
 
   return { groups: Array.from(byKey.values()), excluded }
+}
+
+/** Pass 2, pure: attach each group's plan using ITS host's lookup. */
+export function planGroups(
+  groups: BatchGroupDraft[],
+  lookupFor: (hostId: string) => ResumeTemplateLookup,
+): BatchGroup[] {
+  return groups.map((group) => ({ ...group, plan: planForRecord(group.record, lookupFor(group.hostId)) }))
+}
+
+/**
+ * Pass 2 for execution: load every involved host's config (in parallel,
+ * never throwing), then plan. Display code must NOT use this — it plans with
+ * `useResumeTemplateLookup(hostId)` per row instead.
+ */
+export async function planBatch(
+  groups: BatchGroupDraft[],
+  ensure: (hostId: string) => Promise<void> = (hostId) => useHostConfigStore.getState().ensureLoaded(hostId),
+): Promise<BatchGroup[]> {
+  const hostIds = Array.from(new Set(groups.map((g) => g.hostId)))
+  await Promise.all(hostIds.map((hostId) => ensure(hostId)))
+  return planGroups(groups, resumeLookupFor)
 }
 
 /**
@@ -145,10 +170,18 @@ export function groupForBatch(panes: BatchCandidate[]): { groups: BatchGroup[]; 
  *
  * Never throws — a refusal or a per-group failure lands in the report.
  */
-export async function runBatchRebuild(deps: RebuildDeps = {}): Promise<BatchReport> {
-  const candidates = batchCandidates(collectRecordRows(useTabStore.getState().tabs))
-  const { groups, excluded } = groupForBatch(candidates)
+export async function runBatchRebuild(
+  deps: RebuildDeps = {},
+  options: { hostId?: string } = {},
+): Promise<BatchReport> {
+  const rows = collectRecordRows(useTabStore.getState().tabs)
+  const candidates = batchCandidates(options.hostId ? rows.filter((r) => r.hostId === options.hostId) : rows)
+  const drafts = groupForBatch(candidates)
+  const { excluded } = drafts
   const tabOfPane = new Map(candidates.map((c) => [c.paneId, c.tabId]))
+  // Planned before the lock: loading host config is a network wait, and the
+  // engine re-verifies every group's binding at create time anyway.
+  const groups = await planBatch(drafts.groups)
 
   const grant = useRebuildStore.getState().acquireOperationLock(BATCH_LOCK_OWNER)
   if (!grant) {

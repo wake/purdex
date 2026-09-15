@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveResumeCommand } from './composer'
-import { DEFAULT_RESUME_TEMPLATES, type ResumeTemplateLookup } from '../../stores/useResumeTemplateStore'
+import { DEFAULT_RESUME_TEMPLATES, type ResumeTemplateLookup } from '../resume-templates'
 
 // === resolveResumeCommand — override → template → '' (spec §4.2) ===
 

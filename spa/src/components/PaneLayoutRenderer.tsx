@@ -5,8 +5,6 @@ import { getLayoutKey, collectLeaves, swapPaneContent, countLeaves, findPane } f
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
 import { PaneContextMenu, type PaneMenuAction } from './PaneContextMenu'
-import { QuickCommandMenu } from './QuickCommandMenu'
-import { executeCommand } from '../lib/execute-command'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import {
@@ -154,15 +152,6 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
               useTabStore.getState().setTabLayout(tabId, newLayout)
             }}
             swapTargets={swapTargets}
-            extraActions={content.kind === 'tmux-session' ? (
-              <QuickCommandMenu
-                hostId={content.hostId}
-                workspaceId={useWorkspaceStore.getState().activeWorkspaceId}
-                onExecute={async (cmd) => {
-                  try { await executeCommand(content.hostId, content.sessionCode, cmd.command) } catch { /* ignore */ }
-                }}
-              />
-            ) : undefined}
           />
           <Component pane={layout.pane} isActive={isActive} />
           {paneMenu}

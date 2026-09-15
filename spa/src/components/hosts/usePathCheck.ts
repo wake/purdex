@@ -1,0 +1,27 @@
+import { useEffect, useState } from 'react'
+import { checkHostPath, type PathCheckStatus } from '../../lib/host-config-api'
+
+export type PathVerdict = PathCheckStatus | 'checking' | 'idle'
+
+/** Debounced "does this path exist on the host" advice. Never blocks anything. */
+export function usePathCheck(hostId: string, path: string, delayMs = 400): PathVerdict {
+  const trimmed = path.trim()
+  const key = `${hostId}\u0000${trimmed}`
+  const [verdict, setVerdict] = useState<{ key: string; status: PathVerdict }>({ key: '', status: 'idle' })
+
+  useEffect(() => {
+    if (!trimmed) return
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      // checkHostPath never rejects; an aborted request answers 'unverifiable'
+      // and is dropped here.
+      void checkHostPath(hostId, trimmed, controller.signal).then((r) => {
+        if (!controller.signal.aborted) setVerdict({ key, status: r.status })
+      })
+    }, delayMs)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [hostId, trimmed, delayMs, key])
+
+  if (!trimmed) return 'idle'
+  return verdict.key === key ? verdict.status : 'checking'
+}

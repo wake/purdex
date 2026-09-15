@@ -1,0 +1,71 @@
+import { describe, it, expect } from 'vitest'
+import { MAX_CONFIG_ITEMS, moveItem, newConfigId, suggestSlug, validateCommand, validateProject } from './host-config-validate'
+import type { HostCommand } from './host-config-api'
+
+const p = (over: Partial<{ id: string; name: string; slug: string; path: string }> = {}) =>
+  ({ id: 'p1', name: 'Purdex', slug: 'purdex', path: '~/w/purdex', ...over })
+
+describe('suggestSlug', () => {
+  it.each([
+    ['Purdex', 'purdex'],
+    ['  My Cool_App!! ', 'my-cool-app'],
+    ['中文 Project 2', 'project-2'],
+    ['---', ''],
+    ['a'.repeat(40), 'a'.repeat(32)],
+    ['ab-'.repeat(20), ('ab-'.repeat(11)).slice(0, 32).replace(/-+$/, '')],
+  ])('%j → %j', (name, slug) => expect(suggestSlug(name)).toBe(slug))
+})
+
+describe('validateProject', () => {
+  it('accepts a valid project', () => expect(validateProject(p(), [])).toEqual({}))
+  it('name: trimmed 1-64 runes', () => {
+    expect(validateProject(p({ name: '   ' }), []).name).toBe('projects.invalid.name')
+    expect(validateProject(p({ name: '字'.repeat(64) }), [])).toEqual({})
+    expect(validateProject(p({ name: '字'.repeat(65) }), []).name).toBe('projects.invalid.name')
+  })
+  it('slug: pattern and uniqueness among other projects', () => {
+    expect(validateProject(p({ slug: 'Bad' }), []).slug).toBe('projects.invalid.slug')
+    expect(validateProject(p({ slug: '-x' }), []).slug).toBe('projects.invalid.slug')
+    expect(validateProject(p({ slug: 'a'.repeat(33) }), []).slug).toBe('projects.invalid.slug')
+    expect(validateProject(p(), [p({ id: 'p2' })]).slug).toBe('projects.invalid.slug_taken')
+    expect(validateProject(p(), [p()])).toEqual({}) // same id is itself
+  })
+  it('path: /, ~ or ~/ prefix, 1-1024 bytes, no NUL', () => {
+    for (const ok of ['/', '/srv/app', '~', '~/w']) expect(validateProject(p({ path: ok }), [])).toEqual({})
+    for (const bad of ['', 'rel/x', '~user/x', '/a\u0000b', '/' + 'a'.repeat(1024)]) {
+      expect(validateProject(p({ path: bad }), []).path).toBe('projects.invalid.path')
+    }
+  })
+})
+
+describe('validateCommand', () => {
+  const c = (over: Partial<HostCommand> = {}): HostCommand =>
+    ({ id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' }, ...over })
+  it('accepts a valid command', () => expect(validateCommand(c())).toEqual({}))
+  it('name trimmed 1-64 runes; command 1-4096 bytes, no NUL', () => {
+    expect(validateCommand(c({ name: ' ' })).name).toBe('commands.invalid.name')
+    expect(validateCommand(c({ command: '' })).command).toBe('commands.invalid.command')
+    expect(validateCommand(c({ command: 'a\u0000' })).command).toBe('commands.invalid.command')
+    expect(validateCommand(c({ command: 'é'.repeat(2048) }))).toEqual({}) // 4096 bytes
+    expect(validateCommand(c({ command: 'é'.repeat(2049) })).command).toBe('commands.invalid.command') // 4098 bytes
+  })
+  it('icon value shape (amendment A3)', () => {
+    expect(validateCommand(c({ icon: { kind: 'phosphor', value: 'Terminal' } }))).toEqual({})
+    expect(validateCommand(c({ icon: { kind: 'phosphor', value: 'terminal' } })).icon).toBe('commands.invalid.icon')
+    expect(validateCommand(c({ icon: { kind: 'phosphor', value: 'A'.repeat(65) } })).icon).toBe('commands.invalid.icon')
+    expect(validateCommand(c({ icon: { kind: 'agent', value: 'gemini' } as unknown as HostCommand['icon'] })).icon)
+      .toBe('commands.invalid.icon')
+    expect(validateCommand(c({ icon: { kind: 'emoji', value: 'x' } as unknown as HostCommand['icon'] })).icon)
+      .toBe('commands.invalid.icon')
+  })
+})
+
+describe('moveItem / newConfigId / MAX_CONFIG_ITEMS', () => {
+  it('moves within bounds and is a no-op at the edges', () => {
+    expect(moveItem(['a', 'b', 'c'], 0, 1)).toEqual(['b', 'a', 'c'])
+    expect(moveItem(['a', 'b', 'c'], 2, 1)).toEqual(['a', 'b', 'c'])
+    expect(moveItem(['a', 'b', 'c'], 0, -1)).toEqual(['a', 'b', 'c'])
+  })
+  it('ids satisfy the daemon id rule', () => expect(newConfigId()).toMatch(/^[A-Za-z0-9_-]{1,64}$/))
+  it('caps lists at 200 items', () => expect(MAX_CONFIG_ITEMS).toBe(200))
+})
