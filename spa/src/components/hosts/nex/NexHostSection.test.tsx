@@ -193,6 +193,57 @@ describe('NexHostSection', () => {
     expect(configCallCount()).toBe(configCallsBefore)
   })
 
+  // Ruling K, item (a): a failed Refresh must not collapse the whole
+  // section — only fix round 1's initial-load failure does that.
+  it('a failed Refresh keeps the cards and shows an inline error; a later successful Refresh clears it', async () => {
+    render(<NexHostSection hostId={HOST_ID} />)
+    await screen.findByText('Engine')
+
+    mockFetchInfo.mockRejectedValueOnce(new Error('blip'))
+    fireEvent.click(screen.getByText('Refresh'))
+
+    await waitFor(() => expect(screen.getByTestId('nex-refresh-error')).toBeInTheDocument())
+    // The cards themselves must still be there — this is not the
+    // initial-load failure gate.
+    expect(screen.getByText('Engine')).toBeInTheDocument()
+    expect(screen.getByText('Configuration')).toBeInTheDocument()
+    expect(screen.getByTestId('executions-stub')).toBeInTheDocument()
+    expect(screen.queryByTestId('nex-retry')).not.toBeInTheDocument()
+
+    // mockSuccess() (still in effect for the next call) resolves normally.
+    fireEvent.click(screen.getByText('Refresh'))
+    await waitFor(() => expect(screen.queryByTestId('nex-refresh-error')).not.toBeInTheDocument())
+    expect(screen.getByText('Engine')).toBeInTheDocument()
+  })
+
+  // Ruling K, item (b): the initial-load failure gate gets a way back.
+  it('Retry after an initial /api/config failure reloads and renders the cards', async () => {
+    mockFetchInfo.mockImplementation(() => Promise.resolve(infoResponse(readyInfo)))
+    mockHostFetch.mockImplementation((_hostId, path) => {
+      if (path === '/api/config') return Promise.reject(new Error('config unreachable'))
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
+    })
+
+    render(<NexHostSection hostId={HOST_ID} />)
+    await waitFor(() => expect(screen.getByTestId('nex-retry')).toBeInTheDocument())
+    expect(screen.queryByText('Engine')).not.toBeInTheDocument()
+
+    const infoCallsBeforeRetry = mockFetchInfo.mock.calls.length
+    const configCallsBeforeRetry = configCallCount()
+    mockSuccess()
+
+    fireEvent.click(screen.getByTestId('nex-retry'))
+
+    await screen.findByText('Engine')
+    await screen.findByDisplayValue('/a')
+    expect(mockFetchInfo.mock.calls.length).toBe(infoCallsBeforeRetry + 1)
+    expect(configCallCount()).toBe(configCallsBeforeRetry + 1)
+    // The status card had never mounted before Retry succeeded (the failed
+    // gate rendered a different subtree entirely), so this is its first
+    // Nexen host/capabilities fetch, not a `key`-forced *re*fetch.
+    await waitFor(() => expect(nexApi.fetchNexHost).toHaveBeenCalledTimes(1))
+  })
+
   it('saving through the config form persists and updates the restart-required notice', async () => {
     render(<NexHostSection hostId={HOST_ID} />)
     // Wait for the fetched config (not just the empty-draft default) to land
@@ -214,11 +265,18 @@ describe('NexHostSection', () => {
     await waitFor(() => expect(screen.getByTestId('nex-restart-required')).toBeInTheDocument())
   })
 
-  // Controller ruling I + fix-round-1 item 2, exercised together: offline
-  // always hides the cards — even ones that had already loaded — and a
-  // reconnect reloads both endpoints and remounts the status card (proving
-  // ruling G: the card refetches its own Nexen host/capabilities data a
-  // second time, not just re-rendering with the same badge state).
+  // Controller ruling I, exercised end-to-end with a real reconnect: offline
+  // always hides the cards — even ones that had already loaded — and going
+  // back online reloads both endpoints and re-renders them. The status
+  // card fetching Nexen host/capabilities data a second time is *not*
+  // caused by `key={generation}` forcing a remount of an already-mounted
+  // component (there is no such component here to remount) — it's simply a
+  // fresh `<NexEngineStatus>` mounting for the first time since step 3 tore
+  // down the whole card subtree (ruling I's offline branch renders a
+  // completely different element, not the cards with different props).
+  // Verified in fix round 1 by temporarily removing `key={generation}`:
+  // this test still passed unchanged, proving the key does no work on this
+  // path (see task-7-report.md fix round 1, item 2).
   it('offline hides previously-loaded cards; reconnecting reloads /api/info + /api/config and refetches the status card', async () => {
     // 1) Start offline with nothing ever loaded.
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
@@ -249,10 +307,10 @@ describe('NexHostSection', () => {
     expect(mockFetchInfo.mock.calls.length).toBe(infoCallsAfterFirstConnect)
     expect(configCallCount()).toBe(configCallsAfterFirstConnect)
 
-    // 4) Reconnect a second time — proves ruling G end-to-end: /api/info and
-    // /api/config are refetched, and NexEngineStatus (remounted via
-    // key={generation}) fetches Nexen host/capabilities a *second* time
-    // rather than reusing its already-fetched state from step 2.
+    // 4) Reconnect a second time: /api/info and /api/config are refetched,
+    // and a freshly-mounted <NexEngineStatus> (step 3 unmounted the old one
+    // when it hid the cards) fetches Nexen host/capabilities again rather
+    // than there being any stale badge state left over from step 2.
     setRuntimeStatus('connected')
 
     await waitFor(() => expect(mockFetchInfo.mock.calls.length).toBe(infoCallsAfterFirstConnect + 1))

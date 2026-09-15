@@ -1037,6 +1037,7 @@
   "hosts.mode_normal_hint": "Daemon is running — enter the configured token",
 
   "hosts.nex.label": "Nex",
+  "hosts.nex.retry": "Retry",
   "hosts.nex.status.title": "Engine",
   "hosts.nex.status.disabled": "Disabled",
   "hosts.nex.status.not_running": "Enabled in config, not running — restart the daemon",

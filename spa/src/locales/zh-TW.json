@@ -1037,6 +1037,7 @@
   "hosts.mode_normal_hint": "Daemon 運作中，請輸入已設定的 Token",
 
   "hosts.nex.label": "Nex",
+  "hosts.nex.retry": "重試",
   "hosts.nex.status.title": "引擎",
   "hosts.nex.status.disabled": "未啟用",
   "hosts.nex.status.not_running": "設定已啟用但未執行，請重啟 daemon",

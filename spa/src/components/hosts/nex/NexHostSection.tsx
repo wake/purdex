@@ -3,8 +3,8 @@
 // (→ config.nex) and composes the three Nex cards built in Tasks 4-6:
 // NexEngineStatus, NexConfigForm, NexExecutionsTable.
 //
-// See spa-context.md "Host reconnect refetch" + ruling G for the
-// disconnected→connected refetch/remount contract this section must honor.
+// See spa-context.md "Host reconnect refetch" for the disconnected→
+// connected refetch contract this section must honor.
 import { useEffect, useState } from 'react'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -24,7 +24,11 @@ interface Props {
 // letting the user Save would PUT an empty section over the host's real one
 // (fix round 1, item 1). `loading` also covers the badge: before /api/info
 // resolves, `info` is `null`, which `NexEngineStatus` would otherwise read
-// as "Disabled" rather than "not loaded yet".
+// as "Disabled" rather than "not loaded yet". This is only the *initial*
+// (or Retry-restarted) load's status — a failed manual Refresh (ruling K)
+// is tracked separately via `refreshError` below and must NOT flip this
+// back to `'failed'`, or a transient network blip on Refresh would tear
+// down cards that are already showing good data.
 type LoadStatus = 'loading' | 'loaded' | 'failed'
 
 // Fetches both `/api/info` and `/api/config` for `hostId`, hands the `nex`
@@ -80,16 +84,24 @@ export function NexHostSection({ hostId }: Props) {
   const [config, setConfig] = useState<NexConfig | undefined>(undefined)
   const [infoStatus, setInfoStatus] = useState<LoadStatus>('loading')
   const [configStatus, setConfigStatus] = useState<LoadStatus>('loading')
-  // Bumped only on a disconnected→connected transition (see below). Doubles
-  // as the fetch effect's retrigger (which also resets both statuses back to
-  // 'loading', clearing any earlier 'failed') and as
-  // <NexEngineStatus key={generation}> so the card remounts and re-requests
-  // /v1/host + /v1/capabilities even when `info.ready` itself did not change
-  // value across the reconnect (ruling G). The generation bump and the
-  // refetch below happen in the same transition, so the card remounts once
-  // — still showing the *previous* `info` for that one render — and then
-  // re-fetches its own Nexen data once `info` is refreshed; this is the
-  // intended sequencing, not a race.
+  // A failed manual Refresh (the status card's own button, wired to
+  // `handleRefresh` below) — deliberately independent of `infoStatus` so it
+  // never re-triggers the failed-load gate and tears down cards that are
+  // already showing good data (ruling K). Shown as an inline error line
+  // above the cards; cleared by the next successful Refresh, and also by a
+  // full reload (hostId/generation change) since that supersedes it.
+  const [refreshError, setRefreshError] = useState(false)
+  // Bumped on a disconnected→connected transition (see the reconnect
+  // detector below) and by the Retry button (ruling K) in the failed-load
+  // gate. Both are "restart the load" triggers, so they share one counter.
+  // Also passed as <NexEngineStatus key={generation}>: in every path that
+  // can bump it, the previous render had already unmounted the whole card
+  // subtree — either the offline branch (ruling I) or this component's own
+  // failed/loading gates below — so `NexEngineStatus` is mounting fresh
+  // regardless of the key; the key is currently redundant insurance, kept
+  // in case a future change ever bumps `generation` without an intervening
+  // unmount (verified in fix round 1 by removing it and re-running the
+  // reconnect test, which passed unchanged).
   const [generation, setGeneration] = useState(0)
 
   // Host reconnect detector, using React's documented "adjusting state
@@ -109,23 +121,25 @@ export function NexHostSection({ hostId }: Props) {
     }
   }
 
-  // Reset both statuses to 'loading' the moment `hostId` or `generation`
-  // changes — same render-time-adjustment idiom as the reconnect detector
-  // above (and for the same reason: doing this inside the fetch effect's
-  // body, even before the async calls, is a synchronous setState-in-effect
-  // that `react-hooks/set-state-in-effect` flags). The effect below is then
-  // left to do only the actual fetch, calling back into state exclusively
-  // from its `.then`/`.catch` callbacks, which the rule accepts.
+  // Reset both statuses to 'loading' (and clear any stale refresh error)
+  // the moment `hostId` or `generation` changes — same render-time-
+  // adjustment idiom as the reconnect detector above (and for the same
+  // reason: doing this inside the fetch effect's body, even before the
+  // async calls, is a synchronous setState-in-effect that
+  // `react-hooks/set-state-in-effect` flags). The effect below is then left
+  // to do only the actual fetch, calling back into state exclusively from
+  // its `.then`/`.catch` callbacks, which the rule accepts.
   const fetchKey = `${hostId}:${generation}`
   const [prevFetchKey, setPrevFetchKey] = useState(fetchKey)
   if (fetchKey !== prevFetchKey) {
     setPrevFetchKey(fetchKey)
     setInfoStatus('loading')
     setConfigStatus('loading')
+    setRefreshError(false)
   }
 
   // Initial load, reload on `hostId` change (switching hosts), and reload
-  // again whenever `generation` is bumped above by a reconnect.
+  // again whenever `generation` is bumped above by a reconnect or Retry.
   useEffect(() => {
     let cancelled = false
     loadNexData(hostId, () => cancelled, setInfo, setConfig, setInfoStatus, setConfigStatus)
@@ -147,10 +161,21 @@ export function NexHostSection({ hostId }: Props) {
     )
   }
 
+  // Initial (or Retry-restarted) load failure: no cards have ever
+  // successfully rendered for this generation, so there is nothing to
+  // preserve — show the failure with a way back (ruling K).
   if (infoStatus === 'failed' || configStatus === 'failed') {
     return (
       <div className="max-w-2xl">
         <p className="text-xs text-text-muted">{t('hosts.load_failed')}</p>
+        <button
+          type="button"
+          data-testid="nex-retry"
+          onClick={() => setGeneration((g) => g + 1)}
+          className="mt-2 px-3 py-1.5 rounded-md bg-surface-secondary hover:bg-surface-tertiary border border-border-default text-xs text-text-secondary cursor-pointer"
+        >
+          {t('hosts.nex.retry')}
+        </button>
       </div>
     )
   }
@@ -167,18 +192,21 @@ export function NexHostSection({ hostId }: Props) {
   // when its own Refresh button is clicked (it bumps an internal `tick`);
   // this handler only refreshes the daemon-side /api/info.nex data feeding
   // the badge/effective-config state, so the two refreshes don't duplicate
-  // the same request. A successful refresh clears a previous 'failed'
-  // status; a failed one sets it (deliberately no unmount/stale-hostId
-  // guard here — deferred, see task-7-report.md).
+  // the same request. A failure here must NOT touch `infoStatus` (ruling
+  // K) — doing so would flip the gate above and tear down all three cards
+  // over a transient Refresh blip. It only sets `refreshError`, shown as an
+  // inline line above the still-rendered cards; a subsequent successful
+  // refresh (or any full reload) clears it. Deliberately no unmount/stale-
+  // hostId guard here — deferred, see task-7-report.md.
   const handleRefresh = () => {
     fetchInfo(hostId)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`/api/info: ${r.status}`))))
       .then((data) => {
         setInfo(data.nex ?? null)
-        setInfoStatus('loaded')
+        setRefreshError(false)
       })
       .catch(() => {
-        setInfoStatus('failed')
+        setRefreshError(true)
       })
   }
 
@@ -188,6 +216,9 @@ export function NexHostSection({ hostId }: Props) {
 
   return (
     <div className="max-w-2xl space-y-6">
+      {refreshError && (
+        <p data-testid="nex-refresh-error" className="text-xs text-red-400">{t('hosts.load_failed')}</p>
+      )}
       <NexEngineStatus key={generation} hostId={hostId} info={info} onRefresh={handleRefresh} />
       <NexConfigForm hostId={hostId} config={config} info={info} onSaved={handleConfigSaved} />
       <NexExecutionsTable hostId={hostId} enabled={info?.ready ?? false} />
