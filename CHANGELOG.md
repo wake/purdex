@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.359] - 2026-09-16
+
+### Feat: Host 設定頁 — 專案／指令／快照三頁、每台 host 的 resume 範本，並移除 Quick Command（B2，#1068）
+
+Host 設定新增 Projects、Commands、Snapshots 三個頁面，全部以 alpha.358 的 daemon `hostconfig` 為後端；resume 範本改為每台 host 各自一份，整套 Quick Command 系統同時移除。
+
+- **Host › Projects**：名稱／slug／路徑編輯、即時路徑檢查（`dir`／`not_dir`／`missing`／`error`）、拖曳排序、上限 200 筆；daemon 錯誤訊息就地顯示，409 衝突自動重新載入最新內容。
+- **Host › Commands — Normal 分頁**：名稱／指令／圖示；圖示選擇器提供 5 個 agent 圖示，並可搜尋完整 Phosphor 圖示庫。
+- **Host › Commands — Resume 分頁**：每台 host 自己的 resume 範本，指令字（command word）對照該 host 檢查。
+- **Host › Snapshots**：host 範圍的重建紀錄／tmux session 一律作用在已依 host 過濾的快照上；device 範圍的區塊（分頁、還原版面、全部還原、各電腦狀態）只在 dev host 顯示；擷取與重建共用同一把 busy lock。
+- **每台 host 的 resume 範本**：全域 resume 範本 store 移除；批次重建改為先分組，再逐一載入各 host 的範本。
+- **移除 Quick Command**：store、slots、slot executor、`CommandSlot`、`QuickCommandMenu`、模組 command API、全域 Commands 設定頁、sync contributor、i18n keys 全數刪除，約 5900 行。
+- **Review 修正**：host config 請求綁定該 host 當下的位址與世代（過期回應丟棄、host 變更或移除時中止在途請求）；同一 host＋集合的儲存改為排隊並以 id 定位項目；resume 草稿在儲存失敗後保留，只有在仍持有已儲存的值時才釋放；單列快照重建改為傳入當初規劃的 binding。
+- ⚠️ 純 SPA 變更，HMR 即可生效；但需搭配 alpha.358 的 daemon（舊 daemon 會顯示「不支援」提示）。
+- ⚠️ 不做 persist migration：舊的 quick-command／resume-template localStorage 直接捨棄。
+
 ## [1.0.0-alpha.358] - 2026-09-16
 
 ### Feat: Daemon hostconfig 模組 — 每台 host 的專案／指令／resume 範本（B1，#1065）
