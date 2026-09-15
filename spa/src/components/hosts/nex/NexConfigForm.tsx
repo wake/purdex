@@ -143,8 +143,8 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
         if (editCounterRef.current === startCounter) {
           dirtyRef.current = false
           setDraft(nextNex)
+          setJustSaved(true)
         }
-        setJustSaved(true)
         onSaved(data)
       } else {
         const text = await res.text()

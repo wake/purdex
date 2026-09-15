@@ -99,6 +99,8 @@ describe('NexConfigForm', () => {
 
     // The in-flight response must not clobber the edit made during the save.
     expect((screen.getByLabelText(/claude binary/i) as HTMLInputElement).value).toBe('/new/claude')
+    // Nor should it claim the (never-sent) edit was saved.
+    expect(screen.queryByText(/^saved/i)).not.toBeInTheDocument()
 
     vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response(JSON.stringify({ nex: { ...saved, claude_bin: '/new/claude' } }), { status: 200 }))
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
