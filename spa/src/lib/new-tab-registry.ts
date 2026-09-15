@@ -56,6 +56,13 @@ export interface NewTabProviderMigration {
 
 const providers = new Map<string, NewTabProvider>()
 const sources = new Map<string, NewTabProviderSource>()
+/** Notified when the registry itself changes (provider/source register, replace, clear). */
+const registryListeners = new Set<() => void>()
+
+function notifyRegistryChange(): void {
+  // Copy: a listener may (un)subscribe while we iterate.
+  for (const l of [...registryListeners]) l()
+}
 
 const isSourceReady = (s: NewTabProviderSource) => s.isReady?.() ?? true
 
@@ -74,11 +81,13 @@ export function registerNewTabProvider(provider: NewTabProvider): void {
   // previous entry rather than duplicating it. HMR / bootstrap can call this
   // repeatedly without leaking stale providers.
   providers.set(provider.id, provider)
+  notifyRegistryChange()
 }
 
 /** Register a dynamic provider source. Same-id re-registration replaces. */
 export function registerNewTabProviderSource(source: NewTabProviderSource): void {
   sources.set(source.id, source)
+  notifyRegistryChange()
 }
 
 /**
@@ -87,9 +96,14 @@ export function registerNewTabProviderSource(source: NewTabProviderSource): void
  * stay idempotent across HMR / re-bootstrap.
  */
 export function unregisterNewTabProvidersByModule(ownerModuleId: string): void {
+  let changed = false
   for (const [id, p] of providers) {
-    if (p.moduleId === ownerModuleId) providers.delete(id)
+    if (p.moduleId === ownerModuleId) {
+      providers.delete(id)
+      changed = true
+    }
   }
+  if (changed) notifyRegistryChange()
 }
 
 export function getNewTabProviders(): NewTabProvider[] {
@@ -108,10 +122,37 @@ export function getNewTabProviderMigrations(): NewTabProviderMigration[] {
     .flatMap((s) => s.migrations?.() ?? [])
 }
 
-/** Subscribe to changes of any registered source. Returns an unsubscribe. */
+/**
+ * Subscribe to any change in the provider set: registry changes (providers or
+ * sources registered, replaced, cleared) and each registered source's own
+ * emitter. One stable subscription — per-source subscriptions are re-synced
+ * whenever the source set changes, so sources added later are followed and
+ * replaced/cleared ones are released. Returns an unsubscribe.
+ */
 export function subscribeNewTabProviders(listener: () => void): () => void {
-  const unsubs = [...sources.values()].map((s) => s.subscribe(listener))
-  return () => unsubs.forEach((u) => u())
+  const attached = new Map<NewTabProviderSource, () => void>()
+  const syncSources = () => {
+    for (const [src, unsub] of attached) {
+      if (sources.get(src.id) !== src) {
+        unsub()
+        attached.delete(src)
+      }
+    }
+    for (const src of sources.values()) {
+      if (!attached.has(src)) attached.set(src, src.subscribe(listener))
+    }
+  }
+  const onRegistryChange = () => {
+    syncSources()
+    listener()
+  }
+  syncSources()
+  registryListeners.add(onRegistryChange)
+  return () => {
+    registryListeners.delete(onRegistryChange)
+    for (const unsub of attached.values()) unsub()
+    attached.clear()
+  }
 }
 
 /**
@@ -131,4 +172,5 @@ export function getStaleNewTabProviderIds(ids: string[]): string[] {
 export function clearNewTabRegistry(): void {
   providers.clear()
   sources.clear()
+  notifyRegistryChange()
 }

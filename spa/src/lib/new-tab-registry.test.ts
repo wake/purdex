@@ -192,6 +192,30 @@ describe('new-tab-registry — dynamic provider sources', () => {
     expect(getNewTabProviderMigrations()).toEqual([{ from: 'dyn', to: ['dyn:a'] }])
   })
 
+  it('subscribeNewTabProviders notifies on register / replace / clear, and follows sources added later', () => {
+    let calls = 0
+    const unsub = subscribeNewTabProviders(() => { calls++ })
+    const late = makeSource(['a'])
+    registerNewTabProviderSource(late.source)
+    expect(calls).toBe(1)
+    late.set(['b']) // emitter of a source added after subscription
+    expect(calls).toBe(2)
+    const replacement = makeSource(['z'])
+    registerNewTabProviderSource(replacement.source) // same id → replace
+    expect(calls).toBe(3)
+    expect(late.listenerCount()).toBe(0) // old emitter released
+    late.set(['stale'])
+    expect(calls).toBe(3)
+    registerNewTabProvider({ id: 'static', label: 'S', icon: 'S', order: 0, component: Stub })
+    expect(calls).toBe(4)
+    clearNewTabRegistry()
+    expect(calls).toBe(5)
+    expect(replacement.listenerCount()).toBe(0)
+    unsub()
+    registerNewTabProviderSource(makeSource(['q']).source)
+    expect(calls).toBe(5)
+  })
+
   it('re-registering a source with the same id replaces it; clear removes sources', () => {
     registerNewTabProviderSource(makeSource(['a']).source)
     registerNewTabProviderSource(makeSource(['z']).source)
