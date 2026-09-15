@@ -25,7 +25,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   const t = useI18nStore((s) => s.t)
   const key = executionKey(hostId, executionId)
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
-  const { problem, paused: _paused } = useExecutionSubscription(hostId, executionId, isActive)
+  const { problem } = useExecutionSubscription(hostId, executionId, isActive)
   const { ensureLease, touch } = useExecutionLease(hostId, executionId)
   const [draft, setDraft] = useState<string | null>(null) // restored text after a failed send
 
@@ -37,7 +37,11 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   // NexApiError; I12 still wants a code, so map it (`network`).
   const fail = useCallback((e: unknown) => {
     if (e instanceof NexApiError) {
-      if (e.code === 'no_live_turn' || e.code === 'lease_abandoned') return
+      // no_live_turn / lease_abandoned are silent; lease_held is already
+      // surfaced by the dedicated notice (ensureLease wrote leaseError
+      // before rethrowing) — a second "Send failed" banner would be
+      // redundant and there is no execution.error.lease_held copy for it.
+      if (e.code === 'no_live_turn' || e.code === 'lease_abandoned' || e.code === 'lease_held') return
       store().setSendError(hostId, executionId, { code: e.code, message: e.message, turnId: e.turnId })
     } else {
       store().setSendError(hostId, executionId, { code: 'network', message: e instanceof Error ? e.message : String(e) })
@@ -81,7 +85,8 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
     return <div data-testid="execution-problem" className="flex items-center justify-center h-full text-sm text-text-muted">{text}</div>
   }
 
-  const ended = !!st.summary && (TERMINAL_STATES.has(st.summary.state) || st.summary.archived)
+  const terminal = !!st.summary && TERMINAL_STATES.has(st.summary.state)
+  const ended = terminal || !!st.summary?.archived
   const placeholder = st.summary?.archived ? t('execution.input.archived') : ended ? t('execution.input.terminal') : undefined
   const leaseHeld = st.leaseError?.code === 'lease_held'
   const errorText = st.sendError
@@ -91,11 +96,11 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   return (
     <div className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} costUsd={costUsd} sse={st.sse} isMine={isMine}
-        onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={ended} />
+        onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal} />
       {!st.historyLoaded ? (
         <div data-testid="execution-loading" className="flex-1 flex items-center justify-center text-sm text-text-muted">{t('execution.loading')}</div>
       ) : (
-        <ConversationMessages messages={st.messages} keyPrefix={executionId} showThinking={st.pendingSend && !st.pendingLocal?.delivery}
+        <ConversationMessages messages={st.messages} keyPrefix={executionId} showThinking={st.pendingSend && st.pendingLocal?.delivery !== 'queued'}
           showEmptyHint={st.messages.length === 0 && !st.pendingLocal} emptyText={t('execution.empty')} scrollKey={st.pendingLocal ? 1 : 0}>
           {st.pendingLocal && (
             <div className="flex justify-end">
@@ -114,7 +119,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
       )}
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
       <StreamInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)} showAttach={false}
-        disabled={st.pendingSend || ended} placeholder={placeholder} focused={isActive} />
+        disabled={st.pendingSend || ended || !st.historyLoaded} placeholder={placeholder} focused={isActive} />
     </div>
   )
 }

@@ -1,10 +1,7 @@
 // spa/src/lib/deeplink/deeplinkResolver.ts — resolves a purdex:// execution
-// deeplink into a navigation (P-B). A Nexen execution has no tmux session, so
-// the only landing is the read-only execution detail pane, keyed by
+// deeplink into a navigation (P-B). It opens the execution pane; a Nexen
+// execution has no tmux session, so there is nothing else to focus. Keyed by
 // (host, executionId) so the same id on two hosts opens two panes.
-//
-// Observe-only invariant: this never opens a live interactive session view or
-// attaches a stdin write path. The detail page it opens is strictly read-only.
 import { useTabStore } from '../../stores/useTabStore'
 import { resolveExecutionHostId } from '../nex/resolve-host'
 
@@ -15,8 +12,8 @@ export interface DeeplinkPayload {
 }
 
 /**
- * Open (or focus, if already open) the read-only execution detail tab.
- * Singleton per (host, executionId), so repeated deeplinks reuse the same tab.
+ * Open (or focus, if already open) the execution pane. Singleton per
+ * (host, executionId), so repeated deeplinks reuse the same tab.
  */
 export function openExecutionDetailTab(executionId: string, host: string): void {
   useTabStore.getState().openSingletonTab({ kind: 'execution', executionId, host })
@@ -35,8 +32,8 @@ const defaultDeps: ResolveDeeplinkDeps = {
 }
 
 /**
- * Resolve one deeplink to a landing: the read-only execution detail pane,
- * keyed by the resolved host. An empty executionId is ignored.
+ * Resolve one deeplink to a landing: the execution pane, keyed by the
+ * resolved host. An empty executionId is ignored.
  */
 export async function resolveDeeplink(
   payload: DeeplinkPayload,

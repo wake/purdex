@@ -85,8 +85,15 @@ describe('ExecutionView', () => {
     // The header's own lease line also renders the holder's principal, so
     // /t-other/ matches two elements; scope to the dedicated notice.
     await waitFor(() => expect(screen.getByTestId('lease-held')).toHaveTextContent(/t-other/))
-    expect(box.disabled).toBe(false)
+    // handleSend's catch always restores the draft via the `key={draft}`
+    // remount (same as the send-failure test above), so `box` is a stale,
+    // detached node here too — re-query before asserting on it.
+    const restored = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(restored.disabled).toBe(false)
     expect(api.sendMessage).not.toHaveBeenCalled()
+    // lease_held is fully handled by the notice above — no redundant
+    // "Send failed" banner.
+    expect(screen.queryByTestId('send-error')).toBeNull()
   })
 
   it('interrupt acquires the lease and posts; no_live_turn is silent', async () => {
@@ -115,6 +122,40 @@ describe('ExecutionView', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
     rerender(<ExecutionView hostId={H} executionId={E} isActive />)
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/ended/i))
+  })
+
+  it('disables the input until history has loaded', () => {
+    useExecutionStore.getState().setHistoryLoaded(H, E, false)
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    // The loading placeholder replaces the conversation, but StreamInput is
+    // still rendered below it — must stay disabled while spinner is up.
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+  })
+
+  it('archived: input is disabled but Terminate stays enabled (not a terminal state)', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: /^terminate$/i })).not.toBeDisabled()
+  })
+
+  it('shows the thinking indicator once a delivered send has no reply yet', async () => {
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'hello' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(useExecutionStore.getState().executions[KEY].pendingLocal?.delivery).toBe('delivered'))
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+  })
+
+  it('hides the thinking indicator while the send is still queued', async () => {
+    vi.mocked(api.sendMessage).mockResolvedValueOnce({ turn_id: 't2', delivery: 'queued' })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'hi' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(useExecutionStore.getState().executions[KEY].pendingLocal?.delivery).toBe('queued'))
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
   })
 
   it('renders the problem states instead of the conversation', () => {
