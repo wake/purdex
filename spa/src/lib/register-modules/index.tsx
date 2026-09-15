@@ -56,6 +56,7 @@ import { UploadSection } from '../../components/hosts/UploadSection'
 import { LogsSection } from '../../components/hosts/LogsSection'
 import { NexHostSection } from '../../components/hosts/nex/NexHostSection'
 import { ProjectsSection } from '../../components/hosts/ProjectsSection'
+import { CommandsSection } from '../../components/hosts/CommandsSection'
 import { editorModuleDefinition, registerEditorNewTabProviders } from './editor-module'
 import { registerBuiltinFsBackends } from './fs-backends'
 import {
@@ -464,6 +465,7 @@ export function registerBuiltinModules(): void {
     { localId: 'logs',      labelKey: 'hosts.logs',      order: 5, component: LogsSection },
     { localId: 'nex',       labelKey: 'hosts.nex.label', order: 6, component: NexHostSection },
     { localId: 'projects',  labelKey: 'hosts.projects',  order: 7, component: ProjectsSection },
+    { localId: 'commands',  labelKey: 'hosts.commands',  order: 8, component: CommandsSection },
   ])
 
   // Reconcile module-declared file openers with the file-opener registry.
