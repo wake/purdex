@@ -1,7 +1,32 @@
+import { useEffect, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { SettingItem } from './SettingItem'
+import { ToggleSwitch } from './ToggleSwitch'
 
 export function ElectronSection() {
   const t = useI18nStore((s) => s.t)
+
+  // Tray visibility is owned by the main process (app-prefs.json); null until
+  // the first IPC read resolves, shown as "on" in the meantime.
+  const [showTray, setShowTray] = useState<boolean | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    window.electronAPI?.tray?.getVisible()
+      .then((v) => { if (!cancelled) setShowTray(v) })
+      .catch(() => { /* IPC unavailable — keep the default */ })
+    return () => { cancelled = true }
+  }, [])
+
+  const toggleTray = async (v: boolean) => {
+    const prev = showTray
+    setShowTray(v)
+    try {
+      const applied = await window.electronAPI!.tray.setVisible(v)
+      setShowTray(applied)
+    } catch {
+      setShowTray(prev)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -10,6 +35,9 @@ export function ElectronSection() {
         <p className="text-xs text-text-secondary mb-6">{t('settings.electron.desc')}</p>
       </div>
       <div className="space-y-4">
+        <SettingItem label={t('settings.electron.tray.label')} description={t('settings.electron.tray.desc')}>
+          <ToggleSwitch label={t('settings.electron.tray.aria')} checked={showTray ?? true} onChange={toggleTray} />
+        </SettingItem>
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm text-text-primary">{t('settings.electron.idle_timeout.label')}</div>
