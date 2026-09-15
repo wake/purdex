@@ -556,7 +556,7 @@ export function SnapshotSettingsSection() {
 
       <StatusLine status={status} />
 
-      <DeviceStateSection />
+      <DeviceStateSection onRestored={refresh} />
     </div>
   )
 }
