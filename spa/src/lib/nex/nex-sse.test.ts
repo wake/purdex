@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { openNexSse, resolveNexStreamUrl } from './nex-sse'
+import { NexApiError } from './types'
 import type { NexSseFrame } from './sse-parser'
 
 // @vitest-environment node has no `localStorage`, but useHostStore persists
@@ -174,6 +175,40 @@ describe('nex-sse', () => {
     expect(st.at(-1)).toBe('reconnecting')
     await vi.advanceTimersByTimeAsync(1000)
     expect(fetch503).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops (does not retry) on a terminal structured error like 503 nex_unavailable (spec §4.5)', async () => {
+    const onStatus = vi.fn()
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response('{"code":"nex_unavailable"}', { status: 503 }))
+    openNexSse({ hostId, url: '/api/nex/v1/events', getLastEventId: () => null, onFrame: () => {}, onStatus, fetchImpl, backoff: { jitter: 0 } })
+    await vi.advanceTimersByTimeAsync(0)
+    const [status, err] = onStatus.mock.calls.at(-1)!
+    expect(status).toBe('closed')
+    expect(err).toBeInstanceOf(NexApiError)
+    expect((err as NexApiError).code).toBe('nex_unavailable')
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries on a bare (non-JSON) 5xx — a daemon restarting behind a proxy', async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response('', { status: 502 })).mockResolvedValueOnce(sseResponse([], { hang: true }))
+    const st: string[] = []
+    openNexSse({ hostId, url: '/api/nex/v1/events', getLastEventId: () => null, onFrame: () => {}, onStatus: (s) => st.push(s), fetchImpl, backoff: { jitter: 0 } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(st.at(-1)).toBe('reconnecting')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops on a structured 404 execution_not_found', async () => {
+    const onStatus = vi.fn()
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response('{"code":"execution_not_found"}', { status: 404 }))
+    openNexSse({ hostId, url: '/api/nex/v1/events', getLastEventId: () => null, onFrame: () => {}, onStatus, fetchImpl, backoff: { jitter: 0 } })
+    await vi.advanceTimersByTimeAsync(0)
+    const [status, err] = onStatus.mock.calls.at(-1)!
+    expect(status).toBe('closed')
+    expect(err).toBeInstanceOf(NexApiError)
+    expect((err as NexApiError).code).toBe('execution_not_found')
   })
 
   it('aborts the live stream and reconnects exactly once when onFrame throws', async () => {

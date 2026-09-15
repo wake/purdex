@@ -10,6 +10,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { hostAuthHeaders } from '../host-api'
 import { getNexClientId } from './client-id'
 import { SseParser, type NexSseFrame } from './sse-parser'
+import { nexErrorFromResponse } from './types'
 
 export type NexSseStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
 
@@ -119,7 +120,24 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
       status('closed', new Error(`nex sse: HTTP ${res.status}`))
       return
     }
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
+      // A structured error is transient (worth retrying) only when it is a
+      // 5xx AND the code is 'draining' (daemon shutting down gracefully) or
+      // an unstructured http_<status> (a bare 5xx from a restarting daemon
+      // behind a proxy — no JSON body to carry a real code). Every other
+      // structured code — 401/403 handled above, nex_unavailable,
+      // execution_not_found, … — is terminal: retrying would only spin
+      // forever against an error that will not change (spec §4.5).
+      const err = await nexErrorFromResponse(res)
+      if (res.status >= 500 && (err.code === 'draining' || err.code.startsWith('http_'))) {
+        scheduleReconnect(err)
+      } else {
+        closed = true
+        status('closed', err)
+      }
+      return
+    }
+    if (!res.body) {
       scheduleReconnect()
       return
     }
