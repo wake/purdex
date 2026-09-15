@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TerminalSection } from './TerminalSection'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 
@@ -172,4 +172,83 @@ describe('TerminalSection', () => {
     expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(true)
   })
 
+  describe('host color mark settings', () => {
+    // Option order in each SegmentControl: gradient, left-line, bottom-line, none
+    const STYLE_ORDER = ['gradient', 'left-line', 'bottom-line', 'none'] as const
+    const SURFACES = [
+      { name: 'sidebar', styleKey: 'hostColorSidebarStyle', widthKey: 'hostColorSidebarWidth' },
+      { name: 'tabbar', styleKey: 'hostColorTabBarStyle', widthKey: 'hostColorTabBarWidth' },
+    ] as const
+
+    beforeEach(() => {
+      useUISettingsStore.setState({
+        hostColorSidebarStyle: 'gradient',
+        hostColorSidebarWidth: 2,
+        hostColorTabBarStyle: 'bottom-line',
+        hostColorTabBarWidth: 2,
+      })
+    })
+
+    function styleButtons(surface: string) {
+      return within(screen.getByTestId(`host-color-${surface}-style`)).getAllByRole('button')
+    }
+
+    it('renders both setting rows after the tab indicator row', () => {
+      render(<TerminalSection />)
+      const sidebar = screen.getByTestId('host-color-sidebar-style')
+      const tabbar = screen.getByTestId('host-color-tabbar-style')
+      expect(styleButtons('sidebar')).toHaveLength(4)
+      expect(styleButtons('tabbar')).toHaveLength(4)
+      expect(sidebar.compareDocumentPosition(tabbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      const dynamic = screen.getByLabelText('Dynamic tab name')
+      expect(tabbar.compareDocumentPosition(dynamic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    for (const surface of SURFACES) {
+      it(`${surface.name}: selecting each style updates the store`, () => {
+        useUISettingsStore.setState({ [surface.styleKey]: 'none' })
+        render(<TerminalSection />)
+        for (const [i, style] of STYLE_ORDER.entries()) {
+          if (style === 'none') continue
+          fireEvent.click(styleButtons(surface.name)[i])
+          expect(useUISettingsStore.getState()[surface.styleKey]).toBe(style)
+        }
+        fireEvent.click(styleButtons(surface.name)[3])
+        expect(useUISettingsStore.getState()[surface.styleKey]).toBe('none')
+      })
+
+      it(`${surface.name}: width input only shown for line styles`, () => {
+        const other = surface.name === 'sidebar' ? 'tabbar' : 'sidebar'
+        const otherKey = surface.name === 'sidebar' ? 'hostColorTabBarStyle' : 'hostColorSidebarStyle'
+        useUISettingsStore.setState({ [otherKey]: 'none' })
+        for (const style of STYLE_ORDER) {
+          useUISettingsStore.setState({ [surface.styleKey]: style })
+          const { unmount } = render(<TerminalSection />)
+          const input = screen.queryByTestId(`host-color-${surface.name}-width`)
+          if (style === 'left-line' || style === 'bottom-line') {
+            expect(input).not.toBeNull()
+            expect(input?.getAttribute('type')).toBe('number')
+            expect(input?.getAttribute('aria-label')).toBeTruthy()
+          } else {
+            expect(input).toBeNull()
+          }
+          // other surface stays independent
+          expect(screen.queryByTestId(`host-color-${other}-width`)).toBeNull()
+          unmount()
+        }
+      })
+
+      it(`${surface.name}: width input clamps to 1-6`, () => {
+        useUISettingsStore.setState({ [surface.styleKey]: 'left-line' })
+        render(<TerminalSection />)
+        const input = screen.getByTestId(`host-color-${surface.name}-width`)
+        fireEvent.change(input, { target: { value: '9' } })
+        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(6)
+        fireEvent.change(input, { target: { value: '0' } })
+        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(1)
+        fireEvent.change(input, { target: { value: '4' } })
+        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(4)
+      })
+    }
+  })
 })
