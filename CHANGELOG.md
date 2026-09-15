@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.354] - 2026-09-16
+
+### Feat: 各電腦狀態備份 P1 — daemon 模組＋自動上傳（#1055）
+
+每台 Purdex client 會把自己最新的 workspace / 分頁結構自動存到 Development 選定的 host（`devHostId`），並標明來源電腦；P2（列表＋完整取代）、P3（合併）的 plan 隨 PR 進 `docs/specs/`。
+
+- **Daemon `devicestate` 模組**：`device_state.db` 每個 sync `clientId` 一列、只留最新；`PUT / GET / GET 單筆 / DELETE /api/device-state` 走預設 token 驗證；`capturedAt` 較舊的寫入忽略（多視窗）；payload 頂層形狀與 SPA 讀取守衛 `isWellFormedSnapshotV1` 完全一致才存、5 MB 上限→413。
+- **SPA 上傳器**：不連網的 payload builder（`WorkspaceSnapshot`＋由 pane 推出的 sessionMeta，restorable:false）；結構變動後 5 秒 debounce；內容 hash＋電腦名稱都相同則不送；單一 in-flight＋至多一次重跑；未設定 / 離線狀態顯示；上傳前重新確認目標 host 與其 ip/port/token，途中切換或斷線不會送到舊 host，端點或 token 變更會重傳。
+- **電腦名稱**：可改名，預設 Electron `os.hostname()`／Web「瀏覽器 · OS」，一律 trim＋截到 64 字（過長 hostname 不再被 daemon 拒收）。
+- **Settings > Snapshot** 新增「各電腦狀態備份」區塊：本機名稱（編輯中的草稿不會被背景預設名稱覆蓋）、存放 host、上傳狀態。
+- **Review**：spec 與 P1/P2/P3 plan 各經 codex 審並修訂；PR R1 標準 1×P2（長 hostname）、R2 三視角 4 項（daemon 驗證與讀取守衛不一致、同 host 端點/token 變更不重傳、上傳途中切換 host 送到舊 host、預設名稱覆蓋編輯中草稿），全數修入、無延後 issue。
+- 測試 vitest 431→439 files、5430→5520 tests（含合併 main）；Go 新增 devicestate 套件測試。
+
 ## [1.0.0-alpha.353] - 2026-09-16
 
 ### Feat: Nexen 整併 P-B.3 — Host「Nex」子頁 + daemon 對壞掉的 `[nex]` 軟失敗（#1054）
