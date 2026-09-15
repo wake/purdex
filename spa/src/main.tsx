@@ -6,6 +6,7 @@ import { registerBuiltinLocales } from './lib/register-locales'
 import { registerBuiltinThemes } from './lib/register-themes'
 import { registerBuiltinModules } from './lib/register-modules'
 import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger'
+import { startDeviceStateUploader } from './lib/device-state/uploader'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -21,6 +22,8 @@ registerBuiltinModules()
 // pane closed still backs up (R1-C1). Module-scope so it persists for the
 // app's lifetime; never disposed.
 startBackupAutoTrigger()
+// Device state backup: debounced upload of workspaces/tabs to the Development host (app lifetime).
+startDeviceStateUploader()
 
 useLayoutStore.getState().reconcileViews()
 
