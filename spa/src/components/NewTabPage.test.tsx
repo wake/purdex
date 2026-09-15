@@ -527,6 +527,41 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
   })
 })
 
+describe('NewTabPage — module visibility follows the mount-time snapshot', () => {
+  function editorSource() {
+    let ids: string[] = []
+    const listeners = new Set<() => void>()
+    registerNewTabProviderSource({
+      id: 'dyn-editor',
+      getProviders: () => ids.map((id) => ({ id, label: `label-${id}`, icon: 'File', order: 0, component: FakeEditorCard, moduleId: 'editor' })),
+      subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l) } },
+      ownsId: (id) => id.startsWith('ed:'),
+    })
+    return (next: string[]) => act(() => { ids = next; listeners.forEach((l) => l()) })
+  }
+
+  it('shows a late provider whose module was enabled at mount, even if disabled since', () => {
+    registerNewTabProvider({ id: 'sessions', label: 'sessions', icon: 'List', order: 0, component: FakeSessionsCard })
+    const emit = editorSource()
+    primeLayout(['sessions', 'ed:a'])
+    render(<NewTabPage onSelect={() => {}} />)
+    act(() => { useModuleEnabledStore.setState({ enabled: { editor: false } }) })
+    emit(['ed:a'])
+    expect(screen.getByTestId('card-editor')).toBeTruthy()
+  })
+
+  it('hides a late provider whose module was disabled at mount, even if enabled since', () => {
+    registerNewTabProvider({ id: 'sessions', label: 'sessions', icon: 'List', order: 0, component: FakeSessionsCard })
+    useModuleEnabledStore.setState({ enabled: { editor: false } })
+    const emit = editorSource()
+    primeLayout(['sessions', 'ed:a'])
+    render(<NewTabPage onSelect={() => {}} />)
+    act(() => { useModuleEnabledStore.setState({ enabled: {} }) })
+    emit(['ed:a'])
+    expect(screen.queryByTestId('card-editor')).toBeNull()
+  })
+})
+
 describe('NewTabPage — dynamic providers', () => {
   it('interpolates labelParams into the section heading', () => {
     useI18nStore.setState({ t: (k: string, p?: Record<string, string | number>) => (p ? `${k}:${p.host}` : k) })
