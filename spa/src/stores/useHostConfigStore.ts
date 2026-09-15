@@ -166,7 +166,8 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
             patch(hostId, { status: 'error', error: errorText(err) })
           }
         } finally {
-          if (inflight.get(hostId)?.promise === run) inflight.delete(hostId)
+          // Only this request's own entry: a newer one may already hold the slot.
+          if (inflight.get(hostId)?.abort === abort) inflight.delete(hostId)
         }
       })()
       inflight.set(hostId, { promise: run, endpoint, abort })
