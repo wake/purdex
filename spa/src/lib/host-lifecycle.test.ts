@@ -176,7 +176,7 @@ describe('host delete cascade', () => {
     expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
   })
 
-  it('closeTabs releases held leases on the removed host before clearing execution state (M)', () => {
+  it('closeTabs releases held leases on the removed host before clearing execution state (I13)', () => {
     useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
     useExecutionStore.getState().setLease(HOST_A, 'exc_2', null) // no lease held — must not call releaseLease
     useExecutionStore.getState().applyEvents(HOST_B, 'exc_3', [
@@ -189,7 +189,7 @@ describe('host delete cascade', () => {
     expect(nexApi.releaseLease).toHaveBeenCalledWith(HOST_A, 'exc_1', 'ls_1')
   })
 
-  it('closeTabs=false drops held leases locally without a release call (M)', () => {
+  it('closeTabs=false drops held leases locally without a release call (I13)', () => {
     useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
 
     deleteHostCascade(HOST_A, false)

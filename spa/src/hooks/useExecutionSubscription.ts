@@ -18,9 +18,9 @@ import { useHostStore } from '../stores/useHostStore'
 export type SubscriptionProblem = null | 'not_found' | 'host_removed' | 'nex_unavailable' | 'nex_disabled'
 export const HISTORY_PAGE_LIMIT = 500
 export const SUMMARY_REFETCH_DEBOUNCE_MS = 300
-// A stale/failed summary refetch reschedules itself (fix round 1, Important
-// 2): `summaryStale` only notifies subscribers on a boolean transition, so a
-// second lifecycle event landing while a refetch is in flight would
+// A stale/failed summary refetch reschedules itself: `summaryStale` only
+// notifies subscribers on a boolean transition, so a second lifecycle
+// event landing while a refetch is in flight would
 // otherwise leave the store stuck stale forever. Cap consecutive attempts so
 // a persistently failing daemon doesn't retry every debounce indefinitely.
 const MAX_CONSECUTIVE_STALE_REFETCHES = 5
@@ -232,7 +232,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
         else {
           // Unexpected, non-terminal error before the stream ever opened (a
           // claimed slot would otherwise leak forever on a subscription
-          // that never retries). I1: the common trigger is app start with
+          // that never retries). The common trigger is app start with
           // restored tabs before the host connection is up — retry the
           // whole chain with backoff (2s -> 4 -> 8 -> capped at 30s)
           // instead of getting stuck at "Loading execution..." forever.

@@ -222,8 +222,6 @@ describe('useExecutionSubscription', () => {
     expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
   })
 
-  // --- fix round 1 -----------------------------------------------------
-
   it('an inactive-at-mount pane claims a free slot and goes live (spec §4.3.2 step 4); once slots are full it stays paused until activation evicts the LRU', async () => {
     const closes: Record<string, CloseMock> = {}
     vi.mocked(sse.openNexSse).mockImplementation((o) => {
@@ -365,7 +363,7 @@ describe('useExecutionSubscription', () => {
     expect(closes['exc_new']).toBeDefined()
   })
 
-  it('retries the whole chain with backoff after a non-terminal error, and completes once it succeeds (I1)', async () => {
+  it('retries the whole chain with backoff after a non-terminal error, and completes once it succeeds', async () => {
     vi.mocked(api.getExecution).mockReset().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(summary())
     const { result } = renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })

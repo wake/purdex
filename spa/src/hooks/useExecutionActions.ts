@@ -39,7 +39,7 @@ export function useExecutionActions(
       // before rethrowing) — a second "Send failed" banner would be
       // redundant and there is no execution.error.lease_held copy for it.
       if (e.code === 'no_live_turn' || e.code === 'lease_abandoned' || e.code === 'lease_held') return
-      // I3: the server already invalidated this lease — drop it locally too
+      // The server already invalidated this lease — drop it locally too
       // (no release() DELETE, it's pointless) so the next send/interrupt/
       // terminate re-acquires instead of retrying against a dead lease id.
       if (e.code === 'lease_expired' || e.code === 'lease_mismatch' || e.code === 'lease_required') forget()
@@ -50,7 +50,7 @@ export function useExecutionActions(
   }, [hostId, executionId, forget])
 
   const handleSend = useCallback(async (text: string) => {
-    // Re-entrancy guard (Codex R1 finding B): pendingSend is set
+    // Re-entrancy guard: pendingSend is set
     // synchronously below, before the `await ensureLease()`, so a second
     // submit fired while the first lease acquisition is still in flight
     // reads the lock here and is a no-op — without this, a slow lease let
@@ -69,7 +69,7 @@ export function useExecutionActions(
       // execution.message_accepted (execution/service.go:794-807) can land
       // before this resolves and already clear pendingLocal + push the
       // durable bubble; writing it back unconditionally here would
-      // resurrect a second bubble (C1/I12). Only write if the event hasn't
+      // resurrect a second bubble (I12, spec §5). Only write if the event hasn't
       // already consumed it.
       if (store().executions[key]?.pendingLocal) {
         store().setPendingLocal(hostId, executionId, { text, delivery: r.delivery })

@@ -181,7 +181,7 @@ describe('contentMatches', () => {
     expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a' }, { kind: 'execution', executionId: 'exc_1', host: 'b' })).toBe(false)
     // an absent host resolves to the first host, but a *stored* host that no
     // longer exists is compared as-is, not silently folded into a match
-    // with the first host (I2)
+    // with the first host (spec §4.3.3)
     expect(contentMatches({ kind: 'execution', executionId: 'exc_1' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(true)
     expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'zzz' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(false)
   })

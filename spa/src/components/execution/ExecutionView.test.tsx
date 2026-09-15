@@ -52,7 +52,7 @@ describe('ExecutionView', () => {
     expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(true)
   })
 
-  it('locks the input synchronously before the lease resolves, so a second submit while acquisition is in flight is a no-op (Codex R1 finding B)', async () => {
+  it('locks the input synchronously before the lease resolves, so a second submit while acquisition is in flight is a no-op', async () => {
     let resolveLease!: (v: string) => void
     ensureLease.mockReturnValueOnce(new Promise<string>((resolve) => { resolveLease = resolve }))
     render(<ExecutionView hostId={H} executionId={E} isActive />)
@@ -83,7 +83,7 @@ describe('ExecutionView', () => {
     expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'first')
   })
 
-  it('does not resurrect pendingLocal once message_accepted already consumed it while the POST is still in flight (C1/I12)', async () => {
+  it('does not resurrect pendingLocal once message_accepted already consumed it while the POST is still in flight (I12)', async () => {
     let resolveSend!: (v: { turn_id: string; delivery: 'delivered' | 'queued' }) => void
     vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise((resolve) => { resolveSend = resolve }))
     render(<ExecutionView hostId={H} executionId={E} isActive />)
@@ -151,7 +151,7 @@ describe('ExecutionView', () => {
     expect(screen.queryByTestId('send-error')).toBeNull()
   })
 
-  it('lease_expired | lease_mismatch | lease_required from send drop the local lease via forget() (I3)', async () => {
+  it('lease_expired | lease_mismatch | lease_required from send drop the local lease via forget() so the next action re-acquires', async () => {
     vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(409, 'lease_mismatch', 'stale'))
     render(<ExecutionView hostId={H} executionId={E} isActive />)
     const box = screen.getByRole('textbox')
@@ -242,7 +242,7 @@ describe('ExecutionView', () => {
     expect(screen.getByTestId('execution-loading')).toBeInTheDocument()
   })
 
-  it('shows the retrying error text under the loading line while a retry chain is failing (I1)', () => {
+  it('shows the retrying error text under the loading line while a retry chain is failing', () => {
     useExecutionStore.getState().setHistoryLoaded(H, E, false)
     useExecutionStore.getState().setSse(H, E, 'closed', 'Failed to fetch')
     render(<ExecutionView hostId={H} executionId={E} isActive />)

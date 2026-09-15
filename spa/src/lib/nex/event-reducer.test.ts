@@ -126,7 +126,7 @@ describe('applyDurableEvent', () => {
     expect(applyDurableEvent(base, ev(1, 'result', { type: 'result' })).sendError).toEqual({ code: 'x', message: 'y' })
   })
 
-  it('execution.turn_orphaned clears pendingSend (daemon restart mid-turn) without touching pendingLocal (C2)', () => {
+  it('execution.turn_orphaned clears pendingSend (daemon restart mid-turn) without touching pendingLocal', () => {
     const base: ExecutionState = { ...defaultExecutionState(), pendingSend: true, pendingLocal: { text: 'hi', delivery: 'delivered' } }
     const s = applyDurableEvent(base, ev(1, 'execution.turn_orphaned', { turn_id: 't' }))
     expect(s.pendingSend).toBe(false)
@@ -134,7 +134,7 @@ describe('applyDurableEvent', () => {
     expect(s.summaryStale).toBe(true)
   })
 
-  it('execution.turn_stalled clears pendingSend and pendingLocal (queued turn withdrawn on restart) (C2)', () => {
+  it('execution.turn_stalled clears pendingSend and pendingLocal (queued turn withdrawn on restart)', () => {
     const base: ExecutionState = { ...defaultExecutionState(), pendingSend: true, pendingLocal: { text: 'hi', delivery: 'queued' } }
     const s = applyDurableEvent(base, ev(1, 'execution.turn_stalled', { turn_id: 't' }))
     expect(s.pendingSend).toBe(false)

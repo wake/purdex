@@ -18,7 +18,7 @@ export const LEASE_MIN_REMAINING_MS = 5000
 export interface ExecutionLeaseApi {
   ensureLease(): Promise<string>
   release(): Promise<void>
-  /** Drops the local lease without any network call (I3): the server
+  /** Drops the local lease without any network call: the server
    * already invalidated it (lease_expired / lease_mismatch / lease_required
    * from a send/interrupt/terminate), so a release() DELETE would be
    * pointless — just stop the timer and clear the store. */

@@ -76,7 +76,7 @@ describe('useExecutionLease', () => {
     expect(lease()).toBeNull()
   })
 
-  it('forget() clears the lease without a network call and the next ensureLease attaches anew (I3)', async () => {
+  it('forget() clears the lease without a network call and the next ensureLease attaches anew', async () => {
     const { result } = renderHook(() => useExecutionLease(H, E))
     await act(async () => { await result.current.ensureLease() })
     expect(lease()).not.toBeNull()

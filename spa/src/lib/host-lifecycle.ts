@@ -153,7 +153,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   // §4.3.4); undo restores the tabs, whose hooks re-subscribe from scratch,
   // so nothing here needs snapshotting.
   //
-  // A held lease (M): closeTabs unmounts the panes via the tab-close loop
+  // A held lease: closeTabs unmounts the panes via the tab-close loop
   // above, but the pane's own release() (useExecutionLease's unmount
   // effect) races clearHost below — by the time React actually tears the
   // component down, clearHost may already have wiped the lease out from
