@@ -705,3 +705,37 @@ func TestStatusReadyReportsEffective(t *testing.T) {
 	assert.Equal(t, "1m30s", eff["lease_ttl"])
 	assert.Equal(t, cfg.Nex.RepoRoots, eff["repo_roots"])
 }
+
+// TestInitSoftFailRestoresPath: a soft-failed Init must not leave the
+// process PATH carrying the path_prepend policy — the engine is not
+// running, so nothing needs it, and every other daemon child would
+// otherwise inherit it (spec §4.4.1, I8/I9).
+func TestInitSoftFailRestoresPath(t *testing.T) {
+	cases := map[string]func(t *testing.T, cfg *pdxconfig.Config, m *Module){
+		"assemble failure": func(t *testing.T, cfg *pdxconfig.Config, m *Module) {
+			m.assemble = newFakeAssemble(&fakeAssembleRecord{}, engine{}, errors.New("boom"))
+		},
+		"data_dir failure": func(t *testing.T, cfg *pdxconfig.Config, m *Module) {
+			blocker := filepath.Join(t.TempDir(), "file-not-dir")
+			require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
+			cfg.DataDir = blocker
+			m.assemble = newFakeAssemble(&fakeAssembleRecord{}, noopEngine(), nil)
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("PATH", launchdPath)
+			cfg := baseConfig(t)
+			cfg.Nex.PathPrepend = []string{t.TempDir()}
+			m := New()
+			m.logf = discardLogf
+			setup(t, &cfg, m)
+			c := newTestCore(&cfg)
+
+			require.NoError(t, m.Init(c))
+			require.Error(t, m.initErr)
+			assert.Equal(t, launchdPath, os.Getenv("PATH"))
+		})
+	}
+}

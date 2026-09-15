@@ -60,6 +60,12 @@ type Module struct {
 	// assembled. RegisterRoutes mounts the 503 fallback when it is set.
 	initErr error
 
+	// origPath is the process PATH before Init applied the path_prepend
+	// policy, and pathChanged whether it did; softFail restores it so a
+	// daemon whose engine never assembled keeps its original environment.
+	origPath    string
+	pathChanged bool
+
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
 	logf     func(string, ...any)
@@ -89,7 +95,8 @@ func (m *Module) Dependencies() []string { return nil }
 //     `~/...` entries in path_prepend are real paths before they are
 //     checked;
 //  2. apply the PATH prepend policy to the process environment (the
-//     engine's `claude -p` children inherit it);
+//     engine's `claude -p` children inherit it; a later soft-fail restores
+//     the original PATH);
 //  3. map the config onto nexen.Options (buildOptions);
 //  4. create <DataDir>/nex;
 //  5. assemble the engine.
@@ -121,8 +128,10 @@ func (m *Module) Init(c *core.Core) error {
 
 	// Log the applied prefix and the original PATH's element count, not
 	// the full PATH: on a developer machine that is kilobytes per line.
-	pathElements := len(filepath.SplitList(os.Getenv("PATH")))
+	m.origPath = os.Getenv("PATH")
+	pathElements := len(filepath.SplitList(m.origPath))
 	_, changed := applyPathPolicy(n.PathPrepend, m.isDir)
+	m.pathChanged = changed
 	m.pathPrefix = strings.Join(existingPrefix(n.PathPrepend, m.isDir), string(os.PathListSeparator))
 	if changed {
 		m.logf("nex: PATH policy applied (path_prepend=%q): prefix=%s path_elements=%d", n.PathPrepend, m.pathPrefix, pathElements)
@@ -153,9 +162,19 @@ func (m *Module) Init(c *core.Core) error {
 // softFail records why the engine is unavailable and reports success to the
 // core: a broken [nex] must not take the terminal daemon down (spec §4.4.1,
 // I8). The 503 fallback handler and Status() surface the error instead.
+//
+// The PATH policy is applied before assemble (the engine may resolve
+// `claude` through PATH while assembling), so a failure past that point
+// restores the original PATH here: the policy exists only for the engine's
+// children, and with no engine it must not leak into the rest of the
+// daemon.
 func (m *Module) softFail(err error) error {
 	m.initErr = err
 	m.sys = engine{}
+	if m.pathChanged {
+		os.Setenv("PATH", m.origPath)
+		m.pathChanged = false
+	}
 	m.logf("nex: init failed (engine unavailable, /api/nex answers 503): %v", err)
 	return nil
 }

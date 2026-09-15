@@ -318,6 +318,29 @@ func TestInfoEndpoint_NexRestartRequired(t *testing.T) {
 	})
 }
 
+// TestInfoEndpoint_NexConfiguredIsBootValue: `configured` is whether nex
+// was enabled when the daemon booted (spec §4.4.2); a saved-but-unapplied
+// change only shows up as restart_required.
+func TestInfoEndpoint_NexConfiguredIsBootValue(t *testing.T) {
+	root := t.TempDir()
+
+	t.Run("enabled at boot then PUT disabling stays configured", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true, RepoRoots: []string{root}}}})
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":false,"repo_roots":[%q]}}`, root))
+		nex := getInfoNex(t, c)
+		assert.Equal(t, true, nex["configured"])
+		assert.Equal(t, true, nex["restart_required"])
+	})
+
+	t.Run("disabled at boot then PUT enabling stays unconfigured", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: false}}})
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q]}}`, root))
+		nex := getInfoNex(t, c)
+		assert.Equal(t, false, nex["configured"])
+		assert.Equal(t, true, nex["restart_required"])
+	})
+}
+
 func TestInfoEndpoint_ReporterCannotOverrideCoreNexFields(t *testing.T) {
 	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
 	c.AddModule(&statusStubModule{

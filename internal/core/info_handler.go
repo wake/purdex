@@ -41,7 +41,9 @@ func (c *Core) handleReady(w http.ResponseWriter, r *http.Request) {
 func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
 	hostID := c.Cfg.HostID
-	nexEnabled := c.Cfg.Nex.Enabled
+	// configured is the boot value (spec §4.4.2): a saved-but-unapplied
+	// change is reported through restart_required, not here.
+	nexEnabled := c.bootNex.Enabled
 	restartRequired := !c.Cfg.Nex.Equal(c.bootNex)
 	c.CfgMu.RUnlock()
 
