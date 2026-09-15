@@ -1,0 +1,162 @@
+// spa/src/lib/nex/event-reducer.ts — pure reducer from Nexen durable events
+// to the per-execution view state (spec §4.2.4). No React, no fetch, no
+// store: the hook feeds it history pages and SSE frames alike. Transient
+// frames never reach it (P-B2 adds a partial buffer for them).
+import type { StreamMessage } from '../stream-ws'
+import type { NexSseFrame } from './sse-parser'
+import type { ExecutionSummary, NexEvent } from './types'
+
+export interface ExecutionState {
+  summary: ExecutionSummary | null
+  /** Provider passthrough + synthetic user bubbles, in seq order. */
+  messages: StreamMessage[]
+  /** Highest durable seq applied (history or SSE). Never moved by transient frames. */
+  lastSeq: number
+  historyLoaded: boolean
+  /** A lifecycle event arrived; the summary is authoritative, so the hook refetches. */
+  summaryStale: boolean
+  sse: 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
+  sseError: string | null
+  /** The lease THIS tab holds — written only from attach(control)/renew responses (I11). */
+  lease: { leaseId: string; expiresAt: number } | null
+  leaseError: { code: string; heldBy?: string } | null
+  pendingSend: boolean
+  /** Optimistic user bubble; replaced by the durable execution.message_accepted. */
+  pendingLocal: { text: string; delivery: 'delivered' | 'queued' | null } | null
+  sendError: { code: string; message: string; turnId?: string } | null
+  lastTurn: { turnId: string; delivery: 'delivered' | 'queued' } | null
+}
+
+export function defaultExecutionState(): ExecutionState {
+  return {
+    summary: null,
+    messages: [],
+    lastSeq: 0,
+    historyLoaded: false,
+    summaryStale: false,
+    sse: 'idle',
+    sseError: null,
+    lease: null,
+    leaseError: null,
+    pendingSend: false,
+    pendingLocal: null,
+    sendError: null,
+    lastTurn: null,
+  }
+}
+
+/** Nexen's own (closed-set) kinds; everything else is provider passthrough. */
+export function isLifecycleKind(kind: string): boolean {
+  return kind.startsWith('execution.') || kind.startsWith('lease.')
+}
+
+/**
+ * Durable SSE frame → NexEvent. Returns null for transient frames (no id)
+ * and for data that is not JSON. Accepts both the full eventView shape and
+ * a bare payload (then seq comes from the id line and kind from event:).
+ */
+export function frameToEvent(frame: NexSseFrame): NexEvent | null {
+  if (frame.id == null) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(frame.data)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const obj = parsed as Record<string, unknown>
+  const idSeq = Number(frame.id)
+  if (typeof obj.kind === 'string' && obj.payload && typeof obj.payload === 'object') {
+    return {
+      seq: typeof obj.seq === 'number' ? obj.seq : idSeq,
+      execution_id: typeof obj.execution_id === 'string' ? obj.execution_id : '',
+      kind: obj.kind,
+      payload: obj.payload as Record<string, unknown>,
+      created_at: typeof obj.created_at === 'number' ? obj.created_at : 0,
+    }
+  }
+  return { seq: idSeq, execution_id: '', kind: frame.event, payload: obj, created_at: 0 }
+}
+
+function userBubble(text: string): StreamMessage {
+  return { type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } } as StreamMessage
+}
+
+function str(p: Record<string, unknown>, k: string): string | undefined {
+  const v = p[k]
+  return typeof v === 'string' ? v : undefined
+}
+
+function patchSummary(s: ExecutionState, patch: Partial<ExecutionSummary>): ExecutionState {
+  return { ...s, summaryStale: true, summary: s.summary ? { ...s.summary, ...patch } : null }
+}
+
+export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionState {
+  if (!Number.isFinite(ev.seq) || ev.seq <= s.lastSeq) return s
+  const p = ev.payload ?? {}
+  let next: ExecutionState = { ...s, lastSeq: ev.seq }
+
+  if (!isLifecycleKind(ev.kind)) {
+    next = { ...next, messages: [...next.messages, p as StreamMessage] }
+    if (ev.kind === 'result') next.pendingSend = false
+    return next
+  }
+
+  switch (ev.kind) {
+    case 'execution.delegated': {
+      const brief = str(p, 'brief')
+      if (brief) next = { ...next, messages: [...next.messages, userBubble(brief)] }
+      return patchSummary(next, {})
+    }
+    case 'execution.message_accepted': {
+      // Also a lifecycle event: turn_count / live_turn_id / event_count on the
+      // summary moved, so the hook refetches (summaryStale) like any other.
+      const text = str(p, 'text')
+      next = { ...next, pendingLocal: null, summaryStale: true }
+      if (text) next = { ...next, messages: [...next.messages, userBubble(text)] }
+      return next
+    }
+    case 'execution.running':
+      return patchSummary(next, { state: 'running' })
+    case 'execution.terminal': {
+      // execution/turn.go:568 — {turn_id, reason, state, detail?}; state is
+      // the execution's state after the turn ended (idle, or failed, or a
+      // terminal state that outranked it), so take it rather than assume idle.
+      next = { ...next, pendingSend: false }
+      const reason = str(p, 'reason')
+      const state = str(p, 'state') ?? 'idle'
+      return patchSummary(next, { state, ...(reason ? { last_turn_reason: reason } : {}) })
+    }
+    case 'execution.error':
+      return patchSummary({ ...next, pendingSend: false }, {})
+    case 'execution.rejected':
+      return patchSummary(next, { state: 'rejected', ...(str(p, 'reason') ? { reject_reason: str(p, 'reason') } : {}) })
+    case 'execution.terminated':
+      // execution/service.go:1184 — {principal_id} only; terminal_reason is
+      // the summary's business, the refetch brings it.
+      return patchSummary({ ...next, pendingSend: false }, { state: 'terminated' })
+    case 'execution.archived':
+      return patchSummary(next, { archived: true })
+    case 'execution.unarchived':
+      return patchSummary(next, { archived: false })
+    case 'execution.observer_attached':
+    case 'execution.observer_detached': {
+      const observers = p.observers
+      return patchSummary(next, typeof observers === 'number' ? { observers } : {})
+    }
+    case 'lease.acquired': {
+      const principal_id = str(p, 'principal_id')
+      const expires_at = typeof p.expires_at === 'number' ? p.expires_at : 0
+      return patchSummary(next, principal_id ? { lease: { principal_id, expires_at } } : {})
+    }
+    case 'lease.released': {
+      if (!next.summary) return { ...next, summaryStale: true }
+      const { lease: _dropped, ...rest } = next.summary
+      return { ...next, summaryStale: true, summary: rest as ExecutionSummary }
+    }
+    default:
+      // interrupt_requested / interrupted / turn_stalled / turn_orphaned …:
+      // nothing to render in P-B; the summary refetch carries the state.
+      return { ...next, summaryStale: true }
+  }
+}

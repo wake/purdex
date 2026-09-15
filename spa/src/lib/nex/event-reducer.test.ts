@@ -1,0 +1,119 @@
+// spa/src/lib/nex/event-reducer.test.ts
+import { describe, it, expect } from 'vitest'
+import { applyDurableEvent, defaultExecutionState, frameToEvent, isLifecycleKind, type ExecutionState } from './event-reducer'
+import type { NexEvent, ExecutionSummary } from './types'
+
+const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): NexEvent =>
+  ({ seq, execution_id: 'exc_1', kind, payload, created_at: 1 })
+
+const summary = (extra: Partial<ExecutionSummary> = {}): ExecutionSummary => ({
+  id: 'exc_1', state: 'idle', provider: 'claude', principal_id: 'pdx:mlab', cwd: '/w', mount_kind: 'dev',
+  brief: 'hi', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 0, archived: false, ...extra,
+})
+
+describe('applyDurableEvent', () => {
+  it('appends provider passthrough kinds as messages and advances lastSeq', () => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, ev(1, 'assistant', { type: 'assistant', message: { role: 'assistant', content: [], stop_reason: null } }))
+    s = applyDurableEvent(s, ev(2, 'some_future_provider_kind', { type: 'some_future_provider_kind' }))
+    expect(s.messages).toHaveLength(2)
+    expect(s.lastSeq).toBe(2)
+  })
+
+  it('is idempotent by seq', () => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, ev(5, 'assistant', { type: 'assistant' }))
+    const again = applyDurableEvent(s, ev(5, 'assistant', { type: 'assistant' }))
+    expect(again).toBe(s)
+    const older = applyDurableEvent(s, ev(3, 'assistant', { type: 'assistant' }))
+    expect(older).toBe(s)
+  })
+
+  it('turns execution.delegated brief and message_accepted text into user bubbles, clearing pendingLocal', () => {
+    let s: ExecutionState = { ...defaultExecutionState(), pendingLocal: { text: 'and more', delivery: 'queued' } }
+    s = applyDurableEvent(s, ev(1, 'execution.delegated', { brief: 'do the thing', principal_id: 'p' }))
+    s = applyDurableEvent(s, ev(2, 'execution.message_accepted', { text: 'and more', turn_id: 't1', principal_id: 'p' }))
+    expect(s.messages).toEqual([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'do the thing' }], stop_reason: null } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'and more' }], stop_reason: null } },
+    ])
+    expect(s.pendingLocal).toBeNull()
+    expect(s.summaryStale).toBe(true)
+  })
+
+  it('skips message_accepted with no text (site-wide stripped) without adding a bubble', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.message_accepted', { turn_id: 't1' }))
+    expect(s.messages).toEqual([])
+    expect(s.lastSeq).toBe(1)
+  })
+
+  it('patches summary fields carried by lifecycle events and marks the summary stale', () => {
+    let s: ExecutionState = { ...defaultExecutionState(), summary: summary() }
+    s = applyDurableEvent(s, ev(1, 'execution.running', {}))
+    expect(s.summary?.state).toBe('running')
+    expect(s.summaryStale).toBe(true)
+    s = applyDurableEvent(s, ev(2, 'execution.observer_attached', { observers: 3, principal_id: 'x' }))
+    expect(s.summary?.observers).toBe(3)
+    s = applyDurableEvent(s, ev(3, 'execution.terminal', { turn_id: 't1', reason: 'completed', state: 'idle' }))
+    expect(s.summary?.last_turn_reason).toBe('completed')
+    expect(s.summary?.state).toBe('idle')
+    s = applyDurableEvent(s, ev(4, 'execution.terminal', { turn_id: 't2', reason: 'error', state: 'failed', detail: 'boom' }))
+    expect(s.summary?.state).toBe('failed')
+    s = applyDurableEvent(s, ev(5, 'execution.terminated', { principal_id: 'p' }))
+    expect(s.summary?.state).toBe('terminated')
+    s = applyDurableEvent(s, ev(6, 'execution.archived', { principal_id: 'p' }))
+    expect(s.summary?.archived).toBe(true)
+  })
+
+  it('does not invent summary fields when there is no summary yet', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.running', {}))
+    expect(s.summary).toBeNull()
+    expect(s.summaryStale).toBe(true)
+  })
+
+  it('lease.acquired/released patch summary.lease only, never the local lease (I11)', () => {
+    let s: ExecutionState = { ...defaultExecutionState(), summary: summary(), lease: { leaseId: 'ls_me', expiresAt: 99 } }
+    s = applyDurableEvent(s, ev(1, 'lease.acquired', { lease_id: 'ls_other', principal_id: 'pdx:mlab/t-other', expires_at: 50 }))
+    expect(s.summary?.lease).toEqual({ principal_id: 'pdx:mlab/t-other', expires_at: 50 })
+    expect(s.lease).toEqual({ leaseId: 'ls_me', expiresAt: 99 })
+    s = applyDurableEvent(s, ev(2, 'lease.released', { principal_id: 'pdx:mlab/t-other' }))
+    expect(s.summary?.lease).toBeUndefined()
+    expect(s.lease).toEqual({ leaseId: 'ls_me', expiresAt: 99 })
+  })
+
+  it('result, execution.terminal and execution.error clear pendingSend; sendError is left alone', () => {
+    const base: ExecutionState = { ...defaultExecutionState(), pendingSend: true, sendError: { code: 'x', message: 'y' } }
+    expect(applyDurableEvent(base, ev(1, 'result', { type: 'result', total_cost_usd: 0.1 })).pendingSend).toBe(false)
+    expect(applyDurableEvent(base, ev(1, 'execution.terminal', { turn_id: 't', reason: 'error', state: 'idle' })).pendingSend).toBe(false)
+    expect(applyDurableEvent(base, ev(1, 'execution.error', { reason: 'finish_turn_failed' })).pendingSend).toBe(false)
+    expect(applyDurableEvent(base, ev(1, 'result', { type: 'result' })).sendError).toEqual({ code: 'x', message: 'y' })
+  })
+
+  it('ignores events with a non-finite seq', () => {
+    const s = defaultExecutionState()
+    expect(applyDurableEvent(s, { ...ev(0, 'assistant'), seq: Number.NaN })).toBe(s)
+  })
+})
+
+describe('frameToEvent / isLifecycleKind', () => {
+  it('returns null for transient frames and unparsable data', () => {
+    expect(frameToEvent({ id: null, event: 'stream_event', data: '{}' })).toBeNull()
+    expect(frameToEvent({ id: '7', event: 'assistant', data: '{not json' })).toBeNull()
+  })
+  it('builds a NexEvent from a Nexen durable frame: bare payload, seq from id:, kind from event: (api/sse.go:295)', () => {
+    expect(frameToEvent({ id: '7', event: 'assistant', data: '{"type":"assistant"}' }))
+      .toEqual({ seq: 7, execution_id: '', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 })
+    expect(frameToEvent({ id: '9', event: 'execution.terminal', data: '{"turn_id":"t","reason":"completed","state":"idle"}' }))
+      .toEqual({ seq: 9, execution_id: '', kind: 'execution.terminal', payload: { turn_id: 't', reason: 'completed', state: 'idle' }, created_at: 0 })
+  })
+  it('also accepts a full eventView wrapper (history item shape) for forward compatibility', () => {
+    expect(frameToEvent({ id: '8', event: 'assistant', data: '{"seq":8,"execution_id":"exc_1","kind":"assistant","payload":{"type":"assistant"},"created_at":9}' }))
+      .toEqual({ seq: 8, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 9 })
+  })
+  it('classifies kinds', () => {
+    expect(isLifecycleKind('execution.running')).toBe(true)
+    expect(isLifecycleKind('lease.acquired')).toBe(true)
+    expect(isLifecycleKind('assistant')).toBe(false)
+    expect(isLifecycleKind('rate_limit_event')).toBe(false)
+  })
+})
