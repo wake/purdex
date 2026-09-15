@@ -2,11 +2,7 @@
 // Sync Architecture — PreferencesContributor
 // =============================================================================
 
-import {
-  useUISettingsStore,
-  isHostColorMarkStyle,
-  clampHostColorLineWidth,
-} from '../../../stores/useUISettingsStore'
+import { useUISettingsStore, sanitizeHostColorPrefs } from '../../../stores/useUISettingsStore'
 import type { SyncContributor, FullPayload, MergeStrategy } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -45,26 +41,9 @@ function normalizeIncoming(data: IncomingPreferencesData): Partial<PreferencesDa
     normalized.dynamicTabName = showOscTitle
     normalized.showAgentTitleInStatusBar = showOscTitle
   }
+  // Sync bypasses store setters: invalid remote host color fields are dropped
+  // (local value kept); finite widths are clamped.
   return sanitizeHostColorPrefs(normalized)
-}
-
-/**
- * Sync bypasses store setters, so remote host color mark fields are validated
- * here: invalid styles and non-finite / non-number widths are dropped (local
- * value kept); finite widths are rounded + clamped.
- */
-function sanitizeHostColorPrefs(data: Partial<PreferencesData>): Partial<PreferencesData> {
-  const out: Record<string, unknown> = { ...data }
-  for (const field of ['hostColorSidebarStyle', 'hostColorTabBarStyle'] as const) {
-    if (field in out && !isHostColorMarkStyle(out[field])) delete out[field]
-  }
-  for (const field of ['hostColorSidebarWidth', 'hostColorTabBarWidth'] as const) {
-    if (!(field in out)) continue
-    const v = out[field]
-    if (typeof v !== 'number' || !Number.isFinite(v)) delete out[field]
-    else out[field] = clampHostColorLineWidth(v)
-  }
-  return out as Partial<PreferencesData>
 }
 
 // ---------------------------------------------------------------------------

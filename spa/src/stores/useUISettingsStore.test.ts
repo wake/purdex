@@ -8,6 +8,7 @@ import {
   HOST_COLOR_LINE_WIDTH_MAX,
   clampHostColorLineWidth,
   isHostColorMarkStyle,
+  sanitizeHostColorPrefs,
 } from './useUISettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 
@@ -287,6 +288,70 @@ describe('host color mark settings', () => {
     store.setHostColorTabBarStyle('evil' as never)
     expect(useUISettingsStore.getState().hostColorSidebarStyle).toBe('left-line')
     expect(useUISettingsStore.getState().hostColorTabBarStyle).toBe('none')
+  })
+
+  it('sanitizeHostColorPrefs drops invalid styles / non-finite widths and clamps finite widths', () => {
+    const out = sanitizeHostColorPrefs({
+      hostColorSidebarStyle: 'right-line',
+      hostColorSidebarWidth: '9',
+      hostColorTabBarStyle: 'left-line',
+      hostColorTabBarWidth: 99,
+      other: 'keep',
+    })
+    expect('hostColorSidebarStyle' in out).toBe(false)
+    expect('hostColorSidebarWidth' in out).toBe(false)
+    expect(out.hostColorTabBarStyle).toBe('left-line')
+    expect(out.hostColorTabBarWidth).toBe(6)
+    expect(out.other).toBe('keep')
+  })
+
+  it('sanitizeHostColorPrefs leaves absent fields absent and drops NaN/Infinity', () => {
+    expect(sanitizeHostColorPrefs({})).toEqual({})
+    const out = sanitizeHostColorPrefs({ hostColorSidebarWidth: NaN, hostColorTabBarWidth: Infinity })
+    expect(out).toEqual({})
+    expect(sanitizeHostColorPrefs({ hostColorSidebarWidth: 2.6 })).toEqual({ hostColorSidebarWidth: 3 })
+  })
+
+  it('rehydrate resets invalid persisted styles / widths to defaults and clamps out-of-range widths', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.UI_SETTINGS,
+      JSON.stringify({
+        state: {
+          hostColorSidebarStyle: 'right-line',
+          hostColorSidebarWidth: null,
+          hostColorTabBarStyle: 42,
+          hostColorTabBarWidth: 99,
+        },
+        version: 3,
+      }),
+    )
+    await useUISettingsStore.persist.rehydrate()
+    const s = useUISettingsStore.getState()
+    expect(s.hostColorSidebarStyle).toBe('gradient')
+    expect(s.hostColorSidebarWidth).toBe(2)
+    expect(s.hostColorTabBarStyle).toBe('bottom-line')
+    expect(s.hostColorTabBarWidth).toBe(6)
+  })
+
+  it('rehydrate keeps valid persisted host color prefs', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.UI_SETTINGS,
+      JSON.stringify({
+        state: {
+          hostColorSidebarStyle: 'left-line',
+          hostColorSidebarWidth: 4,
+          hostColorTabBarStyle: 'none',
+          hostColorTabBarWidth: 1,
+        },
+        version: 3,
+      }),
+    )
+    await useUISettingsStore.persist.rehydrate()
+    const s = useUISettingsStore.getState()
+    expect(s.hostColorSidebarStyle).toBe('left-line')
+    expect(s.hostColorSidebarWidth).toBe(4)
+    expect(s.hostColorTabBarStyle).toBe('none')
+    expect(s.hostColorTabBarWidth).toBe(1)
   })
 
   it('width setters clamp and round', () => {

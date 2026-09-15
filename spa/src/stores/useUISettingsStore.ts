@@ -34,6 +34,28 @@ export function clampHostColorLineWidth(n: number): number {
   return Math.min(HOST_COLOR_LINE_WIDTH_MAX, Math.max(HOST_COLOR_LINE_WIDTH_MIN, Math.round(n)))
 }
 
+const HOST_COLOR_STYLE_FIELDS = ['hostColorSidebarStyle', 'hostColorTabBarStyle'] as const
+const HOST_COLOR_WIDTH_FIELDS = ['hostColorSidebarWidth', 'hostColorTabBarWidth'] as const
+
+/**
+ * Validates host color mark fields for paths that bypass store setters (sync,
+ * persist rehydrate): invalid styles and non-number / non-finite widths are
+ * dropped; finite widths are rounded + clamped. Other fields pass through.
+ */
+export function sanitizeHostColorPrefs<T extends object>(data: T): T {
+  const out = { ...data } as Record<string, unknown>
+  for (const field of HOST_COLOR_STYLE_FIELDS) {
+    if (field in out && !isHostColorMarkStyle(out[field])) delete out[field]
+  }
+  for (const field of HOST_COLOR_WIDTH_FIELDS) {
+    if (!(field in out)) continue
+    const v = out[field]
+    if (typeof v !== 'number' || !Number.isFinite(v)) delete out[field]
+    else out[field] = clampHostColorLineWidth(v)
+  }
+  return out as T
+}
+
 interface UISettings {
   /**
    * 收到第一筆 terminal data 後，延遲多久才移除 overlay 顯示畫面（ms）。
@@ -193,6 +215,26 @@ export const useUISettingsStore = create<UISettings>()(
         if (clamped !== state.keepAliveCount) {
           useUISettingsStore.setState({ keepAliveCount: clamped })
         }
+
+        // migrate() passes v3 data through untouched, so corrupt local host color
+        // prefs must be repaired here: dropped fields fall back to defaults.
+        const hostColorDefaults = {
+          hostColorSidebarStyle: 'gradient' as HostColorMarkStyle,
+          hostColorSidebarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+          hostColorTabBarStyle: 'bottom-line' as HostColorMarkStyle,
+          hostColorTabBarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+        }
+        const current = {
+          hostColorSidebarStyle: state.hostColorSidebarStyle,
+          hostColorSidebarWidth: state.hostColorSidebarWidth,
+          hostColorTabBarStyle: state.hostColorTabBarStyle,
+          hostColorTabBarWidth: state.hostColorTabBarWidth,
+        }
+        const sanitized = { ...hostColorDefaults, ...sanitizeHostColorPrefs(current) }
+        const changed = (Object.keys(sanitized) as (keyof typeof sanitized)[]).some(
+          (k) => sanitized[k] !== current[k],
+        )
+        if (changed) useUISettingsStore.setState(sanitized)
       },
     },
   ),
