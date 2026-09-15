@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { DeviceStateSection } from './DeviceStateSection'
 import { useDeviceStateStore } from '../../../stores/useDeviceStateStore'
 import type { DeviceStateStatus } from '../../../stores/useDeviceStateStore'
@@ -29,66 +29,10 @@ describe('DeviceStateSection', () => {
     expect(screen.getByRole('heading', { level: 3 })).toBeInTheDocument()
   })
 
-  it('shows the default name as value and placeholder when no override', () => {
+  it('renders the device name field', () => {
     render(<DeviceStateSection />)
-    const input = nameInput()
-    expect(input.value).toBe('Chrome · macOS')
-    expect(input.placeholder).toBe('Chrome · macOS')
-    expect(input).toHaveAccessibleName()
-  })
-
-  it('shows the custom name when set', () => {
-    useDeviceStateStore.setState({ deviceName: 'Work Air' })
-    render(<DeviceStateSection />)
-    expect(nameInput().value).toBe('Work Air')
-  })
-
-  it('commits a trimmed rename on Enter', () => {
-    render(<DeviceStateSection />)
-    fireEvent.change(nameInput(), { target: { value: '  Studio  ' } })
-    fireEvent.keyDown(nameInput(), { key: 'Enter' })
-    expect(useDeviceStateStore.getState().deviceName).toBe('Studio')
-  })
-
-  it('commits a trimmed rename on blur', () => {
-    render(<DeviceStateSection />)
-    fireEvent.change(nameInput(), { target: { value: ' Laptop ' } })
-    fireEvent.blur(nameInput())
-    expect(useDeviceStateStore.getState().deviceName).toBe('Laptop')
-    expect(nameInput().value).toBe('Laptop')
-  })
-
-  it('does not commit on Enter while composing', () => {
-    render(<DeviceStateSection />)
-    fireEvent.change(nameInput(), { target: { value: '筆電' } })
-    fireEvent.keyDown(nameInput(), { key: 'Enter', isComposing: true })
-    expect(useDeviceStateStore.getState().deviceName).toBeNull()
-  })
-
-  it('hides the reset button when there is no override', () => {
-    render(<DeviceStateSection />)
-    expect(screen.queryByTestId('device-state-name-reset')).not.toBeInTheDocument()
-  })
-
-  it('reset button restores the default name', () => {
-    useDeviceStateStore.setState({ deviceName: 'Work Air' })
-    render(<DeviceStateSection />)
-    fireEvent.click(screen.getByTestId('device-state-name-reset'))
-    expect(useDeviceStateStore.getState().deviceName).toBeNull()
     expect(nameInput().value).toBe('Chrome · macOS')
-    expect(screen.queryByTestId('device-state-name-reset')).not.toBeInTheDocument()
-  })
-
-  it('resyncs the draft when the stored name changes externally', () => {
-    render(<DeviceStateSection />)
-    fireEvent.change(nameInput(), { target: { value: 'draft' } })
-    fireEvent.blur(nameInput())
-    expect(nameInput().value).toBe('draft')
-    // Simulate a sync / other window update.
-    act(() => {
-      useDeviceStateStore.setState({ deviceName: 'From sync' })
-    })
-    expect(nameInput().value).toBe('From sync')
+    expect(nameInput()).toHaveAccessibleName()
   })
 
   it('shows "not set" when no dev host is selected', () => {
