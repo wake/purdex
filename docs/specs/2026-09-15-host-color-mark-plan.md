@@ -86,10 +86,21 @@ Commit: `feat(spa): show host color mark on tabs`
 
 ## T6 — `HostColorField` in host Overview
 
-Files: `src/components/hosts/HostColorField.tsx` + test, `src/components/hosts/OverviewSection.tsx`
+Files: `src/components/hosts/HostColorField.tsx` + test, `src/components/hosts/OverviewSection.tsx`,
+`src/locales/en.json`, `src/locales/zh-TW.json`
 
 - 8 swatches (`aria-label` hex, `aria-pressed`), clear button, hex input (commit Enter/blur via
-  `normalizeHostColor`; invalid → `role="alert"` error text, no save). Writes via `setHostColor`.
+  `normalizeHostColor`; invalid → `role="alert"` error text, no save). Writes **only** via `setHostColor`.
+- Locale keys added in this task (both files; `locale-completeness.test.ts` must stay green):
+
+  | key | en | zh-TW |
+  |---|---|---|
+  | `hosts.color.label` | Color | 顏色 |
+  | `hosts.color.clear` | No color | 不上色 |
+  | `hosts.color.custom_aria` | Custom hex color | 自訂 hex 顏色 |
+  | `hosts.color.invalid` | Use a 6-digit hex like #3b82f6 | 請輸入 6 碼 hex，例如 #3b82f6 |
+
+- Tests query by role / aria-label / `data-testid`, never by translated text.
 - Rendered in Connection section directly below the Name field.
 - Tests: spec §7 `HostColorField` bullet.
 
@@ -102,8 +113,22 @@ Files: `src/components/settings/TerminalSection.tsx` + test, `src/locales/en.jso
 - Two `SettingItem`s after the tab-indicator item: sidebar and top tabs. Each: `SegmentControl`
   (gradient / left-line / bottom-line / none) and, only for line styles, a `type="number"` input
   `min=1 max=6 step=1` (matches existing numeric inputs in this file) with `aria-label`.
-- i18n keys under `settings.terminal.host_color_mark.*` and `hosts.color.*`, both locales
-  (locale-completeness test must pass).
+- Locale keys added in this task (both files; `locale-completeness.test.ts` must stay green):
+
+  | key | en | zh-TW |
+  |---|---|---|
+  | `settings.terminal.host_color_mark.sidebar.label` | Sidebar host color | 側欄 host 顏色 |
+  | `settings.terminal.host_color_mark.sidebar.desc` | How the host color is shown on sidebar tab rows | 側欄分頁列的 host 顏色顯示方式 |
+  | `settings.terminal.host_color_mark.tab_bar.label` | Top tab host color | 上方分頁 host 顏色 |
+  | `settings.terminal.host_color_mark.tab_bar.desc` | How the host color is shown on top tabs | 上方分頁的 host 顏色顯示方式 |
+  | `settings.terminal.host_color_mark.style.gradient` | Gradient | 漸層 |
+  | `settings.terminal.host_color_mark.style.left_line` | Left line | 左邊線 |
+  | `settings.terminal.host_color_mark.style.bottom_line` | Bottom line | 底線 |
+  | `settings.terminal.host_color_mark.style.none` | Off | 關閉 |
+  | `settings.terminal.host_color_mark.width_aria` | Line width in pixels | 線寬（px） |
+  | `settings.terminal.host_color_mark.px` | px | px |
+
+- Tests query by role / aria-label / `data-testid`, never by translated text.
 - Tests: spec §7 `TerminalSection` bullet.
 
 Commit: `feat(spa): host color mark settings UI`

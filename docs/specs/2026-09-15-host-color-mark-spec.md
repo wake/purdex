@@ -119,7 +119,7 @@ unchanged.
 New `Field` "Color" in the Connection section (below Name):
 - 8 preset swatch buttons (`aria-label` = hex, `aria-pressed` for current), a "clear" button,
   and a hex text input (commit on Enter/blur; invalid → inline error, not saved).
-- Writes through `updateHost(hostId, { color })`.
+- Writes through `setHostColor(hostId, color | null)` (never `updateHost`).
 - Component: `HostColorField` in `components/hosts/HostColorField.tsx` (keeps `OverviewSection` from growing).
 
 ### 6.2 Display settings — Settings > Terminal
