@@ -22,13 +22,13 @@ export interface DeeplinkPayload {
 
 /**
  * Observe-only focus of an ALREADY-OPEN session tab. Returns true when a tab
- * matching sessionCode existed and was activated. Never creates a tab and never
- * wires stdin — it only activates a view the user already opened, so the
- * observe-only guarantee holds.
+ * matching hostId + sessionCode existed and was activated. Never creates a tab
+ * and never wires stdin — it only activates a view the user already opened, so
+ * the observe-only guarantee holds.
  */
-export function focusExistingSessionTab(sessionCode: string): boolean {
+export function focusExistingSessionTab(hostId: string, sessionCode: string): boolean {
   const tabs = useTabStore.getState().tabs
-  const tabId = findTabBySessionCode(tabs, sessionCode)
+  const tabId = findTabBySessionCode(tabs, hostId, sessionCode)
   if (!tabId) return false
   useTabStore.getState().setActiveTab(tabId)
   const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
@@ -56,7 +56,7 @@ export function openExecutionDetailTab(executionId: string, host?: string): void
 export interface ResolveDeeplinkDeps {
   resolveHostId: (host?: string) => string
   fetchExecution: (hostId: string, executionId: string) => Promise<ExecutionView | null>
-  focusSession: (sessionCode: string) => boolean
+  focusSession: (hostId: string, sessionCode: string) => boolean
   openDetail: (executionId: string, host?: string) => void
 }
 
@@ -89,7 +89,7 @@ export async function resolveDeeplink(
   }
 
   // ① Live session already has an open tab → focus it (observe-only).
-  if (view?.session_code && deps.focusSession(view.session_code)) return
+  if (view?.session_code && deps.focusSession(hostId, view.session_code)) return
 
   // ② Fallback → read-only execution detail page.
   deps.openDetail(executionId, host)

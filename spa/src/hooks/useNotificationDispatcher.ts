@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useAgentStore } from '../stores/useAgentStore'
 import { getActiveSessionInfo } from '../lib/active-session'
-import { compositeKey } from '../lib/composite-key'
+import { compositeKey, splitCompositeKey } from '../lib/composite-key'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
@@ -10,7 +10,7 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
 import { normalizeEventName } from '../lib/event-name'
-import { findTabBySessionCode, getPrimaryPane } from '../lib/pane-tree'
+import { findTabBySessionCode } from '../lib/pane-tree'
 import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
 import { createTab } from '../types/tab'
@@ -96,8 +96,8 @@ useAgentStore.subscribe((state, prevState) => {
     }
   }
   // Detect removed hosts (any key whose host prefix is gone)
-  const prevHostIds = new Set(Object.keys(prevState.lastEvents).map(k => k.split(':')[0]))
-  const currHostIds = new Set(Object.keys(state.lastEvents).map(k => k.split(':')[0]))
+  const prevHostIds = new Set(Object.keys(prevState.lastEvents).map(k => splitCompositeKey(k).hostId))
+  const currHostIds = new Set(Object.keys(state.lastEvents).map(k => splitCompositeKey(k).hostId))
   for (const hostId of prevHostIds) {
     if (!currHostIds.has(hostId)) {
       purgeDebounceForHost(hostId)
@@ -216,10 +216,7 @@ export function useNotificationDispatcher(): void {
         const prev = prevEvents[compositeKeyStr]
         if (prev && prev.broadcast_ts === event.broadcast_ts) continue
 
-        // Extract sessionCode from composite key (hostId:sessionCode)
-        const colonIdx = compositeKeyStr.indexOf(':')
-        const hostId = colonIdx >= 0 ? compositeKeyStr.slice(0, colonIdx) : ''
-        const sessionCode = colonIdx >= 0 ? compositeKeyStr.slice(colonIdx + 1) : compositeKeyStr
+        const { hostId, sessionCode } = splitCompositeKey(compositeKeyStr)
 
         // Dedup layer 1: localStorage-based persistent dedup (handles restart/snapshot).
         // New sessions use Infinity sentinel — first event is recorded but not dispatched.
@@ -229,7 +226,7 @@ export function useNotificationDispatcher(): void {
 
         const derived = event.status || null
         const tabs = useTabStore.getState().tabs
-        const hasTab = findTabBySessionCode(tabs, sessionCode) !== undefined
+        const hasTab = findTabBySessionCode(tabs, hostId, sessionCode) !== undefined
         const settings = useNotificationSettingsStore.getState().getSettingsForAgent(event.agent_type || '')
         const activeInfo = getActiveSessionInfo()
         const focusedCompositeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
@@ -279,29 +276,19 @@ export function useNotificationDispatcher(): void {
   useEffect(() => {
     if (!window.electronAPI?.onNotificationClicked) return
     return window.electronAPI.onNotificationClicked((payload) => {
-      // If the payload carries an explicit action, use it directly
-      if (payload.action) {
-        if (payload.action.kind === 'open-host') {
-          handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
-        } else {
-          handleNotificationClick({
-            kind: 'open-session',
-            hostId: payload.action.hostId,
-            sessionCode: payload.action.sessionCode ?? payload.sessionCode,
-          })
-        }
-        return
+      // Electron main always forwards `action` (carrying hostId). A payload
+      // without it has no host to route to, so it is ignored rather than
+      // guessed — session codes are not unique across hosts.
+      if (!payload.action) return
+      if (payload.action.kind === 'open-host') {
+        handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
+      } else {
+        handleNotificationClick({
+          kind: 'open-session',
+          hostId: payload.action.hostId,
+          sessionCode: payload.action.sessionCode ?? payload.sessionCode,
+        })
       }
-      // Backwards compat: no action field — fall back to open-session
-      const tabs = useTabStore.getState().tabs
-      const tabId = findTabBySessionCode(tabs, payload.sessionCode)
-      let hostId = useHostStore.getState().hostOrder[0] ?? ''
-      if (tabId) {
-        const tab = tabs[tabId]
-        const primary = getPrimaryPane(tab.layout)
-        if (primary.content.kind === 'tmux-session') hostId = primary.content.hostId
-      }
-      handleNotificationClick({ kind: 'open-session', hostId, sessionCode: payload.sessionCode })
     })
   }, [])
 
@@ -344,7 +331,7 @@ export function handleNotificationClick(action: NotificationAction): void {
     case 'open-session': {
       const { hostId, sessionCode } = action
       const tabs = useTabStore.getState().tabs
-      const tabId = findTabBySessionCode(tabs, sessionCode)
+      const tabId = findTabBySessionCode(tabs, hostId, sessionCode)
       const ck = `${hostId}:${sessionCode}`
       const event = useAgentStore.getState().lastEvents[ck]
       const agentSettings = useNotificationSettingsStore.getState().getSettingsForAgent(event?.agent_type || '')

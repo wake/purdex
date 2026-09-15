@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick, buildDebounceKey, __resetDebounceStateForTests, __purgeDebounceForHostForTests } from './useNotificationDispatcher'
+import { renderHook } from '@testing-library/react'
+import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick, buildDebounceKey, __resetDebounceStateForTests, __purgeDebounceForHostForTests, useNotificationDispatcher } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 import { useTabStore } from '../stores/useTabStore'
@@ -8,6 +9,7 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { createTab } from '../types/tab'
+import { useHostStore } from '../stores/useHostStore'
 
 const defaultSettings: NotificationSettings = {
   enabled: true, events: {}, notifyWithoutTab: false, reopenTabOnClick: false,
@@ -139,6 +141,98 @@ describe('shouldDispatch', () => {
   })
 })
 
+describe('useNotificationDispatcher composite key split', () => {
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+    useNotificationSettingsStore.setState({ agents: {} })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  })
+
+  it('splits hostId / sessionCode on the last colon when hostId itself contains a colon', () => {
+    const showNotification = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
+
+    const HOST_ID = 'mlab:abc123'
+    const SESSION_CODE = 'ses001'
+    const ck = `${HOST_ID}:${SESSION_CODE}`
+    // Seed the persistent dedup so this session is past the Infinity sentinel
+    // and the next (newer) broadcast_ts actually dispatches.
+    localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [ck]: 1 }))
+    useNotificationSettingsStore.getState().setNotifyWithoutTab('cc', true)
+
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    useAgentStore.setState({
+      lastEvents: {
+        [ck]: { agent_type: 'cc', status: 'waiting', raw_event_name: 'PermissionRequest', broadcast_ts: 2, detail: { tool_name: 'Bash' } },
+      },
+    })
+
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    const payload = showNotification.mock.calls[0][0]
+    expect(payload.sessionCode).toBe(SESSION_CODE)
+    expect(payload.action).toEqual({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+    unmount()
+  })
+})
+
+describe('useNotificationDispatcher electron click listener', () => {
+  const SESSION_CODE = 'ses001'
+  let clickHandler: ((payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }) => void) | null
+
+  beforeEach(() => {
+    clickHandler = null
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+    useNotificationSettingsStore.setState({ agents: {} })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    useHostStore.setState({ hostOrder: ['host-a'] })
+    Object.defineProperty(window, 'electronAPI', {
+      value: {
+        onNotificationClicked: (cb: typeof clickHandler) => { clickHandler = cb; return () => { clickHandler = null } },
+      },
+      writable: true,
+      configurable: true,
+    })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  })
+
+  it('ignores a click payload without action (legacy host-guessing path removed)', () => {
+    const tab = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.setState({ activeTabId: null })
+
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    expect(clickHandler).not.toBeNull()
+    clickHandler!({ sessionCode: SESSION_CODE })
+
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    unmount()
+  })
+
+  it('activates the tab named by payload.action', () => {
+    const tab = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.setState({ activeTabId: null })
+
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    clickHandler!({ sessionCode: SESSION_CODE, action: { kind: 'open-session', hostId: 'host-a', sessionCode: SESSION_CODE } })
+
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
+    unmount()
+  })
+})
+
 describe('handleNotificationClick workspace switching', () => {
   const HOST_ID = 'host-a'
   const SESSION_CODE = 'ses001'
@@ -172,6 +266,30 @@ describe('handleNotificationClick workspace switching', () => {
     expect(state.activeWorkspaceId).toBe(wsB.id)
     const wsState = state.workspaces.find(w => w.id === wsB.id)
     expect(wsState?.activeTabId).toBe(tab.id)
+  })
+
+  it('picks the tab whose hostId matches when two hosts share the same session code', () => {
+    // Session codes are a deterministic encoding of tmux `$N`, so host-a and
+    // host-b can both have a session with the same code. The host-a tab is
+    // inserted first so a code-only lookup would wrongly land on it.
+    const tabA = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const tabB = createTab({ kind: 'tmux-session', hostId: 'host-b', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tabA)
+    useTabStore.getState().addTab(tabB)
+
+    const wsA = useWorkspaceStore.getState().addWorkspace('Workspace A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('Workspace B')
+    useWorkspaceStore.getState().addTabToWorkspace(wsA.id, tabA.id)
+    useWorkspaceStore.getState().addTabToWorkspace(wsB.id, tabB.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    useTabStore.getState().setActiveTab(tabA.id)
+
+    handleNotificationClick({ kind: 'open-session', hostId: 'host-b', sessionCode: SESSION_CODE })
+
+    expect(useTabStore.getState().activeTabId).toBe(tabB.id)
+    const state = useWorkspaceStore.getState()
+    expect(state.activeWorkspaceId).toBe(wsB.id)
+    expect(state.workspaces.find(w => w.id === wsB.id)?.activeTabId).toBe(tabB.id)
   })
 
   it('switches to Home when tab is standalone (not in any workspace)', () => {
@@ -433,6 +551,42 @@ describe('debounce cleanup', () => {
     expect(shouldNotify(makeErrorParams(ckTarget, 'rate_limit'))).toBe(true)
     // "mlab:def456" entry untouched → still blocked
     expect(shouldNotify(makeErrorParams(ckOther, 'rate_limit'))).toBe(false)
+  })
+
+  it('debounce__remove_host_with_colon_via_subscription — store subscription detects host removal when hostId contains colon', () => {
+    // Two hosts whose ids both contain ':' and share the prefix "mlab".
+    // Old code derived hostId via split(':')[0] → both collapse to "mlab", so
+    // removing every session of "mlab:abc123" never triggers a host-level purge.
+    const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: { error: 'rate_limit' } }
+    useAgentStore.setState({
+      lastEvents: {
+        'mlab:abc123:s1': { ...fakeEvent },
+        'mlab:def456:s1': { ...fakeEvent },
+      },
+    })
+
+    // Debounce entries: s1 on both hosts, plus an extra s2 on "mlab:abc123"
+    // that has no lastEvents entry — only the host-level purge can clear it.
+    shouldNotify(makeErrorParams('mlab:abc123:s1', 'rate_limit'))
+    shouldNotify(makeErrorParams('mlab:abc123:s2', 'rate_limit'))
+    shouldNotify(makeErrorParams('mlab:def456:s1', 'rate_limit'))
+
+    vi.setSystemTime(1_000)
+    expect(shouldNotify(makeErrorParams('mlab:abc123:s1', 'rate_limit'))).toBe(false)
+    expect(shouldNotify(makeErrorParams('mlab:abc123:s2', 'rate_limit'))).toBe(false)
+    expect(shouldNotify(makeErrorParams('mlab:def456:s1', 'rate_limit'))).toBe(false)
+
+    // Remove the only session of host "mlab:abc123" → host disappears from lastEvents
+    useAgentStore.setState({
+      lastEvents: { 'mlab:def456:s1': { ...fakeEvent } },
+    })
+
+    vi.setSystemTime(2_000)
+    // Host-level purge cleared every "mlab:abc123" entry (incl. s2 with no lastEvents)
+    expect(shouldNotify(makeErrorParams('mlab:abc123:s1', 'rate_limit'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('mlab:abc123:s2', 'rate_limit'))).toBe(true)
+    // "mlab:def456" untouched → still blocked
+    expect(shouldNotify(makeErrorParams('mlab:def456:s1', 'rate_limit'))).toBe(false)
   })
 
   it('debounce__remove_host_resets — all keys for host cleared on removeHost', () => {

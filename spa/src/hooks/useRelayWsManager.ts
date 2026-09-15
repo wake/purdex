@@ -4,6 +4,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { connectStream, type StreamMessage, type ControlRequest } from '../lib/stream-ws'
 import { fetchWsTicket } from '../lib/host-api'
+import { splitCompositeKey } from '../lib/composite-key'
 
 /**
  * Manages stream WS connections driven by relayStatus changes.
@@ -24,10 +25,7 @@ export function useRelayWsManager() {
         for (const [ck, connected] of Object.entries(relayStatus)) {
           const wasConnected = prevRelay.current[ck] ?? false
 
-          // Decompose composite key to hostId + sessionCode
-          const colonIdx = ck.indexOf(':')
-          const hostId = colonIdx >= 0 ? ck.slice(0, colonIdx) : ''
-          const sessionCode = colonIdx >= 0 ? ck.slice(colonIdx + 1) : ck
+          const { hostId, sessionCode } = splitCompositeKey(ck)
 
           if (connected && !wasConnected) {
             if (pendingFetches.has(ck)) continue // ticket fetch already in flight
@@ -96,9 +94,7 @@ export function useRelayWsManager() {
         // Clean up sessions removed from relayStatus (e.g., session deleted)
         for (const prevCk of Object.keys(prevRelay.current)) {
           if (!(prevCk in relayStatus)) {
-            const colonIdx = prevCk.indexOf(':')
-            const hostId = colonIdx >= 0 ? prevCk.slice(0, colonIdx) : ''
-            const sessionCode = colonIdx >= 0 ? prevCk.slice(colonIdx + 1) : prevCk
+            const { hostId, sessionCode } = splitCompositeKey(prevCk)
             const existing = activeConns.get(prevCk)
             existing?.close()
             useStreamStore.getState().setConn(hostId, sessionCode, null)

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ExecutionDetailPage } from './ExecutionDetailPage'
-import { fetchExecutionView, type ExecutionView } from '../lib/execution-api'
+import { fetchExecutionView, resolveExecutionHostId, type ExecutionView } from '../lib/execution-api'
+import { focusExistingSessionTab } from '../lib/deeplink/deeplinkResolver'
 import { useTabStore } from '../stores/useTabStore'
 import { createTab } from '../types/tab'
 
@@ -14,7 +15,13 @@ vi.mock('../lib/execution-api', async () => {
   }
 })
 
+vi.mock('../lib/deeplink/deeplinkResolver', () => ({
+  focusExistingSessionTab: vi.fn(() => true),
+}))
+
 const mockFetch = vi.mocked(fetchExecutionView)
+const mockResolveHost = vi.mocked(resolveExecutionHostId)
+const mockFocus = vi.mocked(focusExistingSessionTab)
 
 function view(overrides: Partial<ExecutionView> = {}): ExecutionView {
   return {
@@ -38,6 +45,9 @@ function view(overrides: Partial<ExecutionView> = {}): ExecutionView {
 
 beforeEach(() => {
   mockFetch.mockReset()
+  mockResolveHost.mockReset()
+  mockResolveHost.mockReturnValue('host-a')
+  mockFocus.mockClear()
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
 })
 afterEach(cleanup)
@@ -104,5 +114,24 @@ describe('ExecutionDetailPage', () => {
     useTabStore.getState().addTab(tab)
     rerender(<ExecutionDetailPage executionId="exc_1" />)
     await waitFor(() => expect(screen.getByTestId('execution-observe')).toBeInTheDocument())
+  })
+
+  it('pins the observe affordance to the hostId used for the fetch, even if resolution changes later', async () => {
+    // First resolution (fetch time) → host-a; any later resolution (e.g. host
+    // store reordered mid-flight) → host-b. The page must keep using host-a.
+    mockResolveHost.mockReturnValueOnce('host-a').mockReturnValue('host-b')
+    mockFetch.mockResolvedValue(view({ session_code: 'sess1', status: 'running' }))
+    const tab = createTab({
+      kind: 'tmux-session', hostId: 'host-a', sessionCode: 'sess1',
+      mode: 'stream', cachedName: 's', tmuxInstance: '',
+    })
+    useTabStore.getState().addTab(tab)
+
+    render(<ExecutionDetailPage executionId="exc_1" />)
+    await waitFor(() => expect(screen.getByTestId('execution-detail')).toBeInTheDocument())
+    expect(screen.getByTestId('execution-observe')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Observe session output' }))
+    expect(mockFocus).toHaveBeenCalledWith('host-a', 'sess1')
   })
 })
