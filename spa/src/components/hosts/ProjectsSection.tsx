@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Check, PencilSimple, Plus, Trash, X } from '@phosphor-icons/react'
-import { HostConfigConflictError, type HostProject } from '../../lib/host-config-api'
-import { MAX_CONFIG_ITEMS, moveItem, newConfigId } from '../../lib/host-config-validate'
-import { useHostConfigStore } from '../../stores/useHostConfigStore'
+import { type HostProject } from '../../lib/host-config-api'
+import { MAX_CONFIG_ITEMS, newConfigId } from '../../lib/host-config-validate'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HostConfigNotice, useHostConfigGate } from './HostConfigNotice'
 import { PathStatusIcon, ProjectEditDialog } from './ProjectEditDialog'
+import { useHostConfigCollection } from './useHostConfigCollection'
 import { usePathCheck } from './usePathCheck'
 
 function RowPathStatus({ hostId, project }: { hostId: string; project: HostProject }) {
@@ -13,56 +13,30 @@ function RowPathStatus({ hostId, project }: { hostId: string; project: HostProje
   return <PathStatusIcon status={status} testId={`project-path-status-${project.id}`} />
 }
 
-/** Where a save failure is shown: inside the open dialog, or above the list. */
-type ErrorTarget = 'dialog' | 'list'
-
 export function ProjectsSection({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const { entry, editable, notice } = useHostConfigGate(hostId)
   const projects = entry.projects
   const [editing, setEditing] = useState<HostProject | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<{ target: ErrorTarget; text: string } | null>(null)
-  const locked = !editable || saving
+  // Row actions are queued and planned from the latest list, so they stay live
+  // while a save is in flight; only the dialog is held shut behind its own save.
+  const { pending, saveError, clearSaveError, move, remove, upsert } = useHostConfigCollection<HostProject>(hostId, 'projects')
+  const locked = !editable
   const atLimit = projects.length >= MAX_CONFIG_ITEMS
 
-  const persist = async (next: HostProject[], target: ErrorTarget) => {
-    setSaving(true)
-    setSaveError(null)
-    try {
-      await useHostConfigStore.getState().saveProjects(hostId, next)
-      return true
-    } catch (err) {
-      // A 400's message is the daemon's body text (host-config-api `failure`).
-      const text = err instanceof HostConfigConflictError
-        ? t('host_config.conflict')
-        : t('host_config.save_failed', { reason: err instanceof Error ? err.message : String(err) })
-      setSaveError({ target, text })
-      return false
-    } finally {
-      setSaving(false)
-    }
-  }
-
   const handleSave = async (project: HostProject) => {
-    const exists = projects.some((p) => p.id === project.id)
-    if (!exists && atLimit) {
-      setSaveError({ target: 'dialog', text: t('host_config.limit', { max: MAX_CONFIG_ITEMS }) })
-      return
-    }
-    const next = exists ? projects.map((p) => (p.id === project.id ? project : p)) : [...projects, project]
-    if (await persist(next, 'dialog')) setEditing(null)
+    if (await upsert(project)) setEditing(null)
   }
 
   const openEditor = (project: HostProject) => {
-    setSaveError(null)
+    clearSaveError()
     setEditing(project)
   }
 
   const closeEditor = () => {
     setEditing(null)
-    setSaveError((e) => (e?.target === 'dialog' ? null : e))
+    clearSaveError('dialog')
   }
 
   const iconBtn = 'p-1 rounded hover:bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
@@ -71,7 +45,7 @@ export function ProjectsSection({ hostId }: { hostId: string }) {
     <div className="max-w-3xl">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">{t('hosts.projects')}</h2>
-        <button type="button" data-testid="project-add" disabled={locked || atLimit}
+        <button type="button" data-testid="project-add" disabled={locked || pending || atLimit}
           onClick={() => openEditor({ id: newConfigId(), name: '', slug: '', path: '' })}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50">
           <Plus size={14} />{t('projects.add')}
@@ -88,7 +62,7 @@ export function ProjectsSection({ hostId }: { hostId: string }) {
 
       {editing && (
         <ProjectEditDialog key={editing.id} hostId={hostId} initial={editing} others={projects}
-          busy={locked} error={saveError?.target === 'dialog' ? saveError.text : null}
+          busy={locked || pending} error={saveError?.target === 'dialog' ? saveError.text : null}
           onSave={(p) => { void handleSave(p) }} onCancel={closeEditor} />
       )}
 
@@ -119,17 +93,17 @@ export function ProjectsSection({ hostId }: { hostId: string }) {
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-end gap-1">
                       <button type="button" data-testid={`project-up-${project.id}`} title={t('host_config.move_up')}
-                        disabled={locked || index === 0} onClick={() => void persist(moveItem(projects, index, -1), 'list')}
+                        disabled={locked || index === 0} onClick={() => void move(project.id, -1)}
                         className={iconBtn}><ArrowUp size={14} /></button>
                       <button type="button" data-testid={`project-down-${project.id}`} title={t('host_config.move_down')}
-                        disabled={locked || index === projects.length - 1} onClick={() => void persist(moveItem(projects, index, 1), 'list')}
+                        disabled={locked || index === projects.length - 1} onClick={() => void move(project.id, 1)}
                         className={iconBtn}><ArrowDown size={14} /></button>
                       <button type="button" data-testid={`project-edit-${project.id}`} title={t('common.edit')}
                         disabled={locked} onClick={() => openEditor(project)} className={iconBtn}><PencilSimple size={14} /></button>
                       {deleting === project.id ? (
                         <span className="flex items-center gap-1">
                           <button type="button" data-testid={`project-delete-confirm-${project.id}`} disabled={locked}
-                            onClick={() => { setDeleting(null); void persist(projects.filter((p) => p.id !== project.id), 'list') }}
+                            onClick={() => { setDeleting(null); void remove(project.id) }}
                             className="p-1 text-red-400 cursor-pointer disabled:opacity-40"><Check size={14} /></button>
                           <button type="button" onClick={() => setDeleting(null)} className="p-1 text-text-muted cursor-pointer"><X size={14} /></button>
                         </span>

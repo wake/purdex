@@ -57,6 +57,17 @@ describe('ProjectsSection', () => {
     expect(screen.getByTestId('project-down-p1')).toBeDisabled()
   })
 
+  it('a second row action fired before the first save lands keeps both intents', async () => {
+    render(<ProjectsSection hostId={H} />)
+    fireEvent.click(screen.getByTestId('project-down-p1'))
+    fireEvent.click(screen.getByTestId('project-delete-p2'))
+    fireEvent.click(screen.getByTestId('project-delete-confirm-p2'))
+    await waitFor(() => expect(saveProjects).toHaveBeenCalledTimes(2))
+    expect(saveProjects.mock.calls[0][1]).toEqual([P2, P1])
+    // Planned from the reordered list the first action left behind.
+    expect(saveProjects.mock.calls[1][1]).toEqual([P1])
+  })
+
   it('adds a project; slug follows the name until edited; client validation blocks bad input', async () => {
     render(<ProjectsSection hostId={H} />)
     fireEvent.click(screen.getByTestId('project-add'))
