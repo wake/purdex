@@ -80,13 +80,18 @@ describe('registerBuiltinModules', () => {
     const hostContributions = listContributions('host')
     const builtins = hostContributions.filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
     expect(builtins.map((c) => c.localId)).toEqual([
-      'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex',
+      'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex', 'projects',
     ])
 
     const nex = builtins.find((c) => c.localId === 'nex')
     expect(nex?.order).toBe(6)
     expect(nex?.labelKey).toBe('hosts.nex.label')
     expect(nex?.component).toBeDefined()
+
+    const projects = builtins.find((c) => c.localId === 'projects')
+    expect(projects?.order).toBe(7)
+    expect(projects?.labelKey).toBe('hosts.projects')
+    expect(projects?.component).toBeDefined()
   })
 
   it('registers memory-monitor kind with Performance Monitor display label', () => {
