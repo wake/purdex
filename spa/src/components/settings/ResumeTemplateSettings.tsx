@@ -12,14 +12,16 @@
 //  2. **Nothing here can block a save.** The template is saved to the host the
 //     moment the row commits; every verdict, including "could not check", is
 //     advice arriving afterwards.
-//  2b. **A draft outlives its commit until the host takes it.** Until the PUT
-//     lands, the draft is the only copy of what the user typed, so a failed
-//     save keeps the text on screen next to the error instead of reverting the
-//     row to the host's value. A conflict is the exception: the daemon's copy
-//     won, the store already holds it, and the draft is dropped so the row
-//     repaints with it. Commits are queued per host and each one merges onto
-//     the copy the previous one left, so two quick edits never overwrite each
-//     other (`host-config-queue`).
+//  2b. **A draft outlives its commit until the host takes THAT value.** Until
+//     the PUT lands, the draft is the only copy of what the user typed, so a
+//     failed save keeps the text on screen next to the error instead of
+//     reverting the row to the host's value. A conflict is the exception: the
+//     daemon's copy won, the store already holds it, and the draft goes so the
+//     row repaints with it. Either way the draft is only released when it still
+//     holds the value the save carried — text typed while the save was in
+//     flight is a newer uncommitted edit and survives. Commits are queued per
+//     host and each one merges onto the copy the previous one left, so two
+//     quick edits never overwrite each other (`host-config-queue`).
 //  3. **Per host.** Templates are this host's daemon copy (host-launcher spec
 //     §4.2); the Test runs against the same host.
 //  4. **A 404 is `unverifiable`.** An older daemon has no such endpoint, and
@@ -130,6 +132,21 @@ export function ResumeTemplateSettings({ hostId, busy = false }: { hostId: strin
   const dropDraft = (key: string) =>
     setDrafts(({ [key]: _dropped, ...rest }) => rest)
 
+  /**
+   * Hand the row back only if it still holds `committed`.
+   *
+   * A save settles after the fact and the inputs stay live while it is in
+   * flight, so by the time it lands the row may hold something the user typed
+   * since. That text has never been saved, and dropping it as if it had been
+   * would revert the row to the older value in front of them.
+   */
+  const dropDraftIfUnchanged = (key: string, committed: string) =>
+    setDrafts((d) => {
+      if (!(key in d) || d[key] !== committed) return d
+      const { [key]: _dropped, ...rest } = d
+      return rest
+    })
+
   const handleChange = (agentType: string, field: Field, value: string) => {
     const key = rowKey(agentType, field)
     setDrafts((d) => ({ ...d, [key]: value }))
@@ -179,10 +196,11 @@ export function ResumeTemplateSettings({ hostId, busy = false }: { hostId: strin
       },
       // Only now is the value the host's: until it is, the draft is the only
       // copy of what the user typed, and dropping it would discard the edit.
-      () => dropDraft(key),
+      () => dropDraftIfUnchanged(key, value),
       // A conflict is the one failure the draft must NOT survive: the daemon's
-      // copy won, and a draft would pin this row against the reload.
-      () => dropDraft(key),
+      // copy won, and a draft would pin this row against the reload. Text typed
+      // since is still the user's uncommitted edit and stays.
+      () => dropDraftIfUnchanged(key, value),
     )
   }
 

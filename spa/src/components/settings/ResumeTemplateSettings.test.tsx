@@ -481,6 +481,24 @@ describe('ResumeTemplateSettings — a commit is not lost', () => {
     expect(input('cc', 'fallback').value).toBe('mine -c')
   })
 
+  it('a save that lands while the row is being typed into again keeps the newer text', async () => {
+    const waiting = deferredSaves()
+    render(<ResumeTemplateSettings hostId={H1} />)
+
+    const el = input('cc', 'exact')
+    fireEvent.change(el, { target: { value: 'first --resume {id}' } })
+    fireEvent.keyDown(el, { key: 'Enter' })
+    await waitFor(() => expect(waiting).toHaveLength(1))
+
+    // The inputs stay live during a save, so the user types on.
+    fireEvent.change(input('cc', 'exact'), { target: { value: 'second --resume {id}' } })
+    await act(async () => { waiting.shift()?.() })
+
+    // The older save landing says nothing about the text typed since.
+    expect(input('cc', 'exact').value).toBe('second --resume {id}')
+    expect(overrides().cc?.exact).toBe('first --resume {id}')
+  })
+
   it('a save that fails keeps the typed text on screen beside the error', async () => {
     useHostConfigStore.setState({
       saveResumeTemplates: vi.fn(async () => { throw new HostConfigApiError(500, 'daemon is unwell') }),
