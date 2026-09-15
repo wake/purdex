@@ -148,106 +148,92 @@ function NewTabSessionForm({ hostId, disabled, onCreated, onCancel }: {
   )
 }
 
-export function SessionSection({ onSelect }: NewTabProviderProps) {
+const EMPTY_SESSIONS: Session[] = []
+
+export interface HostSessionSectionProps extends NewTabProviderProps {
+  hostId: string
+}
+
+/** One host's sessions block on the New Tab page (provider id `sessions:<hostId>`). */
+export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps) {
   useSessionWatch()
-  const sessionsMap = useSessionStore((s) => s.sessions)
-  const hosts = useHostStore((s) => s.hosts)
-  const hostOrder = useHostStore((s) => s.hostOrder)
-  const runtime = useHostStore((s) => s.runtime)
+  const host = useHostStore((s) => s.hosts[hostId])
+  const hostRuntime = useHostStore((s) => s.runtime[hostId])
+  const sessions = useSessionStore((s) => s.sessions[hostId]) ?? EMPTY_SESSIONS
   const t = useI18nStore((s) => s.t)
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-  const [creatingHost, setCreatingHost] = useState<string | null>(null)
+  const [isExpanded, setExpanded] = useState(true)
+  const [creating, setCreating] = useState(false)
 
-  if (hostOrder.length === 0) {
-    return <p className="text-sm text-text-muted px-2">{t('session.no_sessions')}</p>
-  }
+  if (!host) return null
 
+  const isOffline = hostRuntime && hostRuntime.status !== 'connected'
+  const createDisabled = !hostRuntime || hostRuntime.status !== 'connected' || hostRuntime.tmuxState === 'unavailable'
+
+  const statusDot = hostRuntime?.status === 'reconnecting' ? (
+    <Spinner size={8} className="text-yellow-400 animate-spin" />
+  ) : hostRuntime?.status === 'connected' ? (
+    <Circle size={8} weight="fill" className="text-green-400" />
+  ) : hostRuntime ? (
+    <Circle size={8} weight="fill" className="text-red-400" />
+  ) : (
+    <Circle size={8} weight="fill" className="text-text-muted" />
+  )
+
+  // data-session-list scopes j/k / arrow navigation to this host's block.
   return (
     <div className="flex flex-col gap-1" data-session-list>
-      {hostOrder.map((hostId) => {
-        const host = hosts[hostId]
-        if (!host) return null
-        const sessions = sessionsMap[hostId] ?? []
-        const hostRuntime = runtime[hostId]
-        const isOffline = hostRuntime && hostRuntime.status !== 'connected'
-        const isExpanded = expanded[hostId] !== false
-        const createDisabled = !hostRuntime || hostRuntime.status !== 'connected' || hostRuntime.tmuxState === 'unavailable'
-
-        const statusDot = hostRuntime?.status === 'reconnecting' ? (
-          <Spinner size={8} className="text-yellow-400 animate-spin" />
-        ) : hostRuntime?.status === 'connected' ? (
-          <Circle size={8} weight="fill" className="text-green-400" />
-        ) : hostRuntime ? (
-          <Circle size={8} weight="fill" className="text-red-400" />
-        ) : (
-          <Circle size={8} weight="fill" className="text-text-muted" />
-        )
-
-        return (
-          <div key={hostId}>
-            <div className="flex items-center gap-1.5 px-3 py-1 mt-1 w-full">
-              {hostOrder.length > 1 ? (
-                <button
-                  data-testid={`host-header-${hostId}`}
-                  aria-expanded={isExpanded}
-                  onClick={() => setExpanded((prev) => ({ ...prev, [hostId]: !isExpanded }))}
-                  className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
-                >
-                  {isExpanded ? <CaretDown size={10} className="text-text-muted" /> : <CaretRight size={10} className="text-text-muted" />}
-                  {statusDot}
-                  <span className="text-xs text-text-muted font-semibold">{host.name}</span>
-                  {isOffline && (
-                    <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
-                  )}
-                </button>
-              ) : (
-                <span className="flex items-center gap-1.5 flex-1 min-w-0">
-                  {statusDot}
-                  <span className="text-xs text-text-muted font-semibold">{host.name}</span>
-                  {isOffline && (
-                    <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
-                  )}
-                </span>
-              )}
-              <button
-                data-testid={`new-session-${hostId}`}
-                disabled={createDisabled}
-                onClick={() => {
-                  const opening = creatingHost !== hostId
-                  setCreatingHost(opening ? hostId : null)
-                  // Opening on a collapsed host must reveal the form (which is
-                  // gated behind isExpanded) — expand so the "+" isn't a no-op.
-                  if (opening) setExpanded((prev) => ({ ...prev, [hostId]: true }))
-                }}
-                className="ml-auto p-1 rounded hover:bg-white/10 text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                title={t('hosts.new_session')}
-              >
-                <Plus size={14} />
-              </button>
-            </div>
-            {isExpanded && creatingHost === hostId && (
-              <NewTabSessionForm
-                hostId={hostId}
-                disabled={createDisabled}
-                onCancel={() => setCreatingHost(null)}
-                onCreated={({ code, name, mode, tmuxInstance }) => {
-                  setCreatingHost(null)
-                  onSelect({ kind: 'tmux-session', hostId, sessionCode: code, mode: mode as 'terminal' | 'stream', cachedName: name, tmuxInstance })
-                }}
-              />
-            )}
-            {isExpanded && sessions.map((session) => (
-              <SessionRow
-                key={`${hostId}:${session.code}`}
-                hostId={hostId}
-                session={session}
-                disabled={!!isOffline}
-                onSelect={onSelect}
-              />
-            ))}
-          </div>
-        )
-      })}
+      <div className="flex items-center gap-1.5 px-3 py-1 mt-1 w-full">
+        <button
+          data-testid={`host-header-${hostId}`}
+          aria-expanded={isExpanded}
+          onClick={() => setExpanded(!isExpanded)}
+          className="flex items-center gap-1.5 min-w-0 cursor-pointer"
+        >
+          {isExpanded
+            ? <CaretDown size={12} className="text-text-secondary hover:text-text-primary" />
+            : <CaretRight size={12} className="text-text-secondary hover:text-text-primary" />}
+          {statusDot}
+          <span className="text-sm font-bold text-text-primary truncate">{host.name}</span>
+        </button>
+        <button
+          data-testid={`new-session-${hostId}`}
+          disabled={createDisabled}
+          onClick={() => {
+            const opening = !creating
+            setCreating(opening)
+            // Opening on a collapsed host must reveal the form (which is
+            // gated behind isExpanded) - expand so the "+" isn't a no-op.
+            if (opening) setExpanded(true)
+          }}
+          className="ml-1 p-1 rounded border border-accent/40 bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          title={t('hosts.new_session')}
+        >
+          <Plus size={14} weight="bold" />
+        </button>
+        {isOffline && (
+          <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
+        )}
+      </div>
+      {isExpanded && creating && (
+        <NewTabSessionForm
+          hostId={hostId}
+          disabled={createDisabled}
+          onCancel={() => setCreating(false)}
+          onCreated={({ code, name, mode, tmuxInstance }) => {
+            setCreating(false)
+            onSelect({ kind: 'tmux-session', hostId, sessionCode: code, mode: mode as 'terminal' | 'stream', cachedName: name, tmuxInstance })
+          }}
+        />
+      )}
+      {isExpanded && sessions.map((session) => (
+        <SessionRow
+          key={`${hostId}:${session.code}`}
+          hostId={hostId}
+          session={session}
+          disabled={!!isOffline}
+          onSelect={onSelect}
+        />
+      ))}
     </div>
   )
 }

@@ -4,7 +4,7 @@ import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
   type DragEndEvent, type DragStartEvent, pointerWithin,
 } from '@dnd-kit/core'
-import { getNewTabProviders } from '../../../lib/new-tab-registry'
+import { useNewTabProviders } from '../../../hooks/useNewTabProviders'
 import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
 import type { ProfileKey } from '../../../lib/resolve-profile'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -15,7 +15,7 @@ import { NewTabThumbnail } from './NewTabThumbnail'
 
 export function NewTabSubsection() {
   const t = useI18nStore((s) => s.t)
-  const providers = useMemo(() => getNewTabProviders(), [])
+  const providers = useNewTabProviders()
   const profiles = useNewTabLayoutStore((s) => s.profiles)
   const active = useNewTabLayoutStore((s) => s.activeEditingProfile)
   const setEditing = useNewTabLayoutStore((s) => s.setEditing)
@@ -33,6 +33,7 @@ export function NewTabSubsection() {
     return providers.map((p) => ({
       id: p.id,
       label: p.label,
+      labelParams: p.labelParams,
       inUse: activeIds.has(p.id),
       unavailable: p.disabled,
     }))
@@ -87,8 +88,9 @@ export function NewTabSubsection() {
     }
   }
 
+  const draggingProvider = dragging ? providers.find((p) => p.id === dragging.providerId) : undefined
   const overlayLabel = dragging
-    ? (providers.find((p) => p.id === dragging.providerId)?.label ?? dragging.providerId)
+    ? (draggingProvider ? t(draggingProvider.label, draggingProvider.labelParams) : dragging.providerId)
     : null
 
   return (
@@ -113,7 +115,7 @@ export function NewTabSubsection() {
         <DragOverlay>
           {overlayLabel && (
             <div className="px-2 py-1 rounded-md bg-surface-elevated border border-border-active text-xs shadow-lg">
-              {t(overlayLabel)}
+              {overlayLabel}
             </div>
           )}
         </DragOverlay>,

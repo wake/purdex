@@ -4,7 +4,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { X } from '@phosphor-icons/react'
 import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
-import { getNewTabProviders } from '../../../lib/new-tab-registry'
+import { useNewTabProviders } from '../../../hooks/useNewTabProviders'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { colsClass } from '../../../lib/cols-class'
 import type { ProfileKey } from '../../../lib/resolve-profile'
@@ -49,7 +49,7 @@ function SortableItem({ profileKey, id, label, onRemove }: {
 function Column({ profileKey, colIdx, ids }: { profileKey: ProfileKey; colIdx: number; ids: string[] }) {
   const t = useI18nStore((s) => s.t)
   const removeModule = useNewTabLayoutStore((s) => s.removeModule)
-  const providers = useMemo(() => getNewTabProviders(), [])
+  const providers = useNewTabProviders()
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
   const { setNodeRef, isOver } = useDroppable({
     id: `col:${profileKey}:${colIdx}`,
@@ -75,7 +75,7 @@ function Column({ profileKey, colIdx, ids }: { profileKey: ProfileKey; colIdx: n
               key={id}
               profileKey={profileKey}
               id={id}
-              label={t(p.label)}
+              label={t(p.label, p.labelParams)}
               onRemove={() => removeModule(profileKey, id)}
             />
           )

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { NewTabPage } from './NewTabPage'
 import {
   registerNewTabProvider,
+  registerNewTabProviderSource,
   clearNewTabRegistry,
   type NewTabProviderProps,
 } from '../lib/new-tab-registry'
@@ -523,5 +524,66 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
     const list = screen.getByTestId('newtab-bring-in-list')
     expect(list.className).toContain('overflow-y-auto')
     expect(list.className).toContain('min-h-0')
+  })
+})
+
+describe('NewTabPage — module visibility follows the mount-time snapshot', () => {
+  function editorSource() {
+    let ids: string[] = []
+    const listeners = new Set<() => void>()
+    registerNewTabProviderSource({
+      id: 'dyn-editor',
+      getProviders: () => ids.map((id) => ({ id, label: `label-${id}`, icon: 'File', order: 0, component: FakeEditorCard, moduleId: 'editor' })),
+      subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l) } },
+      ownsId: (id) => id.startsWith('ed:'),
+    })
+    return (next: string[]) => act(() => { ids = next; listeners.forEach((l) => l()) })
+  }
+
+  it('shows a late provider whose module was enabled at mount, even if disabled since', () => {
+    registerNewTabProvider({ id: 'sessions', label: 'sessions', icon: 'List', order: 0, component: FakeSessionsCard })
+    const emit = editorSource()
+    primeLayout(['sessions', 'ed:a'])
+    render(<NewTabPage onSelect={() => {}} />)
+    act(() => { useModuleEnabledStore.setState({ enabled: { editor: false } }) })
+    emit(['ed:a'])
+    expect(screen.getByTestId('card-editor')).toBeTruthy()
+  })
+
+  it('hides a late provider whose module was disabled at mount, even if enabled since', () => {
+    registerNewTabProvider({ id: 'sessions', label: 'sessions', icon: 'List', order: 0, component: FakeSessionsCard })
+    useModuleEnabledStore.setState({ enabled: { editor: false } })
+    const emit = editorSource()
+    primeLayout(['sessions', 'ed:a'])
+    render(<NewTabPage onSelect={() => {}} />)
+    act(() => { useModuleEnabledStore.setState({ enabled: {} }) })
+    emit(['ed:a'])
+    expect(screen.queryByTestId('card-editor')).toBeNull()
+  })
+})
+
+describe('NewTabPage — dynamic providers', () => {
+  it('interpolates labelParams into the section heading', () => {
+    useI18nStore.setState({ t: (k: string, p?: Record<string, string | number>) => (p ? `${k}:${p.host}` : k) })
+    registerNewTabProvider({ id: 'sessions:h1', label: 'session.provider_label_host', labelParams: { host: 'mlab' }, icon: 'List', order: 0, component: FakeSessionsCard })
+    primeLayout(['sessions:h1'])
+    render(<NewTabPage onSelect={() => {}} />)
+    expect(screen.getByText('session.provider_label_host:mlab')).toBeTruthy()
+  })
+
+  it('picks up a provider added by a source while mounted', () => {
+    let ids = ['a']
+    const listeners = new Set<() => void>()
+    registerNewTabProviderSource({
+      id: 'dyn',
+      getProviders: () => ids.map((id) => ({ id: `dyn:${id}`, label: `dyn-${id}`, icon: 'List', order: 0, component: FakeSessionsCard })),
+      subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l) } },
+      ownsId: (id) => id.startsWith('dyn:'),
+    })
+    primeLayout(['dyn:a', 'dyn:b'])
+    render(<NewTabPage onSelect={() => {}} />)
+    expect(screen.queryByText('dyn-b')).toBeNull()
+    act(() => { ids = ['a', 'b']; listeners.forEach((l) => l()) })
+    expect(screen.getByText('dyn-b')).toBeTruthy()
   })
 })

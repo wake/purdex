@@ -1,7 +1,7 @@
 // spa/src/components/SessionSection.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
-import { SessionSection } from './SessionSection'
+import { HostSessionSection } from './SessionSection'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
@@ -22,6 +22,12 @@ const HOST_ID = 'test-host'
 const HOST_B = 'host-b'
 const mockOnSelect = vi.fn()
 
+/** Render one block per host, mirroring how NewTabPage lays out `sessions:<hostId>` providers. */
+function Blocks() {
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  return <>{hostOrder.map((h) => <HostSessionSection key={h} hostId={h} onSelect={mockOnSelect} />)}</>
+}
+
 beforeEach(() => {
   cleanup()
   mockOnSelect.mockClear()
@@ -40,28 +46,27 @@ describe('SessionSection', () => {
   it('renders header + create button for a connected host with zero sessions', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } } })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     expect(screen.queryByText('No sessions available')).toBeNull()
     expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeInTheDocument()
   })
 
-  it('shows the global empty message only when there are no hosts', () => {
-    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null })
-    render(<SessionSection onSelect={mockOnSelect} />)
-    expect(screen.getByText('No sessions available')).toBeInTheDocument()
+  it('renders nothing for a host id with no host record', () => {
+    const { container } = render(<HostSessionSection hostId="gone" onSelect={mockOnSelect} />)
+    expect(container).toBeEmptyDOMElement()
   })
 
   it('disables the create button when the host tmux is unavailable', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'unavailable' } } })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeDisabled()
   })
 
   it('disables the create button when the host has no runtime (offline)', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: {} }) // runtime undefined → Host-page rule treats as offline
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeDisabled()
   })
 
@@ -73,7 +78,7 @@ describe('SessionSection', () => {
       runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } },
     })
     useSessionStore.setState({ sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }] } })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     expect(screen.getByTestId(`host-header-${HOST_ID}`)).toHaveAttribute('aria-expanded', 'true') // unchanged
     expect(screen.getByText('dev')).toBeInTheDocument()
@@ -87,7 +92,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     expect(screen.getByText('dev')).toBeInTheDocument()
   })
 
@@ -99,7 +104,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     const row = screen.getByText('dev').closest('button') as HTMLElement
     expect(row).toHaveTextContent('Reading memory')
     // title trails the code within the row
@@ -114,7 +119,7 @@ describe('SessionSection', () => {
         { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
       ] },
     })
-    const withTitle = render(<SessionSection onSelect={mockOnSelect} />)
+    const withTitle = render(<Blocks />)
     const capped = screen.getByText(LONG)
     expect(capped.className).toContain('truncate')
     expect(capped.className).toContain('max-w-[50%]')
@@ -127,7 +132,7 @@ describe('SessionSection', () => {
         { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
       ] },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     const uncapped = screen.getByText(LONG)
     expect(uncapped.className).toContain('truncate')
     expect(uncapped.className).not.toContain('max-w-[50%]')
@@ -141,7 +146,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     const codeCls = screen.getByText('abc001').className
     const titleCls = screen.getByText('Reading memory').className
     // The title should use the same text colour token as the code.
@@ -158,7 +163,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     const row = screen.getByText('dev').closest('button') as HTMLElement
     expect(row).toHaveTextContent('dev')
     expect(row).toHaveTextContent('abc001')
@@ -172,7 +177,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByText('dev'))
     expect(mockOnSelect).toHaveBeenCalledWith({
       kind: 'tmux-session',
@@ -192,12 +197,12 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByText('dev'))
     expect(mockOnSelect).toHaveBeenCalledWith(expect.objectContaining({ tmuxInstance: '222:2000' }))
   })
 
-  it('does not show host header for single host', () => {
+  it('shows the collapse toggle even for a single host', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
@@ -205,9 +210,53 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
-    expect(screen.queryByTestId(`host-header-${HOST_ID}`)).toBeNull()
+    render(<Blocks />)
+    const header = screen.getByTestId(`host-header-${HOST_ID}`)
+    expect(header).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(header)
+    expect(screen.queryByText('dev')).toBeNull()
     expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeInTheDocument()
+  })
+
+  it('styles the host header: bright caret, bold host name, emphasized + right after the name', () => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } } })
+    render(<Blocks />)
+    const header = screen.getByTestId(`host-header-${HOST_ID}`)
+    const caret = header.querySelector('svg') as SVGElement
+    expect(caret.getAttribute('class')).toContain('text-text-secondary')
+    expect(caret.getAttribute('width')).toBe('12')
+    const name = screen.getByText('mlab')
+    expect(name.className).toContain('text-sm')
+    expect(name.className).toContain('font-bold')
+    expect(name.className).toContain('text-text-primary')
+    const plus = screen.getByTestId(`new-session-${HOST_ID}`)
+    expect(plus.className).not.toContain('ml-auto')
+    expect(plus.className).toContain('text-accent')
+    expect(plus.className).toContain('bg-accent/15')
+    // "+" follows the collapse toggle (which ends with the host name) — no
+    // nested buttons, and no longer pushed to the far right.
+    expect(header.lastElementChild).toBe(name)
+    expect(header.nextElementSibling).toBe(plus)
+    expect(header.className).not.toContain('flex-1')
+    expect(plus).not.toBeDisabled()
+  })
+
+  it('scopes j/k navigation to its own host block', () => {
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1', port: 7860, order: 0 }, [HOST_B]: { id: HOST_B, name: 'air', ip: '2', port: 7860, order: 1 } },
+      hostOrder: [HOST_ID, HOST_B], activeHostId: HOST_ID,
+    })
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }],
+        [HOST_B]: [{ code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }],
+      },
+    })
+    render(<Blocks />)
+    const dev = screen.getByText('dev').closest('button') as HTMLElement
+    dev.focus()
+    fireEvent.keyDown(dev, { key: 'j' })
+    expect(document.activeElement).toBe(dev) // last row of its block; does not jump into the next host
   })
 
   it('shows caret toggle on host header when multiple hosts', () => {
@@ -229,7 +278,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     const headerA = screen.getByTestId(`host-header-${HOST_ID}`)
     const headerB = screen.getByTestId(`host-header-${HOST_B}`)
     expect(headerA).toBeInTheDocument()
@@ -257,7 +306,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`host-header-${HOST_B}`))
     expect(screen.queryByText('air-dev')).toBeNull()
     expect(screen.getByTestId(`host-header-${HOST_B}`)).toHaveAttribute('aria-expanded', 'false')
@@ -283,7 +332,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     const headerB = screen.getByTestId(`host-header-${HOST_B}`)
     fireEvent.click(headerB)
     expect(screen.queryByText('air-dev')).toBeNull()
@@ -311,7 +360,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     // SessionSection has no active host protection — any host can be collapsed
     const headerA = screen.getByTestId(`host-header-${HOST_ID}`)
     fireEvent.click(headerA)
@@ -338,7 +387,7 @@ describe('SessionSection', () => {
         ],
       },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     // Collapse HOST_B
     fireEvent.click(screen.getByTestId(`host-header-${HOST_B}`))
     // Only HOST_ID session buttons should be navigable
@@ -354,7 +403,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }] },
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     // TabStatusIndicator renders a data-testid — assert the running indicator exists.
     expect(screen.getByTestId('tab-status-indicator')).toBeInTheDocument()
   })
@@ -367,7 +416,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
     vi.mocked(hostApi.createSession).mockResolvedValue(made())
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
     fireEvent.click(screen.getByText('Create'))
@@ -379,7 +428,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
     vi.mocked(hostApi.createSession).mockResolvedValue({ ...made(), tmux_instance: '222:2000' })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
     fireEvent.click(screen.getByText('Create'))
@@ -390,7 +439,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
     vi.mocked(hostApi.createSession).mockResolvedValue(made({ code: '' }))
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
     fireEvent.click(screen.getByText('Create'))
@@ -406,7 +455,7 @@ describe('SessionSection', () => {
       useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null, runtime: {} }) // host vanishes mid-flight
       return made()
     })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
     fireEvent.click(screen.getByText('Create'))
@@ -419,7 +468,7 @@ describe('SessionSection', () => {
     useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
     let resolve!: (v: ReturnType<typeof made>) => void
     vi.mocked(hostApi.createSession).mockReturnValue(new Promise((r) => { resolve = r }))
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
     const createBtn = screen.getByText('Create')
@@ -437,7 +486,7 @@ describe('SessionSection', () => {
       runtime: { [HOST_ID]: LIVE, [HOST_B]: LIVE },
     })
     useSessionStore.setState({ sessions: { [HOST_ID]: [], [HOST_B]: [] } })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`host-header-${HOST_B}`)) // collapse HOST_B
     expect(screen.getByTestId(`host-header-${HOST_B}`)).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(screen.getByTestId(`new-session-${HOST_B}`)) // + must re-expand and show the form
@@ -450,7 +499,7 @@ describe('SessionSection', () => {
     useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
     let resolve!: (v: ReturnType<typeof made>) => void
     vi.mocked(hostApi.createSession).mockReturnValue(new Promise((r) => { resolve = r }))
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
     fireEvent.click(screen.getByText('Create'))
@@ -465,7 +514,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
     vi.mocked(hostApi.createSession).mockResolvedValue(made())
-    render(<StrictMode><SessionSection onSelect={mockOnSelect} /></StrictMode>)
+    render(<StrictMode><Blocks /></StrictMode>)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
     fireEvent.click(screen.getByText('Create'))
@@ -477,7 +526,7 @@ describe('SessionSection', () => {
   it('disables submit and does not POST when the host goes offline after the form opens', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
     useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
-    render(<SessionSection onSelect={mockOnSelect} />)
+    render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     fireEvent.change(screen.getByPlaceholderText('Session Name'), { target: { value: 'built' } })
     act(() => { useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } }) }) // host drops while form open

@@ -147,6 +147,22 @@ describe('HostSidebar', () => {
     expect(defaultProps.onSelect).toHaveBeenCalledWith(HOST_ID, 'uploads')
   })
 
+  it('renders inactive sub-page items and their module icon at the brighter secondary tone', () => {
+    render(<HostSidebar {...defaultProps} />)
+    const inactive = screen.getByText('Hooks').closest('button')!
+    expect(inactive.className).toContain('text-text-secondary')
+    expect(inactive.className).toContain('hover:text-text-primary')
+    expect(inactive.className).not.toContain('text-text-muted')
+    // Active row keeps its accent styling.
+    expect(screen.getByText('Overview').closest('button')!.className).toContain('text-accent')
+    const puzzleIcons = Array.from(document.querySelectorAll('button svg')).filter((svg) =>
+      svg.parentElement?.tagName === 'BUTTON' && svg.previousElementSibling?.classList.contains('truncate'),
+    )
+    for (const icon of puzzleIcons) {
+      expect(icon.getAttribute('class')).toContain('text-text-secondary')
+    }
+  })
+
   it('shows Hosts title', () => {
     render(<HostSidebar {...defaultProps} />)
     expect(screen.getByText('Hosts')).toBeInTheDocument()

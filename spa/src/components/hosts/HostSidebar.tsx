@@ -116,7 +116,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                             ? 'text-text-muted cursor-not-allowed'
                             : isActive
                               ? 'text-accent font-semibold bg-accent/10 cursor-pointer'
-                              : 'text-text-muted hover:text-text-secondary cursor-pointer'
+                              : 'text-text-secondary hover:text-text-primary cursor-pointer'
                         }`}
                       >
                         <span className="flex-1 truncate">{t(page.labelKey)}</span>
@@ -124,7 +124,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                           <PuzzlePiece
                             size={10}
                             weight="bold"
-                            className="flex-shrink-0 text-text-muted"
+                            className="flex-shrink-0 text-text-secondary"
                             aria-hidden
                           />
                         )}

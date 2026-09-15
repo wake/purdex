@@ -4,6 +4,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 export interface PaletteItem {
   id: string
   label: string       // i18n key
+  labelParams?: Record<string, string>
   inUse: boolean
   unavailable?: boolean
 }
@@ -35,7 +36,7 @@ function Chip({ item, onClickAdd }: { item: PaletteItem; onClickAdd: (id: string
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      aria-label={t(item.label)}
+      aria-label={t(item.label, item.labelParams)}
       data-testid={`palette-chip-${item.id}`}
       data-unavailable={item.unavailable ? 'true' : undefined}
       data-in-use={item.inUse ? 'true' : undefined}
@@ -44,7 +45,7 @@ function Chip({ item, onClickAdd }: { item: PaletteItem; onClickAdd: (id: string
       className={className}
       type="button"
     >
-      <span>{t(item.label)}</span>
+      <span>{t(item.label, item.labelParams)}</span>
       {item.inUse && <span className="ml-1 text-[10px]">{t('settings.interface.palette_in_use')}</span>}
       {item.unavailable && <span className="ml-1 text-[10px]">{t('settings.interface.palette_unavailable')}</span>}
     </button>

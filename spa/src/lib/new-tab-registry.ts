@@ -6,7 +6,9 @@ export interface NewTabProviderProps {
 
 export interface NewTabProvider {
   id: string
-  label: string
+  label: string // i18n key
+  /** Optional interpolation params for `label` (e.g. `{ host: 'mlab' }`). */
+  labelParams?: Record<string, string>
   icon: string
   order: number
   component: React.ComponentType<NewTabProviderProps>
@@ -20,10 +22,58 @@ export interface NewTabProvider {
   moduleId?: string
 }
 
-const providers = new Map<string, NewTabProvider>()
+/**
+ * A dynamic set of providers derived from live state (e.g. one sessions block
+ * per host). `getProviders()` is read on every `getNewTabProviders()` call;
+ * `subscribe` notifies when that set may have changed. `ownsId` lets the
+ * layout bootstrap prune ids this source used to produce but no longer does
+ * (removed host, legacy id) — ids nobody owns are never pruned.
+ */
+export interface NewTabProviderSource {
+  id: string
+  getProviders: () => NewTabProvider[]
+  subscribe: (listener: () => void) => () => void
+  ownsId: (providerId: string) => boolean
+  /**
+   * Whether `getProviders()` reflects real (hydrated) state. While false, the
+   * layout bootstrap neither places this source's providers nor prunes ids it
+   * owns — a pre-hydration host list must not erase persisted placements.
+   * Omitted = always ready.
+   */
+  isReady?: () => boolean
+  /**
+   * Retired ids this source replaces (e.g. legacy `sessions` → every
+   * `sessions:<hostId>`). Applied by the bootstrap before stale pruning, and
+   * only while the source is ready so `to` reflects the real state.
+   */
+  migrations?: () => NewTabProviderMigration[]
+}
 
-function snapshot(): NewTabProvider[] {
-  return [...providers.values()].sort((a, b) => a.order - b.order)
+export interface NewTabProviderMigration {
+  from: string
+  to: string[]
+}
+
+const providers = new Map<string, NewTabProvider>()
+const sources = new Map<string, NewTabProviderSource>()
+/** Notified when the registry itself changes (provider/source register, replace, clear). */
+const registryListeners = new Set<() => void>()
+
+function notifyRegistryChange(): void {
+  // Copy: a listener may (un)subscribe while we iterate.
+  for (const l of [...registryListeners]) l()
+}
+
+const isSourceReady = (s: NewTabProviderSource) => s.isReady?.() ?? true
+
+function snapshot(readyOnly = false): NewTabProvider[] {
+  const all = [...providers.values()]
+  for (const source of sources.values()) {
+    if (readyOnly && !isSourceReady(source)) continue
+    all.push(...source.getProviders())
+  }
+  // Array.prototype.sort is stable, so equal orders keep source order.
+  return all.sort((a, b) => a.order - b.order)
 }
 
 export function registerNewTabProvider(provider: NewTabProvider): void {
@@ -31,6 +81,13 @@ export function registerNewTabProvider(provider: NewTabProvider): void {
   // previous entry rather than duplicating it. HMR / bootstrap can call this
   // repeatedly without leaking stale providers.
   providers.set(provider.id, provider)
+  notifyRegistryChange()
+}
+
+/** Register a dynamic provider source. Same-id re-registration replaces. */
+export function registerNewTabProviderSource(source: NewTabProviderSource): void {
+  sources.set(source.id, source)
+  notifyRegistryChange()
 }
 
 /**
@@ -39,15 +96,81 @@ export function registerNewTabProvider(provider: NewTabProvider): void {
  * stay idempotent across HMR / re-bootstrap.
  */
 export function unregisterNewTabProvidersByModule(ownerModuleId: string): void {
+  let changed = false
   for (const [id, p] of providers) {
-    if (p.moduleId === ownerModuleId) providers.delete(id)
+    if (p.moduleId === ownerModuleId) {
+      providers.delete(id)
+      changed = true
+    }
   }
+  if (changed) notifyRegistryChange()
 }
 
 export function getNewTabProviders(): NewTabProvider[] {
   return snapshot()
 }
 
+/** Static providers plus those of sources whose state is ready (hydrated). */
+export function getReadyNewTabProviders(): NewTabProvider[] {
+  return snapshot(true)
+}
+
+/** Id migrations declared by ready sources (unready sources are skipped). */
+export function getNewTabProviderMigrations(): NewTabProviderMigration[] {
+  return [...sources.values()]
+    .filter(isSourceReady)
+    .flatMap((s) => s.migrations?.() ?? [])
+}
+
+/**
+ * Subscribe to any change in the provider set: registry changes (providers or
+ * sources registered, replaced, cleared) and each registered source's own
+ * emitter. One stable subscription — per-source subscriptions are re-synced
+ * whenever the source set changes, so sources added later are followed and
+ * replaced/cleared ones are released. Returns an unsubscribe.
+ */
+export function subscribeNewTabProviders(listener: () => void): () => void {
+  const attached = new Map<NewTabProviderSource, () => void>()
+  const syncSources = () => {
+    for (const [src, unsub] of attached) {
+      if (sources.get(src.id) !== src) {
+        unsub()
+        attached.delete(src)
+      }
+    }
+    for (const src of sources.values()) {
+      if (!attached.has(src)) attached.set(src, src.subscribe(listener))
+    }
+  }
+  const onRegistryChange = () => {
+    syncSources()
+    listener()
+  }
+  syncSources()
+  registryListeners.add(onRegistryChange)
+  return () => {
+    registryListeners.delete(onRegistryChange)
+    for (const unsub of attached.values()) unsub()
+    attached.clear()
+  }
+}
+
+/**
+ * Ids owned by a registered source that its current providers no longer
+ * include. An id owned by any not-yet-ready source is never reported stale.
+ */
+export function getStaleNewTabProviderIds(ids: string[]): string[] {
+  const live = new Set(snapshot().map((p) => p.id))
+  const all = [...sources.values()]
+  return ids.filter((id) => {
+    if (live.has(id)) return false
+    const owners = all.filter((s) => s.ownsId(id))
+    return owners.length > 0 && owners.every(isSourceReady)
+  })
+}
+
 export function clearNewTabRegistry(): void {
   providers.clear()
+  sources.clear()
+  notifyRegistryChange()
 }
