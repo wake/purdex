@@ -14,7 +14,9 @@
 
 - Pane identity is `(hostId, executionId)`; the same execution id on two hosts is two panes (spec §4.3.3, I10).
 - `ExecutionState.lease` is written only from `attach(control)`/`renew` responses (I11); `lease.acquired`/`released` events touch `summary.lease` only.
-- Subscription order is fixed: `getExecution` → `attachObserve` → history pages ascending from `after = 0` → **then** `openNexSse` with `Last-Event-ID = store.lastSeq` (P-B.1 Task 7 contract).
+- Subscription order is fixed: `getExecution` → `attachObserve` → history pages ascending from `after = 0` → **then** `openNexSse` with `Last-Event-ID = store.lastSeq` (P-B.1 Task 7 contract). `setSummary(host, id, summary, asOfSeq)` is always called with the `lastSeq` read **before** the fetch so a lifecycle event that lands mid-fetch keeps the summary stale (P-B.1 final-review fix).
+- At most `MAX_LIVE_SUBSCRIPTIONS_PER_HOST = 4` live SSE streams per host (spec §4.3.2 step 4, v2.1); LRU by pane activation; paused panes keep their store state and resume via `Last-Event-ID`.
+- The hook never falls back to another host: a pane whose stored host is missing reports `host_removed` immediately (spec §4.3.2 step 5, v2.1). `ExecutionPaneWrapper` passes `content.host ?? resolveExecutionHostId(undefined)` — the fallback applies only when the hint is absent.
 - Lease: renew every `ttl/3` s (ttl from `capabilities.lease.ttl_seconds`, default 120); stop renewing after `2 × ttl` without a send/interrupt (I3); release exactly once on teardown when held (I6).
 - Send failure path (I12): `pendingLocal = null`, `pendingSend = false`, `sendError` set, text restored to the input.
 - Stream mode must render byte-identical DOM before and after the extraction (I7 snapshot).
@@ -830,8 +832,8 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 ### Task 4: `useExecutionSubscription`
 
 **Files:**
-- Create: `spa/src/hooks/useExecutionSubscription.ts`
-- Test: `spa/src/hooks/useExecutionSubscription.test.ts`
+- Create: `spa/src/lib/nex/subscription-slots.ts`, `spa/src/hooks/useExecutionSubscription.ts`
+- Test: `spa/src/lib/nex/subscription-slots.test.ts`, `spa/src/hooks/useExecutionSubscription.test.ts`
 
 **Interfaces:**
 - Consumes: `getExecution`, `attachObserve`, `fetchExecutionEvents` (nex-api); `openNexSse` (nex-sse); `frameToEvent` (event-reducer); `useExecutionStore`; `useHostStore`.
@@ -842,8 +844,25 @@ export type SubscriptionProblem = null | 'not_found' | 'host_removed' | 'nex_una
    // nex_disabled = the daemon answered a plain 404 (NexApiError code 'http_404'): nothing is mounted at /api/nex
 export const HISTORY_PAGE_LIMIT = 500
 export const SUMMARY_REFETCH_DEBOUNCE_MS = 300
-export function useExecutionSubscription(hostId: string, executionId: string): { problem: SubscriptionProblem }
+export function useExecutionSubscription(hostId: string, executionId: string, active: boolean): { problem: SubscriptionProblem; paused: boolean }
+
+// subscription-slots.ts — per-host LRU of live subscriptions (pure, testable)
+export const MAX_LIVE_SUBSCRIPTIONS_PER_HOST = 4
+export interface SlotRegistry {
+  /** Claim/refresh a slot for key; returns the keys that must PAUSE (evicted LRU), if any. */
+  touch(hostId: string, key: string): string[]
+  /** Release a slot (pane closed / host removed). */
+  release(hostId: string, key: string): void
+  /** Subscribe to eviction notices for key; returns unsubscribe. */
+  onEvict(key: string, cb: () => void): () => void
+  /** Is key currently holding a live slot? */
+  isLive(hostId: string, key: string): boolean
+  resetForTests(): void
+}
+export const subscriptionSlots: SlotRegistry
 ```
+
+`ExecutionState.sse` gains the value `'paused'` (add it to the union in `spa/src/lib/nex/event-reducer.ts` — a one-word change, no reducer logic).
 
 - [ ] **Step 1: Failing tests**
 
@@ -885,7 +904,7 @@ describe('useExecutionSubscription', () => {
   afterEach(() => vi.useRealTimers())
 
   it('loads summary, pages history ascending, then opens SSE at lastSeq (order contract)', async () => {
-    const { result } = renderHook(() => useExecutionSubscription(H, E))
+    const { result } = renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(api.getExecution).toHaveBeenCalledWith(H, E)
     expect(api.attachObserve).toHaveBeenCalledWith(H, E)
@@ -906,14 +925,14 @@ describe('useExecutionSubscription', () => {
     vi.mocked(api.fetchExecutionEvents).mockReset()
       .mockResolvedValueOnce({ items: [ev(1)], next_cursor: 1 })
       .mockResolvedValueOnce({ items: [ev(2)], next_cursor: 0 })
-    renderHook(() => useExecutionSubscription(H, E))
+    renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(api.fetchExecutionEvents).toHaveBeenNthCalledWith(2, H, E, { after: 1, limit: HISTORY_PAGE_LIMIT })
     expect(useExecutionStore.getState().executions[KEY].lastSeq).toBe(2)
   })
 
   it('applies durable SSE frames, drops transient ones, mirrors status', async () => {
-    renderHook(() => useExecutionSubscription(H, E))
+    renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     act(() => {
       sseOpts!.onStatus('open')
@@ -928,7 +947,7 @@ describe('useExecutionSubscription', () => {
   })
 
   it('refetches the summary when a lifecycle event marks it stale (debounced) and after reconnect', async () => {
-    renderHook(() => useExecutionSubscription(H, E))
+    renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     vi.mocked(api.getExecution).mockClear()
     act(() => {
@@ -945,7 +964,7 @@ describe('useExecutionSubscription', () => {
 
   it('reports not_found and opens nothing when the summary 404s', async () => {
     vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(404, 'execution_not_found', 'nope'))
-    const { result } = renderHook(() => useExecutionSubscription(H, E))
+    const { result } = renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(result.current.problem).toBe('not_found')
     expect(sse.openNexSse).not.toHaveBeenCalled()
@@ -953,19 +972,19 @@ describe('useExecutionSubscription', () => {
 
   it('reports nex_unavailable on 503 nex_unavailable and nex_disabled on a bare 404', async () => {
     vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(503, 'nex_unavailable', 'init failed'))
-    const a = renderHook(() => useExecutionSubscription(H, E))
+    const a = renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(a.result.current.problem).toBe('nex_unavailable')
     a.unmount()
     vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(404, 'http_404', 'nex: HTTP 404'))
-    const b = renderHook(() => useExecutionSubscription(H, E))
+    const b = renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(b.result.current.problem).toBe('nex_disabled')
   })
 
   it('warns once per connection on a malformed durable frame and does not advance the cursor', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    renderHook(() => useExecutionSubscription(H, E))
+    renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     act(() => {
       sseOpts!.onFrame({ id: '9', event: 'assistant', data: '{oops' })
@@ -977,7 +996,7 @@ describe('useExecutionSubscription', () => {
   })
 
   it('closes the SSE on unmount and when the executionId changes', async () => {
-    const { rerender, unmount } = renderHook(({ id }) => useExecutionSubscription(H, id), { initialProps: { id: E } })
+    const { rerender, unmount } = renderHook(({ id }) => useExecutionSubscription(H, id, true), { initialProps: { id: E } })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     vi.mocked(api.fetchExecutionEvents).mockResolvedValueOnce({ items: [], next_cursor: 0 })
     rerender({ id: 'exc_2' })
@@ -987,8 +1006,44 @@ describe('useExecutionSubscription', () => {
     expect(sseClose).toHaveBeenCalledTimes(2)
   })
 
+  it('reports host_removed immediately when the stored host does not exist — never falls back to another host', async () => {
+    useHostStore.setState({ hosts: { other: { id: 'other', name: 'O', ip: '9', port: 1 } } as never, hostOrder: ['other'], activeHostId: 'other', runtime: {} })
+    const { result } = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(result.current.problem).toBe('host_removed')
+    expect(api.getExecution).not.toHaveBeenCalled()
+    expect(sse.openNexSse).not.toHaveBeenCalled()
+  })
+
+  it('pauses the least-recently-active subscription beyond MAX_LIVE_SUBSCRIPTIONS_PER_HOST and resumes it on activation', async () => {
+    const closes: Record<string, ReturnType<typeof vi.fn>> = {}
+    vi.mocked(sse.openNexSse).mockImplementation((o) => {
+      const id = new URL(o.url, 'http://x').searchParams.get('execution_id')!
+      closes[id] = closes[id] ?? vi.fn()
+      return { close: closes[id] }
+    })
+    vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
+    vi.mocked(api.fetchExecutionEvents).mockResolvedValue({ items: [], next_cursor: 0 })
+    const hooks = ['exc_a', 'exc_b', 'exc_c', 'exc_d'].map((id) => renderHook(({ active }) => useExecutionSubscription(H, id, active), { initialProps: { active: true } }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(Object.keys(closes)).toHaveLength(4)
+    // fifth pane activates → exc_a (least recently active) pauses
+    const fifth = renderHook(({ active }) => useExecutionSubscription(H, 'exc_e', active), { initialProps: { active: true } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(closes['exc_a']).toHaveBeenCalledTimes(1)
+    expect(useExecutionStore.getState().executions['host-a:exc_a'].sse).toBe('paused')
+    expect(hooks[0].result.current.paused).toBe(true)
+    // re-activating exc_a evicts the now least-recent (exc_b) and reopens exc_a with Last-Event-ID
+    hooks[0].rerender({ active: true })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(closes['exc_b']).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sse.openNexSse).mock.calls.filter((c) => c[0].url.includes('exc_a'))).toHaveLength(2)
+    expect(hooks[0].result.current.paused).toBe(false)
+    fifth.unmount(); hooks.forEach((h) => h.unmount())
+  })
+
   it('host removal closes the SSE and reports host_removed (keep-tabs mode, I13)', async () => {
-    const { result } = renderHook(() => useExecutionSubscription(H, E))
+    const { result } = renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
     expect(sseClose).toHaveBeenCalledTimes(1)
@@ -996,6 +1051,90 @@ describe('useExecutionSubscription', () => {
     expect(useExecutionStore.getState().executions[KEY]?.sse ?? 'closed').toBe('closed')
   })
 })
+```
+
+```ts
+// spa/src/lib/nex/subscription-slots.test.ts
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { subscriptionSlots, MAX_LIVE_SUBSCRIPTIONS_PER_HOST } from './subscription-slots'
+
+describe('subscriptionSlots', () => {
+  beforeEach(() => subscriptionSlots.resetForTests())
+
+  it('grants up to the cap per host, then evicts the least recently touched', () => {
+    const keys = Array.from({ length: MAX_LIVE_SUBSCRIPTIONS_PER_HOST + 1 }, (_, i) => `h:exc_${i}`)
+    const evicted = vi.fn()
+    subscriptionSlots.onEvict(keys[0], evicted)
+    for (const k of keys.slice(0, -1)) expect(subscriptionSlots.touch('h', k)).toEqual([])
+    expect(subscriptionSlots.touch('h', keys.at(-1)!)).toEqual([keys[0]])
+    expect(evicted).toHaveBeenCalledTimes(1)
+    expect(subscriptionSlots.isLive('h', keys[0])).toBe(false)
+    expect(subscriptionSlots.isLive('h', keys.at(-1)!)).toBe(true)
+  })
+
+  it('touching an existing key refreshes recency instead of evicting', () => {
+    subscriptionSlots.touch('h', 'a'); subscriptionSlots.touch('h', 'b'); subscriptionSlots.touch('h', 'c'); subscriptionSlots.touch('h', 'd')
+    subscriptionSlots.touch('h', 'a') // a is now most recent
+    expect(subscriptionSlots.touch('h', 'e')).toEqual(['b'])
+  })
+
+  it('release frees a slot; hosts are independent', () => {
+    for (const k of ['a', 'b', 'c', 'd']) subscriptionSlots.touch('h', k)
+    subscriptionSlots.release('h', 'b')
+    expect(subscriptionSlots.touch('h', 'e')).toEqual([])
+    expect(subscriptionSlots.touch('other', 'x')).toEqual([])
+  })
+})
+```
+
+Implementation:
+
+```ts
+// spa/src/lib/nex/subscription-slots.ts — per-host LRU of live execution
+// subscriptions (spec §4.3.2 step 4). The pdx daemon is HTTP/1.1; browsers
+// and Electron allow 6 connections per host:port, and every live SSE holds
+// one for its whole life. Capping live streams at 4 keeps two lanes free for
+// REST (renew/send/interrupt) so the lease heartbeat can never starve.
+export const MAX_LIVE_SUBSCRIPTIONS_PER_HOST = 4
+
+export interface SlotRegistry {
+  touch(hostId: string, key: string): string[]
+  release(hostId: string, key: string): void
+  onEvict(key: string, cb: () => void): () => void
+  isLive(hostId: string, key: string): boolean
+  resetForTests(): void
+}
+
+function create(): SlotRegistry {
+  // Insertion-ordered: first entry is the least recently touched.
+  const live = new Map<string, Set<string>>()
+  const listeners = new Map<string, Set<() => void>>()
+  const set = (hostId: string) => { let s = live.get(hostId); if (!s) { s = new Set(); live.set(hostId, s) } return s }
+  return {
+    touch(hostId, key) {
+      const s = set(hostId)
+      s.delete(key); s.add(key)
+      const evicted: string[] = []
+      while (s.size > MAX_LIVE_SUBSCRIPTIONS_PER_HOST) {
+        const oldest = s.values().next().value as string
+        s.delete(oldest)
+        evicted.push(oldest)
+        listeners.get(oldest)?.forEach((cb) => cb())
+      }
+      return evicted
+    },
+    release(hostId, key) { live.get(hostId)?.delete(key) },
+    onEvict(key, cb) {
+      let l = listeners.get(key); if (!l) { l = new Set(); listeners.set(key, l) }
+      l.add(cb)
+      return () => { l!.delete(cb); if (l!.size === 0) listeners.delete(key) }
+    },
+    isLive(hostId, key) { return live.get(hostId)?.has(key) ?? false },
+    resetForTests() { live.clear(); listeners.clear() },
+  }
+}
+
+export const subscriptionSlots: SlotRegistry = create()
 ```
 
 - [ ] **Step 2: Run to fail** — `npx vitest run src/hooks/useExecutionSubscription.test.ts`.
@@ -1015,6 +1154,7 @@ import { useEffect, useRef, useState } from 'react'
 import { attachObserve, fetchExecutionEvents, getExecution } from '../lib/nex/nex-api'
 import { openNexSse, type NexSseHandle } from '../lib/nex/nex-sse'
 import { frameToEvent } from '../lib/nex/event-reducer'
+import { subscriptionSlots } from '../lib/nex/subscription-slots'
 import { NexApiError } from '../lib/nex/types'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -1023,10 +1163,23 @@ export type SubscriptionProblem = null | 'not_found' | 'host_removed' | 'nex_una
 export const HISTORY_PAGE_LIMIT = 500
 export const SUMMARY_REFETCH_DEBOUNCE_MS = 300
 
-export function useExecutionSubscription(hostId: string, executionId: string): { problem: SubscriptionProblem } {
+export function useExecutionSubscription(hostId: string, executionId: string, active: boolean): { problem: SubscriptionProblem; paused: boolean } {
   const [problem, setProblem] = useState<SubscriptionProblem>(null)
+  const [paused, setPaused] = useState(false)
   const key = executionKey(hostId, executionId)
   const sseRef = useRef<NexSseHandle | null>(null)
+  const resumeRef = useRef<(() => void) | null>(null)
+  const cleanupEvict = useRef<(() => void) | null>(null)
+
+  // Slot bookkeeping: activation claims/refreshes this pane's live slot and
+  // may evict another pane (which pauses itself through onEvict). A paused
+  // pane that becomes active again reclaims a slot and reopens its SSE with
+  // Last-Event-ID = lastSeq — replay fills the gap.
+  useEffect(() => {
+    if (!active || problem) return
+    subscriptionSlots.touch(hostId, key)
+    setPaused(false)
+  }, [active, hostId, key, problem])
 
   useEffect(() => {
     let cancelled = false
@@ -1035,10 +1188,19 @@ export function useExecutionSubscription(hostId: string, executionId: string): {
     setProblem(null)
     const store = () => useExecutionStore.getState()
 
+    // Spec §4.3.2 step 5: the pane's stored host is the only host we talk
+    // to. Missing → host_removed now, no request, no fallback.
+    if (!useHostStore.getState().hosts[hostId]) {
+      setProblem('host_removed')
+      store().setSse(hostId, executionId, 'closed', 'host_removed')
+      return
+    }
+
     const refetchSummary = async () => {
+      const asOf = store().executions[key]?.lastSeq ?? 0
       try {
         const s = await getExecution(hostId, executionId)
-        if (!cancelled) store().setSummary(hostId, executionId, s)
+        if (!cancelled) store().setSummary(hostId, executionId, s, asOf)
       } catch {
         // transient — the next stale mark or reconnect tries again
       }
@@ -1071,9 +1233,10 @@ export function useExecutionSubscription(hostId: string, executionId: string): {
     ;(async () => {
       store().setSse(hostId, executionId, 'connecting')
       try {
+        const asOf = store().executions[key]?.lastSeq ?? 0
         const s = await getExecution(hostId, executionId)
         if (cancelled) return
-        store().setSummary(hostId, executionId, s)
+        store().setSummary(hostId, executionId, s, asOf)
         const obs = await attachObserve(hostId, executionId)
         if (cancelled) return
         // History: forward-only paging from 0; stop at the last page or once
@@ -1088,7 +1251,7 @@ export function useExecutionSubscription(hostId: string, executionId: string): {
         }
         store().setHistoryLoaded(hostId, executionId, true)
         let warnedMalformed = false
-        sseRef.current = openNexSse({
+        const openStream = () => { sseRef.current = openNexSse({
           hostId,
           url: obs.stream_url,
           getLastEventId: () => store().executions[key]?.lastSeq ?? null,
@@ -1112,7 +1275,17 @@ export function useExecutionSubscription(hostId: string, executionId: string): {
             if (status === 'reconnecting') wasReconnecting = true
             if (status === 'open') { warnedMalformed = false; if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
           },
+        }) }
+        // Slot: open now if we hold one; otherwise stay paused until activation.
+        const unsubEvict = subscriptionSlots.onEvict(key, () => {
+          sseRef.current?.close(); sseRef.current = null
+          setPaused(true)
+          store().setSse(hostId, executionId, 'paused')
         })
+        cleanupEvict.current = unsubEvict
+        resumeRef.current = () => { if (!sseRef.current && !cancelled) { store().setSse(hostId, executionId, 'connecting'); openStream() } }
+        if (subscriptionSlots.isLive(hostId, key)) openStream()
+        else { setPaused(true); store().setSse(hostId, executionId, 'paused') }
       } catch (e) {
         if (cancelled) return
         if (e instanceof NexApiError && e.code === 'execution_not_found') teardown('not_found')
@@ -1126,11 +1299,20 @@ export function useExecutionSubscription(hostId: string, executionId: string): {
       cancelled = true
       unsubStale()
       unsubHost()
+      cleanupEvict.current?.(); cleanupEvict.current = null
+      resumeRef.current = null
+      subscriptionSlots.release(hostId, key)
       teardown()
     }
   }, [hostId, executionId, key])
 
-  return { problem }
+  // Activation after a pause reopens the stream (slot already reclaimed by
+  // the activation effect above, which runs first because it is declared first).
+  useEffect(() => {
+    if (active && paused && subscriptionSlots.isLive(hostId, key)) resumeRef.current?.()
+  }, [active, paused, hostId, key])
+
+  return { problem, paused }
 }
 ```
 
@@ -1195,6 +1377,7 @@ execution.sse.connecting     "connecting"                     連線中
 execution.sse.open           "live"                           即時
 execution.sse.reconnecting   "reconnecting"                   重新連線中
 execution.sse.closed         "disconnected"                   已斷線
+execution.sse.paused         "paused — activate to resume"    已暫停，切換到此分頁即恢復
 execution.input.archived     "Execution is archived"          執行體已歸檔
 execution.input.terminal     "Execution has ended"            執行體已結束
 execution.error.generic      "Send failed: {{message}}"         送出失敗：{{message}}
@@ -1222,7 +1405,7 @@ import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn() }))
-vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null })) }))
+vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
 
@@ -1234,7 +1417,7 @@ beforeEach(() => {
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset()
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease, release, touch })
-  vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: null })
+  vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: null, paused: false })
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({ turn_id: 't1', delivery: 'delivered' })
   vi.mocked(api.interruptExecution).mockReset().mockResolvedValue({ turn_id: 't1', state: 'idle' })
   vi.mocked(api.terminateExecution).mockReset().mockResolvedValue(undefined)
@@ -1326,13 +1509,13 @@ describe('ExecutionView', () => {
   })
 
   it('renders the problem states instead of the conversation', () => {
-    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'not_found' })
+    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'not_found', paused: false })
     const { rerender } = render(<ExecutionView hostId={H} executionId={E} isActive />)
     expect(screen.getByText(/not found/i)).toBeInTheDocument()
-    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'host_removed' })
+    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'host_removed', paused: false })
     rerender(<ExecutionView hostId={H} executionId={E} isActive />)
     expect(screen.getByText(/host removed/i)).toBeInTheDocument()
-    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'nex_disabled' })
+    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'nex_disabled', paused: false })
     rerender(<ExecutionView hostId={H} executionId={E} isActive />)
     expect(screen.getByText(/not enabled/i)).toBeInTheDocument()
   })
@@ -1457,7 +1640,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   const t = useI18nStore((s) => s.t)
   const key = executionKey(hostId, executionId)
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
-  const { problem } = useExecutionSubscription(hostId, executionId)
+  const { problem, paused } = useExecutionSubscription(hostId, executionId, isActive)
   const { ensureLease, touch } = useExecutionLease(hostId, executionId)
   const [draft, setDraft] = useState<string | null>(null) // restored text after a failed send
 
@@ -1465,9 +1648,11 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   const costUsd = useMemo(() => st.messages.reduce((sum, m) => sum + ((m as { total_cost_usd?: number }).total_cost_usd ?? 0), 0), [st.messages])
 
   const store = () => useExecutionStore.getState()
+  // A fetch that never reached the daemon rejects with a TypeError, not a
+  // NexApiError; I12 still wants a code, so map it (`network`).
   const fail = (e: unknown) => {
     if (e instanceof NexApiError) {
-      if (e.code === 'no_live_turn') return
+      if (e.code === 'no_live_turn' || e.code === 'lease_abandoned') return
       store().setSendError(hostId, executionId, { code: e.code, message: e.message, turnId: e.turnId })
     } else {
       store().setSendError(hostId, executionId, { code: 'network', message: e instanceof Error ? e.message : String(e) })
@@ -1558,7 +1743,10 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
 function ExecutionPaneWrapper({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
   if (content.kind !== 'execution') return null
-  return <ExecutionView hostId={resolveExecutionHostId(content.host)} executionId={content.executionId} isActive={isActive} />
+  // Fallback only when there is no hint at all (legacy route / deeplink); a
+  // stored host that no longer exists must surface as "Host removed", never
+  // as another daemon (spec §4.3.2 step 5).
+  return <ExecutionView hostId={content.host ?? resolveExecutionHostId(undefined)} executionId={content.executionId} isActive={isActive} />
 }
 ```
 
@@ -1661,3 +1849,6 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 | P2-2 | Malformed durable frame: §4.5 wants drop + warn once per connection, cursor untouched | Fixed: `warnedMalformed` per connection (reset on `open`) + test |
 | P2-3 | `nex_disabled` copy existed but no problem state / detection | Fixed: `SubscriptionProblem` gains `'nex_disabled'` (bare `http_404`); hook + view + tests |
 | P3-1 | No `useRouteSync` regression for the host route | Fixed: test added to Task 2 |
+| — | (P-B.1 final review carry-over) HTTP/1.1 6-connections-per-host cap | Added: spec §4.3.2 step 4 (v2.1), `subscription-slots.ts`, hook `active` param + `paused`, tests |
+| — | (P-B.1 final review carry-over) `resolveExecutionHostId` first-host fallback must not apply to a removed host | Added: spec §4.3.2 step 5 (v2.1), hook early `host_removed`, wrapper `content.host ??` fallback only when absent, test |
+| — | (P-B.1 final review carry-over) `setSummary(…, asOfSeq)` | Hook passes `lastSeq` read before each fetch |

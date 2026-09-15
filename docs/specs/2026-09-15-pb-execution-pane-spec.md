@@ -1,6 +1,6 @@
 # Spec — P-B: execution pane on the Nexen SSE transport + Host "Nex" page
 
-- Status: v2 (2026-09-15) — codex spec review `task-mu2816bw-hgxxq2` applied, see §10
+- Status: v2.1 (2026-09-15) — codex spec review `task-mu2816bw-hgxxq2` applied (§10); v2.1 adds the per-host live-subscription cap and the no-fallback host rule from the P-B.1 final review
 - Predecessor: `2026-09-15-pa-nex-module-spec.md` (P-A, shipped alpha.346/347).
   §4.3 of that spec is **binding** here: fetch + `Authorization: Bearer` +
   `Last-Event-ID` header, `X-Pdx-Client` per-client principal suffix, no
@@ -306,7 +306,21 @@ double-mount cannot leak sockets through the store.
 4. Cleanup on unmount / host removal / executionId change: `close()`.
    The observe SSE stays open while the pane is **inactive** (an observer
    counts toward `ask_human` waiting; keeping the tab's view current is
-   cheap). It closes when the pane is closed.
+   cheap) — **up to `MAX_LIVE_SUBSCRIPTIONS_PER_HOST = 4` per host**. The
+   pdx daemon is HTTP/1.1 and browsers/Electron allow 6 connections per
+   host:port; each live SSE holds one, and every REST call (renew, send,
+   interrupt) would queue behind a seventh. Slots are LRU by pane
+   activation (`spa/src/lib/nex/subscription-slots.ts`): activating a pane
+   claims a slot; when the cap is exceeded the least-recently-active pane's
+   subscription **pauses** (SSE closed, store kept, `sse: 'paused'`) and
+   resumes with `Last-Event-ID = lastSeq` when that pane is activated
+   again. Replay fills the gap, so a paused pane loses nothing but
+   liveness. It closes for good when the pane is closed.
+5. The hook uses the pane's **stored** host id. A missing host is
+   `problem: 'host_removed'` from the first render — never a fallback to
+   another daemon (that would send the request unauthenticated to the wrong
+   host). `resolveExecutionHostId`'s first-host fallback exists only for
+   openers with no hint at all (legacy route, deeplink without `host`).
 
 `useExecutionLease(hostId, executionId)` returns
 `{ lease, leaseError, ensureLease(): Promise<string>, release(): Promise<void> }`:
@@ -540,7 +554,8 @@ enforces parity).
 | Host has no nex (`info.nex.mounted === false`) | Execution pane shows "Nex is not enabled on <host>" with a link to the Host → Nex page; Nex page shows the config form with the status badge "Disabled". |
 | `503 nex_unavailable` (init failed) | Same as above with `init_error` text. SSE does not retry on this code (it is not `draining`). |
 | Daemon restart mid-turn | SSE reconnects with `Last-Event-ID`; replay fills the gap; summary refetched on `open` after a reconnect. Lease is gone after restart (in-memory) — `renew` gets `lease_expired`, local lease dropped, next send re-acquires. |
-| Two tabs, same execution | Both observe. First to send holds the lease; the second gets `lease_held` with the first's principal shown. When the first tab closes (release) or idles past `2×ttl`, the second's next send succeeds. |
+| Two tabs, same execution | Both observe. First to send holds the lease; the second gets `lease_held` with the first's principal shown. When the first tab closes (release) or idles past `2×ttl`, the second's next send succeeds. **Known limitation:** a tab *duplicated* in Chrome/Electron copies `sessionStorage`, so both carry the same client id and the same principal; their `attach(control)` calls preempt each other. Not fixable cheaply; documented. |
+| More than 4 execution panes on one host | The 5th pane's subscription pauses the least-recently-active one (see 4.3.2 step 4); the header shows "paused — activate to resume". REST calls never starve. |
 | Execution archived while pane open | `execution.archived` event patches summary → input disabled with "archived" placeholder; Unarchive available from the Nex page. |
 | History larger than one page | Paged in order; render waits for `historyLoaded` with a spinner and the summary header visible. |
 | Malformed SSE data (non-JSON) | Frame dropped, `console.warn` once per connection, cursor **not** advanced past it (the frame's `id` is only committed after a successful parse). |
