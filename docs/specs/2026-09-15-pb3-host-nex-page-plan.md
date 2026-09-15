@@ -16,7 +16,8 @@
 - `/api/info.nex` = `{configured, mounted, ready, init_error, effective}`; `effective` is the expanded config as passed to `nexen.Options` (`claude_bin` is the configured string, `""` when Nexen resolves it lazily), `null` when not mounted. `core` must not import `internal/module/nex` (cycle) — use an interface.
 - `PUT /api/config {"nex": {...}}` validates with `NexConfig.Validate(home)` → 400 naming the key; persists on success; **nothing applied live** (I9). A `nex: null` body is 400 (`nex must be an object`).
 - SPA: every `/api/nex/…` call goes through `spa/src/lib/nex/nex-api.ts` (Bearer + `X-Pdx-Client`); the site-wide SSE (`/api/nex/v1/events`, no `execution_id`) is a refresh signal only — frame contents are never applied.
-- Host sub-page id `nex`, order 6, label key `hosts.nex`; new strings in both `spa/src/locales/en.json` and `zh-TW.json` (`{{name}}` interpolation).
+- Host sub-page id `nex`, order 6, label key `hosts.nex.label`; locale files are **flat** `Record<string,string>` (`spa/src/lib/locale-registry.ts:4`; keys contain dots but there are no nested objects) — add every new string as a flat key to both `spa/src/locales/en.json` and `zh-TW.json` (`{{name}}` interpolation via `t(key, params)`).
+- Ordering: P-B.3 ships **after** P-B.2, which makes `contentMatches` host-aware (`pane-utils.ts`); Task 6's "Open" relies on that for I10.
 - Sandbox profile choices are the constant list `['', 'readonly', 'standard', 'trusted', 'handoff']` (mirrors `sandbox.ValidName` in Nexen; capabilities only lists *clamped* profiles).
 - Go: `go test ./internal/module/nex/ ./internal/core/` from the worktree; `go build ./...`; gofmt. SPA: `cd spa && npx vitest run <file>`, `pnpm run lint`, `pnpm run build`.
 - One commit per task, `git commit --only <files>`; English code/comments; files ≤ ~300 lines; tests next to the file.
@@ -47,7 +48,7 @@
 **Files:**
 - Modify: `internal/module/nex/module.go` (`Module` struct, `Init`, `RegisterRoutes`, `Start`, `Stop`, `Close`)
 - Create: `internal/module/nex/status.go`
-- Test: `internal/module/nex/module_test.go` (add), `internal/module/nex/status_test.go` (new)
+- Test: `internal/module/nex/module_test.go` (add + update `TestInitWrapsAssembleError`, `TestInitRealAssembleFailures`), `internal/module/nex/status_test.go` (new), `cmd/pdx/nex_test.go` (+1 case)
 
 **Interfaces:**
 - Produces:
@@ -65,6 +66,10 @@ func buildStatus(initErr error, opts nexen.Options, expanded pdxconfig.NexConfig
 - [ ] **Step 1: Failing tests**
 
 Append to `module_test.go` (reuse `newTestCore`, `newFakeAssemble`, `noopEngine`, `fakeAssembleRecord` already in the file; look at `TestInitHandsBuildOptionsToAssembleAndCreatesDataDir` ~line 203 for how a valid config is built):
+
+Also update the existing `TestInitWrapsAssembleError` (~line 325): it currently requires `m.Init()` to return an error; change it to `require.NoError(t, m.Init(newTestCore(&cfg)))`, `require.Error(t, m.initErr)`, `assert.ErrorIs(t, m.initErr, sentinel)`, `assert.Contains(t, m.initErr.Error(), "nex: init: assembling engine:")`.
+
+The valid-config helper is `baseConfig(t) pdxconfig.Config` (returns a value; pass `&cfg` to `newTestCore`). Every `validNexConfig(t)` below means `cfg := baseConfig(t)` + `c := newTestCore(&cfg)`.
 
 ```go
 // TestInitAssembleFailureIsSoft is spec I8: an engine that fails to assemble
@@ -233,6 +238,8 @@ func unavailableHandler(initErr error) http.Handler {
 package nex
 
 import (
+	"time"
+
 	"lab.protype.tw/wake/nexen"
 	pdxconfig "github.com/wake/purdex/internal/config"
 )
@@ -264,22 +271,24 @@ func buildStatus(initErr error, opts nexen.Options, expanded pdxconfig.NexConfig
 		"repo_roots":      expanded.RepoRoots,
 		"service_roots":   expanded.ServiceRoots,
 		"path_prefix":     pathPrefix,
-		"lease_ttl":       cfg.LeaseTTL.String(),
-		"interrupt":       cfg.InterruptTimeout.String(),
-		"turn":            cfg.TurnTimeout.String(),
+		"lease_ttl":       time.Duration(cfg.LeaseTTL).String(), // nexconfig.Duration has no String()
+		"interrupt":       time.Duration(cfg.InterruptTimeout).String(),
+		"turn":            time.Duration(cfg.TurnTimeout).String(),
 	}
 	return st
 }
 ```
 
-> `nexconfig.Duration` — check whether it has a `String()` method (`grep -n "func (d Duration)" ~/Workspace/wake/nexen/config/*.go`); if not, use `time.Duration(cfg.LeaseTTL).String()`. `status_test.go`: one table test over `buildStatus` (nil vs error, assembled vs not, `ClaudeBin` empty vs set).
+> `status_test.go`: one table test over `buildStatus` (nil vs error, assembled vs not, `ClaudeBin` empty vs set).
+>
+> CLI: `pdx nex` prints "not enabled on this host" only on a probe **404** (`cmd/pdx/nex.go:145`); the soft-fail fallback answers 503, so the CLI correctly falls through to the raw client error. Add one case to `cmd/pdx/nex_test.go` (next to the existing 404 probe tests ~line 521): a probe answering `503 {"error":"nex: init: …","code":"nex_unavailable"}` must **not** print "not enabled on this host" and must surface the client error text.
 
-- [ ] **Step 4: Run to pass** — `go test ./internal/module/nex/ 2>&1 | tail -5 && gofmt -l internal/module/nex/` (no output from gofmt).
+- [ ] **Step 4: Run to pass** — `go test ./internal/module/nex/ ./cmd/pdx/ 2>&1 | tail -5 && gofmt -l internal/module/nex/ cmd/pdx/` (no output from gofmt).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git add internal/module/nex/module.go internal/module/nex/status.go internal/module/nex/module_test.go internal/module/nex/status_test.go && git commit --only internal/module/nex/module.go internal/module/nex/status.go internal/module/nex/module_test.go internal/module/nex/status_test.go -m "feat(daemon): nex init soft-fails with a 503 fallback and reports Status()"
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git add internal/module/nex/module.go internal/module/nex/status.go internal/module/nex/module_test.go internal/module/nex/status_test.go cmd/pdx/nex_test.go && git commit --only internal/module/nex/module.go internal/module/nex/status.go internal/module/nex/module_test.go internal/module/nex/status_test.go cmd/pdx/nex_test.go -m "feat(daemon): nex init soft-fails with a 503 fallback and reports Status()"
 ```
 
 ---
@@ -565,7 +574,7 @@ The card fetches `fetchNexHost` + `fetchNexCapabilities` itself **only when `inf
 i18n (en / zh-TW), under `hosts.nex.*`:
 
 ```
-hosts.nex                      "Nex"                                  Nex
+hosts.nex.label                "Nex"                                  Nex
 hosts.nex.status.title         "Engine"                               引擎
 hosts.nex.status.disabled      "Disabled"                             未啟用
 hosts.nex.status.not_running   "Enabled in config, not running — restart the daemon"  設定已啟用但未執行，請重啟 daemon
@@ -791,7 +800,7 @@ describe('NexConfigForm', () => {
 
 - [ ] **Step 2: Run to fail** — `npx vitest run src/components/hosts/nex`.
 
-- [ ] **Step 3: Implement** — `nex-config-diff.ts` as specified (`emptyNexConfig` = all fields empty/false; `parseGoDuration`; `restartRequired`). `NexConfigForm.tsx`: local `draft: NexConfig` initialised from `config ?? emptyNexConfig()` and re-synced when `config` changes **unless dirty** (the `EditorHomePathHostSection` pattern: `dirtyRef`); controls: checkbox (`<label>` with text so `getByLabelText(/enabled/i)` works), three list editors (input `placeholder="/absolute/path"`, `Add`/`Remove` buttons), two text inputs for bins, two `<select>`s over `SANDBOX_PROFILES` (empty option labelled `nexen_default`), three duration inputs; `Save` → `hostFetch(hostId, '/api/config', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nex: trimmed(draft) }) })`; 200 → `onSaved(await res.json())`, `dirty=false`, show `saved`; 400 → text; if it starts with `nex.<key>` map to `data-testid="field-error-<key>"` under that field, else a general `error` line. `restartRequired(config, info)` → `data-testid="nex-restart-required"` notice with `t('hosts.nex.config.restart_required', { host })`.
+- [ ] **Step 3: Implement** — `nex-config-diff.ts` as specified (`emptyNexConfig` = all fields empty/false; `parseGoDuration`; `restartRequired`). `NexConfigForm.tsx`: local `draft: NexConfig` initialised from `config ?? emptyNexConfig()` and re-synced when `config` changes **unless dirty** (the `EditorHomePathHostSection` pattern: `dirtyRef`); controls: checkbox (`<label>` with text so `getByLabelText(/enabled/i)` works), three list editors (input `placeholder="/absolute/path"`, `Add`/`Remove` buttons), two text inputs for bins, two `<select>`s over `SANDBOX_PROFILES` (empty option labelled `nexen_default`), three duration inputs; `Save` → `hostFetch(hostId, '/api/config', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nex: trimmed(draft) }) })` where `trimmed` trims string values and drops blank list rows but **keeps every `NexConfig` key and nested key** (the daemon replaces the whole section, so an omitted key would be persisted as its zero value) — add a test that the PUT body contains all top-level and nested keys even when the values are empty; every input/select/checkbox gets a real `<label htmlFor>` (or `aria-label`) matching its visible label — `Field` is only a visual row wrapper (`form-fields.tsx:25`) and does not provide accessible labelling, so `getByLabelText` in the tests depends on this; 200 → `onSaved(await res.json())`, `dirty=false`, show `saved`; 400 → text; if it starts with `nex.<key>` map to `data-testid="field-error-<key>"` under that field, else a general `error` line. `restartRequired(config, info)` → `data-testid="nex-restart-required"` notice with `t('hosts.nex.config.restart_required', { host })`.
 
 - [ ] **Step 4: Run to pass** — `npx vitest run src/components/hosts/nex src/locales`.
 
@@ -818,7 +827,7 @@ export const LIST_REFRESH_DEBOUNCE_MS = 500
 export default function NexExecutionsTable(p: NexExecutionsTableProps): JSX.Element
 ```
 
-Behaviour: on mount (and when `enabled` flips true) `listExecutions(hostId, { includeArchived, limit: 100 })`; one site-wide `openNexSse({ hostId, url: '/api/nex/v1/events', getLastEventId: () => null, onFrame: () => schedule refetch (debounced 500 ms), onStatus: … })` while mounted and enabled — **frame contents never applied**; closed on unmount/disable. Columns: state dot, short id (`exc_…` first 12 chars, full in `title`), provider · profile, cwd basename (full in `title`), brief first line (≤ 80 chars), observers, lease holder (`(you)` when principal ends with `/${getNexClientId()}`), last_turn_reason, `updated_at` relative. Row actions: **Open** → `useTabStore.getState().openSingletonTab({ kind: 'execution', executionId, host: hostId })` + `setActiveTab`; **Terminate** (two-click confirm; `attachControl` → `terminateExecution` → `releaseLease`); **Archive/Unarchive** → `archiveExecution(hostId, id, archived)`. `include archived` checkbox; manual Refresh button. Errors from actions → inline line with `NexApiError.code`.
+Behaviour: on mount (and when `enabled` flips true) `listExecutions(hostId, { includeArchived, limit: 100 })`; one site-wide `openNexSse({ hostId, url: '/api/nex/v1/events', getLastEventId: () => lastIdRef.current, onFrame, onStatus })` while mounted and enabled, where `lastIdRef = useRef<number | null>(null)` and `onFrame` does `if (frame.id != null) lastIdRef.current = Math.max(lastIdRef.current ?? 0, Number(frame.id))` then schedules the debounced (500 ms) refetch — **frame contents are never applied**, but the cursor is kept so a reconnect does not replay the whole site's durable history from seq 0 (`nexen/api/sse.go:118,195`); closed on unmount/disable. Columns: state dot, short id (`exc_…` first 12 chars, full in `title`), provider · profile, cwd basename (full in `title`), brief first line (≤ 80 chars), observers, lease holder (`(you)` when principal ends with `/${getNexClientId()}`), last_turn_reason, `updated_at` relative. Row actions: **Open** → `useTabStore.getState().openSingletonTab({ kind: 'execution', executionId, host: hostId })` + `setActiveTab`; **Terminate** (two-click confirm; `attachControl` → `terminateExecution` → `releaseLease`); **Archive/Unarchive** → `archiveExecution(hostId, id, archived)`. `include archived` checkbox; manual Refresh button. Errors from actions → inline line with `NexApiError.code`.
 
 i18n `hosts.nex.executions.*`: `title` "Executions/執行體", `empty` "No executions yet — start one with pdx nex delegate./尚無執行體，用 pdx nex delegate 建立。", `include_archived` "Show archived/顯示已歸檔", `open` "Open/開啟", `terminate` "Terminate/終止", `terminate_confirm` "Confirm terminate/確認終止", `archive` "Archive/歸檔", `unarchive` "Unarchive/取消歸檔", `refresh` "Refresh/重新整理", `col.state` "State/狀態", `col.id` "ID", `col.provider` "Provider", `col.cwd` "Directory/目錄", `col.brief` "Brief/摘要", `col.observers` "Observers/觀察者", `col.lease` "Lease", `col.last_turn` "Last turn/上一輪", `col.updated` "Updated/更新", `you` "(you)/（你）", `action_failed` "{{action}} failed: {{code}}/{{action}} 失敗：{{code}}".
 
@@ -878,9 +887,11 @@ describe('NexExecutionsTable', () => {
     act(() => {
       sseOpts!.onFrame({ id: '1', event: 'execution.delegated', data: '{}' })
       sseOpts!.onFrame({ id: '2', event: 'execution.running', data: '{}' })
+      sseOpts!.onFrame({ id: null, event: 'stream_event', data: '{}' })
     })
     await act(async () => { await vi.advanceTimersByTimeAsync(LIST_REFRESH_DEBOUNCE_MS + 1) })
     expect(api.listExecutions).toHaveBeenCalledTimes(2)
+    expect(sseOpts!.getLastEventId()).toBe(2) // cursor kept for reconnect; transient frames do not move it
   })
 
   it('does nothing while disabled and closes the SSE on unmount', async () => {
@@ -940,7 +951,7 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 
 - [ ] **Step 1: Failing test** — render with `hostFetch` mocked for `/api/info` and `/api/config`; assert the three cards' titles appear, that `/api/info` was fetched once, that saving through the form (mock PUT) updates the restart notice, and that `Refresh` on the status card refetches `/api/info`. Plus a registry test: after `dispatchSettingsContributions()` the host built-in list contains `localId: 'nex'` at order 6 (follow how `dispatch-settings-contributions.test.ts` asserts the others).
 - [ ] **Step 2: Run to fail.**
-- [ ] **Step 3: Implement** — section + `{ localId: 'nex', labelKey: 'hosts.nex', order: 6, component: NexHostSection }` appended to `setHostBuiltinSections`.
+- [ ] **Step 3: Implement** — section + `{ localId: 'nex', labelKey: 'hosts.nex.label', order: 6, component: NexHostSection }` appended to `setHostBuiltinSections`.
 - [ ] **Step 4: Run to pass** — `npx vitest run src/components/hosts/nex src/lib/dispatch-settings-contributions.test.ts src/components/HostPage.test.tsx`.
 - [ ] **Step 5: Commit**
 
@@ -956,6 +967,7 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 - [ ] SPA: `npx vitest run 2>&1 | tail -6 && pnpm run lint && pnpm run build 2>&1 | tail -3`.
 - [ ] `go run ./cmd/pdx version` still works (binary builds).
 - [ ] Fix anything red in a `fix(…)` commit naming the cause.
+- [ ] **Live acceptance (spec §6 items 1–3, 8; controller runs these on mlab after the daemon is rebuilt with `[nex] enabled = true`)**: (1) Host → Nex shows Ready, account + quota, roots, profiles; the form mirrors `config.toml`. (2) Change `default_profile` → Save → restart notice shown; `config.toml` updated; `/api/info.nex.effective.default_profile` unchanged until restart. (3) `pdx nex delegate` → the row appears in the table without a manual refresh. (8) Make `[nex]` shape-valid but environmentally broken (e.g. `claude_bin` pointing at a non-executable file) → restart → daemon up, terminal panes unaffected, Nex page shows "Unavailable" with the init error; `pdx nex ls` prints the raw error, not "not enabled".
 
 ---
 
@@ -964,3 +976,18 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 - Spec coverage: §4.4.1 → T1; §4.4.2 → T2 + T3 + T4 types; §4.4.3 cards 1/2/3 → T4/T5/T6; registration → T7; §4.5 "Host has no nex" (`nex_disabled`, P-B.2) shows the copy that points here; "503 nex_unavailable" → T1 + T4 badge; I8 → T1 test; I9 → T3 tests; I10 (table half) → T6 first test.
 - Types consistent: `NexConfig`/`NexInfo`/`NexEffective` defined once in `host-api.ts` (T4) and consumed by T5/T6/T7; `restartRequired(saved, info)` signature identical in T5 definition and T7 use.
 - Go seam: `core` only knows `StatusReporter`; nex implements `Status()`; no import cycle (T1 vs T2 test stubs are independent).
+
+## Codex plan review disposition (`task-mu2bf36l-k1ff9t`, one round, gpt-5.5)
+
+| # | Finding | Disposition |
+|---|---|---|
+| P1-1 | `TestInitWrapsAssembleError` would go red under soft-fail | Fixed: Task 1 updates it |
+| P1-2 | I10 host-scoped singleton depends on `contentMatches` being host-aware | Recorded as ordering: P-B.2 Task 2 lands first (Global Constraints) |
+| P1-3 | Site-wide SSE with `getLastEventId: () => null` replays the whole site on every reconnect | Fixed: `lastIdRef` kept from durable frame ids + test |
+| P2-1 | `trimmed(draft)` undefined; must keep every key (daemon replaces the section) | Fixed: Task 5 |
+| P2-2 | `Field` is not accessible labelling; `getByLabelText` needs real labels | Fixed: Task 5 |
+| P2-3 | Locale files are flat; label key vs prefix | Fixed: flat keys, `hosts.nex.label` |
+| P2-4 | Live acceptance 1–3, 8 missing | Fixed: Task 8 |
+| P3-1 | `validNexConfig` → `baseConfig(t)` | Fixed |
+| P3-2 | `nexconfig.Duration` has no `String()` | Fixed: `time.Duration(...)` |
+| P3-3 | CLI probe on 503 | Fixed: `cmd/pdx/nex_test.go` case in Task 1 |

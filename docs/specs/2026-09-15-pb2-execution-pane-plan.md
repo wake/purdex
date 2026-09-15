@@ -20,7 +20,7 @@
 - Lease: renew every `ttl/3` s (ttl from `capabilities.lease.ttl_seconds`, default 120); stop renewing after `2 × ttl` without a send/interrupt (I3); release exactly once on teardown when held (I6).
 - Send failure path (I12): `pendingLocal = null`, `pendingSend = false`, `sendError` set, text restored to the input.
 - Stream mode must render byte-identical DOM before and after the extraction (I7 snapshot).
-- Every new user-visible string goes in both `spa/src/locales/en.json` and `zh-TW.json` (nested JSON; `locale-completeness.test.ts` enforces parity).
+- Every new user-visible string goes in both `spa/src/locales/en.json` and `zh-TW.json` as **flat** dotted keys (the files are `Record<string,string>`, no nested objects; `locale-completeness.test.ts` enforces parity).
 - Files: one responsibility each, ≤ ~300 lines; tests next to the file.
 - Commands from the worktree: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane/spa && npx vitest run <file>`; `pnpm run lint`; `pnpm run build`. One commit per task with `git commit --only <files>`.
 
