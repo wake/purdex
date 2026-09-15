@@ -13,6 +13,7 @@ import {
   type HostProject,
   type ResumeTemplateOverrides,
 } from '../lib/host-config-api'
+import { useHostStore } from './useHostStore'
 
 export type HostConfigStatus = 'idle' | 'loading' | 'ready' | 'unsupported' | 'error'
 
@@ -44,7 +45,50 @@ interface HostConfigState {
   forget: (hostId: string) => void
 }
 
-const inflight = new Map<string, Promise<void>>()
+/**
+ * What a request was asked of, and what makes its answer still usable.
+ *
+ * A host id is not an endpoint: the same id can point at another daemon a
+ * moment later (the address, the port or the token changed), or at no daemon at
+ * all (the host was removed). A response that lands after either happened
+ * describes a machine this cache no longer speaks to, and writing it here is
+ * silent corruption — the next save would PUT the previous daemon's items,
+ * under the previous daemon's revision, to the new one.
+ *
+ * So every request carries the endpoint it was sent to plus a generation, and
+ * nothing it returns reaches the store unless both still hold.
+ */
+interface RequestToken { gen: number; endpoint: string }
+
+interface Inflight { promise: Promise<void>; endpoint: string; abort: AbortController }
+
+const inflight = new Map<string, Inflight>()
+const generations = new Map<string, number>()
+
+/** The address a request for `hostId` would go to, or `null` when there is none. */
+function endpointOf(hostId: string): string | null {
+  const h = useHostStore.getState().hosts[hostId]
+  return h ? `${h.ip}:${h.port}:${h.token ?? ''}` : null
+}
+
+function beginRequest(hostId: string, endpoint: string): RequestToken {
+  return { gen: generations.get(hostId) ?? 0, endpoint }
+}
+
+/** True only while the host still exists at the same endpoint, un-invalidated. */
+function stillCurrent(hostId: string, token: RequestToken): boolean {
+  if ((generations.get(hostId) ?? 0) !== token.gen) return false
+  return endpointOf(hostId) === token.endpoint
+}
+
+/** Abandon every answer in flight for `hostId`; aborts the fetch when it can. */
+function invalidate(hostId: string): void {
+  generations.set(hostId, (generations.get(hostId) ?? 0) + 1)
+  const running = inflight.get(hostId)
+  if (!running) return
+  inflight.delete(hostId)
+  running.abort.abort()
+}
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -62,12 +106,19 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
   ): Promise<void> {
     const entry = get().byHost[hostId]
     if (!entry || entry.status !== 'ready') throw new Error(`host config for ${hostId} is not loaded`)
+    const endpoint = endpointOf(hostId)
+    if (endpoint === null) throw new Error(`host ${hostId} is not configured`)
+    const token = beginRequest(hostId, endpoint)
     try {
       const stored = await putHostConfig(hostId, collection, items, entry.revisions[field])
+      // The PUT went to the daemon that was there when it was sent. If that is
+      // no longer this host's daemon, its answer says nothing about the one
+      // whose copy the cache now holds.
+      if (!stillCurrent(hostId, token)) return
       const now = get().byHost[hostId] ?? entry
       patch(hostId, { [field]: stored.items, revisions: { ...now.revisions, [field]: stored.revision } })
     } catch (err) {
-      if (err instanceof HostConfigConflictError) {
+      if (err instanceof HostConfigConflictError && stillCurrent(hostId, token)) {
         const now = get().byHost[hostId] ?? entry
         patch(hostId, { [field]: err.current.items, revisions: { ...now.revisions, [field]: err.current.revision } })
       }
@@ -79,13 +130,24 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
     byHost: {},
 
     load: (hostId) => {
+      const endpoint = endpointOf(hostId)
+      // A host with no address is not a host this cache can hold anything for.
+      if (endpoint === null) return Promise.resolve()
       const running = inflight.get(hostId)
-      if (running) return running
+      // Dedupe only within one endpoint: a request sent to the old daemon can
+      // never answer for the new one, so it is abandoned rather than awaited.
+      if (running) {
+        if (running.endpoint === endpoint) return running.promise
+        invalidate(hostId)
+      }
+      const abort = new AbortController()
+      const token = beginRequest(hostId, endpoint)
       const run = (async () => {
         // A refresh of a ready host keeps showing its data while it loads.
         if (get().byHost[hostId]?.status !== 'ready') patch(hostId, { status: 'loading', error: undefined })
         try {
-          const p = await fetchHostConfig(hostId)
+          const p = await fetchHostConfig(hostId, abort.signal)
+          if (!stillCurrent(hostId, token)) return
           patch(hostId, {
             status: 'ready',
             error: undefined,
@@ -95,16 +157,19 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
             revisions: { projects: p.projects.revision, commands: p.commands.revision, resumeTemplates: p.resumeTemplates.revision },
           })
         } catch (err) {
+          // A failure is as endpoint-specific as a success: the old daemon
+          // being unreachable is not this host's status any more.
+          if (!stillCurrent(hostId, token)) return
           if (err instanceof HostConfigApiError && err.status === 404) {
             patch(hostId, { ...emptyHostConfigEntry('unsupported'), error: undefined })
           } else {
             patch(hostId, { status: 'error', error: errorText(err) })
           }
         } finally {
-          inflight.delete(hostId)
+          if (inflight.get(hostId)?.promise === run) inflight.delete(hostId)
         }
       })()
-      inflight.set(hostId, run)
+      inflight.set(hostId, { promise: run, endpoint, abort })
       return run
     },
 
@@ -118,11 +183,16 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
     saveCommands: (hostId, items) => save(hostId, 'commands', 'commands', items),
     saveResumeTemplates: (hostId, items) => save(hostId, 'resume-templates', 'resumeTemplates', items),
 
-    forget: (hostId) => set((s) => {
-      if (!(hostId in s.byHost)) return s
-      const rest = { ...s.byHost }
-      delete rest[hostId]
-      return { byHost: rest }
-    }),
+    forget: (hostId) => {
+      // Dropping the entry is only half of it: an answer already in flight
+      // would put the forgotten daemon's copy straight back.
+      invalidate(hostId)
+      set((s) => {
+        if (!(hostId in s.byHost)) return s
+        const rest = { ...s.byHost }
+        delete rest[hostId]
+        return { byHost: rest }
+      })
+    },
   }
 })

@@ -68,9 +68,9 @@ async function failure(res: Response): Promise<HostConfigApiError> {
   return new HostConfigApiError(res.status, text || `${res.status} ${res.statusText}`.trim())
 }
 
-export async function fetchHostConfig(hostId: string): Promise<HostConfigPayload> {
+export async function fetchHostConfig(hostId: string, signal?: AbortSignal): Promise<HostConfigPayload> {
   assertKnownHost(hostId)
-  const res = await hostFetch(hostId, '/api/hostconfig')
+  const res = await hostFetch(hostId, '/api/hostconfig', { signal })
   if (!res.ok) throw await failure(res)
   return (await res.json()) as HostConfigPayload
 }

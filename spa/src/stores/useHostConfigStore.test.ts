@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { emptyHostConfigEntry, useHostConfigStore } from './useHostConfigStore'
+import { useHostStore } from './useHostStore'
 import * as api from '../lib/host-config-api'
 import { HostConfigApiError, HostConfigConflictError } from '../lib/host-config-api'
 
@@ -16,10 +17,27 @@ const payload = {
   resumeTemplates: { items: { cc: { exact: 'cld --resume {id}', fallback: 'cld -c' } }, revision: 1 },
 }
 
+function registerHost(ip = '1.2.3.4', port = 7860, token: string | null = 't') {
+  useHostStore.setState({
+    hosts: { [H]: { id: H, name: 'mlab', ip, port, token, order: 0 } },
+    hostOrder: [H],
+    runtime: { [H]: { status: 'connected' } },
+  })
+}
+
+/** A fetch nobody has answered yet, plus the switch that answers it. */
+function pendingFetch() {
+  let settle!: (p: typeof payload) => void
+  vi.mocked(api.fetchHostConfig).mockReturnValueOnce(new Promise<typeof payload>((resolve) => { settle = resolve }))
+  return { settle: (p: typeof payload = payload) => settle(p) }
+}
+
 beforeEach(() => {
   vi.mocked(api.fetchHostConfig).mockReset()
   vi.mocked(api.putHostConfig).mockReset()
   useHostConfigStore.setState({ byHost: {} })
+  registerHost()
+  useHostConfigStore.getState().forget(H)
 })
 
 describe('load', () => {
@@ -95,6 +113,61 @@ describe('save*', () => {
   it('refuses to save a host that is not ready', async () => {
     await expect(useHostConfigStore.getState().saveCommands('h-unloaded', [])).rejects.toThrow(/not loaded/)
     expect(api.putHostConfig).not.toHaveBeenCalled()
+  })
+})
+
+// A response belongs to the endpoint it was asked of. Anything that can make
+// that endpoint a different daemon — the host being removed, its address or
+// token changing — must make every answer already in flight unusable, or the
+// next save would PUT the previous daemon's items under its revision.
+describe('stale responses', () => {
+  it('a load that resolves after the host was forgotten never repopulates it', async () => {
+    const f = pendingFetch()
+    const load = useHostConfigStore.getState().load(H)
+    expect(useHostConfigStore.getState().byHost[H].status).toBe('loading')
+    useHostConfigStore.getState().forget(H)
+    f.settle()
+    await load
+    expect(useHostConfigStore.getState().byHost[H]).toBeUndefined()
+  })
+
+  it('a load that resolves after the endpoint moved is discarded; a fresh load fills the new one', async () => {
+    const stale = pendingFetch()
+    const load = useHostConfigStore.getState().load(H)
+    registerHost('5.6.7.8')
+
+    const moved = { ...payload, projects: { items: [{ id: 'p9', name: 'Air', slug: 'air', path: '/a' }], revision: 11 } }
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(moved)
+    const reload = useHostConfigStore.getState().load(H)
+    stale.settle()
+    await Promise.all([load, reload])
+
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.projects).toEqual(moved.projects.items)
+    expect(e.revisions.projects).toBe(11)
+  })
+
+  it('a save that resolves after the endpoint moved does not write', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(payload)
+    await useHostConfigStore.getState().load(H)
+
+    let finish!: (v: api.Versioned<api.HostProject[]>) => void
+    vi.mocked(api.putHostConfig).mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    const next = [{ id: 'p2', name: 'B', slug: 'b', path: '/b' }]
+    const save = useHostConfigStore.getState().saveProjects(H, next)
+    registerHost('5.6.7.8')
+    finish({ items: next, revision: 4 })
+    await save.catch(() => {})
+
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.projects).toEqual(payload.projects.items)
+    expect(e.revisions.projects).toBe(3)
+  })
+
+  it('a load for a host that is not configured touches nothing', async () => {
+    await useHostConfigStore.getState().load('h-gone')
+    expect(useHostConfigStore.getState().byHost['h-gone']).toBeUndefined()
+    expect(api.fetchHostConfig).not.toHaveBeenCalled()
   })
 })
 
