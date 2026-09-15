@@ -80,15 +80,26 @@ export function remountLeaf(
 }
 
 /**
- * Find the tab ID containing a session pane matching the given session code.
+ * Find the tab ID whose primary pane is a `tmux-session` matching BOTH
+ * `hostId` and `sessionCode`.
+ *
+ * Session codes are a deterministic encoding of tmux's `$N` session id
+ * (`internal/module/session/codec.go`), so two hosts routinely produce the
+ * same code for unrelated sessions. Matching on the code alone would land on
+ * whichever host's tab happens to come first in `tabs`.
  */
 export function findTabBySessionCode(
   tabs: Record<string, { layout: PaneLayout }>,
+  hostId: string,
   sessionCode: string,
 ): string | undefined {
   for (const [tabId, tab] of Object.entries(tabs)) {
     const primary = getPrimaryPane(tab.layout)
-    if (primary.content.kind === 'tmux-session' && primary.content.sessionCode === sessionCode) {
+    if (
+      primary.content.kind === 'tmux-session' &&
+      primary.content.hostId === hostId &&
+      primary.content.sessionCode === sessionCode
+    ) {
       return tabId
     }
   }

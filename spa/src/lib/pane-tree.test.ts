@@ -88,21 +88,28 @@ describe('getLayoutKey', () => {
 
 describe('findTabBySessionCode', () => {
   it('returns undefined when tabs is empty', () => {
-    expect(findTabBySessionCode({}, 'abc123')).toBeUndefined()
+    expect(findTabBySessionCode({}, 'test-host', 'abc123')).toBeUndefined()
   })
 
-  it('returns tabId when session code matches', () => {
+  it('returns tabId when hostId and session code both match', () => {
     const tabs = {
       tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
     }
-    expect(findTabBySessionCode(tabs, 'abc123')).toBe('tab1')
+    expect(findTabBySessionCode(tabs, 'test-host', 'abc123')).toBe('tab1')
   })
 
   it('returns undefined when no session code matches', () => {
     const tabs = {
       tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
     }
-    expect(findTabBySessionCode(tabs, 'zzz999')).toBeUndefined()
+    expect(findTabBySessionCode(tabs, 'test-host', 'zzz999')).toBeUndefined()
+  })
+
+  it('returns undefined when session code matches but hostId does not', () => {
+    const tabs = {
+      tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
+    }
+    expect(findTabBySessionCode(tabs, 'other-host', 'abc123')).toBeUndefined()
   })
 
   it('returns first matching tabId when multiple tabs have different sessions', () => {
@@ -111,7 +118,27 @@ describe('findTabBySessionCode', () => {
       tab1: { layout: { type: 'leaf', pane: paneA } as PaneLayout },
       tab2: { layout: { type: 'leaf', pane: paneC } as PaneLayout },
     }
-    expect(findTabBySessionCode(tabs, 'xyz789')).toBe('tab2')
+    expect(findTabBySessionCode(tabs, 'test-host', 'xyz789')).toBe('tab2')
+  })
+
+  it('disambiguates same session code on different hosts by hostId, regardless of tab order', () => {
+    // Session codes are a deterministic encoding of tmux's `$N`, so two hosts
+    // routinely produce the same code for unrelated sessions.
+    const paneHostA: Pane = { id: 'aaaaa1', content: { kind: 'tmux-session', hostId: 'host-a', sessionCode: 'zk16vd', mode: 'terminal', cachedName: '', tmuxInstance: '' } }
+    const paneHostB: Pane = { id: 'bbbbb1', content: { kind: 'tmux-session', hostId: 'host-b', sessionCode: 'zk16vd', mode: 'terminal', cachedName: '', tmuxInstance: '' } }
+    const aFirst = {
+      tabA: { layout: { type: 'leaf', pane: paneHostA } as PaneLayout },
+      tabB: { layout: { type: 'leaf', pane: paneHostB } as PaneLayout },
+    }
+    expect(findTabBySessionCode(aFirst, 'host-a', 'zk16vd')).toBe('tabA')
+    expect(findTabBySessionCode(aFirst, 'host-b', 'zk16vd')).toBe('tabB')
+
+    const bFirst = {
+      tabB: { layout: { type: 'leaf', pane: paneHostB } as PaneLayout },
+      tabA: { layout: { type: 'leaf', pane: paneHostA } as PaneLayout },
+    }
+    expect(findTabBySessionCode(bFirst, 'host-a', 'zk16vd')).toBe('tabA')
+    expect(findTabBySessionCode(bFirst, 'host-b', 'zk16vd')).toBe('tabB')
   })
 
   it('returns undefined for non-session pane kinds', () => {
@@ -121,7 +148,7 @@ describe('findTabBySessionCode', () => {
       tab1: { layout: { type: 'leaf', pane: paneSettings } as PaneLayout },
       tab2: { layout: { type: 'leaf', pane: paneDashboard } as PaneLayout },
     }
-    expect(findTabBySessionCode(tabs, 'abc123')).toBeUndefined()
+    expect(findTabBySessionCode(tabs, 'test-host', 'abc123')).toBeUndefined()
   })
 })
 

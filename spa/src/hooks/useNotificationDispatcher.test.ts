@@ -174,6 +174,30 @@ describe('handleNotificationClick workspace switching', () => {
     expect(wsState?.activeTabId).toBe(tab.id)
   })
 
+  it('picks the tab whose hostId matches when two hosts share the same session code', () => {
+    // Session codes are a deterministic encoding of tmux `$N`, so host-a and
+    // host-b can both have a session with the same code. The host-a tab is
+    // inserted first so a code-only lookup would wrongly land on it.
+    const tabA = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const tabB = createTab({ kind: 'tmux-session', hostId: 'host-b', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tabA)
+    useTabStore.getState().addTab(tabB)
+
+    const wsA = useWorkspaceStore.getState().addWorkspace('Workspace A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('Workspace B')
+    useWorkspaceStore.getState().addTabToWorkspace(wsA.id, tabA.id)
+    useWorkspaceStore.getState().addTabToWorkspace(wsB.id, tabB.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    useTabStore.getState().setActiveTab(tabA.id)
+
+    handleNotificationClick({ kind: 'open-session', hostId: 'host-b', sessionCode: SESSION_CODE })
+
+    expect(useTabStore.getState().activeTabId).toBe(tabB.id)
+    const state = useWorkspaceStore.getState()
+    expect(state.activeWorkspaceId).toBe(wsB.id)
+    expect(state.workspaces.find(w => w.id === wsB.id)?.activeTabId).toBe(tabB.id)
+  })
+
   it('switches to Home when tab is standalone (not in any workspace)', () => {
     // Setup: tab not in any workspace, active workspace is wsA
     const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })

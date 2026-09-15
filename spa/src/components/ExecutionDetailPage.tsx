@@ -109,7 +109,8 @@ export function ExecutionDetailPage({ executionId, host }: ExecutionDetailPagePr
 
   const { view } = state
   const diff = diffArtifact(view)
-  const openTabId = view.session_code ? findTabBySessionCode(tabs, view.session_code) : undefined
+  const hostId = resolveExecutionHostId(host)
+  const openTabId = view.session_code ? findTabBySessionCode(tabs, hostId, view.session_code) : undefined
 
   return (
     <div className="flex-1 overflow-auto p-6" data-testid="execution-detail">
@@ -166,7 +167,7 @@ export function ExecutionDetailPage({ executionId, host }: ExecutionDetailPagePr
         <section className="mt-6" data-testid="execution-observe">
           <button
             type="button"
-            onClick={() => focusExistingSessionTab(view.session_code as string)}
+            onClick={() => focusExistingSessionTab(hostId, view.session_code as string)}
             className="rounded border border-border px-3 py-1.5 text-sm text-text-primary hover:bg-surface-hover"
           >
             Observe session output

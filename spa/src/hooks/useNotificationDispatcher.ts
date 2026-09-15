@@ -10,7 +10,7 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
 import { normalizeEventName } from '../lib/event-name'
-import { findTabBySessionCode, getPrimaryPane } from '../lib/pane-tree'
+import { findTabBySessionCode } from '../lib/pane-tree'
 import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
 import { createTab } from '../types/tab'
@@ -229,7 +229,7 @@ export function useNotificationDispatcher(): void {
 
         const derived = event.status || null
         const tabs = useTabStore.getState().tabs
-        const hasTab = findTabBySessionCode(tabs, sessionCode) !== undefined
+        const hasTab = findTabBySessionCode(tabs, hostId, sessionCode) !== undefined
         const settings = useNotificationSettingsStore.getState().getSettingsForAgent(event.agent_type || '')
         const activeInfo = getActiveSessionInfo()
         const focusedCompositeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
@@ -292,15 +292,15 @@ export function useNotificationDispatcher(): void {
         }
         return
       }
-      // Backwards compat: no action field — fall back to open-session
+      // Backwards compat: no action field (so no hostId) — fall back to
+      // open-session. Walk hosts in order and take the first one that has an
+      // open tab for this session code; otherwise default to the first host.
       const tabs = useTabStore.getState().tabs
-      const tabId = findTabBySessionCode(tabs, payload.sessionCode)
-      let hostId = useHostStore.getState().hostOrder[0] ?? ''
-      if (tabId) {
-        const tab = tabs[tabId]
-        const primary = getPrimaryPane(tab.layout)
-        if (primary.content.kind === 'tmux-session') hostId = primary.content.hostId
-      }
+      const { hostOrder } = useHostStore.getState()
+      const matchedHostId = hostOrder.find(
+        (candidate) => findTabBySessionCode(tabs, candidate, payload.sessionCode) !== undefined,
+      )
+      const hostId = matchedHostId ?? hostOrder[0] ?? ''
       handleNotificationClick({ kind: 'open-session', hostId, sessionCode: payload.sessionCode })
     })
   }, [])
@@ -344,7 +344,7 @@ export function handleNotificationClick(action: NotificationAction): void {
     case 'open-session': {
       const { hostId, sessionCode } = action
       const tabs = useTabStore.getState().tabs
-      const tabId = findTabBySessionCode(tabs, sessionCode)
+      const tabId = findTabBySessionCode(tabs, hostId, sessionCode)
       const ck = `${hostId}:${sessionCode}`
       const event = useAgentStore.getState().lastEvents[ck]
       const agentSettings = useNotificationSettingsStore.getState().getSettingsForAgent(event?.agent_type || '')

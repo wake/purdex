@@ -44,7 +44,7 @@ describe('resolveDeeplink', () => {
       focusSession: vi.fn(() => true), // tab exists → focused
     })
     await resolveDeeplink({ executionId: 'exc_1' }, deps)
-    expect(deps.focusSession).toHaveBeenCalledWith('sess1')
+    expect(deps.focusSession).toHaveBeenCalledWith('host-a', 'sess1')
     expect(deps.openDetail).not.toHaveBeenCalled()
   })
 
@@ -54,7 +54,7 @@ describe('resolveDeeplink', () => {
       focusSession: vi.fn(() => false), // no open tab
     })
     await resolveDeeplink({ executionId: 'exc_1', host: 'host-a' }, deps)
-    expect(deps.focusSession).toHaveBeenCalledWith('sess1')
+    expect(deps.focusSession).toHaveBeenCalledWith('host-a', 'sess1')
     expect(deps.openDetail).toHaveBeenCalledWith('exc_1', 'host-a')
   })
 
