@@ -141,21 +141,48 @@ after own successful upload):
   disabled for this computer's own row).
 - Errors (list/get/delete) → inline error text; never throw to the page.
 
-### 4.2 Full replace — `restoreDeviceStateReplace(snap, deps?)` (`lib/device-state/restore.ts`)
+### 4.2 Reattach by name — `reattachByName(sessionMeta)` (`lib/device-state/reattach.ts`)
+
+The existing `ensureSessions` reattaches only on **code + name** (restore.ts:62), which misses a
+same-name session whose code changed. D4 requires **host + name**, so device-state restores use
+their own reconciler (never `ensureSessions`, never `createSession`):
+
+- Exactly one `listSessions(hostId)` per host in `sessionMeta`; a throw → every entry of that host
+  `failed`.
+- For each `[oldCode, meta]`: live session with `s.name === meta.name` and non-empty string
+  `s.code` → `{ status: 'reattached', newCode: s.code, session: s }` (code may differ); otherwise
+  `failed`.
+- Returns `{ remap: Remap; report: EnsureReport }` (`rebuilt` always 0), so the existing
+  `remapLayoutSessions` / `syncSessionStore` consume it unchanged. `failed` panes become
+  `terminated: 'tmux-restarted'`; revive-by-name may re-point them later when a same-name session
+  appears.
+
+### 4.3 Full replace — `restoreDeviceStateReplace(snap, deps?)` (`lib/device-state/restore.ts`)
+
+Under `withOperationLock('snapshot:deviceStateReplace', …)` (refusal → throw like
+`lockRefused`):
 
 1. Shape guard (§5.1); invalid → throw before any mutation.
 2. `markMissingHosts(snap, hostIds)`: every tmux-session pane whose `hostId` is not in
    `useHostStore.hosts` → `terminated: 'host-removed'`; its `sessionMeta` entry is dropped so
-   `ensureSessions` never contacts it.
-3. Delegate to existing **`restoreTabLayout(snap, deps)`** (`rebuild:false`): reattaches live
-   sessions (code + name), marks the rest `terminated: 'tmux-restarted'`, writes `-prev`,
-   validates navigation refs, atomically replaces both stores, holds the snapshot operation lock.
-   Revive-by-name later re-points `tmux-restarted` panes when a same-name session appears.
-4. Returns the `RestoreReport` plus `hostRemoved: number`.
+   `reattachByName` never contacts it.
+3. `reattachByName(snap.sessionMeta)` → rewrite every tab layout with `remapLayoutSessions`.
+4. `writeDeviceStatePrev(now)` (§4.4), then `replaceTabSnapshot(rewritten)` (validates + rollback);
+   any throw here → `RestoreError` with the report.
+5. `syncSessionStore(remap)`; return report plus `hostRemoved: number`.
 
 UI: confirm dialog stating the current workspaces/tabs will be replaced (undo available via the
 existing "Undo last restore" of the same page), then toast with reattached / terminated /
 host-removed counts. `RestoreError` handled like the existing snapshot actions.
+
+### 4.4 Undo stays structure-only
+
+The page's existing "Undo last restore" replays `-prev` through `restoreAll`, which rebuilds any
+`restorable` dead session. To keep D4 for device-state restores, `writeDeviceStatePrev(now)` =
+`buildSnapshot(now)` with **every `sessionMeta` entry forced `restorable: false`** before
+`writePrevSnapshot`. `ensureSessions` then never reaches `createSession` for that backup
+(restore.ts:74), so Undo after a device-state replace or merge only reattaches or terminates.
+The local snapshot actions keep writing `-prev` as today.
 
 ## 5. P3 — Merge
 
@@ -199,16 +226,19 @@ snapshot **after** `markMissingHosts` and the reattach remap (§5.4). Output: ne
 3. Incoming tabs in `tabOrder` but in no incoming workspace → same skip/clone rule, appended to
    `tabOrder` only.
 4. `activeTabId`, `activeWorkspaceId` unchanged.
-5. `settings` panes with `{ workspaceId }` scope are re-pointed to the mapped local workspace id,
-   or to `global` when the workspace was not merged.
+5. `wsIdMap: incoming workspace id → local workspace id` is recorded for **every** incoming
+   workspace, whether matched by name (local id) or newly added (fresh id). Every cloned
+   `settings` pane with `{ workspaceId }` scope is rewritten to `wsIdMap[workspaceId]`; only when
+   the referenced id has no mapping (it is not among the snapshot's workspaces) does it become
+   `'global'`.
 
 ### 5.4 `restoreDeviceStateMerge(snap, deps?)`
 
 Under the snapshot operation lock (new owner `snapshot:deviceStateMerge`): shape guard →
-`markMissingHosts` → `ensureSessions(meta, { rebuild:false })` + `remapLayoutSessions` (same as
-replace) → `mergeDeviceState` → `writePrevSnapshot(await buildSnapshot(now))` →
-`replaceTabSnapshot(next)` (validates + rollback) → `syncSessionStore(remap)`. Report counts in a
-toast. Undo = existing "Undo last restore".
+`markMissingHosts` → `reattachByName(meta)` + `remapLayoutSessions` (same as replace) →
+`mergeDeviceState` → `writeDeviceStatePrev(now)` (§4.4) → `replaceTabSnapshot(next)` (validates +
+rollback) → `syncSessionStore(remap)`. Report counts in a toast. Undo = existing "Undo last
+restore" (structure-only per §4.4).
 
 ## 6. Error handling summary
 
@@ -233,14 +263,20 @@ from payload.
   no-target, offline then connect, identical hash skipped, rename forces upload, error keeps hash
   unrecorded, single in-flight + one rerun, `stop()` unsubscribes; `DeviceStateSection` P1 render
   and rename.
-- P2: `markMissingHosts`; `restoreDeviceStateReplace` delegates with marked snapshot (mock
-  `restoreTabLayout`) and rejects malformed payload without mutation; list render (own badge,
-  delete disabled on own row, expand lazy-loads, error states); replace confirm flow.
+- P2: `markMissingHosts`; `reattachByName` (same name + **different code** reattaches with new
+  code, no same-name → failed, host `listSessions` throw → all failed, `createSession` never
+  called); `restoreDeviceStateReplace` (lock refusal, malformed payload rejected without
+  mutation, host-removed count, rollback on `replaceTabSnapshot` throw); `writeDeviceStatePrev`
+  forces `restorable:false`, and **Undo after a device-state replace never calls
+  `createSession`** (integration through `undoLastRestore` with mocked host-api); list render
+  (own badge, delete disabled on own row, expand lazy-loads, error states); replace confirm flow.
 - P3: `paneKey` / `tabKey` table incl. untitled null and split tabs; `mergeDeviceState`: same-name
   workspace append, missing workspace add with fresh ids (no id collisions with current),
-  duplicate tab anywhere skipped, standalone tabs, active ids unchanged, settings scope re-point,
+  duplicate tab anywhere skipped, standalone tabs, active ids unchanged, settings scope re-point
+  to a matched workspace, to a **newly added** workspace, and to `global` only for an unmapped id,
   two incoming workspaces with same name merge into one; `restoreDeviceStateMerge` lock refusal,
-  rollback on `replaceTabSnapshot` throw, `-prev` written before mutation.
+  rollback on `replaceTabSnapshot` throw, structure-only `-prev` written before mutation, Undo
+  after merge never calls `createSession`.
 - Gates per PR: `go test ./...` (P1), `pnpm exec vitest run`, `pnpm run lint`, `pnpm run build`.
 
 ## 8. Deploy
