@@ -1,0 +1,101 @@
+import { describe, it, expect, beforeEach } from 'vitest'
+import { useDeviceStateStore, effectiveDeviceName } from './useDeviceStateStore'
+import { STORAGE_KEYS } from '../lib/storage/keys'
+
+const store = () => useDeviceStateStore.getState()
+
+beforeEach(() => {
+  useDeviceStateStore.setState({ deviceName: null, defaultDeviceName: 'Browser', status: { kind: 'idle' } })
+  localStorage.clear()
+})
+
+describe('useDeviceStateStore — defaults', () => {
+  it('starts with no custom name, Browser default and idle status', () => {
+    expect(store().deviceName).toBeNull()
+    expect(store().defaultDeviceName).toBe('Browser')
+    expect(store().status).toEqual({ kind: 'idle' })
+  })
+
+  it('uses the purdex-device-state storage key', () => {
+    expect(STORAGE_KEYS.DEVICE_STATE).toBe('purdex-device-state')
+    expect(useDeviceStateStore.persist.getOptions().name).toBe('purdex-device-state')
+  })
+})
+
+describe('useDeviceStateStore — setDeviceName', () => {
+  it('trims the name', () => {
+    store().setDeviceName('  Office Mac  ')
+    expect(store().deviceName).toBe('Office Mac')
+  })
+
+  it('treats an empty or blank name as null', () => {
+    store().setDeviceName('Office Mac')
+    store().setDeviceName('')
+    expect(store().deviceName).toBeNull()
+    store().setDeviceName('Office Mac')
+    store().setDeviceName('   ')
+    expect(store().deviceName).toBeNull()
+  })
+
+  it('accepts null to reset to the default', () => {
+    store().setDeviceName('Office Mac')
+    store().setDeviceName(null)
+    expect(store().deviceName).toBeNull()
+  })
+
+  it('keeps a 64-code-point name intact', () => {
+    const name = '機'.repeat(64)
+    store().setDeviceName(name)
+    expect(store().deviceName).toBe(name)
+  })
+
+  it('truncates a 65-code-point CJK name to 64 code points', () => {
+    store().setDeviceName('機'.repeat(65))
+    expect(Array.from(store().deviceName!)).toHaveLength(64)
+    expect(store().deviceName).toBe('機'.repeat(64))
+  })
+
+  it('truncates by code point, never splitting a surrogate pair', () => {
+    store().setDeviceName('😀'.repeat(65))
+    const name = store().deviceName!
+    expect(Array.from(name)).toHaveLength(64)
+    expect(name).toBe('😀'.repeat(64))
+    expect(name.length).toBe(128)
+  })
+
+  it('trims before truncating', () => {
+    store().setDeviceName('   ' + 'a'.repeat(64) + '   ')
+    expect(store().deviceName).toBe('a'.repeat(64))
+  })
+})
+
+describe('useDeviceStateStore — setStatus', () => {
+  it('replaces the status', () => {
+    store().setStatus({ kind: 'ok', at: 123, hostId: 'h1' })
+    expect(store().status).toEqual({ kind: 'ok', at: 123, hostId: 'h1' })
+    store().setStatus({ kind: 'error', message: 'boom' })
+    expect(store().status).toEqual({ kind: 'error', message: 'boom' })
+  })
+})
+
+describe('useDeviceStateStore — persistence', () => {
+  it('persists only deviceName', () => {
+    useDeviceStateStore.setState({
+      deviceName: 'Office Mac',
+      defaultDeviceName: 'mlab',
+      status: { kind: 'ok', at: 1, hostId: 'h1' },
+    })
+    const partialize = useDeviceStateStore.persist.getOptions().partialize!
+    expect(partialize(store())).toEqual({ deviceName: 'Office Mac' })
+  })
+})
+
+describe('effectiveDeviceName', () => {
+  it('returns the custom name when set', () => {
+    expect(effectiveDeviceName({ deviceName: 'Office Mac', defaultDeviceName: 'mlab' })).toBe('Office Mac')
+  })
+
+  it('falls back to the default name when no custom name', () => {
+    expect(effectiveDeviceName({ deviceName: null, defaultDeviceName: 'mlab' })).toBe('mlab')
+  })
+})
