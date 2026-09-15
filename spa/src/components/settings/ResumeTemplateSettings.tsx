@@ -12,6 +12,14 @@
 //  2. **Nothing here can block a save.** The template is saved to the host the
 //     moment the row commits; every verdict, including "could not check", is
 //     advice arriving afterwards.
+//  2b. **A draft outlives its commit until the host takes it.** Until the PUT
+//     lands, the draft is the only copy of what the user typed, so a failed
+//     save keeps the text on screen next to the error instead of reverting the
+//     row to the host's value. A conflict is the exception: the daemon's copy
+//     won, the store already holds it, and the draft is dropped so the row
+//     repaints with it. Commits are queued per host and each one merges onto
+//     the copy the previous one left, so two quick edits never overwrite each
+//     other (`host-config-queue`).
 //  3. **Per host.** Templates are this host's daemon copy (host-launcher spec
 //     §4.2); the Test runs against the same host.
 //  4. **A 404 is `unverifiable`.** An older daemon has no such endpoint, and
@@ -39,7 +47,8 @@ import { AGENT_NAMES } from '../../lib/agent-metadata'
 import { resolveShellCommand, type ShellResolveVerdict } from '../../lib/host-api'
 import { commandWordOf } from '../../lib/command-word'
 import { HostConfigConflictError } from '../../lib/host-config-api'
-import { useResumeTemplateLookup, type ResumeTemplatePair } from '../../lib/resume-templates'
+import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-queue'
+import { lookupResumeTemplate, useResumeTemplateLookup, type ResumeTemplatePair } from '../../lib/resume-templates'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { ShellVerdict } from './ShellVerdict'
@@ -130,28 +139,51 @@ export function ResumeTemplateSettings({ hostId, busy = false }: { hostId: strin
     abandonRequest(key)
   }
 
-  const persist = async (next: Record<string, ResumeTemplatePair>) => {
+  /**
+   * Save one map, behind this host's template queue.
+   *
+   * `build` runs when the save's turn comes, not when the row was committed,
+   * so it merges onto the copy the previous save left rather than onto the one
+   * this render captured. `onSaved` runs only when the daemon took the write.
+   */
+  const persist = (
+    build: () => Record<string, ResumeTemplatePair>,
+    onSaved: () => void = () => {},
+    onConflict: () => void = () => {},
+  ) => queueHostConfigSave(hostConfigQueueKey(hostId, 'resume-templates'), async () => {
     setSaveError(null)
     try {
-      await useHostConfigStore.getState().saveResumeTemplates(hostId, next)
+      await useHostConfigStore.getState().saveResumeTemplates(hostId, build())
+      onSaved()
     } catch (err) {
-      setSaveError(err instanceof HostConfigConflictError
-        ? t('host_config.conflict')
-        : t('host_config.save_failed', { reason: err instanceof Error ? err.message : String(err) }))
+      if (err instanceof HostConfigConflictError) {
+        // The store already holds the daemon's copy and this edit lost to it.
+        onConflict()
+        setSaveError(t('host_config.conflict'))
+      } else {
+        setSaveError(t('host_config.save_failed', { reason: err instanceof Error ? err.message : String(err) }))
+      }
     }
-  }
+  })
 
   const handleCommit = (agentType: string, field: Field, value: string) => {
-    const current = useHostConfigStore.getState().byHost[hostId]?.resumeTemplates ?? {}
-    // The edit lands on top of whatever currently answers for this agent, so
-    // editing one field never silently blanks the other.
-    const base = lookup(agentType) ?? BLANK
-    // The save carries this value, so the draft has nothing left to protect —
-    // and a draft that outlives its commit PINS the row: a reload or a
-    // conflict would repaint every panel except the one being edited here, and
-    // Test would go on judging the stale word. A draft is uncommitted state only.
-    dropDraft(rowKey(agentType, field))
-    void persist({ ...current, [agentType]: { ...base, [field]: value } })
+    const key = rowKey(agentType, field)
+    void persist(
+      () => {
+        const current = useHostConfigStore.getState().byHost[hostId]?.resumeTemplates ?? {}
+        // The edit lands on top of whatever currently answers for this agent —
+        // read HERE, so editing one field never blanks the other and never
+        // reverts a field a save that just landed wrote.
+        const base = lookupResumeTemplate(current, agentType) ?? BLANK
+        return { ...current, [agentType]: { ...base, [field]: value } }
+      },
+      // Only now is the value the host's: until it is, the draft is the only
+      // copy of what the user typed, and dropping it would discard the edit.
+      () => dropDraft(key),
+      // A conflict is the one failure the draft must NOT survive: the daemon's
+      // copy won, and a draft would pin this row against the reload.
+      () => dropDraft(key),
+    )
   }
 
   const handleRevert = (agentType: string, field: Field) => {
@@ -165,7 +197,7 @@ export function ResumeTemplateSettings({ hostId, busy = false }: { hostId: strin
     setDrafts({})
     setResults({})
     abandonAllRequests()
-    void persist({})
+    void persist(() => ({}))
   }
 
   /**

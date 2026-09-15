@@ -17,7 +17,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { DEFAULT_RESUME_TEMPLATES } from '../../lib/resume-templates'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
-import { HostConfigConflictError, type ResumeTemplateOverrides } from '../../lib/host-config-api'
+import { HostConfigApiError, HostConfigConflictError, type ResumeTemplateOverrides } from '../../lib/host-config-api'
 import en from '../../locales/en.json'
 import zhTW from '../../locales/zh-TW.json'
 
@@ -97,8 +97,8 @@ describe('ResumeTemplateSettings — rows', () => {
     fireEvent.keyDown(el, { key: 'Enter' })
     fireEvent.blur(el)
 
-    expect(saveMock()).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(overrides().cc?.exact).toBe('cld-yolo --resume {id}'))
+    expect(saveMock()).toHaveBeenCalledTimes(1)
   })
 
   it('blur alone commits', async () => {
@@ -441,6 +441,57 @@ describe('ResumeTemplateSettings — a draft is uncommitted state only', () => {
       seedTemplates({ cc: { exact: 'from-elsewhere {id}', fallback: DEFAULT_RESUME_TEMPLATES.cc.fallback } })
     })
     expect(input('cc', 'exact').value).toBe('half-typed')
+  })
+})
+
+describe('ResumeTemplateSettings — a commit is not lost', () => {
+  /** A save that only lands when the test releases it — i.e. a real round trip. */
+  function deferredSaves() {
+    const waiting: Array<() => void> = []
+    useHostConfigStore.setState({
+      saveResumeTemplates: vi.fn((hostId: string, items: ResumeTemplateOverrides) => new Promise<void>((resolve) => {
+        waiting.push(() => {
+          useHostConfigStore.setState((s) => ({ byHost: { ...s.byHost, [hostId]: { ...s.byHost[hostId], resumeTemplates: items } } }))
+          resolve()
+        })
+      })),
+    })
+    return waiting
+  }
+
+  it('two commits fired before the first save lands both survive', async () => {
+    const waiting = deferredSaves()
+    render(<ResumeTemplateSettings hostId={H1} />)
+
+    const exact = input('cc', 'exact')
+    fireEvent.change(exact, { target: { value: 'mine --resume {id}' } })
+    fireEvent.keyDown(exact, { key: 'Enter' })
+    const fallback = input('cc', 'fallback')
+    fireEvent.change(fallback, { target: { value: 'mine -c' } })
+    fireEvent.keyDown(fallback, { key: 'Enter' })
+
+    await waitFor(() => expect(waiting).toHaveLength(1))
+    await act(async () => { waiting.shift()?.() })
+    await waitFor(() => expect(waiting).toHaveLength(1))
+    await act(async () => { waiting.shift()?.() })
+
+    // The second commit merged onto what the first one saved.
+    expect(overrides().cc).toEqual({ exact: 'mine --resume {id}', fallback: 'mine -c' })
+    expect(input('cc', 'exact').value).toBe('mine --resume {id}')
+    expect(input('cc', 'fallback').value).toBe('mine -c')
+  })
+
+  it('a save that fails keeps the typed text on screen beside the error', async () => {
+    useHostConfigStore.setState({
+      saveResumeTemplates: vi.fn(async () => { throw new HostConfigApiError(500, 'daemon is unwell') }),
+    })
+    render(<ResumeTemplateSettings hostId={H1} />)
+    const el = input('cc', 'exact')
+    fireEvent.change(el, { target: { value: 'mine --resume {id}' } })
+    fireEvent.blur(el)
+
+    expect(await screen.findByTestId('resume-template-save-error')).toHaveTextContent('daemon is unwell')
+    expect(input('cc', 'exact').value).toBe('mine --resume {id}')
   })
 })
 

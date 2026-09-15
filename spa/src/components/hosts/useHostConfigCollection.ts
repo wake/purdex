@@ -11,17 +11,16 @@
 //     here is a function of whatever the store holds when it RUNS, and it
 //     names its row by id, never by index.
 //
-//  2. **One PUT at a time per host and collection.** The `saving` flag that
-//     used to guard this is React state: a second click in the same tick sees
-//     the pre-render value and races the first. The queue below is a plain
-//     promise chain in module scope — synchronous, so the second action is
-//     already behind the first before either has touched the network — and the
-//     loser of a race is no longer a 409 that discards the user's intent.
+//  2. **One PUT at a time per host and collection** (`queueHostConfigSave`).
+//     The `saving` flag that used to guard this is React state: a second click
+//     in the same tick sees the pre-render value and races the first, and the
+//     loser's 409 reload discards the user's intent.
 //
 // The UI keeps its buttons live while a save is in flight; queueing is what
 // makes that safe, and it is what keeps the second intent.
 import { useCallback, useRef, useState } from 'react'
 import { HostConfigConflictError, type HostCommand, type HostProject } from '../../lib/host-config-api'
+import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-queue'
 import { MAX_CONFIG_ITEMS } from '../../lib/host-config-validate'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -38,9 +37,6 @@ export interface WithId { id: string }
 
 /** The limit is re-checked when the action runs, not when the button was drawn. */
 class ItemLimitError extends Error {}
-
-/** One promise chain per `host:collection`. Module scope: it outlives a render. */
-const queues = new Map<string, Promise<unknown>>()
 
 function readItems(hostId: string, kind: CollectionKind): CollectionItem[] {
   return useHostConfigStore.getState().byHost[hostId]?.[kind] ?? []
@@ -87,7 +83,6 @@ export function useHostConfigCollection<T extends WithId>(
     mutate: (current: CollectionItem[]) => CollectionItem[],
     target: ErrorTarget,
   ): Promise<boolean> => {
-    const key = `${hostId}:${kind}`
     depth.current += 1
     setPending(true)
     const run = async (): Promise<boolean> => {
@@ -107,10 +102,7 @@ export function useHostConfigCollection<T extends WithId>(
         if (depth.current === 0) setPending(false)
       }
     }
-    const chained = (queues.get(key) ?? Promise.resolve()).then(run, run)
-    queues.set(key, chained)
-    void chained.then(() => { if (queues.get(key) === chained) queues.delete(key) })
-    return chained
+    return queueHostConfigSave(hostConfigQueueKey(hostId, kind), run)
   }, [describe, hostId, kind])
 
   const clearSaveError = useCallback((target?: ErrorTarget) => {
