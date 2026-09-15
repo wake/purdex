@@ -100,6 +100,31 @@ func TestHandlerPutRejects(t *testing.T) {
 	}
 }
 
+func TestHandlerPutRejectsDuplicateKeys(t *testing.T) {
+	m := newTestModule(t)
+	cases := map[string]struct{ path, body string }{
+		"top-level baseRevision": {"/api/hostconfig/projects", `{"items":[],"baseRevision":1,"baseRevision":0}`},
+		"project path":           {"/api/hostconfig/projects", `{"items":[{"id":"p1","name":"n","slug":"s","path":"/a","path":"/b"}],"baseRevision":0}`},
+		"command icon":           {"/api/hostconfig/commands", `{"items":[{"id":"c1","name":"x","command":"ls","icon":{"kind":"phosphor","value":"Terminal","value":"X"}}],"baseRevision":0}`},
+		"resume agent key":       {"/api/hostconfig/resume-templates", `{"items":{"cc":{"exact":"a","fallback":"b"},"cc":{"exact":"c","fallback":"d"}},"baseRevision":0}`},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			rr := serve(m, http.MethodPut, c.path, c.body)
+			assert.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+		})
+	}
+	e, err := m.store.Get(KeyProjects)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), e.Revision, "nothing stored")
+}
+
+func TestHandlerCheckPathRejectsDuplicateKeys(t *testing.T) {
+	m := newTestModule(t)
+	rr := serve(m, http.MethodPost, "/api/hostconfig/check-path", `{"path":"relative","path":"~"}`)
+	assert.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+}
+
 func TestHandlerPutBodyTooLarge(t *testing.T) {
 	m := newTestModule(t)
 	body := `{"items":[],"baseRevision":0,"pad":"` + strings.Repeat("x", bodyCap) + `"}`

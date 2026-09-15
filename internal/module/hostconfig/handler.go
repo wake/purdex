@@ -74,6 +74,10 @@ func (m *Module) putHandler(key string, normalize func([]byte) (any, error)) htt
 		if !ok {
 			return
 		}
+		if err := rejectDuplicateKeys(body); err != nil {
+			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		var req struct {
 			Items        json.RawMessage `json:"items"`
 			BaseRevision *int64          `json:"baseRevision"`
@@ -123,6 +127,10 @@ func (m *Module) putHandler(key string, normalize func([]byte) (any, error)) htt
 func (m *Module) handleCheckPath(w http.ResponseWriter, r *http.Request) {
 	body, ok := readBody(w, r)
 	if !ok {
+		return
+	}
+	if err := rejectDuplicateKeys(body); err != nil {
+		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	var req struct {
