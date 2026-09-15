@@ -2,8 +2,10 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/wake/purdex/internal/config"
@@ -25,7 +27,10 @@ type configUpdateRequest struct {
 	Detect    *detectUpdateRequest   `json:"detect,omitempty"`
 	Terminal  *config.TerminalConfig `json:"terminal,omitempty"`
 	UploadDir *string                `json:"upload_dir,omitempty"`
-	Nex       json.RawMessage        `json:"nex"`
+	// Nex is kept as a raw message (not *config.NexConfig) so a JSON `null`
+	// can be distinguished from the field being absent: both would decode
+	// to a nil pointer otherwise. See the len(req.Nex) > 0 handling below.
+	Nex json.RawMessage `json:"nex"`
 }
 
 // detectUpdateRequest allows partial updates to detect config.
@@ -44,9 +49,26 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate before mutating
+	var nexUpdate *config.NexConfig
 	if len(req.Nex) > 0 {
-		http.Error(w, "nex is not editable via API in this version; edit config.toml and restart", http.StatusBadRequest)
-		return
+		if bytes.Equal(bytes.TrimSpace(req.Nex), []byte("null")) {
+			http.Error(w, "nex must be an object", http.StatusBadRequest)
+			return
+		}
+		var n config.NexConfig
+		if err := json.Unmarshal(req.Nex, &n); err != nil {
+			http.Error(w, "invalid nex: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Static shape validation only (spec §4.4.1 division of labour);
+		// whether the engine can actually assemble is Init's business after
+		// the restart the UI asks for.
+		home, _ := os.UserHomeDir()
+		if err := n.Validate(home); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		nexUpdate = &n
 	}
 
 	if req.Terminal != nil && req.Terminal.SizingMode != "" {
@@ -83,6 +105,9 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.UploadDir != nil {
 			cfg.UploadDir = *req.UploadDir
+		}
+		if nexUpdate != nil {
+			cfg.Nex = *nexUpdate // persisted, never applied live (I9)
 		}
 		return nil
 	})
