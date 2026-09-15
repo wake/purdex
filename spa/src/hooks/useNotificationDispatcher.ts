@@ -216,8 +216,10 @@ export function useNotificationDispatcher(): void {
         const prev = prevEvents[compositeKeyStr]
         if (prev && prev.broadcast_ts === event.broadcast_ts) continue
 
-        // Extract sessionCode from composite key (hostId:sessionCode)
-        const colonIdx = compositeKeyStr.indexOf(':')
+        // Extract sessionCode from composite key (hostId:sessionCode).
+        // Why lastIndexOf: sessionCode is a fixed 6-char base36 token (never
+        // contains ':'), while hostId may (e.g. "mlab:abc123").
+        const colonIdx = compositeKeyStr.lastIndexOf(':')
         const hostId = colonIdx >= 0 ? compositeKeyStr.slice(0, colonIdx) : ''
         const sessionCode = colonIdx >= 0 ? compositeKeyStr.slice(colonIdx + 1) : compositeKeyStr
 

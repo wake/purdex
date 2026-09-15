@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick, buildDebounceKey, __resetDebounceStateForTests, __purgeDebounceForHostForTests } from './useNotificationDispatcher'
+import { renderHook } from '@testing-library/react'
+import { shouldNotify, shouldDispatch, clearSeenTs, handleNotificationClick, buildDebounceKey, __resetDebounceStateForTests, __purgeDebounceForHostForTests, useNotificationDispatcher } from './useNotificationDispatcher'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 import { useTabStore } from '../stores/useTabStore'
@@ -136,6 +137,47 @@ describe('shouldDispatch', () => {
     // After clear, session is new again — sentinel behavior
     expect(shouldDispatch('abc', 500)).toBe(false) // sentinel → record (even older ts)
     expect(shouldDispatch('abc', 600)).toBe(true)  // newer than 500 → dispatch
+  })
+})
+
+describe('useNotificationDispatcher composite key split', () => {
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+    useNotificationSettingsStore.setState({ agents: {} })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  })
+
+  it('splits hostId / sessionCode on the last colon when hostId itself contains a colon', () => {
+    const showNotification = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
+
+    const HOST_ID = 'mlab:abc123'
+    const SESSION_CODE = 'ses001'
+    const ck = `${HOST_ID}:${SESSION_CODE}`
+    // Seed the persistent dedup so this session is past the Infinity sentinel
+    // and the next (newer) broadcast_ts actually dispatches.
+    localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [ck]: 1 }))
+    useNotificationSettingsStore.getState().setNotifyWithoutTab('cc', true)
+
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    useAgentStore.setState({
+      lastEvents: {
+        [ck]: { agent_type: 'cc', status: 'waiting', raw_event_name: 'PermissionRequest', broadcast_ts: 2, detail: { tool_name: 'Bash' } },
+      },
+    })
+
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    const payload = showNotification.mock.calls[0][0]
+    expect(payload.sessionCode).toBe(SESSION_CODE)
+    expect(payload.action).toEqual({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+    unmount()
   })
 })
 
