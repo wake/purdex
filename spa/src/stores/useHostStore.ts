@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { isValidHostColor, sanitizeHostConfigColor } from '../lib/host-color'
 // host-api.ts imports useHostStore at runtime, so this must stay a type-only
 // import to avoid a require cycle.
 import type { NexInfo } from '../lib/host-api'
@@ -18,6 +19,12 @@ export interface HostConfig {
   // Distinct from `undefined` (field simply absent); `null` survives JSON round-trips.
   token?: string | null
   order: number
+  /**
+   * Per-host mark color, strict `#rrggbb` (see `isValidHostColor`). Absent means
+   * "no color" (the key is removed, never set to null). Synced with the host
+   * config; always re-validated with `isValidHostColor` before reaching CSS.
+   */
+  color?: string
 }
 
 export interface HostRuntime {
@@ -57,6 +64,8 @@ interface HostState {
 
   addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
   updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
+  /** Set a valid `#rrggbb` color, or `null` to remove it. Invalid values and unknown hosts are no-ops. */
+  setHostColor: (hostId: string, color: string | null) => void
   registerLocalHost: (result: { url: string; token: string; hostname: string }) => string
   removeHost: (hostId: string) => void
   reorderHosts: (orderedIds: string[]) => void
@@ -129,6 +138,18 @@ export const useHostStore = create<HostState>()(
           return {
             hosts: { ...state.hosts, [hostId]: { ...host, ...updates } },
           }
+        }),
+
+      setHostColor: (hostId, color) =>
+        set((state) => {
+          const host = state.hosts[hostId]
+          if (!host) return state
+          if (color === null) {
+            const { color: _c, ...rest } = host
+            return { hosts: { ...state.hosts, [hostId]: rest } }
+          }
+          if (!isValidHostColor(color)) return state
+          return { hosts: { ...state.hosts, [hostId]: { ...host, color } } }
         }),
 
       // Idempotent registration used by the local-daemon installer
@@ -219,6 +240,15 @@ export const useHostStore = create<HostState>()(
       name: STORAGE_KEYS.HOSTS,
       storage: purdexStorage,
       version: 1,
+      // Default shallow merge, plus dropping invalid host colors from persisted
+      // (possibly corrupted / cross-tab) state before it reaches the store.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<HostState>
+        if (!p.hosts || typeof p.hosts !== 'object') return { ...current, ...p }
+        const hosts: Record<string, HostConfig> = {}
+        for (const [id, host] of Object.entries(p.hosts)) hosts[id] = sanitizeHostConfigColor(host)
+        return { ...current, ...p, hosts }
+      },
       partialize: (state) => ({
         hosts: state.hosts,
         hostOrder: state.hostOrder,

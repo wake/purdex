@@ -66,6 +66,46 @@ describe('useHostStore', () => {
     expect(updated.hosts[defaultId].port).toBe(8080)
   })
 
+  it('setHostColor stores a valid color', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostColor(id, '#3b82f6')
+    expect(useHostStore.getState().hosts[id].color).toBe('#3b82f6')
+  })
+
+  it('setHostColor(null) removes the color key entirely', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostColor(id, '#3b82f6')
+    useHostStore.getState().setHostColor(id, null)
+    const host = useHostStore.getState().hosts[id]
+    expect('color' in host).toBe(false)
+    expect(host.name).toBe('mlab')
+  })
+
+  it('setHostColor ignores invalid values', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostColor(id, '#22c55e')
+    useHostStore.getState().setHostColor(id, 'red')
+    expect(useHostStore.getState().hosts[id].color).toBe('#22c55e')
+    useHostStore.getState().setHostColor(id, '#abc')
+    expect(useHostStore.getState().hosts[id].color).toBe('#22c55e')
+  })
+
+  it('setHostColor on an unknown host is a no-op', () => {
+    const before = useHostStore.getState().hosts
+    useHostStore.getState().setHostColor('nope', '#22c55e')
+    expect(useHostStore.getState().hosts).toBe(before)
+    expect(useHostStore.getState().hosts.nope).toBeUndefined()
+  })
+
+  it('updateHost leaves an existing color untouched', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostColor(id, '#ec4899')
+    useHostStore.getState().updateHost(id, { name: 'renamed' })
+    const host = useHostStore.getState().hosts[id]
+    expect(host.name).toBe('renamed')
+    expect(host.color).toBe('#ec4899')
+  })
+
   it('setRuntime updates runtime status for a host', () => {
     const state = useHostStore.getState()
     const defaultId = state.activeHostId!
@@ -218,6 +258,34 @@ describe('dev host', () => {
     const id = selectDevHostId(useHostStore.getState())
     expect(id).toBe(dev)
     expect(useHostStore.getState().getDaemonBase(id!)).toBe('http://10.9.9.9:4242')
+  })
+})
+
+describe('persist rehydrate (host color sanitize)', () => {
+  it('drops invalid stored colors and keeps valid ones', async () => {
+    const hosts = {
+      bad: { id: 'bad', name: 'bad', ip: '10.0.0.1', port: 7860, order: 0, color: 'url(x)' },
+      obj: { id: 'obj', name: 'obj', ip: '10.0.0.2', port: 7860, order: 1, color: {} },
+      good: { id: 'good', name: 'good', ip: '10.0.0.3', port: 7860, order: 2, color: '#3b82f6', token: 'T' },
+    }
+    localStorage.setItem(
+      'purdex-hosts',
+      JSON.stringify({ state: { hosts, hostOrder: ['bad', 'obj', 'good'], activeHostId: 'good', devHostId: null }, version: 1 }),
+    )
+    try {
+      await useHostStore.persist.rehydrate()
+      const s = useHostStore.getState()
+      expect('color' in s.hosts.bad).toBe(false)
+      expect('color' in s.hosts.obj).toBe(false)
+      expect(s.hosts.good.color).toBe('#3b82f6')
+      expect(s.hosts.good.token).toBe('T')
+      expect(s.hostOrder).toEqual(['bad', 'obj', 'good'])
+      expect(s.activeHostId).toBe('good')
+      expect(typeof s.setHostColor).toBe('function')
+    } finally {
+      localStorage.removeItem('purdex-hosts')
+      useHostStore.getState().reset()
+    }
   })
 })
 

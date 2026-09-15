@@ -237,6 +237,49 @@ describe('createHostsContributor', () => {
     expect(s.hosts.moved.token).toBeNull() // endpoint changed → cleared (re-auth)
     expect(s.hosts.fresh.token).toBeNull() // new host → cleared
   })
+
+  // -------------------------------------------------------------------------
+  // color round-trip
+  // -------------------------------------------------------------------------
+
+  function seedColoredHosts() {
+    useHostStore.setState({
+      hosts: {
+        a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, token: 'TOK', order: 0, color: '#ef4444' },
+        b: { id: 'b', name: 'b', ip: '10.0.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: ['a', 'b'],
+      activeHostId: 'a',
+    })
+  }
+
+  it('color survives serialize → deserialize (full-replace)', () => {
+    seedColoredHosts()
+    const payload = JSON.parse(JSON.stringify(contributor.serialize())) as FullPayload
+    expect((payload.data.hosts as Record<string, Record<string, unknown>>).a.color).toBe('#ef4444')
+
+    resetStore()
+    contributor.deserialize(payload, { type: 'full-replace' })
+
+    const s = useHostStore.getState()
+    expect(s.hosts.a.color).toBe('#ef4444')
+    expect('color' in s.hosts.b).toBe(false)
+  })
+
+  it('color survives serialize → deserialize (field-merge, hosts=remote) with token contract intact', () => {
+    seedColoredHosts()
+    const payload = JSON.parse(JSON.stringify(contributor.serialize())) as FullPayload
+
+    contributor.deserialize(payload, {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'local' },
+    })
+
+    const s = useHostStore.getState()
+    expect(s.hosts.a.color).toBe('#ef4444')
+    expect(s.hosts.a.token).toBe('TOK') // same endpoint → token preserved
+    expect('color' in s.hosts.b).toBe(false)
+  })
 })
 
 describe('hostsContributor.deserialize (full-replace, token preservation)', () => {
@@ -368,5 +411,61 @@ describe('hostsContributor.deserialize (full-replace, token preservation)', () =
     const roundTripped = JSON.parse(JSON.stringify(host)) as { token?: unknown }
     expect('token' in roundTripped).toBe(true)
     expect(roundTripped.token).toBeNull()
+  })
+})
+
+describe('hostsContributor.deserialize (hostile color payloads)', () => {
+  const HOSTILE: unknown[] = ['url(x)', '#abc', {}, 42]
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: {
+        a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, token: 'TOK', order: 0 },
+      },
+      hostOrder: ['a'],
+      activeHostId: 'a',
+    })
+  })
+
+  function payload(color: unknown): FullPayload {
+    return {
+      version: 1,
+      data: {
+        hosts: {
+          a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, order: 0, color },
+          b: { id: 'b', name: 'b', ip: '10.0.0.2', port: 7860, order: 1, color: '#22c55e' },
+        },
+        hostOrder: ['a', 'b'],
+        activeHostId: 'a',
+      },
+    }
+  }
+
+  it.each(HOSTILE)('full-replace strips invalid color %j, keeps valid color and token contract', (bad) => {
+    createHostsContributor().deserialize(payload(bad), { type: 'full-replace' })
+    const s = useHostStore.getState()
+    expect('color' in s.hosts.a).toBe(false)
+    expect(s.hosts.b.color).toBe('#22c55e')
+    expect(s.hosts.a.token).toBe('TOK')
+    expect(s.hosts.b.token).toBeNull()
+  })
+
+  it.each(HOSTILE)('field-merge strips invalid color %j, keeps valid color and token contract', (bad) => {
+    createHostsContributor().deserialize(payload(bad), {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'remote' },
+    })
+    const s = useHostStore.getState()
+    expect('color' in s.hosts.a).toBe(false)
+    expect(s.hosts.b.color).toBe('#22c55e')
+    expect(s.hosts.a.token).toBe('TOK')
+    expect(s.hosts.b.token).toBeNull()
+  })
+
+  it('invalid color is not re-serialized', () => {
+    createHostsContributor().deserialize(payload('url(x)'), { type: 'full-replace' })
+    const out = createHostsContributor().serialize() as FullPayload
+    const hosts = (out.data as { hosts: Record<string, object> }).hosts
+    expect('color' in hosts.a).toBe(false)
   })
 })

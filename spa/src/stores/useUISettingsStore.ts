@@ -16,6 +16,46 @@ export function clampKeepAlive(renderer: TerminalRenderer, count: number): numbe
   return Math.min(count, max)
 }
 
+export type HostColorMarkStyle = 'gradient' | 'left-line' | 'bottom-line' | 'none'
+
+export const HOST_COLOR_LINE_WIDTH_MIN = 1
+export const HOST_COLOR_LINE_WIDTH_MAX = 6
+const HOST_COLOR_LINE_WIDTH_DEFAULT = 2
+
+const HOST_COLOR_MARK_STYLES: readonly HostColorMarkStyle[] = ['gradient', 'left-line', 'bottom-line', 'none']
+
+export function isHostColorMarkStyle(v: unknown): v is HostColorMarkStyle {
+  return typeof v === 'string' && (HOST_COLOR_MARK_STYLES as readonly string[]).includes(v)
+}
+
+/** Non-finite → default (2); otherwise round then clamp to [MIN, MAX]. */
+export function clampHostColorLineWidth(n: number): number {
+  if (!Number.isFinite(n)) return HOST_COLOR_LINE_WIDTH_DEFAULT
+  return Math.min(HOST_COLOR_LINE_WIDTH_MAX, Math.max(HOST_COLOR_LINE_WIDTH_MIN, Math.round(n)))
+}
+
+const HOST_COLOR_STYLE_FIELDS = ['hostColorSidebarStyle', 'hostColorTabBarStyle'] as const
+const HOST_COLOR_WIDTH_FIELDS = ['hostColorSidebarWidth', 'hostColorTabBarWidth'] as const
+
+/**
+ * Validates host color mark fields for paths that bypass store setters (sync,
+ * persist rehydrate): invalid styles and non-number / non-finite widths are
+ * dropped; finite widths are rounded + clamped. Other fields pass through.
+ */
+export function sanitizeHostColorPrefs<T extends object>(data: T): T {
+  const out = { ...data } as Record<string, unknown>
+  for (const field of HOST_COLOR_STYLE_FIELDS) {
+    if (field in out && !isHostColorMarkStyle(out[field])) delete out[field]
+  }
+  for (const field of HOST_COLOR_WIDTH_FIELDS) {
+    if (!(field in out)) continue
+    const v = out[field]
+    if (typeof v !== 'number' || !Number.isFinite(v)) delete out[field]
+    else out[field] = clampHostColorLineWidth(v)
+  }
+  return out as T
+}
+
 interface UISettings {
   /**
    * 收到第一筆 terminal data 後，延遲多久才移除 overlay 顯示畫面（ms）。
@@ -71,6 +111,15 @@ interface UISettings {
   setTabNameTooltipMode: (mode: TabNameTooltipMode) => void
   showAgentTitleInStatusBar: boolean
   setShowAgentTitleInStatusBar: (show: boolean) => void
+
+  hostColorSidebarStyle: HostColorMarkStyle
+  setHostColorSidebarStyle: (style: HostColorMarkStyle) => void
+  hostColorSidebarWidth: number
+  setHostColorSidebarWidth: (px: number) => void
+  hostColorTabBarStyle: HostColorMarkStyle
+  setHostColorTabBarStyle: (style: HostColorMarkStyle) => void
+  hostColorTabBarWidth: number
+  setHostColorTabBarWidth: (px: number) => void
 }
 
 export const useUISettingsStore = create<UISettings>()(
@@ -109,6 +158,19 @@ export const useUISettingsStore = create<UISettings>()(
       setTabNameTooltipMode: (mode) => set({ tabNameTooltipMode: mode }),
       showAgentTitleInStatusBar: false,
       setShowAgentTitleInStatusBar: (show) => set({ showAgentTitleInStatusBar: show }),
+
+      hostColorSidebarStyle: 'gradient' as HostColorMarkStyle,
+      setHostColorSidebarStyle: (style) => {
+        if (isHostColorMarkStyle(style)) set({ hostColorSidebarStyle: style })
+      },
+      hostColorSidebarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+      setHostColorSidebarWidth: (px) => set({ hostColorSidebarWidth: clampHostColorLineWidth(px) }),
+      hostColorTabBarStyle: 'bottom-line' as HostColorMarkStyle,
+      setHostColorTabBarStyle: (style) => {
+        if (isHostColorMarkStyle(style)) set({ hostColorTabBarStyle: style })
+      },
+      hostColorTabBarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+      setHostColorTabBarWidth: (px) => set({ hostColorTabBarWidth: clampHostColorLineWidth(px) }),
     }),
     {
       name: STORAGE_KEYS.UI_SETTINGS,
@@ -153,6 +215,26 @@ export const useUISettingsStore = create<UISettings>()(
         if (clamped !== state.keepAliveCount) {
           useUISettingsStore.setState({ keepAliveCount: clamped })
         }
+
+        // migrate() passes v3 data through untouched, so corrupt local host color
+        // prefs must be repaired here: dropped fields fall back to defaults.
+        const hostColorDefaults = {
+          hostColorSidebarStyle: 'gradient' as HostColorMarkStyle,
+          hostColorSidebarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+          hostColorTabBarStyle: 'bottom-line' as HostColorMarkStyle,
+          hostColorTabBarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+        }
+        const current = {
+          hostColorSidebarStyle: state.hostColorSidebarStyle,
+          hostColorSidebarWidth: state.hostColorSidebarWidth,
+          hostColorTabBarStyle: state.hostColorTabBarStyle,
+          hostColorTabBarWidth: state.hostColorTabBarWidth,
+        }
+        const sanitized = { ...hostColorDefaults, ...sanitizeHostColorPrefs(current) }
+        const changed = (Object.keys(sanitized) as (keyof typeof sanitized)[]).some(
+          (k) => sanitized[k] !== current[k],
+        )
+        if (changed) useUISettingsStore.setState(sanitized)
       },
     },
   ),
