@@ -50,11 +50,17 @@ export interface NexSseHandle {
 
 /**
  * I1: stream_url already carries /api/nex; resolve it against the daemon
- * origin only. An absolute URL is passed through untouched.
+ * origin only. Credentials (Bearer, X-Pdx-Client) go out with this request,
+ * so a foreign absolute URL must never survive as the fetch target — an
+ * attach(observe) response is server data, and if it were ever wrong or
+ * malicious an absolute stream_url could redirect those headers to another
+ * origin. Only `pathname + search + hash` of the resolved URL is kept, then
+ * rebuilt against the daemon base, so the origin is always the daemon's.
  */
 export function resolveNexStreamUrl(hostId: string, url: string): string {
   const base = useHostStore.getState().getDaemonBase(hostId)
-  return new URL(url, base).toString()
+  const resolved = new URL(url, base)
+  return new URL(resolved.pathname + resolved.search + resolved.hash, base).toString()
 }
 
 export function openNexSse(opts: NexSseOptions): NexSseHandle {

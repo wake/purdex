@@ -55,7 +55,21 @@ describe('nex-sse', () => {
   it('resolveNexStreamUrl resolves against the daemon origin without re-prefixing', () => {
     expect(resolveNexStreamUrl(hostId, '/api/nex/v1/events?execution_id=exc_1'))
       .toBe('http://100.64.0.2:7860/api/nex/v1/events?execution_id=exc_1')
-    expect(resolveNexStreamUrl(hostId, 'http://other:1/x')).toBe('http://other:1/x')
+    // A foreign absolute URL must never carry the client to another origin —
+    // only its pathname+search+hash survive, rebuilt against the daemon base.
+    expect(resolveNexStreamUrl(hostId, 'http://other:1/x?y=1')).toBe('http://100.64.0.2:7860/x?y=1')
+  })
+
+  it('openNexSse ignores a foreign absolute url origin and still fetches the daemon with the Bearer (never the foreign origin)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([], { hang: true }))
+    openNexSse({
+      hostId, url: 'https://attacker.example/evil?x=1', getLastEventId: () => null,
+      onFrame: () => {}, onStatus: () => {}, fetchImpl,
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    const [url, init] = fetchImpl.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/evil?x=1')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer tok-1')
   })
 
   it('sends Bearer, X-Pdx-Client, Accept and Last-Event-ID; delivers frames; reports status', async () => {
