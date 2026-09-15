@@ -1,0 +1,145 @@
+// spa/src/lib/nex/nex-sse.ts — fetch + ReadableStream SSE client for
+// /api/nex/v1/events. A native EventSource is ruled out by the P-A contract
+// (§4.3): it cannot send Authorization / X-Pdx-Client / Last-Event-ID
+// headers and its auto-reconnect would replay a spent ticket URL. This
+// client owns reconnection (backoff) but NOT the cursor: the reducer/store
+// advances lastSeq from durable frames and this layer reads it back through
+// getLastEventId at every (re)connect, so a cursor advanced by history
+// paging while the socket was down is honoured.
+import { useHostStore } from '../../stores/useHostStore'
+import { hostAuthHeaders } from '../host-api'
+import { getNexClientId } from './client-id'
+import { SseParser, type NexSseFrame } from './sse-parser'
+
+export type NexSseStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
+
+export interface NexSseBackoff {
+  initialMs: number
+  maxMs: number
+  /** 0..1 fraction of the delay added/subtracted at random. */
+  jitter: number
+  /** A connection open at least this long resets the backoff. */
+  stableMs: number
+}
+
+const DEFAULT_BACKOFF: NexSseBackoff = { initialMs: 1000, maxMs: 30000, jitter: 0.2, stableMs: 10000 }
+
+export interface NexSseOptions {
+  hostId: string
+  /** Origin-relative (as returned by attach(observe).stream_url) or absolute. */
+  url: string
+  getLastEventId: () => number | null
+  onFrame: (frame: NexSseFrame) => void
+  onStatus: (status: NexSseStatus, err?: Error) => void
+  fetchImpl?: typeof fetch
+  backoff?: Partial<NexSseBackoff>
+}
+
+export interface NexSseHandle {
+  close(): void
+}
+
+/**
+ * I1: stream_url already carries /api/nex; resolve it against the daemon
+ * origin only. An absolute URL is passed through untouched.
+ */
+export function resolveNexStreamUrl(hostId: string, url: string): string {
+  const base = useHostStore.getState().getDaemonBase(hostId)
+  return new URL(url, base).toString()
+}
+
+export function openNexSse(opts: NexSseOptions): NexSseHandle {
+  const fetchImpl = opts.fetchImpl ?? fetch
+  const backoff: NexSseBackoff = { ...DEFAULT_BACKOFF, ...opts.backoff }
+  const target = resolveNexStreamUrl(opts.hostId, opts.url)
+
+  let closed = false
+  let attempt = 0
+  let controller: AbortController | null = null
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const status = (s: NexSseStatus, err?: Error) => {
+    if (closed && s !== 'closed') return
+    if (err) opts.onStatus(s, err)
+    else opts.onStatus(s)
+  }
+
+  const scheduleReconnect = () => {
+    if (closed) return
+    const exp = Math.min(backoff.maxMs, backoff.initialMs * 2 ** attempt)
+    const delta = exp * backoff.jitter * (Math.random() * 2 - 1)
+    attempt += 1
+    status('reconnecting')
+    timer = setTimeout(() => { timer = null; void connect() }, Math.max(0, Math.round(exp + delta)))
+  }
+
+  const connect = async () => {
+    if (closed) return
+    controller = new AbortController()
+    status(attempt === 0 ? 'connecting' : 'reconnecting')
+    const headers = new Headers(hostAuthHeaders(opts.hostId))
+    headers.set('Accept', 'text/event-stream')
+    headers.set('X-Pdx-Client', getNexClientId())
+    const last = opts.getLastEventId()
+    if (last != null) headers.set('Last-Event-ID', String(last))
+
+    let res: Response
+    try {
+      res = await fetchImpl(target, { headers, signal: controller.signal, cache: 'no-store' })
+    } catch {
+      if (closed) return
+      scheduleReconnect()
+      return
+    }
+    if (closed) return
+    if (res.status === 401 || res.status === 403) {
+      closed = true
+      status('closed', new Error(`nex sse: HTTP ${res.status}`))
+      return
+    }
+    if (!res.ok || !res.body) {
+      scheduleReconnect()
+      return
+    }
+
+    status('open')
+    const openedAt = Date.now()
+    const parser = new SseParser()
+    const decoder = new TextDecoder()
+    reader = res.body.getReader()
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        for (const frame of parser.push(decoder.decode(value, { stream: true }))) {
+          if (closed) return
+          opts.onFrame(frame)
+        }
+      }
+    } catch {
+      // aborted or network error — fall through to reconnect
+    } finally {
+      reader = null
+    }
+    if (closed) return
+    if (Date.now() - openedAt >= backoff.stableMs) attempt = 0
+    scheduleReconnect()
+  }
+
+  void connect()
+
+  return {
+    close() {
+      if (closed) return
+      closed = true
+      if (timer) { clearTimeout(timer); timer = null }
+      controller?.abort()
+      // abort() alone does not wake a read() that is already pending on a
+      // locked reader (and test streams may not observe the signal at all);
+      // cancel the reader explicitly so the loop exits now, not on the next chunk.
+      void reader?.cancel().catch(() => {})
+      opts.onStatus('closed')
+    },
+  }
+}
