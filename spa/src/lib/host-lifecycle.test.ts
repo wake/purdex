@@ -5,6 +5,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useStreamStore } from '../stores/useStreamStore'
+import { useExecutionStore } from '../stores/useExecutionStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceSettingsStore } from '../stores/useWorkspaceSettingsStore'
@@ -44,6 +45,7 @@ function resetAllStores() {
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
+  useExecutionStore.setState({ executions: {} })
   useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   useHostSettingsStore.setState({ hosts: {} })
   useWorkspaceStore.getState().reset()
@@ -101,6 +103,19 @@ describe('host delete cascade', () => {
     deleteHostCascade(HOST_A, true)
 
     expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeUndefined()
+  })
+
+  it('clears useExecutionStore entries for the removed host only', () => {
+    useExecutionStore.getState().applyEvents(HOST_A, 'exc_1', [
+      { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
+    ])
+    useExecutionStore.getState().applyEvents(HOST_B, 'exc_1', [
+      { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
+    ])
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
   })
 
   it('cascade cleans SessionStore entries', () => {

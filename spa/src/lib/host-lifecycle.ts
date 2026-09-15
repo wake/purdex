@@ -4,6 +4,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
+import { useExecutionStore } from '../stores/useExecutionStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
@@ -125,6 +126,11 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   sessionStore.removeHost(hostId)
   agentStore.removeHost(hostId)
   streamStore.clearHost(hostId)
+  // Nexen execution view state for this host. Runs after the tab-close loop
+  // above so no execution pane's hook observes a half-cleared store (spec
+  // §4.3.4); undo restores the tabs, whose hooks re-subscribe from scratch,
+  // so nothing here needs snapshotting.
+  useExecutionStore.getState().clearHost(hostId)
   useHostSettingsStore.getState().clearHost(hostId)
   hostStore.removeHost(hostId)
 
