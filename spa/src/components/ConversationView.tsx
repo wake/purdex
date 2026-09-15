@@ -1,26 +1,19 @@
 // spa/src/components/ConversationView.tsx
-import { useRef, useCallback, useState, useEffect } from 'react'
+import { useRef, useCallback, useState } from 'react'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import {
   type StreamMessage,
-  type AssistantMessage,
-  type UserMessage,
   type ControlRequest,
 } from '../lib/stream-ws'
 import { compositeKey } from '../lib/composite-key'
-import MessageBubble from './MessageBubble'
-import ToolCallBlock from './ToolCallBlock'
-import ThinkingBlock from './ThinkingBlock'
-import ToolResultBlock from './ToolResultBlock'
+import ConversationMessages from './ConversationMessages'
 import PermissionPrompt from './PermissionPrompt'
 import AskUserQuestion from './AskUserQuestion'
 import StreamInput from './StreamInput'
-import ThinkingIndicator from './ThinkingIndicator'
 import FileAttachment, { type AttachedFile } from './FileAttachment'
 import HandoffButton from './HandoffButton'
-import { Prohibit, TerminalWindow } from '@phosphor-icons/react'
 
 interface Props {
   hostId: string
@@ -35,7 +28,6 @@ const EMPTY_CONTROLS: ControlRequest[] = []
 
 export default function ConversationView({ hostId, sessionCode, isActive = false, onHandoff, onHandoffToTerm }: Props) {
   const t = useI18nStore((s) => s.t)
-  const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
@@ -54,13 +46,6 @@ export default function ConversationView({ hostId, sessionCode, isActive = false
   // ThinkingIndicator: visible when streaming and no assistant messages yet
   const hasAssistantMessage = messages.some((m) => m.type === 'assistant')
   const showThinking = isStreaming && !hasAssistantMessage
-
-  // Auto-scroll on new messages or control requests
-  useEffect(() => {
-    if (scrollRef.current?.scrollTo) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-    }
-  }, [messages, pendingControlRequests])
 
   const handleSend = useCallback((text: string) => {
     conn?.send({
@@ -221,94 +206,13 @@ export default function ConversationView({ hostId, sessionCode, isActive = false
       />
 
       {/* Messages area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && !isStreaming && (
-          <div className="flex items-center justify-center h-full text-text-muted text-sm">
-            {t('stream.waiting')}
-          </div>
-        )}
-        {messages.map((msg, i) => {
-          const key = `${sessionCode}-${i}`
-
-          // --- Assistant messages ---
-          if (msg.type === 'assistant' && 'message' in msg) {
-            const am = msg as AssistantMessage
-            return (
-              <div key={key}>
-                {am.message.content.map((block, j) => {
-                  if (block.type === 'thinking' && block.thinking) {
-                    return <ThinkingBlock key={j} content={block.thinking} />
-                  }
-                  if (block.type === 'text' && block.text) {
-                    return <MessageBubble key={j} role="assistant" content={block.text} />
-                  }
-                  if (block.type === 'tool_use' && block.name) {
-                    return <ToolCallBlock key={j} tool={block.name} input={block.input || {}} />
-                  }
-                  return null
-                })}
-              </div>
-            )
-          }
-
-          // --- User messages ---
-          if (msg.type === 'user' && 'message' in msg) {
-            const um = msg as UserMessage
-            const blocks = um.message.content
-
-            return (
-              <div key={key}>
-                {blocks.map((block, j) => {
-                  // Tool result
-                  if (block.type === 'tool_result') {
-                    const content = typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
-                    return <ToolResultBlock key={j} content={content} isError={block.is_error ?? false} />
-                  }
-
-                  // Text blocks
-                  if (block.type === 'text' && block.text) {
-                    // Interrupted
-                    if (block.text === '[Request interrupted by user]') {
-                      return (
-                        <div key={j} data-testid="interrupted-msg"
-                          className="flex items-center gap-1.5 bg-status-error rounded-[12px_12px_4px_12px] px-3 py-1.5 text-sm text-[#eaa] italic"> {/* TODO: theme token for text-[#eaa] */}
-                          <Prohibit size={14} />
-                          <span>{t('stream.interrupted')}</span>
-                        </div>
-                      )
-                    }
-
-                    // Slash command
-                    if (block.text.startsWith('/')) {
-                      return (
-                        <div key={j} className="flex justify-end">
-                          <div data-testid="command-bubble"
-                            className="flex items-center gap-1.5 bg-status-warning rounded-[12px_12px_4px_12px] px-3 py-1.5 text-[13px] text-[#e0d0a0] italic font-mono"> {/* TODO: theme token for text-[#e0d0a0] */}
-                            <TerminalWindow size={14} weight="bold" className="text-[#c0a060]" /> {/* TODO: theme token */}
-                            <span>{block.text}</span>
-                          </div>
-                        </div>
-                      )
-                    }
-
-                    // Normal user text
-                    return <MessageBubble key={j} role="user" content={block.text} />
-                  }
-
-                  return null
-                })}
-              </div>
-            )
-          }
-
-          return null
-        })}
-
-        {/* Thinking indicator */}
-        <ThinkingIndicator visible={showThinking} />
-
-        {/* Pending control requests */}
-        {pendingControlRequests.map((req) => {
+      <ConversationMessages
+        messages={messages}
+        keyPrefix={sessionCode}
+        showThinking={showThinking}
+        showEmptyHint={messages.length === 0 && !isStreaming}
+        scrollKey={pendingControlRequests.length}
+        afterThinking={pendingControlRequests.map((req) => {
           if (req.request.tool_name === 'AskUserQuestion') {
             const input = req.request.input as Record<string, unknown> | undefined
             const questions = (input?.questions as Array<{
@@ -340,7 +244,7 @@ export default function ConversationView({ hostId, sessionCode, isActive = false
             />
           )
         })}
-      </div>
+      />
 
       {/* File attachments */}
       <FileAttachment files={attachedFiles} onRemove={handleRemoveFile} />

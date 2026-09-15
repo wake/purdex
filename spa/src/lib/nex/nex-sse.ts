@@ -10,7 +10,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { hostAuthHeaders } from '../host-api'
 import { getNexClientId } from './client-id'
 import { SseParser, type NexSseFrame } from './sse-parser'
-import { nexErrorFromResponse } from './types'
+import { NexApiError, nexErrorFromResponse } from './types'
 
 export type NexSseStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
 
@@ -67,7 +67,6 @@ export function resolveNexStreamUrl(hostId: string, url: string): string {
 export function openNexSse(opts: NexSseOptions): NexSseHandle {
   const fetchImpl = opts.fetchImpl ?? fetch
   const backoff: NexSseBackoff = { ...DEFAULT_BACKOFF, ...opts.backoff }
-  const target = resolveNexStreamUrl(opts.hostId, opts.url)
 
   let closed = false
   let attempt = 0
@@ -98,6 +97,17 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
 
   const connect = async () => {
     if (closed) return
+    // resolveNexStreamUrl -> getDaemonBase() silently falls back to the
+    // active/first host for an unknown hostId — a host removed before the
+    // first connect, or between reconnect attempts, must never ride that
+    // fallback to a different daemon (spec §4.3.2 step 5: never fall back
+    // to another daemon). Refuse terminally instead, same as 401/403 below.
+    if (!useHostStore.getState().hosts[opts.hostId]) {
+      closed = true
+      status('closed', new NexApiError(0, 'host_removed', 'host removed'))
+      return
+    }
+    const target = resolveNexStreamUrl(opts.hostId, opts.url)
     controller = new AbortController()
     status(attempt === 0 ? 'connecting' : 'reconnecting')
     const headers = new Headers(hostAuthHeaders(opts.hostId))

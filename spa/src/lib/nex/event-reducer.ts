@@ -16,7 +16,7 @@ export interface ExecutionState {
   /** A lifecycle event arrived; the summary is authoritative, so the hook refetches. */
   summaryStale: boolean
   /**
-   * 'paused' (spec v2.1 §4.3.2 step 4) is the store-only state P-B.2's
+   * 'paused' (spec §4.3.2 step 4) is the store-only state P-B.2's
    * subscription-slot cap sets when this execution's SSE is deliberately
    * not connected (another pane holds the slot) — never emitted by
    * NexSseStatus, which openNexSse alone owns.
@@ -175,9 +175,20 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       const { lease: _dropped, ...rest } = next.summary
       return { ...next, summaryStale: true, summary: rest as ExecutionSummary }
     }
+    case 'execution.turn_orphaned':
+      // A daemon restart reconciled a live turn with no execution.terminal:
+      // the input must not stay locked forever, so clear pendingSend;
+      // pendingLocal (the optimistic bubble) is left alone — the turn is
+      // still live, just orphaned from this client's view.
+      return { ...next, pendingSend: false, summaryStale: true }
+    case 'execution.turn_stalled':
+      // Same restart reconcile, but for a queued turn the daemon withdraws
+      // outright: both the pending flag and the optimistic bubble must
+      // clear, or the input stays locked and a bubble is stuck forever.
+      return { ...next, pendingSend: false, pendingLocal: null, summaryStale: true }
     default:
-      // interrupt_requested / interrupted / turn_stalled / turn_orphaned …:
-      // nothing to render in P-B; the summary refetch carries the state.
+      // interrupt_requested / interrupted …: nothing to render in P-B; the
+      // summary refetch carries the state.
       return { ...next, summaryStale: true }
   }
 }

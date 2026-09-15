@@ -248,27 +248,24 @@ describe('parseRoute settings subsection', () => {
   })
 })
 
-describe('parseRoute execution (P.12)', () => {
-  it('parses /execution/<id>', () => {
-    expect(parseRoute('/execution/exc_deadbeef')).toEqual({
-      kind: 'execution',
-      executionId: 'exc_deadbeef',
-    })
+describe('parseRoute execution', () => {
+  it('parses /execution/<host>/<id>', () => {
+    expect(parseRoute('/execution/h1/exc_deadbeef')).toEqual({ kind: 'execution', executionId: 'exc_deadbeef', host: 'h1' })
   })
-
-  it('rejects a traversal / illegal id', () => {
+  it('parses the legacy /execution/<id> with no host', () => {
+    expect(parseRoute('/execution/exc_deadbeef')).toEqual({ kind: 'execution', executionId: 'exc_deadbeef' })
+  })
+  it('rejects malformed ids/hosts and extra segments', () => {
     expect(parseRoute('/execution/..')).toBeNull()
     expect(parseRoute('/execution/a%2Fb')).toBeNull()
-  })
-
-  it('rejects extra path segments', () => {
-    expect(parseRoute('/execution/exc_1/extra')).toBeNull()
+    expect(parseRoute('/execution/h1/exc_1/extra')).toBeNull()
+    expect(parseRoute('/execution/bad host/exc_1')).toBeNull()
     expect(parseRoute('/execution')).toBeNull()
   })
-
-  it('round-trips through tabToUrl', () => {
-    const url = tabToUrl('abc123', { kind: 'execution', executionId: 'exc_1' })
-    expect(url).toBe('/execution/exc_1')
-    expect(parseRoute(url)).toEqual({ kind: 'execution', executionId: 'exc_1' })
+  it('round-trips through tabToUrl with and without host', () => {
+    const withHost = tabToUrl('abc123', { kind: 'execution', executionId: 'exc_1', host: 'h1' })
+    expect(withHost).toBe('/execution/h1/exc_1')
+    expect(parseRoute(withHost)).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
+    expect(tabToUrl('abc123', { kind: 'execution', executionId: 'exc_1' })).toBe('/execution/exc_1')
   })
 })

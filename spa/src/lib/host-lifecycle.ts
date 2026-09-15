@@ -4,7 +4,8 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
-import { useExecutionStore } from '../stores/useExecutionStore'
+import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
+import { releaseLease } from './nex/nex-api'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
@@ -35,6 +36,10 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   }
 
   const prefix = `${hostId}:`
+  // Captured before any removal: a hostless execution pane resolves to the
+  // first host (resolveExecutionHostId), so that is its effective host.
+  const fallbackHost = hostStore.hostOrder[0]
+  const effectiveExecutionHost = (host: string | undefined) => host || fallbackHost
 
   // --- Snapshot for undo (serializable data only) ---
   const snapshot: {
@@ -102,10 +107,9 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
         if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId) {
           hasHostPane = true
         }
-        // Execution panes (Nexen, spec §4.3.4) use the stored `host` hint
-        // only — no resolve/fallback — so an unset host never matches and
-        // stays open under whatever host resolveExecutionHostId picks later.
-        if (pane.content.kind === 'execution' && pane.content.host === hostId) {
+        // Execution panes (Nexen, spec §4.3.4) match on their resolved host,
+        // so a legacy hostless pane bound to the removed first host closes too.
+        if (pane.content.kind === 'execution' && effectiveExecutionHost(pane.content.host) === hostId) {
           hasHostPane = true
         }
       })
@@ -127,6 +131,18 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
     // Mark all tmux-session tabs as terminated
     tabStore.markHostTerminated(hostId, 'host-removed')
+    // A hostless execution pane renders against the first host; once that
+    // host is gone it would silently rebind to the next one (spec §4.3.2
+    // step 5 forbids that). Pin it to the removed host so it renders
+    // `host_removed`. Undo leaves the pin: with the host restored,
+    // host === hostId is exactly what the pane was showing.
+    for (const [tabId, tab] of Object.entries(useTabStore.getState().tabs)) {
+      scanPaneTree(tab.layout, (pane) => {
+        if (pane.content.kind === 'execution' && !pane.content.host && fallbackHost === hostId) {
+          useTabStore.getState().setPaneContent(tabId, pane.id, { ...pane.content, host: hostId })
+        }
+      })
+    }
   }
 
   sessionStore.removeHost(hostId)
@@ -136,6 +152,24 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   // above so no execution pane's hook observes a half-cleared store (spec
   // §4.3.4); undo restores the tabs, whose hooks re-subscribe from scratch,
   // so nothing here needs snapshotting.
+  //
+  // A held lease: closeTabs unmounts the panes via the tab-close loop
+  // above, but the pane's own release() (useExecutionLease's unmount
+  // effect) races clearHost below — by the time React actually tears the
+  // component down, clearHost may already have wiped the lease out from
+  // under it, so release() finds nothing to release. Best-effort release
+  // every held lease on this host here instead, before the store is
+  // cleared — but only in closeTabs mode (spec §4.3.4: closeTabs releases
+  // a held lease; keep-tabs mode drops the local lease without a release
+  // call, since the host — and its auth — is gone).
+  if (closeTabs) {
+    for (const [key, execution] of Object.entries(useExecutionStore.getState().executions)) {
+      const { hostId: execHostId, executionId } = splitExecutionKey(key)
+      if (execHostId === hostId && execution.lease) {
+        void releaseLease(hostId, executionId, execution.lease.leaseId).catch(() => {})
+      }
+    }
+  }
   useExecutionStore.getState().clearHost(hostId)
   useHostSettingsStore.getState().clearHost(hostId)
   hostStore.removeHost(hostId)

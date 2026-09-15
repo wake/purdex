@@ -400,9 +400,15 @@ the resolved host id. Layout:
   `{kind:'execution', executionId, host?}` for persisted-tab compatibility,
   but every opener in P-B (route, deeplink, Nex table) resolves the host
   first and stores it, and `contentMatches` (`pane-utils.ts`) compares
-  `resolveExecutionHostId(a.host) === resolveExecutionHostId(b.host) &&
-  a.executionId === b.executionId`. Nexen ids are per-daemon, so the same
-  id on two hosts is two executions and must be two panes (I10).
+  `(a.host ?? firstHost) === (b.host ?? firstHost) &&
+  a.executionId === b.executionId`, where `firstHost` is
+  `resolveExecutionHostId(undefined)`. The first-host fallback applies
+  **only when the hint is absent**: a stored host that no longer exists
+  is compared literally (consistent with 4.3.2 step 5 — no fallback to a
+  removed host), so a fresh opener for the same id on the first host opens
+  a second pane rather than reusing the stale one. Nexen ids are
+  per-daemon, so the same id on two hosts is two executions and must be
+  two panes (I10).
 
 #### 4.3.4 Host removal and other teardown
 
@@ -688,3 +694,4 @@ hot apply, no restart button in P-B, transient frames dropped until P-B2.
 | P3-5 | TS `ConfigData`/info types lack `nex`; `effective.claude_bin` over-promised | Fixed: 4.4.2 |
 | P3-6 | `terminate` requires a lease; "retry on 409" wastes a round trip | Fixed: 4.3.3 Terminate calls `ensureLease` first |
 | — | (self) `deeplinkResolver` imports the M0 `execution-api` | Fixed: 4.3.3 |
+| — | (final review I2) `contentMatches` fell back to the first host even when the stored host hint no longer exists | Ruled: `(a.host ?? firstHost) === (b.host ?? firstHost)` — fallback only when the hint is absent (4.3.2 step 5 outranks the former 4.3.3 literal); cost if wrong: a pane with a stale stored host is never matched by a fresh opener, so a second pane opens |

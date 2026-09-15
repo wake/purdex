@@ -11,13 +11,16 @@ export type ParsedRoute =
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'workspace-settings'; workspaceId: string }
   | { kind: 'workspace-session-tab'; workspaceId: string; tabId: string; mode: 'terminal' | 'stream' }
-  | { kind: 'execution'; executionId: string }
+  | { kind: 'execution'; executionId: string; host?: string }
 
 const ID_PATTERN = /^[0-9a-z]{6}$/
 // Execution ids are daemon-minted opaque handles (contract §2: `exc_` + hex).
 // Kept permissive (safe URL token) so a future id scheme still round-trips, but
 // bounded to reject path traversal / injection in the deeplink path segment.
 const EXECUTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+// Host ids are SPA-assigned (host-api registration), never daemon-sourced —
+// keep the grammar tight since it round-trips through a URL path segment.
+const HOST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 // F6: share the source of truth for settings id grammar with the
 // contribution registry so a registration that passes `assertValid…` is
 // also guaranteed to round-trip through parseRoute(). Subsection uses
@@ -72,11 +75,16 @@ export function parseRoute(path: string): ParsedRoute | null {
 
   const segments = path.split('/').filter(Boolean)
 
-  // /execution/<id> — deeplink landing / detail page (Task P.12). Stable landing
-  // point so a deeplink never dead-ends: the page fetches the projection itself.
-  if (segments[0] === 'execution' && segments.length === 2) {
-    if (!EXECUTION_ID_PATTERN.test(segments[1])) return null
-    return { kind: 'execution', executionId: segments[1] }
+  // /execution/<host>/<id> — execution pane (P-B). The legacy two-segment
+  // form (no host) is still accepted and resolves to the first host.
+  if (segments[0] === 'execution' && (segments.length === 2 || segments.length === 3)) {
+    const id = segments[segments.length - 1]
+    if (!EXECUTION_ID_PATTERN.test(id)) return null
+    if (segments.length === 3) {
+      if (!HOST_ID_PATTERN.test(segments[1])) return null
+      return { kind: 'execution', executionId: id, host: segments[1] }
+    }
+    return { kind: 'execution', executionId: id }
   }
 
   if (segments[0] === 't' && segments.length === 3) {
@@ -133,6 +141,6 @@ export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: stri
     case 'pdf-preview':
       return '/'
     case 'execution':
-      return `/execution/${content.executionId}`
+      return content.host ? `/execution/${content.host}/${content.executionId}` : `/execution/${content.executionId}`
   }
 }

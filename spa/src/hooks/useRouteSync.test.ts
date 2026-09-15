@@ -14,6 +14,7 @@ import { memoryLocation } from 'wouter/memory-location'
 import { resetLastHostSelection } from '../components/HostPage'
 import { useRouteSync } from './useRouteSync'
 import { useTabStore } from '../stores/useTabStore'
+import { useHostStore } from '../stores/useHostStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import type { Tab } from '../types/tab'
 
@@ -200,5 +201,27 @@ describe('useRouteSync', () => {
 
     expect(primary?.content.kind).toBe('hosts')
     expect(mem.history[mem.history.length - 1]).toBe('/hosts/test-host/not-a-page')
+  })
+
+  it('opens /execution/<host>/<id> as an execution pane with the resolved host', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'H1', ip: '1', port: 1, order: 0 } } as never,
+      hostOrder: ['h1'], activeHostId: 'h1', runtime: {},
+    })
+    const mem = memoryLocation({ path: '/execution/h1/exc_1', record: true })
+    renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
+    const tab = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
+    expect(getPrimaryPane(tab.layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
+  })
+
+  it('opens /execution/<unknownHost>/<id> with the unknown host verbatim, never falling back to another daemon (spec §4.3.2 step 5)', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'H1', ip: '1', port: 1, order: 0 } } as never,
+      hostOrder: ['h1'], activeHostId: 'h1', runtime: {},
+    })
+    const mem = memoryLocation({ path: '/execution/unknown-host/exc_1', record: true })
+    renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
+    const tab = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
+    expect(getPrimaryPane(tab.layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'unknown-host' })
   })
 })

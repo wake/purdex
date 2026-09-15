@@ -6,6 +6,7 @@ import { useHistoryStore } from '../stores/useHistoryStore'
 import { parseRoute, tabToUrl } from '../lib/route-utils'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useWorkspaceStore } from '../features/workspace'
+import { resolveExecutionHostId } from '../lib/nex/resolve-host'
 
 export function useRouteSync() {
   const [location, setLocation] = useLocation()
@@ -115,10 +116,11 @@ export function useRouteSync() {
         break
       }
       case 'execution':
-        // Read-only detail landing (Task P.12). Singleton per execution id; the
-        // page fetches its own projection so a direct URL / back-forward never
-        // dead-ends.
-        openSingletonTab({ kind: 'execution', executionId: parsed.executionId })
+        // Execution pane (spec §4.3.3), singleton per (host, execution id).
+        // It owns its own observe subscription, so a direct URL /
+        // back-forward never dead-ends. The host segment (or its absence) is
+        // resolved at open time so the pane always has a concrete host.
+        openSingletonTab({ kind: 'execution', executionId: parsed.executionId, host: resolveExecutionHostId(parsed.host) })
         break
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openSingletonTab, setActiveTab: stable Zustand selectors

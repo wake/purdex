@@ -96,6 +96,15 @@ describe('nex-api', () => {
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
   })
 
+  it('releaseLease forwards a RequestInit (keepalive for beforeunload)', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await releaseLease(hostId, 'exc_1', 'ls_1', { keepalive: true })
+    const [, init] = testGlobal.fetch.mock.calls.at(-1)!
+    expect(init.keepalive).toBe(true)
+    expect(init.method).toBe('DELETE')
+    expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
+  })
+
   it('archiveExecution posts the target archived flag (api/interact.go:81)', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ archived: true }))
     await archiveExecution(hostId, 'exc_1')
@@ -103,6 +112,20 @@ describe('nex-api', () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ archived: false }))
     await archiveExecution(hostId, 'exc_1', true)
     expect(JSON.parse(testGlobal.fetch.mock.calls.at(-1)![1].body)).toEqual({ archived: false })
+  })
+
+  it('nexFetch refuses an unknown/removed host without calling fetch (never falls back to another daemon)', async () => {
+    const err = await nexFetch('unknown-host', '/v1/capabilities').catch((e) => e)
+    expect(err).toBeInstanceOf(NexApiError)
+    expect(err).toMatchObject({ code: 'host_removed', status: 0 })
+    expect(testGlobal.fetch).not.toHaveBeenCalled()
+  })
+
+  it('attachControl on an unknown/removed host rejects host_removed without calling fetch', async () => {
+    const err = await attachControl('unknown-host', 'exc_1').catch((e) => e)
+    expect(err).toBeInstanceOf(NexApiError)
+    expect(err).toMatchObject({ code: 'host_removed' })
+    expect(testGlobal.fetch).not.toHaveBeenCalled()
   })
 
   it('wraps a network failure (fetch rejection) as NexApiError(0, "network", message)', async () => {
@@ -168,9 +191,14 @@ describe('nex-api', () => {
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
   })
 
-  it('resolveExecutionHostId prefers a known host and falls back to the first', () => {
+  it('resolveExecutionHostId returns a present hint verbatim — even an unknown one — and only falls back when the hint is absent (spec §4.3.2 step 5)', () => {
     expect(resolveExecutionHostId(hostId)).toBe(hostId)
-    expect(resolveExecutionHostId('unknown')).toBe(useHostStore.getState().hostOrder[0])
+    expect(resolveExecutionHostId('unknown')).toBe('unknown')
     expect(resolveExecutionHostId(undefined)).toBe(useHostStore.getState().hostOrder[0])
+  })
+
+  it('resolveExecutionHostId falls back to an empty string when there are no hosts and no hint', () => {
+    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null, runtime: {} } as never)
+    expect(resolveExecutionHostId(undefined)).toBe('')
   })
 })

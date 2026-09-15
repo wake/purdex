@@ -22,6 +22,15 @@ import {
 const PREFIX = '/api/nex'
 
 export function nexFetch(hostId: string, path: string, init?: RequestInit): Promise<Response> {
+  // useHostStore.getDaemonBase() silently falls back to the active/first
+  // host for an unknown hostId (spa/src/stores/useHostStore.ts) — a host
+  // removed between the caller reading it and this call (e.g. mid-await in
+  // ensureLease) must never ride that fallback to a different daemon (spec
+  // §4.3.2 step 5: never fall back to another daemon). Refuse here, once,
+  // instead of relying on every caller to re-check.
+  if (!useHostStore.getState().hosts[hostId]) {
+    return Promise.reject(new NexApiError(0, 'host_removed', 'host removed'))
+  }
   const headers = new Headers(init?.headers)
   headers.set('X-Pdx-Client', getNexClientId())
   if (init?.body != null && !headers.has('Content-Type')) {
@@ -47,8 +56,8 @@ async function okVoid(res: Response): Promise<void> {
   if (!res.ok) throw await nexErrorFromResponse(res)
 }
 
-function postJson(hostId: string, path: string, body: unknown, method = 'POST'): Promise<Response> {
-  return nexFetch(hostId, path, { method, body: JSON.stringify(body) })
+function postJson(hostId: string, path: string, body: unknown, method = 'POST', init?: RequestInit): Promise<Response> {
+  return nexFetch(hostId, path, { ...init, method, body: JSON.stringify(body) })
 }
 
 function execPath(executionId: string, suffix = ''): string {
@@ -106,8 +115,8 @@ export function renewLease(hostId: string, executionId: string, leaseId: string)
   return postJson(hostId, execPath(executionId, '/attach/renew'), { lease_id: leaseId }).then((r) => okJson<AttachControlResponse>(r))
 }
 
-export function releaseLease(hostId: string, executionId: string, leaseId: string): Promise<void> {
-  return postJson(hostId, execPath(executionId, '/attach'), { lease_id: leaseId }, 'DELETE').then(okVoid)
+export function releaseLease(hostId: string, executionId: string, leaseId: string, init?: RequestInit): Promise<void> {
+  return postJson(hostId, execPath(executionId, '/attach'), { lease_id: leaseId }, 'DELETE', init).then(okVoid)
 }
 
 export function sendMessage(hostId: string, executionId: string, leaseId: string, text: string): Promise<SendResponse> {
@@ -127,13 +136,8 @@ export function terminateExecution(hostId: string, executionId: string, leaseId:
   return postJson(hostId, execPath(executionId, '/terminate'), { lease_id: leaseId }).then(okVoid)
 }
 
-/**
- * Resolve an optional `host` hint (pane content / deeplink) onto a known SPA
- * hostId; falls back to the first host so an execution always has a daemon
- * to talk to. (Moved from the M0 execution-api.ts, which P-B.2 deletes.)
- */
-export function resolveExecutionHostId(host?: string): string {
-  const { hostOrder } = useHostStore.getState()
-  if (host && hostOrder.includes(host)) return host
-  return hostOrder[0] ?? ''
-}
+// Resolve an optional `host` hint (pane content / deeplink) onto a known SPA
+// hostId; falls back to the first host so an execution always has a daemon
+// to talk to. (Moved to resolve-host.ts, which P-B.2 keeps free of fetch
+// imports so pane-utils / route code can use it without pulling in nex-api.)
+export { resolveExecutionHostId } from './resolve-host'

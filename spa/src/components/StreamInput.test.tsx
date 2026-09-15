@@ -89,4 +89,16 @@ describe('StreamInput', () => {
     await new Promise((r) => requestAnimationFrame(r))
     expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
   })
+
+  it('hides the attach button when showAttach is false', () => {
+    const { container, rerender } = render(<StreamInput onSend={() => {}} />)
+    expect(container.querySelectorAll('button').length).toBeGreaterThanOrEqual(1)
+    rerender(<StreamInput onSend={() => {}} showAttach={false} />)
+    expect(container.querySelector('button svg')).toBeNull()
+  })
+
+  it('seeds the textarea value from initialValue', () => {
+    render(<StreamInput onSend={vi.fn()} initialValue="restored text" />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('restored text')
+  })
 })

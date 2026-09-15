@@ -1,5 +1,6 @@
 // spa/src/lib/host-lifecycle.test.ts — Tests for host delete cascade and session-closed detection
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import * as nexApi from '../lib/nex/nex-api'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
@@ -19,6 +20,8 @@ import type { Tab } from '../types/tab'
 import type { StreamMessage } from './stream-ws'
 import type { Session } from './host-api'
 
+vi.mock('../lib/nex/nex-api', () => ({ releaseLease: vi.fn() }))
+
 function makeSession(code: string, name: string = code): Session {
   return { code, name, mode: 'terminal', cwd: '~', cc_session_id: '', cc_model: '', has_relay: false }
 }
@@ -32,6 +35,7 @@ function makeSessionTab(hostId: string, code: string, mode: 'terminal' | 'stream
 
 function resetAllStores() {
   localStorage.clear()
+  vi.mocked(nexApi.releaseLease).mockReset().mockResolvedValue(undefined)
   useHostStore.setState({
     hosts: {
       [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
@@ -103,6 +107,37 @@ describe('host delete cascade', () => {
     expect(content).toEqual({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
   })
 
+  it('closeTabs=true closes a hostless execution pane bound to the removed first host', () => {
+    const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
+    useTabStore.getState().addTab(legacy)
+
+    deleteHostCascade(HOST_A, true)
+
+    expect(useTabStore.getState().tabs[legacy.id]).toBeUndefined()
+  })
+
+  it('closeTabs=false pins a hostless execution pane to the removed first host instead of rebinding it', () => {
+    const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
+    useTabStore.getState().addTab(legacy)
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(useTabStore.getState().tabs[legacy.id]).toBeDefined()
+    const content = getPrimaryPane(useTabStore.getState().tabs[legacy.id].layout).content
+    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+  })
+
+  it.each([true, false])('removing a non-first host leaves a hostless execution pane untouched (closeTabs=%s)', (closeTabs) => {
+    const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
+    useTabStore.getState().addTab(legacy)
+
+    deleteHostCascade(HOST_B, closeTabs)
+
+    expect(useTabStore.getState().tabs[legacy.id]).toBeDefined()
+    const content = getPrimaryPane(useTabStore.getState().tabs[legacy.id].layout).content
+    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1' })
+  })
+
   it('cascade cleans AgentStore entries', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
@@ -139,6 +174,28 @@ describe('host delete cascade', () => {
     deleteHostCascade(HOST_A, false)
 
     expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
+  })
+
+  it('closeTabs releases held leases on the removed host before clearing execution state (I13)', () => {
+    useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
+    useExecutionStore.getState().setLease(HOST_A, 'exc_2', null) // no lease held — must not call releaseLease
+    useExecutionStore.getState().applyEvents(HOST_B, 'exc_3', [
+      { seq: 1, execution_id: 'exc_3', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
+    ])
+
+    deleteHostCascade(HOST_A, true)
+
+    expect(nexApi.releaseLease).toHaveBeenCalledTimes(1)
+    expect(nexApi.releaseLease).toHaveBeenCalledWith(HOST_A, 'exc_1', 'ls_1')
+  })
+
+  it('closeTabs=false drops held leases locally without a release call (I13)', () => {
+    useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(nexApi.releaseLease).not.toHaveBeenCalled()
+    expect(useExecutionStore.getState().executions[`${HOST_A}:exc_1`]).toBeUndefined()
   })
 
   it('cascade cleans SessionStore entries', () => {
