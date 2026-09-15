@@ -7,6 +7,7 @@ import {
   readPrevSnapshot,
   writePrevSnapshot,
   setSessionMetaCwd,
+  isWellFormedSnapshotV1,
 } from './storage'
 import type { SessionMeta, WorkspaceSnapshot } from './types'
 
@@ -217,5 +218,24 @@ describe('setSessionMetaCwd', () => {
       h1: { s1: metaEntry({ hostId: 'h1', sessionCode: 's1', name: 'a', cwd: '/a' }) },
     })
     expect(setSessionMetaCwd(snap, 'h1', 'nope', '/x')).toBe(snap)
+  })
+})
+
+describe('isWellFormedSnapshotV1', () => {
+  it('accepts a well-formed version 1 snapshot', () => {
+    expect(isWellFormedSnapshotV1(makeSnapshot())).toBe(true)
+  })
+
+  it('rejects other versions', () => {
+    expect(isWellFormedSnapshotV1({ ...makeSnapshot(), version: 2 })).toBe(false)
+  })
+
+  it('rejects malformed shapes and non-objects', () => {
+    const noTabs: Record<string, unknown> = { ...makeSnapshot() }
+    delete noTabs.tabs
+    expect(isWellFormedSnapshotV1(noTabs)).toBe(false)
+    expect(isWellFormedSnapshotV1(null)).toBe(false)
+    expect(isWellFormedSnapshotV1([])).toBe(false)
+    expect(isWellFormedSnapshotV1('x')).toBe(false)
   })
 })

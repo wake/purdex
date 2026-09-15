@@ -27,4 +27,5 @@ export const STORAGE_KEYS = {
   PATH_CACHE_V1: 'purdex-path-cache-v1',
   RECENT_FILES: 'purdex-recent-files',
   PLACEHOLDER_FILES: 'purdex-placeholder-files',
+  DEVICE_STATE: 'purdex-device-state',
 } as const
