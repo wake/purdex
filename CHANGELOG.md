@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.355] - 2026-09-16
+
+### Feat: 各電腦狀態備份 P2 — 電腦清單＋完整取代（#1060）
+
+Settings > Snapshot 的「各電腦狀態備份」區塊現在列出存放 host 上每台電腦的最後狀態，可展開看 workspace／分頁，並以任一台的狀態完整取代本機目前的 workspace 與分頁；只還原結構，絕不建立 tmux session。
+
+- **依名稱接回（`reattachByName`）**：每台 host 查一次 session 列表（逾時 10 秒視同該 host 失敗，不再卡住全域操作鎖）；同 host 同名、code 與 `tmux_instance` 皆有效、模式相容才接回（code 不同也接）；同名且相容的 live session 不只一個時判定模稜兩可而不接；stream pane 不接回。
+- **本機沒有的 host**：該 pane 標 `terminated: 'host-removed'`，不猜其他 host。
+- **完整取代（`restoreDeviceStateReplace`）**：在快照操作鎖下執行形狀驗證 → 標記缺少的 host → 依名稱接回 → 寫只含結構的 `-prev` → 原子取代分頁與 workspace store（失敗 rollback）→ 同步 session store；錯誤回報帶 `hostRemoved`。
+- **復原維持只還原結構**：device-state 還原寫入的 `-prev` 全部 `restorable:false`，同頁既有的「復原」不會重建 session（有整合測試）。
+- **UI**：每台電腦一列（本機徽章、相對時間、版本、數量）、展開 workspace → 分頁樹、完整取代／刪除皆需確認、單一執行＋全域鎖、結果顯示接回／未連線／host 不存在數量；取代一律重新抓最新紀錄（清單刷新後不會套用舊 payload）；本機列在 clientId 尚未產生時也能正確辨識、不能刪除。
+- **Review**：P2/P3 plan 經 codex 審並修訂；PR R1 無問題；R2 三視角 4 項（取代套用快取舊 payload、host 列表無 timeout 卡鎖、同名 live session 模稜兩可、clientId 未產生時本機列可刪除）全數修入；「連按兩次復原仍可能重建」屬既有 Undo 語意，防守方判定不擋。
+- 測試 vitest 439→443 files、5520→5586 tests；Go 未動。
+
 ## [1.0.0-alpha.354] - 2026-09-16
 
 ### Feat: 各電腦狀態備份 P1 — daemon 模組＋自動上傳（#1055）
