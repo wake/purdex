@@ -105,6 +105,13 @@ describe('nex-api', () => {
     expect(JSON.parse(testGlobal.fetch.mock.calls.at(-1)![1].body)).toEqual({ archived: false })
   })
 
+  it('wraps a network failure (fetch rejection) as NexApiError(0, "network", message)', async () => {
+    testGlobal.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const err = await sendMessage(hostId, 'exc_1', 'ls_1', 'hello').catch((e) => e)
+    expect(err).toBeInstanceOf(NexApiError)
+    expect(err).toMatchObject({ code: 'network', status: 0, message: 'Failed to fetch' })
+  })
+
   it('throws NexApiError with the structured code on non-2xx', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ error: 'held', code: 'lease_held' }, 409))
     await expect(attachControl(hostId, 'exc_1')).rejects.toMatchObject({ code: 'lease_held', status: 409 })

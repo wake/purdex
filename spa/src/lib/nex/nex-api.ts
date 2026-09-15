@@ -7,6 +7,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { getNexClientId } from './client-id'
 import {
   nexErrorFromResponse,
+  NexApiError,
   type AttachControlResponse,
   type AttachObserveResponse,
   type EventsPage,
@@ -26,7 +27,15 @@ export function nexFetch(hostId: string, path: string, init?: RequestInit): Prom
   if (init?.body != null && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
-  return hostFetch(hostId, `${PREFIX}${path}`, { ...init, headers })
+  // hostFetch rejects (TypeError, an aborted fetch, …) on anything that
+  // never reached the server — offline, DNS failure, Tailscale path down.
+  // Normalise it to the same NexApiError shape as a structured HTTP error
+  // (I12) so every caller can switch on `code` instead of also handling a
+  // bare rejection.
+  return hostFetch(hostId, `${PREFIX}${path}`, { ...init, headers }).catch((e: unknown) => {
+    const message = e instanceof Error ? e.message : String(e)
+    throw new NexApiError(0, 'network', message)
+  })
 }
 
 async function okJson<T>(res: Response): Promise<T> {
