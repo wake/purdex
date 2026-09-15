@@ -87,7 +87,9 @@ List order in the array is the display order.
 
 - PUT is whole-collection replace with optimistic concurrency: if `baseRevision` ≠ stored revision →
   **409** with the current `{items, revision}` as JSON body. Compare-and-set runs in one transaction.
-- `check-path`: expand `~` / `~/` using the daemon process user's home (`os.UserHomeDir`), then
+- `check-path`: expand `~` / `~/` using the daemon process user's home (`os.UserHomeDir`) — intentionally
+  not a pane shell's `$HOME` (`session/home_handler.go`); for the single-user hosts Purdex targets they
+  coincide, and the UI labels the check as "on this host". Then
   `filepath.Clean`, `os.Stat`. Not absolute after expansion → 400. `ENOENT` → `missing`;
   other stat errors (e.g. permission) → `error` + reason. Stat is followed-symlink (`os.Stat`).
 - Auth: same middleware as all `/api/*` routes (nothing module-specific).
@@ -116,10 +118,22 @@ Handler: 200/400/409/413 paths, check-path dir/not_dir/missing/`~` expansion/rel
 - `ResumeTemplateLookup` stays `(agentType) => pair | undefined`, but lookups are now **built per host**:
   `resumeLookupFor(hostId)` (live, reads store) and `useResumeTemplateLookup(hostId)` (subscribed).
   If host config isn't `ready`, lookup answers from defaults.
-- Rebuild engine / batch: they already pin `hostId` per operation; resolve with
-  `await useHostConfigStore.getState().ensureLoaded(hostId)` at operation start, then
-  `resumeLookupFor(hostId)`. `batch.ts` default param changes accordingly (lookup factory per host).
-- `RenamePopover`, `RebuildActionSet`, Snapshot page pass the relevant `hostId`.
+- **Rebuild engine** (`engine.ts` single-pane paths): pinned `hostId` is known; `await ensureLoaded(hostId)`
+  at operation start, then `resolveResumeCommand(record, resumeLookupFor(hostId))`.
+- **Batch planning** (`batch.ts`): `planForRecord(record, templates)` loses its global default — the lookup
+  becomes a required argument. `groupForBatch()` is split into two passes:
+  (1) synchronous grouping without plans; (2) async `planBatch()` which `await ensureLoaded()` for every
+  involved host (in parallel), then computes each plan with `resumeLookupFor(record.hostId)`.
+  UI code that groups synchronously for display (Snapshot records table) renders plans with
+  `useResumeTemplateLookup(hostId)` per row (defaults when not yet loaded — display only, never executed).
+  Tests: multi-host batch where two hosts have different overrides for the same agent type.
+- **Components** (explicit interface changes):
+  - `RebuildActionSet`: derive host from `binding.hostId` (required when a template lookup is needed);
+    calls `useResumeTemplateLookup(binding.hostId)`.
+  - `RenamePopover` › `PaneDetailBlock`: `RenameTargetPane` already carries `hostId` → `useResumeTemplateLookup(pane.hostId)`.
+  - `ResumeTemplateSettings` → props `{ hostId, busy }`; host picker removed; reads/writes through
+    `useHostConfigStore` for that host only.
+  - `useAgentStore` provenance tests referencing the old store are updated to the new lookup.
 - Delete `useResumeTemplateStore.ts`, its sync registration and `STORAGE_KEYS.RESUME_TEMPLATES`.
 
 ### 4.3 Host sub-pages
@@ -147,15 +161,28 @@ All receive `{ hostId }`. Host offline / `unsupported` → inline notice, editin
   `@phosphor-icons/core` metadata; components resolved through a lazily imported chunk
   (`import('@phosphor-icons/react')`) so the full set is not in the main bundle.
 - `CommandIconView` renders a stored `CommandIcon`; unknown phosphor name or chunk still loading →
-  `Terminal` icon fallback.
+  `Terminal` icon fallback. Rendering a stored phosphor icon does load the full chunk (once, cached);
+  accepted, since the launcher is opened on demand.
+- **First task of B2 is a spike**: confirm the exact metadata export of `@phosphor-icons/core` (move it from
+  devDependencies to dependencies), confirm Vite 8 splits `import('@phosphor-icons/react')` into its own
+  chunk, and record main-bundle size before/after in the PR (budget: main bundle grows < 20 KB gzip). If
+  either fails, fall back to a generated static name→tags list plus per-icon dynamic imports and note it.
 
 **Snapshots** (`components/hosts/SnapshotsSection.tsx`)
-- Reuses the body of `SnapshotSettingsSection` with a `hostId` filter prop: rebuild-records table,
-  tmux sessions table and unattached disclosures show only rows whose `hostId` matches; the tabs block
-  shows tabs containing at least one pane on this host. The host column is dropped.
-  `ResumeTemplateSettings` is no longer rendered here (moved to Commands › Resume).
-- Global `snapshot` settings section is unregistered and its file becomes the host-filtered component
-  (rename; no duplicate).
+The current global page mixes host-scoped data with client-scoped (all hosts) actions. Split explicitly:
+- **Host-scoped part (every host)**: rebuild-records table, tmux sessions table (editable cwd) and unattached
+  disclosures, filtered to `hostId`; host column dropped. Its "rebuild all sessions" action runs on a
+  **derived host-filtered snapshot** — `filterSnapshotByHost(snap, hostId)` (pure, new in
+  `lib/snapshot/filter.ts`) keeps only `sessionMeta[hostId]` and never writes back the derived copy.
+  Writes (cwd edit) keep going through `setSessionMetaCwd` on the full snapshot. Test: from host A's page,
+  rebuild-all never calls create on host B.
+- **Client-scoped part (only on the Dev host's page, i.e. `selectDevHostId`)**: the tabs block,
+  "restore tab layout", "restore all", and `DeviceStateSection` (device state already lives on the dev
+  host's daemon). The block is titled to make clear it covers this device's whole workspace across all
+  hosts. If no dev host is set, show this block on the first host in `hostOrder` with a hint.
+- `ResumeTemplateSettings` is no longer rendered here (moved to Commands › Resume).
+- Global `snapshot` settings section is unregistered; its file is split into the host-scoped component and
+  the client-scoped block (no duplicated logic).
 
 ### 4.4 Removals
 Delete (with their tests): `useQuickCommandStore`, `lib/quick-command-bindings.ts`,
@@ -164,10 +191,14 @@ Delete (with their tests): `useQuickCommandStore`, `lib/quick-command-bindings.t
 `lib/sync/contributors/quick-commands.ts`, `STORAGE_KEYS.QUICK_COMMANDS`, workspace quick-action popover /
 quick-commands context menu and their entry points in `WorkspaceContextMenu` / `WorkspaceRow`,
 the command slot in Host › Sessions header, the `QuickCommandMenu` usage in `PaneLayoutRenderer`,
-and the global "Commands" settings section registration. Module-contributed commands consumed via
-`useCommands` — if any module still contributes commands, that contribution API is removed too
-(verify during planning; if something real depends on it, stop and surface).
-Stale i18n keys removed from all locales.
+and the global "Commands" settings section registration. Also:
+- `lib/execute-command.ts` — kept only if the launcher's send path reuses it; otherwise deleted.
+- Module command API: `ModuleDefinition.commands`, `CommandContribution`, `CommandContext`,
+  `getModulesWithCommands()` in `lib/module-registry.ts` and their tests (if any module still contributes
+  commands for a non-quick-command purpose, stop and surface).
+- `lib/settings-order.ts` `MODULE_QUICK_COMMANDS` constant + tests.
+- i18n: all `modules.quick_commands.*`, `settings.quick_commands.*` and other now-unused keys in every locale.
+The plan must start from a fresh `rg` of importers and list each touched file.
 
 ## 5. B3 — Launcher
 
@@ -186,9 +217,9 @@ Layout:
 3. Empty state when host has no projects: hint + link to Host › Projects. `unsupported` → hint.
 
 ### 5.2 Behaviour
-- **Enter in name input with nothing selected** → create session `name || <default name>`, `cwd '~'`,
-  mode `terminal` (identical to current default submit). Empty name keeps current behaviour
-  (current forms require a name — keep: Enter with empty name and no selection does nothing, shows validation).
+- **Enter in name input** → create session `name`, `cwd '~'`, mode `terminal` (identical to current submit).
+  Empty name → invalid, inline validation, nothing created (current behaviour). Invalid characters
+  (daemon rule `^[a-zA-Z0-9_-]+$`) validated client-side too.
 - **Click a command icon** → launch `{project, command}`. **Click project name** → launch `{project}` (cwd only).
 - Keyboard: `ArrowDown` from input moves focus into the grid; arrows move between items
   (project name and each icon are items, row-major); `Enter`/`Space` launches the focused item;
@@ -196,10 +227,13 @@ Layout:
 - **Session name for a project launch**: typed name if non-empty; else `{slug}-{N}` where
   N = 1 + count of live sessions on this host whose name is exactly `slug` or matches `^slug-\d+$`;
   if that name exists, increment N until free. On 409 from create (race), increment and retry up to 5 times.
-- **Launch sequence** (shared helper `lib/session-launch.ts`):
-  1. `createSession(hostId, name, project.path, 'terminal')`.
-  2. If command: `sendKeys(hostId, session.code, command.command, session.tmuxInstance)` — same call and
-     tmux-instance guard the rebuild engine uses.
+- **Launch sequence** (shared helper `lib/session-launch.ts`), all through one
+  `pinHost(hostId)` transport (`lib/rebuild/transport.ts`) so a host re-pointed mid-launch fails instead of
+  hitting another daemon:
+  1. `pinned.createSession(name, project.path, 'terminal')` — the raw stored path (including `~`) is passed;
+     tmux/shell expansion is the daemon's existing behaviour.
+  2. If command: `pinned.sendKeys(session.code, command.command, session.tmux_instance)` — the same guarded
+     send the rebuild engine uses.
   3. `onLaunched(session)`.
   Failure in 1 → inline error, stay open. Failure in 2 → session is kept, launcher reports
   "session created but command failed to send", and still calls `onLaunched` so the user lands in it.
