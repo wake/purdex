@@ -160,9 +160,12 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
       reader = null
     }
     if (closed) return
-    // An idle-timeout cancel() resolves the pending read() with `done: true`
-    // rather than rejecting it, so surface the error here for the caller.
-    if (idleTimedOut && !loopErr) loopErr = new Error('nex sse: idle timeout')
+    // An idle timeout wins over whatever the aborted read did: cancel()
+    // resolves the pending read() with `done: true` (no error at all), but
+    // an unlocked reader on a real fetch instead rejects with an
+    // AbortError from controller.abort() — either way the idle cause is
+    // the one worth surfacing to the caller, not the abort mechanics.
+    if (idleTimedOut) loopErr = new Error('nex sse: idle timeout')
     if (loopErr) {
       controller?.abort() // no-op if the body already errored/aborted itself
       console.warn('nex sse: stream error, reconnecting', loopErr)

@@ -216,6 +216,42 @@ describe('nex-sse', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
+  it('surfaces the idle-timeout error even when the aborted read rejects with AbortError', async () => {
+    // With a real fetch, controller.abort() makes the pending reader.read()
+    // reject with an AbortError before the idle-timeout branch runs, so the
+    // idle cause must win unconditionally over whatever the aborted read
+    // threw — otherwise onStatus reports the generic AbortError and the
+    // 'idle' message is lost.
+    const fetchImpl = vi.fn()
+      .mockImplementationOnce((_url: string, init: RequestInit) => {
+        const signal = init.signal!
+        const stream = new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            signal.addEventListener('abort', () => {
+              ctrl.error(new DOMException('aborted', 'AbortError'))
+            })
+          },
+        })
+        return Promise.resolve(new Response(stream, { status: 200 }))
+      })
+      .mockResolvedValueOnce(sseResponse([], { hang: true }))
+    const statuses: Array<[string, Error | undefined]> = []
+    openNexSse({
+      hostId, url: '/api/nex/v1/events', getLastEventId: () => null,
+      onFrame: () => {},
+      onStatus: (s, err) => statuses.push([s, err]),
+      fetchImpl, backoff: { initialMs: 1000, jitter: 0, idleMs: 5000 },
+    })
+    await vi.advanceTimersByTimeAsync(0) // connect, open
+    await vi.advanceTimersByTimeAsync(5000) // idle timer fires -> abort -> read() rejects with AbortError
+    await vi.advanceTimersByTimeAsync(0) // let the rejected read() propagate
+    const reconnecting = statuses.filter(([s]) => s === 'reconnecting')
+    expect(reconnecting).toHaveLength(1)
+    const [, err] = reconnecting[0]
+    expect(err).toBeInstanceOf(Error)
+    expect(err?.message).toMatch(/idle/)
+  })
+
   it('resets the idle timer on every chunk, so periodic keepalives keep the connection open', async () => {
     const { stream, push } = controllableStream()
     const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(stream, { status: 200 }))
