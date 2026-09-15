@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.349] - 2026-09-15
+
+### Fix: 點系統通知跳錯 tab——session code 跨主機碰撞，tab 查找改帶 hostId（#1041）
+
+**起因**：Mac Electron 點系統通知會跳到另一台主機的 tab（常是某 workspace 的第一個 tab）。Session code 是 tmux `$N` 的**確定性**編碼（`codec.go`），兩台主機 `$N` 相同就得到相同 code——實測 mlab `purdex` 與 air `bb2` 都是 `zk16vd`（另 `qorh3k`、`8fawn6` 各撞一組）。而 `findTabBySessionCode(tabs, sessionCode)` 只比 code 不比 host，`handleNotificationClick` 拿到 payload 的 `hostId` 也沒用上，於是命中 `tabs` 插入順序最早的同 code tab。
+
+- **`findTabBySessionCode(tabs, hostId, sessionCode)`**：primary pane 需 host 與 code 皆相符；dispatcher `hasTab`、click routing、deeplink `focusExistingSessionTab`、ExecutionDetailPage 五處全帶 hostId。
+- **Codex R1 無 finding；R2 三視角六條全修**（gpt-5.5）：
+  - 攻擊方：compositeKey 用第一個 `:` 拆會把含 `:` 的 hostId 切壞（daemon `host_id` 即 `hostname:code` 形式）→ 抽 `splitCompositeKey` 用**最後一個** `:`（sessionCode 固定 6 字 base36 不含 `:`），統一 dispatcher（含 removed-host debounce 清理）與 `useRelayWsManager` 共 5 處；無 `action` 的 legacy click 分支自 #162 起是死碼且碰撞時會猜錯 host → 刪除；ExecutionDetailPage render 重算 hostId 可能與 fetch 用的分裂 → 存進 `ready` state。
+  - 防守方獨立抓到 relay stream 路徑同型拆解，與攻擊方收斂。
+  - 體質：延後 #1042（notification / deeplink / shortcut 三處 tab 啟用邏輯抽共用 `activateTab`）、#1043（`useNotificationDispatcher.test.ts` >700 行拆分）。
+- 測試 +11：pane-tree 同 code 不同 host（兩種插入順序）、dispatcher 複現 bug + 含 `:` hostId 走 production subscription、relay 含 `:` hostId、composite-key 互逆、ExecutionDetailPage hostId 釘住。
+
 ## [1.0.0-alpha.348] - 2026-09-15
 
 ### Fix: 打包版 menu bar tray 圖示消失＋新增「顯示於選單列」開關（#1037）
