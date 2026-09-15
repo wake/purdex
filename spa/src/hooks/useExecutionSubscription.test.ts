@@ -403,4 +403,14 @@ describe('useExecutionSubscription', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(sse.openNexSse).toHaveBeenCalledTimes(2)
   })
+
+  it('a terminal SSE close (with error) clears a send stuck in flight so the input is not locked forever', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    useExecutionStore.getState().setPendingSend(H, E, true)
+
+    act(() => { sseOpts!.onStatus('closed', new Error('unauthorized')) })
+
+    expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(false)
+  })
 })

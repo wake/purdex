@@ -202,6 +202,12 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
                 // broken stream and nobody else able to use its slot.
                 sseRef.current = null
                 subscriptionSlots.release(hostId, key)
+                // A send already in flight when the stream dies terminally
+                // would otherwise leave pendingSend stuck forever: no SSE
+                // will ever deliver the message_accepted/result that would
+                // clear it, and the input stays disabled with no way out
+                // short of a full remount (Codex R4 P2).
+                store().setPendingSend(hostId, executionId, false)
               }
             },
           })

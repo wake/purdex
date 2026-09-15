@@ -770,6 +770,7 @@
   "execution.sse.paused": "已暫停，切換到此分頁即恢復",
   "execution.input.archived": "執行體已歸檔",
   "execution.input.terminal": "執行體已結束",
+  "execution.input.disconnected": "即時連線中斷，請重新開啟此分頁再繼續",
   "execution.error.generic": "送出失敗：{{message}}",
   "execution.error.invalid_text": "訊息超過這台主機的長度上限",
   "execution.error.execution_archived": "執行體已歸檔，請先取消歸檔",

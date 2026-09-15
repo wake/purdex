@@ -198,6 +198,19 @@ describe('ExecutionView', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
   })
 
+  it('a terminally closed live stream (with error) disables input with a disconnected placeholder', () => {
+    useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden')
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/lost/i))
+  })
+
+  it('sse closed with no error (e.g. an in-progress reconnect backoff) does not disable input', () => {
+    useExecutionStore.getState().setSse(H, E, 'closed', null)
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+  })
+
   it('archived: input is disabled but Terminate stays enabled (not a terminal state)', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
     render(<ExecutionView hostId={H} executionId={E} isActive />)

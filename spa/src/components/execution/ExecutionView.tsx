@@ -41,7 +41,18 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
 
   const terminal = !!st.summary && TERMINAL_STATES.has(st.summary.state)
   const ended = terminal || !!st.summary?.archived
-  const placeholder = st.summary?.archived ? t('execution.input.archived') : ended ? t('execution.input.terminal') : undefined
+  // The SSE handle can die terminally (401/403, or a non-retryable
+  // structured error) after history has loaded, with no reconnect ever
+  // coming — the pane looks live but a send would 2xx into the void with
+  // no message_accepted/result ever arriving (Codex R4 P2). Gate input on
+  // it same as `ended`; `sse` flips back off 'closed' the moment the pane
+  // is reactivated (see useExecutionSubscription's activation effect), so
+  // this clears itself without redesigning the reconnect path.
+  const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
+  const placeholder = st.summary?.archived ? t('execution.input.archived')
+    : ended ? t('execution.input.terminal')
+    : streamDead ? t('execution.input.disconnected')
+    : undefined
   const leaseHeld = st.leaseError?.code === 'lease_held'
   const errorText = st.sendError
     ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`) : t('execution.error.generic', { message: st.sendError.message }))
@@ -80,7 +91,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
       )}
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
       <StreamInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)} showAttach={false}
-        disabled={st.pendingSend || ended || !st.historyLoaded} placeholder={placeholder} focused={isActive} />
+        disabled={st.pendingSend || ended || !st.historyLoaded || streamDead} placeholder={placeholder} focused={isActive} />
     </div>
   )
 }

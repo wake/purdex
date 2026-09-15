@@ -770,6 +770,7 @@
   "execution.sse.paused": "paused — activate to resume",
   "execution.input.archived": "Execution is archived",
   "execution.input.terminal": "Execution has ended",
+  "execution.input.disconnected": "Live connection lost — reopen this pane to continue",
   "execution.error.generic": "Send failed: {{message}}",
   "execution.error.invalid_text": "Message too long for this host",
   "execution.error.execution_archived": "Execution is archived; unarchive it first",
