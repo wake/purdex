@@ -20,8 +20,17 @@ export async function reattachByName(sessionMeta: WorkspaceSnapshot['sessionMeta
 - `markMissingHosts`: pure; returns new tabs with every tmux-session pane on an unknown host set
   `terminated: 'host-removed'` (use `updatePaneInLayout` / `scanPaneTree` from `lib/pane-tree`), removes those hosts'
   `sessionMeta` keys, `hostRemoved` = number of such panes. Input untouched.
-- `reattachByName`: spec §4.2 exactly. Uses `listSessions` from `lib/host-api`; never imports `createSession`.
-- Tests: spec §7 P2 `markMissingHosts` / `reattachByName` bullets; assert `createSession` mock never called.
+- `reattachByName`: spec §4.2, with the same evidence guards as revive-by-name (`lib/rebuild/revive.ts`) because
+  `remapLayoutSessions` stamps `entry.session.tmux_instance` onto the pane:
+  - a live session is **usable** only when `typeof code === 'string' && code !== ''` and
+    `typeof tmux_instance === 'string' && tmux_instance !== ''`;
+  - `meta.mode === 'terminal'` → match requires `session.mode === undefined || session.mode === 'terminal'`;
+  - `meta.mode === 'stream'` → never reattached (`failed`);
+  - usable + same `name` + compatible mode → `reattached` with `newCode: session.code`; anything else → `failed`.
+  Uses `listSessions` from `lib/host-api`; never imports `createSession`.
+- Tests: spec §7 P2 `markMissingHosts` / `reattachByName` bullets, plus: empty/non-string `code`, empty/missing
+  `tmux_instance`, terminal pane vs `mode: 'stream'` session → failed, stream pane → failed; assert `createSession`
+  mock never called.
 
 Commit: `feat(spa): device state reattach by name`
 
@@ -47,7 +56,9 @@ export async function restoreDeviceStateReplace(snap: unknown, deps?: { now?: nu
 Spec §4.3 sequence under `withOperationLock(DEVICE_STATE_LOCK_OWNER.replace, …)`; refusal throws
 `Error('snapshot:deviceStateReplace refused: another operation is already running (<holder>)')`.
 Shape guard = `isWellFormedSnapshotV1`. Layout rewrite = `remapLayoutSessions(layout, remap, {})` per tab.
-`writeDeviceStatePrev` + `replaceTabSnapshot` inside try → `RestoreError({ ...report, rebuiltButUnattached: [] }, cause)`.
+`writeDeviceStatePrev` + `replaceTabSnapshot` inside try → `RestoreError({ ...report, hostRemoved, rebuiltButUnattached: [] }, cause)`
+(the object is a `DeviceStateRestoreReport`; `RestoreError.report` stays typed `RestoreReport`, so UI reads it via
+`(e.report as Partial<DeviceStateRestoreReport>).hostRemoved ?? 0`). A test asserts the error report carries `hostRemoved`.
 Then `syncSessionStore(remap)`.
 Tests: spec §7 P2 `restoreDeviceStateReplace` bullets (lock held by another owner → throws and no store change;
 malformed → throws, stores untouched, `-prev` untouched; host-removed count; same-name different-code pane

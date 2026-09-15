@@ -17,8 +17,9 @@ export function sourceKey(source: FileSource): string                       // d
 export function paneKey(content: PaneContent, wsNameById: ReadonlyMap<string, string>): string | null
 export function tabKey(tab: Tab, wsNameById: ReadonlyMap<string, string>): string | null
 ```
-Table exactly spec §5.2. `settings` with `{ workspaceId }` → `settings:ws:<name>` via `wsNameById`; unknown id →
-`settings:ws:?<workspaceId>`. Untitled editor (`content.untitled` present) → `null`. `tabKey` joins leaf keys in
+Table exactly spec §5.2. `settings` with `{ workspaceId }` → `settings:ws:<name>` via `wsNameById`; an id not in
+`wsNameById` (dangling scope) → `settings:global`, matching the clone rewrite in spec §5.3 step 5 which turns an
+unmapped scope into `global`. Test covers the dangling case. Untitled editor (`content.untitled` present) → `null`. `tabKey` joins leaf keys in
 pre-order (`scanPaneTree`) with `|`; any `null` leaf → `null`.
 Tests: one row per `PaneContent` kind (compile-time exhaustiveness: a `switch` with `never` default), untitled null,
 split tab join order, null propagation, settings scope resolution.
@@ -31,8 +32,15 @@ Commit: `feat(spa): device state tab identity keys`
 export interface TabWorld { tabs: Record<string, Tab>; tabOrder: string[]; activeTabId: string | null; workspaces: Workspace[]; activeWorkspaceId: string | null }
 export interface MergeReport { addedWorkspaces: number; addedTabs: number; skippedTabs: number }
 export function mergeDeviceState(current: TabWorld, incoming: TabWorld, idGen: () => string): { next: TabWorld; report: MergeReport }
-export function cloneTabWithFreshIds(tab: Tab, idGen: () => string): Tab   // new tab id, every pane id and split id
+export function cloneTabWithFreshIds(tab: Tab, freshId: () => string): Tab   // new tab id, every pane id and split id
 ```
+- **Id uniqueness**: `mergeDeviceState` builds `used = Set(current tab ids ∪ current pane ids ∪ current split ids)` and a
+  `freshId()` that calls `idGen()` until the value is not in `used`, then adds it. Every generated tab/pane/split id
+  goes through `freshId`. Test with a counter `idGen` whose first values deliberately equal existing current ids, and
+  assert over `next`: tab keys, all pane ids, all split ids are globally unique.
+- **Rebuild record**: cloned tmux panes **keep** `content.rebuild` unchanged (it carries no tab/pane id; reattach is
+  name-only so `record.sessionName` still matches `cachedName`). Test: record deep-equal after clone; a reattached
+  pane's `cachedName === rebuild.sessionName` when the source had them equal.
 Spec §5.3 steps 1–5 exactly, plus:
 - `new-tab`-only tabs (every leaf `new-tab`) are skipped and **not** counted in `skippedTabs`.
 - A `null` tab key is always added (never matched), and its key is not added to `existing`.
