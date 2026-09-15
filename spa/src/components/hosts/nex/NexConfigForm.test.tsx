@@ -22,7 +22,7 @@ describe('NexConfigForm', () => {
     expect((screen.getByLabelText(/max profile/i) as HTMLSelectElement).value).toBe('handoff')
   })
 
-  it('PUTs the whole nex object and shows restart-required after a change', async () => {
+  it('PUTs the whole nex object and shows Saved; the restart notice follows info.restart_required', async () => {
     vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response(JSON.stringify({ nex: { ...saved, sandbox: { max_profile: 'handoff', default_profile: 'readonly' } } }), { status: 200 }))
     const onSaved = vi.fn()
     render(<NexConfigForm hostId="h" config={saved} info={info} onSaved={onSaved} />)
@@ -36,6 +36,15 @@ describe('NexConfigForm', () => {
     expect(body.nex.sandbox.default_profile).toBe('readonly')
     expect(body.nex.repo_roots).toEqual(['/a'])
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(screen.getByText(/^saved/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('nex-restart-required')).not.toBeInTheDocument()
+  })
+
+  it('shows the restart notice while info.restart_required is true, even with a ~ root the engine expanded', () => {
+    const tildeSaved = { ...saved, repo_roots: ['~/Workspace'] }
+    const { rerender } = render(<NexConfigForm hostId="h" config={tildeSaved} info={{ ...info, restart_required: false }} onSaved={() => {}} />)
+    expect(screen.queryByTestId('nex-restart-required')).not.toBeInTheDocument()
+    rerender(<NexConfigForm hostId="h" config={tildeSaved} info={{ ...info, restart_required: true }} onSaved={() => {}} />)
     expect(screen.getByTestId('nex-restart-required')).toBeInTheDocument()
   })
 

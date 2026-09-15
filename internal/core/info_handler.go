@@ -42,6 +42,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
 	hostID := c.Cfg.HostID
 	nexEnabled := c.Cfg.Nex.Enabled
+	restartRequired := !c.Cfg.Nex.Equal(c.bootNex)
 	c.CfgMu.RUnlock()
 
 	mounted := c.Mounted("nex")
@@ -57,6 +58,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 			nex[k] = v
 		}
 	}
+	nex["restart_required"] = restartRequired
 
 	info := map[string]any{
 		"host_id":        hostID,

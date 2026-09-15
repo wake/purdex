@@ -56,6 +56,13 @@ type Core struct {
 	modules        []Module
 	configChangeMu sync.Mutex // protects onConfigChange
 	onConfigChange []func()   // config change callbacks
+
+	// bootNex is the [nex] section the daemon booted with, captured in New
+	// from the loaded config before any module init or PUT /api/config can
+	// run. /api/info compares it with the live Cfg.Nex to report
+	// restart_required (spec §4.4.2) whether nex is disabled, ready, or
+	// soft-failed. Never mutated after New.
+	bootNex config.NexConfig
 }
 
 // New creates a Core from the given dependencies.
@@ -64,7 +71,12 @@ func New(deps CoreDeps) *Core {
 	if reg == nil {
 		reg = NewServiceRegistry()
 	}
+	var bootNex config.NexConfig
+	if deps.Config != nil {
+		bootNex = deps.Config.Clone().Nex
+	}
 	return &Core{
+		bootNex:      bootNex,
 		Cfg:          deps.Config,
 		Tmux:         deps.Tmux,
 		Registry:     reg,

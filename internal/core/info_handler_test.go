@@ -3,8 +3,10 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -260,4 +262,58 @@ func TestInfoEndpoint_NexMountedWithoutStatusReporter(t *testing.T) {
 	assert.Equal(t, true, nex["ready"])
 	assert.Equal(t, "", nex["init_error"])
 	assert.Nil(t, nex["effective"])
+}
+
+// getInfoNex issues GET /api/info against c and returns its nex object.
+func getInfoNex(t *testing.T, c *Core) map[string]any {
+	t.Helper()
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/info", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	nex, ok := body["nex"].(map[string]any)
+	require.True(t, ok, "nex field should be an object, got %v", body["nex"])
+	return nex
+}
+
+// putConfig issues PUT /api/config with body against c and requires 200.
+func putConfig(t *testing.T, c *Core, body string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
+func TestInfoEndpoint_NexRestartRequired(t *testing.T) {
+	root := t.TempDir()
+	bootNex := func() config.NexConfig {
+		// nil lists, as a TOML without those keys decodes.
+		return config.NexConfig{Enabled: true, RepoRoots: []string{root}}
+	}
+
+	t.Run("unchanged config reports false", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: bootNex()}})
+		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
+	})
+
+	t.Run("PUT changing path_prepend reports true", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: bootNex()}})
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q],"path_prepend":["/opt/homebrew/bin"]}}`, root))
+		assert.Equal(t, true, getInfoNex(t, c)["restart_required"])
+	})
+
+	t.Run("PUT with identical content using [] where boot had nil reports false", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: bootNex()}})
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q],"service_roots":[],"path_prepend":[]}}`, root))
+		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
+	})
+
+	t.Run("disabled at boot then PUT enabling reports true", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: false}}})
+		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
+		putConfig(t, c, fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q]}}`, root))
+		assert.Equal(t, true, getInfoNex(t, c)["restart_required"])
+	})
 }

@@ -1,8 +1,8 @@
 // spa/src/components/hosts/nex/NexConfigForm.tsx — editor for the [nex]
 // config section. Nothing here is applied live (I9): PUT /api/config
-// persists it, and restartRequired() (nex-config-diff.ts) tells the user
-// when the persisted value has drifted from what the running engine was
-// actually assembled with, so they know a `pdx stop && pdx start` is owed.
+// persists it, and restartRequired() (nex-config-diff.ts) surfaces the
+// daemon's `restart_required` (spec §4.4.2) so the user knows a
+// `pdx stop && pdx start` is owed.
 import { useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostStore } from '../../../stores/useHostStore'
@@ -79,9 +79,8 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
   const hostName = useHostStore((s) => s.hosts[hostId]?.name ?? hostId)
 
   const [draft, setDraft] = useState<NexConfig>(config ?? emptyNexConfig())
-  // The last known persisted value — what restartRequired() compares against
-  // NexInfo.effective. Starts as the config prop and is only ever advanced
-  // by a successful save; a re-sync from a changed prop is skipped while the
+  // The last known persisted value. Starts as the config prop and is only
+  // ever advanced by a successful save; a re-sync from a changed prop is skipped while the
   // user has unsaved edits (dirtyRef), same pattern as
   // EditorHomePathHostSection.
   const [committed, setCommitted] = useState<NexConfig | undefined>(config)
@@ -92,8 +91,8 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
   // Bumped by every update() call. handleSave snapshots this when a save
   // starts; if it has moved by the time the response comes back, the user
   // edited a field while the PUT was in flight and that newer draft must
-  // win — the response only updates `committed` (so restartRequired() still
-  // sees the truth) and dirty stays true so the next save resubmits it.
+  // win — the response only updates `committed` (the last persisted value)
+  // and dirty stays true so the next save resubmits it.
   const editCounterRef = useRef(0)
 
   useEffect(() => {

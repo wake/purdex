@@ -210,8 +210,12 @@ export function NexHostSection({ hostId }: Props) {
       })
   }
 
+  // A save changes the daemon-computed `restart_required` (spec §4.4.2), so
+  // refetch /api/info the same way Refresh does — without the loading gate,
+  // so the cards (and the form's "Saved") stay on screen.
   const handleConfigSaved = (cfg: ConfigData) => {
     setConfig(cfg.nex)
+    handleRefresh()
   }
 
   return (

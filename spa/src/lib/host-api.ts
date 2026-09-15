@@ -64,6 +64,9 @@ export interface NexInfo {
   ready: boolean
   init_error: string
   effective: NexEffective | null
+  // Daemon-computed (spec §4.4.2): the live [nex] section differs from the
+  // one the daemon booted with. Optional so older daemons stay consumable.
+  restart_required?: boolean
 }
 
 export interface ConfigData {

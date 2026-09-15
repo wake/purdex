@@ -480,7 +480,8 @@ removes them; P-B only extracts the shared renderer.
     "max_profile": "handoff", "default_profile": "standard",
     "repo_roots": [...], "service_roots": [...], "path_prefix": "/a:/b",
     "lease_ttl": "2m0s", "interrupt": "…", "turn": "…"
-  }
+  },
+  "restart_required": false    // live Cfg.Nex != the [nex] section captured at boot (nil list == empty list)
 }
 ```
 
@@ -509,9 +510,7 @@ field-for-field; optional so older daemons stay consumable) and `fetchInfo`'s
 result gains `nex: NexInfo` (`{configured, mounted, ready, init_error, effective: NexEffective | null}`),
 both in `host-api.ts`.
 
-The SPA computes `restartRequired = !deepEqual(config.nex, normalized(info.nex.effective))`
-only for the fields present in both (roots, bins, profiles, timeouts, path
-prepend); `enabled` vs `mounted` is compared directly.
+The SPA shows the restart notice while `info.nex.restart_required` is true.
 
 #### 4.4.3 SPA: `NexHostSection`
 
@@ -536,8 +535,8 @@ Three stacked cards; each card is its own component with its own tests:
    `PUT /api/config {nex}`; 400 message shown inline next to the offending
    field when the message starts with `nex.<key>`. After a successful save
    the card shows the persistent notice "Saved. Restart the daemon on
-   <host> for changes to take effect (`pdx stop && pdx start`)" until
-   `info.nex.effective` matches.
+   <host> for changes to take effect (`pdx stop && pdx start`)" while
+   `info.nex.restart_required` is true.
 3. **`NexExecutionsTable`** — `listExecutions` (default: `include_archived`
    off, toggle to show), columns: state dot, id (short), provider/profile,
    cwd (basename with full path tooltip), brief (first line, truncated),
@@ -695,3 +694,4 @@ hot apply, no restart button in P-B, transient frames dropped until P-B2.
 | P3-6 | `terminate` requires a lease; "retry on 409" wastes a round trip | Fixed: 4.3.3 Terminate calls `ensureLease` first |
 | — | (self) `deeplinkResolver` imports the M0 `execution-api` | Fixed: 4.3.3 |
 | — | (final review I2) `contentMatches` fell back to the first host even when the stored host hint no longer exists | Ruled: `(a.host ?? firstHost) === (b.host ?? firstHost)` — fallback only when the hint is absent (4.3.2 step 5 outranks the former 4.3.3 literal); cost if wrong: a pane with a stale stored host is never matched by a fresh opener, so a second pane opens |
+| — | (final review) restart-required computed client-side against `~`-expanded effective values → false notice on `~` paths, no `path_prepend`, silent on soft-fail | Moved to the daemon: `restart_required` from a normalised boot snapshot |

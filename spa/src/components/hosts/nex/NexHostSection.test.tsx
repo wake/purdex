@@ -250,10 +250,13 @@ describe('NexHostSection', () => {
     // before asserting on restartRequired() — its repo-roots input shows the
     // fetched value once `config` has arrived.
     await screen.findByDisplayValue('/a')
-    // savedConfig matches readyInfo.effective exactly — no restart notice yet.
+    // readyInfo carries no restart_required — no notice yet.
     expect(screen.queryByTestId('nex-restart-required')).not.toBeInTheDocument()
 
     const changed: NexConfig = { ...savedConfig, sandbox: { max_profile: 'standard', default_profile: 'readonly' } }
+    // The daemon now reports the saved section differs from its boot snapshot.
+    mockFetchInfo.mockImplementation(() => Promise.resolve(infoResponse({ ...readyInfo, restart_required: true })))
+    const infoCallsBeforeSave = mockFetchInfo.mock.calls.length
     mockHostFetch.mockImplementationOnce((_hostId, path) => {
       expect(path).toBe('/api/config')
       return Promise.resolve(configResponse(changed))
@@ -263,6 +266,9 @@ describe('NexHostSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() => expect(screen.getByTestId('nex-restart-required')).toBeInTheDocument())
+    expect(mockFetchInfo.mock.calls.length).toBe(infoCallsBeforeSave + 1)
+    // The refetch keeps the cards mounted (no loading gate) and "Saved" stays.
+    expect(screen.getByText(/^saved/i)).toBeInTheDocument()
   })
 
   // Controller ruling I, exercised end-to-end with a real reconnect: offline
