@@ -15,6 +15,7 @@ export type NexSseStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
 
 export interface NexSseBackoff {
   initialMs: number
+  /** Hard cap on the reconnect delay, jitter included — the delay never exceeds this. */
   maxMs: number
   /** 0..1 fraction of the delay added/subtracted at random. */
   jitter: number
@@ -84,7 +85,8 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
     const delta = exp * backoff.jitter * (Math.random() * 2 - 1)
     attempt += 1
     status('reconnecting', err)
-    timer = setTimeout(() => { timer = null; void connect() }, Math.max(0, Math.round(exp + delta)))
+    const delay = Math.min(backoff.maxMs, Math.max(0, Math.round(exp + delta)))
+    timer = setTimeout(() => { timer = null; void connect() }, delay)
   }
 
   const connect = async () => {

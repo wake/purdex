@@ -121,6 +121,29 @@ describe('nex-sse', () => {
     expect(statuses.at(-1)).toBe('open')
   })
 
+  it('clamps the jittered backoff delay to maxMs', async () => {
+    // initialMs === maxMs === 30000, jitter 0.5, Math.random() stubbed to 1
+    // (max positive jitter) => exp + delta = 30000 + 15000 = 45000 without a
+    // clamp. The spec caps the delay (jitter included) at maxMs.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1)
+    try {
+      const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([]))
+        .mockResolvedValueOnce(sseResponse([], { hang: true }))
+      openNexSse({
+        hostId, url: '/api/nex/v1/events', getLastEventId: () => null,
+        onFrame: () => {}, onStatus: () => {}, fetchImpl,
+        backoff: { initialMs: 30000, maxMs: 30000, jitter: 0.5 },
+      })
+      await vi.advanceTimersByTimeAsync(0)   // first fetch ends -> reconnect scheduled
+      await vi.advanceTimersByTimeAsync(29999)
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+    } finally {
+      randomSpy.mockRestore()
+    }
+  })
+
   it('stops on 401/403 with closed + error, retries on 503', async () => {
     const onStatus = vi.fn()
     const fetchImpl = vi.fn().mockResolvedValueOnce(new Response('', { status: 401 }))
