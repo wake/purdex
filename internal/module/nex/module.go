@@ -2,6 +2,7 @@ package nex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"lab.protype.tw/wake/nexen"
 
+	pdxconfig "github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 )
 
@@ -50,7 +52,13 @@ type Module struct {
 	core       *core.Core
 	sys        engine
 	opts       nexen.Options
-	pathPrefix string // applied path_prepend entries only, joined by the list separator; for the Start log line
+	expanded   pdxconfig.NexConfig // [nex] after "~" expansion; what Status reports as effective
+	pathPrefix string              // applied path_prepend entries only, joined by the list separator; for the Start log line
+
+	// initErr is why the engine is not running (spec §4.4.1 soft-fail). Set
+	// by Init for every failure past static validation; nil when the engine
+	// assembled. RegisterRoutes mounts the 503 fallback when it is set.
+	initErr error
 
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
@@ -94,7 +102,13 @@ func (m *Module) Dependencies() []string { return nil }
 // initialises without HOME. Validate is cheap and re-run here so Init is
 // self-contained rather than trusting that the config went through Load.
 //
-// Every failure is wrapped with the "nex: init:" prefix.
+// Every failure is wrapped with the "nex: init:" prefix. Only the initial
+// Validate error is fatal (a static config shape error — config.Load
+// should already have rejected it). Every later failure (buildOptions,
+// creating data_dir, assembling the engine) is a soft-fail (spec §4.4.1,
+// I8): Init still returns nil, m.initErr records why, and RegisterRoutes /
+// Status surface it — a broken [nex] must not take the terminal daemon
+// down.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
 
@@ -103,6 +117,7 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("nex: init: %w", err)
 	}
 	n := c.Cfg.Nex.Expanded(home)
+	m.expanded = n
 
 	// Log the applied prefix and the original PATH's element count, not
 	// the full PATH: on a developer machine that is kilobytes per line.
@@ -119,32 +134,63 @@ func (m *Module) Init(c *core.Core) error {
 	// Validate error starts with "config:"), so this wrap is the only one.
 	opts, err := buildOptions(c.Cfg.HostID, c.Cfg.DataDir, n, core.ShutdownBudget)
 	if err != nil {
-		return fmt.Errorf("nex: init: %w", err)
+		return m.softFail(fmt.Errorf("nex: init: %w", err))
 	}
 	m.opts = opts
 
 	if err := os.MkdirAll(opts.Config.DataDir, 0o755); err != nil {
-		return fmt.Errorf("nex: init: creating data_dir %s: %w", opts.Config.DataDir, err)
+		return m.softFail(fmt.Errorf("nex: init: creating data_dir %s: %w", opts.Config.DataDir, err))
 	}
 
 	sys, err := m.assemble(context.Background(), opts)
 	if err != nil {
-		return fmt.Errorf("nex: init: assembling engine: %w", err)
+		return m.softFail(fmt.Errorf("nex: init: assembling engine: %w", err))
 	}
 	m.sys = sys
 	return nil
 }
 
+// softFail records why the engine is unavailable and reports success to the
+// core: a broken [nex] must not take the terminal daemon down (spec §4.4.1,
+// I8). The 503 fallback handler and Status() surface the error instead.
+func (m *Module) softFail(err error) error {
+	m.initErr = err
+	m.sys = engine{}
+	m.logf("nex: init failed (engine unavailable, /api/nex answers 503): %v", err)
+	return nil
+}
+
 // RegisterRoutes mounts the engine's handler under RoutePrefix, stripping
 // the prefix (the engine is told about it through Options.PublicPrefix so
-// the URLs it emits stay correct) and containing per-request panics.
+// the URLs it emits stay correct) and containing per-request panics. When
+// Init soft-failed, every path under RoutePrefix instead answers 503
+// nex_unavailable (spec §4.4.1, I8).
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
+	if m.initErr != nil {
+		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
+		return
+	}
 	mux.Handle(RoutePrefix+"/", http.StripPrefix(RoutePrefix, recoverer(m.logf, m.sys.handler)))
 }
 
-// Start logs what the module is serving. The engine is already live after
+// unavailableHandler answers every request under RoutePrefix with the same
+// structured error shape Nexen uses, so one client-side parser covers both.
+func unavailableHandler(initErr error) http.Handler {
+	body, _ := json.Marshal(map[string]string{"error": initErr.Error(), "code": "nex_unavailable"})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write(body)
+	})
+}
+
+// Start logs what the module is serving. When Init soft-failed there is
+// nothing to log or serve. The engine is already live after a successful
 // Init; there is nothing further to start.
 func (m *Module) Start(context.Context) error {
+	if m.initErr != nil {
+		return nil
+	}
 	cfg := m.opts.Config
 	claudeBin := m.opts.ClaudeBin
 	if claudeBin == "" {

@@ -527,6 +527,42 @@ func TestRunNex_ServerAllNotFound_PrintsNotEnabled(t *testing.T) {
 	}
 }
 
+// --- error path: nex soft-failed (503), not "not enabled" ---------------
+
+// TestRunNex_ServerAllUnavailable_PrintsClientErrorNotDisabled: a soft-
+// failed [nex] (spec §4.4.1) answers every path — including the probe's
+// own /v1/capabilities — with 503 nex_unavailable, never 404. `pdx nex`
+// must not misreport that as "not enabled on this host" (which is
+// reserved for a clean 404, meaning the module is not mounted at all);
+// the real, more useful client error surfaces instead.
+func TestRunNex_ServerAllUnavailable_PrintsClientErrorNotDisabled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"nex: init: assembling engine: boom: store locked","code":"nex_unavailable"}`))
+	}))
+	defer srv.Close()
+
+	cfg, _ := nexBaseFromServer(t, srv, "tok")
+	probe, calls := countingProbe()
+
+	var stdout, stderr bytes.Buffer
+	code := runNex([]string{"ls"}, &stdout, &stderr, fakeGetenv(nil), nexTestConfig(cfg), probe)
+
+	if code != 1 {
+		t.Fatalf("code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "not enabled on this host") {
+		t.Errorf("stderr = %q, must not contain the not-enabled message", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "nex_unavailable") && !strings.Contains(stderr.String(), "store locked") {
+		t.Errorf("stderr = %q, want it to surface the client's own error", stderr.String())
+	}
+	if atomic.LoadInt32(calls) != 1 {
+		t.Errorf("probe called %d times, want 1", atomic.LoadInt32(calls))
+	}
+}
+
 // --- error path: daemon enabled, but the resource itself 404s -----------
 
 func TestRunNex_CapabilitiesOK_ShowNotFound_PrintsOriginalError(t *testing.T) {

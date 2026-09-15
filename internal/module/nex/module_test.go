@@ -2,14 +2,19 @@ package nex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"lab.protype.tw/wake/nexen"
 
@@ -320,8 +325,9 @@ func TestInitWithoutHomeTildeEntryNamesHOME(t *testing.T) {
 	}
 }
 
-// TestInitWrapsAssembleError: an assemble failure surfaces with the
-// "nex: init:" prefix and the cause unwrappable.
+// TestInitWrapsAssembleError: an assemble failure is a soft-fail (spec I8)
+// — Init itself returns nil, and the wrapped, unwrappable cause is recorded
+// on m.initErr instead.
 func TestInitWrapsAssembleError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", launchdPath)
@@ -333,16 +339,10 @@ func TestInitWrapsAssembleError(t *testing.T) {
 	m.assemble = newFakeAssemble(rec, engine{}, sentinel)
 	m.logf = discardLogf
 
-	err := m.Init(newTestCore(&cfg))
-	if err == nil {
-		t.Fatal("Init() error = nil, want non-nil")
-	}
-	if !errors.Is(err, sentinel) {
-		t.Errorf("Init() error = %v, want it to wrap %v", err, sentinel)
-	}
-	if !strings.HasPrefix(err.Error(), "nex: init:") {
-		t.Errorf("Init() error = %q, want prefix %q", err.Error(), "nex: init:")
-	}
+	require.NoError(t, m.Init(newTestCore(&cfg)))
+	require.Error(t, m.initErr)
+	assert.ErrorIs(t, m.initErr, sentinel)
+	assert.Contains(t, m.initErr.Error(), "nex: init: assembling engine:")
 }
 
 func TestStartLogsServingLine(t *testing.T) {
@@ -591,19 +591,117 @@ func TestInitRealAssembleFailures(t *testing.T) {
 
 			m := New() // production assemble: the real nexen.Assemble
 			m.logf = discardLogf
-			err := m.Init(newTestCore(&cfg))
-			if err == nil {
-				t.Fatal("Init() error = nil, want non-nil")
-			}
-			t.Logf("Init() error = %v", err)
+			require.NoError(t, m.Init(newTestCore(&cfg)))
+			require.Error(t, m.initErr)
+			t.Logf("m.initErr = %v", m.initErr)
 			for _, sub := range tt.wantSubs {
-				if !strings.Contains(err.Error(), sub) {
-					t.Errorf("Init() error = %q, want it to contain %q", err.Error(), sub)
-				}
+				assert.Contains(t, m.initErr.Error(), sub)
 			}
-			if strings.Contains(err.Error(), "nex: init: nex:") {
-				t.Errorf("Init() error = %q, \"nex:\" prefix doubled", err.Error())
+			if strings.Contains(m.initErr.Error(), "nex: init: nex:") {
+				t.Errorf("m.initErr = %q, \"nex:\" prefix doubled", m.initErr.Error())
 			}
 		})
 	}
+}
+
+// TestInitAssembleFailureIsSoft is spec I8: an engine that fails to assemble
+// leaves the daemon alive — Init returns nil, the module records the error,
+// every /api/nex path answers 503 nex_unavailable, and Start/Stop/Close are
+// no-ops.
+func TestInitAssembleFailureIsSoft(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", launchdPath)
+	cfg := baseConfig(t)
+	c := newTestCore(&cfg)
+	m := New()
+	m.logf = func(string, ...any) {}
+	m.assemble = newFakeAssemble(&fakeAssembleRecord{}, engine{}, errors.New("boom: store locked"))
+
+	require.NoError(t, m.Init(c), "assemble failure must not fail Init")
+	require.Error(t, m.initErr)
+	assert.Contains(t, m.initErr.Error(), "nex: init: assembling engine: boom: store locked")
+
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	for _, path := range []string{"/api/nex/v1/capabilities", "/api/nex/v1/executions", "/api/nex/v1/events?execution_id=x"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code, path)
+		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"), path)
+		var body map[string]string
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), path)
+		assert.Equal(t, "nex_unavailable", body["code"], path)
+		assert.Contains(t, body["error"], "boom: store locked", path)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/nex/v1/executions", strings.NewReader("{}")))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	assert.NoError(t, m.Start(context.Background()))
+	assert.NoError(t, m.Stop(context.Background()))
+	assert.NoError(t, m.Close())
+
+	st := m.Status()
+	assert.Equal(t, false, st["ready"])
+	assert.Contains(t, st["init_error"], "boom: store locked")
+	assert.Nil(t, st["effective"])
+}
+
+// TestInitDataDirFailureIsSoft: the data_dir mkdir path takes the same route.
+func TestInitDataDirFailureIsSoft(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", launchdPath)
+	cfg := baseConfig(t)
+	blocker := filepath.Join(t.TempDir(), "file-not-dir")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
+	cfg.DataDir = blocker // <DataDir>/nex cannot be created under a regular file
+	c := newTestCore(&cfg)
+	m := New()
+	m.logf = func(string, ...any) {}
+	m.assemble = newFakeAssemble(&fakeAssembleRecord{}, noopEngine(), nil)
+	require.NoError(t, m.Init(c))
+	require.Error(t, m.initErr)
+	assert.Contains(t, m.initErr.Error(), "creating data_dir")
+}
+
+// TestInitValidateFailureStaysFatal pins the division of labour: a static
+// shape error is still an Init error (config load already rejects it; this
+// is the belt to that braces).
+func TestInitValidateFailureStaysFatal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", launchdPath)
+	cfg := baseConfig(t)
+	cfg.Nex.RepoRoots = nil
+	cfg.Nex.ServiceRoots = nil
+	c := newTestCore(&cfg)
+	m := New()
+	m.logf = func(string, ...any) {}
+	err := m.Init(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one root required")
+}
+
+// TestStatusReadyReportsEffective: a healthy Init reports the expanded config.
+func TestStatusReadyReportsEffective(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", launchdPath)
+	cfg := baseConfig(t)
+	cfg.Nex.ClaudeBin = "" // lazy → reported as ""
+	cfg.Nex.Sandbox.MaxProfile = "handoff"
+	cfg.Nex.Timeouts.LeaseTTL = "90s"
+	c := newTestCore(&cfg)
+	m := New()
+	m.logf = func(string, ...any) {}
+	m.assemble = newFakeAssemble(&fakeAssembleRecord{}, noopEngine(), nil)
+	require.NoError(t, m.Init(c))
+	st := m.Status()
+	assert.Equal(t, true, st["ready"])
+	assert.Equal(t, "", st["init_error"])
+	eff, ok := st["effective"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(cfg.DataDir, "nex"), eff["data_dir"])
+	assert.Equal(t, "", eff["claude_bin"])
+	assert.Equal(t, "handoff", eff["max_profile"])
+	assert.Equal(t, "1m30s", eff["lease_ttl"])
+	assert.Equal(t, cfg.Nex.RepoRoots, eff["repo_roots"])
 }
