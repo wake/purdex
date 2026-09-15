@@ -22,7 +22,9 @@ type LoadState =
   | { phase: 'loading' }
   | { phase: 'error'; message: string }
   | { phase: 'not-found' }
-  | { phase: 'ready'; view: ExecutionView }
+  // hostId is pinned at fetch time so render + the observe button address the
+  // same daemon the projection came from, even if host resolution changes later.
+  | { phase: 'ready'; view: ExecutionView; hostId: string }
 
 // Map runtime status → a human label. `accepted` is surfaced as "Queued" to
 // match Ploom's projection vocabulary (queued/running/completed/failed).
@@ -56,7 +58,7 @@ export function ExecutionDetailPage({ executionId, host }: ExecutionDetailPagePr
     fetchExecutionView(hostId, executionId)
       .then((view) => {
         if (cancelled) return
-        setState(view ? { phase: 'ready', view } : { phase: 'not-found' })
+        setState(view ? { phase: 'ready', view, hostId } : { phase: 'not-found' })
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -107,9 +109,8 @@ export function ExecutionDetailPage({ executionId, host }: ExecutionDetailPagePr
     )
   }
 
-  const { view } = state
+  const { view, hostId } = state
   const diff = diffArtifact(view)
-  const hostId = resolveExecutionHostId(host)
   const openTabId = view.session_code ? findTabBySessionCode(tabs, hostId, view.session_code) : undefined
 
   return (
