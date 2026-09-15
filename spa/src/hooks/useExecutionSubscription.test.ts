@@ -191,4 +191,140 @@ describe('useExecutionSubscription', () => {
     expect(result.current.problem).toBe('host_removed')
     expect(useExecutionStore.getState().executions[KEY]?.sse ?? 'closed').toBe('closed')
   })
+
+  // --- fix round 1 -----------------------------------------------------
+
+  it('an inactive-at-mount pane claims a free slot and goes live (spec §4.3.2 step 4); once slots are full it stays paused until activation evicts the LRU', async () => {
+    const closes: Record<string, ReturnType<typeof vi.fn>> = {}
+    vi.mocked(sse.openNexSse).mockImplementation((o) => {
+      const id = new URL(o.url, 'http://x').searchParams.get('execution_id')!
+      closes[id] = closes[id] ?? vi.fn()
+      return { close: closes[id] }
+    })
+    vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
+    vi.mocked(api.fetchExecutionEvents).mockResolvedValue({ items: [], next_cursor: 0 })
+
+    // A) inactive at mount, a slot is free → goes live anyway.
+    const first = renderHook(({ active }) => useExecutionSubscription(H, 'exc_a', active), { initialProps: { active: false } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(closes['exc_a']).toBeDefined()
+    expect(first.result.current.paused).toBe(false)
+    expect(useExecutionStore.getState().executions[`${H}:exc_a`].sse).not.toBe('paused')
+
+    // B) fill the remaining 3 slots (exc_a + these three = 4, at cap).
+    const filler = ['exc_b', 'exc_c', 'exc_d'].map((id) => renderHook(() => useExecutionSubscription(H, id, true)))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(Object.keys(closes)).toHaveLength(4)
+
+    // C) a 6th pane mounts inactive with no free slot → stays paused, no SSE opened.
+    const sixth = renderHook(({ active }) => useExecutionSubscription(H, 'exc_f', active), { initialProps: { active: false } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(sixth.result.current.paused).toBe(true)
+    expect(closes['exc_f']).toBeUndefined()
+    expect(useExecutionStore.getState().executions[`${H}:exc_f`].sse).toBe('paused')
+
+    // D) activating it evicts the LRU and goes live.
+    sixth.rerender({ active: true })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(sixth.result.current.paused).toBe(false)
+    expect(closes['exc_f']).toBeDefined()
+    expect(closes['exc_f']).toHaveBeenCalledTimes(0) // its own stream never closed
+    const evictedCount = ['exc_a', 'exc_b', 'exc_c', 'exc_d'].filter((id) => closes[id].mock.calls.length > 0).length
+    expect(evictedCount).toBe(1)
+
+    first.unmount(); filler.forEach((h) => h.unmount()); sixth.unmount()
+  })
+
+  it('re-triggers a stale-summary refetch when the store is still stale after the fetch resolves (subscribe only fires on a boolean transition)', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    vi.mocked(api.getExecution).mockClear()
+
+    let resolveFirst!: (v: unknown) => void
+    vi.mocked(api.getExecution).mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+
+    act(() => { sseOpts!.onFrame({ id: '10', event: 'execution.running', data: '{}' }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(SUMMARY_REFETCH_DEBOUNCE_MS + 1) })
+    expect(api.getExecution).toHaveBeenCalledTimes(1)
+
+    // A second lifecycle event lands while the first refetch is still in flight.
+    act(() => { sseOpts!.onFrame({ id: '11', event: 'execution.terminal', data: '{"reason":"completed","state":"idle","turn_id":"t"}' }) })
+    expect(useExecutionStore.getState().executions[KEY].lastSeq).toBe(11)
+
+    // Primed before the first resolves, for the retry this fix must trigger.
+    vi.mocked(api.getExecution).mockResolvedValueOnce(summary({ state: 'running', event_count: 99 }) as never)
+
+    await act(async () => { resolveFirst(summary({ state: 'running' })); await vi.advanceTimersByTimeAsync(0) })
+    // The stale first response (fetched as-of seq 10) must not clobber the local 'idle' patch from seq 11.
+    expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('idle')
+    expect(useExecutionStore.getState().executions[KEY].summaryStale).toBe(true)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(SUMMARY_REFETCH_DEBOUNCE_MS + 1) })
+    expect(api.getExecution).toHaveBeenCalledTimes(2)
+    expect(useExecutionStore.getState().executions[KEY].summaryStale).toBe(false)
+    expect(useExecutionStore.getState().executions[KEY].summary?.event_count).toBe(99)
+  })
+
+  it('caps consecutive stale/failed refetches so a persistent problem does not loop forever every debounce', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    vi.mocked(api.getExecution).mockClear()
+    // Every refetch fails — the "failed" half of the fix's retry cap.
+    vi.mocked(api.getExecution).mockRejectedValue(new Error('network down'))
+
+    act(() => { sseOpts!.onFrame({ id: '20', event: 'execution.running', data: '{}' }) })
+    for (let i = 0; i < 8; i++) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(SUMMARY_REFETCH_DEBOUNCE_MS + 1) })
+    }
+    // 8 debounce cycles elapsed, but each failure reschedules the next
+    // attempt itself (there is no fresh stale->true transition to drive
+    // it) — the cap must have stopped that chain well short of 8.
+    expect(vi.mocked(api.getExecution).mock.calls.length).toBeLessThanOrEqual(5)
+    expect(vi.mocked(api.getExecution).mock.calls.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('resets paused to false when executionId changes, so a fresh key with a free slot goes live rather than staying stuck paused', async () => {
+    vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
+    vi.mocked(api.fetchExecutionEvents).mockResolvedValue({ items: [], next_cursor: 0 })
+    const closes: Record<string, ReturnType<typeof vi.fn>> = {}
+    vi.mocked(sse.openNexSse).mockImplementation((o) => {
+      const id = new URL(o.url, 'http://x').searchParams.get('execution_id')!
+      closes[id] = closes[id] ?? vi.fn()
+      return { close: closes[id] }
+    })
+
+    const { result, rerender } = renderHook(({ id, active }) => useExecutionSubscription(H, id, active), { initialProps: { id: E, active: true } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(closes[E]).toBeDefined()
+
+    // Evict this pane by filling the cap with four other keys, then free one back up.
+    act(() => {
+      subscriptionSlots.touch(H, 'other-1')
+      subscriptionSlots.touch(H, 'other-2')
+      subscriptionSlots.touch(H, 'other-3')
+      subscriptionSlots.touch(H, 'other-4')
+    })
+    expect(result.current.paused).toBe(true)
+    act(() => { subscriptionSlots.release(H, 'other-1') }) // free a slot
+
+    rerender({ id: 'exc_new', active: false })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(result.current.paused).toBe(false)
+    expect(closes['exc_new']).toBeDefined()
+  })
+
+  it('a terminal SSE close (with error) releases the slot so a later activation can reopen', async () => {
+    const { rerender } = renderHook(({ active }) => useExecutionSubscription(H, E, active), { initialProps: { active: true } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(sse.openNexSse).toHaveBeenCalledTimes(1)
+
+    act(() => { sseOpts!.onStatus('closed', new Error('unauthorized')) })
+    expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('closed')
+
+    rerender({ active: false })
+    rerender({ active: true })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(sse.openNexSse).toHaveBeenCalledTimes(2)
+  })
 })

@@ -28,4 +28,25 @@ describe('subscriptionSlots', () => {
     expect(subscriptionSlots.touch('h', 'e')).toEqual([])
     expect(subscriptionSlots.touch('other', 'x')).toEqual([])
   })
+
+  it('claimIfFree grants a slot without eviction up to the cap, then refuses', () => {
+    expect(subscriptionSlots.claimIfFree('h', 'a')).toBe(true)
+    expect(subscriptionSlots.claimIfFree('h', 'b')).toBe(true)
+    expect(subscriptionSlots.claimIfFree('h', 'c')).toBe(true)
+    expect(subscriptionSlots.claimIfFree('h', 'd')).toBe(true)
+    expect(subscriptionSlots.isLive('h', 'a')).toBe(true)
+    expect(subscriptionSlots.isLive('h', 'd')).toBe(true)
+    const evicted = vi.fn()
+    subscriptionSlots.onEvict('a', evicted)
+    expect(subscriptionSlots.claimIfFree('h', 'e')).toBe(false)
+    expect(subscriptionSlots.isLive('h', 'e')).toBe(false)
+    expect(subscriptionSlots.isLive('h', 'a')).toBe(true) // never evicted
+    expect(evicted).not.toHaveBeenCalled()
+  })
+
+  it('claimIfFree on an already-live key refreshes recency and returns true', () => {
+    for (const k of ['a', 'b', 'c', 'd']) subscriptionSlots.touch('h', k)
+    expect(subscriptionSlots.claimIfFree('h', 'a')).toBe(true) // a now most recent
+    expect(subscriptionSlots.touch('h', 'e')).toEqual(['b']) // b, not a, is now oldest
+  })
 })

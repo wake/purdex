@@ -8,6 +8,14 @@ export const MAX_LIVE_SUBSCRIPTIONS_PER_HOST = 4
 export interface SlotRegistry {
   /** Claim/refresh a slot for key; returns the keys that must PAUSE (evicted LRU), if any. */
   touch(hostId: string, key: string): string[]
+  /**
+   * Claim a slot for key only if one is free (size < cap) — never evicts.
+   * Refreshes recency if key already holds a slot. Returns whether key
+   * holds a slot afterward. Lets an inactive-at-mount pane go live when
+   * capacity allows (spec §4.3.2 step 4: only eviction pauses; an idle cap
+   * should not).
+   */
+  claimIfFree(hostId: string, key: string): boolean
   /** Release a slot (pane closed / host removed). */
   release(hostId: string, key: string): void
   /** Subscribe to eviction notices for key; returns unsubscribe. */
@@ -34,6 +42,13 @@ function create(): SlotRegistry {
         listeners.get(oldest)?.forEach((cb) => cb())
       }
       return evicted
+    },
+    claimIfFree(hostId, key) {
+      const s = set(hostId)
+      if (s.has(key)) { s.delete(key); s.add(key); return true }
+      if (s.size >= MAX_LIVE_SUBSCRIPTIONS_PER_HOST) return false
+      s.add(key)
+      return true
     },
     release(hostId, key) { live.get(hostId)?.delete(key) },
     onEvict(key, cb) {

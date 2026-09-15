@@ -18,6 +18,12 @@ import { useHostStore } from '../stores/useHostStore'
 export type SubscriptionProblem = null | 'not_found' | 'host_removed' | 'nex_unavailable' | 'nex_disabled'
 export const HISTORY_PAGE_LIMIT = 500
 export const SUMMARY_REFETCH_DEBOUNCE_MS = 300
+// A stale/failed summary refetch reschedules itself (fix round 1, Important
+// 2): `summaryStale` only notifies subscribers on a boolean transition, so a
+// second lifecycle event landing while a refetch is in flight would
+// otherwise leave the store stuck stale forever. Cap consecutive attempts so
+// a persistently failing daemon doesn't retry every debounce indefinitely.
+const MAX_CONSECUTIVE_STALE_REFETCHES = 5
 
 export function useExecutionSubscription(hostId: string, executionId: string, active: boolean): { problem: SubscriptionProblem; paused: boolean } {
   const [problem, setProblem] = useState<SubscriptionProblem>(null)
@@ -53,6 +59,11 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     let refetchTimer: ReturnType<typeof setTimeout> | null = null
     let wasReconnecting = false
     setProblem(null)
+    // A pane paused under its PREVIOUS executionId must not carry that flag
+    // into a fresh chain for a new one — the new key gets its own slot
+    // decision below (isLive / claimIfFree) and sets `paused` again only if
+    // that fails.
+    setPaused(false)
     const store = () => useExecutionStore.getState()
 
     // Spec §4.3.2 step 5: the pane's stored host is the only host we talk
@@ -63,13 +74,29 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
       return
     }
 
+    let staleRefetchAttempts = 0
     const refetchSummary = async () => {
       const asOf = store().executions[key]?.lastSeq ?? 0
       try {
         const s = await getExecution(hostId, executionId)
-        if (!cancelled) store().setSummary(hostId, executionId, s, asOf)
+        if (cancelled) return
+        store().setSummary(hostId, executionId, s, asOf)
+        // subscribeWithSelector only notifies on a boolean transition: a
+        // second lifecycle event landing while this fetch was in flight
+        // (lastSeq advancing past asOf again) leaves summaryStale true with
+        // no new true→true notification to re-trigger us. Check the result
+        // directly and reschedule ourselves when still stale, capped so a
+        // persistently failing daemon doesn't retry forever.
+        if (store().executions[key]?.summaryStale) {
+          staleRefetchAttempts += 1
+          if (staleRefetchAttempts < MAX_CONSECUTIVE_STALE_REFETCHES) scheduleRefetch()
+        } else {
+          staleRefetchAttempts = 0
+        }
       } catch {
-        // transient — the next stale mark or reconnect tries again
+        // transient — the next stale mark or reconnect tries again, up to the same cap
+        staleRefetchAttempts += 1
+        if (staleRefetchAttempts < MAX_CONSECUTIVE_STALE_REFETCHES) scheduleRefetch()
       }
     }
     const scheduleRefetch = () => {
@@ -151,28 +178,49 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
               store().setSse(hostId, executionId, status, err?.message ?? null)
               if (status === 'reconnecting') wasReconnecting = true
               if (status === 'open') { warnedMalformed = false; if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
+              if (status === 'closed' && err) {
+                // Terminal from openNexSse itself (401/403, or a
+                // non-retryable structured error code) — the handle is
+                // already dead and will never reconnect on its own. Drop it
+                // and free the slot so a later activation can claim a fresh
+                // one instead of the pane being stuck "live" forever with a
+                // broken stream and nobody else able to use its slot.
+                sseRef.current = null
+                subscriptionSlots.release(hostId, key)
+              }
             },
           })
         }
         // The activation effect above claims the slot synchronously before
         // this async work even starts (it runs first, same commit, on
         // mount) — so by the time history is loaded, isLive already
-        // reflects whether we hold a slot. If not, stay paused until a
-        // later activation reclaims one via openStreamRef.
+        // reflects whether we hold a slot from an `active` pane. But an
+        // inactive-at-mount pane never runs that effect's touch(), so it
+        // would otherwise stay paused forever even with slots free — spec
+        // §4.3.2 step 4 says only eviction pauses; an idle cap should not.
+        // claimIfFree grabs a free slot without evicting anyone, so a
+        // restored (hidden, inactive) tab still goes live up to the cap.
         unsubEvict = subscriptionSlots.onEvict(key, () => {
           sseRef.current?.close(); sseRef.current = null
           setPaused(true)
           store().setSse(hostId, executionId, 'paused')
         })
         openStreamRef.current = openStream
-        if (subscriptionSlots.isLive(hostId, key)) openStream()
+        if (subscriptionSlots.isLive(hostId, key) || subscriptionSlots.claimIfFree(hostId, key)) openStream()
         else { setPaused(true); store().setSse(hostId, executionId, 'paused') }
       } catch (e) {
         if (cancelled) return
         if (e instanceof NexApiError && e.code === 'execution_not_found') teardown('not_found')
         else if (e instanceof NexApiError && e.code === 'nex_unavailable') teardown('nex_unavailable')
         else if (e instanceof NexApiError && e.code === 'http_404') teardown('nex_disabled')
-        else store().setSse(hostId, executionId, 'closed', e instanceof Error ? e.message : String(e))
+        else {
+          // Unexpected error before the stream ever opened (a claimed slot
+          // would otherwise leak forever on a subscription that can never
+          // succeed on its own).
+          sseRef.current = null
+          subscriptionSlots.release(hostId, key)
+          store().setSse(hostId, executionId, 'closed', e instanceof Error ? e.message : String(e))
+        }
       }
     })()
 
