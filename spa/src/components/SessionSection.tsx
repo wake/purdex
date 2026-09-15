@@ -187,14 +187,13 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           data-testid={`host-header-${hostId}`}
           aria-expanded={isExpanded}
           onClick={() => setExpanded(!isExpanded)}
-          className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+          className="flex items-center gap-1.5 min-w-0 cursor-pointer"
         >
-          {isExpanded ? <CaretDown size={10} className="text-text-muted" /> : <CaretRight size={10} className="text-text-muted" />}
+          {isExpanded
+            ? <CaretDown size={12} className="text-text-secondary hover:text-text-primary" />
+            : <CaretRight size={12} className="text-text-secondary hover:text-text-primary" />}
           {statusDot}
-          <span className="text-xs text-text-muted font-semibold">{host.name}</span>
-          {isOffline && (
-            <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
-          )}
+          <span className="text-sm font-bold text-text-primary truncate">{host.name}</span>
         </button>
         <button
           data-testid={`new-session-${hostId}`}
@@ -206,11 +205,14 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
             // gated behind isExpanded) - expand so the "+" isn't a no-op.
             if (opening) setExpanded(true)
           }}
-          className="ml-auto p-1 rounded hover:bg-white/10 text-text-muted hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          className="ml-1 p-1 rounded border border-accent/40 bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           title={t('hosts.new_session')}
         >
-          <Plus size={14} />
+          <Plus size={14} weight="bold" />
         </button>
+        {isOffline && (
+          <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
+        )}
       </div>
       {isExpanded && creating && (
         <NewTabSessionForm

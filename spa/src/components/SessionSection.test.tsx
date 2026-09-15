@@ -218,6 +218,29 @@ describe('SessionSection', () => {
     expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeInTheDocument()
   })
 
+  it('styles the host header: bright caret, bold host name, emphasized + right after the name', () => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } } })
+    render(<Blocks />)
+    const header = screen.getByTestId(`host-header-${HOST_ID}`)
+    const caret = header.querySelector('svg') as SVGElement
+    expect(caret.getAttribute('class')).toContain('text-text-secondary')
+    expect(caret.getAttribute('width')).toBe('12')
+    const name = screen.getByText('mlab')
+    expect(name.className).toContain('text-sm')
+    expect(name.className).toContain('font-bold')
+    expect(name.className).toContain('text-text-primary')
+    const plus = screen.getByTestId(`new-session-${HOST_ID}`)
+    expect(plus.className).not.toContain('ml-auto')
+    expect(plus.className).toContain('text-accent')
+    expect(plus.className).toContain('bg-accent/15')
+    // "+" follows the collapse toggle (which ends with the host name) — no
+    // nested buttons, and no longer pushed to the far right.
+    expect(header.lastElementChild).toBe(name)
+    expect(header.nextElementSibling).toBe(plus)
+    expect(header.className).not.toContain('flex-1')
+    expect(plus).not.toBeDisabled()
+  })
+
   it('scopes j/k navigation to its own host block', () => {
     useHostStore.setState({
       hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1', port: 7860, order: 0 }, [HOST_B]: { id: HOST_B, name: 'air', ip: '2', port: 7860, order: 1 } },
