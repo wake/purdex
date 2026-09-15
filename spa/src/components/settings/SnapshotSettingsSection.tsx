@@ -12,6 +12,7 @@ import {
 import { SettingItem } from './SettingItem'
 import { EditableCwdCell } from './EditableCwdCell'
 import { ResumeTemplateSettings } from './ResumeTemplateSettings'
+import { DeviceStateSection } from './device-state/DeviceStateSection'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { readPrevSnapshot, readSnapshot, setSessionMetaCwd, writeSnapshot } from '../../lib/snapshot/storage'
 import { captureSnapshot } from '../../lib/snapshot/capture'
@@ -554,6 +555,8 @@ export function SnapshotSettingsSection() {
       )}
 
       <StatusLine status={status} />
+
+      <DeviceStateSection />
     </div>
   )
 }
