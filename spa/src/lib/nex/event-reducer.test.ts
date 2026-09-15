@@ -126,6 +126,22 @@ describe('applyDurableEvent', () => {
     expect(applyDurableEvent(base, ev(1, 'result', { type: 'result' })).sendError).toEqual({ code: 'x', message: 'y' })
   })
 
+  it('execution.turn_orphaned clears pendingSend (daemon restart mid-turn) without touching pendingLocal (C2)', () => {
+    const base: ExecutionState = { ...defaultExecutionState(), pendingSend: true, pendingLocal: { text: 'hi', delivery: 'delivered' } }
+    const s = applyDurableEvent(base, ev(1, 'execution.turn_orphaned', { turn_id: 't' }))
+    expect(s.pendingSend).toBe(false)
+    expect(s.pendingLocal).toEqual({ text: 'hi', delivery: 'delivered' })
+    expect(s.summaryStale).toBe(true)
+  })
+
+  it('execution.turn_stalled clears pendingSend and pendingLocal (queued turn withdrawn on restart) (C2)', () => {
+    const base: ExecutionState = { ...defaultExecutionState(), pendingSend: true, pendingLocal: { text: 'hi', delivery: 'queued' } }
+    const s = applyDurableEvent(base, ev(1, 'execution.turn_stalled', { turn_id: 't' }))
+    expect(s.pendingSend).toBe(false)
+    expect(s.pendingLocal).toBeNull()
+    expect(s.summaryStale).toBe(true)
+  })
+
   it('ignores events with a non-finite seq', () => {
     const s = defaultExecutionState()
     expect(applyDurableEvent(s, { ...ev(0, 'assistant'), seq: Number.NaN })).toBe(s)

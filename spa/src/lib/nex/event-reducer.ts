@@ -175,9 +175,20 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       const { lease: _dropped, ...rest } = next.summary
       return { ...next, summaryStale: true, summary: rest as ExecutionSummary }
     }
+    case 'execution.turn_orphaned':
+      // A daemon restart reconciled a live turn with no execution.terminal
+      // (C2): the input must not stay locked forever, so clear pendingSend;
+      // pendingLocal (the optimistic bubble) is left alone — the turn is
+      // still live, just orphaned from this client's view.
+      return { ...next, pendingSend: false, summaryStale: true }
+    case 'execution.turn_stalled':
+      // Same restart reconcile, but for a queued turn the daemon withdraws
+      // outright (C2): both the pending flag and the optimistic bubble must
+      // clear, or the input stays locked and a bubble is stuck forever.
+      return { ...next, pendingSend: false, pendingLocal: null, summaryStale: true }
     default:
-      // interrupt_requested / interrupted / turn_stalled / turn_orphaned …:
-      // nothing to render in P-B; the summary refetch carries the state.
+      // interrupt_requested / interrupted …: nothing to render in P-B; the
+      // summary refetch carries the state.
       return { ...next, summaryStale: true }
   }
 }
