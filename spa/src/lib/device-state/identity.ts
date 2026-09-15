@@ -16,30 +16,39 @@ export function sourceKey(source: FileSource): string {
   }
 }
 
+/** Collision-free encoding: each part is a JSON string, so no delimiter can leak across parts. */
+function encode(...parts: string[]): string {
+  return JSON.stringify(parts)
+}
+
+const SETTINGS_GLOBAL = encode('settings', 'global')
+
 /**
  * Identity of one pane's content, or `null` when it can never match another
  * pane (an untitled editor). A settings pane with a workspace scope resolves
- * through `wsNameById`; an id missing from it (dangling scope) keys as global,
- * mirroring the merge clone rewrite (spec §5.3 step 5).
+ * through `wsNameById` by trimmed name (merge matches workspaces by trimmed
+ * name, spec §5.3); an id missing from it, or a name empty after trim
+ * (dangling scope), keys as global, mirroring the merge clone rewrite
+ * (spec §5.3 step 5).
  */
 export function paneKey(content: PaneContent, wsNameById: ReadonlyMap<string, string>): string | null {
   switch (content.kind) {
     case 'tmux-session':
-      return `tmux:${content.hostId}:${content.cachedName}`
+      return encode('tmux', content.hostId, content.cachedName)
     case 'editor':
       if (content.untitled) return null
-      return `editor:${sourceKey(content.source)}:${content.filePath}`
+      return encode('editor', sourceKey(content.source), content.filePath)
     case 'image-preview':
     case 'pdf-preview':
-      return `${content.kind}:${sourceKey(content.source)}:${content.filePath}`
+      return encode(content.kind, sourceKey(content.source), content.filePath)
     case 'browser':
-      return `browser:${content.url}`
+      return encode('browser', content.url)
     case 'execution':
-      return `execution:${content.host ?? ''}:${content.executionId}`
+      return encode('execution', content.host ?? '', content.executionId)
     case 'settings': {
-      if (content.scope === 'global') return 'settings:global'
-      const name = wsNameById.get(content.scope.workspaceId)
-      return name === undefined ? 'settings:global' : `settings:ws:${name}`
+      if (content.scope === 'global') return SETTINGS_GLOBAL
+      const name = wsNameById.get(content.scope.workspaceId)?.trim()
+      return name ? encode('settings', 'ws', name) : SETTINGS_GLOBAL
     }
     case 'new-tab':
     case 'dashboard':
@@ -47,7 +56,7 @@ export function paneKey(content: PaneContent, wsNameById: ReadonlyMap<string, st
     case 'history':
     case 'memory-monitor':
     case 'editor-buffers':
-      return content.kind
+      return encode(content.kind)
     default: {
       const unreachable: never = content
       return unreachable
@@ -55,7 +64,7 @@ export function paneKey(content: PaneContent, wsNameById: ReadonlyMap<string, st
   }
 }
 
-/** Leaf pane keys in pre-order joined with `|`; any `null` leaf → `null`. */
+/** JSON array of leaf pane keys in pre-order; any `null` leaf → `null`. */
 export function tabKey(tab: Tab, wsNameById: ReadonlyMap<string, string>): string | null {
   const keys: string[] = []
   let hasNull = false
@@ -64,5 +73,5 @@ export function tabKey(tab: Tab, wsNameById: ReadonlyMap<string, string>): strin
     if (key === null) hasNull = true
     else keys.push(key)
   })
-  return hasNull ? null : keys.join('|')
+  return hasNull ? null : JSON.stringify(keys)
 }
