@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.357] - 2026-09-16
+
+### Feat: New Tab 每台 host 一個 Sessions 區塊＋host 選單樣式調整（#1064）
+
+New Tab 的 Sessions 區塊改為每台 host 各一個（`sessions:<hostId>`，版面編輯器顯示 `Sessions · <host 名稱>`），可在 Settings › Interface › New Tab 分別擺放。
+
+- **每 host 一個區塊**：`new-tab-registry` 新增 registry 層級的 provider source（`registerNewTabProviderSource`／`subscribeNewTabProviders`／`getStaleNewTabProviderIds`）與 `labelParams`；host source 由 host store 推導 provider，每台 host 保持穩定 component（區塊不重新掛載）。
+- **舊版面遷移**：既有 `sessions` 就地換成各 host 區塊；使用者先前移除的區塊維持移除。
+- **Prune 安全**：host store hydration 完成前不 prune；只清掉 source 所擁有的過期 id（已移除 host、舊 `sessions`），無 source 認領的 id 仍然不動。
+- **模組可見性**：模組啟用與否以 mount 當下的快照判定（仍需 reload 生效）。
+- **Host 標頭**：收合箭頭更亮、host 名稱粗體、「+」移到 host 名稱旁並加強顯示；j/k 與方向鍵導覽限定於各區塊內。
+- **Host 設定子選單**：未選取項目與圖示改為較亮的色調。
+- **命名**：「Nex」標籤更名為「Nexen」（en／zh-TW，程式識別字不變）。
+- 測試 vitest 447 files、5677 tests；Go 未動。
+
 ## [1.0.0-alpha.356] - 2026-09-16
 
 ### Feat: 各電腦狀態備份 P3 — 合併還原（#1062）
