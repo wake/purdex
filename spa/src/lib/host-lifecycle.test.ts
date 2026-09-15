@@ -1,5 +1,6 @@
 // spa/src/lib/host-lifecycle.test.ts — Tests for host delete cascade and session-closed detection
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import * as nexApi from '../lib/nex/nex-api'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
@@ -19,6 +20,8 @@ import type { Tab } from '../types/tab'
 import type { StreamMessage } from './stream-ws'
 import type { Session } from './host-api'
 
+vi.mock('../lib/nex/nex-api', () => ({ releaseLease: vi.fn() }))
+
 function makeSession(code: string, name: string = code): Session {
   return { code, name, mode: 'terminal', cwd: '~', cc_session_id: '', cc_model: '', has_relay: false }
 }
@@ -32,6 +35,7 @@ function makeSessionTab(hostId: string, code: string, mode: 'terminal' | 'stream
 
 function resetAllStores() {
   localStorage.clear()
+  vi.mocked(nexApi.releaseLease).mockReset().mockResolvedValue(undefined)
   useHostStore.setState({
     hosts: {
       [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
@@ -139,6 +143,19 @@ describe('host delete cascade', () => {
     deleteHostCascade(HOST_A, false)
 
     expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
+  })
+
+  it('closeTabs releases held leases on the removed host before clearing execution state (M)', () => {
+    useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
+    useExecutionStore.getState().setLease(HOST_A, 'exc_2', null) // no lease held — must not call releaseLease
+    useExecutionStore.getState().applyEvents(HOST_B, 'exc_3', [
+      { seq: 1, execution_id: 'exc_3', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
+    ])
+
+    deleteHostCascade(HOST_A, true)
+
+    expect(nexApi.releaseLease).toHaveBeenCalledTimes(1)
+    expect(nexApi.releaseLease).toHaveBeenCalledWith(HOST_A, 'exc_1', 'ls_1')
   })
 
   it('cascade cleans SessionStore entries', () => {

@@ -4,7 +4,8 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
-import { useExecutionStore } from '../stores/useExecutionStore'
+import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
+import { releaseLease } from './nex/nex-api'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
@@ -136,6 +137,20 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   // above so no execution pane's hook observes a half-cleared store (spec
   // §4.3.4); undo restores the tabs, whose hooks re-subscribe from scratch,
   // so nothing here needs snapshotting.
+  //
+  // A held lease (M): closeTabs unmounts the panes via the tab-close loop
+  // above, but the pane's own release() (useExecutionLease's unmount
+  // effect) races clearHost below — by the time React actually tears the
+  // component down, clearHost may already have wiped the lease out from
+  // under it, so release() finds nothing to release. Best-effort release
+  // every held lease on this host here instead, before the store is
+  // cleared (spec §4.3.4: a held lease is released on host removal).
+  for (const [key, execution] of Object.entries(useExecutionStore.getState().executions)) {
+    const { hostId: execHostId, executionId } = splitExecutionKey(key)
+    if (execHostId === hostId && execution.lease) {
+      void releaseLease(hostId, executionId, execution.lease.leaseId).catch(() => {})
+    }
+  }
   useExecutionStore.getState().clearHost(hostId)
   useHostSettingsStore.getState().clearHost(hostId)
   hostStore.removeHost(hostId)
