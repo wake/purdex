@@ -116,8 +116,8 @@ export function useRouteSync() {
         break
       }
       case 'execution':
-        // Read-only detail landing (Task P.12). Singleton per (host, execution
-        // id); the page fetches its own projection so a direct URL /
+        // Execution pane (spec §4.3.3), singleton per (host, execution id).
+        // It owns its own observe subscription, so a direct URL /
         // back-forward never dead-ends. The host segment (or its absence) is
         // resolved at open time so the pane always has a concrete host.
         openSingletonTab({ kind: 'execution', executionId: parsed.executionId, host: resolveExecutionHostId(parsed.host) })

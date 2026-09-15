@@ -50,9 +50,13 @@ export function contentMatches(a: PaneContent, b: PaneContent): boolean {
   }
   // Execution panes are singletons per (host, execution id): Nexen ids are
   // per-daemon, so the same id on two hosts is two executions (spec §4.3.3).
+  // The fallback to the first host applies only when the hint is absent
+  // (v2.1 rule) — a *stored* host that no longer exists must NOT be folded
+  // into a match with the first host, or a restored tab could collide with
+  // a different execution on whichever host now happens to be first (I2).
   if (a.kind === 'execution' && b.kind === 'execution') {
     return a.executionId === b.executionId
-      && resolveExecutionHostId(a.host) === resolveExecutionHostId(b.host)
+      && (a.host ?? resolveExecutionHostId(undefined)) === (b.host ?? resolveExecutionHostId(undefined))
   }
   return true
 }
