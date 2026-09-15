@@ -123,4 +123,37 @@ describe('HostColorField', () => {
     act(() => useHostStore.getState().setHostColor(HOST_ID, '#ec4899'))
     expect(hexInput().value).toBe('#ec4899')
   })
+
+  it.each([
+    ['non-string object', {}],
+    ['css injection string', 'url(x)'],
+  ])('tolerates malformed stored color (%s): no throw, empty input, nothing pressed', (_label, bad) => {
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'H', ip: '1.2.3.4', port: 7860, order: 0, color: bad as never } },
+    })
+    render(<HostColorField hostId={HOST_ID} />)
+    expect(hexInput().value).toBe('')
+    for (const hex of HOST_COLOR_PRESETS) {
+      expect(screen.getByRole('button', { name: hex })).toHaveAttribute('aria-pressed', 'false')
+    }
+    expect(() => {
+      fireEvent.focus(hexInput())
+      fireEvent.blur(hexInput())
+    }).not.toThrow()
+    expect(() => fireEvent.keyDown(hexInput(), { key: 'Enter' })).not.toThrow()
+    expect(hexInput().value).toBe('')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('resyncs to empty when stored color turns malformed externally', () => {
+    useHostStore.getState().setHostColor(HOST_ID, '#3b82f6')
+    render(<HostColorField hostId={HOST_ID} />)
+    act(() => {
+      useHostStore.setState({
+        hosts: { [HOST_ID]: { id: HOST_ID, name: 'H', ip: '1.2.3.4', port: 7860, order: 0, color: {} as never } },
+      })
+    })
+    expect(hexInput().value).toBe('')
+    expect(() => fireEvent.blur(hexInput())).not.toThrow()
+  })
 })

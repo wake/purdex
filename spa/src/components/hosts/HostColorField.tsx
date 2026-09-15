@@ -2,22 +2,24 @@ import { useState } from 'react'
 import { Prohibit } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { HOST_COLOR_PRESETS, normalizeHostColor } from '../../lib/host-color'
+import { HOST_COLOR_PRESETS, isValidHostColor, normalizeHostColor } from '../../lib/host-color'
 import { Field } from './form-fields'
 
 export function HostColorField({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
-  const current = useHostStore((s) => s.hosts[hostId]?.color)
+  const stored = useHostStore((s) => s.hosts[hostId]?.color)
   const setHostColor = useHostStore((s) => s.setHostColor)
+  // Stored color may be malformed (sync / corrupted persist); treat it as no color.
+  const current = isValidHostColor(stored) ? stored : ''
 
-  const [draft, setDraft] = useState(current ?? '')
+  const [draft, setDraft] = useState(current)
   const [invalid, setInvalid] = useState(false)
   const [synced, setSynced] = useState(current)
 
   // Re-sync the draft when the stored color changes (render-phase adjust, no effect).
   if (synced !== current) {
     setSynced(current)
-    setDraft(current ?? '')
+    setDraft(current)
     setInvalid(false)
   }
 
