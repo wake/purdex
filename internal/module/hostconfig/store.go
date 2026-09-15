@@ -86,14 +86,25 @@ func getEntry(ctx context.Context, q querier, key string) (Entry, error) {
 // Get returns the stored entry for key (Revision 0 when never written).
 func (s *Store) Get(key string) (Entry, error) { return getEntry(context.Background(), s.db, key) }
 
-// Put writes value when baseRevision equals the stored revision. The read and
-// the write run inside one BEGIN IMMEDIATE transaction on a dedicated conn:
+// ValidationError wraps an error returned by Put's build callback, so callers
+// can tell a rejected payload (400) from a storage failure (500).
+type ValidationError struct{ Err error }
+
+func (e *ValidationError) Error() string { return e.Err.Error() }
+func (e *ValidationError) Unwrap() error { return e.Err }
+
+// Put stores the value produced by build when baseRevision equals the stored
+// revision. On a mismatch it returns the current entry with ok=false and build
+// is NOT called — a stale client always receives the server copy, whatever its
+// payload. A build error is returned as *ValidationError and nothing is written.
+//
+// The read and the write run inside one BEGIN IMMEDIATE transaction on a dedicated conn:
 // database/sql's Begin is a deferred tx, so two concurrent PUTs could both read
 // the same revision and the loser would hit SQLITE_BUSY_SNAPSHOT (500) instead
 // of a clean 409. IMMEDIATE takes the write lock first; the second writer waits
 // (busy_timeout) and then reads the committed revision. Same pattern as
 // internal/module/backup/store.go AppendSnapshot.
-func (s *Store) Put(key string, value json.RawMessage, baseRevision int64) (Entry, bool, error) {
+func (s *Store) Put(key string, baseRevision int64, build func() (json.RawMessage, error)) (Entry, bool, error) {
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -120,6 +131,10 @@ func (s *Store) Put(key string, value json.RawMessage, baseRevision int64) (Entr
 	}
 	if cur.Revision != baseRevision {
 		return cur, false, nil
+	}
+	value, err := build()
+	if err != nil {
+		return Entry{}, false, &ValidationError{Err: err}
 	}
 	next := Entry{Value: value, Revision: cur.Revision + 1, UpdatedAt: s.now()}
 	if _, err := conn.ExecContext(ctx, `

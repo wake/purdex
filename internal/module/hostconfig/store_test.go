@@ -2,8 +2,10 @@ package hostconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +22,11 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
+// raw returns a build callback yielding v.
+func raw(v string) func() (json.RawMessage, error) {
+	return func() (json.RawMessage, error) { return json.RawMessage(v), nil }
+}
+
 func TestStoreGetMissingIsRevisionZero(t *testing.T) {
 	s := openTestStore(t)
 	e, err := s.Get(KeyProjects)
@@ -30,7 +37,7 @@ func TestStoreGetMissingIsRevisionZero(t *testing.T) {
 
 func TestStorePutFirstWriteRevisionOne(t *testing.T) {
 	s := openTestStore(t)
-	e, ok, err := s.Put(KeyProjects, json.RawMessage(`[{"id":"a"}]`), 0)
+	e, ok, err := s.Put(KeyProjects, 0, raw(`[{"id":"a"}]`))
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, int64(1), e.Revision)
@@ -45,17 +52,62 @@ func TestStorePutFirstWriteRevisionOne(t *testing.T) {
 
 func TestStorePutConflictLeavesRowUntouched(t *testing.T) {
 	s := openTestStore(t)
-	_, ok, err := s.Put(KeyCommands, json.RawMessage(`[1]`), 0)
+	_, ok, err := s.Put(KeyCommands, 0, raw(`[1]`))
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	cur, ok, err := s.Put(KeyCommands, json.RawMessage(`[2]`), 0) // stale base
+	cur, ok, err := s.Put(KeyCommands, 0, raw(`[2]`)) // stale base
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Equal(t, int64(1), cur.Revision)
 	assert.JSONEq(t, `[1]`, string(cur.Value))
 
-	next, ok, err := s.Put(KeyCommands, json.RawMessage(`[3]`), 1)
+	next, ok, err := s.Put(KeyCommands, 1, raw(`[3]`))
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, int64(2), next.Revision)
+}
+
+func TestStorePutConflictDoesNotCallBuild(t *testing.T) {
+	s := openTestStore(t)
+	_, ok, err := s.Put(KeyCommands, 0, raw(`[1]`))
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	called := false
+	cur, ok, err := s.Put(KeyCommands, 0, func() (json.RawMessage, error) {
+		called = true
+		return nil, errors.New("invalid")
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.False(t, called, "build must not run on revision mismatch")
+	assert.Equal(t, int64(1), cur.Revision)
+	assert.JSONEq(t, `[1]`, string(cur.Value))
+}
+
+func TestStorePutBuildErrorIsValidationErrorAndRollsBack(t *testing.T) {
+	s := openTestStore(t)
+	_, ok, err := s.Put(KeyCommands, 0, raw(`[1]`))
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	_, ok, err = s.Put(KeyCommands, 1, func() (json.RawMessage, error) {
+		return nil, errors.New("bad slug")
+	})
+	require.Error(t, err)
+	assert.False(t, ok)
+	var ve *ValidationError
+	require.ErrorAs(t, err, &ve)
+	assert.Equal(t, "bad slug", ve.Error())
+
+	got, err := s.Get(KeyCommands)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), got.Revision)
+	assert.JSONEq(t, `[1]`, string(got.Value))
+
+	// The tx was released: a following write still succeeds.
+	next, ok, err := s.Put(KeyCommands, 1, raw(`[2]`))
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, int64(2), next.Revision)
@@ -63,7 +115,7 @@ func TestStorePutConflictLeavesRowUntouched(t *testing.T) {
 
 func TestStoreKeysAreIndependent(t *testing.T) {
 	s := openTestStore(t)
-	_, _, err := s.Put(KeyProjects, json.RawMessage(`[]`), 0)
+	_, _, err := s.Put(KeyProjects, 0, raw(`[]`))
 	require.NoError(t, err)
 	e, err := s.Get(KeyResumeTemplates)
 	require.NoError(t, err)
@@ -92,9 +144,13 @@ func TestStorePutConcurrentSameBaseOneWins(t *testing.T) {
 		err   error
 	}
 	results := make(chan result, 2)
+	var builds atomic.Int32
 	for _, v := range []string{`["a"]`, `["b"]`} {
 		go func(v string) {
-			e, ok, err := s.Put(KeyProjects, json.RawMessage(v), 0)
+			e, ok, err := s.Put(KeyProjects, 0, func() (json.RawMessage, error) {
+				builds.Add(1)
+				return json.RawMessage(v), nil
+			})
 			results <- result{e, ok, err}
 		}(v)
 	}
@@ -113,4 +169,5 @@ func TestStorePutConcurrentSameBaseOneWins(t *testing.T) {
 	}
 	assert.Equal(t, 1, wins)
 	assert.Equal(t, 1, conflicts)
+	assert.Equal(t, int32(1), builds.Load(), "only the winner builds its value")
 }

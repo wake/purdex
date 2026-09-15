@@ -2,6 +2,7 @@ package hostconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -85,18 +86,26 @@ func (m *Module) putHandler(key string, normalize func([]byte) (any, error)) htt
 			http.Error(w, "items and baseRevision (>= 0) are required", http.StatusBadRequest)
 			return
 		}
-		normalized, err := normalize(req.Items)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		// Normalize inside the store's CAS so a stale revision yields 409 with
+		// the server copy even when the payload is invalid.
+		var marshalErr error
+		entry, stored, err := m.store.Put(key, *req.BaseRevision, func() (json.RawMessage, error) {
+			normalized, err := normalize(req.Items)
+			if err != nil {
+				return nil, err
+			}
+			value, err := json.Marshal(normalized)
+			if err != nil {
+				marshalErr = err
+				return nil, err
+			}
+			return value, nil
+		})
+		var ve *ValidationError
+		if err != nil && marshalErr == nil && errors.As(err, &ve) {
+			http.Error(w, ve.Error(), http.StatusBadRequest)
 			return
 		}
-		value, err := json.Marshal(normalized)
-		if err != nil {
-			log.Printf("[hostconfig] marshal %s: %v", key, err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		entry, stored, err := m.store.Put(key, value, *req.BaseRevision)
 		if err != nil {
 			log.Printf("[hostconfig] put %s: %v", key, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)

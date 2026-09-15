@@ -48,6 +48,34 @@ func TestHandlerPutConflict(t *testing.T) {
 	assert.JSONEq(t, `{"items":[{"id":"c1","name":"x","command":"ls","icon":{"kind":"phosphor","value":"Terminal"}}],"revision":1}`, rr.Body.String())
 }
 
+// A stale client must get the server copy (409) even when its payload is
+// invalid — otherwise it can never recover the current state.
+func TestHandlerPutStaleRevisionWinsOverValidation(t *testing.T) {
+	m := newTestModule(t)
+	stored := `{"items":[{"id":"p1","name":"Purdex","slug":"purdex","path":"~/w"}],"baseRevision":0}`
+	require.Equal(t, http.StatusOK, serve(m, http.MethodPut, "/api/hostconfig/projects", stored).Code)
+
+	rr := serve(m, http.MethodPut, "/api/hostconfig/projects",
+		`{"items":[{"id":"p2","name":"n","slug":"BAD","path":"relative"}],"baseRevision":0}`)
+	require.Equal(t, http.StatusConflict, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"items":[{"id":"p1","name":"Purdex","slug":"purdex","path":"~/w"}],"revision":1}`, rr.Body.String())
+}
+
+func TestHandlerPutMatchingRevisionInvalidItemsLeavesRow(t *testing.T) {
+	m := newTestModule(t)
+	stored := `{"items":[{"id":"p1","name":"Purdex","slug":"purdex","path":"~/w"}],"baseRevision":0}`
+	require.Equal(t, http.StatusOK, serve(m, http.MethodPut, "/api/hostconfig/projects", stored).Code)
+
+	rr := serve(m, http.MethodPut, "/api/hostconfig/projects",
+		`{"items":[{"id":"p2","name":"n","slug":"BAD","path":"/"}],"baseRevision":1}`)
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+
+	e, err := m.store.Get(KeyProjects)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), e.Revision)
+	assert.JSONEq(t, `[{"id":"p1","name":"Purdex","slug":"purdex","path":"~/w"}]`, string(e.Value))
+}
+
 func TestHandlerPutResumeTemplates(t *testing.T) {
 	m := newTestModule(t)
 	rr := serve(m, http.MethodPut, "/api/hostconfig/resume-templates",
