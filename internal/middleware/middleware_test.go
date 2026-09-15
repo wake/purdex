@@ -111,13 +111,14 @@ func (f *fakeTickets) Validate(ticket string) bool {
 	return false
 }
 
-// wsUpgradeRequest builds a request carrying the two headers that make it
-// a WebSocket upgrade (Connection: Upgrade, Upgrade: websocket) — the only
-// shape TokenAuth accepts a one-time ?ticket= on.
+// wsUpgradeRequest builds a real WebSocket handshake: a GET carrying
+// Connection: Upgrade, Upgrade: websocket and Sec-WebSocket-Version: 13 —
+// the only shape TokenAuth accepts a one-time ?ticket= on.
 func wsUpgradeRequest(target string) *http.Request {
 	req := httptest.NewRequest("GET", target, nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
 	return req
 }
 
@@ -177,6 +178,11 @@ func TestTokenAuthTicketRejectedOnPlainRequests(t *testing.T) {
 		{name: "GET with Upgrade header but no Connection: Upgrade", method: "GET", header: map[string]string{"Upgrade": "websocket"}},
 		{name: "GET with Connection: Upgrade but no Upgrade: websocket", method: "GET", header: map[string]string{"Connection": "Upgrade"}},
 		{name: "GET with SSE Accept", method: "GET", header: map[string]string{"Accept": "text/event-stream"}},
+		// A REST call wearing a costume: upgrade headers on a non-GET.
+		{name: "POST with full handshake headers", method: "POST", header: map[string]string{"Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13"}},
+		{name: "DELETE with full handshake headers", method: "DELETE", header: map[string]string{"Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13"}},
+		// Upgrade headers but no Sec-WebSocket-Version: not a handshake.
+		{name: "GET with upgrade headers but no Sec-WebSocket-Version", method: "GET", header: map[string]string{"Connection": "Upgrade", "Upgrade": "websocket"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tv := &fakeTickets{valid: map[string]bool{"fresh": true}}

@@ -59,12 +59,14 @@ func doRequest(t *testing.T, h http.Handler, method, target, bearer string) *htt
 	return rec
 }
 
-// wsUpgrade marks req as a WebSocket upgrade (Connection: Upgrade +
-// Upgrade: websocket) — since the codex R2 follow-up the only request
-// shape TokenAuth accepts a one-time ?ticket= on.
+// wsUpgrade gives req the WebSocket handshake headers (Connection:
+// Upgrade + Upgrade: websocket + Sec-WebSocket-Version: 13) — since the
+// codex R2 follow-up a GET with these is the only request shape TokenAuth
+// accepts a one-time ?ticket= on.
 func wsUpgrade(req *http.Request) *http.Request {
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
 	return req
 }
 
@@ -377,6 +379,33 @@ func TestOuterChain_NexAuthMatrix(t *testing.T) {
 		}
 		if !probe.called {
 			t.Fatal("want probe reached")
+		}
+	})
+
+	t.Run("fresh ticket, POST with WebSocket upgrade headers", func(t *testing.T) {
+		// A WebSocket handshake is a GET; a POST wearing the upgrade
+		// headers is a REST call in a costume and must not get the
+		// ticket path (the ticket stays unconsumed, too).
+		c, probe, outer := newHarness()
+		ticket, err := c.Tickets.Generate()
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		req := wsUpgrade(nexReq(http.MethodPost, "/api/nex/v1/x?ticket="+ticket))
+		rec := httptest.NewRecorder()
+		outer.ServeHTTP(rec, req)
+		if rec.Code != 401 {
+			t.Fatalf("want 401, got %d", rec.Code)
+		}
+		if probe.called {
+			t.Fatal("want probe NOT reached")
+		}
+		// Not consumed: the same ticket still opens a real handshake.
+		req2 := wsUpgrade(nexReq(http.MethodGet, "/api/nex/v1/x?ticket="+ticket))
+		rec2 := httptest.NewRecorder()
+		outer.ServeHTTP(rec2, req2)
+		if rec2.Code != 200 || !probe.called {
+			t.Fatalf("ticket was consumed by the POST: GET handshake got %d, probe.called=%v", rec2.Code, probe.called)
 		}
 	})
 
