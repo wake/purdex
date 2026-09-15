@@ -16,6 +16,24 @@ export function clampKeepAlive(renderer: TerminalRenderer, count: number): numbe
   return Math.min(count, max)
 }
 
+export type HostColorMarkStyle = 'gradient' | 'left-line' | 'bottom-line' | 'none'
+
+export const HOST_COLOR_LINE_WIDTH_MIN = 1
+export const HOST_COLOR_LINE_WIDTH_MAX = 6
+const HOST_COLOR_LINE_WIDTH_DEFAULT = 2
+
+const HOST_COLOR_MARK_STYLES: readonly HostColorMarkStyle[] = ['gradient', 'left-line', 'bottom-line', 'none']
+
+export function isHostColorMarkStyle(v: unknown): v is HostColorMarkStyle {
+  return typeof v === 'string' && (HOST_COLOR_MARK_STYLES as readonly string[]).includes(v)
+}
+
+/** Non-finite → default (2); otherwise round then clamp to [MIN, MAX]. */
+export function clampHostColorLineWidth(n: number): number {
+  if (!Number.isFinite(n)) return HOST_COLOR_LINE_WIDTH_DEFAULT
+  return Math.min(HOST_COLOR_LINE_WIDTH_MAX, Math.max(HOST_COLOR_LINE_WIDTH_MIN, Math.round(n)))
+}
+
 interface UISettings {
   /**
    * 收到第一筆 terminal data 後，延遲多久才移除 overlay 顯示畫面（ms）。
@@ -71,6 +89,15 @@ interface UISettings {
   setTabNameTooltipMode: (mode: TabNameTooltipMode) => void
   showAgentTitleInStatusBar: boolean
   setShowAgentTitleInStatusBar: (show: boolean) => void
+
+  hostColorSidebarStyle: HostColorMarkStyle
+  setHostColorSidebarStyle: (style: HostColorMarkStyle) => void
+  hostColorSidebarWidth: number
+  setHostColorSidebarWidth: (px: number) => void
+  hostColorTabBarStyle: HostColorMarkStyle
+  setHostColorTabBarStyle: (style: HostColorMarkStyle) => void
+  hostColorTabBarWidth: number
+  setHostColorTabBarWidth: (px: number) => void
 }
 
 export const useUISettingsStore = create<UISettings>()(
@@ -109,6 +136,19 @@ export const useUISettingsStore = create<UISettings>()(
       setTabNameTooltipMode: (mode) => set({ tabNameTooltipMode: mode }),
       showAgentTitleInStatusBar: false,
       setShowAgentTitleInStatusBar: (show) => set({ showAgentTitleInStatusBar: show }),
+
+      hostColorSidebarStyle: 'gradient' as HostColorMarkStyle,
+      setHostColorSidebarStyle: (style) => {
+        if (isHostColorMarkStyle(style)) set({ hostColorSidebarStyle: style })
+      },
+      hostColorSidebarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+      setHostColorSidebarWidth: (px) => set({ hostColorSidebarWidth: clampHostColorLineWidth(px) }),
+      hostColorTabBarStyle: 'bottom-line' as HostColorMarkStyle,
+      setHostColorTabBarStyle: (style) => {
+        if (isHostColorMarkStyle(style)) set({ hostColorTabBarStyle: style })
+      },
+      hostColorTabBarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+      setHostColorTabBarWidth: (px) => set({ hostColorTabBarWidth: clampHostColorLineWidth(px) }),
     }),
     {
       name: STORAGE_KEYS.UI_SETTINGS,

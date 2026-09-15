@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useUISettingsStore, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM, clampKeepAlive } from './useUISettingsStore'
+import {
+  useUISettingsStore,
+  KEEPALIVE_MAX_WEBGL,
+  KEEPALIVE_MAX_DOM,
+  clampKeepAlive,
+  HOST_COLOR_LINE_WIDTH_MIN,
+  HOST_COLOR_LINE_WIDTH_MAX,
+  clampHostColorLineWidth,
+  isHostColorMarkStyle,
+} from './useUISettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 
 describe('useUISettingsStore', () => {
@@ -224,6 +233,72 @@ describe('terminalSettingsVersion', () => {
     expect(useUISettingsStore.getState().terminalSettingsVersion).toBe(1)
     useUISettingsStore.getState().bumpTerminalSettingsVersion()
     expect(useUISettingsStore.getState().terminalSettingsVersion).toBe(2)
+  })
+})
+
+describe('host color mark settings', () => {
+  beforeEach(() => {
+    useUISettingsStore.setState({
+      hostColorSidebarStyle: 'gradient',
+      hostColorSidebarWidth: 2,
+      hostColorTabBarStyle: 'bottom-line',
+      hostColorTabBarWidth: 2,
+    })
+  })
+
+  it('defaults: sidebar gradient, tab bar bottom-line, widths 2', () => {
+    const s = useUISettingsStore.getInitialState()
+    expect(s.hostColorSidebarStyle).toBe('gradient')
+    expect(s.hostColorTabBarStyle).toBe('bottom-line')
+    expect(s.hostColorSidebarWidth).toBe(2)
+    expect(s.hostColorTabBarWidth).toBe(2)
+  })
+
+  it('constants are 1 and 6', () => {
+    expect(HOST_COLOR_LINE_WIDTH_MIN).toBe(1)
+    expect(HOST_COLOR_LINE_WIDTH_MAX).toBe(6)
+  })
+
+  it('clampHostColorLineWidth: 0→1, 9→6, 2.6→3, NaN→2', () => {
+    expect(clampHostColorLineWidth(0)).toBe(1)
+    expect(clampHostColorLineWidth(9)).toBe(6)
+    expect(clampHostColorLineWidth(2.6)).toBe(3)
+    expect(clampHostColorLineWidth(NaN)).toBe(2)
+    expect(clampHostColorLineWidth(Infinity)).toBe(2)
+    expect(clampHostColorLineWidth(4)).toBe(4)
+  })
+
+  it('isHostColorMarkStyle accepts only the four styles', () => {
+    for (const v of ['gradient', 'left-line', 'bottom-line', 'none']) {
+      expect(isHostColorMarkStyle(v)).toBe(true)
+    }
+    for (const v of ['evil', '', 'Gradient', null, undefined, 2, {}]) {
+      expect(isHostColorMarkStyle(v)).toBe(false)
+    }
+  })
+
+  it('style setters update valid values and ignore invalid', () => {
+    const store = useUISettingsStore.getState()
+    store.setHostColorSidebarStyle('left-line')
+    store.setHostColorTabBarStyle('none')
+    expect(useUISettingsStore.getState().hostColorSidebarStyle).toBe('left-line')
+    expect(useUISettingsStore.getState().hostColorTabBarStyle).toBe('none')
+    store.setHostColorSidebarStyle('evil' as never)
+    store.setHostColorTabBarStyle('evil' as never)
+    expect(useUISettingsStore.getState().hostColorSidebarStyle).toBe('left-line')
+    expect(useUISettingsStore.getState().hostColorTabBarStyle).toBe('none')
+  })
+
+  it('width setters clamp and round', () => {
+    const store = useUISettingsStore.getState()
+    store.setHostColorSidebarWidth(9)
+    store.setHostColorTabBarWidth(0)
+    expect(useUISettingsStore.getState().hostColorSidebarWidth).toBe(6)
+    expect(useUISettingsStore.getState().hostColorTabBarWidth).toBe(1)
+    store.setHostColorSidebarWidth(2.6)
+    store.setHostColorTabBarWidth(NaN)
+    expect(useUISettingsStore.getState().hostColorSidebarWidth).toBe(3)
+    expect(useUISettingsStore.getState().hostColorTabBarWidth).toBe(2)
   })
 })
 
