@@ -1015,3 +1015,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Open questions:** (1) should a typed name that collides (409) auto-suffix like generated names? Plan keeps today's behaviour (error). (2) Should Host › Sessions `onLaunched` also open the new session in a tab? Spec says "same as today" (close only); kept.
 
+
+---
+
+## Amendments after codex plan review (2026-09-16) — BINDING, override task text above
+
+A1 (high). Keep the liveness guard after the launcher is open. `SessionLauncher` takes `disabled: boolean` (true when host runtime is not connected or tmux unavailable — computed by the caller exactly like today's `disabledSubmit`/`isHostLive` in `SessionSection.tsx`) and additionally re-checks `isHostLive(hostId)` inside `run()` right before launching; when not live it refuses and shows the existing offline message. Input and all items are disabled while `disabled`. Keep/port the existing regression test "host goes offline after the form opens, before launch" (`SessionSection.test.tsx` ~526) for the New Tab entry, and add the equivalent for Host › Sessions.
+
+A2 (medium). 409 retries for generated names: 1 initial attempt + up to 5 retries. Constant `MAX_GENERATED_NAME_RETRIES = 5`; on persistent 409 the test asserts create calls for `slug-1` … `slug-6` (6 calls) then the error surfaces. Update spec wording is not needed ("retry up to 5 times" = 5 retries).
+
+A3 (low). Add a pure test with a slug containing regex metacharacters (e.g. `a.b`): live names `['a.b-1', 'axb-2']` → next name `a.b-2`.
+
+A4 (low). Add component tests: focus a project-name item and a command-icon item, press `Enter` and `Space`, assert `launch()` receives `{project}` / `{project, command}` respectively (no reliance on click in these tests).

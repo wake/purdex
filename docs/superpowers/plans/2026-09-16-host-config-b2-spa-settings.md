@@ -3886,3 +3886,17 @@ Expected: no output.
 
 **Known gaps / open questions:** see "Spec deviations" 1-9. Additionally: (a) the Snapshots page is not gated on host config (it does not read it except for rebuild templates, which fall back to defaults); (b) `inferWorkspaceHostId` is deleted with its tests (only `collectTmuxSessionHostIds` remains).
 
+
+---
+
+## Amendments after codex plan review (2026-09-16) — BINDING, override task text above
+
+A1 (high, Task 8). Capture must stay mutually exclusive with host rebuild/restore after the split. `SnapshotsSection` owns the single `useSnapshotActions` instance (single `busyRef`) and passes it down to `ClientSnapshotBlock` as a prop; `ClientSnapshotBlock` must NOT create its own action state. Test: on the dev host page, while capture is pending, host-scoped rebuild buttons are disabled and clicking them is a no-op (and vice versa).
+
+A2 (high, Task 3). `spa/src/components/settings/SnapshotSettingsSection.records.test.tsx` also calls `useResumeTemplateStore.getState().setTemplate` (around line 134). In Task 3 rewrite that case to seed a host-scoped override through `useHostConfigStore` (host `h1` status `ready`, then update `resumeTemplates.cc.exact`) and keep its re-render assertion, so Task 4's store deletion does not break it. Before deleting the store in Task 4, `rg useResumeTemplateStore spa/src` must return nothing but the store file and its own test.
+
+A3 (medium, validation). Downgrade the "verbatim mirror" claim: client validation is dialog-level field validation (name/slug/path/command/icon value shape) for fast feedback; the daemon remains the final authority. The save path must surface a daemon 400 body text inline in the dialog/list. Additionally validate client-side: project slug uniqueness within the host and max 200 items (cheap, user-facing). No client-side id pattern / resume byte limits.
+
+A4 (medium, Task 3 batch). Add a `runBatchRebuild` test where the host config store starts EMPTY for two hosts, `ensureLoaded` is spied/mocked to populate different `cc` overrides per host, and assert (a) `ensureLoaded` called once per unique host id, (b) each host's `sendKeys` command uses that host's override.
+
+A5 (medium, Task 8). Add a lower-level test calling the REAL `rebuildAllSessions(filterSnapshotByHost(snap, 'h1'))` with `createSession`/`listSessions` mocked, over a snapshot containing sessions on `h1` and `h2`; assert every `createSession` call targets `h1` and none targets `h2`.
