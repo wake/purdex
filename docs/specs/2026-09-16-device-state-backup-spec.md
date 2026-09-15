@@ -63,7 +63,9 @@ Validation (all → `400` with a short message, never partial write):
 - `capturedAt` > 0.
 - Body read through `io.LimitReader(cap+1)`; > **5 MB** → `413`.
 - `payload` is a JSON object with `version == 1`, `workspaces` array, `tabs` object, `tabOrder`
-  array; counts are computed server-side (`len(workspaces)`, `len(tabs)`). Payload stored as the
+  array, `activeTabId` and `activeWorkspaceId` each present and `null` or a string, `sessionMeta`
+  a JSON object (not `null`/array) — the same top-level contract as the SPA read guard
+  `isWellFormedSnapshotV1`, so no stored record is unreadable; counts are computed server-side (`len(workspaces)`, `len(tabs)`). Payload stored as the
   raw JSON bytes received (re-marshalled only for validation, never rewritten).
 
 ### 3.3 SPA — payload builder (`spa/src/lib/device-state/payload.ts`)

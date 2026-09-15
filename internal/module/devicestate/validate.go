@@ -79,6 +79,19 @@ func parsePayload(raw json.RawMessage) (workspaceCount, tabCount int, err error)
 		return 0, 0, errors.New("payload tabOrder must be an array")
 	}
 
+	// activeTabId / activeWorkspaceId: present, and JSON null or string —
+	// mirrors isWellFormedSnapshotV1 (spa/src/lib/snapshot/storage.ts).
+	for _, key := range []string{"activeTabId", "activeWorkspaceId"} {
+		if v, ok := obj[key]; !ok || !isNullOrString(v) {
+			return 0, 0, errors.New("payload " + key + " must be null or a string")
+		}
+	}
+
+	var sessionMeta map[string]json.RawMessage
+	if v, ok := obj["sessionMeta"]; !ok || !startsWith(v, '{') || json.Unmarshal(v, &sessionMeta) != nil {
+		return 0, 0, errors.New("payload sessionMeta must be an object")
+	}
+
 	return len(workspaces), len(tabs), nil
 }
 
@@ -87,6 +100,16 @@ func parsePayload(raw json.RawMessage) (workspaceCount, tabCount int, err error)
 func startsWith(raw []byte, c byte) bool {
 	t := bytes.TrimLeft(raw, " \t\r\n")
 	return len(t) > 0 && t[0] == c
+}
+
+// isNullOrString reports whether raw is exactly JSON null or a JSON string.
+func isNullOrString(raw []byte) bool {
+	t := bytes.TrimSpace(raw)
+	if bytes.Equal(t, []byte("null")) {
+		return true
+	}
+	var s string
+	return startsWith(t, '"') && json.Unmarshal(t, &s) == nil
 }
 
 func startsWithNumber(raw []byte) bool {

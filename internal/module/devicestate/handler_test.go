@@ -13,7 +13,7 @@ import (
 
 const (
 	testClientID = "c_0123456789ab"
-	testPayload  = `{"version":1,"workspaces":[{"id":"w1"},{"id":"w2"}],"tabs":{"t1":{"id":"t1"}},"tabOrder":["t1"]}`
+	testPayload  = `{"version":1,"workspaces":[{"id":"w1"},{"id":"w2"}],"tabs":{"t1":{"id":"t1"}},"tabOrder":["t1"],"activeTabId":"t1","activeWorkspaceId":"w1","sessionMeta":{}}`
 )
 
 func putBody(t *testing.T, name string, capturedAt int64, payload string) []byte {
@@ -73,7 +73,7 @@ func TestHandlerPutListGet(t *testing.T) {
 
 func TestHandlerPutStoresRawPayloadBytes(t *testing.T) {
 	m := newTestModule(t)
-	raw := `{ "tabOrder": [], "version": 1, "tabs": {}, "workspaces": [] }`
+	raw := `{ "tabOrder": [], "version": 1, "tabs": {}, "workspaces": [], "activeTabId": null, "activeWorkspaceId": null, "sessionMeta": {} }`
 	body := `{"deviceName":"Air","capturedAt":5,"payload":` + raw + `}`
 	rr := serveBytes(m, http.MethodPut, "/api/device-state/"+testClientID, []byte(body))
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -120,18 +120,19 @@ func TestHandlerPutBadRequests(t *testing.T) {
 		path string
 		body string
 	}{
-		"malformed json":   {"/api/device-state/" + testClientID, `{"deviceName":`},
-		"wrong type":       {"/api/device-state/" + testClientID, `{"deviceName":1,"capturedAt":1,"payload":` + testPayload + `}`},
-		"bad clientId":     {"/api/device-state/c_0123456789AB", string(putBody(t, "Air", 1, testPayload))},
-		"empty name":       {"/api/device-state/" + testClientID, string(putBody(t, "   ", 1, testPayload))},
-		"long name":        {"/api/device-state/" + testClientID, string(putBody(t, strings.Repeat("機", 65), 1, testPayload))},
-		"long appVersion":  {"/api/device-state/" + testClientID, `{"deviceName":"Air","appVersion":"` + strings.Repeat("a", 65) + `","capturedAt":1,"payload":` + testPayload + `}`},
-		"capturedAt zero":  {"/api/device-state/" + testClientID, string(putBody(t, "Air", 0, testPayload))},
-		"missing payload":  {"/api/device-state/" + testClientID, `{"deviceName":"Air","capturedAt":1}`},
-		"null payload":     {"/api/device-state/" + testClientID, `{"deviceName":"Air","capturedAt":1,"payload":null}`},
-		"array payload":    {"/api/device-state/" + testClientID, string(putBody(t, "Air", 1, `[]`))},
-		"version 2":        {"/api/device-state/" + testClientID, string(putBody(t, "Air", 1, `{"version":2,"workspaces":[],"tabs":{},"tabOrder":[]}`))},
-		"missing tabOrder": {"/api/device-state/" + testClientID, string(putBody(t, "Air", 1, `{"version":1,"workspaces":[],"tabs":{}}`))},
+		"malformed json":      {"/api/device-state/" + testClientID, `{"deviceName":`},
+		"wrong type":          {"/api/device-state/" + testClientID, `{"deviceName":1,"capturedAt":1,"payload":` + testPayload + `}`},
+		"bad clientId":        {"/api/device-state/c_0123456789AB", string(putBody(t, "Air", 1, testPayload))},
+		"empty name":          {"/api/device-state/" + testClientID, string(putBody(t, "   ", 1, testPayload))},
+		"long name":           {"/api/device-state/" + testClientID, string(putBody(t, strings.Repeat("機", 65), 1, testPayload))},
+		"long appVersion":     {"/api/device-state/" + testClientID, `{"deviceName":"Air","appVersion":"` + strings.Repeat("a", 65) + `","capturedAt":1,"payload":` + testPayload + `}`},
+		"capturedAt zero":     {"/api/device-state/" + testClientID, string(putBody(t, "Air", 0, testPayload))},
+		"missing payload":     {"/api/device-state/" + testClientID, `{"deviceName":"Air","capturedAt":1}`},
+		"null payload":        {"/api/device-state/" + testClientID, `{"deviceName":"Air","capturedAt":1,"payload":null}`},
+		"array payload":       {"/api/device-state/" + testClientID, string(putBody(t, "Air", 1, `[]`))},
+		"version 2":           {"/api/device-state/" + testClientID, string(putBody(t, "Air", 1, `{"version":2,"workspaces":[],"tabs":{},"tabOrder":[],"activeTabId":null,"activeWorkspaceId":null,"sessionMeta":{}}`))},
+		"missing tabOrder":    {"/api/device-state/" + testClientID, string(putBody(t, "Air", 1, `{"version":1,"workspaces":[],"tabs":{},"activeTabId":null,"activeWorkspaceId":null,"sessionMeta":{}}`))},
+		"missing sessionMeta": {"/api/device-state/" + testClientID, string(putBody(t, "Air", 1, `{"version":1,"workspaces":[],"tabs":{},"tabOrder":[],"activeTabId":null,"activeWorkspaceId":null}`))},
 	}
 	for name, tc := range cases {
 		rr := serveBytes(m, http.MethodPut, tc.path, []byte(tc.body))
