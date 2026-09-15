@@ -203,6 +203,25 @@ describe('useExecutionSubscription', () => {
     expect(useExecutionStore.getState().executions[KEY]?.sse ?? 'closed').toBe('closed')
   })
 
+  it('re-adding a removed host (keep-tabs delete then undo) restarts the chain from scratch', async () => {
+    const hostRow = useHostStore.getState().hosts[H]
+    const { result } = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
+    expect(result.current.problem).toBe('host_removed')
+    vi.mocked(api.getExecution).mockClear()
+    vi.mocked(api.attachObserve).mockClear()
+    vi.mocked(sse.openNexSse).mockClear()
+    vi.mocked(api.fetchExecutionEvents).mockReset().mockResolvedValueOnce({ items: [], next_cursor: 0 })
+    act(() => { useHostStore.setState({ hosts: { [H]: hostRow }, hostOrder: [H] }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(result.current.problem).toBeNull()
+    expect(api.getExecution).toHaveBeenCalledTimes(1)
+    expect(api.attachObserve).toHaveBeenCalledTimes(1)
+    expect(sse.openNexSse).toHaveBeenCalledTimes(1)
+    expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+  })
+
   // --- fix round 1 -----------------------------------------------------
 
   it('an inactive-at-mount pane claims a free slot and goes live (spec §4.3.2 step 4); once slots are full it stays paused until activation evicts the LRU', async () => {

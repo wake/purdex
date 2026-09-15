@@ -197,6 +197,21 @@ describe('useExecutionLease', () => {
     expect(api.releaseLease).toHaveBeenCalledWith(H, E, 'ls_1', { keepalive: true })
   })
 
+  it('ensureLease works again after a removed host is re-added (keep-tabs delete then undo)', async () => {
+    const hostRow = useHostStore.getState().hosts[H]
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    await act(async () => { await result.current.ensureLease() })
+    act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
+    expect(lease()).toBeNull()
+    act(() => { useHostStore.setState({ hosts: { [H]: hostRow }, hostOrder: [H] }) })
+    vi.mocked(api.attachControl).mockResolvedValue({ mode: 'control', lease_id: 'ls_2', expires_at: Date.now() + 30_000 })
+    let id = ''
+    await act(async () => { id = await result.current.ensureLease() })
+    expect(id).toBe('ls_2')
+    expect(lease()).toEqual({ leaseId: 'ls_2', expiresAt: expect.any(Number) })
+    expect(api.releaseLease).not.toHaveBeenCalled()
+  })
+
   it('rejects ensureLease immediately when the host has been removed, without attaching (host_removed)', async () => {
     const { result } = renderHook(() => useExecutionLease(H, E))
     act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })

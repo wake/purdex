@@ -149,7 +149,10 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
   const touch = useCallback(() => { lastActivity.current = Date.now() }, [])
 
   // Host removal (keep-tabs mode, spec §4.3.4): the daemon is gone, so drop
-  // local authority and stop the heartbeat without a release call.
+  // local authority and stop the heartbeat without a release call. The host
+  // coming back (undo of that delete) re-enables the pane: the next send
+  // re-acquires from scratch. This subscription only lives while mounted,
+  // so re-enabling here never revives an unmounted pane.
   // useHostStore has no subscribeWithSelector — compare prev/next by hand.
   useEffect(() => {
     return useHostStore.subscribe((state, prev) => {
@@ -157,6 +160,8 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
         disposed.current = true
         stopTimer()
         useExecutionStore.getState().setLease(hostId, executionId, null)
+      } else if (!prev.hosts[hostId] && state.hosts[hostId]) {
+        disposed.current = false
       }
     })
   }, [hostId, executionId, stopTimer])

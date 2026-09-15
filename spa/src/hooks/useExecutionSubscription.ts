@@ -29,6 +29,10 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
   const [problem, setProblem] = useState<SubscriptionProblem>(null)
   const [paused, setPaused] = useState(false)
   const key = executionKey(hostId, executionId)
+  // In the main effect's deps: a removed host that comes back (undo of a
+  // keep-tabs delete) must start a fresh chain, since hostId/executionId
+  // themselves never changed.
+  const hostPresent = useHostStore((s) => !!s.hosts[hostId])
   const sseRef = useRef<NexSseHandle | null>(null)
   // Set by the main effect once history is loaded (spec order contract): a
   // function that (re)opens the live stream. Read only by the activation
@@ -68,7 +72,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
 
     // Spec §4.3.2 step 5: the pane's stored host is the only host we talk
     // to. Missing → host_removed now, no request, no fallback.
-    if (!useHostStore.getState().hosts[hostId]) {
+    if (!hostPresent) {
       setProblem('host_removed')
       store().setSse(hostId, executionId, 'closed', 'host_removed')
       return
@@ -258,7 +262,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
       subscriptionSlots.release(hostId, key)
       teardown()
     }
-  }, [hostId, executionId, key])
+  }, [hostId, executionId, key, hostPresent])
 
   return { problem, paused }
 }
