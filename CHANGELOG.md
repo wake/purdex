@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.358] - 2026-09-16
+
+### Feat: Daemon hostconfig 模組 — 每台 host 的專案／指令／resume 範本（B1，#1065）
+
+Daemon 新增 `hostconfig` 模組（`DataDir/host_config.db`），存放每台 host 的 projects、commands 與 resume templates，作為 host launcher 的後端基礎。
+
+- **讀取**：`GET /api/hostconfig` 回傳三個集合與目前 revision。
+- **整批取代＋CAS**：`PUT /api/hostconfig/{projects,commands,resume-templates}` 以整個集合取代，帶 `baseRevision` 做 compare-and-swap（`BEGIN IMMEDIATE`）；revision 過期一律回 409 並附目前狀態，即使送來的項目不合法也以 409 優先。
+- **路徑檢查**：`POST /api/hostconfig/check-path` 支援 `~` 展開，回傳 `dir`／`not_dir`／`missing`／`error`。
+- **輸入防護**：欄位驗證上限、request body 1 MB 上限、拒絕重複 JSON key。
+- 尚無 SPA 使用端（B2／B3 接續）。
+- ⚠️ 需重新建置 daemon 並重啟才生效。
+
 ## [1.0.0-alpha.357] - 2026-09-16
 
 ### Feat: New Tab 每台 host 一個 Sessions 區塊＋host 選單樣式調整（#1064）
