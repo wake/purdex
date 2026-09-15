@@ -491,7 +491,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import {
   nexFetch, fetchNexCapabilities, listExecutions, fetchExecutionEvents,
-  attachObserve, attachControl, sendMessage, releaseLease, resolveExecutionHostId,
+  attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
 } from './nex-api'
 import { NexApiError } from './types'
 import { NEX_CLIENT_ID_RE } from './client-id'
@@ -503,20 +503,20 @@ function json(body: unknown, status = 200): Response {
 }
 
 describe('nex-api', () => {
+  // reset() seeds a default token-less host; add ours explicitly and keep its
+  // id — never search hostOrder by name, the default is also called "mlab".
+  let hostId: string
+
   beforeEach(() => {
     useHostStore.getState().reset()
-    useHostStore.getState().addHost({ name: 'mlab', ip: '100.64.0.2', port: 7860, token: 'tok-1' } as never)
+    hostId = useHostStore.getState().addHost({ id: 'host-mlab', name: 'mlab', ip: '100.64.0.2', port: 7860, token: 'tok-1' })
     vi.stubGlobal('fetch', vi.fn())
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  function hostId(): string {
-    return useHostStore.getState().hostOrder.find((id) => useHostStore.getState().hosts[id].name === 'mlab')!
-  }
-
   it('nexFetch prefixes /api/nex, sends Bearer and X-Pdx-Client, never a ticket', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({}))
-    await nexFetch(hostId(), '/v1/capabilities')
+    await nexFetch(hostId, '/v1/capabilities')
     const [url, init] = testGlobal.fetch.mock.calls[0]
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/capabilities')
     expect(url).not.toContain('ticket')
@@ -527,14 +527,14 @@ describe('nex-api', () => {
 
   it('fetchNexCapabilities returns the parsed body', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ phase: 'P1a', host_id: 'mlab', verbs: ['attach'], lease: { ttl_seconds: 120 } }))
-    const caps = await fetchNexCapabilities(hostId())
+    const caps = await fetchNexCapabilities(hostId)
     expect(caps.phase).toBe('P1a')
     expect(caps.lease.ttl_seconds).toBe(120)
   })
 
   it('listExecutions builds the query string', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ items: [], next_cursor: '' }))
-    await listExecutions(hostId(), { state: 'running', includeArchived: true, cursor: 'c1', limit: 20 })
+    await listExecutions(hostId, { state: 'running', includeArchived: true, cursor: 'c1', limit: 20 })
     const [url] = testGlobal.fetch.mock.calls[0]
     const u = new URL(url)
     expect(u.pathname).toBe('/api/nex/v1/executions')
@@ -546,14 +546,14 @@ describe('nex-api', () => {
 
   it('fetchExecutionEvents passes after/limit and encodes the id', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ items: [], next_cursor: 0 }))
-    await fetchExecutionEvents(hostId(), 'exc a', { after: 41, limit: 500 })
+    await fetchExecutionEvents(hostId, 'exc a', { after: 41, limit: 500 })
     const [url] = testGlobal.fetch.mock.calls[0]
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc%20a/events?after=41&limit=500')
   })
 
   it('attachObserve / attachControl post the mode as JSON', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ mode: 'observe', stream_url: '/api/nex/v1/events?execution_id=exc_1', cursor: 7, state: 'idle' }))
-    const obs = await attachObserve(hostId(), 'exc_1')
+    const obs = await attachObserve(hostId, 'exc_1')
     expect(obs.cursor).toBe(7)
     let [, init] = testGlobal.fetch.mock.calls[0]
     expect(init.method).toBe('POST')
@@ -561,7 +561,7 @@ describe('nex-api', () => {
     expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
 
     testGlobal.fetch.mockResolvedValueOnce(json({ mode: 'control', lease_id: 'ls_1', expires_at: 1 }))
-    const ctl = await attachControl(hostId(), 'exc_1')
+    const ctl = await attachControl(hostId, 'exc_1')
     expect(ctl.lease_id).toBe('ls_1')
     ;[, init] = testGlobal.fetch.mock.calls[1]
     expect(JSON.parse(init.body)).toEqual({ mode: 'control' })
@@ -569,39 +569,47 @@ describe('nex-api', () => {
 
   it('sendMessage posts lease_id + text; releaseLease sends DELETE with lease_id', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ turn_id: 'trn_1', delivery: 'queued' }))
-    const r = await sendMessage(hostId(), 'exc_1', 'ls_1', 'hello')
+    const r = await sendMessage(hostId, 'exc_1', 'ls_1', 'hello')
     expect(r.delivery).toBe('queued')
     let [url, init] = testGlobal.fetch.mock.calls[0]
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/messages')
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1', text: 'hello' })
 
     testGlobal.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
-    await releaseLease(hostId(), 'exc_1', 'ls_1')
+    await releaseLease(hostId, 'exc_1', 'ls_1')
     ;[url, init] = testGlobal.fetch.mock.calls[1]
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/attach')
     expect(init.method).toBe('DELETE')
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
   })
 
+  it('archiveExecution posts the target archived flag (api/interact.go:81)', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ archived: true }))
+    await archiveExecution(hostId, 'exc_1')
+    expect(JSON.parse(testGlobal.fetch.mock.calls.at(-1)![1].body)).toEqual({ archived: true })
+    testGlobal.fetch.mockResolvedValueOnce(json({ archived: false }))
+    await archiveExecution(hostId, 'exc_1', true)
+    expect(JSON.parse(testGlobal.fetch.mock.calls.at(-1)![1].body)).toEqual({ archived: false })
+  })
+
   it('throws NexApiError with the structured code on non-2xx', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ error: 'held', code: 'lease_held' }, 409))
-    await expect(attachControl(hostId(), 'exc_1')).rejects.toMatchObject({ code: 'lease_held', status: 409 })
+    await expect(attachControl(hostId, 'exc_1')).rejects.toMatchObject({ code: 'lease_held', status: 409 })
     testGlobal.fetch.mockResolvedValueOnce(json({ error: 'gone', code: 'execution_not_found' }, 404))
-    const err = await attachObserve(hostId(), 'nope').catch((e) => e)
+    const err = await attachObserve(hostId, 'nope').catch((e) => e)
     expect(err).toBeInstanceOf(NexApiError)
     expect(err.code).toBe('execution_not_found')
   })
 
   it('resolveExecutionHostId prefers a known host and falls back to the first', () => {
-    const id = hostId()
-    expect(resolveExecutionHostId(id)).toBe(id)
+    expect(resolveExecutionHostId(hostId)).toBe(hostId)
     expect(resolveExecutionHostId('unknown')).toBe(useHostStore.getState().hostOrder[0])
     expect(resolveExecutionHostId(undefined)).toBe(useHostStore.getState().hostOrder[0])
   })
 })
 ```
 
-> `addHost` takes `{ id?, name, ip, port, token? }` and returns the id (`useHostStore.ts:54`) — use the return value instead of searching `hostOrder`: `hostId = useHostStore.getState().addHost({ name: 'mlab', ip: '100.64.0.2', port: 7860, token: 'tok-1' })`. Same in Task 5.
+> `addHost` takes `{ id?, name, ip, port, token? }` and returns the id (`useHostStore.ts:54`); `reset()` re-seeds a default token-less host also named `mlab` (`useHostStore.ts:70-80`), which is why the test keeps `addHost`'s return value rather than searching by name.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -971,8 +979,7 @@ describe('nex-sse', () => {
   let hostId: string
   beforeEach(() => {
     useHostStore.getState().reset()
-    useHostStore.getState().addHost({ name: 'mlab', ip: '100.64.0.2', port: 7860, token: 'tok-1' } as never)
-    hostId = useHostStore.getState().hostOrder.find((id) => useHostStore.getState().hosts[id].name === 'mlab')!
+    hostId = useHostStore.getState().addHost({ id: 'host-mlab', name: 'mlab', ip: '100.64.0.2', port: 7860, token: 'tok-1' })
     vi.useFakeTimers()
   })
   afterEach(() => vi.useRealTimers())
@@ -1064,6 +1071,22 @@ describe('nex-sse', () => {
     expect(fetch503).toHaveBeenCalledTimes(2)
   })
 
+  it('close() while the reader is blocked cancels it, emits closed once and never reconnects', async () => {
+    // A stream that never enqueues and never closes: read() stays pending
+    // until cancel() — exactly the shape of an idle live SSE connection.
+    const body = new ReadableStream<Uint8Array>({ start() {} })
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(body, { status: 200 }))
+    const onStatus = vi.fn()
+    const h = openNexSse({ hostId, url: '/api/nex/v1/events', getLastEventId: () => null, onFrame: () => {}, onStatus, fetchImpl, backoff: { jitter: 0 } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onStatus).toHaveBeenLastCalledWith('open')
+    h.close()
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(onStatus.mock.calls.filter((c) => c[0] === 'closed')).toHaveLength(1)
+    expect(onStatus.mock.calls.some((c) => c[0] === 'reconnecting')).toBe(false)
+  })
+
   it('close() aborts the fetch, cancels a pending reconnect and is idempotent', async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([]))
     const onStatus = vi.fn()
@@ -1145,6 +1168,7 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
   let closed = false
   let attempt = 0
   let controller: AbortController | null = null
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
 
   const status = (s: NexSseStatus, err?: Error) => { if (!closed || s === 'closed') opts.onStatus(s, err) }
@@ -1191,7 +1215,7 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
     const openedAt = Date.now()
     const parser = new SseParser()
     const decoder = new TextDecoder()
-    const reader = res.body.getReader()
+    reader = res.body.getReader()
     try {
       for (;;) {
         const { value, done } = await reader.read()
@@ -1203,6 +1227,8 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
       }
     } catch {
       // aborted or network error — fall through to reconnect
+    } finally {
+      reader = null
     }
     if (closed) return
     if (Date.now() - openedAt >= backoff.stableMs) attempt = 0
@@ -1217,6 +1243,10 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
       closed = true
       if (timer) { clearTimeout(timer); timer = null }
       controller?.abort()
+      // abort() alone does not wake a read() that is already pending on a
+      // locked reader (and test streams may not observe the signal at all);
+      // cancel the reader explicitly so the loop exits now, not on the next chunk.
+      void reader?.cancel().catch(() => {})
       opts.onStatus('closed')
     },
   }
@@ -1226,7 +1256,7 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane/spa && npx vitest run src/lib/nex/nex-sse.test.ts`
-Expected: PASS (6 tests). If `Date.now()` under fake timers makes `stableMs` reset misbehave in the backoff test, use `vi.setSystemTime` advances (the test above only relies on `advanceTimersByTimeAsync`, which also advances `Date.now()` in vitest ≥ 1).
+Expected: PASS (7 tests). If `Date.now()` under fake timers makes `stableMs` reset misbehave in the backoff test, use `vi.setSystemTime` advances (the test above only relies on `advanceTimersByTimeAsync`, which also advances `Date.now()` in vitest ≥ 1).
 
 - [ ] **Step 5: Commit**
 
@@ -1311,6 +1341,7 @@ describe('applyDurableEvent', () => {
       { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'and more' }], stop_reason: null } },
     ])
     expect(s.pendingLocal).toBeNull()
+    expect(s.summaryStale).toBe(true)
   })
 
   it('skips message_accepted with no text (site-wide stripped) without adding a bubble', () => {
@@ -1372,13 +1403,15 @@ describe('frameToEvent / isLifecycleKind', () => {
     expect(frameToEvent({ id: null, event: 'stream_event', data: '{}' })).toBeNull()
     expect(frameToEvent({ id: '7', event: 'assistant', data: '{not json' })).toBeNull()
   })
-  it('builds a NexEvent from a durable frame', () => {
-    expect(frameToEvent({ id: '7', event: 'assistant', data: '{"seq":7,"execution_id":"exc_1","kind":"assistant","payload":{"type":"assistant"},"created_at":9}' }))
-      .toEqual({ seq: 7, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 9 })
+  it('builds a NexEvent from a Nexen durable frame: bare payload, seq from id:, kind from event: (api/sse.go:295)', () => {
+    expect(frameToEvent({ id: '7', event: 'assistant', data: '{"type":"assistant"}' }))
+      .toEqual({ seq: 7, execution_id: '', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 })
+    expect(frameToEvent({ id: '9', event: 'execution.terminal', data: '{"turn_id":"t","reason":"completed","state":"idle"}' }))
+      .toEqual({ seq: 9, execution_id: '', kind: 'execution.terminal', payload: { turn_id: 't', reason: 'completed', state: 'idle' }, created_at: 0 })
   })
-  it('falls back to the frame id/event when the data lacks seq/kind', () => {
-    expect(frameToEvent({ id: '8', event: 'user', data: '{"type":"user"}' }))
-      .toEqual({ seq: 8, execution_id: '', kind: 'user', payload: { type: 'user' }, created_at: 0 })
+  it('also accepts a full eventView wrapper (history item shape) for forward compatibility', () => {
+    expect(frameToEvent({ id: '8', event: 'assistant', data: '{"seq":8,"execution_id":"exc_1","kind":"assistant","payload":{"type":"assistant"},"created_at":9}' }))
+      .toEqual({ seq: 8, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 9 })
   })
   it('classifies kinds', () => {
     expect(isLifecycleKind('execution.running')).toBe(true)
@@ -1389,7 +1422,7 @@ describe('frameToEvent / isLifecycleKind', () => {
 })
 ```
 
-> Verified against `~/Workspace/wake/nexen/api/sse.go:295`: a durable frame is `id: <seq>\nevent: <kind>\ndata: <payload JSON>` — the `data` is the **bare payload**, not the `eventView` wrapper. So the primary path of `frameToEvent` is "seq from `id:`, kind from `event:`, payload = data" (the "falls back" test); the full-shape branch is kept only because `GET …/events` history items ARE the wrapper and a future daemon could emit it on the wire too. Keep both tests.
+> Verified against `~/Workspace/wake/nexen/api/sse.go:295`: a durable frame is `id: <seq>\nevent: <kind>\ndata: <payload JSON>` — the `data` is the **bare payload**, not the `eventView` wrapper. So the **primary** path of `frameToEvent` is "seq from `id:`, kind from `event:`, payload = data" (first test); the wrapper branch (second test) exists only because `GET …/events` history items ARE the wrapper and a future daemon could emit it on the wire. Implement the bare-payload path first; the wrapper detection must require BOTH `kind: string` and `payload: object` so a provider payload that happens to have a `kind` key is not misread.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1510,8 +1543,10 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       return patchSummary(next, {})
     }
     case 'execution.message_accepted': {
+      // Also a lifecycle event: turn_count / live_turn_id / event_count on the
+      // summary moved, so the hook refetches (summaryStale) like any other.
       const text = str(p, 'text')
-      next = { ...next, pendingLocal: null }
+      next = { ...next, pendingLocal: null, summaryStale: true }
       if (text) next = { ...next, messages: [...next.messages, userBubble(text)] }
       return next
     }
@@ -1566,7 +1601,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane/spa && npx vitest run src/lib/nex/event-reducer.test.ts`
-Expected: PASS (13 tests).
+Expected: PASS (14 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1639,6 +1674,22 @@ describe('useExecutionStore', () => {
     const before = useExecutionStore.getState().executions['h:exc_1']
     s.applyEvents('h', 'exc_1', [ev(1, 'assistant', { type: 'assistant' })])
     expect(useExecutionStore.getState().executions['h:exc_1']).toBe(before)
+  })
+
+  it('applyEvents with nothing applicable does not create a phantom entry', () => {
+    useExecutionStore.getState().applyEvents('h', 'exc_ghost', [{ ...ev(0, 'assistant'), seq: Number.NaN }])
+    expect(useExecutionStore.getState().executions['h:exc_ghost']).toBeUndefined()
+  })
+
+  it('applyEvents assumes ascending history-before-live order; callers must buffer live frames until historyLoaded', () => {
+    // Documents the contract the P-B.2 subscription hook must honour:
+    // attach(observe) → apply history pages ascending → THEN open SSE with
+    // Last-Event-ID = lastSeq. A live frame applied first raises the high-water
+    // mark and every older history event is (correctly) dropped as a duplicate.
+    const s = useExecutionStore.getState()
+    s.applyEvents('h', 'exc_1', [ev(20, 'assistant', { type: 'assistant', n: 20 })])
+    s.applyEvents('h', 'exc_1', [ev(1, 'assistant', { type: 'assistant', n: 1 }), ev(2, 'assistant', { type: 'assistant', n: 2 })])
+    expect(useExecutionStore.getState().executions['h:exc_1'].messages).toHaveLength(1)
   })
 
   it('setSummary stores the summary and clears summaryStale', () => {
@@ -1736,7 +1787,10 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
       const key = executionKey(hostId, executionId)
       const cur = s.executions[key] ?? defaultExecutionState()
       const next = fn(cur)
-      if (next === cur && key in s.executions) return s
+      // A reducer no-op (old/NaN seq) must not materialise an empty entry for
+      // an execution nobody has otherwise touched; setters always return a
+      // fresh object so they still create the entry on first use.
+      if (next === cur) return s
       return { executions: { ...s.executions, [key]: next } }
     })
 
@@ -1782,7 +1836,7 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane/spa && npx vitest run src/stores/useExecutionStore.test.ts`
-Expected: PASS (6 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1804,20 +1858,26 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `spa/src/lib/host-lifecycle.test.ts` inside the existing top-level `describe` (adapt the host seeding to whatever helper the file already uses — the existing tests seed two hosts because the cascade vetoes deleting the last one):
+`spa/src/lib/host-lifecycle.test.ts` already defines `HOST_A` / `HOST_B` (lines ~25-26) and a `resetAllStores()` helper (~32-51) that every test calls. Three edits:
+
+1. Top import: `import { useExecutionStore } from '../stores/useExecutionStore'`
+2. Inside `resetAllStores()`, add `useExecutionStore.setState({ executions: {} })`
+3. Append inside the existing top-level `describe`:
 
 ```ts
   it('clears useExecutionStore entries for the removed host only', () => {
-    // seed two hosts the way the sibling tests do, then:
-    useExecutionStore.setState({ executions: {} })
-    useExecutionStore.getState().applyEvents(hostA, 'exc_1', [{ seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 }])
-    useExecutionStore.getState().applyEvents(hostB, 'exc_1', [{ seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 }])
-    deleteHostCascade(hostA, false)
-    expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${hostB}:exc_1`])
+    useExecutionStore.getState().applyEvents(HOST_A, 'exc_1', [
+      { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
+    ])
+    useExecutionStore.getState().applyEvents(HOST_B, 'exc_1', [
+      { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
+    ])
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
   })
 ```
-
-with `import { useExecutionStore } from '../stores/useExecutionStore'` at the top.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1870,3 +1930,16 @@ Expected: all test files pass (baseline was 404 files / 5034 tests before this p
 - Spec coverage: §4.2.1 → T1; §4.2.2 → T2+T3; §4.2.3 → T4+T5; §4.2.4 → T6+T7; §4.3.4 clearHost ordering → T8; I1 → T5 test 1; I2 → T3 test 1 + T5 test 2; I4 → T6 idempotence + T5 transient frame id null; I5 → T5 reconnect test; I11 (reducer half) → T6 lease test; I12 (state half) → T6 pendingSend/sendError tests. I3/I6/I7/I10/I13 are P-B.2 (hooks/components).
 - `summaryStale` is an addition over the spec's state list (spec §4.2.4 says "patch from payload where present"); it is the mechanism by which the P-B.2 hook honours "the summary is authoritative" without polling. Recorded here so the P-B.2 plan uses it.
 - Types used consistently: `ExecutionState` fields identical in T6 (definition), T7 (setters) and the spec; `NexEvent` shape identical in T2, T6, T7, T8.
+
+## Codex plan review disposition (`task-mu28nb2s-a747mo`, one round, gpt-5.5)
+
+| # | Finding | Disposition |
+|---|---|---|
+| P1-1 | Task 3/5 test seeding searched `hostOrder` by name and hit the default token-less `mlab` | Fixed: keep `addHost`'s return value (`id: 'host-mlab'`) |
+| P1-2 | Task 6 `frameToEvent` primary test expected the eventView wrapper; Nexen SSE `data:` is the bare payload | Fixed: bare payload is the primary test, wrapper is the compatibility test, note tightened |
+| P2-1 | `close()` never cancels a locked reader; hang-stream test would leave `read()` pending | Fixed: module-level `reader`, `finally { reader = null }`, `reader.cancel()` in `close()`, new test |
+| P2-2 | Single `lastSeq` high-water mark requires history-before-live; contract not pinned | Fixed: Task 7 test documents the ordering contract for the P-B.2 hook |
+| P2-3 | `execution.message_accepted` did not set `summaryStale` | Fixed |
+| P2-4 | Task 8 snippet used undefined `hostA/hostB`, missed `resetAllStores()` | Fixed: uses `HOST_A/HOST_B`, resets the store in the helper |
+| P3-1 | `patch` no-op check materialised phantom entries | Fixed: `if (next === cur) return s` + test |
+| P3-2 | archive body not pinned by a test | Fixed: test added |
