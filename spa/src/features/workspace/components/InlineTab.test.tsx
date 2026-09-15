@@ -51,14 +51,81 @@ beforeEach(() => {
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
     codexIconVariant: 'openai',
+    hostColorSidebarStyle: 'gradient',
+    hostColorSidebarWidth: 2,
   })
   useSessionStore.setState({
     sessions: { h1: [{ code: 'S1', name: 'work' }] as never },
     activeHostId: null,
     activeCode: null,
   })
-  useHostStore.setState({ runtime: {} })
+  useHostStore.setState({
+    runtime: {},
+    hosts: { h1: { id: 'h1', name: 'h1', ip: '127.0.0.1', port: 7860, order: 0 } },
+  })
   useLayoutStore.setState(useLayoutStore.getInitialState())
+})
+
+function setH1Color(color: string) {
+  const h1 = useHostStore.getState().hosts.h1
+  useHostStore.setState({ hosts: { h1: { ...h1, color } } })
+}
+
+function renderInline(tab: Tab = baseTab) {
+  return render(
+    <InlineTab
+      tab={tab}
+      isActive={false}
+      onSelect={() => {}}
+      onClose={() => {}}
+      onMiddleClick={() => {}}
+      onContextMenu={() => {}}
+    />,
+  )
+}
+
+describe('InlineTab — host color mark', () => {
+  it('renders one gradient mark as first child when host has a color', () => {
+    setH1Color('#3b82f6')
+    renderInline()
+    const marks = screen.getAllByTestId('host-color-mark')
+    expect(marks).toHaveLength(1)
+    expect(marks[0]).toHaveAttribute('data-style', 'gradient')
+    expect(screen.getByTestId('inline-tab-row').firstElementChild).toBe(marks[0])
+  })
+
+  it('renders no mark when host has no color', () => {
+    renderInline()
+    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+  })
+
+  it("renders no mark when sidebar style is 'none'", () => {
+    setH1Color('#3b82f6')
+    useUISettingsStore.setState({ hostColorSidebarStyle: 'none' })
+    renderInline()
+    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+  })
+
+  it('reflects left-line width', () => {
+    setH1Color('#3b82f6')
+    useUISettingsStore.setState({ hostColorSidebarStyle: 'left-line', hostColorSidebarWidth: 4 })
+    renderInline()
+    const mark = screen.getByTestId('host-color-mark')
+    expect(mark).toHaveAttribute('data-style', 'left-line')
+    expect(mark.style.width).toBe('4px')
+  })
+
+  it('renders no mark for a tab without a tmux-session pane', () => {
+    setH1Color('#3b82f6')
+    const tab = {
+      ...baseTab,
+      id: 't2',
+      kind: 'new-tab',
+      layout: { type: 'leaf', pane: { id: 't2-pane', content: { kind: 'new-tab' } } },
+    } as never
+    renderInline(tab)
+    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+  })
 })
 
 describe('InlineTab — indicator styles', () => {

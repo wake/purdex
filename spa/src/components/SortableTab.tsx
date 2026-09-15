@@ -7,6 +7,8 @@ import { TabIcon } from './TabIcon'
 import { HoverTooltip } from './HoverTooltip'
 import { shouldShowGlobalUnreadPip } from './tab-icon-helpers'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
+import { HostColorMark } from './HostColorMark'
+import { useTabHostColor } from '../hooks/useTabHostColor'
 
 interface Props {
   tab: Tab
@@ -37,6 +39,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
 
   const t = useI18nStore((s) => s.t)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
+  const hostColorStyle = useUISettingsStore((s) => s.hostColorTabBarStyle)
+  const hostColorWidth = useUISettingsStore((s) => s.hostColorTabBarWidth)
+  const hostColor = useTabHostColor(tab)
   const {
     displayTitle: label,
     IconComponent,
@@ -99,6 +104,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
             style={{ backgroundColor: '#ef4444' }} />
         )}
         {showTooltip && <HoverTooltip placement="top">{label}</HoverTooltip>}
+        <HostColorMark color={hostColor} style={hostColorStyle} width={hostColorWidth} zIndex={1} />
       </button>
     )
   }
@@ -164,6 +170,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           </button>
         </span>
       )}
+      <HostColorMark color={hostColor} style={hostColorStyle} width={hostColorWidth} zIndex={1} />
     </div>
   )
 }

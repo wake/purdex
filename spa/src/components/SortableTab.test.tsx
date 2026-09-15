@@ -56,10 +56,70 @@ beforeEach(() => {
   registerModule({ id: 'session', name: 'Session', panes: [{ kind: 'tmux-session', component: () => null }] })
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
-  useHostStore.setState({ runtime: {} })
+  useHostStore.setState({
+    runtime: {},
+    hosts: { h1: { id: 'h1', name: 'h1', ip: '127.0.0.1', port: 7860, order: 0 } },
+  })
   useAgentStore.setState({ unread: {}, statuses: {}, subagents: {} })
-  useUISettingsStore.setState({ tabIndicatorStyle: 'badge', tabNameTooltipMode: 'both' })
+  useUISettingsStore.setState({
+    tabIndicatorStyle: 'badge',
+    tabNameTooltipMode: 'both',
+    hostColorTabBarStyle: 'bottom-line',
+    hostColorTabBarWidth: 2,
+  })
   useI18nStore.setState({ t: (k: string) => k })
+})
+
+function setH1Color(color: string) {
+  const h1 = useHostStore.getState().hosts.h1
+  useHostStore.setState({ hosts: { h1: { ...h1, color } } })
+}
+
+describe('SortableTab — host color mark', () => {
+  it('renders one bottom-line mark as last child of a normal tab', () => {
+    setH1Color('#3b82f6')
+    const { container } = render(<SortableTab {...defaultProps} />)
+    const marks = screen.getAllByTestId('host-color-mark')
+    expect(marks).toHaveLength(1)
+    expect(marks[0]).toHaveAttribute('data-style', 'bottom-line')
+    expect(marks[0].style.zIndex).toBe('1')
+    expect(container.querySelector('[data-tab-id="t1"]')!.lastElementChild).toBe(marks[0])
+  })
+
+  it('renders the mark as last child of a pinned tab', () => {
+    setH1Color('#3b82f6')
+    const pinnedTab = makeTestTab('t1', { pinned: true })
+    const { container } = render(<SortableTab {...defaultProps} tab={pinnedTab} pinned />)
+    const marks = screen.getAllByTestId('host-color-mark')
+    expect(marks).toHaveLength(1)
+    expect(container.querySelector('[data-tab-id="t1"]')!.lastElementChild).toBe(marks[0])
+  })
+
+  it('renders no mark when host has no color', () => {
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+  })
+
+  it("renders no mark when tab bar style is 'none'", () => {
+    setH1Color('#3b82f6')
+    useUISettingsStore.setState({ hostColorTabBarStyle: 'none' })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+  })
+
+  it('reflects bottom-line width as height', () => {
+    setH1Color('#3b82f6')
+    useUISettingsStore.setState({ hostColorTabBarWidth: 4 })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.getByTestId('host-color-mark').style.height).toBe('4px')
+  })
+
+  it('renders no mark for a tab without a tmux-session pane', () => {
+    setH1Color('#3b82f6')
+    const tab = { ...createTab({ kind: 'new-tab' }), id: 't1' }
+    render(<SortableTab {...defaultProps} tab={tab} />)
+    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+  })
 })
 
 describe('SortableTab', () => {
