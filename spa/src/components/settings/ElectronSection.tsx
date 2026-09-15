@@ -8,20 +8,25 @@ export function ElectronSection() {
 
   // Tray visibility is owned by the main process (app-prefs.json); null until
   // the first IPC read resolves, shown as "on" in the meantime.
+  // The IPC may be missing when the dev server hot-loads a newer SPA into an
+  // older shell whose preload predates it — disable the row rather than show
+  // a switch that cannot do anything.
+  const trayApi = window.electronAPI?.tray
   const [showTray, setShowTray] = useState<boolean | null>(null)
   useEffect(() => {
     let cancelled = false
-    window.electronAPI?.tray?.getVisible()
+    trayApi?.getVisible()
       .then((v) => { if (!cancelled) setShowTray(v) })
       .catch(() => { /* IPC unavailable — keep the default */ })
     return () => { cancelled = true }
-  }, [])
+  }, [trayApi])
 
   const toggleTray = async (v: boolean) => {
+    if (!trayApi) return
     const prev = showTray
     setShowTray(v)
     try {
-      const applied = await window.electronAPI!.tray.setVisible(v)
+      const applied = await trayApi.setVisible(v)
       setShowTray(applied)
     } catch {
       setShowTray(prev)
@@ -35,7 +40,7 @@ export function ElectronSection() {
         <p className="text-xs text-text-secondary mb-6">{t('settings.electron.desc')}</p>
       </div>
       <div className="space-y-4">
-        <SettingItem label={t('settings.electron.tray.label')} description={t('settings.electron.tray.desc')}>
+        <SettingItem label={t('settings.electron.tray.label')} description={t('settings.electron.tray.desc')} disabled={!trayApi}>
           <ToggleSwitch label={t('settings.electron.tray.aria')} checked={showTray ?? true} onChange={toggleTray} />
         </SettingItem>
         <div className="flex items-center justify-between">

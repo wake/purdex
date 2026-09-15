@@ -57,9 +57,13 @@ describe('ElectronSection — tray toggle', () => {
     await waitFor(() => expect(getSwitch().getAttribute('aria-checked')).toBe('true'))
   })
 
-  it('still renders (defaulting to on) when the tray API is unavailable', async () => {
+  it('disables the row when the tray IPC is missing (older shell serving a newer SPA)', async () => {
     window.electronAPI = { ...window.electronAPI!, tray: undefined } as unknown as typeof window.electronAPI
     await renderIt()
-    expect(getSwitch().getAttribute('aria-checked')).toBe('true')
+    const sw = getSwitch()
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    expect(sw.closest('[inert]')).not.toBeNull()
+    fireEvent.click(sw)
+    expect(mockSetVisible).not.toHaveBeenCalled()
   })
 })
