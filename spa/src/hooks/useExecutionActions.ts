@@ -2,7 +2,7 @@
 // (spec §4.3.3): send, interrupt, terminate. Every one goes through
 // ensureLease(). Owns the restored draft after a failed send; ExecutionView
 // composes this with the subscription/lease hooks and only renders.
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { interruptExecution, sendMessage, terminateExecution } from '../lib/nex/nex-api'
 import { NexApiError } from '../lib/nex/types'
@@ -24,6 +24,10 @@ export function useExecutionActions(
   const { ensureLease, touch, forget } = lease
   const key = executionKey(hostId, executionId)
   const [draft, setDraft] = useState<string | null>(null) // restored text after a failed send
+  // Monotonic send attempt counter. A send whose POST outlives its turn
+  // (turn_stalled cleared the lock, the user sent again) must not touch the
+  // newer send's bubble, lock, lastTurn, error or draft when it settles.
+  const sendAttempt = useRef(0)
 
   const store = () => useExecutionStore.getState()
   // A fetch that never reached the daemon rejects with a TypeError, not a
@@ -57,9 +61,11 @@ export function useExecutionActions(
     touch()
     store().setPendingLocal(hostId, executionId, { text, delivery: null })
     store().setPendingSend(hostId, executionId, true)
+    const attempt = ++sendAttempt.current
     try {
       const leaseId = await ensureLease()
       const r = await sendMessage(hostId, executionId, leaseId, text)
+      if (attempt !== sendAttempt.current) return
       // execution.message_accepted (execution/service.go:794-807) can land
       // before this resolves and already clear pendingLocal + push the
       // durable bubble; writing it back unconditionally here would
@@ -70,6 +76,9 @@ export function useExecutionActions(
       }
       store().setLastTurn(hostId, executionId, { turnId: r.turn_id, delivery: r.delivery })
     } catch (e) {
+      // Superseded: skip fail() too — a stale lease_* error must not forget
+      // a lease the newer send may be using; that send reports its own.
+      if (attempt !== sendAttempt.current) return
       store().setPendingLocal(hostId, executionId, null)
       store().setPendingSend(hostId, executionId, false)
       setDraft(text)
