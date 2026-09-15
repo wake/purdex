@@ -213,4 +213,15 @@ describe('useRouteSync', () => {
     const tab = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
     expect(getPrimaryPane(tab.layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
   })
+
+  it('opens /execution/<unknownHost>/<id> with the unknown host verbatim, never falling back to another daemon (spec §4.3.2 step 5)', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'H1', ip: '1', port: 1, order: 0 } } as never,
+      hostOrder: ['h1'], activeHostId: 'h1', runtime: {},
+    })
+    const mem = memoryLocation({ path: '/execution/unknown-host/exc_1', record: true })
+    renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
+    const tab = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
+    expect(getPrimaryPane(tab.layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'unknown-host' })
+  })
 })

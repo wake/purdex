@@ -4,6 +4,7 @@ import {
   registerDeeplinkResolver,
   type ResolveDeeplinkDeps,
 } from './deeplinkResolver'
+import { resolveExecutionHostId } from '../nex/resolve-host'
 
 function makeDeps(over: Partial<ResolveDeeplinkDeps> = {}) {
   const deps: ResolveDeeplinkDeps = {
@@ -27,6 +28,12 @@ describe('resolveDeeplink', () => {
     await resolveDeeplink({ executionId: '' }, deps)
     expect(deps.resolveHostId).not.toHaveBeenCalled()
     expect(deps.openDetail).not.toHaveBeenCalled()
+  })
+
+  it('with the real resolveExecutionHostId, an unknown host hint passes through verbatim (spec §4.3.2 step 5)', async () => {
+    const deps = makeDeps({ resolveHostId: resolveExecutionHostId })
+    await resolveDeeplink({ executionId: 'exc_1', host: 'unknown-host' }, deps)
+    expect(deps.openDetail).toHaveBeenCalledWith('exc_1', 'unknown-host')
   })
 })
 

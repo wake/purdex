@@ -177,9 +177,14 @@ describe('nex-api', () => {
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
   })
 
-  it('resolveExecutionHostId prefers a known host and falls back to the first', () => {
+  it('resolveExecutionHostId returns a present hint verbatim — even an unknown one — and only falls back when the hint is absent (spec §4.3.2 step 5)', () => {
     expect(resolveExecutionHostId(hostId)).toBe(hostId)
-    expect(resolveExecutionHostId('unknown')).toBe(useHostStore.getState().hostOrder[0])
+    expect(resolveExecutionHostId('unknown')).toBe('unknown')
     expect(resolveExecutionHostId(undefined)).toBe(useHostStore.getState().hostOrder[0])
+  })
+
+  it('resolveExecutionHostId falls back to an empty string when there are no hosts and no hint', () => {
+    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null, runtime: {} } as never)
+    expect(resolveExecutionHostId(undefined)).toBe('')
   })
 })
