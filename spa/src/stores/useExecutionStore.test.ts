@@ -55,6 +55,25 @@ describe('useExecutionStore', () => {
     expect(st.summaryStale).toBe(false)
   })
 
+  it('setSummary keeps summaryStale when a newer lifecycle event landed during the refetch', () => {
+    // execution.running (seq 10) marks stale; execution.terminal (seq 11)
+    // arrives before the summary fetch (snapshotted at seq 10) resolves.
+    const s = useExecutionStore.getState()
+    s.applyEvents('h', 'exc_1', [ev(10, 'execution.running')])
+    s.applyEvents('h', 'exc_1', [ev(11, 'execution.terminal', { state: 'idle' })])
+    expect(useExecutionStore.getState().executions['h:exc_1'].summaryStale).toBe(true)
+
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'running' } as never, 10)
+    expect(useExecutionStore.getState().executions['h:exc_1'].summaryStale).toBe(true)
+
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'idle' } as never, 11)
+    expect(useExecutionStore.getState().executions['h:exc_1'].summaryStale).toBe(false)
+
+    s.applyEvents('h', 'exc_1', [ev(12, 'execution.running')])
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'running' } as never)
+    expect(useExecutionStore.getState().executions['h:exc_1'].summaryStale).toBe(false)
+  })
+
   it('setters update their field only', () => {
     const s = useExecutionStore.getState()
     s.setSse('h', 'exc_1', 'reconnecting', 'boom')
