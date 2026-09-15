@@ -31,9 +31,10 @@ export interface HostConfig {
 }
 ```
 
-- `updateHost` accepts `color` (`Pick<…, 'name'|'ip'|'port'|'token'|'color'>`).
-  Passing `color: undefined` removes the key (not stored as `undefined`-valued key that
-  survives as `null` through JSON).
+- `updateHost` is **unchanged** (its `{ ...host, ...updates }` shallow merge cannot remove a key).
+- New action `setHostColor(hostId: string, color: string | null)`:
+  `null` → rebuild the host object without the `color` key (`'color' in host === false`);
+  string → stored only when `isValidHostColor`, otherwise no-op; unknown host → no-op.
 - No persist migration (alpha, field is optional).
 - Sync: `hosts` contributor already spreads every non-token field, so `color` rides along
   with no contributor change. A test pins this.
@@ -55,6 +56,11 @@ setHostColorSidebarStyle / setHostColorSidebarWidth / setHostColorTabBarStyle / 
 - Width setters clamp to `[MIN, MAX]` and round to integer.
 - All four fields are added to the `preferences` sync contributor `DATA_FIELDS`, so they sync
   like `tabIndicatorStyle`. No persist version bump (new fields fall back to defaults).
+- Sync bypasses setters, so `preferences` deserialize sanitizes the four fields in both
+  full-replace and field-merge paths: a style not in the enum is **dropped** (local value kept);
+  a width that is not a finite number is dropped, otherwise rounded + clamped to `[1, 6]`.
+  Shared helpers `isHostColorMarkStyle(v)` and `clampHostColorLineWidth(n)` live in
+  `useUISettingsStore.ts` and are used by both setters and the contributor.
 
 ## 4. Color resolution (`spa/src/lib/host-color.ts`, new, pure)
 
@@ -71,9 +77,15 @@ export function resolveTabHostColor(tab: Tab, hosts: Record<string, HostConfig>)
   value arriving through sync being injected into inline CSS).
 - `getTabHostId` reuses `collectTmuxSessionHostIds` from `infer-workspace-host-id.ts` (`[0] ?? null`).
 
-Hook: `useTabHostColor(tab)` in `spa/src/hooks/useTabHostColor.ts` — selects
-`s.hosts[getTabHostId(tab)]?.color` from `useHostStore` (primitive selector, no re-render on
-unrelated host changes) and validates.
+Hook: `useTabHostColor(tab)` in `spa/src/hooks/useTabHostColor.ts`:
+
+```ts
+const hostId = getTabHostId(tab)
+const color = useHostStore((s) => (hostId ? s.hosts[hostId]?.color : undefined))
+return isValidHostColor(color) ? color : null
+```
+
+Primitive selector → no re-render on unrelated host changes.
 
 ## 5. Rendering — `HostColorMark` (`spa/src/components/HostColorMark.tsx`, new)
 
@@ -110,14 +122,16 @@ New `Field` "Color" in the Connection section (below Name):
 - Writes through `updateHost(hostId, { color })`.
 - Component: `HostColorField` in `components/hosts/HostColorField.tsx` (keeps `OverviewSection` from growing).
 
-### 6.2 Display settings — Appearance > Interface area
+### 6.2 Display settings — Settings > Terminal
 
-Placed in `TerminalSection` next to the existing tab-indicator control (that is where tab
-visuals are configured today). New group "Host color mark" with two rows:
+Placed in `TerminalSection`, directly after the existing tab-indicator `SettingItem` (tab
+visuals are configured there today). Two `SettingItem`s:
 
-- **Sidebar**: `SegmentControl` (Gradient / Left line / Bottom line / Off) + width slider
-  `1–6px` shown only when style is a line style.
-- **Top tabs**: same.
+- **Sidebar host color**: `SegmentControl` (Gradient / Left line / Bottom line / Off) + a
+  compact `input type="number"` (`min=1 max=6 step=1`, `aria-label`, suffix text `px`) matching
+  the existing numeric inputs in this file; value clamped via `clampHostColorLineWidth` in the
+  handler. The width input renders **only** for `left-line` / `bottom-line`.
+- **Top tab host color**: same.
 
 i18n keys added for `en` and `zh-TW` (all locales the repo ships).
 
@@ -127,10 +141,13 @@ i18n keys added for `en` and `zh-TW` (all locales the repo ships).
   (`#ABCDEF`, `abcdef`, `  #abc123 `, `#abc`, `red`, `url(x)`, `''`); `getTabHostId` for
   single leaf, split with mixed kinds (first tmux-session wins in pre-order), no tmux pane;
   `resolveTabHostColor` null paths incl. invalid stored color.
-- `useHostStore` test: `updateHost` sets/clears `color`; clearing removes the key.
+- `useHostStore` test: `setHostColor` sets; `null` removes the key (`'color' in host === false`);
+  invalid value ignored; unknown host no-op.
 - `hosts` contributor test: `color` survives serialize → deserialize (full-replace and field-merge).
-- `useUISettingsStore` test: defaults; width clamp (0→1, 9→6, 2.6→3).
-- `preferences` contributor test: four new fields serialized.
+- `useUISettingsStore` test: defaults; width clamp (0→1, 9→6, 2.6→3, NaN→2 default); `isHostColorMarkStyle`.
+- `preferences` contributor test: four new fields serialized; hostile payloads
+  (`style: 'evil'`, `width: '9'`, `width: Infinity`, `width: 99`) → invalid dropped, 99 clamped to 6,
+  in both full-replace and field-merge.
 - `HostColorMark.test.tsx`: null color / `none` → renders nothing; each style → correct
   `data-style` and width/height px; gradient uses alpha color.
 - `InlineTab` / `SortableTab` tests: mark present with color, absent without, style/width follow the per-surface setting; pinned tab too.
