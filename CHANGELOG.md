@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.350] - 2026-09-15
+
+### Feat: Nexen 整併 P-B.1 — SPA 端 Nexen client + execution store（#1045）
+
+P-A（alpha.346）把 Nexen 引擎掛進 pdx daemon 的 `/api/nex`，這輪補上 SPA 消費它的底層（無 UI）；P-B.2 execution pane 與 P-B.3 Host「Nex」設定/監控頁的 plan 隨 PR 進 `docs/specs/`。
+
+- **`spa/src/lib/nex/`**：`client-id.ts`（每個分頁一個 `X-Pdx-Client`，principal 變 `pdx:<host>/<id>` 才能仲裁 lease）、`types.ts`（wire 型別 + `NexApiError {status, code}`，網路失敗也映成 `code:'network'`）、`nex-api.ts`（Bearer + `X-Pdx-Client`，永不帶 ticket）、`sse-parser.ts` + `nex-sse.ts`（fetch/ReadableStream SSE，`Last-Event-ID` **header** resume、backoff 1s→30s 含 jitter clamp、45s idle/stall timeout 對應 server 15s keepalive、401/403 與結構化終局碼停止、只對 `draining`/裸 5xx/網路錯誤重連、`stream_url` 一律鎖回 daemon origin）、`event-reducer.ts`（seq 冪等純 reducer；`id:` 行為 seq 權威；`lease.*` 事件只碰 `summary.lease`，本機 lease 只來自 attach/renew 回應）。
+- **`useExecutionStore`**：key＝`(hostId, executionId)`、只放資料不放連線；`setSummary(…, asOfSeq)` 讓 refetch 期間到達的 lifecycle 事件不被舊 summary 蓋掉；host 移除 cascade 清 store 並關該 host 的 execution tab。
+- **Spec v2.1**：每 host 最多 4 條 live SSE（HTTP/1.1 每 host 6 連線上限，LRU 暫停/恢復）；execution pane 的 host 缺失一律顯示「Host removed」，不 fallback 到別台。
+- **Review**：codex spec 一輪（12 條）、plan 一輪（8 條）、subagent TDD 逐 task review、最終 whole-branch review（3 Important + 1 minor 一波修）、PR R1（1 條）+ R2 三視角（7 條，含 P1：絕對 `stream_url` 會把 Bearer 送到別的 origin、`503 nex_unavailable` 無限重連）+ R3 乾淨，全數修入。
+- 測試 +12 檔（vitest 411→422 files，5034→5114 tests）；Go 未動。
+
 ## [1.0.0-alpha.349] - 2026-09-15
 
 ### Fix: 點系統通知跳錯 tab——session code 跨主機碰撞，tab 查找改帶 hostId（#1041）
