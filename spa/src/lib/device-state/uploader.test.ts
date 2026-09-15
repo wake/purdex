@@ -100,6 +100,22 @@ describe('startDeviceStateUploader', () => {
     expect(useDeviceStateStore.getState().status).toEqual({ kind: 'ok', at: 1234, hostId: 'h1' })
   })
 
+  it('stores a normalized default device name', async () => {
+    vi.mocked(resolveDefaultDeviceName).mockResolvedValue(`  ${'字'.repeat(100)}  `)
+    start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useDeviceStateStore.getState().defaultDeviceName).toBe('字'.repeat(64))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(put.mock.calls[0][2].deviceName).toBe('字'.repeat(64))
+  })
+
+  it("stores 'Browser' when the resolved default name is blank", async () => {
+    vi.mocked(resolveDefaultDeviceName).mockResolvedValue('   ')
+    start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useDeviceStateStore.getState().defaultDeviceName).toBe('Browser')
+  })
+
   it('collapses a burst of changes into one PUT after the debounce', async () => {
     await startSettled()
     addTab('a')

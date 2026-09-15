@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useDeviceStateStore, effectiveDeviceName } from './useDeviceStateStore'
+import { useDeviceStateStore, effectiveDeviceName, normalizeDeviceName } from './useDeviceStateStore'
 import { STORAGE_KEYS } from '../lib/storage/keys'
 
 const store = () => useDeviceStateStore.getState()
@@ -97,5 +97,45 @@ describe('effectiveDeviceName', () => {
 
   it('falls back to the default name when no custom name', () => {
     expect(effectiveDeviceName({ deviceName: null, defaultDeviceName: 'mlab' })).toBe('mlab')
+  })
+
+  it('truncates an over-long default name to 64 code points', () => {
+    const long = '字'.repeat(100)
+    const result = effectiveDeviceName({ deviceName: null, defaultDeviceName: long })
+    expect(Array.from(result)).toHaveLength(64)
+    expect(result).toBe('字'.repeat(64))
+  })
+
+  it('trims a whitespace-padded default name', () => {
+    expect(effectiveDeviceName({ deviceName: null, defaultDeviceName: '  mlab.local \n' })).toBe('mlab.local')
+  })
+
+  it("falls back to 'Browser' when the default name is whitespace-only", () => {
+    expect(effectiveDeviceName({ deviceName: null, defaultDeviceName: '   ' })).toBe('Browser')
+  })
+
+  it('ignores a blank custom name and uses the normalized default', () => {
+    expect(effectiveDeviceName({ deviceName: '  ', defaultDeviceName: ' mlab ' })).toBe('mlab')
+  })
+})
+
+describe('normalizeDeviceName', () => {
+  it('trims surrounding whitespace', () => {
+    expect(normalizeDeviceName('  Office Mac  ')).toBe('Office Mac')
+  })
+
+  it('returns null for empty or whitespace-only input', () => {
+    expect(normalizeDeviceName('')).toBeNull()
+    expect(normalizeDeviceName(' \t\n ')).toBeNull()
+  })
+
+  it('keeps names at exactly 64 code points', () => {
+    const name = 'a'.repeat(64)
+    expect(normalizeDeviceName(name)).toBe(name)
+  })
+
+  it('truncates to 64 code points without splitting emoji', () => {
+    const result = normalizeDeviceName('😀'.repeat(70))
+    expect(result).toBe('😀'.repeat(64))
   })
 })

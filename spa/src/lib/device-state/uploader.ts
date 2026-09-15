@@ -8,7 +8,7 @@
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { selectDevHostId, useHostStore } from '../../stores/useHostStore'
-import { effectiveDeviceName, useDeviceStateStore } from '../../stores/useDeviceStateStore'
+import { effectiveDeviceName, normalizeDeviceName, useDeviceStateStore } from '../../stores/useDeviceStateStore'
 import { useSyncStore } from '../sync/use-sync-store'
 import { putDeviceState } from './api'
 import { resolveDefaultDeviceName } from './device-name'
@@ -132,7 +132,7 @@ export function startDeviceStateUploader(deps: UploaderDeps = {}): () => void {
 
   void resolveDefaultDeviceName().then(
     (defaultDeviceName) => {
-      if (!stopped) useDeviceStateStore.setState({ defaultDeviceName })
+      if (!stopped) useDeviceStateStore.setState({ defaultDeviceName: normalizeDeviceName(defaultDeviceName) ?? 'Browser' })
     },
     () => {
       // keep the store's fallback name

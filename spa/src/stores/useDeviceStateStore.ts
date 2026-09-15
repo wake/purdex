@@ -30,9 +30,12 @@ export interface DeviceStateState {
   setStatus: (status: DeviceStateStatus) => void
 }
 
-/** Trim; blank → null; longer than 64 code points → first 64 code points. */
-function normalizeDeviceName(name: string | null): string | null {
-  if (name === null) return null
+/**
+ * Trim; blank → null; longer than 64 code points → first 64 code points
+ * (split by code point, so surrogate pairs such as emoji are never cut).
+ * Mirrors the daemon's validation (trim, then 1–64 runes).
+ */
+export function normalizeDeviceName(name: string): string | null {
   const trimmed = name.trim()
   if (trimmed === '') return null
   const points = Array.from(trimmed)
@@ -42,7 +45,9 @@ function normalizeDeviceName(name: string | null): string | null {
 }
 
 export function effectiveDeviceName(state: Pick<DeviceStateState, 'deviceName' | 'defaultDeviceName'>): string {
-  return state.deviceName ?? state.defaultDeviceName
+  return (
+    normalizeDeviceName(state.deviceName ?? '') ?? normalizeDeviceName(state.defaultDeviceName) ?? 'Browser'
+  )
 }
 
 export const useDeviceStateStore = create<DeviceStateState>()(
@@ -51,7 +56,7 @@ export const useDeviceStateStore = create<DeviceStateState>()(
       deviceName: null,
       defaultDeviceName: 'Browser',
       status: { kind: 'idle' },
-      setDeviceName: (name) => set({ deviceName: normalizeDeviceName(name) }),
+      setDeviceName: (name) => set({ deviceName: name === null ? null : normalizeDeviceName(name) }),
       setStatus: (status) => set({ status }),
     }),
     {
