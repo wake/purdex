@@ -95,15 +95,15 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/host-launcher/spa && pnpm
 ```
 Expected: build succeeds; note the `gzip=` byte count and which chunk (if any) contains icon-meta.
 
-- [ ] **Step 5: Record the decision** — replace the block below with the measured values.
+- [x] **Step 5: Record the decision** — replace the block below with the measured values.
 
-```markdown
-**Spike result (Task 1):**
-- `@phosphor-icons/core@2.1.1` exports `icons: IconEntry[]` (`name`, `pascal_name`, `tags`, `categories`, …); count = <N>.
-- Existing pipeline OK: `generate:icons` writes `icon-meta.json` (committed) and `public/icons/{weight}.json` (runtime fetch).
-- Baseline main chunk gzip = <bytes>; icon-meta currently in chunk: <file or "none">.
-- Decision: CommandIconPicker lazy-imports `icon-meta.json` via `import()` and CommandIconView renders via `icon-path-cache` (`regular` weight). No `import('@phosphor-icons/react')`. `@phosphor-icons/core` stays in devDependencies. Budget check (< 20 KB gzip growth) re-measured in Task 10.
-```
+**Spike result (Task 1, measured 2026-09-16):**
+- `@phosphor-icons/core@2.1.1` exports `FigmaCategory, IconCategory, IconStyle, icons`; `icons: IconEntry[]` (`name`, `pascal_name`, `categories`, `figma_category`, `tags`, `codepoint`, `published_in`, `updated_in`); count = 1512. `Terminal` entry: `tags: ["command line","cli","bash","shell","caret","console"]`.
+- Existing pipeline OK: `pnpm run generate:icons` writes 6 weights (1512 icons each) to `public/icons/{thin,light,regular,bold,fill,duotone}.json` (git-ignored via `spa/.gitignore:16`; `regular.json` = 637,289 B) and `src/features/workspace/generated/icon-meta.json` (1512 entries, 163,030 B raw / 27,471 B gzip). Regeneration leaves `icon-meta.json` unchanged in git (committed output is current). Entry shape confirmed `{ n: "Terminal", t: [...tags], c: [...categories] }`.
+- `icon-path-cache.ts` exports: `type PathData`, `prefetchWeight(weight): Promise<void>`, `getIconPath(name, weight): PathData | null`, `isWeightLoaded(weight): boolean`.
+- Baseline build (`pnpm run build`, exit 0): the app is emitted as a **single** JS chunk `dist/assets/index-CFGQMfC1.js` = 2,502,310 B raw / 651,862 B `gzip -c` (Vite reporter: 658.67 kB gzip). No other JS chunks exist.
+- icon-meta currently in chunk: **`index-CFGQMfC1.js` (main)** — `WorkspaceIconPicker.tsx:10` imports it statically, so the ~27 KB gzip catalog is already paid in the main bundle.
+- Decision: CommandIconPicker and CommandIconView reuse the existing pipeline — catalog from `features/workspace/generated/icon-meta.json`, path data via `icon-path-cache` (`prefetchWeight('regular')` + `getIconPath(name, 'regular')`, `Terminal` fallback while loading / unknown). No `import('@phosphor-icons/react')`; `@phosphor-icons/core` stays in devDependencies. Because icon-meta is already statically in the main chunk, a dynamic `import()` of it would NOT split it out (the module stays with its static importer) — CommandIconPicker may import it statically (same as WorkspaceIconPicker); either way expected main-bundle growth from the catalog is ~0. Budget check (< 20 KB gzip growth vs. 651,862 B) re-measured in Task 10.
 
 - [ ] **Step 6: Commit**
 
