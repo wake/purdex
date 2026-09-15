@@ -7,6 +7,7 @@ import { registerBuiltinThemes } from './lib/register-themes'
 import { registerBuiltinModules } from './lib/register-modules'
 import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger'
 import { startDeviceStateUploader } from './lib/device-state/uploader'
+import { startHostConfigLoader } from './lib/host-config-loader'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -24,6 +25,8 @@ registerBuiltinModules()
 startBackupAutoTrigger()
 // Device state backup: debounced upload of workspaces/tabs to the Development host (app lifetime).
 startDeviceStateUploader()
+// Host config (projects / commands / resume templates): fetch each host's copy when it connects.
+startHostConfigLoader()
 
 useLayoutStore.getState().reconcileViews()
 
