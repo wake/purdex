@@ -1184,5 +1184,10 @@
   "quick_commands.toast.switch_failed": "Created and sent, but could not switch focus; check the sessions list.",
   "quick_commands.toast.retry": "Retry",
   "quick_commands.aria.toolbar": "Quick commands",
-  "quick_commands.aria.workspace_actions": "Workspace quick actions"
+  "quick_commands.aria.workspace_actions": "Workspace quick actions",
+  "command_icon.agents": "Agents",
+  "command_icon.all": "All icons",
+  "command_icon.search": "Search icons",
+  "command_icon.no_results": "No icons match",
+  "command_icon.more": "Show {{n}} more"
 }

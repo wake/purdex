@@ -1184,5 +1184,10 @@
   "quick_commands.toast.switch_failed": "已建立並送出指令，但無法切換焦點；請至 sessions 列表查看。",
   "quick_commands.toast.retry": "重試",
   "quick_commands.aria.toolbar": "快速指令",
-  "quick_commands.aria.workspace_actions": "工作區快速動作"
+  "quick_commands.aria.workspace_actions": "工作區快速動作",
+  "command_icon.agents": "Agent",
+  "command_icon.all": "全部圖示",
+  "command_icon.search": "搜尋圖示",
+  "command_icon.no_results": "沒有符合的圖示",
+  "command_icon.more": "再顯示 {{n}} 個"
 }
