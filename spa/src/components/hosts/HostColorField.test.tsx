@@ -90,6 +90,27 @@ describe('HostColorField', () => {
     expect(hexInput().value).toBe('')
   })
 
+  it('clear on uncolored host resets invalid draft and alert', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.change(hexInput(), { target: { value: 'red' } })
+    fireEvent.keyDown(hexInput(), { key: 'Enter' })
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('host-color-clear'))
+    expect(hexInput().value).toBe('')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(host().color).toBeUndefined()
+  })
+
+  it('clear on colored host with uncommitted invalid draft resets draft and removes color', () => {
+    useHostStore.getState().setHostColor(HOST_ID, '#3b82f6')
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.change(hexInput(), { target: { value: 'nope' } })
+    fireEvent.click(screen.getByTestId('host-color-clear'))
+    expect(hexInput().value).toBe('')
+    expect('color' in host()).toBe(false)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('Enter during IME composition does not commit', () => {
     render(<HostColorField hostId={HOST_ID} />)
     fireEvent.change(hexInput(), { target: { value: 'abcdef' } })

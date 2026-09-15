@@ -62,7 +62,12 @@ export function HostColorField({ hostId }: { hostId: string }) {
             aria-label={t('hosts.color.clear')}
             title={t('hosts.color.clear')}
             data-testid="host-color-clear"
-            onClick={() => setHostColor(hostId, null)}
+            onClick={() => {
+              // The store selector may not change (already uncolored), so reset local state directly.
+              setDraft('')
+              setInvalid(false)
+              setHostColor(hostId, null)
+            }}
             className="w-[18px] h-[18px] rounded cursor-pointer border border-border-default flex items-center justify-center text-text-muted hover:text-text-secondary"
           >
             <Prohibit size={12} />
