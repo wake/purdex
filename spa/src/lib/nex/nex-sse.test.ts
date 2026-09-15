@@ -131,6 +131,31 @@ describe('nex-sse', () => {
     expect(fetch503).toHaveBeenCalledTimes(2)
   })
 
+  it('aborts the live stream and reconnects exactly once when onFrame throws', async () => {
+    // A consumer exception (e.g. a store-side JSON.parse on a malformed
+    // frame) must not leave the errored response's fetch un-aborted: the
+    // next connect() would otherwise open a second live subscriber under
+    // the same X-Pdx-Client while the first stream is still held open.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(sseResponse(['id: 1\nevent: user\ndata: {}\n\n'], { hang: true }))
+      .mockResolvedValueOnce(sseResponse([], { hang: true }))
+    const statuses: Array<[string, Error | undefined]> = []
+    openNexSse({
+      hostId, url: '/api/nex/v1/events', getLastEventId: () => null,
+      onFrame: () => { throw new Error('boom') },
+      onStatus: (s, err) => statuses.push([s, err]),
+      fetchImpl, backoff: { initialMs: 1000, jitter: 0 },
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchImpl.mock.calls[0][1].signal.aborted).toBe(true)
+    expect(statuses.filter(([s]) => s === 'reconnecting')).toHaveLength(1)
+    const [, err] = statuses.at(-1)!
+    expect(err).toBeInstanceOf(Error)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
   it('close() while the reader is blocked cancels it, emits closed once and never reconnects', async () => {
     // A stream that never enqueues and never closes: read() stays pending
     // until cancel() — exactly the shape of an idle live SSE connection.

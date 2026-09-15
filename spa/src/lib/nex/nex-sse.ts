@@ -65,12 +65,12 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
     else opts.onStatus(s)
   }
 
-  const scheduleReconnect = () => {
+  const scheduleReconnect = (err?: Error) => {
     if (closed) return
     const exp = Math.min(backoff.maxMs, backoff.initialMs * 2 ** attempt)
     const delta = exp * backoff.jitter * (Math.random() * 2 - 1)
     attempt += 1
-    status('reconnecting')
+    status('reconnecting', err)
     timer = setTimeout(() => { timer = null; void connect() }, Math.max(0, Math.round(exp + delta)))
   }
 
@@ -108,6 +108,7 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
     const parser = new SseParser()
     const decoder = new TextDecoder()
     reader = res.body.getReader()
+    let loopErr: Error | undefined
     try {
       for (;;) {
         const { value, done } = await reader.read()
@@ -117,14 +118,23 @@ export function openNexSse(opts: NexSseOptions): NexSseHandle {
           opts.onFrame(frame)
         }
       }
-    } catch {
-      // aborted or network error — fall through to reconnect
+    } catch (e) {
+      // Either the read itself was aborted/network-failed, or a consumer
+      // (onFrame) threw mid-frame — either way the loop exits here without
+      // having closed the response body, so it must be aborted below before
+      // reconnecting, or the old stream leaks as a second live subscriber
+      // under the same X-Pdx-Client once scheduleReconnect() opens a new one.
+      loopErr = e instanceof Error ? e : new Error(String(e))
     } finally {
       reader = null
     }
     if (closed) return
+    if (loopErr) {
+      controller?.abort() // no-op if the body already errored/aborted itself
+      console.warn('nex sse: stream error, reconnecting', loopErr)
+    }
     if (Date.now() - openedAt >= backoff.stableMs) attempt = 0
-    scheduleReconnect()
+    scheduleReconnect(loopErr)
   }
 
   void connect()
