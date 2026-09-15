@@ -66,7 +66,8 @@ export interface ConversationMessagesProps {
   showEmptyHint: boolean       // "waiting" hint (caller decides: Stream = no messages && !isStreaming)
   emptyText?: string           // override for the hint (default t('stream.waiting'))
   scrollKey?: number           // extra auto-scroll dependency (prompt count / optimistic bubble)
-  children?: ReactNode         // rendered after the list, before ThinkingIndicator
+  children?: ReactNode         // rendered after the list, BEFORE ThinkingIndicator (Execution: optimistic bubble)
+  afterThinking?: ReactNode    // rendered AFTER ThinkingIndicator (Stream: pending prompts — today's DOM order)
 }
 export default function ConversationMessages(props: ConversationMessagesProps): JSX.Element
 // StreamInput.tsx
@@ -181,18 +182,19 @@ describe('ConversationMessages', () => {
     expect(screen.getByText('No history yet')).toBeInTheDocument()
   })
 
-  it('renders children after the list and the thinking indicator when showThinking', () => {
+  it('renders children before the thinking indicator and afterThinking after it', () => {
     render(
-      <ConversationMessages messages={[assistantText]} keyPrefix="k" showThinking showEmptyHint={false}>
+      <ConversationMessages messages={[assistantText]} keyPrefix="k" showThinking showEmptyHint={false}
+        afterThinking={<div data-testid="after">after</div>}>
         <div data-testid="child">child</div>
       </ConversationMessages>,
     )
-    expect(screen.getByTestId('child')).toBeInTheDocument()
-    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
     const child = screen.getByTestId('child')
     const indicator = screen.getByTestId('thinking-indicator')
-    // children come before the indicator in DOM order
+    const after = screen.getByTestId('after')
+    // DOM order: list → children → ThinkingIndicator → afterThinking (Stream's prompts)
     expect(child.compareDocumentPosition(indicator) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(indicator.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('renders the four user block styles', () => {
@@ -215,7 +217,7 @@ Run: `npx vitest run src/components/ConversationMessages.test.tsx` — FAIL, mod
 
 - [ ] **Step 3: Extract the component and rewire `ConversationView` (commit b)**
 
-`ConversationMessages.tsx` — move, verbatim, from `ConversationView.tsx`: the `scrollRef` + auto-scroll `useEffect`, the `<div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">` container, the empty hint, the `messages.map(...)` block (assistant → ThinkingBlock/MessageBubble/ToolCallBlock; user → ToolResultBlock/interrupted/command/MessageBubble), then `{children}`, then `<ThinkingIndicator visible={showThinking} />`. Keys become `${keyPrefix}-${i}`. The auto-scroll effect depends on `[messages, scrollKey]`. The empty hint renders when `showEmptyHint` and reads `emptyText ?? t('stream.waiting')`. **Keep every className and data-testid identical** — the snapshot enforces it. Nothing else moves: the `TODO: theme token` comments travel with their lines.
+`ConversationMessages.tsx` — move, verbatim, from `ConversationView.tsx`: the `scrollRef` + auto-scroll `useEffect`, the `<div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">` container, the empty hint, the `messages.map(...)` block (assistant → ThinkingBlock/MessageBubble/ToolCallBlock; user → ToolResultBlock/interrupted/command/MessageBubble), then `{children}`, then `<ThinkingIndicator visible={showThinking} />`, then `{afterThinking}`. **Today's Stream DOM is list → ThinkingIndicator → pending prompts** (`ConversationView.tsx:307-312`), so Stream passes its prompts as `afterThinking`, not as `children` — that is what keeps the I7 snapshot byte-identical. Keys become `${keyPrefix}-${i}`. The auto-scroll effect depends on `[messages, scrollKey]`. The empty hint renders when `showEmptyHint` and reads `emptyText ?? t('stream.waiting')`. **Keep every className and data-testid identical** — the snapshot enforces it. Nothing else moves: the `TODO: theme token` comments travel with their lines.
 
 `ConversationView.tsx` after the extraction keeps: store reads, handoff branch, send/permission/ask handlers, file attach + drag overlay, and renders
 
@@ -226,9 +228,8 @@ Run: `npx vitest run src/components/ConversationMessages.test.tsx` — FAIL, mod
   showThinking={showThinking}
   showEmptyHint={messages.length === 0 && !isStreaming}
   scrollKey={pendingControlRequests.length}
->
-  {pendingControlRequests.map((req) => /* unchanged AskUserQuestion / PermissionPrompt mapping */)}
-</ConversationMessages>
+  afterThinking={pendingControlRequests.map((req) => /* unchanged AskUserQuestion / PermissionPrompt mapping */)}
+/>
 ```
 
 followed by `FileAttachment` and `StreamInput` exactly as before. Remove the now-unused imports (`useRef` stays only if still used; `ThinkingIndicator`, `MessageBubble`, `ToolCallBlock`, `ThinkingBlock`, `ToolResultBlock`, `Prohibit`, `TerminalWindow` move out).
@@ -400,12 +401,27 @@ export async function resolveDeeplink(payload: DeeplinkPayload, deps: ResolveDee
 
 Update the header comment: a Nexen execution has no tmux session, so the only landing is the execution pane.
 
-- [ ] **Step 4: Run to pass** — same three test files + `src/lib/nex/nex-api.test.ts` + `src/hooks/useRouteSync.test.ts` (if it exists).
+Also add to `spa/src/hooks/useRouteSync.test.ts` (it exists; reuse its `memoryLocation`/`createWrapper`/`resetStore` helpers and import `useHostStore`, `getPrimaryPane`):
+
+```ts
+  it('opens /execution/<host>/<id> as an execution pane with the resolved host', () => {
+    useHostStore.setState({
+      hosts: { h1: { id: 'h1', name: 'H1', ip: '1', port: 1, order: 0 } } as never,
+      hostOrder: ['h1'], activeHostId: 'h1', runtime: {},
+    })
+    const mem = memoryLocation({ path: '/execution/h1/exc_1', record: true })
+    renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
+    const tab = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
+    expect(getPrimaryPane(tab.layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
+  })
+```
+
+- [ ] **Step 4: Run to pass** — the three test files above + `src/lib/nex/nex-api.test.ts` + `src/hooks/useRouteSync.test.ts`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git add spa/src/lib/nex/resolve-host.ts spa/src/lib/nex/nex-api.ts spa/src/lib/pane-utils.ts spa/src/lib/pane-utils.test.ts spa/src/lib/route-utils.ts spa/src/lib/route-utils.test.ts spa/src/hooks/useRouteSync.ts spa/src/lib/deeplink/deeplinkResolver.ts spa/src/lib/deeplink/deeplinkResolver.test.ts && git commit --only spa/src/lib/nex/resolve-host.ts spa/src/lib/nex/nex-api.ts spa/src/lib/pane-utils.ts spa/src/lib/pane-utils.test.ts spa/src/lib/route-utils.ts spa/src/lib/route-utils.test.ts spa/src/hooks/useRouteSync.ts spa/src/lib/deeplink/deeplinkResolver.ts spa/src/lib/deeplink/deeplinkResolver.test.ts -m "feat(spa): execution pane identity is (host, executionId)"
+cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git add spa/src/lib/nex/resolve-host.ts spa/src/lib/nex/nex-api.ts spa/src/lib/pane-utils.ts spa/src/lib/pane-utils.test.ts spa/src/lib/route-utils.ts spa/src/lib/route-utils.test.ts spa/src/hooks/useRouteSync.ts spa/src/hooks/useRouteSync.test.ts spa/src/lib/deeplink/deeplinkResolver.ts spa/src/lib/deeplink/deeplinkResolver.test.ts && git commit --only spa/src/lib/nex/resolve-host.ts spa/src/lib/nex/nex-api.ts spa/src/lib/pane-utils.ts spa/src/lib/pane-utils.test.ts spa/src/lib/route-utils.ts spa/src/lib/route-utils.test.ts spa/src/hooks/useRouteSync.ts spa/src/hooks/useRouteSync.test.ts spa/src/lib/deeplink/deeplinkResolver.ts spa/src/lib/deeplink/deeplinkResolver.test.ts -m "feat(spa): execution pane identity is (host, executionId)"
 ```
 
 ---
@@ -414,7 +430,8 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 
 **Files:**
 - Create: `spa/src/lib/nex/lease-ttl.ts`, `spa/src/hooks/useExecutionLease.ts`
-- Test: `spa/src/lib/nex/lease-ttl.test.ts`, `spa/src/hooks/useExecutionLease.test.ts`
+- Modify: `spa/src/lib/nex/nex-api.ts` (`postJson` + `releaseLease` gain an optional `init?: RequestInit` for `keepalive`)
+- Test: `spa/src/lib/nex/lease-ttl.test.ts`, `spa/src/hooks/useExecutionLease.test.ts`, `spa/src/lib/nex/nex-api.test.ts` (+1 case)
 
 **Interfaces:**
 - Consumes: `fetchNexCapabilities`, `attachControl`, `renewLease`, `releaseLease`, `NexApiError` (P-B.1), `useExecutionStore` setters.
@@ -425,6 +442,10 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 export const DEFAULT_LEASE_TTL_S = 120
 export function getLeaseTtlSeconds(hostId: string): Promise<number>   // cached per host; DEFAULT on failure
 export function resetLeaseTtlCacheForTests(): void
+// nex-api.ts (changed signatures)
+function postJson(hostId: string, path: string, body: unknown, method = 'POST', init?: RequestInit): Promise<Response>
+   // = nexFetch(hostId, path, { ...init, method, body: JSON.stringify(body) })
+export function releaseLease(hostId: string, executionId: string, leaseId: string, init?: RequestInit): Promise<void>
 // useExecutionLease.ts
 export interface ExecutionLeaseApi {
   ensureLease(): Promise<string>     // lease_id; throws NexApiError (lease_held etc.)
@@ -437,6 +458,19 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
 ```
 
 - [ ] **Step 1: Failing tests**
+
+Add to `spa/src/lib/nex/nex-api.test.ts` (inside the existing `describe`):
+
+```ts
+  it('releaseLease forwards a RequestInit (keepalive for beforeunload)', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await releaseLease(hostId, 'exc_1', 'ls_1', { keepalive: true })
+    const [, init] = testGlobal.fetch.mock.calls.at(-1)!
+    expect(init.keepalive).toBe(true)
+    expect(init.method).toBe('DELETE')
+    expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
+  })
+```
 
 ```ts
 // spa/src/lib/nex/lease-ttl.test.ts
@@ -471,9 +505,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useExecutionLease, LEASE_IDLE_MULTIPLIER } from './useExecutionLease'
 import { useExecutionStore } from '../stores/useExecutionStore'
+import { useHostStore } from '../stores/useHostStore'
 import { NexApiError } from '../lib/nex/types'
 import * as api from '../lib/nex/nex-api'
-import * as ttl from '../lib/nex/lease-ttl'
 
 vi.mock('../lib/nex/nex-api', () => ({
   attachControl: vi.fn(), renewLease: vi.fn(), releaseLease: vi.fn(),
@@ -488,6 +522,7 @@ describe('useExecutionLease', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-15T00:00:00Z'))
     useExecutionStore.setState({ executions: {} })
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'H', ip: '1', port: 1 } } as never, hostOrder: [H], activeHostId: H, runtime: {} })
     vi.mocked(api.attachControl).mockReset().mockResolvedValue({ mode: 'control', lease_id: 'ls_1', expires_at: Date.now() + 30_000 })
     vi.mocked(api.renewLease).mockReset().mockImplementation(async () => ({ mode: 'control', lease_id: 'ls_1', expires_at: Date.now() + 30_000 }))
     vi.mocked(api.releaseLease).mockReset().mockResolvedValue(undefined)
@@ -542,6 +577,31 @@ describe('useExecutionLease', () => {
     act(() => { result.current.touch() })
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
     expect(lease()).toBeNull()
+  })
+
+  it('a renew that resolves after release() cannot write the lease back', async () => {
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    await act(async () => { await result.current.ensureLease() })
+    let resolveRenew!: (v: { mode: 'control'; lease_id: string; expires_at: number }) => void
+    vi.mocked(api.renewLease).mockImplementationOnce(() => new Promise((r) => { resolveRenew = r }))
+    act(() => { result.current.touch() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) }) // renew in flight
+    await act(async () => { await result.current.release() })
+    expect(lease()).toBeNull()
+    await act(async () => { resolveRenew({ mode: 'control', lease_id: 'ls_1', expires_at: Date.now() + 30_000 }) })
+    expect(lease()).toBeNull()
+  })
+
+  it('host removal stops the renew timer and drops the local lease without a release call (I13)', async () => {
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'H', ip: '1', port: 1 } } as never, hostOrder: [H], activeHostId: H, runtime: {} })
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    await act(async () => { await result.current.ensureLease() })
+    act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
+    expect(lease()).toBeNull()
+    act(() => { result.current.touch() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(api.renewLease).not.toHaveBeenCalled()
+    expect(api.releaseLease).not.toHaveBeenCalled()
   })
 
   it('releases exactly once on unmount when held, never when not (I6)', async () => {
@@ -627,12 +687,18 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
   const lastActivity = useRef<number>(Date.now())
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const ttlMs = useRef<number>(120_000)
+  // disposed: unmount or host removal happened — no async continuation may
+  // write the store again. releasing: a release() is under way — an
+  // in-flight renew/attach that resolves afterwards must not resurrect it.
+  const disposed = useRef(false)
+  const releasing = useRef(false)
 
   const stopTimer = useCallback(() => {
     if (timer.current) { clearInterval(timer.current); timer.current = null }
   }, [])
 
-  const setLease = useCallback((lease: { leaseId: string; expiresAt: number } | null) => {
+  const writeLease = useCallback((lease: { leaseId: string; expiresAt: number } | null) => {
+    if (disposed.current) return
     useExecutionStore.getState().setLease(hostId, executionId, lease)
   }, [hostId, executionId])
 
@@ -640,7 +706,7 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
     stopTimer()
     timer.current = setInterval(async () => {
       const cur = useExecutionStore.getState().executions[key]?.lease
-      if (!cur) { stopTimer(); return }
+      if (!cur || disposed.current) { stopTimer(); return }
       if (Date.now() - lastActivity.current > ttlMs.current * LEASE_IDLE_MULTIPLIER) {
         // Idle policy: stop heart-beating and let the server expire it.
         stopTimer()
@@ -648,32 +714,39 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
       }
       try {
         const r = await renewLease(hostId, executionId, cur.leaseId)
-        setLease({ leaseId: r.lease_id, expiresAt: r.expires_at })
+        if (!releasing.current) writeLease({ leaseId: r.lease_id, expiresAt: r.expires_at })
       } catch (e) {
         if (e instanceof NexApiError && (e.code === 'lease_expired' || e.code === 'lease_mismatch')) {
-          setLease(null)
+          writeLease(null)
           stopTimer()
         }
         // anything else: keep trying at the same cadence
       }
     }, Math.max(1000, ttlMs.current / 3))
-  }, [hostId, executionId, key, setLease, stopTimer])
+  }, [hostId, executionId, key, writeLease, stopTimer])
 
   const ensureLease = useCallback((): Promise<string> => {
     const cur = useExecutionStore.getState().executions[key]?.lease
     if (cur && cur.expiresAt - Date.now() > LEASE_MIN_REMAINING_MS) return Promise.resolve(cur.leaseId)
     if (inflight.current) return inflight.current
+    releasing.current = false
     const p = (async () => {
       ttlMs.current = (await getLeaseTtlSeconds(hostId)) * 1000
       try {
         const r = await attachControl(hostId, executionId)
-        setLease({ leaseId: r.lease_id, expiresAt: r.expires_at })
+        if (disposed.current || releasing.current) {
+          // Acquired for nobody: give it straight back rather than leave a
+          // lease the pane will never renew.
+          void releaseLease(hostId, executionId, r.lease_id).catch(() => {})
+          throw new NexApiError(0, 'lease_abandoned', 'pane went away while acquiring the lease')
+        }
+        writeLease({ leaseId: r.lease_id, expiresAt: r.expires_at })
         useExecutionStore.getState().setLeaseError(hostId, executionId, null)
         lastActivity.current = Date.now()
         startTimer()
         return r.lease_id
       } catch (e) {
-        if (e instanceof NexApiError) {
+        if (e instanceof NexApiError && !disposed.current) {
           const heldBy = useExecutionStore.getState().executions[key]?.summary?.lease?.principal_id
           useExecutionStore.getState().setLeaseError(hostId, executionId, { code: e.code, heldBy })
         }
@@ -684,29 +757,45 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
     })()
     inflight.current = p
     return p
-  }, [hostId, executionId, key, setLease, startTimer])
+  }, [hostId, executionId, key, writeLease, startTimer])
 
   const release = useCallback(async () => {
+    releasing.current = true
     stopTimer()
     const cur = useExecutionStore.getState().executions[key]?.lease
     if (!cur) return
-    setLease(null)
+    useExecutionStore.getState().setLease(hostId, executionId, null)
     try { await releaseLease(hostId, executionId, cur.leaseId) } catch { /* best-effort */ }
-  }, [hostId, executionId, key, setLease, stopTimer])
+  }, [hostId, executionId, key, stopTimer])
 
   const touch = useCallback(() => { lastActivity.current = Date.now() }, [])
+
+  // Host removal (keep-tabs mode, spec §4.3.4): the daemon is gone, so drop
+  // local authority and stop the heartbeat without a release call.
+  // useHostStore has no subscribeWithSelector — compare prev/next by hand.
+  useEffect(() => {
+    return useHostStore.subscribe((state, prev) => {
+      if (prev.hosts[hostId] && !state.hosts[hostId]) {
+        disposed.current = true
+        stopTimer()
+        useExecutionStore.getState().setLease(hostId, executionId, null)
+      }
+    })
+  }, [hostId, executionId, stopTimer])
 
   // Teardown: unmount / execution change → release once if held. beforeunload
   // gets a keepalive fetch because the page is going away.
   useEffect(() => {
+    disposed.current = false
     const onUnload = () => {
       const cur = useExecutionStore.getState().executions[key]?.lease
       if (!cur) return
-      void releaseLease(hostId, executionId, cur.leaseId).catch(() => {})
+      void releaseLease(hostId, executionId, cur.leaseId, { keepalive: true }).catch(() => {})
     }
     window.addEventListener('beforeunload', onUnload)
     return () => {
       window.removeEventListener('beforeunload', onUnload)
+      disposed.current = true
       void release()
     }
   }, [hostId, executionId, key, release])
@@ -715,9 +804,20 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
 }
 ```
 
-> `releaseLease` is a normal `fetch`; for `beforeunload` a `keepalive: true` request is what survives navigation. Add an optional `init?: RequestInit` passthrough to `releaseLease` in `nex-api.ts` (`releaseLease(hostId, id, leaseId, init?)` merging `{ keepalive: true }`) and pass it from `onUnload`. Test in `nex-api.test.ts`: `releaseLease(h, 'exc_1', 'ls', { keepalive: true })` → `init.keepalive === true`.
+`nex-api.ts` change (do this first so the hook compiles):
 
-- [ ] **Step 4: Run to pass** — both test files + `src/lib/nex/nex-api.test.ts`.
+```ts
+function postJson(hostId: string, path: string, body: unknown, method = 'POST', init?: RequestInit): Promise<Response> {
+  return nexFetch(hostId, path, { ...init, method, body: JSON.stringify(body) })
+}
+export function releaseLease(hostId: string, executionId: string, leaseId: string, init?: RequestInit): Promise<void> {
+  return postJson(hostId, execPath(executionId, '/attach'), { lease_id: leaseId }, 'DELETE', init).then(okVoid)
+}
+```
+
+Also add the hook's imports: `import { useHostStore } from '../stores/useHostStore'`. The `releasing`/`disposed` guards are what make the two new tests pass (renew-after-release, host removal).
+
+- [ ] **Step 4: Run to pass** — `npx vitest run src/lib/nex/lease-ttl.test.ts src/hooks/useExecutionLease.test.ts src/lib/nex/nex-api.test.ts` (8 lease tests).
 
 - [ ] **Step 5: Commit**
 
@@ -738,7 +838,8 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 - Produces:
 
 ```ts
-export type SubscriptionProblem = null | 'not_found' | 'host_removed' | 'nex_unavailable'
+export type SubscriptionProblem = null | 'not_found' | 'host_removed' | 'nex_unavailable' | 'nex_disabled'
+   // nex_disabled = the daemon answered a plain 404 (NexApiError code 'http_404'): nothing is mounted at /api/nex
 export const HISTORY_PAGE_LIMIT = 500
 export const SUMMARY_REFETCH_DEBOUNCE_MS = 300
 export function useExecutionSubscription(hostId: string, executionId: string): { problem: SubscriptionProblem }
@@ -850,11 +951,29 @@ describe('useExecutionSubscription', () => {
     expect(sse.openNexSse).not.toHaveBeenCalled()
   })
 
-  it('reports nex_unavailable on 503 nex_unavailable', async () => {
+  it('reports nex_unavailable on 503 nex_unavailable and nex_disabled on a bare 404', async () => {
     vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(503, 'nex_unavailable', 'init failed'))
-    const { result } = renderHook(() => useExecutionSubscription(H, E))
+    const a = renderHook(() => useExecutionSubscription(H, E))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-    expect(result.current.problem).toBe('nex_unavailable')
+    expect(a.result.current.problem).toBe('nex_unavailable')
+    a.unmount()
+    vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(404, 'http_404', 'nex: HTTP 404'))
+    const b = renderHook(() => useExecutionSubscription(H, E))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(b.result.current.problem).toBe('nex_disabled')
+  })
+
+  it('warns once per connection on a malformed durable frame and does not advance the cursor', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    renderHook(() => useExecutionSubscription(H, E))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      sseOpts!.onFrame({ id: '9', event: 'assistant', data: '{oops' })
+      sseOpts!.onFrame({ id: '10', event: 'assistant', data: '{oops again' })
+    })
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(useExecutionStore.getState().executions[KEY].lastSeq).toBe(2)
+    warn.mockRestore()
   })
 
   it('closes the SSE on unmount and when the executionId changes', async () => {
@@ -941,10 +1060,13 @@ export function useExecutionSubscription(hostId: string, executionId: string): {
       if (reason) { setProblem(reason); store().setSse(hostId, executionId, 'closed', reason) }
     }
 
-    const unsubHost = useHostStore.subscribe(
-      (s) => s.hosts[hostId],
-      (host) => { if (!host && !cancelled) { cancelled = true; teardown('host_removed') } },
-    )
+    // useHostStore has no subscribeWithSelector: compare prev/next by hand.
+    const unsubHost = useHostStore.subscribe((state, prev) => {
+      if (prev.hosts[hostId] && !state.hosts[hostId] && !cancelled) {
+        cancelled = true
+        teardown('host_removed')
+      }
+    })
 
     ;(async () => {
       store().setSse(hostId, executionId, 'connecting')
@@ -965,25 +1087,37 @@ export function useExecutionSubscription(hostId: string, executionId: string): {
           after = page.next_cursor
         }
         store().setHistoryLoaded(hostId, executionId, true)
+        let warnedMalformed = false
         sseRef.current = openNexSse({
           hostId,
           url: obs.stream_url,
           getLastEventId: () => store().executions[key]?.lastSeq ?? null,
           onFrame: (frame) => {
             const ev = frameToEvent(frame)
-            if (ev) store().applyEvents(hostId, executionId, [ev])
+            if (!ev) {
+              // Transient frames are expected (P-B2 renders them); a durable
+              // frame that does not parse is dropped without moving the cursor
+              // and warned about once per connection (spec §4.5).
+              if (frame.id != null && !warnedMalformed) {
+                warnedMalformed = true
+                console.warn(`nex sse: dropped malformed durable frame id=${frame.id} kind=${frame.event}`)
+              }
+              return
+            }
+            store().applyEvents(hostId, executionId, [ev])
           },
           onStatus: (status, err) => {
             if (cancelled) return
             store().setSse(hostId, executionId, status, err?.message ?? null)
             if (status === 'reconnecting') wasReconnecting = true
-            if (status === 'open' && wasReconnecting) { wasReconnecting = false; void refetchSummary() }
+            if (status === 'open') { warnedMalformed = false; if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
           },
         })
       } catch (e) {
         if (cancelled) return
         if (e instanceof NexApiError && e.code === 'execution_not_found') teardown('not_found')
         else if (e instanceof NexApiError && e.code === 'nex_unavailable') teardown('nex_unavailable')
+        else if (e instanceof NexApiError && e.code === 'http_404') teardown('nex_disabled')
         else store().setSse(hostId, executionId, 'closed', e instanceof Error ? e.message : String(e))
       }
     })()
@@ -1045,13 +1179,13 @@ execution.title              "Execution"                      執行體
 execution.loading            "Loading execution…"             載入執行體…
 execution.not_found          "Execution not found on this host." 這台主機上找不到此執行體。
 execution.host_removed       "Host removed."                  主機已移除。
-execution.nex_unavailable    "Nex is unavailable on this host: {error}"  這台主機的 Nex 無法使用：{error}
+execution.nex_unavailable    "Nex is unavailable on this host: {{error}}"  這台主機的 Nex 無法使用：{{error}}
 execution.nex_disabled       "Nex is not enabled on this host. Enable it under Hosts → Nex."  這台主機未啟用 Nex，請到「主機 → Nex」啟用。
 execution.empty              "No messages yet."               尚無訊息。
 execution.observers          "observers"                      觀察者
 execution.lease_you          "(you)"                          （你）
 execution.lease_none         "no lease"                       無 lease
-execution.lease_held         "Held by {principal} — try again when released" 由 {principal} 持有，等對方釋放後再試
+execution.lease_held         "Held by {{principal}} — try again when released" 由 {{principal}} 持有，等對方釋放後再試
 execution.turns              "turns"                          回合
 execution.interrupt          "Interrupt"                      中斷
 execution.terminate          "Terminate"                      終止
@@ -1063,7 +1197,7 @@ execution.sse.reconnecting   "reconnecting"                   重新連線中
 execution.sse.closed         "disconnected"                   已斷線
 execution.input.archived     "Execution is archived"          執行體已歸檔
 execution.input.terminal     "Execution has ended"            執行體已結束
-execution.error.generic      "Send failed: {message}"         送出失敗：{message}
+execution.error.generic      "Send failed: {{message}}"         送出失敗：{{message}}
 execution.error.invalid_text "Message too long for this host" 訊息超過這台主機的長度上限
 execution.error.execution_archived "Execution is archived; unarchive it first" 執行體已歸檔，請先取消歸檔
 execution.error.execution_terminal "Execution has ended"      執行體已結束
@@ -1072,7 +1206,7 @@ execution.error.turn_stalled "The turn was withdrawn; resend if still wanted" �
 execution.error.interrupt_unconfirmed "Interrupt sent but not confirmed; the turn may still be running" 已送出中斷但未確認，這一輪可能仍在執行
 ```
 
-Check how the existing `t()` handles `{placeholders}` (`grep -n "replace\|{" spa/src/stores/useI18nStore.ts`) and follow it; if it has no interpolation, build the string with template literals around `t()` and keep the keys placeholder-free.
+`t(key, params)` interpolates `{{name}}` from `params` (`spa/src/stores/useI18nStore.ts:49`); use that — never build these strings by concatenation.
 
 - [ ] **Step 1: Failing tests**
 
@@ -1149,7 +1283,11 @@ describe('ExecutionView', () => {
 
   it('lease_held shows the holder notice and keeps the input enabled', async () => {
     useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-other', expires_at: 1 } }) as never)
-    ensureLease.mockRejectedValueOnce(new NexApiError(409, 'lease_held', 'held'))
+    // The real hook writes leaseError before rethrowing; the mock must too.
+    ensureLease.mockImplementationOnce(async () => {
+      useExecutionStore.getState().setLeaseError(H, E, { code: 'lease_held', heldBy: 'pdx:mlab/t-other' })
+      throw new NexApiError(409, 'lease_held', 'held')
+    })
     render(<ExecutionView hostId={H} executionId={E} isActive />)
     const box = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(box, { target: { value: 'x' } })
@@ -1194,6 +1332,9 @@ describe('ExecutionView', () => {
     vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'host_removed' })
     rerender(<ExecutionView hostId={H} executionId={E} isActive />)
     expect(screen.getByText(/host removed/i)).toBeInTheDocument()
+    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'nex_disabled' })
+    rerender(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByText(/not enabled/i)).toBeInTheDocument()
   })
 
   it('shows the loading state until history is loaded', () => {
@@ -1365,7 +1506,8 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   if (problem) {
     const text = problem === 'not_found' ? t('execution.not_found')
       : problem === 'host_removed' ? t('execution.host_removed')
-      : `${t('execution.nex_unavailable')} ${st.sseError ?? ''}`
+      : problem === 'nex_disabled' ? t('execution.nex_disabled')
+      : t('execution.nex_unavailable', { error: st.sseError ?? '' })
     return <div data-testid="execution-problem" className="flex items-center justify-center h-full text-sm text-text-muted">{text}</div>
   }
 
@@ -1373,7 +1515,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   const placeholder = st.summary?.archived ? t('execution.input.archived') : ended ? t('execution.input.terminal') : undefined
   const leaseHeld = st.leaseError?.code === 'lease_held'
   const errorText = st.sendError
-    ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`) : `${t('execution.error.generic')} ${st.sendError.message}`)
+    ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`) : t('execution.error.generic', { message: st.sendError.message }))
     : null
 
   return (
@@ -1397,7 +1539,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
       )}
       {leaseHeld && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning">
-          {t('execution.lease_held')} {st.leaseError?.heldBy ?? ''}
+          {t('execution.lease_held', { principal: st.leaseError?.heldBy ?? '' })}
         </div>
       )}
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
@@ -1408,7 +1550,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
 }
 ```
 
-> `StreamInput` has no `initialValue` prop today — add one (`initialValue?: string`, used as `useState(initialValue ?? '')`) in this task with a one-line test in `StreamInput.test.tsx`; the `key={draft}` remount is what puts the failed text back. Interpolated strings (`{principal}`, `{message}`, `{error}`) are built by concatenation as shown so the i18n keys stay placeholder-free unless `t()` already supports interpolation.
+> `StreamInput` has no `initialValue` prop today — add one (`initialValue?: string`, used as `useState(initialValue ?? '')`) in this task with a one-line test in `StreamInput.test.tsx`; the `key={draft}` remount is what puts the failed text back. Interpolated strings use `t(key, { … })` with `{{name}}` placeholders.
 
 `register-modules/index.tsx`:
 
@@ -1504,3 +1646,18 @@ cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb-execution-pane && git 
 - Invariants: I3 → T3 tests 2-3; I6 → T3 test 6 + T4 test 7; I7 → T1 snapshot; I10 → T2; I11 (hook half) → T4 test 4 + T3 never writing from events; I12 → T5 test 3; I13 → T4 test 8 + T6.
 - `summaryStale` (P-B.1 addition) is consumed by T4's subscribe; `setSummary` clears it.
 - Types: `ExecutionLeaseApi` used identically in T3 and T5 mocks; `SubscriptionProblem` values identical in T4 and T5.
+
+## Codex plan review disposition (`task-mu2a5qnp-2vejqo`, one round, gpt-5.5)
+
+| # | Finding | Disposition |
+|---|---|---|
+| P1-1 | `children` placed before `ThinkingIndicator` would break the I7 snapshot (Stream renders prompts after it) | Fixed: `children` (before) + `afterThinking` (after); Stream passes prompts as `afterThinking`; test asserts both orders |
+| P1-2 | `useHostStore.subscribe(selector, listener)` — the store has no `subscribeWithSelector` | Fixed: whole-store subscribe comparing `prev.hosts[hostId]` vs `state.hosts[hostId]` (Tasks 3 and 4) |
+| P1-3 | Lease hook did not react to host removal (timer kept running, §4.3.4/I13) | Fixed: host-removal subscription in `useExecutionLease` + test |
+| P1-4 | Renew/attach resolving after `release()`/unmount could write the lease back | Fixed: `disposed`/`releasing` refs, `writeLease` guard, attach-after-dispose gives the lease back; test added |
+| P1-5 | `releaseLease` had no `RequestInit`; `keepalive` never sent | Fixed: `postJson`/`releaseLease` gain `init?`; nex-api test; `onUnload` passes `{ keepalive: true }` |
+| P1-6 | `lease_held` UI test would fail — mock `ensureLease` did not write `leaseError` | Fixed: mock writes `leaseError` before throwing |
+| P2-1 | `t()` interpolates `{{name}}`, plan used `{name}` + concatenation | Fixed: keys use `{{…}}`, calls pass params |
+| P2-2 | Malformed durable frame: §4.5 wants drop + warn once per connection, cursor untouched | Fixed: `warnedMalformed` per connection (reset on `open`) + test |
+| P2-3 | `nex_disabled` copy existed but no problem state / detection | Fixed: `SubscriptionProblem` gains `'nex_disabled'` (bare `http_404`); hook + view + tests |
+| P3-1 | No `useRouteSync` regression for the host route | Fixed: test added to Task 2 |
