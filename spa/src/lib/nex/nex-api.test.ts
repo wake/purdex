@@ -4,6 +4,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import {
   nexFetch, fetchNexCapabilities, listExecutions, fetchExecutionEvents,
   attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
+  getExecution, fetchNexHost, renewLease, interruptExecution, terminateExecution,
 } from './nex-api'
 import { NexApiError } from './types'
 import { NEX_CLIENT_ID_RE } from './client-id'
@@ -111,6 +112,53 @@ describe('nex-api', () => {
     const err = await attachObserve(hostId, 'nope').catch((e) => e)
     expect(err).toBeInstanceOf(NexApiError)
     expect(err.code).toBe('execution_not_found')
+  })
+
+  it('getExecution GETs the single execution', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ id: 'exc_1', state: 'running' }))
+    const s = await getExecution(hostId, 'exc_1')
+    expect(s.state).toBe('running')
+    const [url, init] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1')
+    expect(init.method ?? 'GET').toBe('GET')
+  })
+
+  it('fetchNexHost GETs the host info', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ active_account: 'acct-1', quota: null }))
+    const h = await fetchNexHost(hostId)
+    expect(h.active_account).toBe('acct-1')
+    const [url, init] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/host')
+    expect(init.method ?? 'GET').toBe('GET')
+  })
+
+  it('renewLease POSTs lease_id to attach/renew and returns the parsed body', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ mode: 'control', lease_id: 'ls_1', expires_at: 99 }))
+    const r = await renewLease(hostId, 'exc_1', 'ls_1')
+    expect(r.expires_at).toBe(99)
+    const [url, init] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/attach/renew')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
+  })
+
+  it('interruptExecution POSTs lease_id to interrupt and returns the parsed body', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ turn_id: 'trn_1', state: 'idle' }))
+    const r = await interruptExecution(hostId, 'exc_1', 'ls_1')
+    expect(r).toEqual({ turn_id: 'trn_1', state: 'idle' })
+    const [url, init] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/interrupt')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
+  })
+
+  it('terminateExecution POSTs lease_id to terminate and resolves void', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await expect(terminateExecution(hostId, 'exc_1', 'ls_1')).resolves.toBeUndefined()
+    const [url, init] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/terminate')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
   })
 
   it('resolveExecutionHostId prefers a known host and falls back to the first', () => {
