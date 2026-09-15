@@ -44,7 +44,7 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   // The SSE handle can die terminally (401/403, or a non-retryable
   // structured error) after history has loaded, with no reconnect ever
   // coming — the pane looks live but a send would 2xx into the void with
-  // no message_accepted/result ever arriving (Codex R4 P2). Gate input on
+  // no message_accepted/result ever arriving. Gate input on
   // it same as `ended`; `sse` flips back off 'closed' the moment the pane
   // is reactivated (see useExecutionSubscription's activation effect), so
   // this clears itself without redesigning the reconnect path.

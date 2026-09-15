@@ -206,7 +206,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
                 // would otherwise leave pendingSend stuck forever: no SSE
                 // will ever deliver the message_accepted/result that would
                 // clear it, and the input stays disabled with no way out
-                // short of a full remount (Codex R4 P2).
+                // short of a full remount.
                 store().setPendingSend(hostId, executionId, false)
               }
             },
