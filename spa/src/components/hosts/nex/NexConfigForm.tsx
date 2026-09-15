@@ -89,6 +89,12 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
   const [justSaved, setJustSaved] = useState(false)
   const [fieldError, setFieldError] = useState<FieldError | null>(null)
   const dirtyRef = useRef(false)
+  // Bumped by every update() call. handleSave snapshots this when a save
+  // starts; if it has moved by the time the response comes back, the user
+  // edited a field while the PUT was in flight and that newer draft must
+  // win — the response only updates `committed` (so restartRequired() still
+  // sees the truth) and dirty stays true so the next save resubmits it.
+  const editCounterRef = useRef(0)
 
   useEffect(() => {
     if (dirtyRef.current) return
@@ -98,6 +104,7 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
 
   const update = (patch: Partial<NexConfig>) => {
     dirtyRef.current = true
+    editCounterRef.current += 1
     setJustSaved(false)
     setDraft((d) => ({ ...d, ...patch }))
   }
@@ -109,6 +116,7 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
     setJustSaved(false)
     setFieldError(null)
     const body = trimForSubmit(draft)
+    const startCounter = editCounterRef.current
     try {
       const res = await hostFetch(hostId, '/api/config', {
         method: 'PUT',
@@ -118,9 +126,14 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
       if (res.ok) {
         const data = await res.json()
         const nextNex: NexConfig = data.nex ?? body
-        dirtyRef.current = false
-        setDraft(nextNex)
+        // Always advance the persisted-value tracker and notify the caller
+        // — but only replace the draft (and clear dirty) if nothing changed
+        // it while this request was in flight.
         setCommitted(nextNex)
+        if (editCounterRef.current === startCounter) {
+          dirtyRef.current = false
+          setDraft(nextNex)
+        }
         setJustSaved(true)
         onSaved(data)
       } else {
@@ -147,14 +160,12 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
       )}
 
       <Field label={t('hosts.nex.config.enabled')}>
-        <label className="inline-flex items-center gap-2 text-sm text-text-primary cursor-pointer">
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            onChange={(e) => update({ enabled: e.target.checked })}
-          />
-          {t('hosts.nex.config.enabled')}
-        </label>
+        <input
+          type="checkbox"
+          aria-label={t('hosts.nex.config.enabled')}
+          checked={draft.enabled}
+          onChange={(e) => update({ enabled: e.target.checked })}
+        />
       </Field>
 
       <NexListEditor

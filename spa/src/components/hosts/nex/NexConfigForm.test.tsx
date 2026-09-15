@@ -68,4 +68,34 @@ describe('NexConfigForm', () => {
     expect(Object.keys(body.nex.sandbox).sort()).toEqual(['default_profile', 'max_profile'])
     expect(Object.keys(body.nex.timeouts).sort()).toEqual(['interrupt', 'lease_ttl', 'turn'])
   })
+
+  it('shows the Enabled label exactly once', () => {
+    render(<NexConfigForm hostId="h" config={saved} info={info} onSaved={() => {}} />)
+    expect(screen.getAllByText('Enabled')).toHaveLength(1)
+  })
+
+  it('keeps an edit made while a save is in flight, and sends it on the next save', async () => {
+    let resolveFetch: (value: Response) => void = () => {}
+    const pending = new Promise<Response>((resolve) => { resolveFetch = resolve })
+    vi.mocked(hostApi.hostFetch).mockReturnValueOnce(pending)
+    const onSaved = vi.fn()
+    render(<NexConfigForm hostId="h" config={saved} info={info} onSaved={onSaved} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    // Edit while the first save is still pending.
+    fireEvent.change(screen.getByLabelText(/claude binary/i), { target: { value: '/new/claude' } })
+
+    resolveFetch(new Response(JSON.stringify({ nex: saved }), { status: 200 }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+
+    // The in-flight response must not clobber the edit made during the save.
+    expect((screen.getByLabelText(/claude binary/i) as HTMLInputElement).value).toBe('/new/claude')
+
+    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response(JSON.stringify({ nex: { ...saved, claude_bin: '/new/claude' } }), { status: 200 }))
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalledTimes(2))
+    const [, , secondInit] = vi.mocked(hostApi.hostFetch).mock.calls[1]
+    const secondBody = JSON.parse(secondInit!.body as string)
+    expect(secondBody.nex.claude_bin).toBe('/new/claude')
+  })
 })
