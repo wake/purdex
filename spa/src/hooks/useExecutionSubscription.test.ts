@@ -294,6 +294,28 @@ describe('useExecutionSubscription', () => {
     expect(vi.mocked(api.getExecution).mock.calls.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('a debounced refetch whose getExecution rejects after unmount does not re-arm the retry timer', async () => {
+    const { unmount } = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    vi.mocked(api.getExecution).mockClear()
+
+    let rejectDeferred!: (e: unknown) => void
+    vi.mocked(api.getExecution).mockImplementationOnce(() => new Promise<ExecutionSummary>((_resolve, reject) => { rejectDeferred = reject }))
+
+    act(() => { sseOpts!.onFrame({ id: '30', event: 'execution.running', data: '{}' }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(SUMMARY_REFETCH_DEBOUNCE_MS + 1) })
+    expect(api.getExecution).toHaveBeenCalledTimes(1) // the debounced refetch, now in flight
+
+    unmount()
+    await act(async () => { rejectDeferred(new Error('network down after unmount')); await vi.advanceTimersByTimeAsync(0) })
+
+    // The rejection landed after cleanup — no stray retry timer should have
+    // been armed by it (up to 4 stray post-unmount calls were possible
+    // before this fix, one per uncapped consecutive-failure retry).
+    await act(async () => { await vi.advanceTimersByTimeAsync(SUMMARY_REFETCH_DEBOUNCE_MS + 1) })
+    expect(api.getExecution).toHaveBeenCalledTimes(1)
+  })
+
   it('resets paused to false when executionId changes, so a fresh key with a free slot goes live rather than staying stuck paused', async () => {
     vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
     vi.mocked(api.fetchExecutionEvents).mockResolvedValue({ items: [], next_cursor: 0 })

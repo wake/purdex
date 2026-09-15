@@ -94,13 +94,18 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
           staleRefetchAttempts = 0
         }
       } catch {
+        if (cancelled) return
         // transient — the next stale mark or reconnect tries again, up to the same cap
         staleRefetchAttempts += 1
         if (staleRefetchAttempts < MAX_CONSECUTIVE_STALE_REFETCHES) scheduleRefetch()
       }
     }
+    // Belt and braces alongside the `cancelled` checks above: even if some
+    // future caller of scheduleRefetch forgets to check `cancelled` first,
+    // a debounced getExecution settling after unmount/key-change can never
+    // arm a new timer here.
     const scheduleRefetch = () => {
-      if (refetchTimer) return
+      if (cancelled || refetchTimer) return
       refetchTimer = setTimeout(() => { refetchTimer = null; void refetchSummary() }, SUMMARY_REFETCH_DEBOUNCE_MS)
     }
 
