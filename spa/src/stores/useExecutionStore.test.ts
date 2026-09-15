@@ -55,23 +55,46 @@ describe('useExecutionStore', () => {
     expect(st.summaryStale).toBe(false)
   })
 
-  it('setSummary keeps summaryStale when a newer lifecycle event landed during the refetch', () => {
+  it('setSummary keeps summaryStale AND the existing summary untouched when a newer lifecycle event landed during the refetch', () => {
+    // Seed an existing summary first — this is what a stale fetch must not
+    // clobber; a null summary is the separate first-fetch case below.
+    const s = useExecutionStore.getState()
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'idle' } as never)
+
     // execution.running (seq 10) marks stale; execution.terminal (seq 11)
     // arrives before the summary fetch (snapshotted at seq 10) resolves.
-    const s = useExecutionStore.getState()
     s.applyEvents('h', 'exc_1', [ev(10, 'execution.running')])
     s.applyEvents('h', 'exc_1', [ev(11, 'execution.terminal', { state: 'idle' })])
     expect(useExecutionStore.getState().executions['h:exc_1'].summaryStale).toBe(true)
 
+    // Fetch snapshotted at seq 10 arrives after seq 11 landed: it is older
+    // than the reducer's own state (idle) — must not overwrite it with the
+    // stale 'running' snapshot.
     s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'running' } as never, 10)
-    expect(useExecutionStore.getState().executions['h:exc_1'].summaryStale).toBe(true)
+    let st = useExecutionStore.getState().executions['h:exc_1']
+    expect(st.summary?.state).toBe('idle')
+    expect(st.summaryStale).toBe(true)
 
+    // Fetch snapshotted at seq 11 is caught up: adopted, stale clears.
     s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'idle' } as never, 11)
-    expect(useExecutionStore.getState().executions['h:exc_1'].summaryStale).toBe(false)
+    st = useExecutionStore.getState().executions['h:exc_1']
+    expect(st.summary?.state).toBe('idle')
+    expect(st.summaryStale).toBe(false)
 
     s.applyEvents('h', 'exc_1', [ev(12, 'execution.running')])
     s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'running' } as never)
     expect(useExecutionStore.getState().executions['h:exc_1'].summaryStale).toBe(false)
+  })
+
+  it('setSummary adopts the fetched summary on a stale first fetch (no prior summary to protect)', () => {
+    const s = useExecutionStore.getState()
+    s.applyEvents('h', 'exc_1', [ev(5, 'execution.running')])
+    expect(useExecutionStore.getState().executions['h:exc_1'].summary).toBeNull()
+
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'queued' } as never, 0)
+    const st = useExecutionStore.getState().executions['h:exc_1']
+    expect(st.summary?.state).toBe('queued')
+    expect(st.summaryStale).toBe(true)
   })
 
   it('setters update their field only', () => {

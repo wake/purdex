@@ -26,10 +26,13 @@ interface ExecutionStore {
    * `lastSeq` the hook read *before* issuing the fetch: if a newer durable
    * event has landed by the time the response arrives (`lastSeq > asOfSeq`),
    * the fetched summary is already stale — it stays `summaryStale` so the
-   * hook refetches again, instead of the response overwriting fresher local
-   * state (e.g. `execution.terminal` arriving mid-flight of a running-state
-   * fetch). Callers that don't track a cursor may omit `asOfSeq`, which
-   * always clears `summaryStale` (today's behaviour).
+   * hook refetches again, AND the existing `summary` object is left
+   * untouched (an older fetch must never overwrite fresher local state,
+   * e.g. `execution.terminal` arriving mid-flight of a running-state
+   * fetch), except when there is no existing summary yet: a first fetch
+   * still populates it (still marked stale, so the hook refetches). Callers
+   * that don't track a cursor may omit `asOfSeq`, which always adopts the
+   * summary and clears `summaryStale` (today's behaviour).
    */
   setSummary: (hostId: string, executionId: string, summary: ExecutionSummary | null, asOfSeq?: number) => void
   applyEvents: (hostId: string, executionId: string, events: NexEvent[]) => void
@@ -62,7 +65,11 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
     executions: {},
 
     setSummary: (h, e, summary, asOfSeq) =>
-      patch(h, e, (c) => ({ ...c, summary, summaryStale: asOfSeq == null ? false : c.lastSeq > asOfSeq })),
+      patch(h, e, (c) => {
+        if (asOfSeq == null) return { ...c, summary, summaryStale: false }
+        const stale = c.lastSeq > asOfSeq
+        return { ...c, summary: stale && c.summary !== null ? c.summary : summary, summaryStale: stale }
+      }),
 
     applyEvents: (h, e, events) => patch(h, e, (c) => events.reduce(applyDurableEvent, c)),
 
