@@ -1,24 +1,21 @@
 // spa/src/components/settings/device-state/DeviceStateSection.tsx — device
 // state backup (spec §3.7 + §4.1/§4.3): this computer's name, where its state
 // is saved, the uploader's status line, and the list of every computer's
-// latest state with Replace / Delete.
-import { useRef, useState } from 'react'
+// latest state with Replace / Merge / Delete.
+import { useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useDeviceStateStore } from '../../../stores/useDeviceStateStore'
 import type { DeviceStateStatus } from '../../../stores/useDeviceStateStore'
 import { selectDevHostId, useHostStore } from '../../../stores/useHostStore'
-import { useRebuildStore } from '../../../stores/useRebuildStore'
 import { useSyncStore } from '../../../lib/sync/use-sync-store'
 import { deleteDeviceState } from '../../../lib/device-state/api'
-import type { DeviceStateRecord } from '../../../lib/device-state/api'
-import { DEVICE_STATE_LOCK_OWNER, restoreDeviceStateReplace } from '../../../lib/device-state/restore'
-import type { DeviceStateRestoreReport } from '../../../lib/device-state/restore'
-import { RestoreError } from '../../../lib/snapshot/types'
 import { SettingItem } from '../SettingItem'
 import { DeviceNameField } from './DeviceNameField'
 import { DeviceStateRow } from './DeviceStateRow'
 import { useDeviceStateList } from './useDeviceStateList'
+import { errMessage, useDeviceStateActions } from './useDeviceStateActions'
+import type { Tone } from './useDeviceStateActions'
 
 type T = ReturnType<typeof useI18nStore.getState>['t']
 
@@ -50,30 +47,11 @@ function statusMessage(t: T, status: DeviceStateStatus): string {
   }
 }
 
-type Tone = 'busy' | 'success' | 'warn' | 'error'
-interface ActionStatus {
-  tone: Tone
-  message: string
-  attrs?: Record<string, number>
-}
-
 const TONE_COLOR: Record<Tone, string> = {
   busy: 'text-text-secondary',
   success: 'text-green-500',
   warn: 'text-yellow-500',
   error: 'text-red-500',
-}
-
-function errMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
-}
-
-function reportAttrs(report: Partial<DeviceStateRestoreReport>): Record<string, number> {
-  return {
-    'data-reattached': report.reattached ?? 0,
-    'data-failed': report.failed ?? 0,
-    'data-host-removed': report.hostRemoved ?? 0,
-  }
 }
 
 export function DeviceStateSection({ onRestored }: { onRestored?: () => void } = {}) {
@@ -84,74 +62,21 @@ export function DeviceStateSection({ onRestored }: { onRestored?: () => void } =
   // getClientId() creates and persists an id on a fresh profile, so the own
   // row is recognised (badge, Delete disabled) even before sync ever ran.
   const [ownClientId] = useState(() => useSyncStore.getState().getClientId())
-  const lockedBy = useRebuildStore((s) => s.lockedBy)
   const { view, reload } = useDeviceStateList(targetId)
+  const { busy, actionStatus, setActionStatus, exclusive, replaceLocked, mergeLocked, replace, merge } =
+    useDeviceStateActions(onRestored)
 
-  const [busy, setBusy] = useState(false)
-  // Ref, not state: two clicks in one render share `busy` but not the ref.
-  const busyRef = useRef(false)
-  const [actionStatus, setActionStatus] = useState<ActionStatus | null>(null)
-  const replaceOwner = DEVICE_STATE_LOCK_OWNER.replace
-  const replaceLocked = lockedBy !== null && lockedBy !== replaceOwner
-
-  const handleReplace = async (load: () => Promise<DeviceStateRecord>) => {
-    if (busyRef.current) return
-    // The lock can be taken between the last render and this click.
-    const holder = useRebuildStore.getState().lockedBy
-    if (holder !== null && holder !== replaceOwner) {
-      setActionStatus({ tone: 'warn', message: t('settings.device_state.toast.locked', { owner: holder }) })
-      return
-    }
-    busyRef.current = true
-    setBusy(true)
-    setActionStatus({ tone: 'busy', message: t('settings.snapshot.toast.restoring') })
-    let attempted = false
-    try {
-      const record = await load()
-      attempted = true
-      const report = await restoreDeviceStateReplace(record.payload)
-      setActionStatus({
-        tone: 'success',
-        message: t('settings.device_state.toast.replaced', {
-          reattached: report.reattached,
-          failed: report.failed,
-          hostRemoved: report.hostRemoved,
-        }),
-        attrs: reportAttrs(report),
-      })
-    } catch (e) {
-      if (e instanceof RestoreError) {
-        setActionStatus({
-          tone: 'error',
-          message: t('settings.device_state.toast.failed', { message: errMessage(e.cause ?? e) }),
-          attrs: reportAttrs(e.report as Partial<DeviceStateRestoreReport>),
-        })
-      } else {
-        setActionStatus({ tone: 'error', message: t('settings.device_state.toast.failed', { message: errMessage(e) }) })
+  const handleDelete = (clientId: string) => {
+    if (!targetId) return
+    void exclusive(async () => {
+      try {
+        await deleteDeviceState(targetId, clientId)
+        setActionStatus(null)
+        reload()
+      } catch (e) {
+        setActionStatus({ tone: 'error', message: t('settings.device_state.action.delete_failed', { message: errMessage(e) }) })
       }
-    } finally {
-      busyRef.current = false
-      setBusy(false)
-      // The restore may have written `-prev` and replaced the stores — let the
-      // parent re-render so its Undo button sees the new backup.
-      if (attempted) onRestored?.()
-    }
-  }
-
-  const handleDelete = async (clientId: string) => {
-    if (!targetId || busyRef.current) return
-    busyRef.current = true
-    setBusy(true)
-    try {
-      await deleteDeviceState(targetId, clientId)
-      setActionStatus(null)
-      reload()
-    } catch (e) {
-      setActionStatus({ tone: 'error', message: t('settings.device_state.action.delete_failed', { message: errMessage(e) }) })
-    } finally {
-      busyRef.current = false
-      setBusy(false)
-    }
+    })
   }
 
   return (
@@ -225,7 +150,9 @@ export function DeviceStateSection({ onRestored }: { onRestored?: () => void } =
                   isOwn={row.clientId === ownClientId}
                   busy={busy}
                   replaceLocked={replaceLocked}
-                  onReplace={handleReplace}
+                  mergeLocked={mergeLocked}
+                  onReplace={replace}
+                  onMerge={merge}
                   onDelete={handleDelete}
                 />
               ))}

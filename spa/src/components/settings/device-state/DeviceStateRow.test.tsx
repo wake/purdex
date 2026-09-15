@@ -53,12 +53,15 @@ interface Props {
   isOwn?: boolean
   busy?: boolean
   replaceLocked?: boolean
+  mergeLocked?: boolean
   onReplace?: (load: () => Promise<DeviceStateRecord>) => void
+  onMerge?: (load: () => Promise<DeviceStateRecord>) => void
   onDelete?: (clientId: string) => void
 }
 
 function renderRow(p: Props = {}) {
   const onReplace = p.onReplace ?? vi.fn()
+  const onMerge = p.onMerge ?? vi.fn()
   const onDelete = p.onDelete ?? vi.fn()
   render(
     <DeviceStateRow
@@ -67,11 +70,13 @@ function renderRow(p: Props = {}) {
       isOwn={p.isOwn ?? false}
       busy={p.busy ?? false}
       replaceLocked={p.replaceLocked ?? false}
+      mergeLocked={p.mergeLocked ?? false}
       onReplace={onReplace}
+      onMerge={onMerge}
       onDelete={onDelete}
     />,
   )
-  return { onReplace, onDelete }
+  return { onReplace, onMerge, onDelete }
 }
 
 const id = SUMMARY.clientId
@@ -211,5 +216,43 @@ describe('DeviceStateRow', () => {
     renderRow({ busy: true })
     await waitFor(() => expect(screen.getByTestId(`device-state-replace-${id}`)).toBeDisabled())
     expect(screen.getByTestId(`device-state-delete-${id}`)).toBeDisabled()
+    expect(screen.getByTestId(`device-state-merge-${id}`)).toBeDisabled()
+  })
+
+  it('Merge asks for confirmation with its own text; Cancel does not call onMerge', () => {
+    const { onMerge, onReplace } = renderRow()
+    fireEvent.click(screen.getByTestId(`device-state-merge-${id}`))
+    const group = screen.getByTestId(`device-state-merge-confirm-${id}`)
+    expect(group.textContent).toContain('Existing ones are kept')
+    fireEvent.click(screen.getByTestId(`device-state-cancel-${id}`))
+    expect(onMerge).not.toHaveBeenCalled()
+    expect(onReplace).not.toHaveBeenCalled()
+    expect(screen.queryByTestId(`device-state-merge-confirm-${id}`)).toBeNull()
+  })
+
+  it('Merge Confirm hands a loader that fetches a fresh record (not the expand cache)', async () => {
+    const newer: DeviceStateRecord = { ...RECORD, updatedAt: RECORD.updatedAt + 1000 }
+    mockedGet.mockResolvedValueOnce(RECORD).mockResolvedValueOnce(newer)
+    const { onMerge, onReplace } = renderRow()
+    fireEvent.click(screen.getByTestId(`device-state-expand-${id}`))
+    await screen.findByTestId('device-state-ws-w1')
+
+    fireEvent.click(screen.getByTestId(`device-state-merge-${id}`))
+    fireEvent.click(screen.getByTestId(`device-state-confirm-${id}`))
+    expect(onReplace).not.toHaveBeenCalled()
+    expect(onMerge).toHaveBeenCalledTimes(1)
+    const load = vi.mocked(onMerge).mock.calls[0][0]
+    let rec: DeviceStateRecord | undefined
+    await act(async () => {
+      rec = await load()
+    })
+    expect(mockedGet).toHaveBeenCalledTimes(2)
+    expect(rec).toBe(newer)
+  })
+
+  it('disables Merge (and its confirm) under a foreign lock', () => {
+    renderRow({ mergeLocked: true })
+    expect(screen.getByTestId(`device-state-merge-${id}`)).toBeDisabled()
+    expect(screen.getByTestId(`device-state-replace-${id}`)).not.toBeDisabled()
   })
 })

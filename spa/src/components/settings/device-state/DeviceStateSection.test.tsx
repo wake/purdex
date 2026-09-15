@@ -9,7 +9,7 @@ import { useSyncStore } from '../../../lib/sync/use-sync-store'
 import * as apiModule from '../../../lib/device-state/api'
 import type { DeviceStateRecord, DeviceStateSummary } from '../../../lib/device-state/api'
 import * as restoreModule from '../../../lib/device-state/restore'
-import type { DeviceStateRestoreReport } from '../../../lib/device-state/restore'
+import type { DeviceStateMergeReport, DeviceStateRestoreReport } from '../../../lib/device-state/restore'
 import { RestoreError } from '../../../lib/snapshot/types'
 import type { WorkspaceSnapshot } from '../../../lib/snapshot/types'
 
@@ -22,12 +22,14 @@ vi.mock('../../../lib/device-state/api', async (importOriginal) => ({
 vi.mock('../../../lib/device-state/restore', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/device-state/restore')>()),
   restoreDeviceStateReplace: vi.fn(),
+  restoreDeviceStateMerge: vi.fn(),
 }))
 
 const mockedList = vi.mocked(apiModule.listDeviceStates)
 const mockedGet = vi.mocked(apiModule.getDeviceState)
 const mockedDelete = vi.mocked(apiModule.deleteDeviceState)
 const mockedReplace = vi.mocked(restoreModule.restoreDeviceStateReplace)
+const mockedMerge = vi.mocked(restoreModule.restoreDeviceStateMerge)
 
 const OWN = 'c_aaaaaaaaaaaa'
 const OTHER = 'c_bbbbbbbbbbbb'
@@ -98,6 +100,7 @@ beforeEach(() => {
   mockedGet.mockReset()
   mockedDelete.mockReset()
   mockedReplace.mockReset()
+  mockedMerge.mockReset()
 })
 
 describe('DeviceStateSection', () => {
@@ -432,5 +435,128 @@ describe('DeviceStateSection — replace', () => {
     expect(screen.getByTestId(`device-state-replace-${OTHER}`)).toBeDisabled()
     act(() => useRebuildStore.setState({ lockedBy: null }))
     expect(screen.getByTestId(`device-state-replace-${OTHER}`)).not.toBeDisabled()
+  })
+})
+
+describe('DeviceStateSection — merge', () => {
+  const MERGE_REPORT: DeviceStateMergeReport = { ...REPORT, addedWorkspaces: 4, addedTabs: 5, skippedTabs: 6 }
+
+  async function renderWithRow(onRestored = vi.fn()) {
+    withTarget()
+    mockedList.mockResolvedValue([summary(OTHER)])
+    render(<DeviceStateSection onRestored={onRestored} />)
+    await screen.findByTestId(`device-state-row-${OTHER}`)
+    return onRestored
+  }
+
+  function confirmMerge() {
+    fireEvent.click(screen.getByTestId(`device-state-merge-${OTHER}`))
+    fireEvent.click(screen.getByTestId(`device-state-confirm-${OTHER}`))
+  }
+
+  it('confirm fetches the record after confirming and merges its payload; success shows counts', async () => {
+    const record: DeviceStateRecord = { ...summary(OTHER), payload: PAYLOAD }
+    mockedGet.mockResolvedValue(record)
+    mockedMerge.mockResolvedValue(MERGE_REPORT)
+    const onRestored = await renderWithRow()
+    fireEvent.click(screen.getByTestId(`device-state-merge-${OTHER}`))
+    expect(mockedGet).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId(`device-state-confirm-${OTHER}`))
+    await waitFor(() => expect(mockedMerge).toHaveBeenCalledWith(PAYLOAD))
+    expect(mockedGet).toHaveBeenCalledWith('h1', OTHER)
+    expect(mockedReplace).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(screen.getByTestId('device-state-action-status')).toHaveAttribute('data-tone', 'success'),
+    )
+    const line = screen.getByTestId('device-state-action-status')
+    expect(line).toHaveAttribute('data-added-workspaces', '4')
+    expect(line).toHaveAttribute('data-added-tabs', '5')
+    expect(line).toHaveAttribute('data-skipped-tabs', '6')
+    expect(line).toHaveAttribute('data-reattached', '2')
+    expect(line).toHaveAttribute('data-failed', '1')
+    expect(line).toHaveAttribute('data-host-removed', '3')
+    expect(line.textContent).toContain('5')
+    expect(line.textContent).not.toContain('{{')
+    expect(onRestored).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancel does not merge', async () => {
+    await renderWithRow()
+    fireEvent.click(screen.getByTestId(`device-state-merge-${OTHER}`))
+    fireEvent.click(screen.getByTestId(`device-state-cancel-${OTHER}`))
+    expect(mockedGet).not.toHaveBeenCalled()
+    expect(mockedMerge).not.toHaveBeenCalled()
+  })
+
+  it('RestoreError → error tone; onRestored still called', async () => {
+    mockedGet.mockResolvedValue({ ...summary(OTHER), payload: PAYLOAD })
+    mockedMerge.mockRejectedValue(new RestoreError(REPORT, new Error('merge-broke')))
+    const onRestored = await renderWithRow()
+    confirmMerge()
+    await waitFor(() =>
+      expect(screen.getByTestId('device-state-action-status')).toHaveAttribute('data-tone', 'error'),
+    )
+    const line = screen.getByTestId('device-state-action-status')
+    expect(line.textContent).toContain('merge-broke')
+    expect(line).toHaveAttribute('data-host-removed', '3')
+    expect(line).toHaveAttribute('data-added-tabs', '0')
+    expect(onRestored).toHaveBeenCalledTimes(1)
+  })
+
+  it('a record fetch failure → error tone, no merge, no onRestored', async () => {
+    mockedGet.mockRejectedValue(new Error('get-404'))
+    const onRestored = await renderWithRow()
+    confirmMerge()
+    await waitFor(() =>
+      expect(screen.getByTestId('device-state-action-status')).toHaveAttribute('data-tone', 'error'),
+    )
+    expect(mockedMerge).not.toHaveBeenCalled()
+    expect(onRestored).not.toHaveBeenCalled()
+  })
+
+  it('disables Merge under a foreign lock (including the Replace owner)', async () => {
+    useRebuildStore.setState({ lockedBy: 'snapshot:restoreAll' })
+    await renderWithRow()
+    expect(screen.getByTestId(`device-state-merge-${OTHER}`)).toBeDisabled()
+    act(() => useRebuildStore.setState({ lockedBy: restoreModule.DEVICE_STATE_LOCK_OWNER.replace }))
+    expect(screen.getByTestId(`device-state-merge-${OTHER}`)).toBeDisabled()
+    act(() => useRebuildStore.setState({ lockedBy: null }))
+    expect(screen.getByTestId(`device-state-merge-${OTHER}`)).not.toBeDisabled()
+  })
+
+  it('Replace and Merge share single-flight: Merge is disabled while Replace runs', async () => {
+    mockedGet.mockResolvedValue({ ...summary(OTHER), payload: PAYLOAD })
+    const run = deferred<DeviceStateRestoreReport>()
+    mockedReplace.mockReturnValue(run.promise)
+    mockedMerge.mockResolvedValue(MERGE_REPORT)
+    await renderWithRow()
+    fireEvent.click(screen.getByTestId(`device-state-replace-${OTHER}`))
+    fireEvent.click(screen.getByTestId(`device-state-confirm-${OTHER}`))
+    await waitFor(() => expect(mockedReplace).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId(`device-state-merge-${OTHER}`)).toBeDisabled()
+    fireEvent.click(screen.getByTestId(`device-state-merge-${OTHER}`))
+    expect(screen.queryByTestId(`device-state-merge-confirm-${OTHER}`)).toBeNull()
+    await act(async () => {
+      run.resolve(REPORT)
+      await run.promise
+    })
+    expect(mockedMerge).not.toHaveBeenCalled()
+    expect(screen.getByTestId(`device-state-merge-${OTHER}`)).not.toBeDisabled()
+  })
+
+  it('Replace and Merge share single-flight: a Replace confirm while Merge runs is ignored', async () => {
+    mockedGet.mockResolvedValue({ ...summary(OTHER), payload: PAYLOAD })
+    const run = deferred<DeviceStateMergeReport>()
+    mockedMerge.mockReturnValue(run.promise)
+    await renderWithRow()
+    fireEvent.click(screen.getByTestId(`device-state-merge-${OTHER}`))
+    fireEvent.click(screen.getByTestId(`device-state-confirm-${OTHER}`))
+    await waitFor(() => expect(mockedMerge).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId(`device-state-replace-${OTHER}`)).toBeDisabled()
+    await act(async () => {
+      run.resolve(MERGE_REPORT)
+      await run.promise
+    })
+    expect(mockedReplace).not.toHaveBeenCalled()
   })
 })
