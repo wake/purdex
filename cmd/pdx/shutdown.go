@@ -52,10 +52,15 @@ type server interface {
 // immediately via exit(130) rather than waiting out the rest of the
 // shutdown budget — a second Ctrl-C should not need to wait for a stuck
 // module. Which signal counts as the second depends on what triggered the
-// sequence: when a signal did, the next one is the second; when Serve
-// returned first (no signal yet), a signal arriving during the sequence is
-// the FIRST one — it is logged with a "send again" hint and must not
-// short-circuit CloseModules — and only the one after it forces the exit.
+// sequence: when a signal did, the trigger consumed the first and the next
+// one is the second; when Serve returned first (the select consumed no
+// signal), the first value the watcher takes from sig — whether it was
+// already buffered when Serve won the race or arrives during the sequence
+// — is the FIRST one: it is logged with a "send again" hint and must not
+// short-circuit CloseModules, and only the one after it forces the exit.
+// Nothing is ever drained from sig outside those two consumers, so a
+// keypress is never silently discarded (which would make the forced exit
+// need a third Ctrl-C).
 func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	cancel context.CancelFunc, target shutdownTarget, budget time.Duration,
 	logf func(string, ...any), exit func(int)) error {
@@ -76,22 +81,18 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		serveReturned = true
 		// A signal may already be sitting in sig (buffered, not yet
 		// delivered to this select) even though Serve is what won the
-		// race. That is still the FIRST signal, not a second one — drain
-		// it so the watcher below does not count it towards the forced
-		// exit (it would otherwise be one Ctrl-C away from skipping
-		// CloseModules for what was really a single keypress).
-		select {
-		case <-sig:
-		default:
-		}
+		// race. It is left there: the Serve-first watcher below counts
+		// it as the FIRST signal (hint, no exit), exactly as it would a
+		// signal arriving later.
 	}
 
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		if !signalTriggered {
-			// Serve-first: the next signal is the first one the user
-			// sent; acknowledge it and keep going.
+			// Serve-first: the first value out of sig — buffered before
+			// the race or sent during the sequence — is the first signal
+			// the user sent; acknowledge it and keep going.
 			select {
 			case s := <-sig:
 				logf("received %v during shutdown; send again to exit immediately", s)

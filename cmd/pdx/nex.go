@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +36,7 @@ const nexUsage = "usage: pdx nex [--addr <url>] [--token <t>] [--config <path>] 
 	"       env: PDX_NEX_ADDR, PDX_NEX_TOKEN — prefer PDX_NEX_TOKEN over --token\n" +
 	"       (argv is visible to other local users; the environment is not)\n" +
 	"       --addr requires --token or PDX_NEX_TOKEN: config.toml's token is only used for the local daemon\n" +
+	"       --addr is http(s)://host[:port][/path] (no query/fragment; a trailing slash is stripped)\n" +
 	"       subcommands: delegate, ls, show, watch, events, attach, send, interrupt, archive, terminate, host"
 
 // runNexMain is the `pdx nex` switch target: it wires runNex to the real
@@ -48,13 +51,16 @@ func runNexMain(args []string) {
 // token), lab.protype.tw/wake/nexen's own CLI grammar (delegate, ls, show,
 // watch, events, attach, send, interrupt, archive, terminate, host).
 //
-// --addr, when given (by flag or env), is used verbatim as the base URL —
-// the caller supplies the full base including /api/nex if that is where it
-// lives — and then REQUIRES a token from --token / PDX_NEX_TOKEN: the
-// local config.toml token is the credential of this host's daemon and is
-// never sent to an address the user typed (exit 2, no config load, no
-// request). The config-derived default is nexBaseURL (bind/port with a
-// wildcard bind resolved to loopback). config.toml is loaded (via
+// --addr, when given (by flag or env), is the base URL — the caller
+// supplies the full base including /api/nex if that is where it lives. It
+// is normalized by normalizeNexAddr (scheme http/https, non-empty host, no
+// query or fragment, cleaned path with no trailing slash; any violation is
+// exit 2 with a message naming the value) and then REQUIRES a token from
+// --token / PDX_NEX_TOKEN: the local config.toml token is the credential
+// of this host's daemon and is never sent to an address the user typed
+// (exit 2, no config load, no request). The config-derived default is
+// nexBaseURL (bind/port with a wildcard bind resolved to loopback), which
+// is not normalized (it is built canonical). config.toml is loaded (via
 // lookupConfig, config.Load in production) only when neither addr nor
 // token was supplied, so a fully-specified invocation never touches disk.
 //
@@ -74,8 +80,8 @@ func runNexMain(args []string) {
 // original error is printed verbatim (e.g. a 404 execution_not_found for
 // an unknown execution id must not be mistaken for nex being disabled).
 // Every error path returns 1; a malformed --addr/--token/--config flag,
-// or --addr without a token, returns 2 without loading config or making
-// any request.
+// a malformed --addr value, or --addr without a token, returns 2 without
+// loading config or making any request.
 func runNex(args []string, stdout, stderr io.Writer, env func(string) string,
 	lookupConfig func(path string) (config.Config, error),
 	probe func(base, token string) (int, error)) int {
@@ -100,6 +106,14 @@ func runNex(args []string, stdout, stderr io.Writer, env func(string) string,
 		token = env("PDX_NEX_TOKEN")
 	}
 
+	if addr != "" {
+		normalized, ok := normalizeNexAddr(addr)
+		if !ok {
+			fmt.Fprintf(stderr, "pdx nex: --addr must be http(s)://host[:port][/path] without query or fragment (got %q)\n", addr)
+			return 2
+		}
+		addr = normalized
+	}
 	if addr != "" && token == "" {
 		fmt.Fprintln(stderr, "pdx nex: --addr given without --token / PDX_NEX_TOKEN (the local config token is not sent to a non-local address)")
 		return 2
@@ -134,6 +148,44 @@ func runNex(args []string, stdout, stderr io.Writer, env func(string) string,
 	}
 	fmt.Fprintf(stderr, "pdx nex: %v\n", err)
 	return 1
+}
+
+// normalizeNexAddr validates and canonicalizes a user-supplied nex base
+// URL (--addr / PDX_NEX_ADDR). It accepts http(s)://host[:port][/path]
+// only: the scheme must be http or https, the host non-empty, and there
+// must be no query or fragment (the client appends /v1/... paths and its
+// own queries; a query or fragment on the base would be silently lost or
+// corrupt every request). The path is path.Clean'd and a trailing slash
+// stripped so "http://h:1/api/nex/" and "http://h:1/api/nex" are the same
+// base and "http://h:1/" is the same as "http://h:1" (client requests
+// then hit /v1/... at the root). ok is false on any violation; the
+// config-derived base (nexBaseURL) never passes through here.
+func normalizeNexAddr(addr string) (string, bool) {
+	u, err := url.Parse(addr)
+	if err != nil {
+		return "", false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", false
+	}
+	if u.Host == "" || u.Hostname() == "" {
+		return "", false
+	}
+	if u.RawQuery != "" || u.Fragment != "" || u.ForceQuery || u.RawFragment != "" {
+		return "", false
+	}
+	if u.User != nil || u.Opaque != "" {
+		return "", false
+	}
+	p := u.Path
+	if p != "" {
+		p = path.Clean(p)
+		if p == "/" || p == "." {
+			p = ""
+		}
+	}
+	p = strings.TrimSuffix(p, "/")
+	return u.Scheme + "://" + u.Host + p, true
 }
 
 // nexBaseURL derives the local daemon's nex base URL from config.toml's

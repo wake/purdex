@@ -147,6 +147,8 @@ type harness struct {
 
 	exitMu    sync.Mutex
 	exitCalls []int // records exit() calls instead of ever calling real os.Exit
+
+	cancelHook func() // if non-nil, runs inside cancel() after recording
 }
 
 func newHarness() *harness {
@@ -159,7 +161,12 @@ func newHarness() *harness {
 	}
 }
 
-func (h *harness) cancel() { h.rec.add("cancel", nil) }
+func (h *harness) cancel() {
+	h.rec.add("cancel", nil)
+	if h.cancelHook != nil {
+		h.cancelHook()
+	}
+}
 
 func (h *harness) logf(format string, args ...any) {
 	h.logMu.Lock()
@@ -248,12 +255,12 @@ func TestServeAndWait_ServeFailsFirstStillRunsSequence(t *testing.T) {
 }
 
 // TestServeAndWait_SignalAndServeErrorRaceRunsSequenceOnce also guards
-// against a stale first signal being misread as a second one: sig already
-// has a buffered value when serveAndWait starts, so when the serveErr
-// branch wins the initial select instead, that value must be drained
-// before the second-signal watcher is armed — otherwise the watcher would
-// immediately "see" it and call exit(130), a hard exit that skips
-// CloseModules, for what is really still the first signal. Regardless of
+// against a lone first signal being misread as a second one: sig already
+// has a buffered value when serveAndWait starts. If the sig branch wins
+// the initial select it is the trigger; if the serveErr branch wins, the
+// buffered value is still the FIRST signal — the Serve-first watcher must
+// log it with the send-again hint, never call exit(130) (a hard exit that
+// skips CloseModules) for what is really a single keypress. Regardless of
 // which branch of the race actually wins (Go's select makes no promise
 // here), exit must never be called: asserting exited() == nil is
 // deterministic in outcome even though the branch taken isn't — see the
@@ -580,6 +587,156 @@ func TestServeAndWait_TwoSignalsDuringServeTriggeredSequenceExitImmediately(t *t
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("serveAndWait did not return after StopModules unblocked")
+	}
+}
+
+// TestServeAndWait_BufferedSignalThenSecondDuringSequenceExits is the
+// codex R2 case as stated: Serve fails immediately AND a signal is already
+// buffered in sig before the initial select. Whichever branch wins the
+// race, that buffered signal is the user's FIRST Ctrl-C (either it
+// triggered the sequence, or — Serve-first — the watcher logs it with the
+// send-again hint); the SECOND one, sent while StopModules is blocked,
+// must call exit(130). The outcome is the same on both branches, so the
+// assertion is deterministic even though the branch taken isn't. (In
+// practice the sig branch wins here: the Serve goroutine has not run by
+// the time the select is entered. The Serve-first side of the rule is
+// pinned deterministically by the next test.)
+func TestServeAndWait_BufferedSignalThenSecondDuringSequenceExits(t *testing.T) {
+	h := newHarness()
+	bindLost := errors.New("bind lost")
+	h.srv.serveErr = bindLost // Serve fails immediately ...
+	h.sig <- syscall.SIGINT   // ... and a signal is already buffered.
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h.target.stopHook = func(context.Context) {
+		close(started)
+		<-release
+	}
+
+	done := h.runAsync(testBudget)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopModules never started")
+	}
+
+	// Exactly one signal so far: no forced exit yet, on either branch.
+	time.Sleep(20 * time.Millisecond)
+	if exits := h.exited(); len(exits) != 0 {
+		t.Fatalf("exit called %v after only the buffered (first) signal", exits)
+	}
+
+	h.sig <- syscall.SIGINT // second signal while StopModules is blocked
+
+	waitFor := time.After(2 * time.Second)
+	for len(h.exited()) == 0 {
+		select {
+		case <-waitFor:
+			t.Fatalf("exit was not called after the second signal; logs = %q", h.logged())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if exits := h.exited(); !equalInts(exits, []int{130}) {
+		t.Fatalf("exit calls = %v, want [130]", exits)
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, bindLost) {
+			t.Fatalf("serveAndWait returned %v, want %v", err, bindLost)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveAndWait did not return after StopModules unblocked")
+	}
+	want := []string{"cancel", "StopModules", "Shutdown", "CloseModules"}
+	if got := h.rec.names(); !equalSteps(got, want) {
+		t.Fatalf("steps = %v, want %v", got, want)
+	}
+}
+
+// TestServeAndWait_ServeFirstBufferedSignalIsFirstThenSecondExits pins the
+// Serve-first side of the rule deterministically: Serve fails with sig
+// empty (so the serveErr branch wins the initial select — nothing else is
+// ready), and the harness's cancel hook, which serveAndWait calls right
+// after arming the watcher and before StopModules, buffers one signal. The
+// watcher must treat whatever is in sig — buffered or new — as the FIRST
+// signal: it is logged with the send-again hint and exit is not called.
+// The SECOND signal, sent while StopModules is still blocked, calls
+// exit(130); the sequence then completes once StopModules unblocks.
+func TestServeAndWait_ServeFirstBufferedSignalIsFirstThenSecondExits(t *testing.T) {
+	h := newHarness()
+	bindLost := errors.New("bind lost")
+	h.srv.serveErr = bindLost
+	h.cancelHook = func() { h.sig <- syscall.SIGTERM } // buffered before StopModules runs
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h.target.stopHook = func(context.Context) {
+		close(started)
+		<-release
+	}
+
+	done := h.runAsync(testBudget)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopModules never started")
+	}
+
+	// The buffered signal is the first: hint logged, no exit.
+	waitHint := time.After(2 * time.Second)
+	for {
+		hinted := false
+		for _, l := range h.logged() {
+			if strings.Contains(l, "during shutdown") && strings.Contains(l, "send again to exit immediately") {
+				hinted = true
+			}
+		}
+		if hinted {
+			break
+		}
+		select {
+		case <-waitHint:
+			t.Fatalf("buffered first signal was not logged with the send-again hint; logs = %q", h.logged())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if exits := h.exited(); len(exits) != 0 {
+		t.Fatalf("exit called %v after only the buffered (first) signal", exits)
+	}
+
+	h.sig <- syscall.SIGTERM // second signal while StopModules is blocked
+
+	waitFor := time.After(2 * time.Second)
+	for len(h.exited()) == 0 {
+		select {
+		case <-waitFor:
+			t.Fatalf("exit was not called after the second signal; logs = %q", h.logged())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if exits := h.exited(); !equalInts(exits, []int{130}) {
+		t.Fatalf("exit calls = %v, want [130]", exits)
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, bindLost) {
+			t.Fatalf("serveAndWait returned %v, want %v", err, bindLost)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveAndWait did not return after StopModules unblocked")
+	}
+	want := []string{"cancel", "StopModules", "Shutdown", "CloseModules"}
+	if got := h.rec.names(); !equalSteps(got, want) {
+		t.Fatalf("steps = %v, want %v", got, want)
 	}
 }
 

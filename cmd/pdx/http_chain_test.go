@@ -59,6 +59,15 @@ func doRequest(t *testing.T, h http.Handler, method, target, bearer string) *htt
 	return rec
 }
 
+// wsUpgrade marks req as a WebSocket upgrade (Connection: Upgrade +
+// Upgrade: websocket) — since the codex R2 follow-up the only request
+// shape TokenAuth accepts a one-time ?ticket= on.
+func wsUpgrade(req *http.Request) *http.Request {
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	return req
+}
+
 // TestNewOuterHandler_EmptyAdminToken covers the empty-admin-token rows:
 // the general chain stays wide open (TokenAuth semantics), the peer chain
 // still requires a matching bearer, and a valid host bearer still works.
@@ -140,14 +149,17 @@ func TestNewOuterHandler_TicketNeverConsultedOnPeerChain(t *testing.T) {
 	}
 
 	// If PeerAuth had consulted (and thus consumed) the ticket, this
-	// second use on the general chain would now fail.
+	// second use on the general chain — as a WebSocket upgrade, the only
+	// shape tickets authenticate — would now fail.
 	rec.reset()
-	res = doRequest(t, outer, "GET", "/api/sessions?ticket="+ticket, "")
+	req := wsUpgrade(httptest.NewRequest("GET", "/api/sessions?ticket="+ticket, nil))
+	res = httptest.NewRecorder()
+	outer.ServeHTTP(res, req)
 	if res.Code != 200 {
-		t.Fatalf("/api/sessions?ticket=...: want 200 (ticket still valid), got %d", res.Code)
+		t.Fatalf("/api/sessions?ticket=... (WS upgrade): want 200 (ticket still valid), got %d", res.Code)
 	}
 	if !rec.called {
-		t.Fatal("/api/sessions?ticket=...: want inner mux called")
+		t.Fatal("/api/sessions?ticket=... (WS upgrade): want inner mux called")
 	}
 }
 
@@ -314,6 +326,10 @@ func TestOuterChain_NexAuthMatrix(t *testing.T) {
 	})
 
 	t.Run("fresh ticket", func(t *testing.T) {
+		// A one-time WS ticket authenticates WebSocket upgrades only
+		// (codex R2 follow-up): on the plain GET / POST / SSE-GET shapes
+		// it is not even consulted, so every /api/nex/... REST request
+		// needs the bearer. The probe must not be reached.
 		for _, v := range variants {
 			t.Run(v.name, func(t *testing.T) {
 				// Each variant needs its own core (and thus its own
@@ -333,13 +349,34 @@ func TestOuterChain_NexAuthMatrix(t *testing.T) {
 				}
 				rec := httptest.NewRecorder()
 				outer.ServeHTTP(rec, req)
-				if rec.Code != 200 {
-					t.Fatalf("want 200, got %d", rec.Code)
+				if rec.Code != 401 {
+					t.Fatalf("want 401, got %d", rec.Code)
 				}
-				if !probe.called {
-					t.Fatal("want probe called")
+				if probe.called {
+					t.Fatal("want probe NOT reached")
 				}
 			})
+		}
+	})
+
+	t.Run("fresh ticket, WebSocket upgrade headers", func(t *testing.T) {
+		// Documents that a WebSocket upgrade carrying a fresh ticket does
+		// pass the chain even on a nex path: the chain cannot know Nexen
+		// has no WS routes (the real handler answers 404 there). Only
+		// reachability is asserted.
+		c, probe, outer := newHarness()
+		ticket, err := c.Tickets.Generate()
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		req := wsUpgrade(nexReq(http.MethodGet, "/api/nex/v1/x?ticket="+ticket))
+		rec := httptest.NewRecorder()
+		outer.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("want 200, got %d", rec.Code)
+		}
+		if !probe.called {
+			t.Fatal("want probe reached")
 		}
 	})
 
@@ -349,8 +386,9 @@ func TestOuterChain_NexAuthMatrix(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Generate: %v", err)
 		}
-		// First use: consumes the one-time ticket via the real chain.
-		req := nexReq(http.MethodGet, "/api/nex/v1/x?ticket="+ticket)
+		// First use (as a WebSocket upgrade, the only shape tickets
+		// authenticate): consumes the one-time ticket via the real chain.
+		req := wsUpgrade(nexReq(http.MethodGet, "/api/nex/v1/x?ticket="+ticket))
 		rec := httptest.NewRecorder()
 		outer.ServeHTTP(rec, req)
 		if rec.Code != 200 {
@@ -362,7 +400,7 @@ func TestOuterChain_NexAuthMatrix(t *testing.T) {
 
 		// Second use of the same ticket: not reached, one-time only.
 		probe.reset()
-		req2 := nexReq(http.MethodGet, "/api/nex/v1/x?ticket="+ticket)
+		req2 := wsUpgrade(nexReq(http.MethodGet, "/api/nex/v1/x?ticket="+ticket))
 		rec2 := httptest.NewRecorder()
 		outer.ServeHTTP(rec2, req2)
 		if rec2.Code != 401 {
@@ -376,7 +414,8 @@ func TestOuterChain_NexAuthMatrix(t *testing.T) {
 	t.Run("Bearer p at /api/nex/v1/x", func(t *testing.T) {
 		// The peer inbound token "p" only authenticates on the
 		// /api/peers chain; /api/nex/ routes through the general chain,
-		// which only accepts the admin token "t" or a valid ticket.
+		// which only accepts the admin token "t" (or a valid ticket on a
+		// WebSocket upgrade).
 		_, probe, outer := newHarness()
 		req := nexReq(http.MethodGet, "/api/nex/v1/x")
 		req.Header.Set("Authorization", "Bearer p")

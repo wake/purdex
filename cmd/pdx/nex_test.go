@@ -251,6 +251,143 @@ func TestRunNex_AddrWithoutToken_RefusesConfigToken(t *testing.T) {
 	}
 }
 
+// --- --addr / PDX_NEX_ADDR normalization ---------------------------------
+
+// TestRunNex_AddrTrailingSlashNormalized: a base given with a trailing
+// slash (`http://h:p/api/nex/`) must not produce `/api/nex//v1/...`
+// request paths — the path is cleaned and the trailing slash stripped
+// before the client and the probe see it.
+func TestRunNex_AddrTrailingSlashNormalized(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		via  string // "flag" or "env"
+	}{
+		{name: "flag", via: "flag"},
+		{name: "env", via: "env"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath, gotAuth string
+			srv := httptest.NewServer(lsOKHandler(&gotPath, &gotAuth))
+			defer srv.Close()
+
+			args := []string{"--token", "tok", "ls"}
+			env := map[string]string{}
+			if tc.via == "flag" {
+				args = append([]string{"--addr", srv.URL + "/api/nex/"}, args...)
+			} else {
+				env["PDX_NEX_ADDR"] = srv.URL + "/api/nex/"
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := runNex(args, &stdout, &stderr, fakeGetenv(env),
+				func(string) (config.Config, error) { t.Fatal("lookupConfig must not run"); return config.Config{}, nil },
+				func(string, string) (int, error) { return 0, nil })
+
+			if code != 0 {
+				t.Fatalf("code = %d, want 0; stderr=%q", code, stderr.String())
+			}
+			if !strings.HasPrefix(gotPath, "/api/nex/v1/") {
+				t.Errorf("request path = %q, want prefix /api/nex/v1/ (no doubled slash)", gotPath)
+			}
+			if strings.Contains(gotPath, "//") {
+				t.Errorf("request path = %q contains a doubled slash", gotPath)
+			}
+		})
+	}
+}
+
+// TestRunNex_AddrNormalizedBaseReachesProbe: the not-enabled message (and
+// the probe request itself) use the normalized base, not the raw --addr.
+func TestRunNex_AddrNormalizedBaseReachesProbe(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	var probedBase string
+	probe := func(base, token string) (int, error) {
+		probedBase = base
+		return probeNexCapabilities(base, token)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runNex([]string{"--addr", srv.URL + "/api/nex/", "--token", "tok", "ls"},
+		&stdout, &stderr, fakeGetenv(nil), nexTestConfig(config.Config{}), probe)
+
+	if code != 1 {
+		t.Fatalf("code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	wantBase := srv.URL + "/api/nex"
+	if probedBase != wantBase {
+		t.Errorf("probe base = %q, want normalized %q", probedBase, wantBase)
+	}
+	want := "nex: not enabled on this host (GET " + wantBase + "/v1/capabilities → 404; set [nex] enabled = true, or check --addr)"
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	}
+}
+
+// TestRunNex_AddrRootPathBecomesEmpty: `http://h:p/` (bare root) is the
+// same as `http://h:p` — the client then requests `/v1/...`.
+func TestRunNex_AddrRootPathBecomesEmpty(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(lsOKHandler(&gotPath, &gotAuth))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := runNex([]string{"--addr", srv.URL + "/", "--token", "tok", "ls"},
+		&stdout, &stderr, fakeGetenv(nil), nexTestConfig(config.Config{}),
+		func(string, string) (int, error) { return 0, nil })
+
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.HasPrefix(gotPath, "/v1/") {
+		t.Errorf("request path = %q, want prefix /v1/", gotPath)
+	}
+}
+
+// TestRunNex_AddrMalformedExit2: a base URL that is not
+// http(s)://host[:port][/path] — no scheme, a query, a fragment, an
+// unsupported scheme, an empty host — is refused with exit 2 before any
+// config load or request.
+func TestRunNex_AddrMalformedExit2(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		addr string
+	}{
+		{name: "no scheme", addr: "h:1/api/nex"},
+		{name: "query", addr: "http://h:1/api/nex?x=y"},
+		{name: "fragment", addr: "http://h:1/api/nex#f"},
+		{name: "unsupported scheme", addr: "ftp://h:1/api/nex"},
+		{name: "empty host", addr: "http:///api/nex"},
+		{name: "bare host no scheme", addr: "localhost:7860"},
+	} {
+		for _, via := range []string{"flag", "env"} {
+			t.Run(tc.name+"/"+via, func(t *testing.T) {
+				args := []string{"--token", "tok", "ls"}
+				env := map[string]string{}
+				if via == "flag" {
+					args = append([]string{"--addr", tc.addr}, args...)
+				} else {
+					env["PDX_NEX_ADDR"] = tc.addr
+				}
+				var stdout, stderr bytes.Buffer
+				code := runNex(args, &stdout, &stderr, fakeGetenv(env),
+					func(string) (config.Config, error) { t.Fatal("lookupConfig must not run"); return config.Config{}, nil },
+					func(string, string) (int, error) { t.Fatal("probe must not run"); return 0, nil })
+				if code != 2 {
+					t.Fatalf("code = %d, want 2; stderr=%q", code, stderr.String())
+				}
+				want := "pdx nex: --addr must be http(s)://host[:port][/path] without query or fragment (got " + strconv.Quote(tc.addr) + ")"
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr = %q, want %q", stderr.String(), want)
+				}
+			})
+		}
+	}
+}
+
 // --- config base URL: wildcard binds resolve to a connectable loopback --
 
 func TestNexBaseURLFromConfig(t *testing.T) {
