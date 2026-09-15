@@ -47,6 +47,35 @@ describe('applyDurableEvent', () => {
     expect(s.lastSeq).toBe(1)
   })
 
+  it('turns an empty-string brief into a user bubble with empty text (human said nothing)', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.delegated', { brief: '', principal_id: 'p' }))
+    expect(s.messages).toEqual([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '' }], stop_reason: null } },
+    ])
+  })
+
+  it('skips execution.delegated with no brief key (site-wide stripped) without adding a bubble', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.delegated', { principal_id: 'p' }))
+    expect(s.messages).toEqual([])
+    expect(s.lastSeq).toBe(1)
+  })
+
+  it('turns an empty-string message_accepted text into a user bubble with empty text, still clearing pendingLocal', () => {
+    let s: ExecutionState = { ...defaultExecutionState(), pendingLocal: { text: '', delivery: 'queued' } }
+    s = applyDurableEvent(s, ev(1, 'execution.message_accepted', { text: '', turn_id: 't1', principal_id: 'p' }))
+    expect(s.messages).toEqual([
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '' }], stop_reason: null } },
+    ])
+    expect(s.pendingLocal).toBeNull()
+  })
+
+  it('skips message_accepted with no text key, still clearing pendingLocal', () => {
+    let s: ExecutionState = { ...defaultExecutionState(), pendingLocal: { text: 'and more', delivery: 'queued' } }
+    s = applyDurableEvent(s, ev(1, 'execution.message_accepted', { turn_id: 't1', principal_id: 'p' }))
+    expect(s.messages).toEqual([])
+    expect(s.pendingLocal).toBeNull()
+  })
+
   it('patches summary fields carried by lifecycle events and marks the summary stale', () => {
     let s: ExecutionState = { ...defaultExecutionState(), summary: summary() }
     s = applyDurableEvent(s, ev(1, 'execution.running', {}))

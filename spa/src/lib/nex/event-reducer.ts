@@ -104,16 +104,21 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
 
   switch (ev.kind) {
     case 'execution.delegated': {
+      // Nexen always emits `brief` on execution-scoped streams; an empty
+      // string means "the human said nothing" and still gets a (empty)
+      // bubble, while an absent key means the site-wide stream stripped it
+      // (spec §4.2.4). A truthy check would conflate the two.
       const brief = str(p, 'brief')
-      if (brief) next = { ...next, messages: [...next.messages, userBubble(brief)] }
+      if (brief !== undefined) next = { ...next, messages: [...next.messages, userBubble(brief)] }
       return patchSummary(next, {})
     }
     case 'execution.message_accepted': {
       // Also a lifecycle event: turn_count / live_turn_id / event_count on the
       // summary moved, so the hook refetches (summaryStale) like any other.
+      // Same empty-vs-absent distinction as execution.delegated above.
       const text = str(p, 'text')
       next = { ...next, pendingLocal: null, summaryStale: true }
-      if (text) next = { ...next, messages: [...next.messages, userBubble(text)] }
+      if (text !== undefined) next = { ...next, messages: [...next.messages, userBubble(text)] }
       return next
     }
     case 'execution.running':
