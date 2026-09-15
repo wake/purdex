@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.351] - 2026-09-15
+
+### Feat: Nexen 整併 P-B.2 — execution pane 改吃 Nexen（#1047）
+
+P-B.1（alpha.350）的 Nexen client + execution store 接上 UI：`{kind:'execution'}` pane 現在是即時的 Nexen execution 對話窗，取代 M0 的 execution detail 頁。
+
+- **Renderer 共用**：從 Stream `ConversationView` 抽出 `ConversationMessages`（I7 snapshot 保證 DOM 完全一致）；`StreamInput` 加 `showAttach` / `initialValue`。
+- **Pane identity＝`(hostId, executionId)`**（I10）：route / deeplink 先解析 host 再開；`resolveExecutionHostId` 對**有給的 host hint 原樣回傳**（即使該 host 已不存在，pane 顯示「Host removed」），只有完全沒 hint 才 fallback 第一台。
+- **`useExecutionLease`**：ensure / renew / release / forget、idle 策略、`beforeunload` keepalive release、stale continuation 防護、host 移除與 undo 復原。
+- **`useExecutionSubscription`**：summary → history → SSE 依契約順序、`Last-Event-ID` 續傳、每 host 4 條 live SSE（LRU 暫停/恢復）、初始鏈路失敗 backoff 重試、`not_found` / `nex_unavailable` / `nex_disabled` / `host_removed` 問題狀態。
+- **`ExecutionView` + `useExecutionActions`**：send / interrupt / terminate 一律走 lease；樂觀 bubble 與 `message_accepted` 對帳（I12）、送出前即上鎖、過期的 send 回應不覆蓋新 send、`lease_*` 錯誤丟本地 lease、SSE 終局關閉後鎖輸入；i18n en / zh-TW。M0 `ExecutionDetailPage` / `execution-api` 移除。
+- **安全**：`nexFetch` 與 SSE 對未知 host 一律拒絕（`getDaemonBase` 對未知 id 會 fallback 到 active host，會把 Bearer 送到別台）；刪 host 時無 host 的舊 pane 以刪除前第一台當解析 host（closeTabs 關、keep-tabs 釘住）。
+- **Review**：subagent TDD 逐 task review、最終 whole-branch review（2 Critical + 3 Important + 1）一波修 + scoped re-review；PR R1（2×P1 route/deeplink host fallback、1×P2 送出鎖）、R2 三視角（3 條真 bug + 體質 3 項）、R3（1×P1 lease 取得途中 host 被刪）、R4（1×P2），全數修入。延後 #1048（subscription hook 拆分）、#1049（deferred minors）。
+- 測試 vitest 422→420 files（M0 detail 頁測試移除）、5114→5214 tests；Go 未動。
+
 ## [1.0.0-alpha.350] - 2026-09-15
 
 ### Feat: Nexen 整併 P-B.1 — SPA 端 Nexen client + execution store（#1045）
