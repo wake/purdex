@@ -241,6 +241,128 @@ describe('startDeviceStateUploader', () => {
     expect(put.mock.calls[0][0]).toBe('h2')
   })
 
+  describe('target endpoint changes (same devHostId)', () => {
+    it('re-uploads when the target token changes', async () => {
+      await startSettled()
+      useHostStore.getState().updateHost('h1', { token: 'new-token' })
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(1)
+      expect(put.mock.calls[0][0]).toBe('h1')
+    })
+
+    it('re-uploads when the target ip changes', async () => {
+      await startSettled()
+      useHostStore.getState().updateHost('h1', { ip: '10.0.0.9' })
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(1)
+      expect(put.mock.calls[0][0]).toBe('h1')
+    })
+
+    it('re-uploads when the target port changes', async () => {
+      await startSettled()
+      useHostStore.getState().updateHost('h1', { port: 7861 })
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(1)
+    })
+
+    it('ignores a token change on a non-target host', async () => {
+      await startSettled()
+      useHostStore.getState().updateHost('h2', { token: 'other' })
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(put).not.toHaveBeenCalled()
+    })
+
+    it('retries after an auth error once the token is fixed', async () => {
+      put.mockRejectedValueOnce(new Error('401'))
+      start()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(useDeviceStateStore.getState().status.kind).toBe('error')
+      useHostStore.getState().updateHost('h1', { token: 'fixed' })
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(2)
+      expect(useDeviceStateStore.getState().status).toEqual({ kind: 'ok', at: 1234, hostId: 'h1' })
+    })
+  })
+
+  describe('target revalidation before and after the PUT', () => {
+    function startWithPendingVersion() {
+      let resolveVersion!: (v: string) => void
+      const getAppVersion = vi
+        .fn<() => Promise<string>>()
+        .mockImplementationOnce(() => new Promise((r) => { resolveVersion = r }))
+        .mockResolvedValue('1.0.0')
+      stop = startDeviceStateUploader({ debounceMs: 5000, now: () => 1234, getAppVersion })
+      return { resolve: (v: string) => resolveVersion(v) }
+    }
+
+    it('does not PUT to the old host when devHostId switches during the await', async () => {
+      const version = startWithPendingVersion()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).not.toHaveBeenCalled()
+      useHostStore.getState().setDevHost('h2')
+      version.resolve('1.0.0')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(put).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(1)
+      expect(put.mock.calls[0][0]).toBe('h2')
+    })
+
+    it('does not PUT when the target disconnects during the await', async () => {
+      const version = startWithPendingVersion()
+      await vi.advanceTimersByTimeAsync(5000)
+      useHostStore.getState().setRuntime('h1', { status: 'disconnected' })
+      version.resolve('1.0.0')
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(put).not.toHaveBeenCalled()
+      expect(useDeviceStateStore.getState().status).toEqual({ kind: 'offline', hostId: 'h1' })
+    })
+
+    it('does not PUT with a stale token captured before the await', async () => {
+      const version = startWithPendingVersion()
+      await vi.advanceTimersByTimeAsync(5000)
+      useHostStore.getState().updateHost('h1', { token: 'rotated' })
+      version.resolve('1.0.0')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(put).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(1)
+      expect(put.mock.calls[0][0]).toBe('h1')
+    })
+
+    it('ignores an in-flight h1 result after devHostId switches to h2', async () => {
+      let resolvePut!: (v: { stored: boolean }) => void
+      put.mockImplementationOnce(() => new Promise((r) => { resolvePut = r }))
+      start()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(1)
+      useHostStore.getState().setDevHost('h2')
+      resolvePut({ stored: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(useDeviceStateStore.getState().status).not.toEqual({ kind: 'ok', at: 1234, hostId: 'h1' })
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(2)
+      expect(put.mock.calls[1][0]).toBe('h2')
+      expect(useDeviceStateStore.getState().status).toEqual({ kind: 'ok', at: 1234, hostId: 'h2' })
+      // h1 was never recorded → switching back must PUT to h1 again
+      useHostStore.getState().setDevHost('h1')
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(put).toHaveBeenCalledTimes(3)
+      expect(put.mock.calls[2][0]).toBe('h1')
+    })
+
+    it('ignores an in-flight h1 error after devHostId switches to h2', async () => {
+      let rejectPut!: (e: Error) => void
+      put.mockImplementationOnce(() => new Promise((_, r) => { rejectPut = r }))
+      start()
+      await vi.advanceTimersByTimeAsync(5000)
+      useHostStore.getState().setDevHost('h2')
+      rejectPut(new Error('boom'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(useDeviceStateStore.getState().status.kind).not.toBe('error')
+    })
+  })
+
   it('stop() prevents further PUTs and ignores an in-flight result', async () => {
     let resolve!: (v: { stored: boolean }) => void
     put.mockImplementationOnce(() => new Promise((r) => { resolve = r }))

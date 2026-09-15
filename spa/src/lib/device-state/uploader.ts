@@ -30,9 +30,22 @@ export async function resolveAppVersion(): Promise<string> {
 
 type HostSnapshot = ReturnType<typeof useHostStore.getState>
 
-function hostProjection(state: HostSnapshot): [string | null, string | undefined] {
+interface HostProjection {
+  target: string | null
+  status: string | undefined
+  /** Endpoint identity (ip/port/token) of the target; '' when there is none. */
+  endpoint: string
+}
+
+function hostProjection(state: HostSnapshot): HostProjection {
   const target = selectDevHostId(state)
-  return [target, target ? state.runtime[target]?.status : undefined]
+  if (target === null) return { target, status: undefined, endpoint: '' }
+  const host = state.hosts[target]
+  return {
+    target,
+    status: state.runtime[target]?.status,
+    endpoint: host ? JSON.stringify([host.ip, host.port, host.token ?? null]) : '',
+  }
 }
 
 export function startDeviceStateUploader(deps: UploaderDeps = {}): () => void {
@@ -64,15 +77,22 @@ export function startDeviceStateUploader(deps: UploaderDeps = {}): () => void {
       rerun = true
       return
     }
-    const hostState = useHostStore.getState()
-    const target = selectDevHostId(hostState)
+    const captured = hostProjection(useHostStore.getState())
+    const { target } = captured
     if (target === null) {
       setStatus({ kind: 'no-target' })
       return
     }
-    if (hostState.runtime[target]?.status !== 'connected') {
+    if (captured.status !== 'connected') {
       setStatus({ kind: 'offline', hostId: target })
       return
+    }
+
+    // A result is only recorded for the host/endpoint it was sent to; status
+    // reflects the current target, so a stale result is dropped silently.
+    const isSameTarget = (): boolean => {
+      const current = hostProjection(useHostStore.getState())
+      return current.target === target && current.endpoint === captured.endpoint
     }
 
     inFlight = true
@@ -87,16 +107,23 @@ export function startDeviceStateUploader(deps: UploaderDeps = {}): () => void {
       setStatus({ kind: 'uploading', hostId: target })
       const appVersion = await getAppVersion()
       if (stopped) return
+      // The target may have switched, disconnected, or changed endpoint during
+      // the awaits above — never PUT to a stale target; let a fresh tick decide.
+      const current = hostProjection(useHostStore.getState())
+      if (current.target !== target || current.status !== 'connected' || current.endpoint !== captured.endpoint) {
+        schedule()
+        return
+      }
       const clientId = useSyncStore.getState().getClientId()
       try {
         await putDeviceState(target, clientId, { deviceName, appVersion, capturedAt, payload })
       } catch (err) {
-        if (!stopped) {
+        if (!stopped && isSameTarget()) {
           setStatus({ kind: 'error', hostId: target, message: err instanceof Error ? err.message : String(err) })
         }
         return
       }
-      if (stopped) return
+      if (stopped || !isSameTarget()) return
       lastUploadedHash[target] = hash
       lastUploadedDeviceName[target] = deviceName
       setStatus({ kind: 'ok', at: now(), hostId: target })
@@ -121,9 +148,17 @@ export function startDeviceStateUploader(deps: UploaderDeps = {}): () => void {
       }
     }),
     useHostStore.subscribe((next, prev) => {
-      const [nextTarget, nextStatus] = hostProjection(next)
-      const [prevTarget, prevStatus] = hostProjection(prev)
-      if (nextTarget !== prevTarget || nextStatus !== prevStatus) schedule()
+      const n = hostProjection(next)
+      const p = hostProjection(prev)
+      if (n.target !== null && n.target === p.target && n.endpoint !== p.endpoint) {
+        // Same host id, new ip/port/token: the old bookkeeping (and any auth
+        // error) belongs to the previous endpoint.
+        delete lastUploadedHash[n.target]
+        delete lastUploadedDeviceName[n.target]
+        schedule()
+        return
+      }
+      if (n.target !== p.target || n.status !== p.status) schedule()
     }),
     useDeviceStateStore.subscribe((next, prev) => {
       if (effectiveDeviceName(next) !== effectiveDeviceName(prev)) schedule()
