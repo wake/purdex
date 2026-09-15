@@ -144,11 +144,15 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   // component down, clearHost may already have wiped the lease out from
   // under it, so release() finds nothing to release. Best-effort release
   // every held lease on this host here instead, before the store is
-  // cleared (spec §4.3.4: a held lease is released on host removal).
-  for (const [key, execution] of Object.entries(useExecutionStore.getState().executions)) {
-    const { hostId: execHostId, executionId } = splitExecutionKey(key)
-    if (execHostId === hostId && execution.lease) {
-      void releaseLease(hostId, executionId, execution.lease.leaseId).catch(() => {})
+  // cleared — but only in closeTabs mode (spec §4.3.4: closeTabs releases
+  // a held lease; keep-tabs mode drops the local lease without a release
+  // call, since the host — and its auth — is gone).
+  if (closeTabs) {
+    for (const [key, execution] of Object.entries(useExecutionStore.getState().executions)) {
+      const { hostId: execHostId, executionId } = splitExecutionKey(key)
+      if (execHostId === hostId && execution.lease) {
+        void releaseLease(hostId, executionId, execution.lease.leaseId).catch(() => {})
+      }
     }
   }
   useExecutionStore.getState().clearHost(hostId)

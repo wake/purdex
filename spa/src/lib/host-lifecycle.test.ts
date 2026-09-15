@@ -158,6 +158,15 @@ describe('host delete cascade', () => {
     expect(nexApi.releaseLease).toHaveBeenCalledWith(HOST_A, 'exc_1', 'ls_1')
   })
 
+  it('closeTabs=false drops held leases locally without a release call (M)', () => {
+    useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(nexApi.releaseLease).not.toHaveBeenCalled()
+    expect(useExecutionStore.getState().executions[`${HOST_A}:exc_1`]).toBeUndefined()
+  })
+
   it('cascade cleans SessionStore entries', () => {
     const sessions: Session[] = [makeSession('dev001', 'Dev')]
     useSessionStore.getState().replaceHost(HOST_A, sessions)
