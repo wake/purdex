@@ -1,7 +1,18 @@
 // spa/src/hooks/useRelayWsManager.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { renderHook, act } from '@testing-library/react'
 import { useStreamStore } from '../stores/useStreamStore'
 import type { StreamConnection } from '../lib/stream-ws'
+import { fetchWsTicket } from '../lib/host-api'
+import { connectStream } from '../lib/stream-ws'
+import { useRelayWsManager } from './useRelayWsManager'
+
+vi.mock('../lib/host-api', () => ({
+  fetchWsTicket: vi.fn(async () => 'tkt'),
+}))
+vi.mock('../lib/stream-ws', () => ({
+  connectStream: vi.fn(() => ({ send: vi.fn(), close: vi.fn() })),
+}))
 
 const HOST = 'local'
 
@@ -57,5 +68,27 @@ describe('useRelayWsManager store integration', () => {
     expect(changes[1]).toEqual({ [`${HOST}:sess-a`]: true, [`${HOST}:sess-b`]: false })
 
     unsub()
+  })
+
+  it('decomposes composite key on the last colon when hostId contains ":"', async () => {
+    const hostId = 'mlab:abc123'
+    const sessionCode = 'ses001'
+    vi.mocked(fetchWsTicket).mockClear()
+    vi.mocked(connectStream).mockClear()
+
+    const { unmount } = renderHook(() => useRelayWsManager())
+
+    await act(async () => {
+      useStreamStore.getState().setRelayStatus(hostId, sessionCode, true)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchWsTicket).toHaveBeenCalledWith(hostId)
+    const url = vi.mocked(connectStream).mock.calls[0][0]
+    expect(url).toContain(`/ws/cli-bridge-sub/${encodeURIComponent(sessionCode)}`)
+    expect(useStreamStore.getState().sessions[`${hostId}:${sessionCode}`]?.conn).not.toBeNull()
+
+    unmount()
   })
 })

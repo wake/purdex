@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useAgentStore } from '../stores/useAgentStore'
 import { getActiveSessionInfo } from '../lib/active-session'
-import { compositeKey } from '../lib/composite-key'
+import { compositeKey, splitCompositeKey } from '../lib/composite-key'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
@@ -96,8 +96,8 @@ useAgentStore.subscribe((state, prevState) => {
     }
   }
   // Detect removed hosts (any key whose host prefix is gone)
-  const prevHostIds = new Set(Object.keys(prevState.lastEvents).map(k => k.split(':')[0]))
-  const currHostIds = new Set(Object.keys(state.lastEvents).map(k => k.split(':')[0]))
+  const prevHostIds = new Set(Object.keys(prevState.lastEvents).map(k => splitCompositeKey(k).hostId))
+  const currHostIds = new Set(Object.keys(state.lastEvents).map(k => splitCompositeKey(k).hostId))
   for (const hostId of prevHostIds) {
     if (!currHostIds.has(hostId)) {
       purgeDebounceForHost(hostId)
@@ -216,12 +216,7 @@ export function useNotificationDispatcher(): void {
         const prev = prevEvents[compositeKeyStr]
         if (prev && prev.broadcast_ts === event.broadcast_ts) continue
 
-        // Extract sessionCode from composite key (hostId:sessionCode).
-        // Why lastIndexOf: sessionCode is a fixed 6-char base36 token (never
-        // contains ':'), while hostId may (e.g. "mlab:abc123").
-        const colonIdx = compositeKeyStr.lastIndexOf(':')
-        const hostId = colonIdx >= 0 ? compositeKeyStr.slice(0, colonIdx) : ''
-        const sessionCode = colonIdx >= 0 ? compositeKeyStr.slice(colonIdx + 1) : compositeKeyStr
+        const { hostId, sessionCode } = splitCompositeKey(compositeKeyStr)
 
         // Dedup layer 1: localStorage-based persistent dedup (handles restart/snapshot).
         // New sessions use Infinity sentinel — first event is recorded but not dispatched.

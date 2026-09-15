@@ -553,6 +553,42 @@ describe('debounce cleanup', () => {
     expect(shouldNotify(makeErrorParams(ckOther, 'rate_limit'))).toBe(false)
   })
 
+  it('debounce__remove_host_with_colon_via_subscription — store subscription detects host removal when hostId contains colon', () => {
+    // Two hosts whose ids both contain ':' and share the prefix "mlab".
+    // Old code derived hostId via split(':')[0] → both collapse to "mlab", so
+    // removing every session of "mlab:abc123" never triggers a host-level purge.
+    const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: { error: 'rate_limit' } }
+    useAgentStore.setState({
+      lastEvents: {
+        'mlab:abc123:s1': { ...fakeEvent },
+        'mlab:def456:s1': { ...fakeEvent },
+      },
+    })
+
+    // Debounce entries: s1 on both hosts, plus an extra s2 on "mlab:abc123"
+    // that has no lastEvents entry — only the host-level purge can clear it.
+    shouldNotify(makeErrorParams('mlab:abc123:s1', 'rate_limit'))
+    shouldNotify(makeErrorParams('mlab:abc123:s2', 'rate_limit'))
+    shouldNotify(makeErrorParams('mlab:def456:s1', 'rate_limit'))
+
+    vi.setSystemTime(1_000)
+    expect(shouldNotify(makeErrorParams('mlab:abc123:s1', 'rate_limit'))).toBe(false)
+    expect(shouldNotify(makeErrorParams('mlab:abc123:s2', 'rate_limit'))).toBe(false)
+    expect(shouldNotify(makeErrorParams('mlab:def456:s1', 'rate_limit'))).toBe(false)
+
+    // Remove the only session of host "mlab:abc123" → host disappears from lastEvents
+    useAgentStore.setState({
+      lastEvents: { 'mlab:def456:s1': { ...fakeEvent } },
+    })
+
+    vi.setSystemTime(2_000)
+    // Host-level purge cleared every "mlab:abc123" entry (incl. s2 with no lastEvents)
+    expect(shouldNotify(makeErrorParams('mlab:abc123:s1', 'rate_limit'))).toBe(true)
+    expect(shouldNotify(makeErrorParams('mlab:abc123:s2', 'rate_limit'))).toBe(true)
+    // "mlab:def456" untouched → still blocked
+    expect(shouldNotify(makeErrorParams('mlab:def456:s1', 'rate_limit'))).toBe(false)
+  })
+
   it('debounce__remove_host_resets — all keys for host cleared on removeHost', () => {
     // Seed lastEvents so subscription can detect host removal
     const fakeEvent = { agent_type: 'cc', status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 1, detail: {} }
