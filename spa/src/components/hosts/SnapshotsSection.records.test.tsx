@@ -1,4 +1,4 @@
-// spa/src/components/settings/SnapshotSettingsSection.records.test.tsx
+// spa/src/components/hosts/SnapshotsSection.records.test.tsx
 //
 // Task 16 — the per-tab rebuild records table and "Rebuild all" (spec §4.11).
 //
@@ -8,8 +8,9 @@
 // partial mocks so the grouping and the conflict rendering stay real.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
-import { SnapshotSettingsSection } from './SnapshotSettingsSection'
+import { SnapshotsSection } from './SnapshotsSection'
 import { useRebuildStore } from '../../stores/useRebuildStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useTabStore } from '../../stores/useTabStore'
 import * as storageModule from '../../lib/snapshot/storage'
@@ -38,6 +39,9 @@ vi.mock('../../lib/rebuild/batch', async (importOriginal) => ({
 vi.mock('../../lib/rebuild/engine', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/rebuild/engine')>()),
   rebuildPane: vi.fn(),
+}))
+vi.mock('../settings/device-state/DeviceStateSection', () => ({
+  DeviceStateSection: () => <div data-testid="device-state-section" />,
 }))
 
 const mockedReadSnapshot = vi.mocked(storageModule.readSnapshot)
@@ -84,11 +88,18 @@ function snapWithData(): WorkspaceSnapshot {
   }
 }
 
-describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
+describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useRebuildStore.setState({ operations: {}, lockedBy: null })
     useHostConfigStore.setState({ byHost: {} })
+    useHostStore.setState({
+      hosts: {
+        h1: { id: 'h1', name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 },
+        h2: { id: 'h2', name: 'air', ip: '5.6.7.8', port: 7860, order: 1 },
+      },
+      hostOrder: ['h1', 'h2'], devHostId: 'h1', runtime: {},
+    })
     mockedReadSnapshot.mockReturnValue(null)
     mockedReadPrev.mockReturnValue(null)
     mockedListSessions.mockResolvedValue([])
@@ -109,7 +120,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
     )
     mockedListSessions.mockResolvedValue([session({ code: 'live1', name: 'alive' })])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('dead')
     })
@@ -128,7 +139,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
         agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 },
       },
     }))
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => expect(screen.getByText('claude --resume S1')).toBeInTheDocument())
 
     // The row's host (h1) loads its config, then an override is edited there.
@@ -147,7 +158,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
     seedTabs(recordTab('t1', 'p1'))
     mockedListSessions.mockRejectedValue(new Error('offline'))
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('offline')
     })
@@ -157,7 +168,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
     seedTabs(recordTab('t1', 'p1', {
       rebuild: { sessionName: 'dev', tmuxInstance: '111:1000', capturedAt: 1 },
     }))
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('structure')
     })
@@ -176,7 +187,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
       session({ code: 'old111', name: 'dev', tmux_instance: '222:2000' }),
     ])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('dead')
     })
@@ -188,7 +199,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
       recordTab('t1', 'p1', { rebuild: { sessionName: 'dev', tmuxInstance: '111:1000', cwd: '/a', capturedAt: 1 } }),
       recordTab('t2', 'p2', { rebuild: { sessionName: 'dev', tmuxInstance: '111:1000', cwd: '/b', capturedAt: 9 } }),
     )
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     const conflict = await screen.findByTestId('batch-conflict-source')
     expect(conflict.textContent).toContain('p2')
     expect(conflict.textContent).toContain('/b')
@@ -196,7 +207,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
 
   it('says nothing about conflicts when the group agrees', () => {
     seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2'))
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     expect(screen.queryByTestId('batch-conflict-source')).toBeNull()
   })
 
@@ -217,12 +228,13 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
       }],
     })
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.click(screen.getByTestId('record-rebuild-all-btn'))
 
     await waitFor(() => {
       expect(mockedRunBatch).toHaveBeenCalledTimes(1)
     })
+    expect(mockedRunBatch).toHaveBeenCalledWith({}, { hostId: 'h1' })
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-status').getAttribute('data-tone')).toBe('success')
     })
@@ -230,7 +242,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
 
   it('lists an unknown-generation pane under "needs attention" with its own Rebuild', async () => {
     seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { tmuxInstance: '' }))
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
 
     // Excluded from the automatic batch…
     expect(screen.queryByTestId('record-attention-rebuild-p1')).toBeNull()
@@ -244,25 +256,39 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
 
   it('labels the legacy snapshot actions shell-only', () => {
     mockedReadSnapshot.mockReturnValue(snapWithData())
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     expect(screen.getByTestId('snapshot-legacy-shell-only').textContent).toMatch(/shell/i)
   })
 
   it('disables "Rebuild all" while another owner holds the operation lock', () => {
     seedTabs(recordTab('t1', 'p1'))
     useRebuildStore.getState().acquireOperationLock('rebuild:p9')
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     expect((screen.getByTestId('record-rebuild-all-btn') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('a blocked batch reports who is holding the lock instead of failing silently', async () => {
     seedTabs(recordTab('t1', 'p1'))
     mockedRunBatch.mockResolvedValue({ status: 'blocked', blockedBy: 'rebuild:p9', groups: [], excluded: [] })
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.click(screen.getByTestId('record-rebuild-all-btn'))
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-status').getAttribute('data-tone')).toBe('warn')
     })
     expect(screen.getByTestId('snapshot-status').textContent).toContain('rebuild:p9')
+  })
+
+  it('shows only this host\'s record rows', () => {
+    seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { hostId: 'h2' }))
+    render(<SnapshotsSection hostId="h1" />)
+    expect(screen.getByTestId('record-health-p1')).toBeInTheDocument()
+    expect(screen.queryByTestId('record-health-p2')).toBeNull()
+  })
+
+  it('lists sessions only for this host even when other hosts have record rows', async () => {
+    seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { hostId: 'h2' }))
+    render(<SnapshotsSection hostId="h1" />)
+    await waitFor(() => expect(mockedListSessions).toHaveBeenCalledTimes(1))
+    expect(mockedListSessions).toHaveBeenCalledWith('h1')
   })
 })

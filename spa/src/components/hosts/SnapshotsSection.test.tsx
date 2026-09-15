@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
-import { SnapshotSettingsSection } from './SnapshotSettingsSection'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { SnapshotsSection } from './SnapshotsSection'
+import { useHostStore } from '../../stores/useHostStore'
 import { RestoreError } from '../../lib/snapshot/types'
 import type { RestoreReport, SessionMeta, WorkspaceSnapshot } from '../../lib/snapshot/types'
 import type { Session } from '../../lib/host-api'
@@ -26,6 +27,9 @@ vi.mock('../../lib/snapshot/storage', async (importOriginal) => {
 vi.mock('../../lib/host-api')
 vi.mock('../../lib/snapshot/capture')
 vi.mock('../../lib/snapshot/restore')
+vi.mock('../settings/device-state/DeviceStateSection', () => ({
+  DeviceStateSection: () => <div data-testid="device-state-section" />,
+}))
 
 const EMPTY_REPORT: RestoreReport = { reattached: 0, rebuilt: 0, failed: 0, rebuiltButUnattached: [] }
 
@@ -91,6 +95,13 @@ const mockedUndo = vi.mocked(restoreModule.undoLastRestore)
 beforeEach(() => {
   vi.clearAllMocks()
   useRebuildStore.setState({ operations: {}, lockedBy: null })
+  useHostStore.setState({
+    hosts: {
+      h1: { id: 'h1', name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 },
+      h2: { id: 'h2', name: 'air', ip: '5.6.7.8', port: 7860, order: 1 },
+    },
+    hostOrder: ['h1', 'h2'], devHostId: 'h1', runtime: {},
+  })
   mockedReadPrev.mockReturnValue(null)
   mockedListSessions.mockResolvedValue([])
   // Safe defaults so an unstubbed click never crashes on `await undefined`.
@@ -120,7 +131,7 @@ function snapWithData(): WorkspaceSnapshot {
   })
 }
 
-describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
+describe('SnapshotsSection — health reconciliation (T8)', () => {
   it('live list missing the captured code → row is dead-rebuildable (red)', async () => {
     mockedReadSnapshot.mockReturnValue(
       makeSnapshot({
@@ -130,7 +141,7 @@ describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
     // Host reachable but returns a DIFFERENT code — no match.
     mockedListSessions.mockResolvedValue([session({ code: 'other', name: 'other' })])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('dead')
     })
@@ -144,7 +155,7 @@ describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
     )
     mockedListSessions.mockResolvedValue([session({ code: 's1', name: 'work' })])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('live')
     })
@@ -159,7 +170,7 @@ describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
     // Same code, DIFFERENT name → a reused code after a tmux restart.
     mockedListSessions.mockResolvedValue([session({ code: 's1', name: 'somethingElse' })])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('dead')
     })
@@ -176,7 +187,7 @@ describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
     // Host reachable, no matching session → would be 🔴 dead if cwd were present.
     mockedListSessions.mockResolvedValue([session({ code: 'other', name: 'other' })])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('structure')
     })
@@ -192,7 +203,7 @@ describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
     )
     mockedListSessions.mockResolvedValue([])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('structure')
     })
@@ -211,7 +222,7 @@ describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
     )
     mockedListSessions.mockRejectedValue(new Error('offline'))
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('offline')
     })
@@ -219,25 +230,20 @@ describe('SnapshotSettingsSection — health reconciliation (T8)', () => {
     expect(screen.getByTestId('snapshot-health-h1-s2').getAttribute('data-health')).toBe('offline')
   })
 
-  it('calls listSessions exactly once per captured host', async () => {
-    mockedReadSnapshot.mockReturnValue(
-      makeSnapshot({
-        sessionMeta: {
-          h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'a', cwd: '/x' }) },
-          h2: { s2: meta({ hostId: 'h2', sessionCode: 's2', name: 'b', cwd: '/y' }) },
-        },
-      }),
-    )
-    render(<SnapshotSettingsSection />)
-    await waitFor(() => {
-      expect(mockedListSessions).toHaveBeenCalledTimes(2)
-    })
+  it('lists sessions for THIS host only and hides other hosts\' rows', async () => {
+    mockedReadSnapshot.mockReturnValue(makeSnapshot({ sessionMeta: {
+      h1: { s1: meta({ hostId: 'h1', sessionCode: 's1', name: 'a', cwd: '/x' }) },
+      h2: { s2: meta({ hostId: 'h2', sessionCode: 's2', name: 'b', cwd: '/y' }) },
+    } }))
+    render(<SnapshotsSection hostId="h1" />)
+    await waitFor(() => expect(mockedListSessions).toHaveBeenCalledTimes(1))
     expect(mockedListSessions).toHaveBeenCalledWith('h1')
-    expect(mockedListSessions).toHaveBeenCalledWith('h2')
+    expect(screen.getByTestId('snapshot-health-h1-s1')).toBeInTheDocument()
+    expect(screen.queryByTestId('snapshot-health-h2-s2')).toBeNull()
   })
 })
 
-describe('SnapshotSettingsSection — tabs tree (T8 block 2)', () => {
+describe('SnapshotsSection — tabs tree (T8 block 2)', () => {
   it('renders workspace → tab → pane labels (terminal name / editor path / browser url)', () => {
     const tabs: Record<string, Tab> = {
       t1: leafTab('t1', { kind: 'tmux-session', hostId: 'h1', sessionCode: 's1', mode: 'terminal', cachedName: 'my-term', tmuxInstance: 'default' }),
@@ -253,7 +259,7 @@ describe('SnapshotSettingsSection — tabs tree (T8 block 2)', () => {
       }),
     )
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     expect(screen.getByText('Alpha')).toBeTruthy()
     expect(screen.getByText('my-term')).toBeTruthy()
     expect(screen.getByText('/repo/main.ts')).toBeTruthy()
@@ -261,11 +267,11 @@ describe('SnapshotSettingsSection — tabs tree (T8 block 2)', () => {
   })
 })
 
-describe('SnapshotSettingsSection — empty state (T8)', () => {
+describe('SnapshotsSection — empty state (T8)', () => {
   it('no snapshot → shows only capture button + empty message, no tables', () => {
     mockedReadSnapshot.mockReturnValue(null)
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     expect(screen.getByTestId('snapshot-capture-btn')).toBeTruthy()
     expect(screen.getByTestId('snapshot-empty')).toBeTruthy()
     expect(screen.queryByTestId('snapshot-tmux-block')).toBeNull()
@@ -274,12 +280,12 @@ describe('SnapshotSettingsSection — empty state (T8)', () => {
   })
 })
 
-describe('SnapshotSettingsSection — action wiring (T9)', () => {
+describe('SnapshotsSection — action wiring (T9)', () => {
   it('capture button → captureSnapshot(Date.now()) + success toast summarizing result', async () => {
     mockedReadSnapshot.mockReturnValue(null)
     mockedCapture.mockResolvedValue({ total: 4, resolved: 3, unresolved: 1 })
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.click(screen.getByTestId('snapshot-capture-btn'))
 
     await waitFor(() => {
@@ -293,24 +299,34 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     expect(status.getAttribute('data-unresolved')).toBe('1')
   })
 
-  it('rebuild button → rebuildAllSessions(snap)', async () => {
+  it('rebuild button → rebuildAllSessions with the host-filtered snapshot', async () => {
     const snap = snapWithData()
+    snap.sessionMeta.h2 = { s2: meta({ hostId: 'h2', sessionCode: 's2', name: 'b', cwd: '/y' }) }
     mockedReadSnapshot.mockReturnValue(snap)
-
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.click(screen.getByTestId('snapshot-rebuild-btn'))
+    await waitFor(() => expect(mockedRebuildAll).toHaveBeenCalledTimes(1))
+    expect(Object.keys(mockedRebuildAll.mock.calls[0][0].sessionMeta)).toEqual(['h1'])
+    expect(mockedWriteSnapshot).not.toHaveBeenCalled()
+  })
 
+  it('capture failure → error toast with the capture-failed wording', async () => {
+    mockedReadSnapshot.mockReturnValue(null)
+    mockedCapture.mockRejectedValue(new Error('boom'))
+    render(<SnapshotsSection hostId="h1" />)
+    fireEvent.click(screen.getByTestId('snapshot-capture-btn'))
     await waitFor(() => {
-      expect(mockedRebuildAll).toHaveBeenCalledTimes(1)
+      expect(screen.getByTestId('snapshot-status').getAttribute('data-tone')).toBe('error')
     })
-    expect(mockedRebuildAll).toHaveBeenCalledWith(snap)
+    expect(screen.getByTestId('snapshot-status').textContent).toMatch(/capture/i)
+    expect(screen.getByTestId('snapshot-status').textContent).toContain('boom')
   })
 
   it('restore-tab button → restoreTabLayout(snap)', async () => {
     const snap = snapWithData()
     mockedReadSnapshot.mockReturnValue(snap)
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.click(screen.getByTestId('snapshot-restore-tab-btn'))
 
     await waitFor(() => {
@@ -323,7 +339,7 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     mockedReadSnapshot.mockReturnValue(snap)
     mockedRestoreAll.mockResolvedValue({ reattached: 2, rebuilt: 1, failed: 3, rebuiltButUnattached: [] })
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
 
     await waitFor(() => {
@@ -342,13 +358,13 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
 
     // First render: no -prev → undo disabled.
     mockedReadPrev.mockReturnValue(null)
-    const { unmount } = render(<SnapshotSettingsSection />)
+    const { unmount } = render(<SnapshotsSection hostId="h1" />)
     expect((screen.getByTestId('snapshot-undo-btn') as HTMLButtonElement).disabled).toBe(true)
     unmount()
 
     // -prev present → undo enabled and wired.
     mockedReadPrev.mockReturnValue(snap)
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     const undoBtn = screen.getByTestId('snapshot-undo-btn') as HTMLButtonElement
     expect(undoBtn.disabled).toBe(false)
     fireEvent.click(undoBtn)
@@ -369,7 +385,7 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     mockedRestoreAll.mockRejectedValue(new RestoreError(report))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
 
     const status = await screen.findByTestId('snapshot-status')
@@ -392,7 +408,7 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     mockedReadSnapshot.mockReturnValue(snap)
     mockedRestoreAll.mockResolvedValue({ reattached: 3, rebuilt: 0, failed: 0, rebuiltButUnattached: [] })
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.click(screen.getByTestId('snapshot-restore-all-btn'))
 
     const status = await screen.findByTestId('snapshot-status')
@@ -409,7 +425,7 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     mockedReadSnapshot.mockReturnValueOnce(null).mockReturnValue(populated)
     mockedCapture.mockResolvedValue({ total: 1, resolved: 1, unresolved: 0 })
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     // Empty state: no restore/rebuild controls yet.
     expect(screen.getByTestId('snapshot-empty')).toBeTruthy()
     expect(screen.queryByTestId('snapshot-tmux-block')).toBeNull()
@@ -429,7 +445,7 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     // Fresh object each read so refresh() bumps the `snap` reference and re-fires the effect.
     mockedReadSnapshot.mockImplementation(() => snapWithData())
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     // Initial mount: one reconciliation pass for h1.
     await waitFor(() => {
       expect(mockedListSessions).toHaveBeenCalledTimes(1)
@@ -453,7 +469,7 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
     let release!: (r: RestoreReport) => void
     mockedRestoreAll.mockReturnValue(new Promise<RestoreReport>((r) => { release = r }))
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     const btn = screen.getByTestId('snapshot-restore-all-btn')
     fireEvent.click(btn)
     fireEvent.click(btn)
@@ -465,13 +481,13 @@ describe('SnapshotSettingsSection — action wiring (T9)', () => {
   })
 })
 
-describe('SnapshotSettingsSection — shared operation lock (§4.11)', () => {
+describe('SnapshotsSection — shared operation lock (§4.11)', () => {
   it('a rebuild holding the lock disables every snapshot action', () => {
     mockedReadSnapshot.mockReturnValue(snapWithData())
     mockedReadPrev.mockReturnValue(snapWithData())
     useRebuildStore.setState({ lockedBy: 'rebuild:p1' })
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     for (const id of [
       'snapshot-capture-btn',
       'snapshot-restore-all-btn',
@@ -487,7 +503,7 @@ describe('SnapshotSettingsSection — shared operation lock (§4.11)', () => {
     mockedReadSnapshot.mockReturnValue(snapWithData())
     mockedReadPrev.mockReturnValue(snapWithData())
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     for (const id of [
       'snapshot-capture-btn',
       'snapshot-restore-all-btn',
@@ -503,14 +519,14 @@ describe('SnapshotSettingsSection — shared operation lock (§4.11)', () => {
     mockedReadSnapshot.mockReturnValue(snapWithData())
     useRebuildStore.setState({ lockedBy: 'rebuild:p1' })
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.doubleClick(screen.getByText('/x'))
     expect(screen.queryByDisplayValue('/x')).toBeNull()
     expect(mockedWriteSnapshot).not.toHaveBeenCalled()
   })
 })
 
-describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
+describe('SnapshotsSection — inline cwd editing (T2)', () => {
   /**
    * Wire readSnapshot/writeSnapshot into a single mutable cell so a commit
    * persists and the subsequent refresh() re-reads the updated snapshot — mirrors
@@ -531,7 +547,7 @@ describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
       }),
     )
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
     expect((screen.getByTestId('snapshot-cwd-input') as HTMLInputElement).value).toBe('/x')
   })
@@ -543,7 +559,7 @@ describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
       }),
     )
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
     const input = screen.getByTestId('snapshot-cwd-input')
     fireEvent.change(input, { target: { value: '/new/dir' } })
@@ -568,7 +584,7 @@ describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
       }),
     )
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     fireEvent.doubleClick(screen.getByTestId('snapshot-cwd-cell'))
     const input = screen.getByTestId('snapshot-cwd-input')
     fireEvent.change(input, { target: { value: '/discarded' } })
@@ -590,7 +606,7 @@ describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
     // Host reachable, session not in the live list → structure now, dead after cwd.
     mockedListSessions.mockResolvedValue([session({ code: 'other', name: 'other' })])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('structure')
     })
@@ -615,7 +631,7 @@ describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
     let release!: (r: RestoreReport) => void
     mockedRestoreAll.mockReturnValue(new Promise<RestoreReport>((r) => { release = r }))
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1')).toBeTruthy()
     })
@@ -644,7 +660,7 @@ describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
     )
     mockedListSessions.mockResolvedValue([session({ code: 'other', name: 'other' })])
 
-    render(<SnapshotSettingsSection />)
+    render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('dead')
     })
@@ -658,5 +674,80 @@ describe('SnapshotSettingsSection — inline cwd editing (T2)', () => {
       expect(screen.getByTestId('snapshot-health-h1-s1').getAttribute('data-health')).toBe('structure')
     })
     expect(mockedWriteSnapshot.mock.calls[0][0].sessionMeta.h1.s1.cwd).toBeUndefined()
+  })
+})
+
+describe('SnapshotsSection — host vs client scope', () => {
+  it('the client block (capture / restore / undo / tabs / device state) renders only on the dev host page', () => {
+    mockedReadSnapshot.mockReturnValue(snapWithData())
+    const { unmount } = render(<SnapshotsSection hostId="h2" />)
+    expect(screen.queryByTestId('snapshot-client-block')).toBeNull()
+    expect(screen.queryByTestId('snapshot-capture-btn')).toBeNull()
+    expect(screen.queryByTestId('snapshot-restore-all-btn')).toBeNull()
+    expect(screen.queryByTestId('snapshot-undo-btn')).toBeNull()
+    expect(screen.queryByTestId('snapshot-tabs-block')).toBeNull()
+    expect(screen.queryByTestId('device-state-section')).toBeNull()
+    unmount()
+    render(<SnapshotsSection hostId="h1" />)
+    expect(screen.getByTestId('snapshot-client-block')).toBeInTheDocument()
+    expect(screen.getByTestId('snapshot-restore-all-btn')).toBeInTheDocument()
+    expect(screen.getByTestId('device-state-section')).toBeInTheDocument()
+    expect(screen.queryByTestId('snapshot-client-no-dev-hint')).toBeNull()
+  })
+
+  it('with no dev host the block goes to the first host in order, with a hint', () => {
+    useHostStore.setState({ devHostId: null })
+    mockedReadSnapshot.mockReturnValue(snapWithData())
+    const { unmount } = render(<SnapshotsSection hostId="h2" />)
+    expect(screen.queryByTestId('snapshot-client-block')).toBeNull()
+    unmount()
+    render(<SnapshotsSection hostId="h1" />)
+    expect(screen.getByTestId('snapshot-client-no-dev-hint')).toBeInTheDocument()
+  })
+
+  it('the host column is gone from both tables', () => {
+    mockedReadSnapshot.mockReturnValue(snapWithData())
+    render(<SnapshotsSection hostId="h1" />)
+    expect(within(screen.getByTestId('snapshot-tmux-block')).queryByText('h1')).toBeNull()
+  })
+})
+
+// Amendment A1: one action state for the whole page, so capture (client block)
+// and the host-scoped rebuilds never interleave.
+describe('SnapshotsSection — capture and host rebuilds are mutually exclusive (A1)', () => {
+  it('while capture is pending, host rebuild buttons are disabled and clicking them is a no-op', async () => {
+    mockedReadSnapshot.mockReturnValue(snapWithData())
+    let release!: (r: { total: number; resolved: number; unresolved: number }) => void
+    mockedCapture.mockReturnValue(new Promise((r) => { release = r }))
+
+    render(<SnapshotsSection hostId="h1" />)
+    fireEvent.click(screen.getByTestId('snapshot-capture-btn'))
+    await waitFor(() => expect(screen.getByTestId('snapshot-rebuild-btn')).toBeDisabled())
+    expect(screen.getByTestId('record-rebuild-all-btn')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('snapshot-rebuild-btn'))
+    fireEvent.click(screen.getByTestId('record-rebuild-all-btn'))
+    expect(mockedRebuildAll).not.toHaveBeenCalled()
+
+    release({ total: 0, resolved: 0, unresolved: 0 })
+    await waitFor(() => expect(screen.getByTestId('snapshot-rebuild-btn')).toBeEnabled())
+  })
+
+  it('while a host rebuild is pending, capture / restore / undo are disabled and capture is a no-op', async () => {
+    mockedReadSnapshot.mockReturnValue(snapWithData())
+    mockedReadPrev.mockReturnValue(snapWithData())
+    let release!: (r: RestoreReport) => void
+    mockedRebuildAll.mockReturnValue(new Promise<RestoreReport>((r) => { release = r }))
+
+    render(<SnapshotsSection hostId="h1" />)
+    fireEvent.click(screen.getByTestId('snapshot-rebuild-btn'))
+    await waitFor(() => expect(screen.getByTestId('snapshot-capture-btn')).toBeDisabled())
+    expect(screen.getByTestId('snapshot-restore-all-btn')).toBeDisabled()
+    expect(screen.getByTestId('snapshot-undo-btn')).toBeDisabled()
+    expect(screen.getByTestId('snapshot-restore-tab-btn')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('snapshot-capture-btn'))
+    expect(mockedCapture).not.toHaveBeenCalled()
+
+    release(EMPTY_REPORT)
+    await waitFor(() => expect(screen.getByTestId('snapshot-capture-btn')).toBeEnabled())
   })
 })

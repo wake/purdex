@@ -15,13 +15,12 @@
  *   | Top built-in (core)         | 0 – 4  | Appearance / Terminal / Interface         |
  *   | Top conditional built-in    | 5 – 9  | Electron (gated by canSystemTray)         |
  *   | Modules switchboard         | 10     | `module-config` (single header row)       |
- *   | Module-owned (alphabetical) | 11–19  | Browser / Commands / Editor / Files /     |
- *   |                             |        | Monitor / Sync                            |
+ *   | Module-owned (alphabetical) | 11–19  | Browser / Editor / Files / Monitor / Sync |
  *   | Tail built-in               | 20–29  | Dev Environment / Tmux Agent Monitor      |
  *
  * The "Module-owned" band sorts by **English (default) sidebar short label**,
  * not runtime locale. Constants are named after the **module identity**
- * (e.g. `MODULE_QUICK_COMMANDS` even though the sidebar shows "Commands"),
+ * (e.g. `MODULE_PERFORMANCE_MONITOR` even though the sidebar shows "Monitor"),
  * because the underlying module ID is the stable identifier; sidebar
  * labels can change without breaking the constants. (Spec §I3)
  *
@@ -57,10 +56,9 @@ export const SETTINGS_ORDER = {
   // Modules switchboard — single row, header of the modules group.
   MODULE_CONFIG: 10,
   // Module-owned (alphabetical by English sidebar short label —
-  // Browser / Commands / Editor / Files / Monitor / Sync). Constant name
+  // Browser / Editor / Files / Monitor / Sync). Constant name
   // tracks module identity, value tracks display order (spec §I3).
   MODULE_BROWSER: 11,             // sidebar: "Browser"
-  MODULE_QUICK_COMMANDS: 12,      // sidebar: "Commands"
   MODULE_EDITOR: 13,              // sidebar: "Editor"
   MODULE_FILES: 14,               // sidebar: "Files"
   MODULE_PERFORMANCE_MONITOR: 15, // sidebar: "Monitor"
@@ -68,7 +66,6 @@ export const SETTINGS_ORDER = {
   // Tail built-in — dev / debug surfaces.
   DEV_ENVIRONMENT: 20,
   TMUX_AGENT_MONITOR: 21,
-  SNAPSHOT: 22,
   // ---- workspace scope ------------------------------------------------
   WORKSPACE_FILES: 10,
 } as const
