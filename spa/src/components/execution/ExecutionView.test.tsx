@@ -52,6 +52,37 @@ describe('ExecutionView', () => {
     expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(true)
   })
 
+  it('locks the input synchronously before the lease resolves, so a second submit while acquisition is in flight is a no-op (Codex R1 finding B)', async () => {
+    let resolveLease!: (v: string) => void
+    ensureLease.mockReturnValueOnce(new Promise<string>((resolve) => { resolveLease = resolve }))
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const box = screen.getByRole('textbox')
+
+    fireEvent.change(box, { target: { value: 'first' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+
+    // pendingSend must already be true synchronously, before ensureLease's
+    // promise has had a chance to resolve — proves the lock is set before
+    // the await, not after.
+    expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(true)
+    expect(ensureLease).toHaveBeenCalledTimes(1)
+    expect(api.sendMessage).not.toHaveBeenCalled()
+
+    // Drive a second submit while the first lease acquisition is still in
+    // flight. Dispatch directly (bypassing the textarea's `disabled`
+    // attribute) so this proves the re-entrancy guard itself, not just the
+    // disabled input.
+    fireEvent.change(box, { target: { value: 'second' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+
+    expect(ensureLease).toHaveBeenCalledTimes(1)
+
+    await act(async () => { resolveLease('ls_1'); await Promise.resolve(); await Promise.resolve() })
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1)
+    expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'first')
+  })
+
   it('does not resurrect pendingLocal once message_accepted already consumed it while the POST is still in flight (C1/I12)', async () => {
     let resolveSend!: (v: { turn_id: string; delivery: 'delivered' | 'queued' }) => void
     vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise((resolve) => { resolveSend = resolve }))

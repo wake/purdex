@@ -53,13 +53,19 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   }, [hostId, executionId, forget])
 
   const handleSend = useCallback(async (text: string) => {
+    // Re-entrancy guard (Codex R1 finding B): pendingSend is set
+    // synchronously below, before the `await ensureLease()`, so a second
+    // submit fired while the first lease acquisition is still in flight
+    // reads the lock here and is a no-op — without this, a slow lease let
+    // two sends race and both post (sharing the same pendingLocal bubble).
+    if (store().executions[key]?.pendingSend) return
     store().setSendError(hostId, executionId, null)
     setDraft(null)
     touch()
+    store().setPendingLocal(hostId, executionId, { text, delivery: null })
+    store().setPendingSend(hostId, executionId, true)
     try {
       const leaseId = await ensureLease()
-      store().setPendingLocal(hostId, executionId, { text, delivery: null })
-      store().setPendingSend(hostId, executionId, true)
       const r = await sendMessage(hostId, executionId, leaseId, text)
       // execution.message_accepted (execution/service.go:794-807) can land
       // before this resolves and already clear pendingLocal + push the
