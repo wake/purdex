@@ -36,6 +36,10 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   }
 
   const prefix = `${hostId}:`
+  // Captured before any removal: a hostless execution pane resolves to the
+  // first host (resolveExecutionHostId), so that is its effective host.
+  const fallbackHost = hostStore.hostOrder[0]
+  const effectiveExecutionHost = (host: string | undefined) => host || fallbackHost
 
   // --- Snapshot for undo (serializable data only) ---
   const snapshot: {
@@ -103,10 +107,9 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
         if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId) {
           hasHostPane = true
         }
-        // Execution panes (Nexen, spec §4.3.4) use the stored `host` hint
-        // only — no resolve/fallback — so an unset host never matches and
-        // stays open under whatever host resolveExecutionHostId picks later.
-        if (pane.content.kind === 'execution' && pane.content.host === hostId) {
+        // Execution panes (Nexen, spec §4.3.4) match on their resolved host,
+        // so a legacy hostless pane bound to the removed first host closes too.
+        if (pane.content.kind === 'execution' && effectiveExecutionHost(pane.content.host) === hostId) {
           hasHostPane = true
         }
       })
@@ -128,6 +131,18 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
     // Mark all tmux-session tabs as terminated
     tabStore.markHostTerminated(hostId, 'host-removed')
+    // A hostless execution pane renders against the first host; once that
+    // host is gone it would silently rebind to the next one (spec §4.3.2
+    // step 5 forbids that). Pin it to the removed host so it renders
+    // `host_removed`. Undo leaves the pin: with the host restored,
+    // host === hostId is exactly what the pane was showing.
+    for (const [tabId, tab] of Object.entries(useTabStore.getState().tabs)) {
+      scanPaneTree(tab.layout, (pane) => {
+        if (pane.content.kind === 'execution' && !pane.content.host && fallbackHost === hostId) {
+          useTabStore.getState().setPaneContent(tabId, pane.id, { ...pane.content, host: hostId })
+        }
+      })
+    }
   }
 
   sessionStore.removeHost(hostId)

@@ -107,6 +107,37 @@ describe('host delete cascade', () => {
     expect(content).toEqual({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
   })
 
+  it('closeTabs=true closes a hostless execution pane bound to the removed first host', () => {
+    const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
+    useTabStore.getState().addTab(legacy)
+
+    deleteHostCascade(HOST_A, true)
+
+    expect(useTabStore.getState().tabs[legacy.id]).toBeUndefined()
+  })
+
+  it('closeTabs=false pins a hostless execution pane to the removed first host instead of rebinding it', () => {
+    const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
+    useTabStore.getState().addTab(legacy)
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(useTabStore.getState().tabs[legacy.id]).toBeDefined()
+    const content = getPrimaryPane(useTabStore.getState().tabs[legacy.id].layout).content
+    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+  })
+
+  it.each([true, false])('removing a non-first host leaves a hostless execution pane untouched (closeTabs=%s)', (closeTabs) => {
+    const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
+    useTabStore.getState().addTab(legacy)
+
+    deleteHostCascade(HOST_B, closeTabs)
+
+    expect(useTabStore.getState().tabs[legacy.id]).toBeDefined()
+    const content = getPrimaryPane(useTabStore.getState().tabs[legacy.id].layout).content
+    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1' })
+  })
+
   it('cascade cleans AgentStore entries', () => {
     const event: NormalizedEvent = {
       agent_type: 'cc',
