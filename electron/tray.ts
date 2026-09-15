@@ -1,13 +1,26 @@
 import { Tray, Menu, nativeImage, app } from 'electron'
-import { join } from 'path'
+import { existsSync } from 'node:fs'
 import type { WindowManager } from './window-manager'
+import { resolveTrayIconPath } from './tray-icon'
 
 let tray: Tray | null = null
 
-export function createTray(windowManager: WindowManager): Tray {
-  // macOS Template image (auto dark/light) — nativeImage does not support SVG
-  const iconPath = join(__dirname, '../../spa/public/icons/icon-192.png')
-  const icon = nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 })
+// Idempotent: returns the existing tray if one is already up. Returns null
+// (and creates nothing) when the icon file cannot be found — an empty
+// nativeImage would otherwise show up as an invisible blank slot in the
+// menu bar.
+export function createTray(windowManager: WindowManager): Tray | null {
+  if (tray) return tray
+
+  const iconPath = resolveTrayIconPath(__dirname, existsSync)
+  if (!iconPath) {
+    console.warn('[tray] icon not found, tray not created')
+    return null
+  }
+
+  // trayTemplate.png is 16px black+alpha with a 32px @2x sibling — already the
+  // right size for a macOS template image, so no resize here.
+  const icon = nativeImage.createFromPath(iconPath)
   icon.setTemplateImage(true)
 
   tray = new Tray(icon)
@@ -29,4 +42,13 @@ export function createTray(windowManager: WindowManager): Tray {
 export function destroyTray(): void {
   tray?.destroy()
   tray = null
+}
+
+export function isTrayVisible(): boolean {
+  return tray !== null
+}
+
+export function setTrayVisible(visible: boolean, windowManager: WindowManager): void {
+  if (visible) createTray(windowManager)
+  else destroyTray()
 }
