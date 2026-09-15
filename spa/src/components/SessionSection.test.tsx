@@ -6,7 +6,9 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { emptyHostConfigEntry, useHostConfigStore } from '../stores/useHostConfigStore'
 import { compositeKey } from '../lib/composite-key'
+import type { HostProject } from '../lib/host-config-api'
 
 vi.mock('../hooks/useSessionWatch', () => ({
   useSessionWatch: vi.fn(),
@@ -19,19 +21,31 @@ vi.mock('../lib/host-api', async (importOriginal) => {
 
 // The launcher owns its own behaviour (its suite covers it); here we only care
 // that the block mounts it for the right host, hands it a live `disabled`
-// verdict, and acts on its callbacks.
+// verdict, and acts on its callbacks. `real.value` swaps the stub for the real
+// component in the one test that needs the whole post-create path.
 const launcherProps = vi.hoisted(() => ({
   current: null as null | { hostId: string; disabled: boolean; onLaunched: (s: unknown) => void; onCancel: () => void },
 }))
-vi.mock('./session-launcher/SessionLauncher', () => ({
-  SessionLauncher: (props: { hostId: string; disabled: boolean; onLaunched: (s: unknown) => void; onCancel: () => void }) => {
-    launcherProps.current = props
-    return <div data-testid={`launcher-stub-${props.hostId}`} data-disabled={String(props.disabled)} />
-  },
+const real = vi.hoisted(() => ({ value: false }))
+const launch = vi.hoisted(() => vi.fn())
+vi.mock('../lib/session-launch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/session-launch')>()),
+  launchSession: launch,
 }))
+vi.mock('./session-launcher/SessionLauncher', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./session-launcher/SessionLauncher')>()
+  return {
+    SessionLauncher: (props: { hostId: string; disabled: boolean; onLaunched: (s: unknown) => void; onCancel: () => void }) => {
+      launcherProps.current = props
+      if (real.value) return <actual.SessionLauncher {...props} onLaunched={props.onLaunched as never} />
+      return <div data-testid={`launcher-stub-${props.hostId}`} data-disabled={String(props.disabled)} />
+    },
+  }
+})
 
 const HOST_ID = 'test-host'
 const HOST_B = 'host-b'
+const PROJECT: HostProject = { id: 'p1', name: 'Purdex', slug: 'purdex', path: '~/w/purdex' }
 const mockOnSelect = vi.fn()
 
 /** Render one block per host, mirroring how NewTabPage lays out `sessions:<hostId>` providers. */
@@ -52,6 +66,8 @@ beforeEach(() => {
   useAgentStore.setState({ statuses: {}, agentTypes: {}, subagents: {}, unread: {} })
   useUISettingsStore.setState({ tabIndicatorStyle: 'badge', ccIconVariant: 'bot', codexIconVariant: 'openai' })
   launcherProps.current = null
+  real.value = false
+  launch.mockReset()
 })
 
 describe('SessionSection', () => {
@@ -451,6 +467,29 @@ describe('SessionSection', () => {
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     act(() => launcherProps.current!.onLaunched(made()))
     expect(mockOnSelect).toHaveBeenCalledWith(expect.objectContaining({ tmuxInstance: '' }))
+  })
+
+  // The whole path with the real launcher: the session IS created, and the host
+  // drops before it can be attached. The launcher must stay on screen carrying
+  // the reason instead of closing on a pane that never opened.
+  it('host drops after the create resolves: the launcher stays open with an error and nothing attaches', async () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: LIVE } })
+    useHostConfigStore.setState({
+      byHost: { [HOST_ID]: { ...emptyHostConfigEntry('ready'), projects: [PROJECT], commands: [] } },
+      ensureLoaded: vi.fn(async () => {}),
+    })
+    launch.mockImplementation(async () => {
+      useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+      return { status: 'created', session: made() }
+    })
+    real.value = true
+    render(<Blocks />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    fireEvent.click(screen.getByTestId('launcher-project-name-p1'))
+    expect(await screen.findByTestId('launcher-error')).toHaveTextContent('went offline')
+    expect(screen.getByTestId('launcher')).toBeInTheDocument()
+    expect(mockOnSelect).not.toHaveBeenCalled()
   })
 
   it('does not attach when the host went offline or was removed before the launch resolved', () => {

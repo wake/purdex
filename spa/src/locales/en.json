@@ -1214,5 +1214,6 @@
   "launcher.empty": "No projects on this host yet.",
   "launcher.empty_link": "Add one in Host › Projects",
   "launcher.unsupported": "This host's daemon is too old for projects — press Enter to create a plain session.",
-  "launcher.offline": "Host is offline — no session was created."
+  "launcher.offline": "Host is offline — no session was created.",
+  "launcher.created_offline": "Session created, but the host went offline before it could be opened."
 }

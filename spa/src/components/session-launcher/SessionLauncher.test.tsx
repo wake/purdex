@@ -264,6 +264,20 @@ describe('SessionLauncher', () => {
     expect(onLaunched).not.toHaveBeenCalled()
   })
 
+  // A3: the session really was created; the launcher must not vanish leaving the
+  // user with no pane and no explanation.
+  it('host drops while the create is in flight: the launcher stays open with an error and hands nothing over', async () => {
+    launch.mockImplementation(async () => {
+      seedHost({ status: 'disconnected' })
+      return { status: 'created', session: made }
+    })
+    renderLauncher()
+    fireEvent.click(screen.getByTestId('launcher-project-name-p1'))
+    expect(await screen.findByTestId('launcher-error')).toHaveTextContent('went offline')
+    expect(onLaunched).not.toHaveBeenCalled()
+    expect(screen.getByTestId('launcher')).toBeInTheDocument()
+  })
+
   it('tmux goes unavailable after the launcher opens: Enter refuses too', async () => {
     renderLauncher()
     seedHost({ tmuxState: 'unavailable' })

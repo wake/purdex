@@ -136,10 +136,13 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
             disabled={createDisabled}
             onCancel={() => setCreating(false)}
             onLaunched={(session) => {
-              setCreating(false)
-              // The host may have dropped or been removed while the launch was
-              // in flight; attaching then would bind the pane to a dead host.
+              // Backstop: the launcher only hands over a session whose host is
+              // still live, but attaching to a host removed in between would
+              // bind the pane to a dead daemon. Closing follows the attach —
+              // never before it — so a refusal here cannot make the launcher
+              // vanish with neither a pane nor a word.
               if (!isHostLive(hostId)) return
+              setCreating(false)
               onSelect({
                 kind: 'tmux-session',
                 hostId,

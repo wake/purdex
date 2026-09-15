@@ -84,6 +84,11 @@ export function SessionLauncher({ hostId, disabled, onLaunched, onCancel, launch
           ? t('launcher.send_unsupported')
           : t('launcher.send_failed', { reason: outcome.sendError }))
       }
+      // The host can drop between the create and the attach. The session exists
+      // — say so and stay open, rather than closing on a pane that will never
+      // appear. The caller only ever receives a session its host is still live
+      // for, so it has no offline case of its own to render.
+      if (!isHostLive(hostId)) { setError(t('launcher.created_offline')); return }
       onLaunched(outcome.session)
     } finally {
       busyRef.current = false

@@ -5,7 +5,9 @@ import { SessionsSection } from './SessionsSection'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useAgentStore } from '../../stores/useAgentStore'
+import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { compositeKey } from '../../lib/composite-key'
+import type { HostProject } from '../../lib/host-config-api'
 
 const mockOpenSingletonTab = vi.fn(() => 'tab-1')
 const mockSetActiveTab = vi.fn()
@@ -41,17 +43,30 @@ vi.mock('../../lib/host-api', () => ({
 
 // The launcher has its own suite; this one only checks that the section mounts
 // it for this host, keeps its `disabled` verdict live, and closes on callback.
+// `real.value` swaps the stub for the real component where the whole
+// post-create path is what matters.
 const launcherProps = vi.hoisted(() => ({
   current: null as null | { hostId: string; disabled: boolean; onLaunched: (s: unknown) => void; onCancel: () => void },
 }))
-vi.mock('../session-launcher/SessionLauncher', () => ({
-  SessionLauncher: (props: { hostId: string; disabled: boolean; onLaunched: (s: unknown) => void; onCancel: () => void }) => {
-    launcherProps.current = props
-    return <div data-testid={`launcher-stub-${props.hostId}`} data-disabled={String(props.disabled)} />
-  },
+const real = vi.hoisted(() => ({ value: false }))
+const launch = vi.hoisted(() => vi.fn())
+vi.mock('../../lib/session-launch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/session-launch')>()),
+  launchSession: launch,
 }))
+vi.mock('../session-launcher/SessionLauncher', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../session-launcher/SessionLauncher')>()
+  return {
+    SessionLauncher: (props: { hostId: string; disabled: boolean; onLaunched: (s: unknown) => void; onCancel: () => void }) => {
+      launcherProps.current = props
+      if (real.value) return <actual.SessionLauncher {...props} onLaunched={props.onLaunched as never} />
+      return <div data-testid={`launcher-stub-${props.hostId}`} data-disabled={String(props.disabled)} />
+    },
+  }
+})
 
 const HOST_ID = 'test-host'
+const PROJECT: HostProject = { id: 'p1', name: 'Purdex', slug: 'purdex', path: '~/w/purdex' }
 const SESSIONS = [
   { code: 'abc', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
 ]
@@ -70,6 +85,8 @@ beforeEach(() => {
   })
   useAgentStore.setState({ statuses: {} })
   launcherProps.current = null
+  real.value = false
+  launch.mockReset()
 })
 
 describe('SessionsSection', () => {
@@ -192,6 +209,27 @@ describe('SessionsSection', () => {
     fireEvent.click(screen.getByText('New Session'))
     act(() => launcherProps.current!.onCancel())
     expect(screen.queryByTestId(`launcher-stub-${HOST_ID}`)).toBeNull()
+  })
+
+  // Same race as the New Tab entry point: the session IS created and the host
+  // drops right after, so the launcher must stay on screen with the reason
+  // rather than closing as if the launch had gone through cleanly.
+  it('host drops after the create resolves: the launcher stays open with an error', async () => {
+    useHostConfigStore.setState({
+      byHost: { [HOST_ID]: { ...emptyHostConfigEntry('ready'), projects: [PROJECT], commands: [] } },
+      ensureLoaded: vi.fn(async () => {}),
+    })
+    launch.mockImplementation(async () => {
+      useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+      return { status: 'created', session: { ...SESSIONS[0], code: 'new1' } }
+    })
+    real.value = true
+    render(<SessionsSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByText('New Session'))
+    fireEvent.click(screen.getByTestId('launcher-project-name-p1'))
+    expect(await screen.findByTestId('launcher-error')).toHaveTextContent('went offline')
+    expect(screen.getByTestId('launcher')).toBeInTheDocument()
+    expect(mockOpenSingletonTab).not.toHaveBeenCalled()
   })
 
   // Equivalent of the New Tab regression: the host may drop while the launcher
