@@ -135,6 +135,12 @@ interface Window {
       rename: (from: string, to: string) => Promise<void>
     }
 
+    // Menu bar tray (main-process preference, persisted in app-prefs.json)
+    tray: {
+      getVisible: () => Promise<boolean>
+      setVisible: (visible: boolean) => Promise<boolean>
+    }
+
     // Dev Update
     getAppInfo: () => Promise<ElectronAppInfo>
     checkUpdate: (daemonUrl: string, token?: string) => Promise<ElectronRemoteVersionInfo>

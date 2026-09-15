@@ -131,6 +131,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     rename: (from: string, to: string) => ipcRenderer.invoke('fs:rename', from, to),
   },
 
+  // Menu bar tray (main-process preference, persisted in app-prefs.json)
+  tray: {
+    getVisible: () => ipcRenderer.invoke('tray:get-visible'),
+    setVisible: (visible: boolean) => ipcRenderer.invoke('tray:set-visible', visible),
+  },
+
   // Dev Update (exposed unless PDX_DEV_MODE=0)
   ...(process.env.PDX_DEV_MODE !== '0' ? {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),

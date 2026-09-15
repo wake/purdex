@@ -5,7 +5,8 @@ import { BrowserViewManager } from './browser-view-manager'
 import { MiniWindowManager } from './mini-browser-window'
 import { registerBrowserViewIpc } from './browser-view-ipc'
 import { registerFsIpc } from './fs-ipc'
-import { createTray } from './tray'
+import { createTray, isTrayVisible, setTrayVisible } from './tray'
+import { loadAppPrefs, saveAppPrefs } from './app-prefs'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 import { pickDeeplinkTarget } from './deeplink'
@@ -113,7 +114,7 @@ function handleDeeplink(rawUrl: string): void {
   deliverDeeplink(dl)
 }
 
-function registerIpcHandlers(): void {
+function registerIpcHandlers(prefsPath: string): void {
   // Window Management
   ipcMain.handle('window:tear-off', (_event, tabJson: string) => {
     windowManager.handleTearOff(tabJson)
@@ -141,6 +142,16 @@ function registerIpcHandlers(): void {
   // Memory Monitor
   ipcMain.handle('metrics:get', () => {
     return browserViewManager.getMetrics()
+  })
+
+  // Menu bar tray — main process owns the preference (app-prefs.json) since
+  // it has to decide before any renderer exists whether to create the tray.
+  ipcMain.handle('tray:get-visible', () => isTrayVisible())
+  ipcMain.handle('tray:set-visible', (_event, visible: boolean) => {
+    const v = visible === true
+    setTrayVisible(v, windowManager)
+    saveAppPrefs(prefsPath, { ...loadAppPrefs(prefsPath), showTray: v })
+    return v
   })
 
   // Notifications — prevent GC from collecting Notification objects before
@@ -349,12 +360,14 @@ if (!gotInstanceLock) {
       return net.fetch('file://' + resolved)
     })
 
-    registerIpcHandlers()
+    const prefsPath = join(app.getPath('userData'), 'app-prefs.json')
+    const prefs = loadAppPrefs(prefsPath)
+    registerIpcHandlers(prefsPath)
     // Spec D5: the app is the launcher on machines without booter/launchd.
     if (process.env.PDX_DEV_MODE !== '0') {
       void localDaemon.ensureRunning().then((r) => console.log(`[local-daemon] ensureRunning: ${r}`))
     }
-    createTray(windowManager)
+    if (prefs.showTray) createTray(windowManager)
 
     const keybindings = getDefaultKeybindings()
     const menuTemplate = buildMenuTemplate(
@@ -387,9 +400,13 @@ if (!gotInstanceLock) {
     for (const url of buffered) handleDeeplink(url)
   })
 
-  // macOS: close window ≠ quit app
   app.on('window-all-closed', () => {
-    // no-op on macOS — tray keeps running
+    // macOS: close window ≠ quit app — the Dock icon stays and `activate`
+    // brings the window back, with or without the tray.
+    if (process.platform === 'darwin') return
+    // Elsewhere the tray is the only way back to a window, so quit when the
+    // user has turned it off; otherwise keep running in the tray.
+    if (!isTrayVisible()) app.quit()
   })
 
   app.on('before-quit', () => {
