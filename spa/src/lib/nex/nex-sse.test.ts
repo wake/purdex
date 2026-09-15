@@ -200,6 +200,22 @@ describe('nex-sse', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
+  it('refuses an unknown/removed host without calling fetch, terminal host_removed (never falls back to another daemon)', async () => {
+    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null, runtime: {} } as never)
+    const onStatus = vi.fn()
+    const fetchImpl = vi.fn()
+    openNexSse({ hostId, url: '/api/nex/v1/events', getLastEventId: () => null, onFrame: () => {}, onStatus, fetchImpl })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchImpl).not.toHaveBeenCalled()
+    const [status, err] = onStatus.mock.calls.at(-1)!
+    expect(status).toBe('closed')
+    expect(err).toBeInstanceOf(NexApiError)
+    expect((err as NexApiError).code).toBe('host_removed')
+    // Terminal: no reconnect attempt should ever call fetch either.
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
   it('stops on a structured 404 execution_not_found', async () => {
     const onStatus = vi.fn()
     const fetchImpl = vi.fn().mockResolvedValueOnce(new Response('{"code":"execution_not_found"}', { status: 404 }))

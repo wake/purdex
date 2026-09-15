@@ -114,6 +114,20 @@ describe('nex-api', () => {
     expect(JSON.parse(testGlobal.fetch.mock.calls.at(-1)![1].body)).toEqual({ archived: false })
   })
 
+  it('nexFetch refuses an unknown/removed host without calling fetch (never falls back to another daemon)', async () => {
+    const err = await nexFetch('unknown-host', '/v1/capabilities').catch((e) => e)
+    expect(err).toBeInstanceOf(NexApiError)
+    expect(err).toMatchObject({ code: 'host_removed', status: 0 })
+    expect(testGlobal.fetch).not.toHaveBeenCalled()
+  })
+
+  it('attachControl on an unknown/removed host rejects host_removed without calling fetch', async () => {
+    const err = await attachControl('unknown-host', 'exc_1').catch((e) => e)
+    expect(err).toBeInstanceOf(NexApiError)
+    expect(err).toMatchObject({ code: 'host_removed' })
+    expect(testGlobal.fetch).not.toHaveBeenCalled()
+  })
+
   it('wraps a network failure (fetch rejection) as NexApiError(0, "network", message)', async () => {
     testGlobal.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     const err = await sendMessage(hostId, 'exc_1', 'ls_1', 'hello').catch((e) => e)

@@ -106,6 +106,14 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
     const p = (async () => {
       try {
         ttlMs.current = (await getLeaseTtlSeconds(hostId)) * 1000
+        // The host may have been removed while that await was pending —
+        // re-check before attachControl so a host-removal race never sends
+        // a control attach for a host that is gone (nexFetch would refuse
+        // it too, but that still costs a call and a leaseError write we'd
+        // rather skip entirely).
+        if (disposed.current || releasing.current || !useHostStore.getState().hosts[hostId]) {
+          throw new NexApiError(0, 'host_removed', 'host removed')
+        }
         const r = await attachControl(hostId, executionId)
         if (disposed.current || releasing.current) {
           // Acquired for nobody: give it straight back rather than leave a

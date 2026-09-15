@@ -3,6 +3,7 @@
 // through hostFetch (Bearer from the host store) plus the per-tab
 // X-Pdx-Client header; tickets are never involved on this path.
 import { hostFetch } from '../host-api'
+import { useHostStore } from '../../stores/useHostStore'
 import { getNexClientId } from './client-id'
 import {
   nexErrorFromResponse,
@@ -21,6 +22,15 @@ import {
 const PREFIX = '/api/nex'
 
 export function nexFetch(hostId: string, path: string, init?: RequestInit): Promise<Response> {
+  // useHostStore.getDaemonBase() silently falls back to the active/first
+  // host for an unknown hostId (spa/src/stores/useHostStore.ts) — a host
+  // removed between the caller reading it and this call (e.g. mid-await in
+  // ensureLease) must never ride that fallback to a different daemon (spec
+  // §4.3.2 step 5: never fall back to another daemon). Refuse here, once,
+  // instead of relying on every caller to re-check.
+  if (!useHostStore.getState().hosts[hostId]) {
+    return Promise.reject(new NexApiError(0, 'host_removed', 'host removed'))
+  }
   const headers = new Headers(init?.headers)
   headers.set('X-Pdx-Client', getNexClientId())
   if (init?.body != null && !headers.has('Content-Type')) {

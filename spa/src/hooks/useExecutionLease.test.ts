@@ -5,6 +5,7 @@ import { useExecutionStore } from '../stores/useExecutionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { NexApiError } from '../lib/nex/types'
 import * as api from '../lib/nex/nex-api'
+import * as leaseTtl from '../lib/nex/lease-ttl'
 
 vi.mock('../lib/nex/nex-api', () => ({
   attachControl: vi.fn(), renewLease: vi.fn(), releaseLease: vi.fn(),
@@ -216,6 +217,23 @@ describe('useExecutionLease', () => {
     const { result } = renderHook(() => useExecutionLease(H, E))
     act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
     await expect(result.current.ensureLease()).rejects.toMatchObject({ code: 'host_removed' })
+    expect(api.attachControl).not.toHaveBeenCalled()
+  })
+
+  it('host removed while the TTL fetch is pending never calls attachControl (host_removed)', async () => {
+    let resolveTtl!: (v: number) => void
+    vi.mocked(leaseTtl.getLeaseTtlSeconds).mockImplementationOnce(() => new Promise((r) => { resolveTtl = r }))
+    const { result } = renderHook(() => useExecutionLease(H, E))
+    let pending!: Promise<string>
+    act(() => { pending = result.current.ensureLease() })
+    // Attach the rejection handler now (before it can ever reject) so Node
+    // never sees it as unhandled between here and the resolveTtl() below.
+    const caught = pending.catch((e: unknown) => e)
+    // Host removed mid-await — the useHostStore subscription in the hook
+    // also flips disposed.current synchronously here.
+    act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
+    await act(async () => { resolveTtl(30) })
+    await expect(caught).resolves.toMatchObject({ code: 'host_removed' })
     expect(api.attachControl).not.toHaveBeenCalled()
   })
 
