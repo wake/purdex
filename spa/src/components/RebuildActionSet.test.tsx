@@ -2,8 +2,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { RebuildActionSet } from './RebuildActionSet'
 import { useRebuildStore } from '../stores/useRebuildStore'
-import { useResumeTemplateStore } from '../stores/useResumeTemplateStore'
+import { emptyHostConfigEntry, useHostConfigStore } from '../stores/useHostConfigStore'
 import type { PaneRebuildRecord } from '../types/tab'
+
+const BINDING = { hostId: 'h1', sessionCode: 'old1', tmuxInstance: '111:1000' }
+function setHostTemplate(agentType: string, exact: string) {
+  useHostConfigStore.setState({ byHost: { h1: { ...emptyHostConfigEntry('ready'), resumeTemplates: { [agentType]: { exact, fallback: '' } } } } })
+}
 
 const record: PaneRebuildRecord = {
   sessionName: 'dev', tmuxInstance: '111:1000', cwd: '/w/p',
@@ -13,7 +18,7 @@ const record: PaneRebuildRecord = {
 
 beforeEach(() => {
   useRebuildStore.setState({ operations: {}, lockedBy: null })
-  useResumeTemplateStore.setState({ agents: {} })
+  useHostConfigStore.setState({ byHost: {} })
 })
 
 // The panel shows what the next Rebuild would send, and that string is
@@ -34,19 +39,25 @@ describe('RebuildActionSet — the resume row is resolved live', () => {
   })
 
   it('re-renders when the template changes, without a remount', () => {
-    render(<RebuildActionSet tabId="t1" paneId="p1" record={record} onRebuild={vi.fn()} />)
+    render(<RebuildActionSet binding={BINDING} tabId="t1" paneId="p1" record={record} onRebuild={vi.fn()} />)
     expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('claude --resume S1')
-    act(() => { useResumeTemplateStore.getState().setTemplate('cc', 'exact', 'cld-yolo --resume {id}') })
+    act(() => { setHostTemplate('cc', 'cld-yolo --resume {id}') })
     expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('cld-yolo --resume S1')
   })
 
   it('turns the row back on when a template appears for an unknown agent', () => {
-    render(<RebuildActionSet tabId="t1" paneId="p1" onRebuild={vi.fn()}
+    render(<RebuildActionSet binding={BINDING} tabId="t1" paneId="p1" onRebuild={vi.fn()}
       record={{ ...record, agent: { type: 'aider', sessionId: 'S1', updatedAt: 1 } }} />)
     expect(screen.getByRole('checkbox', { name: /resume/i })).toBeDisabled()
-    act(() => { useResumeTemplateStore.getState().setTemplate('aider', 'exact', 'aider --restore {id}') })
+    act(() => { setHostTemplate('aider', 'aider --restore {id}') })
     expect(screen.getByRole('checkbox', { name: /resume/i })).toBeEnabled()
     expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('aider --restore S1')
+  })
+
+  it('composes with the binding host\'s template, not another host\'s', () => {
+    useHostConfigStore.setState({ byHost: { h2: { ...emptyHostConfigEntry('ready'), resumeTemplates: { cc: { exact: 'other --resume {id}', fallback: '' } } } } })
+    render(<RebuildActionSet tabId="t1" paneId="p1" record={record} binding={BINDING} onRebuild={vi.fn()} />)
+    expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('claude --resume S1')
   })
 })
 
@@ -73,10 +84,10 @@ describe('RebuildActionSet — the displayed command is pinned only while action
   })
 
   it('pins the operation string while the operation is running, through a template change', () => {
-    render(<RebuildActionSet tabId="t1" paneId="p1" record={record} onRebuild={vi.fn()} operation={runningOp} />)
+    render(<RebuildActionSet binding={BINDING} tabId="t1" paneId="p1" record={record} onRebuild={vi.fn()} operation={runningOp} />)
     expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('claude --resume PINNED')
     // Another window edits the template mid-flight. What is in flight does not change.
-    act(() => { useResumeTemplateStore.getState().setTemplate('cc', 'exact', 'cld-yolo --resume {id}') })
+    act(() => { setHostTemplate('cc', 'cld-yolo --resume {id}') })
     expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('claude --resume PINNED')
     expect(screen.getByTestId('rebuild-resume-command-cell')).not.toHaveTextContent('cld-yolo')
   })
@@ -104,11 +115,11 @@ describe('RebuildActionSet — the displayed command is pinned only while action
         },
       },
     })
-    render(<RebuildActionSet tabId="t1" paneId="p1" record={record} onRebuild={vi.fn()} />)
+    render(<RebuildActionSet binding={BINDING} tabId="t1" paneId="p1" record={record} onRebuild={vi.fn()} />)
     // Retry resume re-sends against the created session: it must show what it will send.
     expect(screen.getByRole('button', { name: /retry resume/i })).toBeEnabled()
     expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('claude --resume PINNED')
-    act(() => { useResumeTemplateStore.getState().setTemplate('cc', 'exact', 'cld-yolo --resume {id}') })
+    act(() => { setHostTemplate('cc', 'cld-yolo --resume {id}') })
     expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('claude --resume PINNED')
   })
 
@@ -131,7 +142,7 @@ describe('RebuildActionSet — the displayed command is pinned only while action
 
   it('shows a template edited after a failed create, and rebuilds with the resume row on', () => {
     const onRebuild = vi.fn()
-    render(<RebuildActionSet tabId="t1" paneId="p1" record={record} onRebuild={onRebuild}
+    render(<RebuildActionSet binding={BINDING} tabId="t1" paneId="p1" record={record} onRebuild={onRebuild}
       operation={{
         status: 'done',
         resumeCommand: 'claude --resume PINNED',
@@ -143,7 +154,7 @@ describe('RebuildActionSet — the displayed command is pinned only while action
           },
         },
       }} />)
-    act(() => { useResumeTemplateStore.getState().setTemplate('cc', 'exact', 'cld-yolo --resume {id}') })
+    act(() => { setHostTemplate('cc', 'cld-yolo --resume {id}') })
     expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('cld-yolo --resume S1')
     // And the button the user presses next is the one that would send it.
     const button = screen.getByRole('button', { name: /^rebuild$/i })

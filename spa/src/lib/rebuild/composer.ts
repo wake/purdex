@@ -1,5 +1,5 @@
 import type { PaneRebuildRecord } from '../../types/tab'
-import type { ResumeTemplateLookup } from '../../stores/useResumeTemplateStore'
+import type { ResumeTemplateLookup } from '../resume-templates'
 
 /**
  * Session ids observed in the wild: cc and codex emit UUIDs, opencode emits a

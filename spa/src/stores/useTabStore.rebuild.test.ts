@@ -8,11 +8,7 @@ import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
 import { batchCandidates, collectRecordRows } from '../lib/rebuild/eligibility'
 import { groupForBatch } from '../lib/rebuild/batch'
 import { resolveResumeCommand } from '../lib/rebuild/composer'
-import { useResumeTemplateStore, type ResumeTemplateLookup } from './useResumeTemplateStore'
-
-/** The shipped templates: the store answers from `DEFAULT_RESUME_TEMPLATES`. */
-const defaultTemplates: ResumeTemplateLookup = (agentType) =>
-  useResumeTemplateStore.getState().getTemplates(agentType)
+import { defaultResumeLookup as defaultTemplates } from '../lib/resume-templates'
 
 function seed(tmuxInstance = '111:1000') {
   const tab = createTab({

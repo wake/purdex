@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { SnapshotSettingsSection } from './SnapshotSettingsSection'
 import { useRebuildStore } from '../../stores/useRebuildStore'
-import { useResumeTemplateStore } from '../../stores/useResumeTemplateStore'
+import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useTabStore } from '../../stores/useTabStore'
 import * as storageModule from '../../lib/snapshot/storage'
 import * as hostApiModule from '../../lib/host-api'
@@ -88,7 +88,7 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useRebuildStore.setState({ operations: {}, lockedBy: null })
-    useResumeTemplateStore.setState({ agents: {} })
+    useHostConfigStore.setState({ byHost: {} })
     mockedReadSnapshot.mockReturnValue(null)
     mockedReadPrev.mockReturnValue(null)
     mockedListSessions.mockResolvedValue([])
@@ -131,7 +131,14 @@ describe('SnapshotSettingsSection — per-tab rebuild records (T16)', () => {
     render(<SnapshotSettingsSection />)
     await waitFor(() => expect(screen.getByText('claude --resume S1')).toBeInTheDocument())
 
-    act(() => { useResumeTemplateStore.getState().setTemplate('cc', 'exact', 'cld-yolo --resume {id}') })
+    // The row's host (h1) loads its config, then an override is edited there.
+    act(() => { useHostConfigStore.setState({ byHost: { h1: emptyHostConfigEntry('ready') } }) })
+    expect(screen.getByText('claude --resume S1')).toBeInTheDocument()
+    act(() => {
+      useHostConfigStore.setState((s) => ({ byHost: { h1: { ...s.byHost.h1, resumeTemplates: {
+        cc: { exact: 'cld-yolo --resume {id}', fallback: 'claude -c' },
+      } } } }))
+    })
     expect(screen.getByText('cld-yolo --resume S1')).toBeInTheDocument()
     expect(screen.queryByText('claude --resume S1')).toBeNull()
   })

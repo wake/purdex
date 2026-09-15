@@ -22,7 +22,8 @@ import {
 } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useSessionStore } from '../../stores/useSessionStore'
-import { liveResumeTemplates } from '../../stores/useResumeTemplateStore'
+import { resumeLookupFor } from '../resume-templates'
+import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { resolveResumeCommand } from './composer'
 import { findPane } from '../pane-tree'
 import type { Session } from '../host-api'
@@ -163,7 +164,7 @@ function publishRefusal(
     binding: content
       ? { hostId: content.hostId, sessionCode: content.sessionCode, tmuxInstance: content.tmuxInstance }
       : { hostId, sessionCode: '', tmuxInstance: '' },
-    resumeCommand: resolveResumeCommand(content?.rebuild, liveResumeTemplates),
+    resumeCommand: resolveResumeCommand(content?.rebuild, resumeLookupFor(hostId)),
     report,
   })
   useRebuildStore.getState().finishOperation(paneId, { report })
@@ -490,6 +491,13 @@ async function runRebuild(
     return publishRefusal(hostId, tabId, paneId, plan, report)
   }
 
+  // The host's resume templates live on its daemon (host-launcher spec §4.2).
+  // Loaded AFTER the pin — an unknown host was refused above, so this never
+  // reaches another machine — and BEFORE the pane read below, because
+  // everything from the binding check to the create must stay one
+  // synchronous run. Never throws; a failed load answers from defaults.
+  await useHostConfigStore.getState().ensureLoaded(hostId)
+
   const content = readTerminalPane(tabId, paneId)
   if (!content || content.hostId !== hostId) {
     report.steps.create = failed(new Error(`pane ${paneId} is no longer a terminal pane on ${hostId}`))
@@ -517,7 +525,7 @@ async function runRebuild(
   // Resolved ONCE, here, and pinned into the operation below: a retry acts on
   // the session this run created and must re-send the string it already sent,
   // not one a template edited in the meantime would now produce (spec §4.3).
-  const resumeCommand = resolveResumeCommand(record, liveResumeTemplates)
+  const resumeCommand = resolveResumeCommand(record, resumeLookupFor(hostId))
   const cwd = plan.applyCwd ? (record?.cwd ?? '') : ''
 
   useRebuildStore.getState().beginOperation({

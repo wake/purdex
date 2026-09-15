@@ -13,26 +13,8 @@ import { useCallback } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-
-export interface ResumeTemplatePair {
-  /** Used when the record has a usable session id. Should contain `{id}`. */
-  exact: string
-  /** Used when it does not — taken verbatim, `{id}` included if present. */
-  fallback: string
-}
-
-/** How a consumer asks for an agent's pair; `undefined` means "no template". */
-export type ResumeTemplateLookup = (agentType: string) => ResumeTemplatePair | undefined
-
-/**
- * The shapes that shipped hardcoded, reproduced verbatim: a user who
- * configures nothing sees no change at all.
- */
-export const DEFAULT_RESUME_TEMPLATES: Readonly<Record<string, ResumeTemplatePair>> = Object.freeze({
-  cc: Object.freeze({ exact: 'claude --resume {id}', fallback: 'claude -c' }),
-  codex: Object.freeze({ exact: 'codex resume {id}', fallback: 'codex resume --last' }),
-  opencode: Object.freeze({ exact: 'opencode -s {id}', fallback: 'opencode -c' }),
-})
+import { DEFAULT_RESUME_TEMPLATES, type ResumeTemplateLookup, type ResumeTemplatePair } from '../lib/resume-templates'
+export { DEFAULT_RESUME_TEMPLATES, type ResumeTemplateLookup, type ResumeTemplatePair }
 
 /** An agent nobody has a shape for: the user may still teach the store one. */
 const BLANK: ResumeTemplatePair = { exact: '', fallback: '' }

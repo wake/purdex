@@ -11,6 +11,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
 import { rebuildPane, type RebuildReport } from '../lib/rebuild/engine'
 import { runBatchRebuild, type BatchReport } from '../lib/rebuild/batch'
+import { emptyHostConfigEntry, useHostConfigStore } from '../stores/useHostConfigStore'
 import type { Session } from '../lib/host-api'
 import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../types/tab'
 
@@ -160,6 +161,7 @@ beforeEach(() => {
   useSessionStore.setState({ sessions: {}, fetchHost: vi.fn(async () => {}) } as never)
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
+  useHostConfigStore.setState({ byHost: { [HOST]: emptyHostConfigEntry('ready'), h2: emptyHostConfigEntry('ready') } })
 })
 
 afterEach(() => {

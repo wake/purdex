@@ -6,11 +6,23 @@ import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useSessionStore } from '../../stores/useSessionStore'
-import { useResumeTemplateStore } from '../../stores/useResumeTemplateStore'
+import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
+import { defaultResumeLookup } from '../resume-templates'
 import { planForRecord } from './batch'
 import { GenerationConflictError } from './transport'
 import type { Session } from '../host-api'
 import type { PaneRebuildRecord, Tab } from '../../types/tab'
+
+const realEnsureLoaded = useHostConfigStore.getState().ensureLoaded
+
+// Every host the fixtures use starts with host config loaded and no overrides,
+// so `ensureLoaded` is a no-op and fetch-count assertions stay exact.
+beforeEach(() => {
+  useHostConfigStore.setState({
+    ensureLoaded: realEnsureLoaded,
+    byHost: { h1: emptyHostConfigEntry('ready'), h2: emptyHostConfigEntry('ready'), other: emptyHostConfigEntry('ready') },
+  })
+})
 
 const plan = { createSession: true, applyCwd: true, runResume: true }
 
@@ -411,7 +423,6 @@ describe('rebuildPane — the command it sends is resolved, not stored', () => {
   beforeEach(() => {
     useRebuildStore.setState({ operations: {}, lockedBy: null })
     useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
-    useResumeTemplateStore.setState({ agents: {} })
     seedHost('h1')
     vi.unstubAllGlobals()
   })
@@ -427,7 +438,7 @@ describe('rebuildPane — the command it sends is resolved, not stored', () => {
   })
 
   it('sends the edited template, so a wrapper command reaches tmux', async () => {
-    useResumeTemplateStore.getState().setTemplate('cc', 'exact', 'cld-yolo --resume {id}')
+    useHostConfigStore.setState({ byHost: { h1: { ...emptyHostConfigEntry('ready'), resumeTemplates: { cc: { exact: 'cld-yolo --resume {id}', fallback: 'claude -c' } } } } })
     seedPane('h1', 't1', 'p1', { cwd: '/w', agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 } })
     const sendKeys = vi.fn()
     await rebuildPane('h1', 't1', 'p1', plan, { createSession: created(), sendKeys })
@@ -452,14 +463,37 @@ describe('rebuildPane — the command it sends is resolved, not stored', () => {
     const createSession = created()
     const sendKeys = vi.fn()
     const record = readRecord('t1', 'p1')
-    const report = await rebuildPane('h1', 't1', 'p1', planForRecord(record), { createSession, sendKeys })
-    expect(planForRecord(record)).toEqual({ createSession: true, applyCwd: true, runResume: false })
+    const report = await rebuildPane('h1', 't1', 'p1', planForRecord(record, defaultResumeLookup), { createSession, sendKeys })
+    expect(planForRecord(record, defaultResumeLookup)).toEqual({ createSession: true, applyCwd: true, runResume: false })
     expect(createSession).toHaveBeenCalledTimes(1)
     expect(vi.mocked(createSession).mock.calls[0][2]).toBe('/w')
     expect(sendKeys).not.toHaveBeenCalled()
     expect(report.steps.create.status).toBe('ok')
     expect(report.steps.resume.status).toBe('skipped')
     expect(report.repointed).toBe(true)
+  })
+
+  it('waits for the host config before resolving, and uses that host\'s override', async () => {
+    useHostConfigStore.setState({ byHost: {} })
+    const ensureLoaded = vi.fn(async (hostId: string) => {
+      useHostConfigStore.setState((s) => ({ byHost: { ...s.byHost, [hostId]: {
+        ...emptyHostConfigEntry('ready'), resumeTemplates: { cc: { exact: 'host-cld --resume {id}', fallback: 'host-cld -c' } },
+      } } }))
+    })
+    useHostConfigStore.setState({ ensureLoaded })
+    seedPane('h1', 't1', 'p1', { cwd: '/w', agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 } })
+    const sendKeys = vi.fn()
+    await rebuildPane('h1', 't1', 'p1', plan, { createSession: created(), sendKeys })
+    expect(ensureLoaded).toHaveBeenCalledWith('h1')
+    expect(sendKeys).toHaveBeenCalledWith('h1', 'new1', 'host-cld --resume S1', '222:2000')
+  })
+
+  it('a host whose config cannot load rebuilds with the default templates', async () => {
+    useHostConfigStore.setState({ byHost: { h1: emptyHostConfigEntry('error') }, ensureLoaded: vi.fn(async () => {}) })
+    seedPane('h1', 't1', 'p1', { cwd: '/w', agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 } })
+    const sendKeys = vi.fn()
+    await rebuildPane('h1', 't1', 'p1', plan, { createSession: created(), sendKeys })
+    expect(sendKeys).toHaveBeenCalledWith('h1', 'new1', 'claude --resume S1', '222:2000')
   })
 })
 

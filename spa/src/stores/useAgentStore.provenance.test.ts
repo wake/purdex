@@ -6,11 +6,7 @@ import { useTabStore } from './useTabStore'
 import { createTab, type PaneContent } from '../types/tab'
 import { findPane } from '../lib/pane-tree'
 import { resolveResumeCommand } from '../lib/rebuild/composer'
-import { useResumeTemplateStore, type ResumeTemplateLookup } from './useResumeTemplateStore'
-
-/** The shipped templates: the store answers from `DEFAULT_RESUME_TEMPLATES`. */
-const defaultTemplates: ResumeTemplateLookup = (agentType) =>
-  useResumeTemplateStore.getState().getTemplates(agentType)
+import { defaultResumeLookup as defaultTemplates } from '../lib/resume-templates'
 
 /** Seed a single-pane tab bound to (h1, abc123) at the given generation. */
 function seedTerminalPane(tmuxInstance: string) {

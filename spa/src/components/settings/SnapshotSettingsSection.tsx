@@ -24,7 +24,8 @@ import {
   SNAPSHOT_LOCK_OWNER,
 } from '../../lib/snapshot/restore'
 import { useRebuildStore } from '../../stores/useRebuildStore'
-import { useResumeTemplateLookup } from '../../stores/useResumeTemplateStore'
+import { resumeLookupFor, useResumeTemplateLookup } from '../../lib/resume-templates'
+import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { resolveResumeCommand } from '../../lib/rebuild/composer'
 import {
@@ -33,7 +34,7 @@ import {
   planForRecord,
   recordsDisagree,
   runBatchRebuild,
-  type BatchGroup,
+  type BatchGroupDraft,
 } from '../../lib/rebuild/batch'
 import {
   batchCandidates,
@@ -446,7 +447,8 @@ export function SnapshotSettingsSection() {
 
   const handleRebuildOne = (pane: BatchCandidate) =>
     runRebuildAction(`rebuild:${pane.paneId}`, async () => {
-      const report = await rebuildPane(pane.hostId, pane.tabId, pane.paneId, planForRecord(pane.record))
+      await useHostConfigStore.getState().ensureLoaded(pane.hostId)
+      const report = await rebuildPane(pane.hostId, pane.tabId, pane.paneId, planForRecord(pane.record, resumeLookupFor(pane.hostId)))
       if (report.steps.create.status === 'failed') {
         return { tone: 'error', message: report.steps.create.error ?? t('settings.snapshot.toast.restoreError') }
       }
@@ -617,7 +619,7 @@ function RebuildRecordsBlock({
   t,
 }: {
   rows: RecordRow[]
-  groups: BatchGroup[]
+  groups: BatchGroupDraft[]
   excluded: BatchCandidate[]
   liveByHost: Record<string, HostLive>
   busy: boolean
@@ -626,9 +628,6 @@ function RebuildRecordsBlock({
   onRebuildOne: (pane: BatchCandidate) => void
   t: ReturnType<typeof useI18nStore.getState>['t']
 }) {
-  // Subscribed, so the command column repaints when a template is edited —
-  // reading the lookup once would render a stale command until a remount.
-  const templates = useResumeTemplateLookup()
   // Only the groups whose members disagree need naming — saying "using p1"
   // when there is nothing to choose between is noise.
   const conflicts = groups.filter((group) => {
@@ -674,7 +673,7 @@ function RebuildRecordsBlock({
                   <td className="py-1 pr-3 text-text-primary">{row.hostId}</td>
                   <td className="py-1 pr-3">{row.record?.sessionName || row.cachedName}</td>
                   <td className="py-1 pr-3 font-mono">{row.record?.cwd || '—'}</td>
-                  <td className="py-1 pr-3 font-mono">{resolveResumeCommand(row.record, templates) || '—'}</td>
+                  <RecordCommandCell hostId={row.hostId} record={row.record} />
                   <td className="py-1">
                     <HealthBadge
                       health={recordHealth(row, livenessOf(liveByHost[row.hostId] ?? 'loading'))}
@@ -733,6 +732,16 @@ function RebuildRecordsBlock({
       )}
     </div>
   )
+}
+
+/**
+ * One row's command, composed with that row's host's templates. Subscribed, so
+ * the cell repaints when a template is edited — reading the lookup once would
+ * render a stale command until a remount.
+ */
+function RecordCommandCell({ hostId, record }: { hostId: string; record: RecordRow['record'] }) {
+  const templates = useResumeTemplateLookup(hostId)
+  return <td className="py-1 pr-3 font-mono">{resolveResumeCommand(record, templates) || '—'}</td>
 }
 
 function TmuxBlock({

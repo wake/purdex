@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { usePaneOperation, type RebuildBinding } from '../stores/useRebuildStore'
-import { useResumeTemplateLookup } from '../stores/useResumeTemplateStore'
+import { useResumeTemplateLookup } from '../lib/resume-templates'
 import { resolveResumeCommand } from '../lib/rebuild/composer'
 import { retryResume, attachAnyway, type RebuildPlan, type StepResult } from '../lib/rebuild/engine'
 import { AGENT_NAMES } from '../lib/agent-metadata'
@@ -215,9 +215,11 @@ export function RebuildActionSet({
   const storedOperation = usePaneOperation(paneId, binding)
   const op: RebuildOperationView | undefined = operation ?? storedOperation
   // Subscribed, not read once: the panel shows what the next Rebuild would
-  // send, so a template edited in Settings (or in another window) has to
-  // repaint this row without anything remounting.
-  const templates = useResumeTemplateLookup()
+  // send, so a template edited in Settings has to repaint this row without
+  // anything remounting. Per host: the command is composed from THIS pane's
+  // host's templates. `binding` is always passed by TerminatedPane; without it
+  // the defaults answer (display only).
+  const templates = useResumeTemplateLookup(binding?.hostId ?? '')
 
   // Per-row overrides on top of the derived defaults, so a value that arrives
   // later (a cwd the user just typed in) turns its row back on by itself.
