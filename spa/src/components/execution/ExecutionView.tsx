@@ -1,18 +1,17 @@
 // spa/src/components/execution/ExecutionView.tsx — the {kind:'execution'}
 // pane (spec §4.3.3). Composes the observe subscription, the lazy control
-// lease, the shared message renderer and StreamInput. Send/interrupt/
-// terminate are the only writes; every one goes through ensureLease().
-import { useCallback, useMemo, useState } from 'react'
+// lease, the pane's actions (useExecutionActions: send/interrupt/terminate,
+// the only writes), the shared message renderer and StreamInput.
+import { useCallback, useMemo } from 'react'
 import ConversationMessages from '../ConversationMessages'
 import StreamInput from '../StreamInput'
 import ExecutionHeader from './ExecutionHeader'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
+import { useExecutionActions } from '../../hooks/useExecutionActions'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
-import { interruptExecution, sendMessage, terminateExecution } from '../../lib/nex/nex-api'
-import { NexApiError } from '../../lib/nex/types'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 
 export interface ExecutionViewProps { hostId: string; executionId: string; isActive: boolean }
@@ -26,73 +25,11 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   const key = executionKey(hostId, executionId)
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
-  const { ensureLease, touch, forget } = useExecutionLease(hostId, executionId)
-  const [draft, setDraft] = useState<string | null>(null) // restored text after a failed send
+  const lease = useExecutionLease(hostId, executionId)
+  const { draft, handleSend, handleInterrupt, handleTerminate } = useExecutionActions(hostId, executionId, lease)
 
   const isMine = useCallback((p: string | undefined) => !!p && p.endsWith(`/${getNexClientId()}`), [])
   const costUsd = useMemo(() => st.messages.reduce((sum, m) => sum + ((m as { total_cost_usd?: number }).total_cost_usd ?? 0), 0), [st.messages])
-
-  const store = () => useExecutionStore.getState()
-  // A fetch that never reached the daemon rejects with a TypeError, not a
-  // NexApiError; I12 still wants a code, so map it (`network`).
-  const fail = useCallback((e: unknown) => {
-    if (e instanceof NexApiError) {
-      // no_live_turn / lease_abandoned are silent; lease_held is already
-      // surfaced by the dedicated notice (ensureLease wrote leaseError
-      // before rethrowing) — a second "Send failed" banner would be
-      // redundant and there is no execution.error.lease_held copy for it.
-      if (e.code === 'no_live_turn' || e.code === 'lease_abandoned' || e.code === 'lease_held') return
-      // I3: the server already invalidated this lease — drop it locally too
-      // (no release() DELETE, it's pointless) so the next send/interrupt/
-      // terminate re-acquires instead of retrying against a dead lease id.
-      if (e.code === 'lease_expired' || e.code === 'lease_mismatch' || e.code === 'lease_required') forget()
-      store().setSendError(hostId, executionId, { code: e.code, message: e.message, turnId: e.turnId })
-    } else {
-      store().setSendError(hostId, executionId, { code: 'network', message: e instanceof Error ? e.message : String(e) })
-    }
-  }, [hostId, executionId, forget])
-
-  const handleSend = useCallback(async (text: string) => {
-    // Re-entrancy guard (Codex R1 finding B): pendingSend is set
-    // synchronously below, before the `await ensureLease()`, so a second
-    // submit fired while the first lease acquisition is still in flight
-    // reads the lock here and is a no-op — without this, a slow lease let
-    // two sends race and both post (sharing the same pendingLocal bubble).
-    if (store().executions[key]?.pendingSend) return
-    store().setSendError(hostId, executionId, null)
-    setDraft(null)
-    touch()
-    store().setPendingLocal(hostId, executionId, { text, delivery: null })
-    store().setPendingSend(hostId, executionId, true)
-    try {
-      const leaseId = await ensureLease()
-      const r = await sendMessage(hostId, executionId, leaseId, text)
-      // execution.message_accepted (execution/service.go:794-807) can land
-      // before this resolves and already clear pendingLocal + push the
-      // durable bubble; writing it back unconditionally here would
-      // resurrect a second bubble (C1/I12). Only write if the event hasn't
-      // already consumed it.
-      if (store().executions[key]?.pendingLocal) {
-        store().setPendingLocal(hostId, executionId, { text, delivery: r.delivery })
-      }
-      store().setLastTurn(hostId, executionId, { turnId: r.turn_id, delivery: r.delivery })
-    } catch (e) {
-      store().setPendingLocal(hostId, executionId, null)
-      store().setPendingSend(hostId, executionId, false)
-      setDraft(text)
-      fail(e)
-    }
-  }, [hostId, executionId, key, ensureLease, touch, fail])
-
-  const handleInterrupt = useCallback(async () => {
-    touch()
-    try { await interruptExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) }
-  }, [hostId, executionId, ensureLease, touch, fail])
-
-  const handleTerminate = useCallback(async () => {
-    touch()
-    try { await terminateExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) }
-  }, [hostId, executionId, ensureLease, touch, fail])
 
   if (problem) {
     const text = problem === 'not_found' ? t('execution.not_found')
