@@ -1207,5 +1207,13 @@
   "command_icon.all": "All icons",
   "command_icon.search": "Search icons",
   "command_icon.no_results": "No icons match",
-  "command_icon.more": "Show {{n}} more"
+  "command_icon.more": "Show {{n}} more",
+
+  "launcher.name_placeholder": "Session name — blank uses <slug>-N",
+  "launcher.name_required": "Type a session name, or pick a project below.",
+  "launcher.send_failed": "Session created, but the command failed to send: {{reason}}",
+  "launcher.empty": "No projects on this host yet.",
+  "launcher.empty_link": "Add one in Host › Projects",
+  "launcher.unsupported": "This host's daemon is too old for projects — press Enter to create a plain session.",
+  "launcher.offline": "Host is offline — no session was created."
 }
