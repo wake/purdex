@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { SettingItem } from './SettingItem'
 import { ToggleSwitch } from './ToggleSwitch'
@@ -18,18 +18,28 @@ export function ElectronSection() {
     trayApi?.getVisible()
       .then((v) => { if (!cancelled) setShowTray(v) })
       .catch(() => { /* IPC unavailable — keep the default */ })
-    return () => { cancelled = true }
+    // The main process broadcasts to every window after applying a change,
+    // so a toggle in another window's Settings page shows up here too.
+    // Optional-chained: a shell whose preload predates this method still
+    // gets a working (just non-synced) switch.
+    const unsubscribe = trayApi?.onVisibilityChanged?.((v) => { if (!cancelled) setShowTray(v) })
+    return () => { cancelled = true; unsubscribe?.() }
   }, [trayApi])
 
+  // Rapid clicks fire one IPC each; responses can come back out of order, so
+  // only the newest request may write state. Older ones — resolved or
+  // rejected — are dropped instead of overwriting the latest intent.
+  const latestToggleId = useRef(0)
   const toggleTray = async (v: boolean) => {
     if (!trayApi) return
+    const id = ++latestToggleId.current
     const prev = showTray
     setShowTray(v)
     try {
       const applied = await trayApi.setVisible(v)
-      setShowTray(applied)
+      if (id === latestToggleId.current) setShowTray(applied)
     } catch {
-      setShowTray(prev)
+      if (id === latestToggleId.current) setShowTray(prev)
     }
   }
 
