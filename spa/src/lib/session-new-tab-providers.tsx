@@ -61,5 +61,10 @@ export function createHostSessionProviderSource(): NewTabProviderSource {
     // Until the persisted host list is loaded, hostOrder is a transient
     // default — never prune or place per-host blocks from it.
     isReady: () => useHostStore.persist.hasHydrated(),
+    // The retired single `sessions` block becomes one block per current host.
+    migrations: () => {
+      const { hosts, hostOrder } = useHostStore.getState()
+      return [{ from: LEGACY_ID, to: hostOrder.filter((h) => hosts[h]).map(sessionsProviderId) }]
+    },
   }
 }

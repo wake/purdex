@@ -35,6 +35,13 @@ interface State {
   ensureDefaults: (providers: ProviderInfo[]) => void
   /** Remove ids from every profile and from knownIds (e.g. a removed host's block). */
   pruneIds: (ids: string[]) => void
+  /**
+   * Replace a retired id with its successors. Where `from` is placed, the
+   * successors take its exact slot (same column/row) in that profile; if
+   * `from` was only known (user removed it), successors become known but
+   * unplaced, preserving the removal. Targets already present are not duplicated.
+   */
+  migrateId: (from: string, to: string[]) => void
   reset: () => void
 }
 
@@ -255,6 +262,29 @@ export const useNewTabLayoutStore = create<State>()(
             }
           }
           return { profiles, knownIds: state.knownIds.filter((id) => !drop.has(id)) }
+        }),
+
+      migrateId: (from, to) =>
+        set((state) => {
+          const keys = ['3col', '2col', '1col'] as const
+          const isPlaced = keys.some((k) => state.profiles[k].columns.some((col) => col.includes(from)))
+          if (!isPlaced && !state.knownIds.includes(from)) return state
+
+          const profiles = { ...state.profiles }
+          for (const key of keys) {
+            const src = state.profiles[key]
+            if (!src.columns.some((col) => col.includes(from))) continue
+            const already = new Set(src.columns.flat())
+            const insert = to.filter((id) => !already.has(id))
+            profiles[key] = {
+              enabled: src.enabled,
+              columns: src.columns.map((col) => col.flatMap((id) => (id === from ? insert : [id]))),
+            }
+          }
+
+          const knownIds = state.knownIds.filter((id) => id !== from)
+          for (const id of to) if (!knownIds.includes(id)) knownIds.push(id)
+          return { profiles, knownIds }
         }),
 
       reset: () => set({ ...initialState() }),

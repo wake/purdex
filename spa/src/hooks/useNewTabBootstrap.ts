@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import {
   getReadyNewTabProviders,
+  getNewTabProviderMigrations,
   getStaleNewTabProviderIds,
   subscribeNewTabProviders,
 } from '../lib/new-tab-registry'
@@ -16,6 +17,13 @@ import {
 export function useNewTabBootstrap(): void {
   useEffect(() => {
     const run = () => {
+      // 1. Migrate retired ids first (legacy `sessions` → per-host blocks, in
+      //    place) so the prune below doesn't just drop them.
+      for (const { from, to } of getNewTabProviderMigrations()) {
+        useNewTabLayoutStore.getState().migrateId(from, to)
+      }
+
+      // 2. Prune ids a ready source no longer produces.
       const { knownIds, profiles, pruneIds } = useNewTabLayoutStore.getState()
       const referenced = new Set<string>(knownIds)
       for (const key of ['3col', '2col', '1col'] as const) {

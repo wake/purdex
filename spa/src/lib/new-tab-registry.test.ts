@@ -8,6 +8,7 @@ import {
   subscribeNewTabProviders,
   getStaleNewTabProviderIds,
   getReadyNewTabProviders,
+  getNewTabProviderMigrations,
   type NewTabProviderProps,
 } from './new-tab-registry'
 
@@ -176,6 +177,19 @@ describe('new-tab-registry — dynamic provider sources', () => {
     ready = true
     expect(getStaleNewTabProviderIds(['dyn:gone'])).toEqual(['dyn:gone'])
     expect(getReadyNewTabProviders().map((p) => p.id)).toEqual(['static', 'dyn:a'])
+  })
+
+  it('getNewTabProviderMigrations collects migrations from ready sources only', () => {
+    let ready = false
+    registerNewTabProviderSource({
+      ...makeSource(['a']).source,
+      isReady: () => ready,
+      migrations: () => [{ from: 'dyn', to: ['dyn:a'] }],
+    })
+    registerNewTabProviderSource({ ...makeSource([]).source, id: 'plain' })
+    expect(getNewTabProviderMigrations()).toEqual([])
+    ready = true
+    expect(getNewTabProviderMigrations()).toEqual([{ from: 'dyn', to: ['dyn:a'] }])
   })
 
   it('re-registering a source with the same id replaces it; clear removes sources', () => {

@@ -92,6 +92,72 @@ describe('useNewTabBootstrap — per-host session blocks', () => {
     }
   })
 
+  it('migrates a placed legacy sessions block in place to every host, in each profile', () => {
+    useHostStore.setState({ hosts: { h1: host('h1', 'mlab', 0), h2: host('h2', 'air', 1) }, hostOrder: ['h1', 'h2'] })
+    useNewTabLayoutStore.setState({
+      profiles: {
+        '3col': { enabled: true, columns: [['browser'], ['sessions'], []] },
+        '2col': { enabled: false, columns: [['sessions', 'browser'], []] },
+        '1col': { enabled: true, columns: [['browser', 'sessions']] },
+      },
+      knownIds: ['browser', 'sessions'],
+    })
+    renderHook(() => useNewTabBootstrap())
+    const s = useNewTabLayoutStore.getState()
+    expect(s.profiles['3col'].columns).toEqual([['browser'], ['sessions:h1', 'sessions:h2'], []])
+    expect(s.profiles['2col'].columns).toEqual([['sessions:h1', 'sessions:h2', 'browser'], []])
+    expect(s.profiles['1col'].columns).toEqual([['browser', 'sessions:h1', 'sessions:h2']])
+    expect(s.knownIds).toEqual(['browser', 'sessions:h1', 'sessions:h2'])
+  })
+
+  it('keeps a user-removed legacy sessions block removed: host ids known but not placed', () => {
+    useHostStore.setState({ hosts: { h1: host('h1', 'mlab', 0), h2: host('h2', 'air', 1) }, hostOrder: ['h1', 'h2'] })
+    useNewTabLayoutStore.setState({
+      profiles: {
+        '3col': { enabled: false, columns: [['browser'], [], []] },
+        '2col': { enabled: false, columns: [['browser'], []] },
+        '1col': { enabled: true, columns: [['browser']] },
+      },
+      knownIds: ['browser', 'sessions'],
+    })
+    renderHook(() => useNewTabBootstrap())
+    const s = useNewTabLayoutStore.getState()
+    for (const key of ['3col', '2col', '1col'] as const) {
+      expect(s.profiles[key].columns.flat()).toEqual(['browser'])
+    }
+    expect(s.knownIds).toEqual(['browser', 'sessions:h1', 'sessions:h2'])
+  })
+
+  it('defers the legacy migration until hosts hydrate, then uses the real host list', () => {
+    let finish: (() => void) | undefined
+    const hydrated = vi.spyOn(useHostStore.persist, 'hasHydrated').mockReturnValue(false)
+    const onFinish = vi.spyOn(useHostStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useHostStore.getState())
+      return () => { finish = undefined }
+    })
+    try {
+      useHostStore.setState({ hosts: { tmp: host('tmp', 'default', 0) }, hostOrder: ['tmp'] })
+      useNewTabLayoutStore.setState({
+        profiles: {
+          '3col': { enabled: false, columns: [[], [], []] },
+          '2col': { enabled: false, columns: [[], []] },
+          '1col': { enabled: true, columns: [['sessions', 'browser']] },
+        },
+        knownIds: ['sessions', 'browser'],
+      })
+      renderHook(() => useNewTabBootstrap())
+      expect(all1col()).toEqual(['sessions', 'browser'])
+      act(() => { useHostStore.setState({ hosts: { real: host('real', 'mlab', 0) }, hostOrder: ['real'] }) })
+      hydrated.mockReturnValue(true)
+      act(() => { finish?.() })
+      expect(all1col()).toEqual(['sessions:real', 'browser'])
+      expect(useNewTabLayoutStore.getState().knownIds).toEqual(['browser', 'sessions:real'])
+    } finally {
+      hydrated.mockRestore()
+      onFinish.mockRestore()
+    }
+  })
+
   it('keeps a user-removed host block removed across unrelated host updates', () => {
     renderHook(() => useNewTabBootstrap())
     act(() => { useNewTabLayoutStore.getState().removeModule('1col', 'sessions:h1') })

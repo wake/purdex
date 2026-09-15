@@ -40,6 +40,12 @@ describe('createHostSessionProviderSource', () => {
     expect(src.getProviders()[1].component).not.toBe(a)
   })
 
+  it('migrates the legacy sessions id to every current host block, in host order', () => {
+    expect(createHostSessionProviderSource().migrations?.()).toEqual([
+      { from: 'sessions', to: ['sessions:h1', 'sessions:h2'] },
+    ])
+  })
+
   it('owns the legacy sessions id and every sessions:* id', () => {
     const src = createHostSessionProviderSource()
     expect(src.ownsId('sessions')).toBe(true)

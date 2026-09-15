@@ -246,6 +246,64 @@ describe('useNewTabLayoutStore', () => {
     })
   })
 
+  describe('migrateId', () => {
+    it('replaces a placed id in place with the targets, in every profile', () => {
+      useNewTabLayoutStore.setState({
+        profiles: {
+          '3col': { enabled: true, columns: [['x'], ['old', 'y'], []] },
+          '2col': { enabled: false, columns: [['y'], ['old']] },
+          '1col': { enabled: true, columns: [['x', 'old', 'y']] },
+        },
+        knownIds: ['x', 'old', 'y'],
+      })
+      useNewTabLayoutStore.getState().migrateId('old', ['n1', 'n2'])
+      const s = useNewTabLayoutStore.getState()
+      expect(s.profiles['3col'].columns).toEqual([['x'], ['n1', 'n2', 'y'], []])
+      expect(s.profiles['2col'].columns).toEqual([['y'], ['n1', 'n2']])
+      expect(s.profiles['1col'].columns).toEqual([['x', 'n1', 'n2', 'y']])
+      expect(s.knownIds).toEqual(['x', 'y', 'n1', 'n2'])
+      expect(s.profiles['3col'].enabled).toBe(true)
+    })
+
+    it('marks targets known but unplaced when the old id was only known (user removed it)', () => {
+      useNewTabLayoutStore.setState({
+        profiles: {
+          '3col': { enabled: false, columns: [[], [], []] },
+          '2col': { enabled: false, columns: [[], []] },
+          '1col': { enabled: true, columns: [['x']] },
+        },
+        knownIds: ['x', 'old'],
+      })
+      useNewTabLayoutStore.getState().migrateId('old', ['n1', 'n2'])
+      const s = useNewTabLayoutStore.getState()
+      expect(s.profiles['1col'].columns).toEqual([['x']])
+      expect(s.knownIds).toEqual(['x', 'n1', 'n2'])
+    })
+
+    it('does not duplicate a target already placed or known', () => {
+      useNewTabLayoutStore.setState({
+        profiles: {
+          '3col': { enabled: false, columns: [[], [], []] },
+          '2col': { enabled: false, columns: [[], []] },
+          '1col': { enabled: true, columns: [['n1', 'old']] },
+        },
+        knownIds: ['n1', 'old'],
+      })
+      useNewTabLayoutStore.getState().migrateId('old', ['n1', 'n2'])
+      const s = useNewTabLayoutStore.getState()
+      expect(s.profiles['1col'].columns).toEqual([['n1', 'n2']])
+      expect(s.knownIds).toEqual(['n1', 'n2'])
+    })
+
+    it('is a no-op (same state) when the old id is absent', () => {
+      useNewTabLayoutStore.getState().ensureDefaults([{ id: 'a', order: 0 }])
+      const before = useNewTabLayoutStore.getState()
+      useNewTabLayoutStore.getState().migrateId('old', ['n1'])
+      expect(useNewTabLayoutStore.getState().profiles).toBe(before.profiles)
+      expect(useNewTabLayoutStore.getState().knownIds).toBe(before.knownIds)
+    })
+  })
+
   describe('reset', () => {
     it('restores initial state', () => {
       useNewTabLayoutStore.getState().setEnabled('3col', true)

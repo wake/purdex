@@ -41,6 +41,17 @@ export interface NewTabProviderSource {
    * Omitted = always ready.
    */
   isReady?: () => boolean
+  /**
+   * Retired ids this source replaces (e.g. legacy `sessions` → every
+   * `sessions:<hostId>`). Applied by the bootstrap before stale pruning, and
+   * only while the source is ready so `to` reflects the real state.
+   */
+  migrations?: () => NewTabProviderMigration[]
+}
+
+export interface NewTabProviderMigration {
+  from: string
+  to: string[]
 }
 
 const providers = new Map<string, NewTabProvider>()
@@ -88,6 +99,13 @@ export function getNewTabProviders(): NewTabProvider[] {
 /** Static providers plus those of sources whose state is ready (hydrated). */
 export function getReadyNewTabProviders(): NewTabProvider[] {
   return snapshot(true)
+}
+
+/** Id migrations declared by ready sources (unready sources are skipped). */
+export function getNewTabProviderMigrations(): NewTabProviderMigration[] {
+  return [...sources.values()]
+    .filter(isSourceReady)
+    .flatMap((s) => s.migrations?.() ?? [])
 }
 
 /** Subscribe to changes of any registered source. Returns an unsubscribe. */
