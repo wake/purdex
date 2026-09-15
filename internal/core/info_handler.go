@@ -44,6 +44,20 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	nexEnabled := c.Cfg.Nex.Enabled
 	c.CfgMu.RUnlock()
 
+	mounted := c.Mounted("nex")
+	nex := map[string]any{
+		"configured": nexEnabled,
+		"mounted":    mounted,
+		"ready":      mounted,
+		"init_error": "",
+		"effective":  nil,
+	}
+	if st, ok := c.ModuleStatus("nex"); ok {
+		for k, v := range st {
+			nex[k] = v
+		}
+	}
+
 	info := map[string]any{
 		"host_id":        hostID,
 		"tmux_instance":  config.GetTmuxInstance(),
@@ -51,10 +65,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"tmux_version":   getTmuxVersion(),
 		"os":             runtime.GOOS,
 		"arch":           runtime.GOARCH,
-		"nex": map[string]bool{
-			"configured": nexEnabled,
-			"mounted":    c.Mounted("nex"),
-		},
+		"nex":            nex,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)

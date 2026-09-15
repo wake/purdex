@@ -90,6 +90,26 @@ func (c *Core) Mounted(name string) bool {
 	return false
 }
 
+// StatusReporter is the optional interface a module implements to publish
+// runtime facts through GET /api/info. nex is the first: whether its engine
+// is serving, why not, and the config it was assembled with (spec §4.4.2).
+type StatusReporter interface{ Status() map[string]any }
+
+// ModuleStatus returns the named module's Status(), or nil,false when the
+// module is not mounted or does not implement StatusReporter.
+func (c *Core) ModuleStatus(name string) (map[string]any, bool) {
+	for _, m := range c.modules {
+		if m.Name() != name {
+			continue
+		}
+		if r, ok := m.(StatusReporter); ok {
+			return r.Status(), true
+		}
+		return nil, false
+	}
+	return nil, false
+}
+
 // InitModules sorts modules by dependency order, then calls Init on each.
 func (c *Core) InitModules() error {
 	sorted, err := topoSort(c.modules)

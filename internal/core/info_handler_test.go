@@ -190,6 +190,9 @@ func TestInfoEndpoint_NexConfiguredButNotMounted(t *testing.T) {
 	require.True(t, ok, "nex field should be an object, got %v (%T)", body["nex"], body["nex"])
 	assert.Equal(t, true, nex["configured"])
 	assert.Equal(t, false, nex["mounted"])
+	assert.Equal(t, false, nex["ready"])
+	assert.Equal(t, "", nex["init_error"])
+	assert.Nil(t, nex["effective"])
 }
 
 func TestInfoEndpoint_NexNotConfiguredAndNotMounted(t *testing.T) {
@@ -209,4 +212,52 @@ func TestInfoEndpoint_NexNotConfiguredAndNotMounted(t *testing.T) {
 	require.True(t, ok, "nex field should be an object, got %v (%T)", body["nex"], body["nex"])
 	assert.Equal(t, false, nex["configured"])
 	assert.Equal(t, false, nex["mounted"])
+}
+
+// statusStubModule extends stubModule with the StatusReporter interface, so
+// tests can simulate the nex module publishing runtime facts through
+// GET /api/info without importing internal/module/nex (import cycle).
+type statusStubModule struct {
+	stubModule
+	status map[string]any
+}
+
+func (m *statusStubModule) Status() map[string]any { return m.status }
+
+func TestInfoEndpoint_NexStatusFields(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
+	c.AddModule(&statusStubModule{
+		stubModule: stubModule{name: "nex"},
+		status: map[string]any{
+			"ready": false, "init_error": "nex: init: assembling engine: boom",
+			"effective": nil,
+		},
+	})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/info", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	nex := body["nex"].(map[string]any)
+	assert.Equal(t, true, nex["configured"])
+	assert.Equal(t, true, nex["mounted"])
+	assert.Equal(t, false, nex["ready"])
+	assert.Equal(t, "nex: init: assembling engine: boom", nex["init_error"])
+	assert.Nil(t, nex["effective"])
+}
+
+func TestInfoEndpoint_NexMountedWithoutStatusReporter(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: true}}})
+	c.AddModule(&stubModule{name: "nex"})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/info", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	nex := body["nex"].(map[string]any)
+	assert.Equal(t, true, nex["ready"])
+	assert.Equal(t, "", nex["init_error"])
+	assert.Nil(t, nex["effective"])
 }
