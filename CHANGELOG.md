@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.352] - 2026-09-15
+
+### Feat: 多主機 Host 顏色標示（#1052）
+
+每台 host 可設定自己的顏色，屬於該 host 的分頁在側欄與上方 tab 列顯示色標，多主機一眼可辨；未設定＝完全不畫。
+
+- **Host 顏色**：`HostConfig.color`（`#rrggbb`，隨 hosts sync 同步）；Host > Overview 新增選色器（8 預設色＋hex 輸入＋清除，IME 安全），寫入一律走 `setHostColor`。
+- **判定**：分頁的 host＝第一個 tmux-session pane 的 hostId；editor / browser 等非 tmux 分頁不上色。
+- **顯示方式分開設定**（Settings > Terminal）：側欄與上方 tab 各自選「漸層 / 左邊線 / 底線 / 關閉」，線條樣式可調 1–6px；預設側欄漸層、上方底線、2px。色標為絕對定位，不影響 tab 寬度、拖曳與截斷。
+- **信任邊界**：host color 在 sync 反序列化與本機 rehydrate 時驗證，非法值直接移除；顯示設定在 sync 與 rehydrate 共用同一 sanitizer（非法 style 丟棄、寬度夾在 1–6）；渲染前再驗一次，杜絕 inline CSS 注入。
+- **Review**：spec 與 plan 各一輪 codex 審（NEEDS-REVISION → 全修）；PR R1 標準 1×P2（清除未重設草稿）、R2 三視角 4 項（非字串 color 使選色器崩潰、hosts sync 未擋非法 color、UI 設定 rehydrate 未驗證、`HostColorMarkSetting` 抽出），全數修入、無延後 issue。
+- 測試 vitest 424→425 files、5214→5334 tests；Go 未動。
+
 ## [1.0.0-alpha.351] - 2026-09-15
 
 ### Feat: Nexen 整併 P-B.2 — execution pane 改吃 Nexen（#1047）
