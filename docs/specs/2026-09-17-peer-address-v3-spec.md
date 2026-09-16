@@ -92,6 +92,12 @@ func CanonicalID(sessionID string) string
   canonical id and a canonical id can never block an alias.
 - `IsCanonicalID(s)` replaces `IsDefaultLabel`, pattern `^_[0-9a-z]{8}$`.
 
+**A safe failure has to say so.** D5 leans on `*AmbiguousError` being the outcome of a collision, so
+that outcome must be legible as a collision and not as a malfunction. `AmbiguousError` already
+carries `Candidates`; `pdx msg send` must print every candidate — address, agent name, pid, cwd —
+rather than a bare "ambiguous". Without that, the operator sees "my address stopped working" and
+goes looking for a bug that is not there. Covered in §7 and §9.
+
 ### 4.2 Alias — unchanged
 
 `internal/module/peers/labels.go` and the `LabelInfo` store keep their current behaviour: claim,
@@ -115,6 +121,18 @@ disjoint by construction rather than by a runtime check.
 
 > This removes most of #1079. The occupancy reasoning it introduced is not being discarded because
 > it was wrong — it is being discarded because D2 removes the mutable input that made it necessary.
+
+**What is NOT being deleted, and where it lives.** Alias uniqueness among live conversations is
+unaffected by this section. It was never implemented here: it is enforced at claim time by
+`internal/module/peers/labels.go` — the claim matrix, `label_taken` with `holder` + `live_labels`,
+and the rule that a dead holder's row is inert and releases the name. None of that appears in the
+table above, and none of it changes.
+
+The three occupancy rules deleted here answered a different question — "which conversation may mint
+a label from this tmux session name" — and that question stops existing under D2. A reader who
+takes "the occupancy rules are gone" to mean "alias uniqueness is gone" will be tempted to add a
+duplicate check back into the record build. Do not: the claim path already refuses a taken alias
+before it can ever reach a record.
 
 ### 4.4 `PeerRecord` (`internal/peers/record.go`)
 
@@ -200,7 +218,14 @@ P1 — so it shows a tmux name that may no longer exist. For a `row_kind: sessio
 is already in the same build (`SessionSummary.Name`, from the tmux inventory). Use it.
 
 For an `entry` row with no session row behind it there is no live name available; keep the registry
-value and accept it, since such a row is by definition not attached to a listed tmux session.
+value, since such a row is by definition not attached to a listed tmux session.
+
+**This makes `suffix` carry two provenances in one response**, and that must be stated rather than
+left for the next reader to discover: on a `session` row it is live, on an `entry` row it may be the
+value frozen at the agent's startup. No field is added to tell them apart — `row_kind` already
+does, and `suffix` is display-only and explicitly not an identity (§4.4). But the doc comment on
+`PeerRecord.Suffix` must say exactly this, because "one field, two meanings, no discriminator" is
+the shape of the `partial` defect found in #1079's review.
 
 ## 6. Wire / API
 
@@ -223,7 +248,7 @@ value and accept it, since such a row is by definition not attached to a listed 
 | `pdx peers` | the `LABEL` column is replaced by `CANONICAL` (same width budget). `ADDRESS` already shows the alias when one is claimed, so the pair reads "the name it answers to" + "the name it always answers to". The `*` default-label marker is removed — there is no longer such a thing. |
 | `pdx peers --json` | per §6 |
 | `pdx msg whoami` | prints `canonical:` and `alias:` lines; `address:` stays as the preferred form |
-| `pdx msg send <host>/<x>` | `<x>` may be an alias or a canonical id |
+| `pdx msg send <host>/<x>` | `<x>` may be an alias or a canonical id. On `*AmbiguousError` the candidates are listed one per line (address, agent name, pid, cwd), not summarised as a count — §4.1 |
 | `pdx msg name` | unchanged |
 
 ## 8. Compatibility
@@ -242,9 +267,15 @@ it is an identity.
 The SPA work in flight does **not** parse or assemble addresses: `address` is displayed and copied
 verbatim, and rows are joined on `session_code`, not on the label. §4.5 is what keeps that true.
 
-One change is required on the SPA side and must land with or before this:
+One change is required on the SPA side:
 
-- `label_source === 'default'` is used to draw a marker. That value becomes `'canonical'`.
+- `label_source === 'default'` is used to draw a marker (one site, `RenamePopover.tsx`). That value
+  becomes `'canonical'`.
+
+**Sequencing constraint.** PR #1085 (peer info in the tab panel and status bar) is in review and
+its tests touch that component. This change must **not** land before #1085 merges, or #1085 goes red
+on a field unrelated to it. Either #1085 merges first and the one-line SPA change rides in this PR,
+or purdex-69 lands it as a follow-up immediately after. Agreed with purdex-69, 2026-09-17.
 
 `suffix` is unused by the SPA, so §5.3 does not affect it. If the wording of any `reason` value
 changes, `spa/src/lib/peer-display.ts` and the `peer.*` i18n namespace are the single copies to
@@ -263,6 +294,8 @@ is gone. `label_test.go`'s `ResolveDefaultLabels` table goes with §4.3.
 - `Resolve`: canonical resolves; alias resolves; a row with an alias still resolves by its
   canonical; two rows sharing a canonical → `*AmbiguousError`; `tmux:<name>` still bypasses tier 1;
   `Partial` / `RegistryIncomplete` behaviour unchanged for both arms.
+- CLI rendering of `*AmbiguousError` names every candidate (§4.1). Asserted on the rendered string,
+  not on the error value — the point of the requirement is what the operator reads.
 - `applyLabel` / `Build`, asserted as §4.5's table: `address == host+"/"+label` on every row;
   alias claimed → `label == alias`, `label_source == "user"`; no alias → `label == canonical`,
   `label_source == "canonical"`; `canonical` non-empty and `alias` possibly empty on every row with
