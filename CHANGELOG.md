@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0-alpha.367] - 2026-09-17
+
+### Feat: Peer Address v3 —— 一個地址，加上一個只是標籤的標籤（#1091）
+
+一個對話從此只有**一個地址**，由 `sessionId` 導出、終生不變：`<host>/_3k9f2mq4:<suffix>`。`label` 留下來當欄位，但不再是第二種定址方式——它是你**挑**人的依據，不是你**找到**人的方式。
+
+這個切分就是整件事的全部：**唯一必須唯一的東西，正是唯一沒有人能選的東西。**
+
+#### 為什麼
+
+alpha.363（#1079）讓沒命名的 session 用它的 tmux session 名當地址。三個後果，全部是實測出來的：
+
+- **改一次 tmux 名，地址就永久 stale。** `Entry.Tmux` 來自 Claude Code 自己的 registry 檔，啟動時抓一次就固定。在 mini-lab 實測：`tmux rename-session aigora2 aigora2zz` 之後，等到 registry 檔**確實被改寫過**（mtime 前進、`status` 從 `busy` 變 `shell`），那個欄位仍是 `aigora2:@5.%5`。會一路掛到 agent 結束。
+- **第三方一開同名 session，兩邊一起失去地址。** 舊的幽靈佔著那個名字，新的來搶，occupancy 規則把**兩個**都跳過。在位者什麼都沒做，地址靜默改變，沒有人被告知。
+- **保底雜湊繞過了它自己的撞名規則。** 安全（歧義拒送，不會誤送）但兩敗俱傷。
+
+#### 改了什麼
+
+label 撞名從此**警告但成立**——它不參與路由，所以不需要唯一。序號慣例（`purdex-tester-2`）留著，但改由 CLAUDE.md 要求、不由 daemon 強制：衝突爆在「宣告的當下」讓 agent 自己加序號，而不是事後靜默改掉別人的地址。
+
+`pdx peers` 改成 **LABEL 在最前、ADDRESS 在後**——閱讀順序符合使用方式：掃 LABEL 找到人，複製 ADDRESS 去找他。`pdx msg name` 成功時同時印出 label 與**未改變的**地址，因為剛替自己命名的 agent 最可能誤以為那個名字可以拿來送訊。
+
+#### 四輪 review 沒看到的那一層
+
+`peer_labels.label` 是 `TEXT UNIQUE`，而 `Claim` 的第一件事是 `DELETE FROM peer_labels WHERE label = ? AND session_id <> ?`——**把在位者靜默改成無名**，正是這次要消滅的那個行為。一輪跨模型加三個平行視角（攻擊／spec drift／體質）全部停在應用層。是實作者在「D7 的回歸測試怎麼寫都不會過」時撞出來的。
+
+`CREATE TABLE IF NOT EXISTS` 不會改既有的表，所以 mini-lab 與 air 上那個 `UNIQUE` 還在——沒有針對性遷移的話，**這個版本最主要的行為在真實機器上不會生效**。遷移已包含，並對 `~/.config/pdx/meta.db` 的複本實際驗證過。
+
+#### 混版
+
+升級不是原子的。v2 daemon 不送 `canonical` 欄位，所以：
+
+- 對 v2 遠端解析會回 `remote_too_old` 而**不是**落到 tmux 名 fallback。攻擊方 review 證實了那條 fallback 會把訊息送到同名的 tmux session 去。偵測徵候是「有 live cc 列卻沒有 canonical」——把不變式反過來讀，不依賴任何版本字串。
+- CLI 對 v2 daemon 的成功回應會明確報版本不符，而不是靜默解成空身份。舊 daemon 回的裸 `PeerRecord` 會**成功**解成零值，`pdx msg whoami` 會印出空地址並 exit 0。
+
+#### 已知且刻意保留
+
+tmux 改名後 `pdx msg whoami` 與 `pdx peers` 會顯示不同的 suffix。self 路由不建盤點，而昂貴的那條路連保證都給不出（逾時就 fallback 回凍結名，等於把「一定不一致」換成「通常一致」，那是更難寫進文件的契約）。分歧僅止於 suffix：兩個 head 都是 canonical，`Resolve` 在 tier 1 之前就把 suffix 丟掉了。已用測試釘住。
+
+- 17 個實作 commit，Go 全套與 SPA 453 檔 / 5983 測全綠。
+- Follow-up：#1092 #1093 #1094 #1095 #1096
+
 ## [1.0.0-alpha.366] - 2026-09-17
 
 ### Fix: 狀態列的 peer 段落對齊與間距（#1088、#1089）
