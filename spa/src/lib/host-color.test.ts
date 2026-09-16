@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   HOST_COLOR_PRESETS,
+  DEFAULT_HOST_ICON,
   isValidHostColor,
+  isIconWeight,
   normalizeHostColor,
   getTabHostId,
   resolveTabHostColor,
-  sanitizeHostConfigColor,
+  sanitizeHostConfig,
 } from './host-color'
 import type { PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
@@ -135,26 +137,83 @@ describe('resolveTabHostColor', () => {
   })
 })
 
-describe('sanitizeHostConfigColor', () => {
+describe('DEFAULT_HOST_ICON', () => {
+  it('is the Desktop Phosphor icon', () => {
+    expect(DEFAULT_HOST_ICON).toBe('Desktop')
+  })
+})
+
+describe('isIconWeight', () => {
+  it.each(['bold', 'regular', 'thin', 'light', 'fill', 'duotone'])('accepts %s', (w) => {
+    expect(isIconWeight(w)).toBe(true)
+  })
+
+  it.each(['evil', '', 'Regular', 'REGULAR', 42, null, undefined, {}, ['bold']])(
+    'rejects %j',
+    (bad) => {
+      expect(isIconWeight(bad)).toBe(false)
+    },
+  )
+})
+
+describe('sanitizeHostConfig', () => {
   const base: HostConfig = { id: 'h1', name: 'H', ip: '1.2.3.4', port: 7860, order: 0 }
 
   it.each(['url(x)', '#abc', 'red', '', {}, 42, null])('removes invalid color %j', (bad) => {
-    const out = sanitizeHostConfigColor({ ...base, token: 'T', color: bad as never })
+    const out = sanitizeHostConfig({ ...base, token: 'T', color: bad as never })
     expect('color' in out).toBe(false)
     expect(out).toEqual({ ...base, token: 'T' })
   })
 
   it('returns the same object when color is valid', () => {
     const h = { ...base, color: '#3b82f6' }
-    expect(sanitizeHostConfigColor(h)).toBe(h)
+    expect(sanitizeHostConfig(h)).toBe(h)
   })
 
   it('returns the same object when color key is absent', () => {
-    expect(sanitizeHostConfigColor(base)).toBe(base)
+    expect(sanitizeHostConfig(base)).toBe(base)
   })
 
   it('removes an explicit undefined color key', () => {
-    const out = sanitizeHostConfigColor({ ...base, color: undefined })
+    const out = sanitizeHostConfig({ ...base, color: undefined })
     expect('color' in out).toBe(false)
+  })
+
+  it('keeps a valid icon and iconWeight (same object reference)', () => {
+    const h: HostConfig = { ...base, color: '#3b82f6', icon: 'Laptop', iconWeight: 'duotone' }
+    expect(sanitizeHostConfig(h)).toBe(h)
+  })
+
+  it.each([42, '', '   ', {}, null, true])('removes invalid icon %j', (bad) => {
+    const out = sanitizeHostConfig({ ...base, icon: bad as never, iconWeight: 'bold' })
+    expect('icon' in out).toBe(false)
+    expect(out.iconWeight).toBe('bold')
+  })
+
+  it('removes an explicit undefined icon key', () => {
+    const out = sanitizeHostConfig({ ...base, icon: undefined })
+    expect('icon' in out).toBe(false)
+  })
+
+  it.each(['evil', '', 42, null, 'Regular'])('removes invalid iconWeight %j', (bad) => {
+    const out = sanitizeHostConfig({ ...base, icon: 'Laptop', iconWeight: bad as never })
+    expect('iconWeight' in out).toBe(false)
+    expect(out.icon).toBe('Laptop')
+  })
+
+  it('drops an invalid color while keeping a valid icon', () => {
+    const out = sanitizeHostConfig({ ...base, color: 'red' as never, icon: 'Laptop' })
+    expect('color' in out).toBe(false)
+    expect(out.icon).toBe('Laptop')
+  })
+
+  it('drops icon, iconWeight and color together when all are invalid', () => {
+    const out = sanitizeHostConfig({
+      ...base,
+      color: 'red' as never,
+      icon: 42 as never,
+      iconWeight: 'evil' as never,
+    })
+    expect(out).toEqual(base)
   })
 })

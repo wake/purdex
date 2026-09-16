@@ -4,7 +4,7 @@
 
 import { useHostStore, type HostConfig } from '../../../stores/useHostStore'
 import type { SyncContributor, FullPayload, MergeStrategy } from '../types'
-import { sanitizeHostConfigColor } from '../../host-color'
+import { sanitizeHostConfig } from '../../host-color'
 
 // Apply an incoming (token-stripped) host map onto the current state, preserving
 // each host's local token ONLY when endpoint identity (ip + port) still matches.
@@ -19,9 +19,9 @@ function mergeHostsPreservingTokens(
 ): Record<string, HostConfig> {
   const merged: Record<string, HostConfig> = {}
   for (const [id, rawHost] of Object.entries(incomingHosts)) {
-    // Incoming hosts are untrusted: drop an invalid color before it is stored
-    // (and later re-serialized to other devices).
-    const host = sanitizeHostConfigColor(rawHost)
+    // Incoming hosts are untrusted: drop an invalid color / icon / iconWeight
+    // before it is stored (and later re-serialized to other devices).
+    const host = sanitizeHostConfig(rawHost)
     const currentHost = current[id]
     const sameEndpoint =
       currentHost !== undefined &&
