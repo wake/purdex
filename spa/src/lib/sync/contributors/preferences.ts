@@ -2,11 +2,7 @@
 // Sync Architecture — PreferencesContributor
 // =============================================================================
 
-import {
-  useUISettingsStore,
-  sanitizeHostColorPrefs,
-  sanitizeHostBadgePrefs,
-} from '../../../stores/useUISettingsStore'
+import { useUISettingsStore, sanitizeHostBadgePrefs } from '../../../stores/useUISettingsStore'
 import type { SyncContributor, FullPayload, MergeStrategy } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -24,10 +20,6 @@ const DATA_FIELDS = [
   'codexIconVariant',
   'dynamicTabName',
   'showAgentTitleInStatusBar',
-  'hostColorSidebarStyle',
-  'hostColorSidebarWidth',
-  'hostColorTabBarStyle',
-  'hostColorTabBarWidth',
   'hostBadgeSidebarEnabled',
   'hostBadgeSidebarLineColor',
   'hostBadgeSidebarLineOpacity',
@@ -59,10 +51,9 @@ function normalizeIncoming(data: IncomingPreferencesData): Partial<PreferencesDa
     normalized.dynamicTabName = showOscTitle
     normalized.showAgentTitleInStatusBar = showOscTitle
   }
-  // Sync bypasses store setters: invalid remote host color / host badge fields
-  // are dropped (local value kept); finite numbers are clamped.
-  const sanitized = sanitizeHostColorPrefs(normalized) as Record<string, unknown>
-  return sanitizeHostBadgePrefs(sanitized) as Partial<PreferencesData>
+  // Sync bypasses store setters: invalid remote host badge fields are dropped
+  // (local value kept); finite numbers are clamped.
+  return sanitizeHostBadgePrefs(normalized)
 }
 
 // ---------------------------------------------------------------------------

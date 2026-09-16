@@ -9,6 +9,7 @@ import { connectionErrorMessage } from '../../lib/host-utils'
 import type { ConfigData } from '../../lib/host-api'
 import { Section, Field, EditableField, TokenField } from './form-fields'
 import { HostColorField } from './HostColorField'
+import { HostIconField } from './HostIconField'
 
 interface Props {
   hostId: string
@@ -127,6 +128,7 @@ export function OverviewSection({ hostId }: Props) {
           onSave={(v) => updateHost(hostId, { name: v })}
         />
         <HostColorField hostId={hostId} />
+        <HostIconField hostId={hostId} />
         <EditableField
           label={t('hosts.ip')}
           value={host.ip}

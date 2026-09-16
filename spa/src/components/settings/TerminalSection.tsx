@@ -1,5 +1,5 @@
 import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
-import { HostColorMarkSetting } from './HostColorMarkSetting'
+import { HostBadgeSetting } from './HostBadgeSetting'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
 import { SegmentControl } from './SegmentControl'
@@ -32,14 +32,35 @@ export function TerminalSection() {
   const setDynamicTabName = useUISettingsStore((s) => s.setDynamicTabName)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
   const setTabNameTooltipMode = useUISettingsStore((s) => s.setTabNameTooltipMode)
-  const hostColorSidebarStyle = useUISettingsStore((s) => s.hostColorSidebarStyle)
-  const setHostColorSidebarStyle = useUISettingsStore((s) => s.setHostColorSidebarStyle)
-  const hostColorSidebarWidth = useUISettingsStore((s) => s.hostColorSidebarWidth)
-  const setHostColorSidebarWidth = useUISettingsStore((s) => s.setHostColorSidebarWidth)
-  const hostColorTabBarStyle = useUISettingsStore((s) => s.hostColorTabBarStyle)
-  const setHostColorTabBarStyle = useUISettingsStore((s) => s.setHostColorTabBarStyle)
-  const hostColorTabBarWidth = useUISettingsStore((s) => s.hostColorTabBarWidth)
-  const setHostColorTabBarWidth = useUISettingsStore((s) => s.setHostColorTabBarWidth)
+  const hostBadgeSidebarEnabled = useUISettingsStore((s) => s.hostBadgeSidebarEnabled)
+  const setHostBadgeSidebarEnabled = useUISettingsStore((s) => s.setHostBadgeSidebarEnabled)
+  const hostBadgeSidebarLineColor = useUISettingsStore((s) => s.hostBadgeSidebarLineColor)
+  const setHostBadgeSidebarLineColor = useUISettingsStore((s) => s.setHostBadgeSidebarLineColor)
+  const hostBadgeSidebarLineOpacity = useUISettingsStore((s) => s.hostBadgeSidebarLineOpacity)
+  const setHostBadgeSidebarLineOpacity = useUISettingsStore((s) => s.setHostBadgeSidebarLineOpacity)
+  const hostBadgeSidebarBgOpacity = useUISettingsStore((s) => s.hostBadgeSidebarBgOpacity)
+  const setHostBadgeSidebarBgOpacity = useUISettingsStore((s) => s.setHostBadgeSidebarBgOpacity)
+  const hostBadgeSidebarBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
+  const setHostBadgeSidebarBox = useUISettingsStore((s) => s.setHostBadgeSidebarBox)
+  const hostBadgeSidebarInset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
+  const setHostBadgeSidebarInset = useUISettingsStore((s) => s.setHostBadgeSidebarInset)
+  const hostBadgeSidebarRadius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
+  const setHostBadgeSidebarRadius = useUISettingsStore((s) => s.setHostBadgeSidebarRadius)
+
+  const hostBadgeTabBarEnabled = useUISettingsStore((s) => s.hostBadgeTabBarEnabled)
+  const setHostBadgeTabBarEnabled = useUISettingsStore((s) => s.setHostBadgeTabBarEnabled)
+  const hostBadgeTabBarLineColor = useUISettingsStore((s) => s.hostBadgeTabBarLineColor)
+  const setHostBadgeTabBarLineColor = useUISettingsStore((s) => s.setHostBadgeTabBarLineColor)
+  const hostBadgeTabBarLineOpacity = useUISettingsStore((s) => s.hostBadgeTabBarLineOpacity)
+  const setHostBadgeTabBarLineOpacity = useUISettingsStore((s) => s.setHostBadgeTabBarLineOpacity)
+  const hostBadgeTabBarBgOpacity = useUISettingsStore((s) => s.hostBadgeTabBarBgOpacity)
+  const setHostBadgeTabBarBgOpacity = useUISettingsStore((s) => s.setHostBadgeTabBarBgOpacity)
+  const hostBadgeTabBarBox = useUISettingsStore((s) => s.hostBadgeTabBarBox)
+  const setHostBadgeTabBarBox = useUISettingsStore((s) => s.setHostBadgeTabBarBox)
+  const hostBadgeTabBarInset = useUISettingsStore((s) => s.hostBadgeTabBarInset)
+  const setHostBadgeTabBarInset = useUISettingsStore((s) => s.setHostBadgeTabBarInset)
+  const hostBadgeTabBarRadius = useUISettingsStore((s) => s.hostBadgeTabBarRadius)
+  const setHostBadgeTabBarRadius = useUISettingsStore((s) => s.setHostBadgeTabBarRadius)
   const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
   const setShowAgentTitleInStatusBar = useUISettingsStore((s) => s.setShowAgentTitleInStatusBar)
 
@@ -136,23 +157,43 @@ export function TerminalSection() {
         <SegmentControl options={TAB_INDICATOR_OPTIONS} value={tabIndicatorStyle} onChange={setTabIndicatorStyle} />
       </SettingItem>
 
-      <HostColorMarkSetting
-        label={t('settings.terminal.host_color_mark.sidebar.label')}
-        description={t('settings.terminal.host_color_mark.sidebar.desc')}
-        style={hostColorSidebarStyle}
-        width={hostColorSidebarWidth}
-        onStyleChange={setHostColorSidebarStyle}
-        onWidthChange={setHostColorSidebarWidth}
-        testIdPrefix="host-color-sidebar"
+      <HostBadgeSetting
+        label={t('settings.terminal.host_badge.sidebar.label')}
+        description={t('settings.terminal.host_badge.sidebar.desc')}
+        enabled={hostBadgeSidebarEnabled}
+        lineColor={hostBadgeSidebarLineColor}
+        lineOpacity={hostBadgeSidebarLineOpacity}
+        bgOpacity={hostBadgeSidebarBgOpacity}
+        box={hostBadgeSidebarBox}
+        inset={hostBadgeSidebarInset}
+        radius={hostBadgeSidebarRadius}
+        onEnabledChange={setHostBadgeSidebarEnabled}
+        onLineColorChange={setHostBadgeSidebarLineColor}
+        onLineOpacityChange={setHostBadgeSidebarLineOpacity}
+        onBgOpacityChange={setHostBadgeSidebarBgOpacity}
+        onBoxChange={setHostBadgeSidebarBox}
+        onInsetChange={setHostBadgeSidebarInset}
+        onRadiusChange={setHostBadgeSidebarRadius}
+        testIdPrefix="host-badge-sidebar"
       />
-      <HostColorMarkSetting
-        label={t('settings.terminal.host_color_mark.tab_bar.label')}
-        description={t('settings.terminal.host_color_mark.tab_bar.desc')}
-        style={hostColorTabBarStyle}
-        width={hostColorTabBarWidth}
-        onStyleChange={setHostColorTabBarStyle}
-        onWidthChange={setHostColorTabBarWidth}
-        testIdPrefix="host-color-tabbar"
+      <HostBadgeSetting
+        label={t('settings.terminal.host_badge.tab_bar.label')}
+        description={t('settings.terminal.host_badge.tab_bar.desc')}
+        enabled={hostBadgeTabBarEnabled}
+        lineColor={hostBadgeTabBarLineColor}
+        lineOpacity={hostBadgeTabBarLineOpacity}
+        bgOpacity={hostBadgeTabBarBgOpacity}
+        box={hostBadgeTabBarBox}
+        inset={hostBadgeTabBarInset}
+        radius={hostBadgeTabBarRadius}
+        onEnabledChange={setHostBadgeTabBarEnabled}
+        onLineColorChange={setHostBadgeTabBarLineColor}
+        onLineOpacityChange={setHostBadgeTabBarLineOpacity}
+        onBgOpacityChange={setHostBadgeTabBarBgOpacity}
+        onBoxChange={setHostBadgeTabBarBox}
+        onInsetChange={setHostBadgeTabBarInset}
+        onRadiusChange={setHostBadgeTabBarRadius}
+        testIdPrefix="host-badge-tabbar"
       />
 
       <SettingItem label={t('settings.terminal.dynamic_tab_name.label')} description={t('settings.terminal.dynamic_tab_name.desc')}>
