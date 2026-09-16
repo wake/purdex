@@ -214,6 +214,12 @@ moves. Two consequences, and an earlier draft got this wrong by saying "always 0
 - With that, `deliver.go:277`'s helper-rename path becomes inert for a v3 origin: the helper is
   named after an address that never moves. The field stays on the wire because v2 senders still
   populate it, and the stale-rev guard still protects against a v2 peer's address changing.
+- **`reply.go` shares `wireFromRecord`, so replies carry rev 0 too**, which means the stale-rev
+  guard can no longer be exercised by a v3 origin at all. Its coverage has to come from a v2 origin
+  — the only sender that can still move an address. `TestE2E_HelperRename` was rewritten on that
+  basis during implementation: a v2 peer performs a legitimate rename at `oldRev+1`, then replays
+  the old rev and is refused. Deleting the guard's test instead would have been the easy reading of
+  "inert", and the wrong one: the path is inert for v3 and load-bearing for v2.
 
 > This is the same defect class as `label_source` (§8.1) and `suffix` (§5.4): one field asked to
 > carry two meanings. Here it was caught by an implementer refusing to guess which of two
