@@ -113,7 +113,12 @@ function CopySegment({ testId, display, value, what, title, dim, rtl, className 
       // `bdi` keeps the path itself left-to-right inside an RTL box, so the
       // ellipsis lands at the start without reordering the text.
       style={rtl ? { direction: 'rtl', textAlign: 'left' } : undefined}
-      className={`min-w-0 truncate text-left ${value === '' ? 'cursor-default' : 'cursor-pointer'} ${dim ? 'opacity-50' : ''} ${className}`}
+      // `text-text-secondary` is on the base, not left to each call site: the
+      // row's container is `text-text-muted`, so a segment that forgets the
+      // class inherits a dimmer colour than the host and session name beside
+      // it — which is exactly what shipped in alpha.365 and read as three
+      // greyed-out segments next to two normal ones.
+      className={`min-w-0 truncate text-left text-text-secondary ${value === '' ? 'cursor-default' : 'cursor-pointer'} ${dim ? 'opacity-70' : ''} ${className}`}
     >
       {rtl ? <bdi>{display}</bdi> : display}
     </button>
