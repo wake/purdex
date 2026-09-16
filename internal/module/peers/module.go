@@ -460,6 +460,11 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Entries:    entries,
 		ProxyPIDs:  proxyPIDs,
 		Labels:     labels,
+		// An empty label map means "unreadable", not "no user labels"
+		// (spec §3.5), so Build must mint no tmux-derived defaults while
+		// the store is down — otherwise a row could advertise a name an
+		// unreadable row already holds for someone else.
+		LabelsUnavailable: labelsUnavailable,
 	})
 
 	return ipeers.Envelope{

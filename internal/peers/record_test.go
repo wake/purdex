@@ -1175,6 +1175,56 @@ func TestBuild_AmbiguousSessionRow_CompetitorForcesHash(t *testing.T) {
 	}
 }
 
+// TestBuild_LabelsUnavailable_EveryRowKeepsItsHash is the round-2 defence
+// case (spec §11.2, §3.5, §4 row 9). When the label store could not be
+// read, Labels is empty for want of data — not because no user labels
+// exist — so a tmux-derived default would advertise a name an unreadable
+// row may already hold for a live session, and a sender resolves a single
+// tier-1 hit even on a Partial snapshot. Build therefore mints NO
+// tmux-derived default at all while the store is unreadable: every row
+// degrades to exactly Peer Address v2's hash.
+func TestBuild_LabelsUnavailable_EveryRowKeepsItsHash(t *testing.T) {
+	in := BuildInput{
+		HostID:   "h:1",
+		Alias:    "mini-lab",
+		Sessions: []SessionSummary{{Code: "s1", Name: "purdex1"}},
+		Owners:   map[string]Owner{"s1": {AgentType: "cc", SessionID: "sess-x", TmuxPaneID: "%1"}},
+		Entries: []Entry{
+			{PID: 100, SessionID: "sess-x", Name: "purdex-69", Tmux: "purdex1:@1.%1", Inbox: "/s/100"},
+			{PID: 101, SessionID: "sess-y", Name: "barbox-0b", Tmux: "bb2:@1.%2", Inbox: "/s/101"},
+		},
+	}
+
+	// Same input, readable store: both rows take their place address.
+	for _, r := range Build(in) {
+		if r.Agent == nil || r.Agent.PID == 0 {
+			continue
+		}
+		if r.LabelSource != LabelSourceDefault || IsDefaultLabel(r.Label) {
+			t.Fatalf("precondition: row %s label = %q, want a tmux-derived default", r.Address, r.Label)
+		}
+	}
+
+	in.LabelsUnavailable = true
+	recs := Build(in)
+	if len(recs) != 2 {
+		t.Fatalf("got %d rows, want 2", len(recs))
+	}
+	for _, r := range recs {
+		want := DefaultLabel(r.Agent.SessionID)
+		if r.Label != want || r.LabelSource != LabelSourceDefault {
+			t.Errorf("row %s label/source = %q/%q, want the hash %q/%s", r.Address, r.Label, r.LabelSource, want, LabelSourceDefault)
+		}
+	}
+
+	// And a send addressed to what would have been the place address does
+	// not reach it: the outage makes the envelope Partial, so a tier-1
+	// miss is ErrResolveNotReady rather than a silent tier-2 guess.
+	if _, err := Resolve(recs, "purdex1", ResolveSnapshot{Partial: true}); !errors.Is(err, ErrResolveNotReady) {
+		t.Errorf("Resolve(%q) = %v, want ErrResolveNotReady", "purdex1", err)
+	}
+}
+
 // TestBuild_UserLabelBeatsTmuxDerivedDefault: a claimed label still wins,
 // with label_source "user" and its rev — the default is not even rendered.
 func TestBuild_UserLabelBeatsTmuxDerivedDefault(t *testing.T) {

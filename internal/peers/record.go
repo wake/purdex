@@ -77,6 +77,16 @@ type BuildInput struct {
 	Entries       []Entry
 	ProxyPIDs     map[int]bool         // empty in P1; kept so P3 needs no signature change
 	Labels        map[string]LabelInfo // by sessionId; absent ⇒ default label, rev 0
+	// LabelsUnavailable says the label snapshot in Labels could NOT be
+	// read (spec §3.5). Labels is then empty for want of data, not
+	// because no user labels exist, so no tmux-derived default may be
+	// minted: rule 3 cannot be checked, and an unreadable row may hold
+	// the very name a row would advertise — a sender resolves a single
+	// tier-1 hit even on a Partial snapshot, so the message would go to
+	// the wrong agent, silently. Every row keeps its v2 hash instead,
+	// which is exactly Peer Address v2's behaviour and the one
+	// degradation that is provably safe.
+	LabelsUnavailable bool
 }
 
 // Build joins sessions, owners and registry entries into PeerRecords. It is
@@ -89,7 +99,12 @@ func Build(in BuildInput) []PeerRecord {
 
 	// One population, computed once, shared by every row (spec §3.2): the
 	// listing may never render two different defaults for one conversation.
-	defaults := ResolveDefaultLabels(in.Entries, in.ProxyPIDs, in.Labels)
+	// A nil map is Peer Address v2 exactly — every lookup falls back to the
+	// hash — which is what an unreadable label store degrades to (§3.5).
+	var defaults DefaultLabels
+	if !in.LabelsUnavailable {
+		defaults = ResolveDefaultLabels(in.Entries, in.ProxyPIDs, in.Labels)
+	}
 
 	records := make([]PeerRecord, 0, len(in.Sessions)+len(in.Entries))
 	consumed := make(map[Entry]bool)
