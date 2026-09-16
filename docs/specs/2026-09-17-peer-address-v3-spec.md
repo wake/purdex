@@ -418,17 +418,42 @@ address is the same guard delivered at the moment of the misconception.
 ### 8.1 SPA (verified on `main`, 2026-09-17)
 
 The SPA does not parse or assemble addresses: `address` is displayed and copied verbatim, and rows
-join on `session_code`. §4.5 keeps that true. Two sites touch `label_source`:
+join on `session_code`. §4.5 keeps that true.
+
+**`label_source: ''` widens in meaning, and this is the part the SPA has to be told about.** Under
+v2 it had exactly one source: a row with no cc agent, because a live cc conversation always received
+a default label. Under v3 it has two:
+
+| `label_source == ""` because | tell them apart with |
+|---|---|
+| a live cc conversation that has not set a label (the common case) | `canonical != ""` |
+| a row with no cc agent at all | `canonical == ""`, or equivalently `agent == null` |
+
+So any SPA logic that read `labelSource === ''` as "this is not an agent row" is now wrong, and must
+key off `agent`/`canonical` instead. This is the same one-value-two-meanings shape as §5.4's
+`suffix`; it is called out here rather than papered over with a third `label_source` value, because
+`canonical` already discriminates and a new enum value would not.
+
+**Sites (full inventory taken on `main` at alpha.365 by purdex-69, 2026-09-17):**
 
 | site | change |
 |---|---|
-| `spa/src/components/RenamePopover.tsx:132` | `row.labelSource === 'default'` draws a marker. That value is gone; the marker goes or keys off `label !== ''`. |
-| `spa/src/stores/usePeerStore.ts:28` | the type comment `// user \| default \| ''` becomes `// user \| ''` |
-| `spa/src/stores/usePeerStore.test.ts` | fixtures use `label_source: 'default'` |
+| `spa/src/components/RenamePopover.tsx:132` | `row.labelSource === 'default'` draws the default-label marker. **The only behavioural use.** The marker goes. |
+| `spa/src/stores/usePeerStore.ts:28` | type comment `// user \| default \| ''` → `// user \| ''` |
+| `spa/src/stores/usePeerStore.ts:93` | passes `label_source` straight through — **no change** |
+| `spa/src/stores/usePeerStore.test.ts` :20 :82 :131 | fixtures |
+| `spa/src/components/RenamePopover.test.tsx` :224 :333 :483 | fixtures |
+| `spa/src/components/StatusBar.test.tsx` :69 | fixture |
+| `spa/src/hooks/usePeerInfo.test.ts` :20 | fixture |
+| `spa/src/lib/host-lifecycle.test.ts` :933 | fixture inside a cascade test, unrelated to label semantics — the easiest one to miss |
 
-**Sequencing constraint.** PR #1085 is in review and its tests touch `RenamePopover.tsx`. This
-change must **not** land before #1085 merges. Agreed with purdex-69, 2026-09-17; confirm its state
-before landing.
+The two tests that assert `labelSource: ''` (`RenamePopover.test.tsx:483`, `usePeerStore.test.ts:131`)
+**stay**, but their meaning changes: they now pin the no-agent case specifically, so they must also
+assert `canonical === ''` to keep saying what they were written to say.
+
+**Sequencing constraint — satisfied.** PR #1085 merged as alpha.365 (#1087); main also carries
+#1088, which touches only `StatusBar.tsx` classes and not `label_source`. Confirmed by purdex-69,
+2026-09-17. `origin/main` is merged into this branch.
 
 ## 9. Testing
 

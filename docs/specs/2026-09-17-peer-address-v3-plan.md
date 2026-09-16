@@ -168,13 +168,22 @@ in `record.go` / `module.go` / `labels.go`. Sync the `Envelope.LabelsUnavailable
 
 ---
 
-### T10 — SPA line + CLAUDE.md
+### T10 — SPA + CLAUDE.md
 
-**Gate first**: confirm PR #1085 has merged (spec §8.1). If not, stop and report — do not land.
+Gate satisfied: #1085 merged as alpha.365; `origin/main` is merged into this branch.
 
-- `RenamePopover.tsx:132`: the `labelSource === 'default'` marker goes.
-- `usePeerStore.ts:28`: comment → `// user | ''`.
-- `usePeerStore.test.ts`: fixtures drop `'default'`.
+**Seven files, not one** — spec §8.1 has the full inventory with line numbers. The only behavioural
+change is `RenamePopover.tsx:132`; the rest are fixtures and one comment, and they must move
+together or that one test stops matching.
+
+**Tests first**: `RenamePopover.test.tsx:483` and `usePeerStore.test.ts:131` currently assert
+`labelSource: ''`. They stay, but must additionally assert `canonical === ''`, because under v3
+`label_source: ''` no longer implies "no agent" on its own (spec §8.1).
+
+- `RenamePopover.tsx:132`: the default-label marker goes.
+- `usePeerStore.ts:28`: comment → `// user | ''`. Line 93 passes through — **do not touch**.
+- Fixtures: `usePeerStore.test.ts` :20 :82 :131, `RenamePopover.test.tsx` :224 :333 :483,
+  `StatusBar.test.tsx` :69, `usePeerInfo.test.ts` :20, `host-lifecycle.test.ts` :933.
 - `CLAUDE.md` "Peer addresses": rewrite per spec §8, including the three-bullet convention block.
 - Gates: `cd spa && npx vitest run && pnpm run lint && pnpm run build`.
 
