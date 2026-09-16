@@ -148,14 +148,6 @@ describe('registerBuiltinModules', () => {
     expect(electron).toBeDefined()
   })
 
-  it('registers tmux agent monitor section in dev mode', () => {
-    registerBuiltinModules()
-    const monitor = getSettingsSections().find((s) => s.id === 'tmux-agent-monitor')
-    expect(monitor).toBeDefined()
-    expect(monitor?.label).toBe('settings.section.tmux_agent_monitor')
-    expect(monitor?.order).toBe(21)
-  })
-
   it('no longer registers a global Snapshot settings section', () => {
     registerBuiltinModules()
     expect(getSettingsSections().find((s) => s.id === 'snapshot')).toBeUndefined()
@@ -405,11 +397,10 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     // consumes the reserved-items plumbing and the entry itself is dead).
     //
     // Always-on: appearance / terminal / interface / module-config.
-    // Electron / dev-environment / tmux-agent-monitor are gated by
-    // PlatformCapabilities / import.meta.env.DEV. `sync` was promoted to
-    // a structural module by PR-2 (spec §4.3) and is no longer a legacy
-    // section; `editor-buffers` was removed when the Editor module
-    // migrated to HSR — see R1-3 below.
+    // Electron / dev-environment are gated by PlatformCapabilities.
+    // `sync` was promoted to a structural module by PR-2 (spec §4.3)
+    // and is no longer a legacy section; `editor-buffers` was removed
+    // when the Editor module migrated to HSR — see R1-3 below.
     for (const id of ['appearance', 'terminal', 'interface', 'module-config']) {
       expect(legacyIds).toContain(id)
     }

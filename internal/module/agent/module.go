@@ -91,8 +91,8 @@ var (
 // would degrade silently via the module's m.frames == nil fallbacks.
 //
 // Trace store initialization is best-effort: the module already tolerates
-// m.traces == nil / m.traceSink == nil in normal operation (monitor
-// endpoints degrade, hook processing still runs). A trace-table migration
+// m.traces == nil / m.traceSink == nil in normal operation (no trace
+// recording, hook processing still runs). A trace-table migration
 // or corruption error is logged and the module continues without trace
 // observability, not treated as a daemon-fatal condition.
 func New(events *store.AgentEventStore) (*Module, error) {
@@ -263,9 +263,6 @@ func (m *Module) Init(c *core.Core) error {
 // RegisterRoutes registers the agent API endpoints.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/event", m.handleEvent)
-	mux.HandleFunc("GET /api/agent/monitor/chains", m.handleMonitorChains)
-	mux.HandleFunc("GET /api/agent/monitor/chains/{id}", m.handleMonitorChain)
-	mux.HandleFunc("GET /api/agent/monitor/projection", m.handleMonitorProjection)
 	mux.HandleFunc("GET /api/hooks/{agent}/status", m.handleHookStatus)
 	mux.HandleFunc("POST /api/hooks/{agent}/setup", m.handleHookSetup)
 	mux.HandleFunc("GET /api/agent/{agent}/statusline/status", m.handleStatuslineStatus)

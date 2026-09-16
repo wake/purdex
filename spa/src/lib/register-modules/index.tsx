@@ -26,7 +26,6 @@ import { AppearanceSection } from '../../components/settings/AppearanceSection'
 import { TerminalSection } from '../../components/settings/TerminalSection'
 import { ElectronSection } from '../../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentSection'
-import { TmuxAgentMonitorSection } from '../../components/settings/TmuxAgentMonitorSection'
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
 import { SyncSection } from '../../components/settings/SyncSection'
 import { FileTreeWorkspaceView } from '../../components/FileTreeView'
@@ -377,15 +376,6 @@ export function registerBuiltinModules(): void {
       label: 'settings.section.dev_environment',
       order: SETTINGS_ORDER.DEV_ENVIRONMENT,
       component: DevEnvironmentSection,
-    })
-  }
-
-  if (import.meta.env.DEV || caps.devUpdateEnabled) {
-    registerSettingsSection({
-      id: 'tmux-agent-monitor',
-      label: 'settings.section.tmux_agent_monitor',
-      order: SETTINGS_ORDER.TMUX_AGENT_MONITOR,
-      component: TmuxAgentMonitorSection,
     })
   }
 
