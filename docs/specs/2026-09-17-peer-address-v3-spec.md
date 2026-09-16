@@ -319,6 +319,24 @@ field as P1. Most call sites are already correct; only three are not:
 
 A two-line fix, not a rework.
 
+**The self routes always answer with the frozen one, and that is a known, bounded divergence.**
+`whoami` / `claim` / `release` render through `EntryRecord`, so their record is always an `entry`
+row — even for a conversation the listing renders as a `session` row with the live name. After a
+tmux rename the two interfaces therefore print different suffixes for one conversation.
+
+It is bounded to `suffix`: both heads are `CanonicalID(sessionId)`, so either address resolves to
+the same row and `Resolve` discards the suffix before tier 1 ever looks at it.
+
+It is not closed because a self route has no cheap live name available. It builds no inventory; a
+registry entry locates a *pane*, and turning that into a session name needs either a new tmux
+executor dependency in the peers module (a fresh `tmux` fork on a hot path) or the full owner
+resolution the listing uses (`ListSessions` plus a pane walk, several `ps` forks, under a 2s budget
+that degrades to partial). **The expensive path cannot even promise agreement** — on timeout it
+falls back to the frozen name anyway, turning "always divergent after a rename" into "usually
+consistent", which is a worse contract to document than this one.
+`TestSelf_SuffixDivergesFromListingAfterATmuxRename` pins the divergence, and its comment records
+both candidate mechanisms and why neither was taken.
+
 **This leaves `suffix` with two provenances in one response**, and that must be stated rather than
 left for the next reader to discover: live on a `session` row, possibly frozen on an `entry` row.
 No field is added to tell them apart — `row_kind` already does, and `suffix` is display-only and
