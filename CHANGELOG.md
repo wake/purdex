@@ -1,5 +1,43 @@
 # Changelog
 
+## [1.0.0-alpha.364] - 2026-09-16
+
+### Feat: `pdx path` —— 讓 CLI 真的可達，不可達就不讓 daemon 啟動（#1081）
+
+App 把 daemon 裝到 `~/.config/pdx/bin/pdx`、用**絕對路徑**啟動它，但安裝流程完全不碰 PATH、也不建 symlink。daemon 跑得起來，**指令不存在**。air-2026 實測就是這個狀態：binary 在、`pdx` 是 command not found、PATH 裡連 `~/.local/bin` 都沒有——於是 `CLAUDE.md` 裡整套要求 agent 執行 `pdx msg name` / `pdx peers --all` 的流程，在每一台由 App 裝 daemon 的機器上都跑不動。agent 照文件做，得到的是 command not found，而且無從得知那份文件是照一台手工設定過的機器寫的。
+
+**新指令（離線修復：不讀 config、不開 store、不發 HTTP）**
+
+| | |
+|---|---|
+| `pdx path` | 報告：`pdx` 解析到哪、**是不是**這顆 binary、`~/.local/bin` 在不在 PATH 上、該用哪個修法；`--json` 給程式讀 |
+| `pdx path link [--force]` | 建 `~/.local/bin/pdx` → **執行這個指令的那顆 binary** |
+| `pdx path add-to-shell [--dry-run]` | 偵測 shell、備份、append 有標記的區塊到 rc 檔 |
+
+兩個指令在 Settings → Development 都有按鈕，也附可複製的指令原文——使用者自己決定用哪個。
+
+**Gate**：`start` / `restart` / `ensureRunning` / `install` 最後的 start 在 `pdx` 不可達時拒絕，並同時列出兩個修法。理由是「一台 daemon 在跑、CLI 卻不可達的機器，看起來健康而實際不是」——那個失敗會在幾小時後、在某個 agent 裡、以一句 command not found 的形式浮現。
+
+**幾個刻意的設計決定**
+
+- **完全不做任何 sanitize**：`path link` 連到你執行的那顆 binary（`os.Executable` + `EvalSymlinks`），且**沒有 `--force` 就絕不重指既有的 symlink**——mlab 的那條指向 repo build，是使用者正在用的開發設定。
+- **`add-to-shell` 真的寫 rc 檔**，推翻交接時「絕不改 rc 檔」的規則。那條規則保護的是「**安裝流程**背著使用者改設定」，而一個以自己行為命名、不執行就什麼都不做的指令不是那回事。仍然絕對禁止：安裝／啟動／更新／輪詢過程中的任何 rc 寫入（有測試擋著）。
+- **rc 檔本身是 symlink 時**（任何 dotfiles 管理的常態）解析後編輯 **target**、保留連結；解析到 `$HOME` 之外就拒絕。早期草案的 temp+rename 會把使用者的 symlink 默默換成普通檔。
+- **gate 的判準是 `resolved === null`**，不是 JSON 的 `ok`、也不是 exit code。`pdx path` 在「PATH 上是別顆 pdx」時 exit 1——那對 CLI 自己的問題是失敗，對 gate 不是。用 `ok` 當判準會把所有手工 symlink 指向 repo build 的機器整台擋死。
+- **保證只宣稱實作扛得住的**：`--force`「絕不覆蓋實體檔案」只對 pdx-vs-pdx 成立（一把 flock、rename 前重新 `Lstat`），對外部行程明講不防，因為 `rename` 無法條件式執行。
+- **`launchEnv()` 會快取 PATH**：不處理的話，使用者照拒絕訊息跑完 `add-to-shell`、開新終端機、回來按 Start，會被一條修好**之前**抓到的 PATH 再拒絕一次。拆成 `cachedLaunchEnv` / `refreshLaunchEnv`，gate 重探、status 用快取（除非上次答案是壞的，那就最多每 5 秒重探一次）。
+- **「pdx 可不可達」只有一份實作**，在 Go；gate 用 launch env 去跑 `pdx path --json`，TypeScript 端不自己走 PATH（`deps.fs` 沒有 `lstat`/`readlink`，會分不出 dangling symlink 和不存在）。
+
+**Review**：spec 兩輪、plan 一輪、PR 三輪（R1 一項；R2 攻擊／防守／體質三份平行，兩個 high；R3 收斂 approve）。R2 的兩個 high：gate 把「binary 答不出來」當成 PATH 沒問題（攻擊與防守**獨立指向同一點**），以及 lockfile 用 mtime 猜 staleness（慢的持有者會被偷鎖、舊持有者 release 會刪掉新持有者的鎖）——後者改用 `flock(2)` 把整類問題消掉。
+
+**一個真機跑出來、單元測試抓不到的 bug**：`pdx path` 原本對「PATH 上是別顆 binary」也印「pdx is NOT reachable… command not found」，那句在 mlab 上是**假的**。所有結構化欄位都對，只有散文錯，而沒有任何測試斷言散文。現在有了。
+
+**順帶修正**：`CLAUDE.md` 把 tmux 導出的預設 label 描述成「正規化後」——那是 alpha.363 出貨時就帶著的錯誤（A 的 R2 修正已移除 sanitize）。同時補上 `pdx: command not found` 時該怎麼辦的入口。
+
+**體質**：`cmd/pdx/path.go` 拆成六檔、`electron/local-daemon/cli.ts` 抽出，兩者都以逐宣告位元組比對證明是純搬移。延後項目 #1082 / #1083。
+
+- 測試：Go 2957、Electron 198、SPA 5826，全綠。
+
 ## [1.0.0-alpha.363] - 2026-09-16
 
 ### Feat: 未命名 session 的預設 peer label 改用 tmux session 名（#1079）
