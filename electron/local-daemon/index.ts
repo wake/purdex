@@ -152,7 +152,11 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     return false
   }
 
-  async function unverifiedRefusal(cli: CliState, env: NodeJS.ProcessEnv): Promise<string | null> {
+  // The parameter excludes 'report' rather than accepting every CliState and
+  // trusting the caller: this function only has an answer for the cases where
+  // the binary could NOT be asked, and saying so in the type is what makes
+  // `cli.error` below legal instead of a cast.
+  async function unverifiedRefusal(cli: Exclude<CliState, { kind: 'report' }>, env: NodeJS.ProcessEnv): Promise<string | null> {
     // No binary is not a PATH problem: there is nothing to gate, and every
     // caller already has its own not-installed branch that says so better
     // than this message could.
