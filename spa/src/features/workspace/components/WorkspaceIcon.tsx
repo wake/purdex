@@ -18,7 +18,9 @@ interface Props {
 const RETRY_DELAY = 3000
 
 export function WorkspaceIcon({ icon, name, size, weight = 'bold', className }: Props) {
-  const fallbackChar = name.charAt(0) || '?'
+  // An unnamed icon (e.g. a host badge) has no text fallback: render an empty span so
+  // no placeholder '?' flashes while the Phosphor weight JSON is still loading.
+  const fallbackChar = name.trim() === '' ? '' : name.charAt(0)
   const textStyle = { fontSize: size * 0.75 }
   const phosphorName = icon && isPhosphorName(icon) ? icon : null
 
