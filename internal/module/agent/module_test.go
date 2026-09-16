@@ -50,7 +50,7 @@ func TestNew_FailsOnMalformedFramesStore(t *testing.T) {
 }
 
 // TestNew_TracesErrorIsNotFatal guards against round-4 regression: the
-// module already tolerates m.traces == nil (monitor endpoints degrade, hook
+// module already tolerates m.traces == nil (no trace recording, hook
 // processing still runs). A trace-store init failure must NOT be elevated to
 // a daemon-fatal condition (as it accidentally was in round 3).
 func TestNew_TracesErrorIsNotFatal(t *testing.T) {

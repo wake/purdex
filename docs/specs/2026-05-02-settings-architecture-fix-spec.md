@@ -150,6 +150,8 @@ export const SETTINGS_ORDER = {
 | dev-environment | 20 (`DEV_ENVIRONMENT`) | built-in（dev） | settings.section.dev_environment |
 | tmux-agent-monitor | 21 (`TMUX_AGENT_MONITOR`) | built-in（dev） | settings.section.tmux_agent_monitor |
 
+> **2026-09-16 更新（已過時）**：`tmux-agent-monitor` section、`SETTINGS_ORDER.TMUX_AGENT_MONITOR`（21）與 `settings.section.tmux_agent_monitor` locale key 皆已移除（見 `docs/specs/2026-09-16-scrollbar-and-monitor-removal-spec.md` Phase 2）。本檔其餘 order 表中的 21 一列同樣僅為歷史記錄；現在 sidebar 尾端止於 `dev-environment`（20）。
+
 說明：
 - module-owned 內部排序：Editor (11) → Quick Commands (12) → Performance Monitor (13) → Sync (14)
 - `link-detect`、`open-behavior` 兩個 entry 不再出現在 sidebar（從 `editorModuleDefinition.settings` 移除）

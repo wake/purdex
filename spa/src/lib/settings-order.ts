@@ -16,7 +16,7 @@
  *   | Top conditional built-in    | 5 – 9  | Electron (gated by canSystemTray)         |
  *   | Modules switchboard         | 10     | `module-config` (single header row)       |
  *   | Module-owned (alphabetical) | 11–19  | Browser / Editor / Files / Monitor / Sync |
- *   | Tail built-in               | 20–29  | Dev Environment / Tmux Agent Monitor      |
+ *   | Tail built-in               | 20–29  | Dev Environment                           |
  *
  * The "Module-owned" band sorts by **English (default) sidebar short label**,
  * not runtime locale. Constants are named after the **module identity**
@@ -65,7 +65,6 @@ export const SETTINGS_ORDER = {
   MODULE_SYNC: 16,                // sidebar: "Sync"
   // Tail built-in — dev / debug surfaces.
   DEV_ENVIRONMENT: 20,
-  TMUX_AGENT_MONITOR: 21,
   // ---- workspace scope ------------------------------------------------
   WORKSPACE_FILES: 10,
 } as const

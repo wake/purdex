@@ -323,6 +323,8 @@ activity probe 目前靠畫面 hash diff 判定，但 cc 提問後若使用者�
 
 Settings → Development 區塊新增 Event / Trace / Frame / Coverage 四視圖 Inspector。Chain / Projection 三視圖消費**既有** `/api/agent/monitor/chains` / `/chains/{id}` / `/projection` endpoint；Coverage 視圖需要**新增一個** `/api/agent/monitor/coverage` 唯讀 endpoint 將 Phase 0 `Coverage()` 結果序列化（現有 Monitor API 沒有此路徑）。本 Phase 主體為 SPA UI，backend 改動限縮於一個無邏輯的 JSON serializer handler + 對應單元測試。
 
+> **2026-09-16 更新（已過時）**：`/api/agent/monitor/chains` / `/chains/{id}` / `/projection` 三個唯讀 endpoint 與 `internal/module/agent/monitor.go` 已隨 Tmux Agent Monitor settings 介面一併移除（見 `docs/specs/2026-09-16-scrollbar-and-monitor-removal-spec.md` Phase 2）。**寫入管線與 `store.TraceStore`（含 `trace_read.go` 的 `ListChains` / `GetChainRecord`）完整保留**，因此本 Phase 不再是「消費既有 endpoint」，而必須在保留的 store 讀取層之上自行重建 read API（Coverage 端點仍是全新的）。
+
 ### 改動觸及
 
 - 新增 `/api/agent/monitor/coverage` endpoint：將 `Coverage()` 結果 JSON 化（欄位命名以 Phase 0 `CoverageRow` 結構為準；`Status` 以現有 string 常數 marshal；無 query / filter 參數）
@@ -374,7 +376,7 @@ Inspector 僅讀取不 mutation。若 Phase 2-4 在 Inspector 設計期間仍變
 - **Frame**：`internal/store/frame.go`、`internal/module/agent/frame_ops.go`
 - **Hook ingest**：`internal/module/agent/handler.go`
 - **Trace**：`internal/store/trace.go`、`internal/module/agent/trace.go`
-- **Monitor API**：`internal/module/agent/monitor.go`
+- **Monitor API**：~~`internal/module/agent/monitor.go`~~（2026-09-16 已移除，見上方 §9 更新；read API 需重建於保留的 `store.TraceStore` 之上）
 - **Module lifecycle**：`internal/module/agent/module.go`（含 `manageActivityWatch` / `onActivityDetected` / `sweepOnce`）
 - **SPA state**：`spa/src/stores/useAgentStore.ts`
 - **SPA 視覺**：`spa/src/components/{TabIcon,TabStatusIndicator,SubagentDots}.tsx`、`spa/src/lib/agent-icons.tsx`

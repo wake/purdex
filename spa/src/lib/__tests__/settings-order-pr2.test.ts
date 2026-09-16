@@ -26,7 +26,6 @@ import { SETTINGS_ORDER } from '../settings-order'
 //   performance-monitor(15)
 //   sync(16)
 //   dev-environment(20)     — only when caps.devUpdateEnabled
-//   tmux-agent-monitor(21)  — DEV or devUpdateEnabled
 //
 // Optional caps-gated entries are excluded from the strict equality so
 // the assertion is stable across DEV / prod-like jsdom runs.
@@ -49,7 +48,6 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
   const OPTIONAL_GATED = new Set([
     'electron',           // canSystemTray
     'dev-environment',    // devUpdateEnabled
-    'tmux-agent-monitor', // DEV || devUpdateEnabled
   ])
 
   it('purdex-scope contributions match the exact PR-2 final ASC list (no unexpected rows)', () => {
