@@ -201,8 +201,8 @@ func TestSelf_Whoami(t *testing.T) {
 	f := newLabelFixture(t)
 	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	rec := decodeRecord(t, status, body)
-	want := "a/" + ipeers.DefaultLabel("sid-2") + ":n20"
-	if rec.Address != want || rec.LabelSource != "default" || rec.RowKind != "entry" || rec.Agent.PID != 20 {
+	want := "a/" + ipeers.CanonicalID("sid-2") + ":n20"
+	if rec.Address != want || rec.Label != "" || rec.LabelSource != "" || rec.RowKind != "entry" || rec.Agent.PID != 20 {
 		t.Errorf("record = %+v, want address %s", rec, want)
 	}
 	// A session inside tmux renders the same address the listing shows.
@@ -234,7 +234,7 @@ func TestClaim_Matrix(t *testing.T) {
 		status, body := f.claim(f.inbox(20), c.label)
 		if c.wantStatus == 200 {
 			rec := decodeRecord(t, status, body)
-			if rec.Label != c.label || rec.LabelSource != "user" || rec.LabelRev != 1 || rec.Address != "a/purdex-tester:n20" {
+			if rec.Label != c.label || rec.LabelSource != "user" || rec.LabelRev != 1 || rec.Address != "a/"+ipeers.CanonicalID("sid-2")+":n20" {
 				t.Errorf("%q: %+v", c.label, rec)
 			}
 			continue
@@ -253,7 +253,7 @@ func TestClaim_Matrix(t *testing.T) {
 	decodeRecord(t, status, body)
 	status, body = f.claim(f.inbox(10), "purdex-tester")
 	ae := f.assertAPIError(status, body, 409, ipeers.ErrLabelTaken)
-	if ae.Holder == nil || ae.Holder.Agent.PID != 20 || ae.Holder.Address != "a/purdex-tester:n20" {
+	if ae.Holder == nil || ae.Holder.Agent.PID != 20 || ae.Holder.Address != "a/"+ipeers.CanonicalID("sid-2")+":n20" {
 		t.Errorf("taken holder = %+v", ae.Holder)
 	}
 	if !reflect.DeepEqual(ae.LiveLabels, []string{"purdex-dev", "purdex-tester"}) {
@@ -270,12 +270,17 @@ func TestClaim_Matrix(t *testing.T) {
 	if len(rows) != 1 || rows[0].SessionID != "sid-1" || rows[0].Label != "purdex-tester" {
 		t.Errorf("rows after take-over = %+v", rows)
 	}
-	// The dead one comes back (resume): whoami shows the default label.
+	// The dead one comes back (resume): its label row was evicted, so
+	// whoami shows no label — and the same address it always had, since a
+	// label was never part of it (spec §4.5).
 	f.live.revive(20)
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	rec = decodeRecord(t, status, body)
-	if rec.LabelSource != "default" || rec.LabelRev != 0 {
-		t.Errorf("resumed holder = %+v, want default label, rev 0", rec)
+	if rec.Label != "" || rec.LabelSource != "" || rec.LabelRev != 0 {
+		t.Errorf("resumed holder = %+v, want no label, rev 0", rec)
+	}
+	if want := "a/" + ipeers.CanonicalID("sid-2") + ":n20"; rec.Address != want {
+		t.Errorf("resumed holder address = %q, want the unchanged %q", rec.Address, want)
 	}
 }
 
@@ -341,8 +346,11 @@ func TestRelease(t *testing.T) {
 	decodeRecord(t, status, body)
 	status, body = f.release(f.inbox(20))
 	rec := decodeRecord(t, status, body)
-	if rec.LabelSource != "default" || rec.LabelRev != 2 || rec.Label != ipeers.DefaultLabel("sid-2") {
-		t.Errorf("released = %+v", rec)
+	if rec.LabelSource != "" || rec.LabelRev != 2 || rec.Label != "" {
+		t.Errorf("released = %+v, want no label at rev 2", rec)
+	}
+	if want := "a/" + ipeers.CanonicalID("sid-2") + ":n20"; rec.Address != want {
+		t.Errorf("released address = %q, want the unchanged %q — releasing a label does not move a conversation", rec.Address, want)
 	}
 	// Release with no row: 200, default, rev 0, nothing written.
 	status, body = f.release(f.inbox(10))
@@ -433,43 +441,17 @@ func (f *labelFixture) listingRecord(sessionID string) ipeers.PeerRecord {
 	return ipeers.PeerRecord{}
 }
 
-// TestSelf_Whoami_DefaultFromTmuxSessionName pins Task 4 item 1 and item 6:
-// the default label of the one live agent in a tmux session is that
-// session's name, and an agent outside tmux keeps the v2 hash.
-func TestSelf_Whoami_DefaultFromTmuxSessionName(t *testing.T) {
-	f := newLabelFixture(t)
-
-	// pid 10 is the only live agent in tmux session "mt0", unnamed.
-	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(10)})
-	rec := decodeRecord(t, status, body)
-	if rec.Label != "mt0" || rec.LabelSource != "default" {
-		t.Errorf("in-tmux whoami label = %q/%q, want mt0/default", rec.Label, rec.LabelSource)
-	}
-	if rec.Address != "a/mt0:mt0-n10" {
-		t.Errorf("in-tmux whoami address = %q, want a/mt0:mt0-n10", rec.Address)
-	}
-
-	// pid 20 has no tmux field: nothing to derive from, so the hash form
-	// is still the answer (spec §3.3 rule 1).
-	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
-	rec = decodeRecord(t, status, body)
-	if rec.Label != ipeers.DefaultLabel("sid-2") || rec.LabelSource != "default" {
-		t.Errorf("outside-tmux whoami = %+v, want the hash default", rec)
-	}
-}
-
-// TestSelf_AddressMatchesListing is the spec §3.2 tripwire: the self
-// routes and the listing resolve defaults over the same population, so for
-// the same live conversation they must render byte-identical labels and
-// addresses. It fails the moment either path derives a default the other
-// does not.
+// TestSelf_AddressMatchesListing is the tripwire for spec §4.5's promise
+// that whoami and the listing cannot disagree: both derive the head from
+// the conversation's own sessionId, so for one live conversation they must
+// render byte-identical labels and addresses.
 func TestSelf_AddressMatchesListing(t *testing.T) {
 	f := newLabelFixture(t)
 
-	// Guard against the test passing because BOTH paths fell back to the
-	// hash: sid-1 must actually be exercising the tmux-derived form.
-	if listed := f.listingRecord("sid-1"); listed.Label != "mt0" {
-		t.Fatalf("listing label for sid-1 = %q, want the tmux-derived mt0", listed.Label)
+	// Guard against the test passing vacuously: sid-1 must actually have
+	// an address to compare.
+	if listed := f.listingRecord("sid-1"); listed.Canonical == "" || listed.Address == "" {
+		t.Fatalf("listing row for sid-1 = %+v, want a canonical id and an address", listed)
 	}
 
 	for _, c := range []struct {
@@ -517,28 +499,6 @@ func TestClaim_RecordsMatchListing(t *testing.T) {
 		t.Errorf("holder %q/%q/%q != listing %q/%q/%q",
 			ae.Holder.Address, ae.Holder.Label, ae.Holder.LabelSource,
 			listed.Address, listed.Label, listed.LabelSource)
-	}
-}
-
-// TestRelease_OwnTmuxLabelBecomesItsDefault pins Task 4 item 4 and the
-// "other" in spec §3.3 rule 3: an agent in tmux "mt0" that had claimed
-// "mt0" gets "mt0" back as its DEFAULT, because the label it is releasing
-// is its own and must not count as a competitor against its own candidate.
-func TestRelease_OwnTmuxLabelBecomesItsDefault(t *testing.T) {
-	f := newLabelFixture(t)
-	status, body := f.claim(f.inbox(10), "mt0")
-	decodeRecord(t, status, body)
-
-	status, body = f.release(f.inbox(10))
-	rec := decodeRecord(t, status, body)
-	if rec.Label != "mt0" || rec.LabelSource != "default" {
-		t.Errorf("released = %q/%q, want mt0/default (not a hash)", rec.Label, rec.LabelSource)
-	}
-	if rec.Address != "a/mt0:mt0-n10" {
-		t.Errorf("released address = %q, want a/mt0:mt0-n10", rec.Address)
-	}
-	if listed := f.listingRecord("sid-1"); rec.Address != listed.Address || rec.Label != listed.Label {
-		t.Errorf("release %q/%q != listing %q/%q", rec.Address, rec.Label, listed.Address, listed.Label)
 	}
 }
 

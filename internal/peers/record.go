@@ -36,8 +36,9 @@ type PeerRecord struct {
 	HostID       string     `json:"host_id"`
 	Address      string     `json:"address"`
 	RowKind      string     `json:"row_kind"`     // session | entry
-	Label        string     `json:"label"`        // "" when the row has no cc agent
-	LabelSource  string     `json:"label_source"` // user | default | ""
+	Canonical    string     `json:"canonical"`    // the sessionId-derived address head; "" when the row has no cc agent
+	Label        string     `json:"label"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
+	LabelSource  string     `json:"label_source"` // user | ""
 	LabelRev     int64      `json:"label_rev"`
 	Suffix       string     `json:"suffix"`        // "" when the row has no cc agent
 	SessionCode  string     `json:"session_code"`  // always present
@@ -49,18 +50,26 @@ type PeerRecord struct {
 	Reason       string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
 }
 
-// WireAddress renders r's from.address (Peer Address v2 spec §3.5):
-// Label + ":" + Suffix, or "" when the row has no cc agent (Label == "").
+// WireAddress renders r's from.address (Peer Address v3 spec §4.4/§4.5):
+// Canonical + ":" + Suffix, or "" when the row has no cc agent (Canonical
+// == "").
+//
+// It is canonical-based rather than label-based because send.go's
+// wireFromRecord puts this string in the outbound from.address: a
+// label-based rendering would have a v3 sender announce itself at an
+// address the receiver's resolver does not route on — and, since Label is
+// still a string, it would compile and pass the wire grammar while doing
+// so. Label is a display name (D3); only the canonical id is reachable.
 func (r PeerRecord) WireAddress() string {
-	if r.Label == "" {
+	if r.Canonical == "" {
 		return ""
 	}
-	return r.Label + ":" + r.Suffix
+	return r.Canonical + ":" + r.Suffix
 }
 
 // LabelInfo is what the label store (Task 3) knows about one conversation:
-// the user label ("" ⇒ the default label applies) and the label row's
-// revision.
+// the user label ("" ⇒ the conversation has not named itself, and nothing
+// is substituted for it) and the label row's revision.
 type LabelInfo struct {
 	Label string
 	Rev   int64
@@ -76,16 +85,20 @@ type BuildInput struct {
 	Unresolved    map[string]bool  // codes whose owner lookup did not run
 	Entries       []Entry
 	ProxyPIDs     map[int]bool         // empty in P1; kept so P3 needs no signature change
-	Labels        map[string]LabelInfo // by sessionId; absent ⇒ default label, rev 0
+	Labels        map[string]LabelInfo // by sessionId; absent ⇒ no label, rev 0
 	// LabelsUnavailable says the label snapshot in Labels could NOT be
-	// read (spec §3.5). Labels is then empty for want of data, not
-	// because no user labels exist, so no tmux-derived default may be
-	// minted: rule 3 cannot be checked, and an unreadable row may hold
-	// the very name a row would advertise — a sender resolves a single
-	// tier-1 hit even on a Partial snapshot, so the message would go to
-	// the wrong agent, silently. Every row keeps its v2 hash instead,
-	// which is exactly Peer Address v2's behaviour and the one
-	// degradation that is provably safe.
+	// read. Under v3 that costs display only: Labels feeds Label and
+	// LabelRev, and nothing else. Every address is CanonicalID(sessionID)
+	// — computed from the registry, never from this store — so an
+	// unreadable label store cannot make a single address wrong, late or
+	// ambiguous. The rows simply render without their display names.
+	//
+	// (Under v2 this flag gated address correctness: a default label was
+	// minted from the tmux session name and resolved over the label rows,
+	// so an unreadable row could hold the very name another row was about
+	// to advertise. D2 removed that input, and Build no longer branches on
+	// this field at all. It is kept because it rides on the wire envelope,
+	// where it still tells a consumer why the label column is blank.)
 	LabelsUnavailable bool
 }
 
@@ -97,20 +110,11 @@ func Build(in BuildInput) []PeerRecord {
 		entriesBySessionID[e.SessionID] = append(entriesBySessionID[e.SessionID], e)
 	}
 
-	// One population, computed once, shared by every row (spec §3.2): the
-	// listing may never render two different defaults for one conversation.
-	// A nil map is Peer Address v2 exactly — every lookup falls back to the
-	// hash — which is what an unreadable label store degrades to (§3.5).
-	var defaults DefaultLabels
-	if !in.LabelsUnavailable {
-		defaults = ResolveDefaultLabels(in.Entries, in.ProxyPIDs, in.Labels)
-	}
-
 	records := make([]PeerRecord, 0, len(in.Sessions)+len(in.Entries))
 	consumed := make(map[Entry]bool)
 
 	for _, s := range in.Sessions {
-		rec, entry, ok := buildSessionRecord(in, s, entriesBySessionID, consumed, defaults)
+		rec, entry, ok := buildSessionRecord(in, s, entriesBySessionID, consumed)
 		records = append(records, rec)
 		if ok {
 			consumed[entry] = true
@@ -123,7 +127,7 @@ func Build(in BuildInput) []PeerRecord {
 		return records[i].SessionCode < records[j].SessionCode
 	})
 
-	entryRecords := buildEntryRecords(in, consumed, defaults)
+	entryRecords := buildEntryRecords(in, consumed)
 	records = append(records, entryRecords...)
 
 	return records
@@ -144,7 +148,7 @@ func Build(in BuildInput) []PeerRecord {
 // exactly as when no unique candidate exists at all. This guarantees an
 // entry is consumed by at most one session row, ever, regardless of how
 // many sessions' owners happen to name it.
-func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[string][]Entry, consumed map[Entry]bool, defaults DefaultLabels) (rec PeerRecord, consumedEntry Entry, ok bool) {
+func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[string][]Entry, consumed map[Entry]bool) (rec PeerRecord, consumedEntry Entry, ok bool) {
 	rec = PeerRecord{
 		Host:         in.Alias,
 		HostID:       in.HostID,
@@ -179,18 +183,17 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 
 	// From here the owner IS a cc conversation, so every remaining branch
 	// sets a cc Agent (full entry info, or the owner-only fallback) and
-	// calls applyLabel to render Label/Suffix/Address (spec §3.4): the
-	// fallback branches (inbox_dead / ambiguous, no entry chosen) derive
-	// the suffix from the SESSION's own tmux name, never a candidate's,
-	// since no entry was chosen for the row.
+	// calls applyLabel to render Canonical/Label/Suffix/Address (spec
+	// §4.5): the fallback branches (inbox_dead / ambiguous, no entry
+	// chosen) derive the suffix from the SESSION's own tmux name, never a
+	// candidate's, since no entry was chosen for the row.
 	//
-	// Every branch, fallbacks included, reads its default through
-	// defaults.For(owner.SessionID) with no special case. The two fallback
-	// kinds then differ, and differ correctly (spec §3.2): an inbox_dead
-	// owner has no live entry at all, so it is outside the population and
-	// For yields the hash; an ambiguous owner DOES have live entries — that
-	// is why it is ambiguous — so it is inside the population and renders
-	// whatever its own entry rows render.
+	// Every branch, fallbacks included, passes CanonicalID(owner.SessionID)
+	// with no special case and no population to consult. That is v3's whole
+	// simplification: the head is a pure function of the conversation's own
+	// id, so an inbox_dead row, an ambiguous row and a deliverable row all
+	// render the same address for the same conversation by construction
+	// rather than by agreeing on a shared lookup.
 	var candidates []Entry
 	for _, e := range entriesBySessionID[owner.SessionID] {
 		if !(e.IsProxy || in.ProxyPIDs[e.PID]) {
@@ -202,18 +205,18 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	case 0:
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "inbox_dead"
-		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], defaults.For(owner.SessionID), s.Name, "")
+		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, "")
 		return rec, Entry{}, false
 	case 1:
 		if consumed[candidates[0]] {
 			rec.Agent = ownerFallbackAgent(owner)
 			rec.Reason = "ambiguous"
-			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], defaults.For(owner.SessionID), s.Name, "")
+			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, "")
 			return rec, Entry{}, false
 		}
 		rec.Agent = agentInfoFromEntry(candidates[0])
 		rec.Deliverable = true
-		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], defaults.For(owner.SessionID), candidates[0].TmuxSessionName(), candidates[0].Name)
+		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), candidates[0].TmuxSessionName(), candidates[0].Name)
 		return rec, candidates[0], true
 	default:
 		var paneMatches []Entry
@@ -226,43 +229,55 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			if consumed[paneMatches[0]] {
 				rec.Agent = ownerFallbackAgent(owner)
 				rec.Reason = "ambiguous"
-				applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], defaults.For(owner.SessionID), s.Name, "")
+				applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, "")
 				return rec, Entry{}, false
 			}
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
 			rec.Deliverable = true
-			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], defaults.For(owner.SessionID), paneMatches[0].TmuxSessionName(), paneMatches[0].Name)
+			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), paneMatches[0].TmuxSessionName(), paneMatches[0].Name)
 			return rec, paneMatches[0], true
 		}
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "ambiguous"
-		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], defaults.For(owner.SessionID), s.Name, "")
+		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, "")
 		return rec, Entry{}, false
 	}
 }
 
-// applyLabel fills Label/LabelSource/LabelRev/Suffix/Address for a row
-// whose agent is a cc conversation (session rows and entry rows alike):
-// info.Label ("" ⇒ the defaultLabel the caller resolved) decides
-// Label/LabelSource, info.Rev is carried straight through, and
-// Suffix/Address are rendered from tmuxName/ccName (spec §3.1/§3.4) — the
-// plan-recorded delta that the suffix always comes from the row's OWN
-// registry tmux field (or, for the owner-fallback session row with no
-// entry, the session's own name), never from Resolve's session argument.
+// applyLabel fills Canonical/Label/LabelSource/LabelRev/Suffix/Address for
+// a row whose agent is a cc conversation (session rows and entry rows
+// alike). It is the single writer of those five fields, which is what makes
+// spec §4.5's invariant table checkable in one function.
 //
-// It does not derive a default itself: defaultLabel arrives already
-// resolved over the whole population (spec §3.2/§3.4), so no caller can
-// render a place address the resolver rejected — or a different one from
-// the one whoami renders for the same conversation.
-func applyLabel(rec *PeerRecord, alias string, info LabelInfo, defaultLabel, tmuxName, ccName string) {
+// The two halves are independent, and that independence IS Peer Address v3
+// (D1/D3):
+//
+//   - canonical is the address. It comes from the caller as
+//     CanonicalID(sessionID) and is the head unconditionally — whether or
+//     not a label is set, whatever the label says, and however the tmux
+//     session is renamed afterwards.
+//   - label is a display name. It is the user label or nothing at all;
+//     "" now means "this conversation has not named itself", never "fall
+//     back to something derived". LabelSource reports which of the two it
+//     is, so the pair ("", "") and (name, "user") are the only shapes.
+//
+// info.Rev is carried straight through: it is still the LABEL's revision
+// (spec §4.4). It no longer implies an address change, because the address
+// does not move.
+//
+// Suffix is display-only and rendered from tmuxName/ccName — the row's OWN
+// registry tmux field, or, for the owner-fallback session row with no
+// entry, the session's own name; never Resolve's session argument.
+func applyLabel(rec *PeerRecord, alias string, info LabelInfo, canonical, tmuxName, ccName string) {
+	rec.Canonical = canonical
 	if info.Label != "" {
 		rec.Label, rec.LabelSource = info.Label, LabelSourceUser
 	} else {
-		rec.Label, rec.LabelSource = defaultLabel, LabelSourceDefault
+		rec.Label, rec.LabelSource = "", ""
 	}
 	rec.LabelRev = info.Rev
 	rec.Suffix = Suffix(tmuxName, ccName)
-	rec.Address = alias + "/" + rec.Label + ":" + rec.Suffix
+	rec.Address = alias + "/" + canonical + ":" + rec.Suffix
 }
 
 // ownerFallbackAgent builds the reduced AgentInfo used when a cc owner's
@@ -296,15 +311,15 @@ func agentInfoFromEntry(e Entry) *AgentInfo {
 // whoami/claim/release straight from the validated entry and label row, so
 // the address it renders must be identical to the listing's: a proxy entry
 // keeps the unresolvable "alias/cc:<name>" form (unchanged from rule 5); a
-// live cc entry gets the same label+suffix address applyLabel gives a
-// session row, derived from the entry's own tmux field.
+// live cc entry gets the same canonical+suffix address applyLabel gives a
+// session row, with the suffix derived from the entry's own tmux field.
 //
-// defaults is the resolved default-label map for the whole population
-// (spec §3.4): the self routes must pass the map they computed over the
-// same entries the listing sees, or the two will disagree about the
-// caller's own address. A nil map is the Peer Address v2 behaviour —
-// every lookup falls back to the hash.
-func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo, defaults DefaultLabels) PeerRecord {
+// It takes no population argument: the head is CanonicalID(e.SessionID),
+// so a self route answering from one validated entry and the listing
+// building from the whole registry cannot disagree about the caller's own
+// address (spec §4.5). That agreement used to require passing the same
+// resolved default-label map to both.
+func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo) PeerRecord {
 	agent := agentInfoFromEntry(e)
 	rec := PeerRecord{
 		Host: alias, HostID: hostID, RowKind: "entry",
@@ -318,7 +333,7 @@ func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo, defa
 		rec.Reason = "proxy"
 		return rec
 	}
-	applyLabel(&rec, alias, info, defaults.For(e.SessionID), e.TmuxSessionName(), e.Name)
+	applyLabel(&rec, alias, info, CanonicalID(e.SessionID), e.TmuxSessionName(), e.Name)
 	return rec
 }
 
@@ -338,13 +353,13 @@ type entryCandidate struct {
 // points into a listed session; a proxy entry's row is EntryRecord's
 // unresolvable "cc:<name>" form. A consumed entry never also produces an
 // entry row, so each entry appears exactly once across the whole output.
-func buildEntryRecords(in BuildInput, consumed map[Entry]bool, defaults DefaultLabels) []PeerRecord {
+func buildEntryRecords(in BuildInput, consumed map[Entry]bool) []PeerRecord {
 	var candidates []entryCandidate
 	for _, e := range in.Entries {
 		if consumed[e] {
 			continue
 		}
-		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Labels[e.SessionID], defaults)
+		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Labels[e.SessionID])
 		candidates = append(candidates, entryCandidate{rec: rec, peerName: e.Name, pid: e.PID})
 	}
 

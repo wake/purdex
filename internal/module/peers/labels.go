@@ -14,8 +14,8 @@ import (
 
 // LabelStore is the peer_labels table (Peer Address v2 spec §3.3):
 // *store.PeerLabelStore in production, a fake in tests. nil means "no
-// store": every conversation has its default label and claims fail with
-// store_unavailable.
+// store": every conversation shows an empty label and claims fail with
+// store_unavailable. Addresses are unaffected either way (spec §4.5).
 type LabelStore interface {
 	Snapshot() ([]store.PeerLabel, error)
 	Claim(sessionID, label string, now time.Time) (store.PeerLabel, error)
@@ -53,21 +53,9 @@ func labelRows(rows []store.PeerLabel) map[string]store.PeerLabel {
 	return out
 }
 
-// labelInfos indexes a store snapshot the way ResolveDefaultLabels reads
-// it — the same shape labelSnapshot() hands Build (module.go), so the self
-// routes resolve defaults over exactly the data the listing does and the
-// two can never disagree about a caller's own address (spec §3.2).
-func labelInfos(rows []store.PeerLabel) map[string]ipeers.LabelInfo {
-	out := make(map[string]ipeers.LabelInfo, len(rows))
-	for _, r := range rows {
-		out[r.SessionID] = ipeers.LabelInfo{Label: r.Label, Rev: r.Rev}
-	}
-	return out
-}
-
 // infoOf converts a (possibly absent) store row into ipeers.LabelInfo:
-// absent ⇒ the zero value, which EntryRecord/applyLabel render as the
-// default label.
+// absent ⇒ the zero value, which EntryRecord/applyLabel render as no label
+// at all — an empty Label with an empty LabelSource (spec §4.5).
 func infoOf(row store.PeerLabel, ok bool) ipeers.LabelInfo {
 	if !ok {
 		return ipeers.LabelInfo{}
@@ -113,12 +101,12 @@ func (m *Module) origin(inbox string) (entries []ipeers.Entry, diag ipeers.Diagn
 // whoami answers the caller's own current record: its address, label and
 // label source, read straight from the validated registry entry and the
 // label store — no write, so a failing store only degrades this to
-// store_unavailable, never a default label presented as fact (spec §3.6:
-// "never print a default label as if it were the truth").
+// store_unavailable rather than reporting "no label" as fact when it
+// simply could not look (spec §3.6).
 func (m *Module) whoami(inbox string) selfResult {
 	m.labelMu.Lock()
 	defer m.labelMu.Unlock()
-	entries, _, proxies, e, res, ok := m.origin(inbox)
+	_, _, _, e, res, ok := m.origin(inbox)
 	if !ok {
 		return res
 	}
@@ -128,11 +116,11 @@ func (m *Module) whoami(inbox string) selfResult {
 	}
 	snap := m.configSnapshot()
 	row, has := labelRows(rows)[e.SessionID]
-	// The entries and proxy set origin() already read ARE the population
-	// (spec §3.2) — whoami reads nothing else, and resolving over them is
-	// what makes its answer identical to the listing's.
-	defaults := ipeers.ResolveDefaultLabels(entries, proxies, labelInfos(rows))
-	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, infoOf(row, has), defaults)}
+	// The entry origin() validated is all whoami needs: the address is
+	// CanonicalID of that entry's own sessionId, so this answer is
+	// identical to the listing's by construction (spec §4.5) rather than by
+	// resolving over the same population.
+	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, infoOf(row, has))}
 }
 
 // claim gives the caller's own conversation label, evicting a dead
@@ -201,13 +189,9 @@ func (m *Module) claim(inbox, label string) selfResult {
 	sort.Strings(liveLabels)
 
 	snap := m.configSnapshot()
-	// One map for both records below, over the same population whoami and
-	// the listing use (spec §3.4).
-	defaults := ipeers.ResolveDefaultLabels(entries, proxies, labelInfos(rows))
-
 	if holder != nil && holder.SessionID != e.SessionID {
 		he := liveEntry[holder.SessionID]
-		hrec := ipeers.EntryRecord(snap.alias, snap.hostID, he, false, ipeers.LabelInfo{Label: holder.Label, Rev: holder.Rev}, defaults)
+		hrec := ipeers.EntryRecord(snap.alias, snap.hostID, he, false, ipeers.LabelInfo{Label: holder.Label, Rev: holder.Rev})
 		r := fail(http.StatusConflict, ipeers.ErrLabelTaken, fmt.Sprintf("%q is held by a live session", label))
 		r.err.Holder, r.err.LiveLabels = &hrec, liveLabels
 		return r
@@ -224,35 +208,30 @@ func (m *Module) claim(inbox, label string) selfResult {
 			return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store write failed")
 		}
 	}
-	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, ipeers.LabelInfo{Label: row.Label, Rev: row.Rev}, defaults)}
+	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, ipeers.LabelInfo{Label: row.Label, Rev: row.Rev})}
 }
 
-// release clears the caller's own label, reverting it to the default. No
-// registry completeness requirement (v2 §3.3): a registry file this daemon
-// cannot classify never blocks releasing your own label, only claiming
-// one you might not be free to take.
+// release clears the caller's own label, leaving the conversation unnamed
+// — its address is unaffected, because the address never came from the
+// label (spec §4.5). No registry completeness requirement (v2 §3.3): a
+// registry file this daemon cannot classify never blocks releasing your
+// own label, only claiming one you might not be free to take.
 //
-// It does read the label store first, though (spec §3.4): the record it
-// returns must show the default the listing will show, and a default can
-// only be resolved over the label rows. That read is a gate — it fails
-// with store_unavailable and attempts NO write — so a release never hands
-// back a default the daemon could not vouch for, and an unreadable store
-// leaves the label exactly where it was.
-// Resolving over the pre-write snapshot is safe precisely because of
-// spec §3.3 rule 3's "other": the caller's own about-to-be-released label
-// does not compete with its own candidate.
+// It still reads the label store before writing, and that read is still a
+// gate: it fails with store_unavailable and attempts NO write, so an
+// unreadable store leaves the label exactly where it was rather than
+// half-releasing it. What the read no longer has to do is resolve the
+// default the response should show — there is no default any more.
 func (m *Module) release(inbox string) selfResult {
 	m.labelMu.Lock()
 	defer m.labelMu.Unlock()
-	entries, _, proxies, e, res, ok := m.origin(inbox)
+	_, _, _, e, res, ok := m.origin(inbox)
 	if !ok {
 		return res
 	}
-	rows, err := m.labels.Snapshot()
-	if err != nil {
+	if _, err := m.labels.Snapshot(); err != nil {
 		return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store read failed")
 	}
-	defaults := ipeers.ResolveDefaultLabels(entries, proxies, labelInfos(rows))
 	row, had, err := m.labels.Release(e.SessionID, m.now())
 	if err != nil {
 		m.logf("peers: release for %s: %v", e.SessionID, err)
@@ -263,7 +242,7 @@ func (m *Module) release(inbox string) selfResult {
 		info.Rev = row.Rev
 	}
 	snap := m.configSnapshot()
-	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, info, defaults)}
+	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, info)}
 }
 
 // handleSelf serves POST /api/peers/self: whoami.

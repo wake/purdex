@@ -1639,11 +1639,11 @@ func TestLocalEnvelope_UnknownRegistryFileMarksPartial(t *testing.T) {
 }
 
 // TestLocalEnvelope_LabelStoreFailureIsPartial pins that a label store
-// Snapshot failure marks the response partial (every row falls back to its
-// default label, spec-consistent since the store's actual content is now
-// unknown), signals it explicitly as labels_unavailable (X4 — the CLI
-// renders the cause from this flag, never by inference from the other
-// partial causes) and logs once, without touching UnknownRegistryFiles.
+// Snapshot failure marks the response partial (the label column is now
+// unknown, so the rows are not the whole truth), signals it explicitly as
+// labels_unavailable (X4 — the CLI renders the cause from this flag, never
+// by inference from the other partial causes) and logs once, without
+// touching UnknownRegistryFiles.
 func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 	f := newLabelJoinFixture(t)
 	f.m.labels = failingLabels{}
@@ -1660,8 +1660,8 @@ func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 		t.Errorf("unknown_registry_files = %v, want none", env.UnknownRegistryFiles)
 	}
 	for _, r := range env.Peers {
-		if r.Agent != nil && r.Agent.Type == "cc" && r.LabelSource != ipeers.LabelSourceDefault {
-			t.Errorf("row %s label_source = %q, want default", r.Address, r.LabelSource)
+		if r.Agent != nil && r.Agent.Type == "cc" && (r.Label != "" || r.LabelSource != "") {
+			t.Errorf("row %s label/source = %q/%q, want both empty: the store that holds them is unreadable", r.Address, r.Label, r.LabelSource)
 		}
 	}
 	if !f.logs.contains("label store") {
@@ -1669,23 +1669,23 @@ func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 	}
 }
 
-// TestLocalEnvelope_LabelStoreFailureSuppressesTmuxDerivedDefaults pins
-// spec §3.5 at the seam that actually decides it: localEnvelope must hand
-// Build LabelsUnavailable, not just report it on the envelope. The
-// fixture's live conversation sits in tmux "mt0", whose name qualifies, so
-// with a readable store it advertises "mt0"; with an unreadable one it
-// must keep its v2 hash — the empty label map is an outage, not proof that
-// nobody holds "mt0".
-func TestLocalEnvelope_LabelStoreFailureSuppressesTmuxDerivedDefaults(t *testing.T) {
+// TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged is the v3
+// inversion of the test that used to live here. Under v2 an unreadable
+// label store changed what every row was reachable AT, so localEnvelope
+// had to hand Build LabelsUnavailable to suppress the tmux-derived
+// defaults. Under D2 the store feeds the label column and nothing else:
+// the same fixture must render byte-identical addresses whether the store
+// reads or fails, and only the label column goes blank.
+func TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged(t *testing.T) {
 	healthy := newLabelJoinFixture(t)
-	var before string
+	addrs := map[string]string{}
 	for _, r := range healthy.m.localEnvelope(context.Background(), "h:1", "a").Peers {
-		if r.SessionCode == "mt0code" {
-			before = r.Label
+		if r.Agent != nil && r.Agent.Type == "cc" {
+			addrs[r.Agent.SessionID] = r.Address
 		}
 	}
-	if before != "mt0" {
-		t.Fatalf("precondition: mt0 row label = %q, want the tmux-derived %q", before, "mt0")
+	if len(addrs) == 0 {
+		t.Fatal("precondition: the fixture produced no live cc rows")
 	}
 
 	f := newLabelJoinFixture(t)
@@ -1693,14 +1693,21 @@ func TestLocalEnvelope_LabelStoreFailureSuppressesTmuxDerivedDefaults(t *testing
 
 	env := f.m.localEnvelope(context.Background(), "h:1", "a")
 
+	seen := 0
 	for _, r := range env.Peers {
 		if r.Agent == nil || r.Agent.Type != "cc" {
 			continue
 		}
-		want := ipeers.DefaultLabel(r.Agent.SessionID)
-		if r.Label != want {
-			t.Errorf("row %s label = %q, want the hash %q while the store is unreadable", r.Address, r.Label, want)
+		seen++
+		if want := addrs[r.Agent.SessionID]; r.Address != want {
+			t.Errorf("row for %s: address = %q with the store down, %q with it up; want identical", r.Agent.SessionID, r.Address, want)
 		}
+		if r.Canonical == "" {
+			t.Errorf("row %s: canonical = \"\" with the store down, want the sessionId-derived id", r.Address)
+		}
+	}
+	if seen != len(addrs) {
+		t.Errorf("live cc rows = %d with the store down, %d with it up", seen, len(addrs))
 	}
 }
 
