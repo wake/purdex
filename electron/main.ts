@@ -292,6 +292,14 @@ function registerIpcHandlers(): void {
     ipcMain.handle('dev:local-daemon-restart', async () => {
       try { return await localDaemon.restart() } catch (err) { throw asString(err) }
     })
+    // `pdx path` (spec 2026-09-16 §5.1). The command's own exit code and
+    // streams go back untouched — its refusals are the useful part.
+    ipcMain.handle('dev:local-daemon-path-link', async (_event, force?: boolean) => {
+      try { return await localDaemon.pathCommand('link', { force: force === true }) } catch (err) { throw asString(err) }
+    })
+    ipcMain.handle('dev:local-daemon-path-add-to-shell', async () => {
+      try { return await localDaemon.pathCommand('add-to-shell') } catch (err) { throw asString(err) }
+    })
   }
 }
 

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, beforeEach } from 'vitest'
 import { createLocalDaemon } from './index'
 import type { LocalDaemonDeps, WriteHandle } from './types'
-import type { ExecResult } from './launch-env'
+import type { ExecFn, ExecResult } from './launch-env'
 
 const NUL = '\0'
 const HOME = '/Users/t'
@@ -23,9 +23,28 @@ interface Fake {
   lsofListen: string                   // lsof -iTCP output
   alivePids: Set<number>
   portProbe: 'open' | 'refused' | 'unknown' // scripted probePort result
+  shellPath: string                    // what the login-shell probe answers
+  // What `pdx path --json` answers for the PATH it was launched with.
+  pathReport: (pathVar: string) => Record<string, unknown>
   onExec: (file: string, args: string[]) => ExecResult | undefined
   downloads: Array<{ status: number; headers: Record<string, string>; body: Uint8Array }>
   clock: number
+}
+
+// The Go `pdx path --json` report (cmd/pdx/path.go `pathReport`), computed
+// from the PATH the binary was launched with — exactly what the real command
+// does, so the fixture and the gate agree on what "reachable" means.
+function defaultPathReport(pathVar: string): Record<string, unknown> {
+  const localBin = `${HOME}/.local/bin`
+  const onPath = pathVar.split(':').includes(localBin)
+  const resolved = onPath ? `${localBin}/pdx` : null
+  return {
+    self: BIN, resolved, resolvedReal: BIN, isSelf: onPath,
+    localBin, localBinExists: true, localBinOnPath: onPath,
+    link: onPath ? 'ok' : 'missing',
+    fixes: onPath ? [] : ['link', 'add-to-shell'],
+    ok: onPath,
+  }
 }
 
 function makeFake(overrides: Partial<Fake> = {}): Fake {
@@ -39,6 +58,8 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
     lsofListen: '',
     alivePids: new Set(),
     portProbe: 'refused',
+    shellPath: `/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`,
+    pathReport: defaultPathReport,
     onExec: () => undefined,
     downloads: [],
     clock: 0,
@@ -61,7 +82,7 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
       fake.execLog.push({ file, args, env: opts.env })
       const custom = fake.onExec(file, args)
       if (custom) return custom
-      if (file === '/bin/zsh') return { code: 0, stdout: `${S}/opt/homebrew/bin:/usr/bin${S}\n`, stderr: '', timedOut: false }
+      if (file === '/bin/zsh') return { code: 0, stdout: `${S}${fake.shellPath}${S}\n`, stderr: '', timedOut: false }
       if (file === '/usr/bin/which') return { code: 0, stdout: '/opt/homebrew/bin/tmux\n', stderr: '', timedOut: false }
       if (file === '/usr/sbin/lsof' || file === '/usr/bin/lsof') {
         if (args.includes('-d')) {
@@ -69,6 +90,11 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
           return { code: 0, stdout: fake.lsofTxt[pid] ?? '', stderr: '', timedOut: false }
         }
         return { code: 0, stdout: fake.lsofListen, stderr: '', timedOut: false }
+      }
+      if (args[0] === 'path' && args[1] === '--json') {
+        if (!fake.files.has(file)) return { code: 127, stdout: '', stderr: 'not found', timedOut: false }
+        const rep = fake.pathReport(opts.env?.PATH ?? '')
+        return { code: rep.ok === true ? 0 : 1, stdout: JSON.stringify(rep) + '\n', stderr: '', timedOut: false }
       }
       if (args[0] === 'version') {
         if (!fake.files.has(file)) return { code: 127, stdout: '', stderr: 'not found', timedOut: false }
@@ -326,7 +352,7 @@ describe('install()', () => {
     const start = f.execLog.find((e) => e.args[0] === 'start')!
     expect(start.file).toBe(BIN)
     expect(start.env?.PDX_DEV_MODE).toBe('1')
-    expect(start.env?.PATH).toBe('/opt/homebrew/bin:/usr/bin')
+    expect(start.env?.PATH).toBe(`/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`)
     const dl = f.execLog.findIndex((e) => e.args[0] === 'version' && e.file === `${BIN}.new`)
     expect(dl).toBeGreaterThan(-1)
   })
@@ -682,5 +708,338 @@ describe('withLock', () => {
     const b = d.status().then(() => order.push('b'))
     await Promise.all([a, b])
     expect(order).toEqual(['a-start', 'a-end', 'b'])
+  })
+})
+
+describe('launch env cache (spec §4.2)', () => {
+  let f: Fake
+  beforeEach(() => {
+    f = makeFake()
+    f.files.set(BIN, identity('aaa'))
+    f.files.set(CFG, 'bind = "100.64.0.9"\nport = 7860\ntoken = "purdex_t"\n')
+  })
+  // Each probe round starts with -ilc; a failing round also tries -lc.
+  const probes = () => f.execLog.filter((e) => e.file === '/bin/zsh' && e.args[0] === '-ilc').length
+  const lastPathEnv = () => f.execLog.filter((e) => e.args[0] === 'path').at(-1)?.env?.PATH
+
+  it('a healthy machine polled ten times runs the login shell once', async () => {
+    const d = createLocalDaemon(f.deps)
+    for (let i = 0; i < 10; i++) await d.status()
+    expect(probes()).toBe(1)
+  })
+
+  it('a machine where pdx does not resolve re-probes, but at most once per 5 s', async () => {
+    f.shellPath = '/opt/homebrew/bin:/usr/bin'
+    const d = createLocalDaemon(f.deps)
+    for (let i = 0; i < 10; i++) await d.status()
+    expect(probes()).toBe(1)          // the first poll's own probe is already fresh
+    f.clock += 5000
+    await d.status()
+    expect(probes()).toBe(2)
+    await d.status()
+    expect(probes()).toBe(2)
+  })
+
+  it('a successful re-probe replaces the cached PATH', async () => {
+    f.shellPath = '/opt/homebrew/bin:/usr/bin'
+    const d = createLocalDaemon(f.deps)
+    await d.status()
+    expect(lastPathEnv()).toBe('/opt/homebrew/bin:/usr/bin')
+    f.shellPath = `/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`
+    f.clock += 5000
+    await d.status()
+    expect(lastPathEnv()).toBe(`/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`)
+  })
+
+  it('a failed re-probe keeps the last good PATH rather than dropping to the fallback', async () => {
+    f.shellPath = '/good/bin'
+    const d = createLocalDaemon(f.deps)
+    await d.status()
+    expect(lastPathEnv()).toBe('/good/bin')
+    f.onExec = (file) => (file === '/bin/zsh' ? { code: 1, stdout: '', stderr: 'boom', timedOut: false } : undefined)
+    f.clock += 5000
+    await d.status()
+    expect(probes()).toBe(2)
+    expect(lastPathEnv()).toBe('/good/bin')
+  })
+
+  it('a machine with no binary installed is never re-probed — there is nothing to ask', async () => {
+    f.files.delete(BIN)
+    const d = createLocalDaemon(f.deps)
+    await d.status()
+    f.clock += 60_000
+    await d.status()
+    expect(probes()).toBe(1)
+    expect(f.execLog.some((e) => e.args[0] === 'path')).toBe(false)
+  })
+})
+// ---------------------------------------------------------------------------
+// The PATH gate (spec §4)
+// ---------------------------------------------------------------------------
+
+/** A PATH on which nothing named pdx is an executable file. */
+const noPdxAnywhere = () => ({ ...defaultPathReport(''), localBinExists: false })
+
+describe('the PATH gate (spec §4.3)', () => {
+  let f: Fake
+  beforeEach(() => {
+    f = makeFake()
+    f.files.set(BIN, identity('aaa'))
+    f.files.set(CFG, 'bind = "100.64.0.9"\nport = 7860\ntoken = "purdex_t"\n')
+    f.shellPath = '/opt/homebrew/bin:/usr/bin'   // no ~/.local/bin
+  })
+
+  it('start refuses and never runs `pdx start`', async () => {
+    await expect(createLocalDaemon(f.deps).start()).rejects.toThrow(/Refusing to start/)
+    expect(f.execLog.some((e) => e.args[0] === 'start')).toBe(false)
+  })
+
+  it('restart refuses and never stops the running daemon', async () => {
+    f.files.set(PID, '4242'); f.alivePids.add(4242)
+    f.lsofTxt[4242] = `p4242${NUL}\nftxt${NUL}n${BIN}${NUL}\n`
+    await expect(createLocalDaemon(f.deps).restart()).rejects.toThrow(/Refusing to start/)
+    expect(f.execLog.some((e) => ['stop', 'start'].includes(e.args[0]))).toBe(false)
+  })
+
+  it('ensureRunning reports path-unresolved — a state, not a failure to diagnose', async () => {
+    expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('path-unresolved')
+    expect(f.execLog.some((e) => e.args[0] === 'start')).toBe(false)
+  })
+
+  it('the refusal names the binary and both commands (spec §4.5)', async () => {
+    const err = await createLocalDaemon(f.deps).start().catch((e: Error) => e.message)
+    expect(err).toContain('The daemon binary is installed at ~/.config/pdx/bin/pdx.')
+    expect(err).toContain('~/.config/pdx/bin/pdx path link           create ~/.local/bin/pdx')
+    expect(err).toContain('~/.config/pdx/bin/pdx path add-to-shell   put ~/.local/bin on PATH')
+    expect(err).not.toMatch(/\/Users\/t\//)   // no half-tilde mixture
+    expect(err).toContain('command not found')
+    expect(err).toContain('Settings → Development')
+    expect(err).toMatch(/open a new terminal and run `pdx path`/)
+  })
+
+  it('lists the fix that would help first, and still shows both', async () => {
+    // ~/.local/bin is on PATH already: only `link` is missing.
+    f.pathReport = () => ({ ...defaultPathReport(''), localBinExists: false, localBinOnPath: true, fixes: ['link'] })
+    const onlyLink = await createLocalDaemon(f.deps).start().catch((e: Error) => e.message)
+    expect(onlyLink!.indexOf('path link')).toBeLessThan(onlyLink!.indexOf('path add-to-shell'))
+
+    const g = makeFake()
+    g.files.set(BIN, identity('aaa'))
+    g.shellPath = '/opt/homebrew/bin:/usr/bin'
+    g.pathReport = () => ({ ...defaultPathReport(''), link: 'ok', fixes: ['add-to-shell'] })
+    const onlyShell = await createLocalDaemon(g.deps).start().catch((e: Error) => e.message)
+    expect(onlyShell!.indexOf('path add-to-shell')).toBeLessThan(onlyShell!.indexOf('path link'))
+  })
+
+  it('the SAME instance starts once the user fixes PATH — the gate defeats the cache (spec §7.5)', async () => {
+    const d = createLocalDaemon(f.deps)
+    await expect(d.start()).rejects.toThrow(/Refusing to start/)
+    f.shellPath = `/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`   // user ran `pdx path add-to-shell`
+    const res = await d.start()
+    expect(res).toMatchObject({ url: 'http://100.64.0.9:7860', hash: 'aaa' })
+  })
+
+  it('install completes the swap and only then refuses; the binary is installed-and-stopped', async () => {
+    scriptedDownload(f, 'bbb')
+    const steps: string[] = []
+    const d = createLocalDaemon(f.deps)
+    await expect(d.install('http://src', 'tok', (s) => steps.push(s))).rejects.toThrow(/Refusing to start/)
+    expect(steps).toEqual(['prepare', 'download', 'verify', 'swap'])
+    expect(f.files.has(`${BIN}.new`)).toBe(false)
+    expect(Buffer.from(f.files.get(BIN) as Uint8Array).toString('utf8')).toBe(identity('bbb'))
+    const st = await d.status()
+    expect(st.managed).toBe('managed')
+    expect(st.alive).toBeNull()
+    expect(st.installed?.hash).toBe('bbb')
+  })
+
+  it('a different pdx winning on PATH does NOT refuse — the criterion is resolved, never ok', async () => {
+    // mlab today: ~/.local/bin/pdx is a hand-made symlink to a repo build.
+    f.pathReport = () => ({
+      ...defaultPathReport(`${HOME}/.local/bin`), resolved: '/repo/bin/pdx',
+      resolvedReal: '/repo/bin/pdx', isSelf: false, ok: false, fixes: ['link'],
+    })
+    const d = createLocalDaemon(f.deps)
+    await expect(d.start()).resolves.toMatchObject({ hash: 'aaa' })
+    const st = await d.status()
+    expect(st.cli).toMatchObject({ resolved: '/repo/bin/pdx', isManagedBinary: false })
+  })
+
+  // Round 2's attack and defence reviewers independently found the same hole
+  // here: this used to assert that an unreadable answer always started. It
+  // does not any more — "we could not check" is not "it is fine". The split
+  // is whether a `pdx` exists on the launch PATH at all.
+  describe('when the binary cannot answer', () => {
+    const tooOld = (_file: string, args: string[]) => (args[0] === 'path'
+      ? { code: 2, stdout: '', stderr: 'pdx: unknown command "path"', timedOut: false }
+      : undefined)
+
+    it('still starts when some pdx is on PATH — an old binary is not a broken machine', async () => {
+      f.onExec = tooOld
+      f.files.set(`${HOME}/.local/bin/pdx`, 'x')
+      f.shellPath = `${HOME}/.local/bin:/usr/bin`
+      await expect(createLocalDaemon(f.deps).start()).resolves.toMatchObject({ hash: 'aaa' })
+    })
+
+    it('refuses when no pdx is on PATH at all, and says why it could not check', async () => {
+      f.onExec = tooOld
+      f.shellPath = '/usr/bin:/bin'
+      await expect(createLocalDaemon(f.deps).start()).rejects.toThrow(/too old to check PATH/)
+    })
+
+    it('refuses the same way when the binary will not run', async () => {
+      f.onExec = (_file, args) => (args[0] === 'path'
+        ? { code: null, stdout: '', stderr: 'spawn EACCES', timedOut: false }
+        : undefined)
+      f.shellPath = '/usr/bin:/bin'
+      await expect(createLocalDaemon(f.deps).start()).rejects.toThrow(/could not be asked/)
+    })
+
+    it('ensureRunning reports path-unresolved rather than a generic failure', async () => {
+      f.onExec = tooOld
+      f.shellPath = '/usr/bin:/bin'
+      expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('path-unresolved')
+    })
+  })
+})
+
+describe('the gate when the shell PATH cannot be read (spec §4.4)', () => {
+  let f: Fake
+  beforeEach(() => {
+    f = makeFake()
+    f.files.set(BIN, identity('aaa'))
+    f.files.set(CFG, 'bind = "100.64.0.9"\nport = 7860\ntoken = "purdex_t"\n')
+    f.onExec = (file) => (file === '/bin/zsh' ? { code: 1, stdout: 'banner only\n', stderr: 'boom', timedOut: false } : undefined)
+  })
+
+  it('probe failed AND no resolve even on the injected fallback ⇒ refuse', async () => {
+    f.pathReport = noPdxAnywhere
+    await expect(createLocalDaemon(f.deps).start()).rejects.toThrow(/Refusing to start/)
+  })
+
+  it('probe failed BUT pdx resolves on the fallback ⇒ start, flagged pathSource fallback', async () => {
+    const d = createLocalDaemon(f.deps)
+    await expect(d.start()).resolves.toMatchObject({ hash: 'aaa' })
+    const st = await d.status()
+    expect(st.cli?.pathSource).toBe('fallback')
+  })
+})
+
+describe('status cli block (spec §4.6)', () => {
+  it('reports what pdx path found, with the Electron side\'s own pathSource', async () => {
+    const f = makeFake()
+    f.files.set(BIN, identity('aaa'))
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.cli).toEqual({
+      resolved: `${HOME}/.local/bin/pdx`,
+      isManagedBinary: true,
+      pathSource: 'shell',
+      localBinOnPath: true,
+      link: 'ok',
+    })
+  })
+
+  it('has no cli block when nothing is installed — there is nothing to ask', async () => {
+    const f = makeFake()
+    const st = await createLocalDaemon(f.deps).status()
+    expect(st.cli).toBeUndefined()
+  })
+
+  it('never reports a link state of "created" — status has no memory of actions', async () => {
+    const f = makeFake()
+    f.files.set(BIN, identity('aaa'))
+    const st = await createLocalDaemon(f.deps).status()
+    expect(['ok', 'missing', 'conflict', 'error']).toContain(st.cli!.link)
+  })
+})
+
+describe('the Electron side never writes to a shell rc file (spec §7.9)', () => {
+  const RC = /(^|\/)\.(zshrc|bashrc|bash_profile|zprofile|profile)$/
+
+  it('install, start, restart, ensureRunning and status touch no rc path', async () => {
+    const f = makeFake()
+    f.files.set(CFG, 'bind = "100.64.0.9"\nport = 7860\ntoken = "purdex_t"\n')
+    const touched: string[] = []
+    const guard = (p: string) => { if (RC.test(p)) touched.push(p) }
+    const fs = f.deps.fs
+    f.deps.fs = {
+      ...fs,
+      writeFile: (p, d, m) => { guard(p); return fs.writeFile(p, d, m) },
+      rename: (a, b) => { guard(a); guard(b); return fs.rename(a, b) },
+      openWrite: (p) => { guard(p); return fs.openWrite(p) },
+      unlink: (p) => { guard(p); return fs.unlink(p) },
+    }
+    scriptedDownload(f, 'bbb')
+    const d = createLocalDaemon(f.deps)
+    await d.install('http://src', 'tok', () => {})
+    await d.restart()
+    await d.ensureRunning()
+    await d.status()
+    await d.start().catch(() => {})
+    expect(touched).toEqual([])
+  })
+})
+
+describe('pathCommand (spec §5.1)', () => {
+  let f: Fake
+  beforeEach(() => {
+    f = makeFake()
+    f.files.set(BIN, identity('aaa'))
+  })
+  const pathRuns = () => f.execLog.filter((e) => e.args[0] === 'path' && e.args[1] !== '--json')
+
+  it('runs the managed binary by absolute path with the launch env', async () => {
+    await createLocalDaemon(f.deps).pathCommand('link')
+    expect(pathRuns()).toHaveLength(1)
+    expect(pathRuns()[0].file).toBe(BIN)
+    expect(pathRuns()[0].args).toEqual(['path', 'link'])
+    expect(pathRuns()[0].env?.PATH).toBe(f.shellPath)
+  })
+
+  // Codex R1 (PR #1081). fallbackPath() injects ~/.local/bin, so handing a
+  // fallback env to `add-to-shell` would show it the very directory it exists
+  // to add: the command calls itself a no-op, the rc file is never touched,
+  // and the button reports success having changed nothing — on precisely the
+  // machine whose real PATH we could not read.
+  it('never hands a synthesized PATH to a command that decides by looking at PATH', async () => {
+    f.onExec = (file) => (file === '/bin/zsh' ? { code: 1, stdout: '', stderr: 'no shell', timedOut: false } : undefined)
+    // deps.baseEnv is the process's own inherited PATH: '/usr/bin:/bin'.
+    await createLocalDaemon(f.deps).pathCommand('add-to-shell')
+    const used = pathRuns()[0].env?.PATH ?? ''
+    expect(used).toBe('/usr/bin:/bin')
+    expect(used).not.toContain(`${HOME}/.local/bin`)
+  })
+
+  it('add-to-shell has its own argv', async () => {
+    await createLocalDaemon(f.deps).pathCommand('add-to-shell')
+    expect(pathRuns()[0].args).toEqual(['path', 'add-to-shell'])
+  })
+
+  it('--force is passed only when asked', async () => {
+    const d = createLocalDaemon(f.deps)
+    await d.pathCommand('link', { force: true })
+    expect(pathRuns()[0].args).toEqual(['path', 'link', '--force'])
+  })
+
+  it('a refusal is returned verbatim, not thrown away — its value is the path it names', async () => {
+    f.onExec = (_file, args) => (args[1] === 'link'
+      ? { code: 1, stdout: '', stderr: `${HOME}/.local/bin/pdx is a symlink to /repo/bin/pdx; use --force\n`, timedOut: false }
+      : undefined)
+    const r = await createLocalDaemon(f.deps).pathCommand('link')
+    expect(r).toEqual({ code: 1, stdout: '', stderr: `${HOME}/.local/bin/pdx is a symlink to /repo/bin/pdx; use --force\n` })
+  })
+
+  it('takes the lock: one issued during an in-flight operation runs after it, never during', async () => {
+    const d = createLocalDaemon(f.deps)
+    const order: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const held = d.withLock(async () => { order.push('busy-start'); await gate; order.push('busy-end') })
+    const cmd = d.pathCommand('link').then(() => order.push('path'))
+    await new Promise((r) => setTimeout(r, 5))
+    expect(order).toEqual(['busy-start'])
+    release()
+    await Promise.all([held, cmd])
+    expect(order).toEqual(['busy-start', 'busy-end', 'path'])
   })
 })

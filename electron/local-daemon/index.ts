@@ -3,10 +3,11 @@
 // an in-memory harness. All public operations run through one promise
 // queue; private helpers (suffix `Unlocked`) never enqueue.
 import { join } from 'node:path'
-import type { LocalDaemon, LocalDaemonDeps, LocalDaemonResult, LocalDaemonStatus } from './types'
+import type { EnsureRunningOutcome, LocalDaemon, LocalDaemonDeps, LocalDaemonPathResult, LocalDaemonResult, LocalDaemonStatus } from './types'
 import { parseLsofF0, txtPaths, listenersOn, decideOwnership, type Ownership } from './lsof'
-import { buildLaunchEnv } from './launch-env'
+import { buildLaunchEnv, type LaunchEnv } from './launch-env'
 import { parseDaemonConfig, pickBindAddress, renderInitialConfig, generateToken, DEFAULT_DATA_DIR, type DaemonConfig } from './config'
+import { readCliState, pathRefusalMessage, cliStatusFields, type CliState } from './cli'
 
 // lsof lives in /usr/sbin on macOS and /usr/bin on Linux (`target()` accepts
 // both). A wrong path would spawn-fail → OwnershipUnavailable on every call.
@@ -19,6 +20,14 @@ const VERSION_TIMEOUT_MS = 2000
 const STOP_TIMEOUT_MS = 35_000
 const START_TIMEOUT_MS = 70_000
 const DOWNLOAD_TIMEOUT_MS = 6 * 60_000
+// `add-to-shell` waits up to 5 s on its own lockfile before giving up, so the
+// command can legitimately take a few seconds without being stuck.
+const PATH_CMD_TIMEOUT_MS = 30_000
+// A machine whose `pdx` does not resolve is re-probed on status, because its
+// user is running the fix commands in another window and watching the panel
+// clear. A healthy machine is never re-probed: `resolveShellPath` runs a login
+// shell with two 5 s timeouts, and status is polled by the UI (spec §4.2).
+const CLI_REPROBE_INTERVAL_MS = 5000
 
 // Thrown when an ownership-determining lsof call could not be trusted —
 // either it timed out or it never ran at all (spawn failure). The caller
@@ -44,13 +53,134 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   // ---- env ---------------------------------------------------------------
-  let envPromise: Promise<NodeJS.ProcessEnv> | null = null
-  function launchEnv(): Promise<NodeJS.ProcessEnv> {
-    envPromise ??= buildLaunchEnv({
+  // Two accessors, because "always re-probe" is as wrong as "never" (spec
+  // §4.2): the gate decisions refresh, everything else reuses the memoized
+  // probe. `lastEnvProbeAt` is the wall clock of the *last actual probe*,
+  // the cached one included, so a broken machine re-probes at most once per 5 s.
+  let envCache: LaunchEnv | null = null
+  let envPromise: Promise<LaunchEnv> | null = null
+  let lastEnvProbeAt = Number.NEGATIVE_INFINITY
+  // undefined until a status has asked the binary; null means `pdx` did not
+  // resolve (or could not be determined), which is what makes status re-probe.
+  let lastCliResolved: string | null | undefined
+
+  function probeLaunchEnv(): Promise<LaunchEnv> {
+    lastEnvProbeAt = deps.now()
+    return buildLaunchEnv({
       exec: deps.exec, shell: deps.shell, baseEnv: deps.baseEnv, home: deps.home,
       sentinel: () => 'PDX_PATH_' + deps.randomBytes(16).toString('hex'),
     })
+  }
+
+  function cachedLaunchEnv(): Promise<LaunchEnv> {
+    envPromise ??= probeLaunchEnv().then((r) => { envCache = r; return r })
     return envPromise
+  }
+
+  // A failed re-probe must never turn a working machine into a refusing one:
+  // it keeps the last shell-derived PATH instead of dropping to the fallback.
+  async function refreshLaunchEnv(): Promise<LaunchEnv> {
+    const fresh = await probeLaunchEnv()
+    if (fresh.pathSource !== 'shell' && envCache?.pathSource === 'shell') return envCache
+    envCache = fresh
+    envPromise = Promise.resolve(fresh)
+    return fresh
+  }
+
+  // The PATH a status poll judges on. Spec §4.2's table: cache when the last
+  // known cli.resolved was non-null, refresh (rate-limited) when it was null.
+  function statusLaunchEnv(binExists: boolean): Promise<LaunchEnv> {
+    const due = deps.now() - lastEnvProbeAt >= CLI_REPROBE_INTERVAL_MS
+    if (binExists && lastCliResolved === null && due) return refreshLaunchEnv()
+    return cachedLaunchEnv()
+  }
+
+  function cachedEnv(): Promise<NodeJS.ProcessEnv> {
+    return cachedLaunchEnv().then((r) => r.env)
+  }
+
+  async function readCli(env: NodeJS.ProcessEnv): Promise<CliState> {
+    const cli = await readCliState({ exec: deps.exec, exists: deps.fs.exists }, binPath, env)
+    // "Could not tell" is recorded as not-resolved: such a machine is broken
+    // in some other way and is exactly the one worth re-checking.
+    lastCliResolved = cli.kind === 'not-installed' ? undefined : cli.kind === 'report' ? cli.report.resolved : null
+    return cli
+  }
+
+  // ---- the gate (spec §4.3) ---------------------------------------------
+  /**
+   * The refusal, or null to proceed. The criterion is `resolved === null` —
+   * never the JSON's `ok`, never the exit code. `pdx path` exits 1 and
+   * reports ok:false when the winner on PATH is a *different* pdx, which for
+   * the CLI's own question is a failure and for the gate's is not: the app's
+   * job is that `pdx` works, not that `pdx` is its own copy. Keying on `ok`
+   * would refuse to start on every machine with a hand-made symlink to a repo
+   * build. An answer we could not read at all is likewise not a refusal: a
+   * gate the user has no command to satisfy is worse than one that admits
+   * what it does not know.
+   */
+  function pathRefusal(cli: CliState): string | null {
+    if (cli.kind !== 'report' || cli.report.resolved !== null) return null
+    return pathRefusalMessage(cli.report, deps.home)
+  }
+
+  /**
+   * When the binary cannot answer (too old to have `path`, unreadable output,
+   * would not run), the gate is not excused from checking — it just has to
+   * check coarsely, itself.
+   *
+   * Round 2's attack and defence reviewers independently landed on the same
+   * hole: treating "no answer" as "fine" let a machine with an old binary AND
+   * no `pdx` anywhere on PATH start a daemon, which is the exact state this
+   * feature exists to end. But failing closed is wrong too — a machine whose
+   * `pdx` works perfectly would be blocked for the sole crime of running a
+   * binary that predates this PR, and the app would be unusable until an
+   * update it now refuses to launch far enough to offer.
+   *
+   * So: look for any file named `pdx` on the launch PATH. This is the weak
+   * check — it cannot tell an executable from a stray file, nor a dangling
+   * symlink from a real one, which is precisely why §4.1 hands the real
+   * question to Go. As a fallback it is still worth having: it catches
+   * "nothing named pdx anywhere", the case that is actually broken, and where
+   * it is wrong it errs toward starting, which is the behaviour that shipped
+   * before this PR.
+   */
+  async function coarsePdxOnPath(env: NodeJS.ProcessEnv): Promise<boolean> {
+    for (const dir of (env.PATH ?? '').split(':')) {
+      if (dir !== '' && (await deps.fs.exists(join(dir, 'pdx')))) return true
+    }
+    return false
+  }
+
+  // The parameter excludes 'report' rather than accepting every CliState and
+  // trusting the caller: this function only has an answer for the cases where
+  // the binary could NOT be asked, and saying so in the type is what makes
+  // `cli.error` below legal instead of a cast.
+  async function unverifiedRefusal(cli: Exclude<CliState, { kind: 'report' }>, env: NodeJS.ProcessEnv): Promise<string | null> {
+    // No binary is not a PATH problem: there is nothing to gate, and every
+    // caller already has its own not-installed branch that says so better
+    // than this message could.
+    if (cli.kind === 'not-installed') return null
+    if (await coarsePdxOnPath(env)) return null
+    const why = cli.kind === 'unparseable'
+      ? 'the installed daemon binary is too old to check PATH (it has no `path` command)'
+      : `the installed daemon binary could not be asked: ${cli.error}`
+    return [
+      'Refusing to start: no `pdx` was found on PATH, so agents following',
+      'CLAUDE.md will get "command not found".',
+      '',
+      `This could not be checked properly because ${why}.`,
+      '',
+      'Update the daemon from Settings → Development, then try again.',
+    ].join('\n')
+  }
+
+  /** Resolve `pdx` against a freshly probed launch PATH (spec §4.2). */
+  async function gateUnlocked(): Promise<{ launch: LaunchEnv; refusal: string | null }> {
+    const launch = await refreshLaunchEnv()
+    const cli = await readCli(launch.env)
+    if (cli.kind === 'report') return { launch, refusal: pathRefusal(cli) }
+    return { launch, refusal: await unverifiedRefusal(cli, launch.env) }
   }
 
   // ---- primitives --------------------------------------------------------
@@ -80,7 +210,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   async function readIdentity(bin: string): Promise<LocalDaemonStatus['installed']> {
     const unknown = { version: 'unknown', hash: 'unknown', goos: 'unknown', goarch: 'unknown' }
     try {
-      const r = await deps.exec(bin, ['version', '--json'], { env: await launchEnv(), timeoutMs: VERSION_TIMEOUT_MS })
+      const r = await deps.exec(bin, ['version', '--json'], { env: await cachedEnv(), timeoutMs: VERSION_TIMEOUT_MS })
       if (r.code !== 0) return unknown
       const j = parseIdentityJson(r.stdout)
       if (!j) return unknown
@@ -169,17 +299,20 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
 
   async function statusUnlocked(): Promise<LocalDaemonStatus> {
     const tgt = target()
-    const env = await launchEnv()
+    const binExists = await deps.fs.exists(binPath)
+    const launch = await statusLaunchEnv(binExists)
+    const env = launch.env
+    const cli = await readCli(env)
     const which = await deps.exec('/usr/bin/which', ['tmux'], { env, timeoutMs: VERSION_TIMEOUT_MS }).catch(() => null)
     const tmux = which && which.code === 0 ? which.stdout.trim() || null : null
     const cfgFile = await readConfig()
     const cfg = cfgFile ?? parseDaemonConfig('', deps.home)
-    const binExists = await deps.fs.exists(binPath)
     const installed = binExists ? await readIdentity(binPath) : null
     const running = await health(cfg.bind, cfg.port)
     const base = {
       binPath, installed, running, target: tgt, tools: { tmux }, hostname: deps.hostname(),
       config: cfgFile ? { bind: cfgFile.bind, port: cfgFile.port, token: cfgFile.token } : null,
+      ...cliStatusFields(cli, launch),
     }
     if (cfgFile && cfgFile.dataDir !== dataDir) {
       return { ...base, managed: 'external', reason: 'custom data_dir', alive: null }
@@ -260,7 +393,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   async function verifyNew(tgt: LocalDaemonStatus['target'], expectedHash: string): Promise<void> {
-    const r = await deps.exec(newPath, ['version', '--json'], { env: await launchEnv(), timeoutMs: VERSION_TIMEOUT_MS }).catch((e: Error) => ({ code: 1, stdout: '', stderr: e.message, timedOut: false }))
+    const r = await deps.exec(newPath, ['version', '--json'], { env: await cachedEnv(), timeoutMs: VERSION_TIMEOUT_MS }).catch((e: Error) => ({ code: 1, stdout: '', stderr: e.message, timedOut: false }))
     if (r.code !== 0) {
       await deps.fs.unlink(newPath)
       throw new Error(`downloaded binary does not run: ${r.stderr.trim() || `exit ${r.code}`}`)
@@ -283,7 +416,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   // dedicated probePort dep; its 'unknown' (timeout / other socket error)
   // keeps us polling exactly like 'open' does — only 'refused' proves free.
   async function stopUnlocked(cfg: DaemonConfig, pid: number): Promise<void> {
-    const r = await deps.exec(binPath, ['stop'], { env: await launchEnv(), cwd: deps.home, timeoutMs: STOP_TIMEOUT_MS })
+    const r = await deps.exec(binPath, ['stop'], { env: await cachedEnv(), cwd: deps.home, timeoutMs: STOP_TIMEOUT_MS })
     if (r.timedOut) throw new Error('pdx stop did not finish within 35s — the old binary was not replaced (the old process may or may not still be running)')
     const deadline = deps.now() + STOP_SETTLE_MS
     for (;;) {
@@ -299,7 +432,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   async function startDaemon(cfg: DaemonConfig): Promise<void> {
-    const r = await deps.exec(binPath, ['start'], { env: await launchEnv(), cwd: deps.home, timeoutMs: START_TIMEOUT_MS })
+    const r = await deps.exec(binPath, ['start'], { env: await cachedEnv(), cwd: deps.home, timeoutMs: START_TIMEOUT_MS })
     if (r.timedOut) throw new Error('pdx start did not finish within 70s')
     if (r.code !== 0) throw new Error(`pdx start failed: ${(r.stderr || r.stdout).trim()}`)
     const onDisk = await readIdentity(binPath)
@@ -322,6 +455,32 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
       url: `http://${cfg.bind}:${cfg.port}`, token: cfg.token ?? '', hash: id?.hash ?? 'unknown', version: id?.version ?? 'unknown',
       hostname: deps.hostname(), ...(bindNote ? { bindNote } : {}),
     }
+  }
+
+  // A repair command, not a poll: it is run because the user pressed a button
+  // on the machine whose PATH is being changed, so it judges on a fresh probe
+  // rather than a cache that may predate the fix they just applied.
+  async function pathCommandUnlocked(kind: 'link' | 'add-to-shell', opts?: { force?: boolean }): Promise<LocalDaemonPathResult> {
+    const { env, pathSource } = await refreshLaunchEnv()
+    // Never hand a SYNTHESIZED PATH to a command that decides what to do by
+    // looking at PATH. When the shell probe fails, fallbackPath() injects
+    // ~/.local/bin — so `add-to-shell` would see the directory it exists to
+    // add, call itself a no-op, and leave the rc file untouched on precisely
+    // the machine whose real PATH we could not read. The button would report
+    // success and change nothing.
+    //
+    // So on a fallback PATH we pass the process's own inherited PATH: not the
+    // user's shell PATH either, but at least something real rather than
+    // something this file made up. Writing a block that turns out to have
+    // been unnecessary is harmless — the marker makes a second run a no-op —
+    // whereas skipping a needed one is the bug this feature exists to fix.
+    const cmdEnv = pathSource === 'fallback' ? { ...env, PATH: deps.baseEnv.PATH ?? '' } : env
+    const args = ['path', kind, ...(kind === 'link' && opts?.force ? ['--force'] : [])]
+    const r = await deps.exec(binPath, args, { env: cmdEnv, cwd: deps.home, timeoutMs: PATH_CMD_TIMEOUT_MS })
+    if (r.timedOut) throw new Error(`pdx path ${kind} did not finish within ${PATH_CMD_TIMEOUT_MS / 1000}s`)
+    // Verbatim, refusals included: a conflict's whole value is the path it
+    // names, and reducing it to a red "failed" would throw that away.
+    return { code: r.code, stdout: r.stdout, stderr: r.stderr }
   }
 
   // ---- public operations -------------------------------------------------
@@ -358,6 +517,10 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     }
     progress('swap')
     await deps.fs.rename(newPath, binPath)
+    // The binary is what the user asked for and is now correctly installed;
+    // only the start is refused. statusUnlocked reads installed-and-stopped.
+    const refusal = (await gateUnlocked()).refusal
+    if (refusal) throw new Error(refusal)
     progress('start')
     await startDaemon(cfg)
     progress('register')
@@ -365,6 +528,8 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   async function startUnlocked(): Promise<LocalDaemonResult> {
+    const refusal = (await gateUnlocked()).refusal
+    if (refusal) throw new Error(refusal)
     const st = await statusUnlocked()
     if (st.managed !== 'managed') throw new Error(`cannot start: ${st.managed}${st.reason ? ` (${st.reason})` : ''}`)
     if (st.alive) throw new Error(`already running (pid ${st.alive.pid})`)
@@ -374,6 +539,8 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   async function restartUnlocked(): Promise<LocalDaemonResult> {
+    const refusal = (await gateUnlocked()).refusal
+    if (refusal) throw new Error(refusal)
     const st = await statusUnlocked()
     if (st.managed !== 'managed') throw new Error(`cannot restart: ${st.managed}${st.reason ? ` (${st.reason})` : ''}`)
     const cfg = (await readConfig()) ?? parseDaemonConfig('', deps.home)
@@ -386,8 +553,13 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
 
   // Never rejects (spec §3.1): every failure, including a broken config,
   // is logged and reported as 'failed'.
-  async function ensureRunningUnlocked(): Promise<'started' | 'already-running' | 'not-installed' | 'external' | 'failed'> {
+  async function ensureRunningUnlocked(): Promise<EnsureRunningOutcome> {
     try {
+      const refusal = (await gateUnlocked()).refusal
+      if (refusal) {
+        deps.log(`[local-daemon] ${refusal}`)
+        return 'path-unresolved'
+      }
       const st = await statusUnlocked()
       if (st.managed === 'none') return 'not-installed'
       if (st.managed === 'external') return 'external'
@@ -415,6 +587,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     start: () => withLock(startUnlocked),
     restart: () => withLock(restartUnlocked),
     ensureRunning: () => withLock(ensureRunningUnlocked),
+    pathCommand: (kind, opts) => withLock(() => pathCommandUnlocked(kind, opts)),
     withLock,
   }
 }

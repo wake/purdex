@@ -1,6 +1,6 @@
 // Types for the app-managed local pdx daemon (spec §3.1). Interfaces only —
 // the factory `createLocalDaemon` lives in ./index.ts.
-import type { ExecFn } from './launch-env'
+import type { ExecFn, PathSource } from './launch-env'
 import type { Iface } from './config'
 
 export interface LocalDaemonStatus {
@@ -15,7 +15,33 @@ export interface LocalDaemonStatus {
   hostname: string
   target: { goos: 'darwin' | 'linux'; goarch: 'arm64' | 'amd64' }
   tools: { tmux: string | null }
+  /**
+   * How `pdx` is reachable on the PATH the daemon is launched with (spec
+   * §4.6). Absent when there is no binary to ask, or when the installed one
+   * could not answer `path --json`. Every field but `pathSource` comes from
+   * that answer; `pathSource` is this side's own knowledge of how it built
+   * the PATH it passed in. `link` describes what is observed *now* — there is
+   * no 'created', because status is recomputed on every poll and has no
+   * memory of actions.
+   */
+  cli?: {
+    resolved: string | null
+    isManagedBinary: boolean
+    pathSource: PathSource
+    localBinOnPath: boolean
+    link: 'ok' | 'missing' | 'conflict' | 'error'
+  }
 }
+
+/**
+ * 'path-unresolved' is deliberately not folded into 'failed': it is not a
+ * failure to diagnose but a specific, actionable state, and app launch is
+ * where a user first meets it (spec §4.3).
+ */
+export type EnsureRunningOutcome = 'started' | 'already-running' | 'not-installed' | 'external' | 'failed' | 'path-unresolved'
+
+/** `pdx path <sub>`'s own exit status and streams, passed through untouched. */
+export interface LocalDaemonPathResult { code: number | null; stdout: string; stderr: string }
 
 export interface LocalDaemonResult { url: string; token: string; hash: string; version: string; hostname: string; bindNote?: string }
 
@@ -60,6 +86,8 @@ export interface LocalDaemon {
   install(daemonUrl: string, token: string | undefined, onProgress: (step: string) => void): Promise<LocalDaemonResult>
   start(): Promise<LocalDaemonResult>
   restart(): Promise<LocalDaemonResult>
-  ensureRunning(): Promise<'started' | 'already-running' | 'not-installed' | 'external' | 'failed'>
+  ensureRunning(): Promise<EnsureRunningOutcome>
+  /** Run `pdx path link` / `pdx path add-to-shell` and return its own output. */
+  pathCommand(kind: 'link' | 'add-to-shell', opts?: { force?: boolean }): Promise<LocalDaemonPathResult>
   withLock<T>(fn: () => Promise<T>): Promise<T>
 }
