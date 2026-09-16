@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -19,6 +20,7 @@ import (
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/peers/proxyhelper/proxyhelpertest"
+	"github.com/wake/purdex/internal/store"
 )
 
 // labelHelperPIDFloor is the first pid proxyhelpertest hands out to a
@@ -385,5 +387,173 @@ func TestSelfRoutes_DenyHostPrincipal(t *testing.T) {
 	status, _ := f.doAs(middleware.Principal{Kind: middleware.PrincipalHost, Alias: "x", HostID: "x:1"}, "POST", "/api/peers/self", ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	if status != 403 {
 		t.Errorf("host principal got %d", status)
+	}
+}
+
+// releaseCountingLabels is a LabelStore whose read always fails while every
+// write is counted. failingLabels/writeFailingLabels can show that a write
+// FAILED; only a counter can show that no write was ever ATTEMPTED, which
+// is what spec §3.4 requires of a release whose label-store read failed.
+type releaseCountingLabels struct {
+	releases int
+	claims   int
+}
+
+func (l *releaseCountingLabels) Snapshot() ([]store.PeerLabel, error) {
+	return nil, errors.New("snapshot boom")
+}
+
+func (l *releaseCountingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+	l.claims++
+	return store.PeerLabel{}, nil
+}
+
+func (l *releaseCountingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+	l.releases++
+	return store.PeerLabel{}, false, nil
+}
+
+// listingRecord is the row GET /api/peers renders for sessionID, built by
+// running this very fixture through localEnvelope → ipeers.Build. It is
+// the other half of the spec §3.2 agreement: whatever the self routes
+// answer for a conversation, this is what the listing says about it.
+func (f *labelFixture) listingRecord(sessionID string) ipeers.PeerRecord {
+	f.t.Helper()
+	snap := f.m.configSnapshot()
+	env := f.m.localEnvelope(context.Background(), snap.hostID, snap.alias)
+	if !env.OK {
+		f.t.Fatalf("localEnvelope: %s", env.Error)
+	}
+	for _, rec := range env.Peers {
+		if rec.Agent != nil && rec.Agent.SessionID == sessionID {
+			return rec
+		}
+	}
+	f.t.Fatalf("no listing row for session %q; peers=%+v", sessionID, env.Peers)
+	return ipeers.PeerRecord{}
+}
+
+// TestSelf_Whoami_DefaultFromTmuxSessionName pins Task 4 item 1 and item 6:
+// the default label of the one live agent in a tmux session is that
+// session's name, and an agent outside tmux keeps the v2 hash.
+func TestSelf_Whoami_DefaultFromTmuxSessionName(t *testing.T) {
+	f := newLabelFixture(t)
+
+	// pid 10 is the only live agent in tmux session "mt0", unnamed.
+	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(10)})
+	rec := decodeRecord(t, status, body)
+	if rec.Label != "mt0" || rec.LabelSource != "default" {
+		t.Errorf("in-tmux whoami label = %q/%q, want mt0/default", rec.Label, rec.LabelSource)
+	}
+	if rec.Address != "a/mt0:mt0-n10" {
+		t.Errorf("in-tmux whoami address = %q, want a/mt0:mt0-n10", rec.Address)
+	}
+
+	// pid 20 has no tmux field: nothing to derive from, so the hash form
+	// is still the answer (spec §3.3 rule 1).
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	rec = decodeRecord(t, status, body)
+	if rec.Label != ipeers.DefaultLabel("sid-2") || rec.LabelSource != "default" {
+		t.Errorf("outside-tmux whoami = %+v, want the hash default", rec)
+	}
+}
+
+// TestSelf_AddressMatchesListing is the spec §3.2 tripwire: the self
+// routes and the listing resolve defaults over the same population, so for
+// the same live conversation they must render byte-identical labels and
+// addresses. It fails the moment either path derives a default the other
+// does not.
+func TestSelf_AddressMatchesListing(t *testing.T) {
+	f := newLabelFixture(t)
+
+	// Guard against the test passing because BOTH paths fell back to the
+	// hash: sid-1 must actually be exercising the tmux-derived form.
+	if listed := f.listingRecord("sid-1"); listed.Label != "mt0" {
+		t.Fatalf("listing label for sid-1 = %q, want the tmux-derived mt0", listed.Label)
+	}
+
+	for _, c := range []struct {
+		pid int
+		sid string
+	}{{10, "sid-1"}, {20, "sid-2"}} {
+		listed := f.listingRecord(c.sid)
+		status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(c.pid)})
+		self := decodeRecord(t, status, body)
+		if self.Address != listed.Address || self.Label != listed.Label || self.LabelSource != listed.LabelSource {
+			t.Errorf("pid %d: whoami %q/%q/%q, listing %q/%q/%q",
+				c.pid, self.Address, self.Label, self.LabelSource,
+				listed.Address, listed.Label, listed.LabelSource)
+		}
+	}
+}
+
+// TestClaim_RecordsMatchListing pins Task 4 item 3: both records claim
+// renders — the 200 body and the 409 label_taken holder — go through the
+// resolved defaults, so neither can drift from the listing.
+func TestClaim_RecordsMatchListing(t *testing.T) {
+	f := newLabelFixture(t)
+
+	// Claiming the name of your own tmux session is allowed (spec §2.2):
+	// the default it displaces is your own.
+	status, body := f.claim(f.inbox(10), "mt0")
+	rec := decodeRecord(t, status, body)
+	if rec.LabelSource != "user" || rec.Label != "mt0" {
+		t.Fatalf("claim record = %+v, want the user label mt0", rec)
+	}
+	listed := f.listingRecord("sid-1")
+	if rec.Address != listed.Address || rec.Label != listed.Label || rec.LabelSource != listed.LabelSource {
+		t.Errorf("claim 200 %q/%q/%q != listing %q/%q/%q",
+			rec.Address, rec.Label, rec.LabelSource, listed.Address, listed.Label, listed.LabelSource)
+	}
+
+	// pid 20 wants the same label: 409, with the holder rendered exactly
+	// as the listing renders it.
+	status, body = f.claim(f.inbox(20), "mt0")
+	ae := f.assertAPIError(status, body, 409, ipeers.ErrLabelTaken)
+	if ae.Holder == nil {
+		t.Fatalf("label_taken carried no holder: %+v", ae)
+	}
+	if ae.Holder.Address != listed.Address || ae.Holder.Label != listed.Label || ae.Holder.LabelSource != listed.LabelSource {
+		t.Errorf("holder %q/%q/%q != listing %q/%q/%q",
+			ae.Holder.Address, ae.Holder.Label, ae.Holder.LabelSource,
+			listed.Address, listed.Label, listed.LabelSource)
+	}
+}
+
+// TestRelease_OwnTmuxLabelBecomesItsDefault pins Task 4 item 4 and the
+// "other" in spec §3.3 rule 3: an agent in tmux "mt0" that had claimed
+// "mt0" gets "mt0" back as its DEFAULT, because the label it is releasing
+// is its own and must not count as a competitor against its own candidate.
+func TestRelease_OwnTmuxLabelBecomesItsDefault(t *testing.T) {
+	f := newLabelFixture(t)
+	status, body := f.claim(f.inbox(10), "mt0")
+	decodeRecord(t, status, body)
+
+	status, body = f.release(f.inbox(10))
+	rec := decodeRecord(t, status, body)
+	if rec.Label != "mt0" || rec.LabelSource != "default" {
+		t.Errorf("released = %q/%q, want mt0/default (not a hash)", rec.Label, rec.LabelSource)
+	}
+	if rec.Address != "a/mt0:mt0-n10" {
+		t.Errorf("released address = %q, want a/mt0:mt0-n10", rec.Address)
+	}
+	if listed := f.listingRecord("sid-1"); rec.Address != listed.Address || rec.Label != listed.Label {
+		t.Errorf("release %q/%q != listing %q/%q", rec.Address, rec.Label, listed.Address, listed.Label)
+	}
+}
+
+// TestRelease_StoreReadFailure_WritesNothing pins Task 4 item 5: release
+// now takes a label snapshot BEFORE the write, and a failed read is
+// store_unavailable with no Release attempted at all — the response is
+// never a default the daemon could not vouch for.
+func TestRelease_StoreReadFailure_WritesNothing(t *testing.T) {
+	f := newLabelFixture(t)
+	fake := &releaseCountingLabels{}
+	f.m.labels = fake
+
+	status, body := f.release(f.inbox(20))
+	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
+	if fake.releases != 0 {
+		t.Errorf("release wrote %d times after a failed snapshot, want 0", fake.releases)
 	}
 }
