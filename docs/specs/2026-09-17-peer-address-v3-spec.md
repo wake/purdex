@@ -68,7 +68,7 @@ until one exits.
 | D2 | The canonical id is derived from `sessionId` **only**. No tmux name, no Claude Code `name`, no cwd — nothing a user or another process can change. |
 | D3 | `label` is a **self-declared display name**. It is never resolved, never routed on, and carries no uniqueness guarantee. |
 | D4 | The tmux-derived default label is **removed**. `label` is empty until a conversation sets one. |
-| D5 | Two conversations may hold the same `label`. Setting one that is already in use **warns and succeeds**; it never refuses and never renames anyone. |
+| D5 | Two conversations may hold the same `label`. Setting one that is already in use **warns and succeeds**; it never refuses and never renames anyone. The serial-number convention (`purdex-tester-2`) stays, enforced by CLAUDE.md rather than by the daemon — see §8. |
 | D6 | No extra `note` / `role` field. `label` is that field, and calling it `label` is what keeps it written as a name rather than a sentence. |
 | D7 | Address conflicts are made structurally impossible rather than adjudicated. Label conflicts are visible, harmless, and left alone. |
 
@@ -121,9 +121,13 @@ The store and the `pdx msg name` route stay; their contract loosens:
 | dead holder's row inert (releases the name) | unchanged — a dead conversation should not show a label |
 
 Grammar is unchanged (`ValidateUserLabel`), so the `<project>-<role>[-<n>]` convention in the
-project CLAUDE.md keeps working. The `-2` in `purdex-tester-2` is now a courtesy to readers rather
-than a uniqueness requirement — which is why D5 warns instead of refusing: the convention is worth
-nudging toward, not worth enforcing.
+project CLAUDE.md keeps working — and is still **asked for** (§8): a second tester should still call
+itself `purdex-tester-2`. What changed is who enforces it. The daemon warns and lets the duplicate
+stand; the convention lives in CLAUDE.md, where an agent follows it because it makes the list
+readable, not because a 409 stopped it.
+
+The warning must therefore be actionable in one step: it carries `live_labels`, which is everything
+an agent needs to pick the next free serial without a second lookup.
 
 ### 4.3 Deletions
 
@@ -307,6 +311,29 @@ the "default label = position / user label = conversation" framing) go; and the 
 workflow must stop implying the claimed name is an address — it now sets a label and reports the
 unchanged address.
 
+**The serial-number convention survives as a convention.** D5 removes the *lock*, not the habit.
+`purdex-tester-2` is still what a second tester should call itself — the difference is that the
+daemon now asks for it instead of imposing it, and nothing breaks if an agent ignores the request.
+The warning is what makes this work without a second lookup: `label_in_use` already carries
+`live_labels`, so the agent can see `purdex-tester` is taken, pick the next free serial, and re-set
+in one more call.
+
+Draft text for the CLAUDE.md section (final wording is the PR's business, these are the points it
+must make):
+
+```markdown
+- **被賦予角色時**：`pdx msg name <專案>-<角色>`，例如 `pdx msg name purdex-tester`。
+- **回應帶 `label_in_use` 時**：label 已經設好了（不會被拒絕），但請照慣例加序號重設一次 ——
+  看回應的 `live_labels` 挑下一個沒被用的序號，`pdx msg name purdex-tester-2`。
+  這是慣例不是限制：不加也能運作，但兩個同名的 agent 在 `pdx peers` 上分不出誰是誰。
+- **label 只給人和 agent 讀，不能拿來送訊。** 送訊一律用 `address`（`pdx msg whoami` 看自己的、
+  `pdx peers` 看別人的）。address 綁 sessionId，改 tmux 名、改 label 都不會變。
+```
+
+The third bullet is load-bearing: an agent that has just named itself is the most likely reader to
+assume the name is reachable. §7's requirement that `pdx msg name` print the unchanged address on
+success is the same guard, delivered at the moment of the misconception.
+
 ### 8.1 SPA dependency (confirmed with purdex-69, 2026-09-17)
 
 The SPA does not parse or assemble addresses: `address` is displayed and copied verbatim, and rows
@@ -343,7 +370,10 @@ is gone. `label_test.go`'s `ResolveDefaultLabels` table goes with §4.3.
 - **Two live rows may hold the same `label`** and both keep their own distinct `canonical` and
   `address`, and both still resolve. This is D5's regression test and the point of the whole change.
 - `PUT /api/peers/self/label` with a label another live session holds: 200, label is set, response
-  carries `label_in_use` and the other holder; the other session is unaffected.
+  carries `label_in_use`, the other holder, **and `live_labels`** — the last is what lets an agent
+  pick the next serial in one step (§8), so it is asserted, not assumed.
+- Re-setting to `purdex-tester-2` after that warning succeeds with no warning, and the first
+  holder's label and address are both untouched.
 - Suffix: a session row whose registry `tmux` name differs from the live inventory name renders the
   **live** name (the P1 regression test).
 - `ValidateWireAddress`: accepts an 8-digit canonical head; **still** accepts a 6-digit v2 head and
