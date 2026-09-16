@@ -91,66 +91,133 @@ func (d DefaultLabels) For(sessionID string) string {
 	return DefaultLabel(sessionID)
 }
 
+// sidSet is a set of conversation ids (sessionIds).
+type sidSet map[string]bool
+
+// otherThan reports whether the set holds any conversation but sid — the
+// one question rules 2 and 3 both ask, since a conversation never
+// competes with itself for its own place.
+func (s sidSet) otherThan(sid string) bool {
+	for other := range s {
+		if other != sid {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveDefaultLabels applies spec §3.3 over one population: the live,
 // non-proxy registry entries of this host. A conversation keeps the v2
 // hash — it is absent from the result — unless all of its entries sit in
-// one tmux session whose name already is a valid user label that no other
-// live conversation derives or holds as a user label. labels may cover
+// one tmux session whose name already is a valid user label, no other
+// live conversation has a process in that same tmux session, and no other
+// live conversation holds that name as a user label. labels may cover
 // sessions outside the population (dead rows); those are inert and
 // ignored.
 func ResolveDefaultLabels(entries []Entry, proxyPIDs map[int]bool, labels map[string]LabelInfo) DefaultLabels {
-	// A disqualified session is deleted from candidates rather than left
-	// with an empty value, so every entry here is a real candidate. The
-	// candidate IS the tmux session's own name (§3.1), so rule 1's
-	// "same tmux session" check is a plain comparison of that name.
-	candidates := make(map[string]string, len(entries))
-	disqualified := make(map[string]bool, len(entries))
-	population := make(map[string]bool, len(entries))
+	population := livePopulation(entries, proxyPIDs)
+	candidateBySID := candidatesOf(population)
+	occupantsByLabel := occupantsOf(population)
+	userLabelHolders := userLabelHoldersOf(population, labels)
+
+	resolved := make(DefaultLabels, len(candidateBySID))
+	for sid, candidate := range candidateBySID {
+		// Rule 2 (the place is shared) and rule 3 (someone else owns the
+		// name) are the same question asked of two different sets.
+		if occupantsByLabel[candidate].otherThan(sid) {
+			continue
+		}
+		if userLabelHolders[candidate].otherThan(sid) {
+			continue
+		}
+		resolved[sid] = candidate
+	}
+	return resolved
+}
+
+// livePopulation is spec §3.2's population: every registry entry that is
+// not one of this daemon's proxy helpers. Filtering once, up front, is
+// what lets every rule below read "population" and mean the same thing.
+func livePopulation(entries []Entry, proxyPIDs map[int]bool) []Entry {
+	out := make([]Entry, 0, len(entries))
 	for _, e := range entries {
 		if e.IsProxy || proxyPIDs[e.PID] {
 			continue
 		}
-		population[e.SessionID] = true
+		out = append(out, e)
+	}
+	return out
+}
+
+// candidatesOf is spec §3.3's candidate[sid]: per CONVERSATION, the one
+// qualifying tmux session name all of its live entries report. A
+// conversation with live processes in two different tmux sessions has no
+// single place, so it gets no place address and is absent here. The
+// candidate is the session's own name byte for byte (§3.1), so rule 1's
+// "same tmux session" test is a plain string comparison.
+func candidatesOf(population []Entry) map[string]string {
+	candidate := make(map[string]string, len(population))
+	// Disqualification is sticky and separate from the map, so a later
+	// entry can never revive a conversation an earlier one ruled out.
+	disqualified := make(map[string]bool, len(population))
+	for _, e := range population {
 		if disqualified[e.SessionID] {
 			continue
 		}
 		name := e.TmuxSessionName()
-		prev, seen := candidates[e.SessionID]
-		if !qualifiesAsDefaultLabel(name) || (seen && prev != name) {
+		seenName, seen := candidate[e.SessionID]
+		if !qualifiesAsDefaultLabel(name) || (seen && seenName != name) {
 			disqualified[e.SessionID] = true
-			delete(candidates, e.SessionID)
+			delete(candidate, e.SessionID)
 			continue
 		}
-		candidates[e.SessionID] = name
+		candidate[e.SessionID] = name
 	}
+	return candidate
+}
 
-	// A candidate names a place, so two conversations claiming it — by
-	// deriving it or by holding it as a user label — means the place
-	// cannot address either of them (rules 2 and 3).
-	claimants := make(map[string][]string, len(candidates))
-	for sid, label := range candidates {
-		claimants[label] = append(claimants[label], sid)
-	}
-	for sid := range population {
-		if label := labels[sid].Label; label != "" {
-			claimants[label] = append(claimants[label], sid)
+// occupantsOf is spec §3.3's occupants[name]: per ENTRY, every
+// conversation with at least one live process in the qualifying tmux
+// session name.
+//
+// Occupancy is about the place; candidacy is about the conversation. A
+// conversation disqualified as a candidate — because it spans two tmux
+// sessions — is still an occupant of both of them, and counting only
+// surviving candidates as competitors let it drop out of the race for a
+// place it was still sitting in, handing that place to the other agent
+// sharing it (spec §11.3).
+func occupantsOf(population []Entry) map[string]sidSet {
+	occupants := make(map[string]sidSet, len(population))
+	for _, e := range population {
+		name := e.TmuxSessionName()
+		if !qualifiesAsDefaultLabel(name) {
+			// A name no candidate can ever equal competes with nothing.
+			continue
 		}
+		if occupants[name] == nil {
+			occupants[name] = sidSet{}
+		}
+		occupants[name][e.SessionID] = true
 	}
+	return occupants
+}
 
-	resolved := make(DefaultLabels, len(candidates))
-	for sid, label := range candidates {
-		contested := false
-		for _, other := range claimants[label] {
-			if other != sid {
-				contested = true
-				break
-			}
+// userLabelHoldersOf indexes the user labels held by conversations IN the
+// population, by label (spec §3.3 rule 3). Label rows whose session is not
+// live are inert and never appear, so a dead holder blocks nothing.
+func userLabelHoldersOf(population []Entry, labels map[string]LabelInfo) map[string]sidSet {
+	holders := make(map[string]sidSet, len(population))
+	for _, e := range population {
+		label := labels[e.SessionID].Label
+		if label == "" {
+			continue
 		}
-		if !contested {
-			resolved[sid] = label
+		if holders[label] == nil {
+			holders[label] = sidSet{}
 		}
+		holders[label][e.SessionID] = true
 	}
-	return resolved
+	return holders
 }
 
 // Sanitize is the suffix component sanitizer: keeps [A-Za-z0-9_.-],

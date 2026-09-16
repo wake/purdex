@@ -104,6 +104,26 @@ func TestResolveDefaultLabels(t *testing.T) {
 			want:    DefaultLabels{},
 		},
 		{
+			// Round-2 file-health finding (spec §11.3, §3.3 rule 2): B's
+			// processes span two tmux sessions, so B has no candidate of
+			// its own — but B still OCCUPIES purdex1, and a place holding
+			// two live conversations names neither of them. Counting only
+			// surviving candidates as competitors handed purdex1 to A.
+			name:    "a conversation with no candidate still occupies its place",
+			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "B", "purdex1"), liveEntry(3, "B", "bb2")},
+			want:    DefaultLabels{},
+		},
+		{
+			// Occupancy is per entry, so a candidate-less occupant blocks
+			// every place it has a process in, not just the first.
+			name: "a candidate-less occupant blocks every place it is in",
+			entries: []Entry{
+				liveEntry(1, "A", "purdex1"), liveEntry(2, "B", "purdex1"),
+				liveEntry(3, "B", "bb2"), liveEntry(4, "C", "bb2"),
+			},
+			want: DefaultLabels{},
+		},
+		{
 			name:    "a user-labelled conversation still competes for the place",
 			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "B", "purdex1")},
 			labels:  map[string]LabelInfo{"B": {Label: "foo", Rev: 1}},
