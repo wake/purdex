@@ -932,11 +932,41 @@ describe('the PATH gate (spec §4.3)', () => {
     expect(st.cli).toMatchObject({ resolved: '/repo/bin/pdx', isManagedBinary: false })
   })
 
-  it('a binary too old to have `path` is not refused — a gate the user cannot satisfy is worse', async () => {
-    f.onExec = (_file, args) => (args[0] === 'path'
+  // Round 2's attack and defence reviewers independently found the same hole
+  // here: this used to assert that an unreadable answer always started. It
+  // does not any more — "we could not check" is not "it is fine". The split
+  // is whether a `pdx` exists on the launch PATH at all.
+  describe('when the binary cannot answer', () => {
+    const tooOld = (_file: string, args: string[]) => (args[0] === 'path'
       ? { code: 2, stdout: '', stderr: 'pdx: unknown command "path"', timedOut: false }
       : undefined)
-    await expect(createLocalDaemon(f.deps).start()).resolves.toMatchObject({ hash: 'aaa' })
+
+    it('still starts when some pdx is on PATH — an old binary is not a broken machine', async () => {
+      f.onExec = tooOld
+      f.files.set(`${HOME}/.local/bin/pdx`, 'x')
+      f.shellPath = `${HOME}/.local/bin:/usr/bin`
+      await expect(createLocalDaemon(f.deps).start()).resolves.toMatchObject({ hash: 'aaa' })
+    })
+
+    it('refuses when no pdx is on PATH at all, and says why it could not check', async () => {
+      f.onExec = tooOld
+      f.shellPath = '/usr/bin:/bin'
+      await expect(createLocalDaemon(f.deps).start()).rejects.toThrow(/too old to check PATH/)
+    })
+
+    it('refuses the same way when the binary will not run', async () => {
+      f.onExec = (_file, args) => (args[0] === 'path'
+        ? { code: null, stdout: '', stderr: 'spawn EACCES', timedOut: false }
+        : undefined)
+      f.shellPath = '/usr/bin:/bin'
+      await expect(createLocalDaemon(f.deps).start()).rejects.toThrow(/could not be asked/)
+    })
+
+    it('ensureRunning reports path-unresolved rather than a generic failure', async () => {
+      f.onExec = tooOld
+      f.shellPath = '/usr/bin:/bin'
+      expect(await createLocalDaemon(f.deps).ensureRunning()).toBe('path-unresolved')
+    })
   })
 })
 

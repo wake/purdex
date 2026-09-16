@@ -48,6 +48,20 @@ func runPathT(t *testing.T, env pathEnv, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
+// assertLockFree proves the lock was released, by taking it. With flock the
+// lockfile's existence means nothing; only the kernel lock does.
+func assertLockFree(t *testing.T, dir string) {
+	t.Helper()
+	l, err := acquirePathLock(dir, lockPolicy{retryEvery: 5 * time.Millisecond, timeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Errorf("lock was not released: %v", err)
+		return
+	}
+	if err := l.release(); err != nil {
+		t.Errorf("release: %v", err)
+	}
+}
+
 // --- Task 1: the report ---------------------------------------------------
 
 func TestPathReport_ResolvesToThisBinary(t *testing.T) {
@@ -440,18 +454,56 @@ func TestMainUsageListsPath(t *testing.T) {
 	}
 }
 
-// TestPathIsOffline asserts, at the source level, that cmd/pdx/path.go has no
-// import-level dependency on the config loader, the store, or HTTP. A grep is
-// weak evidence in general; here it is checking for the *absence* of a
-// dependency in one small file, which is exactly what it can prove (spec §7.0).
+// TestPathIsOffline asserts, at the source level, that **every** path*.go file
+// is free of an import-level dependency on the config loader, the store, or
+// HTTP (spec §7.0).
+//
+// It globs rather than naming one file on purpose: round 2's file-health
+// review pointed out that a guard reading only path.go becomes false
+// confidence the moment the file is split — a new path_shell.go could import
+// the config loader while the test named "IsOffline" stayed green. A grep is
+// weak evidence in general; for the *absence* of a dependency across a known
+// set of files it is exactly the evidence it claims to be, and
+// TestPathSubcommandsRunOffline below exercises the behaviour as well.
 func TestPathIsOffline(t *testing.T) {
-	src, err := os.ReadFile("path.go")
+	files, err := filepath.Glob("path*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, banned := range []string{"config.Load", "net/http", "http.", "store.", "internal/store", "internal/config"} {
-		if strings.Contains(string(src), banned) {
-			t.Errorf("path.go must not reference %q — `pdx path` is an offline repair command (spec §3)", banned)
+	if len(files) == 0 {
+		t.Fatal("no path*.go files found — the guard would pass vacuously")
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, banned := range []string{"config.Load", "net/http", "http.", "store.", "internal/store", "internal/config"} {
+			if strings.Contains(string(src), banned) {
+				t.Errorf("%s must not reference %q — `pdx path` is an offline repair command (spec §3)", f, banned)
+			}
+		}
+	}
+}
+
+// All three subcommands must actually run with no config file, no daemon and
+// no network — the source guard above proves the imports are absent, this
+// proves the code paths do not need them.
+func TestPathSubcommandsRunOffline(t *testing.T) {
+	home := t.TempDir()
+	self := writeExec(t, filepath.Join(home, ".config", "pdx", "bin", "pdx"))
+	env := pathEnv{self: self, home: home, path: filepath.Join(home, "empty"), shell: "/bin/zsh", goos: "darwin"}
+
+	for _, args := range [][]string{{"--json"}, {"link"}, {"add-to-shell", "--dry-run"}} {
+		var out, errb bytes.Buffer
+		// Nothing here creates a config, starts a daemon, or opens a socket;
+		// a subcommand that needed one would fail or hang rather than return.
+		_ = runPathCmd(env, args, &out, &errb)
+		if out.Len() == 0 && errb.Len() == 0 {
+			t.Errorf("pdx path %v produced no output at all", args)
 		}
 	}
 }
@@ -475,9 +527,11 @@ func TestPathLock_AcquireReleaseAndPath(t *testing.T) {
 	if err := lock.release(); err != nil {
 		t.Errorf("release: %v", err)
 	}
-	if _, err := os.Stat(want); !os.IsNotExist(err) {
-		t.Errorf("lockfile survived release: %v", err)
-	}
+	// The file deliberately outlives the lock: removing it on release is
+	// what let the old implementation delete a lock another process had
+	// since taken. What must be true after release is that the lock is
+	// available, which is what this asserts.
+	assertLockFree(t, dir)
 }
 
 func TestPathLock_DefaultPolicy(t *testing.T) {
@@ -488,19 +542,18 @@ func TestPathLock_DefaultPolicy(t *testing.T) {
 	if p.timeout != 5*time.Second {
 		t.Errorf("timeout = %v, want 5s", p.timeout)
 	}
-	if p.staleAfter != 30*time.Second {
-		t.Errorf("staleAfter = %v, want 30s", p.staleAfter)
-	}
 }
 
 func TestPathLock_HeldTimesOutNamingTheLock(t *testing.T) {
 	dir := t.TempDir()
 	lockPath := filepath.Join(dir, ".pdx-path.lock")
-	if err := os.WriteFile(lockPath, []byte("held\n"), 0o644); err != nil {
+	held, err := acquirePathLock(dir, lockPolicy{})
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer held.release()
 
-	_, err := acquirePathLock(dir, lockPolicy{retryEvery: 10 * time.Millisecond, timeout: 120 * time.Millisecond, staleAfter: time.Hour})
+	_, err = acquirePathLock(dir, lockPolicy{retryEvery: 10 * time.Millisecond, timeout: 120 * time.Millisecond})
 	if err == nil {
 		t.Fatal("acquire succeeded while the lock was held")
 	}
@@ -512,10 +565,16 @@ func TestPathLock_HeldTimesOutNamingTheLock(t *testing.T) {
 	}
 }
 
-func TestPathLock_StaleIsBroken(t *testing.T) {
+// A lockfile left by a process that died holding the lock must not block
+// anyone. The old implementation guessed at this from the file's mtime, and
+// round 2's attack review found both ways that guess breaks: a slow-but-alive
+// holder gets its lock stolen, and its later release then unlinks the lock the
+// thief now owns. flock removes the guess — the kernel drops the lock when the
+// descriptor closes, so a leftover file is simply an unlocked file.
+func TestPathLock_FileLeftByADeadHolderDoesNotBlock(t *testing.T) {
 	dir := t.TempDir()
 	lockPath := filepath.Join(dir, ".pdx-path.lock")
-	if err := os.WriteFile(lockPath, []byte("stale\n"), 0o644); err != nil {
+	if err := os.WriteFile(lockPath, []byte("99999\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-40 * time.Second)
@@ -523,13 +582,40 @@ func TestPathLock_StaleIsBroken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lock, err := acquirePathLock(dir, lockPolicy{retryEvery: 10 * time.Millisecond, timeout: 200 * time.Millisecond, staleAfter: 30 * time.Second})
+	lock, err := acquirePathLock(dir, lockPolicy{retryEvery: 10 * time.Millisecond, timeout: 200 * time.Millisecond})
 	if err != nil {
-		t.Fatalf("a stale lock must be broken, not deadlocked on: %v", err)
+		t.Fatalf("a lockfile with no live holder must not block: %v", err)
 	}
 	if err := lock.release(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// The two failure modes of the mtime-staleness design, asserted to be gone:
+// a holder that is merely slow keeps its lock however long it takes, and when
+// it finally releases, the lock is free for the next caller — not deleted out
+// from under one.
+func TestPathLock_ASlowHolderIsNeverStolenFrom(t *testing.T) {
+	dir := t.TempDir()
+	held, err := acquirePathLock(dir, lockPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Age the file well past any staleness window the old design would have
+	// used. The holder is still very much alive.
+	lockPath := filepath.Join(dir, ".pdx-path.lock")
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := acquirePathLock(dir, lockPolicy{retryEvery: 5 * time.Millisecond, timeout: 60 * time.Millisecond}); err == nil {
+		t.Fatal("an old-looking lock that is still held must not be stolen")
+	}
+	if err := held.release(); err != nil {
+		t.Fatal(err)
+	}
+	assertLockFree(t, dir)
 }
 
 // --- Task 2: pdx path link ------------------------------------------------
@@ -685,10 +771,11 @@ func TestPathLink_TableOfStates(t *testing.T) {
 					t.Errorf("link -> %q, want %q", got, env.self)
 				}
 			}
-			// The lockfile is never left behind.
-			if _, err := os.Stat(filepath.Join(env.localBinDir(), ".pdx-path.lock")); err == nil {
-				t.Error("lockfile left behind")
-			}
+			// The lock is always released. The lockfile itself stays on
+			// disk by design — the lock is an flock on a descriptor, not
+			// the file's existence — so the property worth asserting is
+			// that it can be taken again, not that the file is gone.
+			assertLockFree(t, env.localBinDir())
 			// A refusal must not damage what was there.
 			if tc.wantExit != 0 {
 				if _, err := os.Lstat(link); err != nil {
@@ -750,19 +837,23 @@ func TestPathLink_ConcurrentRunsSerialise(t *testing.T) {
 	if got != env.self {
 		t.Errorf("link -> %q, want %q", got, env.self)
 	}
-	if _, err := os.Stat(filepath.Join(env.localBinDir(), ".pdx-path.lock")); err == nil {
-		t.Error("lockfile left behind")
-	}
+	assertLockFree(t, env.localBinDir())
 }
 
 func TestPathLink_ReportsLockTimeout(t *testing.T) {
 	env, _ := linkFixture(t)
 	mkdirAllT(t, env.localBinDir())
 	lockPath := filepath.Join(env.localBinDir(), ".pdx-path.lock")
-	if err := os.WriteFile(lockPath, []byte("held\n"), 0o644); err != nil {
+	// A file sitting at that path is no longer a held lock: holding the lock
+	// means holding the flock, so the test has to hold a real one. That this
+	// test had to change is the point — the old one would have passed against
+	// an implementation that never locked anything at all.
+	held, err := acquirePathLock(env.localBinDir(), lockPolicy{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	env.lock = lockPolicy{retryEvery: 10 * time.Millisecond, timeout: 100 * time.Millisecond, staleAfter: time.Hour}
+	defer held.release()
+	env.lock = lockPolicy{retryEvery: 10 * time.Millisecond, timeout: 100 * time.Millisecond}
 
 	code, _, errOut := runPathT(t, env, "link")
 	if code != 1 {
@@ -1128,7 +1219,7 @@ func TestAddToShell_StaleReadDoesNotDropAConcurrentEdit(t *testing.T) {
 // add-to-shell cannot proceed while link holds it.
 func TestPathCommandsShareOneLock(t *testing.T) {
 	env := shellFixture(t, "/bin/zsh", "darwin")
-	env.lock = lockPolicy{retryEvery: 5 * time.Millisecond, timeout: 60 * time.Millisecond, staleAfter: time.Hour}
+	env.lock = lockPolicy{retryEvery: 5 * time.Millisecond, timeout: 60 * time.Millisecond}
 
 	var innerCode int
 	var innerErr bytes.Buffer

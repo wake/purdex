@@ -234,10 +234,59 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     return pathRefusalMessage(cli.report, deps.home)
   }
 
+  /**
+   * When the binary cannot answer (too old to have `path`, unreadable output,
+   * would not run), the gate is not excused from checking — it just has to
+   * check coarsely, itself.
+   *
+   * Round 2's attack and defence reviewers independently landed on the same
+   * hole: treating "no answer" as "fine" let a machine with an old binary AND
+   * no `pdx` anywhere on PATH start a daemon, which is the exact state this
+   * feature exists to end. But failing closed is wrong too — a machine whose
+   * `pdx` works perfectly would be blocked for the sole crime of running a
+   * binary that predates this PR, and the app would be unusable until an
+   * update it now refuses to launch far enough to offer.
+   *
+   * So: look for any file named `pdx` on the launch PATH. This is the weak
+   * check — it cannot tell an executable from a stray file, nor a dangling
+   * symlink from a real one, which is precisely why §4.1 hands the real
+   * question to Go. As a fallback it is still worth having: it catches
+   * "nothing named pdx anywhere", the case that is actually broken, and where
+   * it is wrong it errs toward starting, which is the behaviour that shipped
+   * before this PR.
+   */
+  async function coarsePdxOnPath(env: NodeJS.ProcessEnv): Promise<boolean> {
+    for (const dir of (env.PATH ?? '').split(':')) {
+      if (dir !== '' && (await deps.fs.exists(join(dir, 'pdx')))) return true
+    }
+    return false
+  }
+
+  async function unverifiedRefusal(cli: CliState, env: NodeJS.ProcessEnv): Promise<string | null> {
+    // No binary is not a PATH problem: there is nothing to gate, and every
+    // caller already has its own not-installed branch that says so better
+    // than this message could.
+    if (cli.kind === 'not-installed') return null
+    if (await coarsePdxOnPath(env)) return null
+    const why = cli.kind === 'unparseable'
+      ? 'the installed daemon binary is too old to check PATH (it has no `path` command)'
+      : `the installed daemon binary could not be asked: ${cli.error}`
+    return [
+      'Refusing to start: no `pdx` was found on PATH, so agents following',
+      'CLAUDE.md will get "command not found".',
+      '',
+      `This could not be checked properly because ${why}.`,
+      '',
+      'Update the daemon from Settings → Development, then try again.',
+    ].join('\n')
+  }
+
   /** Resolve `pdx` against a freshly probed launch PATH (spec §4.2). */
   async function gateUnlocked(): Promise<{ launch: LaunchEnv; refusal: string | null }> {
     const launch = await refreshLaunchEnv()
-    return { launch, refusal: pathRefusal(await readCli(launch.env)) }
+    const cli = await readCli(launch.env)
+    if (cli.kind === 'report') return { launch, refusal: pathRefusal(cli) }
+    return { launch, refusal: await unverifiedRefusal(cli, launch.env) }
   }
 
   // ---- primitives --------------------------------------------------------
