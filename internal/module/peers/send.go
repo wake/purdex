@@ -141,9 +141,16 @@ func findOrigin(records []ipeers.PeerRecord, inbox string) (rec ipeers.PeerRecor
 // wireFromRecord builds the sender's wire identity from its origin row:
 // the v1 fields (the tmux session name when the session is inside tmux,
 // "cc:<peer_name>" otherwise — spec §4.4 from-name, still sent for a v1
-// receiver) plus the Peer Address v2 address, "<label>:<suffix>" of the
-// row at the label row's revision (spec §3.5), which a v2 receiver names
-// the sender's helper after.
+// receiver) plus the address, "<canonical>:<suffix>", which a v2 receiver
+// names the sender's helper after.
+//
+// AddressRev is 0, always, and is NOT rec.LabelRev (spec §4.4). LabelRev
+// still counts how many times this conversation has set its label, but a
+// v3 address is derived from the sessionId and cannot move: putting the
+// label's revision in the ADDRESS's revision claims a change that never
+// happened. The field stays on the wire because v2 senders still populate
+// it, and deliver.go's stale-rev guard still protects against a v2 peer's
+// address changing — for a v3 origin that path is simply never armed.
 func wireFromRecord(hostID string, rec ipeers.PeerRecord, declaredMode string) ipeers.WireFrom {
 	sessionName := rec.SessionName
 	if sessionName == "" {
@@ -158,7 +165,7 @@ func wireFromRecord(hostID string, rec ipeers.PeerRecord, declaredMode string) i
 		SessionName:    sessionName,
 		DeclaredMode:   declaredMode,
 		Address:        rec.WireAddress(),
-		AddressRev:     rec.LabelRev,
+		AddressRev:     0,
 	}
 }
 
@@ -310,9 +317,15 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		var amb *ipeers.AmbiguousError
 		switch {
 		case errors.As(err, &amb):
-			candidates := make([]string, 0, len(amb.Candidates))
+			candidates := make([]ipeers.AmbiguousCandidate, 0, len(amb.Candidates))
 			for _, c := range amb.Candidates {
-				candidates = append(candidates, c.Address)
+				cand := ipeers.AmbiguousCandidate{Address: c.Address, Cwd: c.Cwd}
+				// Tier 2 (a bare tmux session name) can match a row with
+				// no agent at all, so this is not the tier-1 guarantee.
+				if c.Agent != nil {
+					cand.AgentName, cand.PID = c.Agent.PeerName, c.Agent.PID
+				}
+				candidates = append(candidates, cand)
 			}
 			m.logf("peers: send refused (%s): %q on %q has %d candidates", ipeers.ErrAmbiguous, session, entry.Alias, len(candidates))
 			writeWireError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrAmbiguous, Detail: err.Error(), Candidates: candidates})

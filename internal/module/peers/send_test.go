@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -696,6 +697,11 @@ func TestSend_Ambiguous(t *testing.T) {
 	b.Agent.PID = 778
 	a.Canonical, b.Canonical = canonical, canonical
 	a.Label, b.Label = "purdex-tester", "purdex-tester-2"
+	// What the operator needs in order to tell the two apart, and what the
+	// refusal must therefore carry (spec §4.1/§6.4): agent name, pid, cwd.
+	// The address is exactly the thing that cannot do it — they share it.
+	a.Agent.PeerName, b.Agent.PeerName = "twin-1", "twin-2"
+	a.Cwd, b.Cwd = "/w/one", "/w/two"
 	// The remote claims another alias in its addresses: candidates must
 	// come back normalised to the entry's alias.
 	a.Address, b.Address = "zzz/"+canonical, "zzz/"+canonical
@@ -704,12 +710,48 @@ func TestSend_Ambiguous(t *testing.T) {
 	req.To = remoteAlias + "/" + canonical
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrAmbiguous)
-	want := []string{remoteAlias + "/" + canonical, remoteAlias + "/" + canonical}
-	if len(ae.Candidates) != 2 || ae.Candidates[0] != want[0] || ae.Candidates[1] != want[1] {
-		t.Errorf("candidates = %v, want %v", ae.Candidates, want)
+	want := []ipeers.AmbiguousCandidate{
+		{Address: remoteAlias + "/" + canonical, AgentName: "twin-1", PID: remotePID, Cwd: "/w/one"},
+		{Address: remoteAlias + "/" + canonical, AgentName: "twin-2", PID: 778, Cwd: "/w/two"},
+	}
+	if !reflect.DeepEqual(ae.Candidates, want) {
+		t.Errorf("candidates = %+v, want %+v", ae.Candidates, want)
 	}
 	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
 		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+}
+
+// TestSend_AddressRevIsZeroAfterRelabel pins spec §4.4: LabelRev keeps
+// counting label changes, but a v3 address cannot change, so the revision
+// a v3 sender reports for its ADDRESS is 0 — permanently, however many
+// times the conversation has renamed itself. Sending LabelRev there (the
+// old wireFromRecord) announced an address change that never happened,
+// and the receiver's stale-rev/helper-rename path believed it.
+func TestSend_AddressRevIsZeroAfterRelabel(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+
+	// Claim once, then claim a different label: two revisions of the label
+	// row, neither of them a revision of the address.
+	if res := s.m.claim(s.targetSock, "purdex-tester"); res.err != nil {
+		t.Fatalf("first claim: %+v", res.err)
+	}
+	res := s.m.claim(s.targetSock, "purdex-tester-2")
+	if res.err != nil {
+		t.Fatalf("second claim: %+v", res.err)
+	}
+	if res.rec.LabelRev != 2 || res.rec.Label != "purdex-tester-2" {
+		t.Fatalf("after re-claim: label %q rev %d, want purdex-tester-2 rev 2", res.rec.Label, res.rec.LabelRev)
+	}
+
+	s.sendOK(s.sendReq())
+
+	from := s.onlyPost().req.From
+	if from.Address != ipeers.CanonicalID(targetSessionID)+":"+targetPeerName {
+		t.Errorf("from.address = %q, want the canonical head (a label never addresses)", from.Address)
+	}
+	if from.AddressRev != 0 {
+		t.Errorf("from.address_rev = %d, want 0: the label moved twice, the address never did", from.AddressRev)
 	}
 }
 

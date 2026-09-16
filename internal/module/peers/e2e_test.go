@@ -1053,8 +1053,20 @@ func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 	// delivered. ----
 	st, raw := a.send(ipeers.SendRequest{To: "b/" + head, Text: "x", OriginInbox: originSock})
 	ae := a.assertAPIError(st, raw, http.StatusConflict, ipeers.ErrAmbiguous, "two processes, one address")
+	// Both candidates, each named well enough to be told apart: the two
+	// share the address, so agent name, pid and cwd are the only things
+	// that say WHICH live process is which (spec §6.4).
 	if len(ae.Candidates) != 2 {
-		t.Errorf("step 2: candidates = %v, want 2", ae.Candidates)
+		t.Fatalf("step 2: candidates = %+v, want 2", ae.Candidates)
+	}
+	for i, want := range []struct {
+		name string
+		pid  int
+	}{{"twin-1", twin1PID}, {"twin-2", twin2PID}} {
+		got := ae.Candidates[i]
+		if got.Address != "b/"+head+":"+want.name || got.AgentName != want.name || got.PID != want.pid || got.Cwd != "/w" {
+			t.Errorf("step 2: candidate %d = %+v, want address b/%s:%s, agent %s, pid %d, cwd /w", i, got, head, want.name, want.name, want.pid)
+		}
 	}
 	twin1.none("step 2")
 	twin2.none("step 2")
@@ -1124,10 +1136,13 @@ func helperRegistryName(t *testing.T, regDir string, pid int) string {
 // a rename — the fact that claiming a label does NOT rename anything,
 // because it does not move the claimant's address (D3). The rename
 // machinery itself (same socket, same pid, ApplyAddress) is still
-// exercised: every claim bumps label_rev, so a same-name rename is still
-// attempted and must still be idempotent. Step 4's stale-revision guard
-// (spec §3.5 Freshness) is proven with a fresh msg_id so dedup cannot be
-// the reason an old address is refused.
+// exercised, but from the only sender that can still move an address: a
+// v2 peer. A v3 origin reports address_rev 0 for ever (spec §4.4), so no
+// two of its requests can be stale or fresh relative to each other and
+// the rename path is inert for it. Step 4 therefore drives the
+// stale-revision guard (spec §3.5 Freshness) with hand-built v2 requests,
+// each with a fresh msg_id so dedup cannot be the reason an old address
+// is refused.
 func TestE2E_HelperRename(t *testing.T) {
 	sockDir, regDir := proxyhelpertest.TempDirs(t)
 	root := filepath.Dir(regDir)
@@ -1253,48 +1268,70 @@ func TestE2E_HelperRename(t *testing.T) {
 		t.Errorf("step 3: A's helper registry file name = %q, want %q", got, wantAddr2)
 	}
 
-	// ---- 4. Stale-revision guard (spec §3.5 Freshness), dedup ruled out:
-	// POST straight to A's /deliver as B, naming the OLD address
-	// ("purdex-tester") at the OLD revision but a FRESH msg_id ⇒ 200
-	// delivered (the message itself is unaffected), yet the helper's name
-	// and registry file still say "purdex-tester-2" — a stale rename never
-	// applies even though nothing here is a duplicate. ----
-	stale := ipeers.DeliverRequest{
-		MsgID: uuid.NewString(),
-		From: ipeers.WireFrom{
-			HostID: e2eHostB, AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart,
-			PeerName: e2eTargetName, SessionName: "foo", DeclaredMode: ipeers.ModePrompting,
-			Address: "purdex-tester:foo-" + e2eTargetName, AddressRev: oldRev,
-		},
-		To:   ipeers.WireTo{AgentSessionID: e2eOriginSID, PID: e2eOriginPID, ProcStart: e2eCCProcStart},
-		Text: "stale replay",
+	// ---- 4. Stale-revision guard (spec §3.5 Freshness), dedup ruled out.
+	// Under v3 the guard has no v3 sender left to guard against: every v3
+	// origin reports address_rev 0 permanently (spec §4.4), so the replies
+	// in steps 2–3 all named A's helper at revision 0 and none of them
+	// could be stale. What the field still protects against is a V2 peer,
+	// whose address genuinely can move — so that is what this drives,
+	// straight at A's /deliver as B, with a fresh msg_id each time so
+	// dedup can never be the reason something is refused. ----
+	v2Deliver := func(step, addr string, rev int64) {
+		t.Helper()
+		req := ipeers.DeliverRequest{
+			MsgID: uuid.NewString(),
+			From: ipeers.WireFrom{
+				HostID: e2eHostB, AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart,
+				PeerName: e2eTargetName, SessionName: "foo", DeclaredMode: ipeers.ModePrompting,
+				Address: addr, AddressRev: rev,
+			},
+			To:   ipeers.WireTo{AgentSessionID: e2eOriginSID, PID: e2eOriginPID, ProcStart: e2eCCProcStart},
+			Text: "v2 " + step,
+		}
+		if err := req.Validate(); err != nil {
+			t.Fatalf("%s: request does not validate: %v", step, err)
+		}
+		status, raw := a.do(http.MethodPost, "/api/peers/deliver", e2eTokenBtoA, req)
+		if status != http.StatusOK {
+			t.Fatalf("%s: A /deliver = %d; body=%s", step, status, raw)
+		}
+		var delResp ipeers.DeliverResponse
+		if err := json.Unmarshal(raw, &delResp); err != nil {
+			t.Fatalf("%s: decode /deliver response: %v; body=%s", step, err, raw)
+		}
+		if delResp.Result != ipeers.ResultDelivered {
+			t.Errorf("%s: result = %q, want %q", step, delResp.Result, ipeers.ResultDelivered)
+		}
+		origin.recv(step)
+		origin.none(step)
 	}
-	if err := stale.Validate(); err != nil {
-		t.Fatalf("step 4: stale request does not validate: %v", err)
+	assertAHelperName := func(step, want string) {
+		t.Helper()
+		h, ok := a.m.helpers.FindBySock(aHelperSock)
+		if !ok || h.pid != aHelperPID {
+			t.Fatalf("%s: A's helper for the replier changed instance: %+v ok=%v, want pid %d", step, h, ok, aHelperPID)
+		}
+		if got := a.m.helpers.Name(h); got != want {
+			t.Errorf("%s: A's helper name = %q, want %q", step, got, want)
+		}
+		if got := helperRegistryName(t, regDir, aHelperPID); got != want {
+			t.Errorf("%s: A's helper registry file name = %q, want %q", step, got, want)
+		}
 	}
-	status, raw := a.do(http.MethodPost, "/api/peers/deliver", e2eTokenBtoA, stale)
-	if status != http.StatusOK {
-		t.Fatalf("step 4: A /deliver = %d; body=%s", status, raw)
-	}
-	var delResp ipeers.DeliverResponse
-	if err := json.Unmarshal(raw, &delResp); err != nil {
-		t.Fatalf("step 4: decode /deliver response: %v; body=%s", err, raw)
-	}
-	if delResp.Result != ipeers.ResultDelivered {
-		t.Errorf("step 4: result = %q, want %q", delResp.Result, ipeers.ResultDelivered)
-	}
-	origin.recv("step 4")
-	origin.none("step 4")
-	aHelper3, ok := a.m.helpers.FindBySock(aHelperSock)
-	if !ok || aHelper3.pid != aHelperPID {
-		t.Fatalf("step 4: A's helper for the replier changed instance: %+v ok=%v, want pid %d", aHelper3, ok, aHelperPID)
-	}
-	if got := a.m.helpers.Name(aHelper3); got != wantAddr2 {
-		t.Errorf("step 4: A's helper name = %q after the stale replay, want unchanged %q", got, wantAddr2)
-	}
-	if got := helperRegistryName(t, regDir, aHelperPID); got != wantAddr2 {
-		t.Errorf("step 4: A's helper registry file name = %q after the stale replay, want unchanged %q", got, wantAddr2)
-	}
+
+	// 4a. A v2 peer announcing a v2-style address at a revision ABOVE the
+	// 0 every v3 request carries: the rename applies. This is why neither
+	// the field nor deliver.go's rename path is deleted.
+	v2Addr := "purdex-tester-2:foo-" + e2eTargetName
+	v2Deliver("step 4a", v2Addr, oldRev+1)
+	wantV2Addr := "b/" + v2Addr
+	assertAHelperName("step 4a", wantV2Addr)
+
+	// 4b. The stale replay: the OLD address at the OLD revision, fresh
+	// msg_id ⇒ 200 delivered (the message itself is unaffected), yet the
+	// helper's name and registry file are untouched.
+	v2Deliver("step 4b", "purdex-tester:foo-"+e2eTargetName, oldRev)
+	assertAHelperName("step 4b", wantV2Addr)
 
 	// ---- 5. Reverse-direction limit (spec §3.5 Freshness): A's origin
 	// claims a new label; B's helper for A keeps ITS name — through a mere

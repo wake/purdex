@@ -319,14 +319,38 @@ func TestRunMsgSend_ErrorRendering(t *testing.T) {
 			wantStderr: "pdx msg: air: dial tcp: connection refused\n",
 		},
 		{
+			// Spec §4.1/§7: an ambiguity refusal is SAFE, and the operator
+			// has to be able to SEE that. One line per candidate carrying
+			// agent name, pid and cwd is what turns "my address stopped
+			// working" into "two of my conversations share this address";
+			// without it the reader goes hunting a bug that is not there.
 			name:   "ambiguous",
+			status: http.StatusConflict,
+			body: ipeers.APIError{
+				Error:  ipeers.ErrAmbiguous,
+				Detail: `peer address "wake" is ambiguous (2 candidates)`,
+				Candidates: []ipeers.AmbiguousCandidate{
+					{Address: "air/_1c4m7dkz:mt0-twin-1", AgentName: "twin-1", PID: 41001, Cwd: "/w/one"},
+					{Address: "air/_1c4m7dkz:mt0-twin-2", AgentName: "twin-2", PID: 41002, Cwd: "/w/two"},
+				},
+			},
+			wantStderr: "pdx msg: ambiguous: wake\n" +
+				"  air/_1c4m7dkz:mt0-twin-1  agent twin-1  pid 41001  cwd /w/one\n" +
+				"  air/_1c4m7dkz:mt0-twin-2  agent twin-2  pid 41002  cwd /w/two\n",
+		},
+		{
+			// A candidate the daemon knows only by address still gets a
+			// line: the extra fields are advisory, the line is not.
+			name:   "ambiguous with a bare candidate",
 			status: http.StatusConflict,
 			body: ipeers.APIError{
 				Error:      ipeers.ErrAmbiguous,
 				Detail:     `peer address "wake" is ambiguous (2 candidates)`,
-				Candidates: []string{"air/wake-cc-1", "air/wake-cc-2"},
+				Candidates: []ipeers.AmbiguousCandidate{{Address: "air/_1c4m7dkz:mt0-twin-1"}, {Address: "air/tmux:zz", Cwd: "/w/two"}},
 			},
-			wantStderr: "pdx msg: ambiguous: wake\n  air/wake-cc-1\n  air/wake-cc-2\n",
+			wantStderr: "pdx msg: ambiguous: wake\n" +
+				"  air/_1c4m7dkz:mt0-twin-1\n" +
+				"  air/tmux:zz  cwd /w/two\n",
 		},
 		{
 			name:   "origin_unknown from daemon",

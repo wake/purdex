@@ -3,6 +3,7 @@ package peers
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -231,18 +232,29 @@ func TestAPIError_JSON_Minimal(t *testing.T) {
 	}
 }
 
+// TestAPIError_JSON_Full pins spec §6.4: a candidate is a STRUCT, not an
+// address string. An ambiguity refusal is a safe failure, and a safe
+// failure has to say what it is (spec §4.1) — the operator must be able to
+// tell "two conversations share this address" from "my address broke", so
+// the body carries the agent name, pid and cwd that tell them apart. The
+// three extras are omitempty: a candidate the daemon knows only by address
+// still encodes, it just says less.
 func TestAPIError_JSON_Full(t *testing.T) {
 	e := APIError{
-		Error:      ErrAmbiguous,
-		Detail:     "multiple candidates",
-		Candidates: []string{"h1/s1", "h1/s2"},
+		Error:  ErrAmbiguous,
+		Detail: "multiple candidates",
+		Candidates: []AmbiguousCandidate{
+			{Address: "h1/s1", AgentName: "purdex-1", PID: 41001, Cwd: "/w/one"},
+			{Address: "h1/s2"},
+		},
 		Remote: &RemoteError{
 			Status: 502,
 			Error:  ErrRemoteError,
 			Detail: "upstream failed",
 		},
 	}
-	want := `{"error":"ambiguous","detail":"multiple candidates","candidates":["h1/s1","h1/s2"],` +
+	want := `{"error":"ambiguous","detail":"multiple candidates","candidates":[` +
+		`{"address":"h1/s1","agent_name":"purdex-1","pid":41001,"cwd":"/w/one"},{"address":"h1/s2"}],` +
 		`"remote":{"status":502,"error":"remote_error","detail":"upstream failed"}}`
 	got, err := json.Marshal(e)
 	if err != nil {
@@ -256,8 +268,11 @@ func TestAPIError_JSON_Full(t *testing.T) {
 	if err := json.Unmarshal(got, &back); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if back.Error != e.Error || back.Detail != e.Detail || len(back.Candidates) != 2 || back.Remote == nil || *back.Remote != *e.Remote {
+	if back.Error != e.Error || back.Detail != e.Detail || back.Remote == nil || *back.Remote != *e.Remote {
 		t.Fatalf("round-trip mismatch: got %+v, want %+v", back, e)
+	}
+	if !reflect.DeepEqual(back.Candidates, e.Candidates) {
+		t.Fatalf("round-trip candidates = %+v, want %+v", back.Candidates, e.Candidates)
 	}
 }
 

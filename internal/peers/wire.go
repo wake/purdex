@@ -318,12 +318,28 @@ type SelfWarning struct {
 // APIError is the body of every 4xx/5xx JSON response on /send, /deliver,
 // /log and the three self routes (/api/peers/self, /api/peers/self/label).
 type APIError struct {
-	Error      string       `json:"error"`
-	Detail     string       `json:"detail,omitempty"`
-	Candidates []string     `json:"candidates,omitempty"` // ambiguous: addresses
-	Remote     *RemoteError `json:"remote,omitempty"`     // remote_error: the other daemon's answer
-	Partial    bool         `json:"partial,omitempty"`    // not_ready from Resolve: the inventory that produced it was partial
-	Skipped    []string     `json:"skipped,omitempty"`    // not_ready: registry files an inventory could not classify
+	Error      string               `json:"error"`
+	Detail     string               `json:"detail,omitempty"`
+	Candidates []AmbiguousCandidate `json:"candidates,omitempty"` // ambiguous: the rows that share the address
+	Remote     *RemoteError         `json:"remote,omitempty"`     // remote_error: the other daemon's answer
+	Partial    bool                 `json:"partial,omitempty"`    // not_ready from Resolve: the inventory that produced it was partial
+	Skipped    []string             `json:"skipped,omitempty"`    // not_ready: registry files an inventory could not classify
+}
+
+// AmbiguousCandidate is one of the rows an `ambiguous` refusal could not
+// choose between. It exists because a SAFE failure has to be legible as
+// one (spec §4.1): the daemon refuses rather than guessing, but if the
+// caller only sees the address — which by definition every candidate
+// shares — the refusal reads as "my address stopped working" and sends
+// the operator after a bug that is not there. The three extra fields are
+// what actually tells two live processes of one conversation apart, and
+// each is omitempty: a candidate the daemon knows only by address still
+// belongs in the list, it just says less.
+type AmbiguousCandidate struct {
+	Address   string `json:"address"`
+	AgentName string `json:"agent_name,omitempty"`
+	PID       int    `json:"pid,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
 }
 
 // RemoteError carries another daemon's answer when a local request fails

@@ -354,8 +354,9 @@ func decodeMsgAPIError(body []byte) (ipeers.APIError, bool) {
 // stderr, sanitized: the generic form is "pdx msg: <error>[: <detail>]";
 // remote_error additionally names the host part the caller typed and the
 // remote's own error/detail; ambiguous prints the session part the caller
-// typed followed by one indented candidate address per line; not_ready
-// prints the generic line followed by one indented skipped entry per line.
+// typed followed by one indented line per candidate (see
+// msgCandidateLine); not_ready prints the generic line followed by one
+// indented skipped entry per line.
 func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Writer) {
 	switch ae.Error {
 	case ipeers.ErrRemoteError:
@@ -371,7 +372,7 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 	case ipeers.ErrAmbiguous:
 		fmt.Fprintf(stderr, "pdx msg: ambiguous: %s\n", sanitizeCell(session))
 		for _, c := range ae.Candidates {
-			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(c))
+			fmt.Fprintln(stderr, msgCandidateLine(c))
 		}
 
 	case ipeers.ErrNotReady:
@@ -383,6 +384,25 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 	default:
 		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
 	}
+}
+
+// msgCandidateLine renders one ambiguity candidate as an indented line:
+// the address, then whatever the daemon knew that distinguishes it —
+// agent name, pid, cwd. The extras are what make the refusal legible as
+// a name collision rather than a broken address (spec §4.1), so they are
+// printed whenever present and quietly skipped when the row had none.
+func msgCandidateLine(c ipeers.AmbiguousCandidate) string {
+	line := "  " + sanitizeCell(c.Address)
+	if c.AgentName != "" {
+		line += "  agent " + sanitizeCell(c.AgentName)
+	}
+	if c.PID != 0 {
+		line += "  pid " + strconv.Itoa(c.PID)
+	}
+	if c.Cwd != "" {
+		line += "  cwd " + sanitizeCell(c.Cwd)
+	}
+	return line
 }
 
 // msgGenericAPIErrorLine renders the shared "pdx msg: <error>[: <detail>]"
