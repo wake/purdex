@@ -722,6 +722,30 @@ func TestSend_LegacyCCAddress(t *testing.T) {
 	}
 }
 
+// TestSend_PeerNotFoundTeachesTheNewAddressForm pins the peer_not_found
+// detail (default-label spec §4.1 via plan Task 5 item 5). Every "_xxxxxx"
+// address written down before the target host upgraded stops resolving the
+// moment that daemon restarts, so a stale hash is the likeliest way to
+// reach this branch: the detail names both the failed address and the one
+// command that lists the current ones. The wire "error" code stays
+// peer_not_found — assertRefused checks that — so nothing matching on it
+// breaks.
+func TestSend_PeerNotFoundTeachesTheNewAddressForm(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	req := s.sendReq()
+	req.To = remoteAlias + "/_ab12cd" // a default label from before the upgrade
+
+	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+	for _, want := range []string{`"_ab12cd"`, `"` + remoteAlias + `"`, "pdx peers --all", "tmux session name"} {
+		if !strings.Contains(ae.Detail, want) {
+			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
+		}
+	}
+	if len(s.postCalls()) != 0 {
+		t.Errorf("posts = %d, want none", len(s.postCalls()))
+	}
+}
+
 // TestSend_TmuxFormResolves pins the explicit "tmux:<name>" address form:
 // it matches PeerRecord.SessionName directly, bypassing the label tier.
 func TestSend_TmuxFormResolves(t *testing.T) {
