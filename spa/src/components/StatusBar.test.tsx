@@ -9,10 +9,22 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useTabStore } from '../stores/useTabStore'
+import { emptyPeerHostEntry, usePeerStore, type PeerHostEntry, type PeerRow } from '../stores/usePeerStore'
+import { emptySessionCwdEntry, useSessionCwdStore, type SessionCwdEntry } from '../stores/useSessionCwdStore'
+import { copyText } from '../lib/copy-text'
 import { compositeKey } from '../lib/composite-key'
 import type { PaneLayout } from '../types/tab'
 
+vi.mock('../lib/copy-text', () => ({ copyText: vi.fn(async () => {}) }))
+const copyTextMock = vi.mocked(copyText)
+
 const HOST_ID = 'test-host'
+
+// The peer stores are stubbed for *every* test in this file, not only the new
+// ones: `usePeerInfo` runs on every render of a session status bar, so an
+// un-stubbed store would put a real `fetch` behind the existing tests.
+const peerRefresh = vi.fn(async (_hostId: string) => {})
+const cwdRefresh = vi.fn(async (_hostId: string, _code: string) => {})
 
 // Pre-populate stores for tests
 function setupStores() {
@@ -37,6 +49,45 @@ function setupStores() {
   })
   useAgentStore.setState({ agentTypes: {}, oscTitles: {}, models: {}, lastEvents: {}, statuses: {}, unread: {}, subagents: {} })
   useUISettingsStore.setState({ showAgentTitleInStatusBar: false })
+  peerRefresh.mockClear()
+  cwdRefresh.mockClear()
+  copyTextMock.mockClear()
+  copyTextMock.mockResolvedValue(undefined)
+  usePeerStore.setState({ byHost: {}, refresh: peerRefresh })
+  useSessionCwdStore.setState({ byHost: {}, refresh: cwdRefresh })
+}
+
+const PEER_ROW: PeerRow = {
+  address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
+  label: 'ai-chat4',
+  labelSource: 'default',
+  deliverable: true,
+  reason: '',
+  agent: { type: 'cc', peerName: 'ai-chat-story-3a', status: 'idle' },
+}
+
+/** Seed one host as already answered, so nothing in the policy has work left. */
+function seedPeers(entry: Partial<PeerHostEntry> = {}, row: PeerRow | null = PEER_ROW) {
+  usePeerStore.setState({
+    byHost: {
+      [HOST_ID]: {
+        ...emptyPeerHostEntry(),
+        rows: row ? { dev001: row } : {},
+        fetchedAt: Date.now(),
+        ...entry,
+      },
+    },
+  })
+}
+
+function seedCwd(cwd: string, entry: Partial<SessionCwdEntry> = {}) {
+  useSessionCwdStore.setState({
+    byHost: { [HOST_ID]: { dev001: { ...emptySessionCwdEntry(), cwd, fetchedAt: Date.now(), ...entry } } },
+  })
+}
+
+function sessionTab(id = 't1'): Tab {
+  return makeTab(id, { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
 }
 
 function makeTab(id: string, content: PaneContent): Tab {
@@ -298,5 +349,207 @@ describe('StatusBar agent pane title', () => {
     render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
 
     expect(screen.queryByTestId('agent-pane-title')).toBeNull()
+  })
+})
+
+// Peer information in the status bar (peer-info-panel spec §4).
+describe('StatusBar peer segments', () => {
+  beforeEach(() => {
+    setupStores()
+    useUploadStore.setState({ sessions: {} })
+    seedPeers()
+    seedCwd('/Users/wake/Workspace/wake/purdex')
+  })
+
+  it('renders host, cwd, peer name, peer id and status, each in its own element', () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
+    expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/wake/Workspace/wake/purdex')
+    expect(screen.getByTestId('status-seg-agent').textContent).toBe('ai-chat-story-3a')
+    // The *label* is displayed; the full address is what a click copies.
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('ai-chat4')
+    expect(screen.getByTestId('status-seg-status').textContent).toContain('connected')
+  })
+
+  it('separates segments with border rules, never a pipe glyph that would be copied with the text', () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seps = screen.getAllByTestId('status-separator')
+    expect(seps.length).toBeGreaterThan(0)
+    for (const sep of seps) {
+      expect(sep.textContent).toBe('')
+      expect(sep.className).toContain('border-l')
+    }
+    expect(screen.getByTestId('status-segments').textContent).not.toContain('|')
+  })
+
+  it.each([
+    ['status-seg-host', 'mlab', 'copied: host'],
+    ['status-seg-cwd', '/Users/wake/Workspace/wake/purdex', 'copied: cwd'],
+    ['status-seg-agent', 'ai-chat-story-3a', 'copied: agent'],
+    ['status-seg-peer-id', 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a', 'copied: peer id'],
+  ])('%s copies its value and confirms in the fixed slot', async (testId, value, message) => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    fireEvent.click(screen.getByTestId(testId))
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith(value))
+    await waitFor(() => expect(screen.getByTestId('status-copy-feedback').textContent).toBe(message))
+  })
+
+  it('the status segment is not a button — it is not a value to copy', () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-status').tagName).not.toBe('BUTTON')
+  })
+
+  it('shows a distinct message when copyText rejects', async () => {
+    copyTextMock.mockRejectedValueOnce(new Error('copy unsupported'))
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('status-seg-cwd'))
+    await waitFor(() => expect(screen.getByTestId('status-copy-feedback').textContent).toBe('copy failed'))
+  })
+
+  it('keeps the feedback slot present and fixed-width before any copy, so a copy does not reflow the row', () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const slot = screen.getByTestId('status-copy-feedback')
+    expect(slot.textContent).toBe('')
+    expect(slot.className).toMatch(/\bw-\[?\d/)
+    expect(slot.className).toContain('shrink-0')
+  })
+
+  it('dims a stale peer id but still copies it on click — it does not refresh (spec §3.4)', async () => {
+    seedPeers({ fetchedAt: Date.now() - 90_000 })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg).toHaveAttribute('data-dim', 'true')
+    peerRefresh.mockClear()
+    fireEvent.click(seg)
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a'))
+    expect(peerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('the refresh control refreshes both stores once', async () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    peerRefresh.mockClear()
+    cwdRefresh.mockClear()
+    fireEvent.click(screen.getByTestId('status-peer-refresh'))
+    await waitFor(() => expect(peerRefresh).toHaveBeenCalledTimes(1))
+    expect(peerRefresh).toHaveBeenCalledWith(HOST_ID)
+    expect(cwdRefresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables the refresh control while loading', () => {
+    seedPeers({ loading: true })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-peer-refresh')).toBeDisabled()
+  })
+
+  it('disables the refresh control when the host is not connected', () => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-peer-refresh')).toBeDisabled()
+  })
+
+  it('dims the peer id and agent when the host is not connected', () => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-peer-id')).toHaveAttribute('data-dim', 'true')
+    expect(screen.getByTestId('status-seg-agent')).toHaveAttribute('data-dim', 'true')
+  })
+
+  it.each([
+    ['a failed fetch', { error: 'boom' } as Partial<PeerHostEntry>, /boom/],
+    ['a partial envelope with no row', { envelope: { partial: true, labelsUnavailable: false, unknownRegistryFiles: [] } } as Partial<PeerHostEntry>, /could not be determined/],
+    ['a complete envelope with no row', {} as Partial<PeerHostEntry>, /no peer/],
+  ])('renders an em dash for %s, with the reason in the tooltip', (_label, entry, tooltip) => {
+    seedPeers(entry, null)
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toBe('—')
+    expect(seg.getAttribute('title')).toMatch(tooltip)
+  })
+
+  it('renders an em dash for a row whose label is empty (no cc agent)', () => {
+    seedPeers({}, { ...PEER_ROW, label: '', address: '', agent: null })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('—')
+  })
+
+  it.each(['inbox_dead', 'ambiguous'])('shows an %s row dimmed, with its reason in the tooltip', (reason) => {
+    seedPeers({}, { ...PEER_ROW, deliverable: false, reason })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toBe('ai-chat4')
+    expect(seg).toHaveAttribute('data-dim', 'true')
+    expect(seg.getAttribute('title')).toContain('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a')
+  })
+
+  it('each copy control is a native focusable button (Enter/Space activation is the platform’s — jsdom does not simulate it)', () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-agent', 'status-seg-peer-id', 'status-peer-refresh']) {
+      const el = screen.getByTestId(testId)
+      expect(el.tagName, testId).toBe('BUTTON')
+      expect(el.getAttribute('tabindex'), testId).toBeNull()
+      expect((el as HTMLButtonElement).disabled, testId).toBe(false)
+      ;(el as HTMLButtonElement).focus()
+      expect(document.activeElement, testId).toBe(el)
+    }
+  })
+
+  it('renders the narrow-width decisions (jsdom does no layout — see the manual 400px check)', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useUploadStore.setState({
+      sessions: { [ck]: { total: 5, completed: 1, failed: 0, currentFile: 'photo.png', status: 'uploading' } },
+    })
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'plan review' },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
+    })
+    useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
+    useUISettingsStore.setState({ showAgentTitleInStatusBar: true })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+
+    // Dropped, in the order spec §4.3 gives up on them.
+    expect(screen.getByTestId('status-seg-cwd').className).toContain('max-[600px]:hidden')
+    expect(screen.getByTestId('status-seg-agent').className).toContain('max-[700px]:hidden')
+    expect(screen.getByTestId('agent-pane-title').className).toContain('max-[700px]:hidden')
+    expect(screen.getByTestId('status-split-buttons').className).toContain('max-[500px]:hidden')
+    // Never dropped.
+    for (const testId of ['status-seg-status', 'status-view-mode', 'upload-status', 'status-seg-host', 'status-seg-peer-id']) {
+      expect(screen.getByTestId(testId).className, testId).not.toContain(':hidden')
+    }
+    expect(screen.getByTestId('status-seg-status').className).toContain('shrink-0')
+    expect(screen.getByTestId('status-view-mode').className).toContain('shrink-0')
+    // Host survives by shrinking to 8ch, not by disappearing.
+    expect(screen.getByTestId('status-seg-host').className).toContain('max-[500px]:max-w-[8ch]')
+    // Truncation, per segment.
+    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-agent', 'status-seg-peer-id', 'status-seg-session-name']) {
+      expect(screen.getByTestId(testId).className, testId).toContain('truncate')
+    }
+    // cwd truncates from the *left*: its tail is the informative end.
+    expect(screen.getByTestId('status-seg-cwd').style.direction).toBe('rtl')
+  })
+
+  it('lays the row out as three containers, with ml-auto only on the controls', () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const segments = screen.getByTestId('status-segments')
+    const controls = screen.getByTestId('status-controls')
+    expect(segments.className).toContain('min-w-0')
+    expect(segments.className).not.toContain('ml-auto')
+    expect(controls.className).toContain('shrink-0')
+    expect(controls.className).toContain('ml-auto')
+    expect(screen.getByTestId('status-bar').querySelectorAll('.ml-auto').length).toBe(1)
+  })
+
+  it.each([
+    ['no active tab', null],
+    ['an editor pane', { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' } as PaneContent],
+    ['a non-tmux pane', { kind: 'dashboard' } as PaneContent],
+  ])('does not fetch peer data for %s', (_label, content) => {
+    render(<StatusBar activeTab={content ? makeTab('t1', content) : null} onViewModeChange={vi.fn()} />)
+    expect(peerRefresh).not.toHaveBeenCalled()
+    expect(cwdRefresh).not.toHaveBeenCalled()
   })
 })

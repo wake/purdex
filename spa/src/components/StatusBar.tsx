@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { CaretUp, CircleNotch, CheckCircle, XCircle, LockSimple, Columns, Rows } from '@phosphor-icons/react'
+import { CaretUp, CircleNotch, CheckCircle, XCircle, LockSimple, Columns, Rows, ArrowsClockwise } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useTabStore } from '../stores/useTabStore'
@@ -11,6 +11,86 @@ import { useUploadStore } from '../stores/useUploadStore'
 import { compositeKey } from '../lib/composite-key'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
+import { usePeerInfo, type PeerInfo } from '../hooks/usePeerInfo'
+import { copyText } from '../lib/copy-text'
+
+type T = (key: string, params?: Record<string, string | number>) => string
+
+/** How long a copy confirmation stays in the fixed slot. */
+const COPY_FEEDBACK_MS = 1500
+
+/**
+ * A rule between two segments.
+ *
+ * A `|` glyph would be selected and copied along with the text the user is
+ * trying to grab, so the separator carries no text at all (spec §4.1). It
+ * takes the drop class of the segment it introduces, or the row would keep a
+ * dangling rule where a dropped segment used to be.
+ */
+function Separator({ className = '' }: { className?: string }) {
+  return <span aria-hidden="true" data-testid="status-separator" className={`mx-2 h-3 shrink-0 self-center border-l border-border-subtle ${className}`} />
+}
+
+/**
+ * One click-to-copy segment.
+ *
+ * A `<button>`, not a `<span>` with a handler: the status bar had no keyboard
+ * path at all, and these are the first things in it worth reaching. The
+ * displayed text and the copied value differ for the peer id — the label is
+ * readable, the address is what `pdx msg send` accepts.
+ */
+function CopySegment({ testId, display, value, what, title, dim, rtl, className = '', onCopy, onDoubleClick }: {
+  testId: string
+  /** What the row shows; '—' stands in for a value that is not there. */
+  display: string
+  /** What a click puts on the clipboard. Empty disables the button. */
+  value: string
+  /** The segment's name, already translated, for the confirmation message. */
+  what: string
+  title?: string
+  dim?: boolean
+  /** Truncate from the left instead of the right (paths: the tail informs). */
+  rtl?: boolean
+  className?: string
+  onCopy: (what: string, value: string) => void
+  /** The host segment keeps its pre-existing double-click to host settings. */
+  onDoubleClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      data-dim={dim ? 'true' : undefined}
+      disabled={value === ''}
+      title={title}
+      onClick={() => onCopy(what, value)}
+      onDoubleClick={onDoubleClick}
+      // `bdi` keeps the path itself left-to-right inside an RTL box, so the
+      // ellipsis lands at the start without reordering the text.
+      style={rtl ? { direction: 'rtl', textAlign: 'left' } : undefined}
+      className={`min-w-0 truncate text-left ${value === '' ? 'cursor-default' : 'cursor-pointer'} ${dim ? 'opacity-50' : ''} ${className}`}
+    >
+      {rtl ? <bdi>{display}</bdi> : display}
+    </button>
+  )
+}
+
+/** The peer id's tooltip: every §6 state says here why it reads as it does. */
+function peerIdTitle(peer: PeerInfo, t: T): string {
+  if (!peer.connected) return t('peer.host_not_connected')
+  if (peer.error) return t('peer.error', { error: peer.error })
+  const { row } = peer
+  if (!row || row.label === '') {
+    // No row from a partial answer is "undetermined", never "no peer": the row
+    // may simply not have been resolved inside the daemon's 2 s budget.
+    return peer.envelope.partial ? t('peer.undetermined') : t('peer.none')
+  }
+  const parts = [row.address]
+  if (row.reason) parts.push(t(`peer.reason.${row.reason}`))
+  if (peer.envelope.labelsUnavailable) parts.push(t('peer.labels_unavailable_note'))
+  if (peer.stale) parts.push(t('peer.stale', { seconds: Math.round((Date.now() - peer.fetchedAt) / 1000) }))
+  return parts.join(' — ')
+}
 
 interface Props {
   activeTab: Tab | null
@@ -127,6 +207,33 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   useClickOutside(menuRef, closeMenu)
 
+  // Peer data for the primary pane. The hook owns *when* anything is fetched
+  // (spec §3.3); passing nulls — an editor tab, a dashboard, no tab at all —
+  // is how this component says "nothing here needs peer data".
+  const peer = usePeerInfo(agentHostId, agentSessionCode)
+
+  // One confirmation for five copy buttons, in a fixed slot, so a copy never
+  // reflows the row (spec §4.2).
+  const [copyFeedback, setCopyFeedback] = useState('')
+  const [copyFailed, setCopyFailed] = useState(false)
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current) }, [])
+
+  const handleCopy = useCallback(async (what: string, value: string) => {
+    let failed = false
+    try {
+      // `copyText` genuinely rejects: the Electron window over plain http has
+      // no `navigator.clipboard`, which is the reason that helper exists.
+      await copyText(value)
+    } catch {
+      failed = true
+    }
+    setCopyFailed(failed)
+    setCopyFeedback(failed ? t('peer.copy_failed') : t('peer.copied', { what }))
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
+    feedbackTimer.current = setTimeout(() => { setCopyFeedback(''); feedbackTimer.current = null }, COPY_FEEDBACK_MS)
+  }, [t])
+
   const handleNameDoubleClick = useCallback((e: React.MouseEvent<HTMLSpanElement>) => {
     if (!activeTab || !onStartRename) return
     onStartRename(activeTab, e.currentTarget)
@@ -164,69 +271,150 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const viewMode = content.mode
   const viewModes: ('terminal' | 'stream')[] = ['terminal', 'stream']
 
+  // The peer id shows the label and copies the address: a label alone is not
+  // addressable without its host, and someone copying "the peer id" means to
+  // paste something `pdx msg send` accepts.
+  const peerRow = peer.row
+  const peerLabel = peerRow?.label ?? ''
+  const peerUncertain = peerRow?.reason === 'inbox_dead' || peerRow?.reason === 'ambiguous'
+  const peerDim = !peer.connected || peer.stale || peerUncertain
+  const peerName = peerRow?.agent?.peerName ?? ''
+
   return (
-    <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted gap-3 flex-shrink-0 relative z-10">
-      <span
-        className="text-text-secondary select-none"
-        title={t('status.open_host_hint')}
-        onDoubleClick={agentHostId ? () => onNavigateToHost?.(agentHostId) : undefined}
-      >
-        {hostName}
-      </span>
-      <span
-        className="text-text-secondary select-none"
-        title={t('status.rename_hint')}
-        onDoubleClick={handleNameDoubleClick}
-      >
-        {sessionName}
-      </span>
-      <span
-        className={
-          status === 'auth-error' ? 'text-red-400 cursor-pointer flex items-center gap-1'
-            : status === 'connected' && hostRuntime?.tmuxState === 'unavailable' ? 'text-yellow-400'
-            : status === 'connected' ? 'text-green-500'
-            : status === 'reconnecting' ? 'text-yellow-400'
-            : 'text-red-400'
-        }
-        onClick={status === 'auth-error' && agentHostId ? () => onNavigateToHost?.(agentHostId) : undefined}
-      >
-        {status === 'auth-error' && <LockSimple size={10} weight="fill" />}
-        {status === 'auth-error' ? t('hosts.auth_error')
-          : status === 'connected' && hostRuntime?.tmuxState === 'unavailable'
-            ? t('hosts.error_tmux_down')
-            : status}
-      </span>
-      {agentLabel && (
-        <span className="px-[7px] rounded-[3px] border text-[10px] leading-4 bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)]" data-testid="agent-label">
-          {agentLabel}
-        </span>
-      )}
-      <UploadStatus hostId={agentHostId} sessionCode={agentSessionCode} t={t} />
-      {paneTitle && (
+    <div data-testid="status-bar" className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0 relative z-10">
+      {/* Left: the segment group. Everything in here may truncate. */}
+      <div data-testid="status-segments" className="flex min-w-0 items-center">
+        <CopySegment
+          testId="status-seg-host"
+          display={hostName}
+          value={hostName}
+          what={t('peer.label.host')}
+          title={`${t('peer.copy_hint')} \u00b7 ${t('status.open_host_hint')}`}
+          className="max-[500px]:max-w-[8ch] text-text-secondary"
+          onCopy={handleCopy}
+          onDoubleClick={agentHostId ? () => onNavigateToHost?.(agentHostId) : undefined}
+        />
+        <Separator />
         <span
-          data-testid="agent-pane-title"
-          className="ml-auto max-w-[40ch] truncate text-text-muted"
-          title={paneTitle}
+          data-testid="status-seg-session-name"
+          className="min-w-0 max-w-[20ch] truncate text-text-secondary select-none"
+          title={t('status.rename_hint')}
+          onDoubleClick={handleNameDoubleClick}
         >
-          {paneTitle}
+          {sessionName}
         </span>
-      )}
-      <span className={`${paneTitle ? '' : 'ml-auto'} flex items-center gap-1`}>
+        <Separator className="max-[600px]:hidden" />
+        <CopySegment
+          testId="status-seg-cwd"
+          display={peer.cwd || '\u2014'}
+          value={peer.cwd}
+          what={t('peer.label.cwd')}
+          title={peer.cwdError ? t('peer.error', { error: peer.cwdError }) : (peer.cwd || t('peer.copy_hint'))}
+          rtl
+          className="max-w-[32ch] max-[600px]:hidden"
+          onCopy={handleCopy}
+        />
+        <Separator className="max-[700px]:hidden" />
+        <CopySegment
+          testId="status-seg-agent"
+          display={peerName || '\u2014'}
+          value={peerName}
+          what={t('peer.label.agent')}
+          title={peerName ? t('peer.copy_hint') : peerIdTitle(peer, t)}
+          dim={peerDim}
+          className="max-w-[20ch] max-[700px]:hidden"
+          onCopy={handleCopy}
+        />
+        <Separator />
+        <CopySegment
+          testId="status-seg-peer-id"
+          display={peerLabel || '\u2014'}
+          value={peerRow?.address ?? ''}
+          what={t('peer.label.peer_id')}
+          title={peerIdTitle(peer, t)}
+          dim={peerDim}
+          className="max-w-[24ch]"
+          onCopy={handleCopy}
+        />
+        {/* The only control that starts a fetch. Clicking a segment always
+            copies, however stale it is (spec \u00a73.4). */}
         <button
-          title={t('pane.split_horizontal')}
-          onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, getPrimaryPane(activeTab.layout).id, 'h')}
-          className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
+          type="button"
+          data-testid="status-peer-refresh"
+          title={t('peer.refresh')}
+          aria-label={t('peer.refresh')}
+          disabled={!peer.connected || peer.loading}
+          onClick={() => peer.refresh()}
+          className="ml-1.5 flex shrink-0 items-center rounded p-0.5 text-text-muted transition-colors hover:bg-surface-hover disabled:opacity-40 cursor-pointer disabled:cursor-default"
         >
-          <Columns size={12} />
+          <ArrowsClockwise size={10} className={peer.loading ? 'animate-spin' : ''} />
         </button>
-        <button
-          title={t('pane.split_vertical')}
-          onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, getPrimaryPane(activeTab.layout).id, 'v')}
-          className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
+        <Separator />
+        <span
+          data-testid="status-seg-status"
+          className={`shrink-0 ${
+            status === 'auth-error' ? 'text-red-400 cursor-pointer flex items-center gap-1'
+              : status === 'connected' && hostRuntime?.tmuxState === 'unavailable' ? 'text-yellow-400'
+              : status === 'connected' ? 'text-green-500'
+              : status === 'reconnecting' ? 'text-yellow-400'
+              : 'text-red-400'
+          }`}
+          onClick={status === 'auth-error' && agentHostId ? () => onNavigateToHost?.(agentHostId) : undefined}
         >
-          <Rows size={12} />
-        </button>
-        <div className="relative" ref={menuRef}>
+          {status === 'auth-error' && <LockSimple size={10} weight="fill" />}
+          {status === 'auth-error' ? t('hosts.auth_error')
+            : status === 'connected' && hostRuntime?.tmuxState === 'unavailable'
+              ? t('hosts.error_tmux_down')
+              : status}
+        </span>
+      </div>
+
+      {/* Middle: the slack. The feedback slot sits at its start with a fixed
+          width, so a copy confirmation never moves anything. */}
+      <div className="flex min-w-0 flex-1 items-center">
+        <span
+          data-testid="status-copy-feedback"
+          aria-live="polite"
+          className={`ml-2 w-[14ch] shrink-0 truncate ${copyFailed ? 'text-status-error' : 'text-text-muted'}`}
+        >
+          {copyFeedback}
+        </span>
+      </div>
+
+      {/* Right: the controls. `ml-auto` lives here and nowhere else. */}
+      <div data-testid="status-controls" className="ml-auto flex shrink-0 items-center gap-3">
+        {agentLabel && (
+          <span className="px-[7px] rounded-[3px] border text-[10px] leading-4 bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)]" data-testid="agent-label">
+            {agentLabel}
+          </span>
+        )}
+        <UploadStatus hostId={agentHostId} sessionCode={agentSessionCode} t={t} />
+        {paneTitle && (
+          <span
+            data-testid="agent-pane-title"
+            className="max-w-[40ch] truncate text-text-muted max-[700px]:hidden"
+            title={paneTitle}
+          >
+            {paneTitle}
+          </span>
+        )}
+        <span data-testid="status-split-buttons" className="flex items-center gap-1 max-[500px]:hidden">
+          <button
+            title={t('pane.split_horizontal')}
+            onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, getPrimaryPane(activeTab.layout).id, 'h')}
+            className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
+          >
+            <Columns size={12} />
+          </button>
+          <button
+            title={t('pane.split_vertical')}
+            onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, getPrimaryPane(activeTab.layout).id, 'v')}
+            className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
+          >
+            <Rows size={12} />
+          </button>
+        </span>
+        <div data-testid="status-view-mode" className="relative shrink-0" ref={menuRef}>
           <button
             title={t('nav.toggle_view')}
             onClick={() => setMenuOpen((v) => !v)}
@@ -252,7 +440,7 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
             </div>
           )}
         </div>
-      </span>
+      </div>
     </div>
   )
 }
