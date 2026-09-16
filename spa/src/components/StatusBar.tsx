@@ -13,6 +13,7 @@ import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 import { usePeerInfo, type PeerInfo } from '../hooks/usePeerInfo'
 import { copyText } from '../lib/copy-text'
+import { reasonText } from '../lib/peer-display'
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -86,7 +87,7 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
     return peer.envelope.partial ? t('peer.undetermined') : t('peer.none')
   }
   const parts = [row.address]
-  if (row.reason) parts.push(t(`peer.reason.${row.reason}`))
+  if (row.reason) parts.push(reasonText(row.reason, t))
   if (peer.envelope.labelsUnavailable) parts.push(t('peer.labels_unavailable_note'))
   if (peer.stale) parts.push(t('peer.stale', { seconds: Math.round((Date.now() - peer.fetchedAt) / 1000) }))
   return parts.join(' — ')

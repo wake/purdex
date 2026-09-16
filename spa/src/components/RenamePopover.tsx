@@ -12,6 +12,7 @@ import { usePeerStore, type PeerEnvelopeFlags } from '../stores/usePeerStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { copyText } from '../lib/copy-text'
+import { reasonText } from '../lib/peer-display'
 import type { Tab } from '../types/tab'
 
 interface Props {
@@ -56,17 +57,6 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 }
 
 type T = (key: string, params?: Record<string, string | number>) => string
-
-/** The reasons the daemon gives for a row that cannot be delivered to. */
-const PEER_REASONS = new Set(['no_agent', 'not_cc', 'inbox_dead', 'proxy', 'ambiguous'])
-
-/** A reason is the actionable half of "not deliverable", so it is never elided. */
-function reasonText(reason: string, t: T): string {
-  if (!reason) return t('peer.none')
-  // A reason this build does not know about is shown raw rather than as a
-  // missing-translation key: the daemon's vocabulary can outrun the SPA's.
-  return PEER_REASONS.has(reason) ? t(`peer.reason.${reason}`) : reason
-}
 
 /**
  * Which of `partial`'s three causes to name.
