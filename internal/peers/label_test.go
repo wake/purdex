@@ -150,6 +150,14 @@ func TestResolveDefaultLabels(t *testing.T) {
 			want:    DefaultLabels{},
 		},
 		{
+			// Rule 1 is about the tmux sessions, not their spellings:
+			// these two names both sanitize to "my-proj-2", but they are
+			// still two different places, so the conversation has none.
+			name:    "one conversation spanning two tmux sessions that sanitize alike",
+			entries: []Entry{liveEntry(1, "A", "my_proj.2"), liveEntry(2, "A", "my proj 2")},
+			want:    DefaultLabels{},
+		},
+		{
 			name:    "two unnamed conversations in one tmux session",
 			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "B", "purdex1")},
 			want:    DefaultLabels{},

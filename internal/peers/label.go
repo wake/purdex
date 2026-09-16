@@ -118,14 +118,20 @@ func (d DefaultLabels) For(sessionID string) string {
 
 // ResolveDefaultLabels applies spec §3.3 over one population: the live,
 // non-proxy registry entries of this host. A conversation keeps the v2
-// hash — it is absent from the result — unless its entries agree on one
-// tmux session whose sanitized name no other live conversation derives or
-// holds as a user label. labels may cover sessions outside the population
-// (dead rows); those are inert and ignored.
+// hash — it is absent from the result — unless all of its entries sit in
+// one tmux session whose sanitized name no other live conversation derives
+// or holds as a user label. labels may cover sessions outside the
+// population (dead rows); those are inert and ignored.
 func ResolveDefaultLabels(entries []Entry, proxyPIDs map[int]bool, labels map[string]LabelInfo) DefaultLabels {
-	// "" means the session has disqualified itself (entries in two tmux
-	// sessions, or a name that does not sanitize) and must stay absent.
+	// A disqualified session is deleted from candidates rather than left
+	// with an empty value, so every entry here is a real candidate.
 	candidates := make(map[string]string, len(entries))
+	// The RAW tmux name each conversation has been seen in, because rule 1
+	// asks whether its processes sit in one tmux session — not whether
+	// their names happen to sanitize alike. "my_proj.2" and "my proj 2"
+	// both yield "my-proj-2" and are still two different places, so a
+	// conversation spanning them has none and must keep its hash.
+	rawNames := make(map[string]string, len(entries))
 	disqualified := make(map[string]bool, len(entries))
 	population := make(map[string]bool, len(entries))
 	for _, e := range entries {
@@ -136,12 +142,15 @@ func ResolveDefaultLabels(entries []Entry, proxyPIDs map[int]bool, labels map[st
 		if disqualified[e.SessionID] {
 			continue
 		}
-		label, ok := SanitizeLabel(e.TmuxSessionName())
-		if prev, seen := candidates[e.SessionID]; !ok || (seen && prev != label) {
+		raw := e.TmuxSessionName()
+		label, ok := SanitizeLabel(raw)
+		if prev, seen := rawNames[e.SessionID]; !ok || (seen && prev != raw) {
 			disqualified[e.SessionID] = true
 			delete(candidates, e.SessionID)
+			delete(rawNames, e.SessionID)
 			continue
 		}
+		rawNames[e.SessionID] = raw
 		candidates[e.SessionID] = label
 	}
 
