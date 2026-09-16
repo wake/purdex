@@ -525,11 +525,15 @@ describe('StatusBar peer segments', () => {
     }
   })
 
-  it('renders the narrow-width decisions (jsdom does no layout — see the manual 400px check)', () => {
+  it('renders the narrow-width decisions with a model badge, an upload and a pane title all present (jsdom does no layout — see the manual 400px check)', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useUploadStore.setState({
       sessions: { [ck]: { total: 5, completed: 1, failed: 0, currentFile: 'photo.png', status: 'uploading' } },
     })
+    // The three things that live in the fixed-width `shrink-0` controls group
+    // are present together: this is the state §4.3's priority list is *about*,
+    // and the one that overflowed 400 px.
+    useAgentStore.setState({ models: { [ck]: 'Claude Opus 4' } })
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
@@ -547,6 +551,12 @@ describe('StatusBar peer segments', () => {
     expect(screen.getByTestId('status-seg-cwd').className).toContain('max-[600px]:hidden')
     expect(screen.getByTestId('status-seg-agent').className).toContain('max-[700px]:hidden')
     expect(screen.getByTestId('agent-pane-title').className).toContain('max-[700px]:hidden')
+    // The model badge is the third of the agent-identity decorations, and it
+    // sits in the `shrink-0` group, so without a rule of its own a long model
+    // name ("Claude Opus 4") takes its width off the top of the row.
+    expect(screen.getByTestId('agent-label').className).toContain('max-[700px]:hidden')
+    expect(screen.getByTestId('agent-label').className).toContain('truncate')
+    expect(screen.getByTestId('agent-label').className).toMatch(/max-w-\[\d+ch\]/)
     expect(screen.getByTestId('status-split-buttons').className).toContain('max-[500px]:hidden')
     // Never dropped.
     for (const testId of ['status-seg-status', 'status-view-mode', 'upload-status', 'status-seg-host', 'status-seg-peer-id']) {

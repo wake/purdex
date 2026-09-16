@@ -210,6 +210,10 @@ segments do not fit 400 px. The priority, highest first:
 3. **peer id** — truncates from the right.
 4. **session name** — truncates from the right.
 5. **agent** (peer name) — dropped below 700 px.
+5b. **model badge** — truncates to 16ch; dropped below 700 px, with the other
+   two agent-identity decorations. It lives in the `shrink-0` controls group, so
+   a rule of its own is the only thing that stops `Claude Opus 4` taking its
+   full width out of the segments on the left.
 6. **cwd** — truncates from the left (its tail is the informative end);
    dropped below 600 px. It is the one segment the panel always shows in full.
 7. **pane title** — dropped below 700 px (it is already `max-w-[40ch]`).
@@ -219,7 +223,8 @@ segments do not fit 400 px. The priority, highest first:
 9. **split buttons** — dropped below 500 px.
 
 The 400 px acceptance test asserts no horizontal overflow with all of it
-present, including an active upload.
+present — an active upload, a model badge and a pane title together, which is
+the state that fills the `shrink-0` group.
 
 ## 5. The tab panel
 

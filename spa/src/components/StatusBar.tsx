@@ -406,8 +406,18 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
 
       {/* Right: the controls. `ml-auto` lives here and nowhere else. */}
       <div data-testid="status-controls" className="ml-auto flex shrink-0 items-center gap-3">
+        {/* The model badge. It sits in the `shrink-0` controls group, so
+            without a rule of its own a long model name ("Claude Opus 4") takes
+            its full width off the segments on the left rather than yielding.
+            Spec §4.3 puts it with the other agent-identity decorations — the
+            peer name and the pane title — truncating first and dropping below
+            700 px, above which the row still has room for all three. */}
         {agentLabel && (
-          <span className="px-[7px] rounded-[3px] border text-[10px] leading-4 bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)]" data-testid="agent-label">
+          <span
+            className="inline-block max-w-[16ch] truncate px-[7px] rounded-[3px] border text-[10px] leading-4 bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)] max-[700px]:hidden"
+            data-testid="agent-label"
+            title={agentLabel}
+          >
             {agentLabel}
           </span>
         )}
