@@ -103,7 +103,13 @@ Notes on each decision:
    `width − padding − (options.scrollback === 0 ? 0 : options.overviewRuler?.width || 14)`
    — a **hardcoded 14px**, never a measurement of the real scrollbar.
    `useTerminal.ts:56` sets neither `scrollback: 0` nor `overviewRuler`, so 14
-   it is, and `.xterm-viewport` is `overflow-y: scroll` in xterm's own CSS.
+   it is, and xterm's own CSS makes that viewport `overflow-y: scroll` — under
+   the selector `.xterm .xterm-viewport` (specificity 0,2,0), which also loads
+   after ours in the bundle. It declares no scrollbar property of any kind, so
+   the flat `.xterm-viewport` rule below is the only declaration of
+   `scrollbar-width` / `scrollbar-color` matching that element and wins
+   uncontested. Were that ever to change, the exclusion would need the nested
+   selector too.
    Making that scrollbar thinner therefore leaves fit reserving more width than
    the scrollbar occupies: up to ~4px, i.e. at most one column of unused space.
    The error is in the safe direction — content is never hidden behind the
@@ -194,8 +200,9 @@ this spec got wrong:
 ### Out of scope
 
 - Per-surface scrollbar variants beyond the existing accent one.
-- Restyling the xterm scrollbar specifically (it inherits the global rule like
-  everything else; anything more belongs to terminal theming).
+- Styling the terminal scrollbar. It is excluded here, not merely left alone:
+  doing it properly means moving `@xterm/addon-fit`'s 14px reservation in the
+  same change (#1075).
 - Removing the now-inert webkit pseudo-element blocks.
 
 ---
