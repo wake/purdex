@@ -609,12 +609,16 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	}
 	targetTo := ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart}
 	// v2: the resolved row's address is now "<alias>/<label>:<suffix>"
-	// (spec §3.4), not the retired "<alias>/<tmux name>" form.
-	targetAddr := "b/" + ipeers.DefaultLabel(e2eTargetSID) + ":foo-" + e2eTargetName
+	// (spec §3.4), not the retired "<alias>/<tmux name>" form. B's target
+	// is the only live agent in tmux "foo" and has claimed nothing, so its
+	// default label is that tmux name (default-label spec §3.3), where it
+	// used to be DefaultLabel(e2eTargetSID). Same row, readable address.
+	targetAddr := "b/foo:foo-" + e2eTargetName
 	// v2 from-name (spec §3.5): each side names the other's helper after
 	// the sender's "<alias>/<label>:<suffix>" address; neither session has
-	// claimed a label, so both carry their default label.
-	originName := "a/" + ipeers.DefaultLabel(e2eOriginSID) + ":mt1-" + e2eOriginName
+	// claimed a label, so both carry their default label — A's is likewise
+	// its own tmux session name "mt1", not DefaultLabel(e2eOriginSID).
+	originName := "a/mt1:mt1-" + e2eOriginName
 	targetName := targetAddr
 
 	// The baseline for step 9 includes every long-lived goroutine of the
@@ -1135,8 +1139,10 @@ func TestE2E_HelperRename(t *testing.T) {
 	b.setPeer(func(h *config.PeerHost) { h.URL = a.srv.URL })
 
 	// A's origin never claims a label until step 5: its wire address is
-	// the default-label form the whole time (spec §3.5).
-	originAddr := "a/" + ipeers.DefaultLabel(e2eOriginSID) + ":mt1-" + e2eOriginName
+	// the default-label form the whole time (spec §3.5). That default is
+	// A's tmux session name "mt1" (default-label spec §3.3) — it is the
+	// only live agent there — where it used to be the sessionId hash.
+	originAddr := "a/mt1:mt1-" + e2eOriginName
 
 	// ---- 1. B's target claims "purdex-tester"; A sends by label; the
 	// frame the target receives names A's helper after A's own address. ----

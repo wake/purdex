@@ -28,6 +28,16 @@ import (
 // plus the envelope, with generous headroom for JSON escaping.
 const maxSendBodyBytes = 1 << 20
 
+// peerNotFoundHint is appended to the peer_not_found detail for an
+// address that matched no row. An unnamed agent's default label is now
+// derived from its tmux session name, so every "_xxxxxx" address written
+// down before the target host upgraded stopped resolving the moment that
+// daemon restarted (default-label spec §4.1) — and a stale hash is the
+// likeliest way to land here. Saying so, and naming the one command that
+// lists the current addresses, saves the round trip. The wire "error"
+// code is unchanged: anything matching on peer_not_found is unaffected.
+const peerNotFoundHint = "run `pdx peers --all` for the current addresses — an unnamed session is now addressed by its tmux session name, not by a _xxxxxx label"
+
 // maxDeliverRespBytes caps a remote daemon's /deliver answer: a
 // DeliverResponse or an APIError is a few hundred bytes at most, and the
 // body is attacker-controlled (any configured peer host).
@@ -313,7 +323,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ipeers.ErrLegacyCC):
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, err.Error())
 		default:
-			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, fmt.Sprintf("no session %q on %q", session, entry.Alias))
+			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, fmt.Sprintf("no session %q on %q; %s", session, entry.Alias, peerNotFoundHint))
 		}
 		return
 	}

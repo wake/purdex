@@ -205,6 +205,26 @@ func TestRunMsgSend_Success(t *testing.T) {
 	}
 }
 
+// TestRunMsgUsage_TeachesBothDefaultLabelForms pins what the grammar
+// rejection prints about addresses. Since an unnamed agent's default label
+// is now its tmux session name and the "_k3x9qz" hash is only the fallback
+// (default-label spec §2, §4.1), the usage text has to say both — a stale
+// hash address is the most likely reason someone is reading it — and point
+// at the one command that lists the current addresses.
+func TestRunMsgUsage_TeachesBothDefaultLabelForms(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runMsgCmd([]string{"send"}, fakeGetenv(nil), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr=%q", code, stderr.String())
+	}
+	out := stderr.String()
+	for _, want := range []string{"tmux session", "mini-lab/purdex1", "_k3x9qz", "pdx peers --all", "pdx msg name"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("usage does not mention %q:\n%s", want, out)
+		}
+	}
+}
+
 // TestRunMsgSend_DoubleDash pins the option terminator: everything after
 // "--" is positional, so text that starts with a dash (or that looks like
 // one of pdx msg's own flags) can be sent; flags before "--" still apply.

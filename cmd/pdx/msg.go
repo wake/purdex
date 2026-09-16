@@ -33,8 +33,16 @@ const msgDefaultLogTail = 50
 // printed to stderr (exit 2) for every malformed invocation except an
 // unrecognized flag, which gets its own more specific message (see
 // runMsgCmd). `selftest`'s body lives in msg_selftest.go.
+//
+// The <label> line teaches the two forms an unnamed agent can take. The
+// example is a tmux-shaped default rather than a "_k3x9qz" hash because
+// that is now the normal case: a hash only appears when the tmux name is
+// ambiguous or unusable. Both are rendered examples, not a contract.
 const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<label>[:<suffix>] | <host>/tmux:<name> <text>\n" +
 	"           (-- ends the options: use it before text that starts with -)\n" +
+	"           (<label> is a name claimed with `pdx msg name`, else the agent's own tmux session\n" +
+	"            name — mini-lab/purdex1 — falling back to a _k3x9qz hash when that name does not\n" +
+	"            name exactly one live agent; run `pdx peers --all` to see the current addresses)\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +
 	"       pdx msg selftest [--timeout <dur>] [--config <path>]\n" +

@@ -1669,6 +1669,41 @@ func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 	}
 }
 
+// TestLocalEnvelope_LabelStoreFailureSuppressesTmuxDerivedDefaults pins
+// spec §3.5 at the seam that actually decides it: localEnvelope must hand
+// Build LabelsUnavailable, not just report it on the envelope. The
+// fixture's live conversation sits in tmux "mt0", whose name qualifies, so
+// with a readable store it advertises "mt0"; with an unreadable one it
+// must keep its v2 hash — the empty label map is an outage, not proof that
+// nobody holds "mt0".
+func TestLocalEnvelope_LabelStoreFailureSuppressesTmuxDerivedDefaults(t *testing.T) {
+	healthy := newLabelJoinFixture(t)
+	var before string
+	for _, r := range healthy.m.localEnvelope(context.Background(), "h:1", "a").Peers {
+		if r.SessionCode == "mt0code" {
+			before = r.Label
+		}
+	}
+	if before != "mt0" {
+		t.Fatalf("precondition: mt0 row label = %q, want the tmux-derived %q", before, "mt0")
+	}
+
+	f := newLabelJoinFixture(t)
+	f.m.labels = failingLabels{}
+
+	env := f.m.localEnvelope(context.Background(), "h:1", "a")
+
+	for _, r := range env.Peers {
+		if r.Agent == nil || r.Agent.Type != "cc" {
+			continue
+		}
+		want := ipeers.DefaultLabel(r.Agent.SessionID)
+		if r.Label != want {
+			t.Errorf("row %s label = %q, want the hash %q while the store is unreadable", r.Address, r.Label, want)
+		}
+	}
+}
+
 // TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy pins the negative:
 // a healthy (or absent) label store never sets labels_unavailable, even
 // when the response is partial for another reason.
