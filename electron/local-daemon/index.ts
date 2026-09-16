@@ -5,7 +5,7 @@
 import { join } from 'node:path'
 import type { LocalDaemon, LocalDaemonDeps, LocalDaemonResult, LocalDaemonStatus } from './types'
 import { parseLsofF0, txtPaths, listenersOn, decideOwnership, type Ownership } from './lsof'
-import { buildLaunchEnv } from './launch-env'
+import { buildLaunchEnv, type ExecFn, type LaunchEnv } from './launch-env'
 import { parseDaemonConfig, pickBindAddress, renderInitialConfig, generateToken, DEFAULT_DATA_DIR, type DaemonConfig } from './config'
 
 // lsof lives in /usr/sbin on macOS and /usr/bin on Linux (`target()` accepts
@@ -19,12 +19,95 @@ const VERSION_TIMEOUT_MS = 2000
 const STOP_TIMEOUT_MS = 35_000
 const START_TIMEOUT_MS = 70_000
 const DOWNLOAD_TIMEOUT_MS = 6 * 60_000
+const PATH_TIMEOUT_MS = 5000
+// A machine whose `pdx` does not resolve is re-probed on status, because its
+// user is running the fix commands in another window and watching the panel
+// clear. A healthy machine is never re-probed: `resolveShellPath` runs a login
+// shell with two 5 s timeouts, and status is polled by the UI (spec §4.2).
+const CLI_REPROBE_INTERVAL_MS = 5000
 
 // Thrown when an ownership-determining lsof call could not be trusted —
 // either it timed out or it never ran at all (spawn failure). The caller
 // must never fall back to "no processes" in either case (spec §3.1).
 class OwnershipUnavailable extends Error {
   constructor(msg?: string) { super(msg ?? 'ownership check timed out') }
+}
+
+/**
+ * `pdx path --json` (cmd/pdx/path.go `pathReport`). The TypeScript side never
+ * walks PATH itself — `exec.LookPath` semantics, dangling symlinks and "is
+ * this my own binary?" all live in Go, where the syscalls are (spec §4.1).
+ */
+export interface PathReport {
+  self: string
+  selfNote?: string
+  resolved: string | null
+  resolvedReal?: string
+  isSelf: boolean
+  localBin: string
+  localBinExists: boolean
+  localBinOnPath: boolean
+  link: 'ok' | 'missing' | 'conflict' | 'error'
+  linkTarget?: string
+  linkError?: string
+  fixes: string[]
+  ok: boolean
+}
+
+/**
+ * Four distinct answers, deliberately not collapsed into each other:
+ * a report (exit 0 *or* exit 1 — `pdx path` exits 1 precisely when `pdx` is
+ * not reachable, which is data, not a failure), output we could not read, a
+ * binary that would not run, and no binary at all.
+ */
+export type CliState =
+  | { kind: 'report'; code: number | null; report: PathReport }
+  | { kind: 'unparseable'; code: number | null; stdout: string; stderr: string }
+  | { kind: 'exec-failed'; error: string }
+  | { kind: 'not-installed' }
+
+function asPathReport(stdout: string): PathReport | null {
+  let j: unknown
+  try {
+    j = JSON.parse(stdout.trim())
+  } catch {
+    return null
+  }
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) return null
+  const o = j as Record<string, unknown>
+  const ok = typeof o.self === 'string'
+    && (o.resolved === null || typeof o.resolved === 'string')
+    && typeof o.isSelf === 'boolean'
+    && typeof o.localBin === 'string'
+    && typeof o.localBinOnPath === 'boolean'
+    && typeof o.link === 'string'
+    && Array.isArray(o.fixes)
+    && typeof o.ok === 'boolean'
+  return ok ? (o as unknown as PathReport) : null
+}
+
+/**
+ * Ask the managed binary how the CLI is reachable, using the PATH the daemon
+ * would be launched with (spec §4.1).
+ */
+export async function readCliState(
+  deps: { exec: ExecFn; exists: (p: string) => Promise<boolean> },
+  binPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<CliState> {
+  if (!(await deps.exists(binPath))) return { kind: 'not-installed' }
+  let r
+  try {
+    r = await deps.exec(binPath, ['path', '--json'], { env, timeoutMs: PATH_TIMEOUT_MS })
+  } catch (e) {
+    return { kind: 'exec-failed', error: e instanceof Error ? e.message : String(e) }
+  }
+  // A timeout or a spawn failure (code null) is not an answer about PATH.
+  if (r.timedOut) return { kind: 'exec-failed', error: `pdx path timed out after ${PATH_TIMEOUT_MS}ms` }
+  if (r.code === null) return { kind: 'exec-failed', error: `pdx path did not run: ${r.stderr.trim() || 'spawn failed'}` }
+  const report = asPathReport(r.stdout)
+  if (!report) return { kind: 'unparseable', code: r.code, stdout: r.stdout, stderr: r.stderr }
+  return { kind: 'report', code: r.code, report }
 }
 
 export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
@@ -44,13 +127,50 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   // ---- env ---------------------------------------------------------------
-  let envPromise: Promise<NodeJS.ProcessEnv> | null = null
-  function launchEnv(): Promise<NodeJS.ProcessEnv> {
-    envPromise ??= buildLaunchEnv({
+  // Two accessors, because "always re-probe" is as wrong as "never" (spec
+  // §4.2): the gate decisions refresh, everything else reuses the memoized
+  // probe. `lastEnvProbeAt` is the wall clock of the *last actual probe*,
+  // the cached one included, so a broken machine re-probes at most once per 5 s.
+  let envCache: LaunchEnv | null = null
+  let envPromise: Promise<LaunchEnv> | null = null
+  let lastEnvProbeAt = Number.NEGATIVE_INFINITY
+  // undefined until a status has asked the binary; null means `pdx` did not
+  // resolve (or could not be determined), which is what makes status re-probe.
+  let lastCliResolved: string | null | undefined
+
+  function probeLaunchEnv(): Promise<LaunchEnv> {
+    lastEnvProbeAt = deps.now()
+    return buildLaunchEnv({
       exec: deps.exec, shell: deps.shell, baseEnv: deps.baseEnv, home: deps.home,
       sentinel: () => 'PDX_PATH_' + deps.randomBytes(16).toString('hex'),
     })
+  }
+
+  function cachedLaunchEnv(): Promise<LaunchEnv> {
+    envPromise ??= probeLaunchEnv().then((r) => { envCache = r; return r })
     return envPromise
+  }
+
+  // A failed re-probe must never turn a working machine into a refusing one:
+  // it keeps the last shell-derived PATH instead of dropping to the fallback.
+  async function refreshLaunchEnv(): Promise<LaunchEnv> {
+    const fresh = await probeLaunchEnv()
+    if (fresh.pathSource !== 'shell' && envCache?.pathSource === 'shell') return envCache
+    envCache = fresh
+    envPromise = Promise.resolve(fresh)
+    return fresh
+  }
+
+  // The PATH a status poll judges on. Spec §4.2's table: cache when the last
+  // known cli.resolved was non-null, refresh (rate-limited) when it was null.
+  function statusLaunchEnv(binExists: boolean): Promise<LaunchEnv> {
+    const due = deps.now() - lastEnvProbeAt >= CLI_REPROBE_INTERVAL_MS
+    if (binExists && lastCliResolved === null && due) return refreshLaunchEnv()
+    return cachedLaunchEnv()
+  }
+
+  function cachedEnv(): Promise<NodeJS.ProcessEnv> {
+    return cachedLaunchEnv().then((r) => r.env)
   }
 
   // ---- primitives --------------------------------------------------------
@@ -80,7 +200,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   async function readIdentity(bin: string): Promise<LocalDaemonStatus['installed']> {
     const unknown = { version: 'unknown', hash: 'unknown', goos: 'unknown', goarch: 'unknown' }
     try {
-      const r = await deps.exec(bin, ['version', '--json'], { env: await launchEnv(), timeoutMs: VERSION_TIMEOUT_MS })
+      const r = await deps.exec(bin, ['version', '--json'], { env: await cachedEnv(), timeoutMs: VERSION_TIMEOUT_MS })
       if (r.code !== 0) return unknown
       const j = parseIdentityJson(r.stdout)
       if (!j) return unknown
@@ -169,12 +289,17 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
 
   async function statusUnlocked(): Promise<LocalDaemonStatus> {
     const tgt = target()
-    const env = await launchEnv()
+    const binExists = await deps.fs.exists(binPath)
+    const launch = await statusLaunchEnv(binExists)
+    const env = launch.env
+    const cli = await readCliState({ exec: deps.exec, exists: deps.fs.exists }, binPath, env)
+    // "Could not tell" is recorded as not-resolved: such a machine is broken
+    // in some other way and is exactly the one worth re-checking.
+    lastCliResolved = cli.kind === 'not-installed' ? undefined : cli.kind === 'report' ? cli.report.resolved : null
     const which = await deps.exec('/usr/bin/which', ['tmux'], { env, timeoutMs: VERSION_TIMEOUT_MS }).catch(() => null)
     const tmux = which && which.code === 0 ? which.stdout.trim() || null : null
     const cfgFile = await readConfig()
     const cfg = cfgFile ?? parseDaemonConfig('', deps.home)
-    const binExists = await deps.fs.exists(binPath)
     const installed = binExists ? await readIdentity(binPath) : null
     const running = await health(cfg.bind, cfg.port)
     const base = {
@@ -260,7 +385,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   async function verifyNew(tgt: LocalDaemonStatus['target'], expectedHash: string): Promise<void> {
-    const r = await deps.exec(newPath, ['version', '--json'], { env: await launchEnv(), timeoutMs: VERSION_TIMEOUT_MS }).catch((e: Error) => ({ code: 1, stdout: '', stderr: e.message, timedOut: false }))
+    const r = await deps.exec(newPath, ['version', '--json'], { env: await cachedEnv(), timeoutMs: VERSION_TIMEOUT_MS }).catch((e: Error) => ({ code: 1, stdout: '', stderr: e.message, timedOut: false }))
     if (r.code !== 0) {
       await deps.fs.unlink(newPath)
       throw new Error(`downloaded binary does not run: ${r.stderr.trim() || `exit ${r.code}`}`)
@@ -283,7 +408,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   // dedicated probePort dep; its 'unknown' (timeout / other socket error)
   // keeps us polling exactly like 'open' does — only 'refused' proves free.
   async function stopUnlocked(cfg: DaemonConfig, pid: number): Promise<void> {
-    const r = await deps.exec(binPath, ['stop'], { env: await launchEnv(), cwd: deps.home, timeoutMs: STOP_TIMEOUT_MS })
+    const r = await deps.exec(binPath, ['stop'], { env: await cachedEnv(), cwd: deps.home, timeoutMs: STOP_TIMEOUT_MS })
     if (r.timedOut) throw new Error('pdx stop did not finish within 35s — the old binary was not replaced (the old process may or may not still be running)')
     const deadline = deps.now() + STOP_SETTLE_MS
     for (;;) {
@@ -299,7 +424,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   async function startDaemon(cfg: DaemonConfig): Promise<void> {
-    const r = await deps.exec(binPath, ['start'], { env: await launchEnv(), cwd: deps.home, timeoutMs: START_TIMEOUT_MS })
+    const r = await deps.exec(binPath, ['start'], { env: await cachedEnv(), cwd: deps.home, timeoutMs: START_TIMEOUT_MS })
     if (r.timedOut) throw new Error('pdx start did not finish within 70s')
     if (r.code !== 0) throw new Error(`pdx start failed: ${(r.stderr || r.stdout).trim()}`)
     const onDisk = await readIdentity(binPath)

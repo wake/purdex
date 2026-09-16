@@ -29,7 +29,7 @@ describe('resolveShellPath', () => {
       for (const a of args) expect(a).not.toContain('\0')
       return { code: 0, stdout: `${S}/a:/b${S}\n`, stderr: '', timedOut: false }
     })
-    expect(await resolveShellPath(exec, '/bin/zsh', S)).toBe('/a:/b')
+    expect(await resolveShellPath(exec, '/bin/zsh', S)).toEqual({ path: '/a:/b' })
     expect(vi.mocked(exec).mock.calls[0][1][0]).toBe('-ilc')
   })
   it('falls back to -lc when the interactive probe yields nothing', async () => {
@@ -37,12 +37,22 @@ describe('resolveShellPath', () => {
       if (args[0] === '-ilc') return { code: 0, stdout: 'banner only\n', stderr: '', timedOut: false }
       return { code: 0, stdout: `${S}/login/bin${S}\n`, stderr: '', timedOut: false }
     })
-    expect(await resolveShellPath(exec, '/bin/zsh', S)).toBe('/login/bin')
+    expect(await resolveShellPath(exec, '/bin/zsh', S)).toEqual({ path: '/login/bin' })
     expect(vi.mocked(exec).mock.calls.map((c) => c[1][0])).toEqual(['-ilc', '-lc'])
   })
-  it('returns null when both probes fail or time out', async () => {
+  it('returns null plus a readable error when both probes time out', async () => {
     const exec: ExecFn = async () => ({ code: null, stdout: '', stderr: '', timedOut: true })
-    expect(await resolveShellPath(exec, '/bin/zsh', S)).toBeNull()
+    const r = await resolveShellPath(exec, '/bin/zsh', S)
+    expect(r.path).toBeNull()
+    expect(r.error).toMatch(/-ilc/)
+    expect(r.error).toMatch(/-lc/)
+    expect(r.error).toMatch(/timed out/)
+  })
+  it('reports a thrown spawn error rather than swallowing it', async () => {
+    const exec: ExecFn = async () => { throw new Error('ENOENT /bin/fish') }
+    const r = await resolveShellPath(exec, '/bin/fish', S)
+    expect(r.path).toBeNull()
+    expect(r.error).toMatch(/ENOENT \/bin\/fish/)
   })
 })
 
@@ -54,16 +64,20 @@ describe('fallbackPath', () => {
 })
 
 describe('buildLaunchEnv', () => {
-  it('sets PATH from the shell and PDX_DEV_MODE=1', async () => {
+  it('sets PATH from the shell, PDX_DEV_MODE=1, and reports pathSource "shell"', async () => {
     const exec: ExecFn = async () => ({ code: 0, stdout: `${S}/shell/bin${S}\n`, stderr: '', timedOut: false })
-    const env = await buildLaunchEnv({ exec, shell: '/bin/zsh', baseEnv: { HOME: '/Users/x', PATH: '/usr/bin' }, home: '/Users/x', sentinel: () => S })
-    expect(env.PATH).toBe('/shell/bin')
-    expect(env.PDX_DEV_MODE).toBe('1')
-    expect(env.HOME).toBe('/Users/x')
+    const r = await buildLaunchEnv({ exec, shell: '/bin/zsh', baseEnv: { HOME: '/Users/x', PATH: '/usr/bin' }, home: '/Users/x', sentinel: () => S })
+    expect(r.env.PATH).toBe('/shell/bin')
+    expect(r.env.PDX_DEV_MODE).toBe('1')
+    expect(r.env.HOME).toBe('/Users/x')
+    expect(r.pathSource).toBe('shell')
+    expect(r.probeError).toBeUndefined()
   })
-  it('uses the fallback when the shell probe fails', async () => {
+  it('uses the fallback when the shell probe fails, and says why (spec §4.4)', async () => {
     const exec: ExecFn = async () => ({ code: 1, stdout: '', stderr: 'boom', timedOut: false })
-    const env = await buildLaunchEnv({ exec, shell: undefined, baseEnv: { PATH: '/usr/bin' }, home: '/Users/x', sentinel: () => S })
-    expect(env.PATH).toBe('/opt/homebrew/bin:/usr/local/bin:/Users/x/.local/bin:/usr/bin')
+    const r = await buildLaunchEnv({ exec, shell: undefined, baseEnv: { PATH: '/usr/bin' }, home: '/Users/x', sentinel: () => S })
+    expect(r.env.PATH).toBe('/opt/homebrew/bin:/usr/local/bin:/Users/x/.local/bin:/usr/bin')
+    expect(r.pathSource).toBe('fallback')
+    expect(r.probeError).toMatch(/boom/)
   })
 })

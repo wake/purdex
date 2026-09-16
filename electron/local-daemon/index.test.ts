@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, beforeEach } from 'vitest'
-import { createLocalDaemon } from './index'
+import { createLocalDaemon, readCliState } from './index'
 import type { LocalDaemonDeps, WriteHandle } from './types'
-import type { ExecResult } from './launch-env'
+import type { ExecFn, ExecResult } from './launch-env'
 
 const NUL = '\0'
 const HOME = '/Users/t'
@@ -23,9 +23,28 @@ interface Fake {
   lsofListen: string                   // lsof -iTCP output
   alivePids: Set<number>
   portProbe: 'open' | 'refused' | 'unknown' // scripted probePort result
+  shellPath: string                    // what the login-shell probe answers
+  // What `pdx path --json` answers for the PATH it was launched with.
+  pathReport: (pathVar: string) => Record<string, unknown>
   onExec: (file: string, args: string[]) => ExecResult | undefined
   downloads: Array<{ status: number; headers: Record<string, string>; body: Uint8Array }>
   clock: number
+}
+
+// The Go `pdx path --json` report (cmd/pdx/path.go `pathReport`), computed
+// from the PATH the binary was launched with — exactly what the real command
+// does, so the fixture and the gate agree on what "reachable" means.
+function defaultPathReport(pathVar: string): Record<string, unknown> {
+  const localBin = `${HOME}/.local/bin`
+  const onPath = pathVar.split(':').includes(localBin)
+  const resolved = onPath ? `${localBin}/pdx` : null
+  return {
+    self: BIN, resolved, resolvedReal: BIN, isSelf: onPath,
+    localBin, localBinExists: true, localBinOnPath: onPath,
+    link: onPath ? 'ok' : 'missing',
+    fixes: onPath ? [] : ['link', 'add-to-shell'],
+    ok: onPath,
+  }
 }
 
 function makeFake(overrides: Partial<Fake> = {}): Fake {
@@ -39,6 +58,8 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
     lsofListen: '',
     alivePids: new Set(),
     portProbe: 'refused',
+    shellPath: `/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`,
+    pathReport: defaultPathReport,
     onExec: () => undefined,
     downloads: [],
     clock: 0,
@@ -61,7 +82,7 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
       fake.execLog.push({ file, args, env: opts.env })
       const custom = fake.onExec(file, args)
       if (custom) return custom
-      if (file === '/bin/zsh') return { code: 0, stdout: `${S}/opt/homebrew/bin:/usr/bin${S}\n`, stderr: '', timedOut: false }
+      if (file === '/bin/zsh') return { code: 0, stdout: `${S}${fake.shellPath}${S}\n`, stderr: '', timedOut: false }
       if (file === '/usr/bin/which') return { code: 0, stdout: '/opt/homebrew/bin/tmux\n', stderr: '', timedOut: false }
       if (file === '/usr/sbin/lsof' || file === '/usr/bin/lsof') {
         if (args.includes('-d')) {
@@ -69,6 +90,11 @@ function makeFake(overrides: Partial<Fake> = {}): Fake {
           return { code: 0, stdout: fake.lsofTxt[pid] ?? '', stderr: '', timedOut: false }
         }
         return { code: 0, stdout: fake.lsofListen, stderr: '', timedOut: false }
+      }
+      if (args[0] === 'path' && args[1] === '--json') {
+        if (!fake.files.has(file)) return { code: 127, stdout: '', stderr: 'not found', timedOut: false }
+        const rep = fake.pathReport(opts.env?.PATH ?? '')
+        return { code: rep.ok === true ? 0 : 1, stdout: JSON.stringify(rep) + '\n', stderr: '', timedOut: false }
       }
       if (args[0] === 'version') {
         if (!fake.files.has(file)) return { code: 127, stdout: '', stderr: 'not found', timedOut: false }
@@ -326,7 +352,7 @@ describe('install()', () => {
     const start = f.execLog.find((e) => e.args[0] === 'start')!
     expect(start.file).toBe(BIN)
     expect(start.env?.PDX_DEV_MODE).toBe('1')
-    expect(start.env?.PATH).toBe('/opt/homebrew/bin:/usr/bin')
+    expect(start.env?.PATH).toBe(`/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`)
     const dl = f.execLog.findIndex((e) => e.args[0] === 'version' && e.file === `${BIN}.new`)
     expect(dl).toBeGreaterThan(-1)
   })
@@ -682,5 +708,134 @@ describe('withLock', () => {
     const b = d.status().then(() => order.push('b'))
     await Promise.all([a, b])
     expect(order).toEqual(['a-start', 'a-end', 'b'])
+  })
+})
+
+describe('launch env cache (spec §4.2)', () => {
+  let f: Fake
+  beforeEach(() => {
+    f = makeFake()
+    f.files.set(BIN, identity('aaa'))
+    f.files.set(CFG, 'bind = "100.64.0.9"\nport = 7860\ntoken = "purdex_t"\n')
+  })
+  // Each probe round starts with -ilc; a failing round also tries -lc.
+  const probes = () => f.execLog.filter((e) => e.file === '/bin/zsh' && e.args[0] === '-ilc').length
+  const lastPathEnv = () => f.execLog.filter((e) => e.args[0] === 'path').at(-1)?.env?.PATH
+
+  it('a healthy machine polled ten times runs the login shell once', async () => {
+    const d = createLocalDaemon(f.deps)
+    for (let i = 0; i < 10; i++) await d.status()
+    expect(probes()).toBe(1)
+  })
+
+  it('a machine where pdx does not resolve re-probes, but at most once per 5 s', async () => {
+    f.shellPath = '/opt/homebrew/bin:/usr/bin'
+    const d = createLocalDaemon(f.deps)
+    for (let i = 0; i < 10; i++) await d.status()
+    expect(probes()).toBe(1)          // the first poll's own probe is already fresh
+    f.clock += 5000
+    await d.status()
+    expect(probes()).toBe(2)
+    await d.status()
+    expect(probes()).toBe(2)
+  })
+
+  it('a successful re-probe replaces the cached PATH', async () => {
+    f.shellPath = '/opt/homebrew/bin:/usr/bin'
+    const d = createLocalDaemon(f.deps)
+    await d.status()
+    expect(lastPathEnv()).toBe('/opt/homebrew/bin:/usr/bin')
+    f.shellPath = `/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`
+    f.clock += 5000
+    await d.status()
+    expect(lastPathEnv()).toBe(`/opt/homebrew/bin:/usr/bin:${HOME}/.local/bin`)
+  })
+
+  it('a failed re-probe keeps the last good PATH rather than dropping to the fallback', async () => {
+    f.shellPath = '/good/bin'
+    const d = createLocalDaemon(f.deps)
+    await d.status()
+    expect(lastPathEnv()).toBe('/good/bin')
+    f.onExec = (file) => (file === '/bin/zsh' ? { code: 1, stdout: '', stderr: 'boom', timedOut: false } : undefined)
+    f.clock += 5000
+    await d.status()
+    expect(probes()).toBe(2)
+    expect(lastPathEnv()).toBe('/good/bin')
+  })
+
+  it('a machine with no binary installed is never re-probed — there is nothing to ask', async () => {
+    f.files.delete(BIN)
+    const d = createLocalDaemon(f.deps)
+    await d.status()
+    f.clock += 60_000
+    await d.status()
+    expect(probes()).toBe(1)
+    expect(f.execLog.some((e) => e.args[0] === 'path')).toBe(false)
+  })
+})
+
+describe('readCliState (spec §4.1)', () => {
+  const env: NodeJS.ProcessEnv = { PATH: '/x' }
+  const report = {
+    self: BIN, resolved: `${HOME}/.local/bin/pdx`, isSelf: true,
+    localBin: `${HOME}/.local/bin`, localBinExists: true, localBinOnPath: true,
+    link: 'ok', fixes: [], ok: true,
+  }
+  const cli = (exec: ExecFn, present = true) => readCliState({ exec, exists: async () => present }, BIN, env)
+
+  it('runs the managed binary with `path --json` and the launch env', async () => {
+    const calls: Array<{ file: string; args: string[]; env?: NodeJS.ProcessEnv }> = []
+    const exec: ExecFn = async (file, args, opts) => {
+      calls.push({ file, args, env: opts.env })
+      return { code: 0, stdout: JSON.stringify(report), stderr: '', timedOut: false }
+    }
+    await cli(exec)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].file).toBe(BIN)
+    expect(calls[0].args).toEqual(['path', '--json'])
+    expect(calls[0].env).toBe(env)
+  })
+
+  it('exit 0 is a parsed report', async () => {
+    const exec: ExecFn = async () => ({ code: 0, stdout: JSON.stringify(report) + '\n', stderr: '', timedOut: false })
+    expect(await cli(exec)).toEqual({ kind: 'report', code: 0, report })
+  })
+
+  it('exit 1 is the normal not-reachable answer, not an error', async () => {
+    const off = { ...report, resolved: null, isSelf: false, link: 'missing', fixes: ['link'], ok: false }
+    const exec: ExecFn = async () => ({ code: 1, stdout: JSON.stringify(off), stderr: '', timedOut: false })
+    expect(await cli(exec)).toEqual({ kind: 'report', code: 1, report: off })
+  })
+
+  it('malformed output is its own outcome, never a report', async () => {
+    const exec: ExecFn = async () => ({ code: 0, stdout: 'not json', stderr: 'oops', timedOut: false })
+    expect(await cli(exec)).toEqual({ kind: 'unparseable', code: 0, stdout: 'not json', stderr: 'oops' })
+  })
+
+  it('JSON that is not a pdx path report is unparseable, not a report', async () => {
+    const exec: ExecFn = async () => ({ code: 0, stdout: '{"resolved":42}', stderr: '', timedOut: false })
+    expect((await cli(exec)).kind).toBe('unparseable')
+  })
+
+  it('a thrown exec is its own outcome', async () => {
+    const exec: ExecFn = async () => { throw new Error('EACCES') }
+    expect(await cli(exec)).toEqual({ kind: 'exec-failed', error: 'EACCES' })
+  })
+
+  it('a timeout is an exec failure, not "not reachable"', async () => {
+    const exec: ExecFn = async () => ({ code: null, stdout: '', stderr: '', timedOut: true })
+    expect((await cli(exec)).kind).toBe('exec-failed')
+  })
+
+  it('a spawn failure (code null, no timeout) is an exec failure', async () => {
+    const exec: ExecFn = async () => ({ code: null, stdout: '', stderr: 'ENOENT', timedOut: false })
+    expect((await cli(exec)).kind).toBe('exec-failed')
+  })
+
+  it('an absent binary is its own outcome and nothing is executed', async () => {
+    let ran = false
+    const exec: ExecFn = async () => { ran = true; return { code: 0, stdout: '', stderr: '', timedOut: false } }
+    expect(await cli(exec, false)).toEqual({ kind: 'not-installed' })
+    expect(ran).toBe(false)
   })
 })
