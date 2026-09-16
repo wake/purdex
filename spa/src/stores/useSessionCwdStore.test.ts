@@ -181,3 +181,22 @@ describe('forgetHost', () => {
     expect(() => useSessionCwdStore.getState().forgetHost('nobody')).not.toThrow()
   })
 })
+
+// This file's own subject once carried a literal NUL byte as the key separator,
+// and git classifies any file containing one as binary: `git diff` prints
+// "Binary files ... differ", so the file silently drops out of review, out of
+// `git log -p`, and out of every text-based merge. The separator still has to
+// be a byte no hostId can contain — it is spelled as an escape instead of being
+// embedded raw. The guard is tree-wide because the next one will not be here.
+describe('source files stay text', () => {
+  it('no .ts/.tsx file embeds a literal NUL byte', () => {
+    // `?raw` rather than `node:fs`: this project's tsconfig exposes only
+    // `vite/client`, and the glob is resolved at build time, so the test needs
+    // no filesystem types and no path arithmetic.
+    const sources = import.meta.glob('../**/*.{ts,tsx}', { query: '?raw', eager: true, import: 'default' }) as Record<string, string>
+    const offenders = Object.entries(sources)
+      .filter(([, text]) => text.includes(' '))
+      .map(([path]) => path)
+    expect(offenders, 'files git would treat as binary').toEqual([])
+  })
+})
