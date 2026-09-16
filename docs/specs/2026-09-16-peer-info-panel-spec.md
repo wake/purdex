@@ -248,8 +248,17 @@ other live-only rows.
 | session gone from the daemon | no peer section (the pane is marked terminated by the WS) | `—` |
 | session not yet in `useSessionStore` (pane not reconciled) | block renders with a spinner, no error | `—`, no error |
 | primary pane is not a tmux session (editor, browser) | other blocks unaffected | unchanged — the status bar already early-returns |
-| stream-mode pane | peer section shown: a stream pane still has a tmux session and an agent | unchanged |
+| stream-mode pane | **no block at all** — the panel does not render one today (`collectRenameTargets` returns `mode === 'terminal'` panes only), and this feature does not change which panes the panel collects | peer info **is** shown: the status bar reads the primary pane directly and does not go through that collector |
 | tab has panes on two hosts | each block fetches its own host | the status bar follows the **primary** pane only |
+
+The stream-pane row is a **deliberate narrowing of v1**, forced by a conflict
+the plan review found: v1 said the panel shows a peer section for stream
+panes, but the panel renders no block for them at all — `collectRenameTargets`
+filters to terminal panes, and its comment says stream panes are out of scope.
+Honouring v1 would have meant changing which panes the rename panel collects,
+which would give stream panes name/cwd/resume rows as a side effect of a
+read-only peer feature. The status bar covers the case instead, because it
+reads the primary pane directly.
 
 `partial` deserves its own lines because v1 got its meaning wrong. It is set
 by any of three causes — an owner lookup that did not finish, unreadable
