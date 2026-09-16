@@ -689,7 +689,9 @@ func renderSelfWarning(w *ipeers.SelfWarning, stderr io.Writer) {
 // --json passthrough, decoding a non-200 into ipeers.APIError and
 // rendering it, and decoding a 200 into the ipeers.SelfResponse envelope —
 // whose warning, if any, is rendered here so all three routes report one
-// the same way. done is true whenever the caller should return exit
+// the same way. A 200 that is not envelope-shaped is a pre-v3 daemon and
+// is refused, not decoded; see the check itself for why compatibility is
+// the wrong answer there. done is true whenever the caller should return exit
 // immediately without printing anything more (a --json passthrough, an
 // error of any kind); done is false only on a decoded 200, when rec is
 // populated and the caller still owes its own success-line output
@@ -719,6 +721,29 @@ func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, 
 			return ipeers.PeerRecord{}, 1, true
 		}
 		renderMsgAPIError(ae, "", "", stderr)
+		return ipeers.PeerRecord{}, 1, true
+	}
+
+	// Check the SHAPE before decoding it. A daemon from before v3 answers
+	// these routes 200 with a bare PeerRecord, and encoding/json ignores
+	// unknown root fields — so that body unmarshals happily into a zero
+	// SelfResponse, and this used to print a block of empty strings and
+	// exit 0: an agent asking who it is was told, successfully, that it is
+	// nobody. The shape is the version: an envelope has "peer".
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(result.body, &shape); err != nil {
+		fmt.Fprintln(stderr, "pdx msg: invalid response")
+		return ipeers.PeerRecord{}, 1, true
+	}
+	if _, ok := shape["peer"]; !ok {
+		// Deliberately not made compatible with the bare form. A v2
+		// record's address head is a LABEL, and everything else in this
+		// binary treats a head as a canonical id, so accepting it would
+		// hand the caller a v2-semantics address to use as a v3 one — a
+		// wrong answer delivered confidently. In practice this is the
+		// daemon not having been restarted after pdx was updated, which is
+		// what the message says to do.
+		fmt.Fprintln(stderr, "pdx msg: the daemon is older than this pdx and answered with a pre-v3 record; restart it (pdx stop && pdx start) so both run the same version")
 		return ipeers.PeerRecord{}, 1, true
 	}
 

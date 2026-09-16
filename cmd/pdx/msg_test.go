@@ -887,6 +887,81 @@ func TestRunMsgWhoami_JSONPassthrough(t *testing.T) {
 	}
 }
 
+// TestRunMsgSelf_BarePeerRecordIsAVersionMismatch pins the other half of
+// the mixed-version story, the one that bites on a single host: `pdx` was
+// updated and the daemon was not yet restarted, so a self route answers
+// 200 with the v2 shape — a BARE PeerRecord, no envelope.
+//
+// encoding/json ignores unknown root fields, so that body unmarshals
+// happily into a zero SelfResponse and the CLI used to print a whoami
+// block of empty strings and exit 0: an agent asking who it is was told
+// it is nobody, successfully. The shape is checked instead, and a body
+// with no "peer" key is reported as what it is.
+//
+// Compatibility was deliberately not attempted. A v2 record's address head
+// is a label, so accepting it would hand the caller a v2-semantics address
+// while every other part of this build treats a head as a canonical id —
+// a wrong answer delivered confidently, which is worse than no answer.
+func TestRunMsgSelf_BarePeerRecordIsAVersionMismatch(t *testing.T) {
+	bare := `{"address":"air/x1:y","label":"x1","host":"air"}`
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"whoami", []string{"whoami"}},
+		{"name", []string{"name", "purdex-tester"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, bare)
+			}))
+			defer srv.Close()
+			cfgPath := writeTestConfig(t, srv.URL, "t")
+
+			var out, errb bytes.Buffer
+			code := runMsgCmd(append(c.args, "--config", cfgPath),
+				fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+			if code == 0 {
+				t.Fatalf("exit 0 on a v2 response; out %q", out.String())
+			}
+			if out.Len() != 0 {
+				t.Errorf("printed an identity anyway:\n%s", out.String())
+			}
+			for _, want := range []string{"daemon", "older", "restart"} {
+				if !strings.Contains(errb.String(), want) {
+					t.Errorf("stderr %q does not mention %q", errb.String(), want)
+				}
+			}
+		})
+	}
+}
+
+// TestRunMsgSelf_EnvelopeStillWorks pins that the shape check reads the
+// envelope and nothing else: a 200 carrying "peer" is decoded exactly as
+// before, warning included.
+func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{
+			Peer:    ipeers.PeerRecord{Address: "air/_3k9f2mq4:p-3f", Canonical: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user"},
+			Warning: &ipeers.SelfWarning{Code: ipeers.WarnLabelInUse, LiveLabels: []string{"purdex-tester"}},
+		})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"whoami", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "canonical:  _3k9f2mq4") {
+		t.Errorf("out:\n%s", out.String())
+	}
+	if !strings.Contains(errb.String(), ipeers.WarnLabelInUse) {
+		t.Errorf("stderr:\n%s", errb.String())
+	}
+}
+
 // --- name: PUT/DELETE /api/peers/self/label ---------------------------------
 
 // TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress pins the success line
