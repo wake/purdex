@@ -763,17 +763,21 @@ func TestSend_TmuxFormResolves(t *testing.T) {
 	}
 }
 
-// deadHolderTmuxName is the live target's tmux session name in the two
-// dead-holder tests below. "f-" is deliberate: it is a legal user label
-// (so the dead session can really hold it) yet SanitizeLabel rejects it —
-// the trailing '-' is trimmed and one byte is left — so the live agent in
-// it keeps its v2 hash default (default-label spec §3.1/§3.3). That is
-// what keeps tier 2 on the execution path in
-// TestSend_DeadHolderLabelFallsToTmuxSession: with a name that sanitized,
-// the live agent's own default would now be that name and tier 1 would
-// answer first (which is what TestSend_DeadHolderDoesNotBlockTmuxDefault
-// covers instead).
-const deadHolderTmuxName = "f-"
+// deadHolderTmuxName is the live target's tmux session name in
+// TestSend_DeadHolderLabelFallsToTmuxSession. "foo.bar" is deliberate: it
+// does NOT qualify as a default label (spec §3.1 — a name qualifies only
+// when it already is a valid user label, and '.' is not in the charset),
+// so the live agent sitting in it keeps its v2 hash default and tier 2
+// stays on this test's execution path. With a name that qualified, the
+// live agent's own default would be that name and tier 1 would answer
+// first — which is what TestSend_DeadHolderDoesNotBlockTmuxDefault covers
+// instead, with "foo".
+//
+// The dead session's label row is handed to ipeers.Build directly, which
+// takes label rows as given (BuildInput.Labels has no validity contract):
+// what this test pins is resolution — a row whose holder is not live is
+// inert at tier 1 — not what the claim path would accept.
+const deadHolderTmuxName = "foo.bar"
 
 // deadHolderRows builds the X2 fixture out of the real ipeers.Build: tmux
 // session "stale" is owned by a cc conversation that has NO live registry
@@ -799,16 +803,17 @@ func deadHolderRows(t *testing.T, tmuxName string) []ipeers.PeerRecord {
 }
 
 // TestSend_DeadHolderLabelFallsToTmuxSession pins X2 at the module level
-// (spec §3.3: a row whose holder is not live is inert). "air/f-" must not
-// stop at the dead holder with 409 not_deliverable: tier 1 ignores it,
-// and — the live agent's default being a hash, since "f-" does not
-// sanitize — tier 2 delivers to the tmux session.
+// (spec §3.3: a row whose holder is not live is inert). "air/foo.bar" must
+// not stop at the dead holder with 409 not_deliverable: tier 1 ignores it,
+// and — the live agent's default being a hash, since "foo.bar" does not
+// qualify — tier 2 delivers to the tmux session.
 func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	rows := deadHolderRows(t, deadHolderTmuxName)
-	// Sanity: the fixture really is the X2 shape — a dead holder of "f-"
-	// and a deliverable tmux session named "f-" with another label. The
-	// second condition is also what keeps this test on the tier-2 path.
+	// Sanity: the fixture really is the X2 shape — a dead holder of
+	// "foo.bar" and a deliverable tmux session named "foo.bar" with
+	// another label. The second condition is also what keeps this test on
+	// the tier-2 path.
 	var sawDead, sawLive bool
 	for _, r := range rows {
 		switch {

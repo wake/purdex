@@ -1000,6 +1000,49 @@ func TestBuild_SessionRow_TmuxDerivedDefault(t *testing.T) {
 	}
 }
 
+// TestBuild_DefaultNeverShadowsADifferentRealTmuxSession is the round-2
+// attack case (spec §11 finding 1, §4 row 7, §6.2 "shadowing"): tmux
+// session "foo.bar" holds the one live agent, and a SEPARATE, real tmux
+// session "foo-bar" — the string a sanitizer would have produced — has no
+// agent at all. A caller typing "foo-bar" means the real "foo-bar", and
+// must reach it at tier 2; if the agent in "foo.bar" were allowed to
+// derive "foo-bar", tier 1 would answer first and silently deliver into a
+// different tmux session. "foo.bar" does not qualify (§3.1), so nothing
+// shadows the real session.
+func TestBuild_DefaultNeverShadowsADifferentRealTmuxSession(t *testing.T) {
+	agent := Entry{PID: 21, SessionID: "sid-dotted", Name: "n1", Tmux: "foo.bar:@1.%1", Inbox: "/s/21"}
+	recs := Build(BuildInput{
+		HostID: "h:1",
+		Alias:  "mini-lab",
+		Sessions: []SessionSummary{
+			{Code: "c1", Name: "foo.bar"},
+			{Code: "c2", Name: "foo-bar"}, // real, agentless, and NOT the agent's place
+		},
+		Owners:  map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-dotted", TmuxPaneID: "%1"}},
+		Entries: []Entry{agent},
+	})
+
+	for _, r := range recs {
+		if r.Label == "foo-bar" {
+			t.Fatalf("row %+v claims the name of a different real tmux session", r)
+		}
+		if r.Agent != nil && r.Agent.SessionID == "sid-dotted" && r.Label != DefaultLabel("sid-dotted") {
+			t.Errorf("agent row label = %q, want the v2 hash %q", r.Label, DefaultLabel("sid-dotted"))
+		}
+	}
+
+	rec, err := Resolve(recs, "foo-bar", ResolveSnapshot{})
+	if err != nil {
+		t.Fatalf("Resolve(%q) = %v, want the real foo-bar session row", "foo-bar", err)
+	}
+	if rec.SessionName != "foo-bar" || rec.RowKind != "session" {
+		t.Fatalf("Resolve(%q) = %+v, want the real \"foo-bar\" session row", "foo-bar", rec)
+	}
+	if rec.Agent != nil && rec.Agent.SessionID == "sid-dotted" {
+		t.Fatalf("Resolve(%q) landed on the agent living in tmux \"foo.bar\"", "foo-bar")
+	}
+}
+
 // TestBuild_EntryRow_TmuxDerivedDefault pins that an entry row no session
 // consumed derives its default from its OWN registry tmux field, exactly as
 // a session row does.

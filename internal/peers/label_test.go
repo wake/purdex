@@ -57,65 +57,6 @@ func TestDefaultLabel_Golden(t *testing.T) {
 	}
 }
 
-func TestSanitizeLabel(t *testing.T) {
-	cases := []struct {
-		in    string
-		label string
-		ok    bool
-	}{
-		{"purdex1", "purdex1", true},
-		{"AI-Chat4", "ai-chat4", true},
-		{"my_proj.2", "my-proj-2", true},
-		// Lossy on purpose: this input and the one above collapse to the
-		// same label. Spec §3.3 rule 2 makes both sessions fall back.
-		{"my proj 2", "my-proj-2", true},
-		{"--lead--", "lead", true},
-		{"a", "", false},
-		{"", "", false},
-		{"專案", "", false},
-		{"cc", "", false},
-		{"tmux", "", false},
-		{"CC", "", false},
-		{strings.Repeat("a", 33), strings.Repeat("a", 32), true},
-		// The 32-byte cut lands on a '-', which the second trim removes.
-		{strings.Repeat("a-", 20), strings.Repeat("a-", 15) + "a", true},
-		{strings.Repeat("a", 32) + "-x", strings.Repeat("a", 32), true},
-	}
-	for _, c := range cases {
-		label, ok := SanitizeLabel(c.in)
-		if label != c.label || ok != c.ok {
-			t.Errorf("SanitizeLabel(%q) = %q,%v want %q,%v", c.in, label, ok, c.label, c.ok)
-		}
-	}
-}
-
-// The user label regexp validates every accepted output, so the shape is
-// proven rather than the construction trusted (spec §3.1).
-func TestSanitizeLabel_AcceptedOutputIsAValidUserLabel(t *testing.T) {
-	corpus := []string{
-		"purdex1", "AI-Chat4", "my_proj.2", "my proj 2", "--lead--",
-		"a", "", "專案", "cc", "tmux", "CC", "Tmux", "c-c",
-		strings.Repeat("a", 33), strings.Repeat("a-", 20),
-		strings.Repeat("a", 32) + "-x", strings.Repeat("ab", 100),
-		"-", "--", "---", "0", "0a", "-9",
-		"a\x00b", "a\tb", "a\nb", "\x7f", "\x01\x02",
-		"a:b", "a/b", "a.b", "a_b", "a b",
-		"🎉", "pro🎉ject", "側欄", "session#3", "SESSION",
-	}
-	for _, in := range corpus {
-		label, ok := SanitizeLabel(in)
-		if !ok {
-			if label != "" {
-				t.Errorf("SanitizeLabel(%q) rejected but returned %q", in, label)
-			}
-			continue
-		}
-		if err := ValidateUserLabel(label); err != nil {
-			t.Errorf("SanitizeLabel(%q) = %q: %v", in, label, err)
-		}
-	}
-}
-
 // liveEntry is one live cc registry entry in tmux session tmuxName ("" ⇒
 // outside tmux); only the fields ResolveDefaultLabels reads are set.
 func liveEntry(pid int, sid, tmuxName string) Entry {
@@ -150,11 +91,11 @@ func TestResolveDefaultLabels(t *testing.T) {
 			want:    DefaultLabels{},
 		},
 		{
-			// Rule 1 is about the tmux sessions, not their spellings:
-			// these two names both sanitize to "my-proj-2", but they are
-			// still two different places, so the conversation has none.
-			name:    "one conversation spanning two tmux sessions that sanitize alike",
-			entries: []Entry{liveEntry(1, "A", "my_proj.2"), liveEntry(2, "A", "my proj 2")},
+			// Rule 1 is about the tmux sessions, not about which of them
+			// happens to qualify: one live entry in a place that could
+			// have been a candidate is still not a single place.
+			name:    "one conversation spanning a qualifying and a non-qualifying tmux session",
+			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "A", "my_proj.2")},
 			want:    DefaultLabels{},
 		},
 		{
@@ -203,9 +144,13 @@ func TestResolveDefaultLabels(t *testing.T) {
 			want:      DefaultLabels{"A": "purdex1"},
 		},
 		{
-			name:    "two tmux names that sanitize to the same candidate",
-			entries: []Entry{liveEntry(1, "A", "my_proj.2"), liveEntry(2, "B", "my proj 2")},
-			want:    DefaultLabels{},
+			// Spec §3.1 at the resolver level: the agent in "foo.bar" must
+			// not take "foo-bar", which is the real name of the OTHER
+			// session here — and would be the name of a real session the
+			// resolver cannot even see when that session has no agent.
+			name:    "a non-qualifying name never becomes another session's name",
+			entries: []Entry{liveEntry(1, "A", "foo.bar"), liveEntry(2, "B", "foo-bar")},
+			want:    DefaultLabels{"B": "foo-bar"},
 		},
 		{
 			name:    "a released label row is not a competitor named \"\"",
@@ -245,8 +190,8 @@ func TestResolveDefaultLabels_OrderIndependent(t *testing.T) {
 		liveEntry(5, "D", "ai-chat4"),
 		liveEntry(6, "E", ""),
 		proxyOf(liveEntry(7, "F", "purdex1")),
-		liveEntry(8, "G", "my_proj.2"),
-		liveEntry(9, "H", "my proj 2"),
+		liveEntry(8, "G", "my_proj.2"), // does not qualify
+		liveEntry(9, "H", "foo-bar"),
 	}
 	labels := map[string]LabelInfo{"D": {Label: "lead", Rev: 2}, "dead": {Label: "ai-chat4"}}
 	want := ResolveDefaultLabels(entries, nil, labels)
@@ -276,6 +221,42 @@ func TestDefaultLabels_For(t *testing.T) {
 	}
 	if got := d.For("C"); got != DefaultLabel("C") {
 		t.Errorf("absent sid: got %q, want the hash", got)
+	}
+}
+
+// TestResolveDefaultLabels_Qualification pins spec §3.1 and the §6.1
+// boundary list: a tmux session name becomes a default label ONLY when it
+// already is a valid user label, and it is then the candidate verbatim.
+// There is no folding, no substitution and no truncation, because a
+// transformed name is a different string from the session it came from —
+// and that other string may be the real name of another tmux session.
+func TestResolveDefaultLabels_Qualification(t *testing.T) {
+	qualifying := []string{"purdex1", "ab", "a1", "0abc", "purdex-tester-2", "bb2", strings.Repeat("a", 32)}
+	for _, name := range qualifying {
+		got := ResolveDefaultLabels([]Entry{liveEntry(1, "A", name)}, nil, nil)
+		// The candidate is the tmux name itself, byte for byte: an
+		// accepted name is never returned transformed.
+		if !maps.Equal(got, DefaultLabels{"A": name}) {
+			t.Errorf("tmux %q: got %v, want the name unchanged as A's default", name, got)
+		}
+	}
+	rejected := []string{
+		"AI-Chat4",              // uppercase
+		"my_proj.2",             // '_' and '.'
+		"foo.bar",               // would have sanitized into another session's name
+		"a",                     // one byte
+		"專案",                    // non-ASCII
+		"",                      // outside tmux
+		"cc",                    // reserved
+		"tmux",                  // reserved
+		strings.Repeat("a", 33), // 33 bytes
+		"-lead",                 // leading '-'
+	}
+	for _, name := range rejected {
+		got := ResolveDefaultLabels([]Entry{liveEntry(1, "A", name)}, nil, nil)
+		if len(got) != 0 {
+			t.Errorf("tmux %q: got %v, want no default at all (the session keeps its v2 hash)", name, got)
+		}
 	}
 }
 

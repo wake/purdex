@@ -64,41 +64,16 @@ func DefaultLabel(sessionID string) string {
 	return "_" + string(out)
 }
 
-// SanitizeLabel derives a user-label-shaped string from a tmux session
-// name (spec §3.1). Substitution is byte-wise and happens before the
-// 32-byte truncation, so the cut can never split a multi-byte rune. ok is
-// false — and label "" — when the name cannot yield a valid, unreserved
-// label. The result is lossy: two different tmux names can produce the
-// same label, which spec §3.3 rule 2 resolves like any other collision.
-func SanitizeLabel(name string) (string, bool) {
-	b := make([]byte, 0, len(name))
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch {
-		case c >= 'A' && c <= 'Z':
-			c += 'a' - 'A'
-		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-':
-		default:
-			c = '-'
-		}
-		// Collapsing as the bytes are produced also drops the leading
-		// run, so only a trailing '-' is left to trim.
-		if c == '-' && (len(b) == 0 || b[len(b)-1] == '-') {
-			continue
-		}
-		b = append(b, c)
-	}
-	if len(b) > sanitizeMax {
-		b = b[:sanitizeMax]
-	}
-	label := strings.TrimRight(string(b), "-")
-	// Checked against the rule directly rather than by calling
-	// ValidateUserLabel, so the tests' regexp assertion stays independent
-	// of the construction.
-	if len(label) < 2 || label == LabelReservedCC || label == LabelReservedTmux {
-		return "", false
-	}
-	return label, true
+// qualifiesAsDefaultLabel reports whether a tmux session name may be used
+// as a default label (spec §3.1): only when it ALREADY is a valid user
+// label. There is deliberately no sanitizing — no folding, no
+// substitution, no truncation — because a transformed name is a different
+// string from the session it came from, and that other string may be the
+// real name of another tmux session on the same host. Refusing to mint a
+// label that differs from the name it stands for is what makes tier 1 and
+// tier 2 always mean the same place.
+func qualifiesAsDefaultLabel(tmuxName string) bool {
+	return ValidateUserLabel(tmuxName) == nil
 }
 
 // DefaultLabels maps a live conversation's sessionId to its resolved
@@ -119,19 +94,16 @@ func (d DefaultLabels) For(sessionID string) string {
 // ResolveDefaultLabels applies spec §3.3 over one population: the live,
 // non-proxy registry entries of this host. A conversation keeps the v2
 // hash — it is absent from the result — unless all of its entries sit in
-// one tmux session whose sanitized name no other live conversation derives
-// or holds as a user label. labels may cover sessions outside the
-// population (dead rows); those are inert and ignored.
+// one tmux session whose name already is a valid user label that no other
+// live conversation derives or holds as a user label. labels may cover
+// sessions outside the population (dead rows); those are inert and
+// ignored.
 func ResolveDefaultLabels(entries []Entry, proxyPIDs map[int]bool, labels map[string]LabelInfo) DefaultLabels {
 	// A disqualified session is deleted from candidates rather than left
-	// with an empty value, so every entry here is a real candidate.
+	// with an empty value, so every entry here is a real candidate. The
+	// candidate IS the tmux session's own name (§3.1), so rule 1's
+	// "same tmux session" check is a plain comparison of that name.
 	candidates := make(map[string]string, len(entries))
-	// The RAW tmux name each conversation has been seen in, because rule 1
-	// asks whether its processes sit in one tmux session — not whether
-	// their names happen to sanitize alike. "my_proj.2" and "my proj 2"
-	// both yield "my-proj-2" and are still two different places, so a
-	// conversation spanning them has none and must keep its hash.
-	rawNames := make(map[string]string, len(entries))
 	disqualified := make(map[string]bool, len(entries))
 	population := make(map[string]bool, len(entries))
 	for _, e := range entries {
@@ -142,16 +114,14 @@ func ResolveDefaultLabels(entries []Entry, proxyPIDs map[int]bool, labels map[st
 		if disqualified[e.SessionID] {
 			continue
 		}
-		raw := e.TmuxSessionName()
-		label, ok := SanitizeLabel(raw)
-		if prev, seen := rawNames[e.SessionID]; !ok || (seen && prev != raw) {
+		name := e.TmuxSessionName()
+		prev, seen := candidates[e.SessionID]
+		if !qualifiesAsDefaultLabel(name) || (seen && prev != name) {
 			disqualified[e.SessionID] = true
 			delete(candidates, e.SessionID)
-			delete(rawNames, e.SessionID)
 			continue
 		}
-		rawNames[e.SessionID] = raw
-		candidates[e.SessionID] = label
+		candidates[e.SessionID] = name
 	}
 
 	// A candidate names a place, so two conversations claiming it — by
