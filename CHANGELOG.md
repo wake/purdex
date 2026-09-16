@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.361] - 2026-09-16
+
+### Style: 全 app 細版中性 scrollbar；並移除 Tmux Agent Monitor 設定頁（#1072）
+
+兩件不相干的變更，各自一個 commit：scrollbar 樣式從「只有 activity bar 有自訂」推到全域，以及把已無人使用的 Tmux Agent Monitor 設定頁與其唯讀 API 整組移除。
+
+- **全域 scrollbar**：原本只有 activity bar 套了自訂樣式，其餘 40 多個 scroll 容器（New Tab、Settings、Host 各頁、檔案樹、editor）都吃系統預設，在深色主題下是一條淺灰色粗條。現在 `scrollbar-color` 放 `:root`（inherited，還能穿 shadow boundary）、`scrollbar-width: thin` 用 `*`（**這個屬性不是 inherited**，只放 `:root` 會只改到 viewport 而完全改不到內層容器）。
+- **thumb 顏色改用 `--text-secondary` 55%**，不是 `--text-muted`：實測四個內建主題 × 四種 surface，`text-muted` 45% 最差只有 1.35:1，而且即使 100% 不透明在 Dracula 的 elevated surface 上也只有 1.94:1，救不回來；`text-secondary` 55% 最差 2.46:1，與 VS Code 預設 slider（2.42:1）同一級。
+- **終端 viewport（`.xterm-viewport`）刻意排除**，渲染與 alpha.360 完全相同：`@xterm/addon-fit` 為 scrollbar 預留的是寫死的 14px 而非量測值，把實際 scrollbar 改細會讓它多留寬度、最多浪費一欄（方向安全，不會遮住內容）。要正式處理終端 scrollbar 得連 `overviewRuler.width` 一起改 → #1075。
+- 既有兩個例外照舊：`.scrollbar-hide`（分頁溢出條，完全隱藏）與 `.activity-bar-workspace-scroll`（accent 色）。五條規則全部收進新檔 `spa/src/styles/scrollbars.css`。
+- **移除 Tmux Agent Monitor**：設定頁與 4 個元件、`GET /api/agent/monitor/{chains,chains/{id},projection}` 三個 endpoint、`host-api.ts` 的三個 fetch 函式與四個 interface、60 個 i18n key、`monitor.go` 與其測試 —— 共約 1830 行。
+- **trace 寫入管線與整個 `TraceStore`（含 `trace_read.go`）刻意保留**：寫入成本低且有 `traceLimits()` 上限，trace 表是唯一能事後重建 hook chain 的資料，且 store 讀取層並非死碼（十幾個保留的 Go 測試透過 `ListChains` / `GetChainRecord` 斷言）。狀態燈不讀 trace（走 hook WS 廣播與 statusline），不受影響。
+- Lights rebuild 的 Phase 5 Dev Inspector 原本規劃沿用這三個 endpoint（從未實作），該 spec 已就地加註須自行重建讀取層；另兩份仍把已刪 API 寫成有效的 spec 也一併加註。
+- Follow-up：#1073（trace 讀取層歸屬）、#1074（daemon/renderer 版本落差政策）、#1075（終端 scrollbar）。
+- ⚠️ 純 SPA + daemon 變更。SPA 走 HMR 即可生效；daemon 需重新編譯才會移除那三個路由。
+
 ## [1.0.0-alpha.360] - 2026-09-16
 
 ### Feat: Session Launcher — 專案／指令格狀啟動器取代舊的 cwd 輸入（B3，#1070）
