@@ -21,6 +21,31 @@ button:disabled {
   cursor: default;
 }
 
+/* Global scrollbar base — thin, neutral thumb, invisible track.
+   `--text-secondary` (not `--text-muted`) at 55% is the thumb: muted sits too
+   close to the elevated surfaces on some builtin themes to stay visible even
+   at full opacity, while 55% of secondary lands ~2.5:1 at worst — the same
+   band as VS Code's default slider, and quiet enough not to compete with
+   list content. No global `::-webkit-scrollbar` block: a computed
+   `scrollbar-color`/`-width` other than `auto` already overrides those
+   pseudo-elements under our Chromium targets, so such a rule could never win. */
+:root {
+  /* `scrollbar-color` IS inherited, so one declaration at the root reaches
+     every scroll container — including any shadow tree, since inheritance
+     crosses shadow boundaries while a `*` selector does not. */
+  --scroll-thumb: color-mix(in srgb, var(--text-secondary) 55%, transparent);
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+/* `scrollbar-width` is NOT inherited (CSS Scrollbars 1), and the root value is
+   only required to apply to the viewport — a `:root` rule would leave all 40+
+   inner scroll containers on the platform default. Hence the universal
+   selector: it has to actually match them. Specificity 0,0,0, so the class
+   rules below still win. */
+* {
+  scrollbar-width: thin;
+}
+
 /* Hide scrollbar for tab overflow */
 .scrollbar-hide {
   -ms-overflow-style: none;
