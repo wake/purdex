@@ -107,6 +107,39 @@ func TestPathReport_DoesNotResolve(t *testing.T) {
 	}
 }
 
+// The two not-ok outcomes are different failures and the prose must say
+// which one happened. A live run on mlab — where PATH finds the repo build
+// — printed "pdx is NOT reachable … agents will get command not found",
+// which was simply false: pdx runs fine there, it is just a different
+// build. Every structured field was correct, which is why nothing caught
+// it; only the sentence was wrong, so only a test on the sentence can keep
+// it right.
+func TestPathReport_DistinguishesUnreachableFromDifferentBinary(t *testing.T) {
+	home := t.TempDir()
+	self := writeExec(t, filepath.Join(home, "repo", "bin", "pdx"))
+	writeExec(t, filepath.Join(home, "usr", "bin", "pdx"))
+
+	_, differentOut, _ := runPathT(t, pathEnv{
+		self: self, home: home, path: filepath.Join(home, "usr", "bin"),
+	})
+	if strings.Contains(differentOut, "command not found") {
+		t.Errorf("a resolvable-but-different pdx must NOT be reported as command not found:\n%s", differentOut)
+	}
+	if !strings.Contains(differentOut, "different binary") {
+		t.Errorf("report must say it is a different binary:\n%s", differentOut)
+	}
+
+	_, missingOut, _ := runPathT(t, pathEnv{
+		self: self, home: home, path: filepath.Join(home, "empty"),
+	})
+	if !strings.Contains(missingOut, "command not found") {
+		t.Errorf("a genuinely unreachable pdx must say command not found:\n%s", missingOut)
+	}
+	if strings.Contains(missingOut, "different binary") {
+		t.Errorf("nothing resolved, so nothing is a different binary:\n%s", missingOut)
+	}
+}
+
 func TestResolveSelfPath_FollowsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	real := writeExec(t, filepath.Join(dir, "real", "pdx"))

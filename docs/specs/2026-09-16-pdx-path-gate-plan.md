@@ -265,6 +265,14 @@ gains `'path-unresolved'`. `LocalDaemonStatus` gains the `cli` block (spec
 §4.4's split: probe failed **and** no resolve even on the fallback ⇒ refuse;
 probe failed **but** resolves ⇒ start, `pathSource: 'fallback'`.
 
+**The refusal criterion is `resolved === null`, never the JSON's `ok` or the
+command's exit code.** `pdx path` exits 1 — and reports `ok: false` — when
+`pdx` resolves to a *different* binary, because for the CLI's own purpose
+("is my install the one that runs?") that is a failure. For the gate it is
+not: spec §3.3 says the app's job is that `pdx` works, not that `pdx` is its
+own copy. Keying the gate on `ok` would refuse to start on every machine with
+a hand-made symlink to a repo build — mlab, today.
+
 The refusal message is spec §4.5 verbatim, including both commands.
 
 **Tests first:**

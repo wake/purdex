@@ -23,11 +23,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 地址格式：`<host>/<label>[:<suffix>]`。**只有 `<label>` 是地址**；`:<suffix>` 是 daemon 產生的識別資訊（tmux 名-CC 名），打不打都一樣。
 - label 規則：小寫英數與 `-`，2–32 字，`^[a-z0-9][a-z0-9-]{1,31}$`；`cc`、`tmux` 保留。命名慣例 `<專案>-<角色>[-<序號>]`（`purdex-tester`、`purdex-tester-2`）。
-- 尚未命名的 session 有兩種預設 label：該 session 所在的 **tmux session 名**（正規化後），條件是那個名字在這台主機上剛好只指向一個 live agent；不成立時（名字無法正規化、同一個 tmux session 裡有兩個 agent、或該名字已被別人當 user label）才退回由 sessionId 導出的 `_xxxxxx`。`pdx peers` 會在預設 label 後面標 `*`，這是它與同形狀 user label 在畫面上唯一的區別。
+- 尚未命名的 session 有兩種預設 label：該 session 所在的 **tmux session 名，原封不動**（**不做任何正規化**——它必須本身就已經是合法 label，否則不算數），且那個名字要在這台主機上剛好只指向一個 live agent；不成立時（名字不是合法 label、同一個 tmux session 裡有兩個 live 對話、該名字已被別的 live 對話當 user label、或 daemon 當下讀不到 label store）才退回由 sessionId 導出的 `_xxxxxx`。`pdx peers` 會在預設 label 後面標 `*`，這是它與同形狀 user label 在畫面上唯一的區別。
 - 語意差別：**default label ＝ 位置**（那個 tmux session 裡的 agent），tmux 改名或該位置不再唯一就會變；**user label ＝ 對話**，只有使用者改它才會變。要一個跨 tmux 改名仍有效的地址就 `pdx msg name`。
 - 指令：`pdx msg name <label>`（命名自己）、`pdx msg name --release`、`pdx msg whoami`（看自己的地址）、`pdx msg send <host>/<label> "<text>"`；`pdx peers --all` 看所有主機的 session。
 - `<host>/tmux:<tmux session 名>` 是不經 label 的 fallback。`cc:<name>` 形式已移除。
 - 被要求「成為 X」時：先 `pdx msg name X`，再 `pdx msg whoami` 回報地址；`label_taken` 時從回應的 live_labels 挑一個沒撞的。
+- **`pdx: command not found` 時**：這台機器的 daemon 是 App 裝的，執行檔在 `~/.config/pdx/bin/pdx`，但安裝流程不會把它放上 PATH。跑 `~/.config/pdx/bin/pdx path`（開發機則是 repo 的 `bin/pdx`）看診斷，它會告訴你該用 `path link`（建 `~/.local/bin/pdx`）還是 `path add-to-shell`（把 `~/.local/bin` 加進 shell 設定）。兩個指令在 Settings → Development 也有按鈕。
 
 ## 技術棧
 

@@ -436,8 +436,18 @@ func writePathReportText(rep pathReport, env pathEnv, w io.Writer) {
 		return
 	}
 
-	fmt.Fprintln(w, "pdx is NOT reachable from this PATH, so agents following CLAUDE.md")
-	fmt.Fprintln(w, `will get "command not found".`)
+	// "not reachable" and "not me" are different failures and must not be
+	// reported with the same sentence: on a machine whose PATH finds a
+	// different pdx, `pdx` works — saying agents will get "command not
+	// found" would be plainly false, and a false diagnosis sends the reader
+	// to fix something that is not broken.
+	if rep.Resolved != nil {
+		fmt.Fprintln(w, "pdx IS reachable, but it is a different binary than this one.")
+		fmt.Fprintln(w, "Commands will run that other build, not this one.")
+	} else {
+		fmt.Fprintln(w, "pdx is NOT reachable from this PATH, so agents following CLAUDE.md")
+		fmt.Fprintln(w, `will get "command not found".`)
+	}
 	fmt.Fprintln(w)
 	if len(rep.Fixes) == 0 {
 		fmt.Fprintf(w, "Neither fix applies: ~/.local/bin is on PATH and holds a correct\n")
