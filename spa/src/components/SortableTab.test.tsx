@@ -23,8 +23,11 @@ vi.mock('@dnd-kit/sortable', () => ({
   }),
 }))
 
+// The host badge renders a WorkspaceIcon, which only emits an <svg> once the
+// Phosphor weight JSON is cached (a fetch that never resolves in jsdom). The stub
+// encodes name + weight into the path data so tests can assert what was handed down.
 vi.mock('../features/workspace/lib/icon-path-cache', () => ({
-  getIconPath: () => null,
+  getIconPath: (name: string, weight: string) => `M ${name} ${weight}`,
   isWeightLoaded: () => true,
   prefetchWeight: () => Promise.resolve(),
 }))
@@ -64,8 +67,13 @@ beforeEach(() => {
   useUISettingsStore.setState({
     tabIndicatorStyle: 'badge',
     tabNameTooltipMode: 'both',
-    hostColorTabBarStyle: 'bottom-line',
-    hostColorTabBarWidth: 2,
+    hostBadgeTabBarEnabled: true,
+    hostBadgeTabBarLineColor: 'host',
+    hostBadgeTabBarLineOpacity: 100,
+    hostBadgeTabBarBgOpacity: 22,
+    hostBadgeTabBarBox: 16,
+    hostBadgeTabBarInset: 2,
+    hostBadgeTabBarRadius: 4,
   })
   useI18nStore.setState({ t: (k: string) => k })
 })
@@ -75,50 +83,111 @@ function setH1Color(color: string) {
   useHostStore.setState({ hosts: { h1: { ...h1, color } } })
 }
 
-describe('SortableTab — host color mark', () => {
-  it('renders one bottom-line mark as last child of a normal tab', () => {
+function tabChildren(container: HTMLElement): Element[] {
+  return Array.from(container.querySelector('[data-tab-id="t1"]')!.children)
+}
+
+describe('SortableTab — host badge', () => {
+  it('renders exactly one badge, between the tab icon and the label', () => {
     setH1Color('#3b82f6')
     const { container } = render(<SortableTab {...defaultProps} />)
-    const marks = screen.getAllByTestId('host-color-mark')
-    expect(marks).toHaveLength(1)
-    expect(marks[0]).toHaveAttribute('data-style', 'bottom-line')
-    expect(marks[0].style.zIndex).toBe('1')
-    expect(container.querySelector('[data-tab-id="t1"]')!.lastElementChild).toBe(marks[0])
+    const badges = screen.getAllByTestId('host-badge')
+    expect(badges).toHaveLength(1)
+
+    const children = tabChildren(container)
+    const label = container.querySelector('[data-tab-id="t1"] span.overflow-hidden')!
+    const badgeIdx = children.indexOf(badges[0])
+    // Child 0 is the TabIcon slot.
+    expect(badgeIdx).toBe(1)
+    expect(children.indexOf(label)).toBe(badgeIdx + 1)
+    expect(children[0].contains(badges[0])).toBe(false)
+    expect(
+      badges[0].compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 
-  it('renders the mark as last child of a pinned tab', () => {
+  it('renders the badge as a real flex child, not an overlay', () => {
     setH1Color('#3b82f6')
-    const pinnedTab = makeTestTab('t1', { pinned: true })
-    const { container } = render(<SortableTab {...defaultProps} tab={pinnedTab} pinned />)
-    const marks = screen.getAllByTestId('host-color-mark')
-    expect(marks).toHaveLength(1)
-    expect(container.querySelector('[data-tab-id="t1"]')!.lastElementChild).toBe(marks[0])
-  })
-
-  it('renders no mark when host has no color', () => {
     render(<SortableTab {...defaultProps} />)
-    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+    const badge = screen.getByTestId('host-badge')
+    expect(badge.style.position).not.toBe('absolute')
+    expect(badge.style.display).toBe('inline-flex')
   })
 
-  it("renders no mark when tab bar style is 'none'", () => {
+  it('keeps the close overlay as the last, absolutely positioned child', () => {
     setH1Color('#3b82f6')
-    useUISettingsStore.setState({ hostColorTabBarStyle: 'none' })
-    render(<SortableTab {...defaultProps} />)
-    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+    const { container } = render(<SortableTab {...defaultProps} />)
+    const last = container.querySelector('[data-tab-id="t1"]')!.lastElementChild!
+    expect(last.className).toContain('absolute')
+    expect(last.contains(screen.getByTitle('tab.close'))).toBe(true)
   })
 
-  it('reflects bottom-line width as height', () => {
+  it('keeps the unread pip absolutely positioned', () => {
     setH1Color('#3b82f6')
-    useUISettingsStore.setState({ hostColorTabBarWidth: 4 })
-    render(<SortableTab {...defaultProps} />)
-    expect(screen.getByTestId('host-color-mark').style.height).toBe('4px')
+    useAgentStore.setState({ unread: { 'h1:sc1': true }, statuses: {}, subagents: {} })
+    const { container } = render(<SortableTab {...defaultProps} isActive={false} />)
+    const pip = tabChildren(container).find(
+      (el) => (el as HTMLElement).style.backgroundColor === 'rgb(185, 28, 28)',
+    ) as HTMLElement | undefined
+    expect(pip).toBeTruthy()
+    expect(pip!.className).toContain('absolute')
   })
 
-  it('renders no mark for a tab without a tmux-session pane', () => {
+  it('still renders a neutral badge when the host has no color', () => {
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.getByTestId('host-badge')).toHaveAttribute('data-has-color', 'false')
+  })
+
+  it('renders no badge when the top tab surface is disabled', () => {
+    setH1Color('#3b82f6')
+    useUISettingsStore.setState({ hostBadgeTabBarEnabled: false })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('host-badge')).toBeNull()
+  })
+
+  it('renders no badge for a tab without a tmux-session pane', () => {
     setH1Color('#3b82f6')
     const tab = { ...createTab({ kind: 'new-tab' }), id: 't1' }
     render(<SortableTab {...defaultProps} tab={tab} />)
-    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+    expect(screen.queryByTestId('host-badge')).toBeNull()
+  })
+
+  it('passes the tab-bar store settings through to the badge', () => {
+    setH1Color('#3b82f6')
+    useUISettingsStore.setState({
+      hostBadgeTabBarBox: 20,
+      hostBadgeTabBarInset: 1,
+      hostBadgeTabBarRadius: 6,
+      hostBadgeTabBarBgOpacity: 40,
+    })
+    render(<SortableTab {...defaultProps} />)
+    const badge = screen.getByTestId('host-badge')
+    expect(badge.style.width).toBe('20px')
+    expect(badge.style.height).toBe('20px')
+    expect(badge.style.borderRadius).toBe('6px')
+    expect(badge.style.background).toContain('40%')
+    // icon size = box − 2×inset
+    expect(badge.querySelector('svg')).toHaveAttribute('width', '18')
+  })
+
+  it("uses the host's own icon and weight", () => {
+    const h1 = useHostStore.getState().hosts.h1
+    useHostStore.setState({
+      hosts: { h1: { ...h1, color: '#3b82f6', icon: 'Laptop', iconWeight: 'duotone' } },
+    })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.getByTestId('host-badge').querySelector('path')).toHaveAttribute(
+      'd',
+      'M Laptop duotone',
+    )
+  })
+
+  it('renders no badge on a pinned tab and keeps its w-9 width', () => {
+    setH1Color('#3b82f6')
+    const pinnedTab = makeTestTab('t1', { pinned: true })
+    const { container } = render(<SortableTab {...defaultProps} tab={pinnedTab} pinned />)
+    expect(screen.queryByTestId('host-badge')).toBeNull()
+    expect(container.querySelector('[data-tab-id="t1"]')!.className).toContain('w-9')
   })
 })
 
