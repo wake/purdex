@@ -64,6 +64,43 @@ func DefaultLabel(sessionID string) string {
 	return "_" + string(out)
 }
 
+// SanitizeLabel derives a user-label-shaped string from a tmux session
+// name (spec §3.1). Substitution is byte-wise and happens before the
+// 32-byte truncation, so the cut can never split a multi-byte rune. ok is
+// false — and label "" — when the name cannot yield a valid, unreserved
+// label. The result is lossy: two different tmux names can produce the
+// same label, which spec §3.3 rule 2 resolves like any other collision.
+func SanitizeLabel(name string) (string, bool) {
+	b := make([]byte, 0, len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+			c += 'a' - 'A'
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-':
+		default:
+			c = '-'
+		}
+		// Collapsing as the bytes are produced also drops the leading
+		// run, so only a trailing '-' is left to trim.
+		if c == '-' && (len(b) == 0 || b[len(b)-1] == '-') {
+			continue
+		}
+		b = append(b, c)
+	}
+	if len(b) > sanitizeMax {
+		b = b[:sanitizeMax]
+	}
+	label := strings.TrimRight(string(b), "-")
+	// Checked against the rule directly rather than by calling
+	// ValidateUserLabel, so the tests' regexp assertion stays independent
+	// of the construction.
+	if len(label) < 2 || label == LabelReservedCC || label == LabelReservedTmux {
+		return "", false
+	}
+	return label, true
+}
+
 // Sanitize is the suffix component sanitizer: keeps [A-Za-z0-9_.-],
 // replaces every other byte with '_', truncates to 32 bytes; "" ⇒ "_".
 func Sanitize(s string) string {

@@ -54,6 +54,65 @@ func TestDefaultLabel_Golden(t *testing.T) {
 	}
 }
 
+func TestSanitizeLabel(t *testing.T) {
+	cases := []struct {
+		in    string
+		label string
+		ok    bool
+	}{
+		{"purdex1", "purdex1", true},
+		{"AI-Chat4", "ai-chat4", true},
+		{"my_proj.2", "my-proj-2", true},
+		// Lossy on purpose: this input and the one above collapse to the
+		// same label. Spec §3.3 rule 2 makes both sessions fall back.
+		{"my proj 2", "my-proj-2", true},
+		{"--lead--", "lead", true},
+		{"a", "", false},
+		{"", "", false},
+		{"專案", "", false},
+		{"cc", "", false},
+		{"tmux", "", false},
+		{"CC", "", false},
+		{strings.Repeat("a", 33), strings.Repeat("a", 32), true},
+		// The 32-byte cut lands on a '-', which the second trim removes.
+		{strings.Repeat("a-", 20), strings.Repeat("a-", 15) + "a", true},
+		{strings.Repeat("a", 32) + "-x", strings.Repeat("a", 32), true},
+	}
+	for _, c := range cases {
+		label, ok := SanitizeLabel(c.in)
+		if label != c.label || ok != c.ok {
+			t.Errorf("SanitizeLabel(%q) = %q,%v want %q,%v", c.in, label, ok, c.label, c.ok)
+		}
+	}
+}
+
+// The user label regexp validates every accepted output, so the shape is
+// proven rather than the construction trusted (spec §3.1).
+func TestSanitizeLabel_AcceptedOutputIsAValidUserLabel(t *testing.T) {
+	corpus := []string{
+		"purdex1", "AI-Chat4", "my_proj.2", "my proj 2", "--lead--",
+		"a", "", "專案", "cc", "tmux", "CC", "Tmux", "c-c",
+		strings.Repeat("a", 33), strings.Repeat("a-", 20),
+		strings.Repeat("a", 32) + "-x", strings.Repeat("ab", 100),
+		"-", "--", "---", "0", "0a", "-9",
+		"a\x00b", "a\tb", "a\nb", "\x7f", "\x01\x02",
+		"a:b", "a/b", "a.b", "a_b", "a b",
+		"🎉", "pro🎉ject", "側欄", "session#3", "SESSION",
+	}
+	for _, in := range corpus {
+		label, ok := SanitizeLabel(in)
+		if !ok {
+			if label != "" {
+				t.Errorf("SanitizeLabel(%q) rejected but returned %q", in, label)
+			}
+			continue
+		}
+		if err := ValidateUserLabel(label); err != nil {
+			t.Errorf("SanitizeLabel(%q) = %q: %v", in, label, err)
+		}
+	}
+}
+
 func TestSanitize(t *testing.T) {
 	cases := map[string]string{
 		"":                      "_",
