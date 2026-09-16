@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.365] - 2026-09-17
+
+### Feat: peer 資訊進 tab 資訊面板與狀態列（#1085）
+
+狀態列與 tab 雙擊面板顯示 `{host} {cwd} {agent} {peer id} {connected status}`，每段有視覺分隔、各自可點擊複製。**peer id 顯示 label、複製完整地址**——label 本身不可定址，而複製「peer id」的人要的是能貼進 `pdx msg send` 的東西。
+
+**決定設計的那個發現**：`GET /api/peers` 實測 ~2.1 秒（CLI 啟動基準 10ms）。不是第一次慢——`module.go` 設了 `budget: 2 * time.Second`，會在該預算內逐一解析**每個** tmux session 的 owner。那是艦隊盤點端點，不是單一 session 查詢。狀態列若在切分頁時呼叫它，等於每次點擊都在 daemon 上排一個兩秒的 tmux 重活。
+
+**兩個「以為免費」的欄位其實不是**（同一種錯誤：把元件手上已有的值當成功能需要的值）：
+- 既有的 agent badge 是 **model 名稱**（`Claude Opus 4`），而 peers API 的 `agent.peer_name` 是 `ai-chat-story-3a`。model badge 不動，peer name 是新的。
+- `Session.cwd` 是 `#{session_path}`（session **建立時**的目錄），不跟著 `cd`。真正的 cwd 有自己的便宜端點，snapshot capture 在 alpha.321 就因為同一個原因換過去了。這一段**可複製**，錯的值會被貼進指令。
+
+最終：host 與 status 免費即時、cwd 一次便宜的 tmux 呼叫、agent 名與 peer id 來自貴的那支並快取。
+
+**取用策略集中在 `usePeerInfo` 一個 hook**——刻意如此，那是「切分頁不得觸發 fetch」這條測試寫得出來的唯一原因。不輪詢、切分頁不抓；面板開啟時抓、refresh 控制點擊時抓。`connected` + `tmuxState: undefined` **要**抓（那是 WS 連上後的正常過渡態，當成「不 ok」會導致連上後第一次 render 永遠不抓）。
+
+**過期處理**：default label 是位置地址，tmux 改名會讓地址變而 SPA 收不到通知。超過 60 秒變暗並在 tooltip 帶年齡。**點擊語意不隨過期改變**——永遠是複製，refresh 是獨立控制項；讓過期的段落改成 refresh 是在等使用者誤點。
+
+**Review 三輪**（spec 1 + plan 1 + PR R1 + R2 三視角）。R2 六項，其中兩條互相矛盾（防守方說狀態列失敗時仍顯示舊地址、體質方說面板失敗時藏掉已知資料）——那是同一個不一致的兩面，裁定照 spec §6：**兩邊都不顯示過期地址**，並**否決**體質方那條，因為它會把「複製到過期地址→送錯 agent」放回來。
+
+最嚴重的一條（攻擊方）：peer 與 cwd 只用 `sessionCode` 對應，**tmux 重啟後 code 會被重用**，可能把新 session 的地址顯示並複製到舊 pane 上。已改為納入 tmux generation 比對，且**世代未知不得當成匹配**。
+
+**未驗證、未粉飾的兩項**：400px 不溢出的實測沒跑（jsdom 沒有 layout 引擎，那條測試的名字本身就聲明了它只證明「決策」；真實量測需要已認證的 SPA，而注入 token 會讓它出現在指令裡）；也沒有對 daemon 做 live check。前兩個 PR 各有一個 bug 只有真機跑才抓得到，所以這個缺口值得指名。
+
+延後：#1086（`/api/peers/session/{code}` 單一 session 端點，毫秒級、可讓地址永不過期）。
+
+- 測試：453 檔 / 5981，lint 與 build 全綠。
+
 ## [1.0.0-alpha.364] - 2026-09-16
 
 ### Feat: `pdx path` —— 讓 CLI 真的可達，不可達就不讓 daemon 啟動（#1081）
