@@ -101,6 +101,79 @@ func SanitizeLabel(name string) (string, bool) {
 	return label, true
 }
 
+// DefaultLabels maps a live conversation's sessionId to its resolved
+// default label. Only sessions whose tmux-derived candidate survived
+// spec §3.3 are present, so a nil map behaves exactly as Peer Address v2
+// did: every lookup falls back to the hash.
+type DefaultLabels map[string]string
+
+// For is the only way to read a default label, so a caller can never
+// accidentally render a place address the resolver rejected.
+func (d DefaultLabels) For(sessionID string) string {
+	if label := d[sessionID]; label != "" {
+		return label
+	}
+	return DefaultLabel(sessionID)
+}
+
+// ResolveDefaultLabels applies spec §3.3 over one population: the live,
+// non-proxy registry entries of this host. A conversation keeps the v2
+// hash — it is absent from the result — unless its entries agree on one
+// tmux session whose sanitized name no other live conversation derives or
+// holds as a user label. labels may cover sessions outside the population
+// (dead rows); those are inert and ignored.
+func ResolveDefaultLabels(entries []Entry, proxyPIDs map[int]bool, labels map[string]LabelInfo) DefaultLabels {
+	// "" means the session has disqualified itself (entries in two tmux
+	// sessions, or a name that does not sanitize) and must stay absent.
+	candidates := make(map[string]string, len(entries))
+	disqualified := make(map[string]bool, len(entries))
+	population := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.IsProxy || proxyPIDs[e.PID] {
+			continue
+		}
+		population[e.SessionID] = true
+		if disqualified[e.SessionID] {
+			continue
+		}
+		label, ok := SanitizeLabel(e.TmuxSessionName())
+		if prev, seen := candidates[e.SessionID]; !ok || (seen && prev != label) {
+			disqualified[e.SessionID] = true
+			delete(candidates, e.SessionID)
+			continue
+		}
+		candidates[e.SessionID] = label
+	}
+
+	// A candidate names a place, so two conversations claiming it — by
+	// deriving it or by holding it as a user label — means the place
+	// cannot address either of them (rules 2 and 3).
+	claimants := make(map[string][]string, len(candidates))
+	for sid, label := range candidates {
+		claimants[label] = append(claimants[label], sid)
+	}
+	for sid := range population {
+		if label := labels[sid].Label; label != "" {
+			claimants[label] = append(claimants[label], sid)
+		}
+	}
+
+	resolved := make(DefaultLabels, len(candidates))
+	for sid, label := range candidates {
+		contested := false
+		for _, other := range claimants[label] {
+			if other != sid {
+				contested = true
+				break
+			}
+		}
+		if !contested {
+			resolved[sid] = label
+		}
+	}
+	return resolved
+}
+
 // Sanitize is the suffix component sanitizer: keeps [A-Za-z0-9_.-],
 // replaces every other byte with '_', truncates to 32 bytes; "" ⇒ "_".
 func Sanitize(s string) string {

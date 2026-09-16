@@ -3,6 +3,9 @@ package peers
 
 import (
 	"errors"
+	"maps"
+	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -110,6 +113,161 @@ func TestSanitizeLabel_AcceptedOutputIsAValidUserLabel(t *testing.T) {
 		if err := ValidateUserLabel(label); err != nil {
 			t.Errorf("SanitizeLabel(%q) = %q: %v", in, label, err)
 		}
+	}
+}
+
+// liveEntry is one live cc registry entry in tmux session tmuxName ("" ⇒
+// outside tmux); only the fields ResolveDefaultLabels reads are set.
+func liveEntry(pid int, sid, tmuxName string) Entry {
+	e := Entry{PID: pid, SessionID: sid}
+	if tmuxName != "" {
+		e.Tmux = tmuxName + ":@0.%" + string(rune('0'+pid%10))
+	}
+	return e
+}
+
+func TestResolveDefaultLabels(t *testing.T) {
+	cases := []struct {
+		name      string
+		entries   []Entry
+		proxyPIDs map[int]bool
+		labels    map[string]LabelInfo
+		want      DefaultLabels
+	}{
+		{
+			name:    "one conversation in one tmux session",
+			entries: []Entry{liveEntry(1, "A", "purdex1")},
+			want:    DefaultLabels{"A": "purdex1"},
+		},
+		{
+			name:    "one conversation, two processes in the same tmux session",
+			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "A", "purdex1")},
+			want:    DefaultLabels{"A": "purdex1"},
+		},
+		{
+			name:    "one conversation spanning two tmux sessions has no place",
+			entries: []Entry{liveEntry(1, "A", "a1"), liveEntry(2, "A", "a2")},
+			want:    DefaultLabels{},
+		},
+		{
+			name:    "two unnamed conversations in one tmux session",
+			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "B", "purdex1")},
+			want:    DefaultLabels{},
+		},
+		{
+			name:    "a user-labelled conversation still competes for the place",
+			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "B", "purdex1")},
+			labels:  map[string]LabelInfo{"B": {Label: "foo", Rev: 1}},
+			want:    DefaultLabels{},
+		},
+		{
+			name:    "another live session holds the candidate as a user label",
+			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "B", "bb2")},
+			labels:  map[string]LabelInfo{"B": {Label: "purdex1", Rev: 1}},
+			want:    DefaultLabels{"B": "bb2"},
+		},
+		{
+			name:    "a dead session's user label is inert",
+			entries: []Entry{liveEntry(1, "A", "purdex1")},
+			labels:  map[string]LabelInfo{"dead": {Label: "purdex1", Rev: 1}},
+			want:    DefaultLabels{"A": "purdex1"},
+		},
+		{
+			name:    "a session's own user label does not block its own candidate",
+			entries: []Entry{liveEntry(1, "A", "purdex1")},
+			labels:  map[string]LabelInfo{"A": {Label: "purdex1", Rev: 1}},
+			want:    DefaultLabels{"A": "purdex1"},
+		},
+		{
+			name:    "outside tmux",
+			entries: []Entry{liveEntry(1, "A", "")},
+			want:    DefaultLabels{},
+		},
+		{
+			name:    "a proxy entry is not in the population (IsProxy)",
+			entries: []Entry{proxyOf(liveEntry(1, "P", "purdex1")), liveEntry(2, "A", "purdex1")},
+			want:    DefaultLabels{"A": "purdex1"},
+		},
+		{
+			name:      "a proxy entry is not in the population (proxyPIDs)",
+			entries:   []Entry{liveEntry(1, "P", "purdex1"), liveEntry(2, "A", "purdex1")},
+			proxyPIDs: map[int]bool{1: true},
+			want:      DefaultLabels{"A": "purdex1"},
+		},
+		{
+			name:    "two tmux names that sanitize to the same candidate",
+			entries: []Entry{liveEntry(1, "A", "my_proj.2"), liveEntry(2, "B", "my proj 2")},
+			want:    DefaultLabels{},
+		},
+		{
+			name:    "a released label row is not a competitor named \"\"",
+			entries: []Entry{liveEntry(1, "A", "purdex1"), liveEntry(2, "B", "bb2")},
+			labels:  map[string]LabelInfo{"A": {Label: "", Rev: 4}, "B": {Label: "", Rev: 2}},
+			want:    DefaultLabels{"A": "purdex1", "B": "bb2"},
+		},
+		{
+			name:    "the proxy filter runs before the distinct-name check",
+			entries: []Entry{proxyOf(liveEntry(1, "A", "helper")), liveEntry(2, "A", "purdex1")},
+			want:    DefaultLabels{"A": "purdex1"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ResolveDefaultLabels(c.entries, c.proxyPIDs, c.labels)
+			if !maps.Equal(got, c.want) {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func proxyOf(e Entry) Entry {
+	e.IsProxy = true
+	return e
+}
+
+// The resolver is a pure function of the population, so the registry's
+// iteration order must not reach the result.
+func TestResolveDefaultLabels_OrderIndependent(t *testing.T) {
+	entries := []Entry{
+		liveEntry(1, "A", "purdex1"),
+		liveEntry(2, "A", "purdex1"),
+		liveEntry(3, "B", "bb2"),
+		liveEntry(4, "C", "bb2"),
+		liveEntry(5, "D", "ai-chat4"),
+		liveEntry(6, "E", ""),
+		proxyOf(liveEntry(7, "F", "purdex1")),
+		liveEntry(8, "G", "my_proj.2"),
+		liveEntry(9, "H", "my proj 2"),
+	}
+	labels := map[string]LabelInfo{"D": {Label: "lead", Rev: 2}, "dead": {Label: "ai-chat4"}}
+	want := ResolveDefaultLabels(entries, nil, labels)
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := 0; i < 20; i++ {
+		shuffled := slices.Clone(entries)
+		rng.Shuffle(len(shuffled), func(a, b int) {
+			shuffled[a], shuffled[b] = shuffled[b], shuffled[a]
+		})
+		if got := ResolveDefaultLabels(shuffled, nil, labels); !maps.Equal(got, want) {
+			t.Fatalf("shuffle %d: got %v, want %v", i, got, want)
+		}
+	}
+}
+
+func TestDefaultLabels_For(t *testing.T) {
+	var nilMap DefaultLabels
+	if got := nilMap.For("sid-1"); got != DefaultLabel("sid-1") {
+		t.Errorf("nil map: got %q, want the hash", got)
+	}
+	d := DefaultLabels{"A": "purdex1", "B": ""}
+	if got := d.For("A"); got != "purdex1" {
+		t.Errorf("resolved: got %q", got)
+	}
+	if got := d.For("B"); got != DefaultLabel("B") {
+		t.Errorf("empty value: got %q, want the hash", got)
+	}
+	if got := d.For("C"); got != DefaultLabel("C") {
+		t.Errorf("absent sid: got %q, want the hash", got)
 	}
 }
 
