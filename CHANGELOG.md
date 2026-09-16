@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.362] - 2026-09-16
+
+### Feat: 多主機分頁改用 host badge，取代漸層色標（#1077）
+
+alpha.352 的 host color mark（24px 左緣漸層／左線／底線）在深色主題上糊成一塊、還蓋住分頁圖示，使用者實測「和想像落差大」。改為 **host badge**：主機顏色淡底的小方塊，裡面放該台 host 自己的圖示。設計以旋鈕頁 `docs/pages/host-color-lab.html` 逐項調到定案。
+
+- **位置**：分頁圖示插槽之後、標題之前（綠色 `✳` 是標題文字的一部分，不被拆開）；釘選分頁（36px 只放圖示）不畫。
+- **外觀**：底色＝host 色低透明度、線條＝host 色實色；色塊貼齊文字（預設 16px）、圖示內縮 2px、圓角 4px。
+- **每台 host 自選圖示**：`HostConfig.icon` / `iconWeight`，複用 workspace 的 Phosphor 選擇器（搜尋、分類、六種字重含 duotone），隨 hosts sync 同步。
+- **沒設定就沒有**：host 既無顏色也無圖示 → 不畫、不佔空間。
+- **設定 > Terminal**：側欄與上方分頁各一組，可調啟用、線條顏色（host／中性灰）、線條濃度、底色濃度、色塊大小、圖示內縮、圓角。
+- **安全**：host 圖示名稱在寫入、同步、還原、渲染四處都必須是真實存在的 Phosphor 名稱（bounded shape guard＋catalog 比對），避免外來字串被當文字畫進色塊。
+- **移除**：`HostColorMark`、`useTabHostColor`、`HostColorMarkSetting`、4 個 `hostColor*` 設定欄位與其 locale key。
+- 順手修：`WorkspaceIcon` 在沒有名稱時會先閃一個 `?` 再顯示圖示。
+- **Review**：spec 與 plan 各一輪 codex 審（plan 兩個 blocker：刪除順序會讓樹編不過、badge 位置疑慮）；PR R1 無問題，R2 攻擊＋防守同指圖示名稱未驗證（已修）、檔案體質 approve。
+- 測試 vitest 449 files / 5818 tests；Go 未動。
+
 ## [1.0.0-alpha.361] - 2026-09-16
 
 ### Style: 全 app 細版中性 scrollbar；並移除 Tmux Agent Monitor 設定頁（#1072）
