@@ -129,6 +129,14 @@ test that shuffles the input.
 11. two sids whose different tmux names sanitize to the same candidate ⇒ both
     absent.
 12. `For` on a nil map, an absent sid, and an empty-string value ⇒ the hash.
+13. a **released** label row (`labels[sid] = LabelInfo{Label: ""}`) does not
+    block a candidate — `labelSnapshot()` puts released rows in the map with
+    an empty `Label` (`internal/module/peers/module.go`), so the resolver
+    must treat empty as "no user label", never as a competitor named `""`.
+14. one sid with **both** a proxy and a non-proxy entry, in *different* tmux
+    sessions: only the non-proxy entry's name counts, so rule 1 sees one
+    distinct name and the session gets its candidate. (The proxy filter runs
+    before the distinct-name check, not after.)
 
 **Commit:** `feat(peers): resolve default labels from tmux session names`
 
@@ -149,16 +157,21 @@ func EntryRecord(alias, hostID string, e Entry, proxy bool,
 ```
 
 - `applyLabel` no longer calls `DefaultLabel`; it uses the `defaultLabel`
-  it is given. This is the only place that decided a default before, so
-  after this task `grep -n 'DefaultLabel(' internal/peers/record.go` must
-  return nothing.
+  it is given. It was the only place that decided a default, so after this
+  task `grep -n 'DefaultLabel(' internal/peers/record.go` returns nothing
+  — but that grep is a smoke check, not the guarantee: the guarantee is
+  test 3 and test 4 below, which pin what each fallback branch renders.
 - `Build` computes `defaults := ResolveDefaultLabels(in.Entries,
   in.ProxyPIDs, in.Labels)` once, before the join, and passes
   `defaults.For(sid)` at every `applyLabel` call and `defaults` to every
   `EntryRecord` call. `BuildInput` is unchanged.
-- The owner-fallback branches (`inbox_dead`, `ambiguous`) keep passing the
-  owner's sid through `defaults.For`, which yields the hash because no live
-  entry backs them (spec §3.2) — no branch is special-cased.
+- **Every** branch goes through `defaults.For(owner.SessionID)` — including
+  the owner-fallback branches — and no branch is special-cased. Read spec
+  §3.2 before writing this: `inbox_dead` yields a hash because its owner has
+  no live entry and so is not in the population, while `ambiguous` yields
+  whatever the population decided, because its owner *does* have live
+  entries. Those two outcomes differ, and they differ correctly; do not
+  "fix" the `ambiguous` branch into a hash.
 
 **Tests first** (`record_test.go`):
 
@@ -169,7 +182,12 @@ func EntryRecord(alias, hostID string, e Entry, proxy bool,
 3. an `inbox_dead` session row keeps the hash label (the owner has no live
    entry) even though the session is named `purdex1` — and a live entry row
    for another sid in that same tmux session still gets `purdex1`.
-4. an `ambiguous` session row keeps the hash label.
+4. an `ambiguous` session row renders the **same** label as the entry rows of
+   its own conversation (spec §3.2): with two live entries of one sid in tmux
+   `purdex1` and no competitor, all three rows read `purdex1`, and `Resolve`
+   on `purdex1` is an `AmbiguousError` over the two entry rows — which is
+   what it already was with the hash. A second sub-case pins the hash side:
+   the same shape with a competing sid in `purdex1` ⇒ all rows fall back.
 5. a user-labelled session still renders its user label with
    `label_source: "user"` (unchanged).
 6. a proxy row still renders `alias/cc:<name>` with no label (unchanged).
@@ -189,6 +207,16 @@ keep its hash expectation untouched.
 
 **Files:** `internal/module/peers/labels.go`, `labels_test.go`
 
+Call-site checklist for tasks 3+4 — `EntryRecord` has **six** callers, and
+the task is not done until every one compiles against the new signature and
+is covered:
+
+| File | Count | Which |
+|---|---|---|
+| `internal/peers/record.go` | 1 | `buildEntryRecords` |
+| `internal/peers/record_test.go` | 2 | incl. `EntryRecord_MatchesBuild`, whose fixture must feed **the same** `DefaultLabels` both paths see — otherwise the test passes while proving nothing |
+| `internal/module/peers/labels.go` | 4 | `whoami` ×1, `claim` ×2 (the 409 holder and the 200 record), `release` ×1 |
+
 - add `func labelInfos(rows []store.PeerLabel) map[string]ipeers.LabelInfo`
   next to the existing `labelRows`.
 - `whoami`: after its existing `Snapshot()`, compute
@@ -203,6 +231,11 @@ keep its hash expectation untouched.
   the post-release record is rendered with the defaults computed from that
   snapshot; rule 3's "other" is what lets the caller's own
   about-to-be-released label not block its own candidate.
+  This adds a **label-store read** gate only. It does not add a registry
+  completeness gate: v2 §3.3's "release has no completeness requirement"
+  is about unreadable *registry* files not blocking a release, and that
+  stays true. Lock order is unchanged — `labelMu` still spans `origin()`,
+  the store access and the render, exactly as `whoami` and `claim` do.
 
 **Tests first** (`labels_test.go`):
 
@@ -217,7 +250,9 @@ keep its hash expectation untouched.
 4. `release` by an agent in tmux `purdex1` that had claimed `purdex1` ⇒ the
    returned record's label is `purdex1` with `label_source: "default"`.
 5. `release` when `Snapshot()` fails ⇒ 503 `store_unavailable`, and the fake
-   store records **no** `Release` call.
+   store records **no** `Release` call. The existing `failingLabels` /
+   `writeFailingLabels` fakes cannot prove a negative — add a fake that
+   counts `Release` calls, and assert the count is 0.
 6. `whoami` for an agent outside tmux ⇒ still the hash label.
 
 **Commit:** `fix(peers): self routes render the same defaults the listing does`
@@ -234,6 +269,24 @@ nearest existing home for a helper-rename test), `CLAUDE.md`
    individually. A failure that is *not* "a hash default became a
    tmux-derived one" is a bug in tasks 1–4 and is fixed there, not absorbed
    into an expectation.
+
+   Survey first, so the size is known before the editing starts (counts
+   measured on this branch at plan time):
+
+   ```
+   grep -rn 'DefaultLabel(' --include='*_test.go' internal/ cmd/   # 25
+   grep -rn '"_[0-9a-z]\{6\}"' --include='*_test.go' internal/ cmd/ # 33
+   grep -rn 'Tmux:' --include='*_test.go' internal/ cmd/            # 21
+   ```
+
+   Only a fixture that has **both** a `Tmux` field and an assertion on a
+   default label/address changes: `internal/peers/record_test.go`,
+   `internal/module/peers/{labels,send,e2e}_test.go`. A hash literal in
+   `deliver_test.go`, `reply_test.go`, `cmd/pdx/msg_test.go` or
+   `helpers_test.go` that is just a wire-contract fixture keeps its value —
+   changing one of those is a signal the change leaked past its blast
+   radius. `labels_test.go`'s fixture is the one to read carefully: pid 10
+   has a tmux field, pid 20 does not, so the two must diverge.
 2. New test (spec §6.5): a default-label **head** change delivered at an
    unchanged `label_rev` does not rename the peer's local helper —
    `ApplyAddress` ignores `rev <= appliedRev`
@@ -242,14 +295,20 @@ nearest existing home for a helper-rename test), `CLAUDE.md`
 3. New test (spec §6.6): `pdx peers` renders a tmux-derived default with the
    `*` marker, so it is distinguishable on screen from a user label of the
    same shape (`labelField`, `cmd/pdx/peers.go`).
-4. `CLAUDE.md`, "Peer addresses" section: replace
+4. `cmd/pdx/msg.go`'s usage/help text still shows `_k3x9qz` as the example
+   address. Decide explicitly: it is a rendering example, not a contract, so
+   it changes to a tmux-shaped default with the hash form named as the
+   fallback — and the CLI test that pins the help text changes with it.
+5. `CLAUDE.md`, "Peer addresses" section: replace
    "`_xxxxxx` 開頭＝尚未命名（由 sessionId 導出的預設值）" with the two-form
    rule — the default is the tmux session name when it names exactly one live
    agent, `_xxxxxx` otherwise — and add the one-line semantic: default label
    ＝ 位置（那個 tmux session 裡的 agent），user label ＝ 對話。
 
-**Commit:** `test(peers): fleet expectations for tmux-derived defaults` +
-`docs: CLAUDE.md peer address defaults` (two commits; item 4 is docs-only).
+**Commits (two, and this is the one task that has two):**
+`test(peers): fleet expectations for tmux-derived defaults` (items 1–3) and
+`docs: peer address defaults come from the tmux session name` (items 4–5,
+docs and help text only).
 
 ---
 
@@ -261,19 +320,31 @@ go vet ./...
 go build ./...
 ```
 
-Then, on this host (spec §6.7) — evidence pasted into the PR body, not
-summarized:
+Then the live check (spec §6.7) — evidence pasted into the PR body, not
+summarized.
+
+**It must not touch the production daemon.** `pdx serve` takes its
+`data_dir` from the config it loads, and that is where it takes the pid lock
+and opens the DB (`cmd/pdx/main.go`), so `--port` alone would still collide
+with the running mlab daemon's data dir; and `pdx peers` / `pdx msg` derive
+their base URL from the same config, so without `--config` they would talk
+to production on 7860. The whole check therefore runs against a **throwaway
+config with its own `data_dir`**:
 
 ```
-pdx peers --all                       # tmux-derived labels, still marked *
-pdx msg whoami                        # my own address agrees with the listing
-pdx msg send mini-lab/<tmux name> "…" # delivers
+go build -o /tmp/pdx-branch ./cmd/pdx
+# config.toml under a fresh temp dir: its own data_dir, an unused port,
+# its own admin token
+/tmp/pdx-branch serve --config "$TMP/config.toml"
+/tmp/pdx-branch peers --config "$TMP/config.toml" --all   # read-only
+/tmp/pdx-branch msg   --config "$TMP/config.toml" whoami  # read-only
 ```
 
-The live checks run against a daemon **built from this branch**
-(`go build -o bin/pdx ./cmd/pdx` in the worktree, run on a spare port), not
-the mlab production daemon: this branch is not deployed and the running
-daemon is alpha.360.
+The Claude Code registry it reads is the real, shared one, so the listing is
+real data — which is the point. The only write in the check is a single
+`msg send` addressed **to this very session**, so the message lands in an
+inbox we own and no other agent is disturbed; the production alias is never
+a target. Kill the temp daemon and remove the temp dir afterwards.
 
 ## Risks
 
@@ -283,3 +354,20 @@ daemon is alpha.360.
 | An expectation update hides a real regression | Task 5 item 1: any failure that is not the expected shape is fixed, not absorbed |
 | `ResolveDefaultLabels` becomes order-dependent | Task 2 shuffle test |
 | The upgrade moves every address at once (spec §4.1) | Accepted, documented; the live check in Verification is what confirms the new form works before merge |
+| The live check disturbs the production daemon or another agent | Throwaway config + own `data_dir` + own port; reads only, except one `msg send` to this session |
+
+## Codex plan review disposition (`task-mu3waw1z-u8bm7k`)
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | Blocker | Task 3's rationale ("fallback branches yield a hash because no live entry backs them") is false for `ambiguous` | **Fact accepted, proposed fix rejected** — the wrong sentence was the spec's. Forcing `ambiguous` to a hash would split one conversation across two labels and break `Build`/`whoami` agreement. Spec §3.2 rewritten, spec §10 holds the argument, plan Task 3 now states both outcomes and test 4 pins them |
+| 2 | Major | `EntryRecord` has 6 callers, not 3 | **Accepted** — Task 4 opens with the call-site table, incl. `EntryRecord_MatchesBuild`'s fixture trap |
+| 3 | Major | Task 2 missed released label rows and the proxy+non-proxy-same-sid case | **Accepted** — cases 13 and 14 |
+| 4 | Major | Task 5 understates the test surface | **Accepted** — Task 5 item 1 gains the survey greps with counts, and the rule for which files may legitimately change |
+| 5 | Major | Spare-port live check still collides with production's `data_dir` and the CLI still targets 7860 | **Accepted** — Verification rewritten around a throwaway config |
+| 6 | Minor | Note that release adds a label-store gate, not a registry completeness gate | **Accepted** — Task 4 |
+| 7 | Minor | Task 5's two commits contradict "one commit per task" | **Accepted** — stated as the one deliberate exception |
+| — | Omission | `applyLabel` call sites cannot be replaced mechanically | **Accepted** — Task 3 |
+| — | Omission | `EntryRecord_MatchesBuild` fixture must feed both paths the same map | **Accepted** — Task 4 table |
+| — | Omission | Existing fakes cannot prove "no `Release` call" | **Accepted** — Task 4 test 5 |
+| — | Omission | `pdx msg` help text still shows `_k3x9qz` | **Accepted** — Task 5 item 4 |

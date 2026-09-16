@@ -140,9 +140,19 @@ address.
 
 Consequences, stated so they are not discovered later:
 
-- a session row with no live entry (`inbox_dead`, `ambiguous`) keeps the v2
-  hash label. Those rows are inert for resolution (v2 §3.2) and their tmux
-  name is already in their own `session_name` column.
+- an `inbox_dead` session row keeps the v2 hash label: its owner's session
+  has *no* live entry at all, so it is not in the population. The row is
+  inert for resolution either way (v2 §3.2), and its tmux name is already in
+  its own `session_name` column.
+- an `ambiguous` session row does **not** get a special case. Its owner's
+  session does have live entries — that is precisely why it is ambiguous —
+  so it is in the population and it renders whatever the population decides,
+  exactly like the entry rows of that same conversation. Forcing a hash here
+  would be worse than the ambiguity it tried to avoid: one conversation would
+  show two different labels in one listing, and `whoami` (which has only the
+  registry, and sees the same live entries) would disagree with the session
+  row about the caller's own address. The row stays inert for resolution
+  because `hasLiveEntry` rejects `pid: 0`, not because of its label.
 - a row with no cc agent at all keeps `label: ""`, unchanged.
 
 ### 3.3 The rule
@@ -366,3 +376,11 @@ edited in place.
 | — | Omission | Cross-host fan-out mixes old and new defaults mid-upgrade | **Accepted** — §4.1 closing paragraph |
 | — | Omission | `label_rev` semantics for default labels | **Accepted** — §4.2 |
 | — | Omission | The "SPA unaffected" claim needed evidence | **Accepted** — §5 cites the zero-hit search |
+
+## 10. Codex plan review disposition (`task-mu3waw1z-u8bm7k`)
+
+Only the findings that changed this spec; the rest are recorded in the plan.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | Blocker | §3.2 claimed `ambiguous` session rows keep the hash "because no live entry backs them" — false: an `ambiguous` row's owner *does* have live entries (`record.go`, the `consumed` and multi-candidate branches) | **Fact accepted, fix rejected.** The wrong statement was this spec's, not the plan's. Forcing a hash on `ambiguous` rows — codex's proposed fix — would make one conversation render two different labels in one listing and would put `whoami` at odds with the session row, which is exactly what §3.2 exists to prevent. §3.2 now derives both fallback kinds from the same population with no special case, and says why. §6.2 gains the case |
