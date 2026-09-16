@@ -576,6 +576,98 @@ func TestSelf_AddressMatchesListing(t *testing.T) {
 	}
 }
 
+// TestSelf_SuffixDivergesFromListingAfterATmuxRename pins a KNOWN, BOUNDED
+// divergence the tripwire above does not cover, and that the daemon
+// deliberately does not close.
+//
+// Suffix is "<tmux session>-<cc name>", display-only (see
+// ipeers.PeerRecord.Suffix). The listing renders this conversation as a
+// SESSION row, so the daemon's live tmux inventory for that very session is
+// in hand and is what it uses: rename the session and the listing follows
+// on the next request (spec §5.4). The self routes answer from ONE
+// validated registry entry — whoami/claim/release build no inventory at all
+// — and a registry entry carries only the tmux name Claude Code froze into
+// <pid>.json when the agent started, which nothing ever refreshes (spec §2
+// P1). So after a rename the two interfaces print different suffixes for
+// one conversation, and row_kind ("session" vs the "entry" every self route
+// answers with) is the discriminator saying which provenance you are
+// reading.
+//
+// What they cannot disagree about is the part that routes. Both heads are
+// CanonicalID of the same sessionId, so either address names the same
+// conversation and resolves to the same row; Resolve splits the suffix off
+// and ignores it before tier 1 runs. That is asserted below, because it is
+// the reason this divergence is cosmetic rather than a defect.
+//
+// Closing it would mean handing whoami a live tmux name, and the daemon has
+// no cheap way to get one. A registry entry locates a PANE; the only
+// mappings from a pane to the session that currently holds it are a fresh
+// tmux round trip (the peers module holds no tmux executor — only
+// session.SessionProvider and agent.OwnerResolver) or the owner resolution
+// the listing performs (ListSessions plus a per-session pane walk with `ps`
+// forks, under a 2 s budget that degrades to partial). Both put latency and
+// a new failure mode on a path that has neither today, and NEITHER could
+// guarantee agreement: a lookup that fails or times out falls back to the
+// frozen name regardless, turning "always disagrees after a rename" into
+// "usually agrees" — a worse contract to document than this one.
+//
+// If you do make the self routes live, this test is the one that fails.
+// Delete it and extend TestSelf_AddressMatchesListing to rename first.
+func TestSelf_SuffixDivergesFromListingAfterATmuxRename(t *testing.T) {
+	f := newLabelFixture(t)
+
+	// tmux renames mt0 to mt0zz. The registry file for pid 10 keeps
+	// "tmux":"mt0:@1.%1" — Claude Code rewrites that file on status changes
+	// and copies the field through unchanged. A rename does not touch the
+	// tmux session id either, so the daemon's session code stays "c1" and
+	// the owner map still resolves this session to sid-1.
+	f.m.sessions = &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "c1", Name: "mt0zz", Cwd: "/w", TmuxInstance: "inst1"},
+	}}
+
+	listed := f.listingRecord("sid-1")
+	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(10)})
+	self := decodeRecord(t, status, body)
+
+	if listed.RowKind != "session" || self.RowKind != "entry" {
+		t.Fatalf("row kinds = listing %q / whoami %q, want session / entry", listed.RowKind, self.RowKind)
+	}
+	if listed.Suffix != "mt0zz-n10" {
+		t.Errorf("listing suffix = %q, want the live tmux name in mt0zz-n10", listed.Suffix)
+	}
+	if self.Suffix != "mt0-n10" {
+		t.Errorf("whoami suffix = %q, want the frozen registry name in mt0-n10", self.Suffix)
+	}
+	if self.Address == listed.Address {
+		t.Errorf("whoami and the listing now agree on %q; the divergence this test pins is gone — read the comment above before deleting it", self.Address)
+	}
+
+	// The head is the same string from both interfaces, and that is what
+	// makes the difference above cosmetic: a sender that copies EITHER
+	// address reaches this conversation.
+	if self.Canonical == "" || self.Canonical != listed.Canonical {
+		t.Fatalf("canonical: whoami %q, listing %q, want one non-empty id", self.Canonical, listed.Canonical)
+	}
+	snap := f.m.configSnapshot()
+	env := f.m.localEnvelope(context.Background(), snap.hostID, snap.alias)
+	if !env.OK {
+		t.Fatalf("localEnvelope: %s", env.Error)
+	}
+	for _, addr := range []string{self.Address, listed.Address} {
+		host, sess, ok := ipeers.SplitAddress(addr)
+		if !ok || host != snap.alias {
+			t.Fatalf("SplitAddress(%q) = %q/%q/%v", addr, host, sess, ok)
+		}
+		rec, err := ipeers.Resolve(env.Peers, sess, ipeers.ResolveSnapshot{Partial: env.Partial})
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", sess, err)
+		}
+		if rec.Agent == nil || rec.Agent.SessionID != "sid-1" {
+			t.Errorf("Resolve(%q) landed on %+v, want the sid-1 conversation", sess, rec.Agent)
+		}
+	}
+}
+
 // TestClaim_RecordsMatchListing pins Task 4 item 3: both records claim
 // renders — the envelope's own peer and the label_in_use warning's holders
 // — are built the same way the listing builds its rows, so neither can
