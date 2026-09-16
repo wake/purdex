@@ -112,6 +112,13 @@ copies of `req` plus a distinct `emit`), which this fully collapses — but the 
 payloads. `handleMonitorChain` (`internal/module/agent/monitor.go:100`) is its only
 caller. So rehydration has exactly one site.
 
+> **2026-09-16 update (outdated)**: `handleMonitorChain` and all of
+> `internal/module/agent/monitor.go` were removed with the Tmux Agent Monitor
+> surface (see `docs/specs/2026-09-16-scrollbar-and-monitor-removal-spec.md`
+> Phase 2). `GetChainRecord` is retained and still the only step-returning path,
+> but it now has **no runtime caller** — only the retained write-pipeline and
+> `internal/store/trace_dedup_test.go` tests exercise it.
+
 Rows with `payload_is_root = 1` get `PayloadJSON` from the chain's `root_payload_json`.
 If the stored root is `"null"`, rehydration yields `"null"` — preserving today's boundary
 value for an empty payload.

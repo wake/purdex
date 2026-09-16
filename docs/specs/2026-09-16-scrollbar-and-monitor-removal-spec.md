@@ -36,7 +36,13 @@ variant as a deliberate exception.
 
 ### Implementation
 
-`spa/src/index.css` only.
+All scrollbar rules live in **`spa/src/styles/scrollbars.css`**, imported from
+`index.css` after the theme import. `index.css` is already a 250-line global
+junk drawer (Tailwind import, cursor defaults, breathe animation, Tiptap
+typography); adding a fourth scrollbar rule to it was the point at which the
+policy earned its own file. The two pre-existing overrides move there too, so
+all scrollbar behaviour is readable in one place. Rationale stays in this spec,
+not in the CSS — the CSS keeps only what cannot be read off the syntax.
 
 ```css
 :root {
@@ -54,6 +60,13 @@ variant as a deliberate exception.
    them — hence the universal selector, not `:root`. */
 * {
   scrollbar-width: thin;
+}
+
+/* The terminal viewport is excluded: xterm's fit addon reserves a hardcoded
+   14px for the scrollbar, so narrowing the real one costs up to a column. */
+.xterm-viewport {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 ```
 
@@ -85,7 +98,27 @@ Notes on each decision:
    our own UI components, so WCAG 1.4.11's 3:1 is not a hard gate here; 65% is
    the drop-in alternative if we later decide it should be.
 
-2. **No global `*::-webkit-scrollbar` block.** Chromium has supported the
+2. **The terminal viewport keeps the platform scrollbar.**
+   `@xterm/addon-fit@0.11.0` computes columns as
+   `width − padding − (options.scrollback === 0 ? 0 : options.overviewRuler?.width || 14)`
+   — a **hardcoded 14px**, never a measurement of the real scrollbar.
+   `useTerminal.ts:56` sets neither `scrollback: 0` nor `overviewRuler`, so 14
+   it is, and `.xterm-viewport` is `overflow-y: scroll` in xterm's own CSS.
+   Making that scrollbar thinner therefore leaves fit reserving more width than
+   the scrollbar occupies: up to ~4px, i.e. at most one column of unused space.
+   The error is in the safe direction — content is never hidden behind the
+   scrollbar — and an equivalent imprecision already exists on macOS overlay
+   scrollbars, where the real width is 0 and fit still reserves 14.
+
+   It is nonetheless free to avoid, so the terminal viewport is excluded and
+   its rendering stays byte-identical to `main`. This is also what closes the
+   verification gap: "unchanged from `main`" needs no live daemon to
+   demonstrate, whereas "thin works correctly inside xterm's sizing model"
+   would. Deliberately styling the terminal scrollbar — which means picking an
+   `overviewRuler.width` that matches whatever width is chosen — is tracked
+   separately as its own decision, in #1075.
+
+3. **No global `*::-webkit-scrollbar` block.** Chromium has supported the
    standard properties since 121, and a computed `scrollbar-color` /
    `scrollbar-width` other than `auto` overrides the `::-webkit-scrollbar-*`
    pseudo-elements on that element. Under our render targets (Electron's
@@ -124,7 +157,11 @@ this spec got wrong:
     selector reaches an inner container, not just the viewport);
   - the activity bar list → `scrollbarColor` still the accent value;
   - the tab overflow strip → `scrollbarWidth === 'none'`;
-  - `.xterm-viewport` → `scrollbarWidth === 'thin'` (not `auto`).
+  - `.xterm-viewport` → `scrollbarWidth === 'auto'`, i.e. **excluded**. This one
+    is provable on a synthetic element carrying the class, because the claim is
+    purely about the cascade: no rule in this repo narrows that class. A real
+    terminal is not required, since the exclusion means the terminal renders
+    exactly as it does on `main`.
 - Screenshot of the new-tab pane for the visual check that prompted this.
 - `TabBar.test.tsx:177` (already asserts the `.scrollbar-hide` container
   exists) must still pass — guards the override contract.
@@ -143,10 +180,12 @@ this spec got wrong:
   theme `--text-secondary` `#9ca3af` at 55% over a transparent track, exactly
   what the contrast table above is computed against. The activity bar still
   reports the accent thumb at 42%; the tab strip still reports `none`.
-- Assertion (d) was **not** obtained: reaching a real `.xterm-viewport` needs
-  an authenticated daemon and a live session, which the vite dev proxy
-  (pointing at `localhost:7860`) does not provide. Treat it as open until
-  someone confirms it in the Electron app.
+- Assertion (d) was originally **not** obtainable: reaching a real
+  `.xterm-viewport` needs an authenticated daemon and a live session, which the
+  vite dev proxy (pointing at `localhost:7860`) does not provide. The PR review
+  turned this from a missing measurement into a design change — the terminal
+  viewport is now excluded, so (d) asserts `auto` and is satisfiable on a
+  synthetic element.
 - Headless macOS Chromium uses overlay scrollbars that take no layout width
   and do not paint at rest, so a still screenshot cannot show the thumb. The
   computed values are the real evidence; the "does it look right" judgement
@@ -340,3 +379,15 @@ read-only). Findings and their resolution:
 | low | Phase 5 annotation was prose, easy to skip | promoted to a required edit item with line numbers |
 | low | webkit-precedence rationale imprecise | reworded |
 | low | two phases in one PR acceptable, given Phase 1 stays CSS-only | kept; Phase 1 did stay CSS-only |
+
+PR review, 4 reports (round 1 standard: **no actionable findings**; round 2
+attack / defend / file-health, jobs dispatched in parallel):
+
+| Sev | Finding | Resolution |
+|---|---|---|
+| medium (attack) | global `thin` narrows the real scrollbar while `@xterm/addon-fit` reserves a hardcoded 14px | confirmed in `node_modules/@xterm/addon-fit/lib/addon-fit.js`; impact is ≤1 column in the safe direction, but avoided outright — `.xterm-viewport` is excluded |
+| medium (defend) | the spec's own `.xterm-viewport` acceptance gate was left unverified | closed by the exclusion above: the assertion is now about the cascade, provable without a live daemon |
+| medium (health) | scrollbar policy accreting in the `index.css` junk drawer, with comments drifting into a spec summary | moved to `spa/src/styles/scrollbars.css`, comments trimmed, rationale kept here |
+| medium (health) | other specs still describe the deleted API as live | `2026-05-02-settings-architecture-fix-spec.md` (order 21) and `2026-09-07-trace-payload-dedup-spec.md` (`handleMonitorChain` as sole caller) annotated as superseded |
+| low (health) | trace read path is now a tested island with no runtime consumer | #1073 — issue, not a code change; the retention is a deliberate decision recorded above |
+| medium (attack) | old renderer + new daemon → 404 on the removed routes | accepted: dev-only surface, alpha, and removing the API was the explicit decision. #1074 for the skew policy; no deprecation shim |

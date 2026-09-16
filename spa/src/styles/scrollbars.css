@@ -1,0 +1,59 @@
+/* Scrollbar policy for the whole SPA — thin, neutral thumb, invisible track,
+   with two deliberate exceptions below. Rationale (token choice, measured
+   contrast, why there is no global `::-webkit-scrollbar` block) lives in
+   `docs/specs/2026-09-16-scrollbar-and-monitor-removal-spec.md` (Phase 1). */
+
+:root {
+  --scroll-thumb: color-mix(in srgb, var(--text-secondary) 55%, transparent);
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+/* `scrollbar-width` is NOT inherited (CSS Scrollbars 1), and the root value is
+   only required to apply to the viewport — a `:root` rule would leave all 40+
+   inner scroll containers on the platform default. Hence the universal
+   selector: it has to actually match them. Specificity 0,0,0, so the class
+   rules below still win. */
+* {
+  scrollbar-width: thin;
+}
+
+/* Exception — the terminal viewport keeps the platform scrollbar: xterm's fit
+   addon reserves a hardcoded 14px for it rather than measuring it, so
+   narrowing the real one wastes up to a column. */
+.xterm-viewport {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+/* Hide scrollbar for tab overflow */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Activity bar workspace lists scroll independently from Home and footer
+   actions, and keep the accent thumb as a deliberate exception to the neutral
+   default above. */
+.activity-bar-workspace-scroll {
+  scrollbar-color: color-mix(in srgb, var(--accent) 42%, transparent) transparent;
+  scrollbar-width: thin;
+}
+.activity-bar-workspace-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.activity-bar-workspace-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.activity-bar-workspace-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+.activity-bar-workspace-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 58%, transparent);
+  background-clip: content-box;
+}
