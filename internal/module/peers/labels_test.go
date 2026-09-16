@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -283,8 +284,8 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	first := decodeRecord(t, status, body)
-	// pid 10 takes a label of its own first, so live_labels has something
-	// to say beyond the collision itself.
+	// pid 10 takes a label of its own first, so the claim below is a
+	// rename and live_labels has to account for the label it gives up.
 	status, body = f.claim(f.inbox(10), "purdex-dev")
 	decodeRecord(t, status, body)
 
@@ -304,7 +305,10 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 	if len(w.Holders) != 1 || w.Holders[0].Address != first.Address || w.Holders[0].Agent == nil || w.Holders[0].Agent.PID != 20 {
 		t.Errorf("warning holders = %+v, want the pid 20 incumbent", w.Holders)
 	}
-	if !reflect.DeepEqual(w.LiveLabels, []string{"purdex-dev", "purdex-tester"}) {
+	// Every label a live session holds AFTER this claim: both sessions are
+	// now on purdex-tester, and pid 10's purdex-dev is gone with the
+	// rename (see TestClaim_LiveLabelsDescribeTheClaimJustMade).
+	if !reflect.DeepEqual(w.LiveLabels, []string{"purdex-tester", "purdex-tester"}) {
 		t.Errorf("live_labels = %v, want every label a live session holds", w.LiveLabels)
 	}
 
@@ -620,5 +624,133 @@ func TestRelease_StoreReadFailure_WritesNothing(t *testing.T) {
 	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
 	if fake.releases != 0 {
 		t.Errorf("release wrote %d times after a failed snapshot, want 0", fake.releases)
+	}
+}
+
+// storedLabels is every non-empty label in the label store, sorted — the
+// ground truth a claim's live_labels is checked against. Both fixture
+// sessions (sid-1, sid-2) are live, so on this fixture "held by a live
+// session" and "present in the store" are the same set, which is exactly
+// what makes it usable as an independent oracle.
+func (f *labelFixture) storedLabels() []string {
+	f.t.Helper()
+	rows, err := f.labels.Snapshot()
+	if err != nil {
+		f.t.Fatalf("snapshot: %v", err)
+	}
+	out := []string{}
+	for _, r := range rows {
+		if r.Label != "" {
+			out = append(out, r.Label)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// labelInUse fails unless resp carries the label_in_use warning, and
+// returns it.
+func labelInUse(t *testing.T, resp ipeers.SelfResponse) *ipeers.SelfWarning {
+	t.Helper()
+	w := resp.Warning
+	if w == nil || w.Code != ipeers.WarnLabelInUse {
+		t.Fatalf("warning = %+v, want code %q", w, ipeers.WarnLabelInUse)
+	}
+	return w
+}
+
+// TestClaim_LiveLabelsDescribeTheClaimJustMade pins the one thing
+// live_labels is for: letting an agent pick the next free serial in ONE
+// step (spec §4.2, §8). That only works if the list describes the state
+// the claim PRODUCED. Computed before the write, it answers with the state
+// the claim replaced — so the envelope announces a new label in `peer`
+// while `live_labels` still shows the old one and omits the new one, and
+// the agent avoids a serial this very call just freed.
+//
+// Here pid 10 renames itself from purdex-tester-3 onto purdex-tester,
+// which pid 20 holds: afterwards purdex-tester-3 belongs to nobody and
+// purdex-tester belongs to both.
+func TestClaim_LiveLabelsDescribeTheClaimJustMade(t *testing.T) {
+	f := newLabelFixture(t)
+
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	incumbent := decodeRecord(t, status, body)
+	status, body = f.claim(f.inbox(10), "purdex-tester-3")
+	decodeRecord(t, status, body)
+
+	status, body = f.claim(f.inbox(10), "purdex-tester")
+	resp := decodeSelf(t, status, body)
+	if resp.Peer.Label != "purdex-tester" {
+		t.Fatalf("claim record = %+v, want the label actually set", resp.Peer)
+	}
+	w := labelInUse(t, resp)
+
+	// Both live sessions now hold purdex-tester; purdex-tester-3 is free,
+	// and it is free BECAUSE of this call — the whole point of the list.
+	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveLabels, want) {
+		t.Errorf("live_labels = %v, want %v — the set this claim produced", w.LiveLabels, want)
+	}
+	for _, l := range w.LiveLabels {
+		if l == "purdex-tester-3" {
+			t.Errorf("live_labels = %v still lists the caller's released label", w.LiveLabels)
+		}
+	}
+	// And it agrees with the store, which is the state the caller will see
+	// on any later read.
+	if !reflect.DeepEqual(w.LiveLabels, f.storedLabels()) {
+		t.Errorf("live_labels = %v, store holds %v", w.LiveLabels, f.storedLabels())
+	}
+
+	// holders keeps its own meaning: the OTHER live sessions on the label,
+	// never the caller itself.
+	if len(w.Holders) != 1 || w.Holders[0].Address != incumbent.Address {
+		t.Errorf("holders = %+v, want only the pid 20 incumbent", w.Holders)
+	}
+}
+
+// TestClaim_LiveLabelsIncludeANewlyNamedCaller is the same rule for a
+// caller that had no label at all: it contributes nothing to the list
+// before the write and must contribute the claimed label after it.
+func TestClaim_LiveLabelsIncludeANewlyNamedCaller(t *testing.T) {
+	f := newLabelFixture(t)
+
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	decodeRecord(t, status, body)
+
+	status, body = f.claim(f.inbox(10), "purdex-tester")
+	w := labelInUse(t, decodeSelf(t, status, body))
+	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveLabels, want) {
+		t.Errorf("live_labels = %v, want %v — the caller's own new label included", w.LiveLabels, want)
+	}
+	if !reflect.DeepEqual(w.LiveLabels, f.storedLabels()) {
+		t.Errorf("live_labels = %v, store holds %v", w.LiveLabels, f.storedLabels())
+	}
+}
+
+// TestClaim_LiveLabelsOnAlreadyOurs covers the path that writes nothing:
+// re-claiming a label the caller already holds. The list must still be the
+// live set, with the caller's own label present exactly once — this is the
+// path where counting the caller twice, or dropping it, would be easiest.
+func TestClaim_LiveLabelsOnAlreadyOurs(t *testing.T) {
+	f := newLabelFixture(t)
+
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	decodeRecord(t, status, body)
+	status, body = f.claim(f.inbox(10), "purdex-tester")
+	first := decodeSelf(t, status, body)
+	labelInUse(t, first)
+
+	// Again: already ours, no write, rev unchanged, same list.
+	status, body = f.claim(f.inbox(10), "purdex-tester")
+	resp := decodeSelf(t, status, body)
+	if resp.Peer.LabelRev != first.Peer.LabelRev {
+		t.Errorf("re-claim bumped rev %d → %d", first.Peer.LabelRev, resp.Peer.LabelRev)
+	}
+	w := labelInUse(t, resp)
+	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveLabels, want) {
+		t.Errorf("live_labels = %v, want %v — once per live holder", w.LiveLabels, want)
+	}
+	if !reflect.DeepEqual(w.LiveLabels, f.storedLabels()) {
+		t.Errorf("live_labels = %v, store holds %v", w.LiveLabels, f.storedLabels())
 	}
 }

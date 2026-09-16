@@ -150,8 +150,9 @@ func (m *Module) whoami(inbox string) selfResult {
 //
 // The path is now: label grammar → reserved → store nil → registry read
 // error ⇒ not_ready → origin unknown → store read error ⇒
-// store_unavailable → compute the warning → already ours ⇒ 200 no write →
-// write (error ⇒ store_unavailable) → 200.
+// store_unavailable → compute the warning over the state the write will
+// leave behind → already ours ⇒ 200 no write → write (error ⇒
+// store_unavailable) → 200.
 func (m *Module) claim(inbox, label string) selfResult {
 	if err := ipeers.ValidateUserLabel(label); err != nil {
 		code := ipeers.ErrCodeLabelInvalid
@@ -186,30 +187,46 @@ func (m *Module) claim(inbox, label string) selfResult {
 	}
 
 	// liveLabels collects every label held by a live session — the
-	// caller's own included, per spec §3.3 — for the warning body. others
-	// are the live rows holding the requested label that are NOT the
-	// caller; own is the caller's own row when it already holds it.
+	// caller's own included, per spec §3.3 — for the warning body, and it
+	// describes the state this claim PRODUCES, not the one it found. The
+	// caller contributes `label`, whatever its row says now: by the time
+	// anyone reads the warning the write below has happened, and any label
+	// it held before is gone. Read off the untouched snapshot instead, the
+	// envelope would announce one state in `peer` and hand over a list that
+	// does not contain it — and live_labels exists precisely so an agent
+	// can pick the next free serial in ONE step (spec §4.2, §8), so a stale
+	// entry makes it skip a serial this very call just freed. Nothing else
+	// in the snapshot moves: a claim rewrites exactly one row, the
+	// caller's own.
+	//
+	// others are the live rows holding the requested label that are NOT the
+	// caller — unaffected by the write, and still "the other holders"
+	// rather than "everyone on this label". own is the caller's own row
+	// when it already holds the label: the one case with no write, and the
+	// one where the contribution above is the label it already had.
 	var liveLabels []string
 	var others []store.PeerLabel
 	var own *store.PeerLabel
 	for i := range rows {
 		row := &rows[i]
-		if row.Label == "" {
-			continue
-		}
 		if _, live := liveEntry[row.SessionID]; !live {
 			continue
 		}
-		liveLabels = append(liveLabels, row.Label)
-		if row.Label != label {
-			continue
-		}
 		if row.SessionID == e.SessionID {
-			own = row
+			if row.Label == label {
+				own = row
+			}
 			continue
 		}
-		others = append(others, *row)
+		if row.Label == "" {
+			continue
+		}
+		liveLabels = append(liveLabels, row.Label)
+		if row.Label == label {
+			others = append(others, *row)
+		}
 	}
+	liveLabels = append(liveLabels, label)
 	sort.Strings(liveLabels)
 
 	snap := m.configSnapshot()
