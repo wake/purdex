@@ -1,4 +1,4 @@
-# Peer Address v3 — canonical + alias
+# Peer Address v3 — one address, plus a label that is only a label
 
 Date: 2026-09-17 · Scope: daemon (`internal/peers`, `internal/module/peers`) + `pdx` CLI · Single phase
 
@@ -6,18 +6,16 @@ Supersedes the default-label half of `2026-09-16-peer-default-label-tmux-spec.md
 
 ## 1. Goal
 
-Give every conversation **one address that never changes** and, optionally, **one address that
-means something**. Today it has exactly one address and it is neither: it is derived from the tmux
-session name, which goes stale the moment the user renames the session and can be taken away by a
-third party's unrelated action.
+A conversation gets **exactly one address**, derived from its `sessionId`, immutable for its life.
+Nothing a user or another process does can change it, take it away, or hand it to someone else.
 
-- **canonical** — `mini-lab/_3k9f2mq4`. Derived from the Claude Code `sessionId`. Immutable for the
-  life of the conversation, survives resume and daemon restart, unaffected by anything the user
-  does to tmux. Always resolvable.
-- **alias** — `mini-lab/purdex-tester`. The existing user label, claimed with `pdx msg name`.
-  Unique among live conversations, released when the conversation dies, freely re-pointed.
+The `label` column stays, but it stops being a second way to address anything. It becomes what its
+name always suggested: a short name a conversation calls itself, for a human or another agent to
+read when deciding who to talk to. Reading it is how you *choose* a peer; the address is how you
+*reach* one.
 
-Both resolve. Neither can take the other away.
+This is the whole of the collision story: **the only thing that must be unique is the only thing
+nobody can choose.**
 
 ## 2. Evidence — what is broken today
 
@@ -58,50 +56,74 @@ it never consults occupancy. With a 36⁶ space (≈2.18e9) a birthday collision
 conversations is unlikely but unbounded by anything in the code.
 
 The failure is **safe but total**: `resolveTier` sees two matching rows and returns
-`*AmbiguousError`, so delivery is refused rather than misrouted. Both conversations lose their
-canonical address until one exits.
+`*AmbiguousError` (`address.go:137`) and `send.go:309` answers 409 `ambiguous` without picking a
+candidate, so delivery is refused rather than misrouted. Both conversations lose their address
+until one exits.
 
 ## 3. Decisions (user-confirmed, do not reopen)
 
 | # | Decision |
 |---|---|
-| D1 | Two layers: an immutable **canonical** address and an optional **alias**. Both are accepted by every resolver. |
-| D2 | Canonical is derived from `sessionId` **only**. No tmux name, no Claude Code `name`, no cwd — nothing the user or another process can change. |
-| D3 | Alias is the existing user label. Claim (`pdx msg name`), uniqueness among live sessions, release on death, `label_taken` + `live_labels` on conflict — all unchanged. |
-| D4 | The tmux-derived default label is **removed**, not kept as a third tier. A conversation with no alias has only its canonical address. |
-| D5 | Collision is handled by making it negligible (widen the id) plus the existing ambiguity refusal, **not** by stateful assignment. Canonical must stay a pure function of `sessionId`. |
-| D6 | No `note` / `role` field. A conversation's role is its alias, which is already addressable. |
-| D7 | Conflicts must surface **at claim time** (`pdx msg name` → `label_taken`), never by silently changing an address that already works. |
+| D1 | **One address per conversation**, the canonical id. There is no second naming scheme and no aliasing layer. To reach a peer you use its address. |
+| D2 | The canonical id is derived from `sessionId` **only**. No tmux name, no Claude Code `name`, no cwd — nothing a user or another process can change. |
+| D3 | `label` is a **self-declared display name**. It is never resolved, never routed on, and carries no uniqueness guarantee. |
+| D4 | The tmux-derived default label is **removed**. `label` is empty until a conversation sets one. |
+| D5 | Two conversations may hold the same `label`. Setting one that is already in use **warns and succeeds**; it never refuses and never renames anyone. |
+| D6 | No extra `note` / `role` field. `label` is that field, and calling it `label` is what keeps it written as a name rather than a sentence. |
+| D7 | Address conflicts are made structurally impossible rather than adjudicated. Label conflicts are visible, harmless, and left alone. |
+
+### 3.1 Why this removes the conflict problem rather than managing it
+
+Every failure in §2 has the same shape: the address depended on a string someone else could change
+or claim. D1 + D2 remove that dependency entirely — an address is a function of an identity nobody
+issues, requests, or competes for. There is no allocation, so there is nothing to allocate twice.
+
+`label` can collide precisely because nothing depends on it being unique. Two `purdex-tester` rows
+are two rows a reader can see and choose between, not a routing decision anyone has to make.
 
 ## 4. Data model
 
 ### 4.1 Canonical id (`internal/peers/label.go`)
 
 ```go
-// CanonicalID derives a conversation's immutable address component from its
-// Claude Code sessionId: "_" + base36(FNV-1a-64(sessionId) mod 36^8), 8 digits,
-// zero-padded. Pure, deterministic across resumes and daemon restarts.
+// CanonicalID derives a conversation's address from its Claude Code sessionId:
+// "_" + base36(FNV-1a-64(sessionId) mod 36^8), 8 digits, zero-padded. Pure,
+// deterministic across resumes and daemon restarts.
 func CanonicalID(sessionID string) string
 ```
 
-- Replaces `DefaultLabel`, which is deleted along with the rest of §4.3.
-- **Width 8, not 6.** 36⁸ ≈ 2.82e12. For 100 live conversations the birthday probability is ≈1.8e-9,
-  against ≈2.3e-6 at width 6. This is the whole of D5's collision handling; P3 needs no machinery.
-- The leading `_` is what keeps the two namespaces disjoint: a user label must match
-  `^[a-z0-9][a-z0-9-]{1,31}$` and therefore can never begin with `_`. An alias can never shadow a
-  canonical id and a canonical id can never block an alias.
+- Replaces `DefaultLabel`, deleted with the rest of §4.3.
+- **Width 8, not 6.** 36⁸ ≈ 2.82e12. For 100 live conversations the birthday probability is
+  ≈1.8e-9, against ≈2.3e-6 at width 6.
+- The leading `_` keeps it disjoint from anything a human types: a `label` must match
+  `^[a-z0-9][a-z0-9-]{1,31}$` and can never begin with `_`. A label can never be mistaken for an
+  address by the resolver even though the resolver no longer looks at labels at all.
 - `IsCanonicalID(s)` replaces `IsDefaultLabel`, pattern `^_[0-9a-z]{8}$`.
 
-**A safe failure has to say so.** D5 leans on `*AmbiguousError` being the outcome of a collision, so
-that outcome must be legible as a collision and not as a malfunction. `AmbiguousError` already
-carries `Candidates`; `pdx msg send` must print every candidate — address, agent name, pid, cwd —
-rather than a bare "ambiguous". Without that, the operator sees "my address stopped working" and
-goes looking for a bug that is not there. Covered in §7 and §9.
+**Collision handling is the ambiguity refusal that already exists**, kept as a backstop rather than
+a mechanism: two live rows sharing a canonical produce `*AmbiguousError` and a 409, so the failure
+is a refusal to deliver, never a delivery to the wrong conversation. A stateful allocator is
+rejected — it would make the id impure, and purity is the property the whole design rests on.
 
-### 4.2 Alias — unchanged
+**A safe failure has to say so.** `pdx msg send` must print every candidate an `*AmbiguousError`
+carries — address, agent name, pid, cwd — not a bare "ambiguous". Otherwise the operator reads "my
+address stopped working" and goes hunting for a bug that is not there. §7 and §9.
 
-`internal/module/peers/labels.go` and the `LabelInfo` store keep their current behaviour: claim,
-`label_taken` with `holder` + `live_labels`, release, `label_rev`, dead rows inert.
+### 4.2 `label` (`internal/module/peers/labels.go`)
+
+The store and the `pdx msg name` route stay; their contract loosens:
+
+| before | after |
+|---|---|
+| claiming a taken label → 409 `label_taken`, refused | **succeeds**, response carries `warning: "label_in_use"` plus `live_labels` and the other `holder`s |
+| a label was the address head | a label is display-only |
+| `label_rev` tracked address changes | see §4.4 — retained on the wire for v2 senders, always 0 for v3 |
+| dead holder's row inert (releases the name) | unchanged — a dead conversation should not show a label |
+
+Grammar is unchanged (`ValidateUserLabel`), so the `<project>-<role>[-<n>]` convention in the
+project CLAUDE.md keeps working. The `-2` in `purdex-tester-2` is now a courtesy to readers rather
+than a uniqueness requirement — which is why D5 warns instead of refusing: the convention is worth
+nudging toward, not worth enforcing.
 
 ### 4.3 Deletions
 
@@ -116,116 +138,98 @@ With D4, everything that existed to mint a label from a tmux name goes:
 | `DefaultLabel`, `IsDefaultLabel`, `defaultLabelPattern`, `defaultLabelN`, `labelSpace` | `label.go` (replaced by §4.1) |
 | `LabelSourceDefault` | `label.go` |
 
-`userLabelHoldersOf` is no longer needed because §4.1's `_` prefix makes the two namespaces
-disjoint by construction rather than by a runtime check.
+`userLabelHoldersOf` is doubly unnecessary now: §4.1's `_` prefix already made the namespaces
+disjoint, and under D3 a label cannot block anything because nothing resolves through it.
 
 > This removes most of #1079. The occupancy reasoning it introduced is not being discarded because
 > it was wrong — it is being discarded because D2 removes the mutable input that made it necessary.
 
-**What is NOT being deleted, and where it lives.** Alias uniqueness among live conversations is
-unaffected by this section. It was never implemented here: it is enforced at claim time by
-`internal/module/peers/labels.go` — the claim matrix, `label_taken` with `holder` + `live_labels`,
-and the rule that a dead holder's row is inert and releases the name. None of that appears in the
-table above, and none of it changes.
-
-The three occupancy rules deleted here answered a different question — "which conversation may mint
-a label from this tmux session name" — and that question stops existing under D2. A reader who
-takes "the occupancy rules are gone" to mean "alias uniqueness is gone" will be tempted to add a
-duplicate check back into the record build. Do not: the claim path already refuses a taken alias
-before it can ever reach a record.
+**What is NOT being deleted.** The label store and its claim route survive (§4.2). What changes
+there is the verdict on a duplicate, not the existence of the path. A reader who takes "the
+occupancy rules are gone" to mean "labels are gone" will delete too much.
 
 ### 4.4 `PeerRecord` (`internal/peers/record.go`)
 
-Two fields are **added**; `label` and `address` keep the meaning consumers already rely on.
-
 ```go
 Canonical   string `json:"canonical"`    // NEW: "_3k9f2mq4"; "" when the row has no cc agent
-Alias       string `json:"alias"`        // NEW: the claimed user label; "" when none
-Label       string `json:"label"`        // the head used in Address: Alias if claimed, else Canonical
-LabelSource string `json:"label_source"` // CHANGED: "user" | "canonical" | ""  ("default" is gone)
-LabelRev    int64  `json:"label_rev"`    // unchanged; 0 when no alias
-Address     string `json:"address"`      // unchanged FORMAT: <host>/<label>:<suffix>
+Label       string `json:"label"`        // CHANGED: self-declared display name; "" until one is set
+LabelSource string `json:"label_source"` // CHANGED: "user" | ""   ("default" is gone)
+LabelRev    int64  `json:"label_rev"`    // retained for v2 wire compat; always 0 for v3
+Address     string `json:"address"`      // CHANGED head, unchanged FORMAT: <host>/<canonical>:<suffix>
 ```
 
-- `Canonical` and `Alias` are bare ids, like `Label`. `Address` stays the only full-form field;
-  a consumer needing the canonical address builds `<host>/<canonical>` — the suffix is optional on
-  input, so the bare form is pasteable.
 - **`Address` keeps its current format, suffix included.** `applyLabel` builds
-  `alias + "/" + Label + ":" + Suffix` (`record.go:265`), which is what `pdx msg whoami` prints and
-  what a send response returns as `to_address`. This spec changes which head goes in, never the
-  format. Dropping the suffix would be a breaking change and is **not** proposed.
-- `Suffix` keeps its shape (`san(tmux)-san(cc)`) but **must be built from the live tmux inventory**,
-  not `Entry.TmuxSessionName()` — see §5.3.
-- `WireAddress()` is unchanged: `Label + ":" + Suffix`. Because `Label` is always a resolvable head,
-  a v3 sender's `from.address` needs no new handling on the receiving side.
+  `alias + "/" + <head> + ":" + Suffix` (`record.go:265`) — that `alias` parameter is the **host**
+  alias, and stays so. Only the head changes: it is now always the canonical id. Dropping the suffix
+  would be a breaking change and is not proposed.
+- `label` no longer participates in the address, so there is no "which head is it" question to
+  answer and no field needed to answer it.
+- `LabelRev` / `WireTo.AddressRev` stay on the wire because a v2 sender still sends them and
+  `deliver.go:277` uses them to name the sender's proxy helper. A v3 address never changes, so a v3
+  sender always sends 0 and the helper is never renamed.
 
 ### 4.5 Field invariants (the consumer contract)
 
-These exist so no consumer has to guess which kind of address it is looking at. They hold for every
-row whose agent is a **live** cc entry (`agent.type == "cc"` and `agent.pid != 0` — the
-`hasLiveEntry` test the resolver already uses):
+For every row whose agent is a **live** cc entry (`agent.type == "cc"` and `agent.pid != 0` — the
+`hasLiveEntry` test the resolver uses):
 
 | invariant | |
 |---|---|
-| `address == host + "/" + label + ":" + suffix` | the existing format, unchanged |
-| `label != ""` | always |
-| `label == (alias != "" ? alias : canonical)` | the only rule for which head is in play |
-| `label_source == (alias != "" ? "user" : "canonical")` | one field answers "is this the claimed name or the machine one" |
-| `canonical != ""` and immutable for the conversation's life | the address that always works |
-| `alias` may change or become `""` at any time | claiming, releasing, or the holder dying |
+| `address == host + "/" + canonical + ":" + suffix` | one shape, always |
+| `canonical != ""`, immutable for the conversation's life | |
+| `label` may be `""`, may change, **may be shared with another row** | never a key, never routed on |
+| `label_source == (label != "" ? "user" : "")` | |
 
-The two other row kinds keep today's behaviour and are **not** covered by the table:
+Two other row kinds keep today's behaviour and are **not** covered above:
 
 | row | address | note |
 |---|---|---|
-| `row_kind: session`, `agent: null` | `<host>/tmux:<session_name>` (`record.go:151`) | `label`, `alias`, `canonical`, `suffix` all `""`; `label_rev` 0 |
-| owner-fallback rows (`inbox_dead` / `ambiguous`: `agent.type == "cc"`, `agent.pid == 0`) | `<host>/<label>:<suffix>` via `applyLabel` | **pre-existing wart, not introduced here**: the row renders an address that tier 1 will not resolve, because `hasLiveEntry` is false. It is a display of who the owner *is*, not a route to them. `reason` already says `inbox_dead` / `ambiguous`. Out of scope to fix; called out so the table is not read as covering it. |
+| `row_kind: session`, `agent: null` | `<host>/tmux:<session_name>` (`record.go:151`) | all label fields `""` |
+| owner-fallback rows (`inbox_dead` / `ambiguous`: `agent.type == "cc"`, `agent.pid == 0`) | `<host>/<canonical>:<suffix>` via `applyLabel` | **pre-existing wart, not introduced here**: renders an address tier 1 will not resolve, because `hasLiveEntry` is false. `reason` already says why. Out of scope; called out so the table is not read as covering it. |
 
-> **Breaking change for consumers:** `label_source` no longer emits `"default"`. Anything switching
-> on that string must move to `"canonical"`. This is the only value change in the record; `label`
-> and `address` are shape-compatible with v2.
+> **Breaking change for consumers:** `label_source` no longer emits `"default"`, and `label` is now
+> empty on a conversation that has not set one. Anything that displayed `label` as an identifier
+> must display `canonical` or `address` instead.
 
 ## 5. Resolution
 
 ### 5.1 `Resolve` tiers (`internal/peers/address.go`)
 
-Tier 1's predicate gains the canonical arm. Everything else is untouched:
+Tier 1 stops matching labels and matches the canonical id instead:
 
 ```go
-// Tier 1: alias OR canonical, over every row backed by a live entry.
+// Tier 1: the canonical id, over every row backed by a live entry.
 rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-    return hasLiveEntry(r) && ((r.Label != "" && r.Label == head) || r.Canonical == head)
+    return hasLiveEntry(r) && r.Canonical == head
 })
 ```
 
 - `cc:<x>` — still `ErrNotFound` wrapping `ErrLegacyCC`.
-- `tmux:<name>` — unchanged. It already matches `PeerRecord.SessionName`, which comes from the
-  **live** tmux inventory, so it is the one form that was never stale.
-- Tier 2 (bare string as a tmux session name) — unchanged.
-- The ambiguity, `RegistryIncomplete` and `Partial` rules are unchanged and now also cover the
-  canonical arm, which is D5's safety net for P3.
+- `tmux:<name>` and tier 2 (a bare string as a tmux session name) — **kept, unchanged**. These
+  address a *place*, not a conversation: they match `PeerRecord.SessionName`, which comes from the
+  live tmux inventory and was never stale. They are not a second naming scheme — nobody issues or
+  claims them — so D1 does not reach them. A bare label like `purdex-tester` now falls through
+  tier 1, fails tier 2, and returns `ErrNotFound`, which is the correct and legible outcome.
 - **Accepted conservatism, stated so it is not mistaken for an oversight:** a tier-1 miss under
-  `snap.Partial` returns `ErrResolveNotReady` (`address.go:115`). A canonical id does not depend on
-  the label store or on owner resolution, so a partial inventory can never be the reason a canonical
-  failed to match — yet it will still be retried rather than reported missing. That is the safe
-  direction (a retry costs a round trip, a false "not found" costs a message) and splitting `Partial`
-  by cause is out of scope here. Do not "fix" it without a separate decision.
+  `snap.Partial` returns `ErrResolveNotReady` (`address.go:115`). A canonical id depends on neither
+  the label store nor owner resolution, so a partial inventory can never be the reason it missed —
+  yet it is still retried rather than reported missing. That is the safe direction (a retry costs a
+  round trip, a false "not found" costs a message). Splitting `Partial` by cause is out of scope.
 
-### 5.2 Building the label fields (`record.go`, `applyLabel`)
+### 5.2 Building the fields (`record.go`, `applyLabel`)
 
 ```
 canonical = CanonicalID(sessionID)
-alias     = labelStore[sessionID].Label        // "" when unclaimed
+label     = labelStore[sessionID].Label        // "" when none set
 
-if alias != "" { label, source = alias,     "user"      }
-else           { label, source = canonical, "canonical" }
-
-address = host + "/" + label
+head      = canonical                          // always
+address   = host + "/" + head + ":" + suffix
+source    = label != "" ? "user" : ""
 ```
 
-`applyLabel`'s `defaultLabel` parameter is replaced by `canonical`; call sites in `record.go`
-(3 places) and `module.go` drop the `defaults.For(...)` argument. The function now also sets
-`Canonical` and `Alias`, so §4.5's invariants are established in exactly one place.
+`applyLabel`'s `defaultLabel` parameter becomes `canonical`; the call sites in `record.go`
+(7 places) and `module.go` drop the `defaults.For(...)` argument. The function also sets
+`Canonical`, so §4.5's invariants are established in exactly one place.
 
 ### 5.3 Suffix must come from live tmux data
 
@@ -237,83 +241,87 @@ only three are not:
 |---|---|---|
 | 205, 211, 229, 239 | `s.Name` — live `SessionSummary` | already correct, leave |
 | **216, 234** | `candidates[0].TmuxSessionName()` / `paneMatches[0].TmuxSessionName()` — frozen | **fix**: `s.Name` is in scope and is the live name for the very session being rendered |
-| **321** | `e.TmuxSessionName()` — frozen, `entry` rows | see below |
+| **321** | `e.TmuxSessionName()` — frozen, `entry` rows | keep: an entry row with no session row behind it has no live name to use |
 
 So this is a two-line fix for session rows, not a rework.
 
-For an `entry` row with no session row behind it there is no live name available; keep the registry
-value, since such a row is by definition not attached to a listed tmux session.
-
-**This makes `suffix` carry two provenances in one response**, and that must be stated rather than
-left for the next reader to discover: on a `session` row it is live, on an `entry` row it may be the
-value frozen at the agent's startup. No field is added to tell them apart — `row_kind` already
-does, and `suffix` is display-only and explicitly not an identity (§4.4). But the doc comment on
-`PeerRecord.Suffix` must say exactly this, because "one field, two meanings, no discriminator" is
-the shape of the `partial` defect found in #1079's review.
+**This leaves `suffix` with two provenances in one response**, and that must be stated rather than
+left for the next reader to discover: live on a `session` row, possibly frozen on an `entry` row.
+No field is added to tell them apart — `row_kind` already does, and `suffix` is display-only and
+explicitly not an identity. But the doc comment on `PeerRecord.Suffix` must say exactly this,
+because "one field, two meanings, no discriminator" is the shape of the `partial` defect found in
+#1079's review.
 
 ## 6. Wire / API
 
-- `GET /api/peers`: rows gain `canonical` and `alias`; `label` and `address` keep their meaning
-  (§4.5); `label_source` emits `"canonical"` where it used to emit `"default"`.
-- `POST /api/peers/send`: `to` accepts an alias or a canonical id. No request-shape change —
-  §5.1 does the work.
+- `GET /api/peers`: rows gain `canonical`; `label` / `label_source` change meaning per §4.4.
 - **`ValidateWireAddress` must be widened (`wire.go:415`) — implementation blocker.** It gates
   `from.address`'s head through `IsDefaultLabel` (exactly 6 digits) or `ValidateUserLabel`. An
   8-digit canonical passes neither, so a v3 sender's own `DeliverRequest.Validate()` would reject it
   at `send.go:353` before anything left the host. The head must accept `IsCanonicalID`, **and keep
-  accepting the 6-digit form** for as long as a v2 peer may still be sending — a v2 sender's
-  `_xxxxxx:suffix` reaching a v3 receiver must not be refused as `bad_address`. Concretely: accept
-  `^_[0-9a-z]{6,8}$` for the head, alongside `ValidateUserLabel`.
-- `POST /api/peers/deliver`: unchanged. `findTarget` already matches on
-  `agent_session_id` + `pid` + `proc_start`, never on the label. A v2 `from.address` therefore still
-  reaches its target; it is used only to name the sender's proxy helper
-  (`principal.Alias + "/" + req.From.Address`, `deliver.go:277`).
-- `POST /api/peers/self` (`whoami`): response gains `canonical`; it must print **both** addresses,
-  because an agent cannot derive its canonical id itself.
-- `PUT/DELETE /api/peers/self/label`: unchanged.
-- No version negotiation. A v2 peer sending `from.address` with a stale tmux head simply fails to
-  resolve on the receiver, which is the same outcome as today for a renamed session.
+  accepting the 6-digit form** for as long as a v2 peer may still be sending. Concretely: accept
+  `^_[0-9a-z]{6,8}$` for the head, alongside `ValidateUserLabel` (a v2 sender may still present a
+  user label as its head).
+- `POST /api/peers/send`: `to`'s head is a canonical id. No request-shape change.
+- `POST /api/peers/deliver`: unchanged. `findTarget` matches on `agent_session_id` + `pid` +
+  `proc_start` (`deliver.go:51`), never on the label, so a v2 `from.address` still reaches its
+  target; it is used only to name the sender's proxy helper (`deliver.go:277`).
+- `PUT /api/peers/self/label`: **no longer refuses a duplicate.** 200 with
+  `warning: "label_in_use"`, `live_labels`, and the other holders, instead of 409 `label_taken`.
+  `ErrLabelTaken` is removed from the error vocabulary.
+- `POST /api/peers/self` (`whoami`): response gains `canonical`.
 
 ## 7. CLI
 
 | command | change |
 |---|---|
-| `pdx peers` | the `LABEL` column is replaced by `CANONICAL` (same width budget). `ADDRESS` already shows the alias when one is claimed, so the pair reads "the name it answers to" + "the name it always answers to". The `*` default-label marker is removed — there is no longer such a thing. |
-| `pdx peers --json` | per §6 |
-| `pdx msg whoami` | prints `canonical:` and `alias:` lines; `address:` stays as the preferred form |
-| `pdx msg send <host>/<x>` | `<x>` may be an alias or a canonical id. On `*AmbiguousError` the candidates are listed one per line (address, agent name, pid, cwd), not summarised as a count — §4.1 |
-| `pdx msg name` | unchanged |
-| `peerNotFoundHint` (`send.go:39`) | still tells the operator that an unnamed session is addressed by its tmux session name. Under D4 that is no longer true; rewrite it to name the canonical id and `pdx peers` as the way to find one. |
+| `pdx peers` | `LABEL` moves to the **first** column, before `ADDRESS`, and is **blank** when unset (not `-`). No `CANONICAL` column is added — `ADDRESS` already carries it. The `*` default-label marker is removed; there is no longer such a thing. |
+| `pdx msg whoami` | prints `canonical:` alongside `address:` and `label:` |
+| `pdx msg name <label>` | on success prints **both** the label it set and the address, which is unchanged. An agent that has just named itself must see immediately that its address did not move — this is what stops "I named it, so I can send to that name". On a duplicate it prints a warning naming the other holders and exits 0. |
+| `pdx msg send <host>/<x>` | `<x>` is a canonical id (or a `tmux:` form). On `*AmbiguousError` the candidates are listed one per line — address, agent name, pid, cwd — not summarised as a count (§4.1) |
+| `peerNotFoundHint` (`send.go:39`) | still tells the operator that an unnamed session is addressed by its tmux session name. Rewrite: name the canonical id and `pdx peers` as the way to find one. |
+
+### 7.1 `pdx peers` rendering
+
+```
+LABEL           ADDRESS                             AGENT  NAME        STATUS  DELIVERABLE  CWD
+purdex-tester   mini-lab/_3k9f2mq4:aigora2-purdex-b0  cc   purdex-b0   busy    yes          ~/Workspace/wake/purdex
+purdex-tester   mini-lab/_9x2pq0af:purdex1-purdex-69  cc   purdex-69   idle    yes          ~
+                mini-lab/_1c4m7dkz:ff-firefly-be      cc   firefly-be  idle    yes          ~
+                mini-lab/tmux:aigora3                 -    -           -       no_agent     ~/Workspace/wake/aigora
+```
+
+Reading order matches use: scan `LABEL` to find who you want, copy `ADDRESS` to reach them. The
+first two rows share a label deliberately — that is legal under D5, it is visible, and their
+addresses are still distinct. A blank `LABEL` means the conversation has not named itself; it is
+addressed the same way as any other.
 
 ## 8. Compatibility
 
 Alpha: no persistence migration (project convention). Addresses printed before this change are not
 expected to keep working — the tmux-derived ones were already unreliable, which is the point.
 
-`docs`/`CLAUDE.md` text that describes the default label as "the tmux session name" must be updated
-in the same PR; the project CLAUDE.md "Peer addresses" section is the authoritative copy. The two
-bullets introduced by #1079 (the two kinds of default label, and the "default label = position /
-user label = conversation" framing) are removed: a canonical id is neither a position nor a name,
-it is an identity.
+The project CLAUDE.md "Peer addresses" section is the authoritative copy and must be rewritten in
+the same PR. Specifically: the two bullets introduced by #1079 (the two kinds of default label, and
+the "default label = position / user label = conversation" framing) go; and the "被要求「成為 X」時"
+workflow must stop implying the claimed name is an address — it now sets a label and reports the
+unchanged address.
 
 ### 8.1 SPA dependency (confirmed with purdex-69, 2026-09-17)
 
-The SPA work in flight does **not** parse or assemble addresses: `address` is displayed and copied
-verbatim, and rows are joined on `session_code`, not on the label. §4.5 is what keeps that true.
+The SPA does not parse or assemble addresses: `address` is displayed and copied verbatim, and rows
+are joined on `session_code`, not on the label. §4.5 keeps that true.
 
-One change is required on the SPA side:
+Two changes are required on the SPA side:
 
 - `label_source === 'default'` is used to draw a marker (one site, `RenamePopover.tsx`). That value
-  becomes `'canonical'`.
+  is gone; the marker either goes or keys off `label !== ''`.
+- Anywhere `label` is shown as the peer's identifier must show `address` (or `canonical`) instead,
+  since `label` is now empty by default and non-unique when set.
 
-**Sequencing constraint.** PR #1085 (peer info in the tab panel and status bar) is in review and
-its tests touch that component. This change must **not** land before #1085 merges, or #1085 goes red
-on a field unrelated to it. Either #1085 merges first and the one-line SPA change rides in this PR,
-or purdex-69 lands it as a follow-up immediately after. Agreed with purdex-69, 2026-09-17.
-
-`suffix` is unused by the SPA, so §5.3 does not affect it. If the wording of any `reason` value
-changes, `spa/src/lib/peer-display.ts` and the `peer.*` i18n namespace are the single copies to
-update — this spec changes no `reason` value.
+**Sequencing constraint.** PR #1085 (peer info in the tab panel and status bar) is in review and its
+tests touch that component. This change must **not** land before #1085 merges. Agreed with
+purdex-69, 2026-09-17; confirm its state before landing.
 
 ## 9. Testing
 
@@ -322,37 +330,36 @@ is gone. `label_test.go`'s `ResolveDefaultLabels` table goes with §4.3.
 
 - `CanonicalID`: deterministic for a fixed sessionId; 8 base36 digits after `_`; differs for
   different sessionIds; unaffected by tmux name, cwd or pid.
-- `IsCanonicalID`: accepts `_3k9f2mq4`, rejects the 6-digit form, a bare label, `""`, and anything
-  with an uppercase or `-`.
+- `IsCanonicalID`: accepts `_3k9f2mq4`; rejects the 6-digit form, a bare label, `""`, uppercase, `-`.
 - Namespace disjointness: `ValidateUserLabel` rejects every string `IsCanonicalID` accepts.
-- `Resolve`: canonical resolves; alias resolves; a row with an alias still resolves by its
-  canonical; two rows sharing a canonical → `*AmbiguousError`; `tmux:<name>` still bypasses tier 1;
-  `Partial` / `RegistryIncomplete` behaviour unchanged for both arms.
+- `Resolve`: a canonical resolves; **a label does not resolve** (falls through tier 1 and tier 2 to
+  `ErrNotFound`); two rows sharing a canonical → `*AmbiguousError`; `tmux:<name>` and bare-tmux
+  tier 2 still resolve; `Partial` / `RegistryIncomplete` behaviour unchanged.
 - CLI rendering of `*AmbiguousError` names every candidate (§4.1). Asserted on the rendered string,
-  not on the error value — the point of the requirement is what the operator reads.
-- `applyLabel` / `Build`, asserted as §4.5's table: `address == host+"/"+label` on every row;
-  alias claimed → `label == alias`, `label_source == "user"`; no alias → `label == canonical`,
-  `label_source == "canonical"`; `canonical` non-empty and `alias` possibly empty on every row with
-  a live cc agent; all five empty on a row with `agent: null`.
-- A row keeps the same `canonical` across an alias being claimed and then released, and the
-  canonical still resolves throughout (the "both addresses work at once" case).
+  not the error value — the requirement is about what the operator reads.
+- `applyLabel` / `Build`, asserted as §4.5's table: `address == host+"/"+canonical+":"+suffix` on
+  every live-cc row; `canonical` non-empty there and `""` on a row with `agent: null`;
+  `label_source == "user"` exactly when `label != ""`.
+- **Two live rows may hold the same `label`** and both keep their own distinct `canonical` and
+  `address`, and both still resolve. This is D5's regression test and the point of the whole change.
+- `PUT /api/peers/self/label` with a label another live session holds: 200, label is set, response
+  carries `label_in_use` and the other holder; the other session is unaffected.
 - Suffix: a session row whose registry `tmux` name differs from the live inventory name renders the
   **live** name (the P1 regression test).
-- `labels.go`: claim / `label_taken` + `live_labels` / release / dead-holder-inert all still pass
-  unchanged — this layer is untouched and its tests prove it.
-- End to end (`e2e_test.go`): send to a canonical id, send to an alias, send to an alias after the
-  holder released it (→ not found), rename the target's tmux session and confirm **both** addresses
-  still resolve.
-- `ValidateWireAddress`: accepts an 8-digit canonical head; **still** accepts a 6-digit v2 head;
-  accepts a user label; rejects 5 and 9 digits, an uppercase head, and the reserved `cc` / `tmux`.
-  A v3 `DeliverRequest` carrying an 8-digit `from.address` passes `Validate()`.
+- `ValidateWireAddress`: accepts an 8-digit canonical head; **still** accepts a 6-digit v2 head and
+  a user label head; rejects 5 and 9 digits, uppercase, and the reserved `cc` / `tmux`. A v3
+  `DeliverRequest` carrying an 8-digit `from.address` passes `Validate()`.
+- End to end (`e2e_test.go`): send to a canonical; rename the target's tmux session and confirm the
+  address still resolves; set a label on the target and confirm the address is unchanged and the
+  label is not resolvable.
 - Gates: `go build ./...`, `go test ./...`, `go vet ./...`.
 
 ## 10. Out of scope
 
 - **Same-host delivery through pdx.** `send.go`'s D1 (`local_target`) is unchanged here. Unifying
-  the two namespaces that exist on one host — Claude Code's own session name vs the pdx alias — is a
-  separate spec that depends on this one landing first.
-- SPA surfacing of `/api/peers` (in flight elsewhere).
+  the two namespaces that exist on one host — Claude Code's own session name vs the pdx address — is
+  a separate spec that depends on this one landing first.
+- Removing `tmux:` / bare-tmux location addressing (§5.1).
+- Splitting `Partial` by cause (§5.1).
+- Fixing the owner-fallback rows' unresolvable address (§4.5).
 - A `note` / `role` field (D6).
-- Reviving the `cc:` form.
