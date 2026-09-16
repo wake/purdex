@@ -299,7 +299,15 @@ nearest existing home for a helper-rename test), `CLAUDE.md`
    address. Decide explicitly: it is a rendering example, not a contract, so
    it changes to a tmux-shaped default with the hash form named as the
    fallback — and the CLI test that pins the help text changes with it.
-5. `CLAUDE.md`, "Peer addresses" section: replace
+5. The `peer_not_found` detail for an unmatched session is
+   `no session %q on %q` (`internal/module/peers/send.go`). Since §4.1 makes
+   a stale `_hash` address the most likely way to reach it, the message
+   teaches the new form in the same breath — it names `pdx peers --all` and
+   says that an unnamed session is now addressed by its tmux session name.
+   One sentence, one round-trip saved; the wire `error` code is unchanged, so
+   nothing that matches on `peer_not_found` breaks. Covered by a test on the
+   detail text.
+6. `CLAUDE.md`, "Peer addresses" section: replace
    "`_xxxxxx` 開頭＝尚未命名（由 sessionId 導出的預設值）" with the two-form
    rule — the default is the tmux session name when it names exactly one live
    agent, `_xxxxxx` otherwise — and add the one-line semantic: default label
@@ -307,8 +315,8 @@ nearest existing home for a helper-rename test), `CLAUDE.md`
 
 **Commits (two, and this is the one task that has two):**
 `test(peers): fleet expectations for tmux-derived defaults` (items 1–3) and
-`docs: peer address defaults come from the tmux session name` (items 4–5,
-docs and help text only).
+`docs: peer address defaults come from the tmux session name` (items 4–6:
+the help text, the `peer_not_found` detail and its test, and `CLAUDE.md`).
 
 ---
 
