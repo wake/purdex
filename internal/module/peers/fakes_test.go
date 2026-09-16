@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +20,11 @@ var errFakeProvider = errors.New("fake session provider failure")
 // ListSessions is exercised by the peers module; the rest exist to satisfy
 // the interface.
 type fakeSessions struct {
+	// mu guards sessions, so a test can rename a live tmux session between
+	// two requests to a running httptest server without racing the handler
+	// goroutine that is reading the inventory. Tests that only set it at
+	// construction never touch mu.
+	mu       sync.Mutex
 	sessions []session.SessionInfo
 	err      error
 	// instances, when non-nil, is a sequence consumed one entry per
@@ -32,8 +38,18 @@ type fakeSessions struct {
 	listCalls atomic.Int32
 }
 
+// setSessions replaces the live tmux inventory this fake reports — a tmux
+// rename, from the daemon's point of view.
+func (f *fakeSessions) setSessions(sessions []session.SessionInfo) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessions = sessions
+}
+
 func (f *fakeSessions) ListSessions() ([]session.SessionInfo, error) {
 	f.listCalls.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -41,6 +57,8 @@ func (f *fakeSessions) ListSessions() ([]session.SessionInfo, error) {
 }
 
 func (f *fakeSessions) GetSession(code string) (*session.SessionInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, s := range f.sessions {
 		if s.Code == code {
 			cp := s

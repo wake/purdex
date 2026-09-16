@@ -190,11 +190,15 @@ func (b *fakeInbox) close() { b.once.Do(func() { b.ln.Close() }) }
 // e2eDaemon is one real daemon: a Module over the fixture, its core, and
 // the httptest server fronting it through the real PeerAuth chain.
 type e2eDaemon struct {
-	t     *testing.T
-	f     *moduleFixture
-	m     *Module
-	core  *core.Core
-	srv   *httptest.Server
+	t    *testing.T
+	f    *moduleFixture
+	m    *Module
+	core *core.Core
+	srv  *httptest.Server
+	// sess is this daemon's live tmux inventory, kept so a test can rename
+	// one of its sessions mid-run (setSessions is mutex-guarded; the
+	// server's handler goroutines read it).
+	sess  *fakeSessions
 	admin string
 	alias string
 }
@@ -216,9 +220,10 @@ func newE2EDaemon(t *testing.T, o e2eDaemonOpts) *e2eDaemon {
 		Peers:  config.PeersConfig{Alias: o.alias, Hosts: []config.PeerHost{o.peer}, Deliver: true},
 	}
 	c := core.New(core.CoreDeps{Config: cfg, Registry: core.NewServiceRegistry()})
+	sess := &fakeSessions{sessions: o.sessions}
 	f := newTestModuleWith(t, fixtureOpts{
 		core:        c,
-		sessions:    &fakeSessions{sessions: o.sessions},
+		sessions:    sess,
 		owners:      &fakeOwners{owners: o.owners},
 		registryDir: o.regDir,
 		liveness:    o.live.liveness(),
@@ -235,7 +240,7 @@ func newE2EDaemon(t *testing.T, o e2eDaemonOpts) *e2eDaemon {
 	f.m.RegisterRoutes(mux)
 	srv := httptest.NewServer(buildOuterHandler(c, mux))
 	t.Cleanup(srv.Close)
-	return &e2eDaemon{t: t, f: f, m: f.m, core: c, srv: srv, admin: o.admin, alias: o.alias}
+	return &e2eDaemon{t: t, f: f, m: f.m, core: c, srv: srv, sess: sess, admin: o.admin, alias: o.alias}
 }
 
 // setPeer mutates this daemon's one peer entry under the config lock.
@@ -979,6 +984,122 @@ func TestE2E_Labels(t *testing.T) {
 	origin.close()
 	target.close()
 	holder.close()
+	a.stop()
+	b.stop()
+}
+
+// TestE2E_CanonicalSurvivesATmuxRename is spec §9's end-to-end rename
+// requirement, and it is the one property this whole change exists to
+// deliver: an address follows the conversation's sessionId, so renaming the
+// tmux session the target lives in cannot move it.
+//
+// It has to be end to end. The unit tests around CanonicalID and Resolve
+// prove the head is name-independent in isolation, but the failure v2 had
+// (spec §2 P1) lived in the JOIN — the remote fetch, normalizeRemoteRows,
+// Resolve, and the delivery tuple that comes out of it — where a tmux name
+// entered the address by a route no single unit covered.
+//
+// The rename is modelled exactly as production presents it, and the two
+// halves are what make the test worth writing:
+//
+//   - B's LIVE tmux inventory reports the new name. A rename leaves the
+//     tmux session id alone, so B's session code ("foocode") and its owner
+//     resolution are untouched.
+//   - B's REGISTRY entry for the target keeps "foo:@2.%2". Claude Code
+//     froze that field when the agent started and copies it through every
+//     rewrite, so it stays stale for the agent's whole life.
+//
+// Four things are asserted across the rename: the same canonical still
+// delivers; the delivery TUPLE is unchanged (same process, not a lookalike
+// re-resolved by name); the reported address's suffix follows the LIVE name
+// (the display half, spec §5.4 — pass the frozen one here and the operator
+// is handed an address naming a session that no longer exists); and the
+// target's label is not an address before or after (D3).
+//
+// The bare tmux name is the deliberate contrast: "b/foo" delivered before
+// the rename and is a 404 after, because tier 2 addresses a PLACE and a
+// place is exactly the thing a rename moves. That is the difference the
+// canonical id buys.
+func TestE2E_CanonicalSurvivesATmuxRename(t *testing.T) {
+	// Setup identical to TestE2E_Labels: A's tmux session mt1 is the
+	// origin, B's tmux session foo is the target.
+	sockDir, regDir := proxyhelpertest.TempDirs(t)
+	root := filepath.Dir(regDir)
+	originSock := filepath.Join(root, "origin.sock")
+	targetSock := filepath.Join(root, "target.sock")
+	origin := startFakeInbox(t, originSock)
+	target := startFakeInbox(t, targetSock)
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", e2eRegistryJSON(e2eOriginPID, e2eOriginSID, e2eOriginName, "mt1:@1.%1", originSock))
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eTargetPID)+".json", e2eRegistryJSON(e2eTargetPID, e2eTargetSID, e2eTargetName, "foo:@2.%2", targetSock))
+	live := &e2eLiveness{}
+
+	a := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostA, alias: "a", admin: e2eAdminA,
+		peer:     config.PeerHost{Alias: "b", HostID: e2eHostB, Token: e2eTokenAtoB, InboundToken: e2eTokenBtoA},
+		sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"mt1code": {AgentType: "cc", SessionID: e2eOriginSID, TmuxPaneID: "%1"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	b := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostB, alias: "b", admin: e2eAdminB,
+		peer:     config.PeerHost{Alias: "a", HostID: e2eHostA, Token: e2eTokenBtoA, InboundToken: e2eTokenAtoB},
+		sessions: []session.SessionInfo{{Code: "foocode", Name: "foo", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"foocode": {AgentType: "cc", SessionID: e2eTargetSID, TmuxPaneID: "%2"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+	a.setPeer(func(h *config.PeerHost) { h.URL = b.srv.URL })
+	b.setPeer(func(h *config.PeerHost) { h.URL = a.srv.URL })
+
+	canonical := "b/" + ipeers.CanonicalID(e2eTargetSID)
+	targetTo := ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart}
+
+	// ---- 1. The target names itself, so the label is in play throughout. ----
+	status, body := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester"})
+	if status != http.StatusOK {
+		t.Fatalf("step 1: claim = %d %s", status, body)
+	}
+
+	// ---- 2. Before the rename: the canonical delivers; the label does not. ----
+	sent := a.sendOK(ipeers.SendRequest{To: canonical, Text: "before", OriginInbox: originSock})
+	if want := canonical + ":foo-" + e2eTargetName; sent.ToAddress != want || sent.To != targetTo {
+		t.Fatalf("step 2: to = %s %+v, want %s %+v", sent.ToAddress, sent.To, want, targetTo)
+	}
+	target.recv("step 2")
+	st, raw := a.send(ipeers.SendRequest{To: "b/purdex-tester", Text: "by label", OriginInbox: originSock})
+	a.assertAPIError(st, raw, http.StatusNotFound, ipeers.ErrPeerNotFound, "step 2: a label is not an address")
+
+	// The bare tmux name works here, which is what makes step 5 meaningful.
+	a.sendOK(ipeers.SendRequest{To: "b/foo", Text: "by place", OriginInbox: originSock})
+	target.recv("step 2: bare tmux name")
+
+	// ---- 3. `tmux rename-session foo foo-renamed` on B. The registry file
+	// is NOT rewritten: the target's entry still says "foo:@2.%2". ----
+	b.sess.setSessions([]session.SessionInfo{{Code: "foocode", Name: "foo-renamed", Cwd: "/w"}})
+
+	// ---- 4. The SAME canonical still reaches the SAME process, and the
+	// address B reports for it now names the live session. ----
+	sent = a.sendOK(ipeers.SendRequest{To: canonical, Text: "after", OriginInbox: originSock})
+	if sent.To != targetTo {
+		t.Errorf("step 4: to tuple = %+v, want the unchanged %+v", sent.To, targetTo)
+	}
+	if want := canonical + ":foo-renamed-" + e2eTargetName; sent.ToAddress != want {
+		t.Errorf("step 4: to_address = %q, want %q (the suffix must follow the live tmux name, spec §5.4)", sent.ToAddress, want)
+	}
+	target.recv("step 4: the canonical survived the rename")
+	target.none("step 4")
+
+	// ---- 5. What the rename DID move: the place. The old bare name is
+	// gone, the new one works, and the label is still not an address. ----
+	st, raw = a.send(ipeers.SendRequest{To: "b/foo", Text: "stale place", OriginInbox: originSock})
+	a.assertAPIError(st, raw, http.StatusNotFound, ipeers.ErrPeerNotFound, "step 5: the old tmux name")
+	a.sendOK(ipeers.SendRequest{To: "b/tmux:foo-renamed", Text: "new place", OriginInbox: originSock})
+	target.recv("step 5: the new tmux name")
+	st, raw = a.send(ipeers.SendRequest{To: "b/purdex-tester", Text: "by label", OriginInbox: originSock})
+	a.assertAPIError(st, raw, http.StatusNotFound, ipeers.ErrPeerNotFound, "step 5: a label is still not an address")
+	target.none("step 5: neither a label nor a stale place delivered")
+
+	origin.close()
+	target.close()
 	a.stop()
 	b.stop()
 }
