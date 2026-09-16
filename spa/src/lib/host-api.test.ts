@@ -4,9 +4,10 @@ import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, createSession, deleteSession, switchMode,
   handoff, fetchHistory, fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, getConfig, updateConfig, agentUpload,
-  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig,
+  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers,
   type MonitorSnapshot, type Session,
 } from './host-api'
+import { indexPeerRows } from '../stores/usePeerStore'
 
 const HOST_ID = 'test-host'
 const BASE = 'http://100.64.0.2:7860'
@@ -402,5 +403,137 @@ describe('hostFetch auth header', () => {
     const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     const headers = call[1].headers as Headers
     expect(headers.get('Authorization')).toBeNull()
+  })
+})
+
+describe('fetchPeers', () => {
+  // Verbatim from `pdx peers --json` against the mini-lab daemon at
+  // 1.0.0-alpha.364 (two of its session rows, plus a synthetic entry row):
+  // the contract this feature reads. If the daemon renames a field, this
+  // fails here rather than silently rendering blanks in the status bar.
+  const realEnvelope = {
+    host_id: 'mini-lab:278cbm',
+    ok: true,
+    partial: false,
+    peers: [
+      {
+        host: 'mini-lab',
+        host_id: 'mini-lab:278cbm',
+        address: 'mini-lab/tmux:ai-chat2',
+        row_kind: 'session',
+        label: '',
+        label_source: '',
+        label_rev: 0,
+        suffix: '',
+        session_code: 'qorh3k',
+        session_name: 'ai-chat2',
+        tmux_instance: '6901:1789205013',
+        cwd: '/Users/wake/Workspace/wake/ai-chat-story',
+        agent: null,
+        deliverable: false,
+        reason: 'no_agent',
+      },
+      {
+        host: 'mini-lab',
+        host_id: 'mini-lab:278cbm',
+        address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
+        row_kind: 'session',
+        label: 'ai-chat4',
+        label_source: 'default',
+        label_rev: 0,
+        suffix: 'ai-chat4-ai-chat-story-3a',
+        session_code: 'z141yl',
+        session_name: 'ai-chat4',
+        tmux_instance: '6901:1789205013',
+        cwd: '/Users/wake/Workspace/wake/ai-chat-story',
+        agent: {
+          type: 'cc',
+          session_id: 'f5ddb1d6-be90-4b36-9927-a260075c3b0f',
+          peer_name: 'ai-chat-story-3a',
+          pid: 42603,
+          proc_start: 'Sun Sep 13 18:57:56 2026',
+          inbox: '/tmp/cc-socks/42603.sock',
+          status: 'idle',
+          version: '2.1.270',
+        },
+        deliverable: true,
+        reason: '',
+      },
+      {
+        host: 'mini-lab',
+        host_id: 'mini-lab:278cbm',
+        address: 'mini-lab/loose:loose-outside-tmux',
+        row_kind: 'entry',
+        label: 'loose',
+        label_source: 'user',
+        label_rev: 7,
+        suffix: 'loose-outside-tmux',
+        session_code: '',
+        session_name: '',
+        tmux_instance: '',
+        agent: {
+          type: 'cc',
+          session_id: '11111111-2222-3333-4444-555555555555',
+          peer_name: 'outside-tmux',
+          pid: 999,
+          proc_start: 'Mon Sep 15 10:00:00 2026',
+          inbox: '/tmp/cc-socks/999.sock',
+          status: 'busy',
+          version: '2.1.273',
+        },
+        deliverable: true,
+        reason: '',
+      },
+    ],
+    daemon_version: '1.0.0-alpha.364',
+    unknown_registry_files: [],
+    labels_unavailable: false,
+  }
+
+  it('fetches /api/peers with auth and returns the envelope', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(realEnvelope), { status: 200 }),
+    )
+    const env = await fetchPeers(HOST_ID)
+    expect(env.host_id).toBe('mini-lab:278cbm')
+    expect(env.peers).toHaveLength(3)
+    expectAuthFetch(`${BASE}/api/peers`)
+  })
+
+  it('a real envelope parses into the fields the store reads', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(realEnvelope), { status: 200 }),
+    )
+    const env = await fetchPeers(HOST_ID)
+    expect(env.partial).toBe(false)
+    expect(env.labels_unavailable).toBe(false)
+    expect(env.unknown_registry_files).toEqual([])
+    expect(indexPeerRows(env.peers)).toEqual({
+      qorh3k: {
+        address: 'mini-lab/tmux:ai-chat2',
+        label: '',
+        labelSource: '',
+        deliverable: false,
+        reason: 'no_agent',
+        tmuxInstance: '6901:1789205013',
+        agent: null,
+      },
+      z141yl: {
+        address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
+        label: 'ai-chat4',
+        labelSource: 'default',
+        deliverable: true,
+        reason: '',
+        tmuxInstance: '6901:1789205013',
+        agent: { type: 'cc', peerName: 'ai-chat-story-3a', status: 'idle' },
+      },
+    })
+  })
+
+  it('throws on error status', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('nope', { status: 503 }),
+    )
+    await expect(fetchPeers(HOST_ID)).rejects.toThrow('fetchPeers failed: 503')
   })
 })

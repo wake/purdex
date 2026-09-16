@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
+import { ArrowsClockwise, CircleNotch } from '@phosphor-icons/react'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useResumeTemplateLookup } from '../lib/resume-templates'
@@ -6,6 +7,12 @@ import { isValidSessionName } from '../lib/session-name'
 import { resolveResumeCommand } from '../lib/rebuild/composer'
 import { EditableValue, type RebuildEditableField } from './RebuildActionSet'
 import { collectRenameTargets, type RenameTargetPane } from '../features/workspace/hooks'
+import { usePeerInfo } from '../hooks/usePeerInfo'
+import { usePeerStore, type PeerEnvelopeFlags } from '../stores/usePeerStore'
+import { useHostStore } from '../stores/useHostStore'
+import { useSessionStore } from '../stores/useSessionStore'
+import { copyText } from '../lib/copy-text'
+import { reasonText } from '../lib/peer-display'
 import type { Tab } from '../types/tab'
 
 interface Props {
@@ -45,6 +52,160 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
     <div className="flex items-center gap-2 py-0.5">
       <span className="w-28 shrink-0 truncate text-[11px] text-text-secondary">{label}</span>
       <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  )
+}
+
+type T = (key: string, params?: Record<string, string | number>) => string
+
+/**
+ * Which of `partial`'s three causes to name.
+ *
+ * It is set by an owner lookup that did not finish, unreadable registry files,
+ * or a failed label snapshot — so "some other session's owner" is not a
+ * description of it, and the note has to say which one happened.
+ */
+function partialCause(envelope: PeerEnvelopeFlags, t: T): string {
+  if (envelope.unknownRegistryFiles.length > 0) return t('peer.partial.registry')
+  if (envelope.labelsUnavailable) return t('peer.partial.labels')
+  return t('peer.partial.owners')
+}
+
+/**
+ * One pane's peer row: address, agent, deliverability (spec §5).
+ *
+ * Loading and errors live here rather than on the panel because a tab can hold
+ * panes on several hosts, and one host being unreachable must not blank
+ * another pane's block.
+ */
+function PanePeerSection({ target }: { target: RenameTargetPane }) {
+  const t = useI18nStore((s) => s.t)
+  // A pane whose session the store has not reconciled yet is not a pane with
+  // no peer — it is a pane whose answer has not arrived.
+  const reconciled = useSessionStore((s) => (s.sessions[target.hostId] ?? []).some((sess) => sess.code === target.sessionCode))
+  // This pane's tmux generation, as the daemon last described the session —
+  // not `target.tmuxInstance`, which is the generation the *record* was written
+  // in and is exactly what a rebuild is meant to change. A peer row is this
+  // pane's only if it names the same tmux server; see `usePeerInfo`.
+  const paneGeneration = useSessionStore((s) => (s.sessions[target.hostId] ?? []).find((sess) => sess.code === target.sessionCode)?.tmux_instance ?? '')
+  const peer = usePeerInfo(target.hostId, target.sessionCode, paneGeneration)
+  const [feedback, setFeedback] = useState('')
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current) }, [])
+
+  const pid = target.paneId
+  const row = peer.row
+
+  const copyAddress = async () => {
+    if (!row?.address) return
+    let failed = false
+    try {
+      await copyText(row.address)
+    } catch {
+      failed = true
+    }
+    setFeedback(failed ? t('peer.copy_failed') : t('peer.copied', { what: t('peer.label.peer_id') }))
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
+    feedbackTimer.current = setTimeout(() => { setFeedback(''); feedbackTimer.current = null }, 1500)
+  }
+
+  const note = (testId: string, text: string) => (
+    <p data-testid={testId} className="px-1 py-0.5 text-[11px] text-text-muted">{text}</p>
+  )
+
+  const rows = row && (
+    <>
+      {row.address !== '' && (
+        <DetailRow label={t('peer.address')}>
+          <span className="flex min-w-0 items-center gap-1">
+            <button
+              type="button"
+              data-testid={`peer-address-${pid}`}
+              title={t('peer.copy_hint')}
+              onClick={() => void copyAddress()}
+              className="min-w-0 cursor-pointer truncate text-left font-mono text-[11px] text-text-primary"
+            >
+              {row.address}
+            </button>
+            {/* `pdx peers` marks these too: the marker is the only thing that
+                tells a default apart from a user label of the same shape. */}
+            {row.labelSource === 'default' && (
+              <span data-testid={`peer-default-marker-${pid}`} className="shrink-0 rounded border border-border-subtle px-1 text-[10px] text-text-muted">
+                {t('peer.default_label')}
+              </span>
+            )}
+          </span>
+        </DetailRow>
+      )}
+      {row.agent && (
+        <DetailRow label={t('peer.agent')}>
+          <span data-testid={`peer-agent-${pid}`} className="block truncate text-[11px] text-text-primary">
+            {[row.agent.type, row.agent.peerName, row.agent.status].filter(Boolean).join(' · ')}
+          </span>
+        </DetailRow>
+      )}
+      <DetailRow label={t('peer.deliverable')}>
+        <span data-testid={`peer-deliverable-${pid}`} className={`block truncate text-[11px] ${row.deliverable ? 'text-text-primary' : 'text-status-warning'}`}>
+          {row.deliverable ? t('peer.deliverable_yes') : reasonText(row.reason, t)}
+        </span>
+      </DetailRow>
+      {peer.envelope.partial && note(`peer-partial-${pid}`, t('peer.partial_note', { cause: partialCause(peer.envelope, t) }))}
+      {peer.envelope.labelsUnavailable && note(`peer-labels-${pid}`, t('peer.labels_unavailable_note'))}
+    </>
+  )
+
+  let body: React.ReactNode
+  if (!peer.connected) {
+    // Nothing was fetched and nothing will be; whatever was last known stays,
+    // dimmed, because a stale address is still a better start than none.
+    body = <>{note(`peer-status-${pid}`, t('peer.host_not_connected'))}{rows}</>
+  } else if (peer.error) {
+    body = (
+      <p data-testid={`peer-error-${pid}`} className="px-1 py-0.5 text-[11px] text-status-error">
+        {t('peer.error', { error: peer.error })}
+      </p>
+    )
+  } else if (!row && (!reconciled || peer.loading)) {
+    body = (
+      <span data-testid={`peer-spinner-${pid}`} className="flex items-center gap-1 px-1 py-0.5 text-[11px] text-text-muted">
+        <CircleNotch size={11} className="animate-spin" />
+        {t('peer.loading')}
+      </span>
+    )
+  } else if (!row) {
+    // "no peer" is only safe to say about a complete answer.
+    body = note(`peer-status-${pid}`, peer.envelope.partial ? t('peer.undetermined') : t('peer.none'))
+  } else {
+    body = rows
+  }
+
+  return (
+    <div
+      data-testid={`peer-section-${pid}`}
+      data-dim={!peer.connected || peer.stale ? 'true' : undefined}
+      className={`mt-1 border-t border-border-subtle pt-1 ${!peer.connected || peer.stale ? 'opacity-60' : ''}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-text-muted">{t('peer.section')}</span>
+        <span className="flex items-center gap-1">
+          {feedback && <span className="text-[10px] text-text-muted">{feedback}</span>}
+          {/* Inside the popover container on purpose: `useClickOutside` binds
+              mousedown, so a control outside it would close the panel before
+              its own click landed. */}
+          <button
+            type="button"
+            data-testid={`peer-refresh-${pid}`}
+            title={t('peer.refresh')}
+            aria-label={t('peer.refresh')}
+            disabled={!peer.connected || peer.loading}
+            onClick={() => peer.refresh()}
+            className="flex shrink-0 cursor-pointer items-center rounded p-0.5 text-text-muted transition-colors hover:bg-surface-hover disabled:cursor-default disabled:opacity-40"
+          >
+            <ArrowsClockwise size={11} className={peer.loading ? 'animate-spin' : ''} />
+          </button>
+        </span>
+      </div>
+      {body}
     </div>
   )
 }
@@ -160,6 +321,10 @@ function PaneDetailBlock({
         </DetailRow>
       </div>
 
+      {/* A terminated pane has no peer: the section is omitted, as the panel
+          already does for its other live-only rows. */}
+      {live && <PanePeerSection target={target} />}
+
       {invalid && <p className="px-1 pt-1 text-[11px] text-red-400">{invalid}</p>}
     </div>
   )
@@ -177,6 +342,36 @@ export function RenamePopover({ anchorRect, currentName, initialValue, allowUnch
   const targets = useMemo(() => (tab ? collectRenameTargets(tab) : []), [tab])
   const paneMode = targets.length > 0
   const width = paneMode ? PANE_POPOVER_WIDTH : POPOVER_WIDTH
+
+  // Refresh peers once per distinct host when the panel opens (spec §3.3).
+  //
+  // Keyed on the host *set* rather than on `targets`: this component recomputes
+  // its targets on every render, and the peers call costs ~2 s, so an effect
+  // that depended on the array would hammer the daemon. `\0` cannot appear in
+  // a hostId, so the joined string is an honest identity for the set.
+  //
+  // The set is the hosts of the panes that actually render a peer section, so
+  // terminated panes are left out: they show no peer section (spec §5), and a
+  // tab holding nothing but dead panes would otherwise put a two-second,
+  // tmux-heavy inventory call behind opening a panel with nothing to fill.
+  //
+  // The cwd store is refreshed too, by each block's own `usePeerInfo` as it
+  // mounts — one cheap tmux call per pane, which is what opening the panel
+  // means for that store.
+  const hostKey = useMemo(
+    () => Array.from(new Set(targets.filter((target) => !target.terminated).map((target) => target.hostId))).sort().join('\0'),
+    [targets],
+  )
+  useEffect(() => {
+    if (!hostKey) return
+    const { runtime } = useHostStore.getState()
+    for (const hostId of hostKey.split('\0')) {
+      // A host that is not reachable would fail slowly, and the block already
+      // says so.
+      if (runtime[hostId]?.status !== 'connected') continue
+      void usePeerStore.getState().refresh(hostId)
+    }
+  }, [hostKey])
 
   const trimmedDraft = draft.trim()
   const validationError = validateName

@@ -8,6 +8,7 @@ import { registerBuiltinModules } from './lib/register-modules'
 import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger'
 import { startDeviceStateUploader } from './lib/device-state/uploader'
 import { startHostConfigLoader } from './lib/host-config-loader'
+import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -27,6 +28,9 @@ startBackupAutoTrigger()
 startDeviceStateUploader()
 // Host config (projects / commands / resume templates): fetch each host's copy when it connects.
 startHostConfigLoader()
+// Peer cache: drop a host's cached peer rows when its daemon identity changes
+// (removed, re-pointed, token rotated) — a cached address belongs to a daemon.
+startPeerCacheInvalidation()
 
 useLayoutStore.getState().reconcileViews()
 
