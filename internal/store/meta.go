@@ -141,8 +141,74 @@ func migrateMetaDB(db *sql.DB) error {
 	if _, err := db.Exec(`INSERT OR IGNORE INTO peer_label_seq (id, rev) VALUES (1, 0)`); err != nil {
 		return err
 	}
+	if err := dropPeerLabelsLabelUnique(db); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// dropPeerLabelsLabelUnique removes the UNIQUE on peer_labels.label from a
+// database that already exists. CREATE TABLE IF NOT EXISTS above only shapes
+// brand new files; every machine that has run an older daemon still carries
+// the pre-v3 table, where a second session claiming a held label fails at the
+// SQLite layer and the claim route answers 503 instead of D5's 200 + warning.
+//
+// SQLite cannot DROP the implicit index a UNIQUE creates
+// (sqlite_autoindex_peer_labels_1) and has no ALTER TABLE ... DROP
+// CONSTRAINT, so the only way out is the standard table rebuild: new table,
+// copy, drop, rename — all inside one transaction so a crash mid-way leaves
+// either the old table or the new one, never neither.
+//
+// The trigger is read off sqlite_master rather than pragma index_list because
+// the recorded DDL answers the question directly. The word UNIQUE appears in
+// the legacy definition and nowhere in the current one (session_id is spelled
+// PRIMARY KEY), so its presence is an exact test for "this table is legacy",
+// and a DB already on the new schema is left completely alone.
+func dropPeerLabelsLabelUnique(db *sql.DB) error {
+	var ddl string
+	err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'peer_labels'`,
+	).Scan(&ddl)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(strings.ToUpper(ddl), "UNIQUE") {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
+
+	if _, err := tx.Exec(`
+		CREATE TABLE peer_labels_v3 (
+			session_id TEXT PRIMARY KEY,
+			label      TEXT,
+			rev        INTEGER NOT NULL,
+			set_at     INTEGER NOT NULL
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO peer_labels_v3 (session_id, label, rev, set_at)
+		SELECT session_id, label, rev, set_at FROM peer_labels
+	`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE peer_labels`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE peer_labels_v3 RENAME TO peer_labels`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Close closes the underlying DB connection.
