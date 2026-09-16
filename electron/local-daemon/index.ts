@@ -3,7 +3,7 @@
 // an in-memory harness. All public operations run through one promise
 // queue; private helpers (suffix `Unlocked`) never enqueue.
 import { join } from 'node:path'
-import type { LocalDaemon, LocalDaemonDeps, LocalDaemonResult, LocalDaemonStatus } from './types'
+import type { EnsureRunningOutcome, LocalDaemon, LocalDaemonDeps, LocalDaemonResult, LocalDaemonStatus } from './types'
 import { parseLsofF0, txtPaths, listenersOn, decideOwnership, type Ownership } from './lsof'
 import { buildLaunchEnv, type ExecFn, type LaunchEnv } from './launch-env'
 import { parseDaemonConfig, pickBindAddress, renderInitialConfig, generateToken, DEFAULT_DATA_DIR, type DaemonConfig } from './config'
@@ -110,6 +110,39 @@ export async function readCliState(
   return { kind: 'report', code: r.code, report }
 }
 
+/**
+ * Spec §4.5. The message *is* the feature, so it is pinned here rather than
+ * left to a caller: it names the binary, both commands, and what to do next.
+ * Which command comes first follows `pdx path`'s own `fixes` — but both are
+ * always shown, because guessing wrong and hiding the one that was needed is
+ * the failure mode to avoid.
+ */
+export function pathRefusalMessage(report: PathReport, home: string): string {
+  // ~/.config/pdx/bin/pdx reads better than the absolute path in a message
+  // the user is meant to act on; both name the same file.
+  const tilde = (p: string) => (p === home ? '~' : p.startsWith(home + '/') ? '~' + p.slice(home.length) : p)
+  const bin = tilde(report.self)
+  const localBin = tilde(report.localBin)
+  const fixes = [
+    { kind: 'link', line: `  ${bin} path link           create ${localBin}/pdx` },
+    { kind: 'add-to-shell', line: `  ${bin} path add-to-shell   put ${localBin} on PATH` },
+  ]
+  const helps = (kind: string) => (report.fixes.includes(kind) ? 0 : 1)
+  const ordered = [...fixes].sort((a, b) => helps(a.kind) - helps(b.kind))
+  return [
+    'Refusing to start: the command `pdx` is not on PATH, so agents following',
+    'CLAUDE.md will get "command not found".',
+    '',
+    `The daemon binary is installed at ${bin}.`,
+    '',
+    'Fix it with either (both are also buttons in Settings → Development):',
+    '',
+    ...ordered.map((f) => f.line),
+    '',
+    'Then open a new terminal and run `pdx path` to confirm.',
+  ].join('\n')
+}
+
 export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   const dataDir = DEFAULT_DATA_DIR(deps.home)
   const binDir = join(dataDir, 'bin')
@@ -171,6 +204,37 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
 
   function cachedEnv(): Promise<NodeJS.ProcessEnv> {
     return cachedLaunchEnv().then((r) => r.env)
+  }
+
+  async function readCli(env: NodeJS.ProcessEnv): Promise<CliState> {
+    const cli = await readCliState({ exec: deps.exec, exists: deps.fs.exists }, binPath, env)
+    // "Could not tell" is recorded as not-resolved: such a machine is broken
+    // in some other way and is exactly the one worth re-checking.
+    lastCliResolved = cli.kind === 'not-installed' ? undefined : cli.kind === 'report' ? cli.report.resolved : null
+    return cli
+  }
+
+  // ---- the gate (spec §4.3) ---------------------------------------------
+  /**
+   * The refusal, or null to proceed. The criterion is `resolved === null` —
+   * never the JSON's `ok`, never the exit code. `pdx path` exits 1 and
+   * reports ok:false when the winner on PATH is a *different* pdx, which for
+   * the CLI's own question is a failure and for the gate's is not: the app's
+   * job is that `pdx` works, not that `pdx` is its own copy. Keying on `ok`
+   * would refuse to start on every machine with a hand-made symlink to a repo
+   * build. An answer we could not read at all is likewise not a refusal: a
+   * gate the user has no command to satisfy is worse than one that admits
+   * what it does not know.
+   */
+  function pathRefusal(cli: CliState): string | null {
+    if (cli.kind !== 'report' || cli.report.resolved !== null) return null
+    return pathRefusalMessage(cli.report, deps.home)
+  }
+
+  /** Resolve `pdx` against a freshly probed launch PATH (spec §4.2). */
+  async function gateUnlocked(): Promise<{ launch: LaunchEnv; refusal: string | null }> {
+    const launch = await refreshLaunchEnv()
+    return { launch, refusal: pathRefusal(await readCli(launch.env)) }
   }
 
   // ---- primitives --------------------------------------------------------
@@ -292,10 +356,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     const binExists = await deps.fs.exists(binPath)
     const launch = await statusLaunchEnv(binExists)
     const env = launch.env
-    const cli = await readCliState({ exec: deps.exec, exists: deps.fs.exists }, binPath, env)
-    // "Could not tell" is recorded as not-resolved: such a machine is broken
-    // in some other way and is exactly the one worth re-checking.
-    lastCliResolved = cli.kind === 'not-installed' ? undefined : cli.kind === 'report' ? cli.report.resolved : null
+    const cli = await readCli(env)
     const which = await deps.exec('/usr/bin/which', ['tmux'], { env, timeoutMs: VERSION_TIMEOUT_MS }).catch(() => null)
     const tmux = which && which.code === 0 ? which.stdout.trim() || null : null
     const cfgFile = await readConfig()
@@ -305,6 +366,15 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     const base = {
       binPath, installed, running, target: tgt, tools: { tmux }, hostname: deps.hostname(),
       config: cfgFile ? { bind: cfgFile.bind, port: cfgFile.port, token: cfgFile.token } : null,
+      ...(cli.kind === 'report' ? {
+        cli: {
+          resolved: cli.report.resolved,
+          isManagedBinary: cli.report.isSelf,
+          pathSource: launch.pathSource,
+          localBinOnPath: cli.report.localBinOnPath,
+          link: cli.report.link,
+        },
+      } : {}),
     }
     if (cfgFile && cfgFile.dataDir !== dataDir) {
       return { ...base, managed: 'external', reason: 'custom data_dir', alive: null }
@@ -483,6 +553,10 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     }
     progress('swap')
     await deps.fs.rename(newPath, binPath)
+    // The binary is what the user asked for and is now correctly installed;
+    // only the start is refused. statusUnlocked reads installed-and-stopped.
+    const refusal = (await gateUnlocked()).refusal
+    if (refusal) throw new Error(refusal)
     progress('start')
     await startDaemon(cfg)
     progress('register')
@@ -490,6 +564,8 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   async function startUnlocked(): Promise<LocalDaemonResult> {
+    const refusal = (await gateUnlocked()).refusal
+    if (refusal) throw new Error(refusal)
     const st = await statusUnlocked()
     if (st.managed !== 'managed') throw new Error(`cannot start: ${st.managed}${st.reason ? ` (${st.reason})` : ''}`)
     if (st.alive) throw new Error(`already running (pid ${st.alive.pid})`)
@@ -499,6 +575,8 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   }
 
   async function restartUnlocked(): Promise<LocalDaemonResult> {
+    const refusal = (await gateUnlocked()).refusal
+    if (refusal) throw new Error(refusal)
     const st = await statusUnlocked()
     if (st.managed !== 'managed') throw new Error(`cannot restart: ${st.managed}${st.reason ? ` (${st.reason})` : ''}`)
     const cfg = (await readConfig()) ?? parseDaemonConfig('', deps.home)
@@ -511,8 +589,13 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
 
   // Never rejects (spec §3.1): every failure, including a broken config,
   // is logged and reported as 'failed'.
-  async function ensureRunningUnlocked(): Promise<'started' | 'already-running' | 'not-installed' | 'external' | 'failed'> {
+  async function ensureRunningUnlocked(): Promise<EnsureRunningOutcome> {
     try {
+      const refusal = (await gateUnlocked()).refusal
+      if (refusal) {
+        deps.log(`[local-daemon] ${refusal}`)
+        return 'path-unresolved'
+      }
       const st = await statusUnlocked()
       if (st.managed === 'none') return 'not-installed'
       if (st.managed === 'external') return 'external'
