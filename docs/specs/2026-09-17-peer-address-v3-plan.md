@@ -215,6 +215,11 @@ series survives in: `internal/peers/label.go`, `internal/peers/label_test.go`, `
 (the `*` marker, T8), `cmd/pdx/msg_test.go`, and **`internal/module/peers/helpers_test.go`** — the
 last of which the first draft of this plan missed.
 
+**Leftovers reported by T6, to clear here:** `Module.origin()`'s `diag` return value has no consumer
+left (claim was the last one; all three call sites now discard it), and `APIError.Skipped` has no
+producer left (the removed `BlockingUnknown` branch was the only one) although
+`renderMsgAPIError`'s `not_ready` path still reads it.
+
 **Also sweep for indirect dead code, which the symbol grep cannot see.** T3 found that
 `labelInfos` in `internal/module/peers/labels.go` lost its only caller and would have survived a
 name-based sweep; it deleted it there. `go build` and `go vet` do not flag an unused unexported

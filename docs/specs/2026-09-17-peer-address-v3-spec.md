@@ -410,8 +410,27 @@ first two rows share a label deliberately — legal under D5, visible, and their
 
 ## 8. Compatibility
 
-Alpha: no persistence migration (project convention). Addresses printed before this change are not
-expected to keep working — the tmux-derived ones were already unreliable, which is the point.
+Addresses printed before this change are not expected to keep working — the tmux-derived ones were
+already unreliable, which is the point.
+
+**One daemon-side migration is required, and the "no migration in alpha" convention does not cover
+it.** That convention is about the SPA's persisted browser state; the daemon has always done
+idempotent SQLite migrations (`migrateAgentEventDB`, `migrateFramesDB`). Here it is not optional:
+`peer_labels.label` was declared `TEXT UNIQUE`, and `CREATE TABLE IF NOT EXISTS` does not alter a
+table that already exists. On every machine that has run an earlier daemon — `mini-lab` and `air`
+both have — a duplicate claim would fail in SQLite and surface as 503 `store_unavailable` instead of
+the 200 D5 requires. **Without the migration the headline behaviour of this change does not work
+anywhere it matters.**
+
+Dropping the database is not an alternative: `meta.db` also holds `session_meta`, `peer_messages`
+(the cross-host message audit) and `peer_label_seq`. So the migration is a targeted rebuild of that
+one table — create without the constraint, copy, drop, rename, in one transaction — guarded to be a
+no-op on a database that already lacks it.
+
+The store layer held a second enforcement from the same era: `Claim` began with
+`DELETE FROM peer_labels WHERE label = ? AND session_id <> ?`, silently un-naming the incumbent.
+That is precisely the outcome D7 exists to remove, and it was invisible from the application layer —
+neither this spec nor its four review passes looked at the schema.
 
 The project CLAUDE.md "Peer addresses" section is authoritative and must be rewritten in the same
 PR: the two bullets from #1079 (the two kinds of default label; the "default label = position /
