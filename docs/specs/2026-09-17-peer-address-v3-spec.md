@@ -249,9 +249,18 @@ Tier 1 stops matching labels and matches the canonical id:
 ```go
 // Tier 1: the canonical id, over every row backed by a live entry.
 rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-    return hasLiveEntry(r) && r.Canonical == head
+    return hasLiveEntry(r) && head != "" && r.Canonical == head
 })
 ```
+
+**The `head != ""` guard is load-bearing across versions, and an earlier draft of this predicate
+omitted it.** `Resolve` only rejects an empty *session*; `SplitSession(":x")` yields an empty
+*head*, which reaches tier 1. `Resolve` also runs over rows fetched from a **remote** host, and a v2
+daemon does not emit `canonical`, so every one of its live rows decodes with `Canonical == ""`.
+Without the guard, `<v2-host>/:x` matches all of them — ambiguous where there are several, and a
+**successful delivery to an arbitrary conversation** where there is one. The v2 predicate had the
+equivalent check as `r.Label != ""`; dropping it while swapping the field was a silent regression,
+caught during implementation.
 
 - `cc:<x>` — still `ErrNotFound` wrapping `ErrLegacyCC`.
 - `tmux:<name>` and tier 2 (a bare string as a tmux session name) — **kept, unchanged**. They
