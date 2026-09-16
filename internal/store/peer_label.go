@@ -51,18 +51,21 @@ func nextRev(tx *sql.Tx) (int64, error) {
 	return rev, err
 }
 
-// Claim gives label to sessionID: evicts any other row holding label (the
-// caller has proven that holder is not live), bumps the revision and
-// upserts, all in one transaction.
+// Claim gives label to sessionID: bumps the revision and upserts, in one
+// transaction. It touches no other session's row.
+//
+// It used to evict any other row holding label first, on the grounds that
+// the caller had proven that holder was not live. Peer Address v3 D5/D7
+// removed both halves of that: a label is a display name that nothing
+// routes on, so two sessions may hold one, and the caller no longer proves
+// anything about the holder. Evicting would silently un-name a live
+// conversation to satisfy a uniqueness requirement that no longer exists.
 func (s *PeerLabelStore) Claim(sessionID, label string, now time.Time) (PeerLabel, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return PeerLabel{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM peer_labels WHERE label = ? AND session_id <> ?`, label, sessionID); err != nil {
-		return PeerLabel{}, err
-	}
 	rev, err := nextRev(tx)
 	if err != nil {
 		return PeerLabel{}, err

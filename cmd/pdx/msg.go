@@ -34,15 +34,17 @@ const msgDefaultLogTail = 50
 // unrecognized flag, which gets its own more specific message (see
 // runMsgCmd). `selftest`'s body lives in msg_selftest.go.
 //
-// The <label> line teaches the two forms an unnamed agent can take. The
-// example is a tmux-shaped default rather than a "_k3x9qz" hash because
-// that is now the normal case: a hash only appears when the tmux name is
-// ambiguous or unusable. Both are rendered examples, not a contract.
-const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<label>[:<suffix>] | <host>/tmux:<name> <text>\n" +
+// The <canonical> line states the v3 address rule to the reader who most
+// needs it: someone who has just claimed a label and is about to type that
+// label as an address. A label never resolves (spec D3), so the usage text
+// offers only the two forms that do — the canonical head and the explicit
+// tmux form — and names the two commands that print a live address.
+const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<canonical>[:<suffix>] | <host>/tmux:<name> <text>\n" +
 	"           (-- ends the options: use it before text that starts with -)\n" +
-	"           (<label> is a name claimed with `pdx msg name`, else the agent's own tmux session\n" +
-	"            name — mini-lab/purdex1 — falling back to a _k3x9qz hash when that name does not\n" +
-	"            name exactly one live agent; run `pdx peers --all` to see the current addresses)\n" +
+	"           (<canonical> is a session's permanent address head, derived from its sessionId\n" +
+	"            — mini-lab/_3k9f2mq4. A label claimed with `pdx msg name` is never an address:\n" +
+	"            it is how you choose a peer, not how you reach one. `pdx msg whoami` prints your\n" +
+	"            own address, `pdx peers --all` prints every host's.)\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +
 	"       pdx msg selftest [--timeout <dur>] [--config <path>]\n" +
@@ -63,7 +65,7 @@ func runMsgCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 	inv, unknownFlag, ok := parseMsgInvocation(args)
 	if !ok {
 		if unknownFlag != "" {
-			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <host>/<label>[:<suffix>] | <host>/tmux:<name> <text>)\n", unknownFlag)
+			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <host>/<canonical>[:<suffix>] | <host>/tmux:<name> <text>)\n", unknownFlag)
 		} else {
 			fmt.Fprintln(stderr, msgUsage)
 		}
@@ -354,9 +356,11 @@ func decodeMsgAPIError(body []byte) (ipeers.APIError, bool) {
 // stderr, sanitized: the generic form is "pdx msg: <error>[: <detail>]";
 // remote_error additionally names the host part the caller typed and the
 // remote's own error/detail; ambiguous prints the session part the caller
-// typed followed by one indented candidate address per line; label_taken
-// and not_ready (from `pdx msg name`) print the generic line followed by
-// one indented live_labels/skipped entry per line, respectively.
+// typed followed by one indented line per candidate (see
+// msgCandidateLine). Every other error, not_ready included, prints the
+// generic line alone: not_ready used to append the registry files an
+// inventory could not classify, but no daemon path sets that list any more
+// — the claim gate that reported it went with the label_taken refusal.
 func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Writer) {
 	switch ae.Error {
 	case ipeers.ErrRemoteError:
@@ -372,19 +376,7 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 	case ipeers.ErrAmbiguous:
 		fmt.Fprintf(stderr, "pdx msg: ambiguous: %s\n", sanitizeCell(session))
 		for _, c := range ae.Candidates {
-			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(c))
-		}
-
-	case ipeers.ErrLabelTaken:
-		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
-		for _, l := range ae.LiveLabels {
-			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(l))
-		}
-
-	case ipeers.ErrNotReady:
-		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
-		for _, s := range ae.Skipped {
-			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(s))
+			fmt.Fprintln(stderr, msgCandidateLine(c))
 		}
 
 	default:
@@ -392,9 +384,28 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 	}
 }
 
+// msgCandidateLine renders one ambiguity candidate as an indented line:
+// the address, then whatever the daemon knew that distinguishes it —
+// agent name, pid, cwd. The extras are what make the refusal legible as
+// a name collision rather than a broken address (spec §4.1), so they are
+// printed whenever present and quietly skipped when the row had none.
+func msgCandidateLine(c ipeers.AmbiguousCandidate) string {
+	line := "  " + sanitizeCell(c.Address)
+	if c.AgentName != "" {
+		line += "  agent " + sanitizeCell(c.AgentName)
+	}
+	if c.PID != 0 {
+		line += "  pid " + strconv.Itoa(c.PID)
+	}
+	if c.Cwd != "" {
+		line += "  cwd " + sanitizeCell(c.Cwd)
+	}
+	return line
+}
+
 // msgGenericAPIErrorLine renders the shared "pdx msg: <error>[: <detail>]"
-// line used by the default case and by the label_taken/not_ready cases
-// (which append their own indented detail lines after it).
+// line used by every error renderMsgAPIError does not give a shape of its
+// own.
 func msgGenericAPIErrorLine(ae ipeers.APIError) string {
 	line := fmt.Sprintf("pdx msg: %s", sanitizeCell(ae.Error))
 	if ae.Detail != "" {
@@ -629,15 +640,46 @@ func msgOriginInbox(getenv func(string) string, stderr io.Writer) (inbox string,
 }
 
 // renderSelfRecord prints one ipeers.PeerRecord as the block shared by
-// `name` and `whoami`'s text output: address, label (with source and
-// revision), host (with host ID), and — when the caller has a live agent —
-// session ID and PID.
+// `name` and `whoami`'s text output: address, canonical id, label (with
+// source and revision), host (with host ID), and — when the caller has a
+// live agent — session ID and PID.
+//
+// The canonical line exists because an agent cannot work its own out: it
+// is a hash of a sessionId the agent never handles (spec §4.1), so asking
+// is the only way to learn it. It is printed unconditionally rather than
+// only when non-empty — a blank canonical on a self route means the caller
+// was not attributed to a live cc entry, and hiding the line would hide
+// that.
 func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
-	fmt.Fprintf(stdout, "address:  %s\n", sanitizeCell(rec.Address))
-	fmt.Fprintf(stdout, "label:    %s (%s, rev %d)\n", sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
-	fmt.Fprintf(stdout, "host:     %s (%s)\n", sanitizeCell(rec.Host), sanitizeCell(rec.HostID))
+	fmt.Fprintf(stdout, "address:    %s\n", sanitizeCell(rec.Address))
+	fmt.Fprintf(stdout, "canonical:  %s\n", sanitizeCell(rec.Canonical))
+	fmt.Fprintf(stdout, "label:      %s (%s, rev %d)\n", sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
+	fmt.Fprintf(stdout, "host:       %s (%s)\n", sanitizeCell(rec.Host), sanitizeCell(rec.HostID))
 	if rec.Agent != nil {
-		fmt.Fprintf(stdout, "session:  %s pid %d\n", sanitizeCell(rec.Agent.SessionID), rec.Agent.PID)
+		fmt.Fprintf(stdout, "session:    %s pid %d\n", sanitizeCell(rec.Agent.SessionID), rec.Agent.PID)
+	}
+}
+
+// renderSelfWarning prints a self-route 200's advisory to stderr, one
+// indented line per other holder and per live label. It is a warning, not
+// an error: the caller's exit code is unaffected, and the record block
+// still goes to stdout — the label really was set. label_in_use's live
+// labels are listed because picking the next free serial is what the
+// reader is expected to do next (spec §4.2).
+func renderSelfWarning(w *ipeers.SelfWarning, stderr io.Writer) {
+	if w == nil {
+		return
+	}
+	line := fmt.Sprintf("pdx msg: warning: %s", sanitizeCell(w.Code))
+	if w.Detail != "" {
+		line += ": " + sanitizeCell(w.Detail)
+	}
+	fmt.Fprintln(stderr, line)
+	for _, h := range w.Holders {
+		fmt.Fprintf(stderr, "  also held by: %s\n", sanitizeCell(h.Address))
+	}
+	for _, l := range w.LiveLabels {
+		fmt.Fprintf(stderr, "  live label: %s\n", sanitizeCell(l))
 	}
 }
 
@@ -645,12 +687,16 @@ func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
 // handles everything `name` and `whoami` share after that: config.Load and
 // the base URL, doPeersRequest and its transport-error reporting, the
 // --json passthrough, decoding a non-200 into ipeers.APIError and
-// rendering it, and decoding a 200 into rec. done is true whenever the
-// caller should return exit immediately without printing anything more
-// (a --json passthrough, an error of any kind); done is false only on a
-// decoded 200, when rec is populated and the caller still owes its own
-// success-line output (`named:`/`released:` for `name`, nothing for
-// `whoami`) before printing the shared renderSelfRecord block.
+// rendering it, and decoding a 200 into the ipeers.SelfResponse envelope —
+// whose warning, if any, is rendered here so all three routes report one
+// the same way. A 200 that is not envelope-shaped is a pre-v3 daemon and
+// is refused, not decoded; see the check itself for why compatibility is
+// the wrong answer there. done is true whenever the caller should return exit
+// immediately without printing anything more (a --json passthrough, an
+// error of any kind); done is false only on a decoded 200, when rec is
+// populated and the caller still owes its own success-line output
+// (`named:`/`released:` for `name`, nothing for `whoami`) before printing
+// the shared renderSelfRecord block.
 func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, stderr io.Writer) (rec ipeers.PeerRecord, exit int, done bool) {
 	cfg, err := config.Load(inv.cfgPath)
 	if err != nil {
@@ -678,18 +724,43 @@ func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, 
 		return ipeers.PeerRecord{}, 1, true
 	}
 
-	if err := json.Unmarshal(result.body, &rec); err != nil {
+	// Check the SHAPE before decoding it. A daemon from before v3 answers
+	// these routes 200 with a bare PeerRecord, and encoding/json ignores
+	// unknown root fields — so that body unmarshals happily into a zero
+	// SelfResponse, and this used to print a block of empty strings and
+	// exit 0: an agent asking who it is was told, successfully, that it is
+	// nobody. The shape is the version: an envelope has "peer".
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(result.body, &shape); err != nil {
 		fmt.Fprintln(stderr, "pdx msg: invalid response")
 		return ipeers.PeerRecord{}, 1, true
 	}
+	if _, ok := shape["peer"]; !ok {
+		// Deliberately not made compatible with the bare form. A v2
+		// record's address head is a LABEL, and everything else in this
+		// binary treats a head as a canonical id, so accepting it would
+		// hand the caller a v2-semantics address to use as a v3 one — a
+		// wrong answer delivered confidently. In practice this is the
+		// daemon not having been restarted after pdx was updated, which is
+		// what the message says to do.
+		fmt.Fprintln(stderr, "pdx msg: the daemon is older than this pdx and answered with a pre-v3 record; restart it (pdx stop && pdx start) so both run the same version")
+		return ipeers.PeerRecord{}, 1, true
+	}
 
-	return rec, 0, false
+	var resp ipeers.SelfResponse
+	if err := json.Unmarshal(result.body, &resp); err != nil {
+		fmt.Fprintln(stderr, "pdx msg: invalid response")
+		return ipeers.PeerRecord{}, 1, true
+	}
+	renderSelfWarning(resp.Warning, stderr)
+
+	return resp.Peer, 0, false
 }
 
 // runMsgName implements `pdx msg name <label> | --release [--json]
 // [--config <path>]`: PUT /api/peers/self/label to claim inv.label, or
-// DELETE /api/peers/self/label (inv.release) to release the caller's
-// current user label back to its default.
+// DELETE /api/peers/self/label (inv.release) to clear the caller's label.
+// Neither moves the caller's address, and both success lines say so.
 func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int {
 	originInbox, ok := msgOriginInbox(getenv, stderr)
 	if !ok {
@@ -716,10 +787,15 @@ func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		return exit
 	}
 
+	// Both lines name what changed and, beside it, what did not. Printing
+	// the address alone (what this used to do) invited the exact misreading
+	// this release is about: an agent that has just claimed a name is the
+	// most likely reader to assume the name is now reachable, and the
+	// cheapest place to refuse that is the line it reads on success.
 	if inv.release {
-		fmt.Fprintf(stdout, "released: %s\n", sanitizeCell(rec.Address))
+		fmt.Fprintf(stdout, "released: the label (address unchanged: %s)\n", sanitizeCell(rec.Address))
 	} else {
-		fmt.Fprintf(stdout, "named: %s\n", sanitizeCell(rec.Address))
+		fmt.Fprintf(stdout, "named: %s (address unchanged: %s)\n", sanitizeCell(rec.Label), sanitizeCell(rec.Address))
 	}
 	renderSelfRecord(rec, stdout)
 	return 0

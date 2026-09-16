@@ -188,11 +188,33 @@ const (
 	ErrProxyToProxy      = "proxy_to_proxy"
 	ErrNoReturnRoute     = "no_return_route"
 
+	// ErrCodeRemoteTooOld is /send's answer when Resolve came back with
+	// ErrRemoteTooOld: the target host still runs a daemon from before
+	// Peer Address v3, so its rows carry no canonical id and no address
+	// can be resolved against them. Distinct from peer_not_found because
+	// the two ask for opposite things — one says check the address, the
+	// other says upgrade the other host — and the refusal is only useful
+	// if it says which. (The Go sentinel lives in address.go; this is the
+	// wire string, prefixed like ErrCodeLabelInvalid to keep the two
+	// apart in one package.)
+	ErrCodeRemoteTooOld = "remote_too_old"
+
 	// Peer Address v2 self routes (Task 7): whoami, claim, release.
 	ErrCodeLabelInvalid  = "label_invalid"
 	ErrCodeLabelReserved = "label_reserved"
-	ErrLabelTaken        = "label_taken"
 	ErrStoreUnavailable  = "store_unavailable"
+)
+
+// Warning codes: SelfWarning.Code, the advisory a successful self-route
+// answer may carry (Peer Address v3 spec §6.3).
+const (
+	// WarnLabelInUse: the label was set, and other live sessions hold it
+	// too. A warning rather than the refusal v2 gave (`label_taken`, now
+	// gone from the vocabulary) because under v3 nothing routes on a
+	// label, so nothing needs it to be unique — spec D5/D7. The agent is
+	// still asked to add a serial number; SelfWarning.LiveLabels is what
+	// lets it pick one without a second round trip.
+	WarnLabelInUse = "label_in_use"
 )
 
 // Results: DeliverResponse.Result / SendResponse.Result / the audit result
@@ -279,17 +301,55 @@ type ClaimLabelRequest struct {
 	Label       string `json:"label"`
 }
 
+// SelfResponse is the 200 body of all three self routes: POST
+// /api/peers/self, PUT and DELETE /api/peers/self/label (spec §6.3).
+//
+// The record used to be encoded bare. It moved inside an envelope because
+// a 200 now has something to say beyond the record itself — a claim that
+// landed on a label someone else holds succeeds *and* warns — and there is
+// no room for that beside a bare PeerRecord. All three routes carry the
+// envelope, not just the claim: the CLI decodes them through one function
+// (doSelfRequest), so one shape is less churn than one exception.
+type SelfResponse struct {
+	Peer    PeerRecord   `json:"peer"`
+	Warning *SelfWarning `json:"warning,omitempty"`
+}
+
+// SelfWarning is an advisory on an answer that SUCCEEDED: the route did
+// what was asked, and this is what the caller should know about the state
+// it landed in. Absent whenever there is nothing to say. WarnLabelInUse is
+// the only code today.
+type SelfWarning struct {
+	Code       string       `json:"code"`
+	Detail     string       `json:"detail,omitempty"`
+	Holders    []PeerRecord `json:"holders,omitempty"`     // label_in_use: the OTHER live sessions holding the label
+	LiveLabels []string     `json:"live_labels,omitempty"` // label_in_use: every label held by a live session (sorted), the caller's own included
+}
+
 // APIError is the body of every 4xx/5xx JSON response on /send, /deliver,
 // /log and the three self routes (/api/peers/self, /api/peers/self/label).
 type APIError struct {
-	Error      string       `json:"error"`
-	Detail     string       `json:"detail,omitempty"`
-	Candidates []string     `json:"candidates,omitempty"`  // ambiguous: addresses
-	Remote     *RemoteError `json:"remote,omitempty"`      // remote_error: the other daemon's answer
-	Partial    bool         `json:"partial,omitempty"`     // not_ready from Resolve: the inventory that produced it was partial
-	Holder     *PeerRecord  `json:"holder,omitempty"`      // label_taken: the live session currently holding the label
-	LiveLabels []string     `json:"live_labels,omitempty"` // label_taken: every label held by a live session (sorted), including the caller's own
-	Skipped    []string     `json:"skipped,omitempty"`     // not_ready from claim: registry files that blocked the completeness proof
+	Error      string               `json:"error"`
+	Detail     string               `json:"detail,omitempty"`
+	Candidates []AmbiguousCandidate `json:"candidates,omitempty"` // ambiguous: the rows that share the address
+	Remote     *RemoteError         `json:"remote,omitempty"`     // remote_error: the other daemon's answer
+	Partial    bool                 `json:"partial,omitempty"`    // not_ready from Resolve: the inventory that produced it was partial
+}
+
+// AmbiguousCandidate is one of the rows an `ambiguous` refusal could not
+// choose between. It exists because a SAFE failure has to be legible as
+// one (spec §4.1): the daemon refuses rather than guessing, but if the
+// caller only sees the address — which by definition every candidate
+// shares — the refusal reads as "my address stopped working" and sends
+// the operator after a bug that is not there. The three extra fields are
+// what actually tells two live processes of one conversation apart, and
+// each is omitempty: a candidate the daemon knows only by address still
+// belongs in the list, it just says less.
+type AmbiguousCandidate struct {
+	Address   string `json:"address"`
+	AgentName string `json:"agent_name,omitempty"`
+	PID       int    `json:"pid,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
 }
 
 // RemoteError carries another daemon's answer when a local request fails
@@ -405,19 +465,43 @@ func ValidateMode(s string) (string, error) {
 	}
 }
 
-// ValidateWireAddress checks from.address (Peer Address v2 spec §3.5): ""
+// legacyV2HeadPattern is the 6-digit default label a v2 sender derives
+// from its tmux identity. v3 does not mint this width — IsCanonicalID is
+// 8 — so it appears here and nowhere else.
+var legacyV2HeadPattern = regexp.MustCompile(`^_[0-9a-z]{6}$`)
+
+// isLegacyV2Head reports whether head is a v2 default label: "_" plus
+// exactly 6 base36 digits.
+//
+// It exists because the peers on the other end of the wire upgrade on
+// their own schedule. A v2 daemon still announces itself with a 6-digit
+// head, and a receiver that refused it would not be enforcing v3 — it
+// would be dropping real traffic from hosts nobody has updated yet.
+//
+// It is deliberately 6 and only 6, never a 6–8 range: no version of the
+// address scheme has ever minted a 7-digit head, so a range would admit a
+// format that does not exist — a string nothing can have generated and
+// nothing can resolve.
+//
+// Delete this, and its arm in ValidateWireAddress, once every peer that
+// can reach this daemon speaks v3; from then on IsCanonicalID is the whole
+// rule.
+func isLegacyV2Head(head string) bool { return legacyV2HeadPattern.MatchString(head) }
+
+// ValidateWireAddress checks from.address (Peer Address v3 spec §6.2): ""
 // is a v1 sender and always passes; otherwise the head (up to the first
-// ':') must be a user label or a default label, and — when a ':' is
-// present at all — the rest must match the suffix wire grammar
-// (suffixWirePattern), including an explicitly empty suffix
-// ("purdex-tester:"), which is rejected. Reserved heads ("cc", "tmux")
-// never pass, via ValidateUserLabel.
+// ':') must be one of three things — a v3 canonical id (IsCanonicalID), a
+// v2 legacy head (isLegacyV2Head), or a user label (which a v2 sender may
+// still present as a head) — and, when a ':' is present at all, the rest
+// must match the suffix wire grammar (suffixWirePattern), including an
+// explicitly empty suffix ("purdex-tester:"), which is rejected. Reserved
+// heads ("cc", "tmux") never pass, via ValidateUserLabel.
 func ValidateWireAddress(s string) error {
 	if s == "" {
 		return nil
 	}
 	head, rest := SplitSession(s)
-	if !IsDefaultLabel(head) {
+	if !IsCanonicalID(head) && !isLegacyV2Head(head) {
 		if err := ValidateUserLabel(head); err != nil {
 			return fmt.Errorf("%w: head: %w", ErrAddressInvalid, err)
 		}

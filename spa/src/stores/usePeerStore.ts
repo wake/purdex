@@ -23,9 +23,19 @@ export interface PeerAgent {
 export interface PeerRow {
   /** The full address, e.g. `mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a`. */
   address: string
-  /** The label alone — displayed as the peer id; never the value copied. */
+  /**
+   * The sessionId-derived address head (`_3k9f2mq4`), `''` when the row has no
+   * cc agent.
+   *
+   * This is the discriminator, not `labelSource`. `labelSource === ''` has two
+   * causes — a live conversation that has not named itself (the common one) and
+   * a row with no cc agent — and only `canonical`/`agent` tells them apart.
+   */
+  canonical: string
+  /** The name the conversation calls itself, `''` until it sets one. Display
+   *  only: it addresses nothing, and it is never the value copied. */
   label: string
-  labelSource: string   // user | default | ''
+  labelSource: string   // user | ''
   deliverable: boolean
   reason: string        // '' | no_agent | not_cc | inbox_dead | proxy | ambiguous
   /**
@@ -89,6 +99,7 @@ export function indexPeerRows(peers: PeerRecordWire[]): Record<string, PeerRow> 
     if (p.session_code === '') continue
     rows[p.session_code] = {
       address: p.address,
+      canonical: p.canonical ?? '',
       label: p.label,
       labelSource: p.label_source,
       deliverable: p.deliverable,

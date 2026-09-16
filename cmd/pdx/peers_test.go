@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -64,11 +65,16 @@ func peersTableFixture() peers.Envelope {
 	}
 }
 
-const wantPeersTable = "ADDRESS      LABEL  AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"alias/sess1  -      cc     wake-cc  working  yes          /home/wake/project\n" +
-	"alias/sess2  -      codex  -        idle     not_cc       /home/wake/codex\n" +
-	"alias/sess3  -      -      -        -        no_agent     /home/wake/shell\n" +
-	"alias/sess4  -      -      -        -        -            \n" +
+// wantPeersTable is the v3 column order: LABEL first, ADDRESS second
+// (spec 7.1 -- scan the label to find who you want, copy the address to
+// reach them). Every row of the fixture is unlabelled, so every LABEL cell
+// is blank rather than "-": a dash reads as a value, and there is nothing
+// here to name.
+const wantPeersTable = "LABEL  ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
+	"       alias/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
+	"       alias/sess2  codex  -        idle     not_cc       /home/wake/codex\n" +
+	"       alias/sess3  -      -        -        no_agent     /home/wake/shell\n" +
+	"       alias/sess4  -      -        -        -            \n" +
 	"(partial: 1 sessions not resolved within budget)\n" +
 	"daemon (unknown)\n"
 
@@ -79,61 +85,73 @@ func TestFormatPeersTable(t *testing.T) {
 	}
 }
 
-// TestFormatPeersTable_LabelColumnAndEntryIndent pins the Peer Address v2
-// rendering rules (task-9 brief): a LABEL column right after ADDRESS,
-// entry rows' ADDRESS cell indented by two spaces, "-" for an empty label,
-// "<label>*" when LabelSource is "default", and a "daemon <version>"
-// trailer line.
-func TestFormatPeersTable_LabelColumnAndEntryIndent(t *testing.T) {
-	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.342", Peers: []peers.PeerRecord{
-		{Address: "a/purdex-dev:mt0-x", RowKind: "session", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-		{Address: "a/_k3x9qz:y", RowKind: "entry", Label: "_k3x9qz", LabelSource: "default", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+// TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent pins the v3
+// rendering rules (spec 7.1): LABEL is the FIRST column and ADDRESS the
+// second, an unset label renders as a blank cell rather than "-", no row
+// carries a "*" marker (the default label it marked no longer exists), and
+// entry rows keep their two-space ADDRESS indent and the "daemon
+// <version>" trailer.
+func TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
+	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
+		{Address: "a/_3k9f2mq4:mt0-x", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/_9x2pq0af:y", RowKind: "entry", Canonical: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 		{Address: "a/tmux:shell", RowKind: "session", Reason: "no_agent"},
 	}}
 	got := formatPeersTable(env)
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if !strings.HasPrefix(lines[0], "ADDRESS") || !strings.Contains(lines[0], "LABEL") {
-		t.Errorf("header: %q", lines[0])
+	if cols := headerColumns(lines[0]); cols[0] != "LABEL" || cols[1] != "ADDRESS" {
+		t.Errorf("first two columns = %v, want LABEL then ADDRESS", cols[:2])
 	}
-	if !strings.HasPrefix(lines[1], "a/purdex-dev:mt0-x") || !strings.Contains(lines[1], "purdex-dev ") {
-		t.Errorf("session row: %q", lines[1])
+	if !strings.HasPrefix(lines[1], "purdex-dev ") || !strings.Contains(lines[1], "a/_3k9f2mq4:mt0-x") {
+		t.Errorf("labelled session row = %q, want the label first then the address", lines[1])
 	}
-	if !strings.HasPrefix(lines[2], "  a/_k3x9qz:y") || !strings.Contains(lines[2], "_k3x9qz*") {
-		t.Errorf("entry row (indented, default marked): %q", lines[2])
+	if !strings.HasPrefix(lines[2], " ") {
+		t.Errorf("unlabelled entry row = %q, want a BLANK label cell, not a dash", lines[2])
 	}
-	if !strings.Contains(lines[3], "-") { // empty label renders "-"
-		t.Errorf("shell row: %q", lines[3])
+	if !strings.Contains(lines[2], "  a/_9x2pq0af:y") {
+		t.Errorf("entry row = %q, want the address indented by two spaces", lines[2])
 	}
-	if !strings.Contains(got, "daemon 1.0.0-alpha.342") {
+	if !strings.HasPrefix(lines[3], " ") || !strings.Contains(lines[3], "a/tmux:shell") {
+		t.Errorf("agentless row = %q, want a blank label cell", lines[3])
+	}
+	if strings.Contains(got, "*") {
+		t.Errorf("table still carries a * marker -- the default label it marked is gone:\n%s", got)
+	}
+	if !strings.Contains(got, "daemon 1.0.0-alpha.363") {
 		t.Errorf("version trailer missing:\n%s", got)
 	}
 }
 
-// TestFormatPeersTable_TmuxDerivedDefaultStillMarked pins the
-// default-label spec §6.6. A default label used to be recognisable by its
-// shape alone: the "_" prefix is outside the user label charset. Now that
-// an unnamed agent's default is its sanitized tmux session name, a default
-// and a user label can be character-for-character the same string, and the
-// "*" from labelField is the ONLY thing left that tells a reader which is
-// which. Two rows carrying the identical label "purdex1" — one derived,
-// one claimed — must therefore render differently.
-func TestFormatPeersTable_TmuxDerivedDefaultStillMarked(t *testing.T) {
-	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.362", Peers: []peers.PeerRecord{
-		{Address: "a/purdex1:purdex1-x", RowKind: "session", Label: "purdex1", LabelSource: "default", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-		{Address: "b/purdex1:mt0-y", RowKind: "session", Label: "purdex1", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+// headerColumns splits a tabwriter header line on runs of two or more
+// spaces, so a test can assert the column ORDER without pinning the
+// widths the fixture's own cell lengths happen to produce.
+func headerColumns(header string) []string {
+	return regexp.MustCompile(` {2,}`).Split(strings.TrimSpace(header), -1)
+}
+
+// TestFormatPeersTable_SharedLabelRendersBothRows pins spec 7.1's
+// deliberate first two rows: two conversations may hold the SAME label
+// (D5), because a label is a display name and never a key. Both rows must
+// render, each carrying that label verbatim and its own distinct address --
+// the address is what tells them apart, and nothing in the table may
+// suggest one of them "won" the name.
+func TestFormatPeersTable_SharedLabelRendersBothRows(t *testing.T) {
+	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
+		{Address: "mini-lab/_3k9f2mq4:aigora2-purdex-b0", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
+		{Address: "mini-lab/_9x2pq0af:purdex1-purdex-69", RowKind: "session", Canonical: "_9x2pq0af", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
 	}}
 	lines := strings.Split(strings.TrimRight(formatPeersTable(env), "\n"), "\n")
 	if len(lines) < 3 {
 		t.Fatalf("table too short: %q", lines)
 	}
-	if !strings.Contains(lines[1], "purdex1*") {
-		t.Errorf("tmux-derived default row = %q, want the label marked with *", lines[1])
-	}
-	if strings.Contains(lines[2], "purdex1*") {
-		t.Errorf("user-label row = %q, want the same label UNmarked", lines[2])
-	}
-	if !strings.Contains(lines[2], "purdex1") {
-		t.Errorf("user-label row = %q, want it to carry the label verbatim", lines[2])
+	for i, wantAddr := range []string{"mini-lab/_3k9f2mq4:aigora2-purdex-b0", "mini-lab/_9x2pq0af:purdex1-purdex-69"} {
+		row := lines[i+1]
+		if !strings.HasPrefix(row, "purdex-tester ") {
+			t.Errorf("row %d = %q, want the shared label rendered verbatim and first", i, row)
+		}
+		if !strings.Contains(row, wantAddr) {
+			t.Errorf("row %d = %q, want its own address %q", i, row, wantAddr)
+		}
 	}
 }
 
@@ -727,9 +745,12 @@ func peersAllTableFixture() peers.AllEnvelope {
 	}
 }
 
-const wantPeersAllTable = "HOST   ADDRESS      LABEL  AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"local  local/sess1  -      cc     wake-cc  working  yes          /home/wake/project\n" +
-	"air    air/sess2    -      codex  -        idle     not_cc       /home/wake/codex\n" +
+// wantPeersAllTable keeps HOST first -- which host a row lives on is what
+// you need before either of the other two columns means anything -- and
+// then follows the single-host order: LABEL, then ADDRESS (spec 7.1).
+const wantPeersAllTable = "HOST   LABEL  ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
+	"local         local/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
+	"air           air/sess2    codex  -        idle     not_cc       /home/wake/codex\n" +
 	"down  (unreachable: connection refused)\n" +
 	"local  daemon (unknown)\n" +
 	"air  daemon (unknown)\n"
@@ -741,18 +762,19 @@ func TestFormatPeersAllTable(t *testing.T) {
 	}
 }
 
-// TestFormatPeersAllTable_LabelColumnEntryIndentAndVersionTrailers extends
-// TestFormatPeersTable_LabelColumnAndEntryIndent's rules to the --all
-// table: a LABEL column, entry-row indent, and one "<alias>  daemon
-// <version>" trailer line per OK host (the existing "(unreachable: …)"
-// lines for failed hosts stay).
-func TestFormatPeersAllTable_LabelColumnEntryIndentAndVersionTrailers(t *testing.T) {
+// TestFormatPeersAllTable_HostThenLabelThenAddress extends
+// TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent's rules to
+// the --all table: HOST stays the first column, LABEL comes second and
+// ADDRESS third, entry rows keep their indent, and one "<alias>  daemon
+// <version>" trailer line is printed per OK host (the existing
+// "(unreachable: ...)" lines for failed hosts stay).
+func TestFormatPeersAllTable_HostThenLabelThenAddress(t *testing.T) {
 	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
 		{
 			Alias: "local", OK: true, DaemonVersion: "1.0.0-alpha.342",
 			Peers: []peers.PeerRecord{
-				{Address: "local/purdex-dev:mt0-x", RowKind: "session", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-				{Address: "local/_k3x9qz:y", RowKind: "entry", Label: "_k3x9qz", LabelSource: "default", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/_3k9f2mq4:mt0-x", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/_9x2pq0af:y", RowKind: "entry", Canonical: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 			},
 		},
 		{Alias: "air", OK: true, DaemonVersion: "1.0.0-alpha.340", Peers: []peers.PeerRecord{}},
@@ -760,11 +782,14 @@ func TestFormatPeersAllTable_LabelColumnEntryIndentAndVersionTrailers(t *testing
 	}}
 	got := formatPeersAllTable(resp)
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if !strings.HasPrefix(lines[0], "HOST") || !strings.Contains(lines[0], "LABEL") {
-		t.Errorf("header: %q", lines[0])
+	if cols := headerColumns(lines[0]); cols[0] != "HOST" || cols[1] != "LABEL" || cols[2] != "ADDRESS" {
+		t.Errorf("first three columns = %v, want HOST LABEL ADDRESS", cols[:3])
 	}
-	if !strings.Contains(lines[2], "  local/_k3x9qz:y") || !strings.Contains(lines[2], "_k3x9qz*") {
-		t.Errorf("entry row (indented, default marked) not where expected: %q", lines[2])
+	if !strings.Contains(lines[2], "  local/_9x2pq0af:y") {
+		t.Errorf("entry row (indented) not where expected: %q", lines[2])
+	}
+	if strings.Contains(got, "*") {
+		t.Errorf("--all table still carries a * marker:\n%s", got)
 	}
 	if !strings.Contains(got, "down  (unreachable: connection refused)") {
 		t.Errorf("unreachable line missing:\n%s", got)

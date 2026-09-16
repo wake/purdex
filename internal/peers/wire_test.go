@@ -3,6 +3,7 @@ package peers
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -231,18 +232,29 @@ func TestAPIError_JSON_Minimal(t *testing.T) {
 	}
 }
 
+// TestAPIError_JSON_Full pins spec §6.4: a candidate is a STRUCT, not an
+// address string. An ambiguity refusal is a safe failure, and a safe
+// failure has to say what it is (spec §4.1) — the operator must be able to
+// tell "two conversations share this address" from "my address broke", so
+// the body carries the agent name, pid and cwd that tell them apart. The
+// three extras are omitempty: a candidate the daemon knows only by address
+// still encodes, it just says less.
 func TestAPIError_JSON_Full(t *testing.T) {
 	e := APIError{
-		Error:      ErrAmbiguous,
-		Detail:     "multiple candidates",
-		Candidates: []string{"h1/s1", "h1/s2"},
+		Error:  ErrAmbiguous,
+		Detail: "multiple candidates",
+		Candidates: []AmbiguousCandidate{
+			{Address: "h1/s1", AgentName: "purdex-1", PID: 41001, Cwd: "/w/one"},
+			{Address: "h1/s2"},
+		},
 		Remote: &RemoteError{
 			Status: 502,
 			Error:  ErrRemoteError,
 			Detail: "upstream failed",
 		},
 	}
-	want := `{"error":"ambiguous","detail":"multiple candidates","candidates":["h1/s1","h1/s2"],` +
+	want := `{"error":"ambiguous","detail":"multiple candidates","candidates":[` +
+		`{"address":"h1/s1","agent_name":"purdex-1","pid":41001,"cwd":"/w/one"},{"address":"h1/s2"}],` +
 		`"remote":{"status":502,"error":"remote_error","detail":"upstream failed"}}`
 	got, err := json.Marshal(e)
 	if err != nil {
@@ -256,8 +268,11 @@ func TestAPIError_JSON_Full(t *testing.T) {
 	if err := json.Unmarshal(got, &back); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if back.Error != e.Error || back.Detail != e.Detail || len(back.Candidates) != 2 || back.Remote == nil || *back.Remote != *e.Remote {
+	if back.Error != e.Error || back.Detail != e.Detail || back.Remote == nil || *back.Remote != *e.Remote {
 		t.Fatalf("round-trip mismatch: got %+v, want %+v", back, e)
+	}
+	if !reflect.DeepEqual(back.Candidates, e.Candidates) {
+		t.Fatalf("round-trip candidates = %+v, want %+v", back.Candidates, e.Candidates)
 	}
 }
 
@@ -881,5 +896,105 @@ func TestWireFrom_JSON_AddressPresent(t *testing.T) {
 	}
 	if back != f {
 		t.Fatalf("round-trip mismatch: got %+v, want %+v", back, f)
+	}
+}
+
+// TestValidateWireAddress_CanonicalHead pins the widened head grammar
+// (spec §6.2): a head that is not a user label must be a canonical id of
+// exactly 8 digits (v3) or exactly 6 (v2, whose senders are still on the
+// wire), with or without a suffix. A 7-digit head is rejected because
+// neither version ever minted one — accepting it would be accepting a
+// format that does not exist.
+func TestValidateWireAddress_CanonicalHead(t *testing.T) {
+	ok := []string{
+		"_a1b2c3d4",               // v3 canonical, no suffix
+		"_a1b2c3d4:mt0-purdex-49", // v3 canonical, with suffix
+		"_k3x9qz",                 // v2 default label, no suffix
+		"_k3x9qz:mt0-purdex-49",   // v2 default label, with suffix
+		"purdex-tester",           // v2 user label, no suffix
+		"purdex-tester:purdex-3f", // v2 user label, with suffix
+		"_00000000",               // an all-zero v3 id is still an id
+	}
+	for _, s := range ok {
+		if err := ValidateWireAddress(s); err != nil {
+			t.Errorf("ValidateWireAddress(%q) = %v, want nil", s, err)
+		}
+	}
+
+	bad := []string{
+		"_a1b2c3d",   // 7 digits: not an id either version ever minted
+		"_a1b2c3d:x", // ...and a suffix does not rescue it
+		"_a1b2c",     // 5 digits
+		"_a1b2c3d4e", // 9 digits
+		"_A1B2C3D4",  // uppercase
+		"_a1b2-3d4",  // hyphen is not a base36 digit
+		"cc:foo",     // reserved head
+		"tmux:mt0",   // reserved head
+		"_a1b2c3d4:", // explicitly empty suffix
+		"purdex-tester:",
+	}
+	for _, s := range bad {
+		err := ValidateWireAddress(s)
+		if !errors.Is(err, ErrAddressInvalid) || ValidationCode(err) != ErrBadAddress {
+			t.Errorf("ValidateWireAddress(%q) = %v (code %s), want ErrAddressInvalid/ErrBadAddress", s, err, ValidationCode(err))
+		}
+	}
+}
+
+// TestDeliverRequest_Validate_CanonicalAddress pins the blocker §6.2
+// names: a v3 sender announcing an 8-digit canonical in from.address must
+// clear its own Validate() before the request ever leaves the host.
+func TestDeliverRequest_Validate_CanonicalAddress(t *testing.T) {
+	for _, addr := range []string{"_a1b2c3d4", "_a1b2c3d4:mt0-purdex-49"} {
+		req := validDeliverRequest()
+		req.From.Address, req.From.AddressRev = addr, 1
+		if err := req.Validate(); err != nil {
+			t.Errorf("Validate() with from.address %q: %v", addr, err)
+		}
+	}
+
+	req := validDeliverRequest()
+	req.From.Address = "_a1b2c3d" // 7 digits
+	if err := req.Validate(); ValidationCode(err) != ErrBadAddress {
+		t.Errorf("Validate() with a 7-digit from.address = %v, want ErrBadAddress", err)
+	}
+}
+
+// TestValidateWireAddress_UsesIsCanonicalID pins the coupling between the
+// canonical id rule and the wire head rule: whatever IsCanonicalID accepts
+// is, by construction, a head a v3 sender can announce, so the wire check
+// has to accept it too. Without this the head grammar can drift away from
+// the id it exists to validate — which is how IsCanonicalID came to have no
+// production caller at all — and the drift would only surface as v3 senders
+// being refused on the wire.
+func TestValidateWireAddress_UsesIsCanonicalID(t *testing.T) {
+	for _, sessionID := range []string{
+		"3f2a1c8e-0000-4000-8000-000000000001",
+		"c0ffee00-dead-4bee-8fee-feedfacecafe",
+		"",
+		"purdex",
+		strings.Repeat("x", 300),
+	} {
+		id := CanonicalID(sessionID)
+		if !IsCanonicalID(id) {
+			t.Fatalf("CanonicalID(%q) = %q, which IsCanonicalID rejects", sessionID, id)
+		}
+		for _, head := range []string{id, id + ":mt0-purdex-49"} {
+			if err := ValidateWireAddress(head); err != nil {
+				t.Errorf("ValidateWireAddress(%q) = %v, want nil: IsCanonicalID accepts its head", head, err)
+			}
+		}
+	}
+
+	// The exact partition of underscore-headed heads: accepted iff it is a
+	// canonical id (v3) or the 6-digit form a v2 sender still announces.
+	// Every other width is refused — the legacy arm is a bounded exception,
+	// not a range.
+	for n := 1; n <= 12; n++ {
+		s := "_" + strings.Repeat("a", n)
+		want := IsCanonicalID(s) || n == 6
+		if err := ValidateWireAddress(s); (err == nil) != want {
+			t.Errorf("ValidateWireAddress(%q) = %v, want accepted=%v", s, err, want)
+		}
 	}
 }

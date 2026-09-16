@@ -29,14 +29,19 @@ import (
 const maxSendBodyBytes = 1 << 20
 
 // peerNotFoundHint is appended to the peer_not_found detail for an
-// address that matched no row. An unnamed agent's default label is now
-// derived from its tmux session name, so every "_xxxxxx" address written
-// down before the target host upgraded stopped resolving the moment that
-// daemon restarted (default-label spec §4.1) — and a stale hash is the
-// likeliest way to land here. Saying so, and naming the one command that
-// lists the current addresses, saves the round trip. The wire "error"
-// code is unchanged: anything matching on peer_not_found is unaffected.
-const peerNotFoundHint = "run `pdx peers --all` for the current addresses — an unnamed session is now addressed by its tmux session name, not by a _xxxxxx label"
+// address that matched no row.
+//
+// What it said before v3 was the exact inverse of the truth: that a
+// session is addressed by its tmux session name "not by a _xxxxxx label".
+// A v3 address IS the "_xxxxxxxx" form — the canonical id derived from the
+// session's sessionId — so the old hint sent a reader who had typed the
+// right kind of string off to find the one kind that cannot address
+// anyone. A confidently backwards hint costs more than no hint at all,
+// which is why this one names the canonical id, says plainly that a label
+// is not an address, and points at the two commands that print a live one.
+// The wire "error" code is unchanged: anything matching on peer_not_found
+// is unaffected.
+const peerNotFoundHint = "an address is a session's canonical id (`_3k9f2mq4`), not the label it calls itself — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
 
 // maxDeliverRespBytes caps a remote daemon's /deliver answer: a
 // DeliverResponse or an APIError is a few hundred bytes at most, and the
@@ -141,9 +146,16 @@ func findOrigin(records []ipeers.PeerRecord, inbox string) (rec ipeers.PeerRecor
 // wireFromRecord builds the sender's wire identity from its origin row:
 // the v1 fields (the tmux session name when the session is inside tmux,
 // "cc:<peer_name>" otherwise — spec §4.4 from-name, still sent for a v1
-// receiver) plus the Peer Address v2 address, "<label>:<suffix>" of the
-// row at the label row's revision (spec §3.5), which a v2 receiver names
-// the sender's helper after.
+// receiver) plus the address, "<canonical>:<suffix>", which a v2 receiver
+// names the sender's helper after.
+//
+// AddressRev is 0, always, and is NOT rec.LabelRev (spec §4.4). LabelRev
+// still counts how many times this conversation has set its label, but a
+// v3 address is derived from the sessionId and cannot move: putting the
+// label's revision in the ADDRESS's revision claims a change that never
+// happened. The field stays on the wire because v2 senders still populate
+// it, and deliver.go's stale-rev guard still protects against a v2 peer's
+// address changing — for a v3 origin that path is simply never armed.
 func wireFromRecord(hostID string, rec ipeers.PeerRecord, declaredMode string) ipeers.WireFrom {
 	sessionName := rec.SessionName
 	if sessionName == "" {
@@ -158,7 +170,7 @@ func wireFromRecord(hostID string, rec ipeers.PeerRecord, declaredMode string) i
 		SessionName:    sessionName,
 		DeclaredMode:   declaredMode,
 		Address:        rec.WireAddress(),
-		AddressRev:     rec.LabelRev,
+		AddressRev:     0,
 	}
 }
 
@@ -310,9 +322,15 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		var amb *ipeers.AmbiguousError
 		switch {
 		case errors.As(err, &amb):
-			candidates := make([]string, 0, len(amb.Candidates))
+			candidates := make([]ipeers.AmbiguousCandidate, 0, len(amb.Candidates))
 			for _, c := range amb.Candidates {
-				candidates = append(candidates, c.Address)
+				cand := ipeers.AmbiguousCandidate{Address: c.Address, Cwd: c.Cwd}
+				// Tier 2 (a bare tmux session name) can match a row with
+				// no agent at all, so this is not the tier-1 guarantee.
+				if c.Agent != nil {
+					cand.AgentName, cand.PID = c.Agent.PeerName, c.Agent.PID
+				}
+				candidates = append(candidates, cand)
 			}
 			m.logf("peers: send refused (%s): %q on %q has %d candidates", ipeers.ErrAmbiguous, session, entry.Alias, len(candidates))
 			writeWireError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrAmbiguous, Detail: err.Error(), Candidates: candidates})
@@ -320,6 +338,16 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			detail := fmt.Sprintf("peer inventory on %q is partial; retry, or address the tmux session as tmux:<name>", entry.Alias)
 			m.logf("peers: send refused (%s): %s", ipeers.ErrNotReady, detail)
 			writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: detail, Partial: true}) // refuseUnaudited cannot set Partial
+		case errors.Is(err, ipeers.ErrRemoteTooOld):
+			// A version mismatch, not a bad address: the peer host still
+			// runs a pre-v3 daemon, so nothing the caller types can
+			// resolve there. 409 rather than 404 because the request was
+			// well formed and the target host's state is what refuses it,
+			// and a code of its own rather than peer_not_found because the
+			// two prescribe opposite actions — "check the address" would
+			// send the operator looking for a fault on the wrong host.
+			refuseUnaudited(http.StatusConflict, ipeers.ErrCodeRemoteTooOld,
+				fmt.Sprintf("%q: %s", entry.Alias, err.Error()))
 		case errors.Is(err, ipeers.ErrLegacyCC):
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, err.Error())
 		default:

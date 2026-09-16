@@ -429,15 +429,16 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 
 	// The label snapshot (Task 3's peer_labels table) is joined the same
 	// way: a nil store or a read failure never blocks the inventory build
-	// (every row still gets its default label), but a failed read is
-	// reported the same way a failed owner lookup is — this response may
-	// be showing stale/default labels it cannot vouch for — and signalled
-	// on its own as labels_unavailable, so a consumer (pdx peers, the
-	// SPA) names the cause instead of inferring it from the absence of
-	// the other two partial causes.
+	// (every row still gets its address, which is derived from the
+	// registry and owes the store nothing), but a failed read is reported
+	// the same way a failed owner lookup is — this response is showing a
+	// blank label column it cannot vouch for — and signalled on its own as
+	// labels_unavailable, so a consumer (pdx peers, the SPA) names the
+	// cause instead of inferring it from the absence of the other two
+	// partial causes.
 	labels, labelsErr := m.labelSnapshot()
 	if labelsErr != nil {
-		m.logf("peers: inventory: label store unavailable, reporting default labels: %v", labelsErr)
+		m.logf("peers: inventory: label store unavailable, reporting rows without labels: %v", labelsErr)
 	}
 	labelsUnavailable := labelsErr != nil
 
@@ -460,10 +461,11 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Entries:    entries,
 		ProxyPIDs:  proxyPIDs,
 		Labels:     labels,
-		// An empty label map means "unreadable", not "no user labels"
-		// (spec §3.5), so Build must mint no tmux-derived defaults while
-		// the store is down — otherwise a row could advertise a name an
-		// unreadable row already holds for someone else.
+		// An empty label map means "unreadable", not "no user labels".
+		// Build does not branch on this: it is passed through so the flag
+		// travels with the rows it explains, telling a consumer why their
+		// label column is blank. It says nothing about their addresses,
+		// which the label store never had a part in.
 		LabelsUnavailable: labelsUnavailable,
 	})
 
@@ -482,7 +484,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 // empty map and no error (Peer Address v2 has never been configured with a
 // label store, which is not this inventory's trouble); a read error is
 // returned so the caller can mark the response partial — the rows it
-// renders below fall back to their default label, same as an absent row.
+// renders below then carry no label at all, same as an absent row.
 func (m *Module) labelSnapshot() (map[string]ipeers.LabelInfo, error) {
 	out := map[string]ipeers.LabelInfo{}
 	if m.labels == nil {

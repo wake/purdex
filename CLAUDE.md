@@ -21,13 +21,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Peer addresses（跨主機 agent 訊息）
 
-- 地址格式：`<host>/<label>[:<suffix>]`。**只有 `<label>` 是地址**；`:<suffix>` 是 daemon 產生的識別資訊（tmux 名-CC 名），打不打都一樣。
-- label 規則：小寫英數與 `-`，2–32 字，`^[a-z0-9][a-z0-9-]{1,31}$`；`cc`、`tmux` 保留。命名慣例 `<專案>-<角色>[-<序號>]`（`purdex-tester`、`purdex-tester-2`）。
-- 尚未命名的 session 有兩種預設 label：該 session 所在的 **tmux session 名，原封不動**（**不做任何正規化**——它必須本身就已經是合法 label，否則不算數），且那個名字要在這台主機上剛好只指向一個 live agent；不成立時（名字不是合法 label、同一個 tmux session 裡有兩個 live 對話、該名字已被別的 live 對話當 user label、或 daemon 當下讀不到 label store）才退回由 sessionId 導出的 `_xxxxxx`。`pdx peers` 會在預設 label 後面標 `*`，這是它與同形狀 user label 在畫面上唯一的區別。
-- 語意差別：**default label ＝ 位置**（那個 tmux session 裡的 agent），tmux 改名或該位置不再唯一就會變；**user label ＝ 對話**，只有使用者改它才會變。要一個跨 tmux 改名仍有效的地址就 `pdx msg name`。
-- 指令：`pdx msg name <label>`（命名自己）、`pdx msg name --release`、`pdx msg whoami`（看自己的地址）、`pdx msg send <host>/<label> "<text>"`；`pdx peers --all` 看所有主機的 session。
-- `<host>/tmux:<tmux session 名>` 是不經 label 的 fallback。`cc:<name>` 形式已移除。
-- 被要求「成為 X」時：先 `pdx msg name X`，再 `pdx msg whoami` 回報地址；`label_taken` 時從回應的 live_labels 挑一個沒撞的。
+- **一個對話只有一個地址，終生不變。** 格式 `<host>/<canonical>[:<suffix>]`，canonical 形如
+  `_3k9f2mq4`，由該對話的 sessionId 導出（純函數，resume 與 daemon 重啟都不變）。
+  `:<suffix>` 是 daemon 產生的識別資訊（tmux 名-CC 名），打不打都一樣。
+- **label 不是地址。** label 是對話給自己取的短名，只給人和 agent 讀，用來**挑**要跟誰講話；
+  真正**送得到**的是 address。label 不再唯一，兩個對話取同一個名字是允許的。
+- label 規則：小寫英數與 `-`，2–32 字，`^[a-z0-9][a-z0-9-]{1,31}$`；`cc`、`tmux` 保留。
+  canonical 以 `_` 開頭，與 label 的命名空間天生互斥，不會互撞。
+- 指令：`pdx msg name <label>`（命名自己）、`pdx msg name --release`、
+  `pdx msg whoami`（看自己的 address 與 canonical）、`pdx msg send <host>/<canonical> "<text>"`；
+  `pdx peers --all` 看所有主機的 session。
+- `<host>/tmux:<tmux session 名>` 仍是不經 label 的位置型 fallback，但它跟著 tmux 名走，
+  改名就失效。`cc:<name>` 形式已移除。
+- **被賦予角色時**：`pdx msg name <專案>-<角色>`，例如 `pdx msg name purdex-tester`。
+- **回應帶 `label_in_use` 時**：label 已經設好了（不會被拒絕），但請照慣例加序號重設一次 ——
+  看回應的 `live_labels` 挑下一個沒被用的序號，`pdx msg name purdex-tester-2`。
+  這是慣例不是限制：不加也能運作，但兩個同名的 agent 在 `pdx peers` 上分不出誰是誰。
+- **label 只給人和 agent 讀，不能拿來送訊。** 送訊一律用 `address`（`pdx msg whoami` 看自己的、
+  `pdx peers --all` 看別人的）。address 綁 sessionId，改 tmux 名、改 label 都不會變。
+  被要求「成為 X」時就是：`pdx msg name X` → `pdx msg whoami` → **回報那個 address**，不是回報 X。
 - **`pdx: command not found` 時**：這台機器的 daemon 是 App 裝的，執行檔在 `~/.config/pdx/bin/pdx`，但安裝流程不會把它放上 PATH。跑 `~/.config/pdx/bin/pdx path`（開發機則是 repo 的 `bin/pdx`）看診斷，它會告訴你該用 `path link`（建 `~/.local/bin/pdx`）還是 `path add-to-shell`（把 `~/.local/bin` 加進 shell 設定）。兩個指令在 Settings → Development 也有按鈕。
 
 ## 技術棧

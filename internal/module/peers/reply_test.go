@@ -236,7 +236,7 @@ func TestReply_HappyPath(t *testing.T) {
 	wantFrom := ipeers.WireFrom{
 		HostID: localHostID, AgentSessionID: targetSessionID, PID: targetPID, ProcStart: targetProcStart,
 		PeerName: targetPeerName, SessionName: "cc:" + targetPeerName, DeclaredMode: ipeers.ModeBypass,
-		Address: ipeers.DefaultLabel(targetSessionID) + ":" + targetPeerName, AddressRev: 0, // v2 (spec §3.5): the replier row's label:suffix
+		Address: ipeers.CanonicalID(targetSessionID) + ":" + targetPeerName, AddressRev: 0, // v3 (spec §4.4): the replier row's canonical:suffix
 	}
 	if req.From != wantFrom {
 		t.Errorf("from = %+v, want the replier tuple %+v", req.From, wantFrom)

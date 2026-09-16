@@ -930,7 +930,7 @@ function seedPeers(...hostIds: string[]) {
   const cwdByHost: Record<string, Record<string, { cwd: string; fetchedAt: number; loading: boolean; error: string | null }>> = {}
   for (const id of hostIds) {
     byHost[id] = { ...emptyPeerHostEntry(), fetchedAt: 1, rows: { s1: {
-      address: `${id}/label:label-agent`, label: 'label', labelSource: 'default',
+      address: `${id}/_3k9f2mq4:label-agent`, canonical: '_3k9f2mq4', label: 'label', labelSource: 'user',
       deliverable: true, reason: '', tmuxInstance: '1:1',
       agent: { type: 'cc', peerName: 'agent', status: 'idle' },
     } } }

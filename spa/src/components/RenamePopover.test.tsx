@@ -220,8 +220,9 @@ describe('RenamePopover peer section', () => {
 
   const ROW: PeerRow = {
     address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
+    canonical: '_3k9f2mq4',
     label: 'ai-chat4',
-    labelSource: 'default',
+    labelSource: 'user',
     deliverable: true,
     reason: '',
     tmuxInstance: GEN,
@@ -321,18 +322,6 @@ describe('RenamePopover peer section', () => {
     render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
     fireEvent.click(screen.getByTestId('peer-address-p1'))
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a'))
-  })
-
-  it('marks a default label, and leaves a user label unmarked', () => {
-    seedSession(H1, 'abc123')
-    seedHost(H1, 'abc123', ROW)
-    const { unmount } = render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-    expect(screen.getByTestId('peer-default-marker-p1')).toBeInTheDocument()
-    unmount()
-
-    seedHost(H1, 'abc123', { ...ROW, labelSource: 'user' })
-    render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-    expect(screen.queryByTestId('peer-default-marker-p1')).toBeNull()
   })
 
   it.each([
@@ -478,12 +467,22 @@ describe('RenamePopover peer section', () => {
       expect(screen.getByTestId('peer-labels-p1').textContent).toContain('hash defaults')
     })
 
-    it('shows the agent row but no address when the row has no label (no cc agent)', () => {
+    // An empty `labelSource` no longer means "no cc agent" — a live
+    // conversation that has not named itself reports `''` too (spec §8.1). The
+    // address row keys off the address, which is empty only when there is no
+    // canonical, so both halves are asserted here: no canonical hides it, an
+    // unnamed live conversation does not.
+    it('hides the address row only when the row has no canonical, not when it merely has no label', () => {
       seedSession(H1, 'abc123')
-      seedHost(H1, 'abc123', { ...ROW, label: '', address: '', labelSource: '' })
-      render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
+      seedHost(H1, 'abc123', { ...ROW, canonical: '', label: '', address: '', labelSource: '' })
+      const { unmount } = render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
       expect(screen.queryByTestId('peer-address-p1')).toBeNull()
       expect(screen.getByTestId('peer-agent-p1').textContent).toContain('ai-chat-story-3a')
+      unmount()
+
+      seedHost(H1, 'abc123', { ...ROW, label: '', labelSource: '' })
+      render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
+      expect(screen.getByTestId('peer-address-p1').textContent).toBe('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a')
     })
 
     it('shows a spinner and no error while the pane is not yet reconciled with the session store', () => {

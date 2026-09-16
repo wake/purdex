@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -328,13 +329,11 @@ func TestBuild_CC_PaneMatchWrongSessionID_InboxDeadAndOutsideRow(t *testing.T) {
 	if outsideRow == nil {
 		t.Fatalf("outsideRow missing")
 	}
-	// v2: the entry's own tmux session ("elsewhere") is not a listed
-	// session either way, but the row is now an entry row (RowKind) with
-	// a label+suffix address, not the retired "cc:<name>" form.
-	// Expectation updated: "other-sess" is the only conversation in the
-	// population and its entries agree on tmux "elsewhere", so its default
-	// is now that name rather than the v2 hash (spec §3.3).
-	wantAddr := "mini-lab/elsewhere:elsewhere-stray"
+	// The entry's own tmux session ("elsewhere") is not a listed session
+	// either way; the row is an entry row (RowKind) with a
+	// canonical+suffix address, not the retired "cc:<name>" form. The
+	// suffix still shows where it sits; the head does not depend on it.
+	wantAddr := "mini-lab/" + CanonicalID("other-sess") + ":elsewhere-stray"
 	if outsideRow.RowKind != "entry" || outsideRow.Address != wantAddr {
 		t.Errorf("outsideRow rowkind/address = %q/%q, want entry/%q", outsideRow.RowKind, outsideRow.Address, wantAddr)
 	}
@@ -364,7 +363,7 @@ func TestBuild_OutsideTmuxRow(t *testing.T) {
 	if r.SessionCode != "" || r.SessionName != "" || r.TmuxInstance != "" {
 		t.Errorf("outside row session fields not empty: %+v", r)
 	}
-	wantAddr := "mini-lab/" + DefaultLabel("sess-y") + ":outside-1"
+	wantAddr := "mini-lab/" + CanonicalID("sess-y") + ":outside-1"
 	if r.Address != wantAddr {
 		t.Errorf("Address = %q, want %q", r.Address, wantAddr)
 	}
@@ -558,16 +557,13 @@ func TestBuild_TwoSessionsSameOwnerSessionID_EntryConsumedOnce(t *testing.T) {
 	if s1Rec.RowKind != "session" || !s1Rec.Deliverable || s1Rec.Agent == nil || s1Rec.Agent.PID != 100 {
 		t.Fatalf("s1 = %+v, want the winning deliverable session row (PID 100)", s1Rec)
 	}
-	// Both rows carry the same default label (Item 4's ambiguity is now
-	// visible in the label too): Resolve (Task 6) reports the pair
-	// ambiguous by label+suffix, not by this row's SessionCode.
-	// Expectation updated: sess-x's one live entry is in tmux "mt1" and no
-	// other conversation competes for that name, so the shared default is
-	// "mt1" rather than the v2 hash. The point of the assertion — that BOTH
-	// rows read the same label, the s2 ambiguous fallback included — is
-	// unchanged, and is exactly spec §3.2's one-conversation-one-label rule.
-	if s1Rec.Label != "mt1" || s2Rec.Label != "mt1" {
-		t.Errorf("labels = %q/%q, want both %q", s1Rec.Label, s2Rec.Label, "mt1")
+	// Both rows carry the same canonical id, the s2 ambiguous fallback
+	// included: they are two rows of ONE conversation, so they must render
+	// one address. That was previously stated as "the same default label";
+	// under v3 the address head is where the property lives (spec §4.5).
+	wantHead := CanonicalID("sess-x")
+	if s1Rec.Canonical != wantHead || s2Rec.Canonical != wantHead {
+		t.Errorf("canonicals = %q/%q, want both %q", s1Rec.Canonical, s2Rec.Canonical, wantHead)
 	}
 }
 
@@ -601,14 +597,13 @@ func TestBuild_AmbiguousCandidates_StillGetOutsideRows(t *testing.T) {
 	if sessionRow == nil || sessionRow.Reason != "ambiguous" {
 		t.Fatalf("sessionRow = %+v, want reason ambiguous", sessionRow)
 	}
-	// Expectation updated: both entries belong to sess-x and agree on tmux
-	// "elsewhere" (rule 1 is satisfied — two processes of ONE conversation
-	// are not competitors), and nothing else is in the population, so the
-	// shared default is "elsewhere" rather than the v2 hash.
-	label := "elsewhere"
+	// Both entries belong to sess-x, so both entry rows carry that one
+	// conversation's canonical id; only the display suffix tells them
+	// apart.
+	head := CanonicalID("sess-x")
 	wantAddrs := map[string]bool{
-		"mini-lab/" + label + ":elsewhere-one": true,
-		"mini-lab/" + label + ":elsewhere-two": true,
+		"mini-lab/" + head + ":elsewhere-one": true,
+		"mini-lab/" + head + ":elsewhere-two": true,
 	}
 	if len(outsideAddrs) != 2 || !wantAddrs[outsideAddrs[0]] || !wantAddrs[outsideAddrs[1]] {
 		t.Fatalf("outsideAddrs = %v, want both entry-row addresses in %v", outsideAddrs, wantAddrs)
@@ -764,12 +759,10 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 		byAddress[r.Address] = r
 	}
 
-	// Expectation updated: mt1Entry is the only live entry of its
-	// conversation and sits in tmux "mt1", uncontested, so the golden
-	// address is now the readable one this change exists to produce.
-	// outsideEntry below is deliberately left on its hash: its Tmux field
-	// is "", so it is not in tmux and has no place to be named after.
-	mt1 := byAddress["mini-lab/mt1:mt1-purdex-47"]
+	// Both live rows are addressed by their own canonical id; the suffix
+	// still shows the tmux session for the one that is in tmux and only
+	// the cc name for the one that is not.
+	mt1 := byAddress["mini-lab/"+CanonicalID(mt1Entry.SessionID)+":mt1-purdex-47"]
 	if !mt1.Deliverable || mt1.Reason != "" || mt1.Agent == nil {
 		t.Fatalf("mt1 = %+v, want deliverable cc row", mt1)
 	}
@@ -793,7 +786,7 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 		t.Errorf("codexy deliverable/reason = %v/%q, want false/not_cc", codexy.Deliverable, codexy.Reason)
 	}
 
-	outside := byAddress["mini-lab/"+DefaultLabel(outsideEntry.SessionID)+":scratch-1"]
+	outside := byAddress["mini-lab/"+CanonicalID(outsideEntry.SessionID)+":scratch-1"]
 	if outside.Agent == nil || !outside.Deliverable || outside.Reason != "" {
 		t.Errorf("outside = %+v, want deliverable outside-tmux row", outside)
 	}
@@ -804,11 +797,16 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 
 // --- Labels, suffix, entry rows (Peer Address v2, Task 4) -----------------
 
-// TestBuild_LabelsAndAddresses pins the address rules of spec §3.4: a cc
-// row (session or entry) reads "<alias>/<label>:<suffix>" with the suffix
-// derived from the row's own registry tmux field; a session row with no cc
-// agent reads "<alias>/tmux:<name>"; a user label (with its Rev) wins over
-// the default label.
+// TestBuild_LabelsAndAddresses pins the address rules of spec §4.5: a cc
+// row (session or entry) reads "<alias>/<canonical>:<suffix>"; a session
+// row with no cc agent reads "<alias>/tmux:<name>"; a user label is
+// reported with its Rev and label_source "user" without touching the
+// address.
+//
+// The live and registry tmux names agree in this fixture, so spec §5.4's
+// two suffix provenances are indistinguishable here and this test says
+// nothing about them — that is
+// TestBuild_SessionRowSuffixFollowsLiveTmuxRename's job.
 func TestBuild_LabelsAndAddresses(t *testing.T) {
 	in := BuildInput{
 		HostID: "h:1", Alias: "mini-lab",
@@ -827,24 +825,143 @@ func TestBuild_LabelsAndAddresses(t *testing.T) {
 	for _, r := range recs {
 		byAddr[r.Address] = r
 	}
-	dev, ok := byAddr["mini-lab/purdex-dev:mt0-purdex-49"]
+	dev, ok := byAddr["mini-lab/"+CanonicalID("sid-1")+":mt0-purdex-49"]
 	if !ok {
 		t.Fatalf("no dev row; addresses: %v", keys(byAddr))
 	}
 	if dev.RowKind != "session" || dev.Label != "purdex-dev" || dev.LabelSource != LabelSourceUser || dev.LabelRev != 7 || dev.Suffix != "mt0-purdex-49" {
 		t.Errorf("dev row = %+v", dev)
 	}
-	want := "mini-lab/" + DefaultLabel("sid-2") + ":purdex-3f"
+	want := "mini-lab/" + CanonicalID("sid-2") + ":purdex-3f"
 	desk, ok := byAddr[want]
 	if !ok {
 		t.Fatalf("no desktop row %q; addresses: %v", want, keys(byAddr))
 	}
-	if desk.RowKind != "entry" || desk.LabelSource != LabelSourceDefault || desk.LabelRev != 0 || !desk.Deliverable {
+	if desk.RowKind != "entry" || desk.Label != "" || desk.LabelSource != "" || desk.LabelRev != 0 || !desk.Deliverable {
 		t.Errorf("desktop row = %+v", desk)
 	}
 	shell, ok := byAddr["mini-lab/tmux:shell"]
-	if !ok || shell.Label != "" || shell.Suffix != "" || shell.LabelSource != "" {
+	if !ok || shell.Canonical != "" || shell.Label != "" || shell.Suffix != "" || shell.LabelSource != "" {
 		t.Errorf("shell row = %+v (ok=%v)", shell, ok)
+	}
+}
+
+// TestBuild_SessionRowSuffixFollowsLiveTmuxRename is the regression test for
+// spec §2's P1, expressed at the one place P1 is still observable after v3
+// moved the address head off the tmux name: the display suffix.
+//
+// The scenario is the measurement recorded in §2 P1. A conversation started
+// in a tmux session called "aigora2", so Claude Code froze
+// `tmux = "aigora2:@5.%5"` into its registry file. The user then renamed the
+// tmux session to "aigora2zz". The registry file is NOT rewritten with the
+// new name — it keeps saying "aigora2" until the agent exits — so
+// Entry.TmuxSessionName() is stale by construction here.
+//
+// The daemon's own tmux inventory, on the other hand, is live: the
+// SessionSummary being rendered already says "aigora2zz". A session row must
+// use that, because it IS the row for that very session.
+//
+// Both winner-selection paths are covered, because both used to pass the
+// frozen value: the single-candidate path and the pane-tiebreak path.
+func TestBuild_SessionRowSuffixFollowsLiveTmuxRename(t *testing.T) {
+	const (
+		frozenName = "aigora2"   // what the registry file still says
+		liveName   = "aigora2zz" // what tmux actually calls the session now
+	)
+
+	tests := []struct {
+		name    string
+		entries []Entry
+	}{
+		{
+			name: "single candidate",
+			entries: []Entry{
+				{PID: 10, SessionID: "sid-1", Name: "purdex-49", Tmux: frozenName + ":@5.%5", Inbox: "/s/10"},
+			},
+		},
+		{
+			// Two live entries of the same conversation; the owner's pane
+			// picks the winner. Same frozen tmux field, same requirement.
+			name: "pane tiebreak winner",
+			entries: []Entry{
+				{PID: 10, SessionID: "sid-1", Name: "purdex-49", Tmux: frozenName + ":@5.%5", Inbox: "/s/10"},
+				{PID: 11, SessionID: "sid-1", Name: "purdex-4a", Tmux: frozenName + ":@5.%6", Inbox: "/s/11"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recs := Build(BuildInput{
+				HostID: "h:1", Alias: "mini-lab",
+				Sessions: []SessionSummary{{Code: "c1", Name: liveName}},
+				Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%5"}},
+				Entries:  tc.entries,
+			})
+
+			var row PeerRecord
+			var found bool
+			for _, r := range recs {
+				if r.RowKind == "session" {
+					row, found = r, true
+				}
+			}
+			if !found {
+				t.Fatalf("no session row in %+v", recs)
+			}
+			if !row.Deliverable || row.Agent == nil || row.Agent.PID != 10 {
+				t.Fatalf("expected the pid-10 entry to win: %+v", row)
+			}
+
+			wantSuffix := liveName + "-purdex-49"
+			if row.Suffix != wantSuffix {
+				t.Errorf("suffix = %q, want %q (the live tmux name, not the frozen registry one)", row.Suffix, wantSuffix)
+			}
+			if want := "mini-lab/" + CanonicalID("sid-1") + ":" + wantSuffix; row.Address != want {
+				t.Errorf("address = %q, want %q", row.Address, want)
+			}
+			if strings.HasPrefix(row.Suffix, frozenName+"-") {
+				t.Errorf("suffix %q still carries the frozen registry name %q", row.Suffix, frozenName)
+			}
+		})
+	}
+}
+
+// TestBuild_EntryRowSuffixKeepsRegistryTmuxName pins the deliberate other
+// half of spec §5.4: an `entry` row has no session row behind it, so there
+// is no live tmux name to prefer — the frozen registry value is the honest
+// fallback and stays.
+//
+// This is why PeerRecord.Suffix documents two provenances in one response:
+// row_kind is the discriminator, and suffix is display-only either way.
+func TestBuild_EntryRowSuffixKeepsRegistryTmuxName(t *testing.T) {
+	recs := Build(BuildInput{
+		HostID: "h:1", Alias: "mini-lab",
+		Sessions: []SessionSummary{{Code: "c1", Name: "aigora2zz"}},
+		Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%5"}},
+		Entries: []Entry{
+			{PID: 10, SessionID: "sid-1", Name: "purdex-49", Tmux: "aigora2:@5.%5", Inbox: "/s/10"},
+			// A different conversation, whose registry names a tmux
+			// session the inventory does not list at all.
+			{PID: 20, SessionID: "sid-9", Name: "n9", Tmux: "gone-box:@1.%1", Inbox: "/s/20"},
+		},
+	})
+
+	var row PeerRecord
+	var found bool
+	for _, r := range recs {
+		if r.RowKind == "entry" {
+			row, found = r, true
+		}
+	}
+	if !found {
+		t.Fatalf("no entry row in %+v", recs)
+	}
+	if row.Suffix != "gone-box-n9" {
+		t.Errorf("entry row suffix = %q, want %q (registry value kept)", row.Suffix, "gone-box-n9")
+	}
+	if want := "mini-lab/" + CanonicalID("sid-9") + ":gone-box-n9"; row.Address != want {
+		t.Errorf("entry row address = %q, want %q", row.Address, want)
 	}
 }
 
@@ -871,7 +988,7 @@ func TestBuild_EntryRow_NonOwnerEntryInsideListedSession(t *testing.T) {
 	}
 	// The suffix comes from the entry's own tmux field, so an entry row
 	// inside tmux reads like its session row would.
-	if recs[1].Suffix != "mt0-n9" || recs[1].Address != "a/"+DefaultLabel("sid-9")+":mt0-n9" {
+	if recs[1].Suffix != "mt0-n9" || recs[1].Address != "a/"+CanonicalID("sid-9")+":mt0-n9" {
 		t.Errorf("entry row suffix/address = %q %q", recs[1].Suffix, recs[1].Address)
 	}
 }
@@ -883,29 +1000,31 @@ func TestEntryRecord_MatchesBuild(t *testing.T) {
 	e := Entry{PID: 11, SessionID: "sid-9", Name: "n9", Tmux: "mt0:@1.%2", Inbox: "/s/11", Cwd: "/w"}
 	info := LabelInfo{Label: "purdex-tester", Rev: 3}
 	labels := map[string]LabelInfo{"sid-9": info}
-	// The direct call must be fed the SAME population Build resolves over,
-	// which is what a self route has to do too (spec §3.4). Deriving it here
-	// the way Build does is the point: a hand-written map would let the test
-	// pass while proving nothing about the two paths agreeing.
-	defaults := ResolveDefaultLabels([]Entry{e}, nil, labels)
-	one := EntryRecord("a", "h:1", e, false, info, defaults)
+	// Under v3 the direct call needs no population argument at all: both
+	// paths derive the head from the entry's own sessionId, so agreeing is
+	// structural rather than a matter of being handed the same map.
+	one := EntryRecord("a", "h:1", e, false, info)
 	all := Build(BuildInput{HostID: "h:1", Alias: "a", Entries: []Entry{e}, Labels: labels})
 	if len(all) != 1 || !reflect.DeepEqual(all[0], one) {
 		t.Errorf("EntryRecord ≠ Build row:\n%+v\n%+v", one, all)
 	}
-	p := EntryRecord("a", "h:1", e, true, info, defaults)
+	p := EntryRecord("a", "h:1", e, true, info)
 	if p.Agent.Type != "proxy" || p.Deliverable || p.Reason != "proxy" || p.Address != "a/cc:n9" || p.Label != "" {
 		t.Errorf("proxy entry record = %+v", p)
 	}
 }
 
-// TestBuild_SameConversationTwoProcesses_TwoRowsSameLabel pins that same
-// sessionId twice, no pane tiebreak, yields three rows sharing one label:
-// the ambiguous session row (fallback agent) AND both entries get entry
-// rows; Resolve (Task 6) reports them ambiguous with exactly the two
-// ENTRY rows as candidates — the owner-fallback session row carries no
-// live entry (PID 0) and is inert at tier 1 (spec §3.3, X2).
-func TestBuild_SameConversationTwoProcesses_TwoRowsSameLabel(t *testing.T) {
+// TestBuild_SameConversationTwoProcesses_ThreeRowsOneCanonical pins that
+// the same sessionId twice, with no pane tiebreak, yields three rows
+// sharing ONE canonical id: the ambiguous session row (fallback agent) and
+// both entry rows. One conversation, one address — the property that used
+// to be stated as "one label" and is now stated where it belongs.
+//
+// The resolution half then reads that shared id back through Resolve: the
+// two live ENTRY rows are the ambiguous candidates, while the PID-0
+// session row is inert at tier 1. Build and Resolve agree on what the
+// address is, which is the whole point of deriving it from the sessionId.
+func TestBuild_SameConversationTwoProcesses_ThreeRowsOneCanonical(t *testing.T) {
 	in := BuildInput{
 		Alias:    "a",
 		Sessions: []SessionSummary{{Code: "c1", Name: "mt0"}},
@@ -919,27 +1038,39 @@ func TestBuild_SameConversationTwoProcesses_TwoRowsSameLabel(t *testing.T) {
 	if len(recs) != 3 {
 		t.Fatalf("got %d rows, want 3", len(recs))
 	}
-	// Expectation updated: both processes are sid-1's and both report tmux
-	// "mt0", so rule 1 holds and nothing competes — the three rows share
-	// "mt0" instead of sharing the hash. Sharing ONE label across the
-	// ambiguous session row and both entry rows is what this test pins, and
-	// that is unchanged.
+	want := CanonicalID("sid-1")
 	for _, r := range recs {
-		if r.Label != "mt0" {
-			t.Errorf("row %s label = %q", r.Address, r.Label)
+		if r.Canonical != want {
+			t.Errorf("row %s canonical = %q, want %q", r.Address, r.Canonical, want)
+		}
+		if r.Label != "" || r.LabelSource != "" {
+			t.Errorf("row %s label/source = %q/%q, want \"\"/\"\" — nothing named it", r.Address, r.Label, r.LabelSource)
 		}
 	}
 	if recs[0].Reason != "ambiguous" || recs[0].Deliverable {
 		t.Errorf("session row = %+v", recs[0])
 	}
+	live := 0
+	for _, r := range recs {
+		if r.RowKind == "entry" && r.Agent != nil && r.Agent.PID != 0 {
+			live++
+		}
+	}
+	if live != 2 {
+		t.Errorf("live entry rows = %d, want 2", live)
+	}
 
-	_, err := Resolve(recs, "mt0", ResolveSnapshot{})
+	// The resolution half: sending to that one address is refused with
+	// both live processes named, never delivered to one of them. The
+	// fallback session row carries the same canonical but no live entry,
+	// so it is not among the candidates.
+	_, err := Resolve(recs, want, ResolveSnapshot{})
 	var amb *AmbiguousError
 	if !errors.As(err, &amb) {
-		t.Fatalf("Resolve = %v, want AmbiguousError", err)
+		t.Fatalf("Resolve(%q) = %v, want *AmbiguousError", want, err)
 	}
 	if len(amb.Candidates) != 2 {
-		t.Fatalf("candidates = %d, want exactly the 2 entry rows: %+v", len(amb.Candidates), amb.Candidates)
+		t.Fatalf("candidates = %d, want the 2 live entry rows", len(amb.Candidates))
 	}
 	for _, c := range amb.Candidates {
 		if c.RowKind != "entry" || c.Agent == nil || c.Agent.PID == 0 {
@@ -959,275 +1090,31 @@ func keys(m map[string]PeerRecord) []string {
 
 // --- PeerRecord.WireAddress() -------------------------------------------
 
-// TestPeerRecord_WireAddress pins WireAddress's shape: Label + ":" +
-// Suffix for a row that carries a cc agent, "" for a row with none (Label
-// == "" is the no-agent signal — spec §3.4).
+// TestPeerRecord_WireAddress pins WireAddress's shape under v3: Canonical
+// + ":" + Suffix for a row that carries a cc agent, "" for a row with none
+// (Canonical == "" is the no-agent signal — spec §4.5).
+//
+// The label is deliberately set and deliberately ignored: send.go's
+// wireFromRecord puts this string in the outbound from.address, so a
+// label-based WireAddress would have a v3 sender announce itself at an
+// address nothing routes on (spec §4.4, plan T3).
 func TestPeerRecord_WireAddress(t *testing.T) {
-	labelled := PeerRecord{Label: "purdex-tester", Suffix: "purdex-3f"}
-	if got := labelled.WireAddress(); got != "purdex-tester:purdex-3f" {
-		t.Errorf("WireAddress() = %q, want purdex-tester:purdex-3f", got)
+	labelled := PeerRecord{Canonical: "_3k9f2mq4", Label: "purdex-tester", Suffix: "purdex-3f"}
+	if got := labelled.WireAddress(); got != "_3k9f2mq4:purdex-3f" {
+		t.Errorf("WireAddress() = %q, want _3k9f2mq4:purdex-3f", got)
 	}
-	noAgent := PeerRecord{Label: "", Suffix: ""}
+	noAgent := PeerRecord{Canonical: "", Label: "", Suffix: ""}
 	if got := noAgent.WireAddress(); got != "" {
 		t.Errorf("WireAddress() = %q, want \"\"", got)
 	}
 }
 
-// --- Defaults resolved from the tmux session name (spec §3.3/§3.4) -------
-
-// TestBuild_SessionRow_TmuxDerivedDefault pins the happy path: the one live
-// entry of an unnamed conversation in tmux "purdex1" makes the whole row
-// readable — label, label_source and address together.
-func TestBuild_SessionRow_TmuxDerivedDefault(t *testing.T) {
-	entry := Entry{PID: 100, SessionID: "sess-x", Name: "purdex-69", Tmux: "purdex1:@1.%1", Inbox: "/s/100"}
-	in := BuildInput{
-		HostID:   "h:1",
-		Alias:    "mini-lab",
-		Sessions: []SessionSummary{{Code: "s1", Name: "purdex1"}},
-		Owners:   map[string]Owner{"s1": {AgentType: "cc", SessionID: "sess-x", TmuxPaneID: "%1"}},
-		Entries:  []Entry{entry},
-	}
-	got := Build(in)
-	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1 (session row only)", len(got))
-	}
-	r := got[0]
-	if r.Label != "purdex1" || r.LabelSource != LabelSourceDefault {
-		t.Errorf("label/source = %q/%q, want purdex1/%s", r.Label, r.LabelSource, LabelSourceDefault)
-	}
-	if want := "mini-lab/purdex1:purdex1-purdex-69"; r.Address != want {
-		t.Errorf("Address = %q, want %q", r.Address, want)
-	}
-}
-
-// TestBuild_DefaultNeverShadowsADifferentRealTmuxSession is the round-2
-// attack case (spec §11 finding 1, §4 row 7, §6.2 "shadowing"): tmux
-// session "foo.bar" holds the one live agent, and a SEPARATE, real tmux
-// session "foo-bar" — the string a sanitizer would have produced — has no
-// agent at all. A caller typing "foo-bar" means the real "foo-bar", and
-// must reach it at tier 2; if the agent in "foo.bar" were allowed to
-// derive "foo-bar", tier 1 would answer first and silently deliver into a
-// different tmux session. "foo.bar" does not qualify (§3.1), so nothing
-// shadows the real session.
-func TestBuild_DefaultNeverShadowsADifferentRealTmuxSession(t *testing.T) {
-	agent := Entry{PID: 21, SessionID: "sid-dotted", Name: "n1", Tmux: "foo.bar:@1.%1", Inbox: "/s/21"}
-	recs := Build(BuildInput{
-		HostID: "h:1",
-		Alias:  "mini-lab",
-		Sessions: []SessionSummary{
-			{Code: "c1", Name: "foo.bar"},
-			{Code: "c2", Name: "foo-bar"}, // real, agentless, and NOT the agent's place
-		},
-		Owners:  map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-dotted", TmuxPaneID: "%1"}},
-		Entries: []Entry{agent},
-	})
-
-	for _, r := range recs {
-		if r.Label == "foo-bar" {
-			t.Fatalf("row %+v claims the name of a different real tmux session", r)
-		}
-		if r.Agent != nil && r.Agent.SessionID == "sid-dotted" && r.Label != DefaultLabel("sid-dotted") {
-			t.Errorf("agent row label = %q, want the v2 hash %q", r.Label, DefaultLabel("sid-dotted"))
-		}
-	}
-
-	rec, err := Resolve(recs, "foo-bar", ResolveSnapshot{})
-	if err != nil {
-		t.Fatalf("Resolve(%q) = %v, want the real foo-bar session row", "foo-bar", err)
-	}
-	if rec.SessionName != "foo-bar" || rec.RowKind != "session" {
-		t.Fatalf("Resolve(%q) = %+v, want the real \"foo-bar\" session row", "foo-bar", rec)
-	}
-	if rec.Agent != nil && rec.Agent.SessionID == "sid-dotted" {
-		t.Fatalf("Resolve(%q) landed on the agent living in tmux \"foo.bar\"", "foo-bar")
-	}
-}
-
-// TestBuild_EntryRow_TmuxDerivedDefault pins that an entry row no session
-// consumed derives its default from its OWN registry tmux field, exactly as
-// a session row does.
-func TestBuild_EntryRow_TmuxDerivedDefault(t *testing.T) {
-	entry := Entry{PID: 11, SessionID: "sess-b", Name: "barbox-0b", Tmux: "bb2:@1.%2", Inbox: "/s/11"}
-	got := Build(BuildInput{HostID: "h:1", Alias: "air", Entries: []Entry{entry}})
-	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1 (entry row only)", len(got))
-	}
-	r := got[0]
-	if r.RowKind != "entry" || r.Label != "bb2" || r.LabelSource != LabelSourceDefault {
-		t.Errorf("row = %+v, want entry row labelled bb2 by default", r)
-	}
-	if want := "air/bb2:bb2-barbox-0b"; r.Address != want {
-		t.Errorf("Address = %q, want %q", r.Address, want)
-	}
-}
-
-// TestBuild_InboxDeadSessionRow_KeepsHashDefault pins the first half of
-// spec §3.2: an inbox_dead row's owner has NO live entry, so it is not in
-// the population and keeps the v2 hash — even though its tmux session is
-// named "purdex1". A different, live conversation in that same tmux session
-// IS in the population and gets the place address.
-func TestBuild_InboxDeadSessionRow_KeepsHashDefault(t *testing.T) {
-	live := Entry{PID: 11, SessionID: "sess-live", Name: "n9", Tmux: "purdex1:@1.%2", Inbox: "/s/11"}
-	in := BuildInput{
-		HostID:   "h:1",
-		Alias:    "mini-lab",
-		Sessions: []SessionSummary{{Code: "s1", Name: "purdex1"}},
-		Owners:   map[string]Owner{"s1": {AgentType: "cc", SessionID: "sess-dead", TmuxPaneID: "%1"}},
-		Entries:  []Entry{live},
-	}
-	got := Build(in)
-	if len(got) != 2 {
-		t.Fatalf("len = %d, want 2 (inbox_dead session row + live entry row)", len(got))
-	}
-	var sessionRow, entryRow PeerRecord
-	for _, r := range got {
-		if r.RowKind == "session" {
-			sessionRow = r
-		} else {
-			entryRow = r
-		}
-	}
-	if sessionRow.Reason != "inbox_dead" {
-		t.Fatalf("session row = %+v, want reason inbox_dead", sessionRow)
-	}
-	if sessionRow.Label != DefaultLabel("sess-dead") || sessionRow.LabelSource != LabelSourceDefault {
-		t.Errorf("session row label/source = %q/%q, want %q/%s", sessionRow.Label, sessionRow.LabelSource, DefaultLabel("sess-dead"), LabelSourceDefault)
-	}
-	if entryRow.Label != "purdex1" {
-		t.Errorf("entry row label = %q, want purdex1", entryRow.Label)
-	}
-	if want := "mini-lab/purdex1:purdex1-n9"; entryRow.Address != want {
-		t.Errorf("entry row address = %q, want %q", entryRow.Address, want)
-	}
-}
-
-// TestBuild_AmbiguousSessionRow_RendersPopulationDefault pins the second
-// half of spec §3.2, which differs from inbox_dead and differs correctly:
-// an ambiguous row's owner DOES have live entries — that is why it is
-// ambiguous — so it is in the population and must render exactly what its
-// own conversation's entry rows render. One conversation, one label.
-func TestBuild_AmbiguousSessionRow_RendersPopulationDefault(t *testing.T) {
-	in := BuildInput{
-		Alias:    "a",
-		Sessions: []SessionSummary{{Code: "c1", Name: "purdex1"}},
-		Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%9"}},
-		Entries: []Entry{
-			{PID: 10, SessionID: "sid-1", Name: "n1", Tmux: "purdex1:@1.%1", Inbox: "/s/10"},
-			{PID: 11, SessionID: "sid-1", Name: "n2", Tmux: "purdex1:@1.%2", Inbox: "/s/11"},
-		},
-	}
-	recs := Build(in)
-	if len(recs) != 3 {
-		t.Fatalf("got %d rows, want 3 (ambiguous session row + 2 entry rows)", len(recs))
-	}
-	if recs[0].Reason != "ambiguous" || recs[0].Deliverable {
-		t.Fatalf("session row = %+v, want non-deliverable ambiguous row", recs[0])
-	}
-	for _, r := range recs {
-		if r.Label != "purdex1" || r.LabelSource != LabelSourceDefault {
-			t.Errorf("row %s label/source = %q/%q, want purdex1/%s", r.Address, r.Label, r.LabelSource, LabelSourceDefault)
-		}
-	}
-	// Ambiguity is unchanged by the label's shape: it was an AmbiguousError
-	// over the two entry rows with the hash, and it still is.
-	_, err := Resolve(recs, "purdex1", ResolveSnapshot{})
-	var amb *AmbiguousError
-	if !errors.As(err, &amb) {
-		t.Fatalf("Resolve = %v, want AmbiguousError", err)
-	}
-	if len(amb.Candidates) != 2 {
-		t.Fatalf("candidates = %d, want exactly the 2 entry rows: %+v", len(amb.Candidates), amb.Candidates)
-	}
-	for _, c := range amb.Candidates {
-		if c.RowKind != "entry" || c.Agent == nil || c.Agent.PID == 0 {
-			t.Errorf("candidate %+v is not a live entry row", c)
-		}
-	}
-}
-
-// TestBuild_AmbiguousSessionRow_CompetitorForcesHash is the other half of
-// the same shape: add a SECOND conversation to tmux "purdex1" and rule 2
-// makes the place address name nobody, so every row — the ambiguous session
-// row included — falls back to its own hash.
-func TestBuild_AmbiguousSessionRow_CompetitorForcesHash(t *testing.T) {
-	in := BuildInput{
-		Alias:    "a",
-		Sessions: []SessionSummary{{Code: "c1", Name: "purdex1"}},
-		Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%9"}},
-		Entries: []Entry{
-			{PID: 10, SessionID: "sid-1", Name: "n1", Tmux: "purdex1:@1.%1", Inbox: "/s/10"},
-			{PID: 11, SessionID: "sid-1", Name: "n2", Tmux: "purdex1:@1.%2", Inbox: "/s/11"},
-			{PID: 12, SessionID: "sid-2", Name: "n3", Tmux: "purdex1:@1.%3", Inbox: "/s/12"},
-		},
-	}
-	recs := Build(in)
-	if len(recs) != 4 {
-		t.Fatalf("got %d rows, want 4 (ambiguous session row + 3 entry rows)", len(recs))
-	}
-	for _, r := range recs {
-		want := DefaultLabel("sid-1")
-		if r.Agent != nil && r.Agent.SessionID == "sid-2" {
-			want = DefaultLabel("sid-2")
-		}
-		if r.Label != want {
-			t.Errorf("row %s label = %q, want %q", r.Address, r.Label, want)
-		}
-	}
-}
-
-// TestBuild_LabelsUnavailable_EveryRowKeepsItsHash is the round-2 defence
-// case (spec §11.2, §3.5, §4 row 9). When the label store could not be
-// read, Labels is empty for want of data — not because no user labels
-// exist — so a tmux-derived default would advertise a name an unreadable
-// row may already hold for a live session, and a sender resolves a single
-// tier-1 hit even on a Partial snapshot. Build therefore mints NO
-// tmux-derived default at all while the store is unreadable: every row
-// degrades to exactly Peer Address v2's hash.
-func TestBuild_LabelsUnavailable_EveryRowKeepsItsHash(t *testing.T) {
-	in := BuildInput{
-		HostID:   "h:1",
-		Alias:    "mini-lab",
-		Sessions: []SessionSummary{{Code: "s1", Name: "purdex1"}},
-		Owners:   map[string]Owner{"s1": {AgentType: "cc", SessionID: "sess-x", TmuxPaneID: "%1"}},
-		Entries: []Entry{
-			{PID: 100, SessionID: "sess-x", Name: "purdex-69", Tmux: "purdex1:@1.%1", Inbox: "/s/100"},
-			{PID: 101, SessionID: "sess-y", Name: "barbox-0b", Tmux: "bb2:@1.%2", Inbox: "/s/101"},
-		},
-	}
-
-	// Same input, readable store: both rows take their place address.
-	for _, r := range Build(in) {
-		if r.Agent == nil || r.Agent.PID == 0 {
-			continue
-		}
-		if r.LabelSource != LabelSourceDefault || IsDefaultLabel(r.Label) {
-			t.Fatalf("precondition: row %s label = %q, want a tmux-derived default", r.Address, r.Label)
-		}
-	}
-
-	in.LabelsUnavailable = true
-	recs := Build(in)
-	if len(recs) != 2 {
-		t.Fatalf("got %d rows, want 2", len(recs))
-	}
-	for _, r := range recs {
-		want := DefaultLabel(r.Agent.SessionID)
-		if r.Label != want || r.LabelSource != LabelSourceDefault {
-			t.Errorf("row %s label/source = %q/%q, want the hash %q/%s", r.Address, r.Label, r.LabelSource, want, LabelSourceDefault)
-		}
-	}
-
-	// And a send addressed to what would have been the place address does
-	// not reach it: the outage makes the envelope Partial, so a tier-1
-	// miss is ErrResolveNotReady rather than a silent tier-2 guess.
-	if _, err := Resolve(recs, "purdex1", ResolveSnapshot{Partial: true}); !errors.Is(err, ErrResolveNotReady) {
-		t.Errorf("Resolve(%q) = %v, want ErrResolveNotReady", "purdex1", err)
-	}
-}
-
-// TestBuild_UserLabelBeatsTmuxDerivedDefault: a claimed label still wins,
-// with label_source "user" and its rev — the default is not even rendered.
-func TestBuild_UserLabelBeatsTmuxDerivedDefault(t *testing.T) {
+// TestBuild_UserLabelDoesNotMoveTheAddress is the same fixture that used
+// to assert a claimed label CHANGED the row's address. Under D3 it asserts
+// the opposite, which is the whole point of v3: the label is reported with
+// label_source "user" and its rev, and the address is exactly what it was
+// before anyone named anything.
+func TestBuild_UserLabelDoesNotMoveTheAddress(t *testing.T) {
 	entry := Entry{PID: 100, SessionID: "sess-x", Name: "purdex-69", Tmux: "purdex1:@1.%1", Inbox: "/s/100"}
 	in := BuildInput{
 		HostID:   "h:1",
@@ -1241,8 +1128,14 @@ func TestBuild_UserLabelBeatsTmuxDerivedDefault(t *testing.T) {
 	if r.Label != "purdex-tester" || r.LabelSource != LabelSourceUser || r.LabelRev != 4 {
 		t.Errorf("label/source/rev = %q/%q/%d, want purdex-tester/%s/4", r.Label, r.LabelSource, r.LabelRev, LabelSourceUser)
 	}
-	if want := "mini-lab/purdex-tester:purdex1-purdex-69"; r.Address != want {
-		t.Errorf("Address = %q, want %q", r.Address, want)
+	if want := "mini-lab/" + CanonicalID("sess-x") + ":purdex1-purdex-69"; r.Address != want {
+		t.Errorf("Address = %q, want %q — a label names a conversation, it does not move it (D3)", r.Address, want)
+	}
+	// And it is byte for byte the address the same conversation had with no
+	// label at all.
+	in.Labels = nil
+	if unnamed := Build(in)[0].Address; unnamed != r.Address {
+		t.Errorf("address without a label = %q, with one = %q; want identical", unnamed, r.Address)
 	}
 }
 
@@ -1251,7 +1144,7 @@ func TestBuild_UserLabelBeatsTmuxDerivedDefault(t *testing.T) {
 func TestBuild_ProxyEntryInTmux_KeepsCCFormNoLabel(t *testing.T) {
 	entry := Entry{PID: 300, SessionID: "sess-z", Name: "helper-1", Tmux: "purdex1:@1.%1", IsProxy: true}
 	r := Build(BuildInput{Alias: "mini-lab", Entries: []Entry{entry}})[0]
-	if r.Address != "mini-lab/cc:helper-1" || r.Label != "" || r.LabelSource != "" || r.Suffix != "" {
+	if r.Address != "mini-lab/cc:helper-1" || r.Canonical != "" || r.Label != "" || r.LabelSource != "" || r.Suffix != "" {
 		t.Errorf("proxy row = %+v, want mini-lab/cc:helper-1 with no label", r)
 	}
 	if r.Deliverable || r.Reason != "proxy" {
@@ -1259,10 +1152,13 @@ func TestBuild_ProxyEntryInTmux_KeepsCCFormNoLabel(t *testing.T) {
 	}
 }
 
-// TestBuild_TwoConversationsOneTmuxSession_BothHash is rule 2 end to end
-// through Build: two conversations in one place means the place address
-// names neither, and both revert to exactly the behaviour that ships today.
-func TestBuild_TwoConversationsOneTmuxSession_BothHash(t *testing.T) {
+// TestBuild_TwoConversationsOneTmuxSession_DistinctCanonicals is the case
+// that motivated v3 (spec §2 P2): two conversations sharing one tmux
+// session. Under v2 they contended for the session's name and both lost
+// it. Under v3 there is nothing to contend for — each is addressed by its
+// own sessionId — so both stay reachable and neither is affected by the
+// other's presence.
+func TestBuild_TwoConversationsOneTmuxSession_DistinctCanonicals(t *testing.T) {
 	in := BuildInput{
 		Alias: "mini-lab",
 		Entries: []Entry{
@@ -1279,11 +1175,197 @@ func TestBuild_TwoConversationsOneTmuxSession_BothHash(t *testing.T) {
 		byAddr[r.Address] = r
 	}
 	for _, want := range []string{
-		"mini-lab/" + DefaultLabel("sid-1") + ":purdex1-n1",
-		"mini-lab/" + DefaultLabel("sid-2") + ":purdex1-n2",
+		"mini-lab/" + CanonicalID("sid-1") + ":purdex1-n1",
+		"mini-lab/" + CanonicalID("sid-2") + ":purdex1-n2",
 	} {
 		if _, ok := byAddr[want]; !ok {
 			t.Errorf("missing %q; addresses: %v", want, keys(byAddr))
+		}
+	}
+}
+
+// --- Peer Address v3: the canonical id is the address head ---------------
+
+// v3Fixture is one BuildInput covering every row kind spec §4.5 and §4.4
+// distinguish: a deliverable session row with a user label, a deliverable
+// session row with none, an entry row outside tmux, a proxy entry row, an
+// agentless session row, and an owner-fallback (inbox_dead) session row.
+func v3Fixture() BuildInput {
+	return BuildInput{
+		HostID: "h:1", Alias: "mini-lab",
+		Sessions: []SessionSummary{
+			{Code: "c1", Name: "mt0", Cwd: "/w"},
+			{Code: "c2", Name: "mt9"},
+			{Code: "c3", Name: "shell"},
+			{Code: "c4", Name: "deadplace"},
+		},
+		Owners: map[string]Owner{
+			"c1": {AgentType: "cc", SessionID: "sid-labelled", TmuxPaneID: "%1"},
+			"c2": {AgentType: "cc", SessionID: "sid-plain", TmuxPaneID: "%2"},
+			"c4": {AgentType: "cc", SessionID: "sid-dead", TmuxPaneID: "%4"},
+		},
+		Entries: []Entry{
+			{PID: 10, SessionID: "sid-labelled", Name: "purdex-49", Tmux: "mt0:@1.%1", Inbox: "/s/10"},
+			{PID: 11, SessionID: "sid-plain", Name: "purdex-4a", Tmux: "mt9:@1.%2", Inbox: "/s/11"},
+			{PID: 20, SessionID: "sid-outside", Name: "purdex-3f", Tmux: "", Inbox: "/s/20"},
+			{PID: 30, SessionID: "sid-proxy", Name: "helper-1", Tmux: "", IsProxy: true},
+		},
+		Labels: map[string]LabelInfo{"sid-labelled": {Label: "purdex-tester", Rev: 7}},
+	}
+}
+
+// bySessionID indexes built rows by the agent session id they carry, and
+// separately returns the rows with no agent at all.
+func bySessionID(recs []PeerRecord) (map[string]PeerRecord, []PeerRecord) {
+	byID := map[string]PeerRecord{}
+	var agentless []PeerRecord
+	for _, r := range recs {
+		if r.Agent == nil {
+			agentless = append(agentless, r)
+			continue
+		}
+		byID[r.Agent.SessionID] = r
+	}
+	return byID, agentless
+}
+
+// TestBuild_V3FieldInvariants asserts spec §4.5's table on EVERY row whose
+// agent is a live cc entry: the address is host/canonical:suffix, the
+// canonical is non-empty, and label_source is "user" exactly when a label
+// is set. One loop over the whole fixture, because §4.5 is a property of
+// every such row rather than of a chosen one.
+func TestBuild_V3FieldInvariants(t *testing.T) {
+	recs := Build(v3Fixture())
+	live := 0
+	for _, r := range recs {
+		if !hasLiveEntry(r) {
+			continue
+		}
+		live++
+		if r.Canonical == "" {
+			t.Errorf("row %s: canonical = \"\", want the sessionId-derived id", r.Address)
+			continue
+		}
+		if want := CanonicalID(r.Agent.SessionID); r.Canonical != want {
+			t.Errorf("row %s: canonical = %q, want %q", r.Address, r.Canonical, want)
+		}
+		if want := "mini-lab/" + r.Canonical + ":" + r.Suffix; r.Address != want {
+			t.Errorf("row: address = %q, want %q", r.Address, want)
+		}
+		wantSource := ""
+		if r.Label != "" {
+			wantSource = LabelSourceUser
+		}
+		if r.LabelSource != wantSource {
+			t.Errorf("row %s: label %q has label_source %q, want %q", r.Address, r.Label, r.LabelSource, wantSource)
+		}
+	}
+	if live != 3 {
+		t.Fatalf("fixture produced %d live cc rows, want 3", live)
+	}
+}
+
+// TestBuild_NoLabel_EmptyLabelAndCanonicalAddress pins D4: a conversation
+// that has never claimed a label carries no label at all — not a
+// tmux-derived one, not a hash — and is still addressable.
+func TestBuild_NoLabel_EmptyLabelAndCanonicalAddress(t *testing.T) {
+	byID, _ := bySessionID(Build(v3Fixture()))
+	plain := byID["sid-plain"]
+	if plain.Label != "" || plain.LabelSource != "" {
+		t.Errorf("unlabelled row label/source = %q/%q, want \"\"/\"\"", plain.Label, plain.LabelSource)
+	}
+	want := "mini-lab/" + CanonicalID("sid-plain") + ":mt9-purdex-4a"
+	if plain.Address != want {
+		t.Errorf("unlabelled row address = %q, want %q", plain.Address, want)
+	}
+}
+
+// TestBuild_UserLabel_AddressStaysCanonical is D3's pin, and the single
+// most important assertion in this change: setting a label names the
+// conversation, it does not move it. The label is reported, label_source
+// says "user", and the address head is STILL the canonical id.
+func TestBuild_UserLabel_AddressStaysCanonical(t *testing.T) {
+	byID, _ := bySessionID(Build(v3Fixture()))
+	labelled := byID["sid-labelled"]
+	if labelled.Label != "purdex-tester" || labelled.LabelSource != LabelSourceUser {
+		t.Errorf("labelled row label/source = %q/%q, want purdex-tester/%s", labelled.Label, labelled.LabelSource, LabelSourceUser)
+	}
+	want := "mini-lab/" + CanonicalID("sid-labelled") + ":mt0-purdex-49"
+	if labelled.Address != want {
+		t.Errorf("labelled row address = %q, want %q — a label is not an address (D3)", labelled.Address, want)
+	}
+	if got := CanonicalID("sid-labelled"); labelled.Canonical != got {
+		t.Errorf("labelled row canonical = %q, want %q", labelled.Canonical, got)
+	}
+}
+
+// TestBuild_LabelRev_PassesThrough pins spec §4.4: LabelRev is still the
+// label's revision, carried straight through from the store. It stops
+// implying an address change; it does not stop existing.
+func TestBuild_LabelRev_PassesThrough(t *testing.T) {
+	byID, _ := bySessionID(Build(v3Fixture()))
+	if got := byID["sid-labelled"].LabelRev; got != 7 {
+		t.Errorf("labelled row label_rev = %d, want 7", got)
+	}
+	if got := byID["sid-plain"].LabelRev; got != 0 {
+		t.Errorf("unlabelled row label_rev = %d, want 0", got)
+	}
+}
+
+// TestBuild_AgentNullRow_NoCanonical pins the first of the three row kinds
+// §4.5 deliberately does NOT cover: a session row with no agent keeps the
+// tmux: address and has no canonical, which is what tells an SPA reading
+// label_source == "" apart from an unlabelled live conversation (§8.1).
+func TestBuild_AgentNullRow_NoCanonical(t *testing.T) {
+	_, agentless := bySessionID(Build(v3Fixture()))
+	if len(agentless) != 1 {
+		t.Fatalf("got %d agentless rows, want 1", len(agentless))
+	}
+	shell := agentless[0]
+	if shell.Canonical != "" {
+		t.Errorf("agentless row canonical = %q, want \"\"", shell.Canonical)
+	}
+	if shell.Address != "mini-lab/tmux:shell" {
+		t.Errorf("agentless row address = %q, want mini-lab/tmux:shell", shell.Address)
+	}
+}
+
+// TestBuild_ProxyAndOwnerFallbackRows_Unchanged pins the other two row
+// kinds §4.5 excludes: a proxy row keeps the retired, deliberately
+// unresolvable cc: form with no canonical, and an owner-fallback
+// (inbox_dead) row still renders an address — the canonical one, since
+// applyLabel is what writes it.
+func TestBuild_ProxyAndOwnerFallbackRows_Unchanged(t *testing.T) {
+	byID, _ := bySessionID(Build(v3Fixture()))
+
+	proxy := byID["sid-proxy"]
+	if proxy.Address != "mini-lab/cc:helper-1" || proxy.Reason != "proxy" || proxy.Deliverable {
+		t.Errorf("proxy row = %+v, want the unresolvable cc: form", proxy)
+	}
+	if proxy.Canonical != "" || proxy.Label != "" || proxy.LabelSource != "" {
+		t.Errorf("proxy row canonical/label/source = %q/%q/%q, want all empty", proxy.Canonical, proxy.Label, proxy.LabelSource)
+	}
+
+	dead := byID["sid-dead"]
+	if dead.Reason != "inbox_dead" || dead.Deliverable {
+		t.Fatalf("owner-fallback row = %+v, want a non-deliverable inbox_dead row", dead)
+	}
+	if want := "mini-lab/" + CanonicalID("sid-dead") + ":" + dead.Suffix; dead.Address != want {
+		t.Errorf("owner-fallback row address = %q, want %q", dead.Address, want)
+	}
+	if dead.Canonical != CanonicalID("sid-dead") {
+		t.Errorf("owner-fallback row canonical = %q, want %q", dead.Canonical, CanonicalID("sid-dead"))
+	}
+}
+
+// TestBuild_JSON_CanonicalKeyAlwaysPresent pins that `canonical` is on the
+// wire for every row, empty string included — a consumer must be able to
+// read it without checking whether the key exists (spec §6.1).
+func TestBuild_JSON_CanonicalKeyAlwaysPresent(t *testing.T) {
+	for _, rec := range Build(v3Fixture()) {
+		m := mustMarshalMap(t, rec)
+		if _, present := m["canonical"]; !present {
+			t.Errorf("record %+v missing key \"canonical\"", rec)
 		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -299,6 +300,12 @@ type sendEnv struct {
 
 // remoteRow is one deliverable cc row as the remote host "air" reports it
 // (its own alias/host_id/address — normalised by the sender).
+//
+// Canonical is set because spec §4.5 says a v3 daemon sets it on every row
+// with a live cc entry, and Resolve now reads a live cc row WITHOUT one as
+// proof that the whole batch came from a pre-v3 daemon (ErrRemoteTooOld).
+// Leaving it empty here would have made every send test in this file run
+// against a v2 peer without saying so.
 func remoteRow(sessionName, sessionCode string) ipeers.PeerRecord {
 	addr := remoteAlias + "/" + sessionName
 	if sessionName == "" {
@@ -308,6 +315,7 @@ func remoteRow(sessionName, sessionCode string) ipeers.PeerRecord {
 		Host:         remoteAlias,
 		HostID:       remoteHostID,
 		Address:      addr,
+		Canonical:    ipeers.CanonicalID(remoteSessionID),
 		SessionCode:  sessionCode,
 		SessionName:  sessionName,
 		TmuxInstance: "air-inst",
@@ -472,9 +480,10 @@ func TestSend_HappyPath(t *testing.T) {
 		ProcStart:      targetProcStart,
 		PeerName:       targetPeerName,
 		SessionName:    "cc:" + targetPeerName, // outside tmux ⇒ cc:<peer_name>
-		// v2 (spec §3.5): the origin row's "<label>:<suffix>" at its label
-		// row's revision (no label row ⇒ the default label, rev 0).
-		Address:      ipeers.DefaultLabel(targetSessionID) + ":" + targetPeerName,
+		// v3 (spec §4.4): the origin row's "<canonical>:<suffix>" at its
+		// label row's revision (no label row ⇒ rev 0). The head is the
+		// conversation's canonical id whether or not it has a label.
+		Address:      ipeers.CanonicalID(targetSessionID) + ":" + targetPeerName,
 		AddressRev:   0,
 		DeclaredMode: ipeers.ModeBypass,
 	}
@@ -682,26 +691,74 @@ func TestSend_OriginProxyRows(t *testing.T) {
 	})
 }
 
+// TestSend_Ambiguous pins the v3 shape of ambiguity: ONE conversation with
+// two live processes, so both rows carry the same canonical id and the one
+// address they share cannot pick between them. The labels are deliberately
+// different — under D3 a label is not what made this ambiguous and could
+// not have resolved it either.
 func TestSend_Ambiguous(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
+	canonical := ipeers.CanonicalID(remoteSessionID)
 	a := remoteRow("", "")
 	b := remoteRow("", "")
-	b.Agent.PID, b.Agent.SessionID = 778, "99999999-8888-4777-8666-666666666666"
-	a.Label, b.Label = "dup-label", "dup-label"
+	b.Agent.PID = 778
+	a.Canonical, b.Canonical = canonical, canonical
+	a.Label, b.Label = "purdex-tester", "purdex-tester-2"
+	// What the operator needs in order to tell the two apart, and what the
+	// refusal must therefore carry (spec §4.1/§6.4): agent name, pid, cwd.
+	// The address is exactly the thing that cannot do it — they share it.
+	a.Agent.PeerName, b.Agent.PeerName = "twin-1", "twin-2"
+	a.Cwd, b.Cwd = "/w/one", "/w/two"
 	// The remote claims another alias in its addresses: candidates must
 	// come back normalised to the entry's alias.
-	a.Address, b.Address = "zzz/dup-label", "zzz/dup-label"
+	a.Address, b.Address = "zzz/"+canonical, "zzz/"+canonical
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(a, b) })
 	req := s.sendReq()
-	req.To = remoteAlias + "/dup-label"
+	req.To = remoteAlias + "/" + canonical
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrAmbiguous)
-	want := []string{remoteAlias + "/dup-label", remoteAlias + "/dup-label"}
-	if len(ae.Candidates) != 2 || ae.Candidates[0] != want[0] || ae.Candidates[1] != want[1] {
-		t.Errorf("candidates = %v, want %v", ae.Candidates, want)
+	want := []ipeers.AmbiguousCandidate{
+		{Address: remoteAlias + "/" + canonical, AgentName: "twin-1", PID: remotePID, Cwd: "/w/one"},
+		{Address: remoteAlias + "/" + canonical, AgentName: "twin-2", PID: 778, Cwd: "/w/two"},
+	}
+	if !reflect.DeepEqual(ae.Candidates, want) {
+		t.Errorf("candidates = %+v, want %+v", ae.Candidates, want)
 	}
 	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
 		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+}
+
+// TestSend_AddressRevIsZeroAfterRelabel pins spec §4.4: LabelRev keeps
+// counting label changes, but a v3 address cannot change, so the revision
+// a v3 sender reports for its ADDRESS is 0 — permanently, however many
+// times the conversation has renamed itself. Sending LabelRev there (the
+// old wireFromRecord) announced an address change that never happened,
+// and the receiver's stale-rev/helper-rename path believed it.
+func TestSend_AddressRevIsZeroAfterRelabel(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+
+	// Claim once, then claim a different label: two revisions of the label
+	// row, neither of them a revision of the address.
+	if res := s.m.claim(s.targetSock, "purdex-tester"); res.err != nil {
+		t.Fatalf("first claim: %+v", res.err)
+	}
+	res := s.m.claim(s.targetSock, "purdex-tester-2")
+	if res.err != nil {
+		t.Fatalf("second claim: %+v", res.err)
+	}
+	if res.rec.LabelRev != 2 || res.rec.Label != "purdex-tester-2" {
+		t.Fatalf("after re-claim: label %q rev %d, want purdex-tester-2 rev 2", res.rec.Label, res.rec.LabelRev)
+	}
+
+	s.sendOK(s.sendReq())
+
+	from := s.onlyPost().req.From
+	if from.Address != ipeers.CanonicalID(targetSessionID)+":"+targetPeerName {
+		t.Errorf("from.address = %q, want the canonical head (a label never addresses)", from.Address)
+	}
+	if from.AddressRev != 0 {
+		t.Errorf("from.address_rev = %d, want 0: the label moved twice, the address never did", from.AddressRev)
 	}
 }
 
@@ -722,27 +779,74 @@ func TestSend_LegacyCCAddress(t *testing.T) {
 	}
 }
 
-// TestSend_PeerNotFoundTeachesTheNewAddressForm pins the peer_not_found
-// detail (default-label spec §4.1 via plan Task 5 item 5). Every "_xxxxxx"
-// address written down before the target host upgraded stops resolving the
-// moment that daemon restarts, so a stale hash is the likeliest way to
-// reach this branch: the detail names both the failed address and the one
-// command that lists the current ones. The wire "error" code stays
-// peer_not_found — assertRefused checks that — so nothing matching on it
-// breaks.
-func TestSend_PeerNotFoundTeachesTheNewAddressForm(t *testing.T) {
+// TestSend_PeerNotFoundTeachesTheCanonicalAddress pins the peer_not_found
+// detail (v3 spec §7). The hint this replaced taught the exact opposite of
+// what is now true — it told the reader an unnamed session is addressed by
+// its tmux session name "not by a _xxxxxx label", and a v3 address is
+// precisely the "_xxxxxxxx" form. A hint that is confidently backwards is
+// worse than none: it sends the reader to look up a string that cannot
+// address anyone. The detail must instead name the canonical id, say that
+// a label never addresses, and point at the two commands that print a live
+// address. The wire "error" code stays peer_not_found — assertRefused
+// checks that — so nothing matching on it breaks.
+func TestSend_PeerNotFoundTeachesTheCanonicalAddress(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	req := s.sendReq()
-	req.To = remoteAlias + "/_ab12cd" // a default label from before the upgrade
+	req.To = remoteAlias + "/_ab12cd" // a v2 six-digit head, no longer minted
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
-	for _, want := range []string{`"_ab12cd"`, `"` + remoteAlias + `"`, "pdx peers --all", "tmux session name"} {
+	for _, want := range []string{`"_ab12cd"`, `"` + remoteAlias + `"`, "pdx peers --all", "pdx msg whoami", "canonical"} {
+		if !strings.Contains(ae.Detail, want) {
+			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
+		}
+	}
+	if strings.Contains(ae.Detail, "tmux session name") {
+		t.Errorf("detail = %q, still teaches the tmux-name form as the address", ae.Detail)
+	}
+	if len(s.postCalls()) != 0 {
+		t.Errorf("posts = %d, want none", len(s.postCalls()))
+	}
+}
+
+// TestSend_RemoteTooOld pins the mixed-version refusal at the HTTP edge.
+// The upgrade is not atomic: while "air" still runs a pre-v3 daemon it
+// keeps PRINTING a label as the address head, so that is what an operator
+// on this side reads and types. Its rows carry no canonical, tier 1 cannot
+// match, and the fallback used to try the same string as a tmux session
+// NAME — which is how a message addressed to one conversation was
+// delivered to whichever one happened to sit in a tmux session of that
+// name (see the resolver's own regression test).
+//
+// The refusal gets its own code rather than peer_not_found because the two
+// prescribe opposite actions: peer_not_found says check the address, this
+// says upgrade the other host. It is 409, not 404 — the request is well
+// formed and the target host's state is what refuses it.
+func TestSend_RemoteTooOld(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	v2 := remoteRow(remoteSession, "fooc")
+	v2.Canonical = "" // a pre-v3 daemon has never heard of the field
+	v2.Label, v2.LabelSource = "purdex-tester", "user"
+	v2.Address = remoteAlias + "/purdex-tester:foo-purdex-b0"
+	s.env = remoteEnvelope(v2)
+
+	req := s.sendReq()
+	req.To = remoteAlias + "/purdex-tester" // the head that daemon prints
+	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrCodeRemoteTooOld)
+	for _, want := range []string{`"` + remoteAlias + `"`, "upgrade", "tmux:<name>"} {
 		if !strings.Contains(ae.Detail, want) {
 			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
 		}
 	}
 	if len(s.postCalls()) != 0 {
-		t.Errorf("posts = %d, want none", len(s.postCalls()))
+		t.Errorf("posts = %d, want none — nothing may leave on a guess", len(s.postCalls()))
+	}
+
+	// The escape hatch the detail names has to be real: "tmux:<name>" says
+	// a place outright, and a v2 daemon reports SessionName exactly as a v3
+	// one does, so it must still go through against the same old peer.
+	req.To = remoteAlias + "/tmux:" + remoteSession
+	if rr := s.send(adminCtx(), req); rr.Code != http.StatusOK {
+		t.Fatalf("tmux form: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -789,19 +893,12 @@ const (
 // target.
 //
 // spansTwoTmuxSessions gives that same live target a SECOND live process,
-// in tmux session "elsewhere". That is the only difference between the two
-// dead-holder tests, and it decides which resolution tier answers:
-//
-//   - false — the target's processes all sit in tmuxName, so it derives
-//     tmuxName as its default (spec §3.3 rule 1) and the bare name is
-//     answered at TIER 1 by the live agent itself.
-//   - true — a conversation with live processes in two different tmux
-//     sessions has no single place, so rule 1 gives it no place address
-//     and it keeps its v2 hash. Nothing live then carries the label
-//     tmuxName, tier 1 misses, and the bare name falls through to TIER 2.
-//
-// Both shapes occur in production: one Claude Code conversation resumed in
-// a pane of another tmux session is all it takes for the second.
+// in tmux session "elsewhere". Under v2 that flag decided which tier
+// answered the bare name, because it decided whether the target derived
+// tmuxName as its default label. Under D4 nothing is derived, so both
+// shapes now behave identically and only the spanning one is still
+// exercised; the parameter stays because the shape it builds (one
+// conversation, two tmux sessions) is real and worth keeping buildable.
 func deadHolderRows(t *testing.T, tmuxName string, spansTwoTmuxSessions bool) []ipeers.PeerRecord {
 	t.Helper()
 	const deadSID = "dddddddd-4444-4444-8444-444444444444"
@@ -837,11 +934,9 @@ func deadHolderRows(t *testing.T, tmuxName string, spansTwoTmuxSessions bool) []
 // Why the live target does NOT hold the tmux-derived default "foo-bar" is
 // a premise of this test, not a coincidence: it has a second live process
 // in tmux session "elsewhere" (deadHolderRows' spansTwoTmuxSessions), and
-// spec §3.3 rule 1 gives a conversation spread over two tmux sessions no
-// place address at all. So it keeps its v2 hash, nothing live is labelled
-// "foo-bar", and tier 2 is reached. Remove that second process and the
-// address would be answered at tier 1 instead — which is exactly what
-// TestSend_DeadHolderDoesNotBlockTmuxDefault covers.
+// Under v3 no live row is labelled at all unless it claimed one, so
+// nothing live carries "foo-bar" and tier 2 is always what answers the
+// bare name here.
 func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	rows := deadHolderRows(t, deadHolderTmuxName, targetSpansTwoTmuxSessions)
@@ -855,15 +950,15 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 		case r.SessionName == "stale":
 			sawDead = r.Reason == "inbox_dead" && r.Label == deadHolderTmuxName && r.Agent != nil && r.Agent.PID == 0
 		case r.SessionName == deadHolderTmuxName:
-			// The hash, spelled out rather than "anything but the name":
-			// the tier-2 path exists only while this holds, so a fixture
-			// change that quietly restores the place address fails here
+			// Spelled out rather than "anything but the name": the tier-2
+			// path exists only while nothing LIVE holds the label, so a
+			// fixture change that quietly labels this row fails here
 			// instead of silently retargeting the test at tier 1.
-			sawLive = r.Deliverable && r.Label == ipeers.DefaultLabel(remoteSessionID)
+			sawLive = r.Deliverable && r.Label == "" && r.Canonical == ipeers.CanonicalID(remoteSessionID)
 		}
 	}
 	if !sawDead || !sawLive {
-		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of %q and a deliverable tmux session %q whose own default is the hash %q", rows, deadHolderTmuxName, deadHolderTmuxName, ipeers.DefaultLabel(remoteSessionID))
+		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of %q and an unlabelled deliverable tmux session %q", rows, deadHolderTmuxName, deadHolderTmuxName)
 	}
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(rows...) })
 	req := s.sendReq()
@@ -873,8 +968,8 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	if resp.Result != ipeers.ResultDelivered {
 		t.Errorf("result = %q, want delivered", resp.Result)
 	}
-	if !strings.HasPrefix(resp.ToAddress, remoteAlias+"/"+ipeers.DefaultLabel(remoteSessionID)+":") {
-		t.Errorf("to_address = %q, want the tmux session %q's own hash-default address", resp.ToAddress, deadHolderTmuxName)
+	if !strings.HasPrefix(resp.ToAddress, remoteAlias+"/"+ipeers.CanonicalID(remoteSessionID)+":") {
+		t.Errorf("to_address = %q, want the tmux session %q's own canonical address", resp.ToAddress, deadHolderTmuxName)
 	}
 	post := s.onlyPost()
 	if post.req.To.AgentSessionID != remoteSessionID || post.req.To.PID != remotePID {
@@ -882,81 +977,23 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	}
 }
 
-// TestSend_DeadHolderDoesNotBlockTmuxDefault pins row 5 of the
-// default-label spec's §4 table: a user label held by a DEAD session does
-// not stop the live agent in the tmux session of the same name from
-// deriving it as its default (spec §3.3 rule 3 only counts sessions in the
-// live population). The address now lands at tier 1 instead of tier 2 —
-// and the row it lands on is the same one tier 2 reached before, so the
-// delivery is unchanged. That equality is asserted directly: resolving
-// "foo" and "tmux:foo" over the same rows must yield the same record.
-func TestSend_DeadHolderDoesNotBlockTmuxDefault(t *testing.T) {
-	s := newSendEnv(t, envOpts{})
-	// "foo", and the target's one live process sits in it — so unlike the
-	// test above it DOES derive the name as its default.
-	rows := deadHolderRows(t, remoteSession, targetInOneTmuxSession)
-	var live ipeers.PeerRecord
-	var sawDead bool
-	for _, r := range rows {
-		switch {
-		case r.SessionName == "stale":
-			sawDead = r.Reason == "inbox_dead" && r.Label == remoteSession && r.Agent != nil && r.Agent.PID == 0
-		case r.SessionName == remoteSession:
-			live = r
-		}
-	}
-	if !sawDead {
-		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of %q", rows, remoteSession)
-	}
-	// The dead holder is inert, so the live agent keeps the candidate.
-	if live.Label != remoteSession || live.LabelSource != ipeers.LabelSourceDefault {
-		t.Fatalf("live row label = %q/%q, want %q as a default label (the dead holder must not block it)", live.Label, live.LabelSource, remoteSession)
-	}
-
-	// Same row at both tiers: the bare name now hits tier 1, "tmux:<name>"
-	// still hits the explicit form, and they must agree.
-	tier1, err := ipeers.Resolve(rows, remoteSession, ipeers.ResolveSnapshot{})
-	if err != nil {
-		t.Fatalf("resolve %q: %v", remoteSession, err)
-	}
-	tier2, err := ipeers.Resolve(rows, "tmux:"+remoteSession, ipeers.ResolveSnapshot{})
-	if err != nil {
-		t.Fatalf("resolve tmux:%s: %v", remoteSession, err)
-	}
-	if tier1.Address != tier2.Address || tier1.Agent == nil || tier2.Agent == nil || *tier1.Agent != *tier2.Agent {
-		t.Errorf("tier 1 row = %+v, tier 2 row = %+v, want the same row", tier1, tier2)
-	}
-
-	s.set(func(s *sendEnv) { s.env = remoteEnvelope(rows...) })
-	resp := s.sendOK(s.sendReq()) // To: air/foo
-	if resp.Result != ipeers.ResultDelivered {
-		t.Errorf("result = %q, want delivered", resp.Result)
-	}
-	if resp.ToAddress != tier2.Address {
-		t.Errorf("to_address = %q, want %q — the very row tier 2 would have reached", resp.ToAddress, tier2.Address)
-	}
-	post := s.onlyPost()
-	if post.req.To.AgentSessionID != remoteSessionID || post.req.To.PID != remotePID {
-		t.Errorf("post to = %+v, want the live tuple in tmux %q", post.req.To, remoteSession)
-	}
-}
-
-// TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady pins X1 at the
-// module level: the remote reports one alive-but-undecodable registry file
-// and a single live row carrying the addressed label. That file may be a
+// TestSend_SingleHitUnderUnknownRegistryFileNotReady pins X1 at the module
+// level: the remote reports one alive-but-undecodable registry file and a
+// single live row carrying the addressed canonical id. That file may be a
 // second process of the same conversation, so the send is 503 not_ready
 // (Partial:true) with nothing posted — not a delivery to the one process
 // that happened to be readable.
-func TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady(t *testing.T) {
+func TestSend_SingleHitUnderUnknownRegistryFileNotReady(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	row := remoteRow("", "")
-	row.Label, row.LabelSource = "dup-label", "default"
+	row.Canonical = ipeers.CanonicalID(remoteSessionID)
+	row.Label, row.LabelSource = "purdex-tester", "user"
 	s.set(func(s *sendEnv) {
 		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row},
 			UnknownRegistryFiles: []string{"/reg/778.json"}}
 	})
 	req := s.sendReq()
-	req.To = remoteAlias + "/dup-label"
+	req.To = remoteAlias + "/" + row.Canonical
 
 	rr := s.send(adminCtx(), req)
 	if rr.Code != http.StatusServiceUnavailable {

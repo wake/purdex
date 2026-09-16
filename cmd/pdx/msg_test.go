@@ -205,23 +205,31 @@ func TestRunMsgSend_Success(t *testing.T) {
 	}
 }
 
-// TestRunMsgUsage_TeachesBothDefaultLabelForms pins what the grammar
-// rejection prints about addresses. Since an unnamed agent's default label
-// is now its tmux session name and the "_k3x9qz" hash is only the fallback
-// (default-label spec §2, §4.1), the usage text has to say both — a stale
-// hash address is the most likely reason someone is reading it — and point
-// at the one command that lists the current addresses.
-func TestRunMsgUsage_TeachesBothDefaultLabelForms(t *testing.T) {
+// TestRunMsgUsage_TeachesTheCanonicalAddress pins what the grammar
+// rejection prints about addresses. A label is no longer an address (spec
+// 1, D3), so the usage text must not offer one as the thing you type: it
+// names the canonical head, the explicit tmux form, and the two commands
+// that print a current address -- and it must say, in as many words, that
+// a label does not address anyone. That last sentence is the whole point
+// of the line: the reader most likely to be here is one who just ran
+// `pdx msg name` and assumed the name was reachable.
+func TestRunMsgUsage_TeachesTheCanonicalAddress(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runMsgCmd([]string{"send"}, fakeGetenv(nil), &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2; stderr=%q", code, stderr.String())
 	}
 	out := stderr.String()
-	for _, want := range []string{"tmux session", "mini-lab/purdex1", "_k3x9qz", "pdx peers --all", "pdx msg name"} {
+	for _, want := range []string{"<host>/<canonical>", "tmux:<name>", "_3k9f2mq4", "pdx peers --all", "pdx msg whoami"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("usage does not mention %q:\n%s", want, out)
 		}
+	}
+	if !strings.Contains(out, "never an address") {
+		t.Errorf("usage does not say a label is never an address:\n%s", out)
+	}
+	if strings.Contains(out, "<host>/<label>") {
+		t.Errorf("usage still offers <host>/<label> as the address form:\n%s", out)
 	}
 }
 
@@ -319,14 +327,38 @@ func TestRunMsgSend_ErrorRendering(t *testing.T) {
 			wantStderr: "pdx msg: air: dial tcp: connection refused\n",
 		},
 		{
+			// Spec §4.1/§7: an ambiguity refusal is SAFE, and the operator
+			// has to be able to SEE that. One line per candidate carrying
+			// agent name, pid and cwd is what turns "my address stopped
+			// working" into "two of my conversations share this address";
+			// without it the reader goes hunting a bug that is not there.
 			name:   "ambiguous",
+			status: http.StatusConflict,
+			body: ipeers.APIError{
+				Error:  ipeers.ErrAmbiguous,
+				Detail: `peer address "wake" is ambiguous (2 candidates)`,
+				Candidates: []ipeers.AmbiguousCandidate{
+					{Address: "air/_1c4m7dkz:mt0-twin-1", AgentName: "twin-1", PID: 41001, Cwd: "/w/one"},
+					{Address: "air/_1c4m7dkz:mt0-twin-2", AgentName: "twin-2", PID: 41002, Cwd: "/w/two"},
+				},
+			},
+			wantStderr: "pdx msg: ambiguous: wake\n" +
+				"  air/_1c4m7dkz:mt0-twin-1  agent twin-1  pid 41001  cwd /w/one\n" +
+				"  air/_1c4m7dkz:mt0-twin-2  agent twin-2  pid 41002  cwd /w/two\n",
+		},
+		{
+			// A candidate the daemon knows only by address still gets a
+			// line: the extra fields are advisory, the line is not.
+			name:   "ambiguous with a bare candidate",
 			status: http.StatusConflict,
 			body: ipeers.APIError{
 				Error:      ipeers.ErrAmbiguous,
 				Detail:     `peer address "wake" is ambiguous (2 candidates)`,
-				Candidates: []string{"air/wake-cc-1", "air/wake-cc-2"},
+				Candidates: []ipeers.AmbiguousCandidate{{Address: "air/_1c4m7dkz:mt0-twin-1"}, {Address: "air/tmux:zz", Cwd: "/w/two"}},
 			},
-			wantStderr: "pdx msg: ambiguous: wake\n  air/wake-cc-1\n  air/wake-cc-2\n",
+			wantStderr: "pdx msg: ambiguous: wake\n" +
+				"  air/_1c4m7dkz:mt0-twin-1\n" +
+				"  air/tmux:zz  cwd /w/two\n",
 		},
 		{
 			name:   "origin_unknown from daemon",
@@ -807,16 +839,20 @@ func TestParseMsgInvocation_NameAndWhoami(t *testing.T) {
 
 // --- whoami: POST /api/peers/self -------------------------------------------
 
+// TestRunMsgWhoami_Text pins the whoami block, including the canonical:
+// line (spec 7). An agent cannot derive its own canonical id -- it is a
+// hash of a sessionId the agent never sees -- so asking is the only way to
+// learn it, and whoami is where it asks.
 func TestRunMsgWhoami_Text(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/peers/self" {
 			t.Errorf("%s %s", r.Method, r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(ipeers.PeerRecord{
-			Host: "air", HostID: "air:9k2m4q", Address: "air/purdex-tester:purdex-3f",
-			Label: "purdex-tester", LabelSource: "user", LabelRev: 7,
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
+			Host: "air", HostID: "air:9k2m4q", Address: "air/_3k9f2mq4:purdex-3f",
+			Canonical: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", LabelRev: 7,
 			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "fa5d4c07-0000", PID: 76973},
-		})
+		}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
@@ -826,7 +862,11 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	want := "address:  air/purdex-tester:purdex-3f\nlabel:    purdex-tester (user, rev 7)\nhost:     air (air:9k2m4q)\nsession:  fa5d4c07-0000 pid 76973\n"
+	want := "address:    air/_3k9f2mq4:purdex-3f\n" +
+		"canonical:  _3k9f2mq4\n" +
+		"label:      purdex-tester (user, rev 7)\n" +
+		"host:       air (air:9k2m4q)\n" +
+		"session:    fa5d4c07-0000 pid 76973\n"
 	if out.String() != want {
 		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want)
 	}
@@ -847,19 +887,100 @@ func TestRunMsgWhoami_JSONPassthrough(t *testing.T) {
 	}
 }
 
+// TestRunMsgSelf_BarePeerRecordIsAVersionMismatch pins the other half of
+// the mixed-version story, the one that bites on a single host: `pdx` was
+// updated and the daemon was not yet restarted, so a self route answers
+// 200 with the v2 shape — a BARE PeerRecord, no envelope.
+//
+// encoding/json ignores unknown root fields, so that body unmarshals
+// happily into a zero SelfResponse and the CLI used to print a whoami
+// block of empty strings and exit 0: an agent asking who it is was told
+// it is nobody, successfully. The shape is checked instead, and a body
+// with no "peer" key is reported as what it is.
+//
+// Compatibility was deliberately not attempted. A v2 record's address head
+// is a label, so accepting it would hand the caller a v2-semantics address
+// while every other part of this build treats a head as a canonical id —
+// a wrong answer delivered confidently, which is worse than no answer.
+func TestRunMsgSelf_BarePeerRecordIsAVersionMismatch(t *testing.T) {
+	bare := `{"address":"air/x1:y","label":"x1","host":"air"}`
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"whoami", []string{"whoami"}},
+		{"name", []string{"name", "purdex-tester"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, bare)
+			}))
+			defer srv.Close()
+			cfgPath := writeTestConfig(t, srv.URL, "t")
+
+			var out, errb bytes.Buffer
+			code := runMsgCmd(append(c.args, "--config", cfgPath),
+				fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+			if code == 0 {
+				t.Fatalf("exit 0 on a v2 response; out %q", out.String())
+			}
+			if out.Len() != 0 {
+				t.Errorf("printed an identity anyway:\n%s", out.String())
+			}
+			for _, want := range []string{"daemon", "older", "restart"} {
+				if !strings.Contains(errb.String(), want) {
+					t.Errorf("stderr %q does not mention %q", errb.String(), want)
+				}
+			}
+		})
+	}
+}
+
+// TestRunMsgSelf_EnvelopeStillWorks pins that the shape check reads the
+// envelope and nothing else: a 200 carrying "peer" is decoded exactly as
+// before, warning included.
+func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{
+			Peer:    ipeers.PeerRecord{Address: "air/_3k9f2mq4:p-3f", Canonical: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user"},
+			Warning: &ipeers.SelfWarning{Code: ipeers.WarnLabelInUse, LiveLabels: []string{"purdex-tester"}},
+		})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "t")
+
+	var out, errb bytes.Buffer
+	code := runMsgCmd([]string{"whoami", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "canonical:  _3k9f2mq4") {
+		t.Errorf("out:\n%s", out.String())
+	}
+	if !strings.Contains(errb.String(), ipeers.WarnLabelInUse) {
+		t.Errorf("stderr:\n%s", errb.String())
+	}
+}
+
 // --- name: PUT/DELETE /api/peers/self/label ---------------------------------
 
-func TestRunMsgName_ClaimUsesPut(t *testing.T) {
+// TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress pins the success line
+// (spec 7): it names the label that was set AND the address, which did not
+// move. The agent that just named itself is the reader most likely to
+// assume the name is now reachable, and this line is where that assumption
+// is cheapest to refuse.
+func TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ipeers.ClaimLabelRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/label" || req.Label != "purdex-tester" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		json.NewEncoder(w).Encode(ipeers.PeerRecord{
-			Address: "air/purdex-tester:purdex-3f", Label: "purdex-tester", LabelSource: "user", LabelRev: 1,
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
+			Address: "air/_3k9f2mq4:purdex-3f", Canonical: "_3k9f2mq4",
+			Label: "purdex-tester", LabelSource: "user", LabelRev: 1,
 			Host: "air", HostID: "air:1",
-		})
+		}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
@@ -869,40 +990,70 @@ func TestRunMsgName_ClaimUsesPut(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	want := "named: air/purdex-tester:purdex-3f\naddress:  air/purdex-tester:purdex-3f\nlabel:    purdex-tester (user, rev 1)\nhost:     air (air:1)\n"
+	want := "named: purdex-tester (address unchanged: air/_3k9f2mq4:purdex-3f)\n" +
+		"address:    air/_3k9f2mq4:purdex-3f\n" +
+		"canonical:  _3k9f2mq4\n" +
+		"label:      purdex-tester (user, rev 1)\n" +
+		"host:       air (air:1)\n"
 	if out.String() != want {
 		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want)
 	}
 }
 
-func TestRunMsgName_TakenRendersLiveLabels(t *testing.T) {
+// TestRunMsgName_DuplicateWarnsAndExitsZero: a claim that lands on a label
+// another live session already holds is a SUCCESS (spec D5). The label is
+// set, the address is printed as usual, the warning names the other
+// holders and every live label — and the exit code is 0, because nothing
+// failed. Anything else would make the serial-number convention look like
+// an enforced rule again.
+func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ipeers.ClaimLabelRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/label" || req.Label != "purdex-tester" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(ipeers.APIError{Error: ipeers.ErrLabelTaken, Detail: `"purdex-tester" is held by a live session`, LiveLabels: []string{"purdex-dev", "purdex-tester"}})
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{
+			Peer: ipeers.PeerRecord{
+				Address: "air/_1c4m7dkz:mt0-n10", Label: "purdex-tester", LabelSource: "user", LabelRev: 3,
+				Host: "air", HostID: "air:1",
+			},
+			Warning: &ipeers.SelfWarning{
+				Code:       ipeers.WarnLabelInUse,
+				Detail:     `"purdex-tester" is also held by 1 other live session`,
+				Holders:    []ipeers.PeerRecord{{Address: "air/_9x2pq0af:n20", Label: "purdex-tester"}},
+				LiveLabels: []string{"purdex-dev", "purdex-tester"},
+			},
+		})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
 
 	var out, errb bytes.Buffer
 	code := runMsgCmd([]string{"name", "purdex-tester", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
-	if code != 1 {
-		t.Fatalf("exit %d", code)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — a duplicate label is a warning, not a failure; stderr=%s", code, errb.String())
 	}
-	want := "pdx msg: label_taken: \"purdex-tester\" is held by a live session\n  purdex-dev\n  purdex-tester\n"
-	if errb.String() != want {
-		t.Errorf("stderr:\n%s\nwant:\n%s", errb.String(), want)
+	wantErr := "pdx msg: warning: label_in_use: \"purdex-tester\" is also held by 1 other live session\n" +
+		"  also held by: air/_9x2pq0af:n20\n" +
+		"  live label: purdex-dev\n" +
+		"  live label: purdex-tester\n"
+	if errb.String() != wantErr {
+		t.Errorf("stderr:\n%s\nwant:\n%s", errb.String(), wantErr)
+	}
+	if !strings.HasPrefix(out.String(), "named: purdex-tester (address unchanged: air/_1c4m7dkz:mt0-n10)\n") {
+		t.Errorf("stdout:\n%s\nwant the label set and the unchanged address printed", out.String())
 	}
 }
 
-func TestRunMsgName_NotReadyRendersSkipped(t *testing.T) {
+// TestRunMsgName_NotReadyRendersGenericLine pins that not_ready now gets
+// the same one-line shape as any other error. It used to append the
+// registry files the daemon could not classify, but nothing sets that list
+// any more, so an extra indented section would only ever be empty.
+func TestRunMsgName_NotReadyRendersGenericLine(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "registry has unreadable files", Skipped: []string{"/r/4242.json"}})
+		json.NewEncoder(w).Encode(ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "registry has unreadable files"})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
@@ -912,7 +1063,7 @@ func TestRunMsgName_NotReadyRendersSkipped(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if errb.String() != "pdx msg: not_ready: registry has unreadable files\n  /r/4242.json\n" {
+	if errb.String() != "pdx msg: not_ready: registry has unreadable files\n" {
 		t.Errorf("stderr %q", errb.String())
 	}
 }
@@ -924,14 +1075,14 @@ func TestRunMsgName_Release_UsesDelete(t *testing.T) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/peers/self/label" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		json.NewEncoder(w).Encode(ipeers.PeerRecord{Address: "air/_k3x9qz:purdex-3f", Label: "_k3x9qz", LabelSource: "default", LabelRev: 2, Host: "air", HostID: "air:1"})
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/_3k9f2mq4:purdex-3f", Canonical: "_3k9f2mq4", LabelRev: 2, Host: "air", HostID: "air:1"}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
 
 	var out, errb bytes.Buffer
 	code := runMsgCmd([]string{"name", "--release", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
-	if code != 0 || !strings.HasPrefix(out.String(), "released: air/_k3x9qz:purdex-3f\n") {
+	if code != 0 || !strings.HasPrefix(out.String(), "released: the label (address unchanged: air/_3k9f2mq4:purdex-3f)\n") {
 		t.Fatalf("exit %d out %q err %q", code, out.String(), errb.String())
 	}
 }
@@ -965,19 +1116,22 @@ func TestRunMsgName_NoSocketEnv(t *testing.T) {
 	}
 }
 
-// pins the Task 6 deferred Minor: the unknown-flag message must speak the
-// v2 grammar (<host>/<label>[:<suffix>] | <host>/tmux:<name>), not the old
-// <host>/<session>.
-func TestRunMsgCmd_UnknownFlagMessage_V2Grammar(t *testing.T) {
+// the unknown-flag message must speak the v3 grammar
+// (<host>/<canonical>[:<suffix>] | <host>/tmux:<name>) -- not the v1
+// <host>/<session>, and not the v2 <host>/<label>, which now names a
+// string that addresses nobody.
+func TestRunMsgCmd_UnknownFlagMessage_V3Grammar(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := runMsgCmd([]string{"send", "air/x", "- first item"}, fakeGetenv(nil), &out, &errb)
 	if code != 2 {
 		t.Fatalf("exit %d", code)
 	}
-	if strings.Contains(errb.String(), "<host>/<session>") {
-		t.Errorf("stderr still uses the old grammar: %q", errb.String())
+	for _, stale := range []string{"<host>/<session>", "<host>/<label>"} {
+		if strings.Contains(errb.String(), stale) {
+			t.Errorf("stderr still uses the stale grammar %s: %q", stale, errb.String())
+		}
 	}
-	if !strings.Contains(errb.String(), "<host>/<label>[:<suffix>]") || !strings.Contains(errb.String(), "<host>/tmux:<name>") {
-		t.Errorf("stderr = %q, want the v2 grammar", errb.String())
+	if !strings.Contains(errb.String(), "<host>/<canonical>[:<suffix>]") || !strings.Contains(errb.String(), "<host>/tmux:<name>") {
+		t.Errorf("stderr = %q, want the v3 grammar", errb.String())
 	}
 }

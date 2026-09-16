@@ -1212,7 +1212,6 @@
   "peer.agent": "Agent",
   "peer.deliverable": "Deliverable",
   "peer.deliverable_yes": "yes",
-  "peer.default_label": "default label",
   "peer.none": "no peer",
   "peer.undetermined": "could not be determined",
   "peer.host_not_connected": "host not connected",

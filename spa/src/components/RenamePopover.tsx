@@ -127,13 +127,6 @@ function PanePeerSection({ target }: { target: RenameTargetPane }) {
             >
               {row.address}
             </button>
-            {/* `pdx peers` marks these too: the marker is the only thing that
-                tells a default apart from a user label of the same shape. */}
-            {row.labelSource === 'default' && (
-              <span data-testid={`peer-default-marker-${pid}`} className="shrink-0 rounded border border-border-subtle px-1 text-[10px] text-text-muted">
-                {t('peer.default_label')}
-              </span>
-            )}
           </span>
         </DetailRow>
       )}

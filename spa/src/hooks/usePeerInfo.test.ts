@@ -16,8 +16,9 @@ const cwdRefresh = vi.fn(async (_hostId: string, _code: string) => {})
 
 const ROW: PeerRow = {
   address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
+  canonical: '_3k9f2mq4',
   label: 'ai-chat4',
-  labelSource: 'default',
+  labelSource: 'user',
   deliverable: true,
   reason: '',
   tmuxInstance: GEN,
