@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.366] - 2026-09-17
+
+### Fix: 狀態列的 peer 段落對齊與間距（#1088、#1089）
+
+alpha.365 上線後由真機截圖回報：cwd / agent / peer id 三段比旁邊的 host 與 session name 暗，間距也太寬。**這正是 #1085 自己標記為「跑不到、不粉飾」的那項驗證**——jsdom 沒有 layout 引擎，也不可能抓到顏色繼承。
+
+**#1088 — 顏色繼承**：容器是 `text-text-muted`，host 與 session name 各自指定了 `text-text-secondary`，三個新段落沒有。class 移到 `CopySegment` 的 base，新段落無法再忘記。
+
+**#1089 — 不再用亮度表達「可能過期」**：#1088 把 stale 的 `opacity-50` 放寬到 70%，方向仍是錯的。第二張截圖指出同一件事——**在一行裡，比鄰居暗的段落讀起來是「壞掉了」而不是「暫定」，沒有哪個 opacity 能說出「這可能過期」而不同時說成「這被停用」**。文字因此完全不再變暗（peer id 與 agent 與 host 同色），狀態移到旁邊的 refresh 控制項：轉琥珀色、tooltip 帶原因。它就在它所修飾的值旁邊，而且本身就是修好那個狀態的東西。
+
+分隔間距 `mx-2` → `mx-1`：八個段落各隔 16px 讀起來像一串不相干的項目，不像一行狀態。
+
+兩條新測試釘住新行為：stale 的段落必須與 host 同色且**不含任何 opacity class**、refresh 必須帶 `data-stale`。下次有人想「讓它暗一點表示過期」會直接撞到紅燈。
+
+- 測試 453 檔 / 5983，lint 與 build 全綠。
+
 ## [1.0.0-alpha.365] - 2026-09-17
 
 ### Feat: peer 資訊進 tab 資訊面板與狀態列（#1085）
