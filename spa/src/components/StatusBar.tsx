@@ -290,7 +290,14 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   // The peer id shows the label and copies the address: a label alone is not
   // addressable without its host, and someone copying "the peer id" means to
   // paste something `pdx msg send` accepts.
-  const peerRow = peer.row
+  //
+  // A failed refresh shows nothing at all (spec §6): the cache still holds the
+  // last answer, but that is precisely the answer the daemon has just failed to
+  // confirm, and these segments are click-to-copy — a stale address pasted into
+  // `pdx msg send` reaches the wrong agent. The error stays in the tooltip, and
+  // the refresh control is right there. (Being *not connected* is different: the
+  // status segment already says so, and §6 keeps the last rows, dimmed.)
+  const peerRow = peer.error ? null : peer.row
   const peerLabel = peerRow?.label ?? ''
   const peerUncertain = peerRow?.reason === 'inbox_dead' || peerRow?.reason === 'ambiguous'
   const peerDim = !peer.connected || peer.stale || peerUncertain

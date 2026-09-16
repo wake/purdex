@@ -473,6 +473,31 @@ describe('StatusBar peer segments', () => {
     expect(seg.getAttribute('title')).toMatch(tooltip)
   })
 
+  // A failed refresh is not a stale address with a warning on it: spec §6 says
+  // the status bar shows `—` and keeps the error in the tooltip. The row the
+  // cache still holds is the row the daemon has just refused to confirm, and the
+  // segment is click-to-copy — the value would go into `pdx msg send`.
+  it('shows an em dash, not the last known address, when the refresh failed', () => {
+    seedPeers({ error: 'connection refused' })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toBe('—')
+    expect(seg.getAttribute('title')).toMatch(/connection refused/)
+    expect(screen.getByTestId('status-seg-agent').textContent).toBe('—')
+    expect(screen.getByTestId('status-seg-agent').getAttribute('title')).toMatch(/connection refused/)
+  })
+
+  it('offers nothing to copy while the refresh is failing', () => {
+    seedPeers({ error: 'connection refused' })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    for (const testId of ['status-seg-peer-id', 'status-seg-agent']) {
+      const seg = screen.getByTestId(testId)
+      expect(seg, testId).toBeDisabled()
+      fireEvent.click(seg)
+    }
+    expect(copyTextMock).not.toHaveBeenCalled()
+  })
+
   it('renders an em dash for a row whose label is empty (no cc agent)', () => {
     seedPeers({}, { ...PEER_ROW, label: '', address: '', agent: null })
     render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
