@@ -208,6 +208,12 @@ describe('RenamePopover', () => {
 describe('RenamePopover peer section', () => {
   const H1 = 'h1'
   const H2 = 'h2'
+  /**
+   * The tmux server generation. A peer row joins to a pane on (host, session
+   * code, generation): tmux hands `$N` out from zero again after a restart, and
+   * a session code is `$N` re-encoded, so the code alone can name two sessions.
+   */
+  const GEN = '111:1000'
 
   const peerRefresh = vi.fn(async (_hostId: string) => {})
   const cwdRefresh = vi.fn(async (_hostId: string, _code: string) => {})
@@ -218,6 +224,7 @@ describe('RenamePopover peer section', () => {
     labelSource: 'default',
     deliverable: true,
     reason: '',
+    tmuxInstance: GEN,
     agent: { type: 'cc', peerName: 'ai-chat-story-3a', status: 'idle' },
   }
 
@@ -270,11 +277,11 @@ describe('RenamePopover peer section', () => {
   }
 
   /** The pane is reconciled: the session exists in the session store. */
-  function seedSession(hostId: string, code: string) {
+  function seedSession(hostId: string, code: string, tmux_instance: string | undefined = GEN) {
     useSessionStore.setState({
       sessions: {
         ...useSessionStore.getState().sessions,
-        [hostId]: [{ code, name: 'dev', cwd: '/start/dir', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }],
+        [hostId]: [{ code, name: 'dev', cwd: '/start/dir', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance }],
       },
     })
   }
@@ -501,6 +508,38 @@ describe('RenamePopover peer section', () => {
       render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane({ mode: 'stream' }))} />)
       expect(screen.queryByTestId('rename-pane-block-p1')).toBeNull()
       expect(screen.queryByTestId('peer-section-p1')).toBeNull()
+    })
+  })
+
+  // The row joins on the tmux generation as well as the code, for the same
+  // reason the status bar does: a row cached before a tmux restart carries
+  // another session's address under a reused code, and this one is copyable.
+  describe('the tmux generation', () => {
+    it('shows the address when the pane and the row share a generation', () => {
+      seedSession(H1, 'abc123')
+      seedHost(H1, 'abc123', ROW)
+      render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
+      expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat4')
+    })
+
+    it.each([
+      ['the row is from another tmux server', GEN, '999:2000'],
+      ['the daemon did not stamp the row', GEN, ''],
+      ['the pane generation is unknown', '', GEN],
+    ])('shows no peer when %s', (_label, paneGen, rowGen) => {
+      seedSession(H1, 'abc123', paneGen)
+      seedHost(H1, 'abc123', { ...ROW, tmuxInstance: rowGen })
+      render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
+      expect(screen.queryByTestId('peer-address-p1')).toBeNull()
+      expect(screen.getByTestId('peer-status-p1').textContent).toBe('no peer')
+    })
+
+    it('keeps the section rendered, with its refresh control, on a mismatch', () => {
+      seedSession(H1, 'abc123', '999:2000')
+      seedHost(H1, 'abc123', ROW)
+      render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
+      expect(screen.getByTestId('peer-section-p1')).toBeInTheDocument()
+      expect(screen.getByTestId('peer-refresh-p1')).toBeEnabled()
     })
   })
 })

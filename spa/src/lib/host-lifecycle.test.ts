@@ -931,7 +931,8 @@ function seedPeers(...hostIds: string[]) {
   for (const id of hostIds) {
     byHost[id] = { ...emptyPeerHostEntry(), fetchedAt: 1, rows: { s1: {
       address: `${id}/label:label-agent`, label: 'label', labelSource: 'default',
-      deliverable: true, reason: '', agent: { type: 'cc', peerName: 'agent', status: 'idle' },
+      deliverable: true, reason: '', tmuxInstance: '1:1',
+      agent: { type: 'cc', peerName: 'agent', status: 'idle' },
     } } }
     cwdByHost[id] = { s1: { cwd: `/somewhere/${id}`, fetchedAt: 1, loading: false, error: null } }
   }

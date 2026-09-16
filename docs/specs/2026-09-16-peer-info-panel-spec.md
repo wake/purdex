@@ -101,6 +101,17 @@ rather than a rule anyone promised to keep. `inbox_dead` and `ambiguous` rows
 are session rows and *do* keep their code; they are indexed, and §6 says what
 they render.
 
+**The join is (host, session code, tmux generation).** A session code is tmux's
+`$N` re-encoded, and tmux hands `$N` out from zero again after a restart — so
+`rows[code]` on its own can be a *different* session's address, and this value
+is copied into `pdx msg send`. Each row therefore keeps its `tmux_instance`, and
+a reader uses the row only when it equals the pane's own generation
+(`Session.tmux_instance`, the value the daemon stamped on the payload that
+carried the session). `''` on either side is "the daemon could not say" and is
+never a match: a mismatch renders exactly as no peer, in both landing sites. The
+generation gates what is *read*, never what is fetched — a pane whose generation
+is not known yet still warms the host's cache.
+
 **Invalidation.** `forgetHost` runs when a host is removed, its endpoint
 changes, or its token changes — a cached address belongs to a daemon identity,
 and keeping it across a re-point would show one machine's peers under
@@ -244,6 +255,7 @@ other live-only rows.
 | no row, envelope complete | "no peer" | `—` |
 | row exists, `label: ""` (no cc agent) | agent row only, no address | `—` for peer id |
 | row is `inbox_dead` / `ambiguous` | address shown with the reason | address shown, dimmed |
+| row's `tmux_instance` differs from the pane's, or either is `''` | no address, agent or deliverability — exactly as "no peer"; the section and its refresh control stay | `—` for peer id and agent |
 | pane terminated | no peer section | primary pane terminated → existing behaviour, no peer id |
 | session gone from the daemon | no peer section (the pane is marked terminated by the WS) | `—` |
 | session not yet in `useSessionStore` (pane not reconciled) | block renders with a spinner, no error | `—`, no error |

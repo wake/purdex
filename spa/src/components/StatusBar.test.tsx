@@ -19,6 +19,12 @@ vi.mock('../lib/copy-text', () => ({ copyText: vi.fn(async () => {}) }))
 const copyTextMock = vi.mocked(copyText)
 
 const HOST_ID = 'test-host'
+/**
+ * The tmux server generation. The pane's own generation comes from
+ * `Session.tmux_instance`, and only a peer row stamped with the same one is
+ * this pane's — tmux reuses `$N`, and a session code is `$N` re-encoded.
+ */
+const GEN = '6901:1789205013'
 
 // The peer stores are stubbed for *every* test in this file, not only the new
 // ones: `usePeerInfo` runs on every render of a session status bar, so an
@@ -31,7 +37,7 @@ function setupStores() {
   useSessionStore.setState({
     sessions: {
       [HOST_ID]: [
-        { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+        { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: GEN },
       ],
     },
     activeHostId: HOST_ID,
@@ -63,6 +69,7 @@ const PEER_ROW: PeerRow = {
   labelSource: 'default',
   deliverable: true,
   reason: '',
+  tmuxInstance: GEN,
   agent: { type: 'cc', peerName: 'ai-chat-story-3a', status: 'idle' },
 }
 
@@ -314,7 +321,7 @@ describe('StatusBar agent pane title', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'plan review' },
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: GEN, pane_title: 'plan review' },
         ],
       },
       activeHostId: HOST_ID,
@@ -336,7 +343,7 @@ describe('StatusBar agent pane title', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'plan review' },
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: GEN, pane_title: 'plan review' },
         ],
       },
       activeHostId: HOST_ID,
@@ -501,7 +508,7 @@ describe('StatusBar peer segments', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'plan review' },
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: GEN, pane_title: 'plan review' },
         ],
       },
       activeHostId: HOST_ID,
@@ -551,11 +558,77 @@ describe('StatusBar peer segments', () => {
     // handed its session code to somebody else — so asking would risk
     // rendering, and copying, a stranger's address.
     ['a terminated tmux pane', {
-      kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', terminated: true,
+      kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal',
+      cachedName: '', tmuxInstance: GEN, terminated: 'tmux-restarted',
     } as PaneContent],
   ])('does not fetch peer data for %s', (_label, content) => {
     render(<StatusBar activeTab={content ? makeTab('t1', content) : null} onViewModeChange={vi.fn()} />)
     expect(peerRefresh).not.toHaveBeenCalled()
     expect(cwdRefresh).not.toHaveBeenCalled()
+  })
+})
+
+// The join is (host, session code, tmux generation), never (host, session code)
+// alone: tmux hands `$N` out from zero again after a restart, so a row cached
+// before the restart can carry another session's address under this pane's code.
+// Showing it is bad; this segment is click-to-copy, so it would be pasted into
+// `pdx msg send` and reach a stranger's agent.
+describe('StatusBar peer generation', () => {
+  beforeEach(() => {
+    setupStores()
+    useUploadStore.setState({ sessions: {} })
+    seedPeers()
+    seedCwd('/Users/wake/Workspace/wake/purdex')
+  })
+
+  function setSessionGeneration(tmux_instance: string | undefined) {
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance },
+        ],
+      },
+      activeHostId: HOST_ID,
+      activeCode: null,
+    })
+  }
+
+  it('shows the peer id when the pane and the row share a generation', () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('ai-chat4')
+  })
+
+  it.each([
+    ['the row is from another tmux server', GEN, '4242:1700000000'],
+    ['the pane generation is unknown', '', GEN],
+    ['the daemon did not stamp the row', GEN, ''],
+    ['neither side knows', '', ''],
+  ])('shows no peer when %s', (_label, paneGen, rowGen) => {
+    setSessionGeneration(paneGen)
+    seedPeers({}, { ...PEER_ROW, tmuxInstance: rowGen })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('—')
+    expect(screen.getByTestId('status-seg-agent').textContent).toBe('—')
+  })
+
+  it('offers nothing to copy for a row from another generation', () => {
+    setSessionGeneration('4242:1700000000')
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg).toBeDisabled()
+    fireEvent.click(seg)
+    expect(copyTextMock).not.toHaveBeenCalled()
+  })
+
+  it('shows no peer for a session the store has not reconciled yet — no generation to match on', () => {
+    setSessionGeneration(undefined)
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('—')
+  })
+
+  it('still shows the cwd on a generation mismatch — that reading is the daemon’s answer for this pane', () => {
+    setSessionGeneration('4242:1700000000')
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/wake/Workspace/wake/purdex')
   })
 })

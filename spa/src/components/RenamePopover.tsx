@@ -80,10 +80,15 @@ function partialCause(envelope: PeerEnvelopeFlags, t: T): string {
  */
 function PanePeerSection({ target }: { target: RenameTargetPane }) {
   const t = useI18nStore((s) => s.t)
-  const peer = usePeerInfo(target.hostId, target.sessionCode)
   // A pane whose session the store has not reconciled yet is not a pane with
   // no peer — it is a pane whose answer has not arrived.
   const reconciled = useSessionStore((s) => (s.sessions[target.hostId] ?? []).some((sess) => sess.code === target.sessionCode))
+  // This pane's tmux generation, as the daemon last described the session —
+  // not `target.tmuxInstance`, which is the generation the *record* was written
+  // in and is exactly what a rebuild is meant to change. A peer row is this
+  // pane's only if it names the same tmux server; see `usePeerInfo`.
+  const paneGeneration = useSessionStore((s) => (s.sessions[target.hostId] ?? []).find((sess) => sess.code === target.sessionCode)?.tmux_instance ?? '')
+  const peer = usePeerInfo(target.hostId, target.sessionCode, paneGeneration)
   const [feedback, setFeedback] = useState('')
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current) }, [])

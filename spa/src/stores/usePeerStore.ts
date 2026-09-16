@@ -28,6 +28,17 @@ export interface PeerRow {
   labelSource: string   // user | default | ''
   deliverable: boolean
   reason: string        // '' | no_agent | not_cc | inbox_dead | proxy | ambiguous
+  /**
+   * The tmux server generation this row describes (`<server pid>:<start time>`),
+   * `''` when the daemon could not say.
+   *
+   * Not displayed — it is what makes the join sound. A session code is tmux's
+   * `$N` re-encoded and tmux hands `$N` out from zero again after a restart, so
+   * `rows[code]` alone can be a *different* session's address. Readers match
+   * this against the pane's own generation and treat `''` on either side as
+   * unknown, never as a match.
+   */
+  tmuxInstance: string
   agent: PeerAgent | null
 }
 
@@ -82,6 +93,7 @@ export function indexPeerRows(peers: PeerRecordWire[]): Record<string, PeerRow> 
       labelSource: p.label_source,
       deliverable: p.deliverable,
       reason: p.reason,
+      tmuxInstance: p.tmux_instance ?? '',
       agent: p.agent
         ? { type: p.agent.type, peerName: p.agent.peer_name ?? '', status: p.agent.status ?? '' }
         : null,

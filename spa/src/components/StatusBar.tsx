@@ -215,8 +215,18 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   // have been handed to a different session by a tmux restart — so asking for
   // it would not merely be pointless, it could render and copy a stranger's
   // address. Nulls here are how this component declines to ask.
+  //
+  // The same restart threatens a *live* pane too, from the other side: a peers
+  // answer cached before it carries another session's address under this code.
+  // The third argument is this pane's tmux generation, read from the session the
+  // daemon most recently described; the hook returns a row only when the two
+  // agree. `undefined` — a session not reconciled yet — is unknown, not a match.
   const primaryTerminated = !!(primaryContent && primaryContent.kind === 'tmux-session' && primaryContent.terminated)
-  const peer = usePeerInfo(primaryTerminated ? null : agentHostId, primaryTerminated ? null : agentSessionCode)
+  const peer = usePeerInfo(
+    primaryTerminated ? null : agentHostId,
+    primaryTerminated ? null : agentSessionCode,
+    session?.tmux_instance ?? '',
+  )
 
   // One confirmation for five copy buttons, in a fixed slot, so a copy never
   // reflows the row (spec §4.2).

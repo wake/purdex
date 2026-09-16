@@ -82,9 +82,19 @@ describe('indexing', () => {
         labelSource: 'default',
         deliverable: true,
         reason: '',
+        // Kept because a session code alone does not identify a session: tmux
+        // hands `$N` out from zero again after a restart, so the reader has to
+        // check that the row and the pane describe the same tmux server.
+        tmuxInstance: '6901:1789205013',
         agent: { type: 'cc', peerName: 'ai-chat-story-3a', status: 'idle' },
       },
     })
+  })
+
+  it('keeps an absent tmux_instance as the empty string — unknown, never a match', async () => {
+    vi.mocked(api.fetchPeers).mockResolvedValue(envelope([row({ tmux_instance: '' })]))
+    await usePeerStore.getState().refresh(H)
+    expect(usePeerStore.getState().byHost[H].rows.z141yl.tmuxInstance).toBe('')
   })
 
   it('indexes inbox_dead and ambiguous session rows — they are session rows and keep their codes', async () => {

@@ -22,8 +22,25 @@ import { useSessionCwdStore } from '../stores/useSessionCwdStore'
  */
 export const PEER_STALE_AFTER_MS = 60_000
 
+/**
+ * Does a cached row describe the same tmux server as the pane in front of us?
+ *
+ * A session code is tmux's `$N` re-encoded, and tmux hands `$N` out from zero
+ * again after a restart — so a row cached before a restart can carry a
+ * *different* session's address under this pane's code. `''` on either side is
+ * "the daemon could not say", and an unknown is never a match: the cost of
+ * withholding a real address is a dash on screen, the cost of showing a wrong
+ * one is a message delivered to a stranger's agent.
+ */
+function sameGeneration(pane: string | null, row: string): boolean {
+  return !!pane && pane !== '' && row !== '' && pane === row
+}
+
 export interface PeerInfo {
-  /** This session's peer row, or `null` when the host's answer has none for it. */
+  /**
+   * This session's peer row — `null` when the host's answer has none for it,
+   * and equally when the row it has describes another tmux generation.
+   */
   row: PeerRow | null
   /** `pane_current_path` for this session; `''` when not read yet. */
   cwd: string
@@ -56,11 +73,18 @@ export interface PeerInfo {
  * `undefined` is the normal moment just after a WS opens, and `unavailable` is
  * a host whose daemon answers but has no tmux sessions, which is a real answer.
  * The cheap cwd read is the exception: it re-runs per activated session.
+ *
+ * `tmuxInstance` is the pane's own tmux generation — `Session.tmux_instance`,
+ * the value the daemon stamped on the payload that carried this session. Only a
+ * row from the same generation is returned; see {@link sameGeneration}. It gates
+ * what is *read*, never what is fetched: a pane whose generation is not known
+ * yet still warms the host's cache, it just shows nothing until it is.
  */
-export function usePeerInfo(hostId: string | null, sessionCode: string | null): PeerInfo {
+export function usePeerInfo(hostId: string | null, sessionCode: string | null, tmuxInstance: string | null): PeerInfo {
   const connected = useHostStore((s) => (hostId ? s.runtime[hostId]?.status === 'connected' : false))
 
-  const row = usePeerStore((s) => (hostId && sessionCode ? s.byHost[hostId]?.rows[sessionCode] ?? null : null))
+  const cached = usePeerStore((s) => (hostId && sessionCode ? s.byHost[hostId]?.rows[sessionCode] ?? null : null))
+  const row = cached && sameGeneration(tmuxInstance, cached.tmuxInstance) ? cached : null
   const envelope = usePeerStore((s) => (hostId ? s.byHost[hostId]?.envelope : undefined) ?? EMPTY_PEER_HOST_ENTRY.envelope)
   const fetchedAt = usePeerStore((s) => (hostId ? s.byHost[hostId]?.fetchedAt ?? 0 : 0))
   const peersLoading = usePeerStore((s) => (hostId ? s.byHost[hostId]?.loading ?? false : false))
