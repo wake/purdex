@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.363] - 2026-09-16
+
+### Feat: 未命名 session 的預設 peer label 改用 tmux session 名（#1079）
+
+全機 14 個 agent 命名率 0%，所以大家實際打的地址就是 `mini-lab/_d4t5cs`。完整形式 `mini-lab/_d4t5cs:ai-chat4-ai-chat-story-3a` 裡兩個看得懂的識別（tmux 名 `ai-chat4`、CC 名 `ai-chat-story-3a`）全在 **suffix**——那是 resolver 會丟棄、文件還明說「打不打都一樣」的部分。Peer Address v2 的好處要等使用者命名才出現，噪音卻無條件先付。
+
+現在未命名 session 的預設 label ＝ 它所在的 **tmux session 名**：`mini-lab/purdex1:purdex1-purdex-69`。
+
+- **語意**：default label ＝ **位置**（那個 tmux session 裡的那個 live agent），user label ＝ **對話**。這正是 `tmux:<name>` fallback 一直以來的語意，只是改成講明白，而不是再鑄一個不可讀的識別碼。
+- **不 sanitize**：tmux 名必須**本身就是合法 label** 才算數。轉換過的名字是**另一個字串**，而那個字串可能正是同主機上另一個真實 session 的名字（`foo.bar` → `foo-bar`），tier 1 會搶在 tier 2 之前回答一個呼叫者從沒指的 session。實測本機 14 個 agent 的 tmux 名全部本來就合格。
+- **歧義一律退回 hash**：`_xxxxxx` 從常態變成 fallback。競爭者共五種——同名的另一個候選值、只是「人在那個 session 裡」但自己沒有候選值的對話、把該名字當 user label 持有的 live 對話、**讀不到的** label store、以及會被轉換名影射到的另一個真實 session。任何一種出現，相關各方全部退回 hash。
+- **`Resolve` 未動**（含 tier 2），只有 tier 1 會命中的字串集合變了。
+- **列表與 whoami 必須逐字元相同**：兩邊都只從「live、非 proxy 的 registry entries」這**一個** population 導出預設值，因為 whoami 讀不到 tmux inventory。`TestSelf_AddressMatchesListing` 是那條絆線，實作途中真的絆到過一次。
+- `release` 在寫入前多讀一次 label store（讀失敗 → `store_unavailable` 且不寫）。
+- `peer_not_found` 的訊息會教新形式；`pdx peers` 仍以 `*` 標記 default。
+- **不相容**：升級後所有未命名 agent 的舊 `_hash` 地址立即失效（不是改名後才失效）。失敗是 loud 的 `peer_not_found` 並指向 `pdx peers --all`，**不會誤投遞**。已否決「保留 legacy hash tier」的緩解方案——那會讓每列同時有兩個地址，並保住正要淘汰的那個識別碼。
+- **Review**：spec 一輪、plan 一輪、PR 四輪（R1 標準；R2 攻擊／防守／體質三份平行；R3 收斂）。R2 三份各回報一個 high，**全部是同一個 bug 的三種化身**：§2.2 那條不變量的「不指向其他任何東西」被少數了三種東西。R3 無 finding。
+- **延後**：拆 `internal/peers/label.go`、`applyLabel`／`EntryRecord` 改參數物件、精簡新測試裡複述 spec 的註解。
+- 測試 Go 全綠；SPA 未動（`rg "api/peers" spa/src` 零命中）。
+
 ## [1.0.0-alpha.362] - 2026-09-16
 
 ### Feat: 多主機分頁改用 host badge，取代漸層色標（#1077）
