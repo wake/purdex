@@ -16,7 +16,7 @@ Design settled interactively in `docs/pages/host-color-lab.html` (soft / 淡底�
 | # | Decision |
 |---|----------|
 | D1 | Appearance = **tinted box + host icon** ("淡底色"): background = host color at low opacity, icon strokes = host color at full opacity. |
-| D2 | Position = **between the terminal icon and the title group**. The agent (`✳`) icon belongs to the title group and is never separated from it. |
+| D2 | Position = **between the tab's icon slot and the title**. Verified against the code: a row renders exactly one icon slot (`renderInlineTabIcon` / `TabIcon`, whose `IconComponent` is `agentIcon ?? paneIcon`) followed by the title span; the green `✳` the user sees is **part of the title text** (the agent writes it into the pane title), not a separate element. So no icon/title restructuring is needed — the badge is inserted between those two existing children. |
 | D3 | The box size **matches the row's text box** (default 16px); the icon is **inset 2px** inside it (icon = box − 2×inset); corner radius default 4px. |
 | D4 | Settings expose **two colors + opacity**: icon line color (host color or neutral) with its own opacity, and background opacity. Sidebar and top tabs are configured **separately**. |
 | D5 | Each host picks **its own icon**, exactly like a workspace: the existing Phosphor picker, including weight (duotone available). |
@@ -93,8 +93,8 @@ interface HostBadgeProps {
 
 | Surface | File | Placement |
 |---|---|---|
-| Sidebar row | `features/workspace/components/InlineTab.tsx` | directly after the terminal-icon slot, **before** `renderInlineTabIcon`'s agent icon + title |
-| Top tab (normal only) | `components/SortableTab.tsx` | after `TabIcon`, before the title |
+| Sidebar row | `features/workspace/components/InlineTab.tsx` | between `renderInlineTabIcon({...})` and `<span data-testid="inline-tab-title">` |
+| Top tab (normal only) | `components/SortableTab.tsx` | between `<TabIcon …/>` and the title span |
 | Top tab (**pinned**) | `components/SortableTab.tsx` | **no badge** — a pinned tab is `w-9` (36px) and icon-only; a 16px badge plus `gap-1.5` would overflow it. Pinned tabs keep their hover tooltip for identification. |
 
 Gap handling: the badge participates in the row's existing `gap-1.5`, so no extra margins.

@@ -17,6 +17,14 @@ Rules for every task:
 
 Waves: **A** = T1, T2 (parallel) → **B** = T3, T4 (parallel) → **C** = T5 → **D** = T6 → **E** = T7.
 
+**The tree must compile (tsc) and lint at every task boundary.** Therefore removal is deferred to
+the task that rewrites the last consumer: T2 is **additive only** (it keeps the old `hostColor*`
+fields, `HostColorMarkStyle`, `isHostColorMarkStyle`, `clampHostColorLineWidth`,
+`HOST_COLOR_LINE_WIDTH_*` and `sanitizeHostColorPrefs` in place); T5 deletes `HostColorMark` +
+`useTabHostColor` once no tab imports them; T6 deletes `HostColorMarkSetting`, the old
+`hostColor*` store fields/types/helpers, their preferences `DATA_FIELDS` entries and the
+`settings.terminal.host_color_mark.*` locale keys once the settings UI no longer uses them.
+
 ---
 
 ## T1 — host identity data: icon + weight + sanitizer rename
@@ -40,14 +48,18 @@ Commit: `feat(spa): per-host icon on HostConfig`
 
 Files: `spa/src/stores/useUISettingsStore.ts` (+test), `spa/src/lib/sync/contributors/preferences.ts` (+test).
 
-- Remove every `hostColor*` field/setter/type/helper listed in spec §3.2 (incl. `sanitizeHostColorPrefs`).
+- **Additive only** — the old `hostColor*` fields/types/helpers stay until T6 (see the wave note),
+  so `HostColorMark`, `HostColorMarkSetting`, `InlineTab`, `SortableTab` and `TerminalSection`
+  keep compiling.
 - Add the 7 fields × 2 surfaces from spec §3.2 with setters; numeric setters clamp
   (box 12–24, inset 0–5, radius 0–8, lineOpacity 20–100, bgOpacity 0–100, all rounded);
   `LineColor` setter ignores values outside `'host' | 'neutral'`.
 - `export function sanitizeHostBadgePrefs(data)` — drops invalid enums and non-finite numbers,
-  clamps valid numbers. Used by the preferences contributor (both merge modes, replacing the old
-  sanitizer) and by `onRehydrateStorage` (invalid → default, only `setState` when something changed).
-- `DATA_FIELDS` in the contributor: drop the 4 old keys, add the 14 new ones. No persist version bump.
+  clamps valid numbers. Used by the preferences contributor (both merge modes, **alongside** the
+  old sanitizer until T6 removes it) and by `onRehydrateStorage` (invalid → default, only
+  `setState` when something changed).
+- `DATA_FIELDS` in the contributor: **add** the 14 new keys (the 4 old ones are dropped in T6).
+  No persist version bump.
 - Tests: spec §6 bullets 4–5, plus "removed keys in a persisted payload are ignored".
 
 Commit: `feat(spa): host badge display settings`
@@ -63,8 +75,9 @@ and `HostColorMark.test.tsx` in T5 (they still compile until then).
 - `<span>` with `display:inline-flex; align-items:center; justify-content:center; flex-shrink:0`,
   `width/height = box`, `border-radius = radius`, `aria-hidden`, `data-testid` (default
   `host-badge`), `data-has-color`.
-- Colors per spec §4.1 via `color-mix`. Icon size = `Math.max(8, box - inset*2)`.
-- Tests: spec §6 `HostBadge` bullet.
+- Colors per spec §4.1 via `color-mix`. Icon size = **exactly `box - inset*2`** (no floor); the
+  settings clamps already bound it to 2–24px.
+- Tests: spec §6 `HostBadge` bullet, plus the boundary case `box=12, inset=5` → icon size 2.
 
 Commit: `feat(spa): HostBadge component`
 
@@ -89,13 +102,22 @@ Files: `spa/src/features/workspace/components/InlineTab.tsx` (+test),
 `spa/src/components/SortableTab.tsx` (+test); delete `HostColorMark.tsx`, `HostColorMark.test.tsx`,
 `hooks/useTabHostColor.ts`, `useTabHostColor.test.ts`.
 
-- InlineTab: badge right after the terminal-icon slot, before `renderInlineTabIcon`'s output;
-  reads the Sidebar prefs; renders nothing when `Enabled` is false or the hook returns null.
-- SortableTab: same for the **normal** branch only; the **pinned** branch renders no badge and
-  keeps `w-9`.
+- InlineTab: badge between `renderInlineTabIcon({...})` and
+  `<span data-testid="inline-tab-title">`; reads the Sidebar prefs; renders nothing when
+  `Enabled` is false or the hook returns null.
+- SortableTab: same position (after `TabIcon`, before the title span) in the **normal** branch
+  only; the **pinned** branch renders no badge and keeps `w-9`.
 - Remove every `HostColorMark` / `useTabHostColor` import and the old host-color test cases.
-- Tests: spec §6 `InlineTab` / `SortableTab` bullet (incl. the pinned-tab assertion and the
-  existing suites staying green).
+- Tests must pin the layout contract, not just presence:
+  - DOM order in a sidebar row: icon slot → `host-badge` → `inline-tab-title` (assert via
+    `compareDocumentPosition` or `parentElement.children` order).
+  - The badge is a **real flex child**: its computed `position` is not `absolute`.
+  - Title keeps `flex-1` + `truncate`; the unread pip keeps `position: absolute` on the row;
+    `inline-tab-host-offline` and `inline-tab-lock` still render after the title.
+  - SortableTab normal: order `TabIcon` → `host-badge` → title; the close-button overlay stays
+    the last child and absolute; the unread pip stays absolute.
+  - SortableTab pinned: no `host-badge`, and the button still has the `w-9` class.
+  - Both suites' existing cases stay green.
 
 Commit: `feat(spa): show host badge on tabs`
 
@@ -109,11 +131,22 @@ Files: `spa/src/components/hosts/HostIconField.tsx` (+test),
 delete `spa/src/components/settings/HostColorMarkSetting.tsx` (+test).
 
 - `HostIconField` per spec §5.1 (preview button, inline `WorkspaceIconPicker`, weight passthrough,
-  `''` → `setHostIcon(hostId, null)`, "use default" button). Add `title?: string` to
-  `WorkspaceIconPicker` only if its own header shows in `inline` mode — check first; if added,
-  default to today's key so workspace behaviour is unchanged.
+  `''` → `setHostIcon(hostId, null)`, "use default" button).
+  **Confirmed from the code**: in `inline` mode the picker does NOT render its
+  `workspace.change_icon` header, so **no `title` prop is added**. Its inner control labels
+  ("Search icons…", "Style", "Clear") are hard-coded in the picker and are reused as-is — host
+  settings do not get their own wording for them.
+  Tests: selecting an icon calls `setHostIcon(hostId, name)`; the picker's Clear (`onSelect('')`)
+  maps to `setHostIcon(hostId, null)`; the weight control calls `setHostIcon` with the weight; no
+  `workspace.change_icon` text is rendered.
 - `HostBadgeSetting` per spec §5.2 (toggle + `SegmentControl` + 5 numeric inputs, disabled when off),
   rendered twice in `TerminalSection` where the old rows were.
+- **Removals owned by this task** (the last consumers disappear here): `HostColorMarkSetting.tsx`
+  + its test; the `hostColor{Sidebar,TabBar}{Style,Width}` fields/setters, `HostColorMarkStyle`,
+  `isHostColorMarkStyle`, `clampHostColorLineWidth`, `HOST_COLOR_LINE_WIDTH_*` and
+  `sanitizeHostColorPrefs` in `useUISettingsStore.ts`; their entries in the preferences
+  `DATA_FIELDS` and that contributor's use of the old sanitizer; their cases in
+  `useUISettingsStore.test.ts` / `preferences.test.ts` / `TerminalSection.test.tsx`.
 - Locale keys: drop `settings.terminal.host_color_mark.*`; add `settings.terminal.host_badge.*`
   (`sidebar.label/desc`, `tab_bar.label/desc`, `enabled`, `line_color.host`, `line_color.neutral`,
   `line_opacity`, `bg_opacity`, `box`, `inset`, `radius`, `px`) and `hosts.icon.label`,
