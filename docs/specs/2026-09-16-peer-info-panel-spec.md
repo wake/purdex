@@ -184,6 +184,14 @@ keyboard path at all.
 | peer id | the **full address** (`mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a`) |
 | status | nothing — not a value, so not a button |
 
+**The host segment carries two gestures.** Double-clicking it opened host
+settings before this feature existed, and a browser dispatches two `click`s
+before `dblclick` — so the copy that this feature adds would also run on the way
+to the navigation, silently overwriting the clipboard. The host segment's copy
+is therefore deferred by one double-click window (250 ms) and cancelled when
+`dblclick` arrives. Only a segment with a second gesture waits; every other one
+copies on the click.
+
 The displayed peer id is the **label**; the copied value is the full address.
 A label alone is not addressable without its host, and someone copying "the
 peer id" means to paste something that works in `pdx msg send`.

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react'
 import { StatusBar } from './StatusBar'
 import { createTab } from '../types/tab'
@@ -399,6 +399,45 @@ describe('StatusBar peer segments', () => {
     fireEvent.click(screen.getByTestId(testId))
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith(value))
     await waitFor(() => expect(screen.getByTestId('status-copy-feedback').textContent).toBe(message))
+  })
+
+  // The host segment carries two gestures: the single click that copies (new),
+  // and the double click that opens host settings (pre-existing). A browser
+  // dispatches two `click`s before `dblclick`, so without a grace period the
+  // navigating gesture also copies — silently putting the host name on the
+  // clipboard over whatever the user had there.
+  describe('the host segment carries two gestures', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('a double-click navigates and copies nothing', () => {
+      const onNavigateToHost = vi.fn()
+      render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} onNavigateToHost={onNavigateToHost} />)
+      const seg = screen.getByTestId('status-seg-host')
+      // What a browser actually sends for one double-click.
+      fireEvent.click(seg)
+      fireEvent.click(seg)
+      fireEvent.dblClick(seg)
+      act(() => { vi.advanceTimersByTime(2000) })
+      expect(onNavigateToHost).toHaveBeenCalledWith(HOST_ID)
+      expect(copyTextMock).not.toHaveBeenCalled()
+      expect(screen.getByTestId('status-copy-feedback').textContent).toBe('')
+    })
+
+    it('a single click still copies once the double-click window has passed', async () => {
+      render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} onNavigateToHost={vi.fn()} />)
+      fireEvent.click(screen.getByTestId('status-seg-host'))
+      expect(copyTextMock).not.toHaveBeenCalled()
+      await act(async () => { vi.advanceTimersByTime(2000) })
+      expect(copyTextMock).toHaveBeenCalledWith('mlab')
+      expect(screen.getByTestId('status-copy-feedback').textContent).toBe('copied: host')
+    })
+
+    it('a segment with no double-click gesture copies immediately', async () => {
+      render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+      await act(async () => { fireEvent.click(screen.getByTestId('status-seg-cwd')) })
+      expect(copyTextMock).toHaveBeenCalledWith('/Users/wake/Workspace/wake/purdex')
+    })
   })
 
   it('the status segment is not a button — it is not a value to copy', () => {

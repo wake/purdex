@@ -21,6 +21,25 @@ type T = (key: string, params?: Record<string, string | number>) => string
 const COPY_FEEDBACK_MS = 1500
 
 /**
+ * How long a segment that also has a double-click gesture waits before copying.
+ *
+ * A browser dispatches two `click`s *before* `dblclick`, so an element carrying
+ * both gestures runs the single-click action twice on the way to the double one.
+ * The host segment carries both — click copies the host name, double-click opens
+ * host settings, which it did before this feature existed — and the collision is
+ * silent: the user navigates and finds the clipboard overwritten. So the copy is
+ * deferred by one double-click window and cancelled if `dblclick` arrives.
+ *
+ * The alternative was to separate the gestures, which means taking one of them
+ * off the segment: the double-click is muscle memory that predates this feature,
+ * and the single click is what §4.2 promises for every segment. A quarter-second
+ * on a clipboard write whose confirmation lands in a fixed slot anyway is the
+ * cheaper side of that trade; the delay applies only to segments that have a
+ * second gesture, which today is the host alone.
+ */
+const DOUBLE_CLICK_GRACE_MS = 250
+
+/**
  * A rule between two segments.
  *
  * A `|` glyph would be selected and copied along with the text the user is
@@ -57,6 +76,31 @@ function CopySegment({ testId, display, value, what, title, dim, rtl, className 
   /** The host segment keeps its pre-existing double-click to host settings. */
   onDoubleClick?: () => void
 }) {
+  // Only set while a copy is waiting out the double-click window; see
+  // DOUBLE_CLICK_GRACE_MS. A segment without a second gesture copies at once.
+  const pendingCopy = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (pendingCopy.current) clearTimeout(pendingCopy.current) }, [])
+
+  const handleClick = () => {
+    if (!onDoubleClick) {
+      onCopy(what, value)
+      return
+    }
+    if (pendingCopy.current) clearTimeout(pendingCopy.current)
+    pendingCopy.current = setTimeout(() => {
+      pendingCopy.current = null
+      onCopy(what, value)
+    }, DOUBLE_CLICK_GRACE_MS)
+  }
+
+  const handleDoubleClick = () => {
+    if (pendingCopy.current) {
+      clearTimeout(pendingCopy.current)
+      pendingCopy.current = null
+    }
+    onDoubleClick?.()
+  }
+
   return (
     <button
       type="button"
@@ -64,8 +108,8 @@ function CopySegment({ testId, display, value, what, title, dim, rtl, className 
       data-dim={dim ? 'true' : undefined}
       disabled={value === ''}
       title={title}
-      onClick={() => onCopy(what, value)}
-      onDoubleClick={onDoubleClick}
+      onClick={handleClick}
+      onDoubleClick={onDoubleClick ? handleDoubleClick : undefined}
       // `bdi` keeps the path itself left-to-right inside an RTL box, so the
       // ellipsis lands at the start without reordering the text.
       style={rtl ? { direction: 'rtl', textAlign: 'left' } : undefined}
