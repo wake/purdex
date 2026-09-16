@@ -9,6 +9,7 @@ import { shouldShowGlobalUnreadPip } from './tab-icon-helpers'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { HostBadge } from './HostBadge'
 import { useTabHostBadge } from '../hooks/useTabHostBadge'
+import { hasHostBadge } from '../lib/host-color'
 
 interface Props {
   tab: Tab
@@ -144,7 +145,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       }`}
     >
       <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
-      {badgeEnabled && hostBadge && (
+      {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge
           color={hostBadge.color}
           icon={hostBadge.icon}

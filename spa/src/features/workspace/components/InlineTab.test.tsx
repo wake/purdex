@@ -84,6 +84,11 @@ function setH1Color(color: string) {
   useHostStore.setState({ hosts: { h1: { ...h1, color } } })
 }
 
+function setH1Icon(icon: string) {
+  const h1 = useHostStore.getState().hosts.h1
+  useHostStore.setState({ hosts: { h1: { ...h1, icon } } })
+}
+
 function renderInline(tab: Tab = baseTab) {
   return render(
     <InlineTab
@@ -149,10 +154,32 @@ describe('InlineTab — host badge', () => {
     expect(children.indexOf(screen.getByTestId('inline-tab-lock'))).toBeGreaterThan(titleIdx)
   })
 
-  it('still renders a neutral badge when the host has no color', () => {
+  it('still renders a neutral badge when the host has an icon but no color', () => {
+    setH1Icon('Laptop')
     renderInline()
     const badge = screen.getByTestId('host-badge')
     expect(badge).toHaveAttribute('data-has-color', 'false')
+  })
+
+  it('renders the badge when the host has a color but no icon', () => {
+    setH1Color('#3b82f6')
+    renderInline()
+    expect(screen.getByTestId('host-badge')).toHaveAttribute('data-has-color', 'true')
+  })
+
+  it('renders the badge when the host has both a color and an icon', () => {
+    const h1 = useHostStore.getState().hosts.h1
+    useHostStore.setState({ hosts: { h1: { ...h1, color: '#3b82f6', icon: 'Laptop' } } })
+    renderInline()
+    expect(screen.getByTestId('host-badge')).toHaveAttribute('data-has-color', 'true')
+  })
+
+  it('renders no badge — and reserves no space — when the host has neither color nor icon', () => {
+    renderInline()
+    expect(screen.queryByTestId('host-badge')).toBeNull()
+    // The icon slot is immediately followed by the title: nothing sits in between.
+    const children = rowChildren()
+    expect(children.indexOf(screen.getByTestId('inline-tab-title'))).toBe(1)
   })
 
   it('renders no badge when the sidebar surface is disabled', () => {

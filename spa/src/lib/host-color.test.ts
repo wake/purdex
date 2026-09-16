@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   HOST_COLOR_PRESETS,
   DEFAULT_HOST_ICON,
+  hasHostBadge,
   isValidHostColor,
   isIconWeight,
   normalizeHostColor,
@@ -154,6 +155,32 @@ describe('isIconWeight', () => {
       expect(isIconWeight(bad)).toBe(false)
     },
   )
+})
+
+describe('hasHostBadge', () => {
+  it('is false for a tab that resolves no host', () => {
+    expect(hasHostBadge(null)).toBe(false)
+  })
+
+  it('is false when the host set neither a color nor an icon', () => {
+    expect(hasHostBadge({ color: null, icon: undefined, iconWeight: undefined })).toBe(false)
+  })
+
+  it('is true when the host set a color only', () => {
+    expect(hasHostBadge({ color: '#3b82f6', icon: undefined, iconWeight: undefined })).toBe(true)
+  })
+
+  it('is true when the host set an icon only', () => {
+    expect(hasHostBadge({ color: null, icon: 'Laptop', iconWeight: undefined })).toBe(true)
+  })
+
+  it('is true when the host set both', () => {
+    expect(hasHostBadge({ color: '#3b82f6', icon: 'Laptop', iconWeight: 'duotone' })).toBe(true)
+  })
+
+  it('ignores a weight on its own — a weight is not something to show', () => {
+    expect(hasHostBadge({ color: null, icon: undefined, iconWeight: 'duotone' })).toBe(false)
+  })
 })
 
 describe('sanitizeHostConfig', () => {

@@ -9,6 +9,7 @@ import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { HostBadge } from '../../../components/HostBadge'
 import { useTabHostBadge } from '../../../hooks/useTabHostBadge'
+import { hasHostBadge } from '../../../lib/host-color'
 
 interface Props {
   tab: Tab
@@ -124,7 +125,7 @@ export function InlineTab({
         subagentRefs,
         isUnread,
       })}
-      {badgeEnabled && hostBadge && (
+      {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge
           color={hostBadge.color}
           icon={hostBadge.icon}

@@ -83,6 +83,11 @@ function setH1Color(color: string) {
   useHostStore.setState({ hosts: { h1: { ...h1, color } } })
 }
 
+function setH1Icon(icon: string) {
+  const h1 = useHostStore.getState().hosts.h1
+  useHostStore.setState({ hosts: { h1: { ...h1, icon } } })
+}
+
 function tabChildren(container: HTMLElement): Element[] {
   return Array.from(container.querySelector('[data-tab-id="t1"]')!.children)
 }
@@ -133,9 +138,32 @@ describe('SortableTab — host badge', () => {
     expect(pip!.className).toContain('absolute')
   })
 
-  it('still renders a neutral badge when the host has no color', () => {
+  it('still renders a neutral badge when the host has an icon but no color', () => {
+    setH1Icon('Laptop')
     render(<SortableTab {...defaultProps} />)
     expect(screen.getByTestId('host-badge')).toHaveAttribute('data-has-color', 'false')
+  })
+
+  it('renders the badge when the host has a color but no icon', () => {
+    setH1Color('#3b82f6')
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.getByTestId('host-badge')).toHaveAttribute('data-has-color', 'true')
+  })
+
+  it('renders the badge when the host has both a color and an icon', () => {
+    const h1 = useHostStore.getState().hosts.h1
+    useHostStore.setState({ hosts: { h1: { ...h1, color: '#3b82f6', icon: 'Laptop' } } })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.getByTestId('host-badge')).toHaveAttribute('data-has-color', 'true')
+  })
+
+  it('renders no badge — and reserves no space — when the host has neither color nor icon', () => {
+    const { container } = render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('host-badge')).toBeNull()
+    // The TabIcon slot is immediately followed by the label: nothing sits in between.
+    const children = tabChildren(container)
+    const label = container.querySelector('[data-tab-id="t1"] span.overflow-hidden')!
+    expect(children.indexOf(label)).toBe(1)
   })
 
   it('renders no badge when the top tab surface is disabled', () => {
