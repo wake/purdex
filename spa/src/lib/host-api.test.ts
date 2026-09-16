@@ -515,6 +515,7 @@ describe('fetchPeers', () => {
         labelSource: '',
         deliverable: false,
         reason: 'no_agent',
+        tmuxInstance: '6901:1789205013',
         agent: null,
       },
       z141yl: {
@@ -523,6 +524,7 @@ describe('fetchPeers', () => {
         labelSource: 'default',
         deliverable: true,
         reason: '',
+        tmuxInstance: '6901:1789205013',
         agent: { type: 'cc', peerName: 'ai-chat-story-3a', status: 'idle' },
       },
     })
