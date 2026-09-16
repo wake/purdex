@@ -94,8 +94,14 @@ export interface PeerRecordWire {
   host_id: string
   address: string
   row_kind: string            // session | entry
-  label: string               // '' when the row has no cc agent
-  label_source: string        // user | default | ''
+  /**
+   * The sessionId-derived address head (`_3k9f2mq4`), `''` when the row has no
+   * cc agent. This — not `label_source` — is what tells an agent row apart from
+   * a row with no agent.
+   */
+  canonical: string
+  label: string               // '' until the conversation names itself
+  label_source: string        // user | ''
   label_rev: number
   suffix: string
   session_code: string

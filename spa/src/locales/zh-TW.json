@@ -1212,7 +1212,6 @@
   "peer.agent": "Agent",
   "peer.deliverable": "可送達",
   "peer.deliverable_yes": "是",
-  "peer.default_label": "預設 label",
   "peer.none": "無 peer",
   "peer.undetermined": "無法判定",
   "peer.host_not_connected": "主機未連線",

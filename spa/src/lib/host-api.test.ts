@@ -407,10 +407,13 @@ describe('hostFetch auth header', () => {
 })
 
 describe('fetchPeers', () => {
-  // Verbatim from `pdx peers --json` against the mini-lab daemon at
-  // 1.0.0-alpha.364 (two of its session rows, plus a synthetic entry row):
-  // the contract this feature reads. If the daemon renames a field, this
-  // fails here rather than silently rendering blanks in the status bar.
+  // The `pdx peers --json` contract this feature reads: two session rows plus a
+  // synthetic entry row. If the daemon renames a field, this fails here rather
+  // than silently rendering blanks in the status bar.
+  //
+  // Captured from the mini-lab daemon at 1.0.0-alpha.364 and then hand-updated
+  // to the v3 shape (`canonical`, a canonical address head, no `'default'`
+  // label source) — re-capture it against a v3 daemon when one is deployed.
   const realEnvelope = {
     host_id: 'mini-lab:278cbm',
     ok: true,
@@ -421,6 +424,7 @@ describe('fetchPeers', () => {
         host_id: 'mini-lab:278cbm',
         address: 'mini-lab/tmux:ai-chat2',
         row_kind: 'session',
+        canonical: '',
         label: '',
         label_source: '',
         label_rev: 0,
@@ -436,10 +440,11 @@ describe('fetchPeers', () => {
       {
         host: 'mini-lab',
         host_id: 'mini-lab:278cbm',
-        address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
+        address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
         row_kind: 'session',
+        canonical: '_3k9f2mq4',
         label: 'ai-chat4',
-        label_source: 'default',
+        label_source: 'user',
         label_rev: 0,
         suffix: 'ai-chat4-ai-chat-story-3a',
         session_code: 'z141yl',
@@ -462,8 +467,9 @@ describe('fetchPeers', () => {
       {
         host: 'mini-lab',
         host_id: 'mini-lab:278cbm',
-        address: 'mini-lab/loose:loose-outside-tmux',
+        address: 'mini-lab/_7p2wq5ba:loose-outside-tmux',
         row_kind: 'entry',
+        canonical: '_7p2wq5ba',
         label: 'loose',
         label_source: 'user',
         label_rev: 7,
@@ -511,6 +517,7 @@ describe('fetchPeers', () => {
     expect(indexPeerRows(env.peers)).toEqual({
       qorh3k: {
         address: 'mini-lab/tmux:ai-chat2',
+        canonical: '',
         label: '',
         labelSource: '',
         deliverable: false,
@@ -519,9 +526,10 @@ describe('fetchPeers', () => {
         agent: null,
       },
       z141yl: {
-        address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
+        address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
+        canonical: '_3k9f2mq4',
         label: 'ai-chat4',
-        labelSource: 'default',
+        labelSource: 'user',
         deliverable: true,
         reason: '',
         tmuxInstance: '6901:1789205013',
