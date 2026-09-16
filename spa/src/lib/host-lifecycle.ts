@@ -8,6 +8,7 @@ import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStor
 import { releaseLease } from './nex/nex-api'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { usePeerStore } from '../stores/usePeerStore'
+import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
@@ -176,7 +177,10 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   // Peer rows are a cache of a daemon that is no longer configured. Nothing to
   // snapshot: undo restores the host, and the first render that needs its peers
   // fetches them again (`usePeerInfo`'s predicate fires on an absent entry).
+  // The cwd readings go the same way and for the same reason — a directory read
+  // from one daemon says nothing about another.
   usePeerStore.getState().forgetHost(hostId)
+  useSessionCwdStore.getState().forgetHost(hostId)
   hostStore.removeHost(hostId)
 
   // Return undo function
@@ -290,8 +294,8 @@ function hostIdentity(h: HostConfig | undefined): string {
 }
 
 /**
- * Drop a host's cached peer rows whenever its daemon identity changes
- * (peer-info-panel spec §3.1).
+ * Drop a host's cached peer rows and cwd readings whenever its daemon identity
+ * changes (peer-info-panel spec §3.1).
  *
  * A peer address names a process on one machine, so keeping the cache across a
  * re-point would show one daemon's peers under another's name — and the address
@@ -313,6 +317,7 @@ export function startPeerCacheInvalidation(): () => void {
       // cached belongs to a daemon this id no longer names.
       if (after && hostIdentity(prev.hosts[hostId]) === hostIdentity(after)) continue
       usePeerStore.getState().forgetHost(hostId)
+      useSessionCwdStore.getState().forgetHost(hostId)
     }
   })
 }

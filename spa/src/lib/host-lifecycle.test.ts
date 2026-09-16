@@ -16,6 +16,7 @@ import { createTab } from '../types/tab'
 import { getPrimaryPane, scanPaneTree } from './pane-tree'
 import { deleteHostCascade, startPeerCacheInvalidation } from './host-lifecycle'
 import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
+import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { STORAGE_KEYS } from './storage/keys'
 import type { Tab } from '../types/tab'
 import type { StreamMessage } from './stream-ws'
@@ -926,13 +927,16 @@ describe('#541 cross-store rehydrate order invariants', () => {
 
 function seedPeers(...hostIds: string[]) {
   const byHost: Record<string, ReturnType<typeof emptyPeerHostEntry>> = {}
+  const cwdByHost: Record<string, Record<string, { cwd: string; fetchedAt: number; loading: boolean; error: string | null }>> = {}
   for (const id of hostIds) {
     byHost[id] = { ...emptyPeerHostEntry(), fetchedAt: 1, rows: { s1: {
       address: `${id}/label:label-agent`, label: 'label', labelSource: 'default',
       deliverable: true, reason: '', agent: { type: 'cc', peerName: 'agent', status: 'idle' },
     } } }
+    cwdByHost[id] = { s1: { cwd: `/somewhere/${id}`, fetchedAt: 1, loading: false, error: null } }
   }
   usePeerStore.setState({ byHost })
+  useSessionCwdStore.setState({ byHost: cwdByHost })
 }
 
 describe('peer cache invalidation', () => {
@@ -940,6 +944,7 @@ describe('peer cache invalidation', () => {
   beforeEach(() => {
     resetAllStores()
     usePeerStore.setState({ byHost: {} })
+    useSessionCwdStore.setState({ byHost: {} })
   })
   afterEach(() => { stop(); stop = () => {} })
 
@@ -950,33 +955,45 @@ describe('peer cache invalidation', () => {
     expect(usePeerStore.getState().byHost[HOST_B]).toBeDefined()
   })
 
-  it('updateHost changing the ip clears the host peer rows', () => {
+  it('removing a host clears its cwd readings through the cascade too', () => {
+    seedPeers(HOST_A, HOST_B)
+    deleteHostCascade(HOST_A, true)
+    expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeUndefined()
+    expect(useSessionCwdStore.getState().byHost[HOST_B]).toBeDefined()
+  })
+
+  it('updateHost changing the ip clears the host peer rows and cwd readings', () => {
     stop = startPeerCacheInvalidation()
     seedPeers(HOST_A, HOST_B)
     useHostStore.getState().updateHost(HOST_A, { ip: '9.9.9.9' })
     expect(usePeerStore.getState().byHost[HOST_A]).toBeUndefined()
+    expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeUndefined()
     expect(usePeerStore.getState().byHost[HOST_B]).toBeDefined()
+    expect(useSessionCwdStore.getState().byHost[HOST_B]).toBeDefined()
   })
 
-  it('updateHost changing the port clears the host peer rows', () => {
+  it('updateHost changing the port clears the host peer rows and cwd readings', () => {
     stop = startPeerCacheInvalidation()
     seedPeers(HOST_A)
     useHostStore.getState().updateHost(HOST_A, { port: 7861 })
     expect(usePeerStore.getState().byHost[HOST_A]).toBeUndefined()
+    expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeUndefined()
   })
 
-  it('updateHost changing the token clears the host peer rows', () => {
+  it('updateHost changing the token clears the host peer rows and cwd readings', () => {
     stop = startPeerCacheInvalidation()
     seedPeers(HOST_A)
     useHostStore.getState().updateHost(HOST_A, { token: 'rotated' })
     expect(usePeerStore.getState().byHost[HOST_A]).toBeUndefined()
+    expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeUndefined()
   })
 
-  it('updateHost changing only the name keeps the peer rows', () => {
+  it('updateHost changing only the name keeps the peer rows and cwd readings', () => {
     stop = startPeerCacheInvalidation()
     seedPeers(HOST_A)
     useHostStore.getState().updateHost(HOST_A, { name: 'renamed' })
     expect(usePeerStore.getState().byHost[HOST_A]).toBeDefined()
+    expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeDefined()
   })
 
   it('a host removed without the cascade (sync replace) is forgotten too', () => {
@@ -987,6 +1004,7 @@ describe('peer cache invalidation', () => {
       hostOrder: [HOST_B],
     }))
     expect(usePeerStore.getState().byHost[HOST_A]).toBeUndefined()
+    expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeUndefined()
     expect(usePeerStore.getState().byHost[HOST_B]).toBeDefined()
   })
 
@@ -996,5 +1014,6 @@ describe('peer cache invalidation', () => {
     seedPeers(HOST_A)
     useHostStore.getState().updateHost(HOST_A, { ip: '9.9.9.9' })
     expect(usePeerStore.getState().byHost[HOST_A]).toBeDefined()
+    expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeDefined()
   })
 })
