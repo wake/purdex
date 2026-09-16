@@ -547,6 +547,12 @@ describe('StatusBar peer segments', () => {
     ['no active tab', null],
     ['an editor pane', { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' } as PaneContent],
     ['a non-tmux pane', { kind: 'dashboard' } as PaneContent],
+    // Codex R1: a terminated pane has no peer, and a tmux restart may have
+    // handed its session code to somebody else — so asking would risk
+    // rendering, and copying, a stranger's address.
+    ['a terminated tmux pane', {
+      kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', terminated: true,
+    } as PaneContent],
   ])('does not fetch peer data for %s', (_label, content) => {
     render(<StatusBar activeTab={content ? makeTab('t1', content) : null} onViewModeChange={vi.fn()} />)
     expect(peerRefresh).not.toHaveBeenCalled()

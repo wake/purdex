@@ -211,7 +211,12 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   // Peer data for the primary pane. The hook owns *when* anything is fetched
   // (spec §3.3); passing nulls — an editor tab, a dashboard, no tab at all —
   // is how this component says "nothing here needs peer data".
-  const peer = usePeerInfo(agentHostId, agentSessionCode)
+  // A terminated pane has no peer (spec §6), and its session code may already
+  // have been handed to a different session by a tmux restart — so asking for
+  // it would not merely be pointless, it could render and copy a stranger's
+  // address. Nulls here are how this component declines to ask.
+  const primaryTerminated = !!(primaryContent && primaryContent.kind === 'tmux-session' && primaryContent.terminated)
+  const peer = usePeerInfo(primaryTerminated ? null : agentHostId, primaryTerminated ? null : agentSessionCode)
 
   // One confirmation for five copy buttons, in a fixed slot, so a copy never
   // reflows the row (spec §4.2).

@@ -135,6 +135,17 @@ export const usePeerStore = create<PeerState>()((set, get) => {
         try {
           const env = await fetchPeers(hostId, abort.signal)
           if (!stillCurrent()) return
+          // A 200 carrying `ok: false` is a failure the daemon chose to
+          // describe rather than a 500 — an inventory it could not build at
+          // all (tmux unreachable, registry unreadable). Its `peers` is empty
+          // for want of an answer, not because there are none, so indexing it
+          // would turn "we could not look" into a confident "no peer" and
+          // clear the rows we still have. Treated exactly like a thrown
+          // request: keep the rows, keep `fetchedAt`, record the reason.
+          if (!env.ok) {
+            patch(hostId, { error: env.error || 'peers unavailable', loading: false })
+            return
+          }
           patch(hostId, {
             rows: indexPeerRows(env.peers),
             fetchedAt: Date.now(),

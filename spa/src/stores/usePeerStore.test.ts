@@ -180,6 +180,33 @@ describe('refresh', () => {
     expect(after.fetchedAt).toBe(before.fetchedAt)
   })
 
+  // Codex R1. A 200 carrying ok:false is the daemon describing a failure it
+  // could not build an inventory for, not an empty fleet. Indexing its empty
+  // `peers` would turn "we could not look" into a confident "no peer" and drop
+  // the rows we still had.
+  it('an ok:false envelope is a failed refresh, not an empty one', async () => {
+    vi.mocked(api.fetchPeers).mockResolvedValueOnce(envelope([row()]))
+    await usePeerStore.getState().refresh(H)
+    const before = usePeerStore.getState().byHost[H]
+
+    vi.mocked(api.fetchPeers).mockResolvedValueOnce(
+      envelope([], { ok: false, error: 'tmux unavailable' }),
+    )
+    await usePeerStore.getState().refresh(H)
+    const after = usePeerStore.getState().byHost[H]
+
+    expect(after.error).toBe('tmux unavailable')
+    expect(after.rows).toEqual(before.rows)
+    expect(after.fetchedAt).toBe(before.fetchedAt)
+    expect(after.loading).toBe(false)
+  })
+
+  it('an ok:false envelope with no error message still records one', async () => {
+    vi.mocked(api.fetchPeers).mockResolvedValueOnce(envelope([], { ok: false }))
+    await usePeerStore.getState().refresh(H)
+    expect(usePeerStore.getState().byHost[H].error).toBeTruthy()
+  })
+
   it('a successful refresh clears a previous error', async () => {
     vi.mocked(api.fetchPeers).mockRejectedValueOnce(new Error('boom'))
     await usePeerStore.getState().refresh(H)
