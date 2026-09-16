@@ -16,42 +16,102 @@ export function clampKeepAlive(renderer: TerminalRenderer, count: number): numbe
   return Math.min(count, max)
 }
 
-export type HostColorMarkStyle = 'gradient' | 'left-line' | 'bottom-line' | 'none'
+// ---------------------------------------------------------------------------
+// Host badge (tinted box + host icon shown on sidebar rows / top tabs)
+// ---------------------------------------------------------------------------
 
-export const HOST_COLOR_LINE_WIDTH_MIN = 1
-export const HOST_COLOR_LINE_WIDTH_MAX = 6
-const HOST_COLOR_LINE_WIDTH_DEFAULT = 2
+export type HostBadgeLineColor = 'host' | 'neutral'
 
-const HOST_COLOR_MARK_STYLES: readonly HostColorMarkStyle[] = ['gradient', 'left-line', 'bottom-line', 'none']
+const HOST_BADGE_LINE_COLORS: readonly HostBadgeLineColor[] = ['host', 'neutral']
 
-export function isHostColorMarkStyle(v: unknown): v is HostColorMarkStyle {
-  return typeof v === 'string' && (HOST_COLOR_MARK_STYLES as readonly string[]).includes(v)
+export function isHostBadgeLineColor(v: unknown): v is HostBadgeLineColor {
+  return typeof v === 'string' && (HOST_BADGE_LINE_COLORS as readonly string[]).includes(v)
 }
 
-/** Non-finite → default (2); otherwise round then clamp to [MIN, MAX]. */
-export function clampHostColorLineWidth(n: number): number {
-  if (!Number.isFinite(n)) return HOST_COLOR_LINE_WIDTH_DEFAULT
-  return Math.min(HOST_COLOR_LINE_WIDTH_MAX, Math.max(HOST_COLOR_LINE_WIDTH_MIN, Math.round(n)))
+export const HOST_BADGE_LINE_OPACITY_MIN = 20
+export const HOST_BADGE_LINE_OPACITY_MAX = 100
+export const HOST_BADGE_LINE_OPACITY_DEFAULT = 100
+export const HOST_BADGE_BG_OPACITY_MIN = 0
+export const HOST_BADGE_BG_OPACITY_MAX = 100
+export const HOST_BADGE_BG_OPACITY_DEFAULT = 22
+export const HOST_BADGE_BOX_MIN = 12
+export const HOST_BADGE_BOX_MAX = 24
+export const HOST_BADGE_BOX_DEFAULT = 16
+export const HOST_BADGE_INSET_MIN = 0
+export const HOST_BADGE_INSET_MAX = 5
+export const HOST_BADGE_INSET_DEFAULT = 2
+export const HOST_BADGE_RADIUS_MIN = 0
+export const HOST_BADGE_RADIUS_MAX = 8
+export const HOST_BADGE_RADIUS_DEFAULT = 4
+
+/** Non-finite → the field's default; otherwise round then clamp to [min, max]. */
+function clampRounded(n: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, Math.round(n)))
 }
 
-const HOST_COLOR_STYLE_FIELDS = ['hostColorSidebarStyle', 'hostColorTabBarStyle'] as const
-const HOST_COLOR_WIDTH_FIELDS = ['hostColorSidebarWidth', 'hostColorTabBarWidth'] as const
+export const clampHostBadgeLineOpacity = (n: number): number =>
+  clampRounded(n, HOST_BADGE_LINE_OPACITY_MIN, HOST_BADGE_LINE_OPACITY_MAX, HOST_BADGE_LINE_OPACITY_DEFAULT)
+export const clampHostBadgeBgOpacity = (n: number): number =>
+  clampRounded(n, HOST_BADGE_BG_OPACITY_MIN, HOST_BADGE_BG_OPACITY_MAX, HOST_BADGE_BG_OPACITY_DEFAULT)
+export const clampHostBadgeBox = (n: number): number =>
+  clampRounded(n, HOST_BADGE_BOX_MIN, HOST_BADGE_BOX_MAX, HOST_BADGE_BOX_DEFAULT)
+export const clampHostBadgeInset = (n: number): number =>
+  clampRounded(n, HOST_BADGE_INSET_MIN, HOST_BADGE_INSET_MAX, HOST_BADGE_INSET_DEFAULT)
+export const clampHostBadgeRadius = (n: number): number =>
+  clampRounded(n, HOST_BADGE_RADIUS_MIN, HOST_BADGE_RADIUS_MAX, HOST_BADGE_RADIUS_DEFAULT)
+
+const HOST_BADGE_SURFACES = ['Sidebar', 'TabBar'] as const
+
+const HOST_BADGE_BOOL_FIELDS = HOST_BADGE_SURFACES.map((s) => `hostBadge${s}Enabled`)
+const HOST_BADGE_ENUM_FIELDS = HOST_BADGE_SURFACES.map((s) => `hostBadge${s}LineColor`)
+const HOST_BADGE_NUMERIC_CLAMPS: Record<string, (n: number) => number> = Object.fromEntries(
+  HOST_BADGE_SURFACES.flatMap((s) => [
+    [`hostBadge${s}LineOpacity`, clampHostBadgeLineOpacity],
+    [`hostBadge${s}BgOpacity`, clampHostBadgeBgOpacity],
+    [`hostBadge${s}Box`, clampHostBadgeBox],
+    [`hostBadge${s}Inset`, clampHostBadgeInset],
+    [`hostBadge${s}Radius`, clampHostBadgeRadius],
+  ]),
+)
+
+/** Initial values for the 14 host badge fields; also the rehydrate fallback. */
+export const HOST_BADGE_DEFAULTS = {
+  hostBadgeSidebarEnabled: true,
+  hostBadgeSidebarLineColor: 'host' as HostBadgeLineColor,
+  hostBadgeSidebarLineOpacity: HOST_BADGE_LINE_OPACITY_DEFAULT,
+  hostBadgeSidebarBgOpacity: HOST_BADGE_BG_OPACITY_DEFAULT,
+  hostBadgeSidebarBox: HOST_BADGE_BOX_DEFAULT,
+  hostBadgeSidebarInset: HOST_BADGE_INSET_DEFAULT,
+  hostBadgeSidebarRadius: HOST_BADGE_RADIUS_DEFAULT,
+  hostBadgeTabBarEnabled: true,
+  hostBadgeTabBarLineColor: 'host' as HostBadgeLineColor,
+  hostBadgeTabBarLineOpacity: HOST_BADGE_LINE_OPACITY_DEFAULT,
+  hostBadgeTabBarBgOpacity: HOST_BADGE_BG_OPACITY_DEFAULT,
+  hostBadgeTabBarBox: HOST_BADGE_BOX_DEFAULT,
+  hostBadgeTabBarInset: HOST_BADGE_INSET_DEFAULT,
+  hostBadgeTabBarRadius: HOST_BADGE_RADIUS_DEFAULT,
+}
 
 /**
- * Validates host color mark fields for paths that bypass store setters (sync,
- * persist rehydrate): invalid styles and non-number / non-finite widths are
- * dropped; finite widths are rounded + clamped. Other fields pass through.
+ * Validates host badge fields for paths that bypass store setters (sync,
+ * persist rehydrate): non-boolean toggles, invalid line colors and non-number /
+ * non-finite metrics are dropped; finite metrics are rounded + clamped. Other
+ * fields pass through untouched.
  */
-export function sanitizeHostColorPrefs<T extends object>(data: T): T {
+export function sanitizeHostBadgePrefs<T extends object>(data: T): T {
   const out = { ...data } as Record<string, unknown>
-  for (const field of HOST_COLOR_STYLE_FIELDS) {
-    if (field in out && !isHostColorMarkStyle(out[field])) delete out[field]
+  for (const field of HOST_BADGE_BOOL_FIELDS) {
+    if (field in out && typeof out[field] !== 'boolean') delete out[field]
   }
-  for (const field of HOST_COLOR_WIDTH_FIELDS) {
+  for (const field of HOST_BADGE_ENUM_FIELDS) {
+    if (field in out && !isHostBadgeLineColor(out[field])) delete out[field]
+  }
+  for (const [field, clamp] of Object.entries(HOST_BADGE_NUMERIC_CLAMPS)) {
     if (!(field in out)) continue
     const v = out[field]
     if (typeof v !== 'number' || !Number.isFinite(v)) delete out[field]
-    else out[field] = clampHostColorLineWidth(v)
+    else out[field] = clamp(v)
   }
   return out as T
 }
@@ -112,14 +172,36 @@ interface UISettings {
   showAgentTitleInStatusBar: boolean
   setShowAgentTitleInStatusBar: (show: boolean) => void
 
-  hostColorSidebarStyle: HostColorMarkStyle
-  setHostColorSidebarStyle: (style: HostColorMarkStyle) => void
-  hostColorSidebarWidth: number
-  setHostColorSidebarWidth: (px: number) => void
-  hostColorTabBarStyle: HostColorMarkStyle
-  setHostColorTabBarStyle: (style: HostColorMarkStyle) => void
-  hostColorTabBarWidth: number
-  setHostColorTabBarWidth: (px: number) => void
+
+  hostBadgeSidebarEnabled: boolean
+  setHostBadgeSidebarEnabled: (v: boolean) => void
+  hostBadgeSidebarLineColor: HostBadgeLineColor
+  setHostBadgeSidebarLineColor: (v: HostBadgeLineColor) => void
+  hostBadgeSidebarLineOpacity: number
+  setHostBadgeSidebarLineOpacity: (pct: number) => void
+  hostBadgeSidebarBgOpacity: number
+  setHostBadgeSidebarBgOpacity: (pct: number) => void
+  hostBadgeSidebarBox: number
+  setHostBadgeSidebarBox: (px: number) => void
+  hostBadgeSidebarInset: number
+  setHostBadgeSidebarInset: (px: number) => void
+  hostBadgeSidebarRadius: number
+  setHostBadgeSidebarRadius: (px: number) => void
+
+  hostBadgeTabBarEnabled: boolean
+  setHostBadgeTabBarEnabled: (v: boolean) => void
+  hostBadgeTabBarLineColor: HostBadgeLineColor
+  setHostBadgeTabBarLineColor: (v: HostBadgeLineColor) => void
+  hostBadgeTabBarLineOpacity: number
+  setHostBadgeTabBarLineOpacity: (pct: number) => void
+  hostBadgeTabBarBgOpacity: number
+  setHostBadgeTabBarBgOpacity: (pct: number) => void
+  hostBadgeTabBarBox: number
+  setHostBadgeTabBarBox: (px: number) => void
+  hostBadgeTabBarInset: number
+  setHostBadgeTabBarInset: (px: number) => void
+  hostBadgeTabBarRadius: number
+  setHostBadgeTabBarRadius: (px: number) => void
 }
 
 export const useUISettingsStore = create<UISettings>()(
@@ -159,18 +241,27 @@ export const useUISettingsStore = create<UISettings>()(
       showAgentTitleInStatusBar: false,
       setShowAgentTitleInStatusBar: (show) => set({ showAgentTitleInStatusBar: show }),
 
-      hostColorSidebarStyle: 'gradient' as HostColorMarkStyle,
-      setHostColorSidebarStyle: (style) => {
-        if (isHostColorMarkStyle(style)) set({ hostColorSidebarStyle: style })
+
+      ...HOST_BADGE_DEFAULTS,
+      setHostBadgeSidebarEnabled: (v) => set({ hostBadgeSidebarEnabled: v }),
+      setHostBadgeSidebarLineColor: (v) => {
+        if (isHostBadgeLineColor(v)) set({ hostBadgeSidebarLineColor: v })
       },
-      hostColorSidebarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
-      setHostColorSidebarWidth: (px) => set({ hostColorSidebarWidth: clampHostColorLineWidth(px) }),
-      hostColorTabBarStyle: 'bottom-line' as HostColorMarkStyle,
-      setHostColorTabBarStyle: (style) => {
-        if (isHostColorMarkStyle(style)) set({ hostColorTabBarStyle: style })
+      setHostBadgeSidebarLineOpacity: (pct) => set({ hostBadgeSidebarLineOpacity: clampHostBadgeLineOpacity(pct) }),
+      setHostBadgeSidebarBgOpacity: (pct) => set({ hostBadgeSidebarBgOpacity: clampHostBadgeBgOpacity(pct) }),
+      setHostBadgeSidebarBox: (px) => set({ hostBadgeSidebarBox: clampHostBadgeBox(px) }),
+      setHostBadgeSidebarInset: (px) => set({ hostBadgeSidebarInset: clampHostBadgeInset(px) }),
+      setHostBadgeSidebarRadius: (px) => set({ hostBadgeSidebarRadius: clampHostBadgeRadius(px) }),
+
+      setHostBadgeTabBarEnabled: (v) => set({ hostBadgeTabBarEnabled: v }),
+      setHostBadgeTabBarLineColor: (v) => {
+        if (isHostBadgeLineColor(v)) set({ hostBadgeTabBarLineColor: v })
       },
-      hostColorTabBarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
-      setHostColorTabBarWidth: (px) => set({ hostColorTabBarWidth: clampHostColorLineWidth(px) }),
+      setHostBadgeTabBarLineOpacity: (pct) => set({ hostBadgeTabBarLineOpacity: clampHostBadgeLineOpacity(pct) }),
+      setHostBadgeTabBarBgOpacity: (pct) => set({ hostBadgeTabBarBgOpacity: clampHostBadgeBgOpacity(pct) }),
+      setHostBadgeTabBarBox: (px) => set({ hostBadgeTabBarBox: clampHostBadgeBox(px) }),
+      setHostBadgeTabBarInset: (px) => set({ hostBadgeTabBarInset: clampHostBadgeInset(px) }),
+      setHostBadgeTabBarRadius: (px) => set({ hostBadgeTabBarRadius: clampHostBadgeRadius(px) }),
     }),
     {
       name: STORAGE_KEYS.UI_SETTINGS,
@@ -216,25 +307,19 @@ export const useUISettingsStore = create<UISettings>()(
           useUISettingsStore.setState({ keepAliveCount: clamped })
         }
 
-        // migrate() passes v3 data through untouched, so corrupt local host color
-        // prefs must be repaired here: dropped fields fall back to defaults.
-        const hostColorDefaults = {
-          hostColorSidebarStyle: 'gradient' as HostColorMarkStyle,
-          hostColorSidebarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
-          hostColorTabBarStyle: 'bottom-line' as HostColorMarkStyle,
-          hostColorTabBarWidth: HOST_COLOR_LINE_WIDTH_DEFAULT,
+        // migrate() passes v3 data through untouched, so corrupt local host badge
+        // prefs must be repaired here: a dropped field falls back to its default,
+        // an out-of-range number is clamped.
+        const badgeState = state as unknown as Record<string, unknown>
+        const badgeKeys = Object.keys(HOST_BADGE_DEFAULTS)
+        const badgeCurrent: Record<string, unknown> = {}
+        for (const k of badgeKeys) badgeCurrent[k] = badgeState[k]
+        const badgeSanitized: Record<string, unknown> = {
+          ...HOST_BADGE_DEFAULTS,
+          ...sanitizeHostBadgePrefs(badgeCurrent),
         }
-        const current = {
-          hostColorSidebarStyle: state.hostColorSidebarStyle,
-          hostColorSidebarWidth: state.hostColorSidebarWidth,
-          hostColorTabBarStyle: state.hostColorTabBarStyle,
-          hostColorTabBarWidth: state.hostColorTabBarWidth,
-        }
-        const sanitized = { ...hostColorDefaults, ...sanitizeHostColorPrefs(current) }
-        const changed = (Object.keys(sanitized) as (keyof typeof sanitized)[]).some(
-          (k) => sanitized[k] !== current[k],
-        )
-        if (changed) useUISettingsStore.setState(sanitized)
+        const badgeChanged = badgeKeys.some((k) => badgeSanitized[k] !== badgeCurrent[k])
+        if (badgeChanged) useUISettingsStore.setState(badgeSanitized as Partial<UISettings>)
       },
     },
   ),

@@ -53,4 +53,49 @@ describe('WorkspaceIcon', () => {
     render(<WorkspaceIcon icon="X" name="Test" size={18} />)
     expect(screen.getByText('X')).toBeInTheDocument()
   })
+
+  // HostBadge passes name="" — a host badge has no text fallback, so the placeholder
+  // '?' must not flash while the Phosphor weight JSON is still loading.
+  describe('empty name', () => {
+    it('renders nothing when the icon is undefined', () => {
+      const { container } = render(<WorkspaceIcon icon={undefined} name="" size={18} />)
+      expect(container.textContent).toBe('')
+      expect(container.querySelector('span')).toBeInTheDocument()
+    })
+
+    it('renders nothing when the Phosphor path is not loaded yet', () => {
+      const { container } = render(<WorkspaceIcon icon="NonExistent" name="" size={18} />)
+      expect(container.textContent).toBe('')
+      expect(container.querySelector('span')).toBeInTheDocument()
+    })
+
+    it('treats a whitespace-only name as empty', () => {
+      const { container } = render(<WorkspaceIcon icon="NonExistent" name="   " size={18} />)
+      expect(container.textContent).toBe('')
+    })
+
+    it('keeps the wrapper className and font size so the layout does not shift', () => {
+      const { container } = render(
+        <WorkspaceIcon icon={undefined} name="" size={18} className="ws-icon" />
+      )
+      const span = container.querySelector('span')
+      expect(span).toHaveClass('ws-icon')
+      expect(span).toHaveStyle({ fontSize: '13.5px' })
+    })
+
+    it('still renders the SVG for a loadable icon', () => {
+      const { container } = render(<WorkspaceIcon icon="Rocket" name="" size={18} />)
+      expect(container.querySelector('svg path')?.getAttribute('d')).toBe('M0,0L10,10Z')
+    })
+
+    it('still renders an emoji icon as text', () => {
+      render(<WorkspaceIcon icon="🚀" name="" size={18} />)
+      expect(screen.getByText('🚀')).toBeInTheDocument()
+    })
+  })
+
+  it('still shows the first char when the name is non-empty and the path is missing', () => {
+    render(<WorkspaceIcon icon="NonExistent" name="Infra" size={18} />)
+    expect(screen.getByText('I')).toBeInTheDocument()
+  })
 })

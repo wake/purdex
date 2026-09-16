@@ -20,6 +20,14 @@ vi.mock('@dnd-kit/sortable', () => ({
   }),
 }))
 
+// The host badge renders a WorkspaceIcon, which only emits an <svg> once the
+// Phosphor weight JSON is cached (a fetch that never resolves in jsdom).
+vi.mock('../lib/icon-path-cache', () => ({
+  getIconPath: (name: string, weight: string) => `M ${name} ${weight}`,
+  isWeightLoaded: () => true,
+  prefetchWeight: () => Promise.resolve(),
+}))
+
 const { InlineTab } = await import('./InlineTab')
 
 const baseTab: Tab = {
@@ -51,8 +59,13 @@ beforeEach(() => {
     tabIndicatorStyle: 'badge',
     ccIconVariant: 'bot',
     codexIconVariant: 'openai',
-    hostColorSidebarStyle: 'gradient',
-    hostColorSidebarWidth: 2,
+    hostBadgeSidebarEnabled: true,
+    hostBadgeSidebarLineColor: 'host',
+    hostBadgeSidebarLineOpacity: 100,
+    hostBadgeSidebarBgOpacity: 22,
+    hostBadgeSidebarBox: 16,
+    hostBadgeSidebarInset: 2,
+    hostBadgeSidebarRadius: 4,
   })
   useSessionStore.setState({
     sessions: { h1: [{ code: 'S1', name: 'work' }] as never },
@@ -71,6 +84,11 @@ function setH1Color(color: string) {
   useHostStore.setState({ hosts: { h1: { ...h1, color } } })
 }
 
+function setH1Icon(icon: string) {
+  const h1 = useHostStore.getState().hosts.h1
+  useHostStore.setState({ hosts: { h1: { ...h1, icon } } })
+}
+
 function renderInline(tab: Tab = baseTab) {
   return render(
     <InlineTab
@@ -84,38 +102,94 @@ function renderInline(tab: Tab = baseTab) {
   )
 }
 
-describe('InlineTab — host color mark', () => {
-  it('renders one gradient mark as first child when host has a color', () => {
+function rowChildren(): Element[] {
+  return Array.from(screen.getByTestId('inline-tab-row').children)
+}
+
+describe('InlineTab — host badge', () => {
+  it('renders exactly one badge, between the icon slot and the title', () => {
     setH1Color('#3b82f6')
     renderInline()
-    const marks = screen.getAllByTestId('host-color-mark')
-    expect(marks).toHaveLength(1)
-    expect(marks[0]).toHaveAttribute('data-style', 'gradient')
-    expect(screen.getByTestId('inline-tab-row').firstElementChild).toBe(marks[0])
+    const badges = screen.getAllByTestId('host-badge')
+    expect(badges).toHaveLength(1)
+
+    const children = rowChildren()
+    const title = screen.getByTestId('inline-tab-title')
+    const badgeIdx = children.indexOf(badges[0])
+    const titleIdx = children.indexOf(title)
+    // Child 0 is the icon slot rendered by renderInlineTabIcon.
+    expect(badgeIdx).toBe(1)
+    expect(titleIdx).toBe(badgeIdx + 1)
+    expect(children[0].contains(badges[0])).toBe(false)
+    expect(
+      badges[0].compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 
-  it('renders no mark when host has no color', () => {
-    renderInline()
-    expect(screen.queryByTestId('host-color-mark')).toBeNull()
-  })
-
-  it("renders no mark when sidebar style is 'none'", () => {
+  it('renders the badge as a real flex child, not an overlay', () => {
     setH1Color('#3b82f6')
-    useUISettingsStore.setState({ hostColorSidebarStyle: 'none' })
     renderInline()
-    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+    const badge = screen.getByTestId('host-badge')
+    expect(badge.style.position).not.toBe('absolute')
+    expect(badge.style.display).toBe('inline-flex')
   })
 
-  it('reflects left-line width', () => {
+  it('keeps the title flex-1 + truncate and the unread pip absolute', () => {
     setH1Color('#3b82f6')
-    useUISettingsStore.setState({ hostColorSidebarStyle: 'left-line', hostColorSidebarWidth: 4 })
+    useAgentStore.setState({ unread: { 'h1:S1': true } })
     renderInline()
-    const mark = screen.getByTestId('host-color-mark')
-    expect(mark).toHaveAttribute('data-style', 'left-line')
-    expect(mark.style.width).toBe('4px')
+    const title = screen.getByTestId('inline-tab-title')
+    expect(title.className).toContain('flex-1')
+    expect(title.className).toContain('truncate')
+    expect(screen.getByTestId('inline-tab-unread').className).toContain('absolute')
   })
 
-  it('renders no mark for a tab without a tmux-session pane', () => {
+  it('keeps the offline and lock icons after the title', () => {
+    setH1Color('#3b82f6')
+    useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } } as never)
+    renderInline({ ...baseTab, locked: true } as never)
+    const children = rowChildren()
+    const titleIdx = children.indexOf(screen.getByTestId('inline-tab-title'))
+    expect(children.indexOf(screen.getByTestId('inline-tab-host-offline'))).toBeGreaterThan(titleIdx)
+    expect(children.indexOf(screen.getByTestId('inline-tab-lock'))).toBeGreaterThan(titleIdx)
+  })
+
+  it('still renders a neutral badge when the host has an icon but no color', () => {
+    setH1Icon('Laptop')
+    renderInline()
+    const badge = screen.getByTestId('host-badge')
+    expect(badge).toHaveAttribute('data-has-color', 'false')
+  })
+
+  it('renders the badge when the host has a color but no icon', () => {
+    setH1Color('#3b82f6')
+    renderInline()
+    expect(screen.getByTestId('host-badge')).toHaveAttribute('data-has-color', 'true')
+  })
+
+  it('renders the badge when the host has both a color and an icon', () => {
+    const h1 = useHostStore.getState().hosts.h1
+    useHostStore.setState({ hosts: { h1: { ...h1, color: '#3b82f6', icon: 'Laptop' } } })
+    renderInline()
+    expect(screen.getByTestId('host-badge')).toHaveAttribute('data-has-color', 'true')
+  })
+
+  it('renders no badge — and reserves no space — when the host has neither color nor icon', () => {
+    renderInline()
+    expect(screen.queryByTestId('host-badge')).toBeNull()
+    // The icon slot is immediately followed by the title: nothing sits in between.
+    const children = rowChildren()
+    expect(children.indexOf(screen.getByTestId('inline-tab-title'))).toBe(1)
+  })
+
+  it('renders no badge when the sidebar surface is disabled', () => {
+    setH1Color('#3b82f6')
+    useUISettingsStore.setState({ hostBadgeSidebarEnabled: false })
+    renderInline()
+    expect(screen.queryByTestId('host-badge')).toBeNull()
+  })
+
+  it('renders no badge for a tab without a tmux-session pane', () => {
     setH1Color('#3b82f6')
     const tab = {
       ...baseTab,
@@ -124,7 +198,35 @@ describe('InlineTab — host color mark', () => {
       layout: { type: 'leaf', pane: { id: 't2-pane', content: { kind: 'new-tab' } } },
     } as never
     renderInline(tab)
-    expect(screen.queryByTestId('host-color-mark')).toBeNull()
+    expect(screen.queryByTestId('host-badge')).toBeNull()
+  })
+
+  it('passes the sidebar store settings through to the badge', () => {
+    setH1Color('#3b82f6')
+    useUISettingsStore.setState({
+      hostBadgeSidebarBox: 20,
+      hostBadgeSidebarInset: 1,
+      hostBadgeSidebarRadius: 6,
+      hostBadgeSidebarBgOpacity: 40,
+    })
+    renderInline()
+    const badge = screen.getByTestId('host-badge')
+    expect(badge.style.width).toBe('20px')
+    expect(badge.style.height).toBe('20px')
+    expect(badge.style.borderRadius).toBe('6px')
+    expect(badge.style.background).toContain('40%')
+    // icon size = box − 2×inset
+    expect(badge.querySelector('svg')).toHaveAttribute('width', '18')
+  })
+
+  it("uses the host's own icon and weight", () => {
+    const h1 = useHostStore.getState().hosts.h1
+    useHostStore.setState({
+      hosts: { h1: { ...h1, color: '#3b82f6', icon: 'Laptop', iconWeight: 'duotone' } },
+    })
+    renderInline()
+    const path = screen.getByTestId('host-badge').querySelector('path')
+    expect(path).toHaveAttribute('d', 'M Laptop duotone')
   })
 })
 

@@ -7,8 +7,9 @@ import { TabIcon } from './TabIcon'
 import { HoverTooltip } from './HoverTooltip'
 import { shouldShowGlobalUnreadPip } from './tab-icon-helpers'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
-import { HostColorMark } from './HostColorMark'
-import { useTabHostColor } from '../hooks/useTabHostColor'
+import { HostBadge } from './HostBadge'
+import { useTabHostBadge } from '../hooks/useTabHostBadge'
+import { hasHostBadge } from '../lib/host-color'
 
 interface Props {
   tab: Tab
@@ -39,9 +40,14 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
 
   const t = useI18nStore((s) => s.t)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
-  const hostColorStyle = useUISettingsStore((s) => s.hostColorTabBarStyle)
-  const hostColorWidth = useUISettingsStore((s) => s.hostColorTabBarWidth)
-  const hostColor = useTabHostColor(tab)
+  const badgeEnabled = useUISettingsStore((s) => s.hostBadgeTabBarEnabled)
+  const badgeLineColor = useUISettingsStore((s) => s.hostBadgeTabBarLineColor)
+  const badgeLineOpacity = useUISettingsStore((s) => s.hostBadgeTabBarLineOpacity)
+  const badgeBgOpacity = useUISettingsStore((s) => s.hostBadgeTabBarBgOpacity)
+  const badgeBox = useUISettingsStore((s) => s.hostBadgeTabBarBox)
+  const badgeInset = useUISettingsStore((s) => s.hostBadgeTabBarInset)
+  const badgeRadius = useUISettingsStore((s) => s.hostBadgeTabBarRadius)
+  const hostBadge = useTabHostBadge(tab)
   const {
     displayTitle: label,
     IconComponent,
@@ -103,8 +109,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
             style={{ backgroundColor: '#ef4444' }} />
         )}
+        {/* Pinned tabs are icon-only inside a 36px (w-9) box — no room for a badge. */}
         {showTooltip && <HoverTooltip placement="top">{label}</HoverTooltip>}
-        <HostColorMark color={hostColor} style={hostColorStyle} width={hostColorWidth} zIndex={1} />
       </button>
     )
   }
@@ -139,6 +145,19 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       }`}
     >
       <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
+      {badgeEnabled && hasHostBadge(hostBadge) && (
+        <HostBadge
+          color={hostBadge.color}
+          icon={hostBadge.icon}
+          iconWeight={hostBadge.iconWeight}
+          box={badgeBox}
+          inset={badgeInset}
+          radius={badgeRadius}
+          lineColor={badgeLineColor}
+          lineOpacity={badgeLineOpacity}
+          bgOpacity={badgeBgOpacity}
+        />
+      )}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       {showTooltip && <HoverTooltip placement="top">{label}</HoverTooltip>}
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
@@ -170,7 +189,6 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           </button>
         </span>
       )}
-      <HostColorMark color={hostColor} style={hostColorStyle} width={hostColorWidth} zIndex={1} />
     </div>
   )
 }

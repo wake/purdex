@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import {
   HOST_COLOR_PRESETS,
+  DEFAULT_HOST_ICON,
+  hasHostBadge,
   isValidHostColor,
+  isIconWeight,
+  isPhosphorIconName,
   normalizeHostColor,
   getTabHostId,
   resolveTabHostColor,
-  sanitizeHostConfigColor,
+  sanitizeHostConfig,
 } from './host-color'
 import type { PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
@@ -135,26 +139,166 @@ describe('resolveTabHostColor', () => {
   })
 })
 
-describe('sanitizeHostConfigColor', () => {
+describe('DEFAULT_HOST_ICON', () => {
+  it('is the Desktop Phosphor icon', () => {
+    expect(DEFAULT_HOST_ICON).toBe('Desktop')
+  })
+
+  it('is itself a real catalog name — the fallback can never render as text', () => {
+    expect(isPhosphorIconName(DEFAULT_HOST_ICON)).toBe(true)
+  })
+})
+
+describe('isPhosphorIconName', () => {
+  it.each(['Desktop', 'Laptop', 'Cloud', 'Rocket'])('accepts the catalog name %j', (name) => {
+    expect(isPhosphorIconName(name)).toBe(true)
+  })
+
+  it.each([
+    // well-shaped but not in the catalog — the shape guard alone is not enough
+    'NotARealPhosphorIcon',
+    'Zzz',
+    // wrong case
+    'laptop',
+    'LAPTOP',
+    'desktop',
+    // padded: rejected outright, never trimmed-then-accepted
+    ' Laptop ',
+    'Laptop ',
+    ' Laptop',
+    // blank
+    '',
+    '   ',
+    // punctuation / injection shapes
+    'Laptop; background:url(x)',
+    'Laptop<script>',
+    'Laptop-Extra',
+    'Laptop.Extra',
+    '../../etc/passwd',
+  ])('rejects %j', (bad) => {
+    expect(isPhosphorIconName(bad)).toBe(false)
+  })
+
+  it('rejects an overlong string without scanning the catalog', () => {
+    expect(isPhosphorIconName('a'.repeat(200))).toBe(false)
+    expect(isPhosphorIconName('A'.repeat(200))).toBe(false)
+  })
+
+  it.each([42, null, undefined, {}, ['Laptop'], true])('rejects the non-string %j', (bad) => {
+    expect(isPhosphorIconName(bad)).toBe(false)
+  })
+})
+
+describe('isIconWeight', () => {
+  it.each(['bold', 'regular', 'thin', 'light', 'fill', 'duotone'])('accepts %s', (w) => {
+    expect(isIconWeight(w)).toBe(true)
+  })
+
+  it.each(['evil', '', 'Regular', 'REGULAR', 42, null, undefined, {}, ['bold']])(
+    'rejects %j',
+    (bad) => {
+      expect(isIconWeight(bad)).toBe(false)
+    },
+  )
+})
+
+describe('hasHostBadge', () => {
+  it('is false for a tab that resolves no host', () => {
+    expect(hasHostBadge(null)).toBe(false)
+  })
+
+  it('is false when the host set neither a color nor an icon', () => {
+    expect(hasHostBadge({ color: null, icon: undefined, iconWeight: undefined })).toBe(false)
+  })
+
+  it('is true when the host set a color only', () => {
+    expect(hasHostBadge({ color: '#3b82f6', icon: undefined, iconWeight: undefined })).toBe(true)
+  })
+
+  it('is true when the host set an icon only', () => {
+    expect(hasHostBadge({ color: null, icon: 'Laptop', iconWeight: undefined })).toBe(true)
+  })
+
+  it('is true when the host set both', () => {
+    expect(hasHostBadge({ color: '#3b82f6', icon: 'Laptop', iconWeight: 'duotone' })).toBe(true)
+  })
+
+  it('ignores a weight on its own — a weight is not something to show', () => {
+    expect(hasHostBadge({ color: null, icon: undefined, iconWeight: 'duotone' })).toBe(false)
+  })
+})
+
+describe('sanitizeHostConfig', () => {
   const base: HostConfig = { id: 'h1', name: 'H', ip: '1.2.3.4', port: 7860, order: 0 }
 
   it.each(['url(x)', '#abc', 'red', '', {}, 42, null])('removes invalid color %j', (bad) => {
-    const out = sanitizeHostConfigColor({ ...base, token: 'T', color: bad as never })
+    const out = sanitizeHostConfig({ ...base, token: 'T', color: bad as never })
     expect('color' in out).toBe(false)
     expect(out).toEqual({ ...base, token: 'T' })
   })
 
   it('returns the same object when color is valid', () => {
     const h = { ...base, color: '#3b82f6' }
-    expect(sanitizeHostConfigColor(h)).toBe(h)
+    expect(sanitizeHostConfig(h)).toBe(h)
   })
 
   it('returns the same object when color key is absent', () => {
-    expect(sanitizeHostConfigColor(base)).toBe(base)
+    expect(sanitizeHostConfig(base)).toBe(base)
   })
 
   it('removes an explicit undefined color key', () => {
-    const out = sanitizeHostConfigColor({ ...base, color: undefined })
+    const out = sanitizeHostConfig({ ...base, color: undefined })
     expect('color' in out).toBe(false)
+  })
+
+  it('keeps a valid icon and iconWeight (same object reference)', () => {
+    const h: HostConfig = { ...base, color: '#3b82f6', icon: 'Laptop', iconWeight: 'duotone' }
+    expect(sanitizeHostConfig(h)).toBe(h)
+  })
+
+  it.each([
+    42,
+    '',
+    '   ',
+    {},
+    null,
+    true,
+    // hostile / corrupted values that the old "any non-empty string" check let through
+    'a'.repeat(200),
+    'laptop',
+    ' Laptop ',
+    'NotARealPhosphorIcon',
+    'Laptop; background:url(x)',
+  ])('removes invalid icon %j', (bad) => {
+    const out = sanitizeHostConfig({ ...base, icon: bad as never, iconWeight: 'bold' })
+    expect('icon' in out).toBe(false)
+    expect(out.iconWeight).toBe('bold')
+  })
+
+  it('removes an explicit undefined icon key', () => {
+    const out = sanitizeHostConfig({ ...base, icon: undefined })
+    expect('icon' in out).toBe(false)
+  })
+
+  it.each(['evil', '', 42, null, 'Regular'])('removes invalid iconWeight %j', (bad) => {
+    const out = sanitizeHostConfig({ ...base, icon: 'Laptop', iconWeight: bad as never })
+    expect('iconWeight' in out).toBe(false)
+    expect(out.icon).toBe('Laptop')
+  })
+
+  it('drops an invalid color while keeping a valid icon', () => {
+    const out = sanitizeHostConfig({ ...base, color: 'red' as never, icon: 'Laptop' })
+    expect('color' in out).toBe(false)
+    expect(out.icon).toBe('Laptop')
+  })
+
+  it('drops icon, iconWeight and color together when all are invalid', () => {
+    const out = sanitizeHostConfig({
+      ...base,
+      color: 'red' as never,
+      icon: 42 as never,
+      iconWeight: 'evil' as never,
+    })
+    expect(out).toEqual(base)
   })
 })

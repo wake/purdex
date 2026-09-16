@@ -280,6 +280,57 @@ describe('createHostsContributor', () => {
     expect(s.hosts.a.token).toBe('TOK') // same endpoint → token preserved
     expect('color' in s.hosts.b).toBe(false)
   })
+
+  // -------------------------------------------------------------------------
+  // icon / iconWeight round-trip
+  // -------------------------------------------------------------------------
+
+  function seedIconHosts() {
+    useHostStore.setState({
+      hosts: {
+        a: {
+          id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, token: 'TOK', order: 0,
+          icon: 'Laptop', iconWeight: 'duotone',
+        },
+        b: { id: 'b', name: 'b', ip: '10.0.0.2', port: 7860, order: 1 },
+      },
+      hostOrder: ['a', 'b'],
+      activeHostId: 'a',
+    })
+  }
+
+  it('icon/iconWeight survive serialize → deserialize (full-replace)', () => {
+    seedIconHosts()
+    const payload = JSON.parse(JSON.stringify(contributor.serialize())) as FullPayload
+    const serialized = (payload.data.hosts as Record<string, Record<string, unknown>>).a
+    expect(serialized.icon).toBe('Laptop')
+    expect(serialized.iconWeight).toBe('duotone')
+
+    resetStore()
+    contributor.deserialize(payload, { type: 'full-replace' })
+
+    const s = useHostStore.getState()
+    expect(s.hosts.a.icon).toBe('Laptop')
+    expect(s.hosts.a.iconWeight).toBe('duotone')
+    expect('icon' in s.hosts.b).toBe(false)
+    expect('iconWeight' in s.hosts.b).toBe(false)
+  })
+
+  it('icon/iconWeight survive serialize → deserialize (field-merge, hosts=remote) with token contract intact', () => {
+    seedIconHosts()
+    const payload = JSON.parse(JSON.stringify(contributor.serialize())) as FullPayload
+
+    contributor.deserialize(payload, {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'local' },
+    })
+
+    const s = useHostStore.getState()
+    expect(s.hosts.a.icon).toBe('Laptop')
+    expect(s.hosts.a.iconWeight).toBe('duotone')
+    expect(s.hosts.a.token).toBe('TOK') // same endpoint → token preserved
+    expect('icon' in s.hosts.b).toBe(false)
+  })
 })
 
 describe('hostsContributor.deserialize (full-replace, token preservation)', () => {
@@ -467,5 +518,101 @@ describe('hostsContributor.deserialize (hostile color payloads)', () => {
     const out = createHostsContributor().serialize() as FullPayload
     const hosts = (out.data as { hosts: Record<string, object> }).hosts
     expect('color' in hosts.a).toBe(false)
+  })
+})
+
+describe('hostsContributor.deserialize (hostile icon payloads)', () => {
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: {
+        a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, token: 'TOK', order: 0 },
+      },
+      hostOrder: ['a'],
+      activeHostId: 'a',
+    })
+  })
+
+  function iconPayload(icon: unknown, iconWeight: unknown): FullPayload {
+    return {
+      version: 1,
+      data: {
+        hosts: {
+          a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, order: 0, icon, iconWeight },
+          b: {
+            id: 'b', name: 'b', ip: '10.0.0.2', port: 7860, order: 1,
+            icon: 'Laptop', iconWeight: 'fill',
+          },
+        },
+        hostOrder: ['a', 'b'],
+        activeHostId: 'a',
+      },
+    }
+  }
+
+  it('full-replace strips a hostile icon/iconWeight, keeps the valid pair and the token contract', () => {
+    createHostsContributor().deserialize(iconPayload(42, 'evil'), { type: 'full-replace' })
+    const s = useHostStore.getState()
+    expect('icon' in s.hosts.a).toBe(false)
+    expect('iconWeight' in s.hosts.a).toBe(false)
+    expect(s.hosts.b.icon).toBe('Laptop')
+    expect(s.hosts.b.iconWeight).toBe('fill')
+    expect(s.hosts.a.token).toBe('TOK')
+    expect(s.hosts.b.token).toBeNull()
+  })
+
+  it('field-merge strips a hostile icon/iconWeight, keeps the valid pair and the token contract', () => {
+    createHostsContributor().deserialize(iconPayload(42, 'evil'), {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'remote' },
+    })
+    const s = useHostStore.getState()
+    expect('icon' in s.hosts.a).toBe(false)
+    expect('iconWeight' in s.hosts.a).toBe(false)
+    expect(s.hosts.b.icon).toBe('Laptop')
+    expect(s.hosts.b.iconWeight).toBe('fill')
+    expect(s.hosts.a.token).toBe('TOK')
+    expect(s.hosts.b.token).toBeNull()
+  })
+
+  it('an empty icon string is stripped in both merge modes', () => {
+    createHostsContributor().deserialize(iconPayload('', 'bold'), { type: 'full-replace' })
+    expect('icon' in useHostStore.getState().hosts.a).toBe(false)
+    expect(useHostStore.getState().hosts.a.iconWeight).toBe('bold')
+  })
+
+  it.each([
+    ['an overlong string', 'a'.repeat(4096)],
+    ['a lowercase name', 'laptop'],
+    ['a padded name', ' Laptop '],
+    ['an unknown but well-shaped name', 'NotARealPhosphorIcon'],
+    ['an injection-shaped name', 'Laptop; background:url(x)'],
+  ])('strips %s icon in both merge modes', (_label, hostile) => {
+    createHostsContributor().deserialize(iconPayload(hostile, 'bold'), { type: 'full-replace' })
+    const afterFull = useHostStore.getState()
+    expect('icon' in afterFull.hosts.a).toBe(false)
+    expect(afterFull.hosts.a.iconWeight).toBe('bold')
+    expect(afterFull.hosts.b.icon).toBe('Laptop')
+
+    useHostStore.setState({
+      hosts: { a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, token: 'TOK', order: 0 } },
+      hostOrder: ['a'],
+      activeHostId: 'a',
+    })
+    createHostsContributor().deserialize(iconPayload(hostile, 'bold'), {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'remote' },
+    })
+    const afterMerge = useHostStore.getState()
+    expect('icon' in afterMerge.hosts.a).toBe(false)
+    expect(afterMerge.hosts.a.iconWeight).toBe('bold')
+    expect(afterMerge.hosts.b.icon).toBe('Laptop')
+  })
+
+  it('a hostile icon is not re-serialized', () => {
+    createHostsContributor().deserialize(iconPayload(42, 'evil'), { type: 'full-replace' })
+    const out = createHostsContributor().serialize() as FullPayload
+    const hosts = (out.data as { hosts: Record<string, object> }).hosts
+    expect('icon' in hosts.a).toBe(false)
+    expect('iconWeight' in hosts.a).toBe(false)
   })
 })

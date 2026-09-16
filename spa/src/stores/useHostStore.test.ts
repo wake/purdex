@@ -97,6 +97,98 @@ describe('useHostStore', () => {
     expect(useHostStore.getState().hosts.nope).toBeUndefined()
   })
 
+  it('setHostIcon stores an icon name', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostIcon(id, 'Laptop')
+    const host = useHostStore.getState().hosts[id]
+    expect(host.icon).toBe('Laptop')
+    expect('iconWeight' in host).toBe(false)
+  })
+
+  it('setHostIcon stores an icon name with a weight', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostIcon(id, 'Laptop', 'duotone')
+    const host = useHostStore.getState().hosts[id]
+    expect(host.icon).toBe('Laptop')
+    expect(host.iconWeight).toBe('duotone')
+  })
+
+  it('setHostIcon ignores an invalid weight but still stores the icon', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostIcon(id, 'Laptop', 'evil' as never)
+    const host = useHostStore.getState().hosts[id]
+    expect(host.icon).toBe('Laptop')
+    expect('iconWeight' in host).toBe(false)
+  })
+
+  it('setHostIcon(null) removes both the icon and iconWeight keys', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
+    useHostStore.getState().setHostIcon(id, null)
+    const host = useHostStore.getState().hosts[id]
+    expect('icon' in host).toBe(false)
+    expect('iconWeight' in host).toBe(false)
+    expect(host.name).toBe('mlab')
+  })
+
+  it.each(['', '   '])('setHostIcon(%j) is treated as null', (blank) => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
+    useHostStore.getState().setHostIcon(id, blank)
+    const host = useHostStore.getState().hosts[id]
+    expect('icon' in host).toBe(false)
+    expect('iconWeight' in host).toBe(false)
+  })
+
+  it.each([
+    'a'.repeat(200),
+    'laptop',
+    ' Laptop ',
+    'NotARealPhosphorIcon',
+    'Laptop; background:url(x)',
+  ])('setHostIcon(%j) is rejected and stores nothing', (bad) => {
+    const id = useHostStore.getState().activeHostId!
+    const before = useHostStore.getState().hosts
+    useHostStore.getState().setHostIcon(id, bad, 'fill')
+    expect(useHostStore.getState().hosts).toBe(before)
+    expect('icon' in useHostStore.getState().hosts[id]).toBe(false)
+    expect('iconWeight' in useHostStore.getState().hosts[id]).toBe(false)
+  })
+
+  it('setHostIcon with a non-Phosphor name leaves an existing icon untouched', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
+    useHostStore.getState().setHostIcon(id, 'NotARealPhosphorIcon', 'bold')
+    const host = useHostStore.getState().hosts[id]
+    expect(host.icon).toBe('Laptop')
+    expect(host.iconWeight).toBe('fill')
+  })
+
+  it('setHostIcon on an unknown host is a no-op', () => {
+    const before = useHostStore.getState().hosts
+    useHostStore.getState().setHostIcon('nope', 'Laptop')
+    expect(useHostStore.getState().hosts).toBe(before)
+    expect(useHostStore.getState().hosts.nope).toBeUndefined()
+  })
+
+  it('setHostIcon leaves the host color untouched', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostColor(id, '#3b82f6')
+    useHostStore.getState().setHostIcon(id, 'Laptop', 'bold')
+    const host = useHostStore.getState().hosts[id]
+    expect(host.color).toBe('#3b82f6')
+    expect(host.icon).toBe('Laptop')
+  })
+
+  it('setHostIcon replacing an icon without a weight keeps the previous weight', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
+    useHostStore.getState().setHostIcon(id, 'Desktop')
+    const host = useHostStore.getState().hosts[id]
+    expect(host.icon).toBe('Desktop')
+    expect(host.iconWeight).toBe('fill')
+  })
+
   it('updateHost leaves an existing color untouched', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostColor(id, '#ec4899')

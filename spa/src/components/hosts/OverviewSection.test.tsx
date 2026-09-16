@@ -3,6 +3,14 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { OverviewSection } from './OverviewSection'
 import { useHostStore } from '../../stores/useHostStore'
 
+// HostIconField renders a Phosphor icon whose weight loader fetches
+// /icons/<weight>.json — that would consume this suite's fetch mocks.
+vi.mock('../../features/workspace/lib/icon-path-cache', () => ({
+  getIconPath: () => 'M0,0L10,10',
+  isWeightLoaded: () => true,
+  prefetchWeight: () => Promise.resolve(),
+}))
+
 // Mock the host-api module
 vi.mock('../../lib/host-api', () => ({
   hostFetch: vi.fn(),
@@ -58,6 +66,13 @@ describe('OverviewSection', () => {
   it('renders host name heading', async () => {
     render(<OverviewSection hostId={HOST_ID} />)
     expect(screen.getByRole('heading', { level: 2, name: 'Test' })).toBeInTheDocument()
+  })
+
+  it('renders the host icon field right below the host color field', async () => {
+    render(<OverviewSection hostId={HOST_ID} />)
+    const color = screen.getByTestId('host-color-hex')
+    const icon = screen.getByTestId('host-icon-preview')
+    expect(color.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('shows connection, daemon config, system info sections', async () => {

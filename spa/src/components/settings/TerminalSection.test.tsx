@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TerminalSection } from './TerminalSection'
-import { useUISettingsStore } from '../../stores/useUISettingsStore'
+import { useUISettingsStore, HOST_BADGE_DEFAULTS } from '../../stores/useUISettingsStore'
 
 describe('TerminalSection', () => {
   beforeEach(() => {
@@ -172,52 +172,82 @@ describe('TerminalSection', () => {
     expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(true)
   })
 
-  describe('host color mark settings', () => {
-    // Option order in each SegmentControl: gradient, left-line, bottom-line, none
-    const STYLE_ORDER = ['gradient', 'left-line', 'bottom-line', 'none'] as const
+  describe('host badge settings', () => {
     const SURFACES = [
-      { name: 'sidebar', styleKey: 'hostColorSidebarStyle', widthKey: 'hostColorSidebarWidth' },
-      { name: 'tabbar', styleKey: 'hostColorTabBarStyle', widthKey: 'hostColorTabBarWidth' },
+      { testId: 'host-badge-sidebar', store: 'Sidebar', other: 'TabBar' },
+      { testId: 'host-badge-tabbar', store: 'TabBar', other: 'Sidebar' },
     ] as const
 
     beforeEach(() => {
-      useUISettingsStore.setState({
-        hostColorSidebarStyle: 'gradient',
-        hostColorSidebarWidth: 2,
-        hostColorTabBarStyle: 'bottom-line',
-        hostColorTabBarWidth: 2,
-      })
+      useUISettingsStore.setState({ ...HOST_BADGE_DEFAULTS })
     })
 
-    function styleButtons(surface: string) {
-      return within(screen.getByTestId(`host-color-${surface}-style`)).getAllByRole('button')
+    function toggle(prefix: string) {
+      return within(screen.getByTestId(`${prefix}-enabled`)).getByRole('switch')
     }
 
-    it('renders both setting rows after the tab indicator row', () => {
+    function lineColorButtons(prefix: string) {
+      return within(screen.getByTestId(`${prefix}-line-color`)).getAllByRole('button')
+    }
+
+    it('renders both badge rows after the tab indicator row and before the dynamic tab name row', () => {
       render(<TerminalSection />)
-      const sidebar = screen.getByTestId('host-color-sidebar-style')
-      const tabbar = screen.getByTestId('host-color-tabbar-style')
-      expect(styleButtons('sidebar')).toHaveLength(4)
-      expect(styleButtons('tabbar')).toHaveLength(4)
-      expect(sidebar.compareDocumentPosition(tabbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      const sidebar = screen.getByTestId('host-badge-sidebar-enabled')
+      const tabbar = screen.getByTestId('host-badge-tabbar-enabled')
+      const indicator = screen.getByText('Dot beside icon')
       const dynamic = screen.getByLabelText('Dynamic tab name')
+      expect(indicator.compareDocumentPosition(sidebar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(sidebar.compareDocumentPosition(tabbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       expect(tabbar.compareDocumentPosition(dynamic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      for (const surface of SURFACES) {
+        expect(lineColorButtons(surface.testId)).toHaveLength(2)
+        for (const id of ['line-opacity', 'bg-opacity', 'box', 'inset', 'radius']) {
+          expect(screen.getByTestId(`${surface.testId}-${id}`)).toBeTruthy()
+        }
+      }
     })
 
-    // Focused behaviour (width visibility, clamping) lives in HostColorMarkSetting.test.tsx;
-    // here we only verify each row is wired to the right store fields.
     for (const surface of SURFACES) {
-      it(`${surface.name}: writes style and width to its own store fields`, () => {
-        const otherStyleKey = surface.name === 'sidebar' ? 'hostColorTabBarStyle' : 'hostColorSidebarStyle'
-        const otherWidthKey = surface.name === 'sidebar' ? 'hostColorTabBarWidth' : 'hostColorSidebarWidth'
-        useUISettingsStore.setState({ [surface.styleKey]: 'none', [otherStyleKey]: 'none' })
+      it(`${surface.testId}: each control writes only its own store fields`, () => {
         render(<TerminalSection />)
-        fireEvent.click(styleButtons(surface.name)[STYLE_ORDER.indexOf('left-line')])
-        expect(useUISettingsStore.getState()[surface.styleKey]).toBe('left-line')
-        expect(useUISettingsStore.getState()[otherStyleKey]).toBe('none')
-        fireEvent.change(screen.getByTestId(`host-color-${surface.name}-width`), { target: { value: '5' } })
-        expect(useUISettingsStore.getState()[surface.widthKey]).toBe(5)
-        expect(useUISettingsStore.getState()[otherWidthKey]).toBe(2)
+        const s = () => useUISettingsStore.getState()
+
+        fireEvent.click(lineColorButtons(surface.testId)[1])
+        expect(s()[`hostBadge${surface.store}LineColor`]).toBe('neutral')
+        expect(s()[`hostBadge${surface.other}LineColor`]).toBe('host')
+
+        fireEvent.change(screen.getByTestId(`${surface.testId}-line-opacity`), { target: { value: '60' } })
+        expect(s()[`hostBadge${surface.store}LineOpacity`]).toBe(60)
+        expect(s()[`hostBadge${surface.other}LineOpacity`]).toBe(100)
+
+        fireEvent.change(screen.getByTestId(`${surface.testId}-bg-opacity`), { target: { value: '40' } })
+        expect(s()[`hostBadge${surface.store}BgOpacity`]).toBe(40)
+        expect(s()[`hostBadge${surface.other}BgOpacity`]).toBe(22)
+
+        fireEvent.change(screen.getByTestId(`${surface.testId}-box`), { target: { value: '99' } })
+        expect(s()[`hostBadge${surface.store}Box`]).toBe(24)
+        expect(s()[`hostBadge${surface.other}Box`]).toBe(16)
+
+        fireEvent.change(screen.getByTestId(`${surface.testId}-inset`), { target: { value: '4' } })
+        expect(s()[`hostBadge${surface.store}Inset`]).toBe(4)
+        expect(s()[`hostBadge${surface.other}Inset`]).toBe(2)
+
+        fireEvent.change(screen.getByTestId(`${surface.testId}-radius`), { target: { value: '7' } })
+        expect(s()[`hostBadge${surface.store}Radius`]).toBe(7)
+        expect(s()[`hostBadge${surface.other}Radius`]).toBe(4)
+
+        fireEvent.click(toggle(surface.testId))
+        expect(s()[`hostBadge${surface.store}Enabled`]).toBe(false)
+        expect(s()[`hostBadge${surface.other}Enabled`]).toBe(true)
+      })
+
+      it(`${surface.testId}: controls are disabled while the surface is off`, () => {
+        useUISettingsStore.setState({ [`hostBadge${surface.store}Enabled`]: false })
+        render(<TerminalSection />)
+        expect(screen.getByTestId(`${surface.testId}-box`)).toBeDisabled()
+        expect(screen.getByTestId(`${surface.testId}-line-color`)).toHaveAttribute('inert')
+        // The other surface stays interactive.
+        expect(screen.getByTestId(`host-badge-${surface.other === 'Sidebar' ? 'sidebar' : 'tabbar'}-box`)).not.toBeDisabled()
       })
     }
   })

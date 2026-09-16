@@ -233,25 +233,45 @@ describe('createPreferencesContributor', () => {
   })
 
   // -------------------------------------------------------------------------
-  // host color mark fields
+  // host badge fields
   // -------------------------------------------------------------------------
 
-  describe('host color mark fields', () => {
-    const HOST_COLOR_FIELDS = [
-      'hostColorSidebarStyle',
-      'hostColorSidebarWidth',
-      'hostColorTabBarStyle',
-      'hostColorTabBarWidth',
+  describe('host badge fields', () => {
+    const HOST_BADGE_FIELDS = [
+      'hostBadgeSidebarEnabled',
+      'hostBadgeSidebarLineColor',
+      'hostBadgeSidebarLineOpacity',
+      'hostBadgeSidebarBgOpacity',
+      'hostBadgeSidebarBox',
+      'hostBadgeSidebarInset',
+      'hostBadgeSidebarRadius',
+      'hostBadgeTabBarEnabled',
+      'hostBadgeTabBarLineColor',
+      'hostBadgeTabBarLineOpacity',
+      'hostBadgeTabBarBgOpacity',
+      'hostBadgeTabBarBox',
+      'hostBadgeTabBarInset',
+      'hostBadgeTabBarRadius',
     ] as const
 
     const LOCAL = {
-      hostColorSidebarStyle: 'left-line' as const,
-      hostColorSidebarWidth: 3,
-      hostColorTabBarStyle: 'gradient' as const,
-      hostColorTabBarWidth: 4,
+      hostBadgeSidebarEnabled: true,
+      hostBadgeSidebarLineColor: 'host' as const,
+      hostBadgeSidebarLineOpacity: 100,
+      hostBadgeSidebarBgOpacity: 22,
+      hostBadgeSidebarBox: 16,
+      hostBadgeSidebarInset: 2,
+      hostBadgeSidebarRadius: 4,
+      hostBadgeTabBarEnabled: true,
+      hostBadgeTabBarLineColor: 'host' as const,
+      hostBadgeTabBarLineOpacity: 100,
+      hostBadgeTabBarBgOpacity: 22,
+      hostBadgeTabBarBox: 16,
+      hostBadgeTabBarInset: 2,
+      hostBadgeTabBarRadius: 4,
     }
 
-    const allRemote = Object.fromEntries(HOST_COLOR_FIELDS.map((f) => [f, 'remote' as const]))
+    const allRemote = Object.fromEntries(HOST_BADGE_FIELDS.map((f) => [f, 'remote' as const]))
 
     const merges = [
       { name: 'full-replace', merge: { type: 'full-replace' as const } },
@@ -262,13 +282,14 @@ describe('createPreferencesContributor', () => {
       useUISettingsStore.setState(LOCAL)
     })
 
-    it('serialize includes the four host color fields', () => {
+    it('serialize includes all 14 host badge fields', () => {
       const payload = contributor.serialize() as FullPayload
-      for (const f of HOST_COLOR_FIELDS) {
-        expect(Object.keys(payload.data)).toContain(f)
+      const keys = Object.keys(payload.data)
+      for (const f of HOST_BADGE_FIELDS) {
+        expect(keys).toContain(f)
       }
-      expect(payload.data.hostColorSidebarStyle).toBe('left-line')
-      expect(payload.data.hostColorTabBarWidth).toBe(4)
+      expect(payload.data.hostBadgeSidebarBox).toBe(16)
+      expect(payload.data.hostBadgeTabBarLineColor).toBe('host')
     })
 
     for (const { name, merge } of merges) {
@@ -277,52 +298,63 @@ describe('createPreferencesContributor', () => {
           {
             version: 1,
             data: {
-              hostColorSidebarStyle: 'none',
-              hostColorSidebarWidth: 5,
-              hostColorTabBarStyle: 'left-line',
-              hostColorTabBarWidth: 1,
+              hostBadgeSidebarEnabled: false,
+              hostBadgeSidebarLineColor: 'neutral',
+              hostBadgeSidebarLineOpacity: 60,
+              hostBadgeSidebarBgOpacity: 10,
+              hostBadgeSidebarBox: 20,
+              hostBadgeSidebarInset: 1,
+              hostBadgeSidebarRadius: 8,
+              hostBadgeTabBarEnabled: false,
+              hostBadgeTabBarLineColor: 'neutral',
+              hostBadgeTabBarBox: 12,
             },
           },
           merge,
         )
         const s = useUISettingsStore.getState()
-        expect(s.hostColorSidebarStyle).toBe('none')
-        expect(s.hostColorSidebarWidth).toBe(5)
-        expect(s.hostColorTabBarStyle).toBe('left-line')
-        expect(s.hostColorTabBarWidth).toBe(1)
+        expect(s.hostBadgeSidebarEnabled).toBe(false)
+        expect(s.hostBadgeSidebarLineColor).toBe('neutral')
+        expect(s.hostBadgeSidebarLineOpacity).toBe(60)
+        expect(s.hostBadgeSidebarBgOpacity).toBe(10)
+        expect(s.hostBadgeSidebarBox).toBe(20)
+        expect(s.hostBadgeSidebarInset).toBe(1)
+        expect(s.hostBadgeSidebarRadius).toBe(8)
+        expect(s.hostBadgeTabBarEnabled).toBe(false)
+        expect(s.hostBadgeTabBarLineColor).toBe('neutral')
+        expect(s.hostBadgeTabBarBox).toBe(12)
       })
 
-      it(`${name}: hostile style 'evil' and width '9' are dropped, width 99 clamped to 6`, () => {
+      it(`${name}: hostile values are dropped and out-of-range numbers clamped`, () => {
         contributor.deserialize(
           {
             version: 1,
             data: {
-              hostColorSidebarStyle: 'evil',
-              hostColorSidebarWidth: '9',
-              hostColorTabBarStyle: 'evil',
-              hostColorTabBarWidth: 99,
+              hostBadgeSidebarEnabled: 'yes',
+              hostBadgeSidebarLineColor: 'evil',
+              hostBadgeSidebarLineOpacity: '60',
+              hostBadgeSidebarBgOpacity: Infinity,
+              hostBadgeSidebarBox: 999,
+              hostBadgeSidebarInset: -4,
+              hostBadgeSidebarRadius: NaN,
+              hostBadgeTabBarLineColor: 42,
+              hostBadgeTabBarBox: 1,
             },
           },
           merge,
         )
         const s = useUISettingsStore.getState()
-        expect(s.hostColorSidebarStyle).toBe('left-line')
-        expect(s.hostColorSidebarWidth).toBe(3)
-        expect(s.hostColorTabBarStyle).toBe('gradient')
-        expect(s.hostColorTabBarWidth).toBe(6)
-      })
-
-      it(`${name}: width Infinity is dropped`, () => {
-        contributor.deserialize(
-          {
-            version: 1,
-            data: { hostColorSidebarWidth: Infinity, hostColorTabBarWidth: Infinity },
-          },
-          merge,
-        )
-        const s = useUISettingsStore.getState()
-        expect(s.hostColorSidebarWidth).toBe(3)
-        expect(s.hostColorTabBarWidth).toBe(4)
+        // dropped → local value kept
+        expect(s.hostBadgeSidebarEnabled).toBe(true)
+        expect(s.hostBadgeSidebarLineColor).toBe('host')
+        expect(s.hostBadgeSidebarLineOpacity).toBe(100)
+        expect(s.hostBadgeSidebarBgOpacity).toBe(22)
+        expect(s.hostBadgeSidebarRadius).toBe(4)
+        expect(s.hostBadgeTabBarLineColor).toBe('host')
+        // clamped
+        expect(s.hostBadgeSidebarBox).toBe(24)
+        expect(s.hostBadgeSidebarInset).toBe(0)
+        expect(s.hostBadgeTabBarBox).toBe(12)
       })
     }
   })

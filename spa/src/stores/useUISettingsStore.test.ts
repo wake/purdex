@@ -4,11 +4,29 @@ import {
   KEEPALIVE_MAX_WEBGL,
   KEEPALIVE_MAX_DOM,
   clampKeepAlive,
-  HOST_COLOR_LINE_WIDTH_MIN,
-  HOST_COLOR_LINE_WIDTH_MAX,
-  clampHostColorLineWidth,
-  isHostColorMarkStyle,
-  sanitizeHostColorPrefs,
+  HOST_BADGE_LINE_OPACITY_MIN,
+  HOST_BADGE_LINE_OPACITY_MAX,
+  HOST_BADGE_LINE_OPACITY_DEFAULT,
+  HOST_BADGE_BG_OPACITY_MIN,
+  HOST_BADGE_BG_OPACITY_MAX,
+  HOST_BADGE_BG_OPACITY_DEFAULT,
+  HOST_BADGE_BOX_MIN,
+  HOST_BADGE_BOX_MAX,
+  HOST_BADGE_BOX_DEFAULT,
+  HOST_BADGE_INSET_MIN,
+  HOST_BADGE_INSET_MAX,
+  HOST_BADGE_INSET_DEFAULT,
+  HOST_BADGE_RADIUS_MIN,
+  HOST_BADGE_RADIUS_MAX,
+  HOST_BADGE_RADIUS_DEFAULT,
+  HOST_BADGE_DEFAULTS,
+  clampHostBadgeLineOpacity,
+  clampHostBadgeBgOpacity,
+  clampHostBadgeBox,
+  clampHostBadgeInset,
+  clampHostBadgeRadius,
+  isHostBadgeLineColor,
+  sanitizeHostBadgePrefs,
 } from './useUISettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 
@@ -237,133 +255,259 @@ describe('terminalSettingsVersion', () => {
   })
 })
 
-describe('host color mark settings', () => {
+describe('host badge settings', () => {
   beforeEach(() => {
-    useUISettingsStore.setState({
-      hostColorSidebarStyle: 'gradient',
-      hostColorSidebarWidth: 2,
-      hostColorTabBarStyle: 'bottom-line',
-      hostColorTabBarWidth: 2,
-    })
+    localStorage.clear()
+    useUISettingsStore.setState({ ...HOST_BADGE_DEFAULTS })
   })
 
-  it('defaults: sidebar gradient, tab bar bottom-line, widths 2', () => {
+  it('exposes the documented bounds as constants', () => {
+    expect([HOST_BADGE_LINE_OPACITY_MIN, HOST_BADGE_LINE_OPACITY_MAX, HOST_BADGE_LINE_OPACITY_DEFAULT]).toEqual([20, 100, 100])
+    expect([HOST_BADGE_BG_OPACITY_MIN, HOST_BADGE_BG_OPACITY_MAX, HOST_BADGE_BG_OPACITY_DEFAULT]).toEqual([0, 100, 22])
+    expect([HOST_BADGE_BOX_MIN, HOST_BADGE_BOX_MAX, HOST_BADGE_BOX_DEFAULT]).toEqual([12, 24, 16])
+    expect([HOST_BADGE_INSET_MIN, HOST_BADGE_INSET_MAX, HOST_BADGE_INSET_DEFAULT]).toEqual([0, 5, 2])
+    expect([HOST_BADGE_RADIUS_MIN, HOST_BADGE_RADIUS_MAX, HOST_BADGE_RADIUS_DEFAULT]).toEqual([0, 8, 4])
+  })
+
+  it('defaults all 14 fields per surface', () => {
     const s = useUISettingsStore.getInitialState()
-    expect(s.hostColorSidebarStyle).toBe('gradient')
-    expect(s.hostColorTabBarStyle).toBe('bottom-line')
-    expect(s.hostColorSidebarWidth).toBe(2)
-    expect(s.hostColorTabBarWidth).toBe(2)
-  })
-
-  it('constants are 1 and 6', () => {
-    expect(HOST_COLOR_LINE_WIDTH_MIN).toBe(1)
-    expect(HOST_COLOR_LINE_WIDTH_MAX).toBe(6)
-  })
-
-  it('clampHostColorLineWidth: 0→1, 9→6, 2.6→3, NaN→2', () => {
-    expect(clampHostColorLineWidth(0)).toBe(1)
-    expect(clampHostColorLineWidth(9)).toBe(6)
-    expect(clampHostColorLineWidth(2.6)).toBe(3)
-    expect(clampHostColorLineWidth(NaN)).toBe(2)
-    expect(clampHostColorLineWidth(Infinity)).toBe(2)
-    expect(clampHostColorLineWidth(4)).toBe(4)
-  })
-
-  it('isHostColorMarkStyle accepts only the four styles', () => {
-    for (const v of ['gradient', 'left-line', 'bottom-line', 'none']) {
-      expect(isHostColorMarkStyle(v)).toBe(true)
-    }
-    for (const v of ['evil', '', 'Gradient', null, undefined, 2, {}]) {
-      expect(isHostColorMarkStyle(v)).toBe(false)
+    for (const surface of ['Sidebar', 'TabBar'] as const) {
+      expect(s[`hostBadge${surface}Enabled`]).toBe(true)
+      expect(s[`hostBadge${surface}LineColor`]).toBe('host')
+      expect(s[`hostBadge${surface}LineOpacity`]).toBe(100)
+      expect(s[`hostBadge${surface}BgOpacity`]).toBe(22)
+      expect(s[`hostBadge${surface}Box`]).toBe(16)
+      expect(s[`hostBadge${surface}Inset`]).toBe(2)
+      expect(s[`hostBadge${surface}Radius`]).toBe(4)
     }
   })
 
-  it('style setters update valid values and ignore invalid', () => {
+  it('HOST_BADGE_DEFAULTS lists exactly the 14 fields', () => {
+    expect(Object.keys(HOST_BADGE_DEFAULTS).sort()).toEqual(
+      [
+        'hostBadgeSidebarEnabled',
+        'hostBadgeSidebarLineColor',
+        'hostBadgeSidebarLineOpacity',
+        'hostBadgeSidebarBgOpacity',
+        'hostBadgeSidebarBox',
+        'hostBadgeSidebarInset',
+        'hostBadgeSidebarRadius',
+        'hostBadgeTabBarEnabled',
+        'hostBadgeTabBarLineColor',
+        'hostBadgeTabBarLineOpacity',
+        'hostBadgeTabBarBgOpacity',
+        'hostBadgeTabBarBox',
+        'hostBadgeTabBarInset',
+        'hostBadgeTabBarRadius',
+      ].sort(),
+    )
+  })
+
+  it('isHostBadgeLineColor accepts only host / neutral', () => {
+    expect(isHostBadgeLineColor('host')).toBe(true)
+    expect(isHostBadgeLineColor('neutral')).toBe(true)
+    for (const v of ['evil', '', 'Host', null, undefined, 2, {}]) {
+      expect(isHostBadgeLineColor(v)).toBe(false)
+    }
+  })
+
+  it('clamp helpers round then clamp, non-finite falls back to the default', () => {
+    expect(clampHostBadgeBox(8)).toBe(12)
+    expect(clampHostBadgeBox(40)).toBe(24)
+    expect(clampHostBadgeBox(15.6)).toBe(16)
+    expect(clampHostBadgeBox(NaN)).toBe(16)
+    expect(clampHostBadgeBox(Infinity)).toBe(16)
+
+    expect(clampHostBadgeInset(-1)).toBe(0)
+    expect(clampHostBadgeInset(9)).toBe(5)
+    expect(clampHostBadgeInset(2.6)).toBe(3)
+    expect(clampHostBadgeInset(NaN)).toBe(2)
+
+    expect(clampHostBadgeLineOpacity(5)).toBe(20)
+    expect(clampHostBadgeLineOpacity(200)).toBe(100)
+    expect(clampHostBadgeLineOpacity(50.4)).toBe(50)
+    expect(clampHostBadgeLineOpacity(NaN)).toBe(100)
+
+    expect(clampHostBadgeBgOpacity(-5)).toBe(0)
+    expect(clampHostBadgeBgOpacity(200)).toBe(100)
+    expect(clampHostBadgeBgOpacity(NaN)).toBe(22)
+
+    expect(clampHostBadgeRadius(20)).toBe(8)
+    expect(clampHostBadgeRadius(-1)).toBe(0)
+    expect(clampHostBadgeRadius(2.6)).toBe(3)
+    expect(clampHostBadgeRadius(NaN)).toBe(4)
+  })
+
+  it('Enabled setters toggle each surface independently', () => {
+    useUISettingsStore.getState().setHostBadgeSidebarEnabled(false)
+    expect(useUISettingsStore.getState().hostBadgeSidebarEnabled).toBe(false)
+    expect(useUISettingsStore.getState().hostBadgeTabBarEnabled).toBe(true)
+    useUISettingsStore.getState().setHostBadgeTabBarEnabled(false)
+    useUISettingsStore.getState().setHostBadgeSidebarEnabled(true)
+    expect(useUISettingsStore.getState().hostBadgeSidebarEnabled).toBe(true)
+    expect(useUISettingsStore.getState().hostBadgeTabBarEnabled).toBe(false)
+  })
+
+  it('LineColor setters accept the union and ignore anything else', () => {
     const store = useUISettingsStore.getState()
-    store.setHostColorSidebarStyle('left-line')
-    store.setHostColorTabBarStyle('none')
-    expect(useUISettingsStore.getState().hostColorSidebarStyle).toBe('left-line')
-    expect(useUISettingsStore.getState().hostColorTabBarStyle).toBe('none')
-    store.setHostColorSidebarStyle('evil' as never)
-    store.setHostColorTabBarStyle('evil' as never)
-    expect(useUISettingsStore.getState().hostColorSidebarStyle).toBe('left-line')
-    expect(useUISettingsStore.getState().hostColorTabBarStyle).toBe('none')
+    store.setHostBadgeSidebarLineColor('neutral')
+    store.setHostBadgeTabBarLineColor('neutral')
+    expect(useUISettingsStore.getState().hostBadgeSidebarLineColor).toBe('neutral')
+    expect(useUISettingsStore.getState().hostBadgeTabBarLineColor).toBe('neutral')
+    store.setHostBadgeSidebarLineColor('evil' as never)
+    store.setHostBadgeTabBarLineColor('' as never)
+    expect(useUISettingsStore.getState().hostBadgeSidebarLineColor).toBe('neutral')
+    expect(useUISettingsStore.getState().hostBadgeTabBarLineColor).toBe('neutral')
+    store.setHostBadgeSidebarLineColor('host')
+    expect(useUISettingsStore.getState().hostBadgeSidebarLineColor).toBe('host')
   })
 
-  it('sanitizeHostColorPrefs drops invalid styles / non-finite widths and clamps finite widths', () => {
-    const out = sanitizeHostColorPrefs({
-      hostColorSidebarStyle: 'right-line',
-      hostColorSidebarWidth: '9',
-      hostColorTabBarStyle: 'left-line',
-      hostColorTabBarWidth: 99,
+  it('numeric setters round then clamp on both surfaces', () => {
+    const store = useUISettingsStore.getState()
+    store.setHostBadgeSidebarBox(8)
+    store.setHostBadgeTabBarBox(40)
+    store.setHostBadgeSidebarInset(-1)
+    store.setHostBadgeTabBarInset(9)
+    store.setHostBadgeSidebarLineOpacity(5)
+    store.setHostBadgeTabBarLineOpacity(200)
+    store.setHostBadgeSidebarBgOpacity(-5)
+    store.setHostBadgeTabBarBgOpacity(200)
+    store.setHostBadgeSidebarRadius(20)
+    store.setHostBadgeTabBarRadius(2.6)
+
+    const s = useUISettingsStore.getState()
+    expect(s.hostBadgeSidebarBox).toBe(12)
+    expect(s.hostBadgeTabBarBox).toBe(24)
+    expect(s.hostBadgeSidebarInset).toBe(0)
+    expect(s.hostBadgeTabBarInset).toBe(5)
+    expect(s.hostBadgeSidebarLineOpacity).toBe(20)
+    expect(s.hostBadgeTabBarLineOpacity).toBe(100)
+    expect(s.hostBadgeSidebarBgOpacity).toBe(0)
+    expect(s.hostBadgeTabBarBgOpacity).toBe(100)
+    expect(s.hostBadgeSidebarRadius).toBe(8)
+    expect(s.hostBadgeTabBarRadius).toBe(3)
+
+    store.setHostBadgeSidebarBox(NaN)
+    expect(useUISettingsStore.getState().hostBadgeSidebarBox).toBe(16)
+  })
+
+  it('sanitizeHostBadgePrefs drops invalid enums / booleans / non-finite numbers and clamps the rest', () => {
+    const out = sanitizeHostBadgePrefs({
+      hostBadgeSidebarEnabled: 'yes',
+      hostBadgeSidebarLineColor: 'evil',
+      hostBadgeSidebarLineOpacity: '80',
+      hostBadgeSidebarBgOpacity: NaN,
+      hostBadgeSidebarBox: 99,
+      hostBadgeSidebarInset: -3,
+      hostBadgeSidebarRadius: 2.6,
+      hostBadgeTabBarEnabled: false,
+      hostBadgeTabBarLineColor: 'neutral',
+      hostBadgeTabBarBox: Infinity,
       other: 'keep',
     })
-    expect('hostColorSidebarStyle' in out).toBe(false)
-    expect('hostColorSidebarWidth' in out).toBe(false)
-    expect(out.hostColorTabBarStyle).toBe('left-line')
-    expect(out.hostColorTabBarWidth).toBe(6)
+    expect('hostBadgeSidebarEnabled' in out).toBe(false)
+    expect('hostBadgeSidebarLineColor' in out).toBe(false)
+    expect('hostBadgeSidebarLineOpacity' in out).toBe(false)
+    expect('hostBadgeSidebarBgOpacity' in out).toBe(false)
+    expect('hostBadgeTabBarBox' in out).toBe(false)
+    expect(out.hostBadgeSidebarBox).toBe(24)
+    expect(out.hostBadgeSidebarInset).toBe(0)
+    expect(out.hostBadgeSidebarRadius).toBe(3)
+    expect(out.hostBadgeTabBarEnabled).toBe(false)
+    expect(out.hostBadgeTabBarLineColor).toBe('neutral')
     expect(out.other).toBe('keep')
   })
 
-  it('sanitizeHostColorPrefs leaves absent fields absent and drops NaN/Infinity', () => {
-    expect(sanitizeHostColorPrefs({})).toEqual({})
-    const out = sanitizeHostColorPrefs({ hostColorSidebarWidth: NaN, hostColorTabBarWidth: Infinity })
-    expect(out).toEqual({})
-    expect(sanitizeHostColorPrefs({ hostColorSidebarWidth: 2.6 })).toEqual({ hostColorSidebarWidth: 3 })
+  it('sanitizeHostBadgePrefs leaves absent fields absent and does not mutate its input', () => {
+    expect(sanitizeHostBadgePrefs({})).toEqual({})
+    const input = { hostBadgeSidebarBox: 99 }
+    const out = sanitizeHostBadgePrefs(input)
+    expect(out).toEqual({ hostBadgeSidebarBox: 24 })
+    expect(input.hostBadgeSidebarBox).toBe(99)
   })
 
-  it('rehydrate resets invalid persisted styles / widths to defaults and clamps out-of-range widths', async () => {
+  it('rehydrate resets a corrupt persisted payload to defaults and clamps out-of-range values', async () => {
     localStorage.setItem(
       STORAGE_KEYS.UI_SETTINGS,
       JSON.stringify({
         state: {
-          hostColorSidebarStyle: 'right-line',
-          hostColorSidebarWidth: null,
-          hostColorTabBarStyle: 42,
-          hostColorTabBarWidth: 99,
+          hostBadgeSidebarEnabled: 'yes',
+          hostBadgeSidebarLineColor: 'evil',
+          hostBadgeSidebarLineOpacity: null,
+          hostBadgeSidebarBgOpacity: 999,
+          hostBadgeSidebarBox: 3,
+          hostBadgeSidebarInset: 42,
+          hostBadgeSidebarRadius: 'big',
+          hostBadgeTabBarEnabled: false,
+          hostBadgeTabBarLineColor: 'neutral',
+          hostBadgeTabBarLineOpacity: 1,
+          hostBadgeTabBarBox: 100,
         },
         version: 3,
       }),
     )
     await useUISettingsStore.persist.rehydrate()
     const s = useUISettingsStore.getState()
-    expect(s.hostColorSidebarStyle).toBe('gradient')
-    expect(s.hostColorSidebarWidth).toBe(2)
-    expect(s.hostColorTabBarStyle).toBe('bottom-line')
-    expect(s.hostColorTabBarWidth).toBe(6)
+    expect(s.hostBadgeSidebarEnabled).toBe(true)
+    expect(s.hostBadgeSidebarLineColor).toBe('host')
+    expect(s.hostBadgeSidebarLineOpacity).toBe(100)
+    expect(s.hostBadgeSidebarBgOpacity).toBe(100)
+    expect(s.hostBadgeSidebarBox).toBe(12)
+    expect(s.hostBadgeSidebarInset).toBe(5)
+    expect(s.hostBadgeSidebarRadius).toBe(4)
+    // valid persisted values survive
+    expect(s.hostBadgeTabBarEnabled).toBe(false)
+    expect(s.hostBadgeTabBarLineColor).toBe('neutral')
+    expect(s.hostBadgeTabBarLineOpacity).toBe(20)
+    expect(s.hostBadgeTabBarBox).toBe(24)
   })
 
-  it('rehydrate keeps valid persisted host color prefs', async () => {
+  it('rehydrate leaves a clean persisted payload untouched', async () => {
     localStorage.setItem(
       STORAGE_KEYS.UI_SETTINGS,
       JSON.stringify({
         state: {
-          hostColorSidebarStyle: 'left-line',
-          hostColorSidebarWidth: 4,
-          hostColorTabBarStyle: 'none',
-          hostColorTabBarWidth: 1,
+          hostBadgeSidebarEnabled: false,
+          hostBadgeSidebarLineColor: 'neutral',
+          hostBadgeSidebarLineOpacity: 60,
+          hostBadgeSidebarBgOpacity: 10,
+          hostBadgeSidebarBox: 20,
+          hostBadgeSidebarInset: 1,
+          hostBadgeSidebarRadius: 8,
+          hostBadgeTabBarEnabled: true,
+          hostBadgeTabBarLineColor: 'host',
+          hostBadgeTabBarLineOpacity: 100,
+          hostBadgeTabBarBgOpacity: 22,
+          hostBadgeTabBarBox: 16,
+          hostBadgeTabBarInset: 2,
+          hostBadgeTabBarRadius: 4,
         },
         version: 3,
       }),
     )
     await useUISettingsStore.persist.rehydrate()
     const s = useUISettingsStore.getState()
-    expect(s.hostColorSidebarStyle).toBe('left-line')
-    expect(s.hostColorSidebarWidth).toBe(4)
-    expect(s.hostColorTabBarStyle).toBe('none')
-    expect(s.hostColorTabBarWidth).toBe(1)
+    expect(s.hostBadgeSidebarEnabled).toBe(false)
+    expect(s.hostBadgeSidebarLineColor).toBe('neutral')
+    expect(s.hostBadgeSidebarLineOpacity).toBe(60)
+    expect(s.hostBadgeSidebarBgOpacity).toBe(10)
+    expect(s.hostBadgeSidebarBox).toBe(20)
+    expect(s.hostBadgeSidebarInset).toBe(1)
+    expect(s.hostBadgeSidebarRadius).toBe(8)
+    expect(s.hostBadgeTabBarEnabled).toBe(true)
+    expect(s.hostBadgeTabBarLineColor).toBe('host')
   })
 
-  it('width setters clamp and round', () => {
-    const store = useUISettingsStore.getState()
-    store.setHostColorSidebarWidth(9)
-    store.setHostColorTabBarWidth(0)
-    expect(useUISettingsStore.getState().hostColorSidebarWidth).toBe(6)
-    expect(useUISettingsStore.getState().hostColorTabBarWidth).toBe(1)
-    store.setHostColorSidebarWidth(2.6)
-    store.setHostColorTabBarWidth(NaN)
-    expect(useUISettingsStore.getState().hostColorSidebarWidth).toBe(3)
-    expect(useUISettingsStore.getState().hostColorTabBarWidth).toBe(2)
+  it('rehydrate with no persisted host badge keys leaves every field at its default', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.UI_SETTINGS,
+      JSON.stringify({ state: { terminalRenderer: 'webgl' }, version: 3 }),
+    )
+    await useUISettingsStore.persist.rehydrate()
+    const s = useUISettingsStore.getState() as unknown as Record<string, unknown>
+    for (const [k, v] of Object.entries(HOST_BADGE_DEFAULTS)) {
+      expect(s[k]).toBe(v)
+    }
   })
 })
 

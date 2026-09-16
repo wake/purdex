@@ -7,8 +7,9 @@ import { shouldShowGlobalUnreadPip } from '../../../components/tab-icon-helpers'
 import { HoverTooltip } from '../../../components/HoverTooltip'
 import { renderInlineTabIcon } from '../lib/renderInlineTabIcon'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
-import { HostColorMark } from '../../../components/HostColorMark'
-import { useTabHostColor } from '../../../hooks/useTabHostColor'
+import { HostBadge } from '../../../components/HostBadge'
+import { useTabHostBadge } from '../../../hooks/useTabHostBadge'
+import { hasHostBadge } from '../../../lib/host-color'
 
 interface Props {
   tab: Tab
@@ -33,9 +34,14 @@ export function InlineTab({
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
-  const hostColorStyle = useUISettingsStore((s) => s.hostColorSidebarStyle)
-  const hostColorWidth = useUISettingsStore((s) => s.hostColorSidebarWidth)
-  const hostColor = useTabHostColor(tab)
+  const badgeEnabled = useUISettingsStore((s) => s.hostBadgeSidebarEnabled)
+  const badgeLineColor = useUISettingsStore((s) => s.hostBadgeSidebarLineColor)
+  const badgeLineOpacity = useUISettingsStore((s) => s.hostBadgeSidebarLineOpacity)
+  const badgeBgOpacity = useUISettingsStore((s) => s.hostBadgeSidebarBgOpacity)
+  const badgeBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
+  const badgeInset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
+  const badgeRadius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
+  const hostBadge = useTabHostBadge(tab)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
     data: { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
@@ -111,7 +117,6 @@ export function InlineTab({
       onContextMenu={(e) => onContextMenu(e, tab.id)}
       className={`group relative flex items-center gap-1.5 mx-2 pl-[18px] pr-1.5 py-1 rounded-md text-xs cursor-pointer transition-colors ${activeClasses}`}
     >
-      <HostColorMark color={hostColor} style={hostColorStyle} width={hostColorWidth} />
       {renderInlineTabIcon({
         IconComponent,
         agentStatus,
@@ -120,6 +125,19 @@ export function InlineTab({
         subagentRefs,
         isUnread,
       })}
+      {badgeEnabled && hasHostBadge(hostBadge) && (
+        <HostBadge
+          color={hostBadge.color}
+          icon={hostBadge.icon}
+          iconWeight={hostBadge.iconWeight}
+          box={badgeBox}
+          inset={badgeInset}
+          radius={badgeRadius}
+          lineColor={badgeLineColor}
+          lineOpacity={badgeLineOpacity}
+          bgOpacity={badgeBgOpacity}
+        />
+      )}
       <span data-testid="inline-tab-title" className="flex-1 truncate">
         {displayTitle}
       </span>
