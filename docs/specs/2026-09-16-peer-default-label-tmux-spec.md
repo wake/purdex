@@ -161,9 +161,15 @@ hold, in which case it is `candidate`:
    no place address.)
 2. no **other** `sessionId` in the population derives the same `candidate` —
    whether or not that other session carries a user label.
-3. no `sessionId` in the population holds the user label `candidate`.
+3. no **other** `sessionId` in the population holds the user label
+   `candidate`.
 
-Rule 3 is what enforces §2.2's "the user label always wins".
+Rule 3 is what enforces §2.2's "the user label always wins". It says "other"
+because a session's own user label must not block its own default: the two
+belong to the same row and can never disagree about where a message goes.
+Without "other", `pdx msg name --release` from an agent in tmux `purdex1`
+that had claimed `purdex1` would read its own about-to-be-released label as a
+competitor and hand back a hash.
 
 Rule 2 counts user-labelled sessions as competitors even though they will
 never display the candidate themselves, and that is deliberate. If a
@@ -202,7 +208,7 @@ func ResolveDefaultLabels(entries []Entry, proxyPIDs map[int]bool,
 | `EntryRecord` | `internal/peers/record.go` | takes the resolved default as a parameter (it no longer derives one), for `Build`'s entry rows and for the self routes alike |
 | `whoami` | `internal/module/peers/labels.go` | over the `entries` `origin()` already read, with the same proxy filter and the store snapshot it already fetches |
 | `claim` | `internal/module/peers/labels.go` | same, including the `holder` record in the 409 `label_taken` body |
-| `release` | `internal/module/peers/labels.go` | same — a release must render the default the listing will show, not a hash |
+| `release` | `internal/module/peers/labels.go` | same — a release must render the default the listing will show, not a hash. `release` reads no label snapshot today; it gains one, taken **before** the write and failing with `store_unavailable` if it errors, so the response is never a default the daemon cannot vouch for (v2 §3.6) and no write happens on a failed read |
 
 `send` needs no change of its own: its origin record comes from
 `localEnvelope` → `Build`, so it inherits the resolved default and puts it on
@@ -303,6 +309,10 @@ the fix belongs with helper freshness as a whole, not here.
 3. `Build` and `whoami` return the **same** address for the same live entry,
    asserted by a test that runs both paths over one fixture; `claim`'s
    `label_taken` holder record and `release`'s record are covered too.
+   Specifically: an agent in tmux `purdex1` that claimed `purdex1` and then
+   releases gets `purdex1` back as its **default** (rule 3's "other"), not a
+   hash; and a `release` whose label-store read fails is `store_unavailable`
+   with no write.
 4. `Resolve` tests for every row of §4's table, including the dead-user-label
    row and both two-agent rows.
 5. A test pins §4.2: a default-label head change at unchanged `label_rev`
