@@ -176,6 +176,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     localDaemonInstall: (daemonUrl: string, token?: string) => ipcRenderer.invoke('dev:local-daemon-install', daemonUrl, token),
     localDaemonStart: () => ipcRenderer.invoke('dev:local-daemon-start'),
     localDaemonRestart: () => ipcRenderer.invoke('dev:local-daemon-restart'),
+    localDaemonPathLink: (force?: boolean) => ipcRenderer.invoke('dev:local-daemon-path-link', force),
+    localDaemonPathAddToShell: () => ipcRenderer.invoke('dev:local-daemon-path-add-to-shell'),
     onLocalDaemonProgress: (callback: (step: string) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, step: string) => callback(step)
       ipcRenderer.on('dev:local-daemon-progress', handler)

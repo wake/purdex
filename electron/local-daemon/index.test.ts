@@ -1016,3 +1016,53 @@ describe('the Electron side never writes to a shell rc file (spec §7.9)', () =>
     expect(touched).toEqual([])
   })
 })
+
+describe('pathCommand (spec §5.1)', () => {
+  let f: Fake
+  beforeEach(() => {
+    f = makeFake()
+    f.files.set(BIN, identity('aaa'))
+  })
+  const pathRuns = () => f.execLog.filter((e) => e.args[0] === 'path' && e.args[1] !== '--json')
+
+  it('runs the managed binary by absolute path with the launch env', async () => {
+    await createLocalDaemon(f.deps).pathCommand('link')
+    expect(pathRuns()).toHaveLength(1)
+    expect(pathRuns()[0].file).toBe(BIN)
+    expect(pathRuns()[0].args).toEqual(['path', 'link'])
+    expect(pathRuns()[0].env?.PATH).toBe(f.shellPath)
+  })
+
+  it('add-to-shell has its own argv', async () => {
+    await createLocalDaemon(f.deps).pathCommand('add-to-shell')
+    expect(pathRuns()[0].args).toEqual(['path', 'add-to-shell'])
+  })
+
+  it('--force is passed only when asked', async () => {
+    const d = createLocalDaemon(f.deps)
+    await d.pathCommand('link', { force: true })
+    expect(pathRuns()[0].args).toEqual(['path', 'link', '--force'])
+  })
+
+  it('a refusal is returned verbatim, not thrown away — its value is the path it names', async () => {
+    f.onExec = (_file, args) => (args[1] === 'link'
+      ? { code: 1, stdout: '', stderr: `${HOME}/.local/bin/pdx is a symlink to /repo/bin/pdx; use --force\n`, timedOut: false }
+      : undefined)
+    const r = await createLocalDaemon(f.deps).pathCommand('link')
+    expect(r).toEqual({ code: 1, stdout: '', stderr: `${HOME}/.local/bin/pdx is a symlink to /repo/bin/pdx; use --force\n` })
+  })
+
+  it('takes the lock: one issued during an in-flight operation runs after it, never during', async () => {
+    const d = createLocalDaemon(f.deps)
+    const order: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const held = d.withLock(async () => { order.push('busy-start'); await gate; order.push('busy-end') })
+    const cmd = d.pathCommand('link').then(() => order.push('path'))
+    await new Promise((r) => setTimeout(r, 5))
+    expect(order).toEqual(['busy-start'])
+    release()
+    await Promise.all([held, cmd])
+    expect(order).toEqual(['busy-start', 'busy-end', 'path'])
+  })
+})

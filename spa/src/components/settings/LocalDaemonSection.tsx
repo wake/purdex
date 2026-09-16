@@ -12,7 +12,7 @@ interface Props {
   refreshKey: unknown
 }
 
-type Busy = null | 'install' | 'start' | 'restart'
+type Busy = null | 'install' | 'start' | 'restart' | 'path-link' | 'path-add-to-shell'
 
 const btnSecondary = 'px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default'
 const btnPrimary = 'px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse hover:bg-accent-hover disabled:opacity-50 cursor-pointer disabled:cursor-default'
@@ -28,6 +28,9 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const [step, setStep] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // The command's own stdout/stderr, shown verbatim: a refusal's whole value
+  // is the path it names, so it must be readable, not reduced to "failed".
+  const [cliOutput, setCliOutput] = useState<string | null>(null)
   const hosts = useHostStore((s) => s.hosts)
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -91,9 +94,25 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
     }
   }, [refresh, registerLocalHost, t])
 
+  const runPath = useCallback(async (kind: 'path-link' | 'path-add-to-shell') => {
+    const op = kind === 'path-link' ? api?.localDaemonPathLink : api?.localDaemonPathAddToShell
+    if (!op) return
+    setBusy(kind); setError(null); setNotice(null); setCliOutput(null)
+    try {
+      const r = await op()
+      setCliOutput([r.stdout, r.stderr].map((x) => x.trimEnd()).filter(Boolean).join('\n') || `exit ${r.code}`)
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setBusy(null)
+      void refresh()
+    }
+  }, [api, refresh])
+
   if (!api?.localDaemonStatus) return null
 
   const installed = status?.installed ?? null
+  const cli = status?.cli ?? null
   const running = status?.running ?? null
   const alive = status?.alive ?? null
   const updateAvailable = !!installed && !!latestHash && installed.hash !== latestHash
@@ -174,6 +193,36 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
             </>
           )}
           {status.tools.tmux === null && <div className="text-status-warning">{t('settings.dev.local.tmux_missing')}</div>}
+        </div>
+      )}
+
+      {status && cli && (
+        <div className="space-y-1 mb-3 text-xs text-text-secondary">
+          <div className="font-semibold text-text-primary">{t('settings.dev.local.cli.heading')}</div>
+          {cli.resolved === null ? (
+            <div className="text-status-warning">{t('settings.dev.local.cli.unresolved')}</div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <span>{t('settings.dev.local.cli.resolved')}</span>
+                <span className="font-mono text-text-primary select-text break-all">{cli.resolved}</span>
+              </div>
+              {!cli.isManagedBinary && <div className="text-status-warning">{t('settings.dev.local.cli.not_managed')}</div>}
+            </>
+          )}
+          {cli.pathSource === 'fallback' && <div className="text-status-warning">{t('settings.dev.local.cli.fallback')}</div>}
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={() => void runPath('path-link')} disabled={disabled} className={btnSecondary}>
+              {t('settings.dev.local.cli.btn.link')}
+            </button>
+            <button type="button" onClick={() => void runPath('path-add-to-shell')} disabled={disabled} className={btnSecondary}>
+              {t('settings.dev.local.cli.btn.add_to_shell')}
+            </button>
+          </div>
+          <div className="pt-1">{t('settings.dev.local.cli.commands')}</div>
+          <div className="font-mono text-text-primary select-text break-all">{`${status.binPath} path link`}</div>
+          <div className="font-mono text-text-primary select-text break-all">{`${status.binPath} path add-to-shell`}</div>
+          {cliOutput && <pre className="mt-2 p-2 rounded-md bg-surface-input border border-border-default font-mono text-text-primary whitespace-pre-wrap select-text">{cliOutput}</pre>}
         </div>
       )}
 

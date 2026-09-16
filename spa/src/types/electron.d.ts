@@ -62,6 +62,21 @@ interface ElectronLocalDaemonStatus {
   hostname: string
   target: { goos: 'darwin' | 'linux'; goarch: 'arm64' | 'amd64' }
   tools: { tmux: string | null }
+  /** How `pdx` is reachable on the daemon's launch PATH; absent when there is
+   *  no installed binary able to answer (spec 2026-09-16 §4.6). */
+  cli?: {
+    resolved: string | null
+    isManagedBinary: boolean
+    pathSource: 'shell' | 'fallback'
+    localBinOnPath: boolean
+    link: 'ok' | 'missing' | 'conflict' | 'error'
+  }
+}
+
+interface ElectronLocalDaemonPathResult {
+  code: number | null
+  stdout: string
+  stderr: string
 }
 
 interface ElectronLocalDaemonResult {
@@ -159,6 +174,8 @@ interface Window {
     localDaemonInstall?: (daemonUrl: string, token?: string) => Promise<ElectronLocalDaemonResult>
     localDaemonStart?: () => Promise<ElectronLocalDaemonResult>
     localDaemonRestart?: () => Promise<ElectronLocalDaemonResult>
+    localDaemonPathLink?: (force?: boolean) => Promise<ElectronLocalDaemonPathResult>
+    localDaemonPathAddToShell?: () => Promise<ElectronLocalDaemonPathResult>
     onLocalDaemonProgress?: (callback: (step: string) => void) => () => void
   }
 }

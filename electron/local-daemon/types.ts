@@ -40,6 +40,9 @@ export interface LocalDaemonStatus {
  */
 export type EnsureRunningOutcome = 'started' | 'already-running' | 'not-installed' | 'external' | 'failed' | 'path-unresolved'
 
+/** `pdx path <sub>`'s own exit status and streams, passed through untouched. */
+export interface LocalDaemonPathResult { code: number | null; stdout: string; stderr: string }
+
 export interface LocalDaemonResult { url: string; token: string; hash: string; version: string; hostname: string; bindNote?: string }
 
 export interface WriteHandle { write(chunk: Uint8Array): Promise<void>; close(): Promise<void> }
@@ -84,5 +87,7 @@ export interface LocalDaemon {
   start(): Promise<LocalDaemonResult>
   restart(): Promise<LocalDaemonResult>
   ensureRunning(): Promise<EnsureRunningOutcome>
+  /** Run `pdx path link` / `pdx path add-to-shell` and return its own output. */
+  pathCommand(kind: 'link' | 'add-to-shell', opts?: { force?: boolean }): Promise<LocalDaemonPathResult>
   withLock<T>(fn: () => Promise<T>): Promise<T>
 }

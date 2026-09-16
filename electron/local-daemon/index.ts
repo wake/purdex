@@ -3,7 +3,7 @@
 // an in-memory harness. All public operations run through one promise
 // queue; private helpers (suffix `Unlocked`) never enqueue.
 import { join } from 'node:path'
-import type { EnsureRunningOutcome, LocalDaemon, LocalDaemonDeps, LocalDaemonResult, LocalDaemonStatus } from './types'
+import type { EnsureRunningOutcome, LocalDaemon, LocalDaemonDeps, LocalDaemonPathResult, LocalDaemonResult, LocalDaemonStatus } from './types'
 import { parseLsofF0, txtPaths, listenersOn, decideOwnership, type Ownership } from './lsof'
 import { buildLaunchEnv, type ExecFn, type LaunchEnv } from './launch-env'
 import { parseDaemonConfig, pickBindAddress, renderInitialConfig, generateToken, DEFAULT_DATA_DIR, type DaemonConfig } from './config'
@@ -20,6 +20,9 @@ const STOP_TIMEOUT_MS = 35_000
 const START_TIMEOUT_MS = 70_000
 const DOWNLOAD_TIMEOUT_MS = 6 * 60_000
 const PATH_TIMEOUT_MS = 5000
+// `add-to-shell` waits up to 5 s on its own lockfile before giving up, so the
+// command can legitimately take a few seconds without being stuck.
+const PATH_CMD_TIMEOUT_MS = 30_000
 // A machine whose `pdx` does not resolve is re-probed on status, because its
 // user is running the fix commands in another window and watching the panel
 // clear. A healthy machine is never re-probed: `resolveShellPath` runs a login
@@ -519,6 +522,19 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     }
   }
 
+  // A repair command, not a poll: it is run because the user pressed a button
+  // on the machine whose PATH is being changed, so it judges on a fresh probe
+  // rather than a cache that may predate the fix they just applied.
+  async function pathCommandUnlocked(kind: 'link' | 'add-to-shell', opts?: { force?: boolean }): Promise<LocalDaemonPathResult> {
+    const { env } = await refreshLaunchEnv()
+    const args = ['path', kind, ...(kind === 'link' && opts?.force ? ['--force'] : [])]
+    const r = await deps.exec(binPath, args, { env, cwd: deps.home, timeoutMs: PATH_CMD_TIMEOUT_MS })
+    if (r.timedOut) throw new Error(`pdx path ${kind} did not finish within ${PATH_CMD_TIMEOUT_MS / 1000}s`)
+    // Verbatim, refusals included: a conflict's whole value is the path it
+    // names, and reducing it to a red "failed" would throw that away.
+    return { code: r.code, stdout: r.stdout, stderr: r.stderr }
+  }
+
   // ---- public operations -------------------------------------------------
   async function installUnlocked(daemonUrl: string, token: string | undefined, progress: (s: string) => void): Promise<LocalDaemonResult> {
     const st = await statusUnlocked()
@@ -623,6 +639,7 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
     start: () => withLock(startUnlocked),
     restart: () => withLock(restartUnlocked),
     ensureRunning: () => withLock(ensureRunningUnlocked),
+    pathCommand: (kind, opts) => withLock(() => pathCommandUnlocked(kind, opts)),
     withLock,
   }
 }
