@@ -349,6 +349,91 @@ func TestSplitAddress(t *testing.T) {
 	}
 }
 
+// --- Resolve: rows fetched from a pre-v3 daemon -----------------------------
+
+// v2LiveRow is a live cc row exactly as a daemon that predates v3 puts it
+// on the wire: a label, a tmux session name, and NO canonical — that
+// daemon has never heard of the field, so it decodes as "".
+func v2LiveRow(label, sessionName string, pid int) PeerRecord {
+	return PeerRecord{RowKind: "session", SessionName: sessionName, Label: label, LabelSource: "user",
+		Agent: &AgentInfo{Type: "cc", PID: pid}, Deliverable: true}
+}
+
+// TestResolve_V2Rows_HeadRefusedRatherThanGuessed pins the mixed-version
+// rule. A v2 daemon still prints a label as the address head, so that is
+// what an operator on the v3 side types. Tier 1 cannot match it (the rows
+// carry no canonical), and the old behaviour was to drop into tier 2 and
+// try the string as a tmux session name — a guess, on a batch the resolver
+// can see is too old to answer properly. It must say so instead, in both
+// the bare and the "<head>:<suffix>" forms.
+func TestResolve_V2Rows_HeadRefusedRatherThanGuessed(t *testing.T) {
+	recs := []PeerRecord{v2LiveRow("purdex-tester", "mt0", 1), v2LiveRow("purdex-dev", "mt1", 2)}
+	for _, in := range []string{"purdex-tester", "purdex-tester:mt0-purdex-b0", canonA} {
+		_, err := Resolve(recs, in, ResolveSnapshot{})
+		if !errors.Is(err, ErrRemoteTooOld) {
+			t.Errorf("%q: got %v, want ErrRemoteTooOld", in, err)
+		}
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("%q: got %v, want it to stay an ErrNotFound for existing callers", in, err)
+		}
+	}
+}
+
+// TestResolve_V2Rows_NeverLandOnASameNamedTmuxSession is the misroute this
+// exists to stop: one row calls itself "purdex-tester", a DIFFERENT row's
+// tmux session is named "purdex-tester". Under the tier-2 fallback the
+// message went to the second row — a successful delivery to the wrong
+// conversation, which is worse than any refusal.
+func TestResolve_V2Rows_NeverLandOnASameNamedTmuxSession(t *testing.T) {
+	recs := []PeerRecord{v2LiveRow("purdex-tester", "mt0", 1), v2LiveRow("", "purdex-tester", 2)}
+	got, err := Resolve(recs, "purdex-tester", ResolveSnapshot{})
+	if !errors.Is(err, ErrRemoteTooOld) {
+		t.Fatalf("got %+v %v, want ErrRemoteTooOld", got, err)
+	}
+	if got.Agent != nil {
+		t.Fatalf("resolved to pid %d — a v2 label head must never route", got.Agent.PID)
+	}
+}
+
+// TestResolve_V2Rows_ExplicitTmuxFormStillResolves pins what the refusal
+// must NOT swallow. "tmux:<name>" addresses a place, the operator said so
+// in as many words, and a v2 daemon sends SessionName just as a v3 one
+// does — so that form keeps working against an old peer and is the escape
+// hatch the refusal points at.
+func TestResolve_V2Rows_ExplicitTmuxFormStillResolves(t *testing.T) {
+	recs := []PeerRecord{v2LiveRow("purdex-tester", "mt0", 1), v2LiveRow("", "purdex-tester", 2)}
+	got, err := Resolve(recs, "tmux:purdex-tester", ResolveSnapshot{})
+	if err != nil || got.Agent == nil || got.Agent.PID != 2 {
+		t.Fatalf("got %+v %v, want the row whose tmux session is purdex-tester (pid 2)", got, err)
+	}
+	if got, err := Resolve(recs, "tmux:mt0", ResolveSnapshot{}); err != nil || got.Agent.PID != 1 {
+		t.Fatalf("tmux:mt0: got %+v %v, want pid 1", got, err)
+	}
+}
+
+// TestResolve_V3Rows_TmuxFallbackUnaffected pins the other side of the
+// guard: the version signal is a LIVE cc row with no canonical, so a
+// normal v3 batch — canonical on every live row, rows with no agent
+// carrying none by design — keeps both tiers exactly as they were.
+func TestResolve_V3Rows_TmuxFallbackUnaffected(t *testing.T) {
+	recs := []PeerRecord{
+		liveRow(canonA, "purdex-tester", "mt0", 1),
+		{RowKind: "session", SessionName: "shell"},            // agent: null, canonical "" by design
+		{Canonical: canonC, Agent: &AgentInfo{Type: "proxy"}}, // proxy row, not a live cc entry
+		inboxDeadRow(canonB, "purdex-dev", "mt1"),             // owner fallback, pid 0
+	}
+	if got, err := Resolve(recs, canonA, ResolveSnapshot{}); err != nil || got.Agent.PID != 1 {
+		t.Fatalf("canonical: got %+v %v", got, err)
+	}
+	if got, err := Resolve(recs, "shell", ResolveSnapshot{}); err != nil || got.SessionName != "shell" {
+		t.Fatalf("tier 2: got %+v %v, want the shell row", got, err)
+	}
+	_, err := Resolve(recs, "purdex-tester", ResolveSnapshot{})
+	if !errors.Is(err, ErrNotFound) || errors.Is(err, ErrRemoteTooOld) {
+		t.Fatalf("a label on a v3 batch: got %v, want a plain ErrNotFound", err)
+	}
+}
+
 // --- HostMatches -------------------------------------------------------
 
 func TestHostMatches(t *testing.T) {

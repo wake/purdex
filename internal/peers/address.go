@@ -44,6 +44,24 @@ type ResolveSnapshot struct {
 // v1 "cc:<name>" address form, which Peer Address v2 retires.
 var ErrLegacyCC = errors.New("cc: addresses were removed; run pdx peers --all to see the new addresses")
 
+// ErrRemoteTooOld is returned (wrapped under ErrNotFound, like ErrLegacyCC)
+// by Resolve when tier 1 misses over a batch of rows that came from a
+// daemon predating Peer Address v3 — see hasPreV3Rows for the signal.
+//
+// It exists because the upgrade is not atomic: one host runs v3 while the
+// other still runs v2, and the v2 host keeps PRINTING a label as its
+// address head. An operator reads that head off the old daemon and types
+// it here, tier 1 cannot match it (a v2 row carries no canonical), and
+// without this the resolver dropped into tier 2 and tried the very same
+// string as a tmux session NAME. Where the remote happened to have a tmux
+// session of that name, the message was delivered — to a different
+// conversation than the one the operator read the head from.
+//
+// Refusing is the whole posture of v3: an address is resolved, never
+// guessed at. A version mismatch is a fact the batch itself reveals, so it
+// is named rather than silently absorbed into a fallback.
+var ErrRemoteTooOld = errors.New("the peer host's daemon predates Peer Address v3 and reports no canonical ids; upgrade and restart pdx there, or address a session as tmux:<name>")
+
 // AmbiguousError is returned by Resolve when a tier matches more than one
 // record; Candidates holds only the matches from the tier that decided.
 type AmbiguousError struct {
@@ -83,6 +101,14 @@ func (e *AmbiguousError) Error() string {
 // that record (subject to the RegistryIncomplete rule above); several =>
 // *AmbiguousError (never falls through to a lower tier). No tier matches
 // => ErrNotFound.
+//
+// One exception overrides tier 2 and the Partial rule alike: when the
+// batch itself shows it came from a pre-v3 daemon (hasPreV3Rows), a
+// tier-1 miss is ErrNotFound wrapping ErrRemoteTooOld and nothing else is
+// tried. The explicit "tmux:<name>" form is decided above this and is
+// unaffected — it names a place outright, a v2 daemon reports SessionName
+// exactly as a v3 one does, and it is the escape hatch the refusal points
+// the caller at.
 //
 // PeerRecord.Label is matched by NOTHING here, and that is D3: a label is
 // a self-declared display name, read to CHOOSE a peer, never used to
@@ -136,6 +162,16 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 	if !errors.Is(err, ErrNotFound) {
 		return rec, err
 	}
+	// Tier 1 missed. Before anything is guessed at, ask whether this batch
+	// could have answered at all: rows from a pre-v3 daemon carry no
+	// canonical, so a miss says nothing about the head and everything
+	// about the peer's version. Refuse by name. This sits ahead of the
+	// Partial check on purpose — "retry, the inventory is partial" is
+	// advice that can never come true against a v2 daemon, and a wrong
+	// diagnosis costs the operator the time they spend following it.
+	if hasPreV3Rows(records) {
+		return PeerRecord{}, fmt.Errorf("%w: %w", ErrNotFound, ErrRemoteTooOld)
+	}
 	if snap.Partial {
 		return PeerRecord{}, ErrResolveNotReady
 	}
@@ -154,6 +190,27 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 // another Type; neither may decide tier 1.
 func hasLiveEntry(r PeerRecord) bool {
 	return r.Agent != nil && r.Agent.Type == "cc" && r.Agent.PID != 0
+}
+
+// hasPreV3Rows reports whether records were produced by a daemon that
+// predates Peer Address v3 — the condition behind ErrRemoteTooOld.
+//
+// The signal is spec §4.5's invariant read backwards. A v3 daemon gives
+// every row with a live cc entry a non-empty Canonical, so one such row
+// WITHOUT it can only have come from a daemon that does not know the
+// field, whose JSON therefore decodes it as "". No version string is
+// needed, and none is trusted: the rows say it themselves.
+//
+// Only live cc rows count. A row with agent: null, a proxy row and an
+// owner-fallback row all carry an empty Canonical by design on a v3
+// daemon too, so counting them would declare every v3 host obsolete.
+func hasPreV3Rows(records []PeerRecord) bool {
+	for _, r := range records {
+		if hasLiveEntry(r) && r.Canonical == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveTier finds all records matching predicate and applies the

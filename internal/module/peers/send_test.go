@@ -300,6 +300,12 @@ type sendEnv struct {
 
 // remoteRow is one deliverable cc row as the remote host "air" reports it
 // (its own alias/host_id/address — normalised by the sender).
+//
+// Canonical is set because spec §4.5 says a v3 daemon sets it on every row
+// with a live cc entry, and Resolve now reads a live cc row WITHOUT one as
+// proof that the whole batch came from a pre-v3 daemon (ErrRemoteTooOld).
+// Leaving it empty here would have made every send test in this file run
+// against a v2 peer without saying so.
 func remoteRow(sessionName, sessionCode string) ipeers.PeerRecord {
 	addr := remoteAlias + "/" + sessionName
 	if sessionName == "" {
@@ -309,6 +315,7 @@ func remoteRow(sessionName, sessionCode string) ipeers.PeerRecord {
 		Host:         remoteAlias,
 		HostID:       remoteHostID,
 		Address:      addr,
+		Canonical:    ipeers.CanonicalID(remoteSessionID),
 		SessionCode:  sessionCode,
 		SessionName:  sessionName,
 		TmuxInstance: "air-inst",
@@ -798,6 +805,48 @@ func TestSend_PeerNotFoundTeachesTheCanonicalAddress(t *testing.T) {
 	}
 	if len(s.postCalls()) != 0 {
 		t.Errorf("posts = %d, want none", len(s.postCalls()))
+	}
+}
+
+// TestSend_RemoteTooOld pins the mixed-version refusal at the HTTP edge.
+// The upgrade is not atomic: while "air" still runs a pre-v3 daemon it
+// keeps PRINTING a label as the address head, so that is what an operator
+// on this side reads and types. Its rows carry no canonical, tier 1 cannot
+// match, and the fallback used to try the same string as a tmux session
+// NAME — which is how a message addressed to one conversation was
+// delivered to whichever one happened to sit in a tmux session of that
+// name (see the resolver's own regression test).
+//
+// The refusal gets its own code rather than peer_not_found because the two
+// prescribe opposite actions: peer_not_found says check the address, this
+// says upgrade the other host. It is 409, not 404 — the request is well
+// formed and the target host's state is what refuses it.
+func TestSend_RemoteTooOld(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	v2 := remoteRow(remoteSession, "fooc")
+	v2.Canonical = "" // a pre-v3 daemon has never heard of the field
+	v2.Label, v2.LabelSource = "purdex-tester", "user"
+	v2.Address = remoteAlias + "/purdex-tester:foo-purdex-b0"
+	s.env = remoteEnvelope(v2)
+
+	req := s.sendReq()
+	req.To = remoteAlias + "/purdex-tester" // the head that daemon prints
+	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrCodeRemoteTooOld)
+	for _, want := range []string{`"` + remoteAlias + `"`, "upgrade", "tmux:<name>"} {
+		if !strings.Contains(ae.Detail, want) {
+			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
+		}
+	}
+	if len(s.postCalls()) != 0 {
+		t.Errorf("posts = %d, want none — nothing may leave on a guess", len(s.postCalls()))
+	}
+
+	// The escape hatch the detail names has to be real: "tmux:<name>" says
+	// a place outright, and a v2 daemon reports SessionName exactly as a v3
+	// one does, so it must still go through against the same old peer.
+	req.To = remoteAlias + "/tmux:" + remoteSession
+	if rr := s.send(adminCtx(), req); rr.Code != http.StatusOK {
+		t.Fatalf("tmux form: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 }
 

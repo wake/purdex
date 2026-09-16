@@ -338,6 +338,16 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			detail := fmt.Sprintf("peer inventory on %q is partial; retry, or address the tmux session as tmux:<name>", entry.Alias)
 			m.logf("peers: send refused (%s): %s", ipeers.ErrNotReady, detail)
 			writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: detail, Partial: true}) // refuseUnaudited cannot set Partial
+		case errors.Is(err, ipeers.ErrRemoteTooOld):
+			// A version mismatch, not a bad address: the peer host still
+			// runs a pre-v3 daemon, so nothing the caller types can
+			// resolve there. 409 rather than 404 because the request was
+			// well formed and the target host's state is what refuses it,
+			// and a code of its own rather than peer_not_found because the
+			// two prescribe opposite actions — "check the address" would
+			// send the operator looking for a fault on the wrong host.
+			refuseUnaudited(http.StatusConflict, ipeers.ErrCodeRemoteTooOld,
+				fmt.Sprintf("%q: %s", entry.Alias, err.Error()))
 		case errors.Is(err, ipeers.ErrLegacyCC):
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, err.Error())
 		default:

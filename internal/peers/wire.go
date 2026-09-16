@@ -188,6 +188,17 @@ const (
 	ErrProxyToProxy      = "proxy_to_proxy"
 	ErrNoReturnRoute     = "no_return_route"
 
+	// ErrCodeRemoteTooOld is /send's answer when Resolve came back with
+	// ErrRemoteTooOld: the target host still runs a daemon from before
+	// Peer Address v3, so its rows carry no canonical id and no address
+	// can be resolved against them. Distinct from peer_not_found because
+	// the two ask for opposite things — one says check the address, the
+	// other says upgrade the other host — and the refusal is only useful
+	// if it says which. (The Go sentinel lives in address.go; this is the
+	// wire string, prefixed like ErrCodeLabelInvalid to keep the two
+	// apart in one package.)
+	ErrCodeRemoteTooOld = "remote_too_old"
+
 	// Peer Address v2 self routes (Task 7): whoami, claim, release.
 	ErrCodeLabelInvalid  = "label_invalid"
 	ErrCodeLabelReserved = "label_reserved"
