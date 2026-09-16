@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -796,10 +797,15 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 // --- Labels, suffix, entry rows (Peer Address v2, Task 4) -----------------
 
 // TestBuild_LabelsAndAddresses pins the address rules of spec §4.5: a cc
-// row (session or entry) reads "<alias>/<canonical>:<suffix>" with the
-// suffix derived from the row's own registry tmux field; a session row
-// with no cc agent reads "<alias>/tmux:<name>"; a user label is reported
-// with its Rev and label_source "user" without touching the address.
+// row (session or entry) reads "<alias>/<canonical>:<suffix>"; a session
+// row with no cc agent reads "<alias>/tmux:<name>"; a user label is
+// reported with its Rev and label_source "user" without touching the
+// address.
+//
+// The live and registry tmux names agree in this fixture, so spec §5.4's
+// two suffix provenances are indistinguishable here and this test says
+// nothing about them — that is
+// TestBuild_SessionRowSuffixFollowsLiveTmuxRename's job.
 func TestBuild_LabelsAndAddresses(t *testing.T) {
 	in := BuildInput{
 		HostID: "h:1", Alias: "mini-lab",
@@ -836,6 +842,125 @@ func TestBuild_LabelsAndAddresses(t *testing.T) {
 	shell, ok := byAddr["mini-lab/tmux:shell"]
 	if !ok || shell.Canonical != "" || shell.Label != "" || shell.Suffix != "" || shell.LabelSource != "" {
 		t.Errorf("shell row = %+v (ok=%v)", shell, ok)
+	}
+}
+
+// TestBuild_SessionRowSuffixFollowsLiveTmuxRename is the regression test for
+// spec §2's P1, expressed at the one place P1 is still observable after v3
+// moved the address head off the tmux name: the display suffix.
+//
+// The scenario is the measurement recorded in §2 P1. A conversation started
+// in a tmux session called "aigora2", so Claude Code froze
+// `tmux = "aigora2:@5.%5"` into its registry file. The user then renamed the
+// tmux session to "aigora2zz". The registry file is NOT rewritten with the
+// new name — it keeps saying "aigora2" until the agent exits — so
+// Entry.TmuxSessionName() is stale by construction here.
+//
+// The daemon's own tmux inventory, on the other hand, is live: the
+// SessionSummary being rendered already says "aigora2zz". A session row must
+// use that, because it IS the row for that very session.
+//
+// Both winner-selection paths are covered, because both used to pass the
+// frozen value: the single-candidate path and the pane-tiebreak path.
+func TestBuild_SessionRowSuffixFollowsLiveTmuxRename(t *testing.T) {
+	const (
+		frozenName = "aigora2"   // what the registry file still says
+		liveName   = "aigora2zz" // what tmux actually calls the session now
+	)
+
+	tests := []struct {
+		name    string
+		entries []Entry
+	}{
+		{
+			name: "single candidate",
+			entries: []Entry{
+				{PID: 10, SessionID: "sid-1", Name: "purdex-49", Tmux: frozenName + ":@5.%5", Inbox: "/s/10"},
+			},
+		},
+		{
+			// Two live entries of the same conversation; the owner's pane
+			// picks the winner. Same frozen tmux field, same requirement.
+			name: "pane tiebreak winner",
+			entries: []Entry{
+				{PID: 10, SessionID: "sid-1", Name: "purdex-49", Tmux: frozenName + ":@5.%5", Inbox: "/s/10"},
+				{PID: 11, SessionID: "sid-1", Name: "purdex-4a", Tmux: frozenName + ":@5.%6", Inbox: "/s/11"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recs := Build(BuildInput{
+				HostID: "h:1", Alias: "mini-lab",
+				Sessions: []SessionSummary{{Code: "c1", Name: liveName}},
+				Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%5"}},
+				Entries:  tc.entries,
+			})
+
+			var row PeerRecord
+			var found bool
+			for _, r := range recs {
+				if r.RowKind == "session" {
+					row, found = r, true
+				}
+			}
+			if !found {
+				t.Fatalf("no session row in %+v", recs)
+			}
+			if !row.Deliverable || row.Agent == nil || row.Agent.PID != 10 {
+				t.Fatalf("expected the pid-10 entry to win: %+v", row)
+			}
+
+			wantSuffix := liveName + "-purdex-49"
+			if row.Suffix != wantSuffix {
+				t.Errorf("suffix = %q, want %q (the live tmux name, not the frozen registry one)", row.Suffix, wantSuffix)
+			}
+			if want := "mini-lab/" + CanonicalID("sid-1") + ":" + wantSuffix; row.Address != want {
+				t.Errorf("address = %q, want %q", row.Address, want)
+			}
+			if strings.HasPrefix(row.Suffix, frozenName+"-") {
+				t.Errorf("suffix %q still carries the frozen registry name %q", row.Suffix, frozenName)
+			}
+		})
+	}
+}
+
+// TestBuild_EntryRowSuffixKeepsRegistryTmuxName pins the deliberate other
+// half of spec §5.4: an `entry` row has no session row behind it, so there
+// is no live tmux name to prefer — the frozen registry value is the honest
+// fallback and stays.
+//
+// This is why PeerRecord.Suffix documents two provenances in one response:
+// row_kind is the discriminator, and suffix is display-only either way.
+func TestBuild_EntryRowSuffixKeepsRegistryTmuxName(t *testing.T) {
+	recs := Build(BuildInput{
+		HostID: "h:1", Alias: "mini-lab",
+		Sessions: []SessionSummary{{Code: "c1", Name: "aigora2zz"}},
+		Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%5"}},
+		Entries: []Entry{
+			{PID: 10, SessionID: "sid-1", Name: "purdex-49", Tmux: "aigora2:@5.%5", Inbox: "/s/10"},
+			// A different conversation, whose registry names a tmux
+			// session the inventory does not list at all.
+			{PID: 20, SessionID: "sid-9", Name: "n9", Tmux: "gone-box:@1.%1", Inbox: "/s/20"},
+		},
+	})
+
+	var row PeerRecord
+	var found bool
+	for _, r := range recs {
+		if r.RowKind == "entry" {
+			row, found = r, true
+		}
+	}
+	if !found {
+		t.Fatalf("no entry row in %+v", recs)
+	}
+	if row.Suffix != "gone-box-n9" {
+		t.Errorf("entry row suffix = %q, want %q (registry value kept)", row.Suffix, "gone-box-n9")
+	}
+	if want := "mini-lab/" + CanonicalID("sid-9") + ":gone-box-n9"; row.Address != want {
+		t.Errorf("entry row address = %q, want %q", row.Address, want)
 	}
 }
 

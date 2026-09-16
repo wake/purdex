@@ -32,15 +32,34 @@ type AgentInfo struct {
 // whether or not that entry's tmux field points into a listed session
 // (Peer Address v2 spec §3.4; RowKind tells the two apart).
 type PeerRecord struct {
-	Host         string     `json:"host"`
-	HostID       string     `json:"host_id"`
-	Address      string     `json:"address"`
-	RowKind      string     `json:"row_kind"`     // session | entry
-	Canonical    string     `json:"canonical"`    // the sessionId-derived address head; "" when the row has no cc agent
-	Label        string     `json:"label"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
-	LabelSource  string     `json:"label_source"` // user | ""
-	LabelRev     int64      `json:"label_rev"`
-	Suffix       string     `json:"suffix"`        // "" when the row has no cc agent
+	Host        string `json:"host"`
+	HostID      string `json:"host_id"`
+	Address     string `json:"address"`
+	RowKind     string `json:"row_kind"`     // session | entry
+	Canonical   string `json:"canonical"`    // the sessionId-derived address head; "" when the row has no cc agent
+	Label       string `json:"label"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
+	LabelSource string `json:"label_source"` // user | ""
+	LabelRev    int64  `json:"label_rev"`
+	// Suffix is "<tmux session>-<cc name>", display-only, and NOT part of
+	// any identity: the address is Canonical, and nothing resolves or
+	// routes on this string. "" when the row has no cc agent.
+	//
+	// It has TWO PROVENANCES within a single response, told apart by
+	// RowKind (spec §5.4):
+	//
+	//   - row_kind "session": the tmux half is the daemon's live inventory
+	//     name for that session, so it tracks a tmux rename immediately.
+	//   - row_kind "entry": there is no session row behind it, so the tmux
+	//     half comes from Claude Code's registry file, where it was frozen
+	//     when the agent started and is never refreshed. It can therefore
+	//     name a session that has since been renamed or has gone away
+	//     (spec §2 P1).
+	//
+	// No separate field distinguishes them because RowKind already does,
+	// and because a display string is not worth a second identity column.
+	// Consumers that need a session's current name should read
+	// SessionName, not parse this.
+	Suffix       string     `json:"suffix"`
 	SessionCode  string     `json:"session_code"`  // always present
 	SessionName  string     `json:"session_name"`  // always present
 	TmuxInstance string     `json:"tmux_instance"` // always present
@@ -184,9 +203,13 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	// From here the owner IS a cc conversation, so every remaining branch
 	// sets a cc Agent (full entry info, or the owner-only fallback) and
 	// calls applyLabel to render Canonical/Label/Suffix/Address (spec
-	// §4.5): the fallback branches (inbox_dead / ambiguous, no entry
-	// chosen) derive the suffix from the SESSION's own tmux name, never a
-	// candidate's, since no entry was chosen for the row.
+	// §4.5). Every branch passes s.Name for the suffix's tmux half —
+	// including the ones that DID choose an entry (spec §5.4). A chosen
+	// entry's Entry.TmuxSessionName() is the name Claude Code froze into
+	// its registry file at agent startup and never refreshes, so it goes
+	// stale the moment the session is renamed (spec §2 P1). s.Name is the
+	// daemon's live inventory of the very session being rendered, so it is
+	// both fresher and, for a session row, the more obviously correct one.
 	//
 	// Every branch, fallbacks included, passes CanonicalID(owner.SessionID)
 	// with no special case and no population to consult. That is v3's whole
@@ -216,7 +239,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 		}
 		rec.Agent = agentInfoFromEntry(candidates[0])
 		rec.Deliverable = true
-		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), candidates[0].TmuxSessionName(), candidates[0].Name)
+		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, candidates[0].Name)
 		return rec, candidates[0], true
 	default:
 		var paneMatches []Entry
@@ -234,7 +257,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			}
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
 			rec.Deliverable = true
-			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), paneMatches[0].TmuxSessionName(), paneMatches[0].Name)
+			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, paneMatches[0].Name)
 			return rec, paneMatches[0], true
 		}
 		rec.Agent = ownerFallbackAgent(owner)
@@ -265,9 +288,11 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 // (spec §4.4). It no longer implies an address change, because the address
 // does not move.
 //
-// Suffix is display-only and rendered from tmuxName/ccName — the row's OWN
-// registry tmux field, or, for the owner-fallback session row with no
-// entry, the session's own name; never Resolve's session argument.
+// Suffix is display-only and rendered from tmuxName/ccName. A session row's
+// caller passes the live SessionSummary.Name; an entry row's caller has no
+// session behind it and passes the row's own registry tmux field. Never
+// Resolve's session argument. See PeerRecord.Suffix for what that split
+// means to a consumer.
 func applyLabel(rec *PeerRecord, alias string, info LabelInfo, canonical, tmuxName, ccName string) {
 	rec.Canonical = canonical
 	if info.Label != "" {
