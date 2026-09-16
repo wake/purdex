@@ -69,6 +69,60 @@ export interface NexInfo {
   restart_required?: boolean
 }
 
+/* ─── Peers API wire types (internal/peers/record.go, envelope.go) ─── */
+
+/** `PeerRecord.agent`: the agent owning a peer row, when one is known. */
+export interface PeerAgentWire {
+  type: string                // cc | codex | opencode | proxy
+  session_id?: string
+  /** The agent's identity — the readable half of an address, e.g. `ai-chat-story-3a`. */
+  peer_name?: string
+  pid?: number
+  proc_start?: string
+  inbox?: string
+  status?: string             // idle | busy
+  version: string             // always present; '' when unknown
+}
+
+/**
+ * One row of `GET /api/peers`: one per tmux session, plus one per live Claude
+ * Code registry entry no session row consumed. `row_kind` tells the two apart —
+ * only `'session'` rows carry a `session_code` that joins to a pane.
+ */
+export interface PeerRecordWire {
+  host: string
+  host_id: string
+  address: string
+  row_kind: string            // session | entry
+  label: string               // '' when the row has no cc agent
+  label_source: string        // user | default | ''
+  label_rev: number
+  suffix: string
+  session_code: string
+  session_name: string
+  tmux_instance: string
+  cwd?: string
+  agent: PeerAgentWire | null
+  deliverable: boolean
+  reason: string              // '' | no_agent | not_cc | inbox_dead | proxy | ambiguous
+}
+
+/**
+ * `GET /api/peers` for one host. `partial` has three independent causes — owner
+ * lookups that did not run, `unknown_registry_files`, `labels_unavailable` — so
+ * "no row and partial" never means "no peer".
+ */
+export interface PeersEnvelope {
+  host_id: string
+  ok: boolean
+  error?: string
+  partial: boolean
+  peers: PeerRecordWire[]     // never null
+  daemon_version: string
+  unknown_registry_files: string[]  // never null
+  labels_unavailable: boolean
+}
+
 export interface ConfigData {
   bind: string
   port: number
@@ -200,6 +254,21 @@ export async function switchMode(hostId: string, code: string, mode: string): Pr
     body: JSON.stringify({ mode }),
   })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.json()
+}
+
+/* ─── Peers API ─── */
+
+/**
+ * The host's whole peer inventory. Expensive: the daemon resolves the owning
+ * agent of *every* tmux session under a 2 s budget (`internal/module/peers/
+ * module.go`), and with a couple of dozen sessions it spends that budget every
+ * call. Never put this behind a per-tab interaction — see the fetch policy in
+ * `usePeerInfo`.
+ */
+export async function fetchPeers(hostId: string, signal?: AbortSignal): Promise<PeersEnvelope> {
+  const res = await hostFetch(hostId, '/api/peers', { signal })
+  if (!res.ok) throw new Error(`fetchPeers failed: ${res.status}`)
   return res.json()
 }
 

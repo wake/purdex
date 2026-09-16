@@ -7,6 +7,8 @@ import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
 import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
 import { releaseLease } from './nex/nex-api'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
+import { usePeerStore } from '../stores/usePeerStore'
+import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
@@ -172,6 +174,13 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   }
   useExecutionStore.getState().clearHost(hostId)
   useHostSettingsStore.getState().clearHost(hostId)
+  // Peer rows are a cache of a daemon that is no longer configured. Nothing to
+  // snapshot: undo restores the host, and the first render that needs its peers
+  // fetches them again (`usePeerInfo`'s predicate fires on an absent entry).
+  // The cwd readings go the same way and for the same reason — a directory read
+  // from one daemon says nothing about another.
+  usePeerStore.getState().forgetHost(hostId)
+  useSessionCwdStore.getState().forgetHost(hostId)
   hostStore.removeHost(hostId)
 
   // Return undo function
@@ -277,4 +286,38 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
       }
     }
   }
+}
+
+/** Endpoint identity of a host: what makes a cached answer still that host's. */
+function hostIdentity(h: HostConfig | undefined): string {
+  return h ? `${h.ip}:${h.port}:${h.token ?? ''}` : ''
+}
+
+/**
+ * Drop a host's cached peer rows and cwd readings whenever its daemon identity
+ * changes (peer-info-panel spec §3.1).
+ *
+ * A peer address names a process on one machine, so keeping the cache across a
+ * re-point would show one daemon's peers under another's name — and the address
+ * is copyable, so the wrong one gets pasted into `pdx msg send`.
+ *
+ * This is a subscription rather than a line inside `useHostStore.updateHost`
+ * because `useHostStore` sits at the bottom of the import graph on purpose
+ * (`host-api` imports it, and `usePeerStore` imports `host-api`); the same
+ * shape already covers the host-config cache in `host-config-loader.ts`. It
+ * also catches removals that never go through `deleteHostCascade`, such as a
+ * sync full-replace. Started once from `main.tsx`; returns its unsubscribe.
+ */
+export function startPeerCacheInvalidation(): () => void {
+  return useHostStore.subscribe((next, prev) => {
+    if (next.hosts === prev.hosts) return
+    for (const hostId of Object.keys(prev.hosts)) {
+      const after = next.hosts[hostId]
+      // A removed host and a re-pointed one are the same problem: whatever is
+      // cached belongs to a daemon this id no longer names.
+      if (after && hostIdentity(prev.hosts[hostId]) === hostIdentity(after)) continue
+      usePeerStore.getState().forgetHost(hostId)
+      useSessionCwdStore.getState().forgetHost(hostId)
+    }
+  })
 }

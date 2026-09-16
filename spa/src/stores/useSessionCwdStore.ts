@@ -1,0 +1,130 @@
+// spa/src/stores/useSessionCwdStore.ts — per-session working directory, read
+// from GET /api/sessions/{code}/cwd (peer-info-panel spec §3.2).
+//
+// Why a store at all, when `Session` already has a `cwd`: it is not the same
+// directory. `Session.cwd` is tmux's `#{session_path}` — where the session was
+// *created* — and it does not follow a `cd`. The endpoint this store calls
+// serves `#{pane_current_path}`, which is what a person means by "the working
+// directory", and which the snapshot capture already switched to (alpha.321)
+// after `session_path` recorded the wrong directory. This value is displayed
+// under the label "cwd" and is click-to-copy, so a wrong one gets pasted into
+// a command.
+//
+// It is also cheap — one tmux call, unlike the peers inventory — which is why
+// it is a separate store with its own trigger rather than part of `usePeerStore`.
+import { create } from 'zustand'
+import { fetchSessionCwd } from '../lib/host-api'
+
+export interface SessionCwdEntry {
+  /** `#{pane_current_path}`, '' when never read. */
+  cwd: string
+  fetchedAt: number
+  loading: boolean
+  error: string | null
+}
+
+export function emptySessionCwdEntry(): SessionCwdEntry {
+  return { cwd: '', fetchedAt: 0, loading: false, error: null }
+}
+
+/** Stable fallback for selectors — a fresh object per call would loop useSyncExternalStore. */
+export const EMPTY_SESSION_CWD: SessionCwdEntry = Object.freeze(emptySessionCwdEntry()) as SessionCwdEntry
+
+interface SessionCwdState {
+  /** hostId → sessionCode → entry. Nested, never a composite key: a hostId can
+   *  itself contain a colon (`mini-lab:278cbm`). */
+  byHost: Record<string, Record<string, SessionCwdEntry>>
+  /** Read one session's working directory. Deduped while in flight; never throws. */
+  refresh: (hostId: string, sessionCode: string) => Promise<void>
+  /** Drop a host's readings and abandon anything in flight for it. */
+  forgetHost: (hostId: string) => void
+}
+
+/**
+ * The in-flight key's separator: a byte neither a hostId nor a session code can
+ * contain.
+ *
+ * Written as an escape and never embedded raw. A literal NUL byte in a source
+ * file makes git classify the whole file as binary — `git diff` renders it as
+ * "Binary files … differ", so the file drops out of review, out of `git log -p`
+ * and out of every text-based merge.
+ */
+const SEP = '\\u0000'
+
+function key(hostId: string, sessionCode: string): string {
+  // Request bookkeeping only — never a store key, and never split apart.
+  return `${hostId}${SEP}${sessionCode}`
+}
+
+const inflight = new Map<string, { promise: Promise<void>; abort: AbortController }>()
+/** Bumped per host by `forgetHost`, so an answer for a daemon this cache no
+ *  longer speaks to cannot put its directory back after the host was re-pointed. */
+const generations = new Map<string, number>()
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+export const useSessionCwdStore = create<SessionCwdState>()((set, get) => {
+  const patch = (hostId: string, sessionCode: string, update: Partial<SessionCwdEntry>) =>
+    set((s) => {
+      const host = s.byHost[hostId] ?? {}
+      return {
+        byHost: {
+          ...s.byHost,
+          [hostId]: { ...host, [sessionCode]: { ...(host[sessionCode] ?? emptySessionCwdEntry()), ...update } },
+        },
+      }
+    })
+
+  return {
+    byHost: {},
+
+    refresh: (hostId, sessionCode) => {
+      const k = key(hostId, sessionCode)
+      const running = inflight.get(k)
+      if (running) return running.promise
+
+      const gen = generations.get(hostId) ?? 0
+      const abort = new AbortController()
+      const stillCurrent = () => (generations.get(hostId) ?? 0) === gen
+
+      const run = (async () => {
+        patch(hostId, sessionCode, { loading: true })
+        try {
+          // `fetchSessionCwd` resolves to `{ cwd, tmuxInstance }`. The
+          // generation is dropped on purpose: it exists so the rebuild probe
+          // cannot write a stranger's directory into an old pane's record, and
+          // this store only displays.
+          const { cwd } = await fetchSessionCwd(hostId, sessionCode, abort.signal)
+          if (!stillCurrent()) return
+          patch(hostId, sessionCode, { cwd, fetchedAt: Date.now(), error: null, loading: false })
+        } catch (err) {
+          // The previous reading stays: a failed refresh goes stale, not blank.
+          if (!stillCurrent()) return
+          patch(hostId, sessionCode, { error: errorText(err), loading: false })
+        } finally {
+          if (inflight.get(k)?.abort === abort) inflight.delete(k)
+        }
+      })()
+      inflight.set(k, { promise: run, abort })
+      return run
+    },
+
+    forgetHost: (hostId) => {
+      generations.set(hostId, (generations.get(hostId) ?? 0) + 1)
+      const prefix = `${hostId}${SEP}`
+      for (const [k, running] of inflight) {
+        if (!k.startsWith(prefix)) continue
+        inflight.delete(k)
+        running.abort.abort()
+      }
+      if (!(hostId in get().byHost)) return
+      set((s) => {
+        const rest = { ...s.byHost }
+        delete rest[hostId]
+        return { byHost: rest }
+      })
+    },
+  }
+})
