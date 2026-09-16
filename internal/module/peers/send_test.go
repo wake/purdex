@@ -764,30 +764,48 @@ func TestSend_TmuxFormResolves(t *testing.T) {
 }
 
 // deadHolderTmuxName is the live target's tmux session name in
-// TestSend_DeadHolderLabelFallsToTmuxSession. "foo.bar" is deliberate: it
-// does NOT qualify as a default label (spec §3.1 — a name qualifies only
-// when it already is a valid user label, and '.' is not in the charset),
-// so the live agent sitting in it keeps its v2 hash default and tier 2
-// stays on this test's execution path. With a name that qualified, the
-// live agent's own default would be that name and tier 1 would answer
-// first — which is what TestSend_DeadHolderDoesNotBlockTmuxDefault covers
-// instead, with "foo".
-//
-// The dead session's label row is handed to ipeers.Build directly, which
-// takes label rows as given (BuildInput.Labels has no validity contract):
-// what this test pins is resolution — a row whose holder is not live is
-// inert at tier 1 — not what the claim path would accept.
-const deadHolderTmuxName = "foo.bar"
+// TestSend_DeadHolderLabelFallsToTmuxSession. It is a perfectly ordinary,
+// VALID user label — the dead session below really holds it, exactly as
+// the claim path would have written it. What keeps the live agent off it
+// is the second process, not the spelling: see deadHolderRows.
+const deadHolderTmuxName = "foo-bar"
+
+// The live target's second process, in another tmux session.
+const (
+	deadHolderSpanPID      = 778
+	deadHolderSpanTmuxName = "elsewhere"
+)
+
+// Readable arguments for deadHolderRows' spansTwoTmuxSessions parameter.
+const (
+	targetInOneTmuxSession     = false
+	targetSpansTwoTmuxSessions = true
+)
 
 // deadHolderRows builds the X2 fixture out of the real ipeers.Build: tmux
 // session "stale" is owned by a cc conversation that has NO live registry
 // entry but still holds the user label tmuxName (an inbox_dead
 // owner-fallback row, PID 0), and tmux session tmuxName carries the live
 // target.
-func deadHolderRows(t *testing.T, tmuxName string) []ipeers.PeerRecord {
+//
+// spansTwoTmuxSessions gives that same live target a SECOND live process,
+// in tmux session "elsewhere". That is the only difference between the two
+// dead-holder tests, and it decides which resolution tier answers:
+//
+//   - false — the target's processes all sit in tmuxName, so it derives
+//     tmuxName as its default (spec §3.3 rule 1) and the bare name is
+//     answered at TIER 1 by the live agent itself.
+//   - true — a conversation with live processes in two different tmux
+//     sessions has no single place, so rule 1 gives it no place address
+//     and it keeps its v2 hash. Nothing live then carries the label
+//     tmuxName, tier 1 misses, and the bare name falls through to TIER 2.
+//
+// Both shapes occur in production: one Claude Code conversation resumed in
+// a pane of another tmux session is all it takes for the second.
+func deadHolderRows(t *testing.T, tmuxName string, spansTwoTmuxSessions bool) []ipeers.PeerRecord {
 	t.Helper()
 	const deadSID = "dddddddd-4444-4444-8444-444444444444"
-	return ipeers.Build(ipeers.BuildInput{
+	in := ipeers.BuildInput{
 		HostID: remoteHostID, Alias: remoteAlias,
 		Sessions: []ipeers.SessionSummary{{Code: "stalec", Name: "stale", Cwd: "/w"}, {Code: "fooc", Name: tmuxName, Cwd: "/w"}},
 		Owners: map[string]ipeers.Owner{
@@ -799,19 +817,36 @@ func deadHolderRows(t *testing.T, tmuxName string) []ipeers.PeerRecord {
 			Tmux: tmuxName + ":@1.%2", Inbox: "/tmp/cc-socks/777.sock", ProcStart: remoteProcStart, Version: "2.1.270", Status: "idle",
 		}},
 		Labels: map[string]ipeers.LabelInfo{deadSID: {Label: tmuxName, Rev: 3}},
-	})
+	}
+	if spansTwoTmuxSessions {
+		in.Sessions = append(in.Sessions, ipeers.SessionSummary{Code: "elsec", Name: deadHolderSpanTmuxName, Cwd: "/w"})
+		in.Owners["elsec"] = ipeers.Owner{AgentType: "cc", SessionID: remoteSessionID, TmuxPaneID: "%5"}
+		in.Entries = append(in.Entries, ipeers.Entry{
+			PID: deadHolderSpanPID, SessionID: remoteSessionID, Name: remoteSession + "-2", Cwd: "/w",
+			Tmux: deadHolderSpanTmuxName + ":@2.%5", Inbox: "/tmp/cc-socks/778.sock", ProcStart: remoteProcStart, Version: "2.1.270", Status: "idle",
+		})
+	}
+	return ipeers.Build(in)
 }
 
 // TestSend_DeadHolderLabelFallsToTmuxSession pins X2 at the module level
-// (spec §3.3: a row whose holder is not live is inert). "air/foo.bar" must
-// not stop at the dead holder with 409 not_deliverable: tier 1 ignores it,
-// and — the live agent's default being a hash, since "foo.bar" does not
-// qualify — tier 2 delivers to the tmux session.
+// (spec §3.3: a row whose holder is not live is inert). "air/foo-bar" must
+// not stop at the dead holder with 409 not_deliverable: tier 1 ignores it
+// and tier 2 delivers to the tmux session.
+//
+// Why the live target does NOT hold the tmux-derived default "foo-bar" is
+// a premise of this test, not a coincidence: it has a second live process
+// in tmux session "elsewhere" (deadHolderRows' spansTwoTmuxSessions), and
+// spec §3.3 rule 1 gives a conversation spread over two tmux sessions no
+// place address at all. So it keeps its v2 hash, nothing live is labelled
+// "foo-bar", and tier 2 is reached. Remove that second process and the
+// address would be answered at tier 1 instead — which is exactly what
+// TestSend_DeadHolderDoesNotBlockTmuxDefault covers.
 func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
-	rows := deadHolderRows(t, deadHolderTmuxName)
+	rows := deadHolderRows(t, deadHolderTmuxName, targetSpansTwoTmuxSessions)
 	// Sanity: the fixture really is the X2 shape — a dead holder of
-	// "foo.bar" and a deliverable tmux session named "foo.bar" with
+	// "foo-bar" and a deliverable tmux session named "foo-bar" with
 	// another label. The second condition is also what keeps this test on
 	// the tier-2 path.
 	var sawDead, sawLive bool
@@ -820,11 +855,15 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 		case r.SessionName == "stale":
 			sawDead = r.Reason == "inbox_dead" && r.Label == deadHolderTmuxName && r.Agent != nil && r.Agent.PID == 0
 		case r.SessionName == deadHolderTmuxName:
-			sawLive = r.Deliverable && r.Label != deadHolderTmuxName
+			// The hash, spelled out rather than "anything but the name":
+			// the tier-2 path exists only while this holds, so a fixture
+			// change that quietly restores the place address fails here
+			// instead of silently retargeting the test at tier 1.
+			sawLive = r.Deliverable && r.Label == ipeers.DefaultLabel(remoteSessionID)
 		}
 	}
 	if !sawDead || !sawLive {
-		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of %q and a deliverable tmux session %q whose own default is the hash", rows, deadHolderTmuxName, deadHolderTmuxName)
+		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of %q and a deliverable tmux session %q whose own default is the hash %q", rows, deadHolderTmuxName, deadHolderTmuxName, ipeers.DefaultLabel(remoteSessionID))
 	}
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(rows...) })
 	req := s.sendReq()
@@ -853,7 +892,9 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 // "foo" and "tmux:foo" over the same rows must yield the same record.
 func TestSend_DeadHolderDoesNotBlockTmuxDefault(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
-	rows := deadHolderRows(t, remoteSession) // "foo" — this one does sanitize
+	// "foo", and the target's one live process sits in it — so unlike the
+	// test above it DOES derive the name as its default.
+	rows := deadHolderRows(t, remoteSession, targetInOneTmuxSession)
 	var live ipeers.PeerRecord
 	var sawDead bool
 	for _, r := range rows {
