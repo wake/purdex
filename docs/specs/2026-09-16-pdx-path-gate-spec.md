@@ -1,10 +1,9 @@
 # Spec — `pdx path`: make the CLI reachable, and refuse to start until it is
 
-Status: draft v2 (redesigned on the user's direction: the app no longer places
-the symlink itself — two explicit `pdx path` commands do, and the user picks.
-v1's codex review `task-mu3zexp2-2n6khu` returned 3 Blockers / 4 Majors /
-1 Minor / 4 omissions; §8 records which survived the redesign and which it
-dissolved)
+Status: draft v3 (codex review of v2, `task-mu43l14y-1xfmtq`: 3 Blockers /
+4 Majors / 4 Minors / 6 omissions, all accepted — §8.1. v2 redesigned on the
+user's direction: the app no longer places the symlink itself, two explicit
+`pdx path` commands do. v1's review `task-mu3zexp2-2n6khu` is §8)
 Date: 2026-09-16
 Branch: `worktree-pdx-path-gate`
 Scope: `cmd/pdx/` (new command), `electron/local-daemon/*`,
@@ -76,8 +75,18 @@ subcommands. The filesystem work lives here, in Go, rather than in the Electron
 layer — `os.Lstat` / `os.Readlink` / `os.Symlink` are one line each, where the
 Electron `deps.fs` interface has none of them (v1's Blocker 3).
 
-Every subcommand operates on **the running binary's own path**
-(`os.Executable()`, resolved through symlinks). So
+**`pdx path` is an offline repair command.** It must not `config.Load`, must
+not open the store, and must not make an HTTP request — not even to check
+whether the daemon is alive. It is the command a user reaches for precisely
+when the daemon will not start, so anything it depends on is another thing
+that can stop it from working. Its only inputs are `os.Executable()`, `$HOME`,
+`$PATH`, `$SHELL` and the filesystem.
+
+Every subcommand operates on **the running binary's own path**:
+`os.Executable()` followed by `filepath.EvalSymlinks`, the same pairing
+`cmd/pdx/setup.go` already uses. `os.Executable()` alone is not enough — when
+the user runs `~/.local/bin/pdx path`, it may report the symlink, and every
+comparison this command makes is about which *binary* is which. So
 `~/.config/pdx/bin/pdx path link` links to the app-managed binary, and
 `~/Workspace/wake/purdex/bin/pdx path link` links to the repo build. The
 command never guesses which pdx the user meant: it is the one they ran.
@@ -124,6 +133,25 @@ symlink only re-points a pointer, and the user asked for it. The replacement is
 atomic (`symlink` to a temp name in the same directory, then `rename` over the
 old one), so an interrupted `--force` never leaves the path empty.
 
+**The limit of that guarantee, stated because v2 overstated it.** `rename(2)`
+cannot be made conditional on the destination still being a symlink: between
+the `Lstat` that classified the path and the `Rename` that replaces it, another
+process could put a regular file there, and the rename would overwrite it.
+There is no portable syscall that closes this window.
+
+So the guarantee is scoped honestly rather than claimed absolutely:
+
+- Concurrent runs of **pdx itself** are serialised by a lockfile
+  (`~/.local/bin/.pdx-path.lock`, `O_CREATE|O_EXCL`, stale after 30s), and the
+  path is re-`Lstat`ed inside the lock immediately before the rename.
+- A **non-pdx process** racing us for that exact path in that exact window is
+  out of scope, and §7 says so instead of asserting a safety property the
+  implementation cannot hold.
+
+The alternative — `Remove` then `Symlink` — was rejected: it has the same
+TOCTOU and additionally leaves a window in which `pdx` does not exist at all,
+which is the state this whole feature exists to prevent.
+
 Not overwriting by default matters concretely: mlab's `~/.local/bin/pdx` points
 at a repo build its owner uses deliberately, and a link step that silently
 re-pointed it would swap out the binary a developer is actively testing with.
@@ -152,9 +180,32 @@ that and writes nothing. If `~/.local/bin` is already on PATH by some other
 means, it says so and writes nothing — the goal is a working PATH, not a block
 in a file.
 
-**Backup**: the rc file is copied to `<file>.pdx-backup` before the first write.
+**When the rc file is itself a symlink** — the normal shape under any dotfiles
+manager — the temp-file-plus-`rename` below would replace the *symlink* with a
+regular file, quietly detaching the user's shell config from the repository
+that manages it. So the file is `Lstat`ed first:
+
+- a symlink is resolved with `EvalSymlinks`, and **the target** is backed up
+  and edited in place, leaving the link itself untouched;
+- a symlink that does not resolve, or resolves outside `$HOME`, is **refused**
+  with the block printed for manual use. Editing a file somewhere else in the
+  filesystem on the strength of a link is not something this command should
+  decide to do on its own.
+
+**Backup**: the file that will actually be written (the symlink's target, if
+that is what it is) is copied to `<file>.pdx-backup` before the first write.
 An existing backup is not overwritten, so the copy always represents the state
 before pdx ever touched the file.
+
+**Trailing newline**: if the file is non-empty and does not end in `\n`, one is
+written before the block. Appending straight onto a file whose last line has no
+newline would splice the marker comment onto the end of a live shell command.
+
+**Locking and lost updates**: the read-decide-write sequence runs under a
+lockfile next to the target file, and the marker/PATH checks are re-evaluated
+*inside* the lock against a fresh read. Two concurrent `add-to-shell` runs
+therefore produce one block, not two, and a run that read the file before the
+user saved an edit in their editor cannot write a version that drops it.
 
 **Writing**: append via a temp file in the same directory plus `rename`, so an
 interrupted run cannot truncate a shell config. The file's existing mode is
@@ -201,10 +252,32 @@ the refusal, runs `pdx path add-to-shell`, opens a new terminal, presses Start �
 and the app re-checks a PATH it captured before the fix, refuses again, and
 looks broken. Following the instructions correctly would not work.
 
-So: **the gate re-probes.** `status` and every gated operation resolve `pdx`
-against a freshly built launch env, and a successful re-probe replaces the
-cached one. The cache stays for what it was for — not re-running a login shell
-on every unrelated call — but it may never be the thing a refusal is based on.
+So the cache is split in two, because "always re-probe" is as wrong as "never":
+`resolveShellPath` runs a login shell with two 5s timeouts, and `status` is
+polled by the Development panel, so re-probing on every status call would put a
+login shell behind a UI refresh.
+
+```ts
+cachedLaunchEnv()    // the memoized one; unrelated callers keep using it
+refreshLaunchEnv()   // re-probe; on SUCCESS replace the cache, on failure keep it
+```
+
+Who gets which:
+
+| Caller | PATH |
+|---|---|
+| `start`, `restart`, `ensureRunning`, `install`'s final start | **refresh** — these are the gate decisions |
+| `status` when the last known `cli.resolved` was non-null | cache |
+| `status` when the last known `cli.resolved` was null | **refresh**, at most once per 5s |
+| everything else (`device-name`, health, …) | cache |
+
+The asymmetry is the point: a machine that is fine pays nothing, and a machine
+that is broken re-checks — which is exactly the machine whose user is running
+fix commands in another window and watching the panel for it to clear.
+
+A failed re-probe never overwrites a good cached PATH; it is reported
+(`pathSource`, and the probe error) rather than allowed to turn a working
+machine into a refusing one.
 
 ### 4.3 Which operations refuse
 
@@ -233,8 +306,11 @@ reviewer wanted wrong in the other:
 - probe failed **and** `pdx` does not resolve even on the fallback ⇒ **refuse**.
   The machine is definitely broken.
 - probe failed **but** `pdx` resolves on the fallback ⇒ **start**, and report
-  `pathSource: 'fallback'` prominently: the app could not read your shell's
-  PATH, so this is a guess; run `pdx path` in your own terminal to confirm.
+  `pathSource: 'fallback'` prominently. The wording is part of the spec, not
+  left to the UI: the fallback proves only that the *daemon's* launch env will
+  contain that directory, never that the user's terminal does. The panel says
+  so — "the daemon started, but your terminal's PATH could not be verified;
+  run `pdx path` in a terminal to check" — and §7 asserts it.
 
 Refusing the second case would hard-block a machine whose only fault is an
 unusual `$SHELL`, and — the part that matters — running either fix command
@@ -302,6 +378,28 @@ failure — a user should be able to check it before it bites):
 The buttons run the binary the app manages, by absolute path, so they work in
 exactly the state that needs them: daemon refusing to start, `pdx` not on PATH.
 
+### 5.1 The wiring the buttons need
+
+None of it exists yet: `electron/main.ts` registers four dev IPC handlers
+(`status` / `install` / `start` / `restart`), `electron/preload.ts` exposes the
+same four, and `spa/src/types/electron.d.ts` types the same four. The spec is
+not done until it names the rest:
+
+- `LocalDaemon` gains `pathCommand(kind: 'link' | 'add-to-shell', opts?: { force?: boolean })`,
+  which runs `deps.exec(binPath, ['path', …])` **inside `withLock`** — it
+  changes what `start` will decide, so it must not interleave with an install
+  or a start.
+- two IPC channels, `dev:local-daemon-path-link` and
+  `dev:local-daemon-path-add-to-shell`, registered inside the existing dev-mode
+  gate, returning `{ code, stdout, stderr }` verbatim.
+- matching `preload.ts` exposure, `electron.d.ts` types, and i18n keys for the
+  panel's labels.
+
+The command's own stdout/stderr is what the panel shows — including its
+refusals. A conflict (`~/.local/bin/pdx` points somewhere else) must be
+readable in the panel, not reduced to a red "failed": the whole value of that
+refusal is the path it names.
+
 ## 6. Out of scope
 
 - Windows. `local-daemon` is macOS/Linux throughout.
@@ -312,28 +410,47 @@ exactly the state that needs them: daemon refusing to start, `pdx` not on PATH.
 
 ## 7. Acceptance
 
+0. `pdx path` is offline: a test runs all three subcommands with no config
+   file present, no daemon running, and a fake that fails the test if
+   `config.Load` or any HTTP round-trip happens. It also follows the existing
+   CLI conventions — `runPathCmd(args, stdout, stderr) int` drivable from a
+   test without `os.Exit`, grammar errors exit 2, and `path` appears in
+   `main.go`'s top-level usage list (asserted, since that list is hand-written
+   and has no compiler keeping it honest).
 1. `pdx path` reports: resolves to this binary; resolves to a *different* pdx
    (named, exit 1); does not resolve; `~/.local/bin` present/absent and
-   on/off PATH. `--json` shape asserted.
+   on/off PATH; invoked **through** a symlink and still identifying itself by
+   the resolved binary (`EvalSymlinks`). `--json` shape asserted.
 2. `pdx path link`: every row of §3.2's table, dangling symlink included.
-   `--force` replaces a symlink and **refuses** a regular file. The replacement
-   is atomic (a test asserts the path is never absent mid-operation, by
-   inspecting the implementation's rename, not by racing it).
+   `--force` replaces a symlink and **refuses** a regular file. Two concurrent
+   runs serialise on the lockfile and produce one symlink. The test asserts
+   pdx-level serialisation — **not** immunity to an external process, which
+   §3.2 says is out of scope; a test claiming otherwise would be asserting a
+   property the implementation does not have.
 3. `pdx path add-to-shell`: zsh and bash (macOS and Linux paths); unknown and
    unset `$SHELL` refused with the line printed; the marked block written once
    and recognised on a second run (writes nothing); `~/.local/bin` already on
    PATH ⇒ writes nothing; backup created once and never overwritten;
-   `--dry-run` writes nothing; an existing rc file keeps its mode.
+   `--dry-run` writes nothing; an existing rc file keeps its mode. Plus the
+   three cases v2 missed: **the rc file is a symlink** (the link survives, its
+   target is what gets edited and backed up); a symlink pointing outside
+   `$HOME` is refused; a file **not ending in a newline** gets one before the
+   block. And concurrency: two simultaneous runs write one block, and a run
+   whose read is stale does not drop a concurrent edit.
 4. The gate refuses `start`, `restart` and `ensureRunning`, and `ensureRunning`
    reports `'path-unresolved'`.
-5. **The cache test** (§4.2): a fixture whose shell PATH lacks `pdx`, gate
-   refuses; the fixture's PATH then changes; the *same* `LocalDaemon` instance
-   starts successfully without being recreated. This is the test that proves
-   the documented fix actually works.
+5. **The cache tests** (§4.2). Two, and both matter:
+   - a fixture whose shell PATH lacks `pdx`, gate refuses; the fixture's PATH
+     then changes; the *same* `LocalDaemon` instance starts successfully
+     without being recreated. This proves the documented fix actually works.
+   - a healthy fixture polled for `status` ten times runs the shell probe
+     **once**, and an unhealthy one re-probes but no more than once per 5s.
+     This proves the fix did not put a login shell behind every UI refresh.
 6. `install` completes the swap and only then refuses at the start step; the
    binary is on disk afterwards and status reads installed-and-stopped.
 7. §4.4's two branches: no resolve on fallback ⇒ refuse; resolve on fallback ⇒
-   start with `pathSource: 'fallback'`.
+   start with `pathSource: 'fallback'`, and the panel string says the
+   terminal's PATH is unverified and names `pdx path` as the way to check.
 8. The refusal message names the binary path and **both** commands; asserted on
    the string, so it cannot rot into something unactionable.
 9. The Electron side never writes to any rc path: asserted by a fake that fails
@@ -359,6 +476,26 @@ exactly the state that needs them: daemon refusing to start, `pdx` not on PATH.
 | — | Omission | A different `pdx` earlier on PATH should be visible | **Fixed** — §3.1, §4.6 `isManagedBinary` |
 | — | Omission | `$SHELL` may be absent in a packaged app | **Fixed** — §3.3 refuses; §4.4 covers the probe failure |
 | — | Omission | `~/.local/bin` conventions differ by OS | **Fixed** — §3.3's bash split; §7.1 |
+
+### 8.1 v2 review disposition (`task-mu43l14y-1xfmtq`)
+
+Every finding accepted. The three blockers are worth naming individually,
+because two of them are properties v2 **claimed and could not hold** — the
+most expensive kind of spec defect, since a reader trusts them.
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| B1 | Blocker | "`status` and every gated operation re-probe" puts a login shell (2 × 5s timeouts) behind every UI status poll | §4.2 splits `cachedLaunchEnv()` / `refreshLaunchEnv()` and tables who gets which; §7.5 tests both the correctness *and* the probe count |
+| B2 | Blocker | `--force`'s "never replaces a regular file" cannot survive a TOCTOU: `rename` is not conditional on the destination still being a symlink | §3.2 scopes the guarantee to pdx's own concurrent runs (lockfile + re-`Lstat` inside it) and says plainly that an external process racing us is out of scope; §7.2 tests what is actually true |
+| B3 | Blocker | If the rc file is a symlink — the normal dotfiles shape — temp+`rename` silently replaces the user's symlink with a regular file | §3.3 `Lstat`s first and edits the *target*, leaving the link alone; refuses a link resolving outside `$HOME`; §7.3 |
+| M1 | Major | No locking on the rc write: two runs, or a concurrent editor save, lose an update | §3.3 locks and re-reads inside the lock |
+| M2 | Major | A file not ending in `\n` gets the marker spliced onto a live command | §3.3 writes the newline first |
+| M3 | Major | The panel buttons have no IPC, preload, or SPA type — none of it exists | §5.1 names all four layers |
+| M4 | Major | `pathSource: 'fallback'` needs explicit wording about what it does *not* prove | §4.4, asserted in §7.7 |
+| m1 | Minor | `pdx path` must not load config or reach the daemon | §3 opening paragraph, tested in §7.0 |
+| m2 | Minor | `os.Executable()` needs `EvalSymlinks` (repo precedent: `setup.go`) | §3, tested in §7.1 |
+| m3 | Minor | `main.go`'s hand-written usage list needs `path`, and the CLI conventions (exit 2, testable inner function) apply | §7.0 |
+| m4 | Minor | Phase split is fine | — |
 
 ## 9. Phases
 
