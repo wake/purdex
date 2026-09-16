@@ -23,6 +23,37 @@ describe('locale completeness', () => {
     expect(empty.map(([k]) => k), 'Empty values in zh-TW.json').toEqual([])
   })
 
+  // The peer namespace (peer-info-panel spec §8.9). The whole-file check above
+  // would catch a key added to one side and forgotten in the other, but it
+  // reports the whole file; this one fails with the feature's own name on it,
+  // and it also pins the two things the whole-file check does not look at: that
+  // the namespace exists at all, and that a translation did not quietly drop a
+  // placeholder — `{{what}}` missing from `peer.copied` renders half a sentence
+  // to whichever half of the fleet runs the other locale.
+  describe('the peer namespace', () => {
+    const peerKeys = (o: Record<string, string>) => Object.keys(o).filter((k) => k.startsWith('peer.')).sort()
+    const enPeer = peerKeys(en as Record<string, string>)
+    const zhPeer = peerKeys(zhTW as Record<string, string>)
+
+    it('exists in both files', () => {
+      expect(enPeer.length).toBeGreaterThan(0)
+      expect(zhPeer.length).toBeGreaterThan(0)
+    })
+
+    it('has identical key sets', () => {
+      expect(zhPeer, 'peer.* keys differ between en.json and zh-TW.json').toEqual(enPeer)
+    })
+
+    it('keeps every placeholder in the translation', () => {
+      const placeholders = (v: string) => (v.match(/\{\{\w+\}\}/g) ?? []).sort()
+      for (const key of enPeer) {
+        const enValue = (en as Record<string, string>)[key]
+        const zhValue = (zhTW as Record<string, string>)[key]
+        expect(placeholders(zhValue), key).toEqual(placeholders(enValue))
+      }
+    })
+  })
+
   // The Live Mode gate explains to the user why their file opened raw, so it is
   // the one place a half-translated string is actively confusing. Capitalised
   // terms (HTML, Live Mode) are product/UI names this file keeps in English by
