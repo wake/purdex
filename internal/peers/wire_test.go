@@ -959,3 +959,42 @@ func TestDeliverRequest_Validate_CanonicalAddress(t *testing.T) {
 		t.Errorf("Validate() with a 7-digit from.address = %v, want ErrBadAddress", err)
 	}
 }
+
+// TestValidateWireAddress_UsesIsCanonicalID pins the coupling between the
+// canonical id rule and the wire head rule: whatever IsCanonicalID accepts
+// is, by construction, a head a v3 sender can announce, so the wire check
+// has to accept it too. Without this the head grammar can drift away from
+// the id it exists to validate — which is how IsCanonicalID came to have no
+// production caller at all — and the drift would only surface as v3 senders
+// being refused on the wire.
+func TestValidateWireAddress_UsesIsCanonicalID(t *testing.T) {
+	for _, sessionID := range []string{
+		"3f2a1c8e-0000-4000-8000-000000000001",
+		"c0ffee00-dead-4bee-8fee-feedfacecafe",
+		"",
+		"purdex",
+		strings.Repeat("x", 300),
+	} {
+		id := CanonicalID(sessionID)
+		if !IsCanonicalID(id) {
+			t.Fatalf("CanonicalID(%q) = %q, which IsCanonicalID rejects", sessionID, id)
+		}
+		for _, head := range []string{id, id + ":mt0-purdex-49"} {
+			if err := ValidateWireAddress(head); err != nil {
+				t.Errorf("ValidateWireAddress(%q) = %v, want nil: IsCanonicalID accepts its head", head, err)
+			}
+		}
+	}
+
+	// The exact partition of underscore-headed heads: accepted iff it is a
+	// canonical id (v3) or the 6-digit form a v2 sender still announces.
+	// Every other width is refused — the legacy arm is a bounded exception,
+	// not a range.
+	for n := 1; n <= 12; n++ {
+		s := "_" + strings.Repeat("a", n)
+		want := IsCanonicalID(s) || n == 6
+		if err := ValidateWireAddress(s); (err == nil) != want {
+			t.Errorf("ValidateWireAddress(%q) = %v, want accepted=%v", s, err, want)
+		}
+	}
+}
