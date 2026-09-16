@@ -109,6 +109,34 @@ func TestFormatPeersTable_LabelColumnAndEntryIndent(t *testing.T) {
 	}
 }
 
+// TestFormatPeersTable_TmuxDerivedDefaultStillMarked pins the
+// default-label spec §6.6. A default label used to be recognisable by its
+// shape alone: the "_" prefix is outside the user label charset. Now that
+// an unnamed agent's default is its sanitized tmux session name, a default
+// and a user label can be character-for-character the same string, and the
+// "*" from labelField is the ONLY thing left that tells a reader which is
+// which. Two rows carrying the identical label "purdex1" — one derived,
+// one claimed — must therefore render differently.
+func TestFormatPeersTable_TmuxDerivedDefaultStillMarked(t *testing.T) {
+	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.362", Peers: []peers.PeerRecord{
+		{Address: "a/purdex1:purdex1-x", RowKind: "session", Label: "purdex1", LabelSource: "default", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+		{Address: "b/purdex1:mt0-y", RowKind: "session", Label: "purdex1", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+	}}
+	lines := strings.Split(strings.TrimRight(formatPeersTable(env), "\n"), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("table too short: %q", lines)
+	}
+	if !strings.Contains(lines[1], "purdex1*") {
+		t.Errorf("tmux-derived default row = %q, want the label marked with *", lines[1])
+	}
+	if strings.Contains(lines[2], "purdex1*") {
+		t.Errorf("user-label row = %q, want the same label UNmarked", lines[2])
+	}
+	if !strings.Contains(lines[2], "purdex1") {
+		t.Errorf("user-label row = %q, want it to carry the label verbatim", lines[2])
+	}
+}
+
 func TestFormatPeersTable_NoPartialLine(t *testing.T) {
 	resp := peers.Envelope{
 		OK: true,

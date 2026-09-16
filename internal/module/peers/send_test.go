@@ -739,57 +739,135 @@ func TestSend_TmuxFormResolves(t *testing.T) {
 	}
 }
 
-// TestSend_DeadHolderLabelFallsToTmuxSession pins X2 at the module level
-// (spec §3.3: a row whose holder is not live is inert). The remote's rows
-// come out of the real ipeers.Build: tmux session "stale" is owned by a cc
-// conversation that has NO live registry entry but still holds the user
-// label "foo" (an inbox_dead owner-fallback row, PID 0), and tmux session
-// "foo" carries the live target. "air/foo" must not stop at the dead
-// holder with 409 not_deliverable: tier 1 ignores it, tier 2 delivers to
-// the tmux session.
-func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
-	s := newSendEnv(t, envOpts{})
+// deadHolderTmuxName is the live target's tmux session name in the two
+// dead-holder tests below. "f-" is deliberate: it is a legal user label
+// (so the dead session can really hold it) yet SanitizeLabel rejects it —
+// the trailing '-' is trimmed and one byte is left — so the live agent in
+// it keeps its v2 hash default (default-label spec §3.1/§3.3). That is
+// what keeps tier 2 on the execution path in
+// TestSend_DeadHolderLabelFallsToTmuxSession: with a name that sanitized,
+// the live agent's own default would now be that name and tier 1 would
+// answer first (which is what TestSend_DeadHolderDoesNotBlockTmuxDefault
+// covers instead).
+const deadHolderTmuxName = "f-"
+
+// deadHolderRows builds the X2 fixture out of the real ipeers.Build: tmux
+// session "stale" is owned by a cc conversation that has NO live registry
+// entry but still holds the user label tmuxName (an inbox_dead
+// owner-fallback row, PID 0), and tmux session tmuxName carries the live
+// target.
+func deadHolderRows(t *testing.T, tmuxName string) []ipeers.PeerRecord {
+	t.Helper()
 	const deadSID = "dddddddd-4444-4444-8444-444444444444"
-	rows := ipeers.Build(ipeers.BuildInput{
+	return ipeers.Build(ipeers.BuildInput{
 		HostID: remoteHostID, Alias: remoteAlias,
-		Sessions: []ipeers.SessionSummary{{Code: "stalec", Name: "stale", Cwd: "/w"}, {Code: "fooc", Name: "foo", Cwd: "/w"}},
+		Sessions: []ipeers.SessionSummary{{Code: "stalec", Name: "stale", Cwd: "/w"}, {Code: "fooc", Name: tmuxName, Cwd: "/w"}},
 		Owners: map[string]ipeers.Owner{
 			"stalec": {AgentType: "cc", SessionID: deadSID, TmuxPaneID: "%1"},
 			"fooc":   {AgentType: "cc", SessionID: remoteSessionID, TmuxPaneID: "%2"},
 		},
 		Entries: []ipeers.Entry{{
 			PID: remotePID, SessionID: remoteSessionID, Name: remoteSession, Cwd: "/w",
-			Tmux: "foo:@1.%2", Inbox: "/tmp/cc-socks/777.sock", ProcStart: remoteProcStart, Version: "2.1.270", Status: "idle",
+			Tmux: tmuxName + ":@1.%2", Inbox: "/tmp/cc-socks/777.sock", ProcStart: remoteProcStart, Version: "2.1.270", Status: "idle",
 		}},
-		Labels: map[string]ipeers.LabelInfo{deadSID: {Label: "foo", Rev: 3}},
+		Labels: map[string]ipeers.LabelInfo{deadSID: {Label: tmuxName, Rev: 3}},
 	})
-	// Sanity: the fixture really is the X2 shape — a dead holder of "foo"
-	// and a deliverable tmux session named "foo" with another label.
+}
+
+// TestSend_DeadHolderLabelFallsToTmuxSession pins X2 at the module level
+// (spec §3.3: a row whose holder is not live is inert). "air/f-" must not
+// stop at the dead holder with 409 not_deliverable: tier 1 ignores it,
+// and — the live agent's default being a hash, since "f-" does not
+// sanitize — tier 2 delivers to the tmux session.
+func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	rows := deadHolderRows(t, deadHolderTmuxName)
+	// Sanity: the fixture really is the X2 shape — a dead holder of "f-"
+	// and a deliverable tmux session named "f-" with another label. The
+	// second condition is also what keeps this test on the tier-2 path.
 	var sawDead, sawLive bool
 	for _, r := range rows {
 		switch {
 		case r.SessionName == "stale":
-			sawDead = r.Reason == "inbox_dead" && r.Label == "foo" && r.Agent != nil && r.Agent.PID == 0
-		case r.SessionName == "foo":
-			sawLive = r.Deliverable && r.Label != "foo"
+			sawDead = r.Reason == "inbox_dead" && r.Label == deadHolderTmuxName && r.Agent != nil && r.Agent.PID == 0
+		case r.SessionName == deadHolderTmuxName:
+			sawLive = r.Deliverable && r.Label != deadHolderTmuxName
 		}
 	}
 	if !sawDead || !sawLive {
-		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of \"foo\" and a deliverable tmux session foo", rows)
+		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of %q and a deliverable tmux session %q whose own default is the hash", rows, deadHolderTmuxName, deadHolderTmuxName)
 	}
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(rows...) })
-	req := s.sendReq() // To: air/foo
+	req := s.sendReq()
+	req.To = remoteAlias + "/" + deadHolderTmuxName
 
 	resp := s.sendOK(req)
 	if resp.Result != ipeers.ResultDelivered {
 		t.Errorf("result = %q, want delivered", resp.Result)
 	}
-	if resp.ToAddress != remoteAlias+"/tmux:foo" && !strings.HasPrefix(resp.ToAddress, remoteAlias+"/"+ipeers.DefaultLabel(remoteSessionID)+":") {
-		t.Errorf("to_address = %q, want the tmux session foo's own address", resp.ToAddress)
+	if !strings.HasPrefix(resp.ToAddress, remoteAlias+"/"+ipeers.DefaultLabel(remoteSessionID)+":") {
+		t.Errorf("to_address = %q, want the tmux session %q's own hash-default address", resp.ToAddress, deadHolderTmuxName)
 	}
 	post := s.onlyPost()
 	if post.req.To.AgentSessionID != remoteSessionID || post.req.To.PID != remotePID {
-		t.Errorf("post to = %+v, want the tmux session foo's live tuple", post.req.To)
+		t.Errorf("post to = %+v, want the tmux session %q's live tuple", post.req.To, deadHolderTmuxName)
+	}
+}
+
+// TestSend_DeadHolderDoesNotBlockTmuxDefault pins row 5 of the
+// default-label spec's §4 table: a user label held by a DEAD session does
+// not stop the live agent in the tmux session of the same name from
+// deriving it as its default (spec §3.3 rule 3 only counts sessions in the
+// live population). The address now lands at tier 1 instead of tier 2 —
+// and the row it lands on is the same one tier 2 reached before, so the
+// delivery is unchanged. That equality is asserted directly: resolving
+// "foo" and "tmux:foo" over the same rows must yield the same record.
+func TestSend_DeadHolderDoesNotBlockTmuxDefault(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	rows := deadHolderRows(t, remoteSession) // "foo" — this one does sanitize
+	var live ipeers.PeerRecord
+	var sawDead bool
+	for _, r := range rows {
+		switch {
+		case r.SessionName == "stale":
+			sawDead = r.Reason == "inbox_dead" && r.Label == remoteSession && r.Agent != nil && r.Agent.PID == 0
+		case r.SessionName == remoteSession:
+			live = r
+		}
+	}
+	if !sawDead {
+		t.Fatalf("fixture rows = %+v, want an inbox_dead holder of %q", rows, remoteSession)
+	}
+	// The dead holder is inert, so the live agent keeps the candidate.
+	if live.Label != remoteSession || live.LabelSource != ipeers.LabelSourceDefault {
+		t.Fatalf("live row label = %q/%q, want %q as a default label (the dead holder must not block it)", live.Label, live.LabelSource, remoteSession)
+	}
+
+	// Same row at both tiers: the bare name now hits tier 1, "tmux:<name>"
+	// still hits the explicit form, and they must agree.
+	tier1, err := ipeers.Resolve(rows, remoteSession, ipeers.ResolveSnapshot{})
+	if err != nil {
+		t.Fatalf("resolve %q: %v", remoteSession, err)
+	}
+	tier2, err := ipeers.Resolve(rows, "tmux:"+remoteSession, ipeers.ResolveSnapshot{})
+	if err != nil {
+		t.Fatalf("resolve tmux:%s: %v", remoteSession, err)
+	}
+	if tier1.Address != tier2.Address || tier1.Agent == nil || tier2.Agent == nil || *tier1.Agent != *tier2.Agent {
+		t.Errorf("tier 1 row = %+v, tier 2 row = %+v, want the same row", tier1, tier2)
+	}
+
+	s.set(func(s *sendEnv) { s.env = remoteEnvelope(rows...) })
+	resp := s.sendOK(s.sendReq()) // To: air/foo
+	if resp.Result != ipeers.ResultDelivered {
+		t.Errorf("result = %q, want delivered", resp.Result)
+	}
+	if resp.ToAddress != tier2.Address {
+		t.Errorf("to_address = %q, want %q — the very row tier 2 would have reached", resp.ToAddress, tier2.Address)
+	}
+	post := s.onlyPost()
+	if post.req.To.AgentSessionID != remoteSessionID || post.req.To.PID != remotePID {
+		t.Errorf("post to = %+v, want the live tuple in tmux %q", post.req.To, remoteSession)
 	}
 }
 
