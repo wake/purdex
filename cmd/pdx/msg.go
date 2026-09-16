@@ -354,9 +354,8 @@ func decodeMsgAPIError(body []byte) (ipeers.APIError, bool) {
 // stderr, sanitized: the generic form is "pdx msg: <error>[: <detail>]";
 // remote_error additionally names the host part the caller typed and the
 // remote's own error/detail; ambiguous prints the session part the caller
-// typed followed by one indented candidate address per line; label_taken
-// and not_ready (from `pdx msg name`) print the generic line followed by
-// one indented live_labels/skipped entry per line, respectively.
+// typed followed by one indented candidate address per line; not_ready
+// prints the generic line followed by one indented skipped entry per line.
 func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Writer) {
 	switch ae.Error {
 	case ipeers.ErrRemoteError:
@@ -375,12 +374,6 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(c))
 		}
 
-	case ipeers.ErrLabelTaken:
-		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
-		for _, l := range ae.LiveLabels {
-			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(l))
-		}
-
 	case ipeers.ErrNotReady:
 		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
 		for _, s := range ae.Skipped {
@@ -393,8 +386,8 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 }
 
 // msgGenericAPIErrorLine renders the shared "pdx msg: <error>[: <detail>]"
-// line used by the default case and by the label_taken/not_ready cases
-// (which append their own indented detail lines after it).
+// line used by the default case and by the not_ready case (which appends
+// its own indented detail lines after it).
 func msgGenericAPIErrorLine(ae ipeers.APIError) string {
 	line := fmt.Sprintf("pdx msg: %s", sanitizeCell(ae.Error))
 	if ae.Detail != "" {
@@ -641,16 +634,41 @@ func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
 	}
 }
 
+// renderSelfWarning prints a self-route 200's advisory to stderr, one
+// indented line per other holder and per live label. It is a warning, not
+// an error: the caller's exit code is unaffected, and the record block
+// still goes to stdout — the label really was set. label_in_use's live
+// labels are listed because picking the next free serial is what the
+// reader is expected to do next (spec §4.2).
+func renderSelfWarning(w *ipeers.SelfWarning, stderr io.Writer) {
+	if w == nil {
+		return
+	}
+	line := fmt.Sprintf("pdx msg: warning: %s", sanitizeCell(w.Code))
+	if w.Detail != "" {
+		line += ": " + sanitizeCell(w.Detail)
+	}
+	fmt.Fprintln(stderr, line)
+	for _, h := range w.Holders {
+		fmt.Fprintf(stderr, "  also held by: %s\n", sanitizeCell(h.Address))
+	}
+	for _, l := range w.LiveLabels {
+		fmt.Fprintf(stderr, "  live label: %s\n", sanitizeCell(l))
+	}
+}
+
 // doSelfRequest issues one request on the /api/peers/self* routes and
 // handles everything `name` and `whoami` share after that: config.Load and
 // the base URL, doPeersRequest and its transport-error reporting, the
 // --json passthrough, decoding a non-200 into ipeers.APIError and
-// rendering it, and decoding a 200 into rec. done is true whenever the
-// caller should return exit immediately without printing anything more
-// (a --json passthrough, an error of any kind); done is false only on a
-// decoded 200, when rec is populated and the caller still owes its own
-// success-line output (`named:`/`released:` for `name`, nothing for
-// `whoami`) before printing the shared renderSelfRecord block.
+// rendering it, and decoding a 200 into the ipeers.SelfResponse envelope —
+// whose warning, if any, is rendered here so all three routes report one
+// the same way. done is true whenever the caller should return exit
+// immediately without printing anything more (a --json passthrough, an
+// error of any kind); done is false only on a decoded 200, when rec is
+// populated and the caller still owes its own success-line output
+// (`named:`/`released:` for `name`, nothing for `whoami`) before printing
+// the shared renderSelfRecord block.
 func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, stderr io.Writer) (rec ipeers.PeerRecord, exit int, done bool) {
 	cfg, err := config.Load(inv.cfgPath)
 	if err != nil {
@@ -678,12 +696,14 @@ func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, 
 		return ipeers.PeerRecord{}, 1, true
 	}
 
-	if err := json.Unmarshal(result.body, &rec); err != nil {
+	var resp ipeers.SelfResponse
+	if err := json.Unmarshal(result.body, &resp); err != nil {
 		fmt.Fprintln(stderr, "pdx msg: invalid response")
 		return ipeers.PeerRecord{}, 1, true
 	}
+	renderSelfWarning(resp.Warning, stderr)
 
-	return rec, 0, false
+	return resp.Peer, 0, false
 }
 
 // runMsgName implements `pdx msg name <label> | --release [--json]

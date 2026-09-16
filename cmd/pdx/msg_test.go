@@ -812,11 +812,11 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/peers/self" {
 			t.Errorf("%s %s", r.Method, r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(ipeers.PeerRecord{
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
 			Host: "air", HostID: "air:9k2m4q", Address: "air/purdex-tester:purdex-3f",
 			Label: "purdex-tester", LabelSource: "user", LabelRev: 7,
 			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "fa5d4c07-0000", PID: 76973},
-		})
+		}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
@@ -856,10 +856,10 @@ func TestRunMsgName_ClaimUsesPut(t *testing.T) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/label" || req.Label != "purdex-tester" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		json.NewEncoder(w).Encode(ipeers.PeerRecord{
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
 			Address: "air/purdex-tester:purdex-3f", Label: "purdex-tester", LabelSource: "user", LabelRev: 1,
 			Host: "air", HostID: "air:1",
-		})
+		}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
@@ -875,27 +875,49 @@ func TestRunMsgName_ClaimUsesPut(t *testing.T) {
 	}
 }
 
-func TestRunMsgName_TakenRendersLiveLabels(t *testing.T) {
+// TestRunMsgName_DuplicateWarnsAndExitsZero: a claim that lands on a label
+// another live session already holds is a SUCCESS (spec D5). The label is
+// set, the address is printed as usual, the warning names the other
+// holders and every live label — and the exit code is 0, because nothing
+// failed. Anything else would make the serial-number convention look like
+// an enforced rule again.
+func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ipeers.ClaimLabelRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/label" || req.Label != "purdex-tester" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(ipeers.APIError{Error: ipeers.ErrLabelTaken, Detail: `"purdex-tester" is held by a live session`, LiveLabels: []string{"purdex-dev", "purdex-tester"}})
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{
+			Peer: ipeers.PeerRecord{
+				Address: "air/_1c4m7dkz:mt0-n10", Label: "purdex-tester", LabelSource: "user", LabelRev: 3,
+				Host: "air", HostID: "air:1",
+			},
+			Warning: &ipeers.SelfWarning{
+				Code:       ipeers.WarnLabelInUse,
+				Detail:     `"purdex-tester" is also held by 1 other live session`,
+				Holders:    []ipeers.PeerRecord{{Address: "air/_9x2pq0af:n20", Label: "purdex-tester"}},
+				LiveLabels: []string{"purdex-dev", "purdex-tester"},
+			},
+		})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
 
 	var out, errb bytes.Buffer
 	code := runMsgCmd([]string{"name", "purdex-tester", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
-	if code != 1 {
-		t.Fatalf("exit %d", code)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 — a duplicate label is a warning, not a failure; stderr=%s", code, errb.String())
 	}
-	want := "pdx msg: label_taken: \"purdex-tester\" is held by a live session\n  purdex-dev\n  purdex-tester\n"
-	if errb.String() != want {
-		t.Errorf("stderr:\n%s\nwant:\n%s", errb.String(), want)
+	wantErr := "pdx msg: warning: label_in_use: \"purdex-tester\" is also held by 1 other live session\n" +
+		"  also held by: air/_9x2pq0af:n20\n" +
+		"  live label: purdex-dev\n" +
+		"  live label: purdex-tester\n"
+	if errb.String() != wantErr {
+		t.Errorf("stderr:\n%s\nwant:\n%s", errb.String(), wantErr)
+	}
+	if !strings.HasPrefix(out.String(), "named: air/_1c4m7dkz:mt0-n10\n") {
+		t.Errorf("stdout:\n%s\nwant the label set and the address printed", out.String())
 	}
 }
 
@@ -924,7 +946,7 @@ func TestRunMsgName_Release_UsesDelete(t *testing.T) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/peers/self/label" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		json.NewEncoder(w).Encode(ipeers.PeerRecord{Address: "air/_k3x9qz:purdex-3f", Label: "_k3x9qz", LabelSource: "default", LabelRev: 2, Host: "air", HostID: "air:1"})
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/_k3x9qz:purdex-3f", LabelRev: 2, Host: "air", HostID: "air:1"}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")

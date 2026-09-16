@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,7 +41,6 @@ type labelLiveness struct {
 }
 
 func (l *labelLiveness) markDead(pid int) { l.dead.Store(pid, struct{}{}) }
-func (l *labelLiveness) revive(pid int)   { l.dead.Delete(pid) }
 
 func (l *labelLiveness) startOf(pid int) time.Time {
 	if pid >= labelHelperPIDFloor {
@@ -183,18 +180,31 @@ func (f *labelFixture) spawnHelper(t *testing.T) *helper {
 	return h
 }
 
-// decodeRecord fails the test unless status == 200 and body decodes as an
-// ipeers.PeerRecord.
-func decodeRecord(t *testing.T, status int, body []byte) ipeers.PeerRecord {
+// decodeSelf fails the test unless status == 200 and body decodes as the
+// self-route envelope (spec §6.3): { "peer": …, "warning": … }.
+func decodeSelf(t *testing.T, status int, body []byte) ipeers.SelfResponse {
 	t.Helper()
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", status, body)
 	}
-	var rec ipeers.PeerRecord
-	if err := json.Unmarshal(body, &rec); err != nil {
-		t.Fatalf("decode PeerRecord: %v; body=%s", err, body)
+	var resp ipeers.SelfResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode SelfResponse: %v; body=%s", err, body)
 	}
-	return rec
+	return resp
+}
+
+// decodeRecord is decodeSelf for the callers that only want the record,
+// and it refuses a warning rather than ignoring one: every self-route 200
+// in this file is a clean answer except the duplicate-label claims, which
+// go through decodeSelf and assert the warning themselves.
+func decodeRecord(t *testing.T, status int, body []byte) ipeers.PeerRecord {
+	t.Helper()
+	resp := decodeSelf(t, status, body)
+	if resp.Warning != nil {
+		t.Fatalf("unexpected warning %+v; body=%s", resp.Warning, body)
+	}
+	return resp.Peer
 }
 
 func TestSelf_Whoami(t *testing.T) {
@@ -247,55 +257,126 @@ func TestClaim_Matrix(t *testing.T) {
 	if rec.LabelRev != 1 {
 		t.Errorf("re-claim bumped rev to %d", rec.LabelRev)
 	}
-	// Another live session: taken, with holder + live_labels (the caller's
-	// own live label is listed too — spec §3.3 says every held label).
-	status, body = f.claim(f.inbox(10), "purdex-dev")
-	decodeRecord(t, status, body)
-	status, body = f.claim(f.inbox(10), "purdex-tester")
-	ae := f.assertAPIError(status, body, 409, ipeers.ErrLabelTaken)
-	if ae.Holder == nil || ae.Holder.Agent.PID != 20 || ae.Holder.Address != "a/"+ipeers.CanonicalID("sid-2")+":n20" {
-		t.Errorf("taken holder = %+v", ae.Holder)
-	}
-	if !reflect.DeepEqual(ae.LiveLabels, []string{"purdex-dev", "purdex-tester"}) {
-		t.Errorf("live_labels = %v", ae.LiveLabels)
-	}
-	// Holder dies ⇒ claim succeeds, old row evicted, caller's previous label replaced.
-	f.live.markDead(20)
-	status, body = f.claim(f.inbox(10), "purdex-tester")
+	// A conversation renaming itself replaces its own row and bumps rev.
+	status, body = f.claim(f.inbox(20), "purdex-tester-2")
 	rec = decodeRecord(t, status, body)
-	if rec.Agent.PID != 10 || rec.Label != "purdex-tester" || rec.LabelRev != 3 {
-		t.Errorf("take-over: %+v", rec)
+	if rec.Label != "purdex-tester-2" || rec.LabelRev != 2 {
+		t.Errorf("rename = %+v, want purdex-tester-2 at rev 2", rec)
 	}
-	rows, _ := f.labels.Snapshot()
-	if len(rows) != 1 || rows[0].SessionID != "sid-1" || rows[0].Label != "purdex-tester" {
-		t.Errorf("rows after take-over = %+v", rows)
-	}
-	// The dead one comes back (resume): its label row was evicted, so
-	// whoami shows no label — and the same address it always had, since a
-	// label was never part of it (spec §4.5).
-	f.live.revive(20)
-	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
-	rec = decodeRecord(t, status, body)
-	if rec.Label != "" || rec.LabelSource != "" || rec.LabelRev != 0 {
-		t.Errorf("resumed holder = %+v, want no label, rev 0", rec)
-	}
-	if want := "a/" + ipeers.CanonicalID("sid-2") + ":n20"; rec.Address != want {
-		t.Errorf("resumed holder address = %q, want the unchanged %q", rec.Address, want)
+	if rows, _ := f.labels.Snapshot(); len(rows) != 1 {
+		t.Errorf("rename wrote a second row: %+v", rows)
 	}
 }
 
-func TestClaim_NotReadyOnUnknownLiveFile(t *testing.T) {
+// TestClaim_DuplicateLabelWarnsAndSucceeds is D5/D7's regression test.
+// Claiming a label another LIVE session holds now succeeds — a label is a
+// display name, and nothing routes on it — and the answer carries the
+// warning that makes the serial-number convention a one-step fix: the
+// other holders, plus every label held on this host.
+//
+// The half that matters most is the incumbent: it is not evicted, not
+// renamed, not re-revisioned. Under v2 the loser of a collision lost its
+// name; under v3 there is no loser, because there is nothing to lose — its
+// address never came from the label (spec §4.5, D7).
+func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
+	f := newLabelFixture(t)
+
+	status, body := f.claim(f.inbox(20), "purdex-tester")
+	first := decodeRecord(t, status, body)
+	// pid 10 takes a label of its own first, so live_labels has something
+	// to say beyond the collision itself.
+	status, body = f.claim(f.inbox(10), "purdex-dev")
+	decodeRecord(t, status, body)
+
+	status, body = f.claim(f.inbox(10), "purdex-tester")
+	resp := decodeSelf(t, status, body)
+	if resp.Peer.Label != "purdex-tester" || resp.Peer.LabelSource != "user" {
+		t.Errorf("claim record = %+v, want the label actually set", resp.Peer)
+	}
+	if want := "a/" + ipeers.CanonicalID("sid-1") + ":mt0-n10"; resp.Peer.Address != want {
+		t.Errorf("claimant address = %q, want its own unchanged %q", resp.Peer.Address, want)
+	}
+
+	w := resp.Warning
+	if w == nil || w.Code != ipeers.WarnLabelInUse {
+		t.Fatalf("warning = %+v, want code %q", w, ipeers.WarnLabelInUse)
+	}
+	if len(w.Holders) != 1 || w.Holders[0].Address != first.Address || w.Holders[0].Agent == nil || w.Holders[0].Agent.PID != 20 {
+		t.Errorf("warning holders = %+v, want the pid 20 incumbent", w.Holders)
+	}
+	if !reflect.DeepEqual(w.LiveLabels, []string{"purdex-dev", "purdex-tester"}) {
+		t.Errorf("live_labels = %v, want every label a live session holds", w.LiveLabels)
+	}
+
+	// D7: the incumbent is exactly where it was.
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	still := decodeRecord(t, status, body)
+	if still.Label != first.Label || still.Canonical != first.Canonical || still.Address != first.Address || still.LabelRev != first.LabelRev {
+		t.Errorf("incumbent = %+v, want the untouched %+v", still, first)
+	}
+	rows, _ := f.labels.Snapshot()
+	if len(rows) != 2 {
+		t.Errorf("rows = %+v, want both holders — a duplicate claim evicts nobody", rows)
+	}
+
+	// The convention the warning exists to prompt: the next serial is free,
+	// so claiming it is clean and says nothing.
+	status, body = f.claim(f.inbox(10), "purdex-tester-2")
+	resp = decodeSelf(t, status, body)
+	if resp.Warning != nil {
+		t.Errorf("warning on a label nobody else holds: %+v", resp.Warning)
+	}
+	if resp.Peer.Label != "purdex-tester-2" {
+		t.Errorf("record = %+v, want purdex-tester-2", resp.Peer)
+	}
+}
+
+// TestSelf_EnvelopeShape pins spec §6.3: all three self routes answer the
+// same envelope, and `warning` is omitted entirely — not null, not an
+// empty object — when there is nothing to warn about.
+func TestSelf_EnvelopeShape(t *testing.T) {
+	f := newLabelFixture(t)
+	for _, c := range []struct {
+		name string
+		call func() (int, []byte)
+	}{
+		{"whoami", func() (int, []byte) { return f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)}) }},
+		{"claim", func() (int, []byte) { return f.claim(f.inbox(20), "purdex-tester") }},
+		{"release", func() (int, []byte) { return f.release(f.inbox(20)) }},
+	} {
+		status, body := c.call()
+		var raw map[string]json.RawMessage
+		if status != http.StatusOK {
+			t.Fatalf("%s: status = %d; body=%s", c.name, status, body)
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			t.Fatalf("%s: decode: %v; body=%s", c.name, err, body)
+		}
+		if _, ok := raw["peer"]; !ok {
+			t.Errorf("%s: body carries no peer envelope: %s", c.name, body)
+		}
+		if _, ok := raw["warning"]; ok {
+			t.Errorf("%s: warning present on a clean answer: %s", c.name, body)
+		}
+		if rec := decodeRecord(t, status, body); rec.HostID != "h:1" {
+			t.Errorf("%s: peer = %+v", c.name, rec)
+		}
+	}
+}
+
+// TestClaim_UnknownLiveFileNoLongerBlocks pins the gate spec §4.2 removed.
+// A registry file the daemon cannot decode, belonging to a live pid, used
+// to make claim 503 not_ready: a label "could not be proven free". Under
+// D5 a label never has to be free, so the proof is meaningless and the
+// refusal that waited on it is gone. Release never had the requirement.
+func TestClaim_UnknownLiveFileNoLongerBlocks(t *testing.T) {
 	f := newLabelFixture(t)
 	writeRegistryFixture(t, f.registryDir, "4242.json", "{") // pid 4242 alive per fake
 	status, body := f.claim(f.inbox(20), "purdex-tester")
-	ae := f.assertAPIError(status, body, 503, ipeers.ErrNotReady)
-	if len(ae.Skipped) != 1 || !strings.HasSuffix(ae.Skipped[0], "4242.json") {
-		t.Errorf("skipped = %v", ae.Skipped)
+	rec := decodeRecord(t, status, body)
+	if rec.Label != "purdex-tester" || rec.LabelSource != "user" {
+		t.Errorf("claim under an undecodable registry file = %+v", rec)
 	}
-	f.live.markDead(4242) // now the unknown file belongs to a dead pid: ignored
-	status, body = f.claim(f.inbox(20), "purdex-tester")
-	decodeRecord(t, status, body)
-	// Release has no completeness requirement.
 	writeRegistryFixture(t, f.registryDir, "4243.json", "{")
 	status, body = f.release(f.inbox(20))
 	decodeRecord(t, status, body)
@@ -363,21 +444,43 @@ func TestRelease(t *testing.T) {
 	}
 }
 
-func TestClaim_ConcurrentSameLabel_OneWins(t *testing.T) {
+// TestClaim_ConcurrentSameLabel_BothSucceed: labelMu still serialises two
+// live sessions racing for one label, but the one that arrives second is
+// no longer a loser — it gets the label too, and (whichever order the
+// scheduler picked) exactly one of the two answers carries the warning.
+func TestClaim_ConcurrentSameLabel_BothSucceed(t *testing.T) {
 	f := newLabelFixture(t)
 	var wg sync.WaitGroup
 	results := make([]int, 2)
+	warned := make([]bool, 2)
 	for i, pid := range []int{10, 20} {
 		wg.Add(1)
 		go func(i, pid int) {
 			defer wg.Done()
-			results[i], _ = f.claim(f.inbox(pid), "purdex-tester")
+			status, body := f.claim(f.inbox(pid), "purdex-tester")
+			results[i] = status
+			if status == http.StatusOK {
+				var resp ipeers.SelfResponse
+				_ = json.Unmarshal(body, &resp)
+				warned[i] = resp.Warning != nil
+			}
 		}(i, pid)
 	}
 	wg.Wait()
-	sort.Ints(results)
-	if results[0] != 200 || results[1] != 409 {
-		t.Fatalf("statuses = %v, want [200 409]", results)
+	if results[0] != 200 || results[1] != 200 {
+		t.Fatalf("statuses = %v, want both 200", results)
+	}
+	if warned[0] == warned[1] {
+		t.Errorf("warnings = %v, want exactly one of the two to be warned", warned)
+	}
+	rows, _ := f.labels.Snapshot()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v, want one per session", rows)
+	}
+	for _, r := range rows {
+		if r.Label != "purdex-tester" {
+			t.Errorf("row %+v lost its label", r)
+		}
 	}
 }
 
@@ -470,8 +573,9 @@ func TestSelf_AddressMatchesListing(t *testing.T) {
 }
 
 // TestClaim_RecordsMatchListing pins Task 4 item 3: both records claim
-// renders — the 200 body and the 409 label_taken holder — go through the
-// resolved defaults, so neither can drift from the listing.
+// renders — the envelope's own peer and the label_in_use warning's holders
+// — are built the same way the listing builds its rows, so neither can
+// drift from it.
 func TestClaim_RecordsMatchListing(t *testing.T) {
 	f := newLabelFixture(t)
 
@@ -488,16 +592,17 @@ func TestClaim_RecordsMatchListing(t *testing.T) {
 			rec.Address, rec.Label, rec.LabelSource, listed.Address, listed.Label, listed.LabelSource)
 	}
 
-	// pid 20 wants the same label: 409, with the holder rendered exactly
-	// as the listing renders it.
+	// pid 20 takes the same label: 200, with the other holder rendered
+	// exactly as the listing renders it.
 	status, body = f.claim(f.inbox(20), "mt0")
-	ae := f.assertAPIError(status, body, 409, ipeers.ErrLabelTaken)
-	if ae.Holder == nil {
-		t.Fatalf("label_taken carried no holder: %+v", ae)
+	resp := decodeSelf(t, status, body)
+	if resp.Warning == nil || len(resp.Warning.Holders) != 1 {
+		t.Fatalf("label_in_use carried no holder: %+v", resp.Warning)
 	}
-	if ae.Holder.Address != listed.Address || ae.Holder.Label != listed.Label || ae.Holder.LabelSource != listed.LabelSource {
+	h := resp.Warning.Holders[0]
+	if h.Address != listed.Address || h.Label != listed.Label || h.LabelSource != listed.LabelSource {
 		t.Errorf("holder %q/%q/%q != listing %q/%q/%q",
-			ae.Holder.Address, ae.Holder.Label, ae.Holder.LabelSource,
+			h.Address, h.Label, h.LabelSource,
 			listed.Address, listed.Label, listed.LabelSource)
 	}
 }

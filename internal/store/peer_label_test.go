@@ -29,13 +29,18 @@ func TestPeerLabels_ClaimReleaseRev(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "tester-2", rows[0].Label)
 
-	// Another session takes "tester-2": the old row (caller proved it not live) is evicted.
+	// Another session takes "tester-2" too: both rows keep it (Peer Address
+	// v3 D5 — a label is a display name, so it need not be unique, and the
+	// incumbent is left exactly where it was).
 	b, err := ls.Claim("sid-b", "tester-2", now)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), b.Rev)
 	rows, _ = ls.Snapshot()
-	require.Len(t, rows, 1)
-	assert.Equal(t, "sid-b", rows[0].SessionID)
+	require.Len(t, rows, 2)
+	for _, r := range rows {
+		assert.Equal(t, "tester-2", r.Label, "claiming a held label evicts nobody")
+	}
+	assert.Equal(t, int64(2), rows[0].Rev, "sid-a's revision is untouched by sid-b's claim")
 
 	// Release keeps the row with a NULL label and a higher rev.
 	rel, ok, err := ls.Release("sid-b", now)
@@ -44,21 +49,22 @@ func TestPeerLabels_ClaimReleaseRev(t *testing.T) {
 	assert.Equal(t, "", rel.Label)
 	assert.Equal(t, int64(4), rel.Rev)
 	rows, _ = ls.Snapshot()
-	require.Len(t, rows, 1)
-	assert.Equal(t, "", rows[0].Label)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "tester-2", rows[0].Label, "sid-a still holds the label sid-b released")
+	assert.Equal(t, "", rows[1].Label)
 
 	// Releasing an unknown session is a no-op.
 	_, ok, err = ls.Release("nobody", now)
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	// Two released rows do not collide on UNIQUE(label).
+	// A third session's claim and release leave every row in place.
 	_, err = ls.Claim("sid-c", "x1", now)
 	require.NoError(t, err)
 	_, _, err = ls.Release("sid-c", now)
 	require.NoError(t, err)
 	rows, _ = ls.Snapshot()
-	assert.Len(t, rows, 2)
+	assert.Len(t, rows, 3)
 }
 
 func TestPeerLabels_RevSurvivesReopen(t *testing.T) {

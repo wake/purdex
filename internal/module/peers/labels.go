@@ -64,9 +64,12 @@ func infoOf(row store.PeerLabel, ok bool) ipeers.LabelInfo {
 }
 
 // selfResult is the outcome of one whoami/claim/release call: exactly one
-// of rec (status 200) or err (any other status) is set.
+// of rec (status 200) or err (any other status) is set. warn rides along
+// with rec — it qualifies a success, never replaces one — and is nil
+// unless the verb had something to report (spec §6.3).
 type selfResult struct {
 	rec    ipeers.PeerRecord
+	warn   *ipeers.SelfWarning
 	err    *ipeers.APIError
 	status int
 }
@@ -123,13 +126,27 @@ func (m *Module) whoami(inbox string) selfResult {
 	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, infoOf(row, has))}
 }
 
-// claim gives the caller's own conversation label, evicting a dead
-// session's hold on it but refusing a live one's (spec §3.3's claim
-// matrix, restated in Task 7's brief): label rule → reserved → store nil
-// → registry read error ⇒ not_ready → origin unknown → blocking unknown
-// files ⇒ not_ready with skipped → store read error ⇒ store_unavailable →
-// taken (live holder ≠ self) ⇒ 409 with holder + live_labels → already
-// ours ⇒ 200 no write → write (error ⇒ store_unavailable) → 200.
+// claim gives the caller's own conversation a label. A label another live
+// session already holds is granted anyway, with a label_in_use warning
+// naming the other holders (spec D5): a label is a display name, nothing
+// resolves or routes on it, so it has no reason to be unique. The
+// serial-number convention survives as a convention, prompted at the
+// moment of the collision by the warning's live_labels rather than
+// enforced by a refusal.
+//
+// Two v2 behaviours went with that guarantee:
+//
+//   - the 409 label_taken refusal, now the warning above;
+//   - the BlockingUnknown() gate, which made an undecodable registry file
+//     a 503 because a label "could not be proven free" (spec §4.2). Under
+//     D5 a label never has to be free, so the proof has nothing left to
+//     establish and waiting on it would only fail a path that has nothing
+//     to lose by proceeding.
+//
+// The path is now: label grammar → reserved → store nil → registry read
+// error ⇒ not_ready → origin unknown → store read error ⇒
+// store_unavailable → compute the warning → already ours ⇒ 200 no write →
+// write (error ⇒ store_unavailable) → 200.
 func (m *Module) claim(inbox, label string) selfResult {
 	if err := ipeers.ValidateUserLabel(label); err != nil {
 		code := ipeers.ErrCodeLabelInvalid
@@ -140,14 +157,9 @@ func (m *Module) claim(inbox, label string) selfResult {
 	}
 	m.labelMu.Lock()
 	defer m.labelMu.Unlock()
-	entries, diag, proxies, e, res, ok := m.origin(inbox)
+	entries, _, proxies, e, res, ok := m.origin(inbox)
 	if !ok {
 		return res
-	}
-	if blocking := diag.BlockingUnknown(); len(blocking) > 0 {
-		r := fail(http.StatusServiceUnavailable, ipeers.ErrNotReady, "registry has unreadable files for live processes; a label cannot be proven free")
-		r.err.Skipped = blocking
-		return r
 	}
 	rows, err := m.labels.Snapshot()
 	if err != nil {
@@ -155,9 +167,9 @@ func (m *Module) claim(inbox, label string) selfResult {
 	}
 
 	// liveEntry maps every live, non-proxy entry's session id to that
-	// entry (first seen), so a taken label's holder can be rendered with
-	// EntryRecord from the entry already in hand, never a fresh registry
-	// read.
+	// entry (first seen), so another holder of the label can be rendered
+	// with EntryRecord from the entry already in hand, never a fresh
+	// registry read.
 	liveEntry := map[string]ipeers.Entry{}
 	for _, le := range entries {
 		if le.IsProxy || proxies[le.PID] {
@@ -169,10 +181,12 @@ func (m *Module) claim(inbox, label string) selfResult {
 	}
 
 	// liveLabels collects every label held by a live session — the
-	// caller's own included, per spec §3.3 — for the label_taken body;
-	// holder is the row (if any) that already holds the requested label.
+	// caller's own included, per spec §3.3 — for the warning body. others
+	// are the live rows holding the requested label that are NOT the
+	// caller; own is the caller's own row when it already holds it.
 	var liveLabels []string
-	var holder *store.PeerLabel
+	var others []store.PeerLabel
+	var own *store.PeerLabel
 	for i := range rows {
 		row := &rows[i]
 		if row.Label == "" {
@@ -182,25 +196,37 @@ func (m *Module) claim(inbox, label string) selfResult {
 			continue
 		}
 		liveLabels = append(liveLabels, row.Label)
-		if row.Label == label {
-			holder = row
+		if row.Label != label {
+			continue
 		}
+		if row.SessionID == e.SessionID {
+			own = row
+			continue
+		}
+		others = append(others, *row)
 	}
 	sort.Strings(liveLabels)
 
 	snap := m.configSnapshot()
-	if holder != nil && holder.SessionID != e.SessionID {
-		he := liveEntry[holder.SessionID]
-		hrec := ipeers.EntryRecord(snap.alias, snap.hostID, he, false, ipeers.LabelInfo{Label: holder.Label, Rev: holder.Rev})
-		r := fail(http.StatusConflict, ipeers.ErrLabelTaken, fmt.Sprintf("%q is held by a live session", label))
-		r.err.Holder, r.err.LiveLabels = &hrec, liveLabels
-		return r
+	var warn *ipeers.SelfWarning
+	if len(others) > 0 {
+		holders := make([]ipeers.PeerRecord, 0, len(others))
+		for _, o := range others {
+			he := liveEntry[o.SessionID]
+			holders = append(holders, ipeers.EntryRecord(snap.alias, snap.hostID, he, false, ipeers.LabelInfo{Label: o.Label, Rev: o.Rev}))
+		}
+		warn = &ipeers.SelfWarning{
+			Code:       ipeers.WarnLabelInUse,
+			Detail:     inUseDetail(label, len(others)),
+			Holders:    holders,
+			LiveLabels: liveLabels,
+		}
 	}
 
 	var row store.PeerLabel
-	if holder != nil {
+	if own != nil {
 		// Already ours: no write, revision unchanged.
-		row = *holder
+		row = *own
 	} else {
 		row, err = m.labels.Claim(e.SessionID, label, m.now())
 		if err != nil {
@@ -208,7 +234,23 @@ func (m *Module) claim(inbox, label string) selfResult {
 			return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store write failed")
 		}
 	}
-	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, ipeers.LabelInfo{Label: row.Label, Rev: row.Rev})}
+	return selfResult{
+		status: http.StatusOK,
+		rec:    ipeers.EntryRecord(snap.alias, snap.hostID, e, false, ipeers.LabelInfo{Label: row.Label, Rev: row.Rev}),
+		warn:   warn,
+	}
+}
+
+// inUseDetail is the label_in_use warning's sentence. It says "also", and
+// says it about the other holders rather than about the caller, because
+// the caller's own claim went through: this is a report on the company it
+// is now keeping, not a report on a failure.
+func inUseDetail(label string, others int) string {
+	plural := ""
+	if others > 1 {
+		plural = "s"
+	}
+	return fmt.Sprintf("%q is also held by %d other live session%s", label, others, plural)
 }
 
 // release clears the caller's own label, leaving the conversation unnamed
@@ -288,13 +330,14 @@ func (m *Module) handleReleaseLabel(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeSelfResult encodes a selfResult: the error body on failure, the
-// PeerRecord on success. Always called after labelMu is released — the
-// lock covers the registry read, the store write and the construction of
-// res itself, never the encode.
+// ipeers.SelfResponse envelope on success (spec §6.3 — the record used to
+// go out bare, with nowhere to carry a warning). Always called after
+// labelMu is released — the lock covers the registry read, the store write
+// and the construction of res itself, never the encode.
 func writeSelfResult(w http.ResponseWriter, res selfResult) {
 	if res.err != nil {
 		writeWireError(w, res.status, *res.err)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(res.rec)
+	_ = json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: res.rec, Warning: res.warn})
 }

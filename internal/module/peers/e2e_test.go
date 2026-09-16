@@ -1167,11 +1167,11 @@ func TestE2E_HelperRename(t *testing.T) {
 	if claimStatus != http.StatusOK {
 		t.Fatalf("step 1: claim purdex-tester = %d %s", claimStatus, claimBody)
 	}
-	var claimRec ipeers.PeerRecord
-	if err := json.Unmarshal(claimBody, &claimRec); err != nil {
+	var claimResp ipeers.SelfResponse
+	if err := json.Unmarshal(claimBody, &claimResp); err != nil {
 		t.Fatalf("step 1: decode claim response: %v; body=%s", err, claimBody)
 	}
-	oldRev := claimRec.LabelRev // the "purdex-tester" claim's revision — the stale one step 4 replays
+	oldRev := claimResp.Peer.LabelRev // the "purdex-tester" claim's revision — the stale one step 4 replays
 
 	sent := a.sendOK(ipeers.SendRequest{To: "b/" + ipeers.CanonicalID(e2eTargetSID), Text: "ping", OriginInbox: originSock})
 	wantAddr1 := "b/" + ipeers.CanonicalID(e2eTargetSID) + ":foo-" + e2eTargetName

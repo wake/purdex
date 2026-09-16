@@ -111,14 +111,19 @@ func migrateMetaDB(db *sql.DB) error {
 		return err
 	}
 
-	// peer_labels: Peer Address v2 (spec §3.3). One user label per
-	// conversation (sessionId), one conversation per label; label is NULL
-	// after a release so the row keeps carrying rev. peer_label_seq is
-	// the host-wide strictly increasing revision.
+	// peer_labels: one self-declared display label per conversation
+	// (sessionId); label is NULL after a release so the row keeps carrying
+	// rev. peer_label_seq is the host-wide strictly increasing revision.
+	//
+	// label is deliberately NOT UNIQUE (Peer Address v3 D5): two
+	// conversations may call themselves the same thing. Uniqueness lived
+	// here while a label was the head of an address; now that a label
+	// routes nothing, the only thing that must be unique is the canonical
+	// id — which is derived, not claimed, so no table can collide over it.
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS peer_labels (
 			session_id TEXT PRIMARY KEY,
-			label      TEXT UNIQUE,
+			label      TEXT,
 			rev        INTEGER NOT NULL,
 			set_at     INTEGER NOT NULL
 		)
