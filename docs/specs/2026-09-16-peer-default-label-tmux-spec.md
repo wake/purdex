@@ -1,8 +1,11 @@
 # Spec — Default peer label from the tmux session name
 
-Status: draft v2 (codex spec review `task-mu3w0qhs-ehc5la`: 1 Blocker, 4 Majors,
-3 Minors, 5 omissions — all accepted except the legacy-hash alias tier; §9 holds
-the disposition)
+Status: draft v3 (PR #1079 codex round 2, three parallel adversarial reviews:
+**three separate high findings, all the same bug class — a default label that
+names something other than the one live conversation it claims to name**, all
+accepted; §11 holds the disposition. v2: codex spec review
+`task-mu3w0qhs-ehc5la` — 1 Blocker, 4 Majors, 3 Minors, 5 omissions, all
+accepted except the legacy-hash alias tier; §9/§10 hold those)
 Date: 2026-09-16
 Branch: `worktree-peer-default-label`
 Amends: `2026-09-14-peer-address-v2-spec.md` v3.3 (§3.1 "Default label", §3.2 tier 1)
@@ -43,9 +46,10 @@ every axis a reader cares about.
 
 ## 2. Change
 
-A live Claude Code conversation's default label is the **sanitized name of
-the tmux session it is running in**, when that name is unambiguous. Anything
-else keeps the v2 hash form, which becomes the fallback rather than the rule:
+A live Claude Code conversation's default label is the **name of the tmux
+session it is running in**, when that name is already label-shaped and
+unambiguous. Anything else keeps the v2 hash form, which becomes the fallback
+rather than the rule:
 
 ```
 mini-lab/purdex1:purdex1-purdex-69      unnamed, tmux session "purdex1"
@@ -83,9 +87,20 @@ lives inside the user label charset, so that guarantee has to be restored by
 a rule instead of by the alphabet:
 
 > **A tmux-derived default label exists only while it names exactly one
-> live conversation and nothing else.** The instant its name is also a live
-> user label, or two live conversations would derive it, every conversation
-> that would have used it falls back to its v2 hash label.
+> live conversation and nothing else.** The instant it would name anything
+> else as well, every conversation that would have used it falls back to its
+> v2 hash label.
+
+"Anything else" is the part that is easy to under-count, and round 2 found
+three separate ways to do so (§11). The complete list of competitors:
+
+| Competitor | Rule |
+|---|---|
+| another live conversation **deriving** the same name | §3.3 rule 2 |
+| another live conversation merely **present** in that tmux session, even with no candidate of its own | §3.3 rule 2 (occupancy) |
+| another live conversation **holding** the name as a user label | §3.3 rule 3 |
+| a user label the daemon **cannot currently read** | §3.5 |
+| a **different real tmux session** that the name would have been mangled into | §3.1 (no sanitizing) |
 
 The user label therefore always wins, and tier 1 never gains an ambiguity —
 or a hit it did not have before (§4 walks the cases).
@@ -96,33 +111,45 @@ is your own.
 
 ## 3. Derivation
 
-### 3.1 Sanitizing a tmux session name
+### 3.1 Which tmux names qualify: no sanitizing at all
 
-`SanitizeLabel(name) (label string, ok bool)`, a pure function:
+A tmux session name becomes a default label **only when it already is a valid
+user label** — `ValidateUserLabel(name) == nil`, i.e. it matches
+`^[a-z0-9][a-z0-9-]{1,31}$` and is not `cc` or `tmux`. There is no folding,
+no substitution, no truncation. `purdex1` qualifies; `AI-Chat4`, `my_proj.2`,
+`a`, `專案` and `tmux` do not, and their sessions keep the hash.
 
-1. fold `A-Z` to `a-z`;
-2. replace every byte outside `[a-z0-9-]` with `-` (a multi-byte rune
-   becomes one `-` per byte, then step 3 collapses it);
-3. collapse every run of `-` to a single `-`;
-4. trim leading and trailing `-`;
-5. truncate to 32 bytes, then trim a trailing `-` again;
-6. `ok` is false when the result is shorter than 2 bytes, or is `cc` or
-   `tmux` (v2 §3.1 reserved words).
+An earlier draft sanitized the name into label shape (fold case, map every
+other byte to `-`, collapse, truncate). That is exactly the thing that must
+not be done, and the reason is worth keeping in writing:
 
-The output, when `ok`, satisfies the user label rule
-`^[a-z0-9][a-z0-9-]{1,31}$` by construction — the same regexp validates it in
-tests rather than the construction being trusted. Because every byte outside
-the ASCII label charset is replaced *before* truncation, step 5 can never cut
-a multi-byte rune in half.
+> A sanitized name is a **different string** from the session it came from.
+> `foo.bar` sanitizes to `foo-bar` — and `foo-bar` may be the real name of
+> *another* tmux session on the same host. The default label would then
+> match at tier 1 and win before tier 2 could reach the session the caller
+> actually meant, silently delivering to an agent in a different session.
+> A caller typing `host/foo-bar` would land in `foo.bar`.
 
-Examples: `purdex1` → `purdex1`; `AI-Chat4` → `ai-chat4`; `my_proj.2` →
-`my-proj-2`; `a` → not ok (too short); `專案` → not ok (collapses to empty);
-`tmux` → not ok (reserved).
+The host's real tmux session names are the one competitor this rule cannot
+enumerate: §3.2 pins the population to live registry entries, so a session
+with no live agent is invisible to `whoami` and cannot be consulted. Refusing
+to mint a label that differs from the name it stands for removes the whole
+class instead of trying to detect it: **the candidate is always, literally,
+the session's own name**, so tier 1 and tier 2 can only ever mean the same
+place.
 
-Sanitizing is lossy: `my_proj.2` and `my proj 2` both become `my-proj-2`.
-That is a collision between two *different* tmux sessions, and §3.3 rule 2
-resolves it the same way it resolves any other — both fall back to their hash
-labels. No special case is needed, but the case is tested (§6).
+The cost is real but small, and it was measured rather than assumed: all 14
+live agents on this fleet sit in sessions (`ai-chat4`, `purdex1`, `mlab2`,
+`bb3`, …) whose names already qualify. A session named `My_Proj` gets a hash
+and a one-line reason; renaming the tmux session or claiming a user label
+both fix it.
+
+One residual case, stated rather than hidden: two tmux *instances* on one
+host may each have a session named `foo`. If exactly one of them holds a live
+agent, tier 1 now answers `foo` with that agent, where before tier 2 would
+have found two session rows and returned `AmbiguousError`. That resolves to
+the only deliverable thing `foo` could mean, so it is an improvement, but it
+is a behaviour change and it is tested (§6).
 
 ### 3.2 The population
 
@@ -161,18 +188,39 @@ Input: the population (each entry contributes `sessionId` and the tmux
 session name from its own registry `tmux` field, `""` outside tmux), and the
 label rows, restricted to sessions in the population.
 
+Two derived structures, and the distinction between them is where an earlier
+draft had a hole:
+
+- **`candidate[sid]`** — the qualifying tmux name shared by *all* of that
+  session's live entries, if there is one (rule 1 below).
+- **`occupants[name]`** — every `sid` with **at least one** live entry in the
+  tmux session `name`, for every qualifying `name`. A session counts as an
+  occupant of every place it has a process in, **even when it has no
+  candidate of its own**.
+
+Occupancy is about the place, candidacy is about the conversation, and a
+conversation that is disqualified as a *candidate* is still an *occupant*.
+Conflating the two let a session that spanned two tmux sessions drop out of
+the competition entirely, handing its place to the other agent sharing it —
+see §11.
+
 For each `sessionId` in the population, its default label is
 `"_" + enc(sessionId)` (v2 §3.1, unchanged) unless **all** of the following
 hold, in which case it is `candidate`:
 
 1. every live entry of that `sessionId` reports the same tmux session name,
-   and `SanitizeLabel` accepts it as `candidate`. (A conversation with live
-   processes in two different tmux sessions has no single place, so it gets
-   no place address.)
-2. no **other** `sessionId` in the population derives the same `candidate` —
-   whether or not that other session carries a user label.
+   and that name qualifies under §3.1 as `candidate`. (A conversation with
+   live processes in two different tmux sessions has no single place, so it
+   gets no place address.)
+2. `occupants[candidate]` is exactly `{sessionId}` — no other live
+   conversation has a process in that tmux session, whether or not that other
+   session carries a user label, and whether or not it has a candidate of its
+   own.
 3. no **other** `sessionId` in the population holds the user label
    `candidate`.
+4. the label store was actually read. When the snapshot failed, **no**
+   tmux-derived defaults are produced at all — every session keeps its hash
+   (§3.5).
 
 Rule 3 is what enforces §2.2's "the user label always wins". It says "other"
 because a session's own user label must not block its own default: the two
@@ -227,6 +275,30 @@ the wire via `rec.WireAddress()` (`internal/module/peers/send.go`).
 No new I/O, no new store column, no persistence: the default is derived on
 every read, exactly as the suffix is.
 
+### 3.5 An unreadable label store produces no place addresses
+
+Rule 3 can only be checked against label rows that were actually read. v2
+never had to care: with defaults in the `_` namespace, a label-store outage
+could not manufacture a collision, because a hash could not collide with a
+user label by construction. Sharing the namespace removes that safety net.
+
+`localEnvelope` already tolerates a failed `labelSnapshot()` — it marks the
+envelope `partial`, sets `labels_unavailable`, and builds the listing with an
+empty label map (`internal/module/peers/module.go`). Under this change, that
+empty map would tell `ResolveDefaultLabels` "no user labels exist", so an
+unnamed agent in tmux `purdex1` would advertise `purdex1` while the
+unreadable store may hold a live user label `purdex1` for someone else. A
+sender resolves a single tier-1 hit even on a `Partial` snapshot (only
+`RegistryIncomplete` blocks that), so the message would go to the wrong
+agent — silently.
+
+So: `BuildInput` carries `LabelsUnavailable`, and when it is set `Build`
+produces **no** tmux-derived defaults. The listing degrades to exactly v2's
+behaviour for as long as the store is unreadable, which is the one
+degradation that is provably safe. The self routes need no equivalent: they
+already refuse with `store_unavailable` when the snapshot fails (v2 §3.6),
+and §3.4 extends that to `release`.
+
 ## 4. Resolution
 
 `Resolve` (v2 §3.2) is **unchanged**, including tier 2. What changes is which
@@ -240,6 +312,9 @@ strings tier 1 matches:
 | `purdex1`, claimed as a user label by another live agent | tier 1 → that agent | unchanged: the tmux default yielded (rule 3) |
 | `purdex1`, held as a user label by a **dead** session | tier 2 → the session row | tier 1 → the live agent in tmux `purdex1`. Dead label rows are inert (v2 §3.3), so they do not block, and the row reached is the same one tier 2 would have reached |
 | `_5wndni` | tier 1 matches | matches only while that hash is still the live default (§4.1) |
+| `foo-bar`, while a live agent sits in tmux `foo.bar` and a separate tmux `foo-bar` has no agent | tier 2 → the real `foo-bar` session row | unchanged: `foo.bar` does not qualify (§3.1), so nothing shadows the real session |
+| `purdex1`, one unnamed agent there, plus a second conversation that also has a process there but spans two tmux sessions | tier 2 → the session row | the second conversation **occupies** `purdex1` (§3.3 rule 2), so the first falls back; tier 1 misses, tier 2 → the session row — identical |
+| `purdex1`, one unnamed agent there, label store unreadable | tier 2 → the session row | same: no tmux-derived defaults exist while the store is unreadable (§3.5) |
 | `tmux:purdex1` | session row | unchanged |
 
 `ValidateWireAddress` (`internal/peers/wire.go`) already accepts any valid
@@ -305,17 +380,26 @@ the fix belongs with helper freshness as a whole, not here.
 
 ## 6. Acceptance
 
-1. `SanitizeLabel` unit tests cover the six rules and the examples in §3.1,
-   assert every accepted output matches the user label regexp, and include
-   the truncation boundary (33 bytes, and a 33-byte input whose 32nd byte is
-   a hyphen) and the lossy-collision pair from §3.1.
+1. Qualification (§3.1) is tested at the boundary: `purdex1` qualifies;
+   `AI-Chat4`, `my_proj.2`, `foo.bar`, `a`, `專案`, `""`, `cc`, `tmux`, a
+   33-byte name and a name with a leading `-` all do not, and their sessions
+   render the hash. A test asserts that an accepted name is returned
+   **unchanged** — the candidate is never a transformed string.
 2. `ResolveDefaultLabels` unit tests cover: the happy path; a conversation
    with two live entries in different tmux sessions; two unnamed
    conversations in one tmux session; **one unnamed and one user-labelled in
    one tmux session** (rule 2 — both fall back); a candidate equal to a live
    user label; a candidate equal to a user label held by a *dead* session (no
    yield); an entry outside tmux; a proxy entry (excluded from the
-   population); a name that sanitizes to something invalid.
+   population); a name that does not qualify. Plus the three round-2 cases,
+   each of which must have failed before its fix:
+   - **occupancy**: A alone in `purdex1`, B with processes in `purdex1` *and*
+     `bb2` (so B has no candidate) ⇒ **A falls back too**;
+   - **shadowing**: a live agent in `foo.bar` plus a real tmux session
+     `foo-bar` with no agent ⇒ resolving `foo-bar` reaches the real session,
+     never the agent;
+   - **outage**: `LabelsUnavailable` ⇒ every row renders a hash, and a send
+     to what would have been the tmux-derived label does not resolve to it.
 3. `Build` and `whoami` return the **same** address for the same live entry,
    asserted by a test that runs both paths over one fixture; `claim`'s
    `label_taken` holder record and `release`'s record are covered too.
@@ -384,3 +468,25 @@ Only the findings that changed this spec; the rest are recorded in the plan.
 | # | Severity | Finding | Disposition |
 |---|---|---|---|
 | 1 | Blocker | §3.2 claimed `ambiguous` session rows keep the hash "because no live entry backs them" — false: an `ambiguous` row's owner *does* have live entries (`record.go`, the `consumed` and multi-candidate branches) | **Fact accepted, fix rejected.** The wrong statement was this spec's, not the plan's. Forcing a hash on `ambiguous` rows — codex's proposed fix — would make one conversation render two different labels in one listing and would put `whoami` at odds with the session row, which is exactly what §3.2 exists to prevent. §3.2 now derives both fallback kinds from the same population with no special case, and says why. §6.2 gains the case |
+
+## 11. Codex PR round-2 disposition (three parallel adversarial reviews)
+
+`review-mu3xykuf-r3wwjx` (attack), `review-mu3y1609-5kmzhx` (defence),
+`review-mu3y2z2q-qjjse3` (file health). All three returned **needs-attention**
+with one `high` each — and all three highs are the same bug in three
+disguises: the v2 invariant was re-derived as a rule, and the rule under-counted
+what a default label must not collide with.
+
+| # | From | Finding | Disposition |
+|---|---|---|---|
+| 1 | attack | A sanitized default can shadow a **different real tmux session**: an agent in `foo.bar` takes `foo-bar`, and a caller meaning the real `foo-bar` session lands on it at tier 1 before tier 2 can look | **Accepted.** Fix rejected in favour of a stronger one: the attacker proposed feeding tmux session summaries into the resolver, which would break §3.2 (`whoami` has no tmux inventory, so the listing and `whoami` could disagree about the caller's own address). §3.1 instead **drops sanitizing entirely** — a name qualifies only if it already is a valid label, so the candidate is literally the session's own name and the whole class disappears |
+| 2 | defence | A **label-store outage** lets `Build` mint a tmux-derived default while an unreadable row may hold that exact user label for a live session; a sender resolves a single tier-1 hit on a `Partial` snapshot | **Accepted** — §3.5: `BuildInput.LabelsUnavailable` suppresses every tmux-derived default, degrading to v2 behaviour for the duration. The alternative (carry the flag into `Resolve` and answer `not_ready`) was rejected: it changes the resolver contract this spec promised not to touch, and a safe degradation needs no new wire state |
+| 3 | file health | A session **disqualified** as a candidate (processes in two tmux sessions) stopped competing for the place it still occupies, handing `purdex1` to the other agent sharing that session | **Accepted** — §3.3 now separates `occupants[name]` (per *entry*) from `candidate[sid]` (per *conversation*); occupancy counts a session even when it has no candidate. This was the finding the "both agents fall back" claim in §4 had been asserting without actually implementing |
+
+Non-blocking suggestions from the same round, deferred to issues rather than
+done here: splitting `internal/peers/label.go` into per-concern files in the
+same package; replacing the six-argument `applyLabel` / `EntryRecord` with
+parameter structs that bind `defaults` to the population it came from; and
+trimming the spec-restating comments in the new tests once the behaviour has
+settled. None changes behaviour, and doing them inside a PR that is already
+correcting three delivery bugs would bury the corrections.
