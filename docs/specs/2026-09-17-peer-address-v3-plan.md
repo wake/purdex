@@ -121,6 +121,13 @@ required by spec §5.4.
 - `tmux:<name>` and bare-tmux tier 2 still resolve; `cc:` still `ErrLegacyCC`.
 - `Partial` / `RegistryIncomplete` unchanged for the canonical arm.
 
+**Also in this task, flagged by T3**: `internal/module/peers/e2e_test.go`'s
+`LabelAmbiguityUnderUnknownFile` was kept green through T3 by giving the twin conversations a shared
+*user label* as the ambiguous head, with a code comment saying T5 must switch it back. Switch that
+head to the canonical here; the X1 rule it exercises is unchanged. Also finish
+`record_test.go`'s `…ThreeRowsOneCanonical`, whose `Resolve` half T3 deferred because tier 1 was
+still matching labels.
+
 **Implementation**: predicate becomes `hasLiveEntry(r) && r.Canonical == head`. Update the `Resolve`
 doc comment including spec §5.1's accepted-conservatism note.
 
@@ -162,6 +169,13 @@ compile time.
 (`wire.go:287`); producer at `send.go:313–318`; **CLI consumer at `cmd/pdx/msg.go:374`**, where
 `sanitizeCell(c)` stops compiling the moment the element type changes.
 
+**Also in this task: `AddressRev` stops following `LabelRev`.** `wireFromRecord` does
+`AddressRev: rec.LabelRev` (`send.go:161`). A v3 address cannot change, so its revision is 0
+permanently; sending the *label's* revision there claims an address change that did not happen.
+Send 0. Spec §4.4 — an earlier draft of which contradicted itself here, and T3's implementer
+stopped and reported rather than picking one of the two sentences. Assert that a v3 `from.address`
+carries `address_rev: 0` even after the origin has claimed and re-claimed a label.
+
 ---
 
 ### T8 — CLI presentation
@@ -196,9 +210,18 @@ rg 'DefaultLabel|ResolveDefaultLabels|DefaultLabels|IsDefaultLabel|LabelSourceDe
    --glob '!docs/**'
 ```
 
-Known remaining references that earlier tasks must have cleared by the time T9 runs:
-`internal/module/peers/reply_test.go:239`, `send_test.go:477`, `e2e_test.go:1024`,
-`cmd/pdx/peers.go:514`.
+T3 already cleared `reply_test.go:239`, `send_test.go:477` and `e2e_test.go:1024`. As of T3 the
+series survives in: `internal/peers/label.go`, `internal/peers/label_test.go`, `cmd/pdx/peers.go`
+(the `*` marker, T8), `cmd/pdx/msg_test.go`, and **`internal/module/peers/helpers_test.go`** — the
+last of which the first draft of this plan missed.
+
+**Also sweep for indirect dead code, which the symbol grep cannot see.** T3 found that
+`labelInfos` in `internal/module/peers/labels.go` lost its only caller and would have survived a
+name-based sweep; it deleted it there. `go build` and `go vet` do not flag an unused unexported
+function, and neither `staticcheck` nor `deadcode` is installed on this machine. So for each
+function remaining in `internal/peers/label.go` after the deletions, grep the repo for its name and
+confirm it has a caller. The file is small by then; this is a handful of greps, not a tooling
+project.
 
 ---
 

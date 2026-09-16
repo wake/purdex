@@ -204,11 +204,20 @@ The complete set, all of which must stay consistent:
 revision and stays one. What it stops implying is an *address* change, because the address no longer
 moves. Two consequences, and an earlier draft got this wrong by saying "always 0":
 
-- `applyLabel` keeps passing `info.Rev` through (`record.go:263`); the release path keeps writing a
-  bumped rev (`labels.go:261`). No change.
-- `WireFrom.AddressRev` / the helper-rename logic in `deliver.go:277` is the part that becomes
-  inert: a v3 address never changes, so a v3 sender always reports rev 0 there and a helper is never
-  renamed for a v3 origin. The field stays on the wire because v2 senders still populate it.
+- `applyLabel` keeps passing `info.Rev` through; the release path keeps writing a bumped rev
+  (`labels.go:261`). No change.
+- **`wireFromRecord` must stop sourcing `AddressRev` from it.** It currently does
+  `AddressRev: rec.LabelRev` (`send.go:161`), which — combined with the line above — is a
+  contradiction an earlier draft of this spec shipped: `LabelRev` cannot both keep counting label
+  changes and be the number a v3 sender reports as its *address* revision. A v3 address cannot
+  change, so its revision is 0, permanently. `wireFromRecord` sends `AddressRev: 0`.
+- With that, `deliver.go:277`'s helper-rename path becomes inert for a v3 origin: the helper is
+  named after an address that never moves. The field stays on the wire because v2 senders still
+  populate it, and the stale-rev guard still protects against a v2 peer's address changing.
+
+> This is the same defect class as `label_source` (§8.1) and `suffix` (§5.4): one field asked to
+> carry two meanings. Here it was caught by an implementer refusing to guess which of two
+> contradictory sentences to follow.
 
 ### 4.5 Field invariants (the consumer contract)
 
