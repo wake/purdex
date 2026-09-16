@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { isIconWeight, isValidHostColor, sanitizeHostConfig } from '../lib/host-color'
+import { isIconWeight, isPhosphorIconName, isValidHostColor, sanitizeHostConfig } from '../lib/host-color'
 // host-api.ts imports useHostStore at runtime, so this must stay a type-only
 // import to avoid a require cycle.
 import type { NexInfo } from '../lib/host-api'
@@ -169,12 +169,14 @@ export const useHostStore = create<HostState>()(
         set((state) => {
           const host = state.hosts[hostId]
           if (!host) return state
-          const name = typeof icon === 'string' ? icon.trim() : ''
-          if (icon === null || name === '') {
+          if (icon === null || (typeof icon === 'string' && icon.trim() === '')) {
             const { icon: _i, iconWeight: _w, ...rest } = host
             return { hosts: { ...state.hosts, [hostId]: rest } }
           }
-          const next: HostConfig = { ...host, icon: name }
+          // Anything that is not a real catalog name is dropped, not normalized:
+          // `WorkspaceIcon` would render it as literal text in the host badge.
+          if (!isPhosphorIconName(icon)) return state
+          const next: HostConfig = { ...host, icon }
           if (isIconWeight(weight)) next.iconWeight = weight
           return { hosts: { ...state.hosts, [hostId]: next } }
         }),

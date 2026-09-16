@@ -140,6 +140,30 @@ describe('useHostStore', () => {
     expect('iconWeight' in host).toBe(false)
   })
 
+  it.each([
+    'a'.repeat(200),
+    'laptop',
+    ' Laptop ',
+    'NotARealPhosphorIcon',
+    'Laptop; background:url(x)',
+  ])('setHostIcon(%j) is rejected and stores nothing', (bad) => {
+    const id = useHostStore.getState().activeHostId!
+    const before = useHostStore.getState().hosts
+    useHostStore.getState().setHostIcon(id, bad, 'fill')
+    expect(useHostStore.getState().hosts).toBe(before)
+    expect('icon' in useHostStore.getState().hosts[id]).toBe(false)
+    expect('iconWeight' in useHostStore.getState().hosts[id]).toBe(false)
+  })
+
+  it('setHostIcon with a non-Phosphor name leaves an existing icon untouched', () => {
+    const id = useHostStore.getState().activeHostId!
+    useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
+    useHostStore.getState().setHostIcon(id, 'NotARealPhosphorIcon', 'bold')
+    const host = useHostStore.getState().hosts[id]
+    expect(host.icon).toBe('Laptop')
+    expect(host.iconWeight).toBe('fill')
+  })
+
   it('setHostIcon on an unknown host is a no-op', () => {
     const before = useHostStore.getState().hosts
     useHostStore.getState().setHostIcon('nope', 'Laptop')

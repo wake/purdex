@@ -84,6 +84,21 @@ describe('useTabHostBadge', () => {
     expect(wrongType.current?.icon).toBeUndefined()
   })
 
+  it.each([
+    'a'.repeat(200),
+    'laptop',
+    ' Laptop ',
+    'NotARealPhosphorIcon',
+    'Laptop; background:url(x)',
+  ])('returns an undefined icon for the pre-existing non-Phosphor value %j', (bad) => {
+    // setState on purpose: a value written before the guard existed bypasses setHostIcon.
+    useHostStore.setState((s) => ({
+      hosts: { ...s.hosts, 'host-a': { ...hostA, icon: bad } },
+    }))
+    const { result } = renderHook(() => useTabHostBadge(tmuxTab('host-a')))
+    expect(result.current?.icon).toBeUndefined()
+  })
+
   it('returns an undefined weight when the stored weight is invalid', () => {
     useHostStore.setState((s) => ({
       hosts: {

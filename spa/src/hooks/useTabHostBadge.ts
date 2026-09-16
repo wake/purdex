@@ -1,6 +1,6 @@
 import type { IconWeight, Tab } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
-import { getTabHostId, isIconWeight, isValidHostColor } from '../lib/host-color'
+import { getTabHostId, isIconWeight, isPhosphorIconName, isValidHostColor } from '../lib/host-color'
 
 /** Validated host identity for a tab's badge. `null` / `undefined` mean "fall back to the neutral default". */
 export interface TabHostBadge {
@@ -27,7 +27,10 @@ export function useTabHostBadge(tab: Tab): TabHostBadge | null {
   if (!hostId) return null
   return {
     color: isValidHostColor(color) ? color : null,
-    icon: typeof icon === 'string' && icon.trim() !== '' ? icon : undefined,
+    // Last line of defence: a value stored before the guard existed (or written by
+    // a stranger) must never reach `WorkspaceIcon`, which renders an unknown name
+    // as literal text inside the badge.
+    icon: isPhosphorIconName(icon) ? icon : undefined,
     iconWeight: isIconWeight(iconWeight) ? iconWeight : undefined,
   }
 }

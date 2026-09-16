@@ -1,9 +1,37 @@
 import type { IconWeight, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
 import { collectTmuxSessionHostIds } from './infer-workspace-host-id'
+// Static import on purpose: `CommandIconPicker` already pulls icon-meta into the
+// main chunk, so the catalog costs nothing extra here.
+import iconMetaData from '../features/workspace/generated/icon-meta.json'
 
-/** Phosphor icon used for a host that has not picked one. */
+/** Phosphor icon used for a host that has not picked one. Must itself pass `isPhosphorIconName`. */
 export const DEFAULT_HOST_ICON = 'Desktop'
+
+/**
+ * Cheap bounded shape check run *before* the catalog lookup, so a megabyte-long
+ * hostile string is rejected without hashing it. Phosphor names are PascalCase
+ * alphanumerics; the longest real one is well under 64 chars.
+ */
+const PHOSPHOR_NAME_RE = /^[A-Z][A-Za-z0-9]{0,63}$/
+
+let phosphorNames: Set<string> | null = null
+
+/**
+ * Whether a value is a real Phosphor icon name from the generated catalog.
+ *
+ * `WorkspaceIcon` renders an unknown name as literal *text*, so any untrusted
+ * value (sync payload, persisted state) that reaches it would paint
+ * attacker-controlled text into every affected tab row. Membership in the
+ * catalog — not just "non-empty string" — is the gate.
+ *
+ * Exact match only: a padded `' Laptop '` is invalid, never trimmed and accepted.
+ */
+export function isPhosphorIconName(v: unknown): v is string {
+  if (typeof v !== 'string' || !PHOSPHOR_NAME_RE.test(v)) return false
+  phosphorNames ??= new Set((iconMetaData as { n: string }[]).map((m) => m.n))
+  return phosphorNames.has(v)
+}
 
 const ICON_WEIGHTS: readonly string[] = ['bold', 'regular', 'thin', 'light', 'fill', 'duotone']
 
@@ -45,7 +73,7 @@ export function normalizeHostColor(v: string): string | null {
  */
 export function sanitizeHostConfig(host: HostConfig): HostConfig {
   const badColor = 'color' in host && !isValidHostColor(host.color)
-  const badIcon = 'icon' in host && !(typeof host.icon === 'string' && host.icon.trim() !== '')
+  const badIcon = 'icon' in host && !isPhosphorIconName(host.icon)
   const badWeight = 'iconWeight' in host && !isIconWeight(host.iconWeight)
   if (!badColor && !badIcon && !badWeight) return host
 

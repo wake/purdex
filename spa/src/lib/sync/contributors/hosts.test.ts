@@ -580,6 +580,34 @@ describe('hostsContributor.deserialize (hostile icon payloads)', () => {
     expect(useHostStore.getState().hosts.a.iconWeight).toBe('bold')
   })
 
+  it.each([
+    ['an overlong string', 'a'.repeat(4096)],
+    ['a lowercase name', 'laptop'],
+    ['a padded name', ' Laptop '],
+    ['an unknown but well-shaped name', 'NotARealPhosphorIcon'],
+    ['an injection-shaped name', 'Laptop; background:url(x)'],
+  ])('strips %s icon in both merge modes', (_label, hostile) => {
+    createHostsContributor().deserialize(iconPayload(hostile, 'bold'), { type: 'full-replace' })
+    const afterFull = useHostStore.getState()
+    expect('icon' in afterFull.hosts.a).toBe(false)
+    expect(afterFull.hosts.a.iconWeight).toBe('bold')
+    expect(afterFull.hosts.b.icon).toBe('Laptop')
+
+    useHostStore.setState({
+      hosts: { a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, token: 'TOK', order: 0 } },
+      hostOrder: ['a'],
+      activeHostId: 'a',
+    })
+    createHostsContributor().deserialize(iconPayload(hostile, 'bold'), {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'remote' },
+    })
+    const afterMerge = useHostStore.getState()
+    expect('icon' in afterMerge.hosts.a).toBe(false)
+    expect(afterMerge.hosts.a.iconWeight).toBe('bold')
+    expect(afterMerge.hosts.b.icon).toBe('Laptop')
+  })
+
   it('a hostile icon is not re-serialized', () => {
     createHostsContributor().deserialize(iconPayload(42, 'evil'), { type: 'full-replace' })
     const out = createHostsContributor().serialize() as FullPayload

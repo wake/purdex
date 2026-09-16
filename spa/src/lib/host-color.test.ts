@@ -5,6 +5,7 @@ import {
   hasHostBadge,
   isValidHostColor,
   isIconWeight,
+  isPhosphorIconName,
   normalizeHostColor,
   getTabHostId,
   resolveTabHostColor,
@@ -142,6 +143,50 @@ describe('DEFAULT_HOST_ICON', () => {
   it('is the Desktop Phosphor icon', () => {
     expect(DEFAULT_HOST_ICON).toBe('Desktop')
   })
+
+  it('is itself a real catalog name — the fallback can never render as text', () => {
+    expect(isPhosphorIconName(DEFAULT_HOST_ICON)).toBe(true)
+  })
+})
+
+describe('isPhosphorIconName', () => {
+  it.each(['Desktop', 'Laptop', 'Cloud', 'Rocket'])('accepts the catalog name %j', (name) => {
+    expect(isPhosphorIconName(name)).toBe(true)
+  })
+
+  it.each([
+    // well-shaped but not in the catalog — the shape guard alone is not enough
+    'NotARealPhosphorIcon',
+    'Zzz',
+    // wrong case
+    'laptop',
+    'LAPTOP',
+    'desktop',
+    // padded: rejected outright, never trimmed-then-accepted
+    ' Laptop ',
+    'Laptop ',
+    ' Laptop',
+    // blank
+    '',
+    '   ',
+    // punctuation / injection shapes
+    'Laptop; background:url(x)',
+    'Laptop<script>',
+    'Laptop-Extra',
+    'Laptop.Extra',
+    '../../etc/passwd',
+  ])('rejects %j', (bad) => {
+    expect(isPhosphorIconName(bad)).toBe(false)
+  })
+
+  it('rejects an overlong string without scanning the catalog', () => {
+    expect(isPhosphorIconName('a'.repeat(200))).toBe(false)
+    expect(isPhosphorIconName('A'.repeat(200))).toBe(false)
+  })
+
+  it.each([42, null, undefined, {}, ['Laptop'], true])('rejects the non-string %j', (bad) => {
+    expect(isPhosphorIconName(bad)).toBe(false)
+  })
 })
 
 describe('isIconWeight', () => {
@@ -211,7 +256,20 @@ describe('sanitizeHostConfig', () => {
     expect(sanitizeHostConfig(h)).toBe(h)
   })
 
-  it.each([42, '', '   ', {}, null, true])('removes invalid icon %j', (bad) => {
+  it.each([
+    42,
+    '',
+    '   ',
+    {},
+    null,
+    true,
+    // hostile / corrupted values that the old "any non-empty string" check let through
+    'a'.repeat(200),
+    'laptop',
+    ' Laptop ',
+    'NotARealPhosphorIcon',
+    'Laptop; background:url(x)',
+  ])('removes invalid icon %j', (bad) => {
     const out = sanitizeHostConfig({ ...base, icon: bad as never, iconWeight: 'bold' })
     expect('icon' in out).toBe(false)
     expect(out.iconWeight).toBe('bold')
