@@ -883,3 +883,64 @@ func TestWireFrom_JSON_AddressPresent(t *testing.T) {
 		t.Fatalf("round-trip mismatch: got %+v, want %+v", back, f)
 	}
 }
+
+// TestValidateWireAddress_CanonicalHead pins the widened head grammar
+// (spec §6.2): a head that is not a user label must be a canonical id of
+// exactly 8 digits (v3) or exactly 6 (v2, whose senders are still on the
+// wire), with or without a suffix. A 7-digit head is rejected because
+// neither version ever minted one — accepting it would be accepting a
+// format that does not exist.
+func TestValidateWireAddress_CanonicalHead(t *testing.T) {
+	ok := []string{
+		"_a1b2c3d4",               // v3 canonical, no suffix
+		"_a1b2c3d4:mt0-purdex-49", // v3 canonical, with suffix
+		"_k3x9qz",                 // v2 default label, no suffix
+		"_k3x9qz:mt0-purdex-49",   // v2 default label, with suffix
+		"purdex-tester",           // v2 user label, no suffix
+		"purdex-tester:purdex-3f", // v2 user label, with suffix
+		"_00000000",               // an all-zero v3 id is still an id
+	}
+	for _, s := range ok {
+		if err := ValidateWireAddress(s); err != nil {
+			t.Errorf("ValidateWireAddress(%q) = %v, want nil", s, err)
+		}
+	}
+
+	bad := []string{
+		"_a1b2c3d",   // 7 digits: not an id either version ever minted
+		"_a1b2c3d:x", // ...and a suffix does not rescue it
+		"_a1b2c",     // 5 digits
+		"_a1b2c3d4e", // 9 digits
+		"_A1B2C3D4",  // uppercase
+		"_a1b2-3d4",  // hyphen is not a base36 digit
+		"cc:foo",     // reserved head
+		"tmux:mt0",   // reserved head
+		"_a1b2c3d4:", // explicitly empty suffix
+		"purdex-tester:",
+	}
+	for _, s := range bad {
+		err := ValidateWireAddress(s)
+		if !errors.Is(err, ErrAddressInvalid) || ValidationCode(err) != ErrBadAddress {
+			t.Errorf("ValidateWireAddress(%q) = %v (code %s), want ErrAddressInvalid/ErrBadAddress", s, err, ValidationCode(err))
+		}
+	}
+}
+
+// TestDeliverRequest_Validate_CanonicalAddress pins the blocker §6.2
+// names: a v3 sender announcing an 8-digit canonical in from.address must
+// clear its own Validate() before the request ever leaves the host.
+func TestDeliverRequest_Validate_CanonicalAddress(t *testing.T) {
+	for _, addr := range []string{"_a1b2c3d4", "_a1b2c3d4:mt0-purdex-49"} {
+		req := validDeliverRequest()
+		req.From.Address, req.From.AddressRev = addr, 1
+		if err := req.Validate(); err != nil {
+			t.Errorf("Validate() with from.address %q: %v", addr, err)
+		}
+	}
+
+	req := validDeliverRequest()
+	req.From.Address = "_a1b2c3d" // 7 digits
+	if err := req.Validate(); ValidationCode(err) != ErrBadAddress {
+		t.Errorf("Validate() with a 7-digit from.address = %v, want ErrBadAddress", err)
+	}
+}
