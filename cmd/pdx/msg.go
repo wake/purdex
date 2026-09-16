@@ -34,15 +34,17 @@ const msgDefaultLogTail = 50
 // unrecognized flag, which gets its own more specific message (see
 // runMsgCmd). `selftest`'s body lives in msg_selftest.go.
 //
-// The <label> line teaches the two forms an unnamed agent can take. The
-// example is a tmux-shaped default rather than a "_k3x9qz" hash because
-// that is now the normal case: a hash only appears when the tmux name is
-// ambiguous or unusable. Both are rendered examples, not a contract.
-const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<label>[:<suffix>] | <host>/tmux:<name> <text>\n" +
+// The <canonical> line states the v3 address rule to the reader who most
+// needs it: someone who has just claimed a label and is about to type that
+// label as an address. A label never resolves (spec D3), so the usage text
+// offers only the two forms that do — the canonical head and the explicit
+// tmux form — and names the two commands that print a live address.
+const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<canonical>[:<suffix>] | <host>/tmux:<name> <text>\n" +
 	"           (-- ends the options: use it before text that starts with -)\n" +
-	"           (<label> is a name claimed with `pdx msg name`, else the agent's own tmux session\n" +
-	"            name — mini-lab/purdex1 — falling back to a _k3x9qz hash when that name does not\n" +
-	"            name exactly one live agent; run `pdx peers --all` to see the current addresses)\n" +
+	"           (<canonical> is a session's permanent address head, derived from its sessionId\n" +
+	"            — mini-lab/_3k9f2mq4. A label claimed with `pdx msg name` is never an address:\n" +
+	"            it is how you choose a peer, not how you reach one. `pdx msg whoami` prints your\n" +
+	"            own address, `pdx peers --all` prints every host's.)\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +
 	"       pdx msg selftest [--timeout <dur>] [--config <path>]\n" +
@@ -63,7 +65,7 @@ func runMsgCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 	inv, unknownFlag, ok := parseMsgInvocation(args)
 	if !ok {
 		if unknownFlag != "" {
-			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <host>/<label>[:<suffix>] | <host>/tmux:<name> <text>)\n", unknownFlag)
+			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <host>/<canonical>[:<suffix>] | <host>/tmux:<name> <text>)\n", unknownFlag)
 		} else {
 			fmt.Fprintln(stderr, msgUsage)
 		}
@@ -642,15 +644,23 @@ func msgOriginInbox(getenv func(string) string, stderr io.Writer) (inbox string,
 }
 
 // renderSelfRecord prints one ipeers.PeerRecord as the block shared by
-// `name` and `whoami`'s text output: address, label (with source and
-// revision), host (with host ID), and — when the caller has a live agent —
-// session ID and PID.
+// `name` and `whoami`'s text output: address, canonical id, label (with
+// source and revision), host (with host ID), and — when the caller has a
+// live agent — session ID and PID.
+//
+// The canonical line exists because an agent cannot work its own out: it
+// is a hash of a sessionId the agent never handles (spec §4.1), so asking
+// is the only way to learn it. It is printed unconditionally rather than
+// only when non-empty — a blank canonical on a self route means the caller
+// was not attributed to a live cc entry, and hiding the line would hide
+// that.
 func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
-	fmt.Fprintf(stdout, "address:  %s\n", sanitizeCell(rec.Address))
-	fmt.Fprintf(stdout, "label:    %s (%s, rev %d)\n", sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
-	fmt.Fprintf(stdout, "host:     %s (%s)\n", sanitizeCell(rec.Host), sanitizeCell(rec.HostID))
+	fmt.Fprintf(stdout, "address:    %s\n", sanitizeCell(rec.Address))
+	fmt.Fprintf(stdout, "canonical:  %s\n", sanitizeCell(rec.Canonical))
+	fmt.Fprintf(stdout, "label:      %s (%s, rev %d)\n", sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
+	fmt.Fprintf(stdout, "host:       %s (%s)\n", sanitizeCell(rec.Host), sanitizeCell(rec.HostID))
 	if rec.Agent != nil {
-		fmt.Fprintf(stdout, "session:  %s pid %d\n", sanitizeCell(rec.Agent.SessionID), rec.Agent.PID)
+		fmt.Fprintf(stdout, "session:    %s pid %d\n", sanitizeCell(rec.Agent.SessionID), rec.Agent.PID)
 	}
 }
 
@@ -728,8 +738,8 @@ func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, 
 
 // runMsgName implements `pdx msg name <label> | --release [--json]
 // [--config <path>]`: PUT /api/peers/self/label to claim inv.label, or
-// DELETE /api/peers/self/label (inv.release) to release the caller's
-// current user label back to its default.
+// DELETE /api/peers/self/label (inv.release) to clear the caller's label.
+// Neither moves the caller's address, and both success lines say so.
 func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int {
 	originInbox, ok := msgOriginInbox(getenv, stderr)
 	if !ok {
@@ -756,10 +766,15 @@ func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		return exit
 	}
 
+	// Both lines name what changed and, beside it, what did not. Printing
+	// the address alone (what this used to do) invited the exact misreading
+	// this release is about: an agent that has just claimed a name is the
+	// most likely reader to assume the name is now reachable, and the
+	// cheapest place to refuse that is the line it reads on success.
 	if inv.release {
-		fmt.Fprintf(stdout, "released: %s\n", sanitizeCell(rec.Address))
+		fmt.Fprintf(stdout, "released: the label (address unchanged: %s)\n", sanitizeCell(rec.Address))
 	} else {
-		fmt.Fprintf(stdout, "named: %s\n", sanitizeCell(rec.Address))
+		fmt.Fprintf(stdout, "named: %s (address unchanged: %s)\n", sanitizeCell(rec.Label), sanitizeCell(rec.Address))
 	}
 	renderSelfRecord(rec, stdout)
 	return 0

@@ -357,18 +357,25 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 }
 
 // formatPeersTable renders resp.Peers as a text/tabwriter table with columns
-// ADDRESS LABEL AGENT NAME STATUS DELIVERABLE CWD, followed by the
+// LABEL ADDRESS AGENT NAME STATUS DELIVERABLE CWD, followed by the
 // host's partial-cause lines (writeHostDiagnostics) and a trailer line
 // naming this daemon's version.
+//
+// LABEL comes first because that is the order the table is used in (spec
+// §7.1): a reader scans the labels to find the conversation they want,
+// then copies that row's ADDRESS to reach it. A row with no label renders
+// a BLANK cell rather than "-" — a dash reads as a value, and an unnamed
+// conversation has nothing to show there; it is still perfectly
+// addressable, which is exactly what the ADDRESS beside it says.
 func formatPeersTable(resp peers.Envelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ADDRESS\tLABEL\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
+	fmt.Fprintln(w, "LABEL\tADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
 
 	for _, rec := range resp.Peers {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			sanitizeCell(rec.Label),
 			addressField(rec),
-			sanitizeCell(labelField(rec)),
 			sanitizeCell(agentField(rec)),
 			sanitizeCell(nameField(rec)),
 			sanitizeCell(statusField(rec)),
@@ -439,9 +446,11 @@ func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.
 }
 
 // formatPeersAllTable renders a scope=all response as a text/tabwriter
-// table with a leading HOST column (the row's host alias) and a LABEL
-// column after ADDRESS, one row per peer record across every host whose
-// fetch succeeded, followed by one line per host whose fetch failed:
+// table with a leading HOST column (the row's host alias) and then the
+// single-host order, LABEL before ADDRESS (spec §7.1). HOST stays first
+// because neither of the other two columns means anything until you know
+// which host the row lives on. One row per peer record across every host
+// whose fetch succeeded, followed by one line per host whose fetch failed:
 // "<alias>  (unreachable: <error>)", followed by, for every host whose
 // fetch succeeded, that host's "<alias>  (partial: …)" cause lines (spec
 // §3.3, writeHostDiagnostics — the same lines the single-host table
@@ -449,7 +458,7 @@ func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.
 func formatPeersAllTable(resp peers.AllEnvelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "HOST\tADDRESS\tLABEL\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
+	fmt.Fprintln(w, "HOST\tLABEL\tADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
 
 	for _, h := range resp.Hosts {
 		if !h.OK {
@@ -458,8 +467,8 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 		for _, rec := range h.Peers {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				sanitizeCell(h.Alias),
+				sanitizeCell(rec.Label),
 				addressField(rec),
-				sanitizeCell(labelField(rec)),
 				sanitizeCell(agentField(rec)),
 				sanitizeCell(nameField(rec)),
 				sanitizeCell(statusField(rec)),
@@ -501,20 +510,6 @@ func addressField(rec peers.PeerRecord) string {
 		addr = "  " + addr
 	}
 	return addr
-}
-
-// labelField renders rec.Label: "-" when the row has no label (a proxy row
-// or one whose cc agent could not be attributed), "<label>*" when the
-// label is the auto-derived default (LabelSource == peers.LabelSourceDefault),
-// or the label verbatim when the operator set it explicitly.
-func labelField(rec peers.PeerRecord) string {
-	if rec.Label == "" {
-		return "-"
-	}
-	if rec.LabelSource == peers.LabelSourceDefault {
-		return rec.Label + "*"
-	}
-	return rec.Label
 }
 
 func agentField(rec peers.PeerRecord) string {

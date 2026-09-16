@@ -772,24 +772,29 @@ func TestSend_LegacyCCAddress(t *testing.T) {
 	}
 }
 
-// TestSend_PeerNotFoundTeachesTheNewAddressForm pins the peer_not_found
-// detail (default-label spec §4.1 via plan Task 5 item 5). Every "_xxxxxx"
-// address written down before the target host upgraded stops resolving the
-// moment that daemon restarts, so a stale hash is the likeliest way to
-// reach this branch: the detail names both the failed address and the one
-// command that lists the current ones. The wire "error" code stays
-// peer_not_found — assertRefused checks that — so nothing matching on it
-// breaks.
-func TestSend_PeerNotFoundTeachesTheNewAddressForm(t *testing.T) {
+// TestSend_PeerNotFoundTeachesTheCanonicalAddress pins the peer_not_found
+// detail (v3 spec §7). The hint this replaced taught the exact opposite of
+// what is now true — it told the reader an unnamed session is addressed by
+// its tmux session name "not by a _xxxxxx label", and a v3 address is
+// precisely the "_xxxxxxxx" form. A hint that is confidently backwards is
+// worse than none: it sends the reader to look up a string that cannot
+// address anyone. The detail must instead name the canonical id, say that
+// a label never addresses, and point at the two commands that print a live
+// address. The wire "error" code stays peer_not_found — assertRefused
+// checks that — so nothing matching on it breaks.
+func TestSend_PeerNotFoundTeachesTheCanonicalAddress(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	req := s.sendReq()
-	req.To = remoteAlias + "/_ab12cd" // a default label from before the upgrade
+	req.To = remoteAlias + "/_ab12cd" // a v2 six-digit head, no longer minted
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
-	for _, want := range []string{`"_ab12cd"`, `"` + remoteAlias + `"`, "pdx peers --all", "tmux session name"} {
+	for _, want := range []string{`"_ab12cd"`, `"` + remoteAlias + `"`, "pdx peers --all", "pdx msg whoami", "canonical"} {
 		if !strings.Contains(ae.Detail, want) {
 			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
 		}
+	}
+	if strings.Contains(ae.Detail, "tmux session name") {
+		t.Errorf("detail = %q, still teaches the tmux-name form as the address", ae.Detail)
 	}
 	if len(s.postCalls()) != 0 {
 		t.Errorf("posts = %d, want none", len(s.postCalls()))

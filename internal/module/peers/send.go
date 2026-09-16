@@ -29,14 +29,19 @@ import (
 const maxSendBodyBytes = 1 << 20
 
 // peerNotFoundHint is appended to the peer_not_found detail for an
-// address that matched no row. An unnamed agent's default label is now
-// derived from its tmux session name, so every "_xxxxxx" address written
-// down before the target host upgraded stopped resolving the moment that
-// daemon restarted (default-label spec §4.1) — and a stale hash is the
-// likeliest way to land here. Saying so, and naming the one command that
-// lists the current addresses, saves the round trip. The wire "error"
-// code is unchanged: anything matching on peer_not_found is unaffected.
-const peerNotFoundHint = "run `pdx peers --all` for the current addresses — an unnamed session is now addressed by its tmux session name, not by a _xxxxxx label"
+// address that matched no row.
+//
+// What it said before v3 was the exact inverse of the truth: that a
+// session is addressed by its tmux session name "not by a _xxxxxx label".
+// A v3 address IS the "_xxxxxxxx" form — the canonical id derived from the
+// session's sessionId — so the old hint sent a reader who had typed the
+// right kind of string off to find the one kind that cannot address
+// anyone. A confidently backwards hint costs more than no hint at all,
+// which is why this one names the canonical id, says plainly that a label
+// is not an address, and points at the two commands that print a live one.
+// The wire "error" code is unchanged: anything matching on peer_not_found
+// is unaffected.
+const peerNotFoundHint = "an address is a session's canonical id (`_3k9f2mq4`), not the label it calls itself — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
 
 // maxDeliverRespBytes caps a remote daemon's /deliver answer: a
 // DeliverResponse or an APIError is a few hundred bytes at most, and the
