@@ -35,9 +35,11 @@ iconWeight?: IconWeight  // NEW: same union as Workspace; absent → 'regular'
   keys; a non-empty name stores it (and the weight when given); unknown host → no-op.
 - `DEFAULT_HOST_ICON = 'Desktop'` (`spa/src/lib/host-color.ts`).
 - Sync: `hosts` contributor already carries every non-token field, so `icon` / `iconWeight` ride
-  along. `sanitizeHostConfigColor` gains a sibling check: a non-string `icon` or an
-  `iconWeight` outside the union is dropped at the sync/rehydrate boundary
-  (same trust-boundary rule as `color`).
+  along. `sanitizeHostConfigColor` is **renamed `sanitizeHostConfig`** (both call sites updated:
+  `useHostStore` persist `merge` and `lib/sync/contributors/hosts.ts`) and additionally drops a
+  non-string / empty `icon` and an `iconWeight` outside `IconWeight` (`types/tab.ts`:
+  `'bold' | 'regular' | 'thin' | 'light' | 'fill' | 'duotone'`), via an exported
+  `isIconWeight(v): v is IconWeight` guard in `lib/host-color.ts`.
 
 ### 3.2 UI settings (`spa/src/stores/useUISettingsStore.ts`)
 
@@ -92,7 +94,8 @@ interface HostBadgeProps {
 | Surface | File | Placement |
 |---|---|---|
 | Sidebar row | `features/workspace/components/InlineTab.tsx` | directly after the terminal-icon slot, **before** `renderInlineTabIcon`'s agent icon + title |
-| Top tab (normal and pinned) | `components/SortableTab.tsx` | same position: after `TabIcon`, before the title |
+| Top tab (normal only) | `components/SortableTab.tsx` | after `TabIcon`, before the title |
+| Top tab (**pinned**) | `components/SortableTab.tsx` | **no badge** — a pinned tab is `w-9` (36px) and icon-only; a 16px badge plus `gap-1.5` would overflow it. Pinned tabs keep their hover tooltip for identification. |
 
 Gap handling: the badge participates in the row's existing `gap-1.5`, so no extra margins.
 
@@ -103,18 +106,29 @@ Gap handling: the badge participates in the row's existing `gap-1.5`, so no extr
 - A tab with no tmux pane (editor / browser / settings) renders **nothing and reserves no
   space** — titles on those rows start further left. (Chosen default; a "reserve space" toggle is
   explicitly out of scope for this change.)
-- `useTabHostBadge(tab)` (replaces `useTabHostColor`) returns
-  `{ color, icon, iconWeight } | null` with primitive selectors, so a row re-renders only when
-  its own host's badge inputs change.
+- `useTabHostBadge(tab)` (replaces `useTabHostColor`) returns `{ color, icon, iconWeight } | null`.
+  It must use **three separate primitive `useHostStore` selectors** (`hosts[id]?.color`,
+  `?.icon`, `?.iconWeight`) and assemble the object afterwards — a single selector returning a
+  fresh object would re-render on every unrelated store write. `color` is passed through
+  `isValidHostColor`; `iconWeight` through the weight guard (§3.1).
 
 ## 5. Settings UI
 
 ### 5.1 Per host (`components/hosts/HostColorField.tsx` + new `HostIconField.tsx`)
 
 - The existing color field is unchanged.
-- New "Icon" field below it: current icon preview button → opens the existing
-  `WorkspaceIconPicker` (reused as-is; it already offers search, categories and the six weights
-  including duotone), plus a "use default" button clearing back to `DEFAULT_HOST_ICON`.
+- New `HostIconField`: a preview button showing the current icon → expands
+  `WorkspaceIconPicker` in **`inline` mode** (search, categories, six weights incl. duotone),
+  wrapped rather than used bare, because the picker hard-codes workspace strings
+  (`workspace.change_icon`) and clears by calling `onSelect('')`:
+  - `HostIconField` renders its own `Field` label (`hosts.icon.label`) and a "use default"
+    button; it maps the picker's `''` to `setHostIcon(hostId, null)`.
+  - If the picker's own header/labels are visible in `inline` mode, the plan adds an optional
+    `title?: string` prop to `WorkspaceIconPicker` (default keeps today's key) rather than
+    forking it.
+- Bundle: no new cost — `icon-meta.json` is already imported on the hosts side by
+  `components/hosts/CommandIconPicker.tsx`, and `fuse.js` / `@tanstack/react-virtual` already
+  ship with `WorkspaceIconPicker` in the main chunk.
 - Writes through `setHostIcon`.
 
 ### 5.2 Per surface (`components/settings/HostBadgeSetting.tsx`, replaces `HostColorMarkSetting.tsx`)
@@ -134,8 +148,15 @@ i18n: replace the `settings.terminal.host_color_mark.*` keys with
 
 ## 6. Testing
 
-- `host-color.ts`: `DEFAULT_HOST_ICON`; `sanitizeHostConfig` drops invalid `icon` / `iconWeight`
-  while keeping valid ones and the existing color behaviour.
+**Old tests are deleted or rewritten, never left behind**: `HostColorMark.test.tsx` →
+`HostBadge.test.tsx`; `useTabHostColor.test.ts` → `useTabHostBadge.test.ts`;
+`HostColorMarkSetting.test.tsx` → `HostBadgeSetting.test.tsx`; the host-color-mark cases inside
+`InlineTab.test.tsx`, `SortableTab.test.tsx`, `TerminalSection.test.tsx`,
+`useUISettingsStore.test.ts`, `preferences.test.ts`, `hosts.test.ts` and
+`locale-completeness` fixtures are rewritten for the badge. No test may import a removed symbol.
+
+- `host-color.ts`: `DEFAULT_HOST_ICON`; `isIconWeight`; `sanitizeHostConfig` drops invalid
+  `icon` / `iconWeight` while keeping valid ones and the existing color behaviour.
 - `useHostStore`: `setHostIcon` sets name and weight; `null` removes both keys; unknown host no-op;
   invalid weight ignored.
 - `hosts` sync contributor: `icon` / `iconWeight` round-trip; hostile payloads (`icon: 42`,
@@ -149,8 +170,9 @@ i18n: replace the `settings.terminal.host_color_mark.*` keys with
   `data-has-color`.
 - `useTabHostBadge`: returns host icon/color; null for a tab with no tmux pane; reacts to the
   host's icon change; ignores an invalid stored color.
-- `InlineTab` / `SortableTab` (incl. pinned): badge present with a host, absent when the surface is
-  disabled, absent for a non-tmux tab; sits between the terminal icon and the title.
+- `InlineTab` / `SortableTab`: badge present with a host, absent when the surface is disabled,
+  absent for a non-tmux tab; sits between the terminal icon and the title; **a pinned top tab
+  never renders one** (and its width stays `w-9`).
 - `HostIconField`: opens the picker, selecting an icon calls `setHostIcon`, default button clears.
 - `HostBadgeSetting` + `TerminalSection`: each control writes its own store field; controls
   disabled when the toggle is off; both surfaces independent.
