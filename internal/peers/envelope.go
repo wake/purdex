@@ -9,6 +9,14 @@ package peers
 // of the others: owner lookups that did not run (visible per row as
 // agent:null with an empty reason), UnknownRegistryFiles, and
 // LabelsUnavailable.
+//
+// The three are not equally serious, and LabelsUnavailable is the mild one
+// (spec §6.1): every address in Peers is CanonicalID of that row's own
+// sessionId, so an unreadable label store costs the label column and
+// nothing else. Under v2 it did reach the address — a default label was
+// minted from the tmux session name and resolved over the very label rows
+// that could not be read — which is why the flag reads as graver than it
+// now is.
 type Envelope struct {
 	HostID               string       `json:"host_id"`
 	OK                   bool         `json:"ok"`
@@ -17,7 +25,7 @@ type Envelope struct {
 	Peers                []PeerRecord `json:"peers"`                  // never null
 	DaemonVersion        string       `json:"daemon_version"`         // this daemon's buildinfo.Version
 	UnknownRegistryFiles []string     `json:"unknown_registry_files"` // never null; alive-but-undecodable registry files (Diagnosis.BlockingUnknown)
-	LabelsUnavailable    bool         `json:"labels_unavailable"`     // the label store could not be read: every row shows its default label
+	LabelsUnavailable    bool         `json:"labels_unavailable"`     // the label store could not be read: every row renders without its label. Addresses are unaffected
 }
 
 // HostResult is one host's row in a scope=all response: like Envelope, plus

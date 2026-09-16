@@ -971,10 +971,14 @@ func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
 	}
 }
 
-func TestRunMsgName_NotReadyRendersSkipped(t *testing.T) {
+// TestRunMsgName_NotReadyRendersGenericLine pins that not_ready now gets
+// the same one-line shape as any other error. It used to append the
+// registry files the daemon could not classify, but nothing sets that list
+// any more, so an extra indented section would only ever be empty.
+func TestRunMsgName_NotReadyRendersGenericLine(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "registry has unreadable files", Skipped: []string{"/r/4242.json"}})
+		json.NewEncoder(w).Encode(ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "registry has unreadable files"})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
@@ -984,7 +988,7 @@ func TestRunMsgName_NotReadyRendersSkipped(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if errb.String() != "pdx msg: not_ready: registry has unreadable files\n  /r/4242.json\n" {
+	if errb.String() != "pdx msg: not_ready: registry has unreadable files\n" {
 		t.Errorf("stderr %q", errb.String())
 	}
 }

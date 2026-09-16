@@ -357,8 +357,10 @@ func decodeMsgAPIError(body []byte) (ipeers.APIError, bool) {
 // remote_error additionally names the host part the caller typed and the
 // remote's own error/detail; ambiguous prints the session part the caller
 // typed followed by one indented line per candidate (see
-// msgCandidateLine); not_ready prints the generic line followed by one
-// indented skipped entry per line.
+// msgCandidateLine). Every other error, not_ready included, prints the
+// generic line alone: not_ready used to append the registry files an
+// inventory could not classify, but no daemon path sets that list any more
+// — the claim gate that reported it went with the label_taken refusal.
 func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Writer) {
 	switch ae.Error {
 	case ipeers.ErrRemoteError:
@@ -375,12 +377,6 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 		fmt.Fprintf(stderr, "pdx msg: ambiguous: %s\n", sanitizeCell(session))
 		for _, c := range ae.Candidates {
 			fmt.Fprintln(stderr, msgCandidateLine(c))
-		}
-
-	case ipeers.ErrNotReady:
-		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
-		for _, s := range ae.Skipped {
-			fmt.Fprintf(stderr, "  %s\n", sanitizeCell(s))
 		}
 
 	default:
@@ -408,8 +404,8 @@ func msgCandidateLine(c ipeers.AmbiguousCandidate) string {
 }
 
 // msgGenericAPIErrorLine renders the shared "pdx msg: <error>[: <detail>]"
-// line used by the default case and by the not_ready case (which appends
-// its own indented detail lines after it).
+// line used by every error renderMsgAPIError does not give a shape of its
+// own.
 func msgGenericAPIErrorLine(ae ipeers.APIError) string {
 	line := fmt.Sprintf("pdx msg: %s", sanitizeCell(ae.Error))
 	if ae.Detail != "" {

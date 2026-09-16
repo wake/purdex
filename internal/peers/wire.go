@@ -323,7 +323,6 @@ type APIError struct {
 	Candidates []AmbiguousCandidate `json:"candidates,omitempty"` // ambiguous: the rows that share the address
 	Remote     *RemoteError         `json:"remote,omitempty"`     // remote_error: the other daemon's answer
 	Partial    bool                 `json:"partial,omitempty"`    // not_ready from Resolve: the inventory that produced it was partial
-	Skipped    []string             `json:"skipped,omitempty"`    // not_ready: registry files an inventory could not classify
 }
 
 // AmbiguousCandidate is one of the rows an `ambiguous` refusal could not

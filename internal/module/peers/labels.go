@@ -82,23 +82,28 @@ func fail(status int, code, detail string) selfResult {
 // origin reads the registry and attributes inbox to a live, non-proxy
 // entry. Shared by whoami/claim/release — the one registry read and origin
 // check every verb makes before doing its own thing.
-func (m *Module) origin(inbox string) (entries []ipeers.Entry, diag ipeers.Diagnosis, proxies map[int]bool, e ipeers.Entry, res selfResult, ok bool) {
+//
+// It hands back no registry Diagnosis, because no verb branches on one any
+// more. The last reader was claim's BlockingUnknown() gate, which had to
+// prove a label free before granting it; under D5 a label never has to be
+// free (spec §4.2), so the diagnosis had nothing left to decide.
+func (m *Module) origin(inbox string) (entries []ipeers.Entry, proxies map[int]bool, e ipeers.Entry, res selfResult, ok bool) {
 	if inbox == "" {
-		return nil, ipeers.Diagnosis{}, nil, ipeers.Entry{}, fail(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is empty (CLAUDE_CODE_MESSAGING_SOCKET unset?)"), false
+		return nil, nil, ipeers.Entry{}, fail(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is empty (CLAUDE_CODE_MESSAGING_SOCKET unset?)"), false
 	}
 	if m.labels == nil {
-		return nil, ipeers.Diagnosis{}, nil, ipeers.Entry{}, fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store is not available"), false
+		return nil, nil, ipeers.Entry{}, fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "label store is not available"), false
 	}
-	entries, diag, err := ipeers.ReadRegistryDiag(m.registryDir, m.liveness)
+	entries, _, err := ipeers.ReadRegistry(m.registryDir, m.liveness)
 	if err != nil {
-		return nil, diag, nil, ipeers.Entry{}, fail(http.StatusServiceUnavailable, ipeers.ErrNotReady, "registry read failed: "+err.Error()), false
+		return nil, nil, ipeers.Entry{}, fail(http.StatusServiceUnavailable, ipeers.ErrNotReady, "registry read failed: "+err.Error()), false
 	}
 	proxies = m.proxyPIDs()
 	e, found := findOriginEntry(entries, proxies, inbox)
 	if !found {
-		return nil, diag, nil, ipeers.Entry{}, fail(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is not a live Claude Code session on this host"), false
+		return nil, nil, ipeers.Entry{}, fail(http.StatusBadRequest, ipeers.ErrOriginUnknown, "origin_inbox is not a live Claude Code session on this host"), false
 	}
-	return entries, diag, proxies, e, selfResult{}, true
+	return entries, proxies, e, selfResult{}, true
 }
 
 // whoami answers the caller's own current record: its address, label and
@@ -109,7 +114,7 @@ func (m *Module) origin(inbox string) (entries []ipeers.Entry, diag ipeers.Diagn
 func (m *Module) whoami(inbox string) selfResult {
 	m.labelMu.Lock()
 	defer m.labelMu.Unlock()
-	_, _, _, e, res, ok := m.origin(inbox)
+	_, _, e, res, ok := m.origin(inbox)
 	if !ok {
 		return res
 	}
@@ -157,7 +162,7 @@ func (m *Module) claim(inbox, label string) selfResult {
 	}
 	m.labelMu.Lock()
 	defer m.labelMu.Unlock()
-	entries, _, proxies, e, res, ok := m.origin(inbox)
+	entries, proxies, e, res, ok := m.origin(inbox)
 	if !ok {
 		return res
 	}
@@ -267,7 +272,7 @@ func inUseDetail(label string, others int) string {
 func (m *Module) release(inbox string) selfResult {
 	m.labelMu.Lock()
 	defer m.labelMu.Unlock()
-	_, _, _, e, res, ok := m.origin(inbox)
+	_, _, e, res, ok := m.origin(inbox)
 	if !ok {
 		return res
 	}

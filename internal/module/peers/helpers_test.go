@@ -1995,24 +1995,25 @@ func TestApplyAddress_LegacySpawnTakesFirstV2AddressEvenAtRevZero(t *testing.T) 
 	}
 }
 
-// TestApplyAddress_DefaultLabelHeadChangeAtSameRevIsIgnored pins the limit
-// the default-label spec §4.2 accepts on purpose, so that changing it is a
-// deliberate decision rather than an accident.
+// TestApplyAddress_SuffixChangeAtSameRevIsIgnored pins the limit the
+// address design accepts on purpose, so that changing it is a deliberate
+// decision rather than an accident.
 //
-// label_rev counts USER label writes. A default label is derived, so its
-// head moves without the rev moving: the sender's tmux session is renamed,
-// or a competitor appears or goes away, and its address goes from
-// "a/mt1:..." to "a/mt2:..." at rev 0 throughout. ApplyAddress ignores any
-// rev <= appliedRev, so the remote host keeps showing the OLD helper
-// display name until something actually advances the rev. Only the display
-// name on the other host goes stale — addressing, resolution and delivery
-// all read the live listing and are unaffected.
-func TestApplyAddress_DefaultLabelHeadChangeAtSameRevIsIgnored(t *testing.T) {
+// The canonical head never moves. The SUFFIX does: it renders the live
+// tmux session name, so renaming the sender's tmux session takes its
+// address from "a/_1c4m7dkz:mt1-n" to "a/_1c4m7dkz:mt2-n" — at rev 0
+// throughout, because address_rev never follows a display change.
+// ApplyAddress ignores any rev <= appliedRev, so the remote host keeps
+// showing the OLD helper display name until the helper is rebuilt. Only
+// that display name goes stale: the head a sender is reached at is
+// unchanged, and addressing, resolution and delivery all read the live
+// listing anyway.
+func TestApplyAddress_SuffixChangeAtSameRevIsIgnored(t *testing.T) {
 	tm := newTestManager(t)
 	tm.sweepOK(t)
-	// The sender is unnamed and lives in tmux "mt1", so its default label
-	// is that tmux session name at rev 0 (default-label spec §3.3).
-	h, err := tm.m.Acquire(context.Background(), applyKey, "a/mt1:mt1-n", 0)
+	// The sender lives in tmux "mt1", so its suffix is built from that
+	// session name; its head is its canonical id.
+	h, err := tm.m.Acquire(context.Background(), applyKey, "a/_1c4m7dkz:mt1-n", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2020,23 +2021,23 @@ func TestApplyAddress_DefaultLabelHeadChangeAtSameRevIsIgnored(t *testing.T) {
 		t.Fatalf("appliedRev after spawn = %d, want 0", got)
 	}
 
-	// The tmux session is renamed to "mt2". The sender's default head
-	// changes with it; label_rev does not, because nothing claimed a
-	// label. The accepted limit: the helper keeps the old name.
-	if got := tm.m.ApplyAddress(h, "a/mt2:mt2-n", 0); got != "a/mt1:mt1-n" {
-		t.Errorf("default head change at rev 0 = %q, want the stale %q (spec §4.2)", got, "a/mt1:mt1-n")
+	// The tmux session is renamed to "mt2". The suffix changes with it;
+	// the rev does not. The accepted limit: the helper keeps the old name.
+	if got := tm.m.ApplyAddress(h, "a/_1c4m7dkz:mt2-n", 0); got != "a/_1c4m7dkz:mt1-n" {
+		t.Errorf("suffix change at rev 0 = %q, want the stale %q", got, "a/_1c4m7dkz:mt1-n")
 	}
-	if got := registryName(t, tm.registryDir, h.pid); got != "a/mt1:mt1-n" {
-		t.Errorf("registry name = %q, want the stale %q", got, "a/mt1:mt1-n")
+	if got := registryName(t, tm.registryDir, h.pid); got != "a/_1c4m7dkz:mt1-n" {
+		t.Errorf("registry name = %q, want the stale %q", got, "a/_1c4m7dkz:mt1-n")
 	}
 
-	// Claiming a USER label does advance the rev, and that is the
-	// documented way out of the stale name.
-	if got := tm.m.ApplyAddress(h, "a/purdex-tester:mt2-n", 1); got != "a/purdex-tester:mt2-n" {
-		t.Errorf("user label at rev 1 = %q, want it applied", got)
+	// A strictly newer rev is still the one thing that does rewrite the
+	// name — the gate itself is unchanged, only the inputs that can move
+	// underneath it.
+	if got := tm.m.ApplyAddress(h, "a/_1c4m7dkz:mt2-n", 1); got != "a/_1c4m7dkz:mt2-n" {
+		t.Errorf("rev 1 = %q, want it applied", got)
 	}
-	if got := registryName(t, tm.registryDir, h.pid); got != "a/purdex-tester:mt2-n" {
-		t.Errorf("registry name after the claim = %q", got)
+	if got := registryName(t, tm.registryDir, h.pid); got != "a/_1c4m7dkz:mt2-n" {
+		t.Errorf("registry name after the newer rev = %q", got)
 	}
 }
 
