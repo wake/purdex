@@ -526,9 +526,22 @@ export function createLocalDaemon(deps: LocalDaemonDeps): LocalDaemon {
   // on the machine whose PATH is being changed, so it judges on a fresh probe
   // rather than a cache that may predate the fix they just applied.
   async function pathCommandUnlocked(kind: 'link' | 'add-to-shell', opts?: { force?: boolean }): Promise<LocalDaemonPathResult> {
-    const { env } = await refreshLaunchEnv()
+    const { env, pathSource } = await refreshLaunchEnv()
+    // Never hand a SYNTHESIZED PATH to a command that decides what to do by
+    // looking at PATH. When the shell probe fails, fallbackPath() injects
+    // ~/.local/bin — so `add-to-shell` would see the directory it exists to
+    // add, call itself a no-op, and leave the rc file untouched on precisely
+    // the machine whose real PATH we could not read. The button would report
+    // success and change nothing.
+    //
+    // So on a fallback PATH we pass the process's own inherited PATH: not the
+    // user's shell PATH either, but at least something real rather than
+    // something this file made up. Writing a block that turns out to have
+    // been unnecessary is harmless — the marker makes a second run a no-op —
+    // whereas skipping a needed one is the bug this feature exists to fix.
+    const cmdEnv = pathSource === 'fallback' ? { ...env, PATH: deps.baseEnv.PATH ?? '' } : env
     const args = ['path', kind, ...(kind === 'link' && opts?.force ? ['--force'] : [])]
-    const r = await deps.exec(binPath, args, { env, cwd: deps.home, timeoutMs: PATH_CMD_TIMEOUT_MS })
+    const r = await deps.exec(binPath, args, { env: cmdEnv, cwd: deps.home, timeoutMs: PATH_CMD_TIMEOUT_MS })
     if (r.timedOut) throw new Error(`pdx path ${kind} did not finish within ${PATH_CMD_TIMEOUT_MS / 1000}s`)
     // Verbatim, refusals included: a conflict's whole value is the path it
     // names, and reducing it to a red "failed" would throw that away.

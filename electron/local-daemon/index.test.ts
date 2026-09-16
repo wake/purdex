@@ -1033,6 +1033,20 @@ describe('pathCommand (spec §5.1)', () => {
     expect(pathRuns()[0].env?.PATH).toBe(f.shellPath)
   })
 
+  // Codex R1 (PR #1081). fallbackPath() injects ~/.local/bin, so handing a
+  // fallback env to `add-to-shell` would show it the very directory it exists
+  // to add: the command calls itself a no-op, the rc file is never touched,
+  // and the button reports success having changed nothing — on precisely the
+  // machine whose real PATH we could not read.
+  it('never hands a synthesized PATH to a command that decides by looking at PATH', async () => {
+    f.onExec = (file) => (file === '/bin/zsh' ? { code: 1, stdout: '', stderr: 'no shell', timedOut: false } : undefined)
+    // deps.baseEnv is the process's own inherited PATH: '/usr/bin:/bin'.
+    await createLocalDaemon(f.deps).pathCommand('add-to-shell')
+    const used = pathRuns()[0].env?.PATH ?? ''
+    expect(used).toBe('/usr/bin:/bin')
+    expect(used).not.toContain(`${HOME}/.local/bin`)
+  })
+
   it('add-to-shell has its own argv', async () => {
     await createLocalDaemon(f.deps).pathCommand('add-to-shell')
     expect(pathRuns()[0].args).toEqual(['path', 'add-to-shell'])
