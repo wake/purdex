@@ -501,6 +501,33 @@ describe('StatusBar peer segments', () => {
     expect(screen.getByTestId('status-seg-agent')).toHaveAttribute('data-dim', 'true')
   })
 
+  // Uncertainty is signalled beside the value, not by darkening it. Two
+  // rounds of "make it dimmer" drew the same complaint from a live screenshot
+  // both times: a segment darker than its neighbours reads as broken, not as
+  // provisional. The text now always matches host and session name; the
+  // refresh control — which sits next to the peer id and is what fixes the
+  // condition — carries the state.
+  it('a stale peer id is as bright as its neighbours, and the refresh control carries the state', () => {
+    seedPeers({ fetchedAt: Date.now() - 90_000 })
+    seedCwd('/tmp/here')
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+
+    const peerId = screen.getByTestId('status-seg-peer-id')
+    const host = screen.getByTestId('status-seg-host')
+    // Same colour class, and no opacity class anywhere on the stale segment.
+    expect(peerId.className).toContain('text-text-secondary')
+    expect(host.className).toContain('text-text-secondary')
+    expect(peerId.className).not.toMatch(/opacity-\d/)
+
+    expect(screen.getByTestId('status-peer-refresh')).toHaveAttribute('data-stale', 'true')
+  })
+
+  it('the refresh control is not marked stale for a fresh answer', () => {
+    seedPeers()
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-peer-refresh')).not.toHaveAttribute('data-stale')
+  })
+
   it.each([
     ['a failed fetch', { error: 'boom' } as Partial<PeerHostEntry>, /boom/],
     ['a partial envelope with no row', { envelope: { partial: true, labelsUnavailable: false, unknownRegistryFiles: [] } } as Partial<PeerHostEntry>, /could not be determined/],

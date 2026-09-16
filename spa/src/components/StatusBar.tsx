@@ -48,7 +48,7 @@ const DOUBLE_CLICK_GRACE_MS = 250
  * dangling rule where a dropped segment used to be.
  */
 function Separator({ className = '' }: { className?: string }) {
-  return <span aria-hidden="true" data-testid="status-separator" className={`mx-2 h-3 shrink-0 self-center border-l border-border-subtle ${className}`} />
+  return <span aria-hidden="true" data-testid="status-separator" className={`mx-1 h-3 shrink-0 self-center border-l border-border-subtle ${className}`} />
 }
 
 /**
@@ -118,7 +118,14 @@ function CopySegment({ testId, display, value, what, title, dim, rtl, className 
       // class inherits a dimmer colour than the host and session name beside
       // it — which is exactly what shipped in alpha.365 and read as three
       // greyed-out segments next to two normal ones.
-      className={`min-w-0 truncate text-left text-text-secondary ${value === '' ? 'cursor-default' : 'cursor-pointer'} ${dim ? 'opacity-70' : ''} ${className}`}
+      //
+      // `dim` no longer changes the text at all. Two rounds of trying to make
+      // "uncertain" a *brightness* landed on the same complaint both times:
+      // the row reads as one line, and a segment that is darker than its
+      // neighbours looks broken rather than provisional. The uncertainty is
+      // signalled beside the value instead (the refresh control), where it
+      // costs no legibility; `data-dim` stays as the tested state.
+      className={`min-w-0 truncate text-left text-text-secondary ${value === '' ? 'cursor-default' : 'cursor-pointer'} ${className}`}
     >
       {rtl ? <bdi>{display}</bdi> : display}
     </button>
@@ -413,11 +420,16 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
         <button
           type="button"
           data-testid="status-peer-refresh"
-          title={t('peer.refresh')}
+          title={peerDim ? peerIdTitle(peer, t) : t('peer.refresh')}
           aria-label={t('peer.refresh')}
+          data-stale={peerDim ? 'true' : undefined}
           disabled={!peer.connected || peer.loading}
           onClick={() => peer.refresh()}
-          className="ml-1.5 flex shrink-0 items-center rounded p-0.5 text-text-muted transition-colors hover:bg-surface-hover disabled:opacity-40 cursor-pointer disabled:cursor-default"
+          // This icon carries the uncertainty the text used to carry: amber
+          // when the answer beside it may no longer hold, neutral otherwise.
+          // It sits directly after the peer id, it is the thing that fixes the
+          // condition it reports, and colouring it costs nothing to read.
+          className={`ml-1.5 flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-surface-hover disabled:opacity-40 cursor-pointer disabled:cursor-default ${peerDim ? 'text-status-warning' : 'text-text-muted'}`}
         >
           <ArrowsClockwise size={10} className={peer.loading ? 'animate-spin' : ''} />
         </button>
