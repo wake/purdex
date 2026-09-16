@@ -97,7 +97,10 @@ Prints, and with `--json` emits, the state the other two act on:
 
 - this binary's own resolved path;
 - what `pdx` resolves to on the **current process's** PATH, or that it does
-  not resolve;
+  not resolve. Resolution uses `exec.LookPath` semantics: a PATH entry holding
+  a `pdx` that is not a regular executable file is skipped, because a shell
+  would skip it too. Reporting a non-executable file as "reachable" would be
+  the same lie the whole feature exists to stop telling;
 - whether that resolved `pdx` is **this** binary (compared by resolved path) —
   a machine with a stale `pdx` earlier on PATH is a real configuration, and
   silently "working" while pointing at last month's build is worse than not
@@ -141,9 +144,17 @@ There is no portable syscall that closes this window.
 
 So the guarantee is scoped honestly rather than claimed absolutely:
 
-- Concurrent runs of **pdx itself** are serialised by a lockfile
-  (`~/.local/bin/.pdx-path.lock`, `O_CREATE|O_EXCL`, stale after 30s), and the
-  path is re-`Lstat`ed inside the lock immediately before the rename.
+- Concurrent runs of **pdx itself** are serialised by **one** lockfile —
+  `~/.local/bin/.pdx-path.lock`, `O_CREATE|O_EXCL`, treated as stale after 30s,
+  acquired by `link` **and** `add-to-shell` alike, since both change the same
+  thing: whether `pdx` is reachable. The path is re-`Lstat`ed inside the lock,
+  immediately before the rename.
+
+  One lock, not two. A second lock beside the rc file was considered and
+  rejected: it would only ever protect pdx from pdx, which this lock already
+  does, and it cannot protect the rc file from the user's editor — no lockfile
+  can, because editors do not take it. Claiming otherwise would be another
+  guarantee the implementation does not have.
 - A **non-pdx process** racing us for that exact path in that exact window is
   out of scope, and §7 says so instead of asserting a safety property the
   implementation cannot hold.
@@ -201,11 +212,12 @@ before pdx ever touched the file.
 written before the block. Appending straight onto a file whose last line has no
 newline would splice the marker comment onto the end of a live shell command.
 
-**Locking and lost updates**: the read-decide-write sequence runs under a
-lockfile next to the target file, and the marker/PATH checks are re-evaluated
+**Locking and lost updates**: the read-decide-write sequence runs under the
+same single lock `link` uses (§3.2), and the marker/PATH checks are re-evaluated
 *inside* the lock against a fresh read. Two concurrent `add-to-shell` runs
 therefore produce one block, not two, and a run that read the file before the
-user saved an edit in their editor cannot write a version that drops it.
+user saved an edit in their editor cannot write a version that drops it —
+because it never uses that earlier read to build what it writes.
 
 **Writing**: append via a temp file in the same directory plus `rename`, so an
 interrupted run cannot truncate a shell config. The file's existing mode is
@@ -227,6 +239,25 @@ environment.
 `pdx` is resolved against **the PATH the daemon is about to be launched with**
 — `buildLaunchEnv`'s result (`electron/local-daemon/launch-env.ts`), which is
 the user's login-shell PATH whenever the shell probe succeeds.
+
+**The gate does not re-implement the resolution.** It runs the managed binary
+with that env and reads its answer:
+
+```ts
+deps.exec(binPath, ['path', '--json'], { env: launchEnv })
+```
+
+`pdx path` already computes all of it — resolution with `exec.LookPath`
+semantics (a `pdx` that is not executable is not a command), whether the winner
+is this binary, the symlink's state — and the Electron `deps.fs` interface has
+neither `lstat` nor `readlink` to do the same work honestly. Two
+implementations of "is `pdx` reachable" would drift, and the TypeScript one
+would be the weaker: it would have to treat a dangling symlink and an absent
+path alike, which is the distinction §3.2 exists to make.
+
+So the gate is a consumer of §3.1's report, with the daemon's launch PATH
+substituted for the CLI's own. One implementation, tested once, in the language
+that has the syscalls.
 
 That PATH, not `process.env.PATH`, is the one to test: the daemon passes its
 environment to the tmux sessions it creates, so it is the PATH **agents** end
@@ -354,6 +385,11 @@ cli: {
   link: 'ok' | 'missing' | 'conflict' | 'error'
 }
 ```
+
+Every field comes from `pdx path --json` (§4.1) except `pathSource`, which is
+the Electron side's own knowledge of how it built the PATH it passed in. When
+the binary is not installed there is no `cli` block at all — there is nothing
+to ask.
 
 `link` describes what is observed *now*. v1 also had a `'created'` state, which
 was wrong (v1 Major 3): status is recomputed on every poll and has no memory of

@@ -52,7 +52,15 @@ type pathEnv struct {
 testable entry point; `runPath(args)` builds a `pathEnv` from the real process
 and calls it. `os.Executable()` is paired with `filepath.EvalSymlinks` exactly
 as `cmd/pdx/setup.go` already does — **not** `os.Executable()` alone, or
-running through `~/.local/bin/pdx` misidentifies the binary.
+running through `~/.local/bin/pdx` misidentifies the binary. Copy that file's
+error handling too: an `os.Executable()` error fails the command, but an
+`EvalSymlinks` error keeps the unresolved executable path and notes it in the
+report. "Paired exactly" must not be read as "fail if either fails".
+
+Resolution uses **`exec.LookPath` semantics**: a PATH entry holding a `pdx`
+that is not a regular executable file is skipped, because a shell skips it too.
+A non-executable file reported as reachable would be precisely the false
+"everything is fine" this feature exists to remove.
 
 Report contents and exit codes per spec §3.1. `--json` emits a stable shape;
 the human form is a few labelled lines.
@@ -71,6 +79,8 @@ string — that list has no compiler keeping it honest, so the test asserts it.
 5. `~/.local/bin` absent / present-but-not-on-PATH / present-and-on-PATH ⇒ the
    suggested fix differs in each.
 6. an empty PATH, and a PATH entry that does not exist ⇒ no crash.
+6b. a PATH entry holding a **non-executable** `pdx` ⇒ skipped, and if a real
+    one sits later on PATH, that one wins.
 7. two `pdx` on PATH ⇒ first wins and the report says which.
 8. `--json` shape.
 9. grammar: unknown subcommand and unknown flag ⇒ exit 2, usage on stderr.
@@ -93,9 +103,13 @@ Spec §3.2's table, plus the lockfile. Order inside the lock: acquire →
 `Lstat` → classify → act. The `--force` replacement is `Symlink` to a temp name
 in the same directory then `Rename` over the destination.
 
-The lockfile (`~/.local/bin/.pdx-path.lock`, `O_CREATE|O_EXCL`, treated as
-stale after 30s) is shared with Task 3, so write it once as a small helper with
-its own tests.
+**One lock for both commands** (spec §3.2): `~/.local/bin/.pdx-path.lock`,
+`O_CREATE|O_EXCL`, stale after 30s. Task 3 takes the *same* lock — not a second
+one beside the rc file — because both commands change the same thing, whether
+`pdx` is reachable. Write it once as a small helper with its own tests,
+including the acquisition policy the spec leaves open: retry every 50ms up to
+5s, then fail with a message naming the lock path; a lockfile whose mtime is
+older than 30s is removed and re-acquired.
 
 **Tests first:**
 
@@ -111,7 +125,11 @@ its own tests.
    only — spec §3.2 states that an external process racing the rename is out of
    scope, and a test claiming otherwise would assert a property the code does
    not have.
-5. a stale lockfile (mtime older than 30s) is broken rather than deadlocking.
+5. a stale lockfile (mtime older than 30s) is broken rather than deadlocking;
+   a fresh one held by someone else times out after 5s with the lock path in
+   the message.
+6. a `link` and an `add-to-shell` running concurrently do not interleave their
+   decisions — they contend for the same lock.
 
 **Commit:** `feat(cli): pdx path link places the ~/.local/bin symlink`
 
@@ -150,6 +168,11 @@ user owns:
 9. `--dry-run` prints the file and the block, writes nothing, creates no backup.
 10. an existing file keeps its mode (0600 stays 0600); a new file is 0644.
 11. two concurrent runs ⇒ exactly one block.
+11b. **stale read** (spec §7.3): a test seam rewrites the rc file to
+    `original\nuser-edit\n` *after* the command's first read but *before* it
+    takes the lock; the result must contain `user-edit` and the block. Test 11
+    only proves marker de-duplication — it cannot prove the write is built from
+    the in-lock read, which is the property that stops a lost update.
 12. `$HOME` containing a space works throughout (the written line uses
     `$HOME`, so this is about the *paths we open*, not the text we write).
 
@@ -161,6 +184,11 @@ user owns:
 
 **Files:** `CLAUDE.md`, plus whatever Task 1–3 review turns up
 
+0. **Offline, all three subcommands** (spec §7.0): one test drives `path`,
+   `path link` and `path add-to-shell --dry-run` with no config file, no daemon
+   and a guard that fails on a `config.Load` or an HTTP round-trip. Task 1's
+   version of this could only cover `path`, because the other two did not exist
+   yet.
 1. Full Go suite, vet, and a real end-to-end run **on this machine** against a
    throwaway `HOME` (never the real one):
    `HOME=$TMP ./bin/pdx path`, `… path link`, `… path add-to-shell --dry-run`,
@@ -178,33 +206,56 @@ user owns:
 
 # P2 — the gate and the panel
 
-## Task 5 — the launch-env split
+## Task 5 — the launch-env split, and asking the binary
 
-**Files:** `electron/local-daemon/index.ts`, `index.test.ts`
+**Files:** `electron/local-daemon/launch-env.ts`, `launch-env.test.ts`,
+`electron/local-daemon/index.ts`, `index.test.ts`
 
-Spec §4.2. `cachedLaunchEnv()` keeps today's memoization; `refreshLaunchEnv()`
-re-probes and replaces the cache **only on success**. A failed probe leaves a
-good cached PATH in place and is reported.
+Two pieces, both prerequisites of the gate.
 
-Add `resolvePdxOnPath(env)`: walk the PATH entries of the given env, return the
-first `pdx` plus whether its realpath is `binPath`.
+**(a) `buildLaunchEnv` must say how it got the PATH.** It currently returns a
+bare `ProcessEnv`, which hides whether the shell probe worked — and §4.4's
+whole decision turns on that. It returns `{ env, pathSource, probeError? }`
+instead; `index.ts` caches that structure. Without this, Task 6 would have to
+re-probe or guess.
+
+**(b) `cachedLaunchEnv()` / `refreshLaunchEnv()`** per spec §4.2, with the
+caller table. `refreshLaunchEnv` replaces the cache **only on success**.
+
+**(c) `readCliState()`**: run `deps.exec(binPath, ['path', '--json'], { env })`
+and parse it. This is where the gate's answer comes from (spec §4.1) — the
+TypeScript side never walks PATH itself. A non-zero exit is data, not an
+error: `pdx path` exits 1 precisely when `pdx` is not reachable, which is the
+case the gate cares most about. Unparseable output, a missing binary, or an
+exec failure are distinct from "not reachable" and are reported as such.
 
 **Tests first:**
 
-1. `refreshLaunchEnv` success replaces the cache; failure does not.
-2. resolution: first entry; later entry; absent; empty PATH; non-existent
-   entry; two matches (first wins); match is / is not the managed binary.
-3. a healthy fixture polled for `status` ten times probes the shell **once**.
-4. an unhealthy fixture (`cli.resolved === null`) re-probes on `status`, but
-   **at most once per 5s** — the debounce is asserted with a fake clock.
+1. `buildLaunchEnv` reports `pathSource: 'shell'` on a successful probe and
+   `'fallback'` + `probeError` when both probe forms fail.
+2. `refreshLaunchEnv` success replaces the cache; failure leaves the previous
+   good cache in place and does not turn a working machine into a refusing one.
+3. `readCliState`: exit 0 parsed; exit 1 parsed (this is the normal
+   not-reachable answer); malformed JSON; exec failure; binary absent — each a
+   distinct outcome, none collapsed into the others.
+4. a healthy fixture polled for `status` ten times probes the shell **once**.
+5. an unhealthy fixture re-probes on `status` but **at most once per 5s**,
+   asserted with the existing injectable `now()` (`deps.now`, already used by
+   the test fakes).
 
-**Commit:** `refactor(local-daemon): split cached and refreshed launch env`
+**Commit:** `refactor(local-daemon): launch env reports its source; read cli state`
 
 ---
 
 ## Task 6 — the gate
 
-**Files:** `electron/local-daemon/index.ts`, `types.ts`, `index.test.ts`
+**Files:** `electron/local-daemon/index.ts`, `types.ts`, `index.test.ts`,
+`electron/main.ts`
+
+`ensureRunning`'s return type gains a member, so every caller and every test
+expecting the old union must be updated in the same commit or the TypeScript
+build breaks — `electron/main.ts` logs the result, and `index.test.ts` asserts
+the outcomes.
 
 `start` / `restart` / `ensureRunning` / `install`'s final start resolve against
 a **refreshed** env and refuse when `pdx` does not resolve. `ensureRunning`
@@ -227,7 +278,8 @@ The refusal message is spec §4.5 verbatim, including both commands.
    afterwards and `status` reads installed-and-stopped, not a rollback.
 4. both §4.4 branches.
 5. the refusal string names the binary path and **both** commands.
-6. `cli.isManagedBinary === false` when a different `pdx` wins.
+6. `cli.isManagedBinary === false` when a different `pdx` wins — taken from
+   the binary's own JSON, not recomputed in TypeScript.
 7. no rc writes from the Electron side: a fake that fails the test if
    `writeFile`/`rename`/`openWrite`/`unlink` is called with a path matching
    `.zshrc` / `.bashrc` / `.bash_profile` / `.zprofile` / `.profile`.
