@@ -130,6 +130,28 @@ this spec got wrong:
   exists) must still pass — guards the override contract.
 - `pnpm run lint` + `pnpm run build` clean.
 
+**Environment limits, recorded from the actual implementation run:**
+
+- `playwright cli … eval` is refused outright in a worktree-isolated session
+  (the isolation guard rejects any command that runs a string through eval).
+  `open` / `snapshot` / `click` work. The working substitute for
+  `getComputedStyle` readings is a standalone Playwright node script.
+- Assertions (a) (b) (c) need only a locally created workspace and tab, and
+  were confirmed: the new-tab column at `NewTabPage.tsx:145` computes
+  `scrollbar-width: thin` with `scrollbar-color:
+  color(srgb 0.611765 0.639216 0.686275 / 0.55) rgba(0,0,0,0)` — i.e. dark
+  theme `--text-secondary` `#9ca3af` at 55% over a transparent track, exactly
+  what the contrast table above is computed against. The activity bar still
+  reports the accent thumb at 42%; the tab strip still reports `none`.
+- Assertion (d) was **not** obtained: reaching a real `.xterm-viewport` needs
+  an authenticated daemon and a live session, which the vite dev proxy
+  (pointing at `localhost:7860`) does not provide. Treat it as open until
+  someone confirms it in the Electron app.
+- Headless macOS Chromium uses overlay scrollbars that take no layout width
+  and do not paint at rest, so a still screenshot cannot show the thumb. The
+  computed values are the real evidence; the "does it look right" judgement
+  needs the app or a human.
+
 ### Out of scope
 
 - Per-surface scrollbar variants beyond the existing accent one.
