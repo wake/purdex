@@ -511,6 +511,31 @@ describe('RenamePopover peer section', () => {
     })
   })
 
+  // Opening the panel is the one moment it fetches (spec §3.3), and the call
+  // costs ~2 s of tmux work on the daemon — so it asks only for the hosts of
+  // the panes that will render a peer section.
+  describe('what opening the panel asks for', () => {
+    it('a terminated-only popover asks for nothing — it renders no peer section to fill', () => {
+      render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane({ terminated: 'session-closed' }))} />)
+      expect(peerRefresh).not.toHaveBeenCalled()
+      expect(cwdRefresh).not.toHaveBeenCalled()
+    })
+
+    it('fetches only the hosts of the panes that render a peer section', () => {
+      // Both hosts are seeded, so the only thing that can call `refresh` here
+      // is the panel's own open effect.
+      seedSession(H2, 'def456')
+      seedHost(H1, 'abc123', ROW)
+      seedHost(H2, 'def456', ROW)
+      render(<RenamePopover {...popoverProps} tab={tabOf(
+        terminalPane({ terminated: 'session-closed' }),
+        terminalPane({ hostId: H2, sessionCode: 'def456' }),
+      )} />)
+      expect(peerRefresh).toHaveBeenCalledTimes(1)
+      expect(peerRefresh).toHaveBeenCalledWith(H2)
+    })
+  })
+
   // The row joins on the tmux generation as well as the code, for the same
   // reason the status bar does: a row cached before a tmux restart carries
   // another session's address under a reused code, and this one is copyable.

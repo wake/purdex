@@ -350,11 +350,16 @@ export function RenamePopover({ anchorRect, currentName, initialValue, allowUnch
   // that depended on the array would hammer the daemon. `\0` cannot appear in
   // a hostId, so the joined string is an honest identity for the set.
   //
+  // The set is the hosts of the panes that actually render a peer section, so
+  // terminated panes are left out: they show no peer section (spec §5), and a
+  // tab holding nothing but dead panes would otherwise put a two-second,
+  // tmux-heavy inventory call behind opening a panel with nothing to fill.
+  //
   // The cwd store is refreshed too, by each block's own `usePeerInfo` as it
   // mounts — one cheap tmux call per pane, which is what opening the panel
   // means for that store.
   const hostKey = useMemo(
-    () => Array.from(new Set(targets.map((t) => t.hostId))).sort().join('\0'),
+    () => Array.from(new Set(targets.filter((target) => !target.terminated).map((target) => target.hostId))).sort().join('\0'),
     [targets],
   )
   useEffect(() => {
