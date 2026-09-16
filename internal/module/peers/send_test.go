@@ -683,21 +683,28 @@ func TestSend_OriginProxyRows(t *testing.T) {
 	})
 }
 
+// TestSend_Ambiguous pins the v3 shape of ambiguity: ONE conversation with
+// two live processes, so both rows carry the same canonical id and the one
+// address they share cannot pick between them. The labels are deliberately
+// different — under D3 a label is not what made this ambiguous and could
+// not have resolved it either.
 func TestSend_Ambiguous(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
+	canonical := ipeers.CanonicalID(remoteSessionID)
 	a := remoteRow("", "")
 	b := remoteRow("", "")
-	b.Agent.PID, b.Agent.SessionID = 778, "99999999-8888-4777-8666-666666666666"
-	a.Label, b.Label = "dup-label", "dup-label"
+	b.Agent.PID = 778
+	a.Canonical, b.Canonical = canonical, canonical
+	a.Label, b.Label = "purdex-tester", "purdex-tester-2"
 	// The remote claims another alias in its addresses: candidates must
 	// come back normalised to the entry's alias.
-	a.Address, b.Address = "zzz/dup-label", "zzz/dup-label"
+	a.Address, b.Address = "zzz/"+canonical, "zzz/"+canonical
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(a, b) })
 	req := s.sendReq()
-	req.To = remoteAlias + "/dup-label"
+	req.To = remoteAlias + "/" + canonical
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrAmbiguous)
-	want := []string{remoteAlias + "/dup-label", remoteAlias + "/dup-label"}
+	want := []string{remoteAlias + "/" + canonical, remoteAlias + "/" + canonical}
 	if len(ae.Candidates) != 2 || ae.Candidates[0] != want[0] || ae.Candidates[1] != want[1] {
 		t.Errorf("candidates = %v, want %v", ae.Candidates, want)
 	}
@@ -874,22 +881,23 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	}
 }
 
-// TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady pins X1 at the
-// module level: the remote reports one alive-but-undecodable registry file
-// and a single live row carrying the addressed label. That file may be a
+// TestSend_SingleHitUnderUnknownRegistryFileNotReady pins X1 at the module
+// level: the remote reports one alive-but-undecodable registry file and a
+// single live row carrying the addressed canonical id. That file may be a
 // second process of the same conversation, so the send is 503 not_ready
 // (Partial:true) with nothing posted — not a delivery to the one process
 // that happened to be readable.
-func TestSend_SingleLabelHitUnderUnknownRegistryFileNotReady(t *testing.T) {
+func TestSend_SingleHitUnderUnknownRegistryFileNotReady(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	row := remoteRow("", "")
-	row.Label, row.LabelSource = "dup-label", "default"
+	row.Canonical = ipeers.CanonicalID(remoteSessionID)
+	row.Label, row.LabelSource = "purdex-tester", "user"
 	s.set(func(s *sendEnv) {
 		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row},
 			UnknownRegistryFiles: []string{"/reg/778.json"}}
 	})
 	req := s.sendReq()
-	req.To = remoteAlias + "/dup-label"
+	req.To = remoteAlias + "/" + row.Canonical
 
 	rr := s.send(adminCtx(), req)
 	if rr.Code != http.StatusServiceUnavailable {

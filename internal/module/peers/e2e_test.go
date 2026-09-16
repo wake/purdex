@@ -870,15 +870,18 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	assertNoGoroutineGrowth(t, before)
 }
 
-// TestE2E_Labels drives the Peer Address v2 label primitives (Tasks 1-9)
-// across the same two-daemon bridge as TestE2E_TwoDaemons: claiming a
-// label on B, sending to it by label, the "tmux:" bypass form, the retired
-// "cc:" form, and the R2-1 shadow-vs-partial scenario (spec §3.3): a
-// label held by a Desktop session shadows a same-named tmux session while
-// everything is readable, but once the holder's own registry file becomes
-// unreadable a bare name must refuse not_ready rather than fall through to
-// the tmux session — "tmux:<name>" still bypasses the label tier entirely
-// and keeps delivering.
+// TestE2E_Labels drives the address primitives across the same two-daemon
+// bridge as TestE2E_TwoDaemons, now under v3: claiming a label on B,
+// sending to that conversation by its CANONICAL id, the 404 a bare label
+// gets instead (D3 — a name is not an address), the "tmux:" bypass form,
+// the retired "cc:" form, and what survives of the R2-1 scenario (spec
+// §3.3). R2-1's first half inverts here: a Desktop session holding the
+// label "foo" no longer shadows a same-named tmux session, so a bare
+// "b/foo" reaches the tmux session. Its second half is unchanged and is
+// the part that mattered: once the holder's own registry file becomes
+// unreadable the inventory is partial, and a bare name must refuse
+// not_ready rather than fall through to tier 2 — while "tmux:<name>"
+// still bypasses tier 1 entirely and keeps delivering.
 func TestE2E_Labels(t *testing.T) {
 	// Setup identical to TestE2E_TwoDaemons: A's tmux session mt1 is the
 	// origin, B's tmux session foo is the target.
@@ -917,35 +920,42 @@ func TestE2E_Labels(t *testing.T) {
 		t.Fatalf("step 1: claim = %d %s", status, body)
 	}
 
-	// ---- 2. A sends by label; delivered to target.sock. to_address is the
-	// resolved row's own address, which is canonical-based and therefore
-	// NOT the string that was typed — claiming "purdex-tester" named the
-	// conversation without moving it (D3). ----
-	sent := a.sendOK(ipeers.SendRequest{To: "b/purdex-tester", Text: "ping", OriginInbox: originSock})
+	// ---- 2. A sends to the target's canonical id; delivered to
+	// target.sock, and to_address is the resolved row's own address. The
+	// label claimed in step 1 is NOT a way to reach it: the same send
+	// addressed to "b/purdex-tester" is a plain 404 and nothing is
+	// delivered. That is D3, end to end. ----
+	sent := a.sendOK(ipeers.SendRequest{To: "b/" + ipeers.CanonicalID(e2eTargetSID), Text: "ping", OriginInbox: originSock})
 	wantAddr := "b/" + ipeers.CanonicalID(e2eTargetSID) + ":foo-" + e2eTargetName
 	if sent.ToAddress != wantAddr || sent.To != targetTo {
 		t.Errorf("step 2: to = %s %+v, want %s %+v", sent.ToAddress, sent.To, wantAddr, targetTo)
 	}
 	target.recv("step 2")
 
+	st, raw := a.send(ipeers.SendRequest{To: "b/purdex-tester", Text: "by label", OriginInbox: originSock})
+	a.assertAPIError(st, raw, http.StatusNotFound, ipeers.ErrPeerNotFound, "a label is not an address")
+	target.none("step 2: a label must never route")
+
 	// ---- 3. tmux: form and bare tmux name still deliver; cc: does not. ----
 	a.sendOK(ipeers.SendRequest{To: "b/tmux:foo", Text: "x", OriginInbox: originSock})
 	target.recv("step 3a")
 	a.sendOK(ipeers.SendRequest{To: "b/foo", Text: "x", OriginInbox: originSock})
 	target.recv("step 3b")
-	st, raw := a.send(ipeers.SendRequest{To: "b/cc:" + e2eTargetName, Text: "x", OriginInbox: originSock})
+	st, raw = a.send(ipeers.SendRequest{To: "b/cc:" + e2eTargetName, Text: "x", OriginInbox: originSock})
 	a.assertAPIError(st, raw, http.StatusNotFound, ipeers.ErrPeerNotFound, "cc: form")
 
 	// ---- 4. Native reply from the target through B's helper reaching the
 	// origin is the same reply path TestE2E_TwoDaemons drives end to end
 	// (v2 from-name included, spec §3.5); not repeated here. ----
 
-	// ---- 5. R2-1 (spec §3.3): a Desktop session on B holds the LABEL
-	// "foo" while B also has a tmux session named foo. While everything is
-	// readable the label shadows the tmux name; when the holder's own
-	// registry file becomes unreadable, a bare "b/foo" must be 503
-	// not_ready — never a tier-2 delivery to the tmux session — and
-	// "b/tmux:foo" still delivers. ----
+	// ---- 5. R2-1 (spec §3.3), as v3 leaves it: a Desktop session on B
+	// holds the LABEL "foo" while B also has a tmux session named foo.
+	// The label no longer shadows the tmux name — a bare "b/foo" misses
+	// tier 1 and lands on the tmux session (D3). But when the holder's own
+	// registry file becomes unreadable, B's inventory goes partial and the
+	// same bare "b/foo" must be 503 not_ready — never a tier-2 delivery on
+	// an inventory that may be hiding the row that would have matched —
+	// and "b/tmux:foo" still delivers. ----
 	holderSock := filepath.Join(root, "holder.sock")
 	holder := startFakeInbox(t, holderSock)
 	const holderPID, holderSID = 31337, "holder-sid"
@@ -954,14 +964,14 @@ func TestE2E_Labels(t *testing.T) {
 	if st != http.StatusOK {
 		t.Fatalf("step 5: holder claim = %d %s", st, raw)
 	}
-	a.sendOK(ipeers.SendRequest{To: "b/foo", Text: "to-label", OriginInbox: originSock})
-	holder.recv("step 5a: label shadows tmux name")
-	target.none("step 5a")
+	a.sendOK(ipeers.SendRequest{To: "b/foo", Text: "to-tmux", OriginInbox: originSock})
+	target.recv("step 5a: a label no longer shadows the tmux name")
+	holder.none("step 5a")
 
 	writeRegistryFixture(t, regDir, strconv.Itoa(holderPID)+".json", "{") // holder unreadable, pid still alive per fake liveness
 	st, raw = a.send(ipeers.SendRequest{To: "b/foo", Text: "x", OriginInbox: originSock})
 	a.assertAPIError(st, raw, http.StatusServiceUnavailable, ipeers.ErrNotReady, "partial bare name")
-	target.none("step 5b: no tier-2 delivery while the label holder is unknown")
+	target.none("step 5b: no tier-2 delivery on a partial inventory")
 
 	a.sendOK(ipeers.SendRequest{To: "b/tmux:foo", Text: "x", OriginInbox: originSock})
 	target.recv("step 5c")
@@ -976,13 +986,14 @@ func TestE2E_Labels(t *testing.T) {
 // TestE2E_LabelAmbiguityUnderUnknownFile drives X1 (spec §3.2, "tier 1
 // exactly one match, registry incomplete") across the two-daemon bridge:
 // ONE conversation with TWO live processes outside tmux on B — two
-// registry entries sharing a sessionId, each with its own fake inbox. By
-// the one head both rows share the pair is 409 ambiguous. When one process's
-// registry file becomes unreadable while its pid is still alive, the
-// remaining single row must NOT be delivered to — the hidden file may be
-// the other process of that very conversation — so the send is 503
-// not_ready and NEITHER inbox receives a frame. "b/tmux:foo" bypasses the
-// label tier and still delivers to B's tmux target.
+// registry entries sharing a sessionId, each with its own fake inbox. The
+// head both rows share is that conversation's canonical id (v3: one
+// sessionId, one address, nothing claimed), and by it the pair is 409
+// ambiguous. When one process's registry file becomes unreadable while its
+// pid is still alive, the remaining single row must NOT be delivered to —
+// the hidden file may be the other process of that very conversation — so
+// the send is 503 not_ready and NEITHER inbox receives a frame.
+// "b/tmux:foo" bypasses tier 1 and still delivers to B's tmux target.
 func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 	sockDir, regDir := proxyhelpertest.TempDirs(t)
 	root := filepath.Dir(regDir)
@@ -1020,32 +1031,28 @@ func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 	twin2 := startFakeInbox(t, twin2Sock)
 	writeRegistryFixture(t, regDir, strconv.Itoa(twin1PID)+".json", e2eRegistryJSON(twin1PID, twinSID, "twin-1", "", twin1Sock))
 	writeRegistryFixture(t, regDir, strconv.Itoa(twin2PID)+".json", e2eRegistryJSON(twin2PID, twinSID, "twin-2", "", twin2Sock))
-	// Under v3 an unnamed conversation carries no label at all, so the head
-	// this test addresses is a user label the twins share: one claim on
-	// twin1's inbox names the CONVERSATION, so both of its rows carry it.
-	// T5 replaces this head with the conversation's canonical id, which is
-	// what production will use. The X1 rule under test — a single tier-1
-	// hit beside an undecodable live file is 503, never a delivery — is
-	// the same either way.
-	const label = "twins"
-	if st, raw := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: twin1Sock, Label: label}); st != http.StatusOK {
-		t.Fatalf("step 1: twin claim = %d %s", st, raw)
-	}
+	// The head both rows share is the conversation's canonical id, which
+	// they carry by construction: one sessionId, one address, nothing
+	// claimed and nothing to claim. The X1 rule under test — a single
+	// tier-1 hit beside an undecodable live file is 503, never a delivery
+	// — is what this exercises.
+	head := ipeers.CanonicalID(twinSID)
 
-	// Both are entry rows on B carrying that one label.
+	// Both are entry rows on B carrying that one canonical id.
 	env := b.peers()
 	if env.Partial || len(env.UnknownRegistryFiles) != 0 {
 		t.Fatalf("step 1: B's inventory partial=%v unknown=%v, want complete", env.Partial, env.UnknownRegistryFiles)
 	}
 	for _, sock := range []string{twin1Sock, twin2Sock} {
-		if rec := b.peerByInbox(env, sock); rec.Label != label || rec.RowKind != "entry" {
-			t.Fatalf("step 1: row for %s = %+v, want entry row with label %q", filepath.Base(sock), rec, label)
+		if rec := b.peerByInbox(env, sock); rec.Canonical != head || rec.RowKind != "entry" {
+			t.Fatalf("step 1: row for %s = %+v, want entry row with canonical %q", filepath.Base(sock), rec, head)
 		}
 	}
 
-	// ---- 2. By label: ambiguous, both candidates, nothing delivered. ----
-	st, raw := a.send(ipeers.SendRequest{To: "b/" + label, Text: "x", OriginInbox: originSock})
-	ae := a.assertAPIError(st, raw, http.StatusConflict, ipeers.ErrAmbiguous, "two processes, one label")
+	// ---- 2. By the canonical id: ambiguous, both candidates, nothing
+	// delivered. ----
+	st, raw := a.send(ipeers.SendRequest{To: "b/" + head, Text: "x", OriginInbox: originSock})
+	ae := a.assertAPIError(st, raw, http.StatusConflict, ipeers.ErrAmbiguous, "two processes, one address")
 	if len(ae.Candidates) != 2 {
 		t.Errorf("step 2: candidates = %v, want 2", ae.Candidates)
 	}
@@ -1059,15 +1066,15 @@ func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 	if !env.Partial || len(env.UnknownRegistryFiles) != 1 {
 		t.Fatalf("step 3: B's inventory partial=%v unknown=%v, want partial with one unknown file", env.Partial, env.UnknownRegistryFiles)
 	}
-	if rec := b.peerByInbox(env, twin1Sock); rec.Label != label || !rec.Deliverable {
-		t.Fatalf("step 3: twin1 row = %+v, want the single deliverable label hit", rec)
+	if rec := b.peerByInbox(env, twin1Sock); rec.Canonical != head || !rec.Deliverable {
+		t.Fatalf("step 3: twin1 row = %+v, want the single deliverable tier-1 hit", rec)
 	}
-	st, raw = a.send(ipeers.SendRequest{To: "b/" + label, Text: "x", OriginInbox: originSock})
+	st, raw = a.send(ipeers.SendRequest{To: "b/" + head, Text: "x", OriginInbox: originSock})
 	ae = a.assertAPIError(st, raw, http.StatusServiceUnavailable, ipeers.ErrNotReady, "single hit under an unknown file")
 	if !ae.Partial {
 		t.Errorf("step 3: body = %+v, want partial:true", ae)
 	}
-	// The explicit tmux form still bypasses the label tier and delivers;
+	// The explicit tmux form still bypasses tier 1 and delivers;
 	// its positive signal proves the send path has finished, so the
 	// twins' "no frame" checks below are not racing anything.
 	a.sendOK(ipeers.SendRequest{To: "b/tmux:foo", Text: "x", OriginInbox: originSock})
@@ -1079,7 +1086,7 @@ func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 	// (never silently delivered), and by ITS OWN sessionId-free form there
 	// is still no way to name one process outside tmux. ----
 	writeRegistryFixture(t, regDir, strconv.Itoa(twin2PID)+".json", e2eRegistryJSON(twin2PID, twinSID, "twin-2", "", twin2Sock))
-	st, raw = a.send(ipeers.SendRequest{To: "b/" + label, Text: "x", OriginInbox: originSock})
+	st, raw = a.send(ipeers.SendRequest{To: "b/" + head, Text: "x", OriginInbox: originSock})
 	a.assertAPIError(st, raw, http.StatusConflict, ipeers.ErrAmbiguous, "two processes readable again")
 	twin1.none("step 4")
 	twin2.none("step 4")
@@ -1153,7 +1160,8 @@ func TestE2E_HelperRename(t *testing.T) {
 	// claim does not change it, which is the point (spec §4.5).
 	originAddr := "a/" + ipeers.CanonicalID(e2eOriginSID) + ":mt1-" + e2eOriginName
 
-	// ---- 1. B's target claims "purdex-tester"; A sends by label; the
+	// ---- 1. B's target claims "purdex-tester"; A sends to its canonical
+	// address (the claim gave it a name, not a second address — D3); the
 	// frame the target receives names A's helper after A's own address. ----
 	claimStatus, claimBody := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester"})
 	if claimStatus != http.StatusOK {
@@ -1165,7 +1173,7 @@ func TestE2E_HelperRename(t *testing.T) {
 	}
 	oldRev := claimRec.LabelRev // the "purdex-tester" claim's revision — the stale one step 4 replays
 
-	sent := a.sendOK(ipeers.SendRequest{To: "b/purdex-tester", Text: "ping", OriginInbox: originSock})
+	sent := a.sendOK(ipeers.SendRequest{To: "b/" + ipeers.CanonicalID(e2eTargetSID), Text: "ping", OriginInbox: originSock})
 	wantAddr1 := "b/" + ipeers.CanonicalID(e2eTargetSID) + ":foo-" + e2eTargetName
 	if sent.ToAddress != wantAddr1 {
 		t.Errorf("step 1: to_address = %q, want %q", sent.ToAddress, wantAddr1)
@@ -1195,7 +1203,7 @@ func TestE2E_HelperRename(t *testing.T) {
 
 	// ---- 2. The target replies natively; the reply reaches A's origin
 	// inbox, and A's helper for the replier is named after the target's
-	// CURRENT address ("purdex-tester"). ----
+	// address — its canonical one, the only one it has. ----
 	native1 := uuid.NewString()
 	proxyhelpertest.WriteToSock(t, bHelperSock, nativeReply(native1, "pong"))
 	line = origin.recv("step 2")
@@ -1309,7 +1317,7 @@ func TestE2E_HelperRename(t *testing.T) {
 	}
 
 	newOriginAddr := originAddr // claiming "purdex-dev" did not move A
-	a.sendOK(ipeers.SendRequest{To: "b/purdex-tester-2", Text: "again", OriginInbox: originSock})
+	a.sendOK(ipeers.SendRequest{To: "b/" + ipeers.CanonicalID(e2eTargetSID), Text: "again", OriginInbox: originSock})
 	target.recv("step 5b")
 	if got := b.m.helpers.Name(bHelper); got != newOriginAddr {
 		t.Errorf("step 5b: B's helper name = %q after A's next send, want %q", got, newOriginAddr)

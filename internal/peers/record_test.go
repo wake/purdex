@@ -2,6 +2,7 @@ package peers
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sort"
 	"strings"
@@ -1019,10 +1020,10 @@ func TestEntryRecord_MatchesBuild(t *testing.T) {
 // both entry rows. One conversation, one address — the property that used
 // to be stated as "one label" and is now stated where it belongs.
 //
-// The resolution half of the old test (Resolve reports those two ENTRY
-// rows as the ambiguous candidates, the PID-0 session row being inert at
-// tier 1) moves to address_test.go with tier 1 itself, since a canonical
-// head does not resolve until then.
+// The resolution half then reads that shared id back through Resolve: the
+// two live ENTRY rows are the ambiguous candidates, while the PID-0
+// session row is inert at tier 1. Build and Resolve agree on what the
+// address is, which is the whole point of deriving it from the sessionId.
 func TestBuild_SameConversationTwoProcesses_ThreeRowsOneCanonical(t *testing.T) {
 	in := BuildInput{
 		Alias:    "a",
@@ -1057,6 +1058,24 @@ func TestBuild_SameConversationTwoProcesses_ThreeRowsOneCanonical(t *testing.T) 
 	}
 	if live != 2 {
 		t.Errorf("live entry rows = %d, want 2", live)
+	}
+
+	// The resolution half: sending to that one address is refused with
+	// both live processes named, never delivered to one of them. The
+	// fallback session row carries the same canonical but no live entry,
+	// so it is not among the candidates.
+	_, err := Resolve(recs, want, ResolveSnapshot{})
+	var amb *AmbiguousError
+	if !errors.As(err, &amb) {
+		t.Fatalf("Resolve(%q) = %v, want *AmbiguousError", want, err)
+	}
+	if len(amb.Candidates) != 2 {
+		t.Fatalf("candidates = %d, want the 2 live entry rows", len(amb.Candidates))
+	}
+	for _, c := range amb.Candidates {
+		if c.RowKind != "entry" || c.Agent == nil || c.Agent.PID == 0 {
+			t.Errorf("candidate %+v is not a live entry row", c)
+		}
 	}
 }
 

@@ -11,15 +11,15 @@ import (
 var ErrNotFound = errors.New("peer not found")
 
 // ErrResolveNotReady is returned by Resolve when the snapshot cannot
-// vouch for the label tier's answer: the label tier found no match and
-// the snapshot is Partial (the inventory may be missing the very label
-// that would have matched, so a bare tmux-name fallback — tier 2 — would
-// risk landing on the wrong session), or it found exactly one match while
-// the snapshot's registry is incomplete (the unreadable file may hide a
-// second live process of that same conversation, which would have made
-// the label ambiguous). The caller retries, or addresses the session
-// explicitly as "tmux:<name>" to bypass the label tier altogether.
-var ErrResolveNotReady = errors.New("inventory partial: the label may be missing")
+// vouch for tier 1's answer: tier 1 found no match and the snapshot is
+// Partial (the inventory may be missing the very row that would have
+// matched, so a bare tmux-name fallback — tier 2 — would risk landing on
+// the wrong session), or it found exactly one match while the snapshot's
+// registry is incomplete (the unreadable file may hide a second live
+// process of that same conversation, which would have made the address
+// ambiguous). The caller retries, or addresses the session explicitly as
+// "tmux:<name>" to bypass tier 1 altogether.
+var ErrResolveNotReady = errors.New("inventory partial: the peer may be missing")
 
 // ResolveSnapshot is what the caller knows about the completeness of the
 // records it hands Resolve — both flags come straight from the target
@@ -55,27 +55,27 @@ func (e *AmbiguousError) Error() string {
 	return fmt.Sprintf("peer address %q is ambiguous (%d candidates)", e.Session, len(e.Candidates))
 }
 
-// Resolve implements Peer Address v2 spec §3.2 for ONE host's records;
+// Resolve implements Peer Address v3 spec §5.1 for ONE host's records;
 // host has already been matched by the caller. Forms and tiers, in order:
 //
 //   - "cc:<anything>": the retired v1 form, always ErrNotFound wrapping
 //     ErrLegacyCC, regardless of partial.
-//   - "tmux:<name>": explicit tmux form, bypassing the label tier
-//     entirely; matches PeerRecord.SessionName == name. "tmux:" with an
-//     empty name is ErrNotFound.
-//   - "<label>[:<suffix>]": tier 1, the label, matched over every row
-//     that carries a LIVE cc entry — session rows and entry rows alike,
-//     but only those whose Agent is a real registry entry (Type "cc",
-//     PID != 0). Proxy rows, rows with Label == "" and owner-fallback
-//     rows (inbox_dead / ambiguous: Agent.PID == 0, no entry behind them)
-//     are excluded — spec §3.3 makes a row whose holder is not live
-//     inert, neither resolving nor blocking, and that is how the rule
-//     reaches resolution. A typed suffix is ignored (display-only).
-//     Several matches => *AmbiguousError regardless of the snapshot.
-//     Exactly one match and snap.RegistryIncomplete => ErrResolveNotReady
-//     (an unreadable registry file may hide a second process of that
-//     conversation). No match and snap.Partial => ErrResolveNotReady (the
-//     inventory may be missing the label that would have matched). No
+//   - "tmux:<name>": explicit tmux form, bypassing tier 1 entirely;
+//     matches PeerRecord.SessionName == name. "tmux:" with an empty name
+//     is ErrNotFound.
+//   - "<canonical>[:<suffix>]": tier 1, the canonical id — the
+//     sessionId-derived head PeerRecord.Canonical carries — matched over
+//     every row that carries a LIVE cc entry, session rows and entry rows
+//     alike, but only those whose Agent is a real registry entry (Type
+//     "cc", PID != 0). Proxy rows and owner-fallback rows (inbox_dead /
+//     ambiguous: Agent.PID == 0, no entry behind them) are excluded —
+//     spec §3.3 makes a row whose holder is not live inert, neither
+//     resolving nor blocking, and that is how the rule reaches
+//     resolution. A typed suffix is ignored (display-only). Several
+//     matches => *AmbiguousError regardless of the snapshot. Exactly one
+//     match and snap.RegistryIncomplete => ErrResolveNotReady (an
+//     unreadable registry file may hide a second process of that
+//     conversation). No match and snap.Partial => ErrResolveNotReady. No
 //     match, not Partial and the head contains no ':' => tier 2: the bare
 //     string as a tmux session name.
 //
@@ -83,6 +83,26 @@ func (e *AmbiguousError) Error() string {
 // that record (subject to the RegistryIncomplete rule above); several =>
 // *AmbiguousError (never falls through to a lower tier). No tier matches
 // => ErrNotFound.
+//
+// PeerRecord.Label is matched by NOTHING here, and that is D3: a label is
+// a self-declared display name, read to CHOOSE a peer, never used to
+// reach one. Two conversations may hold one label (D5) precisely because
+// no routing decision rests on it. A bare label therefore misses tier 1,
+// fails tier 2, and comes back ErrNotFound.
+//
+// Two conservatisms are deliberate, so that neither reads as an oversight:
+//
+//   - A tier-1 miss under snap.Partial is ErrResolveNotReady even though
+//     a canonical id is derived from the sessionId alone — it depends on
+//     neither the label store nor owner resolution, so a partial
+//     inventory can never be the reason it missed. It is retried anyway
+//     because that is the safe direction: a retry costs one round trip, a
+//     false "not found" costs a message. Splitting Partial by cause is
+//     out of scope (spec §5.1).
+//   - "tmux:<name>" and tier 2 match SessionName without comparing
+//     TmuxInstance, so with two tmux servers holding same-named sessions
+//     they resolve the one the daemon can see, which may not be the one
+//     the operator meant. Pre-existing, out of scope (spec §5.1).
 func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRecord, error) {
 	if session == "" {
 		return PeerRecord{}, ErrNotFound
@@ -97,15 +117,19 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		}
 		return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == rest })
 	}
-	// Tier 1: label, over every row backed by a live entry; the typed
-	// suffix is ignored.
+	// Tier 1: the canonical id, over every row backed by a live entry;
+	// the typed suffix is ignored. head != "" carries over the guard v2
+	// spelled as `r.Label != ""`: ":suffix" splits to an empty head, and
+	// these records may come from a REMOTE host — a v2 daemon that has
+	// never heard of `canonical` sends live rows with it empty, and
+	// without the guard every one of them would match that head.
 	rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-		return r.Label != "" && r.Label == head && hasLiveEntry(r)
+		return hasLiveEntry(r) && head != "" && r.Canonical == head
 	})
 	if err == nil && snap.RegistryIncomplete {
 		// One hit, but a registry file for an alive pid could not be
 		// decoded: that file may be a second live process of this very
-		// conversation, which would have made the label ambiguous. Do
+		// conversation, which would have made the address ambiguous. Do
 		// not pick one process on incomplete evidence.
 		return PeerRecord{}, ErrResolveNotReady
 	}
@@ -127,7 +151,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 // (ownerFallbackAgent, used for inbox_dead / ambiguous session rows) have
 // Type "cc" but PID 0 — the conversation is known only from owner
 // resolution, no live entry stands behind the row — and proxy rows have
-// another Type; neither may decide the label tier.
+// another Type; neither may decide tier 1.
 func hasLiveEntry(r PeerRecord) bool {
 	return r.Agent != nil && r.Agent.Type == "cc" && r.Agent.PID != 0
 }
