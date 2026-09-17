@@ -70,6 +70,8 @@ func sanitizeCell(s string) string {
 const peersUsage = "usage: pdx peers [--json] [--all] [--config <path>]\n" +
 	"       pdx peers host add [<alias>] <url> [--token <t>] [--config <path>]\n" +
 	"       pdx peers host set-token <alias> <token> [--allow-bypass=true|false] [--config <path>]\n" +
+	"       pdx peers host verify <alias> [--json] [--config <path>]\n" +
+	"       pdx peers host rename <alias> <new-alias> [--config <path>]\n" +
 	"       pdx peers host remove <alias> [--config <path>]\n" +
 	"       pdx peers host list [--config <path>]"
 
@@ -125,6 +127,8 @@ type peersInvocation struct {
 var peersHostVerbArity = map[string][]int{
 	"add":       {1, 2},
 	"set-token": {2},
+	"verify":    {1},
+	"rename":    {2},
 	"remove":    {1},
 	"list":      {0},
 }
@@ -202,7 +206,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 
 	// host subcommand form.
 	inv.hostMode = true
-	if inv.all || inv.jsonOutput {
+	if inv.all {
 		return peersInvocation{}, "", false
 	}
 	if len(positionals) < 2 {
@@ -213,6 +217,12 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 
 	arities, known := peersHostVerbArity[inv.verb]
 	if !known || !slices.Contains(arities, len(inv.positionals)) {
+		return peersInvocation{}, "", false
+	}
+
+	// --json is a query-form flag; among host verbs only verify has a
+	// JSON body worth passing through.
+	if inv.jsonOutput && inv.verb != "verify" {
 		return peersInvocation{}, "", false
 	}
 
@@ -234,7 +244,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		if inv.hasToken {
 			return peersInvocation{}, "", false
 		}
-	default: // remove, list
+	default: // verify, rename, remove, list
 		if inv.hasToken || inv.allowBypass != nil {
 			return peersInvocation{}, "", false
 		}
@@ -686,6 +696,68 @@ type cliPutHostRequest struct {
 	AllowBypass *bool  `json:"allow_bypass,omitempty"`
 }
 
+// cliVerifyHostResponse mirrors internal/module/peers.verifyHostResponse:
+// one scope=all row for one entry, minus its peer rows.
+type cliVerifyHostResponse struct {
+	Alias         string `json:"alias"`
+	HostID        string `json:"host_id"`
+	OK            bool   `json:"ok"`
+	Error         string `json:"error"`
+	SelfAlias     string `json:"self_alias"`
+	DaemonVersion string `json:"daemon_version"`
+}
+
+// runPeersHostVerify implements `pdx peers host verify <alias> [--json]`:
+// POST /api/peers/hosts/{alias}/verify, exit 0 on ok, 1 otherwise. The
+// drift line uses the wording `pdx peers --all` prints so the two agree
+// word for word; every remote value passes through sanitizeCell because
+// it is the peer's own text landing in a terminal.
+func runPeersHostVerify(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
+	alias := inv.positionals[0]
+
+	result, err := doPeersRequest(http.MethodPost, base+"/"+url.PathEscape(alias)+"/verify", nil, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return reportPeersTransportErr(err, stderr)
+	}
+	if result.status != http.StatusOK {
+		return reportPeersAPIError(result, stderr)
+	}
+
+	var resp cliVerifyHostResponse
+	if err := json.Unmarshal(result.body, &resp); err != nil {
+		fmt.Fprintln(stderr, "pdx peers: invalid response")
+		return 1
+	}
+
+	if inv.jsonOutput {
+		// Re-encoded, not echoed: the daemon's body is trusted-shaped but
+		// re-encoding guarantees one JSON document with a trailing newline.
+		enc := json.NewEncoder(stdout)
+		if err := enc.Encode(resp); err != nil {
+			fmt.Fprintf(stderr, "pdx peers: %v\n", err)
+			return 1
+		}
+		if resp.OK {
+			return 0
+		}
+		return 1
+	}
+
+	if !resp.OK {
+		fmt.Fprintf(stdout, "%s  FAILED: %s\n", sanitizeCell(resp.Alias), sanitizeCell(resp.Error))
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s  ok  host_id %s  daemon %s\n",
+		sanitizeCell(resp.Alias), sanitizeCell(resp.HostID), sanitizeCell(resp.DaemonVersion))
+	if resp.SelfAlias != "" {
+		fmt.Fprintf(stdout, "  self alias: %s\n", sanitizeCell(resp.SelfAlias))
+	}
+	if resp.SelfAlias != "" && !strings.EqualFold(resp.SelfAlias, resp.Alias) {
+		fmt.Fprintf(stdout, "  alias drift: peer calls itself %s\n", sanitizeCell(resp.SelfAlias))
+	}
+	return 0
+}
+
 // runPeersHostCmd dispatches to the four `pdx peers host` verbs. inv.verb
 // and inv.positionals' arity are already validated by parsePeersInvocation.
 func runPeersHostCmd(inv peersInvocation, stdout, stderr io.Writer) int {
@@ -703,6 +775,8 @@ func runPeersHostCmd(inv peersInvocation, stdout, stderr io.Writer) int {
 		return runPeersHostAdd(cfg, base, inv, stdout, stderr)
 	case "set-token":
 		return runPeersHostSetToken(cfg, base, inv, stdout, stderr)
+	case "verify":
+		return runPeersHostVerify(cfg, base, inv, stdout, stderr)
 	case "remove":
 		return runPeersHostRemove(cfg, base, inv, stdout, stderr)
 	default:

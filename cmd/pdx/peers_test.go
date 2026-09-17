@@ -1750,3 +1750,138 @@ func TestDisplayAddressAndMsgCandidateLineAgree(t *testing.T) {
 		})
 	}
 }
+
+// --- host verify (spec §4.4) -------------------------------------------------
+
+func TestRunPeersCmd_HostVerify_OKWithDrift(t *testing.T) {
+	var gotMethod, gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotAuth = r.Method, r.URL.Path, r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"alias": "air", "host_id": "wakes-air-2026:oa6drb", "ok": true,
+			"self_alias": "air26", "daemon_version": "1.0.0-alpha.377",
+		})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "verify", "air", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/peers/hosts/air/verify" {
+		t.Errorf("request = %s %s, want POST /api/peers/hosts/air/verify", gotMethod, gotPath)
+	}
+	if gotAuth != "Bearer admin-tok" {
+		t.Errorf("Authorization = %q, want the admin token", gotAuth)
+	}
+	out := stdout.String()
+	for _, want := range []string{"ok", "wakes-air-2026:oa6drb", "1.0.0-alpha.377", "alias drift: peer calls itself air26"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+func TestRunPeersCmd_HostVerify_NoDriftWhenSameCaseInsensitive(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"alias": "air", "host_id": "a:1", "ok": true, "self_alias": "AIR", "daemon_version": "x"})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	if code := runPeersCmd([]string{"host", "verify", "air", "--config", cfgPath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "drift") {
+		t.Errorf("stdout = %q, want no drift line for a case-only difference", stdout.String())
+	}
+}
+
+func TestRunPeersCmd_HostVerify_Failed_Exit1(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"alias": "air", "host_id": "a:1", "ok": false, "error": "no outbound token", "self_alias": "", "daemon_version": ""})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "verify", "air", "--config", cfgPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stdout.String(), "FAILED: no outbound token") {
+		t.Errorf("stdout = %q, want FAILED line", stdout.String())
+	}
+}
+
+// The peer's self_alias is attacker-controlled and lands in a terminal:
+// sanitizeCell must escape it (mutation: print it raw → the ESC byte reaches stdout).
+func TestRunPeersCmd_HostVerify_SelfAliasSanitized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"alias": "air", "host_id": "a:1", "ok": true, "self_alias": "evil\x1b[31mred", "daemon_version": "v\x07"})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	runPeersCmd([]string{"host", "verify", "air", "--config", cfgPath}, &stdout, &stderr)
+	if strings.ContainsAny(stdout.String(), "\x1b\x07") {
+		t.Errorf("stdout contains a raw control byte: %q", stdout.String())
+	}
+}
+
+func TestRunPeersCmd_HostVerify_JSONPassthrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"alias": "air", "host_id": "a:1", "ok": true, "self_alias": "air26", "daemon_version": "x"})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	if code := runPeersCmd([]string{"host", "verify", "air", "--json", "--config", cfgPath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	var v map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &v); err != nil {
+		t.Fatalf("stdout is not JSON: %v; %q", err, stdout.String())
+	}
+	if v["self_alias"] != "air26" {
+		t.Errorf("json self_alias = %v, want air26", v["self_alias"])
+	}
+}
+
+func TestRunPeersCmd_HostVerify_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unknown alias"})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	if code := runPeersCmd([]string{"host", "verify", "ghost", "--config", cfgPath}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown alias") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}
+
+func TestParsePeersInvocation_HostVerifyGrammar(t *testing.T) {
+	if _, _, ok := parsePeersInvocation([]string{"host", "verify"}); ok {
+		t.Error("verify with no alias accepted")
+	}
+	if _, _, ok := parsePeersInvocation([]string{"host", "verify", "a", "b"}); ok {
+		t.Error("verify with two positionals accepted")
+	}
+	if _, _, ok := parsePeersInvocation([]string{"host", "verify", "a", "--token", "x"}); ok {
+		t.Error("verify with --token accepted")
+	}
+	if _, _, ok := parsePeersInvocation([]string{"host", "list", "--json"}); ok {
+		t.Error("--json accepted for a verb other than verify")
+	}
+	inv, _, ok := parsePeersInvocation([]string{"host", "verify", "a", "--json"})
+	if !ok || !inv.jsonOutput || inv.verb != "verify" {
+		t.Errorf("verify --json: inv=%+v ok=%v", inv, ok)
+	}
+}
