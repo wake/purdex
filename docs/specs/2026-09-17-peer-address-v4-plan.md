@@ -66,7 +66,7 @@ Follow that idiom. Do not invent helpers that other tasks would then have to mat
 | `spa/src/stores/usePeerStore.ts` | field renames | A3b, B3 |
 | `spa/src/components/StatusBar.tsx` | display vs clipboard split | A9 |
 
-**Ordering.** A1 → A2 may run in parallel. A3 needs A1+A2. A3b needs A3. A4 needs A3. A6 needs A4 (it edits the same function). A5, A7, A8 need A3. A9 needs A3b. B1 is independent of Phase A and may run any time. B2 needs B1 **and** A3 (it renames fields A3 also touches). B3 needs B2. C1 → C2 → C3 are serial. D1 is last.
+**Ordering.** A1 → A2 are **serial**: A2 edits `ref.go`, which A1 creates by renaming `label.go`. A3 needs A1+A2. A3b needs A3. A4 needs A3. A6 needs A4 (it edits the same function). A5, A7, A8 need A3. A9 needs A3b. B1 is independent of Phase A and may run any time. B2 needs B1 **and** A3 (it renames fields A3 also touches). B3 needs B2. C1 → C2 → C3 are serial. D1 is last.
 
 ---
 
