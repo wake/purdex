@@ -63,8 +63,10 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
     ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`) : t('execution.error.generic', { message: st.sendError.message }))
     : null
   // Spec §4.4 R3: dots while the model is silent (own delivered send, or an
-  // observed live turn); the typewriter takes over once tokens flow.
-  const showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued')) && !partialHasVisibleContent(st.partial)
+  // observed live turn); the typewriter takes over once tokens flow, and a
+  // running tool's spinner already shows activity, so no dots beside it.
+  const showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued'))
+    && !partialHasVisibleContent(st.partial) && !anyRunning
 
   return (
     <div className="flex flex-col h-full">

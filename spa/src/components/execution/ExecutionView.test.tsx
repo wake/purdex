@@ -325,6 +325,20 @@ describe('ExecutionView — thinking indicator truth table (R3)', () => {
     render(<ExecutionView hostId={H} executionId={E} isActive />)
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
   })
+
+  it('R3: turnLive with a running tool → spinner only, no thinking indicator; dots return once the tool_result lands', () => {
+    patchExec({ turnLive: true })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
+    expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    // Turn still live, no partial: the model is silent again, so the dots come back.
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [toolResultFrame(2, 9_000)]) })
+    expect(useExecutionStore.getState().executions[KEY].turnLive).toBe(true)
+    expect(screen.queryByTestId('tool-icon-spinner')).not.toBeInTheDocument()
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+  })
 })
 
 describe('ExecutionView — tool activity (R2) and the elapsed ticker', () => {
