@@ -63,11 +63,21 @@ which is which:
   It proves the **outbound** direction of the caller only. It fetches the peer's full inventory
   (the daemon resolves every session's owner under a 2 s budget), so it costs what one row of a
   `scope=all` fan-out costs; `remoteFetchTimeout` is 3 s. No lighter probe endpoint exists.
-- `fetchHostResult(ctx, h)` (`module.go`) is `verifyHost` plus the four failure translations the
-  fan-out needs (no token / transport / host_id mismatch / invalid host_id) and yields
-  `HostResult{Alias, SelfAlias, HostID, OK, Error, DaemonVersion, …}` — every field already bounded
-  for display (`boundRemoteText`). Its `SelfAlias` is the peer's self-report, deliberately *not*
-  validated (v4 §7.1: validation is right before adoption, wrong before display).
+- `fetchHostResult(ctx, h)` (`module.go:648–776`) is the fan-out's one-host probe. It is **not**
+  `verifyHost` with extras; the two share the fetch and differ in three places, stated exactly
+  because D1 reuses `fetchHostResult` (§4.1):
+  - no `Token` → `OK:false, Error:"no outbound token"` without dialling (`module.go:649`);
+  - a configured `HostID` is compared to the envelope's (`module.go:677`) → `"host_id mismatch: got
+    <bounded>"`; `validHostID(env.HostID)` runs only when the configured one is empty
+    (`module.go:693`) — equivalent, since a configured host_id was validated when it was stored;
+  - `OK` is copied from `env.OK` and `Error` from `env.Error` (bounded, `"peer: "`-prefixed) — so a
+    peer answering `ok:false` with **no** error text yields `OK:false, Error:""`, where `verifyHost`
+    would say `"peer reported ok=false"` (`hosts.go:220`). D1 closes that gap in `fetchHostResult`
+    itself (§4.1) so the fan-out row and the verify route can never carry a bare `ok:false`.
+
+  It yields `HostResult{Alias, SelfAlias, HostID, OK, Error, DaemonVersion, …}` — every remote
+  field bounded for display (`boundRemoteText`). `SelfAlias` is the peer's self-report,
+  deliberately *not* validated (v4 §7.1: validation is right before adoption, wrong before display).
 - Routes: `GET/POST /api/peers/hosts`, `PUT/DELETE /api/peers/hosts/{alias}`,
   `GET/PUT /api/peers/settings` (settings returns `{deliver, alias}` — the self alias).
   `HostRoutePolicy` admits a host principal to `GET /api/peers` (scope local) and
@@ -147,13 +157,20 @@ write a learned `host_id` into an entry that lacks one (that path — token with
 be produced by the API and exists only for hand-edited configs); making a probe idempotent and
 side-effect-free is worth more than closing that corner.
 
-**D-7. Rotation is three steps with the old token valid throughout, and both a commit and a
-cancel.** `inbound_token_prev` holds the outgoing token; `MatchInboundToken` accepts either; the
-order is mint → push to the peer (its `PUT {token}` verifies against us with the new token, which we
-already accept) → commit (drop `prev`). A failed push leaves the peer on the old token, which still
-works; cancel restores it as the sole token. A daemon cannot know whether the push landed, so cancel
-is offered for "push failed" and the page re-verifies after every step so an inconsistent state is
-visible and repairable through the same buttons (§7.4).
+**D-7. Rotation is three steps with the old token valid throughout, and commit is gated on
+evidence, not memory.** `inbound_token_prev` holds the outgoing token; `MatchInboundToken` accepts
+either; the order is mint → push to the peer (its `PUT {token}` verifies against us with the new
+token, which we already accept) → commit (drop `prev`). A failed push leaves the peer on the old
+token, which still works; cancel restores it as the sole token.
+
+The daemon *can* know which token the peer is presenting: every host-principal request it serves
+authenticated with either `current` or `prev`, and the daemon remembers, per entry, which one the
+**most recent** such request used (`last_inbound_auth`, §6.2). **Commit is refused unless the last
+inbound authentication used the new token.** That turns "did the push land?" from something a
+client has to remember — and would misremember after a reload or from a second App instance — into
+something any client establishes by making the peer dial us once (the return-path verify of §4.1 is
+exactly that dial) and then reading one field. The page re-verifies after every step (§7.4), so the
+gate is always evaluated against a fresh dial.
 
 **D-8. Live tokens stay in memory for one flow.** The only responses that carry a token value are
 POST 201 (`inbound_token`, existing) and rotate (`inbound_token`, new). The SPA holds such a value
@@ -192,9 +209,13 @@ very function one `scope=all` row is built by — then answers with that row min
 
 - `404 {error: "unknown alias"}` when no entry matches (case-insensitive, `FindPeerHostByAlias`).
 - Every probe outcome is a **200 with `ok`**, never a 5xx: "no outbound token", transport errors,
-  `HTTP <code>`, "peer: <bounded>", "host_id mismatch: got <bounded>", "peer returned an invalid
-  host_id" — the exact strings `fetchHostResult` already produces, so the page and `pdx peers --all`
-  can never disagree about one host.
+  `HTTP <code>`, "peer: <bounded>", "peer reported ok=false", "host_id mismatch: got <bounded>",
+  "peer returned an invalid host_id" — the exact strings `fetchHostResult` produces, so the page and
+  `pdx peers --all` can never disagree about one host. **`ok:false` always carries a non-empty
+  `error`**: D1 adds to `fetchHostResult` the one translation it lacks today (§2.2 — `env.OK ==
+  false && env.Error == ""` → `"peer reported ok=false"`, the string `verifyHost` already uses), so
+  the fan-out row gains the same guarantee. The semantics are `fetchHostResult`'s, not
+  `verifyHost`'s: a configured `host_id` is *compared*, an unconfigured one is *validated*.
 - `host_id` is the configured value, or the learned one when the entry had none (as in the fan-out).
 - `self_alias` and `daemon_version` are bounded (`boundRemoteText`) and otherwise verbatim: display
   values, never validated here (v4 §7.1). `self_alias` is `""` when the peer never said.
@@ -274,36 +295,59 @@ the PUT and prints `renamed <old> -> <new>`. Both are ~40 lines in `cmd/pdx/peer
   - `matchCounterpart(entry, appHosts: {hostId, host_id, url}[])` → the App host whose daemon
     `host_id` equals `entry.host_id`, else (only when `entry.host_id === ''`) whose normalized URL
     equals `entry.url`, else `null` (D-3).
-  - `pairStatus(outbound: VerifyOutcome, inbound: VerifyOutcome | 'no-entry' | 'not-app-host')` →
-    `'bidirectional' | 'one-way' | 'outbound-only' | 'unpaired'`:
+  - `pairStatus(outbound: VerifyOutcome, inbound: VerifyOutcome | 'no-entry' | 'not-app-host' |
+    'counterpart-unavailable')` → `'bidirectional' | 'one-way' | 'outbound-only' |
+    'return-unknown' | 'unpaired' | 'checking'`. The three non-verify inbound values are distinct
+    on purpose: `not-app-host` = the App has no host whose daemon *is* this peer (D-4, a permanent
+    fact about the App); `counterpart-unavailable` = the App *has* that host but could not ask it
+    this time (runtime `disconnected` / `reconnecting` / `auth-error`, or its `/api/info`,
+    `/api/peers/settings` or `/api/peers/hosts` call failed — a transient fact, with the cause
+    shown); `no-entry` = it was asked and has no entry for X.
 
     | outbound | inbound | status |
     |---|---|---|
     | ok | ok | `bidirectional` |
     | ok | failed / `no-entry` | `one-way` (with which direction failed) |
     | ok | `not-app-host` | `outbound-only` (half-verifiable, D-4) |
+    | ok | `counterpart-unavailable` | `return-unknown` (the cause, and Refresh) |
     | failed | ok | `one-way` |
-    | failed | failed / `no-entry` / `not-app-host` | `unpaired` |
+    | failed | failed / `no-entry` / `not-app-host` / `counterpart-unavailable` | `unpaired` (the return side's cause still shown) |
     | pending on either side | — | `checking` |
+
+    `outbound-only` and `return-unknown` are both drawn neutral, never green; only `outbound-only`
+    is stable across refreshes, which is why they are two words.
   - `aliasDrift(entry.alias, verify.self_alias)` → `self_alias` when non-empty and not
     case-insensitively equal, else `''` — the same rule as `aliasDriftField` in `cmd/pdx/peers.go`.
 
 ### 5.2 What the page does on mount (selected App host X)
 
+0. `fetchInfo(X)` and `fetchPeerSettings(X)` → X's own `host_id` and self alias. These, and
+   `listPeerHosts(X)` (step 1), are the page's preconditions: if any fails the page shows one error
+   banner with the failing call and a Retry, and renders no rows — without X's `host_id` no return
+   entry can be found, and guessing by URL alone would join the wrong host.
 1. `listPeerHosts(X)` → entries.
-2. For every App host H in `hostOrder` with runtime status `connected`: `fetchInfo(H)` →
-   `host_id`; `fetchPeerSettings(H)` → self alias. Hosts that are not connected are joined by
-   nothing and count as `not-app-host` for this render (the row says "<name> is not connected").
-3. For each entry E: `Y = matchCounterpart(E, …)`. If `Y` is an App host: `listPeerHosts(Y)` →
-   find `E'` whose `host_id === X.host_id` (URL fallback as in D-3) → the return-path entry, or
-   `'no-entry'`.
+2. For every *other* App host H in `hostOrder`: if its runtime status is `connected`,
+   `fetchInfo(H)` and `fetchPeerSettings(H)`; otherwise, or if either call fails, H is recorded as
+   **unavailable with its cause** (`auth-error`, `disconnected`, or the failed call). An
+   unavailable host still participates in the join by whatever the App knows locally — its URL
+   (`getDaemonBase`) — so an entry pointing at it becomes `counterpart-unavailable`, not
+   `not-app-host`: "we know this host but cannot ask it now" is a different sentence from "this
+   is not one of our hosts", and only the second one is a fact about the pair.
+3. For each entry E: `Y = matchCounterpart(E, …)`. If `Y` is an available App host:
+   `listPeerHosts(Y)` — **fetched once per counterpart per refresh** (memoised across entries;
+   two entries on X pointing at the same daemon share one call) — then find `E'` whose
+   `host_id === X.host_id` (URL fallback as in D-3) → the return-path entry, or `'no-entry'`. A
+   failed `listPeerHosts(Y)` makes every entry joined to Y `counterpart-unavailable`.
 4. Verify **automatically, in parallel**, each direction that has an entry:
    `verifyPeerHost(X, E.alias)` and `verifyPeerHost(Y, E'.alias)`. Results are component state;
-   a Refresh button re-runs 1–4. Nothing is persisted or cached across mounts: every verify is a
+   a Refresh button re-runs 0–4. Nothing is persisted or cached across mounts: every verify is a
    live dial, and a stale green is the thing this page exists to remove.
 
-Cost bound: with `n` entries the page issues at most `2n` verify calls, each ≤ 3 s on the daemon
-side, in parallel — the same load as one `pdx peers --all` on each of two hosts.
+Cost bound, per refresh, with `n` entries on X and `m` connected App hosts: `3` calls on X (info,
+settings, list); at most `2` small calls per other connected host (info, settings) plus `1` list
+call per host that is the counterpart of at least one entry — so `≤ 3 + 3m` cheap calls; and at
+most `2n` verify calls, each ≤ 3 s on the daemon side, all in parallel. The verify calls are the
+only expensive ones and equal one `pdx peers --all` on each side of each pair.
 
 ### 5.3 What one row shows
 
@@ -324,7 +368,8 @@ air  (App host "Air 2026")                                    [Verify]  [Rename 
 - Return line: result of `verify(Y, E'.alias)` when `Y` is an App host and `E'` exists, with its
   own drift marker and **Rename** button acting on `Y`; "no entry for <X self alias> on <Y name>"
   when `E'` is missing (pairing that direction is D4); "not verifiable — not a host in this App"
-  when `Y` is `null` (D-4).
+  when `Y` is `null` (D-4); "<Y name> could not be asked: <cause>" when `Y` is unavailable
+  (§5.2 step 2), with Refresh as the only action.
 - Status word from `pairStatus`. `outbound-only` is drawn in the neutral colour, not green.
 - `has_token: false` shows "no outbound token" on the outbound line without dialling (the daemon
   answers that without a network call, §4.1).
@@ -339,47 +384,76 @@ so the page cannot half-implement them. No `allow_bypass`/`deliver` toggles (D-1
 ### 6.1 Config
 
 `PeerHost` gains `InboundTokenPrev string \`toml:"inbound_token_prev" json:"inbound_token_prev"\``.
-`Redacted()` blanks it alongside `InboundToken`. `hostRow` gains `RotationPending bool
-\`json:"rotation_pending"\`` (= `InboundTokenPrev != ""`); the value itself is never served.
+`Redacted()` blanks it alongside `InboundToken`. `hostRow` gains two never-secret fields:
+`RotationPending bool \`json:"rotation_pending"\`` (= `InboundTokenPrev != ""`) and
+`LastInboundAuth string \`json:"last_inbound_auth"\`` (`""` | `"current"` | `"prev"`, §6.2). Token
+values are never served.
 
-### 6.2 `MatchInboundToken`
+### 6.2 `MatchInboundToken`, and remembering which token was presented
 
-Compares the bearer against every entry's non-empty `InboundToken` **and** non-empty
-`InboundTokenPrev`, both with `subtle.ConstantTimeCompare`, no early exit, same last-match-wins
-shape as today. A match on either field authenticates as that host with the same `Principal`;
-nothing downstream can tell which token was used (it does not need to). An entry with a `prev` and
-no current token is not a state the API can produce; if a hand-edited config has one, `prev` alone
+`MatchInboundToken(bearer) (PeerHost, usedPrev bool, ok bool)` compares the bearer against every
+entry's non-empty `InboundToken` **and** non-empty `InboundTokenPrev`, both with
+`subtle.ConstantTimeCompare`, no early exit across any configured non-empty field, last match wins
+(same shape as today; `usedPrev` is the field of the last match). An entry with a `prev` and no
+current token is not a state the API can produce; if a hand-edited config has one, `prev` alone
 still authenticates (the field is a token, not a flag).
+
+`middleware.Principal` gains `UsedPrevToken bool`, set by `PeerAuth` from `usedPrev`. The peers
+module keeps an **in-memory** `map[alias]lastInboundAuth{usedPrev bool, at time.Time}` and records
+into it at the two places a host principal is served — `handlePeers` (scope local) and
+`handleDeliver` — through one helper, `m.noteInboundAuth(principal)`, called before any policy or
+rate-limit refusal can return (the fact being recorded is "this bearer authenticated", which is
+true whether or not the request is then refused). `rotate` resets the entry's record to `""`, so
+`last_inbound_auth` always describes the *current rotation epoch*; commit and cancel leave it (there
+is no `prev` afterwards, so it can only read `""` or `"current"`). Not persisted: after a daemon
+restart it reads `""` until the peer dials again, which the page causes on its next verify.
 
 ### 6.3 Routes (all admin-only by `HostRoutePolicy` + `requireAdmin`)
 
 | route | effect | responses |
 |---|---|---|
-| `POST /api/peers/hosts/{alias}/rotate` | `prev := current; current := mint()` | `200 {alias, inbound_token: <new>}` — the second and last response that carries a live token; `409 rotation already pending` when `prev != ""`; 404 unknown alias |
-| `POST /api/peers/hosts/{alias}/rotate/commit` | `prev := ""` | `200 hostRow`; **idempotent** — with no `prev` it is a 200 no-op, so a lost response is safely retried; 404 |
+| `POST /api/peers/hosts/{alias}/rotate` | `prev := current; current := mint(); last_inbound_auth := ""` | `200 {alias, inbound_token: <new>}` — the second and last response that carries a live token; `409 rotation already pending` when `prev != ""`; 404 unknown alias |
+| `POST /api/peers/hosts/{alias}/rotate/commit` body `{force?: bool}` | `prev := ""` | `200 hostRow`; **idempotent** — with no `prev` it is a 200 no-op, so a lost response is safely retried; **`409 rotation unconfirmed`** when `prev != ""` and `last_inbound_auth != "current"` unless `force` (D-7: the peer has not been seen presenting the new token, so dropping the old one may lock it out); 404 |
 | `POST /api/peers/hosts/{alias}/rotate/cancel` | `current := prev; prev := ""` | `200 hostRow`; `409 no rotation pending` when `prev == ""` (there is nothing safe to restore); 404 |
 
 All three mutate inside one `UpdateConfig` closure, re-finding the entry by alias under the lock;
+the commit gate reads the in-memory record under the module's own mutex inside that closure, so a
+dial that lands between the check and the write cannot be missed in the *unsafe* direction (a
+`"prev"` arriving after a `"current"` check means the peer still has both — still safe).
 `rotate` mints with `mintInboundToken(adminToken)` (never the admin token; a 128-bit random
-collision with any other entry is not checked, as today at POST).
+collision with any other entry is not checked, as today at POST). `force` exists for the operator
+whose peer is gone for good; the page never sends it (§7.3), the CLI requires `--force` spelled out.
 
 ### 6.4 The flow the App drives (D-7), with what each failure leaves behind
 
 ```
-X: rotate(E)            → new token tX'; X now accepts tX (prev) and tX' (current)
-Y: PUT E' {token: tX'}  → Y verifies Y→X with tX' (X accepts it), stores it
+X: rotate(E)            → new token tX'; X accepts tX (prev) and tX' (current); last_inbound_auth = ""
+Y: PUT E' {token: tX'}  → Y verifies Y→X with tX' (X accepts it, records "current"), stores it
+X: verify(Y→X) …        → the page re-verifies; Y dials X with whatever it STORED
+X: read row             → last_inbound_auth == "current" ⇒ Commit offered and accepted
 X: commit(E)            → X drops tX; only tX' is valid
 ```
 
-| step that failed | state | what still works | repair from the page |
+| step that failed | state | what still works | what the page offers, and why it is safe |
 |---|---|---|---|
 | rotate | nothing changed | everything | retry |
-| push (network, or Y's 502 from its verify) | X accepts both; Y still holds tX | Y→X with tX | **Cancel** (restores tX as sole token) or retry the push — but the page no longer has tX' after a reload (D-8), so after a reload the only offer is Cancel |
+| push (network, or Y's 502 from its verify) | X accepts both; Y still holds tX | Y→X with tX | **Cancel**. Commit is not offered and would be refused: the re-verify makes Y present tX, so `last_inbound_auth == "prev"` |
+| push's verify dial succeeded but Y's own commit failed (409/500) | X accepts both, X recorded `"current"` once; Y still holds tX | Y→X with tX | the page re-verifies before reading the row, and that fresh dial presents tX ⇒ `"prev"` ⇒ **Cancel** only. This is why the gate is "most recent", not "ever seen" |
 | commit (lost response) | X accepts both; Y holds tX' | Y→X with tX' | Commit again (idempotent) |
+| reload, or a second App instance, mid-rotation | X accepts both; the client has no token | whichever Y holds | re-verify, read the row: `"current"` ⇒ Commit; `"prev"` or `""` ⇒ Cancel. No client ever decides from memory |
 | user cancels after a successful push | X accepts tX only; Y holds tX' | **Y→X is broken** | verify shows it red; rotate again and push |
 
-`rotation_pending` on the row is what the page keys its Commit/Cancel offer on, so a reload lands
-on a consistent, if unfinished, state.
+`rotation_pending` tells the page a rotation is open; `last_inbound_auth` — always read after a
+fresh return-path verify — tells it which of Commit / Cancel is the safe one. Stated precisely, the
+daemon gate is *necessary, not sufficient*: it refuses every commit for which the peer has never
+presented the new token in this epoch (the reload and second-instance cases), but it cannot see
+that the peer verified with `tX'` and then failed to persist it (third row above). That residual is
+closed by the protocol the page follows unconditionally — **verify the return path, then read the
+row, then commit** (§7.3). The CLI cannot follow it (a CLI on X cannot make Y dial X), so
+`--commit` relies on the gate alone and its refusal message says what to do: run `pdx peers host
+verify <X's alias>` **on the peer**, then retry. Any ordinary delivery from Y also refreshes the
+record, so the residual is "Y verified with the new token, failed to persist it, and has sent
+nothing since" — visible as a red return line on the next refresh, repairable by rotating again.
 
 ### 6.5 Interaction with the existing PUT identity check
 
@@ -393,8 +467,12 @@ check to distinguish them. Noted so a reviewer does not "fix" it.
 
 ```
 pdx peers host rotate <alias> [--config <path>]          # prints the new token, like add does
-pdx peers host rotate <alias> --commit | --cancel
+pdx peers host rotate <alias> --commit [--force]         # 409 rotation unconfirmed → exit 1 with the
+                                                          #   "verify on the peer first" instruction
+pdx peers host rotate <alias> --cancel
 ```
+
+`pdx peers host list` gains a `ROTATION` column (`-` / `pending` / `pending, confirmed`).
 
 ## 7. Phase D4 — SPA: pair, unpair, rotate from the page
 
@@ -430,10 +508,22 @@ counterpart is left as is and the dialog says so.
 
 ### 7.3 Rotate
 
-Per direction line, **Rotate**: runs §6.4 and shows each step; on `rotation_pending` after a
-reload, the line shows "rotation pending" with **Commit** and **Cancel** only (no token is
-available to re-push). Only offered when the counterpart is an App host (the push needs its admin
-token); for a non-App counterpart the button is absent and a tooltip says why.
+Per direction line, **Rotate**: runs §6.4 and shows each step. The page never decides Commit from
+its own memory of the push: after the push (succeeded or not), and on any render where the row
+says `rotation_pending` (a reload, a second App instance, a CLI-started rotation), it **re-verifies
+the return path, then re-reads the row**, and offers exactly one of:
+
+- **Commit** — when `last_inbound_auth === 'current'`;
+- **Cancel** — otherwise (`'prev'` or `''`), with the line reading "rotation pending — the peer
+  is still presenting the old token" (or "has not dialled since the rotation").
+
+The page never sends `force`. A Commit that is nonetheless refused (`409 rotation unconfirmed`,
+because the peer dialled with the old token between the read and the click) is shown and the row
+re-read. Rotate is only offered when the counterpart is an App host (the push needs its admin
+token); for a non-App counterpart the button is absent and a tooltip says why. An already-pending
+rotation on such a row (started from the CLI) still gets Commit/Cancel by the same rule, minus the
+re-verify the page cannot perform; the line says the reading is "as of the peer's last dial" and
+the daemon gate remains the backstop.
 
 ### 7.4 Every action ends in a re-verify
 
@@ -453,6 +543,7 @@ red; the implementer runs them and records the red in the PR.
 | verify 200 `ok:true` with `self_alias`/`daemon_version` bounded from a fake fetch | drop `boundRemoteText` → a 5 KB alias comes back whole |
 | verify 200 `ok:false, error:"no outbound token"` with **zero** fetch calls | remove the `Token == ""` short-circuit → the fake fetch is called |
 | verify `ok:false` `host_id mismatch` when configured host_id ≠ envelope | drop the mismatch branch → `ok:true` |
+| verify `ok:false, error:"peer reported ok=false"` when the fake envelope has `OK:false, Error:""`; the same fixture through `GET /api/peers?scope=all` yields the same row text | drop the new translation in `fetchHostResult` → `error` is `""` in both |
 | verify never writes: config file bytes identical before/after an `ok:true` call on an entry with `host_id: ""` | add a "learn host_id" write → file differs |
 | verify 404 unknown alias; 403 for a host principal (direct handler call) | — |
 | rename 200, row and file carry the new alias; old alias 404 afterwards | — |
@@ -479,19 +570,24 @@ red; the implementer runs them and records the red in the PR.
 
 | test | mutation that must break it |
 |---|---|
-| `MatchInboundToken`: while pending, **both** old and new authenticate as the same alias | remove the `prev` comparison |
+| `MatchInboundToken`: while pending, **both** old and new authenticate as the same alias, `usedPrev` true only for the old | remove the `prev` comparison |
 | after commit, old is refused, new accepted | commit that does not clear `prev` |
 | after cancel, old accepted, new refused | cancel that does not restore |
 | rotate 409 when pending; commit 200 no-op when not pending; cancel 409 when not pending | — |
+| **commit gate**: after rotate, commit → `409 rotation unconfirmed`; after a host-principal `GET /api/peers` with the **new** token (real `PeerAuth` + `handlePeers`), commit → 200; after one more with the **old** token, commit → 409 again (most recent wins); `{force:true}` → 200 regardless | drop the gate → first commit is 200; make the record sticky ("ever seen") → the third step is 200 |
+| `last_inbound_auth` is `""` right after rotate even if the old token was seen before; a `handleDeliver` request (refused by rate limit or `host_unverified`) still records | do not reset on rotate → stale `"current"` from the previous epoch passes the gate; record after the refusal → the refused-delivery test reads `""` |
 | rotate response carries a fresh `pdxp_` token ≠ old, ≠ admin; `hostRow` never carries either value; `Redacted()` blanks `prev`; `rotation_pending` true/false | drop `prev` from `Redacted` → the config JSON test sees the value |
-| `PeerAuth` end-to-end through the real middleware with a pending rotation | — |
-| PUT `{token}` during a pending rotation 409s `entry changed concurrently` (documents §6.5) | — |
-| CLI `rotate` / `--commit` / `--cancel` | — |
+| `PeerAuth` end-to-end through the real middleware with a pending rotation; `Principal.UsedPrevToken` set correctly | — |
+| §6.5 interleaving, forced: a PUT `{token}` whose fake fetch **blocks**; while it is blocked, `rotate` the same entry; release the fetch → the PUT's commit 409s `entry changed concurrently` and the rotated tokens are untouched. (A PUT *started* after the rotation snapshots the new token and must succeed — a second test says so, so the first cannot be satisfied by "always 409 while pending".) | — |
+| CLI `rotate` / `--commit` (409 → exit 1 with the on-peer instruction) / `--commit --force` / `--cancel`; `host list` `ROTATION` column | — |
 
 Constant-time-ness is not tested by timing (the inherited draft's "flip a bit, same time" is not a
-unit test that can pass or fail deterministically); it is guaranteed by construction —
-`subtle.ConstantTimeCompare`, no early exit — and a test asserts that **every** entry's two fields
-are compared even after a match (a counting fake or a last-match-wins fixture).
+unit test that can pass or fail deterministically). The property that can be pinned is **no early
+exit across configured non-empty token fields**, and it is pinned without any comparison seam by
+a last-match-wins fixture: three entries where the bearer equals entry 1's `current`, entry 3's
+`prev` and nothing of entry 2 — the result must be entry 3 with `usedPrev == true`. An
+implementation that returns on the first match (or that skips `prev`) yields entry 1. Timing
+equivalence itself holds only for equal-length inputs, which peer tokens are (`pdxp_` + 32 hex).
 
 ### 8.4 D4
 
@@ -500,9 +596,15 @@ are compared even after a match (a counting fake or a last-match-wins fixture).
 - Step 3 fails → both entries exist, status `one-way`, retry path uses `rotate` + `PUT` + `commit`.
 - 409 on step 1 → alias prompt; the retry uses the typed alias.
 - Unpair: both DELETEs; 404 on either is success; non-App counterpart not deleted.
-- Rotate: mint → push → commit call order; push failure leaves Cancel offered; reload with
-  `rotation_pending` offers Commit/Cancel only; no token value ever reaches a store
-  (assert `useHostStore` state and `localStorage` contain no `pdxp_` after the flow).
+- Rotate: call order is mint → push → **verify(Y→X) → list(X)** → commit, and commit is sent only
+  when the re-read row says `'current'`; push failure → re-verify → row `'prev'` → Cancel offered,
+  Commit absent; reload with `rotation_pending` → re-verify then read, `'current'` ⇒ Commit only,
+  `'prev'`/`''` ⇒ Cancel only; a Commit answered 409 is rendered and the row re-read; `force` never
+  appears in any request body (assert over every call the mock saw); no token value ever reaches a
+  store (assert `useHostStore` state and `localStorage` contain no `pdxp_` after the flow).
+- Mutation: make the page offer Commit from its own "push succeeded" memory instead of the row →
+  the "push's verify passed but Y failed to persist" fixture (mock PUT returns 409 after the verify
+  dial was observed) offers Commit and the test fails.
 
 ## 9. Real-machine acceptance (must be run, not assumed)
 
@@ -517,10 +619,12 @@ Recorded per phase in the PR; the two hosts are mlab (`mini-lab:278cbm`) and air
   header reads `air26`, `pdx peers --all` on mlab prints `air26/…` addresses and no drift.
   Then from a Claude Code session on mlab, `pdx msg send air26/<name> "…"` delivers (the address is
   now the same string the air side prints). This closes the §2.1 case.
-- **D3:** `pdx peers host rotate air` on mlab, `pdx peers host set-token mini-lab <new>` on air,
-  `pdx peers --all` still green from both sides, `pdx peers host rotate air --commit`; `pdx peers
-  host list` on mlab shows no pending. Negative: rotate, do *not* push, `pdx peers --all` on air is
-  still green (old token honoured), `--cancel`, still green.
+- **D3:** `pdx peers host rotate air` on mlab; **`--commit` immediately → refused** (`rotation
+  unconfirmed`, exit 1); `pdx peers host set-token mini-lab <new>` on air; `pdx peers --all` still
+  green from both sides; `host list` on mlab shows `pending, confirmed`; `--commit` → 200; no
+  pending. Negative: rotate, do *not* push, `pdx peers --all` on air is still green (old token
+  honoured) and mlab's `host list` shows `pending` (not confirmed, because air just dialled with the
+  old one); `--cancel`; still green.
 - **D4:** unpair mlab↔air from the page, both `host list`s empty; Pair from the page, both
   `host list`s show the entry with both tokens, `pdx peers --all` green both ways; rotate from the
   page, both ways green after.
@@ -552,3 +656,14 @@ as this spec; it survives in the branch's WIP commit `3079f2a3` for reference. T
 (not this worktree) still carries uncommitted edits from the same draft — a global `pair` route in
 `route-utils.ts`, `register-modules/index.tsx` and `types/tab.ts`, plus an untracked
 `components/Pair.tsx` — which this branch does not include and which should be discarded there.
+
+## 12. Corrections folded in from review (codex `task-mu6062k7-ag4iyh`, gpt-5.5)
+
+| first draft | why it was wrong | now |
+|---|---|---|
+| after a reload, a pending rotation offered **Commit** and Cancel | the client no longer knows whether the push landed; a commit then can lock the peer out — and a second App instance never knew | commit is gated on the daemon's record of which token the peer **most recently** presented (`last_inbound_auth`, §6.2); the page verifies-then-reads before offering either button (§7.3); the CLI relies on the gate and says what to do (§6.6) |
+| "`fetchHostResult` is `verifyHost` plus four translations" | it is not: `OK:false` with empty `Error` passes through bare, and host_id is *compared* when configured, *validated* only when not | §2.2 states the exact semantics; D1 adds the missing `"peer reported ok=false"` translation to `fetchHostResult` and tests it through both routes (§8.1) |
+| a disconnected App host "counts as `not-app-host`" | conflates "we know this host but cannot ask it now" with "not one of our hosts"; only the second is a fact about the pair | `counterpart-unavailable` → `return-unknown` (§5.1), with the cause; X's own metadata failures are a page-level banner (§5.2 step 0) |
+| cost bound "`2n` verify calls" | omitted the per-entry `listPeerHosts(Y)` and metadata calls, and duplicate counterparts | de-duplicated per counterpart; bound restated as `≤ 3 + 3m` cheap calls plus `≤ 2n` verifies (§5.2) |
+| test "PUT `{token}` during a pending rotation 409s" | a PUT started after the rotate snapshots the new token and must *succeed*; only the rotate-between-snapshot-and-commit interleaving 409s | the test forces the interleaving with a blocking fake fetch, and a second test pins that the non-interleaved PUT succeeds (§8.3) |
+| "a counting fake" to prove every field is compared | needs a comparison seam in production code just for the test | a last-match-wins fixture with the bearer matching entry 1's `current` and entry 3's `prev` (§8.3) |
