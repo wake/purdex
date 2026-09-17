@@ -730,6 +730,12 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	rowErr := env.Error
 	if rowErr != "" {
 		rowErr = "peer: " + boundRemoteText(rowErr)
+	} else if !env.OK {
+		// A peer that says ok=false and nothing else still gets a named
+		// cause: this row is what the verify route (hosts_verify.go) and
+		// the page render, and {ok:false, error:""} would be a red row
+		// with no reason. Same string verifyHost uses for the 502 case.
+		rowErr = "peer reported ok=false"
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable

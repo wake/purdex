@@ -1090,6 +1090,58 @@ func TestHandlePeers_ScopeAll_RemoteErrorBounded(t *testing.T) {
 	}
 }
 
+// TestHandlePeers_ScopeAll_RemoteNotOKWithoutText pins spec §4.1: a peer
+// that answers ok=false with NO error text must still produce a row whose
+// Error names the cause. Before this, the row copied env.Error verbatim and
+// came back as {ok:false, error:""} — and the verify route (hosts_verify.go)
+// reuses this function, so the page would have shown a red row with no
+// reason. verifyHost already used this exact string for the add/put 502.
+func TestHandlePeers_ScopeAll_RemoteNotOKWithoutText(t *testing.T) {
+	dir := t.TempDir()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID: "host-a:111",
+			OK:     false,
+			Error:  "",
+			Peers:  []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "host-a", URL: srv.URL, Token: "tok-a", HostID: "host-a:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	row := got.Hosts[1]
+	if row.OK {
+		t.Errorf("row = %+v, want ok=false", row)
+	}
+	if row.Error != "peer reported ok=false" {
+		t.Errorf("row.Error = %q, want %q", row.Error, "peer reported ok=false")
+	}
+}
+
 // TestHandlePeers_ScopeAll_NoOutboundToken pins the no-token row: a
 // configured host without an outbound Token is listed as a failed row
 // without ever being dialed.
