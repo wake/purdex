@@ -11,6 +11,36 @@ export interface ToolActivity {
   status: 'running' | 'done' | 'error' | 'aborted'
 }
 
+/**
+ * What ToolCallBlock renders beyond the tool name + input (P-B2.2 R1/R2).
+ * One variant per lifecycle stage, each carrying only the fields that stage
+ * can use; absent → today's Stream-mode DOM. `streaming` is the in-flight
+ * partial block (PartialMessageGroup); the rest come from the durable
+ * ToolActivity via toToolCallActivity.
+ */
+export type ToolCallActivity =
+  | { status: 'streaming'; rawInput: string }
+  | { status: 'running'; startedAt: number; now: number }
+  | { status: 'done' | 'error'; startedAt: number; endedAt: number }
+  | { status: 'aborted' }
+
+/**
+ * Durable ToolActivity → the renderer's activity prop. `now` is only carried
+ * by `running`; a done/error entry with no endedAt (never produced by the
+ * reducer) maps to undefined so the block renders plain.
+ */
+export function toToolCallActivity(entry: ToolActivity, now: number): ToolCallActivity | undefined {
+  switch (entry.status) {
+    case 'running':
+      return { status: 'running', startedAt: entry.startedAt, now }
+    case 'done':
+    case 'error':
+      return entry.endedAt == null ? undefined : { status: entry.status, startedAt: entry.startedAt, endedAt: entry.endedAt }
+    case 'aborted':
+      return { status: 'aborted' }
+  }
+}
+
 export function recordToolStarts(s: ExecutionState, p: Record<string, unknown>, at: number): ExecutionState {
   let tools = s.tools
   for (const b of contentBlocks(p)) {

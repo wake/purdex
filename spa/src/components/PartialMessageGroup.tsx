@@ -30,7 +30,7 @@ export default function PartialMessageGroup({ partial }: { partial: PartialAssem
           case 'tool_use':
             return (
               <ToolCallBlock key={block.index} tool={block.toolName ?? t('execution.tool.unknown')} input={{}}
-                status="streaming" rawInput={block.partialJson} />
+                activity={{ status: 'streaming', rawInput: block.partialJson }} />
             )
           default:
             return null
