@@ -11,6 +11,7 @@ import { attachObserve, fetchExecutionEvents, getExecution } from '../lib/nex/ne
 import { openNexSse, type NexSseHandle } from '../lib/nex/nex-sse'
 import { frameToEvent } from '../lib/nex/event-reducer'
 import { subscriptionSlots } from '../lib/nex/subscription-slots'
+import { createTransientFrameQueue, type TransientFrameQueue } from '../lib/nex/transient-frame-queue'
 import { NexApiError } from '../lib/nex/types'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -125,43 +126,17 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     // e.g. "nex: init: assembling engine: …") — falls back to the problem
     // code itself only when the caller has nothing better (a plain reason
     // like 'host_removed' has no server text to carry).
-    // Transient frames (spec §4.3): queued and applied once per animation
-    // frame. The generation token exists because a flush callback scheduled
-    // under the old connection can still fire after the transport has
-    // reconnected — writing it would duplicate text the new connection's
-    // snapshot already carries, or resurrect a partial a replayed `result`
-    // cleared.
-    let pending: { kind: string; payload: Record<string, unknown> }[] = []
-    let generation = 0
-    let flushHandle: number | ReturnType<typeof setTimeout> | null = null
-    let flushIsRaf = false
-    const flush = (gen: number) => {
-      if (gen !== generation || cancelled) return
-      const batch = pending
-      pending = []
-      flushHandle = null
-      if (batch.length) store().applyTransient(hostId, executionId, batch)
-    }
-    const cancelFlush = () => {
-      if (flushHandle === null) return
-      if (flushIsRaf) cancelAnimationFrame(flushHandle as number)
-      else clearTimeout(flushHandle as ReturnType<typeof setTimeout>)
-      flushHandle = null
-    }
-    const scheduleFlush = () => {
-      if (flushHandle !== null) return
-      const gen = generation
-      flushIsRaf = typeof requestAnimationFrame === 'function'
-      flushHandle = flushIsRaf ? requestAnimationFrame(() => flush(gen)) : setTimeout(() => flush(gen), 16)
-    }
-    const dropQueue = () => {
-      pending = []
-      cancelFlush()
-    }
+    // Transient frames (spec §4.3) go through a per-stream queue that
+    // coalesces them per animation frame and drops them at connection
+    // boundaries (transient-frame-queue.ts). One queue per openStream: a
+    // closed queue never flushes again, and a pane resumed after eviction
+    // opens a fresh stream with a fresh queue.
+    let queue: TransientFrameQueue | null = null
     const closeStream = () => {
       sseRef.current?.close()
       sseRef.current = null
-      dropQueue()
+      queue?.close()
+      queue = null
     }
 
     const teardown = (reason?: SubscriptionProblem, detail?: string) => {
@@ -208,6 +183,9 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
         store().setHistoryLoaded(hostId, executionId, true)
         let warnedMalformed = false
         const openStream = () => {
+          queue?.close()
+          const q = createTransientFrameQueue({ flush: (batch) => store().applyTransient(hostId, executionId, batch) })
+          queue = q
           sseRef.current = openNexSse({
             hostId,
             url: obs.stream_url,
@@ -217,12 +195,11 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
                 let payload: unknown
                 try { payload = JSON.parse(frame.data) } catch { return }
                 if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
-                pending.push({ kind: frame.event, payload: payload as Record<string, unknown> })
-                scheduleFlush()
+                q.enqueue(frame.event, payload as Record<string, unknown>)
                 return
               }
               // A delta queued before its finalizing `assistant` must land first.
-              flush(generation)
+              q.flushNow()
               const ev = frameToEvent(frame)
               if (!ev) {
                 // A durable frame that does not parse is dropped without moving
@@ -237,8 +214,8 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
             },
             onStatus: (status, err) => {
               if (cancelled) return
-              if (status === 'connecting' || status === 'reconnecting') { generation += 1; dropQueue() }
-              if (status === 'closed') dropQueue()
+              if (status === 'connecting' || status === 'reconnecting') q.bumpGeneration()
+              if (status === 'closed') q.close()
               store().setSse(hostId, executionId, status, err?.message ?? null)
               if (status === 'reconnecting') wasReconnecting = true
               if (status === 'open') { warnedMalformed = false; if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
