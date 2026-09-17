@@ -33,6 +33,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lab.protype.tw/wake/nexen"
 )
 
 // fakeTurnClaude is the plan's "Fake claude fixture": consume the turn's
@@ -57,14 +59,10 @@ cat >/dev/null
 // accessToken and expiresAt in MILLISECONDS, far enough out to clear
 // hostcred.ExpiryMargin.
 //
-// ⚠️ This token stays local only while the FILE backend is the sole usable
-// one. hostcred's resolver takes a ~1ms read of ~/.claude.json when exactly
-// one backend answers, but puts EACH token to GET /api/oauth/profile when
-// two do (its R9-1/R9-2 split) — so on a host whose keychain also holds a
-// "Claude Code-credentials" item, these tests would make a real network call
-// carrying this fake token and the user's real one. The temp $HOME does not
-// close that hole by itself, and pdx has no way to force a backend: nexen's
-// credential_source knob is not plumbed through [nex] yet. Tracked in #1099.
+// This token stays local because newMountFixture also refuses the machine's
+// keychain — the temp $HOME below covers the FILE backend and nothing else.
+// See TestMountFixtureRefusesTheMachineKeychain for what the other backend
+// would otherwise cost.
 func writeHostCredential(t *testing.T, home string) {
 	t.Helper()
 	dir := filepath.Join(home, ".claude")
@@ -84,6 +82,11 @@ type mountFixture struct {
 	srv    *httptest.Server
 	hostID string
 	root   string // the single allowlisted repo root
+	// assembleOpts is what the REAL Assemble was handed, captured at the
+	// seam. TestMountFixtureRefusesTheMachineKeychain reads it so that
+	// deleting the wrapper below turns into a failing test rather than a
+	// silent return to touching the operator's keychain.
+	assembleOpts nexen.Options
 }
 
 // newMountFixture assembles the real engine and mounts it. Cleanup runs
@@ -100,6 +103,21 @@ func newMountFixture(t *testing.T) *mountFixture {
 
 	m := New()
 	m.logf = discardLogf
+
+	// Assemble for real, but never at the machine's keychain — see
+	// TestMountFixtureRefusesTheMachineKeychain for why the temp $HOME above
+	// does not cover it. Wrapping the seam rather than teaching buildOptions
+	// about it keeps the switch where it belongs: production MUST read the
+	// keychain, because on two of this tailnet's three hosts that is the
+	// only place the host login lives.
+	realAssemble := m.assemble
+	var assembleOpts nexen.Options
+	m.assemble = func(ctx context.Context, opts nexen.Options) (engine, error) {
+		opts.DisableHostKeychain = true
+		assembleOpts = opts
+		return realAssemble(ctx, opts)
+	}
+
 	if err := m.Init(newTestCore(&cfg)); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
@@ -119,7 +137,35 @@ func newMountFixture(t *testing.T) *mountFixture {
 			t.Errorf("Close() error = %v", err)
 		}
 	})
-	return &mountFixture{m: m, srv: srv, hostID: cfg.HostID, root: cfg.Nex.RepoRoots[0]}
+	return &mountFixture{m: m, srv: srv, hostID: cfg.HostID, root: cfg.Nex.RepoRoots[0], assembleOpts: assembleOpts}
+}
+
+// TestMountFixtureRefusesTheMachineKeychain pins the one thing the temp
+// $HOME cannot buy on its own.
+//
+// hostcred.Reader takes its FILE path from home but its keychain from a
+// fixed service name, so redirecting $HOME isolates one backend and leaves
+// the other aimed at the operator's real login — which is where the
+// workstations in this tailnet actually keep the credential. Two things
+// then follow from a harness that fakes a login: both tokens get put to
+// GET /api/oauth/profile so they can be told apart, and the credential
+// watchdog is carrying a real DELETE capability against the real item.
+//
+// nexen v0.11.1 added Options.DisableHostKeychain for exactly this shape —
+// an embedder whose process already runs with a redirected $HOME, which its
+// own automatic HomeDir rule cannot detect (os.UserHomeDir reads $HOME, so
+// the redirected one IS the real home as far as that process can tell).
+//
+// 📌 credential_source = "file" is NOT a substitute: it only skips the slow
+// identity path, while Reader.Read still spawns `security` and the watchdog
+// still holds its deleter.
+func TestMountFixtureRefusesTheMachineKeychain(t *testing.T) {
+	f := newMountFixture(t)
+	if !f.assembleOpts.DisableHostKeychain {
+		t.Fatal("Assemble was handed DisableHostKeychain=false: this harness writes a fake login into a temp $HOME, " +
+			"and the machine's keychain is not covered by that redirect — the real item would be read, and the " +
+			"watchdog would hold a real delete capability against it")
+	}
 }
 
 // do issues one request against the mounted engine with no auth header
