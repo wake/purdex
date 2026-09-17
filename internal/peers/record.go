@@ -39,17 +39,31 @@ type PeerRecord struct {
 	// Ref is the sessionId-derived disambiguator, "_q34psn"; "" when the row
 	// has no cc agent. It is the one part of an address that cannot drift, and
 	// what Resolve falls back to when a name does.
-	Ref          string     `json:"ref"`
-	Label        string     `json:"label"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
-	LabelSource  string     `json:"label_source"` // user | ""
-	LabelRev     int64      `json:"label_rev"`
-	SessionCode  string     `json:"session_code"`  // always present
-	SessionName  string     `json:"session_name"`  // always present
-	TmuxInstance string     `json:"tmux_instance"` // always present
-	Cwd          string     `json:"cwd,omitempty"`
-	Agent        *AgentInfo `json:"agent"` // always present, null when none
-	Deliverable  bool       `json:"deliverable"`
-	Reason       string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
+	Ref          string `json:"ref"`
+	Label        string `json:"label"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
+	LabelSource  string `json:"label_source"` // user | ""
+	LabelRev     int64  `json:"label_rev"`
+	SessionCode  string `json:"session_code"`  // always present
+	SessionName  string `json:"session_name"`  // always present
+	TmuxInstance string `json:"tmux_instance"` // always present
+	// TmuxName is the tmux session this row's agent is in, for display only.
+	// NOTHING routes on it, and that is the point: its two provenances differ
+	// in how much they can be trusted, and RowKind tells them apart.
+	//
+	//   - row_kind "session": the daemon's live inventory name, so it tracks a
+	//     rename immediately.
+	//   - row_kind "entry": no session row stands behind it, so this is Claude
+	//     Code's registry field, frozen when the agent started and never
+	//     refreshed. It can name a session since renamed or gone — which is
+	//     exactly v3 spec §2's P1, and exactly why SessionName is NOT set here
+	//     and no tier may match on this field.
+	//
+	// "" when the agent is not in tmux at all.
+	TmuxName    string     `json:"tmux_name"`
+	Cwd         string     `json:"cwd,omitempty"`
+	Agent       *AgentInfo `json:"agent"` // always present, null when none
+	Deliverable bool       `json:"deliverable"`
+	Reason      string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
 }
 
 // WireAddress renders r's from.address: the bare Ref, or "" when the row has
@@ -154,6 +168,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 		RowKind:      "session",
 		SessionCode:  s.Code,
 		SessionName:  s.Name,
+		TmuxName:     s.Name,
 		TmuxInstance: s.TmuxInstance,
 		Cwd:          s.Cwd,
 	}
@@ -320,7 +335,8 @@ func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo) Peer
 	agent := agentInfoFromEntry(e)
 	rec := PeerRecord{
 		Host: alias, HostID: hostID, RowKind: "entry",
-		Cwd: e.Cwd, Agent: agent, Deliverable: true,
+		TmuxName: e.TmuxSessionName(),
+		Cwd:      e.Cwd, Agent: agent, Deliverable: true,
 	}
 	if proxy {
 		agent.Type = "proxy"

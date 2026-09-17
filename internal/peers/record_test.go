@@ -1445,3 +1445,48 @@ func TestApplyIdentity_TmuxRowUnchanged(t *testing.T) {
 		t.Errorf("Ref = %q, want empty on an agentless row", got.Ref)
 	}
 }
+
+func TestBuild_TmuxName_SessionRowUsesLiveName(t *testing.T) {
+	in := ccBuildInput("purdex-b0", "sess-x")
+	got := Build(in)[0]
+	if got.TmuxName != "mt1" {
+		t.Errorf("TmuxName = %q, want the live session name %q", got.TmuxName, "mt1")
+	}
+	if got.RowKind != "session" {
+		t.Fatalf("RowKind = %q, want session", got.RowKind)
+	}
+}
+
+// An entry row has no session behind it, so its tmux name comes from the
+// registry file, where it was frozen at startup.
+func TestBuild_TmuxName_EntryRowUsesFrozenRegistryName(t *testing.T) {
+	in := BuildInput{
+		Alias: "mlab",
+		Entries: []Entry{{
+			PID: 100, SessionID: "sess-z", Name: "purdex-b0",
+			Tmux: "aigora2:@5.%5", Inbox: "/tmp/1.sock",
+		}},
+	}
+	got := Build(in)[0]
+	if got.RowKind != "entry" {
+		t.Fatalf("RowKind = %q, want entry", got.RowKind)
+	}
+	if got.TmuxName != "aigora2" {
+		t.Errorf("TmuxName = %q, want the frozen registry name %q", got.TmuxName, "aigora2")
+	}
+	// SessionName stays empty: tier 4 and "tmux:<name>" must not be able to
+	// reach a row through a value that may already be wrong.
+	if got.SessionName != "" {
+		t.Errorf("SessionName = %q, want empty on an entry row", got.SessionName)
+	}
+}
+
+func TestBuild_TmuxName_EmptyOutsideTmux(t *testing.T) {
+	in := BuildInput{
+		Alias:   "mlab",
+		Entries: []Entry{{PID: 100, SessionID: "sess-z", Name: "purdex-b0", Inbox: "/tmp/1.sock"}},
+	}
+	if got := Build(in)[0]; got.TmuxName != "" {
+		t.Errorf("TmuxName = %q, want empty for an agent outside tmux", got.TmuxName)
+	}
+}
