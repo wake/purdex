@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0-alpha.377] - 2026-09-18
+
+### Feature: exec pane 的串流基礎 — partial assembly、工具活動、transient 佇列（P-B2.1，#1129）
+
+**這版看不到任何畫面變化。** 它把 Nexen 送來、P-B 一直丟掉的 transient 幀（`stream_event` 逐字增量、`stream_snapshot`）接進 store，並從 durable 事件推導「哪個工具正在跑、跑了多久」。畫面（打字機游標、工具 spinner + 計時）是下一個 PR（P-B2.2）。
+
+#### 先量再寫
+
+- Claude Code 2.1.275 `-p` 跑一個 6 秒的 Bash，**完全不送 `tool_progress`**（29 幀：19 `stream_event`、5 `system`、2 `assistant`、1 `user`、1 `result`、1 `rate_limit_event`）；Nexen 也沒這個 kind。所以「工具進行中」只能靠 `tool_use` 已到、`tool_result` 未到來推導 —— 跟 Nexen console 一樣。那份 wire 樣本進了 repo（`spa/src/lib/nex/__fixtures__/cc-2.1.275-sleep6.jsonl`，路徑已清），當 golden replay 測試。
+- SSE 重連在 P-B 就做完了（backoff、jitter、`Last-Event-ID`、idle timeout）。158 天前記憶裡「WS 永不重連」講的是 relay 時代。
+
+#### Reducer：一個 `finalized` 計數器，不是「刪最低 index」
+
+partial 以 (message.id, block index) 為鍵；durable `assistant` 幀一次一個 block，第 N 幀 finalize 第 N 個 block。spec v1 原本寫「刪掉 partial 裡最低的 index」——codex spec review 抓到反例：帶著舊 `Last-Event-ID` 重連時 snapshot 只有 block 1、replay 補送 assistant block 0，「刪最低」會把 block 1 刪掉、之後它的 delta 全丟。改成 `finalized` 計數器，**種子來自這個 client 已渲染的同 message.id assistant 幀數**，snapshot 的 index 不參與。兩個 mutation check 各自只讓對應的 reconnect case 變紅。
+
+subagent 幀（`parent_tool_use_id` 非 null）在 partial、tool activity、turn 結束、`pendingSend` 四條路上都跳過 —— R1 抓到 subagent 的 `result` 會把主 turn 收掉，R3 抓到它還會把輸入框解鎖。
+
+#### Hook：rAF 合批 + connection generation
+
+claude 一秒送幾十個 delta；每個都寫 store 會讓 `ReactMarkdown` 每個字重跑一次。transient 幀先進佇列、一個 animation frame 沖一次；durable 幀來時先沖佇列再套用，delta 與它的 finalizing `assistant` 順序不會反。codex 抓到第二個 P1：舊連線排定的 flush 會在重連後落在新 snapshot 之後，把文字重複或把已清掉的 partial 復活。佇列綁 connection generation，`connecting`／`reconnecting`／`closed`／unmount 全部清掉，過期的 flush 不寫。
+
+#### 檔案體質
+
+reducer 一度長到 415 行、三個職責混一檔。拆成 `partial.ts`（161）、`tool-activity.ts`（42）、`content-blocks.ts`（11），`event-reducer.ts` 剩 227 行只做 compose；hook 的佇列狀態機抽成 `transient-frame-queue.ts`（89，10 個直接單測）。純搬移用逐宣告位元組比對證明：29/29 宣告、68/68 測試本體相同。
+
+#### 測試
+
+reducer 22 → 72、store 11 → 15、hook 22 → 29、佇列 +10、golden replay 1；整套 6096 綠。四份 codex（R1、攻擊、防守、體質）+ R3 scoped 全部處置完。
+
 ## [1.0.0-alpha.376] - 2026-09-18
 
 ### Fix: 狀態列的 peer id 在 pane 換了 agent 之後會跟上（#1127）
