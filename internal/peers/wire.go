@@ -195,7 +195,7 @@ const (
 	// the two ask for opposite things — one says check the address, the
 	// other says upgrade the other host — and the refusal is only useful
 	// if it says which. (The Go sentinel lives in address.go; this is the
-	// wire string, prefixed like ErrCodeLabelInvalid to keep the two
+	// wire string, prefixed like ErrCodeTitleInvalid to keep the two
 	// apart in one package.)
 	ErrCodeRemoteTooOld = "remote_too_old"
 
@@ -206,9 +206,11 @@ const (
 	// operator's call and they cannot make it from the code alone.
 	ErrCodeNameMismatch = "name_mismatch"
 
-	// Peer Address v2 self routes (Task 7): whoami, claim, release.
-	ErrCodeLabelInvalid  = "label_invalid"
-	ErrCodeLabelReserved = "label_reserved"
+	// The self routes' refusals: whoami, claim, release. Nothing returns
+	// ErrCodeTitleReserved since v4 dropped the reserved words — a title
+	// routes nowhere, so it has nothing to shadow.
+	ErrCodeTitleInvalid  = "title_invalid"
+	ErrCodeTitleReserved = "title_reserved"
 	ErrStoreUnavailable  = "store_unavailable"
 )
 
@@ -294,22 +296,22 @@ type SendResponse struct {
 }
 
 // SelfRequest is the body of POST /api/peers/self and DELETE
-// /api/peers/self/label: the caller's own inbox, attributed to a live,
+// /api/peers/self/title: the caller's own inbox, attributed to a live,
 // non-proxy registry entry (entry attribution, Peer Address v2 spec
 // §3.6 — not /send's deliverable-row origin rule).
 type SelfRequest struct {
 	OriginInbox string `json:"origin_inbox"`
 }
 
-// ClaimLabelRequest is the body of PUT /api/peers/self/label: the
-// caller's own inbox plus the user label it wants to claim.
-type ClaimLabelRequest struct {
+// ClaimTitleRequest is the body of PUT /api/peers/self/title: the
+// caller's own inbox plus the free-text title it wants to claim.
+type ClaimTitleRequest struct {
 	OriginInbox string `json:"origin_inbox"`
-	Label       string `json:"label"`
+	Title       string `json:"title"`
 }
 
 // SelfResponse is the 200 body of all three self routes: POST
-// /api/peers/self, PUT and DELETE /api/peers/self/label (spec §6.3).
+// /api/peers/self, PUT and DELETE /api/peers/self/title (spec §6.3).
 //
 // The record used to be encoded bare. It moved inside an envelope because
 // a 200 now has something to say beyond the record itself — a claim that
@@ -334,7 +336,7 @@ type SelfWarning struct {
 }
 
 // APIError is the body of every 4xx/5xx JSON response on /send, /deliver,
-// /log and the three self routes (/api/peers/self, /api/peers/self/label).
+// /log and the three self routes (/api/peers/self, /api/peers/self/title).
 type APIError struct {
 	Error      string               `json:"error"`
 	Detail     string               `json:"detail,omitempty"`

@@ -29,8 +29,8 @@ func TestHostRoutePolicy(t *testing.T) {
 		{"POST /api/peers/send", "POST", "/api/peers/send", "", false},
 		{"POST /api/peers/settings", "POST", "/api/peers/settings", "", false},
 		{"POST /api/peers/self", "POST", "/api/peers/self", "", false},
-		{"PUT /api/peers/self/label", "PUT", "/api/peers/self/label", "", false},
-		{"DELETE /api/peers/self/label", "DELETE", "/api/peers/self/label", "", false},
+		{"PUT /api/peers/self/title", "PUT", "/api/peers/self/title", "", false},
+		{"DELETE /api/peers/self/title", "DELETE", "/api/peers/self/title", "", false},
 	}
 
 	for _, tc := range cases {

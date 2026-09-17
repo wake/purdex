@@ -920,8 +920,8 @@ func TestE2E_Labels(t *testing.T) {
 
 	targetTo := ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart}
 
-	// ---- 1. B's target claims "purdex-tester" through B's own /self/label. ----
-	status, body := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester"})
+	// ---- 1. B's target claims "purdex-tester" through B's own /self/title. ----
+	status, body := b.do(http.MethodPut, "/api/peers/self/title", b.admin, ipeers.ClaimTitleRequest{OriginInbox: targetSock, Title: "purdex-tester"})
 	if status != http.StatusOK {
 		t.Fatalf("step 1: claim = %d %s", status, body)
 	}
@@ -966,7 +966,7 @@ func TestE2E_Labels(t *testing.T) {
 	holder := startFakeInbox(t, holderSock)
 	const holderPID, holderSID = 31337, "holder-sid"
 	writeRegistryFixture(t, regDir, strconv.Itoa(holderPID)+".json", e2eRegistryJSON(holderPID, holderSID, "holder-1", "", holderSock)) // no tmux: entry row on B
-	st, raw = b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: holderSock, Label: "foo"})
+	st, raw = b.do(http.MethodPut, "/api/peers/self/title", b.admin, ipeers.ClaimTitleRequest{OriginInbox: holderSock, Title: "foo"})
 	if st != http.StatusOK {
 		t.Fatalf("step 5: holder claim = %d %s", st, raw)
 	}
@@ -1055,7 +1055,7 @@ func TestE2E_CanonicalSurvivesATmuxRename(t *testing.T) {
 	targetTo := ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart}
 
 	// ---- 1. The target names itself, so the label is in play throughout. ----
-	status, body := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester"})
+	status, body := b.do(http.MethodPut, "/api/peers/self/title", b.admin, ipeers.ClaimTitleRequest{OriginInbox: targetSock, Title: "purdex-tester"})
 	if status != http.StatusOK {
 		t.Fatalf("step 1: claim = %d %s", status, body)
 	}
@@ -1304,7 +1304,7 @@ func TestE2E_HelperRename(t *testing.T) {
 	// ---- 1. B's target claims "purdex-tester"; A sends to its canonical
 	// address (the claim gave it a name, not a second address — D3); the
 	// frame the target receives names A's helper after A's own address. ----
-	claimStatus, claimBody := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester"})
+	claimStatus, claimBody := b.do(http.MethodPut, "/api/peers/self/title", b.admin, ipeers.ClaimTitleRequest{OriginInbox: targetSock, Title: "purdex-tester"})
 	if claimStatus != http.StatusOK {
 		t.Fatalf("step 1: claim purdex-tester = %d %s", claimStatus, claimBody)
 	}
@@ -1369,7 +1369,7 @@ func TestE2E_HelperRename(t *testing.T) {
 	// name is UNCHANGED — the claim bumped title_rev, so a rename really
 	// was attempted, and it resolved to the same string because the
 	// address the helper is named after never moved (D3). ----
-	st, body := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester-2"})
+	st, body := b.do(http.MethodPut, "/api/peers/self/title", b.admin, ipeers.ClaimTitleRequest{OriginInbox: targetSock, Title: "purdex-tester-2"})
 	if st != http.StatusOK {
 		t.Fatalf("step 3: claim purdex-tester-2 = %d %s", st, body)
 	}
@@ -1466,7 +1466,7 @@ func TestE2E_HelperRename(t *testing.T) {
 	// reply, and then through A's own next send, which is where a v2
 	// address change WOULD have landed. Under v3 there is no new address
 	// to land, so the name is the same string at both checkpoints. ----
-	st, body = a.do(http.MethodPut, "/api/peers/self/label", a.admin, ipeers.ClaimLabelRequest{OriginInbox: originSock, Label: "purdex-dev"})
+	st, body = a.do(http.MethodPut, "/api/peers/self/title", a.admin, ipeers.ClaimTitleRequest{OriginInbox: originSock, Title: "purdex-dev"})
 	if st != http.StatusOK {
 		t.Fatalf("step 5: claim purdex-dev = %d %s", st, body)
 	}

@@ -156,13 +156,11 @@ func (m *Module) whoami(inbox string) selfResult {
 // already ours ⇒ 200 no write → write (error ⇒ store_unavailable) → 200.
 //
 // The reserved-word refusal is gone with the grammar: a title reaches
-// nothing, so "cc" and "tmux" have nothing to shadow. The wire code stays
-// ErrCodeLabelInvalid because the route it answers is still
-// /api/peers/self/label — the v4 rename moved the Go vocabulary and the
-// peer-row JSON keys, not this route or its request body (spec §6).
+// nothing, so "cc" and "tmux" have nothing to shadow — which is why no
+// path below can return ErrCodeTitleReserved any more.
 func (m *Module) claim(inbox, title string) selfResult {
 	if err := ipeers.ValidateTitle(title); err != nil {
-		return fail(http.StatusBadRequest, ipeers.ErrCodeLabelInvalid, err.Error())
+		return fail(http.StatusBadRequest, ipeers.ErrCodeTitleInvalid, err.Error())
 	}
 	m.titleMu.Lock()
 	defer m.titleMu.Unlock()
@@ -338,22 +336,22 @@ func (m *Module) handleSelf(w http.ResponseWriter, r *http.Request) {
 	writeSelfResult(w, m.whoami(req.OriginInbox))
 }
 
-// handleClaimLabel serves PUT /api/peers/self/label: claim.
-func (m *Module) handleClaimLabel(w http.ResponseWriter, r *http.Request) {
+// handleClaimTitle serves PUT /api/peers/self/title: claim.
+func (m *Module) handleClaimTitle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if !requireAdmin(w, r) {
 		return
 	}
-	var req ipeers.ClaimLabelRequest
+	var req ipeers.ClaimTitleRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrBadRequest, Detail: "invalid JSON body"})
 		return
 	}
-	writeSelfResult(w, m.claim(req.OriginInbox, req.Label))
+	writeSelfResult(w, m.claim(req.OriginInbox, req.Title))
 }
 
-// handleReleaseLabel serves DELETE /api/peers/self/label: release.
-func (m *Module) handleReleaseLabel(w http.ResponseWriter, r *http.Request) {
+// handleReleaseTitle serves DELETE /api/peers/self/title: release.
+func (m *Module) handleReleaseTitle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if !requireAdmin(w, r) {
 		return

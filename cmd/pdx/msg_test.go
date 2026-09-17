@@ -978,7 +978,7 @@ func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
 	}
 }
 
-// --- name: PUT/DELETE /api/peers/self/label ---------------------------------
+// --- name: PUT/DELETE /api/peers/self/title ---------------------------------
 
 // TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress pins the success line
 // (spec 7): it names the title that was set AND the address, which did not
@@ -987,9 +987,9 @@ func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
 // is cheapest to refuse.
 func TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req ipeers.ClaimLabelRequest
+		var req ipeers.ClaimTitleRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/label" || req.Label != "purdex-tester" || req.OriginInbox != "/tmp/x.sock" {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/title" || req.Title != "purdex-tester" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
@@ -1024,9 +1024,9 @@ func TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress(t *testing.T) {
 // an enforced rule again.
 func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req ipeers.ClaimLabelRequest
+		var req ipeers.ClaimTitleRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/label" || req.Label != "purdex-tester" {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/peers/self/title" || req.Title != "purdex-tester" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{
@@ -1088,7 +1088,7 @@ func TestRunMsgName_Release_UsesDelete(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ipeers.SelfRequest
 		json.NewDecoder(r.Body).Decode(&req)
-		if r.Method != http.MethodDelete || r.URL.Path != "/api/peers/self/label" || req.OriginInbox != "/tmp/x.sock" {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/peers/self/title" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/_3k9f2mq4:purdex-3f", Ref: "_3k9f2mq4", TitleRev: 2, Host: "air", HostID: "air:1"}})

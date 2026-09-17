@@ -137,12 +137,12 @@ func (f *titleFixture) self(req ipeers.SelfRequest) (int, []byte) {
 
 func (f *titleFixture) claim(inbox, title string) (int, []byte) {
 	f.t.Helper()
-	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodPut, "/api/peers/self/label", ipeers.ClaimLabelRequest{OriginInbox: inbox, Label: title})
+	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodPut, "/api/peers/self/title", ipeers.ClaimTitleRequest{OriginInbox: inbox, Title: title})
 }
 
 func (f *titleFixture) release(inbox string) (int, []byte) {
 	f.t.Helper()
-	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodDelete, "/api/peers/self/label", ipeers.SelfRequest{OriginInbox: inbox})
+	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodDelete, "/api/peers/self/title", ipeers.SelfRequest{OriginInbox: inbox})
 }
 
 // assertAPIError requires status == wantStatus and decodes body as an
@@ -237,11 +237,10 @@ func TestClaim_Matrix(t *testing.T) {
 	// What the v4 title grammar still refuses: empty, over 64 BYTES, and
 	// any control character — a title is printed into a terminal table and
 	// into peer warnings, so an escape in one rewrites somebody else's
-	// screen. The wire code stays ErrCodeLabelInvalid because the route it
-	// answers is still /api/peers/self/label (spec §6).
+	// screen.
 	for _, bad := range []string{"", strings.Repeat("a", 65), "has\ttab", "esc\x1b[31m"} {
 		status, body := f.claim(f.inbox(20), bad)
-		f.assertAPIError(status, body, 400, ipeers.ErrCodeLabelInvalid)
+		f.assertAPIError(status, body, 400, ipeers.ErrCodeTitleInvalid)
 	}
 	// What v2 refused and v4 accepts. A title reaches nothing — Resolve
 	// never consults one — so "cc" and "tmux" have nothing left to shadow,
@@ -533,7 +532,7 @@ func TestClaim_ConcurrentSameLabel_BothSucceed(t *testing.T) {
 
 func TestSelfRoutes_DenyHostPrincipal(t *testing.T) {
 	for _, c := range []struct{ method, path string }{
-		{"POST", "/api/peers/self"}, {"PUT", "/api/peers/self/label"}, {"DELETE", "/api/peers/self/label"},
+		{"POST", "/api/peers/self"}, {"PUT", "/api/peers/self/title"}, {"DELETE", "/api/peers/self/title"},
 	} {
 		r := httptest.NewRequest(c.method, c.path, nil)
 		if HostRoutePolicy(r) {
@@ -545,6 +544,33 @@ func TestSelfRoutes_DenyHostPrincipal(t *testing.T) {
 	status, _ := f.doAs(middleware.Principal{Kind: middleware.PrincipalHost, Alias: "x", HostID: "x:1"}, "POST", "/api/peers/self", ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	if status != 403 {
 		t.Errorf("host principal got %d", status)
+	}
+}
+
+// TestSelfRoutes_TitlePathReplacesLabelPath pins the one thing a rename can
+// silently get wrong: the mux is the only place the path string is spelled,
+// so a claim that answers on /title proves nothing unless /label is also
+// shown to be gone. Both ends of this route ship together — only this
+// repo's `pdx` CLI calls it, never the SPA — so the old path is expected to
+// vanish rather than linger as an alias, and that is what is asserted here.
+func TestSelfRoutes_TitlePathReplacesLabelPath(t *testing.T) {
+	f := newTitleFixture(t)
+	admin := middleware.Principal{Kind: middleware.PrincipalAdmin}
+
+	status, body := f.doAs(admin, http.MethodPut, "/api/peers/self/title", ipeers.ClaimTitleRequest{OriginInbox: f.inbox(20), Title: "Purdex Tester 01"})
+	if rec := decodeRecord(t, status, body); rec.Title != "Purdex Tester 01" {
+		t.Errorf("claim on /title: title = %q, want %q", rec.Title, "Purdex Tester 01")
+	}
+	status, body = f.doAs(admin, http.MethodDelete, "/api/peers/self/title", ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	if rec := decodeRecord(t, status, body); rec.Title != "" {
+		t.Errorf("release on /title: title = %q, want empty", rec.Title)
+	}
+
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		status, body := f.doAs(admin, method, "/api/peers/self/label", ipeers.ClaimTitleRequest{OriginInbox: f.inbox(20), Title: "Purdex Tester 01"})
+		if status != http.StatusNotFound {
+			t.Errorf("%s /api/peers/self/label = %d, want 404; body=%s", method, status, body)
+		}
 	}
 }
 

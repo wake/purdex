@@ -651,7 +651,7 @@ func msgOnOff(b bool) string {
 	return "off"
 }
 
-// --- name: PUT/DELETE /api/peers/self/label ---------------------------------
+// --- name: PUT/DELETE /api/peers/self/title ---------------------------------
 // --- whoami: POST /api/peers/self --------------------------------------------
 //
 // Both verbs attribute the caller to a live registry entry via
@@ -804,8 +804,8 @@ func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, 
 }
 
 // runMsgName implements `pdx msg name <title> | --release [--json]
-// [--config <path>]`: PUT /api/peers/self/label to claim inv.title, or
-// DELETE /api/peers/self/label (inv.release) to clear the caller's title.
+// [--config <path>]`: PUT /api/peers/self/title to claim inv.title, or
+// DELETE /api/peers/self/title (inv.release) to clear the caller's title.
 // Neither moves the caller's address, and both success lines say so.
 func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int {
 	originInbox, ok := msgOriginInbox(getenv, stderr)
@@ -821,14 +821,14 @@ func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		reqBody, err = json.Marshal(ipeers.SelfRequest{OriginInbox: originInbox})
 	} else {
 		method = http.MethodPut
-		reqBody, err = json.Marshal(ipeers.ClaimLabelRequest{OriginInbox: originInbox, Label: inv.title})
+		reqBody, err = json.Marshal(ipeers.ClaimTitleRequest{OriginInbox: originInbox, Title: inv.title})
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
 		return 1
 	}
 
-	rec, exit, done := doSelfRequest(method, "/api/peers/self/label", reqBody, inv, stdout, stderr)
+	rec, exit, done := doSelfRequest(method, "/api/peers/self/title", reqBody, inv, stdout, stderr)
 	if done {
 		return exit
 	}

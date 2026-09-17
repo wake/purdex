@@ -353,7 +353,15 @@ one can route on — the confusion v3 removed, and the one v4 must not reintrodu
 | reserved words | `cc`, `tmux` | **dropped** — a title reaches nothing, so nothing can be shadowed |
 | collision compare | exact | normalized: casefold + collapse whitespace runs |
 | warning | `label_in_use` + `live_labels` | `title_in_use` + `live_titles`, behaviour unchanged |
+| route | `PUT`/`DELETE /api/peers/self/label`, body `{label}` | `…/self/title`, body `{title}`; refusals `label_invalid`/`label_reserved` → `title_*` |
 | store | `peer_labels` table | unchanged on disk; Go symbols renamed |
+
+**The route is renamed with everything else, without a compatibility alias.** Its only caller is
+this repo's own `pdx` CLI against the local daemon — the SPA never touches it — and the §5 ref-width
+change already forces both ends to be rebuilt together, so there is no window in which an old client
+meets a new daemon. Leaving `/label` behind would have been the more expensive choice: a request
+field named `label` carrying a title, beside a response field named `title`, is exactly the reading
+this phase exists to remove.
 
 **The schema needs no change.** v3 already removed the `UNIQUE` constraint and the evicting
 `DELETE` — `meta.go:117` records why, and `Claim` (`peer_label.go:63`) is a plain upsert. This phase
