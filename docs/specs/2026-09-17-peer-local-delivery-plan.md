@@ -31,7 +31,7 @@ Referred to by id everywhere below, so "re-run the mutations" means something ch
 | **M2** | A2 | set `Wrapper.From` to a helper socket | the wrapper-attribute assertion |
 | **M3** | A4 | move the pair-limit check above the audit insert | "the rate-limited refusal is audited" |
 | **M4** | B1 | delete the `HasSuffix` arm of `addressWithRef` | the ref-form render case |
-| **M5** | B2 | drop `Ref: c.Ref` from the candidate **population** (`send.go:335`) — keep the struct field | the same-name e2e, on the two refs differing |
+| **M5** | B2 | drop `Ref: c.Ref` from the candidate **population** (`send.go:373`, moved by A1–A4 — locate it by `grep -n 'AmbiguousCandidate{'` rather than by line) — keep the struct field | the same-name e2e, on the two refs differing |
 
 **M1 and M2 must fail independently.** If one assertion covers both, you have written one test for two fields.
 
@@ -49,7 +49,7 @@ Referred to by id everywhere below, so "re-run the mutations" means something ch
 | `SendRequest` | `internal/peers/wire.go:280` | `To`, `Text`, `Mode`, `OriginInbox` — **no `MsgID`, no `HopChain`** |
 | `SendResponse` | `internal/peers/wire.go:288` | `MsgID`, `ToHostID`, `ToAddress`, `To`, `Result`, `EffectiveMode`, `OneWay` |
 | `AmbiguousError` | `internal/peers/address.go:77` | `{Session string; Candidates []PeerRecord}` — `PeerRecord.Ref` exists, so `c.Ref` is available |
-| `AmbiguousCandidate` | `internal/peers/wire.go:357` | `Address`, `AgentName`, `PID`, `Cwd` — no `Ref` |
+| `AmbiguousCandidate` |  `internal/peers/wire.go:373` | `Address`, `AgentName`, `PID`, `Cwd` — no `Ref` |
 | `displayAddress` | `cmd/pdx/peers.go:583` | omits bracket when `Ref == "" \|\| strings.HasSuffix(Address, "/"+Ref)` |
 | `msgCandidateLine` | `cmd/pdx/msg.go:428` | prints address + agent/pid/cwd; no ref |
 | `m.localEnvelope` | called at `send.go:270` | already built at step 4 to attribute the origin |
@@ -194,7 +194,7 @@ Runs **after A4**, not alongside it: B1 edits `internal/peers/wire.go` and `inte
 
 - [ ] **Red.** `cmd/pdx`: a candidate with a ref renders `<address> [<ref>]`; one without renders the bare address; **one whose address already ends in its ref renders no bracket** — that is the second arm of `displayAddress` and the case a restated rule gets wrong.
 - [ ] **Red.** `displayAddress` and the candidate renderer return the same string for the same `(address, ref)` input across all three cases.
-- [ ] **Green.** Add `Ref string \`json:"ref,omitempty"\`` to `AmbiguousCandidate` (`internal/peers/wire.go:357`), populated `Ref: c.Ref` where the candidate is built (`send.go:335`).
+- [ ] **Green.** Add `Ref string \`json:"ref,omitempty"\`` to `AmbiguousCandidate` (`internal/peers/wire.go:373`), populated `Ref: c.Ref` where the candidate is built (`send.go:373`, moved by A1–A4 — locate it by `grep -n 'AmbiguousCandidate{'` rather than by line).
 - [ ] **Green.** Extract `addressWithRef(address, ref string) string` with **both** arms (spec §5.2). Make `displayAddress` a one-line caller. Use it in `msgCandidateLine`.
 - [ ] **Mutation M4.** Delete the `HasSuffix` arm from `addressWithRef` — a test must go red on `mlab/_h0h3ln [h0h3ln]`. Revert.
 - [ ] `go test -race -count=1 ./internal/peers/... ./internal/module/peers/... ./cmd/pdx/...`
@@ -213,7 +213,7 @@ Needs A2 and B1. This is v4 §9.7 written as an automated test, because §9.7 wa
   1. the bare name is refused `ambiguous`;
   2. the refusal carries two candidates with **identical addresses** and **different refs**;
   3. each ref, sent as `<host>/_<ref>`, delivers to its own row and not the other.
-- [ ] **Mutation M5 — mutate the population, not the struct.** Remove `Ref: c.Ref` from where the candidate is built (`send.go:335`), leaving `AmbiguousCandidate.Ref` in place. Deleting the field instead would be a **compile error**, and a compile error proves nothing about whether the refusal is usable — it is the "it went red, so it must be covered" trap. This test must fail on step 2's *two refs differing*, with everything still compiling. Revert.
+- [ ] **Mutation M5 — mutate the population, not the struct.** Remove `Ref: c.Ref` from where the candidate is built (`send.go:373`, moved by A1–A4 — locate it by `grep -n 'AmbiguousCandidate{'` rather than by line), leaving `AmbiguousCandidate.Ref` in place. Deleting the field instead would be a **compile error**, and a compile error proves nothing about whether the refusal is usable — it is the "it went red, so it must be covered" trap. This test must fail on step 2's *two refs differing*, with everything still compiling. Revert.
 - [ ] Do not modify the `twin-1`/`twin-2` test. It covers something still true.
 - [ ] `go test -race -count=1 ./internal/module/peers/...`
 - [ ] Commit: `git commit --only internal/module/peers/e2e_test.go -m "test(peers): two conversations sharing a name are told apart by ref"`

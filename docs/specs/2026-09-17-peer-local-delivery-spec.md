@@ -286,7 +286,7 @@ needed in v4.
 
 ### 5.1 The defect
 
-`AmbiguousCandidate` (`internal/peers/wire.go:357`) carries `Address`, `AgentName`, `PID`, `Cwd` —
+`AmbiguousCandidate` (`internal/peers/wire.go:373`) carries `Address`, `AgentName`, `PID`, `Cwd` —
 and no ref.
 
 Under v4 that is not a gap in detail, it is a refusal that cannot be acted on. Two live conversations
@@ -323,7 +323,7 @@ type AmbiguousCandidate struct {
 }
 ```
 
-Populated from `c.Ref` where the candidate is built (`send.go:335`), and rendered by
+Populated from `c.Ref` where the candidate is built (`send.go:373`, moved by A1–A4 — locate it by `grep -n 'AmbiguousCandidate{'` rather than by line), and rendered by
 `msgCandidateLine` (`cmd/pdx/msg.go:428`) in the bracket form the address grammar already accepts, so
 the line can be copied whole:
 
