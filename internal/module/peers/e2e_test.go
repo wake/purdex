@@ -1235,6 +1235,127 @@ func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 	b.stop()
 }
 
+// TestE2E_LocalSameNameToldApartByRef is spec §6.2: v4 §9.7 written as an
+// automated test, because §9.7 was the acceptance item that got skipped and
+// it took a real defect with it (spec §5.1).
+//
+// It is the exact OPPOSITE fixture to TestE2E_LabelAmbiguityUnderUnknownFile
+// above, which is why that one covers nothing of this. The twins there are
+// two processes of ONE conversation: two registry names, hence two addresses,
+// hence self-distinguishing under v4 — the ambiguity that does not need refs.
+// Here there are TWO conversations that happen to share one registry name:
+// one address, two refs. Their refusal lists two rows with identical
+// addresses, so the ref is the only thing in it an operator can act on, and a
+// refusal nobody can act on has told them nothing.
+//
+// The target is on the SENDER's own host, so this also drives L1's local
+// branch end to end: one daemon, no HTTP hop, the frame written straight to
+// the target conversation's own inbox.
+func TestE2E_LocalSameNameToldApartByRef(t *testing.T) {
+	sockDir, regDir := proxyhelpertest.TempDirs(t)
+	root := filepath.Dir(regDir)
+	originSock := filepath.Join(root, "origin.sock")
+	origin := startFakeInbox(t, originSock)
+	writeRegistryFixture(t, regDir, strconv.Itoa(e2eOriginPID)+".json", e2eRegistryJSON(e2eOriginPID, e2eOriginSID, e2eOriginName, "mt1:@1.%1", originSock))
+	live := &e2eLiveness{}
+
+	// One daemon only. The peer entry is configured because a daemon has
+	// one, and is never reached: a local send takes no HTTP hop at all.
+	a := newE2EDaemon(t, e2eDaemonOpts{
+		hostID: e2eHostA, alias: "a", admin: e2eAdminA,
+		peer:     config.PeerHost{Alias: "b", HostID: e2eHostB, Token: e2eTokenAtoB, InboundToken: e2eTokenBtoA},
+		sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}},
+		owners:   map[string]agent.PaneOwner{"mt1code": {AgentType: "cc", SessionID: e2eOriginSID, TmuxPaneID: "%1"}},
+		sockDir:  sockDir, regDir: regDir, live: live,
+	})
+
+	// ---- 1. Two conversations sharing one registry name, on A itself. ----
+	const (
+		dupeName = "purdex-dd"
+		dupeSID1 = "dddddddd-1111-4111-8111-aaaaaaaaaaaa"
+		dupeSID2 = "dddddddd-2222-4222-8222-bbbbbbbbbbbb"
+
+		dupePID1 = 41011
+		dupePID2 = 41012
+	)
+	dupe1Sock := filepath.Join(root, "dupe1.sock")
+	dupe2Sock := filepath.Join(root, "dupe2.sock")
+	dupe1 := startFakeInbox(t, dupe1Sock)
+	dupe2 := startFakeInbox(t, dupe2Sock)
+	writeRegistryFixture(t, regDir, strconv.Itoa(dupePID1)+".json", e2eRegistryJSON(dupePID1, dupeSID1, dupeName, "", dupe1Sock))
+	writeRegistryFixture(t, regDir, strconv.Itoa(dupePID2)+".json", e2eRegistryJSON(dupePID2, dupeSID2, dupeName, "", dupe2Sock))
+
+	// Two sessionIds, hence two refs: the ref is a pure function of the
+	// sessionId, so the fixture asserts they differ rather than assuming it.
+	ref1, ref2 := ipeers.RefID(dupeSID1), ipeers.RefID(dupeSID2)
+	if ref1 == ref2 {
+		t.Fatalf("fixture: both sessionIds derive the ref %q; choose two that do not collide", ref1)
+	}
+	inboxByRef := map[string]*fakeInbox{ref1: dupe1, ref2: dupe2}
+	otherByRef := map[string]*fakeInbox{ref1: dupe2, ref2: dupe1}
+
+	wantAddress := a.alias + "/" + dupeName
+	env := a.peers()
+	if env.Partial || len(env.UnknownRegistryFiles) != 0 {
+		t.Fatalf("step 1: A's inventory partial=%v unknown=%v, want complete", env.Partial, env.UnknownRegistryFiles)
+	}
+	for ref, sock := range map[string]string{ref1: dupe1Sock, ref2: dupe2Sock} {
+		if rec := a.peerByInbox(env, sock); rec.Address != wantAddress || rec.Ref != ref || rec.RowKind != "entry" {
+			t.Fatalf("step 1: row for %s = %+v, want entry row %q with ref %q", filepath.Base(sock), rec, wantAddress, ref)
+		}
+	}
+
+	// ---- 2. The bare name is refused, and the refusal must be ACTIONABLE. ----
+	st, raw := a.send(ipeers.SendRequest{To: wantAddress, Text: "which of you?", OriginInbox: originSock})
+	ae := a.assertAPIError(st, raw, http.StatusConflict, ipeers.ErrAmbiguous, "two conversations, one name")
+	if len(ae.Candidates) != 2 {
+		t.Fatalf("step 2: candidates = %+v, want 2", ae.Candidates)
+	}
+	for i, c := range ae.Candidates {
+		if c.Address != wantAddress {
+			t.Errorf("step 2: candidate %d address = %q, want %q — the two SHARE an address, which is this test's premise", i, c.Address, wantAddress)
+		}
+	}
+	// Identical addresses mean everything rests on the refs: pid and cwd are
+	// not address forms, so without two different refs the operator is shown
+	// two rows and can reach neither (spec §5.1).
+	if ae.Candidates[0].Ref == ae.Candidates[1].Ref {
+		t.Fatalf("step 2: both candidates carry ref %q, so the refusal names two rows and lets the operator address neither; want two refs differing", ae.Candidates[0].Ref)
+	}
+	if named := map[string]bool{ae.Candidates[0].Ref: true, ae.Candidates[1].Ref: true}; !named[ref1] || !named[ref2] {
+		t.Fatalf("step 2: candidate refs = %q/%q, want the two conversations' own %q and %q", ae.Candidates[0].Ref, ae.Candidates[1].Ref, ref1, ref2)
+	}
+	dupe1.none("step 2: an ambiguous address delivers to neither")
+	dupe2.none("step 2: an ambiguous address delivers to neither")
+
+	// ---- 3. Each ref, taken from the refusal itself, reaches ITS OWN row
+	// and not the other. This is what makes the refusal actionable rather
+	// than merely informative: the addresses sent here are the strings the
+	// refusal handed back, not strings the test made up. ----
+	for _, c := range ae.Candidates {
+		own, ok := inboxByRef[c.Ref]
+		if !ok {
+			t.Fatalf("step 3: the refusal named ref %q, which belongs to neither conversation", c.Ref)
+		}
+		text := "for " + c.Ref
+		resp := a.sendOK(ipeers.SendRequest{To: a.alias + "/" + c.Ref, Text: text, OriginInbox: originSock})
+		if resp.Result != ipeers.ResultDelivered {
+			t.Fatalf("step 3: %s: result = %q, want %q", c.Ref, resp.Result, ipeers.ResultDelivered)
+		}
+		w, _ := wrapperOf(t, own.recv("step 3: "+c.Ref))
+		if w.Text != text {
+			t.Errorf("step 3: %s: delivered text = %q, want %q", c.Ref, w.Text, text)
+		}
+		own.none("step 3: " + c.Ref + " delivered exactly once")
+		otherByRef[c.Ref].none("step 3: " + c.Ref + " must not reach the other conversation")
+	}
+
+	origin.close()
+	dupe1.close()
+	dupe2.close()
+	a.stop()
+}
+
 // helperRegistryName reads the "name" field of a helper's own registry
 // entry — the ground truth ApplyAddress/RewriteRegistryName write to,
 // independent of the in-memory helperManager state Name() reports.
