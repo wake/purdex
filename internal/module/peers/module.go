@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -571,36 +570,77 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 
 // normalizeRemoteRows rewrites every row of a remote host's fan-out
 // response into this host's local view: Host becomes alias (how WE have
-// the peer configured, never the remote's own self-reported value), and
-// HostID becomes hostID (the caller's already-verified/bounded value for
-// this host). Address is rebuilt as "<alias>/<session>", where <session>
-// is everything after the remote's own first "/" (a "cc:" address's colon
-// survives intact); a remote address with no "/" at all (malformed) keeps
-// the whole original address as the session part instead. If the rebuilt
-// address still doesn't parse as a valid "<host>/<session>" pair
-// (ipeers.SplitAddress) — e.g. an empty session part, or a session part
-// that itself contains another "/" — Address is blanked rather than left
-// as an unusable value; Host and HostID stay set. Exported at the package
-// level (not a method) so P3 can reuse it as-is.
+// the peer configured, never the remote's own self-reported value), HostID
+// becomes hostID (the caller's already-verified/bounded value for this
+// host), and Address is RECOMPUTED by remoteAddress from the row's own
+// fields. Exported at the package level (not a method) so P3 can reuse it
+// as-is.
+//
+// It recomputes rather than adjusts because a paired peer is
+// attacker-controlled — the same assumption fetchHostResult already makes
+// about its error text and its host_id. The previous version kept everything
+// after the remote's first "/" and re-prefixed the local alias, so the remote
+// chose what this host printed in its ADDRESS column: publishing peer_name
+// "trusted:ops" with address "air/trusted:ops" got `pdx peers --all` to render
+// "air/trusted:ops [q34psn]", a pasteable address for a name spec §5.2 says
+// can never be one.
 func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeers.PeerRecord {
 	out := make([]ipeers.PeerRecord, len(rows))
 	for i, rec := range rows {
 		rec.Host = alias
 		rec.HostID = hostID
-
-		session := rec.Address
-		if idx := strings.IndexByte(rec.Address, '/'); idx >= 0 {
-			session = rec.Address[idx+1:]
-		}
-		rec.Address = alias + "/" + session
-
-		if _, _, ok := ipeers.SplitAddress(rec.Address); !ok {
-			rec.Address = ""
-		}
-
+		rec.Address = remoteAddress(rec, alias)
 		out[i] = rec
 	}
 	return out
+}
+
+// remoteAddress derives the address this host will print for one remote row,
+// from that row's own fields and in the same order applyIdentity uses for a
+// local one: a live cc entry with a routable name, else that entry's ref, else
+// the tmux form of a session this host can actually address.
+//
+// The remote's own Address is not read at all, by design: it is the one field
+// whose body carried whatever the remote wanted rendered, and a rule that
+// consults it — even only for its shape — is a rule a reader has to check the
+// remote against. Every input below is still the remote's, but each is put
+// through the grammar this host routes by, so whatever is printed is a form
+// Resolve can be handed back and will land on this very row.
+//
+// A row yielding none of the three forms gets "" rather than an unusable
+// value, exactly as a rebuilt address that failed SplitAddress used to.
+// A proxy row is one of those: its local "<host>/cc:<name>" form is retired
+// and unresolvable, so reproducing it here would only put a remote-chosen
+// string in the address column.
+func remoteAddress(rec ipeers.PeerRecord, alias string) string {
+	var session string
+	switch {
+	// hasLiveEntry's condition, spelled out: Resolve's name and ref tiers
+	// decide only on rows carrying a real live cc registry entry, so only
+	// those two forms may be printed for one.
+	case rec.Agent != nil && rec.Agent.Type == "cc" && rec.Agent.PID != 0:
+		switch {
+		case ipeers.RoutableName(rec.Agent.PeerName):
+			session = rec.Agent.PeerName
+		case ipeers.IsRef(rec.Ref):
+			session = rec.Ref
+		}
+	// Any other row: the tmux form, which names a place rather than a
+	// conversation and is matched on SessionName — the same field printed
+	// here, so the address resolves back to this row.
+	case rec.SessionName != "":
+		session = ipeers.LabelReservedTmux + ":" + rec.SessionName
+	}
+	if session == "" {
+		return ""
+	}
+	addr := alias + "/" + session
+	// The backstop the rebuild always had: a value that cannot be split back
+	// into a host and a session is not an address, whatever produced it.
+	if _, _, ok := ipeers.SplitAddress(addr); !ok {
+		return ""
+	}
+	return addr
 }
 
 // fetchHostResult fetches one configured peer host's inventory for a

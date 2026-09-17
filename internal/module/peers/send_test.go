@@ -706,11 +706,14 @@ func TestSend_Ambiguous(t *testing.T) {
 	a.Title, b.Title = "purdex-tester", "purdex-tester-2"
 	// What the operator needs in order to tell the two apart, and what the
 	// refusal must therefore carry (spec §4.1/§6.4): agent name, pid, cwd.
-	// The address is exactly the thing that cannot do it — they share it.
+	// The REF is the thing that cannot do it — they share it, which is what
+	// made the send ambiguous.
 	a.Agent.PeerName, b.Agent.PeerName = "twin-1", "twin-2"
 	a.Cwd, b.Cwd = "/w/one", "/w/two"
-	// The remote claims another alias in its addresses: candidates must
-	// come back normalised to the entry's alias.
+	// The remote claims another alias, and the shared ref, in both addresses.
+	// Neither survives: normalizeRemoteRows derives each row's address from
+	// its own fields under the entry's alias, so the two processes come back
+	// separately addressable by name even though the ref they share is not.
 	a.Address, b.Address = "zzz/"+canonical, "zzz/"+canonical
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(a, b) })
 	req := s.sendReq()
@@ -718,8 +721,8 @@ func TestSend_Ambiguous(t *testing.T) {
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrAmbiguous)
 	want := []ipeers.AmbiguousCandidate{
-		{Address: remoteAlias + "/" + canonical, AgentName: "twin-1", PID: remotePID, Cwd: "/w/one"},
-		{Address: remoteAlias + "/" + canonical, AgentName: "twin-2", PID: 778, Cwd: "/w/two"},
+		{Address: remoteAlias + "/twin-1", AgentName: "twin-1", PID: remotePID, Cwd: "/w/one"},
+		{Address: remoteAlias + "/twin-2", AgentName: "twin-2", PID: 778, Cwd: "/w/two"},
 	}
 	if !reflect.DeepEqual(ae.Candidates, want) {
 		t.Errorf("candidates = %+v, want %+v", ae.Candidates, want)

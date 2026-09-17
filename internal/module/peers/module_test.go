@@ -1128,72 +1128,91 @@ func TestHandlePeers_ScopeAll_NoOutboundToken(t *testing.T) {
 	}
 }
 
-// TestNormalizeRemoteRows pins Item 2: every row of a remote host's
-// fan-out response must be rewritten into this host's local view — Host
-// becomes the configured alias, HostID becomes the caller-supplied
-// (verified/bounded) value, and Address is rebuilt as "<alias>/<session>"
-// where <session> is everything after the remote's own first "/" (a "cc:"
-// address's colon survives intact). A remote address with no "/" at all
-// (malformed) keeps the whole original as the session part. A rebuilt
-// address that still doesn't parse as a valid "<host>/<session>" pair
-// (ipeers.SplitAddress) — an empty session part, or a session part that
-// itself contains another "/" — is blanked rather than left unusable;
-// Host and HostID stay set.
+// TestNormalizeRemoteRows pins Item 2 at its v4 width: every row of a remote
+// host's fan-out response is rewritten into this host's local view — Host
+// becomes the configured alias, HostID the caller-supplied (verified/bounded)
+// value, and Address is RECOMPUTED from the row's own validated fields in the
+// same order applyIdentity uses locally.
+//
+// The remote's own address body is not read at all. It used to be: everything
+// after the first "/" was kept and re-prefixed with the local alias, so a
+// paired peer — which the module's own comments call attacker-controlled —
+// chose what this host printed in its ADDRESS column.
+//
+// A row that yields none of the three forms is blanked rather than left
+// holding an unusable value; Host and HostID stay set either way.
 func TestNormalizeRemoteRows(t *testing.T) {
+	liveCC := func(name string) *ipeers.AgentInfo {
+		return &ipeers.AgentInfo{Type: "cc", PID: 4242, PeerName: name, SessionID: "sid", Version: "2.1"}
+	}
 	cases := []struct {
 		name     string
-		address  string
+		row      ipeers.PeerRecord
 		alias    string
 		hostID   string
 		wantAddr string
 	}{
 		{
-			name:     "tmux session address rewritten under the local alias",
-			address:  "laptop/mt1",
+			name:     "a live cc row with a routable name takes the name form",
+			row:      ipeers.PeerRecord{Address: "laptop/purdex-b0", Ref: "_q34psn", Agent: liveCC("purdex-b0")},
 			alias:    "air",
 			hostID:   "air:111",
-			wantAddr: "air/mt1",
+			wantAddr: "air/purdex-b0",
 		},
 		{
-			name:     "cc: address keeps its colon form intact",
-			address:  "laptop/cc:name",
+			name:     "a live cc row whose name is unroutable falls back to its ref",
+			row:      ipeers.PeerRecord{Address: "laptop/trusted:ops", Ref: "_q34psn", Agent: liveCC("trusted:ops")},
 			alias:    "air",
 			hostID:   "air:111",
-			wantAddr: "air/cc:name",
+			wantAddr: "air/_q34psn",
+		},
+		{
+			name:     "a session row with no live cc agent takes the tmux form from SessionName",
+			row:      ipeers.PeerRecord{Address: "laptop/tmux:mt1", RowKind: "session", SessionName: "mt1"},
+			alias:    "air",
+			hostID:   "air:111",
+			wantAddr: "air/tmux:mt1",
 		},
 		{
 			name:     "remote alias equal to the local alias still maps to h.Alias",
-			address:  "mlab/mt1",
+			row:      ipeers.PeerRecord{Address: "mlab/tmux:mt1", RowKind: "session", SessionName: "mt1"},
 			alias:    "mlab",
 			hostID:   "mlab-remote:1",
-			wantAddr: "mlab/mt1",
+			wantAddr: "mlab/tmux:mt1",
 		},
 		{
-			name:     "malformed address without a slash keeps the original as the session part",
-			address:  "malformed",
+			name:     "a proxy row yields no form and is blanked",
+			row:      ipeers.PeerRecord{Address: "laptop/cc:helper-1", RowKind: "entry", Agent: &ipeers.AgentInfo{Type: "proxy", PID: 9}},
 			alias:    "air",
 			hostID:   "air:111",
-			wantAddr: "air/malformed",
+			wantAddr: "",
 		},
 		{
-			name:     "rebuilt address whose session part contains another slash is blanked",
-			address:  "other/cc:a/foo",
+			name:     "an owner-fallback row with no name and no valid ref is blanked",
+			row:      ipeers.PeerRecord{Address: "laptop/_q34psn", Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "sid"}},
+			alias:    "air",
+			hostID:   "air:111",
+			wantAddr: "",
+		},
+		{
+			name:     "a tmux name carrying a slash cannot parse and is blanked",
+			row:      ipeers.PeerRecord{Address: "laptop/tmux:a-b", RowKind: "session", SessionName: "a/b"},
 			alias:    "b",
 			hostID:   "b:1",
 			wantAddr: "",
 		},
 		{
-			name:     "rebuilt address with an empty session part is blanked",
-			address:  "other/",
-			alias:    "b",
-			hostID:   "b:1",
+			name:     "a row with nothing to derive from is blanked",
+			row:      ipeers.PeerRecord{Address: "malformed"},
+			alias:    "air",
+			hostID:   "air:111",
 			wantAddr: "",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeRemoteRows([]ipeers.PeerRecord{{Address: tc.address}}, tc.alias, tc.hostID)
+			got := normalizeRemoteRows([]ipeers.PeerRecord{tc.row}, tc.alias, tc.hostID)
 			if len(got) != 1 {
 				t.Fatalf("len = %d, want 1", len(got))
 			}
@@ -1207,6 +1226,63 @@ func TestNormalizeRemoteRows(t *testing.T) {
 				t.Errorf("Address = %q, want %q", got[0].Address, tc.wantAddr)
 			}
 		})
+	}
+}
+
+// TestNormalizeRemoteRows_HostileEnvelope is the security property behind the
+// recompute: a paired peer is attacker-controlled (this module's own comments
+// say so about its error text and its host_id), so the string this host prints
+// in its ADDRESS column must be one this host derived, not one the remote
+// chose.
+//
+// The attack the old code allowed: publish peer_name "trusted:ops" and address
+// "air/trusted:ops", and `pdx peers --all` renders "air/trusted:ops [q34psn]"
+// — a pasteable address for a name §5.2 says can never be one. Every name
+// below is unroutable, so every row must come back addressed by its ref, and
+// the offered name must appear in no address at all.
+func TestNormalizeRemoteRows_HostileEnvelope(t *testing.T) {
+	for _, name := range []string{
+		"trusted:ops",     // the address grammar's own separator
+		"trusted ops",     // a space: the combined form splits on it
+		"trusted[q34psn]", // brackets: it would forge the combined form
+		"trusted\x07ops",  // a control character
+		"q34psn",          // ref-shaped: it would shadow another row's ref
+		"has/slash",       // a second '/': it would not even parse
+		"",                // no name offered at all
+	} {
+		row := ipeers.PeerRecord{
+			Host: "laptop", HostID: "laptop:1",
+			Address: "laptop/" + name, RowKind: "entry", SessionName: name,
+			Ref:   "_q34psn",
+			Agent: &ipeers.AgentInfo{Type: "cc", PID: 7, PeerName: name, SessionID: "sid"},
+		}
+		got := normalizeRemoteRows([]ipeers.PeerRecord{row}, "air", "air:111")[0]
+		if got.Address != "air/_q34psn" {
+			t.Errorf("peer_name %q: Address = %q, want air/_q34psn", name, got.Address)
+		}
+		if got.Address == "air/"+name {
+			t.Errorf("peer_name %q: the remote's name became the address %q", name, got.Address)
+		}
+		// The name itself is still carried, for the NAME column to show
+		// (sanitized there). Refusing to route on it is the whole fix; hiding
+		// it would only make the row unidentifiable.
+		if got.Agent.PeerName != name {
+			t.Errorf("peer_name %q: dropped from the row (%q)", name, got.Agent.PeerName)
+		}
+	}
+}
+
+// A remote that offers a ref of its own invention gets no address from it
+// either: a ref is validated by grammar before it is printed as one.
+func TestNormalizeRemoteRows_RefMustBeWellFormed(t *testing.T) {
+	for _, ref := range []string{"q34psn", "_TOOLONG", "_q34ps", "_q34psn:x", "_q3/psn", "notaref"} {
+		row := ipeers.PeerRecord{
+			Address: "laptop/" + ref, RowKind: "entry", Ref: ref,
+			Agent: &ipeers.AgentInfo{Type: "cc", PID: 7, PeerName: "has/slash", SessionID: "sid"},
+		}
+		if got := normalizeRemoteRows([]ipeers.PeerRecord{row}, "air", "air:111")[0]; got.Address != "" {
+			t.Errorf("ref %q: Address = %q, want it blanked", ref, got.Address)
+		}
 	}
 }
 
@@ -1228,6 +1304,11 @@ func TestNormalizeRemoteRows_NilRowsReturnsNonNilEmpty(t *testing.T) {
 // in: a remote reporting its own alias ("laptop") and host_id must have
 // its rows rewritten under how THIS host has the peer configured ("air"
 // with the verified host_id), not the remote's self-reported values.
+//
+// The two rows are the v4 shapes a real remote emits — a live cc entry with
+// a routable name, and a session row with no agent — because the address is
+// now derived from those fields rather than copied out of what the remote
+// published.
 func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1238,8 +1319,12 @@ func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 			OK:      true,
 			Partial: false,
 			Peers: []ipeers.PeerRecord{
-				{Host: "laptop", HostID: "air:111", Address: "laptop/mt1", SessionCode: "remote-1"},
-				{Host: "laptop", HostID: "air:111", Address: "laptop/cc:foo", SessionCode: "remote-2"},
+				{
+					Host: "laptop", HostID: "air:111", Address: "laptop/purdex-b0", SessionCode: "remote-1",
+					RowKind: "session", SessionName: "mt1", Ref: "_q34psn", Deliverable: true,
+					Agent: &ipeers.AgentInfo{Type: "cc", PID: 4242, PeerName: "purdex-b0", SessionID: "sid-1"},
+				},
+				{Host: "laptop", HostID: "air:111", Address: "laptop/tmux:mt2", SessionCode: "remote-2", RowKind: "session", SessionName: "mt2"},
 			},
 		})
 	}))
@@ -1272,11 +1357,11 @@ func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 	if !row.OK || len(row.Peers) != 2 {
 		t.Fatalf("row = %+v, want ok=true with 2 peers", row)
 	}
-	if row.Peers[0].Host != "air" || row.Peers[0].Address != "air/mt1" {
-		t.Errorf("peers[0] = %+v, want Host=air Address=air/mt1", row.Peers[0])
+	if row.Peers[0].Host != "air" || row.Peers[0].Address != "air/purdex-b0" {
+		t.Errorf("peers[0] = %+v, want Host=air Address=air/purdex-b0", row.Peers[0])
 	}
-	if row.Peers[1].Host != "air" || row.Peers[1].Address != "air/cc:foo" {
-		t.Errorf("peers[1] = %+v, want Host=air Address=air/cc:foo", row.Peers[1])
+	if row.Peers[1].Host != "air" || row.Peers[1].Address != "air/tmux:mt2" {
+		t.Errorf("peers[1] = %+v, want Host=air Address=air/tmux:mt2", row.Peers[1])
 	}
 	if row.Peers[0].HostID != "air:111" || row.Peers[1].HostID != "air:111" {
 		t.Errorf("peers = %+v, want HostID=air:111 on every row", row.Peers)
