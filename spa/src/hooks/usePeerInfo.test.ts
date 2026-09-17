@@ -295,6 +295,34 @@ describe('staleness', () => {
       expect(peerRefresh).not.toHaveBeenCalled()
     })
 
+    // The other door into the same failure: the boundary passed while no pane
+    // of this host was on screen (or the host was down), and a tab is opened
+    // late. There is no timer left to fire, so the mount is the boundary.
+    it('refreshes once on mount when the cached answer is already past the boundary', () => {
+      seedFetched({ fetchedAt: NOW - PEER_STALE_AFTER_MS - 1 })
+      const { rerender } = renderHook(() => usePeerInfo(H, CODE, GEN))
+      expect(peerRefresh).toHaveBeenCalledTimes(1)
+      expect(peerRefresh).toHaveBeenCalledWith(H)
+      for (let i = 0; i < 10; i++) rerender()
+      expect(peerRefresh).toHaveBeenCalledTimes(1)
+    })
+
+    it('refreshes once the host reconnects with an answer already past the boundary, not before', () => {
+      seedFetched({ fetchedAt: NOW - PEER_STALE_AFTER_MS - 1 })
+      setRuntime({ status: 'disconnected' })
+      renderHook(() => usePeerInfo(H, CODE, GEN))
+      expect(peerRefresh).not.toHaveBeenCalled()
+      act(() => { useHostStore.getState().setRuntime(H, { status: 'connected' }) })
+      expect(peerRefresh).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not refresh on mount when the cached answer is still fresh — switching tabs fetches no fresh data', () => {
+      seedFetched({ fetchedAt: NOW - 30_000 })
+      const { rerender } = renderHook(({ code }) => usePeerInfo(H, code, GEN), { initialProps: { code: CODE } })
+      rerender({ code: 'other1' })
+      expect(peerRefresh).not.toHaveBeenCalled()
+    })
+
     it('does not refresh when the pane is no longer active — the hook is handed nulls', () => {
       seedFetched({ fetchedAt: NOW })
       const { rerender } = renderHook(({ host }) => usePeerInfo(host, CODE, GEN), { initialProps: { host: H as string | null } })

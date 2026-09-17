@@ -188,11 +188,21 @@ export function usePeerInfo(hostId: string | null, sessionCode: string | null, t
   // while a FAILED refresh keeps `fetchedAt` (the store's rule), so nothing
   // schedules again and a failing host is asked once, not hammered. A pane
   // that is no longer active is handed a null host and schedules nothing.
+  //
+  // An answer ALREADY past the boundary when this effect runs — a tab opened
+  // late, a host reconnecting after the timer would have fired — has no timer
+  // left to wake on, so the mount (or the reconnect) is its boundary and it is
+  // refreshed right away. This never touches fresh data: switching tabs still
+  // fetches nothing while the host's answer is younger than the boundary.
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (fetchedAt === 0) return
     const remaining = fetchedAt + PEER_STALE_AFTER_MS - Date.now()
-    if (remaining <= 0) return  // already past it; `now` says so without a timer
+    if (remaining <= 0) {
+      // Already past it; `now` says so without a timer.
+      if (hostId && connected) void usePeerStore.getState().refresh(hostId)
+      return
+    }
     const timer = setTimeout(() => {
       setNow(Date.now())
       if (hostId && connected) void usePeerStore.getState().refresh(hostId)
