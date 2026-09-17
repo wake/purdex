@@ -150,7 +150,15 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 			// /private/tmp on macOS), so a string comparison produces false
 			// mismatches — and killing a live session on a false positive is
 			// far worse than the rare race it would guard.
-			if s.Cwd != req.Cwd {
+			//
+			// That same canonicalisation is why the warning is gated on
+			// sameDirectory (os.SameFile) rather than on the string compare
+			// alone: every create through a symlinked path or a /tmp request
+			// comes back spelled differently while being the very same
+			// directory, and warning on those would bury the one case the
+			// warning is for — the requested directory vanished and tmux
+			// silently fell back to $HOME.
+			if s.Cwd != req.Cwd && !sameDirectory(s.Cwd, req.Cwd) {
 				log.Printf("session: tmux did not honour the requested directory for %q: requested %q, session is in %q", req.Name, req.Cwd, s.Cwd)
 			}
 
@@ -192,6 +200,30 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(info)
+}
+
+// sameDirectory reports whether two paths name one and the same directory.
+//
+// Two spellings of the same directory are the normal case, not the exception:
+// getcwd() — which is where tmux's `#{session_path}` comes from — resolves
+// symlinks and filesystem case, so the path that comes back out of tmux is
+// frequently not the path that went in. os.SameFile compares what the two
+// paths actually resolve to, which is the only comparison that tells a rename
+// of the spelling apart from a change of directory.
+//
+// A path that cannot be stat'd is not the same directory as anything: the
+// interesting divergence is precisely the one where the requested directory no
+// longer exists.
+func sameDirectory(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }
 
 type renameRequest struct {

@@ -1,8 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -376,6 +379,101 @@ func TestHandlerCreateSession_RecordsRequestedCwdWhenTmuxAgrees(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "/tmp", stored.Cwd)
+}
+
+// captureStdLog points the standard logger at a buffer for the duration of the
+// test and hands back a reader for whatever was written to it. The warning
+// under test goes through the package-level logger, so this is the only seam.
+func captureStdLog(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return buf.String
+}
+
+// TestHandlerCreateSession_SilentWhenCwdOnlyCanonicalised guards the warning
+// against its own false positives.
+//
+// tmux's `#{session_path}` comes from getcwd(), which resolves symlinks and
+// filesystem case, so a wholly successful create routinely reports a different
+// *string* than was asked for (/tmp → /private/tmp on macOS, and any symlinked
+// worktree the same way). Warning on those would bury the one case the warning
+// exists for.
+func TestHandlerCreateSession_SilentWhenCwdOnlyCanonicalised(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(realDir, 0o755))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(realDir, link))
+	// The session was asked for via the symlink; getcwd() reports the target.
+	fake.ForceNewSessionCwd = realDir
+
+	logged := captureStdLog(t)
+
+	body := fmt.Sprintf(`{"name": "canonical", "cwd": %q}`, link)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+	assert.Equal(t, realDir, info.Cwd, "the canonical path is still what gets recorded")
+	assert.Empty(t, logged(), "canonicalisation is not a divergence and must not warn")
+}
+
+// TestHandlerCreateSession_WarnsWhenCwdTrulyDiverges is the case the warning is
+// for: tmux did not land in the requested directory at all.
+func TestHandlerCreateSession_WarnsWhenCwdTrulyDiverges(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	root := t.TempDir()
+	// The requested directory went away between resolveCwd and tmux, so tmux
+	// silently started the session in a fallback directory instead.
+	fake.ForceNewSessionCwd = "/"
+
+	logged := captureStdLog(t)
+
+	body := fmt.Sprintf(`{"name": "diverged", "cwd": %q}`, root)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	out := logged()
+	assert.Contains(t, out, "did not honour the requested directory")
+	assert.Contains(t, out, root, "the warning names the requested path")
+	assert.Contains(t, out, `"/"`, "the warning names the path tmux actually used")
+}
+
+// TestSameDirectory covers the branch the handler cannot reach from a test —
+// the requested directory having been removed after resolveCwd stat'd it,
+// which is the real TOCTOU the warning exists to surface.
+func TestSameDirectory(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(realDir, 0o755))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(realDir, link))
+
+	assert.True(t, sameDirectory(link, realDir), "a symlink and its target are one directory")
+	assert.True(t, sameDirectory(realDir, realDir))
+	assert.False(t, sameDirectory(realDir, root), "different directories are different")
+	assert.False(t, sameDirectory(filepath.Join(root, "gone"), realDir),
+		"a path that no longer exists is not the same directory as anything")
+	assert.False(t, sameDirectory(realDir, filepath.Join(root, "gone")))
 }
 
 func TestHandlerCreateSessionWithMode(t *testing.T) {
