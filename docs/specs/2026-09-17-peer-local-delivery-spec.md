@@ -175,7 +175,7 @@ content — what the receiving agent *reads*. Remote sets both to the helper's s
 to the sender's own. A test that asserts only one of them would not catch the second being wrong,
 so §6.1 requires both.
 
-**`HopChain` is `""`, not `req.HopChain`.** `SendRequest` (`wire.go:278`) has no `HopChain` field —
+**`HopChain` is `""`, not `req.HopChain`.** `SendRequest` (`wire.go:280`) has no `HopChain` field —
 only `To`, `Text`, `Mode`, `OriginInbox` — so the obvious transcription does not compile. A
 CLI-initiated send is by definition the first hop. (`HopChain` reaches `/deliver` only on the relay
 path, `reply.go:129`, which local does not use.)
@@ -231,7 +231,7 @@ before anything leaves the host. The local path keeps that line in the same plac
   / not-ready / not-found / not-deliverable), and the §4.5 self-target refusal;
 - **audited**: everything from the step-7 insert onward — the pair-limit refusal, a socket write
   failure, and the result (`delivered` / `delivery_uncertain`, the same mapping `/deliver` uses for
-  `ErrPostWriteTimeout` at `deliver.go:349`).
+  `ErrPostWriteTimeout` at `deliver.go:350`).
 
 This deliberately puts the local pair-limit refusal on the *audited* side while local resolution
 failures stay unaudited — matching where each sits remotely, rather than matching which handler it
@@ -458,7 +458,7 @@ reader re-deriving them would land in the same place.
 |---|---|---|
 | "policy applies to local unchanged" (§4.3) | audit-in, dedup, host limit, pair limit and mode clamping all live in `handleDeliver`, which a local send never reaches — so nothing was inherited and every item had to be decided | §4.3 decides each one, with its reason |
 | local delivery runs dedup, and a mutation removing it must turn a test red (§6.3) | the id is minted per attempt by this handler and `SendRequest` carries none, so a local send can never be a duplicate; the check could not fire and the test could only have been faked | L8: dedup does not run locally; the mutation is deleted and replaced with three that can fail |
-| `HopChain: req.HopChain` in the local frame (§4.1) | `SendRequest` (`wire.go:278`) has no such field — the line does not compile | `HopChain: ""`, with the reason (a CLI send is the first hop) |
+| `HopChain: req.HopChain` in the local frame (§4.1) | `SendRequest` (`wire.go:280`) has no such field — the line does not compile | `HopChain: ""`, with the reason (a CLI send is the first hop) |
 | "build the frame with the sender's own inbox as the reply address" (§4.1) | there are **two** `from`s — `BuildFrame`'s socket argument becomes `Frame.From`, the real reply address, while `Wrapper.From` is display text inside the content — and a test asserting one would miss the other | both named explicitly; §6.1 asserts both and §6.3 mutates each separately |
 | the local branch replaces the step-3 refusal in place | step 3 runs before `findOrigin`, and the local frame needs the origin | decided at step 3, taken at step 5; §4.1 gives the full step table |
 | the local path is "resolve → write" | `entry` is zero locally and is read 24 times after step 3; an unsubstituted `entry.Alias` renders as an empty host in the error a human then reads | §4.1's substitution table, plus a test that no local refusal renders an empty alias |
