@@ -1,7 +1,9 @@
 // Package peers implements the "peers" daemon module: GET /api/peers, a
 // local inventory of this host's tmux sessions joined with the agent module's
 // owner resolution and the Claude Code session registry; the peer-host
-// management and settings routes; POST /api/peers/send, the outbound half
+// management and settings routes; POST /api/peers/hosts/{alias}/verify
+// (hosts_verify.go) probes one entry the way a scope=all row does; POST
+// /api/peers/send, the outbound half
 // of cross-host messaging (send.go); POST /api/peers/deliver, the
 // inbound half (deliver.go), backed by the per-origin helper manager
 // (helpers.go) and the peer_messages audit store; the reply path that
@@ -284,6 +286,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/hosts", m.handleAddHost)
 	mux.HandleFunc("PUT /api/peers/hosts/{alias}", m.handlePutHost)
 	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)
+	mux.HandleFunc("POST /api/peers/hosts/{alias}/verify", m.handleVerifyHost)
 	mux.HandleFunc("GET /api/peers/settings", m.handleGetSettings)
 	mux.HandleFunc("PUT /api/peers/settings", m.handlePutSettings)
 	mux.HandleFunc("POST /api/peers/send", m.handleSend)
