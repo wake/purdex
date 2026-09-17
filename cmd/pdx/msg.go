@@ -421,12 +421,19 @@ func msgHostOrPlaceholder(host string) string {
 }
 
 // msgCandidateLine renders one ambiguity candidate as an indented line:
-// the address, then whatever the daemon knew that distinguishes it —
-// agent name, pid, cwd. The extras are what make the refusal legible as
-// a name collision rather than a broken address (spec §4.1), so they are
-// printed whenever present and quietly skipped when the row had none.
+// the address WITH ITS REF, then whatever the daemon knew that
+// distinguishes it — agent name, pid, cwd. The extras are what make the
+// refusal legible as a name collision rather than a broken address (spec
+// §4.1), so they are printed whenever present and quietly skipped when the
+// row had none.
+//
+// The ref is not one of those extras. Two conversations sharing a registry
+// name collide on address AND agent name, so the ref is the only thing on
+// the line that can be sent to; it goes through addressWithRef — the same
+// function `pdx peers` renders with — so the whole address is copyable out
+// of the refusal exactly as the table would have shown it.
 func msgCandidateLine(c ipeers.AmbiguousCandidate) string {
-	line := "  " + sanitizeCell(c.Address)
+	line := "  " + sanitizeCell(addressWithRef(c.Address, c.Ref))
 	if c.AgentName != "" {
 		line += "  agent " + sanitizeCell(c.AgentName)
 	}

@@ -1321,3 +1321,46 @@ func TestRenderSelfRecord_SetTitle(t *testing.T) {
 		t.Errorf("set title block:\n%s", got)
 	}
 }
+
+// --- ambiguity candidates carry their ref (spec §5.2) ---------------------
+
+// TestMsgCandidateLine_RendersRef pins the bracket form on the candidate
+// line. Under v4 two conversations sharing a registry name produce
+// candidates with IDENTICAL Address and IDENTICAL AgentName, so without the
+// ref the refusal lists rows the operator can see but cannot address: pid
+// and cwd are not address forms. The rendered line is the address form the
+// grammar accepts, so it can be copied whole into `pdx msg send`.
+//
+// The third case is the one a restated rule gets wrong, and a ref collision
+// is exactly when it is reachable: a row addressed BY its ref already ends
+// in it, and appending the bracket would print the ref twice.
+func TestMsgCandidateLine_RendersRef(t *testing.T) {
+	cases := []struct {
+		name string
+		cand ipeers.AmbiguousCandidate
+		want string
+	}{
+		{
+			name: "ref is bracketed without its underscore",
+			cand: ipeers.AmbiguousCandidate{Address: "mlab/purdex-dd", Ref: "_h0h3ln", AgentName: "purdex-dd", PID: 39396, Cwd: "~"},
+			want: "  mlab/purdex-dd [h0h3ln]  agent purdex-dd  pid 39396  cwd ~",
+		},
+		{
+			name: "no ref, no bracket",
+			cand: ipeers.AmbiguousCandidate{Address: "mlab/tmux:zz", Cwd: "/w/two"},
+			want: "  mlab/tmux:zz  cwd /w/two",
+		},
+		{
+			name: "an address that already IS the ref gets no bracket",
+			cand: ipeers.AmbiguousCandidate{Address: "mlab/_h0h3ln", Ref: "_h0h3ln", AgentName: "purdex-dd", PID: 12345},
+			want: "  mlab/_h0h3ln  agent purdex-dd  pid 12345",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := msgCandidateLine(tc.cand); got != tc.want {
+				t.Errorf("msgCandidateLine = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

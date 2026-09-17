@@ -1288,9 +1288,14 @@ func TestSend_Ambiguous(t *testing.T) {
 	req.To = remoteAlias + "/" + canonical
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrAmbiguous)
+	// Each candidate carries its ref, and here both carry the SAME one —
+	// that is what "one conversation, two processes" means, and it is why
+	// this case needs agent name/pid/cwd instead. The ref is still reported:
+	// suppressing it when it happens not to discriminate would make its
+	// presence a second, undocumented signal.
 	want := []ipeers.AmbiguousCandidate{
-		{Address: remoteAlias + "/twin-1", AgentName: "twin-1", PID: remotePID, Cwd: "/w/one"},
-		{Address: remoteAlias + "/twin-2", AgentName: "twin-2", PID: 778, Cwd: "/w/two"},
+		{Address: remoteAlias + "/twin-1", Ref: canonical, AgentName: "twin-1", PID: remotePID, Cwd: "/w/one"},
+		{Address: remoteAlias + "/twin-2", Ref: canonical, AgentName: "twin-2", PID: 778, Cwd: "/w/two"},
 	}
 	if !reflect.DeepEqual(ae.Candidates, want) {
 		t.Errorf("candidates = %+v, want %+v", ae.Candidates, want)

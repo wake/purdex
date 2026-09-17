@@ -370,7 +370,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &amb):
 			candidates := make([]ipeers.AmbiguousCandidate, 0, len(amb.Candidates))
 			for _, c := range amb.Candidates {
-				cand := ipeers.AmbiguousCandidate{Address: c.Address, Cwd: c.Cwd}
+				cand := ipeers.AmbiguousCandidate{Address: c.Address, Ref: c.Ref, Cwd: c.Cwd}
 				// Tier 2 (a bare tmux session name) can match a row with
 				// no agent at all, so this is not the tier-1 guarantee.
 				if c.Agent != nil {
