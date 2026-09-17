@@ -690,10 +690,13 @@ type cliAddHostResponse struct {
 	Verified     bool   `json:"verified"`
 }
 
-// cliPutHostRequest mirrors PUT /api/peers/hosts/{alias}'s body.
+// cliPutHostRequest mirrors PUT /api/peers/hosts/{alias}'s body. Alias is
+// the rename field (spec §4.2); omitted when empty so set-token bodies
+// stay byte-identical to before.
 type cliPutHostRequest struct {
 	Token       string `json:"token"`
 	AllowBypass *bool  `json:"allow_bypass,omitempty"`
+	Alias       string `json:"alias,omitempty"`
 }
 
 // cliVerifyHostResponse mirrors internal/module/peers.verifyHostResponse:
@@ -758,7 +761,7 @@ func runPeersHostVerify(cfg config.Config, base string, inv peersInvocation, std
 	return 0
 }
 
-// runPeersHostCmd dispatches to the four `pdx peers host` verbs. inv.verb
+// runPeersHostCmd dispatches to the six `pdx peers host` verbs. inv.verb
 // and inv.positionals' arity are already validated by parsePeersInvocation.
 func runPeersHostCmd(inv peersInvocation, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(inv.cfgPath)
@@ -777,6 +780,8 @@ func runPeersHostCmd(inv peersInvocation, stdout, stderr io.Writer) int {
 		return runPeersHostSetToken(cfg, base, inv, stdout, stderr)
 	case "verify":
 		return runPeersHostVerify(cfg, base, inv, stdout, stderr)
+	case "rename":
+		return runPeersHostRename(cfg, base, inv, stdout, stderr)
 	case "remove":
 		return runPeersHostRemove(cfg, base, inv, stdout, stderr)
 	default:
@@ -858,6 +863,35 @@ func runPeersHostSetToken(cfg config.Config, base string, inv peersInvocation, s
 	}
 
 	fmt.Fprint(stdout, formatHostsTable([]cliHostRow{row}))
+	return 0
+}
+
+// runPeersHostRename implements `pdx peers host rename <alias> <new-alias>`:
+// a PUT with only the alias field. Validation and uniqueness are the
+// daemon's; the CLI only carries the words.
+func runPeersHostRename(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
+	oldAlias, newAlias := inv.positionals[0], inv.positionals[1]
+	reqBody, err := json.Marshal(cliPutHostRequest{Alias: newAlias})
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx peers: %v\n", err)
+		return 1
+	}
+
+	result, err := doPeersRequest(http.MethodPut, base+"/"+url.PathEscape(oldAlias), reqBody, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return reportPeersTransportErr(err, stderr)
+	}
+	if result.status != http.StatusOK {
+		return reportPeersAPIError(result, stderr)
+	}
+
+	var row cliHostRow
+	if err := json.Unmarshal(result.body, &row); err != nil {
+		fmt.Fprintln(stderr, "pdx peers: invalid response")
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "renamed %s -> %s\n", sanitizeCell(oldAlias), sanitizeCell(row.Alias))
 	return 0
 }
 

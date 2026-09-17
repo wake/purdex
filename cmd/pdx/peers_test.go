@@ -1885,3 +1885,86 @@ func TestParsePeersInvocation_HostVerifyGrammar(t *testing.T) {
 		t.Errorf("verify --json: inv=%+v ok=%v", inv, ok)
 	}
 }
+
+// --- host rename (spec §4.4) -------------------------------------------------
+
+func TestRunPeersCmd_HostRename(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"alias": "air26", "url": "http://100.64.0.4:7860", "host_id": "a:1",
+			"verified": true, "has_token": true, "has_inbound_token": true, "allow_bypass": false,
+		})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "rename", "air", "air26", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotMethod != http.MethodPut || gotPath != "/api/peers/hosts/air" {
+		t.Errorf("request = %s %s, want PUT /api/peers/hosts/air", gotMethod, gotPath)
+	}
+	if gotBody["alias"] != "air26" {
+		t.Errorf("body = %v, want alias air26", gotBody)
+	}
+	if _, has := gotBody["token"]; has && gotBody["token"] != "" {
+		t.Errorf("body = %v, want no token", gotBody)
+	}
+	if !strings.Contains(stdout.String(), "renamed air -> air26") {
+		t.Errorf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunPeersCmd_HostRename_Conflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": `alias "air26" is already used by another host`})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	if code := runPeersCmd([]string{"host", "rename", "air", "air26", "--config", cfgPath}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "already used by another host") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunPeersCmd_HostRename_EscapesAlias(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		_ = json.NewEncoder(w).Encode(map[string]any{"alias": "b"})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	runPeersCmd([]string{"host", "rename", "a?b", "b", "--config", cfgPath}, &stdout, &stderr)
+	if gotPath != "/api/peers/hosts/a%3Fb" {
+		t.Errorf("path = %q, want the alias percent-escaped", gotPath)
+	}
+}
+
+func TestParsePeersInvocation_HostRenameGrammar(t *testing.T) {
+	if _, _, ok := parsePeersInvocation([]string{"host", "rename", "a"}); ok {
+		t.Error("rename with one positional accepted")
+	}
+	if _, _, ok := parsePeersInvocation([]string{"host", "rename", "a", "b", "--json"}); ok {
+		t.Error("rename --json accepted")
+	}
+	if _, _, ok := parsePeersInvocation([]string{"host", "rename", "a", "b", "--allow-bypass=true"}); ok {
+		t.Error("rename --allow-bypass accepted")
+	}
+	inv, _, ok := parsePeersInvocation([]string{"host", "rename", "a", "b"})
+	if !ok || inv.verb != "rename" || len(inv.positionals) != 2 {
+		t.Errorf("rename a b: inv=%+v ok=%v", inv, ok)
+	}
+}
