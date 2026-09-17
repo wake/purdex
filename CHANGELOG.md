@@ -1,5 +1,79 @@
 # Changelog
 
+## [1.0.0-alpha.373] - 2026-09-17
+
+### Feat: Peer Address v4 —— 可讀的地址，背後仍是精確的那個（#1107）
+
+```
+before   mini-lab/_q34psn4f:aigora2-purdex-b0
+after    mlab/purdex-b0 [q34psn]
+```
+
+形狀直接比照 Claude Code 自己的 `ListAgents` / `SendMessage`：**名字就是地址**，方括號裡的 ref 只在名字不夠用時才需要打。前面多一段主機，因為 pdx 跨機器而 Claude Code 不跨。
+
+#### v3 為什麼變得不可讀，以及那個理由站不站得住
+
+v3 拿掉可讀段的技術理由是「Claude Code 的 registry `name` 是 `derived`，會變」。把 mini-lab 上每一個 live registry 檔全量量過：
+
+| 觀察 | 結果 |
+|---|---|
+| 名字從啟動到現在沒變過 | **14 / 14** |
+| `nameSince` ≠ `startedAt` | 3 筆，差距都是 **1 毫秒**（寫入時序，不是改名） |
+| 14 個名字互不相同 | **14** |
+
+這個取樣能支撐的是「**實務上穩定**」，不是「不可能變」，spec §2 就是照這個範圍寫的 —— resume、compact、使用者改名，以及**這個 repo 自己的 `RewriteRegistryName`**，四條路徑都沒被涵蓋。所以名字被定義成**方便用的別名**，任何必須撐過改名的東西都走 ref。
+
+#### 三層
+
+**A · 地址**　名字當地址頭，由新的 `RoutableName` 文法把關；ref 從 8 碼縮到 6 碼 base36；`Suffix` 刪除、`TmuxName` 補上；`Resolve` 多一層名字 tier、一個共用的 `resolveRefHead`，以及一個拒絕。
+
+**B · `label` → `title`**　自由文字、上限 64 bytes、沒有保留字、永不參與路由；撞名正規化後警告並成功。
+
+**C · 主機自報 alias**　地址在兩台機器上指的是同一個字串。配對時採用對方自報的名字，drift 只在 `pdx peers --all` 顯示，**絕不跟隨** —— 悄悄採用對方的改名，會把每一個寫下來的地址從人腳下抽走。
+
+#### 這輪最值得記的：三個「綠燈但什麼都沒驗證」的測試
+
+每一個都是綠的，而且都會**繼續綠著**穿過這次改動：
+
+- **一個控制字元消毒測試**用 `Agent.PeerName` 當 payload —— 那是 `NAME` 欄，v4 已經不渲染它了。payload 移到 `TmuxName` 和 `Title`，也就是 v4 真正會被別人的資料餵進來的那兩格。
+- **狀態列的 `PEER_ROW` fixture** 是 v3 形狀的地址，按 v4 規則「名字段」會變成整團 `ai-chat4:ai-chat4-…` 後綴 —— 顯示是壞的，斷言也斷言那個壞結果。
+- **一段宣稱「title 讀不到會讓地址變成雜湊預設值」的文案**被一個**以那句假話命名**的測試釘住。v4 下它根本不成立：地址是 registry 名字或 sessionId 導出的 ref，兩者都不經過 title store。一個釘住假陳述的測試，會保護那個 bug 不被任何一次 sweep 修掉。（關閉 #1094）
+
+測試會用兩種方式失效：**停止驗證任何東西**，或**開始守護錯誤的東西**。這三個各佔一種。
+
+#### Mutation testing 從加分項變成交付項
+
+Task A4 照著計畫把測試全寫完、全綠，然後自己去戳那條它存在的理由 —— **把 stale-version 閘門移到 tier 1 底下，整包還是綠的**。原因很具體：那些 fixture 都沒帶 registry 名字，所以本來就會 miss 掉 tier 1，閘門在上在下都一樣。
+
+從那之後每個 task 都必須弄壞自己的規則、證明有東西變紅。好幾次證明了**該斷言的不是狀態碼**：
+
+- 刪掉 alias 撞名的 409，狀態碼仍是 409（`UpdateConfig` 的二次檢查也回 409），只有回應內容會變
+- 跳過 `sanitizeLearnedAlias`，狀態碼仍是 400；真正的損失是對方（攻擊者可控）的位元組被引號原樣回吐進本機終端機
+
+#### Review 抓到的七件事，其中兩件會複合
+
+`RoutableName` 存在的原因本身就是一次 review：spec 初稿宣稱 registry name 不可能以 `_` 開頭，所以名字和 ref 的命名空間天生互斥。**沒有任何東西在保證那件事** —— `registry.go` 原樣賦值，而這個 repo 自己的 `ccuds/registry_write.go` 可以寫進任意字串。互斥現在是**造出來的**，不是假設的。
+
+PR 階段的七個發現裡，F1（combined form 繞過 `RoutableName`）與 F2（`normalizeRemoteRows` 原樣信任遠端給的地址主體）**會複合**：F1 是路由的洞，F2 是把誘餌放到操作者眼前。已配對的主機是攻擊者可控的，它可以自報 `address: "air/trusted:ops"` 配上對應的 `peer_name`，本機就會印出 `air/trusted:ops [abc123]` —— 一列看起來和其他列毫無差別的地址。單獨修任一個都不夠。
+
+現在遠端列的地址是**用本機自己驗證過的欄位重算出來的**，而且只讀 `Agent` / `Ref` / `SessionName`，**完全不讀 `rec.Address`** —— 「地址是重算的」因此是一個 grep 就能驗證的宣稱，而不是一段需要推理的論證。
+
+#### 兩個我開的處方是錯的
+
+把 name tier gate 在 `rest == ""` 沒有用：`SplitSession("purdex-b0:")` 回傳的 rest 就是空字串，尾端冒號會溜過去 —— 而且 tiers 2/3 有一模一樣的洞，`_q34psn:` 一直解得開，沒有任何測試蓋到。規則是「**不得含冒號**」，這才是「v4 沒有 suffix 形式」的實際意思。發現的方式是：先寫的測試包含了尾端冒號那個案例，套上處方之後**還是紅的**。
+
+用「檢查遠端的 session 部分是否恰好是 `tmux:<name>`」來辨認 tmux 形式 —— 那仍然是在讀我們正要拒絕信任的那個欄位。
+
+#### 行為變更
+
+- 遠端的 **proxy 列現在顯示空地址**，原本是 `<alias>/cc:<對方自取的名字>`。那個形式本來就設計成不可解析，所以它唯一的作用是把攻擊者可選的文字放進 `ADDRESS` 欄。本機的 proxy 列不變。
+- 一個 registry 名字剛好叫 `cc` 或 `tmux` 的對話，現在拿得到也解得開 `<host>/cc`。先前 daemon 會鑄出並印出這個地址，然後用「cc: addresses were removed」拒絕它 —— **自己印出來、自己不認**。
+
+#### 未做
+
+**spec §9 的九條真機驗收**需要兩台部署好的 daemon。§9.9（把一台上產生的地址貼到另一台）是卡 release 的那一條。
+
+Follow-up：#1113 #1114 #1115 #1116，另在 #1092 #1093 補了發現。
 ## [1.0.0-alpha.372] - 2026-09-17
 
 ### Feat: daemon 的 tmux 呼叫不再依賴「它是怎麼被啟動的」（#1110）
