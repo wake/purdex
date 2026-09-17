@@ -423,6 +423,20 @@ Two PRs on this worktree branch, second based on the first's merge.
 
 Each turn costs real Claude usage; keep prompts small.
 
+### 6.1 Acceptance run 2026-09-18 (mlab, branch `da434a03`, worktree dev server :5175 + playwright cli, daemon alpha.378)
+
+Execution `06GB2ZFDHNCW2ZWQ33EG9D1ZXM` (cwd `~/Workspace/wake/nex-acceptance-scratch`, profile `standard`), archived afterwards. DOM probed every ~0.5 s for `stream-cursor` / `assistant-text` / `partial-group` / `thinking-indicator` / `tool-icon-spinner` / `tool-elapsed` / `tool-duration` / `tool-aborted` counts; screenshots at each sample.
+
+1. **PASS** — typewriter. Dots → `partial-group` with one `stream-cursor`, last assistant text grew 160 → 714 → 1204 chars over 3 s, then cursor and group gone, `assistant-text` count went 1 → 2 (durable replaced the partial, no duplicate, no flicker). Cosmetic: the cursor renders on its own line under the paragraph because it follows the markdown `<p>` block rather than sitting inline after the last glyph.
+2. **FAIL (timing badge)** — tool turn `sleep 8 && echo ok`. `tool-icon-spinner` shown for the whole 8 s and the result block followed, but `tool-elapsed` never appeared and no `tool-duration` after completion. Root cause: Nexen's SSE `data:` is the bare provider payload, not the `{seq, kind, payload, created_at}` wrapper (`api/sse.go:309` `writeFrame`), so `frameToEvent` yields `created_at: 0` for every live durable frame → `ToolActivity.startedAt = 0` → A4 hides the timer. The REST history page does carry `created_at`: the same tool showed `8.8s` when a second tab loaded it from history (step 3), proving the badge path itself works. Fix belongs in the hook (stamp `created_at = Date.now()` on live durable frames whose wrapper lacks it, as Nexen's console does — `detail.mjs:708-714`); spec F6/A1 must say "server time from history, arrival time from live".
+   Also observed: while the tool runs the thinking dots stay on beside the spinner (R3 formula: `turnLive` and no visible partial). Spec-compliant but noisy; consider `&& !anyRunning`.
+3. **PASS** — observer tab (no lease) opened during a `sleep 6` turn saw dots, then the running-tool spinner, then the result; history-loaded tool showed its `8.8s` duration badge.
+4. **PASS** — 300-word text turn interrupted mid-paragraph via the header button: `stream-cursor` 1 → 0, `partial-group` 1 → 0, dots 0, input re-enabled; the truncated assistant message that claude emits on interrupt landed as durable history; `pdx nex show` → `last_turn_reason: interrupted`.
+5. **PASS (aborted not reachable)** — `sleep 14` turn, `pdx stop` + `pdx start` (healthy in 1 s). The pane reconnected, spinner → wrench, dots off, input re-enabled, no ghost partial. Nexen's graceful shutdown sends `execution.interrupt_requested {source: daemon_shutdown}`, claude returns a rejected `tool_result` and the turn ends `execution.terminal {reason: interrupted}` — so the tool ends via A2 (`done`/`error`), not A3 (`aborted`). `turn_orphaned` only happens on a hard kill; not exercised.
+6. **Not exercised** — no Stream-mode session in the fresh browser profile; guarded by `ConversationView.snapshot.test.tsx` and the default-prop snapshots.
+
+Environment notes: CC's guard blocks `sleep 25` ("Blocked: sleep 25…"), and the `standard` profile denies `python3`, so long tools must be `sleep ≤ ~14`. Browser console showed only the `ERR_CONNECTION_REFUSED` burst from the deliberate restart.
+
 ## 7. Risks
 
 - **Render cost of markdown per delta**: mitigated by rAF coalescing (§4.3)
