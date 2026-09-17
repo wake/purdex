@@ -164,14 +164,26 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		return PeerRecord{}, ErrNotFound
 	}
 	head, rest := SplitSession(session)
-	switch head {
-	case LabelReservedCC:
-		return PeerRecord{}, fmt.Errorf("%w: %w", ErrNotFound, ErrLegacyCC)
-	case LabelReservedTmux:
-		if rest == "" {
-			return PeerRecord{}, ErrNotFound
+	// The two explicit forms are the PREFIXED ones, and the colon is what
+	// makes them explicit — matching on the head alone would swallow a bare
+	// "cc" or "tmux".
+	//
+	// That is reachable, not theoretical: RoutableName accepts both (it only
+	// requires two or more characters of [a-z0-9-]), so a conversation whose
+	// registry name is exactly "cc" gets the perfectly ordinary address
+	// "<host>/cc" — which the head-only switch then answered with "cc:
+	// addresses were removed". An address this daemon mints and prints must
+	// be one it can also resolve.
+	if strings.ContainsRune(session, ':') {
+		switch head {
+		case LabelReservedCC:
+			return PeerRecord{}, fmt.Errorf("%w: %w", ErrNotFound, ErrLegacyCC)
+		case LabelReservedTmux:
+			if rest == "" {
+				return PeerRecord{}, ErrNotFound
+			}
+			return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == rest })
 		}
-		return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == rest })
 	}
 	// The stale-version gate, ABOVE every tier — not in front of the
 	// fallback, where v3 had it. A pre-v4 row still carries a usable registry
