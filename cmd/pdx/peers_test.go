@@ -1963,6 +1963,24 @@ func TestRunPeersCmd_HostRename_OldDaemonIgnoredAlias(t *testing.T) {
 	}
 }
 
+// A case-only rename is a real rename: an old daemon that echoes the old
+// spelling must be refused exactly like any other ignored rename.
+func TestRunPeersCmd_HostRename_OldDaemonIgnoredCaseOnlyRename(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"alias": "air", "url": "http://100.64.0.4:7860", "host_id": "a:1"})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "rename", "air", "Air", "--config", cfgPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if strings.Contains(stdout.String(), "renamed") {
+		t.Errorf("stdout = %q, want no success line", stdout.String())
+	}
+}
+
 func TestRunPeersCmd_HostRename_EscapesAlias(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
