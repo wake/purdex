@@ -1,5 +1,80 @@
 # Changelog
 
+## [1.0.0-alpha.374] - 2026-09-17
+
+### Feat: 本機投遞 —— 一個入口，一組 ref（#1119）
+
+`pdx msg send` 現在送得到本機 peer。`local_target` 刪除，所以 `pdx peers` 印出來的每一個地址都是 `pdx msg send` 收得下的。
+
+之前必須先知道對方在哪台，才能決定用哪個工具，而兩個工具對同一個 session 的稱呼還不一樣：
+
+```
+pdx peers --all   →  mini-lab/purdex-dd [h0h3ln]
+ListAgents        →  purdex-dd [ba68ab]
+```
+
+兩個都對，它們是不同的命名空間。**選入口就等於選命名空間**，而且兩者不可能合併 —— native 的 ref 是**每個觀察者本機**的編號（同一個對話在 mlab 是 `d8dc4a`、在 air 是 `ad1737`），也無法在行程外導出（11 種輸入 × 9 種雜湊 × 20 個位移全不中）。
+
+這也是 **#1118 被取代**的原因：它提的是「把兩個命名空間對齊」，但只要入口收斂成一個，就沒有第二個命名空間需要對齊。
+
+#### 本機路徑比遠端**短**，不是長
+
+```
+remote:  resolve → HTTP → peer daemon → acquire helper → write
+local:   resolve → write
+```
+
+helper 存在的理由，是讓收件端（它只會回覆 `uds:` 地址）在寄件人不同機時有個本機的東西可以回。本機寄件人的 socket 就在同一個檔案系統裡，所以 frame 直接帶它自己的 inbox，收件端原路回去。
+
+#### 兩個做這件事時才浮出來的東西
+
+**送給自己是可達的，而且真的會投遞。** 實作前的測試回的是 `200 delivered`，收件人的 session id 等於寄件人。它一直碰不到只是因為 `local_target` 擋在前面。現在拒絕 `self_target`（400）—— 那個 frame 的回覆地址會是收件端自己的 socket，而 native 回覆不經過 pdx，`HopChain` 與 pair limit 都不在那條路上，沒有任何既有機制會擋住自我迴圈。
+
+**ambiguity 的那個缺陷，有一個看不見它的測試。** 唯一蓋到撞名的 e2e 用的是 `twin-1`/`twin-2` —— 同一個對話的**兩個行程**，名字不同、地址就不同，v4 之下本來就分得開。它蓋到的正是**不需要 ref** 的案例。本次補上需要的那個，並且讓論證變成可執行的證據：在 mutation M5 之下新測試變紅，**twin 測試維持綠**。
+
+v4 §9.7 就是會抓到這件事的驗收項，它被跳過了。§6.2 是那條驗收改寫成的自動化測試。
+
+#### 決定
+
+| # | 決定 |
+|---|---|
+| L1 | 一個入口。`pdx msg send` 接受本機目標，`local_target` 刪除 |
+| L2 | pdx 自己解析本機目標，所以 ref 到處都是 pdx 的 |
+| L3 | 不加 local/remote 欄位 —— 目標在哪台是 daemon 的內部判斷 |
+| L4 | 本機投遞不用 helper，frame 的 `from` 是寄件人自己的 socket |
+| L5 | ambiguity 拒絕帶上每個候選的 ref |
+| L6 | 原生 `SendMessage` 照常運作，只是不再是到達本機 peer 的必要工具 |
+| L7 | 送給自己會被拒絕（`self_target`） |
+| L8 | 本機路徑**不跑 dedup** —— 它的 id 由同一個 handler 每次現鑄，不可能重複 |
+
+**policy 逐項決定，而不是「照常適用」。** audit-in、dedup、host limit、pair limit、mode clamp 全部住在 `handleDeliver`，本機送訊不經過它，所以每一項都得決定：pair limit **留**（它保護的是收件端 session 不被灌爆，跟訊息從哪來無關）、host limit **不留**（那是管外部主機的配額）、audit **一筆** `DirOut`（一個 daemon 只做了一次觀察，兩筆不是佐證是重複記帳）、mode 照 declared。
+
+本機的 bypass 由 admin 路由加上 live origin 歸屬授權，**不是**由 `AllowBypass` —— 那是不同的授權基礎，明寫出來而不是讓它讀起來像疏漏。
+
+### Fix: ambiguity 拒絕現在指得出是哪一個（#1119）
+
+`AmbiguousCandidate` 沒有 `Ref`。v4 之下兩個撞名的對話產生**完全相同**的 `Address` 和 `AgentName`，所以那個拒絕列出兩列、而操作者一列都定址不到 —— `pid` 和 `cwd` 都不是地址形式。
+
+v4 spec §3.1 白紙黑字寫了「會連同兩個候選**和它們的 ref** 一起告知」。實作從來沒帶，七輪 review 全漏。
+
+`displayAddress` 的括號規則有**兩個**條件而非一個（ref 為空，或地址本身已經以 ref 結尾），兩個渲染點現在共用同一個 `addressWithRef`，而不是各自複述規則。
+
+### 已知且已接受
+
+**`origin_inbox` 是呼叫端送進來的參數，daemon 無從驗證它屬於呼叫端。** 在 L4 之下它成為 frame 的回覆地址，所以持有本機 admin token 的人可以讓一個本機 session 看起來是另一個，而受害者的回覆會流向被冒充者、pdx 看不到。
+
+這不只是「同 user 行程本來就無所不能」的重述：那個論據對**本機行程**成立（`/tmp/cc-socks` 是 `0700`、socket `0600`），但 daemon 綁的是 tailnet 位址而非 loopback，**admin token 的呼叫端不必是同 user 行程** —— 對它來說 `0600` 是真正的屏障，而這條路徑繞過了它。
+
+明知而接受，spec §4.6 記錄，#1120 追蹤選項。
+
+### 其他
+
+- 本機寫入失敗現在把 `socket_write_failed` 記進 audit 的 result 欄，跟 `/deliver` 一致（先前留空，`pdx msg log` 上分不出來）
+- `self_target` 的比對加上 `isLocal` 把關 —— 先前對遠端目標也生效，而那一行上方的註解正**斷言著它不會發生**
+- `handleSend` 452 → 373 行，本機投遞移到 `send_local.go`；完整拆分見 #1121
+- follow-up：#1120（冒充/回覆地址）、#1121（`handleSend` 拆分）、#1122（測試 fixture 組織）
+
+
 ## [1.0.0-alpha.373] - 2026-09-17
 
 ### Feat: Peer Address v4 —— 可讀的地址，背後仍是精確的那個（#1107）
