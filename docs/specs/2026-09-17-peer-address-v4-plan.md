@@ -82,9 +82,18 @@ Follow that idiom. Do not invent helpers that other tasks would then have to mat
 - Consumes: nothing.
 - Produces: `RefID(sessionID string) string`, `IsRef(s string) bool`. `CanonicalID` and `IsCanonicalID` survive this task as **deprecated one-line aliases** so the tree keeps compiling; Task A3 deletes them.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Rename the files, then write the failing tests**
 
-Append to `internal/peers/ref_test.go` (`package peers` — no `peers.` prefix anywhere):
+The rename comes first so the tests have somewhere to live. It is pure `git mv`, no content change, so the red light still precedes the implementation:
+
+```bash
+git mv internal/peers/label.go internal/peers/ref.go
+git mv internal/peers/label_test.go internal/peers/ref_test.go
+```
+
+Fix the path comment on each file's first line (`// internal/peers/label.go` → `ref.go`); `git mv` does not.
+
+Then append to `internal/peers/ref_test.go` (`package peers` — no `peers.` prefix anywhere):
 
 ```go
 func TestRefID_Shape(t *testing.T) {
@@ -133,12 +142,7 @@ Add `"regexp"` to the test file's imports if it is not already there.
 Run: `go test -race -count=1 ./internal/peers/ -run 'TestRefID|TestIsRef'`
 Expected: FAIL — `undefined: RefID`, `undefined: IsRef`.
 
-- [ ] **Step 3: Rename the file and narrow the width**
-
-```bash
-git mv internal/peers/label.go internal/peers/ref.go
-git mv internal/peers/label_test.go internal/peers/ref_test.go
-```
+- [ ] **Step 3: Narrow the width**
 
 In `ref.go`, change the two constants, replace `canonicalPattern`, and add the two functions plus the compatibility aliases:
 
@@ -946,7 +950,24 @@ git commit --only internal/peers/address.go internal/peers/address_test.go \
 
 **Interfaces:**
 - Consumes: `IsRef`, `ValidSuffix` (kept).
-- Produces: `ValidateWireAddress` accepting the matrix below.
+- Produces: `ValidateWireAddress` accepting the matrix below; `legacyV3Head`; `isLegacyV2Head` and `legacyV2HeadPattern` **deleted**.
+
+**Two things Task A1 left for you, found while it ran:**
+
+1. **`isLegacyV2Head` is now the same predicate as `IsRef`.** v2's default label was `"_"` plus exactly 6 base36 digits (`wire.go:473`) — the identical shape v4 gives a ref. Delete `isLegacyV2Head` and `legacyV2HeadPattern` and let `IsRef` cover both; keeping two names for one regex leaves a comment that contradicts the code. Say so where `IsRef` is used:
+
+   ```go
+   // IsRef also covers v2's legacy head: v2's default label was "_" plus six
+   // base36 digits, the same shape a v4 ref has. That is a coincidence of
+   // format, not of meaning, and it is harmless here because this function
+   // only checks grammar. Routing tells them apart — a v2 or v3 peer's rows
+   // carry no ref at all, so Resolve refuses the whole batch (spec §8.3)
+   // rather than matching one.
+   ```
+
+2. **Between A1 and this task, an 8-digit v3 head on the wire is rejected** with `bad_address`, because A1 narrowed `IsCanonicalID` to 6 and nothing else accepted 8. `legacyV3Head` below is what closes that window. It never reached a released build — the whole branch merges at once — but do not reorder this task after C, and do not "simplify" `legacyV3Head` away.
+
+`ValidateWireAddress`'s doc comment (`wire.go:491-498`) describes v3's three head classes and is wrong after this change. Rewrite it against the matrix.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -959,6 +980,7 @@ func TestValidateWireAddress_Matrix(t *testing.T) {
 		{"v4 ref", "_q34psn", true},
 		{"v3 canonical, one release", "_q34psn4f", true},
 		{"v3 canonical with suffix", "_q34psn4f:aigora2-purdex-b0", true},
+		{"v2 default head is ref-shaped, covered by IsRef", "_abc123", true},
 		{"v2 user label head", "purdex-tester", true},
 		{"v1 empty", "", true},
 		{"garbage head", "has/slash", false},
