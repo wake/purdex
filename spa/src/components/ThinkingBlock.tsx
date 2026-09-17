@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { Brain, CaretRight, CaretDown } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
+import StreamCursor from './StreamCursor'
 
 interface Props {
   content: string
@@ -23,9 +24,7 @@ export default function ThinkingBlock({ content, streaming }: Props) {
       >
         <Brain size={14} />
         <span>{t('stream.thinking')}</span>
-        {streaming && (
-          <span data-testid="stream-cursor" className="stream-cursor" aria-hidden="true">▌</span>
-        )}
+        {streaming && <StreamCursor />}
         <span className="ml-auto">
           {expanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
         </span>
@@ -36,9 +35,7 @@ export default function ThinkingBlock({ content, streaming }: Props) {
           className="px-2.5 pb-2 text-xs text-text-secondary leading-relaxed whitespace-pre-wrap font-mono"
         >
           {content}
-          {streaming && (
-            <span data-testid="stream-cursor" className="stream-cursor" aria-hidden="true">▌</span>
-          )}
+          {streaming && <StreamCursor />}
         </div>
       )}
     </div>

@@ -2,6 +2,7 @@
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
+import StreamCursor from './StreamCursor'
 
 interface Props {
   role: 'user' | 'assistant'
@@ -31,9 +32,7 @@ export default function MessageBubble({ role, content, streaming }: Props) {
           {content}
         </ReactMarkdown>
       </div>
-      {streaming && (
-        <span data-testid="stream-cursor" className="stream-cursor" aria-hidden="true">▌</span>
-      )}
+      {streaming && <StreamCursor />}
     </div>
   )
 }

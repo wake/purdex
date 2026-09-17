@@ -7,9 +7,9 @@ import {
   type UserMessage,
 } from '../lib/stream-ws'
 import { partialVersionOf, type PartialAssembly } from '../lib/nex/partial'
-import { toToolCallActivity, type ToolActivity } from '../lib/nex/tool-activity'
+import type { ToolActivity } from '../lib/nex/tool-activity'
 import MessageBubble from './MessageBubble'
-import ToolCallBlock from './ToolCallBlock'
+import ToolUseBlock from './ToolUseBlock'
 import ThinkingBlock from './ThinkingBlock'
 import ToolResultBlock from './ToolResultBlock'
 import ThinkingIndicator from './ThinkingIndicator'
@@ -81,9 +81,7 @@ export default function ConversationMessages({
                 }
                 if (block.type === 'tool_use' && block.name) {
                   // R2: a tools entry (execution pane only) adds status + timing; none → today's DOM.
-                  const entry = block.id ? tools?.[block.id] : undefined
-                  const activity = entry ? toToolCallActivity(entry, now ?? 0) : undefined
-                  return <ToolCallBlock key={j} tool={block.name} input={block.input || {}} activity={activity} />
+                  return <ToolUseBlock key={j} block={block} tools={tools} now={now ?? 0} />
                 }
                 return null
               })}
