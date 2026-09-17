@@ -1296,6 +1296,40 @@ func TestHandlePutHost_ConcurrentRecreateSameURL_409NothingRecreated(t *testing.
 	}
 }
 
+// TestHandlePutHost_RenameOnly_ConcurrentRecreate_409NotRenamed forces the
+// interleaving a rename-only PUT can hit — DELETE + re-POST at the same
+// alias between the handler's pre-lock snapshot and its commit — through
+// the putHostAfterSnapshot seam, since a rename-only request has no fetch
+// to block on. The hoisted identity re-check must refuse it.
+func TestHandlePutHost_RenameOnly_ConcurrentRecreate_409NotRenamed(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	fired := false
+	m.putHostAfterSnapshot = func() {
+		if fired {
+			return
+		}
+		fired = true
+		if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air", nil, adminPrincipal()); rr.Code != http.StatusNoContent {
+			t.Errorf("delete status = %d; body=%s", rr.Code, rr.Body.String())
+		}
+		if rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{"alias": "air", "url": "https://a.example"}, adminPrincipal()); rr.Code != http.StatusCreated {
+			t.Errorf("re-add status = %d; body=%s", rr.Code, rr.Body.String())
+		}
+	}
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "air26"}, adminPrincipal())
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("PUT status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air26") != -1 || reloaded.Peers.FindPeerHostByAlias("air") == -1 {
+		t.Errorf("rename landed on the re-created entry: %+v", reloaded.Peers.Hosts)
+	}
+}
+
 // ---- DELETE /api/peers/hosts/{alias} ----
 
 func TestHandleDeleteHost_204ThenGoneFromList(t *testing.T) {

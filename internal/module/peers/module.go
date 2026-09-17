@@ -179,6 +179,11 @@ type Module struct {
 	// read/written from concurrent request handlers with no other lock
 	// guarding it. Zero value is ready to use.
 	warnedVersions sync.Map
+
+	// putHostAfterSnapshot is a test seam: called by handlePutHost right
+	// after its pre-lock snapshot, so a test can force a concurrent
+	// mutation into that window. No-op in production.
+	putHostAfterSnapshot func()
 }
 
 // New constructs a peers Module with production defaults over audit (the
@@ -195,22 +200,23 @@ func New(audit AuditStore, titles TitleStore) *Module {
 	}
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	m := &Module{
-		registryDir:      registryDir,
-		liveness:         ipeers.DefaultLiveness(),
-		budget:           2 * time.Second,
-		now:              time.Now, // the one clock seam; every other clock reader below takes m.now
-		client:           newRemoteClient(),
-		fetch:            fetchRemote,
-		logf:             log.Printf,
-		audit:            audit,
-		titles:           titles,
-		writeFrame:       ccuds.WriteFrame,
-		sockWriteTimeout: ipeers.SocketWriteTimeout,
-		newMsgID:         uuid.NewString,
-		post:             postDeliver,
-		stopCtx:          stopCtx,
-		stopCancel:       stopCancel,
-		replySem:         make(chan struct{}, replyWorkerCap),
+		registryDir:          registryDir,
+		liveness:             ipeers.DefaultLiveness(),
+		budget:               2 * time.Second,
+		now:                  time.Now, // the one clock seam; every other clock reader below takes m.now
+		client:               newRemoteClient(),
+		fetch:                fetchRemote,
+		logf:                 log.Printf,
+		audit:                audit,
+		titles:               titles,
+		writeFrame:           ccuds.WriteFrame,
+		sockWriteTimeout:     ipeers.SocketWriteTimeout,
+		newMsgID:             uuid.NewString,
+		post:                 postDeliver,
+		stopCtx:              stopCtx,
+		stopCancel:           stopCancel,
+		replySem:             make(chan struct{}, replyWorkerCap),
+		putHostAfterSnapshot: func() {},
 	}
 	m.dedup = newDedupSet(ipeers.DedupWindow, m.now)
 	m.pairs = newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, m.now)
