@@ -31,17 +31,25 @@ const maxSendBodyBytes = 1 << 20
 // peerNotFoundHint is appended to the peer_not_found detail for an
 // address that matched no row.
 //
-// What it said before v3 was the exact inverse of the truth: that a
-// session is addressed by its tmux session name "not by a _xxxxxx label".
-// A v3 address IS the "_xxxxxxxx" form — the canonical id derived from the
-// session's sessionId — so the old hint sent a reader who had typed the
-// right kind of string off to find the one kind that cannot address
-// anyone. A confidently backwards hint costs more than no hint at all,
-// which is why this one names the canonical id, says plainly that a label
-// is not an address, and points at the two commands that print a live one.
+// This hint has now been wrong twice, in opposite directions, and the
+// history is the reason it is worth this much comment.
+//
+// Before v3 it said a session is addressed by its tmux session name "not by
+// a _xxxxxx label" — the exact inverse of v3, where the address IS the
+// "_xxxxxxxx" canonical id. v3 corrected it by naming the canonical id and
+// saying plainly that a label never addresses. v4 then made THAT half wrong
+// too: the everyday address head is the session's registry name, and no
+// eight-digit form is minted any more, so a reader following the v3 hint
+// went looking for a string nothing can produce.
+//
+// What survived both rewrites is the clause about the self-declared name
+// (now `title`), which has never addressed anything and still does not.
+// What keeps breaking is any sentence that names one form as "the" address.
+// So this version names all three and ranks them, rather than picking one.
+//
 // The wire "error" code is unchanged: anything matching on peer_not_found
 // is unaffected.
-const peerNotFoundHint = "an address is a session's canonical id (`_3k9f2mq4`), not the label it calls itself — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
+const peerNotFoundHint = "an address is `<host>/<name>`, where <name> is the session's own name — not the title it calls itself; add its ref as `<host>/<name> [<ref>]` when two sessions share a name, or use `<host>/_<ref>` alone, which never changes — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
 
 // maxDeliverRespBytes caps a remote daemon's /deliver answer: a
 // DeliverResponse or an APIError is a few hundred bytes at most, and the

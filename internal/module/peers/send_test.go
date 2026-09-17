@@ -779,29 +779,42 @@ func TestSend_LegacyCCAddress(t *testing.T) {
 	}
 }
 
-// TestSend_PeerNotFoundTeachesTheCanonicalAddress pins the peer_not_found
-// detail (v3 spec §7). The hint this replaced taught the exact opposite of
-// what is now true — it told the reader an unnamed session is addressed by
-// its tmux session name "not by a _xxxxxx label", and a v3 address is
-// precisely the "_xxxxxxxx" form. A hint that is confidently backwards is
-// worse than none: it sends the reader to look up a string that cannot
-// address anyone. The detail must instead name the canonical id, say that
-// a label never addresses, and point at the two commands that print a live
-// address. The wire "error" code stays peer_not_found — assertRefused
-// checks that — so nothing matching on it breaks.
-func TestSend_PeerNotFoundTeachesTheCanonicalAddress(t *testing.T) {
+// TestSend_PeerNotFoundTeachesTheV4AddressForms pins the peer_not_found
+// detail (v4 spec §5.5).
+//
+// This hint has been confidently backwards twice. Before v3 it taught the
+// tmux session name as the address, which v3 made false. v3 taught the
+// eight-digit canonical id, which v4 made false — no such form is minted
+// any more, so a reader following it hunts a string nothing produces. A
+// hint that is wrong is worse than none: it sends someone who typed a
+// correct address off to find an impossible one.
+//
+// The assertions below are therefore about coverage, not wording. The
+// detail must name all three v4 forms rather than crowning one, must keep
+// the clause that the self-declared title never addresses, and must point
+// at the two commands that print a live address. The negative assertions
+// pin the two retired teachings so neither can return. The wire "error"
+// code stays peer_not_found — assertRefused checks that — so nothing
+// matching on it breaks.
+func TestSend_PeerNotFoundTeachesTheV4AddressForms(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	req := s.sendReq()
-	req.To = remoteAlias + "/_ab12cd" // a v2 six-digit head, no longer minted
+	req.To = remoteAlias + "/_ab12cd" // a ref that matches no row
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
-	for _, want := range []string{`"_ab12cd"`, `"` + remoteAlias + `"`, "pdx peers --all", "pdx msg whoami", "canonical"} {
+	for _, want := range []string{
+		`"_ab12cd"`, `"` + remoteAlias + `"`,
+		"<host>/<name>", "[<ref>]", "<host>/_<ref>",
+		"title", "pdx peers --all", "pdx msg whoami",
+	} {
 		if !strings.Contains(ae.Detail, want) {
 			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
 		}
 	}
-	if strings.Contains(ae.Detail, "tmux session name") {
-		t.Errorf("detail = %q, still teaches the tmux-name form as the address", ae.Detail)
+	for _, gone := range []string{"tmux session name", "canonical"} {
+		if strings.Contains(ae.Detail, gone) {
+			t.Errorf("detail = %q, still teaches the retired %q form", ae.Detail, gone)
+		}
 	}
 	if len(s.postCalls()) != 0 {
 		t.Errorf("posts = %d, want none", len(s.postCalls()))
