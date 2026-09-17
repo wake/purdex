@@ -1,10 +1,16 @@
 // spa/src/lib/nex/event-reducer.ts — pure reducer from Nexen durable events
-// to the per-execution view state (spec §4.2.4). No React, no fetch, no
-// store: the hook feeds it history pages and SSE frames alike. Transient
-// frames never reach it (P-B2 adds a partial buffer for them).
+// to the per-execution view state (spec §4.2.4), plus the partial assembly
+// fed by transient stream frames (P-B2 spec §4.1). No React, no fetch, no
+// store: the hook feeds it history pages and SSE frames alike.
 import type { StreamMessage } from '../stream-ws'
+import { finalizeBlock, type PartialAssembly } from './partial'
 import type { NexSseFrame } from './sse-parser'
+import { endTurn, recordToolEnds, recordToolStarts, type ToolActivity } from './tool-activity'
 import type { ExecutionSummary, NexEvent } from './types'
+
+export type { PartialAssembly, PartialBlock } from './partial'
+export { applyTransientFrame, finalizedFor } from './partial'
+export type { ToolActivity } from './tool-activity'
 
 export interface ExecutionState {
   summary: ExecutionSummary | null
@@ -31,6 +37,12 @@ export interface ExecutionState {
   pendingLocal: { text: string; delivery: 'delivered' | 'queued' | null } | null
   sendError: { code: string; message: string; turnId?: string } | null
   lastTurn: { turnId: string; delivery: 'delivered' | 'queued' } | null
+  /** In-flight assistant message from transient frames; only applyTransientFrame / D-rules write it. */
+  partial: PartialAssembly | null
+  /** A turn is running per the event stream (observers see it too, unlike pendingSend). */
+  turnLive: boolean
+  /** Keyed by tool_use id; written by the durable A-rules only. */
+  tools: Record<string, ToolActivity>
 }
 
 export function defaultExecutionState(): ExecutionState {
@@ -48,6 +60,9 @@ export function defaultExecutionState(): ExecutionState {
     pendingLocal: null,
     sendError: null,
     lastTurn: null,
+    partial: null,
+    turnLive: false,
+    tools: {},
   }
 }
 
@@ -107,14 +122,32 @@ function patchSummary(s: ExecutionState, patch: Partial<ExecutionSummary>): Exec
   return { ...s, summaryStale: true, summary: s.summary ? { ...s.summary, ...patch } : null }
 }
 
+/** D3 + D4: the turn is over, so nothing can still be streaming or running. */
+const TURN_ENDING_KINDS = new Set([
+  'result', 'execution.terminal', 'execution.error', 'execution.rejected', 'execution.terminated',
+  'execution.interrupted', 'execution.turn_orphaned', 'execution.turn_stalled', 'execution.archived',
+])
+
+/** Spec §4.1 D1–D4 and §4.2 A1–A4; runs after the seq guard, before the per-kind reducers. */
+function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
+  // A subagent's frames (non-null parent_tool_use_id) — including its own
+  // `result` — must never end the main turn or touch the main partial/tools.
+  if (!isLifecycleKind(ev.kind) && p.parent_tool_use_id != null) return s
+  if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
+  if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
+  if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
+  if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
+  return s
+}
+
 export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionState {
   if (!Number.isFinite(ev.seq) || ev.seq <= s.lastSeq) return s
   const p = ev.payload ?? {}
-  let next: ExecutionState = { ...s, lastSeq: ev.seq }
+  let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq }, ev, p)
 
   if (!isLifecycleKind(ev.kind)) {
     next = { ...next, messages: [...next.messages, p as StreamMessage] }
-    if (ev.kind === 'result') next = { ...next, pendingSend: false }
+    if (ev.kind === 'result' && p.parent_tool_use_id == null) next = { ...next, pendingSend: false }
     return next
   }
 

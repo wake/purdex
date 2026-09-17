@@ -1,6 +1,6 @@
 // spa/src/lib/nex/event-reducer.test.ts
 import { describe, it, expect } from 'vitest'
-import { applyDurableEvent, defaultExecutionState, frameToEvent, isLifecycleKind, type ExecutionState } from './event-reducer'
+import { applyDurableEvent, applyTransientFrame, defaultExecutionState, frameToEvent, isLifecycleKind, type ExecutionState } from './event-reducer'
 import type { NexEvent, ExecutionSummary } from './types'
 
 const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): NexEvent =>
@@ -180,5 +180,92 @@ describe('frameToEvent / isLifecycleKind', () => {
     expect(isLifecycleKind('lease.acquired')).toBe(true)
     expect(isLifecycleKind('assistant')).toBe(false)
     expect(isLifecycleKind('rate_limit_event')).toBe(false)
+  })
+})
+
+describe('applyDurableEvent: turn composition (D2–D4, subagent guard)', () => {
+  const MSG = 'msg_011Cf9fLxdWgh5jkA2b9MjXt'
+  const at = (seq: number, kind: string, payload: Record<string, unknown>, created_at = seq * 100): NexEvent =>
+    ({ seq, execution_id: 'exc_1', kind, payload, created_at })
+  const streamEvent = (event: Record<string, unknown>): Record<string, unknown> =>
+    ({ type: 'stream_event', event, session_id: 's', parent_tool_use_id: null, uuid: 'u' })
+  const messageStart = (id: string = MSG) =>
+    streamEvent({ type: 'message_start', message: { id, type: 'message', role: 'assistant', content: [] } })
+  const delta = (index: number, d: Record<string, unknown>) =>
+    streamEvent({ type: 'content_block_delta', index, delta: d })
+  const transient = (s: ExecutionState, ...frames: Record<string, unknown>[]) =>
+    frames.reduce((acc, f) => applyTransientFrame(acc, 'stream_event', f), s)
+  const running = (id: string, startedAt = 100) => ({ [id]: { name: 'Bash', startedAt, endedAt: null, status: 'running' as const } })
+
+  it('D2: execution.running and execution.message_accepted each set turnLive', () => {
+    expect(applyDurableEvent(defaultExecutionState(), at(1, 'execution.running', {})).turnLive).toBe(true)
+    expect(applyDurableEvent(defaultExecutionState(), at(1, 'execution.message_accepted', { turn_id: 't', text: 'hi' })).turnLive).toBe(true)
+  })
+
+  it.each([
+    ['result', { type: 'result', subtype: 'success' }],
+    ['execution.terminal', { turn_id: 't', reason: 'completed', state: 'idle' }],
+    ['execution.error', { reason: 'boom' }],
+    ['execution.rejected', { reason: 'nope' }],
+    ['execution.terminated', { principal_id: 'p' }],
+    ['execution.interrupted', { turn_id: 't' }],
+    ['execution.turn_orphaned', { turn_id: 't' }],
+    ['execution.turn_stalled', { turn_id: 't' }],
+  ])('D3: %s clears partial, turnLive and aborts running tools', (kind, payload) => {
+    const base: ExecutionState = {
+      ...defaultExecutionState(),
+      turnLive: true,
+      partial: { messageId: MSG, finalized: 0, blocks: { 0: { index: 0, type: 'text', text: 'a', thinking: '', partialJson: '' } } },
+      tools: running('toolu_a'),
+    }
+    const s = applyDurableEvent(base, at(7, kind, payload))
+    expect(s.partial).toBeNull()
+    expect(s.turnLive).toBe(false)
+    expect(s.tools.toolu_a).toEqual({ name: 'Bash', startedAt: 100, endedAt: 700, status: 'aborted' })
+  })
+
+  it('D4: execution.archived clears partial and turnLive like D3', () => {
+    const base: ExecutionState = {
+      ...defaultExecutionState(),
+      turnLive: true,
+      partial: { messageId: MSG, finalized: 0, blocks: {} },
+      tools: running('toolu_a'),
+    }
+    const s = applyDurableEvent(base, at(3, 'execution.archived', { principal_id: 'p' }))
+    expect(s.partial).toBeNull()
+    expect(s.turnLive).toBe(false)
+    expect(s.tools.toolu_a.status).toBe('aborted')
+    expect(s.summaryStale).toBe(true)
+  })
+
+  it('F1: a subagent result (non-null parent_tool_use_id) neither ends the turn nor touches partial / tools, but is still pushed to messages', () => {
+    let s = transient(defaultExecutionState(), messageStart(), delta(0, { type: 'text_delta', text: 'a' }))
+    s = { ...s, tools: running('toolu_main') }
+    const before = s
+    s = applyDurableEvent(s, at(1, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: 'toolu_x' }))
+    expect(s.partial).toEqual(before.partial)
+    expect(s.turnLive).toBe(true)
+    expect(s.tools).toEqual(before.tools)
+    expect(s.tools.toolu_main.status).toBe('running')
+    expect(s.messages).toHaveLength(1)
+    expect(s.lastSeq).toBe(1)
+  })
+
+  it('F1: a subagent result does not clear pendingSend (the main turn is still in flight)', () => {
+    let s = { ...defaultExecutionState(), pendingSend: true }
+    s = applyDurableEvent(s, at(1, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: 'toolu_x' }))
+    expect(s.pendingSend).toBe(true)
+    s = applyDurableEvent(s, at(2, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: null }))
+    expect(s.pendingSend).toBe(false)
+  })
+
+})
+
+describe('defaultExecutionState', () => {
+  it('starts with no partial assembly, turnLive false and no tool activity', () => {
+    const s = defaultExecutionState()
+    expect(s.partial).toBeNull()
+    expect(s.turnLive).toBe(false)
+    expect(s.tools).toEqual({})
   })
 })

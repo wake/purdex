@@ -20,6 +20,9 @@ const ev = (seq: number, kind = 'assistant') => ({ seq, execution_id: E, kind, p
 // literal returned from an openNexSse mock structurally satisfies
 // NexSseHandle without each call site needing its own annotation.
 type CloseMock = ReturnType<typeof vi.fn<() => void>>
+const transient = (event: Record<string, unknown>) => ({ id: null, event: 'stream_event', data: JSON.stringify({ type: 'stream_event', event }) })
+const messageStart = (id: string) => transient({ type: 'message_start', message: { id, role: 'assistant', content: [] } })
+const textDelta = (index: number, text: string) => transient({ type: 'content_block_delta', index, delta: { type: 'text_delta', text } })
 
 let sseOpts: NexSseOptions | null
 let sseClose: CloseMock
@@ -68,19 +71,122 @@ describe('useExecutionSubscription', () => {
     expect(useExecutionStore.getState().executions[KEY].lastSeq).toBe(2)
   })
 
-  it('applies durable SSE frames, drops transient ones, mirrors status', async () => {
+  it('applies durable SSE frames and coalesces transient ones without moving lastSeq', async () => {
     renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     act(() => {
       sseOpts!.onStatus('open')
       sseOpts!.onFrame({ id: '3', event: 'assistant', data: '{"type":"assistant"}' })
-      sseOpts!.onFrame({ id: null, event: 'stream_event', data: '{}' })
-      sseOpts!.onFrame({ id: '4', event: 'assistant', data: '{not json' })
+      sseOpts!.onFrame(messageStart('m1'))
+      sseOpts!.onFrame(textDelta(0, 'hi'))
     })
+    expect(useExecutionStore.getState().executions[KEY].partial).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
     const st = useExecutionStore.getState().executions[KEY]
     expect(st.sse).toBe('open')
-    expect(st.messages).toHaveLength(3)
+    expect(st.partial?.blocks[0].text).toBe('hi')
     expect(st.lastSeq).toBe(3)
+    expect(st.messages).toHaveLength(3)
+  })
+
+  it('durable frames flush the transient queue first (delta then assistant in the same tick finalizes the block)', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame(messageStart('m1'))
+      sseOpts!.onFrame(textDelta(0, 'a'))
+      sseOpts!.onFrame({ id: '3', event: 'assistant', data: '{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"a"}],"stop_reason":null}}' })
+    })
+    const st = useExecutionStore.getState().executions[KEY]
+    expect(st.partial?.blocks[0]).toBeUndefined()
+    expect(st.partial?.finalized).toBe(1)
+    expect(st.messages).toHaveLength(3)
+    expect(st.messages[2].type).toBe('assistant')
+  })
+
+  it('reconnecting drops the queued transient frames', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame(textDelta(0, 'x'))
+      sseOpts!.onStatus('reconnecting')
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    expect(useExecutionStore.getState().executions[KEY].partial).toBeNull()
+  })
+
+  it('closed drops the queued transient frames', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame(textDelta(0, 'x'))
+      sseOpts!.onStatus('closed')
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    expect(useExecutionStore.getState().executions[KEY].partial).toBeNull()
+  })
+
+  it('connecting bumps the generation so an already-scheduled flush writes nothing', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame(textDelta(0, 'x'))
+      sseOpts!.onStatus('connecting')
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    expect(useExecutionStore.getState().executions[KEY].partial).toBeNull()
+  })
+
+  it('a stale-generation flush after reconnect cannot land on the new connection', async () => {
+    const applyTransient = vi.spyOn(useExecutionStore.getState(), 'applyTransient')
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    const snapshot = { message_id: 'm1', blocks: [{ index: 0, text: 'snap' }] }
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame(textDelta(0, 'old'))
+      sseOpts!.onStatus('reconnecting')
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame({ id: null, event: 'stream_snapshot', data: JSON.stringify(snapshot) })
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    expect(applyTransient).toHaveBeenCalledTimes(1)
+    expect(applyTransient).toHaveBeenCalledWith(H, E, [{ kind: 'stream_snapshot', payload: snapshot }])
+    const st = useExecutionStore.getState().executions[KEY]
+    expect(st.partial?.messageId).toBe('m1')
+    expect(st.partial?.blocks[0].text).toBe('snap')
+    applyTransient.mockRestore()
+  })
+
+  it('unmount drops the queue and never writes after close', async () => {
+    const { unmount } = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame(textDelta(0, 'x'))
+    })
+    unmount()
+    expect(sseClose).toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    expect(useExecutionStore.getState().executions[KEY].partial).toBeNull()
+  })
+
+  it('malformed transient JSON is dropped without a console warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame({ id: null, event: 'stream_event', data: '{not json' })
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    expect(warn).not.toHaveBeenCalled()
+    expect(useExecutionStore.getState().executions[KEY].partial).toBeNull()
+    warn.mockRestore()
   })
 
   it('refetches the summary when a lifecycle event marks it stale (debounced) and after reconnect', async () => {

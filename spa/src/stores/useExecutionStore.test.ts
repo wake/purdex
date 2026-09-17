@@ -123,6 +123,51 @@ describe('useExecutionStore', () => {
     expect(useExecutionStore.getState().executions['h:exc_1'].sse).toBe('paused')
   })
 
+  describe('applyTransient (spec §4.3 — one set() per batch)', () => {
+    const streamEvent = (event: Record<string, unknown>) =>
+      ({ kind: 'stream_event', payload: { type: 'stream_event', event, session_id: 's', parent_tool_use_id: null, uuid: 'u' } })
+    const messageStart = (id = 'msg_1') =>
+      streamEvent({ type: 'message_start', message: { id, type: 'message', role: 'assistant', content: [] } })
+    const textDelta = (index: number, text: string) =>
+      streamEvent({ type: 'content_block_delta', index, delta: { type: 'text_delta', text } })
+
+    it('folds message_start + three text deltas from one call into one block with the concatenated text and turnLive', () => {
+      useExecutionStore.getState().applyTransient('h', 'exc_1', [
+        messageStart(), textDelta(0, 'hel'), textDelta(0, 'lo '), textDelta(0, 'world'),
+      ])
+      const st = useExecutionStore.getState().executions['h:exc_1']
+      expect(st.turnLive).toBe(true)
+      expect(st.partial?.messageId).toBe('msg_1')
+      expect(Object.keys(st.partial?.blocks ?? {})).toEqual(['0'])
+      expect(st.partial?.blocks[0].text).toBe('hello world')
+    })
+
+    it('a batch of only lease.renewed frames on an untouched execution materialises no entry', () => {
+      useExecutionStore.getState().applyTransient('h', 'exc_ghost', [
+        { kind: 'lease.renewed', payload: { lease_id: 'ls', expires_at: 5 } },
+        { kind: 'lease.renewed', payload: { lease_id: 'ls', expires_at: 6 } },
+      ])
+      expect(useExecutionStore.getState().executions['h:exc_ghost']).toBeUndefined()
+    })
+
+    it('clearExecution after applyTransient drops the entry including its partial', () => {
+      const s = useExecutionStore.getState()
+      s.applyTransient('h', 'exc_1', [messageStart(), textDelta(0, 'hi')])
+      expect(useExecutionStore.getState().executions['h:exc_1'].partial?.blocks[0].text).toBe('hi')
+      s.clearExecution('h', 'exc_1')
+      expect(useExecutionStore.getState().executions['h:exc_1']).toBeUndefined()
+    })
+
+    it('does not change lastSeq on an execution that already has durable events', () => {
+      const s = useExecutionStore.getState()
+      s.applyEvents('h', 'exc_1', [ev(7, 'assistant', { type: 'assistant' })])
+      s.applyTransient('h', 'exc_1', [messageStart(), textDelta(0, 'hi')])
+      const st = useExecutionStore.getState().executions['h:exc_1']
+      expect(st.lastSeq).toBe(7)
+      expect(st.partial?.blocks[0].text).toBe('hi')
+    })
+  })
+
   it('clearExecution removes one entry; clearHost removes only that host', () => {
     const s = useExecutionStore.getState()
     s.applyEvents('h1', 'exc_1', [ev(1, 'assistant', { type: 'assistant' })])

@@ -11,6 +11,7 @@ import { attachObserve, fetchExecutionEvents, getExecution } from '../lib/nex/ne
 import { openNexSse, type NexSseHandle } from '../lib/nex/nex-sse'
 import { frameToEvent } from '../lib/nex/event-reducer'
 import { subscriptionSlots } from '../lib/nex/subscription-slots'
+import { createTransientFrameQueue, type TransientFrameQueue } from '../lib/nex/transient-frame-queue'
 import { NexApiError } from '../lib/nex/types'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -125,9 +126,21 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     // e.g. "nex: init: assembling engine: …") — falls back to the problem
     // code itself only when the caller has nothing better (a plain reason
     // like 'host_removed' has no server text to carry).
-    const teardown = (reason?: SubscriptionProblem, detail?: string) => {
+    // Transient frames (spec §4.3) go through a per-stream queue that
+    // coalesces them per animation frame and drops them at connection
+    // boundaries (transient-frame-queue.ts). One queue per openStream: a
+    // closed queue never flushes again, and a pane resumed after eviction
+    // opens a fresh stream with a fresh queue.
+    let queue: TransientFrameQueue | null = null
+    const closeStream = () => {
       sseRef.current?.close()
       sseRef.current = null
+      queue?.close()
+      queue = null
+    }
+
+    const teardown = (reason?: SubscriptionProblem, detail?: string) => {
+      closeStream()
       if (refetchTimer) { clearTimeout(refetchTimer); refetchTimer = null }
       if (reason) {
         setProblem(reason)
@@ -170,17 +183,28 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
         store().setHistoryLoaded(hostId, executionId, true)
         let warnedMalformed = false
         const openStream = () => {
+          queue?.close()
+          const q = createTransientFrameQueue({ flush: (batch) => store().applyTransient(hostId, executionId, batch) })
+          queue = q
           sseRef.current = openNexSse({
             hostId,
             url: obs.stream_url,
             getLastEventId: () => store().executions[key]?.lastSeq ?? null,
             onFrame: (frame) => {
+              if (frame.id == null) {
+                let payload: unknown
+                try { payload = JSON.parse(frame.data) } catch { return }
+                if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
+                q.enqueue(frame.event, payload as Record<string, unknown>)
+                return
+              }
+              // A delta queued before its finalizing `assistant` must land first.
+              q.flushNow()
               const ev = frameToEvent(frame)
               if (!ev) {
-                // Transient frames are expected (P-B2 renders them); a durable
-                // frame that does not parse is dropped without moving the cursor
-                // and warned about once per connection (spec §4.5).
-                if (frame.id != null && !warnedMalformed) {
+                // A durable frame that does not parse is dropped without moving
+                // the cursor and warned about once per connection (spec §4.5).
+                if (!warnedMalformed) {
                   warnedMalformed = true
                   console.warn(`nex sse: dropped malformed durable frame id=${frame.id} kind=${frame.event}`)
                 }
@@ -190,6 +214,8 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
             },
             onStatus: (status, err) => {
               if (cancelled) return
+              if (status === 'connecting' || status === 'reconnecting') q.bumpGeneration()
+              if (status === 'closed') q.close()
               store().setSse(hostId, executionId, status, err?.message ?? null)
               if (status === 'reconnecting') wasReconnecting = true
               if (status === 'open') { warnedMalformed = false; if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
@@ -222,7 +248,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
         // claimIfFree grabs a free slot without evicting anyone, so a
         // restored (hidden, inactive) tab still goes live up to the cap.
         unsubEvict = subscriptionSlots.onEvict(key, () => {
-          sseRef.current?.close(); sseRef.current = null
+          closeStream()
           setPaused(true)
           store().setSse(hostId, executionId, 'paused')
         })

@@ -17,6 +17,7 @@ export interface ContentBlock {
 export interface AssistantMessage {
   type: 'assistant'
   message: {
+    id?: string
     role: 'assistant'
     content: ContentBlock[]
     stop_reason: string | null
