@@ -15,12 +15,38 @@
 - **Ref grammar:** `^_[0-9a-z]{6}$` — `_` + exactly 6 base36 digits, zero-padded, from `FNV-1a-64(sessionId) mod 36^6`.
 - **Routable-name grammar:** `^[a-z0-9][a-z0-9-]{1,63}$` **and not** `^[0-9a-z]{6}$`.
 - **Title grammar:** ≤64 bytes, printable UTF-8, no control characters. No reserved words.
+- **All `internal/peers` tests live in `package peers`** (internal tests). Call `RefID`, `Build`, `Resolve`, `PeerRecord` directly — **never** `peers.RefID`. `internal/module/peers` tests are `package peers` too (the module package); `cmd/pdx` tests are `package main`.
 - **Build the daemon with `make build`**, never bare `go build` — the version is injected via ldflags and a bare build yields `version unknown`.
-- **The repo root holds a version-controlled 2.7 MB `pdx` binary that `go build ./cmd/...` overwrites.** Every commit must use `git commit --only <explicit files>`. Never `git commit -am`.
+- **The repo root holds a version-controlled 2.7 MB `pdx` binary that `go build ./cmd/...` overwrites.** Every commit uses `git commit --only` with the **explicit file list printed in that task's commit step**. Never `git commit -am`, and never expand `$(git diff --name-only)` into a commit — this worktree may host parallel subagents sharing one index, and a dynamic expansion sweeps in their work.
 - **Go tests:** `go test -race -count=1 ./internal/peers/...` (scope narrowed per task).
 - **SPA:** `cd spa && npx vitest run`, `pnpm run lint`, `pnpm run build`.
 - **Known flake, not yours:** `internal/module/agent`'s `TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown` reddens intermittently under parallel load and passes alone (#1092).
-- **Every task is its own commit.** Parallel subagents in this worktree share one git index — `--only` with explicit paths is what keeps them from sweeping each other's files in.
+
+### Existing test fixtures you will reuse (verified 2026-09-17)
+
+| symbol | file | signature |
+|---|---|---|
+| `liveRow` | `internal/peers/address_test.go:21` | `liveRow(canonical, label, sessionName string, pid int) PeerRecord` — **Task A4 extends this**; it currently sets `Canonical` and no `PeerName` |
+| `inboxDeadRow` | `internal/peers/address_test.go:35` | `inboxDeadRow(canonical, label, sessionName string) PeerRecord` |
+| `mustMarshalMap` | `internal/peers/record_test.go:14` | `mustMarshalMap(t *testing.T, v any) map[string]any` |
+| `formatPeersTable` | `cmd/pdx/peers.go:370` | `formatPeersTable(resp peers.Envelope) string` — returns a string, takes no writer |
+| `formatHostsTable` | `cmd/pdx/peers.go:715` | `formatHostsTable(hosts []cliHostRow) string` |
+| `cliHostRow` | `cmd/pdx/peers.go:560` | `{Alias, URL, HostID string; Verified, HasToken, HasInboundToken, AllowBypass bool}` |
+| `runMsgSend` | `cmd/pdx/msg.go:280` | `runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int` |
+
+`record_test.go` has **no** `buildInputWithEntry`-style helpers. Its tests construct data inline:
+
+```go
+in := BuildInput{
+	Alias:    "mini-lab",
+	Sessions: []SessionSummary{{Code: "s1", Name: "mt1", Cwd: "/w", TmuxInstance: "t1"}},
+	Owners:   map[string]Owner{"s1": {AgentType: "cc", SessionID: "sess-x", TmuxPaneID: "%1", Status: "idle"}},
+	Entries:  []Entry{{PID: 100, SessionID: "sess-x", Name: "purdex-1", Tmux: "mt1:@1.%1", Inbox: "/tmp/1.sock"}},
+}
+got := Build(in)
+```
+
+Follow that idiom. Do not invent helpers that other tasks would then have to match.
 
 ---
 
@@ -28,18 +54,19 @@
 
 | File | Responsibility | Task |
 |---|---|---|
-| `internal/peers/ref.go` (renamed from `label.go`) | ref derivation, `RoutableName`, title grammar, `SplitSession` | A1, A2, B1 |
-| `internal/peers/record.go` | `PeerRecord`, `Build`, `applyIdentity` — the single writer of identity fields | A3 |
-| `internal/peers/address.go` | `Resolve` and its tiers, `ErrNameMismatch`, `hasStaleVersionRows` | A4, A6 |
+| `internal/peers/ref.go` (renamed from `label.go`) | ref derivation, `RoutableName`, title grammar | A1, A2, B1 |
+| `internal/peers/record.go` | `PeerRecord`, `Build`, `applyIdentity` — single writer of identity fields | A3 |
+| `internal/peers/address.go` | `Resolve`, `resolveRefHead`, `ErrNameMismatch`, `hasStaleVersionRows` | A4, A6 |
 | `internal/peers/wire.go` | `WireFrom.Address`, `ValidateWireAddress` | A5 |
-| `internal/peers/envelope.go` | `Envelope.Alias`, `HostResult.SelfAlias` | C1 |
-| `cmd/pdx/peers.go` | table columns, display composition | A7 |
+| `internal/peers/envelope.go` | `Envelope.Alias`, `HostResult.SelfAlias` | C1, C3 |
+| `cmd/pdx/peers.go` | table columns, display composition | A7, C3 |
 | `cmd/pdx/msg.go` | send input forms, `whoami` block | A8 |
-| `internal/module/peers/hosts.go` | alias learning and adoption | C2 |
-| `internal/module/peers/titles.go` (renamed from `labels.go`) | claim/release routes | B2 |
-| `internal/store/peer_label.go` | title store (table name unchanged on disk) | B2 |
-| `spa/src/stores/usePeerStore.ts` | field renames | A3, B3 |
+| `internal/module/peers/hosts.go` | alias learning and adoption | C1, C2 |
+| `internal/module/peers/titles.go` (from `labels.go`) | claim/release routes | B2 |
+| `spa/src/stores/usePeerStore.ts` | field renames | A3b, B3 |
 | `spa/src/components/StatusBar.tsx` | display vs clipboard split | A9 |
+
+**Ordering.** A1 → A2 may run in parallel. A3 needs A1+A2. A3b needs A3. A4 needs A3. A6 needs A4 (it edits the same function). A5, A7, A8 need A3. A9 needs A3b. B1 is independent of Phase A and may run any time. B2 needs B1 **and** A3 (it renames fields A3 also touches). B3 needs B2. C1 → C2 → C3 are serial. D1 is last.
 
 ---
 
@@ -48,82 +75,79 @@
 ### Task A1: Ref derivation at width 6
 
 **Files:**
-- Rename: `internal/peers/label.go` → `internal/peers/ref.go`
-- Rename: `internal/peers/label_test.go` → `internal/peers/ref_test.go`
+- Rename: `internal/peers/label.go` → `internal/peers/ref.go`; `internal/peers/label_test.go` → `internal/peers/ref_test.go`
 - Test: `internal/peers/ref_test.go`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `RefID(sessionID string) string`, `IsRef(s string) bool`. Both replace `CanonicalID` / `IsCanonicalID`, which are deleted.
+- Produces: `RefID(sessionID string) string`, `IsRef(s string) bool`. `CanonicalID` and `IsCanonicalID` survive this task as **deprecated one-line aliases** so the tree keeps compiling; Task A3 deletes them.
 
 - [ ] **Step 1: Write the failing tests**
 
+Append to `internal/peers/ref_test.go` (`package peers` — no `peers.` prefix anywhere):
+
 ```go
-// TestRefID_Shape pins the grammar every other tier depends on.
 func TestRefID_Shape(t *testing.T) {
-	for _, sid := range []string{
-		"a57f3d89-5850-4812-84f5-d24d6c561902",
-		"",
-		"x",
-	} {
-		got := peers.RefID(sid)
+	for _, sid := range []string{"a57f3d89-5850-4812-84f5-d24d6c561902", "", "x"} {
+		got := RefID(sid)
 		if !regexp.MustCompile(`^_[0-9a-z]{6}$`).MatchString(got) {
 			t.Errorf("RefID(%q) = %q, want ^_[0-9a-z]{6}$", sid, got)
 		}
-		if !peers.IsRef(got) {
+		if !IsRef(got) {
 			t.Errorf("IsRef(%q) = false, want true", got)
 		}
 	}
 }
 
-// TestRefID_Deterministic is the property a resume and a daemon restart rest on.
 func TestRefID_Deterministic(t *testing.T) {
 	const sid = "1ab9778a-38a4-4355-bc76-b82c9baa61b8"
-	if a, b := peers.RefID(sid), peers.RefID(sid); a != b {
+	if a, b := RefID(sid), RefID(sid); a != b {
 		t.Errorf("RefID not deterministic: %q != %q", a, b)
 	}
 }
 
 // TestRefID_PinnedVector fails loudly if a refactor changes every address on
 // every host at once. The expectation is a LITERAL on purpose: a vector that
-// recomputes its own expectation asserts nothing. Fill it in at Step 4 and
-// change it only alongside a deliberate format change.
+// recomputes its own expectation asserts nothing. Fill it in at Step 4.
 func TestRefID_PinnedVector(t *testing.T) {
 	const sid = "1ab9778a-38a4-4355-bc76-b82c9baa61b8"
 	const want = "REPLACE_AT_STEP_4"
-	if got := peers.RefID(sid); got != want {
+	if got := RefID(sid); got != want {
 		t.Errorf("RefID(%q) = %q, want %q", sid, got, want)
 	}
 }
 
-// TestIsRef_Rejects guards the namespace boundary RoutableName also defends.
 func TestIsRef_Rejects(t *testing.T) {
-	for _, s := range []string{
-		"", "_", "_q34psn4f", "q34psn", "_Q34PSN", "_q34ps", "_q34psn7x", "purdex-b0",
-	} {
-		if peers.IsRef(s) {
+	for _, s := range []string{"", "_", "_q34psn4f", "q34psn", "_Q34PSN", "_q34ps", "purdex-b0"} {
+		if IsRef(s) {
 			t.Errorf("IsRef(%q) = true, want false", s)
 		}
 	}
 }
 ```
 
+Add `"regexp"` to the test file's imports if it is not already there.
+
 - [ ] **Step 2: Run the tests and watch them fail**
 
 Run: `go test -race -count=1 ./internal/peers/ -run 'TestRefID|TestIsRef'`
-Expected: FAIL — `undefined: peers.RefID`, `undefined: peers.IsRef`.
+Expected: FAIL — `undefined: RefID`, `undefined: IsRef`.
 
 - [ ] **Step 3: Rename the file and narrow the width**
 
-`git mv internal/peers/label.go internal/peers/ref.go` and
-`git mv internal/peers/label_test.go internal/peers/ref_test.go`, then in `ref.go`:
+```bash
+git mv internal/peers/label.go internal/peers/ref.go
+git mv internal/peers/label_test.go internal/peers/ref_test.go
+```
+
+In `ref.go`, change the two constants, replace `canonicalPattern`, and add the two functions plus the compatibility aliases:
 
 ```go
 const (
 	// canonicalN is 6, not 8: the ref is no longer the only way to reach a
-	// conversation (v4 §5.1). The name covers a ref collision exactly as the
-	// ref covers a name collision, so the width carries a tiebreaker's budget
-	// rather than the whole address's. 36^6 ≈ 2.18e9 puts the birthday
+	// conversation (v4 spec §5.1). The name covers a ref collision exactly as
+	// the ref covers a name collision, so the width carries a tiebreaker's
+	// budget rather than the whole address's. 36^6 ≈ 2.18e9 puts the birthday
 	// probability for 100 live conversations at ≈2.3e-6.
 	canonicalN     = 6
 	canonicalSpace = 36 * 36 * 36 * 36 * 36 * 36 // 36^6
@@ -131,9 +155,9 @@ const (
 
 var refPattern = regexp.MustCompile(`^_[0-9a-z]{6}$`)
 
-// IsRef reports whether s has the ref form, "_" followed by exactly 6
-// base36 digits. The leading '_' is half of what keeps the ref namespace
-// disjoint from the name namespace; RoutableName is the other half.
+// IsRef reports whether s has the ref form, "_" followed by exactly 6 base36
+// digits. The leading '_' is half of what keeps the ref namespace disjoint
+// from the name namespace; RoutableName (Task A2) is the other half.
 func IsRef(s string) bool { return refPattern.MatchString(s) }
 
 // RefID derives a conversation's ref from its Claude Code sessionId:
@@ -150,29 +174,34 @@ func RefID(sessionID string) string {
 	}
 	return "_" + string(out)
 }
+
+// Deprecated: use RefID / IsRef.
+//
+// These exist for exactly one task. Renaming the FUNCTION here and the FIELD
+// in Task A3 as one change would mean a single unreviewable commit spanning
+// 45 files; splitting them means this task cannot also delete the old names.
+// Task A3 removes both lines along with the Canonical field.
+func CanonicalID(sessionID string) string { return RefID(sessionID) }
+func IsCanonicalID(s string) bool         { return IsRef(s) }
 ```
 
-Delete `CanonicalID`, `IsCanonicalID` and `canonicalPattern`. Compilation will break across the tree — that is expected and Task A3 repairs it; to keep this task independently testable, apply a mechanical `CanonicalID` → `RefID` and `IsCanonicalID` → `IsRef` rename at every call site now (`gofmt -r` or editor rename), changing nothing else.
+Delete the old `CanonicalID` body and `canonicalPattern`. **Touch no other file.** The old names still resolve, so the tree still compiles.
 
 - [ ] **Step 4: Fill in the pinned vector**
 
-The failing `TestRefID_PinnedVector` now prints the real value in its own error
-message: `RefID("1ab9...") = "_xxxxxx", want "REPLACE_AT_STEP_4"`. Copy the
-value from the left-hand side into the `want` constant. No scratch code and no
-extra run — the assertion that is about to pass is the one that produced the
-number.
+The failing `TestRefID_PinnedVector` prints the real value in its own message:
+`RefID("1ab9...") = "_xxxxxx", want "REPLACE_AT_STEP_4"`. Copy the left-hand value into `want`.
 
-- [ ] **Step 5: Run the tests and verify they pass**
+- [ ] **Step 5: Run the package and verify nothing else broke**
 
-Run: `go test -race -count=1 ./internal/peers/ -run 'TestRefID|TestIsRef' -v`
-Expected: PASS, four tests.
+Run: `go test -race -count=1 ./internal/peers/ -v`
+Expected: PASS. Pre-existing tests asserting an 8-digit canonical will fail — update **those assertions only** (width 8 → 6); do not change what they test.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git commit --only internal/peers/ref.go internal/peers/ref_test.go \
-  $(git diff --name-only | grep -E '\.go$' | tr '\n' ' ') \
-  -m "feat(peers): derive a 6-digit ref, replacing the 8-digit canonical id"
+  -m "feat(peers): derive a 6-digit ref, with the canonical names kept as aliases"
 ```
 
 ---
@@ -184,100 +213,97 @@ git commit --only internal/peers/ref.go internal/peers/ref_test.go \
 - Test: `internal/peers/ref_test.go`
 
 **Interfaces:**
-- Consumes: `IsRef` from A1.
+- Consumes: nothing (it does not call `IsRef`; it matches the ref *shape* independently).
 - Produces: `RoutableName(s string) bool`.
 
-**Why this task exists:** the first draft of the spec assumed a registry name could never look like a ref. Nothing enforces that — `registry.go:383` assigns the field raw from JSON and `internal/peers/ccuds/registry_write.go:175` writes arbitrary strings into it. This function is what makes the assumption true instead of assumed.
+**Why this task exists:** the spec's first draft assumed a registry name could never look like a ref. Nothing enforces that — `registry.go:383` assigns the field raw from JSON and `internal/peers/ccuds/registry_write.go:175` writes arbitrary strings into it. This function makes the assumption true instead of assumed.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```go
 func TestRoutableName_AcceptsObservedCorpus(t *testing.T) {
-	// Every name in ~/.claude/sessions on mini-lab, 2026-09-17.
+	// Every registry name on mini-lab, 2026-09-17.
 	for _, s := range []string{
 		"purdex-b0", "purdex-53", "purdex-03", "nexen-f2", "nexen-ec",
 		"ai-chat-story-3a", "at-inwin-plugin-2e", "invoice-plane-89",
-		"firefly-be", "csp-plugin-5e", "mlab-c8", "air19-e2", "istdc-a5",
-		"barbox-a6",
+		"firefly-be", "csp-plugin-5e", "mlab-c8", "air19-e2", "istdc-a5", "barbox-a6",
 	} {
-		if !peers.RoutableName(s) {
+		if !RoutableName(s) {
 			t.Errorf("RoutableName(%q) = false, want true", s)
 		}
 	}
 }
 
-// TestRoutableName_RejectsAddressSyntax: each of these would make a name
-// address unparseable or ambiguous against the address grammar.
+// Each of these would make a name address unparseable or ambiguous.
 func TestRoutableName_RejectsAddressSyntax(t *testing.T) {
 	for _, s := range []string{
-		"", "-lead", "has/slash", "has:colon", "has space", "has[bracket]",
-		"_leading-underscore", "UPPER", "tráiler",
-		strings.Repeat("a", 65),
+		"", "a", "-lead", "has/slash", "has:colon", "has space", "has[bracket]",
+		"_leading-underscore", "UPPER", "tráiler", strings.Repeat("a", 65),
 	} {
-		if peers.RoutableName(s) {
+		if RoutableName(s) {
 			t.Errorf("RoutableName(%q) = true, want false", s)
 		}
 	}
 }
 
-// TestRoutableName_RejectsRefShaped is the whole point: a six-digit name
-// would shadow the bare-ref input form for anyone copying bracket text.
+// The whole point: a six-digit name would shadow the bare-ref input form for
+// anyone copying bracket text.
 func TestRoutableName_RejectsRefShaped(t *testing.T) {
 	for _, s := range []string{"q34psn", "abc123", "000000", "zzzzzz"} {
-		if peers.RoutableName(s) {
+		if RoutableName(s) {
 			t.Errorf("RoutableName(%q) = true, want false (ref-shaped)", s)
 		}
 	}
-	// One character either side of the ref width stays routable.
 	for _, s := range []string{"abc12", "abc1234"} {
-		if !peers.RoutableName(s) {
+		if !RoutableName(s) {
 			t.Errorf("RoutableName(%q) = false, want true", s)
 		}
 	}
 }
 
 func TestRoutableName_BoundaryLengths(t *testing.T) {
-	if !peers.RoutableName("ab") {
-		t.Error("RoutableName(2 chars) = false, want true")
+	if !RoutableName("ab") {
+		t.Error("2 chars rejected")
 	}
-	if !peers.RoutableName(strings.Repeat("a", 64)) {
-		t.Error("RoutableName(64 chars) = false, want true")
-	}
-	if peers.RoutableName("a") {
-		t.Error("RoutableName(1 char) = true, want false")
+	if !RoutableName(strings.Repeat("a", 64)) {
+		t.Error("64 chars rejected")
 	}
 }
 ```
 
+Add `"strings"` to the test imports if absent.
+
 - [ ] **Step 2: Run the tests and watch them fail**
 
 Run: `go test -race -count=1 ./internal/peers/ -run TestRoutableName`
-Expected: FAIL — `undefined: peers.RoutableName`.
+Expected: FAIL — `undefined: RoutableName`.
 
 - [ ] **Step 3: Implement**
 
 ```go
-var routableNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)
-var refShapedPattern = regexp.MustCompile(`^[0-9a-z]{6}$`)
+var (
+	routableNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)
+	refShapedPattern    = regexp.MustCompile(`^[0-9a-z]{6}$`)
+)
 
-// RoutableName reports whether a Claude Code registry name may be used as
-// an address head (v4 spec §5.2).
+// RoutableName reports whether a Claude Code registry name may be used as an
+// address head (v4 spec §5.2).
 //
-// The registry name is an unvalidated JSON string: registry.go assigns it
-// raw, and ccuds.RewriteRegistryName can write anything into it. Two
-// independent hazards follow, and this function closes both:
+// The registry name is an unvalidated JSON string: registry.go assigns it raw
+// and ccuds.RewriteRegistryName can write anything into it. Two independent
+// hazards follow, and this function closes both:
 //
-//   - the PATTERN keeps '/' ':' ' ' '[' ']' and a leading '_' out of an
-//     address head, so "<host>/<name>" always parses and can never be read
-//     as a ref;
-//   - the REF-SHAPED exclusion is what makes Resolve's bare-ref tier safe.
-//     The table prints "[q34psn]", so an operator copying bracket text
-//     types "q34psn"; without this clause a conversation named "q34psn"
-//     would silently shadow the ref of another, and anything able to write
-//     a registry file could arrange exactly that.
+//   - the PATTERN keeps '/', ':', ' ', '[', ']' and a leading '_' out of an
+//     address head, so "<host>/<name>" always parses and can never be read as
+//     a ref;
+//   - the REF-SHAPED exclusion is what makes Resolve's bare-ref tier safe. The
+//     table prints "[q34psn]", so an operator copying bracket text types
+//     "q34psn"; without this clause a conversation named "q34psn" would
+//     silently shadow another's ref, and anything able to write a registry
+//     file could arrange exactly that.
 //
-// A name that fails is still displayed. It simply never becomes an address:
-// its row is reachable by ref only, and carries Reason "name_unroutable".
+// A failing name is still displayed. It simply never becomes an address: its
+// row is reachable by ref only and carries Reason "name_unroutable".
 func RoutableName(s string) bool {
 	return routableNamePattern.MatchString(s) && !refShapedPattern.MatchString(s)
 }
@@ -297,62 +323,73 @@ git commit --only internal/peers/ref.go internal/peers/ref_test.go \
 
 ---
 
-### Task A3: `PeerRecord` — `Ref`, no `Suffix`, and the new `Address`
+### Task A3: `PeerRecord` — `Ref`, no `Suffix`, and the new `Address` (Go atom)
 
 **Files:**
-- Modify: `internal/peers/record.go` (field block at `:34-70`, `applyLabel` at `:270-306`, `WireAddress` at `:82`)
-- Modify: every file referencing `.Canonical` or `.Suffix` (45 and 33 files respectively — mechanical)
-- Modify: `spa/src/stores/usePeerStore.ts`
-- Test: `internal/peers/record_test.go`, `spa/src/stores/usePeerStore.test.ts`
+- Modify: `internal/peers/record.go`, `internal/peers/ref.go` (delete the A1 aliases), and every Go file referencing `.Canonical` / `.Suffix` / `CanonicalID` / `IsCanonicalID`
+- Test: `internal/peers/record_test.go`
 
 **Interfaces:**
-- Consumes: `RefID`, `RoutableName` from A1/A2.
-- Produces: `PeerRecord.Ref string` (json `ref`), `PeerRecord.Address` in the forms `<host>/<name>` | `<host>/_<ref>` | `<host>/tmux:<session>`; `PeerRecord.Suffix` deleted; `applyLabel` renamed `applyIdentity` with signature `applyIdentity(rec *PeerRecord, alias string, info LabelInfo, ref, ccName string)` — note `tmuxName` is dropped, it existed only to build `Suffix`.
+- Consumes: `RefID`, `RoutableName`.
+- Produces: `PeerRecord.Ref string` (json `ref`); `PeerRecord.Suffix` **deleted**; `applyIdentity(rec *PeerRecord, alias string, info LabelInfo, ref, ccName string)` replacing `applyLabel` (the `tmuxName` parameter goes — it existed only to build `Suffix`).
 
-**This task must land atomically.** Renaming a struct field breaks the package until every reference is updated; a partial commit does not compile.
+**This task must land atomically.** Renaming a struct field breaks the package until every reference is updated.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Enumerate the blast radius before touching anything**
+
+```bash
+grep -rln '\.Canonical\|\.Suffix\|CanonicalID\|IsCanonicalID\|Suffix(' --include='*.go' . | sort | tee /tmp/a3-files.txt
+wc -l /tmp/a3-files.txt
+```
+
+That list is your commit allowlist for Step 7. If a file appears that you did not change, drop it from the commit rather than committing it.
+
+- [ ] **Step 2: Write the failing tests**
+
+Append to `internal/peers/record_test.go` (`package peers`):
 
 ```go
-// TestApplyIdentity_NameAddress: the everyday case.
-func TestApplyIdentity_NameAddress(t *testing.T) {
-	recs := peers.Build(buildInputWithEntry(t, "purdex-b0", "sid-1"))
-	got := findBySessionID(t, recs, "sid-1")
-	if want := "mlab/purdex-b0"; got.Address != want {
-		t.Errorf("Address = %q, want %q", got.Address, want)
-	}
-	if got.Ref != peers.RefID("sid-1") {
-		t.Errorf("Ref = %q, want %q", got.Ref, peers.RefID("sid-1"))
+// ccBuildInput is the minimal BuildInput for one deliverable cc row. It
+// mirrors TestBuild_CC_OneCandidate_Deliverable's shape.
+func ccBuildInput(name, sessionID string) BuildInput {
+	return BuildInput{
+		Alias:    "mlab",
+		Sessions: []SessionSummary{{Code: "s1", Name: "mt1", Cwd: "/w", TmuxInstance: "t1"}},
+		Owners: map[string]Owner{
+			"s1": {AgentType: "cc", SessionID: sessionID, TmuxPaneID: "%1", Status: "idle"},
+		},
+		Entries: []Entry{{
+			PID: 100, SessionID: sessionID, Name: name, NameSource: "derived",
+			Cwd: "/w", Tmux: "mt1:@1.%1", Inbox: "/tmp/1.sock", Status: "idle",
+		}},
 	}
 }
 
-// TestApplyIdentity_UnroutableNameFallsBackToRef is A2's payoff: a name
-// that cannot be an address must not produce a broken one.
+func TestApplyIdentity_NameAddress(t *testing.T) {
+	got := Build(ccBuildInput("purdex-b0", "sess-x"))[0]
+	if want := "mlab/purdex-b0"; got.Address != want {
+		t.Errorf("Address = %q, want %q", got.Address, want)
+	}
+	if want := RefID("sess-x"); got.Ref != want {
+		t.Errorf("Ref = %q, want %q", got.Ref, want)
+	}
+}
+
+// A name that cannot be an address must not produce a broken one.
 func TestApplyIdentity_UnroutableNameFallsBackToRef(t *testing.T) {
-	for _, bad := range []string{"has/slash", "q34psn", "_underscore", ""} {
-		recs := peers.Build(buildInputWithEntry(t, bad, "sid-2"))
-		got := findBySessionID(t, recs, "sid-2")
-		want := "mlab/" + peers.RefID("sid-2")
-		if got.Address != want {
+	for _, bad := range []string{"has/slash", "q34psn", "_underscore"} {
+		got := Build(ccBuildInput(bad, "sess-y"))[0]
+		if want := "mlab/" + RefID("sess-y"); got.Address != want {
 			t.Errorf("name %q: Address = %q, want %q", bad, got.Address, want)
 		}
-		if got.Reason != "name_unroutable" && bad != "" {
+		if got.Reason != "name_unroutable" {
 			t.Errorf("name %q: Reason = %q, want name_unroutable", bad, got.Reason)
 		}
 	}
 }
 
-// TestPeerRecord_NoSuffixField pins the deletion: a consumer parsing the
-// old key must fail loudly rather than read "".
 func TestPeerRecord_JSONKeys(t *testing.T) {
-	b, err := json.Marshal(peers.PeerRecord{Ref: "_abc123"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		t.Fatal(err)
-	}
+	m := mustMarshalMap(t, PeerRecord{Ref: "_abc123"})
 	if _, ok := m["ref"]; !ok {
 		t.Error(`marshalled record has no "ref" key`)
 	}
@@ -363,10 +400,13 @@ func TestPeerRecord_JSONKeys(t *testing.T) {
 	}
 }
 
-// TestApplyIdentity_TmuxRowUnchanged guards V8.
+// V8: an agentless tmux row is untouched.
 func TestApplyIdentity_TmuxRowUnchanged(t *testing.T) {
-	recs := peers.Build(buildInputWithAgentlessSession(t, "aigora3"))
-	got := findBySessionName(t, recs, "aigora3")
+	in := BuildInput{
+		Alias:    "mlab",
+		Sessions: []SessionSummary{{Code: "s1", Name: "aigora3", Cwd: "~", TmuxInstance: "t1"}},
+	}
+	got := Build(in)[0]
 	if want := "mlab/tmux:aigora3"; got.Address != want {
 		t.Errorf("Address = %q, want %q", got.Address, want)
 	}
@@ -376,42 +416,38 @@ func TestApplyIdentity_TmuxRowUnchanged(t *testing.T) {
 }
 ```
 
-Reuse the existing helpers in `record_test.go` for `buildInputWithEntry` / `findBySessionID`; if their current signatures do not take a registry name, extend them rather than duplicating.
-
-- [ ] **Step 2: Run the tests and watch them fail**
+- [ ] **Step 3: Run the tests and watch them fail**
 
 Run: `go test -race -count=1 ./internal/peers/ -run 'TestApplyIdentity|TestPeerRecord_JSONKeys'`
-Expected: FAIL — `unknown field Ref`, `undefined: applyIdentity`.
+Expected: FAIL — `unknown field Ref in struct literal`.
 
-- [ ] **Step 3: Change the struct and the single writer**
+- [ ] **Step 4: Change the struct and its single writer**
 
-In `record.go`, replace the `Canonical` field and delete `Suffix`:
+In `record.go`, replace the `Canonical` field and delete `Suffix` with its comment block:
 
 ```go
-	// Ref is the sessionId-derived disambiguator, "_q34psn"; "" when the
-	// row has no cc agent. It is the one part of an address that cannot
-	// drift, and the one Resolve falls back to when a name does.
+	// Ref is the sessionId-derived disambiguator, "_q34psn"; "" when the row
+	// has no cc agent. It is the one part of an address that cannot drift, and
+	// what Resolve falls back to when a name does.
 	Ref string `json:"ref"`
 ```
 
-Delete the `Suffix` field and its long comment; `RowKind` already carries the provenance split the comment described, and the readable half of the address is now the name.
-
-Replace `applyLabel` with:
+Replace `applyLabel` (`:270-306`) with:
 
 ```go
-// applyIdentity fills Ref/Label/LabelSource/LabelRev/Address/Reason for a
-// row whose agent is a cc conversation. It is the single writer of those
-// fields, which is what makes the spec's invariant table checkable in one
-// place.
+// applyIdentity fills Ref/Label/LabelSource/LabelRev/Address/Reason for a row
+// whose agent is a cc conversation. It is the single writer of those fields,
+// which is what makes the spec's invariant table checkable in one place.
 //
-// The address has two forms and the choice between them is RoutableName's
-// (v4 §5.2): a routable registry name gives "<host>/<name>", anything else
-// gives "<host>/<ref>" and says why in Reason. A row is never left with an
+// The address has two forms and RoutableName picks between them (v4 §5.2): a
+// routable registry name gives "<host>/<name>", anything else gives
+// "<host>/<ref>" and says why in Reason. A row is never left holding an
 // address that cannot be typed back in.
 //
-// ccName is the registry name. Callers on the owner-fallback paths pass ""
-// — no live entry stands behind those rows, so they have no name to offer
-// and get the ref form, which matches their being unreachable anyway.
+// ccName is the registry name. The owner-fallback callers pass "" — no live
+// entry stands behind those rows, so they have no name to offer, and the ref
+// form matches their being unreachable anyway. "" is not a Reason-worthy
+// event for them, so only a non-empty unroutable name sets one.
 func applyIdentity(rec *PeerRecord, alias string, info LabelInfo, ref, ccName string) {
 	rec.Ref = ref
 	if info.Label != "" {
@@ -431,37 +467,77 @@ func applyIdentity(rec *PeerRecord, alias string, info LabelInfo, ref, ccName st
 }
 ```
 
-Update `WireAddress` (`:82`) to return `r.Ref` (or `""` when `Ref == ""`), dropping the `":" + Suffix` half — Task A5 covers the wire contract that consumes it.
+Update `WireAddress` (`:82`) to return `r.Ref` (`""` when `Ref == ""`), dropping the `":" + Suffix` half.
 
-Update all seven `applyLabel` call sites to `applyIdentity`, dropping the `s.Name` / tmux argument and passing `RefID(...)` where they passed `CanonicalID(...)`. Delete the `Suffix` function and `sanitizeMax`/`Sanitize` if nothing else uses them — check with `grep -rn "peers.Sanitize\|\.Suffix" --include='*.go' .` first; `Sanitize` may have other consumers.
+Update all seven `applyLabel` call sites to `applyIdentity`, dropping the tmux-name argument and passing `RefID(...)`. Delete the `Suffix` function. Check `grep -rn 'Sanitize(' --include='*.go' .` before deleting `Sanitize` — it may have other consumers.
 
-- [ ] **Step 4: Repair the rest of the tree mechanically**
+Delete the `CanonicalID` / `IsCanonicalID` aliases from `ref.go` and fix the resulting call sites.
 
-Run `go build ./... 2>&1 | head -50` and fix each `.Canonical` → `.Ref` and each `.Suffix` removal. Change nothing else — a behaviour change smuggled into a rename is invisible to review.
+- [ ] **Step 5: Repair the tree against the Step 1 list**
 
-- [ ] **Step 5: Mirror the rename in the SPA store**
+Work through `/tmp/a3-files.txt`, not through `go build` output — an iterative guess-and-compile loop makes it impossible to tell afterwards which edits were intended. Change only `.Canonical` → `.Ref`, `CanonicalID` → `RefID`, `IsCanonicalID` → `IsRef`, and `.Suffix` removals. Then confirm:
 
-In `spa/src/stores/usePeerStore.ts`: `canonical` → `ref` on both the type and the mapping (`p.canonical ?? ''` becomes `p.ref ?? ''`), and delete `suffix` if present. Update `usePeerStore.test.ts` fixtures to the new keys.
+Run: `go build ./...`
+Expected: clean.
 
-- [ ] **Step 6: Run the tests and verify they pass**
+- [ ] **Step 6: Run the Go tests**
 
-Run: `go test -race -count=1 ./internal/peers/... ./internal/module/peers/...`
-Run: `cd spa && npx vitest run src/stores/usePeerStore.test.ts`
-Expected: PASS. Go failures outside `internal/peers` mean Step 4 is incomplete.
+Run: `go test -race -count=1 ./internal/peers/... ./internal/module/peers/... ./cmd/pdx/...`
+Expected: PASS, except assertions that pinned the old address format — update those to the new one. A test that pinned `_q34psn4f:aigora2-purdex-b0` is asserting v3 and must now assert `mlab/purdex-b0`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-# The grep drops the version-controlled `pdx` binary at the repo root: any
-# `go build ./...` overwrites it, and --only would otherwise commit 2.7 MB
-# of artefact alongside the change.
-git commit --only $(git diff --name-only | grep -Ev '^pdx$' | tr '\n' ' ') \
+# Use the allowlist from Step 1, minus anything you did not actually change.
+git commit --only $(cat /tmp/a3-files.txt | tr '\n' ' ') \
+  internal/peers/record_test.go \
   -m "feat(peers): address on the registry name, ref when it is not routable"
 ```
 
+Verify before pushing: `git show --stat HEAD` must not list `pdx` or any file outside the list.
+
 ---
 
-### Task A4: `Resolve` — the tiers, and the refusal on a name/ref mismatch
+### Task A3b: SPA store follows the field rename
+
+**Files:**
+- Modify: `spa/src/stores/usePeerStore.ts`
+- Test: `spa/src/stores/usePeerStore.test.ts`
+
+**Interfaces:**
+- Consumes: A3's `ref` JSON key.
+- Produces: `PeerRow.ref: string`; `suffix` removed if present.
+
+- [ ] **Step 1: Update the test fixtures to the new key**
+
+In `usePeerStore.test.ts`, change every fixture's `canonical: '...'` to `ref: '...'` and every assertion on `.canonical` to `.ref`.
+
+- [ ] **Step 2: Run the tests and watch them fail**
+
+Run: `cd spa && npx vitest run src/stores/usePeerStore.test.ts`
+Expected: FAIL — `ref` is undefined on the mapped row.
+
+- [ ] **Step 3: Implement**
+
+In `usePeerStore.ts`: rename the `canonical: string` field to `ref: string` (keeping its comment, which explains it is the discriminator rather than `labelSource`), and change the mapping `canonical: p.canonical ?? ''` to `ref: p.ref ?? ''`. Remove `suffix` from the type and mapping if present.
+
+- [ ] **Step 4: Run and verify**
+
+Run: `cd spa && npx vitest run src/stores/usePeerStore.test.ts && pnpm run build`
+Expected: PASS; the build surfaces any other consumer of `.canonical` — fix each by rename only.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit --only spa/src/stores/usePeerStore.ts spa/src/stores/usePeerStore.test.ts \
+  -m "refactor(spa): follow canonical to ref"
+```
+
+If Step 4 forced edits to other SPA files, add those exact paths to the command.
+
+---
+
+### Task A4: `Resolve` — tiers, the shared ref helper, and the mismatch refusal
 
 **Files:**
 - Modify: `internal/peers/address.go`
@@ -469,14 +545,38 @@ git commit --only $(git diff --name-only | grep -Ev '^pdx$' | tr '\n' ' ') \
 
 **Interfaces:**
 - Consumes: `PeerRecord.Ref`, `RoutableName`, `IsRef`.
-- Produces: `ErrNameMismatch` (a package-level `error`), `Resolve` accepting the three input forms.
+- Produces: `ErrNameMismatch error`; `resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (PeerRecord, error)`; `splitCombined(s string) (name, ref string, ok bool)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Extend the existing `liveRow` helper**
+
+`liveRow` at `address_test.go:21` currently takes `(canonical, label, sessionName string, pid int)` and sets no `PeerName`. Tier 1 now matches on `Agent.PeerName`, so add the parameter and update **every existing call site in the file**:
+
+```go
+// liveRow is the row shape the name and ref tiers decide on: a live cc entry
+// carrying both its registry name and its ref. The label rides along and is
+// deliberately never what any tier matches — that is D3, unchanged in v4.
+func liveRow(ref, name, label, sessionName string, pid int) PeerRecord {
+	source := ""
+	if label != "" {
+		source = "user"
+	}
+	return PeerRecord{
+		SessionName: sessionName, Ref: ref, Label: label, LabelSource: source,
+		Agent:       &AgentInfo{Type: "cc", PID: pid, PeerName: name},
+		Deliverable: true,
+	}
+}
+```
+
+- [ ] **Step 2: Write the failing tests**
 
 ```go
 func TestResolve_BareName(t *testing.T) {
-	recs := []peers.PeerRecord{liveRow("purdex-b0", "_q34psn"), liveRow("nexen-f2", "_df25d0")}
-	got, err := peers.Resolve(recs, "purdex-b0", peers.ResolveSnapshot{})
+	recs := []PeerRecord{
+		liveRow("_q34psn", "purdex-b0", "", "aigora2", 1),
+		liveRow("_df25d0", "nexen-f2", "", "nexen", 2),
+	}
+	got, err := Resolve(recs, "purdex-b0", ResolveSnapshot{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -486,9 +586,9 @@ func TestResolve_BareName(t *testing.T) {
 }
 
 func TestResolve_RefWithAndWithoutUnderscore(t *testing.T) {
-	recs := []peers.PeerRecord{liveRow("purdex-b0", "_q34psn")}
+	recs := []PeerRecord{liveRow("_q34psn", "purdex-b0", "", "aigora2", 1)}
 	for _, form := range []string{"_q34psn", "q34psn"} {
-		got, err := peers.Resolve(recs, form, peers.ResolveSnapshot{})
+		got, err := Resolve(recs, form, ResolveSnapshot{})
 		if err != nil {
 			t.Fatalf("Resolve(%q): %v", form, err)
 		}
@@ -498,25 +598,25 @@ func TestResolve_RefWithAndWithoutUnderscore(t *testing.T) {
 	}
 }
 
-// TestResolve_RefShapedNameCannotShadow is A2 defended end to end: even if a
-// registry file carries a six-digit name, it must not win the bare-ref form.
+// RoutableName defended end to end: a six-digit registry name must not win
+// the bare-ref form.
 func TestResolve_RefShapedNameCannotShadow(t *testing.T) {
-	recs := []peers.PeerRecord{
-		liveRow("q34psn", "_aaaaaa"), // an attacker-shaped name
-		liveRow("purdex-b0", "_q34psn"),
+	recs := []PeerRecord{
+		liveRow("_aaaaaa", "q34psn", "", "evil", 1),
+		liveRow("_q34psn", "purdex-b0", "", "aigora2", 2),
 	}
-	got, err := peers.Resolve(recs, "q34psn", peers.ResolveSnapshot{})
+	got, err := Resolve(recs, "q34psn", ResolveSnapshot{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if got.Ref != "_q34psn" {
-		t.Errorf("bare ref resolved to %q; the ref-shaped NAME shadowed it", got.Ref)
+		t.Errorf("bare ref resolved to %q; a ref-shaped NAME shadowed it", got.Ref)
 	}
 }
 
 func TestResolve_CombinedFormMatches(t *testing.T) {
-	recs := []peers.PeerRecord{liveRow("purdex-b0", "_q34psn")}
-	got, err := peers.Resolve(recs, "purdex-b0 [q34psn]", peers.ResolveSnapshot{})
+	recs := []PeerRecord{liveRow("_q34psn", "purdex-b0", "", "aigora2", 1)}
+	got, err := Resolve(recs, "purdex-b0 [q34psn]", ResolveSnapshot{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -525,12 +625,11 @@ func TestResolve_CombinedFormMatches(t *testing.T) {
 	}
 }
 
-// TestResolve_CombinedFormMismatchRefuses is the security property: the name
-// in a combined address is a check digit, not decoration.
+// The security property: the name in a combined address is a check digit.
 func TestResolve_CombinedFormMismatchRefuses(t *testing.T) {
-	recs := []peers.PeerRecord{liveRow("attacker", "_q34psn")}
-	_, err := peers.Resolve(recs, "trusted-name [q34psn]", peers.ResolveSnapshot{})
-	if !errors.Is(err, peers.ErrNameMismatch) {
+	recs := []PeerRecord{liveRow("_q34psn", "attacker", "", "evil", 1)}
+	_, err := Resolve(recs, "trusted-name [q34psn]", ResolveSnapshot{})
+	if !errors.Is(err, ErrNameMismatch) {
 		t.Fatalf("Resolve err = %v, want ErrNameMismatch", err)
 	}
 	for _, want := range []string{"trusted-name", "attacker", "q34psn"} {
@@ -540,99 +639,162 @@ func TestResolve_CombinedFormMismatchRefuses(t *testing.T) {
 	}
 }
 
-func TestResolve_AmbiguousName(t *testing.T) {
-	recs := []peers.PeerRecord{liveRow("purdex-b0", "_aaaaaa"), liveRow("purdex-b0", "_bbbbbb")}
-	_, err := peers.Resolve(recs, "purdex-b0", peers.ResolveSnapshot{})
-	var amb *peers.AmbiguousError
-	if !errors.As(err, &amb) || len(amb.Candidates) != 2 {
-		t.Fatalf("Resolve err = %v, want AmbiguousError with 2 candidates", err)
+// The combined form must carry the SAME conservatisms as the bare ref tier.
+func TestResolve_CombinedFormHonoursSnapshot(t *testing.T) {
+	recs := []PeerRecord{liveRow("_q34psn", "purdex-b0", "", "aigora2", 1)}
+	if _, err := Resolve(recs, "purdex-b0 [q34psn]", ResolveSnapshot{Partial: true, RegistryIncomplete: true}); !errors.Is(err, ErrResolveNotReady) {
+		t.Errorf("err = %v, want ErrResolveNotReady", err)
+	}
+	empty := []PeerRecord{}
+	if _, err := Resolve(empty, "purdex-b0 [q34psn]", ResolveSnapshot{Partial: true}); !errors.Is(err, ErrResolveNotReady) {
+		t.Errorf("miss under Partial: err = %v, want ErrResolveNotReady", err)
 	}
 }
 
-// TestResolve_AmbiguousRefStillReachableByName is §3.1's residual, asserted.
-func TestResolve_AmbiguousRefStillReachableByName(t *testing.T) {
-	recs := []peers.PeerRecord{liveRow("purdex-b0", "_q34psn"), liveRow("nexen-f2", "_q34psn")}
-	var amb *peers.AmbiguousError
-	if _, err := peers.Resolve(recs, "_q34psn", peers.ResolveSnapshot{}); !errors.As(err, &amb) {
-		t.Fatalf("ref Resolve err = %v, want AmbiguousError", err)
+func TestResolve_AmbiguousName(t *testing.T) {
+	recs := []PeerRecord{
+		liveRow("_aaaaaa", "purdex-b0", "", "a", 1),
+		liveRow("_bbbbbb", "purdex-b0", "", "b", 2),
 	}
-	if _, err := peers.Resolve(recs, "purdex-b0", peers.ResolveSnapshot{}); err != nil {
+	var amb *AmbiguousError
+	if _, err := Resolve(recs, "purdex-b0", ResolveSnapshot{}); !errors.As(err, &amb) || len(amb.Candidates) != 2 {
+		t.Fatalf("err = %v, want AmbiguousError with 2 candidates", err)
+	}
+}
+
+// §3.1's residual, asserted: a shared ref costs the ref form, not the name.
+func TestResolve_AmbiguousRefStillReachableByName(t *testing.T) {
+	recs := []PeerRecord{
+		liveRow("_q34psn", "purdex-b0", "", "a", 1),
+		liveRow("_q34psn", "nexen-f2", "", "b", 2),
+	}
+	var amb *AmbiguousError
+	if _, err := Resolve(recs, "_q34psn", ResolveSnapshot{}); !errors.As(err, &amb) {
+		t.Fatalf("ref err = %v, want AmbiguousError", err)
+	}
+	if _, err := Resolve(recs, "purdex-b0", ResolveSnapshot{}); err != nil {
 		t.Errorf("name Resolve: %v, want the name to still work", err)
 	}
 }
 
-// TestResolve_UnroutableNameNeverWinsTier1
 func TestResolve_UnroutableNameNeverWinsTier1(t *testing.T) {
-	recs := []peers.PeerRecord{liveRow("has/slash", "_aaaaaa")}
-	if _, err := peers.Resolve(recs, "has/slash", peers.ResolveSnapshot{}); !errors.Is(err, peers.ErrNotFound) {
-		t.Errorf("Resolve err = %v, want ErrNotFound", err)
+	recs := []PeerRecord{liveRow("_aaaaaa", "has/slash", "", "a", 1)}
+	if _, err := Resolve(recs, "has/slash", ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSplitCombined_Malformed(t *testing.T) {
+	for _, s := range []string{
+		"purdex-b0", "[q34psn]", "purdex-b0 [", "purdex-b0]", " [q34psn]",
+		"purdex-b0 [a][b]", "purdex-b0 []",
+	} {
+		if _, _, ok := splitCombined(s); ok {
+			t.Errorf("splitCombined(%q) reported ok; want not-combined", s)
+		}
 	}
 }
 ```
 
-`liveRow(name, ref)` is a helper to add: a `PeerRecord` with `Ref: ref` and
-`Agent: &AgentInfo{Type: "cc", PID: 1, PeerName: name}`.
+- [ ] **Step 3: Run the tests and watch them fail**
 
-- [ ] **Step 2: Run the tests and watch them fail**
+Run: `go test -race -count=1 ./internal/peers/ -run 'TestResolve|TestSplitCombined'`
+Expected: FAIL — `undefined: ErrNameMismatch`, `undefined: splitCombined`.
 
-Run: `go test -race -count=1 ./internal/peers/ -run TestResolve`
-Expected: FAIL — `undefined: peers.ErrNameMismatch`, plus wrong-tier failures.
+- [ ] **Step 4: Implement**
 
-- [ ] **Step 3: Implement the tiers**
-
-Add before the existing tier logic in `Resolve`:
+Add to `address.go`:
 
 ```go
-// ErrNameMismatch is returned for the combined form "<name> [<ref>]" when
-// the ref resolves to a row whose name is not the one typed.
+// ErrNameMismatch is returned for the combined form "<name> [<ref>]" when the
+// ref resolves to a row whose name is not the one typed.
 //
 // It refuses rather than delivering-with-a-warning because the name in a
 // combined address is the reader's only check on the ref beside it.
 // "trusted-name [attackerRef]" is precisely the string worth getting pasted,
 // and a warning arrives after the message has gone. Legitimate drift has an
 // explicit escape hatch: "<host>/_<ref>" asks for the ref outright.
-var ErrNameMismatch = errors.New("the name does not match the ref's current name")
+var ErrNameMismatch = errors.New("the typed name does not match the ref's current name")
 
-// splitCombined splits "<name> [<ref>]" into its parts. ok is false when s
-// is not in that form, in which case it is one of the plain forms.
+// splitCombined splits "<name> [<ref>]" into its parts. ok is false for
+// anything else, including a nested or doubled bracket group — those are not
+// a form this accepts, and treating them as one would let a crafted string
+// choose which half gets checked.
 func splitCombined(s string) (name, ref string, ok bool) {
+	if !strings.HasSuffix(s, "]") {
+		return "", "", false
+	}
 	i := strings.IndexByte(s, '[')
-	if i <= 0 || !strings.HasSuffix(s, "]") {
+	if i <= 0 {
+		return "", "", false
+	}
+	inner := s[i+1 : len(s)-1]
+	if strings.ContainsAny(inner, "[]") {
 		return "", "", false
 	}
 	name = strings.TrimSpace(s[:i])
-	ref = s[i+1 : len(s)-1]
-	if name == "" || ref == "" {
+	if name == "" || inner == "" {
 		return "", "", false
 	}
-	return name, ref, true
+	return name, inner, true
+}
+
+// resolveRefHead resolves a ref with or without its leading underscore,
+// applying every conservatism the bare-ref tier applies.
+//
+// It is shared with the combined form deliberately: a combined address
+// contains a ref, and it must not acquire a weaker rule set than that same
+// ref typed on its own would get.
+func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (PeerRecord, error) {
+	if !strings.HasPrefix(ref, "_") {
+		ref = "_" + ref
+	}
+	if !IsRef(ref) {
+		return PeerRecord{}, ErrNotFound
+	}
+	rec, err := resolveTier(records, ref, func(r PeerRecord) bool {
+		return hasLiveEntry(r) && r.Ref == ref
+	})
+	if err == nil && snap.RegistryIncomplete {
+		return PeerRecord{}, ErrResolveNotReady
+	}
+	if errors.Is(err, ErrNotFound) && snap.Partial {
+		return PeerRecord{}, ErrResolveNotReady
+	}
+	return rec, err
 }
 ```
 
-In `Resolve`, after the `cc:` / `tmux:` switch:
+Rewrite `Resolve`'s body after the `cc:` / `tmux:` switch:
 
 ```go
+	// The stale-version gate sits ABOVE every tier, not before the fallback.
+	// In v3 it guarded a tier-1 miss because the only thing under it was a
+	// tmux-name guess. Here the tier directly under it would SUCCEED: a v3 row
+	// carries a usable name in agent.peer_name, so a bare name would resolve
+	// against a row whose ref the sender could never have verified. One stale
+	// row condemns the batch — Resolve is called per host, so every row in it
+	// came from the same daemon. "tmux:<name>" is decided above this and stays
+	// available; it is the escape hatch the refusal points the caller at.
+	if hasStaleVersionRows(records) {
+		return PeerRecord{}, fmt.Errorf("%w: %w", ErrNotFound, ErrRemoteTooOld)
+	}
+
 	if name, ref, ok := splitCombined(session); ok {
-		if !strings.HasPrefix(ref, "_") {
-			ref = "_" + ref
-		}
-		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-			return hasLiveEntry(r) && r.Ref == ref
-		})
+		rec, err := resolveRefHead(records, ref, snap)
 		if err != nil {
-			return rec, err
+			return PeerRecord{}, err
 		}
 		if rec.Agent.PeerName != name {
-			return PeerRecord{}, fmt.Errorf("%w: typed %q, ref %s is now %q",
+			return PeerRecord{}, fmt.Errorf("%w: typed %q, but %s is now %q",
 				ErrNameMismatch, name, ref, rec.Agent.PeerName)
 		}
 		return rec, nil
 	}
 
-	// Tier 1: the registry name, over live rows whose name is routable.
-	// The RoutableName guard is not decoration: an unroutable name must not
-	// win a tier, because it could never have produced the address the
-	// caller is holding.
+	// Tier 1: the registry name, over live rows whose name is routable. The
+	// RoutableName guard is not decoration — an unroutable name must not win a
+	// tier, because it could never have produced the address being typed.
 	rec, err := resolveTier(records, session, func(r PeerRecord) bool {
 		return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) && r.Agent.PeerName == head
 	})
@@ -640,120 +802,38 @@ In `Resolve`, after the `cc:` / `tmux:` switch:
 		return rec, err
 	}
 
-	// Tier 2/3: the ref, with or without its underscore. Safe without an
-	// ordering rule because RoutableName forbids a ref-shaped name, so no
-	// row can match both tiers.
-	wantRef := head
-	if !strings.HasPrefix(wantRef, "_") {
-		wantRef = "_" + wantRef
-	}
-	if IsRef(wantRef) {
-		rec, err = resolveTier(records, session, func(r PeerRecord) bool {
-			return hasLiveEntry(r) && r.Ref == wantRef
-		})
-		if err == nil && snap.RegistryIncomplete {
-			return PeerRecord{}, ErrResolveNotReady
-		}
+	// Tiers 2/3: the ref, with or without its underscore. No ordering rule is
+	// needed against tier 1: RoutableName forbids a ref-shaped name, so no row
+	// can match both.
+	if rest == "" {
+		rec, err = resolveRefHead(records, head, snap)
 		if !errors.Is(err, ErrNotFound) {
 			return rec, err
 		}
 	}
+
+	if snap.Partial {
+		return PeerRecord{}, ErrResolveNotReady
+	}
+	// Tier 4: bare tmux session name, complete inventory only.
+	if rest != "" {
+		return PeerRecord{}, ErrNotFound
+	}
+	return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == head })
 ```
 
-Then the existing stale-version check, `snap.Partial` check and tier 4 (bare tmux name) follow unchanged. Update `Resolve`'s doc comment to describe the new tiers — the old one describes v3's and is now actively misleading.
+Rewrite `Resolve`'s doc comment to describe these tiers — the existing one describes v3's and is now actively misleading.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 5: Run the tests and verify they pass**
 
-Run: `go test -race -count=1 ./internal/peers/ -run TestResolve -v`
-Expected: PASS, including every pre-existing v3 conservatism test.
+Run: `go test -race -count=1 ./internal/peers/ -v`
+Expected: PASS. Pre-existing v3 tier tests (`TestResolve_CanonicalTier`, `TestResolve_LabelDoesNotResolve`, …) need their `liveRow` calls updated for the new parameter and their expectations moved from 8-digit to 6-digit refs. Do not delete a conservatism test to make it pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git commit --only internal/peers/address.go internal/peers/address_test.go \
-  -m "feat(peers): resolve by name, by ref, and refuse a combined form whose name drifted"
-```
-
----
-
-### Task A5: Wire contract
-
-**Files:**
-- Modify: `internal/peers/wire.go` (`ValidateWireAddress` at `:499`, `WireFrom.Address` doc at `:238`)
-- Test: `internal/peers/wire_test.go`
-
-**Interfaces:**
-- Consumes: `IsRef`.
-- Produces: `ValidateWireAddress` accepting the four classes in the table below.
-
-- [ ] **Step 1: Write the failing test**
-
-```go
-func TestValidateWireAddress_Matrix(t *testing.T) {
-	for _, tc := range []struct {
-		name, addr string
-		wantOK     bool
-	}{
-		{"v4 ref", "_q34psn", true},
-		{"v3 canonical, accepted one release", "_q34psn4f", true},
-		{"v2 user label head", "purdex-tester", true},
-		{"v1 empty", "", true},
-		{"v3 canonical with suffix", "_q34psn4f:aigora2-purdex-b0", true},
-		{"garbage", "has/slash", false},
-		{"bracket form is not a wire address", "purdex-b0 [q34psn]", false},
-	} {
-		err := peers.ValidateWireAddress(tc.addr)
-		if gotOK := err == nil; gotOK != tc.wantOK {
-			t.Errorf("%s: ValidateWireAddress(%q) err = %v, wantOK %v",
-				tc.name, tc.addr, err, tc.wantOK)
-		}
-	}
-}
-```
-
-- [ ] **Step 2: Run the test and watch it fail**
-
-Run: `go test -race -count=1 ./internal/peers/ -run TestValidateWireAddress_Matrix`
-Expected: FAIL on the bracket-form and `_q34psn` rows.
-
-- [ ] **Step 3: Implement**
-
-```go
-// legacyV3Head matches the 8-digit canonical id v3 used as an address head.
-//
-// TODO(v5): delete this arm, isLegacyV2Head, and their rows in
-// TestValidateWireAddress_Matrix once every peer runs v4 or later. Both are
-// accepted for exactly one release so that a single upgrade window does not
-// have to carry two incompatibilities at once.
-var legacyV3Head = regexp.MustCompile(`^_[0-9a-z]{8}$`)
-
-func ValidateWireAddress(s string) error {
-	if s == "" {
-		return nil
-	}
-	head, rest := SplitSession(s)
-	if !IsRef(head) && !legacyV3Head.MatchString(head) && !isLegacyV2Head(head) {
-		if err := ValidateUserLabel(head); err != nil {
-			return fmt.Errorf("%w: head: %w", ErrAddressInvalid, err)
-		}
-	}
-	_ = rest // a legacy suffix is tolerated; v4 senders do not set one
-	return nil
-}
-```
-
-Delete `ValidSuffix` and `suffixWirePattern`, and the suffix arm that used them. Update `WireFrom.Address`'s comment to say it is `_<ref>` from a v4 sender.
-
-- [ ] **Step 4: Run the tests and verify they pass**
-
-Run: `go test -race -count=1 ./internal/peers/ -run 'TestValidateWireAddress|TestDeliverRequest'`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git commit --only internal/peers/wire.go internal/peers/wire_test.go \
-  -m "feat(peers): accept a 6-digit ref on the wire, with v2/v3 heads for one release"
+  -m "feat(peers): resolve by name then ref, and refuse a combined form whose name drifted"
 ```
 
 ---
@@ -766,62 +846,53 @@ git commit --only internal/peers/wire.go internal/peers/wire_test.go \
 
 **Interfaces:**
 - Consumes: `hasLiveEntry`.
-- Produces: `hasStaleVersionRows(records []PeerRecord) bool` (renamed from `hasPreV3Rows`).
+- Produces: `hasStaleVersionRows(records []PeerRecord) bool`, replacing `hasPreV3Rows`.
 
-**Why the precision matters:** the JSON key changed from `canonical` to `ref`, so every row from a v3 daemon decodes with `Ref == ""`. But so do three kinds of legitimate **v4** row — owner-fallback (`inbox_dead` / `ambiguous`, `Agent.PID == 0`), proxy, and `agent: null`. Only the `hasLiveEntry` conjunction tells them apart.
+Task A4 already calls `hasStaleVersionRows`; this task renames the function to match and pins the precision with tests.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```go
-func TestHasStaleVersionRows_V3Batch(t *testing.T) {
-	recs := []peers.PeerRecord{{
-		Agent: &peers.AgentInfo{Type: "cc", PID: 42, PeerName: "purdex-b0"},
-		Ref:   "", // a v3 daemon sent "canonical"; v4 does not read that key
+func TestStaleVersion_V3BatchRefusesEveryForm(t *testing.T) {
+	// A v3 daemon sent "canonical"; a v4 decoder reads "ref", so Ref is empty
+	// while the row is otherwise a live, usable cc row.
+	recs := []PeerRecord{{
+		SessionName: "aigora2",
+		Agent:       &AgentInfo{Type: "cc", PID: 42, PeerName: "purdex-b0"},
 	}}
-	if _, err := peers.Resolve(recs, "purdex-b0", peers.ResolveSnapshot{}); !errors.Is(err, peers.ErrRemoteTooOld) {
-		t.Fatalf("Resolve err = %v, want ErrRemoteTooOld", err)
-	}
-}
-
-// TestHasStaleVersionRows_V4RowsNotMisjudged: each of these legitimately
-// carries an empty Ref on a current daemon.
-func TestHasStaleVersionRows_V4RowsNotMisjudged(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		rec  peers.PeerRecord
-	}{
-		{"owner fallback", peers.PeerRecord{
-			Agent: &peers.AgentInfo{Type: "cc", PID: 0}, Reason: "inbox_dead"}},
-		{"proxy", peers.PeerRecord{
-			Agent: &peers.AgentInfo{Type: "proxy", PID: 7}, Reason: "proxy"}},
-		{"agent null", peers.PeerRecord{
-			Agent: nil, Reason: "no_agent", SessionName: "aigora3"}},
-	} {
-		recs := []peers.PeerRecord{tc.rec}
-		_, err := peers.Resolve(recs, "nobody", peers.ResolveSnapshot{})
-		if errors.Is(err, peers.ErrRemoteTooOld) {
-			t.Errorf("%s: judged stale; want a plain miss", tc.name)
+	for _, form := range []string{"purdex-b0", "_q34psn", "q34psn", "purdex-b0 [q34psn]"} {
+		if _, err := Resolve(recs, form, ResolveSnapshot{}); !errors.Is(err, ErrRemoteTooOld) {
+			t.Errorf("Resolve(%q) err = %v, want ErrRemoteTooOld", form, err)
 		}
 	}
+	// The escape hatch the refusal names must still work.
+	if _, err := Resolve(recs, "tmux:aigora2", ResolveSnapshot{}); err != nil {
+		t.Errorf("tmux form: %v, want it to resolve", err)
+	}
 }
 
-// A v3 batch must still honour the explicit tmux form — it is the escape
-// hatch the refusal points the caller at.
-func TestHasStaleVersionRows_TmuxFormStillResolves(t *testing.T) {
-	recs := []peers.PeerRecord{{
-		Agent:       &peers.AgentInfo{Type: "cc", PID: 42, PeerName: "purdex-b0"},
-		SessionName: "aigora2",
-	}}
-	if _, err := peers.Resolve(recs, "tmux:aigora2", peers.ResolveSnapshot{}); err != nil {
-		t.Errorf("tmux form: %v", err)
+// Each of these legitimately carries an empty Ref on a CURRENT daemon.
+func TestStaleVersion_V4RowsNotMisjudged(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rec  PeerRecord
+	}{
+		{"owner fallback", PeerRecord{Agent: &AgentInfo{Type: "cc", PID: 0}, Reason: "inbox_dead"}},
+		{"proxy", PeerRecord{Agent: &AgentInfo{Type: "proxy", PID: 7}, Reason: "proxy"}},
+		{"agent null", PeerRecord{Agent: nil, Reason: "no_agent", SessionName: "aigora3"}},
+	} {
+		_, err := Resolve([]PeerRecord{tc.rec}, "nobody", ResolveSnapshot{})
+		if errors.Is(err, ErrRemoteTooOld) {
+			t.Errorf("%s: judged stale; want a plain miss", tc.name)
+		}
 	}
 }
 ```
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
-Run: `go test -race -count=1 ./internal/peers/ -run TestHasStaleVersionRows`
-Expected: FAIL — the combined-form and name tiers reach the refusal differently than v3's single tier did.
+Run: `go test -race -count=1 ./internal/peers/ -run TestStaleVersion`
+Expected: FAIL — `undefined: hasStaleVersionRows` if A4 left it unrenamed, or a compile error on the old name.
 
 - [ ] **Step 3: Rename and re-comment**
 
@@ -829,19 +900,18 @@ Expected: FAIL — the combined-form and name tiers reach the refusal differentl
 // hasStaleVersionRows reports whether records came from a daemon predating
 // Peer Address v4 — the condition behind ErrRemoteTooOld.
 //
-// The signal is the spec's invariant read backwards, and v4 gets it for
-// free: the JSON key moved from "canonical" to "ref", so a v3 daemon's rows
-// decode with Ref == "" no matter what they actually sent.
+// v4 gets the signal for free: the JSON key moved from "canonical" to "ref",
+// so a v3 daemon's rows decode with Ref == "" whatever they actually sent.
 //
-// The hasLiveEntry conjunction is load-bearing, not caution. A CURRENT
-// daemon also emits rows with an empty Ref — owner-fallback rows
-// (inbox_dead / ambiguous, PID 0), proxy rows, and agent:null rows — and
-// counting those would declare every v4 host obsolete.
+// The hasLiveEntry conjunction is load-bearing, not caution. A CURRENT daemon
+// also emits rows with an empty Ref — owner-fallback rows (inbox_dead /
+// ambiguous, PID 0), proxy rows and agent:null rows — and counting those would
+// declare every v4 host obsolete.
 //
-// Refusing matters more here than it did in v3, where the fallback was a
+// Refusing matters more here than it did in v3, where what lay below was a
 // tmux-name guess. A v3 row still carries a usable registry name in
-// agent.peer_name, so v4's name tier would SUCCEED against it — delivering
-// to a row whose ref the sender could never have verified.
+// agent.peer_name, so v4's name tier would SUCCEED against it, delivering to a
+// row whose ref the sender could never have verified.
 func hasStaleVersionRows(records []PeerRecord) bool {
 	for _, r := range records {
 		if hasLiveEntry(r) && r.Ref == "" {
@@ -852,12 +922,12 @@ func hasStaleVersionRows(records []PeerRecord) bool {
 }
 ```
 
-Move the call so it is reached from the name tier's miss as well as the ref tier's, and keep it ahead of the `snap.Partial` check for the reason v3 records: "retry, the inventory is partial" is advice that can never come true against an old daemon.
+Delete `hasPreV3Rows` and any leftover call to it.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run the whole package**
 
 Run: `go test -race -count=1 ./internal/peers/ -v`
-Expected: PASS, whole package.
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -868,53 +938,36 @@ git commit --only internal/peers/address.go internal/peers/address_test.go \
 
 ---
 
-### Task A7: `pdx peers` table
+### Task A5: Wire contract
 
 **Files:**
-- Modify: `cmd/pdx/peers.go` (`formatPeersTable` at `:359-373`, the `--all` variant at `:449-461`, `deliverableField` at `:536`)
-- Test: `cmd/pdx/peers_test.go`
+- Modify: `internal/peers/wire.go`
+- Test: `internal/peers/wire_test.go`
 
 **Interfaces:**
-- Consumes: `PeerRecord.Ref`, `.Address`, `.SessionName`, `.Reason`.
-- Produces: the column set `TITLE ADDRESS AGENT STATUS DELIVERABLE TMUX CWD` (with `HOST` leading in `--all`).
+- Consumes: `IsRef`, `ValidSuffix` (kept).
+- Produces: `ValidateWireAddress` accepting the matrix below.
 
-Note: this task renders the column header as `TITLE` even though the field is still `Label` until Phase B. Renaming the Go symbol is B2's job; rendering the right word is this task's, and doing it here keeps the golden files from churning twice.
-
-- [ ] **Step 1: Write the failing golden test**
+- [ ] **Step 1: Write the failing test**
 
 ```go
-func TestFormatPeersTable_Columns(t *testing.T) {
-	resp := peersResponse{Peers: []ipeers.PeerRecord{
-		{Address: "mlab/purdex-b0", Ref: "_q34psn", SessionName: "aigora2", Cwd: "~",
-			Agent: &ipeers.AgentInfo{Type: "cc", Status: "idle"}, Deliverable: true},
-		{Address: "mlab/purdex-53", Ref: "_d8dc4a", SessionName: "purdex7", Cwd: "~",
-			Label: "Purdex Tester 01",
-			Agent: &ipeers.AgentInfo{Type: "cc", Status: "busy"}, Deliverable: true},
-		{Address: "mlab/_df25d0", Ref: "_df25d0", SessionName: "nexen", Cwd: "~",
-			Agent: &ipeers.AgentInfo{Type: "cc", Status: "idle"}, Reason: "inbox_dead"},
-		{Address: "mlab/tmux:aigora3", SessionName: "aigora3", Cwd: "~", Reason: "no_agent"},
-	}}
-	var buf bytes.Buffer
-	formatPeersTable(&buf, resp)
-	out := buf.String()
-
-	if !strings.HasPrefix(out, "TITLE\tADDRESS\tAGENT\tSTATUS\tDELIVERABLE\tTMUX\tCWD") {
-		t.Errorf("header = %q", strings.SplitN(out, "\n", 2)[0])
-	}
-	for _, want := range []string{
-		"mlab/purdex-b0 [q34psn]",
-		"Purdex Tester 01",
-		"inbox_dead",
-		"mlab/tmux:aigora3",
-		"aigora2",
+func TestValidateWireAddress_Matrix(t *testing.T) {
+	for _, tc := range []struct {
+		name, addr string
+		wantOK     bool
+	}{
+		{"v4 ref", "_q34psn", true},
+		{"v3 canonical, one release", "_q34psn4f", true},
+		{"v3 canonical with suffix", "_q34psn4f:aigora2-purdex-b0", true},
+		{"v2 user label head", "purdex-tester", true},
+		{"v1 empty", "", true},
+		{"garbage head", "has/slash", false},
+		{"legacy suffix must still be validated", "_q34psn4f:bad suffix", false},
+		{"bracket form is not a wire address", "purdex-b0 [q34psn]", false},
 	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("table does not contain %q:\n%s", want, out)
-		}
-	}
-	for _, gone := range []string{"NAME\t", "HOST\t"} {
-		if strings.Contains(out, gone) {
-			t.Errorf("table still has the %q column:\n%s", gone, out)
+		err := ValidateWireAddress(tc.addr)
+		if gotOK := err == nil; gotOK != tc.wantOK {
+			t.Errorf("%s: ValidateWireAddress(%q) err = %v, wantOK %v", tc.name, tc.addr, err, tc.wantOK)
 		}
 	}
 }
@@ -922,21 +975,124 @@ func TestFormatPeersTable_Columns(t *testing.T) {
 
 - [ ] **Step 2: Run the test and watch it fail**
 
-Run: `go test -race -count=1 ./cmd/pdx/ -run TestFormatPeersTable_Columns`
-Expected: FAIL on the header and on the bracketed address.
+Run: `go test -race -count=1 ./internal/peers/ -run TestValidateWireAddress_Matrix`
+Expected: FAIL on the `_q34psn` and bracket rows.
 
 - [ ] **Step 3: Implement**
 
-Add the display composer beside the table code:
+```go
+// legacyV3Head matches the 8-digit canonical id v3 used as an address head.
+//
+// TODO(v5): delete this arm, isLegacyV2Head and their rows in
+// TestValidateWireAddress_Matrix once every peer runs v4 or later. Both are
+// accepted for exactly one release so a single upgrade window does not have to
+// carry two incompatibilities at once.
+var legacyV3Head = regexp.MustCompile(`^_[0-9a-z]{8}$`)
+
+func ValidateWireAddress(s string) error {
+	if s == "" {
+		return nil
+	}
+	head, rest := SplitSession(s)
+	if !IsRef(head) && !legacyV3Head.MatchString(head) && !isLegacyV2Head(head) {
+		if err := ValidateUserLabel(head); err != nil {
+			return fmt.Errorf("%w: head: %w", ErrAddressInvalid, err)
+		}
+	}
+	// A v4 sender sets no suffix, but a legacy one does, and a legacy suffix is
+	// still validated rather than waved through: relaxing a receiver's grammar
+	// while retiring a sender's is how a field stops being checked at all.
+	if strings.Contains(s, ":") && !ValidSuffix(rest) {
+		return fmt.Errorf("%w: suffix must match %s", ErrAddressInvalid, suffixWirePattern)
+	}
+	return nil
+}
+```
+
+Keep `ValidSuffix` and `suffixWirePattern`. Update `WireFrom.Address`'s comment to say a v4 sender sets `_<ref>` and no suffix.
+
+- [ ] **Step 4: Run and verify**
+
+Run: `go test -race -count=1 ./internal/peers/ -run 'TestValidateWireAddress|TestDeliverRequest' -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit --only internal/peers/wire.go internal/peers/wire_test.go \
+  -m "feat(peers): accept a 6-digit ref on the wire, keeping v2/v3 heads for one release"
+```
+
+---
+
+### Task A7: `pdx peers` table
+
+**Files:**
+- Modify: `cmd/pdx/peers.go`
+- Test: `cmd/pdx/peers_test.go`
+
+**Interfaces:**
+- Consumes: `PeerRecord.Ref`, `.Address`, `.SessionName`.
+- Produces: `displayAddress(rec peers.PeerRecord) string`; columns `TITLE ADDRESS AGENT STATUS DELIVERABLE TMUX CWD` (`HOST` leads in `--all`).
+
+`formatPeersTable` **takes `peers.Envelope` and returns a string** — it does not take a writer. The header is rendered as `TITLE` even though the Go field is still `Label` until Task B2; rendering the right word here keeps the golden fixtures from churning twice.
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+func TestFormatPeersTable_V4Columns(t *testing.T) {
+	env := peers.Envelope{OK: true, Peers: []peers.PeerRecord{
+		{Address: "mlab/purdex-b0", Ref: "_q34psn", SessionName: "aigora2", Cwd: "~",
+			Agent: &peers.AgentInfo{Type: "cc", Status: "idle"}, Deliverable: true},
+		{Address: "mlab/purdex-53", Ref: "_d8dc4a", SessionName: "purdex7", Cwd: "~",
+			Label: "Purdex Tester 01",
+			Agent: &peers.AgentInfo{Type: "cc", Status: "busy"}, Deliverable: true},
+		{Address: "mlab/_df25d0", Ref: "_df25d0", SessionName: "nexen", Cwd: "~",
+			Agent: &peers.AgentInfo{Type: "cc", Status: "idle"}, Reason: "inbox_dead"},
+		{Address: "mlab/tmux:aigora3", SessionName: "aigora3", Cwd: "~", Reason: "no_agent"},
+	}}
+	got := formatPeersTable(env)
+
+	header := strings.SplitN(got, "\n", 2)[0]
+	if !strings.HasPrefix(header, "TITLE\tADDRESS\tAGENT\tSTATUS\tDELIVERABLE\tTMUX\tCWD") {
+		t.Errorf("header = %q", header)
+	}
+	for _, want := range []string{
+		"mlab/purdex-b0 [q34psn]", "Purdex Tester 01", "inbox_dead",
+		"mlab/tmux:aigora3", "aigora2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("table lacks %q:\n%s", want, got)
+		}
+	}
+	// A row whose address IS the ref must not get a redundant bracket.
+	if strings.Contains(got, "mlab/_df25d0 [df25d0]") {
+		t.Errorf("ref-address row got a redundant bracket:\n%s", got)
+	}
+	if strings.Contains(header, "NAME") || strings.Contains(header, "HOST") {
+		t.Errorf("dropped column still present: %q", header)
+	}
+}
+```
+
+- [ ] **Step 2: Run the test and watch it fail**
+
+Run: `go test -race -count=1 ./cmd/pdx/ -run TestFormatPeersTable_V4Columns`
+Expected: FAIL on the header and the bracketed address.
+
+- [ ] **Step 3: Implement**
 
 ```go
 // displayAddress renders a row's address for a human: "<host>/<name> [<ref>]".
 //
-// The ref prints without its leading underscore because the bracket already
-// separates it, and prints on EVERY row rather than only on ambiguous ones:
-// a reader who has to go looking for it when a name stops working has to
-// look in a different place than the one they were already reading.
-func displayAddress(rec ipeers.PeerRecord) string {
+// The ref prints without its leading underscore — the bracket already
+// separates it — and prints on EVERY row rather than only ambiguous ones: a
+// reader who has to go looking for it when a name stops working has to look
+// somewhere other than where they were already reading.
+//
+// A row whose address is already the ref (an unroutable name, or no name at
+// all) gets no bracket; repeating it would suggest two different identifiers.
+func displayAddress(rec peers.PeerRecord) string {
 	if rec.Ref == "" || strings.HasSuffix(rec.Address, "/"+rec.Ref) {
 		return rec.Address
 	}
@@ -944,12 +1100,12 @@ func displayAddress(rec ipeers.PeerRecord) string {
 }
 ```
 
-Change both header lines and both row loops: drop `HOST` from the single-host form and `NAME` from both, add `TMUX` (from `rec.SessionName`) before `CWD`, and pass every address through `displayAddress`. Leave `deliverableField` alone — `yes` / `<reason>` is already the shape §5.7 specifies.
+Change both header lines (`:373` single-host, `:461` `--all`) and both row loops: drop `HOST` from the single-host form and `NAME` from both, add `TMUX` (from `rec.SessionName`) before `CWD`, and pass every address through `displayAddress`. Leave `deliverableField` unchanged.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run and verify**
 
 Run: `go test -race -count=1 ./cmd/pdx/ -run TestFormatPeers -v`
-Expected: PASS. Update any pre-existing golden fixtures that pinned the old columns.
+Expected: PASS. The golden fixture `wantPeersTable` (`peers_test.go:22-84`) pins the old columns — update it to the new ones.
 
 - [ ] **Step 5: Commit**
 
@@ -963,34 +1119,34 @@ git commit --only cmd/pdx/peers.go cmd/pdx/peers_test.go \
 ### Task A8: `pdx msg send` input forms and the `whoami` block
 
 **Files:**
-- Modify: `cmd/pdx/msg.go` (`renderSelfRecord` at `:653`, the send path's address handling)
+- Modify: `cmd/pdx/msg.go`
 - Test: `cmd/pdx/msg_test.go`
 
 **Interfaces:**
-- Consumes: `Resolve`'s three forms (A4).
-- Produces: no new exported symbols; `pdx msg send` passes the address through unchanged so `Resolve` sees the bracket form intact.
+- Consumes: A4's three input forms.
+- Produces: no new exported symbols.
+
+`runMsgSend` is `runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int` — it takes a `getenv`, not a URL. Follow the existing send tests in `msg_test.go` for how they stand up a server and point the config at it; do not invent a `fakeSendServer`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```go
-func TestRunMsgSend_AcceptsCombinedForm(t *testing.T) {
-	// The CLI must not strip, split or normalise the bracket form — Resolve
-	// checks the name against the ref, and a CLI that discarded the name
-	// would silently disable that check.
-	srv := fakeSendServer(t)
-	defer srv.Close()
-	exit := runMsgSend(msgInvocation{args: []string{"mlab/purdex-b0 [q34psn]", "hi"}}, srv.URL, io.Discard, io.Discard)
-	if exit != 0 {
-		t.Fatalf("exit = %d", exit)
+// The CLI must not strip, split or normalise the bracket form: Resolve checks
+// the typed name against the ref, and a CLI that dropped the name would
+// silently disable that check.
+func TestParseMsgInvocation_KeepsCombinedAddressVerbatim(t *testing.T) {
+	inv, ok := parseMsgInvocation([]string{"send", "mlab/purdex-b0 [q34psn]", "hi"})
+	if !ok {
+		t.Fatal("parseMsgInvocation returned !ok")
 	}
-	if got := srv.lastToAddress(); got != "mlab/purdex-b0 [q34psn]" {
-		t.Errorf("sent to %q, want the address verbatim", got)
+	if inv.target != "mlab/purdex-b0 [q34psn]" {
+		t.Errorf("target = %q, want the address verbatim", inv.target)
 	}
 }
 
 func TestRenderSelfRecord_UnsetTitle(t *testing.T) {
 	var buf bytes.Buffer
-	renderSelfRecord(ipeers.PeerRecord{
+	renderSelfRecord(peers.PeerRecord{
 		Address: "mlab/purdex-53", Ref: "_d8dc4a", Host: "mlab", HostID: "mlab:278cbm",
 	}, &buf)
 	out := buf.String()
@@ -1004,36 +1160,49 @@ func TestRenderSelfRecord_UnsetTitle(t *testing.T) {
 		t.Errorf("ref line missing:\n%s", out)
 	}
 }
+
+func TestRenderSelfRecord_SetTitle(t *testing.T) {
+	var buf bytes.Buffer
+	renderSelfRecord(peers.PeerRecord{
+		Address: "mlab/purdex-53", Ref: "_d8dc4a", Label: "Purdex Tester 01",
+		LabelSource: "user", LabelRev: 4,
+	}, &buf)
+	if got := buf.String(); !strings.Contains(got, "Purdex Tester 01 (user, rev 4)") {
+		t.Errorf("set title block:\n%s", got)
+	}
+}
 ```
+
+Check `msgInvocation`'s actual field name for the address argument before writing `inv.target`; use whatever it is called.
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
-Run: `go test -race -count=1 ./cmd/pdx/ -run 'TestRunMsgSend_AcceptsCombinedForm|TestRenderSelfRecord_UnsetTitle'`
+Run: `go test -race -count=1 ./cmd/pdx/ -run 'TestParseMsgInvocation_KeepsCombined|TestRenderSelfRecord'`
 Expected: FAIL — the whoami block prints `label:       (, rev 0)`.
 
 - [ ] **Step 3: Implement**
 
-In `renderSelfRecord`, replace the canonical and label lines:
+In `renderSelfRecord` (`msg.go:653`) replace the canonical and label lines:
 
 ```go
 	fmt.Fprintf(stdout, "address:    %s\n", sanitizeCell(rec.Address))
 	fmt.Fprintf(stdout, "ref:        %s\n", sanitizeCell(rec.Ref))
 	if rec.Label == "" {
-		fmt.Fprintf(stdout, "title:      (none)\n")
+		fmt.Fprintln(stdout, "title:      (none)")
 	} else {
 		fmt.Fprintf(stdout, "title:      %s (%s, rev %d)\n",
 			sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
 	}
 ```
 
-For the send path, confirm the address argument reaches the request body unmodified. If any trimming or splitting exists, remove it and note why in a comment: the bracket form's name is a check digit and the CLI is not entitled to drop it.
+Confirm the send path passes its address argument through unchanged. If any trimming or splitting exists, remove it and say why in a comment: the bracket form's name is a check digit and the CLI is not entitled to drop it.
 
-Update `peersUsage` and `msgUsage` to show the three forms from §5.5.
+Update `msgUsage` to show the three forms, replacing the `_3k9f2mq4` example.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run and verify**
 
 Run: `go test -race -count=1 ./cmd/pdx/ -v`
-Expected: PASS. Update usage-string assertions that pinned `_3k9f2mq4`.
+Expected: PASS. `msg_test.go:223` asserts the usage text contains `_3k9f2mq4` — update it to the v4 forms.
 
 - [ ] **Step 5: Commit**
 
@@ -1047,54 +1216,60 @@ git commit --only cmd/pdx/msg.go cmd/pdx/msg_test.go \
 ### Task A9: SPA status bar — display readable, copy exact
 
 **Files:**
-- Modify: `spa/src/components/StatusBar.tsx` (`:140`, `:346-370`)
+- Modify: `spa/src/components/StatusBar.tsx`
 - Test: `spa/src/components/StatusBar.test.tsx`
 
 **Interfaces:**
-- Consumes: `usePeerStore`'s `ref` (A3) and `address`.
+- Consumes: A3b's `PeerRow.ref`.
 - Produces: no new exports.
+
+Open `StatusBar.test.tsx` first and reuse whatever peer-seeding fixture it already has. Do not invent `renderStatusBarWithPeer` if the file seeds the store another way.
 
 - [ ] **Step 1: Write the failing test**
 
+Following the file's existing rendering idiom, add:
+
 ```tsx
-it('displays the name with its ref and copies the exact form', async () => {
-  renderStatusBarWithPeer({ address: 'mlab/purdex-b0', ref: '_q34psn', label: '' })
+it('shows the name with its ref and copies the exact form', async () => {
+  // seed a peer row: address 'mlab/purdex-b0', ref '_q34psn', label ''
+  // (use this file's existing seeding helper)
   expect(screen.getByText(/purdex-b0 \[q34psn\]/)).toBeInTheDocument()
   await userEvent.click(screen.getByText(/purdex-b0 \[q34psn\]/))
   expect(await navigator.clipboard.readText()).toBe('mlab/purdex-b0 [q34psn]')
 })
 
-it('renders a peer with no title', () => {
-  renderStatusBarWithPeer({ address: 'mlab/purdex-b0', ref: '_q34psn', label: '' })
-  expect(screen.queryByTestId('peer-id')).not.toBeNull()
+it('renders a peer that has no title', () => {
+  // same seed, label: '' — the row must still appear
+  expect(screen.queryByText(/purdex-b0/)).not.toBeNull()
 })
 ```
 
 - [ ] **Step 2: Run the test and watch it fail**
 
 Run: `cd spa && npx vitest run src/components/StatusBar.test.tsx`
-Expected: FAIL — the component returns early because `row.label === ''`.
+Expected: FAIL — the component returns early at `StatusBar.tsx:140` because `row.label === ''`.
 
 - [ ] **Step 3: Implement**
 
-Replace the `row.label === ''` guard with `row.ref === '' && row.address === ''`: a title was never what identified a row, and under v4 it is usually absent. Render `` `${name} [${ref.replace(/^_/, '')}]` `` where `name` is the address's segment after the first `/`, and set the copy value to `` `${address} [${ref.replace(/^_/, '')}]` ``.
+Replace the `row.label === ''` guard with one on `row.ref === '' && row.address === ''`. A title never identified a row and under v4 is usually absent; the name always identifies it.
 
-Add the comment that explains the asymmetry, because it will read as an inconsistency otherwise:
+Render `` `${name} [${ref.replace(/^_/, '')}]` `` where `name` is the address's segment after the first `/`, and set the copy value to `` `${address} [${ref.replace(/^_/, '')}]` ``. When `ref` is empty or the address already ends in `/${ref}`, render and copy the address unchanged.
+
+Add the comment, because the asymmetry reads as an inconsistency otherwise:
 
 ```tsx
-// Display drops the host, the clipboard keeps it — and keeps the ref.
-// What gets copied is what gets pasted into a handoff and used hours
-// later, which is exactly the window in which a name drifts or is taken
-// by someone else. The prettier string is the weaker one; it does not
-// belong on the clipboard.
+// Display drops the host; the clipboard keeps it, and keeps the ref. What
+// gets copied is what gets pasted into a handoff and used hours later —
+// exactly the window in which a name drifts or is taken by someone else. The
+// prettier string is the weaker one; it does not belong on the clipboard.
 ```
 
 Render the title, when set, beside the name rather than instead of it.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run and verify**
 
 Run: `cd spa && npx vitest run src/components/StatusBar.test.tsx && pnpm run lint`
-Expected: PASS, no lint errors.
+Expected: PASS, clean lint.
 
 - [ ] **Step 5: Commit**
 
@@ -1107,7 +1282,7 @@ git commit --only spa/src/components/StatusBar.tsx spa/src/components/StatusBar.
 
 ## Phase B — `label` becomes `title`
 
-### Task B1: `ValidateTitle` and normalized collision compare
+### Task B1: `ValidateTitle` and the normalized compare
 
 **Files:**
 - Modify: `internal/peers/ref.go`
@@ -1115,17 +1290,18 @@ git commit --only spa/src/components/StatusBar.tsx spa/src/components/StatusBar.
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `ValidateTitle(s string) error`, `NormalizeTitle(s string) string`. `ValidateUserLabel` stays for one release — Task A5's wire arm still calls it.
+- Produces: `ErrTitleInvalid error`, `ValidateTitle(s string) error`, `NormalizeTitle(s string) string`. `ValidateUserLabel` **stays** — Task A5's wire arm still calls it.
+
+Imports needed in `ref.go`: `strings`, `unicode`, `unicode/utf8` (in addition to what is there).
 
 - [ ] **Step 1: Write the failing tests**
 
 ```go
 func TestValidateTitle_Accepts(t *testing.T) {
 	for _, s := range []string{
-		"Purdex Tester 01", "purdex-tester", "測試 01", "cc", "tmux",
-		strings.Repeat("a", 64),
+		"Purdex Tester 01", "purdex-tester", "測試 01", "cc", "tmux", strings.Repeat("a", 64),
 	} {
-		if err := peers.ValidateTitle(s); err != nil {
+		if err := ValidateTitle(s); err != nil {
 			t.Errorf("ValidateTitle(%q) = %v, want nil", s, err)
 		}
 	}
@@ -1135,19 +1311,18 @@ func TestValidateTitle_Rejects(t *testing.T) {
 	for _, s := range []string{
 		"", strings.Repeat("a", 65), "has\ttab", "has\nnewline", "esc\x1b[31m",
 	} {
-		if err := peers.ValidateTitle(s); err == nil {
+		if err := ValidateTitle(s); err == nil {
 			t.Errorf("ValidateTitle(%q) = nil, want an error", s)
 		}
 	}
 }
 
-// The 64 is BYTES, not runes: a multi-byte title must be measured the way
-// the storage and the wire measure it.
+// The limit is BYTES, not runes: storage and the wire both measure bytes.
 func TestValidateTitle_ByteBoundary(t *testing.T) {
-	if err := peers.ValidateTitle(strings.Repeat("測", 21)); err != nil { // 63 bytes
+	if err := ValidateTitle(strings.Repeat("測", 21)); err != nil { // 63 bytes
 		t.Errorf("63 bytes rejected: %v", err)
 	}
-	if err := peers.ValidateTitle(strings.Repeat("測", 22)); err == nil { // 66 bytes
+	if err := ValidateTitle(strings.Repeat("測", 22)); err == nil { // 66 bytes
 		t.Error("66 bytes accepted, want rejected")
 	}
 }
@@ -1158,7 +1333,7 @@ func TestNormalizeTitle(t *testing.T) {
 		{"purdex  tester", "purdex tester"},
 		{"  Purdex\tTester  ", "purdex tester"},
 	} {
-		if got := peers.NormalizeTitle(tc.in); got != tc.want {
+		if got := NormalizeTitle(tc.in); got != tc.want {
 			t.Errorf("NormalizeTitle(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
@@ -1175,12 +1350,18 @@ Expected: FAIL — undefined.
 ```go
 const titleMaxBytes = 64
 
+// ErrTitleInvalid is returned by ValidateTitle.
+var ErrTitleInvalid = errors.New("title invalid")
+
 // ValidateTitle applies the title rule: 1..64 bytes of printable UTF-8.
 //
 // There are no reserved words. A title reaches nothing — Resolve never
 // consults one — so there is nothing for "cc" or "tmux" to shadow, and
-// refusing them would only make the field harder to use than it is
-// dangerous.
+// refusing them would make the field harder to use than it is dangerous.
+//
+// Control characters are refused because a title is printed into a terminal
+// table and into peer warnings; an ANSI escape in one is a way to rewrite
+// somebody else's screen.
 func ValidateTitle(s string) error {
 	if s == "" {
 		return fmt.Errorf("%w: empty", ErrTitleInvalid)
@@ -1199,19 +1380,20 @@ func ValidateTitle(s string) error {
 	return nil
 }
 
-// NormalizeTitle is the form two titles are compared in when deciding
-// whether to warn: case-folded, with runs of whitespace collapsed to one
-// space and the ends trimmed. "Purdex Tester" and "purdex  tester" name the
-// same thing to a reader, so they must collide for the warning too —
-// otherwise the warning misses exactly the near-duplicates it exists for.
+// NormalizeTitle is the form two titles are compared in when deciding whether
+// to warn: case-folded, runs of whitespace collapsed, ends trimmed.
+//
+// "Purdex Tester" and "purdex  tester" name the same thing to a reader, so
+// they must collide for the warning too — otherwise the warning misses exactly
+// the near-duplicates it exists for.
 func NormalizeTitle(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 ```
 
-Add `ErrTitleInvalid` beside the existing error vars.
+`unicode.IsPrint` already reports false for `\t` and `\n`, which is what makes the two functions consistent: anything `NormalizeTitle` would collapse as whitespace beyond a plain space is refused before it is ever stored.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run and verify**
 
 Run: `go test -race -count=1 ./internal/peers/ -run 'TestValidateTitle|TestNormalizeTitle' -v`
 Expected: PASS, four tests.
@@ -1228,93 +1410,104 @@ git commit --only internal/peers/ref.go internal/peers/ref_test.go \
 ### Task B2: Rename `label` → `title` across Go
 
 **Files:**
-- Rename: `internal/module/peers/labels.go` → `titles.go` (and its test)
-- Modify: `internal/peers/record.go`, `internal/peers/ref.go`, `internal/module/peers/*.go`, `internal/store/peer_label.go`, `cmd/pdx/*.go` — 18 files carry the symbols
-- Test: the renamed tests plus `internal/module/peers/titles_test.go`
+- Rename: `internal/module/peers/labels.go` → `titles.go`; `labels_test.go` → `titles_test.go`
+- Modify: `internal/peers/record.go`, `internal/module/peers/*.go`, `internal/store/peer_label.go`, `cmd/pdx/peers.go`, `cmd/pdx/msg.go`, **`cmd/pdx/main.go`** (`:259` declares `var labels peersmod.LabelStore`)
+- Test: the renamed tests
 
 **Interfaces:**
-- Consumes: `ValidateTitle`, `NormalizeTitle` from B1.
-- Produces: `PeerRecord.Title/TitleSource/TitleRev` (json `title`, `title_source`, `title_rev`); `Envelope.TitlesUnavailable` (json `titles_unavailable`); `SelfWarning.Code == "title_in_use"` with `LiveTitles []string`.
+- Consumes: `ValidateTitle`, `NormalizeTitle`.
+- Produces: `PeerRecord.Title/TitleSource/TitleRev` (json `title`, `title_source`, `title_rev`); `Envelope.TitlesUnavailable` (json `titles_unavailable`); warning code `title_in_use` with `LiveTitles []string`.
 
-**The SQLite table keeps its name.** `peer_labels` on disk is untouched: renaming it would be a migration, and alpha carries no migration obligation (`feedback_no_alpha_migration`). Only Go symbols and JSON keys move.
+**The SQLite table keeps its name.** `peer_labels` on disk is untouched — renaming it would be a migration, and alpha carries none. Only Go symbols and JSON keys move.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Enumerate the blast radius**
+
+```bash
+grep -rln 'LabelSource\|LabelRev\|LabelInfo\|LabelStore\|ValidateUserLabel\|label_in_use\|live_labels\|labels_unavailable\|\.Label\b' --include='*.go' . | sort | tee /tmp/b2-files.txt
+```
+
+Confirm `cmd/pdx/main.go` is in the list. That file is easy to miss because it only names the type once.
+
+- [ ] **Step 2: Write the failing test**
+
+Open `internal/module/peers/labels_test.go` and reuse its existing module fixture — do not invent `newTestModule`/`mustClaimTitle` if it builds the module some other way. Add, in that file's idiom:
 
 ```go
+// A duplicate title warns and succeeds; both holders keep their title.
+// Normalisation is what makes the warning useful: "Purdex Tester" and
+// "purdex  tester" are the same name to the person reading them.
 func TestClaimTitle_WarnsOnNormalizedDuplicate(t *testing.T) {
-	m := newTestModule(t)
-	mustClaimTitle(t, m, "sid-1", "Purdex Tester")
-	resp := mustClaimTitle(t, m, "sid-2", "purdex  tester")
-	if resp.Warning == nil || resp.Warning.Code != "title_in_use" {
-		t.Fatalf("warning = %+v, want title_in_use", resp.Warning)
-	}
-	if len(resp.Warning.LiveTitles) == 0 {
-		t.Error("live_titles is empty; an agent cannot pick the next serial")
-	}
-	// Both keep their titles: a duplicate warns, it never refuses.
-	if got := titleOf(t, m, "sid-1"); got != "Purdex Tester" {
-		t.Errorf("first holder's title = %q, want it untouched", got)
-	}
+	// 1. claim "Purdex Tester" for one sessionID
+	// 2. claim "purdex  tester" for another
+	// 3. assert the second response's warning code is "title_in_use"
+	// 4. assert the warning's LiveTitles is non-empty
+	// 5. assert the first holder's title is still "Purdex Tester"
 }
 ```
 
-- [ ] **Step 2: Run the test and watch it fail**
-
-Run: `go test -race -count=1 ./internal/module/peers/ -run TestClaimTitle`
-Expected: FAIL — undefined helpers / `label_in_use` code.
+Fill the body using the fixture the file already provides.
 
 - [ ] **Step 3: Rename mechanically, then wire the normalized compare**
 
-`git mv internal/module/peers/labels.go internal/module/peers/titles.go` (and the test), then apply throughout: `ValidateUserLabel`→`ValidateTitle` **at the claim path only** (the wire's legacy arm keeps calling the old one), `LabelSourceUser`→`TitleSourceUser`, `LabelInfo`→`TitleInfo`, `LabelStore`→`TitleStore`, `PeerRecord.Label/LabelSource/LabelRev`→`Title/TitleSource/TitleRev`, `label_in_use`→`title_in_use`, `live_labels`→`live_titles`, `labels_unavailable`→`titles_unavailable`, `applyIdentity`'s `info.Label`→`info.Title`.
+```bash
+git mv internal/module/peers/labels.go internal/module/peers/titles.go
+git mv internal/module/peers/labels_test.go internal/module/peers/titles_test.go
+```
 
-In the claim path, compare with `NormalizeTitle` on both sides when computing the warning's holders.
+Apply throughout the Step 1 list: `LabelSourceUser`→`TitleSourceUser`, `LabelInfo`→`TitleInfo`, `LabelStore`→`TitleStore`, `PeerRecord.Label/LabelSource/LabelRev`→`Title/TitleSource/TitleRev`, `applyIdentity`'s `info.Label`→`info.Title`, `label_in_use`→`title_in_use`, `live_labels`→`live_titles`, `labels_unavailable`→`titles_unavailable`. At the **claim path only**, `ValidateUserLabel`→`ValidateTitle`; the wire's legacy arm keeps calling `ValidateUserLabel`.
 
-Change nothing else. A behaviour change hidden in a rename of this size is not reviewable.
+In the claim path, compare through `NormalizeTitle` on both sides when computing the warning's holders.
 
-- [ ] **Step 4: Run the full suite**
+Change nothing else. A behaviour change hidden inside a rename this size is not reviewable.
+
+- [ ] **Step 4: Run everything**
 
 Run: `go test -race -count=1 ./...`
-Expected: PASS except the known `internal/module/agent` flake (#1092) — rerun that package alone to confirm it is the flake and not your change.
+Expected: PASS except the known `internal/module/agent` flake (#1092) — rerun that package alone to confirm it is the flake.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-# The grep drops the version-controlled `pdx` binary at the repo root — see
-# Task A3's commit step for why.
-git commit --only $(git diff --name-only | grep -Ev '^pdx$' | tr '\n' ' ') \
+git commit --only $(cat /tmp/b2-files.txt | tr '\n' ' ') \
+  internal/module/peers/titles.go internal/module/peers/titles_test.go \
   -m "refactor(peers): rename label to title, now that it names rather than tags"
 ```
+
+Verify: `git show --stat HEAD` must not list `pdx`.
 
 ---
 
 ### Task B3: SPA title rename
 
 **Files:**
-- Modify: the 30 files under `spa/src` referencing `label`/`labelSource`/`canonical` peer fields
+- Modify: the SPA files referencing peer `label`/`labelSource`/`labelsUnavailable`
 - Test: their co-located tests
 
 **Interfaces:**
 - Consumes: B2's JSON keys.
-- Produces: `PeerRow.title`, `.titleSource`, `.titleRev`; `PeerEnvelopeFlags.titlesUnavailable`.
+- Produces: `PeerRow.title/.titleSource/.titleRev`; `PeerEnvelopeFlags.titlesUnavailable`.
 
-- [ ] **Step 1: Update the store type and mapping first**
+- [ ] **Step 1: Rename in the store first**
 
-In `usePeerStore.ts`: `label`→`title`, `labelSource`→`titleSource`, `labelRev`→`titleRev`, `labelsUnavailable`→`titlesUnavailable`, and the `p.label`/`p.label_source`/`env.labels_unavailable` reads to the new keys. Update the i18n key `peer.labels_unavailable_note`→`peer.titles_unavailable_note` and its entry in the locale files.
+In `usePeerStore.ts`: `label`→`title`, `labelSource`→`titleSource`, `labelRev`→`titleRev`, `labelsUnavailable`→`titlesUnavailable`, and the reads `p.label`/`p.label_source`/`env.labels_unavailable` to the new keys. Rename the i18n key `peer.labels_unavailable_note`→`peer.titles_unavailable_note` in the locale files too.
 
-- [ ] **Step 2: Run the type check and let it find the rest**
+- [ ] **Step 2: Let the type checker find the rest**
 
 Run: `cd spa && pnpm run build`
-Expected: FAIL, listing every consumer. Fix each; change nothing but names.
+Expected: FAIL, listing every consumer. Fix each by rename only.
 
-- [ ] **Step 3: Run the tests**
+- [ ] **Step 3: Run the suite**
 
 Run: `cd spa && npx vitest run && pnpm run lint && pnpm run build`
 Expected: PASS, clean lint, successful build.
 
 - [ ] **Step 4: Commit**
 
+List the exact files you touched:
+
 ```bash
-git commit --only $(git diff --name-only -- spa | tr '\n' ' ') \
+git commit --only spa/src/stores/usePeerStore.ts spa/src/stores/usePeerStore.test.ts \
+  <every other spa file you edited> \
   -m "refactor(spa): follow the label to title rename"
 ```
 
@@ -1326,59 +1519,76 @@ git commit --only $(git diff --name-only -- spa | tr '\n' ' ') \
 
 **Files:**
 - Modify: `internal/peers/envelope.go`, `internal/module/peers/module.go` (`localEnvelope`), `internal/module/peers/hosts.go` (`verifyHost` at `:199`)
-- Test: `internal/peers/envelope_test.go`, `internal/module/peers/hosts_test.go`
+- Test: `internal/peers/envelope_test.go` (**JSON shape only**), `internal/module/peers/hosts_test.go` (`verifyHost` behaviour)
 
 **Interfaces:**
-- Consumes: `config.Config.PeerAlias()`.
-- Produces: `Envelope.Alias string` (json `alias`); `verifyHost` returning an envelope whose `Alias` is validated or blanked.
+- Consumes: `config.ValidateAlias`, `config.Config.PeerAlias()`.
+- Produces: `Envelope.Alias string` (json `alias`); `sanitizeLearnedAlias(alias, localAlias string) string` in `internal/module/peers`.
+
+`localEnvelope` and the module fixtures live in `internal/module/peers`, so their tests belong there — an `internal/peers` test cannot reach them.
 
 - [ ] **Step 1: Write the failing tests**
 
-```go
-func TestLocalEnvelope_CarriesSelfAlias(t *testing.T) {
-	m := newTestModule(t, withPeerAlias("mlab"))
-	env := m.localEnvelope(context.Background(), "mlab:278cbm", "mlab")
-	if env.Alias != "mlab" {
-		t.Errorf("Alias = %q, want %q", env.Alias, "mlab")
-	}
-}
+In `internal/peers/envelope_test.go` (`package peers`):
 
-// A peer's self-reported alias is attacker-controlled, exactly like host_id.
-func TestVerifyHost_RejectsUnsafeAlias(t *testing.T) {
-	for _, bad := range []string{"has/slash", "..", "esc\x1b[31m", strings.Repeat("a", 65), ""} {
-		env := envelopeFromFakeHost(t, bad)
-		got := sanitizeLearnedAlias(env.Alias, "mlab")
-		if got != "" {
-			t.Errorf("alias %q survived sanitising as %q", bad, got)
-		}
+```go
+func TestEnvelope_CarriesAliasKey(t *testing.T) {
+	b, err := json.Marshal(Envelope{HostID: "mlab:278cbm", Alias: "mlab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["alias"] != "mlab" {
+		t.Errorf("alias key = %v, want %q", m["alias"], "mlab")
 	}
 }
 ```
+
+In `internal/module/peers/hosts_test.go`, using that file's existing module fixture:
+
+```go
+// A peer's self-reported alias is attacker-controlled, exactly like host_id.
+func TestSanitizeLearnedAlias_RejectsUnsafe(t *testing.T) {
+	for _, bad := range []string{"", "has/slash", "..", "esc\x1b[31m", strings.Repeat("a", 65), "mlab"} {
+		if got := sanitizeLearnedAlias(bad, "mlab"); got != "" {
+			t.Errorf("alias %q survived as %q", bad, got)
+		}
+	}
+	if got := sanitizeLearnedAlias("air26", "mlab"); got != "air26" {
+		t.Errorf("safe alias = %q, want %q", got, "air26")
+	}
+}
+```
+
+(`"mlab"` is in the reject list because `ValidateAlias` refuses an alias equal to the local one.)
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
-Run: `go test -race -count=1 ./internal/peers/ ./internal/module/peers/ -run 'TestLocalEnvelope_CarriesSelfAlias|TestVerifyHost_RejectsUnsafeAlias'`
-Expected: FAIL — undefined field / helper.
+Run: `go test -race -count=1 ./internal/peers/ ./internal/module/peers/ -run 'TestEnvelope_CarriesAliasKey|TestSanitizeLearnedAlias'`
+Expected: FAIL — unknown field / undefined function.
 
 - [ ] **Step 3: Implement**
 
-In `envelope.go`:
+In `envelope.go`, add to `Envelope`:
 
 ```go
-	// Alias is what this host calls ITSELF (config PeerAlias()). A reader
-	// uses it to name a newly paired peer the way that peer names itself,
-	// so an address means the same string on both machines. It is
-	// self-reported and therefore attacker-controlled: validate before
-	// storing, exactly as host_id already is.
+	// Alias is what this host calls ITSELF (config PeerAlias()). A reader uses
+	// it to name a newly paired peer the way that peer names itself, so an
+	// address means the same string on both machines. It is self-reported and
+	// therefore attacker-controlled: validate before storing, exactly as
+	// host_id already is.
 	Alias string `json:"alias"`
 ```
 
-Set it in `localEnvelope` from the alias already passed in. Add beside `validHostID`:
+Set it in `localEnvelope` from the alias already passed in. In `hosts.go`, beside `validHostID`:
 
 ```go
-// sanitizeLearnedAlias returns alias when it is safe to adopt as a local
-// name for a peer, or "" when it is not. It is the same posture
-// validHostID takes: a peer's self-report is data, never a decision.
+// sanitizeLearnedAlias returns alias when it is safe to adopt as a local name
+// for a peer, or "" when it is not. Same posture as validHostID: a peer's
+// self-report is data, never a decision.
 func sanitizeLearnedAlias(alias, localAlias string) string {
 	if config.ValidateAlias(alias, localAlias) != nil {
 		return ""
@@ -1387,9 +1597,7 @@ func sanitizeLearnedAlias(alias, localAlias string) string {
 }
 ```
 
-Have `verifyHost` blank `env.Alias` through this helper before returning.
-
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run and verify**
 
 Run: `go test -race -count=1 ./internal/peers/ ./internal/module/peers/ -v`
 Expected: PASS.
@@ -1407,58 +1615,25 @@ git commit --only internal/peers/envelope.go internal/peers/envelope_test.go \
 ### Task C2: Adopt the published alias when pairing
 
 **Files:**
-- Modify: `internal/module/peers/hosts.go` (`handleAddHost` at `:250-330`)
-- Modify: `cmd/pdx/peers.go` (make the `alias` argument optional in `pdx peers host add`)
+- Modify: `internal/module/peers/hosts.go` (`handleAddHost`, `:250-330`), `cmd/pdx/peers.go` (make the alias argument optional)
 - Test: `internal/module/peers/hosts_test.go`, `cmd/pdx/peers_test.go`
 
 **Interfaces:**
-- Consumes: `sanitizeLearnedAlias`, `Envelope.Alias` from C1.
-- Produces: `addHostRequest.Alias` optional; a 409 body naming both aliases on collision.
+- Consumes: `sanitizeLearnedAlias`, `Envelope.Alias`.
+- Produces: `addHostRequest.Alias` optional; 409 naming the colliding alias; 400 when neither side supplies one.
 
 - [ ] **Step 1: Write the failing tests**
 
-```go
-func TestAddHost_AdoptsPublishedAlias(t *testing.T) {
-	m := newTestModule(t)
-	remote := fakePeerHost(t, envelope{HostID: "air:aaa", Alias: "air26"})
-	resp := mustAddHost(t, m, addHostRequest{URL: remote.URL, Token: "t"})
-	if resp.Alias != "air26" {
-		t.Errorf("Alias = %q, want the published %q", resp.Alias, "air26")
-	}
-}
+Using `hosts_test.go`'s existing fake-peer and module fixtures, add four cases:
 
-func TestAddHost_ExplicitAliasWins(t *testing.T) {
-	m := newTestModule(t)
-	remote := fakePeerHost(t, envelope{HostID: "air:aaa", Alias: "air26"})
-	resp := mustAddHost(t, m, addHostRequest{Alias: "air", URL: remote.URL, Token: "t"})
-	if resp.Alias != "air" {
-		t.Errorf("Alias = %q, want the explicit %q", resp.Alias, "air")
-	}
-}
+| test | setup | assert |
+|---|---|---|
+| `TestAddHost_AdoptsPublishedAlias` | remote envelope `{HostID: "air:aaa", Alias: "air26"}`, request with no alias | stored/returned alias is `air26` |
+| `TestAddHost_ExplicitAliasWins` | same remote, request alias `air` | stored alias is `air` |
+| `TestAddHost_PublishedAliasCollisionIs409` | local config already has a host named `air26`; remote publishes `air26`, request has no alias | status 409, body contains `air26` |
+| `TestAddHost_NoAliasAnywhereIs400` | remote publishes `""`, request has no alias | status 400 |
 
-// A collision is not auto-suffixed: "air26-2" would be unportable in a new
-// way, which is the problem this phase exists to remove.
-func TestAddHost_PublishedAliasCollisionIs409(t *testing.T) {
-	m := newTestModule(t, withExistingHost("air26"))
-	remote := fakePeerHost(t, envelope{HostID: "air:bbb", Alias: "air26"})
-	code, body := addHost(t, m, addHostRequest{URL: remote.URL, Token: "t"})
-	if code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409", code)
-	}
-	if !strings.Contains(body, "air26") {
-		t.Errorf("409 body does not name the colliding alias: %s", body)
-	}
-}
-
-// No published alias and no explicit one: the operator must name it.
-func TestAddHost_NoAliasAnywhereIs400(t *testing.T) {
-	m := newTestModule(t)
-	remote := fakePeerHost(t, envelope{HostID: "air:aaa", Alias: ""})
-	if code, _ := addHost(t, m, addHostRequest{URL: remote.URL, Token: "t"}); code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", code)
-	}
-}
-```
+Write each out in the file's existing idiom rather than inventing helpers.
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
@@ -1467,7 +1642,7 @@ Expected: FAIL — the alias is currently required and never learned.
 
 - [ ] **Step 3: Implement**
 
-Reorder `handleAddHost`: run `verifyHost` **before** the alias checks when `req.Alias == ""`, so the published alias is available to fall back to. Then:
+Reorder `handleAddHost` so `verifyHost` runs **before** the alias checks when `req.Alias == ""`, making the published alias available as a fallback. Then:
 
 ```go
 	alias := req.Alias
@@ -1483,18 +1658,20 @@ Reorder `handleAddHost`: run `verifyHost` **before** the alias checks when `req.
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if cfg.Peers.FindPeerHostByAlias(alias) != -1 {
+	// Not auto-suffixed: "air26-2" would be unportable in a new way, which is
+	// the problem this phase exists to remove. The operator picks.
+	if aliasTaken(alias) {
 		writeJSONError(w, http.StatusConflict, fmt.Sprintf(
 			"alias %q is already used by another host; pass an explicit alias for this one", alias))
 		return
 	}
 ```
 
-Keep every existing guard — the admin-token check, the self-pairing check, and the re-check inside `UpdateConfig`. Adding a fallback must not remove a gate.
+Keep every existing guard — the admin-token check, the self-pairing check, and the re-check inside `UpdateConfig`. Adding a fallback must not remove a gate. Note that when `req.Token == ""` there is no `verifyHost` and therefore no published alias; that path still requires an explicit alias.
 
-In `cmd/pdx/peers.go`, allow `pdx peers host add <url>` with the alias omitted, and update `peersUsage`.
+In `cmd/pdx/peers.go`, accept `pdx peers host add <url>` with the alias omitted and update `peersUsage`.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run and verify**
 
 Run: `go test -race -count=1 ./internal/module/peers/ ./cmd/pdx/ -v`
 Expected: PASS.
@@ -1509,61 +1686,60 @@ git commit --only internal/module/peers/hosts.go internal/module/peers/hosts_tes
 
 ---
 
-### Task C3: Surface alias drift
+### Task C3: Surface alias drift in `pdx peers --all`
 
 **Files:**
-- Modify: `internal/peers/envelope.go` (`HostResult`), `internal/module/peers/module.go` (`fetchHostResult`), `cmd/pdx/peers.go` (`formatHostsTable` at `:712`)
+- Modify: `internal/peers/envelope.go` (`HostResult`), `internal/module/peers/module.go` (`fetchHostResult`), `cmd/pdx/peers.go` (the `--all` renderer)
 - Test: `cmd/pdx/peers_test.go`
 
 **Interfaces:**
 - Consumes: `Envelope.Alias`.
-- Produces: `HostResult.SelfAlias string` (json `self_alias`); a `SELF_ALIAS` column.
+- Produces: `HostResult.SelfAlias string` (json `self_alias`).
+
+**Not `pdx peers host list`.** `GET /api/peers/hosts` renders `cliHostRow` straight out of local config and never contacts anyone, so it has no live self-reported value — only a stale one. The fan-out fetches each envelope on every call, which makes `--all` the one place the comparison is current. Spec §7.4 says so; do not move it.
 
 - [ ] **Step 1: Write the failing test**
 
+`formatPeersTable(resp peers.Envelope) string` renders one host; find the `--all` renderer in `peers.go` (around `:449-461`) and test that one. Assert that a host whose `SelfAlias` differs from its `Alias` is marked, and that an agreeing host is not.
+
 ```go
-func TestFormatHostsTable_MarksAliasDrift(t *testing.T) {
-	var buf bytes.Buffer
-	formatHostsTable(&buf, []hostRow{
-		{Alias: "air", SelfAlias: "air26"},
-		{Alias: "mlab", SelfAlias: "mlab"},
-	})
-	out := buf.String()
-	if !strings.Contains(out, "SELF_ALIAS") {
-		t.Errorf("no SELF_ALIAS column:\n%s", out)
+func TestFormatPeersAll_MarksAliasDrift(t *testing.T) {
+	all := peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "mlab", OK: true},
+		{Alias: "air", SelfAlias: "air26", OK: true},
+	}}
+	got := renderPeersAllTable(all) // use the actual renderer's name and signature
+	if !strings.Contains(got, "air26") {
+		t.Errorf("drifted self alias not shown:\n%s", got)
 	}
-	if !strings.Contains(out, "air26") {
-		t.Errorf("drifted self alias not shown:\n%s", out)
-	}
-	// A row that agrees must not be marked; the marker is for the exception.
-	agreeing := out[strings.Index(out, "mlab"):]
-	if strings.Contains(agreeing, "!") {
-		t.Errorf("agreeing row is marked:\n%s", out)
+	mlabLine := lineContaining(t, got, "mlab")
+	if strings.Contains(mlabLine, "!") {
+		t.Errorf("agreeing host is marked: %q", mlabLine)
 	}
 }
 ```
 
+Read the `--all` renderer's real name and signature first and use those; add a small `lineContaining` helper in the test file if one does not exist.
+
 - [ ] **Step 2: Run the test and watch it fail**
 
-Run: `go test -race -count=1 ./cmd/pdx/ -run TestFormatHostsTable_MarksAliasDrift`
+Run: `go test -race -count=1 ./cmd/pdx/ -run TestFormatPeersAll_MarksAliasDrift`
 Expected: FAIL — `unknown field SelfAlias`.
 
 - [ ] **Step 3: Implement**
 
-Add `SelfAlias` to `HostResult` and to `hostRow`, populate it in `fetchHostResult` from the fetched envelope, and add the column. Mark drift with a trailing `!` on the `SELF_ALIAS` cell only when it is non-empty and differs from `ALIAS`.
-
-Add the comment that stops a later reader from "fixing" this into an auto-follow:
+Add `SelfAlias string \`json:"self_alias"\`` to `HostResult`, populate it in `fetchHostResult` from the fetched envelope (and in `allEnvelope` for the local row, where it equals the local alias), and mark drift in the `--all` footer or host column with a trailing `!`.
 
 ```go
-// SelfAlias is what the peer calls itself, shown beside the name we call
-// it. Drift is surfaced, never followed: the local alias is what every
-// address on this host resolves against, and silently adopting a peer's
-// rename would move every address out from under whoever wrote one down.
+// SelfAlias is what the peer calls itself, shown beside the name we call it.
+// Drift is surfaced, never followed: the local alias is what every address on
+// this host resolves against, and silently adopting a peer's rename would move
+// every address out from under whoever wrote one down.
 ```
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run and verify**
 
-Run: `go test -race -count=1 ./cmd/pdx/ -v`
+Run: `go test -race -count=1 ./cmd/pdx/ ./internal/module/peers/ -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1576,25 +1752,30 @@ git commit --only internal/peers/envelope.go internal/module/peers/module.go \
 
 ---
 
-## Final task: documentation and the version gate
-
-### Task D1: Update CLAUDE.md and build
+## Task D1: CLAUDE.md and the build gate
 
 **Files:**
-- Modify: `CLAUDE.md` (the "Peer addresses" section)
-- Modify: `docs/specs/2026-09-17-peer-address-v4-spec.md` (tick §9's acceptance items as they are run)
+- Modify: `CLAUDE.md` (the "Peer addresses" section only)
+
+**Do not edit the spec.** Its §9 acceptance items are run on two real daemons after merge, by an operator, not by this task.
 
 - [ ] **Step 1: Rewrite the Peer addresses section**
 
-The current text describes v3: `<host>/<canonical>[:<suffix>]`, canonical `_3k9f2mq4`, labels with the `^[a-z0-9][a-z0-9-]{1,31}$` grammar and the `label_in_use` serial convention. Replace with v4's model: the address is `<host>/<name>`, displayed `<host>/<name> [<ref>]`; the three input forms; `title` as free text with the serial convention retained for human disambiguation; and the instruction that an agent asked to "become X" reports its **address**, not X.
+The current text describes v3: `<host>/<canonical>[:<suffix>]`, canonical `_3k9f2mq4`, labels under `^[a-z0-9][a-z0-9-]{1,31}$`, and the `label_in_use` serial convention. Replace with v4:
 
-- [ ] **Step 2: Build and verify the daemon**
+- the address is `<host>/<name>`, displayed `<host>/<name> [<ref>]`;
+- the three input forms from spec §5.5;
+- `title` is free text; the serial convention stays, for humans, not for routing;
+- an agent asked to "become X" runs `pdx msg name X`, then `pdx msg whoami`, and **reports the address**, not X;
+- the `pdx: command not found` paragraph is unchanged.
+
+- [ ] **Step 2: Build and check the version**
 
 ```bash
 make build
 ./bin/pdx --version
 ```
-Expected: the version string from `VERSION`, not `unknown`.
+Expected: the string from `VERSION`, not `unknown`.
 
 - [ ] **Step 3: Run everything**
 
@@ -1602,16 +1783,16 @@ Expected: the version string from `VERSION`, not `unknown`.
 go test -race -count=1 ./...
 cd spa && npx vitest run && pnpm run lint && pnpm run build
 ```
+Expected: PASS (bar the #1092 flake).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git commit --only CLAUDE.md docs/specs/2026-09-17-peer-address-v4-spec.md \
-  -m "docs: describe the v4 address model in CLAUDE.md"
+git commit --only CLAUDE.md -m "docs: describe the v4 address model in CLAUDE.md"
 ```
 
 ---
 
 ## After the plan
 
-Real-machine acceptance is **§9 of the spec**, not a step here, because it needs two daemons deployed and cannot be run by a subagent in a worktree. Run it after merge and before the bump PR. §9.9 — pasting an address made on one host into the other — is the one that gates the release.
+Spec §9's real-machine acceptance is **not** a task here: it needs two deployed daemons and cannot run inside a worktree. Run it after merge and before the bump PR. §9.9 — pasting an address made on one host into the other — is the one that gates the release.

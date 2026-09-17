@@ -230,9 +230,20 @@ with a warning:
 > because "the ref is authoritative" spends the only check the reader had. Legitimate drift has an
 > explicit escape hatch — `<host>/_<ref>` says "the ref, whatever it is called now" outright.
 
-v3's conservatisms carry over verbatim: `snap.Partial` on a tier miss is `ErrResolveNotReady`;
-`snap.RegistryIncomplete` on a single hit is `ErrResolveNotReady`; the stale-version check refuses
-ahead of any fallback.
+**The stale-version check sits above every tier, not before the fallback.** In v3 it guarded a tier-1
+miss, because the only thing below it was a tmux-name guess. In v4 the tier immediately below it
+would *succeed*: a v3 row carries a usable name in `agent.peer_name`, so a bare name would resolve
+against a row whose ref the sender could never have verified. The gate therefore runs straight after
+the explicit `cc:` / `tmux:` forms and before tier 1 — one stale row condemns the batch, because
+`Resolve` is called per host and every row in it comes from the same daemon.
+
+`tmux:<name>` stays above the gate. It names a place outright, a v3 daemon reports `SessionName`
+exactly as a v4 one does, and it is the escape hatch the refusal points the caller at.
+
+The remaining v3 conservatisms carry over verbatim: `snap.Partial` on a miss is
+`ErrResolveNotReady`; `snap.RegistryIncomplete` on a single hit is `ErrResolveNotReady`. **Both apply
+to the combined form too** — it resolves its ref through the same helper the bare-ref tiers use, so
+it cannot quietly acquire a weaker rule set than the address it contains.
 
 ### 5.5 Input forms accepted by `pdx msg send`
 
@@ -367,9 +378,14 @@ type Envelope struct {
 3. A learned alias colliding with an existing local alias (or this host's own) is **not**
    auto-suffixed — `mlab-2/...` is unportable in a new way. The add returns 409 naming both, and the
    operator supplies one explicitly.
-4. `HostResult` gains `SelfAlias`; `pdx peers host list` shows `ALIAS` beside `SELF_ALIAS` and marks
-   rows where they differ. Drift is surfaced, never followed: the local alias stays authoritative for
-   routing.
+4. `HostResult` gains `SelfAlias`, and **`pdx peers --all`** marks a host whose self-reported name
+   differs from the local one. Drift is surfaced, never followed: the local alias stays authoritative
+   for routing.
+
+   **Not `pdx peers host list`.** That route (`GET /api/peers/hosts`) renders `cliHostRow` straight
+   out of local config and never contacts anyone, so it has no self-reported value to show and could
+   only display a stale one learned at pairing time. The fan-out already fetches each host's envelope
+   on every call, which makes `--all` the one place the comparison is live rather than remembered.
 
 **C is not optional for the goal.** §1's premise is an address that can be handed to someone else.
 A and B alone produce a readable address that is still only locally meaningful, so V11 ships the
