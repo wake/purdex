@@ -423,6 +423,32 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		refuseUnaudited(http.StatusConflict, ipeers.ErrNotDeliverable, reason)
 		return
 	}
+	// Sending to yourself (spec §4.5). Only local delivery reaches this: a
+	// remote target is on another host by construction, so the tuples could
+	// not match. Refused rather than delivered because the frame would
+	// arrive labelled as being from its own receiver, with that receiver's
+	// own socket as the reply address, and a native reply travels that
+	// socket without touching pdx — neither HopChain nor the pair limit is
+	// in the path of the loop.
+	//
+	// The comparison is the identity tuple the rest of the bridge routes
+	// on, NOT the typed address: `pdx msg whoami` prints a name form and a
+	// ref form of one session, and a string check would refuse whichever
+	// the caller happened to type and deliver the other.
+	//
+	// Placed AFTER the deliverable guard, not before it, which is what
+	// "after Resolve" most obviously reads as: a tier-4 or tmux: match
+	// resolves to a row with no agent at all, so reading target.Agent one
+	// line earlier turns a not_deliverable refusal into a nil dereference.
+	// origin.Agent needs no such guard — findOrigin only ever returns a row
+	// whose Agent is non-nil and of type "cc" (send.go, findOrigin).
+	if origin.Agent.SessionID == target.Agent.SessionID &&
+		origin.Agent.PID == target.Agent.PID &&
+		origin.Agent.ProcStart == target.Agent.ProcStart {
+		refuseUnaudited(http.StatusBadRequest, ipeers.ErrSelfTarget,
+			"the address resolves to this session; a message to yourself has nowhere to go")
+		return
+	}
 	to := ipeers.WireTo{AgentSessionID: target.Agent.SessionID, PID: target.Agent.PID, ProcStart: target.Agent.ProcStart}
 	toAddress := target.Address
 	if toAddress == "" { // normalizeRemoteRows blanks an address that does not parse

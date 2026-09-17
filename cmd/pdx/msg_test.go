@@ -1256,6 +1256,29 @@ func TestRunMsgSend_NameMismatchRendering(t *testing.T) {
 	}
 }
 
+// TestRenderMsgAPIError_UnknownCodeStillRenders is the mixed-version guard
+// every new wire code needs (spec §4.5, as ErrCodeNameMismatch needed in
+// v4): a daemon NEWER than the CLI talking to it can answer with a code
+// this switch has no arm for — `self_target` is the one being added — and
+// an old CLI has to print it, detail and all, rather than crash or answer
+// with silence.
+//
+// The code here is deliberately one nothing will ever implement, not
+// ipeers.ErrSelfTarget: a test that pins the default arm must stay on the
+// default arm even if self_target later earns a shape of its own.
+func TestRenderMsgAPIError_UnknownCodeStillRenders(t *testing.T) {
+	var stderr bytes.Buffer
+	renderMsgAPIError(ipeers.APIError{
+		Error:  "a_code_from_a_newer_daemon",
+		Detail: "the address resolves to this session; a message to yourself has nowhere to go",
+	}, "mlab", "purdex-b0", &stderr)
+
+	want := "pdx msg: a_code_from_a_newer_daemon: the address resolves to this session; a message to yourself has nowhere to go\n"
+	if stderr.String() != want {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	}
+}
+
 // --- whoami/name: the shared record block -----------------------------------
 
 // TestRenderSelfRecord_UnsetTitle pins the unset case, which under v4 is

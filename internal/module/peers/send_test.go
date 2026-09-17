@@ -863,6 +863,62 @@ func TestSend_LocalPartialInventoryNotReady(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Sending to yourself (spec §4.5)
+// ---------------------------------------------------------------------------
+
+// TestSend_SelfTargetRefused pins spec §4.5. Local delivery made a case
+// reachable that the bridge never had — the origin and the target are one
+// session — and it is refused rather than written into the caller's own
+// inbox with that same inbox as the reply address.
+//
+// Both address forms are exercised because the comparison is on the
+// identity tuple, not on the string the caller typed: `pdx msg whoami`
+// prints a name form and a ref form of the SAME session, so a check on the
+// typed address would refuse one and deliver the other, and the one it
+// delivered would be just as much a loop.
+func TestSend_SelfTargetRefused(t *testing.T) {
+	forms := []struct{ name, session string }{
+		{"by name", targetPeerName},
+		{"by ref", ipeers.RefID(targetSessionID)},
+	}
+	for _, f := range forms {
+		t.Run(f.name, func(t *testing.T) {
+			s := newSendEnv(t, envOpts{})
+			req := s.localSendReq()
+			req.To = localAlias + "/" + f.session
+
+			assertRefused(t, s.send(adminCtx(), req), http.StatusBadRequest, ipeers.ErrSelfTarget)
+
+			s.assertNoLine() // the caller's own inbox is where this would have landed
+			if len(s.rows()) != 0 {
+				t.Errorf("audit rows = %d, want none: §4.3 puts this refusal with the other step-6 resolution refusals", len(s.rows()))
+			}
+			if len(s.fetchCalls()) != 0 || len(s.postCalls()) != 0 {
+				t.Errorf("fetch/post = %d/%d, want none", len(s.fetchCalls()), len(s.postCalls()))
+			}
+		})
+	}
+}
+
+// TestSend_AgentlessLocalTargetIsNotDeliverable guards the ORDER of two
+// checks rather than either check on its own. A `tmux:<name>` address can
+// resolve to a row with no agent at all, so a self-target comparison placed
+// where "after Resolve" most obviously reads — before the deliverable guard
+// — dereferences a nil target.Agent and turns this refusal into a panic.
+func TestSend_AgentlessLocalTargetIsNotDeliverable(t *testing.T) {
+	const agentless = "ghost" // a tmux session with no agent: a row, but not a deliverable one
+	s := newSendEnv(t, envOpts{sessions: []session.SessionInfo{{Code: "s1", Name: agentless}}})
+	req := s.localSendReq()
+	req.To = localAlias + "/tmux:" + agentless
+
+	assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrNotDeliverable)
+	s.assertNoLine()
+	if len(s.rows()) != 0 {
+		t.Errorf("audit rows = %d, want none", len(s.rows()))
+	}
+}
+
 // TestSend_RefusalCodesMatchPerAddressForm is the property L1 actually
 // promises (spec §6.1): for every address FORM, a local target and an
 // equivalent remote target are refused with the SAME code. It deliberately

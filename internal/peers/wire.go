@@ -205,6 +205,16 @@ const (
 	// operator's call and they cannot make it from the code alone.
 	ErrCodeNameMismatch = "name_mismatch"
 
+	// ErrSelfTarget is /send's answer when the address resolved to the
+	// sending session itself (spec §4.5). Only local delivery can reach it:
+	// a remote target is on another host by construction. Refused rather
+	// than delivered because the frame would arrive labelled as being from
+	// its own receiver, with that receiver's own socket as the reply
+	// address, and a native reply goes back over that socket without
+	// touching pdx — so neither HopChain nor the pair limit is in the path
+	// of the loop it invites.
+	ErrSelfTarget = "self_target"
+
 	// The self routes' refusals: whoami, claim, release. Nothing returns
 	// ErrCodeTitleReserved since v4 dropped the reserved words — a title
 	// routes nowhere, so it has nothing to shadow.
