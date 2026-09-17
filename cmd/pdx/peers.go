@@ -891,6 +891,15 @@ func runPeersHostRename(cfg config.Config, base string, inv peersInvocation, std
 		return 1
 	}
 
+	// An older daemon decodes the PUT body without an alias field, ignores
+	// the key, and answers 200 with the entry unchanged. The row's alias is
+	// the only evidence the rename landed; "renamed air -> air" would be a
+	// lie the operator acts on.
+	if !strings.EqualFold(row.Alias, newAlias) {
+		fmt.Fprintf(stderr, "pdx peers: daemon did not apply the rename (entry is still %q; daemon too old?)\n", sanitizeCell(row.Alias))
+		return 1
+	}
+
 	fmt.Fprintf(stdout, "renamed %s -> %s\n", sanitizeCell(oldAlias), sanitizeCell(row.Alias))
 	return 0
 }

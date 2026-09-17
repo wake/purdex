@@ -1938,6 +1938,28 @@ func TestRunPeersCmd_HostRename_Conflict(t *testing.T) {
 	}
 }
 
+// TestRunPeersCmd_HostRename_OldDaemonIgnoredAlias pins the mixed-version
+// path: an alpha.376 daemon has no alias field on PUT, answers 200 with the
+// entry unchanged, and the CLI must not print "renamed air -> air".
+func TestRunPeersCmd_HostRename_OldDaemonIgnoredAlias(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"alias": "air", "url": "http://100.64.0.4:7860", "host_id": "a:1"})
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "rename", "air", "air26", "--config", cfgPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if strings.Contains(stdout.String(), "renamed") {
+		t.Errorf("stdout = %q, want no success line", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "did not apply the rename") {
+		t.Errorf("stderr = %q, want the not-applied message", stderr.String())
+	}
+}
+
 func TestRunPeersCmd_HostRename_EscapesAlias(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
