@@ -405,6 +405,13 @@ the refusal names both candidates with **different** refs; each ref then deliver
 This is v4 §9.7 written as an automated test rather than an acceptance step, because the acceptance
 step is the one that got skipped.
 
+**The ref already carries its underscore.** `RefID` returns `_xxxxxx`, and `PeerRecord.Ref` and
+`AmbiguousCandidate.Ref` hold it that way, so the address to send is `<host>/` **+ the candidate's
+`Ref` verbatim**. Writing `<host>/_` + `Ref` yields `a/__xxxxxx` and a `peer_not_found`. Only the
+*display* path strips it, for the bracket form — which is why the table prints `[q34psn]` while the
+address is `_q34psn`. Anyone transcribing from the printed table rather than from the refusal's JSON
+is reading the stripped form and must put the underscore back.
+
 ### 6.3 Mutation tests (deliverables)
 
 Each must turn something red; if it does not, the missing test is the work:
