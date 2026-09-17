@@ -228,3 +228,78 @@ Notes the implementer must respect:
 4. Codex review round (`--base origin/main --model gpt-5.5`).
 5. Merge → separate bump PR (`VERSION` + `package.json` + `spa/package.json` +
    `CHANGELOG.md`) → rebuild and restart the mlab daemon.
+
+---
+
+## Amendments after codex plan review (`task-mu51bwkl-9d6ll3`)
+
+These override the task bodies above wherever they disagree.
+
+### A1 — T1 tests must not hard-code this machine's paths
+
+The table in T1 lists expectations like `/Users/wake/Workspace/x`. With the
+`os.Stat` gate in the same task, those cases only pass if the directory happens
+to exist on the test machine. Rewrite them so every case that is expected to
+SUCCEED is built from `t.TempDir()`:
+
+- `home := t.TempDir()`, then `os.MkdirAll(filepath.Join(home, "Workspace", "x"))`
+- feed `func() (string, error) { return home, nil }` as the `home` argument
+- expectations are `filepath.Join(home, …)`, never a literal
+
+The failure cases (`~foo/bar`, `relative/x`, home error, NUL, missing path,
+existing file) stay as they are — they never reach a successful stat.
+
+The handler test goes through `os.UserHomeDir`, so it must set the home
+directory for the process: `t.Setenv("HOME", tmp)` with `tmp` containing `sub`.
+Assert the fake executor received `filepath.Join(tmp, "sub")`.
+
+### A2 — T3 must test a remembered sub-page that is disabled on the first host
+
+The spec promises the remembered sub-page clamps through `pickSelectableSubPage`
+when it is not selectable for `hostOrder[0]`. Without a test for it, an
+implementer can carry `lastSel.subPage` straight through, pass every planned
+test, and still select a disabled sub-page.
+
+Add: `lastSelection = { hostId: 'b', subPage: <X> }` where `<X>`'s contribution
+is disabled for host `a`'s ctx; navigate to bare `/hosts`; assert the resolved
+selection is host `a` with the first SELECTABLE sub-page, and that the canonical
+redirect names that sub-page — not `<X>`.
+
+### A3 — T5 tooltips: anchor off the button, and test visibility not presence
+
+Two changes to the T5 markup and tests.
+
+**Markup.** `HoverTooltip` anchors to its parent element, and a `disabled`
+button is an unreliable target for `mouseenter` / `focusin`. The tooltip must
+therefore hang off a wrapper that is never disabled, not off the button itself:
+
+```tsx
+<span className="relative flex min-w-0 flex-1">
+  <button … className={`… min-w-0 flex-1 ${itemCls}`}>…</button>
+  <HoverTooltip placement="top" data-testid={`launcher-project-tip-${project.id}`}>
+    {`${project.name} · ${project.slug} · ${project.path}`}
+  </HoverTooltip>
+</span>
+```
+
+and the same shape (`<span className="relative inline-flex">`) around each
+command button, with
+`data-testid={`launcher-command-tip-${project.id}-${command.id}`}`.
+
+The wrapper carries the sizing classes the button used to need from its parent
+(`min-w-0 flex-1` for the project, nothing for the icons). `data-launch-item`
+stays on the buttons, so `items()` and the arrow-key model are untouched.
+
+**Tests.** `HoverTooltip` always portals its children into `document.body` with
+`opacity-0`, so asserting on text presence proves nothing. Use the per-tooltip
+`data-testid` plus fake timers:
+
+```ts
+vi.useFakeTimers()
+fireEvent.mouseEnter(screen.getByTestId(`launcher-project-name-${id}`).parentElement!)
+act(() => { vi.advanceTimersByTime(800) })
+expect(screen.getByTestId(`launcher-project-tip-${id}`).className).toContain('opacity-100')
+```
+
+(`HOVER_TOOLTIP_DELAY_MS` is 800.) Assert the same for one command tooltip, and
+assert the content string. Restore real timers in the test's cleanup.
