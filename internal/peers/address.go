@@ -94,10 +94,10 @@ func (e *AmbiguousError) Error() string {
 //     an empty name is ErrNotFound.
 //   - the stale-version gate (see below), which decides nothing but can
 //     refuse everything under it.
-//   - "<name> [<ref>]": the combined form the peers table prints. The ref
-//     resolves through resolveRefHead and the typed name is then compared
-//     against the resolved row's registry name; a mismatch is
-//     ErrNameMismatch, never a delivery.
+//   - "<name> [<ref>]": the combined form the peers table prints. The typed
+//     name must be routable and both halves must match the SAME row; failing
+//     that the ref is asked on its own, only to say which half went wrong. A
+//     mismatch is ErrNameMismatch, never a delivery.
 //   - tier 1, "<name>": Agent.PeerName == head, over rows carrying a LIVE cc
 //     entry whose name is routable.
 //   - tiers 2 and 3, "_<ref>" and the same ref without its underscore:
@@ -151,8 +151,9 @@ func (e *AmbiguousError) Error() string {
 //     missed. It is retried anyway because that is the safe direction: a retry
 //     costs one round trip, a false "not found" costs a message. Splitting
 //     Partial by cause is out of scope (spec §5.4).
-//   - The combined form carries those same rules, because it resolves its ref
-//     through the same helper the bare-ref tiers use. It cannot quietly
+//   - The combined form carries those same rules: RegistryIncomplete refuses
+//     its single hit exactly as it refuses a bare ref's, and a miss falls
+//     through resolveRefHead, which applies Partial. It cannot quietly
 //     acquire a weaker rule set than the address it contains.
 //   - "tmux:<name>" and tier 4 match SessionName without comparing
 //     TmuxInstance, so with two tmux servers holding same-named sessions they
@@ -186,16 +187,73 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 	// The combined form "<name> [<ref>]", which the peers table prints and an
 	// operator pastes verbatim. The ref decides where this goes; the name is
 	// the reader's check on it, so a mismatch refuses rather than delivers.
-	if name, ref, ok := splitCombined(session); ok {
-		rec, err := resolveRefHead(records, ref, snap)
-		if err != nil {
+	if typedName, typedRef, ok := splitCombined(session); ok {
+		// The typed name must clear the same grammar tier 1 applies. Without
+		// this the combined form is a way around RoutableName: §5.2 says an
+		// unroutable registry name is displayed but never becomes an address,
+		// and a bare-name send honours that — but comparing the typed name
+		// against the row's without asking either to be routable made
+		// "<unroutable name> [<its ref>]" deliver.
+		if !RoutableName(typedName) {
+			return PeerRecord{}, fmt.Errorf("%w: %q cannot be an address head", ErrNotFound, typedName)
+		}
+		ref := typedRef
+		if !strings.HasPrefix(ref, "_") {
+			ref = "_" + ref
+		}
+		if !IsRef(ref) {
+			return PeerRecord{}, ErrNotFound
+		}
+
+		// Match the ref and the name TOGETHER rather than resolving the ref
+		// and then checking the name. Two live rows may share a ref (spec
+		// §3.1's P3 residual, which promises they "remain reachable by
+		// name"), and the typed name is what tells them apart — resolving the
+		// ref alone called the pasted table address ambiguous when it named
+		// exactly one row.
+		//
+		// The name is still a check ON the ref, not a second way in past it:
+		// a name carried by no row with this ref is refused below, never
+		// delivered.
+		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
+			return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
+				r.Ref == ref && r.Agent.PeerName == typedName
+		})
+		switch {
+		case err == nil:
+			if snap.RegistryIncomplete {
+				// The same rule the bare ref gets: an undecodable registry
+				// file may be a second live process of this conversation,
+				// which would have made even this pair ambiguous.
+				return PeerRecord{}, ErrResolveNotReady
+			}
+			return rec, nil
+		case !errors.Is(err, ErrNotFound):
+			// Same name AND same ref on two rows: genuinely unresolvable.
 			return PeerRecord{}, err
 		}
-		if rec.Agent.PeerName != name {
+
+		// Nothing matched both halves. Ask the ref on its own, because the two
+		// ways this can happen need different actions from the reader: a
+		// drifted name means re-read the address, an absent ref means the
+		// conversation is gone. resolveRefHead is also what applies the
+		// snapshot conservatisms to a miss.
+		byRef, refErr := resolveRefHead(records, ref, snap)
+		var amb *AmbiguousError
+		switch {
+		case refErr == nil:
 			return PeerRecord{}, fmt.Errorf("%w: typed %q, but %s is now %q",
-				ErrNameMismatch, name, ref, rec.Agent.PeerName)
+				ErrNameMismatch, typedName, ref, byRef.Agent.PeerName)
+		case errors.As(refErr, &amb):
+			// The ref is ambiguous and none of its rows carries the typed
+			// name — a mismatch, not an ambiguity: no candidate was ever in
+			// the running.
+			return PeerRecord{}, fmt.Errorf("%w: typed %q, but %s names no such conversation",
+				ErrNameMismatch, typedName, ref)
+		default:
+			// ErrNotFound or ErrResolveNotReady, both already the right answer.
+			return PeerRecord{}, refErr
 		}
-		return rec, nil
 	}
 
 	// Tiers 1 to 4 all require a session carrying no ':' at all: v4 deleted
@@ -274,9 +332,10 @@ func splitCombined(s string) (name, ref string, ok bool) {
 // resolveRefHead resolves a ref with or without its leading underscore,
 // applying every conservatism the bare-ref tier applies.
 //
-// It is shared with the combined form deliberately: a combined address
-// contains a ref, and it must not acquire a weaker rule set than that same
-// ref typed on its own would get.
+// The combined form calls it too, but only after its own name+ref match has
+// missed — there to diagnose which half was wrong, and to apply Partial to the
+// miss. It does not decide that form, because a combined address names one row
+// out of the several a shared ref may reach.
 func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (PeerRecord, error) {
 	if !strings.HasPrefix(ref, "_") {
 		ref = "_" + ref

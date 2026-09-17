@@ -384,6 +384,108 @@ func TestResolve_CombinedFormMismatchRefuses(t *testing.T) {
 	}
 }
 
+// TestResolve_CombinedForm_UnroutableNameRefused is F1: the combined form is
+// the second way in, and it has to clear the same grammar the first one does.
+//
+// §5.2 says a name that fails RoutableName is displayed but never becomes an
+// address, and tier 1 enforces that. The combined form compared the typed name
+// against the row's without asking either of them to be routable — so a row
+// whose registry name holds a ':', a space, a bracket or six base36 digits was
+// reachable by typing "<that name> [<its ref>]", which is exactly the string
+// §5.2 says cannot exist. The rows below are all still perfectly deliverable;
+// only by their refs, which is what their addresses show.
+func TestResolve_CombinedForm_UnroutableNameRefused(t *testing.T) {
+	for _, c := range []struct{ name, why string }{
+		{"trusted:ops", "a colon, which the address grammar assigns meaning to"},
+		{"trusted ops", "a space, which the combined form itself splits on"},
+		{"trusted[ops", "a bracket, which the combined form itself splits on"},
+		{"trusted\x07ops", "a control character"},
+		{"trustéd", "non-ASCII"},
+		{"abc123", "ref-shaped: it would shadow the ref namespace"},
+		{"Trusted", "upper case, which RoutableName does not admit"},
+	} {
+		recs := []PeerRecord{liveRow("_zq81ab", c.name, "", "evil", 1)}
+		in := c.name + " [zq81ab]"
+		if _, err := Resolve(recs, in, ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Resolve(%q) = %v, want ErrNotFound — %s", in, err, c.why)
+		}
+		// The row is not unreachable, it simply has no name address: the
+		// ref it is addressed by still delivers.
+		if got, err := Resolve(recs, "_zq81ab", ResolveSnapshot{}); err != nil || got.Agent.PID != 1 {
+			t.Errorf("name %q: ref form got %+v %v, want the row", c.name, got, err)
+		}
+	}
+}
+
+// TestResolve_CombinedForm_SharedRefResolvedByName is F3, and it is the other
+// half of F1's fix rather than a separate one: matching the ref and the name
+// TOGETHER is what lets the typed name be a check on the ref without the ref
+// having to be unique.
+//
+// §3.1's P3 residual says two conversations sharing a ref "remain reachable by
+// name". Resolving the ref first and checking the name afterwards made that
+// false for the form the table prints and a person pastes: the ref alone is
+// ambiguous, so the paste was refused although it named exactly one row.
+func TestResolve_CombinedForm_SharedRefResolvedByName(t *testing.T) {
+	recs := []PeerRecord{
+		liveRow("_q34psn", "purdex-b0", "", "a", 1),
+		liveRow("_q34psn", "nexen-f2", "", "b", 2),
+	}
+	for _, c := range []struct {
+		in  string
+		pid int
+	}{{"purdex-b0 [q34psn]", 1}, {"nexen-f2 [q34psn]", 2}} {
+		got, err := Resolve(recs, c.in, ResolveSnapshot{})
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", c.in, err)
+		}
+		if got.Agent.PID != c.pid {
+			t.Errorf("Resolve(%q) landed on pid %d, want %d", c.in, got.Agent.PID, c.pid)
+		}
+	}
+	// The bare ref is still ambiguous — the name is what told them apart.
+	var amb *AmbiguousError
+	if _, err := Resolve(recs, "_q34psn", ResolveSnapshot{}); !errors.As(err, &amb) {
+		t.Errorf("bare ref: %v, want AmbiguousError", err)
+	}
+	// A name carried by no row with that ref is refused, so the name is a
+	// check ON the ref and never a second way in past it.
+	_, err := Resolve(recs, "ghost-name [q34psn]", ResolveSnapshot{})
+	if !errors.Is(err, ErrNameMismatch) {
+		t.Fatalf("unknown name on an ambiguous ref: %v, want ErrNameMismatch", err)
+	}
+	for _, want := range []string{"ghost-name", "q34psn"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+}
+
+// Two rows sharing a ref AND a name: nothing tells them apart, so the combined
+// form is genuinely ambiguous and must say so rather than pick one.
+func TestResolve_CombinedForm_SameNameAndRefIsAmbiguous(t *testing.T) {
+	recs := []PeerRecord{
+		liveRow("_q34psn", "purdex-b0", "", "a", 1),
+		liveRow("_q34psn", "purdex-b0", "", "b", 2),
+	}
+	var amb *AmbiguousError
+	if _, err := Resolve(recs, "purdex-b0 [q34psn]", ResolveSnapshot{}); !errors.As(err, &amb) || len(amb.Candidates) != 2 {
+		t.Fatalf("err = %v, want AmbiguousError with 2 candidates", err)
+	}
+}
+
+// A live name plus a ref that names nothing is a miss, not a delivery to the
+// name: the bracket group is the part that routes.
+func TestResolve_CombinedForm_LiveNameWithAbsentRefMisses(t *testing.T) {
+	recs := []PeerRecord{liveRow("_q34psn", "purdex-b0", "", "aigora2", 1)}
+	if _, err := Resolve(recs, "purdex-b0 [zzzzzz]", ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+	if _, err := Resolve(recs, "purdex-b0 [not-a-ref]", ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("malformed ref: err = %v, want ErrNotFound", err)
+	}
+}
+
 // The combined form must carry the SAME conservatisms as the bare ref tier.
 func TestResolve_CombinedFormHonoursSnapshot(t *testing.T) {
 	recs := []PeerRecord{liveRow("_q34psn", "purdex-b0", "", "aigora2", 1)}
