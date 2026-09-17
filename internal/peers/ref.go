@@ -1,4 +1,4 @@
-// internal/peers/label.go
+// internal/peers/ref.go
 package peers
 
 import (
@@ -22,13 +22,13 @@ const (
 	sanitizeMax  = 32
 	base36Digits = "0123456789abcdefghijklmnopqrstuvwxyz"
 
-	// canonicalN is 8, not 6, because the canonical id is the ONLY thing
-	// a conversation is reachable by (spec §4.1): there is no allocator
-	// to fall back on, so the width has to carry the collision budget on
-	// its own. 36^8 ≈ 2.82e12 puts the birthday probability for 100 live
-	// conversations at ≈1.8e-9, against ≈2.3e-6 at width 6.
-	canonicalN     = 8
-	canonicalSpace = 36 * 36 * 36 * 36 * 36 * 36 * 36 * 36 // 36^8
+	// canonicalN is 6, not 8: the ref is no longer the only way to reach a
+	// conversation (v4 spec §5.1). The name covers a ref collision exactly as
+	// the ref covers a name collision, so the width carries a tiebreaker's
+	// budget rather than the whole address's. 36^6 ≈ 2.18e9 puts the birthday
+	// probability for 100 live conversations at ≈2.3e-6.
+	canonicalN     = 6
+	canonicalSpace = 36 * 36 * 36 * 36 * 36 * 36 // 36^6
 )
 
 var (
@@ -36,7 +36,7 @@ var (
 	ErrLabelReserved = errors.New("label reserved")
 
 	userLabelPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,31}$`)
-	canonicalPattern  = regexp.MustCompile(`^_[0-9a-z]{8}$`)
+	refPattern        = regexp.MustCompile(`^_[0-9a-z]{6}$`)
 	suffixWirePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,65}$`)
 )
 
@@ -51,19 +51,15 @@ func ValidateUserLabel(s string) error {
 	return nil
 }
 
-// IsCanonicalID reports whether s has the canonical form, "_" followed by
-// exactly 8 base36 digits. The leading '_' is what keeps the address
-// namespace disjoint from the label namespace: a user label must match
-// ^[a-z0-9][a-z0-9-]{1,31}$ and so can never begin with '_'.
-func IsCanonicalID(s string) bool { return canonicalPattern.MatchString(s) }
+// IsRef reports whether s has the ref form, "_" followed by exactly 6 base36
+// digits. The leading '_' is half of what keeps the ref namespace disjoint
+// from the name namespace; RoutableName (Task A2) is the other half.
+func IsRef(s string) bool { return refPattern.MatchString(s) }
 
-// CanonicalID derives a conversation's address from its Claude Code
-// sessionId: "_" + base36(FNV-1a-64(sessionId) mod 36^8), 8 digits,
-// zero-padded. Pure and deterministic across resumes and daemon
-// restarts, because the sessionId is the one identity nobody issues,
-// requests, or competes for (spec §3.1) — which is exactly why an
-// address derived from it cannot be allocated twice.
-func CanonicalID(sessionID string) string {
+// RefID derives a conversation's ref from its Claude Code sessionId:
+// "_" + base36(FNV-1a-64(sessionId) mod 36^6), 6 digits, zero-padded. Pure
+// and deterministic across resumes and daemon restarts.
+func RefID(sessionID string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(sessionID))
 	n := h.Sum64() % canonicalSpace
@@ -74,6 +70,15 @@ func CanonicalID(sessionID string) string {
 	}
 	return "_" + string(out)
 }
+
+// Deprecated: use RefID / IsRef.
+//
+// These exist for exactly one task. Renaming the FUNCTION here and the FIELD
+// in Task A3 as one change would mean a single unreviewable commit spanning
+// 45 files; splitting them means this task cannot also delete the old names.
+// Task A3 removes both lines along with the Canonical field.
+func CanonicalID(sessionID string) string { return RefID(sessionID) }
+func IsCanonicalID(s string) bool         { return IsRef(s) }
 
 // Sanitize is the suffix component sanitizer: keeps [A-Za-z0-9_.-],
 // replaces every other byte with '_', truncates to 32 bytes; "" ⇒ "_".

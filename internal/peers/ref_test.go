@@ -1,8 +1,9 @@
-// internal/peers/label_test.go
+// internal/peers/ref_test.go
 package peers
 
 import (
 	"errors"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -126,11 +127,11 @@ func TestCanonicalID_Form(t *testing.T) {
 			t.Errorf("CanonicalID(%q) = %q: len %d, want %d", in, got, len(got), canonicalN+1)
 		}
 		if !IsCanonicalID(got) {
-			t.Errorf("CanonicalID(%q) = %q, want ^_[0-9a-z]{8}$", in, got)
+			t.Errorf("CanonicalID(%q) = %q, want ^_[0-9a-z]{6}$", in, got)
 		}
 	}
 
-	// The zero-padding path: a value below 36^7 renders with a leading
+	// The zero-padding path: a value below 36^5 renders with a leading
 	// '0', which only a fixed-width encoder produces.
 	padded := false
 	for i := range 200 {
@@ -145,7 +146,7 @@ func TestCanonicalID_Form(t *testing.T) {
 }
 
 func TestIsCanonicalID(t *testing.T) {
-	ok := []string{"_00000000", "_3k9f2mq4", "_zzzzzzzz", "_0a1b2c3d"}
+	ok := []string{"_000000", "_3k9f2m", "_zzzzzz", "_0a1b2c"}
 	for _, s := range ok {
 		if !IsCanonicalID(s) {
 			t.Errorf("IsCanonicalID(%q) = false, want true", s)
@@ -154,18 +155,18 @@ func TestIsCanonicalID(t *testing.T) {
 	bad := []string{
 		"",              // empty
 		"_",             // bare underscore
-		"_k3x9qz",       // 6 digits: the v2 default label
-		"_k3x9qz1",      // 7 digits: neither v2 nor v3, must not pass
+		"_k3x9q",        // 5 digits
+		"_k3x9qz1",      // 7 digits: one too many, must not pass
 		"_k3x9qz123",    // 9 digits
-		"3k9f2mq4",      // no leading underscore
+		"3k9f2m",        // no leading underscore
 		"purdex-tester", // a user label
-		"_3K9F2MQ4",     // uppercase
-		"_3k9f2mq-",     // hyphen
-		"_3k9f2m_4",     // underscore inside
-		"__3k9f2mq",     // second underscore
-		"_3k9f2mq4:x",   // a whole address, not a bare id
-		" _3k9f2mq4",    // leading space
-		"_3k9f2mq4\n",   // trailing newline
+		"_3K9F2M",       // uppercase
+		"_3k9f2-",       // hyphen
+		"_3k9f_m",       // underscore inside
+		"__3k9f2",       // second underscore
+		"_3k9f2m:x",     // a whole address, not a bare id
+		" _3k9f2m",      // leading space
+		"_3k9f2m\n",     // trailing newline
 	}
 	for _, s := range bad {
 		if IsCanonicalID(s) {
@@ -185,7 +186,7 @@ func TestCanonicalID_DisjointFromUserLabels(t *testing.T) {
 			t.Fatalf("ValidateUserLabel(%q) accepted a canonical id", id)
 		}
 	}
-	for _, id := range []string{"_00000000", "_zzzzzzzz", "_3k9f2mq4"} {
+	for _, id := range []string{"_000000", "_zzzzzz", "_3k9f2m"} {
 		if err := ValidateUserLabel(id); err == nil {
 			t.Errorf("ValidateUserLabel(%q) accepted a canonical id", id)
 		}
@@ -199,6 +200,44 @@ func TestCanonicalID_DisjointFromUserLabels(t *testing.T) {
 	for _, s := range labels {
 		if IsCanonicalID(s) {
 			t.Errorf("IsCanonicalID(%q) = true for a label-shaped string", s)
+		}
+	}
+}
+
+func TestRefID_Shape(t *testing.T) {
+	for _, sid := range []string{"a57f3d89-5850-4812-84f5-d24d6c561902", "", "x"} {
+		got := RefID(sid)
+		if !regexp.MustCompile(`^_[0-9a-z]{6}$`).MatchString(got) {
+			t.Errorf("RefID(%q) = %q, want ^_[0-9a-z]{6}$", sid, got)
+		}
+		if !IsRef(got) {
+			t.Errorf("IsRef(%q) = false, want true", got)
+		}
+	}
+}
+
+func TestRefID_Deterministic(t *testing.T) {
+	const sid = "1ab9778a-38a4-4355-bc76-b82c9baa61b8"
+	if a, b := RefID(sid), RefID(sid); a != b {
+		t.Errorf("RefID not deterministic: %q != %q", a, b)
+	}
+}
+
+// TestRefID_PinnedVector fails loudly if a refactor changes every address on
+// every host at once. The expectation is a LITERAL on purpose: a vector that
+// recomputes its own expectation asserts nothing.
+func TestRefID_PinnedVector(t *testing.T) {
+	const sid = "1ab9778a-38a4-4355-bc76-b82c9baa61b8"
+	const want = "_4psn4f"
+	if got := RefID(sid); got != want {
+		t.Errorf("RefID(%q) = %q, want %q", sid, got, want)
+	}
+}
+
+func TestIsRef_Rejects(t *testing.T) {
+	for _, s := range []string{"", "_", "_q34psn4f", "q34psn", "_Q34PSN", "_q34ps", "purdex-b0"} {
+		if IsRef(s) {
+			t.Errorf("IsRef(%q) = true, want false", s)
 		}
 	}
 }
