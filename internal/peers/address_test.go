@@ -70,7 +70,7 @@ func TestResolve_RefTier(t *testing.T) {
 			t.Errorf("%q resolved to pid %d, want %d", c.in, got.Agent.PID, c.pid)
 		}
 	}
-	for _, in := range []string{refA + ":whatever-suffix", refB + ":x"} {
+	for _, in := range []string{refA + ":whatever-suffix", refB + ":x", refA + ":"} {
 		if _, err := Resolve(recs, in, ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%q: got %v, want ErrNotFound — v4 has no suffix form", in, err)
 		}
@@ -688,6 +688,29 @@ func TestStaleVersion_V4RowsNotMisjudged(t *testing.T) {
 		_, err := Resolve([]PeerRecord{tc.rec}, "nobody", ResolveSnapshot{})
 		if errors.Is(err, ErrRemoteTooOld) {
 			t.Errorf("%s: judged stale; want a plain miss", tc.name)
+		}
+	}
+}
+
+// TestResolve_NameTierRejectsSuffixForm pins the half of §5.4's grammar that
+// tier 1 was missing: v4 deleted the "<head>:<suffix>" form outright, and the
+// ref tiers refuse it (they run only when rest == ""), but the name tier
+// matched on head alone — so "<name>:anything" delivered to <name>, and every
+// retired v3 address in someone's scrollback stayed live.
+//
+// It is a real hole rather than a cosmetic one: the suffix v3 printed was the
+// tmux-and-conversation identity, so a stale suffixed address names a place
+// that may have moved while the bare name in front of it did not.
+func TestResolve_NameTierRejectsSuffixForm(t *testing.T) {
+	recs := []PeerRecord{liveRow(refA, "purdex-b0", "", "aigora2", 1)}
+	// The bare name is live, so a miss below cannot be an artefact of the
+	// row being unmatchable.
+	if _, err := Resolve(recs, "purdex-b0", ResolveSnapshot{}); err != nil {
+		t.Fatalf("bare name: %v, want it to resolve", err)
+	}
+	for _, in := range []string{"purdex-b0:old-suffix", "purdex-b0:", "purdex-b0:aigora2-claude"} {
+		if _, err := Resolve(recs, in, ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%q: got %v, want ErrNotFound — v4 has no suffix form", in, err)
 		}
 	}
 }

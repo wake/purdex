@@ -101,10 +101,13 @@ func (e *AmbiguousError) Error() string {
 //   - tier 1, "<name>": Agent.PeerName == head, over rows carrying a LIVE cc
 //     entry whose name is routable.
 //   - tiers 2 and 3, "_<ref>" and the same ref without its underscore:
-//     PeerRecord.Ref == head over those same live rows. Only for a head with
-//     nothing after a ':'.
+//     PeerRecord.Ref == head over those same live rows.
 //   - tier 4, "<name>" read as a bare tmux session name: SessionName == head,
 //     over a complete inventory only.
+//
+// Every tier decides only for a session carrying no ':' at all. v4 has no
+// suffix form, so "<head>:<anything>" is not an address; matching it on its
+// head alone would keep every retired v3 address routable.
 //
 // Tiers 1 to 3 see only rows whose Agent is a real registry entry (Type "cc",
 // PID != 0). Proxy rows and owner-fallback rows (inbox_dead / ambiguous:
@@ -195,29 +198,40 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		return rec, nil
 	}
 
-	// Tier 1: the registry name, over live rows whose name is routable. The
-	// RoutableName guard is not decoration — an unroutable name must not win a
-	// tier, because it could never have produced the address being typed. It
-	// also subsumes the `head != ""` guard v3 spelled out: ":suffix" splits to
-	// an empty head, and RoutableName("") is false.
-	rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-		return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) && r.Agent.PeerName == head
-	})
-	if err == nil && snap.RegistryIncomplete {
-		// One hit, but a registry file for an alive pid could not be
-		// decoded: that file may be a second live process of this very
-		// conversation, which would have made the address ambiguous. Do
-		// not pick one process on incomplete evidence.
-		return PeerRecord{}, ErrResolveNotReady
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return rec, err
-	}
+	// Tiers 1 to 4 all require a session carrying no ':' at all: v4 deleted
+	// the "<head>:<suffix>" form outright (spec §5.3 removes the field it
+	// printed), so a string with a ':' in it is not an address and must not
+	// be matched on its head alone. v3's tiers 2/3 said so; tier 1 did not,
+	// which left every retired "<name>:<suffix>" in a scrollback still
+	// delivering to <name> — and the suffix was the very part that said WHICH
+	// conversation, so the half still honoured was the half that can drift.
+	//
+	// The test is the ':' itself rather than SplitSession's rest, because
+	// "<head>:" splits to an empty rest and would otherwise slip through the
+	// gate the other suffixed forms are stopped by. Only "cc:" and
+	// "tmux:<name>", decided above, ever carry a ':' legitimately.
+	if !strings.Contains(session, ":") {
+		// Tier 1: the registry name, over live rows whose name is routable.
+		// The RoutableName guard is not decoration — an unroutable name must
+		// not win a tier, because it could never have produced the address
+		// being typed.
+		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
+			return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) && r.Agent.PeerName == head
+		})
+		if err == nil && snap.RegistryIncomplete {
+			// One hit, but a registry file for an alive pid could not be
+			// decoded: that file may be a second live process of this very
+			// conversation, which would have made the address ambiguous. Do
+			// not pick one process on incomplete evidence.
+			return PeerRecord{}, ErrResolveNotReady
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return rec, err
+		}
 
-	// Tiers 2/3: the ref, with or without its underscore. No ordering rule is
-	// needed against tier 1: RoutableName forbids a ref-shaped name, so no row
-	// can match both.
-	if rest == "" {
+		// Tiers 2/3: the ref, with or without its underscore. No ordering
+		// rule is needed against tier 1: RoutableName forbids a ref-shaped
+		// name, so no row can match both.
 		rec, err = resolveRefHead(records, head, snap)
 		if !errors.Is(err, ErrNotFound) {
 			return rec, err
@@ -228,7 +242,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		return PeerRecord{}, ErrResolveNotReady
 	}
 	// Tier 4: bare tmux session name, complete inventory only.
-	if rest != "" {
+	if strings.Contains(session, ":") {
 		return PeerRecord{}, ErrNotFound
 	}
 	return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == head })
