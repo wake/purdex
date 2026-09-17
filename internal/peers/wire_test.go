@@ -959,13 +959,12 @@ func TestDeliverRequest_Validate_CanonicalAddress(t *testing.T) {
 	}
 }
 
-// TestValidateWireAddress_UsesIsRef pins the coupling between the
-// canonical id rule and the wire head rule: whatever IsRef accepts
-// is, by construction, a head a v3 sender can announce, so the wire check
-// has to accept it too. Without this the head grammar can drift away from
-// the id it exists to validate — which is how IsRef came to have no
-// production caller at all — and the drift would only surface as v3 senders
-// being refused on the wire.
+// TestValidateWireAddress_UsesIsRef pins the coupling between the ref rule
+// and the wire head rule: whatever IsRef accepts is, by construction, a head
+// a v4 sender can announce, so the wire check has to accept it too. Without
+// this the head grammar can drift away from the id it exists to validate —
+// which is how IsRef came to have no production caller at all — and the drift
+// would only surface as v4 senders being refused on the wire.
 func TestValidateWireAddress_UsesIsRef(t *testing.T) {
 	for _, sessionID := range []string{
 		"3f2a1c8e-0000-4000-8000-000000000001",
@@ -985,15 +984,43 @@ func TestValidateWireAddress_UsesIsRef(t *testing.T) {
 		}
 	}
 
-	// The exact partition of underscore-headed heads: accepted iff it is a
-	// canonical id (v3) or the 6-digit form a v2 sender still announces.
-	// Every other width is refused — the legacy arm is a bounded exception,
-	// not a range.
+	// The exact partition of underscore-headed heads: accepted iff it is a v4
+	// ref (IsRef, which is also the shape a v2 sender's default head has) or
+	// the 8-digit canonical id a v3 sender still announces. Every other width
+	// is refused — the legacy arm is a bounded exception, not a range, so a
+	// 7-digit head no version ever minted stays unroutable.
 	for n := 1; n <= 12; n++ {
 		s := "_" + strings.Repeat("a", n)
-		want := IsRef(s) || n == 6
+		want := IsRef(s) || n == 8
 		if err := ValidateWireAddress(s); (err == nil) != want {
 			t.Errorf("ValidateWireAddress(%q) = %v, want accepted=%v", s, err, want)
+		}
+	}
+}
+
+// TestValidateWireAddress_Matrix pins spec §5.6's head matrix one row each:
+// a v4 ref, the v3 canonical id and the v2 heads (both the ref-shaped
+// default and a user label) are all accepted, "" is a v1 sender, and
+// everything else — including the bracket form a human reads — is refused.
+// The legacy suffix is still validated rather than waved through.
+func TestValidateWireAddress_Matrix(t *testing.T) {
+	for _, tc := range []struct {
+		name, addr string
+		wantOK     bool
+	}{
+		{"v4 ref", "_q34psn", true},
+		{"v3 canonical, one release", "_q34psn4f", true},
+		{"v3 canonical with suffix", "_q34psn4f:aigora2-purdex-b0", true},
+		{"v2 default head is ref-shaped, covered by IsRef", "_abc123", true},
+		{"v2 user label head", "purdex-tester", true},
+		{"v1 empty", "", true},
+		{"garbage head", "has/slash", false},
+		{"legacy suffix must still be validated", "_q34psn4f:bad suffix", false},
+		{"bracket form is not a wire address", "purdex-b0 [q34psn]", false},
+	} {
+		err := ValidateWireAddress(tc.addr)
+		if gotOK := err == nil; gotOK != tc.wantOK {
+			t.Errorf("%s: ValidateWireAddress(%q) err = %v, wantOK %v", tc.name, tc.addr, err, tc.wantOK)
 		}
 	}
 }

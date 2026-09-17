@@ -235,7 +235,7 @@ type WireFrom struct {
 	PeerName       string `json:"peer_name"`             // registry name; may be ""
 	SessionName    string `json:"session_name"`          // tmux session name, or "cc:<peer_name>" outside tmux
 	DeclaredMode   string `json:"declared_mode"`         // prompting | bypass
-	Address        string `json:"address,omitempty"`     // "<label>:<suffix>" (Peer Address v2 spec §3.5); "" from a v1 sender
+	Address        string `json:"address,omitempty"`     // "_<ref>" from a v4 sender, which sets no suffix (v4 spec §5.6); "<label>:<suffix>" from a legacy sender; "" from a v1 sender
 	AddressRev     int64  `json:"address_rev,omitempty"` // the label row's revision when Address is set
 }
 
@@ -465,47 +465,55 @@ func ValidateMode(s string) (string, error) {
 	}
 }
 
-// legacyV2HeadPattern is the 6-digit default label a v2 sender derives
-// from its tmux identity. v3 does not mint this width — IsRef is
-// 8 — so it appears here and nowhere else.
-var legacyV2HeadPattern = regexp.MustCompile(`^_[0-9a-z]{6}$`)
-
-// isLegacyV2Head reports whether head is a v2 default label: "_" plus
-// exactly 6 base36 digits.
+// legacyV3Head matches the 8-digit canonical id v3 used as an address head.
 //
-// It exists because the peers on the other end of the wire upgrade on
-// their own schedule. A v2 daemon still announces itself with a 6-digit
-// head, and a receiver that refused it would not be enforcing v3 — it
-// would be dropping real traffic from hosts nobody has updated yet.
+// It exists because the peers on the other end of the wire upgrade on their
+// own schedule: a v3 daemon still announces an 8-digit head, and a receiver
+// that refused it would not be enforcing v4 — it would be dropping real
+// traffic from hosts nobody has updated yet. Resolve still refuses such a
+// batch (spec §8.3), so accepting the head here only changes which error the
+// operator sees.
 //
-// It is deliberately 6 and only 6, never a 6–8 range: no version of the
+// It is deliberately 8 and only 8, never a 6-8 range: no version of the
 // address scheme has ever minted a 7-digit head, so a range would admit a
 // format that does not exist — a string nothing can have generated and
 // nothing can resolve.
 //
-// Delete this, and its arm in ValidateWireAddress, once every peer that
-// can reach this daemon speaks v3; from then on IsRef is the whole
-// rule.
-func isLegacyV2Head(head string) bool { return legacyV2HeadPattern.MatchString(head) }
+// TODO(v5): delete this arm, the v2 arm that IsRef now covers, and their rows
+// in TestValidateWireAddress_Matrix once every peer that can reach this daemon
+// speaks v4 or later. Both legacy classes are accepted for exactly one release
+// so a single upgrade window does not have to carry two incompatibilities at
+// once.
+var legacyV3Head = regexp.MustCompile(`^_[0-9a-z]{8}$`)
 
-// ValidateWireAddress checks from.address (Peer Address v3 spec §6.2): ""
-// is a v1 sender and always passes; otherwise the head (up to the first
-// ':') must be one of three things — a v3 canonical id (IsRef), a
-// v2 legacy head (isLegacyV2Head), or a user label (which a v2 sender may
-// still present as a head) — and, when a ':' is present at all, the rest
-// must match the suffix wire grammar (suffixWirePattern), including an
-// explicitly empty suffix ("purdex-tester:"), which is rejected. Reserved
-// heads ("cc", "tmux") never pass, via ValidateUserLabel.
+// ValidateWireAddress checks from.address (Peer Address v4 spec §5.6): "" is a
+// v1 sender and always passes; otherwise the head (up to the first ':') must be
+// a v4 ref (IsRef), the 8-digit canonical id a v3 sender still announces
+// (legacyV3Head), or a user label (which a v2 sender may still present as a
+// head); and, when a ':' is present at all, the rest must match the suffix wire
+// grammar (suffixWirePattern), including an explicitly empty suffix
+// ("purdex-tester:"), which is rejected. Reserved heads ("cc", "tmux") never
+// pass, via ValidateUserLabel.
+//
+// IsRef also covers v2's legacy head: v2's default label was "_" plus six
+// base36 digits, the same shape a v4 ref has. That is a coincidence of
+// format, not of meaning, and it is harmless here because this function
+// only checks grammar. Routing tells them apart — a v2 or v3 peer's rows
+// carry no ref at all, so Resolve refuses the whole batch (spec §8.3)
+// rather than matching one.
 func ValidateWireAddress(s string) error {
 	if s == "" {
 		return nil
 	}
 	head, rest := SplitSession(s)
-	if !IsRef(head) && !isLegacyV2Head(head) {
+	if !IsRef(head) && !legacyV3Head.MatchString(head) {
 		if err := ValidateUserLabel(head); err != nil {
 			return fmt.Errorf("%w: head: %w", ErrAddressInvalid, err)
 		}
 	}
+	// A v4 sender sets no suffix, but a legacy one does, and a legacy suffix is
+	// still validated rather than waved through: relaxing a receiver's grammar
+	// while retiring a sender's is how a field stops being checked at all.
 	if strings.Contains(s, ":") && !ValidSuffix(rest) {
 		return fmt.Errorf("%w: suffix must match %s", ErrAddressInvalid, suffixWirePattern)
 	}
