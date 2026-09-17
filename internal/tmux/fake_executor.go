@@ -78,6 +78,12 @@ type FakeExecutor struct {
 	HooksOutput           string   // returned by ShowHooksGlobal
 	FailSendKeys          bool     // if true, SendKeysRaw returns an error
 	FailPasteText         bool     // if true, PasteText returns an error
+	// ForceNewSessionCwd, when non-empty, is the cwd NewSession records for the
+	// new session instead of the one it was asked for — test-only. It models
+	// the one thing real tmux does that no error surfaces: `new-session -c
+	// <dir>` on a directory it cannot use silently starts the session in $HOME,
+	// so `#{session_path}` comes back as somewhere nobody asked for.
+	ForceNewSessionCwd string
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -222,6 +228,9 @@ func (f *FakeExecutor) ListCallCount() int {
 func (f *FakeExecutor) NewSession(name, cwd string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.ForceNewSessionCwd != "" {
+		cwd = f.ForceNewSessionCwd
+	}
 	id := fmt.Sprintf("$%d", f.nextID)
 	f.nextID++
 	f.sessions[name] = TmuxSession{ID: id, Name: name, Cwd: cwd}

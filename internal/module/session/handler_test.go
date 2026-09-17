@@ -320,6 +320,64 @@ func TestHandlerCreateSession_StampsTmuxInstance(t *testing.T) {
 	assert.Equal(t, "4471:1788740000", info.TmuxInstance)
 }
 
+// TestHandlerCreateSession_RecordsTmuxCwdNotRequestedCwd pins the create path
+// to the truth rather than to the request.
+//
+// resolveCwd stats the directory, and then tmux is invoked — a window in which
+// the directory can go away. tmux does not fail on an unusable -c, it silently
+// starts the session in $HOME, so the cwd the session is really in can differ
+// from the one that was asked for. `#{session_path}` is the only witness of
+// which one it is, and both the stored meta and the response must carry it.
+func TestHandlerCreateSession_RecordsTmuxCwdNotRequestedCwd(t *testing.T) {
+	mod, meta, fake := newTestModule(t)
+	// tmux ignored -c and started the session somewhere else.
+	fake.ForceNewSessionCwd = "/"
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	body := `{"name": "raced", "cwd": "/tmp"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+	assert.Equal(t, "/", info.Cwd, "response must report the directory tmux used")
+
+	stored, err := meta.GetMeta("$0")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "/", stored.Cwd, "stored meta must record the directory tmux used")
+}
+
+// TestHandlerCreateSession_RecordsRequestedCwdWhenTmuxAgrees is the other half:
+// in the ordinary case tmux honours -c, so nothing about the recorded cwd moves.
+func TestHandlerCreateSession_RecordsRequestedCwdWhenTmuxAgrees(t *testing.T) {
+	mod, meta, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	body := `{"name": "honoured", "cwd": "/tmp"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+	assert.Equal(t, "/tmp", info.Cwd)
+
+	stored, err := meta.GetMeta("$0")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "/tmp", stored.Cwd)
+}
+
 func TestHandlerCreateSessionWithMode(t *testing.T) {
 	mod, meta, _ := newTestModule(t)
 	mux := http.NewServeMux()

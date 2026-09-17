@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -134,11 +135,30 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// `s.Cwd` is tmux's own `#{session_path}` — the directory the
+			// session is actually in — so it, not `req.Cwd`, is what gets
+			// recorded. resolveCwd stat'd the directory a moment ago, but tmux
+			// ran after that: if it vanished in between, tmux silently started
+			// the session in $HOME, and recording the request would have the
+			// daemon report a directory the session is not in. This also puts
+			// create on the same footing as list/get, which already source Cwd
+			// from tmux.
+			//
+			// A mismatch is logged, not fatal. Killing the session on mismatch
+			// was considered and rejected: `session_path` comes from getcwd(),
+			// which canonicalises symlinks and filesystem case (/tmp →
+			// /private/tmp on macOS), so a string comparison produces false
+			// mismatches — and killing a live session on a false positive is
+			// far worse than the rare race it would guard.
+			if s.Cwd != req.Cwd {
+				log.Printf("session: tmux did not honour the requested directory for %q: requested %q, session is in %q", req.Name, req.Cwd, s.Cwd)
+			}
+
 			// Set initial meta
 			if err := m.meta.SetMeta(s.ID, store.SessionMeta{
 				TmuxID: s.ID,
 				Mode:   req.Mode,
-				Cwd:    req.Cwd,
+				Cwd:    s.Cwd,
 			}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -150,7 +170,7 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 				Name:   s.Name,
 				Exists: true,
 				Mode:   req.Mode,
-				Cwd:    req.Cwd,
+				Cwd:    s.Cwd,
 				// This response is built by hand rather than via ListSessions,
 				// so it needs its own stamp. The rebuild engine re-points a
 				// pane using the generation carried here (spec §4.8 step 4);
