@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.375] - 2026-09-18
+
+### Fix: `pdx msg send` 不再誤標 bypass 為 prompting（#1124）
+
+修正 #1124：當 `pdx msg send` 沒帶 `--mode` 時，daemon 無法得知呼叫者的權限模式（不在環境變數、registry 或可觀測的狀態），所以不再猜測為 "prompting"，改為送 "unknown"。
+
+接收端規則：不同模式才觸發 hold。所以 bypass session 寄訊而被標成 prompting（相同）就直接投遞，應該觸發的 hold 卻被拿掉了。
+
+現在送 "unknown"，接收端會判定為 mismatch → hold for approval ✅
+
+- 新增 `ModeUnknown` 常數到 wire protocol
+- `ValidateMode("")` 改為返回 `ModeUnknown`（而非 `ModePrompting`）
+- `clampMode` 保留 `ModeUnknown` 不做 clamp
+- 補 mutation test 確保改動不被誤改回去
+
 ## [1.0.0-alpha.374] - 2026-09-17
 
 ### Feat: 本機投遞 —— 一個入口，一組 ref（#1119）
