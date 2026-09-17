@@ -1021,16 +1021,21 @@ func TestSend_SingleHitUnderUnknownRegistryFileNotReady(t *testing.T) {
 }
 
 // TestSend_PartialInventoryNotReady pins the v2 delta on step 6: when the
-// remote's envelope is partial, a label-tier miss is 503 not_ready with
-// Partial:true in the body rather than falling back to the bare tmux-name
+// remote's envelope is partial, a miss in the deciding tiers is 503 not_ready
+// with Partial:true in the body rather than falling back to the bare tmux-name
 // tier — even though that tier would otherwise have matched.
 func TestSend_PartialInventoryNotReady(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	s.set(func(s *sendEnv) {
 		row := remoteRow(remoteSession, "fooc") // carries no Label
+		// remoteRow gives the row a registry name equal to its tmux session
+		// name. Peer Address v4 added a NAME tier above the tmux fallback, so
+		// leaving them equal would resolve at that tier and never exercise the
+		// fallback this test is about. Give the name its own value.
+		row.Agent.PeerName = remoteSession + "-b0"
 		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row}}
 	})
-	req := s.sendReq() // To: remoteAlias + "/" + remoteSession — would match tier 2 if reached
+	req := s.sendReq() // To: remoteAlias + "/" + remoteSession — would match the tmux fallback if reached
 
 	rr := s.send(adminCtx(), req)
 	if rr.Code != http.StatusServiceUnavailable {
