@@ -66,3 +66,18 @@ describe('MessageBubble', () => {
     expect(assistantContainer.querySelector('[data-testid="icon-assistant"]')).toBeNull()
   })
 })
+
+// P-B2.2 G5 guard: default-prop rendering must stay byte-identical while
+// task 8 adds the optional `streaming` prop. Taken BEFORE any renderer change.
+describe('MessageBubble default-prop snapshots (G5)', () => {
+  it('user bubble', () => {
+    const { container } = render(<MessageBubble role="user" content="Hello, world!" />)
+    expect(container.firstChild).toMatchSnapshot()
+  })
+
+  it('assistant bubble with markdown and a code fence', () => {
+    const md = 'Run **this**:\n\n```js\nconsole.log("hi")\n```\n'
+    const { container } = render(<MessageBubble role="assistant" content={md} />)
+    expect(container.firstChild).toMatchSnapshot()
+  })
+})

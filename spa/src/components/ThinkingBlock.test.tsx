@@ -26,3 +26,18 @@ describe('ThinkingBlock', () => {
     expect(screen.queryByTestId('thinking-content')).toBeNull()
   })
 })
+
+// P-B2.2 G5 guard: default-prop rendering must stay byte-identical while
+// task 8 adds the optional `streaming` prop. Taken BEFORE any renderer change.
+describe('ThinkingBlock default-prop snapshots (G5)', () => {
+  it('collapsed', () => {
+    const { container } = render(<ThinkingBlock content="Let me analyze this problem." />)
+    expect(container.firstChild).toMatchSnapshot()
+  })
+
+  it('expanded after clicking the header', () => {
+    const { container } = render(<ThinkingBlock content="Let me analyze this problem." />)
+    fireEvent.click(screen.getByTestId('thinking-header'))
+    expect(container.firstChild).toMatchSnapshot()
+  })
+})

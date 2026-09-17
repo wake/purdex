@@ -62,3 +62,18 @@ describe('ToolCallBlock', () => {
     expect(screen.getByText(/\*\*\/\*\.ts/)).toBeInTheDocument()
   })
 })
+
+// P-B2.2 G5 guard: default-prop rendering must stay byte-identical while
+// tasks 7–9 add optional status/timing props. Taken BEFORE any renderer change.
+describe('ToolCallBlock default-prop snapshots (G5)', () => {
+  it('collapsed with a Bash input', () => {
+    const { container } = render(<ToolCallBlock tool="Bash" input={{ command: 'ls -la', description: 'List files' }} />)
+    expect(container.firstChild).toMatchSnapshot()
+  })
+
+  it('expanded after clicking the header', () => {
+    const { container } = render(<ToolCallBlock tool="Bash" input={{ command: 'ls -la', description: 'List files' }} />)
+    fireEvent.click(screen.getByTestId('tool-header'))
+    expect(container.firstChild).toMatchSnapshot()
+  })
+})
