@@ -1341,8 +1341,8 @@ func TestBuild_AgentNullRow_NoRef(t *testing.T) {
 // still renders an address — the ref form, since applyIdentity writes it and
 // no live entry stands behind the row to supply a name.
 //
-// Its Reason stays "inbox_dead": applyIdentity only mints "name_unroutable"
-// for a NON-EMPTY name it had to refuse, and this caller passes none.
+// Its Reason stays "inbox_dead": applyIdentity writes an address, never a
+// Reason, so the caller's verdict is the only one on the row.
 func TestBuild_ProxyAndOwnerFallbackRows_Unchanged(t *testing.T) {
 	byID, _ := bySessionID(Build(v3Fixture()))
 
@@ -1406,15 +1406,50 @@ func TestApplyIdentity_NameAddress(t *testing.T) {
 	}
 }
 
-// A name that cannot be an address must not produce a broken one.
+// A name that cannot be an address must not produce a broken one — and must
+// not cost the row its deliverability either. The ref form IS the row's
+// address; there is nothing degraded about it, so nothing is reported.
 func TestApplyIdentity_UnroutableNameFallsBackToRef(t *testing.T) {
 	for _, bad := range []string{"has/slash", "q34psn", "_underscore"} {
 		got := Build(ccBuildInput(bad, "sess-y"))[0]
 		if want := "mlab/" + RefID("sess-y"); got.Address != want {
 			t.Errorf("name %q: Address = %q, want %q", bad, got.Address, want)
 		}
-		if got.Reason != "name_unroutable" {
-			t.Errorf("name %q: Reason = %q, want name_unroutable", bad, got.Reason)
+		if !got.Deliverable {
+			t.Errorf("name %q: Deliverable = false; an unroutable name does not stop delivery", bad)
+		}
+		if got.Reason != "" {
+			t.Errorf("name %q: Reason = %q, want \"\" — Reason says why a row cannot be DELIVERED to", bad, got.Reason)
+		}
+	}
+}
+
+// TestBuild_DeliverableRowsCarryNoReason pins the invariant every reader of
+// Reason depends on: Deliverable == true implies Reason == "".
+//
+// cmd/pdx's deliverableField renders "yes" whenever Deliverable is true and
+// only otherwise falls back to Reason, and the SPA's PEER_REASONS enumerates
+// the non-deliverable causes — so a Reason set on a deliverable row is a
+// string nothing can ever show. That is how "name_unroutable" got written into
+// a field whose documented domain is why a row cannot be delivered to, and sat
+// there invisible: an unroutable name is an ADDRESSING fact, and the address
+// already says it by taking the ref form.
+func TestBuild_DeliverableRowsCarryNoReason(t *testing.T) {
+	batches := map[string][]PeerRecord{"fixture": Build(v3Fixture())}
+	for _, name := range []string{"purdex-b0", "has/slash", "q34psn", "_underscore", "trusted:ops", ""} {
+		batches["name="+name] = Build(ccBuildInput(name, "sess-z"))
+	}
+	for what, recs := range batches {
+		for _, rec := range recs {
+			if rec.Deliverable && rec.Reason != "" {
+				t.Errorf("%s: deliverable row %+v carries Reason %q, which nothing renders", what, rec, rec.Reason)
+			}
+		}
+	}
+	// The implication is not vacuous: the awkward rows above are deliverable.
+	for _, name := range []string{"has/slash", "trusted:ops"} {
+		if got := batches["name="+name][0]; !got.Deliverable {
+			t.Errorf("name %q: row is not deliverable, so the invariant above proves nothing", name)
 		}
 	}
 }

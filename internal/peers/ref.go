@@ -139,8 +139,10 @@ func RefID(sessionID string) string {
 //     silently shadow another's ref, and anything able to write a registry
 //     file could arrange exactly that.
 //
-// A failing name is still displayed. It simply never becomes an address: its
-// row is reachable by ref only and carries Reason "name_unroutable".
+// A failing name is still displayed, and its row stays deliverable. The name
+// simply never becomes an address: the row is reachable by its ref, which is
+// what its Address then shows. Nothing is reported in Reason — that field says
+// why a row cannot be delivered to, and this row can be.
 func RoutableName(s string) bool {
 	return routableNamePattern.MatchString(s) && !refShapedPattern.MatchString(s)
 }

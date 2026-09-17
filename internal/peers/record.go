@@ -258,19 +258,27 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	}
 }
 
-// applyIdentity fills Ref/Title/TitleSource/TitleRev/Address/Reason for a row
-// whose agent is a cc conversation. It is the single writer of those fields,
-// which is what makes the spec's invariant table checkable in one place.
+// applyIdentity fills Ref/Title/TitleSource/TitleRev/Address for a row whose
+// agent is a cc conversation. It is the single writer of those fields, which
+// is what makes the spec's invariant table checkable in one place.
 //
 // The address has two forms and RoutableName picks between them (v4 §5.2): a
 // routable registry name gives "<host>/<name>", anything else gives
-// "<host>/<ref>" and says why in Reason. A row is never left holding an
-// address that cannot be typed back in.
+// "<host>/<ref>". A row is never left holding an address that cannot be typed
+// back in.
+//
+// It does NOT touch Reason, and must not. Reason says why a row cannot be
+// DELIVERED to — "" | no_agent | not_cc | inbox_dead | proxy | ambiguous —
+// and an unroutable name does not stop delivery: the row is reachable by its
+// ref, which is exactly what its address already shows. Writing an addressing
+// fact there broke the invariant Deliverable == true <=> Reason == "" that
+// cmd/pdx's deliverableField and the SPA's PEER_REASONS both read, and since
+// deliverableField renders "yes" for any deliverable row, the value could
+// never have reached a screen anyway.
 //
 // ccName is the registry name. The owner-fallback callers pass "" — no live
 // entry stands behind those rows, so they have no name to offer, and the ref
-// form matches their being unreachable anyway. "" is not a Reason-worthy
-// event for them, so only a non-empty unroutable name sets one.
+// form matches their being unreachable anyway.
 //
 // info.Rev is carried straight through: it is still the TITLE's revision. It
 // does not imply an address change.
@@ -287,9 +295,6 @@ func applyIdentity(rec *PeerRecord, alias string, info TitleInfo, ref, ccName st
 		return
 	}
 	rec.Address = alias + "/" + ref
-	if ccName != "" && rec.Reason == "" {
-		rec.Reason = "name_unroutable"
-	}
 }
 
 // ownerFallbackAgent builds the reduced AgentInfo used when a cc owner's

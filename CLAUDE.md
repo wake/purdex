@@ -35,8 +35,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   resume 與 daemon 重啟都不變，改名也不變）。表格括號裡印的是**去掉底線**的 6 碼，
   當地址打時要把 `_` 補回去。agent 算不出自己的 ref（拿不到 sessionId），只能問 `pdx msg whoami`。
 - **name 要通過 routable 規則才能當地址**：`^[a-z0-9][a-z0-9-]{1,63}$`，且**不得剛好是 6 碼
-  base36**（否則會遮蔽別人的 ref）。不合格的 name 照樣顯示，但那一列只能用 ref 定址，
-  `reason` 標 `name_unroutable`。
+  base36**（否則會遮蔽別人的 ref）。不合格的 name 照樣顯示，那一列也照樣送得到，
+  只是只能用 ref 定址 —— `address` 本身就會印成 ref 形式。`reason` 不記這件事：
+  那個欄位講的是「為什麼送不到」，而這一列送得到。
 - **`title` 取代了舊的 `label`**：自由文字，≤64 bytes、可列印 UTF-8、無控制字元，**沒有保留字**
   （`cc`、`tmux` 不再被擋），而且**完全不參與定址** —— 送訊時永遠不會被解析成收件人。
 - 指令：`pdx msg name <title>`（給自己取名）、`pdx msg name --release`（清掉）、
