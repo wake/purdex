@@ -25,7 +25,7 @@ func writeTmux(t *testing.T, dir string, executable bool) string {
 // emptyPathDir returns a directory guaranteed to hold no tmux. Real system
 // directories must not be used for this: `/usr/bin/tmux` exists on most Linux
 // and CI images, which would make LookPath succeed and quietly turn the
-// Prepended and NotFound cases into Found — a green test proving nothing.
+// Appended and NotFound cases into Found — a green test proving nothing.
 func emptyPathDir(t *testing.T) string {
 	t.Helper()
 	return t.TempDir()
@@ -61,9 +61,15 @@ func TestPrepare_AlreadyOnPath_LeavesPathUntouched(t *testing.T) {
 	}
 }
 
-// Acceptance 2: a probed directory is prepended, and the PATH it was prepended
-// to survives intact and in order — the daemon execs more than tmux.
-func TestPrepare_NotOnPath_PrependsProbedDir(t *testing.T) {
+// Acceptance 2: a probed directory is APPENDED, and the PATH it was added to
+// survives intact and in order.
+//
+// Appended, not prepended, because the daemon's panes inherit this PATH and are
+// sent bare `pdx relay ...`: winning precedence here would let an unrelated
+// `pdx` outrank the one the daemon is running. This test pins the position so
+// that a well-meaning change back to prepending fails here, rather than as an
+// agent timeout weeks later.
+func TestPrepare_NotOnPath_AppendsProbedDir(t *testing.T) {
 	isolate(t)
 	original := emptyPathDir(t) + string(os.PathListSeparator) + emptyPathDir(t)
 	t.Setenv("PATH", original)
@@ -71,13 +77,13 @@ func TestPrepare_NotOnPath_PrependsProbedDir(t *testing.T) {
 
 	got := prepare([]string{found})
 
-	if got.Action != Prepended {
-		t.Fatalf("Action = %v, want Prepended", got.Action)
+	if got.Action != Appended {
+		t.Fatalf("Action = %v, want Appended", got.Action)
 	}
 	if got.AddedDir != found {
 		t.Errorf("AddedDir = %q, want %q", got.AddedDir, found)
 	}
-	want := found + string(os.PathListSeparator) + original
+	want := original + string(os.PathListSeparator) + found
 	if os.Getenv("PATH") != want {
 		t.Errorf("PATH = %q, want %q", os.Getenv("PATH"), want)
 	}
@@ -113,8 +119,8 @@ func TestPrepare_SkipsNonExecutableAndKeepsLooking(t *testing.T) {
 
 	got := prepare([]string{decoy, real})
 
-	if got.Action != Prepended {
-		t.Fatalf("Action = %v, want Prepended", got.Action)
+	if got.Action != Appended {
+		t.Fatalf("Action = %v, want Appended", got.Action)
 	}
 	if got.AddedDir != real {
 		t.Errorf("AddedDir = %q, want the executable one (%q), not the decoy (%q)", got.AddedDir, real, decoy)
@@ -201,8 +207,8 @@ func TestPrepare_Idempotent(t *testing.T) {
 		t.Errorf("PATH contains %q more than once: %q", found, os.Getenv("PATH"))
 	}
 	// The second call finds it on PATH now, because the first one put it there.
-	if first.Action != Prepended || second.Action != Found {
-		t.Errorf("Actions = %v then %v, want Prepended then Found", first.Action, second.Action)
+	if first.Action != Appended || second.Action != Found {
+		t.Errorf("Actions = %v then %v, want Appended then Found", first.Action, second.Action)
 	}
 }
 

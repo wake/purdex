@@ -36,9 +36,9 @@ type Action int
 const (
 	// Found: the inherited PATH already resolves tmux. Nothing was changed.
 	Found Action = iota
-	// Prepended: tmux was not on PATH but was found in a probed directory,
-	// which is now PATH's first element.
-	Prepended
+	// Appended: tmux was not on PATH but was found in a probed directory,
+	// which is now PATH's LAST element.
+	Appended
 	// NotFound: tmux is on neither PATH nor any probed directory. PATH is
 	// untouched and the caller is expected to say so loudly.
 	NotFound
@@ -48,8 +48,8 @@ func (a Action) String() string {
 	switch a {
 	case Found:
 		return "found"
-	case Prepended:
-		return "prepended"
+	case Appended:
+		return "appended"
 	case NotFound:
 		return "not-found"
 	default:
@@ -64,7 +64,7 @@ type Result struct {
 	// Resolved is the tmux binary that will now be executed. Empty on
 	// NotFound.
 	Resolved string
-	// AddedDir is the directory prepended to PATH; empty unless Prepended.
+	// AddedDir is the directory appended to PATH; empty unless Appended.
 	AddedDir string
 	// Probed lists the directories that were looked in, so a NotFound log
 	// can name them instead of leaving the user to guess.
@@ -127,15 +127,25 @@ func prepare(probe []string) Result {
 		if !isExecutableFile(candidate) {
 			continue
 		}
-		// Prepend the DIRECTORY rather than remembering an absolute path: it
-		// covers every call site without editing one, and the tmux server the
-		// daemon spawns inherits the same PATH, so its panes can find tmux too.
+		// Add the DIRECTORY rather than remembering an absolute path: it covers
+		// every call site without editing one, and the tmux server the daemon
+		// spawns inherits the same PATH, so its panes can find tmux too.
+		//
+		// 🔴 APPENDED, never prepended. That same inheritance is why: panes are
+		// sent bare `pdx relay ...` (module/execution/launcher.go:166,
+		// module/stream/orchestrator.go:120), so winning precedence here would
+		// let an unrelated `pdx` in a Homebrew directory outrank the one the
+		// daemon is actually running — a version mismatch that surfaces as an
+		// agent timeout, nowhere near tmux. Appending cannot do that: this
+		// branch is only reached because LookPath already failed, so nothing
+		// resolvable today changes rank, and tmux — resolvable nowhere — is
+		// found either way.
 		if existing := os.Getenv("PATH"); existing != "" {
-			os.Setenv("PATH", dir+string(os.PathListSeparator)+existing)
+			os.Setenv("PATH", existing+string(os.PathListSeparator)+dir)
 		} else {
 			os.Setenv("PATH", dir)
 		}
-		res.Action = Prepended
+		res.Action = Appended
 		res.AddedDir = dir
 		res.Resolved = candidate
 		return res
@@ -146,8 +156,8 @@ func prepare(probe []string) Result {
 }
 
 // isExecutableFile reports whether p is a regular file with an execute bit.
-// A non-executable file named "tmux" is not a tmux: accepting one would
-// prepend a directory that cannot satisfy a single call.
+// A non-executable file named "tmux" is not a tmux: accepting one would add a
+// directory that cannot satisfy a single call.
 func isExecutableFile(p string) bool {
 	fi, err := os.Stat(p)
 	if err != nil || fi.IsDir() {

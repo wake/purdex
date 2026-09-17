@@ -72,7 +72,7 @@ it execs tmux") and is called from the same place.
 
 **(a) Make `tmux` reachable.** `exec.LookPath("tmux")`. On success, nothing is
 changed — the inherited PATH already works. On failure, probe a fixed list of
-well-known locations and, if one holds an executable `tmux`, **prepend that
+well-known locations and, if one holds an executable `tmux`, **append that
 directory to `PATH`** rather than remembering an absolute path:
 
 - it covers every call site with no edits, and
@@ -90,27 +90,32 @@ general; this one is about where **tmux** actually is, and on both machines in
 this tailnet that is Homebrew. Leading with `~/.local/bin` would let a stray
 personal shim outrank the real install.
 
-#### 🔴 What prepending costs
+#### 🔴 Appended, never prepended
 
-`PATH` is process-wide, so a prepend is inherited by **every** later exec, not
-just tmux: `git` and `go build` in the dev module
+`PATH` is process-wide, so whatever is added is inherited by **every** later
+exec, not just tmux — the dev module's build tooling
 (`module/dev/module.go:202`, `module/dev/build.go:113`), the terminal relay
-(`terminal/relay.go:50`), agent and execution spawns. This is a wider blast
-radius than nex's PATH policy, which is at least opt-in behind
-`[nex] enabled`.
+(`terminal/relay.go:50`), agent and execution spawns — and, through the tmux
+server, the panes themselves.
 
-It is accepted for one reason, which must not be lost: **the prepend only
-happens when `LookPath("tmux")` already failed.** In the `Found` case — every
-host today — `PATH` is not touched at all. So the side effect is confined to an
-environment that was already too impoverished to run tmux, and in that
-environment putting Homebrew's `bin` on `PATH` is very likely right for `git`
-and `go` as well.
+That last one decides the direction. Panes are sent **bare `pdx relay …`**
+(`module/execution/launcher.go:166`, `module/stream/orchestrator.go:120`), so a
+directory that won precedence could hand them a different `pdx` than the one
+the daemon is running — a version mismatch that surfaces as an agent timeout,
+nowhere near tmux. In the LaunchAgent case this is not hypothetical: the daemon
+may be `~/.config/pdx/bin/pdx` while something unrelated sits in
+`/opt/homebrew/bin`.
+
+**So the directory is appended.** Appending cannot change the rank of anything,
+because this branch is only reached once `LookPath("tmux")` has already failed:
+nothing resolvable today moves, and tmux — resolvable nowhere — is found either
+way. In the `Found` case (every host today) `PATH` is not touched at all.
 
 #### Version-mismatch risk
 
 A probed `tmux` need not be the one the operator's shell uses. Two different
 tmux builds talking to one server produce a protocol version mismatch. The
-mitigation is diagnostic rather than preventive: the `Prepended` log names the
+mitigation is diagnostic rather than preventive: the `Appended` log names the
 exact binary, so a mismatch is one line away from being explained instead of
 being a mystery. (Prevention would mean resolving the user's login-shell PATH,
 which is what `docs/specs/2026-09-14-local-daemon-install-spec.md` already does
@@ -141,12 +146,12 @@ so this converts an undocumented accident into a stated rule.
 ### 2.2 Result and logging
 
 `Result` reports enough for one honest log line: what happened to the lookup
-(`Found` / `Prepended` / `NotFound`), the resolved path, the directory added if
+(`Found` / `Appended` / `NotFound`), the resolved path, the directory added if
 any, and whether `TMUX` was actually present.
 
 `runServe` logs:
 
-- `Prepended` — at INFO, naming the directory and the resolved binary. A PATH
+- `Appended` — at INFO, naming the directory and the resolved binary. A PATH
   that did not contain tmux is worth knowing about even when recovered.
 - `NotFound` — as a prominent error naming the directories probed. This is the
   line that has to exist: #1108's complaint is *"直接噴錯而我無法分辨為什麼"*,
@@ -203,9 +208,11 @@ process environment rather than in `RealExecutor`.
 ## 4. Acceptance
 
 1. `tmux` already on PATH → `Found`, `PATH` byte-identical afterwards.
-2. `tmux` not on PATH but executable in a probed directory → `Prepended`, that
-   directory is the first `PATH` element, and the rest of `PATH` is unchanged
-   and still in order.
+2. `tmux` not on PATH but executable in a probed directory → `Appended`, that
+   directory is the **last** `PATH` element, and the rest of `PATH` is unchanged
+   and still in order. The position is asserted, not merely the membership: a
+   change back to prepending has to fail this test rather than an agent weeks
+   later.
 3. `tmux` in none of them → `NotFound`, `PATH` unchanged, no panic.
 4. A non-executable file named `tmux` in a probed directory is not accepted:
    the probe continues to the next directory.
@@ -213,9 +220,9 @@ process environment rather than in `RealExecutor`.
    and `Result.DroppedTMUX` reports whether `TMUX` had been set — including the
    negative: it is false when `TMUX` was never there, so the log line cannot
    cry wolf on an ordinary start.
-6. `Prepare()` is idempotent: a second call does not prepend a second copy, and
+6. `Prepare()` is idempotent: a second call does not add a second copy, and
    `PATH` is byte-identical afterwards. (The second call reports `Found`, not
-   `Prepended` — the first one put it on `PATH`.)
+   `Appended` — the first one put it on `PATH`.)
 7. Probe order is honoured — with `tmux` in two probed directories, the earlier
    one wins.
 8. `runServe` calls `Prepare()` before `config.Load`.

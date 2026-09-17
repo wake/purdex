@@ -122,8 +122,8 @@ func runServe(args []string) {
 	// undo it.
 	tenv := tmuxenv.Prepare()
 	switch tenv.Action {
-	case tmuxenv.Prepended:
-		log.Printf("tmux: not on PATH, prepended %s (using %s)", tenv.AddedDir, tenv.Resolved)
+	case tmuxenv.Appended:
+		log.Printf("tmux: not on PATH, appended %s (using %s)", tenv.AddedDir, tenv.Resolved)
 	case tmuxenv.NotFound:
 		log.Printf("tmux: ERROR not found on PATH nor in %s — sessions, terminals and monitoring will fail until tmux is installed or PATH is fixed (see `pdx path`)", tenv.ProbedList())
 	}
