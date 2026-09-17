@@ -199,6 +199,13 @@ const (
 	// apart in one package.)
 	ErrCodeRemoteTooOld = "remote_too_old"
 
+	// ErrCodeNameMismatch is /send's answer when Resolve came back with
+	// ErrNameMismatch: the combined form's name is not the ref's current
+	// name. The detail carries all three values, because distinguishing a
+	// peer that renamed itself from an address someone doctored is the
+	// operator's call and they cannot make it from the code alone.
+	ErrCodeNameMismatch = "name_mismatch"
+
 	// Peer Address v2 self routes (Task 7): whoami, claim, release.
 	ErrCodeLabelInvalid  = "label_invalid"
 	ErrCodeLabelReserved = "label_reserved"

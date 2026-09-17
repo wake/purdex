@@ -34,17 +34,24 @@ const msgDefaultLogTail = 50
 // unrecognized flag, which gets its own more specific message (see
 // runMsgCmd). `selftest`'s body lives in msg_selftest.go.
 //
-// The <canonical> line states the v3 address rule to the reader who most
-// needs it: someone who has just claimed a label and is about to type that
-// label as an address. A label never resolves (spec D3), so the usage text
-// offers only the two forms that do — the canonical head and the explicit
-// tmux form — and names the two commands that print a live address.
-const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <host>/<canonical>[:<suffix>] | <host>/tmux:<name> <text>\n" +
+// The <address> block lists v4's forms (spec §5.5) in the order a reader
+// will want them: the everyday name, the bracket form the peers table
+// prints (quoted, because it contains a space, and pasted whole because
+// the name is checked against the ref), the bare ref that survives a
+// rename, and the explicit tmux escape hatch. It still states the rule to
+// the reader who most needs it — someone who has just run `pdx msg name`
+// and is about to type that string as an address — because what that verb
+// sets is a title, and a title routes nothing.
+const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <address> <text>\n" +
 	"           (-- ends the options: use it before text that starts with -)\n" +
-	"           (<canonical> is a session's permanent address head, derived from its sessionId\n" +
-	"            — mini-lab/_3k9f2mq4. A label claimed with `pdx msg name` is never an address:\n" +
-	"            it is how you choose a peer, not how you reach one. `pdx msg whoami` prints your\n" +
-	"            own address, `pdx peers --all` prints every host's.)\n" +
+	"           (<address> is one of:\n" +
+	"              <host>/<name>              the everyday form — mlab/purdex-b0\n" +
+	"              \"<host>/<name> [<ref>]\"     pasted whole; the name is checked against the ref\n" +
+	"              <host>/_<ref>              exact, and survives a rename — mlab/_q34psn\n" +
+	"              <host>/tmux:<name>         the tmux session itself\n" +
+	"            The title claimed with `pdx msg name` is never an address: it is how you choose\n" +
+	"            a peer, not how you reach one. `pdx msg whoami` prints your own address,\n" +
+	"            `pdx peers --all` prints every host's.)\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +
 	"       pdx msg selftest [--timeout <dur>] [--config <path>]\n" +
@@ -65,7 +72,7 @@ func runMsgCmd(args []string, getenv func(string) string, stdout, stderr io.Writ
 	inv, unknownFlag, ok := parseMsgInvocation(args)
 	if !ok {
 		if unknownFlag != "" {
-			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <host>/<canonical>[:<suffix>] | <host>/tmux:<name> <text>)\n", unknownFlag)
+			fmt.Fprintf(stderr, "pdx msg: unknown flag %s (put -- before text that starts with -; see usage: [--] <address> <text>)\n", unknownFlag)
 		} else {
 			fmt.Fprintln(stderr, msgUsage)
 		}
@@ -293,6 +300,12 @@ func runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		return 1
 	}
 
+	// inv.to goes over the wire exactly as it was typed — no trimming, no
+	// splitting on the bracket group, no normalising of the head. In the
+	// combined form `<host>/<name> [<ref>]` the name is a check digit the
+	// daemon compares against the ref (spec §5.4), and a CLI that dropped
+	// it would leave an address that still resolves, silently switching
+	// that check off for everyone who pasted what the peers table printed.
 	reqBody, err := json.Marshal(ipeers.SendRequest{
 		To:          inv.to,
 		Text:        inv.text,
@@ -379,9 +392,32 @@ func renderMsgAPIError(ae ipeers.APIError, host, session string, stderr io.Write
 			fmt.Fprintln(stderr, msgCandidateLine(c))
 		}
 
+	case ipeers.ErrCodeNameMismatch:
+		// The daemon's detail is the whole value of this refusal: it names
+		// the name that was typed, the ref, and the name that ref answers
+		// to now. The generic line below would have printed it too, but a
+		// code alone cannot tell the reader which of the two causes they
+		// are looking at — a peer that renamed itself, or an address
+		// someone doctored to read `trusted-name [attackerRef]` — and the
+		// two have different next steps, so both are spelled out.
+		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
+		fmt.Fprintln(stderr, "  the name in `<name> [<ref>]` is a check on the ref, so this was refused, not delivered")
+		fmt.Fprintf(stderr, "  re-read the address with `pdx peers --all`, or address the ref alone as %s/_<ref> if the rename was expected\n", sanitizeCell(msgHostOrPlaceholder(host)))
+
 	default:
 		fmt.Fprintln(stderr, msgGenericAPIErrorLine(ae))
 	}
+}
+
+// msgHostOrPlaceholder returns host, or the literal "<host>" when the
+// caller had none to give — renderMsgAPIError is also reached from the
+// pre-flight checks that run before an address has been parsed, and a
+// hint reading "/_<ref>" would be worse than one that stays generic.
+func msgHostOrPlaceholder(host string) string {
+	if host == "" {
+		return "<host>"
+	}
+	return host
 }
 
 // msgCandidateLine renders one ambiguity candidate as an indented line:
@@ -640,20 +676,30 @@ func msgOriginInbox(getenv func(string) string, stderr io.Writer) (inbox string,
 }
 
 // renderSelfRecord prints one ipeers.PeerRecord as the block shared by
-// `name` and `whoami`'s text output: address, canonical id, label (with
-// source and revision), host (with host ID), and — when the caller has a
-// live agent — session ID and PID.
+// `name` and `whoami`'s text output: address, ref, title (with source and
+// revision), host (with host ID), and — when the caller has a live agent —
+// session ID and PID.
 //
-// The canonical line exists because an agent cannot work its own out: it
-// is a hash of a sessionId the agent never handles (spec §4.1), so asking
-// is the only way to learn it. It is printed unconditionally rather than
-// only when non-empty — a blank canonical on a self route means the caller
-// was not attributed to a live cc entry, and hiding the line would hide
-// that.
+// The ref line exists because an agent cannot work its own out: it is a
+// hash of a sessionId the agent never handles (spec §6.1), so asking is
+// the only way to learn it. It is printed unconditionally rather than only
+// when non-empty — a blank ref on a self route means the caller was not
+// attributed to a live cc entry, and hiding the line would hide that.
+//
+// The title line is the one exception, because under v4 unset is the
+// COMMON case: nothing derives a title any more and nothing routes on one.
+// Printing the tuple regardless gave `label:       (, rev 0)` — an empty
+// value, an empty source and a revision that means nothing yet, which
+// reads like a malfunction rather than like "not set" (spec §6.1).
 func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
 	fmt.Fprintf(stdout, "address:    %s\n", sanitizeCell(rec.Address))
-	fmt.Fprintf(stdout, "canonical:  %s\n", sanitizeCell(rec.Ref))
-	fmt.Fprintf(stdout, "label:      %s (%s, rev %d)\n", sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
+	fmt.Fprintf(stdout, "ref:        %s\n", sanitizeCell(rec.Ref))
+	if rec.Label == "" {
+		fmt.Fprintln(stdout, "title:      (none)")
+	} else {
+		fmt.Fprintf(stdout, "title:      %s (%s, rev %d)\n",
+			sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
+	}
 	fmt.Fprintf(stdout, "host:       %s (%s)\n", sanitizeCell(rec.Host), sanitizeCell(rec.HostID))
 	if rec.Agent != nil {
 		fmt.Fprintf(stdout, "session:    %s pid %d\n", sanitizeCell(rec.Agent.SessionID), rec.Agent.PID)

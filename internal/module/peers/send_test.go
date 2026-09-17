@@ -1347,3 +1347,52 @@ func TestSend_NotReadyBeforeAudit(t *testing.T) {
 		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
 	}
 }
+
+// TestSend_CombinedNameMismatchRefused pins §5.4's refusal of the combined
+// form `<name> [<ref>]` when the typed name is not the ref's current name —
+// and, more to the point, pins its DETAIL.
+//
+// The refusal itself is cheap to get right and worthless on its own. What
+// the operator has to decide is which of two things happened: the peer
+// renamed itself (harmless, re-read the address) or someone handed them
+// `trusted-name [attackerRef]` (not harmless at all). That call cannot be
+// made from the code, only from the three values — the name they typed, the
+// name the ref answers to now, and the ref itself. Before this test the arm
+// did not exist: ErrNameMismatch fell through to `default:` and came back as
+// a 404 peer_not_found reading "no session %q on %q", which discards two of
+// the three and buries the third inside a sentence saying the address was
+// never found — the opposite of what happened. It was found, and refused.
+//
+// 409, not 404, for the same reason ErrRemoteTooOld is 409: the address was
+// understood and declined, and "check the address" is the wrong instruction.
+func TestSend_CombinedNameMismatchRefused(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	ref := ipeers.RefID(remoteSessionID)
+	bare := strings.TrimPrefix(ref, "_")
+
+	req := s.sendReq()
+	req.To = remoteAlias + "/decoy-name [" + bare + "]"
+	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrCodeNameMismatch)
+	for _, want := range []string{`"decoy-name"`, `"` + remoteSession + `"`, bare} {
+		if !strings.Contains(ae.Detail, want) {
+			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
+		}
+	}
+	if len(s.postCalls()) != 0 {
+		t.Errorf("posts = %d, want none — a mismatch must not deliver and warn", len(s.postCalls()))
+	}
+
+	// The override the refusal exists to leave open: `_<ref>` says "the ref,
+	// whatever it is called now" outright, and must still go through.
+	req.To = remoteAlias + "/" + ref
+	if rr := s.send(adminCtx(), req); rr.Code != http.StatusOK {
+		t.Fatalf("ref form: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	// And the matching combined form delivers: the check is a check, not a
+	// blanket refusal of the form the peers table prints.
+	req.To = remoteAlias + "/" + remoteSession + " [" + bare + "]"
+	if rr := s.send(adminCtx(), req); rr.Code != http.StatusOK {
+		t.Fatalf("matching combined form: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+}

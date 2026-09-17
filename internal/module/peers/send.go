@@ -348,6 +348,19 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			// send the operator looking for a fault on the wrong host.
 			refuseUnaudited(http.StatusConflict, ipeers.ErrCodeRemoteTooOld,
 				fmt.Sprintf("%q: %s", entry.Alias, err.Error()))
+		case errors.Is(err, ipeers.ErrNameMismatch):
+			// The combined form `<name> [<ref>]` whose name is not the
+			// ref's current name (spec §5.4). 409 like the ambiguous and
+			// too-old arms above, because all three mean "your address was
+			// understood and refused" — not "not found", which is what the
+			// default arm below would have said while throwing away the
+			// only three facts that matter here. err.Error() names the
+			// typed name, the ref and the name that ref answers to now,
+			// and it is passed through whole: an operator deciding
+			// between "the peer renamed itself" and "someone handed me a
+			// doctored address" has nothing else to decide it with.
+			refuseUnaudited(http.StatusConflict, ipeers.ErrCodeNameMismatch,
+				fmt.Sprintf("%q: %s", entry.Alias, err.Error()))
 		case errors.Is(err, ipeers.ErrLegacyCC):
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, err.Error())
 		default:
