@@ -798,6 +798,8 @@
   "execution.error.turn_failed_to_launch": "The turn never started; check the execution and resend",
   "execution.error.turn_stalled": "The turn was withdrawn; resend if still wanted",
   "execution.error.interrupt_unconfirmed": "Interrupt sent but not confirmed; the turn may still be running",
+  "execution.tool.aborted": "aborted",
+  "execution.tool.unknown": "tool",
 
   "error.json.invalid": "Invalid JSON syntax",
   "error.json.invalid_file": "Invalid JSON syntax in file",

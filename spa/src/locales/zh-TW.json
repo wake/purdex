@@ -798,6 +798,8 @@
   "execution.error.turn_failed_to_launch": "這一輪未能啟動，請確認後重送",
   "execution.error.turn_stalled": "這一輪已被撤回，需要的話請重送",
   "execution.error.interrupt_unconfirmed": "已送出中斷但未確認，這一輪可能仍在執行",
+  "execution.tool.aborted": "已中止",
+  "execution.tool.unknown": "工具",
 
   "error.json.invalid": "JSON 語法無效",
   "error.json.invalid_file": "檔案中的 JSON 語法無效",
