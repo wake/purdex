@@ -93,8 +93,8 @@ func TestFormatPeersTable(t *testing.T) {
 // <version>" trailer.
 func TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
-		{Address: "a/_3k9f2mq4:mt0-x", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-		{Address: "a/_9x2pq0af:y", RowKind: "entry", Canonical: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/_9x2pq0af:y", RowKind: "entry", Ref: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 		{Address: "a/tmux:shell", RowKind: "session", Reason: "no_agent"},
 	}}
 	got := formatPeersTable(env)
@@ -137,8 +137,8 @@ func headerColumns(header string) []string {
 // suggest one of them "won" the name.
 func TestFormatPeersTable_SharedLabelRendersBothRows(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
-		{Address: "mini-lab/_3k9f2mq4:aigora2-purdex-b0", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
-		{Address: "mini-lab/_9x2pq0af:purdex1-purdex-69", RowKind: "session", Canonical: "_9x2pq0af", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
+		{Address: "mini-lab/_3k9f2mq4:aigora2-purdex-b0", RowKind: "session", Ref: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
+		{Address: "mini-lab/_9x2pq0af:purdex1-purdex-69", RowKind: "session", Ref: "_9x2pq0af", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
 	}}
 	lines := strings.Split(strings.TrimRight(formatPeersTable(env), "\n"), "\n")
 	if len(lines) < 3 {
@@ -773,8 +773,8 @@ func TestFormatPeersAllTable_HostThenLabelThenAddress(t *testing.T) {
 		{
 			Alias: "local", OK: true, DaemonVersion: "1.0.0-alpha.342",
 			Peers: []peers.PeerRecord{
-				{Address: "local/_3k9f2mq4:mt0-x", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-				{Address: "local/_9x2pq0af:y", RowKind: "entry", Canonical: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/_9x2pq0af:y", RowKind: "entry", Ref: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 			},
 		},
 		{Alias: "air", OK: true, DaemonVersion: "1.0.0-alpha.340", Peers: []peers.PeerRecord{}},

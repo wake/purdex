@@ -7,34 +7,34 @@ import (
 
 // --- helpers -------------------------------------------------------------
 
-// Canonical ids as they come out of CanonicalID: "_" + 8 base36 digits.
-// Tier 1 compares them as plain strings, so literals are the real thing.
+// Refs as v3 minted them: "_" + 8 base36 digits. Tier 1 compares them as
+// plain strings, so literals are the real thing.
 const (
 	canonA = "_3k9f2mq4"
 	canonB = "_zq81ab00"
 	canonC = "_0000zzzz"
 )
 
-// liveRow is the row shape tier 1 decides on: a live cc entry whose
-// Canonical is its address head (spec §4.5). The label rides along and is
-// deliberately never what tier 1 matches — that is D3.
+// liveRow is the row shape tier 1 decides on: a live cc entry whose Ref is
+// what tier 1 matches. The label rides along and is deliberately never what
+// tier 1 matches — that is D3.
 func liveRow(canonical, label, sessionName string, pid int) PeerRecord {
 	source := ""
 	if label != "" {
 		source = "user"
 	}
-	return PeerRecord{SessionName: sessionName, Canonical: canonical, Label: label, LabelSource: source,
+	return PeerRecord{SessionName: sessionName, Ref: canonical, Label: label, LabelSource: source,
 		Agent: &AgentInfo{Type: "cc", PID: pid}, Deliverable: true}
 }
 
 // inboxDeadRow is the owner-fallback session row Build emits when a cc
 // owner's conversation has no live registry entry (ownerFallbackAgent: PID
-// 0, no inbox). It carries the conversation's canonical id and its
-// persisted label, but its holder is not live, so per spec §3.3 it is
+// 0, no inbox). It carries the conversation's ref and its persisted
+// label, but its holder is not live, so per spec §3.3 it is
 // inert — it must neither resolve nor block.
 func inboxDeadRow(canonical, label, sessionName string) PeerRecord {
 	return PeerRecord{
-		RowKind: "session", SessionName: sessionName, Canonical: canonical, Label: label, LabelSource: "user",
+		RowKind: "session", SessionName: sessionName, Ref: canonical, Label: label, LabelSource: "user",
 		Agent:  &AgentInfo{Type: "cc", SessionID: "dead-sid"},
 		Reason: "inbox_dead",
 	}
@@ -174,7 +174,7 @@ func TestResolve_Ambiguous_SameCanonical(t *testing.T) {
 // reachable through tier 2.
 func TestResolve_ProxyRowsExcluded(t *testing.T) {
 	recs := []PeerRecord{
-		{Canonical: canonC, Agent: &AgentInfo{Type: "proxy"}},
+		{Ref: canonC, Agent: &AgentInfo{Type: "proxy"}},
 		{SessionName: canonC}, // tier 2 would match
 	}
 	got, err := Resolve(recs, canonC, ResolveSnapshot{})
@@ -418,9 +418,9 @@ func TestResolve_V2Rows_ExplicitTmuxFormStillResolves(t *testing.T) {
 func TestResolve_V3Rows_TmuxFallbackUnaffected(t *testing.T) {
 	recs := []PeerRecord{
 		liveRow(canonA, "purdex-tester", "mt0", 1),
-		{RowKind: "session", SessionName: "shell"},            // agent: null, canonical "" by design
-		{Canonical: canonC, Agent: &AgentInfo{Type: "proxy"}}, // proxy row, not a live cc entry
-		inboxDeadRow(canonB, "purdex-dev", "mt1"),             // owner fallback, pid 0
+		{RowKind: "session", SessionName: "shell"},      // agent: null, canonical "" by design
+		{Ref: canonC, Agent: &AgentInfo{Type: "proxy"}}, // proxy row, not a live cc entry
+		inboxDeadRow(canonB, "purdex-dev", "mt1"),       // owner fallback, pid 0
 	}
 	if got, err := Resolve(recs, canonA, ResolveSnapshot{}); err != nil || got.Agent.PID != 1 {
 		t.Fatalf("canonical: got %+v %v", got, err)

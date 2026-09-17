@@ -466,7 +466,7 @@ func ValidateMode(s string) (string, error) {
 }
 
 // legacyV2HeadPattern is the 6-digit default label a v2 sender derives
-// from its tmux identity. v3 does not mint this width — IsCanonicalID is
+// from its tmux identity. v3 does not mint this width — IsRef is
 // 8 — so it appears here and nowhere else.
 var legacyV2HeadPattern = regexp.MustCompile(`^_[0-9a-z]{6}$`)
 
@@ -484,13 +484,13 @@ var legacyV2HeadPattern = regexp.MustCompile(`^_[0-9a-z]{6}$`)
 // nothing can resolve.
 //
 // Delete this, and its arm in ValidateWireAddress, once every peer that
-// can reach this daemon speaks v3; from then on IsCanonicalID is the whole
+// can reach this daemon speaks v3; from then on IsRef is the whole
 // rule.
 func isLegacyV2Head(head string) bool { return legacyV2HeadPattern.MatchString(head) }
 
 // ValidateWireAddress checks from.address (Peer Address v3 spec §6.2): ""
 // is a v1 sender and always passes; otherwise the head (up to the first
-// ':') must be one of three things — a v3 canonical id (IsCanonicalID), a
+// ':') must be one of three things — a v3 canonical id (IsRef), a
 // v2 legacy head (isLegacyV2Head), or a user label (which a v2 sender may
 // still present as a head) — and, when a ':' is present at all, the rest
 // must match the suffix wire grammar (suffixWirePattern), including an
@@ -501,7 +501,7 @@ func ValidateWireAddress(s string) error {
 		return nil
 	}
 	head, rest := SplitSession(s)
-	if !IsCanonicalID(head) && !isLegacyV2Head(head) {
+	if !IsRef(head) && !isLegacyV2Head(head) {
 		if err := ValidateUserLabel(head); err != nil {
 			return fmt.Errorf("%w: head: %w", ErrAddressInvalid, err)
 		}

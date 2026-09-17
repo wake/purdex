@@ -1702,7 +1702,7 @@ func TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged(t *testing.T) {
 		if want := addrs[r.Agent.SessionID]; r.Address != want {
 			t.Errorf("row for %s: address = %q with the store down, %q with it up; want identical", r.Agent.SessionID, r.Address, want)
 		}
-		if r.Canonical == "" {
+		if r.Ref == "" {
 			t.Errorf("row %s: canonical = \"\" with the store down, want the sessionId-derived id", r.Address)
 		}
 	}

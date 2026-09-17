@@ -652,7 +652,7 @@ func msgOriginInbox(getenv func(string) string, stderr io.Writer) (inbox string,
 // that.
 func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
 	fmt.Fprintf(stdout, "address:    %s\n", sanitizeCell(rec.Address))
-	fmt.Fprintf(stdout, "canonical:  %s\n", sanitizeCell(rec.Canonical))
+	fmt.Fprintf(stdout, "canonical:  %s\n", sanitizeCell(rec.Ref))
 	fmt.Fprintf(stdout, "label:      %s (%s, rev %d)\n", sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
 	fmt.Fprintf(stdout, "host:       %s (%s)\n", sanitizeCell(rec.Host), sanitizeCell(rec.HostID))
 	if rec.Agent != nil {

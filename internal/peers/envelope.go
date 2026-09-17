@@ -11,8 +11,8 @@ package peers
 // LabelsUnavailable.
 //
 // The three are not equally serious, and LabelsUnavailable is the mild one
-// (spec §6.1): every address in Peers is CanonicalID of that row's own
-// sessionId, so an unreadable label store costs the label column and
+// (spec §6.1): every address in Peers is built from that row's own registry
+// name and sessionId, so an unreadable label store costs the label column
 // nothing else. Under v2 it did reach the address — a default label was
 // minted from the tmux session name and resolved over the very label rows
 // that could not be read — which is why the flag reads as graver than it

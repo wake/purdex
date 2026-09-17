@@ -29,34 +29,11 @@ func TestValidateUserLabel(t *testing.T) {
 	}
 }
 
-func TestSanitize(t *testing.T) {
-	cases := map[string]string{
-		"":                      "_",
-		"mt0":                   "mt0",
-		"purdex-49":             "purdex-49",
-		"a b":                   "a_b",
-		"側欄":                    "______", // 2 runes × 3 bytes, byte-wise
-		"a:b/c":                 "a_b_c",
-		strings.Repeat("z", 40): strings.Repeat("z", 32),
-		"A.B_C-D":               "A.B_C-D",
-	}
-	for in, want := range cases {
-		if got := Sanitize(in); got != want {
-			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestSuffix(t *testing.T) {
-	if got := Suffix("mt0", "purdex-49"); got != "mt0-purdex-49" {
-		t.Errorf("got %q", got)
-	}
-	if got := Suffix("", "purdex-49"); got != "purdex-49" {
-		t.Errorf("outside tmux: got %q", got)
-	}
-	long := Suffix(strings.Repeat("a", 40), strings.Repeat("b", 40))
-	if len(long) != 65 || !ValidSuffix(long) {
-		t.Errorf("65-char bound: len %d valid %v", len(long), ValidSuffix(long))
+// ValidSuffix outlives Suffix/Sanitize: v4 mints no suffix, but wire.go still
+// validates one a v2 or v3 sender puts on the wire (spec §5.6).
+func TestValidSuffix(t *testing.T) {
+	if long := strings.Repeat("a", 40) + "-" + strings.Repeat("b", 24); !ValidSuffix(long) {
+		t.Errorf("65-char bound: ValidSuffix(%q) = false", long)
 	}
 	if ValidSuffix("") || ValidSuffix(strings.Repeat("a", 66)) || ValidSuffix("a:b") {
 		t.Error("ValidSuffix accepted an invalid value")
@@ -79,11 +56,11 @@ func TestSplitSession(t *testing.T) {
 	}
 }
 
-// TestCanonicalID_Deterministic pins the property the whole v3 address
-// design rests on (spec §3.1): the id is a pure function of the
-// sessionId, so a resume or a daemon restart lands on the same address,
-// and two different conversations do not land on one.
-func TestCanonicalID_Deterministic(t *testing.T) {
+// TestRefID_DeterministicAndCollisionFree pins the property the whole address
+// design rests on (spec §5.1): the ref is a pure function of the sessionId, so
+// a resume or a daemon restart lands on the same one, and two different
+// conversations do not land on one.
+func TestRefID_DeterministicAndCollisionFree(t *testing.T) {
 	sids := []string{
 		"",
 		"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c",
@@ -95,23 +72,23 @@ func TestCanonicalID_Deterministic(t *testing.T) {
 
 	seen := make(map[string]string, len(sids))
 	for _, sid := range sids {
-		got := CanonicalID(sid)
+		got := RefID(sid)
 		for range 8 {
-			if again := CanonicalID(sid); again != got {
-				t.Fatalf("CanonicalID(%q) not deterministic: %q then %q", sid, got, again)
+			if again := RefID(sid); again != got {
+				t.Fatalf("RefID(%q) not deterministic: %q then %q", sid, got, again)
 			}
 		}
 		if other, dup := seen[got]; dup {
-			t.Errorf("CanonicalID collision: %q and %q both give %q", other, sid, got)
+			t.Errorf("RefID collision: %q and %q both give %q", other, sid, got)
 		}
 		seen[got] = sid
 	}
 }
 
-// TestCanonicalID_Form checks every output lands in the canonical
+// TestRefID_Form checks every output lands in the ref
 // namespace, including the inputs most likely to break an encoder: the
 // empty string, a very long one, and bytes that are not valid UTF-8.
-func TestCanonicalID_Form(t *testing.T) {
+func TestRefID_Form(t *testing.T) {
 	inputs := []string{
 		"",
 		"a",
@@ -122,12 +99,12 @@ func TestCanonicalID_Form(t *testing.T) {
 		string([]byte{0xc3, 0x28, 0xff, 0xfe}),
 	}
 	for _, in := range inputs {
-		got := CanonicalID(in)
+		got := RefID(in)
 		if len(got) != canonicalN+1 {
-			t.Errorf("CanonicalID(%q) = %q: len %d, want %d", in, got, len(got), canonicalN+1)
+			t.Errorf("RefID(%q) = %q: len %d, want %d", in, got, len(got), canonicalN+1)
 		}
-		if !IsCanonicalID(got) {
-			t.Errorf("CanonicalID(%q) = %q, want ^_[0-9a-z]{6}$", in, got)
+		if !IsRef(got) {
+			t.Errorf("RefID(%q) = %q, want ^_[0-9a-z]{6}$", in, got)
 		}
 	}
 
@@ -135,7 +112,7 @@ func TestCanonicalID_Form(t *testing.T) {
 	// '0', which only a fixed-width encoder produces.
 	padded := false
 	for i := range 200 {
-		if CanonicalID("pad-probe-" + strconv.Itoa(i))[1] == '0' {
+		if RefID("pad-probe-" + strconv.Itoa(i))[1] == '0' {
 			padded = true
 			break
 		}
@@ -145,11 +122,11 @@ func TestCanonicalID_Form(t *testing.T) {
 	}
 }
 
-func TestIsCanonicalID(t *testing.T) {
+func TestIsRef(t *testing.T) {
 	ok := []string{"_000000", "_3k9f2m", "_zzzzzz", "_0a1b2c"}
 	for _, s := range ok {
-		if !IsCanonicalID(s) {
-			t.Errorf("IsCanonicalID(%q) = false, want true", s)
+		if !IsRef(s) {
+			t.Errorf("IsRef(%q) = false, want true", s)
 		}
 	}
 	bad := []string{
@@ -169,26 +146,25 @@ func TestIsCanonicalID(t *testing.T) {
 		"_3k9f2m\n",     // trailing newline
 	}
 	for _, s := range bad {
-		if IsCanonicalID(s) {
-			t.Errorf("IsCanonicalID(%q) = true, want false", s)
+		if IsRef(s) {
+			t.Errorf("IsRef(%q) = true, want false", s)
 		}
 	}
 }
 
-// TestCanonicalID_DisjointFromUserLabels is the namespace guarantee of
-// spec §4.1, asserted in both directions: no canonical id can ever be
-// claimed as a label, and no claimable label can ever be read as an
-// address.
-func TestCanonicalID_DisjointFromUserLabels(t *testing.T) {
+// TestRefID_DisjointFromUserLabels is the namespace guarantee of
+// spec §5.1, asserted in both directions: no ref can ever be claimed as a
+// label, and no claimable label can ever be read as a ref.
+func TestRefID_DisjointFromUserLabels(t *testing.T) {
 	for i := range 500 {
-		id := CanonicalID("disjointness-probe-" + strconv.Itoa(i))
+		id := RefID("disjointness-probe-" + strconv.Itoa(i))
 		if err := ValidateUserLabel(id); err == nil {
-			t.Fatalf("ValidateUserLabel(%q) accepted a canonical id", id)
+			t.Fatalf("ValidateUserLabel(%q) accepted a ref", id)
 		}
 	}
 	for _, id := range []string{"_000000", "_zzzzzz", "_3k9f2m"} {
 		if err := ValidateUserLabel(id); err == nil {
-			t.Errorf("ValidateUserLabel(%q) accepted a canonical id", id)
+			t.Errorf("ValidateUserLabel(%q) accepted a ref", id)
 		}
 	}
 
@@ -198,8 +174,8 @@ func TestCanonicalID_DisjointFromUserLabels(t *testing.T) {
 		strings.Repeat("a", 32), "abcdefgh", "12345678",
 	}
 	for _, s := range labels {
-		if IsCanonicalID(s) {
-			t.Errorf("IsCanonicalID(%q) = true for a label-shaped string", s)
+		if IsRef(s) {
+			t.Errorf("IsRef(%q) = true for a label-shaped string", s)
 		}
 	}
 }

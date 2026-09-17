@@ -82,7 +82,7 @@ func (e *AmbiguousError) Error() string {
 //     matches PeerRecord.SessionName == name. "tmux:" with an empty name
 //     is ErrNotFound.
 //   - "<canonical>[:<suffix>]": tier 1, the canonical id — the
-//     sessionId-derived head PeerRecord.Canonical carries — matched over
+//     sessionId-derived head PeerRecord.Ref carries — matched over
 //     every row that carries a LIVE cc entry, session rows and entry rows
 //     alike, but only those whose Agent is a real registry entry (Type
 //     "cc", PID != 0). Proxy rows and owner-fallback rows (inbox_dead /
@@ -150,7 +150,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 	// never heard of `canonical` sends live rows with it empty, and
 	// without the guard every one of them would match that head.
 	rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-		return hasLiveEntry(r) && head != "" && r.Canonical == head
+		return hasLiveEntry(r) && head != "" && r.Ref == head
 	})
 	if err == nil && snap.RegistryIncomplete {
 		// One hit, but a registry file for an alive pid could not be
@@ -196,17 +196,17 @@ func hasLiveEntry(r PeerRecord) bool {
 // predates Peer Address v3 — the condition behind ErrRemoteTooOld.
 //
 // The signal is spec §4.5's invariant read backwards. A v3 daemon gives
-// every row with a live cc entry a non-empty Canonical, so one such row
+// every row with a live cc entry a non-empty Ref, so one such row
 // WITHOUT it can only have come from a daemon that does not know the
 // field, whose JSON therefore decodes it as "". No version string is
 // needed, and none is trusted: the rows say it themselves.
 //
 // Only live cc rows count. A row with agent: null, a proxy row and an
-// owner-fallback row all carry an empty Canonical by design on a v3
+// owner-fallback row all carry an empty Ref by design on a v3
 // daemon too, so counting them would declare every v3 host obsolete.
 func hasPreV3Rows(records []PeerRecord) bool {
 	for _, r := range records {
-		if hasLiveEntry(r) && r.Canonical == "" {
+		if hasLiveEntry(r) && r.Ref == "" {
 			return true
 		}
 	}

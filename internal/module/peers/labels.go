@@ -125,7 +125,7 @@ func (m *Module) whoami(inbox string) selfResult {
 	snap := m.configSnapshot()
 	row, has := labelRows(rows)[e.SessionID]
 	// The entry origin() validated is all whoami needs: the address is
-	// CanonicalID of that entry's own sessionId, so this answer is
+	// RefID of that entry's own sessionId, so this answer is
 	// identical to the listing's by construction (spec §4.5) rather than by
 	// resolving over the same population.
 	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, infoOf(row, has))}

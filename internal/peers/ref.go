@@ -19,7 +19,6 @@ const (
 	LabelReservedCC   = "cc"
 	LabelReservedTmux = "tmux"
 
-	sanitizeMax  = 32
 	base36Digits = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 	// canonicalN is 6, not 8: the ref is no longer the only way to reach a
@@ -94,43 +93,6 @@ func RefID(sessionID string) string {
 // row is reachable by ref only and carries Reason "name_unroutable".
 func RoutableName(s string) bool {
 	return routableNamePattern.MatchString(s) && !refShapedPattern.MatchString(s)
-}
-
-// Deprecated: use RefID / IsRef.
-//
-// These exist for exactly one task. Renaming the FUNCTION here and the FIELD
-// in Task A3 as one change would mean a single unreviewable commit spanning
-// 45 files; splitting them means this task cannot also delete the old names.
-// Task A3 removes both lines along with the Canonical field.
-func CanonicalID(sessionID string) string { return RefID(sessionID) }
-func IsCanonicalID(s string) bool         { return IsRef(s) }
-
-// Sanitize is the suffix component sanitizer: keeps [A-Za-z0-9_.-],
-// replaces every other byte with '_', truncates to 32 bytes; "" ⇒ "_".
-func Sanitize(s string) string {
-	if s == "" {
-		return "_"
-	}
-	b := make([]byte, 0, len(s))
-	for i := 0; i < len(s) && len(b) < sanitizeMax; i++ {
-		c := s[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '.', c == '-':
-			b = append(b, c)
-		default:
-			b = append(b, '_')
-		}
-	}
-	return string(b)
-}
-
-// Suffix is the display suffix: san(tmux)-san(cc) inside tmux, san(cc)
-// outside (tmuxSessionName == "").
-func Suffix(tmuxSessionName, ccName string) string {
-	if tmuxSessionName == "" {
-		return Sanitize(ccName)
-	}
-	return Sanitize(tmuxSessionName) + "-" + Sanitize(ccName)
 }
 
 // ValidSuffix is the wire grammar a receiver checks on from.address's

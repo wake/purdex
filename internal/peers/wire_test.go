@@ -959,14 +959,14 @@ func TestDeliverRequest_Validate_CanonicalAddress(t *testing.T) {
 	}
 }
 
-// TestValidateWireAddress_UsesIsCanonicalID pins the coupling between the
-// canonical id rule and the wire head rule: whatever IsCanonicalID accepts
+// TestValidateWireAddress_UsesIsRef pins the coupling between the
+// canonical id rule and the wire head rule: whatever IsRef accepts
 // is, by construction, a head a v3 sender can announce, so the wire check
 // has to accept it too. Without this the head grammar can drift away from
-// the id it exists to validate — which is how IsCanonicalID came to have no
+// the id it exists to validate — which is how IsRef came to have no
 // production caller at all — and the drift would only surface as v3 senders
 // being refused on the wire.
-func TestValidateWireAddress_UsesIsCanonicalID(t *testing.T) {
+func TestValidateWireAddress_UsesIsRef(t *testing.T) {
 	for _, sessionID := range []string{
 		"3f2a1c8e-0000-4000-8000-000000000001",
 		"c0ffee00-dead-4bee-8fee-feedfacecafe",
@@ -974,13 +974,13 @@ func TestValidateWireAddress_UsesIsCanonicalID(t *testing.T) {
 		"purdex",
 		strings.Repeat("x", 300),
 	} {
-		id := CanonicalID(sessionID)
-		if !IsCanonicalID(id) {
-			t.Fatalf("CanonicalID(%q) = %q, which IsCanonicalID rejects", sessionID, id)
+		id := RefID(sessionID)
+		if !IsRef(id) {
+			t.Fatalf("RefID(%q) = %q, which IsRef rejects", sessionID, id)
 		}
 		for _, head := range []string{id, id + ":mt0-purdex-49"} {
 			if err := ValidateWireAddress(head); err != nil {
-				t.Errorf("ValidateWireAddress(%q) = %v, want nil: IsCanonicalID accepts its head", head, err)
+				t.Errorf("ValidateWireAddress(%q) = %v, want nil: IsRef accepts its head", head, err)
 			}
 		}
 	}
@@ -991,7 +991,7 @@ func TestValidateWireAddress_UsesIsCanonicalID(t *testing.T) {
 	// not a range.
 	for n := 1; n <= 12; n++ {
 		s := "_" + strings.Repeat("a", n)
-		want := IsCanonicalID(s) || n == 6
+		want := IsRef(s) || n == 6
 		if err := ValidateWireAddress(s); (err == nil) != want {
 			t.Errorf("ValidateWireAddress(%q) = %v, want accepted=%v", s, err, want)
 		}

@@ -850,7 +850,7 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
 			Host: "air", HostID: "air:9k2m4q", Address: "air/_3k9f2mq4:purdex-3f",
-			Canonical: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", LabelRev: 7,
+			Ref: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", LabelRev: 7,
 			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "fa5d4c07-0000", PID: 76973},
 		}})
 	}))
@@ -942,7 +942,7 @@ func TestRunMsgSelf_BarePeerRecordIsAVersionMismatch(t *testing.T) {
 func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{
-			Peer:    ipeers.PeerRecord{Address: "air/_3k9f2mq4:p-3f", Canonical: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user"},
+			Peer:    ipeers.PeerRecord{Address: "air/_3k9f2mq4:p-3f", Ref: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user"},
 			Warning: &ipeers.SelfWarning{Code: ipeers.WarnLabelInUse, LiveLabels: []string{"purdex-tester"}},
 		})
 	}))
@@ -977,7 +977,7 @@ func TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress(t *testing.T) {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
-			Address: "air/_3k9f2mq4:purdex-3f", Canonical: "_3k9f2mq4",
+			Address: "air/_3k9f2mq4:purdex-3f", Ref: "_3k9f2mq4",
 			Label: "purdex-tester", LabelSource: "user", LabelRev: 1,
 			Host: "air", HostID: "air:1",
 		}})
@@ -1075,7 +1075,7 @@ func TestRunMsgName_Release_UsesDelete(t *testing.T) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/peers/self/label" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/_3k9f2mq4:purdex-3f", Canonical: "_3k9f2mq4", LabelRev: 2, Host: "air", HostID: "air:1"}})
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/_3k9f2mq4:purdex-3f", Ref: "_3k9f2mq4", LabelRev: 2, Host: "air", HostID: "air:1"}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")

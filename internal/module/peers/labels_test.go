@@ -212,15 +212,18 @@ func TestSelf_Whoami(t *testing.T) {
 	f := newLabelFixture(t)
 	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	rec := decodeRecord(t, status, body)
-	want := "a/" + ipeers.CanonicalID("sid-2") + ":n20"
+	want := "a/n20"
 	if rec.Address != want || rec.Label != "" || rec.LabelSource != "" || rec.RowKind != "entry" || rec.Agent.PID != 20 {
 		t.Errorf("record = %+v, want address %s", rec, want)
+	}
+	if rec.Ref != ipeers.RefID("sid-2") {
+		t.Errorf("ref = %q, want %q", rec.Ref, ipeers.RefID("sid-2"))
 	}
 	// A session inside tmux renders the same address the listing shows.
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(10)})
 	rec = decodeRecord(t, status, body)
-	if rec.Suffix != "mt0-n10" {
-		t.Errorf("tmux session suffix = %q", rec.Suffix)
+	if rec.Address != "a/n10" || rec.Ref != ipeers.RefID("sid-1") {
+		t.Errorf("tmux session address/ref = %q/%q", rec.Address, rec.Ref)
 	}
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: "/nope.sock"})
 	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
@@ -245,7 +248,7 @@ func TestClaim_Matrix(t *testing.T) {
 		status, body := f.claim(f.inbox(20), c.label)
 		if c.wantStatus == 200 {
 			rec := decodeRecord(t, status, body)
-			if rec.Label != c.label || rec.LabelSource != "user" || rec.LabelRev != 1 || rec.Address != "a/"+ipeers.CanonicalID("sid-2")+":n20" {
+			if rec.Label != c.label || rec.LabelSource != "user" || rec.LabelRev != 1 || rec.Address != "a/n20" {
 				t.Errorf("%q: %+v", c.label, rec)
 			}
 			continue
@@ -294,7 +297,7 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 	if resp.Peer.Label != "purdex-tester" || resp.Peer.LabelSource != "user" {
 		t.Errorf("claim record = %+v, want the label actually set", resp.Peer)
 	}
-	if want := "a/" + ipeers.CanonicalID("sid-1") + ":mt0-n10"; resp.Peer.Address != want {
+	if want := "a/n10"; resp.Peer.Address != want {
 		t.Errorf("claimant address = %q, want its own unchanged %q", resp.Peer.Address, want)
 	}
 
@@ -315,7 +318,7 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 	// D7: the incumbent is exactly where it was.
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	still := decodeRecord(t, status, body)
-	if still.Label != first.Label || still.Canonical != first.Canonical || still.Address != first.Address || still.LabelRev != first.LabelRev {
+	if still.Label != first.Label || still.Ref != first.Ref || still.Address != first.Address || still.LabelRev != first.LabelRev {
 		t.Errorf("incumbent = %+v, want the untouched %+v", still, first)
 	}
 	rows, _ := f.labels.Snapshot()
@@ -434,7 +437,7 @@ func TestRelease(t *testing.T) {
 	if rec.LabelSource != "" || rec.LabelRev != 2 || rec.Label != "" {
 		t.Errorf("released = %+v, want no label at rev 2", rec)
 	}
-	if want := "a/" + ipeers.CanonicalID("sid-2") + ":n20"; rec.Address != want {
+	if want := "a/n20"; rec.Address != want {
 		t.Errorf("released address = %q, want the unchanged %q — releasing a label does not move a conversation", rec.Address, want)
 	}
 	// Release with no row: 200, default, rev 0, nothing written.
@@ -548,17 +551,17 @@ func (f *labelFixture) listingRecord(sessionID string) ipeers.PeerRecord {
 	return ipeers.PeerRecord{}
 }
 
-// TestSelf_AddressMatchesListing is the tripwire for spec §4.5's promise
-// that whoami and the listing cannot disagree: both derive the head from
-// the conversation's own sessionId, so for one live conversation they must
+// TestSelf_AddressMatchesListing is the tripwire for the promise that whoami
+// and the listing cannot disagree: both build a row from the conversation's
+// own registry entry and sessionId, so for one live conversation they must
 // render byte-identical labels and addresses.
 func TestSelf_AddressMatchesListing(t *testing.T) {
 	f := newLabelFixture(t)
 
 	// Guard against the test passing vacuously: sid-1 must actually have
 	// an address to compare.
-	if listed := f.listingRecord("sid-1"); listed.Canonical == "" || listed.Address == "" {
-		t.Fatalf("listing row for sid-1 = %+v, want a canonical id and an address", listed)
+	if listed := f.listingRecord("sid-1"); listed.Ref == "" || listed.Address == "" {
+		t.Fatalf("listing row for sid-1 = %+v, want a ref and an address", listed)
 	}
 
 	for _, c := range []struct {
@@ -576,44 +579,23 @@ func TestSelf_AddressMatchesListing(t *testing.T) {
 	}
 }
 
-// TestSelf_SuffixDivergesFromListingAfterATmuxRename pins a KNOWN, BOUNDED
-// divergence the tripwire above does not cover, and that the daemon
-// deliberately does not close.
+// TestSelf_AddressMatchesListingAfterATmuxRename is what v3's
+// TestSelf_SuffixDivergesFromListingAfterATmuxRename became. That test pinned a
+// known, bounded divergence: the listing rendered a SESSION row and put the
+// daemon's LIVE tmux name in the display suffix, while whoami answered from one
+// frozen registry entry and put the name Claude Code recorded at startup there
+// instead. After a rename the two interfaces printed different suffixes for one
+// conversation, and its comment said the test to write when the divergence
+// closed was this one.
 //
-// Suffix is "<tmux session>-<cc name>", display-only (see
-// ipeers.PeerRecord.Suffix). The listing renders this conversation as a
-// SESSION row, so the daemon's live tmux inventory for that very session is
-// in hand and is what it uses: rename the session and the listing follows
-// on the next request (spec §5.4). The self routes answer from ONE
-// validated registry entry — whoami/claim/release build no inventory at all
-// — and a registry entry carries only the tmux name Claude Code froze into
-// <pid>.json when the agent started, which nothing ever refreshes (spec §2
-// P1). So after a rename the two interfaces print different suffixes for
-// one conversation, and row_kind ("session" vs the "entry" every self route
-// answers with) is the discriminator saying which provenance you are
-// reading.
+// v4 closes it by deletion rather than by making the self routes live: with
+// PeerRecord.Suffix gone, no tmux name — live or frozen — reaches a record at
+// all, so the one field that could disagree no longer exists. The address is
+// the registry name, which both interfaces read from the same file.
 //
-// What they cannot disagree about is the part that routes. Both heads are
-// CanonicalID of the same sessionId, so either address names the same
-// conversation and resolves to the same row; Resolve splits the suffix off
-// and ignores it before tier 1 runs. That is asserted below, because it is
-// the reason this divergence is cosmetic rather than a defect.
-//
-// Closing it would mean handing whoami a live tmux name, and the daemon has
-// no cheap way to get one. A registry entry locates a PANE; the only
-// mappings from a pane to the session that currently holds it are a fresh
-// tmux round trip (the peers module holds no tmux executor — only
-// session.SessionProvider and agent.OwnerResolver) or the owner resolution
-// the listing performs (ListSessions plus a per-session pane walk with `ps`
-// forks, under a 2 s budget that degrades to partial). Both put latency and
-// a new failure mode on a path that has neither today, and NEITHER could
-// guarantee agreement: a lookup that fails or times out falls back to the
-// frozen name regardless, turning "always disagrees after a rename" into
-// "usually agrees" — a worse contract to document than this one.
-//
-// If you do make the self routes live, this test is the one that fails.
-// Delete it and extend TestSelf_AddressMatchesListing to rename first.
-func TestSelf_SuffixDivergesFromListingAfterATmuxRename(t *testing.T) {
+// The rename is still performed, because "they agree" is only worth asserting
+// under the conditions that used to make them disagree.
+func TestSelf_AddressMatchesListingAfterATmuxRename(t *testing.T) {
 	f := newLabelFixture(t)
 
 	// tmux renames mt0 to mt0zz. The registry file for pid 10 keeps
@@ -629,35 +611,29 @@ func TestSelf_SuffixDivergesFromListingAfterATmuxRename(t *testing.T) {
 	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(10)})
 	self := decodeRecord(t, status, body)
 
+	// The two rows still come from different places — that has not changed,
+	// and it is why the agreement below is worth pinning.
 	if listed.RowKind != "session" || self.RowKind != "entry" {
 		t.Fatalf("row kinds = listing %q / whoami %q, want session / entry", listed.RowKind, self.RowKind)
 	}
-	if listed.Suffix != "mt0zz-n10" {
-		t.Errorf("listing suffix = %q, want the live tmux name in mt0zz-n10", listed.Suffix)
+	if self.Address != listed.Address {
+		t.Errorf("whoami %q, listing %q; a tmux rename must no longer move either", self.Address, listed.Address)
 	}
-	if self.Suffix != "mt0-n10" {
-		t.Errorf("whoami suffix = %q, want the frozen registry name in mt0-n10", self.Suffix)
-	}
-	if self.Address == listed.Address {
-		t.Errorf("whoami and the listing now agree on %q; the divergence this test pins is gone — read the comment above before deleting it", self.Address)
+	if self.Ref == "" || self.Ref != listed.Ref {
+		t.Fatalf("ref: whoami %q, listing %q, want one non-empty ref", self.Ref, listed.Ref)
 	}
 
-	// The head is the same string from both interfaces, and that is what
-	// makes the difference above cosmetic: a sender that copies EITHER
-	// address reaches this conversation.
-	if self.Canonical == "" || self.Canonical != listed.Canonical {
-		t.Fatalf("canonical: whoami %q, listing %q, want one non-empty id", self.Canonical, listed.Canonical)
-	}
+	// And the ref both rows agree on still resolves to this conversation.
+	// The NAME tier arrives with Resolve's v4 rewrite; the ref tier is what
+	// exists at this point and is the half a rename could never have moved.
 	snap := f.m.configSnapshot()
 	env := f.m.localEnvelope(context.Background(), snap.hostID, snap.alias)
 	if !env.OK {
 		t.Fatalf("localEnvelope: %s", env.Error)
 	}
-	for _, addr := range []string{self.Address, listed.Address} {
-		host, sess, ok := ipeers.SplitAddress(addr)
-		if !ok || host != snap.alias {
-			t.Fatalf("SplitAddress(%q) = %q/%q/%v", addr, host, sess, ok)
-		}
+	if _, sess, ok := ipeers.SplitAddress(listed.Host + "/" + listed.Ref); !ok {
+		t.Fatalf("SplitAddress of the ref form failed")
+	} else {
 		rec, err := ipeers.Resolve(env.Peers, sess, ipeers.ResolveSnapshot{Partial: env.Partial})
 		if err != nil {
 			t.Fatalf("Resolve(%q): %v", sess, err)
