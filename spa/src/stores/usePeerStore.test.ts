@@ -17,9 +17,9 @@ function row(over: Partial<PeerRecordWire> = {}): PeerRecordWire {
     address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
     row_kind: 'session',
     ref: '_3k9f2mq4',
-    label: 'ai-chat4',
-    label_source: 'user',
-    label_rev: 0,
+    title: 'ai-chat4',
+    title_source: 'user',
+    title_rev: 0,
     session_code: 'z141yl',
     session_name: 'ai-chat4',
     tmux_instance: '6901:1789205013',
@@ -48,7 +48,7 @@ function envelope(peers: PeerRecordWire[], over: Partial<PeersEnvelope> = {}): P
     peers,
     daemon_version: '1.0.0-alpha.364',
     unknown_registry_files: [],
-    labels_unavailable: false,
+    titles_unavailable: false,
     ...over,
   }
 }
@@ -79,8 +79,8 @@ describe('indexing', () => {
       z141yl: {
         address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
         ref: '_3k9f2mq4',
-        label: 'ai-chat4',
-        labelSource: 'user',
+        title: 'ai-chat4',
+        titleSource: 'user',
         deliverable: true,
         reason: '',
         // Kept because a session code alone does not identify a session: tmux
@@ -127,26 +127,26 @@ describe('indexing', () => {
     expect(usePeerStore.getState().byHost[H].rows).toEqual({})
   })
 
-  // `label_source: ''` is not what makes this the no-agent case — a live
+  // `title_source: ''` is not what makes this the no-agent case — a live
   // conversation that has not named itself reports `''` too (spec §8.1). What
   // says "no agent" is an empty `ref`, so this row carries one and the
   // test asserts it: without that line it would no longer pin what it was
   // written to pin.
   it('keeps a row with no agent (agent: null, ref: \'\')', async () => {
     vi.mocked(api.fetchPeers).mockResolvedValue(envelope([
-      row({ session_code: 'bare01', ref: '', label: '', label_source: '', agent: null, deliverable: false, reason: 'no_agent' }),
+      row({ session_code: 'bare01', ref: '', title: '', title_source: '', agent: null, deliverable: false, reason: 'no_agent' }),
     ]))
     await usePeerStore.getState().refresh(H)
     expect(usePeerStore.getState().byHost[H].rows.bare01.agent).toBeNull()
     expect(usePeerStore.getState().byHost[H].rows.bare01.ref).toBe('')
   })
 
-  // The other reading of `label_source: ''`: a live conversation with no label
+  // The other reading of `title_source: ''`: a live conversation with no title
   // of its own. It keeps its ref and its address, so nothing may treat an
-  // empty label source as "no agent".
+  // empty title source as "no agent".
   it("keeps the ref of a live row that has not named itself", async () => {
     vi.mocked(api.fetchPeers).mockResolvedValue(envelope([
-      row({ session_code: 'live01', label: '', label_source: '' }),
+      row({ session_code: 'live01', title: '', title_source: '' }),
     ]))
     await usePeerStore.getState().refresh(H)
     const r = usePeerStore.getState().byHost[H].rows.live01
@@ -249,13 +249,13 @@ describe('refresh', () => {
   it('stores the envelope flags', async () => {
     vi.mocked(api.fetchPeers).mockResolvedValue(envelope([row()], {
       partial: true,
-      labels_unavailable: true,
+      titles_unavailable: true,
       unknown_registry_files: ['/tmp/cc-registry/9.json'],
     }))
     await usePeerStore.getState().refresh(H)
     expect(usePeerStore.getState().byHost[H].envelope).toEqual({
       partial: true,
-      labelsUnavailable: true,
+      titlesUnavailable: true,
       unknownRegistryFiles: ['/tmp/cc-registry/9.json'],
     })
   })

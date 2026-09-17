@@ -1222,7 +1222,7 @@
   "peer.partial.owners": "有 session 的擁有者未解析完成",
   "peer.partial.registry": "有 registry 檔案讀不到",
   "peer.partial.labels": "label 讀取失敗",
-  "peer.labels_unavailable_note": "label 讀取失敗，位址可能是雜湊預設值。",
+  "peer.titles_unavailable_note": "label 讀取失敗，位址可能是雜湊預設值。",
   "peer.reason.no_agent": "此 session 沒有 agent",
   "peer.reason.not_cc": "不是 Claude Code session",
   "peer.reason.inbox_dead": "agent 的 inbox 沒有回應",

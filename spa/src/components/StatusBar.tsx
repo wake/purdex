@@ -138,7 +138,7 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
   if (!peer.connected) return t('peer.host_not_connected')
   if (peer.error) return t('peer.error', { error: peer.error })
   const { row } = peer
-  // Not `row.label === ''`, which is what this guard used to read. A title is
+  // Not `row.title === ''`, which is what this guard used to read. A title is
   // free text that routes nothing and under v4 is usually unset, so keying the
   // whole segment off it hid rows that were perfectly addressable. A row is
   // absent when it has neither a ref nor an address — nothing to say and
@@ -150,7 +150,7 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
   }
   const parts = [row.address]
   if (row.reason) parts.push(reasonText(row.reason, t))
-  if (peer.envelope.labelsUnavailable) parts.push(t('peer.labels_unavailable_note'))
+  if (peer.envelope.titlesUnavailable) parts.push(t('peer.titles_unavailable_note'))
   if (peer.stale) parts.push(t('peer.stale', { seconds: Math.round((Date.now() - peer.fetchedAt) / 1000) }))
   return parts.join(' — ')
 }
@@ -388,7 +388,7 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   // The title sits beside the name, not in place of it: it is a human's note
   // about the conversation, and losing the name would lose the thing that both
   // identifies the row and matches what the clipboard carries.
-  const peerTitle = peerRow?.label ?? ''
+  const peerTitle = peerRow?.title ?? ''
   const peerIdDisplay = peerId.display && peerTitle ? `${peerId.display} · ${peerTitle}` : peerId.display
   const peerUncertain = peerRow?.reason === 'inbox_dead' || peerRow?.reason === 'ambiguous'
   const peerDim = !peer.connected || peer.stale || peerUncertain

@@ -69,8 +69,8 @@ const PEER_ROW: PeerRow = {
   // A v4 title is free text, routes nothing, and is usually unset. The row is
   // identified by its name and its ref, so the fixture leaves it empty; the one
   // test that cares about a title sets it.
-  label: '',
-  labelSource: '',
+  title: '',
+  titleSource: '',
   deliverable: true,
   reason: '',
   tmuxInstance: GEN,
@@ -394,18 +394,18 @@ describe('StatusBar peer segments', () => {
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0 [q34psn]'))
   })
 
-  // The old guard declined to render a row whose *label* was empty. Under v4 a
+  // The old guard declined to render a row whose *title* was empty. Under v4 a
   // title is usually empty and never identified a row, so an untitled peer must
   // still appear — its name is what identifies it.
   it('renders a peer that has no title', () => {
     render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
-    expect(PEER_ROW.label).toBe('')
+    expect(PEER_ROW.title).toBe('')
     expect(screen.queryByText(/purdex-b0/)).not.toBeNull()
     expect(screen.getByTestId('status-seg-peer-id')).not.toBeDisabled()
   })
 
   it('renders a set title beside the name rather than instead of it', () => {
-    seedPeers({}, { ...PEER_ROW, label: 'Purdex Tester 01', labelSource: 'user' })
+    seedPeers({}, { ...PEER_ROW, title: 'Purdex Tester 01', titleSource: 'user' })
     render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg.textContent).toContain('purdex-b0 [q34psn]')
@@ -583,7 +583,7 @@ describe('StatusBar peer segments', () => {
 
   it.each([
     ['a failed fetch', { error: 'boom' } as Partial<PeerHostEntry>, /boom/],
-    ['a partial envelope with no row', { envelope: { partial: true, labelsUnavailable: false, unknownRegistryFiles: [] } } as Partial<PeerHostEntry>, /could not be determined/],
+    ['a partial envelope with no row', { envelope: { partial: true, titlesUnavailable: false, unknownRegistryFiles: [] } } as Partial<PeerHostEntry>, /could not be determined/],
     ['a complete envelope with no row', {} as Partial<PeerHostEntry>, /no peer/],
   ])('renders an em dash for %s, with the reason in the tooltip', (_label, entry, tooltip) => {
     seedPeers(entry, null)

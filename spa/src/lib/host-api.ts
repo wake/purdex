@@ -96,13 +96,13 @@ export interface PeerRecordWire {
   row_kind: string            // session | entry
   /**
    * The sessionId-derived address head (`_3k9f2mq4`), `''` when the row has no
-   * cc agent. This — not `label_source` — is what tells an agent row apart from
+   * cc agent. This — not `title_source` — is what tells an agent row apart from
    * a row with no agent.
    */
   ref: string
-  label: string               // '' until the conversation names itself
-  label_source: string        // user | ''
-  label_rev: number
+  title: string               // '' until the conversation names itself
+  title_source: string        // user | ''
+  title_rev: number
   session_code: string
   session_name: string
   tmux_instance: string
@@ -114,7 +114,7 @@ export interface PeerRecordWire {
 
 /**
  * `GET /api/peers` for one host. `partial` has three independent causes — owner
- * lookups that did not run, `unknown_registry_files`, `labels_unavailable` — so
+ * lookups that did not run, `unknown_registry_files`, `titles_unavailable` — so
  * "no row and partial" never means "no peer".
  */
 export interface PeersEnvelope {
@@ -125,7 +125,7 @@ export interface PeersEnvelope {
   peers: PeerRecordWire[]     // never null
   daemon_version: string
   unknown_registry_files: string[]  // never null
-  labels_unavailable: boolean
+  titles_unavailable: boolean
 }
 
 export interface ConfigData {

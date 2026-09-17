@@ -1222,7 +1222,7 @@
   "peer.partial.owners": "unresolved owners",
   "peer.partial.registry": "unreadable registry files",
   "peer.partial.labels": "labels unavailable",
-  "peer.labels_unavailable_note": "Labels could not be read, so addresses may be hash defaults.",
+  "peer.titles_unavailable_note": "Labels could not be read, so addresses may be hash defaults.",
   "peer.reason.no_agent": "no agent in this session",
   "peer.reason.not_cc": "not a Claude Code session",
   "peer.reason.inbox_dead": "the agent's inbox is not responding",

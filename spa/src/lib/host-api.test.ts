@@ -413,7 +413,7 @@ describe('fetchPeers', () => {
   //
   // Captured from the mini-lab daemon at 1.0.0-alpha.364 and then hand-updated
   // to the v4 shape (`ref` in place of `canonical`, no `suffix`, no `'default'`
-  // label source) — re-capture it against a v4 daemon when one is deployed.
+  // title source) — re-capture it against a v4 daemon when one is deployed.
   const realEnvelope = {
     host_id: 'mini-lab:278cbm',
     ok: true,
@@ -425,9 +425,9 @@ describe('fetchPeers', () => {
         address: 'mini-lab/tmux:ai-chat2',
         row_kind: 'session',
         ref: '',
-        label: '',
-        label_source: '',
-        label_rev: 0,
+        title: '',
+        title_source: '',
+        title_rev: 0,
         session_code: 'qorh3k',
         session_name: 'ai-chat2',
         tmux_instance: '6901:1789205013',
@@ -442,9 +442,9 @@ describe('fetchPeers', () => {
         address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
         row_kind: 'session',
         ref: '_3k9f2mq4',
-        label: 'ai-chat4',
-        label_source: 'user',
-        label_rev: 0,
+        title: 'ai-chat4',
+        title_source: 'user',
+        title_rev: 0,
         session_code: 'z141yl',
         session_name: 'ai-chat4',
         tmux_instance: '6901:1789205013',
@@ -468,9 +468,9 @@ describe('fetchPeers', () => {
         address: 'mini-lab/_7p2wq5ba:loose-outside-tmux',
         row_kind: 'entry',
         ref: '_7p2wq5ba',
-        label: 'loose',
-        label_source: 'user',
-        label_rev: 7,
+        title: 'loose',
+        title_source: 'user',
+        title_rev: 7,
         session_code: '',
         session_name: '',
         tmux_instance: '',
@@ -490,7 +490,7 @@ describe('fetchPeers', () => {
     ],
     daemon_version: '1.0.0-alpha.364',
     unknown_registry_files: [],
-    labels_unavailable: false,
+    titles_unavailable: false,
   }
 
   it('fetches /api/peers with auth and returns the envelope', async () => {
@@ -509,14 +509,14 @@ describe('fetchPeers', () => {
     )
     const env = await fetchPeers(HOST_ID)
     expect(env.partial).toBe(false)
-    expect(env.labels_unavailable).toBe(false)
+    expect(env.titles_unavailable).toBe(false)
     expect(env.unknown_registry_files).toEqual([])
     expect(indexPeerRows(env.peers)).toEqual({
       qorh3k: {
         address: 'mini-lab/tmux:ai-chat2',
         ref: '',
-        label: '',
-        labelSource: '',
+        title: '',
+        titleSource: '',
         deliverable: false,
         reason: 'no_agent',
         tmuxInstance: '6901:1789205013',
@@ -525,8 +525,8 @@ describe('fetchPeers', () => {
       z141yl: {
         address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
         ref: '_3k9f2mq4',
-        label: 'ai-chat4',
-        labelSource: 'user',
+        title: 'ai-chat4',
+        titleSource: 'user',
         deliverable: true,
         reason: '',
         tmuxInstance: '6901:1789205013',
