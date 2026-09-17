@@ -9,8 +9,19 @@
 - Every task: subagent, TDD (failing test first, then the code), one commit
   with `git commit --only <files>`. Every Bash call prefixed with
   `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb2-exec-stream/spa &&`.
-  Verify per task: `npx vitest run <changed test files>`; before each PR:
+  Verify per task: `npx vitest run <changed test files>`, plus
+  `src/components/ConversationView.snapshot.test.tsx` for every task that
+  touches a shared renderer (7, 8, 9); before each PR:
   `npx vitest run && pnpm run lint && pnpm run build`.
+- **Tasks 1–4 are sequential** (each commit must compile and stay green on
+  its own; task 4 calls the store action task 3 adds). Tasks 6–9 are
+  sequential too (task 6's snapshots must exist before 7–9 change the
+  components). Do not run these subagents in parallel.
+- Test environment facts (measured 2026-09-18): vitest 4.1.1, jsdom,
+  `requestAnimationFrame` exists and is driven by `vi.useFakeTimers()` +
+  `vi.advanceTimersByTimeAsync(20)` (probe passed) — **no rAF stub**;
+  `useExecutionSubscription.test.ts` already uses fake timers in
+  `beforeEach`.
 - No daemon or Nexen change. `nex-sse.ts`, `sse-parser.ts`, `nex-api.ts`
   are not edited.
 
@@ -18,15 +29,15 @@
 
 - `spa/src/lib/nex/event-reducer.ts` 194 lines; `ExecutionState` fields at
   9–34; `frameToEvent` 73–95 returns `null` for `frame.id == null`;
-  `applyDurableEvent` 110–194, non-lifecycle push at 114–118.
+  `applyDurableEvent` 110–194, non-lifecycle push at 115–118.
 - `spa/src/stores/useExecutionStore.ts`: `patch()` helper returns `s`
   unchanged when the reducer returns the same object (no entry
   materialised); actions listed at 37–48.
 - `spa/src/hooks/useExecutionSubscription.ts`: `onFrame` at 177–190,
   `openStream` closure at 172; `teardown` closes `sseRef`.
-- `spa/src/components/ConversationMessages.tsx` 125 lines; props 16–25;
+- `spa/src/components/ConversationMessages.tsx` 139 lines; props 16–25;
   scroll effect deps `[messages, scrollKey]`.
-- `spa/src/components/ToolCallBlock.tsx` 61 lines, props `{tool, input}`;
+- `spa/src/components/ToolCallBlock.tsx` 62 lines, props `{tool, input}`;
   `MessageBubble.tsx` props `{role, content}`; `ThinkingBlock.tsx` props
   `{content}`; `ThinkingIndicator.tsx` props `{visible}`.
 - `spa/src/lib/stream-ws.ts:16-23` `AssistantMessage.message` has no `id`.
@@ -59,15 +70,20 @@ Files: `spa/src/lib/nex/event-reducer.ts`, `spa/src/lib/stream-ws.ts`
   `turnLive`; T2 repeated `message_start` for the same id returns `s`; T2
   with one matching assistant already in `messages` seeds `finalized: 1`;
   T3 `content_block_start` for `tool_use` records id+name,
-  `index < finalized` dropped; T4 delta creates a block when missing (type
+  `index < finalized` dropped, start with `partial == null` creates
+  `{messageId: null, finalized: 0}`; T4 delta creates a block when missing (type
   inferred), appends text/thinking/partial_json, `signature_delta` no-op,
   `index < finalized` dropped, delta before any `message_start` creates an
   assembly with `messageId: null, finalized: 0`; T5
   stop/message_delta/message_stop return `s` (same object); T6 snapshot
   assigns blocks, `finalized = finalizedFor` (not min index), no
-  toolName on seeded blocks, malformed snapshot returns `s`; T7
-  `lease.renewed` returns `s`; T8 `lastSeq`/`messages`/`summaryStale`/`sse`
-  untouched.
+  toolName on seeded blocks, sets `turnLive`, malformed snapshot returns
+  `s`; T7 `lease.renewed` returns `s`; T8 after a delta
+  `lastSeq`/`messages`/`summaryStale`/`sse`/`lease`/`leaseError`/
+  `pendingSend`/`pendingLocal` are reference-equal to before.
+- `stream-ws.ts`: `AssistantMessage.message.id?: string` — a type-level
+  test in `event-reducer.test.ts` builds an `AssistantMessage` with `id`
+  and reads it back without a cast (R5).
 - Mutation check in the task report: comment out the `index < finalized`
   drop in T4 → name the failing test.
 
@@ -90,16 +106,22 @@ Files: `event-reducer.ts`, `event-reducer.test.ts`.
   `finalized == 1`, a following delta for index 1 appends, assistant 1 →
   blocks empty, `finalized == 2`; **reconnect case B**: assistant 0 already
   in `messages`, same snapshot → `finalized` seeded 1, assistant 1 removes
-  block 1; D3 each kind clears; seq idempotency still short-circuits before
-  D-rules (replayed frame does not double-finalize); A1 first sighting
-  wins; A1/A2 skip subagent frames; A2 error result → `'error'`; A3 aborts
-  only `running` tools; A4 `created_at` 0 stored as 0.
+  block 1; D2 `execution.running` and `execution.message_accepted` each
+  set `turnLive`; D3 each listed kind clears `partial` and `turnLive`; D4
+  `execution.archived` clears both; seq idempotency still short-circuits
+  before D-rules (replayed frame does not double-finalize); A1 first
+  sighting wins; A1/A2 skip subagent frames; A2 error result → `'error'`;
+  A3 aborts only `running` tools; A4 `created_at` 0 stored as 0.
 - Golden test: replay the fixture through `applyTransientFrame` /
   `applyDurableEvent` in wire order (assign seq to durable frames in
-  order, `created_at` = index×100) and assert `messages` has exactly the 5
-  durable provider frames (2 assistant, 1 user, 1 result, 1
-  rate_limit_event, plus 5 system), `partial == null`, `turnLive ==
-  false`, the Bash tool `status == 'done'` with `endedAt > startedAt`.
+  order, `created_at` = index×100) and assert `messages.length === 10`
+  with type counts `{system: 5, assistant: 2, user: 1, result: 1,
+  rate_limit_event: 1}` (the fixture's 29 frames = 19 `stream_event` + 10
+  durable), `partial == null`, `turnLive == false`, the Bash tool
+  `status == 'done'` with `endedAt > startedAt`. Also assert that
+  **mid-replay** (after frame 13, the last `input_json_delta`)
+  `partial.blocks[0].partialJson` is the full concatenation and
+  `toolName === 'Bash'`.
 - Mutation check: replace `delete blocks[finalized]` with "delete the
   lowest index" → reconnect case A must fail; replace `finalizedFor` with
   `0` in T6 → reconnect case B must fail. Name both in the task report.
@@ -129,16 +151,19 @@ Files: `useExecutionSubscription.ts`, `useExecutionSubscription.test.ts`.
   cancelled. `onStatus('connecting' | 'reconnecting')` → `generation += 1`,
   queue cleared, scheduled flush cancelled; `onStatus('closed')`, teardown
   and unmount → same clear/cancel.
-- Tests (fake timers, `requestAnimationFrame` stubbed to `setTimeout 16`):
+- Tests (existing fake timers drive the real jsdom rAF; no stub):
   flip `:71` to assert a `stream_event` text delta reaches
-  `partial.blocks[0].text` after the flush and `lastSeq` is unchanged;
-  durable-after-transient ordering (delta then `assistant` in the same
-  tick → block finalized, not resurrected); queue dropped on
-  `reconnecting`; **stale generation**: delta queued → `reconnecting` →
-  `open` → `stream_snapshot` frame (flushed) → advance timers so the old
-  rAF would fire → store partial equals the snapshot only; queue dropped
-  on unmount (no store write after `close()`); malformed transient JSON
-  dropped without warning.
+  `partial.blocks[0].text` after `advanceTimersByTimeAsync(20)` and
+  `lastSeq` is unchanged; durable-after-transient ordering (delta then
+  `assistant` in the same tick → block finalized, not resurrected); queue
+  dropped on `reconnecting` (advance timers → no partial); queue dropped
+  on `closed` (same); `connecting` bumps the generation (delta queued →
+  `onStatus('connecting')` → advance timers → no write); **stale
+  generation**: delta queued → `reconnecting` → `open` → `stream_snapshot`
+  frame (flushed) → advance timers so the old rAF would fire → store
+  partial equals the snapshot only; queue dropped on unmount (no store
+  write after `close()`); malformed transient JSON dropped without
+  warning.
 
 ### Task 5 — P-B2.1 PR
 
@@ -210,14 +235,22 @@ Files: `ConversationMessages.tsx`, `ConversationMessages.test.tsx`,
   its deps.
 - `ExecutionView`: `const anyRunning = Object.values(st.tools).some(t => t.status === 'running')`;
   `const now = useElapsedTicker(anyRunning)`; `showThinking` per R3.
-- Tests: partial group after durable messages and before `children`;
-  index ordering; empty text block renders nothing; snapshot-seeded
-  `tool_use` block (no `toolName`) shows `execution.tool.unknown`; no
-  `partial` prop → `ConversationView.snapshot.test.tsx` unchanged (run
-  it); running tool
-  shows spinner + elapsed; R3 truth table in `ExecutionView.test.tsx`
-  (observer `turnLive` → dots; partial text → no dots; `pendingSend`
-  queued → no dots); `aborted` badge after `execution.turn_orphaned`.
+- Tests (`ConversationMessages.test.tsx`, each a named `it`): R1 partial
+  group after durable messages and before `children`; R1 index ordering
+  (blocks 2,0,1 in the map render 0,1,2); R1 text block renders
+  `MessageBubble` with `stream-cursor`; R1 thinking block renders
+  `ThinkingBlock` with `stream-cursor`; R1 empty text block renders
+  nothing; R1 `unknown` block renders nothing; R1 snapshot-seeded
+  `tool_use` block (no `toolName`) shows `execution.tool.unknown`; R2
+  durable `tool_use` with a `tools` entry passes status/timing (running →
+  spinner + elapsed); R2 durable `tool_use` **without** a `tools` entry
+  renders today's DOM (wrench, no badge); R4 a partial text growth with
+  unchanged `messages` calls `scrollTo` again; no `partial` prop →
+  `ConversationView.snapshot.test.tsx` unchanged (run it).
+  `ExecutionView.test.tsx`: R3 truth table (observer `turnLive` → dots;
+  partial text → no dots; `pendingSend` queued → no dots; neither → no
+  dots); `aborted` badge after `execution.turn_orphaned`; `now` ticks
+  only while a tool is running (ticker active flag).
 
 ### Task 10 — P-B2.2 PR + acceptance
 
@@ -233,3 +266,13 @@ Files: `ConversationMessages.tsx`, `ConversationMessages.test.tsx`,
 
 After each PR merges: separate bump PR (`VERSION`, `package.json`,
 `spa/package.json`, `CHANGELOG.md`), branch reset to `origin/main` first.
+
+## Review log
+
+- codex `task-mu60g2te-jyp7ry` (gpt-5.5), 7 findings, all applied: (1)
+  named tests for T3-null/T6-turnLive/T8-fields/D2/D4/R1 variants/R2
+  no-entry/R4/R5; (2) task 4 `closed` + `connecting` boundary tests; (3)
+  golden count fixed to 10 with per-type counts; (4) no rAF stub —
+  measured that fake timers drive jsdom's rAF; (5) baseline line counts
+  corrected; (6) tasks 1–4 and 6–9 declared sequential; (7)
+  `ConversationView` snapshot test in the verify step of tasks 7–9.
