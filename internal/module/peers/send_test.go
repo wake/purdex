@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -686,10 +687,32 @@ func (s *sendEnv) addLocalPeer(name, sessionID string, pid int) *localPeer {
 			}()
 		}
 	}()
+	s.registerLocalPeer(name, sessionID, pid, p.sock)
+	return p
+}
+
+// addLocalPeerWithDeadInbox registers a second local session whose
+// messagingSocketPath is a REGULAR FILE rather than a listener — the same
+// trick deliverEnv's listenAbsent uses (deliver_test.go). The registry row
+// is otherwise indistinguishable from a live one, so resolution succeeds
+// and the send gets all the way to the inbox write, which is the only way
+// to reach the socket-write failure arm of send.go's local branch.
+func (s *sendEnv) addLocalPeerWithDeadInbox(name, sessionID string, pid int) string {
+	s.t.Helper()
+	sock := filepath.Join(s.root, "peer"+strconv.Itoa(pid)+".sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		s.t.Fatal(err)
+	}
+	s.registerLocalPeer(name, sessionID, pid, sock)
+	return sock
+}
+
+// registerLocalPeer writes the registry entry both constructors share.
+func (s *sendEnv) registerLocalPeer(name, sessionID string, pid int, sock string) {
+	s.t.Helper()
 	writeRegistryFixture(s.t, s.regDir, strconv.Itoa(pid)+".json",
 		`{"pid":`+strconv.Itoa(pid)+`,"sessionId":"`+sessionID+`","cwd":"/w2","procStart":"`+targetProcStart+
-			`","version":"2.1.270","messagingSocketPath":"`+p.sock+`","name":"`+name+`","status":"idle"}`)
-	return p
+			`","version":"2.1.270","messagingSocketPath":"`+sock+`","name":"`+name+`","status":"idle"}`)
 }
 
 // recvLine waits (bounded) for the next line on the local peer's inbox.
@@ -964,6 +987,33 @@ func TestSend_LocalDeliveryWritesExactlyOneAuditRow(t *testing.T) {
 		row.ToHostID != localHostID || row.ToSessionID != localPeerSessionID ||
 		row.Result != ipeers.ResultDelivered || row.Bytes != len(req.Text) {
 		t.Errorf("audit row = %+v, want %s → %s on %s, delivered, %d bytes", row, targetSessionID, localPeerSessionID, localHostID, len(req.Text))
+	}
+}
+
+// TestSend_LocalWriteFailureIsAuditedAsSocketWriteFailed pins the RESULT a
+// failed local write leaves behind, not the answer the caller gets. §4.3 says
+// the local path's results use the same mapping /deliver uses, and /deliver's
+// refuse() writes the refusal CODE into result (deliver.go). A local write
+// failure that left result empty would render as a blank cell in
+// `pdx msg log` (cmd/pdx/msg.go) where the identical remote failure renders
+// socket_write_failed — the same event, told two different ways, on the one
+// column an operator reads to find out what happened.
+//
+// The error text stays in the error column: result says WHAT the outcome was,
+// error says why.
+func TestSend_LocalWriteFailureIsAuditedAsSocketWriteFailed(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	s.addLocalPeerWithDeadInbox(localPeerName, localPeerSessionID, localPeerPID)
+	req := s.localSendReq()
+
+	assertRefused(t, s.send(adminCtx(), req), http.StatusBadGateway, ipeers.ErrSocketWriteFailed)
+
+	row := s.onlyRow()
+	if row.Result != ipeers.ErrSocketWriteFailed {
+		t.Errorf("audit result = %q, want %q", row.Result, ipeers.ErrSocketWriteFailed)
+	}
+	if row.Error == "" {
+		t.Errorf("audit error = %q, want the write's error text preserved", row.Error)
 	}
 }
 

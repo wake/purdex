@@ -546,7 +546,12 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			Text:     req.Text,
 		})
 		if err != nil {
-			m.setResult(id, "", "", err.Error())
+			// The result column carries the refusal CODE, as /deliver's
+			// refuse() writes it (deliver.go): this daemon performed the
+			// delivery itself, so it has an outcome of its own to record,
+			// unlike the remote arms below, whose result would have come
+			// from the peer's answer and a failed call has none.
+			m.setResult(id, "", ipeers.ErrSocketWriteFailed, err.Error())
 			m.logf("peers: send %s to %q: build frame: %v", msgID, targetAlias, err)
 			writeWireError(w, http.StatusInternalServerError, ipeers.APIError{Error: ipeers.ErrSocketWriteFailed, Detail: "build frame: " + err.Error()})
 			return
@@ -562,7 +567,8 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			result = ipeers.ResultDeliveryUncertain
 			errText = err.Error()
 		default:
-			m.setResult(id, "", "", err.Error())
+			// Result is the code, error the text — see the build-frame arm.
+			m.setResult(id, "", ipeers.ErrSocketWriteFailed, err.Error())
 			m.logf("peers: send %s to %q: inbox write failed: %v", msgID, targetAlias, err)
 			writeWireError(w, http.StatusBadGateway, ipeers.APIError{Error: ipeers.ErrSocketWriteFailed, Detail: err.Error()})
 			return
