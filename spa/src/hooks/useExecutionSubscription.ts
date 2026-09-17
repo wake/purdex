@@ -210,6 +210,13 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
                 }
                 return
               }
+              // Nexen's live `data:` is the bare provider payload with no
+              // `{seq, kind, payload, created_at}` wrapper (api/sse.go
+              // writeFrame), so frameToEvent yields created_at 0 here.
+              // Stamp client arrival time so the tool timers (spec §4.2 A1/
+              // A2) run on live turns; history keeps the server's ms. Same
+              // split as Nexen's own console. The reducer stays pure.
+              if (ev.created_at === 0) ev.created_at = Date.now()
               store().applyEvents(hostId, executionId, [ev])
             },
             onStatus: (status, err) => {

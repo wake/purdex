@@ -2,13 +2,16 @@
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
+import StreamCursor from './StreamCursor'
 
 interface Props {
   role: 'user' | 'assistant'
   content: string
+  /** Append a blinking cursor after the markdown body (assistant only). */
+  streaming?: boolean
 }
 
-export default function MessageBubble({ role, content }: Props) {
+export default function MessageBubble({ role, content, streaming }: Props) {
   if (role === 'user') {
     return (
       <div className="flex justify-end">
@@ -29,6 +32,7 @@ export default function MessageBubble({ role, content }: Props) {
           {content}
         </ReactMarkdown>
       </div>
+      {streaming && <StreamCursor />}
     </div>
   )
 }

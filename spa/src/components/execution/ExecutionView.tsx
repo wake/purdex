@@ -10,9 +10,11 @@ import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions } from '../../hooks/useExecutionActions'
+import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
+import { partialHasVisibleContent } from '../../lib/nex/partial'
 
 export interface ExecutionViewProps { hostId: string; executionId: string; isActive: boolean }
 
@@ -30,6 +32,9 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
 
   const isMine = useCallback((p: string | undefined) => !!p && p.endsWith(`/${getNexClientId()}`), [])
   const costUsd = useMemo(() => st.messages.reduce((sum, m) => sum + ((m as { total_cost_usd?: number }).total_cost_usd ?? 0), 0), [st.messages])
+  // Spec §4.2: the 1 s clock only runs while some tool is running.
+  const anyRunning = useMemo(() => Object.values(st.tools).some((tool) => tool.status === 'running'), [st.tools])
+  const now = useElapsedTicker(anyRunning)
 
   if (problem) {
     const text = problem === 'not_found' ? t('execution.not_found')
@@ -57,6 +62,11 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   const errorText = st.sendError
     ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`) : t('execution.error.generic', { message: st.sendError.message }))
     : null
+  // Spec §4.4 R3: dots while the model is silent (own delivered send, or an
+  // observed live turn); the typewriter takes over once tokens flow, and a
+  // running tool's spinner already shows activity, so no dots beside it.
+  const showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued'))
+    && !partialHasVisibleContent(st.partial) && !anyRunning
 
   return (
     <div className="flex flex-col h-full">
@@ -72,8 +82,9 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
           )}
         </div>
       ) : (
-        <ConversationMessages messages={st.messages} keyPrefix={executionId} showThinking={st.pendingSend && st.pendingLocal?.delivery !== 'queued'}
-          showEmptyHint={st.messages.length === 0 && !st.pendingLocal} emptyText={t('execution.empty')} scrollKey={st.pendingLocal ? 1 : 0}>
+        <ConversationMessages messages={st.messages} keyPrefix={executionId} showThinking={showThinking}
+          showEmptyHint={st.messages.length === 0 && !st.pendingLocal} emptyText={t('execution.empty')} scrollKey={st.pendingLocal ? 1 : 0}
+          partial={st.partial} tools={st.tools} now={now}>
           {st.pendingLocal && (
             <div className="flex justify-end">
               <div className="flex items-center gap-2 bg-surface-input rounded-[12px_12px_4px_12px] px-3 py-1.5 text-sm">

@@ -1,6 +1,7 @@
 // spa/src/lib/nex/tool-activity.test.ts — spec §4.2 A1–A4 through applyDurableEvent.
 import { describe, it, expect } from 'vitest'
 import { applyDurableEvent, defaultExecutionState, type ExecutionState } from './event-reducer'
+import { toToolCallActivity } from './tool-activity'
 import type { NexEvent } from './types'
 
 describe('applyDurableEvent: tool activity', () => {
@@ -79,4 +80,32 @@ describe('applyDurableEvent: tool activity', () => {
     expect(ended.tools[TOOL]).toEqual({ name: 'Bash', startedAt: 0, endedAt: 0, status: 'done' })
   })
 
+})
+
+describe('toToolCallActivity: durable ToolActivity → ToolCallBlock activity prop', () => {
+  it('running → { status: running, startedAt, now }', () => {
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: null, status: 'running' }, 13_400))
+      .toEqual({ status: 'running', startedAt: 1_000, now: 13_400 })
+  })
+
+  it('done / error with an endedAt → { status, startedAt, endedAt } (now not carried)', () => {
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: 7_200, status: 'done' }, 99_999))
+      .toEqual({ status: 'done', startedAt: 1_000, endedAt: 7_200 })
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: 7_200, status: 'error' }, 99_999))
+      .toEqual({ status: 'error', startedAt: 1_000, endedAt: 7_200 })
+  })
+
+  it('done / error with endedAt null (malformed) → undefined, so the block renders plain', () => {
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: null, status: 'done' }, 5)).toBeUndefined()
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: null, status: 'error' }, 5)).toBeUndefined()
+  })
+
+  it('aborted → { status: aborted } with no timing', () => {
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: 9_000, status: 'aborted' }, 5)).toEqual({ status: 'aborted' })
+  })
+
+  it('startedAt 0 (unknown) passes through untouched — the renderer decides to hide the badge', () => {
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 0, endedAt: null, status: 'running' }, 5)).toEqual({ status: 'running', startedAt: 0, now: 5 })
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 0, endedAt: 0, status: 'done' }, 5)).toEqual({ status: 'done', startedAt: 0, endedAt: 0 })
+  })
 })

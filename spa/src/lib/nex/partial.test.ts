@@ -1,7 +1,7 @@
 // spa/src/lib/nex/partial.test.ts — spec §4.1 T1–T8 (transient frames) and D1
 // (durable assistant frames finalize the partial through applyDurableEvent).
 import { describe, it, expect } from 'vitest'
-import { applyTransientFrame, finalizedFor } from './partial'
+import { applyTransientFrame, finalizedFor, isPartialBlockVisible, partialHasVisibleContent, partialVersionOf, type PartialAssembly, type PartialBlock } from './partial'
 import { applyDurableEvent, defaultExecutionState, type ExecutionState } from './event-reducer'
 import type { NexEvent } from './types'
 import type { AssistantMessage } from '../stream-ws'
@@ -331,4 +331,105 @@ describe('applyDurableEvent: D1 finalizes the partial', () => {
     expect(s.partial?.messageId).toBe('m1')
   })
 
+})
+
+describe('isPartialBlockVisible (spec §4.4 R1/R3 — one predicate for rendering and state)', () => {
+  const block = (over: Partial<PartialBlock> & { type: PartialBlock['type'] }): PartialBlock =>
+    ({ index: 0, text: '', thinking: '', partialJson: '', ...over })
+
+  it('text / thinking: visible only when the trimmed content is non-empty', () => {
+    expect(isPartialBlockVisible(block({ type: 'text', text: 'a' }))).toBe(true)
+    expect(isPartialBlockVisible(block({ type: 'text', text: '' }))).toBe(false)
+    expect(isPartialBlockVisible(block({ type: 'text', text: ' \n\t ' }))).toBe(false)
+    expect(isPartialBlockVisible(block({ type: 'thinking', thinking: 't' }))).toBe(true)
+    expect(isPartialBlockVisible(block({ type: 'thinking', thinking: '  ' }))).toBe(false)
+  })
+
+  it('tool_use: a started tool is a visible row even with an empty partialJson', () => {
+    expect(isPartialBlockVisible(block({ type: 'tool_use', toolName: 'Bash' }))).toBe(true)
+    expect(isPartialBlockVisible(block({ type: 'tool_use' }))).toBe(true)
+    expect(isPartialBlockVisible(block({ type: 'tool_use', partialJson: '{' }))).toBe(true)
+  })
+
+  it('unknown: never visible, whatever the fields hold', () => {
+    expect(isPartialBlockVisible(block({ type: 'unknown', text: 'x', thinking: 'y', partialJson: 'z' }))).toBe(false)
+  })
+})
+
+describe('partialHasVisibleContent (spec §4.4 R3)', () => {
+  const assembly = (blocks: PartialAssembly['blocks']): PartialAssembly => ({ messageId: 'm', finalized: 0, blocks })
+
+  it('null partial and an assembly with no blocks → false', () => {
+    expect(partialHasVisibleContent(null)).toBe(false)
+    expect(partialHasVisibleContent(assembly({}))).toBe(false)
+  })
+
+  it('empty text / thinking and unknown blocks → false', () => {
+    const p = assembly({
+      0: { index: 0, type: 'text', text: '', thinking: '', partialJson: '' },
+      1: { index: 1, type: 'thinking', text: '', thinking: '', partialJson: '' },
+      2: { index: 2, type: 'unknown', text: 'x', thinking: 'y', partialJson: 'z' },
+    })
+    expect(partialHasVisibleContent(p)).toBe(false)
+  })
+
+  it('a whitespace-only text block → false (renders no bubble, so the dots must stay)', () => {
+    expect(partialHasVisibleContent(assembly({ 0: { index: 0, type: 'text', text: ' \n ', thinking: '', partialJson: '' } }))).toBe(false)
+  })
+
+  it('a started tool_use with empty partialJson → true (it renders a spinner row)', () => {
+    expect(partialHasVisibleContent(assembly({ 0: { index: 0, type: 'tool_use', text: '', thinking: '', partialJson: '', toolName: 'Bash' } }))).toBe(true)
+  })
+
+  it('any block with non-empty text, thinking or partialJson → true', () => {
+    const empty = { index: 0, type: 'text' as const, text: '', thinking: '', partialJson: '' }
+    expect(partialHasVisibleContent(assembly({ 0: empty, 1: { ...empty, index: 1, text: 'a' } }))).toBe(true)
+    expect(partialHasVisibleContent(assembly({ 0: empty, 1: { ...empty, index: 1, type: 'thinking', thinking: 't' } }))).toBe(true)
+    expect(partialHasVisibleContent(assembly({ 0: empty, 1: { ...empty, index: 1, type: 'tool_use', partialJson: '{' } }))).toBe(true)
+  })
+})
+
+describe('partialVersionOf (spec §4.4 R4)', () => {
+  const pb = (index: number, over: Partial<PartialBlock> & { type: PartialBlock['type'] }): PartialBlock =>
+    ({ index, text: '', thinking: '', partialJson: '', ...over })
+  const assembly = (...blocks: PartialBlock[]): PartialAssembly =>
+    ({ messageId: 'm', finalized: 0, blocks: Object.fromEntries(blocks.map((b) => [b.index, b])) })
+
+  it('same value for null / undefined, and equal for equal content regardless of object identity', () => {
+    expect(partialVersionOf(null)).toBe(partialVersionOf(undefined))
+    expect(partialVersionOf(assembly(pb(0, { type: 'text', text: 'hello' })))).toBe(partialVersionOf(assembly(pb(0, { type: 'text', text: 'hello' }))))
+    expect(partialVersionOf(assembly())).toBe(partialVersionOf(assembly()))
+    expect(partialVersionOf(assembly())).not.toBe(partialVersionOf(null))
+  })
+
+  it('changes when text grows', () => {
+    expect(partialVersionOf(assembly(pb(0, { type: 'text', text: 'he' })))).not.toBe(partialVersionOf(assembly(pb(0, { type: 'text', text: 'hello' }))))
+  })
+
+  it('changes when a tool_use block with empty input is added (the row appears without any delta)', () => {
+    const before = assembly(pb(0, { type: 'text', text: 'hi' }))
+    const after = assembly(pb(0, { type: 'text', text: 'hi' }), pb(1, { type: 'tool_use', toolName: 'Bash' }))
+    expect(partialVersionOf(after)).not.toBe(partialVersionOf(before))
+  })
+
+  it('changes when a block is finalized away (fewer blocks, higher finalized)', () => {
+    const streaming = assembly(pb(0, { type: 'text', text: 'hi' }))
+    const finalized: PartialAssembly = { messageId: 'm', finalized: 1, blocks: {} }
+    expect(partialVersionOf(finalized)).not.toBe(partialVersionOf(streaming))
+  })
+
+  it('changes when the message id changes with identical blocks', () => {
+    const a = assembly(pb(0, { type: 'text', text: 'hi' }))
+    const b: PartialAssembly = { ...a, messageId: 'other' }
+    expect(partialVersionOf(a)).not.toBe(partialVersionOf(b))
+  })
+
+  it('changes when a block changes type or tool name with the same lengths', () => {
+    const text = assembly(pb(0, { type: 'text', text: 'ab' }))
+    const thinking = assembly(pb(0, { type: 'thinking', thinking: 'ab' }))
+    expect(partialVersionOf(text)).not.toBe(partialVersionOf(thinking))
+    const bash = assembly(pb(0, { type: 'tool_use', toolName: 'Bash' }))
+    const read = assembly(pb(0, { type: 'tool_use', toolName: 'Read' }))
+    expect(partialVersionOf(bash)).not.toBe(partialVersionOf(read))
+  })
 })

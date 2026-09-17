@@ -1,6 +1,6 @@
 # Spec — P-B2: exec mode live streaming (typewriter + tool activity)
 
-- Status: v1.1 (2026-09-18) — codex spec review `task-mu603x78-fe7zvg` applied (§10)
+- Status: v1.2 (2026-09-18) — codex spec review `task-mu603x78-fe7zvg` applied (§10); acceptance run §6.1 fixes applied (F6/A4/R3)
 - Predecessor: `2026-09-15-pb-execution-pane-spec.md` (P-B, shipped
   alpha.350/351/353). Its §4.2.3 transport and §4.2.4 reducer rules stay
   binding; this spec only adds what P-B explicitly deferred to "P-B2".
@@ -102,7 +102,10 @@ Nexen v0.11.2 (`~/tmp/go/pkg/mod/lab.protype.tw/wake/nexen@v0.11.2`):
   and every turn ending (`ClearAssembly` on interrupt/error/orphan) clear the
   assembly server-side.
 - F6 `created_at` on `NexEvent` is unix **milliseconds**
-  (`store/execution.go:155-157`, `store/event.go:19`).
+  (`store/execution.go:155-157`, `store/event.go:19`) — on the REST history
+  page only; live SSE `data:` is the bare provider payload with no wrapper
+  (`api/sse.go:303-315`), so `frameToEvent` yields `created_at: 0` for live
+  durable frames.
 - F7 Restart reconcile (`execution/reconcile.go`): a turn still `running`
   with no live handle → `execution.turn_orphaned`, execution settles to
   `idle`; never respawns.
@@ -261,9 +264,12 @@ export interface ToolActivity {
 - A3 On D3 events: every `tools[*]` still `running` → `endedAt =
   ev.created_at`, `status = 'aborted'`.
 - A4 `created_at` of 0 (the `frameToEvent` fallback for a frame without a
-  wrapper) → `startedAt = Date.now()` is **not** used in the reducer (pure);
-  instead `startedAt = 0` and the renderer treats `0` as "unknown, show no
-  timer". Nexen always sends the wrapper, so this is a guard, not a path.
+  wrapper, i.e. every live durable frame per F6): the hook stamps a live
+  durable frame whose `created_at` is 0 with client arrival time
+  (`Date.now()`) before it reaches the reducer, mirroring Nexen's console
+  (history = server ms, live = client ms); the reducer stays pure and a
+  literal 0 that somehow survives still means "no timer" (`startedAt = 0`,
+  renderer shows no badge).
 
 Elapsed time is computed in the renderer as `max(0, now - startedAt)` with
 `now` from a 1 s ticker that runs only while at least one tool is
@@ -333,10 +339,12 @@ now?: number                 // ticker value for running tools
   `aborted` → muted "aborted". Missing entry (older history, subagent) →
   today's rendering.
 - R3 `ThinkingIndicator` visibility from `ExecutionView`:
-  `showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued')) && !partialHasVisibleContent`
+  `showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued')) && !partialHasVisibleContent && !anyRunning`
   where `partialHasVisibleContent` is any block with non-empty text /
-  thinking / partialJson. Observers therefore see the dots while the model
-  is thinking and the typewriter once tokens flow.
+  thinking / partialJson and `anyRunning` is any `tools[*].status ===
+  'running'` — a running tool's spinner already shows activity, so the dots
+  would only add noise beside it. Observers therefore see the dots while
+  the model is thinking and the typewriter once tokens flow.
 - R4 Auto-scroll: `ConversationMessages`'s scroll effect also depends on a
   cheap `partialVersion` counter (length sum of partial fields) so the view
   follows the typewriter without depending on the whole object identity.
@@ -423,6 +431,31 @@ Two PRs on this worktree branch, second based on the first's merge.
 
 Each turn costs real Claude usage; keep prompts small.
 
+### 6.1 Acceptance run 2026-09-18 (mlab, branch `da434a03`, worktree dev server :5175 + playwright cli, daemon alpha.378)
+
+Execution `06GB2ZFDHNCW2ZWQ33EG9D1ZXM` (cwd `~/Workspace/wake/nex-acceptance-scratch`, profile `standard`), archived afterwards. DOM probed every ~0.5 s for `stream-cursor` / `assistant-text` / `partial-group` / `thinking-indicator` / `tool-icon-spinner` / `tool-elapsed` / `tool-duration` / `tool-aborted` counts; screenshots at each sample.
+
+1. **PASS** — typewriter. Dots → `partial-group` with one `stream-cursor`, last assistant text grew 160 → 714 → 1204 chars over 3 s, then cursor and group gone, `assistant-text` count went 1 → 2 (durable replaced the partial, no duplicate, no flicker). Cosmetic: the cursor renders on its own line under the paragraph because it follows the markdown `<p>` block rather than sitting inline after the last glyph.
+2. **FAIL (timing badge)** — tool turn `sleep 8 && echo ok`. `tool-icon-spinner` shown for the whole 8 s and the result block followed, but `tool-elapsed` never appeared and no `tool-duration` after completion. Root cause: Nexen's SSE `data:` is the bare provider payload, not the `{seq, kind, payload, created_at}` wrapper (`api/sse.go:309` `writeFrame`), so `frameToEvent` yields `created_at: 0` for every live durable frame → `ToolActivity.startedAt = 0` → A4 hides the timer. The REST history page does carry `created_at`: the same tool showed `8.8s` when a second tab loaded it from history (step 3), proving the badge path itself works. Fix belongs in the hook (stamp `created_at = Date.now()` on live durable frames whose wrapper lacks it, as Nexen's console does — `detail.mjs:708-714`); spec F6/A1 must say "server time from history, arrival time from live".
+   Also observed: while the tool runs the thinking dots stay on beside the spinner (R3 formula: `turnLive` and no visible partial). Spec-compliant but noisy; consider `&& !anyRunning`.
+3. **PASS** — observer tab (no lease) opened during a `sleep 6` turn saw dots, then the running-tool spinner, then the result; history-loaded tool showed its `8.8s` duration badge.
+4. **PASS** — 300-word text turn interrupted mid-paragraph via the header button: `stream-cursor` 1 → 0, `partial-group` 1 → 0, dots 0, input re-enabled; the truncated assistant message that claude emits on interrupt landed as durable history; `pdx nex show` → `last_turn_reason: interrupted`.
+5. **PASS (aborted not reachable)** — `sleep 14` turn, `pdx stop` + `pdx start` (healthy in 1 s). The pane reconnected, spinner → wrench, dots off, input re-enabled, no ghost partial. Nexen's graceful shutdown sends `execution.interrupt_requested {source: daemon_shutdown}`, claude returns a rejected `tool_result` and the turn ends `execution.terminal {reason: interrupted}` — so the tool ends via A2 (`done`/`error`), not A3 (`aborted`). `turn_orphaned` only happens on a hard kill; not exercised.
+6. **Not exercised** — no Stream-mode session in the fresh browser profile; guarded by `ConversationView.snapshot.test.tsx` and the default-prop snapshots.
+
+Environment notes: CC's guard blocks `sleep 25` ("Blocked: sleep 25…"), and the `standard` profile denies `python3`, so long tools must be `sleep ≤ ~14`. Browser console showed only the `ERR_CONNECTION_REFUSED` burst from the deliberate restart.
+
+### 6.2 Re-verification 2026-09-18 (after 4f6c3bf5)
+
+Same setup (worktree :5175, playwright session `pb2-exec-stream`, host `a4rl2m` seeded with the daemon token via `localstorage-set`, daemon alpha.378). Execution `06GB35T4DSMDV9DVX6G3VAPH44`, archived afterwards. Two tool turns: the delegate brief (pane opened right after delegate) and a second `sleep 8 && echo ok2` sent from the pane's own input so every frame arrived live over SSE.
+
+- (a) **PASS** — `tool-icon-spinner` 1 and `tool-elapsed` ticking on the live turn: `0.0s` at t+1 s, `3.0s` at t+3 s, `5.0s` at t+5 s (DOM probed every 2 s).
+- (b) **PASS** — `thinking-indicator` count 0 for every sample while the spinner was up; dots returned for one sample (t+7 s) after the `tool_result` landed and before the final text — exactly the R3 `!anyRunning` behaviour.
+- (c) **PASS** — both tools ended with a `tool-duration` badge of `8.5s`, each followed by its `tool-result-block` (`ok` / `ok2`) and the reply paragraph; `assistant-text` 2 → 3, no duplicate.
+- (d) **PASS** — console: 3 messages, 0 errors, 0 warnings (only the React DevTools info line).
+
+The first delegate turn's badge appeared even though the pane loaded after the turn started (history carries `created_at`); the second turn proves the live path (`created_at` stamped at arrival, F6/A4 v1.2).
+
 ## 7. Risks
 
 - **Render cost of markdown per delta**: mitigated by rAF coalescing (§4.3)
@@ -462,3 +495,5 @@ durable frames, never from snapshot indices.
   non-goal conflict → A1/A2 skip non-null `parent_tool_use_id`; (6) P2
   "Stream mode untouched" too broad → G5 reworded + default-prop snapshot
   tests; (7) P3 preserved fields listed (§4.1/§4.5).
+- v1.2 — acceptance run §6.1: live frames carry no `created_at` → hook
+  stamps arrival time (F6/A4); dots suppressed while a tool runs (R3).

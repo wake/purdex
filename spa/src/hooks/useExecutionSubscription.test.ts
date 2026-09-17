@@ -105,6 +105,56 @@ describe('useExecutionSubscription', () => {
     expect(st.messages[2].type).toBe('assistant')
   })
 
+  // Spec §6.1 / A4: Nexen's live SSE `data:` is the bare provider payload
+  // (no `{seq, kind, payload, created_at}` wrapper), so frameToEvent yields
+  // created_at 0 for every live durable frame. The hook stamps client
+  // arrival time so the tool timers run on live turns (history keeps the
+  // server's created_at).
+  it('stamps a bare live durable frame (no wrapper, created_at 0) with Date.now() at arrival', async () => {
+    const applyEvents = vi.spyOn(useExecutionStore.getState(), 'applyEvents')
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    vi.setSystemTime(1_700_000_000_000)
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame({ id: '3', event: 'assistant', data: '{"type":"assistant"}' })
+    })
+    const live = applyEvents.mock.calls.at(-1)![2]
+    expect(live).toHaveLength(1)
+    expect(live[0]).toMatchObject({ seq: 3, kind: 'assistant', created_at: 1_700_000_000_000 })
+    // History (applied before SSE opened) is left exactly as the server sent it.
+    expect(applyEvents.mock.calls[0][2].map((e) => e.created_at)).toEqual([0, 0])
+  })
+
+  it('keeps the wrapper created_at when a live durable frame carries one', async () => {
+    const applyEvents = vi.spyOn(useExecutionStore.getState(), 'applyEvents')
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    vi.setSystemTime(1_700_000_000_000)
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame({ id: '3', event: 'assistant', data: JSON.stringify({ seq: 3, kind: 'assistant', payload: { type: 'assistant' }, created_at: 123 }) })
+    })
+    const live = applyEvents.mock.calls.at(-1)![2]
+    expect(live[0]).toMatchObject({ seq: 3, kind: 'assistant', created_at: 123 })
+  })
+
+  it('bare live tool_use then tool_result 5 s later → tools[id] started/ended at the two arrival times, status done', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    const toolUse = { type: 'assistant', parent_tool_use_id: null, message: { id: 'm1', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'sleep 5' } }], stop_reason: null } }
+    const toolResult = { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'ok', is_error: false }], stop_reason: null } }
+    vi.setSystemTime(50_000)
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame({ id: '3', event: 'assistant', data: JSON.stringify(toolUse) })
+    })
+    expect(useExecutionStore.getState().executions[KEY].tools.tu1).toMatchObject({ name: 'Bash', startedAt: 50_000, endedAt: null, status: 'running' })
+    vi.setSystemTime(55_000)
+    act(() => { sseOpts!.onFrame({ id: '4', event: 'user', data: JSON.stringify(toolResult) }) })
+    expect(useExecutionStore.getState().executions[KEY].tools.tu1).toEqual({ name: 'Bash', startedAt: 50_000, endedAt: 55_000, status: 'done' })
+  })
+
   it('reconnecting drops the queued transient frames', async () => {
     renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })

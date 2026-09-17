@@ -33,6 +33,18 @@ button:disabled {
   animation: breathe 2s ease-in-out infinite;
 }
 
+/* Streaming cursor for partial assistant text / thinking blocks (P-B2.2 R1).
+   Colour follows the theme token; steps(2, start) gives a hard on/off blink. */
+.stream-cursor {
+  display: inline-block;
+  margin-left: 0.15em;
+  color: var(--text-secondary);
+  animation: stream-cursor-blink 1s steps(2, start) infinite;
+}
+@keyframes stream-cursor-blink {
+  to { visibility: hidden; }
+}
+
 /* === Markdown Live Mode (Tiptap) — Outline-style reading typography ===
    Scoped strictly to `.tiptap-editor` (only TiptapEditor uses this class;
    MessageBubble uses generic prose and is unaffected). Sizes / weights /
