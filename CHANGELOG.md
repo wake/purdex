@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.0.0-alpha.368] - 2026-09-17
+
+### Refactor: 拔掉 cswap 殘留，nexen 升到 v0.11.0（#1098）
+
+nexen v0.11.0 把外部切帳工具 **cswap 整個移除**。它本來就壞了——兩個帳號的 usage 都是 null、refresh token 皆 `invalid_grant`、keychain 讀取累積失敗 1279 次——所以沒有損失任何還能用的功能。purdex 這邊的 `cswap_bin` 從此是死碼，Go config、`module/nex` 的映射與 `effective` 輸出、SPA 的表單欄位／型別／en+zh-TW i18n 一併拔除。
+
+`go.mod` 的 `lab.protype.tw/wake/nexen` 從 pseudo-version 升到 `v0.11.0`。兩件事合成一個 commit：只刪欄位不升 pin 的話，舊 pin 的 nexen `Validate` 會去 PATH 找 `cswap`，測試會紅。
+
+#### 🔴 部署必須刪 nex.db
+
+nexen 的 schema version 從 3 跳到 5（`turns` 新增 `account_uuid` / `credential_source`），alpha 期沒有 migration，`store.Open` 直接拒絕舊 DB：
+
+```
+pdx stop
+rm ~/.config/pdx/nex/nex.db*
+pdx start
+```
+
+不刪不會讓 daemon 掛掉——`Init` 對 assemble 失敗是 soft-fail，nex 模組改吐 503 並在 Status 顯示 `store: … has schema version 3, this build expects 5`，terminal daemon 照常運作。
+
+#### 順帶補上：憑證來源與歧義警告（adversarial review 抓到）
+
+v0.11.0 讓 host 自己的 Claude Code 登入**就是** turn 所跑的帳號，而那個登入是從**兩個** backend 解析出來的（`~/.claude/.credentials.json` 與 macOS keychain）——CLI 會寫其中一個、刪掉另一個，從不說用了哪個。nexen 相對 CLI 的價值就是它**會說**：`GET /v1/host` 新增 `account_id` / `credential_source` / `credential_warning`，最後那個在兩個 backend 拿著**不同帳號**、挑選是任意的時候才非空。
+
+升 pin 卻不讀這三個欄位，等於使用者可能對著擲硬幣選出來的帳號跑 turn，畫面上一個字都沒有。Engine 卡片現在把 warning 當橫幅顯示在帳號列上方，來源（含 account id）另開一列。三個欄位都是 optional：沒有 host 登入的 daemon、以及所有比 v0.11.0 舊的 daemon 都不會回報，那些情況整組列不渲染而不是渲染成空的。
+
+#### 一個留著沒補的洞（#1099）
+
+`mount_test` 的新 fixture 在測試自己的 `$HOME` 底下寫假憑證讓 turn 通過 admission。但 hostcred 的 resolver 是兩條路：**一個** backend 可用時讀 `~/.claude.json`（~1ms，純本地），**兩個**都可用時把**每一把 token** 都送去 `GET /api/oauth/profile`。所以在 keychain 裡確實有 `Claude Code-credentials` 的機器上，這些測試會帶著假 token 和使用者的真 token 去打 Anthropic。
+
+mlab 現在踩不到（這台的憑證在檔案不在 keychain），但那是環境巧合不是設計保證。真正的修法是把 nexen 的 `credential_source` 旋鈕接進 `[nex]` 讓 fixture 釘死 `file`——那是新的設定介面，不適合長在一個以「拔設定欄位」為題的 PR 裡，開成 #1099。
+
+#### 相容性
+
+既有 `config.toml` 殘留的 `cswap_bin` 不會出事：`toml.Unmarshal` 忽略 struct 沒宣告的 key，下次寫入時自然消失。舊版 SPA 對新 daemon PUT 帶 `cswap_bin` 同理。
+
+
 ## [1.0.0-alpha.367] - 2026-09-17
 
 ### Feat: Peer Address v3 —— 一個地址，加上一個只是標籤的標籤（#1091）
