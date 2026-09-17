@@ -282,6 +282,45 @@ A new error code is a wire-contract addition, so the plan must confirm the CLI r
 code from an older daemon without crashing — the same mixed-version check `ErrCodeNameMismatch`
 needed in v4.
 
+### 4.6 What the admin token can now do, stated rather than left to be discovered
+
+`origin_inbox` is a **parameter of the request**, not something the daemon derives. `findOrigin`
+(`send.go:141`) checks only that *some* live, deliverable local cc row carries that inbox path — never
+that it is the caller's own. There is nothing to check it against: the caller cannot prove which
+session it is, and HTTP carries no session identity.
+
+Under L4 that path becomes the frame's `Frame.From` — the address the receiver replies to. So:
+
+> **A holder of this host's admin token can send a message that any local session will see as coming
+> from any other local session, and the victim's reply goes to the impersonated session's socket,
+> without pdx observing it.**
+
+**This is not merely a restatement of "same-user processes can do anything".** That argument does
+hold for one principal and was the first reading of this finding: `/tmp/cc-socks` is `0700` and its
+sockets `0600`, so a process running as this user can already write frames to any of them directly,
+and pdx refusing to help would protect nothing.
+
+But the daemon binds `cfg.Bind` (`cmd/pdx/main.go:245`), which on this deployment is the tailnet
+address, not loopback. **A caller holding the admin token need not be a local same-user process**, and
+for such a caller the `0600` sockets are a real barrier that this path now goes around. Before L1
+there was no way to place a frame in a local session's inbox *and choose its reply address*; there is
+now. The honest scope is "what a leaked admin token can do", and that is strictly larger than it was.
+
+**Accepted, not mitigated.** `AllowBypass` has no bearing — the admin token is the boundary, and it
+is the same boundary that already permits `pdx msg send` to any peer, `pdx peers host set-token`, and
+the rest of the admin surface. Three further options exist and none is taken here:
+
+- route local delivery through a pdx-owned helper so the reply address is never a caller-supplied
+  socket (this is §4.2's deferred local helper, reached from the security side rather than the audit
+  side — the same change answers both);
+- bind `origin_inbox` to a proof the caller holds that session (a nonce read from its own socket),
+  which is a new mechanism, not a fix;
+- narrow the exposure instead of the behaviour: serve the admin routes on loopback and leave only
+  `/api/peers/deliver`, which authenticates a *host* principal, on the tailnet.
+
+Tracked rather than built, because the choice depends on a threat model — whether a tailnet-reachable
+admin token is in scope — that this spec cannot settle on its own.
+
 ## 5. Phase B — the ambiguity refusal must carry refs
 
 ### 5.1 The defect
