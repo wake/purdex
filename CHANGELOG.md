@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.379] - 2026-09-18
+
+### Feature: exec pane 打字機 + 工具執行中狀態（P-B2.2，#1132）
+
+alpha.377 把 transient 幀接進 store，這版把它畫出來。exec pane 現在：assistant 文字逐字出現、尾端一個閃爍游標，durable 幀落地時整段取代、不重複；`tool_use` 送出後 wrench 變 spinner、旁邊一個秒數在跳，`tool_result` 回來變成 `8.5s` 這種 duration badge；turn 被 interrupt／daemon 重啟時工具標 `aborted`；觀察者分頁（沒有 lease 的那個）也看得到這一切。
+
+#### 真機驗收抓到一個測試抓不到的 bug
+
+spec §6 在 mlab 用 worktree dev server + playwright 跑：步驟 1／3／4／5 一次過，**步驟 2 的計時 badge 在 live turn 上永遠不出現**，但同一個 execution 從第二個分頁用 REST history 載入就有 `8.8s`。根因：Nexen 的 live SSE `data:` 是**裸 provider payload**，沒有 `{seq, kind, payload, created_at}` wrapper（`api/sse.go:303-315`），`frameToEvent` 拿到 `created_at: 0`，reducer 照 A4 規則不給計時。spec F6 是從 REST 事件形狀推到 SSE 的——「先量再寫」的教訓又一次。修法跟 Nexen console 一樣：hook 對缺 wrapper 的 live durable 幀蓋 client 到達時間，history 保留 server 毫秒，reducer 維持 pure。復驗 elapsed `0.0s → 3.0s → 5.0s`、duration `8.5s`、console 零錯誤。
+
+順帶：工具跑的時候「思考中」點點不該跟 spinner 並存，`showThinking` 加 `!anyRunning`。
+
+#### 四份 codex + fix wave
+
+R1 與攻擊方同時抓到「`tool_use` 剛 start、還沒 `input_json_delta` 時有畫面但不算可見」——點點跟 spinner 並存、而且新出現的那列不觸發捲動；攻擊方另抓到純空白 delta 會渲染一個空泡泡把點點壓掉。修法是**一個** predicate `isPartialBlockVisible`（started tool 算可見、text/thinking 要 `trim()` 非空），渲染與 R3 判斷都用它；`partialVersionOf` 改成結構字串（只嵌長度不嵌內容）。體質方要求 `ToolCallBlock` 的五個鬆散 prop 收成 discriminated `activity` union（不可能狀態不可表示）、游標抽 `StreamCursor`、活動查表抽 `ToolUseBlock`。`ConversationMessages` 的大拆與測試檔拆分開 #1133／#1134，游標掉到段落下一行 #1139。R3 scoped：無 P1/P2。
+
+#### Stream 模式零變動
+
+三個共用 renderer 的 default-prop snapshot 在改動前先鎖（`26d16cc9`），整個 PR 逐 commit 位元組相同；`ConversationView` snapshot 未動。
+
+#### 測試
+
+6096 → 6188；spec §6.1／§6.2 真機紀錄在 spec 檔內。純 SPA，daemon 免動。
+
 ## [1.0.0-alpha.378] - 2026-09-18
 
 ### Feature: peer pairing D1 — 驗證單一 peer entry、改名、CLI `host verify` / `host rename`（#1131）
