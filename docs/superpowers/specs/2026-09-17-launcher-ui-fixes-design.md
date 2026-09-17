@@ -249,3 +249,30 @@ them would cost more review than it saves.
      background.
   6. Launcher → two cards per row at the narrowest column; hovering a project
      shows name · slug · path, hovering an icon shows the command name.
+
+---
+
+## Addendum — the residual TOCTOU on `cwd` (codex adversarial review)
+
+`resolveCwd` stats the directory, then `handleCreate` calls tmux a moment
+later. If the directory disappears in that window, tmux falls back to `$HOME`
+again and the fix appears to have failed.
+
+Codex recommended comparing the created session's directory against the request
+and killing the session on a mismatch. **Rejected.** tmux's `session_path` comes
+from `getcwd()`, which canonicalises symlinks and filesystem case — on macOS
+`/tmp` resolves to `/private/tmp`, and a case-insensitive volume rewrites the
+case of every component. A string comparison therefore produces false
+mismatches, and destroying a session on a false positive is a much worse
+failure than the race it guards against.
+
+What ships instead: `handleCreate` records the directory **tmux actually
+used** (`#{session_path}`, already returned by `ListSessions`) in both
+`SessionMeta.Cwd` and the create response, rather than the directory that was
+requested, and logs a warning when the two differ. The daemon can then never
+report a session as being somewhere it is not — which is the diagnosable half
+of the problem — while the list and get paths already sourced `Cwd` from tmux
+(`service.go:60,102`), so the create response now agrees with them.
+
+The remaining exposure is a directory deleted inside a millisecond-wide window,
+for which no correct outcome exists anyway.
