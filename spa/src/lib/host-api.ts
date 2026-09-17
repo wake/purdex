@@ -99,11 +99,10 @@ export interface PeerRecordWire {
    * cc agent. This — not `label_source` — is what tells an agent row apart from
    * a row with no agent.
    */
-  canonical: string
+  ref: string
   label: string               // '' until the conversation names itself
   label_source: string        // user | ''
   label_rev: number
-  suffix: string
   session_code: string
   session_name: string
   tmux_instance: string

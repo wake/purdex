@@ -65,7 +65,7 @@ function setupStores() {
 
 const PEER_ROW: PeerRow = {
   address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
-  canonical: '_3k9f2mq4',
+  ref: '_3k9f2mq4',
   label: 'ai-chat4',
   labelSource: 'user',
   deliverable: true,

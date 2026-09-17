@@ -220,7 +220,7 @@ describe('RenamePopover peer section', () => {
 
   const ROW: PeerRow = {
     address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
-    canonical: '_3k9f2mq4',
+    ref: '_3k9f2mq4',
     label: 'ai-chat4',
     labelSource: 'user',
     deliverable: true,
@@ -470,11 +470,11 @@ describe('RenamePopover peer section', () => {
     // An empty `labelSource` no longer means "no cc agent" — a live
     // conversation that has not named itself reports `''` too (spec §8.1). The
     // address row keys off the address, which is empty only when there is no
-    // canonical, so both halves are asserted here: no canonical hides it, an
+    // ref, so both halves are asserted here: no ref hides it, an
     // unnamed live conversation does not.
-    it('hides the address row only when the row has no canonical, not when it merely has no label', () => {
+    it('hides the address row only when the row has no ref, not when it merely has no label', () => {
       seedSession(H1, 'abc123')
-      seedHost(H1, 'abc123', { ...ROW, canonical: '', label: '', address: '', labelSource: '' })
+      seedHost(H1, 'abc123', { ...ROW, ref: '', label: '', address: '', labelSource: '' })
       const { unmount } = render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
       expect(screen.queryByTestId('peer-address-p1')).toBeNull()
       expect(screen.getByTestId('peer-agent-p1').textContent).toContain('ai-chat-story-3a')

@@ -16,11 +16,10 @@ function row(over: Partial<PeerRecordWire> = {}): PeerRecordWire {
     host_id: 'mini-lab:278cbm',
     address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
     row_kind: 'session',
-    canonical: '_3k9f2mq4',
+    ref: '_3k9f2mq4',
     label: 'ai-chat4',
     label_source: 'user',
     label_rev: 0,
-    suffix: 'ai-chat4-ai-chat-story-3a',
     session_code: 'z141yl',
     session_name: 'ai-chat4',
     tmux_instance: '6901:1789205013',
@@ -79,7 +78,7 @@ describe('indexing', () => {
     expect(usePeerStore.getState().byHost[H].rows).toEqual({
       z141yl: {
         address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
-        canonical: '_3k9f2mq4',
+        ref: '_3k9f2mq4',
         label: 'ai-chat4',
         labelSource: 'user',
         deliverable: true,
@@ -130,28 +129,28 @@ describe('indexing', () => {
 
   // `label_source: ''` is not what makes this the no-agent case — a live
   // conversation that has not named itself reports `''` too (spec §8.1). What
-  // says "no agent" is an empty `canonical`, so this row carries one and the
+  // says "no agent" is an empty `ref`, so this row carries one and the
   // test asserts it: without that line it would no longer pin what it was
   // written to pin.
-  it('keeps a row with no agent (agent: null, canonical: \'\')', async () => {
+  it('keeps a row with no agent (agent: null, ref: \'\')', async () => {
     vi.mocked(api.fetchPeers).mockResolvedValue(envelope([
-      row({ session_code: 'bare01', canonical: '', label: '', label_source: '', suffix: '', agent: null, deliverable: false, reason: 'no_agent' }),
+      row({ session_code: 'bare01', ref: '', label: '', label_source: '', agent: null, deliverable: false, reason: 'no_agent' }),
     ]))
     await usePeerStore.getState().refresh(H)
     expect(usePeerStore.getState().byHost[H].rows.bare01.agent).toBeNull()
-    expect(usePeerStore.getState().byHost[H].rows.bare01.canonical).toBe('')
+    expect(usePeerStore.getState().byHost[H].rows.bare01.ref).toBe('')
   })
 
   // The other reading of `label_source: ''`: a live conversation with no label
-  // of its own. It keeps its canonical and its address, so nothing may treat an
+  // of its own. It keeps its ref and its address, so nothing may treat an
   // empty label source as "no agent".
-  it("keeps the canonical of a live row that has not named itself", async () => {
+  it("keeps the ref of a live row that has not named itself", async () => {
     vi.mocked(api.fetchPeers).mockResolvedValue(envelope([
       row({ session_code: 'live01', label: '', label_source: '' }),
     ]))
     await usePeerStore.getState().refresh(H)
     const r = usePeerStore.getState().byHost[H].rows.live01
-    expect(r.canonical).toBe('_3k9f2mq4')
+    expect(r.ref).toBe('_3k9f2mq4')
     expect(r.agent).not.toBeNull()
   })
 })

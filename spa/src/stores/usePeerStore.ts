@@ -29,9 +29,9 @@ export interface PeerRow {
    *
    * This is the discriminator, not `labelSource`. `labelSource === ''` has two
    * causes — a live conversation that has not named itself (the common one) and
-   * a row with no cc agent — and only `canonical`/`agent` tells them apart.
+   * a row with no cc agent — and only `ref`/`agent` tells them apart.
    */
-  canonical: string
+  ref: string
   /** The name the conversation calls itself, `''` until it sets one. Display
    *  only: it addresses nothing, and it is never the value copied. */
   label: string
@@ -99,7 +99,7 @@ export function indexPeerRows(peers: PeerRecordWire[]): Record<string, PeerRow> 
     if (p.session_code === '') continue
     rows[p.session_code] = {
       address: p.address,
-      canonical: p.canonical ?? '',
+      ref: p.ref ?? '',
       label: p.label,
       labelSource: p.label_source,
       deliverable: p.deliverable,
