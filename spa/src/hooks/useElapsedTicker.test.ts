@@ -48,14 +48,25 @@ describe('useElapsedTicker', () => {
     expect(result.current).toBe(T0 + 2_000)
   })
 
-  it('toggling active → true again resumes ticking from a fresh sample', () => {
+  it('toggling active → true resamples immediately, before the first tick', () => {
     const { result, rerender } = renderHook(({ active }) => useElapsedTicker(active), {
       initialProps: { active: false },
     })
     act(() => { vi.advanceTimersByTime(5_000) })
     expect(result.current).toBe(T0)
-    rerender({ active: true })
-    act(() => { vi.advanceTimersByTime(1_000) })
+    act(() => { rerender({ active: true }) })
+    expect(result.current).toBe(T0 + 5_000)
+  })
+
+  it('toggling active → true again keeps ticking every 1000 ms from that fresh sample', () => {
+    const { result, rerender } = renderHook(({ active }) => useElapsedTicker(active), {
+      initialProps: { active: false },
+    })
+    act(() => { vi.advanceTimersByTime(5_000) })
+    act(() => { rerender({ active: true }) })
+    act(() => { vi.advanceTimersByTime(999) })
+    expect(result.current).toBe(T0 + 5_000)
+    act(() => { vi.advanceTimersByTime(1) })
     expect(result.current).toBe(T0 + 6_000)
   })
 
