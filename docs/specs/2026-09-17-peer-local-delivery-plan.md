@@ -56,6 +56,28 @@ Referred to by id everywhere below, so "re-run the mutations" means something ch
 | write-result mapping | `internal/module/peers/deliver.go:350` | `nil` → `delivered`; `ErrPostWriteTimeout` → `delivery_uncertain`; else `socket_write_failed` |
 | `BuildFrame` | `internal/peers/ccuds/frame.go:36` | `BuildFrame(msgID, fromSock, w)` — arg 2 becomes top-level `Frame.From`; `w.From` is separate, inside the content |
 
+### Scaffolding A2 built, and three traps it found (read before A3)
+
+A2 is committed (`dba63005`). It added test scaffolding and hit three things this plan had
+under-specified. A3, A4 and B2 all touch the same harness, so they are recorded here rather than
+rediscovered:
+
+- **`sendEnv.addLocalPeer(name, sessionID string, pid int) *localPeer`** (`send_test.go:660`) — a
+  real Unix listener plus a registry entry. The harness previously had **exactly one** local cc row
+  (`targetSock`), which `sendEnv` uses as the *origin*, so any test needing a second local session
+  must use this. Reuse it; do not build a parallel fixture.
+- **`procStart` must be `targetProcStart`.** `deliverLiveness` reports `fixture76973ProcStart` for
+  every pid below 900000, so any other value makes the entry look dead and the row never appears at
+  all — the test then fails for a reason that has nothing to do with what it is testing.
+- **`Partial` alone does not make every address form `not_ready`.** `Resolve` consults
+  `snap.Partial` only *below* tiers 1–3, so a partial-inventory test must use an address that
+  reaches the tmux fallback (A2 uses a bare tmux session name whose owner lookup errors). A test
+  written against a **name-tier** address would pass while proving nothing — the same trap this plan
+  warns about, found in the plan's own test list.
+- **A successful local send inserts one `DirOut` audit row**, so the old `TestSend_LocalTarget`
+  assertion `len(s.rows()) == 0` is now false. A2 dropped it rather than weakening it; A4 owns the
+  audit-row count.
+
 ### File structure
 
 | File | Responsibility | Task |
