@@ -52,7 +52,6 @@ function trimForSubmit(draft: NexConfig): NexConfig {
     repo_roots: trimList(draft.repo_roots),
     service_roots: trimList(draft.service_roots),
     claude_bin: draft.claude_bin.trim(),
-    cswap_bin: draft.cswap_bin.trim(),
     path_prepend: trimList(draft.path_prepend),
     sandbox: {
       max_profile: draft.sandbox.max_profile,
@@ -217,17 +216,6 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
         />
       </Field>
       <FieldErrorText field="claude_bin" message={errorFor('claude_bin')} />
-
-      <Field label={t('hosts.nex.config.cswap_bin')}>
-        <input
-          type="text"
-          aria-label={t('hosts.nex.config.cswap_bin')}
-          value={draft.cswap_bin}
-          onChange={(e) => update({ cswap_bin: e.target.value })}
-          className={inputClass}
-        />
-      </Field>
-      <FieldErrorText field="cswap_bin" message={errorFor('cswap_bin')} />
 
       <Field label={t('hosts.nex.config.max_profile')}>
         <select

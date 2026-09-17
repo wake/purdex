@@ -87,7 +87,7 @@ export interface NexQuota {
   five_hour_pct: number
   seven_day_pct: number
   resets_at: number
-  source: 'cswap' | 'provider_event' | string
+  source: 'usage_api' | 'provider_event' | string
 }
 
 export interface NexHostInfo {

@@ -1084,7 +1084,6 @@
   "hosts.nex.config.service_roots": "服務根目錄",
   "hosts.nex.config.path_prepend": "PATH 前置",
   "hosts.nex.config.claude_bin": "claude 執行檔",
-  "hosts.nex.config.cswap_bin": "cswap 執行檔",
   "hosts.nex.config.max_profile": "最高 profile",
   "hosts.nex.config.default_profile": "預設 profile",
   "hosts.nex.config.lease_ttl": "Lease TTL",
