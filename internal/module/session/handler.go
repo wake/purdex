@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"regexp"
 	"time"
 
@@ -77,9 +78,15 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Cwd == "" {
-		req.Cwd = "/"
+	// tmux neither expands ~ nor fails on an unusable -c: it silently starts
+	// the session in $HOME. Resolve here so the pane really lands where the
+	// caller asked, and so the recorded cwd matches the pane's directory.
+	cwd, err := resolveCwd(req.Cwd, os.UserHomeDir)
+	if err != nil {
+		http.Error(w, "invalid cwd: "+err.Error(), http.StatusBadRequest)
+		return
 	}
+	req.Cwd = cwd
 
 	// Default and validate mode
 	if req.Mode == "" {

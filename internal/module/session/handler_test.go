@@ -5,6 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -890,4 +893,61 @@ func TestHandlerTerminalWSNotFound(t *testing.T) {
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandlerCreateSessionExpandsTildeCwd — tmux neither expands ~ nor fails
+// on an unusable -c; it silently starts the session in $HOME. The daemon must
+// therefore hand tmux an already-resolved absolute directory.
+func TestHandlerCreateSessionExpandsTildeCwd(t *testing.T) {
+	mod, meta, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	// handleCreate resolves through os.UserHomeDir, which reads $HOME.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	want := filepath.Join(tmp, "sub")
+	require.NoError(t, os.MkdirAll(want, 0o755))
+
+	body := `{"name": "tilde", "cwd": "~/sub"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+	assert.Equal(t, want, info.Cwd, "response must carry the resolved path")
+
+	sessions, err := fake.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, want, sessions[0].Cwd, "tmux must receive the expanded path")
+
+	m, err := meta.GetMeta(sessions[0].ID)
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	assert.Equal(t, want, m.Cwd, "stored meta must carry the resolved path")
+}
+
+// TestHandlerCreateSessionRejectsMissingCwd — a missing directory used to be
+// swallowed by tmux, which created the session in $HOME anyway. It is now a
+// 400, and nothing is created.
+func TestHandlerCreateSessionRejectsMissingCwd(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	missing := filepath.Join(t.TempDir(), "nope")
+	body := `{"name": "missing-cwd", "cwd": ` + strconv.Quote(missing) + `}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid cwd")
+	assert.False(t, fake.HasSession("missing-cwd"), "nothing may be created")
 }
