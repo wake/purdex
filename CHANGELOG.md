@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.0.0-alpha.370] - 2026-09-17
+
+### Test: 測試不再碰得到機器的 keychain（#1102，nexen v0.11.1）
+
+alpha.368 為了讓 turn 通過 admission，在測試自己的 `$HOME` 底下寫了一份假的 Claude Code 登入。當時就標了一個 ⚠️ 並開了 #1099：那份假 token 只有在「檔案是唯一可用 backend」時才留在本機。
+
+**這個洞比當時寫的大。** `hostcred.Reader` 的**檔案**路徑跟著 home 走，但 **keychain 用的是固定的 service 名字**：
+
+```go
+Path:        filepath.Join(home, ".claude", ".credentials.json")  // 跟著 home
+Service:     hostcred.DefaultKeychainService                       // 固定字串
+KeychainRun: hostcred.RunSecurity                                  // 真的
+KeychainDel: hostcred.DeleteKeychainItem                           // 真的
+```
+
+轉向 `$HOME` 只隔離了**一個** backend。另一個仍然對著操作者真實的登入 —— 而那正是這個 tailnet 三台裡有兩台（a19／a26）實際存放憑證的地方。
+
+於是「在 temp `$HOME` 寫一份假登入」拿到的不是一個可用憑證，是**兩個**，兩個後果同時成立：兩把 token 都會被送去 `GET /api/oauth/profile` 以便分辨彼此（#1099 只寫到這裡），而且**憑證看門狗握著對真實 keychain 項目的 DELETE 能力**。
+
+mlab 一路沒踩到，只是因為這台的 keychain 是空的 —— 憑證住在檔案裡。那是環境巧合，不是設計保證。
+
+#### #1099 原本提的修法不夠
+
+原議是把 `credential_source` 接進 `[nex]`、fixture 釘死 `file`。nexen 那邊驗過**不足以代替**：`credential_source` 只跳過身分解析的慢路，`Reader.Read` 仍然會起 `security` 子行程，看門狗也仍然帶著 deleter。
+
+nexen v0.11.1 新增的 `Options.DisableHostKeychain` 才是正解，而它存在的理由正是這個形狀：**行程本身的 `$HOME` 已經被轉向**的 embedder，自動的 `HomeDir` 規則看不到 —— 因為 `os.UserHomeDir()` 讀的就是 `$HOME`，所以被轉向的 `$HOME` 在那個行程眼裡就是「真的」home。
+
+#### 改了什麼
+
+`go.mod` → `v0.11.1`。`newMountFixture` 在 **assemble seam** 上設旗標，不是在 `buildOptions` —— production **必須**讀 keychain，a19／a26 的 host 登入就住在那裡，誤關會讓那兩台解析不到帳號。
+
+守衛測試讀的是**真 `Assemble` 實際收到的 `Options`**，不是 fixture 自己設的旗標。所以只刪掉設值那一行、或整個 wrapper 刪掉，測試都會紅；要讓它綠就只能真的把旗標送到邊界另一邊。
+
+**本版不用動 DB**：v0.11.0 → v0.11.1 純新增，只改 `assemble.go` 與其測試，schema 仍是 v5。
+
+#### 一個可以帶走的通則
+
+nexen 那邊修這個洞時，一度 commit 了「宣稱修好但其實沒修到」的版本，發現方式是 mutation 測試沒有變紅。根因值得記：**任何要拿來做安全決策的路徑比對，不能先 `Abs` 或 `Clean`** —— 兩者都用文字消解 `..`，會把你正要檢查的東西先消掉。
+
+
 ## [1.0.0-alpha.369] - 2026-09-17
 
 ### Fix: Host Launcher 回報的五個缺陷（#1101）
