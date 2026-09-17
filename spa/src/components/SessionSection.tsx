@@ -110,6 +110,9 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           {statusDot}
           <span className="text-sm font-bold text-text-primary truncate">{host.name}</span>
         </button>
+        {isOffline && (
+          <span className="text-xs text-text-muted">{t('session.reconnecting')}</span>
+        )}
         <button
           data-testid={`new-session-${hostId}`}
           disabled={createDisabled}
@@ -120,14 +123,11 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
             // gated behind isExpanded) - expand so the "+" isn't a no-op.
             if (opening) setExpanded(true)
           }}
-          className="ml-1 p-1 rounded border border-accent/40 bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          className="ml-auto p-1 rounded bg-accent text-white hover:bg-accent/80 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           title={t('hosts.new_session')}
         >
           <Plus size={14} weight="bold" />
         </button>
-        {isOffline && (
-          <span className="text-xs text-text-muted ml-auto">{t('session.reconnecting')}</span>
-        )}
       </div>
       {isExpanded && creating && (
         <div className="mx-3 my-1">

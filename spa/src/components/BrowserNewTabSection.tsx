@@ -20,11 +20,10 @@ export function BrowserNewTabSection({ onSelect }: NewTabProviderProps) {
   const [showDropdown, setShowDropdown] = useState(false)
   const [highlightIndex, setHighlightIndex] = useState(-1)
   const inputRef = useRef<HTMLInputElement>(null)
+  // No mount-time `inputRef.current?.focus()`: focusing scrolls every
+  // scrollable ancestor to reveal the input, which dragged the New Tab column
+  // past the session list. The input stays focusable by click and keyboard.
   const dropdownRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
 
   const filtered = url.trim()
     ? urls.filter((u) => u.toLowerCase().includes(url.toLowerCase()))

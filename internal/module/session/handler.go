@@ -3,7 +3,9 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"time"
 
@@ -77,9 +79,15 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Cwd == "" {
-		req.Cwd = "/"
+	// tmux neither expands ~ nor fails on an unusable -c: it silently starts
+	// the session in $HOME. Resolve here so the pane really lands where the
+	// caller asked, and so the recorded cwd matches the pane's directory.
+	cwd, err := resolveCwd(req.Cwd, os.UserHomeDir)
+	if err != nil {
+		http.Error(w, "invalid cwd: "+err.Error(), http.StatusBadRequest)
+		return
 	}
+	req.Cwd = cwd
 
 	// Default and validate mode
 	if req.Mode == "" {
@@ -127,11 +135,38 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// `s.Cwd` is tmux's own `#{session_path}` — the directory the
+			// session is actually in — so it, not `req.Cwd`, is what gets
+			// recorded. resolveCwd stat'd the directory a moment ago, but tmux
+			// ran after that: if it vanished in between, tmux silently started
+			// the session in $HOME, and recording the request would have the
+			// daemon report a directory the session is not in. This also puts
+			// create on the same footing as list/get, which already source Cwd
+			// from tmux.
+			//
+			// A mismatch is logged, not fatal. Killing the session on mismatch
+			// was considered and rejected: `session_path` comes from getcwd(),
+			// which canonicalises symlinks and filesystem case (/tmp →
+			// /private/tmp on macOS), so a string comparison produces false
+			// mismatches — and killing a live session on a false positive is
+			// far worse than the rare race it would guard.
+			//
+			// That same canonicalisation is why the warning is gated on
+			// sameDirectory (os.SameFile) rather than on the string compare
+			// alone: every create through a symlinked path or a /tmp request
+			// comes back spelled differently while being the very same
+			// directory, and warning on those would bury the one case the
+			// warning is for — the requested directory vanished and tmux
+			// silently fell back to $HOME.
+			if s.Cwd != req.Cwd && !sameDirectory(s.Cwd, req.Cwd) {
+				log.Printf("session: tmux did not honour the requested directory for %q: requested %q, session is in %q", req.Name, req.Cwd, s.Cwd)
+			}
+
 			// Set initial meta
 			if err := m.meta.SetMeta(s.ID, store.SessionMeta{
 				TmuxID: s.ID,
 				Mode:   req.Mode,
-				Cwd:    req.Cwd,
+				Cwd:    s.Cwd,
 			}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -143,7 +178,7 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 				Name:   s.Name,
 				Exists: true,
 				Mode:   req.Mode,
-				Cwd:    req.Cwd,
+				Cwd:    s.Cwd,
 				// This response is built by hand rather than via ListSessions,
 				// so it needs its own stamp. The rebuild engine re-points a
 				// pane using the generation carried here (spec §4.8 step 4);
@@ -165,6 +200,30 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(info)
+}
+
+// sameDirectory reports whether two paths name one and the same directory.
+//
+// Two spellings of the same directory are the normal case, not the exception:
+// getcwd() — which is where tmux's `#{session_path}` comes from — resolves
+// symlinks and filesystem case, so the path that comes back out of tmux is
+// frequently not the path that went in. os.SameFile compares what the two
+// paths actually resolve to, which is the only comparison that tells a rename
+// of the spelling apart from a change of directory.
+//
+// A path that cannot be stat'd is not the same directory as anything: the
+// interesting divergence is precisely the one where the requested directory no
+// longer exists.
+func sameDirectory(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }
 
 type renameRequest struct {

@@ -795,16 +795,18 @@ describe('Test 14 — pickHostIdFallback (shared helper)', () => {
     expect(pickHostIdFallback([], 'anything', { hostId: 'anything' })).toBeNull()
   })
 
-  it('prefers lastSel.hostId when present in hostOrder', () => {
-    expect(pickHostIdFallback(['a', 'b'], null, { hostId: 'b' })).toBe('b')
-    expect(pickHostIdFallback(['a', 'b'], 'a', { hostId: 'b' })).toBe('b')
+  // T3 — the Hosts page deliberately does not remember a host, so neither
+  // lastSel.hostId nor activeHostId influence the answer any more.
+  it('ignores lastSel.hostId even when present in hostOrder', () => {
+    expect(pickHostIdFallback(['a', 'b'], null, { hostId: 'b' })).toBe('a')
+    expect(pickHostIdFallback(['a', 'b'], 'a', { hostId: 'b' })).toBe('a')
   })
 
-  it('skips lastSel.hostId when not in hostOrder, falls to activeHostId', () => {
-    expect(pickHostIdFallback(['a', 'b'], 'a', { hostId: 'stale' })).toBe('a')
+  it('ignores activeHostId even when present in hostOrder', () => {
+    expect(pickHostIdFallback(['a', 'b'], 'b', { hostId: 'stale' })).toBe('a')
   })
 
-  it('falls back to hostOrder[0] when neither lastSel nor activeHostId are valid', () => {
+  it('always returns hostOrder[0]', () => {
     expect(pickHostIdFallback(['a', 'b'], null, null)).toBe('a')
     expect(pickHostIdFallback(['a', 'b'], 'stale', { hostId: 'stale' })).toBe('a')
   })
@@ -914,14 +916,102 @@ describe('Test 14 — pickHostIdFallback (shared helper)', () => {
       runtime: {},
     })
 
-    // No URL hostId → activeHostId='b' → preResolveHostId picks 'b' → resolveSelection
-    // also picks 'b' (lastSelection cleared by beforeEach).
+    // No URL hostId → preResolveHostId picks hostOrder[0]='a' → resolveSelection
+    // also picks 'a'.  activeHostId='b' is deliberately ignored (T3).
     const mem = memoryLocation({ path: '/hosts', record: true })
     render(
       <Router hook={mem.hook}>
         <HostPage pane={hostPane} isActive />
       </Router>,
     )
-    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', 'b')
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', 'a')
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// T3 — the Hosts page always opens on the FIRST host (spec §3).
+//
+// A route that does not name a host selects `hostOrder[0]`, never the last
+// visited host and never `activeHostId`.  Sub-page memory is deliberately
+// KEPT: `lastSelection.subPage` still carries the user's working sub-page and
+// is clamped through `pickSelectableSubPage` for the first host.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('T3 — Hosts page always opens on the first host', () => {
+  it('pickHostIdFallback ignores activeHostId and lastSel, returning hostOrder[0]', () => {
+    expect(pickHostIdFallback(['a', 'b', 'c'], 'c', { hostId: 'b' })).toBe('a')
+    expect(pickHostIdFallback(['a', 'b'], 'b', null)).toBe('a')
+    expect(pickHostIdFallback(['a', 'b'], null, { hostId: 'b' })).toBe('a')
+    expect(pickHostIdFallback([], 'b', { hostId: 'b' })).toBeNull()
+  })
+
+  it('bare /hosts selects the first host even after the user visited another one', () => {
+    const first = renderHostPage(`/hosts/${SECOND_HOST_ID}/overview`)
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', SECOND_HOST_ID)
+    first.unmount()
+
+    const { mem } = renderHostPage('/hosts')
+
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', TEST_HOST_ID)
+    expect(currentPath(mem)).toBe(`/hosts/${TEST_HOST_ID}/overview`)
+  })
+
+  it('bare /hosts ignores activeHostId pointing at a later host', () => {
+    seedHosts({ activeHostId: SECOND_HOST_ID })
+
+    const { mem } = renderHostPage('/hosts')
+
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', TEST_HOST_ID)
+    expect(currentPath(mem)).toBe(`/hosts/${TEST_HOST_ID}/overview`)
+  })
+
+  it('an explicit /hosts/<id>/<sub> route still wins over the first-host fallback', () => {
+    const { mem } = renderHostPage(`/hosts/${SECOND_HOST_ID}/logs`)
+
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', SECOND_HOST_ID)
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-subpage', 'logs')
+    expect(screen.getByTestId('logs-section')).toHaveAttribute('data-host', SECOND_HOST_ID)
+    expect(currentPath(mem)).toBe(`/hosts/${SECOND_HOST_ID}/logs`)
+  })
+
+  it('keeps sub-page memory while dropping host memory', () => {
+    const first = renderHostPage(`/hosts/${SECOND_HOST_ID}/logs`)
+    expect(screen.getByTestId('logs-section')).toHaveAttribute('data-host', SECOND_HOST_ID)
+    first.unmount()
+
+    const { mem } = renderHostPage('/hosts')
+
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', TEST_HOST_ID)
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-subpage', 'logs')
+    expect(screen.getByTestId('logs-section')).toHaveAttribute('data-host', TEST_HOST_ID)
+    expect(currentPath(mem)).toBe(`/hosts/${TEST_HOST_ID}/logs`)
+  })
+
+  // Amendment A2 — a remembered sub-page that is NOT selectable for
+  // hostOrder[0] must clamp through pickSelectableSubPage, and the canonical
+  // redirect must name the clamped sub-page, not the remembered one.
+  it('A2 — clamps a remembered sub-page that is disabled for the first host', () => {
+    registerSettingsContribution({
+      moduleId: 'fakemod',
+      id: 'fakemod.second-only',
+      localId: 'second-only',
+      scope: 'host',
+      order: 100,
+      labelKey: 'second-only',
+      component: () => <div data-testid="second-only-body">SO</div>,
+      disabled: (ctx: SettingsContextFor<'host'>) => ctx.hostId !== SECOND_HOST_ID,
+    })
+
+    // Remember {second-host, second-only} — enabled there, so it sticks.
+    const first = renderHostPage(`/hosts/${SECOND_HOST_ID}/second-only`)
+    expect(screen.getByTestId('second-only-body')).toBeInTheDocument()
+    first.unmount()
+
+    const { mem } = renderHostPage('/hosts')
+
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', TEST_HOST_ID)
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-subpage', 'overview')
+    expect(screen.queryByTestId('second-only-body')).not.toBeInTheDocument()
+    expect(currentPath(mem)).toBe(`/hosts/${TEST_HOST_ID}/overview`)
   })
 })

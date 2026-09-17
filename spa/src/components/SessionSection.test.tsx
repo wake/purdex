@@ -246,7 +246,7 @@ describe('SessionSection', () => {
     expect(screen.getByTestId(`new-session-${HOST_ID}`)).toBeInTheDocument()
   })
 
-  it('styles the host header: bright caret, bold host name, emphasized + right after the name', () => {
+  it('styles the host header: bright caret, bold host name, filled + on the right edge', () => {
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } } })
     render(<Blocks />)
     const header = screen.getByTestId(`host-header-${HOST_ID}`)
@@ -258,15 +258,31 @@ describe('SessionSection', () => {
     expect(name.className).toContain('font-bold')
     expect(name.className).toContain('text-text-primary')
     const plus = screen.getByTestId(`new-session-${HOST_ID}`)
-    expect(plus.className).not.toContain('ml-auto')
-    expect(plus.className).toContain('text-accent')
-    expect(plus.className).toContain('bg-accent/15')
-    // "+" follows the collapse toggle (which ends with the host name) — no
-    // nested buttons, and no longer pushed to the far right.
+    // The "+" owns the right edge and reads as a real button: a solid accent
+    // fill, not the old 15%-alpha tint.
+    expect(plus.className).toContain('ml-auto')
+    expect(plus.className).toContain('bg-accent')
+    expect(plus.className).not.toContain('bg-accent/15')
+    // "+" is last in the header row; the collapse toggle still ends with the name.
     expect(header.lastElementChild).toBe(name)
-    expect(header.nextElementSibling).toBe(plus)
+    expect(plus.parentElement!.lastElementChild).toBe(plus)
     expect(header.className).not.toContain('flex-1')
     expect(plus).not.toBeDisabled()
+  })
+
+  it('offline: the reconnecting label precedes the right-aligned +', () => {
+    useSessionStore.setState({ sessions: { [HOST_ID]: [] } })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'reconnecting' } } })
+    render(<Blocks />)
+    const plus = screen.getByTestId(`new-session-${HOST_ID}`)
+    const row = plus.parentElement as HTMLElement
+    const label = row.querySelector(':scope > span') as HTMLElement
+    expect(label).not.toBeNull()
+    // The label no longer claims the right edge — the "+" does.
+    expect(label.className).not.toContain('ml-auto')
+    const children = Array.from(row.children)
+    expect(children.indexOf(label)).toBeLessThan(children.indexOf(plus))
+    expect(row.lastElementChild).toBe(plus)
   })
 
   it('scopes j/k navigation to its own host block', () => {

@@ -136,6 +136,22 @@ describe('HostPage route sync', () => {
     })
   })
 
+  // T3 — a bare /hosts route canonicalizes to hostOrder[0], never to the
+  // persisted activeHostId.
+  it('canonicalizes bare /hosts to the first host even when activeHostId is another host', async () => {
+    act(() => {
+      useHostStore.setState({ activeHostId: SECOND_HOST_ID })
+    })
+
+    const { mem } = renderWithRoute('/hosts')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-host', TEST_HOST_ID)
+      expect(currentPath(mem)).toBe('/hosts/test-host/overview')
+      expect(mem.history).toEqual(['/hosts/test-host/overview'])
+    })
+  })
+
   it('keeps /hosts/:hostId/:subPage on first mount while opening the singleton hosts tab', async () => {
     const { mem } = renderWithRoute('/hosts/test-host/logs')
 
