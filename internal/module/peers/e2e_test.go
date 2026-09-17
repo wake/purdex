@@ -634,8 +634,8 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if sent.OneWay {
 		t.Errorf("step 1: one_way = true, want false (B has a verified route back to A)")
 	}
-	if sent.Result != ipeers.ResultDelivered || sent.EffectiveMode != ipeers.ModePrompting {
-		t.Errorf("step 1: result/effective_mode = %q/%q, want delivered/prompting", sent.Result, sent.EffectiveMode)
+	if sent.Result != ipeers.ResultDelivered || sent.EffectiveMode != ipeers.ModeUnknown {
+		t.Errorf("step 1: result/effective_mode = %q/%q, want delivered/unknown", sent.Result, sent.EffectiveMode)
 	}
 	if sent.ToHostID != e2eHostB || sent.ToAddress != targetAddr || sent.To != targetTo {
 		t.Errorf("step 1: response to = %s %s %+v, want %s %s %+v", sent.ToHostID, sent.ToAddress, sent.To, e2eHostB, targetAddr, targetTo)
@@ -660,7 +660,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	if got := b.m.helpers.Name(bHelper); got != originName {
 		t.Errorf("step 1: B's helper name = %q, want %s", got, originName)
 	}
-	assertWrapper(t, "step 1", w, bHelperSock, originName, ipeers.ModePrompting, "", "ping")
+	assertWrapper(t, "step 1", w, bHelperSock, originName, ipeers.ModeUnknown, "", "ping") // #1124: default mode is now unknown
 
 	// nativeReply is what the target Claude writes into B's helper socket:
 	// a native reply wrapped by its own harness (D3), naming target.sock.
@@ -708,7 +708,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	aOut, _ := findLogRow(aRows, store.DirOut, ipeers.ResultDelivered, "")
 	if aOut.MsgID != sent.MsgID || aOut.FromHostID != e2eHostA || aOut.FromSessionID != e2eOriginSID ||
 		aOut.ToHostID != e2eHostB || aOut.ToSessionID != e2eTargetSID ||
-		aOut.DeclaredMode != ipeers.ModePrompting || aOut.EffectiveMode != ipeers.ModePrompting || aOut.Error != "" {
+		aOut.DeclaredMode != ipeers.ModeUnknown || aOut.EffectiveMode != ipeers.ModeUnknown || aOut.Error != "" { // #1124: default mode is now unknown
 		t.Errorf("step 4: A out row = %+v", aOut)
 	}
 	aIn, _ := findLogRow(aRows, store.DirIn, ipeers.ResultDelivered, "")
@@ -728,7 +728,7 @@ func TestE2E_TwoDaemons(t *testing.T) {
 	bIn, _ := findLogRow(bRows, store.DirIn, ipeers.ResultDelivered, "")
 	if bIn.MsgID != sent.MsgID || bIn.FromHostID != e2eHostA || bIn.FromSessionID != e2eOriginSID ||
 		bIn.ToHostID != e2eHostB || bIn.ToSessionID != e2eTargetSID ||
-		bIn.DeclaredMode != ipeers.ModePrompting || bIn.EffectiveMode != ipeers.ModePrompting || bIn.Error != "" {
+		bIn.DeclaredMode != ipeers.ModeUnknown || bIn.EffectiveMode != ipeers.ModeUnknown || bIn.Error != "" { // #1124: default mode is now unknown
 		t.Errorf("step 4: B in row = %+v", bIn)
 	}
 	bReply, _ := findLogRow(bRows, store.DirReply, ipeers.ResultDelivered, native1)

@@ -156,6 +156,7 @@ func ValidationCode(err error) string {
 const (
 	ModePrompting = "prompting"
 	ModeBypass    = "bypass"
+	ModeUnknown   = "unknown" // sender cannot determine caller's mode
 )
 
 // Error codes: the "error" field of every 4xx/5xx JSON body on /send,
@@ -478,13 +479,15 @@ func ValidateText(s string) error {
 	return nil
 }
 
-// ValidateMode normalises s ("" means prompting) and rejects anything
-// other than "", ModePrompting or ModeBypass.
+// ValidateMode normalises s ("" means unknown) and rejects anything
+// other than "", ModePrompting, ModeBypass or ModeUnknown.
+// ModeUnknown is used when the sender cannot determine the caller's mode
+// (issue #1124, Option 2): the receiver treats unknown as mismatch.
 func ValidateMode(s string) (string, error) {
 	switch s {
 	case "":
-		return ModePrompting, nil
-	case ModePrompting, ModeBypass:
+		return ModeUnknown, nil
+	case ModePrompting, ModeBypass, ModeUnknown:
 		return s, nil
 	default:
 		return "", fmt.Errorf("%w: bad mode %s", ErrModeInvalid, quoteBounded(s))

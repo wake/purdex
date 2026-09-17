@@ -412,9 +412,10 @@ func TestValidateMode_Table(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"", ModePrompting, false},
+		{"", ModeUnknown, false}, // default when caller's mode is unknown (#1124)
 		{ModePrompting, ModePrompting, false},
 		{ModeBypass, ModeBypass, false},
+		{ModeUnknown, ModeUnknown, false},
 		{"bogus", "", true},
 		{"Prompting", "", true}, // case-sensitive
 	}
