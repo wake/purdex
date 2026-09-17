@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.378] - 2026-09-18
+
+### Feature: peer pairing D1 — 驗證單一 peer entry、改名、CLI `host verify` / `host rename`（#1131）
+
+Phase D 的 daemon 半邊；D2 的 Peers 頁面（狀態／雙向驗證／drift 一鍵採用）接在它上面。Spec `docs/specs/2026-09-18-peer-pairing-ui-spec.md` §4（D2–D4 未進這版）。
+
+#### 回程驗證＝在對方那端跑既有的 outbound verify
+
+`POST /api/peers/hosts/{alias}/verify`（admin-only、唯讀）直接重用 `fetchHostResult` —— 就是一列 `scope=all` 扣掉 peer rows，所以頁面與 `pdx peers --all` 對同一台的判定不可能不一致。每種探測結果都是 200 帶 `ok`（`no outbound token` 不撥號、transport error、`peer: <bounded>`、`host_id mismatch`…），404 只給 unknown alias，永不寫入（D-6），永不帶 token 值。App 同時握兩把 admin token，所以「B 連不連得到 A」＝從 B 對 A 跑這條——不需要新的 inbound route、不需要新的 token 流。**為什麼不寫更輕的 probe**：更輕的 probe 是對方要新增的 inbound route，混版本時舊 daemon 會被誤報 unreachable；`GET /api/peers` 是 P2 起每台都對 host principal 開的唯一路由，才是對混版本誠實的探針。
+
+`fetchHostResult` 順手補上它缺的一個翻譯：peer 回 `ok:false` 但沒有錯誤文字 → `peer reported ok=false`（`verifyHost` 早就用這個字串），從 verify route 和 `scope=all` 兩邊釘住。
+
+#### 改名是 PUT 的第三個獨立欄位
+
+`PUT /api/peers/hosts/{alias}` 加 `alias`：`ValidateAlias`＋不分大小寫唯一性（排除自己，所以 `air`→`Air` 合法）在撥號前先擋、進 `UpdateConfig` closure 再擋一次，**拒絕一定在任何欄位寫入之前**，alias 是 closure 的最後一個寫入。identity re-check（URL＋InboundToken 對 pre-lock snapshot）現在 rename-only 也走——review 抓到 rename 撞上同名 DELETE+POST 會把新 entry 改名；用 `putHostAfterSnapshot` 測試 seam 逼出這個交錯（rename-only 沒有 fetch 可以阻塞）。體質 review 再抓到快速路徑拿**過期的 `idx`** 判「是不是自己」——中間有人刪了前面的 entry，case-only rename 會誤 409；改成同一把 RLock 內重找。D2 的「採用對方自報 alias」就是這個 PUT，daemon 不知道自己在「採用」——自報值過的是 operator 的門檻（v4 §7.2）。
+
+#### CLI
+
+`pdx peers host verify <alias> [--json]`（ok 出 0、否則 1；drift 那行跟 `--all` 一字不差）、`pdx peers host rename <alias> <new-alias>`。**對舊 daemon**：verify 拿到 404 出 1；rename 會被 376 忽略而回 200 帶舊名——CLI 比對回傳的 alias 與要求的**完全相等**才報成功（codex R1 抓到 `EqualFold` 會放過 case-only rename），否則 `daemon did not apply the rename` 出 1。`--json` 在 host mode 只對 verify 開放。
+
+#### 證據
+
+mutation record `docs/plans/2026-09-18-peer-pairing-d1-mutations.md`：M1–M16 全紅，含誠實的 M9（快速路徑的 `ValidateAlias` 只有 no-dial 測試抓得到）；在 review fix wave 後於 HEAD 全數重跑。codex 兩輪（R1 標準；R2 攻擊零發現／防守／體質）全部處置。
+
+#### 尚待真機驗收（deploy 後）
+
+`pdx peers host verify air` on mlab → `air  ok …`、`self alias: air26`、`alias drift: peer calls itself air26`；停掉 air daemon → `ok:false` transport error、exit 1。
+
 ## [1.0.0-alpha.377] - 2026-09-18
 
 ### Feature: exec pane 的串流基礎 — partial assembly、工具活動、transient 佇列（P-B2.1，#1129）
