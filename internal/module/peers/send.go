@@ -21,6 +21,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/peers/ccuds"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -231,30 +232,42 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. The host entry (D1: the local host is never a target).
+	// 3. The host segment decides the branch, and nothing more: the local
+	// branch is DECIDED here but TAKEN at step 5, because the frame it
+	// writes needs the origin, which step 4 is what attributes (spec §4.1).
+	//
+	// L1 deleted the local_target refusal: an address this daemon mints and
+	// prints must be one it can also resolve, and `pdx peers` prints local
+	// rows. A local target has no config entry, no token and no URL — so the
+	// entry lookup, host_unknown and host_unverified are skipped rather than
+	// answered, and targetAlias/targetHostID come from this host's own
+	// snapshot. Every read of `entry` after this point is on a branch only a
+	// remote target reaches.
 	snap := m.configSnapshot()
-	if ipeers.HostMatches(host, snap.alias, snap.hostID) {
-		refuseUnaudited(http.StatusBadRequest, ipeers.ErrLocalTarget, "same-host sessions reach each other natively; the bridge only delivers to other hosts")
-		return
-	}
+	isLocal := ipeers.HostMatches(host, snap.alias, snap.hostID)
 	var entry config.PeerHost
-	found := false
-	for _, h := range snap.hosts {
-		if ipeers.HostMatches(host, h.Alias, h.HostID) {
-			entry, found = h, true
-			break
+	if !isLocal {
+		found := false
+		for _, h := range snap.hosts {
+			if ipeers.HostMatches(host, h.Alias, h.HostID) {
+				entry, found = h, true
+				break
+			}
 		}
-	}
-	if !found {
-		refuseUnaudited(http.StatusNotFound, ipeers.ErrHostUnknown, fmt.Sprintf("no peer host %q", host))
-		return
-	}
-	if entry.Token == "" || entry.HostID == "" {
-		refuseUnaudited(http.StatusConflict, ipeers.ErrHostUnverified, fmt.Sprintf("host %q has no verified outbound route; run pdx peers host set-token", entry.Alias))
-		return
+		if !found {
+			refuseUnaudited(http.StatusNotFound, ipeers.ErrHostUnknown, fmt.Sprintf("no peer host %q", host))
+			return
+		}
+		if entry.Token == "" || entry.HostID == "" {
+			refuseUnaudited(http.StatusConflict, ipeers.ErrHostUnverified, fmt.Sprintf("host %q has no verified outbound route; run pdx peers host set-token", entry.Alias))
+			return
+		}
 	}
 
 	targetAlias, targetHostID := entry.Alias, entry.HostID
+	if isLocal {
+		targetAlias, targetHostID = snap.alias, snap.hostID
+	}
 
 	// 4. The origin: the caller's own session, attributed by its inbox.
 	// Peer Address v2 gives every live, non-proxy registry entry its own
@@ -285,49 +298,72 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	from := wireFromRecord(snap.hostID, origin, mode)
 
-	// 5. The remote snapshot, with the entry's token, at the entry's URL.
-	// Whatever the rows claim about their host, they are normalised to
+	// 5. The inventory to resolve over.
+	//
+	// Local: step 4's envelope IS it. No fetch — there is no second daemon
+	// to ask — and no normalizeRemoteRows: that function exists to force an
+	// untrusted peer's self-reported host onto the entry we authenticated,
+	// and these rows are this daemon's own. Re-stamping them would be
+	// laundering nothing through a function whose whole purpose is distrust
+	// (spec §4.1).
+	//
+	// Remote: the peer's snapshot, with the entry's token, at the entry's
+	// URL. Whatever the rows claim about their host, they are normalised to
 	// the entry (P2 #5); the envelope must name the entry's host_id.
-	remoteRefused := func(text string) {
-		writeWireError(w, http.StatusBadGateway, ipeers.APIError{
-			Error:  ipeers.ErrRemoteError,
-			Detail: "fetching the peer inventory failed",
-			Remote: &ipeers.RemoteError{Status: 0, Error: text},
-		})
+	var (
+		rows  []ipeers.PeerRecord
+		rsnap ipeers.ResolveSnapshot
+	)
+	if isLocal {
+		rows = local.Peers
+		rsnap = ipeers.ResolveSnapshot{
+			Partial:            local.Partial,
+			RegistryIncomplete: len(local.UnknownRegistryFiles) > 0,
+		}
+	} else {
+		remoteRefused := func(text string) {
+			writeWireError(w, http.StatusBadGateway, ipeers.APIError{
+				Error:  ipeers.ErrRemoteError,
+				Detail: "fetching the peer inventory failed",
+				Remote: &ipeers.RemoteError{Status: 0, Error: text},
+			})
+		}
+		fetchCtx, cancelFetch := context.WithTimeout(r.Context(), remoteFetchTimeout)
+		env, err := m.fetch(fetchCtx, m.client, entry.URL, entry.Token)
+		cancelFetch()
+		if err != nil {
+			// The error may carry the remote's own text (an HTTP status line
+			// is fine; a body-derived decode error is not): bounded everywhere.
+			text := boundRemoteText(err.Error())
+			m.logf("peers: send to %q: fetch inventory: %s", targetAlias, text)
+			remoteRefused(text)
+			return
+		}
+		if env.HostID != targetHostID {
+			m.logf("peers: send to %q: host_id mismatch: got %s", targetAlias, boundRemoteText(env.HostID))
+			remoteRefused("host_id mismatch: got " + boundRemoteText(env.HostID))
+			return
+		}
+		if !env.OK {
+			m.logf("peers: send to %q: peer inventory not ok: %s", targetAlias, boundRemoteText(env.Error))
+			remoteRefused("peer: " + boundRemoteText(env.Error))
+			return
+		}
+		rows = normalizeRemoteRows(env.Peers, targetAlias, targetHostID)
+		rsnap = ipeers.ResolveSnapshot{
+			Partial:            env.Partial,
+			RegistryIncomplete: len(env.UnknownRegistryFiles) > 0,
+		}
 	}
-	fetchCtx, cancelFetch := context.WithTimeout(r.Context(), remoteFetchTimeout)
-	env, err := m.fetch(fetchCtx, m.client, entry.URL, entry.Token)
-	cancelFetch()
-	if err != nil {
-		// The error may carry the remote's own text (an HTTP status line
-		// is fine; a body-derived decode error is not): bounded everywhere.
-		text := boundRemoteText(err.Error())
-		m.logf("peers: send to %q: fetch inventory: %s", targetAlias, text)
-		remoteRefused(text)
-		return
-	}
-	if env.HostID != targetHostID {
-		m.logf("peers: send to %q: host_id mismatch: got %s", targetAlias, boundRemoteText(env.HostID))
-		remoteRefused("host_id mismatch: got " + boundRemoteText(env.HostID))
-		return
-	}
-	if !env.OK {
-		m.logf("peers: send to %q: peer inventory not ok: %s", targetAlias, boundRemoteText(env.Error))
-		remoteRefused("peer: " + boundRemoteText(env.Error))
-		return
-	}
-	rows := normalizeRemoteRows(env.Peers, targetAlias, targetHostID)
 
-	// 6. Resolve the session part over the remote's rows (Peer Address v2
-	// spec §3.2). The snapshot flags are the remote envelope's own: Partial
-	// as reported, and RegistryIncomplete whenever it named an
-	// alive-but-undecodable registry file — the one Partial cause that can
-	// hide a whole live process, under which even a single label hit is
-	// not_ready (spec §3.2, X1).
-	target, err := ipeers.Resolve(rows, session, ipeers.ResolveSnapshot{
-		Partial:            env.Partial,
-		RegistryIncomplete: len(env.UnknownRegistryFiles) > 0,
-	})
+	// 6. Resolve the session part over those rows (Peer Address v2 spec
+	// §3.2), under the snapshot flags of whichever inventory they came
+	// from: Partial as reported, and RegistryIncomplete whenever it named
+	// an alive-but-undecodable registry file — the one Partial cause that
+	// can hide a whole live process, under which even a single label hit is
+	// not_ready (spec §3.2, X1). A local inventory gets no dispensation
+	// here: being this daemon's own does not make a partial one complete.
+	target, err := ipeers.Resolve(rows, session, rsnap)
 	if err != nil {
 		var amb *ipeers.AmbiguousError
 		switch {
@@ -429,6 +465,68 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		m.logf("peers: send %s to %q: audit insert: %v", msgID, targetAlias, err)
 		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrAuditUnavailable, Detail: "audit insert failed"})
+		return
+	}
+
+	// 8 (local). The frame goes straight into the target's inbox, with the
+	// SENDER's own socket as its reply address — no helper stands in, so a
+	// native reply goes back to the session that sent this (spec §4.2, L4).
+	//
+	// Two different `from`s are set, and they are not the same field:
+	// BuildFrame's second argument becomes the NDJSON frame's top-level
+	// from, which is what Claude Code replies to, while Wrapper.From is an
+	// attribute inside the rendered content, which is what the receiving
+	// agent reads. Both are the sender's own inbox.
+	//
+	// HopChain is "" rather than anything off req: SendRequest carries no
+	// hop chain, and a CLI-initiated send is by definition the first hop.
+	//
+	// Written under stopCtx, for the same reason the remote call is: a
+	// caller that leaves mid-write must not leave a half frame or an
+	// unrecorded delivery.
+	if isLocal {
+		effective := mode
+		line, err := ccuds.BuildFrame(msgID, req.OriginInbox, ccuds.Wrapper{
+			From:     "uds:" + req.OriginInbox,
+			FromName: origin.Address,
+			FromMode: effective,
+			HopChain: "",
+			Text:     req.Text,
+		})
+		if err != nil {
+			m.setResult(id, "", "", err.Error())
+			m.logf("peers: send %s to %q: build frame: %v", msgID, targetAlias, err)
+			writeWireError(w, http.StatusInternalServerError, ipeers.APIError{Error: ipeers.ErrSocketWriteFailed, Detail: "build frame: " + err.Error()})
+			return
+		}
+		// The same mapping /deliver uses (deliver.go): a clean write is
+		// delivered, a write that completed but was never acknowledged is
+		// delivery_uncertain, anything else is a failure.
+		var result, errText string
+		switch err := m.writeFrame(m.stopCtx, target.Agent.Inbox, line, m.sockWriteTimeout); {
+		case err == nil:
+			result = ipeers.ResultDelivered
+		case errors.Is(err, ccuds.ErrPostWriteTimeout):
+			result = ipeers.ResultDeliveryUncertain
+			errText = err.Error()
+		default:
+			m.setResult(id, "", "", err.Error())
+			m.logf("peers: send %s to %q: inbox write failed: %v", msgID, targetAlias, err)
+			writeWireError(w, http.StatusBadGateway, ipeers.APIError{Error: ipeers.ErrSocketWriteFailed, Detail: err.Error()})
+			return
+		}
+		m.setResult(id, effective, result, errText)
+		_ = json.NewEncoder(w).Encode(ipeers.SendResponse{
+			MsgID:         msgID,
+			ToHostID:      targetHostID,
+			ToAddress:     toAddress,
+			To:            to,
+			Result:        result,
+			EffectiveMode: effective,
+			// A local delivery always has a return route: the reply
+			// address is a socket in this very filesystem.
+			OneWay: false,
+		})
 		return
 	}
 

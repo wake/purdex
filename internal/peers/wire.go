@@ -166,7 +166,6 @@ const (
 	ErrTextTooLarge      = "text_too_large"
 	ErrBadMode           = "bad_mode"
 	ErrBadAddress        = "bad_address"
-	ErrLocalTarget       = "local_target"
 	ErrHostUnknown       = "host_unknown"
 	ErrOriginUnknown     = "origin_unknown"
 	ErrPeerNotFound      = "peer_not_found"
