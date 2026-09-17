@@ -166,11 +166,15 @@ token, which still works; cancel restores it as the sole token.
 The daemon *can* know which token the peer is presenting: every host-principal request it serves
 authenticated with either `current` or `prev`, and the daemon remembers, per entry, which one the
 **most recent** such request used (`last_inbound_auth`, §6.2). **Commit is refused unless the last
-inbound authentication used the new token.** That turns "did the push land?" from something a
-client has to remember — and would misremember after a reload or from a second App instance — into
-something any client establishes by making the peer dial us once (the return-path verify of §4.1 is
-exactly that dial) and then reading one field. The page re-verifies after every step (§7.4), so the
-gate is always evaluated against a fresh dial.
+inbound authentication used the new token; cancel is refused unless it used the old one; when no
+dial has been seen in this rotation epoch, both are refused.** The two gates are symmetric because
+the two lock-outs are: committing drops the old token while the peer still holds it, cancelling
+drops the new token after the peer has switched to it. That turns "did the push land?" from
+something a client has to remember — and would misremember after a reload or from a second App
+instance — into something any client establishes by making the peer dial us once (the return-path
+verify of §4.1 is exactly that dial) and then reading one field. With no observation the safe state
+is the one the daemon is already in — both tokens valid — so it stays there. The page re-verifies
+after every step (§7.4), so the gates are always evaluated against a fresh dial.
 
 **D-8. Live tokens stay in memory for one flow.** The only responses that carry a token value are
 POST 201 (`inbound_token`, existing) and rotate (`inbound_token`, new). The SPA holds such a value
@@ -405,8 +409,14 @@ into it at the two places a host principal is served — `handlePeers` (scope lo
 rate-limit refusal can return (the fact being recorded is "this bearer authenticated", which is
 true whether or not the request is then refused). `rotate` resets the entry's record to `""`, so
 `last_inbound_auth` always describes the *current rotation epoch*; commit and cancel leave it (there
-is no `prev` afterwards, so it can only read `""` or `"current"`). Not persisted: after a daemon
-restart it reads `""` until the peer dials again, which the page causes on its next verify.
+is no `prev` afterwards, so it can only read `""` or `"current"`).
+
+**In-memory on purpose, not an omission.** After a daemon restart the record reads `""`, so both
+commit and cancel are refused until the peer dials again — fail-closed, in the state (both tokens
+valid) the daemon was already in. The next return-path verify from the page, or the peer's next
+ordinary delivery, rebuilds it. Persisting it would buy nothing (a persisted value is *older* than a
+fresh dial, and the gate wants the freshest) and would add a write to every host-principal
+request.
 
 ### 6.3 Routes (all admin-only by `HostRoutePolicy` + `requireAdmin`)
 
@@ -414,12 +424,15 @@ restart it reads `""` until the peer dials again, which the page causes on its n
 |---|---|---|
 | `POST /api/peers/hosts/{alias}/rotate` | `prev := current; current := mint(); last_inbound_auth := ""` | `200 {alias, inbound_token: <new>}` — the second and last response that carries a live token; `409 rotation already pending` when `prev != ""`; 404 unknown alias |
 | `POST /api/peers/hosts/{alias}/rotate/commit` body `{force?: bool}` | `prev := ""` | `200 hostRow`; **idempotent** — with no `prev` it is a 200 no-op, so a lost response is safely retried; **`409 rotation unconfirmed`** when `prev != ""` and `last_inbound_auth != "current"` unless `force` (D-7: the peer has not been seen presenting the new token, so dropping the old one may lock it out); 404 |
-| `POST /api/peers/hosts/{alias}/rotate/cancel` | `current := prev; prev := ""` | `200 hostRow`; `409 no rotation pending` when `prev == ""` (there is nothing safe to restore); 404 |
+| `POST /api/peers/hosts/{alias}/rotate/cancel` body `{force?: bool}` | `current := prev; prev := ""` | `200 hostRow`; `409 no rotation pending` when `prev == ""` (there is nothing safe to restore); **`409 rotation unconfirmed`** when `prev != ""` and `last_inbound_auth != "prev"` unless `force` (the peer has been seen on the new token — `"current"` — or not seen at all — `""` — so dropping the new one may lock it out); 404 |
 
 All three mutate inside one `UpdateConfig` closure, re-finding the entry by alias under the lock;
-the commit gate reads the in-memory record under the module's own mutex inside that closure, so a
-dial that lands between the check and the write cannot be missed in the *unsafe* direction (a
-`"prev"` arriving after a `"current"` check means the peer still has both — still safe).
+both gates read the in-memory record under the module's own mutex inside that closure. A dial
+landing between the check and the write can only flip the record to the *other* observed value,
+and the daemon is safe under either write until the next request: after a commit the peer that
+just dialled with `prev` still has both tokens and has lost nothing yet; the next verify shows red
+and the page repairs (§6.4 last row). Neither gate is a proof about the future; each is a proof
+that the operation is not *already known* to be a lock-out.
 `rotate` mints with `mintInboundToken(adminToken)` (never the admin token; a 128-bit random
 collision with any other entry is not checked, as today at POST). `force` exists for the operator
 whose peer is gone for good; the page never sends it (§7.3), the CLI requires `--force` spelled out.
@@ -437,17 +450,18 @@ X: commit(E)            → X drops tX; only tX' is valid
 | step that failed | state | what still works | what the page offers, and why it is safe |
 |---|---|---|---|
 | rotate | nothing changed | everything | retry |
-| push (network, or Y's 502 from its verify) | X accepts both; Y still holds tX | Y→X with tX | **Cancel**. Commit is not offered and would be refused: the re-verify makes Y present tX, so `last_inbound_auth == "prev"` |
+| push (network, or Y's 502 from its verify) | X accepts both; Y still holds tX | Y→X with tX | **Cancel**, once the re-verify has made Y present tX (`last_inbound_auth == "prev"`). If Y cannot reach X at all the record stays `""` and neither button is offered: both tokens stay valid, nothing is urgent |
 | push's verify dial succeeded but Y's own commit failed (409/500) | X accepts both, X recorded `"current"` once; Y still holds tX | Y→X with tX | the page re-verifies before reading the row, and that fresh dial presents tX ⇒ `"prev"` ⇒ **Cancel** only. This is why the gate is "most recent", not "ever seen" |
 | commit (lost response) | X accepts both; Y holds tX' | Y→X with tX' | Commit again (idempotent) |
-| reload, or a second App instance, mid-rotation | X accepts both; the client has no token | whichever Y holds | re-verify, read the row: `"current"` ⇒ Commit; `"prev"` or `""` ⇒ Cancel. No client ever decides from memory |
-| user cancels after a successful push | X accepts tX only; Y holds tX' | **Y→X is broken** | verify shows it red; rotate again and push |
+| reload, or a second App instance, mid-rotation | X accepts both; the client has no token | whichever Y holds | re-verify, read the row: `"current"` ⇒ Commit; `"prev"` ⇒ Cancel; `""` ⇒ neither (the peer could not be made to dial — leave both valid, say so, offer Refresh). No client ever decides from memory |
+| a client cancels after a successful push (only possible with `force`, or by a stale read racing a dial) | X accepts tX only; Y holds tX' | **Y→X is broken** | verify shows it red; rotate again and push. Without `force` the daemon refuses this: the peer was last seen on `"current"` |
 
 `rotation_pending` tells the page a rotation is open; `last_inbound_auth` — always read after a
-fresh return-path verify — tells it which of Commit / Cancel is the safe one. Stated precisely, the
-daemon gate is *necessary, not sufficient*: it refuses every commit for which the peer has never
-presented the new token in this epoch (the reload and second-instance cases), but it cannot see
-that the peer verified with `tX'` and then failed to persist it (third row above). That residual is
+fresh return-path verify — tells it which of Commit / Cancel is the safe one, or that neither is.
+Stated precisely, the daemon gates are *necessary, not sufficient*: they refuse every commit for
+which the peer has never presented the new token in this epoch and every cancel for which it has
+not been seen on the old one (the reload and second-instance cases), but they cannot see that the
+peer verified with `tX'` and then failed to persist it (third row above). That residual is
 closed by the protocol the page follows unconditionally — **verify the return path, then read the
 row, then commit** (§7.3). The CLI cannot follow it (a CLI on X cannot make Y dial X), so
 `--commit` relies on the gate alone and its refusal message says what to do: run `pdx peers host
@@ -469,7 +483,8 @@ check to distinguish them. Noted so a reviewer does not "fix" it.
 pdx peers host rotate <alias> [--config <path>]          # prints the new token, like add does
 pdx peers host rotate <alias> --commit [--force]         # 409 rotation unconfirmed → exit 1 with the
                                                           #   "verify on the peer first" instruction
-pdx peers host rotate <alias> --cancel
+pdx peers host rotate <alias> --cancel [--force]        # same gate, mirrored: refused unless the
+                                                          #   peer was last seen on the old token
 ```
 
 `pdx peers host list` gains a `ROTATION` column (`-` / `pending` / `pending, confirmed`).
@@ -513,13 +528,15 @@ its own memory of the push: after the push (succeeded or not), and on any render
 says `rotation_pending` (a reload, a second App instance, a CLI-started rotation), it **re-verifies
 the return path, then re-reads the row**, and offers exactly one of:
 
-- **Commit** — when `last_inbound_auth === 'current'`;
-- **Cancel** — otherwise (`'prev'` or `''`), with the line reading "rotation pending — the peer
-  is still presenting the old token" (or "has not dialled since the rotation").
+- **Commit** — when `last_inbound_auth === 'current'` ("the peer is on the new token");
+- **Cancel** — when `'prev'` ("the peer is still presenting the old token");
+- **neither** — when `''` ("the peer has not dialled since the rotation; both tokens stay valid"),
+  with Refresh as the only action. The daemon would refuse both anyway (§6.3); the page does not
+  offer a button it knows will 409.
 
-The page never sends `force`. A Commit that is nonetheless refused (`409 rotation unconfirmed`,
-because the peer dialled with the old token between the read and the click) is shown and the row
-re-read. Rotate is only offered when the counterpart is an App host (the push needs its admin
+The page never sends `force`. A Commit or Cancel that is nonetheless refused (`409 rotation
+unconfirmed`, because the peer dialled with the other token between the read and the click) is
+shown and the row re-read. Rotate is only offered when the counterpart is an App host (the push needs its admin
 token); for a non-App counterpart the button is absent and a tooltip says why. An already-pending
 rotation on such a row (started from the CLI) still gets Commit/Cancel by the same rule, minus the
 re-verify the page cannot perform; the line says the reading is "as of the peer's last dial" and
@@ -572,9 +589,10 @@ red; the implementer runs them and records the red in the PR.
 |---|---|
 | `MatchInboundToken`: while pending, **both** old and new authenticate as the same alias, `usedPrev` true only for the old | remove the `prev` comparison |
 | after commit, old is refused, new accepted | commit that does not clear `prev` |
-| after cancel, old accepted, new refused | cancel that does not restore |
+| after cancel (peer last seen on `prev`), old accepted, new refused | cancel that does not restore |
+| **cancel gate**: after rotate with no dial, cancel → `409 rotation unconfirmed`; after a dial with the **old** token → 200; after a dial with the **new** token → 409; `{force:true}` → 200 regardless | drop the cancel gate → first cancel is 200 |
 | rotate 409 when pending; commit 200 no-op when not pending; cancel 409 when not pending | — |
-| **commit gate**: after rotate, commit → `409 rotation unconfirmed`; after a host-principal `GET /api/peers` with the **new** token (real `PeerAuth` + `handlePeers`), commit → 200; after one more with the **old** token, commit → 409 again (most recent wins); `{force:true}` → 200 regardless | drop the gate → first commit is 200; make the record sticky ("ever seen") → the third step is 200 |
+| **commit gate**: after rotate with no dial, commit → `409 rotation unconfirmed`; after a host-principal `GET /api/peers` with the **new** token (real `PeerAuth` + `handlePeers`), commit → 200; after one more with the **old** token, commit → 409 again (most recent wins); `{force:true}` → 200 regardless | drop the gate → first commit is 200; make the record sticky ("ever seen") → the third step is 200 |
 | `last_inbound_auth` is `""` right after rotate even if the old token was seen before; a `handleDeliver` request (refused by rate limit or `host_unverified`) still records | do not reset on rotate → stale `"current"` from the previous epoch passes the gate; record after the refusal → the refused-delivery test reads `""` |
 | rotate response carries a fresh `pdxp_` token ≠ old, ≠ admin; `hostRow` never carries either value; `Redacted()` blanks `prev`; `rotation_pending` true/false | drop `prev` from `Redacted` → the config JSON test sees the value |
 | `PeerAuth` end-to-end through the real middleware with a pending rotation; `Principal.UsedPrevToken` set correctly | — |
@@ -599,7 +617,8 @@ equivalence itself holds only for equal-length inputs, which peer tokens are (`p
 - Rotate: call order is mint → push → **verify(Y→X) → list(X)** → commit, and commit is sent only
   when the re-read row says `'current'`; push failure → re-verify → row `'prev'` → Cancel offered,
   Commit absent; reload with `rotation_pending` → re-verify then read, `'current'` ⇒ Commit only,
-  `'prev'`/`''` ⇒ Cancel only; a Commit answered 409 is rendered and the row re-read; `force` never
+  `'prev'` ⇒ Cancel only, `''` ⇒ neither; a Commit or Cancel answered 409 is rendered and the row
+  re-read; `force` never
   appears in any request body (assert over every call the mock saw); no token value ever reaches a
   store (assert `useHostStore` state and `localStorage` contain no `pdxp_` after the flow).
 - Mutation: make the page offer Commit from its own "push succeeded" memory instead of the row →
@@ -666,4 +685,5 @@ as this spec; it survives in the branch's WIP commit `3079f2a3` for reference. T
 | a disconnected App host "counts as `not-app-host`" | conflates "we know this host but cannot ask it now" with "not one of our hosts"; only the second is a fact about the pair | `counterpart-unavailable` → `return-unknown` (§5.1), with the cause; X's own metadata failures are a page-level banner (§5.2 step 0) |
 | cost bound "`2n` verify calls" | omitted the per-entry `listPeerHosts(Y)` and metadata calls, and duplicate counterparts | de-duplicated per counterpart; bound restated as `≤ 3 + 3m` cheap calls plus `≤ 2n` verifies (§5.2) |
 | test "PUT `{token}` during a pending rotation 409s" | a PUT started after the rotate snapshots the new token and must *succeed*; only the rotate-between-snapshot-and-commit interleaving 409s | the test forces the interleaving with a blocking fake fetch, and a second test pins that the non-interleaved PUT succeeds (§8.3) |
+| cancel always allowed while pending (peer review, purdex-53) | cancel after a successful push drops the token the peer has just switched to — the commit lock-out mirrored | cancel is gated on `last_inbound_auth == "prev"`, commit on `"current"`, `""` refuses both; `force` on both; the page offers neither on `""` (§6.3, §7.3) |
 | "a counting fake" to prove every field is compared | needs a comparison seam in production code just for the test | a last-match-wins fixture with the bearer matching entry 1's `current` and entry 3's `prev` (§8.3) |
