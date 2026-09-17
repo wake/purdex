@@ -251,6 +251,14 @@ describe('applyDurableEvent: turn composition (D2–D4, subagent guard)', () => 
     expect(s.lastSeq).toBe(1)
   })
 
+  it('F1: a subagent result does not clear pendingSend (the main turn is still in flight)', () => {
+    let s = { ...defaultExecutionState(), pendingSend: true }
+    s = applyDurableEvent(s, at(1, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: 'toolu_x' }))
+    expect(s.pendingSend).toBe(true)
+    s = applyDurableEvent(s, at(2, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: null }))
+    expect(s.pendingSend).toBe(false)
+  })
+
 })
 
 describe('defaultExecutionState', () => {
