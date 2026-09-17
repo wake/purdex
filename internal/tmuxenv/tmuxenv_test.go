@@ -22,6 +22,15 @@ func writeTmux(t *testing.T, dir string, executable bool) string {
 	return dir
 }
 
+// emptyPathDir returns a directory guaranteed to hold no tmux. Real system
+// directories must not be used for this: `/usr/bin/tmux` exists on most Linux
+// and CI images, which would make LookPath succeed and quietly turn the
+// Prepended and NotFound cases into Found — a green test proving nothing.
+func emptyPathDir(t *testing.T) string {
+	t.Helper()
+	return t.TempDir()
+}
+
 // isolate gives the test a PATH with no tmux on it and no inherited tmux
 // variables, so each case starts from a known environment.
 func isolate(t *testing.T) {
@@ -36,7 +45,7 @@ func isolate(t *testing.T) {
 func TestPrepare_AlreadyOnPath_LeavesPathUntouched(t *testing.T) {
 	isolate(t)
 	binDir := writeTmux(t, t.TempDir(), true)
-	want := binDir + string(os.PathListSeparator) + "/usr/bin"
+	want := binDir + string(os.PathListSeparator) + emptyPathDir(t)
 	t.Setenv("PATH", want)
 
 	got := prepare([]string{"/nowhere-a", "/nowhere-b"})
@@ -56,7 +65,7 @@ func TestPrepare_AlreadyOnPath_LeavesPathUntouched(t *testing.T) {
 // to survives intact and in order — the daemon execs more than tmux.
 func TestPrepare_NotOnPath_PrependsProbedDir(t *testing.T) {
 	isolate(t)
-	original := "/usr/bin" + string(os.PathListSeparator) + "/bin"
+	original := emptyPathDir(t) + string(os.PathListSeparator) + emptyPathDir(t)
 	t.Setenv("PATH", original)
 	found := writeTmux(t, t.TempDir(), true)
 
@@ -78,7 +87,7 @@ func TestPrepare_NotOnPath_PrependsProbedDir(t *testing.T) {
 // damaged on the way to finding that out.
 func TestPrepare_NowhereToBeFound_LeavesPathUntouched(t *testing.T) {
 	isolate(t)
-	original := "/usr/bin"
+	original := emptyPathDir(t)
 	t.Setenv("PATH", original)
 
 	got := prepare([]string{t.TempDir(), t.TempDir()})
@@ -98,7 +107,7 @@ func TestPrepare_NowhereToBeFound_LeavesPathUntouched(t *testing.T) {
 // would prepend a directory that cannot satisfy a single call.
 func TestPrepare_SkipsNonExecutableAndKeepsLooking(t *testing.T) {
 	isolate(t)
-	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("PATH", emptyPathDir(t))
 	decoy := writeTmux(t, t.TempDir(), false)
 	real := writeTmux(t, t.TempDir(), true)
 
@@ -116,7 +125,7 @@ func TestPrepare_SkipsNonExecutableAndKeepsLooking(t *testing.T) {
 // preference rather than whatever the filesystem answers first.
 func TestPrepare_HonoursProbeOrder(t *testing.T) {
 	isolate(t)
-	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("PATH", emptyPathDir(t))
 	first := writeTmux(t, t.TempDir(), true)
 	second := writeTmux(t, t.TempDir(), true)
 
@@ -141,10 +150,10 @@ func TestPrepare_AlwaysUnsetsTmuxVars(t *testing.T) {
 			case "found":
 				t.Setenv("PATH", writeTmux(t, t.TempDir(), true))
 			case "prepended":
-				t.Setenv("PATH", "/usr/bin")
+				t.Setenv("PATH", emptyPathDir(t))
 				probe = []string{writeTmux(t, t.TempDir(), true)}
 			case "not found":
-				t.Setenv("PATH", "/usr/bin")
+				t.Setenv("PATH", emptyPathDir(t))
 				probe = []string{t.TempDir()}
 			}
 
@@ -178,7 +187,7 @@ func TestPrepare_ReportsWhenTmuxWasNotSet(t *testing.T) {
 // or a second caller must not grow PATH a copy at a time.
 func TestPrepare_Idempotent(t *testing.T) {
 	isolate(t)
-	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("PATH", emptyPathDir(t))
 	found := writeTmux(t, t.TempDir(), true)
 
 	first := prepare([]string{found})
