@@ -68,6 +68,33 @@ describe('NexEngineStatus', () => {
     warn.mockRestore()
   })
 
+  // nexen v0.11.0 resolves the host's own Claude Code login out of two
+  // backends the CLI flips between, and reports credential_warning when the
+  // pick was ambiguous. Saying so is the whole reason the daemon resolves it
+  // instead of letting the CLI pick silently — a user who cannot see the
+  // warning runs turns against whichever account won a coin toss.
+  it('renders the credential source, account id and the ambiguity warning', async () => {
+    vi.mocked(api.fetchNexHost).mockResolvedValueOnce({
+      active_account: 'wake@example.com',
+      account_id: 'HOST',
+      credential_source: 'keychain',
+      credential_warning: 'two usable credentials for different accounts; picked the freshest',
+      quota: null,
+    })
+    render(<NexEngineStatus hostId="h" info={ready} onRefresh={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('nex-credential-warning')).toHaveTextContent(/different accounts/))
+    expect(screen.getByText('keychain · HOST')).toBeInTheDocument()
+  })
+
+  // An older daemon omits all three fields; the card must not grow an empty
+  // row or a stray warning box for a response that simply predates them.
+  it('omits the credential rows entirely when the daemon does not report them', async () => {
+    render(<NexEngineStatus hostId="h" info={ready} onRefresh={() => {}} />)
+    await waitFor(() => expect(screen.getByText('wake@example.com')).toBeInTheDocument())
+    expect(screen.queryByTestId('nex-credential-warning')).not.toBeInTheDocument()
+    expect(screen.queryByText(/credential from/i)).not.toBeInTheDocument()
+  })
+
   it('renders quota as unknown when null (never 0)', async () => {
     vi.mocked(api.fetchNexHost).mockResolvedValueOnce({ active_account: '', quota: null })
     render(<NexEngineStatus hostId="h" info={ready} onRefresh={() => {}} />)

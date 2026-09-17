@@ -1069,6 +1069,7 @@
   "hosts.nex.status.ready": "就緒",
   "hosts.nex.status.phase": "階段",
   "hosts.nex.status.account": "帳號",
+  "hosts.nex.status.credential_source": "憑證來源",
   "hosts.nex.status.quota_5h": "5 小時額度",
   "hosts.nex.status.quota_7d": "7 天額度",
   "hosts.nex.status.quota_unknown": "未知",

@@ -55,8 +55,16 @@ cat >/dev/null
 //
 // The shape is hostcred's: a claudeAiOauth object with a non-empty
 // accessToken and expiresAt in MILLISECONDS, far enough out to clear
-// hostcred.ExpiryMargin. The token is never sent anywhere — the fake claude
-// script ignores its environment entirely.
+// hostcred.ExpiryMargin.
+//
+// ⚠️ This token stays local only while the FILE backend is the sole usable
+// one. hostcred's resolver takes a ~1ms read of ~/.claude.json when exactly
+// one backend answers, but puts EACH token to GET /api/oauth/profile when
+// two do (its R9-1/R9-2 split) — so on a host whose keychain also holds a
+// "Claude Code-credentials" item, these tests would make a real network call
+// carrying this fake token and the user's real one. The temp $HOME does not
+// close that hole by itself, and pdx has no way to force a backend: nexen's
+// credential_source knob is not plumbed through [nex] yet. Tracked in #1099.
 func writeHostCredential(t *testing.T, home string) {
 	t.Helper()
 	dir := filepath.Join(home, ".claude")

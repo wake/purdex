@@ -92,6 +92,25 @@ export interface NexQuota {
 
 export interface NexHostInfo {
   active_account: string
+  /**
+   * Which account the reading is attributed to — the id of the token that
+   * would be used, not a claim about who the user is. Omitted by a daemon
+   * with no host login, and by every daemon older than nexen v0.11.0.
+   */
+  account_id?: string
+  /**
+   * Which backend the host's Claude Code login was read from. The CLI writes
+   * to whichever of the two is writable and deletes the other, so this can
+   * flip without anyone touching the config.
+   */
+  credential_source?: 'file' | 'keychain' | string
+  /**
+   * Non-empty exactly when the pick was ambiguous — most importantly when
+   * the two backends hold DIFFERENT accounts. Saying so is the whole point
+   * of nexen resolving the credential instead of letting the CLI pick one
+   * silently, so the card renders it loudly rather than as another row.
+   */
+  credential_warning?: string
   /** null whenever the daemon cannot say whose quota it would be. */
   quota: NexQuota | null
 }
