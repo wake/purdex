@@ -147,10 +147,69 @@ function patchSummary(s: ExecutionState, patch: Partial<ExecutionSummary>): Exec
   return { ...s, summaryStale: true, summary: s.summary ? { ...s.summary, ...patch } : null }
 }
 
+/** D3 + D4: the turn is over, so nothing can still be streaming or running. */
+const TURN_ENDING_KINDS = new Set([
+  'result', 'execution.terminal', 'execution.error', 'execution.rejected', 'execution.terminated',
+  'execution.interrupted', 'execution.turn_orphaned', 'execution.turn_stalled', 'execution.archived',
+])
+
+function contentBlocks(p: Record<string, unknown>): Record<string, unknown>[] {
+  const content = obj(p.message)?.content
+  return Array.isArray(content) ? content.map(obj).filter((b): b is Record<string, unknown> => b !== null) : []
+}
+
+function endTurn(s: ExecutionState, at: number): ExecutionState {
+  const tools = { ...s.tools }
+  for (const [id, t] of Object.entries(tools)) {
+    if (t.status === 'running') tools[id] = { ...t, endedAt: at, status: 'aborted' }
+  }
+  return { ...s, partial: null, turnLive: false, tools }
+}
+
+function finalizeBlock(s: ExecutionState, p: Record<string, unknown>): ExecutionState {
+  const partial = s.partial
+  if (!partial) return s
+  if (partial.messageId !== null && obj(p.message)?.id !== partial.messageId) return { ...s, partial: null }
+  // By counter, not lowest index: after a snapshot {blocks:[1]} the replayed
+  // assistant 0 must be a no-op that leaves block 1 streaming (spec D1).
+  const { [partial.finalized]: _finalized, ...blocks } = partial.blocks
+  return { ...s, partial: { ...partial, finalized: partial.finalized + 1, blocks } }
+}
+
+function recordToolStarts(s: ExecutionState, p: Record<string, unknown>, at: number): ExecutionState {
+  let tools = s.tools
+  for (const b of contentBlocks(p)) {
+    if (b.type !== 'tool_use' || typeof b.id !== 'string' || tools[b.id]) continue
+    tools = { ...tools, [b.id]: { name: typeof b.name === 'string' ? b.name : '', startedAt: at, endedAt: null, status: 'running' } }
+  }
+  return tools === s.tools ? s : { ...s, tools }
+}
+
+function recordToolEnds(s: ExecutionState, p: Record<string, unknown>, at: number): ExecutionState {
+  let tools = s.tools
+  for (const b of contentBlocks(p)) {
+    if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
+    const t = tools[b.tool_use_id]
+    if (!t || t.endedAt !== null) continue
+    tools = { ...tools, [b.tool_use_id]: { ...t, endedAt: at, status: b.is_error === true ? 'error' : 'done' } }
+  }
+  return tools === s.tools ? s : { ...s, tools }
+}
+
+/** Spec §4.1 D1–D4 and §4.2 A1–A4; runs after the seq guard, before the per-kind reducers. */
+function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
+  if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
+  if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
+  if (p.parent_tool_use_id != null) return s
+  if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
+  if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
+  return s
+}
+
 export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionState {
   if (!Number.isFinite(ev.seq) || ev.seq <= s.lastSeq) return s
   const p = ev.payload ?? {}
-  let next: ExecutionState = { ...s, lastSeq: ev.seq }
+  let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq }, ev, p)
 
   if (!isLifecycleKind(ev.kind)) {
     next = { ...next, messages: [...next.messages, p as StreamMessage] }

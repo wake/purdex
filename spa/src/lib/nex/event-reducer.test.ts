@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { applyDurableEvent, applyTransientFrame, defaultExecutionState, finalizedFor, frameToEvent, isLifecycleKind, type ExecutionState } from './event-reducer'
 import type { NexEvent, ExecutionSummary } from './types'
 import type { AssistantMessage } from '../stream-ws'
+import wireSample from './__fixtures__/cc-2.1.275-sleep6.jsonl?raw'
 
 const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): NexEvent =>
   ({ seq, execution_id: 'exc_1', kind, payload, created_at: 1 })
@@ -395,6 +396,238 @@ describe('applyTransientFrame', () => {
     const m: AssistantMessage = { type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [], stop_reason: null } }
     const id: string | undefined = m.message.id
     expect(id).toBe('msg_1')
+  })
+})
+
+describe('applyDurableEvent: partial + tool activity', () => {
+  const MSG = 'msg_011Cf9fLxdWgh5jkA2b9MjXt'
+  const TOOL = 'toolu_01CyoH2VpvKrWq9hjjeBX6uM'
+  const at = (seq: number, kind: string, payload: Record<string, unknown>, created_at = seq * 100): NexEvent =>
+    ({ seq, execution_id: 'exc_1', kind, payload, created_at })
+  const streamEvent = (event: Record<string, unknown>): Record<string, unknown> =>
+    ({ type: 'stream_event', event, session_id: 's', parent_tool_use_id: null, uuid: 'u' })
+  const messageStart = (id: string = MSG) =>
+    streamEvent({ type: 'message_start', message: { id, type: 'message', role: 'assistant', content: [] } })
+  const blockStart = (index: number, content_block: Record<string, unknown>) =>
+    streamEvent({ type: 'content_block_start', index, content_block })
+  const delta = (index: number, d: Record<string, unknown>) =>
+    streamEvent({ type: 'content_block_delta', index, delta: d })
+  const assistant = (blocks: Record<string, unknown>[], id: string = MSG, parent: string | null = null): Record<string, unknown> =>
+    ({ type: 'assistant', message: { id, role: 'assistant', content: blocks, stop_reason: null }, parent_tool_use_id: parent })
+  const toolUse = (id: string = TOOL, name = 'Bash'): Record<string, unknown> => ({ type: 'tool_use', id, name, input: {} })
+  const toolResult = (tool_use_id: string = TOOL, is_error = false, parent: string | null = null): Record<string, unknown> =>
+    ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id, content: 'ok', is_error }] }, parent_tool_use_id: parent })
+  const transient = (s: ExecutionState, ...frames: Record<string, unknown>[]) =>
+    frames.reduce((acc, f) => applyTransientFrame(acc, 'stream_event', f), s)
+  const snapshot = (s: ExecutionState, blocks: Record<string, unknown>[], message_id = MSG) =>
+    applyTransientFrame(s, 'stream_snapshot', { message_id, blocks })
+  const running = (id: string, startedAt = 100) => ({ [id]: { name: 'Bash', startedAt, endedAt: null, status: 'running' as const } })
+
+  it('D1: the Nth assistant frame finalizes block N (F8/F9 interleaving) leaving finalized == 2 and no blocks', () => {
+    let s = transient(defaultExecutionState(),
+      messageStart(),
+      blockStart(0, { type: 'text', text: '' }),
+      delta(0, { type: 'text_delta', text: 'hello' }))
+    s = applyDurableEvent(s, at(1, 'assistant', assistant([{ type: 'text', text: 'hello' }])))
+    expect(s.partial).toEqual({ messageId: MSG, finalized: 1, blocks: {} })
+    s = transient(s,
+      streamEvent({ type: 'content_block_stop', index: 0 }),
+      blockStart(1, toolUse()),
+      delta(1, { type: 'input_json_delta', partial_json: '{"command":"ls"}' }))
+    expect(Object.keys(s.partial?.blocks ?? {})).toEqual(['1'])
+    s = applyDurableEvent(s, at(2, 'assistant', assistant([toolUse()])))
+    expect(s.partial).toEqual({ messageId: MSG, finalized: 2, blocks: {} })
+    expect(s.messages).toHaveLength(2)
+  })
+
+  it('D1: an assistant frame with a different message id drops the whole partial', () => {
+    let s = transient(defaultExecutionState(), messageStart(), delta(0, { type: 'text_delta', text: 'stale' }))
+    s = applyDurableEvent(s, at(1, 'assistant', assistant([{ type: 'text', text: 'x' }], 'msg_other')))
+    expect(s.partial).toBeNull()
+    expect(s.messages).toHaveLength(1)
+  })
+
+  it('D1: a null-id assembly (joined mid-message) is finalized by any main-agent assistant frame', () => {
+    let s = transient(defaultExecutionState(), delta(0, { type: 'text_delta', text: 'a' }))
+    expect(s.partial?.messageId).toBeNull()
+    s = applyDurableEvent(s, at(1, 'assistant', assistant([{ type: 'text', text: 'a' }])))
+    expect(s.partial).toEqual({ messageId: null, finalized: 1, blocks: {} })
+  })
+
+  it('D1: an assistant frame with no partial leaves partial null (no throw, message still pushed)', () => {
+    const s = applyDurableEvent(defaultExecutionState(), at(1, 'assistant', assistant([{ type: 'text', text: 'a' }])))
+    expect(s.partial).toBeNull()
+    expect(s.messages).toHaveLength(1)
+  })
+
+  it('D1: a subagent assistant frame (non-null parent_tool_use_id) does not finalize', () => {
+    let s = transient(defaultExecutionState(), messageStart(), delta(0, { type: 'text_delta', text: 'a' }))
+    s = applyDurableEvent(s, at(1, 'assistant', assistant([{ type: 'text', text: 'a' }], MSG, 'toolu_parent')))
+    expect(s.partial).toEqual({ messageId: MSG, finalized: 0, blocks: { 0: { index: 0, type: 'text', text: 'a', thinking: '', partialJson: '' } } })
+  })
+
+  it('reconnect case A: snapshot {blocks:[1]} with no rendered assistant, replayed assistant 0 keeps block 1 streaming', () => {
+    let s = snapshot(defaultExecutionState(), [{ index: 1, text: 'b' }])
+    expect(s.partial?.finalized).toBe(0)
+    s = applyDurableEvent(s, at(1, 'assistant', assistant([{ type: 'text', text: 'block zero' }])))
+    expect(s.partial?.finalized).toBe(1)
+    expect(s.partial?.blocks[1]).toMatchObject({ index: 1, type: 'text', text: 'b' })
+    s = transient(s, delta(1, { type: 'text_delta', text: 'c' }))
+    expect(s.partial?.blocks[1].text).toBe('bc')
+    s = applyDurableEvent(s, at(2, 'assistant', assistant([{ type: 'text', text: 'bc' }])))
+    expect(s.partial).toEqual({ messageId: MSG, finalized: 2, blocks: {} })
+  })
+
+  it('reconnect case B: assistant 0 already rendered, snapshot {blocks:[1]} seeds finalized 1 and assistant 1 removes block 1', () => {
+    let s = applyDurableEvent(defaultExecutionState(), at(1, 'assistant', assistant([{ type: 'text', text: 'block zero' }])))
+    s = snapshot(s, [{ index: 1, text: 'b' }])
+    expect(s.partial?.finalized).toBe(1)
+    expect(s.partial?.blocks[1]).toMatchObject({ text: 'b' })
+    s = applyDurableEvent(s, at(2, 'assistant', assistant([{ type: 'text', text: 'b' }])))
+    expect(s.partial).toEqual({ messageId: MSG, finalized: 2, blocks: {} })
+  })
+
+  it('seq idempotency short-circuits before D1: a replayed assistant frame does not double-finalize', () => {
+    let s = transient(defaultExecutionState(), messageStart(), delta(0, { type: 'text_delta', text: 'a' }), delta(1, { type: 'text_delta', text: 'b' }))
+    const frame = at(1, 'assistant', assistant([{ type: 'text', text: 'a' }]))
+    s = applyDurableEvent(s, frame)
+    expect(s.partial?.finalized).toBe(1)
+    const again = applyDurableEvent(s, frame)
+    expect(again).toBe(s)
+    expect(again.partial?.finalized).toBe(1)
+    expect(again.partial?.blocks[1]).toBeDefined()
+  })
+
+  it('D2: execution.running and execution.message_accepted each set turnLive', () => {
+    expect(applyDurableEvent(defaultExecutionState(), at(1, 'execution.running', {})).turnLive).toBe(true)
+    expect(applyDurableEvent(defaultExecutionState(), at(1, 'execution.message_accepted', { turn_id: 't', text: 'hi' })).turnLive).toBe(true)
+  })
+
+  it.each([
+    ['result', { type: 'result', subtype: 'success' }],
+    ['execution.terminal', { turn_id: 't', reason: 'completed', state: 'idle' }],
+    ['execution.error', { reason: 'boom' }],
+    ['execution.rejected', { reason: 'nope' }],
+    ['execution.terminated', { principal_id: 'p' }],
+    ['execution.interrupted', { turn_id: 't' }],
+    ['execution.turn_orphaned', { turn_id: 't' }],
+    ['execution.turn_stalled', { turn_id: 't' }],
+  ])('D3: %s clears partial, turnLive and aborts running tools', (kind, payload) => {
+    const base: ExecutionState = {
+      ...defaultExecutionState(),
+      turnLive: true,
+      partial: { messageId: MSG, finalized: 0, blocks: { 0: { index: 0, type: 'text', text: 'a', thinking: '', partialJson: '' } } },
+      tools: running('toolu_a'),
+    }
+    const s = applyDurableEvent(base, at(7, kind, payload))
+    expect(s.partial).toBeNull()
+    expect(s.turnLive).toBe(false)
+    expect(s.tools.toolu_a).toEqual({ name: 'Bash', startedAt: 100, endedAt: 700, status: 'aborted' })
+  })
+
+  it('D4: execution.archived clears partial and turnLive like D3', () => {
+    const base: ExecutionState = {
+      ...defaultExecutionState(),
+      turnLive: true,
+      partial: { messageId: MSG, finalized: 0, blocks: {} },
+      tools: running('toolu_a'),
+    }
+    const s = applyDurableEvent(base, at(3, 'execution.archived', { principal_id: 'p' }))
+    expect(s.partial).toBeNull()
+    expect(s.turnLive).toBe(false)
+    expect(s.tools.toolu_a.status).toBe('aborted')
+    expect(s.summaryStale).toBe(true)
+  })
+
+  it('A1: a tool_use block starts a running activity at ev.created_at; first sighting wins', () => {
+    let s = applyDurableEvent(defaultExecutionState(), at(1, 'assistant', assistant([toolUse(TOOL, 'Bash')])))
+    expect(s.tools[TOOL]).toEqual({ name: 'Bash', startedAt: 100, endedAt: null, status: 'running' })
+    s = applyDurableEvent(s, at(2, 'assistant', assistant([toolUse(TOOL, 'Renamed')], 'msg_2')))
+    expect(s.tools[TOOL]).toEqual({ name: 'Bash', startedAt: 100, endedAt: null, status: 'running' })
+  })
+
+  it('A1/A2: subagent assistant and user frames (non-null parent_tool_use_id) are skipped', () => {
+    let s = applyDurableEvent(defaultExecutionState(), at(1, 'assistant', assistant([toolUse('toolu_sub')], MSG, 'toolu_parent')))
+    expect(s.tools).toEqual({})
+    s = { ...s, tools: running(TOOL) }
+    s = applyDurableEvent(s, at(2, 'user', toolResult(TOOL, false, 'toolu_parent')))
+    expect(s.tools[TOOL]).toEqual({ name: 'Bash', startedAt: 100, endedAt: null, status: 'running' })
+  })
+
+  it('A2: a tool_result ends the activity as done, or error when is_error', () => {
+    const base: ExecutionState = { ...defaultExecutionState(), tools: { ...running('toolu_ok'), ...running('toolu_bad') } }
+    let s = applyDurableEvent(base, at(4, 'user', toolResult('toolu_ok', false)))
+    s = applyDurableEvent(s, at(5, 'user', toolResult('toolu_bad', true)))
+    expect(s.tools.toolu_ok).toEqual({ name: 'Bash', startedAt: 100, endedAt: 400, status: 'done' })
+    expect(s.tools.toolu_bad).toEqual({ name: 'Bash', startedAt: 100, endedAt: 500, status: 'error' })
+  })
+
+  it('A2: a tool_result for an unknown or already-ended tool changes nothing', () => {
+    const ended = { name: 'Bash', startedAt: 100, endedAt: 200, status: 'aborted' as const }
+    const base: ExecutionState = { ...defaultExecutionState(), tools: { toolu_x: ended } }
+    const s = applyDurableEvent(base, at(4, 'user', toolResult('toolu_x')))
+    expect(s.tools.toolu_x).toEqual(ended)
+    expect(applyDurableEvent(base, at(5, 'user', toolResult('toolu_never'))).tools).toEqual({ toolu_x: ended })
+  })
+
+  it('A3: a turn-ending event aborts only running tools; done/error/aborted keep their timestamps', () => {
+    const done = { name: 'Bash', startedAt: 100, endedAt: 200, status: 'done' as const }
+    const error = { name: 'Bash', startedAt: 100, endedAt: 250, status: 'error' as const }
+    const base: ExecutionState = { ...defaultExecutionState(), tools: { toolu_done: done, toolu_err: error, ...running('toolu_run', 300) } }
+    const s = applyDurableEvent(base, at(9, 'execution.turn_orphaned', { turn_id: 't' }))
+    expect(s.tools.toolu_done).toEqual(done)
+    expect(s.tools.toolu_err).toEqual(error)
+    expect(s.tools.toolu_run).toEqual({ name: 'Bash', startedAt: 300, endedAt: 900, status: 'aborted' })
+  })
+
+  it('A4: created_at 0 (bare frame fallback) is stored as startedAt 0, never Date.now()', () => {
+    const s = applyDurableEvent(defaultExecutionState(), at(1, 'assistant', assistant([toolUse()]), 0))
+    expect(s.tools[TOOL].startedAt).toBe(0)
+    const ended = applyDurableEvent(s, at(2, 'user', toolResult(), 0))
+    expect(ended.tools[TOOL]).toEqual({ name: 'Bash', startedAt: 0, endedAt: 0, status: 'done' })
+  })
+
+  it('golden: replaying the CC 2.1.275 sleep-6 wire sample ends with 10 messages, no partial, Bash done', () => {
+    const lines = wireSample.split('\n').filter((l) => l.trim() !== '')
+    expect(lines).toHaveLength(29)
+    const frames = lines.map((l) => JSON.parse(l) as Record<string, unknown>)
+    let s = defaultExecutionState()
+    let seq = 0
+    let expectedJson = ''
+    frames.forEach((frame, i) => {
+      const line = i + 1
+      if (frame.type === 'stream_event') {
+        const event = frame.event as { type: string; delta?: { type: string; partial_json?: string } }
+        if (event.delta?.type === 'input_json_delta') expectedJson += event.delta.partial_json ?? ''
+        s = applyTransientFrame(s, 'stream_event', frame)
+      } else {
+        seq += 1
+        s = applyDurableEvent(s, { seq, execution_id: 'exc_1', kind: frame.type as string, payload: frame, created_at: line * 100 })
+      }
+      if (line === 13) {
+        expect(expectedJson).toBe('{"command": "sleep 6 && echo ok", "description": "Sleep 6 seconds then echo ok"}')
+        expect(s.partial?.blocks[0].partialJson).toBe(expectedJson)
+        expect(s.partial?.blocks[0].toolName).toBe('Bash')
+        expect(s.turnLive).toBe(true)
+      }
+      if (line === 14) expect(s.partial).toEqual({ messageId: MSG, finalized: 1, blocks: {} })
+      if (line === 20) expect(s.tools[TOOL]).toMatchObject({ status: 'done', startedAt: 1400, endedAt: 2000 })
+      if (line === 24) expect(s.partial?.blocks[0]).toMatchObject({ type: 'text', text: 'done' })
+    })
+    expect(seq).toBe(10)
+    expect(s.messages).toHaveLength(10)
+    const counts: Record<string, number> = {}
+    for (const m of s.messages) counts[m.type] = (counts[m.type] ?? 0) + 1
+    expect(counts).toEqual({ system: 5, assistant: 2, user: 1, result: 1, rate_limit_event: 1 })
+    expect(s.partial).toBeNull()
+    expect(s.turnLive).toBe(false)
+    expect(s.lastSeq).toBe(10)
+    expect(s.pendingSend).toBe(false)
+    const bash = s.tools[TOOL]
+    expect(bash.status).toBe('done')
+    expect(bash.name).toBe('Bash')
+    expect(bash.endedAt).not.toBeNull()
+    expect(bash.endedAt as number).toBeGreaterThan(bash.startedAt)
   })
 })
 
