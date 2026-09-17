@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.376] - 2026-09-18
+
+### Fix: 狀態列的 peer id 在 pane 換了 agent 之後會跟上（#1127）
+
+狀態列顯示 `purdex-4a`，但那個 tmux 座位上坐的已經是 `purdex-bb` —— 舊 agent 退出、新 agent 在**同一個 tmux session** 裡啟動，狀態列停在前一個人，變暗，直到有人按 ↻。
+
+#### 為什麼一直在那裡、為什麼現在才被看到
+
+`usePeerInfo` 的快取鍵是 (host, session code, tmux instance)，守衛比對的是 tmux 世代。這擋得住 tmux **重啟**，擋不住 **CC session 在活著的 tmux session 裡被換掉** —— tmux 層什麼都沒變。60 秒後它把 row 標成 `stale`，但刻意不重抓：註解寫著「the refresh control is the way back」。
+
+v3 時狀態列顯示 `_q34psn4f` 這種雜湊，舊的和新的長得一樣，沒人看得出它 stale。v4 把名字變可讀，staleness 就變得肉眼可見。**一個既有的快取缺陷，被可讀性照出來。**
+
+#### 修法：用一個早就存在的訊號
+
+`writeProvenanceRecord` 在 `SessionStart` 時已經把新 agent 的 `sessionId` 寫進 pane 的 rebuild 記錄。`usePeerInfo` 現在訂閱那個字串，它變成**不同且非空**的值就 refresh 該 host。同一個 agent 的狀態變化不觸發。
+
+selector **刻意不用** hook 的 `tmuxInstance` 參數篩 pane：狀態列傳的是 `session?.tmux_instance ?? ''`，session 還沒 reconcile 時是空字串，靠它篩會讓值從 `''` 跳到實值 → 每次開 tab 一次假 refresh。`setPaneRebuild` 寫入時已經對過 pane binding，所以 host + code + 排除 terminated 就夠。
+
+#### 兩層保險
+
+stale 邊界那個 timer 本來就精準地在 `fetchedAt + 60s` 觸發，只是只 `setNow`。現在對連線中、有 active pane 的 host 順便 refresh —— 每個邊界一次，不是 polling。失敗的 host 保留 `fetchedAt`，effect 的依賴不變就不會反覆打。
+
+Codex review 抓到一個縫：掛載或重連時答案**已經**過界，`remaining <= 0` 直接 return，什麼都不會發生。補上：那個分支對連線中的 host 立刻 refresh。「切 tab 不發 fetch」這條規則因此精確化為「切 tab 不發 fetch **fresh** 資料」，並用一個新 case 釘住。
+
+#### 測試
+
++13 case，四個 mutation 各自變紅（拿掉 sessionId 訂閱 3 紅／每次寫入都觸發 1 紅／邊界只 `setNow` 2 紅／掛載過界仍 return 2 紅）。既有 case 零調整。
+
+順手修一個測試衛生問題：兩個檔的 `beforeEach` 用 `mockClear()`，它不會清 `mockImplementationOnce`，紅燈階段一個沒被消耗的 once-impl 洩漏到下一個舊 case。改成 `mockReset()`。
+
+只動 `spa/`。
 ## [1.0.0-alpha.375] - 2026-09-18
 
 ### Fix: `pdx msg send` 不再誤標 bypass 為 prompting（#1124）
