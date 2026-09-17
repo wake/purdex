@@ -864,6 +864,250 @@ func TestSend_LocalPartialInventoryNotReady(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Policy on the local path (spec §4.3)
+// ---------------------------------------------------------------------------
+
+const (
+	twinPeerSessionID = "e1e2e3e4-f5f6-4f78-8a9b-0c1d2e3f4a5c"
+	twinPeerPID       = 76975
+)
+
+// floodPairLimit drives PairRateLimit successful local sends from the origin
+// to p, draining p's inbox each time, and returns the request the NEXT send
+// should use — the one the limit must refuse.
+func (s *sendEnv) floodPairLimit(p *localPeer) ipeers.SendRequest {
+	s.t.Helper()
+	req := s.localSendReq()
+	for i := 0; i < ipeers.PairRateLimit; i++ {
+		s.sendOK(req)
+		p.recvLine()
+	}
+	return req
+}
+
+// TestSend_LocalPairRateLimited pins the one /deliver policy that §4.3 keeps
+// on the local path. It is not about trust between daemons — that is what the
+// host limit is for, and §4.3 drops that one here — but about protecting the
+// RECEIVING session from a flood, which is as wanted from next door as from
+// another host.
+func TestSend_LocalPairRateLimited(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	req := s.floodPairLimit(p)
+
+	assertRefused(t, s.send(adminCtx(), req), http.StatusTooManyRequests, ipeers.ErrRateLimited)
+	p.assertNoLine() // the 31st frame did not reach the target
+}
+
+// TestSend_LocalRateLimitedRefusalIsAudited is the audited side of §4.3's
+// boundary, and the target of mutation M3: the pair-limit check sits AFTER
+// the step-7 insert, so a refused send is still an attempt this daemon
+// recorded having made. Moving the check above the insert leaves the refusal
+// in the log and nowhere else, and this is the test that says so.
+func TestSend_LocalRateLimitedRefusalIsAudited(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	req := s.floodPairLimit(p)
+
+	assertRefused(t, s.send(adminCtx(), req), http.StatusTooManyRequests, ipeers.ErrRateLimited)
+
+	rows := s.rows()
+	if len(rows) != ipeers.PairRateLimit+1 {
+		t.Fatalf("audit rows = %d, want %d (the refusal is recorded too)", len(rows), ipeers.PairRateLimit+1)
+	}
+	last := rows[len(rows)-1]
+	if last.Result != ipeers.ErrRateLimited {
+		t.Errorf("last row result = %q, want %q", last.Result, ipeers.ErrRateLimited)
+	}
+	if last.Direction != store.DirOut || last.ToHostID != localHostID || last.ToSessionID != localPeerSessionID {
+		t.Errorf("last row = %+v, want an out row to the local target on %s", last, localHostID)
+	}
+}
+
+// TestSend_LocalResolutionFailureIsUnaudited is the other side of that
+// boundary: steps 1–6 are logged, not audited, on the local path exactly as
+// on the remote one. §4.3 puts each refusal where it sits REMOTELY rather
+// than where it happens to be written, and a resolution failure sits before
+// the insert on both.
+func TestSend_LocalResolutionFailureIsUnaudited(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	req := s.localSendReq()
+	req.To = localAlias + "/no-such-conversation"
+
+	assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+
+	if rows := s.rows(); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none", rows)
+	}
+	p.assertNoLine()
+}
+
+// TestSend_LocalDeliveryWritesExactlyOneAuditRow pins the first row of
+// §4.3's table. A remote send leaves two rows because two daemons each
+// record what they saw; here one daemon saw one thing, and a DirIn row
+// beside the DirOut one would not be corroboration — it would be the same
+// observation written twice.
+func TestSend_LocalDeliveryWritesExactlyOneAuditRow(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	req := s.localSendReq()
+
+	resp := s.sendOK(req)
+	p.recvLine()
+
+	row := s.onlyRow() // "exactly one" is this call, not the field checks below
+	if row.Direction != store.DirOut {
+		t.Errorf("direction = %v, want %v (the same daemon is both ends)", row.Direction, store.DirOut)
+	}
+	if row.MsgID != resp.MsgID || row.FromHostID != localHostID || row.FromSessionID != targetSessionID ||
+		row.ToHostID != localHostID || row.ToSessionID != localPeerSessionID ||
+		row.Result != ipeers.ResultDelivered || row.Bytes != len(req.Text) {
+		t.Errorf("audit row = %+v, want %s → %s on %s, delivered, %d bytes", row, targetSessionID, localPeerSessionID, localHostID, len(req.Text))
+	}
+}
+
+// TestSend_LocalModeIsTakenAsDeclared pins §4.3's mode row, and says why it
+// is not "remote, unchanged": AllowBypass is a PEER-HOST trust flag, and a
+// local target has no host entry to carry one. The authorisation is the
+// admin route plus live origin attribution instead — so the fixture removes
+// every host entry, and a send that consulted one would have none to consult.
+func TestSend_LocalModeIsTakenAsDeclared(t *testing.T) {
+	s := newSendEnv(t, envOpts{hosts: []config.PeerHost{}})
+	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	req := s.localSendReq()
+	req.Mode = ipeers.ModeBypass
+
+	resp := s.sendOK(req)
+
+	w, _ := wrapperOf(t, p.recvLine())
+	if w.FromMode != ipeers.ModeBypass {
+		t.Errorf("wrapper from-mode = %q, want %q", w.FromMode, ipeers.ModeBypass)
+	}
+	if resp.EffectiveMode != ipeers.ModeBypass {
+		t.Errorf("effective_mode = %q, want %q (nothing clamped it)", resp.EffectiveMode, ipeers.ModeBypass)
+	}
+	if row := s.onlyRow(); row.DeclaredMode != ipeers.ModeBypass || row.EffectiveMode != ipeers.ModeBypass {
+		t.Errorf("audit modes = %q/%q, want bypass/bypass", row.DeclaredMode, row.EffectiveMode)
+	}
+}
+
+// TestSend_LocalInvalidModeStillRefused: taking the declared mode as given
+// is not taking any string as given. ValidateMode still runs, and still
+// refuses before anything is recorded.
+func TestSend_LocalInvalidModeStillRefused(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	req := s.localSendReq()
+	req.Mode = "yolo"
+
+	assertRefused(t, s.send(adminCtx(), req), http.StatusBadRequest, ipeers.ErrBadMode)
+	p.assertNoLine()
+	if rows := s.rows(); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none (validation is unaudited)", rows)
+	}
+}
+
+// TestSend_LocalRefusalsNameThisHost is the guard on A1's substitution. On
+// the local path `entry` is the zero config.PeerHost, so an arm still
+// formatting entry.Alias renders "" where the host should be — a failure
+// that reads as a cosmetic blemish and is in fact a refusal that no longer
+// says which host it is about.
+//
+// Scoped to the arms that FORMAT THE TARGET HOST, which is the set A1
+// substituted. Validation, origin attribution, the pair limit and a write
+// failure are excluded on purpose: none of them names a host, so an alias
+// assertion there would pin wording nobody chose.
+//
+// Two of A1's sites are absent, and their absence is a fact about the local
+// path rather than a gap here:
+//
+//   - remote_too_old needs a live cc row with an empty Ref
+//     (hasStaleVersionRows, address.go). Every local row for a live cc entry
+//     gets Ref = RefID(sessionID) from applyIdentity (record.go), which is
+//     never empty, so this daemon cannot report its own inventory as pre-v4.
+//   - the toAddress fallback needs target.Address == "", which only
+//     normalizeRemoteRows produces, and the local branch does not call it.
+//     It is also not a refusal.
+func TestSend_LocalRefusalsNameThisHost(t *testing.T) {
+	cases := []struct {
+		name   string
+		opts   envOpts
+		setup  func(s *sendEnv) string // returns the address to send to
+		status int
+		code   string
+		// inDetail says WHERE the arm formats the host. Four arms put it in
+		// the operator-facing detail. The ambiguous arm does not: its detail
+		// is Resolve's own text about the session part, and targetAlias goes
+		// to the log line — so that is where this asserts, rather than
+		// pretending one uniform claim covers both.
+		inDetail bool
+	}{
+		{
+			name: "ambiguous",
+			setup: func(s *sendEnv) string {
+				s.addLocalPeer("twins", localPeerSessionID, localPeerPID)
+				s.addLocalPeer("twins", twinPeerSessionID, twinPeerPID)
+				return localAlias + "/twins"
+			},
+			status: http.StatusConflict, code: ipeers.ErrAmbiguous,
+		},
+		{
+			// A partial inventory reached through the tmux fallback: a
+			// name-tier address would not be not_ready at all, because
+			// Resolve consults snap.Partial only below tiers 1–3.
+			name: "not ready",
+			opts: envOpts{sessions: []session.SessionInfo{{Code: "s1", Name: "ghost"}}},
+			setup: func(s *sendEnv) string {
+				s.m.owners = &fakeOwners{errs: map[string]error{"s1": errors.New("resolver timeout")}}
+				return localAlias + "/ghost"
+			},
+			status: http.StatusServiceUnavailable, code: ipeers.ErrNotReady, inDetail: true,
+		},
+		{
+			name:   "not found",
+			setup:  func(s *sendEnv) string { return localAlias + "/no-such-conversation" },
+			status: http.StatusNotFound, code: ipeers.ErrPeerNotFound, inDetail: true,
+		},
+		{
+			// The combined form whose typed name is not the ref's current
+			// name: understood, and refused.
+			name: "name mismatch",
+			setup: func(s *sendEnv) string {
+				s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+				return localAlias + "/purdex-zz [" + strings.TrimPrefix(ipeers.RefID(localPeerSessionID), "_") + "]"
+			},
+			status: http.StatusConflict, code: ipeers.ErrCodeNameMismatch, inDetail: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSendEnv(t, c.opts)
+			req := s.localSendReq()
+			req.To = c.setup(s)
+
+			ae := assertRefused(t, s.send(adminCtx(), req), c.status, c.code)
+
+			if c.inDetail {
+				if !strings.Contains(ae.Detail, localAlias) {
+					t.Errorf("detail = %q, want it to name this host %q", ae.Detail, localAlias)
+				}
+				return
+			}
+			named := false
+			for _, l := range s.f.logs.all() {
+				if strings.Contains(l, c.code) && strings.Contains(l, localAlias) {
+					named = true
+				}
+			}
+			if !named {
+				t.Errorf("no %s log line names this host %q: %v", c.code, localAlias, s.f.logs.all())
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Sending to yourself (spec §4.5)
 // ---------------------------------------------------------------------------
 

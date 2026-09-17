@@ -494,6 +494,32 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 7b (local). The pair rate limit, which is the ONE /deliver policy that
+	// also runs here (spec §4.3). Not because local callers are distrusted —
+	// they hold this host's admin token — but because this limit protects the
+	// RECEIVING session from being flooded, and that protection is as wanted
+	// from next door as from another host. The key is built with the same
+	// constructor /deliver uses (deliver.go), and OriginKey carries HostID, so
+	// a local pair can never collide with a remote one.
+	//
+	// AFTER the insert, deliberately, mirroring /deliver: the refusal is on
+	// the audited side of the step-7 boundary because it is an attempt this
+	// daemon made, unlike the resolution failures above it, which are the
+	// caller's address being wrong.
+	//
+	// The two policies that are NOT here are decided, not overlooked:
+	// dedup keys on a msg id this very handler mints per attempt, so it could
+	// never fire and a test of it would assert nothing; and the host limit
+	// rations an external host's admission to this daemon, which the local
+	// admin caller is not (spec §4.3).
+	if isLocal && !m.pairs.Allow(pairKey{From: from.Key(), To: to.Key(targetHostID)}) {
+		const detail = "pair rate limit exceeded"
+		m.setResult(id, "", ipeers.ErrRateLimited, detail)
+		m.logf("peers: send %s to %q refused (%s): %s", msgID, targetAlias, ipeers.ErrRateLimited, detail)
+		writeWireError(w, http.StatusTooManyRequests, ipeers.APIError{Error: ipeers.ErrRateLimited, Detail: detail})
+		return
+	}
+
 	// 8 (local). The frame goes straight into the target's inbox, with the
 	// SENDER's own socket as its reply address — no helper stands in, so a
 	// native reply goes back to the session that sent this (spec §4.2, L4).
