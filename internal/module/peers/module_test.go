@@ -1546,6 +1546,53 @@ func TestLocalEnvelope_UsesCallerSnapshot_NotLiveConfig(t *testing.T) {
 	}
 }
 
+// TestLocalEnvelope_PublishesOwnAlias pins Phase C's premise (spec §7): the
+// envelope says what this host calls itself, so a peer pairing with it can
+// adopt that name instead of inventing a local one. Like HostID, the value
+// comes from the caller's config snapshot, never from a second read of the
+// live config — the module's live alias here is "y" and must not leak in.
+func TestLocalEnvelope_PublishesOwnAlias(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "s1", Name: "s1", Cwd: "/a"},
+	}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "live-host-id", "y")
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	env := m.localEnvelope(context.Background(), "snapshot-host-id", "x")
+
+	if !env.OK {
+		t.Fatalf("ok = false, want true; error=%q", env.Error)
+	}
+	if env.Alias != "x" {
+		t.Errorf("env.Alias = %q, want the snapshot alias %q (live config alias %q must not leak in)", env.Alias, "x", "y")
+	}
+}
+
+// TestLocalEnvelope_PublishesOwnAliasOnFailure is the companion: a host
+// that cannot build its inventory still knows its own name, and a reader
+// that only pairs on ok=true loses nothing by being told it. The alias
+// travels with every envelope, not only the successful ones.
+func TestLocalEnvelope_PublishesOwnAliasOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{err: errors.New("tmux unreachable")}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "live-host-id", "y")
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	env := m.localEnvelope(context.Background(), "snapshot-host-id", "x")
+
+	if env.OK {
+		t.Fatalf("ok = true, want false: the session listing fails in this fixture")
+	}
+	if env.Alias != "x" {
+		t.Errorf("env.Alias = %q, want the snapshot alias %q even on a failed inventory", env.Alias, "x")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Label snapshot join, registry diagnosis, daemon_version (Task 5).
 // ---------------------------------------------------------------------------

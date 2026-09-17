@@ -191,6 +191,19 @@ func validHostID(s string) bool {
 	return true
 }
 
+// sanitizeLearnedAlias returns alias when it is safe to adopt as a local name
+// for a peer, or "" when it is not. Same posture as validHostID: a peer's
+// self-report is data, never a decision. config.ValidateAlias is the single
+// rule — one safe URL path segment, bounded, no control characters, not a
+// reserved dot name, and distinct from localAlias — so a learned alias can
+// never be accepted on terms an operator-supplied one would be refused on.
+func sanitizeLearnedAlias(alias, localAlias string) string {
+	if config.ValidateAlias(alias, localAlias) != nil {
+		return ""
+	}
+	return alias
+}
+
 // verifyHost calls the fetch seam against url with the given outbound
 // token, applying the verify predicate: err == nil && env.OK &&
 // validHostID(env.HostID). On success errMsg is ""; otherwise errMsg names

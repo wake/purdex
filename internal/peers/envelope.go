@@ -18,7 +18,13 @@ package peers
 // that could not be read — which is why the flag reads as graver than it
 // now is.
 type Envelope struct {
-	HostID               string       `json:"host_id"`
+	HostID string `json:"host_id"`
+	// Alias is what this host calls ITSELF (config PeerAlias()). A reader uses
+	// it to name a newly paired peer the way that peer names itself, so an
+	// address means the same string on both machines. It is self-reported and
+	// therefore attacker-controlled: validate before storing, exactly as
+	// host_id already is.
+	Alias                string       `json:"alias"`
 	OK                   bool         `json:"ok"`
 	Error                string       `json:"error,omitempty"`
 	Partial              bool         `json:"partial"`

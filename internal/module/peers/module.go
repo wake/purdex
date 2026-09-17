@@ -345,6 +345,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	writeError := func(errMsg string) ipeers.Envelope {
 		return ipeers.Envelope{
 			HostID:               hostID,
+			Alias:                alias,
 			OK:                   false,
 			Error:                errMsg,
 			Partial:              false,
@@ -470,7 +471,11 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	})
 
 	return ipeers.Envelope{
-		HostID:               hostID,
+		HostID: hostID,
+		// The caller's snapshot alias, published so a peer pairing with this
+		// host can adopt the name this host uses for itself (spec §7) rather
+		// than inventing a local one that makes addresses unportable.
+		Alias:                alias,
 		OK:                   true,
 		Partial:              partial,
 		Peers:                peerRecords,

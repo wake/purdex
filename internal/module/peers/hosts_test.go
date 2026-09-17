@@ -182,6 +182,25 @@ func TestValidHostID(t *testing.T) {
 	}
 }
 
+// TestSanitizeLearnedAlias_RejectsUnsafe pins for a peer's self-reported
+// alias (spec §7) the posture validHostID already holds for its
+// self-reported host_id: it is attacker-controlled, and it flows into this
+// host's config, into address strings and into this host's own terminal
+// output. Anything config.ValidateAlias refuses — empty, something that is
+// not one safe URL path segment, a reserved dot name, a control character,
+// an oversized value, or a collision with the local alias in any case —
+// must come back as "" rather than be adopted.
+func TestSanitizeLearnedAlias_RejectsUnsafe(t *testing.T) {
+	for _, bad := range []string{"", "has/slash", "..", "esc\x1b[31m", strings.Repeat("a", 65), "mlab", "MLAB"} {
+		if got := sanitizeLearnedAlias(bad, "mlab"); got != "" {
+			t.Errorf("alias %q survived as %q", bad, got)
+		}
+	}
+	if got := sanitizeLearnedAlias("air26", "mlab"); got != "air26" {
+		t.Errorf("safe alias = %q, want %q", got, "air26")
+	}
+}
+
 // ---- GET /api/peers/hosts ----
 
 func TestHandleListHosts_NonAdminForbidden(t *testing.T) {
