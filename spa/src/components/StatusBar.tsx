@@ -12,6 +12,7 @@ import { compositeKey } from '../lib/composite-key'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 import { usePeerInfo, type PeerInfo } from '../hooks/usePeerInfo'
+import type { PeerRow } from '../stores/usePeerStore'
 import { copyText } from '../lib/copy-text'
 import { reasonText } from '../lib/peer-display'
 
@@ -56,8 +57,8 @@ function Separator({ className = '' }: { className?: string }) {
  *
  * A `<button>`, not a `<span>` with a handler: the status bar had no keyboard
  * path at all, and these are the first things in it worth reaching. The
- * displayed text and the copied value differ for the peer id — the label is
- * readable, the address is what `pdx msg send` accepts.
+ * displayed text and the copied value differ for the peer id — see
+ * `peerIdText`.
  */
 function CopySegment({ testId, display, value, what, title, dim, rtl, className = '', onCopy, onDoubleClick }: {
   testId: string
@@ -137,16 +138,44 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
   if (!peer.connected) return t('peer.host_not_connected')
   if (peer.error) return t('peer.error', { error: peer.error })
   const { row } = peer
-  if (!row || row.label === '') {
+  // Not `row.title === ''`, which is what this guard used to read. A title is
+  // free text that routes nothing and under v4 is usually unset, so keying the
+  // whole segment off it hid rows that were perfectly addressable. A row is
+  // absent when it has neither a ref nor an address — nothing to say and
+  // nothing to copy.
+  if (!row || (row.ref === '' && row.address === '')) {
     // No row from a partial answer is "undetermined", never "no peer": the row
     // may simply not have been resolved inside the daemon's 2 s budget.
     return peer.envelope.partial ? t('peer.undetermined') : t('peer.none')
   }
   const parts = [row.address]
   if (row.reason) parts.push(reasonText(row.reason, t))
-  if (peer.envelope.labelsUnavailable) parts.push(t('peer.labels_unavailable_note'))
+  if (peer.envelope.titlesUnavailable) parts.push(t('peer.titles_unavailable_note'))
   if (peer.stale) parts.push(t('peer.stale', { seconds: Math.round((Date.now() - peer.fetchedAt) / 1000) }))
   return parts.join(' — ')
+}
+
+/**
+ * The peer segment's two strings: what the row shows, and what a click copies.
+ *
+ * Display drops the host; the clipboard keeps it, and keeps the ref. What
+ * gets copied is what gets pasted into a handoff and used hours later —
+ * exactly the window in which a name drifts or is taken by someone else. The
+ * prettier string is the weaker one; it does not belong on the clipboard.
+ */
+function peerIdText(row: PeerRow | null): { display: string; value: string } {
+  const address = row?.address ?? ''
+  if (address === '') return { display: '', value: '' }
+  // The host is the address's first segment; the name is everything after it.
+  const slash = address.indexOf('/')
+  const name = slash === -1 ? address : address.slice(slash + 1)
+  const ref = row?.ref ?? ''
+  // A session whose registry name is not routable is addressed by its ref, so
+  // the address already ends in it and there is no name to bracket: appending
+  // would render `_q34psn [q34psn]`, which says the same thing twice.
+  if (ref === '' || name === ref) return { display: name, value: address }
+  const bracketed = ` [${ref.replace(/^_/, '')}]`
+  return { display: name + bracketed, value: address + bracketed }
 }
 
 interface Props {
@@ -343,9 +372,10 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const viewMode = content.mode
   const viewModes: ('terminal' | 'stream')[] = ['terminal', 'stream']
 
-  // The peer id shows the label and copies the address: a label alone is not
-  // addressable without its host, and someone copying "the peer id" means to
-  // paste something `pdx msg send` accepts.
+  // The peer id shows the name with its ref and copies the full address with
+  // its ref (`peerIdText`): a name alone is not addressable without its host,
+  // and someone copying "the peer id" means to paste something `pdx msg send`
+  // accepts.
   //
   // A failed refresh shows nothing at all (spec §6): the cache still holds the
   // last answer, but that is precisely the answer the daemon has just failed to
@@ -354,7 +384,12 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   // the refresh control is right there. (Being *not connected* is different: the
   // status segment already says so, and §6 keeps the last rows, dimmed.)
   const peerRow = peer.error ? null : peer.row
-  const peerLabel = peerRow?.label ?? ''
+  const peerId = peerIdText(peerRow)
+  // The title sits beside the name, not in place of it: it is a human's note
+  // about the conversation, and losing the name would lose the thing that both
+  // identifies the row and matches what the clipboard carries.
+  const peerTitle = peerRow?.title ?? ''
+  const peerIdDisplay = peerId.display && peerTitle ? `${peerId.display} · ${peerTitle}` : peerId.display
   const peerUncertain = peerRow?.reason === 'inbox_dead' || peerRow?.reason === 'ambiguous'
   const peerDim = !peer.connected || peer.stale || peerUncertain
   const peerName = peerRow?.agent?.peerName ?? ''
@@ -407,8 +442,8 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
         <Separator />
         <CopySegment
           testId="status-seg-peer-id"
-          display={peerLabel || '\u2014'}
-          value={peerRow?.address ?? ''}
+          display={peerIdDisplay || '\u2014'}
+          value={peerId.value}
           what={t('peer.label.peer_id')}
           title={peerIdTitle(peer, t)}
           dim={peerDim}

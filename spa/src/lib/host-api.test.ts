@@ -411,9 +411,14 @@ describe('fetchPeers', () => {
   // synthetic entry row. If the daemon renames a field, this fails here rather
   // than silently rendering blanks in the status bar.
   //
-  // Captured from the mini-lab daemon at 1.0.0-alpha.364 and then hand-updated
-  // to the v3 shape (`canonical`, a canonical address head, no `'default'`
-  // label source) — re-capture it against a v3 daemon when one is deployed.
+  // NOT a verbatim capture. It began as one from the mini-lab daemon at
+  // 1.0.0-alpha.364 and every address-bearing field has been hand-written to
+  // the v4 shape since: a six-digit `ref` in place of the eight-digit
+  // `canonical`, `<host>/<name>` addresses in place of the retired
+  // `<host>/<canonical>:<suffix>`, no `suffix`, no `'default'` title source.
+  // Re-capture it against a v4 daemon when one is deployed — until then the
+  // shapes below are asserted rather than observed, which is what the
+  // v3-shape guard at the end of this block is for.
   const realEnvelope = {
     host_id: 'mini-lab:278cbm',
     ok: true,
@@ -424,11 +429,10 @@ describe('fetchPeers', () => {
         host_id: 'mini-lab:278cbm',
         address: 'mini-lab/tmux:ai-chat2',
         row_kind: 'session',
-        canonical: '',
-        label: '',
-        label_source: '',
-        label_rev: 0,
-        suffix: '',
+        ref: '',
+        title: '',
+        title_source: '',
+        title_rev: 0,
         session_code: 'qorh3k',
         session_name: 'ai-chat2',
         tmux_instance: '6901:1789205013',
@@ -440,13 +444,12 @@ describe('fetchPeers', () => {
       {
         host: 'mini-lab',
         host_id: 'mini-lab:278cbm',
-        address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
+        address: 'mini-lab/ai-chat-story-3a',
         row_kind: 'session',
-        canonical: '_3k9f2mq4',
-        label: 'ai-chat4',
-        label_source: 'user',
-        label_rev: 0,
-        suffix: 'ai-chat4-ai-chat-story-3a',
+        ref: '_3k9f2m',
+        title: 'ai-chat4',
+        title_source: 'user',
+        title_rev: 0,
         session_code: 'z141yl',
         session_name: 'ai-chat4',
         tmux_instance: '6901:1789205013',
@@ -467,13 +470,12 @@ describe('fetchPeers', () => {
       {
         host: 'mini-lab',
         host_id: 'mini-lab:278cbm',
-        address: 'mini-lab/_7p2wq5ba:loose-outside-tmux',
+        address: 'mini-lab/outside-tmux',
         row_kind: 'entry',
-        canonical: '_7p2wq5ba',
-        label: 'loose',
-        label_source: 'user',
-        label_rev: 7,
-        suffix: 'loose-outside-tmux',
+        ref: '_7p2wq5',
+        title: 'loose',
+        title_source: 'user',
+        title_rev: 7,
         session_code: '',
         session_name: '',
         tmux_instance: '',
@@ -493,8 +495,20 @@ describe('fetchPeers', () => {
     ],
     daemon_version: '1.0.0-alpha.364',
     unknown_registry_files: [],
-    labels_unavailable: false,
+    titles_unavailable: false,
   }
+
+  // The guard the comment above points at. A fixture in the retired v3 shape
+  // passes every other assertion in this block and proves only that the code
+  // echoes whatever it was handed — so the shapes themselves are asserted.
+  // `_` + exactly six base36 digits for a ref; `<host>/<name>`,
+  // `<host>/_<ref>` or `<host>/tmux:<name>` for an address, and nothing else.
+  it('holds v4 refs and v4 addresses, not the v3 shapes it was captured in', () => {
+    for (const row of realEnvelope.peers) {
+      if (row.ref !== '') expect(row.ref).toMatch(/^_[0-9a-z]{6}$/)
+      expect(row.address).toMatch(/^[a-z0-9][a-z0-9.-]*\/(tmux:.+|_[0-9a-z]{6}|[a-z0-9][a-z0-9-]*)$/)
+    }
+  })
 
   it('fetches /api/peers with auth and returns the envelope', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -512,24 +526,24 @@ describe('fetchPeers', () => {
     )
     const env = await fetchPeers(HOST_ID)
     expect(env.partial).toBe(false)
-    expect(env.labels_unavailable).toBe(false)
+    expect(env.titles_unavailable).toBe(false)
     expect(env.unknown_registry_files).toEqual([])
     expect(indexPeerRows(env.peers)).toEqual({
       qorh3k: {
         address: 'mini-lab/tmux:ai-chat2',
-        canonical: '',
-        label: '',
-        labelSource: '',
+        ref: '',
+        title: '',
+        titleSource: '',
         deliverable: false,
         reason: 'no_agent',
         tmuxInstance: '6901:1789205013',
         agent: null,
       },
       z141yl: {
-        address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
-        canonical: '_3k9f2mq4',
-        label: 'ai-chat4',
-        labelSource: 'user',
+        address: 'mini-lab/ai-chat-story-3a',
+        ref: '_3k9f2m',
+        title: 'ai-chat4',
+        titleSource: 'user',
         deliverable: true,
         reason: '',
         tmuxInstance: '6901:1789205013',

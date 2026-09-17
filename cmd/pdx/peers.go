@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -67,7 +68,7 @@ func sanitizeCell(s string) string {
 // (exit 2) for every malformed invocation except an unrecognized flag,
 // which gets its own more specific message (see runPeersCmd).
 const peersUsage = "usage: pdx peers [--json] [--all] [--config <path>]\n" +
-	"       pdx peers host add <alias> <url> [--token <t>] [--config <path>]\n" +
+	"       pdx peers host add [<alias>] <url> [--token <t>] [--config <path>]\n" +
 	"       pdx peers host set-token <alias> <token> [--allow-bypass=true|false] [--config <path>]\n" +
 	"       pdx peers host remove <alias> [--config <path>]\n" +
 	"       pdx peers host list [--config <path>]"
@@ -117,13 +118,29 @@ type peersInvocation struct {
 	allowBypass *bool
 }
 
-// peersHostVerbArity is every known `pdx peers host` verb's exact
-// positional-argument count.
-var peersHostVerbArity = map[string]int{
-	"add":       2,
-	"set-token": 2,
-	"remove":    1,
-	"list":      0,
+// peersHostVerbArity is every known `pdx peers host` verb's accepted
+// positional-argument counts. "add" accepts two forms because its alias is
+// optional (spec §7.2): `<alias> <url>` names the host locally, and `<url>`
+// alone lets the daemon adopt the alias the peer publishes for itself.
+var peersHostVerbArity = map[string][]int{
+	"add":       {1, 2},
+	"set-token": {2},
+	"remove":    {1},
+	"list":      {0},
+}
+
+// addArgs splits `host add`'s positionals into alias and URL. The alias is
+// the optional one, so a lone positional is the URL — never a host named
+// after it. Only meaningful once parsePeersInvocation has accepted the
+// invocation; any other arity yields two empty strings.
+func (inv peersInvocation) addArgs() (alias, hostURL string) {
+	switch len(inv.positionals) {
+	case 1:
+		return "", inv.positionals[0]
+	case 2:
+		return inv.positionals[0], inv.positionals[1]
+	}
+	return "", ""
 }
 
 // parsePeersInvocation parses pdx peers' full grammar in one pass: flags
@@ -194,14 +211,23 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 	inv.verb = positionals[1]
 	inv.positionals = positionals[2:]
 
-	arity, known := peersHostVerbArity[inv.verb]
-	if !known || len(inv.positionals) != arity {
+	arities, known := peersHostVerbArity[inv.verb]
+	if !known || !slices.Contains(arities, len(inv.positionals)) {
 		return peersInvocation{}, "", false
 	}
 
 	switch inv.verb {
 	case "add":
 		if inv.allowBypass != nil {
+			return peersInvocation{}, "", false
+		}
+		// The alias is what "add" may omit, so a lone positional has to
+		// look like the URL it stands in for. Without this, "host add
+		// air" would parse as the one-arg form and POST "air" as a URL
+		// instead of being reported as the missing url it is. Only the
+		// ambiguous arity is checked: with both positionals present the
+		// URL's own validation stays the daemon's job.
+		if len(inv.positionals) == 1 && !strings.Contains(inv.positionals[0], "://") {
 			return peersInvocation{}, "", false
 		}
 	case "set-token":
@@ -214,10 +240,18 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		}
 	}
 
-	// Every verb with a positional puts the alias first; refuse "/" in it
-	// client-side (the server also validates it, but this catches the
-	// obviously-wrong case before any request is made).
-	if len(inv.positionals) > 0 && strings.Contains(inv.positionals[0], "/") {
+	// Refuse "/" in the alias client-side (the server also validates it,
+	// but this catches the obviously-wrong case before any request is
+	// made). Every verb with a positional puts the alias first EXCEPT
+	// "add", whose alias is optional — asking addArgs keeps a URL in the
+	// first slot from being mistaken for an alias full of slashes.
+	alias := ""
+	if inv.verb == "add" {
+		alias, _ = inv.addArgs()
+	} else if len(inv.positionals) > 0 {
+		alias = inv.positionals[0]
+	}
+	if strings.Contains(alias, "/") {
 		return peersInvocation{}, "", false
 	}
 
@@ -357,35 +391,41 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 }
 
 // formatPeersTable renders resp.Peers as a text/tabwriter table with columns
-// LABEL ADDRESS AGENT NAME STATUS DELIVERABLE CWD, followed by the
+// TITLE ADDRESS AGENT STATUS DELIVERABLE TMUX CWD, followed by the
 // host's partial-cause lines (writeHostDiagnostics) and a trailer line
 // naming this daemon's version.
 //
-// LABEL comes first because that is the order the table is used in (spec
-// §7.1): a reader scans the labels to find the conversation they want,
-// then copies that row's ADDRESS to reach it. A row with no label renders
+// TITLE comes first because that is the order the table is used in (v4 spec
+// §5.7): a reader scans the titles to find the conversation they want,
+// then copies that row's ADDRESS to reach it. A row with no title renders
 // a BLANK cell rather than "-" — a dash reads as a value, and an unnamed
 // conversation has nothing to show there; it is still perfectly
 // addressable, which is exactly what the ADDRESS beside it says.
+//
+// Two v3 columns are gone and one is new. NAME went because it IS the
+// address's second segment, and HOST — which only the --all form ever had —
+// because it is the address's first. TMUX arrives because the tmux name left
+// the address along with the suffix, and without a column of its own it would
+// not be on screen anywhere.
 func formatPeersTable(resp peers.Envelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "LABEL\tADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
+	fmt.Fprintln(w, "TITLE\tADDRESS\tAGENT\tSTATUS\tDELIVERABLE\tTMUX\tCWD")
 
 	for _, rec := range resp.Peers {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			sanitizeCell(rec.Label),
+			sanitizeCell(rec.Title),
 			addressField(rec),
 			sanitizeCell(agentField(rec)),
-			sanitizeCell(nameField(rec)),
 			sanitizeCell(statusField(rec)),
 			sanitizeCell(deliverableField(rec)),
+			sanitizeCell(tmuxField(rec)),
 			sanitizeCell(rec.Cwd),
 		)
 	}
 	w.Flush()
 
-	writeHostDiagnostics(&buf, "", resp.Peers, resp.UnknownRegistryFiles, resp.LabelsUnavailable)
+	writeHostDiagnostics(&buf, "", resp.Peers, resp.UnknownRegistryFiles, resp.TitlesUnavailable)
 	fmt.Fprintf(&buf, "daemon %s\n", daemonVersionField(resp.DaemonVersion))
 
 	return buf.String()
@@ -424,12 +464,12 @@ func daemonVersionField(v string) string {
 //
 //	(partial: N sessions not resolved within budget)   N = countUnresolved(peers) > 0
 //	(partial: unknown registry files: a, b)            unknownFiles non-empty; each path through sanitizeCell
-//	(partial: label store unavailable)                 labelsUnavailable
+//	(partial: title store unavailable)                 titlesUnavailable
 //
 // prefix is "" for the single-host table and "<alias>  " for --all,
 // matching the unreachable/daemon trailer lines. Nothing is printed when
 // no signal is set.
-func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.PeerRecord, unknownFiles []string, labelsUnavailable bool) {
+func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.PeerRecord, unknownFiles []string, titlesUnavailable bool) {
 	if unresolved := countUnresolved(peerRows); unresolved > 0 {
 		fmt.Fprintf(buf, "%s(partial: %d sessions not resolved within budget)\n", prefix, unresolved)
 	}
@@ -440,25 +480,29 @@ func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.
 		}
 		fmt.Fprintf(buf, "%s(partial: unknown registry files: %s)\n", prefix, strings.Join(names, ", "))
 	}
-	if labelsUnavailable {
-		fmt.Fprintf(buf, "%s(partial: label store unavailable)\n", prefix)
+	if titlesUnavailable {
+		fmt.Fprintf(buf, "%s(partial: title store unavailable)\n", prefix)
 	}
 }
 
 // formatPeersAllTable renders a scope=all response as a text/tabwriter
 // table with a leading HOST column (the row's host alias) and then the
-// single-host order, LABEL before ADDRESS (spec §7.1). HOST stays first
+// single-host order, TITLE before ADDRESS (v4 spec §5.7). HOST stays first
 // because neither of the other two columns means anything until you know
-// which host the row lives on. One row per peer record across every host
+// which host the row lives on — the address carries its own host segment,
+// but a column you can scan down beats one you have to read across.
+// One row per peer record across every host
 // whose fetch succeeded, followed by one line per host whose fetch failed:
-// "<alias>  (unreachable: <error>)", followed by, for every host whose
+// "<alias>  (unreachable: <error>)", then one line per host whose
+// self-reported name disagrees with ours (aliasDriftField), followed by, for
+// every host whose
 // fetch succeeded, that host's "<alias>  (partial: …)" cause lines (spec
 // §3.3, writeHostDiagnostics — the same lines the single-host table
 // prints) and a "<alias>  daemon <version>" trailer line.
 func formatPeersAllTable(resp peers.AllEnvelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "HOST\tLABEL\tADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
+	fmt.Fprintln(w, "HOST\tTITLE\tADDRESS\tAGENT\tSTATUS\tDELIVERABLE\tTMUX\tCWD")
 
 	for _, h := range resp.Hosts {
 		if !h.OK {
@@ -467,12 +511,12 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 		for _, rec := range h.Peers {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				sanitizeCell(h.Alias),
-				sanitizeCell(rec.Label),
+				sanitizeCell(rec.Title),
 				addressField(rec),
 				sanitizeCell(agentField(rec)),
-				sanitizeCell(nameField(rec)),
 				sanitizeCell(statusField(rec)),
 				sanitizeCell(deliverableField(rec)),
+				sanitizeCell(tmuxField(rec)),
 				sanitizeCell(rec.Cwd),
 			)
 		}
@@ -485,18 +529,65 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 		}
 	}
 	for _, h := range resp.Hosts {
+		if self := aliasDriftField(h); self != "" {
+			fmt.Fprintf(&buf, "%s  (alias drift: peer calls itself %s)\n", sanitizeCell(h.Alias), sanitizeCell(self))
+		}
+	}
+	for _, h := range resp.Hosts {
 		if !h.OK {
 			continue
 		}
 		alias := sanitizeCell(h.Alias)
-		writeHostDiagnostics(&buf, alias+"  ", h.Peers, h.UnknownRegistryFiles, h.LabelsUnavailable)
+		writeHostDiagnostics(&buf, alias+"  ", h.Peers, h.UnknownRegistryFiles, h.TitlesUnavailable)
 		fmt.Fprintf(&buf, "%s  daemon %s\n", alias, daemonVersionField(h.DaemonVersion))
 	}
 
 	return buf.String()
 }
 
-// addressField renders rec.Address through sanitizeCell first, then — only
+// aliasDriftField returns the peer's self-reported name when it disagrees
+// with the name this host has that peer configured under, and "" when there
+// is nothing to say: the two agree, or the peer never reported one (an old
+// daemon, or a fetch that never reached one — see HostResult.SelfAlias).
+// The comparison is case-insensitive because everything that routes on an
+// alias already is (config.ValidateAlias, config.FindPeerHostByAlias), so
+// "MLAB" and "mlab" reach the same host and are not a disagreement.
+//
+// Drift is surfaced, never followed. h.Alias is what every address on this
+// host resolves against; adopting the peer's rename here would move every
+// address out from under whoever had written one down. The line reports that
+// the two disagree and stops — renaming stays a deliberate `pdx peers host`
+// edit by an operator who has decided to.
+//
+// This lives on --all and not on `pdx peers host list` on purpose (spec
+// §7.4): that route renders local config and contacts nobody, so the best it
+// could show is a value remembered at pairing time. The fan-out refetches
+// every peer's envelope on every call, which makes this the one place the
+// comparison is live rather than stale.
+func aliasDriftField(h peers.HostResult) string {
+	if h.SelfAlias == "" || strings.EqualFold(h.SelfAlias, h.Alias) {
+		return ""
+	}
+	return h.SelfAlias
+}
+
+// displayAddress renders a row's address for a human: "<host>/<name> [<ref>]".
+//
+// The ref prints without its leading underscore — the bracket already
+// separates it — and prints on EVERY row rather than only ambiguous ones: a
+// reader who has to go looking for it when a name stops working has to look
+// somewhere other than where they were already reading.
+//
+// A row whose address is already the ref (an unroutable name, or no name at
+// all) gets no bracket; repeating it would suggest two different identifiers.
+func displayAddress(rec peers.PeerRecord) string {
+	if rec.Ref == "" || strings.HasSuffix(rec.Address, "/"+rec.Ref) {
+		return rec.Address
+	}
+	return rec.Address + " [" + strings.TrimPrefix(rec.Ref, "_") + "]"
+}
+
+// addressField renders displayAddress through sanitizeCell first, then — only
 // for an entry row (RowKind == "entry", a live tmux/cc process outside any
 // registered session) — prefixes it with two spaces, visually nesting it
 // under the session rows above it. sanitizeCell passes plain spaces
@@ -505,7 +596,7 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 // indistinguishable from our own indentation, or make a non-entry row
 // with a stray leading space look indented when it is not.
 func addressField(rec peers.PeerRecord) string {
-	addr := strings.TrimLeft(sanitizeCell(rec.Address), " ")
+	addr := strings.TrimLeft(sanitizeCell(displayAddress(rec)), " ")
 	if rec.RowKind == "entry" {
 		addr = "  " + addr
 	}
@@ -519,11 +610,22 @@ func agentField(rec peers.PeerRecord) string {
 	return rec.Agent.Type
 }
 
-func nameField(rec peers.PeerRecord) string {
-	if rec.Agent == nil || rec.Agent.PeerName == "" {
+// tmuxField renders the TMUX cell. An entry row's tmux name comes from the
+// registry file, frozen when the agent started, so it can name a session
+// since renamed or gone; a session row's comes from the live inventory. The
+// '?' is the difference, and a reader deciding where to attach is the one who
+// needs to know it.
+//
+// It renders TmuxName and never SessionName: SessionName is empty on an entry
+// row, which is the whole reason TmuxName exists (v4 spec §5.3).
+func tmuxField(rec peers.PeerRecord) string {
+	if rec.TmuxName == "" {
 		return "-"
 	}
-	return rec.Agent.PeerName
+	if rec.RowKind == "entry" {
+		return rec.TmuxName + "?"
+	}
+	return rec.TmuxName
 }
 
 func statusField(rec peers.PeerRecord) string {
@@ -641,7 +743,9 @@ func runPeersHostList(cfg config.Config, base string, stdout, stderr io.Writer) 
 }
 
 func runPeersHostAdd(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
-	alias, hostURL := inv.positionals[0], inv.positionals[1]
+	// An empty alias is sent as such: the daemon then adopts the one the
+	// peer publishes for itself, and the 201 reports what it settled on.
+	alias, hostURL := inv.addArgs()
 	reqBody, err := json.Marshal(cliAddHostRequest{Alias: alias, URL: hostURL, Token: inv.token})
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx peers: %v\n", err)

@@ -191,6 +191,19 @@ func validHostID(s string) bool {
 	return true
 }
 
+// sanitizeLearnedAlias returns alias when it is safe to adopt as a local name
+// for a peer, or "" when it is not. Same posture as validHostID: a peer's
+// self-report is data, never a decision. config.ValidateAlias is the single
+// rule — one safe URL path segment, bounded, no control characters, not a
+// reserved dot name, and distinct from localAlias — so a learned alias can
+// never be accepted on terms an operator-supplied one would be refused on.
+func sanitizeLearnedAlias(alias, localAlias string) string {
+	if config.ValidateAlias(alias, localAlias) != nil {
+		return ""
+	}
+	return alias
+}
+
 // verifyHost calls the fetch seam against url with the given outbound
 // token, applying the verify predicate: err == nil && env.OK &&
 // validHostID(env.HostID). On success errMsg is ""; otherwise errMsg names
@@ -235,13 +248,18 @@ func (m *Module) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"hosts": rows})
 }
 
-// handleAddHost serves POST /api/peers/hosts. See hosts.go's package
-// comment / the P2 plan brief for the full sequence: validate alias/url,
-// refuse an outbound token equal to the admin token, check alias
-// uniqueness (fast path), mint an inbound token, verify outside any lock
-// when a token was supplied, then commit inside UpdateConfig — which
-// re-checks alias uniqueness and, when verified, that the learned host_id
-// doesn't collide with the local one. Any failure persists nothing.
+// handleAddHost serves POST /api/peers/hosts. The sequence: validate an
+// explicit alias and the url, refuse an outbound token equal to the admin
+// token, verify outside any lock when a token was supplied, SETTLE the
+// alias (spec §7.2 — an omitted one falls back to the alias the peer
+// publishes for itself, which is why the verify has to come first), check
+// the settled alias for validity and for uniqueness (fast path), mint an
+// inbound token, then commit inside UpdateConfig — which re-checks alias
+// uniqueness and, when verified, that the learned host_id doesn't collide
+// with the local one. Any failure persists nothing.
+//
+// Every alias check below runs on the settled alias, not on req.Alias: a
+// learned alias must clear exactly the bar an operator-supplied one does.
 func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if !requireAdmin(w, r) {
@@ -257,12 +275,17 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 	m.core.CfgMu.RLock()
 	localAlias := m.core.Cfg.PeerAlias()
 	adminToken := m.core.Cfg.Token
-	aliasTaken := m.core.Cfg.Peers.FindPeerHostByAlias(req.Alias) != -1
 	m.core.CfgMu.RUnlock()
 
-	if err := config.ValidateAlias(req.Alias, localAlias); err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
+	// An explicit alias is rejected here, before the verify below dials
+	// anyone: a request this host will refuse anyway must not cost a
+	// network round trip to a peer. The settled alias is validated again
+	// after the verify, which is what covers the learned path.
+	if req.Alias != "" {
+		if err := config.ValidateAlias(req.Alias, localAlias); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	normalizedURL, err := normalizeHostURL(req.URL)
 	if err != nil {
@@ -273,8 +296,51 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "token equals admin token")
 		return
 	}
+
+	var learnedHostID, publishedAlias string
+	verified := false
+	if req.Token != "" {
+		env, errMsg := m.verifyHost(r.Context(), normalizedURL, req.Token)
+		if errMsg != "" {
+			writeJSONError(w, http.StatusBadGateway, errMsg)
+			return
+		}
+		learnedHostID = env.HostID
+		publishedAlias = env.Alias
+		verified = true
+	}
+
+	// Settle the alias. With no outbound token there was no verify and so
+	// no envelope, which leaves publishedAlias "" — that path still
+	// requires an explicit alias. sanitizeLearnedAlias yields "" for
+	// anything unsafe, and the refusal below deliberately does NOT quote
+	// the peer's value back: it is attacker-controlled and this message
+	// lands in an operator's terminal.
+	alias := req.Alias
+	if alias == "" {
+		alias = sanitizeLearnedAlias(publishedAlias, localAlias)
+	}
+	if alias == "" {
+		writeJSONError(w, http.StatusBadRequest,
+			"no alias given and the peer published none; pass one explicitly")
+		return
+	}
+	if err := config.ValidateAlias(alias, localAlias); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Recomputed against the settled alias, never req.Alias: a learned one
+	// has to clear the same uniqueness bar. config.ValidateAlias cannot do
+	// this — it compares only against the local alias, never against the
+	// other configured hosts. Not auto-suffixed either: "air26-2" would be
+	// unportable in a new way, which is the problem this phase exists to
+	// remove. The operator picks.
+	m.core.CfgMu.RLock()
+	aliasTaken := m.core.Cfg.Peers.FindPeerHostByAlias(alias) != -1
+	m.core.CfgMu.RUnlock()
 	if aliasTaken {
-		writeJSONError(w, http.StatusConflict, "alias already exists")
+		writeJSONError(w, http.StatusConflict, fmt.Sprintf(
+			"alias %q is already used by another host; pass an explicit alias for this one", alias))
 		return
 	}
 
@@ -284,20 +350,8 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var learnedHostID string
-	verified := false
-	if req.Token != "" {
-		env, errMsg := m.verifyHost(r.Context(), normalizedURL, req.Token)
-		if errMsg != "" {
-			writeJSONError(w, http.StatusBadGateway, errMsg)
-			return
-		}
-		learnedHostID = env.HostID
-		verified = true
-	}
-
 	newHost := config.PeerHost{
-		Alias:        req.Alias,
+		Alias:        alias,
 		URL:          normalizedURL,
 		HostID:       learnedHostID,
 		Token:        req.Token,
@@ -305,7 +359,7 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = m.core.UpdateConfig(func(cfg *config.Config) error {
-		if cfg.Peers.FindPeerHostByAlias(req.Alias) != -1 {
+		if cfg.Peers.FindPeerHostByAlias(alias) != -1 {
 			return &apiError{http.StatusConflict, "alias changed concurrently"}
 		}
 		if verified && learnedHostID == cfg.HostID {
@@ -321,7 +375,7 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(addHostResponse{
-		Alias:        req.Alias,
+		Alias:        alias,
 		URL:          normalizedURL,
 		HostID:       learnedHostID,
 		InboundToken: inboundToken,

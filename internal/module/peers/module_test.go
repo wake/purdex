@@ -131,7 +131,7 @@ type moduleFixture struct {
 	proxiesPath string
 	fake        *proxyhelpertest.Fake
 	audit       *fakeAudit
-	labels      *store.PeerLabelStore
+	titles      *store.PeerLabelStore
 	logs        *logSink
 	frames      chan frameEvent // every onFrame call the manager makes
 	clock       *fakeClock
@@ -173,7 +173,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 	}
 	t.Cleanup(func() { meta.Close() })
 	f.audit = &fakeAudit{real: meta.PeerMessages()}
-	f.labels = meta.PeerLabels()
+	f.titles = meta.PeerLabels()
 
 	// fakeClock is not goroutine-safe and the helper manager reads the
 	// clock from its own goroutines: one mutex-guarded accessor feeds
@@ -199,7 +199,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 		fetch:            fetchRemote,
 		logf:             f.logs.logf,
 		audit:            f.audit,
-		labels:           f.labels,
+		titles:           f.titles,
 		dedup:            newDedupSet(ipeers.DedupWindow, now),
 		pairs:            newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, now),
 		hostLimit:        newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, now),
@@ -1128,72 +1128,91 @@ func TestHandlePeers_ScopeAll_NoOutboundToken(t *testing.T) {
 	}
 }
 
-// TestNormalizeRemoteRows pins Item 2: every row of a remote host's
-// fan-out response must be rewritten into this host's local view — Host
-// becomes the configured alias, HostID becomes the caller-supplied
-// (verified/bounded) value, and Address is rebuilt as "<alias>/<session>"
-// where <session> is everything after the remote's own first "/" (a "cc:"
-// address's colon survives intact). A remote address with no "/" at all
-// (malformed) keeps the whole original as the session part. A rebuilt
-// address that still doesn't parse as a valid "<host>/<session>" pair
-// (ipeers.SplitAddress) — an empty session part, or a session part that
-// itself contains another "/" — is blanked rather than left unusable;
-// Host and HostID stay set.
+// TestNormalizeRemoteRows pins Item 2 at its v4 width: every row of a remote
+// host's fan-out response is rewritten into this host's local view — Host
+// becomes the configured alias, HostID the caller-supplied (verified/bounded)
+// value, and Address is RECOMPUTED from the row's own validated fields in the
+// same order applyIdentity uses locally.
+//
+// The remote's own address body is not read at all. It used to be: everything
+// after the first "/" was kept and re-prefixed with the local alias, so a
+// paired peer — which the module's own comments call attacker-controlled —
+// chose what this host printed in its ADDRESS column.
+//
+// A row that yields none of the three forms is blanked rather than left
+// holding an unusable value; Host and HostID stay set either way.
 func TestNormalizeRemoteRows(t *testing.T) {
+	liveCC := func(name string) *ipeers.AgentInfo {
+		return &ipeers.AgentInfo{Type: "cc", PID: 4242, PeerName: name, SessionID: "sid", Version: "2.1"}
+	}
 	cases := []struct {
 		name     string
-		address  string
+		row      ipeers.PeerRecord
 		alias    string
 		hostID   string
 		wantAddr string
 	}{
 		{
-			name:     "tmux session address rewritten under the local alias",
-			address:  "laptop/mt1",
+			name:     "a live cc row with a routable name takes the name form",
+			row:      ipeers.PeerRecord{Address: "laptop/purdex-b0", Ref: "_q34psn", Agent: liveCC("purdex-b0")},
 			alias:    "air",
 			hostID:   "air:111",
-			wantAddr: "air/mt1",
+			wantAddr: "air/purdex-b0",
 		},
 		{
-			name:     "cc: address keeps its colon form intact",
-			address:  "laptop/cc:name",
+			name:     "a live cc row whose name is unroutable falls back to its ref",
+			row:      ipeers.PeerRecord{Address: "laptop/trusted:ops", Ref: "_q34psn", Agent: liveCC("trusted:ops")},
 			alias:    "air",
 			hostID:   "air:111",
-			wantAddr: "air/cc:name",
+			wantAddr: "air/_q34psn",
+		},
+		{
+			name:     "a session row with no live cc agent takes the tmux form from SessionName",
+			row:      ipeers.PeerRecord{Address: "laptop/tmux:mt1", RowKind: "session", SessionName: "mt1"},
+			alias:    "air",
+			hostID:   "air:111",
+			wantAddr: "air/tmux:mt1",
 		},
 		{
 			name:     "remote alias equal to the local alias still maps to h.Alias",
-			address:  "mlab/mt1",
+			row:      ipeers.PeerRecord{Address: "mlab/tmux:mt1", RowKind: "session", SessionName: "mt1"},
 			alias:    "mlab",
 			hostID:   "mlab-remote:1",
-			wantAddr: "mlab/mt1",
+			wantAddr: "mlab/tmux:mt1",
 		},
 		{
-			name:     "malformed address without a slash keeps the original as the session part",
-			address:  "malformed",
+			name:     "a proxy row yields no form and is blanked",
+			row:      ipeers.PeerRecord{Address: "laptop/cc:helper-1", RowKind: "entry", Agent: &ipeers.AgentInfo{Type: "proxy", PID: 9}},
 			alias:    "air",
 			hostID:   "air:111",
-			wantAddr: "air/malformed",
+			wantAddr: "",
 		},
 		{
-			name:     "rebuilt address whose session part contains another slash is blanked",
-			address:  "other/cc:a/foo",
+			name:     "an owner-fallback row with no name and no valid ref is blanked",
+			row:      ipeers.PeerRecord{Address: "laptop/_q34psn", Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "sid"}},
+			alias:    "air",
+			hostID:   "air:111",
+			wantAddr: "",
+		},
+		{
+			name:     "a tmux name carrying a slash cannot parse and is blanked",
+			row:      ipeers.PeerRecord{Address: "laptop/tmux:a-b", RowKind: "session", SessionName: "a/b"},
 			alias:    "b",
 			hostID:   "b:1",
 			wantAddr: "",
 		},
 		{
-			name:     "rebuilt address with an empty session part is blanked",
-			address:  "other/",
-			alias:    "b",
-			hostID:   "b:1",
+			name:     "a row with nothing to derive from is blanked",
+			row:      ipeers.PeerRecord{Address: "malformed"},
+			alias:    "air",
+			hostID:   "air:111",
 			wantAddr: "",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeRemoteRows([]ipeers.PeerRecord{{Address: tc.address}}, tc.alias, tc.hostID)
+			got := normalizeRemoteRows([]ipeers.PeerRecord{tc.row}, tc.alias, tc.hostID)
 			if len(got) != 1 {
 				t.Fatalf("len = %d, want 1", len(got))
 			}
@@ -1207,6 +1226,63 @@ func TestNormalizeRemoteRows(t *testing.T) {
 				t.Errorf("Address = %q, want %q", got[0].Address, tc.wantAddr)
 			}
 		})
+	}
+}
+
+// TestNormalizeRemoteRows_HostileEnvelope is the security property behind the
+// recompute: a paired peer is attacker-controlled (this module's own comments
+// say so about its error text and its host_id), so the string this host prints
+// in its ADDRESS column must be one this host derived, not one the remote
+// chose.
+//
+// The attack the old code allowed: publish peer_name "trusted:ops" and address
+// "air/trusted:ops", and `pdx peers --all` renders "air/trusted:ops [q34psn]"
+// — a pasteable address for a name §5.2 says can never be one. Every name
+// below is unroutable, so every row must come back addressed by its ref, and
+// the offered name must appear in no address at all.
+func TestNormalizeRemoteRows_HostileEnvelope(t *testing.T) {
+	for _, name := range []string{
+		"trusted:ops",     // the address grammar's own separator
+		"trusted ops",     // a space: the combined form splits on it
+		"trusted[q34psn]", // brackets: it would forge the combined form
+		"trusted\x07ops",  // a control character
+		"q34psn",          // ref-shaped: it would shadow another row's ref
+		"has/slash",       // a second '/': it would not even parse
+		"",                // no name offered at all
+	} {
+		row := ipeers.PeerRecord{
+			Host: "laptop", HostID: "laptop:1",
+			Address: "laptop/" + name, RowKind: "entry", SessionName: name,
+			Ref:   "_q34psn",
+			Agent: &ipeers.AgentInfo{Type: "cc", PID: 7, PeerName: name, SessionID: "sid"},
+		}
+		got := normalizeRemoteRows([]ipeers.PeerRecord{row}, "air", "air:111")[0]
+		if got.Address != "air/_q34psn" {
+			t.Errorf("peer_name %q: Address = %q, want air/_q34psn", name, got.Address)
+		}
+		if got.Address == "air/"+name {
+			t.Errorf("peer_name %q: the remote's name became the address %q", name, got.Address)
+		}
+		// The name itself is still carried, for the NAME column to show
+		// (sanitized there). Refusing to route on it is the whole fix; hiding
+		// it would only make the row unidentifiable.
+		if got.Agent.PeerName != name {
+			t.Errorf("peer_name %q: dropped from the row (%q)", name, got.Agent.PeerName)
+		}
+	}
+}
+
+// A remote that offers a ref of its own invention gets no address from it
+// either: a ref is validated by grammar before it is printed as one.
+func TestNormalizeRemoteRows_RefMustBeWellFormed(t *testing.T) {
+	for _, ref := range []string{"q34psn", "_TOOLONG", "_q34ps", "_q34psn:x", "_q3/psn", "notaref"} {
+		row := ipeers.PeerRecord{
+			Address: "laptop/" + ref, RowKind: "entry", Ref: ref,
+			Agent: &ipeers.AgentInfo{Type: "cc", PID: 7, PeerName: "has/slash", SessionID: "sid"},
+		}
+		if got := normalizeRemoteRows([]ipeers.PeerRecord{row}, "air", "air:111")[0]; got.Address != "" {
+			t.Errorf("ref %q: Address = %q, want it blanked", ref, got.Address)
+		}
 	}
 }
 
@@ -1228,6 +1304,11 @@ func TestNormalizeRemoteRows_NilRowsReturnsNonNilEmpty(t *testing.T) {
 // in: a remote reporting its own alias ("laptop") and host_id must have
 // its rows rewritten under how THIS host has the peer configured ("air"
 // with the verified host_id), not the remote's self-reported values.
+//
+// The two rows are the v4 shapes a real remote emits — a live cc entry with
+// a routable name, and a session row with no agent — because the address is
+// now derived from those fields rather than copied out of what the remote
+// published.
 func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1238,8 +1319,12 @@ func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 			OK:      true,
 			Partial: false,
 			Peers: []ipeers.PeerRecord{
-				{Host: "laptop", HostID: "air:111", Address: "laptop/mt1", SessionCode: "remote-1"},
-				{Host: "laptop", HostID: "air:111", Address: "laptop/cc:foo", SessionCode: "remote-2"},
+				{
+					Host: "laptop", HostID: "air:111", Address: "laptop/purdex-b0", SessionCode: "remote-1",
+					RowKind: "session", SessionName: "mt1", Ref: "_q34psn", Deliverable: true,
+					Agent: &ipeers.AgentInfo{Type: "cc", PID: 4242, PeerName: "purdex-b0", SessionID: "sid-1"},
+				},
+				{Host: "laptop", HostID: "air:111", Address: "laptop/tmux:mt2", SessionCode: "remote-2", RowKind: "session", SessionName: "mt2"},
 			},
 		})
 	}))
@@ -1272,11 +1357,11 @@ func TestHandlePeers_ScopeAll_RemoteRowsNormalizedToLocalAlias(t *testing.T) {
 	if !row.OK || len(row.Peers) != 2 {
 		t.Fatalf("row = %+v, want ok=true with 2 peers", row)
 	}
-	if row.Peers[0].Host != "air" || row.Peers[0].Address != "air/mt1" {
-		t.Errorf("peers[0] = %+v, want Host=air Address=air/mt1", row.Peers[0])
+	if row.Peers[0].Host != "air" || row.Peers[0].Address != "air/purdex-b0" {
+		t.Errorf("peers[0] = %+v, want Host=air Address=air/purdex-b0", row.Peers[0])
 	}
-	if row.Peers[1].Host != "air" || row.Peers[1].Address != "air/cc:foo" {
-		t.Errorf("peers[1] = %+v, want Host=air Address=air/cc:foo", row.Peers[1])
+	if row.Peers[1].Host != "air" || row.Peers[1].Address != "air/tmux:mt2" {
+		t.Errorf("peers[1] = %+v, want Host=air Address=air/tmux:mt2", row.Peers[1])
 	}
 	if row.Peers[0].HostID != "air:111" || row.Peers[1].HostID != "air:111" {
 		t.Errorf("peers = %+v, want HostID=air:111 on every row", row.Peers)
@@ -1546,6 +1631,53 @@ func TestLocalEnvelope_UsesCallerSnapshot_NotLiveConfig(t *testing.T) {
 	}
 }
 
+// TestLocalEnvelope_PublishesOwnAlias pins Phase C's premise (spec §7): the
+// envelope says what this host calls itself, so a peer pairing with it can
+// adopt that name instead of inventing a local one. Like HostID, the value
+// comes from the caller's config snapshot, never from a second read of the
+// live config — the module's live alias here is "y" and must not leak in.
+func TestLocalEnvelope_PublishesOwnAlias(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "s1", Name: "s1", Cwd: "/a"},
+	}}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "live-host-id", "y")
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	env := m.localEnvelope(context.Background(), "snapshot-host-id", "x")
+
+	if !env.OK {
+		t.Fatalf("ok = false, want true; error=%q", env.Error)
+	}
+	if env.Alias != "x" {
+		t.Errorf("env.Alias = %q, want the snapshot alias %q (live config alias %q must not leak in)", env.Alias, "x", "y")
+	}
+}
+
+// TestLocalEnvelope_PublishesOwnAliasOnFailure is the companion: a host
+// that cannot build its inventory still knows its own name, and a reader
+// that only pairs on ok=true loses nothing by being told it. The alias
+// travels with every envelope, not only the successful ones.
+func TestLocalEnvelope_PublishesOwnAliasOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	sessions := &fakeSessions{err: errors.New("tmux unreachable")}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "live-host-id", "y")
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	env := m.localEnvelope(context.Background(), "snapshot-host-id", "x")
+
+	if env.OK {
+		t.Fatalf("ok = true, want false: the session listing fails in this fixture")
+	}
+	if env.Alias != "x" {
+		t.Errorf("env.Alias = %q, want the snapshot alias %q even on a failed inventory", env.Alias, "x")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Label snapshot join, registry diagnosis, daemon_version (Task 5).
 // ---------------------------------------------------------------------------
@@ -1582,7 +1714,7 @@ func newLabelJoinFixture(t *testing.T) *moduleFixture {
 // (here empty) unknown_registry_files list.
 func TestLocalEnvelope_LabelsJoinedAndVersion(t *testing.T) {
 	f := newLabelJoinFixture(t)
-	if _, err := f.labels.Claim("sid-1", "purdex-dev", time.Now()); err != nil {
+	if _, err := f.titles.Claim("sid-1", "purdex-dev", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1604,7 +1736,7 @@ func TestLocalEnvelope_LabelsJoinedAndVersion(t *testing.T) {
 	if rec == nil {
 		t.Fatalf("mt0 record not found in peers: %+v", env.Peers)
 	}
-	if rec.Label != "purdex-dev" || rec.LabelSource != ipeers.LabelSourceUser || rec.LabelRev != 1 {
+	if rec.Title != "purdex-dev" || rec.TitleSource != ipeers.TitleSourceUser || rec.TitleRev != 1 {
 		t.Errorf("row = %+v, want label purdex-dev/user/rev 1", rec)
 	}
 }
@@ -1641,38 +1773,38 @@ func TestLocalEnvelope_UnknownRegistryFileMarksPartial(t *testing.T) {
 // TestLocalEnvelope_LabelStoreFailureIsPartial pins that a label store
 // Snapshot failure marks the response partial (the label column is now
 // unknown, so the rows are not the whole truth), signals it explicitly as
-// labels_unavailable (X4 — the CLI renders the cause from this flag, never
+// titles_unavailable (X4 — the CLI renders the cause from this flag, never
 // by inference from the other partial causes) and logs once, without
 // touching UnknownRegistryFiles.
 func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 	f := newLabelJoinFixture(t)
-	f.m.labels = failingLabels{}
+	f.m.titles = failingTitles{}
 
 	env := f.m.localEnvelope(context.Background(), "h:1", "a")
 
 	if !env.Partial {
 		t.Fatal("partial = false, want true on label store failure")
 	}
-	if !env.LabelsUnavailable {
-		t.Error("labels_unavailable = false, want true on label store failure")
+	if !env.TitlesUnavailable {
+		t.Error("titles_unavailable = false, want true on label store failure")
 	}
 	if len(env.UnknownRegistryFiles) != 0 {
 		t.Errorf("unknown_registry_files = %v, want none", env.UnknownRegistryFiles)
 	}
 	for _, r := range env.Peers {
-		if r.Agent != nil && r.Agent.Type == "cc" && (r.Label != "" || r.LabelSource != "") {
-			t.Errorf("row %s label/source = %q/%q, want both empty: the store that holds them is unreadable", r.Address, r.Label, r.LabelSource)
+		if r.Agent != nil && r.Agent.Type == "cc" && (r.Title != "" || r.TitleSource != "") {
+			t.Errorf("row %s label/source = %q/%q, want both empty: the store that holds them is unreadable", r.Address, r.Title, r.TitleSource)
 		}
 	}
-	if !f.logs.contains("label store") {
-		t.Error("expected one log line about the label store")
+	if !f.logs.contains("title store") {
+		t.Error("expected one log line about the title store")
 	}
 }
 
 // TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged is the v3
 // inversion of the test that used to live here. Under v2 an unreadable
 // label store changed what every row was reachable AT, so localEnvelope
-// had to hand Build LabelsUnavailable to suppress the tmux-derived
+// had to hand Build TitlesUnavailable to suppress the tmux-derived
 // defaults. Under D2 the store feeds the label column and nothing else:
 // the same fixture must render byte-identical addresses whether the store
 // reads or fails, and only the label column goes blank.
@@ -1689,7 +1821,7 @@ func TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged(t *testing.T) {
 	}
 
 	f := newLabelJoinFixture(t)
-	f.m.labels = failingLabels{}
+	f.m.titles = failingTitles{}
 
 	env := f.m.localEnvelope(context.Background(), "h:1", "a")
 
@@ -1702,7 +1834,7 @@ func TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged(t *testing.T) {
 		if want := addrs[r.Agent.SessionID]; r.Address != want {
 			t.Errorf("row for %s: address = %q with the store down, %q with it up; want identical", r.Agent.SessionID, r.Address, want)
 		}
-		if r.Canonical == "" {
+		if r.Ref == "" {
 			t.Errorf("row %s: canonical = \"\" with the store down, want the sessionId-derived id", r.Address)
 		}
 	}
@@ -1712,7 +1844,7 @@ func TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged(t *testing.T) {
 }
 
 // TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy pins the negative:
-// a healthy (or absent) label store never sets labels_unavailable, even
+// a healthy (or absent) label store never sets titles_unavailable, even
 // when the response is partial for another reason.
 func TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy(t *testing.T) {
 	f := newLabelJoinFixture(t)
@@ -1723,8 +1855,8 @@ func TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy(t *testing.T) {
 	if !env.Partial || len(env.UnknownRegistryFiles) != 1 {
 		t.Fatalf("partial=%v unknown=%v, want partial with one unknown file", env.Partial, env.UnknownRegistryFiles)
 	}
-	if env.LabelsUnavailable {
-		t.Error("labels_unavailable = true, want false: the label store read succeeded")
+	if env.TitlesUnavailable {
+		t.Error("titles_unavailable = true, want false: the label store read succeeded")
 	}
 }
 
@@ -1734,7 +1866,7 @@ func TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy(t *testing.T) {
 // own field, on one partial envelope.
 func TestLocalEnvelope_LabelStoreFailureAndUnknownFile_BothSignalled(t *testing.T) {
 	f := newLabelJoinFixture(t)
-	f.m.labels = failingLabels{}
+	f.m.titles = failingTitles{}
 	writeRegistryFixture(t, f.registryDir, "4242.json", "{")
 
 	env := f.m.localEnvelope(context.Background(), "h:1", "a")
@@ -1742,8 +1874,8 @@ func TestLocalEnvelope_LabelStoreFailureAndUnknownFile_BothSignalled(t *testing.
 	if !env.Partial {
 		t.Fatal("partial = false, want true")
 	}
-	if !env.LabelsUnavailable {
-		t.Error("labels_unavailable = false, want true")
+	if !env.TitlesUnavailable {
+		t.Error("titles_unavailable = false, want true")
 	}
 	if len(env.UnknownRegistryFiles) != 1 || !strings.HasSuffix(env.UnknownRegistryFiles[0], "4242.json") {
 		t.Errorf("unknown_registry_files = %v, want the one unknown file", env.UnknownRegistryFiles)
@@ -1751,16 +1883,16 @@ func TestLocalEnvelope_LabelStoreFailureAndUnknownFile_BothSignalled(t *testing.
 }
 
 // TestAllEnvelope_LabelsUnavailableCopiedThrough pins that scope=all
-// carries labels_unavailable on both kinds of row: the local row copies
+// carries titles_unavailable on both kinds of row: the local row copies
 // localEnvelope's flag, and a remote host's row copies the flag the remote
 // envelope reported (fetchHostResult), next to its unknown files.
 func TestAllEnvelope_LabelsUnavailableCopiedThrough(t *testing.T) {
 	f := newLabelJoinFixture(t)
-	f.m.labels = failingLabels{}
+	f.m.titles = failingTitles{}
 	f.m.fetch = func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error) {
 		return ipeers.Envelope{
 			HostID: "air:111", OK: true, Partial: true, Peers: []ipeers.PeerRecord{},
-			UnknownRegistryFiles: []string{"/reg/9.json"}, LabelsUnavailable: true,
+			UnknownRegistryFiles: []string{"/reg/9.json"}, TitlesUnavailable: true,
 		}, nil
 	}
 	hosts := []config.PeerHost{{Alias: "air", URL: "http://air.invalid", Token: "tok", HostID: "air:111"}}
@@ -1771,38 +1903,38 @@ func TestAllEnvelope_LabelsUnavailableCopiedThrough(t *testing.T) {
 		t.Fatalf("hosts = %+v, want 2 rows", all.Hosts)
 	}
 	local, remote := all.Hosts[0], all.Hosts[1]
-	if !local.OK || !local.Partial || !local.LabelsUnavailable {
-		t.Errorf("local row = ok %v partial %v labels_unavailable %v, want true/true/true", local.OK, local.Partial, local.LabelsUnavailable)
+	if !local.OK || !local.Partial || !local.TitlesUnavailable {
+		t.Errorf("local row = ok %v partial %v titles_unavailable %v, want true/true/true", local.OK, local.Partial, local.TitlesUnavailable)
 	}
-	if !remote.OK || !remote.Partial || !remote.LabelsUnavailable {
-		t.Errorf("remote row = ok %v partial %v labels_unavailable %v, want true/true/true", remote.OK, remote.Partial, remote.LabelsUnavailable)
+	if !remote.OK || !remote.Partial || !remote.TitlesUnavailable {
+		t.Errorf("remote row = ok %v partial %v titles_unavailable %v, want true/true/true", remote.OK, remote.Partial, remote.TitlesUnavailable)
 	}
 	if len(remote.UnknownRegistryFiles) != 1 || remote.UnknownRegistryFiles[0] != "/reg/9.json" {
-		t.Errorf("remote unknown_registry_files = %v, want the reported file alongside labels_unavailable", remote.UnknownRegistryFiles)
+		t.Errorf("remote unknown_registry_files = %v, want the reported file alongside titles_unavailable", remote.UnknownRegistryFiles)
 	}
 }
 
-// failingLabels is a LabelStore whose every method fails: it stands in for
+// failingTitles is a TitleStore whose every method fails: it stands in for
 // a label store that is configured but unreachable (a locked/corrupt DB).
-type failingLabels struct{}
+type failingTitles struct{}
 
-func (failingLabels) Snapshot() ([]store.PeerLabel, error) { return nil, errors.New("boom") }
-func (failingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+func (failingTitles) Snapshot() ([]store.PeerLabel, error) { return nil, errors.New("boom") }
+func (failingTitles) Claim(string, string, time.Time) (store.PeerLabel, error) {
 	return store.PeerLabel{}, errors.New("boom")
 }
-func (failingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+func (failingTitles) Release(string, time.Time) (store.PeerLabel, bool, error) {
 	return store.PeerLabel{}, false, errors.New("boom")
 }
 
-// writeFailingLabels reads fine but cannot write (Task 7 uses it for the
+// writeFailingTitles reads fine but cannot write (Task 7 uses it for the
 // claim/release write-failure rows of the matrix).
-type writeFailingLabels struct{ real *store.PeerLabelStore }
+type writeFailingTitles struct{ real *store.PeerLabelStore }
 
-func (w writeFailingLabels) Snapshot() ([]store.PeerLabel, error) { return w.real.Snapshot() }
-func (writeFailingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+func (w writeFailingTitles) Snapshot() ([]store.PeerLabel, error) { return w.real.Snapshot() }
+func (writeFailingTitles) Claim(string, string, time.Time) (store.PeerLabel, error) {
 	return store.PeerLabel{}, errors.New("disk full")
 }
-func (writeFailingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+func (writeFailingTitles) Release(string, time.Time) (store.PeerLabel, bool, error) {
 	return store.PeerLabel{}, false, errors.New("disk full")
 }
 
@@ -1835,5 +1967,147 @@ func TestInit_MissingOwnerResolver(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), agent.OwnerResolverKey) {
 		t.Errorf("Init error = %q, want it to mention %q", err.Error(), agent.OwnerResolverKey)
+	}
+}
+
+// TestHandlePeers_ScopeAll_CarriesSelfAlias pins spec §7.4's input: the
+// fan-out is the one caller that fetches every peer's envelope on each call,
+// so it is the one that can hand the CLI a LIVE self-reported name to
+// compare against the local one. Alias stays what we have the host
+// configured as; SelfAlias is what the host says it is; the two are carried
+// side by side and the local Alias is never overwritten by the report.
+//
+// The local row (Hosts[0]) fills both from the same snapshot alias, so it
+// agrees with itself by construction and can never be flagged.
+func TestHandlePeers_ScopeAll_CarriesSelfAlias(t *testing.T) {
+	dir := t.TempDir()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID: "air:111", Alias: "air26", OK: true, Peers: []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: srv.URL, Token: "tok-a", HostID: "air:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+
+	local := got.Hosts[0]
+	if local.SelfAlias != local.Alias || local.Alias != "mlab" {
+		t.Errorf("local row alias/self_alias = %q/%q, want both %q", local.Alias, local.SelfAlias, "mlab")
+	}
+
+	remote := got.Hosts[1]
+	if remote.Alias != "air" {
+		t.Errorf("remote alias = %q, want the locally configured %q — the peer's own report must not overwrite it", remote.Alias, "air")
+	}
+	if remote.SelfAlias != "air26" {
+		t.Errorf("remote self_alias = %q, want the peer's own report %q", remote.SelfAlias, "air26")
+	}
+}
+
+// TestHandlePeers_ScopeAll_RemoteSelfAliasBounded: self_alias is the
+// remote's own text, exactly as attacker-controlled as env.Error and
+// env.DaemonVersion, and it is bounded on the same terms before it is
+// re-encoded or printed.
+func TestHandlePeers_ScopeAll_RemoteSelfAliasBounded(t *testing.T) {
+	dir := t.TempDir()
+
+	hugeAlias := strings.Repeat("a", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID: "air:111", Alias: hugeAlias, OK: true, Peers: []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: srv.URL, Token: "tok-a", HostID: "air:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	if n := len(got.Hosts[1].SelfAlias); n >= len(hugeAlias) {
+		t.Errorf("self_alias len = %d, want bounded well below the remote's %d-byte report", n, len(hugeAlias))
+	}
+	if !strings.HasSuffix(got.Hosts[1].SelfAlias, "…") {
+		t.Errorf("self_alias = %q, want the truncation marker", got.Hosts[1].SelfAlias)
+	}
+}
+
+// TestHandlePeers_ScopeAll_UnreachableHostHasNoSelfAlias: a host we never
+// reached reported nothing, so its self_alias stays "" — the CLI reads ""
+// as "never said", not as "disagrees".
+func TestHandlePeers_ScopeAll_UnreachableHostHasNoSelfAlias(t *testing.T) {
+	dir := t.TempDir()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: "http://127.0.0.1:1", Token: "", HostID: "air:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	if got.Hosts[1].OK {
+		t.Fatalf("remote row ok = true, want a failed fetch in this fixture")
+	}
+	if got.Hosts[1].SelfAlias != "" {
+		t.Errorf("self_alias = %q, want \"\" for a host that was never reached", got.Hosts[1].SelfAlias)
 	}
 }

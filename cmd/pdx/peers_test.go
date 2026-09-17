@@ -27,35 +27,43 @@ func peersTableFixture() peers.Envelope {
 		OK:      true,
 		Partial: true,
 		Peers: []peers.PeerRecord{
-			{ // deliverable cc row
+			{ // deliverable cc row — the only one with a ref, so the only bracket
 				Address: "alias/sess1",
+				RowKind: "session",
+				Ref:     "_q34psn",
 				Agent: &peers.AgentInfo{
 					Type:     "cc",
 					PeerName: "wake-cc",
 					Status:   "working",
 				},
 				Deliverable: true,
+				TmuxName:    "aigora2",
 				Cwd:         "/home/wake/project",
 			},
-			{ // not_cc codex row
+			{ // not_cc codex row — no ref (Ref is set only for a cc agent)
 				Address: "alias/sess2",
+				RowKind: "session",
 				Agent: &peers.AgentInfo{
 					Type:   "codex",
 					Status: "idle",
 				},
 				Deliverable: false,
 				Reason:      "not_cc",
+				TmuxName:    "codex1",
 				Cwd:         "/home/wake/codex",
 			},
 			{ // shell row — no agent at all, reason set, NOT counted toward partial
 				Address:     "alias/sess3",
+				RowKind:     "session",
 				Agent:       nil,
 				Deliverable: false,
 				Reason:      "no_agent",
+				TmuxName:    "shell1",
 				Cwd:         "/home/wake/shell",
 			},
 			{ // unresolved row — no agent, no reason, counted toward partial (N=1)
 				Address:     "alias/sess4",
+				RowKind:     "session",
 				Agent:       nil,
 				Deliverable: false,
 				Reason:      "",
@@ -65,16 +73,18 @@ func peersTableFixture() peers.Envelope {
 	}
 }
 
-// wantPeersTable is the v3 column order: LABEL first, ADDRESS second
-// (spec 7.1 -- scan the label to find who you want, copy the address to
-// reach them). Every row of the fixture is unlabelled, so every LABEL cell
-// is blank rather than "-": a dash reads as a value, and there is nothing
-// here to name.
-const wantPeersTable = "LABEL  ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"       alias/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
-	"       alias/sess2  codex  -        idle     not_cc       /home/wake/codex\n" +
-	"       alias/sess3  -      -        -        no_agent     /home/wake/shell\n" +
-	"       alias/sess4  -      -        -        -            \n" +
+// wantPeersTable is the v4 column order: TITLE first, ADDRESS second (spec
+// §5.7 -- scan the title to find who you want, copy the address to reach
+// them), NAME gone because it IS the address's second segment, and TMUX added
+// between DELIVERABLE and CWD. Every row of the fixture is untitled, so every
+// TITLE cell is blank rather than "-": a dash reads as a value, and there is
+// nothing here to name. Only the cc row has a ref, so only it is bracketed;
+// the row with no tmux at all shows "-".
+const wantPeersTable = "TITLE  ADDRESS               AGENT  STATUS   DELIVERABLE  TMUX     CWD\n" +
+	"       alias/sess1 [q34psn]  cc     working  yes          aigora2  /home/wake/project\n" +
+	"       alias/sess2           codex  idle     not_cc       codex1   /home/wake/codex\n" +
+	"       alias/sess3           -      -        no_agent     shell1   /home/wake/shell\n" +
+	"       alias/sess4           -      -        -            -        \n" +
 	"(partial: 1 sessions not resolved within budget)\n" +
 	"daemon (unknown)\n"
 
@@ -85,34 +95,34 @@ func TestFormatPeersTable(t *testing.T) {
 	}
 }
 
-// TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent pins the v3
-// rendering rules (spec 7.1): LABEL is the FIRST column and ADDRESS the
-// second, an unset label renders as a blank cell rather than "-", no row
-// carries a "*" marker (the default label it marked no longer exists), and
-// entry rows keep their two-space ADDRESS indent and the "daemon
-// <version>" trailer.
-func TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
+// TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent pins the
+// rendering rules that survived into v4 (spec §5.7): the title is the FIRST
+// column and ADDRESS the second, an unset title renders as a blank cell
+// rather than "-", no row carries a "*" marker (the default label it marked
+// no longer exists), and entry rows keep their two-space ADDRESS indent and
+// the "daemon <version>" trailer.
+func TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
-		{Address: "a/_3k9f2mq4:mt0-x", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-		{Address: "a/_9x2pq0af:y", RowKind: "entry", Canonical: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/x", RowKind: "session", Ref: "_3k9f2m", Title: "purdex-dev", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/y", RowKind: "entry", Ref: "_9x2pq0", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 		{Address: "a/tmux:shell", RowKind: "session", Reason: "no_agent"},
 	}}
 	got := formatPeersTable(env)
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if cols := headerColumns(lines[0]); cols[0] != "LABEL" || cols[1] != "ADDRESS" {
-		t.Errorf("first two columns = %v, want LABEL then ADDRESS", cols[:2])
+	if cols := headerColumns(lines[0]); cols[0] != "TITLE" || cols[1] != "ADDRESS" {
+		t.Errorf("first two columns = %v, want TITLE then ADDRESS", cols[:2])
 	}
-	if !strings.HasPrefix(lines[1], "purdex-dev ") || !strings.Contains(lines[1], "a/_3k9f2mq4:mt0-x") {
-		t.Errorf("labelled session row = %q, want the label first then the address", lines[1])
+	if !strings.HasPrefix(lines[1], "purdex-dev ") || !strings.Contains(lines[1], "a/x") {
+		t.Errorf("titled session row = %q, want the title first then the address", lines[1])
 	}
 	if !strings.HasPrefix(lines[2], " ") {
-		t.Errorf("unlabelled entry row = %q, want a BLANK label cell, not a dash", lines[2])
+		t.Errorf("untitled entry row = %q, want a BLANK title cell, not a dash", lines[2])
 	}
-	if !strings.Contains(lines[2], "  a/_9x2pq0af:y") {
+	if !strings.Contains(lines[2], "  a/y") {
 		t.Errorf("entry row = %q, want the address indented by two spaces", lines[2])
 	}
 	if !strings.HasPrefix(lines[3], " ") || !strings.Contains(lines[3], "a/tmux:shell") {
-		t.Errorf("agentless row = %q, want a blank label cell", lines[3])
+		t.Errorf("agentless row = %q, want a blank title cell", lines[3])
 	}
 	if strings.Contains(got, "*") {
 		t.Errorf("table still carries a * marker -- the default label it marked is gone:\n%s", got)
@@ -130,24 +140,24 @@ func headerColumns(header string) []string {
 }
 
 // TestFormatPeersTable_SharedLabelRendersBothRows pins spec 7.1's
-// deliberate first two rows: two conversations may hold the SAME label
-// (D5), because a label is a display name and never a key. Both rows must
-// render, each carrying that label verbatim and its own distinct address --
+// deliberate first two rows: two conversations may hold the SAME title
+// (D5), because a title is a display name and never a key. Both rows must
+// render, each carrying that title verbatim and its own distinct address --
 // the address is what tells them apart, and nothing in the table may
 // suggest one of them "won" the name.
 func TestFormatPeersTable_SharedLabelRendersBothRows(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
-		{Address: "mini-lab/_3k9f2mq4:aigora2-purdex-b0", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
-		{Address: "mini-lab/_9x2pq0af:purdex1-purdex-69", RowKind: "session", Canonical: "_9x2pq0af", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
+		{Address: "mini-lab/purdex-b0", RowKind: "session", Ref: "_3k9f2m", Title: "purdex-tester", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
+		{Address: "mini-lab/purdex-69", RowKind: "session", Ref: "_9x2pq0", Title: "purdex-tester", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
 	}}
 	lines := strings.Split(strings.TrimRight(formatPeersTable(env), "\n"), "\n")
 	if len(lines) < 3 {
 		t.Fatalf("table too short: %q", lines)
 	}
-	for i, wantAddr := range []string{"mini-lab/_3k9f2mq4:aigora2-purdex-b0", "mini-lab/_9x2pq0af:purdex1-purdex-69"} {
+	for i, wantAddr := range []string{"mini-lab/purdex-b0", "mini-lab/purdex-69"} {
 		row := lines[i+1]
 		if !strings.HasPrefix(row, "purdex-tester ") {
-			t.Errorf("row %d = %q, want the shared label rendered verbatim and first", i, row)
+			t.Errorf("row %d = %q, want the shared title rendered verbatim and first", i, row)
 		}
 		if !strings.Contains(row, wantAddr) {
 			t.Errorf("row %d = %q, want its own address %q", i, row, wantAddr)
@@ -194,37 +204,37 @@ func TestFormatPeersTable_UnknownRegistryFilesLine(t *testing.T) {
 }
 
 // TestFormatPeersTable_LabelStoreUnavailableLine pins the partial-cause
-// line for a label store read failure (spec §3.3): it is rendered from the
-// envelope's explicit labels_unavailable flag (X4), never inferred from
+// line for a title store read failure (spec §3.3): it is rendered from the
+// envelope's explicit titles_unavailable flag (X4), never inferred from
 // the absence of the other causes.
 func TestFormatPeersTable_LabelStoreUnavailableLine(t *testing.T) {
 	resp := peers.Envelope{
 		OK:                true,
 		Partial:           true,
-		LabelsUnavailable: true,
+		TitlesUnavailable: true,
 		Peers: []peers.PeerRecord{
 			{Address: "alias/sess1", Deliverable: true, Agent: &peers.AgentInfo{Type: "cc"}},
 		},
 	}
 	got := formatPeersTable(resp)
-	if !strings.Contains(got, "(partial: label store unavailable)\n") {
-		t.Errorf("formatPeersTable = %q, want the label-store-unavailable line", got)
+	if !strings.Contains(got, "(partial: title store unavailable)\n") {
+		t.Errorf("formatPeersTable = %q, want the title-store-unavailable line", got)
 	}
 	if strings.Contains(got, "sessions not resolved") || strings.Contains(got, "unknown registry files") {
-		t.Errorf("formatPeersTable = %q, want only the label-store line", got)
+		t.Errorf("formatPeersTable = %q, want only the title-store line", got)
 	}
 
 	// Without the flag, nothing infers it — even though the envelope is
 	// Partial with no other visible cause.
-	resp.LabelsUnavailable = false
-	if got := formatPeersTable(resp); strings.Contains(got, "label store") {
-		t.Errorf("formatPeersTable = %q, want no label-store line without labels_unavailable", got)
+	resp.TitlesUnavailable = false
+	if got := formatPeersTable(resp); strings.Contains(got, "title store") {
+		t.Errorf("formatPeersTable = %q, want no title-store line without titles_unavailable", got)
 	}
 }
 
 // TestFormatPeersTable_AllPartialCauseLines pins that the three partial
 // causes are independent lines, each printed whenever its own signal is
-// set, in the order count / unknown files / label store — none is
+// set, in the order count / unknown files / title store — none is
 // suppressed by another (X3).
 func TestFormatPeersTable_AllPartialCauseLines(t *testing.T) {
 	resp := peers.Envelope{
@@ -232,7 +242,7 @@ func TestFormatPeersTable_AllPartialCauseLines(t *testing.T) {
 		Partial:              true,
 		DaemonVersion:        "1.0.0",
 		UnknownRegistryFiles: []string{"/reg/1.json", "/reg/2.json"},
-		LabelsUnavailable:    true,
+		TitlesUnavailable:    true,
 		Peers: []peers.PeerRecord{
 			{Address: "alias/sess1", Deliverable: false, Reason: "no_agent"},
 			{Address: "alias/sess2"}, // unresolved
@@ -242,7 +252,7 @@ func TestFormatPeersTable_AllPartialCauseLines(t *testing.T) {
 	got := formatPeersTable(resp)
 	want := "(partial: 2 sessions not resolved within budget)\n" +
 		"(partial: unknown registry files: /reg/1.json, /reg/2.json)\n" +
-		"(partial: label store unavailable)\n" +
+		"(partial: title store unavailable)\n" +
 		"daemon 1.0.0\n"
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("formatPeersTable = %q, want it to end with %q", got, want)
@@ -276,15 +286,23 @@ func TestSanitizeCell(t *testing.T) {
 	}
 }
 
+// TestFormatPeersTable_EscapesControlCharacters pins that every cell fed by
+// data someone else controls goes through sanitizeCell. In v4 that is the
+// TMUX cell (a tmux session name, or a registry file's frozen copy of one)
+// and the TITLE cell (a self-declared title) -- the NAME column that used to
+// carry this coverage is gone.
 func TestFormatPeersTable_EscapesControlCharacters(t *testing.T) {
 	resp := peers.Envelope{
 		OK: true,
 		Peers: []peers.PeerRecord{
 			{
-				Address: "alias/sess1",
+				Address:  "alias/sess1",
+				RowKind:  "session",
+				Title:    "t\x1b[32mz",
+				TmuxName: "x\x1b[31my",
 				Agent: &peers.AgentInfo{
 					Type:     "cc",
-					PeerName: "x\x1b[31my",
+					PeerName: "wake-cc",
 					Status:   "working",
 				},
 				Deliverable: true,
@@ -293,8 +311,10 @@ func TestFormatPeersTable_EscapesControlCharacters(t *testing.T) {
 		},
 	}
 	got := formatPeersTable(resp)
-	if !strings.Contains(got, `x\x1b[31my`) {
-		t.Errorf("formatPeersTable = %q, want literal escaped %q", got, `x\x1b[31my`)
+	for _, want := range []string{`x\x1b[31my`, `t\x1b[32mz`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatPeersTable = %q, want literal escaped %q", got, want)
+		}
 	}
 	if strings.ContainsRune(got, 0x1b) {
 		t.Errorf("formatPeersTable = %q, want no raw ESC byte", got)
@@ -420,6 +440,10 @@ var controlCharPeerName = "x" + string(rune(0x1b)) + "[31my"
 // controlCharPeerName, so the wire body carries it in the properly
 // \u-escaped JSON form (as encoding/json always produces for control
 // characters), never as a literal control byte.
+//
+// It lands in tmux_name as well as peer_name: v4 dropped the NAME column, so
+// peer_name alone would no longer reach the rendered table at all, and the
+// table test below would pass while rendering nothing.
 func peersControlCharBody(t *testing.T) []byte {
 	t.Helper()
 	body, err := json.Marshal(peers.Envelope{
@@ -428,12 +452,14 @@ func peersControlCharBody(t *testing.T) []byte {
 		Peers: []peers.PeerRecord{
 			{
 				Address: "alias/sess1",
+				RowKind: "session",
 				Agent: &peers.AgentInfo{
 					Type:     "cc",
 					PeerName: controlCharPeerName,
 					Status:   "working",
 				},
 				Deliverable: true,
+				TmuxName:    controlCharPeerName,
 				Cwd:         "/home/wake/project",
 			},
 		},
@@ -715,8 +741,11 @@ func peersAllTableFixture() peers.AllEnvelope {
 				Peers: []peers.PeerRecord{
 					{
 						Address:     "local/sess1",
+						RowKind:     "session",
+						Ref:         "_q34psn",
 						Agent:       &peers.AgentInfo{Type: "cc", PeerName: "wake-cc", Status: "working"},
 						Deliverable: true,
+						TmuxName:    "aigora2",
 						Cwd:         "/home/wake/project",
 					},
 				},
@@ -728,9 +757,11 @@ func peersAllTableFixture() peers.AllEnvelope {
 				Peers: []peers.PeerRecord{
 					{
 						Address:     "air/sess2",
+						RowKind:     "session",
 						Agent:       &peers.AgentInfo{Type: "codex", Status: "idle"},
 						Deliverable: false,
 						Reason:      "not_cc",
+						TmuxName:    "codex1",
 						Cwd:         "/home/wake/codex",
 					},
 				},
@@ -747,10 +778,11 @@ func peersAllTableFixture() peers.AllEnvelope {
 
 // wantPeersAllTable keeps HOST first -- which host a row lives on is what
 // you need before either of the other two columns means anything -- and
-// then follows the single-host order: LABEL, then ADDRESS (spec 7.1).
-const wantPeersAllTable = "HOST   LABEL  ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"local         local/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
-	"air           air/sess2    codex  -        idle     not_cc       /home/wake/codex\n" +
+// then follows the single-host order exactly: TITLE, then ADDRESS, and TMUX
+// between DELIVERABLE and CWD (v4 spec §5.7).
+const wantPeersAllTable = "HOST   TITLE  ADDRESS               AGENT  STATUS   DELIVERABLE  TMUX     CWD\n" +
+	"local         local/sess1 [q34psn]  cc     working  yes          aigora2  /home/wake/project\n" +
+	"air           air/sess2             codex  idle     not_cc       codex1   /home/wake/codex\n" +
 	"down  (unreachable: connection refused)\n" +
 	"local  daemon (unknown)\n" +
 	"air  daemon (unknown)\n"
@@ -762,19 +794,19 @@ func TestFormatPeersAllTable(t *testing.T) {
 	}
 }
 
-// TestFormatPeersAllTable_HostThenLabelThenAddress extends
-// TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent's rules to
-// the --all table: HOST stays the first column, LABEL comes second and
+// TestFormatPeersAllTable_HostThenTitleThenAddress extends
+// TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent's rules to
+// the --all table: HOST stays the first column, TITLE comes second and
 // ADDRESS third, entry rows keep their indent, and one "<alias>  daemon
 // <version>" trailer line is printed per OK host (the existing
 // "(unreachable: ...)" lines for failed hosts stay).
-func TestFormatPeersAllTable_HostThenLabelThenAddress(t *testing.T) {
+func TestFormatPeersAllTable_HostThenTitleThenAddress(t *testing.T) {
 	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
 		{
 			Alias: "local", OK: true, DaemonVersion: "1.0.0-alpha.342",
 			Peers: []peers.PeerRecord{
-				{Address: "local/_3k9f2mq4:mt0-x", RowKind: "session", Canonical: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-				{Address: "local/_9x2pq0af:y", RowKind: "entry", Canonical: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/x", RowKind: "session", Ref: "_3k9f2m", Title: "purdex-dev", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/y", RowKind: "entry", Ref: "_9x2pq0", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 			},
 		},
 		{Alias: "air", OK: true, DaemonVersion: "1.0.0-alpha.340", Peers: []peers.PeerRecord{}},
@@ -782,10 +814,10 @@ func TestFormatPeersAllTable_HostThenLabelThenAddress(t *testing.T) {
 	}}
 	got := formatPeersAllTable(resp)
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if cols := headerColumns(lines[0]); cols[0] != "HOST" || cols[1] != "LABEL" || cols[2] != "ADDRESS" {
-		t.Errorf("first three columns = %v, want HOST LABEL ADDRESS", cols[:3])
+	if cols := headerColumns(lines[0]); cols[0] != "HOST" || cols[1] != "TITLE" || cols[2] != "ADDRESS" {
+		t.Errorf("first three columns = %v, want HOST TITLE ADDRESS", cols[:3])
 	}
-	if !strings.Contains(lines[2], "  local/_9x2pq0af:y") {
+	if !strings.Contains(lines[2], "  local/y") {
 		t.Errorf("entry row (indented) not where expected: %q", lines[2])
 	}
 	if strings.Contains(got, "*") {
@@ -807,8 +839,8 @@ func TestFormatPeersAllTable_HostThenLabelThenAddress(t *testing.T) {
 
 // TestFormatPeersAllTable_PartialCauseLines pins the per-host
 // partial-cause lines: an alias-prefixed unknown-registry-files line for
-// the host that has one, and an alias-prefixed label-store-unavailable
-// line for the host whose envelope says labels_unavailable — each placed
+// the host that has one, and an alias-prefixed title-store-unavailable
+// line for the host whose envelope says titles_unavailable — each placed
 // ahead of that host's own daemon trailer.
 func TestFormatPeersAllTable_PartialCauseLines(t *testing.T) {
 	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
@@ -821,7 +853,7 @@ func TestFormatPeersAllTable_PartialCauseLines(t *testing.T) {
 		{
 			Alias: "air", OK: true, DaemonVersion: "1.0.1",
 			Partial:           true,
-			LabelsUnavailable: true,
+			TitlesUnavailable: true,
 			Peers:             []peers.PeerRecord{{Address: "air/sess1", Deliverable: true, Agent: &peers.AgentInfo{Type: "cc"}}},
 		},
 		{Alias: "down", OK: false, Error: "connection refused", Peers: []peers.PeerRecord{}},
@@ -830,8 +862,8 @@ func TestFormatPeersAllTable_PartialCauseLines(t *testing.T) {
 	if !strings.Contains(got, "local  (partial: unknown registry files: /reg/9999.json)\n") {
 		t.Errorf("formatPeersAllTable = %q, want local's unknown-registry-files line", got)
 	}
-	if !strings.Contains(got, "air  (partial: label store unavailable)\n") {
-		t.Errorf("formatPeersAllTable = %q, want air's label-store-unavailable line", got)
+	if !strings.Contains(got, "air  (partial: title store unavailable)\n") {
+		t.Errorf("formatPeersAllTable = %q, want air's title-store-unavailable line", got)
 	}
 	if strings.Contains(got, "down  (partial:") {
 		t.Errorf("formatPeersAllTable = %q, want no partial line for the unreachable host", got)
@@ -861,21 +893,21 @@ func TestFormatPeersAllTable_OwnerOnlyPartialPrintsCount(t *testing.T) {
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("formatPeersAllTable = %q, want it to end with %q", got, want)
 	}
-	if strings.Contains(got, "label store") || strings.Contains(got, "unknown registry") {
+	if strings.Contains(got, "title store") || strings.Contains(got, "unknown registry") {
 		t.Errorf("formatPeersAllTable = %q, want only the count line", got)
 	}
 }
 
 // TestFormatPeersAllTable_AllPartialCauseLines pins that --all prints
 // every applicable cause line per host, alias-prefixed, in the order
-// count / unknown files / label store, ahead of that host's trailer —
+// count / unknown files / title store, ahead of that host's trailer —
 // the same renderer the single-host table uses.
 func TestFormatPeersAllTable_AllPartialCauseLines(t *testing.T) {
 	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
 		{
 			Alias: "local", OK: true, DaemonVersion: "1.0.0", Partial: true,
 			UnknownRegistryFiles: []string{"/reg/1.json"},
-			LabelsUnavailable:    true,
+			TitlesUnavailable:    true,
 			Peers: []peers.PeerRecord{
 				{Address: "local/sess1"}, // unresolved
 			},
@@ -885,7 +917,7 @@ func TestFormatPeersAllTable_AllPartialCauseLines(t *testing.T) {
 	got := formatPeersAllTable(resp)
 	want := "local  (partial: 1 sessions not resolved within budget)\n" +
 		"local  (partial: unknown registry files: /reg/1.json)\n" +
-		"local  (partial: label store unavailable)\n" +
+		"local  (partial: title store unavailable)\n" +
 		"local  daemon 1.0.0\n" +
 		"air  daemon 1.0.1\n"
 	if !strings.HasSuffix(got, want) {
@@ -1091,6 +1123,39 @@ func TestRunPeersCmd_HostAdd(t *testing.T) {
 		"  pdxp_inbound123\n"
 	if stdout.String() != wantStdout {
 		t.Errorf("stdout = %q, want %q", stdout.String(), wantStdout)
+	}
+}
+
+// TestRunPeersCmd_HostAdd_AliasOmitted pins spec §7.2 at the CLI edge:
+// `pdx peers host add <url>` is legal, and it sends an empty alias so the
+// daemon adopts the one the peer publishes for itself. The alias is the
+// optional positional, so the sole one is the URL.
+func TestRunPeersCmd_HostAdd_AliasOmitted(t *testing.T) {
+	var gotBody cliAddHostRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(cliAddHostResponse{
+			Alias: "air26", URL: "https://air.mlab.host", HostID: "air:def456",
+			InboundToken: "pdxp_inbound123", Verified: true,
+		})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "add", "https://air.mlab.host", "--token", "pdxp_out123", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	wantBody := cliAddHostRequest{Alias: "", URL: "https://air.mlab.host", Token: "pdxp_out123"}
+	if gotBody != wantBody {
+		t.Errorf("request body = %+v, want %+v", gotBody, wantBody)
+	}
+	// The name echoed back is the daemon's, not the operator's.
+	if !strings.Contains(stdout.String(), "added air26 (https://air.mlab.host)") {
+		t.Errorf("stdout = %q, want it to report the adopted alias", stdout.String())
 	}
 }
 
@@ -1331,6 +1396,9 @@ func TestRunPeersCmd_GrammarRejections(t *testing.T) {
 	}{
 		{"host missing verb", []string{"host"}},
 		{"host unknown verb", []string{"host", "bogus"}},
+		{"host add no positionals", []string{"host", "add"}},
+		// The alias is optional, so one positional is legal — but only as a
+		// URL. A bare word is a missing URL, not a host named "air".
 		{"host add missing url", []string{"host", "add", "air"}},
 		{"host add extra positional", []string{"host", "add", "air", "https://x", "extra"}},
 		{"host list extra positional", []string{"host", "list", "extra"}},
@@ -1393,5 +1461,236 @@ func TestRunPeersCmd_ConfigFlagMissingValue(t *testing.T) {
 	}
 	if stdout.String() != "" {
 		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+// --- v4 columns -----------------------------------------------------------
+
+// v4TableFixture mirrors spec §5.7's worked example: a plain session row, a
+// titled one, a row whose name was not routable so its address IS its ref, an
+// agentless tmux row, and an entry row whose tmux name is frozen.
+func v4TableFixture() peers.Envelope {
+	return peers.Envelope{OK: true, Peers: []peers.PeerRecord{
+		{Address: "mlab/purdex-b0", Ref: "_q34psn", RowKind: "session",
+			SessionName: "aigora2", TmuxName: "aigora2", Cwd: "~/Workspace/wake/aigora",
+			Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "idle"}, Deliverable: true},
+		{Address: "mlab/purdex-53", Ref: "_d8dc4a", RowKind: "session",
+			SessionName: "purdex7", TmuxName: "purdex7", Cwd: "~",
+			Title: "Purdex Tester 01",
+			Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-53", Status: "busy"}, Deliverable: true},
+		{Address: "mlab/_df25d0", Ref: "_df25d0", RowKind: "session",
+			SessionName: "nexen", TmuxName: "nexen", Cwd: "~",
+			Agent: &peers.AgentInfo{Type: "cc", PeerName: "nexen-f2", Status: "idle"}, Reason: "inbox_dead"},
+		{Address: "mlab/tmux:aigora3", RowKind: "session",
+			SessionName: "aigora3", TmuxName: "aigora3", Cwd: "~", Reason: "no_agent"},
+		{Address: "mlab/barbox-a6", Ref: "_n4zeqk", RowKind: "entry",
+			TmuxName: "bb2", Cwd: "~",
+			Agent: &peers.AgentInfo{Type: "cc", PeerName: "barbox-a6", Status: "idle"}, Deliverable: true},
+	}}
+}
+
+// TestFormatPeersTable_V4Columns pins spec §5.7: the columns are TITLE
+// ADDRESS AGENT STATUS DELIVERABLE TMUX CWD -- NAME is gone (it IS the
+// address's second segment) and HOST never belonged to the single-host form
+// (it is the address's first segment); TMUX arrives because the tmux name
+// left the address with the suffix. Every address carries its ref in
+// brackets except one that already IS the ref.
+func TestFormatPeersTable_V4Columns(t *testing.T) {
+	got := formatPeersTable(v4TableFixture())
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	header := lines[0]
+
+	wantCols := []string{"TITLE", "ADDRESS", "AGENT", "STATUS", "DELIVERABLE", "TMUX", "CWD"}
+	if cols := headerColumns(header); strings.Join(cols, "|") != strings.Join(wantCols, "|") {
+		t.Errorf("header columns = %v, want %v", cols, wantCols)
+	}
+	if strings.Contains(header, "NAME") || strings.Contains(header, "HOST") {
+		t.Errorf("dropped column still present: %q", header)
+	}
+
+	for _, want := range []string{
+		"mlab/purdex-b0 [q34psn]", // ref rendered without its underscore
+		"mlab/purdex-53 [d8dc4a]",
+		"Purdex Tester 01", // TITLE cell
+		"inbox_dead",       // DELIVERABLE cell
+		"mlab/_df25d0",     // the ref-address row still renders
+		"mlab/tmux:aigora3",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("table lacks %q:\n%s", want, got)
+		}
+	}
+
+	// A row whose address IS the ref must not get a redundant bracket.
+	if strings.Contains(got, "mlab/_df25d0 [df25d0]") {
+		t.Errorf("ref-address row got a redundant bracket:\n%s", got)
+	}
+	// Nor does a row with no ref at all.
+	if strings.Contains(got, "mlab/tmux:aigora3 [") {
+		t.Errorf("refless row got a bracket:\n%s", got)
+	}
+	// An entry row keeps its two-space address indent, and its address is
+	// bracketed like any other.
+	if !strings.Contains(got, "  mlab/barbox-a6 [n4zeqk]") {
+		t.Errorf("entry row address not indented/bracketed:\n%s", got)
+	}
+}
+
+// TestFormatPeersTable_TmuxColumn pins the TMUX cell (spec §5.7): it renders
+// TmuxName, never SessionName -- SessionName is empty on an entry row, which
+// is the whole reason TmuxName exists -- and an entry row's value carries a
+// trailing "?" because it is frozen registry data that may name a session
+// since renamed or gone. A session row, read live from the inventory, gets no
+// marker; a row with no tmux at all gets "-".
+func TestFormatPeersTable_TmuxColumn(t *testing.T) {
+	got := formatPeersTable(v4TableFixture())
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+
+	// The entry row's SessionName is "" -- only TmuxName can produce this.
+	if !strings.Contains(got, "bb2?") {
+		t.Errorf("entry row TMUX cell missing the marked frozen name %q:\n%s", "bb2?", got)
+	}
+	for _, want := range []string{"aigora2", "purdex7", "nexen", "aigora3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("session row TMUX cell lacks %q:\n%s", want, got)
+		}
+	}
+	// Session rows are live, so none of them is marked.
+	for _, unwanted := range []string{"aigora2?", "purdex7?", "nexen?", "aigora3?"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("session row TMUX cell was marked %q -- only entry rows are:\n%s", unwanted, got)
+		}
+	}
+
+	// The TMUX cell sits second from the right, between DELIVERABLE and CWD.
+	for i, wantTmux := range []string{"aigora2", "purdex7", "nexen", "aigora3", "bb2?"} {
+		cells := headerColumns(lines[i+1])
+		// An unset TITLE cell is blank, so headerColumns drops it; index
+		// from the right instead, where CWD is last.
+		if len(cells) < 2 {
+			t.Fatalf("row %d too short: %q", i, lines[i+1])
+		}
+		if gotTmux := cells[len(cells)-2]; gotTmux != wantTmux {
+			t.Errorf("row %d TMUX cell = %q, want %q (row %q)", i, gotTmux, wantTmux, lines[i+1])
+		}
+	}
+
+	// No tmux at all renders "-", not a blank.
+	none := formatPeersTable(peers.Envelope{OK: true, Peers: []peers.PeerRecord{
+		{Address: "mlab/loner-11", Ref: "_aaaaaa", RowKind: "entry", Cwd: "~",
+			Agent: &peers.AgentInfo{Type: "cc", Status: "idle"}, Deliverable: true},
+	}})
+	cells := headerColumns(strings.Split(none, "\n")[1])
+	if got := cells[len(cells)-2]; got != "-" {
+		t.Errorf("tmux-less row TMUX cell = %q, want %q (%q)", got, "-", none)
+	}
+}
+
+// TestFormatPeersAllTable_V4Columns pins that --all keeps its leading HOST
+// column (spec §5.7) and then follows the single-host order exactly.
+func TestFormatPeersAllTable_V4Columns(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", OK: true, DaemonVersion: "1.0.0", Peers: v4TableFixture().Peers},
+	}})
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+
+	wantCols := []string{"HOST", "TITLE", "ADDRESS", "AGENT", "STATUS", "DELIVERABLE", "TMUX", "CWD"}
+	if cols := headerColumns(lines[0]); strings.Join(cols, "|") != strings.Join(wantCols, "|") {
+		t.Errorf("--all header columns = %v, want %v", cols, wantCols)
+	}
+	if strings.Contains(lines[0], "NAME") {
+		t.Errorf("--all header still carries NAME: %q", lines[0])
+	}
+	if !strings.Contains(got, "mlab/purdex-b0 [q34psn]") {
+		t.Errorf("--all table lacks the bracketed address:\n%s", got)
+	}
+	if !strings.Contains(got, "bb2?") {
+		t.Errorf("--all table lacks the marked entry-row tmux name:\n%s", got)
+	}
+	if strings.Contains(got, "mlab/_df25d0 [df25d0]") {
+		t.Errorf("--all ref-address row got a redundant bracket:\n%s", got)
+	}
+}
+
+// TestFormatPeersAllTable_MarksAliasDrift pins spec §7.4: --all is the one
+// place the comparison between what we call a host and what that host calls
+// itself is live, so it is the place that says the two disagree. The
+// agreeing host says nothing at all — a mark on every row is a mark on none.
+func TestFormatPeersAllTable_MarksAliasDrift(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "mlab", OK: true, DaemonVersion: "1.0.0", Peers: []peers.PeerRecord{}},
+		{Alias: "air", SelfAlias: "air26", OK: true, DaemonVersion: "1.0.0", Peers: []peers.PeerRecord{}},
+	}})
+
+	if !strings.Contains(got, "air  (alias drift: peer calls itself air26)") {
+		t.Errorf("drifted self alias not shown:\n%s", got)
+	}
+	if n := strings.Count(got, "alias drift"); n != 1 {
+		t.Errorf("alias-drift lines = %d, want exactly 1 (only the host that drifted):\n%s", n, got)
+	}
+	for _, ln := range strings.Split(got, "\n") {
+		if strings.HasPrefix(ln, "mlab") && strings.Contains(ln, "alias drift") {
+			t.Errorf("agreeing host is marked: %q", ln)
+		}
+	}
+	// Surfaced, never followed: the line reports the disagreement, it does
+	// not rename anything. Every row still lives under the local alias.
+	if strings.Contains(got, "air26/") {
+		t.Errorf("--all rewrote a row to the peer's self-reported name:\n%s", got)
+	}
+}
+
+// TestFormatPeersAllTable_SilentWhenSelfAliasUnknown: "" is not drift. A
+// host that never reported a name — an old daemon, or a fetch that never
+// reached a daemon at all — disagrees with nothing.
+func TestFormatPeersAllTable_SilentWhenSelfAliasUnknown(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "mlab", OK: true, Peers: []peers.PeerRecord{}},
+		{Alias: "air", OK: true, Peers: []peers.PeerRecord{}},
+		{Alias: "down", OK: false, Error: "connection refused", Peers: []peers.PeerRecord{}},
+	}})
+	if strings.Contains(got, "alias drift") {
+		t.Errorf("a host with no self-reported alias was marked as drifting:\n%s", got)
+	}
+}
+
+// TestFormatPeersAllTable_AliasDriftIsCaseInsensitive: aliases are matched
+// case-insensitively everywhere that routes on them (config.ValidateAlias,
+// config.FindPeerHostByAlias), so "MLAB" and "mlab" reach the same host and
+// are not a disagreement worth a line.
+func TestFormatPeersAllTable_AliasDriftIsCaseInsensitive(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "MLAB", OK: true, Peers: []peers.PeerRecord{}},
+	}})
+	if strings.Contains(got, "alias drift") {
+		t.Errorf("a case-only difference was reported as drift:\n%s", got)
+	}
+}
+
+// TestFormatPeersAllTable_EscapesAliasDrift: self_alias is the peer's own
+// report, exactly as attacker-controlled as its error text, and it lands on
+// a terminal.
+func TestFormatPeersAllTable_EscapesAliasDrift(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "air", SelfAlias: "air\x1b[2Jevil\x07", OK: true, Peers: []peers.PeerRecord{}},
+	}})
+	if !strings.Contains(got, "alias drift") {
+		t.Fatalf("drift line missing entirely:\n%s", got)
+	}
+	if strings.ContainsAny(got, "\x1b\x07") {
+		t.Errorf("formatPeersAllTable = %q, want no raw ESC/BEL bytes in the drift line", got)
+	}
+}
+
+// TestFormatPeersAllTable_LocalRowNeverDrifts: the local host is Hosts[0]
+// of every fan-out and its SelfAlias equals its Alias by construction
+// (internal/module/peers.allEnvelope fills both from the same snapshot).
+// It must never be able to disagree with itself.
+func TestFormatPeersAllTable_LocalRowNeverDrifts(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "mlab", OK: true, DaemonVersion: "1.0.0", Peers: []peers.PeerRecord{}},
+	}})
+	if strings.Contains(got, "alias drift") {
+		t.Errorf("the local row reported drift against itself:\n%s", got)
 	}
 }

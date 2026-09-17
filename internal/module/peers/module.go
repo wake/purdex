@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -139,15 +138,15 @@ type Module struct {
 	fetch       fetchFunc                        // default fetchRemote; test seam
 	logf        func(format string, args ...any) // default log.Printf; test seam
 
-	// labels is the peer_labels store (Task 3/7): Snapshot joins into every
+	// titles is the peer_labels store (Task 3/7): Snapshot joins into every
 	// inventory build (localEnvelope, unguarded — a plain read with no
-	// ordering requirement of its own); the self routes (labels.go —
-	// whoami, claim, release) read and write it under labelMu, held across
+	// ordering requirement of its own); the self routes (titles.go —
+	// whoami, claim, release) read and write it under titleMu, held across
 	// the whole verb (origin/registry read through the store call and the
 	// response construction), even whoami's own Snapshot-only read, so a
 	// concurrent claim/release can never interleave with it.
-	labels  LabelStore
-	labelMu sync.Mutex
+	titles  TitleStore
+	titleMu sync.Mutex
 
 	// Inbound delivery (deliver.go) and its collaborators.
 	audit            AuditStore     // nil ⇒ audit_unavailable on every deliver
@@ -182,12 +181,12 @@ type Module struct {
 
 // New constructs a peers Module with production defaults over audit (the
 // meta store's PeerMessages; nil disables delivery with audit_unavailable)
-// and labels (the meta store's PeerLabels; nil means every conversation has
-// its default label and claims fail with store_unavailable). Collaborators
+// and titles (the meta store's PeerLabels; nil means every conversation has
+// no title at all and claims fail with store_unavailable). Collaborators
 // (sessions, owners) and the helper manager are wired in Init: the manager
 // needs the config's data dir and the daemon's own executable path, neither
 // of which belongs in a constructor.
-func New(audit AuditStore, labels LabelStore) *Module {
+func New(audit AuditStore, titles TitleStore) *Module {
 	registryDir := filepath.Join(".claude", "sessions")
 	if home, err := os.UserHomeDir(); err == nil {
 		registryDir = filepath.Join(home, ".claude", "sessions")
@@ -202,7 +201,7 @@ func New(audit AuditStore, labels LabelStore) *Module {
 		fetch:            fetchRemote,
 		logf:             log.Printf,
 		audit:            audit,
-		labels:           labels,
+		titles:           titles,
 		writeFrame:       ccuds.WriteFrame,
 		sockWriteTimeout: ipeers.SocketWriteTimeout,
 		newMsgID:         uuid.NewString,
@@ -291,8 +290,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/deliver", m.handleDeliver)
 	mux.HandleFunc("GET /api/peers/log", m.handlePeersLog)
 	mux.HandleFunc("POST /api/peers/self", m.handleSelf)
-	mux.HandleFunc("PUT /api/peers/self/label", m.handleClaimLabel)
-	mux.HandleFunc("DELETE /api/peers/self/label", m.handleReleaseLabel)
+	mux.HandleFunc("PUT /api/peers/self/title", m.handleClaimTitle)
+	mux.HandleFunc("DELETE /api/peers/self/title", m.handleReleaseTitle)
 }
 
 // handlePeers serves GET /api/peers. scope unset/"local" returns this
@@ -337,7 +336,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 // hostID/alias: the response body for scope unset/"local", and the local
 // row's peers/ok/partial/error for scope=all. It never touches CfgMu itself
 // — the caller (handlePeers) takes the one config snapshot for the whole
-// request, so the local row's labels and the host/host_id embedded in its
+// request, so the local row's titles and the host/host_id embedded in its
 // own Peers records are always built from the same values.
 func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers.Envelope {
 	deadline := m.now().Add(m.budget)
@@ -345,6 +344,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	writeError := func(errMsg string) ipeers.Envelope {
 		return ipeers.Envelope{
 			HostID:               hostID,
+			Alias:                alias,
 			OK:                   false,
 			Error:                errMsg,
 			Partial:              false,
@@ -427,22 +427,22 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		unknown = []string{}
 	}
 
-	// The label snapshot (Task 3's peer_labels table) is joined the same
+	// The title snapshot (Task 3's peer_labels table) is joined the same
 	// way: a nil store or a read failure never blocks the inventory build
 	// (every row still gets its address, which is derived from the
 	// registry and owes the store nothing), but a failed read is reported
 	// the same way a failed owner lookup is — this response is showing a
-	// blank label column it cannot vouch for — and signalled on its own as
-	// labels_unavailable, so a consumer (pdx peers, the SPA) names the
+	// blank title column it cannot vouch for — and signalled on its own as
+	// titles_unavailable, so a consumer (pdx peers, the SPA) names the
 	// cause instead of inferring it from the absence of the other two
 	// partial causes.
-	labels, labelsErr := m.labelSnapshot()
-	if labelsErr != nil {
-		m.logf("peers: inventory: label store unavailable, reporting rows without labels: %v", labelsErr)
+	titles, titlesErr := m.titleSnapshot()
+	if titlesErr != nil {
+		m.logf("peers: inventory: title store unavailable, reporting rows without titles: %v", titlesErr)
 	}
-	labelsUnavailable := labelsErr != nil
+	titlesUnavailable := titlesErr != nil
 
-	partial := len(unresolved) > 0 || len(unknown) > 0 || labelsUnavailable
+	partial := len(unresolved) > 0 || len(unknown) > 0 || titlesUnavailable
 
 	// This daemon's own helpers are hidden as proxy rows by pid (their
 	// registry entries are otherwise indistinguishable from a Claude Code
@@ -460,42 +460,46 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Unresolved: unresolved,
 		Entries:    entries,
 		ProxyPIDs:  proxyPIDs,
-		Labels:     labels,
-		// An empty label map means "unreadable", not "no user labels".
+		Titles:     titles,
+		// An empty title map means "unreadable", not "no user titles".
 		// Build does not branch on this: it is passed through so the flag
 		// travels with the rows it explains, telling a consumer why their
-		// label column is blank. It says nothing about their addresses,
-		// which the label store never had a part in.
-		LabelsUnavailable: labelsUnavailable,
+		// title column is blank. It says nothing about their addresses,
+		// which the title store never had a part in.
+		TitlesUnavailable: titlesUnavailable,
 	})
 
 	return ipeers.Envelope{
-		HostID:               hostID,
+		HostID: hostID,
+		// The caller's snapshot alias, published so a peer pairing with this
+		// host can adopt the name this host uses for itself (spec §7) rather
+		// than inventing a local one that makes addresses unportable.
+		Alias:                alias,
 		OK:                   true,
 		Partial:              partial,
 		Peers:                peerRecords,
 		DaemonVersion:        buildinfo.Version,
 		UnknownRegistryFiles: unknown,
-		LabelsUnavailable:    labelsUnavailable,
+		TitlesUnavailable:    titlesUnavailable,
 	}
 }
 
-// labelSnapshot reads the label table into Build's map. A nil store is an
+// titleSnapshot reads the title table into Build's map. A nil store is an
 // empty map and no error (Peer Address v2 has never been configured with a
-// label store, which is not this inventory's trouble); a read error is
+// title store, which is not this inventory's trouble); a read error is
 // returned so the caller can mark the response partial — the rows it
-// renders below then carry no label at all, same as an absent row.
-func (m *Module) labelSnapshot() (map[string]ipeers.LabelInfo, error) {
-	out := map[string]ipeers.LabelInfo{}
-	if m.labels == nil {
+// renders below then carry no title at all, same as an absent row.
+func (m *Module) titleSnapshot() (map[string]ipeers.TitleInfo, error) {
+	out := map[string]ipeers.TitleInfo{}
+	if m.titles == nil {
 		return out, nil
 	}
-	rows, err := m.labels.Snapshot()
+	rows, err := m.titles.Snapshot()
 	if err != nil {
 		return out, err
 	}
 	for _, r := range rows {
-		out[r.SessionID] = ipeers.LabelInfo{Label: r.Label, Rev: r.Rev}
+		out[r.SessionID] = ipeers.TitleInfo{Title: r.Label, Rev: r.Rev}
 	}
 	return out, nil
 }
@@ -542,7 +546,13 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 
 	local := m.localEnvelope(ctx, hostID, alias)
 	results[0] = ipeers.HostResult{
-		Alias:                alias,
+		Alias: alias,
+		// The local row's SelfAlias comes from the same snapshot alias as
+		// Alias, so this host agrees with itself by construction and can
+		// never be flagged as drifting — there is no second opinion to
+		// disagree with, and inventing one from the live config would only
+		// manufacture drift out of a mid-request rename.
+		SelfAlias:            alias,
 		HostID:               hostID,
 		OK:                   local.OK,
 		Error:                local.Error,
@@ -550,7 +560,7 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 		Peers:                local.Peers,
 		DaemonVersion:        local.DaemonVersion,
 		UnknownRegistryFiles: local.UnknownRegistryFiles,
-		LabelsUnavailable:    local.LabelsUnavailable,
+		TitlesUnavailable:    local.TitlesUnavailable,
 	}
 
 	wg.Wait()
@@ -560,36 +570,77 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 
 // normalizeRemoteRows rewrites every row of a remote host's fan-out
 // response into this host's local view: Host becomes alias (how WE have
-// the peer configured, never the remote's own self-reported value), and
-// HostID becomes hostID (the caller's already-verified/bounded value for
-// this host). Address is rebuilt as "<alias>/<session>", where <session>
-// is everything after the remote's own first "/" (a "cc:" address's colon
-// survives intact); a remote address with no "/" at all (malformed) keeps
-// the whole original address as the session part instead. If the rebuilt
-// address still doesn't parse as a valid "<host>/<session>" pair
-// (ipeers.SplitAddress) — e.g. an empty session part, or a session part
-// that itself contains another "/" — Address is blanked rather than left
-// as an unusable value; Host and HostID stay set. Exported at the package
-// level (not a method) so P3 can reuse it as-is.
+// the peer configured, never the remote's own self-reported value), HostID
+// becomes hostID (the caller's already-verified/bounded value for this
+// host), and Address is RECOMPUTED by remoteAddress from the row's own
+// fields. Exported at the package level (not a method) so P3 can reuse it
+// as-is.
+//
+// It recomputes rather than adjusts because a paired peer is
+// attacker-controlled — the same assumption fetchHostResult already makes
+// about its error text and its host_id. The previous version kept everything
+// after the remote's first "/" and re-prefixed the local alias, so the remote
+// chose what this host printed in its ADDRESS column: publishing peer_name
+// "trusted:ops" with address "air/trusted:ops" got `pdx peers --all` to render
+// "air/trusted:ops [q34psn]", a pasteable address for a name spec §5.2 says
+// can never be one.
 func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeers.PeerRecord {
 	out := make([]ipeers.PeerRecord, len(rows))
 	for i, rec := range rows {
 		rec.Host = alias
 		rec.HostID = hostID
-
-		session := rec.Address
-		if idx := strings.IndexByte(rec.Address, '/'); idx >= 0 {
-			session = rec.Address[idx+1:]
-		}
-		rec.Address = alias + "/" + session
-
-		if _, _, ok := ipeers.SplitAddress(rec.Address); !ok {
-			rec.Address = ""
-		}
-
+		rec.Address = remoteAddress(rec, alias)
 		out[i] = rec
 	}
 	return out
+}
+
+// remoteAddress derives the address this host will print for one remote row,
+// from that row's own fields and in the same order applyIdentity uses for a
+// local one: a live cc entry with a routable name, else that entry's ref, else
+// the tmux form of a session this host can actually address.
+//
+// The remote's own Address is not read at all, by design: it is the one field
+// whose body carried whatever the remote wanted rendered, and a rule that
+// consults it — even only for its shape — is a rule a reader has to check the
+// remote against. Every input below is still the remote's, but each is put
+// through the grammar this host routes by, so whatever is printed is a form
+// Resolve can be handed back and will land on this very row.
+//
+// A row yielding none of the three forms gets "" rather than an unusable
+// value, exactly as a rebuilt address that failed SplitAddress used to.
+// A proxy row is one of those: its local "<host>/cc:<name>" form is retired
+// and unresolvable, so reproducing it here would only put a remote-chosen
+// string in the address column.
+func remoteAddress(rec ipeers.PeerRecord, alias string) string {
+	var session string
+	switch {
+	// hasLiveEntry's condition, spelled out: Resolve's name and ref tiers
+	// decide only on rows carrying a real live cc registry entry, so only
+	// those two forms may be printed for one.
+	case rec.Agent != nil && rec.Agent.Type == "cc" && rec.Agent.PID != 0:
+		switch {
+		case ipeers.RoutableName(rec.Agent.PeerName):
+			session = rec.Agent.PeerName
+		case ipeers.IsRef(rec.Ref):
+			session = rec.Ref
+		}
+	// Any other row: the tmux form, which names a place rather than a
+	// conversation and is matched on SessionName — the same field printed
+	// here, so the address resolves back to this row.
+	case rec.SessionName != "":
+		session = ipeers.LabelReservedTmux + ":" + rec.SessionName
+	}
+	if session == "" {
+		return ""
+	}
+	addr := alias + "/" + session
+	// The backstop the rebuild always had: a value that cannot be split back
+	// into a host and a session is not an address, whatever produced it.
+	if _, _, ok := ipeers.SplitAddress(addr); !ok {
+		return ""
+	}
+	return addr
 }
 
 // fetchHostResult fetches one configured peer host's inventory for a
@@ -698,11 +749,20 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	// env.DaemonVersion is the remote's own reported text, exactly as
 	// attacker-controlled as env.Error and the unknown-registry-files list
 	// above, so it is bounded the same way before this row is ever printed
-	// or re-encoded. env.LabelsUnavailable is a bool and needs no bounding:
+	// or re-encoded. env.TitlesUnavailable is a bool and needs no bounding:
 	// it is the remote's own claim about its label store, copied through
 	// for the per-host cause line.
+	//
+	// env.Alias gets that same bounding and nothing more. It is NOT put
+	// through sanitizeLearnedAlias: that helper answers "may we adopt this
+	// name?" and returns "" when the answer is no, which would erase exactly
+	// the reports worth seeing — a peer that renamed itself to something
+	// unroutable, or to our own local alias. This field is only ever
+	// displayed (sanitizeCell at the terminal), never stored and never
+	// routed on, so the bar it clears is the one env.Error clears.
 	return ipeers.HostResult{
 		Alias:                h.Alias,
+		SelfAlias:            boundRemoteText(env.Alias),
 		HostID:               resultHostID,
 		OK:                   env.OK,
 		Error:                rowErr,
@@ -710,6 +770,6 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		Peers:                peers,
 		DaemonVersion:        boundRemoteText(env.DaemonVersion),
 		UnknownRegistryFiles: bounded,
-		LabelsUnavailable:    env.LabelsUnavailable,
+		TitlesUnavailable:    env.TitlesUnavailable,
 	}
 }

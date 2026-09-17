@@ -301,11 +301,11 @@ type sendEnv struct {
 // remoteRow is one deliverable cc row as the remote host "air" reports it
 // (its own alias/host_id/address — normalised by the sender).
 //
-// Canonical is set because spec §4.5 says a v3 daemon sets it on every row
-// with a live cc entry, and Resolve now reads a live cc row WITHOUT one as
-// proof that the whole batch came from a pre-v3 daemon (ErrRemoteTooOld).
-// Leaving it empty here would have made every send test in this file run
-// against a v2 peer without saying so.
+// Ref is set because a v3-or-later daemon sets it on every row with a live cc
+// entry, and Resolve reads a live cc row WITHOUT one as proof that the whole
+// batch came from a pre-v3 daemon (ErrRemoteTooOld). Leaving it empty here
+// would have made every send test in this file run against a v2 peer without
+// saying so.
 func remoteRow(sessionName, sessionCode string) ipeers.PeerRecord {
 	addr := remoteAlias + "/" + sessionName
 	if sessionName == "" {
@@ -315,7 +315,7 @@ func remoteRow(sessionName, sessionCode string) ipeers.PeerRecord {
 		Host:         remoteAlias,
 		HostID:       remoteHostID,
 		Address:      addr,
-		Canonical:    ipeers.CanonicalID(remoteSessionID),
+		Ref:          ipeers.RefID(remoteSessionID),
 		SessionCode:  sessionCode,
 		SessionName:  sessionName,
 		TmuxInstance: "air-inst",
@@ -480,10 +480,10 @@ func TestSend_HappyPath(t *testing.T) {
 		ProcStart:      targetProcStart,
 		PeerName:       targetPeerName,
 		SessionName:    "cc:" + targetPeerName, // outside tmux ⇒ cc:<peer_name>
-		// v3 (spec §4.4): the origin row's "<canonical>:<suffix>" at its
-		// label row's revision (no label row ⇒ rev 0). The head is the
-		// conversation's canonical id whether or not it has a label.
-		Address:      ipeers.CanonicalID(targetSessionID) + ":" + targetPeerName,
+		// v4 (§5.6): the origin row's bare ref at its label row's revision
+		// (no label row ⇒ rev 0). The ref is the conversation's own,
+		// whether or not it has a label.
+		Address:      ipeers.RefID(targetSessionID),
 		AddressRev:   0,
 		DeclaredMode: ipeers.ModeBypass,
 	}
@@ -698,19 +698,22 @@ func TestSend_OriginProxyRows(t *testing.T) {
 // not have resolved it either.
 func TestSend_Ambiguous(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
-	canonical := ipeers.CanonicalID(remoteSessionID)
+	canonical := ipeers.RefID(remoteSessionID)
 	a := remoteRow("", "")
 	b := remoteRow("", "")
 	b.Agent.PID = 778
-	a.Canonical, b.Canonical = canonical, canonical
-	a.Label, b.Label = "purdex-tester", "purdex-tester-2"
+	a.Ref, b.Ref = canonical, canonical
+	a.Title, b.Title = "purdex-tester", "purdex-tester-2"
 	// What the operator needs in order to tell the two apart, and what the
 	// refusal must therefore carry (spec §4.1/§6.4): agent name, pid, cwd.
-	// The address is exactly the thing that cannot do it — they share it.
+	// The REF is the thing that cannot do it — they share it, which is what
+	// made the send ambiguous.
 	a.Agent.PeerName, b.Agent.PeerName = "twin-1", "twin-2"
 	a.Cwd, b.Cwd = "/w/one", "/w/two"
-	// The remote claims another alias in its addresses: candidates must
-	// come back normalised to the entry's alias.
+	// The remote claims another alias, and the shared ref, in both addresses.
+	// Neither survives: normalizeRemoteRows derives each row's address from
+	// its own fields under the entry's alias, so the two processes come back
+	// separately addressable by name even though the ref they share is not.
 	a.Address, b.Address = "zzz/"+canonical, "zzz/"+canonical
 	s.set(func(s *sendEnv) { s.env = remoteEnvelope(a, b) })
 	req := s.sendReq()
@@ -718,8 +721,8 @@ func TestSend_Ambiguous(t *testing.T) {
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrAmbiguous)
 	want := []ipeers.AmbiguousCandidate{
-		{Address: remoteAlias + "/" + canonical, AgentName: "twin-1", PID: remotePID, Cwd: "/w/one"},
-		{Address: remoteAlias + "/" + canonical, AgentName: "twin-2", PID: 778, Cwd: "/w/two"},
+		{Address: remoteAlias + "/twin-1", AgentName: "twin-1", PID: remotePID, Cwd: "/w/one"},
+		{Address: remoteAlias + "/twin-2", AgentName: "twin-2", PID: 778, Cwd: "/w/two"},
 	}
 	if !reflect.DeepEqual(ae.Candidates, want) {
 		t.Errorf("candidates = %+v, want %+v", ae.Candidates, want)
@@ -729,10 +732,10 @@ func TestSend_Ambiguous(t *testing.T) {
 	}
 }
 
-// TestSend_AddressRevIsZeroAfterRelabel pins spec §4.4: LabelRev keeps
+// TestSend_AddressRevIsZeroAfterRelabel pins spec §4.4: TitleRev keeps
 // counting label changes, but a v3 address cannot change, so the revision
 // a v3 sender reports for its ADDRESS is 0 — permanently, however many
-// times the conversation has renamed itself. Sending LabelRev there (the
+// times the conversation has renamed itself. Sending TitleRev there (the
 // old wireFromRecord) announced an address change that never happened,
 // and the receiver's stale-rev/helper-rename path believed it.
 func TestSend_AddressRevIsZeroAfterRelabel(t *testing.T) {
@@ -747,15 +750,15 @@ func TestSend_AddressRevIsZeroAfterRelabel(t *testing.T) {
 	if res.err != nil {
 		t.Fatalf("second claim: %+v", res.err)
 	}
-	if res.rec.LabelRev != 2 || res.rec.Label != "purdex-tester-2" {
-		t.Fatalf("after re-claim: label %q rev %d, want purdex-tester-2 rev 2", res.rec.Label, res.rec.LabelRev)
+	if res.rec.TitleRev != 2 || res.rec.Title != "purdex-tester-2" {
+		t.Fatalf("after re-claim: label %q rev %d, want purdex-tester-2 rev 2", res.rec.Title, res.rec.TitleRev)
 	}
 
 	s.sendOK(s.sendReq())
 
 	from := s.onlyPost().req.From
-	if from.Address != ipeers.CanonicalID(targetSessionID)+":"+targetPeerName {
-		t.Errorf("from.address = %q, want the canonical head (a label never addresses)", from.Address)
+	if from.Address != ipeers.RefID(targetSessionID) {
+		t.Errorf("from.address = %q, want the bare ref (a label never addresses)", from.Address)
 	}
 	if from.AddressRev != 0 {
 		t.Errorf("from.address_rev = %d, want 0: the label moved twice, the address never did", from.AddressRev)
@@ -779,29 +782,42 @@ func TestSend_LegacyCCAddress(t *testing.T) {
 	}
 }
 
-// TestSend_PeerNotFoundTeachesTheCanonicalAddress pins the peer_not_found
-// detail (v3 spec §7). The hint this replaced taught the exact opposite of
-// what is now true — it told the reader an unnamed session is addressed by
-// its tmux session name "not by a _xxxxxx label", and a v3 address is
-// precisely the "_xxxxxxxx" form. A hint that is confidently backwards is
-// worse than none: it sends the reader to look up a string that cannot
-// address anyone. The detail must instead name the canonical id, say that
-// a label never addresses, and point at the two commands that print a live
-// address. The wire "error" code stays peer_not_found — assertRefused
-// checks that — so nothing matching on it breaks.
-func TestSend_PeerNotFoundTeachesTheCanonicalAddress(t *testing.T) {
+// TestSend_PeerNotFoundTeachesTheV4AddressForms pins the peer_not_found
+// detail (v4 spec §5.5).
+//
+// This hint has been confidently backwards twice. Before v3 it taught the
+// tmux session name as the address, which v3 made false. v3 taught the
+// eight-digit canonical id, which v4 made false — no such form is minted
+// any more, so a reader following it hunts a string nothing produces. A
+// hint that is wrong is worse than none: it sends someone who typed a
+// correct address off to find an impossible one.
+//
+// The assertions below are therefore about coverage, not wording. The
+// detail must name all three v4 forms rather than crowning one, must keep
+// the clause that the self-declared title never addresses, and must point
+// at the two commands that print a live address. The negative assertions
+// pin the two retired teachings so neither can return. The wire "error"
+// code stays peer_not_found — assertRefused checks that — so nothing
+// matching on it breaks.
+func TestSend_PeerNotFoundTeachesTheV4AddressForms(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	req := s.sendReq()
-	req.To = remoteAlias + "/_ab12cd" // a v2 six-digit head, no longer minted
+	req.To = remoteAlias + "/_ab12cd" // a ref that matches no row
 
 	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
-	for _, want := range []string{`"_ab12cd"`, `"` + remoteAlias + `"`, "pdx peers --all", "pdx msg whoami", "canonical"} {
+	for _, want := range []string{
+		`"_ab12cd"`, `"` + remoteAlias + `"`,
+		"<host>/<name>", "[<ref>]", "<host>/_<ref>",
+		"title", "pdx peers --all", "pdx msg whoami",
+	} {
 		if !strings.Contains(ae.Detail, want) {
 			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
 		}
 	}
-	if strings.Contains(ae.Detail, "tmux session name") {
-		t.Errorf("detail = %q, still teaches the tmux-name form as the address", ae.Detail)
+	for _, gone := range []string{"tmux session name", "canonical"} {
+		if strings.Contains(ae.Detail, gone) {
+			t.Errorf("detail = %q, still teaches the retired %q form", ae.Detail, gone)
+		}
 	}
 	if len(s.postCalls()) != 0 {
 		t.Errorf("posts = %d, want none", len(s.postCalls()))
@@ -824,8 +840,8 @@ func TestSend_PeerNotFoundTeachesTheCanonicalAddress(t *testing.T) {
 func TestSend_RemoteTooOld(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	v2 := remoteRow(remoteSession, "fooc")
-	v2.Canonical = "" // a pre-v3 daemon has never heard of the field
-	v2.Label, v2.LabelSource = "purdex-tester", "user"
+	v2.Ref = "" // a pre-v3 daemon has never heard of the field
+	v2.Title, v2.TitleSource = "purdex-tester", "user"
 	v2.Address = remoteAlias + "/purdex-tester:foo-purdex-b0"
 	s.env = remoteEnvelope(v2)
 
@@ -913,7 +929,7 @@ func deadHolderRows(t *testing.T, tmuxName string, spansTwoTmuxSessions bool) []
 			PID: remotePID, SessionID: remoteSessionID, Name: remoteSession, Cwd: "/w",
 			Tmux: tmuxName + ":@1.%2", Inbox: "/tmp/cc-socks/777.sock", ProcStart: remoteProcStart, Version: "2.1.270", Status: "idle",
 		}},
-		Labels: map[string]ipeers.LabelInfo{deadSID: {Label: tmuxName, Rev: 3}},
+		Titles: map[string]ipeers.TitleInfo{deadSID: {Title: tmuxName, Rev: 3}},
 	}
 	if spansTwoTmuxSessions {
 		in.Sessions = append(in.Sessions, ipeers.SessionSummary{Code: "elsec", Name: deadHolderSpanTmuxName, Cwd: "/w"})
@@ -948,13 +964,13 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	for _, r := range rows {
 		switch {
 		case r.SessionName == "stale":
-			sawDead = r.Reason == "inbox_dead" && r.Label == deadHolderTmuxName && r.Agent != nil && r.Agent.PID == 0
+			sawDead = r.Reason == "inbox_dead" && r.Title == deadHolderTmuxName && r.Agent != nil && r.Agent.PID == 0
 		case r.SessionName == deadHolderTmuxName:
 			// Spelled out rather than "anything but the name": the tier-2
 			// path exists only while nothing LIVE holds the label, so a
 			// fixture change that quietly labels this row fails here
 			// instead of silently retargeting the test at tier 1.
-			sawLive = r.Deliverable && r.Label == "" && r.Canonical == ipeers.CanonicalID(remoteSessionID)
+			sawLive = r.Deliverable && r.Title == "" && r.Ref == ipeers.RefID(remoteSessionID)
 		}
 	}
 	if !sawDead || !sawLive {
@@ -968,8 +984,8 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	if resp.Result != ipeers.ResultDelivered {
 		t.Errorf("result = %q, want delivered", resp.Result)
 	}
-	if !strings.HasPrefix(resp.ToAddress, remoteAlias+"/"+ipeers.CanonicalID(remoteSessionID)+":") {
-		t.Errorf("to_address = %q, want the tmux session %q's own canonical address", resp.ToAddress, deadHolderTmuxName)
+	if want := remoteAlias + "/" + remoteSession; resp.ToAddress != want {
+		t.Errorf("to_address = %q, want %q — the tmux session %q's own row, addressed by its registry name", resp.ToAddress, want, deadHolderTmuxName)
 	}
 	post := s.onlyPost()
 	if post.req.To.AgentSessionID != remoteSessionID || post.req.To.PID != remotePID {
@@ -986,14 +1002,14 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 func TestSend_SingleHitUnderUnknownRegistryFileNotReady(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	row := remoteRow("", "")
-	row.Canonical = ipeers.CanonicalID(remoteSessionID)
-	row.Label, row.LabelSource = "purdex-tester", "user"
+	row.Ref = ipeers.RefID(remoteSessionID)
+	row.Title, row.TitleSource = "purdex-tester", "user"
 	s.set(func(s *sendEnv) {
 		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row},
 			UnknownRegistryFiles: []string{"/reg/778.json"}}
 	})
 	req := s.sendReq()
-	req.To = remoteAlias + "/" + row.Canonical
+	req.To = remoteAlias + "/" + row.Ref
 
 	rr := s.send(adminCtx(), req)
 	if rr.Code != http.StatusServiceUnavailable {
@@ -1021,16 +1037,21 @@ func TestSend_SingleHitUnderUnknownRegistryFileNotReady(t *testing.T) {
 }
 
 // TestSend_PartialInventoryNotReady pins the v2 delta on step 6: when the
-// remote's envelope is partial, a label-tier miss is 503 not_ready with
-// Partial:true in the body rather than falling back to the bare tmux-name
+// remote's envelope is partial, a miss in the deciding tiers is 503 not_ready
+// with Partial:true in the body rather than falling back to the bare tmux-name
 // tier — even though that tier would otherwise have matched.
 func TestSend_PartialInventoryNotReady(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	s.set(func(s *sendEnv) {
 		row := remoteRow(remoteSession, "fooc") // carries no Label
+		// remoteRow gives the row a registry name equal to its tmux session
+		// name. Peer Address v4 added a NAME tier above the tmux fallback, so
+		// leaving them equal would resolve at that tier and never exercise the
+		// fallback this test is about. Give the name its own value.
+		row.Agent.PeerName = remoteSession + "-b0"
 		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row}}
 	})
-	req := s.sendReq() // To: remoteAlias + "/" + remoteSession — would match tier 2 if reached
+	req := s.sendReq() // To: remoteAlias + "/" + remoteSession — would match the tmux fallback if reached
 
 	rr := s.send(adminCtx(), req)
 	if rr.Code != http.StatusServiceUnavailable {
@@ -1145,7 +1166,7 @@ func TestSend_ErrorSteps(t *testing.T) {
 			// non-retryable 400 origin_unknown even while the label
 			// store is down, never 503 not_ready.
 			name:    "origin unknown path: label-store failure alone stays origin_unknown",
-			prepare: func(s *sendEnv) { s.m.labels = failingLabels{} },
+			prepare: func(s *sendEnv) { s.m.titles = failingTitles{} },
 			mutate:  func(r *ipeers.SendRequest) { r.OriginInbox = "/nonexistent/x.sock" },
 			status:  http.StatusBadRequest, code: ipeers.ErrOriginUnknown,
 		},
@@ -1340,5 +1361,54 @@ func TestSend_NotReadyBeforeAudit(t *testing.T) {
 	assertRefused(t, s.send(adminCtx(), s.sendReq()), http.StatusServiceUnavailable, ipeers.ErrNotReady)
 	if len(s.postCalls()) != 0 || len(s.rows()) != 0 {
 		t.Errorf("post/rows = %d/%d, want none", len(s.postCalls()), len(s.rows()))
+	}
+}
+
+// TestSend_CombinedNameMismatchRefused pins §5.4's refusal of the combined
+// form `<name> [<ref>]` when the typed name is not the ref's current name —
+// and, more to the point, pins its DETAIL.
+//
+// The refusal itself is cheap to get right and worthless on its own. What
+// the operator has to decide is which of two things happened: the peer
+// renamed itself (harmless, re-read the address) or someone handed them
+// `trusted-name [attackerRef]` (not harmless at all). That call cannot be
+// made from the code, only from the three values — the name they typed, the
+// name the ref answers to now, and the ref itself. Before this test the arm
+// did not exist: ErrNameMismatch fell through to `default:` and came back as
+// a 404 peer_not_found reading "no session %q on %q", which discards two of
+// the three and buries the third inside a sentence saying the address was
+// never found — the opposite of what happened. It was found, and refused.
+//
+// 409, not 404, for the same reason ErrRemoteTooOld is 409: the address was
+// understood and declined, and "check the address" is the wrong instruction.
+func TestSend_CombinedNameMismatchRefused(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	ref := ipeers.RefID(remoteSessionID)
+	bare := strings.TrimPrefix(ref, "_")
+
+	req := s.sendReq()
+	req.To = remoteAlias + "/decoy-name [" + bare + "]"
+	ae := assertRefused(t, s.send(adminCtx(), req), http.StatusConflict, ipeers.ErrCodeNameMismatch)
+	for _, want := range []string{`"decoy-name"`, `"` + remoteSession + `"`, bare} {
+		if !strings.Contains(ae.Detail, want) {
+			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
+		}
+	}
+	if len(s.postCalls()) != 0 {
+		t.Errorf("posts = %d, want none — a mismatch must not deliver and warn", len(s.postCalls()))
+	}
+
+	// The override the refusal exists to leave open: `_<ref>` says "the ref,
+	// whatever it is called now" outright, and must still go through.
+	req.To = remoteAlias + "/" + ref
+	if rr := s.send(adminCtx(), req); rr.Code != http.StatusOK {
+		t.Fatalf("ref form: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	// And the matching combined form delivers: the check is a check, not a
+	// blanket refusal of the form the peers table prints.
+	req.To = remoteAlias + "/" + remoteSession + " [" + bare + "]"
+	if rr := s.send(adminCtx(), req); rr.Code != http.StatusOK {
+		t.Fatalf("matching combined form: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 }

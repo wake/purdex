@@ -219,10 +219,10 @@ describe('RenamePopover peer section', () => {
   const cwdRefresh = vi.fn(async (_hostId: string, _code: string) => {})
 
   const ROW: PeerRow = {
-    address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
-    canonical: '_3k9f2mq4',
-    label: 'ai-chat4',
-    labelSource: 'user',
+    address: 'mini-lab/ai-chat-story-3a',
+    ref: '_3k9f2m',
+    title: 'ai-chat4',
+    titleSource: 'user',
     deliverable: true,
     reason: '',
     tmuxInstance: GEN,
@@ -304,11 +304,20 @@ describe('RenamePopover peer section', () => {
     useSessionCwdStore.setState({ byHost: {}, refresh: cwdRefresh })
   })
 
+  // The drift guard for ROW. Every test below renders it and asserts on what
+  // appears, so a fixture still in v3's shape — an eight-digit ref, an
+  // address ending in `:<suffix>` — would pass all of them and prove only
+  // that the component prints its input.
+  it('ROW is a v4 row: a six-digit ref and a colon-free address', () => {
+    expect(ROW.ref).toMatch(/^_[0-9a-z]{6}$/)
+    expect(ROW.address).toMatch(/^[a-z0-9][a-z0-9.-]*\/(tmux:.+|_[0-9a-z]{6}|[a-z0-9][a-z0-9-]*)$/)
+  })
+
   it('renders address, agent and deliverability for a live pane', () => {
     seedSession(H1, 'abc123')
     seedHost(H1, 'abc123', ROW)
     render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-    expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a')
+    expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat-story-3a')
     const agent = screen.getByTestId('peer-agent-p1').textContent ?? ''
     expect(agent).toContain('cc')
     expect(agent).toContain('ai-chat-story-3a')
@@ -321,7 +330,7 @@ describe('RenamePopover peer section', () => {
     seedHost(H1, 'abc123', ROW)
     render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
     fireEvent.click(screen.getByTestId('peer-address-p1'))
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a'))
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat-story-3a'))
   })
 
   it.each([
@@ -355,7 +364,7 @@ describe('RenamePopover peer section', () => {
     render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane(), terminalPane({ hostId: H2, sessionCode: 'def456' }))} />)
     expect(screen.getByTestId('peer-error-p1').textContent).toContain('connection refused')
     expect(screen.queryByTestId('peer-address-p1')).toBeNull()
-    expect(screen.getByTestId('peer-address-p2').textContent).toContain('mini-lab/ai-chat4')
+    expect(screen.getByTestId('peer-address-p2').textContent).toContain('mini-lab/ai-chat-story-3a')
     expect(screen.queryByTestId('peer-error-p2')).toBeNull()
   })
 
@@ -398,7 +407,7 @@ describe('RenamePopover peer section', () => {
     seedHost(H1, 'abc123', ROW)
     useHostStore.setState({ runtime: { [H1]: { status: 'disconnected' } } })
     render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-    expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat4')
+    expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat-story-3a')
     expect(screen.getByTestId('peer-section-p1')).toHaveAttribute('data-dim', 'true')
   })
 
@@ -431,22 +440,22 @@ describe('RenamePopover peer section', () => {
   describe('spec §6 states', () => {
     it('shows the row plus a note naming the cause when the envelope is partial', () => {
       seedSession(H1, 'abc123')
-      seedHost(H1, 'abc123', ROW, { envelope: { partial: true, labelsUnavailable: false, unknownRegistryFiles: [] } })
+      seedHost(H1, 'abc123', ROW, { envelope: { partial: true, titlesUnavailable: false, unknownRegistryFiles: [] } })
       render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-      expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat4')
+      expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat-story-3a')
       expect(screen.getByTestId('peer-partial-p1').textContent).toContain('unresolved owners')
     })
 
     it('names the unreadable registry files when they are the cause', () => {
       seedSession(H1, 'abc123')
-      seedHost(H1, 'abc123', ROW, { envelope: { partial: true, labelsUnavailable: false, unknownRegistryFiles: ['/a/b.json'] } })
+      seedHost(H1, 'abc123', ROW, { envelope: { partial: true, titlesUnavailable: false, unknownRegistryFiles: ['/a/b.json'] } })
       render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
       expect(screen.getByTestId('peer-partial-p1').textContent).toContain('unreadable registry files')
     })
 
     it('says "could not be determined", not "no peer", when the envelope is partial and there is no row', () => {
       seedSession(H1, 'abc123')
-      seedHost(H1, 'abc123', null, { envelope: { partial: true, labelsUnavailable: false, unknownRegistryFiles: [] } })
+      seedHost(H1, 'abc123', null, { envelope: { partial: true, titlesUnavailable: false, unknownRegistryFiles: [] } })
       render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
       const note = screen.getByTestId('peer-status-p1').textContent
       expect(note).toBe('could not be determined')
@@ -460,29 +469,36 @@ describe('RenamePopover peer section', () => {
       expect(screen.getByTestId('peer-status-p1').textContent).toBe('no peer')
     })
 
-    it('notes that labels could not be read, so addresses may be hash defaults', () => {
+    // An unreadable title store costs the title column and nothing else: a v4
+    // address is the registry name or the sessionId-derived ref, and neither
+    // is read from that store. The note this replaced claimed the opposite —
+    // "addresses may be hash defaults" — and this test asserted the claim,
+    // which is how a false sentence survives a rename untouched (#1094).
+    it('says an unreadable title store costs the title column, not the address', () => {
       seedSession(H1, 'abc123')
-      seedHost(H1, 'abc123', ROW, { envelope: { partial: true, labelsUnavailable: true, unknownRegistryFiles: [] } })
+      seedHost(H1, 'abc123', ROW, { envelope: { partial: true, titlesUnavailable: true, unknownRegistryFiles: [] } })
       render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-      expect(screen.getByTestId('peer-labels-p1').textContent).toContain('hash defaults')
+      const note = screen.getByTestId('peer-titles-p1').textContent ?? ''
+      expect(note).toContain('Addresses are unaffected')
+      expect(note).not.toContain('hash defaults')
     })
 
-    // An empty `labelSource` no longer means "no cc agent" — a live
+    // An empty `titleSource` no longer means "no cc agent" — a live
     // conversation that has not named itself reports `''` too (spec §8.1). The
     // address row keys off the address, which is empty only when there is no
-    // canonical, so both halves are asserted here: no canonical hides it, an
+    // ref, so both halves are asserted here: no ref hides it, an
     // unnamed live conversation does not.
-    it('hides the address row only when the row has no canonical, not when it merely has no label', () => {
+    it('hides the address row only when the row has no ref, not when it merely has no title', () => {
       seedSession(H1, 'abc123')
-      seedHost(H1, 'abc123', { ...ROW, canonical: '', label: '', address: '', labelSource: '' })
+      seedHost(H1, 'abc123', { ...ROW, ref: '', title: '', address: '', titleSource: '' })
       const { unmount } = render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
       expect(screen.queryByTestId('peer-address-p1')).toBeNull()
       expect(screen.getByTestId('peer-agent-p1').textContent).toContain('ai-chat-story-3a')
       unmount()
 
-      seedHost(H1, 'abc123', { ...ROW, label: '', labelSource: '' })
+      seedHost(H1, 'abc123', { ...ROW, title: '', titleSource: '' })
       render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-      expect(screen.getByTestId('peer-address-p1').textContent).toBe('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a')
+      expect(screen.getByTestId('peer-address-p1').textContent).toBe('mini-lab/ai-chat-story-3a')
     })
 
     it('shows a spinner and no error while the pane is not yet reconciled with the session store', () => {
@@ -498,7 +514,7 @@ describe('RenamePopover peer section', () => {
       seedHost(H1, 'abc123', ROW)
       const tab = tabOf({ kind: 'editor', source: { type: 'local' }, filePath: '/a.md' }, terminalPane())
       render(<RenamePopover {...popoverProps} tab={tab} />)
-      expect(screen.getByTestId('peer-address-p2').textContent).toContain('mini-lab/ai-chat4')
+      expect(screen.getByTestId('peer-address-p2').textContent).toContain('mini-lab/ai-chat-story-3a')
     })
 
     it('renders no block at all for a stream pane — the collector never offers one', () => {
@@ -543,7 +559,7 @@ describe('RenamePopover peer section', () => {
       seedSession(H1, 'abc123')
       seedHost(H1, 'abc123', ROW)
       render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-      expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat4')
+      expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat-story-3a')
     })
 
     it.each([

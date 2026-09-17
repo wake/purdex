@@ -32,65 +32,58 @@ type AgentInfo struct {
 // whether or not that entry's tmux field points into a listed session
 // (Peer Address v2 spec §3.4; RowKind tells the two apart).
 type PeerRecord struct {
-	Host        string `json:"host"`
-	HostID      string `json:"host_id"`
-	Address     string `json:"address"`
-	RowKind     string `json:"row_kind"`     // session | entry
-	Canonical   string `json:"canonical"`    // the sessionId-derived address head; "" when the row has no cc agent
-	Label       string `json:"label"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
-	LabelSource string `json:"label_source"` // user | ""
-	LabelRev    int64  `json:"label_rev"`
-	// Suffix is "<tmux session>-<cc name>", display-only, and NOT part of
-	// any identity: the address is Canonical, and nothing resolves or
-	// routes on this string. "" when the row has no cc agent.
+	Host    string `json:"host"`
+	HostID  string `json:"host_id"`
+	Address string `json:"address"`
+	RowKind string `json:"row_kind"` // session | entry
+	// Ref is the sessionId-derived disambiguator, "_q34psn"; "" when the row
+	// has no cc agent. It is the one part of an address that cannot drift, and
+	// what Resolve falls back to when a name does.
+	Ref          string `json:"ref"`
+	Title        string `json:"title"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
+	TitleSource  string `json:"title_source"` // user | ""
+	TitleRev     int64  `json:"title_rev"`
+	SessionCode  string `json:"session_code"`  // always present
+	SessionName  string `json:"session_name"`  // always present
+	TmuxInstance string `json:"tmux_instance"` // always present
+	// TmuxName is the tmux session this row's agent is in, for display only.
+	// NOTHING routes on it, and that is the point: its two provenances differ
+	// in how much they can be trusted, and RowKind tells them apart.
 	//
-	// It has TWO PROVENANCES within a single response, told apart by
-	// RowKind (spec §5.4):
+	//   - row_kind "session": the daemon's live inventory name, so it tracks a
+	//     rename immediately.
+	//   - row_kind "entry": no session row stands behind it, so this is Claude
+	//     Code's registry field, frozen when the agent started and never
+	//     refreshed. It can name a session since renamed or gone — which is
+	//     exactly v3 spec §2's P1, and exactly why SessionName is NOT set here
+	//     and no tier may match on this field.
 	//
-	//   - row_kind "session": the tmux half is the daemon's live inventory
-	//     name for that session, so it tracks a tmux rename immediately.
-	//   - row_kind "entry": there is no session row behind it, so the tmux
-	//     half comes from Claude Code's registry file, where it was frozen
-	//     when the agent started and is never refreshed. It can therefore
-	//     name a session that has since been renamed or has gone away
-	//     (spec §2 P1).
-	//
-	// No separate field distinguishes them because RowKind already does,
-	// and because a display string is not worth a second identity column.
-	// Consumers that need a session's current name should read
-	// SessionName, not parse this.
-	Suffix       string     `json:"suffix"`
-	SessionCode  string     `json:"session_code"`  // always present
-	SessionName  string     `json:"session_name"`  // always present
-	TmuxInstance string     `json:"tmux_instance"` // always present
-	Cwd          string     `json:"cwd,omitempty"`
-	Agent        *AgentInfo `json:"agent"` // always present, null when none
-	Deliverable  bool       `json:"deliverable"`
-	Reason       string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
+	// "" when the agent is not in tmux at all.
+	TmuxName    string     `json:"tmux_name"`
+	Cwd         string     `json:"cwd,omitempty"`
+	Agent       *AgentInfo `json:"agent"` // always present, null when none
+	Deliverable bool       `json:"deliverable"`
+	Reason      string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
 }
 
-// WireAddress renders r's from.address (Peer Address v3 spec §4.4/§4.5):
-// Canonical + ":" + Suffix, or "" when the row has no cc agent (Canonical
-// == "").
+// WireAddress renders r's from.address: the bare Ref, or "" when the row has
+// no cc agent (Ref == "").
 //
-// It is canonical-based rather than label-based because send.go's
-// wireFromRecord puts this string in the outbound from.address: a
-// label-based rendering would have a v3 sender announce itself at an
-// address the receiver's resolver does not route on — and, since Label is
-// still a string, it would compile and pass the wire grammar while doing
-// so. Label is a display name (D3); only the canonical id is reachable.
+// It is ref-based rather than name- or label-based because send.go's
+// wireFromRecord puts this string in the outbound from.address: a name-based
+// rendering would announce the sender at an address that drifts the moment
+// Claude Code re-derives the registry name, and a label-based one at an
+// address nothing routes on at all. The ref is the one half of the address
+// that cannot move.
 func (r PeerRecord) WireAddress() string {
-	if r.Canonical == "" {
-		return ""
-	}
-	return r.Canonical + ":" + r.Suffix
+	return r.Ref
 }
 
-// LabelInfo is what the label store (Task 3) knows about one conversation:
-// the user label ("" ⇒ the conversation has not named itself, and nothing
-// is substituted for it) and the label row's revision.
-type LabelInfo struct {
-	Label string
+// TitleInfo is what the title store (Task 3) knows about one conversation:
+// the user title ("" ⇒ the conversation has not named itself, and nothing
+// is substituted for it) and the title row's revision.
+type TitleInfo struct {
+	Title string
 	Rev   int64
 }
 
@@ -104,12 +97,12 @@ type BuildInput struct {
 	Unresolved    map[string]bool  // codes whose owner lookup did not run
 	Entries       []Entry
 	ProxyPIDs     map[int]bool         // empty in P1; kept so P3 needs no signature change
-	Labels        map[string]LabelInfo // by sessionId; absent ⇒ no label, rev 0
-	// LabelsUnavailable says the label snapshot in Labels could NOT be
-	// read. Under v3 that costs display only: Labels feeds Label and
-	// LabelRev, and nothing else. Every address is CanonicalID(sessionID)
-	// — computed from the registry, never from this store — so an
-	// unreadable label store cannot make a single address wrong, late or
+	Titles        map[string]TitleInfo // by sessionId; absent ⇒ no title, rev 0
+	// TitlesUnavailable says the title snapshot in Titles could NOT be
+	// read. Under v3 that costs display only: Titles feeds Title and
+	// TitleRev, and nothing else. Every address is built from the registry
+	// name and RefID(sessionID) — never from this store — so an
+	// unreadable title store cannot make a single address wrong, late or
 	// ambiguous. The rows simply render without their display names.
 	//
 	// (Under v2 this flag gated address correctness: a default label was
@@ -117,8 +110,8 @@ type BuildInput struct {
 	// so an unreadable row could hold the very name another row was about
 	// to advertise. D2 removed that input, and Build no longer branches on
 	// this field at all. It is kept because it rides on the wire envelope,
-	// where it still tells a consumer why the label column is blank.)
-	LabelsUnavailable bool
+	// where it still tells a consumer why the title column is blank.)
+	TitlesUnavailable bool
 }
 
 // Build joins sessions, owners and registry entries into PeerRecords. It is
@@ -175,6 +168,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 		RowKind:      "session",
 		SessionCode:  s.Code,
 		SessionName:  s.Name,
+		TmuxName:     s.Name,
 		TmuxInstance: s.TmuxInstance,
 		Cwd:          s.Cwd,
 	}
@@ -202,21 +196,18 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 
 	// From here the owner IS a cc conversation, so every remaining branch
 	// sets a cc Agent (full entry info, or the owner-only fallback) and
-	// calls applyLabel to render Canonical/Label/Suffix/Address (spec
-	// §4.5). Every branch passes s.Name for the suffix's tmux half —
-	// including the ones that DID choose an entry (spec §5.4). A chosen
-	// entry's Entry.TmuxSessionName() is the name Claude Code froze into
-	// its registry file at agent startup and never refreshes, so it goes
-	// stale the moment the session is renamed (spec §2 P1). s.Name is the
-	// daemon's live inventory of the very session being rendered, so it is
-	// both fresher and, for a session row, the more obviously correct one.
+	// calls applyIdentity to render Ref/Title/Address (v4 spec §5.3).
 	//
-	// Every branch, fallbacks included, passes CanonicalID(owner.SessionID)
-	// with no special case and no population to consult. That is v3's whole
-	// simplification: the head is a pure function of the conversation's own
-	// id, so an inbox_dead row, an ambiguous row and a deliverable row all
-	// render the same address for the same conversation by construction
-	// rather than by agreeing on a shared lookup.
+	// Every branch, fallbacks included, passes RefID(owner.SessionID) with no
+	// special case and no population to consult: the ref is a pure function of
+	// the conversation's own id, so an inbox_dead row, an ambiguous row and a
+	// deliverable row all carry the same ref for the same conversation by
+	// construction rather than by agreeing on a shared lookup.
+	//
+	// What DOES differ between them is the registry name. Only a branch that
+	// pinned the row to exactly one live entry has one to pass; the fallbacks
+	// pass "", which is why their addresses take the ref form (§5.2).
+
 	var candidates []Entry
 	for _, e := range entriesBySessionID[owner.SessionID] {
 		if !(e.IsProxy || in.ProxyPIDs[e.PID]) {
@@ -228,18 +219,18 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	case 0:
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "inbox_dead"
-		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, "")
+		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 		return rec, Entry{}, false
 	case 1:
 		if consumed[candidates[0]] {
 			rec.Agent = ownerFallbackAgent(owner)
 			rec.Reason = "ambiguous"
-			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, "")
+			applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 			return rec, Entry{}, false
 		}
 		rec.Agent = agentInfoFromEntry(candidates[0])
 		rec.Deliverable = true
-		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, candidates[0].Name)
+		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), candidates[0].Name)
 		return rec, candidates[0], true
 	default:
 		var paneMatches []Entry
@@ -252,57 +243,58 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			if consumed[paneMatches[0]] {
 				rec.Agent = ownerFallbackAgent(owner)
 				rec.Reason = "ambiguous"
-				applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, "")
+				applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 				return rec, Entry{}, false
 			}
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
 			rec.Deliverable = true
-			applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, paneMatches[0].Name)
+			applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), paneMatches[0].Name)
 			return rec, paneMatches[0], true
 		}
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "ambiguous"
-		applyLabel(&rec, in.Alias, in.Labels[owner.SessionID], CanonicalID(owner.SessionID), s.Name, "")
+		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 		return rec, Entry{}, false
 	}
 }
 
-// applyLabel fills Canonical/Label/LabelSource/LabelRev/Suffix/Address for
-// a row whose agent is a cc conversation (session rows and entry rows
-// alike). It is the single writer of those five fields, which is what makes
-// spec §4.5's invariant table checkable in one function.
+// applyIdentity fills Ref/Title/TitleSource/TitleRev/Address for a row whose
+// agent is a cc conversation. It is the single writer of those fields, which
+// is what makes the spec's invariant table checkable in one place.
 //
-// The two halves are independent, and that independence IS Peer Address v3
-// (D1/D3):
+// The address has two forms and RoutableName picks between them (v4 §5.2): a
+// routable registry name gives "<host>/<name>", anything else gives
+// "<host>/<ref>". A row is never left holding an address that cannot be typed
+// back in.
 //
-//   - canonical is the address. It comes from the caller as
-//     CanonicalID(sessionID) and is the head unconditionally — whether or
-//     not a label is set, whatever the label says, and however the tmux
-//     session is renamed afterwards.
-//   - label is a display name. It is the user label or nothing at all;
-//     "" now means "this conversation has not named itself", never "fall
-//     back to something derived". LabelSource reports which of the two it
-//     is, so the pair ("", "") and (name, "user") are the only shapes.
+// It does NOT touch Reason, and must not. Reason says why a row cannot be
+// DELIVERED to — "" | no_agent | not_cc | inbox_dead | proxy | ambiguous —
+// and an unroutable name does not stop delivery: the row is reachable by its
+// ref, which is exactly what its address already shows. Writing an addressing
+// fact there broke the invariant Deliverable == true <=> Reason == "" that
+// cmd/pdx's deliverableField and the SPA's PEER_REASONS both read, and since
+// deliverableField renders "yes" for any deliverable row, the value could
+// never have reached a screen anyway.
 //
-// info.Rev is carried straight through: it is still the LABEL's revision
-// (spec §4.4). It no longer implies an address change, because the address
-// does not move.
+// ccName is the registry name. The owner-fallback callers pass "" — no live
+// entry stands behind those rows, so they have no name to offer, and the ref
+// form matches their being unreachable anyway.
 //
-// Suffix is display-only and rendered from tmuxName/ccName. A session row's
-// caller passes the live SessionSummary.Name; an entry row's caller has no
-// session behind it and passes the row's own registry tmux field. Never
-// Resolve's session argument. See PeerRecord.Suffix for what that split
-// means to a consumer.
-func applyLabel(rec *PeerRecord, alias string, info LabelInfo, canonical, tmuxName, ccName string) {
-	rec.Canonical = canonical
-	if info.Label != "" {
-		rec.Label, rec.LabelSource = info.Label, LabelSourceUser
+// info.Rev is carried straight through: it is still the TITLE's revision. It
+// does not imply an address change.
+func applyIdentity(rec *PeerRecord, alias string, info TitleInfo, ref, ccName string) {
+	rec.Ref = ref
+	if info.Title != "" {
+		rec.Title, rec.TitleSource = info.Title, TitleSourceUser
 	} else {
-		rec.Label, rec.LabelSource = "", ""
+		rec.Title, rec.TitleSource = "", ""
 	}
-	rec.LabelRev = info.Rev
-	rec.Suffix = Suffix(tmuxName, ccName)
-	rec.Address = alias + "/" + canonical + ":" + rec.Suffix
+	rec.TitleRev = info.Rev
+	if RoutableName(ccName) {
+		rec.Address = alias + "/" + ccName
+		return
+	}
+	rec.Address = alias + "/" + ref
 }
 
 // ownerFallbackAgent builds the reduced AgentInfo used when a cc owner's
@@ -333,22 +325,23 @@ func agentInfoFromEntry(e Entry) *AgentInfo {
 
 // EntryRecord is the row of one live registry entry that no session row
 // consumed (Peer Address v2 spec §3.4). Task 7 also uses it to answer
-// whoami/claim/release straight from the validated entry and label row, so
+// whoami/claim/release straight from the validated entry and title row, so
 // the address it renders must be identical to the listing's: a proxy entry
 // keeps the unresolvable "alias/cc:<name>" form (unchanged from rule 5); a
-// live cc entry gets the same canonical+suffix address applyLabel gives a
-// session row, with the suffix derived from the entry's own tmux field.
+// live cc entry gets the same address applyIdentity gives a session row,
+// derived from the entry's own registry name and sessionId.
 //
-// It takes no population argument: the head is CanonicalID(e.SessionID),
-// so a self route answering from one validated entry and the listing
-// building from the whole registry cannot disagree about the caller's own
-// address (spec §4.5). That agreement used to require passing the same
-// resolved default-label map to both.
-func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo) PeerRecord {
+// It takes no population argument: the ref is RefID(e.SessionID) and the name
+// is the entry's own, so a self route answering from one validated entry and
+// the listing building from the whole registry cannot disagree about the
+// caller's own address (v4 spec §5.3). That agreement used to require passing
+// the same resolved default-label map to both.
+func EntryRecord(alias, hostID string, e Entry, proxy bool, info TitleInfo) PeerRecord {
 	agent := agentInfoFromEntry(e)
 	rec := PeerRecord{
 		Host: alias, HostID: hostID, RowKind: "entry",
-		Cwd: e.Cwd, Agent: agent, Deliverable: true,
+		TmuxName: e.TmuxSessionName(),
+		Cwd:      e.Cwd, Agent: agent, Deliverable: true,
 	}
 	if proxy {
 		agent.Type = "proxy"
@@ -358,7 +351,7 @@ func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo) Peer
 		rec.Reason = "proxy"
 		return rec
 	}
-	applyLabel(&rec, alias, info, CanonicalID(e.SessionID), e.TmuxSessionName(), e.Name)
+	applyIdentity(&rec, alias, info, RefID(e.SessionID), e.Name)
 	return rec
 }
 
@@ -384,7 +377,7 @@ func buildEntryRecords(in BuildInput, consumed map[Entry]bool) []PeerRecord {
 		if consumed[e] {
 			continue
 		}
-		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Labels[e.SessionID])
+		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Titles[e.SessionID])
 		candidates = append(candidates, entryCandidate{rec: rec, peerName: e.Name, pid: e.PID})
 	}
 

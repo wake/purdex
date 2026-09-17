@@ -31,17 +31,25 @@ const maxSendBodyBytes = 1 << 20
 // peerNotFoundHint is appended to the peer_not_found detail for an
 // address that matched no row.
 //
-// What it said before v3 was the exact inverse of the truth: that a
-// session is addressed by its tmux session name "not by a _xxxxxx label".
-// A v3 address IS the "_xxxxxxxx" form — the canonical id derived from the
-// session's sessionId — so the old hint sent a reader who had typed the
-// right kind of string off to find the one kind that cannot address
-// anyone. A confidently backwards hint costs more than no hint at all,
-// which is why this one names the canonical id, says plainly that a label
-// is not an address, and points at the two commands that print a live one.
+// This hint has now been wrong twice, in opposite directions, and the
+// history is the reason it is worth this much comment.
+//
+// Before v3 it said a session is addressed by its tmux session name "not by
+// a _xxxxxx label" — the exact inverse of v3, where the address IS the
+// "_xxxxxxxx" canonical id. v3 corrected it by naming the canonical id and
+// saying plainly that a label never addresses. v4 then made THAT half wrong
+// too: the everyday address head is the session's registry name, and no
+// eight-digit form is minted any more, so a reader following the v3 hint
+// went looking for a string nothing can produce.
+//
+// What survived both rewrites is the clause about the self-declared name
+// (now `title`), which has never addressed anything and still does not.
+// What keeps breaking is any sentence that names one form as "the" address.
+// So this version names all three and ranks them, rather than picking one.
+//
 // The wire "error" code is unchanged: anything matching on peer_not_found
 // is unaffected.
-const peerNotFoundHint = "an address is a session's canonical id (`_3k9f2mq4`), not the label it calls itself — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
+const peerNotFoundHint = "an address is `<host>/<name>`, where <name> is the session's own name — not the title it calls itself; add its ref as `<host>/<name> [<ref>]` when two sessions share a name, or use `<host>/_<ref>` alone, which never changes — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
 
 // maxDeliverRespBytes caps a remote daemon's /deliver answer: a
 // DeliverResponse or an APIError is a few hundred bytes at most, and the
@@ -149,10 +157,10 @@ func findOrigin(records []ipeers.PeerRecord, inbox string) (rec ipeers.PeerRecor
 // receiver) plus the address, "<canonical>:<suffix>", which a v2 receiver
 // names the sender's helper after.
 //
-// AddressRev is 0, always, and is NOT rec.LabelRev (spec §4.4). LabelRev
-// still counts how many times this conversation has set its label, but a
+// AddressRev is 0, always, and is NOT rec.TitleRev (spec §4.4). TitleRev
+// still counts how many times this conversation has set its title, but a
 // v3 address is derived from the sessionId and cannot move: putting the
-// label's revision in the ADDRESS's revision claims a change that never
+// title's revision in the ADDRESS's revision claims a change that never
 // happened. The field stays on the wire because v2 senders still populate
 // it, and deliver.go's stale-rev guard still protects against a v2 peer's
 // address changing — for a v3 origin that path is simply never armed.
@@ -347,6 +355,19 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			// two prescribe opposite actions — "check the address" would
 			// send the operator looking for a fault on the wrong host.
 			refuseUnaudited(http.StatusConflict, ipeers.ErrCodeRemoteTooOld,
+				fmt.Sprintf("%q: %s", entry.Alias, err.Error()))
+		case errors.Is(err, ipeers.ErrNameMismatch):
+			// The combined form `<name> [<ref>]` whose name is not the
+			// ref's current name (spec §5.4). 409 like the ambiguous and
+			// too-old arms above, because all three mean "your address was
+			// understood and refused" — not "not found", which is what the
+			// default arm below would have said while throwing away the
+			// only three facts that matter here. err.Error() names the
+			// typed name, the ref and the name that ref answers to now,
+			// and it is passed through whole: an operator deciding
+			// between "the peer renamed itself" and "someone handed me a
+			// doctored address" has nothing else to decide it with.
+			refuseUnaudited(http.StatusConflict, ipeers.ErrCodeNameMismatch,
 				fmt.Sprintf("%q: %s", entry.Alias, err.Error()))
 		case errors.Is(err, ipeers.ErrLegacyCC):
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, err.Error())

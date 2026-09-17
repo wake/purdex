@@ -64,10 +64,13 @@ function setupStores() {
 }
 
 const PEER_ROW: PeerRow = {
-  address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
-  canonical: '_3k9f2mq4',
-  label: 'ai-chat4',
-  labelSource: 'user',
+  address: 'mlab/purdex-b0',
+  ref: '_q34psn',
+  // A v4 title is free text, routes nothing, and is usually unset. The row is
+  // identified by its name and its ref, so the fixture leaves it empty; the one
+  // test that cares about a title sets it.
+  title: '',
+  titleSource: '',
   deliverable: true,
   reason: '',
   tmuxInstance: GEN,
@@ -374,9 +377,59 @@ describe('StatusBar peer segments', () => {
     expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
     expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/wake/Workspace/wake/purdex')
     expect(screen.getByTestId('status-seg-agent').textContent).toBe('ai-chat-story-3a')
-    // The *label* is displayed; the full address is what a click copies.
-    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('ai-chat4')
+    // The *name* is displayed with its ref; the full address is what a click copies.
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-b0 [q34psn]')
     expect(screen.getByTestId('status-seg-status').textContent).toContain('connected')
+  })
+
+  // Spec §5.8. The two strings differ on purpose: the display drops the host
+  // because the row already shows it, while the clipboard keeps the host *and*
+  // the ref, because a copied address is pasted hours later — exactly the window
+  // in which a name drifts or is taken by someone else.
+  it('shows the name with its ref and copies the exact form', async () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByText(/purdex-b0 \[q34psn\]/)
+    expect(seg.textContent).not.toContain('mlab/')
+    fireEvent.click(seg)
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0 [q34psn]'))
+  })
+
+  // The old guard declined to render a row whose *title* was empty. Under v4 a
+  // title is usually empty and never identified a row, so an untitled peer must
+  // still appear — its name is what identifies it.
+  it('renders a peer that has no title', () => {
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    expect(PEER_ROW.title).toBe('')
+    expect(screen.queryByText(/purdex-b0/)).not.toBeNull()
+    expect(screen.getByTestId('status-seg-peer-id')).not.toBeDisabled()
+  })
+
+  it('renders a set title beside the name rather than instead of it', () => {
+    seedPeers({}, { ...PEER_ROW, title: 'Purdex Tester 01', titleSource: 'user' })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toContain('purdex-b0 [q34psn]')
+    expect(seg.textContent).toContain('Purdex Tester 01')
+  })
+
+  // A session whose registry name is not routable is addressed by its ref, so
+  // the address already ends in it. Bracketing would say the same thing twice.
+  it('leaves an address that is already its ref unbracketed', async () => {
+    seedPeers({}, { ...PEER_ROW, address: 'mlab/_q34psn' })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toBe('_q34psn')
+    fireEvent.click(seg)
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/_q34psn'))
+  })
+
+  it('renders and copies the address unchanged when the row has no ref', async () => {
+    seedPeers({}, { ...PEER_ROW, ref: '' })
+    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toBe('purdex-b0')
+    fireEvent.click(seg)
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0'))
   })
 
   it('separates segments with border rules, never a pipe glyph that would be copied with the text', () => {
@@ -394,7 +447,7 @@ describe('StatusBar peer segments', () => {
     ['status-seg-host', 'mlab', 'copied: host'],
     ['status-seg-cwd', '/Users/wake/Workspace/wake/purdex', 'copied: cwd'],
     ['status-seg-agent', 'ai-chat-story-3a', 'copied: agent'],
-    ['status-seg-peer-id', 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a', 'copied: peer id'],
+    ['status-seg-peer-id', 'mlab/purdex-b0 [q34psn]', 'copied: peer id'],
   ])('%s copies its value and confirms in the fixed slot', async (testId, value, message) => {
     render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
     fireEvent.click(screen.getByTestId(testId))
@@ -468,7 +521,7 @@ describe('StatusBar peer segments', () => {
     expect(seg).toHaveAttribute('data-dim', 'true')
     peerRefresh.mockClear()
     fireEvent.click(seg)
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a'))
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0 [q34psn]'))
     expect(peerRefresh).not.toHaveBeenCalled()
   })
 
@@ -530,7 +583,7 @@ describe('StatusBar peer segments', () => {
 
   it.each([
     ['a failed fetch', { error: 'boom' } as Partial<PeerHostEntry>, /boom/],
-    ['a partial envelope with no row', { envelope: { partial: true, labelsUnavailable: false, unknownRegistryFiles: [] } } as Partial<PeerHostEntry>, /could not be determined/],
+    ['a partial envelope with no row', { envelope: { partial: true, titlesUnavailable: false, unknownRegistryFiles: [] } } as Partial<PeerHostEntry>, /could not be determined/],
     ['a complete envelope with no row', {} as Partial<PeerHostEntry>, /no peer/],
   ])('renders an em dash for %s, with the reason in the tooltip', (_label, entry, tooltip) => {
     seedPeers(entry, null)
@@ -565,8 +618,8 @@ describe('StatusBar peer segments', () => {
     expect(copyTextMock).not.toHaveBeenCalled()
   })
 
-  it('renders an em dash for a row whose label is empty (no cc agent)', () => {
-    seedPeers({}, { ...PEER_ROW, label: '', address: '', agent: null })
+  it('renders an em dash for a row that has neither a ref nor an address', () => {
+    seedPeers({}, { ...PEER_ROW, ref: '', address: '', agent: null })
     render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('—')
   })
@@ -575,9 +628,9 @@ describe('StatusBar peer segments', () => {
     seedPeers({}, { ...PEER_ROW, deliverable: false, reason })
     render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
-    expect(seg.textContent).toBe('ai-chat4')
+    expect(seg.textContent).toBe('purdex-b0 [q34psn]')
     expect(seg).toHaveAttribute('data-dim', 'true')
-    expect(seg.getAttribute('title')).toContain('mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a')
+    expect(seg.getAttribute('title')).toContain('mlab/purdex-b0')
   })
 
   it('each copy control is a native focusable button (Enter/Space activation is the platform’s — jsdom does not simulate it)', () => {
@@ -697,7 +750,7 @@ describe('StatusBar peer generation', () => {
 
   it('shows the peer id when the pane and the row share a generation', () => {
     render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
-    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('ai-chat4')
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-b0 [q34psn]')
   })
 
   it.each([

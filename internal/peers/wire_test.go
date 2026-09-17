@@ -901,19 +901,18 @@ func TestWireFrom_JSON_AddressPresent(t *testing.T) {
 
 // TestValidateWireAddress_CanonicalHead pins the widened head grammar
 // (spec §6.2): a head that is not a user label must be a canonical id of
-// exactly 8 digits (v3) or exactly 6 (v2, whose senders are still on the
-// wire), with or without a suffix. A 7-digit head is rejected because
-// neither version ever minted one — accepting it would be accepting a
+// exactly 6 digits, with or without a suffix. A 7-digit head is rejected
+// because no version ever minted one — accepting it would be accepting a
 // format that does not exist.
 func TestValidateWireAddress_CanonicalHead(t *testing.T) {
 	ok := []string{
-		"_a1b2c3d4",               // v3 canonical, no suffix
-		"_a1b2c3d4:mt0-purdex-49", // v3 canonical, with suffix
+		"_a1b2c3",                 // canonical, no suffix
+		"_a1b2c3:mt0-purdex-49",   // canonical, with suffix
 		"_k3x9qz",                 // v2 default label, no suffix
 		"_k3x9qz:mt0-purdex-49",   // v2 default label, with suffix
 		"purdex-tester",           // v2 user label, no suffix
 		"purdex-tester:purdex-3f", // v2 user label, with suffix
-		"_00000000",               // an all-zero v3 id is still an id
+		"_000000",                 // an all-zero id is still an id
 	}
 	for _, s := range ok {
 		if err := ValidateWireAddress(s); err != nil {
@@ -926,11 +925,11 @@ func TestValidateWireAddress_CanonicalHead(t *testing.T) {
 		"_a1b2c3d:x", // ...and a suffix does not rescue it
 		"_a1b2c",     // 5 digits
 		"_a1b2c3d4e", // 9 digits
-		"_A1B2C3D4",  // uppercase
-		"_a1b2-3d4",  // hyphen is not a base36 digit
+		"_A1B2C3",    // uppercase
+		"_a1b2-3",    // hyphen is not a base36 digit
 		"cc:foo",     // reserved head
 		"tmux:mt0",   // reserved head
-		"_a1b2c3d4:", // explicitly empty suffix
+		"_a1b2c3:",   // explicitly empty suffix
 		"purdex-tester:",
 	}
 	for _, s := range bad {
@@ -942,10 +941,10 @@ func TestValidateWireAddress_CanonicalHead(t *testing.T) {
 }
 
 // TestDeliverRequest_Validate_CanonicalAddress pins the blocker §6.2
-// names: a v3 sender announcing an 8-digit canonical in from.address must
+// names: a sender announcing a 6-digit canonical in from.address must
 // clear its own Validate() before the request ever leaves the host.
 func TestDeliverRequest_Validate_CanonicalAddress(t *testing.T) {
-	for _, addr := range []string{"_a1b2c3d4", "_a1b2c3d4:mt0-purdex-49"} {
+	for _, addr := range []string{"_a1b2c3", "_a1b2c3:mt0-purdex-49"} {
 		req := validDeliverRequest()
 		req.From.Address, req.From.AddressRev = addr, 1
 		if err := req.Validate(); err != nil {
@@ -960,14 +959,13 @@ func TestDeliverRequest_Validate_CanonicalAddress(t *testing.T) {
 	}
 }
 
-// TestValidateWireAddress_UsesIsCanonicalID pins the coupling between the
-// canonical id rule and the wire head rule: whatever IsCanonicalID accepts
-// is, by construction, a head a v3 sender can announce, so the wire check
-// has to accept it too. Without this the head grammar can drift away from
-// the id it exists to validate — which is how IsCanonicalID came to have no
-// production caller at all — and the drift would only surface as v3 senders
-// being refused on the wire.
-func TestValidateWireAddress_UsesIsCanonicalID(t *testing.T) {
+// TestValidateWireAddress_UsesIsRef pins the coupling between the ref rule
+// and the wire head rule: whatever IsRef accepts is, by construction, a head
+// a v4 sender can announce, so the wire check has to accept it too. Without
+// this the head grammar can drift away from the id it exists to validate —
+// which is how IsRef came to have no production caller at all — and the drift
+// would only surface as v4 senders being refused on the wire.
+func TestValidateWireAddress_UsesIsRef(t *testing.T) {
 	for _, sessionID := range []string{
 		"3f2a1c8e-0000-4000-8000-000000000001",
 		"c0ffee00-dead-4bee-8fee-feedfacecafe",
@@ -975,26 +973,54 @@ func TestValidateWireAddress_UsesIsCanonicalID(t *testing.T) {
 		"purdex",
 		strings.Repeat("x", 300),
 	} {
-		id := CanonicalID(sessionID)
-		if !IsCanonicalID(id) {
-			t.Fatalf("CanonicalID(%q) = %q, which IsCanonicalID rejects", sessionID, id)
+		id := RefID(sessionID)
+		if !IsRef(id) {
+			t.Fatalf("RefID(%q) = %q, which IsRef rejects", sessionID, id)
 		}
 		for _, head := range []string{id, id + ":mt0-purdex-49"} {
 			if err := ValidateWireAddress(head); err != nil {
-				t.Errorf("ValidateWireAddress(%q) = %v, want nil: IsCanonicalID accepts its head", head, err)
+				t.Errorf("ValidateWireAddress(%q) = %v, want nil: IsRef accepts its head", head, err)
 			}
 		}
 	}
 
-	// The exact partition of underscore-headed heads: accepted iff it is a
-	// canonical id (v3) or the 6-digit form a v2 sender still announces.
-	// Every other width is refused — the legacy arm is a bounded exception,
-	// not a range.
+	// The exact partition of underscore-headed heads: accepted iff it is a v4
+	// ref (IsRef, which is also the shape a v2 sender's default head has) or
+	// the 8-digit canonical id a v3 sender still announces. Every other width
+	// is refused — the legacy arm is a bounded exception, not a range, so a
+	// 7-digit head no version ever minted stays unroutable.
 	for n := 1; n <= 12; n++ {
 		s := "_" + strings.Repeat("a", n)
-		want := IsCanonicalID(s) || n == 6
+		want := IsRef(s) || n == 8
 		if err := ValidateWireAddress(s); (err == nil) != want {
 			t.Errorf("ValidateWireAddress(%q) = %v, want accepted=%v", s, err, want)
+		}
+	}
+}
+
+// TestValidateWireAddress_Matrix pins spec §5.6's head matrix one row each:
+// a v4 ref, the v3 canonical id and the v2 heads (both the ref-shaped
+// default and a user label) are all accepted, "" is a v1 sender, and
+// everything else — including the bracket form a human reads — is refused.
+// The legacy suffix is still validated rather than waved through.
+func TestValidateWireAddress_Matrix(t *testing.T) {
+	for _, tc := range []struct {
+		name, addr string
+		wantOK     bool
+	}{
+		{"v4 ref", "_q34psn", true},
+		{"v3 canonical, one release", "_q34psn4f", true},
+		{"v3 canonical with suffix", "_q34psn4f:aigora2-purdex-b0", true},
+		{"v2 default head is ref-shaped, covered by IsRef", "_abc123", true},
+		{"v2 user label head", "purdex-tester", true},
+		{"v1 empty", "", true},
+		{"garbage head", "has/slash", false},
+		{"legacy suffix must still be validated", "_q34psn4f:bad suffix", false},
+		{"bracket form is not a wire address", "purdex-b0 [q34psn]", false},
+	} {
+		err := ValidateWireAddress(tc.addr)
+		if gotOK := err == nil; gotOK != tc.wantOK {
+			t.Errorf("%s: ValidateWireAddress(%q) err = %v, wantOK %v", tc.name, tc.addr, err, tc.wantOK)
 		}
 	}
 }

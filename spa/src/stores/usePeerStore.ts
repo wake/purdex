@@ -21,21 +21,21 @@ export interface PeerAgent {
 
 /** One session's peer row, reduced to what is displayed (spec §3.1). */
 export interface PeerRow {
-  /** The full address, e.g. `mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a`. */
+  /** The full address, e.g. `mini-lab/ai-chat-story-3a`. */
   address: string
   /**
-   * The sessionId-derived address head (`_3k9f2mq4`), `''` when the row has no
+   * The sessionId-derived address head (`_3k9f2m`), `''` when the row has no
    * cc agent.
    *
-   * This is the discriminator, not `labelSource`. `labelSource === ''` has two
+   * This is the discriminator, not `titleSource`. `titleSource === ''` has two
    * causes — a live conversation that has not named itself (the common one) and
-   * a row with no cc agent — and only `canonical`/`agent` tells them apart.
+   * a row with no cc agent — and only `ref`/`agent` tells them apart.
    */
-  canonical: string
+  ref: string
   /** The name the conversation calls itself, `''` until it sets one. Display
    *  only: it addresses nothing, and it is never the value copied. */
-  label: string
-  labelSource: string   // user | ''
+  title: string
+  titleSource: string   // user | ''
   deliverable: boolean
   reason: string        // '' | no_agent | not_cc | inbox_dead | proxy | ambiguous
   /**
@@ -58,7 +58,7 @@ export interface PeerRow {
  */
 export interface PeerEnvelopeFlags {
   partial: boolean
-  labelsUnavailable: boolean
+  titlesUnavailable: boolean
   unknownRegistryFiles: string[]
 }
 
@@ -73,7 +73,7 @@ export interface PeerHostEntry {
   loading: boolean
 }
 
-const COMPLETE_ENVELOPE: PeerEnvelopeFlags = { partial: false, labelsUnavailable: false, unknownRegistryFiles: [] }
+const COMPLETE_ENVELOPE: PeerEnvelopeFlags = { partial: false, titlesUnavailable: false, unknownRegistryFiles: [] }
 
 export function emptyPeerHostEntry(): PeerHostEntry {
   return { rows: {}, fetchedAt: 0, envelope: COMPLETE_ENVELOPE, error: null, loading: false }
@@ -99,9 +99,9 @@ export function indexPeerRows(peers: PeerRecordWire[]): Record<string, PeerRow> 
     if (p.session_code === '') continue
     rows[p.session_code] = {
       address: p.address,
-      canonical: p.canonical ?? '',
-      label: p.label,
-      labelSource: p.label_source,
+      ref: p.ref ?? '',
+      title: p.title,
+      titleSource: p.title_source,
       deliverable: p.deliverable,
       reason: p.reason,
       tmuxInstance: p.tmux_instance ?? '',
@@ -174,7 +174,7 @@ export const usePeerStore = create<PeerState>()((set, get) => {
             fetchedAt: Date.now(),
             envelope: {
               partial: env.partial,
-              labelsUnavailable: env.labels_unavailable,
+              titlesUnavailable: env.titles_unavailable,
               unknownRegistryFiles: env.unknown_registry_files ?? [],
             },
             error: null,

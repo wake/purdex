@@ -62,12 +62,12 @@ type T = (key: string, params?: Record<string, string | number>) => string
  * Which of `partial`'s three causes to name.
  *
  * It is set by an owner lookup that did not finish, unreadable registry files,
- * or a failed label snapshot — so "some other session's owner" is not a
+ * or a failed title snapshot — so "some other session's owner" is not a
  * description of it, and the note has to say which one happened.
  */
 function partialCause(envelope: PeerEnvelopeFlags, t: T): string {
   if (envelope.unknownRegistryFiles.length > 0) return t('peer.partial.registry')
-  if (envelope.labelsUnavailable) return t('peer.partial.labels')
+  if (envelope.titlesUnavailable) return t('peer.partial.titles')
   return t('peer.partial.owners')
 }
 
@@ -143,7 +143,7 @@ function PanePeerSection({ target }: { target: RenameTargetPane }) {
         </span>
       </DetailRow>
       {peer.envelope.partial && note(`peer-partial-${pid}`, t('peer.partial_note', { cause: partialCause(peer.envelope, t) }))}
-      {peer.envelope.labelsUnavailable && note(`peer-labels-${pid}`, t('peer.labels_unavailable_note'))}
+      {peer.envelope.titlesUnavailable && note(`peer-titles-${pid}`, t('peer.titles_unavailable_note'))}
     </>
   )
 
