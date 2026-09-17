@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,6 +47,29 @@ echo '{"type":"result","session_id":"sess-fake","subtype":"success"}'
 cat >/dev/null
 `
 
+// writeHostCredential seeds ~/.claude/.credentials.json inside the test's
+// HOME. Since nexen v0.11.0 the host's own Claude Code login IS the account
+// a turn runs as (the cswap switcher is gone), so admission resolves a host
+// credential before it launches anything — without one every turn here comes
+// back rejected, whatever the fake claude script would have done.
+//
+// The shape is hostcred's: a claudeAiOauth object with a non-empty
+// accessToken and expiresAt in MILLISECONDS, far enough out to clear
+// hostcred.ExpiryMargin. The token is never sent anywhere — the fake claude
+// script ignores its environment entirely.
+func writeHostCredential(t *testing.T, home string) {
+	t.Helper()
+	dir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("creating %s: %v", dir, err)
+	}
+	doc := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"test-access-token","expiresAt":%d}}`,
+		time.Now().Add(24*time.Hour).UnixMilli())
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(doc), 0o600); err != nil {
+		t.Fatalf("writing credential: %v", err)
+	}
+}
+
 // mountFixture is one assembled module mounted on its own mux.
 type mountFixture struct {
 	m      *Module
@@ -58,8 +82,10 @@ type mountFixture struct {
 // the spec's lifecycle order: Stop (drain) → HTTP server stops → Close.
 func newMountFixture(t *testing.T) *mountFixture {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("PATH", launchdPath)
+	writeHostCredential(t, home)
 
 	cfg := baseConfig(t)
 	cfg.Nex.ClaudeBin = writeScript(t, t.TempDir(), "claude", fakeTurnClaude)

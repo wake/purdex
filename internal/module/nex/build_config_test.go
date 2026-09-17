@@ -25,7 +25,6 @@ func TestBuildOptionsFullMapping(t *testing.T) {
 		RepoRoots:    []string{"/repo/a", "/repo/b"},
 		ServiceRoots: []string{"/svc/a"},
 		ClaudeBin:    "/usr/local/bin/claude",
-		CswapBin:     "/usr/local/bin/cswap",
 		Sandbox: pdxconfig.NexSandboxConfig{
 			MaxProfile:     "trusted",
 			DefaultProfile: "readonly",
@@ -59,9 +58,6 @@ func TestBuildOptionsFullMapping(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.ServiceRoots, n.ServiceRoots) {
 		t.Errorf("Config.ServiceRoots = %v, want %v", cfg.ServiceRoots, n.ServiceRoots)
-	}
-	if cfg.CswapBin != n.CswapBin {
-		t.Errorf("Config.CswapBin = %q, want %q", cfg.CswapBin, n.CswapBin)
 	}
 	wantSandbox := sandbox.Policy{MaxProfile: "trusted", DefaultProfile: "readonly"}
 	if cfg.Sandbox != wantSandbox {

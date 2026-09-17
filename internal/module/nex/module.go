@@ -105,7 +105,7 @@ func (m *Module) Dependencies() []string { return nil }
 // (os.UserHomeDir fails — a launchd/Finder-started daemon) is not an error
 // by itself. Validate(home) with home == "" rejects only a `~` entry that
 // would need expanding, naming HOME and the key; an enabled host whose
-// roots/claude_bin/cswap_bin are absolute and whose path_prepend is []
+// roots/claude_bin are absolute and whose path_prepend is []
 // initialises without HOME. Validate is cheap and re-run here so Init is
 // self-contained rather than trusting that the config went through Load.
 //
