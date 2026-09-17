@@ -327,6 +327,17 @@ a human conversation does — "Purdex Tester has finished" is unusable if two ex
 convention stays in CLAUDE.md, and `live_titles` keeps giving an agent what it needs to pick the next
 free serial in one step.
 
+### 6.1 `whoami`'s unset-title line
+
+`renderSelfRecord` prints `label:       (, rev 0)` when nothing is set
+(`cmd/pdx/msg.go:656`) — an empty value, an empty source and a revision that means nothing yet, in a
+tuple that reads like a malfunction. Under v4 the unset case becomes the *common* case, because the
+title no longer has a derived fallback and nothing routes on it.
+
+Unset renders `title:      (none)`; set keeps `title:      <title> (user, rev N)`. A `ref:` line
+joins the block, because an agent cannot compute its own ref — it is a hash of a `sessionId` the
+agent never handles, so asking is the only way to learn it.
+
 Renames: `ValidateUserLabel` → `ValidateTitle`, `LabelSourceUser` → `TitleSourceUser`,
 `PeerRecord.Label/LabelSource/LabelRev` → `Title/TitleSource/TitleRev`, `LabelInfo` → `TitleInfo`,
 `LabelStore` → `TitleStore`, `labels.go` → `titles.go`, `label.go` → `ref.go`. `pdx msg name` keeps
