@@ -6,7 +6,8 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import { compositeKey } from '../lib/composite-key'
-import { applyDurableEvent, applyTransientFrame, defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
+import { applyDurableEvent, defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
+import { applyTransientFrame } from '../lib/nex/partial'
 import type { ExecutionSummary, NexEvent } from '../lib/nex/types'
 
 export function executionKey(hostId: string, executionId: string): string {
