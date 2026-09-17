@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.371] - 2026-09-17
+
+### Chore: `pdx nex host` 終於說得出憑證是哪來的（#1105，nexen v0.11.2）
+
+`cmd/pdx/nex.go` 直接 import nexen 自己的 CLI printer（`lab.protype.tw/wake/nexen/cmd/nex/client`），所以 `pdx nex host` 印什麼是由 nexen 的 pin 決定的。v0.11.0 在 `GET /v1/host` 加的三個欄位一直在 wire 上，但從來沒進到終端機。
+
+最要緊的是 **`credential_warning`** —— 它非空的時機正是「兩個憑證 backend 拿著**不同帳號**、nexen 的挑選是任意的」。Engine 卡片從 alpha.368 起會顯示它（#1098），但看 CLI 的人完全沒有管道知道。R9-5 的整句主張是「CLI 靜默選一個，nexen 要說出來」—— 而 nexen 的第一層皮自己也沒說出來。
+
+對**沒有重啟也沒有改動**的現有 daemon 跑新 CLI：
+
+```
+active_account: wake.gs@gmail.com
+account_id: HOST            ← 新
+credential_source: file     ← 新
+quota_five_hour_pct: 18.0
+...
+```
+
+三個欄位在 wire 上都是 `omitempty`，舊 daemon 一個都不送，CLI 不會替它生空行 —— 替一個從沒被告知的事實生出空行，等於 CLI 宣稱知道它不知道的事。
+
+nexen 同版另外拿掉了 CLI 的 `(none — single-account mode)`：那個模式在 v0.11.0（R1-1）之後就不存在，指著一個 daemon 已經沒有的模式，只會叫讀的人去找不在那裡的東西。
+
+**purdex 側零程式碼改動**，只有 `go.mod` / `go.sum` 兩行。v0.11.1 → v0.11.2 在 nexen 側只動 `cmd/nex/client` 與其測試，wire 與 schema 都沒碰（仍是 v5），**部署不用做任何事**。
+
+
 ## [1.0.0-alpha.370] - 2026-09-17
 
 ### Test: 測試不再碰得到機器的 keychain（#1102，nexen v0.11.1）
