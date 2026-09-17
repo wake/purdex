@@ -445,6 +445,17 @@ Execution `06GB2ZFDHNCW2ZWQ33EG9D1ZXM` (cwd `~/Workspace/wake/nex-acceptance-scr
 
 Environment notes: CC's guard blocks `sleep 25` ("Blocked: sleep 25…"), and the `standard` profile denies `python3`, so long tools must be `sleep ≤ ~14`. Browser console showed only the `ERR_CONNECTION_REFUSED` burst from the deliberate restart.
 
+### 6.2 Re-verification 2026-09-18 (after 4f6c3bf5)
+
+Same setup (worktree :5175, playwright session `pb2-exec-stream`, host `a4rl2m` seeded with the daemon token via `localstorage-set`, daemon alpha.378). Execution `06GB35T4DSMDV9DVX6G3VAPH44`, archived afterwards. Two tool turns: the delegate brief (pane opened right after delegate) and a second `sleep 8 && echo ok2` sent from the pane's own input so every frame arrived live over SSE.
+
+- (a) **PASS** — `tool-icon-spinner` 1 and `tool-elapsed` ticking on the live turn: `0.0s` at t+1 s, `3.0s` at t+3 s, `5.0s` at t+5 s (DOM probed every 2 s).
+- (b) **PASS** — `thinking-indicator` count 0 for every sample while the spinner was up; dots returned for one sample (t+7 s) after the `tool_result` landed and before the final text — exactly the R3 `!anyRunning` behaviour.
+- (c) **PASS** — both tools ended with a `tool-duration` badge of `8.5s`, each followed by its `tool-result-block` (`ok` / `ok2`) and the reply paragraph; `assistant-text` 2 → 3, no duplicate.
+- (d) **PASS** — console: 3 messages, 0 errors, 0 warnings (only the React DevTools info line).
+
+The first delegate turn's badge appeared even though the pane loaded after the turn started (history carries `created_at`); the second turn proves the live path (`created_at` stamped at arrival, F6/A4 v1.2).
+
 ## 7. Risks
 
 - **Render cost of markdown per delta**: mitigated by rAF coalescing (§4.3)
