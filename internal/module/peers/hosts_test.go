@@ -1678,6 +1678,40 @@ func TestHandlePutHost_Rename_CaseChangeOfOwnAliasOK(t *testing.T) {
 	}
 }
 
+// TestHandlePutHost_Rename_CaseOnly_AfterConcurrentDeleteShiftsIndex pins
+// that the fast-path self-match is decided from one snapshot: with two
+// hosts, the first is deleted (via the seam) after the handler's initial
+// snapshot, shifting the target from index 1 to 0; a case-only rename of
+// the target must still succeed, not 409 against its own new index.
+func TestHandlePutHost_Rename_CaseOnly_AfterConcurrentDeleteShiftsIndex(t *testing.T) {
+	hosts := []config.PeerHost{
+		{Alias: "first", URL: "https://f.example", InboundToken: "in-f"},
+		{Alias: "air", URL: "https://a.example", InboundToken: "in-a"},
+	}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	fired := false
+	m.putHostAfterSnapshot = func() {
+		if fired {
+			return
+		}
+		fired = true
+		if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/first", nil, adminPrincipal()); rr.Code != http.StatusNoContent {
+			t.Errorf("delete status = %d; body=%s", rr.Code, rr.Body.String())
+		}
+	}
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "Air"}, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if len(reloaded.Peers.Hosts) != 1 || reloaded.Peers.Hosts[0].Alias != "Air" || reloaded.Peers.Hosts[0].InboundToken != "in-a" {
+		t.Errorf("persisted = %+v, want exactly the renamed second entry", reloaded.Peers.Hosts)
+	}
+}
+
 func TestHandlePutHost_Rename_Invalid_400(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)

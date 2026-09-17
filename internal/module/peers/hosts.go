@@ -453,9 +453,16 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.core.CfgMu.RLock()
+		cur := m.core.Cfg.Peers.FindPeerHostByAlias(alias)
 		other := m.core.Cfg.Peers.FindPeerHostByAlias(req.Alias)
 		m.core.CfgMu.RUnlock()
-		if other != -1 && other != idx {
+		// cur and other come from the same snapshot, so "other == cur" means
+		// the entry itself (a case-only rename), whatever index it now sits
+		// at. Comparing against the idx taken under the earlier lock would
+		// mis-report a self-match as a collision after a concurrent delete
+		// shifted the slice. cur == -1 (deleted meanwhile) falls through to
+		// the closure, which answers 404.
+		if other != -1 && other != cur {
 			writeJSONError(w, http.StatusConflict, fmt.Sprintf(
 				"alias %q is already used by another host", req.Alias))
 			return
