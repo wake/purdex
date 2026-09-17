@@ -354,13 +354,13 @@ func TestRunMsgSend_ErrorRendering(t *testing.T) {
 				Error:  ipeers.ErrAmbiguous,
 				Detail: `peer address "wake" is ambiguous (2 candidates)`,
 				Candidates: []ipeers.AmbiguousCandidate{
-					{Address: "air/_1c4m7dkz:mt0-twin-1", AgentName: "twin-1", PID: 41001, Cwd: "/w/one"},
-					{Address: "air/_1c4m7dkz:mt0-twin-2", AgentName: "twin-2", PID: 41002, Cwd: "/w/two"},
+					{Address: "air/twin-1", AgentName: "twin-1", PID: 41001, Cwd: "/w/one"},
+					{Address: "air/twin-2", AgentName: "twin-2", PID: 41002, Cwd: "/w/two"},
 				},
 			},
 			wantStderr: "pdx msg: ambiguous: wake\n" +
-				"  air/_1c4m7dkz:mt0-twin-1  agent twin-1  pid 41001  cwd /w/one\n" +
-				"  air/_1c4m7dkz:mt0-twin-2  agent twin-2  pid 41002  cwd /w/two\n",
+				"  air/twin-1  agent twin-1  pid 41001  cwd /w/one\n" +
+				"  air/twin-2  agent twin-2  pid 41002  cwd /w/two\n",
 		},
 		{
 			// A candidate the daemon knows only by address still gets a
@@ -370,10 +370,10 @@ func TestRunMsgSend_ErrorRendering(t *testing.T) {
 			body: ipeers.APIError{
 				Error:      ipeers.ErrAmbiguous,
 				Detail:     `peer address "wake" is ambiguous (2 candidates)`,
-				Candidates: []ipeers.AmbiguousCandidate{{Address: "air/_1c4m7dkz:mt0-twin-1"}, {Address: "air/tmux:zz", Cwd: "/w/two"}},
+				Candidates: []ipeers.AmbiguousCandidate{{Address: "air/twin-1"}, {Address: "air/tmux:zz", Cwd: "/w/two"}},
 			},
 			wantStderr: "pdx msg: ambiguous: wake\n" +
-				"  air/_1c4m7dkz:mt0-twin-1\n" +
+				"  air/twin-1\n" +
 				"  air/tmux:zz  cwd /w/two\n",
 		},
 		{
@@ -865,8 +865,8 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 			t.Errorf("%s %s", r.Method, r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
-			Host: "air", HostID: "air:9k2m4q", Address: "air/_3k9f2mq4:purdex-3f",
-			Ref: "_3k9f2mq4", Title: "purdex-tester", TitleSource: "user", TitleRev: 7,
+			Host: "air", HostID: "air:9k2m4q", Address: "air/purdex-3f",
+			Ref: "_3k9f2m", Title: "purdex-tester", TitleSource: "user", TitleRev: 7,
 			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "fa5d4c07-0000", PID: 76973},
 		}})
 	}))
@@ -878,8 +878,8 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	want := "address:    air/_3k9f2mq4:purdex-3f\n" +
-		"ref:        _3k9f2mq4\n" +
+	want := "address:    air/purdex-3f\n" +
+		"ref:        _3k9f2m\n" +
 		"title:      purdex-tester (user, rev 7)\n" +
 		"host:       air (air:9k2m4q)\n" +
 		"session:    fa5d4c07-0000 pid 76973\n"
@@ -889,7 +889,7 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 }
 
 func TestRunMsgWhoami_JSONPassthrough(t *testing.T) {
-	raw := `{"address":"air/x1:y","title":"x1"}` + "\n"
+	raw := `{"address":"air/x1","title":"x1"}` + "\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, raw)
 	}))
@@ -919,7 +919,7 @@ func TestRunMsgWhoami_JSONPassthrough(t *testing.T) {
 // while every other part of this build treats a head as a canonical id —
 // a wrong answer delivered confidently, which is worse than no answer.
 func TestRunMsgSelf_BarePeerRecordIsAVersionMismatch(t *testing.T) {
-	bare := `{"address":"air/x1:y","label":"x1","host":"air"}`
+	bare := `{"address":"air/x1","label":"x1","host":"air"}`
 	for _, c := range []struct {
 		name string
 		args []string
@@ -958,7 +958,7 @@ func TestRunMsgSelf_BarePeerRecordIsAVersionMismatch(t *testing.T) {
 func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{
-			Peer:    ipeers.PeerRecord{Address: "air/_3k9f2mq4:p-3f", Ref: "_3k9f2mq4", Title: "purdex-tester", TitleSource: "user"},
+			Peer:    ipeers.PeerRecord{Address: "air/p-3f", Ref: "_3k9f2m", Title: "purdex-tester", TitleSource: "user"},
 			Warning: &ipeers.SelfWarning{Code: ipeers.WarnTitleInUse, LiveTitles: []string{"purdex-tester"}},
 		})
 	}))
@@ -970,7 +970,7 @@ func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	if !strings.Contains(out.String(), "ref:        _3k9f2mq4") {
+	if !strings.Contains(out.String(), "ref:        _3k9f2m") {
 		t.Errorf("out:\n%s", out.String())
 	}
 	if !strings.Contains(errb.String(), ipeers.WarnTitleInUse) {
@@ -993,7 +993,7 @@ func TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress(t *testing.T) {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
-			Address: "air/_3k9f2mq4:purdex-3f", Ref: "_3k9f2mq4",
+			Address: "air/purdex-3f", Ref: "_3k9f2m",
 			Title: "purdex-tester", TitleSource: "user", TitleRev: 1,
 			Host: "air", HostID: "air:1",
 		}})
@@ -1006,9 +1006,9 @@ func TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	want := "named: purdex-tester (address unchanged: air/_3k9f2mq4:purdex-3f)\n" +
-		"address:    air/_3k9f2mq4:purdex-3f\n" +
-		"ref:        _3k9f2mq4\n" +
+	want := "named: purdex-tester (address unchanged: air/purdex-3f)\n" +
+		"address:    air/purdex-3f\n" +
+		"ref:        _3k9f2m\n" +
 		"title:      purdex-tester (user, rev 1)\n" +
 		"host:       air (air:1)\n"
 	if out.String() != want {
@@ -1031,13 +1031,13 @@ func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{
 			Peer: ipeers.PeerRecord{
-				Address: "air/_1c4m7dkz:mt0-n10", Title: "purdex-tester", TitleSource: "user", TitleRev: 3,
+				Address: "air/n10", Title: "purdex-tester", TitleSource: "user", TitleRev: 3,
 				Host: "air", HostID: "air:1",
 			},
 			Warning: &ipeers.SelfWarning{
 				Code:       ipeers.WarnTitleInUse,
 				Detail:     `"purdex-tester" is also held by 1 other live session`,
-				Holders:    []ipeers.PeerRecord{{Address: "air/_9x2pq0af:n20", Title: "purdex-tester"}},
+				Holders:    []ipeers.PeerRecord{{Address: "air/n20", Title: "purdex-tester"}},
 				LiveTitles: []string{"purdex-dev", "purdex-tester"},
 			},
 		})
@@ -1051,13 +1051,13 @@ func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
 		t.Fatalf("exit %d, want 0 — a duplicate title is a warning, not a failure; stderr=%s", code, errb.String())
 	}
 	wantErr := "pdx msg: warning: title_in_use: \"purdex-tester\" is also held by 1 other live session\n" +
-		"  also held by: air/_9x2pq0af:n20\n" +
+		"  also held by: air/n20\n" +
 		"  live title: purdex-dev\n" +
 		"  live title: purdex-tester\n"
 	if errb.String() != wantErr {
 		t.Errorf("stderr:\n%s\nwant:\n%s", errb.String(), wantErr)
 	}
-	if !strings.HasPrefix(out.String(), "named: purdex-tester (address unchanged: air/_1c4m7dkz:mt0-n10)\n") {
+	if !strings.HasPrefix(out.String(), "named: purdex-tester (address unchanged: air/n10)\n") {
 		t.Errorf("stdout:\n%s\nwant the title set and the unchanged address printed", out.String())
 	}
 }
@@ -1091,20 +1091,20 @@ func TestRunMsgName_Release_UsesDelete(t *testing.T) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/peers/self/title" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/_3k9f2mq4:purdex-3f", Ref: "_3k9f2mq4", TitleRev: 2, Host: "air", HostID: "air:1"}})
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/purdex-3f", Ref: "_3k9f2m", TitleRev: 2, Host: "air", HostID: "air:1"}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
 
 	var out, errb bytes.Buffer
 	code := runMsgCmd([]string{"name", "--release", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
-	if code != 0 || !strings.HasPrefix(out.String(), "released: the title (address unchanged: air/_3k9f2mq4:purdex-3f)\n") {
+	if code != 0 || !strings.HasPrefix(out.String(), "released: the title (address unchanged: air/purdex-3f)\n") {
 		t.Fatalf("exit %d out %q err %q", code, out.String(), errb.String())
 	}
 }
 
 func TestRunMsgName_JSONPassthrough(t *testing.T) {
-	raw := `{"address":"air/x1:y","title":"x1"}` + "\n"
+	raw := `{"address":"air/x1","title":"x1"}` + "\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, raw)
 	}))

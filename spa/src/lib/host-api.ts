@@ -93,7 +93,7 @@ export interface PeerRecordWire {
   address: string
   row_kind: string            // session | entry
   /**
-   * The sessionId-derived address head (`_3k9f2mq4`), `''` when the row has no
+   * The sessionId-derived address head (`_3k9f2m`), `''` when the row has no
    * cc agent. This — not `title_source` — is what tells an agent row apart from
    * a row with no agent.
    */

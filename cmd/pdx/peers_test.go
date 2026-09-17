@@ -103,8 +103,8 @@ func TestFormatPeersTable(t *testing.T) {
 // the "daemon <version>" trailer.
 func TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
-		{Address: "a/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Title: "purdex-dev", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-		{Address: "a/_9x2pq0af:y", RowKind: "entry", Ref: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/x", RowKind: "session", Ref: "_3k9f2m", Title: "purdex-dev", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/y", RowKind: "entry", Ref: "_9x2pq0", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 		{Address: "a/tmux:shell", RowKind: "session", Reason: "no_agent"},
 	}}
 	got := formatPeersTable(env)
@@ -112,13 +112,13 @@ func TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
 	if cols := headerColumns(lines[0]); cols[0] != "TITLE" || cols[1] != "ADDRESS" {
 		t.Errorf("first two columns = %v, want TITLE then ADDRESS", cols[:2])
 	}
-	if !strings.HasPrefix(lines[1], "purdex-dev ") || !strings.Contains(lines[1], "a/_3k9f2mq4:mt0-x") {
+	if !strings.HasPrefix(lines[1], "purdex-dev ") || !strings.Contains(lines[1], "a/x") {
 		t.Errorf("titled session row = %q, want the title first then the address", lines[1])
 	}
 	if !strings.HasPrefix(lines[2], " ") {
 		t.Errorf("untitled entry row = %q, want a BLANK title cell, not a dash", lines[2])
 	}
-	if !strings.Contains(lines[2], "  a/_9x2pq0af:y") {
+	if !strings.Contains(lines[2], "  a/y") {
 		t.Errorf("entry row = %q, want the address indented by two spaces", lines[2])
 	}
 	if !strings.HasPrefix(lines[3], " ") || !strings.Contains(lines[3], "a/tmux:shell") {
@@ -147,14 +147,14 @@ func headerColumns(header string) []string {
 // suggest one of them "won" the name.
 func TestFormatPeersTable_SharedLabelRendersBothRows(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
-		{Address: "mini-lab/_3k9f2mq4:aigora2-purdex-b0", RowKind: "session", Ref: "_3k9f2mq4", Title: "purdex-tester", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
-		{Address: "mini-lab/_9x2pq0af:purdex1-purdex-69", RowKind: "session", Ref: "_9x2pq0af", Title: "purdex-tester", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
+		{Address: "mini-lab/purdex-b0", RowKind: "session", Ref: "_3k9f2m", Title: "purdex-tester", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
+		{Address: "mini-lab/purdex-69", RowKind: "session", Ref: "_9x2pq0", Title: "purdex-tester", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
 	}}
 	lines := strings.Split(strings.TrimRight(formatPeersTable(env), "\n"), "\n")
 	if len(lines) < 3 {
 		t.Fatalf("table too short: %q", lines)
 	}
-	for i, wantAddr := range []string{"mini-lab/_3k9f2mq4:aigora2-purdex-b0", "mini-lab/_9x2pq0af:purdex1-purdex-69"} {
+	for i, wantAddr := range []string{"mini-lab/purdex-b0", "mini-lab/purdex-69"} {
 		row := lines[i+1]
 		if !strings.HasPrefix(row, "purdex-tester ") {
 			t.Errorf("row %d = %q, want the shared title rendered verbatim and first", i, row)
@@ -805,8 +805,8 @@ func TestFormatPeersAllTable_HostThenTitleThenAddress(t *testing.T) {
 		{
 			Alias: "local", OK: true, DaemonVersion: "1.0.0-alpha.342",
 			Peers: []peers.PeerRecord{
-				{Address: "local/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Title: "purdex-dev", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
-				{Address: "local/_9x2pq0af:y", RowKind: "entry", Ref: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/x", RowKind: "session", Ref: "_3k9f2m", Title: "purdex-dev", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/y", RowKind: "entry", Ref: "_9x2pq0", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 			},
 		},
 		{Alias: "air", OK: true, DaemonVersion: "1.0.0-alpha.340", Peers: []peers.PeerRecord{}},
@@ -817,7 +817,7 @@ func TestFormatPeersAllTable_HostThenTitleThenAddress(t *testing.T) {
 	if cols := headerColumns(lines[0]); cols[0] != "HOST" || cols[1] != "TITLE" || cols[2] != "ADDRESS" {
 		t.Errorf("first three columns = %v, want HOST TITLE ADDRESS", cols[:3])
 	}
-	if !strings.Contains(lines[2], "  local/_9x2pq0af:y") {
+	if !strings.Contains(lines[2], "  local/y") {
 		t.Errorf("entry row (indented) not where expected: %q", lines[2])
 	}
 	if strings.Contains(got, "*") {

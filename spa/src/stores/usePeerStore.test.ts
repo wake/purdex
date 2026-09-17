@@ -14,9 +14,9 @@ function row(over: Partial<PeerRecordWire> = {}): PeerRecordWire {
   return {
     host: 'mini-lab',
     host_id: 'mini-lab:278cbm',
-    address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
+    address: 'mini-lab/ai-chat-story-3a',
     row_kind: 'session',
-    ref: '_3k9f2mq4',
+    ref: '_3k9f2m',
     title: 'ai-chat4',
     title_source: 'user',
     title_rev: 0,
@@ -72,13 +72,22 @@ beforeEach(() => {
 })
 
 describe('indexing', () => {
+  // The drift guard. Every test below feeds `row()` through the store and
+  // checks what comes out, so a fixture still carrying v3's eight-digit ref
+  // and `<host>/<ref>:<suffix>` address would pass all of them while proving
+  // only that the store copies fields. The shape is asserted here instead.
+  it('the fixture is a v4 row: a six-digit ref and a colon-free address', () => {
+    expect(row().ref).toMatch(/^_[0-9a-z]{6}$/)
+    expect(row().address).toMatch(/^[a-z0-9][a-z0-9.-]*\/(tmux:.+|_[0-9a-z]{6}|[a-z0-9][a-z0-9-]*)$/)
+  })
+
   it('indexes session rows by session_code, keeping only the displayed fields', async () => {
     vi.mocked(api.fetchPeers).mockResolvedValue(envelope([row()]))
     await usePeerStore.getState().refresh(H)
     expect(usePeerStore.getState().byHost[H].rows).toEqual({
       z141yl: {
-        address: 'mini-lab/_3k9f2mq4:ai-chat4-ai-chat-story-3a',
-        ref: '_3k9f2mq4',
+        address: 'mini-lab/ai-chat-story-3a',
+        ref: '_3k9f2m',
         title: 'ai-chat4',
         titleSource: 'user',
         deliverable: true,
@@ -150,7 +159,7 @@ describe('indexing', () => {
     ]))
     await usePeerStore.getState().refresh(H)
     const r = usePeerStore.getState().byHost[H].rows.live01
-    expect(r.ref).toBe('_3k9f2mq4')
+    expect(r.ref).toBe('_3k9f2m')
     expect(r.agent).not.toBeNull()
   })
 })

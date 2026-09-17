@@ -21,10 +21,10 @@ export interface PeerAgent {
 
 /** One session's peer row, reduced to what is displayed (spec §3.1). */
 export interface PeerRow {
-  /** The full address, e.g. `mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a`. */
+  /** The full address, e.g. `mini-lab/ai-chat-story-3a`. */
   address: string
   /**
-   * The sessionId-derived address head (`_3k9f2mq4`), `''` when the row has no
+   * The sessionId-derived address head (`_3k9f2m`), `''` when the row has no
    * cc agent.
    *
    * This is the discriminator, not `titleSource`. `titleSource === ''` has two

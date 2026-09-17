@@ -15,8 +15,8 @@ const peerRefresh = vi.fn(async (_hostId: string) => {})
 const cwdRefresh = vi.fn(async (_hostId: string, _code: string) => {})
 
 const ROW: PeerRow = {
-  address: 'mini-lab/ai-chat4:ai-chat4-ai-chat-story-3a',
-  ref: '_3k9f2mq4',
+  address: 'mini-lab/ai-chat-story-3a',
+  ref: '_3k9f2m',
   title: 'ai-chat4',
   titleSource: 'user',
   deliverable: true,
@@ -58,6 +58,14 @@ afterEach(() => {
 })
 
 describe('the fetch policy', () => {
+  // The drift guard for ROW: a fixture in v3's shape — an eight-digit ref,
+  // an address ending in `:<suffix>` — passes every test in this file while
+  // proving nothing about v4.
+  it('ROW is a v4 row: a six-digit ref and a colon-free address', () => {
+    expect(ROW.ref).toMatch(/^_[0-9a-z]{6}$/)
+    expect(ROW.address).toMatch(/^[a-z0-9][a-z0-9.-]*\/(tmux:.+|_[0-9a-z]{6}|[a-z0-9][a-z0-9-]*)$/)
+  })
+
   it('fetches once on the first render that needs a connected, unfetched host', () => {
     renderHook(() => usePeerInfo(H, CODE, GEN))
     expect(peerRefresh).toHaveBeenCalledTimes(1)

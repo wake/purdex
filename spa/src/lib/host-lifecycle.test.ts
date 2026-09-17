@@ -930,7 +930,7 @@ function seedPeers(...hostIds: string[]) {
   const cwdByHost: Record<string, Record<string, { cwd: string; fetchedAt: number; loading: boolean; error: string | null }>> = {}
   for (const id of hostIds) {
     byHost[id] = { ...emptyPeerHostEntry(), fetchedAt: 1, rows: { s1: {
-      address: `${id}/_3k9f2mq4:label-agent`, ref: '_3k9f2mq4', title: 'title', titleSource: 'user',
+      address: `${id}/agent`, ref: '_3k9f2m', title: 'title', titleSource: 'user',
       deliverable: true, reason: '', tmuxInstance: '1:1',
       agent: { type: 'cc', peerName: 'agent', status: 'idle' },
     } } }
@@ -948,6 +948,16 @@ describe('peer cache invalidation', () => {
     useSessionCwdStore.setState({ byHost: {} })
   })
   afterEach(() => { stop(); stop = () => {} })
+
+  // The drift guard for the seeded row: these tests only ever check that the
+  // rows are present or gone, so a v3-shaped fixture would sit here green
+  // forever.
+  it('the seeded row is a v4 row: a six-digit ref and a colon-free address', () => {
+    seedPeers(HOST_A)
+    const row = usePeerStore.getState().byHost[HOST_A].rows.s1
+    expect(row.ref).toMatch(/^_[0-9a-z]{6}$/)
+    expect(row.address).toMatch(/^[a-z0-9][a-z0-9.-]*\/(tmux:.+|_[0-9a-z]{6}|[a-z0-9][a-z0-9-]*)$/)
+  })
 
   it('removing a host clears its peer rows through the cascade, leaving other hosts alone', () => {
     seedPeers(HOST_A, HOST_B)
