@@ -278,8 +278,9 @@ pdx peers host rename <alias> <new-alias> [--config <path>]
 ```
 
 `verify` prints `ok` / `FAILED: <error>` plus `self alias: <bounded, sanitizeCell>` and, when it
-differs from `<alias>`, `alias drift: this host calls it "<alias>", it calls itself "<self>"` — the
-same wording `pdx peers --all` uses — exit 0 on `ok`, 1 otherwise. `rename` is a thin wrapper over
+differs from `<alias>` case-insensitively, `alias drift: peer calls itself <self>` — **the exact
+string `pdx peers --all` already prints** (`cmd/pdx/peers.go:533`), so the two verbs never disagree
+— exit 0 on `ok`, 1 otherwise. `rename` is a thin wrapper over
 the PUT and prints `renamed <old> -> <new>`. Both are ~40 lines in `cmd/pdx/peers.go`; #1113
 (splitting that file) is not made harder and is not attempted here.
 

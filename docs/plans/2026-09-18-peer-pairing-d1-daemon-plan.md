@@ -185,11 +185,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/middleware"
 	ipeers "github.com/wake/purdex/internal/peers"
 )
 
@@ -399,9 +401,30 @@ func TestHandleVerifyHost_HostPrincipalForbidden(t *testing.T) {
 	}
 }
 
-// TestHandleVerifyHost_ContextIsRequests: the fetch runs under the request
-// context (a client that goes away cancels the dial), bounded by
-// remoteFetchTimeout inside fetchHostResult.
+// verifyCtxKey is a sentinel planted in the request context so the fake
+// fetch can prove the dial runs under the REQUEST's context (a client that
+// goes away cancels it) and not under context.Background().
+type verifyCtxKey struct{}
+
+// doHostsRequestWithContext is doHostsRequest with a caller-supplied base
+// context (doHostsRequest itself always starts from context.Background()).
+func doHostsRequestWithContext(t *testing.T, m *Module, method, target string, base context.Context, principal *middleware.Principal) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	req := httptest.NewRequest(method, target, nil)
+	ctx := base
+	if principal != nil {
+		ctx = middleware.WithPrincipal(ctx, *principal)
+	}
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req.WithContext(ctx))
+	return rr
+}
+
+// TestHandleVerifyHost_UsesConfiguredURLAndToken: the fetch dials the
+// entry's url with its outbound token, under the request's context
+// (sentinel present), bounded by remoteFetchTimeout (deadline present).
 func TestHandleVerifyHost_UsesConfiguredURLAndToken(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: "out-tok", InboundToken: "in-a"}}
 	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
@@ -411,10 +434,14 @@ func TestHandleVerifyHost_UsesConfiguredURLAndToken(t *testing.T) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Error("fetch context has no deadline; want remoteFetchTimeout applied")
 		}
+		if ctx.Value(verifyCtxKey{}) != "request" {
+			t.Error("fetch context does not descend from the request context")
+		}
 		return ipeers.Envelope{HostID: "air:1", OK: true, Peers: []ipeers.PeerRecord{}}, nil
 	})
 
-	doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts/air/verify", nil, adminPrincipal())
+	base := context.WithValue(context.Background(), verifyCtxKey{}, "request")
+	doHostsRequestWithContext(t, m, http.MethodPost, "/api/peers/hosts/air/verify", base, adminPrincipal())
 	if gotURL != "https://a.example" || gotBearer != "out-tok" {
 		t.Errorf("fetch(url=%q, bearer=%q), want the entry's url and outbound token", gotURL, gotBearer)
 	}
@@ -715,6 +742,20 @@ func TestHandlePutHost_Rename_ConcurrentCollision_409(t *testing.T) {
 	}
 }
 
+// An invalid rename must be refused BEFORE the verify dials anyone (spec
+// §4.2 mirrors handleAddHost's rule). Mutation M9: drop the fast-path
+// ValidateAlias → the fake fetch is called.
+func TestHandlePutHost_RenameInvalidWithToken_400NoDial(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "..", "token": "new-tok"}, adminPrincipal())
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 // Empty alias in the body means "unchanged", so {allow_bypass:true} alone
 // still works exactly as before this phase.
 func TestHandlePutHost_EmptyAliasIsUnchanged(t *testing.T) {
@@ -803,7 +844,7 @@ type putHostRequest struct {
 	}
 ```
 
-(d) Inside the `UpdateConfig` closure, after the existing identity re-checks and the `h.Token = req.Token; h.HostID = learnedHostID` block, before `if req.AllowBypass != nil`, add:
+(d) Inside the `UpdateConfig` closure, **immediately after** the existing `if verifying { … }` identity re-check block's last `return &apiError{…}` (the `cannot pair a host with itself` check) and **before** the two writes `h.Token = req.Token` / `h.HostID = learnedHostID`, add:
 
 ```go
 		if renaming {
@@ -826,7 +867,7 @@ and make `h.Alias = req.Alias` the **last** write in the closure, immediately be
 		row = toHostRow(*h)
 ```
 
-Order inside the closure matters: the token/host_id writes above already happened only if `verifying`; a rename refusal must return before any write, so place the rename re-checks **before** `h.Token = req.Token`. Concretely the closure reads: find entry → identity re-checks (`verifying`) → rename re-checks (`renaming`) → token/host_id writes → allow_bypass write → alias write → `row = toHostRow(*h)`.
+This means splitting the existing `if verifying { … }` block into two: the first keeps the three re-checks (`entry changed concurrently`, `host_id mismatch`, `cannot pair a host with itself`) and returns on failure; the rename re-checks go between; a second `if verifying { h.Token = req.Token; h.HostID = learnedHostID }` performs the writes. A rename refusal must return before **any** field is written (spec §4.2 step 3). The closure therefore reads, in this order and no other: find entry → identity re-checks (`verifying`) → rename re-checks (`renaming`) → token/host_id writes (`verifying`) → allow_bypass write → alias write → `row = toHostRow(*h)`.
 
 Update the `handlePutHost` doc comment's first sentence to mention the third optional field: "an optional Alias renames the entry (spec §4.2), validated and uniqueness-checked before the verify and again under the lock; the alias write is the last one in the closure".
 
@@ -1339,8 +1380,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ### Task 6: mutation pass, vet, build, deploy-readiness
 
 **Files:**
-- Modify (temporarily, then revert): `internal/module/peers/module.go`, `internal/module/peers/hosts.go`, `cmd/pdx/peers.go`
-- No committed changes except a note file: `docs/plans/2026-09-18-peer-pairing-d1-mutations.md`
+- Modify (temporarily, then revert with `git checkout --`): `internal/module/peers/module.go`, `internal/module/peers/hosts.go`, `internal/module/peers/hosts_verify.go`, `cmd/pdx/peers.go`
+- Create (the only committed file of this task): `docs/plans/2026-09-18-peer-pairing-d1-mutations.md`
 
 **Interfaces:** none — this task proves the tests from Tasks 1–5 guard what they claim (spec §8.1: mutation tests are a deliverable).
 
@@ -1355,42 +1396,20 @@ For each row, apply the mutation with a one-line edit, run the named test, confi
 | M3 | `module.go` `fetchHostResult`: change `if h.HostID != "" && env.HostID != h.HostID` to `if false` | `-run 'TestHandleVerifyHost_HostIDMismatch'` | `TestHandleVerifyHost_HostIDMismatch` |
 | M4 | `module.go` `fetchHostResult`: replace `SelfAlias: boundRemoteText(env.Alias)` with `SelfAlias: env.Alias` | `-run 'TestHandleVerifyHost_SelfAliasBounded'` | `TestHandleVerifyHost_SelfAliasBounded` |
 | M5 | `hosts_verify.go`: after `res := m.fetchHostResult(...)`, add `if res.OK && h.HostID == "" { _ = m.core.UpdateConfig(func(cfg *config.Config) error { i := cfg.Peers.FindPeerHostByAlias(alias); if i != -1 { cfg.Peers.Hosts[i].HostID = res.HostID }; return nil }) }` | `-run 'TestHandleVerifyHost_NeverWrites'` | `TestHandleVerifyHost_NeverWrites` |
-| M6 | `hosts.go` `handlePutHost`: delete the fast-path `if other != -1 && other != idx { … 409 … }` block AND the in-closure `if other := …; other != -1 && other != i { … }` block | `-run 'TestHandlePutHost_Rename_Collision'` | `TestHandlePutHost_Rename_CollisionCaseInsensitive_409Unchanged` and `TestHandlePutHost_Rename_ConcurrentCollision_409` |
+| M6 | `hosts.go` `handlePutHost`: delete the fast-path `if other != -1 && other != idx { … 409 … }` block AND the in-closure `if other := …; other != -1 && other != i { … }` block | `-run 'TestHandlePutHost_Rename_(CollisionCaseInsensitive_409Unchanged|ConcurrentCollision_409)$'` | `TestHandlePutHost_Rename_CollisionCaseInsensitive_409Unchanged` and `TestHandlePutHost_Rename_ConcurrentCollision_409` |
 | M7 | `hosts.go` `handlePutHost`: delete only the in-closure uniqueness re-check | `-run 'TestHandlePutHost_Rename_ConcurrentCollision_409'` | `TestHandlePutHost_Rename_ConcurrentCollision_409` |
 | M8 | `hosts.go` `handlePutHost`: change both `other != idx` / `other != i` to `true` (exact-only self-exclusion removed) | `-run 'TestHandlePutHost_Rename_CaseChangeOfOwnAliasOK'` | `TestHandlePutHost_Rename_CaseChangeOfOwnAliasOK` |
-| M9 | `hosts.go` `handlePutHost`: delete the fast-path `config.ValidateAlias` call (keep the in-closure one) | `-run 'TestHandlePutHost_Rename_Invalid_400'` | still passes (the closure catches it) — **record this as expected**: the fast path exists to avoid the network round trip, which `TestHandlePutHost_RenameWithToken_VerifiesThenRenames` does not cover for an invalid alias. Add the missing test now: an invalid alias + token must 400 with `failIfCalledFetch` (`TestHandlePutHost_RenameInvalidWithToken_400NoDial`), then re-run M9 → FAILS |
+| M9 | `hosts.go` `handlePutHost`: delete the fast-path `config.ValidateAlias` call (keep the in-closure one) | `-run 'TestHandlePutHost_Rename(_Invalid_400|InvalidWithToken_400NoDial)$'` | `TestHandlePutHost_RenameInvalidWithToken_400NoDial` (fatal: fetch should not have been called). `_Invalid_400` alone still passes — the closure catches the value — which is why the no-dial test exists (Task 3) |
 | M10 | `cmd/pdx/peers.go` `runPeersHostVerify`: replace `sanitizeCell(resp.SelfAlias)` with `resp.SelfAlias` in the drift line | `go test -count=1 ./cmd/pdx/ -run 'SelfAliasSanitized'` | `TestRunPeersCmd_HostVerify_SelfAliasSanitized` |
 | M11 | `cmd/pdx/peers.go` `runPeersHostVerify`: change `!strings.EqualFold(resp.SelfAlias, resp.Alias)` to `resp.SelfAlias != resp.Alias` | `-run 'NoDriftWhenSameCaseInsensitive'` | `TestRunPeersCmd_HostVerify_NoDriftWhenSameCaseInsensitive` |
 
-- [ ] **Step 2: Add the M9 test, commit it**
+- [ ] **Step 2: Confirm the tree is clean**
 
-Append to `internal/module/peers/hosts_test.go`:
-
-```go
-// An invalid rename must be refused BEFORE the verify dials anyone (spec
-// §4.2 mirrors handleAddHost's rule). Mutation M9: drop the fast-path
-// ValidateAlias → the fake fetch is called.
-func TestHandlePutHost_RenameInvalidWithToken_400NoDial(t *testing.T) {
-	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
-	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
-	m := newHostsTestModule(t, c, failIfCalledFetch(t))
-
-	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "..", "token": "new-tok"}, adminPrincipal())
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
-	}
-}
-```
-
-```bash
-git commit --only internal/module/peers/hosts_test.go -m "test(peers): an invalid rename with a token is refused before any dial
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
-```
+Run: `git status --short` — expected: empty. Every mutation was reverted; nothing from this task's Step 1 may be committed.
 
 - [ ] **Step 3: Write the mutation record and commit it**
 
-Create `docs/plans/2026-09-18-peer-pairing-d1-mutations.md` with a table: mutation id, edit, command, the failing test name and its assertion text as printed. Every row M1–M11 must show a red (M9 after Step 2).
+Create `docs/plans/2026-09-18-peer-pairing-d1-mutations.md` with a table: mutation id, edit, command, the failing test name and its assertion text as printed. Every row M1–M11 must show a red.
 
 ```bash
 git commit --only docs/plans/2026-09-18-peer-pairing-d1-mutations.md -m "docs: D1 mutation-test record
@@ -1428,7 +1447,7 @@ The running mlab daemon is alpha.376 and does not have the route yet; acceptance
 - §4.2 rename: validate, uniqueness excluding self, both re-run in closure, alias write last, token+alias together → Task 3.
 - §4.3 consequences are documentation (helper names follow-up issue is opened at PR time, §10) — no code.
 - §4.4 CLI verify / rename, exit codes, drift wording, sanitizeCell → Tasks 4, 5.
-- §8.1 rows: "zero fetch calls" (M2), mismatch (M3), never writes (M5), 404/403 (Task 2), rename 200/409/case-change/400/token+alias/concurrent (Task 3, M6–M8), CLI grammar (Tasks 4–5). The one §8.1 row not literally listed as a mutation — "`self_alias`/`daemon_version` bounded" — is M4.
+- §8.1 rows: "zero fetch calls" (M2), mismatch (M3), never writes (M5), 404/403 (Task 2), rename 200/409/case-change/400/token+alias/concurrent/no-dial-on-invalid (Task 3, M6–M9), CLI grammar (Tasks 4–5). The one §8.1 row not literally listed as a mutation — "`self_alias`/`daemon_version` bounded" — is M4.
 - `--json` for verify was in the spec's CLI grammar; the parser change is the smallest that admits it (Task 4c) and is pinned by `TestParsePeersInvocation_HostVerifyGrammar`.
 
 **Placeholders:** none — every step has the code; Task 6 M5's mutation is spelled out as the exact edit.
