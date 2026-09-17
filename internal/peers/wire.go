@@ -166,7 +166,6 @@ const (
 	ErrTextTooLarge      = "text_too_large"
 	ErrBadMode           = "bad_mode"
 	ErrBadAddress        = "bad_address"
-	ErrLocalTarget       = "local_target"
 	ErrHostUnknown       = "host_unknown"
 	ErrOriginUnknown     = "origin_unknown"
 	ErrPeerNotFound      = "peer_not_found"
@@ -205,6 +204,16 @@ const (
 	// peer that renamed itself from an address someone doctored is the
 	// operator's call and they cannot make it from the code alone.
 	ErrCodeNameMismatch = "name_mismatch"
+
+	// ErrSelfTarget is /send's answer when the address resolved to the
+	// sending session itself (spec §4.5). Only local delivery can reach it:
+	// a remote target is on another host by construction. Refused rather
+	// than delivered because the frame would arrive labelled as being from
+	// its own receiver, with that receiver's own socket as the reply
+	// address, and a native reply goes back over that socket without
+	// touching pdx — so neither HopChain nor the pair limit is in the path
+	// of the loop it invites.
+	ErrSelfTarget = "self_target"
 
 	// The self routes' refusals: whoami, claim, release. Nothing returns
 	// ErrCodeTitleReserved since v4 dropped the reserved words — a title
@@ -354,8 +363,16 @@ type APIError struct {
 // what actually tells two live processes of one conversation apart, and
 // each is omitempty: a candidate the daemon knows only by address still
 // belongs in the list, it just says less.
+//
+// Ref is the one field that is not merely advisory. Under v4 the rows that
+// actually collide are two conversations sharing a registry name, and those
+// have IDENTICAL Address and IDENTICAL AgentName — pid and cwd tell them
+// apart but are not address forms, so a refusal without the ref names no
+// way to reach either. It is still omitempty: Ref is empty on any row with
+// no live cc agent (record.go), and such a row still belongs in the list.
 type AmbiguousCandidate struct {
 	Address   string `json:"address"`
+	Ref       string `json:"ref,omitempty"`
 	AgentName string `json:"agent_name,omitempty"`
 	PID       int    `json:"pid,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`

@@ -1694,3 +1694,59 @@ func TestFormatPeersAllTable_LocalRowNeverDrifts(t *testing.T) {
 		t.Errorf("the local row reported drift against itself:\n%s", got)
 	}
 }
+
+// --- the bracket rule has one owner (spec §5.2) --------------------------
+
+// addressWithRefCases are the three inputs the bracket rule turns on. The
+// third is the one a restated rule gets wrong, and it is reachable from the
+// very defect refs were added to fix: a name collision is a case where both
+// candidates may carry ref-form addresses.
+var addressWithRefCases = []struct {
+	name    string
+	address string
+	ref     string
+	want    string
+}{
+	{"a ref is bracketed without its underscore", "mlab/purdex-dd", "_h0h3ln", "mlab/purdex-dd [h0h3ln]"},
+	{"no ref, no bracket", "mlab/tmux:zz", "", "mlab/tmux:zz"},
+	{"an address that already IS the ref gets no bracket", "mlab/_h0h3ln", "_h0h3ln", "mlab/_h0h3ln"},
+}
+
+// TestDisplayAddress_BracketRule pins displayAddress against the three cases
+// directly rather than through formatPeersTable's golden table, so that a
+// change to the rule fails at the rule rather than in a column-width diff.
+func TestDisplayAddress_BracketRule(t *testing.T) {
+	for _, tc := range addressWithRefCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := displayAddress(peers.PeerRecord{Address: tc.address, Ref: tc.ref})
+			if got != tc.want {
+				t.Errorf("displayAddress(%q, %q) = %q, want %q", tc.address, tc.ref, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDisplayAddressAndMsgCandidateLineAgree is the reason addressWithRef
+// exists as a shared function instead of a rule written twice. `pdx peers`
+// shows an address and `pdx msg` refuses with one; if the two rendered the
+// same (address, ref) differently, the string the operator copies out of a
+// refusal would not be the string they see in the table — and the case they
+// would disagree on is precisely the ref-form address, since restating the
+// rule from memory yields only its first arm.
+func TestDisplayAddressAndMsgCandidateLineAgree(t *testing.T) {
+	for _, tc := range addressWithRefCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fromTable := displayAddress(peers.PeerRecord{Address: tc.address, Ref: tc.ref})
+			fromRefusal := strings.TrimPrefix(
+				msgCandidateLine(peers.AmbiguousCandidate{Address: tc.address, Ref: tc.ref}),
+				"  ")
+			if fromTable != fromRefusal {
+				t.Errorf("renderers disagree on (%q, %q): peers table %q, msg refusal %q",
+					tc.address, tc.ref, fromTable, fromRefusal)
+			}
+			if fromTable != tc.want {
+				t.Errorf("both renderers agree on %q, but the rule wants %q", fromTable, tc.want)
+			}
+		})
+	}
+}

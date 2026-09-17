@@ -571,20 +571,9 @@ func aliasDriftField(h peers.HostResult) string {
 	return h.SelfAlias
 }
 
-// displayAddress renders a row's address for a human: "<host>/<name> [<ref>]".
-//
-// The ref prints without its leading underscore — the bracket already
-// separates it — and prints on EVERY row rather than only ambiguous ones: a
-// reader who has to go looking for it when a name stops working has to look
-// somewhere other than where they were already reading.
-//
-// A row whose address is already the ref (an unroutable name, or no name at
-// all) gets no bracket; repeating it would suggest two different identifiers.
+// displayAddress renders one peer row's address through addressWithRef.
 func displayAddress(rec peers.PeerRecord) string {
-	if rec.Ref == "" || strings.HasSuffix(rec.Address, "/"+rec.Ref) {
-		return rec.Address
-	}
-	return rec.Address + " [" + strings.TrimPrefix(rec.Ref, "_") + "]"
+	return addressWithRef(rec.Address, rec.Ref)
 }
 
 // addressField renders displayAddress through sanitizeCell first, then — only

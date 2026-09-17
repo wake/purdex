@@ -1256,6 +1256,29 @@ func TestRunMsgSend_NameMismatchRendering(t *testing.T) {
 	}
 }
 
+// TestRenderMsgAPIError_UnknownCodeStillRenders is the mixed-version guard
+// every new wire code needs (spec §4.5, as ErrCodeNameMismatch needed in
+// v4): a daemon NEWER than the CLI talking to it can answer with a code
+// this switch has no arm for — `self_target` is the one being added — and
+// an old CLI has to print it, detail and all, rather than crash or answer
+// with silence.
+//
+// The code here is deliberately one nothing will ever implement, not
+// ipeers.ErrSelfTarget: a test that pins the default arm must stay on the
+// default arm even if self_target later earns a shape of its own.
+func TestRenderMsgAPIError_UnknownCodeStillRenders(t *testing.T) {
+	var stderr bytes.Buffer
+	renderMsgAPIError(ipeers.APIError{
+		Error:  "a_code_from_a_newer_daemon",
+		Detail: "the address resolves to this session; a message to yourself has nowhere to go",
+	}, "mlab", "purdex-b0", &stderr)
+
+	want := "pdx msg: a_code_from_a_newer_daemon: the address resolves to this session; a message to yourself has nowhere to go\n"
+	if stderr.String() != want {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	}
+}
+
 // --- whoami/name: the shared record block -----------------------------------
 
 // TestRenderSelfRecord_UnsetTitle pins the unset case, which under v4 is
@@ -1296,5 +1319,48 @@ func TestRenderSelfRecord_SetTitle(t *testing.T) {
 	}, &buf)
 	if got := buf.String(); !strings.Contains(got, "Purdex Tester 01 (user, rev 4)") {
 		t.Errorf("set title block:\n%s", got)
+	}
+}
+
+// --- ambiguity candidates carry their ref (spec §5.2) ---------------------
+
+// TestMsgCandidateLine_RendersRef pins the bracket form on the candidate
+// line. Under v4 two conversations sharing a registry name produce
+// candidates with IDENTICAL Address and IDENTICAL AgentName, so without the
+// ref the refusal lists rows the operator can see but cannot address: pid
+// and cwd are not address forms. The rendered line is the address form the
+// grammar accepts, so it can be copied whole into `pdx msg send`.
+//
+// The third case is the one a restated rule gets wrong, and a ref collision
+// is exactly when it is reachable: a row addressed BY its ref already ends
+// in it, and appending the bracket would print the ref twice.
+func TestMsgCandidateLine_RendersRef(t *testing.T) {
+	cases := []struct {
+		name string
+		cand ipeers.AmbiguousCandidate
+		want string
+	}{
+		{
+			name: "ref is bracketed without its underscore",
+			cand: ipeers.AmbiguousCandidate{Address: "mlab/purdex-dd", Ref: "_h0h3ln", AgentName: "purdex-dd", PID: 39396, Cwd: "~"},
+			want: "  mlab/purdex-dd [h0h3ln]  agent purdex-dd  pid 39396  cwd ~",
+		},
+		{
+			name: "no ref, no bracket",
+			cand: ipeers.AmbiguousCandidate{Address: "mlab/tmux:zz", Cwd: "/w/two"},
+			want: "  mlab/tmux:zz  cwd /w/two",
+		},
+		{
+			name: "an address that already IS the ref gets no bracket",
+			cand: ipeers.AmbiguousCandidate{Address: "mlab/_h0h3ln", Ref: "_h0h3ln", AgentName: "purdex-dd", PID: 12345},
+			want: "  mlab/_h0h3ln  agent purdex-dd  pid 12345",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := msgCandidateLine(tc.cand); got != tc.want {
+				t.Errorf("msgCandidateLine = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
