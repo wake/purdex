@@ -1126,6 +1126,39 @@ func TestRunPeersCmd_HostAdd(t *testing.T) {
 	}
 }
 
+// TestRunPeersCmd_HostAdd_AliasOmitted pins spec §7.2 at the CLI edge:
+// `pdx peers host add <url>` is legal, and it sends an empty alias so the
+// daemon adopts the one the peer publishes for itself. The alias is the
+// optional positional, so the sole one is the URL.
+func TestRunPeersCmd_HostAdd_AliasOmitted(t *testing.T) {
+	var gotBody cliAddHostRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(cliAddHostResponse{
+			Alias: "air26", URL: "https://air.mlab.host", HostID: "air:def456",
+			InboundToken: "pdxp_inbound123", Verified: true,
+		})
+	}))
+	defer srv.Close()
+
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"host", "add", "https://air.mlab.host", "--token", "pdxp_out123", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	wantBody := cliAddHostRequest{Alias: "", URL: "https://air.mlab.host", Token: "pdxp_out123"}
+	if gotBody != wantBody {
+		t.Errorf("request body = %+v, want %+v", gotBody, wantBody)
+	}
+	// The name echoed back is the daemon's, not the operator's.
+	if !strings.Contains(stdout.String(), "added air26 (https://air.mlab.host)") {
+		t.Errorf("stdout = %q, want it to report the adopted alias", stdout.String())
+	}
+}
+
 func TestRunPeersCmd_HostAdd_FlagBeforePositionals(t *testing.T) {
 	// Pins "flags may appear anywhere after peers": --token here precedes
 	// the alias/url positionals it applies to.
@@ -1363,6 +1396,9 @@ func TestRunPeersCmd_GrammarRejections(t *testing.T) {
 	}{
 		{"host missing verb", []string{"host"}},
 		{"host unknown verb", []string{"host", "bogus"}},
+		{"host add no positionals", []string{"host", "add"}},
+		// The alias is optional, so one positional is legal — but only as a
+		// URL. A bare word is a missing URL, not a host named "air".
 		{"host add missing url", []string{"host", "add", "air"}},
 		{"host add extra positional", []string{"host", "add", "air", "https://x", "extra"}},
 		{"host list extra positional", []string{"host", "list", "extra"}},

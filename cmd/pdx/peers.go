@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -67,7 +68,7 @@ func sanitizeCell(s string) string {
 // (exit 2) for every malformed invocation except an unrecognized flag,
 // which gets its own more specific message (see runPeersCmd).
 const peersUsage = "usage: pdx peers [--json] [--all] [--config <path>]\n" +
-	"       pdx peers host add <alias> <url> [--token <t>] [--config <path>]\n" +
+	"       pdx peers host add [<alias>] <url> [--token <t>] [--config <path>]\n" +
 	"       pdx peers host set-token <alias> <token> [--allow-bypass=true|false] [--config <path>]\n" +
 	"       pdx peers host remove <alias> [--config <path>]\n" +
 	"       pdx peers host list [--config <path>]"
@@ -117,13 +118,29 @@ type peersInvocation struct {
 	allowBypass *bool
 }
 
-// peersHostVerbArity is every known `pdx peers host` verb's exact
-// positional-argument count.
-var peersHostVerbArity = map[string]int{
-	"add":       2,
-	"set-token": 2,
-	"remove":    1,
-	"list":      0,
+// peersHostVerbArity is every known `pdx peers host` verb's accepted
+// positional-argument counts. "add" accepts two forms because its alias is
+// optional (spec §7.2): `<alias> <url>` names the host locally, and `<url>`
+// alone lets the daemon adopt the alias the peer publishes for itself.
+var peersHostVerbArity = map[string][]int{
+	"add":       {1, 2},
+	"set-token": {2},
+	"remove":    {1},
+	"list":      {0},
+}
+
+// addArgs splits `host add`'s positionals into alias and URL. The alias is
+// the optional one, so a lone positional is the URL — never a host named
+// after it. Only meaningful once parsePeersInvocation has accepted the
+// invocation; any other arity yields two empty strings.
+func (inv peersInvocation) addArgs() (alias, hostURL string) {
+	switch len(inv.positionals) {
+	case 1:
+		return "", inv.positionals[0]
+	case 2:
+		return inv.positionals[0], inv.positionals[1]
+	}
+	return "", ""
 }
 
 // parsePeersInvocation parses pdx peers' full grammar in one pass: flags
@@ -194,14 +211,23 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 	inv.verb = positionals[1]
 	inv.positionals = positionals[2:]
 
-	arity, known := peersHostVerbArity[inv.verb]
-	if !known || len(inv.positionals) != arity {
+	arities, known := peersHostVerbArity[inv.verb]
+	if !known || !slices.Contains(arities, len(inv.positionals)) {
 		return peersInvocation{}, "", false
 	}
 
 	switch inv.verb {
 	case "add":
 		if inv.allowBypass != nil {
+			return peersInvocation{}, "", false
+		}
+		// The alias is what "add" may omit, so a lone positional has to
+		// look like the URL it stands in for. Without this, "host add
+		// air" would parse as the one-arg form and POST "air" as a URL
+		// instead of being reported as the missing url it is. Only the
+		// ambiguous arity is checked: with both positionals present the
+		// URL's own validation stays the daemon's job.
+		if len(inv.positionals) == 1 && !strings.Contains(inv.positionals[0], "://") {
 			return peersInvocation{}, "", false
 		}
 	case "set-token":
@@ -214,10 +240,18 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		}
 	}
 
-	// Every verb with a positional puts the alias first; refuse "/" in it
-	// client-side (the server also validates it, but this catches the
-	// obviously-wrong case before any request is made).
-	if len(inv.positionals) > 0 && strings.Contains(inv.positionals[0], "/") {
+	// Refuse "/" in the alias client-side (the server also validates it,
+	// but this catches the obviously-wrong case before any request is
+	// made). Every verb with a positional puts the alias first EXCEPT
+	// "add", whose alias is optional — asking addArgs keeps a URL in the
+	// first slot from being mistaken for an alias full of slashes.
+	alias := ""
+	if inv.verb == "add" {
+		alias, _ = inv.addArgs()
+	} else if len(inv.positionals) > 0 {
+		alias = inv.positionals[0]
+	}
+	if strings.Contains(alias, "/") {
 		return peersInvocation{}, "", false
 	}
 
@@ -676,7 +710,9 @@ func runPeersHostList(cfg config.Config, base string, stdout, stderr io.Writer) 
 }
 
 func runPeersHostAdd(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
-	alias, hostURL := inv.positionals[0], inv.positionals[1]
+	// An empty alias is sent as such: the daemon then adopts the one the
+	// peer publishes for itself, and the 201 reports what it settled on.
+	alias, hostURL := inv.addArgs()
 	reqBody, err := json.Marshal(cliAddHostRequest{Alias: alias, URL: hostURL, Token: inv.token})
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx peers: %v\n", err)

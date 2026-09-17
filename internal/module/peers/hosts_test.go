@@ -532,6 +532,209 @@ func TestHandleAddHost_RemoteHostIDEqualsLocal_400(t *testing.T) {
 	}
 }
 
+// TestHandleAddHost_AdoptsPublishedAlias pins spec §7.2: a POST with no
+// alias adopts the one the peer publishes for itself, so the address
+// "air26/..." means the same thing on both machines.
+func TestHandleAddHost_AdoptsPublishedAlias(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:aaa", Alias: "air26", OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"url": "https://air.example", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Alias    string `json:"alias"`
+		HostID   string `json:"host_id"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Alias != "air26" {
+		t.Errorf("response alias = %q, want air26", got.Alias)
+	}
+	if got.HostID != "air:aaa" || !got.Verified {
+		t.Errorf("response = %+v, want verified=true host_id=air:aaa", got)
+	}
+
+	reloaded := loadCfg(t, cfgPath)
+	idx := reloaded.Peers.FindPeerHostByAlias("air26")
+	if idx == -1 {
+		t.Fatalf("learned alias not persisted: %+v", reloaded.Peers.Hosts)
+	}
+	if reloaded.Peers.Hosts[idx].HostID != "air:aaa" {
+		t.Errorf("persisted host_id = %q, want air:aaa", reloaded.Peers.Hosts[idx].HostID)
+	}
+}
+
+// TestHandleAddHost_ExplicitAliasWins pins the other half of §7.2: the
+// published alias is only a fallback. An operator who names the host keeps
+// that name, whatever the peer calls itself.
+func TestHandleAddHost_ExplicitAliasWins(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:aaa", Alias: "air26", OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"alias": "air", "url": "https://air.example", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Alias string `json:"alias"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Alias != "air" {
+		t.Errorf("response alias = %q, want air", got.Alias)
+	}
+
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air") == -1 {
+		t.Fatalf("explicit alias not persisted: %+v", reloaded.Peers.Hosts)
+	}
+	if reloaded.Peers.FindPeerHostByAlias("air26") != -1 {
+		t.Errorf("published alias was adopted despite an explicit one: %+v", reloaded.Peers.Hosts)
+	}
+}
+
+// TestHandleAddHost_PublishedAliasCollisionIs409 pins §7.3: a learned
+// alias colliding with an already-configured host is NOT auto-suffixed
+// ("air26-2" would be unportable in a new way, which is the problem this
+// phase exists to remove). The add fails naming the alias so the operator
+// can supply one explicitly. config.ValidateAlias cannot catch this — it
+// compares only against the LOCAL alias — so the check is the handler's
+// own, and the body naming the alias is what distinguishes it from
+// UpdateConfig's generic concurrent-change re-check.
+func TestHandleAddHost_PublishedAliasCollisionIs409(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air26", URL: "https://old.example", InboundToken: "inbound-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:aaa", Alias: "air26", OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"url": "https://air.example", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "air26") {
+		t.Errorf("body = %s, want it to name the colliding alias air26", rr.Body.String())
+	}
+
+	reloaded := loadCfg(t, cfgPath)
+	if len(reloaded.Peers.Hosts) != 1 {
+		t.Fatalf("hosts = %+v, want only the single pre-existing entry", reloaded.Peers.Hosts)
+	}
+	if reloaded.Peers.Hosts[0].URL != "https://old.example" {
+		t.Errorf("pre-existing host was overwritten: %+v", reloaded.Peers.Hosts[0])
+	}
+}
+
+// TestHandleAddHost_NoAliasAnywhereIs400 pins the floor: with neither an
+// explicit alias nor a published one there is no name to file the host
+// under, and nothing is invented.
+func TestHandleAddHost_NoAliasAnywhereIs400(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:aaa", Alias: "", OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"url": "https://air.example", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if len(reloaded.Peers.Hosts) != 0 {
+		t.Fatalf("nothing should be persisted: %+v", reloaded.Peers.Hosts)
+	}
+}
+
+// TestHandleAddHost_NoTokenNoAlias_400WithoutDialing pins that the
+// published alias is only available where a verify actually happens: with
+// no outbound token there is no envelope, so an omitted alias is simply
+// missing and the add is refused without any network call.
+func TestHandleAddHost_NoTokenNoAlias_400WithoutDialing(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"url": "https://air.example",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if len(reloaded.Peers.Hosts) != 0 {
+		t.Fatalf("nothing should be persisted: %+v", reloaded.Peers.Hosts)
+	}
+}
+
+// TestHandleAddHost_UnsafePublishedAliasNotAdoptedNorEchoed pins the
+// posture sanitizeLearnedAlias exists for: a peer's self-reported alias is
+// attacker-controlled data. An unsafe one is not adopted, AND it is not
+// quoted back into this host's own terminal output — the refusal is the
+// generic "the peer published none", never a message carrying the peer's
+// own bytes.
+func TestHandleAddHost_UnsafePublishedAliasNotAdoptedNorEchoed(t *testing.T) {
+	for _, bad := range []string{"esc\x1b[31mred", "has/slash", "..", strings.Repeat("a", 65), "local"} {
+		t.Run(bad, func(t *testing.T) {
+			c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+			m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:aaa", Alias: bad, OK: true}, nil))
+
+			rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+				"url": "https://air.example", "token": "tok",
+			}, adminPrincipal())
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "the peer published none") {
+				t.Errorf("body = %s, want the generic no-alias refusal", rr.Body.String())
+			}
+			if strings.Contains(rr.Body.String(), bad) {
+				t.Errorf("body echoes the peer's unsafe alias %q: %s", bad, rr.Body.String())
+			}
+			reloaded := loadCfg(t, cfgPath)
+			if len(reloaded.Peers.Hosts) != 0 {
+				t.Fatalf("nothing should be persisted: %+v", reloaded.Peers.Hosts)
+			}
+		})
+	}
+}
+
+// TestHandleAddHost_LearnedAliasSelfPairing_Refused pins that adopting a
+// published alias opens no back door around the self-pairing refusal: the
+// peer that answered is this very daemon, and neither the alias nor the
+// entry survives.
+func TestHandleAddHost_LearnedAliasSelfPairing_Refused(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "local:1", Alias: "loopback", OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"url": "https://air.example", "token": "tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "cannot pair a host with itself") {
+		t.Errorf("body = %s, want the self-pairing refusal", rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if len(reloaded.Peers.Hosts) != 0 {
+		t.Fatalf("nothing should be persisted: %+v", reloaded.Peers.Hosts)
+	}
+}
+
 func TestHandleAddHost_TokenEqualsAdminToken_400(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "admin-secret", nil)
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
