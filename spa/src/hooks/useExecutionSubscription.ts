@@ -125,9 +125,47 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     // e.g. "nex: init: assembling engine: …") — falls back to the problem
     // code itself only when the caller has nothing better (a plain reason
     // like 'host_removed' has no server text to carry).
-    const teardown = (reason?: SubscriptionProblem, detail?: string) => {
+    // Transient frames (spec §4.3): queued and applied once per animation
+    // frame. The generation token exists because a flush callback scheduled
+    // under the old connection can still fire after the transport has
+    // reconnected — writing it would duplicate text the new connection's
+    // snapshot already carries, or resurrect a partial a replayed `result`
+    // cleared.
+    let pending: { kind: string; payload: Record<string, unknown> }[] = []
+    let generation = 0
+    let flushHandle: number | ReturnType<typeof setTimeout> | null = null
+    let flushIsRaf = false
+    const flush = (gen: number) => {
+      if (gen !== generation || cancelled) return
+      const batch = pending
+      pending = []
+      flushHandle = null
+      if (batch.length) store().applyTransient(hostId, executionId, batch)
+    }
+    const cancelFlush = () => {
+      if (flushHandle === null) return
+      if (flushIsRaf) cancelAnimationFrame(flushHandle as number)
+      else clearTimeout(flushHandle as ReturnType<typeof setTimeout>)
+      flushHandle = null
+    }
+    const scheduleFlush = () => {
+      if (flushHandle !== null) return
+      const gen = generation
+      flushIsRaf = typeof requestAnimationFrame === 'function'
+      flushHandle = flushIsRaf ? requestAnimationFrame(() => flush(gen)) : setTimeout(() => flush(gen), 16)
+    }
+    const dropQueue = () => {
+      pending = []
+      cancelFlush()
+    }
+    const closeStream = () => {
       sseRef.current?.close()
       sseRef.current = null
+      dropQueue()
+    }
+
+    const teardown = (reason?: SubscriptionProblem, detail?: string) => {
+      closeStream()
       if (refetchTimer) { clearTimeout(refetchTimer); refetchTimer = null }
       if (reason) {
         setProblem(reason)
@@ -175,12 +213,21 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
             url: obs.stream_url,
             getLastEventId: () => store().executions[key]?.lastSeq ?? null,
             onFrame: (frame) => {
+              if (frame.id == null) {
+                let payload: unknown
+                try { payload = JSON.parse(frame.data) } catch { return }
+                if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
+                pending.push({ kind: frame.event, payload: payload as Record<string, unknown> })
+                scheduleFlush()
+                return
+              }
+              // A delta queued before its finalizing `assistant` must land first.
+              flush(generation)
               const ev = frameToEvent(frame)
               if (!ev) {
-                // Transient frames are expected (P-B2 renders them); a durable
-                // frame that does not parse is dropped without moving the cursor
-                // and warned about once per connection (spec §4.5).
-                if (frame.id != null && !warnedMalformed) {
+                // A durable frame that does not parse is dropped without moving
+                // the cursor and warned about once per connection (spec §4.5).
+                if (!warnedMalformed) {
                   warnedMalformed = true
                   console.warn(`nex sse: dropped malformed durable frame id=${frame.id} kind=${frame.event}`)
                 }
@@ -190,6 +237,8 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
             },
             onStatus: (status, err) => {
               if (cancelled) return
+              if (status === 'connecting' || status === 'reconnecting') { generation += 1; dropQueue() }
+              if (status === 'closed') dropQueue()
               store().setSse(hostId, executionId, status, err?.message ?? null)
               if (status === 'reconnecting') wasReconnecting = true
               if (status === 'open') { warnedMalformed = false; if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
@@ -222,7 +271,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
         // claimIfFree grabs a free slot without evicting anyone, so a
         // restored (hidden, inactive) tab still goes live up to the cap.
         unsubEvict = subscriptionSlots.onEvict(key, () => {
-          sseRef.current?.close(); sseRef.current = null
+          closeStream()
           setPaused(true)
           store().setSse(hostId, executionId, 'paused')
         })
