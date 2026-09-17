@@ -35,6 +35,7 @@ import (
 	"github.com/wake/purdex/internal/relay"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
+	"github.com/wake/purdex/internal/tmuxenv"
 )
 
 func main() {
@@ -107,6 +108,27 @@ func runServe(args []string) {
 		log.Printf("locale: no UTF-8 locale in environment, exported LANG=%s", r.Value)
 	case locale.Warned:
 		log.Printf("locale: WARNING %s=%q is not UTF-8; tmux output parsing will break", r.Source, r.Value)
+	}
+
+	// 0b. tmux environment — the daemon execs `tmux` by bare name in ~35
+	// places and must not inherit the socket of whatever pane it was started
+	// from. Same constraint as the locale step: it must precede every tmux
+	// exec, the earliest of which is reached through module init and the
+	// first /api/info (config.GetTmuxInstance), not through config.Load.
+	//
+	// It also has to run before nex's PATH policy, which snapshots PATH at
+	// Init and restores that snapshot on soft-fail: taking this slot means
+	// the snapshot already contains our repair, so a nex failure cannot
+	// undo it.
+	tenv := tmuxenv.Prepare()
+	switch tenv.Action {
+	case tmuxenv.Appended:
+		log.Printf("tmux: not on PATH, appended %s (using %s)", tenv.AddedDir, tenv.Resolved)
+	case tmuxenv.NotFound:
+		log.Printf("tmux: ERROR not found on PATH nor in %s — sessions, terminals and monitoring will fail until tmux is installed or PATH is fixed (see `pdx path`)", tenv.ProbedList())
+	}
+	if tenv.DroppedTMUX {
+		log.Printf("tmux: started from inside a tmux pane; dropped inherited $TMUX so this daemon addresses the default socket, not that pane's server")
 	}
 
 	// 1. Load config
