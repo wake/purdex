@@ -6,10 +6,14 @@
 // switch would put a two-second, tmux-heavy daemon job behind every click. With
 // the rule here, "switching tabs issues no fetch" is a test somebody can write;
 // spread across two components it is only a hope.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useHostStore } from '../stores/useHostStore'
 import { EMPTY_PEER_HOST_ENTRY, usePeerStore, type PeerEnvelopeFlags, type PeerRow } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
+import { useTabStore } from '../stores/useTabStore'
+import { scanPaneTree } from '../lib/pane-tree'
+import { compositeKey } from '../lib/composite-key'
+import type { Tab } from '../types/tab'
 
 /**
  * How long a peer address stays trustworthy on screen.
@@ -34,6 +38,43 @@ export const PEER_STALE_AFTER_MS = 60_000
  */
 function sameGeneration(pane: string | null, row: string): boolean {
   return !!pane && pane !== '' && row !== '' && pane === row
+}
+
+/**
+ * The agent session id the tab store has recorded for a session — the
+ * `rebuild.agent.sessionId` an owner `SessionStart` wrote onto the live
+ * terminal pane(s) bound to `(hostId, sessionCode)`; `''` when no live pane
+ * has recorded one.
+ *
+ * {@link sameGeneration} catches a tmux RESTART. It cannot catch a Claude Code
+ * session being REPLACED inside a live tmux session — same code, same server,
+ * nothing at the tmux level moves — so a cached row keeps naming the previous
+ * occupant. The provenance write path already records the new occupant the
+ * moment it starts; this selector is how the hook hears it.
+ *
+ * Host and code only, not the generation: the record is written against the
+ * pane's own binding (`setPaneRebuild` checks the envelope's `tmux_instance`
+ * against it), so a record on a live pane is already generation-consistent
+ * with that pane. Filtering by the hook's `tmuxInstance` argument here would
+ * make the value jump from `''` to a real id whenever a pane's session is
+ * reconciled — a refresh on every tab activation, not on a replacement.
+ *
+ * A string, so the subscription fires only when the id itself changes, never
+ * on unrelated tab-store writes.
+ */
+function recordedAgentSessionId(tabs: Record<string, Tab>, hostId: string, sessionCode: string): string {
+  let found = ''
+  for (const tab of Object.values(tabs)) {
+    if (found) break
+    scanPaneTree(tab.layout, (pane) => {
+      if (found) return
+      const c = pane.content
+      if (c.kind !== 'tmux-session' || c.mode !== 'terminal' || c.terminated) return
+      if (c.hostId !== hostId || c.sessionCode !== sessionCode) return
+      found = c.rebuild?.agent?.sessionId ?? ''
+    })
+  }
+  return found
 }
 
 export interface PeerInfo {
@@ -112,19 +153,62 @@ export function usePeerInfo(hostId: string | null, sessionCode: string | null, t
     void useSessionCwdStore.getState().refresh(hostId, sessionCode)
   }, [hostId, sessionCode, connected])
 
+  // The precise one: the agent behind this pane was replaced. A row cached
+  // before an owner `SessionStart` names the previous occupant, and nothing
+  // about tmux changed to invalidate it — see `recordedAgentSessionId`. The
+  // baseline is per (host, code): the value read on mount, or right after the
+  // pane this hook serves changes, is what the record already said, not a
+  // change; switching tabs must issue no fetch. Only the id moving to a
+  // different, non-empty value while the pane stays the same counts. Gated on
+  // `fetched` because an unfetched host is the first effect's job, and the
+  // store would only join the in-flight request anyway.
+  const recordedSessionId = useTabStore((s) => (hostId && sessionCode ? recordedAgentSessionId(s.tabs, hostId, sessionCode) : ''))
+  const lastSeen = useRef<{ key: string; sessionId: string } | null>(null)
+  useEffect(() => {
+    const key = hostId && sessionCode ? compositeKey(hostId, sessionCode) : ''
+    const prev = lastSeen.current
+    lastSeen.current = { key, sessionId: recordedSessionId }
+    if (!hostId || !key || !prev || prev.key !== key) return
+    if (recordedSessionId === '' || recordedSessionId === prev.sessionId) return
+    if (!connected || !fetched) return
+    void usePeerStore.getState().refresh(hostId)
+  }, [hostId, sessionCode, recordedSessionId, connected, fetched])
+
   // Staleness is a function of the clock, so nothing would re-render at the
   // boundary on its own. The clock is read once at mount and then only by a
   // timeout scheduled for the exact moment the current answer goes stale —
   // one timer per answer, not a poll. A newer answer is always ahead of this
   // reading, so it reads fresh until its own timer fires.
+  //
+  // The same timer is the safety net for what no event announces (a renamed
+  // tmux session, a second agent in one): at the boundary a connected host
+  // whose pane is still on screen gets its rows re-read, so "stale" is a state
+  // the bar passes through rather than one it sits in until ↻. One refresh per
+  // answer: a fresh answer moves `fetchedAt` and schedules the next boundary,
+  // while a FAILED refresh keeps `fetchedAt` (the store's rule), so nothing
+  // schedules again and a failing host is asked once, not hammered. A pane
+  // that is no longer active is handed a null host and schedules nothing.
+  //
+  // An answer ALREADY past the boundary when this effect runs — a tab opened
+  // late, a host reconnecting after the timer would have fired — has no timer
+  // left to wake on, so the mount (or the reconnect) is its boundary and it is
+  // refreshed right away. This never touches fresh data: switching tabs still
+  // fetches nothing while the host's answer is younger than the boundary.
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (fetchedAt === 0) return
     const remaining = fetchedAt + PEER_STALE_AFTER_MS - Date.now()
-    if (remaining <= 0) return  // already past it; `now` says so without a timer
-    const timer = setTimeout(() => setNow(Date.now()), remaining)
+    if (remaining <= 0) {
+      // Already past it; `now` says so without a timer.
+      if (hostId && connected) void usePeerStore.getState().refresh(hostId)
+      return
+    }
+    const timer = setTimeout(() => {
+      setNow(Date.now())
+      if (hostId && connected) void usePeerStore.getState().refresh(hostId)
+    }, remaining)
     return () => clearTimeout(timer)
-  }, [fetchedAt])
+  }, [fetchedAt, hostId, connected])
 
   return {
     row,
