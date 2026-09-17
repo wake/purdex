@@ -55,7 +55,7 @@ const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--conf
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +
 	"       pdx msg selftest [--timeout <dur>] [--config <path>]\n" +
-	"       pdx msg name <label> | --release [--json] [--config <path>]\n" +
+	"       pdx msg name <title> | --release [--json] [--config <path>]\n" +
 	"       pdx msg whoami [--json] [--config <path>]"
 
 // runMsg is the `pdx msg` switch target.
@@ -121,8 +121,8 @@ type msgInvocation struct {
 	timeout string
 
 	// name
-	label   string // the label to claim; "" when release is true
-	release bool   // --release: DELETE the label instead of claiming one
+	title   string // the title to claim; "" when release is true
+	release bool   // --release: DELETE the title instead of claiming one
 }
 
 // parseMsgInvocation parses pdx msg's full grammar in one pass: flags may
@@ -262,7 +262,7 @@ func parseMsgInvocation(args []string) (inv msgInvocation, unknownFlag string, o
 			if len(rest) != 1 {
 				return msgInvocation{}, "", false
 			}
-			inv.label = rest[0]
+			inv.title = rest[0]
 		}
 
 	case "whoami":
@@ -694,11 +694,11 @@ func msgOriginInbox(getenv func(string) string, stderr io.Writer) (inbox string,
 func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
 	fmt.Fprintf(stdout, "address:    %s\n", sanitizeCell(rec.Address))
 	fmt.Fprintf(stdout, "ref:        %s\n", sanitizeCell(rec.Ref))
-	if rec.Label == "" {
+	if rec.Title == "" {
 		fmt.Fprintln(stdout, "title:      (none)")
 	} else {
 		fmt.Fprintf(stdout, "title:      %s (%s, rev %d)\n",
-			sanitizeCell(rec.Label), sanitizeCell(rec.LabelSource), rec.LabelRev)
+			sanitizeCell(rec.Title), sanitizeCell(rec.TitleSource), rec.TitleRev)
 	}
 	fmt.Fprintf(stdout, "host:       %s (%s)\n", sanitizeCell(rec.Host), sanitizeCell(rec.HostID))
 	if rec.Agent != nil {
@@ -707,10 +707,10 @@ func renderSelfRecord(rec ipeers.PeerRecord, stdout io.Writer) {
 }
 
 // renderSelfWarning prints a self-route 200's advisory to stderr, one
-// indented line per other holder and per live label. It is a warning, not
+// indented line per other holder and per live title. It is a warning, not
 // an error: the caller's exit code is unaffected, and the record block
-// still goes to stdout — the label really was set. label_in_use's live
-// labels are listed because picking the next free serial is what the
+// still goes to stdout — the title really was set. title_in_use's live
+// titles are listed because picking the next free serial is what the
 // reader is expected to do next (spec §4.2).
 func renderSelfWarning(w *ipeers.SelfWarning, stderr io.Writer) {
 	if w == nil {
@@ -724,8 +724,8 @@ func renderSelfWarning(w *ipeers.SelfWarning, stderr io.Writer) {
 	for _, h := range w.Holders {
 		fmt.Fprintf(stderr, "  also held by: %s\n", sanitizeCell(h.Address))
 	}
-	for _, l := range w.LiveLabels {
-		fmt.Fprintf(stderr, "  live label: %s\n", sanitizeCell(l))
+	for _, l := range w.LiveTitles {
+		fmt.Fprintf(stderr, "  live title: %s\n", sanitizeCell(l))
 	}
 }
 
@@ -803,9 +803,9 @@ func doSelfRequest(method, path string, body []byte, inv msgInvocation, stdout, 
 	return resp.Peer, 0, false
 }
 
-// runMsgName implements `pdx msg name <label> | --release [--json]
-// [--config <path>]`: PUT /api/peers/self/label to claim inv.label, or
-// DELETE /api/peers/self/label (inv.release) to clear the caller's label.
+// runMsgName implements `pdx msg name <title> | --release [--json]
+// [--config <path>]`: PUT /api/peers/self/label to claim inv.title, or
+// DELETE /api/peers/self/label (inv.release) to clear the caller's title.
 // Neither moves the caller's address, and both success lines say so.
 func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int {
 	originInbox, ok := msgOriginInbox(getenv, stderr)
@@ -821,7 +821,7 @@ func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		reqBody, err = json.Marshal(ipeers.SelfRequest{OriginInbox: originInbox})
 	} else {
 		method = http.MethodPut
-		reqBody, err = json.Marshal(ipeers.ClaimLabelRequest{OriginInbox: originInbox, Label: inv.label})
+		reqBody, err = json.Marshal(ipeers.ClaimLabelRequest{OriginInbox: originInbox, Label: inv.title})
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx msg: %v\n", err)
@@ -839,9 +839,9 @@ func runMsgName(inv msgInvocation, getenv func(string) string, stdout, stderr io
 	// most likely reader to assume the name is now reachable, and the
 	// cheapest place to refuse that is the line it reads on success.
 	if inv.release {
-		fmt.Fprintf(stdout, "released: the label (address unchanged: %s)\n", sanitizeCell(rec.Address))
+		fmt.Fprintf(stdout, "released: the title (address unchanged: %s)\n", sanitizeCell(rec.Address))
 	} else {
-		fmt.Fprintf(stdout, "named: %s (address unchanged: %s)\n", sanitizeCell(rec.Label), sanitizeCell(rec.Address))
+		fmt.Fprintf(stdout, "named: %s (address unchanged: %s)\n", sanitizeCell(rec.Title), sanitizeCell(rec.Address))
 	}
 	renderSelfRecord(rec, stdout)
 	return 0

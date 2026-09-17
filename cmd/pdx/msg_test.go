@@ -826,7 +826,7 @@ func TestParseMsgInvocation_NameAndWhoami(t *testing.T) {
 		args    []string
 		ok      bool
 		verb    string
-		label   string
+		title   string
 		release bool
 	}{
 		{[]string{"name", "purdex-tester"}, true, "name", "purdex-tester", false},
@@ -847,8 +847,8 @@ func TestParseMsgInvocation_NameAndWhoami(t *testing.T) {
 	}
 	for _, c := range cases {
 		inv, _, ok := parseMsgInvocation(c.args)
-		if ok != c.ok || (ok && (inv.verb != c.verb || inv.label != c.label || inv.release != c.release)) {
-			t.Errorf("%v ⇒ ok=%v inv=%+v, want ok=%v verb=%q label=%q release=%v", c.args, ok, inv, c.ok, c.verb, c.label, c.release)
+		if ok != c.ok || (ok && (inv.verb != c.verb || inv.title != c.title || inv.release != c.release)) {
+			t.Errorf("%v ⇒ ok=%v inv=%+v, want ok=%v verb=%q title=%q release=%v", c.args, ok, inv, c.ok, c.verb, c.title, c.release)
 		}
 	}
 }
@@ -866,7 +866,7 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
 			Host: "air", HostID: "air:9k2m4q", Address: "air/_3k9f2mq4:purdex-3f",
-			Ref: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", LabelRev: 7,
+			Ref: "_3k9f2mq4", Title: "purdex-tester", TitleSource: "user", TitleRev: 7,
 			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "fa5d4c07-0000", PID: 76973},
 		}})
 	}))
@@ -889,7 +889,7 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 }
 
 func TestRunMsgWhoami_JSONPassthrough(t *testing.T) {
-	raw := `{"address":"air/x1:y","label":"x1"}` + "\n"
+	raw := `{"address":"air/x1:y","title":"x1"}` + "\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, raw)
 	}))
@@ -958,8 +958,8 @@ func TestRunMsgSelf_BarePeerRecordIsAVersionMismatch(t *testing.T) {
 func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{
-			Peer:    ipeers.PeerRecord{Address: "air/_3k9f2mq4:p-3f", Ref: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user"},
-			Warning: &ipeers.SelfWarning{Code: ipeers.WarnLabelInUse, LiveLabels: []string{"purdex-tester"}},
+			Peer:    ipeers.PeerRecord{Address: "air/_3k9f2mq4:p-3f", Ref: "_3k9f2mq4", Title: "purdex-tester", TitleSource: "user"},
+			Warning: &ipeers.SelfWarning{Code: ipeers.WarnTitleInUse, LiveTitles: []string{"purdex-tester"}},
 		})
 	}))
 	defer srv.Close()
@@ -973,7 +973,7 @@ func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
 	if !strings.Contains(out.String(), "ref:        _3k9f2mq4") {
 		t.Errorf("out:\n%s", out.String())
 	}
-	if !strings.Contains(errb.String(), ipeers.WarnLabelInUse) {
+	if !strings.Contains(errb.String(), ipeers.WarnTitleInUse) {
 		t.Errorf("stderr:\n%s", errb.String())
 	}
 }
@@ -981,7 +981,7 @@ func TestRunMsgSelf_EnvelopeStillWorks(t *testing.T) {
 // --- name: PUT/DELETE /api/peers/self/label ---------------------------------
 
 // TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress pins the success line
-// (spec 7): it names the label that was set AND the address, which did not
+// (spec 7): it names the title that was set AND the address, which did not
 // move. The agent that just named itself is the reader most likely to
 // assume the name is now reachable, and this line is where that assumption
 // is cheapest to refuse.
@@ -994,7 +994,7 @@ func TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
 			Address: "air/_3k9f2mq4:purdex-3f", Ref: "_3k9f2mq4",
-			Label: "purdex-tester", LabelSource: "user", LabelRev: 1,
+			Title: "purdex-tester", TitleSource: "user", TitleRev: 1,
 			Host: "air", HostID: "air:1",
 		}})
 	}))
@@ -1016,10 +1016,10 @@ func TestRunMsgName_ClaimPrintsLabelAndUnchangedAddress(t *testing.T) {
 	}
 }
 
-// TestRunMsgName_DuplicateWarnsAndExitsZero: a claim that lands on a label
-// another live session already holds is a SUCCESS (spec D5). The label is
+// TestRunMsgName_DuplicateWarnsAndExitsZero: a claim that lands on a title
+// another live session already holds is a SUCCESS (spec D5). The title is
 // set, the address is printed as usual, the warning names the other
-// holders and every live label — and the exit code is 0, because nothing
+// holders and every live title — and the exit code is 0, because nothing
 // failed. Anything else would make the serial-number convention look like
 // an enforced rule again.
 func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
@@ -1031,14 +1031,14 @@ func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{
 			Peer: ipeers.PeerRecord{
-				Address: "air/_1c4m7dkz:mt0-n10", Label: "purdex-tester", LabelSource: "user", LabelRev: 3,
+				Address: "air/_1c4m7dkz:mt0-n10", Title: "purdex-tester", TitleSource: "user", TitleRev: 3,
 				Host: "air", HostID: "air:1",
 			},
 			Warning: &ipeers.SelfWarning{
-				Code:       ipeers.WarnLabelInUse,
+				Code:       ipeers.WarnTitleInUse,
 				Detail:     `"purdex-tester" is also held by 1 other live session`,
-				Holders:    []ipeers.PeerRecord{{Address: "air/_9x2pq0af:n20", Label: "purdex-tester"}},
-				LiveLabels: []string{"purdex-dev", "purdex-tester"},
+				Holders:    []ipeers.PeerRecord{{Address: "air/_9x2pq0af:n20", Title: "purdex-tester"}},
+				LiveTitles: []string{"purdex-dev", "purdex-tester"},
 			},
 		})
 	}))
@@ -1048,17 +1048,17 @@ func TestRunMsgName_DuplicateWarnsAndExitsZero(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := runMsgCmd([]string{"name", "purdex-tester", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
 	if code != 0 {
-		t.Fatalf("exit %d, want 0 — a duplicate label is a warning, not a failure; stderr=%s", code, errb.String())
+		t.Fatalf("exit %d, want 0 — a duplicate title is a warning, not a failure; stderr=%s", code, errb.String())
 	}
-	wantErr := "pdx msg: warning: label_in_use: \"purdex-tester\" is also held by 1 other live session\n" +
+	wantErr := "pdx msg: warning: title_in_use: \"purdex-tester\" is also held by 1 other live session\n" +
 		"  also held by: air/_9x2pq0af:n20\n" +
-		"  live label: purdex-dev\n" +
-		"  live label: purdex-tester\n"
+		"  live title: purdex-dev\n" +
+		"  live title: purdex-tester\n"
 	if errb.String() != wantErr {
 		t.Errorf("stderr:\n%s\nwant:\n%s", errb.String(), wantErr)
 	}
 	if !strings.HasPrefix(out.String(), "named: purdex-tester (address unchanged: air/_1c4m7dkz:mt0-n10)\n") {
-		t.Errorf("stdout:\n%s\nwant the label set and the unchanged address printed", out.String())
+		t.Errorf("stdout:\n%s\nwant the title set and the unchanged address printed", out.String())
 	}
 }
 
@@ -1091,20 +1091,20 @@ func TestRunMsgName_Release_UsesDelete(t *testing.T) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/peers/self/label" || req.OriginInbox != "/tmp/x.sock" {
 			t.Errorf("%s %s %+v", r.Method, r.URL.Path, req)
 		}
-		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/_3k9f2mq4:purdex-3f", Ref: "_3k9f2mq4", LabelRev: 2, Host: "air", HostID: "air:1"}})
+		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{Address: "air/_3k9f2mq4:purdex-3f", Ref: "_3k9f2mq4", TitleRev: 2, Host: "air", HostID: "air:1"}})
 	}))
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "t")
 
 	var out, errb bytes.Buffer
 	code := runMsgCmd([]string{"name", "--release", "--config", cfgPath}, fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), &out, &errb)
-	if code != 0 || !strings.HasPrefix(out.String(), "released: the label (address unchanged: air/_3k9f2mq4:purdex-3f)\n") {
+	if code != 0 || !strings.HasPrefix(out.String(), "released: the title (address unchanged: air/_3k9f2mq4:purdex-3f)\n") {
 		t.Fatalf("exit %d out %q err %q", code, out.String(), errb.String())
 	}
 }
 
 func TestRunMsgName_JSONPassthrough(t *testing.T) {
-	raw := `{"address":"air/x1:y","label":"x1"}` + "\n"
+	raw := `{"address":"air/x1:y","title":"x1"}` + "\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, raw)
 	}))
@@ -1291,8 +1291,8 @@ func TestRenderSelfRecord_UnsetTitle(t *testing.T) {
 func TestRenderSelfRecord_SetTitle(t *testing.T) {
 	var buf bytes.Buffer
 	renderSelfRecord(ipeers.PeerRecord{
-		Address: "mlab/purdex-53", Ref: "_d8dc4a", Label: "Purdex Tester 01",
-		LabelSource: "user", LabelRev: 4,
+		Address: "mlab/purdex-53", Ref: "_d8dc4a", Title: "Purdex Tester 01",
+		TitleSource: "user", TitleRev: 4,
 	}, &buf)
 	if got := buf.String(); !strings.Contains(got, "Purdex Tester 01 (user, rev 4)") {
 		t.Errorf("set title block:\n%s", got)

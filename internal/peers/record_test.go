@@ -704,7 +704,7 @@ func TestBuild_JSON_EveryRecordHasCoreKeys(t *testing.T) {
 	got := Build(in)
 	for _, rec := range got {
 		m := mustMarshalMap(t, rec)
-		for _, key := range []string{"session_code", "session_name", "tmux_instance", "reason", "row_kind", "label", "label_source", "label_rev", "ref"} {
+		for _, key := range []string{"session_code", "session_name", "tmux_instance", "reason", "row_kind", "title", "title_source", "title_rev", "ref"} {
 			if _, present := m[key]; !present {
 				t.Errorf("record %+v missing key %q", rec, key)
 			}
@@ -805,7 +805,7 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 // TestBuild_LabelsAndAddresses pins the address rules of v4 §5.2: a cc row
 // (session or entry) reads "<alias>/<registry name>"; a session row with no
 // cc agent reads "<alias>/tmux:<name>"; a user label is reported with its Rev
-// and label_source "user" without touching the address.
+// and title_source "user" without touching the address.
 func TestBuild_LabelsAndAddresses(t *testing.T) {
 	in := BuildInput{
 		HostID: "h:1", Alias: "mini-lab",
@@ -817,7 +817,7 @@ func TestBuild_LabelsAndAddresses(t *testing.T) {
 			{PID: 10, SessionID: "sid-1", Name: "purdex-49", Tmux: "mt0:@1.%1", Inbox: "/s/10"},
 			{PID: 20, SessionID: "sid-2", Name: "purdex-3f", Tmux: "", Inbox: "/s/20"}, // Desktop
 		},
-		Labels: map[string]LabelInfo{"sid-1": {Label: "purdex-dev", Rev: 7}},
+		Titles: map[string]TitleInfo{"sid-1": {Title: "purdex-dev", Rev: 7}},
 	}
 	recs := Build(in)
 	byAddr := map[string]PeerRecord{}
@@ -828,7 +828,7 @@ func TestBuild_LabelsAndAddresses(t *testing.T) {
 	if !ok {
 		t.Fatalf("no dev row; addresses: %v", keys(byAddr))
 	}
-	if dev.RowKind != "session" || dev.Label != "purdex-dev" || dev.LabelSource != LabelSourceUser || dev.LabelRev != 7 || dev.Ref != RefID("sid-1") {
+	if dev.RowKind != "session" || dev.Title != "purdex-dev" || dev.TitleSource != TitleSourceUser || dev.TitleRev != 7 || dev.Ref != RefID("sid-1") {
 		t.Errorf("dev row = %+v", dev)
 	}
 	want := "mini-lab/purdex-3f"
@@ -836,11 +836,11 @@ func TestBuild_LabelsAndAddresses(t *testing.T) {
 	if !ok {
 		t.Fatalf("no desktop row %q; addresses: %v", want, keys(byAddr))
 	}
-	if desk.RowKind != "entry" || desk.Label != "" || desk.LabelSource != "" || desk.LabelRev != 0 || !desk.Deliverable {
+	if desk.RowKind != "entry" || desk.Title != "" || desk.TitleSource != "" || desk.TitleRev != 0 || !desk.Deliverable {
 		t.Errorf("desktop row = %+v", desk)
 	}
 	shell, ok := byAddr["mini-lab/tmux:shell"]
-	if !ok || shell.Ref != "" || shell.Label != "" || shell.LabelSource != "" {
+	if !ok || shell.Ref != "" || shell.Title != "" || shell.TitleSource != "" {
 		t.Errorf("shell row = %+v (ok=%v)", shell, ok)
 	}
 }
@@ -998,18 +998,18 @@ func TestBuild_EntryRow_NonOwnerEntryInsideListedSession(t *testing.T) {
 // release to render the identical address the listing shows.
 func TestEntryRecord_MatchesBuild(t *testing.T) {
 	e := Entry{PID: 11, SessionID: "sid-9", Name: "n9", Tmux: "mt0:@1.%2", Inbox: "/s/11", Cwd: "/w"}
-	info := LabelInfo{Label: "purdex-tester", Rev: 3}
-	labels := map[string]LabelInfo{"sid-9": info}
+	info := TitleInfo{Title: "purdex-tester", Rev: 3}
+	titles := map[string]TitleInfo{"sid-9": info}
 	// Under v3 the direct call needs no population argument at all: both
 	// paths derive the head from the entry's own sessionId, so agreeing is
 	// structural rather than a matter of being handed the same map.
 	one := EntryRecord("a", "h:1", e, false, info)
-	all := Build(BuildInput{HostID: "h:1", Alias: "a", Entries: []Entry{e}, Labels: labels})
+	all := Build(BuildInput{HostID: "h:1", Alias: "a", Entries: []Entry{e}, Titles: titles})
 	if len(all) != 1 || !reflect.DeepEqual(all[0], one) {
 		t.Errorf("EntryRecord ≠ Build row:\n%+v\n%+v", one, all)
 	}
 	p := EntryRecord("a", "h:1", e, true, info)
-	if p.Agent.Type != "proxy" || p.Deliverable || p.Reason != "proxy" || p.Address != "a/cc:n9" || p.Label != "" {
+	if p.Agent.Type != "proxy" || p.Deliverable || p.Reason != "proxy" || p.Address != "a/cc:n9" || p.Title != "" {
 		t.Errorf("proxy entry record = %+v", p)
 	}
 }
@@ -1043,8 +1043,8 @@ func TestBuild_SameConversationTwoProcesses_ThreeRowsOneCanonical(t *testing.T) 
 		if r.Ref != want {
 			t.Errorf("row %s canonical = %q, want %q", r.Address, r.Ref, want)
 		}
-		if r.Label != "" || r.LabelSource != "" {
-			t.Errorf("row %s label/source = %q/%q, want \"\"/\"\" — nothing named it", r.Address, r.Label, r.LabelSource)
+		if r.Title != "" || r.TitleSource != "" {
+			t.Errorf("row %s label/source = %q/%q, want \"\"/\"\" — nothing named it", r.Address, r.Title, r.TitleSource)
 		}
 	}
 	if recs[0].Reason != "ambiguous" || recs[0].Deliverable {
@@ -1099,11 +1099,11 @@ func keys(m map[string]PeerRecord) []string {
 // label-based WireAddress would have a sender announce itself at an address
 // nothing routes on.
 func TestPeerRecord_WireAddress(t *testing.T) {
-	labelled := PeerRecord{Ref: "_3k9f2m", Label: "purdex-tester"}
+	labelled := PeerRecord{Ref: "_3k9f2m", Title: "purdex-tester"}
 	if got := labelled.WireAddress(); got != "_3k9f2m" {
 		t.Errorf("WireAddress() = %q, want _3k9f2m", got)
 	}
-	noAgent := PeerRecord{Ref: "", Label: ""}
+	noAgent := PeerRecord{Ref: "", Title: ""}
 	if got := noAgent.WireAddress(); got != "" {
 		t.Errorf("WireAddress() = %q, want \"\"", got)
 	}
@@ -1112,7 +1112,7 @@ func TestPeerRecord_WireAddress(t *testing.T) {
 // TestBuild_UserLabelDoesNotMoveTheAddress is the same fixture that used
 // to assert a claimed label CHANGED the row's address. Under D3 it asserts
 // the opposite, which is the whole point of v3: the label is reported with
-// label_source "user" and its rev, and the address is exactly what it was
+// title_source "user" and its rev, and the address is exactly what it was
 // before anyone named anything.
 func TestBuild_UserLabelDoesNotMoveTheAddress(t *testing.T) {
 	entry := Entry{PID: 100, SessionID: "sess-x", Name: "purdex-69", Tmux: "purdex1:@1.%1", Inbox: "/s/100"}
@@ -1122,18 +1122,18 @@ func TestBuild_UserLabelDoesNotMoveTheAddress(t *testing.T) {
 		Sessions: []SessionSummary{{Code: "s1", Name: "purdex1"}},
 		Owners:   map[string]Owner{"s1": {AgentType: "cc", SessionID: "sess-x", TmuxPaneID: "%1"}},
 		Entries:  []Entry{entry},
-		Labels:   map[string]LabelInfo{"sess-x": {Label: "purdex-tester", Rev: 4}},
+		Titles:   map[string]TitleInfo{"sess-x": {Title: "purdex-tester", Rev: 4}},
 	}
 	r := Build(in)[0]
-	if r.Label != "purdex-tester" || r.LabelSource != LabelSourceUser || r.LabelRev != 4 {
-		t.Errorf("label/source/rev = %q/%q/%d, want purdex-tester/%s/4", r.Label, r.LabelSource, r.LabelRev, LabelSourceUser)
+	if r.Title != "purdex-tester" || r.TitleSource != TitleSourceUser || r.TitleRev != 4 {
+		t.Errorf("label/source/rev = %q/%q/%d, want purdex-tester/%s/4", r.Title, r.TitleSource, r.TitleRev, TitleSourceUser)
 	}
 	if want := "mini-lab/purdex-69"; r.Address != want {
 		t.Errorf("Address = %q, want %q — a label names a conversation, it does not move it (D3)", r.Address, want)
 	}
 	// And it is byte for byte the address the same conversation had with no
 	// label at all.
-	in.Labels = nil
+	in.Titles = nil
 	if unnamed := Build(in)[0].Address; unnamed != r.Address {
 		t.Errorf("address without a label = %q, with one = %q; want identical", unnamed, r.Address)
 	}
@@ -1144,7 +1144,7 @@ func TestBuild_UserLabelDoesNotMoveTheAddress(t *testing.T) {
 func TestBuild_ProxyEntryInTmux_KeepsCCFormNoLabel(t *testing.T) {
 	entry := Entry{PID: 300, SessionID: "sess-z", Name: "helper-1", Tmux: "purdex1:@1.%1", IsProxy: true}
 	r := Build(BuildInput{Alias: "mini-lab", Entries: []Entry{entry}})[0]
-	if r.Address != "mini-lab/cc:helper-1" || r.Ref != "" || r.Label != "" || r.LabelSource != "" {
+	if r.Address != "mini-lab/cc:helper-1" || r.Ref != "" || r.Title != "" || r.TitleSource != "" {
 		t.Errorf("proxy row = %+v, want mini-lab/cc:helper-1 with no label", r)
 	}
 	if r.Deliverable || r.Reason != "proxy" {
@@ -1210,7 +1210,7 @@ func v3Fixture() BuildInput {
 			{PID: 20, SessionID: "sid-outside", Name: "purdex-3f", Tmux: "", Inbox: "/s/20"},
 			{PID: 30, SessionID: "sid-proxy", Name: "helper-1", Tmux: "", IsProxy: true},
 		},
-		Labels: map[string]LabelInfo{"sid-labelled": {Label: "purdex-tester", Rev: 7}},
+		Titles: map[string]TitleInfo{"sid-labelled": {Title: "purdex-tester", Rev: 7}},
 	}
 }
 
@@ -1232,7 +1232,7 @@ func bySessionID(recs []PeerRecord) (map[string]PeerRecord, []PeerRecord) {
 // TestBuild_V4FieldInvariants asserts v4 §5.2/§5.3's table on EVERY row whose
 // agent is a live cc entry: the ref is non-empty and derived from the
 // sessionId, the address is the registry name when that name is routable and
-// the ref otherwise, and label_source is "user" exactly when a label is set.
+// the ref otherwise, and title_source is "user" exactly when a label is set.
 // One loop over the whole fixture, because that is a property of every such
 // row rather than of a chosen one.
 func TestBuild_V4FieldInvariants(t *testing.T) {
@@ -1258,11 +1258,11 @@ func TestBuild_V4FieldInvariants(t *testing.T) {
 			t.Errorf("row: address = %q, want %q", r.Address, want)
 		}
 		wantSource := ""
-		if r.Label != "" {
-			wantSource = LabelSourceUser
+		if r.Title != "" {
+			wantSource = TitleSourceUser
 		}
-		if r.LabelSource != wantSource {
-			t.Errorf("row %s: label %q has label_source %q, want %q", r.Address, r.Label, r.LabelSource, wantSource)
+		if r.TitleSource != wantSource {
+			t.Errorf("row %s: label %q has title_source %q, want %q", r.Address, r.Title, r.TitleSource, wantSource)
 		}
 	}
 	if live != 3 {
@@ -1276,8 +1276,8 @@ func TestBuild_V4FieldInvariants(t *testing.T) {
 func TestBuild_NoLabel_EmptyLabelAndNameAddress(t *testing.T) {
 	byID, _ := bySessionID(Build(v3Fixture()))
 	plain := byID["sid-plain"]
-	if plain.Label != "" || plain.LabelSource != "" {
-		t.Errorf("unlabelled row label/source = %q/%q, want \"\"/\"\"", plain.Label, plain.LabelSource)
+	if plain.Title != "" || plain.TitleSource != "" {
+		t.Errorf("unlabelled row label/source = %q/%q, want \"\"/\"\"", plain.Title, plain.TitleSource)
 	}
 	want := "mini-lab/purdex-4a"
 	if plain.Address != want {
@@ -1287,13 +1287,13 @@ func TestBuild_NoLabel_EmptyLabelAndNameAddress(t *testing.T) {
 
 // TestBuild_UserLabel_AddressStaysPut is D3's pin, and the single most
 // important assertion in this change: setting a label names the conversation,
-// it does not move it. The label is reported, label_source says "user", and
+// it does not move it. The label is reported, title_source says "user", and
 // the address is STILL the registry name.
 func TestBuild_UserLabel_AddressStaysPut(t *testing.T) {
 	byID, _ := bySessionID(Build(v3Fixture()))
 	labelled := byID["sid-labelled"]
-	if labelled.Label != "purdex-tester" || labelled.LabelSource != LabelSourceUser {
-		t.Errorf("labelled row label/source = %q/%q, want purdex-tester/%s", labelled.Label, labelled.LabelSource, LabelSourceUser)
+	if labelled.Title != "purdex-tester" || labelled.TitleSource != TitleSourceUser {
+		t.Errorf("labelled row label/source = %q/%q, want purdex-tester/%s", labelled.Title, labelled.TitleSource, TitleSourceUser)
 	}
 	want := "mini-lab/purdex-49"
 	if labelled.Address != want {
@@ -1304,23 +1304,23 @@ func TestBuild_UserLabel_AddressStaysPut(t *testing.T) {
 	}
 }
 
-// TestBuild_LabelRev_PassesThrough pins spec §4.4: LabelRev is still the
+// TestBuild_LabelRev_PassesThrough pins spec §4.4: TitleRev is still the
 // label's revision, carried straight through from the store. It stops
 // implying an address change; it does not stop existing.
 func TestBuild_LabelRev_PassesThrough(t *testing.T) {
 	byID, _ := bySessionID(Build(v3Fixture()))
-	if got := byID["sid-labelled"].LabelRev; got != 7 {
-		t.Errorf("labelled row label_rev = %d, want 7", got)
+	if got := byID["sid-labelled"].TitleRev; got != 7 {
+		t.Errorf("labelled row title_rev = %d, want 7", got)
 	}
-	if got := byID["sid-plain"].LabelRev; got != 0 {
-		t.Errorf("unlabelled row label_rev = %d, want 0", got)
+	if got := byID["sid-plain"].TitleRev; got != 0 {
+		t.Errorf("unlabelled row title_rev = %d, want 0", got)
 	}
 }
 
 // TestBuild_AgentNullRow_NoRef pins the first of the three row kinds the
 // invariant table deliberately does NOT cover: a session row with no agent
 // keeps the tmux: address and has no ref, which is what tells an SPA reading
-// label_source == "" apart from an unlabelled live conversation.
+// title_source == "" apart from an unlabelled live conversation.
 func TestBuild_AgentNullRow_NoRef(t *testing.T) {
 	_, agentless := bySessionID(Build(v3Fixture()))
 	if len(agentless) != 1 {
@@ -1350,8 +1350,8 @@ func TestBuild_ProxyAndOwnerFallbackRows_Unchanged(t *testing.T) {
 	if proxy.Address != "mini-lab/cc:helper-1" || proxy.Reason != "proxy" || proxy.Deliverable {
 		t.Errorf("proxy row = %+v, want the unresolvable cc: form", proxy)
 	}
-	if proxy.Ref != "" || proxy.Label != "" || proxy.LabelSource != "" {
-		t.Errorf("proxy row ref/label/source = %q/%q/%q, want all empty", proxy.Ref, proxy.Label, proxy.LabelSource)
+	if proxy.Ref != "" || proxy.Title != "" || proxy.TitleSource != "" {
+		t.Errorf("proxy row ref/label/source = %q/%q/%q, want all empty", proxy.Ref, proxy.Title, proxy.TitleSource)
 	}
 
 	dead := byID["sid-dead"]

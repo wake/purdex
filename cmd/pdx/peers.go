@@ -366,8 +366,7 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 // then copies that row's ADDRESS to reach it. A row with no title renders
 // a BLANK cell rather than "-" — a dash reads as a value, and an unnamed
 // conversation has nothing to show there; it is still perfectly
-// addressable, which is exactly what the ADDRESS beside it says. (The Go
-// field is still Label until Task B2; the column it feeds is TITLE.)
+// addressable, which is exactly what the ADDRESS beside it says.
 //
 // Two v3 columns are gone and one is new. NAME went because it IS the
 // address's second segment, and HOST — which only the --all form ever had —
@@ -381,7 +380,7 @@ func formatPeersTable(resp peers.Envelope) string {
 
 	for _, rec := range resp.Peers {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			sanitizeCell(rec.Label),
+			sanitizeCell(rec.Title),
 			addressField(rec),
 			sanitizeCell(agentField(rec)),
 			sanitizeCell(statusField(rec)),
@@ -392,7 +391,7 @@ func formatPeersTable(resp peers.Envelope) string {
 	}
 	w.Flush()
 
-	writeHostDiagnostics(&buf, "", resp.Peers, resp.UnknownRegistryFiles, resp.LabelsUnavailable)
+	writeHostDiagnostics(&buf, "", resp.Peers, resp.UnknownRegistryFiles, resp.TitlesUnavailable)
 	fmt.Fprintf(&buf, "daemon %s\n", daemonVersionField(resp.DaemonVersion))
 
 	return buf.String()
@@ -431,12 +430,12 @@ func daemonVersionField(v string) string {
 //
 //	(partial: N sessions not resolved within budget)   N = countUnresolved(peers) > 0
 //	(partial: unknown registry files: a, b)            unknownFiles non-empty; each path through sanitizeCell
-//	(partial: label store unavailable)                 labelsUnavailable
+//	(partial: title store unavailable)                 titlesUnavailable
 //
 // prefix is "" for the single-host table and "<alias>  " for --all,
 // matching the unreachable/daemon trailer lines. Nothing is printed when
 // no signal is set.
-func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.PeerRecord, unknownFiles []string, labelsUnavailable bool) {
+func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.PeerRecord, unknownFiles []string, titlesUnavailable bool) {
 	if unresolved := countUnresolved(peerRows); unresolved > 0 {
 		fmt.Fprintf(buf, "%s(partial: %d sessions not resolved within budget)\n", prefix, unresolved)
 	}
@@ -447,8 +446,8 @@ func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.
 		}
 		fmt.Fprintf(buf, "%s(partial: unknown registry files: %s)\n", prefix, strings.Join(names, ", "))
 	}
-	if labelsUnavailable {
-		fmt.Fprintf(buf, "%s(partial: label store unavailable)\n", prefix)
+	if titlesUnavailable {
+		fmt.Fprintf(buf, "%s(partial: title store unavailable)\n", prefix)
 	}
 }
 
@@ -476,7 +475,7 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 		for _, rec := range h.Peers {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				sanitizeCell(h.Alias),
-				sanitizeCell(rec.Label),
+				sanitizeCell(rec.Title),
 				addressField(rec),
 				sanitizeCell(agentField(rec)),
 				sanitizeCell(statusField(rec)),
@@ -498,7 +497,7 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 			continue
 		}
 		alias := sanitizeCell(h.Alias)
-		writeHostDiagnostics(&buf, alias+"  ", h.Peers, h.UnknownRegistryFiles, h.LabelsUnavailable)
+		writeHostDiagnostics(&buf, alias+"  ", h.Peers, h.UnknownRegistryFiles, h.TitlesUnavailable)
 		fmt.Fprintf(&buf, "%s  daemon %s\n", alias, daemonVersionField(h.DaemonVersion))
 	}
 

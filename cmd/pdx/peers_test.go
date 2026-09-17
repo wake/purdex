@@ -103,7 +103,7 @@ func TestFormatPeersTable(t *testing.T) {
 // the "daemon <version>" trailer.
 func TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
-		{Address: "a/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+		{Address: "a/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Title: "purdex-dev", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
 		{Address: "a/_9x2pq0af:y", RowKind: "entry", Ref: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 		{Address: "a/tmux:shell", RowKind: "session", Reason: "no_agent"},
 	}}
@@ -140,15 +140,15 @@ func headerColumns(header string) []string {
 }
 
 // TestFormatPeersTable_SharedLabelRendersBothRows pins spec 7.1's
-// deliberate first two rows: two conversations may hold the SAME label
-// (D5), because a label is a display name and never a key. Both rows must
-// render, each carrying that label verbatim and its own distinct address --
+// deliberate first two rows: two conversations may hold the SAME title
+// (D5), because a title is a display name and never a key. Both rows must
+// render, each carrying that title verbatim and its own distinct address --
 // the address is what tells them apart, and nothing in the table may
 // suggest one of them "won" the name.
 func TestFormatPeersTable_SharedLabelRendersBothRows(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
-		{Address: "mini-lab/_3k9f2mq4:aigora2-purdex-b0", RowKind: "session", Ref: "_3k9f2mq4", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
-		{Address: "mini-lab/_9x2pq0af:purdex1-purdex-69", RowKind: "session", Ref: "_9x2pq0af", Label: "purdex-tester", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
+		{Address: "mini-lab/_3k9f2mq4:aigora2-purdex-b0", RowKind: "session", Ref: "_3k9f2mq4", Title: "purdex-tester", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "busy"}, Deliverable: true, Cwd: "~/Workspace/wake/purdex"},
+		{Address: "mini-lab/_9x2pq0af:purdex1-purdex-69", RowKind: "session", Ref: "_9x2pq0af", Title: "purdex-tester", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-69", Status: "idle"}, Deliverable: true, Cwd: "~"},
 	}}
 	lines := strings.Split(strings.TrimRight(formatPeersTable(env), "\n"), "\n")
 	if len(lines) < 3 {
@@ -157,7 +157,7 @@ func TestFormatPeersTable_SharedLabelRendersBothRows(t *testing.T) {
 	for i, wantAddr := range []string{"mini-lab/_3k9f2mq4:aigora2-purdex-b0", "mini-lab/_9x2pq0af:purdex1-purdex-69"} {
 		row := lines[i+1]
 		if !strings.HasPrefix(row, "purdex-tester ") {
-			t.Errorf("row %d = %q, want the shared label rendered verbatim and first", i, row)
+			t.Errorf("row %d = %q, want the shared title rendered verbatim and first", i, row)
 		}
 		if !strings.Contains(row, wantAddr) {
 			t.Errorf("row %d = %q, want its own address %q", i, row, wantAddr)
@@ -204,37 +204,37 @@ func TestFormatPeersTable_UnknownRegistryFilesLine(t *testing.T) {
 }
 
 // TestFormatPeersTable_LabelStoreUnavailableLine pins the partial-cause
-// line for a label store read failure (spec §3.3): it is rendered from the
-// envelope's explicit labels_unavailable flag (X4), never inferred from
+// line for a title store read failure (spec §3.3): it is rendered from the
+// envelope's explicit titles_unavailable flag (X4), never inferred from
 // the absence of the other causes.
 func TestFormatPeersTable_LabelStoreUnavailableLine(t *testing.T) {
 	resp := peers.Envelope{
 		OK:                true,
 		Partial:           true,
-		LabelsUnavailable: true,
+		TitlesUnavailable: true,
 		Peers: []peers.PeerRecord{
 			{Address: "alias/sess1", Deliverable: true, Agent: &peers.AgentInfo{Type: "cc"}},
 		},
 	}
 	got := formatPeersTable(resp)
-	if !strings.Contains(got, "(partial: label store unavailable)\n") {
-		t.Errorf("formatPeersTable = %q, want the label-store-unavailable line", got)
+	if !strings.Contains(got, "(partial: title store unavailable)\n") {
+		t.Errorf("formatPeersTable = %q, want the title-store-unavailable line", got)
 	}
 	if strings.Contains(got, "sessions not resolved") || strings.Contains(got, "unknown registry files") {
-		t.Errorf("formatPeersTable = %q, want only the label-store line", got)
+		t.Errorf("formatPeersTable = %q, want only the title-store line", got)
 	}
 
 	// Without the flag, nothing infers it — even though the envelope is
 	// Partial with no other visible cause.
-	resp.LabelsUnavailable = false
-	if got := formatPeersTable(resp); strings.Contains(got, "label store") {
-		t.Errorf("formatPeersTable = %q, want no label-store line without labels_unavailable", got)
+	resp.TitlesUnavailable = false
+	if got := formatPeersTable(resp); strings.Contains(got, "title store") {
+		t.Errorf("formatPeersTable = %q, want no title-store line without titles_unavailable", got)
 	}
 }
 
 // TestFormatPeersTable_AllPartialCauseLines pins that the three partial
 // causes are independent lines, each printed whenever its own signal is
-// set, in the order count / unknown files / label store — none is
+// set, in the order count / unknown files / title store — none is
 // suppressed by another (X3).
 func TestFormatPeersTable_AllPartialCauseLines(t *testing.T) {
 	resp := peers.Envelope{
@@ -242,7 +242,7 @@ func TestFormatPeersTable_AllPartialCauseLines(t *testing.T) {
 		Partial:              true,
 		DaemonVersion:        "1.0.0",
 		UnknownRegistryFiles: []string{"/reg/1.json", "/reg/2.json"},
-		LabelsUnavailable:    true,
+		TitlesUnavailable:    true,
 		Peers: []peers.PeerRecord{
 			{Address: "alias/sess1", Deliverable: false, Reason: "no_agent"},
 			{Address: "alias/sess2"}, // unresolved
@@ -252,7 +252,7 @@ func TestFormatPeersTable_AllPartialCauseLines(t *testing.T) {
 	got := formatPeersTable(resp)
 	want := "(partial: 2 sessions not resolved within budget)\n" +
 		"(partial: unknown registry files: /reg/1.json, /reg/2.json)\n" +
-		"(partial: label store unavailable)\n" +
+		"(partial: title store unavailable)\n" +
 		"daemon 1.0.0\n"
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("formatPeersTable = %q, want it to end with %q", got, want)
@@ -298,7 +298,7 @@ func TestFormatPeersTable_EscapesControlCharacters(t *testing.T) {
 			{
 				Address:  "alias/sess1",
 				RowKind:  "session",
-				Label:    "t\x1b[32mz",
+				Title:    "t\x1b[32mz",
 				TmuxName: "x\x1b[31my",
 				Agent: &peers.AgentInfo{
 					Type:     "cc",
@@ -805,7 +805,7 @@ func TestFormatPeersAllTable_HostThenTitleThenAddress(t *testing.T) {
 		{
 			Alias: "local", OK: true, DaemonVersion: "1.0.0-alpha.342",
 			Peers: []peers.PeerRecord{
-				{Address: "local/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
+				{Address: "local/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Title: "purdex-dev", TitleSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
 				{Address: "local/_9x2pq0af:y", RowKind: "entry", Ref: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
 			},
 		},
@@ -839,8 +839,8 @@ func TestFormatPeersAllTable_HostThenTitleThenAddress(t *testing.T) {
 
 // TestFormatPeersAllTable_PartialCauseLines pins the per-host
 // partial-cause lines: an alias-prefixed unknown-registry-files line for
-// the host that has one, and an alias-prefixed label-store-unavailable
-// line for the host whose envelope says labels_unavailable — each placed
+// the host that has one, and an alias-prefixed title-store-unavailable
+// line for the host whose envelope says titles_unavailable — each placed
 // ahead of that host's own daemon trailer.
 func TestFormatPeersAllTable_PartialCauseLines(t *testing.T) {
 	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
@@ -853,7 +853,7 @@ func TestFormatPeersAllTable_PartialCauseLines(t *testing.T) {
 		{
 			Alias: "air", OK: true, DaemonVersion: "1.0.1",
 			Partial:           true,
-			LabelsUnavailable: true,
+			TitlesUnavailable: true,
 			Peers:             []peers.PeerRecord{{Address: "air/sess1", Deliverable: true, Agent: &peers.AgentInfo{Type: "cc"}}},
 		},
 		{Alias: "down", OK: false, Error: "connection refused", Peers: []peers.PeerRecord{}},
@@ -862,8 +862,8 @@ func TestFormatPeersAllTable_PartialCauseLines(t *testing.T) {
 	if !strings.Contains(got, "local  (partial: unknown registry files: /reg/9999.json)\n") {
 		t.Errorf("formatPeersAllTable = %q, want local's unknown-registry-files line", got)
 	}
-	if !strings.Contains(got, "air  (partial: label store unavailable)\n") {
-		t.Errorf("formatPeersAllTable = %q, want air's label-store-unavailable line", got)
+	if !strings.Contains(got, "air  (partial: title store unavailable)\n") {
+		t.Errorf("formatPeersAllTable = %q, want air's title-store-unavailable line", got)
 	}
 	if strings.Contains(got, "down  (partial:") {
 		t.Errorf("formatPeersAllTable = %q, want no partial line for the unreachable host", got)
@@ -893,21 +893,21 @@ func TestFormatPeersAllTable_OwnerOnlyPartialPrintsCount(t *testing.T) {
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("formatPeersAllTable = %q, want it to end with %q", got, want)
 	}
-	if strings.Contains(got, "label store") || strings.Contains(got, "unknown registry") {
+	if strings.Contains(got, "title store") || strings.Contains(got, "unknown registry") {
 		t.Errorf("formatPeersAllTable = %q, want only the count line", got)
 	}
 }
 
 // TestFormatPeersAllTable_AllPartialCauseLines pins that --all prints
 // every applicable cause line per host, alias-prefixed, in the order
-// count / unknown files / label store, ahead of that host's trailer —
+// count / unknown files / title store, ahead of that host's trailer —
 // the same renderer the single-host table uses.
 func TestFormatPeersAllTable_AllPartialCauseLines(t *testing.T) {
 	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
 		{
 			Alias: "local", OK: true, DaemonVersion: "1.0.0", Partial: true,
 			UnknownRegistryFiles: []string{"/reg/1.json"},
-			LabelsUnavailable:    true,
+			TitlesUnavailable:    true,
 			Peers: []peers.PeerRecord{
 				{Address: "local/sess1"}, // unresolved
 			},
@@ -917,7 +917,7 @@ func TestFormatPeersAllTable_AllPartialCauseLines(t *testing.T) {
 	got := formatPeersAllTable(resp)
 	want := "local  (partial: 1 sessions not resolved within budget)\n" +
 		"local  (partial: unknown registry files: /reg/1.json)\n" +
-		"local  (partial: label store unavailable)\n" +
+		"local  (partial: title store unavailable)\n" +
 		"local  daemon 1.0.0\n" +
 		"air  daemon 1.0.1\n"
 	if !strings.HasSuffix(got, want) {
@@ -1440,7 +1440,7 @@ func v4TableFixture() peers.Envelope {
 			Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "idle"}, Deliverable: true},
 		{Address: "mlab/purdex-53", Ref: "_d8dc4a", RowKind: "session",
 			SessionName: "purdex7", TmuxName: "purdex7", Cwd: "~",
-			Label: "Purdex Tester 01",
+			Title: "Purdex Tester 01",
 			Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-53", Status: "busy"}, Deliverable: true},
 		{Address: "mlab/_df25d0", Ref: "_df25d0", RowKind: "session",
 			SessionName: "nexen", TmuxName: "nexen", Cwd: "~",

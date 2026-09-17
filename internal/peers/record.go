@@ -40,9 +40,9 @@ type PeerRecord struct {
 	// has no cc agent. It is the one part of an address that cannot drift, and
 	// what Resolve falls back to when a name does.
 	Ref          string `json:"ref"`
-	Label        string `json:"label"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
-	LabelSource  string `json:"label_source"` // user | ""
-	LabelRev     int64  `json:"label_rev"`
+	Title        string `json:"title"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
+	TitleSource  string `json:"title_source"` // user | ""
+	TitleRev     int64  `json:"title_rev"`
 	SessionCode  string `json:"session_code"`  // always present
 	SessionName  string `json:"session_name"`  // always present
 	TmuxInstance string `json:"tmux_instance"` // always present
@@ -79,11 +79,11 @@ func (r PeerRecord) WireAddress() string {
 	return r.Ref
 }
 
-// LabelInfo is what the label store (Task 3) knows about one conversation:
-// the user label ("" ⇒ the conversation has not named itself, and nothing
-// is substituted for it) and the label row's revision.
-type LabelInfo struct {
-	Label string
+// TitleInfo is what the title store (Task 3) knows about one conversation:
+// the user title ("" ⇒ the conversation has not named itself, and nothing
+// is substituted for it) and the title row's revision.
+type TitleInfo struct {
+	Title string
 	Rev   int64
 }
 
@@ -97,12 +97,12 @@ type BuildInput struct {
 	Unresolved    map[string]bool  // codes whose owner lookup did not run
 	Entries       []Entry
 	ProxyPIDs     map[int]bool         // empty in P1; kept so P3 needs no signature change
-	Labels        map[string]LabelInfo // by sessionId; absent ⇒ no label, rev 0
-	// LabelsUnavailable says the label snapshot in Labels could NOT be
-	// read. Under v3 that costs display only: Labels feeds Label and
-	// LabelRev, and nothing else. Every address is built from the registry
+	Titles        map[string]TitleInfo // by sessionId; absent ⇒ no title, rev 0
+	// TitlesUnavailable says the title snapshot in Titles could NOT be
+	// read. Under v3 that costs display only: Titles feeds Title and
+	// TitleRev, and nothing else. Every address is built from the registry
 	// name and RefID(sessionID) — never from this store — so an
-	// unreadable label store cannot make a single address wrong, late or
+	// unreadable title store cannot make a single address wrong, late or
 	// ambiguous. The rows simply render without their display names.
 	//
 	// (Under v2 this flag gated address correctness: a default label was
@@ -110,8 +110,8 @@ type BuildInput struct {
 	// so an unreadable row could hold the very name another row was about
 	// to advertise. D2 removed that input, and Build no longer branches on
 	// this field at all. It is kept because it rides on the wire envelope,
-	// where it still tells a consumer why the label column is blank.)
-	LabelsUnavailable bool
+	// where it still tells a consumer why the title column is blank.)
+	TitlesUnavailable bool
 }
 
 // Build joins sessions, owners and registry entries into PeerRecords. It is
@@ -196,7 +196,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 
 	// From here the owner IS a cc conversation, so every remaining branch
 	// sets a cc Agent (full entry info, or the owner-only fallback) and
-	// calls applyIdentity to render Ref/Label/Address (v4 spec §5.3).
+	// calls applyIdentity to render Ref/Title/Address (v4 spec §5.3).
 	//
 	// Every branch, fallbacks included, passes RefID(owner.SessionID) with no
 	// special case and no population to consult: the ref is a pure function of
@@ -219,18 +219,18 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	case 0:
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "inbox_dead"
-		applyIdentity(&rec, in.Alias, in.Labels[owner.SessionID], RefID(owner.SessionID), "")
+		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 		return rec, Entry{}, false
 	case 1:
 		if consumed[candidates[0]] {
 			rec.Agent = ownerFallbackAgent(owner)
 			rec.Reason = "ambiguous"
-			applyIdentity(&rec, in.Alias, in.Labels[owner.SessionID], RefID(owner.SessionID), "")
+			applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 			return rec, Entry{}, false
 		}
 		rec.Agent = agentInfoFromEntry(candidates[0])
 		rec.Deliverable = true
-		applyIdentity(&rec, in.Alias, in.Labels[owner.SessionID], RefID(owner.SessionID), candidates[0].Name)
+		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), candidates[0].Name)
 		return rec, candidates[0], true
 	default:
 		var paneMatches []Entry
@@ -243,22 +243,22 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			if consumed[paneMatches[0]] {
 				rec.Agent = ownerFallbackAgent(owner)
 				rec.Reason = "ambiguous"
-				applyIdentity(&rec, in.Alias, in.Labels[owner.SessionID], RefID(owner.SessionID), "")
+				applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 				return rec, Entry{}, false
 			}
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
 			rec.Deliverable = true
-			applyIdentity(&rec, in.Alias, in.Labels[owner.SessionID], RefID(owner.SessionID), paneMatches[0].Name)
+			applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), paneMatches[0].Name)
 			return rec, paneMatches[0], true
 		}
 		rec.Agent = ownerFallbackAgent(owner)
 		rec.Reason = "ambiguous"
-		applyIdentity(&rec, in.Alias, in.Labels[owner.SessionID], RefID(owner.SessionID), "")
+		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 		return rec, Entry{}, false
 	}
 }
 
-// applyIdentity fills Ref/Label/LabelSource/LabelRev/Address/Reason for a row
+// applyIdentity fills Ref/Title/TitleSource/TitleRev/Address/Reason for a row
 // whose agent is a cc conversation. It is the single writer of those fields,
 // which is what makes the spec's invariant table checkable in one place.
 //
@@ -272,16 +272,16 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 // form matches their being unreachable anyway. "" is not a Reason-worthy
 // event for them, so only a non-empty unroutable name sets one.
 //
-// info.Rev is carried straight through: it is still the LABEL's revision. It
+// info.Rev is carried straight through: it is still the TITLE's revision. It
 // does not imply an address change.
-func applyIdentity(rec *PeerRecord, alias string, info LabelInfo, ref, ccName string) {
+func applyIdentity(rec *PeerRecord, alias string, info TitleInfo, ref, ccName string) {
 	rec.Ref = ref
-	if info.Label != "" {
-		rec.Label, rec.LabelSource = info.Label, LabelSourceUser
+	if info.Title != "" {
+		rec.Title, rec.TitleSource = info.Title, TitleSourceUser
 	} else {
-		rec.Label, rec.LabelSource = "", ""
+		rec.Title, rec.TitleSource = "", ""
 	}
-	rec.LabelRev = info.Rev
+	rec.TitleRev = info.Rev
 	if RoutableName(ccName) {
 		rec.Address = alias + "/" + ccName
 		return
@@ -320,7 +320,7 @@ func agentInfoFromEntry(e Entry) *AgentInfo {
 
 // EntryRecord is the row of one live registry entry that no session row
 // consumed (Peer Address v2 spec §3.4). Task 7 also uses it to answer
-// whoami/claim/release straight from the validated entry and label row, so
+// whoami/claim/release straight from the validated entry and title row, so
 // the address it renders must be identical to the listing's: a proxy entry
 // keeps the unresolvable "alias/cc:<name>" form (unchanged from rule 5); a
 // live cc entry gets the same address applyIdentity gives a session row,
@@ -331,7 +331,7 @@ func agentInfoFromEntry(e Entry) *AgentInfo {
 // the listing building from the whole registry cannot disagree about the
 // caller's own address (v4 spec §5.3). That agreement used to require passing
 // the same resolved default-label map to both.
-func EntryRecord(alias, hostID string, e Entry, proxy bool, info LabelInfo) PeerRecord {
+func EntryRecord(alias, hostID string, e Entry, proxy bool, info TitleInfo) PeerRecord {
 	agent := agentInfoFromEntry(e)
 	rec := PeerRecord{
 		Host: alias, HostID: hostID, RowKind: "entry",
@@ -372,7 +372,7 @@ func buildEntryRecords(in BuildInput, consumed map[Entry]bool) []PeerRecord {
 		if consumed[e] {
 			continue
 		}
-		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Labels[e.SessionID])
+		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Titles[e.SessionID])
 		candidates = append(candidates, entryCandidate{rec: rec, peerName: e.Name, pid: e.PID})
 	}
 

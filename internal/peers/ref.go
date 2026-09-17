@@ -11,9 +11,9 @@ import (
 	"unicode/utf8"
 )
 
-// Label rules (Peer Address v2 spec §3.1).
+// Title source, and the legacy v2 label rules Resolve still short-circuits.
 const (
-	LabelSourceUser = "user"
+	TitleSourceUser = "user"
 
 	// LabelReservedCC / LabelReservedTmux are refused as labels and
 	// short-circuited by Resolve so "cc:<x>" and "tmux:<x>" never parse as

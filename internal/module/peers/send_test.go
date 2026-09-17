@@ -703,7 +703,7 @@ func TestSend_Ambiguous(t *testing.T) {
 	b := remoteRow("", "")
 	b.Agent.PID = 778
 	a.Ref, b.Ref = canonical, canonical
-	a.Label, b.Label = "purdex-tester", "purdex-tester-2"
+	a.Title, b.Title = "purdex-tester", "purdex-tester-2"
 	// What the operator needs in order to tell the two apart, and what the
 	// refusal must therefore carry (spec §4.1/§6.4): agent name, pid, cwd.
 	// The address is exactly the thing that cannot do it — they share it.
@@ -729,10 +729,10 @@ func TestSend_Ambiguous(t *testing.T) {
 	}
 }
 
-// TestSend_AddressRevIsZeroAfterRelabel pins spec §4.4: LabelRev keeps
+// TestSend_AddressRevIsZeroAfterRelabel pins spec §4.4: TitleRev keeps
 // counting label changes, but a v3 address cannot change, so the revision
 // a v3 sender reports for its ADDRESS is 0 — permanently, however many
-// times the conversation has renamed itself. Sending LabelRev there (the
+// times the conversation has renamed itself. Sending TitleRev there (the
 // old wireFromRecord) announced an address change that never happened,
 // and the receiver's stale-rev/helper-rename path believed it.
 func TestSend_AddressRevIsZeroAfterRelabel(t *testing.T) {
@@ -747,8 +747,8 @@ func TestSend_AddressRevIsZeroAfterRelabel(t *testing.T) {
 	if res.err != nil {
 		t.Fatalf("second claim: %+v", res.err)
 	}
-	if res.rec.LabelRev != 2 || res.rec.Label != "purdex-tester-2" {
-		t.Fatalf("after re-claim: label %q rev %d, want purdex-tester-2 rev 2", res.rec.Label, res.rec.LabelRev)
+	if res.rec.TitleRev != 2 || res.rec.Title != "purdex-tester-2" {
+		t.Fatalf("after re-claim: label %q rev %d, want purdex-tester-2 rev 2", res.rec.Title, res.rec.TitleRev)
 	}
 
 	s.sendOK(s.sendReq())
@@ -838,7 +838,7 @@ func TestSend_RemoteTooOld(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	v2 := remoteRow(remoteSession, "fooc")
 	v2.Ref = "" // a pre-v3 daemon has never heard of the field
-	v2.Label, v2.LabelSource = "purdex-tester", "user"
+	v2.Title, v2.TitleSource = "purdex-tester", "user"
 	v2.Address = remoteAlias + "/purdex-tester:foo-purdex-b0"
 	s.env = remoteEnvelope(v2)
 
@@ -926,7 +926,7 @@ func deadHolderRows(t *testing.T, tmuxName string, spansTwoTmuxSessions bool) []
 			PID: remotePID, SessionID: remoteSessionID, Name: remoteSession, Cwd: "/w",
 			Tmux: tmuxName + ":@1.%2", Inbox: "/tmp/cc-socks/777.sock", ProcStart: remoteProcStart, Version: "2.1.270", Status: "idle",
 		}},
-		Labels: map[string]ipeers.LabelInfo{deadSID: {Label: tmuxName, Rev: 3}},
+		Titles: map[string]ipeers.TitleInfo{deadSID: {Title: tmuxName, Rev: 3}},
 	}
 	if spansTwoTmuxSessions {
 		in.Sessions = append(in.Sessions, ipeers.SessionSummary{Code: "elsec", Name: deadHolderSpanTmuxName, Cwd: "/w"})
@@ -961,13 +961,13 @@ func TestSend_DeadHolderLabelFallsToTmuxSession(t *testing.T) {
 	for _, r := range rows {
 		switch {
 		case r.SessionName == "stale":
-			sawDead = r.Reason == "inbox_dead" && r.Label == deadHolderTmuxName && r.Agent != nil && r.Agent.PID == 0
+			sawDead = r.Reason == "inbox_dead" && r.Title == deadHolderTmuxName && r.Agent != nil && r.Agent.PID == 0
 		case r.SessionName == deadHolderTmuxName:
 			// Spelled out rather than "anything but the name": the tier-2
 			// path exists only while nothing LIVE holds the label, so a
 			// fixture change that quietly labels this row fails here
 			// instead of silently retargeting the test at tier 1.
-			sawLive = r.Deliverable && r.Label == "" && r.Ref == ipeers.RefID(remoteSessionID)
+			sawLive = r.Deliverable && r.Title == "" && r.Ref == ipeers.RefID(remoteSessionID)
 		}
 	}
 	if !sawDead || !sawLive {
@@ -1000,7 +1000,7 @@ func TestSend_SingleHitUnderUnknownRegistryFileNotReady(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	row := remoteRow("", "")
 	row.Ref = ipeers.RefID(remoteSessionID)
-	row.Label, row.LabelSource = "purdex-tester", "user"
+	row.Title, row.TitleSource = "purdex-tester", "user"
 	s.set(func(s *sendEnv) {
 		s.env = ipeers.Envelope{HostID: remoteHostID, OK: true, Partial: true, Peers: []ipeers.PeerRecord{row},
 			UnknownRegistryFiles: []string{"/reg/778.json"}}
@@ -1163,7 +1163,7 @@ func TestSend_ErrorSteps(t *testing.T) {
 			// non-retryable 400 origin_unknown even while the label
 			// store is down, never 503 not_ready.
 			name:    "origin unknown path: label-store failure alone stays origin_unknown",
-			prepare: func(s *sendEnv) { s.m.labels = failingLabels{} },
+			prepare: func(s *sendEnv) { s.m.titles = failingTitles{} },
 			mutate:  func(r *ipeers.SendRequest) { r.OriginInbox = "/nonexistent/x.sock" },
 			status:  http.StatusBadRequest, code: ipeers.ErrOriginUnknown,
 		},

@@ -131,7 +131,7 @@ type moduleFixture struct {
 	proxiesPath string
 	fake        *proxyhelpertest.Fake
 	audit       *fakeAudit
-	labels      *store.PeerLabelStore
+	titles      *store.PeerLabelStore
 	logs        *logSink
 	frames      chan frameEvent // every onFrame call the manager makes
 	clock       *fakeClock
@@ -173,7 +173,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 	}
 	t.Cleanup(func() { meta.Close() })
 	f.audit = &fakeAudit{real: meta.PeerMessages()}
-	f.labels = meta.PeerLabels()
+	f.titles = meta.PeerLabels()
 
 	// fakeClock is not goroutine-safe and the helper manager reads the
 	// clock from its own goroutines: one mutex-guarded accessor feeds
@@ -199,7 +199,7 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 		fetch:            fetchRemote,
 		logf:             f.logs.logf,
 		audit:            f.audit,
-		labels:           f.labels,
+		titles:           f.titles,
 		dedup:            newDedupSet(ipeers.DedupWindow, now),
 		pairs:            newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, now),
 		hostLimit:        newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, now),
@@ -1582,7 +1582,7 @@ func newLabelJoinFixture(t *testing.T) *moduleFixture {
 // (here empty) unknown_registry_files list.
 func TestLocalEnvelope_LabelsJoinedAndVersion(t *testing.T) {
 	f := newLabelJoinFixture(t)
-	if _, err := f.labels.Claim("sid-1", "purdex-dev", time.Now()); err != nil {
+	if _, err := f.titles.Claim("sid-1", "purdex-dev", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1604,7 +1604,7 @@ func TestLocalEnvelope_LabelsJoinedAndVersion(t *testing.T) {
 	if rec == nil {
 		t.Fatalf("mt0 record not found in peers: %+v", env.Peers)
 	}
-	if rec.Label != "purdex-dev" || rec.LabelSource != ipeers.LabelSourceUser || rec.LabelRev != 1 {
+	if rec.Title != "purdex-dev" || rec.TitleSource != ipeers.TitleSourceUser || rec.TitleRev != 1 {
 		t.Errorf("row = %+v, want label purdex-dev/user/rev 1", rec)
 	}
 }
@@ -1641,38 +1641,38 @@ func TestLocalEnvelope_UnknownRegistryFileMarksPartial(t *testing.T) {
 // TestLocalEnvelope_LabelStoreFailureIsPartial pins that a label store
 // Snapshot failure marks the response partial (the label column is now
 // unknown, so the rows are not the whole truth), signals it explicitly as
-// labels_unavailable (X4 — the CLI renders the cause from this flag, never
+// titles_unavailable (X4 — the CLI renders the cause from this flag, never
 // by inference from the other partial causes) and logs once, without
 // touching UnknownRegistryFiles.
 func TestLocalEnvelope_LabelStoreFailureIsPartial(t *testing.T) {
 	f := newLabelJoinFixture(t)
-	f.m.labels = failingLabels{}
+	f.m.titles = failingTitles{}
 
 	env := f.m.localEnvelope(context.Background(), "h:1", "a")
 
 	if !env.Partial {
 		t.Fatal("partial = false, want true on label store failure")
 	}
-	if !env.LabelsUnavailable {
-		t.Error("labels_unavailable = false, want true on label store failure")
+	if !env.TitlesUnavailable {
+		t.Error("titles_unavailable = false, want true on label store failure")
 	}
 	if len(env.UnknownRegistryFiles) != 0 {
 		t.Errorf("unknown_registry_files = %v, want none", env.UnknownRegistryFiles)
 	}
 	for _, r := range env.Peers {
-		if r.Agent != nil && r.Agent.Type == "cc" && (r.Label != "" || r.LabelSource != "") {
-			t.Errorf("row %s label/source = %q/%q, want both empty: the store that holds them is unreadable", r.Address, r.Label, r.LabelSource)
+		if r.Agent != nil && r.Agent.Type == "cc" && (r.Title != "" || r.TitleSource != "") {
+			t.Errorf("row %s label/source = %q/%q, want both empty: the store that holds them is unreadable", r.Address, r.Title, r.TitleSource)
 		}
 	}
-	if !f.logs.contains("label store") {
-		t.Error("expected one log line about the label store")
+	if !f.logs.contains("title store") {
+		t.Error("expected one log line about the title store")
 	}
 }
 
 // TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged is the v3
 // inversion of the test that used to live here. Under v2 an unreadable
 // label store changed what every row was reachable AT, so localEnvelope
-// had to hand Build LabelsUnavailable to suppress the tmux-derived
+// had to hand Build TitlesUnavailable to suppress the tmux-derived
 // defaults. Under D2 the store feeds the label column and nothing else:
 // the same fixture must render byte-identical addresses whether the store
 // reads or fails, and only the label column goes blank.
@@ -1689,7 +1689,7 @@ func TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged(t *testing.T) {
 	}
 
 	f := newLabelJoinFixture(t)
-	f.m.labels = failingLabels{}
+	f.m.titles = failingTitles{}
 
 	env := f.m.localEnvelope(context.Background(), "h:1", "a")
 
@@ -1712,7 +1712,7 @@ func TestLocalEnvelope_LabelStoreFailureLeavesAddressesUnchanged(t *testing.T) {
 }
 
 // TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy pins the negative:
-// a healthy (or absent) label store never sets labels_unavailable, even
+// a healthy (or absent) label store never sets titles_unavailable, even
 // when the response is partial for another reason.
 func TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy(t *testing.T) {
 	f := newLabelJoinFixture(t)
@@ -1723,8 +1723,8 @@ func TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy(t *testing.T) {
 	if !env.Partial || len(env.UnknownRegistryFiles) != 1 {
 		t.Fatalf("partial=%v unknown=%v, want partial with one unknown file", env.Partial, env.UnknownRegistryFiles)
 	}
-	if env.LabelsUnavailable {
-		t.Error("labels_unavailable = true, want false: the label store read succeeded")
+	if env.TitlesUnavailable {
+		t.Error("titles_unavailable = true, want false: the label store read succeeded")
 	}
 }
 
@@ -1734,7 +1734,7 @@ func TestLocalEnvelope_LabelsAvailableFlagFalseWhenHealthy(t *testing.T) {
 // own field, on one partial envelope.
 func TestLocalEnvelope_LabelStoreFailureAndUnknownFile_BothSignalled(t *testing.T) {
 	f := newLabelJoinFixture(t)
-	f.m.labels = failingLabels{}
+	f.m.titles = failingTitles{}
 	writeRegistryFixture(t, f.registryDir, "4242.json", "{")
 
 	env := f.m.localEnvelope(context.Background(), "h:1", "a")
@@ -1742,8 +1742,8 @@ func TestLocalEnvelope_LabelStoreFailureAndUnknownFile_BothSignalled(t *testing.
 	if !env.Partial {
 		t.Fatal("partial = false, want true")
 	}
-	if !env.LabelsUnavailable {
-		t.Error("labels_unavailable = false, want true")
+	if !env.TitlesUnavailable {
+		t.Error("titles_unavailable = false, want true")
 	}
 	if len(env.UnknownRegistryFiles) != 1 || !strings.HasSuffix(env.UnknownRegistryFiles[0], "4242.json") {
 		t.Errorf("unknown_registry_files = %v, want the one unknown file", env.UnknownRegistryFiles)
@@ -1751,16 +1751,16 @@ func TestLocalEnvelope_LabelStoreFailureAndUnknownFile_BothSignalled(t *testing.
 }
 
 // TestAllEnvelope_LabelsUnavailableCopiedThrough pins that scope=all
-// carries labels_unavailable on both kinds of row: the local row copies
+// carries titles_unavailable on both kinds of row: the local row copies
 // localEnvelope's flag, and a remote host's row copies the flag the remote
 // envelope reported (fetchHostResult), next to its unknown files.
 func TestAllEnvelope_LabelsUnavailableCopiedThrough(t *testing.T) {
 	f := newLabelJoinFixture(t)
-	f.m.labels = failingLabels{}
+	f.m.titles = failingTitles{}
 	f.m.fetch = func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error) {
 		return ipeers.Envelope{
 			HostID: "air:111", OK: true, Partial: true, Peers: []ipeers.PeerRecord{},
-			UnknownRegistryFiles: []string{"/reg/9.json"}, LabelsUnavailable: true,
+			UnknownRegistryFiles: []string{"/reg/9.json"}, TitlesUnavailable: true,
 		}, nil
 	}
 	hosts := []config.PeerHost{{Alias: "air", URL: "http://air.invalid", Token: "tok", HostID: "air:111"}}
@@ -1771,38 +1771,38 @@ func TestAllEnvelope_LabelsUnavailableCopiedThrough(t *testing.T) {
 		t.Fatalf("hosts = %+v, want 2 rows", all.Hosts)
 	}
 	local, remote := all.Hosts[0], all.Hosts[1]
-	if !local.OK || !local.Partial || !local.LabelsUnavailable {
-		t.Errorf("local row = ok %v partial %v labels_unavailable %v, want true/true/true", local.OK, local.Partial, local.LabelsUnavailable)
+	if !local.OK || !local.Partial || !local.TitlesUnavailable {
+		t.Errorf("local row = ok %v partial %v titles_unavailable %v, want true/true/true", local.OK, local.Partial, local.TitlesUnavailable)
 	}
-	if !remote.OK || !remote.Partial || !remote.LabelsUnavailable {
-		t.Errorf("remote row = ok %v partial %v labels_unavailable %v, want true/true/true", remote.OK, remote.Partial, remote.LabelsUnavailable)
+	if !remote.OK || !remote.Partial || !remote.TitlesUnavailable {
+		t.Errorf("remote row = ok %v partial %v titles_unavailable %v, want true/true/true", remote.OK, remote.Partial, remote.TitlesUnavailable)
 	}
 	if len(remote.UnknownRegistryFiles) != 1 || remote.UnknownRegistryFiles[0] != "/reg/9.json" {
-		t.Errorf("remote unknown_registry_files = %v, want the reported file alongside labels_unavailable", remote.UnknownRegistryFiles)
+		t.Errorf("remote unknown_registry_files = %v, want the reported file alongside titles_unavailable", remote.UnknownRegistryFiles)
 	}
 }
 
-// failingLabels is a LabelStore whose every method fails: it stands in for
+// failingTitles is a TitleStore whose every method fails: it stands in for
 // a label store that is configured but unreachable (a locked/corrupt DB).
-type failingLabels struct{}
+type failingTitles struct{}
 
-func (failingLabels) Snapshot() ([]store.PeerLabel, error) { return nil, errors.New("boom") }
-func (failingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+func (failingTitles) Snapshot() ([]store.PeerLabel, error) { return nil, errors.New("boom") }
+func (failingTitles) Claim(string, string, time.Time) (store.PeerLabel, error) {
 	return store.PeerLabel{}, errors.New("boom")
 }
-func (failingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+func (failingTitles) Release(string, time.Time) (store.PeerLabel, bool, error) {
 	return store.PeerLabel{}, false, errors.New("boom")
 }
 
-// writeFailingLabels reads fine but cannot write (Task 7 uses it for the
+// writeFailingTitles reads fine but cannot write (Task 7 uses it for the
 // claim/release write-failure rows of the matrix).
-type writeFailingLabels struct{ real *store.PeerLabelStore }
+type writeFailingTitles struct{ real *store.PeerLabelStore }
 
-func (w writeFailingLabels) Snapshot() ([]store.PeerLabel, error) { return w.real.Snapshot() }
-func (writeFailingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+func (w writeFailingTitles) Snapshot() ([]store.PeerLabel, error) { return w.real.Snapshot() }
+func (writeFailingTitles) Claim(string, string, time.Time) (store.PeerLabel, error) {
 	return store.PeerLabel{}, errors.New("disk full")
 }
-func (writeFailingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+func (writeFailingTitles) Release(string, time.Time) (store.PeerLabel, bool, error) {
 	return store.PeerLabel{}, false, errors.New("disk full")
 }
 

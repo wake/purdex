@@ -157,10 +157,10 @@ func findOrigin(records []ipeers.PeerRecord, inbox string) (rec ipeers.PeerRecor
 // receiver) plus the address, "<canonical>:<suffix>", which a v2 receiver
 // names the sender's helper after.
 //
-// AddressRev is 0, always, and is NOT rec.LabelRev (spec §4.4). LabelRev
-// still counts how many times this conversation has set its label, but a
+// AddressRev is 0, always, and is NOT rec.TitleRev (spec §4.4). TitleRev
+// still counts how many times this conversation has set its title, but a
 // v3 address is derived from the sessionId and cannot move: putting the
-// label's revision in the ADDRESS's revision claims a change that never
+// title's revision in the ADDRESS's revision claims a change that never
 // happened. The field stays on the wire because v2 senders still populate
 // it, and deliver.go's stale-rev guard still protects against a v2 peer's
 // address changing — for a v3 origin that path is simply never armed.

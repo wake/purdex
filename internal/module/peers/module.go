@@ -139,15 +139,15 @@ type Module struct {
 	fetch       fetchFunc                        // default fetchRemote; test seam
 	logf        func(format string, args ...any) // default log.Printf; test seam
 
-	// labels is the peer_labels store (Task 3/7): Snapshot joins into every
+	// titles is the peer_labels store (Task 3/7): Snapshot joins into every
 	// inventory build (localEnvelope, unguarded — a plain read with no
-	// ordering requirement of its own); the self routes (labels.go —
-	// whoami, claim, release) read and write it under labelMu, held across
+	// ordering requirement of its own); the self routes (titles.go —
+	// whoami, claim, release) read and write it under titleMu, held across
 	// the whole verb (origin/registry read through the store call and the
 	// response construction), even whoami's own Snapshot-only read, so a
 	// concurrent claim/release can never interleave with it.
-	labels  LabelStore
-	labelMu sync.Mutex
+	titles  TitleStore
+	titleMu sync.Mutex
 
 	// Inbound delivery (deliver.go) and its collaborators.
 	audit            AuditStore     // nil ⇒ audit_unavailable on every deliver
@@ -182,12 +182,12 @@ type Module struct {
 
 // New constructs a peers Module with production defaults over audit (the
 // meta store's PeerMessages; nil disables delivery with audit_unavailable)
-// and labels (the meta store's PeerLabels; nil means every conversation has
-// its default label and claims fail with store_unavailable). Collaborators
+// and titles (the meta store's PeerLabels; nil means every conversation has
+// no title at all and claims fail with store_unavailable). Collaborators
 // (sessions, owners) and the helper manager are wired in Init: the manager
 // needs the config's data dir and the daemon's own executable path, neither
 // of which belongs in a constructor.
-func New(audit AuditStore, labels LabelStore) *Module {
+func New(audit AuditStore, titles TitleStore) *Module {
 	registryDir := filepath.Join(".claude", "sessions")
 	if home, err := os.UserHomeDir(); err == nil {
 		registryDir = filepath.Join(home, ".claude", "sessions")
@@ -202,7 +202,7 @@ func New(audit AuditStore, labels LabelStore) *Module {
 		fetch:            fetchRemote,
 		logf:             log.Printf,
 		audit:            audit,
-		labels:           labels,
+		titles:           titles,
 		writeFrame:       ccuds.WriteFrame,
 		sockWriteTimeout: ipeers.SocketWriteTimeout,
 		newMsgID:         uuid.NewString,
@@ -337,7 +337,7 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 // hostID/alias: the response body for scope unset/"local", and the local
 // row's peers/ok/partial/error for scope=all. It never touches CfgMu itself
 // — the caller (handlePeers) takes the one config snapshot for the whole
-// request, so the local row's labels and the host/host_id embedded in its
+// request, so the local row's titles and the host/host_id embedded in its
 // own Peers records are always built from the same values.
 func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers.Envelope {
 	deadline := m.now().Add(m.budget)
@@ -427,22 +427,22 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		unknown = []string{}
 	}
 
-	// The label snapshot (Task 3's peer_labels table) is joined the same
+	// The title snapshot (Task 3's peer_labels table) is joined the same
 	// way: a nil store or a read failure never blocks the inventory build
 	// (every row still gets its address, which is derived from the
 	// registry and owes the store nothing), but a failed read is reported
 	// the same way a failed owner lookup is — this response is showing a
-	// blank label column it cannot vouch for — and signalled on its own as
-	// labels_unavailable, so a consumer (pdx peers, the SPA) names the
+	// blank title column it cannot vouch for — and signalled on its own as
+	// titles_unavailable, so a consumer (pdx peers, the SPA) names the
 	// cause instead of inferring it from the absence of the other two
 	// partial causes.
-	labels, labelsErr := m.labelSnapshot()
-	if labelsErr != nil {
-		m.logf("peers: inventory: label store unavailable, reporting rows without labels: %v", labelsErr)
+	titles, titlesErr := m.titleSnapshot()
+	if titlesErr != nil {
+		m.logf("peers: inventory: title store unavailable, reporting rows without titles: %v", titlesErr)
 	}
-	labelsUnavailable := labelsErr != nil
+	titlesUnavailable := titlesErr != nil
 
-	partial := len(unresolved) > 0 || len(unknown) > 0 || labelsUnavailable
+	partial := len(unresolved) > 0 || len(unknown) > 0 || titlesUnavailable
 
 	// This daemon's own helpers are hidden as proxy rows by pid (their
 	// registry entries are otherwise indistinguishable from a Claude Code
@@ -460,13 +460,13 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Unresolved: unresolved,
 		Entries:    entries,
 		ProxyPIDs:  proxyPIDs,
-		Labels:     labels,
-		// An empty label map means "unreadable", not "no user labels".
+		Titles:     titles,
+		// An empty title map means "unreadable", not "no user titles".
 		// Build does not branch on this: it is passed through so the flag
 		// travels with the rows it explains, telling a consumer why their
-		// label column is blank. It says nothing about their addresses,
-		// which the label store never had a part in.
-		LabelsUnavailable: labelsUnavailable,
+		// title column is blank. It says nothing about their addresses,
+		// which the title store never had a part in.
+		TitlesUnavailable: titlesUnavailable,
 	})
 
 	return ipeers.Envelope{
@@ -476,26 +476,26 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Peers:                peerRecords,
 		DaemonVersion:        buildinfo.Version,
 		UnknownRegistryFiles: unknown,
-		LabelsUnavailable:    labelsUnavailable,
+		TitlesUnavailable:    titlesUnavailable,
 	}
 }
 
-// labelSnapshot reads the label table into Build's map. A nil store is an
+// titleSnapshot reads the title table into Build's map. A nil store is an
 // empty map and no error (Peer Address v2 has never been configured with a
-// label store, which is not this inventory's trouble); a read error is
+// title store, which is not this inventory's trouble); a read error is
 // returned so the caller can mark the response partial — the rows it
-// renders below then carry no label at all, same as an absent row.
-func (m *Module) labelSnapshot() (map[string]ipeers.LabelInfo, error) {
-	out := map[string]ipeers.LabelInfo{}
-	if m.labels == nil {
+// renders below then carry no title at all, same as an absent row.
+func (m *Module) titleSnapshot() (map[string]ipeers.TitleInfo, error) {
+	out := map[string]ipeers.TitleInfo{}
+	if m.titles == nil {
 		return out, nil
 	}
-	rows, err := m.labels.Snapshot()
+	rows, err := m.titles.Snapshot()
 	if err != nil {
 		return out, err
 	}
 	for _, r := range rows {
-		out[r.SessionID] = ipeers.LabelInfo{Label: r.Label, Rev: r.Rev}
+		out[r.SessionID] = ipeers.TitleInfo{Title: r.Label, Rev: r.Rev}
 	}
 	return out, nil
 }
@@ -550,7 +550,7 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 		Peers:                local.Peers,
 		DaemonVersion:        local.DaemonVersion,
 		UnknownRegistryFiles: local.UnknownRegistryFiles,
-		LabelsUnavailable:    local.LabelsUnavailable,
+		TitlesUnavailable:    local.TitlesUnavailable,
 	}
 
 	wg.Wait()
@@ -698,7 +698,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	// env.DaemonVersion is the remote's own reported text, exactly as
 	// attacker-controlled as env.Error and the unknown-registry-files list
 	// above, so it is bounded the same way before this row is ever printed
-	// or re-encoded. env.LabelsUnavailable is a bool and needs no bounding:
+	// or re-encoded. env.TitlesUnavailable is a bool and needs no bounding:
 	// it is the remote's own claim about its label store, copied through
 	// for the per-host cause line.
 	return ipeers.HostResult{
@@ -710,6 +710,6 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		Peers:                peers,
 		DaemonVersion:        boundRemoteText(env.DaemonVersion),
 		UnknownRegistryFiles: bounded,
-		LabelsUnavailable:    env.LabelsUnavailable,
+		TitlesUnavailable:    env.TitlesUnavailable,
 	}
 }

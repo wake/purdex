@@ -1,4 +1,4 @@
-// internal/module/peers/labels_test.go
+// internal/module/peers/titles_test.go
 package peers
 
 import (
@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,14 +23,14 @@ import (
 	"github.com/wake/purdex/internal/store"
 )
 
-// labelHelperPIDFloor is the first pid proxyhelpertest hands out to a
+// titleHelperPIDFloor is the first pid proxyhelpertest hands out to a
 // spawned fake helper (mirrors e2eFakeHelperPID in e2e_test.go): every pid
 // at or above it is a fake helper process, whose registry entry (a real
 // helper spawn writes its own <pid>.json — proxyhelper.Run, not the test's
 // doing) carries proxyhelpertest.ProcStart(pid), not targetProcStart.
-const labelHelperPIDFloor = 900000
+const titleHelperPIDFloor = 900000
 
-// labelLiveness is the Liveness the self-route fixture shares across its
+// titleLiveness is the Liveness the self-route fixture shares across its
 // two fake registry entries: every pid is alive (Stat always succeeds,
 // procStart always matches its own entry) unless markDead has been called
 // for it, modelled on e2eLiveness (e2e_test.go). StartTime must answer
@@ -37,14 +38,14 @@ const labelHelperPIDFloor = 900000
 // entry (whose file carries proxyhelpertest.ProcStart(pid), a different
 // string per pid) is classified confirmed-dead by the mismatch and never
 // reaches findOriginEntry at all, making the proxy exclusion untested.
-type labelLiveness struct {
+type titleLiveness struct {
 	dead sync.Map // pid → struct{}
 }
 
-func (l *labelLiveness) markDead(pid int) { l.dead.Store(pid, struct{}{}) }
+func (l *titleLiveness) markDead(pid int) { l.dead.Store(pid, struct{}{}) }
 
-func (l *labelLiveness) startOf(pid int) time.Time {
-	if pid >= labelHelperPIDFloor {
+func (l *titleLiveness) startOf(pid int) time.Time {
+	if pid >= titleHelperPIDFloor {
 		s, _ := proxyhelpertest.ProcStart(pid)
 		ts, _ := ipeers.ParseProcStart(s)
 		return ts
@@ -53,7 +54,7 @@ func (l *labelLiveness) startOf(pid int) time.Time {
 	return ts
 }
 
-func (l *labelLiveness) liveness() ipeers.Liveness {
+func (l *titleLiveness) liveness() ipeers.Liveness {
 	return ipeers.Liveness{
 		Stat: func(path string) error { return nil },
 		PidAlive: func(pid int) bool {
@@ -66,18 +67,18 @@ func (l *labelLiveness) liveness() ipeers.Liveness {
 	}
 }
 
-// labelFixture is the self-route test fixture: a moduleFixture whose
+// titleFixture is the self-route test fixture: a moduleFixture whose
 // registry holds two live entries — pid 10, inside tmux session "mt0"
 // (registry name "n10", session id "sid-1"), and pid 20 with no tmux, the
 // Desktop stand-in (registry name "n20", session id "sid-2").
-type labelFixture struct {
+type titleFixture struct {
 	*moduleFixture
 	t       *testing.T
-	live    *labelLiveness
+	live    *titleLiveness
 	inboxes map[int]string
 }
 
-func newLabelFixture(t *testing.T) *labelFixture {
+func newTitleFixture(t *testing.T) *titleFixture {
 	t.Helper()
 	dir := t.TempDir()
 	inbox10 := dir + "/10.sock"
@@ -92,7 +93,7 @@ func newLabelFixture(t *testing.T) *labelFixture {
 		"c1": {AgentType: "cc", SessionID: "sid-1", Cwd: "/w", TmuxPaneID: "%1"},
 	}}
 
-	live := &labelLiveness{}
+	live := &titleLiveness{}
 	mf := newTestModuleWith(t, fixtureOpts{
 		core:        newTestCore(t, "h:1", "a"),
 		sessions:    sessions,
@@ -102,7 +103,7 @@ func newLabelFixture(t *testing.T) *labelFixture {
 		budget:      2 * time.Second,
 	})
 
-	return &labelFixture{
+	return &titleFixture{
 		moduleFixture: mf,
 		t:             t,
 		live:          live,
@@ -110,11 +111,11 @@ func newLabelFixture(t *testing.T) *labelFixture {
 	}
 }
 
-func (f *labelFixture) inbox(pid int) string { return f.inboxes[pid] }
+func (f *titleFixture) inbox(pid int) string { return f.inboxes[pid] }
 
 // doAs serves one request under mux with principal p, decoding a
 // non-nil body as JSON.
-func (f *labelFixture) doAs(p middleware.Principal, method, path string, body any) (int, []byte) {
+func (f *titleFixture) doAs(p middleware.Principal, method, path string, body any) (int, []byte) {
 	f.t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -129,24 +130,24 @@ func (f *labelFixture) doAs(p middleware.Principal, method, path string, body an
 	return rr.Code, rr.Body.Bytes()
 }
 
-func (f *labelFixture) self(req ipeers.SelfRequest) (int, []byte) {
+func (f *titleFixture) self(req ipeers.SelfRequest) (int, []byte) {
 	f.t.Helper()
 	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodPost, "/api/peers/self", req)
 }
 
-func (f *labelFixture) claim(inbox, label string) (int, []byte) {
+func (f *titleFixture) claim(inbox, title string) (int, []byte) {
 	f.t.Helper()
-	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodPut, "/api/peers/self/label", ipeers.ClaimLabelRequest{OriginInbox: inbox, Label: label})
+	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodPut, "/api/peers/self/label", ipeers.ClaimLabelRequest{OriginInbox: inbox, Label: title})
 }
 
-func (f *labelFixture) release(inbox string) (int, []byte) {
+func (f *titleFixture) release(inbox string) (int, []byte) {
 	f.t.Helper()
 	return f.doAs(middleware.Principal{Kind: middleware.PrincipalAdmin}, http.MethodDelete, "/api/peers/self/label", ipeers.SelfRequest{OriginInbox: inbox})
 }
 
 // assertAPIError requires status == wantStatus and decodes body as an
 // ipeers.APIError with Error == wantCode, returning it for further checks.
-func (f *labelFixture) assertAPIError(status int, body []byte, wantStatus int, wantCode string) ipeers.APIError {
+func (f *titleFixture) assertAPIError(status int, body []byte, wantStatus int, wantCode string) ipeers.APIError {
 	f.t.Helper()
 	if status != wantStatus {
 		f.t.Fatalf("status = %d, want %d; body=%s", status, wantStatus, body)
@@ -164,7 +165,7 @@ func (f *labelFixture) assertAPIError(status int, body []byte, wantStatus int, w
 // spawnHelper acquires a fake `pdx peer-proxy` helper from the fixture's
 // helper manager, so its pid shows up in m.proxyPIDs() — used to prove a
 // proxy cannot name itself as a self-route origin.
-func (f *labelFixture) spawnHelper(t *testing.T) *helper {
+func (f *titleFixture) spawnHelper(t *testing.T) *helper {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -197,7 +198,7 @@ func decodeSelf(t *testing.T, status int, body []byte) ipeers.SelfResponse {
 
 // decodeRecord is decodeSelf for the callers that only want the record,
 // and it refuses a warning rather than ignoring one: every self-route 200
-// in this file is a clean answer except the duplicate-label claims, which
+// in this file is a clean answer except the duplicate-title claims, which
 // go through decodeSelf and assert the warning themselves.
 func decodeRecord(t *testing.T, status int, body []byte) ipeers.PeerRecord {
 	t.Helper()
@@ -209,11 +210,11 @@ func decodeRecord(t *testing.T, status int, body []byte) ipeers.PeerRecord {
 }
 
 func TestSelf_Whoami(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	rec := decodeRecord(t, status, body)
 	want := "a/n20"
-	if rec.Address != want || rec.Label != "" || rec.LabelSource != "" || rec.RowKind != "entry" || rec.Agent.PID != 20 {
+	if rec.Address != want || rec.Title != "" || rec.TitleSource != "" || rec.RowKind != "entry" || rec.Agent.PID != 20 {
 		t.Errorf("record = %+v, want address %s", rec, want)
 	}
 	if rec.Ref != ipeers.RefID("sid-2") {
@@ -232,42 +233,41 @@ func TestSelf_Whoami(t *testing.T) {
 }
 
 func TestClaim_Matrix(t *testing.T) {
-	f := newLabelFixture(t)
-	cases := []struct {
-		label      string
-		wantStatus int
-		wantCode   string
-	}{
-		{"Bad Label", 400, ipeers.ErrCodeLabelInvalid},
-		{"cc", 400, ipeers.ErrCodeLabelReserved},
-		{"tmux", 400, ipeers.ErrCodeLabelReserved},
-		{"_abc123", 400, ipeers.ErrCodeLabelInvalid},
-		{"purdex-tester", 200, ""},
+	f := newTitleFixture(t)
+	// What the v4 title grammar still refuses: empty, over 64 BYTES, and
+	// any control character — a title is printed into a terminal table and
+	// into peer warnings, so an escape in one rewrites somebody else's
+	// screen. The wire code stays ErrCodeLabelInvalid because the route it
+	// answers is still /api/peers/self/label (spec §6).
+	for _, bad := range []string{"", strings.Repeat("a", 65), "has\ttab", "esc\x1b[31m"} {
+		status, body := f.claim(f.inbox(20), bad)
+		f.assertAPIError(status, body, 400, ipeers.ErrCodeLabelInvalid)
 	}
-	for _, c := range cases {
-		status, body := f.claim(f.inbox(20), c.label)
-		if c.wantStatus == 200 {
-			rec := decodeRecord(t, status, body)
-			if rec.Label != c.label || rec.LabelSource != "user" || rec.LabelRev != 1 || rec.Address != "a/n20" {
-				t.Errorf("%q: %+v", c.label, rec)
-			}
-			continue
+	// What v2 refused and v4 accepts. A title reaches nothing — Resolve
+	// never consults one — so "cc" and "tmux" have nothing left to shadow,
+	// and "_abc123" cannot be mistaken for a ref because no address is
+	// ever resolved against a title. Each accepted claim bumps the
+	// host-wide revision by one; the refusals above wrote nothing.
+	for i, good := range []string{"Bad Label", "cc", "tmux", "_abc123", "測試 01"} {
+		status, body := f.claim(f.inbox(20), good)
+		rec := decodeRecord(t, status, body)
+		if rec.Title != good || rec.TitleSource != "user" || rec.TitleRev != int64(i+1) || rec.Address != "a/n20" {
+			t.Errorf("%q: %+v", good, rec)
 		}
-		f.assertAPIError(status, body, c.wantStatus, c.wantCode)
 	}
-	// Same label again: 200, rev unchanged.
-	status, body := f.claim(f.inbox(20), "purdex-tester")
+	// Same title again: 200, rev unchanged.
+	status, body := f.claim(f.inbox(20), "測試 01")
 	rec := decodeRecord(t, status, body)
-	if rec.LabelRev != 1 {
-		t.Errorf("re-claim bumped rev to %d", rec.LabelRev)
+	if rec.TitleRev != 5 {
+		t.Errorf("re-claim bumped rev to %d", rec.TitleRev)
 	}
 	// A conversation renaming itself replaces its own row and bumps rev.
 	status, body = f.claim(f.inbox(20), "purdex-tester-2")
 	rec = decodeRecord(t, status, body)
-	if rec.Label != "purdex-tester-2" || rec.LabelRev != 2 {
-		t.Errorf("rename = %+v, want purdex-tester-2 at rev 2", rec)
+	if rec.Title != "purdex-tester-2" || rec.TitleRev != 6 {
+		t.Errorf("rename = %+v, want purdex-tester-2 at rev 6", rec)
 	}
-	if rows, _ := f.labels.Snapshot(); len(rows) != 1 {
+	if rows, _ := f.titles.Snapshot(); len(rows) != 1 {
 		t.Errorf("rename wrote a second row: %+v", rows)
 	}
 }
@@ -283,18 +283,18 @@ func TestClaim_Matrix(t *testing.T) {
 // name; under v3 there is no loser, because there is nothing to lose — its
 // address never came from the label (spec §4.5, D7).
 func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	first := decodeRecord(t, status, body)
 	// pid 10 takes a label of its own first, so the claim below is a
-	// rename and live_labels has to account for the label it gives up.
+	// rename and live_titles has to account for the label it gives up.
 	status, body = f.claim(f.inbox(10), "purdex-dev")
 	decodeRecord(t, status, body)
 
 	status, body = f.claim(f.inbox(10), "purdex-tester")
 	resp := decodeSelf(t, status, body)
-	if resp.Peer.Label != "purdex-tester" || resp.Peer.LabelSource != "user" {
+	if resp.Peer.Title != "purdex-tester" || resp.Peer.TitleSource != "user" {
 		t.Errorf("claim record = %+v, want the label actually set", resp.Peer)
 	}
 	if want := "a/n10"; resp.Peer.Address != want {
@@ -302,8 +302,8 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 	}
 
 	w := resp.Warning
-	if w == nil || w.Code != ipeers.WarnLabelInUse {
-		t.Fatalf("warning = %+v, want code %q", w, ipeers.WarnLabelInUse)
+	if w == nil || w.Code != ipeers.WarnTitleInUse {
+		t.Fatalf("warning = %+v, want code %q", w, ipeers.WarnTitleInUse)
 	}
 	if len(w.Holders) != 1 || w.Holders[0].Address != first.Address || w.Holders[0].Agent == nil || w.Holders[0].Agent.PID != 20 {
 		t.Errorf("warning holders = %+v, want the pid 20 incumbent", w.Holders)
@@ -311,17 +311,17 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 	// Every label a live session holds AFTER this claim: both sessions are
 	// now on purdex-tester, and pid 10's purdex-dev is gone with the
 	// rename (see TestClaim_LiveLabelsDescribeTheClaimJustMade).
-	if !reflect.DeepEqual(w.LiveLabels, []string{"purdex-tester", "purdex-tester"}) {
-		t.Errorf("live_labels = %v, want every label a live session holds", w.LiveLabels)
+	if !reflect.DeepEqual(w.LiveTitles, []string{"purdex-tester", "purdex-tester"}) {
+		t.Errorf("live_titles = %v, want every label a live session holds", w.LiveTitles)
 	}
 
 	// D7: the incumbent is exactly where it was.
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	still := decodeRecord(t, status, body)
-	if still.Label != first.Label || still.Ref != first.Ref || still.Address != first.Address || still.LabelRev != first.LabelRev {
+	if still.Title != first.Title || still.Ref != first.Ref || still.Address != first.Address || still.TitleRev != first.TitleRev {
 		t.Errorf("incumbent = %+v, want the untouched %+v", still, first)
 	}
-	rows, _ := f.labels.Snapshot()
+	rows, _ := f.titles.Snapshot()
 	if len(rows) != 2 {
 		t.Errorf("rows = %+v, want both holders — a duplicate claim evicts nobody", rows)
 	}
@@ -333,8 +333,48 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 	if resp.Warning != nil {
 		t.Errorf("warning on a label nobody else holds: %+v", resp.Warning)
 	}
-	if resp.Peer.Label != "purdex-tester-2" {
+	if resp.Peer.Title != "purdex-tester-2" {
 		t.Errorf("record = %+v, want purdex-tester-2", resp.Peer)
+	}
+}
+
+// TestClaimTitle_WarnsOnNormalizedDuplicate pins the compare the title
+// warning is made of. A duplicate title warns and succeeds; both holders
+// keep their title. Normalisation is what makes the warning useful:
+// "Purdex Tester" and "purdex  tester" are the same name to the person
+// reading them, so an exact compare would miss exactly the near-duplicates
+// the warning exists for.
+func TestClaimTitle_WarnsOnNormalizedDuplicate(t *testing.T) {
+	f := newTitleFixture(t)
+
+	status, body := f.claim(f.inbox(20), "Purdex Tester")
+	first := decodeRecord(t, status, body)
+	if first.Title != "Purdex Tester" {
+		t.Fatalf("first claim = %+v, want the title as written", first)
+	}
+
+	status, body = f.claim(f.inbox(10), "purdex  tester")
+	resp := decodeSelf(t, status, body)
+	if resp.Peer.Title != "purdex  tester" {
+		t.Errorf("second claim = %+v, want the title as written", resp.Peer)
+	}
+
+	w := resp.Warning
+	if w == nil || w.Code != ipeers.WarnTitleInUse {
+		t.Fatalf("warning = %+v, want code %q", w, ipeers.WarnTitleInUse)
+	}
+	if len(w.LiveTitles) == 0 {
+		t.Errorf("live_titles = %v, want every title a live session holds", w.LiveTitles)
+	}
+	if len(w.Holders) != 1 || w.Holders[0].Address != first.Address {
+		t.Errorf("warning holders = %+v, want the pid 20 incumbent", w.Holders)
+	}
+
+	// The incumbent keeps the title it wrote, in the form it wrote it.
+	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
+	still := decodeRecord(t, status, body)
+	if still.Title != "Purdex Tester" || still.TitleRev != first.TitleRev {
+		t.Errorf("incumbent = %+v, want the untouched %+v", still, first)
 	}
 }
 
@@ -342,7 +382,7 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 // same envelope, and `warning` is omitted entirely — not null, not an
 // empty object — when there is nothing to warn about.
 func TestSelf_EnvelopeShape(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 	for _, c := range []struct {
 		name string
 		call func() (int, []byte)
@@ -377,11 +417,11 @@ func TestSelf_EnvelopeShape(t *testing.T) {
 // D5 a label never has to be free, so the proof is meaningless and the
 // refusal that waited on it is gone. Release never had the requirement.
 func TestClaim_UnknownLiveFileNoLongerBlocks(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 	writeRegistryFixture(t, f.registryDir, "4242.json", "{") // pid 4242 alive per fake
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	rec := decodeRecord(t, status, body)
-	if rec.Label != "purdex-tester" || rec.LabelSource != "user" {
+	if rec.Title != "purdex-tester" || rec.TitleSource != "user" {
 		t.Errorf("claim under an undecodable registry file = %+v", rec)
 	}
 	writeRegistryFixture(t, f.registryDir, "4243.json", "{")
@@ -390,13 +430,13 @@ func TestClaim_UnknownLiveFileNoLongerBlocks(t *testing.T) {
 }
 
 func TestClaim_OriginMustBeLiveNonProxy(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 	f.live.markDead(20)
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	f.assertAPIError(status, body, 400, ipeers.ErrOriginUnknown)
 	// A helper (proxy) entry cannot name itself: register one via the
 	// fixture's helper manager (Acquire) and present its inbox. The
-	// helper's own registry entry is genuinely LIVE here (labelLiveness
+	// helper's own registry entry is genuinely LIVE here (titleLiveness
 	// answers its own procStart) — the refusal below must come from
 	// findOriginEntry's !proxyPIDs[e.PID] exclusion, not from the entry
 	// having been dropped as dead.
@@ -408,19 +448,19 @@ func TestClaim_OriginMustBeLiveNonProxy(t *testing.T) {
 }
 
 func TestClaim_StoreFailures(t *testing.T) {
-	f := newLabelFixture(t)
-	f.m.labels = failingLabels{} // read fails
+	f := newTitleFixture(t)
+	f.m.titles = failingTitles{} // read fails
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
 
-	f.m.labels = writeFailingLabels{real: f.labels} // read ok, write fails
+	f.m.titles = writeFailingTitles{real: f.titles} // read ok, write fails
 	status, body = f.claim(f.inbox(20), "purdex-tester")
 	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
 	status, body = f.release(f.inbox(20))
 	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
-	if rows, _ := f.labels.Snapshot(); len(rows) != 0 {
+	if rows, _ := f.titles.Snapshot(); len(rows) != 0 {
 		t.Errorf("rows written despite failure: %+v", rows)
 	}
 	// whoami only reads: still fine.
@@ -429,12 +469,12 @@ func TestClaim_StoreFailures(t *testing.T) {
 }
 
 func TestRelease(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	decodeRecord(t, status, body)
 	status, body = f.release(f.inbox(20))
 	rec := decodeRecord(t, status, body)
-	if rec.LabelSource != "" || rec.LabelRev != 2 || rec.Label != "" {
+	if rec.TitleSource != "" || rec.TitleRev != 2 || rec.Title != "" {
 		t.Errorf("released = %+v, want no label at rev 2", rec)
 	}
 	if want := "a/n20"; rec.Address != want {
@@ -443,10 +483,10 @@ func TestRelease(t *testing.T) {
 	// Release with no row: 200, default, rev 0, nothing written.
 	status, body = f.release(f.inbox(10))
 	rec = decodeRecord(t, status, body)
-	if rec.LabelRev != 0 {
+	if rec.TitleRev != 0 {
 		t.Errorf("no-row release = %+v", rec)
 	}
-	if rows, _ := f.labels.Snapshot(); len(rows) != 1 {
+	if rows, _ := f.titles.Snapshot(); len(rows) != 1 {
 		t.Errorf("rows = %+v, want only sid-2's released row", rows)
 	}
 }
@@ -456,7 +496,7 @@ func TestRelease(t *testing.T) {
 // no longer a loser — it gets the label too, and (whichever order the
 // scheduler picked) exactly one of the two answers carries the warning.
 func TestClaim_ConcurrentSameLabel_BothSucceed(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 	var wg sync.WaitGroup
 	results := make([]int, 2)
 	warned := make([]bool, 2)
@@ -480,7 +520,7 @@ func TestClaim_ConcurrentSameLabel_BothSucceed(t *testing.T) {
 	if warned[0] == warned[1] {
 		t.Errorf("warnings = %v, want exactly one of the two to be warned", warned)
 	}
-	rows, _ := f.labels.Snapshot()
+	rows, _ := f.titles.Snapshot()
 	if len(rows) != 2 {
 		t.Fatalf("rows = %+v, want one per session", rows)
 	}
@@ -501,32 +541,32 @@ func TestSelfRoutes_DenyHostPrincipal(t *testing.T) {
 		}
 	}
 	// And the handlers themselves refuse a host principal in depth.
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 	status, _ := f.doAs(middleware.Principal{Kind: middleware.PrincipalHost, Alias: "x", HostID: "x:1"}, "POST", "/api/peers/self", ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	if status != 403 {
 		t.Errorf("host principal got %d", status)
 	}
 }
 
-// releaseCountingLabels is a LabelStore whose read always fails while every
-// write is counted. failingLabels/writeFailingLabels can show that a write
+// releaseCountingTitles is a TitleStore whose read always fails while every
+// write is counted. failingTitles/writeFailingTitles can show that a write
 // FAILED; only a counter can show that no write was ever ATTEMPTED, which
 // is what spec §3.4 requires of a release whose label-store read failed.
-type releaseCountingLabels struct {
+type releaseCountingTitles struct {
 	releases int
 	claims   int
 }
 
-func (l *releaseCountingLabels) Snapshot() ([]store.PeerLabel, error) {
+func (l *releaseCountingTitles) Snapshot() ([]store.PeerLabel, error) {
 	return nil, errors.New("snapshot boom")
 }
 
-func (l *releaseCountingLabels) Claim(string, string, time.Time) (store.PeerLabel, error) {
+func (l *releaseCountingTitles) Claim(string, string, time.Time) (store.PeerLabel, error) {
 	l.claims++
 	return store.PeerLabel{}, nil
 }
 
-func (l *releaseCountingLabels) Release(string, time.Time) (store.PeerLabel, bool, error) {
+func (l *releaseCountingTitles) Release(string, time.Time) (store.PeerLabel, bool, error) {
 	l.releases++
 	return store.PeerLabel{}, false, nil
 }
@@ -535,7 +575,7 @@ func (l *releaseCountingLabels) Release(string, time.Time) (store.PeerLabel, boo
 // running this very fixture through localEnvelope → ipeers.Build. It is
 // the other half of the spec §3.2 agreement: whatever the self routes
 // answer for a conversation, this is what the listing says about it.
-func (f *labelFixture) listingRecord(sessionID string) ipeers.PeerRecord {
+func (f *titleFixture) listingRecord(sessionID string) ipeers.PeerRecord {
 	f.t.Helper()
 	snap := f.m.configSnapshot()
 	env := f.m.localEnvelope(context.Background(), snap.hostID, snap.alias)
@@ -556,7 +596,7 @@ func (f *labelFixture) listingRecord(sessionID string) ipeers.PeerRecord {
 // own registry entry and sessionId, so for one live conversation they must
 // render byte-identical labels and addresses.
 func TestSelf_AddressMatchesListing(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 
 	// Guard against the test passing vacuously: sid-1 must actually have
 	// an address to compare.
@@ -571,10 +611,10 @@ func TestSelf_AddressMatchesListing(t *testing.T) {
 		listed := f.listingRecord(c.sid)
 		status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(c.pid)})
 		self := decodeRecord(t, status, body)
-		if self.Address != listed.Address || self.Label != listed.Label || self.LabelSource != listed.LabelSource {
+		if self.Address != listed.Address || self.Title != listed.Title || self.TitleSource != listed.TitleSource {
 			t.Errorf("pid %d: whoami %q/%q/%q, listing %q/%q/%q",
-				c.pid, self.Address, self.Label, self.LabelSource,
-				listed.Address, listed.Label, listed.LabelSource)
+				c.pid, self.Address, self.Title, self.TitleSource,
+				listed.Address, listed.Title, listed.TitleSource)
 		}
 	}
 }
@@ -596,7 +636,7 @@ func TestSelf_AddressMatchesListing(t *testing.T) {
 // The rename is still performed, because "they agree" is only worth asserting
 // under the conditions that used to make them disagree.
 func TestSelf_AddressMatchesListingAfterATmuxRename(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 
 	// tmux renames mt0 to mt0zz. The registry file for pid 10 keeps
 	// "tmux":"mt0:@1.%1" — Claude Code rewrites that file on status changes
@@ -645,23 +685,23 @@ func TestSelf_AddressMatchesListingAfterATmuxRename(t *testing.T) {
 }
 
 // TestClaim_RecordsMatchListing pins Task 4 item 3: both records claim
-// renders — the envelope's own peer and the label_in_use warning's holders
+// renders — the envelope's own peer and the title_in_use warning's holders
 // — are built the same way the listing builds its rows, so neither can
 // drift from it.
 func TestClaim_RecordsMatchListing(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 
 	// Claiming the name of your own tmux session is allowed (spec §2.2):
 	// the default it displaces is your own.
 	status, body := f.claim(f.inbox(10), "mt0")
 	rec := decodeRecord(t, status, body)
-	if rec.LabelSource != "user" || rec.Label != "mt0" {
+	if rec.TitleSource != "user" || rec.Title != "mt0" {
 		t.Fatalf("claim record = %+v, want the user label mt0", rec)
 	}
 	listed := f.listingRecord("sid-1")
-	if rec.Address != listed.Address || rec.Label != listed.Label || rec.LabelSource != listed.LabelSource {
+	if rec.Address != listed.Address || rec.Title != listed.Title || rec.TitleSource != listed.TitleSource {
 		t.Errorf("claim 200 %q/%q/%q != listing %q/%q/%q",
-			rec.Address, rec.Label, rec.LabelSource, listed.Address, listed.Label, listed.LabelSource)
+			rec.Address, rec.Title, rec.TitleSource, listed.Address, listed.Title, listed.TitleSource)
 	}
 
 	// pid 20 takes the same label: 200, with the other holder rendered
@@ -669,13 +709,13 @@ func TestClaim_RecordsMatchListing(t *testing.T) {
 	status, body = f.claim(f.inbox(20), "mt0")
 	resp := decodeSelf(t, status, body)
 	if resp.Warning == nil || len(resp.Warning.Holders) != 1 {
-		t.Fatalf("label_in_use carried no holder: %+v", resp.Warning)
+		t.Fatalf("title_in_use carried no holder: %+v", resp.Warning)
 	}
 	h := resp.Warning.Holders[0]
-	if h.Address != listed.Address || h.Label != listed.Label || h.LabelSource != listed.LabelSource {
+	if h.Address != listed.Address || h.Title != listed.Title || h.TitleSource != listed.TitleSource {
 		t.Errorf("holder %q/%q/%q != listing %q/%q/%q",
-			h.Address, h.Label, h.LabelSource,
-			listed.Address, listed.Label, listed.LabelSource)
+			h.Address, h.Title, h.TitleSource,
+			listed.Address, listed.Title, listed.TitleSource)
 	}
 }
 
@@ -684,9 +724,9 @@ func TestClaim_RecordsMatchListing(t *testing.T) {
 // store_unavailable with no Release attempted at all — the response is
 // never a default the daemon could not vouch for.
 func TestRelease_StoreReadFailure_WritesNothing(t *testing.T) {
-	f := newLabelFixture(t)
-	fake := &releaseCountingLabels{}
-	f.m.labels = fake
+	f := newTitleFixture(t)
+	fake := &releaseCountingTitles{}
+	f.m.titles = fake
 
 	status, body := f.release(f.inbox(20))
 	f.assertAPIError(status, body, 503, ipeers.ErrStoreUnavailable)
@@ -695,14 +735,14 @@ func TestRelease_StoreReadFailure_WritesNothing(t *testing.T) {
 	}
 }
 
-// storedLabels is every non-empty label in the label store, sorted — the
-// ground truth a claim's live_labels is checked against. Both fixture
+// storedTitles is every non-empty label in the label store, sorted — the
+// ground truth a claim's live_titles is checked against. Both fixture
 // sessions (sid-1, sid-2) are live, so on this fixture "held by a live
 // session" and "present in the store" are the same set, which is exactly
 // what makes it usable as an independent oracle.
-func (f *labelFixture) storedLabels() []string {
+func (f *titleFixture) storedTitles() []string {
 	f.t.Helper()
-	rows, err := f.labels.Snapshot()
+	rows, err := f.titles.Snapshot()
 	if err != nil {
 		f.t.Fatalf("snapshot: %v", err)
 	}
@@ -716,30 +756,30 @@ func (f *labelFixture) storedLabels() []string {
 	return out
 }
 
-// labelInUse fails unless resp carries the label_in_use warning, and
+// titleInUse fails unless resp carries the title_in_use warning, and
 // returns it.
-func labelInUse(t *testing.T, resp ipeers.SelfResponse) *ipeers.SelfWarning {
+func titleInUse(t *testing.T, resp ipeers.SelfResponse) *ipeers.SelfWarning {
 	t.Helper()
 	w := resp.Warning
-	if w == nil || w.Code != ipeers.WarnLabelInUse {
-		t.Fatalf("warning = %+v, want code %q", w, ipeers.WarnLabelInUse)
+	if w == nil || w.Code != ipeers.WarnTitleInUse {
+		t.Fatalf("warning = %+v, want code %q", w, ipeers.WarnTitleInUse)
 	}
 	return w
 }
 
 // TestClaim_LiveLabelsDescribeTheClaimJustMade pins the one thing
-// live_labels is for: letting an agent pick the next free serial in ONE
+// live_titles is for: letting an agent pick the next free serial in ONE
 // step (spec §4.2, §8). That only works if the list describes the state
 // the claim PRODUCED. Computed before the write, it answers with the state
 // the claim replaced — so the envelope announces a new label in `peer`
-// while `live_labels` still shows the old one and omits the new one, and
+// while `live_titles` still shows the old one and omits the new one, and
 // the agent avoids a serial this very call just freed.
 //
 // Here pid 10 renames itself from purdex-tester-3 onto purdex-tester,
 // which pid 20 holds: afterwards purdex-tester-3 belongs to nobody and
 // purdex-tester belongs to both.
 func TestClaim_LiveLabelsDescribeTheClaimJustMade(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	incumbent := decodeRecord(t, status, body)
@@ -748,25 +788,25 @@ func TestClaim_LiveLabelsDescribeTheClaimJustMade(t *testing.T) {
 
 	status, body = f.claim(f.inbox(10), "purdex-tester")
 	resp := decodeSelf(t, status, body)
-	if resp.Peer.Label != "purdex-tester" {
+	if resp.Peer.Title != "purdex-tester" {
 		t.Fatalf("claim record = %+v, want the label actually set", resp.Peer)
 	}
-	w := labelInUse(t, resp)
+	w := titleInUse(t, resp)
 
 	// Both live sessions now hold purdex-tester; purdex-tester-3 is free,
 	// and it is free BECAUSE of this call — the whole point of the list.
-	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveLabels, want) {
-		t.Errorf("live_labels = %v, want %v — the set this claim produced", w.LiveLabels, want)
+	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveTitles, want) {
+		t.Errorf("live_titles = %v, want %v — the set this claim produced", w.LiveTitles, want)
 	}
-	for _, l := range w.LiveLabels {
+	for _, l := range w.LiveTitles {
 		if l == "purdex-tester-3" {
-			t.Errorf("live_labels = %v still lists the caller's released label", w.LiveLabels)
+			t.Errorf("live_titles = %v still lists the caller's released label", w.LiveTitles)
 		}
 	}
 	// And it agrees with the store, which is the state the caller will see
 	// on any later read.
-	if !reflect.DeepEqual(w.LiveLabels, f.storedLabels()) {
-		t.Errorf("live_labels = %v, store holds %v", w.LiveLabels, f.storedLabels())
+	if !reflect.DeepEqual(w.LiveTitles, f.storedTitles()) {
+		t.Errorf("live_titles = %v, store holds %v", w.LiveTitles, f.storedTitles())
 	}
 
 	// holders keeps its own meaning: the OTHER live sessions on the label,
@@ -780,18 +820,18 @@ func TestClaim_LiveLabelsDescribeTheClaimJustMade(t *testing.T) {
 // caller that had no label at all: it contributes nothing to the list
 // before the write and must contribute the claimed label after it.
 func TestClaim_LiveLabelsIncludeANewlyNamedCaller(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	decodeRecord(t, status, body)
 
 	status, body = f.claim(f.inbox(10), "purdex-tester")
-	w := labelInUse(t, decodeSelf(t, status, body))
-	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveLabels, want) {
-		t.Errorf("live_labels = %v, want %v — the caller's own new label included", w.LiveLabels, want)
+	w := titleInUse(t, decodeSelf(t, status, body))
+	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveTitles, want) {
+		t.Errorf("live_titles = %v, want %v — the caller's own new label included", w.LiveTitles, want)
 	}
-	if !reflect.DeepEqual(w.LiveLabels, f.storedLabels()) {
-		t.Errorf("live_labels = %v, store holds %v", w.LiveLabels, f.storedLabels())
+	if !reflect.DeepEqual(w.LiveTitles, f.storedTitles()) {
+		t.Errorf("live_titles = %v, store holds %v", w.LiveTitles, f.storedTitles())
 	}
 }
 
@@ -800,25 +840,25 @@ func TestClaim_LiveLabelsIncludeANewlyNamedCaller(t *testing.T) {
 // live set, with the caller's own label present exactly once — this is the
 // path where counting the caller twice, or dropping it, would be easiest.
 func TestClaim_LiveLabelsOnAlreadyOurs(t *testing.T) {
-	f := newLabelFixture(t)
+	f := newTitleFixture(t)
 
 	status, body := f.claim(f.inbox(20), "purdex-tester")
 	decodeRecord(t, status, body)
 	status, body = f.claim(f.inbox(10), "purdex-tester")
 	first := decodeSelf(t, status, body)
-	labelInUse(t, first)
+	titleInUse(t, first)
 
 	// Again: already ours, no write, rev unchanged, same list.
 	status, body = f.claim(f.inbox(10), "purdex-tester")
 	resp := decodeSelf(t, status, body)
-	if resp.Peer.LabelRev != first.Peer.LabelRev {
-		t.Errorf("re-claim bumped rev %d → %d", first.Peer.LabelRev, resp.Peer.LabelRev)
+	if resp.Peer.TitleRev != first.Peer.TitleRev {
+		t.Errorf("re-claim bumped rev %d → %d", first.Peer.TitleRev, resp.Peer.TitleRev)
 	}
-	w := labelInUse(t, resp)
-	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveLabels, want) {
-		t.Errorf("live_labels = %v, want %v — once per live holder", w.LiveLabels, want)
+	w := titleInUse(t, resp)
+	if want := []string{"purdex-tester", "purdex-tester"}; !reflect.DeepEqual(w.LiveTitles, want) {
+		t.Errorf("live_titles = %v, want %v — once per live holder", w.LiveTitles, want)
 	}
-	if !reflect.DeepEqual(w.LiveLabels, f.storedLabels()) {
-		t.Errorf("live_labels = %v, store holds %v", w.LiveLabels, f.storedLabels())
+	if !reflect.DeepEqual(w.LiveTitles, f.storedTitles()) {
+		t.Errorf("live_titles = %v, store holds %v", w.LiveTitles, f.storedTitles())
 	}
 }

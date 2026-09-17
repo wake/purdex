@@ -25,7 +25,7 @@ func liveRow(ref, name, label, sessionName string, pid int) PeerRecord {
 		source = "user"
 	}
 	return PeerRecord{
-		SessionName: sessionName, Ref: ref, Label: label, LabelSource: source,
+		SessionName: sessionName, Ref: ref, Title: label, TitleSource: source,
 		Agent:       &AgentInfo{Type: "cc", PID: pid, PeerName: name},
 		Deliverable: true,
 	}
@@ -38,7 +38,7 @@ func liveRow(ref, name, label, sessionName string, pid int) PeerRecord {
 // inert — it must neither resolve nor block.
 func inboxDeadRow(ref, label, sessionName string) PeerRecord {
 	return PeerRecord{
-		RowKind: "session", SessionName: sessionName, Ref: ref, Label: label, LabelSource: "user",
+		RowKind: "session", SessionName: sessionName, Ref: ref, Title: label, TitleSource: "user",
 		Agent:  &AgentInfo{Type: "cc", SessionID: "dead-sid"},
 		Reason: "inbox_dead",
 	}
@@ -506,7 +506,7 @@ func TestSplitAddress(t *testing.T) {
 // on the wire: a label, a tmux session name, and NO canonical — that
 // daemon has never heard of the field, so it decodes as "".
 func v2LiveRow(label, sessionName string, pid int) PeerRecord {
-	return PeerRecord{RowKind: "session", SessionName: sessionName, Label: label, LabelSource: "user",
+	return PeerRecord{RowKind: "session", SessionName: sessionName, Title: label, TitleSource: "user",
 		Agent: &AgentInfo{Type: "cc", PID: pid}, Deliverable: true}
 }
 

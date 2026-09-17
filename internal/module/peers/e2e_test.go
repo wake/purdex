@@ -1312,7 +1312,7 @@ func TestE2E_HelperRename(t *testing.T) {
 	if err := json.Unmarshal(claimBody, &claimResp); err != nil {
 		t.Fatalf("step 1: decode claim response: %v; body=%s", err, claimBody)
 	}
-	oldRev := claimResp.Peer.LabelRev // the "purdex-tester" claim's revision — the stale one step 4 replays
+	oldRev := claimResp.Peer.TitleRev // the "purdex-tester" claim's revision — the stale one step 4 replays
 
 	sent := a.sendOK(ipeers.SendRequest{To: "b/" + ipeers.RefID(e2eTargetSID), Text: "ping", OriginInbox: originSock})
 	wantAddr1 := "b/" + e2eTargetName
@@ -1366,7 +1366,7 @@ func TestE2E_HelperRename(t *testing.T) {
 
 	// ---- 3. The target re-claims "purdex-tester-2" and replies again: the
 	// SAME helper instance on A (same socket, same pid) survives, and its
-	// name is UNCHANGED — the claim bumped label_rev, so a rename really
+	// name is UNCHANGED — the claim bumped title_rev, so a rename really
 	// was attempted, and it resolved to the same string because the
 	// address the helper is named after never moved (D3). ----
 	st, body := b.do(http.MethodPut, "/api/peers/self/label", b.admin, ipeers.ClaimLabelRequest{OriginInbox: targetSock, Label: "purdex-tester-2"})

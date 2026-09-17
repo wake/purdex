@@ -215,13 +215,13 @@ const (
 // Warning codes: SelfWarning.Code, the advisory a successful self-route
 // answer may carry (Peer Address v3 spec §6.3).
 const (
-	// WarnLabelInUse: the label was set, and other live sessions hold it
+	// WarnTitleInUse: the title was set, and other live sessions hold it
 	// too. A warning rather than the refusal v2 gave (`label_taken`, now
 	// gone from the vocabulary) because under v3 nothing routes on a
-	// label, so nothing needs it to be unique — spec D5/D7. The agent is
-	// still asked to add a serial number; SelfWarning.LiveLabels is what
+	// title, so nothing needs it to be unique — spec D5/D7. The agent is
+	// still asked to add a serial number; SelfWarning.LiveTitles is what
 	// lets it pick one without a second round trip.
-	WarnLabelInUse = "label_in_use"
+	WarnTitleInUse = "title_in_use"
 )
 
 // Results: DeliverResponse.Result / SendResponse.Result / the audit result
@@ -313,7 +313,7 @@ type ClaimLabelRequest struct {
 //
 // The record used to be encoded bare. It moved inside an envelope because
 // a 200 now has something to say beyond the record itself — a claim that
-// landed on a label someone else holds succeeds *and* warns — and there is
+// landed on a title someone else holds succeeds *and* warns — and there is
 // no room for that beside a bare PeerRecord. All three routes carry the
 // envelope, not just the claim: the CLI decodes them through one function
 // (doSelfRequest), so one shape is less churn than one exception.
@@ -324,13 +324,13 @@ type SelfResponse struct {
 
 // SelfWarning is an advisory on an answer that SUCCEEDED: the route did
 // what was asked, and this is what the caller should know about the state
-// it landed in. Absent whenever there is nothing to say. WarnLabelInUse is
+// it landed in. Absent whenever there is nothing to say. WarnTitleInUse is
 // the only code today.
 type SelfWarning struct {
 	Code       string       `json:"code"`
 	Detail     string       `json:"detail,omitempty"`
-	Holders    []PeerRecord `json:"holders,omitempty"`     // label_in_use: the OTHER live sessions holding the label
-	LiveLabels []string     `json:"live_labels,omitempty"` // label_in_use: every label held by a live session (sorted), the caller's own included
+	Holders    []PeerRecord `json:"holders,omitempty"`     // title_in_use: the OTHER live sessions holding the title
+	LiveTitles []string     `json:"live_titles,omitempty"` // title_in_use: every title held by a live session (sorted), the caller's own included
 }
 
 // APIError is the body of every 4xx/5xx JSON response on /send, /deliver,

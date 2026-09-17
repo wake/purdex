@@ -27,14 +27,14 @@ func TestEnvelope_JSON_MatchesP1Shape(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	want := `{"host_id":"h","ok":true,"partial":false,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"labels_unavailable":false}`
+	want := `{"host_id":"h","ok":true,"partial":false,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"titles_unavailable":false}`
 	if string(got) != want {
 		t.Errorf("Envelope JSON = %s, want %s", got, want)
 	}
 }
 
 // TestHostResult_JSON_Shape pins HostResult's wire format — Envelope's
-// fields behind alias/host_id, including labels_unavailable (always
+// fields behind alias/host_id, including titles_unavailable (always
 // present), which pdx peers --all renders per host.
 func TestHostResult_JSON_Shape(t *testing.T) {
 	h := HostResult{
@@ -45,13 +45,13 @@ func TestHostResult_JSON_Shape(t *testing.T) {
 		Peers:                []PeerRecord{},
 		DaemonVersion:        "1.2.3",
 		UnknownRegistryFiles: []string{},
-		LabelsUnavailable:    true,
+		TitlesUnavailable:    true,
 	}
 	got, err := json.Marshal(h)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	want := `{"alias":"air","host_id":"air:1","ok":true,"partial":true,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"labels_unavailable":true}`
+	want := `{"alias":"air","host_id":"air:1","ok":true,"partial":true,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"titles_unavailable":true}`
 	if string(got) != want {
 		t.Errorf("HostResult JSON = %s, want %s", got, want)
 	}
@@ -74,7 +74,7 @@ func TestEnvelope_JSON_ErrorIncludedWhenSet(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	want := `{"host_id":"h","ok":false,"error":"boom","partial":false,"peers":[],"daemon_version":"","unknown_registry_files":[],"labels_unavailable":false}`
+	want := `{"host_id":"h","ok":false,"error":"boom","partial":false,"peers":[],"daemon_version":"","unknown_registry_files":[],"titles_unavailable":false}`
 	if string(got) != want {
 		t.Errorf("Envelope JSON = %s, want %s", got, want)
 	}

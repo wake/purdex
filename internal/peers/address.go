@@ -26,7 +26,7 @@ var ErrResolveNotReady = errors.New("inventory partial: the peer may be missing"
 // host's inventory envelope (spec §3.3).
 type ResolveSnapshot struct {
 	// Partial is the envelope's partial flag: some owner lookup did not
-	// run, the label store could not be read, or the registry is
+	// run, the title store could not be read, or the registry is
 	// incomplete. A tier-1 miss on a Partial snapshot is ErrResolveNotReady
 	// rather than a tier-2 fallback.
 	Partial bool
@@ -34,7 +34,7 @@ type ResolveSnapshot struct {
 	// alive-but-undecodable registry file (len(UnknownRegistryFiles) > 0).
 	// It is the one Partial cause that can hide a whole live PROCESS, so
 	// even a single tier-1 hit is ErrResolveNotReady under it: the hidden
-	// process may belong to the same conversation and make the label
+	// process may belong to the same conversation and make the name
 	// ambiguous. A caller setting RegistryIncomplete should set Partial
 	// too; Resolve does not require it.
 	RegistryIncomplete bool
@@ -134,16 +134,16 @@ func (e *AmbiguousError) Error() string {
 // daemon reports SessionName exactly as a current one does, and it is the
 // escape hatch the refusal points the caller at.
 //
-// PeerRecord.Label is matched by NOTHING here, and that is D3: a label is a
+// PeerRecord.Title is matched by NOTHING here, and that is D3: a title is a
 // self-declared display name, read to CHOOSE a peer, never used to reach one.
-// Two conversations may hold one label (D5) precisely because no routing
-// decision rests on it. A bare label therefore misses every tier and comes
+// Two conversations may hold one title (D5) precisely because no routing
+// decision rests on it. A bare title therefore misses every tier and comes
 // back ErrNotFound.
 //
 // Three conservatisms are deliberate, so that none reads as an oversight:
 //
 //   - A ref miss under snap.Partial is ErrResolveNotReady even though a ref is
-//     derived from the sessionId alone — it depends on neither the label store
+//     derived from the sessionId alone — it depends on neither the title store
 //     nor owner resolution, so a partial inventory can never be the reason it
 //     missed. It is retried anyway because that is the safe direction: a retry
 //     costs one round trip, a false "not found" costs a message. Splitting
