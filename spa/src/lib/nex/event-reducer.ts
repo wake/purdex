@@ -169,7 +169,11 @@ function endTurn(s: ExecutionState, at: number): ExecutionState {
 function finalizeBlock(s: ExecutionState, p: Record<string, unknown>): ExecutionState {
   const partial = s.partial
   if (!partial) return s
-  if (partial.messageId !== null && obj(p.message)?.id !== partial.messageId) return { ...s, partial: null }
+  // Only a PRESENT id that disagrees supersedes the assembly; a frame with
+  // no message.id (older history, bare payload) is taken as the next block
+  // of whatever is streaming, like a match.
+  const id = obj(p.message)?.id
+  if (partial.messageId !== null && typeof id === 'string' && id !== partial.messageId) return { ...s, partial: null }
   // By counter, not lowest index: after a snapshot {blocks:[1]} the replayed
   // assistant 0 must be a no-op that leaves block 1 streaming (spec D1).
   const { [partial.finalized]: _finalized, ...blocks } = partial.blocks
@@ -190,7 +194,9 @@ function recordToolEnds(s: ExecutionState, p: Record<string, unknown>, at: numbe
   for (const b of contentBlocks(p)) {
     if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
     const t = tools[b.tool_use_id]
-    if (!t || t.endedAt !== null) continue
+    // done/error are final; an 'aborted' tool (A3 fired on a turn-ending
+    // event before its tool_result landed) is still corrected by that result.
+    if (!t || t.status === 'done' || t.status === 'error') continue
     tools = { ...tools, [b.tool_use_id]: { ...t, endedAt: at, status: b.is_error === true ? 'error' : 'done' } }
   }
   return tools === s.tools ? s : { ...s, tools }
@@ -198,9 +204,11 @@ function recordToolEnds(s: ExecutionState, p: Record<string, unknown>, at: numbe
 
 /** Spec §4.1 D1–D4 and §4.2 A1–A4; runs after the seq guard, before the per-kind reducers. */
 function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
+  // A subagent's frames (non-null parent_tool_use_id) — including its own
+  // `result` — must never end the main turn or touch the main partial/tools.
+  if (!isLifecycleKind(ev.kind) && p.parent_tool_use_id != null) return s
   if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
   if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
-  if (p.parent_tool_use_id != null) return s
   if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
   if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
   return s

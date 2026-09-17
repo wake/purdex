@@ -562,12 +562,56 @@ describe('applyDurableEvent: partial + tool activity', () => {
     expect(s.tools.toolu_bad).toEqual({ name: 'Bash', startedAt: 100, endedAt: 500, status: 'error' })
   })
 
-  it('A2: a tool_result for an unknown or already-ended tool changes nothing', () => {
-    const ended = { name: 'Bash', startedAt: 100, endedAt: 200, status: 'aborted' as const }
+  it('A2: a tool_result for an unknown or already-ended (done) tool changes nothing', () => {
+    const ended = { name: 'Bash', startedAt: 100, endedAt: 200, status: 'done' as const }
     const base: ExecutionState = { ...defaultExecutionState(), tools: { toolu_x: ended } }
     const s = applyDurableEvent(base, at(4, 'user', toolResult('toolu_x')))
     expect(s.tools.toolu_x).toEqual(ended)
     expect(applyDurableEvent(base, at(5, 'user', toolResult('toolu_never'))).tools).toEqual({ toolu_x: ended })
+  })
+
+  it('F1: a subagent result (non-null parent_tool_use_id) neither ends the turn nor touches partial / tools, but is still pushed to messages', () => {
+    let s = transient(defaultExecutionState(), messageStart(), delta(0, { type: 'text_delta', text: 'a' }))
+    s = { ...s, tools: running('toolu_main') }
+    const before = s
+    s = applyDurableEvent(s, at(1, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: 'toolu_x' }))
+    expect(s.partial).toEqual(before.partial)
+    expect(s.turnLive).toBe(true)
+    expect(s.tools).toEqual(before.tools)
+    expect(s.tools.toolu_main.status).toBe('running')
+    expect(s.messages).toHaveLength(1)
+    expect(s.lastSeq).toBe(1)
+  })
+
+  it('F2: an assistant frame without message.id finalizes the active partial like a matching id', () => {
+    let s = transient(defaultExecutionState(), messageStart('m1'), delta(0, { type: 'text_delta', text: 'a' }))
+    const noId = (text: string): Record<string, unknown> =>
+      ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: null }, parent_tool_use_id: null })
+    s = applyDurableEvent(s, at(1, 'assistant', noId('a')))
+    expect(s.partial?.blocks[0]).toBeUndefined()
+    expect(s.partial?.finalized).toBe(1)
+    s = transient(s, blockStart(1, { type: 'text', text: '' }), delta(1, { type: 'text_delta', text: 'b' }))
+    expect(s.partial?.blocks[1]?.text).toBe('b')
+    s = applyDurableEvent(s, at(2, 'assistant', noId('b')))
+    expect(s.partial?.blocks[1]).toBeUndefined()
+    expect(s.partial?.finalized).toBe(2)
+    expect(s.partial?.messageId).toBe('m1')
+  })
+
+  it('F3: a tool_result arriving after the turn-ending result overrides the aborted status with done at its own created_at', () => {
+    const fold = (...events: NexEvent[]) => events.reduce(applyDurableEvent, defaultExecutionState())
+    const s = fold(
+      at(10, 'assistant', assistant([toolUse('toolu_1')])),
+      at(11, 'result', { type: 'result', subtype: 'success' }),
+      at(12, 'user', toolResult('toolu_1')),
+    )
+    expect(s.tools.toolu_1).toEqual({ name: 'Bash', startedAt: 1000, endedAt: 1200, status: 'done' })
+    const err = fold(
+      at(10, 'assistant', assistant([toolUse('toolu_1')])),
+      at(11, 'result', { type: 'result', subtype: 'success' }),
+      at(12, 'user', toolResult('toolu_1', true)),
+    )
+    expect(err.tools.toolu_1).toEqual({ name: 'Bash', startedAt: 1000, endedAt: 1200, status: 'error' })
   })
 
   it('A3: a turn-ending event aborts only running tools; done/error/aborted keep their timestamps', () => {
