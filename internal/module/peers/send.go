@@ -21,7 +21,6 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
 	ipeers "github.com/wake/purdex/internal/peers"
-	"github.com/wake/purdex/internal/peers/ccuds"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -501,97 +500,18 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7b (local). The pair rate limit, which is the ONE /deliver policy that
-	// also runs here (spec §4.3). Not because local callers are distrusted —
-	// they hold this host's admin token — but because this limit protects the
-	// RECEIVING session from being flooded, and that protection is as wanted
-	// from next door as from another host. The key is built with the same
-	// constructor /deliver uses (deliver.go), and OriginKey carries HostID, so
-	// a local pair can never collide with a remote one.
+	// 7b + 8 (local). Steps 7b and 8 for a local target — the pair rate
+	// limit, the frame, the socket write, the audit result and the response —
+	// are deliverLocal's (send_local.go). It is entered AFTER the insert
+	// above, which is the whole reason it takes that row's id: its first act
+	// is a refusal that belongs on the audited side of the step-7 boundary.
 	//
-	// AFTER the insert, deliberately, mirroring /deliver: the refusal is on
-	// the audited side of the step-7 boundary because it is an attempt this
-	// daemon made, unlike the resolution failures above it, which are the
-	// caller's address being wrong.
-	//
-	// The two policies that are NOT here are decided, not overlooked:
-	// dedup keys on a msg id this very handler mints per attempt, so it could
-	// never fire and a test of it would assert nothing; and the host limit
-	// rations an external host's admission to this daemon, which the local
-	// admin caller is not (spec §4.3).
-	if isLocal && !m.pairs.Allow(pairKey{From: from.Key(), To: to.Key(targetHostID)}) {
-		const detail = "pair rate limit exceeded"
-		m.setResult(id, "", ipeers.ErrRateLimited, detail)
-		m.logf("peers: send %s to %q refused (%s): %s", msgID, targetAlias, ipeers.ErrRateLimited, detail)
-		writeWireError(w, http.StatusTooManyRequests, ipeers.APIError{Error: ipeers.ErrRateLimited, Detail: detail})
-		return
-	}
-
-	// 8 (local). The frame goes straight into the target's inbox, with the
-	// SENDER's own socket as its reply address — no helper stands in, so a
-	// native reply goes back to the session that sent this (spec §4.2, L4).
-	//
-	// Two different `from`s are set, and they are not the same field:
-	// BuildFrame's second argument becomes the NDJSON frame's top-level
-	// from, which is what Claude Code replies to, while Wrapper.From is an
-	// attribute inside the rendered content, which is what the receiving
-	// agent reads. Both are the sender's own inbox.
-	//
-	// HopChain is "" rather than anything off req: SendRequest carries no
-	// hop chain, and a CLI-initiated send is by definition the first hop.
-	//
-	// Written under stopCtx, for the same reason the remote call is: a
-	// caller that leaves mid-write must not leave a half frame or an
-	// unrecorded delivery.
+	// An early return rather than an else: the remote arm below is the rest
+	// of this function and is left exactly where it was. There is no strategy
+	// object here on purpose — two concrete transports read more plainly than
+	// one interface with two implementations.
 	if isLocal {
-		effective := mode
-		line, err := ccuds.BuildFrame(msgID, req.OriginInbox, ccuds.Wrapper{
-			From:     "uds:" + req.OriginInbox,
-			FromName: origin.Address,
-			FromMode: effective,
-			HopChain: "",
-			Text:     req.Text,
-		})
-		if err != nil {
-			// The result column carries the refusal CODE, as /deliver's
-			// refuse() writes it (deliver.go): this daemon performed the
-			// delivery itself, so it has an outcome of its own to record,
-			// unlike the remote arms below, whose result would have come
-			// from the peer's answer and a failed call has none.
-			m.setResult(id, "", ipeers.ErrSocketWriteFailed, err.Error())
-			m.logf("peers: send %s to %q: build frame: %v", msgID, targetAlias, err)
-			writeWireError(w, http.StatusInternalServerError, ipeers.APIError{Error: ipeers.ErrSocketWriteFailed, Detail: "build frame: " + err.Error()})
-			return
-		}
-		// The same mapping /deliver uses (deliver.go): a clean write is
-		// delivered, a write that completed but was never acknowledged is
-		// delivery_uncertain, anything else is a failure.
-		var result, errText string
-		switch err := m.writeFrame(m.stopCtx, target.Agent.Inbox, line, m.sockWriteTimeout); {
-		case err == nil:
-			result = ipeers.ResultDelivered
-		case errors.Is(err, ccuds.ErrPostWriteTimeout):
-			result = ipeers.ResultDeliveryUncertain
-			errText = err.Error()
-		default:
-			// Result is the code, error the text — see the build-frame arm.
-			m.setResult(id, "", ipeers.ErrSocketWriteFailed, err.Error())
-			m.logf("peers: send %s to %q: inbox write failed: %v", msgID, targetAlias, err)
-			writeWireError(w, http.StatusBadGateway, ipeers.APIError{Error: ipeers.ErrSocketWriteFailed, Detail: err.Error()})
-			return
-		}
-		m.setResult(id, effective, result, errText)
-		_ = json.NewEncoder(w).Encode(ipeers.SendResponse{
-			MsgID:         msgID,
-			ToHostID:      targetHostID,
-			ToAddress:     toAddress,
-			To:            to,
-			Result:        result,
-			EffectiveMode: effective,
-			// A local delivery always has a return route: the reply
-			// address is a socket in this very filesystem.
-			OneWay: false,
-		})
+		m.deliverLocal(w, dreq, id, mode, req.OriginInbox, origin.Address, target.Agent.Inbox, targetHostID, targetAlias, toAddress)
 		return
 	}
 
