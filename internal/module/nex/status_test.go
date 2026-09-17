@@ -23,8 +23,7 @@ func TestBuildStatus(t *testing.T) {
 		ServiceRoots: []string{"/svc"},
 	}
 	cfg := &nexconfig.Config{
-		DataDir:  "/data/nex",
-		CswapBin: "/usr/local/bin/cswap",
+		DataDir: "/data/nex",
 		Sandbox: sandbox.Policy{
 			MaxProfile:     "handoff",
 			DefaultProfile: "trusted",
@@ -58,7 +57,6 @@ func TestBuildStatus(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "/data/nex", eff["data_dir"])
 		assert.Equal(t, "/usr/local/bin/claude", eff["claude_bin"])
-		assert.Equal(t, "/usr/local/bin/cswap", eff["cswap_bin"])
 		assert.Equal(t, "handoff", eff["max_profile"])
 		assert.Equal(t, "trusted", eff["default_profile"])
 		assert.Equal(t, []string{"/repo"}, eff["repo_roots"])

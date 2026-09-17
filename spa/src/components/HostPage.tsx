@@ -24,31 +24,25 @@ function buildHostPath({ hostId, subPage }: Selection) {
 }
 
 /**
- * Single source of truth for host-id fallback ordering across both the
+ * Single source of truth for host-id fallback across both the
  * runtime-independent pre-resolve path (`preResolveHostId`) and the
  * full resolve path (`getFallbackSelection` / `resolveSelection`).
  *
- * Order:
- *   1. lastSelection.hostId (if still in hostOrder)
- *   2. activeHostId (if still in hostOrder)
- *   3. hostOrder[0]
- *
- * Returning null only when hostOrder is empty.
- *
- * Extracting this helper guarantees both callsites agree on fallback
- * semantics; equivalence regression covered by host-selection-utils tests.
+ * The Hosts page deliberately does NOT remember a host: any route that does
+ * not name one selects `hostOrder[0]`, returning null only when hostOrder is
+ * empty.  `_activeHostId` and `_lastSel` are kept in the signature so both
+ * call sites (which do have them to hand) stay unchanged, but they are
+ * intentionally ignored — see spec §3.  Sub-page memory is unaffected and
+ * still flows through `lastSelection.subPage`.
  *
  * @internal
  */
 // eslint-disable-next-line react-refresh/only-export-components
 export function pickHostIdFallback(
   hostOrder: string[],
-  activeHostId: string | null,
-  lastSel: { hostId: string } | null,
+  _activeHostId: string | null,
+  _lastSel: { hostId: string } | null,
 ): string | null {
-  if (hostOrder.length === 0) return null
-  if (lastSel?.hostId && hostOrder.includes(lastSel.hostId)) return lastSel.hostId
-  if (activeHostId && hostOrder.includes(activeHostId)) return activeHostId
   return hostOrder[0] ?? null
 }
 
@@ -60,7 +54,7 @@ export function pickHostIdFallback(
  *
  * Selection priority:
  *   1. URL hostId (when /hosts/:id/... and :id is in hostOrder)
- *   2. shared fallback (lastSel → activeHostId → hostOrder[0])
+ *   2. shared fallback (hostOrder[0])
  */
 function preResolveHostId(
   location: string,
@@ -204,8 +198,10 @@ function resolveSelection(
       }
     }
 
+    // Bare /hosts — the host is NOT remembered (spec §3): always hostOrder[0].
+    // The remembered sub-page still applies, clamped for the first host.
     if (lastSel) {
-      const hostId = hostOrder.includes(lastSel.hostId) ? lastSel.hostId : fallbackSelection.hostId
+      const hostId = fallbackSelection.hostId
       const subPage = pickSelectableSubPage(hostId, lastSel.subPage, evalRuntimeFor(hostId))
       const selection = { hostId, subPage }
       return { selection, canonicalPath: buildHostPath(selection), shouldPersistSelection: true }
@@ -233,9 +229,10 @@ function resolveSelection(
     }
   }
 
-  // Non-host route: keep lastSel if available, clamped to live registry.
+  // Non-host route: the host is NOT remembered (spec §3), but the remembered
+  // sub-page is, clamped to the live registry for the first host.
   if (lastSel) {
-    const hostId = hostOrder.includes(lastSel.hostId) ? lastSel.hostId : fallbackSelection.hostId
+    const hostId = fallbackSelection.hostId
     const subPage = pickSelectableSubPage(hostId, lastSel.subPage, evalRuntimeFor(hostId))
     return {
       selection: { hostId, subPage },

@@ -6,10 +6,10 @@ import type { NexInfo } from '../../../lib/host-api'
 
 vi.mock('../../../lib/nex/nex-api', () => ({ fetchNexHost: vi.fn(), fetchNexCapabilities: vi.fn() }))
 
-const ready: NexInfo = { configured: true, mounted: true, ready: true, init_error: '', effective: { data_dir: '/d/nex', claude_bin: '', cswap_bin: '', max_profile: 'handoff', default_profile: 'standard', repo_roots: ['/Users/w/Workspace'], service_roots: [], path_prefix: '/opt/bin', lease_ttl: '2m0s', interrupt: '10s', turn: '5m0s' } }
+const ready: NexInfo = { configured: true, mounted: true, ready: true, init_error: '', effective: { data_dir: '/d/nex', claude_bin: '', max_profile: 'handoff', default_profile: 'standard', repo_roots: ['/Users/w/Workspace'], service_roots: [], path_prefix: '/opt/bin', lease_ttl: '2m0s', interrupt: '10s', turn: '5m0s' } }
 
 beforeEach(() => {
-  vi.mocked(api.fetchNexHost).mockReset().mockResolvedValue({ active_account: 'wake@example.com', quota: { five_hour_pct: 12.5, seven_day_pct: 80, resets_at: 0, source: 'cswap' } })
+  vi.mocked(api.fetchNexHost).mockReset().mockResolvedValue({ active_account: 'wake@example.com', quota: { five_hour_pct: 12.5, seven_day_pct: 80, resets_at: 0, source: 'usage_api' } })
   // sandbox_default_profile/sandbox_max_profile deliberately differ from
   // `ready.effective.{default_profile,max_profile}` so a fix#1 regression
   // (reading the clamped live capability instead of the configured
@@ -66,6 +66,33 @@ describe('NexEngineStatus', () => {
     await waitFor(() => expect(api.fetchNexCapabilities).toHaveBeenCalledTimes(1))
     expect(screen.getByText('standard / handoff')).toBeInTheDocument()
     warn.mockRestore()
+  })
+
+  // nexen v0.11.0 resolves the host's own Claude Code login out of two
+  // backends the CLI flips between, and reports credential_warning when the
+  // pick was ambiguous. Saying so is the whole reason the daemon resolves it
+  // instead of letting the CLI pick silently — a user who cannot see the
+  // warning runs turns against whichever account won a coin toss.
+  it('renders the credential source, account id and the ambiguity warning', async () => {
+    vi.mocked(api.fetchNexHost).mockResolvedValueOnce({
+      active_account: 'wake@example.com',
+      account_id: 'HOST',
+      credential_source: 'keychain',
+      credential_warning: 'two usable credentials for different accounts; picked the freshest',
+      quota: null,
+    })
+    render(<NexEngineStatus hostId="h" info={ready} onRefresh={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('nex-credential-warning')).toHaveTextContent(/different accounts/))
+    expect(screen.getByText('keychain · HOST')).toBeInTheDocument()
+  })
+
+  // An older daemon omits all three fields; the card must not grow an empty
+  // row or a stray warning box for a response that simply predates them.
+  it('omits the credential rows entirely when the daemon does not report them', async () => {
+    render(<NexEngineStatus hostId="h" info={ready} onRefresh={() => {}} />)
+    await waitFor(() => expect(screen.getByText('wake@example.com')).toBeInTheDocument())
+    expect(screen.queryByTestId('nex-credential-warning')).not.toBeInTheDocument()
+    expect(screen.queryByText(/credential from/i)).not.toBeInTheDocument()
   })
 
   it('renders quota as unknown when null (never 0)', async () => {

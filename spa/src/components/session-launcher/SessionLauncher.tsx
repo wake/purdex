@@ -15,6 +15,7 @@ import { EMPTY_HOST_CONFIG, useHostConfigStore } from '../../stores/useHostConfi
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { CommandIconView } from '../hosts/CommandIconView'
+import { HoverTooltip } from '../HoverTooltip'
 
 interface Props {
   hostId: string
@@ -176,24 +177,36 @@ export function SessionLauncher({ hostId, disabled, onLaunched, onCancel, launch
         <div data-testid="launcher-grid" className="grid grid-cols-2 @md:grid-cols-3 @3xl:grid-cols-4 gap-2" onKeyDown={handleGridKey}>
           {config.projects.map((project) => (
             <div key={project.id} data-testid={`launcher-project-${project.id}`}
-              className="min-w-0 flex flex-col gap-1 p-2 rounded border border-border-subtle bg-surface-primary">
-              <button type="button" data-launch-item data-testid={`launcher-project-name-${project.id}`} disabled={locked}
-                {...activate({ name: trimmed, project })}
-                className={`flex items-center gap-1.5 text-left text-sm font-bold text-text-primary min-w-0 ${itemCls}`}>
-                <FolderSimple size={14} className="shrink-0 text-text-secondary" />
-                <span className="truncate">{project.name}</span>
-              </button>
-              <span className="truncate text-xs text-text-muted font-mono" title={project.path}>{project.path}</span>
+              className="min-w-0 flex items-center gap-1.5 p-1.5 rounded border border-border-subtle bg-surface-primary">
+              {/* The tooltip anchors to its parent element, and a disabled button is
+                  an unreliable mouseenter/focusin target — so it hangs off this
+                  never-disabled wrapper, which also carries the button's sizing. */}
+              <span className="relative flex min-w-0 flex-1">
+                <button type="button" data-launch-item data-testid={`launcher-project-name-${project.id}`} disabled={locked}
+                  {...activate({ name: trimmed, project })}
+                  className={`flex items-center gap-1.5 text-left text-sm font-bold text-text-primary min-w-0 flex-1 ${itemCls}`}>
+                  <FolderSimple size={14} className="shrink-0 text-text-secondary" />
+                  <span className="truncate">{project.name}</span>
+                </button>
+                <HoverTooltip placement="top" data-testid={`launcher-project-tip-${project.id}`}>
+                  {`${project.name} · ${project.slug} · ${project.path}`}
+                </HoverTooltip>
+              </span>
               {config.commands.length > 0 && (
-                <div className="flex flex-wrap gap-1">
+                <div className="flex items-center gap-0.5 shrink-0">
                   {config.commands.map((command) => (
-                    <button key={command.id} type="button" data-launch-item
-                      data-testid={`launcher-command-${project.id}-${command.id}`}
-                      title={command.name} aria-label={`${project.name} · ${command.name}`} disabled={locked}
-                      {...activate({ name: trimmed, project, command })}
-                      className={`p-1 text-text-secondary hover:text-text-primary hover:bg-surface-hover ${itemCls}`}>
-                      <CommandIconView icon={command.icon} size={16} />
-                    </button>
+                    <span key={command.id} className="relative inline-flex">
+                      <button type="button" data-launch-item
+                        data-testid={`launcher-command-${project.id}-${command.id}`}
+                        aria-label={`${project.name} · ${command.name}`} disabled={locked}
+                        {...activate({ name: trimmed, project, command })}
+                        className={`p-1 text-text-secondary hover:text-text-primary hover:bg-surface-hover ${itemCls}`}>
+                        <CommandIconView icon={command.icon} size={16} />
+                      </button>
+                      <HoverTooltip placement="top" data-testid={`launcher-command-tip-${project.id}-${command.id}`}>
+                        {command.name}
+                      </HoverTooltip>
+                    </span>
                   ))}
                 </div>
               )}

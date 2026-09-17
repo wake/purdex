@@ -81,7 +81,6 @@ func buildOptions(hostID, dataDir string, n pdxconfig.NexConfig, shutdownBudget 
 		DataDir:      filepath.Join(dataDir, "nex"),
 		RepoRoots:    n.RepoRoots,
 		ServiceRoots: n.ServiceRoots,
-		CswapBin:     n.CswapBin,
 		HostID:       hostID,
 		Sandbox: sandbox.Policy{
 			MaxProfile:     n.Sandbox.MaxProfile,

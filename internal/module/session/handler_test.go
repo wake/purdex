@@ -1,10 +1,16 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -315,6 +321,159 @@ func TestHandlerCreateSession_StampsTmuxInstance(t *testing.T) {
 	var info SessionInfo
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
 	assert.Equal(t, "4471:1788740000", info.TmuxInstance)
+}
+
+// TestHandlerCreateSession_RecordsTmuxCwdNotRequestedCwd pins the create path
+// to the truth rather than to the request.
+//
+// resolveCwd stats the directory, and then tmux is invoked — a window in which
+// the directory can go away. tmux does not fail on an unusable -c, it silently
+// starts the session in $HOME, so the cwd the session is really in can differ
+// from the one that was asked for. `#{session_path}` is the only witness of
+// which one it is, and both the stored meta and the response must carry it.
+func TestHandlerCreateSession_RecordsTmuxCwdNotRequestedCwd(t *testing.T) {
+	mod, meta, fake := newTestModule(t)
+	// tmux ignored -c and started the session somewhere else.
+	fake.ForceNewSessionCwd = "/"
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	body := `{"name": "raced", "cwd": "/tmp"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+	assert.Equal(t, "/", info.Cwd, "response must report the directory tmux used")
+
+	stored, err := meta.GetMeta("$0")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "/", stored.Cwd, "stored meta must record the directory tmux used")
+}
+
+// TestHandlerCreateSession_RecordsRequestedCwdWhenTmuxAgrees is the other half:
+// in the ordinary case tmux honours -c, so nothing about the recorded cwd moves.
+func TestHandlerCreateSession_RecordsRequestedCwdWhenTmuxAgrees(t *testing.T) {
+	mod, meta, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	body := `{"name": "honoured", "cwd": "/tmp"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+	assert.Equal(t, "/tmp", info.Cwd)
+
+	stored, err := meta.GetMeta("$0")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "/tmp", stored.Cwd)
+}
+
+// captureStdLog points the standard logger at a buffer for the duration of the
+// test and hands back a reader for whatever was written to it. The warning
+// under test goes through the package-level logger, so this is the only seam.
+func captureStdLog(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return buf.String
+}
+
+// TestHandlerCreateSession_SilentWhenCwdOnlyCanonicalised guards the warning
+// against its own false positives.
+//
+// tmux's `#{session_path}` comes from getcwd(), which resolves symlinks and
+// filesystem case, so a wholly successful create routinely reports a different
+// *string* than was asked for (/tmp → /private/tmp on macOS, and any symlinked
+// worktree the same way). Warning on those would bury the one case the warning
+// exists for.
+func TestHandlerCreateSession_SilentWhenCwdOnlyCanonicalised(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(realDir, 0o755))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(realDir, link))
+	// The session was asked for via the symlink; getcwd() reports the target.
+	fake.ForceNewSessionCwd = realDir
+
+	logged := captureStdLog(t)
+
+	body := fmt.Sprintf(`{"name": "canonical", "cwd": %q}`, link)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+	assert.Equal(t, realDir, info.Cwd, "the canonical path is still what gets recorded")
+	assert.Empty(t, logged(), "canonicalisation is not a divergence and must not warn")
+}
+
+// TestHandlerCreateSession_WarnsWhenCwdTrulyDiverges is the case the warning is
+// for: tmux did not land in the requested directory at all.
+func TestHandlerCreateSession_WarnsWhenCwdTrulyDiverges(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	root := t.TempDir()
+	// The requested directory went away between resolveCwd and tmux, so tmux
+	// silently started the session in a fallback directory instead.
+	fake.ForceNewSessionCwd = "/"
+
+	logged := captureStdLog(t)
+
+	body := fmt.Sprintf(`{"name": "diverged", "cwd": %q}`, root)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	out := logged()
+	assert.Contains(t, out, "did not honour the requested directory")
+	assert.Contains(t, out, root, "the warning names the requested path")
+	assert.Contains(t, out, `"/"`, "the warning names the path tmux actually used")
+}
+
+// TestSameDirectory covers the branch the handler cannot reach from a test —
+// the requested directory having been removed after resolveCwd stat'd it,
+// which is the real TOCTOU the warning exists to surface.
+func TestSameDirectory(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(realDir, 0o755))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(realDir, link))
+
+	assert.True(t, sameDirectory(link, realDir), "a symlink and its target are one directory")
+	assert.True(t, sameDirectory(realDir, realDir))
+	assert.False(t, sameDirectory(realDir, root), "different directories are different")
+	assert.False(t, sameDirectory(filepath.Join(root, "gone"), realDir),
+		"a path that no longer exists is not the same directory as anything")
+	assert.False(t, sameDirectory(realDir, filepath.Join(root, "gone")))
 }
 
 func TestHandlerCreateSessionWithMode(t *testing.T) {
@@ -890,4 +1049,61 @@ func TestHandlerTerminalWSNotFound(t *testing.T) {
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandlerCreateSessionExpandsTildeCwd — tmux neither expands ~ nor fails
+// on an unusable -c; it silently starts the session in $HOME. The daemon must
+// therefore hand tmux an already-resolved absolute directory.
+func TestHandlerCreateSessionExpandsTildeCwd(t *testing.T) {
+	mod, meta, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	// handleCreate resolves through os.UserHomeDir, which reads $HOME.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	want := filepath.Join(tmp, "sub")
+	require.NoError(t, os.MkdirAll(want, 0o755))
+
+	body := `{"name": "tilde", "cwd": "~/sub"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var info SessionInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
+	assert.Equal(t, want, info.Cwd, "response must carry the resolved path")
+
+	sessions, err := fake.ListSessions()
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, want, sessions[0].Cwd, "tmux must receive the expanded path")
+
+	m, err := meta.GetMeta(sessions[0].ID)
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	assert.Equal(t, want, m.Cwd, "stored meta must carry the resolved path")
+}
+
+// TestHandlerCreateSessionRejectsMissingCwd — a missing directory used to be
+// swallowed by tmux, which created the session in $HOME anyway. It is now a
+// 400, and nothing is created.
+func TestHandlerCreateSessionRejectsMissingCwd(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	missing := filepath.Join(t.TempDir(), "nope")
+	body := `{"name": "missing-cwd", "cwd": ` + strconv.Quote(missing) + `}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid cwd")
+	assert.False(t, fake.HasSession("missing-cwd"), "nothing may be created")
 }

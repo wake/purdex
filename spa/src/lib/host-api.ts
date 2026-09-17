@@ -38,7 +38,6 @@ export interface NexConfig {
   repo_roots: string[]
   service_roots: string[]
   claude_bin: string
-  cswap_bin: string
   path_prepend: string[]
   sandbox: NexSandboxConfig
   timeouts: NexTimeoutsConfig
@@ -47,7 +46,6 @@ export interface NexConfig {
 export interface NexEffective {
   data_dir: string
   claude_bin: string
-  cswap_bin: string
   max_profile: string
   default_profile: string
   repo_roots: string[]

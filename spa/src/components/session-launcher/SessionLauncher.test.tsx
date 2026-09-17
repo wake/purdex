@@ -69,12 +69,46 @@ describe('SessionLauncher', () => {
     expect(grid).toContain('@3xl:grid-cols-4')
   })
 
-  it('renders every project with name, truncated path (title) and every command icon', () => {
+  // The card is one row now: name + icons. Path/slug/command names moved to
+  // HoverTooltip, so neither the path line nor the native titles remain.
+  it('renders every project with its name and every command icon, and prints no path or title', () => {
     renderLauncher()
     expect(screen.getByTestId('launcher-project-name-p1')).toHaveTextContent('Purdex')
-    expect(screen.getByTitle('/srv/ploom')).toBeInTheDocument()
-    expect(screen.getByTestId('launcher-command-p2-c2')).toHaveAttribute('title', 'Codex')
-    expect(screen.getAllByTestId(/^launcher-command-/)).toHaveLength(4)
+    expect(screen.getByTestId('launcher-project-p2').textContent).not.toContain('/srv/ploom')
+    expect(screen.queryByTitle('/srv/ploom')).toBeNull()
+    expect(screen.getByTestId('launcher-command-p2-c2')).not.toHaveAttribute('title')
+    expect(screen.getAllByTestId(/^launcher-command-(?!tip-)/)).toHaveLength(4)
+  })
+
+  it('hovering a project reveals a tooltip with name \u00b7 slug \u00b7 path after the 800ms delay', () => {
+    renderLauncher()
+    vi.useFakeTimers()
+    try {
+      expect(screen.getByTestId('launcher-project-tip-p1').className).toContain('opacity-0')
+      // A3: the tooltip hangs off a never-disabled wrapper, not the button.
+      fireEvent.mouseEnter(screen.getByTestId('launcher-project-name-p1').parentElement!)
+      act(() => { vi.advanceTimersByTime(800) })
+      const tip = screen.getByTestId('launcher-project-tip-p1')
+      expect(tip.className).toContain('opacity-100')
+      expect(tip.textContent).toBe('Purdex \u00b7 purdex \u00b7 ~/w/purdex')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('hovering a command icon reveals a tooltip with the command name after the 800ms delay', () => {
+    renderLauncher()
+    vi.useFakeTimers()
+    try {
+      expect(screen.getByTestId('launcher-command-tip-p2-c2').className).toContain('opacity-0')
+      fireEvent.mouseEnter(screen.getByTestId('launcher-command-p2-c2').parentElement!)
+      act(() => { vi.advanceTimersByTime(800) })
+      const tip = screen.getByTestId('launcher-command-tip-p2-c2')
+      expect(tip.className).toContain('opacity-100')
+      expect(tip.textContent).toBe('Codex')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('Enter in the name input launches name + ~ (no project, no command)', async () => {

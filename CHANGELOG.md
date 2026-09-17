@@ -1,5 +1,145 @@
 # Changelog
 
+## [1.0.0-alpha.371] - 2026-09-17
+
+### Chore: `pdx nex host` 終於說得出憑證是哪來的（#1105，nexen v0.11.2）
+
+`cmd/pdx/nex.go` 直接 import nexen 自己的 CLI printer（`lab.protype.tw/wake/nexen/cmd/nex/client`），所以 `pdx nex host` 印什麼是由 nexen 的 pin 決定的。v0.11.0 在 `GET /v1/host` 加的三個欄位一直在 wire 上，但從來沒進到終端機。
+
+最要緊的是 **`credential_warning`** —— 它非空的時機正是「兩個憑證 backend 拿著**不同帳號**、nexen 的挑選是任意的」。Engine 卡片從 alpha.368 起會顯示它（#1098），但看 CLI 的人完全沒有管道知道。R9-5 的整句主張是「CLI 靜默選一個，nexen 要說出來」—— 而 nexen 的第一層皮自己也沒說出來。
+
+對**沒有重啟也沒有改動**的現有 daemon 跑新 CLI：
+
+```
+active_account: wake.gs@gmail.com
+account_id: HOST            ← 新
+credential_source: file     ← 新
+quota_five_hour_pct: 18.0
+...
+```
+
+三個欄位在 wire 上都是 `omitempty`，舊 daemon 一個都不送，CLI 不會替它生空行 —— 替一個從沒被告知的事實生出空行，等於 CLI 宣稱知道它不知道的事。
+
+nexen 同版另外拿掉了 CLI 的 `(none — single-account mode)`：那個模式在 v0.11.0（R1-1）之後就不存在，指著一個 daemon 已經沒有的模式，只會叫讀的人去找不在那裡的東西。
+
+**purdex 側零程式碼改動**，只有 `go.mod` / `go.sum` 兩行。v0.11.1 → v0.11.2 在 nexen 側只動 `cmd/nex/client` 與其測試，wire 與 schema 都沒碰（仍是 v5），**部署不用做任何事**。
+
+
+## [1.0.0-alpha.370] - 2026-09-17
+
+### Test: 測試不再碰得到機器的 keychain（#1102，nexen v0.11.1）
+
+alpha.368 為了讓 turn 通過 admission，在測試自己的 `$HOME` 底下寫了一份假的 Claude Code 登入。當時就標了一個 ⚠️ 並開了 #1099：那份假 token 只有在「檔案是唯一可用 backend」時才留在本機。
+
+**這個洞比當時寫的大。** `hostcred.Reader` 的**檔案**路徑跟著 home 走，但 **keychain 用的是固定的 service 名字**：
+
+```go
+Path:        filepath.Join(home, ".claude", ".credentials.json")  // 跟著 home
+Service:     hostcred.DefaultKeychainService                       // 固定字串
+KeychainRun: hostcred.RunSecurity                                  // 真的
+KeychainDel: hostcred.DeleteKeychainItem                           // 真的
+```
+
+轉向 `$HOME` 只隔離了**一個** backend。另一個仍然對著操作者真實的登入 —— 而那正是這個 tailnet 三台裡有兩台（a19／a26）實際存放憑證的地方。
+
+於是「在 temp `$HOME` 寫一份假登入」拿到的不是一個可用憑證，是**兩個**，兩個後果同時成立：兩把 token 都會被送去 `GET /api/oauth/profile` 以便分辨彼此（#1099 只寫到這裡），而且**憑證看門狗握著對真實 keychain 項目的 DELETE 能力**。
+
+mlab 一路沒踩到，只是因為這台的 keychain 是空的 —— 憑證住在檔案裡。那是環境巧合，不是設計保證。
+
+#### #1099 原本提的修法不夠
+
+原議是把 `credential_source` 接進 `[nex]`、fixture 釘死 `file`。nexen 那邊驗過**不足以代替**：`credential_source` 只跳過身分解析的慢路，`Reader.Read` 仍然會起 `security` 子行程，看門狗也仍然帶著 deleter。
+
+nexen v0.11.1 新增的 `Options.DisableHostKeychain` 才是正解，而它存在的理由正是這個形狀：**行程本身的 `$HOME` 已經被轉向**的 embedder，自動的 `HomeDir` 規則看不到 —— 因為 `os.UserHomeDir()` 讀的就是 `$HOME`，所以被轉向的 `$HOME` 在那個行程眼裡就是「真的」home。
+
+#### 改了什麼
+
+`go.mod` → `v0.11.1`。`newMountFixture` 在 **assemble seam** 上設旗標，不是在 `buildOptions` —— production **必須**讀 keychain，a19／a26 的 host 登入就住在那裡，誤關會讓那兩台解析不到帳號。
+
+守衛測試讀的是**真 `Assemble` 實際收到的 `Options`**，不是 fixture 自己設的旗標。所以只刪掉設值那一行、或整個 wrapper 刪掉，測試都會紅；要讓它綠就只能真的把旗標送到邊界另一邊。
+
+**本版不用動 DB**：v0.11.0 → v0.11.1 純新增，只改 `assemble.go` 與其測試，schema 仍是 v5。
+
+#### 一個可以帶走的通則
+
+nexen 那邊修這個洞時，一度 commit 了「宣稱修好但其實沒修到」的版本，發現方式是 mutation 測試沒有變紅。根因值得記：**任何要拿來做安全決策的路徑比對，不能先 `Abs` 或 `Clean`** —— 兩者都用文字消解 `..`，會把你正要檢查的東西先消掉。
+
+
+## [1.0.0-alpha.369] - 2026-09-17
+
+### Fix: Host Launcher 回報的五個缺陷（#1101）
+
+Host Launcher（alpha.357–360）上線後回報的五個問題，一併修掉。
+
+#### 🔴 啟動的 session 根本沒進專案目錄（daemon）
+
+從路徑是 `~/Workspace/wake/malb` 的專案卡片啟動 `cld-yolo`，pane 的提示字元是 `wake [/Users/wake] ❯` —— 指令跑在家目錄，不是專案裡。
+
+根因在 tmux：`tmux new-session -c '~/foo'` **不展開波浪號，也不報錯**，直接把 session 開在 `$HOME`；`-c` 指向不存在的目錄同樣如此（兩者實測都回 exit 0）。而 host 專案路徑是明確允許 `~/…` 的（`hostconfig/validate.go`），`hostconfig/checkpath.go` 也早就正確展開了 —— 只有建 session 這條路徑沒有。
+
+新的 `internal/module/session/cwd.go`：trim → 空字串維持 `/` → 拒絕 NUL → 以 `os.UserHomeDir` 展開開頭的 `~` / `~/` → 拒絕仍是相對路徑的輸入 → `filepath.Clean` → `os.Stat`。目錄不存在或不是目錄一律回 **400**，不再讓 tmux 默默吞掉。
+
+**這是行為變更**：tab rebuild 與 snapshot restore 碰到已刪除的專案目錄，現在會明確失敗，而不是看似成功卻開在 `$HOME`。codex 逐一檢查過所有 `createSession` 呼叫端，沒有任何一個合理需要不存在的 cwd。
+
+另外 `handleCreate` 改為記錄 **tmux 實際使用的目錄**（`#{session_path}`）到 `SessionMeta.Cwd` 與 create 回應，而非「要求的」路徑，讓三條路徑（create / list / get）的 `Cwd` 全都來自 tmux。兩者真正分歧時打 warning；**不殺 session** —— `session_path` 來自 `getcwd()`，會正規化 symlink 與檔名大小寫（macOS `/tmp` → `/private/tmp`），字串比對必然誤判，為誤判殺掉剛建好的 session 比它要防的罕見 race 嚴重得多。判斷改用 `os.SameFile`，純正規化不出聲。
+
+#### New Tab 一開啟就捲到 session 清單最底
+
+`BrowserNewTabSection` 在 mount 時 focus 網址列。`focus()` 會把所有可捲動祖先捲到目標可見為止，而 New Tab 的欄位是 `overflow-y-auto`，於是每次開分頁都被拖過 session 清單。只在 Electron 下會發生（`disabled: !caps.canBrowserPane`）。自動聚焦整個拿掉。
+
+#### Host 頁開在上次看的那台，不是第一台
+
+`pickHostIdFallback` 的優先序是 `lastSelection.hostId` → `activeHostId` → `hostOrder[0]`。未指名 host 的路由現在一律選 `hostOrder[0]`，完全不記憶。子頁記憶保留，且仍會經 `pickSelectableSubPage` 夾取；明確的 `/hosts/<id>/<sub>` 依然優先。
+
+#### New Tab 的「+」靠右並加上底色
+
+每台 host 的 `+` 從 `ml-1` 移到列尾（`ml-auto`），15% 透明度的 accent tint 換成實心 accent 底色；reconnecting 標籤上移到 host 名稱旁。
+
+#### Launcher 卡片壓成一列
+
+`[{專案} {指令}{指令}{指令}]`，最窄一行兩張。永遠可見的路徑列拿掉，路徑、slug 與指令名稱改由 `HoverTooltip` 在 hover 時顯示 —— tooltip 掛在不會 disabled 的 wrapper span 上，所以 `locked` 狀態的按鈕一樣有提示。鍵盤模型、`data-launch-item` 順序與啟動語意皆未變。
+
+#### 部署
+
+daemon 有變更：mlab 需重新 `make build` + 重啟，air-2026 需更新 App 內建的 daemon，第一項修正才會生效。
+
+## [1.0.0-alpha.368] - 2026-09-17
+
+### Refactor: 拔掉 cswap 殘留，nexen 升到 v0.11.0（#1098）
+
+nexen v0.11.0 把外部切帳工具 **cswap 整個移除**。它本來就壞了——兩個帳號的 usage 都是 null、refresh token 皆 `invalid_grant`、keychain 讀取累積失敗 1279 次——所以沒有損失任何還能用的功能。purdex 這邊的 `cswap_bin` 從此是死碼，Go config、`module/nex` 的映射與 `effective` 輸出、SPA 的表單欄位／型別／en+zh-TW i18n 一併拔除。
+
+`go.mod` 的 `lab.protype.tw/wake/nexen` 從 pseudo-version 升到 `v0.11.0`。兩件事合成一個 commit：只刪欄位不升 pin 的話，舊 pin 的 nexen `Validate` 會去 PATH 找 `cswap`，測試會紅。
+
+#### 🔴 部署必須刪 nex.db
+
+nexen 的 schema version 從 3 跳到 5（`turns` 新增 `account_uuid` / `credential_source`），alpha 期沒有 migration，`store.Open` 直接拒絕舊 DB：
+
+```
+pdx stop
+rm ~/.config/pdx/nex/nex.db*
+pdx start
+```
+
+不刪不會讓 daemon 掛掉——`Init` 對 assemble 失敗是 soft-fail，nex 模組改吐 503 並在 Status 顯示 `store: … has schema version 3, this build expects 5`，terminal daemon 照常運作。
+
+#### 順帶補上：憑證來源與歧義警告（adversarial review 抓到）
+
+v0.11.0 讓 host 自己的 Claude Code 登入**就是** turn 所跑的帳號，而那個登入是從**兩個** backend 解析出來的（`~/.claude/.credentials.json` 與 macOS keychain）——CLI 會寫其中一個、刪掉另一個，從不說用了哪個。nexen 相對 CLI 的價值就是它**會說**：`GET /v1/host` 新增 `account_id` / `credential_source` / `credential_warning`，最後那個在兩個 backend 拿著**不同帳號**、挑選是任意的時候才非空。
+
+升 pin 卻不讀這三個欄位，等於使用者可能對著擲硬幣選出來的帳號跑 turn，畫面上一個字都沒有。Engine 卡片現在把 warning 當橫幅顯示在帳號列上方，來源（含 account id）另開一列。三個欄位都是 optional：沒有 host 登入的 daemon、以及所有比 v0.11.0 舊的 daemon 都不會回報，那些情況整組列不渲染而不是渲染成空的。
+
+#### 一個留著沒補的洞（#1099）
+
+`mount_test` 的新 fixture 在測試自己的 `$HOME` 底下寫假憑證讓 turn 通過 admission。但 hostcred 的 resolver 是兩條路：**一個** backend 可用時讀 `~/.claude.json`（~1ms，純本地），**兩個**都可用時把**每一把 token** 都送去 `GET /api/oauth/profile`。所以在 keychain 裡確實有 `Claude Code-credentials` 的機器上，這些測試會帶著假 token 和使用者的真 token 去打 Anthropic。
+
+mlab 現在踩不到（這台的憑證在檔案不在 keychain），但那是環境巧合不是設計保證。真正的修法是把 nexen 的 `credential_source` 旋鈕接進 `[nex]` 讓 fixture 釘死 `file`——那是新的設定介面，不適合長在一個以「拔設定欄位」為題的 PR 裡，開成 #1099。
+
+#### 相容性
+
+既有 `config.toml` 殘留的 `cswap_bin` 不會出事：`toml.Unmarshal` 忽略 struct 沒宣告的 key，下次寫入時自然消失。舊版 SPA 對新 daemon PUT 帶 `cswap_bin` 同理。
+
+
 ## [1.0.0-alpha.367] - 2026-09-17
 
 ### Feat: Peer Address v3 —— 一個地址，加上一個只是標籤的標籤（#1091）
