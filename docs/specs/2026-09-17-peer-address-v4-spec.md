@@ -187,8 +187,27 @@ Title   string `json:"title"`   // was Label; free text, "" until set
 
 `Canonical` is renamed `Ref` — it is no longer "the canonical address", it is the disambiguator.
 `Suffix` is **deleted**: its two jobs were readability (now the name's) and provenance-by-`RowKind`
-(which `RowKind` already carries). `SessionName` keeps the tmux session name, and §5.7 adds the
-`TMUX` column so it stays on screen.
+(which `RowKind` already carries).
+
+```go
+TmuxName string `json:"tmux_name"` // display-only; "" when unknown
+```
+
+**`TmuxName` is new, and it exists because deleting `Suffix` would otherwise lose real information.**
+`SessionName` is set only on session rows (`record.go:156`); `EntryRecord` never sets it, because an
+entry row has no session row behind it. Under v3 the tmux name still reached the screen through
+`Suffix`, whose two provenances `RowKind` told apart. Drop `Suffix` without replacing that and the
+`TMUX` column in §5.7 renders empty for exactly the rows whose session is hardest to find.
+
+`TmuxName` carries `s.Name` on a session row and `e.TmuxSessionName()` on an entry row — the same
+two provenances, in a field that says what it is. **It is display-only and routed on by nothing.**
+`SessionName` keeps its current meaning untouched, so tier 4 and the `tmux:<name>` form are
+unaffected: an entry row's frozen registry value must never become a way to reach anything, because
+that value going stale is v3 §2's P1.
+
+§5.7 marks an entry row's value with a trailing `?`, because a frozen name is a place that may no
+longer exist and a reader deciding where to attach is entitled to know which of the two they are
+looking at.
 
 **No top-level `Name` field is added.** The registry name already crosses the wire as
 `AgentInfo.PeerName` (`record.go:22`), in v3 and v4 alike; adding a second copy would create a field
@@ -289,7 +308,7 @@ Purdex Tester 01  mlab/purdex-53 [d8dc4a]   cc     busy    yes          purdex7 
 |---|---|
 | `HOST` (single-host form) | dropped — it is the address's first segment |
 | `NAME` | dropped — it **is** the address's second segment |
-| `TMUX` | **added** — the tmux name left `Address` with `Suffix`; without this column it is no longer on screen at all |
+| `TMUX` | **added** — the tmux name left `Address` with `Suffix`; without this column it is no longer on screen at all. Renders `TmuxName` (§5.3), with a trailing `?` on an entry row to mark a frozen value that may name a session that has since been renamed or gone |
 
 `AGENT` stays: it will carry non-`cc` types as cross-agent messaging lands. `DELIVERABLE` stays
 separate from `STATUS` although `Deliverable == true` ⟺ `Reason == ""` (verified at

@@ -541,6 +541,117 @@ If Step 4 forced edits to other SPA files, add those exact paths to the command.
 
 ---
 
+### Task A3c: `TmuxName` — keep the tmux name on screen for entry rows
+
+**Files:**
+- Modify: `internal/peers/record.go`
+- Test: `internal/peers/record_test.go`
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces: `PeerRecord.TmuxName string` (json `tmux_name`), display-only.
+
+**Why this task exists.** Task A3 deleted `Suffix`, and Task A3 reported the consequence: `SessionName`
+is set only on session rows (`record.go:156`), so `EntryRecord` rows now carry no tmux name at all
+and §5.7's new `TMUX` column would render empty for them. Under v3 that name reached the screen
+through `Suffix`. This restores it in a field that says what it is.
+
+`TmuxName` is **display-only**. Do not add it to any `Resolve` tier. An entry row's value is the
+frozen registry field, and that value going stale is v3 §2's P1 — the whole reason the tmux name is
+not an identity in v4.
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+func TestBuild_TmuxName_SessionRowUsesLiveName(t *testing.T) {
+	in := ccBuildInput("purdex-b0", "sess-x") // from Task A3
+	got := Build(in)[0]
+	if got.TmuxName != "mt1" {
+		t.Errorf("TmuxName = %q, want the live session name %q", got.TmuxName, "mt1")
+	}
+	if got.RowKind != "session" {
+		t.Fatalf("RowKind = %q, want session", got.RowKind)
+	}
+}
+
+// An entry row has no session behind it, so its tmux name comes from the
+// registry file, where it was frozen at startup.
+func TestBuild_TmuxName_EntryRowUsesFrozenRegistryName(t *testing.T) {
+	in := BuildInput{
+		Alias: "mlab",
+		Entries: []Entry{{
+			PID: 100, SessionID: "sess-z", Name: "purdex-b0",
+			Tmux: "aigora2:@5.%5", Inbox: "/tmp/1.sock",
+		}},
+	}
+	got := Build(in)[0]
+	if got.RowKind != "entry" {
+		t.Fatalf("RowKind = %q, want entry", got.RowKind)
+	}
+	if got.TmuxName != "aigora2" {
+		t.Errorf("TmuxName = %q, want the frozen registry name %q", got.TmuxName, "aigora2")
+	}
+	// SessionName stays empty: tier 4 and "tmux:<name>" must not be able to
+	// reach a row through a value that may already be wrong.
+	if got.SessionName != "" {
+		t.Errorf("SessionName = %q, want empty on an entry row", got.SessionName)
+	}
+}
+
+func TestBuild_TmuxName_EmptyOutsideTmux(t *testing.T) {
+	in := BuildInput{
+		Alias:   "mlab",
+		Entries: []Entry{{PID: 100, SessionID: "sess-z", Name: "purdex-b0", Inbox: "/tmp/1.sock"}},
+	}
+	if got := Build(in)[0]; got.TmuxName != "" {
+		t.Errorf("TmuxName = %q, want empty for an agent outside tmux", got.TmuxName)
+	}
+}
+```
+
+- [ ] **Step 2: Run the tests and watch them fail**
+
+Run: `go test -race -count=1 ./internal/peers/ -run TestBuild_TmuxName`
+Expected: FAIL — `unknown field TmuxName`.
+
+- [ ] **Step 3: Implement**
+
+Add to `PeerRecord`:
+
+```go
+	// TmuxName is the tmux session this row's agent is in, for display only.
+	// NOTHING routes on it, and that is the point: its two provenances differ
+	// in how much they can be trusted, and RowKind tells them apart.
+	//
+	//   - row_kind "session": the daemon's live inventory name, so it tracks a
+	//     rename immediately.
+	//   - row_kind "entry": no session row stands behind it, so this is Claude
+	//     Code's registry field, frozen when the agent started and never
+	//     refreshed. It can name a session since renamed or gone — which is
+	//     exactly v3 spec §2's P1, and exactly why SessionName is NOT set here
+	//     and no tier may match on this field.
+	//
+	// "" when the agent is not in tmux at all.
+	TmuxName string `json:"tmux_name"`
+```
+
+Set `TmuxName: s.Name` beside `SessionName: s.Name` in `buildSessionRecord`, and
+`TmuxName: e.TmuxSessionName()` in `EntryRecord`. Leave `SessionName` alone in both.
+
+- [ ] **Step 4: Run and verify**
+
+Run: `go test -race -count=1 ./internal/peers/... ./internal/module/peers/... ./cmd/pdx/... `
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit --only internal/peers/record.go internal/peers/record_test.go \
+  -m "feat(peers): carry the tmux name as display-only TmuxName"
+```
+
+---
+
 ### Task A4: `Resolve` — tiers, the shared ref helper, and the mismatch refusal
 
 **Files:**
@@ -1122,7 +1233,28 @@ func displayAddress(rec peers.PeerRecord) string {
 }
 ```
 
-Change both header lines (`:373` single-host, `:461` `--all`) and both row loops: drop `HOST` from the single-host form and `NAME` from both, add `TMUX` (from `rec.SessionName`) before `CWD`, and pass every address through `displayAddress`. Leave `deliverableField` unchanged.
+Change both header lines (`:373` single-host, `:461` `--all`) and both row loops: drop `HOST` from the single-host form and `NAME` from both, add `TMUX` before `CWD`, and pass every address through `displayAddress`. Leave `deliverableField` unchanged.
+
+`TMUX` renders `TmuxName` (Task A3c), **not** `SessionName` — the latter is empty on entry rows. Mark an entry row's value, because it is frozen and may name a session that no longer exists:
+
+```go
+// tmuxField renders the TMUX cell. An entry row's tmux name comes from the
+// registry file, frozen when the agent started, so it can name a session
+// since renamed or gone; a session row's comes from the live inventory. The
+// '?' is the difference, and a reader deciding where to attach is the one who
+// needs to know it.
+func tmuxField(rec peers.PeerRecord) string {
+	if rec.TmuxName == "" {
+		return "-"
+	}
+	if rec.RowKind == "entry" {
+		return rec.TmuxName + "?"
+	}
+	return rec.TmuxName
+}
+```
+
+Add a row to `TestFormatPeersTable_V4Columns`'s fixture with `RowKind: "entry"`, `TmuxName: "aigora2"` and assert the table contains `aigora2?`.
 
 - [ ] **Step 4: Run and verify**
 
