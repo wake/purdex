@@ -460,11 +460,18 @@ describe('RenamePopover peer section', () => {
       expect(screen.getByTestId('peer-status-p1').textContent).toBe('no peer')
     })
 
-    it('notes that titles could not be read, so addresses may be hash defaults', () => {
+    // An unreadable title store costs the title column and nothing else: a v4
+    // address is the registry name or the sessionId-derived ref, and neither
+    // is read from that store. The note this replaced claimed the opposite —
+    // "addresses may be hash defaults" — and this test asserted the claim,
+    // which is how a false sentence survives a rename untouched (#1094).
+    it('says an unreadable title store costs the title column, not the address', () => {
       seedSession(H1, 'abc123')
       seedHost(H1, 'abc123', ROW, { envelope: { partial: true, titlesUnavailable: true, unknownRegistryFiles: [] } })
       render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
-      expect(screen.getByTestId('peer-titles-p1').textContent).toContain('hash defaults')
+      const note = screen.getByTestId('peer-titles-p1').textContent ?? ''
+      expect(note).toContain('Addresses are unaffected')
+      expect(note).not.toContain('hash defaults')
     })
 
     // An empty `titleSource` no longer means "no cc agent" — a live

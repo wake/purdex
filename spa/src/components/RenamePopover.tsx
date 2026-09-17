@@ -67,7 +67,7 @@ type T = (key: string, params?: Record<string, string | number>) => string
  */
 function partialCause(envelope: PeerEnvelopeFlags, t: T): string {
   if (envelope.unknownRegistryFiles.length > 0) return t('peer.partial.registry')
-  if (envelope.titlesUnavailable) return t('peer.partial.labels')
+  if (envelope.titlesUnavailable) return t('peer.partial.titles')
   return t('peer.partial.owners')
 }
 
