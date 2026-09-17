@@ -47,8 +47,8 @@ export default function ConversationMessages({
   const t = useI18nStore((s) => s.t)
   const scrollRef = useRef<HTMLDivElement>(null)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
-  // R4: follow the typewriter by a length counter, not the assembly's identity.
-  const partialVersion = useMemo(() => partialVersionOf(partial), [partial])
+  // R4: follow the typewriter by a content/structure key, not the assembly's identity.
+  const partialVersion: string = useMemo(() => partialVersionOf(partial), [partial])
 
   // Auto-scroll on new messages, control requests, or partial growth
   useEffect(() => {

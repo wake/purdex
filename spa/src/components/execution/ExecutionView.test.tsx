@@ -301,6 +301,20 @@ describe('ExecutionView — thinking indicator truth table (R3)', () => {
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
   })
 
+  it('R3: turnLive with a whitespace-only text partial → no bubble, thinking indicator still present', () => {
+    patchExec({ turnLive: true, partial: textPartial(' \n ') })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    expect(screen.queryByTestId('stream-cursor')).not.toBeInTheDocument()
+  })
+
+  it('R3: turnLive with a started tool_use (no input_json_delta yet) → spinner row, thinking indicator absent', () => {
+    patchExec({ turnLive: true, partial: { messageId: 'm', finalized: 0, blocks: { 0: { index: 0, type: 'tool_use', text: '', thinking: '', partialJson: '', toolId: 'tu9', toolName: 'Bash' } } } })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
+  })
+
   it('R3: pendingSend queued without turnLive → thinking indicator absent', () => {
     patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: 'queued' } as Exec['pendingLocal'] })
     render(<ExecutionView hostId={H} executionId={E} isActive />)

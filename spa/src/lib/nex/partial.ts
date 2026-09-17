@@ -29,28 +29,55 @@ export interface PartialAssembly {
 }
 
 /**
- * Spec §4.4 R3: any block with non-empty text / thinking / partialJson.
- * Gates the ThinkingIndicator — dots while the model is silent, typewriter
- * once tokens flow.
+ * Spec §4.4 R1/R3 — the ONE visibility predicate shared by the renderer
+ * (PartialMessageGroup renders a block iff this is true) and the state
+ * (partialHasVisibleContent gates the ThinkingIndicator). Keeping them on
+ * the same function is what guarantees the dots and the typewriter / spinner
+ * are never shown together, and never both hidden.
+ *
+ * - text / thinking: something non-whitespace to put in a bubble.
+ * - tool_use: always — a started tool is a spinner row with its name even
+ *   before the first input_json_delta.
+ * - unknown: never.
  */
-export function partialHasVisibleContent(p: PartialAssembly | null): boolean {
-  if (!p) return false
-  for (const b of Object.values(p.blocks)) {
-    if (b.text.length > 0 || b.thinking.length > 0 || b.partialJson.length > 0) return true
+export function isPartialBlockVisible(b: PartialBlock): boolean {
+  switch (b.type) {
+    case 'text':
+      return b.text.trim().length > 0
+    case 'thinking':
+      return b.thinking.trim().length > 0
+    case 'tool_use':
+      return true
+    default:
+      return false
   }
-  return false
 }
 
 /**
- * Spec §4.4 R4: cheap change counter (length sum of every partial field) so
- * the auto-scroll effect follows the typewriter without depending on the
- * assembly's identity. 0 when there is no partial.
+ * Spec §4.4 R3: some block is visible (see isPartialBlockVisible). Gates the
+ * ThinkingIndicator — dots while the model is silent, typewriter / spinner
+ * once something renders.
  */
-export function partialVersionOf(p: PartialAssembly | null | undefined): number {
-  if (!p) return 0
-  let n = 0
-  for (const b of Object.values(p.blocks)) n += b.text.length + b.thinking.length + b.partialJson.length
-  return n
+export function partialHasVisibleContent(p: PartialAssembly | null): boolean {
+  if (!p) return false
+  return Object.values(p.blocks).some(isPartialBlockVisible)
+}
+
+/**
+ * Spec §4.4 R4: a cheap change key that differs whenever the rendered group
+ * would differ, so the auto-scroll effect can follow the typewriter without
+ * depending on the assembly's identity. It folds in the structure (message
+ * id, finalized counter, and each block's index / type / tool name) as well
+ * as the content lengths, so a block that appears with no content yet (a
+ * started tool_use) or one finalized away still moves the key. '' when there
+ * is no partial.
+ */
+export function partialVersionOf(p: PartialAssembly | null | undefined): string {
+  if (!p) return ''
+  const blocks = Object.values(p.blocks)
+    .map((b) => `${b.index}:${b.type}:${b.toolName ?? ''}:${b.text.length}:${b.thinking.length}:${b.partialJson.length}`)
+    .join('|')
+  return `${p.messageId ?? ''}#${p.finalized}#${blocks}`
 }
 
 function blockIndex(v: unknown): number | null {

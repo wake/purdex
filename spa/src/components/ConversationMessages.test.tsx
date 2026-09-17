@@ -115,6 +115,22 @@ describe('ConversationMessages', () => {
       expect(screen.queryByTestId('stream-cursor')).not.toBeInTheDocument()
     })
 
+    it('R1: whitespace-only text / thinking blocks render nothing (same predicate as partialHasVisibleContent)', () => {
+      render(<ConversationMessages messages={[]} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        partial={assembly(pb(0, { type: 'text', text: ' \n\t ' }), pb(1, { type: 'thinking', thinking: '  ' }))} />)
+      expect(screen.getByTestId('partial-group')).toBeEmptyDOMElement()
+      expect(screen.queryByTestId('assistant-text')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('stream-cursor')).not.toBeInTheDocument()
+    })
+
+    it('R1: a started tool_use with empty partialJson renders the spinner row with only the tool name', () => {
+      render(<ConversationMessages messages={[]} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        partial={assembly(pb(0, { type: 'tool_use', toolName: 'Bash' }))} />)
+      const header = within(screen.getByTestId('partial-group')).getByTestId('tool-header')
+      expect(within(header).getByTestId('tool-icon-spinner')).toBeInTheDocument()
+      expect(header).toHaveTextContent(/^Bash$/)
+    })
+
     it('R1: an unknown block renders nothing', () => {
       render(<ConversationMessages messages={[]} keyPrefix="k" showThinking={false} showEmptyHint={false}
         partial={assembly(pb(0, { type: 'unknown', text: 'x', thinking: 'y', partialJson: 'z' }))} />)
@@ -193,6 +209,17 @@ describe('ConversationMessages', () => {
       // counter, not the assembly's identity, is the effect dep.
       rerender(<ConversationMessages messages={messages} keyPrefix="k" showThinking={false} showEmptyHint={false}
         partial={assembly(pb(0, { type: 'text', text: 'hello' }))} />)
+      expect(scrollTo).toHaveBeenCalledTimes(2)
+    })
+
+    it('R4: a started tool_use with empty input (no delta yet) scrolls when its row appears', () => {
+      Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+      const messages = [assistantText]
+      const { rerender } = render(<ConversationMessages messages={messages} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        partial={assembly(pb(0, { type: 'text', text: 'hello' }))} />)
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+      rerender(<ConversationMessages messages={messages} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        partial={assembly(pb(0, { type: 'text', text: 'hello' }), pb(1, { type: 'tool_use', toolName: 'Bash' }))} />)
       expect(scrollTo).toHaveBeenCalledTimes(2)
     })
   })
