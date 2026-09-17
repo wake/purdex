@@ -173,9 +173,16 @@ Two clauses, each closing one hole:
 
 The observed corpus passes: `purdex-b0`, `nexen-f2`, `ai-chat-story-3a`, `at-inwin-plugin-2e`.
 
-**A row whose name fails `RoutableName` gets no name address.** Its `Address` is `<host>/_<ref>`, the
-name still renders in the table (sanitized, as today), and `Reason` carries `name_unroutable` so the
-state is visible rather than looking like a missing row.
+**A row whose name fails `RoutableName` gets no name address.** Its `Address` is `<host>/_<ref>`, and
+that address *is* the signal — a ref-form address says "this row has no name you can type" without
+needing a second field to say so.
+
+**It does not set `Reason`.** An earlier draft had it carry `name_unroutable`, which was wrong twice
+over. `Reason` documents why a row **cannot be delivered to** (`"" | no_agent | not_cc | inbox_dead |
+proxy | ambiguous`), and a row with an unroutable name is perfectly deliverable — by its ref. Worse,
+writing it there broke the invariant `Deliverable == true ⟺ Reason == ""` that `deliverableField`
+(`cmd/pdx/peers.go`) depends on: that function returns `yes` whenever `Deliverable` is set, so the
+reason never reached the screen anyway. A field that is both wrong and invisible is not a signal.
 
 ### 5.3 `PeerRecord` (`internal/peers/record.go`)
 
@@ -234,15 +241,30 @@ Forms in order; the first with ≥1 match decides, and several matches in one ti
 | 3 | `<ref>` without the underscore | as tier 2 — safe only because `RoutableName` forbids a 6-digit name (§5.2) |
 | 4 | `<name>` | bare tmux session name, complete inventory only (v3's tier 2) |
 
+**Tiers 1 to 4 accept no colon at all.** v4 has no suffix form, so a `:` anywhere below the two
+explicit `cc:` / `tmux:` forms means the caller typed something v4 does not mint. The rule is stated
+as "contains no colon", not as "nothing after the first colon" — the second lets `purdex-b0:` and
+`_q34psn:` through, which is what an earlier draft of this line permitted and no test covered.
+
 **Tiers 1 and 2 are disjoint because `RoutableName` makes them so** — not because registry names
 happen to look a certain way. The first draft asserted the latter; it is false, and §11 records it.
 Tier 1 is restricted to routable names so that an unroutable one can never win a tier it should not
 be in.
 
-**The combined form `<name> [<ref>]` refuses on mismatch.** The bracket group is stripped, the ref
-resolves, and the typed name is compared against the resolved row's. A mismatch is
-`ErrNameMismatch`, naming the typed name, the resolved name and the ref. It does **not** deliver
-with a warning:
+**The combined form `<name> [<ref>]` matches both halves at once.** The bracket group is stripped,
+the typed name must itself pass `RoutableName`, and a row must carry **both** that ref and that name
+to be chosen. Two consequences, each the fix for a real hole:
+
+- **The name is gated, not merely compared.** Resolving the ref and then comparing names would leave
+  the combined form as a way around `RoutableName` — a row whose registry name can never be an
+  address would still be reachable by typing it. Tier 1 applies that grammar; so must this.
+- **A shared ref is resolved by the name, not refused.** Resolving the ref first returns
+  `*AmbiguousError` the moment two rows share one, before the typed name — which identifies exactly
+  one of them — is consulted. §3.1's P3 residual promises those rows stay reachable by name, and the
+  combined form is the shape the table prints and a person copies.
+
+A typed name that matches no row carrying that ref is `ErrNameMismatch`, naming the typed name, what
+the ref is called now, and the ref. It does **not** deliver with a warning:
 
 > The name in a combined address is a human check digit, not decoration. An address of the form
 > `trusted-name [attackerRef]` is the exact string an attacker would want pasted, and delivering it
@@ -399,6 +421,30 @@ the envelope carries no alias.
 Consequence: **an address is not portable, and readability without portability is worth little.**
 `mlab/purdex-b0` pasted into a handoff means nothing on a machine that calls this host `mini-lab`.
 
+### 7.1 A remote row's address is recomputed, never adjusted
+
+`normalizeRemoteRows` used to take the remote's `Address`, strip everything before the first `/`, and
+re-prefix the local alias — so the **body** was whatever the peer sent, checked only by
+`SplitAddress`, which rejects a `/` and an empty string and nothing else.
+
+A paired host is attacker-controlled; the module's own comment says so. One could publish
+`address: "air/trusted:ops"` with a matching `peer_name`, and this host would print
+`air/trusted:ops [abc123]` in `pdx peers --all` — an address that looks like every other row and
+that a person would reasonably paste.
+
+So the address of a remote row is **rebuilt from fields this host validates itself**, by the same
+rule `applyIdentity` uses locally, and the rebuild reads `Agent`, `Ref` and `SessionName` only —
+never `rec.Address`. That is checkable by grep, which is the point: "the address is recomputed" is a
+claim a reviewer can verify in one search rather than by reasoning about what the remote sent.
+
+`Ref` is validated too (`IsRef`), for the same reason the name is: it is exactly as remote-controlled.
+A row that fits none of the forms gets an empty address, as a `SplitAddress` failure already did.
+
+One consequence worth stating because it is a behaviour change: a **remote proxy row now renders a
+blank address** where it used to render `<alias>/cc:<remote-chosen-name>`. That form was already
+unresolvable by design, so all it did was put attacker-chosen text in the `ADDRESS` column. Local
+proxy rows are unchanged.
+
 ```go
 type Envelope struct {
     HostID string `json:"host_id"`
@@ -407,7 +453,18 @@ type Envelope struct {
 }
 ```
 
-1. `verifyHost` learns `env.Alias` beside `env.HostID`, validating it with `ValidateAlias`.
+1. `verifyHost` returns the whole envelope, so `env.Alias` reaches the caller as it arrives. It is
+   **not** validated there, and the split is deliberate: the same self-reported string is used for
+   two purposes with opposite requirements.
+
+   | use | rule | why |
+   |---|---|---|
+   | **adopting** it as a local name (step 2) | `sanitizeLearnedAlias`, which is `ValidateAlias` and returns `""` on any failure | the value is about to be written into this host's config and then routed on |
+   | **displaying** it as drift (step 4) | bounded (`boundRemoteText`) and terminal-sanitized (`sanitizeCell`), but not validated | validating here would blank exactly the reports worth reading — a peer that renamed itself to something unroutable, or to *our* local alias, is precisely when an operator needs to be told |
+
+   Validating in `verifyHost` would force one of those two rules onto both. The value is never
+   stored or routed on from the display path, so it clears the same bar `env.Error` and
+   `env.DaemonVersion` already clear.
 2. `POST /api/peers/hosts` with no `alias` adopts the learned one; an explicit `alias` still wins.
 3. A learned alias colliding with an existing local alias (or this host's own) is **not**
    auto-suffixed — `mlab-2/...` is unportable in a new way. The add returns 409 naming both, and the
@@ -527,4 +584,9 @@ re-deriving them from scratch would land in the same place.
 | §2's 14-file sample supports the name as an address head | it supports "stable in practice", not "cannot change"; resume, compact, user rename and this repo's own rewriter are uncovered | §2 scopes the claim; the name is a convenience alias and every copy action carries the ref (§5.8) |
 | Phase C as a follow-on | A+B alone give a readable address that is not portable, which is not the goal | V11 ships the three together; §9.9 gates the release on a cross-host paste |
 | "`ValidSuffix` … deleted with `Suffix`" (§5.6) | `Suffix` is the producer v4 stops writing; `ValidSuffix` is the receiver's check on what a legacy sender still sends. Deleting the check with the field would leave the value unvalidated | the suffix arm stays; a malformed legacy suffix is still `bad_address` |
+| the combined form compares the name **after** resolving the ref (§5.4) | two holes at once: it skipped `RoutableName`, so the form was a way around the gate tier 1 applies; and it returned `*AmbiguousError` on a shared ref before the typed name — which names exactly one of them — was read | both halves are matched together, and the typed name must itself be routable |
+| tiers gated on "nothing after the first colon" (§5.4) | `SplitSession("purdex-b0:")` yields an empty rest, so a trailing colon passed — and tiers 2/3 carried the same hole, with `_q34psn:` resolving and no test covering it | the rule is "contains no colon", which is what v4 having no suffix form actually means |
+| `Reason` carries `name_unroutable` (§5.2) | `Reason` documents why a row cannot be delivered to, and such a row is deliverable by its ref; writing it there also broke `Deliverable == true ⟺ Reason == ""`, which `deliverableField` relies on — so it never rendered | no `Reason`; the ref-form address is the signal |
+| a remote row's address adjusted rather than rebuilt (§7.1) | the body came from an attacker-controlled peer and only `SplitAddress` saw it, so a hostile name could be printed as a pasteable address | rebuilt from `Agent`/`Ref`/`SessionName`, never from `rec.Address` |
+| "`verifyHost` … validating it with `ValidateAlias`" (§7.1) | one rule cannot serve both uses: validation is right before adoption and wrong before display, where it would blank the reports most worth reading | validated at the adoption point; bounded and terminal-sanitized on the display path |
 | `isLegacyV2Head` as a distinct class (§5.6) | v2's default head and a v4 ref are the same six-digit shape, so it was a second name for one regex | deleted; `IsRef` covers both |
