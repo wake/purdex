@@ -1849,6 +1849,9 @@ func TestRunPeersCmd_HostVerify_JSONPassthrough(t *testing.T) {
 	if v["self_alias"] != "air26" {
 		t.Errorf("json self_alias = %v, want air26", v["self_alias"])
 	}
+	if _, has := v["error"]; has {
+		t.Errorf("json has error key = %v, want omitted on success (matching the daemon body)", v["error"])
+	}
 }
 
 func TestRunPeersCmd_HostVerify_NotFound(t *testing.T) {

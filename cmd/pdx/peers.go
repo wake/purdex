@@ -705,7 +705,7 @@ type cliVerifyHostResponse struct {
 	Alias         string `json:"alias"`
 	HostID        string `json:"host_id"`
 	OK            bool   `json:"ok"`
-	Error         string `json:"error"`
+	Error         string `json:"error,omitempty"`
 	SelfAlias     string `json:"self_alias"`
 	DaemonVersion string `json:"daemon_version"`
 }
