@@ -241,3 +241,52 @@ func TestIsRef_Rejects(t *testing.T) {
 		}
 	}
 }
+
+func TestRoutableName_AcceptsObservedCorpus(t *testing.T) {
+	// Every registry name on mini-lab, 2026-09-17.
+	for _, s := range []string{
+		"purdex-b0", "purdex-53", "purdex-03", "nexen-f2", "nexen-ec",
+		"ai-chat-story-3a", "at-inwin-plugin-2e", "invoice-plane-89",
+		"firefly-be", "csp-plugin-5e", "mlab-c8", "air19-e2", "istdc-a5", "barbox-a6",
+	} {
+		if !RoutableName(s) {
+			t.Errorf("RoutableName(%q) = false, want true", s)
+		}
+	}
+}
+
+// Each of these would make a name address unparseable or ambiguous.
+func TestRoutableName_RejectsAddressSyntax(t *testing.T) {
+	for _, s := range []string{
+		"", "a", "-lead", "has/slash", "has:colon", "has space", "has[bracket]",
+		"_leading-underscore", "UPPER", "tráiler", strings.Repeat("a", 65),
+	} {
+		if RoutableName(s) {
+			t.Errorf("RoutableName(%q) = true, want false", s)
+		}
+	}
+}
+
+// The whole point: a six-digit name would shadow the bare-ref input form for
+// anyone copying bracket text.
+func TestRoutableName_RejectsRefShaped(t *testing.T) {
+	for _, s := range []string{"q34psn", "abc123", "000000", "zzzzzz"} {
+		if RoutableName(s) {
+			t.Errorf("RoutableName(%q) = true, want false (ref-shaped)", s)
+		}
+	}
+	for _, s := range []string{"abc12", "abc1234"} {
+		if !RoutableName(s) {
+			t.Errorf("RoutableName(%q) = false, want true", s)
+		}
+	}
+}
+
+func TestRoutableName_BoundaryLengths(t *testing.T) {
+	if !RoutableName("ab") {
+		t.Error("2 chars rejected")
+	}
+	if !RoutableName(strings.Repeat("a", 64)) {
+		t.Error("64 chars rejected")
+	}
+}

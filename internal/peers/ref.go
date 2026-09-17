@@ -38,6 +38,9 @@ var (
 	userLabelPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,31}$`)
 	refPattern        = regexp.MustCompile(`^_[0-9a-z]{6}$`)
 	suffixWirePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,65}$`)
+
+	routableNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)
+	refShapedPattern    = regexp.MustCompile(`^[0-9a-z]{6}$`)
 )
 
 // ValidateUserLabel applies the user label rule and the reserved words.
@@ -69,6 +72,28 @@ func RefID(sessionID string) string {
 		n /= 36
 	}
 	return "_" + string(out)
+}
+
+// RoutableName reports whether a Claude Code registry name may be used as an
+// address head (v4 spec §5.2).
+//
+// The registry name is an unvalidated JSON string: registry.go assigns it raw
+// and ccuds.RewriteRegistryName can write anything into it. Two independent
+// hazards follow, and this function closes both:
+//
+//   - the PATTERN keeps '/', ':', ' ', '[', ']' and a leading '_' out of an
+//     address head, so "<host>/<name>" always parses and can never be read as
+//     a ref;
+//   - the REF-SHAPED exclusion is what makes Resolve's bare-ref tier safe. The
+//     table prints "[q34psn]", so an operator copying bracket text types
+//     "q34psn"; without this clause a conversation named "q34psn" would
+//     silently shadow another's ref, and anything able to write a registry
+//     file could arrange exactly that.
+//
+// A failing name is still displayed. It simply never becomes an address: its
+// row is reachable by ref only and carries Reason "name_unroutable".
+func RoutableName(s string) bool {
+	return routableNamePattern.MatchString(s) && !refShapedPattern.MatchString(s)
 }
 
 // Deprecated: use RefID / IsRef.
