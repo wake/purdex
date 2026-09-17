@@ -266,3 +266,55 @@ func TestRoutableName_BoundaryLengths(t *testing.T) {
 		t.Error("64 chars rejected")
 	}
 }
+
+func TestValidateTitle_Accepts(t *testing.T) {
+	for _, s := range []string{
+		"Purdex Tester 01", "purdex-tester", "測試 01", "cc", "tmux", strings.Repeat("a", 64),
+	} {
+		if err := ValidateTitle(s); err != nil {
+			t.Errorf("ValidateTitle(%q) = %v, want nil", s, err)
+		}
+	}
+}
+
+func TestValidateTitle_Rejects(t *testing.T) {
+	// NBSP and U+3000 are listed for the same reason as \t: strings.Fields
+	// collapses them, so NormalizeTitle would read them as a space that
+	// ValidateTitle never let through. Keeping them refused is what makes the
+	// two functions agree on what "whitespace" means.
+	for _, s := range []string{
+		"", strings.Repeat("a", 65), "has\ttab", "has\nnewline", "esc\x1b[31m",
+		"nbsp here", "ideographic　space", "\x00nul",
+	} {
+		err := ValidateTitle(s)
+		if err == nil {
+			t.Errorf("ValidateTitle(%q) = nil, want an error", s)
+			continue
+		}
+		if !errors.Is(err, ErrTitleInvalid) {
+			t.Errorf("ValidateTitle(%q) = %v, want it to wrap ErrTitleInvalid", s, err)
+		}
+	}
+}
+
+// The limit is BYTES, not runes: storage and the wire both measure bytes.
+func TestValidateTitle_ByteBoundary(t *testing.T) {
+	if err := ValidateTitle(strings.Repeat("測", 21)); err != nil { // 63 bytes
+		t.Errorf("63 bytes rejected: %v", err)
+	}
+	if err := ValidateTitle(strings.Repeat("測", 22)); err == nil { // 66 bytes
+		t.Error("66 bytes accepted, want rejected")
+	}
+}
+
+func TestNormalizeTitle(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Purdex Tester", "purdex tester"},
+		{"purdex  tester", "purdex tester"},
+		{"  Purdex\tTester  ", "purdex tester"},
+	} {
+		if got := NormalizeTitle(tc.in); got != tc.want {
+			t.Errorf("NormalizeTitle(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

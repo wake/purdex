@@ -7,6 +7,8 @@ import (
 	"hash/fnv"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Label rules (Peer Address v2 spec §3.1).
@@ -28,11 +30,16 @@ const (
 	// probability for 100 live conversations at ≈2.3e-6.
 	canonicalN     = 6
 	canonicalSpace = 36 * 36 * 36 * 36 * 36 * 36 // 36^6
+
+	titleMaxBytes = 64
 )
 
 var (
 	ErrLabelInvalid  = errors.New("label invalid")
 	ErrLabelReserved = errors.New("label reserved")
+
+	// ErrTitleInvalid is what every ValidateTitle failure wraps.
+	ErrTitleInvalid = errors.New("title invalid")
 
 	userLabelPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,31}$`)
 	refPattern        = regexp.MustCompile(`^_[0-9a-z]{6}$`)
@@ -51,6 +58,49 @@ func ValidateUserLabel(s string) error {
 		return fmt.Errorf("%w: must match ^[a-z0-9][a-z0-9-]{1,31}$", ErrLabelInvalid)
 	}
 	return nil
+}
+
+// ValidateTitle applies the title rule (v4 spec §6): 1..64 bytes of printable
+// UTF-8.
+//
+// There are no reserved words. A title reaches nothing — Resolve never
+// consults one — so there is nothing for "cc" or "tmux" to shadow, and
+// refusing them would make the field harder to use than it is dangerous.
+//
+// Control characters are refused because a title is printed into a terminal
+// table and into peer warnings; an ANSI escape in one is a way to rewrite
+// somebody else's screen.
+func ValidateTitle(s string) error {
+	if s == "" {
+		return fmt.Errorf("%w: empty", ErrTitleInvalid)
+	}
+	if len(s) > titleMaxBytes {
+		return fmt.Errorf("%w: %d bytes, max %d", ErrTitleInvalid, len(s), titleMaxBytes)
+	}
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("%w: not valid UTF-8", ErrTitleInvalid)
+	}
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			return fmt.Errorf("%w: contains a non-printable character", ErrTitleInvalid)
+		}
+	}
+	return nil
+}
+
+// NormalizeTitle is the form two titles are compared in when deciding whether
+// to warn: case-folded, runs of whitespace collapsed, ends trimmed.
+//
+// "Purdex Tester" and "purdex  tester" name the same thing to a reader, so
+// they must collide for the warning too — otherwise the warning misses exactly
+// the near-duplicates it exists for.
+//
+// It stays consistent with ValidateTitle because unicode.IsPrint reports false
+// for every rune strings.Fields would split on except the plain ASCII space —
+// \t, \n and \r, but also NBSP and U+3000 (verified). So a stored title can
+// only ever contain the one kind of whitespace this collapses.
+func NormalizeTitle(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 // IsRef reports whether s has the ref form, "_" followed by exactly 6 base36
