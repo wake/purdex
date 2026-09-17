@@ -27,35 +27,43 @@ func peersTableFixture() peers.Envelope {
 		OK:      true,
 		Partial: true,
 		Peers: []peers.PeerRecord{
-			{ // deliverable cc row
+			{ // deliverable cc row — the only one with a ref, so the only bracket
 				Address: "alias/sess1",
+				RowKind: "session",
+				Ref:     "_q34psn",
 				Agent: &peers.AgentInfo{
 					Type:     "cc",
 					PeerName: "wake-cc",
 					Status:   "working",
 				},
 				Deliverable: true,
+				TmuxName:    "aigora2",
 				Cwd:         "/home/wake/project",
 			},
-			{ // not_cc codex row
+			{ // not_cc codex row — no ref (Ref is set only for a cc agent)
 				Address: "alias/sess2",
+				RowKind: "session",
 				Agent: &peers.AgentInfo{
 					Type:   "codex",
 					Status: "idle",
 				},
 				Deliverable: false,
 				Reason:      "not_cc",
+				TmuxName:    "codex1",
 				Cwd:         "/home/wake/codex",
 			},
 			{ // shell row — no agent at all, reason set, NOT counted toward partial
 				Address:     "alias/sess3",
+				RowKind:     "session",
 				Agent:       nil,
 				Deliverable: false,
 				Reason:      "no_agent",
+				TmuxName:    "shell1",
 				Cwd:         "/home/wake/shell",
 			},
 			{ // unresolved row — no agent, no reason, counted toward partial (N=1)
 				Address:     "alias/sess4",
+				RowKind:     "session",
 				Agent:       nil,
 				Deliverable: false,
 				Reason:      "",
@@ -65,16 +73,18 @@ func peersTableFixture() peers.Envelope {
 	}
 }
 
-// wantPeersTable is the v3 column order: LABEL first, ADDRESS second
-// (spec 7.1 -- scan the label to find who you want, copy the address to
-// reach them). Every row of the fixture is unlabelled, so every LABEL cell
-// is blank rather than "-": a dash reads as a value, and there is nothing
-// here to name.
-const wantPeersTable = "LABEL  ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"       alias/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
-	"       alias/sess2  codex  -        idle     not_cc       /home/wake/codex\n" +
-	"       alias/sess3  -      -        -        no_agent     /home/wake/shell\n" +
-	"       alias/sess4  -      -        -        -            \n" +
+// wantPeersTable is the v4 column order: TITLE first, ADDRESS second (spec
+// §5.7 -- scan the title to find who you want, copy the address to reach
+// them), NAME gone because it IS the address's second segment, and TMUX added
+// between DELIVERABLE and CWD. Every row of the fixture is untitled, so every
+// TITLE cell is blank rather than "-": a dash reads as a value, and there is
+// nothing here to name. Only the cc row has a ref, so only it is bracketed;
+// the row with no tmux at all shows "-".
+const wantPeersTable = "TITLE  ADDRESS               AGENT  STATUS   DELIVERABLE  TMUX     CWD\n" +
+	"       alias/sess1 [q34psn]  cc     working  yes          aigora2  /home/wake/project\n" +
+	"       alias/sess2           codex  idle     not_cc       codex1   /home/wake/codex\n" +
+	"       alias/sess3           -      -        no_agent     shell1   /home/wake/shell\n" +
+	"       alias/sess4           -      -        -            -        \n" +
 	"(partial: 1 sessions not resolved within budget)\n" +
 	"daemon (unknown)\n"
 
@@ -85,13 +95,13 @@ func TestFormatPeersTable(t *testing.T) {
 	}
 }
 
-// TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent pins the v3
-// rendering rules (spec 7.1): LABEL is the FIRST column and ADDRESS the
-// second, an unset label renders as a blank cell rather than "-", no row
-// carries a "*" marker (the default label it marked no longer exists), and
-// entry rows keep their two-space ADDRESS indent and the "daemon
-// <version>" trailer.
-func TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
+// TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent pins the
+// rendering rules that survived into v4 (spec §5.7): the title is the FIRST
+// column and ADDRESS the second, an unset title renders as a blank cell
+// rather than "-", no row carries a "*" marker (the default label it marked
+// no longer exists), and entry rows keep their two-space ADDRESS indent and
+// the "daemon <version>" trailer.
+func TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
 	env := peers.Envelope{OK: true, DaemonVersion: "1.0.0-alpha.363", Peers: []peers.PeerRecord{
 		{Address: "a/_3k9f2mq4:mt0-x", RowKind: "session", Ref: "_3k9f2mq4", Label: "purdex-dev", LabelSource: "user", Agent: &peers.AgentInfo{Type: "cc", PeerName: "x", Status: "idle"}, Deliverable: true, Cwd: "/w"},
 		{Address: "a/_9x2pq0af:y", RowKind: "entry", Ref: "_9x2pq0af", Agent: &peers.AgentInfo{Type: "cc", PeerName: "y", Status: "busy"}, Deliverable: true, Cwd: "/w"},
@@ -99,20 +109,20 @@ func TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent(t *testing.T) {
 	}}
 	got := formatPeersTable(env)
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if cols := headerColumns(lines[0]); cols[0] != "LABEL" || cols[1] != "ADDRESS" {
-		t.Errorf("first two columns = %v, want LABEL then ADDRESS", cols[:2])
+	if cols := headerColumns(lines[0]); cols[0] != "TITLE" || cols[1] != "ADDRESS" {
+		t.Errorf("first two columns = %v, want TITLE then ADDRESS", cols[:2])
 	}
 	if !strings.HasPrefix(lines[1], "purdex-dev ") || !strings.Contains(lines[1], "a/_3k9f2mq4:mt0-x") {
-		t.Errorf("labelled session row = %q, want the label first then the address", lines[1])
+		t.Errorf("titled session row = %q, want the title first then the address", lines[1])
 	}
 	if !strings.HasPrefix(lines[2], " ") {
-		t.Errorf("unlabelled entry row = %q, want a BLANK label cell, not a dash", lines[2])
+		t.Errorf("untitled entry row = %q, want a BLANK title cell, not a dash", lines[2])
 	}
 	if !strings.Contains(lines[2], "  a/_9x2pq0af:y") {
 		t.Errorf("entry row = %q, want the address indented by two spaces", lines[2])
 	}
 	if !strings.HasPrefix(lines[3], " ") || !strings.Contains(lines[3], "a/tmux:shell") {
-		t.Errorf("agentless row = %q, want a blank label cell", lines[3])
+		t.Errorf("agentless row = %q, want a blank title cell", lines[3])
 	}
 	if strings.Contains(got, "*") {
 		t.Errorf("table still carries a * marker -- the default label it marked is gone:\n%s", got)
@@ -276,15 +286,23 @@ func TestSanitizeCell(t *testing.T) {
 	}
 }
 
+// TestFormatPeersTable_EscapesControlCharacters pins that every cell fed by
+// data someone else controls goes through sanitizeCell. In v4 that is the
+// TMUX cell (a tmux session name, or a registry file's frozen copy of one)
+// and the TITLE cell (a self-declared title) -- the NAME column that used to
+// carry this coverage is gone.
 func TestFormatPeersTable_EscapesControlCharacters(t *testing.T) {
 	resp := peers.Envelope{
 		OK: true,
 		Peers: []peers.PeerRecord{
 			{
-				Address: "alias/sess1",
+				Address:  "alias/sess1",
+				RowKind:  "session",
+				Label:    "t\x1b[32mz",
+				TmuxName: "x\x1b[31my",
 				Agent: &peers.AgentInfo{
 					Type:     "cc",
-					PeerName: "x\x1b[31my",
+					PeerName: "wake-cc",
 					Status:   "working",
 				},
 				Deliverable: true,
@@ -293,8 +311,10 @@ func TestFormatPeersTable_EscapesControlCharacters(t *testing.T) {
 		},
 	}
 	got := formatPeersTable(resp)
-	if !strings.Contains(got, `x\x1b[31my`) {
-		t.Errorf("formatPeersTable = %q, want literal escaped %q", got, `x\x1b[31my`)
+	for _, want := range []string{`x\x1b[31my`, `t\x1b[32mz`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatPeersTable = %q, want literal escaped %q", got, want)
+		}
 	}
 	if strings.ContainsRune(got, 0x1b) {
 		t.Errorf("formatPeersTable = %q, want no raw ESC byte", got)
@@ -420,6 +440,10 @@ var controlCharPeerName = "x" + string(rune(0x1b)) + "[31my"
 // controlCharPeerName, so the wire body carries it in the properly
 // \u-escaped JSON form (as encoding/json always produces for control
 // characters), never as a literal control byte.
+//
+// It lands in tmux_name as well as peer_name: v4 dropped the NAME column, so
+// peer_name alone would no longer reach the rendered table at all, and the
+// table test below would pass while rendering nothing.
 func peersControlCharBody(t *testing.T) []byte {
 	t.Helper()
 	body, err := json.Marshal(peers.Envelope{
@@ -428,12 +452,14 @@ func peersControlCharBody(t *testing.T) []byte {
 		Peers: []peers.PeerRecord{
 			{
 				Address: "alias/sess1",
+				RowKind: "session",
 				Agent: &peers.AgentInfo{
 					Type:     "cc",
 					PeerName: controlCharPeerName,
 					Status:   "working",
 				},
 				Deliverable: true,
+				TmuxName:    controlCharPeerName,
 				Cwd:         "/home/wake/project",
 			},
 		},
@@ -715,8 +741,11 @@ func peersAllTableFixture() peers.AllEnvelope {
 				Peers: []peers.PeerRecord{
 					{
 						Address:     "local/sess1",
+						RowKind:     "session",
+						Ref:         "_q34psn",
 						Agent:       &peers.AgentInfo{Type: "cc", PeerName: "wake-cc", Status: "working"},
 						Deliverable: true,
+						TmuxName:    "aigora2",
 						Cwd:         "/home/wake/project",
 					},
 				},
@@ -728,9 +757,11 @@ func peersAllTableFixture() peers.AllEnvelope {
 				Peers: []peers.PeerRecord{
 					{
 						Address:     "air/sess2",
+						RowKind:     "session",
 						Agent:       &peers.AgentInfo{Type: "codex", Status: "idle"},
 						Deliverable: false,
 						Reason:      "not_cc",
+						TmuxName:    "codex1",
 						Cwd:         "/home/wake/codex",
 					},
 				},
@@ -747,10 +778,11 @@ func peersAllTableFixture() peers.AllEnvelope {
 
 // wantPeersAllTable keeps HOST first -- which host a row lives on is what
 // you need before either of the other two columns means anything -- and
-// then follows the single-host order: LABEL, then ADDRESS (spec 7.1).
-const wantPeersAllTable = "HOST   LABEL  ADDRESS      AGENT  NAME     STATUS   DELIVERABLE  CWD\n" +
-	"local         local/sess1  cc     wake-cc  working  yes          /home/wake/project\n" +
-	"air           air/sess2    codex  -        idle     not_cc       /home/wake/codex\n" +
+// then follows the single-host order exactly: TITLE, then ADDRESS, and TMUX
+// between DELIVERABLE and CWD (v4 spec §5.7).
+const wantPeersAllTable = "HOST   TITLE  ADDRESS               AGENT  STATUS   DELIVERABLE  TMUX     CWD\n" +
+	"local         local/sess1 [q34psn]  cc     working  yes          aigora2  /home/wake/project\n" +
+	"air           air/sess2             codex  idle     not_cc       codex1   /home/wake/codex\n" +
 	"down  (unreachable: connection refused)\n" +
 	"local  daemon (unknown)\n" +
 	"air  daemon (unknown)\n"
@@ -762,13 +794,13 @@ func TestFormatPeersAllTable(t *testing.T) {
 	}
 }
 
-// TestFormatPeersAllTable_HostThenLabelThenAddress extends
-// TestFormatPeersTable_LabelFirstBlankWhenUnsetAndEntryIndent's rules to
-// the --all table: HOST stays the first column, LABEL comes second and
+// TestFormatPeersAllTable_HostThenTitleThenAddress extends
+// TestFormatPeersTable_TitleFirstBlankWhenUnsetAndEntryIndent's rules to
+// the --all table: HOST stays the first column, TITLE comes second and
 // ADDRESS third, entry rows keep their indent, and one "<alias>  daemon
 // <version>" trailer line is printed per OK host (the existing
 // "(unreachable: ...)" lines for failed hosts stay).
-func TestFormatPeersAllTable_HostThenLabelThenAddress(t *testing.T) {
+func TestFormatPeersAllTable_HostThenTitleThenAddress(t *testing.T) {
 	resp := peers.AllEnvelope{Hosts: []peers.HostResult{
 		{
 			Alias: "local", OK: true, DaemonVersion: "1.0.0-alpha.342",
@@ -782,8 +814,8 @@ func TestFormatPeersAllTable_HostThenLabelThenAddress(t *testing.T) {
 	}}
 	got := formatPeersAllTable(resp)
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if cols := headerColumns(lines[0]); cols[0] != "HOST" || cols[1] != "LABEL" || cols[2] != "ADDRESS" {
-		t.Errorf("first three columns = %v, want HOST LABEL ADDRESS", cols[:3])
+	if cols := headerColumns(lines[0]); cols[0] != "HOST" || cols[1] != "TITLE" || cols[2] != "ADDRESS" {
+		t.Errorf("first three columns = %v, want HOST TITLE ADDRESS", cols[:3])
 	}
 	if !strings.Contains(lines[2], "  local/_9x2pq0af:y") {
 		t.Errorf("entry row (indented) not where expected: %q", lines[2])
@@ -1393,5 +1425,153 @@ func TestRunPeersCmd_ConfigFlagMissingValue(t *testing.T) {
 	}
 	if stdout.String() != "" {
 		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+// --- v4 columns -----------------------------------------------------------
+
+// v4TableFixture mirrors spec §5.7's worked example: a plain session row, a
+// titled one, a row whose name was not routable so its address IS its ref, an
+// agentless tmux row, and an entry row whose tmux name is frozen.
+func v4TableFixture() peers.Envelope {
+	return peers.Envelope{OK: true, Peers: []peers.PeerRecord{
+		{Address: "mlab/purdex-b0", Ref: "_q34psn", RowKind: "session",
+			SessionName: "aigora2", TmuxName: "aigora2", Cwd: "~/Workspace/wake/aigora",
+			Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-b0", Status: "idle"}, Deliverable: true},
+		{Address: "mlab/purdex-53", Ref: "_d8dc4a", RowKind: "session",
+			SessionName: "purdex7", TmuxName: "purdex7", Cwd: "~",
+			Label: "Purdex Tester 01",
+			Agent: &peers.AgentInfo{Type: "cc", PeerName: "purdex-53", Status: "busy"}, Deliverable: true},
+		{Address: "mlab/_df25d0", Ref: "_df25d0", RowKind: "session",
+			SessionName: "nexen", TmuxName: "nexen", Cwd: "~",
+			Agent: &peers.AgentInfo{Type: "cc", PeerName: "nexen-f2", Status: "idle"}, Reason: "inbox_dead"},
+		{Address: "mlab/tmux:aigora3", RowKind: "session",
+			SessionName: "aigora3", TmuxName: "aigora3", Cwd: "~", Reason: "no_agent"},
+		{Address: "mlab/barbox-a6", Ref: "_n4zeqk", RowKind: "entry",
+			TmuxName: "bb2", Cwd: "~",
+			Agent: &peers.AgentInfo{Type: "cc", PeerName: "barbox-a6", Status: "idle"}, Deliverable: true},
+	}}
+}
+
+// TestFormatPeersTable_V4Columns pins spec §5.7: the columns are TITLE
+// ADDRESS AGENT STATUS DELIVERABLE TMUX CWD -- NAME is gone (it IS the
+// address's second segment) and HOST never belonged to the single-host form
+// (it is the address's first segment); TMUX arrives because the tmux name
+// left the address with the suffix. Every address carries its ref in
+// brackets except one that already IS the ref.
+func TestFormatPeersTable_V4Columns(t *testing.T) {
+	got := formatPeersTable(v4TableFixture())
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	header := lines[0]
+
+	wantCols := []string{"TITLE", "ADDRESS", "AGENT", "STATUS", "DELIVERABLE", "TMUX", "CWD"}
+	if cols := headerColumns(header); strings.Join(cols, "|") != strings.Join(wantCols, "|") {
+		t.Errorf("header columns = %v, want %v", cols, wantCols)
+	}
+	if strings.Contains(header, "NAME") || strings.Contains(header, "HOST") {
+		t.Errorf("dropped column still present: %q", header)
+	}
+
+	for _, want := range []string{
+		"mlab/purdex-b0 [q34psn]", // ref rendered without its underscore
+		"mlab/purdex-53 [d8dc4a]",
+		"Purdex Tester 01", // TITLE cell
+		"inbox_dead",       // DELIVERABLE cell
+		"mlab/_df25d0",     // the ref-address row still renders
+		"mlab/tmux:aigora3",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("table lacks %q:\n%s", want, got)
+		}
+	}
+
+	// A row whose address IS the ref must not get a redundant bracket.
+	if strings.Contains(got, "mlab/_df25d0 [df25d0]") {
+		t.Errorf("ref-address row got a redundant bracket:\n%s", got)
+	}
+	// Nor does a row with no ref at all.
+	if strings.Contains(got, "mlab/tmux:aigora3 [") {
+		t.Errorf("refless row got a bracket:\n%s", got)
+	}
+	// An entry row keeps its two-space address indent, and its address is
+	// bracketed like any other.
+	if !strings.Contains(got, "  mlab/barbox-a6 [n4zeqk]") {
+		t.Errorf("entry row address not indented/bracketed:\n%s", got)
+	}
+}
+
+// TestFormatPeersTable_TmuxColumn pins the TMUX cell (spec §5.7): it renders
+// TmuxName, never SessionName -- SessionName is empty on an entry row, which
+// is the whole reason TmuxName exists -- and an entry row's value carries a
+// trailing "?" because it is frozen registry data that may name a session
+// since renamed or gone. A session row, read live from the inventory, gets no
+// marker; a row with no tmux at all gets "-".
+func TestFormatPeersTable_TmuxColumn(t *testing.T) {
+	got := formatPeersTable(v4TableFixture())
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+
+	// The entry row's SessionName is "" -- only TmuxName can produce this.
+	if !strings.Contains(got, "bb2?") {
+		t.Errorf("entry row TMUX cell missing the marked frozen name %q:\n%s", "bb2?", got)
+	}
+	for _, want := range []string{"aigora2", "purdex7", "nexen", "aigora3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("session row TMUX cell lacks %q:\n%s", want, got)
+		}
+	}
+	// Session rows are live, so none of them is marked.
+	for _, unwanted := range []string{"aigora2?", "purdex7?", "nexen?", "aigora3?"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("session row TMUX cell was marked %q -- only entry rows are:\n%s", unwanted, got)
+		}
+	}
+
+	// The TMUX cell sits second from the right, between DELIVERABLE and CWD.
+	for i, wantTmux := range []string{"aigora2", "purdex7", "nexen", "aigora3", "bb2?"} {
+		cells := headerColumns(lines[i+1])
+		// An unset TITLE cell is blank, so headerColumns drops it; index
+		// from the right instead, where CWD is last.
+		if len(cells) < 2 {
+			t.Fatalf("row %d too short: %q", i, lines[i+1])
+		}
+		if gotTmux := cells[len(cells)-2]; gotTmux != wantTmux {
+			t.Errorf("row %d TMUX cell = %q, want %q (row %q)", i, gotTmux, wantTmux, lines[i+1])
+		}
+	}
+
+	// No tmux at all renders "-", not a blank.
+	none := formatPeersTable(peers.Envelope{OK: true, Peers: []peers.PeerRecord{
+		{Address: "mlab/loner-11", Ref: "_aaaaaa", RowKind: "entry", Cwd: "~",
+			Agent: &peers.AgentInfo{Type: "cc", Status: "idle"}, Deliverable: true},
+	}})
+	cells := headerColumns(strings.Split(none, "\n")[1])
+	if got := cells[len(cells)-2]; got != "-" {
+		t.Errorf("tmux-less row TMUX cell = %q, want %q (%q)", got, "-", none)
+	}
+}
+
+// TestFormatPeersAllTable_V4Columns pins that --all keeps its leading HOST
+// column (spec §5.7) and then follows the single-host order exactly.
+func TestFormatPeersAllTable_V4Columns(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", OK: true, DaemonVersion: "1.0.0", Peers: v4TableFixture().Peers},
+	}})
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+
+	wantCols := []string{"HOST", "TITLE", "ADDRESS", "AGENT", "STATUS", "DELIVERABLE", "TMUX", "CWD"}
+	if cols := headerColumns(lines[0]); strings.Join(cols, "|") != strings.Join(wantCols, "|") {
+		t.Errorf("--all header columns = %v, want %v", cols, wantCols)
+	}
+	if strings.Contains(lines[0], "NAME") {
+		t.Errorf("--all header still carries NAME: %q", lines[0])
+	}
+	if !strings.Contains(got, "mlab/purdex-b0 [q34psn]") {
+		t.Errorf("--all table lacks the bracketed address:\n%s", got)
+	}
+	if !strings.Contains(got, "bb2?") {
+		t.Errorf("--all table lacks the marked entry-row tmux name:\n%s", got)
+	}
+	if strings.Contains(got, "mlab/_df25d0 [df25d0]") {
+		t.Errorf("--all ref-address row got a redundant bracket:\n%s", got)
 	}
 }

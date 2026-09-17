@@ -357,29 +357,36 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 }
 
 // formatPeersTable renders resp.Peers as a text/tabwriter table with columns
-// LABEL ADDRESS AGENT NAME STATUS DELIVERABLE CWD, followed by the
+// TITLE ADDRESS AGENT STATUS DELIVERABLE TMUX CWD, followed by the
 // host's partial-cause lines (writeHostDiagnostics) and a trailer line
 // naming this daemon's version.
 //
-// LABEL comes first because that is the order the table is used in (spec
-// §7.1): a reader scans the labels to find the conversation they want,
-// then copies that row's ADDRESS to reach it. A row with no label renders
+// TITLE comes first because that is the order the table is used in (v4 spec
+// §5.7): a reader scans the titles to find the conversation they want,
+// then copies that row's ADDRESS to reach it. A row with no title renders
 // a BLANK cell rather than "-" — a dash reads as a value, and an unnamed
 // conversation has nothing to show there; it is still perfectly
-// addressable, which is exactly what the ADDRESS beside it says.
+// addressable, which is exactly what the ADDRESS beside it says. (The Go
+// field is still Label until Task B2; the column it feeds is TITLE.)
+//
+// Two v3 columns are gone and one is new. NAME went because it IS the
+// address's second segment, and HOST — which only the --all form ever had —
+// because it is the address's first. TMUX arrives because the tmux name left
+// the address along with the suffix, and without a column of its own it would
+// not be on screen anywhere.
 func formatPeersTable(resp peers.Envelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "LABEL\tADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
+	fmt.Fprintln(w, "TITLE\tADDRESS\tAGENT\tSTATUS\tDELIVERABLE\tTMUX\tCWD")
 
 	for _, rec := range resp.Peers {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			sanitizeCell(rec.Label),
 			addressField(rec),
 			sanitizeCell(agentField(rec)),
-			sanitizeCell(nameField(rec)),
 			sanitizeCell(statusField(rec)),
 			sanitizeCell(deliverableField(rec)),
+			sanitizeCell(tmuxField(rec)),
 			sanitizeCell(rec.Cwd),
 		)
 	}
@@ -447,9 +454,11 @@ func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.
 
 // formatPeersAllTable renders a scope=all response as a text/tabwriter
 // table with a leading HOST column (the row's host alias) and then the
-// single-host order, LABEL before ADDRESS (spec §7.1). HOST stays first
+// single-host order, TITLE before ADDRESS (v4 spec §5.7). HOST stays first
 // because neither of the other two columns means anything until you know
-// which host the row lives on. One row per peer record across every host
+// which host the row lives on — the address carries its own host segment,
+// but a column you can scan down beats one you have to read across.
+// One row per peer record across every host
 // whose fetch succeeded, followed by one line per host whose fetch failed:
 // "<alias>  (unreachable: <error>)", followed by, for every host whose
 // fetch succeeded, that host's "<alias>  (partial: …)" cause lines (spec
@@ -458,7 +467,7 @@ func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.
 func formatPeersAllTable(resp peers.AllEnvelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "HOST\tLABEL\tADDRESS\tAGENT\tNAME\tSTATUS\tDELIVERABLE\tCWD")
+	fmt.Fprintln(w, "HOST\tTITLE\tADDRESS\tAGENT\tSTATUS\tDELIVERABLE\tTMUX\tCWD")
 
 	for _, h := range resp.Hosts {
 		if !h.OK {
@@ -470,9 +479,9 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 				sanitizeCell(rec.Label),
 				addressField(rec),
 				sanitizeCell(agentField(rec)),
-				sanitizeCell(nameField(rec)),
 				sanitizeCell(statusField(rec)),
 				sanitizeCell(deliverableField(rec)),
+				sanitizeCell(tmuxField(rec)),
 				sanitizeCell(rec.Cwd),
 			)
 		}
@@ -496,7 +505,23 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 	return buf.String()
 }
 
-// addressField renders rec.Address through sanitizeCell first, then — only
+// displayAddress renders a row's address for a human: "<host>/<name> [<ref>]".
+//
+// The ref prints without its leading underscore — the bracket already
+// separates it — and prints on EVERY row rather than only ambiguous ones: a
+// reader who has to go looking for it when a name stops working has to look
+// somewhere other than where they were already reading.
+//
+// A row whose address is already the ref (an unroutable name, or no name at
+// all) gets no bracket; repeating it would suggest two different identifiers.
+func displayAddress(rec peers.PeerRecord) string {
+	if rec.Ref == "" || strings.HasSuffix(rec.Address, "/"+rec.Ref) {
+		return rec.Address
+	}
+	return rec.Address + " [" + strings.TrimPrefix(rec.Ref, "_") + "]"
+}
+
+// addressField renders displayAddress through sanitizeCell first, then — only
 // for an entry row (RowKind == "entry", a live tmux/cc process outside any
 // registered session) — prefixes it with two spaces, visually nesting it
 // under the session rows above it. sanitizeCell passes plain spaces
@@ -505,7 +530,7 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 // indistinguishable from our own indentation, or make a non-entry row
 // with a stray leading space look indented when it is not.
 func addressField(rec peers.PeerRecord) string {
-	addr := strings.TrimLeft(sanitizeCell(rec.Address), " ")
+	addr := strings.TrimLeft(sanitizeCell(displayAddress(rec)), " ")
 	if rec.RowKind == "entry" {
 		addr = "  " + addr
 	}
@@ -519,11 +544,22 @@ func agentField(rec peers.PeerRecord) string {
 	return rec.Agent.Type
 }
 
-func nameField(rec peers.PeerRecord) string {
-	if rec.Agent == nil || rec.Agent.PeerName == "" {
+// tmuxField renders the TMUX cell. An entry row's tmux name comes from the
+// registry file, frozen when the agent started, so it can name a session
+// since renamed or gone; a session row's comes from the live inventory. The
+// '?' is the difference, and a reader deciding where to attach is the one who
+// needs to know it.
+//
+// It renders TmuxName and never SessionName: SessionName is empty on an entry
+// row, which is the whole reason TmuxName exists (v4 spec §5.3).
+func tmuxField(rec peers.PeerRecord) string {
+	if rec.TmuxName == "" {
 		return "-"
 	}
-	return rec.Agent.PeerName
+	if rec.RowKind == "entry" {
+		return rec.TmuxName + "?"
+	}
+	return rec.TmuxName
 }
 
 func statusField(rec peers.PeerRecord) string {
