@@ -204,6 +204,19 @@ very function one `scope=all` row is built by — then answers with that row min
 Reusing `fetchHostResult` is the point, not a shortcut: the verify route *is* one fan-out row, and a
 reviewer can check the claim "verify and `--all` agree" by reading one call site.
 
+**Why not a lighter probe.** Verify needs only "reachable, token accepted, host_id matches", and
+`fetchHostResult` obtains that by pulling the peer's whole inventory (the peer resolves every
+session's owner under its 2 s budget; the rows are then recomputed by `normalizeRemoteRows` and,
+here, thrown away). A lighter probe would be cheaper per call but it would be a **new inbound route
+on the peer** — one that a host principal must be admitted to by `HostRoutePolicy` — so verification
+would work only once *both* daemons run the new version, and against an older peer the page would
+report "unreachable" for a pair that works. `GET /api/peers` (scope local) is the one route every
+daemon since P2 already serves to a host principal, which makes it the only probe that is honest
+about the actual state of a mixed-version pair. The cost is bounded (≤ 3 s, one call per direction,
+only when the page is open or the CLI verb is run — never on a timer), and a `GET /api/peers/ping`
+can be added later (§10) with `fetchHostResult` falling back to the inventory for an old peer; the
+verify route's contract does not change when that happens.
+
 ### 4.2 Rename via `PUT /api/peers/hosts/{alias}`
 
 `putHostRequest` gains `Alias string \`json:"alias"\``. Empty means unchanged. When non-empty:
