@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.0.0-alpha.372] - 2026-09-17
+
+### Feat: daemon 的 tmux 呼叫不再依賴「它是怎麼被啟動的」（#1110）
+
+daemon 用**裸名稱** exec `tmux`，共約 35 處，沒有一處呼叫 `LookPath`；同時它會繼承啟動它那個 pane 的 `$TMUX`，而 `tmux.c` 的 `main` 在沒帶 `-L`/`-S` 時**拿 `$TMUX` 當 socket 路徑**。
+
+兩個雷今天都不會發作 —— 兩台機器的 PATH 都完整，mlab 繼承的 `$TMUX` 又剛好等於預設 socket。**那是運氣，不是設計**，而 LaunchAgent 化的 daemon 會把第一份運氣花掉：它拿到的 PATH 是 `/usr/bin:/bin:/usr/sbin:/sbin`，而 macOS 沒有 `/usr/bin/tmux`。
+
+新增 `internal/tmuxenv`，在 daemon 啟動時修正**行程環境**一次。因為 `exec.Command` 繼承環境，那 35 個呼叫點**一個都不用改** —— 而 `cmd/pdx/hook.go`（在 pane 裡跑，`:127` 真的讀 `TMUX_PANE`）因為是另一個行程而天然不受影響。這正是把修正放在環境層而非 `RealExecutor` 的理由。完全比照既有的 `internal/locale`：同一類問題、同一個掛載點。
+
+#### 附加，不是前置 —— 這個方向是 review 換來的
+
+原本的實作是把探測到的目錄**前置**到 PATH。對抗性 review 指出：修好的 PATH 會被 tmux server 繼承、再被 pane 繼承，而 pane 收到的是**裸 `pdx relay ...`**（`module/execution/launcher.go:166`、`module/stream/orchestrator.go:120`）。贏得優先順序就可能讓探測目錄裡某顆無關的 `pdx` 蓋掉 daemon 自己正在跑的那顆 —— 在 LaunchAgent 情境下這不是假設：daemon 可能是 `~/.config/pdx/bin/pdx`，而 `/opt/homebrew/bin` 放著別的東西。**那種失敗會表現成 agent 逾時，離 tmux 十萬八千里**，正好是這個套件存在的目的所要避免的診斷。
+
+改成附加什麼都沒失去：這段程式只有在 `LookPath("tmux")` **已經失敗**時才會走到，所以今天解析得到的指令一個都不會變順位，而 tmux —— 哪裡都解析不到 —— 從 PATH 的哪一端找都找得到。測試現在斷言的是**位置**而不只是成員，所以哪天有人好意改回前置，紅的會是測試而不是幾週後的某個 agent。
+
+#### 掛載點是雙重承重的
+
+1. 必須早於第一次 tmux exec —— 那是經由 module init 與 `/api/info` 的 `GetTmuxInstance` 抵達的（`core/info_handler.go:69`、`session/module.go:62`），**不是**經由 `config.Load`
+2. 必須早於 nex 的 PATH policy —— nex 在 Init 快照 PATH、soft-fail 時還原該快照（`module/nex/module.go:131/171`）。先跑代表快照裡已含本次修正，nex 失敗不會把它洗掉
+
+#### 行為變更（明講）
+
+從 `tmux -L other` 的 pane 啟動的 daemon，以前管理的是**那顆** server，之後管理預設那顆。attach relay 也一樣。這是把一個沒寫下來的意外變成寫下來的規則。
+
+找不到 tmux **不擋啟動**，但會印一行明確的錯誤 —— 比照 local daemon install spec 既有的「warning 但不阻擋」先例。alpha.364 的 PATH gate 守的是 `pdx` 自己，缺了會毀掉整個 agent/hook/CLI 生態，性質不同。
+
+#### 驗證方式
+
+不只單元測試。帶著假的 `$TMUX=/private/tmp/tmux-501/pretend,999,1` 起一顆臨時 daemon，log 印出丟棄那一行之後，**tmux hook 安裝成功** —— 若繼承的 `$TMUX` 還活著，tmux 會去找 `pretend` 那顆 socket，安裝必然失敗。
+
+三輪 codex review 收斂（spec 6 個必須 → 標準 1 個 → 對抗 1 個 → 再驗無 finding）。其中兩個是**我 spec 與程式碼註解都寫錯的事實**：`config.Load` 並不觸發 `GetTmuxInstance`；「purdex 不讀 TMUX/TMUX_PANE」是錯的。
+
+#### 留下的三個追蹤
+
+- **#1108** — tmux 一顆都沒跑時 UI 擋住建立 session。那個 gate 是**刻意**加的（當初真的踩過建立失敗且錯誤無法分辨），根因未查明，刻意延後
+- **#1111** — pane 裡的 relay 指令用裸 `pdx`，可能跑到與 daemon 不同的 binary。既有問題，本次只是降低風險
+- **#1109** — 第二顆 daemon 關閉時會移除第一顆的 tmux global hook（驗證過程中意外踩到）
+
+
 ## [1.0.0-alpha.371] - 2026-09-17
 
 ### Chore: `pdx nex host` 終於說得出憑證是哪來的（#1105，nexen v0.11.2）
