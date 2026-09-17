@@ -4,6 +4,9 @@ import { PEER_STALE_AFTER_MS, usePeerInfo } from './usePeerInfo'
 import { useHostStore, type HostRuntime } from '../stores/useHostStore'
 import { emptyPeerHostEntry, usePeerStore, type PeerHostEntry, type PeerRow } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
+import { useTabStore } from '../stores/useTabStore'
+import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
+import { createTab } from '../types/tab'
 
 const H = 'h1'
 const CODE = 'z141yl'
@@ -43,13 +46,48 @@ function seedFetched(entry: Partial<PeerHostEntry> = {}) {
   })
 }
 
+/**
+ * Seed one terminal pane bound to (host, code) at GEN, optionally already
+ * carrying the Claude Code session id its last owner `SessionStart` recorded.
+ */
+function seedTerminalPane(code = CODE, sessionId?: string, tabId = `tab-${code}`) {
+  const tab = createTab({
+    kind: 'tmux-session', hostId: H, sessionCode: code, mode: 'terminal', cachedName: 'dev', tmuxInstance: GEN,
+  })
+  const l = tab.layout
+  if (l.type === 'leaf' && l.pane.content.kind === 'tmux-session' && sessionId !== undefined) {
+    l.pane.content.rebuild = {
+      sessionName: 'dev', tmuxInstance: GEN, capturedAt: NOW - 1,
+      agent: { type: 'cc', sessionId, updatedAt: NOW - 1 },
+    }
+  }
+  useTabStore.setState((s) => ({ tabs: { ...s.tabs, [tabId]: { ...tab, id: tabId } }, tabOrder: [...s.tabOrder, tabId], activeTabId: tabId }))
+}
+
+/**
+ * A qualifying owner `SessionStart` for (host, code): the event the SPA's
+ * provenance path turns into a rebuild-record write — the only signal that
+ * says which Claude Code session is behind the pane now.
+ */
+function sessionStart(sessionId: string, code = CODE) {
+  const event: NormalizedEvent = {
+    agent_type: 'cc', status: 'idle', raw_event_name: 'PdxSessionStart', broadcast_ts: 1, subagents: [],
+    detail: { pdx_provenance: { owner_session_start: true, agent_type: 'cc', session_id: sessionId, cwd: '/w', tmux_pane_id: '%1', tmux_instance: GEN } },
+  }
+  useAgentStore.getState().handleNormalizedEvent(H, code, event)
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(NOW)
-  peerRefresh.mockClear()
-  cwdRefresh.mockClear()
+  // `mockReset`, not `mockClear`: a once-implementation a failing test never
+  // consumed must not leak into the next one.
+  peerRefresh.mockReset()
+  cwdRefresh.mockReset()
   usePeerStore.setState({ byHost: {}, refresh: peerRefresh })
   useSessionCwdStore.setState({ byHost: {}, refresh: cwdRefresh })
+  useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  useAgentStore.setState({ statuses: {}, agentTypes: {}, models: {}, subagents: {}, lastEvents: {}, unread: {} })
   setRuntime({ status: 'connected' })
 })
 
@@ -231,6 +269,134 @@ describe('staleness', () => {
     expect(result.current.stale).toBe(false)
     act(() => { vi.advanceTimersByTime(PEER_STALE_AFTER_MS + 1) })
     expect(result.current.stale).toBe(true)
+  })
+
+  // The boundary timer is the one moment the hook already wakes up on its own,
+  // so it is also where a host with an active pane gets its rows re-read:
+  // "marked stale" becomes "refreshed at the boundary", one refresh per
+  // answer, never a poll on render.
+  describe('at the boundary', () => {
+    it('refreshes a connected host with an active pane exactly once', () => {
+      seedFetched({ fetchedAt: NOW })
+      renderHook(() => usePeerInfo(H, CODE, GEN))
+      peerRefresh.mockClear()
+      act(() => { vi.advanceTimersByTime(PEER_STALE_AFTER_MS - 1) })
+      expect(peerRefresh).not.toHaveBeenCalled()
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(peerRefresh).toHaveBeenCalledTimes(1)
+      expect(peerRefresh).toHaveBeenCalledWith(H)
+    })
+
+    it('does not refresh a host that is not connected', () => {
+      seedFetched({ fetchedAt: NOW })
+      setRuntime({ status: 'disconnected' })
+      renderHook(() => usePeerInfo(H, CODE, GEN))
+      act(() => { vi.advanceTimersByTime(PEER_STALE_AFTER_MS + 1) })
+      expect(peerRefresh).not.toHaveBeenCalled()
+    })
+
+    it('does not refresh when the pane is no longer active — the hook is handed nulls', () => {
+      seedFetched({ fetchedAt: NOW })
+      const { rerender } = renderHook(({ host }) => usePeerInfo(host, CODE, GEN), { initialProps: { host: H as string | null } })
+      peerRefresh.mockClear()
+      rerender({ host: null })
+      act(() => { vi.advanceTimersByTime(PEER_STALE_AFTER_MS + 1) })
+      expect(peerRefresh).not.toHaveBeenCalled()
+    })
+
+    it('a host whose boundary refresh fails is not refetched on re-render, nor by a later timer', () => {
+      seedFetched({ fetchedAt: NOW })
+      // The store keeps `fetchedAt` on a failed refresh (the rows go stale
+      // rather than blank), which is what leaves no new boundary to fire at.
+      peerRefresh.mockImplementationOnce(async (hostId) => {
+        usePeerStore.setState((s) => ({ byHost: { ...s.byHost, [hostId]: { ...s.byHost[hostId], error: 'boom', loading: false } } }))
+      })
+      const { result, rerender } = renderHook(() => usePeerInfo(H, CODE, GEN))
+      peerRefresh.mockClear()
+      act(() => { vi.advanceTimersByTime(PEER_STALE_AFTER_MS) })
+      expect(peerRefresh).toHaveBeenCalledTimes(1)
+      expect(result.current.error).toBe('boom')
+      for (let i = 0; i < 10; i++) rerender()
+      act(() => { vi.advanceTimersByTime(PEER_STALE_AFTER_MS * 3) })
+      expect(peerRefresh).toHaveBeenCalledTimes(1)
+    })
+  })
+})
+
+// The generation guard above catches a tmux RESTART. It cannot catch a Claude
+// Code session being REPLACED inside a live tmux session — same code, same
+// server, nothing at the tmux level moves — and that is how a status bar came
+// to show `purdex-4a` for a pane whose session now held `purdex-bb`. The SPA
+// does already learn about the replacement: a qualifying `SessionStart` writes
+// the new agent's session id into the pane's rebuild record. That write is the
+// trigger.
+describe('a replaced Claude Code session', () => {
+  it('refreshes the host when a SessionStart records a different session id for this pane', () => {
+    seedFetched()
+    seedTerminalPane(CODE, 'sid-4a')
+    renderHook(() => usePeerInfo(H, CODE, GEN))
+    peerRefresh.mockClear()
+    act(() => { sessionStart('sid-bb') })
+    expect(peerRefresh).toHaveBeenCalledTimes(1)
+    expect(peerRefresh).toHaveBeenCalledWith(H)
+  })
+
+  it('does not refresh when a SessionStart records the SAME session id — a status change is not a new agent', () => {
+    seedFetched()
+    seedTerminalPane(CODE, 'sid-4a')
+    renderHook(() => usePeerInfo(H, CODE, GEN))
+    peerRefresh.mockClear()
+    act(() => { sessionStart('sid-4a') })
+    expect(peerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('does not refresh on an agent event that carries no provenance', () => {
+    seedFetched()
+    seedTerminalPane(CODE, 'sid-4a')
+    renderHook(() => usePeerInfo(H, CODE, GEN))
+    peerRefresh.mockClear()
+    act(() => {
+      useAgentStore.getState().handleNormalizedEvent(H, CODE, {
+        agent_type: 'cc', status: 'running', raw_event_name: 'PreToolUse', broadcast_ts: 2, subagents: [],
+      })
+    })
+    expect(peerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('does not refresh on mount for a record already present — the record is the baseline, not a change', () => {
+    seedFetched()
+    seedTerminalPane(CODE, 'sid-4a')
+    renderHook(() => usePeerInfo(H, CODE, GEN))
+    expect(peerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('does not refresh when the tab switches between panes that recorded different session ids', () => {
+    seedFetched()
+    seedTerminalPane(CODE, 'sid-4a')
+    seedTerminalPane('other1', 'sid-other')
+    const { rerender } = renderHook(({ code }) => usePeerInfo(H, code, GEN), { initialProps: { code: CODE } })
+    peerRefresh.mockClear()
+    rerender({ code: 'other1' })
+    rerender({ code: CODE })
+    expect(peerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('does not refresh a host that is not connected', () => {
+    seedFetched()
+    seedTerminalPane(CODE, 'sid-4a')
+    setRuntime({ status: 'disconnected' })
+    renderHook(() => usePeerInfo(H, CODE, GEN))
+    act(() => { sessionStart('sid-bb') })
+    expect(peerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('still refreshes once the record goes from empty to a session id — the first owner start after a fetch', () => {
+    seedFetched()
+    seedTerminalPane(CODE)
+    renderHook(() => usePeerInfo(H, CODE, GEN))
+    peerRefresh.mockClear()
+    act(() => { sessionStart('sid-bb') })
+    expect(peerRefresh).toHaveBeenCalledTimes(1)
   })
 })
 
