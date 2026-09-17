@@ -20,7 +20,8 @@
 - **The repo root holds a version-controlled 2.7 MB `pdx` binary that `go build ./cmd/...` overwrites.** Every commit uses `git commit --only` with the **explicit file list printed in that task's commit step**. Never `git commit -am`, and never expand `$(git diff --name-only)` into a commit — this worktree may host parallel subagents sharing one index, and a dynamic expansion sweeps in their work.
 - **Go tests:** `go test -race -count=1 ./internal/peers/...` (scope narrowed per task).
 - **SPA:** `cd spa && npx vitest run`, `pnpm run lint`, `pnpm run build`.
-- **Known flake, not yours:** `internal/module/agent`'s `TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown` reddens intermittently under parallel load and passes alone (#1092).
+- **Known flakes, not yours** — both redden under parallel load and pass alone. Rerun the package by itself before believing either is your change: `internal/module/agent`'s `TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown` (#1092), and `internal/agent/probe`'s `TestWatch_StopWatch_CancelsLoop` (found during Task A4; file an issue if it recurs).
+- **Mutation-test any rule the task calls load-bearing.** Task A4 found that none of its prescribed tests actually pinned the rule the whole task exists for: moving the stale-version gate below tier 1 left the package green. Before you report a rule as covered, break it deliberately and confirm something goes red. If nothing does, the test you still owe is the deliverable.
 
 ### Existing test fixtures you will reuse (verified 2026-09-17)
 
@@ -1273,12 +1274,43 @@ git commit --only cmd/pdx/peers.go cmd/pdx/peers_test.go \
 ### Task A8: `pdx msg send` input forms and the `whoami` block
 
 **Files:**
-- Modify: `cmd/pdx/msg.go`
-- Test: `cmd/pdx/msg_test.go`
+- Modify: `cmd/pdx/msg.go`, `internal/peers/wire.go` (one error-code constant), `internal/module/peers/send.go`
+- Test: `cmd/pdx/msg_test.go`, `internal/module/peers/send_test.go`
 
 **Interfaces:**
-- Consumes: A4's three input forms.
-- Produces: no new exported symbols.
+- Consumes: A4's `ErrNameMismatch` and the three input forms.
+- Produces: `ErrCodeNameMismatch = "name_mismatch"` in `wire.go`, returned by `/send` with the refusal's detail intact.
+
+**Task A4 found that the refusal is currently invisible, and fixing that is part of this task.**
+`ErrNameMismatch` falls into `send.go`'s `default:` arm, which answers 404 `peer_not_found` with a
+generic "no session %q on %q" — discarding the typed name, the resolved name and the ref. Those three
+facts are the entire point: they are how an operator tells "the peer renamed itself" from "someone
+handed me a doctored address". A refusal nobody can read is not a refusal.
+
+- [ ] **Step 0: Surface the mismatch through `/send`**
+
+Add beside the other codes in `wire.go`:
+
+```go
+	// ErrCodeNameMismatch is /send's answer when Resolve came back with
+	// ErrNameMismatch: the combined form's name is not the ref's current name.
+	// The detail carries all three values, because distinguishing a peer that
+	// renamed itself from an address someone doctored is the operator's call
+	// and they cannot make it from the code alone.
+	ErrCodeNameMismatch = "name_mismatch"
+```
+
+In `send.go`'s Resolve-error switch, add a case ahead of `default:` that maps `ErrNameMismatch` to
+409 with `err.Error()` as the detail — the same status the ambiguous case uses, since both mean
+"your address was understood and refused", not "not found".
+
+Add a `send_test.go` case asserting the code and that the detail contains all three values.
+
+- [ ] **Step 0b: Add the CLI's rendering**
+
+`renderMsgAPIError` (`cmd/pdx/msg.go:355`) must print the detail for this code rather than a bare
+`name_mismatch`, and say what to do: re-read the address, or use `<host>/_<ref>` if the rename was
+expected.
 
 `runMsgSend` is `runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io.Writer) int` — it takes a `getenv`, not a URL. Follow the existing send tests in `msg_test.go` for how they stand up a server and point the config at it; do not invent a `fakeSendServer`.
 
