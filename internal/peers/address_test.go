@@ -619,6 +619,79 @@ func TestResolve_CurrentRows_TmuxFallbackUnaffected(t *testing.T) {
 	}
 }
 
+// --- the stale-version signal itself ------------------------------------
+
+// TestStaleVersionRows_SignalIsTheConjunction calls the predicate by name,
+// because the name is half of what this rule delivers: "pre-v3" stopped being
+// true the moment v4 moved the signal to the ref field, and a predicate whose
+// name misstates its own cause is read wrong by the next person to touch the
+// gate above tier 1.
+func TestStaleVersionRows_SignalIsTheConjunction(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rec  PeerRecord
+		want bool
+	}{
+		{"live cc row without a ref", PeerRecord{Agent: &AgentInfo{Type: "cc", PID: 42, PeerName: "purdex-b0"}}, true},
+		{"live cc row with a ref", liveRow(refA, "purdex-b0", "", "mt0", 42), false},
+		{"owner fallback", PeerRecord{Agent: &AgentInfo{Type: "cc", PID: 0}, Reason: "inbox_dead"}, false},
+		{"proxy", PeerRecord{Agent: &AgentInfo{Type: "proxy", PID: 7}, Reason: "proxy"}, false},
+		{"agent null", PeerRecord{Agent: nil, Reason: "no_agent", SessionName: "aigora3"}, false},
+	} {
+		if got := hasStaleVersionRows([]PeerRecord{tc.rec}); got != tc.want {
+			t.Errorf("hasStaleVersionRows(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	// One stale row condemns the batch: Resolve is called per host, so every
+	// row in it came from the same daemon.
+	mixed := []PeerRecord{
+		liveRow(refA, "purdex-b0", "", "mt0", 1),
+		{Agent: &AgentInfo{Type: "cc", PID: 2, PeerName: "purdex-dev"}},
+	}
+	if !hasStaleVersionRows(mixed) {
+		t.Error("hasStaleVersionRows(mixed batch) = false, want true")
+	}
+}
+
+// TestStaleVersion_V3BatchRefusesEveryForm drives a v3-shaped batch through
+// Resolve: a v3 daemon sent "canonical", a v4 decoder reads "ref", so Ref is
+// empty while the row is otherwise a live, usable cc row carrying a name that
+// tier 1 would happily match.
+func TestStaleVersion_V3BatchRefusesEveryForm(t *testing.T) {
+	recs := []PeerRecord{{
+		SessionName: "aigora2",
+		Agent:       &AgentInfo{Type: "cc", PID: 42, PeerName: "purdex-b0"},
+	}}
+	for _, form := range []string{"purdex-b0", "_q34psn", "q34psn", "purdex-b0 [q34psn]"} {
+		if _, err := Resolve(recs, form, ResolveSnapshot{}); !errors.Is(err, ErrRemoteTooOld) {
+			t.Errorf("Resolve(%q) err = %v, want ErrRemoteTooOld", form, err)
+		}
+	}
+	// The escape hatch the refusal names must still work.
+	if _, err := Resolve(recs, "tmux:aigora2", ResolveSnapshot{}); err != nil {
+		t.Errorf("tmux form: %v, want it to resolve", err)
+	}
+}
+
+// TestStaleVersion_V4RowsNotMisjudged pins the other half of the conjunction.
+// Each row below legitimately carries an empty Ref on a CURRENT daemon, so
+// testing Ref alone would declare every v4 host obsolete.
+func TestStaleVersion_V4RowsNotMisjudged(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rec  PeerRecord
+	}{
+		{"owner fallback", PeerRecord{Agent: &AgentInfo{Type: "cc", PID: 0}, Reason: "inbox_dead"}},
+		{"proxy", PeerRecord{Agent: &AgentInfo{Type: "proxy", PID: 7}, Reason: "proxy"}},
+		{"agent null", PeerRecord{Agent: nil, Reason: "no_agent", SessionName: "aigora3"}},
+	} {
+		_, err := Resolve([]PeerRecord{tc.rec}, "nobody", ResolveSnapshot{})
+		if errors.Is(err, ErrRemoteTooOld) {
+			t.Errorf("%s: judged stale; want a plain miss", tc.name)
+		}
+	}
+}
+
 // --- HostMatches -------------------------------------------------------
 
 func TestHostMatches(t *testing.T) {

@@ -46,7 +46,7 @@ var ErrLegacyCC = errors.New("cc: addresses were removed; run pdx peers --all to
 
 // ErrRemoteTooOld is returned (wrapped under ErrNotFound, like ErrLegacyCC)
 // by Resolve when tier 1 misses over a batch of rows that came from a
-// daemon predating Peer Address v3 — see hasPreV3Rows for the signal.
+// daemon predating Peer Address v4 — see hasStaleVersionRows for the signal.
 //
 // It exists because the upgrade is not atomic: one host runs v3 while the
 // other still runs v2, and the v2 host keeps PRINTING a label as its
@@ -176,7 +176,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 	// the inventory is partial" is advice that can never come true against an
 	// old daemon, and a wrong diagnosis costs the operator the time they spend
 	// following it.
-	if hasPreV3Rows(records) {
+	if hasStaleVersionRows(records) {
 		return PeerRecord{}, fmt.Errorf("%w: %w", ErrNotFound, ErrRemoteTooOld)
 	}
 
@@ -292,19 +292,24 @@ func hasLiveEntry(r PeerRecord) bool {
 	return r.Agent != nil && r.Agent.Type == "cc" && r.Agent.PID != 0
 }
 
-// hasPreV3Rows reports whether records were produced by a daemon that
-// predates Peer Address v3 — the condition behind ErrRemoteTooOld.
+// hasStaleVersionRows reports whether records came from a daemon predating
+// Peer Address v4 — the condition behind ErrRemoteTooOld.
 //
-// The signal is spec §4.5's invariant read backwards. A v3 daemon gives
-// every row with a live cc entry a non-empty Ref, so one such row
-// WITHOUT it can only have come from a daemon that does not know the
-// field, whose JSON therefore decodes it as "". No version string is
-// needed, and none is trusted: the rows say it themselves.
+// v4 gets the signal for free: the JSON key moved from "canonical" to "ref"
+// (spec §5.3), so a v3 daemon's rows decode with Ref == "" whatever they
+// actually sent. No version string is needed, and none is trusted: the rows
+// say it themselves.
 //
-// Only live cc rows count. A row with agent: null, a proxy row and an
-// owner-fallback row all carry an empty Ref by design on a v3
-// daemon too, so counting them would declare every v3 host obsolete.
-func hasPreV3Rows(records []PeerRecord) bool {
+// The hasLiveEntry conjunction is load-bearing, not caution. A CURRENT daemon
+// also emits rows with an empty Ref — owner-fallback rows (inbox_dead /
+// ambiguous, PID 0), proxy rows and agent:null rows — and counting those would
+// declare every v4 host obsolete.
+//
+// Refusing matters more here than it did in v3, where what lay below was a
+// tmux-name guess. A v3 row still carries a usable registry name in
+// agent.peer_name, so v4's name tier would SUCCEED against it, delivering to a
+// row whose ref the sender could never have verified.
+func hasStaleVersionRows(records []PeerRecord) bool {
 	for _, r := range records {
 		if hasLiveEntry(r) && r.Ref == "" {
 			return true
