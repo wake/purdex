@@ -282,14 +282,21 @@ renders; no new field.
 
 | class | head | accepted | rationale |
 |---|---|---|---|
-| v4 | `^_[0-9a-z]{6}$` | yes | current |
-| v3 | `^_[0-9a-z]{8}$` | yes, **one release** | a peer mid-upgrade; `Resolve` still refuses it via §8.3, so acceptance here only changes *which* error the operator sees |
-| v2 | user-label head (`isLegacyV2Head`) | yes, **one release** | unchanged from v3, which still accepts it; removing it in the same release as the ref-width change would make one upgrade window carry two incompatibilities |
+| v4 | `^_[0-9a-z]{6}$` (`IsRef`) | yes | current |
+| v3 | `^_[0-9a-z]{8}$` (`legacyV3Head`) | yes, **one release** | a peer mid-upgrade; `Resolve` still refuses it via §8.3, so acceptance here only changes *which* error the operator sees |
+| v2 | its default head, **also `IsRef`** | yes | v2's default label was `_` plus six base36 digits — the identical shape a v4 ref has, so `isLegacyV2Head` is deleted and `IsRef` covers both. A coincidence of format, not of meaning, and harmless here because this function checks grammar only; §8.3 is what tells the versions apart, and it refuses a pre-v4 batch whole |
+| v2 | a bare user label | yes | unchanged from v3, via `ValidateUserLabel` |
 | v1 | `""` | yes | a v1 sender, unchanged |
 
-`ValidSuffix`, `suffixWirePattern` and the suffix arm are deleted with `Suffix`. The two "one
-release" rows are removed together in the version after this one; a `// TODO(v5)` on each arm names
-that release so the deletion is not lost.
+Only the v3 row is time-limited, so there is **one** `// TODO(v5)` arm, not two; it names the
+release and both retired forms so the deletion is not lost.
+
+**`ValidSuffix` and `suffixWirePattern` are kept, not deleted with `Suffix`.** An earlier draft said
+otherwise and was wrong in a way worth recording, because the two names look like one thing:
+`Suffix` was the *producer*, a field v4 stops writing, while `ValidSuffix` is the *receiver's* check
+on what a legacy sender still puts on the wire. Retiring a sender while relaxing the matching
+receiver is how a field quietly stops being validated at all — so the suffix arm stays, and a
+malformed legacy suffix is still `bad_address`.
 
 ### 5.7 `pdx peers` table (`cmd/pdx/peers.go`)
 
@@ -511,3 +518,5 @@ re-deriving them from scratch would land in the same place.
 | "every v3 row decodes with `Ref == ''`" | true but too loose — legitimate v4 owner-fallback, proxy and `agent: null` rows do too | the signal is the `hasLiveEntry` conjunction (§8.3) |
 | §2's 14-file sample supports the name as an address head | it supports "stable in practice", not "cannot change"; resume, compact, user rename and this repo's own rewriter are uncovered | §2 scopes the claim; the name is a convenience alias and every copy action carries the ref (§5.8) |
 | Phase C as a follow-on | A+B alone give a readable address that is not portable, which is not the goal | V11 ships the three together; §9.9 gates the release on a cross-host paste |
+| "`ValidSuffix` … deleted with `Suffix`" (§5.6) | `Suffix` is the producer v4 stops writing; `ValidSuffix` is the receiver's check on what a legacy sender still sends. Deleting the check with the field would leave the value unvalidated | the suffix arm stays; a malformed legacy suffix is still `bad_address` |
+| `isLegacyV2Head` as a distinct class (§5.6) | v2's default head and a v4 ref are the same six-digit shape, so it was a second name for one regex | deleted; `IsRef` covers both |
