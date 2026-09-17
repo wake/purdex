@@ -281,8 +281,11 @@ pdx peers host rename <alias> <new-alias> [--config <path>]
 differs from `<alias>` case-insensitively, `alias drift: peer calls itself <self>` — **the exact
 string `pdx peers --all` already prints** (`cmd/pdx/peers.go:533`), so the two verbs never disagree
 — exit 0 on `ok`, 1 otherwise. `rename` is a thin wrapper over
-the PUT and prints `renamed <old> -> <new>`. Both are ~40 lines in `cmd/pdx/peers.go`; #1113
-(splitting that file) is not made harder and is not attempted here.
+the PUT and prints `renamed <old> -> <new>`. It compares the returned `alias` to the requested one
+**exactly** and refuses to report success otherwise (`daemon did not apply the rename`, exit 1): an
+older daemon has no `alias` field on PUT, ignores the key and answers 200 with the entry unchanged
+— a case-only rename is a real rename, so the comparison is case-sensitive. Both are ~40 lines in
+`cmd/pdx/peers.go`; #1113 (splitting that file) is not made harder and is not attempted here.
 
 ## 5. Phase D2 — SPA: the Peers sub-page
 
