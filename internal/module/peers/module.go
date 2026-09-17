@@ -547,7 +547,13 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 
 	local := m.localEnvelope(ctx, hostID, alias)
 	results[0] = ipeers.HostResult{
-		Alias:                alias,
+		Alias: alias,
+		// The local row's SelfAlias comes from the same snapshot alias as
+		// Alias, so this host agrees with itself by construction and can
+		// never be flagged as drifting — there is no second opinion to
+		// disagree with, and inventing one from the live config would only
+		// manufacture drift out of a mid-request rename.
+		SelfAlias:            alias,
 		HostID:               hostID,
 		OK:                   local.OK,
 		Error:                local.Error,
@@ -706,8 +712,17 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	// or re-encoded. env.TitlesUnavailable is a bool and needs no bounding:
 	// it is the remote's own claim about its label store, copied through
 	// for the per-host cause line.
+	//
+	// env.Alias gets that same bounding and nothing more. It is NOT put
+	// through sanitizeLearnedAlias: that helper answers "may we adopt this
+	// name?" and returns "" when the answer is no, which would erase exactly
+	// the reports worth seeing — a peer that renamed itself to something
+	// unroutable, or to our own local alias. This field is only ever
+	// displayed (sanitizeCell at the terminal), never stored and never
+	// routed on, so the bar it clears is the one env.Error clears.
 	return ipeers.HostResult{
 		Alias:                h.Alias,
+		SelfAlias:            boundRemoteText(env.Alias),
 		HostID:               resultHostID,
 		OK:                   env.OK,
 		Error:                rowErr,

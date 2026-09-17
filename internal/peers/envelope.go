@@ -37,8 +37,19 @@ type Envelope struct {
 // HostResult is one host's row in a scope=all response: like Envelope, plus
 // the alias/host_id identifying which peer host it came from.
 type HostResult struct {
-	Alias                string       `json:"alias"`
-	HostID               string       `json:"host_id"` // configured or learned; "" if unknown
+	Alias  string `json:"alias"`
+	HostID string `json:"host_id"` // configured or learned; "" if unknown
+	// SelfAlias is what the peer calls ITSELF (its Envelope.Alias), carried
+	// beside Alias — which is what WE call it. "" means the peer never said:
+	// an old daemon, or a fetch that never reached one. "" is not a
+	// disagreement, and a reader must not treat it as one.
+	//
+	// Drift is surfaced, never followed. Alias stays authoritative: it is the
+	// head every address on this host resolves against, so silently adopting
+	// a peer's rename would move every address out from under whoever had
+	// written one down. `pdx peers --all` says the two disagree and stops
+	// there; renaming stays a deliberate `pdx peers host` edit.
+	SelfAlias            string       `json:"self_alias"`
 	OK                   bool         `json:"ok"`
 	Error                string       `json:"error,omitempty"`
 	Partial              bool         `json:"partial"`

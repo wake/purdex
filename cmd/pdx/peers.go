@@ -493,7 +493,9 @@ func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.
 // but a column you can scan down beats one you have to read across.
 // One row per peer record across every host
 // whose fetch succeeded, followed by one line per host whose fetch failed:
-// "<alias>  (unreachable: <error>)", followed by, for every host whose
+// "<alias>  (unreachable: <error>)", then one line per host whose
+// self-reported name disagrees with ours (aliasDriftField), followed by, for
+// every host whose
 // fetch succeeded, that host's "<alias>  (partial: …)" cause lines (spec
 // §3.3, writeHostDiagnostics — the same lines the single-host table
 // prints) and a "<alias>  daemon <version>" trailer line.
@@ -527,6 +529,11 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 		}
 	}
 	for _, h := range resp.Hosts {
+		if self := aliasDriftField(h); self != "" {
+			fmt.Fprintf(&buf, "%s  (alias drift: peer calls itself %s)\n", sanitizeCell(h.Alias), sanitizeCell(self))
+		}
+	}
+	for _, h := range resp.Hosts {
 		if !h.OK {
 			continue
 		}
@@ -536,6 +543,32 @@ func formatPeersAllTable(resp peers.AllEnvelope) string {
 	}
 
 	return buf.String()
+}
+
+// aliasDriftField returns the peer's self-reported name when it disagrees
+// with the name this host has that peer configured under, and "" when there
+// is nothing to say: the two agree, or the peer never reported one (an old
+// daemon, or a fetch that never reached one — see HostResult.SelfAlias).
+// The comparison is case-insensitive because everything that routes on an
+// alias already is (config.ValidateAlias, config.FindPeerHostByAlias), so
+// "MLAB" and "mlab" reach the same host and are not a disagreement.
+//
+// Drift is surfaced, never followed. h.Alias is what every address on this
+// host resolves against; adopting the peer's rename here would move every
+// address out from under whoever had written one down. The line reports that
+// the two disagree and stops — renaming stays a deliberate `pdx peers host`
+// edit by an operator who has decided to.
+//
+// This lives on --all and not on `pdx peers host list` on purpose (spec
+// §7.4): that route renders local config and contacts nobody, so the best it
+// could show is a value remembered at pairing time. The fan-out refetches
+// every peer's envelope on every call, which makes this the one place the
+// comparison is live rather than stale.
+func aliasDriftField(h peers.HostResult) string {
+	if h.SelfAlias == "" || strings.EqualFold(h.SelfAlias, h.Alias) {
+		return ""
+	}
+	return h.SelfAlias
 }
 
 // displayAddress renders a row's address for a human: "<host>/<name> [<ref>]".

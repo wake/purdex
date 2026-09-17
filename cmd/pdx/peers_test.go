@@ -1611,3 +1611,86 @@ func TestFormatPeersAllTable_V4Columns(t *testing.T) {
 		t.Errorf("--all ref-address row got a redundant bracket:\n%s", got)
 	}
 }
+
+// TestFormatPeersAllTable_MarksAliasDrift pins spec §7.4: --all is the one
+// place the comparison between what we call a host and what that host calls
+// itself is live, so it is the place that says the two disagree. The
+// agreeing host says nothing at all — a mark on every row is a mark on none.
+func TestFormatPeersAllTable_MarksAliasDrift(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "mlab", OK: true, DaemonVersion: "1.0.0", Peers: []peers.PeerRecord{}},
+		{Alias: "air", SelfAlias: "air26", OK: true, DaemonVersion: "1.0.0", Peers: []peers.PeerRecord{}},
+	}})
+
+	if !strings.Contains(got, "air  (alias drift: peer calls itself air26)") {
+		t.Errorf("drifted self alias not shown:\n%s", got)
+	}
+	if n := strings.Count(got, "alias drift"); n != 1 {
+		t.Errorf("alias-drift lines = %d, want exactly 1 (only the host that drifted):\n%s", n, got)
+	}
+	for _, ln := range strings.Split(got, "\n") {
+		if strings.HasPrefix(ln, "mlab") && strings.Contains(ln, "alias drift") {
+			t.Errorf("agreeing host is marked: %q", ln)
+		}
+	}
+	// Surfaced, never followed: the line reports the disagreement, it does
+	// not rename anything. Every row still lives under the local alias.
+	if strings.Contains(got, "air26/") {
+		t.Errorf("--all rewrote a row to the peer's self-reported name:\n%s", got)
+	}
+}
+
+// TestFormatPeersAllTable_SilentWhenSelfAliasUnknown: "" is not drift. A
+// host that never reported a name — an old daemon, or a fetch that never
+// reached a daemon at all — disagrees with nothing.
+func TestFormatPeersAllTable_SilentWhenSelfAliasUnknown(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "mlab", OK: true, Peers: []peers.PeerRecord{}},
+		{Alias: "air", OK: true, Peers: []peers.PeerRecord{}},
+		{Alias: "down", OK: false, Error: "connection refused", Peers: []peers.PeerRecord{}},
+	}})
+	if strings.Contains(got, "alias drift") {
+		t.Errorf("a host with no self-reported alias was marked as drifting:\n%s", got)
+	}
+}
+
+// TestFormatPeersAllTable_AliasDriftIsCaseInsensitive: aliases are matched
+// case-insensitively everywhere that routes on them (config.ValidateAlias,
+// config.FindPeerHostByAlias), so "MLAB" and "mlab" reach the same host and
+// are not a disagreement worth a line.
+func TestFormatPeersAllTable_AliasDriftIsCaseInsensitive(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "MLAB", OK: true, Peers: []peers.PeerRecord{}},
+	}})
+	if strings.Contains(got, "alias drift") {
+		t.Errorf("a case-only difference was reported as drift:\n%s", got)
+	}
+}
+
+// TestFormatPeersAllTable_EscapesAliasDrift: self_alias is the peer's own
+// report, exactly as attacker-controlled as its error text, and it lands on
+// a terminal.
+func TestFormatPeersAllTable_EscapesAliasDrift(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "air", SelfAlias: "air\x1b[2Jevil\x07", OK: true, Peers: []peers.PeerRecord{}},
+	}})
+	if !strings.Contains(got, "alias drift") {
+		t.Fatalf("drift line missing entirely:\n%s", got)
+	}
+	if strings.ContainsAny(got, "\x1b\x07") {
+		t.Errorf("formatPeersAllTable = %q, want no raw ESC/BEL bytes in the drift line", got)
+	}
+}
+
+// TestFormatPeersAllTable_LocalRowNeverDrifts: the local host is Hosts[0]
+// of every fan-out and its SelfAlias equals its Alias by construction
+// (internal/module/peers.allEnvelope fills both from the same snapshot).
+// It must never be able to disagree with itself.
+func TestFormatPeersAllTable_LocalRowNeverDrifts(t *testing.T) {
+	got := formatPeersAllTable(peers.AllEnvelope{Hosts: []peers.HostResult{
+		{Alias: "mlab", SelfAlias: "mlab", OK: true, DaemonVersion: "1.0.0", Peers: []peers.PeerRecord{}},
+	}})
+	if strings.Contains(got, "alias drift") {
+		t.Errorf("the local row reported drift against itself:\n%s", got)
+	}
+}

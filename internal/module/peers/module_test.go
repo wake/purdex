@@ -1884,3 +1884,145 @@ func TestInit_MissingOwnerResolver(t *testing.T) {
 		t.Errorf("Init error = %q, want it to mention %q", err.Error(), agent.OwnerResolverKey)
 	}
 }
+
+// TestHandlePeers_ScopeAll_CarriesSelfAlias pins spec §7.4's input: the
+// fan-out is the one caller that fetches every peer's envelope on each call,
+// so it is the one that can hand the CLI a LIVE self-reported name to
+// compare against the local one. Alias stays what we have the host
+// configured as; SelfAlias is what the host says it is; the two are carried
+// side by side and the local Alias is never overwritten by the report.
+//
+// The local row (Hosts[0]) fills both from the same snapshot alias, so it
+// agrees with itself by construction and can never be flagged.
+func TestHandlePeers_ScopeAll_CarriesSelfAlias(t *testing.T) {
+	dir := t.TempDir()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID: "air:111", Alias: "air26", OK: true, Peers: []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: srv.URL, Token: "tok-a", HostID: "air:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+
+	local := got.Hosts[0]
+	if local.SelfAlias != local.Alias || local.Alias != "mlab" {
+		t.Errorf("local row alias/self_alias = %q/%q, want both %q", local.Alias, local.SelfAlias, "mlab")
+	}
+
+	remote := got.Hosts[1]
+	if remote.Alias != "air" {
+		t.Errorf("remote alias = %q, want the locally configured %q — the peer's own report must not overwrite it", remote.Alias, "air")
+	}
+	if remote.SelfAlias != "air26" {
+		t.Errorf("remote self_alias = %q, want the peer's own report %q", remote.SelfAlias, "air26")
+	}
+}
+
+// TestHandlePeers_ScopeAll_RemoteSelfAliasBounded: self_alias is the
+// remote's own text, exactly as attacker-controlled as env.Error and
+// env.DaemonVersion, and it is bounded on the same terms before it is
+// re-encoded or printed.
+func TestHandlePeers_ScopeAll_RemoteSelfAliasBounded(t *testing.T) {
+	dir := t.TempDir()
+
+	hugeAlias := strings.Repeat("a", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{
+			HostID: "air:111", Alias: hugeAlias, OK: true, Peers: []ipeers.PeerRecord{},
+		})
+	}))
+	defer srv.Close()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: srv.URL, Token: "tok-a", HostID: "air:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	if n := len(got.Hosts[1].SelfAlias); n >= len(hugeAlias) {
+		t.Errorf("self_alias len = %d, want bounded well below the remote's %d-byte report", n, len(hugeAlias))
+	}
+	if !strings.HasSuffix(got.Hosts[1].SelfAlias, "…") {
+		t.Errorf("self_alias = %q, want the truncation marker", got.Hosts[1].SelfAlias)
+	}
+}
+
+// TestHandlePeers_ScopeAll_UnreachableHostHasNoSelfAlias: a host we never
+// reached reported nothing, so its self_alias stays "" — the CLI reads ""
+// as "never said", not as "disagrees".
+func TestHandlePeers_ScopeAll_UnreachableHostHasNoSelfAlias(t *testing.T) {
+	dir := t.TempDir()
+
+	sessions := &fakeSessions{sessions: nil}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: "http://127.0.0.1:1", Token: "", HostID: "air:111"},
+	}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{Kind: middleware.PrincipalAdmin})
+	rr := doGetPeersWithContext(t, m, "/api/peers?scope=all", ctx)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got ipeers.AllEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if len(got.Hosts) != 2 {
+		t.Fatalf("hosts = %+v, want 2 rows", got.Hosts)
+	}
+	if got.Hosts[1].OK {
+		t.Fatalf("remote row ok = true, want a failed fetch in this fixture")
+	}
+	if got.Hosts[1].SelfAlias != "" {
+		t.Errorf("self_alias = %q, want \"\" for a host that was never reached", got.Hosts[1].SelfAlias)
+	}
+}

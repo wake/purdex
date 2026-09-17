@@ -37,9 +37,14 @@ func TestEnvelope_JSON_MatchesP1Shape(t *testing.T) {
 // TestHostResult_JSON_Shape pins HostResult's wire format — Envelope's
 // fields behind alias/host_id, including titles_unavailable (always
 // present), which pdx peers --all renders per host.
+//
+// self_alias sits beside alias and is likewise always present: "" is the
+// meaningful "this peer never reported a name", so eliding it would make a
+// silent peer indistinguishable from an absent field.
 func TestHostResult_JSON_Shape(t *testing.T) {
 	h := HostResult{
 		Alias:                "air",
+		SelfAlias:            "air26",
 		HostID:               "air:1",
 		OK:                   true,
 		Partial:              true,
@@ -52,7 +57,7 @@ func TestHostResult_JSON_Shape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	want := `{"alias":"air","host_id":"air:1","ok":true,"partial":true,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"titles_unavailable":true}`
+	want := `{"alias":"air","host_id":"air:1","self_alias":"air26","ok":true,"partial":true,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"titles_unavailable":true}`
 	if string(got) != want {
 		t.Errorf("HostResult JSON = %s, want %s", got, want)
 	}
