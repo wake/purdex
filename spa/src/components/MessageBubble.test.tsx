@@ -67,6 +67,40 @@ describe('MessageBubble', () => {
   })
 })
 
+// P-B2.2 task 8 (spec §4.4 R1): `streaming` appends a blinking cursor after
+// the markdown body of an assistant bubble; user bubbles ignore it.
+describe('MessageBubble streaming cursor (R1)', () => {
+  it('assistant + streaming renders the cursor as a sibling after the prose div', () => {
+    const { container } = render(
+      <MessageBubble role="assistant" content="partial text" streaming />,
+    )
+    const wrapper = container.querySelector('[data-testid="assistant-text"]')!
+    const cursor = wrapper.querySelector('[data-testid="stream-cursor"]')!
+    expect(cursor).toBeInTheDocument()
+    expect(cursor).toHaveTextContent('▌')
+    expect(cursor).toHaveClass('stream-cursor')
+    expect(cursor).toHaveAttribute('aria-hidden', 'true')
+    // Sits at the end of the flow: direct child of the wrapper, immediately
+    // after the prose container, not inside ReactMarkdown output.
+    const prose = wrapper.querySelector('.prose')!
+    expect(cursor.parentElement).toBe(wrapper)
+    expect(prose.nextElementSibling).toBe(cursor)
+    expect(prose.contains(cursor)).toBe(false)
+    expect(wrapper.querySelectorAll('[data-testid="stream-cursor"]')).toHaveLength(1)
+  })
+
+  it('assistant without streaming renders no cursor', () => {
+    const { container } = render(<MessageBubble role="assistant" content="done" />)
+    expect(container.querySelector('[data-testid="stream-cursor"]')).toBeNull()
+  })
+
+  it('user + streaming renders no cursor', () => {
+    const { container } = render(<MessageBubble role="user" content="hello" streaming />)
+    expect(container.querySelector('[data-testid="user-bubble"]')).toBeInTheDocument()
+    expect(container.querySelector('[data-testid="stream-cursor"]')).toBeNull()
+  })
+})
+
 // P-B2.2 G5 guard: default-prop rendering must stay byte-identical while
 // task 8 adds the optional `streaming` prop. Taken BEFORE any renderer change.
 describe('MessageBubble default-prop snapshots (G5)', () => {

@@ -5,9 +5,11 @@ import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   content: string
+  /** Show a blinking cursor in the header (visible while collapsed) and at the end of the content. */
+  streaming?: boolean
 }
 
-export default function ThinkingBlock({ content }: Props) {
+export default function ThinkingBlock({ content, streaming }: Props) {
   const t = useI18nStore((s) => s.t)
   const [expanded, setExpanded] = useState(false)
 
@@ -21,6 +23,9 @@ export default function ThinkingBlock({ content }: Props) {
       >
         <Brain size={14} />
         <span>{t('stream.thinking')}</span>
+        {streaming && (
+          <span data-testid="stream-cursor" className="stream-cursor" aria-hidden="true">▌</span>
+        )}
         <span className="ml-auto">
           {expanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
         </span>
@@ -31,6 +36,9 @@ export default function ThinkingBlock({ content }: Props) {
           className="px-2.5 pb-2 text-xs text-text-secondary leading-relaxed whitespace-pre-wrap font-mono"
         >
           {content}
+          {streaming && (
+            <span data-testid="stream-cursor" className="stream-cursor" aria-hidden="true">▌</span>
+          )}
         </div>
       )}
     </div>
